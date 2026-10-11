@@ -89,6 +89,7 @@ export function readInterruptedUpdateCandidate(db: DatabaseSync) {
 export type UpdateRunListInput = {
   limit?: number;
   active?: boolean;
+  succeeded?: boolean;
   reason?: string;
   excludeReason?: string;
   includeRunId?: string;
@@ -103,6 +104,9 @@ export function readUpdateRuns(db: DatabaseSync, input: UpdateRunListInput) {
     .selectAll();
   if (input.active) {
     query = query.where("status", "=", "running");
+  }
+  if (input.succeeded) {
+    query = query.where("status", "=", "succeeded");
   }
   if (input.reason) {
     query = query.where("reason", "=", input.reason);

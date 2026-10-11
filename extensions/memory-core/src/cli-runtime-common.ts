@@ -11,6 +11,7 @@ import {
   shortenHomePath,
   theme,
   withManager,
+  withProgressTotals,
 } from "openclaw/plugin-sdk/memory-core-host-runtime-cli";
 import {
   listAgentIds,
@@ -19,20 +20,84 @@ import {
   resolveDefaultAgentId,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
-import { buildAgentSessionKey } from "openclaw/plugin-sdk/routing";
 import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { formatMemoryCoreSidecarNotice, resolveForeignMemorySlotOwner } from "./cli-memory-slot.js";
+import type { MemoryCommandOptions } from "./cli.types.js";
 import type { MemoryCoreAcquireLocalService } from "./memory/embedding-local-service.js";
 import { getMemorySearchManager } from "./memory/index.js";
+import type { MemoryCoreRuntimeHost } from "./memory/runtime-host.js";
 import type { ShortTermAuditSummary } from "./short-term-promotion.js";
 const { warn } = theme;
 export type MemoryManager = NonNullable<
   Awaited<ReturnType<typeof getMemorySearchManager>>["manager"]
 >;
+
+export async function syncMemoryWithProgress(params: {
+  sync: NonNullable<MemoryManager["sync"]>;
+  options: Pick<MemoryCommandOptions, "force" | "verbose">;
+  elapsed?: boolean;
+  onError?: (error: unknown) => void;
+}): Promise<void> {
+  const startedAt = params.elapsed ? Date.now() : 0;
+  let lastLabel = "Indexing memory…";
+  let lastCompleted = 0;
+  let lastTotal = 0;
+  const formatDuration = (elapsedMs: number) => {
+    const seconds = Math.floor(elapsedMs / 1000);
+    return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
+  };
+  const buildLabel = () => {
+    const elapsedMs = Math.max(1, Date.now() - startedAt);
+    const elapsed = formatDuration(elapsedMs);
+    if (lastTotal <= 0 || lastCompleted <= 0) {
+      return `${lastLabel} · elapsed ${elapsed}`;
+    }
+    const remainingMs = Math.max(0, ((lastTotal - lastCompleted) * elapsedMs) / lastCompleted);
+    return `${lastLabel} · elapsed ${elapsed} · eta ${formatDuration(remainingMs)}`;
+  };
+  await withProgressTotals(
+    { label: lastLabel, total: 0, fallback: params.options.verbose ? "line" : undefined },
+    async (update, progress) => {
+      const interval = params.elapsed
+        ? setInterval(() => progress.setLabel(buildLabel()), 1000)
+        : undefined;
+      try {
+        await params.sync({
+          reason: "cli",
+          force: Boolean(params.options.force),
+          progress: (syncUpdate) => {
+            if (syncUpdate.label) {
+              lastLabel = syncUpdate.label;
+            }
+            lastCompleted = syncUpdate.completed;
+            lastTotal = syncUpdate.total;
+            update({
+              completed: syncUpdate.completed,
+              total: syncUpdate.total,
+              label: params.elapsed ? buildLabel() : syncUpdate.label,
+            });
+            if (params.elapsed) {
+              progress.setLabel(buildLabel());
+            } else if (syncUpdate.label) {
+              progress.setLabel(syncUpdate.label);
+            }
+          },
+        });
+      } catch (error) {
+        if (!params.onError) {
+          throw error;
+        }
+        params.onError(error);
+      } finally {
+        if (interval !== undefined) {
+          clearInterval(interval);
+        }
+      }
+    },
+  );
+}
+
 type MemoryManagerPurpose = Parameters<typeof getMemorySearchManager>[0]["purpose"];
-type MemoryCommandUnavailable = { agentId: string } & (
-  | { status: "disabled" }
-  | ReturnType<typeof formatCliJsonFailure>
-);
 function isMemorySecretOwnerFailure(error: unknown, message: string): boolean {
   const candidate = error && typeof error === "object" ? (error as Record<string, unknown>) : {};
   if (
@@ -88,22 +153,12 @@ async function loadMemoryCommandConfig(
     };
   }
 }
-function emitMemorySecretResolveDiagnostics(
-  diagnostics: string[],
-  params?: { json?: boolean },
-): void {
-  if (diagnostics.length === 0) {
-    return;
-  }
-  const toStderr = params?.json === true;
-  for (const entry of diagnostics) {
-    const message = warn(`[secrets] ${entry}`);
-    if (toStderr) {
-      defaultRuntime.error(message);
-    } else {
-      defaultRuntime.log(message);
-    }
-  }
+function emitMemoryCommandWarning(message: string, toStderr: boolean): void {
+  defaultRuntime[toStderr ? "error" : "log"](warn(message));
+}
+/** Tells the operator that a Memory Core command acts on its sidecar index only. */
+export function emitMemoryCoreSidecarNotice(owner: string, params?: { json?: boolean }): void {
+  emitMemoryCommandWarning(formatMemoryCoreSidecarNotice(owner), Boolean(params?.json));
 }
 export function resolveMemoryPluginConfig(cfg: OpenClawConfig): Record<string, unknown> {
   const entry = asNullableRecord(cfg.plugins?.entries?.["memory-core"]);
@@ -122,27 +177,19 @@ export function formatAuditCounts(audit: ShortTermAuditSummary): string {
   const suffix = scriptCoverage ? ` · scripts=${scriptCoverage}` : "";
   return `${audit.entryCount} entries · ${audit.promotedCount} promoted · ${audit.conceptTaggedEntryCount} concept-tagged · ${audit.spacedEntryCount} spaced${suffix}`;
 }
-export function resolveMemoryAgent(cfg: OpenClawConfig, agent?: string) {
+function resolveExplicitMemoryAgent(cfg: OpenClawConfig, agent?: string): string | undefined {
   const trimmed = agent?.trim();
   if (agent !== undefined && !trimmed) {
     throw new Error("--agent must not be blank");
   }
-  return trimmed ? resolveConfiguredAgentId(cfg, trimmed) : resolveDefaultAgentId(cfg);
+  return trimmed ? resolveConfiguredAgentId(cfg, trimmed) : undefined;
 }
-export function buildCliMemorySearchSessionKey(agentId: string): string {
-  return buildAgentSessionKey({
-    agentId,
-    channel: "cli",
-    peer: { kind: "direct", id: "memory-search" },
-    dmScope: "per-channel-peer",
-  });
+export function resolveMemoryAgent(cfg: OpenClawConfig, agent?: string) {
+  return resolveExplicitMemoryAgent(cfg, agent) ?? resolveDefaultAgentId(cfg);
 }
 export function resolveMemoryAgentIds(cfg: OpenClawConfig, agent?: string): string[] {
-  const trimmed = agent?.trim();
-  if (agent !== undefined && !trimmed) {
-    throw new Error("--agent must not be blank");
-  }
-  return trimmed ? [resolveConfiguredAgentId(cfg, trimmed)] : listAgentIds(cfg);
+  const explicit = resolveExplicitMemoryAgent(cfg, agent);
+  return explicit === undefined ? listAgentIds(cfg) : [explicit];
 }
 export function formatExtraPaths(workspaceDir: string, extraPaths: MemoryExtraPath[]): string[] {
   return normalizeExtraMemoryPathEntries(workspaceDir, extraPaths).map((entry) => {
@@ -152,50 +199,64 @@ export function formatExtraPaths(workspaceDir: string, extraPaths: MemoryExtraPa
 }
 export async function withMemoryCommand(params: {
   commandName: string;
-  agent?: string;
+  options: Pick<MemoryCommandOptions, "agent" | "json">;
   allAgents?: boolean;
-  diagnosticsToStderr?: boolean;
-  // Single-command writers opt in; status owns one aggregate document after this scope.
-  onUnavailable?: (result: MemoryCommandUnavailable) => void;
   purpose?: MemoryManagerPurpose;
   inspectSources?: boolean;
   acquireLocalService?: MemoryCoreAcquireLocalService;
+  runInBackgroundContext?: MemoryCoreRuntimeHost["runInBackgroundContext"];
+  /** Refuse instead of answering from the sidecar index when another plugin owns the slot. */
+  requiresMemorySlot?: boolean;
   run: (context: { manager: MemoryManager; cfg: OpenClawConfig; agentId: string }) => Promise<void>;
 }): Promise<OpenClawConfig> {
+  const { agent, json } = params.options;
+  // Status owns one aggregate document; single-agent commands report acquisition failures here.
+  const onUnavailable = json && !params.allAgents ? defaultRuntime.writeJson : undefined;
   const { config: cfg, diagnostics } = await loadMemoryCommandConfig(
     params.commandName,
     params.purpose === "status" ? "read_only_status" : undefined,
   );
-  emitMemorySecretResolveDiagnostics(diagnostics, { json: params.diagnosticsToStderr });
+  for (const entry of diagnostics) {
+    emitMemoryCommandWarning(`[secrets] ${entry}`, json === true);
+  }
+  const slotOwner = resolveForeignMemorySlotOwner(cfg);
+  if (slotOwner && params.requiresMemorySlot) {
+    const message = `${params.commandName} reads only Memory Core's sidecar index, but plugins.slots.memory selects "${slotOwner}". Search the selected memory through the agent's memory tools or the ${slotOwner} plugin's own commands.`;
+    defaultRuntime.error(message);
+    process.exitCode = 1;
+    onUnavailable?.({
+      ...formatCliJsonFailure(message),
+      agentId: resolveMemoryAgent(cfg, agent),
+    });
+    return cfg;
+  }
+  if (slotOwner) {
+    emitMemoryCoreSidecarNotice(slotOwner, { json });
+  }
   const agentIds = params.allAgents
-    ? resolveMemoryAgentIds(cfg, params.agent)
-    : [resolveMemoryAgent(cfg, params.agent)];
+    ? resolveMemoryAgentIds(cfg, agent)
+    : [resolveMemoryAgent(cfg, agent)];
   for (const agentId of agentIds) {
-    const managerParams: Parameters<typeof getMemorySearchManager>[0] = {
-      cfg,
-      agentId,
-    };
-    if (params.purpose) {
-      managerParams.purpose = params.purpose;
-    }
-    if (params.inspectSources) {
-      managerParams.inspectSources = true;
-    }
-    if (params.acquireLocalService) {
-      managerParams.acquireLocalService = params.acquireLocalService;
-    }
     await withManager<MemoryManager>({
-      getManager: () => getMemorySearchManager(managerParams),
+      getManager: () =>
+        getMemorySearchManager({
+          cfg,
+          agentId,
+          purpose: params.purpose,
+          inspectSources: params.inspectSources,
+          acquireLocalService: params.acquireLocalService,
+          runInBackgroundContext: params.runInBackgroundContext,
+        }),
       onMissing: (error) => {
         if (!error?.trim()) {
           defaultRuntime.log("Memory search disabled.");
-          params.onUnavailable?.({ agentId, status: "disabled" });
+          onUnavailable?.({ agentId, status: "disabled" });
           return;
         }
         const message = `${params.commandName} failed (${agentId}): ${error}`;
         defaultRuntime.error(message);
         process.exitCode = 1;
-        params.onUnavailable?.({ ...formatCliJsonFailure(message), agentId });
+        onUnavailable?.({ ...formatCliJsonFailure(message), agentId });
       },
       onCloseError: (err) =>
         defaultRuntime.error(`Memory manager close failed: ${formatErrorMessage(err)}`),

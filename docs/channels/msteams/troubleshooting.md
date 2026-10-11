@@ -27,8 +27,8 @@ the agent turn drains independently and replies proactively. If request
 handling or durable admission misses the transport window, Teams may retry the
 activity, and the ingress tombstone rejects a repeated event ID.
 
-If Teams went silent after setting `legacyWebhook: false`, check whether Azure Bot
-or your reverse proxy still points to port `3978`. Follow the
+If Teams went silent after removing the `legacyWebhook` pin or setting it to
+`false`, check whether Azure Bot or your reverse proxy still points to port `3978`. Follow the
 [endpoint migration instructions](/channels/msteams/configuration#migrating-an-existing-webhook-endpoint)
 to use the Gateway port or finish migrating an explicit legacy listener.
 
@@ -80,7 +80,7 @@ Example for GCC High:
 }
 ```
 
-`channels.msteams.serviceUrl` is restricted to supported Microsoft Teams Bot Connector hosts. When a service URL is configured, OpenClaw checks that the stored conversation `serviceUrl` uses the same host before proactive sends, edits, deletes, cards, polls, or queued long-running replies run. With the default public-cloud config, OpenClaw fails closed if a stored conversation points outside the public Teams Connector host. Receive a fresh message from the conversation after changing cloud/service URL settings so the stored conversation reference is current.
+`channels.msteams.serviceUrl` is restricted to supported Microsoft Teams Bot Connector hosts. When a service URL is configured, OpenClaw checks that the stored conversation `serviceUrl` uses the same host before proactive sends, edits, deletes, cards, polls, or queued long-running replies run. With the default public-cloud config, OpenClaw rejects those operations if a stored conversation points outside the public Teams Connector host. Receive a fresh message from the conversation after changing cloud/service URL settings so the stored conversation reference is current.
 
 China/21Vianet has no separate global proactive `smba` URL in Microsoft's Teams proactive endpoint table. Configure `cloud: "China"` so the Teams SDK uses Azure China auth, token, and JWT endpoints. Proactive sends then require a stored conversation reference from an incoming China Teams activity, or an explicitly configured service URL, on the Azure China Bot Framework channel boundary (`*.botframework.azure.cn`). Graph-backed Teams helpers are disabled for `cloud: "China"` until OpenClaw routes Graph requests through the Azure China Graph endpoint.
 

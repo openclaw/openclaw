@@ -174,6 +174,12 @@ describe("persisted subagent capability lookups", () => {
     write(4);
     expect(resolveStoredSubagentCapabilities(key, { cfg }).depth).toBe(4);
     expect(exact).toHaveBeenCalledTimes(3);
+    expect(
+      resolveStoredSubagentCapabilities(key, {
+        cfg,
+        store: { [key]: { spawnedBy: "agent:main:main" } },
+      }).depth,
+    ).toBe(4);
   });
 
   it.each([true, false])(
@@ -202,36 +208,7 @@ describe("persisted subagent capability lookups", () => {
     },
   );
 
-  it("keeps canonical depth fallback for a partial explicit record", () => {
-    const storePath = path.join(tempDirs.make("subagent-capability-partial-"), "sessions.sqlite");
-    const cfg = { session: { store: storePath } };
-    const key = "agent:main:subagent:child";
-    runOpenClawAgentWriteTransaction(
-      (database) => {
-        writeSessionEntry(database, key, { sessionId: "child", updatedAt: 1, spawnDepth: 3 });
-      },
-      { agentId: "main", path: storePath },
-    );
-    expect(
-      resolveStoredSubagentCapabilities(key, {
-        cfg,
-        store: { [key]: { spawnedBy: "agent:main:main" } },
-      }).depth,
-    ).toBe(3);
-  });
-
-  it("uses the first matching normalized session ID in an explicit record", () => {
-    expect(
-      getSubagentDepthFromSessionStore(" duplicate-session ", {
-        store: {
-          "agent:main:subagent:first": { sessionId: "\tduplicate-session\n", spawnDepth: 2 },
-          "agent:main:subagent:later": { sessionId: "duplicate-session", spawnDepth: 4 },
-        },
-      }),
-    ).toBe(2);
-  });
-
-  it.each(["", " ", "\t\r\n", "\u00a0\u2003\u2028\ufeff"])(
+  it.each(["", " \t\r\n\u00a0\u2003\u2028\ufeff"])(
     "matches explicit stores for nested and by-id lineage without listing unrelated sessions (padding=%j)",
     (padding) => {
       const storePath = path.join(tempDirs.make("subagent-capability-lookup-"), "sessions.sqlite");
@@ -281,7 +258,12 @@ describe("persisted subagent capability lookups", () => {
         { agentId: "main", path: storePath },
       );
       const listing = vi.spyOn(sessionAccessor, "listSessionEntriesReadOnly");
-      const stores = [entries, createSessionCapabilityLookup(entries)];
+      const explicit = {
+        ...entries,
+        "agent:main:subagent:later": { sessionId: "child-id", updatedAt: 1, spawnDepth: 4 },
+      };
+      expect(getSubagentDepthFromSessionStore(" child-id ", { store: explicit })).toBe(2);
+      const stores = [explicit, createSessionCapabilityLookup(entries)];
       for (const key of [parent, child, acp, dashboard, byId, "child-id", cycle]) {
         const persisted = resolveSubagentCapabilityStore(key, { cfg });
         for (const store of stores) {

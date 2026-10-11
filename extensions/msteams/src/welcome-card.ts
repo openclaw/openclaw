@@ -5,9 +5,7 @@ const DEFAULT_PROMPT_STARTERS = [
 ];
 
 type WelcomeCardOptions = {
-  /** Bot display name. Falls back to "OpenClaw". */
   botName?: string;
-  /** Custom prompt starters. Falls back to defaults. */
   promptStarters?: string[];
 };
 

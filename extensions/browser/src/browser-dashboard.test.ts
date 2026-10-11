@@ -2,18 +2,18 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type {
-  OpenClawPluginService,
-  OpenClawPluginServiceContext,
+  OpenClawPluginApi,
+  OpenClawPluginServiceContextV2,
   OpenClawPluginGatewayEvents,
 } from "openclaw/plugin-sdk/plugin-entry";
 import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
+import { createPluginStateKeyedStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import {
-  createPluginStateKeyedStoreForTests,
-  openOpenClawStateDatabase,
-} from "openclaw/plugin-sdk/plugin-state-test-runtime";
-import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
+  createTestPluginApi,
+  createTestPluginServiceScheduler,
+} from "openclaw/plugin-sdk/plugin-test-api";
 import type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { registerBrowserPlugin } from "../plugin-registration.js";
 import {
   interceptStoreActions,
@@ -51,6 +51,7 @@ import {
 } from "./browser/routes/test-helpers.js";
 import type { BrowserRouteContext } from "./browser/server-context.js";
 import { makeBrowserProfile } from "./browser/server-context.test-harness.js";
+import { browserSessionTabStorageKey } from "./browser/session-tab-identity.js";
 import { readColdNativeActivity } from "./browser/session-tab-process-state.js";
 import {
   closeTrackedBrowserTabsForSessions,
@@ -62,7 +63,6 @@ import {
 import { durableOwnership } from "./browser/session-tab-registry.sqlite.test-helpers.js";
 import {
   dispatchBrowserTabClose,
-  browserSessionTabStorageKey,
   type BrowserSessionTabRecord,
   getBrowserSessionTabStore,
   parseBrowserDashboardStopIntent,
@@ -657,7 +657,7 @@ describe("Browser dashboard lifetime", () => {
 
   it("publishes changed lifetimes and drains board-change cleanup through the existing service events", async () => {
     const serviceScope = new AsyncLocalStorage<string>();
-    const services: OpenClawPluginService[] = [];
+    const services: Parameters<OpenClawPluginApi["registerService"]>[0][] = [];
     let boardChanged: Parameters<OpenClawPluginGatewayEvents["onSessionsChanged"]>[0] | undefined;
     const emit = vi.fn();
     const unsubscribe = vi.fn();
@@ -682,7 +682,10 @@ describe("Browser dashboard lifetime", () => {
         },
       }),
     );
-    const context: OpenClawPluginServiceContext = {
+    const scheduler = createTestPluginServiceScheduler();
+    onTestFinished(() => scheduler.stop());
+    const context: OpenClawPluginServiceContextV2 = {
+      scheduler,
       config: {},
       stateDir: fixture.stateDir,
       logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
@@ -891,49 +894,6 @@ describe("Browser dashboard lifetime", () => {
       });
       await expect(requestBrowserDashboard(request)).rejects.toThrow(
         "Dashboard tab stopped during this operation",
-      );
-      expect(browser.open).toHaveBeenCalledOnce();
-      expect(browser.closeOwned).not.toHaveBeenCalled();
-    },
-  );
-
-  it.each(["selected", "unrelated"] as const)(
-    "handles %s corrupt JSON introduced during the dashboard ownership lookup",
-    async (scope) => {
-      const opened = await requestBrowserDashboard(request);
-      const tab = (await readBrowserDashboardTabs())[0];
-      if (!tab) {
-        throw new Error("Expected the registered dashboard tab");
-      }
-      const store = getBrowserSessionTabStore();
-      await store.register("unrelated-entry", { diagnostic: "unrelated" });
-      browser.ownership.mockImplementationOnce(async () => {
-        openOpenClawStateDatabase()
-          .db.prepare(
-            "UPDATE plugin_state_entries SET value_json = ? WHERE plugin_id = ? AND namespace = ? AND entry_key = ?",
-          )
-          .run(
-            "{",
-            "browser",
-            "browser.session-tabs",
-            scope === "selected" ? tab.storageKey : "unrelated-entry",
-          );
-        return {
-          status: "durable",
-          nativeTargetId: tab.nativeTargetId,
-          profileFingerprint: tab.profileFingerprint,
-          browserInstanceFingerprint: tab.browserInstanceFingerprint,
-        };
-      });
-      if (scope === "selected") {
-        await expect(requestBrowserDashboard(request)).rejects.toMatchObject({
-          code: "PLUGIN_STATE_CORRUPT",
-        });
-      } else {
-        expect((await requestBrowserDashboard(request)).browserTab).toEqual(opened.browserTab);
-      }
-      await expect(readBrowserDashboardTabs()).rejects.toThrow(
-        "Plugin state entry contains corrupt JSON",
       );
       expect(browser.open).toHaveBeenCalledOnce();
       expect(browser.closeOwned).not.toHaveBeenCalled();

@@ -106,7 +106,7 @@ describeLive("embedded Responses output-limit recovery live", () => {
           },
         },
         agents: {
-          list: [{ id: "main", default: true, workspace: state.workspaceDir }],
+          entries: { main: { workspace: state.workspaceDir } },
           defaults: {
             skipBootstrap: true,
             models: { [`openai/${modelId}`]: { params: { transport: "sse" } } },

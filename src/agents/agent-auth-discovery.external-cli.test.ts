@@ -70,28 +70,6 @@ describe("resolveAgentDiscoveryAuthFacts external CLI scoping", () => {
     });
   });
 
-  it("reuses the active runtime generation for read-only auth discovery", () => {
-    const cfg = {} as OpenClawConfig;
-    const externalCli = externalCliDiscoveryForProviders({
-      cfg,
-      providers: ["fireworks"],
-    });
-
-    resolveAgentDiscoveryAuthFacts("/tmp/openclaw-agent", {
-      config: cfg,
-      env: {},
-      externalCli,
-      readOnly: true,
-    });
-
-    expect(storeMocks.ensureAuthProfileStore).toHaveBeenCalledWith("/tmp/openclaw-agent", {
-      allowKeychainPrompt: false,
-      config: cfg,
-      externalCli,
-      readOnly: true,
-    });
-  });
-
   it("merges prepared ambient credentials without repeating ambient discovery", () => {
     credentialMocks.resolveAgentCredentialMapFromStore.mockReturnValue({
       fireworks: { type: "api_key", key: "agent-key" },

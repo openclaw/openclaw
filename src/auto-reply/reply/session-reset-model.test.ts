@@ -41,7 +41,6 @@ function createResetFixture(entry: Partial<SessionEntry> = {}) {
     sessionEntry,
     sessionStore: { "agent:main:dm:1": sessionEntry } as Record<string, SessionEntry>,
     sessionCtx: { BodyStripped: "minimax summarize" },
-    ctx: { ChatType: "direct" },
   };
 }
 
@@ -199,7 +198,6 @@ describe("applyResetModelOverride", () => {
       resetTriggered: true,
       bodyStripped: "minimax summarize",
       sessionCtx: fixture.sessionCtx,
-      ctx: fixture.ctx,
       defaultProvider: "openai",
       defaultModel: "gpt-4o-mini",
       aliasIndex: fixture.aliasIndex,

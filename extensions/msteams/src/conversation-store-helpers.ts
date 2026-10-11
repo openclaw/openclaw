@@ -5,15 +5,6 @@ import type {
   StoredConversationReference,
 } from "./conversation-store.js";
 
-export function toConversationStoreEntries(
-  entries: Iterable<[string, StoredConversationReference]>,
-): MSTeamsConversationStoreEntry[] {
-  return Array.from(entries, ([conversationId, reference]) => ({
-    conversationId,
-    reference,
-  }));
-}
-
 export function mergeStoredConversationReference(
   existing: StoredConversationReference | undefined,
   incoming: StoredConversationReference,
@@ -53,7 +44,7 @@ export function findPreferredDmConversationByUserId(
       continue;
     }
     const convType = normalizeLowercaseStringOrEmpty(
-      entry.reference.conversation?.conversationType ?? "",
+      entry.reference.conversation?.conversationType,
     );
     if (convType === "channel" || convType === "groupchat") {
       continue;

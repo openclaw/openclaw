@@ -6,9 +6,14 @@ import {
   openSidebarSortMenu,
   routeAvatarFixtures,
 } from "./session-ownership-visuals.test-support.ts";
-import { chooseSidebarMenuOption, closeSidebarMenu } from "./sidebar-session-menu.test-support.ts";
+import { selectAllSidebarSessions } from "./sidebar-navigation.test-support.ts";
+import {
+  chooseSidebarMenuOption,
+  chooseSidebarOwner,
+  closeSidebarMenu,
+} from "./sidebar-session-menu.test-support.ts";
 
-const suite = createControlUiE2eSuite({ name: "Control UI person header owner filter" });
+const suite = createControlUiE2eSuite({ name: "Control UI toolbar owner filter" });
 
 function sessionsList() {
   const ada = {
@@ -53,7 +58,7 @@ function sessionsList() {
 }
 
 suite.define(() => {
-  it("filters to a person from the group header and clears from the toolbar", async () => {
+  it("filters grouped sessions from the toolbar without duplicate header controls", async () => {
     const context = await suite.browser.newContext({ viewport: { height: 800, width: 1200 } });
     const page = await context.newPage();
     const response = sessionsList();
@@ -80,6 +85,7 @@ suite.define(() => {
         { id: "profile-bob", background: "#985b42", label: "B" },
       ]);
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:ada"));
+      await selectAllSidebarSessions(page);
       const menu = await openSidebarSortMenu(page);
       await chooseSidebarMenuOption(menu.page(), "Group by", "Person");
       await closeSidebarMenu(page);
@@ -89,14 +95,11 @@ suite.define(() => {
       await expectBrowser(bobSection).toBeVisible();
 
       const header = adaSection.locator(".sidebar-recent-sessions__head");
-      const action = header.locator(".sidebar-session-person-filter");
       await header.hover();
-      await expectBrowser(action).toHaveAccessibleName("Show only Ada");
-      await expectBrowser
-        .poll(() => action.evaluate((button) => Number(getComputedStyle(button).opacity)))
-        .toBeGreaterThan(0);
+      await expectBrowser(header.locator(".sidebar-session-group-actions")).toHaveCount(0);
       const beforeFilter = (await gateway.getRequests("sessions.list")).length;
-      await action.click();
+      await chooseSidebarOwner(page, "owner:profile-ada");
+      await closeSidebarMenu(page);
       await expect
         .poll(async () => (await gateway.getRequests("sessions.list")).slice(beforeFilter))
         .toEqual(
@@ -108,17 +111,16 @@ suite.define(() => {
         );
       await expectBrowser(bobSection).toHaveCount(0);
       await expectBrowser(adaSection.getByText("Ada research", { exact: true })).toBeVisible();
-      const summary = page.locator(".sidebar-session-filter-summary");
-      const funnel = page.locator(".sidebar-session-sort");
-      await expectBrowser(summary).toBeVisible();
-      await expectBrowser(summary).toContainText("Ada");
-      await expectBrowser(summary).toHaveAccessibleName("Ada · Show all sessions");
-      await expectBrowser(funnel).toHaveClass(/sidebar-session-sort--filtered/);
-      await expectBrowser(action).toHaveAttribute("aria-pressed", "true");
-      await expectBrowser(action).toHaveAccessibleName("Show everyone");
+      const ownerChip = page.locator("#sidebar-session-owner-title");
+      const funnel = page.getByRole("button", { name: "Filter & sort", exact: true });
+      await expectBrowser(ownerChip).toBeVisible();
+      await expectBrowser(ownerChip.locator(".picker-select__label")).toHaveText("Ada");
+      await expectBrowser(ownerChip).toHaveAccessibleName("Owners: Ada");
+      await expectBrowser(funnel).not.toHaveClass(/sidebar-session-sort--filtered/);
+      await expectBrowser(header.locator(".sidebar-session-group-actions")).toHaveCount(0);
 
       const beforeClear = (await gateway.getRequests("sessions.list")).length;
-      await summary.click();
+      await selectAllSidebarSessions(page);
       await expect
         .poll(async () =>
           (await gateway.getRequests("sessions.list")).slice(beforeClear).some((request) => {
@@ -128,9 +130,9 @@ suite.define(() => {
         )
         .toBe(true);
       await expectBrowser(bobSection).toBeVisible();
-      await expectBrowser(summary).toHaveCount(0);
+      await expectBrowser(ownerChip.locator(".picker-select__label")).toHaveText("All owners");
       await expectBrowser(funnel).not.toHaveClass(/sidebar-session-sort--filtered/);
-      await expectBrowser(action).toHaveAttribute("aria-pressed", "false");
+      await expectBrowser(header.locator(".sidebar-session-group-actions")).toHaveCount(0);
     } finally {
       await context.close();
     }

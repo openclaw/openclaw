@@ -1,5 +1,4 @@
 import { freezeJsonSnapshot } from "../shared/immutable-data.js";
-import { cloneEnvWithPlatformSemantics } from "./config-env-vars.js";
 import { cloneConfigWithResolutionFacts } from "./resolution-facts.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
 
@@ -18,10 +17,8 @@ export function captureRuntimeConfigWithSource(
   config: OpenClawConfig,
   source: OpenClawConfig,
 ): OpenClawConfig {
-  const clone = (value: OpenClawConfig) => {
-    const captured = cloneConfigWithResolutionFacts(value);
-    return freezeJsonSnapshot(captured);
-  };
+  const clone = (value: OpenClawConfig) =>
+    freezeJsonSnapshot(cloneConfigWithResolutionFacts(value));
   const captured = clone(config);
   const capturedSource = source === config ? captured : clone(source);
   captures.set(captured, { source: capturedSource, origin: config });
@@ -32,14 +29,3 @@ export function captureRuntimeConfigWithSource(
 }
 
 export type CapturedRuntimeConfigRead = { config: OpenClawConfig; env: NodeJS.ProcessEnv };
-
-/** Retain effective environment alongside the selected config/source publication. */
-export function captureRuntimeConfigRead(
-  config: OpenClawConfig,
-  source: OpenClawConfig,
-): CapturedRuntimeConfigRead {
-  return {
-    config: captureRuntimeConfigWithSource(config, source),
-    env: cloneEnvWithPlatformSemantics(process.env),
-  };
-}

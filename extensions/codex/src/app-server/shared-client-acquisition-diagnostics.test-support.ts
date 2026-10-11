@@ -4,6 +4,7 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { expect, it, vi } from "vitest";
 import * as catalogEvents from "../session-catalog-events.js";
 import * as authBridge from "./auth-bridge.js";
+import type { CodexAppServerAuthHandoff } from "./auth-types.js";
 import { CodexAppServerClient } from "./client.js";
 import { withCodexAppServerJsonClient } from "./request.js";
 import * as sharedClient from "./shared-client.js";
@@ -16,7 +17,7 @@ import { CODEX_APP_SERVER_VERSION } from "./version.js";
 
 export function deferNextAuthProfileApplication(): () => void {
   let release: () => void = () => {};
-  const gate = new Promise<authBridge.CodexAppServerAuthHandoff | undefined>((resolve) => {
+  const gate = new Promise<CodexAppServerAuthHandoff | undefined>((resolve) => {
     release = () => resolve(undefined);
   });
   vi.mocked(authBridge.applyCodexAppServerAuthProfile).mockReturnValueOnce(gate);
@@ -37,7 +38,7 @@ export function registerSharedClientAcquisitionDiagnosticsTests({
   const getLeasedSharedCodexAppServerClient = sharedClient.getLeasedSharedCodexAppServerClient;
   it.each([
     "context",
-    "prestart-artifact-drain",
+    "entry-selection",
     "transport-registration",
     "initialize",
     "catalog-observation",
@@ -69,7 +70,7 @@ export function registerSharedClientAcquisitionDiagnosticsTests({
           return startOptions;
         },
       );
-    } else if (boundary === "prestart-artifact-drain") {
+    } else if (boundary === "entry-selection") {
       vi.mocked(authBridge.reconcileCodexComputerUseStartArtifacts).mockImplementationOnce(park);
     } else if (boundary === "catalog-observation") {
       vi.spyOn(catalogEvents, "observeCodexCatalogClient").mockImplementationOnce(park);

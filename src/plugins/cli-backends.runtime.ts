@@ -1,9 +1,7 @@
 import type { CliBackendPlugin } from "./cli-backend.types.js";
-// Runtime bridge for plugin-provided CLI backends.
 import { isPluginRegistryRetired } from "./registry-lifecycle.js";
 import { getPluginRegistryForContext } from "./runtime/gateway-request-scope.js";
 
-/** Runtime CLI backend registration with owning plugin id. */
 type PluginCliBackendEntry = CliBackendPlugin & {
   pluginId: string;
   builtWithOpenClawVersion?: string;
@@ -14,7 +12,6 @@ type PluginCliBackendMetadata = Pick<
   "id" | "modelProvider" | "subscriptionAuthDispatch" | "pluginId"
 >;
 
-/** Resolves CLI backends from the active runtime plugin registry. */
 export function resolveRuntimeCliBackends(mode: "metadata"): PluginCliBackendMetadata[];
 export function resolveRuntimeCliBackends(): PluginCliBackendEntry[];
 export function resolveRuntimeCliBackends(mode?: "metadata"): PluginCliBackendMetadata[] {

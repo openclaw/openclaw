@@ -1004,7 +1004,7 @@ class NodeForegroundServiceTest {
         drainWithMainLooper {
           withTimeout(10_000) { runtime.pendingGatewayTrust.first { it != null } }
         }
-        assertEquals("Accepted TLS must not overwrite the newer queued request's progress", "Connecting…", runtime.statusText.value)
+        assertEquals("Accepted TLS must not overwrite the newer queued request's progress", "Connecting…", runtime.gatewayConnectionDisplay.value.statusText)
         configMutex.unlock()
         configQueueHeld = false
       }
@@ -2015,7 +2015,7 @@ class NodeForegroundServiceTest {
       )
       assertFalse("The deadline must not admit a replacement socket", admitted.isCompleted)
       assertEquals("synthetic-old-setup", app.prefs.loadGatewayCredentials(endpoint.stableId).token)
-      assertFalse("Queued configuration must not be persisted before cleanup", app.prefs.manualEnabled.value)
+      assertFalse("Queued configuration must not be persisted before cleanup", app.getSharedPreferences("openclaw.node", Context.MODE_PRIVATE).getBoolean("gateway.manual.enabled", false))
 
       if (disconnectBeforeRelease) {
         viewModel.disconnect()
@@ -2044,13 +2044,13 @@ class NodeForegroundServiceTest {
       if (disconnectBeforeRelease) {
         assertFalse(admitted.isCompleted)
         assertEquals("synthetic-old-setup", app.prefs.loadGatewayCredentials(endpoint.stableId).token)
-        assertFalse(app.prefs.manualEnabled.value)
+        assertFalse(app.getSharedPreferences("openclaw.node", Context.MODE_PRIVATE).getBoolean("gateway.manual.enabled", false))
         assertEquals("Offline", runtime.gatewayConnectionDisplay.value.statusText)
         assertNull(runtime.gatewayConnectionDisplay.value.problem)
       } else {
         drainWithMainLooper { withTimeout(10_000) { admitted.await() } }
         assertEquals("synthetic-replacement-setup", app.prefs.loadGatewayCredentials(endpoint.stableId).token)
-        assertTrue(app.prefs.manualEnabled.value)
+        assertTrue(app.getSharedPreferences("openclaw.node", Context.MODE_PRIVATE).getBoolean("gateway.manual.enabled", false))
         assertNull(runtime.gatewayConnectionDisplay.value.problem)
       }
     } finally {

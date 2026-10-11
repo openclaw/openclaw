@@ -10,7 +10,11 @@ import type {
   ModelAuthAvailabilityEvaluation,
   ModelAuthAvailabilityRef,
 } from "./model-auth-availability.js";
-import { compareModelCatalogEntries, orderModelCatalogForPicker } from "./model-catalog-order.js";
+import {
+  compareModelCatalogEntries,
+  createModelPickerRecommendationRank,
+  orderModelCatalogForPicker,
+} from "./model-catalog-order.js";
 import type {
   ModelCatalogRoutePolicy,
   ModelCatalogRouteProjection,
@@ -35,20 +39,14 @@ export type ModelCatalogAuthChecker = (
   ref?: ModelAuthAvailabilityRef,
 ) => boolean | Promise<boolean>;
 
-type LogicalModelCatalogEntryState = {
-  authBacked: boolean;
-  compatible: boolean;
-  routeManaged: boolean;
-  routeProjection: ModelCatalogRouteProjection;
-  nativeRuntime?: string;
-};
+type LogicalModelCatalogEntryState = ReturnType<typeof resolveLogicalModelCatalogEntryState>;
 
 /** Maps one shared auth evaluation into logical catalog selection state. */
 export function resolveLogicalModelCatalogEntryState(params: {
   evaluation: ModelAuthAvailabilityEvaluation;
   authBacked?: boolean;
   routePolicy: ModelCatalogRoutePolicy;
-}): LogicalModelCatalogEntryState {
+}) {
   const routeManaged = params.evaluation.routeResolution !== null;
   const selectedRoute = params.evaluation.selectedRoute;
   const routeProjection: ModelCatalogRouteProjection = !routeManaged
@@ -112,7 +110,7 @@ export async function prepareLogicalVisibleModelCatalog(
     prepareEntry(
       entry: ModelCatalogEntry,
       routeVariants: readonly ModelCatalogEntry[],
-    ): Promise<() => LogicalModelCatalogEntryState>;
+    ): (() => LogicalModelCatalogEntryState) | Promise<() => LogicalModelCatalogEntryState>;
   },
 ): Promise<() => ModelCatalogEntry[]> {
   const policy =
@@ -157,7 +155,9 @@ export async function prepareLogicalVisibleModelCatalog(
     const key = resolveModelCatalogIdentityKey(entry);
     if (!readers.has(key)) {
       const variants = catalogView.variantsOf(entry, key) ?? [entry];
-      readers.set(key, await params.prepareEntry(variants[0] ?? entry, variants));
+      const prepared = params.prepareEntry(variants[0] ?? entry, variants);
+      // Prepared-fact readers stay in the caller's synchronous authority boundary.
+      readers.set(key, typeof prepared === "function" ? prepared : await prepared);
     }
   }
   const { buildManifestBuiltInModelSuppressionResolver } =
@@ -242,16 +242,21 @@ export async function prepareLogicalVisibleModelCatalog(
       return orderModelCatalogForPicker(
         dedupeByKey(projected, publicationKeyOf),
         params.selectedModel ?? params.retainedModel,
+        createModelPickerRecommendationRank(params.cfg),
       );
     };
     if (params.view === "all") {
       return publish(projectEntries(params.catalog));
     }
+    // Authored refs stay listed, unavailable, until their login or key returns.
     const defaultVisibleCatalog = wildcard
       ? sortModelCatalogEntries(
           dedupeModelCatalogEntries([
             ...configuredCatalog,
-            ...params.catalog.filter((entry) => getEntryState(entry).authBacked),
+            ...params.catalog.filter(
+              (entry) =>
+                configuredKeys.has(publicationKeyOf(entry)) || getEntryState(entry).authBacked,
+            ),
           ]),
         )
       : [];

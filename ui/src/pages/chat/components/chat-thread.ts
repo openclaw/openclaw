@@ -24,7 +24,7 @@ import {
   CHAT_HISTORY_BOUNDARY_HEIGHT_PX,
   renderChatHistoryBoundary,
 } from "./chat-history-boundary.ts";
-import "./chat-comment-pins.ts";
+import "./chat-comment-pins.tsx";
 import { renderChatPositionRail } from "./chat-position-rail.ts";
 import {
   handleTranscriptContextMenu,
@@ -93,7 +93,7 @@ function renderTranscriptShell(
     ? renderLoadingState()
     : projection.showLoadingSkeleton || projection.isEmpty
       ? html`
-          <div class="chat-thread-inner" ${ref(transcript.scrollElementRef)}>
+          <div class="chat-thread-inner">
             ${historySentinel}
             ${
               projection.isEmpty && !projection.showLoadingSkeleton && historyHeader
@@ -106,7 +106,7 @@ function renderTranscriptShell(
                 : nothing
             }
             ${
-              projection.isEmpty && !projection.searchOpen
+              projection.isEmpty && !projection.showLoadingSkeleton && !projection.searchOpen
                 ? renderWelcomeState({ ...props, onModelSetup: undefined })
                 : nothing
             }
@@ -124,8 +124,8 @@ function renderTranscriptShell(
         class="chat-thread ${projection.isDirectThread ? "chat-thread--direct" : ""} ${
           routeLoading ? "chat-thread--route-loading" : ""
         } ${commentPins ? "chat-thread--comment-pins" : ""}"
-        ${markdownBlocks(props.transcriptVisible ?? true, props.transcriptPresentation)}
-        ${linkReaderPrefetch(props.sessionKey, (props.transcriptVisible ?? true) && !projection.showLoadingSkeleton, Boolean(props.gatewayClient?.connected), props.transcriptPresentation)}
+        ${markdownBlocks(props.transcriptVisible ?? true)}
+        ${linkReaderPrefetch(props.sessionKey, projection.showLoadingSkeleton ? false : (props.transcriptVisible ?? true), Boolean(props.gatewayClient?.connected))}
         ${ref((element) => {
           if (element instanceof HTMLElement) {
             hydrateLinkFavicons(element, props.fetchLinkFavicon);

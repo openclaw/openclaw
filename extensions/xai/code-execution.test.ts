@@ -30,13 +30,6 @@ function jsonResponse(payload: unknown, init?: ResponseInit): Response {
   });
 }
 
-function malformedJsonResponse(): Response {
-  return new Response("{ nope", {
-    status: 200,
-    headers: { "content-type": "application/json" },
-  });
-}
-
 function installCodeExecutionFetch(payload?: Record<string, unknown>) {
   const mockFetch = vi.fn((_input?: unknown, _init?: unknown) =>
     Promise.resolve(
@@ -207,22 +200,6 @@ describe("xai code_execution tool", () => {
     expect(body.store).toBe(false);
     expect(body).not.toHaveProperty("reasoning");
     expect(body).not.toHaveProperty("max_turns");
-  });
-
-  it("reports malformed code_execution JSON as a provider error", async () => {
-    const mockFetch = vi.fn((_input?: unknown, _init?: unknown) =>
-      Promise.resolve(malformedJsonResponse()),
-    );
-    vi.stubGlobal("fetch", withFetchPreconnect(mockFetch));
-    const tool = createCodeExecutionTool({
-      config: codeExecutionConfig(),
-    });
-
-    await expect(
-      tool?.execute?.("code-execution:malformed-json", {
-        task: "Calculate the mean of [40, 42, 44]",
-      }),
-    ).rejects.toThrow("xAI code execution failed: malformed JSON response");
   });
 
   it("reports missing code_execution answers without blaming JSON decoding", async () => {

@@ -33,11 +33,13 @@ import { resolveCodexAppServerFallbackApiKeyCacheKey } from "../app-server/auth-
 import { resolveCodexAppServerAuthProfileIdForAgent } from "../app-server/auth-profile.js";
 import {
   CODEX_PLUGINS_MARKETPLACE_NAME,
-  readCodexPluginConfig,
   resolveCodexAppServerRuntimeOptions,
   type ResolvedCodexPluginPolicy,
 } from "../app-server/config.js";
-import { ensureCodexPluginActivation } from "../app-server/plugin-activation.js";
+import {
+  ensureCodexPluginActivation,
+  type CodexPluginActivationResult,
+} from "../app-server/plugin-activation.js";
 import { buildCodexPluginAppCacheKey } from "../app-server/plugin-app-cache-key.js";
 import { isOpenAiCuratedMarketplaceName } from "../app-server/plugin-inventory.js";
 import type { v2 } from "../app-server/protocol.js";
@@ -47,7 +49,6 @@ import {
   getLeasedSharedCodexAppServerClient,
   releaseLeasedSharedCodexAppServerClient,
 } from "../app-server/shared-client.js";
-import { codexPluginActivationReportState } from "./apply-report.js";
 import {
   createCodexAuthItemApplier,
   resolveCodexConfigPatchMode,
@@ -71,6 +72,16 @@ const TARGET_CODEX_MARKETPLACE_DISCOVERY_POLL_MS = 250;
 const TARGET_CODEX_MARKETPLACE_DISCOVERY_TIMEOUT_MS = 30_000;
 const TARGET_CODEX_MARKETPLACE_DISCOVERY_TIMEOUT_ENV =
   "OPENCLAW_CODEX_MIGRATION_PLUGIN_LIST_TIMEOUT_MS";
+const PLUGIN_ACTIVATION_REPORT_STATE = {
+  already_active: { installed: true, enabled: true },
+  installed: { installed: true, enabled: true },
+  auth_required: { installed: true, enabled: false },
+  refresh_failed: { installed: true, enabled: false },
+  disabled: { installed: false, enabled: false },
+  install_failed: { installed: false, enabled: false },
+  marketplace_missing: { installed: false, enabled: false },
+  plugin_missing: { installed: false, enabled: false },
+} satisfies Record<CodexPluginActivationResult["reason"], { installed: boolean; enabled: boolean }>;
 
 type CodexMigrationTargetAppServerPreparation = {
   dispose: () => Promise<void>;
@@ -88,21 +99,15 @@ export function prepareTargetCodexAppServer(
 ): CodexMigrationTargetAppServerPreparation {
   const appServer = resolveTargetCodexAppServer(ctx);
   const targets = resolvePlannedMigrationTargets(ctx);
-  let warmedClient: Awaited<ReturnType<typeof getLeasedSharedCodexAppServerClient>> | undefined;
   const ready = getLeasedSharedCodexAppServerClient({
     startOptions: appServer.start,
     timeoutMs: 60_000,
     agentDir: targets.agentDir,
     config: ctx.config,
-  }).then(
-    (client) => {
-      warmedClient = client;
-    },
-    () => undefined,
-  );
+  }).catch(() => undefined);
   return {
     async dispose() {
-      await ready;
+      const warmedClient = await ready;
       if (warmedClient) {
         releaseLeasedSharedCodexAppServerClient(warmedClient);
       }
@@ -213,55 +218,41 @@ async function applyCodexPluginInstallItem(
       appCache: defaultCodexAppInventoryCache,
       appCacheKey,
     });
-    const baseDetails = {
-      ...item.details,
-      code: result.reason,
-      activationReason: result.reason,
-      ...codexPluginActivationReportState(result),
-      installAttempted: result.installAttempted,
-      diagnostics: result.diagnostics.map((diagnostic) => diagnostic.message),
+    const applied: MigrationItem = {
+      ...item,
+      status: result.ok ? "migrated" : "error",
+      details: {
+        ...item.details,
+        code: result.reason,
+        activationReason: result.reason,
+        ...PLUGIN_ACTIVATION_REPORT_STATE[result.reason],
+        installAttempted: result.installAttempted,
+        diagnostics: result.diagnostics.map((diagnostic) => diagnostic.message),
+      },
     };
     if (result.ok) {
-      return {
-        ...item,
-        status: "migrated",
-        ...(result.reason === "already_active" ? { reason: "already active" } : {}),
-        details: baseDetails,
-      };
+      if (result.reason === "already_active") {
+        applied.reason = "already active";
+      }
+      return applied;
     }
+    applied.reason = result.reason;
     if (result.reason === CODEX_PLUGIN_AUTH_REQUIRED_REASON) {
-      return {
-        ...item,
-        status: "skipped",
-        reason: CODEX_PLUGIN_AUTH_REQUIRED_REASON,
-        details: {
-          ...baseDetails,
-          appsNeedingAuth: (result.installResponse?.appsNeedingAuth ?? []).map(({ id, name }) => ({
-            id,
-            name,
-            needsAuth: true,
-          })),
-        },
+      applied.status = "skipped";
+      applied.details = {
+        ...applied.details,
+        appsNeedingAuth: (result.installResponse?.appsNeedingAuth ?? []).map(({ id, name }) => ({
+          id,
+          name,
+          needsAuth: true,
+        })),
       };
+    } else if (result.reason === "plugin_missing" || result.reason === "marketplace_missing") {
+      applied.status = "warning";
+      applied.message = `Codex plugin "${policy.pluginName}" could not be migrated automatically`;
+      applied.details = { ...applied.details, warningReason: CODEX_PLUGIN_LOAD_WARNING };
     }
-    if (result.reason === "plugin_missing" || result.reason === "marketplace_missing") {
-      return {
-        ...item,
-        status: "warning",
-        reason: result.reason,
-        message: `Codex plugin "${policy.pluginName}" could not be migrated automatically`,
-        details: {
-          ...baseDetails,
-          warningReason: CODEX_PLUGIN_LOAD_WARNING,
-        },
-      };
-    }
-    return {
-      ...item,
-      status: "error",
-      reason: result.reason,
-      details: baseDetails,
-    };
+    return applied;
   } catch (error) {
     if (coerceErrorMessage(error).includes("codex app-server plugin/list timed out")) {
       return {
@@ -291,7 +282,7 @@ async function applyCodexPluginInstallItem(
 
 function resolveTargetCodexAppServer(ctx: MigrationProviderContext) {
   return resolveCodexAppServerRuntimeOptions({
-    pluginConfig: readCodexPluginConfig(ctx.config),
+    pluginConfig: ctx.config.plugins?.entries?.codex?.config,
   });
 }
 

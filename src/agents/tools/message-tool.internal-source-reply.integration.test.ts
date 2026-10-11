@@ -1,8 +1,8 @@
-// Integration coverage for targetless WebChat tool sends through the internal
-// source-reply sink and embedded-run payload projection.
+// Integration coverage for real cron message authority and targetless WebChat
+// replies through the internal source-reply sink and embedded-run payload projection.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { asOptionalRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it, vi } from "vitest";
 import { getReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
 import { buildReplyPayloads } from "../../auto-reply/reply/agent-runner-payloads.js";
@@ -24,6 +24,12 @@ import {
   resolveManagedOutgoingMediaArtifactDownload,
 } from "../../gateway/managed-image-attachments.js";
 import { listManagedImageRecordEntries } from "../../gateway/managed-image-record-store.js";
+import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
+import {
+  createSqliteWorkerTransferReceiver,
+  type SqliteWorkerTransferFrame,
+  type SqliteWorkerTransferHandle,
+} from "../../infra/sqlite-worker-transfer.js";
 import {
   onSessionTranscriptUpdate,
   type SessionTranscriptUpdate,
@@ -37,6 +43,7 @@ import { createRemoteShellSandboxFsBridge } from "../sandbox/remote-fs-bridge.js
 import { createLocalRemoteShellScriptRunner } from "../sandbox/remote-fs-bridge.test-helpers.js";
 import { createSandboxTestContext } from "../sandbox/test-fixtures.js";
 import { createMessageTool } from "./message-tool-execution.js";
+import { withCronMessageRun } from "./message-tool.cron.test-support.js";
 
 // Internal WebChat sends have no external channels to discover.
 const INTERNAL_SOURCE_CATALOG = {
@@ -49,7 +56,7 @@ function createCurrentSourceMessageTool(
   params: NonNullable<Parameters<typeof createMessageTool>[0]> = {},
 ) {
   return createMessageTool({
-    config: { agents: { entries: { main: { default: true } } } },
+    config: { agents: { entries: { main: {} } } },
     preparedMessageToolCatalog: INTERNAL_SOURCE_CATALOG,
     currentChannelProvider: "webchat",
     sourceReplyDeliveryMode: "automatic",
@@ -71,6 +78,201 @@ const TINY_PNG_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9ZQmcAAAAASUVORK5CYII=";
 
 describe("WebChat message tool internal source reply", () => {
+  it("refuses an internal-source transcript commit after its real cron admission closes", async () => {
+    await withOpenClawTestState(
+      { layout: "state-only", prefix: "cron-source-commit-" },
+      async (state) => {
+        const sessionKey = "agent:main:webchat:dm:cron-source-commit";
+        const sessionId = "cron-source-commit-session";
+        const storePath = path.join(state.stateDir, "agents", "main", "sessions", "sessions.json");
+        const scope = { agentId: "main", sessionKey, sessionId, storePath };
+        await replaceSessionEntry(scope, { sessionId, updatedAt: 1 });
+        await withCronMessageRun(
+          {
+            cfg: {
+              agents: { entries: { main: {} }, defaults: { workspace: state.workspaceDir } },
+              tools: { allow: ["message"] },
+            },
+            storePath: state.statePath("cron", "internal-source.json"),
+            sessionKey,
+            sessionId,
+          },
+          async (owner) => {
+            const message = "must never become a committed assistant message";
+            let commitRequests = 0;
+            let granted = 0;
+            const create = workerAdmission.createSqliteWorkerOperationAdmission;
+            const admission = vi
+              .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
+              .mockImplementation((admit, attachment) => {
+                let receiver: ReturnType<typeof createSqliteWorkerTransferReceiver> | undefined;
+                let transferId: number | undefined;
+                let assistantTurn = false;
+                return create((request, grant) => {
+                  const facts =
+                    isRecord(request.facts) && request.facts.kind === "session-entry-current"
+                      ? request.facts.domainFacts
+                      : request.facts;
+                  const publication = isRecord(facts) ? facts.publication : undefined;
+                  if (isRecord(publication)) {
+                    if (publication.kind === "session-entry-patch-transfer") {
+                      // SAFETY: The real session-entry worker emits this typed transfer handle.
+                      const handle = publication.handle as SqliteWorkerTransferHandle;
+                      transferId = handle.id;
+                      assistantTurn = false;
+                      receiver = createSqliteWorkerTransferReceiver(handle, (record) => {
+                        if (
+                          record.kind === "patch" &&
+                          isRecord(record.value) &&
+                          record.value.kind === "session-turn" &&
+                          isRecord(record.value.result) &&
+                          Array.isArray(record.value.result.appendedMessages)
+                        ) {
+                          assistantTurn = record.value.result.appendedMessages.some(
+                            (appended: unknown) =>
+                              isRecord(appended) &&
+                              isRecord(appended.message) &&
+                              appended.message.role === "assistant" &&
+                              readAssistantDisplayContent(appended.message).some(
+                                (block) => block.type === "text" && block.text === message,
+                              ),
+                          );
+                        }
+                      });
+                    } else if (publication.kind === "session-entry-patch-frame") {
+                      // SAFETY: This frame belongs to the intercepted worker transfer above.
+                      receiver?.accept(publication.frame as SqliteWorkerTransferFrame);
+                    } else if (
+                      request.stage === "commit" &&
+                      publication.kind === "session-entry-patch-committed" &&
+                      publication.transferId === transferId &&
+                      assistantTurn
+                    ) {
+                      commitRequests += 1;
+                      owner.closeAdmission();
+                      return admit(request, () => {
+                        const accepted = grant();
+                        granted += Number(accepted);
+                        return accepted;
+                      });
+                    }
+                  }
+                  return admit(request, grant);
+                }, attachment);
+              });
+            try {
+              const tool = owner.createTool({
+                preparedMessageToolCatalog: INTERNAL_SOURCE_CATALOG,
+                currentChannelProvider: "webchat",
+                sourceReplyDeliveryMode: "automatic",
+              });
+              const outcome = await tool
+                .execute("cron-source-commit", { action: "send", message })
+                .then(
+                  (result) => ({ result }),
+                  (error: unknown) => ({ error }),
+                );
+              const assistants = (await loadTranscriptEvents(scope)).filter(
+                (event) => readTranscriptEventMessage(event)?.role === "assistant",
+              );
+              expect({ commitRequests, granted, assistants }).toEqual({
+                commitRequests: 1,
+                granted: 0,
+                assistants: [],
+              });
+              expect(outcome).toHaveProperty("error");
+            } finally {
+              admission.mockRestore();
+            }
+          },
+        );
+      },
+    );
+  });
+
+  it("downloads and persists scheduled current-source media once", async () => {
+    await withOpenClawTestState(
+      { layout: "state-only", prefix: "cron-source-remote-media-" },
+      async (state) => {
+        const sessionKey = "agent:main:webchat:dm:cron-source-media";
+        const sessionId = "cron-source-media-session";
+        const storePath = path.join(state.stateDir, "agents", "main", "sessions", "sessions.json");
+        const scope = { agentId: "main", sessionKey, sessionId, storePath };
+        await fs.mkdir(state.workspaceDir, { recursive: true });
+        await replaceSessionEntry(scope, { sessionId, updatedAt: 1 });
+        await withCronMessageRun(
+          {
+            cfg: {
+              agents: { entries: { main: {} }, defaults: { workspace: state.workspaceDir } },
+              tools: { allow: ["message"] },
+            },
+            storePath: state.statePath("cron", "internal-source-media.json"),
+            sessionKey,
+            sessionId,
+          },
+          async (owner) => {
+            const fetchStarted = Promise.withResolvers<void>();
+            const response = Promise.withResolvers<Response>();
+            const fetch = vi.fn(() => {
+              fetchStarted.resolve();
+              return response.promise;
+            });
+            vi.stubGlobal("fetch", fetch);
+            let execution: ReturnType<ReturnType<typeof createMessageTool>["execute"]> | undefined;
+            const respond = () =>
+              response.resolve(
+                new Response(new Uint8Array(Buffer.from(TINY_PNG_BASE64, "base64")), {
+                  headers: { "content-type": "image/png" },
+                }),
+              );
+            try {
+              const tool = owner.createTool({
+                preparedMessageToolCatalog: INTERNAL_SOURCE_CATALOG,
+                currentChannelProvider: "webchat",
+                sourceReplyDeliveryMode: "automatic",
+              });
+              const args = {
+                action: "send",
+                message: "Remote media from a scheduled current-source reply.",
+                media: "https://93.184.216.34/proof.png",
+              };
+              execution = tool.execute("cron-source-media", args);
+              await Promise.race([
+                fetchStarted.promise,
+                execution.then(() => {
+                  throw new Error("Scheduled source reply completed before its media request");
+                }),
+              ]);
+              respond();
+              const result = await execution;
+              expect(result.details).toMatchObject({
+                sourceReplySink: "internal-ui",
+                sourceReplyTranscriptOwner: true,
+              });
+              await tool.execute("cron-source-media", args);
+              const assistants = (await loadTranscriptEvents(scope))
+                .map(readTranscriptEventMessage)
+                .filter((message) => message?.role === "assistant");
+              expect(assistants).toHaveLength(1);
+              expect(readAssistantDisplayContent(assistants[0])).toEqual([
+                { type: "text", text: args.message },
+                expect.objectContaining({
+                  type: "image",
+                  artifactId: expect.stringMatching(/^artifact_managed_image_/u),
+                }),
+              ]);
+              expect(fetch).toHaveBeenCalledTimes(1);
+            } finally {
+              respond();
+              await execution?.catch(() => undefined);
+              vi.unstubAllGlobals();
+            }
+          },
+        );
+      },
+    );
+  });
+
   it("projects a real targetless send and preserves the automatic final reply", async () => {
     const tool = createCurrentSourceMessageTool();
 
@@ -85,6 +287,12 @@ describe("WebChat message tool internal source reply", () => {
       sourceReplySink: "internal-ui",
       sourceReply: { text: "Visible progress from the message tool." },
     });
+    expect(toolResult.content).toEqual([
+      {
+        type: "text",
+        text: "Sent visible reply to the current source conversation via internal-ui.",
+      },
+    ]);
 
     const sourceReply = extractMessagingToolSourceReplyPayload(toolResult);
     expect(sourceReply).toMatchObject({ text: "Visible progress from the message tool." });
@@ -126,6 +334,34 @@ describe("WebChat message tool internal source reply", () => {
     expect(getReplyPayloadMetadata(payloads[1] as object)?.sourceReplyTranscriptMirror).toBe(
       undefined,
     );
+  });
+
+  it("reports a route-less inter-session send as a transcript record, not a channel delivery", async () => {
+    const tool = createCurrentSourceMessageTool({
+      agentSessionKey: "agent:main:main",
+      sourceReplyDeliveryMode: "message_tool_only",
+      inputProvenance: {
+        kind: "inter_session",
+        sourceSessionKey: "agent:main:subagent:child",
+        sourceTool: "sessions_send",
+      },
+    });
+
+    const toolResult = await tool.execute("message-call", {
+      action: "send",
+      message: "Child task finished.",
+    });
+
+    expect(toolResult.details).toMatchObject({
+      target: "current-run",
+      sourceReplySink: "internal-ui",
+    });
+    expect(toolResult.content).toEqual([
+      {
+        type: "text",
+        text: "Recorded reply in the current session transcript via internal-ui. This send did not deliver it to an external channel.",
+      },
+    ]);
   });
 
   it("stages a trusted HTML buffer before acknowledging the current-source send", async () => {
@@ -272,7 +508,7 @@ describe("WebChat message tool internal source reply", () => {
           { sessionId, chatType: "direct", updatedAt: 1 },
         );
         const config = {
-          agents: { entries: { main: { default: true, workspace: workspaceDir } } },
+          agents: { entries: { main: { workspace: workspaceDir } } },
         };
         const tool = createCurrentSourceMessageTool({
           config,
@@ -483,7 +719,7 @@ describe("WebChat message tool internal source reply", () => {
             const persist = () =>
               persistInternalSourceReply({
                 cfg: {
-                  agents: { entries: { main: { default: true, workspace: state.workspaceDir } } },
+                  agents: { entries: { main: { workspace: state.workspaceDir } } },
                 },
                 sessionKey,
                 expectedSessionId: sessionId,

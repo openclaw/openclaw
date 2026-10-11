@@ -1,6 +1,14 @@
 // Test Live tests cover test live script behavior.
 import { spawn, spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
@@ -8,19 +16,84 @@ import { setTimeout as delay } from "node:timers/promises";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   buildTestLiveEnv,
-  buildTestLivePnpmArgs,
-  buildTestLiveSpawnParams,
+  buildTestLiveVitestArgs,
   parseTestLiveArgs,
   resolveTestLiveHeartbeatMs,
 } from "../../scripts/test-live.mts";
 import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
 import { withinTest } from "../helpers/promise.js";
+import { runNodeScript } from "../helpers/run-node-script.js";
 
 const posixIt = process.platform === "win32" ? it.skip : it;
 const fixtureLifetime = createFixtureLifetime();
 afterEach(() => fixtureLifetime.cleanup());
 
 describe("scripts/test-live", () => {
+  posixIt.for([
+    { runtime: "node", exitCode: 0 },
+    { runtime: "node", exitCode: 7 },
+    { runtime: "bun", exitCode: 0 },
+    { runtime: "bun", exitCode: 7 },
+  ])(
+    "runs the cache package lane through $runtime and preserves exit $exitCode",
+    async ({ runtime, exitCode }, { signal }) => {
+      await fixtureLifetime.run(async () => {
+        const root = fixtureLifetime.createTempDir("openclaw-cache-runtime-");
+        const home = join(root, "home");
+        const tmp = join(root, "tmp");
+        mkdirSync(home);
+        mkdirSync(tmp);
+        const receipt = join(root, "invocation.json");
+        const preload = join(root, "cache-preload.mjs");
+        // Intercept both old and new leaf entrypoints before any provider code loads.
+        writeFileSync(
+          preload,
+          [
+            'import fs from "node:fs";',
+            'import path from "node:path";',
+            'if (["check-live-cache.ts", "vitest.mjs"].includes(path.basename(process.argv[1] ?? ""))) {',
+            "  fs.writeFileSync(process.env.OPENCLAW_CACHE_RUNTIME_RECEIPT, JSON.stringify({",
+            '    runtime: process.versions.bun ? "bun" : "node", args: process.argv.slice(2),',
+            "    live: process.env.OPENCLAW_LIVE_TEST, cache: process.env.OPENCLAW_LIVE_CACHE_TEST,",
+            "  }));",
+            "  process.exit(Number(process.env.OPENCLAW_FAKE_BUN_EXIT));",
+            "}",
+          ].join("\n"),
+        );
+        writeFakeBun(join(root, "bun"));
+        const script = JSON.parse(readFileSync("package.json", "utf8")).scripts["test:live:cache"];
+        const [command, ...args] = script.split(/\s+/u);
+        expect(command).toBe("node");
+        expect(args.at(-1)).toMatch(
+          /^(?:scripts\/check-live-cache\.ts|src\/agents\/live-cache-regression\.live\.test\.ts)$/u,
+        );
+        const result = await fixtureLifetime.track(
+          runNodeScript(
+            args,
+            {
+              PATH: `${root}:${process.env.PATH ?? ""}`,
+              HOME: home,
+              TMPDIR: tmp,
+              TMP: tmp,
+              TEMP: tmp,
+              NODE_OPTIONS: `--import=${preload}`,
+              OPENCLAW_VITEST_RUNTIME: runtime,
+              OPENCLAW_CACHE_RUNTIME_RECEIPT: receipt,
+              OPENCLAW_FAKE_BUN_EXIT: String(exitCode),
+            },
+            15_000,
+            { cwd: process.cwd(), signal, requireProcessTreeExit: true, maxBuffer: 128 * 1024 },
+          ),
+        );
+        expect(result.error, result.stderr).toBeUndefined();
+        expect(result.status, result.stderr).toBe(exitCode);
+        const invocation = JSON.parse(readFileSync(receipt, "utf8"));
+        expect(invocation).toMatchObject({ runtime, live: "1", cache: "1" });
+        expect(invocation.args).toContain("src/agents/live-cache-regression.live.test.ts");
+      });
+    },
+  );
+
   it("parses wrapper flags before live test spawn", () => {
     const args = parseTestLiveArgs([
       "--codex-harness",
@@ -36,9 +109,7 @@ describe("scripts/test-live", () => {
       help: false,
       quietOverride: "0",
     });
-    expect(buildTestLivePnpmArgs(args)).toEqual([
-      "exec",
-      "vitest",
+    expect(buildTestLiveVitestArgs(args)).toEqual([
       "run",
       "--config",
       "test/vitest/vitest.live.config.ts",
@@ -74,36 +145,24 @@ describe("scripts/test-live", () => {
     });
   });
 
-  it("spawns live test children in a cleanup-friendly process group", () => {
-    expect(buildTestLiveSpawnParams({ PATH: "/usr/bin" }, "darwin")).toEqual({
-      detached: true,
-      env: { PATH: "/usr/bin" },
-      stdio: ["inherit", "pipe", "pipe"],
-    });
-    expect(buildTestLiveSpawnParams({ PATH: "/usr/bin" }, "win32")).toEqual({
-      detached: false,
-      env: { PATH: "/usr/bin" },
-      stdio: ["inherit", "pipe", "pipe"],
-    });
-  });
-
   posixIt.for(["SIGINT", "SIGTERM"] as const)(
-    "signals the live pnpm child on %s and removes its joined namespace",
+    "selects Bun, signals its live child on %s and removes its joined namespace",
     (stopSignal, { signal }) =>
       fixtureLifetime.run(async () => {
         const root = mkdtempSync(join(tmpdir(), "openclaw-test-live-signal-"));
-        const fakePnpmPath = join(root, "pnpm");
+        const fakeBunPath = join(root, "bun");
         const signaledPath = join(root, "signaled");
 
-        writeFakePnpm(fakePnpmPath);
+        writeFakeBun(fakeBunPath);
         const runner = spawn(
           process.execPath,
           ["--import", "tsx", "scripts/test-live.mts", "--", "fake.live.test.ts"],
           {
             env: {
               ...process.env,
-              OPENCLAW_FAKE_PNPM_SIGNALED_PATH: signaledPath,
-              npm_execpath: fakePnpmPath,
+              OPENCLAW_FAKE_BUN_SIGNALED_PATH: signaledPath,
+              OPENCLAW_VITEST_RUNTIME: "bun",
+              PATH: `${root}:${process.env.PATH ?? ""}`,
             },
             stdio: ["ignore", "pipe", "ignore"],
           },
@@ -114,6 +173,18 @@ describe("scripts/test-live", () => {
 
         try {
           ({ childPid, descendantPid } = await waitForFixtureReady(runner, signal));
+
+          const invocation = JSON.parse(readFileSync(join(root, "invocation.json"), "utf8"));
+          expect(invocation).toMatchObject({ live: "1", quiet: "1", compileCache: "1" });
+          expect(invocation.args).toEqual([
+            "--tsconfig-override",
+            join(process.cwd(), "tsconfig.json"),
+            expect.stringMatching(/[/\\]vitest\.mjs$/),
+            "run",
+            "--config",
+            "test/vitest/vitest.live.config.ts",
+            "fake.live.test.ts",
+          ]);
 
           expect(runner.pid).toBeGreaterThan(0);
           process.kill(runner.pid!, stopSignal);
@@ -131,65 +202,68 @@ describe("scripts/test-live", () => {
       }),
   );
 
-  posixIt("kills the live pnpm process group after the no-output timeout", ({ signal }) =>
-    fixtureLifetime.run(async () => {
-      const root = mkdtempSync(join(tmpdir(), "openclaw-test-live-timeout-"));
-      const fakePnpmPath = join(root, "pnpm");
-      const stderr: Buffer[] = [];
+  posixIt(
+    "kills the selected live runtime process group after the no-output timeout",
+    ({ signal }) =>
+      fixtureLifetime.run(async () => {
+        const root = mkdtempSync(join(tmpdir(), "openclaw-test-live-timeout-"));
+        const fakeBunPath = join(root, "bun");
+        const stderr: Buffer[] = [];
 
-      writeFakePnpm(fakePnpmPath);
-      // Advance the watchdog only after the real process group is ready; startup
-      // latency must not race the short timeout that this test is exercising.
-      const runner = spawn(
-        process.execPath,
-        [
-          "--import",
-          "tsx",
-          "--input-type=module",
-          "--eval",
+        writeFakeBun(fakeBunPath);
+        // Advance the watchdog only after the real process group is ready; startup
+        // latency must not race the short timeout that this test is exercising.
+        const runner = spawn(
+          process.execPath,
           [
-            'import { mock } from "node:test";',
-            'import { main } from "./scripts/test-live.mts";',
-            'mock.timers.enable({ apis: ["Date", "setInterval"], now: 0 });',
-            'process.once("message", () => {',
-            "  mock.timers.tick(25);",
-            "  mock.timers.tick(75);",
-            "});",
-            'main(["--", "fake.live.test.ts"]);',
-          ].join("\n"),
-        ],
-        {
-          env: {
-            ...process.env,
-            OPENCLAW_LIVE_WRAPPER_HEARTBEAT_MS: "25",
-            OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "100",
-            npm_execpath: fakePnpmPath,
+            "--import",
+            "tsx",
+            "--input-type=module",
+            "--eval",
+            [
+              'import { mock } from "node:test";',
+              'import { main } from "./scripts/test-live.mts";',
+              'mock.timers.enable({ apis: ["Date", "setInterval"], now: 0 });',
+              'process.once("message", () => {',
+              "  mock.timers.tick(25);",
+              "  mock.timers.tick(75);",
+              "});",
+              'main(["--", "fake.live.test.ts"]);',
+            ].join("\n"),
+          ],
+          {
+            env: {
+              ...process.env,
+              OPENCLAW_LIVE_WRAPPER_HEARTBEAT_MS: "25",
+              OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "100",
+              OPENCLAW_VITEST_RUNTIME: "bun",
+              PATH: `${root}:${process.env.PATH ?? ""}`,
+            },
+            stdio: ["ignore", "pipe", "pipe", "ipc"],
           },
-          stdio: ["ignore", "pipe", "pipe", "ipc"],
-        },
-      );
-      const completion = waitForClose(runner);
-      runner.stderr?.on("data", (chunk) => stderr.push(chunk));
-      let childPid = 0;
-      let descendantPid = 0;
-
-      try {
-        ({ childPid, descendantPid } = await waitForFixtureReady(runner, signal));
-
-        runner.send("advance-watchdog");
-        expect(await withinTest(completion, signal)).toEqual({ code: 1, signal: null });
-        expect(Buffer.concat(stderr).toString("utf8")).toContain(
-          "no output for 100ms; terminating stalled Vitest process group",
         );
-        expect(Buffer.concat(stderr).toString("utf8")).toContain("[test:live] still running");
-        await waitForProcessExit(childPid, signal);
-        await waitForProcessExit(descendantPid, signal);
-        expect(existsSync(readFileSync(join(root, "namespace"), "utf8"))).toBe(false);
-      } finally {
-        await stopFixture(runner, completion, [childPid, descendantPid]);
-        rmSync(root, { force: true, recursive: true });
-      }
-    }),
+        const completion = waitForClose(runner);
+        runner.stderr?.on("data", (chunk) => stderr.push(chunk));
+        let childPid = 0;
+        let descendantPid = 0;
+
+        try {
+          ({ childPid, descendantPid } = await waitForFixtureReady(runner, signal));
+
+          runner.send("advance-watchdog");
+          expect(await withinTest(completion, signal)).toEqual({ code: 1, signal: null });
+          expect(Buffer.concat(stderr).toString("utf8")).toContain(
+            "no output for 100ms; terminating stalled Vitest process group",
+          );
+          expect(Buffer.concat(stderr).toString("utf8")).toContain("[test:live] still running");
+          await waitForProcessExit(childPid, signal);
+          await waitForProcessExit(descendantPid, signal);
+          expect(existsSync(readFileSync(join(root, "namespace"), "utf8"))).toBe(false);
+        } finally {
+          await stopFixture(runner, completion, [childPid, descendantPid]);
+          rmSync(root, { force: true, recursive: true });
+        }
+      }),
   );
 
   it("rejects loose heartbeat intervals instead of parsing prefixes", () => {
@@ -225,18 +299,24 @@ describe("scripts/test-live", () => {
   });
 });
 
-function writeFakePnpm(filePath: string): void {
+function writeFakeBun(filePath: string): void {
   writeFileSync(
     filePath,
     [
       "#!/usr/bin/env node",
       'const { spawn } = require("node:child_process");',
       'const fs = require("node:fs");',
+      'fs.writeFileSync(require("node:path").join(__dirname, "invocation.json"), JSON.stringify({',
+      '  runtime: "bun", args: process.argv.slice(2), live: process.env.OPENCLAW_LIVE_TEST,',
+      "  cache: process.env.OPENCLAW_LIVE_CACHE_TEST,",
+      "  quiet: process.env.OPENCLAW_LIVE_TEST_QUIET, compileCache: process.env.NODE_DISABLE_COMPILE_CACHE,",
+      "}));",
+      "if (process.env.OPENCLAW_FAKE_BUN_EXIT !== undefined) process.exit(Number(process.env.OPENCLAW_FAKE_BUN_EXIT));",
       'const tmp = require("node:os").tmpdir();',
       'fs.writeFileSync(require("node:path").join(__dirname, "namespace"), tmp);',
       'fs.writeFileSync(require("node:path").join(tmp, "owned-marker"), "owned");',
       'for (const signal of ["SIGINT", "SIGTERM"]) process.on(signal, () => {',
-      "  fs.writeFileSync(process.env.OPENCLAW_FAKE_PNPM_SIGNALED_PATH, signal);",
+      "  fs.writeFileSync(process.env.OPENCLAW_FAKE_BUN_SIGNALED_PATH, signal);",
       "  process.exit(0);",
       "});",
       "const child = spawn(process.execPath, [",

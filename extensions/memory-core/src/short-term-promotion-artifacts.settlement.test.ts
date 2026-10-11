@@ -8,7 +8,6 @@ import {
   DREAMING_SESSION_INGESTION_FILES_NAMESPACE,
   DREAMING_SESSION_INGESTION_SEEN_NAMESPACE,
   SESSION_BACKFILL_REWIND_NAMESPACE,
-  SHORT_TERM_LOCK_NAMESPACE,
   SHORT_TERM_PHASE_SIGNAL_NAMESPACE,
   SHORT_TERM_RECALL_NAMESPACE,
   writeMemoryCoreWorkspaceEntry,
@@ -16,7 +15,7 @@ import {
 import { withMemoryWorkspaceLock } from "./memory-workspace-lock.js";
 import { rewindSessionBackfillIngestionState } from "./session-backfill-lifecycle.js";
 import { removeGroundedShortTermCandidates } from "./short-term-promotion-artifacts.js";
-import { recordGroundedShortTermCandidates } from "./short-term-promotion-record.js";
+import { recordShortTermRecalls } from "./short-term-promotion-record.js";
 import { recordDreamingPhaseSignals } from "./short-term-promotion-stats.js";
 import {
   configureMemoryCoreDreamingStateForTests,
@@ -38,11 +37,13 @@ it.each([
     failingNamespace: SHORT_TERM_PHASE_SIGNAL_NAMESPACE,
     pendingNamespace: SHORT_TERM_RECALL_NAMESPACE,
     async prepare(workspaceDir: string) {
-      await recordGroundedShortTermCandidates({
+      await recordShortTermRecalls({
         workspaceDir,
         query: "historical candidate",
-        items: [
+        signalType: "grounded",
+        results: [
           {
+            source: "memory",
             path: "memory/2026-04-03.md",
             startLine: 1,
             endLine: 1,
@@ -116,7 +117,6 @@ it.each([
     const firstFailureIssued = createDeferred<void>();
     const failure = new Error("write unavailable");
     let failureSelected = false;
-    let lockReleaseStarted = false;
     const beforeMutation = async (namespace: string) => {
       if (namespace === scenario.failingNamespace && !failureSelected) {
         failureSelected = true;
@@ -134,12 +134,6 @@ it.each([
       const store = createPluginStateKeyedStoreForTests<T>("memory-core", options);
       return {
         ...store,
-        async compareAndApply(...args: Parameters<typeof store.compareAndApply>) {
-          if (options.namespace === SHORT_TERM_LOCK_NAMESPACE && args[2].operation === "delete") {
-            lockReleaseStarted = true;
-          }
-          return await store.compareAndApply(...args);
-        },
         async register(...args: Parameters<typeof store.register>) {
           if (scenario.mutation === "register") {
             await beforeMutation(options.namespace);
@@ -167,7 +161,6 @@ it.each([
     vi.useFakeTimers();
     try {
       await vi.advanceTimersByTimeAsync(0);
-      expect(lockReleaseStarted).toBe(false);
       expect(rollbackSettled).toBe(false);
       expect(nextWriterEntered).toBe(false);
     } finally {

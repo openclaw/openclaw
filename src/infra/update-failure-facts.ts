@@ -4,7 +4,6 @@ import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion"
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { containsAsciiControlCharacter } from "@openclaw/normalization-core/string-normalization";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import type { z } from "zod";
 import { resolveStateDir } from "../config/paths.js";
 import {
   redactPublicSupportDiagnosticLine,
@@ -22,10 +21,45 @@ import {
 } from "./errors.js";
 import { npmFailurePackageName } from "./npm-error.js";
 import { resolveOpenClawPackageRootSync } from "./openclaw-root.js";
+import { formatUpdateFailureFact, type UpdateFailureFact } from "./update-failure-facts-format.js";
 import { isPublicUpdateFailureCode } from "./update-failure-public-codes.js";
 import { UpdateDestinationFailureSchema, UpdateFailureFactSchema } from "./update-run-schema.js";
 
-export type UpdateFailureFact = z.infer<typeof UpdateFailureFactSchema>;
+export type { UpdateFailureFact } from "./update-failure-facts-format.js";
+
+type UpdatePreflightDiagnostic = {
+  check: string;
+  required: string;
+  detected: string;
+  installRoot?: string;
+  binaryPath?: string;
+  gatewayInstall?: string;
+  remedy: string;
+};
+
+/** The local report keeps paths; persisted/exported facts use the existing redaction bounds. */
+export function createUpdatePreflightDiagnostics(
+  params: UpdatePreflightDiagnostic & { code: string; affectedKey?: string },
+) {
+  const mismatch =
+    params.installRoot && params.gatewayInstall && params.installRoot !== params.gatewayInstall;
+  const facts = [
+    `Required: ${params.required}; detected: ${params.detected}`,
+    `Update install root: ${params.installRoot ?? "unresolved"}`,
+    `Update binary: ${params.binaryPath ?? "unresolved"}`,
+    `Gateway install root: ${params.gatewayInstall ?? "unresolved"}${mismatch ? " (differs from update install)" : ""}`,
+    `${mismatch ? "Different installations: align PATH and use the intended installation's absolute launcher. " : ""}${params.remedy}`,
+  ].map((message) => ({
+    check: params.check,
+    code: params.code,
+    affectedKey: params.affectedKey,
+    message,
+  }));
+  return {
+    message: facts.map(formatUpdateFailureFact).join("\n"),
+    failureFacts: facts.map((fact) => createUpdateFailureFact(fact)),
+  };
+}
 
 function normalizeDestinationFailure(
   fact: NonNullable<UpdateFailureFact["destination"]>,
@@ -164,17 +198,24 @@ export function createUpdateFailureFact(
       : fact.message
         ? line(fact.message, Number.MAX_SAFE_INTEGER)
         : undefined;
-  const message = fact.errorName
-    ? diagnostic
-        ?.replace(
-          /\b(?:[a-zA-Z0-9-]+\.)+[a-zA-Z][a-zA-Z0-9-]*(?::\d+)?\b|\b(?:\d{1,3}\.){3}\d{1,3}(?::\d+)?\b|(?<!\w)(?:[A-Fa-f0-9]{0,4}:){2,}[A-Fa-f0-9:.%]*/gu,
-          "[redacted-host]",
-        )
-        .replace(
-          /\b(host(?:name)?|server|endpoint)\s*[=:]\s*["']?[A-Za-z0-9-]+["']?/giu,
-          "$1=[redacted-host]",
-        )
-    : diagnostic;
+  // Closed recovery facts contain generated basenames, not hostnames.
+  const recoveryDiagnostic = diagnostic?.startsWith("Package recovery ")
+    ? redactPublicSupportDiagnosticLine(diagnostic, context)
+    : undefined;
+  const message =
+    recoveryDiagnostic && recoveryDiagnostic !== "[redacted-diagnostic]"
+      ? recoveryDiagnostic
+      : fact.errorName
+        ? diagnostic
+            ?.replace(
+              /\b(?:[a-zA-Z0-9-]+\.)+[a-zA-Z][a-zA-Z0-9-]*(?::\d+)?\b|\b(?:\d{1,3}\.){3}\d{1,3}(?::\d+)?\b|(?<!\w)(?:[A-Fa-f0-9]{0,4}:){2,}[A-Fa-f0-9:.%]*/gu,
+              "[redacted-host]",
+            )
+            .replace(
+              /\b(host(?:name)?|server|endpoint)\s*[=:]\s*["']?[A-Za-z0-9-]+["']?/giu,
+              "$1=[redacted-host]",
+            )
+        : diagnostic;
   const location =
     fact.location &&
     /^(?:src|dist|packages|extensions)\/[A-Za-z0-9_./-]+:\d+:\d+$/u.test(fact.location)
@@ -211,6 +252,43 @@ export function normalizeUpdateFailureFacts(
   env: NodeJS.ProcessEnv = process.env,
 ): UpdateFailureFact[] {
   return facts.slice(0, 5).map((fact) => createUpdateFailureFact(fact, env));
+}
+
+export function createUpdateCanaryFailureFacts(params: {
+  phase: string;
+  name: string;
+  signal: NodeJS.Signals | null;
+  timedOut: boolean;
+  exitWarning?: string;
+  failureMessage: string;
+  diagnostic?: string;
+  findings?: UpdateFailureFact[];
+  env: NodeJS.ProcessEnv;
+}): UpdateFailureFact[] {
+  const { phase, signal, timedOut, exitWarning, failureMessage, diagnostic, findings, env } =
+    params;
+  if (!signal && findings?.length) {
+    return findings;
+  }
+  const fact = createUpdateFailureFact(
+    {
+      check: phase,
+      code: signal
+        ? "signal"
+        : timedOut && !exitWarning
+          ? "candidate-checks-timeout"
+          : phase === "doctor" || phase === "lint"
+            ? "doctor-failed"
+            : `candidate-${phase}-failed`,
+      message: signal
+        ? `${phase === "doctor" ? "Checking data migrations" : params.name}: terminated by ${signal}`
+        : timedOut
+          ? failureMessage
+          : (diagnostic ?? failureMessage),
+    },
+    env,
+  );
+  return signal ? [fact, ...(findings ?? []).slice(0, 4)] : [fact];
 }
 
 /** Config validation issues are more specific than the CLI's failure envelope. */

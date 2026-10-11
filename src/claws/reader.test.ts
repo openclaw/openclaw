@@ -105,10 +105,10 @@ describe("Claw source reader", () => {
     const source = join(root, "CLAW.md");
     await writeFile(
       source,
-      "---\nschemaVersion: 1\nagent:\n  id: researcher\n---\nResearch carefully.\n",
+      "---\nschemaVersion: 1\nagent:\n  id: researcher\n  name: Café\n---\nResearch carefully.\n",
     );
     const standalone = await readClawManifestFile(source);
-    expect(standalone.ok).toBe(true);
+    expect(standalone).toMatchObject({ ok: true, manifest: { agent: { name: "Café" } } });
     expect(await readClawManifestFile(root)).toEqual(standalone);
 
     await writeFile(join(root, "package.json"), JSON.stringify({ name: "invalid-package" }));
@@ -116,23 +116,6 @@ describe("Claw source reader", () => {
       ok: false,
       diagnostics: [expect.objectContaining({ code: "invalid_package_metadata" })],
     });
-  });
-
-  it("preserves non-ASCII UTF-8 frontmatter values", async () => {
-    const root = tempDirs.make("openclaw-claw-markdown-unicode-");
-    const manifestPath = join(root, "CLAW.md");
-    await writeFile(
-      manifestPath,
-      "---\nschemaVersion: 1\nagent: { id: cafe, name: Café }\n---\nPortable soul\n",
-      "utf8",
-    );
-
-    const result = await readClawManifestFile(manifestPath);
-
-    expect(result.ok).toBe(true);
-    if (result.ok) {
-      expect(result.manifest.agent.name).toBe("Café");
-    }
   });
 
   it("rejects a body with a case-folded nested workspace collision", async () => {

@@ -98,7 +98,7 @@ const config: OpenClawConfig = {
   },
 };
 await fs.writeFile(process.env.OPENCLAW_CONFIG_PATH!, JSON.stringify(config));
-await runGatewayLoop({
+const code = await runGatewayLoop({
   ownsProcessLifecycle: true,
   start: async (startup) => {
     const server = await startGatewayServerCore(0, {
@@ -121,13 +121,7 @@ await runGatewayLoop({
     setImmediate(() => trace("gateway-ready-degraded"));
     return server;
   },
-  runtime: {
-    log: () => {},
-    error: (...args) => console.error(...args),
-    exit: (code) => {
-      assert.notEqual(getPreparedModelRuntimeStartupStatus()?.degraded, false);
-      trace(`process-exit:${code}`);
-      process.exit(code);
-    },
-  },
 });
+assert.notEqual(getPreparedModelRuntimeStartupStatus()?.degraded, false);
+trace(`process-exit:${code}`);
+process.exitCode = code;

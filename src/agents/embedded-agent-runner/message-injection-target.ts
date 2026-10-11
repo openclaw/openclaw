@@ -1,11 +1,21 @@
 import { hasInboundAudio } from "../../auto-reply/reply/inbound-media.js";
 import {
+  createMessageInjectionAuthority,
+  enqueueMessageInjection,
+} from "../../auto-reply/reply/message-injection-authority.js";
+import {
   replyMessageInjectionTargetOwner,
   type ReplyBackendHandle,
   type ReplyMessageInjectionRejectionReason,
   type ReplyMessageInjectionTarget,
+  type ReplyMessageInjectionOptions,
+  type ReplyToolAuthorityPreparation,
 } from "../../auto-reply/reply/reply-run-registry.contracts.js";
 import { resolveReplyBackendMessageInjectionRejection } from "../../auto-reply/reply/reply-run-registry.message-injection.js";
+import {
+  getAttachedBackend,
+  resolveReplyRunForCurrentSessionId,
+} from "../../auto-reply/reply/reply-run-registry.state.js";
 import {
   getActiveAgentRunDelegatedAuthority,
   validateAgentRunDelegatedAuthority,
@@ -18,12 +28,20 @@ import {
   diagnosticLogger as diag,
   logMessageQueuedWithBacklogPolicy,
 } from "../../logging/diagnostic-runtime.js";
+import { bindWorkerToolPreparation } from "../harness/host-private-capabilities.js";
+import {
+  bindMessageInjectionV2,
+  bindPreparedToolAuthority,
+  createLegacyToolAuthorityQueuePreflight,
+} from "../harness/tool-authority-preparation.js";
 import {
   ACTIVE_EMBEDDED_RUN_REGISTRATIONS,
   ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY,
   ACTIVE_EMBEDDED_RUNS,
   ACTIVE_EMBEDDED_RUNS_BY_RUN_ID,
   resolveActiveEmbeddedRunRecoveryBlocker,
+  type EmbeddedAgentQueueHandle,
+  type EmbeddedAgentQueueMessageOutcome,
 } from "./run-state.js";
 import { isEmbeddedRunHandleAbortable } from "./runs.probes.js";
 
@@ -98,6 +116,7 @@ export function captureDirectEmbeddedMessageInjectionTarget(
     runId,
     sourceTurnId: toolAuthority.sourceTurnId,
     [replyMessageInjectionTargetOwner]: {
+      backendIdentity: handle,
       acceptParticipant: (overlay) => toolAuthority.personalToolParticipants?.accept(overlay),
       projectToolAuthorityFingerprint: (overlay) => {
         try {
@@ -105,6 +124,20 @@ export function captureDirectEmbeddedMessageInjectionTarget(
           return canInject()
             ? toolAuthority.project({ ...overlay, traceAuthorized: false })
             : undefined;
+        } catch {
+          return undefined;
+        }
+      },
+      projectToolAuthorityFingerprintAsync: async (overlay) => {
+        try {
+          if (!canInject()) {
+            return undefined;
+          }
+          const projected = await toolAuthority.projectAsync({
+            ...overlay,
+            traceAuthorized: false,
+          });
+          return canInject() ? projected : undefined;
         } catch {
           return undefined;
         }
@@ -181,4 +214,239 @@ export function captureDirectEmbeddedMessageInjectionTarget(
       },
     },
   };
+}
+
+export type EmbeddedInjectionPreparation = Pick<
+  ReplyToolAuthorityPreparation,
+  "assertCurrent" | "prepareCurrent"
+> &
+  Partial<Pick<ReplyToolAuthorityPreparation, "compatAssertCurrent">> & {
+    prepareMessage?: () => Promise<string>;
+  };
+
+type EmbeddedInjectionTask = (
+  sessionId: string,
+  text: string,
+  options: ReplyMessageInjectionOptions | undefined,
+  canInject: (() => boolean) | undefined,
+  sourcePreparation: EmbeddedInjectionPreparation | undefined,
+  release: () => void,
+  assertCurrent: () => void,
+) => Promise<EmbeddedAgentQueueMessageOutcome>;
+
+export function createEmbeddedMessageInjectionQueue(consume: EmbeddedInjectionTask) {
+  return (
+    sessionId: string,
+    text: string,
+    options?: ReplyMessageInjectionOptions,
+    canInject?: () => boolean,
+    sourcePreparation?: EmbeddedInjectionPreparation,
+  ): Promise<EmbeddedAgentQueueMessageOutcome> => {
+    const handle = ACTIVE_EMBEDDED_RUNS.get(sessionId);
+    const registration = handle && ACTIVE_EMBEDDED_RUN_REGISTRATIONS.get(handle);
+    const runId = handle?.runId;
+    const assertCurrent = createMessageInjectionAuthority(() => {
+      registration?.toolAuthority?.assertActive();
+      return (
+        ACTIVE_EMBEDDED_RUNS.get(sessionId) === handle &&
+        (!handle ||
+          (ACTIVE_EMBEDDED_RUN_REGISTRATIONS.get(handle) === registration &&
+            handle.runId === runId))
+      );
+    });
+    const admitted = (release: () => void) =>
+      consume(sessionId, text, options, canInject, sourcePreparation, release, assertCurrent);
+    return handle ? enqueueMessageInjection(handle, admitted) : admitted(() => {});
+  };
+}
+
+export async function prepareEmbeddedInjectionAuthority(
+  sessionId: string,
+  options?: ReplyMessageInjectionOptions,
+  canInject?: () => boolean,
+  sourcePreparation?: EmbeddedInjectionPreparation,
+): Promise<{ fingerprint?: string; preparation: EmbeddedInjectionPreparation } | undefined> {
+  const handle = ACTIVE_EMBEDDED_RUNS.get(sessionId);
+  if (!handle) {
+    return undefined;
+  }
+  const registration = ACTIVE_EMBEDDED_RUN_REGISTRATIONS.get(handle);
+  const operation = resolveReplyRunForCurrentSessionId(sessionId);
+  const ownedOperation =
+    operation && getAttachedBackend(operation) === handle ? operation : undefined;
+  const assertCurrent = createMessageInjectionAuthority(() => {
+    sourcePreparation?.assertCurrent();
+    registration?.toolAuthority?.assertActive();
+    return (
+      (!canInject || canInject()) &&
+      ACTIVE_EMBEDDED_RUNS.get(sessionId) === handle &&
+      ACTIVE_EMBEDDED_RUN_REGISTRATIONS.get(handle) === registration &&
+      (!ownedOperation ||
+        (resolveReplyRunForCurrentSessionId(sessionId) === ownedOperation &&
+          getAttachedBackend(ownedOperation) === handle))
+    );
+  });
+  const project = async () => {
+    assertCurrent();
+    await sourcePreparation?.prepareCurrent();
+    const overlay = options?.toolAuthorityOverlay;
+    const fingerprint = overlay
+      ? await (
+          registration?.toolAuthority
+            ? registration.toolAuthority.projectAsync(overlay)
+            : ownedOperation?.projectToolAuthorityFingerprintAsync(overlay)
+        )?.catch(() => undefined)
+      : options?.toolAuthorityFingerprint;
+    assertCurrent();
+    return fingerprint;
+  };
+  const fingerprint = await project();
+  return {
+    fingerprint,
+    preparation: bindWorkerToolPreparation(
+      {
+        assertCurrent,
+        compatAssertCurrent: () => {
+          assertCurrent();
+          sourcePreparation?.compatAssertCurrent?.();
+          const overlay = options?.toolAuthorityOverlay;
+          const projected = overlay
+            ? registration?.toolAuthority
+              ? registration.toolAuthority.project(overlay)
+              : ownedOperation?.projectToolAuthorityFingerprint(overlay)
+            : options?.toolAuthorityFingerprint;
+          if (projected !== fingerprint) {
+            throw new Error("Queued caller tool authority changed during preparation");
+          }
+          assertCurrent();
+        },
+        prepareCurrent: async () => {
+          if ((await project()) !== fingerprint) {
+            throw new Error("Queued caller tool authority changed during preparation");
+          }
+        },
+      },
+      sourcePreparation ? [sourcePreparation] : [],
+    ),
+  };
+}
+
+type EmbeddedMessageInjection = ReturnType<typeof bindMessageInjectionV2>;
+
+function bindEmbeddedMessageInjection(
+  sessionId: string,
+  handle: EmbeddedAgentQueueHandle,
+  guarded: NonNullable<EmbeddedAgentQueueHandle["messageInjectionV2"]>,
+  sourceCanInject?: () => boolean,
+  preparation?: EmbeddedInjectionPreparation,
+  options?: ReplyMessageInjectionOptions,
+): EmbeddedMessageInjection | undefined {
+  const registration = ACTIVE_EMBEDDED_RUN_REGISTRATIONS.get(handle);
+  const operation = resolveReplyRunForCurrentSessionId(sessionId);
+  const ownedOperation =
+    operation && getAttachedBackend(operation) === handle ? operation : undefined;
+  const assertCurrent = createMessageInjectionAuthority(() => {
+    preparation?.assertCurrent();
+    preparation?.compatAssertCurrent?.();
+    if (sourceCanInject && !sourceCanInject()) {
+      return false;
+    }
+    const overlay = options?.toolAuthorityOverlay;
+    if (overlay) {
+      const projected = registration?.toolAuthority
+        ? registration.toolAuthority.project(overlay)
+        : ownedOperation?.projectToolAuthorityFingerprint(overlay);
+      if (
+        !projected ||
+        projected !== (handle.toolAuthorityFingerprint ?? ownedOperation?.toolAuthorityFingerprint)
+      ) {
+        return false;
+      }
+    }
+    registration?.toolAuthority?.assertActive();
+    return (
+      ACTIVE_EMBEDDED_RUNS.get(sessionId) === handle &&
+      ACTIVE_EMBEDDED_RUN_REGISTRATIONS.get(handle) === registration &&
+      (!ownedOperation ||
+        (resolveReplyRunForCurrentSessionId(sessionId) === ownedOperation &&
+          getAttachedBackend(ownedOperation) === handle))
+    );
+  });
+  const authorityKind = sourceCanInject ? "source-bound" : "run";
+  const prepared =
+    preparation &&
+    bindPreparedToolAuthority({
+      ...preparation,
+      compatAssertCurrent: assertCurrent,
+    });
+  const legacy =
+    prepared && !guarded.queueMessageAsync
+      ? createLegacyToolAuthorityQueuePreflight(prepared)
+      : undefined;
+  return guarded.isAvailable()
+    ? bindMessageInjectionV2(
+        guarded,
+        assertCurrent,
+        authorityKind,
+        prepared && (() => prepared),
+        legacy,
+      )
+    : undefined;
+}
+
+export function resolveEmbeddedInjection(
+  sessionId: string,
+  handle: EmbeddedAgentQueueHandle,
+  sourceCanInject?: () => boolean,
+  preparation?: EmbeddedInjectionPreparation,
+  injectionOptions?: ReplyMessageInjectionOptions,
+): EmbeddedMessageInjection | undefined {
+  try {
+    const guarded = handle.messageInjectionV2;
+    if (guarded?.version === 2) {
+      return bindEmbeddedMessageInjection(
+        sessionId,
+        handle,
+        guarded,
+        sourceCanInject,
+        preparation,
+        injectionOptions,
+      );
+    }
+    // Shipped v2026.8.1 sinks have no source-lifetime enforcement contract.
+    if (sourceCanInject) {
+      return undefined;
+    }
+    const legacy =
+      preparation &&
+      createLegacyToolAuthorityQueuePreflight({
+        ...preparation,
+        compatAssertCurrent: preparation.compatAssertCurrent ?? preparation.assertCurrent,
+      });
+    const injection = handle.messageInjection;
+    // Legacy handles predate explicit injection capability. Preserve their
+    // shipped eligibility probe while modern backends use messageInjection.
+    const isAvailable = injection
+      ? injection.isAvailable()
+      : handle.isStopped
+        ? !handle.isStopped()
+        : handle.isStreaming();
+    const target = injection || handle;
+    return isAvailable
+      ? {
+          prepareQueueMessage: legacy?.prepareQueueMessage,
+          queueMessage: (text, options) => {
+            legacy?.assertQueueCurrent();
+            return target.queueMessage(text, options);
+          },
+          claimPendingUserInputAnswer: handle.claimPendingUserInputAnswer?.bind(handle),
+          cancelPendingUserInput: handle.cancelPendingUserInput?.bind(handle),
+        }
+      : undefined;
+  } catch (err) {
+    diag.warn(
+      `queue message failed: sessionId=${sessionId} reason=injectable_check_failed err=${String(err)}`,
+    );
+    return undefined;
+  }
 }

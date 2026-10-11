@@ -84,6 +84,7 @@ import {
   readBoundExecutionState,
   registerYieldedRequesterBatchCase,
 } from "./subagent-spawn.production-boundary.test-support.js";
+import { registerRequestCustodySpawnCases } from "./subagent-spawn.request-custody.test-support.js";
 import { registerOperatorSpawnRollbackCases } from "./subagent-spawn.rollback.test-support.js";
 import { registerManagedWorktreeSpawnCases } from "./subagent-spawn.worktree.test-support.js";
 
@@ -398,6 +399,17 @@ async function createGuestParent(audit = true) {
 }
 
 describe("recursive spawn production boundary", () => {
+  registerRequestCustodySpawnCases({
+    createBoundParent,
+    createBoundGateway,
+    closeBoundGateway,
+    throwBoundFailures,
+    parentSessionKey,
+    parentRunId,
+    assertNoModelExecution: () => expect(runEmbeddedAgent).not.toHaveBeenCalled(),
+    runEmbeddedAgent,
+  });
+
   registerGuestSpawnCases({
     createGuestParent,
     createBoundGateway,
@@ -504,10 +516,18 @@ describe("recursive spawn production boundary", () => {
     let childRunId: string | undefined;
     const failures: unknown[] = [];
     try {
-      const result = await createBoundSpawnInvocation(bound, undefined, {
-        provider: "custom",
-        model: "child-model",
-      })();
+      // Model-facing owner fields cannot clear the trusted host identity.
+      const request = {
+        context: "isolated" as const,
+        senderIsOwner: false,
+        spawnedBySenderIsOwner: false,
+      };
+      const result = await createBoundSpawnInvocation(
+        bound,
+        request,
+        { provider: "custom", model: "child-model" },
+        true,
+      )();
       expect(result.details, JSON.stringify(result)).toMatchObject({
         status: "accepted",
         childSessionKey: expect.any(String),
@@ -548,6 +568,8 @@ describe("recursive spawn production boundary", () => {
         loadSessionEntry({ storePath: bound.storePath, sessionKey: details.childSessionKey }),
       ).toMatchObject({
         spawnedBy: parentSessionKey,
+        spawnedBySessionId: "parent-session",
+        spawnedBySenderIsOwner: true,
         spawnDepth: 2,
         providerOverride: "custom",
         modelOverride: "child-model",
@@ -555,6 +577,11 @@ describe("recursive spawn production boundary", () => {
         modelOverrideFallbackOriginProvider: "custom",
         modelOverrideFallbackOriginModel: "child-model",
       });
+      // The receipt's parent id stays out of navigation fields that sessions.list projects.
+      expect(
+        loadSessionEntry({ storePath: bound.storePath, sessionKey: details.childSessionKey })
+          ?.parentSessionId,
+      ).toBeUndefined();
       expect(subagentRuns.get(details.runId)).toMatchObject({
         childSessionKey: details.childSessionKey,
         requesterSessionKey: parentSessionKey,
@@ -572,7 +599,6 @@ describe("recursive spawn production boundary", () => {
   });
 
   it.each([
-    "active",
     "completed",
     "stopped",
     "operator-completed",
@@ -773,14 +799,6 @@ describe("recursive spawn production boundary", () => {
           expect(
             identities.some((identity) => identity.operationalRunInstance === releaserInstance),
           ).toBe(false);
-          if (parentState === "active") {
-            expect(
-              identities.some(
-                (identity) =>
-                  identity.operationalRunInstance === bound.admission.operationalRunInstance,
-              ),
-            ).toBe(true);
-          }
         }
       } catch (error) {
         failures.push(error);
@@ -824,20 +842,15 @@ describe("recursive spawn production boundary", () => {
     const bound = await createBoundParent();
     const { context, runtime } = await createBoundGateway(bound);
     const childSessionKey = "agent:main:subagent:queued-cleanup";
+    const childScope = { storePath: bound.storePath, sessionKey: childSessionKey };
     const original = {
       sessionId: "queued-cleanup-session",
       lifecycleRevision: "queued-cleanup-generation",
       updatedAt: 1,
       label: "original",
     };
-    await upsertSessionEntryCore(
-      { storePath: bound.storePath, sessionKey: childSessionKey },
-      original,
-    );
-    let expectedEntry = loadSessionEntry({
-      storePath: bound.storePath,
-      sessionKey: childSessionKey,
-    });
+    await upsertSessionEntryCore(childScope, original);
+    let expectedEntry = loadSessionEntry(childScope);
     const worker = target.startsWith("worker-") ? await createBoundWorker(bound) : undefined;
     let replacementClaim:
       | Awaited<ReturnType<NonNullable<typeof worker>["store"]["claimTurn"]>>
@@ -911,19 +924,13 @@ describe("recursive spawn production boundary", () => {
         await activate(caller);
       }
       if (target === "replaced-session") {
-        await upsertSessionEntryCore(
-          { storePath: bound.storePath, sessionKey: childSessionKey },
-          {
-            ...original,
-            sessionId: "replacement-session",
-            lifecycleRevision: "replacement-generation",
-            label: "replacement",
-          },
-        );
-        expectedEntry = loadSessionEntry({
-          storePath: bound.storePath,
-          sessionKey: childSessionKey,
+        await upsertSessionEntryCore(childScope, {
+          ...original,
+          sessionId: "replacement-session",
+          lifecycleRevision: "replacement-generation",
+          label: "replacement",
         });
+        expectedEntry = loadSessionEntry(childScope);
       } else if (target === "replaced-gateway") {
         bound.gatewayBinding.current = { ...context };
       } else if (target === "worker-reassigned" && worker) {
@@ -971,14 +978,10 @@ describe("recursive spawn production boundary", () => {
       expect(results, errors.map(String).join("\n")).toEqual([deleted]);
       if (deleted) {
         expect(errors).toEqual([]);
-        expect(
-          loadSessionEntry({ storePath: bound.storePath, sessionKey: childSessionKey }),
-        ).toBeUndefined();
+        expect(loadSessionEntry(childScope)).toBeUndefined();
       } else {
         expect(errors).toHaveLength(1);
-        expect(
-          loadSessionEntry({ storePath: bound.storePath, sessionKey: childSessionKey }),
-        ).toEqual(expectedEntry);
+        expect(loadSessionEntry(childScope)).toEqual(expectedEntry);
       }
       if (replacementClaim && worker) {
         expect(worker.store.validateTurnClaim(replacementClaim)).toBe(true);

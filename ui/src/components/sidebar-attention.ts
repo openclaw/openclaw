@@ -332,7 +332,7 @@ class SidebarAttention extends OpenClawLightDomElement {
               entries,
               onApprovalDecision: (event, approvalId, decision) =>
                 void this.decideApproval(event, approvalId, decision),
-              onClose: (restoreFocus) => this.closePanel(restoreFocus),
+              onClose: () => this.closePanel(true),
               onDismiss: (dismissal) => this.context?.sidebarAttention.dismiss(dismissal),
               onKeydown: this.handlePanelKeydown,
               onNavigate: (routeId, options) => {

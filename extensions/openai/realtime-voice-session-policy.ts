@@ -49,21 +49,7 @@ export type OpenAIRealtimeUserMessageOptions = {
   toolChoice?: { type: "function"; name: string };
 };
 
-export type OpenAIRealtimeVoiceProviderConfig = {
-  apiKey?: string;
-  model?: string;
-  voice?: string;
-  temperature?: number;
-  vadThreshold?: number;
-  silenceDurationMs?: number;
-  prefixPaddingMs?: number;
-  interruptResponseOnInputAudio?: boolean;
-  minBargeInAudioEndMs?: number;
-  reasoningEffort?: string;
-  azureEndpoint?: string;
-  azureDeployment?: string;
-  azureApiVersion?: string;
-};
+export type OpenAIRealtimeVoiceProviderConfig = Partial<ReturnType<typeof normalizeProviderConfig>>;
 
 export type OpenAIRealtimeVoiceBridgeConfig = RealtimeVoiceBridgeCreateRequest &
   Omit<OpenAIRealtimeVoiceProviderConfig, "voice"> & {
@@ -167,11 +153,32 @@ export type RealtimeEvent = {
 
 type RealtimeGaSessionPolicy = ReturnType<typeof buildOpenAIRealtimeGaSessionPolicy>;
 
-export function normalizeProviderConfig(
-  config: RealtimeVoiceProviderConfig,
-): OpenAIRealtimeVoiceProviderConfig {
+function normalizeRealtimeBaseUrl(value: unknown): string | undefined {
+  if (value === undefined || (typeof value === "string" && !value.trim())) {
+    return undefined;
+  }
+  const url = typeof value === "string" ? URL.parse(value.trim()) : null;
+  if (!url || !["http:", "https:", "ws:", "wss:"].includes(url.protocol)) {
+    throw new Error("Invalid OpenAI realtime baseUrl: expected an HTTP(S) or WS(S) endpoint URL");
+  }
+  // Never echo a configured URL: query values may contain provider credentials.
+  if (url.username || url.password || url.hash) {
+    throw new Error("Invalid OpenAI realtime baseUrl: credentials and fragments are not supported");
+  }
+  url.protocol = url.protocol.replace("http", "ws");
+  return url.toString();
+}
+
+export function normalizeProviderConfig(config: RealtimeVoiceProviderConfig) {
   const raw = resolveOpenAIProviderConfigRecord(config);
+  const baseUrl = normalizeRealtimeBaseUrl(raw?.baseUrl);
+  const azureEndpoint = normalizeOptionalString(raw?.azureEndpoint);
+  const azureDeployment = normalizeOptionalString(raw?.azureDeployment);
+  if (baseUrl && (azureEndpoint || azureDeployment)) {
+    throw new Error("OpenAI realtime baseUrl cannot be combined with Azure endpoint or deployment");
+  }
   return {
+    baseUrl,
     apiKey: normalizeResolvedSecretInputString({
       value: raw?.apiKey,
       path: "plugins.entries.voice-call.config.realtime.providers.openai.apiKey",
@@ -189,15 +196,11 @@ export function normalizeProviderConfig(
         : undefined,
     minBargeInAudioEndMs: asSafeIntegerInRange(raw?.minBargeInAudioEndMs, { min: 0 }),
     reasoningEffort: normalizeOptionalString(raw?.reasoningEffort),
-    azureEndpoint: normalizeOptionalString(raw?.azureEndpoint),
-    azureDeployment: normalizeOptionalString(raw?.azureDeployment),
+    azureEndpoint,
+    azureDeployment,
     azureApiVersion: normalizeOptionalString(raw?.azureApiVersion),
   };
 }
-
-type OpenAIRealtimeApiKeyResolution =
-  | { status: "available"; value: string }
-  | { status: "missing" };
 
 export const OPENAI_REALTIME_PLATFORM_AUTH_REQUIRED =
   "OpenAI Realtime voice requires an OpenAI Platform API key";
@@ -267,40 +270,22 @@ function resolveKeychainSecretRef(value: string): string | undefined {
 
 export function resolveOpenAIRealtimeSecretInput(
   configuredApiKey: string | undefined,
-): OpenAIRealtimeApiKeyResolution {
+): string | undefined {
   const configured = normalizeSecretInputString(configuredApiKey);
-  if (configured) {
-    const value = resolveKeychainSecretRef(configured);
-    return value ? { status: "available", value } : { status: "missing" };
-  }
-
-  return { status: "missing" };
-}
-
-export function resolveOpenAIRealtimeEnvApiKey(): OpenAIRealtimeApiKeyResolution {
-  return resolveOpenAIRealtimeSecretInput(process.env.OPENAI_API_KEY);
-}
-
-function resolveOpenAIRealtimeApiKey(
-  configuredApiKey: string | undefined,
-): OpenAIRealtimeApiKeyResolution {
-  const configured = resolveOpenAIRealtimeSecretInput(configuredApiKey);
-  if (
-    configured.status === "available" ||
-    hasOpenAIRealtimeConfiguredApiKeyInput(configuredApiKey)
-  ) {
-    return configured;
-  }
-  return resolveOpenAIRealtimeEnvApiKey();
+  return configured ? resolveKeychainSecretRef(configured) : undefined;
 }
 
 export function requireOpenAIRealtimeApiKey(
   configuredApiKey: string | undefined,
   errorMessage = OPENAI_REALTIME_API_KEY_REQUIRED,
 ): string {
-  const resolved = resolveOpenAIRealtimeApiKey(configuredApiKey);
-  if (resolved.status === "available") {
-    return resolved.value;
+  const configured = resolveOpenAIRealtimeSecretInput(configuredApiKey);
+  const resolved =
+    configured || hasOpenAIRealtimeConfiguredApiKeyInput(configuredApiKey)
+      ? configured
+      : resolveOpenAIRealtimeSecretInput(process.env.OPENAI_API_KEY);
+  if (resolved) {
+    return resolved;
   }
   throw new Error(errorMessage);
 }
@@ -434,12 +419,9 @@ export async function resolveOpenAIRealtimePlatformAuth(
     agentId?: string;
   },
   runtime: OpenAIRealtimeHost,
-): Promise<OpenAIRealtimeApiKeyResolution> {
+): Promise<string | undefined> {
   const configured = resolveOpenAIRealtimeSecretInput(params.configuredApiKey);
-  if (
-    configured.status === "available" ||
-    hasOpenAIRealtimeConfiguredApiKeyInput(params.configuredApiKey)
-  ) {
+  if (configured || hasOpenAIRealtimeConfiguredApiKeyInput(params.configuredApiKey)) {
     return configured;
   }
 
@@ -453,18 +435,15 @@ export async function resolveOpenAIRealtimePlatformAuth(
     profileTypes: ["api_key"],
     includeExternalCliAuth: false,
   });
-  if (profileApiKey) {
-    return { status: "available", value: profileApiKey };
-  }
-  return resolveOpenAIRealtimeEnvApiKey();
+  return profileApiKey || resolveOpenAIRealtimeSecretInput(process.env.OPENAI_API_KEY);
 }
 
 export async function requireOpenAIRealtimePlatformAuth(
   params: Parameters<typeof resolveOpenAIRealtimePlatformAuth>[0],
   runtime: OpenAIRealtimeHost,
-): Promise<Extract<OpenAIRealtimeApiKeyResolution, { status: "available" }>> {
+): Promise<string> {
   const resolved = await resolveOpenAIRealtimePlatformAuth(params, runtime);
-  if (resolved.status === "available") {
+  if (resolved) {
     return resolved;
   }
   throw new Error(OPENAI_REALTIME_PLATFORM_AUTH_REQUIRED);
@@ -491,8 +470,8 @@ export async function resolveOpenAIQuicksilverBridgeAuth(
     }
   }
   const platformAuth = await resolveOpenAIRealtimePlatformAuth(params, runtime);
-  if (platformAuth.status === "available") {
-    return { type: "api-key" as const, token: platformAuth.value };
+  if (platformAuth) {
+    return { type: "api-key" as const, token: platformAuth };
   }
   if (hasOpenAIRealtimePlatformAuthInput(params, runtime)) {
     throw new Error(

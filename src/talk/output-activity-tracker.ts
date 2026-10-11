@@ -16,39 +16,15 @@ export type RealtimeVoiceOutputActivityDelta = {
   sinkAudioBytes?: number;
 };
 
-/** Current output counters and playback timestamps. */
-export type RealtimeVoiceOutputActivitySnapshot = {
-  audioMs: number;
-  chunks: number;
-  sourceAudioBytes: number;
-  sinkAudioBytes: number;
-  playbackStarted: boolean;
-  streamEnding: boolean;
-  lastAudioAt?: number;
-  playbackStartedAt?: number;
-};
-
 /** Mutable tracker for one realtime voice output stream. */
-export type RealtimeVoiceOutputActivityTracker = {
-  markStreamOpened(): void;
-  markStreamEnding(): void;
-  markPlaybackStarted(): void;
-  markAudio(delta: RealtimeVoiceOutputActivityDelta): void;
-  reset(): void;
-  /** Whether output exists or the downstream sink reports active playback. */
-  isActive(sinkActive?: boolean): boolean;
-  /** Whether caller speech should be treated as interrupting current output. */
-  isInterruptible(sinkActive?: boolean): boolean;
-  elapsedPlaybackMs(): number;
-  /** Delay before watchdog should assume playback has exceeded expected audio duration. */
-  playbackWatchdogDelayMs(options: { marginMs: number; minMs?: number }): number | undefined;
-  snapshot(): RealtimeVoiceOutputActivitySnapshot;
-};
+export type RealtimeVoiceOutputActivityTracker = ReturnType<
+  typeof createRealtimeVoiceOutputActivityTracker
+>;
 
 /** Create a fresh output activity tracker for a realtime voice session. */
 export function createRealtimeVoiceOutputActivityTracker(
   options: RealtimeVoiceOutputActivityTrackerOptions = {},
-): RealtimeVoiceOutputActivityTracker {
+) {
   const now = options.now ?? Date.now;
   let audioMs = 0;
   let chunks = 0;
@@ -58,17 +34,6 @@ export function createRealtimeVoiceOutputActivityTracker(
   let streamEnding = false;
   let lastAudioAt: number | undefined;
   let playbackStartedAt: number | undefined;
-
-  const snapshot = (): RealtimeVoiceOutputActivitySnapshot => ({
-    audioMs,
-    chunks,
-    sourceAudioBytes,
-    sinkAudioBytes,
-    playbackStarted,
-    streamEnding,
-    ...(lastAudioAt === undefined ? {} : { lastAudioAt }),
-    ...(playbackStartedAt === undefined ? {} : { playbackStartedAt }),
-  });
 
   return {
     markStreamOpened() {
@@ -89,7 +54,7 @@ export function createRealtimeVoiceOutputActivityTracker(
       playbackStarted = true;
       playbackStartedAt = now();
     },
-    markAudio(delta) {
+    markAudio(delta: RealtimeVoiceOutputActivityDelta) {
       // Clamp negative/provider-buggy deltas to zero while still recording that
       // a chunk arrived.
       audioMs += Math.max(0, delta.audioMs ?? 0);
@@ -108,17 +73,20 @@ export function createRealtimeVoiceOutputActivityTracker(
       lastAudioAt = undefined;
       playbackStartedAt = undefined;
     },
+    /** Whether output exists or the downstream sink reports active playback. */
     isActive(sinkActive = false) {
       // Some sinks can report active playback before byte counters are visible.
       return sinkActive || chunks > 0;
     },
+    /** Whether caller speech should be treated as interrupting current output. */
     isInterruptible(sinkActive = false) {
       return sinkActive || chunks > 0 || audioMs > 0;
     },
     elapsedPlaybackMs() {
       return playbackStartedAt === undefined ? 0 : now() - playbackStartedAt;
     },
-    playbackWatchdogDelayMs({ marginMs, minMs = 1_000 }) {
+    /** Delay before watchdog should assume playback exceeded the expected audio duration. */
+    playbackWatchdogDelayMs({ marginMs, minMs = 1_000 }: { marginMs: number; minMs?: number }) {
       if (playbackStartedAt === undefined || audioMs <= 0) {
         return undefined;
       }
@@ -126,6 +94,24 @@ export function createRealtimeVoiceOutputActivityTracker(
       // the configured minimum to avoid immediate false positives.
       return Math.max(minMs, audioMs - (now() - playbackStartedAt) + marginMs);
     },
-    snapshot,
+    /** Current output counters and playback timestamps. */
+    snapshot(): Required<RealtimeVoiceOutputActivityDelta> & {
+      chunks: number;
+      playbackStarted: boolean;
+      streamEnding: boolean;
+      lastAudioAt?: number;
+      playbackStartedAt?: number;
+    } {
+      return {
+        audioMs,
+        chunks,
+        sourceAudioBytes,
+        sinkAudioBytes,
+        playbackStarted,
+        streamEnding,
+        ...(lastAudioAt === undefined ? {} : { lastAudioAt }),
+        ...(playbackStartedAt === undefined ? {} : { playbackStartedAt }),
+      };
+    },
   };
 }

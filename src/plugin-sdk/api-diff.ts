@@ -218,8 +218,8 @@ function collectDeclarationChanges(
   before: readonly PluginSdkApiDeclarationSection[],
   after: readonly PluginSdkApiDeclarationSection[],
 ): PluginSdkApiDeclarationChange[] {
-  const beforeByKey = new Map((before ?? []).map((section) => [sectionKey(section), section]));
-  const afterByKey = new Map((after ?? []).map((section) => [sectionKey(section), section]));
+  const beforeByKey = new Map(before.map((section) => [sectionKey(section), section]));
+  const afterByKey = new Map(after.map((section) => [sectionKey(section), section]));
   const removedByName = new Map<string, string[]>();
   const addedByName = new Map<string, string[]>();
   for (const [key, section] of beforeByKey) {

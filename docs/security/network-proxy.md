@@ -102,12 +102,12 @@ without activating it.
 
 The implicit bypass covers `localhost` and literal loopback IP URLs. LAN, tailnet, private-network, and public hosts continue through the managed proxy. Application-level SSRF checks still apply to untrusted destinations.
 
-Local Gateway HTTP health probes follow this policy too, including HTTPS probes
-used by Doctor and restart checks. HTTPS probes verify the configured Gateway
+Local Gateway HTTP health checks follow this policy too, including HTTPS checks
+used by Doctor and restart checks. HTTPS checks verify the configured Gateway
 certificate fingerprint on each connection; enabling a proxy does not disable
 that verification.
 
-Update canary `/startupz` and `/readyz` probes use the same loopback routing policy. If a running canary never answers within the validation budget, the update records the observed failure as a warning, including the next troubleshooting step, and continues best effort.
+Update canary `/startupz` and `/readyz` checks use the same loopback routing policy. If a running canary never answers within the validation budget, the update records the observed failure as a warning, including the next troubleshooting step, and continues best effort.
 
 Environment-only HTTP proxy routing honors `no_proxy`/`NO_PROXY` (lowercase takes precedence). These environment bypass lists do not override managed proxy policy.
 
@@ -165,14 +165,14 @@ openclaw proxy validate --proxy-url https://proxy.corp.example:8443 --proxy-ca-f
 | `--proxy-ca-file <path>` | CA bundle for an HTTPS proxy endpoint.                               |
 | `--allowed-url <url>`    | Destination expected to succeed (repeatable).                        |
 | `--denied-url <url>`     | Destination expected to be blocked (repeatable).                     |
-| `--apns-reachable`       | Also verify the proxy can tunnel a direct sandbox APNs HTTP/2 probe. |
-| `--apns-authority <url>` | Override the APNs authority probed with `--apns-reachable`.          |
+| `--apns-reachable`       | Also verify the proxy can tunnel a direct sandbox APNs HTTP/2 check. |
+| `--apns-authority <url>` | Override the APNs authority checked with `--apns-reachable`.         |
 | `--timeout-ms <ms>`      | Per-request timeout.                                                 |
 | `--json`                 | Machine-readable output.                                             |
 
 If no config, environment, or `--proxy-url` value is available, the command reports a config problem; pass `--proxy-url` for a one-off preflight before changing config.
 
-With no `--allowed-url`/`--denied-url`, the default checks are: `https://example.com/` must succeed, and a temporary loopback canary server the proxy must not reach must be blocked. The loopback check passes on a transport failure, or on a non-2xx response that lacks the canary's per-run token; it fails on a 2xx response missing the token (an unexpected success from something other than the canary) and, especially, on any response carrying the matching token, since that proves the proxy actually forwarded a loopback destination it should have denied. Custom `--denied-url` targets have no such canary token, so they are fail-closed: any HTTP response counts as reachable, and a transport error fails the check too, because OpenClaw cannot confirm your proxy denied a reachable origin versus something else going wrong. Only the built-in loopback canary treats a transport error as proof of blocking. See [`openclaw proxy`](/cli/proxy) for the CLI-side statement of the same rule. `--apns-reachable` sends an intentionally invalid provider token, so a `403 InvalidProviderToken` response counts as proof the tunnel reached Apple. The command exits `1` on any validation failure; proxy URL credentials are redacted from both text and JSON output.
+With no `--allowed-url`/`--denied-url`, the default checks are: `https://example.com/` must succeed, and a temporary loopback canary server the proxy must not reach must be blocked. The loopback check passes on a transport failure, or on a non-2xx response that lacks the canary's per-run token; it fails on a 2xx response missing the token (an unexpected success from something other than the canary) and, especially, on any response carrying the matching token, since that proves the proxy actually forwarded a loopback destination it should have denied. Custom `--denied-url` targets have no such canary token, so validation rejects uncertain results: any HTTP response counts as reachable, and a transport error fails the check too, because OpenClaw cannot confirm your proxy denied a reachable origin versus something else going wrong. Only the built-in loopback canary treats a transport error as proof of blocking. See [`openclaw proxy`](/cli/proxy) for the CLI-side statement of the same rule. `--apns-reachable` sends an intentionally invalid provider token, so a `403 InvalidProviderToken` response counts as proof the tunnel reached Apple. The command exits `1` on any validation failure; proxy URL credentials are redacted from both text and JSON output.
 
 ```json
 {

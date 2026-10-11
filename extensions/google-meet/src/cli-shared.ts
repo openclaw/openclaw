@@ -299,7 +299,6 @@ export function parsePositiveIntegerOption(
 }
 
 export async function callGoogleMeetGateway(params: {
-  callGateway: typeof callGatewayFromCli;
   method: GoogleMeetGatewayMethod;
   payload?: Record<string, unknown>;
   timeoutMs?: number;
@@ -308,7 +307,7 @@ export async function callGoogleMeetGateway(params: {
     const timeoutMs = resolveGoogleMeetGatewayTimeoutMs(params.timeoutMs);
     return {
       ok: true,
-      payload: await params.callGateway(
+      payload: await callGatewayFromCli(
         params.method,
         { json: true, timeout: String(timeoutMs) },
         params.payload,

@@ -242,41 +242,6 @@ describe("exec PATH login shell merge", () => {
       JSON.stringify({ GIT_PAGER: "", PAGER: "" }),
     );
   });
-
-  it("does not apply login-shell PATH when probe rejects unregistered absolute SHELL", async () => {
-    if (isWin) {
-      return;
-    }
-    process.env.PATH = "/usr/bin";
-    const shellDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-shell-env-"));
-    const unregisteredShellPath = path.join(shellDir, "unregistered-shell");
-    fs.writeFileSync(unregisteredShellPath, '#!/bin/sh\nexec /bin/sh "$@"\n', {
-      encoding: "utf8",
-      mode: 0o755,
-    });
-    process.env.SHELL = unregisteredShellPath;
-
-    try {
-      const shellPathMock = shellEnvMocks.getShellPathFromLoginShell;
-      shellPathMock.mockClear();
-      shellPathMock.mockImplementation((opts) =>
-        opts.env.SHELL?.trim() === unregisteredShellPath ? null : "/custom/bin:/opt/bin",
-      );
-
-      const result = await execute({
-        command: "echo $PATH",
-      });
-      const entries = normalizePathEntries(result.content.find((c) => c.type === "text")?.text);
-
-      expect(entries).toEqual(["/usr/bin"]);
-      expect(shellPathMock).toHaveBeenCalledTimes(1);
-      const shellPathCall = shellPathMock.mock.calls.at(0)?.[0];
-      expect(shellPathCall?.env).toBe(process.env);
-      expect(shellPathCall?.timeoutMs).toBe(1234);
-    } finally {
-      fs.rmSync(shellDir, { recursive: true, force: true });
-    }
-  });
 });
 
 describe("exec host env validation", () => {

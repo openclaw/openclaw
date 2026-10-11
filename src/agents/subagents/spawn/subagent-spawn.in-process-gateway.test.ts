@@ -3,11 +3,14 @@ import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { withinTest } from "../../../../test/helpers/promise.js";
 import { createExecutionIdentityAdmissionToken } from "../../../audit/execution-identity-admission.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../../../config/config.js";
+import { captureSessionTranscriptTargetBinding } from "../../../config/sessions/transcript-target-binding.js";
 import { readAgentRuntimeExecutionLineage } from "../../../gateway/agent-runtime-execution-lineage.js";
 import type { AgentRuntimeIdentity } from "../../../gateway/agent-runtime-identity-token.js";
 import { readInProcessAgentRuntimeIdentity } from "../../../gateway/in-process-agent-runtime-identity.js";
+import type { GatewayRecoveryRuntime } from "../../../gateway/server-instance-runtime.types.js";
 import type { GatewayRequestOptions } from "../../../gateway/server-methods/types.js";
 import type { dispatchGatewayMethodInProcess } from "../../../gateway/server-plugins.js";
 import type { WorkerSessionTurnClaim } from "../../../gateway/worker-environments/placement-record.js";
@@ -26,7 +29,9 @@ import {
   resetGatewayWorkAdmission,
   tryBeginGatewayRootWorkAdmission,
 } from "../../../process/gateway-work-admission.js";
+import { listSessionStateEventsSince } from "../../../sessions/session-state-events.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
+import { openOpenClawStateDatabase } from "../../../state/openclaw-state-db.js";
 import { createTestRegistry } from "../../../test-utils/channel-plugins.js";
 import { captureEnv, setTestEnvValue } from "../../../test-utils/env.js";
 import { cleanupSessionStateForTest } from "../../../test-utils/session-state-cleanup.js";
@@ -39,11 +44,12 @@ import {
 import { withGatewayToolCallerIdentity } from "../../tools/gateway-caller-context.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
 import { restoreSubagentRunsFromDisk } from "../registry/subagent-registry-persistence.js";
+import { subscribeSubagentRunChanges } from "../registry/subagent-registry-publication.js";
+import { observeRootWork } from "../registry/subagent-registry.browser-cleanup.test-support.js";
 import { markSubagentRunTerminated } from "../registry/subagent-registry.js";
 import { resetSubagentRegistryForTests } from "../registry/subagent-registry.test-helpers.js";
 import { testing as swarmSchedulerTesting } from "../swarm/swarm-scheduler.test-support.js";
 import { withParentExecutionIdentity } from "./execution-identity-spawn-context.js";
-import { buildSubagentExecutionSessionSpawnContext } from "./subagent-spawn-execution-identity.js";
 import "./subagent-spawn-model.mocks.shared.js";
 import { makeGatewayContext } from "./subagent-spawn.in-process-gateway.test-support.js";
 import { spawnSubagentDirect } from "./subagent-spawn.js";
@@ -93,21 +99,6 @@ async function waitForAssertion(assertion: () => void, timeoutMs = 2_000): Promi
 }
 
 describe("spawnSubagentDirect in-process Gateway collector launch", () => {
-  it("does not construct private lineage while identity collection is disabled", () => {
-    expect(
-      buildSubagentExecutionSessionSpawnContext({
-        enabled: false,
-        backend: "subagent",
-        parentAgentId: "main",
-        requesterRef: "agent:main:main",
-        controllerRef: "agent:main:main",
-        depth: 1,
-        targetAgentId: "main",
-        sandbox: "inherit",
-      }),
-    ).toBeUndefined();
-  });
-
   beforeEach(async () => {
     resetGatewayWorkAdmission();
     swarmSchedulerTesting.reset();
@@ -155,18 +146,52 @@ describe("spawnSubagentDirect in-process Gateway collector launch", () => {
     }
   });
 
-  it("launches queued collectors after the parent admission lease is released", async () => {
+  it("launches queued collectors after the parent admission lease is released", async ({
+    signal,
+  }) => {
     const gatewayContext = makeGatewayContext();
     const firstLaunchGate = createDeferredCore();
+    const dispatches = [createDeferredCore(), createDeferredCore()];
+    const waitEntries = [createDeferredCore(), createDeferredCore()];
+    const terminalReplies = [createDeferredCore(), createDeferredCore()];
+    const launchedRunIds: string[] = [];
     const subordinateAdmissionStates: boolean[] = [];
     let launchCount = 0;
+    gatewayContext.recoveryRuntime = {
+      prepareRestartRecovery: () => undefined,
+      waitForAgent: async <T>(params: { runId: string }): Promise<T> => {
+        const index = launchedRunIds.indexOf(params.runId);
+        const terminal = expectDefined(terminalReplies[index], "launched collector terminal owner");
+        const startedAt = Date.now();
+        expectDefined(waitEntries[index], "launched collector wait owner").resolve();
+        await terminal.promise;
+        return {
+          status: "ok",
+          startedAt,
+          endedAt: Date.now(),
+          terminalReply: { disposition: "visible", text: "collector finished" },
+        } as T;
+      },
+      dispatchAgent: async () => {
+        throw new Error("Unexpected fixture recovery agent dispatch");
+      },
+      dispatchSessionMethod: async (method) => {
+        throw new Error(`Unexpected fixture recovery session method ${method}`);
+      },
+      sendRecoveryNotice: async () => {
+        throw new Error("Unexpected fixture recovery notice");
+      },
+    } satisfies GatewayRecoveryRuntime;
     subagentSpawnTesting.setDepsForTest({
       dispatchGatewayMethodInProcess: async <T>(
-        _method: string,
+        method: string,
         params: Record<string, unknown>,
       ) => {
+        expect(method).toBe("agent");
         subordinateAdmissionStates.push(isGatewaySubordinateWorkAdmissionClosed());
+        launchedRunIds.push(String(params.idempotencyKey));
         launchCount += 1;
+        expectDefined(dispatches[launchCount - 1], "expected collector dispatch").resolve();
         if (launchCount === 1) {
           await firstLaunchGate.promise;
         }
@@ -178,64 +203,122 @@ describe("spawnSubagentDirect in-process Gateway collector launch", () => {
     });
 
     const parentAdmission = tryBeginGatewayRootWorkAdmission();
-    expect(parentAdmission).not.toBeNull();
-    const results = await parentAdmission!.run(() =>
-      withPluginRuntimeGatewayRequestScope(
-        {
-          context: gatewayContext,
-          client: externalCliClient(),
-          isWebchatConnect: () => false,
-        },
-        () =>
-          Promise.all([
-            spawnSubagentDirect(
-              {
-                task: "first collector",
-                collect: true,
-                context: "isolated",
-                lightContext: true,
-                groupId: "swarm-queued-launch",
-                swarmLaunchReplayKey: "code-mode:agentSpawn:1",
-              },
-              {
-                agentSessionKey: "agent:main:main",
-                requesterRunId: "parent-run",
-              },
-            ),
-            spawnSubagentDirect(
-              {
-                task: "second collector",
-                collect: true,
-                context: "isolated",
-                lightContext: true,
-                groupId: "swarm-queued-launch",
-                swarmLaunchReplayKey: "code-mode:agentSpawn:2",
-              },
-              {
-                agentSessionKey: "agent:main:main",
-                requesterRunId: "parent-run",
-              },
-            ),
-          ]),
-      ),
-    );
-    parentAdmission!.release();
-
-    expect(results.map((result) => result.status)).toEqual(["accepted", "accepted"]);
-    await waitForAssertion(() => {
-      expect(launchCount).toBe(1);
+    const settleRootWork = observeRootWork();
+    const terminalPublications = new Map<string, ReturnType<typeof createDeferredCore<void>>>();
+    const stopObserving = subscribeSubagentRunChanges("projection", () => {
+      for (const [runId, terminal] of terminalPublications) {
+        if (subagentRuns.get(runId)?.execution.status === "terminal") {
+          terminal.resolve();
+        }
+      }
     });
-    firstLaunchGate.resolve();
-    await waitForAssertion(() => {
+    let spawnedWork: ReturnType<typeof spawnSubagentDirect>[] = [];
+    let spawning: Promise<Awaited<ReturnType<typeof spawnSubagentDirect>>[]> | undefined;
+    try {
+      expect(parentAdmission).not.toBeNull();
+      spawning = parentAdmission!.run(() =>
+        withPluginRuntimeGatewayRequestScope(
+          {
+            context: gatewayContext,
+            client: externalCliClient(),
+            isWebchatConnect: () => false,
+          },
+          () => {
+            spawnedWork = [
+              spawnSubagentDirect(
+                {
+                  task: "first collector",
+                  collect: true,
+                  context: "isolated",
+                  lightContext: true,
+                  groupId: "swarm-queued-launch",
+                  swarmLaunchReplayKey: "code-mode:agentSpawn:1",
+                },
+                {
+                  agentSessionKey: "agent:main:main",
+                  requesterRunId: "parent-run",
+                },
+              ),
+              spawnSubagentDirect(
+                {
+                  task: "second collector",
+                  collect: true,
+                  context: "isolated",
+                  lightContext: true,
+                  groupId: "swarm-queued-launch",
+                  swarmLaunchReplayKey: "code-mode:agentSpawn:2",
+                },
+                {
+                  agentSessionKey: "agent:main:main",
+                  requesterRunId: "parent-run",
+                },
+              ),
+            ];
+            return Promise.all(spawnedWork);
+          },
+        ),
+      );
+      const results = await withinTest(spawning, signal);
+      parentAdmission!.release();
+
+      expect(results.map((result) => result.status)).toEqual(["accepted", "accepted"]);
+      await withinTest(dispatches[0]!.promise, signal);
+      expect(launchCount).toBe(1);
+      firstLaunchGate.resolve();
+      await withinTest(waitEntries[0]!.promise, signal);
+      expect(launchCount).toBe(1);
+      const queued = expectDefined(
+        results.find((result) => result.runId !== launchedRunIds[0]),
+        "queued collector",
+      );
+      expect(subagentRuns.get(queued.runId!)).toMatchObject({
+        execution: { status: "queued" },
+        swarmLaunchPending: true,
+      });
+      terminalReplies[0]!.resolve();
+      await withinTest(Promise.all([dispatches[1]!.promise, waitEntries[1]!.promise]), signal);
       expect(launchCount).toBe(2);
+      expect(subagentRuns.get(launchedRunIds[0]!)).toMatchObject({
+        execution: { status: "terminal", outcome: { status: "ok" } },
+      });
       for (const result of results) {
         expect(subagentRuns.get(result.runId!)).toMatchObject({
           collect: true,
           swarmLaunchPending: false,
         });
       }
-    });
-    expect(subordinateAdmissionStates).toEqual([false, false]);
+      expect(subordinateAdmissionStates).toEqual([false, false]);
+    } finally {
+      firstLaunchGate.resolve();
+      terminalReplies.forEach((reply) => reply.resolve());
+      parentAdmission?.release();
+      try {
+        await Promise.allSettled(spawnedWork);
+        const results = await spawning;
+        await withinTest(
+          Promise.all(
+            (results ?? []).flatMap((result) => {
+              if (result.status !== "accepted" || !result.runId) {
+                return [];
+              }
+              if (subagentRuns.get(result.runId)?.execution.status === "terminal") {
+                return [];
+              }
+              const terminal = createDeferredCore();
+              terminalPublications.set(result.runId, terminal);
+              return [terminal.promise];
+            }),
+          ),
+          signal,
+        );
+      } finally {
+        try {
+          await settleRootWork();
+        } finally {
+          stopObserving();
+        }
+      }
+    }
   });
 
   it("gives each selected global agent its own collector capacity", async () => {
@@ -357,6 +440,23 @@ describe("spawnSubagentDirect in-process Gateway collector launch", () => {
 
       expect(result.error).toBeUndefined();
       expect(result.status).toBe("accepted");
+      const childSessionKey = expectDefined(result.childSessionKey, "accepted child session");
+      const events = (await listSessionStateEventsSince(childSessionKey, "main", 0)).events;
+      expect(events.map((event) => event.kind)).toEqual(["created", "child_spawned"]);
+      const spawned = expectDefined(events[1], "spawned signal");
+      expect(spawned).toMatchObject({ actorId: "agent:main:main", runId: result.runId });
+      expect(
+        openOpenClawStateDatabase()
+          .db.prepare(
+            `SELECT last_seen_sequence, notified_sequence, material_sequence
+           FROM session_watch_cursors WHERE watcher_session_key = ? AND target_session_key = ?`,
+          )
+          .get("agent:main:main", childSessionKey),
+      ).toEqual({
+        last_seen_sequence: spawned.sequence,
+        notified_sequence: spawned.sequence,
+        material_sequence: spawned.sequence,
+      });
       expect(childIdentity?.executionIdentity).toBe(parentToken);
       expect(readAgentRuntimeExecutionLineage(childIdentity?.sessionSpawnContext)).toMatchObject({
         relation: "sessions_spawn",
@@ -396,12 +496,12 @@ describe("spawnSubagentDirect in-process Gateway collector launch", () => {
         }
       },
       sessionKey: "agent:main:main",
-      sessionTarget: {
+      sessionTarget: captureSessionTranscriptTargetBinding({
         agentId: "main",
         sessionId: turnClaim.sessionId,
         sessionKey: "agent:main:main",
         storePath: path.join(stateDir, "agents", "main", "sessions", "sessions.json"),
-      },
+      }),
       turnClaim,
     };
     let validations = 0;
@@ -603,61 +703,6 @@ describe("spawnSubagentDirect in-process Gateway collector launch", () => {
       });
     });
     expect(transport).not.toHaveBeenCalled();
-  });
-
-  it("aborts the accepted child run when registry registration fails", async () => {
-    const gatewayContext = makeGatewayContext();
-    const requests: Array<{ method: string; params: Record<string, unknown> }> = [];
-    let acceptedChildSessionKey: unknown;
-    subagentSpawnTesting.setDepsForTest({
-      dispatchGatewayMethodInProcess: async <T>(
-        method: string,
-        params: Record<string, unknown>,
-      ) => {
-        requests.push({ method, params });
-        if (method === "agent") {
-          acceptedChildSessionKey = params.sessionKey;
-          return { runId: "gateway-accepted-run", status: "accepted" } as T;
-        }
-        if (method === "chat.abort") {
-          if (
-            params.sessionKey !== acceptedChildSessionKey ||
-            params.runId !== "gateway-accepted-run"
-          ) {
-            throw new Error("Abort must target the accepted child session and run");
-          }
-          return { aborted: true, runIds: [params.runId] } as T;
-        }
-        return {} as T;
-      },
-    });
-    // The registry never takes ownership, which is exactly when the suppressed
-    // gateway CLI row would have been the only record of the accepted run.
-    persistRegistryRows.mockImplementation(() => {
-      throw new Error("state db unavailable");
-    });
-
-    const result = await withPluginRuntimeGatewayRequestScope(
-      {
-        context: gatewayContext,
-        client: externalCliClient(),
-        isWebchatConnect: () => false,
-      },
-      () =>
-        spawnSubagentDirect(
-          { task: "orphan me", context: "isolated", lightContext: true },
-          { agentSessionKey: "agent:main:main", requesterRunId: "parent-run" },
-        ),
-    );
-
-    expect(result.status).toBe("error");
-    expect(result.error ?? "").toContain("Failed to register subagent run");
-    expect(result.childSessionKey).toEqual(expect.any(String));
-    // No registry row exists, so an unaborted run would execute with no task row at all.
-    expect(requests).toContainEqual({
-      method: "chat.abort",
-      params: { sessionKey: result.childSessionKey, runId: "gateway-accepted-run" },
-    });
   });
 
   it("does not abort an out-of-process run when registry persistence fails", async () => {

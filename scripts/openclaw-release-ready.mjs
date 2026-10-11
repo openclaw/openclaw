@@ -29,7 +29,7 @@ import { classifyReleaseTrain, parseReleaseVersion } from "./lib/release-version
 import {
   consumePreparedNpmPackage,
   downloadPreparedNpmRelease,
-  preparedNpmArtifactName,
+  validatePreparedNpmArtifactDescriptor,
 } from "./plugin-npm-prepared-release.mjs";
 import { runReleaseToolingGh, verifyReleaseToolingIdentity } from "./release-tooling-identity.mjs";
 
@@ -228,14 +228,34 @@ export function readyArtifactName(sourceSha, runId, runAttempt) {
 function artifactFor(run, workflow, tooling, name) {
   const identity = producer(run, workflow, tooling);
   const artifacts = [];
+  let totalCount;
   for (let page = 1; page <= 20; page++) {
     const result = api(`actions/runs/${run.id}/artifacts?per_page=100&page=${page}`);
-    requireValue(result.total_count <= 2000, "Prepared release artifact list exceeds its limit.");
+    requireValue(
+      Number.isSafeInteger(result.total_count) &&
+        result.total_count >= 0 &&
+        result.total_count <= 2000 &&
+        Array.isArray(result.artifacts),
+      "Prepared release artifact list is invalid or exceeds its limit.",
+    );
+    totalCount ??= result.total_count;
+    requireValue(
+      result.total_count === totalCount,
+      "Prepared release artifact count changed while reading it.",
+    );
     artifacts.push(...result.artifacts);
-    if (artifacts.length >= result.total_count) {
+    if (artifacts.length === result.total_count) {
       break;
     }
+    requireValue(
+      result.artifacts.length > 0 && artifacts.length < result.total_count,
+      "Prepared release artifact list is incomplete.",
+    );
   }
+  requireValue(
+    artifacts.length === totalCount && artifacts.length > 0,
+    "Prepared release artifact list is incomplete.",
+  );
   const matches = artifacts.filter((artifact) => artifact.name === name);
   requireValue(matches.length === 1, `Expected one exact prepared artifact: ${name}.`);
   const [artifact] = matches;
@@ -255,7 +275,7 @@ function artifactFor(run, workflow, tooling, name) {
   };
 }
 
-async function waitForRun(runId, attempt, workflow, tooling) {
+async function waitForRun(runId, attempt, workflow, tooling, { allowFailure = false } = {}) {
   const deadline = Date.now() + 110 * 60_000;
   while (Date.now() < deadline) {
     const run = api(`actions/runs/${runId}`);
@@ -266,7 +286,7 @@ async function waitForRun(runId, attempt, workflow, tooling) {
     );
     if (run.status === "completed") {
       requireValue(
-        run.conclusion === "success",
+        run.conclusion === "success" || (allowFailure && run.conclusion === "failure"),
         `${workflow} run ${runId}/${attempt} ended ${run.conclusion}; ${
           workflow === PUBLISH_WORKFLOW
             ? "inspect child outcomes for owner recovery, then start a new button run with the same readiness receipt and openclaw_npm_resume_run_id when core npm succeeded. A published core version without a successful child requires core-owner reconciliation. This button remains bound to its original parent attempt."
@@ -343,11 +363,16 @@ export function validateReadyRelease(value, expected) {
     requireValue(
       descriptor?.repository === REPOSITORY &&
         descriptor.workflowSha === value.tooling.sha &&
-        descriptor.workflowHeadBranch === value.tooling.ref &&
+        (target === "npm" || descriptor.workflowHeadBranch === value.tooling.ref) &&
         descriptor.workflowPath === path,
       `Prepared ${target} producer differs from the release tooling.`,
     );
   }
+  validatePreparedNpmArtifactDescriptor(value.plugins.npm, {
+    repository: REPOSITORY,
+    sourceSha: value.sourceSha,
+    workflowSha: value.tooling.sha,
+  });
   return value;
 }
 
@@ -541,6 +566,34 @@ async function readPublicationRequest(path, directory, tooling, token) {
   return request;
 }
 
+async function verifyPublicationOutcome(run, request, tooling, token, directory) {
+  if (run.conclusion === "failure") {
+    const { verifyOpenClawCorePostpublish } = await import("./openclaw-core-postpublish.mjs");
+    const artifact = artifactFor(
+      run,
+      PUBLISH_WORKFLOW,
+      tooling,
+      `openclaw-release-postpublish-evidence-${request.inputs.tag}`,
+    );
+    await verifyOpenClawCorePostpublish({
+      parent: run,
+      artifact,
+      releaseTag: request.inputs.tag,
+      npmDistTag: request.inputs.npm_dist_tag,
+      token,
+      outputDir: join(directory, "core-postpublish-verification"),
+    });
+  }
+  const { verifyClawHubPostpublish } = await import("./clawhub-postpublish.mjs");
+  await verifyClawHubPostpublish({
+    event: { workflow_run: run },
+    parentStatePolicy: "sealed-producer",
+    verifierSha: tooling.sha,
+    token,
+    outputDir: join(directory, "clawhub-public-verification"),
+  });
+}
+
 async function main() {
   const { positionals, values } = parseArgs({
     allowPositionals: true,
@@ -571,40 +624,9 @@ async function main() {
       inputs.tag === `v${packageJson.version}`,
       "Release tag and source package version differ.",
     );
-    const request = {
-      schema: "openclaw.release-ready/v1",
-      repository: REPOSITORY,
-      sourceSha,
-      tooling,
-      inputs,
-      npmRunId: null,
-      clawhubRunId: null,
-    };
-    const requestPath = join(directory, "request.json");
-    if (values.request !== undefined) {
-      const recovered = readJson(values.request);
-      requireValue(
-        isRecord(recovered) &&
-          isDeepStrictEqual({ ...recovered, npmRunId: null, clawhubRunId: null }, request),
-        "Preparation recovery differs from the frozen source, tooling, or publication inputs.",
-      );
-      for (const [key, workflow] of [
-        ["npmRunId", ".github/workflows/plugin-npm-release.yml"],
-        ["clawhubRunId", ".github/workflows/plugin-clawhub-release.yml"],
-      ]) {
-        requireValue(
-          Number.isSafeInteger(recovered[key]) && recovered[key] > 0,
-          `Preparation recovery requires an explicitly identified ${key}; inspect Actions before selecting it.`,
-        );
-        producer(api(`actions/runs/${recovered[key]}`), workflow, tooling);
-        request[key] = recovered[key];
-      }
-      // Adoption is read-only. The seal still proves each selected run's source,
-      // complete package roster, producer attempt, and exact qualified bytes.
-    }
     const { authenticateFullReleaseValidationEvidence } =
       await import("./validate-full-release-validation-evidence.mjs");
-    await authenticateFullReleaseValidationEvidence({
+    const authenticated = await authenticateFullReleaseValidationEvidence({
       run: api(
         `actions/runs/${inputs.full_release_validation_run_id}/attempts/${inputs.full_release_validation_run_attempt}`,
       ),
@@ -638,23 +660,40 @@ async function main() {
         );
       },
     });
+    const npmArtifact = validatePreparedNpmArtifactDescriptor(
+      authenticated.evidence.current.manifest.publicationArtifacts?.pluginNpm,
+      { repository: REPOSITORY, sourceSha, workflowSha: tooling.sha },
+    );
+    const request = {
+      schema: "openclaw.release-ready/v1",
+      repository: REPOSITORY,
+      sourceSha,
+      tooling,
+      inputs,
+      npmArtifact,
+      clawhubRunId: null,
+    };
+    const requestPath = join(directory, "request.json");
+    if (values.request !== undefined) {
+      const recovered = readJson(values.request);
+      requireValue(
+        isRecord(recovered) &&
+          isDeepStrictEqual({ ...recovered, clawhubRunId: null }, request) &&
+          Number.isSafeInteger(recovered.clawhubRunId) &&
+          recovered.clawhubRunId > 0,
+        "Preparation recovery differs from the frozen source, tooling, or publication inputs.",
+      );
+      producer(
+        api(`actions/runs/${recovered.clawhubRunId}`),
+        ".github/workflows/plugin-clawhub-release.yml",
+        tooling,
+      );
+      request.clawhubRunId = recovered.clawhubRunId;
+    }
     writeJson(requestPath, request);
     if (values.request === undefined) {
-      // Persist before either mutation, then after each acknowledged run. A null
-      // ID means unconfirmed, never proof that a lost dispatch created no run.
-      request.npmRunId = dispatch(
-        "plugin-npm-release.yml",
-        {
-          ref: sourceSha,
-          publish_scope: "all-publishable",
-          npm_dist_tag: inputs.npm_dist_tag === "extended-stable" ? "extended-stable" : "default",
-          preflight_only: "true",
-          trusted_publisher_preflight: "false",
-        },
-        tooling,
-      ).workflow_run_id;
-      replaceJson(requestPath, request);
-      reportDispatch("plugin-npm-release.yml", request.npmRunId);
+      // npm bytes are already qualified by FRV. Persist before the remaining
+      // mutation so an uncertain ClawHub dispatch is never repeated blindly.
       request.clawhubRunId = dispatch(
         "plugin-clawhub-release.yml",
         { ref: sourceSha, publish_scope: "all-publishable", dry_run: "true" },
@@ -663,7 +702,6 @@ async function main() {
       replaceJson(requestPath, request);
       reportDispatch("plugin-clawhub-release.yml", request.clawhubRunId);
     }
-    output("npm_run_id", String(request.npmRunId));
     output("clawhub_run_id", String(request.clawhubRunId));
     output("request", request);
     output("source_sha", sourceSha);
@@ -677,30 +715,24 @@ async function main() {
     );
     // Retrying a failed seal job may follow an explicit rerun of the original
     // producers. Resolve each current attempt once, never fall back to an older success.
-    const npmAttempt = api(`actions/runs/${request.npmRunId}`).run_attempt;
     const clawhubAttempt = api(`actions/runs/${request.clawhubRunId}`).run_attempt;
-    const [npmRun, clawhubRun] = await Promise.all([
-      waitForRun(request.npmRunId, npmAttempt, ".github/workflows/plugin-npm-release.yml", tooling),
-      waitForRun(
-        request.clawhubRunId,
-        clawhubAttempt,
-        ".github/workflows/plugin-clawhub-release.yml",
-        tooling,
-      ),
-    ]);
-    const npmProducer = producer(npmRun, ".github/workflows/plugin-npm-release.yml", tooling);
+    const clawhubRun = await waitForRun(
+      request.clawhubRunId,
+      clawhubAttempt,
+      ".github/workflows/plugin-clawhub-release.yml",
+      tooling,
+    );
     const clawhubProducer = producer(
       clawhubRun,
       ".github/workflows/plugin-clawhub-release.yml",
       tooling,
     );
     const plugins = {
-      npm: artifactFor(
-        npmRun,
-        npmProducer.workflowPath,
-        tooling,
-        preparedNpmArtifactName(request.sourceSha, npmProducer),
-      ),
+      npm: validatePreparedNpmArtifactDescriptor(request.npmArtifact, {
+        repository: REPOSITORY,
+        sourceSha: request.sourceSha,
+        workflowSha: tooling.sha,
+      }),
       clawhub: artifactFor(
         clawhubRun,
         clawhubProducer.workflowPath,
@@ -827,9 +859,12 @@ async function main() {
       requireValue(
         isDeepStrictEqual(observed, request.producer) &&
           run.status === "completed" &&
-          run.conclusion === "success",
-        "Publication request no longer identifies a successful exact publisher.",
+          ["success", "failure"].includes(run.conclusion),
+        "Publication request no longer identifies an allowed terminal exact publisher.",
       );
+      if (run.conclusion === "failure") {
+        await verifyPublicationOutcome(run, request, tooling, token, directory);
+      }
       return;
     }
     const run = await waitForRun(
@@ -837,14 +872,9 @@ async function main() {
       request.releaseRunAttempt,
       PUBLISH_WORKFLOW,
       tooling,
+      { allowFailure: true },
     );
-    const { verifyClawHubPostpublish } = await import("./clawhub-postpublish.mjs");
-    await verifyClawHubPostpublish({
-      event: { workflow_run: run },
-      verifierSha: tooling.sha,
-      token,
-      outputDir: join(directory, "clawhub-public-verification"),
-    });
+    await verifyPublicationOutcome(run, request, tooling, token, directory);
     output("verified", "true");
     return;
   }

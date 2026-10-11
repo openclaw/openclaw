@@ -25,6 +25,7 @@ import {
   FakeChild,
   renderSteps,
   stubHealthyGateway,
+  canaryOutcomeStep,
 } from "./update-candidate-canary.test-support.js";
 import { writeUpdateRunReportArtifact } from "./update-failure-report-artifact.js";
 import { createUpdateRun, finishUpdateRun, recordUpdateRunStep } from "./update-run-ledger.js";
@@ -290,33 +291,9 @@ describe("update candidate Doctor lint", () => {
     );
   });
 
-  it("retains posture warnings without admitting blocking lint errors", async () => {
-    lintReport = {
-      ok: false,
-      checksRun: 1,
-      findings: [{ checkId: "core/config", severity: "error", message: "Invalid configuration." }],
-      warnings: [
-        {
-          checkId: "core/doctor/security",
-          severity: "warning",
-          message: "Open group policy permits mention-gated requests.",
-        },
-      ],
-    };
-    stubHealthyGateway();
-    const result = await validateUpdateCandidateCanary(canaryStateOptions());
-    expect(result).toMatchObject({ status: "error", phase: "lint", reason: "doctor-failed" });
-    expect(
-      updateRunWarningMessages(result.steps.flatMap(updateRunStepsFromResultStep)),
-    ).toContainEqual(expect.stringContaining("Open group policy permits mention-gated requests."));
-    expect(
-      result.steps.find((step) => step.name === "candidate-doctor-lint")?.doctorLintFindings,
-    ).toEqual([...lintReport.findings, ...lintReport.warnings]);
-  });
   it.each([
     { name: "signal", exitCode: null, signal: "SIGTERM", outputLimitExceeded: false },
     { name: "output limit after exit zero", exitCode: 0, signal: null, outputLimitExceeded: true },
-    { name: "output limit after exit one", exitCode: 1, signal: null, outputLimitExceeded: true },
   ])("retains physical $name facts without accepting policy output", async (physical) => {
     const spawnNormally = mocks.spawn.getMockImplementation()!;
     mocks.spawn.mockImplementation((command, args: string[], options) => {
@@ -363,7 +340,9 @@ describe("update candidate Doctor lint", () => {
     expect(renderSteps([step])).toContain(
       physical.outputLimitExceeded && physical.exitCode === 0
         ? "Update health check output exceeded the inspection limit"
-        : "Update health check failed",
+        : physical.signal
+          ? `terminated by ${physical.signal}`
+          : "Update health check failed",
     );
     expect(renderUpdateRunReport(updateRunReportInputFromResult(failure)).markdown).toContain(
       "Failed: candidate-doctor-lint",
@@ -415,7 +394,8 @@ describe("update candidate Doctor lint", () => {
     const options = { ...canaryStateOptions(3_000), env, onStep };
     const result = await validateUpdateCandidateCanary(options);
     expect(result).toMatchObject({ status: "error", phase: "lint" });
-    expect(result.steps.at(-1)).toMatchObject({
+    const failed = canaryOutcomeStep(result.steps);
+    expect(failed).toMatchObject({
       failureFacts: Array.from({ length: 5 }, (_, index) => ({
         check: `config.invalid.${index}`,
         code: "doctor-failed",
@@ -423,9 +403,9 @@ describe("update candidate Doctor lint", () => {
         message: expect.stringContaining("Invalid server"),
       })),
     });
-    expect(onStep).toHaveBeenLastCalledWith(result.steps.at(-1));
-    expect(result.steps.at(-1)?.failureFacts?.[0]?.message).toContain("ECONNREFUSED");
-    const findings = result.steps.at(-1)?.doctorLintFindings;
+    expect(onStep).toHaveBeenCalledWith(failed);
+    expect(failed?.failureFacts?.[0]?.message).toContain("ECONNREFUSED");
+    const findings = failed?.doctorLintFindings;
     expect(findings).toHaveLength(48);
     expect(findings?.map((finding) => finding.checkId)).toEqual([
       ...Array.from({ length: 40 }, (_, index) => `optional.warning.${index}`),

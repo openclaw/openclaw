@@ -13,7 +13,7 @@ import { applyLegacyCompatibilityStep } from "../commands/doctor/shared/config-f
 import { normalizeCompatibilityConfigValues } from "../commands/doctor/shared/legacy-config-core-migrate.js";
 import { loadCronJobsStore, resolveCronJobsStorePathFromConfig } from "../cron/store.js";
 import { loadGatewayStartupConfigSnapshot } from "../gateway/server-startup-config-helpers.js";
-import { runStartupSessionMigration } from "../gateway/server-startup-session-migration.js";
+import { runStartupSessionMaintenanceForTest } from "../gateway/server-startup-session-migration.test-support.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { createSqliteReadOnlyWorkerScope } from "../infra/sqlite-readonly-worker.js";
 import { resolveBundledDirFromPackageRoot } from "../plugins/bundled-dir.js";
@@ -229,7 +229,7 @@ export function createStateStartupCorpusFixture() {
               });
               const config = startup.snapshot.config;
               phase("startup-session-migration");
-              await runStartupSessionMigration({ cfg: config, log: console });
+              await runStartupSessionMaintenanceForTest({ cfg: config, log: console });
               phase("state-assertions");
               for (const session of fixture.sessions) {
                 signal.throwIfAborted();

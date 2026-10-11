@@ -4,8 +4,17 @@ import { CUSTODIAN_PANEL_TOGGLE_EVENT } from "../../components/panel-toggle-cont
 import { createContext } from "../custodian/custodian-page.test-harness.ts";
 import { currentPluginHelpReference, takePluginHelpDraft } from "../custodian/plugin-help.ts";
 import { PluginHelpController } from "./plugin-help-controller.ts";
-import type { PluginsPageViewModel } from "./plugins-page-view.ts";
-import type { PluginSettingsField } from "./settings-editor.ts";
+import { createDiscoveryDetail, createPlugin, createResult } from "./plugins-page.test-support.ts";
+import type { PluginSettingsField } from "./settings-editor.tsx";
+
+function createController() {
+  return new PluginHelpController({
+    addController: vi.fn(),
+    removeController: vi.fn(),
+    requestUpdate: vi.fn(),
+    updateComplete: Promise.resolve(true),
+  });
+}
 
 afterEach(() => {
   window.history.replaceState({}, "", "/");
@@ -17,12 +26,7 @@ it.each(["plugin", "route", "connection", "disconnect"])(
   async (change) => {
     const { context, setPathname, setGatewayToken } = createContext(vi.fn());
     setPathname("/settings/plugins/first");
-    const controller = new PluginHelpController({
-      addController: vi.fn(),
-      removeController: vi.fn(),
-      requestUpdate: vi.fn(),
-      updateComplete: Promise.resolve(true),
-    });
+    const controller = createController();
     const model = (id: string) =>
       ({
         context,
@@ -30,7 +34,7 @@ it.each(["plugin", "route", "connection", "disconnect"])(
         result: { plugins: [{ id, name: id, installed: true }] },
         detail: { pluginId: id },
         installedDetailTab: "configuration",
-      }) as unknown as PluginsPageViewModel;
+      }) as unknown as Parameters<PluginHelpController["update"]>[0];
     controller.update(model("first"));
     const ask = controller.ask.bind(controller);
     if (change === "plugin") {
@@ -62,74 +66,87 @@ it.each(["plugin", "route", "connection", "disconnect"])(
   },
 );
 
-it("publishes the local plugin identity when its catalog entry has no package name", () => {
-  const { context, setPathname } = createContext(vi.fn());
-  setPathname("/plugins/local-entry");
-  const controller = new PluginHelpController({
-    addController: vi.fn(),
-    removeController: vi.fn(),
-    requestUpdate: vi.fn(),
-    updateComplete: Promise.resolve(true),
-  });
-  controller.update({
-    context,
-    connected: true,
-    catalogDetail: {
-      result: {
-        plugin: { local: { pluginId: "local-tool" }, catalog: { name: "Local tool" } },
-        detail: { origin: "local", skills: [], mcpServers: [] },
-      },
-    },
-  } as unknown as PluginsPageViewModel);
-  expect(currentPluginHelpReference(context)).toMatchObject({
-    id: "local-tool",
-    name: "Local tool",
-  });
-  controller.hostDisconnected();
-});
-
-it("publishes catalog declarations without turning a provider into a tool", () => {
-  const { context, setPathname } = createContext(vi.fn());
-  setPathname("/plugins/video");
-  const controller = new PluginHelpController({
-    addController: vi.fn(),
-    removeController: vi.fn(),
-    requestUpdate: vi.fn(),
-    updateComplete: Promise.resolve(true),
-  });
-  controller.update({
-    context,
-    connected: true,
-    catalogDetail: {
-      result: {
-        plugin: { local: {}, catalog: { name: "Video provider" } },
-        detail: {
-          packageName: "video-plugin",
-          contracts: { videoGenerationProviders: ["video"] },
+it.each<{
+  id: string;
+  name: string;
+  local: boolean;
+  contracts: Record<string, string[]> | undefined;
+  install: boolean;
+}>([
+  { id: "local-tool", name: "Local tool", local: true, contracts: undefined, install: false },
+  {
+    id: "video-plugin",
+    name: "Video provider",
+    local: false,
+    contracts: { videoGenerationProviders: ["video"] },
+    install: false,
+  },
+  {
+    id: "workboard",
+    name: "Workboard",
+    local: false,
+    contracts: { tools: ["known_tool"] },
+    install: true,
+  },
+])(
+  "publishes the catalog identity and bounded declarations for $id",
+  ({ id, name, local, contracts, install }) => {
+    const { context, setPathname } = createContext(vi.fn());
+    setPathname(`/plugins/${id}`);
+    const controller = createController();
+    const catalog = createDiscoveryDetail(createPlugin({ id, name }));
+    catalog.plugin.id = "catalog-workboard";
+    catalog.plugin.local.pluginId = local ? id : undefined;
+    catalog.detail = {
+      ...catalog.detail,
+      origin: local ? "local" : "clawhub",
+      packageName: local ? undefined : id,
+      contracts,
+      providers: [],
+      channels: [],
+      configuration: [{ name: "credential", required: true, sensitive: true }],
+      readme: "Do not inject this document.",
+    };
+    const model: Parameters<PluginHelpController["update"]>[0] = {
+      context,
+      connected: true,
+      result: createResult([]),
+      detail: null,
+      installedDetailTab: "readme",
+      catalogDetail: { result: catalog },
+    };
+    try {
+      controller.update(model);
+      expect(currentPluginHelpReference(context)).toEqual({
+        id,
+        name,
+        installed: false,
+        declared: {
           providers: [],
           channels: [],
           skills: [],
           mcpServers: [],
-          configuration: [{ name: "credential", sensitive: true }],
-          readme: "Do not inject this document.",
+          ...(contracts ? { contracts: install ? [] : ["videoGenerationProviders: video"] } : {}),
+          ...(install ? { tools: ["known_tool"] } : {}),
         },
-      },
-    },
-  } as unknown as PluginsPageViewModel);
-  expect(currentPluginHelpReference(context)).toEqual({
-    id: "video-plugin",
-    name: "Video provider",
-    installed: false,
-    declared: {
-      providers: [],
-      channels: [],
-      contracts: ["videoGenerationProviders: video"],
-      skills: [],
-      mcpServers: [],
-    },
-  });
-  controller.hostDisconnected();
-});
+      });
+      if (install) {
+        controller.update({
+          ...model,
+          result: createResult(createPlugin({ id, name, catalogId: "catalog-workboard" })),
+          detail: { pluginId: id, inspection: null },
+        });
+        expect(currentPluginHelpReference(context)).toMatchObject({
+          id,
+          installed: true,
+          declared: { tools: ["known_tool"] },
+        });
+      }
+    } finally {
+      controller.hostDisconnected();
+    }
+  },
+);
 
 it.each([
   {
@@ -151,19 +168,14 @@ it.each([
   async ({ path, label, value, expected, sensitive }) => {
     const { context, setPathname } = createContext(vi.fn());
     setPathname("/settings/plugins/workboard");
-    const controller = new PluginHelpController({
-      addController: vi.fn(),
-      removeController: vi.fn(),
-      requestUpdate: vi.fn(),
-      updateComplete: Promise.resolve(true),
-    });
+    const controller = createController();
     controller.update({
       context,
       connected: true,
       result: { plugins: [{ id: "workboard", name: "Workboard", installed: true }] },
       detail: { pluginId: "workboard" },
       installedDetailTab: "configuration",
-    } as unknown as PluginsPageViewModel);
+    } as unknown as Parameters<PluginHelpController["update"]>[0]);
     try {
       await controller.ask({
         path,
@@ -181,49 +193,3 @@ it.each([
     }
   },
 );
-
-it("keeps catalog declarations while the installed inspection is pending", () => {
-  const { context, setPathname } = createContext(vi.fn());
-  setPathname("/plugins/workboard");
-  const controller = new PluginHelpController({
-    addController: vi.fn(),
-    removeController: vi.fn(),
-    requestUpdate: vi.fn(),
-    updateComplete: Promise.resolve(true),
-  });
-  const model = {
-    context,
-    connected: true,
-    result: { plugins: [] },
-    detail: null,
-    installedDetailTab: "readme",
-    catalogDetail: {
-      result: {
-        plugin: { id: "catalog-workboard", local: {}, catalog: { name: "Workboard" } },
-        detail: {
-          packageName: "workboard",
-          contracts: { tools: ["known_tool"] },
-          skills: [],
-          mcpServers: [],
-        },
-      },
-    },
-  } as unknown as PluginsPageViewModel;
-  controller.update(model);
-  expect(currentPluginHelpReference(context)?.declared?.tools).toEqual(["known_tool"]);
-  controller.update({
-    ...model,
-    result: {
-      plugins: [
-        { id: "workboard", name: "Workboard", installed: true, catalogId: "catalog-workboard" },
-      ],
-    } as PluginsPageViewModel["result"],
-    detail: { pluginId: "workboard", inspection: null },
-  });
-  expect(currentPluginHelpReference(context)).toMatchObject({
-    id: "workboard",
-    installed: true,
-    declared: { tools: ["known_tool"] },
-  });
-  controller.hostDisconnected();
-});

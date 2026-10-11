@@ -7,15 +7,16 @@ import {
 } from "../channels/plugins/config-helpers.js";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { createScopedChannelConfigAdapter } from "../plugin-sdk/channel-config-helpers.js";
 import { createPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
-import { createTestRegistry } from "../test-utils/channel-plugins.js";
+import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import {
   ensureChannelSetupPluginInstalled,
   loadChannelSetupPluginRegistrySnapshotForChannel,
 } from "./channel-setup/plugin-install.js";
-import { configMocks } from "./channels.mock-harness.js";
+import { configMocks, offsetMocks } from "./channels.mock-harness.js";
 import {
   createExternalChatCatalogEntry,
   createExternalChatDeletePlugin,
@@ -88,7 +89,7 @@ function firstWrittenChannelsConfig() {
 }
 
 function mockInstalledPlugin(plugin: ChannelPlugin) {
-  vi.mocked(loadChannelSetupPluginRegistrySnapshotForChannel).mockReturnValue(
+  vi.mocked(loadChannelSetupPluginRegistrySnapshotForChannel).mockResolvedValue(
     createTestRegistry([{ pluginId: "@vendor/external-chat-plugin", plugin, source: "test" }]),
   );
 }
@@ -131,7 +132,7 @@ describe("channelsRemoveCommand", () => {
       status: "installed",
     }));
     vi.mocked(loadChannelSetupPluginRegistrySnapshotForChannel).mockClear();
-    vi.mocked(loadChannelSetupPluginRegistrySnapshotForChannel).mockReturnValue(
+    vi.mocked(loadChannelSetupPluginRegistrySnapshotForChannel).mockResolvedValue(
       createTestRegistry(),
     );
     registryRefreshMocks.refreshPluginRegistryAfterConfigMutation.mockClear();
@@ -181,6 +182,40 @@ describe("channelsRemoveCommand", () => {
       'Channel plugin "external-chat" is not installed. Run openclaw channels add --channel external-chat first.',
     );
     expect(runtime.exit).toHaveBeenCalledWith(1);
+  });
+
+  it("cleans up telegram update offset when deleting a telegram account", async () => {
+    offsetMocks.deleteTelegramUpdateOffset.mockClear();
+    const plugin = {
+      ...createChannelTestPluginBase({ id: "telegram", label: "Telegram" }),
+      config: createScopedChannelConfigAdapter({
+        sectionKey: "telegram",
+        listAccountIds: (cfg) => Object.keys(cfg.channels?.telegram?.accounts ?? { default: {} }),
+        resolveAccount: (cfg, accountId) =>
+          cfg.channels?.telegram?.accounts?.[accountId ?? "default"] ?? cfg.channels?.telegram,
+        defaultAccountId: () => "default",
+        clearBaseFields: ["botToken", "name", "dmPolicy", "allowFrom", "groupPolicy", "streaming"],
+        resolveAllowFrom: () => [],
+        formatAllowFrom: (allowFrom) => allowFrom.map(String),
+      }),
+      lifecycle: {
+        onAccountRemoved: async ({ accountId }: { accountId: string }) => {
+          await offsetMocks.deleteTelegramUpdateOffset({ accountId });
+        },
+      },
+    };
+    setActivePluginRegistry(createTestRegistry([{ pluginId: "telegram", plugin, source: "test" }]));
+    configMocks.readConfigFileSnapshot.mockResolvedValue(
+      createTestConfigSnapshot({ channels: { telegram: { botToken: "123:abc", enabled: true } } }),
+    );
+
+    await channelsRemoveCommand(
+      { channel: "telegram", account: "default", delete: true },
+      runtime,
+      { hasFlags: true },
+    );
+
+    expect(offsetMocks.deleteTelegramUpdateOffset).toHaveBeenCalledWith({ accountId: "default" });
   });
 
   it("keeps omitted removal on literal default when the plugin selects another default", async () => {
@@ -250,7 +285,7 @@ describe("channelsRemoveCommand", () => {
         ),
       },
     };
-    vi.mocked(loadChannelSetupPluginRegistrySnapshotForChannel).mockReturnValue(
+    vi.mocked(loadChannelSetupPluginRegistrySnapshotForChannel).mockResolvedValue(
       createTestRegistry([
         {
           pluginId: "@vendor/external-chat-plugin",

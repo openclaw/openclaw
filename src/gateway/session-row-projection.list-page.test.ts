@@ -27,7 +27,7 @@ afterEach(() => vi.restoreAllMocks());
 
 it("retries failed catalog renewal without blocking lists on its replacement", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const cfg = { agents: { list: [{ id: "main", default: true }] } };
+    const cfg = { agents: { entries: { main: {} } } };
     setRuntimeConfigSnapshot(cfg);
     const key = "agent:main:dashboard:catalog-retry";
     const catalog = [
@@ -83,7 +83,7 @@ it("retries failed catalog renewal without blocking lists on its replacement", a
 
 it("retains prepared child metadata across a parent presentation refresh", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const cfg = { agents: { list: [{ id: "main", default: true }] } };
+    const cfg = { agents: { entries: { main: {} } } };
     setRuntimeConfigSnapshot(cfg);
     const parent = "agent:main:dashboard:prepared-parent";
     const child = "agent:main:dashboard:prepared-child";
@@ -122,13 +122,76 @@ it("retains prepared child metadata across a parent presentation refresh", async
   });
 });
 
-it("materializes only concurrent selected pages after a catalog publication", async () => {
+it("counts matching children across cached serialized archive views", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const cfg = { agents: { list: [{ id: "main", default: true }] } };
+    const cfg = { agents: { entries: { main: {} } } };
     setRuntimeConfigSnapshot(cfg);
-    for (let index = 0; index < 80; index++) {
+    const parent = "agent:main:dashboard:archive-parent";
+    const children = [1, 2].map((id) => `${parent}-child-${id}`);
+    replaceSessionEntrySync(
+      { agentId: "main", sessionKey: parent },
+      { sessionId: "archive-parent", updatedAt: 3 },
+    );
+    const writeChild = (index: number, archivedAt?: number) =>
       replaceSessionEntrySync(
-        { agentId: "main", sessionKey: `agent:main:dashboard:page-${index}` },
+        { agentId: "main", sessionKey: children[index]! },
+        {
+          sessionId: `archive-child-${index}`,
+          updatedAt: 1,
+          parentSessionKey: parent,
+          archivedAt,
+        },
+      );
+    writeChild(0);
+    writeChild(1, 1);
+    const release = retainSessionListForegroundWork();
+    const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
+    const listParent = async () => {
+      const result = await listProjectedSessions({
+        projection,
+        opts: { limit: 1 },
+        acceptsSerializedJson: true,
+      });
+      expect(result.sessions[0]?.key).toBe(parent);
+      return result.sessions[0]?.childSessions ?? [];
+    };
+    try {
+      expect(await listParent()).toEqual([children[0]]);
+      const archived = await listProjectedSessions({
+        projection,
+        opts: { archived: true },
+        acceptsSerializedJson: true,
+      });
+      expect(archived.sessions.map((row) => row.key)).toEqual([children[1]]);
+      const all = await listProjectedSessions({
+        projection,
+        opts: { archived: "all", limit: 1 },
+        acceptsSerializedJson: true,
+      });
+      expect(all.sessions[0]?.childSessions).toEqual(children);
+      const visible = await listParent();
+      expect(visible).toEqual([children[0]]);
+      expect(await listParent()).toBe(visible);
+      writeChild(0, 2);
+      expect(await listParent()).toEqual([]);
+      writeChild(0);
+      writeChild(1);
+      expect(await listParent()).toEqual(children);
+    } finally {
+      projection.dispose();
+      release();
+    }
+  });
+});
+
+it("yields while materializing only overlapping selected pages for concurrent list handlers", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const cfg = { agents: { entries: { main: {} } } };
+    setRuntimeConfigSnapshot(cfg);
+    const keys = Array.from({ length: 80 }, (_, index) => `agent:main:dashboard:page-${index}`);
+    for (const [index, key] of keys.entries()) {
+      replaceSessionEntrySync(
+        { agentId: "main", sessionKey: key },
         { sessionId: `page-${index}`, updatedAt: index + 1 },
       );
     }
@@ -136,20 +199,44 @@ it("materializes only concurrent selected pages after a catalog publication", as
     const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
     try {
       await projection.ensureMaterialized();
+      const context = bindSessionRowProjection(requestContext(cfg), () => projection);
       const before = projection.materializedCount;
       const reads = vi.spyOn(history, "withSessionHistoryWorkerDatabases");
       const sql = observeSqliteReadSql(StatementSync.prototype);
+      const rendered: string[] = [];
       const materialized: number[] = [];
+      let elapsed = 0;
+      let checkpoint: Promise<number> | undefined;
+      vi.spyOn(performance, "now").mockImplementation(() => elapsed);
+      const readInputs = rowInputs.readSessionRowInputs;
+      vi.spyOn(rowInputs, "readSessionRowInputs").mockImplementation((params) => {
+        const result = readInputs(params);
+        rendered.push(params.key);
+        // Charge the slice budget deterministically without sleeping or busy-waiting.
+        elapsed += 20;
+        checkpoint ??= nextTurn().then(() => rendered.length);
+        return result;
+      });
       try {
         sessionChanges.emit({ all: true, scope: "catalog" });
         const pages = await Promise.all(
-          [0, 5, 0, 5].map((offset) =>
-            listProjectedSessions({
-              projection,
-              opts: { limit: 5, offset },
-              onResult: () => materialized.push(projection.materializedCount - before),
-            }),
-          ),
+          [0, 5, 0, 5].map(async (offset, index) => {
+            const respond = vi.fn();
+            await sessionReadHandlers["sessions.list"]!({
+              req: { type: "req", id: `page-${index}`, method: "sessions.list" },
+              params: { limit: 5, offset },
+              client: null,
+              context,
+              isWebchatConnect: () => false,
+              respond(ok, result) {
+                expect(ok).toBe(true);
+                materialized.push(projection.materializedCount - before);
+                respond(result);
+              },
+            });
+            expect(respond).toHaveBeenCalledOnce();
+            return respond.mock.calls[0]![0] as SessionsListResult;
+          }),
         );
         expect(pages.map((page) => page.sessions.map((row) => row.sessionId))).toEqual([
           ["page-79", "page-78", "page-77", "page-76", "page-75"],
@@ -157,6 +244,11 @@ it("materializes only concurrent selected pages after a catalog publication", as
           ["page-79", "page-78", "page-77", "page-76", "page-75"],
           ["page-74", "page-73", "page-72", "page-71", "page-70"],
         ]);
+        expect(pages.map((page) => page.sessions.map((row) => row.key))).toEqual(
+          [0, 5, 0, 5].map((offset) => keys.toReversed().slice(offset, offset + 5)),
+        );
+        expect(await checkpoint).toBeLessThan(5);
+        expect(rendered.toSorted()).toEqual(keys.slice(-10).toSorted());
         expect(Math.max(...materialized)).toBe(10);
         expect(reads).not.toHaveBeenCalled();
         expect(sql.queries).toEqual([]);
@@ -170,67 +262,9 @@ it("materializes only concurrent selected pages after a catalog publication", as
   });
 });
 
-it("yields between cold page slices shared by concurrent list handlers", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const cfg = { agents: { list: [{ id: "main", default: true }] } };
-    setRuntimeConfigSnapshot(cfg);
-    const keys = Array.from({ length: 7 }, (_, index) => `agent:main:dashboard:yield-${index}`);
-    for (const [index, key] of keys.entries()) {
-      replaceSessionEntrySync(
-        { agentId: "main", sessionKey: key },
-        { sessionId: `yield-${index}`, updatedAt: index + 1 },
-      );
-    }
-    const release = retainSessionListForegroundWork();
-    const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
-    try {
-      await projection.ensureMaterialized();
-      const context = bindSessionRowProjection(requestContext(cfg), () => projection);
-      const rendered: string[] = [];
-      let elapsed = 0;
-      let checkpoint: Promise<number> | undefined;
-      vi.spyOn(performance, "now").mockImplementation(() => elapsed);
-      const readInputs = rowInputs.readSessionRowInputs;
-      vi.spyOn(rowInputs, "readSessionRowInputs").mockImplementation((params) => {
-        const result = readInputs(params);
-        rendered.push(params.key);
-        // Charge real row work to the slice budget without sleeping or busy-waiting.
-        elapsed += 20;
-        checkpoint ??= nextTurn().then(() => rendered.length);
-        return result;
-      });
-      sessionChanges.emit({ all: true, scope: "catalog" });
-      const results: SessionsListResult[] = [];
-      await Promise.all(
-        Array.from({ length: 3 }, async (_, index) => {
-          await sessionReadHandlers["sessions.list"]!({
-            req: { type: "req", id: `yield-${index}`, method: "sessions.list" },
-            params: { limit: keys.length },
-            client: null,
-            context,
-            isWebchatConnect: () => false,
-            respond(ok, result) {
-              expect(ok).toBe(true);
-              results.push(result as SessionsListResult);
-            },
-          });
-        }),
-      );
-      expect(await checkpoint).toBeLessThan(keys.length);
-      expect(rendered.toSorted()).toEqual(keys.toSorted());
-      expect(results.map((result) => result.sessions.map((row) => row.key))).toEqual(
-        Array.from({ length: 3 }, () => keys.toReversed()),
-      );
-    } finally {
-      projection.dispose();
-      release();
-    }
-  });
-});
-
 it("selects fresh metadata and board facts without materializing the unselected roster", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const cfg = { agents: { list: [{ id: "main", default: true }] } };
+    const cfg = { agents: { entries: { main: {} } } };
     setRuntimeConfigSnapshot(cfg);
     for (let index = 0; index < 70; index++) {
       replaceSessionEntrySync(

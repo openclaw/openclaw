@@ -8,6 +8,18 @@ type VaultRoot = Awaited<ReturnType<typeof fsRoot>>;
 const isConcurrentRewriteRace = (error: unknown): boolean =>
   error instanceof FsSafeError && error.code === "path-mismatch";
 
+export async function readWikiPageStat(vault: VaultRoot, pagePath: string) {
+  return vault.stat(pagePath).catch((error: unknown) => {
+    if (
+      error instanceof FsSafeError &&
+      (error.code === "not-found" || error.code === "path-alias")
+    ) {
+      return null;
+    }
+    throw error;
+  });
+}
+
 export async function readExistingWikiPage(
   read: () => Promise<string>,
   emptyOn: (error: unknown) => boolean,

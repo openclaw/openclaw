@@ -110,37 +110,38 @@ describe("screen-owned desktop audio", () => {
     expect(f.firstCapture().stop).toHaveBeenCalledTimes(1);
   });
 
-  it("mutes immediately and serializes re-enable without overlapping recorders", async () => {
-    const f = fixture();
-    f.attach();
-    f.observation.activate();
-    f.peer.command("start");
-    await flush();
-    f.peer.command("start");
-    await flush();
-    expect(f.start).toHaveBeenCalledTimes(1);
-    f.peer.command("stop");
-    const before = f.peer.sent.length;
-    f.firstCapture().stream.write(Buffer.alloc(4, 10));
-    expect(f.peer.sent).toHaveLength(before);
-    f.peer.command("start");
-    await flush();
-    expect(f.firstCapture().stop).toHaveBeenCalledTimes(1);
-    expect(f.start).toHaveBeenCalledTimes(2);
-  });
-
-  it("coalesces pending intent while screen authentication is incomplete", async () => {
-    const f = fixture();
-    f.attach();
-    for (let n = 0; n < 100; n++) {
+  it.each([false, true])(
+    "serializes capture intent (pending authentication: %s)",
+    async (pending) => {
+      const f = fixture();
+      f.attach();
+      if (pending) {
+        for (let n = 0; n < 100; n++) {
+          f.peer.command("start");
+          f.peer.command("stop");
+        }
+        f.peer.command("start");
+      }
+      f.observation.activate();
+      await flush();
+      if (!pending) {
+        expect(f.start).not.toHaveBeenCalled();
+        f.peer.command("start");
+        await flush();
+      }
       f.peer.command("start");
+      await flush();
+      expect(f.start).toHaveBeenCalledTimes(1);
       f.peer.command("stop");
-    }
-    f.peer.command("start");
-    f.observation.activate();
-    await flush();
-    expect(f.start).toHaveBeenCalledTimes(1);
-  });
+      const before = f.peer.sent.length;
+      f.firstCapture().stream.write(Buffer.alloc(4, 10));
+      expect(f.peer.sent).toHaveLength(before);
+      f.peer.command("start");
+      await flush();
+      expect(f.firstCapture().stop).toHaveBeenCalledTimes(1);
+      expect(f.start).toHaveBeenCalledTimes(2);
+    },
+  );
 
   it("rejects replay and retires abandoned screen grants", async () => {
     const f = fixture();
@@ -154,19 +155,44 @@ describe("screen-owned desktop audio", () => {
     expect(f.start).not.toHaveBeenCalled();
   });
 
-  it("revokes audio when requester authority changes, including in-flight capture", async () => {
-    let current = true;
-    const f = fixture({ isCurrent: () => current });
-    f.attach();
-    f.observation.activate();
-    f.peer.command("start");
-    await flush();
-    current = false;
-    f.firstCapture().stream.write(Buffer.alloc(4, 1));
-    await flush();
-    expect(f.peer.sent.some((value) => Buffer.isBuffer(value))).toBe(false);
-    expect(f.firstCapture().stop).toHaveBeenCalledTimes(1);
-  });
+  it.each(["revocation", "recorder close", "backpressure"] as const)(
+    "stops active capture on %s",
+    async (event) => {
+      let current = true;
+      const f = fixture({ isCurrent: () => current });
+      f.attach();
+      f.observation.activate();
+      f.peer.command("start");
+      await flush();
+      const capture = f.firstCapture();
+      if (event === "recorder close") {
+        capture.stream.destroy();
+        capture.stream.emit("close");
+      } else {
+        current = event !== "revocation";
+        f.peer.bufferedAmount = event === "backpressure" ? 48_000 : 0;
+        capture.stream.write(Buffer.alloc(4, 1));
+      }
+      await flush();
+      expect(capture.stop).toHaveBeenCalledTimes(1);
+      if (event === "revocation") {
+        expect(f.peer.sent.some((value) => Buffer.isBuffer(value))).toBe(false);
+      } else if (event === "backpressure") {
+        expect(f.peer.closed).toContainEqual([1013, "desktop audio backpressure"]);
+        expect(capture.signal.aborted).toBe(true);
+      } else {
+        expect(
+          f.peer.sent.some(
+            (item) => typeof item === "string" && JSON.parse(item).state === "error",
+          ),
+        ).toBe(true);
+        expect(capture.stream.listenerCount("data")).toBe(0);
+        f.peer.command("start");
+        await flush();
+        expect(f.start).toHaveBeenCalledTimes(2);
+      }
+    },
+  );
 
   it.each([true, false])(
     "carries live requester authority into pending capture admission (%s)",
@@ -238,39 +264,6 @@ describe("screen-owned desktop audio", () => {
       expect(cleanup).toHaveBeenCalledTimes(2);
     },
   );
-
-  it("reports unexpected recorder close and permits a new capture", async () => {
-    const f = fixture();
-    f.attach();
-    f.observation.activate();
-    f.peer.command("start");
-    await flush();
-    f.firstCapture().stream.destroy();
-    f.firstCapture().stream.emit("close");
-    await flush();
-    expect(
-      f.peer.sent.some((item) => typeof item === "string" && JSON.parse(item).state === "error"),
-    ).toBe(true);
-    expect(f.firstCapture().stop).toHaveBeenCalledTimes(1);
-    expect(f.firstCapture().stream.listenerCount("data")).toBe(0);
-    f.peer.command("start");
-    await flush();
-    expect(f.start).toHaveBeenCalledTimes(2);
-  });
-
-  it("bounds slow-reader buffers instead of accumulating delayed sound", async () => {
-    const f = fixture();
-    f.attach();
-    f.observation.activate();
-    f.peer.command("start");
-    await flush();
-    f.peer.bufferedAmount = 48_000;
-    f.firstCapture().stream.write(Buffer.alloc(4));
-    await flush();
-    expect(f.peer.closed).toContainEqual([1013, "desktop audio backpressure"]);
-    expect(f.firstCapture().signal.aborted).toBe(true);
-    expect(f.firstCapture().stop).toHaveBeenCalledTimes(1);
-  });
 
   it("rejects binary or unknown commands without starting capture", async () => {
     const f = fixture();

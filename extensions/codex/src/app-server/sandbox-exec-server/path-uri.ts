@@ -5,15 +5,7 @@ const WINDOWS_DRIVE_PATH_RE = /^\/[A-Za-z]:(?:\/|$)/u;
 
 /** Resolves one Codex exec-server PathUri into a POSIX sandbox path. */
 export function resolveExecServerPath(rawPath: string, label: string): string {
-  let pathUrl: URL;
-  try {
-    pathUrl = new URL(rawPath);
-  } catch (error) {
-    throw new Error(
-      `${label} must be a valid file URI: ${error instanceof Error ? error.message : String(error)}`,
-      { cause: error },
-    );
-  }
+  const pathUrl = parseSandboxPath(() => new URL(rawPath), `${label} must be a valid file URI`);
   if (pathUrl.protocol !== "file:") {
     throw new Error(
       `${label} URI must use the file scheme, received ${pathUrl.protocol.slice(0, -1)}.`,
@@ -22,17 +14,11 @@ export function resolveExecServerPath(rawPath: string, label: string): string {
   if (pathUrl.search || pathUrl.hash) {
     throw new Error(`${label} file URI must not include a query or fragment.`);
   }
-  let resolved: string;
-  try {
-    // The URI names the sandbox target, so decode with POSIX rules even when
-    // the Gateway host is Windows. Docker and SSH backends own POSIX workdirs.
-    resolved = fileURLToPath(pathUrl, { windows: false });
-  } catch (error) {
-    throw new Error(
-      `${label} file URI is not valid for the sandbox: ${error instanceof Error ? error.message : String(error)}`,
-      { cause: error },
-    );
-  }
+  // Decode the sandbox target using POSIX rules, regardless of the Gateway host.
+  const resolved = parseSandboxPath(
+    () => fileURLToPath(pathUrl, { windows: false }),
+    `${label} file URI is not valid for the sandbox`,
+  );
   if (WINDOWS_DRIVE_PATH_RE.test(resolved)) {
     // OpenClaw exec-server backends currently expose Docker/SSH POSIX paths.
     // Reject foreign drive URIs instead of silently rewriting their meaning.
@@ -42,4 +28,14 @@ export function resolveExecServerPath(rawPath: string, label: string): string {
     throw new Error(`${label} file URI must not contain a null byte.`);
   }
   return resolved;
+}
+
+function parseSandboxPath<T>(parse: () => T, message: string): T {
+  try {
+    return parse();
+  } catch (error) {
+    throw new Error(`${message}: ${error instanceof Error ? error.message : String(error)}`, {
+      cause: error,
+    });
+  }
 }

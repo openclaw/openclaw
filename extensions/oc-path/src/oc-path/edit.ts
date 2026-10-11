@@ -33,9 +33,6 @@ export function setMdOcPath(ast: MdAst, path: OcPath, newValue: string): MdEditR
       return { ok: false, reason: "unresolved" };
     }
     const idx = ast.frontmatter.findIndex((e) => e.key === key);
-    if (idx === -1) {
-      return { ok: false, reason: "unresolved" };
-    }
     const existing = ast.frontmatter[idx];
     if (existing === undefined) {
       return { ok: false, reason: "unresolved" };

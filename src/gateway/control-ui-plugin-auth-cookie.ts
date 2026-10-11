@@ -277,7 +277,7 @@ export function respondControlUiPluginAuthCookieProbe(
     res.statusCode = 400;
     res.setHeader("Cache-Control", "no-store");
     res.setHeader("Content-Type", "text/plain; charset=utf-8");
-    res.end("Invalid plugin frame auth probe");
+    res.end("Invalid plugin frame auth check");
     return true;
   }
   res.statusCode = 200;

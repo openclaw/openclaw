@@ -1,4 +1,3 @@
-import { isProxy } from "node:util/types";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   GATEWAY_CLIENT_CAPS,
@@ -7,8 +6,6 @@ import {
 import { USER_PROFILE_ID_MAX_LENGTH } from "../../packages/gateway-protocol/src/schema/user-profile-constants.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { SystemPresence } from "../infra/system-presence.js";
-// Gateway WebSocket broadcaster.
-// Applies event scope guards and slow-consumer handling before sending frames.
 import { logRejectedLargePayload } from "../logging/diagnostic-payload.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { queuePluginSessionsChanged } from "../plugins/gateway-events.js";
@@ -23,6 +20,7 @@ import {
 import { createGatewayNarrationDelivery } from "./server-broadcast-narration.js";
 import {
   hasEventScope,
+  isPlainEventPayload,
   isSessionReadInvalidation,
   modelMetadataInvalidationFragment,
 } from "./server-broadcast-scopes.js";
@@ -40,6 +38,7 @@ import { MAX_BUFFERED_BYTES, WEBSOCKET_OPEN_READY_STATE } from "./server-constan
 import type { GatewayClientRegistry } from "./server/client-registry.js";
 import { closeGatewayTransportWithGrace } from "./server/connection-transport-close.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
+import { invalidateSharedReadResponses } from "./shared-read-responses.js";
 import { logWs, summarizeAgentEventForWsLog } from "./ws-log.js";
 
 // Opt-in scoped clients never receive session-bearing broadcasts without an
@@ -160,7 +159,7 @@ type FrameFields = {
   stateVersionFragment: string;
 };
 type FrameBase = FrameFields & {
-  payloadFragment: string;
+  payloadFragment: "" | Buffer;
 };
 type PreparedFrames = {
   fields?: FrameFields;
@@ -177,14 +176,18 @@ const MAX_RECIPIENT_PROFILE_FIELD_BYTES =
 function frameWithSequence(
   base: FrameFields,
   seq: number,
-  payload: string,
+  payload: string | Buffer,
   recipientProfileId?: string,
-): string {
+): string | Buffer {
   const recipient =
     recipientProfileId === undefined
       ? ""
       : `,"recipientProfileId":${JSON.stringify(recipientProfileId)}`;
-  return `{"type":"event","event":${base.eventJSON}${payload},"seq":${seq}${base.stateVersionFragment}${recipient}}`;
+  const prefix = `{"type":"event","event":${base.eventJSON}`;
+  const suffix = `,"seq":${seq}${base.stateVersionFragment}${recipient}}`;
+  return typeof payload === "string"
+    ? `${prefix}${payload}${suffix}`
+    : Buffer.concat([Buffer.from(prefix), payload, Buffer.from(suffix)]);
 }
 
 export function createGatewayBroadcaster(params: {
@@ -239,6 +242,9 @@ export function createGatewayBroadcaster(params: {
       publication?: LiveTextPublication;
     },
   ) => {
+    if (!retained) {
+      invalidateSharedReadResponses(broadcast, event);
+    }
     if (!retained && event === "sessions.changed") {
       // Delivery is queued here so process-local handlers run after websocket fanout returns.
       queuePluginSessionsChanged(payload);
@@ -270,7 +276,7 @@ export function createGatewayBroadcaster(params: {
         metadataInvalidation !== undefined ||
         isSessionReadInvalidation(event, payload, isTargeted));
     let projectPresence: ((client: GatewayWsClient) => SystemPresence[]) | undefined;
-    let presenceFragments: Map<SystemPresence[], string> | undefined;
+    let presenceFragments: Map<SystemPresence[], Buffer> | undefined;
     let projectSession:
       | ((client: GatewayWsClient) => SessionEventProjection | undefined)
       | undefined;
@@ -280,7 +286,7 @@ export function createGatewayBroadcaster(params: {
     let lastFrameSequence = 0;
     let lastFrameRecipientProfileId: string | undefined;
     let lastFrame: string | Buffer | undefined;
-    let lastPayloadFragment: string | undefined;
+    let lastPayloadFragment: string | Buffer | undefined;
     const frames: PreparedFrames = retained?.frames ?? {};
     // Private coalescers preserve inputs; identical pending histories can share this merge.
     let mergedFrames: Map<unknown, { payload: unknown; frames: PreparedFrames }> | undefined;
@@ -294,18 +300,14 @@ export function createGatewayBroadcaster(params: {
       });
     const frameBaseFor = (value: unknown): FrameBase => ({
       ...getFrameFields(),
-      payloadFragment:
-        value === payload && metadataInvalidation !== undefined
-          ? metadataInvalidation
-          : presencePayload
-            ? ""
-            : serializeFrameField("payload", value),
+      payloadFragment: presencePayload
+        ? ""
+        : Buffer.from(
+            value === payload && metadataInvalidation !== undefined
+              ? metadataInvalidation
+              : serializeFrameField("payload", value),
+          ),
     });
-    // Lazy so filtered-out broadcasts (zero eligible clients) never pay
-    // JSON.stringify for the payload.
-    const getFrameBase = () => {
-      return (frames.snapshot ??= frameBaseFor(payload));
-    };
     const sessionSubscriptionVerified = opts?.sessionSubscriptionVerified === true;
     const isSessionSubscriptionEvent = SESSION_SUBSCRIPTION_EVENTS.has(event);
     const sessionMessageSubscribers = params.sessionMessageSubscribers;
@@ -560,25 +562,17 @@ export function createGatewayBroadcaster(params: {
       const getDeliveryFrameBase = () =>
         useDelta && projection
           ? (frames.delta ??= frameBaseFor(projection.delta(payload)))
-          : getFrameBase();
+          : (frames.snapshot ??= frameBaseFor(payload));
       let frame: string | Buffer;
       let delivered: (() => void) | undefined;
       try {
         if (!sessionProjectionPrepared) {
           // Headers precede source hooks and reads performed while preparing projection.
           getFrameFields();
-          let canSkipSourcePayload = false;
-          if (
+          const canSkipSourcePayload =
             !retained &&
             (event === "session.message" || event === "sessions.changed") &&
-            !isProxy(payload) &&
-            isRecord(payload)
-          ) {
-            // Classify without executing getters or Proxy traps.
-            const prototype = Object.getPrototypeOf(payload);
-            canSkipSourcePayload =
-              (prototype === null || prototype === Object.prototype) && !("toJSON" in payload);
-          }
+            isPlainEventPayload(payload);
           if (!canSkipSourcePayload) {
             getDeliveryFrameBase();
           }
@@ -593,7 +587,9 @@ export function createGatewayBroadcaster(params: {
           sessionProjectionPrepared = true;
         }
         const base = skipSourcePayload ? getFrameFields() : getDeliveryFrameBase();
-        let payloadFragment = skipSourcePayload ? "" : getDeliveryFrameBase().payloadFragment;
+        let payloadFragment: string | Buffer = skipSourcePayload
+          ? ""
+          : getDeliveryFrameBase().payloadFragment;
         if (presencePayload) {
           // Presence contains session references. Only the connection owner's
           // recipient projection may cross this boundary; never send the raw roster.
@@ -607,7 +603,8 @@ export function createGatewayBroadcaster(params: {
             Object.keys(projectedPayload).length === 1 && !("toJSON" in projectedPayload);
           const cached = reusable ? presenceFragments?.get(projectedPayload.presence) : undefined;
           payloadFragment = cached ?? serializeFrameField("payload", projectedPayload);
-          if (reusable && cached === undefined) {
+          if (reusable && typeof payloadFragment === "string") {
+            payloadFragment = Buffer.from(payloadFragment);
             (presenceFragments ??= new Map()).set(projectedPayload.presence, payloadFragment);
           }
         }
@@ -631,21 +628,16 @@ export function createGatewayBroadcaster(params: {
         const recipientProfileId =
           (c.connect.role ?? "operator") === "operator" ? c.preparedRecipientProfileId : undefined;
         if (
-          !presencePayload &&
           !projectSession &&
           lastFrame !== undefined &&
-          lastPayloadFragment === payloadFragment &&
           lastFrameSequence === nextSeq &&
-          lastFrameRecipientProfileId === recipientProfileId
+          lastFrameRecipientProfileId === recipientProfileId &&
+          lastPayloadFragment === payloadFragment
         ) {
           frame = lastFrame;
         } else {
           frame = frameWithSequence(base, nextSeq, payloadFragment, recipientProfileId);
-          if (!presencePayload && !projectSession) {
-            // Share UTF-8 bytes too: ws otherwise encodes the same string for every socket.
-            if (!retained && (targetConnIds?.size ?? params.clients.size) > 1) {
-              frame = Buffer.from(frame);
-            }
+          if (!projectSession) {
             lastFrameSequence = nextSeq;
             lastFrameRecipientProfileId = recipientProfileId;
             lastPayloadFragment = payloadFragment;

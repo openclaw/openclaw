@@ -1,11 +1,11 @@
 package ai.openclaw.app.node
 
+import ai.openclaw.app.hasPermission
 import ai.openclaw.app.hasPhotoReadPermission
 import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Build
-import androidx.core.content.ContextCompat
 
 /**
  * Canonical Android authority snapshot shared by node approval and device.permissions.
@@ -59,33 +59,31 @@ internal fun readAndroidPermissionSnapshot(
   photosEnabled: Boolean,
   backgroundLocationEnabled: Boolean,
 ): AndroidPermissionSnapshot {
-  fun hasPermission(permission: String): Boolean = ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED
-
-  val locationFine = hasPermission(Manifest.permission.ACCESS_FINE_LOCATION)
-  val locationCoarse = hasPermission(Manifest.permission.ACCESS_COARSE_LOCATION)
+  val locationFine = context.hasPermission(Manifest.permission.ACCESS_FINE_LOCATION)
+  val locationCoarse = context.hasPermission(Manifest.permission.ACCESS_COARSE_LOCATION)
   val telephonyAvailable = context.packageManager.hasSystemFeature(PackageManager.FEATURE_TELEPHONY)
 
   return AndroidPermissionSnapshot(
-    camera = hasPermission(Manifest.permission.CAMERA),
-    microphone = hasPermission(Manifest.permission.RECORD_AUDIO),
+    camera = context.hasPermission(Manifest.permission.CAMERA),
+    microphone = context.hasPermission(Manifest.permission.RECORD_AUDIO),
     location = locationFine || locationCoarse,
     locationPrecise = locationFine,
     locationBackground =
       backgroundLocationEnabled &&
         (locationFine || locationCoarse) &&
-        hasPermission(Manifest.permission.ACCESS_BACKGROUND_LOCATION),
-    smsSend = smsEnabled && telephonyAvailable && hasPermission(Manifest.permission.SEND_SMS),
-    smsRead = smsEnabled && telephonyAvailable && hasPermission(Manifest.permission.READ_SMS),
+        context.hasPermission(Manifest.permission.ACCESS_BACKGROUND_LOCATION),
+    smsSend = smsEnabled && telephonyAvailable && context.hasPermission(Manifest.permission.SEND_SMS),
+    smsRead = smsEnabled && telephonyAvailable && context.hasPermission(Manifest.permission.READ_SMS),
     notificationListener = DeviceNotificationListenerService.isAccessEnabled(context),
     notifications =
       Build.VERSION.SDK_INT < 33 ||
-        hasPermission(Manifest.permission.POST_NOTIFICATIONS),
+        context.hasPermission(Manifest.permission.POST_NOTIFICATIONS),
     photos = photosEnabled && hasPhotoReadPermission(context),
-    contactsRead = hasPermission(Manifest.permission.READ_CONTACTS),
-    contactsWrite = hasPermission(Manifest.permission.WRITE_CONTACTS),
-    calendarRead = hasPermission(Manifest.permission.READ_CALENDAR),
-    calendarWrite = hasPermission(Manifest.permission.WRITE_CALENDAR),
-    callLog = callLogEnabled && hasPermission(Manifest.permission.READ_CALL_LOG),
-    motion = hasPermission(Manifest.permission.ACTIVITY_RECOGNITION),
+    contactsRead = context.hasPermission(Manifest.permission.READ_CONTACTS),
+    contactsWrite = context.hasPermission(Manifest.permission.WRITE_CONTACTS),
+    calendarRead = context.hasPermission(Manifest.permission.READ_CALENDAR),
+    calendarWrite = context.hasPermission(Manifest.permission.WRITE_CALENDAR),
+    callLog = callLogEnabled && context.hasPermission(Manifest.permission.READ_CALL_LOG),
+    motion = context.hasPermission(Manifest.permission.ACTIVITY_RECOGNITION),
   )
 }

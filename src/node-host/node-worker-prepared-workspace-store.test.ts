@@ -39,57 +39,36 @@ beforeEach(() => {
 });
 
 describe("prepared workspace mutation admission", () => {
-  it("fences legacy reads until the admitted permit closes", async () => {
-    const store = new NodeWorkerPreparedWorkspaceStore({});
-    const admitted = createDeferredCore<NodeWorkerPreparedWorkspaceRow>();
-    mock.execute.mockReturnValueOnce(admitted.promise);
-    expect(store.findSync(bound.environment_id)).toBe(bound);
-    const pending = store.beginMutation(bound);
-    let permit: Awaited<typeof pending> | undefined;
-    try {
-      expect(() => store.findSync(bound.environment_id)).toThrow(/mutation/i);
-      admitted.resolve(retiring);
-      permit = await pending;
-      expect(() => store.findSync(bound.environment_id)).toThrow(/mutation/i);
-      permit.close();
+  it.each(["accepted", "refused"] as const)(
+    "fences legacy reads through %s retirement",
+    async (outcome) => {
+      const store = new NodeWorkerPreparedWorkspaceStore({});
+      const admitted = createDeferredCore<NodeWorkerPreparedWorkspaceRow>();
+      mock.execute.mockReturnValueOnce(admitted.promise);
       expect(store.findSync(bound.environment_id)).toBe(bound);
-    } finally {
-      admitted.resolve(retiring);
-      (permit ?? (await pending)).close();
-    }
-  });
-
-  it("releases the local fence when retirement is refused", async () => {
-    const store = new NodeWorkerPreparedWorkspaceStore({});
-    const admitted = createDeferredCore<NodeWorkerPreparedWorkspaceRow>();
-    mock.execute.mockReturnValueOnce(admitted.promise);
-    const failure = new Error("synthetic retirement refused");
-    const pending = store.beginMutation(bound);
-    const rejected = expect(pending).rejects.toBe(failure);
-    try {
-      expect(() => store.findSync(bound.environment_id)).toThrow(/mutation/i);
-    } finally {
-      admitted.reject(failure);
-      await rejected;
-    }
-    expect(store.findSync(bound.environment_id)).toBe(bound);
-  });
-
-  it("does not let an old permit close a later mutation fence", async () => {
-    const store = new NodeWorkerPreparedWorkspaceStore({});
-    mock.execute.mockResolvedValueOnce(retiring);
-    const previous = await store.beginMutation(bound);
-    await previous.complete();
-    const admitted = createDeferredCore<NodeWorkerPreparedWorkspaceRow>();
-    mock.execute.mockReturnValueOnce(admitted.promise);
-    const pending = store.beginMutation(bound);
-    try {
-      previous.close();
-      expect(() => store.findSync(bound.environment_id)).toThrow(/mutation/i);
-    } finally {
-      admitted.resolve(retiring);
-      (await pending).close();
-    }
-    expect(store.findSync(bound.environment_id)).toBe(bound);
-  });
+      const pending = store.beginMutation(bound);
+      const failure = new Error("synthetic retirement refused");
+      const rejected = outcome === "refused" ? expect(pending).rejects.toBe(failure) : undefined;
+      let permit: Awaited<typeof pending> | undefined;
+      try {
+        expect(() => store.findSync(bound.environment_id)).toThrow(/mutation/i);
+        if (!rejected) {
+          admitted.resolve(retiring);
+          permit = await pending;
+          expect(() => store.findSync(bound.environment_id)).toThrow(/mutation/i);
+          permit.close();
+          expect(store.findSync(bound.environment_id)).toBe(bound);
+        }
+      } finally {
+        if (rejected) {
+          admitted.reject(failure);
+          await rejected;
+        } else {
+          admitted.resolve(retiring);
+          (permit ?? (await pending)).close();
+        }
+      }
+      expect(store.findSync(bound.environment_id)).toBe(bound);
+    },
+  );
 });

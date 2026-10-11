@@ -1,8 +1,8 @@
-/* @vitest-environment jsdom */
-
 import { expectDefined } from "@openclaw/normalization-core";
+/* @vitest-environment jsdom */
 import { html, nothing, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveThemeBranding } from "../../../../../packages/gateway-protocol/src/theme.ts";
 import { resolveControlUiAuthToken } from "../../../app/control-ui-auth.ts";
 import { currentThemeBranding, setCurrentThemeBranding } from "../../../app/theme-branding.ts";
 import { resolveAvatarHat } from "../../../components/agent-avatar-hat.ts";
@@ -28,6 +28,7 @@ import {
   toggleTranscriptSearch,
 } from "./chat-thread-interactions.ts";
 import { renderChatThread } from "./chat-thread.ts";
+import { settleToolBridges } from "./chat-tool-render.test-support.ts";
 import { projectChatTranscript } from "./chat-transcript-projection.ts";
 import {
   flushDeferredRowPrune,
@@ -43,7 +44,7 @@ describe("chat transcript invalidation", () => {
   it.each(["ready", "delayed"])(
     "updates settled avatars when only the theme hat changes with a %s palette",
     (palette) => {
-      const branding = { mascot: "claw" as const, critters: [], avatarHat: "fedora" as const };
+      const branding = resolveThemeBranding({ mascot: "claw", critters: [], avatarHat: "fedora" });
       const agentId = Array.from({ length: 100 }, (_, index) => `agent-${index}`).find((id) =>
         resolveAvatarHat(id, branding),
       )!;
@@ -286,7 +287,7 @@ describe("chat transcript invalidation", () => {
         const owner = new EventTarget();
         let visible = true;
         if (parent === "parked") {
-          props.transcriptPresentation = { owner, isPresented: () => visible };
+          props.transcriptVisible = { owner, isPresented: () => visible };
         }
         await renderPreview();
         expect(container.querySelector(".chat-video-preview img")).toBeInstanceOf(HTMLImageElement);
@@ -302,7 +303,9 @@ describe("chat transcript invalidation", () => {
         expect(revokeObjectURL).toHaveBeenCalledWith("blob:transcript-poster");
         visible = true;
         owner.dispatchEvent(new Event(PRESENTATION_CHANGED_EVENT));
-        props.transcriptVisible = true;
+        if (parent === "rendered") {
+          props.transcriptVisible = true;
+        }
         await renderPreview();
         expect(container.querySelector(".chat-video-preview img")).toBeInstanceOf(HTMLImageElement);
       },
@@ -472,47 +475,41 @@ describe("chat transcript invalidation", () => {
     },
   );
 
-  it.each(["done", "interrupted"] as const)(
-    "keeps settled history idle when %s status appears, refreshes or clears",
-    async (phase) => {
-      vi.spyOn(Date, "now").mockReturnValue(60_000);
-      const props = threadProps(`pane-terminal-status-${phase}`);
-      saveChatSessionScrollPosition(props.paneId, props.sessionKey, {
-        scrollTop: 0,
-        anchorToEnd: false,
-      });
-      const transcript = createTestTranscript(props.paneId);
-      const container = document.body.appendChild(document.createElement("div"));
-      const rerender = () => {
-        render(renderChatThread(props, transcript), container);
-        transcript.hostUpdated();
-      };
-      try {
+  it("keeps settled history idle across unchanged rerenders", async () => {
+    // A minute rollover intentionally invalidates rows; this case keeps time unchanged.
+    vi.spyOn(Date, "now").mockReturnValue(1_700_000_010_000);
+    const props = threadProps("pane-unchanged-rerender");
+    saveChatSessionScrollPosition(props.paneId, props.sessionKey, {
+      scrollTop: 0,
+      anchorToEnd: false,
+    });
+    const transcript = createTestTranscript(props.paneId);
+    const container = document.body.appendChild(document.createElement("div"));
+    const rerender = () => {
+      render(renderChatThread(props, transcript), container);
+      transcript.hostUpdated();
+    };
+    try {
+      rerender();
+      transcript.hostConnected();
+      await flushDeferredRowPrune();
+      const bubbles = Array.from(container.querySelectorAll(".chat-bubble"));
+      expect(bubbles).toHaveLength(4);
+      const renderGroup = vi.spyOn(chatMessage, "renderMessageGroup");
+
+      for (let rerenderIndex = 0; rerenderIndex < 3; rerenderIndex++) {
         rerender();
-        transcript.hostConnected();
-        await flushDeferredRowPrune();
-        const bubbles = Array.from(container.querySelectorAll(".chat-bubble"));
-        expect(bubbles).toHaveLength(4);
-        const renderGroup = vi.spyOn(chatMessage, "renderMessageGroup");
 
-        for (const occurredAt of [59_000, 59_500, null]) {
-          props.runStatus =
-            occurredAt === null
-              ? null
-              : { phase, runId: "finished-run", sessionKey: props.sessionKey, occurredAt };
-          rerender();
-
-          expect(renderGroup).not.toHaveBeenCalled();
-          const currentBubbles = Array.from(container.querySelectorAll(".chat-bubble"));
-          expect(currentBubbles).toHaveLength(bubbles.length);
-          currentBubbles.forEach((bubble, index) => expect(bubble).toBe(bubbles[index]));
-          expect(container.textContent).toContain("reply two");
-        }
-      } finally {
-        transcript.hostDisconnected();
+        expect(renderGroup).not.toHaveBeenCalled();
+        const currentBubbles = Array.from(container.querySelectorAll(".chat-bubble"));
+        expect(currentBubbles).toHaveLength(bubbles.length);
+        currentBubbles.forEach((bubble, index) => expect(bubble).toBe(bubbles[index]));
+        expect(container.textContent).toContain("reply two");
       }
-    },
-  );
+    } finally {
+      transcript.hostDisconnected();
+    }
+  });
 
   it("keeps built row identities across an A to B to A presentation reset", () => {
     const paneId = "pane-session-items";
@@ -872,7 +869,7 @@ describe("chat transcript invalidation", () => {
     expect(provider.snapshot$.value.revision).toBe(1);
   });
 
-  it("keeps mounted disclosure handlers attached to recreated session expansion maps", () => {
+  it("keeps mounted disclosure handlers attached to recreated session expansion maps", async () => {
     const sessionKey = "retained-session";
     const props = {
       ...threadProps("retained-pane", sessionKey, [
@@ -891,6 +888,7 @@ describe("chat transcript invalidation", () => {
     const controller = createTestTranscript();
     const retainedPane = document.body.appendChild(document.createElement("div"));
     render(renderChatThread(props, controller), retainedPane);
+    await settleToolBridges(retainedPane);
     const staleTools = getExpandedToolCards(sessionKey);
     const staleUsers = getExpandedUserMessages(sessionKey);
     const previousToolVersion = getExpansionStateVersion(staleTools);
@@ -909,9 +907,11 @@ describe("chat transcript invalidation", () => {
         ),
         alternatePane,
       );
+      await settleToolBridges(alternatePane);
     }
 
     render(renderChatThread(props, controller), retainedPane);
+    await settleToolBridges(retainedPane);
     const currentTools = getExpandedToolCards(sessionKey);
     const currentUsers = getExpandedUserMessages(sessionKey);
     expect(currentTools).not.toBe(staleTools);
@@ -966,9 +966,11 @@ describe("chat transcript invalidation", () => {
     });
     const toolVisibilityController = createTestTranscript(toolVisibilityProps.paneId);
     const toolVisibilityPane = document.body.appendChild(document.createElement("div"));
-    const renderToolVisibility = (next = toolVisibilityProps) =>
+    const renderToolVisibility = async (next = toolVisibilityProps) => {
       render(renderChatThread(next, toolVisibilityController), toolVisibilityPane);
-    renderToolVisibility();
+      await settleToolBridges(toolVisibilityPane);
+    };
+    await renderToolVisibility();
     const visibilityState = getExpandedToolCards(toolVisibilitySession);
     const visibilityIds = [...visibilityState.keys()].filter((key) => key.startsWith("toolmsg:"));
     const expandedToolId = expectDefined(visibilityIds[0], "expanded standalone tool disclosure");
@@ -983,19 +985,19 @@ describe("chat transcript invalidation", () => {
       "false",
     ]);
     expectDefined(disclosureButtons()[0], "first mounted tool disclosure").click();
-    renderToolVisibility();
+    await renderToolVisibility();
     expectDefined(disclosureButtons()[1], "second mounted tool disclosure").click();
-    renderToolVisibility();
+    await renderToolVisibility();
     expectDefined(disclosureButtons()[1], "second mounted tool disclosure").click();
-    renderToolVisibility();
+    await renderToolVisibility();
     expect(disclosureButtons().map((button) => button.getAttribute("aria-expanded"))).toEqual([
       "true",
       "false",
     ]);
 
-    renderToolVisibility({ ...toolVisibilityProps, showToolCalls: false });
+    await renderToolVisibility({ ...toolVisibilityProps, showToolCalls: false });
     expect(disclosureButtons()).toHaveLength(0);
-    renderToolVisibility();
+    await renderToolVisibility();
 
     expect(disclosureButtons()).toHaveLength(2);
     expect(disclosureButtons().map((button) => button.getAttribute("aria-expanded"))).toEqual([
@@ -1004,7 +1006,7 @@ describe("chat transcript invalidation", () => {
     ]);
     expect(visibilityState.get(expandedToolId)).toBe(true);
     expect(visibilityState.get(collapsedToolId)).toBe(false);
-    renderToolVisibility({
+    await renderToolVisibility({
       ...toolVisibilityProps,
       messages: toolVisibilityProps.messages.filter(
         (message) => !("toolCallId" in message && message.toolCallId === "expanded-tool"),

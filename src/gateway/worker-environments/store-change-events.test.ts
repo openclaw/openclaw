@@ -2,6 +2,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as operationAdmission from "../../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -165,7 +166,7 @@ describe("worker store session change publications", () => {
       },
       { to: "active", patch: { activeOwnerEpoch: 7 } },
     ] as const) {
-      active = store.transition({
+      active = await store.transition({
         sessionId: SESSION.sessionId,
         from: active.state,
         expectedGeneration: active.generation,
@@ -175,7 +176,7 @@ describe("worker store session change publications", () => {
     if (active.state !== "active") {
       throw new Error("expected active worker placement");
     }
-    const claim = store.claimWorkspaceMutationResult({
+    const claim = await store.claimWorkspaceMutationResult({
       ...SESSION,
       owner: {
         kind: "local",
@@ -200,9 +201,7 @@ describe("worker store session change publications", () => {
           change.agentId === SESSION.agentId
         ) {
           observed.push({
-            reconciling: store
-              .getWorkspaceResultReconcilingSessionIds([SESSION.sessionId])
-              .has(SESSION.sessionId),
+            reconciling: Boolean(store.preparedWorkspaceResult(claim)?.stagedResultRef),
             conflict: Boolean(store.get(SESSION.sessionId)?.workspaceResultConflict),
             transaction: database.db.isTransaction,
           });
@@ -210,7 +209,6 @@ describe("worker store session change publications", () => {
       }),
     );
     const ref = "refs/openclaw/worker-results/pending-row-change";
-    const createAdmission = operationAdmission.createSqliteWorkerOperationAdmission;
     let refused = 0;
     let current = true;
     const assertCurrent = () => {
@@ -218,23 +216,19 @@ describe("worker store session change publications", () => {
         throw new Error("rollback pending row");
       }
     };
-    const admission = vi
-      .spyOn(operationAdmission, "createSqliteWorkerOperationAdmission")
-      .mockImplementation((admit, attachment) =>
-        createAdmission((request, grant) => {
-          if (
-            request.stage === "commit" &&
-            isRecord(request.facts) &&
-            isRecord(request.facts.placement) &&
-            request.facts.placement.sessionId === claim.sessionId
-          ) {
-            refused++;
-            expect(observed).toEqual([]);
-            current = false;
-          }
-          admit(request, grant);
-        }, attachment),
-      );
+    const admission = probe.admission(operationAdmission, (request, grant, admit) => {
+      if (
+        request.stage === "commit" &&
+        isRecord(request.facts) &&
+        isRecord(request.facts.placement) &&
+        request.facts.placement.sessionId === claim.sessionId
+      ) {
+        refused++;
+        expect(observed).toEqual([]);
+        current = false;
+      }
+      admit(request, grant);
+    });
     try {
       await expect(
         store.recordStagedWorkspaceResult(claim, ref, undefined, assertCurrent),
@@ -244,30 +238,28 @@ describe("worker store session change publications", () => {
     }
     expect(refused).toBe(1);
     expect(observed).toEqual([]);
-    expect(store.listPendingWorkspaceResults()).toMatchObject([{ stagedResultRef: null }]);
+    expect(await store.listPendingWorkspaceResultsAsync()).toMatchObject([
+      { stagedResultRef: null },
+    ]);
     expect(authority.isCurrent()).toBe(true);
     expect(() => observation.assertCurrent()).not.toThrow();
     let commitGrants = 0;
-    const successfulAdmission = vi
-      .spyOn(operationAdmission, "createSqliteWorkerOperationAdmission")
-      .mockImplementation((admit, attachment) =>
-        createAdmission((request, grant) => {
-          admit(request, () => {
-            if (
-              request.stage === "commit" &&
-              isRecord(request.facts) &&
-              isRecord(request.facts.placement) &&
-              request.facts.placement.sessionId === claim.sessionId
-            ) {
-              commitGrants++;
-              expect(authority.isCurrent()).toBe(true);
-              expect(() => observation.assertCurrent()).toThrow("placement authority changed");
-              expect(observed).toEqual([]);
-            }
-            return grant();
-          });
-        }, attachment),
-      );
+    const successfulAdmission = probe.admission(operationAdmission, (request, grant, admit) => {
+      admit(request, () => {
+        if (
+          request.stage === "commit" &&
+          isRecord(request.facts) &&
+          isRecord(request.facts.placement) &&
+          request.facts.placement.sessionId === claim.sessionId
+        ) {
+          commitGrants++;
+          expect(authority.isCurrent()).toBe(true);
+          expect(() => observation.assertCurrent()).toThrow("placement authority changed");
+          expect(observed).toEqual([]);
+        }
+        return grant();
+      });
+    });
     try {
       await store.recordStagedWorkspaceResult(claim, ref);
     } finally {
@@ -281,8 +273,8 @@ describe("worker store session change publications", () => {
     expect(observed.at(-1)).toEqual({ reconciling: true, conflict: true, transaction: false });
     store.recordWorkspaceResultConflict(claim, undefined);
     expect(observed.at(-1)).toEqual({ reconciling: true, conflict: false, transaction: false });
-    store.acceptWorkspaceResult(claim);
-    store.completeWorkspaceResultAndReleaseTurn(claim);
+    await store.acceptWorkspaceResult(claim);
+    await store.completeWorkspaceResultAndReleaseTurn(claim);
     expect(observed.at(-1)).toEqual({ reconciling: false, conflict: false, transaction: false });
   });
 });

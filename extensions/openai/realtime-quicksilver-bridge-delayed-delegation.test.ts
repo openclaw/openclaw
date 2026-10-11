@@ -1,7 +1,85 @@
 import { describe, expect, it, vi } from "vitest";
 import { createHarness, sentEvents } from "./realtime-quicksilver-bridge.test-support.js";
 
-describe("public GPT-Live delayed bridge delegation", () => {
+describe("GPT-Live bridge delegation admission", () => {
+  it("claims subscription tasks and controls before callbacks without consuming fresh context", async () => {
+    const classify = vi.fn(() => "consult" as const);
+    const harness = createHarness({ model: "gpt-live-1-codex", handleDelegationInput: classify });
+    const delegate = (id: string) =>
+      harness.socket.serverEvent({
+        type: "delegation.created",
+        item: {
+          type: "delegation",
+          target: "client",
+          id,
+          content: [{ type: "input_text", text: "Run the same action." }],
+        },
+      });
+    await harness.bridge.connect();
+    try {
+      harness.onToolCall.mockImplementationOnce(() => delegate("first"));
+      delegate("first");
+      expect(harness.onToolCall).toHaveBeenCalledOnce();
+      harness.bridge.submitToolResult("first", "Done.");
+      harness.socket.serverEvent({
+        type: "turn.done",
+        turn: { role: "user", transcript: "Fresh context." },
+      });
+      delegate("first");
+      expect(classify).toHaveBeenCalledOnce();
+      delegate("second");
+      expect(harness.onToolCall).toHaveBeenCalledTimes(2);
+      expect(harness.onTranscript).toHaveBeenCalledWith("user", "Fresh context.", true);
+      harness.bridge.submitToolResult("second", "Done.");
+      expect(harness.onError).not.toHaveBeenCalled();
+    } finally {
+      await harness.bridge.close();
+    }
+    delegate("third");
+    expect(harness.onToolCall).toHaveBeenCalledTimes(2);
+
+    // Provider IDs belong to a connection, never a process-global replay cache.
+    const fresh = createHarness({ model: "gpt-live-1-codex" });
+    await fresh.bridge.connect();
+    try {
+      fresh.socket.serverEvent({
+        type: "delegation.created",
+        item: {
+          type: "delegation",
+          target: "client",
+          id: "first",
+          content: [{ type: "input_text", text: "Run the same action." }],
+        },
+      });
+      expect(fresh.onToolCall).toHaveBeenCalledOnce();
+    } finally {
+      await fresh.bridge.close();
+    }
+  });
+
+  it("does not reclassify a completed native control notice against later work", async () => {
+    const classify = vi.fn(() => "control" as const);
+    const harness = createHarness({ model: "gpt-live-1-codex", handleDelegationInput: classify });
+    await harness.bridge.connect();
+    const event = {
+      type: "delegation.created",
+      item: {
+        type: "delegation",
+        target: "client",
+        id: "cancel-one",
+        content: [{ type: "input_text", text: "Cancel it." }],
+      },
+    };
+    try {
+      harness.socket.serverEvent(event);
+      harness.socket.serverEvent(event);
+      expect(classify).toHaveBeenCalledOnce();
+      expect(harness.onToolCall).not.toHaveBeenCalled();
+    } finally {
+      await harness.bridge.close();
+    }
+  });
+
   it("waits for public transcript input and ignores duplicate notices after tool completion", async () => {
     const harness = createHarness({ model: "gpt-live-1" });
     await harness.bridge.connect();

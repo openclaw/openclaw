@@ -1,4 +1,3 @@
-// Runs lightweight get-reply fast-path commands before full agent setup.
 import crypto from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeChatType } from "../../channels/chat-type.js";
@@ -52,13 +51,13 @@ export function resolveGetReplyConfig(params: {
   if (configOverride == null) {
     return params.getRuntimeConfig();
   }
-  if (params.isFastTestEnv && !isCompleteReplyConfig(configOverride) && !isSlowReplyTestAllowed()) {
+  if (isCompleteReplyConfig(configOverride)) {
+    return configOverride;
+  }
+  if (params.isFastTestEnv && !isSlowReplyTestAllowed()) {
     throw new Error(
       "Fast reply tests must pass with withFastReplyConfig()/markCompleteReplyConfig(); set OPENCLAW_ALLOW_SLOW_REPLY_TESTS=1 to opt out.",
     );
-  }
-  if (isCompleteReplyConfig(configOverride)) {
-    return configOverride;
   }
   return applyMergePatch(params.getRuntimeConfig(), configOverride) as OpenClawConfig;
 }
@@ -72,13 +71,13 @@ export function shouldUseReplyFastTestRuntime(params: {
   );
 }
 
-export function initFastReplySessionState(params: {
+export async function initFastReplySessionState(params: {
   ctx: MsgContext;
   cfg: OpenClawConfig;
   agentId: string;
   commandAuthorized: boolean;
   workspaceDir: string;
-}): SessionInitResult {
+}): Promise<SessionInitResult> {
   const { ctx, cfg, agentId, commandAuthorized } = params;
   const sessionScope = cfg.session?.scope ?? "per-sender";
   const sessionKey =
@@ -91,7 +90,7 @@ export function initFastReplySessionState(params: {
     ctx.CommandTargetSessionKey,
     resolveSessionParentSessionKey(sessionKey),
   ].filter((key): key is string => typeof key === "string");
-  const snapshot = loadReplySessionInitializationSnapshot({
+  const snapshot = await loadReplySessionInitializationSnapshot({
     agentId,
     storePath,
     sessionKey,
@@ -105,7 +104,7 @@ export function initFastReplySessionState(params: {
       sessionStore[key] = entry;
     }
   }
-  const commandSource = ctx.commandText ?? "";
+  const commandSource = ctx.commandText;
   const normalizedChatType = normalizeChatType(ctx.ChatType);
   const isGroup = normalizedChatType != null && normalizedChatType !== "direct";
   const resetCommand = resolveSessionResetCommand({
@@ -130,11 +129,14 @@ export function initFastReplySessionState(params: {
   const previousSessionEntry = resetTriggered && existingEntry ? { ...existingEntry } : undefined;
   const sessionId =
     !resetTriggered && existingEntry ? existingEntry.sessionId : crypto.randomUUID();
-  const bodyStripped = resetTriggered ? (resetCommand.payload ?? "") : (ctx.agentText ?? "");
+  const bodyStripped = resetTriggered ? (resetCommand.payload ?? "") : ctx.agentText;
   const now = Date.now();
   const resetPreservedSelection = resetTriggered
     ? resolveResetPreservedSelection({ entry: existingEntry })
     : {};
+  const channel = normalizeOptionalString(ctx.Provider);
+  const subject = normalizeOptionalString(ctx.GroupSubject);
+  const groupChannel = normalizeOptionalString(ctx.GroupChannel);
   const sessionEntry: SessionEntry = {
     ...(!resetTriggered ? existingEntry : undefined),
     sessionId,
@@ -145,10 +147,13 @@ export function initFastReplySessionState(params: {
       ? {
           previousSessionId: existingEntry.sessionId,
           spawnedBy: existingEntry.spawnedBy,
+          spawnedBySenderIsOwner: existingEntry.spawnedBySenderIsOwner,
+          spawnedBySessionId: existingEntry.spawnedBySessionId,
           spawnedWorkspaceDir: existingEntry.spawnedWorkspaceDir,
           spawnedCwd: existingEntry.spawnedCwd,
           parentSessionKey: existingEntry.parentSessionKey,
           parentSessionId: existingEntry.parentSessionId,
+          parentSessionLifecycleRevision: existingEntry.parentSessionLifecycleRevision,
           forkedFromParent: existingEntry.forkedFromParent,
           forkSource: existingEntry.forkSource,
           createdVia: existingEntry.createdVia,
@@ -171,15 +176,9 @@ export function initFastReplySessionState(params: {
     ttsAuto: existingEntry?.ttsAuto,
     responseUsage: existingEntry?.responseUsage,
     ...(normalizedChatType ? { chatType: normalizedChatType } : {}),
-    ...(normalizeOptionalString(ctx.Provider)
-      ? { channel: normalizeOptionalString(ctx.Provider) }
-      : {}),
-    ...(normalizeOptionalString(ctx.GroupSubject)
-      ? { subject: normalizeOptionalString(ctx.GroupSubject) }
-      : {}),
-    ...(normalizeOptionalString(ctx.GroupChannel)
-      ? { groupChannel: normalizeOptionalString(ctx.GroupChannel) }
-      : {}),
+    ...(channel ? { channel } : {}),
+    ...(subject ? { subject } : {}),
+    ...(groupChannel ? { groupChannel } : {}),
     topicName: normalizeOptionalString(ctx.TopicName) ?? existingEntry?.topicName,
   };
   sessionStore[sessionKey] = sessionEntry;
@@ -190,9 +189,9 @@ export function initFastReplySessionState(params: {
   });
   const sessionCtx: TemplateContext = {
     ...ctx,
-    commandText: ctx.commandText ?? "",
+    commandText: ctx.commandText,
     agentText: bodyStripped,
-    rawText: ctx.rawText ?? "",
+    rawText: ctx.rawText,
     SessionKey: sessionKey,
     CommandAuthorized: commandAuthorized,
     BodyStripped: bodyStripped,

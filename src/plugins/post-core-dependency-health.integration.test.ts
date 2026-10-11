@@ -9,6 +9,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import * as temporaryState from "../infra/tmp-openclaw-dir.js";
 import * as processExecution from "../process/exec.js";
+import { listKnownProviderAuthEnvVarNamesCore } from "../secrets/provider-env-vars.js";
 import { npmCommandArgs } from "../test-utils/npm-command.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { resolvePluginNpmProjectDir } from "./install-paths.js";
@@ -56,10 +57,17 @@ describe("post-core update required dependency publication", () => {
     "handles a $payload payload after real npm success without losing the previous installation ($workBudget work budget)",
     { timeout: 180_000 },
     async ({ payload, workTimeoutMs, expectedTimeoutMs }) => {
+      // Ambient provider credentials must not add installs to this synthetic registry.
+      const env = Object.fromEntries(
+        listKnownProviderAuthEnvVarNamesCore({ config: {}, env: process.env }).map((key) => [
+          key,
+          undefined,
+        ]),
+      );
       await withOpenClawTestState(
         {
           label: `post-core-dependency-${payload}`,
-          env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" },
+          env: { ...env, OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" },
         },
         async (state) => {
           const control = state.path("control");

@@ -18,7 +18,6 @@ import {
 import {
   OPENCLAW_TOOLS_MCP_AGENT_SESSION_KEY_ENV,
   resolveOpenClawToolsForMcp,
-  resolveOpenClawToolsMcpAgentSessionKey,
 } from "./openclaw-tools-serve.js";
 import { createPluginToolsMcpHandlers } from "./plugin-tools-handlers.js";
 
@@ -26,6 +25,8 @@ const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-mcp-subagent-pol
 
 vi.mock("../system-agent/overview.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../system-agent/overview.js")>();
+  const { withSystemAgentOverviewSources } =
+    await import("../system-agent/overview.test-support.js");
   const config = {
     agents: {
       ownership: "explicit" as const,
@@ -39,27 +40,23 @@ vi.mock("../system-agent/overview.js", async (importOriginal) => {
   return {
     ...actual,
     loadSystemAgentOverview: (options?: Parameters<typeof actual.loadSystemAgentOverview>[0]) =>
-      actual.loadSystemAgentOverview({
-        ...options,
-        deps: {
-          readConfigFileSnapshot: async () => ({
-            path: "/tmp/openclaw-mcp-owner.json",
-            exists: true,
-            valid: true,
-            raw: null,
-            parsed: config,
-            sourceConfig: config,
-            resolved: config,
-            runtimeConfig: config,
-            config,
-            issues: [],
-            warnings: [],
-            legacyIssues: [],
-          }),
-          probeLocalCommand: async (command) => ({ command, found: false }),
-          probeGatewayUrl: async (url) => ({ url, reachable: false }),
+      withSystemAgentOverviewSources(
+        {
+          path: "/tmp/openclaw-mcp-owner.json",
+          exists: true,
+          valid: true,
+          raw: null,
+          parsed: config,
+          sourceConfig: config,
+          resolved: config,
+          runtimeConfig: config,
+          config,
+          issues: [],
+          warnings: [],
+          legacyIssues: [],
         },
-      }),
+        () => actual.loadSystemAgentOverview(options),
+      ),
   };
 });
 
@@ -124,14 +121,6 @@ describe("OpenClaw tools MCP server", () => {
     );
   });
 
-  it("reads the managed bridge agent session key from env", () => {
-    expect(
-      resolveOpenClawToolsMcpAgentSessionKey({
-        [OPENCLAW_TOOLS_MCP_AGENT_SESSION_KEY_ENV]: " agent:worker:main ",
-      }),
-    ).toBe("agent:worker:main");
-  });
-
   it("keeps the generated helper owner through MCP diagnostic actions", async () => {
     const config = buildSystemAgentToolsMcpServerConfig({ surface: "gateway", agentId: "work" });
     const server = config.mcpServers.openclaw as { args: string[] };
@@ -194,23 +183,6 @@ describe("OpenClaw tools MCP server", () => {
         [OPENCLAW_TOOLS_MCP_SYSTEM_AGENT_SURFACE_ENV]: "remote",
       }),
     ).toThrow(OPENCLAW_TOOLS_MCP_SYSTEM_AGENT_SURFACE_ENV);
-  });
-
-  it("builds a openclaw-only stdio server config under the openclaw name", () => {
-    const config = buildSystemAgentToolsMcpServerConfig({ surface: "gateway" });
-
-    expect(Object.keys(config.mcpServers)).toEqual(["openclaw"]);
-    const server = config.mcpServers.openclaw as {
-      command?: string;
-      args?: string[];
-      env?: Record<string, string>;
-    };
-    expect(server.command).toBe(process.execPath);
-    expect(server.args?.at(-1)).toMatch(/openclaw-tools-serve\.(js|ts)$/);
-    expect(server.env).toEqual({
-      [OPENCLAW_TOOLS_MCP_TOOLS_ENV]: "openclaw",
-      [OPENCLAW_TOOLS_MCP_SYSTEM_AGENT_SURFACE_ENV]: "gateway",
-    });
   });
 
   it("serializes operator-approval-only through the native CLI MCP config", () => {

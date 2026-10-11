@@ -9,6 +9,7 @@ import {
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeNullableString as nonEmptyString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
 import { classifyMSTeamsSendError } from "./errors.js";
 import { MSTEAMS_REQUEST_TIMEOUT_MS } from "./request-timeout.js";
 import { getMSTeamsRuntime } from "./runtime.js";
@@ -40,12 +41,6 @@ type MSTeamsIngressOptions = {
     liveContext?: MSTeamsTurnContext,
   ) => Promise<MSTeamsIngressDispatchResult | void> | MSTeamsIngressDispatchResult | void;
   queue?: ChannelIngressQueue<MSTeamsIngressPayload>;
-};
-
-type MSTeamsIngress = {
-  accept: (activity: MSTeamsIngressActivity, liveContext?: MSTeamsTurnContext) => Promise<void>;
-  start: () => void;
-  stop: () => Promise<void>;
 };
 
 const MSTeamsIngressPayloadError = createChannelIngressError<
@@ -133,7 +128,7 @@ function parseClaimedActivity(
   return parsed;
 }
 
-export function createMSTeamsIngress(options: MSTeamsIngressOptions): MSTeamsIngress {
+export function createMSTeamsIngress(options: MSTeamsIngressOptions) {
   const queue =
     options.queue ??
     getMSTeamsRuntime().state.openChannelIngressQueue<MSTeamsIngressPayload>({
@@ -202,7 +197,7 @@ export function createMSTeamsIngress(options: MSTeamsIngressOptions): MSTeamsIng
   let stopTask: Promise<void> | undefined;
 
   return {
-    accept: async (activity, liveContext) => {
+    accept: async (activity: MSTeamsIngressActivity, liveContext?: MSTeamsTurnContext) => {
       const facts = inspectMSTeamsIngressActivity(activity);
       if (!facts) {
         return;
@@ -214,12 +209,9 @@ export function createMSTeamsIngress(options: MSTeamsIngressOptions): MSTeamsIng
       if (liveContext && installedLiveContext) {
         liveContexts.set(facts.eventId, liveContext);
       }
-      // Identity-guarded uninstall: only remove OUR context so a concurrent
-      // redelivery's fresh install is never clobbered. A failed or
-      // tombstoned-duplicate append leaves no claim to consume the entry, and
-      // a later retry must not dispatch this request's stale context.
+      // A rejected append has no delivery that can consume the context.
       const uninstallLiveContext = () => {
-        if (installedLiveContext && liveContexts.get(facts.eventId) === liveContext) {
+        if (installedLiveContext) {
           liveContexts.delete(facts.eventId);
         }
       };
@@ -245,17 +237,18 @@ export function createMSTeamsIngress(options: MSTeamsIngressOptions): MSTeamsIng
     stop: () => {
       stopTask ??= (async () => {
         await monitor.pause();
-        let graceTimer: ReturnType<typeof setTimeout> | undefined;
-        const graceElapsed = new Promise<void>((resolve) => {
-          graceTimer = setTimeout(resolve, MSTEAMS_REQUEST_TIMEOUT_MS);
-          graceTimer.unref?.();
-        });
         try {
           // Preserve completed side effects when possible, but retain an abort path for
           // deliveries that themselves wait on the lifecycle signal.
-          await Promise.race([monitor.waitForIdle(), graceElapsed]);
+          await raceWithTimeout(
+            () => monitor.waitForIdle(),
+            MSTEAMS_REQUEST_TIMEOUT_MS,
+            () => undefined,
+            {
+              ref: false,
+            },
+          );
         } finally {
-          clearTimeout(graceTimer);
           await monitor.stop();
           liveContexts.clear();
         }

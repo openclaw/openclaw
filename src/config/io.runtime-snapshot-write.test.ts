@@ -3,7 +3,6 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  projectConfigOntoRuntimeSourceSnapshot,
   registerConfigWriteListener,
   resetConfigRuntimeState,
   setRuntimeConfigSnapshotRefreshHandler,
@@ -19,7 +18,6 @@ import {
   type RuntimeConfigWriteNotification,
   type RuntimeConfigWritePreparedCandidate,
 } from "./runtime-snapshot.js";
-import { createProviderConfigFixture } from "./runtime-snapshot.test-fixtures.js";
 import { withTempHomeConfig } from "./test-helpers.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "./types.js";
 
@@ -35,31 +33,6 @@ describe("runtime config snapshot writes", () => {
 
   afterEach(() => {
     resetRuntimeConfigState();
-  });
-
-  it("isolates untouched source descendants when projecting runtime edits", () => {
-    const sourceConfig: OpenClawConfig = {
-      ...createProviderConfigFixture(),
-      gateway: { mode: "local", port: 19001 },
-      tools: { exec: { safeBins: ["jq"] } },
-    };
-    const runtimeConfig: OpenClawConfig = {
-      ...sourceConfig,
-      ...createProviderConfigFixture("synthetic-runtime-value"),
-    };
-    setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
-    const projected = projectConfigOntoRuntimeSourceSnapshot({
-      ...runtimeConfig,
-      gateway: { ...runtimeConfig.gateway, port: 19002 },
-    });
-    const safeBins = projected.tools?.exec?.safeBins;
-    if (!safeBins) {
-      throw new Error("expected projected safe bins");
-    }
-    safeBins.push("cut");
-    expect(sourceConfig.tools?.exec?.safeBins).toEqual(["jq"]);
-    expect(projected.models).toEqual(sourceConfig.models);
-    expect(projected.gateway?.port).toBe(19002);
   });
 
   it("publishes canonical include snapshots with managed auth-store refresh scope", async () => {

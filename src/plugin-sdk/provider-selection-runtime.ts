@@ -93,9 +93,10 @@ export function resolveProviderRawConfig(params: {
     ? [params.providerId, params.configuredProviderId]
     : [...(params.providerAliases ?? []).toReversed(), params.providerId];
   return Object.fromEntries(
-    providerIds.flatMap((providerId) =>
-      Object.entries(readProviderConfig(params.providerConfigs, providerId) ?? {}),
-    ),
+    providerIds.flatMap((providerId) => {
+      const config = providerId ? params.providerConfigs?.[providerId] : undefined;
+      return config && typeof config === "object" ? Object.entries(config) : [];
+    }),
   );
 }
 
@@ -137,6 +138,23 @@ export function resolveConfiguredCapabilityProvider<
   }) => boolean;
 }): ResolvedConfiguredProvider<TProvider, TConfig> {
   const configuredProviderId = normalizeOptionalString(params.configuredProviderId);
+  const resolveCandidate = (
+    provider: TProvider,
+  ): ResolvedConfiguredProvider<TProvider, TConfig> => {
+    const providerConfig = params.resolveProviderConfig({
+      provider,
+      cfg: params.cfgForResolve,
+      rawConfig: resolveProviderRawConfig({
+        providerId: provider.id,
+        providerAliases: provider.aliases,
+        configuredProviderId,
+        providerConfigs: params.providerConfigs,
+      }),
+    });
+    return params.isProviderConfigured({ provider, cfg: params.cfg, providerConfig })
+      ? { ok: true, configuredProviderId, provider, providerConfig }
+      : { ok: false, code: "provider-not-configured", configuredProviderId, provider };
+  };
   if (configuredProviderId) {
     const provider = params.getConfiguredProvider(configuredProviderId);
     if (!provider) {
@@ -147,11 +165,7 @@ export function resolveConfiguredCapabilityProvider<
       };
     }
 
-    return resolveProviderCandidate({
-      ...params,
-      configuredProviderId,
-      provider,
-    });
+    return resolveCandidate(provider);
   }
 
   const providers = [...params.listProviders()].toSorted(compareProviderAutoSelectOrder);
@@ -169,11 +183,7 @@ export function resolveConfiguredCapabilityProvider<
       firstUnavailable ??= provider;
       continue;
     }
-    const resolution = resolveProviderCandidate({
-      ...params,
-      configuredProviderId,
-      provider,
-    });
+    const resolution = resolveCandidate(provider);
     if (resolution.ok) {
       return resolution;
     }
@@ -208,52 +218,4 @@ function selectFirstAutoProvider<TProvider extends AutoSelectableProvider>(
     }
   }
   return selected;
-}
-
-function readProviderConfig(
-  providerConfigs: Record<string, Record<string, unknown> | undefined> | undefined,
-  providerId: string | undefined,
-): Record<string, unknown> | undefined {
-  if (!providerId) {
-    return undefined;
-  }
-  const providerConfig = providerConfigs?.[providerId];
-  return providerConfig && typeof providerConfig === "object" ? providerConfig : undefined;
-}
-
-function resolveProviderCandidate<TConfig, TFullConfig, TProvider extends AutoSelectableProvider>(
-  params: Omit<
-    Parameters<typeof resolveConfiguredCapabilityProvider<TConfig, TFullConfig, TProvider>>[0],
-    "getConfiguredProvider" | "listProviders" | "isProviderAvailable"
-  > & { provider: TProvider },
-): ResolvedConfiguredProvider<TProvider, TConfig> {
-  const rawProviderConfig = resolveProviderRawConfig({
-    providerId: params.provider.id,
-    providerAliases: params.provider.aliases,
-    configuredProviderId: params.configuredProviderId,
-    providerConfigs: params.providerConfigs,
-  });
-  const providerConfig = params.resolveProviderConfig({
-    provider: params.provider,
-    cfg: params.cfgForResolve,
-    rawConfig: rawProviderConfig,
-  });
-
-  if (
-    !params.isProviderConfigured({ provider: params.provider, cfg: params.cfg, providerConfig })
-  ) {
-    return {
-      ok: false,
-      code: "provider-not-configured",
-      configuredProviderId: params.configuredProviderId,
-      provider: params.provider,
-    };
-  }
-
-  return {
-    ok: true,
-    configuredProviderId: params.configuredProviderId,
-    provider: params.provider,
-    providerConfig,
-  };
 }

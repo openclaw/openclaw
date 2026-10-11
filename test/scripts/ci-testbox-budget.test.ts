@@ -94,6 +94,18 @@ describe("Testbox spending admission", () => {
     );
   });
 
+  it.each(["check", "check-memory", "arm", "build", "windows"])(
+    "admits a saturated %s queue without resetting the dispatch deadline",
+    (profile) => {
+      const created = Date.parse(request.createdAt);
+      const plan = planTestboxAdmission({ ...request, profile }, created + 35 * 60_000);
+      expect(plan.expires_at).toBe(created + 60 * 60_000);
+      expect(() => planTestboxAdmission({ ...request, profile }, created + 60 * 60_000)).toThrow(
+        /expired/,
+      );
+    },
+  );
+
   it("caps idle requests while retaining shorter provider deadlines", () => {
     expect(boundedTestboxIdleMinutes("90\n")).toBe(15);
     expect(boundedTestboxIdleMinutes("5\n")).toBe(5);
@@ -164,5 +176,245 @@ describe("Testbox spending admission", () => {
       );
       expect(names).toContain("Close Testbox SSH sessions");
     }
+    const expiry = job.steps.find(
+      (step: { name: string }) => step.name === "Reject expired Testbox admission",
+    );
+    const plan = planTestboxAdmission({ ...request, profile }, now);
+    const created = Date.parse(request.createdAt);
+    for (const minutes of [35, 59, 60]) {
+      const result = spawnSync(
+        "bash",
+        ["-c", `date() { printf '%s\\n' "$TESTBOX_NOW_SECONDS"; }\n${expiry.run}`],
+        {
+          encoding: "utf8",
+          env: {
+            TESTBOX_EXPIRES_AT: String(plan.expires_at),
+            TESTBOX_NOW_SECONDS: String(created / 1000 + minutes * 60),
+          },
+        },
+      );
+      expect(result.status, `${file} at ${minutes} minutes: ${result.stderr}`).toBe(
+        minutes < 60 ? 0 : 1,
+      );
+      if (minutes === 60) {
+        expect(result.stderr).toContain("stop this lease and request a fresh one");
+      }
+    }
+  });
+});
+
+describe("Testbox admission GitHub response", () => {
+  const secret = "synthetic-response-secret";
+  const requestId = "ABCD:123456:789ABC:01234567";
+  const rateHeaders = {
+    "x-github-request-id": requestId,
+    "x-ratelimit-limit": "1000",
+    "x-ratelimit-remaining": "0",
+    "x-ratelimit-used": "1000",
+    "x-ratelimit-reset": "1790859600",
+    "x-ratelimit-resource": "core",
+    "retry-after": "60",
+  };
+
+  function admit({
+    status,
+    body = "",
+    headers = {},
+    streamError = false,
+  }: {
+    status: number;
+    body?: string;
+    headers?: Record<string, string>;
+    streamError?: boolean;
+  }) {
+    const script = resolve("scripts/ci-testbox-budget.mjs");
+    const fixture = { status, body, headers, streamError, secret, now };
+    const result = spawnSync(
+      process.execPath,
+      [
+        "--input-type=module",
+        "--eval",
+        `
+      import assert from "node:assert/strict";
+      import fs from "node:fs";
+      import { syncBuiltinESMExports } from "node:module";
+      import { pathToFileURL } from "node:url";
+      const fixture = ${JSON.stringify(fixture)};
+      let requests = 0;
+      let output = "";
+      let canceled = false;
+      Date.now = () => fixture.now;
+      fs.appendFileSync = (path, text) => {
+        assert.equal(path, "admission-output");
+        output += text;
+      };
+      syncBuiltinESMExports();
+      globalThis.fetch = async (url, options) => {
+        assert.equal(++requests, 1);
+        assert.equal(url, "https://api.github.com/repos/example/project/actions/runs/123");
+        assert.equal(options.headers.Authorization, "Bearer " + fixture.secret);
+        assert.ok(options.signal instanceof AbortSignal);
+        return new Response(new ReadableStream({
+          start(controller) {
+            if (fixture.streamError) {
+              controller.error(new Error(fixture.secret));
+              return;
+            }
+            for (let offset = 0; offset < fixture.body.length; offset += 1024) {
+              controller.enqueue(new TextEncoder().encode(fixture.body.slice(offset, offset + 1024)));
+            }
+            // Oversized errors deliberately stay open to exercise bounded cancellation.
+            if (fixture.body.length <= 8192) controller.close();
+          },
+          cancel() { canceled = true; },
+        }), { status: fixture.status, headers: fixture.headers });
+      };
+      process.on("exit", () => console.log(JSON.stringify({ requests, output, canceled })));
+      process.argv = [process.execPath, ${JSON.stringify(script)}, "admit"];
+      await import(pathToFileURL(process.argv[1]).href);
+    `,
+      ],
+      {
+        encoding: "utf8",
+        env: {
+          GITHUB_API_URL: "https://api.github.com",
+          GITHUB_REPOSITORY: "example/project",
+          GITHUB_RUN_ID: "123",
+          GH_TOKEN: secret,
+          GITHUB_OUTPUT: "admission-output",
+          TESTBOX_PROFILE: "check",
+          TESTBOX_ID: "tbx_example",
+        },
+      },
+    );
+    const receipt = JSON.parse(result.stdout.trim().split("\n").at(-1) ?? "null") as {
+      requests: number;
+      output: string;
+      canceled: boolean;
+    };
+    expect(receipt.requests).toBe(1);
+    expect(result.stderr).not.toContain(secret);
+    expect(result.stdout).not.toContain(secret);
+    return { ...result, receipt };
+  }
+
+  it.each([
+    {
+      status: 403,
+      body: JSON.stringify({ message: secret }),
+      headers: rateHeaders,
+      classification: "primary-rate-limit",
+      bodyKind: "json",
+    },
+    {
+      status: 403,
+      body: JSON.stringify({ message: "You have exceeded a secondary rate limit. " + secret }),
+      classification: "secondary-rate-limit",
+      bodyKind: "json",
+    },
+    {
+      status: 403,
+      body: JSON.stringify({ message: "Resource not accessible by integration" }),
+      classification: "resource-not-accessible",
+      bodyKind: "json",
+    },
+    {
+      status: 403,
+      body: JSON.stringify({ message: "Resource not accessible by personal access token" }),
+      classification: "resource-not-accessible",
+      bodyKind: "json",
+    },
+    {
+      status: 403,
+      body: JSON.stringify({
+        message: secret,
+        documentation_url: "https://example.test/" + secret,
+      }),
+      classification: "forbidden",
+      bodyKind: "json",
+    },
+    {
+      status: 403,
+      body: "<html>" + secret + "</html>",
+      classification: "forbidden",
+      bodyKind: "invalid-json",
+    },
+    {
+      status: 403,
+      body: '{"message":"' + secret,
+      classification: "forbidden",
+      bodyKind: "invalid-json",
+    },
+    {
+      status: 403,
+      body: JSON.stringify({ message: { value: secret } }),
+      classification: "forbidden",
+      bodyKind: "json",
+    },
+    {
+      status: 403,
+      body: JSON.stringify({
+        message: "You have exceeded a secondary rate limit.",
+        extra: secret.repeat(1000),
+      }),
+      headers: rateHeaders,
+      classification: "primary-rate-limit",
+      bodyKind: "too-large",
+    },
+    {
+      status: 403,
+      streamError: true,
+      headers: rateHeaders,
+      classification: "primary-rate-limit",
+      bodyKind: "unreadable",
+    },
+    { status: 401, classification: "authentication-failed", bodyKind: "empty" },
+    { status: 404, classification: "not-found", bodyKind: "empty" },
+    { status: 429, classification: "rate-limited", bodyKind: "empty" },
+    { status: 503, classification: "service-error", bodyKind: "empty" },
+  ])("denies $status/$classification/$bodyKind without disclosing response data", (fixture) => {
+    const result = admit(fixture);
+    expect(result.status).toBe(1);
+    expect(result.receipt.output).toBe("");
+    expect(result.stderr).toContain(`GitHub returned ${fixture.status}`);
+    expect(result.stderr).toContain(`class=${fixture.classification}; body=${fixture.bodyKind}`);
+    if (fixture.headers) {
+      expect(result.stderr).toContain(`request_id=${requestId}`);
+      for (const [key, value] of Object.entries(rateHeaders).filter(
+        ([header]) => header !== "x-github-request-id",
+      )) {
+        expect(result.stderr).toContain(`${key}=${value}`);
+      }
+    }
+    if (fixture.bodyKind === "too-large") {
+      expect(result.receipt.canceled).toBe(true);
+    }
+  });
+
+  it("omits malformed or unrecognized header values instead of printing them", () => {
+    const headers = Object.fromEntries(Object.keys(rateHeaders).map((name) => [name, secret]));
+    const result = admit({ status: 403, headers });
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("class=forbidden");
+    expect(result.stderr).not.toContain("request_id=");
+    expect(result.stderr).not.toContain("; x-ratelimit-");
+    expect(result.stderr).not.toContain("retry-after=");
+  });
+
+  it("preserves successful admission and refuses an expired dispatch", () => {
+    const success = admit({ status: 200, body: JSON.stringify({ created_at: request.createdAt }) });
+    expect(success.status, success.stderr).toBe(0);
+    expect(success.receipt.output).toMatch(/^group=openclaw-testbox-budget-v1-\d+\n/);
+    expect(success.receipt.output).toContain("minutes=60\n");
+    expect(success.receipt.output).toContain(
+      `expires_at=${Date.parse(request.createdAt) + 60 * 60_000}\n`,
+    );
+    const expired = admit({
+      status: 200,
+      body: JSON.stringify({ created_at: "2026-10-01T11:00:00Z" }),
+    });
+    expect(expired.status).toBe(1);
+    expect(expired.receipt.output).toBe("");
+    expect(expired.stderr).toContain("admission expired");
   });
 });

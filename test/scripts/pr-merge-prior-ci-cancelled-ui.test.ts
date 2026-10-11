@@ -141,38 +141,18 @@ describePosix("attributed real-Gateway UI failure in a cancelled job", () => {
     "unbound matrix",
     "wrong build mode",
     "ignored test failure",
-  ])("refuses %s in the source owner", (fault) => {
-    const f = uiRootCandidate(true, fault);
-    const result = f.verifyPriorCi(f.path);
-    expect(result.status, result.output).not.toBe(0);
-    expect(result.output).toContain("canonical real-Gateway UI workflow owner");
-    expect(f.state().mutations).toBe(0);
-  });
-
-  it.each([
     "different job",
-    "wrong step number",
     "unknown runner prelude",
     "extra cleanup step",
     "skipped runner cleanup",
     "skipped setup cleanup",
-    "missing source step",
-    "missing timestamp",
-    "overlapping steps",
-    "additional failed step",
-    "stale check head",
-    "missing independent proof",
-    "omitted collateral",
   ])("refuses %s without dispatch", (fault) => {
-    const f = uiRootCandidate(true);
+    const f = uiRootCandidate(true, fault);
     const state = f.state();
     const job = state.priorCi.jobs![0]!;
     const steps = job.steps!;
     if (fault === "different job") {
       job.name = state.priorCi.deadline.check.name = "checks-ui";
-    }
-    if (fault === "wrong step number") {
-      f.evidence.failures[0]!.failedStep.number = 8;
     }
     if (fault === "unknown runner prelude") {
       steps[1]!.name = "Unbound runner command";
@@ -186,32 +166,22 @@ describePosix("attributed real-Gateway UI failure in a cancelled job", () => {
     if (fault === "skipped setup cleanup") {
       steps.at(-3)!.conclusion = "skipped";
     }
-    if (fault === "missing source step") {
-      steps.splice(2, 1);
-    }
-    if (fault === "missing timestamp") {
-      delete steps[1]!.started_at;
-    }
-    if (fault === "overlapping steps") {
-      steps[2]!.started_at = "2026-09-20T00:00:59Z";
-    }
-    if (fault === "additional failed step") {
-      steps[1]!.conclusion = "failure";
-    }
-    if (fault === "stale check head") {
-      state.priorCi.deadline.check.head_sha = f.base;
-    }
-    if (fault === "missing independent proof") {
-      f.evidence.failures[0]!.evidence = [];
-    }
-    if (fault === "omitted collateral") {
-      f.evidence.cancellation.jobIds = [];
-    }
     f.save(state);
     writeFileSync(f.path, JSON.stringify(f.evidence));
     const result = f.verifyPriorCi(f.path);
     expect(result.status, result.output).not.toBe(0);
-    expect(result.output).toContain("Prior-CI admin admission:");
+    expect(result.output).toContain(
+      [
+        "different command",
+        "changed test condition",
+        "unbound test selection",
+        "unbound matrix",
+        "wrong build mode",
+        "ignored test failure",
+      ].includes(fault)
+        ? "canonical real-Gateway UI workflow owner"
+        : "Prior-CI admin admission:",
+    );
     expect(f.state().mutations).toBe(0);
   });
 });

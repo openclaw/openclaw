@@ -15,8 +15,10 @@ import {
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
-import { repairCanonicalSessionKeys } from "./doctor-session-canonical-keys.js";
-import { insertLegacySession } from "./doctor-session-canonical-keys.test-support.js";
+import {
+  insertLegacySession,
+  repairCanonicalSessionKeys,
+} from "./doctor-session-canonical-keys.test-support.js";
 
 afterEach(() => closeOpenClawAgentDatabasesForTest());
 
@@ -28,7 +30,7 @@ describe("doctor canonical session-key retention repair", () => {
       const mainStore = resolveSessionStorePathCore(storeTemplate, { agentId: "main", env });
       const opsStore = resolveSessionStorePathCore(storeTemplate, { agentId: "ops", env });
       const cfg = {
-        agents: { list: [{ id: "main", default: true }, { id: "ops" }] },
+        agents: { entries: { main: {}, ops: {} } },
         session: { mainKey: "shared", store: storeTemplate },
       } as OpenClawConfig;
 
@@ -217,7 +219,7 @@ describe("doctor canonical session-key retention repair", () => {
         const mainStore = resolveSessionStorePathCore(storeTemplate, { agentId: "main", env });
         const opsStore = resolveSessionStorePathCore(storeTemplate, { agentId: "ops", env });
         const cfg = {
-          agents: { list: [{ id: "main", default: true }, { id: "ops" }] },
+          agents: { entries: { main: {}, ops: {} } },
           session: { mainKey: "work", store: storeTemplate },
         } as OpenClawConfig;
         insertLegacySession({

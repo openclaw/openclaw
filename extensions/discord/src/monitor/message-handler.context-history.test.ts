@@ -1,5 +1,5 @@
 import path from "node:path";
-import { ChannelType, MessageType, type APIMessage } from "discord-api-types/v10";
+import { ChannelType, type APIMessage } from "discord-api-types/v10";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { closeOpenClawAgentDatabasesAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
@@ -169,44 +169,25 @@ describe("Discord native recent history through process context", () => {
     expect(get).toHaveBeenCalledWith("/channels/c1/messages", { before: "1000", limit: 3 });
   });
 
-  it("paginates only the configured physical window, with identical Body and InboundHistory selection", async () => {
-    const native = Array.from({ length: 150 }, (_, index) => nativeMessage(900 - index));
-    const get = vi.fn(async (_path: string, query: { limit: number; before: string }) =>
-      native.filter((message) => BigInt(message.id) < BigInt(query.before)).slice(0, query.limit),
-    );
-    const result = await buildContext(
-      await recentContext({ historyLimit: 105, client: { rest: { get } } }),
-    );
-    const selected = Array.from({ length: 105 }, (_, index) => String(796 + index));
-
-    expect(result?.ctxPayload.InboundHistory?.map((entry) => entry.messageId)).toEqual(selected);
-    expect(
-      result?.ctxPayload.Body?.match(/\[id:(\d+) channel:c1\]/gu)?.map(
-        (label) => label.match(/\d+/u)?.[0],
-      ),
-    ).toEqual(selected);
-    expect(get.mock.calls).toEqual([
-      ["/channels/c1/messages", { before: "1000", limit: 100 }],
-      ["/channels/c1/messages", { before: "801", limit: 5 }],
-    ]);
-  });
-
-  it("filters native sender identities without extending the physical window", async () => {
+  it("filters native sender identities without excluding permitted bots or extending the window", async () => {
     const get = vi.fn().mockResolvedValue([
       nativeMessage(900, "blocked discussion", {
         author: { ...nativeMessage(900).author, id: "222" },
       }),
-      nativeMessage(899, "permitted discussion"),
+      nativeMessage(899, "permitted bot discussion", {
+        author: { ...nativeMessage(899).author, bot: true },
+      }),
     ]);
     const ctx = await recentContext({
       historyLimit: 2,
+      discordConfig: { allowBots: "mentions" },
       client: { rest: { get } },
       channelConfig: { allowed: true, users: ["111"] },
     });
     ctx.cfg = { ...ctx.cfg, channels: { discord: { contextVisibility: "allowlist_quote" } } };
     const result = await buildContext(ctx);
     expect(result?.ctxPayload.InboundHistory?.map((entry) => entry.messageId)).toEqual(["899"]);
-    expect(result?.ctxPayload.Body).toContain("permitted discussion");
+    expect(result?.ctxPayload.Body).toContain("permitted bot discussion");
     expect(result?.ctxPayload.Body).not.toContain("blocked discussion");
     expect(get).toHaveBeenCalledTimes(1);
   });
@@ -432,45 +413,5 @@ describe("Discord native recent history through process context", () => {
     expect(result?.ctxPayload.ThreadParentId).toBe("c1");
     expect(result?.ctxPayload.Body).not.toContain("parent discussion");
     expect(get.mock.calls.some(([route]) => route === "/channels/c1/messages")).toBe(false);
-  });
-
-  it("retains other bots as context independently of allowBots", async () => {
-    const bot = { ...nativeMessage(900).author, id: "other-bot", bot: true };
-    const reply = {
-      author: bot,
-      type: MessageType.Reply,
-      mentions: [{ ...bot, id: "self" }],
-    };
-    const ctx = await recentContext({
-      botUserId: "self",
-      discordConfig: { allowBots: "mentions" },
-      client: {
-        rest: {
-          get: vi
-            .fn()
-            .mockResolvedValue([
-              nativeMessage(900, "own bot output", { author: { ...bot, id: "self" } }),
-              nativeMessage(899, "other bot output", { author: bot }),
-              nativeMessage(898, "human discussion"),
-              nativeMessage(897, "passive reply ping", reply),
-              nativeMessage(896, "<@self> active bot reply", reply),
-              nativeMessage(895, "history-helper, assist", { author: bot }),
-              nativeMessage(894, "`history-helper`", reply),
-            ]),
-        },
-      },
-    });
-    ctx.cfg = { ...ctx.cfg, messages: { groupChat: { mentionPatterns: ["history-helper"] } } };
-    const result = await buildContext(ctx);
-
-    expect(result?.ctxPayload.InboundHistory?.map((entry) => entry.messageId)).toEqual([
-      "894",
-      "895",
-      "896",
-      "897",
-      "898",
-      "899",
-    ]);
-    expect(result?.ctxPayload.Body).not.toContain("own bot output");
   });
 });

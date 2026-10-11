@@ -1,4 +1,5 @@
 import type { LocalPackageOverridesResult } from "./package-local-overrides-shared.js";
+import type { PackageActivationRuntime } from "./package-update-activation-runtime.types.js";
 import type { PackagePostInstallVerifier } from "./package-update-verification-step.js";
 import type { ResolvedGlobalInstallTarget } from "./update-global.js";
 import type { NativePackageStage } from "./update-native-package-stage.js";
@@ -6,19 +7,12 @@ import type { NpmGlobalPrefixLayout } from "./update-npm-prefix.js";
 import type { UpdateRecoveryFence } from "./update-run-recovery-types.js";
 import type { UpdateStepResult } from "./update-step-result.js";
 
-export type PackageActivationRuntime = {
-  kind: "node" | "bun";
-  path: string;
-  identity: string;
-  /** Preflight snapshot filtered by the daemon runtime probe owner. */
-  env?: NodeJS.ProcessEnv;
-};
-
 export type PackageActivationOptions = {
   fence: UpdateRecoveryFence;
   runtime: PackageActivationRuntime;
   onPrepared: (command: string) => void;
   onUnavailable?: (message: string) => void;
+  onWarning?: (message: string) => void;
 };
 
 /** The orchestrator owns schema safety and service verification before confirming or restoring. */

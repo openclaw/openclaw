@@ -45,9 +45,10 @@ export async function buildSkillSnapshot(
     prompt: prepared.prompt,
     skills: eligible.map((entry) => ({
       name: entry.skill.name,
+      source: { filePath: entry.skill.filePath, fileHost: resolveSkillFileHost(entry.skill) },
       gatewayFilePath:
         resolveSkillFileHost(entry.skill) === "gateway" ? entry.skill.filePath : undefined,
-      skillKey: resolveSkillKey(entry.skill, entry),
+      skillKey: resolveSkillKey(entry),
       primaryEnv: entry.metadata?.primaryEnv,
       requiredEnv: entry.metadata?.requires?.env?.slice(),
     })),
@@ -84,12 +85,8 @@ async function buildSkillsPromptFromEntries(
     return "";
   }
   const { prompt } = await buildSkillSnapshot(params.workspaceDir, {
+    ...params,
     entries,
-    config: params.config,
-    agentId: params.agentId,
-    eligibility: params.eligibility,
-    preserveEntryOrder: params.preserveEntryOrder,
-    assertCurrent: params.assertCurrent,
   });
   return prompt.trim() ? prompt : "";
 }
@@ -104,7 +101,7 @@ async function rebuildAfterUnsafeSnapshot(
   );
   const sourceEntries = params.entries ?? (await params.loadEntries?.());
   const entries = sourceEntries?.filter(
-    (entry) => !isSkillSecretOwnerUnavailable(resolveSkillKey(entry.skill, entry)),
+    (entry) => !isSkillSecretOwnerUnavailable(resolveSkillKey(entry)),
   );
   return buildSkillsPromptFromEntries(params, entries);
 }

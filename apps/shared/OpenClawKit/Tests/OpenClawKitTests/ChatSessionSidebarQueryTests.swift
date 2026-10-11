@@ -1,9 +1,14 @@
 import Foundation
 import OpenClawProtocol
+import SwiftUI
 import Testing
 @testable import OpenClawChatUI
 
-private actor SidebarQueryTransport: OpenClawChatSidebarTransport {
+actor SidebarQueryTransport: OpenClawChatSidebarTransport {
+    func loadSidebarAgentAvatar(_: String) async -> Data? {
+        nil
+    }
+
     struct Pending: Sendable {
         let request: OpenClawChatGatewayRequest
         let reply: CheckedContinuation<Data, any Error>
@@ -52,6 +57,18 @@ private actor SidebarQueryTransport: OpenClawChatSidebarTransport {
         self.responder = responder
     }
 
+    nonisolated func scoped(toAgentID _: String) -> (any OpenClawChatTransport)? {
+        self
+    }
+
+    func acquireSessionSettingsRouteLease() async -> OpenClawChatSessionSettingsRouteLease? {
+        OpenClawChatSessionSettingsRouteLease { key, agentID, patch in
+            let response = try await self.send(OpenClawChatGatewayRequests.patchSessionSettings(
+                sessionKey: key, agentID: agentID, model: patch.model))
+            return try JSONDecoder().decode(OpenClawChatModelPatchResult.self, from: response)
+        }
+    }
+
     func requestHistory(sessionKey _: String) async throws -> OpenClawChatHistoryPayload {
         throw CancellationError()
     }
@@ -82,8 +99,14 @@ struct ChatSessionSidebarQueryTests {
         let transport = SidebarQueryTransport()
         let agentID = allAgents ? nil : "main"
         let owner = self.owner(transport, query: .init(agentID: agentID))
-        let parent = #"{"key":"agent:main:parent","sessionId":"parent","owner":{"actor":{"type":"human","id":"alice"}},"childSessions":["agent:main:child"]}"#
-        let child = #"{"key":"agent:main:child","sessionId":"child","owner":{"actor":{"type":"human","id":"bob"}},"unread":true,"status":"failed"}"#
+        let parent = #"""
+        {"key":"agent:main:parent","sessionId":"parent","owner":{"actor":{"type":"human","id":"alice"}},
+         "childSessions":["agent:main:child"]}
+        """#
+        let child = #"""
+        {"key":"agent:main:child","sessionId":"child","owner":{"actor":{"type":"human","id":"bob"}},
+         "unread":true,"status":"failed"}
+        """#
         _ = await self.load(owner, transport, self.page([parent, child]))
         if owner.setQuery(.init(agentID: agentID, ownerId: "alice")) {
             _ = await self.load(owner, transport, self.page([parent]))
@@ -97,7 +120,8 @@ struct ChatSessionSidebarQueryTests {
         updated.childSessions = ["agent:main:child"]
         owner.receive([updated], read: owner.beginRead())
         #expect(owner.rowsIncludingLoadedDescendants.count == 2)
-        let wake = Date.now.addingTimeInterval(3600)
+        // Fractional seconds can round upward through the wire millisecond conversion.
+        let wake = Date(timeIntervalSince1970: Date.now.timeIntervalSince1970.rounded(.up) + 3600)
         updated.snoozedUntil = wake.timeIntervalSince1970 * 1000
         owner.receive([updated], read: owner.beginRead())
         #expect(owner.rows(at: wake.addingTimeInterval(-1)).isEmpty)
@@ -142,7 +166,7 @@ struct ChatSessionSidebarQueryTests {
         #expect(await transport.requests.allSatisfy { ($0.params["limit"]?.value as? Int ?? 0) <= 100 })
     }
 
-    private func owner(
+    func owner(
         _ transport: SidebarQueryTransport,
         query: OpenClawChatSidebarQuery = .init(agentID: "main")) -> OpenClawChatSessionSidebarData
     {
@@ -151,15 +175,15 @@ struct ChatSessionSidebarQueryTests {
         return owner
     }
 
-    private func row(_ name: String, label: String = "Work", updatedAt: Int = 10) -> String {
+    func row(_ name: String, label: String = "Work", updatedAt: Int = 10) -> String {
         #"{"key":"agent:main:\#(name)","sessionId":"\#(name)","label":"\#(label)","updatedAt":\#(updatedAt)}"#
     }
 
-    private func page(_ rows: [String], paging: String = #""hasMore":false,"nextOffset":null"#) -> Data {
+    func page(_ rows: [String], paging: String = #""hasMore":false,"nextOffset":null"#) -> Data {
         Data(#"{"count":\#(rows.count),"sessions":[\#(rows.joined(separator: ","))],\#(paging)}"#.utf8)
     }
 
-    private func load(
+    func load(
         _ owner: OpenClawChatSessionSidebarData,
         _ transport: SidebarQueryTransport,
         _ data: Data,

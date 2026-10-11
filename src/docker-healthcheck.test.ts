@@ -1,94 +1,72 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { getRuntimeConfig } from "./config/config.js";
 import { probeDockerGatewayHealth } from "./docker-healthcheck.js";
+import { readActiveGatewayLockPort } from "./infra/gateway-lock.js";
+
+vi.mock("./config/config.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./config/config.js")>()),
+  getRuntimeConfig: vi.fn(),
+}));
+
+vi.mock("./infra/gateway-lock.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./infra/gateway-lock.js")>()),
+  readActiveGatewayLockPort: vi.fn(),
+}));
 
 describe("Docker healthcheck", () => {
-  it("probes the active Gateway lock port used by --port", async () => {
-    const getRuntimeConfig = vi.fn(() => ({ gateway: { port: 19002 } }));
-    const resolveGatewayPort = vi.fn(() => 19003);
-    const fetch = vi.fn(async () => ({ ok: true }) as Response);
+  const fetch = vi.fn<typeof globalThis.fetch>();
 
-    await expect(
-      probeDockerGatewayHealth({
-        env: { OPENCLAW_GATEWAY_PORT: "19001" },
-        fetch,
-        getRuntimeConfig,
-        readActiveGatewayLockPort: vi.fn(async () => 19000),
-        resolveGatewayPort,
-      }),
-    ).resolves.toBe(true);
+  beforeEach(() => {
+    vi.stubGlobal("fetch", fetch);
+    vi.stubEnv("OPENCLAW_GATEWAY_PORT", undefined);
+    vi.mocked(readActiveGatewayLockPort).mockResolvedValue(undefined);
+    vi.mocked(getRuntimeConfig).mockReturnValue({ gateway: { port: 19002 } });
+    fetch.mockResolvedValue(new Response());
+  });
+
+  afterEach(() => {
+    vi.clearAllMocks();
+    vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
+  });
+
+  it("probes the active Gateway lock port used by --port", async () => {
+    vi.stubEnv("OPENCLAW_GATEWAY_PORT", "19001");
+    vi.mocked(readActiveGatewayLockPort).mockResolvedValue(19000);
+
+    await expect(probeDockerGatewayHealth()).resolves.toBe(true);
     expect(fetch).toHaveBeenCalledWith("http://127.0.0.1:19000/healthz");
     expect(getRuntimeConfig).not.toHaveBeenCalled();
-    expect(resolveGatewayPort).not.toHaveBeenCalled();
   });
 
   it.each([
-    {
-      name: "environment",
-      env: { OPENCLAW_GATEWAY_PORT: "19001" },
-      config: { gateway: { port: 19002 } },
-      expected: 19001,
-    },
-    {
-      name: "config",
-      env: {},
-      config: { gateway: { port: 19002 } },
-      expected: 19002,
-    },
-  ])(
-    "probes the canonical $name port when no active lock exists",
-    async ({ env, config, expected }) => {
-      const fetch = vi.fn(async () => ({ ok: true }) as Response);
+    { name: "environment", port: "19001", expected: 19001 },
+    { name: "config", port: undefined, expected: 19002 },
+  ])("probes the canonical $name port when no active lock exists", async ({ port, expected }) => {
+    vi.stubEnv("OPENCLAW_GATEWAY_PORT", port);
 
-      await expect(
-        probeDockerGatewayHealth({
-          env,
-          fetch,
-          getRuntimeConfig: () => config,
-          readActiveGatewayLockPort: vi.fn(async () => undefined),
-        }),
-      ).resolves.toBe(true);
-      expect(fetch).toHaveBeenCalledWith(`http://127.0.0.1:${expected}/healthz`);
-    },
-  );
+    await expect(probeDockerGatewayHealth()).resolves.toBe(true);
+    expect(fetch).toHaveBeenCalledWith(`http://127.0.0.1:${expected}/healthz`);
+    expect(getRuntimeConfig).toHaveBeenCalledWith({
+      pin: false,
+      skipPluginValidation: true,
+      skipShellEnvFallback: true,
+    });
+  });
 
   it("probes the configured port when the active lock cannot be read", async () => {
-    const fetch = vi.fn(async () => ({ ok: true }) as Response);
+    vi.mocked(readActiveGatewayLockPort).mockRejectedValue(new Error("lock unavailable"));
 
-    await expect(
-      probeDockerGatewayHealth({
-        env: {},
-        fetch,
-        getRuntimeConfig: () => ({ gateway: { port: 19002 } }),
-        readActiveGatewayLockPort: vi.fn(async () => {
-          throw new Error("lock unavailable");
-        }),
-        resolveGatewayPort: (config) => config.gateway?.port ?? 18789,
-      }),
-    ).resolves.toBe(true);
+    await expect(probeDockerGatewayHealth()).resolves.toBe(true);
     expect(fetch).toHaveBeenCalledWith("http://127.0.0.1:19002/healthz");
   });
 
   it("reports an unsuccessful or unreachable liveness endpoint as unhealthy", async () => {
-    const baseDeps = {
-      env: {},
-      getRuntimeConfig: () => ({ gateway: { port: 19002 } }),
-      readActiveGatewayLockPort: vi.fn(async () => 19000),
-      resolveGatewayPort: vi.fn(() => 19002),
-    };
+    vi.mocked(readActiveGatewayLockPort).mockResolvedValue(19000);
+    fetch.mockResolvedValueOnce(new Response(null, { status: 503 }));
+    await expect(probeDockerGatewayHealth()).resolves.toBe(false);
 
-    await expect(
-      probeDockerGatewayHealth({
-        ...baseDeps,
-        fetch: vi.fn(async () => ({ ok: false }) as Response),
-      }),
-    ).resolves.toBe(false);
-    await expect(
-      probeDockerGatewayHealth({
-        ...baseDeps,
-        fetch: vi.fn(async () => {
-          throw new Error("connection refused");
-        }),
-      }),
-    ).resolves.toBe(false);
+    fetch.mockRejectedValueOnce(new Error("connection refused"));
+    await expect(probeDockerGatewayHealth()).resolves.toBe(false);
   });
 });

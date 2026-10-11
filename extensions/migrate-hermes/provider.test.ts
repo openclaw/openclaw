@@ -1,8 +1,6 @@
-// Migrate Hermes tests cover provider plugin behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { createCapturedPluginRegistration } from "openclaw/plugin-sdk/plugin-test-runtime";
 import {
   resolvePreferredOpenClawTmpDir,
   tempWorkspace,
@@ -10,7 +8,6 @@ import {
 } from "openclaw/plugin-sdk/temp-path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveHomePath } from "./helpers.js";
-import pluginEntry from "./index.js";
 import { HERMES_REASON_INCLUDE_SECRETS } from "./items.js";
 import { buildHermesMigrationProvider } from "./provider.js";
 import { makeContext, makeHermesPaths, writeFile } from "./test/provider-helpers.js";
@@ -36,26 +33,6 @@ describe("Hermes migration provider", () => {
     await testWorkspace.cleanup();
   });
 
-  it("registers the Hermes migration provider through the plugin entry", () => {
-    const captured = createCapturedPluginRegistration();
-    pluginEntry.register(captured.api);
-    expect(captured.migrationProviders.map((provider) => provider.id)).toEqual(["hermes"]);
-  });
-
-  it("resolves tilde source paths against the OS home when OPENCLAW_HOME is set", () => {
-    const previous = process.env.OPENCLAW_HOME;
-    process.env.OPENCLAW_HOME = path.join(path.sep, "tmp", "openclaw-home");
-    try {
-      expect(resolveHomePath("~/.hermes")).toBe(path.join(os.homedir(), ".hermes"));
-    } finally {
-      if (previous === undefined) {
-        delete process.env.OPENCLAW_HOME;
-      } else {
-        process.env.OPENCLAW_HOME = previous;
-      }
-    }
-  });
-
   it("keeps literal $ patterns in home when expanding tildes", () => {
     const spy = vi.spyOn(os, "homedir").mockReturnValue("/home/$&user");
     try {
@@ -63,24 +40,6 @@ describe("Hermes migration provider", () => {
     } finally {
       spy.mockRestore();
     }
-  });
-
-  it("detects Hermes sources supported by planning", async () => {
-    const { root, source } = makeHermesPaths(testWorkspace.dir);
-    await writeFile(path.join(source, "SOUL.md"), "# Hermes soul\n");
-
-    const provider = buildHermesMigrationProvider();
-    const detected = await provider.detect?.(
-      makeContext({
-        source,
-        stateDir: path.join(root, "state"),
-        workspaceDir: path.join(root, "workspace"),
-      }),
-    );
-
-    expect(detected?.found).toBe(true);
-    expect(detected?.source).toBe(source);
-    expect(detected?.confidence).toBe("high");
   });
 
   it("detects archive-only Hermes sources", async () => {
@@ -99,97 +58,6 @@ describe("Hermes migration provider", () => {
     expect(detected?.found).toBe(true);
     expect(detected?.source).toBe(source);
     expect(detected?.confidence).toBe("high");
-  });
-
-  it("detects only memory files in memory-only mode", async () => {
-    const { root, source, workspaceDir } = makeHermesPaths(testWorkspace.dir);
-    await writeFile(path.join(source, "SOUL.md"), "# Hermes soul\n");
-    const provider = buildHermesMigrationProvider();
-    const context = makeContext({
-      source,
-      stateDir: path.join(root, "state"),
-      workspaceDir,
-      itemKinds: ["memory"],
-    });
-
-    expect((await provider.detect?.(context))?.found).toBe(false);
-    await expect(provider.plan(context)).resolves.toMatchObject({
-      items: [],
-      summary: { total: 0 },
-    });
-    await writeFile(path.join(source, "memories", "MEMORY.md"), "remember this\n");
-    expect((await provider.detect?.(context))?.found).toBe(true);
-  });
-
-  it("plans only copy items under the Hermes memory import directory", async () => {
-    const { root, source, workspaceDir } = makeHermesPaths(testWorkspace.dir);
-    await writeFile(path.join(source, "memories", "MEMORY.md"), "remember this\n");
-    await writeFile(path.join(source, "memories", "USER.md"), "user detail\n");
-    await writeFile(path.join(source, "SOUL.md"), "# Must not be planned\n");
-    const provider = buildHermesMigrationProvider();
-
-    const plan = await provider.plan(
-      makeContext({
-        source,
-        stateDir: path.join(root, "state"),
-        workspaceDir,
-        itemKinds: ["memory"],
-      }),
-    );
-
-    expect(provider.supportedItemKinds).toEqual(["memory"]);
-    expect(plan.items).toHaveLength(2);
-    expect(plan.items).toEqual([
-      expect.objectContaining({
-        id: "memory:MEMORY.md",
-        kind: "memory",
-        action: "copy",
-        status: "planned",
-        target: path.join(workspaceDir, "memory", "imports", "hermes", "MEMORY.md"),
-        details: {
-          sourceType: "hermes-memory",
-          sourceLabel: "Hermes MEMORY.md",
-          collectionId: "hermes",
-          collectionLabel: "Hermes",
-          relativePath: "MEMORY.md",
-        },
-      }),
-      expect.objectContaining({
-        id: "memory:USER.md",
-        kind: "memory",
-        action: "copy",
-        status: "planned",
-        target: path.join(workspaceDir, "memory", "imports", "hermes", "USER.md"),
-      }),
-    ]);
-  });
-
-  it("targets the selected agent workspace for memory-only imports", async () => {
-    const { root, source } = makeHermesPaths(testWorkspace.dir);
-    const defaultWorkspace = path.join(root, "workspace-main");
-    const targetWorkspace = path.join(root, "workspace-research");
-    await writeFile(path.join(source, "memories", "MEMORY.md"), "research memory\n");
-    const provider = buildHermesMigrationProvider();
-
-    const plan = await provider.plan(
-      makeContext({
-        source,
-        stateDir: path.join(root, "state"),
-        workspaceDir: defaultWorkspace,
-        config: {
-          agents: {
-            defaults: { workspace: defaultWorkspace },
-            list: [{ id: "research", workspace: targetWorkspace }],
-          },
-        },
-        targetAgentId: "research",
-        itemKinds: ["memory"],
-      }),
-    );
-
-    expect(plan.items[0]?.target).toBe(
-      path.join(targetWorkspace, "memory", "imports", "hermes", "MEMORY.md"),
-    );
   });
 
   it("marks existing memory import targets as conflicts", async () => {

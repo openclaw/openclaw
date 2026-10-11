@@ -6,6 +6,7 @@ import path from "node:path";
 import JSON5 from "json5";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { prepareLegacyConfigMigrationRuntime } from "../commands/doctor/shared/legacy-config-migrate.test-support.js";
+import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -276,18 +277,24 @@ describe("config observe recovery", () => {
     await seedConfigBackup(configPath, largeRecoverableCoreConfig);
     const backupRaw = await fsp.readFile(`${configPath}.bak`, "utf-8");
     await writeConfigRaw(configPath, { meta: { lastTouchedVersion: "2026.5.28" } });
-    const append = configAudit.appendConfigAuditRecord;
+    const captureAppender = configAudit.captureConfigAuditAppender;
     let closedAfterRestore = false;
     const audit = vi
-      .spyOn(configAudit, "appendConfigAuditRecord")
-      .mockImplementation(async (params) => {
-        await append(params);
-        const record = "record" in params ? params.record : params;
-        if (!closedAfterRestore && record.event === "config.observe" && record.restoredFromBackup) {
-          expect(await fsp.readFile(configPath, "utf-8")).toBe(backupRaw);
-          closedAfterRestore = true;
-          await closeOpenClawStateDatabaseAsync();
-        }
+      .spyOn(configAudit, "captureConfigAuditAppender")
+      .mockImplementation((...params) => {
+        const append = captureAppender(...params);
+        return async (record) => {
+          await append(record);
+          if (
+            !closedAfterRestore &&
+            record.event === "config.observe" &&
+            record.restoredFromBackup
+          ) {
+            expect(await fsp.readFile(configPath, "utf-8")).toBe(backupRaw);
+            closedAfterRestore = true;
+            await closeOpenClawStateDatabaseAsync();
+          }
+        };
       });
     try {
       const snapshot = await io.readConfigFileSnapshot({ recoverSuspicious: true });
@@ -544,16 +551,23 @@ describe("config observe recovery", () => {
               return deps.fs.renameSync(source, target);
             },
           };
-    const recover = (recoveryDeps: ObserveRecoveryDeps) => {
+    const recover = async (recoveryDeps: ObserveRecoveryDeps) => {
       const input = {
         deps: recoveryDeps,
         configPath,
         ...clobbered,
         prepareBackup: approveRecoveryCandidate,
       };
-      return mode === "async"
-        ? maybeRecoverSuspiciousConfigRead(input)
-        : maybeRecoverSuspiciousConfigReadSync(input);
+      const work = new AsyncWorkScope();
+      try {
+        return await work.run(() =>
+          mode === "async"
+            ? maybeRecoverSuspiciousConfigRead(input)
+            : maybeRecoverSuspiciousConfigReadSync(input),
+        );
+      } finally {
+        await work.drain();
+      }
     };
     const recovered = await recover({ ...deps, fs: failingFs });
 

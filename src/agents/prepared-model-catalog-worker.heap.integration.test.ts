@@ -7,16 +7,16 @@ import { runtimeProcessEntrypoints } from "../infra/runtime-process-entrypoints.
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { WorkerTaskPool } from "../infra/worker-task-pool.js";
 import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
-import {
-  createPreparedModelCatalogWorkerInput,
-  type PreparedModelCatalogWorkerTask,
-  type PreparedModelWorkerResult,
-} from "./prepared-model-catalog-worker.js";
+import { createPreparedModelCatalogWorkerInput } from "./prepared-model-catalog-worker.js";
 import {
   createCatalogFixture,
   PLUGIN_ID,
   PROVIDER_ID,
 } from "./prepared-model-catalog-worker.test-support.js";
+import type {
+  PreparedModelCatalogWorkerTask,
+  PreparedModelWorkerResult,
+} from "./prepared-model-catalog-worker.types.js";
 import { AuthStorage } from "./sessions/auth-storage.js";
 import { usePreparedCatalogWorkerFixtures } from "./test-helpers/prepared-model-catalog-worker-fixture.js";
 
@@ -695,29 +695,6 @@ export function register(api) {
     expect(staleImport.latest?.staleError).toBe("no-live-owner");
     expect(staleImport.latest?.staleEvaluations).toBe(0);
     expect(captureFiles(captureDir)).toEqual(captureBeforeStaleImport);
-    console.log(
-      JSON.stringify({
-        firstModelId: first.latest?.modelId,
-        whileNeighborLives: {
-          modelId: whileNeighborLives.latest?.modelId,
-          laterEvaluations: whileNeighborLives.latest?.laterEvaluations,
-          evaluations: whileNeighborLives.latest?.evaluations,
-        },
-        retiredStatus: retired.result.status,
-        afterNeighborRetires: {
-          modelId: afterNeighborRetires.latest?.modelId,
-          laterEvaluations: afterNeighborRetires.latest?.laterEvaluations,
-          afterEvaluations: afterNeighborRetires.latest?.afterEvaluations,
-          evaluations: afterNeighborRetires.latest?.evaluations,
-          catalogModelIds: afterNeighborRetires.catalogModelIds,
-        },
-        staleImport: {
-          staleRejected: staleImport.latest?.staleRejected,
-          staleError: staleImport.latest?.staleError,
-          staleEvaluations: staleImport.latest?.staleEvaluations,
-        },
-      }),
-    );
   } finally {
     await pool.close();
   }

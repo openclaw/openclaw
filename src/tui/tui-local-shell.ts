@@ -14,7 +14,7 @@ type LocalShellDeps = {
     requestRender: () => void;
   };
   openOverlay: (component: Component) => OverlayHandle;
-  closeOverlay: (handle?: OverlayHandle) => void;
+  closeOverlay: (handle: OverlayHandle) => void;
   createSelector?: (
     items: SelectItem[],
     maxVisible: number,
@@ -28,8 +28,7 @@ type LocalShellDeps = {
 };
 
 export function createLocalShellRunner(deps: LocalShellDeps) {
-  let localExecAsked = false;
-  let localExecAllowed = false;
+  let permission: "unasked" | "denied" | "allowed" = "unasked";
   let closing = false;
   let shutdownPromise: Promise<void> | undefined;
   let cancelPendingApproval: (() => void) | undefined;
@@ -42,10 +41,10 @@ export function createLocalShellRunner(deps: LocalShellDeps) {
   const maxChars = deps.maxOutputChars ?? 40_000;
 
   const ensureLocalExecAllowed = async (): Promise<boolean> => {
-    if (closing || localExecAsked) {
-      return localExecAllowed && !closing;
+    if (closing || permission !== "unasked") {
+      return permission === "allowed" && !closing;
     }
-    localExecAsked = true;
+    permission = "denied";
 
     return await new Promise<boolean>((resolve) => {
       let settled = false;
@@ -69,7 +68,7 @@ export function createLocalShellRunner(deps: LocalShellDeps) {
         deps.closeOverlay(overlayHandle);
         cancelPendingApproval = undefined;
         if (allowed) {
-          localExecAllowed = true;
+          permission = "allowed";
         }
         deps.chatLog.addSystem(message);
         deps.tui.requestRender();
@@ -97,7 +96,7 @@ export function createLocalShellRunner(deps: LocalShellDeps) {
       return;
     }
 
-    if (localExecAsked && !localExecAllowed) {
+    if (permission === "denied") {
       deps.chatLog.addSystem("local shell: not enabled for this session");
       deps.tui.requestRender();
       return;

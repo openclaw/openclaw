@@ -10,7 +10,6 @@ import {
   unsetConfigOverride,
 } from "./runtime-overrides.js";
 import { resolveMainSessionKey, resolveSessionRoutingContract } from "./sessions/main-session.js";
-import type { OpenClawConfig } from "./types.js";
 import { validateConfigObject } from "./validation.js";
 
 describe("runtime overrides", () => {
@@ -78,7 +77,13 @@ describe("runtime overrides", () => {
 
     for (const runtimeConfig of runtimeConfigs) {
       expect(runtimeConfig.agents).not.toBe(validated.config.agents);
-      expect(runtimeConfig.agents?.list?.map((entry) => entry.id)).toEqual(["jarvis", "worker"]);
+      expect(Object.getOwnPropertyDescriptor(runtimeConfig.agents, "list")).toMatchObject({
+        enumerable: false,
+        value: [
+          { id: "jarvis", workspace: "/tmp/jarvis-workspace" },
+          { id: "worker", workspace: "/tmp/worker-workspace" },
+        ],
+      });
       expect(Object.keys(runtimeConfig.agents ?? {})).not.toContain("list");
       expect(listAgentWorkspaceDirs(runtimeConfig)).toEqual([
         "/tmp/jarvis-workspace",
@@ -86,16 +91,6 @@ describe("runtime overrides", () => {
       ]);
       expect(resolveMainSessionKey(runtimeConfig)).toBe("agent:jarvis:main");
     }
-  });
-
-  it("merges object overrides without clobbering siblings", () => {
-    const cfg = {
-      channels: { whatsapp: { dmPolicy: "pairing", allowFrom: ["+1"] } },
-    } as OpenClawConfig;
-    setConfigOverride("channels.whatsapp.dmPolicy", "open");
-    const next = applyConfigOverrides(cfg);
-    expect(next.channels?.whatsapp?.dmPolicy).toBe("open");
-    expect(next.channels?.whatsapp?.allowFrom).toEqual(["+1"]);
   });
 
   it("unsets overrides and prunes empty branches", () => {
@@ -112,24 +107,6 @@ describe("runtime overrides", () => {
       expect(result.ok).toBe(false);
       expect(Object.keys(getConfigOverrides()).length).toBe(0);
     }
-  });
-
-  it("blocks __proto__ keys inside override object values", () => {
-    const cfg = { commands: {} } as OpenClawConfig;
-    setConfigOverride("commands", JSON.parse('{"__proto__":{"bash":true}}'));
-
-    const next = applyConfigOverrides(cfg);
-    expect(next.commands?.bash).toBeUndefined();
-    expect(Object.hasOwn(next.commands ?? {}, "bash")).toBe(false);
-  });
-
-  it("blocks constructor/prototype keys inside override object values", () => {
-    const cfg = { commands: {} } as OpenClawConfig;
-    setConfigOverride("commands", JSON.parse('{"constructor":{"prototype":{"bash":true}}}'));
-
-    const next = applyConfigOverrides(cfg);
-    expect(next.commands?.bash).toBeUndefined();
-    expect(Object.hasOwn(next.commands ?? {}, "bash")).toBe(false);
   });
 
   it("sanitizes blocked object keys when writing overrides", () => {

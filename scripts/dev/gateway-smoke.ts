@@ -18,11 +18,7 @@ function writeStderrLine(message: string): void {
   process.stderr.write(`${message}\n`);
 }
 
-type GatewaySmokeCliOptions = {
-  help: boolean;
-  token?: string;
-  urlRaw?: string;
-};
+type GatewaySmokeCliOptions = ReturnType<typeof parseGatewaySmokeCli>;
 
 type GatewaySmokeDeps = {
   createClient?: typeof createGatewayWsClient;
@@ -67,10 +63,7 @@ function validateArgs(argv: readonly string[]): void {
   }
 }
 
-function parseGatewaySmokeCli(
-  argv = process.argv.slice(2),
-  env: NodeJS.ProcessEnv = process.env,
-): GatewaySmokeCliOptions {
+function parseGatewaySmokeCli(argv = process.argv.slice(2), env: NodeJS.ProcessEnv = process.env) {
   validateArgs(argv);
   const { get: getArg, has } = createArgReader([...argv]);
   return {

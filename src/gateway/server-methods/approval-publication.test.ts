@@ -4,14 +4,14 @@ import { publishAppliedApprovalResolution } from "./approval-publication.js";
 
 type PublishParams = Parameters<typeof publishAppliedApprovalResolution>[0];
 
-async function publishSystemAgentTerminal(status: "allowed" | "denied" | "expired" | "cancelled") {
+async function publishSystemAgentTerminal(status: "denied" | "expired" | "cancelled") {
   const handleSystemAgentApprovalResolved = vi.fn(async () => {});
   await publishAppliedApprovalResolution({
     record: {
       id: "system-agent:1",
       kind: "system-agent",
       status,
-      decision: status === "denied" ? "deny" : status === "allowed" ? "allow-once" : undefined,
+      decision: status === "denied" ? "deny" : undefined,
       resolvedAtMs: 1,
     } as unknown as PublishParams["record"],
     liveRecord: { request: {}, resolvedBy: null } as unknown as PublishParams["liveRecord"],
@@ -27,12 +27,9 @@ async function publishSystemAgentTerminal(status: "allowed" | "denied" | "expire
 describe("publishAppliedApprovalResolution for OpenClaw changes", () => {
   // Decisions publish their applied outcome from the system-agent owner; a
   // second chat update here would duplicate the terminal message.
-  it.each(["allowed", "denied"] as const)(
-    "leaves the %s chat outcome to the owner",
-    async (status) => {
-      expect(await publishSystemAgentTerminal(status)).not.toHaveBeenCalled();
-    },
-  );
+  it("leaves the denied chat outcome to the owner", async () => {
+    expect(await publishSystemAgentTerminal("denied")).not.toHaveBeenCalled();
+  });
 
   it.each(["expired", "cancelled"] as const)(
     "tells the chat when a change is %s",

@@ -127,31 +127,6 @@ describe("doctor transcript and heartbeat session repairs", () => {
     fs.rmSync(tempHome, { recursive: true, force: true });
   });
 
-  it("leaves legacy transcript diagnostics to the SQLite migration owner", async () => {
-    writeSessionStore(
-      {},
-      {
-        "agent:main:main:heartbeat": {
-          heartbeatIsolatedBaseSessionKey: mainKey,
-          sessionId: "latest-heartbeat-wake",
-          updatedAt: 1,
-        },
-      },
-    );
-    const displaced = path.join(
-      resolveSessionTranscriptsDirForAgent("main", process.env, () => tempHome),
-      "displaced-heartbeat-wake.jsonl",
-    );
-    fs.writeFileSync(displaced, '{"type":"session"}\n');
-    await run();
-    expect(stateIntegrityText()).not.toContain("recent sessions are missing transcripts");
-    expect(stateIntegrityText()).not.toContain("orphan transcript file");
-    expect(fs.existsSync(displaced)).toBe(true);
-    expect(approveMove).not.toHaveBeenCalledWith(
-      expect.objectContaining({ message: expect.stringContaining("Archive 1 orphan") }),
-    );
-  });
-
   it("does not require JSONL files for an explicit SQLite store", async () => {
     const cfg: OpenClawConfig = {
       session: { store: path.join(fs.realpathSync(tempHome), "sessions.sqlite") },

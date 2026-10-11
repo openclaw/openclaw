@@ -20,7 +20,8 @@
 }
 
 .composer-context-strip__label-text,
-.composer-context-strip__text {
+.composer-context-strip__text,
+.composer-context-strip__person-name {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -47,12 +48,6 @@
 .composer-context-strip__person[hidden],
 .composer-context-strip__more[hidden] {
   display: none;
-}
-
-.composer-context-strip__person-name {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .composer-context-strip__person .chat-author-avatar {

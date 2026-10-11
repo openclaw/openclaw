@@ -6,13 +6,5 @@ export function createDiscordRequestClient(
   token: string,
   options?: RequestClientOptions,
 ): RequestClient {
-  if (!options?.fetch) {
-    return new RequestClient(token, options);
-  }
-  return new RequestClient(token, {
-    maxQueueSize: 1000,
-    timeout: DISCORD_REST_TIMEOUT_MS,
-    ...options,
-    fetch: options.fetch,
-  });
+  return new RequestClient(token, options);
 }

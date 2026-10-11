@@ -1,5 +1,4 @@
 #!/usr/bin/env node
-// Audits repo ownership seams, optional plugin leaks, and nearby test coverage signals.
 
 import { promises as fs } from "node:fs";
 import path from "node:path";
@@ -124,10 +123,6 @@ function isTestLikePath(relativePath: string) {
   );
 }
 
-function isProductionLikeFile(relativePath: string) {
-  return !isTestLikePath(relativePath);
-}
-
 async function walkCodeFiles(
   rootDir: string,
   options: { includeTests?: boolean; ignoreUnreadable?: boolean } = {},
@@ -153,7 +148,7 @@ async function walkCodeFiles(
       } else if (
         entry.isFile() &&
         isCodeFile(entry.name) &&
-        (options.includeTests || isProductionLikeFile(normalizePath(fullPath)))
+        (options.includeTests || !isTestLikePath(normalizePath(fullPath)))
       ) {
         out.push(fullPath);
       }
@@ -320,26 +315,6 @@ function buildOptionalClusterStaticLeaks(inventory: OptionalClusterImportEntry[]
   );
 }
 
-function packageClusterMeta(relativePackagePath: string) {
-  if (relativePackagePath === "ui/package.json") {
-    return {
-      cluster: "ui",
-      packageName: "openclaw-control-ui",
-      packagePath: relativePackagePath,
-      reachability: "workspace-ui",
-    };
-  }
-  const cluster = path.basename(path.dirname(relativePackagePath));
-  return {
-    cluster,
-    packageName: null,
-    packagePath: relativePackagePath,
-    reachability: relativePackagePath.startsWith(BUNDLED_PLUGIN_PATH_PREFIX)
-      ? "extension-workspace"
-      : "workspace",
-  };
-}
-
 function classifyMissingPackageCluster(params: {
   cluster: string;
   pluginSdkEntries: string[];
@@ -370,7 +345,7 @@ function classifyMissingPackageCluster(params: {
   };
 }
 
-async function buildMissingPackages(params: { staticLeakClusters?: Set<string> } = {}) {
+async function buildMissingPackages(staticLeakClusters: ReadonlySet<string>) {
   const rootPackage: PackageJson = JSON.parse(
     await fs.readFile(path.join(repoRoot, "package.json"), "utf8"),
   );
@@ -411,20 +386,21 @@ async function buildMissingPackages(params: { staticLeakClusters?: Set<string> }
     if (missing.length === 0) {
       continue;
     }
-    const meta = packageClusterMeta(relativePackagePath);
-    const pluginSdkEntries = [...(pluginSdkReachability.get(meta.cluster) ?? new Set())].toSorted(
+    const cluster = path.basename(path.dirname(relativePackagePath));
+    const pluginSdkEntries = [...(pluginSdkReachability.get(cluster) ?? [])].toSorted(
       compareStrings,
     );
     const classification = classifyMissingPackageCluster({
-      cluster: meta.cluster,
+      cluster,
       pluginSdkEntries,
-      hasStaticLeak: params.staticLeakClusters?.has(meta.cluster) === true,
+      hasStaticLeak: staticLeakClusters.has(cluster),
     });
     output.push({
-      cluster: meta.cluster,
+      cluster,
       decision: classification.decision,
       decisionReason: classification.reason,
-      packageName: pkg.name ?? meta.packageName,
+      packageName:
+        pkg.name ?? (relativePackagePath === "ui/package.json" ? "openclaw-control-ui" : null),
       packagePath: relativePackagePath,
       npmSpec: redactNpmSpec(pkg.openclaw?.install?.npmSpec),
       private: pkg.private === true,
@@ -446,7 +422,7 @@ function stemFromRelativePath(relativePath: string) {
 function splitNameTokens(name: string) {
   return name
     .split(/[^a-zA-Z0-9]+/)
-    .map((token) => token.trim().toLowerCase())
+    .map((token) => token.toLowerCase())
     .filter(Boolean);
 }
 
@@ -462,18 +438,6 @@ function hasAnyImportSource(source: string, specifiers: string[]) {
   return specifiers.some((specifier) => hasImportSource(source, specifier));
 }
 
-function isCronProductionPath(relativePath: string) {
-  return relativePath.startsWith("src/cron/") && isProductionLikeFile(relativePath);
-}
-
-function isSubagentProductionPath(relativePath: string) {
-  return (
-    (relativePath.startsWith("src/agents/") || relativePath.startsWith("src/cron/")) &&
-    isProductionLikeFile(relativePath) &&
-    /subagent|sessions-spawn|acp-spawn/.test(relativePath)
-  );
-}
-
 function matchingSeamKinds(source: string, rules: Array<[string, boolean, RegExp]>) {
   return rules
     .filter(([, enabled, pattern]) => enabled && pattern.test(source))
@@ -481,7 +445,7 @@ function matchingSeamKinds(source: string, rules: Array<[string, boolean, RegExp
 }
 
 function describeCronSeamKinds(relativePath: string, source: string) {
-  if (!isCronProductionPath(relativePath)) {
+  if (!relativePath.startsWith("src/cron/") || isTestLikePath(relativePath)) {
     return [];
   }
 
@@ -560,7 +524,11 @@ function describeCronSeamKinds(relativePath: string, source: string) {
 }
 
 function describeSubagentSeamKinds(relativePath: string, source: string) {
-  if (!isSubagentProductionPath(relativePath)) {
+  if (
+    (!relativePath.startsWith("src/agents/") && !relativePath.startsWith("src/cron/")) ||
+    isTestLikePath(relativePath) ||
+    !/subagent|sessions-spawn|acp-spawn/.test(relativePath)
+  ) {
     return [];
   }
 
@@ -638,7 +606,7 @@ function describeSubagentSeamKinds(relativePath: string, source: string) {
     [
       "subagent-announce-delivery",
       importsAnnounceDelivery || isAnnounceDispatchPath,
-      /\brunSubagentAnnounceFlow\b|\brunSubagentAnnounceDispatch\b|\benqueueAnnounce\b|\bcreateBoundDeliveryRouter\b|\bqueueEmbeddedAgentMessage\b|\bwaitForEmbeddedAgentRunEnd\b|\bqueue-fallback\b|\bdirect-primary\b/,
+      /\brunSubagentAnnounceFlow\b|\brunSubagentAnnounceDispatch\b|\benqueueAnnounce\b|\bresolveBoundDeliveryDestination\b|\bqueueEmbeddedAgentMessage\b|\bwaitForEmbeddedAgentRunEnd\b|\bqueue-fallback\b|\bdirect-primary\b/,
     ],
     [
       "subagent-session-cleanup",
@@ -740,8 +708,6 @@ function hasModuleMockReference(source: string, importPath: string) {
   return patterns.some((pattern) => pattern.test(source));
 }
 
-const matchQualityRank = (quality: MatchQuality) => MATCH_QUALITY_RANK[quality] ?? 4;
-
 function findRelatedTests(relativePath: string, testIndex: TestIndexEntry[]): RelatedTestMatch[] {
   const stem = stemFromRelativePath(relativePath);
   const baseName = path.basename(stem);
@@ -778,20 +744,9 @@ function findRelatedTests(relativePath: string, testIndex: TestIndexEntry[]): Re
     return [];
   });
 
-  const byFile = new Map<string, RelatedTestMatch>();
-  for (const match of matches) {
-    const existing = byFile.get(match.file);
-    if (
-      !existing ||
-      matchQualityRank(match.matchQuality) < matchQualityRank(existing.matchQuality)
-    ) {
-      byFile.set(match.file, match);
-    }
-  }
-
-  return [...byFile.values()].toSorted((left, right) => {
+  return matches.toSorted((left, right) => {
     return (
-      matchQualityRank(left.matchQuality) - matchQualityRank(right.matchQuality) ||
+      MATCH_QUALITY_RANK[left.matchQuality] - MATCH_QUALITY_RANK[right.matchQuality] ||
       left.file.localeCompare(right.file)
     );
   });
@@ -894,7 +849,7 @@ export async function main(argv: string[] = process.argv.slice(2)) {
     duplicatedSeamFamilies: buildDuplicatedSeamFamilies(inventory),
     overlapFiles: buildOverlapFiles(inventory),
     optionalClusterStaticLeaks: buildOptionalClusterStaticLeaks(optionalClusterStaticLeaks),
-    missingPackages: await buildMissingPackages({ staticLeakClusters }),
+    missingPackages: await buildMissingPackages(staticLeakClusters),
     seamTestInventory: await buildSeamTestInventory(),
   };
 

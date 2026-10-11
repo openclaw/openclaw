@@ -15,12 +15,11 @@ import {
   appendPluginControlPlaneWorkspaceDiagnostic,
   resolvePluginControlPlaneWorkspace,
 } from "./control-plane-workspace.js";
-import { resolveEffectivePluginIds } from "./effective-plugin-ids.js";
 import {
-  buildPluginShapeSummary,
-  type PluginCapabilityEntry,
-  type PluginInspectShape,
-} from "./inspect-shape.js";
+  resolveEffectivePluginIds,
+  resolveEffectivePluginIdsAsync,
+} from "./effective-plugin-ids.js";
+import { buildPluginShapeSummary } from "./inspect-shape.js";
 import {
   acquirePluginRegistryForInspection,
   loadPluginRegistryHandle,
@@ -37,6 +36,7 @@ import {
   type PluginMetadataSnapshot,
 } from "./plugin-metadata-snapshot.js";
 import { normalizePluginPolicyId } from "./plugin-policy-id.js";
+import { normalizePluginIdScope } from "./plugin-scope.js";
 import { resolveBundledProviderCompatPluginIds } from "./providers.js";
 import { groupPluginRecords } from "./record-groups.js";
 import type { PluginRegistry } from "./registry.js";
@@ -73,13 +73,9 @@ export type {
   PluginCompatibilitySummary,
 } from "./status-compatibility.js";
 
-export type PluginInspectReport = {
+export type PluginInspectReport = ReturnType<typeof buildPluginShapeSummary> & {
   workspaceDir?: string;
   plugin: PluginRegistry["plugins"][number];
-  shape: PluginInspectShape;
-  capabilityMode: "none" | "plain" | "hybrid";
-  capabilityCount: number;
-  capabilities: PluginCapabilityEntry[];
   typedHooks: Array<{
     name: PluginHookName;
     priority?: number;
@@ -290,8 +286,8 @@ function preparePluginReport(params: PluginReportParams | undefined) {
 function buildPluginReport(
   params: PluginReportParams | undefined,
   loadModules: boolean,
+  prepared = preparePluginReport(params),
 ): PluginStatusReport {
-  const prepared = preparePluginReport(params);
   const { rawConfig, workspaceDir, metadataSnapshot, context, runtimeCompatConfig, onlyPluginIds } =
     prepared;
   const registry = loadModules
@@ -310,6 +306,7 @@ function buildPluginReport(
             env: params?.env,
             logger: params?.logger,
             loadModules: false,
+            throwOnLoadError: false,
             onlyPluginIds,
             manifestRegistry: metadataSnapshot.manifestRegistry,
             runtimeContext: context,
@@ -358,6 +355,28 @@ function projectPluginReport(
 
 export function buildPluginSnapshotReport(params?: PluginReportParams): PluginStatusReport {
   return buildPluginReport(params, false);
+}
+
+export async function buildPluginSnapshotReportAsync(
+  params?: PluginReportParams,
+): Promise<PluginStatusReport> {
+  const prepared = preparePluginReport({ ...params, effectiveOnly: false });
+  if (params?.effectiveOnly === true) {
+    const requestedPluginIds = normalizePluginIdScope(params.onlyPluginIds);
+    const effectivePluginIds = await resolveEffectivePluginIdsAsync({
+      config: prepared.rawConfig,
+      workspaceDir: prepared.workspaceDir,
+      env: params.env ?? process.env,
+      metadataSnapshot: prepared.metadataSnapshot,
+    });
+    const onlyPluginIds =
+      requestedPluginIds === undefined
+        ? effectivePluginIds
+        : effectivePluginIds.filter((pluginId) => requestedPluginIds.includes(pluginId));
+    prepared.onlyPluginIds = onlyPluginIds;
+    prepared.runtimeLoadOptions = { ...prepared.runtimeLoadOptions, onlyPluginIds };
+  }
+  return buildPluginReport(params, false, prepared);
 }
 
 /** Complete diagnostics projection before retiring its imported plugin generation. */
@@ -462,7 +481,7 @@ function buildPluginInspectRecord(
   const shape = shapeSummary.shape;
   const gatewayMethods = (
     rows?.gatewayMethodDescriptors ??
-    (report.gatewayMethodDescriptors ?? []).filter(
+    report.gatewayMethodDescriptors.filter(
       (descriptor) => descriptor.owner.kind === "plugin" && descriptor.owner.pluginId === plugin.id,
     )
   ).map((descriptor) => descriptor.name);
@@ -572,7 +591,7 @@ export function buildAllPluginInspectReports(params: PluginInspectParams): Plugi
   const diagnostics = groupPluginRecords(report.diagnostics, (entry) => entry.pluginId);
   const sessionCatalogs = groupPluginRecords(report.sessionCatalogs, (entry) => entry.pluginId);
   const gatewayMethodDescriptors = groupPluginRecords(
-    report.gatewayMethodDescriptors ?? [],
+    report.gatewayMethodDescriptors,
     (descriptor) => (descriptor.owner.kind === "plugin" ? descriptor.owner.pluginId : undefined),
   );
   return report.plugins.map((plugin) =>

@@ -45,26 +45,22 @@ export function resolveComposerMenus(
 ) {
   const skillMenuVisible = commandsVisible && isSkillMenuVisible(skill);
   const slashMenuVisible = commandsVisible && isSlashMenuVisible(slash);
+  const inlineMenu = emoji.open ? emoji : mention.open ? mention : null;
   return {
     skillMenuVisible,
     slashMenuVisible,
     mentionMenuVisible: mention.open,
-    emojiMenuVisible: emoji.open,
     menuVisible: skillMenuVisible || slashMenuVisible || mention.open || emoji.open,
-    activeMenuOptionId: emoji.open
-      ? emoji.activeId(paneId)
-      : mention.open
-        ? mention.activeId(paneId)
-        : skillMenuVisible
-          ? getActiveSkillMenuOptionId(skill, paneId)
-          : getActiveSlashMenuOptionId(slash, paneId),
-    activeMenuOptionLabel: emoji.open
-      ? emoji.activeLabel()
-      : mention.open
-        ? mention.activeLabel()
-        : skillMenuVisible
-          ? getActiveSkillMenuOptionLabel(skill)
-          : getActiveSlashMenuOptionLabel(slash),
+    activeMenuOptionId: inlineMenu
+      ? inlineMenu.activeId(paneId)
+      : skillMenuVisible
+        ? getActiveSkillMenuOptionId(skill, paneId)
+        : getActiveSlashMenuOptionId(slash, paneId),
+    activeMenuOptionLabel: inlineMenu
+      ? inlineMenu.activeLabel()
+      : skillMenuVisible
+        ? getActiveSkillMenuOptionLabel(skill)
+        : getActiveSlashMenuOptionLabel(slash),
     menuListboxId: paneDomId(
       paneId,
       emoji.open

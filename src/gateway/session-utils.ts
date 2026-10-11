@@ -9,7 +9,7 @@ export type {
 export { resolveSessionModelRef } from "../agents/session-model-ref.js";
 export { loadCombinedSessionStoreForGatewayCore } from "../config/sessions/combined-store-gateway.js";
 export { deriveSessionTitle } from "./session-utils-core.js";
-export { resolveDeletedAgentIdFromSessionKey } from "./session-utils-store.js";
+export { prepareDeletedAgentSessionCheck } from "./session-utils-store.js";
 export { loadGatewaySessionEntry as loadSessionEntry } from "./session-utils-store.js";
 export { loadGatewaySessionEntryReadOnly } from "./session-utils-store.js";
 export { resolveCanonicalSessionEntryFromStoreKeys } from "./session-utils-store.js";
@@ -19,5 +19,4 @@ export { resolveGatewaySessionStoreTargetWithStore } from "./session-utils-store
 export { resolveGatewaySessionStoreTarget } from "./session-utils-store-lookup.js";
 export { getSessionDefaults } from "./session-utils-model.js";
 export { resolveGatewayModelSupportsImages } from "./session-utils-model.js";
-export { buildGatewaySessionRow } from "./session-utils-row.js";
 export { listProjectedSessions } from "./session-utils-list.js";

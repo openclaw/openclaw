@@ -2,6 +2,7 @@ import { INVALID_PROJECT_ANNOTATION_KEY } from "openclaw/plugin-sdk/memory-core-
 
 type ProjectRankable = {
   score: number;
+  importance?: number;
   projectKey?: string;
 };
 
@@ -25,11 +26,19 @@ export function projectScoreMultiplier(
   return stored.every((key) => activeProjectKeys.has(key)) ? 1.15 : 0.9;
 }
 
-export function applyProjectRanking<T extends ProjectRankable>(
+export function applyRetrievalRanking<T extends ProjectRankable>(
   results: readonly T[],
   activeProjectKeys?: ReadonlySet<string>,
 ): T[] {
-  const eligible = results.filter(
+  const weighted = results.map((entry) => {
+    const importance = entry.importance;
+    const multiplier =
+      importance === null || importance === undefined
+        ? 1
+        : 0.75 + Math.max(1, Math.min(10, Math.floor(importance))) * 0.05;
+    return { ...entry, score: entry.score * multiplier };
+  });
+  const eligible = weighted.filter(
     (entry) =>
       !entry.projectKey
         ?.split(";")

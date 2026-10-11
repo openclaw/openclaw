@@ -1,16 +1,13 @@
 // Exercises harness lifecycle hook adapters and finalize-retry budget semantics.
 import { afterEach, describe, expect, it, vi } from "vitest";
+const log = vi.hoisted(() => ({ warn: vi.fn() }));
+vi.mock("../../logging/subsystem.js", () => ({ createSubsystemLogger: () => log }));
 import {
   awaitAgentHarnessAgentEndHook,
   runAgentHarnessAgentEndHook,
   runAgentHarnessBeforeAgentFinalizeHook,
-  runAgentHarnessLlmInputHook,
-  runAgentHarnessLlmOutputHook,
 } from "./lifecycle-hook-helpers.js";
-
-const createLegacyHookRunner = () => ({
-  hasHooks: vi.fn(() => true),
-});
+import { bindAgentHarnessHookMessages } from "./lifecycle-hook-messages.js";
 
 const EVENT = {
   runId: "run-1",
@@ -29,38 +26,46 @@ const EVENT = {
 
 describe("agent harness lifecycle hook helpers", () => {
   afterEach(() => {
+    log.warn.mockClear();
     Reflect.deleteProperty(globalThis, Symbol.for("openclaw.pluginFinalizeRetryBudget"));
   });
 
-  it("ignores legacy hook runners that advertise llm_input without a runner method", () => {
-    const hookRunner = createLegacyHookRunner();
-    runAgentHarnessLlmInputHook({
-      ctx: {},
-      event: {},
-      hookRunner,
-    } as never);
-    expect(hookRunner.hasHooks).toHaveBeenCalledWith("llm_input");
-  });
-
-  it("ignores legacy hook runners that advertise llm_output without a runner method", () => {
-    const hookRunner = createLegacyHookRunner();
-    runAgentHarnessLlmOutputHook({
-      ctx: {},
-      event: {},
-      hookRunner,
-    } as never);
-    expect(hookRunner.hasHooks).toHaveBeenCalledWith("llm_output");
-  });
-
-  it("ignores legacy hook runners that advertise agent_end without a runner method", () => {
-    const hookRunner = createLegacyHookRunner();
-    runAgentHarnessAgentEndHook({
-      ctx: {},
-      event: {},
-      hookRunner,
-    } as never);
-    expect(hookRunner.hasHooks).toHaveBeenCalledWith("agent_end");
-  });
+  it.each(["agent_end", "before_agent_finalize"] as const)(
+    "loads %s evidence only for its subscriber and skips delivery when loading fails",
+    async (hook) => {
+      const messages = [{ role: "custom", content: "canonical evidence" }];
+      const dispatch = vi.fn(async (_event: { messages?: unknown[] }) => undefined);
+      const loadMessages = vi.fn(async () => messages);
+      let enabled = false;
+      const params = {
+        ctx: { runId: EVENT.runId },
+        event: EVENT,
+        hookRunner: {
+          hasHooks: () => enabled,
+          runAgentEnd: dispatch,
+          runBeforeAgentFinalize: dispatch,
+        } as never,
+      };
+      const run = () => {
+        bindAgentHarnessHookMessages(params.event, loadMessages);
+        return hook === "agent_end"
+          ? awaitAgentHarnessAgentEndHook(params)
+          : runAgentHarnessBeforeAgentFinalizeHook(params);
+      };
+      await run();
+      expect(loadMessages).not.toHaveBeenCalled();
+      expect(dispatch).not.toHaveBeenCalled();
+      enabled = true;
+      loadMessages.mockRejectedValueOnce(new Error("transcript owner retired"));
+      await run();
+      expect(dispatch).not.toHaveBeenCalled();
+      expect(log.warn).toHaveBeenCalledWith(`${hook} hook failed: Error: transcript owner retired`);
+      await run();
+      expect(dispatch).toHaveBeenCalledOnce();
+      expect(dispatch.mock.calls[0]?.[0]).toMatchObject({ messages });
+      expect(EVENT.messages).toEqual([]);
+    },
+  );
 
   it("resolves after agent_end hooks settle", async () => {
     let releaseHook: () => void = () => undefined;
@@ -113,16 +118,6 @@ describe("agent harness lifecycle hook helpers", () => {
       expect.objectContaining({ runId: "run-1", sessionKey: "agent:main:session-1" }),
       { unrefTimeout: true },
     );
-  });
-
-  it("continues when legacy hook runners advertise before_agent_finalize without a runner method", async () => {
-    await expect(
-      runAgentHarnessBeforeAgentFinalizeHook({
-        ctx: {},
-        event: {},
-        hookRunner: createLegacyHookRunner(),
-      } as never),
-    ).resolves.toEqual({ action: "continue" });
   });
 
   it("keys finalize retry budgets by context run id when the event omits run id", async () => {

@@ -11,9 +11,11 @@ import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
 } from "../test-utils/gateway-scheduler-clock.js";
+import { readCronRunHistoryPageForTests } from "./run-history.test-support.js";
 import { CronService, type CronEvent } from "./service.js";
 import { setupCronServiceSuite } from "./service.test-harness.js";
 import type { CronServiceDeps } from "./service/state.js";
+import { cronStoreKey } from "./store/key.js";
 import type { CronJobCreate } from "./types.js";
 
 const { logger, makeStorePath } = setupCronServiceSuite({ prefix: "cron-one-shot-" });
@@ -95,6 +97,52 @@ async function fixture(
 }
 
 describe("CronService one-shot lifecycle", () => {
+  it("records overflowed reminders as failures without losing accepted reminders", async () => {
+    const { cron, deps, cleanup } = await fixture({ removable: true });
+    try {
+      const reminders: Array<{ id: string; text: string }> = [];
+      for (let index = 0; index < 23; index++) {
+        const text = `Reminder ${index}`;
+        const job = await cron.add(
+          mainJob({
+            enabled: false,
+            schedule: { kind: "every", everyMs: 3_600_000 },
+            wakeMode: "next-heartbeat",
+            payload: { kind: "systemEvent", text },
+          }),
+        );
+        reminders.push({ id: job.id, text });
+        await cron.run(job.id, "force");
+      }
+      const admitted = drainSystemEventEntries(sessionKey()).map((event) => event.text);
+      expect(admitted).toEqual(reminders.slice(0, 20).map(({ text }) => text));
+      for (const [index, reminder] of reminders.entries()) {
+        const run = readCronRunHistoryPageForTests({
+          storeKey: cronStoreKey(deps.storePath),
+          jobId: reminder.id,
+        }).entries[0];
+        expect(run).toMatchObject(
+          index < 20
+            ? { status: "ok", completionStatus: "succeeded" }
+            : {
+                status: "error",
+                completionStatus: "failed",
+                error: expect.stringContaining("queue is full"),
+              },
+        );
+      }
+      expect(deps.requestHeartbeat).toHaveBeenCalledTimes(20);
+      const retry = reminders[20]!;
+      await cron.run(retry.id, "force");
+      expect(drainSystemEventEntries(sessionKey()).map((event) => event.text)).toEqual([
+        retry.text,
+      ]);
+      expect(cron.getJob(retry.id)?.state.lastRunStatus).toBe("ok");
+    } finally {
+      await cleanup();
+    }
+  });
+
   it("disables a retained one-shot after success and does not replay it when re-enabled", async () => {
     const { cron, deps, clock, finished, cleanup } = await fixture();
     try {
@@ -292,11 +340,17 @@ describe("CronService one-shot lifecycle", () => {
         expect(stored?.state.consecutiveErrors).toBe(1);
         if (executionStarted) {
           expect(stored?.state.nextRunAtMs).toBeUndefined();
+          expect(deps.enqueueSystemEvent).toHaveBeenCalledExactlyOnceWith(
+            expect.stringContaining('Automation "one-shot" failed 1 times'),
+            expect.objectContaining({ contextKey: `cron:${job.id}:failure-alert` }),
+          );
+          expect(deps.requestHeartbeat).toHaveBeenCalledOnce();
         } else {
           expect(stored?.state.nextRunAtMs).toBeTypeOf("number");
+          expect(deps.enqueueSystemEvent).not.toHaveBeenCalled();
+          expect(deps.requestHeartbeat).not.toHaveBeenCalled();
         }
-        expect(deps.enqueueSystemEvent).not.toHaveBeenCalled();
-        expect(deps.requestHeartbeat).not.toHaveBeenCalled();
+        expect(runIsolatedAgentJob).toHaveBeenCalledOnce();
       } finally {
         await cleanup();
       }
@@ -308,9 +362,9 @@ describe("CronService one-shot lifecycle", () => {
     try {
       await expect(
         cron.add(mainJob({ payload: { kind: "agentTurn", message: "nope" } })),
-      ).rejects.toThrow(/main cron jobs require/);
+      ).rejects.toThrow(/sessionTarget "main" requires/);
       await expect(cron.add(mainJob({ sessionTarget: "isolated" }))).rejects.toThrow(
-        /isolated.*cron jobs require/,
+        /sessionTarget "isolated" requires/,
       );
     } finally {
       await cleanup();

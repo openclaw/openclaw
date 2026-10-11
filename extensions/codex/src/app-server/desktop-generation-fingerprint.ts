@@ -87,11 +87,7 @@ export function resolveMacOSDesktopGenerationWatchPaths(
     "darwin",
   ),
 ): string[] {
-  const watched = new Set<string>(["/Applications"]);
-  for (const candidate of candidates) {
-    watched.add(candidate.appBundlePath);
-  }
-  return [...watched];
+  return [...new Set(["/Applications", ...candidates.map((candidate) => candidate.appBundlePath)])];
 }
 
 export async function readCodexDesktopArtifactTreeFingerprint(root: string): Promise<string> {
@@ -99,11 +95,7 @@ export async function readCodexDesktopArtifactTreeFingerprint(root: string): Pro
   try {
     rootStat = await fs.lstat(root, { bigint: true });
   } catch (error) {
-    const code = extractErrorCode(error);
-    if (code === "ENOENT" || code === "ENOTDIR") {
-      return "missing";
-    }
-    throw error;
+    return missingFingerprint(error);
   }
   if (!rootStat.isDirectory()) {
     return statFingerprint(root);
@@ -131,10 +123,6 @@ export async function readCodexDesktopArtifactTreeFingerprint(root: string): Pro
         hash.update(`entry\0${relativePath}\0${await statFingerprint(entryPath)}\0`);
       }
     }
-    const after = await fs.lstat(directory, { bigint: true });
-    if (!sameStat(before, after)) {
-      throw new Error(`Codex desktop artifact changed while fingerprinting: ${directory}`);
-    }
   };
   await visit(root, ".", rootStat);
   return hash.digest("hex");
@@ -152,7 +140,7 @@ async function statFingerprint(filePath: string): Promise<string> {
           : "other";
     const own = statTuple(entry);
     if (!entry.isSymbolicLink()) {
-      const content = entry.isFile() ? await readFileFingerprint(filePath, entry, false) : "";
+      const content = entry.isFile() ? await readFileFingerprint(filePath, false) : "";
       return `${type}:${own}:${content}`;
     }
     const [link, realPath, target] = await Promise.all([
@@ -160,46 +148,35 @@ async function statFingerprint(filePath: string): Promise<string> {
       fs.realpath(filePath),
       fs.stat(filePath, { bigint: true }),
     ]);
-    const content = target.isFile() ? await readFileFingerprint(filePath, target, true) : "";
+    const content = target.isFile() ? await readFileFingerprint(filePath, true) : "";
     return `${type}:${own}:${link}:${realPath}:${statTuple(target)}:${content}`;
   } catch (error) {
-    const code = extractErrorCode(error);
-    if (code === "ENOENT" || code === "ENOTDIR") {
-      return "missing";
-    }
-    throw error;
+    return missingFingerprint(error);
   }
 }
 
-async function readFileFingerprint(
-  filePath: string,
-  expected: BigIntStats,
-  followsSymlink: boolean,
-): Promise<string> {
+async function readFileFingerprint(filePath: string, followsSymlink: boolean): Promise<string> {
   const noFollow = followsSymlink ? 0 : (fsConstants.O_NOFOLLOW ?? 0);
   const handle = await fs.open(filePath, fsConstants.O_RDONLY | noFollow);
   try {
     const before = await handle.stat({ bigint: true });
-    if (!sameStat(before, expected)) {
-      throw new Error(`Codex desktop artifact changed while fingerprinting: ${filePath}`);
-    }
     // Metadata can collide on coarse filesystems. Content binds an event-driven generation
     // to the exact executable/config bytes without adding request-hot-path polling.
     const hash = await sha256File(handle, { maxBytes: Number(before.size) });
-    const after = await handle.stat({ bigint: true });
-    if (BigInt(hash.bytes) !== before.size || !sameStat(before, after)) {
-      throw new Error(`Codex desktop artifact changed while fingerprinting: ${filePath}`);
-    }
     return hash.digest;
   } finally {
     await handle.close();
   }
 }
 
-function sameStat(left: BigIntStats, right: BigIntStats): boolean {
-  return statTuple(left) === statTuple(right);
-}
-
 function statTuple(stat: BigIntStats): string {
   return [stat.dev, stat.ino, stat.mode, stat.size, stat.mtimeNs, stat.ctimeNs].join(":");
+}
+
+function missingFingerprint(error: unknown): "missing" {
+  const code = extractErrorCode(error);
+  if (code === "ENOENT" || code === "ENOTDIR") {
+    return "missing";
+  }
+  throw error;
 }

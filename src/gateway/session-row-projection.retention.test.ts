@@ -3,6 +3,7 @@ import { queryObjects } from "node:v8";
 import { expect, it } from "vitest";
 import { setRuntimeConfigSnapshot } from "../config/config.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
+import { sessionChanges } from "../sessions/session-row-changes.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { retainSessionListForegroundWork } from "./session-projection-work.js";
 import { ready } from "./session-row-projection-record.js";
@@ -15,7 +16,7 @@ function createCollectionControl() {
 
 it("collects superseded resident rows and their materializations after metadata refreshes", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const cfg = { agents: { list: [{ id: "main", default: true }] } };
+    const cfg = { agents: { entries: { main: {} } } };
     setRuntimeConfigSnapshot(cfg);
     const keys = Array.from({ length: 4 }, (_, index) => `agent:main:retention-${index}`);
     const write = (key: string, revision: number) =>
@@ -40,11 +41,16 @@ it("collects superseded resident rows and their materializations after metadata 
       materialized: WeakRef<object>;
     }[] = [];
     const selections: WeakRef<object>[] = [];
+    const snapshots: WeakRef<object>[] = [];
     function captureSelections() {
       for (const opts of [{}, { agentId: "main" }, { configuredAgentsOnly: true }]) {
         for (const activeOnly of [false, true]) {
           selections.push(
-            new WeakRef(prepareSessionRowSelection(projection, { ...opts, activeOnly }).entries),
+            ...prepareSessionRowSelection(
+              projection,
+              { ...opts, activeOnly },
+              { ordered: true },
+            ).entries.map((pair) => new WeakRef(pair)),
           );
         }
       }
@@ -60,18 +66,23 @@ it("collects superseded resident rows and their materializations after metadata 
         write(row.key, revision);
       }
     }
+    async function captureList(revision: number) {
+      const result = await listProjectedSessions({
+        projection,
+        opts: { limit: keys.length, includePeople: true },
+        acceptsSerializedJson: true,
+      });
+      snapshots.push(...result.sessions.map((row) => new WeakRef(row)));
+      expect(result.sessions.map((row) => row.label)).toEqual(
+        keys.map(() => `Revision ${revision}`),
+      );
+    }
     try {
       await projection.ensureMaterialized();
       for (let revision = 1; revision <= 4; revision++) {
         refreshEntries(revision);
         await projection.ensureMaterialized();
-        const result = await listProjectedSessions({
-          projection,
-          opts: { limit: keys.length, includePeople: true },
-        });
-        expect(result.sessions.map((row) => row.label)).toEqual(
-          keys.map(() => `Revision ${revision}`),
-        );
+        await captureList(revision);
         captureSelections();
       }
       // A publication must release the last list even when no subsequent viewer arrives.
@@ -85,9 +96,21 @@ it("collects superseded resident rows and their materializations after metadata 
       expect(retired.filter(({ row }) => row.deref())).toHaveLength(0);
       expect(retired.filter(({ entry }) => entry.deref())).toHaveLength(0);
       expect(selections.filter((selection) => selection.deref())).toHaveLength(0);
+      expect(snapshots.filter((snapshot) => snapshot.deref())).toHaveLength(0);
       expect(retired.filter(({ materialized }) => materialized.deref())).toHaveLength(0);
       expect(projection.selectEntries().filter(ready)).toHaveLength(keys.length);
-      await listProjectedSessions({ projection, opts: {} });
+      await listProjectedSessions({ projection, opts: {}, acceptsSerializedJson: true });
+      const rematerialized = projection
+        .selectEntries()
+        .filter(ready)
+        .map((row) => new WeakRef(row.materialized));
+      // Catalog refresh replaces materializations while keeping their resident rows alive.
+      sessionChanges.emit({ all: true, scope: "catalog" });
+      await projection.ensureMaterialized();
+      await nextTurn();
+      queryObjects(WeakRef);
+      expect(rematerialized.filter((materialized) => materialized.deref())).toHaveLength(0);
+      await listProjectedSessions({ projection, opts: {}, acceptsSerializedJson: true });
       const disposedEntries = projection.selectEntries().map((row) => new WeakRef(row.entry));
       captureSelections();
       projection.dispose();
@@ -99,6 +122,45 @@ it("collects superseded resident rows and their materializations after metadata 
       projection.dispose();
       release();
       await nextTurn();
+    }
+  });
+});
+
+it("does not retain a superseded child entry through a held parent display row", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const cfg = { agents: { entries: { main: {} } } };
+    setRuntimeConfigSnapshot(cfg);
+    const parent = "agent:main:compact-parent";
+    const child = "agent:main:compact-child";
+    replaceSessionEntrySync(
+      { agentId: "main", sessionKey: parent },
+      { sessionId: "compact-parent", updatedAt: 1 },
+    );
+    const writeChild = (updatedAt: number) =>
+      replaceSessionEntrySync(
+        { agentId: "main", sessionKey: child },
+        { sessionId: "compact-child", updatedAt, parentSessionKey: parent },
+      );
+    writeChild(1);
+    const release = retainSessionListForegroundWork();
+    const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
+    try {
+      await projection.ensureMaterialized();
+      const heldParent = projection.describe({ agentId: "main", key: parent })!;
+      const retiredChild = new WeakRef(projection.describe({ agentId: "main", key: child })!.entry);
+      writeChild(2);
+      await projection.ensureMaterialized();
+      await nextTurn();
+      queryObjects(WeakRef);
+      expect(retiredChild.deref()).toBeUndefined();
+      // Retained consumers may still hold the old parent; it needs only child display facts.
+      expect(heldParent.materialized.source.childLinks?.[0]?.entry.sessionId).toBe("compact-child");
+      expect(
+        projection.snapshot({ agentId: "main", key: parent }, { now: 2 }).row?.childSessions,
+      ).toEqual([child]);
+    } finally {
+      projection.dispose();
+      release();
     }
   });
 });

@@ -1,4 +1,4 @@
-/** Shared node-host request, result, event, and approval-bin provider contracts. */
+import type { SystemRunExecutionContext } from "../../packages/gateway-protocol/src/system-run-execution-context.js";
 import type { SkillBinTrustEntry, SystemRunApprovalPlan } from "../infra/exec-approvals.js";
 
 export type NodeInvokeRequestPayload = {
@@ -17,6 +17,7 @@ export type SystemRunParams = {
   systemRunPlan?: SystemRunApprovalPlan | null;
   cwd?: string | null;
   env?: Record<string, string>;
+  executionContext?: SystemRunExecutionContext;
   timeoutMs?: number | null;
   needsScreenRecording?: boolean | null;
   agentId?: string | null;
@@ -52,23 +53,6 @@ export type ExecEventPayload = {
   suppressNotifyOnExit?: boolean;
 };
 
-export type ExecFinishedResult = {
-  stdout?: string;
-  stderr?: string;
-  error?: string | null;
-  exitCode?: number | null;
-  timedOut?: boolean;
-  success?: boolean;
-};
-
-export type ExecFinishedEventParams = {
-  sessionKey: string;
-  runId: string;
-  commandText: string;
-  result: ExecFinishedResult;
-  suppressNotifyOnExit?: boolean;
-};
-
 export type SkillBinsProvider = {
-  current(force?: boolean): Promise<SkillBinTrustEntry[]>;
+  current(): Promise<SkillBinTrustEntry[]>;
 };

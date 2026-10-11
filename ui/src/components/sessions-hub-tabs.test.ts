@@ -3,14 +3,29 @@
 import { render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { i18n } from "../i18n/index.ts";
-import { renderSessionsHubTabs } from "./sessions-hub-tabs.ts";
+import { renderHubTabs } from "./hub-tabs.ts";
 
-type SessionsHubTabsProps = Parameters<typeof renderSessionsHubTabs>[0];
+type SessionsHubTabsProps = {
+  active: "sessions" | "worktrees";
+  onSelect: (tab: "sessions" | "worktrees") => void;
+};
 
 async function mount(props: SessionsHubTabsProps): Promise<HTMLDivElement> {
   const container = document.createElement("div");
   document.body.append(container);
-  render(renderSessionsHubTabs(props), container);
+  render(
+    renderHubTabs({
+      ...props,
+      id: "sessions",
+      tabs: [
+        { value: "sessions", label: "Sessions" },
+        { value: "worktrees", label: "Worktrees" },
+      ],
+      ariaLabel: "Sessions",
+      panelId: "sessions-hub-panel",
+    }),
+    container,
+  );
   const group = container.querySelector<HTMLElement & { updateComplete: Promise<boolean> }>(
     "wa-tab-group",
   );
@@ -18,7 +33,7 @@ async function mount(props: SessionsHubTabsProps): Promise<HTMLDivElement> {
   return container;
 }
 
-describe("renderSessionsHubTabs", () => {
+describe("Sessions hub navigation", () => {
   beforeEach(async () => {
     await i18n.setLocale("en");
   });

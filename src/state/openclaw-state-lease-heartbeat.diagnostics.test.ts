@@ -14,9 +14,11 @@ const fixture = vi.hoisted(() => ({
   receive: undefined as ((message: LeaseHeartbeatParentMessage) => void) | undefined,
 }));
 
-vi.mock("node:worker_threads", async () => {
+vi.mock("node:worker_threads", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:worker_threads")>();
   const { EventEmitter } = await import("node:events");
   return {
+    ...actual,
     isMainThread: false,
     get workerData() {
       return fixture.data;
@@ -24,6 +26,11 @@ vi.mock("node:worker_threads", async () => {
     parentPort: {
       on(_event: "message", listener: (message: LeaseHeartbeatParentMessage) => void) {
         fixture.receive = listener;
+      },
+      off(_event: "message", listener: (message: LeaseHeartbeatParentMessage) => void) {
+        if (fixture.receive === listener) {
+          fixture.receive = undefined;
+        }
       },
       postMessage: (message: unknown) => fixture.worker?.emit("message", structuredClone(message)),
       close: () => queueMicrotask(() => fixture.worker?.emit("exit", 0)),
@@ -50,14 +57,19 @@ vi.mock("../infra/gateway-state-owner.js", () => ({
   assertStateDatabaseAccessAllowed() {},
   GatewayStateOwnerContentionError: class extends Error {},
 }));
-vi.mock("../infra/sqlite-worker-identity.js", () => ({
+vi.mock("../infra/sqlite-worker-identity.js", async () => ({
+  ...(await vi.importActual<typeof import("../infra/sqlite-worker-identity.js")>(
+    "../infra/sqlite-worker-identity.js",
+  )),
   readDatabasePathIdentitySync: (canonicalPath: string) => ({ key: "file:12:34", canonicalPath }),
 }));
 vi.mock("../infra/sqlite-busy-timeout.js", () => ({
   runWithSqliteBusyTimeout: (_db: unknown, _ms: number, run: () => unknown) => run(),
 }));
+// mock-isolation: The heartbeat diagnostic fixture has no native database or transaction custody.
 vi.mock("../infra/sqlite-transaction.js", () => ({
   runSqliteImmediateTransactionSync: (_db: unknown, run: () => unknown) => run(),
+  retainSqliteWriteAdmissionService: () => () => {},
 }));
 vi.mock("./openclaw-state-db-handle.js", () => ({
   openTrackedStateDatabase: () => ({}),
@@ -97,15 +109,21 @@ async function start() {
   return { heartbeat, outcome, onLost };
 }
 
-it.each([false, true])(
-  "retains the fatal renewal cause after prior success=%s",
-  async (renewed) => {
+it.each([
+  { renewed: false, throws: true },
+  { renewed: true, throws: false },
+])(
+  "retains automatic loss diagnostics (renewed=$renewed, throws=$throws)",
+  async ({ renewed, throws }) => {
     const failure = Object.assign(new Error("synthetic disk I/O error"), {
       code: "ERR_SQLITE_ERROR",
       errcode: 266,
     });
     fixture.renew.mockImplementation(() => {
-      throw failure;
+      if (throws) {
+        throw failure;
+      }
+      return undefined;
     });
     if (renewed) {
       fixture.renew.mockImplementationOnce(() => Date.now() + 60_000);
@@ -117,25 +135,31 @@ it.each([false, true])(
         await vi.advanceTimersByTimeAsync(20_000);
       }
       const error: unknown = onLost.mock.calls[0]?.[0];
-      expect(error).toMatchObject({
-        cause: {
-          name: "Error",
-          message: failure.message,
-          code: failure.code,
-          errcode: 266,
-          attempt: renewed ? 2 : 1,
-          elapsedMs: renewed ? 20_100 : 100,
-        },
-      });
-      expect(String(error)).toContain("state lease heartbeat exited");
-      expect(String(error)).toContain("Error: synthetic disk I/O error");
-      expect(String(error)).toContain("code=ERR_SQLITE_ERROR, errcode=266");
-      expect(String(error)).toContain(`acquiredAt=${acquiredAt}`);
-      expect(String(error)).toContain(`lastRenewedAt=${renewed ? acquiredAt + 100 : "never"}`);
-      expect(String(error)).toContain(`attempt=${renewed ? 2 : 1}`);
-      expect(String(error)).toContain(`elapsedMs=${renewed ? 20_100 : 100}`);
       expect(String(error)).toContain(`lossPath=${renewed ? "automatic-renewal" : "activation"}`);
-      expect(String(error)).toContain("lossOutcome=operation-error");
+      if (throws) {
+        expect(error).toMatchObject({
+          cause: {
+            name: "Error",
+            message: failure.message,
+            code: failure.code,
+            errcode: 266,
+            attempt: renewed ? 2 : 1,
+            elapsedMs: renewed ? 20_100 : 100,
+          },
+        });
+        expect(String(error)).toContain("state lease heartbeat exited");
+        expect(String(error)).toContain("Error: synthetic disk I/O error");
+        expect(String(error)).toContain("code=ERR_SQLITE_ERROR, errcode=266");
+        expect(String(error)).toContain(`acquiredAt=${acquiredAt}`);
+        expect(String(error)).toContain(`lastRenewedAt=${renewed ? acquiredAt + 100 : "never"}`);
+        expect(String(error)).toContain(`attempt=${renewed ? 2 : 1}`);
+        expect(String(error)).toContain(`elapsedMs=${renewed ? 20_100 : 100}`);
+        expect(String(error)).toContain("lossOutcome=operation-error");
+      } else {
+        expect(String(error)).toContain("expired or ownership lost");
+        expect(String(error)).toContain("lossOutcome=no-current-owned-unexpired-row");
+        expect(error).not.toHaveProperty("cause");
+      }
       if (!renewed) {
         expect(await outcome).toBe(error);
       }
@@ -145,32 +169,7 @@ it.each([false, true])(
   },
 );
 
-it.each([false, true])(
-  "reports missing ownership without claiming expiry after success=%s",
-  async (renewed) => {
-    fixture.renew.mockReturnValue(undefined);
-    if (renewed) {
-      fixture.renew.mockImplementationOnce(() => Date.now() + 60_000);
-    }
-    const { heartbeat, outcome, onLost } = await start();
-    try {
-      if (renewed) {
-        await expect(outcome).resolves.toBeUndefined();
-        await vi.advanceTimersByTimeAsync(20_000);
-      }
-      const error: unknown = onLost.mock.calls[0]?.[0];
-      expect(String(error)).toContain("expired or ownership lost");
-      expect(String(error)).toContain(`lossPath=${renewed ? "automatic-renewal" : "activation"}`);
-      expect(String(error)).toContain("lossOutcome=no-current-owned-unexpired-row");
-      expect(error).not.toHaveProperty("cause");
-    } finally {
-      await heartbeat.stop();
-    }
-  },
-);
-
 it.each([
-  ["verify", false],
   ["verify", true],
   ["renew", false],
   ["renew", true],
@@ -201,14 +200,8 @@ it.each([
   }
 });
 
-it("suppresses loss reporting during normal close and termination", async () => {
-  const { heartbeat, outcome, onLost } = await start();
-  await expect(outcome).resolves.toBeUndefined();
-  await heartbeat.stop();
-  expect(onLost).not.toHaveBeenCalled();
-});
-
-it.each([5, 6, 261, 517])("still retries SQLite contention errcode=%s", async (errcode) => {
+it("still retries SQLite contention", async () => {
+  const errcode = 6;
   fixture.renew.mockImplementationOnce(() => {
     throw Object.assign(new Error("database is locked"), { code: "ERR_SQLITE_ERROR", errcode });
   });

@@ -1,4 +1,3 @@
-// Shared first-owner bootstrap for DM pairing approval surfaces.
 import {
   formatCommandOwnerFromChannelSender,
   hasConfiguredCommandOwners,

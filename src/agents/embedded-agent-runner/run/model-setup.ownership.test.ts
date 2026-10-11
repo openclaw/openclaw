@@ -3,16 +3,21 @@ import {
   resolveOpenAIResponsesPayloadPolicy,
 } from "@openclaw/ai/transports";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { observeHostDataSql } from "../../../../test/helpers/sqlite-statement-execution-counter.js";
+import { withAgentTurnCompletion } from "../../../auto-reply/reply/agent-runner-completion.js";
 import { createReplyOperation } from "../../../auto-reply/reply/reply-run-registry.js";
 import { prepareReplyToolAuthority } from "../../../auto-reply/reply/reply-tool-authority.js";
-import { persistSessionUsageUpdate } from "../../../auto-reply/reply/session-usage.js";
+import { prepareSessionUsageUpdate } from "../../../auto-reply/reply/session-usage.js";
 import { resolveSessionStorePathCore, type SessionEntry } from "../../../config/sessions.js";
 import {
   loadSessionEntryReadOnly,
   patchSessionEntryCore,
   replaceSessionEntry,
+  replaceSessionEntrySync,
 } from "../../../config/sessions/session-accessor.js";
+import { projectionLane } from "../../../config/sessions/session-transcript-worker-resources.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { sessionChanges } from "../../../sessions/session-row-changes.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import {
   createOpenClawTestState,
@@ -62,6 +67,7 @@ afterEach(async () => {
 async function createFixture(
   config: OpenClawConfig = {},
   nativeOwner?: AgentHarness["resolveSessionRuntimeOwnership"],
+  asyncNativeOwner?: AgentHarness["resolveSessionRuntimeOwnershipAsync"],
 ) {
   const state = await createOpenClawTestState({ label: "model-ownership" });
   states.push(state);
@@ -88,6 +94,7 @@ async function createFixture(
           ? { supported: false, fallbackRuntime: "openclaw" }
           : { supported: true },
     ...(nativeOwner ? { resolveSessionRuntimeOwnership: nativeOwner } : {}),
+    ...(asyncNativeOwner ? { resolveSessionRuntimeOwnershipAsync: asyncNativeOwner } : {}),
     runAttempt: vi.fn<AgentHarness["runAttempt"]>(),
   };
   registerAgentHarness(harness);
@@ -113,7 +120,7 @@ async function createFixture(
     sessionId: runParams.sessionId,
     updatedAt: 1,
     modelSelectionLocked: true,
-    ...(nativeOwner
+    ...(nativeOwner || asyncNativeOwner
       ? { agentHarnessId: "codex" }
       : {
           pluginOwnerId: "catalog-owner",
@@ -123,14 +130,15 @@ async function createFixture(
         }),
   };
   await replaceSessionEntry(target, entry);
-  const resolve = (
+  const resolve = async (
     assertCurrent = () => {},
     preparedModelRuntime: PreparedModelRuntimeSnapshot = generation.preparedModelRuntime,
+    sessionAdmission?: Awaited<ReturnType<typeof assertAgentHarnessRunAdmission>>,
   ) =>
     resolveEmbeddedRunModelSetup({
       assertCurrent,
       runParams,
-      sessionAdmission: assertAgentHarnessRunAdmission(runParams),
+      sessionAdmission: sessionAdmission ?? (await assertAgentHarnessRunAdmission(runParams)),
       provider: generation.provider,
       modelId: generation.modelId,
       agentDir: generation.preparedModelRuntime.agentDir,
@@ -163,7 +171,7 @@ async function createFixture(
       runtime = await prepareEmbeddedRunRuntime({
         assertCurrent: () => {},
         runParams: { ...actualParams, preparedRunAdmission: admission },
-        sessionAdmission: assertAgentHarnessRunAdmission(actualParams),
+        sessionAdmission: await assertAgentHarnessRunAdmission(actualParams),
         provider: actualParams.provider ?? generation.provider,
         modelId: actualParams.model ?? generation.modelId,
         agentDir: generation.preparedModelRuntime.agentDir,
@@ -186,6 +194,75 @@ async function createFixture(
 }
 
 describe("model chat and native model ownership", () => {
+  it.each([true, false])(
+    "prepares native ownership through the async hook (sync hook present: %s)",
+    async (hasSyncHook) => {
+      const syncOwner = vi.fn(() => ({ model: "native" as const, auth: "native" as const }));
+      const fixture = await createFixture({}, syncOwner);
+      const asyncOwner = vi.fn<NonNullable<AgentHarness["resolveSessionRuntimeOwnershipAsync"]>>(
+        async ({ assertCurrent, readPreviousSessionId }) => {
+          expect(await readPreviousSessionId()).toBe("native-predecessor");
+          assertCurrent();
+          return { model: "native", auth: "native" };
+        },
+      );
+      fixture.harness.resolveSessionRuntimeOwnershipAsync = asyncOwner;
+      if (!hasSyncHook) {
+        delete fixture.harness.resolveSessionRuntimeOwnership;
+      }
+      registerAgentHarness(fixture.harness);
+      await patchSessionEntryCore(fixture.target, () => ({
+        previousSessionId: "native-predecessor",
+      }));
+
+      const setup = await fixture.resolve();
+      expect(setup.nativeModelOwned).toBe(true);
+      await expect(setup.nativeSessionRuntime!.assertCurrent()).resolves.toBeUndefined();
+      expect(asyncOwner).toHaveBeenCalledTimes(2);
+      expect(syncOwner).not.toHaveBeenCalled();
+      expect(fixture.generation.resolveDynamicModel).not.toHaveBeenCalled();
+    },
+  );
+
+  it("keeps native ownership through unrelated runtime, auth and display publications", async () => {
+    const nativeOwner = vi.fn<NonNullable<AgentHarness["resolveSessionRuntimeOwnership"]>>(
+      ({ assertCurrent, sessionKey }) => {
+        for (const scope of [
+          "agent-runs",
+          "subagent-runs",
+          "profiles",
+          "catalog",
+          "config",
+          "runtime",
+          "acp",
+          "worker-placements",
+          "worker-environments",
+        ]) {
+          sessionChanges.emit({ all: true, scope });
+          assertCurrent();
+        }
+        sessionChanges.emit({ sessionKey: sessionKey!, agentId: "main" });
+        sessionChanges.emit({
+          sessionKey: sessionKey!,
+          agentId: "main",
+          scope: "runtime",
+        });
+        sessionChanges.emit({
+          sessionKey: "agent:main:other",
+          storePath: fixture.target.storePath,
+        });
+        sessionChanges.emit({ all: true, scope: { agentId: "other" } });
+        assertCurrent();
+        return { model: "native", auth: "native" };
+      },
+    );
+    const fixture = await createFixture({}, nativeOwner);
+    const setup = await fixture.resolve();
+    await expect(setup.nativeSessionRuntime!.assertCurrent()).resolves.toBeUndefined();
+    expect(nativeOwner).toHaveBeenCalledTimes(2);
+    expect(fixture.generation.resolveDynamicModel).not.toHaveBeenCalled();
+  });
+
   it.each(["current", "changed-again", "revoked"] as const)(
     "reacquires initial model preparation after a shared OAuth refresh while authority is %s",
     async (outcome) => {
@@ -330,17 +407,42 @@ describe("model chat and native model ownership", () => {
 
   it("keeps model and plugin ownership across usage writes and subsequent turns", async () => {
     const fixture = await createFixture();
-    const sessionStore = { [fixture.target.sessionKey]: fixture.entry };
     for (const observation of [undefined, "codex", "openclaw"]) {
       if (observation) {
-        await persistSessionUsageUpdate({
-          ...fixture.target,
-          sessionStore,
+        const prepared = prepareSessionUsageUpdate({
           cfg: fixture.runParams.config,
           modelUsed: "fixture-model",
           providerUsed: "openai",
           agentHarnessId: observation,
         });
+        const operation = createReplyOperation({
+          sessionId: fixture.entry.sessionId,
+          sessionKey: fixture.target.sessionKey,
+          resetTriggered: false,
+        });
+        operation.setPhase("running");
+        try {
+          await withAgentTurnCompletion(
+            {
+              ...fixture.target,
+              entry: loadSessionEntryReadOnly(fixture.target),
+              operation,
+              publish() {},
+            },
+            async (completion) => {
+              if (!completion || !prepared) {
+                throw new Error("Missing usage completion owner");
+              }
+              completion.patch((entry) => ({
+                kind: "usage",
+                update: { ...prepared.update, estimatedCostUsd: prepared.estimateCost(entry) },
+                updatedAt: Date.now(),
+              }));
+            },
+          );
+        } finally {
+          operation.complete();
+        }
       }
       const entry = loadSessionEntryReadOnly(fixture.target);
       expect(entry).toMatchObject({
@@ -351,9 +453,6 @@ describe("model chat and native model ownership", () => {
         modelSelectionLocked: true,
       });
       expect(entry?.agentHarnessId).toBe(observation);
-      const committedEntry = sessionStore[fixture.target.sessionKey];
-      expect(committedEntry).toBeDefined();
-      expect(committedEntry?.agentHarnessId).toBe(observation);
       fixture.runParams.agentHarnessRuntimeOverride = resolveSessionRuntimeOverrideForProvider({
         provider: "openai",
         entry,
@@ -584,6 +683,104 @@ describe("model chat and native model ownership", () => {
     });
   });
 
+  it("reuses admitted ownership and refreshes the predecessor at dispatch without main-thread SQL", async () => {
+    const predecessors: Array<string | undefined> = [];
+    const fixture = await createFixture({}, ({ assertCurrent, readPreviousSessionId }) => {
+      for (let i = 0; i < 3; i++) {
+        assertCurrent();
+        predecessors.push(readPreviousSessionId?.());
+      }
+      return { model: "native", auth: "native" };
+    });
+    await patchSessionEntryCore(fixture.target, () => ({
+      previousSessionId: "initial-predecessor",
+    }));
+    const admission = await assertAgentHarnessRunAdmission(fixture.runParams);
+    const workerRead = vi.spyOn(projectionLane.pool, "run");
+    let setup: Awaited<ReturnType<typeof fixture.resolve>>;
+    try {
+      setup = await fixture.resolve(undefined, undefined, admission);
+      expect(workerRead).not.toHaveBeenCalled();
+      expect(predecessors).toEqual(Array(3).fill("initial-predecessor"));
+    } finally {
+      workerRead.mockRestore();
+    }
+    predecessors.length = 0;
+    const hostSql = observeHostDataSql();
+    try {
+      await setup.nativeSessionRuntime!.assertCurrent();
+      await setup.nativeSessionRuntime!.assertCurrent();
+      expect(predecessors).toEqual(Array(6).fill("initial-predecessor"));
+      expect(hostSql.calls.flatMap((call) => call.mock.calls)).toEqual([]);
+    } finally {
+      hostSql.restore();
+    }
+    await patchSessionEntryCore(fixture.target, () => ({ previousSessionId: "new-predecessor" }));
+    predecessors.length = 0;
+    await setup.nativeSessionRuntime!.assertCurrent();
+    expect(predecessors).toEqual(Array(3).fill("new-predecessor"));
+  });
+
+  it.each([
+    "sessionId",
+    "lifecycleRevision",
+    "activeWriterRunId",
+    "agentHarnessId",
+    "previousSessionId",
+  ] as const)(
+    "rejects a same-frame %s publication during the synchronous native hook",
+    async (field) => {
+      const fixture = await createFixture({}, ({ assertCurrent }) => {
+        replaceSessionEntrySync(fixture.target, { ...fixture.entry, [field]: "changed" });
+        assertCurrent();
+        return { model: "native", auth: "native" };
+      });
+      await expect(fixture.resolve()).rejects.toMatchObject({ name: "AgentHarnessPreflightError" });
+      expect(fixture.generation.resolveDynamicModel).not.toHaveBeenCalled();
+    },
+  );
+
+  it("rereads native ownership when the writer claim follows run admission", async () => {
+    const fixture = await createFixture({}, () => ({ model: "native", auth: "native" }));
+    const admission = await assertAgentHarnessRunAdmission(fixture.runParams);
+    // The lane claims the writer after admission, as the run orchestrator does.
+    await patchSessionEntryCore(fixture.target, () => ({ activeWriterRunId: "claimed-writer" }));
+    fixture.runParams.sessionTarget = {
+      ...fixture.target,
+      sessionId: fixture.entry.sessionId,
+      expectedWriterRunId: "claimed-writer",
+    };
+    const setup = await fixture.resolve(undefined, undefined, admission);
+    expect(setup.nativeModelOwned).toBe(true);
+    await expect(setup.nativeSessionRuntime!.assertCurrent()).resolves.toBeUndefined();
+  });
+
+  it("rechecks the admitted writer pin on each worker-prepared ownership read", async () => {
+    const fixture = await createFixture({}, () => ({ model: "native", auth: "native" }));
+    fixture.runParams.sessionTarget = {
+      ...fixture.target,
+      sessionId: fixture.entry.sessionId,
+      expectedWriterRunId: "admitted-writer",
+    };
+    await patchSessionEntryCore(fixture.target, () => ({ activeWriterRunId: "admitted-writer" }));
+    const setup = await fixture.resolve();
+    await patchSessionEntryCore(fixture.target, () => ({
+      activeWriterRunId: "replacement-writer",
+    }));
+    await expect(setup.nativeSessionRuntime!.assertCurrent()).rejects.toThrow("ownership changed");
+  });
+
+  it("rejects cancellation inside the synchronous ownership hook before publishing its result", async () => {
+    const controller = new AbortController();
+    const reason = new Error("native preparation canceled");
+    const fixture = await createFixture({}, () => {
+      controller.abort(reason);
+      return { model: "native", auth: "native" };
+    });
+    fixture.runParams.abortSignal = controller.signal;
+    await expect(fixture.resolve()).rejects.toBe(reason);
+  });
+
   it("reads latest native lineage from the admitted store after a session rollover", async () => {
     const fixture = await createFixture({}, ({ readPreviousSessionId }) =>
       readPreviousSessionId?.() === "model-chat" ? { model: "native", auth: "native" } : undefined,
@@ -625,21 +822,51 @@ describe("model chat and native model ownership", () => {
 
   it("closes host assertions and lineage reads after the ownership callback returns", async () => {
     let retained: (() => void) | undefined;
-    let retainedRead: (() => string | undefined) | undefined;
-    const fixture = await createFixture({}, ({ assertCurrent, readPreviousSessionId }) => {
-      retained = assertCurrent;
-      retainedRead = readPreviousSessionId;
-      return {
-        model: "native",
-        auth: "host",
-        modelRef: { provider: "openai", model: "fixture-model" },
-      };
-    });
+    let retainedRead: (() => Promise<string | undefined>) | undefined;
+    const fixture = await createFixture(
+      {},
+      undefined,
+      async ({ assertCurrent, readPreviousSessionId }) => {
+        await readPreviousSessionId();
+        retained = assertCurrent;
+        retainedRead = readPreviousSessionId;
+        return {
+          model: "native",
+          auth: "host",
+          modelRef: { provider: "openai", model: "fixture-model" },
+        };
+      },
+    );
     await fixture.resolve();
     expect(retained).toBeTypeOf("function");
     expect(() => retained?.()).toThrow("ownership changed");
     expect(retainedRead).toBeTypeOf("function");
-    expect(() => retainedRead?.()).toThrow("ownership changed");
+    await expect(retainedRead?.()).rejects.toThrow("ownership changed");
+  });
+
+  it("propagates async ownership failure without selecting the legacy hook", async () => {
+    const legacyOwner = vi.fn<NonNullable<AgentHarness["resolveSessionRuntimeOwnership"]>>(() => ({
+      model: "native",
+      auth: "native",
+    }));
+    const failure = new Error("ownership worker failed");
+    const fixture = await createFixture({}, legacyOwner, async () => {
+      throw failure;
+    });
+
+    await expect(fixture.resolve()).rejects.toBe(failure);
+    expect(legacyOwner).not.toHaveBeenCalled();
+    expect(fixture.generation.resolveDynamicModel).not.toHaveBeenCalled();
+  });
+
+  it("rejects a session replacement while async ownership is being read", async () => {
+    const fixture = await createFixture({}, undefined, async () => {
+      await patchSessionEntryCore(fixture.target, () => ({ lifecycleRevision: "replacement" }));
+      return { model: "native", auth: "native" };
+    });
+
+    await expect(fixture.resolve()).rejects.toThrow("ownership changed");
+    expect(fixture.generation.resolveDynamicModel).not.toHaveBeenCalled();
   });
 
   it("uses the native owner fact and rejects a lost binding before dispatch", async () => {

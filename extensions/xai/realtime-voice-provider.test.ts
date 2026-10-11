@@ -282,10 +282,10 @@ describe("buildXaiRealtimeVoiceProvider", () => {
     }));
     const cfg = {
       agents: {
-        list: [
-          { id: "helper", agentDir: "/tmp/openclaw-helper-agent" },
-          { id: "molty", agentDir: "/tmp/openclaw-molty-agent" },
-        ],
+        entries: {
+          helper: { agentDir: "/tmp/openclaw-helper-agent" },
+          molty: { agentDir: "/tmp/openclaw-molty-agent" },
+        },
       },
     };
     expect(

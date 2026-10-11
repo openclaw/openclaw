@@ -2,7 +2,7 @@ import {
   awaitAgentEndSideEffects,
   runAgentEndSideEffects,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { withTimeout } from "openclaw/plugin-sdk/time-runtime";
+import { raceWithTimeout, withTimeout } from "openclaw/plugin-sdk/time-runtime";
 import { toCopilotError } from "./attempt-config.js";
 import {
   BACKGROUND_COMPACTION_CANCEL_TIMEOUT_MS,
@@ -118,21 +118,8 @@ async function awaitDeferredCleanupBeforeDeadline(params: {
     await params.bridge.awaitCompactionCompletion();
     return "completed" as const;
   })();
-  let resolveAbort: () => void = () => undefined;
-  const aborted = new Promise<"aborted">((resolve) => {
-    resolveAbort = () => resolve("aborted");
-    params.abortSignal?.addEventListener("abort", resolveAbort, { once: true });
+  return await raceWithTimeout(completion, params.timeoutMs, () => "deadline" as const, {
+    signal: params.abortSignal,
+    onAbort: () => "aborted" as const,
   });
-  let timeoutId: ReturnType<typeof setTimeout> | undefined;
-  const deadline = new Promise<"deadline">((resolve) => {
-    timeoutId = setTimeout(() => resolve("deadline"), params.timeoutMs);
-  });
-  try {
-    return await Promise.race([completion, aborted, deadline]);
-  } finally {
-    params.abortSignal?.removeEventListener("abort", resolveAbort);
-    if (timeoutId !== undefined) {
-      clearTimeout(timeoutId);
-    }
-  }
 }

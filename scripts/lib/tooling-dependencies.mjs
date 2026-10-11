@@ -1,33 +1,55 @@
 import { spawnSync } from "node:child_process";
 import { readFileSync, realpathSync, statSync } from "node:fs";
 import { createRequire, registerHooks } from "node:module";
-import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { resolveConfiguredModulesDir } from "./tsx-cli-shim.mjs";
 
+function isWithin(root, target) {
+  const rel = relative(root, target);
+  return (
+    rel !== "" &&
+    rel !== ".." &&
+    !rel.startsWith("../") &&
+    !rel.startsWith("..\\") &&
+    !isAbsolute(rel)
+  );
+}
+
 function contained(root, target) {
   const physical = realpathSync(target);
-  const rel = relative(root, physical);
-  if (!rel || rel === ".." || rel.startsWith("../") || rel.startsWith("..\\") || isAbsolute(rel)) {
+  if (!isWithin(root, physical)) {
     throw new Error("Tooling package escapes its installed dependency owner.");
   }
   return physical;
 }
 
-function qualifiedPackage(checkout, root, specifier, consumer) {
-  const name = specifier
+function packageName(specifier) {
+  return specifier
     .split("/")
     .slice(0, specifier.startsWith("@") ? 2 : 1)
     .join("/");
-  const manifest = JSON.parse(readFileSync(join(checkout, "package.json"), "utf8"));
-  const required =
+}
+
+function declaredVersion(manifest, name) {
+  return (
     manifest.dependencies?.[name] ??
     manifest.devDependencies?.[name] ??
-    manifest.optionalDependencies?.[name];
+    manifest.optionalDependencies?.[name]
+  );
+}
+
+function readManifest(checkout) {
+  return JSON.parse(readFileSync(join(checkout, "package.json"), "utf8"));
+}
+
+function qualifiedPackage(manifest, root, specifier, consumer, owner = root) {
+  const name = packageName(specifier);
+  const required = declaredVersion(manifest, name);
   const modules = realpathSync(join(root, "node_modules"));
   // A workspace link would execute another checkout's source. Only installed
   // third-party packages can fill missing dependencies in this checkout.
-  const directory = contained(modules, join(modules, name));
+  const directory = contained(modules, join(owner, "node_modules", name));
   const installed = JSON.parse(readFileSync(join(directory, "package.json"), "utf8"));
   if (!required || installed.name !== name || installed.version !== required) {
     throw new Error(
@@ -128,7 +150,7 @@ export function toolingDependencyOptions(checkout, consumer, { tsx = false } = {
   hook.searchParams.set("consumer", consumer);
   let tsxImport;
   if (tsx) {
-    const directory = qualifiedPackage(checkout, root, "tsx/esm", consumer);
+    const directory = qualifiedPackage(readManifest(checkout), root, "tsx/esm", consumer);
     const require = createRequire(join(directory, "package.json"));
     tsxImport = pathToFileURL(contained(directory, require.resolve("tsx/esm"))).href;
   }
@@ -140,25 +162,71 @@ export function toolingDependencyOptions(checkout, consumer, { tsx = false } = {
 const params = new URL(import.meta.url).searchParams;
 const root = params.get("root");
 if (root) {
-  const checkout = params.get("checkout");
+  const checkout = realpathSync(params.get("checkout"));
   const consumer = params.get("consumer");
-  const parentURL = pathToFileURL(join(root, "package.json")).href;
+  const manifests = new Map([[checkout, readManifest(checkout)]]);
+  const sourceOwner = (context) => {
+    const importer = context.parentURL?.startsWith("file:")
+      ? fileURLToPath(context.parentURL)
+      : undefined;
+    if (
+      !importer ||
+      !isWithin(checkout, importer) ||
+      relative(checkout, importer).split(sep).includes("node_modules")
+    ) {
+      return undefined;
+    }
+    let directory = dirname(contained(checkout, importer));
+    while (!manifests.has(directory)) {
+      if (statSync(join(directory, "package.json"), { throwIfNoEntry: false })?.isFile()) {
+        manifests.set(directory, readManifest(directory));
+        break;
+      }
+      directory = dirname(directory);
+    }
+    return { directory, manifest: manifests.get(directory) };
+  };
   registerHooks({
     resolve(specifier, context, nextResolve) {
+      if (isAbsolute(specifier) || /^(?:\.{1,2}(?:\/|$)|[a-z][a-z\d+.-]*:|#)/i.test(specifier)) {
+        return nextResolve(specifier, context);
+      }
+      const owner = sourceOwner(context);
+      // Dependency-owned imports retain their own private versions and failures.
+      if (!owner) {
+        return nextResolve(specifier, context);
+      }
       let resolved;
       try {
-        return nextResolve(specifier, context);
+        resolved = nextResolve(specifier, context);
       } catch (error) {
         if (
-          error?.code !== "ERR_MODULE_NOT_FOUND" ||
-          isAbsolute(specifier) ||
-          /^(?:\.{1,2}(?:\/|$)|[a-z][a-z\d+.-]*:|#)/i.test(specifier)
+          error?.code !== "ERR_MODULE_NOT_FOUND" &&
+          !declaredVersion(owner.manifest, packageName(specifier))
         ) {
           throw error;
         }
-        resolved = nextResolve(specifier, { ...context, parentURL });
       }
-      const directory = qualifiedPackage(checkout, root, specifier, consumer);
+      if (resolved) {
+        const target = resolved.url.startsWith("file:") ? fileURLToPath(resolved.url) : undefined;
+        if (!target || isWithin(checkout, realpathSync(target))) {
+          return resolved;
+        }
+        if (!target.split(sep).includes("node_modules")) {
+          throw new Error("Tooling package escapes its installed dependency owner.");
+        }
+      }
+      // A workspace package owns its pins and its donor resolution context.
+      // Its pnpm links may land in the root store, never in foreign source.
+      const donor =
+        owner.directory === checkout
+          ? root
+          : contained(root, join(root, relative(checkout, owner.directory)));
+      const directory = qualifiedPackage(owner.manifest, root, specifier, consumer, donor);
+      resolved = nextResolve(specifier, {
+        ...context,
+        parentURL: pathToFileURL(join(donor, "package.json")).href,
+      });
       contained(directory, fileURLToPath(resolved.url));
       return resolved;
     },

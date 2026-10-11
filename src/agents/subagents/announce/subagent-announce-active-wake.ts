@@ -8,26 +8,18 @@ import {
   resolveEmbeddedRunAbandonment,
   type EmbeddedAgentQueueMessageOutcome,
 } from "../../embedded-agent-runner/runs.js";
+import type { CurrentInboundPromptContext } from "../../internal-runtime-context.js";
 import { waitForAnnounceRetryDelay } from "./subagent-announce-delivery-retry.js";
 import {
   getSubagentRequesterSessionActivity as resolveRequesterSessionActivity,
   loadRequesterSessionEntry,
   resolveQueueSettings,
+  withSubagentRequesterSource,
 } from "./subagent-announce-delivery.runtime.js";
 
 export const SOURCE_OWNER_CHANGED = Symbol("source_owner_changed");
 
 export { resolveRequesterSessionActivity };
-
-// Backoff schedule for re-attempting an active-requester steer while the run is
-// compacting. Compaction is transient and usually finishes quickly, so a denser
-// schedule is used than for transient delivery errors. Total wait stays well
-// within the announce delivery timeout, and the loop also stops on cancellation.
-function resolveCompactionSteerRetryDelaysMs() {
-  return isFastTestRuntimeEnv()
-    ? ([8, 16, 32, 64] as const)
-    : ([1_000, 2_000, 4_000, 8_000] as const);
-}
 
 // Wake an active requester run through transient compacting and delivery-mode
 // outcomes. Unsupported transcript-commit waits are terminal refusals: the loop
@@ -80,13 +72,12 @@ export async function resolveActiveWakeWithRetries(
     return isAttemptAllowed?.() === false ? SOURCE_OWNER_CHANGED : result;
   };
   let outcome = await attemptWake(currentOptions);
-  const compactionRetryDelaysMs = resolveCompactionSteerRetryDelaysMs();
+  const compactionRetryDelaysMs = isFastTestRuntimeEnv()
+    ? ([8, 16, 32, 64] as const)
+    : ([1_000, 2_000, 4_000, 8_000] as const);
   let compactionRetryIndex = 0;
   for (;;) {
-    if (outcome === SOURCE_OWNER_CHANGED) {
-      break;
-    }
-    if (outcome.queued || signal?.aborted) {
+    if (outcome === SOURCE_OWNER_CHANGED || outcome.queued || signal?.aborted) {
       break;
     }
     if (isAttemptAllowed?.() === false || isSourceSessionAdmissionAllowed?.() === false) {
@@ -102,14 +93,7 @@ export async function resolveActiveWakeWithRetries(
       const activeRunOptions = { ...currentOptions };
       delete activeRunOptions.sourceReplyDeliveryMode;
       currentOptions = activeRunOptions;
-      const retryOptions = resolveRetryOptions();
-      if (!retryOptions) {
-        break;
-      }
-      outcome = await attemptWake(retryOptions);
-      continue;
-    }
-    if (outcome.reason === "compacting") {
+    } else if (outcome.reason === "compacting") {
       const remainingDeliveryTimeoutMs =
         compactionDeadlineMs === undefined ? undefined : compactionDeadlineMs - Date.now();
       const canRetry =
@@ -135,14 +119,14 @@ export async function resolveActiveWakeWithRetries(
         break;
       }
       compactionRetryIndex += 1;
-      const retryOptions = resolveRetryOptions();
-      if (!retryOptions) {
-        break;
-      }
-      outcome = await attemptWake(retryOptions);
-      continue;
+    } else {
+      break;
     }
-    break;
+    const retryOptions = resolveRetryOptions();
+    if (!retryOptions) {
+      break;
+    }
+    outcome = await attemptWake(retryOptions);
   }
   return outcome;
 }
@@ -152,6 +136,7 @@ export async function maybeSteerSubagentAnnounce(params: {
   requesterSessionKey: string;
   requesterAgentId?: string;
   steerMessage: string;
+  currentInboundContext?: CurrentInboundPromptContext;
   createUserTurnTranscriptRecorder?: (sessionId: string) => UserTurnTranscriptRecorder;
   signal?: AbortSignal;
   isSourceSessionEffectsAllowed?: () => boolean;
@@ -160,10 +145,34 @@ export async function maybeSteerSubagentAnnounce(params: {
   | { status: "steered"; deliveredAt?: number; enqueuedAt?: number }
   | { status: "none" | "dropped" | "source_owner_changed" }
 > {
+  return withSubagentRequesterSource(
+    params.requesterSessionKey,
+    params.requesterAgentId,
+    async (isRequesterCurrent): Promise<Awaited<ReturnType<typeof maybeSteerSubagentAnnounce>>> => {
+      const guardedParams = isRequesterCurrent
+        ? {
+            ...params,
+            isSourceSessionEffectsAllowed: () =>
+              isRequesterCurrent() && params.isSourceSessionEffectsAllowed?.() !== false,
+            isSourceSessionAdmissionAllowed: () =>
+              isRequesterCurrent() && params.isSourceSessionAdmissionAllowed?.() !== false,
+          }
+        : params;
+      return maybeSteerSubagentAnnounceBound(guardedParams);
+    },
+  );
+}
+
+async function maybeSteerSubagentAnnounceBound(
+  params: Parameters<typeof maybeSteerSubagentAnnounce>[0],
+): ReturnType<typeof maybeSteerSubagentAnnounce> {
   if (params.signal?.aborted) {
     return { status: "none" };
   }
-  const requester = loadRequesterSessionEntry(params.requesterSessionKey, params.requesterAgentId);
+  const requester = await loadRequesterSessionEntry(
+    params.requesterSessionKey,
+    params.requesterAgentId,
+  );
   const { cfg, entry, canonicalKey } = requester;
   const { sessionId, isActive } = resolveRequesterSessionActivity(
     params.requesterSessionKey,
@@ -189,6 +198,9 @@ export async function maybeSteerSubagentAnnounce(params: {
     steeringMode: "all",
     ...(queueSettings.debounceMs !== undefined ? { debounceMs: queueSettings.debounceMs } : {}),
     waitForTranscriptCommit: true,
+    ...(params.currentInboundContext
+      ? { currentInboundContext: params.currentInboundContext }
+      : {}),
     ...(params.createUserTurnTranscriptRecorder
       ? { userTurnTranscriptRecorder: params.createUserTurnTranscriptRecorder(sessionId) }
       : {}),
@@ -226,7 +238,7 @@ export async function maybeSteerSubagentAnnounce(params: {
   }
   const currentActivity = resolveRequesterSessionActivity(
     params.requesterSessionKey,
-    loadRequesterSessionEntry(params.requesterSessionKey, params.requesterAgentId),
+    await loadRequesterSessionEntry(params.requesterSessionKey, params.requesterAgentId),
   );
   return { status: currentActivity.isActive ? "dropped" : "none" };
 }

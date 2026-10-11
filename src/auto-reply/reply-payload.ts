@@ -5,9 +5,11 @@ import {
   readNonBlankString,
 } from "@openclaw/normalization-core/string-coerce";
 import type { FailoverReason } from "../agents/failover/signal.js";
-/** Reply payload contracts and metadata helpers shared by dispatch and channel renderers. */
 import type { ProgressContinuationCapability } from "../channels/progress-continuation.js";
-import type { HarnessCompletionRecovery } from "../config/sessions/restart-recovery-types.js";
+import type {
+  HarnessCompletionRecovery,
+  RestartRecoveryTerminalDeliveryEvidence,
+} from "../config/sessions/restart-recovery-types.js";
 import type { ReplyToMode } from "../config/types.base.js";
 import { hasReplyPayloadContent } from "../interactive/payload.js";
 import type { AssistantDeliveryTtsFacts } from "../llm/types.js";
@@ -22,7 +24,11 @@ export type {
   ReplyPayloadTtsSupplement,
 } from "../shared/reply-payload.types.js";
 
-export type ReplyMediaFailureCode = "file-not-found" | "unsupported-format" | "delivery-failed";
+export type ReplyMediaFailureCode =
+  | "file-not-found"
+  | "unsupported-format"
+  | "delivery-failed"
+  | "invalid-reference";
 
 /** Adds the BTW question banner for channels that only accept plain text bodies. */
 export function formatBtwTextForExternalDelivery(payload: ReplyPayload): string | undefined {
@@ -38,7 +44,6 @@ export function formatBtwTextForExternalDelivery(payload: ReplyPayload): string 
   return text.startsWith("BTW\nQuestion:") ? text : formatted;
 }
 
-/** True when a payload has visible or playable content for delivery. */
 export function isRenderablePayload(payload: ReplyPayload): boolean {
   return hasReplyPayloadContent(payload, {
     extraContent:
@@ -46,7 +51,6 @@ export function isRenderablePayload(payload: ReplyPayload): boolean {
   });
 }
 
-/** True when a payload should stay internal as reasoning-only output. */
 export function shouldSuppressReasoningPayload(payload: ReplyPayload): boolean {
   return payload.isReasoning === true;
 }
@@ -91,7 +95,6 @@ export function readPairingQrReplyChannelData(
   return setupCode && expiresAtMs ? { setupCode, expiresAtMs } : undefined;
 }
 
-/** Metadata for fast-auto progress notices. */
 export const FAST_MODE_AUTO_PROGRESS_KIND = "fast-mode-auto";
 
 export function isFastModeAutoProgressPayload(payload: Pick<ReplyPayload, "channelData">): boolean {
@@ -108,6 +111,8 @@ const REPLY_MEDIA_FAILURE_MESSAGES: Record<ReplyMediaFailureCode, string> = {
   "file-not-found": "File not found. Check the path and try again.",
   "unsupported-format": "Rejected by the local attachment allowlist. Send a supported file type.",
   "delivery-failed": "Delivery failed. Try sending this file again.",
+  "invalid-reference":
+    "Use a public HTTPS URL without credentials or attach a local file by a safe path.",
 };
 
 function formatReplyMediaFailures(failures: readonly ReplyMediaFailure[]): string {
@@ -167,7 +172,6 @@ export function getReplyPayloadTtsSupplement(
   };
 }
 
-/** Returns true when the payload is a valid TTS supplement media payload. */
 export function isReplyPayloadTtsSupplement(
   payload: Pick<ReplyPayload, "mediaUrl" | "mediaUrls" | "ttsSupplement">,
 ): boolean {
@@ -219,6 +223,16 @@ export function buildTtsSupplementMediaPayload(payload: ReplyPayload): ReplyPayl
 /** WeakMap-backed metadata attached to payload objects without changing wire shape. */
 export type SessionWriterDeliveryAuthority = {
   agentId?: string;
+  /** Current facts from the original process-owned actor, never a replacement. */
+  readCurrentSession?: () =>
+    | {
+        sessionId: string;
+        lifecycleRevision?: string;
+        activeWriterRunId?: string;
+        restartRecoveryHarnessCompletion?: HarnessCompletionRecovery;
+        restartRecoveryTerminalDeliveryEvidence?: RestartRecoveryTerminalDeliveryEvidence[];
+      }
+    | undefined;
   /** Captured admitted completion authority, retained by the durable queue. */
   harnessCompletion?: HarnessCompletionRecovery;
   expectedLifecycleRevision?: string;
@@ -234,6 +248,8 @@ export type ReplyPayloadMetadata = {
   /** The model failed after a committed recovery compaction in the same turn. */
   postCompactionModelFailure?: true;
   assistantMessageIndex?: number;
+  /** First index of this block's physical assistant message; each content item advances the index. */
+  assistantMessageStartIndex?: number;
   /** Answer to a preceding user input in the same run. */
   precedingInputAnswer?: true;
   /** Visible source represented by this block, excluding synthetic chunk wrappers. */
@@ -310,9 +326,9 @@ export type ReplyPayloadMetadata = {
   independentDeliveryIntentId?: string;
   /**
    * A message-tool reply to the active internal UI source. The final payload is
-   * still the live delivery vehicle; this mirror makes the reply durable for
-   * chat.history and page reloads without turning the internal UI into an
-   * outbound channel.
+   * the live delivery vehicle unless transcriptOwner identifies an already
+   * committed reply delivered through session.message/history. The mirror
+   * makes replies durable without turning the internal UI into an outbound channel.
    */
   sourceReplyTranscriptMirror?: {
     sessionKey: string;
@@ -335,6 +351,8 @@ export type ReplyPayloadMetadata = {
   toolErrorWarning?: { toolName: string };
   /** Warning synthesized from an observed tool error after the run produced assistant output. */
   nonTerminalToolErrorWarning?: boolean;
+  /** Host label or status about the run (truncation, restart, compaction); not the answer. */
+  hostNotice?: true;
   /** Unresolved mutating tool failure that makes a heartbeat run terminally failed. */
   heartbeatTerminalToolFailure?: {
     toolName: string;
@@ -349,7 +367,6 @@ const replyPayloadMetadata = resolveGlobalSingleton(
   () => new WeakMap<object, ReplyPayloadMetadata>(),
 );
 
-/** Adds internal metadata to a reply payload object. */
 export function setReplyPayloadMetadata<T extends object>(
   payload: T,
   metadata: ReplyPayloadMetadata,
@@ -359,9 +376,24 @@ export function setReplyPayloadMetadata<T extends object>(
   return payload;
 }
 
-/** Reads internal metadata attached to a reply payload object. */
 export function getReplyPayloadMetadata(payload: object): ReplyPayloadMetadata | undefined {
   return replyPayloadMetadata.get(payload);
+}
+
+/** Records attachment failures after the ones the payload already carries. */
+export function addReplyPayloadMediaFailures<T extends object>(
+  payload: T,
+  failures: readonly ReplyMediaFailure[] | undefined,
+): T {
+  if (!failures?.length) {
+    return payload;
+  }
+  return setReplyPayloadMetadata(payload, {
+    assistantMediaFailures: [
+      ...(getReplyPayloadMetadata(payload)?.assistantMediaFailures ?? []),
+      ...failures,
+    ],
+  });
 }
 
 /** Exact source occurrence represented by one emitted block reply. */
@@ -453,12 +485,10 @@ export function isReplyPayloadSessionWriterDeliveryAuthorized(
   );
 }
 
-/** Returns true when a payload is the synthesized warning for a non-terminal tool error. */
 export function isReplyPayloadNonTerminalToolErrorWarning(payload: object): boolean {
   return getReplyPayloadMetadata(payload)?.nonTerminalToolErrorWarning === true;
 }
 
-/** Copies internal payload metadata when cloning or transforming payload objects. */
 export function copyReplyPayloadMetadata<T extends object>(source: object, payload: T): T {
   const metadata = getReplyPayloadMetadata(source);
   return metadata ? setReplyPayloadMetadata(payload, metadata) : payload;
@@ -504,6 +534,15 @@ export function isReplyPayloadStatusNotice(
   payload: Pick<ReplyPayload, "isCompactionNotice" | "isFallbackNotice" | "isStatusNotice">,
 ): boolean {
   return Boolean(payload.isCompactionNotice || payload.isFallbackNotice || payload.isStatusNotice);
+}
+
+/** Host-generated errors, warnings, status lines and run labels; never the model's answer. */
+export function isHostNoticePayload(payload: ReplyPayload): boolean {
+  return (
+    payload.isError === true ||
+    isReplyPayloadStatusNotice(payload) ||
+    getReplyPayloadMetadata(payload)?.hostNotice === true
+  );
 }
 
 /** Classifies terminal vs. supplemental reply lanes, not content, sendability, or authority. */

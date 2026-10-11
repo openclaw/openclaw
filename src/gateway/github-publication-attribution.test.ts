@@ -136,8 +136,8 @@ describe("Gateway GitHub publication attribution", () => {
             .mockImplementation((params) =>
               execute({
                 ...params,
-                recordEffect: (effect, observed) => {
-                  params.recordEffect?.(effect, observed);
+                recordEffect: async (effect, observed) => {
+                  await params.recordEffect?.(effect, observed);
                   if (effect === boundary && observed === undefined) {
                     optOut();
                   }
@@ -154,8 +154,8 @@ describe("Gateway GitHub publication attribution", () => {
                 ...params,
                 execution: {
                   ...params.execution,
-                  recordEffect: (effect, observed) => {
-                    params.execution.recordEffect(effect, observed);
+                  recordEffect: async (effect, observed) => {
+                    await params.execution.recordEffect(effect, observed);
                     if (effect === boundary && observed === undefined) {
                       optOut();
                     }
@@ -337,7 +337,7 @@ describe("Gateway GitHub publication attribution", () => {
       createdAt: 1,
       lastActiveAt: 1,
     };
-    insertRegistryWorktree(process.env, worktree);
+    await insertRegistryWorktree(process.env, worktree);
     mocks.findWorktree.mockReturnValue(worktree);
     mocks.findWorktreeById.mockReturnValue(worktree);
     mocks.resolveRepository.mockResolvedValue({

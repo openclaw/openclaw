@@ -25,6 +25,7 @@ import { buildModelAliasIndex, resolveModelRefFromString } from "../agents/model
 import { resolveOpenAITextVerbosity } from "../agents/openai-text-verbosity.js";
 import { resolveSandboxRuntimeStatus } from "../agents/sandbox.js";
 import type { resolveSelectedAndActiveModel } from "../auto-reply/model-runtime.js";
+import { formatCompactionStatus } from "../auto-reply/reply/compaction-notice.js";
 import type {
   ElevatedLevel,
   ReasoningLevel,
@@ -42,7 +43,7 @@ import {
   type SessionEntry,
   type SessionScope,
 } from "../config/sessions.js";
-import { resolveSessionLifecycleTimestamps } from "../config/sessions/lifecycle.js";
+import { resolveTimestamp } from "../config/sessions/lifecycle-timestamps.js";
 import {
   hasSessionActiveAutoModelFallback,
   hasSessionAutoModelFallbackProvenance,
@@ -107,6 +108,7 @@ type StatusArgs = {
   parentSessionKey?: string;
   sessionScope?: SessionScope;
   sessionStorePath?: string;
+  sessionStartedAt?: number;
   groupActivation?: "mention" | "always";
   resolvedThink?: ThinkLevel;
   resolvedFast?: FastMode;
@@ -130,16 +132,7 @@ type StatusArgs = {
   now?: number;
 };
 
-type NormalizedAuthMode =
-  | "api-key"
-  | "oauth"
-  | "token"
-  | "aws-sdk"
-  | "native"
-  | "mixed"
-  | "unknown";
-
-function normalizeAuthMode(value?: string): NormalizedAuthMode | undefined {
+function normalizeAuthMode(value?: string) {
   const normalized = normalizeOptionalLowercaseString(value);
   if (!normalized) {
     return undefined;
@@ -505,13 +498,9 @@ function resolveChannelModelNote(params: {
   return "channel override";
 }
 
-export type StatusMessageParts = {
-  text: string;
-  /** Structured mirror of the text body for channels with native table rendering. */
-  presentation: MessagePresentation;
-};
+export type StatusMessageParts = ReturnType<typeof buildStatusMessageParts>;
 
-export function buildStatusMessageParts(args: StatusArgs): StatusMessageParts {
+export function buildStatusMessageParts(args: StatusArgs) {
   const now = args.now ?? Date.now();
   // Derive the live wall clock here so both /status and session_status expose
   // the same configured timezone without duplicating formatting at each caller.
@@ -550,9 +539,7 @@ export function buildStatusMessageParts(args: StatusArgs): StatusMessageParts {
     const fallbackMatchesRuntimeModel =
       initialFallbackState.active &&
       normalizeLowercaseStringOrEmpty(runtimeModelRaw) ===
-        normalizeLowercaseStringOrEmpty(
-          normalizeOptionalString(entry?.fallbackNotice?.activeModel ?? "") ?? "",
-        );
+        normalizeLowercaseStringOrEmpty(entry?.fallbackNotice?.activeModel);
     const runtimeMatchesSelectedModel =
       normalizeLowercaseStringOrEmpty(runtimeModelRaw) ===
       normalizeLowercaseStringOrEmpty(modelRefs.selected.label || "unknown");
@@ -753,12 +740,7 @@ export function buildStatusMessageParts(args: StatusArgs): StatusMessageParts {
   });
 
   const updatedAt = entry?.updatedAt;
-  const sessionStartedAt = resolveSessionLifecycleTimestamps({
-    entry,
-    agentId: args.agentId,
-    sessionKey: args.sessionKey,
-    storePath: args.sessionStorePath,
-  }).sessionStartedAt;
+  const sessionStartedAt = resolveTimestamp(args.sessionStartedAt ?? entry?.sessionStartedAt);
   const sessionDuration =
     typeof sessionStartedAt === "number"
       ? formatDurationCompact(now - sessionStartedAt, { spaced: true })
@@ -941,21 +923,16 @@ export function buildStatusMessageParts(args: StatusArgs): StatusMessageParts {
   const cacheValue = formatCacheHitValue(inputTokens, cacheRead, cacheWrite);
   const cacheLine = cacheValue ? `🗄️ Cache: ${cacheValue}` : null;
   const costLine = costLabel ? `💵 Cost: ${costLabel}` : null;
-  // Depth 0 is the boring default; the queue row keeps details only when the
-  // queue is non-empty or the session carries queue overrides.
+  // Show queue details only for a nonempty queue or explicit overrides.
   const queueHasSignal = (args.queue?.depth ?? 0) > 0 || args.queue?.showDetails === true;
-  const compactionCount = entry?.compactionCount ?? 0;
+  const compactionValue = formatCompactionStatus(entry);
   const contextPct =
     typeof totalTokens === "number" && totalTokens > 0 && contextTokens > 0
       ? Math.min(999, Math.round((totalTokens / contextTokens) * 100))
       : null;
+  const filled = Math.min(10, Math.max(0, Math.round((contextPct ?? 0) / 10)));
   const contextMeter =
-    contextPct !== null
-      ? (() => {
-          const filled = Math.min(10, Math.max(0, Math.round(contextPct / 10)));
-          return `${"▰".repeat(filled)}${"▱".repeat(10 - filled)} `;
-        })()
-      : "";
+    contextPct === null ? "" : `${"▰".repeat(filled)}${"▱".repeat(10 - filled)} `;
   const mediaLine = formatMediaUnderstandingLine(args.mediaDecisions);
   const voiceLine = formatVoiceModeLine(args.config, args.sessionEntry, args.agentId);
 
@@ -973,7 +950,7 @@ export function buildStatusMessageParts(args: StatusArgs): StatusMessageParts {
       costLine,
       cacheLine,
       `📚 Context: ${contextUsageLabel}`,
-      compactionCount > 0 ? `🧹 Compactions: ${compactionCount}` : null,
+      compactionValue ? `🧹 Compactions: ${compactionValue}` : null,
       mediaLine,
       args.usageLine,
     ],
@@ -1012,7 +989,7 @@ export function buildStatusMessageParts(args: StatusArgs): StatusMessageParts {
   pushStatusRow("💵 Cost", costLabel);
   pushStatusRow("🗄️ Cache", cacheValue);
   pushStatusRow("📚 Context", `${contextMeter}${contextUsageLabel}`);
-  pushStatusRow("🧹 Compactions", compactionCount > 0 ? compactionCount : null);
+  pushStatusRow("🧹 Compactions", compactionValue);
   pushStatusRow("🧵 Session", sessionValue);
   pushStatusRow("⚙️ Execution", execution);
   pushStatusRow("Runtime", agentRuntimeLabel);

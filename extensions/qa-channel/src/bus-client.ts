@@ -1,6 +1,7 @@
 import http from "node:http";
 import https from "node:https";
 import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
+import { captureEffectAuthority } from "openclaw/plugin-sdk/fetch-runtime";
 import { resolvePositiveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import {
@@ -96,6 +97,17 @@ async function postJson<T>(
   path: string,
   body: unknown,
   options: QaBusPostOptions = {},
+): Promise<T> {
+  return captureEffectAuthority().initiate(() =>
+    initiateQaBusPost<T>(baseUrl, path, body, options),
+  );
+}
+
+async function initiateQaBusPost<T>(
+  baseUrl: string,
+  path: string,
+  body: unknown,
+  options: QaBusPostOptions,
 ): Promise<T> {
   const url = buildQaBusUrl(baseUrl, path);
   const payload = JSON.stringify(body);

@@ -1,14 +1,9 @@
 import { calculateUsageCost, type ModelCostConfig } from "@openclaw/llm-core";
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { NormalizedUsage, UsageLike } from "../agents/usage.js";
 import { hasRecordedUsageCost, normalizeUsage } from "../agents/usage.js";
 import { countToolResults, extractToolCallNames } from "../utils/transcript-tools.js";
-import type {
-  CostBreakdown,
-  CostUsageTotals,
-  ParsedTranscriptEntry,
-} from "./session-cost-usage.types.js";
+import type { CostBreakdown, ParsedTranscriptEntry } from "./session-cost-usage.types.js";
 
 const extractCostBreakdown = (usageRaw?: UsageLike | null): CostBreakdown | undefined => {
   if (!usageRaw || typeof usageRaw !== "object") {
@@ -84,7 +79,6 @@ export const parseUsageCostTranscriptRecord = (
   const durationMs = asFiniteNumber(message.durationMs ?? entry.durationMs);
 
   return {
-    message,
     role,
     timestamp: parseTimestamp(entry),
     durationMs,
@@ -115,48 +109,8 @@ export const computeUsageTokenTotals = (usage: NormalizedUsage) => {
     output,
     cacheRead,
     cacheWrite,
-    componentTotal,
     totalTokens: usage.total ?? componentTotal,
   };
-};
-
-export const applyUsageTotals = (totals: CostUsageTotals, usage: NormalizedUsage): void => {
-  const usageTotals = computeUsageTokenTotals(usage);
-  totals.input += usageTotals.input;
-  totals.output += usageTotals.output;
-  totals.cacheRead += usageTotals.cacheRead;
-  totals.cacheWrite += usageTotals.cacheWrite;
-  totals.totalTokens += usageTotals.totalTokens;
-};
-
-export const applyCostBreakdown = (
-  totals: CostUsageTotals,
-  costBreakdown: CostBreakdown | undefined,
-): void => {
-  if (costBreakdown === undefined || costBreakdown.total === undefined) {
-    return;
-  }
-  totals.totalCost += costBreakdown.total;
-  totals.inputCost += costBreakdown.input ?? 0;
-  totals.outputCost += costBreakdown.output ?? 0;
-  totals.cacheReadCost += costBreakdown.cacheRead ?? 0;
-  totals.cacheWriteCost += costBreakdown.cacheWrite ?? 0;
-};
-
-export const applyCostTotal = (
-  totals: CostUsageTotals,
-  costTotal: number | undefined,
-  provider?: string,
-  model?: string,
-): void => {
-  if (costTotal === undefined) {
-    totals.missingCostEntries += 1;
-    const modelKey = `${normalizeOptionalString(provider) ?? "unknown"}/${normalizeOptionalString(model) ?? "unknown"}`;
-    totals.missingCostByModel ??= {};
-    totals.missingCostByModel[modelKey] = (totals.missingCostByModel[modelKey] ?? 0) + 1;
-    return;
-  }
-  totals.totalCost += costTotal;
 };
 
 export type UsageCostResolver = (params: {

@@ -46,7 +46,6 @@ describe("queued collector native admission", () => {
       const releasePublication = createDeferred();
       const cleanupWaiting = createDeferred();
       const order: string[] = [];
-      let deleteAttempts = 0;
       let nativeRunId: string | undefined;
       let stopping: Promise<void> | undefined;
       const agentResponse = vi.fn();
@@ -70,27 +69,28 @@ describe("queued collector native admission", () => {
             currentControl.preparePublication,
             "native publication preparation",
           );
-          const publish = expectDefined(params.onResult, "native cancellation publication");
-          return kill(
-            {
-              ...params,
-              onResult: (result) => {
-                publish(result);
+          const publishSnapshot = expectDefined(
+            preparation.publishSnapshot,
+            "native cancellation snapshot publication",
+          );
+          return kill(params, {
+            ...currentControl,
+            preparePublication: {
+              ...preparation,
+              publishSnapshot: (result) => {
+                publishSnapshot(result);
                 order.push("published");
               },
-            },
-            {
-              ...currentControl,
-              preparePublication: async (publishPrepared) => {
+              prepare: async (publishPrepared) => {
                 publicationEntered.resolve();
                 await releasePublication.promise;
                 if (publicationFailure) {
                   throw new Error("publication preparation failed");
                 }
-                return await preparation(publishPrepared);
+                return await preparation.prepare(publishPrepared);
               },
             },
-          );
+          });
         });
       const runtimeGate = vi
         .spyOn(preparedModelRuntime, "loadPublishedGatewayReplyDispatchRuntime")
@@ -139,11 +139,6 @@ describe("queued collector native admission", () => {
           } else if (method === "chat.abort") {
             await handleChatAbortRequest(request);
           } else if (method === "sessions.delete") {
-            deleteAttempts += 1;
-            if (!exact && !publicationFailure && deleteAttempts === 1) {
-              order.push("delete failed");
-              throw new Error("transient native cleanup failure");
-            }
             order.push("deleting");
             await expectDefined(
               sessionDeleteHandlers["sessions.delete"],
@@ -275,10 +270,6 @@ describe("queued collector native admission", () => {
         expect(context.chatAbortControllers.has(entry.runId)).toBe(false);
         expect(order[0]).toBe(publicationFailure ? "deleting" : "published");
         expect(order).toContain("deleted");
-        if (!exact && !publicationFailure) {
-          expect(order.indexOf("delete failed")).toBe(1);
-          expect(order.indexOf("deleted")).toBeGreaterThan(order.indexOf("delete failed"));
-        }
         expect(loadGatewaySessionEntryReadOnly(entry.childSessionKey).entry).toBeUndefined();
       } finally {
         releasePublication.resolve();

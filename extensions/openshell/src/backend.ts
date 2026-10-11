@@ -70,21 +70,6 @@ type OpenShellWorkspaceLease = {
 const openShellWorkspaceOperations = new KeyedAsyncQueue();
 let openShellDetachedCreateSupport: { key: string; promise: Promise<boolean> } | undefined;
 const MATERIALIZED_SKILLS_REMOTE_PARTS = [".openclaw", "sandbox-skills"] as const;
-function buildOpenShellDirectoryUploadArgs(params: {
-  sandboxName: string;
-  localPath: string;
-  remotePath: string;
-}): string[] {
-  return [
-    "sandbox",
-    "upload",
-    "--no-git-ignore",
-    params.sandboxName,
-    params.localPath,
-    `${normalizeRemotePath(params.remotePath)}/`,
-  ];
-}
-
 // Prints "0" when every managed root is missing or empty, "1" otherwise. Any
 // content in a managed root means the remote workspace was already seeded (or
 // holds operator data) and re-seeding would destroy remote-canonical state.
@@ -626,9 +611,12 @@ class OpenShellSandboxBackendImpl {
           : path.posix.dirname(target.relativePath),
       ],
     });
-    const result = await runOpenShellCli({
-      context: this.params.execContext,
-      args: [
+    await this.uploadFileToRemote(localPath, remotePath);
+  }
+
+  private async uploadFileToRemote(localPath: string, remotePath: string): Promise<void> {
+    await this.runCli(
+      [
         "sandbox",
         "upload",
         "--no-git-ignore",
@@ -636,11 +624,21 @@ class OpenShellSandboxBackendImpl {
         localPath,
         remotePath,
       ],
+      "openshell sandbox upload failed",
+    );
+  }
+
+  private async runCli(args: string[], failureMessage?: string, timeoutMs?: number) {
+    const result = await runOpenShellCli({
+      context: this.params.execContext,
+      args,
       cwd: this.params.createParams.workspaceDir,
+      ...(timeoutMs === undefined ? {} : { timeoutMs }),
     });
-    if (result.code !== 0) {
-      throw new Error(result.stderr.trim() || "openshell sandbox upload failed");
+    if (failureMessage && result.code !== 0) {
+      throw new Error(result.stderr.trim() || failureMessage);
     }
+    return result;
   }
 
   private async runPinnedRemotePathMutation(params: {
@@ -710,11 +708,7 @@ class OpenShellSandboxBackendImpl {
   }
 
   private async ensureSandboxExistsInner(): Promise<void> {
-    const getResult = await runOpenShellCli({
-      context: this.params.execContext,
-      args: ["sandbox", "get", this.params.execContext.sandboxName],
-      cwd: this.params.createParams.workspaceDir,
-    });
+    const getResult = await this.runCli(["sandbox", "get", this.params.execContext.sandboxName]);
     if (getResult.code === 0) {
       if (this.params.legacyRuntimeAdopted) {
         const phase = await this.resolveLegacyRuntimePhase();
@@ -764,15 +758,11 @@ class OpenShellSandboxBackendImpl {
       ...this.params.execContext.config.providers.flatMap((provider) => ["--provider", provider]),
       ...(detachedCreateSupported ? ["--detach", "--", "sleep", "infinity"] : ["--", "true"]),
     ];
-    const createResult = await runOpenShellCli({
-      context: this.params.execContext,
-      args: createArgs,
-      cwd: this.params.createParams.workspaceDir,
-      timeoutMs: Math.max(this.params.execContext.config.timeoutMs, 300_000),
-    });
-    if (createResult.code !== 0) {
-      throw new Error(createResult.stderr.trim() || "openshell sandbox create failed");
-    }
+    await this.runCli(
+      createArgs,
+      "openshell sandbox create failed",
+      Math.max(this.params.execContext.config.timeoutMs, 300_000),
+    );
     this.remoteSeedPending = true;
   }
 
@@ -790,16 +780,10 @@ class OpenShellSandboxBackendImpl {
         : undefined;
     if (!support) {
       support = (async () => {
-        const result = await runOpenShellCli({
-          context: this.params.execContext,
-          args: ["sandbox", "create", "--help"],
-          cwd: this.params.createParams.workspaceDir,
-        });
-        if (result.code !== 0) {
-          throw new Error(
-            result.stderr.trim() || "openshell sandbox create capability check failed",
-          );
-        }
+        const result = await this.runCli(
+          ["sandbox", "create", "--help"],
+          "openshell sandbox create capability check failed",
+        );
         // Older supported CLIs run and await trailing commands; newer ones require a live main.
         return /^\s*--detach(?:\s|$)/mu.test(result.stdout);
       })();
@@ -818,20 +802,16 @@ class OpenShellSandboxBackendImpl {
   private async resolveLegacyRuntimePhase(): Promise<string | undefined> {
     const pageSize = 100;
     for (let offset = 0; ; offset += pageSize) {
-      const listResult = await runOpenShellCli({
-        context: this.params.execContext,
-        args: [
-          "sandbox",
-          "list",
-          "--limit",
-          String(pageSize),
-          "--offset",
-          String(offset),
-          "--output",
-          "json",
-        ],
-        cwd: this.params.createParams.workspaceDir,
-      });
+      const listResult = await this.runCli([
+        "sandbox",
+        "list",
+        "--limit",
+        String(pageSize),
+        "--offset",
+        String(offset),
+        "--output",
+        "json",
+      ]);
       if (listResult.code !== 0) {
         throw this.buildLegacyRuntimeUnavailableError(listResult.stderr.trim());
       }
@@ -946,14 +926,10 @@ class OpenShellSandboxBackendImpl {
       await withTempWorkspace(
         { rootDir: resolveOpenShellTmpRoot(), prefix: "openclaw-openshell-sync-" },
         async ({ dir: tmpDir }) => {
-          const result = await runOpenShellCli({
-            context: this.params.execContext,
-            args: ["sandbox", "download", this.params.execContext.sandboxName, root.remote, tmpDir],
-            cwd: this.params.createParams.workspaceDir,
-          });
-          if (result.code !== 0) {
-            throw new Error(result.stderr.trim() || "openshell sandbox download failed");
-          }
+          await this.runCli(
+            ["sandbox", "download", this.params.execContext.sandboxName, root.remote, tmpDir],
+            "openshell sandbox download failed",
+          );
           const preservedShadows: PreservedLocalShadow[] = [];
           const failures: unknown[] = [];
           try {
@@ -1051,18 +1027,10 @@ class OpenShellSandboxBackendImpl {
           excludeDirs: DEFAULT_OPEN_SHELL_MIRROR_EXCLUDE_DIRS,
         });
         for (const entry of (await fs.readdir(stagedRoot)).toSorted()) {
-          const result = await runOpenShellCli({
-            context: this.params.execContext,
-            args: buildOpenShellDirectoryUploadArgs({
-              sandboxName: this.params.execContext.sandboxName,
-              localPath: path.join(stagedRoot, entry),
-              remotePath,
-            }),
-            cwd: this.params.createParams.workspaceDir,
-          });
-          if (result.code !== 0) {
-            throw new Error(result.stderr.trim() || "openshell sandbox upload failed");
-          }
+          await this.uploadFileToRemote(
+            path.join(stagedRoot, entry),
+            `${normalizeRemotePath(remotePath)}/`,
+          );
         }
       },
     );

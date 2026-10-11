@@ -1,35 +1,21 @@
 import assert from "node:assert/strict";
-import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import {
   readJson as readRecoveryJson,
   writeJson as writeRecoveryJson,
 } from "../fixtures/common.mjs";
+import { hashFile } from "./fixture-files.mjs";
 
 export function recoveryFileIdentity(file) {
   const stat = fs.lstatSync(file, { bigint: true });
   assert(stat.isFile(), `expected regular recovery file: ${file}`);
-  const digest = createHash("sha256");
-  const buffer = Buffer.alloc(64 * 1024);
-  const fd = fs.openSync(file, "r");
-  try {
-    for (;;) {
-      const bytes = fs.readSync(fd, buffer, 0, buffer.length, null);
-      if (!bytes) {
-        break;
-      }
-      digest.update(buffer.subarray(0, bytes));
-    }
-  } finally {
-    fs.closeSync(fd);
-  }
   return {
     dev: String(stat.dev),
     ino: String(stat.ino),
     size: Number(stat.size),
     mtimeNs: String(stat.mtimeNs),
-    sha256: digest.digest("hex"),
+    sha256: hashFile(file, 64 * 1024),
   };
 }
 

@@ -110,11 +110,18 @@ export function instrumentPluginInstanceApi(
             assertPluginApiRegistrationCaller(instance);
             return instance.run(() =>
               Reflect.apply(value, target, [
-                instance.wrap((context: Parameters<OpenClawPluginCliRegistrar>[0]) => {
+                instance.wrap(async (context: Parameters<OpenClawPluginCliRegistrar>[0]) => {
+                  const [{ withPluginCliServiceScheduler }, { toPluginCommandFailure }] =
+                    await Promise.all([
+                      import("./cli-service-scheduler.js"),
+                      import("../cli/failure-output.js"),
+                    ]);
                   // Commander retains callbacks beyond this registrar's invocation.
                   // Bind at the typed host boundary, without proxying its native objects.
-                  bindPluginCliProgram(context.program);
-                  return registrar(context);
+                  return withPluginCliServiceScheduler(instance, () => {
+                    bindPluginCliProgram(context.program, toPluginCommandFailure);
+                    return registrar(context);
+                  });
                 }),
                 ...options.map((option) => instance.wrap(option)),
               ]),

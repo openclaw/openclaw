@@ -3,10 +3,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ApplicationContext } from "../../app/context.ts";
 import {
   createTerminalController,
+  createTestTerminalPanel,
   defineTestTerminalPanelElement,
   terminalOpenResult,
 } from "../../components/terminal/terminal-panel.test-support.ts";
-import type { OpenClawTerminalPanel } from "../../components/terminal/terminal-panel.ts";
 import {
   createDraftFixture,
   registerTextPayload,
@@ -36,7 +36,7 @@ function mountNativeTerminal(context: ApplicationContext) {
     },
     forceReconnect: vi.fn(),
   });
-  const panel = document.createElement(nativeTerminalElement) as OpenClawTerminalPanel;
+  const panel = createTestTerminalPanel(nativeTerminalElement);
   panel.client = client;
   panel.available = true;
   panel.page = true;

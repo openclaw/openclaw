@@ -42,13 +42,8 @@ function truncateForObservation(text: string | undefined, maxChars: number): str
 }
 
 function boundObservationInput(text: string | undefined): string | undefined {
-  const trimmed = text?.trim();
-  if (!trimmed) {
-    return undefined;
-  }
-  return trimmed.length > MAX_OBSERVATION_INPUT_CHARS
-    ? truncateUtf16Safe(trimmed, MAX_OBSERVATION_INPUT_CHARS)
-    : trimmed;
+  const trimmed = normalizeOptionalString(text);
+  return trimmed ? truncateUtf16Safe(trimmed, MAX_OBSERVATION_INPUT_CHARS) : undefined;
 }
 
 function replaceRequestIdPreview(
@@ -95,9 +90,7 @@ function buildObservationFingerprint(params: {
   message?: string;
 }): string | null {
   const boundedMessage =
-    params.message && params.message.length > MAX_FINGERPRINT_MESSAGE_CHARS
-      ? truncateUtf16Safe(params.message, MAX_FINGERPRINT_MESSAGE_CHARS)
-      : params.message;
+    params.message && truncateUtf16Safe(params.message, MAX_FINGERPRINT_MESSAGE_CHARS);
   const structured =
     params.httpCode || params.type || boundedMessage
       ? stableStringify({

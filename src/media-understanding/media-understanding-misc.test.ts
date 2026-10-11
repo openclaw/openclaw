@@ -11,15 +11,9 @@ import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { withFetchPreconnect } from "../test-utils/fetch-mock.js";
 import { mockCall } from "../test-utils/mock-call-assertions.js";
 import { MediaAttachmentCache } from "./attachments.js";
-import { normalizeMediaUnderstandingChatType, resolveMediaUnderstandingScope } from "./scope.js";
+import { resolveMediaUnderstandingScope } from "./scope.js";
 
 describe("media understanding scope", () => {
-  it("normalizes chatType", () => {
-    expect(normalizeMediaUnderstandingChatType("channel")).toBe("channel");
-    expect(normalizeMediaUnderstandingChatType("dm")).toBe("direct");
-    expect(normalizeMediaUnderstandingChatType("room")).toBeUndefined();
-  });
-
   it("matches channel chatType explicitly", () => {
     const scope = {
       rules: [{ action: "deny", match: { chatType: "channel" } }],

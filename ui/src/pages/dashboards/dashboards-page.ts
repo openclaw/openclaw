@@ -6,11 +6,8 @@ import {
   DASHBOARD_DOCUMENT_ELEMENT,
   ensureCustomElementDefined,
 } from "../../app/lazy-custom-element.ts";
-import { completePanelRefresh, failPanelRefresh } from "../../components/panel-refresh-status.ts";
 import { formatUiError } from "../../lib/format-error.ts";
-import { fetchPagedSessionRows } from "../../lib/sessions/paged-session-rows.ts";
 import { dashboardSessionListQuery } from "../../lib/sessions/session-requests.ts";
-import { GatewayPageController } from "../../lit/gateway-page-controller.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { dashboardsRouteData } from "./route.ts";
@@ -37,10 +34,6 @@ class DashboardsPage extends OpenClawLightDomElement {
   private observedScopeId?: string | null;
   private unsubscribeList?: () => void;
   private data?: DashboardsRouteData;
-  private listGeneration = 0;
-  private readonly gateway = new GatewayPageController(this, {
-    getGateway: () => this.context?.gateway,
-  });
   private readonly subscriptions = new SubscriptionsController(this).effect(
     () => this.context?.agentSelection,
     (agentSelection) => {
@@ -62,7 +55,6 @@ class DashboardsPage extends OpenClawLightDomElement {
   }
 
   override disconnectedCallback() {
-    this.listGeneration += 1;
     this.unsubscribeList?.();
     this.unsubscribeList = undefined;
     this.observedSessions = undefined;
@@ -103,67 +95,20 @@ class DashboardsPage extends OpenClawLightDomElement {
       }
       this.data = dashboardsRouteData(context, snapshot);
       this.requestUpdate();
-      this.completeList(context, sessions, scopeId, query, snapshot);
+      if (snapshot.result?.hasMore && !snapshot.loading && !snapshot.error) {
+        void sessions.refreshList({
+          ...query,
+          append: true,
+          offset: snapshot.result.nextOffset ?? snapshot.result.sessions.length,
+        });
+      }
     };
     this.unsubscribeList = sessions.subscribeList(query, apply);
     const snapshot = sessions.listSnapshot(query);
     apply(snapshot);
     if (!snapshot.result && !snapshot.loading && context.gateway.snapshot.phase === "connected") {
-      void sessions.refreshList({ ...query, force: true });
+      void sessions.refreshList(query);
     }
-  }
-
-  private completeList(
-    context: ApplicationContext,
-    sessions: ApplicationContext["sessions"],
-    scopeId: string | null,
-    query: ReturnType<typeof dashboardSessionListQuery>,
-    snapshot: ReturnType<ApplicationContext["sessions"]["listSnapshot"]>,
-  ): void {
-    const initialResult = snapshot.result;
-    const generation = ++this.listGeneration;
-    const gatewayScope = this.gateway.capture();
-    if (!initialResult?.hasMore || snapshot.loading || snapshot.error || !gatewayScope) {
-      return;
-    }
-    const isCurrent = () =>
-      this.context === context &&
-      this.observedSessions === sessions &&
-      this.observedScopeId === scopeId &&
-      this.listGeneration === generation &&
-      this.gateway.isCurrent(gatewayScope);
-    void fetchPagedSessionRows({
-      initialResult,
-      list: (offset) => sessions.list({ ...query, offset }),
-      isCurrent,
-      missingResultError: "dashboard enumeration returned no result",
-      stalledPaginationError: "dashboard enumeration did not advance",
-      incompletePaginationError: "dashboard enumeration was incomplete",
-    })
-      .then((rows) => {
-        if (!rows || !isCurrent()) {
-          return;
-        }
-        this.data = dashboardsRouteData(context, {
-          ...snapshot,
-          result: {
-            ...initialResult,
-            count: rows.length,
-            hasMore: false,
-            nextOffset: null,
-            sessions: rows,
-          },
-        });
-        this.requestUpdate();
-      })
-      .catch((error: unknown) => {
-        if (!isCurrent()) {
-          return;
-        }
-        const status = failPanelRefresh(completePanelRefresh(), error, context.gateway.snapshot);
-        this.data = dashboardsRouteData(context, { ...snapshot, error: status.error });
-        this.requestUpdate();
-      });
   }
 
   override render() {
@@ -171,14 +116,8 @@ class DashboardsPage extends OpenClawLightDomElement {
       this.data,
       this.filters,
       {
-        onQueryChange: (query) => {
-          this.filters = { ...this.filters, query };
-        },
-        onOwnerChange: (ownerId) => {
-          this.filters = { ...this.filters, ownerId };
-        },
-        onSortChange: (sort) => {
-          this.filters = { ...this.filters, sort };
+        onFilterChange: (filter) => {
+          this.filters = { ...this.filters, ...filter };
         },
         onNavigate: this.context?.navigate,
       },

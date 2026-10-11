@@ -8,7 +8,6 @@ import {
 import { finalizeInboundContext } from "openclaw/plugin-sdk/reply-runtime";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 import { getSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
-import { isPrivateNetworkOptInEnabled } from "openclaw/plugin-sdk/ssrf-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { ResolvedMattermostAccount } from "../mattermost/accounts.js";
 import { getMattermostRuntime } from "../runtime.js";
@@ -49,7 +48,6 @@ import {
   resolveCommandText,
   type MattermostRegisteredCommand,
   type MattermostCommandResponse,
-  type MattermostSlashCommandResponse,
   type MattermostSlashCommandPayload,
 } from "./slash-commands.js";
 
@@ -96,14 +94,32 @@ const SECRET_LOG_KEYS = new Set([
   "token",
 ]);
 
-export function sendSlashCommandResponse(
-  res: ServerResponse,
-  status: number,
-  body: MattermostSlashCommandResponse,
-) {
+export function sendSlashCommandResponse(res: ServerResponse, status: number, text: string) {
   res.statusCode = status;
   res.setHeader("Content-Type", "application/json; charset=utf-8");
-  res.end(JSON.stringify(body));
+  res.end(JSON.stringify({ response_type: "ephemeral", text }));
+}
+
+export async function readSlashCommandBody(
+  req: IncomingMessage,
+  res: ServerResponse,
+  timeoutMs = BODY_READ_TIMEOUT_MS,
+): Promise<string | undefined> {
+  try {
+    return await readRequestBodyWithLimit(req, {
+      maxBytes: MAX_BODY_BYTES,
+      timeoutMs,
+      // Let rejection reach Mattermost before closing the connection.
+      destroyOnLimit: false,
+    });
+  } catch (error) {
+    if (isRequestBodyLimitError(error, "REQUEST_BODY_TIMEOUT")) {
+      await sendHttpRequestRejection(req, res, 408, "Request body timeout");
+    } else {
+      await sendHttpRequestRejection(req, res, 413, "Payload Too Large");
+    }
+    return undefined;
+  }
 }
 
 function findRegisteredCommandForPayload(params: {
@@ -400,12 +416,9 @@ async function validateMattermostSlashCommandToken(params: {
   return true;
 }
 
-type SlashInvocationAuth = Omit<
-  Awaited<ReturnType<typeof authorizeMattermostCommandInvocation>>,
-  "denyReason"
-> & {
-  denyResponse?: MattermostSlashCommandResponse;
-};
+type SlashInvocationAuth =
+  | Extract<Awaited<ReturnType<typeof authorizeMattermostCommandInvocation>>, { ok: true }>
+  | { ok: false; denyText: string };
 
 async function authorizeSlashInvocation(params: {
   account: ResolvedMattermostAccount;
@@ -432,17 +445,7 @@ async function authorizeSlashInvocation(params: {
   if (!channelInfo) {
     return {
       ok: false,
-      denyResponse: {
-        response_type: "ephemeral",
-        text: "Temporary error: unable to determine channel type. Please try again.",
-      },
-      commandAuthorized: false,
-      channelInfo: null,
-      kind: "channel",
-      chatType: "channel",
-      channelName: "",
-      channelDisplay: "",
-      roomLabel: `#${channelId}`,
+      denyText: "Temporary error: unable to determine channel type. Please try again.",
     };
   }
 
@@ -480,15 +483,12 @@ async function authorizeSlashInvocation(params: {
         meta: { name: senderName },
       });
       return {
-        ...decision,
-        denyResponse: {
-          response_type: "ephemeral",
-          text: core.channel.pairing.buildPairingReply({
-            channel: "mattermost",
-            idLine: `Your Mattermost user id: ${senderId}`,
-            code,
-          }),
-        },
+        ok: false,
+        denyText: core.channel.pairing.buildPairingReply({
+          channel: "mattermost",
+          idLine: `Your Mattermost user id: ${senderId}`,
+          code,
+        }),
       };
     }
 
@@ -502,19 +502,10 @@ async function authorizeSlashInvocation(params: {
             : decision.denyReason === "channel-no-allowlist"
               ? "Slash commands are not configured for this channel (no allowlist)."
               : "Unauthorized.";
-    return {
-      ...decision,
-      denyResponse: {
-        response_type: "ephemeral",
-        text: denyText,
-      },
-    };
+    return { ok: false, denyText };
   }
 
-  return {
-    ...decision,
-    denyResponse: undefined,
-  };
+  return decision;
 }
 
 export function createSlashCommandHttpHandler(params: SlashHttpHandlerParams) {
@@ -533,32 +524,15 @@ export function createSlashCommandHttpHandler(params: SlashHttpHandlerParams) {
       return;
     }
 
-    let body: string;
-    try {
-      body =
-        bufferedBody ??
-        (await readRequestBodyWithLimit(req, {
-          maxBytes: MAX_BODY_BYTES,
-          timeoutMs: bodyTimeoutMs ?? BODY_READ_TIMEOUT_MS,
-          // Let rejection reach Mattermost before closing the connection.
-          destroyOnLimit: false,
-        }));
-    } catch (error) {
-      if (isRequestBodyLimitError(error, "REQUEST_BODY_TIMEOUT")) {
-        await sendHttpRequestRejection(req, res, 408, "Request body timeout");
-        return;
-      }
-      await sendHttpRequestRejection(req, res, 413, "Payload Too Large");
+    const body = bufferedBody ?? (await readSlashCommandBody(req, res, bodyTimeoutMs));
+    if (body === undefined) {
       return;
     }
 
     const contentType = req.headers["content-type"] ?? "";
     const payload = parseSlashCommandPayload(body, contentType);
     if (!payload) {
-      sendSlashCommandResponse(res, 400, {
-        response_type: "ephemeral",
-        text: "Invalid slash command payload.",
-      });
+      sendSlashCommandResponse(res, 400, "Invalid slash command payload.");
       return;
     }
 
@@ -572,17 +546,14 @@ export function createSlashCommandHttpHandler(params: SlashHttpHandlerParams) {
     // which would otherwise let an attacker poison the per-command failure
     // cache and DoS legitimate invocations of command B.
     if (!registeredCommand || !safeEqualSecret(payload.token, registeredCommand.token)) {
-      sendSlashCommandResponse(res, 401, {
-        response_type: "ephemeral",
-        text: "Unauthorized: invalid command token.",
-      });
+      sendSlashCommandResponse(res, 401, "Unauthorized: invalid command token.");
       return;
     }
 
     const client = createMattermostClient({
       baseUrl: account.baseUrl ?? "",
       botToken: account.botToken ?? "",
-      allowPrivateNetwork: isPrivateNetworkOptInEnabled(account.config),
+      allowPrivateNetwork: account.config.network?.dangerouslyAllowPrivateNetwork === true,
     });
 
     const tokenIsCurrent = await validateMattermostSlashCommandToken({
@@ -593,10 +564,7 @@ export function createSlashCommandHttpHandler(params: SlashHttpHandlerParams) {
       log,
     });
     if (!tokenIsCurrent) {
-      sendSlashCommandResponse(res, 401, {
-        response_type: "ephemeral",
-        text: "Unauthorized: invalid command token.",
-      });
+      sendSlashCommandResponse(res, 401, "Unauthorized: invalid command token.");
       return;
     }
 
@@ -620,11 +588,7 @@ export function createSlashCommandHttpHandler(params: SlashHttpHandlerParams) {
     });
 
     if (!auth.ok) {
-      sendSlashCommandResponse(
-        res,
-        200,
-        auth.denyResponse ?? { response_type: "ephemeral", text: "Unauthorized." },
-      );
+      sendSlashCommandResponse(res, 200, auth.denyText);
       return;
     }
 
@@ -633,10 +597,7 @@ export function createSlashCommandHttpHandler(params: SlashHttpHandlerParams) {
     );
 
     // Acknowledge immediately — we'll send the actual reply asynchronously
-    sendSlashCommandResponse(res, 200, {
-      response_type: "ephemeral",
-      text: "Processing...",
-    });
+    sendSlashCommandResponse(res, 200, "Processing...");
 
     try {
       await handleSlashCommandAsync({

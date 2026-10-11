@@ -128,9 +128,29 @@ export function recordRuntimeAuthProfileStorePersistedMutation(
   }
 }
 
-function combineMutationTokens(
-  tokens: RuntimeAuthProfileStoreMutationToken[],
+function readMutationTokens(
+  requestedKey: string,
+  options: { includeMain?: boolean; owner?: RuntimeAuthProfileStoreMutationOwner } | undefined,
+  read: (record: PersistedMutationRecord) => RuntimeAuthProfileStoreMutationToken,
 ): RuntimeAuthProfileStoreMutationToken {
+  if (options?.includeMain && options.owner?.kind === "unresolved") {
+    return { revision: 0, known: false };
+  }
+  const mainKey = !options?.includeMain
+    ? requestedKey
+    : options.owner?.kind === "resolved"
+      ? options.owner.sharedDatabasePath
+      : resolveRuntimeStoreKey(undefined);
+  const keys =
+    requestedKey === mainKey || options?.includeMain !== true
+      ? [requestedKey]
+      : [requestedKey, mainKey];
+  const tokens = keys.map((key) => {
+    const record = persistedMutationRecords.get(key);
+    return record
+      ? read(record)
+      : { revision: evictedOwnerMutationFloor, known: evictedOwnerMutationFloor === 0 };
+  });
   return {
     revision: Math.max(0, ...tokens.map((token) => token.revision)),
     known: tokens.every((token) => token.known),
@@ -150,30 +170,12 @@ export function getRuntimeAuthProfileStoreCredentialMutationToken(
       ? { revision: record.credentialRevision, known: record.credentialRevisionKnown }
       : { revision: evictedOwnerMutationFloor, known: evictedOwnerMutationFloor === 0 };
   }
-  if (options?.includeMain && options.owner?.kind === "unresolved") {
-    return { revision: 0, known: false };
-  }
-  const mainKey = !options?.includeMain
-    ? requestedKey
-    : options.owner?.kind === "resolved"
-      ? options.owner.sharedDatabasePath
-      : resolveRuntimeStoreKey(undefined);
-  const keys =
-    requestedKey === mainKey || options?.includeMain !== true
-      ? [requestedKey]
-      : [requestedKey, mainKey];
-  return combineMutationTokens(
-    keys.map((key) => {
-      const record = persistedMutationRecords.get(key);
-      if (!record) {
-        return { revision: evictedOwnerMutationFloor, known: evictedOwnerMutationFloor === 0 };
-      }
-      const revision = record.profileRevisions.get(profileId);
-      return revision === undefined
-        ? { revision: record.mutationFloor, known: record.mutationFloor === 0 }
-        : { revision, known: true };
-    }),
-  );
+  return readMutationTokens(requestedKey, options, (record) => {
+    const revision = record.profileRevisions.get(profileId);
+    return revision === undefined
+      ? { revision: record.mutationFloor, known: record.mutationFloor === 0 }
+      : { revision, known: true };
+  });
 }
 
 /** Persisted token for profile-id additions and removals in one owner store. */
@@ -194,26 +196,10 @@ export function getRuntimeAuthProfileStoreStateMutationToken(
   options?: { includeMain?: boolean; owner?: RuntimeAuthProfileStoreMutationOwner },
 ): RuntimeAuthProfileStoreMutationToken {
   const requestedKey = options?.owner?.databasePath ?? resolveRuntimeStoreKey(agentDir);
-  if (options?.includeMain && options.owner?.kind === "unresolved") {
-    return { revision: 0, known: false };
-  }
-  const mainKey = !options?.includeMain
-    ? requestedKey
-    : options.owner?.kind === "resolved"
-      ? options.owner.sharedDatabasePath
-      : resolveRuntimeStoreKey(undefined);
-  const keys =
-    requestedKey === mainKey || options?.includeMain !== true
-      ? [requestedKey]
-      : [requestedKey, mainKey];
-  return combineMutationTokens(
-    keys.map((key) => {
-      const record = persistedMutationRecords.get(key);
-      return record
-        ? { revision: record.stateRevision, known: record.stateRevisionKnown }
-        : { revision: evictedOwnerMutationFloor, known: evictedOwnerMutationFloor === 0 };
-    }),
-  );
+  return readMutationTokens(requestedKey, options, (record) => ({
+    revision: record.stateRevision,
+    known: record.stateRevisionKnown,
+  }));
 }
 
 const testing = {

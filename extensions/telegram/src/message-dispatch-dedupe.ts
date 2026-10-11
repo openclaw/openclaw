@@ -20,11 +20,6 @@ const TELEGRAM_MESSAGE_DISPATCH_DEDUPE_STATE_PLUGIN_ID = "telegram-message-dispa
 const TELEGRAM_MESSAGE_DISPATCH_DEDUPE_MEMORY_MAX_ENTRIES = 50_000;
 const TELEGRAM_MESSAGE_DISPATCH_DEDUPE_STATE_MAX_ENTRIES = 50_000;
 
-type TelegramMessageDispatchClaim =
-  | { kind: "claimed"; handle: ChannelReplayClaimHandle }
-  | { kind: "duplicate" }
-  | { kind: "invalid" };
-
 type TelegramMessageDispatchReplayForgetFailure = {
   key: string;
   error?: unknown;
@@ -102,7 +97,7 @@ export async function claimTelegramMessageDispatchReplay(params: {
   accountId: string;
   botUserId: number;
   msg: Message;
-}): Promise<TelegramMessageDispatchClaim> {
+}) {
   return await runClaimableDedupeClaimLoop(
     () =>
       params.guard.claim({

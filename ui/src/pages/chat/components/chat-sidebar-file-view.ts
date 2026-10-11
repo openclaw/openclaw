@@ -1,5 +1,5 @@
 import { html, nothing, type TemplateResult } from "lit";
-import "../../../components/mcp-app-catalog.ts";
+import "../../../components/mcp-app-catalog.tsx";
 import { keyed } from "lit/directives/keyed.js";
 import { localEditorFilePath } from "../../../app/native-editor-locality.runtime.ts";
 import { icons } from "../../../components/icons.ts";
@@ -139,6 +139,12 @@ function renderFileCopyButton(action: FileCopyAction, controls?: FileViewControl
   });
 }
 
+function renderFileTextAction(label: string, onClick: () => void, disabled = false) {
+  return html`<button class="btn btn--sm" type="button" ?disabled=${disabled} @click=${onClick}>
+    ${label}
+  </button>`;
+}
+
 export function renderSidebarFile(
   content: FileSidebarContent,
   onViewRawText: () => void,
@@ -194,22 +200,12 @@ export function renderSidebarFile(
                   ${
                     controls.editing
                       ? html`
-                          <button
-                            class="btn btn--sm"
-                            type="button"
-                            ?disabled=${!controls.dirty || controls.saving}
-                            @click=${controls.onSave}
-                          >
-                            ${controls.saving ? t("common.saving") : t("common.save")}
-                          </button>
-                          <button
-                            class="btn btn--sm"
-                            type="button"
-                            ?disabled=${controls.saving}
-                            @click=${controls.onDiscard}
-                          >
-                            ${t("chat.detailPanel.discard")}
-                          </button>
+                          ${renderFileTextAction(
+                            t(controls.saving ? "common.saving" : "common.save"),
+                            controls.onSave,
+                            !controls.dirty || controls.saving,
+                          )}
+                          ${renderFileTextAction(t("chat.detailPanel.discard"), controls.onDiscard, controls.saving)}
                         `
                       : html`
                           ${
@@ -311,22 +307,8 @@ export function renderSidebarFile(
                   controls.saveNotice.kind === "conflict"
                     ? html`
                         <div class="file-view__save-notice-actions">
-                          <button
-                            class="btn btn--sm"
-                            type="button"
-                            ?disabled=${controls.saving}
-                            @click=${controls.onReload}
-                          >
-                            ${t("common.reload")}
-                          </button>
-                          <button
-                            class="btn btn--sm"
-                            type="button"
-                            ?disabled=${controls.saving}
-                            @click=${controls.onOverwrite}
-                          >
-                            ${t("chat.detailPanel.overwrite")}
-                          </button>
+                          ${renderFileTextAction(t("common.reload"), controls.onReload, controls.saving)}
+                          ${renderFileTextAction(t("chat.detailPanel.overwrite"), controls.onOverwrite, controls.saving)}
                         </div>
                       `
                     : nothing
@@ -356,9 +338,7 @@ export function renderSidebarFile(
           ? nothing
           : html`
               <div class="sidebar-file-view__footer">
-                <button @click=${onViewRawText} class="btn btn--sm" type="button">
-                  ${t("chat.detailPanel.viewRawText")}
-                </button>
+                ${renderFileTextAction(t("chat.detailPanel.viewRawText"), onViewRawText)}
               </div>
             `
       }

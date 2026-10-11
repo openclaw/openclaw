@@ -24,6 +24,8 @@ const isolatedCompletionMocks = vi.hoisted(() => ({
   resolveAgentHarnessSelectionDecision:
     vi.fn<(params: AgentHarnessSelectionDecisionParams) => AgentHarnessSelectionDecision>(),
   ensureAuthProfileStore: vi.fn(),
+  cliBackendAcceptsAuthProfileForwarding: vi.fn<() => boolean>(() => false),
+  resolveCliExecutionAuthProfileId: vi.fn<() => string | undefined>(() => undefined),
   hasAvailableAuthForProvider: vi.fn(async () => false),
   isCliRuntimeAliasForProvider: vi.fn<(params: { runtime?: string; provider?: string }) => boolean>(
     () => false,
@@ -54,6 +56,12 @@ vi.mock("./agent-scope.js", async () => ({
 vi.mock("./cli-backends.js", () => ({
   resolveCliBackendConfig: isolatedCompletionMocks.resolveCliBackendConfig,
   resolveCliRuntimeCanonicalProvider: isolatedCompletionMocks.resolveCliRuntimeCanonicalProvider,
+}));
+// mock-isolation: Exercise the credential handoff without reading host auth stores.
+vi.mock("./cli-execution-auth.js", () => ({
+  cliBackendAcceptsAuthProfileForwarding:
+    isolatedCompletionMocks.cliBackendAcceptsAuthProfileForwarding,
+  resolveCliExecutionAuthProfileId: isolatedCompletionMocks.resolveCliExecutionAuthProfileId,
 }));
 vi.mock("./embedded-agent-runner/cli-backend-dispatch-eligibility.js", () => ({
   resolveEmbeddedCliBackendDispatchEligibility:
@@ -190,6 +198,8 @@ export function resetIsolatedCompletionTestState(): void {
     [Symbol.asyncDispose]: releaseRuntimeLease,
   });
   isolatedCompletionMocks.isCliRuntimeAliasForProvider.mockReturnValue(false);
+  isolatedCompletionMocks.cliBackendAcceptsAuthProfileForwarding.mockReturnValue(false);
+  isolatedCompletionMocks.resolveCliExecutionAuthProfileId.mockReturnValue(undefined);
   isolatedCompletionMocks.resolveCliBackendConfig.mockReturnValue({
     config: { command: "test-cli" },
   });

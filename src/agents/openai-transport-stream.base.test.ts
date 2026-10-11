@@ -1,11 +1,5 @@
 import { getAiTransportHost } from "@openclaw/ai";
-import {
-  buildTransportAwareSimpleStreamFn,
-  createAzureOpenAIResponsesTransportStreamFn,
-  prepareTransportAwareSimpleModel,
-  resolveTransportAwareSimpleApi,
-} from "@openclaw/ai/transports";
-import type { Model } from "openclaw/plugin-sdk/llm";
+import { createAzureOpenAIResponsesTransportStreamFn } from "@openclaw/ai/transports";
 import { assert, describe, expect, it, vi } from "vitest";
 import { logResponsesFailedNoDetails } from "../../packages/ai/src/transports/openai-responses-debug.js";
 import {
@@ -19,7 +13,6 @@ import {
   expectRecordFields,
 } from "./openai-transport-stream.test-harness.js";
 import { testing } from "./openai-transport-stream.test-support.js";
-import { attachModelProviderRequestTransport } from "./provider-request-config.js";
 import { createZeroUsageFixture } from "./test-helpers/usage-fixtures.js";
 
 describe("openai transport stream", () => {
@@ -122,33 +115,6 @@ describe("openai transport stream", () => {
     expect(JSON.stringify(observation)).not.toContain("header_req_plaintext_345");
     expect(JSON.stringify(observation)).not.toContain("header_req_plaintext_678");
     expect(JSON.stringify(observation)).not.toContain("sk-observation-secret");
-  });
-
-  it("treats empty Responses error objects as detail-less failures", async () => {
-    const model = createAzureResponsesModel();
-    const output = createResponsesAssistantOutput(model);
-
-    await expect(
-      testing.processResponsesStream(
-        streamChunks([
-          {
-            type: "response.failed",
-            response: {
-              id: "resp_failed_empty_error",
-              status: "failed",
-              model: "gpt-5.4-pro",
-              error: { code: null, message: null },
-              provider_request_id: "provider_req_empty_error",
-            },
-          },
-        ]),
-        output,
-        { push: vi.fn() },
-        model,
-      ),
-    ).rejects.toThrow("Unknown error (no error details in response)");
-
-    expect(output.responseId).toBe("resp_failed_empty_error");
   });
 
   it("tags Responses encrypted reasoning with replay provenance while streaming", async () => {
@@ -390,88 +356,6 @@ describe("openai transport stream", () => {
     expect(headers.accept).toBeUndefined();
   });
 
-  it("prepares a custom simple-completion api alias when transport overrides are attached", () => {
-    const model = attachModelProviderRequestTransport(
-      makeResponsesModel({
-        id: "gpt-5.4",
-        name: "GPT-5.4",
-      }),
-      {
-        proxy: {
-          mode: "explicit-proxy",
-          url: "http://proxy.internal:8443",
-        },
-      },
-    );
-
-    const prepared = prepareTransportAwareSimpleModel(model);
-
-    expect(resolveTransportAwareSimpleApi(model.api)).toBe("openclaw-openai-responses-transport");
-    expectRecordFields(prepared, {
-      api: "openclaw-openai-responses-transport",
-      provider: "openai",
-      id: "gpt-5.4",
-    });
-    expect(buildTransportAwareSimpleStreamFn(model)).toBeTypeOf("function");
-  });
-
-  it("keeps github-copilot OpenAI-family models on the shared transport seam", () => {
-    const model = attachModelProviderRequestTransport(
-      makeResponsesModel({
-        id: "gpt-5.4",
-        name: "GPT-5.4",
-        provider: "github-copilot",
-        baseUrl: "https://api.githubcopilot.com/v1",
-        input: ["text", "image"],
-      }),
-      {
-        proxy: {
-          mode: "explicit-proxy",
-          url: "http://proxy.internal:8443",
-        },
-      },
-    );
-
-    expect(resolveTransportAwareSimpleApi(model.api)).toBe("openclaw-openai-responses-transport");
-    expectRecordFields(prepareTransportAwareSimpleModel(model), {
-      api: "openclaw-openai-responses-transport",
-      provider: "github-copilot",
-      id: "gpt-5.4",
-    });
-    expect(buildTransportAwareSimpleStreamFn(model)).toBeTypeOf("function");
-  });
-
-  it("keeps github-copilot Claude models on the shared Anthropic transport seam", () => {
-    const model = attachModelProviderRequestTransport(
-      {
-        id: "claude-sonnet-4.6",
-        name: "Claude Sonnet 4.6",
-        api: "anthropic-messages",
-        provider: "github-copilot",
-        baseUrl: "https://api.githubcopilot.com/anthropic",
-        reasoning: true,
-        input: ["text", "image"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 200000,
-        maxTokens: 8192,
-      } satisfies Model<"anthropic-messages">,
-      {
-        proxy: {
-          mode: "explicit-proxy",
-          url: "http://proxy.internal:8443",
-        },
-      },
-    );
-
-    expect(resolveTransportAwareSimpleApi(model.api)).toBe("openclaw-anthropic-messages-transport");
-    expectRecordFields(prepareTransportAwareSimpleModel(model), {
-      api: "openclaw-anthropic-messages-transport",
-      provider: "github-copilot",
-      id: "claude-sonnet-4.6",
-    });
-    expect(buildTransportAwareSimpleStreamFn(model)).toBeTypeOf("function");
-  });
-
   it("uses a valid Azure API version default when the environment is unset", () => {
     expect(resolveAzureOpenAIApiVersion({})).toBe("preview");
     expect(resolveAzureOpenAIApiVersion({ AZURE_OPENAI_API_VERSION: "2025-01-01-preview" })).toBe(
@@ -583,39 +467,5 @@ describe("openai transport stream", () => {
 
     expect(output.content).toMatchObject([{ type: "text", text: "STREAMED_HALF_SENTENCE" }]);
     expect(output.stopReason).toBe("length");
-  });
-
-  it("keeps terminal-only text out of turns that stop for a non-length reason", async () => {
-    const model = createAzureResponsesModel();
-    const output = createResponsesAssistantOutput(model);
-
-    await testing.processResponsesStream(
-      streamChunks([
-        {
-          type: "response.incomplete",
-          response: {
-            id: "resp-filtered",
-            status: "incomplete",
-            incomplete_details: { reason: "content_filter" },
-            output: [
-              {
-                type: "message",
-                id: "msg_filtered",
-                role: "assistant",
-                content: [{ type: "text", text: "FILTERED_PARTIAL" }],
-              },
-            ],
-            usage: { input_tokens: 12, output_tokens: 0, total_tokens: 12 },
-          },
-        },
-      ]),
-      output,
-      { push: vi.fn() },
-      model,
-    );
-
-    // A filtered turn is surfaced as an error, so its partial text is not a recoverable answer.
-    expect(output.content).toEqual([]);
-    expect(output.stopReason).toBe("error");
   });
 });

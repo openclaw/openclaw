@@ -9,10 +9,14 @@ import {
 import { configureMockSubagentRegistryPersistence } from "../../subagent-test-fixtures.test-helpers.js";
 import * as delivery from "./subagent-delivery-state.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
-import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
+import {
+  mutateSubagentRuns,
+  restoreSubagentRunsFromDisk,
+} from "./subagent-registry-persistence.js";
 import { getLatestSubagentRunByChildSessionKeyFromRuns } from "./subagent-registry-queries.js";
 import type { SubagentRunReadScope } from "./subagent-registry-read-snapshot.js";
 import {
+  loadSubagentRegistryFromSqlite,
   persistRegistryFixture,
   saveSubagentRegistryToSqlite,
 } from "./subagent-registry-state.fixture.test-support.js";
@@ -21,7 +25,6 @@ import {
   getSubagentRunsSnapshotForRead,
   withSubagentRunReadSnapshot,
 } from "./subagent-registry-state.js";
-import * as store from "./subagent-registry.store.sqlite.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 let state: OpenClawTestState;
@@ -136,7 +139,7 @@ describe("prepared subagent publication ownership", () => {
       ]);
       saveSubagentRegistryToSqlite(committed);
       if (warm) {
-        getSubagentRunsSnapshotForRead(new Map());
+        await restoreSubagentRunsFromDisk({ runs: new Map() });
       }
       const fail = await configureMockSubagentRegistryPersistence({
         persistRegistryRows: () => {
@@ -163,8 +166,9 @@ describe("prepared subagent publication ownership", () => {
       if (preparedFirst) {
         expect(await readLatest()).toMatchObject(second);
       }
+      await restoreSubagentRunsFromDisk({ runs: new Map() });
       expect(getSubagentRunsSnapshotForRead(new Map()).size).toBe(2);
-      expect(store.loadSubagentRegistryFromSqlite().size).toBe(2);
+      expect(loadSubagentRegistryFromSqlite().size).toBe(2);
       expect(await readLatest()).toMatchObject(second);
       persistRegistryFixture(new Map(), [second.runId]);
       expect(await readLatest()).toMatchObject(first);
@@ -181,7 +185,7 @@ describe("prepared subagent publication ownership", () => {
       [retained.runId, retained],
     ]);
     saveSubagentRegistryToSqlite(original);
-    getSubagentRunsSnapshotForRead(new Map());
+    await restoreSubagentRunsFromDisk({ runs: new Map() });
     const fail = await configureMockSubagentRegistryPersistence({
       persistRegistryRows: () => {
         throw new Error("Synthetic replacement failure");
@@ -206,7 +210,10 @@ describe("prepared subagent publication ownership", () => {
       fail.mockRestore();
     }
     const copy = expectDefined(await readLatest(), "retained committed row");
-    copy.task = "Caller must not mutate committed facts";
+    expect(() => {
+      copy.task = "Caller must not mutate committed facts";
+    }).toThrow(TypeError);
+    expect(await readLatest()).toBe(copy);
     expect(await readLatest()).toMatchObject(removed);
     expect(getSubagentRunsSnapshotForRead(new Map()).has(intended.runId)).toBe(false);
     const committed = { ...retained, createdAt: 1_000 };
@@ -222,7 +229,7 @@ describe("prepared subagent publication ownership", () => {
     const retained = run();
     const original = new Map([[retained.runId, retained]]);
     saveSubagentRegistryToSqlite(original);
-    getSubagentRunsSnapshotForRead(new Map());
+    await restoreSubagentRunsFromDisk({ runs: new Map() });
     const fail = await configureMockSubagentRegistryPersistence({
       persistRegistryRows: () => {
         throw new Error("Synthetic database failure");
@@ -254,7 +261,9 @@ describe("prepared subagent publication ownership", () => {
           ),
         ).rejects.toThrow("Synthetic database failure");
         const copy = expectDefined(await readLatest(), "other database committed row");
-        copy.task = "Caller must not mutate committed facts";
+        expect(() => {
+          copy.task = "Caller must not mutate committed facts";
+        }).toThrow(TypeError);
         expect(await readLatest()).toMatchObject(otherDurable);
       });
       expect(await readLatest()).toMatchObject(retained);

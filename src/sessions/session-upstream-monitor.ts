@@ -3,11 +3,6 @@ import { createHash } from "node:crypto";
 import { isEmbeddedAgentRunActive } from "../agents/embedded-agent.js";
 import { allowsProcessHomeSessionScan } from "../config/paths.js";
 import type { loadSessionEntryReadOnly } from "../config/sessions/session-accessor.js";
-import { captureSessionEntryCurrentRead } from "../config/sessions/session-entry-current-runtime.js";
-import type {
-  CapturedSessionEntryCurrentRead,
-  SessionEntryCurrentFacts,
-} from "../config/sessions/session-entry-current.types.js";
 import { withSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import { resolveSessionStorePathForScope } from "../config/sessions/session-store-path.js";
 import { readRecentUserAssistantTextForSession } from "../config/sessions/transcript.js";
@@ -53,71 +48,47 @@ type SessionUpstreamMissingCounter = {
   linkUpdatedAt: number;
 };
 
-function currentProviders(): SessionCatalogProvider[] {
-  return (getPluginRegistryState()?.activeRegistry?.sessionCatalogs ?? []).map(
-    (registration) => registration.provider,
-  );
-}
-
-function databaseOptions(options: SessionUpstreamMonitorOptions): OpenClawStateDatabaseOptions {
-  return {
-    ...(options.env ? { env: options.env } : {}),
-    ...(options.path ? { path: options.path } : {}),
-  };
-}
-
-function normalizeUserText(text: string): string {
-  return text.trim().replace(/\s+/g, " ");
-}
-
 // Stable identity of the physical upstream source (host/thread/ref). A re-Continue
 // can rebase a session onto a new source whose activity ids (e.g. Claude byte
 // offsets) collide with the old source; hashing this into dedupe keys and the CAS
 // keeps those from silently deduping genuine new activity or accepting a stale scan.
-function upstreamSourceKey(probe: {
-  hostId: string;
-  threadId: string;
-  upstreamRef: unknown;
-}): string {
+function upstreamSourceKey(
+  probe: Pick<SessionUpstreamProbe, "hostId" | "threadId" | "upstreamRef">,
+): string {
   return createHash("sha256")
     .update(`${probe.hostId}\u0000${probe.threadId}\u0000${JSON.stringify(probe.upstreamRef)}`)
     .digest("hex")
     .slice(0, 16);
 }
 
-function upstreamMonitorLinkKey(probe: {
-  sessionKey: string;
-  agentId: string;
-  hostId: string;
-  threadId: string;
-  upstreamRef: unknown;
-}): string {
+function upstreamMonitorLinkKey(
+  probe: Pick<
+    SessionUpstreamProbe,
+    "sessionKey" | "agentId" | "hostId" | "threadId" | "upstreamRef"
+  >,
+): string {
   return `${probe.sessionKey}\n${probe.agentId}\n${upstreamSourceKey(probe)}`;
 }
-
-type ProbeSession = { entry: SessionEntry; current: CapturedSessionEntryCurrentRead };
 
 function assertMonitorCurrent(options: SessionUpstreamMonitorOptions): void {
   options.signal?.throwIfAborted();
 }
 
 function isIdleSession(
-  entry: SessionEntryCurrentFacts | undefined,
+  entry: SessionEntry | undefined,
   options: SessionUpstreamMonitorOptions,
-  expectedSessionId?: string,
 ): boolean {
   return Boolean(
     !options.signal?.aborted &&
     entry?.sessionId &&
-    (expectedSessionId === undefined || entry.sessionId === expectedSessionId) &&
     !(options.isRunActive ?? isEmbeddedAgentRunActive)(entry.sessionId),
   );
 }
 
-async function loadIdleProbeSession(
+async function loadProbeSession(
   probe: Pick<SessionUpstreamProbe, "sessionKey" | "agentId">,
   options: SessionUpstreamMonitorOptions,
-): Promise<ProbeSession | undefined> {
+): Promise<SessionEntry | undefined> {
   assertMonitorCurrent(options);
   const scope = {
     sessionKey: probe.sessionKey,
@@ -126,55 +97,19 @@ async function loadIdleProbeSession(
     env: options.env,
   };
   const loadEntry = options.loadEntry;
-  const loaded = loadEntry
-    ? {
-        entry: loadEntry(scope),
-        current: {
-          kind: "native" as const,
-          assertSourceCurrent: () => assertMonitorCurrent(options),
-          readCurrent: () => loadEntry(scope),
-        },
-      }
+  const entry = loadEntry
+    ? loadEntry(scope)
     : await withSessionEntryReadOnlyInWorker(
         scope,
         () => assertMonitorCurrent(options),
-        async (read, owner) => {
+        async (read) => {
           if (!read.ok) {
             throw read.error;
           }
-          return { entry: read.value, current: captureSessionEntryCurrentRead(scope, owner) };
+          return read.value;
         },
       );
-  return loaded.entry && isIdleSession(loaded.entry, options)
-    ? { ...loaded, entry: loaded.entry }
-    : undefined;
-}
-
-async function probeSessionIdle(
-  session: ProbeSession,
-  options: SessionUpstreamMonitorOptions,
-): Promise<boolean> {
-  const entry = await session.current.readCurrent();
-  return isIdleSession(entry, options, session.entry.sessionId);
-}
-
-function probeAdmission(session: ProbeSession, options: SessionUpstreamMonitorOptions) {
-  const assertEntry = (entry: SessionEntryCurrentFacts | undefined) => {
-    if (!isIdleSession(entry, options, session.entry.sessionId)) {
-      throw new Error("Upstream observation lost its idle session owner");
-    }
-  };
-  return {
-    assertCurrent: () => {
-      assertMonitorCurrent(options);
-      session.current.assertSourceCurrent();
-      // File-backed rows are revalidated by the worker at transaction and commit admission.
-      assertEntry(session.current.kind === "file" ? session.entry : session.current.readCurrent());
-    },
-    ...(session.current.source
-      ? { sessionEntryCurrent: { source: session.current.source, assertCurrent: assertEntry } }
-      : {}),
-  };
+  return entry;
 }
 
 async function loadOwnRecentUserTexts(
@@ -198,23 +133,7 @@ async function loadOwnRecentUserTexts(
     preferUpstreamUserText: true,
     role: "user",
   });
-  return recent.map((item) => normalizeUserText(item.text)).filter(Boolean);
-}
-
-async function probeProvenanceUnchanged(
-  probe: SessionUpstreamProbe,
-  session: ProbeSession,
-  options: SessionUpstreamMonitorOptions,
-): Promise<boolean> {
-  if (!(await probeSessionIdle(session, options))) {
-    return false;
-  }
-  const current = await loadOwnRecentUserTexts(probe, session.entry, options);
-  return (
-    (await probeSessionIdle(session, options)) &&
-    current.length === probe.ownRecentUserTexts.length &&
-    current.every((text, index) => text === probe.ownRecentUserTexts[index])
-  );
+  return recent.map((item) => item.text.trim().replace(/\s+/g, " ")).filter(Boolean);
 }
 
 async function runSessionUpstreamMonitorTick(
@@ -224,7 +143,10 @@ async function runSessionUpstreamMonitorTick(
   if (options.signal?.aborted) {
     return;
   }
-  const dbOptions = databaseOptions(options);
+  const dbOptions = {
+    ...(options.env ? { env: options.env } : {}),
+    ...(options.path ? { path: options.path } : {}),
+  };
   const linksByCatalog = await listWatchedSessionUpstreamLinks(dbOptions);
   if (options.signal?.aborted) {
     return;
@@ -238,7 +160,11 @@ async function runSessionUpstreamMonitorTick(
       missingCounts.delete(key);
     }
   }
-  const providers = options.providers ?? currentProviders();
+  const providers =
+    options.providers ??
+    (getPluginRegistryState()?.activeRegistry?.sessionCatalogs ?? []).map(
+      (registration) => registration.provider,
+    );
   const providerById = new Map(providers.map((provider) => [provider.id, provider]));
   for (const [catalogId, links] of linksByCatalog) {
     const provider = providerById.get(catalogId);
@@ -246,7 +172,7 @@ async function runSessionUpstreamMonitorTick(
       continue;
     }
     const probes: SessionUpstreamProbe[] = [];
-    const sessionBySessionKey = new Map<string, ProbeSession>();
+    const sessionBySessionKey = new Map<string, SessionEntry>();
     for (const link of links) {
       const probe = {
         sessionKey: link.sessionKey,
@@ -259,13 +185,13 @@ async function runSessionUpstreamMonitorTick(
       } satisfies Omit<SessionUpstreamProbe, "ownRecentUserTexts">;
       // One corrupt session store must not reject the whole tick; skip that link only.
       try {
-        const session = await loadIdleProbeSession(probe, options);
+        const session = await loadProbeSession(probe, options);
         // Active runs may still append upstream user items. Defer the scan so their
         // marker remains available for positive transcript-provenance matching.
-        if (!session) {
+        if (!session || !isIdleSession(session, options)) {
           continue;
         }
-        const ownRecentUserTexts = await loadOwnRecentUserTexts(probe, session.entry, options);
+        const ownRecentUserTexts = await loadOwnRecentUserTexts(probe, session, options);
         if (options.signal?.aborted) {
           return;
         }
@@ -309,20 +235,22 @@ async function runSessionUpstreamMonitorTick(
         }
         try {
           const expectedUpdatedAt = currentLink.updatedAt;
-          const admission = probeAdmission(session, options);
+          // Activity is advisory bookkeeping. One idle check after provider I/O is
+          // sufficient; a run starting after this point is observed by the next tick.
+          const currentSession = await loadProbeSession(probe, options);
+          if (!currentSession || currentSession.sessionId !== session.sessionId) {
+            missingCounts.delete(upstreamMonitorLinkKey(probe));
+            continue;
+          }
+          if (!isIdleSession(currentSession, options)) {
+            continue;
+          }
+          const admission = { assertCurrent: () => assertMonitorCurrent(options) };
           const missingCountKey = upstreamMonitorLinkKey(probe);
           if (outcome.kind === "missing") {
             // Provider I/O may outlive a new run or Continue. Only the scanned owner counts.
             if (!(await isSessionUpstreamLinkCurrent(currentLink, dbOptions))) {
               missingCounts.delete(missingCountKey);
-              continue;
-            }
-            const currentSession = await session.current.readCurrent();
-            if (!currentSession || currentSession.sessionId !== session.entry.sessionId) {
-              missingCounts.delete(missingCountKey);
-              continue;
-            }
-            if (!isIdleSession(currentSession, options, session.entry.sessionId)) {
               continue;
             }
             const previous = missingCounts.get(missingCountKey);
@@ -378,18 +306,6 @@ async function runSessionUpstreamMonitorTick(
           if (!Number.isSafeInteger(activity.humanTurns) || activity.humanTurns < 0) {
             continue;
           }
-          try {
-            // A run can start while the provider is scanning. Recheck ownership and
-            // provenance before any marker advance so its prompt remains deferred.
-            if (!(await probeProvenanceUnchanged(probe, session, options))) {
-              continue;
-            }
-          } catch (error) {
-            log.warn(
-              `upstream transcript provenance failed for ${probe.sessionKey}: ${String(error)}`,
-            );
-            continue;
-          }
           if (activity.humanTurns === 0) {
             await settleSessionUpstreamLink(
               currentLink,
@@ -433,7 +349,7 @@ async function runSessionUpstreamMonitorTick(
         }
       }
     } catch (error) {
-      log.warn(`upstream activity probe failed for ${catalogId}: ${String(error)}`);
+      log.warn(`upstream activity check failed for ${catalogId}: ${String(error)}`);
     }
   }
 }

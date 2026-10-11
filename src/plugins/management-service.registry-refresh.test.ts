@@ -71,7 +71,7 @@ vi.mock("./registry-refresh.js", () => ({
 }));
 
 vi.mock("./slot-selection.js", () => ({
-  applySlotSelectionForPlugin: (config: unknown) => ({ config, warnings: [] }),
+  applySlotSelectionForPlugin: (config: unknown) => config,
 }));
 
 const { clearManagedPluginCatalogCache } = await import("./management-catalog.js");
@@ -255,31 +255,6 @@ describe("plugin management registry refresh", () => {
     expect(result.warnings).toContainEqual(
       expect.stringContaining("set agents.defaults.systemAgent.agentId"),
     );
-  });
-
-  it("returns persistence warnings without forwarding them to source-install loggers", async () => {
-    mockClawHubWorkboardInstall();
-    const instruction =
-      'Installed plugin "workboard" without enabling it because it requires configuration first.';
-    mocks.persistInstall.mockImplementation(
-      async (params: { persistenceLogger?: { warn?: (message: string) => void } }) => {
-        params.persistenceLogger?.warn?.(instruction);
-        return {};
-      },
-    );
-    const logger = { warn: vi.fn() };
-
-    const result = await installManagedPluginSource({
-      request: { source: "clawhub", spec: "clawhub:community/workboard" },
-      snapshot: installSnapshot,
-      env: {},
-      logger,
-      acknowledgeCapabilities: emptyArtifactAcknowledgment,
-    });
-
-    expect(mocks.clawhubInstall).toHaveBeenCalledWith(expect.objectContaining({ logger }));
-    expect(logger.warn).not.toHaveBeenCalled();
-    expect(result).toMatchObject({ ok: true, warnings: [instruction] });
   });
 
   it("requires artifact consent before a linked source is enabled or recorded", async () => {

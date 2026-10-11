@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
-import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import { afterEach, expect, it, vi } from "vitest";
 import * as logging from "../../logging/logger.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
@@ -21,14 +20,15 @@ import {
   loadSessionEntry,
   loadTranscriptEventsSync,
   replaceSessionEntrySync,
-  replaceTranscriptEventsSync,
   resetSessionEntryLifecycle,
 } from "./session-accessor.js";
 import { kickSessionEntryMaintenanceAfterWrite } from "./session-accessor.sqlite-maintenance-kick.js";
 import * as maintenance from "./session-accessor.sqlite-maintenance.js";
+import * as reclamationRun from "./session-accessor.sqlite-reclamation-run.js";
 import * as reclamationDiagnostics from "./session-accessor.sqlite-reclamation-worker-diagnostics.js";
 import { applySessionEntryCanonicalReplacements } from "./session-accessor.sqlite-replacement-projection.js";
 import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
+import { replaceTranscriptEventsSync } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { enforceSqliteSessionHistoryDiskBudget } from "./session-history-eviction.js";
 import { resolveMaintenanceConfigFromInput } from "./store-maintenance.js";
 
@@ -45,13 +45,15 @@ function observeSlowWriters(
   const getChildLogger = logging.getChildLogger;
   vi.spyOn(logging, "getChildLogger").mockImplementation((...args) => {
     const logger = getChildLogger(...args);
-    vi.spyOn(logger, "warn").mockImplementation((message, fields) => {
-      if (message === "slow SQLite session write") {
+    vi.spyOn(logger, "warn").mockImplementation((first: unknown, second: unknown) => {
+      if (second === "slow SQLite session write") {
+        const fields = first;
         assert(fields && typeof fields === "object");
         const operation = "operation" in fields ? fields.operation : undefined;
         operations.push(operation);
         onWarning(operation, fields);
-      } else if (message === "slow SQLite session archive pruning") {
+      } else if (first === "slow SQLite session archive pruning") {
+        const fields = second;
         assert(fields && typeof fields === "object");
         onPruning(fields);
       }
@@ -348,12 +350,20 @@ it("coalesces automatic maintenance through native planning and finalization", a
     const finalize = maintenance.finalizeSessionEntryMaintenancePlansAfterWriterReleaseBestEffort;
     const finalized = createDeferredCore<Awaited<ReturnType<typeof finalize>>>();
     // Row deletion precedes archive publication; join the unchanged finalizer, including both.
-    vi.spyOn(
-      maintenance,
-      "finalizeSessionEntryMaintenancePlansAfterWriterReleaseBestEffort",
-    ).mockImplementation((...args) => {
-      const result = finalize(...args);
-      finalized.resolve(result);
+    const finalizer = vi
+      .spyOn(maintenance, "finalizeSessionEntryMaintenancePlansAfterWriterReleaseBestEffort")
+      .mockImplementation((...args) => {
+        const result = finalize(...args);
+        finalized.resolve(result);
+        return result;
+      });
+    const deadlineRead = createDeferredCore();
+    const reclaim = reclamationRun.runSqliteSessionReclamation;
+    vi.spyOn(reclamationRun, "runSqliteSessionReclamation").mockImplementation(async (params) => {
+      const result = await reclaim(params);
+      if (params.plan.kind === "maintenance-age") {
+        deadlineRead.resolve();
+      }
       return result;
     });
     const workerOutcomes: Parameters<
@@ -382,21 +392,14 @@ it("coalesces automatic maintenance through native planning and finalization", a
       kickSessionEntryMaintenanceAfterWrite(request);
       kickSessionEntryMaintenanceAfterWrite(request);
       await finalized.promise;
-      await yieldToEventLoop();
-      // Metadata uses the canonical actor; only archive finalization uses reclamation admission.
-      expect(operations).toEqual([
-        "session.maintenance.plan",
-        "session.reclamation.retain",
-        "session.maintenance.plan",
-        "session.reclamation.retain",
-        "session.reclamation.retain",
-        "session.reclamation.worker-commit",
-      ]);
-      expect(workerOutcomes.map(({ kind }) => kind)).toEqual([
-        "maintenance-plan",
-        "maintenance-plan",
-        "maintenance-finalize",
-      ]);
+      await deadlineRead.promise;
+      // Read-only preflight can precede writable planning; both kicks share one committed finalizer.
+      expect(operations).toContain("session.maintenance.plan");
+      expect(
+        operations.filter((operation) => operation === "session.reclamation.worker-commit"),
+      ).toEqual(["session.reclamation.worker-commit"]);
+      expect(finalizer).toHaveBeenCalledOnce();
+      expect(workerOutcomes.map(({ kind }) => kind)).toEqual(["maintenance-finalize"]);
       for (const outcome of workerOutcomes) {
         expect(outcome.outcome).toBe("resolved");
         expect(outcome.workerThreadId).toBeGreaterThan(0);

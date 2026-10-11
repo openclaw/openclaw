@@ -1,20 +1,35 @@
 import type { DatabaseSync } from "node:sqlite";
-import type { SessionEntry } from "../config/sessions/types.js";
+import type { SessionMembershipFact } from "../config/sessions/session-membership-facts.types.js";
+import type { SessionAcpMeta, SessionEntry } from "../config/sessions/types.js";
 import {
-  deferSqlitePostCommitPublication,
+  hasSqlitePostCommitScope,
+  publishSqliteCommittedState,
+  stageSqliteCommittedPublication,
   stageSqliteTransactionState,
+  type SqliteCommittedPublication,
 } from "../infra/sqlite-post-commit.js";
-import { resolveGlobalSet } from "../shared/global-singleton.js";
+import { resolveGlobalSet, resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { notifyListeners, registerListener } from "../shared/listeners.js";
 
 export type SessionRowFacts =
   | { kind: "unchanged" }
+  | { kind: "replacement"; membership: SessionMembershipFact; lifecycleChanged?: boolean }
+  | {
+      kind: "acp";
+      sessionId: string | undefined;
+      lifecycleRevision: string | null;
+      sessionStartedAt?: number;
+      acp: SessionAcpMeta | null;
+    }
   | {
       kind: "entry";
       previousSessionId: string | undefined;
       sessionId: string;
       category: string | null;
       clearMembers: boolean;
+      /** Exact peer-policy/lifecycle projection; absent publications require a fresh read. */
+      communicationBinding?: string;
+      lifecycleChanged?: boolean;
     }
   | { kind: "member"; sessionId: string; identityId: string; present: boolean }
   | {
@@ -36,7 +51,7 @@ export type SessionRowChange =
       sessionKey: string;
       agentId?: string;
       storePath?: string;
-      scope?: "automation" | "runtime" | "session-entry";
+      scope?: "automation" | "runtime" | "session-entry" | "acp" | "transcript";
       /** Category uncertainty cannot change identity or lineage; other storage outcomes can. */
       factsInvalidated?: true | "category";
       /** Omission is a metadata notification; storage owners publish their changed facts. */
@@ -47,6 +62,31 @@ export type SessionRowChange =
       scope: string | { agentId?: string; storePath?: string; topology?: true };
       factsInvalidated?: true;
     };
+
+/** Display/runtime and auth refreshes do not replace committed storage facts. */
+export function sessionChangeScopeAffectsStoredRows(change: SessionRowChange): boolean {
+  if ("all" in change) {
+    // Profiles still refresh authorization at its owner, independently of row freshness.
+    return (
+      typeof change.scope !== "string" ||
+      ![
+        "profiles",
+        "catalog",
+        "acp",
+        "agent-runs",
+        "subagent-runs",
+        "worker-placements",
+        "worker-environments",
+        "config",
+        "config-presentation",
+        "config-profiles",
+        "runtime",
+        "automation",
+      ].includes(change.scope)
+    );
+  }
+  return change.scope !== "automation" && change.scope !== "runtime" && change.scope !== "acp";
+}
 
 /** Store discovery fences also apply to agent-scoped topology publications. */
 export function isSessionStoreTopologyChange(change: SessionRowChange): boolean {
@@ -73,8 +113,49 @@ const projectionListeners = resolveGlobalSet<(change: SessionRowChange) => void>
   Symbol.for("openclaw.sessionRowProjectionChanges"),
   "close-and-restart",
 );
+const invalidationSources = resolveGlobalSingleton(
+  Symbol.for("openclaw.sessionRowInvalidationSources"),
+  () => new WeakMap<object, object>(),
+);
+const privateFacts = resolveGlobalSingleton(
+  Symbol.for("openclaw.sessionRowPrivateFacts"),
+  () => new WeakMap<object, (() => void) | undefined>(),
+);
+const captures = resolveGlobalSingleton(
+  Symbol.for("openclaw.sessionRowChangeCaptures"),
+  () => new WeakMap<DatabaseSync, Set<SessionRowChange[]>>(),
+);
+
+/** Worker receipts borrow the producer's transaction postimages, including savepoint rollback. */
+export function captureSessionRowChanges<T>(
+  database: DatabaseSync,
+  run: (changes: readonly SessionRowChange[]) => T,
+) {
+  const changes: SessionRowChange[] = [];
+  const active = captures.get(database) ?? new Set<SessionRowChange[]>();
+  active.add(changes);
+  captures.set(database, active);
+  try {
+    return { result: run(changes), changes };
+  } finally {
+    active.delete(changes);
+    if (active.size === 0) {
+      captures.delete(database);
+    }
+  }
+}
+
+/** Failure invalidations retain physical provenance, but never their old postimages. */
+export function sessionRowChangeSource(change: object): object {
+  return invalidationSources.get(change) ?? change;
+}
 
 export const sessionChanges = {
+  /** Authority-only facts join commit installation without a duplicate presentation event. */
+  markFactsOnly<T extends SessionRowChange>(change: T, install?: () => void): T {
+    privateFacts.set(change, install);
+    return change;
+  },
   subscribe(listener: (change: SessionRowNotification) => void): () => void {
     return registerListener(listeners, listener);
   },
@@ -86,6 +167,13 @@ export const sessionChanges = {
   subscribeProjection(listener: (change: SessionRowChange) => void): () => void {
     return registerListener(projectionListeners, listener);
   },
+  /** Pending or indeterminate work fences facts without announcing a committed change. */
+  invalidate(change: SessionRowChange): void {
+    notifyListeners(factListeners, change);
+    if (!privateFacts.has(change)) {
+      notifyListeners(projectionListeners, change);
+    }
+  },
   /** SQLite observers run only after all committed owner state has settled. */
   emit(change: SessionRowChange, database?: DatabaseSync): void {
     sessionChanges.emitBatch([change], database);
@@ -95,44 +183,92 @@ export const sessionChanges = {
     database?: DatabaseSync,
     beforePublicNotifications?: () => void,
   ): void {
+    if (database && hasSqlitePostCommitScope(database)) {
+      for (const captured of captures.get(database) ?? []) {
+        const start = captured.length;
+        if (
+          !stageSqliteTransactionState(database, {
+            stage: () => captured.push(...changes),
+            commit() {},
+            rollback: () => captured.splice(start),
+          })
+        ) {
+          throw new Error("Session receipt capture requires a transaction publication owner");
+        }
+      }
+    }
+    const visible = changes.filter((change) => !privateFacts.has(change));
+    const install = (
+      targets: Iterable<(change: SessionRowChange) => void>,
+      batch: readonly SessionRowChange[],
+    ) => {
+      const failures: unknown[] = [];
+      for (const change of batch) {
+        notifyListeners(targets, change, (error) => failures.push(error));
+      }
+      if (failures.length > 0) {
+        throw new AggregateError(failures, "Session committed fact installation failed");
+      }
+    };
     const publishFacts = () => {
       for (const change of changes) {
-        notifyListeners(factListeners, change);
+        privateFacts.get(change)?.();
       }
+      install(factListeners, changes);
     };
     const prepareObservers = () => {
-      for (const change of changes) {
-        notifyListeners(projectionListeners, change);
-      }
+      install(projectionListeners, visible);
     };
-    // Apply every committed delta before any row/lifecycle observer sees the transaction.
-    // Savepoint rollback discards these staged callbacks with the ordinary publications.
-    if (
-      !database ||
-      !stageSqliteTransactionState(database, {
-        stage: () => {},
-        rollback: () => {},
-        commit: publishFacts,
-        prepareObservers,
-      })
-    ) {
-      publishFacts();
-      prepareObservers();
-    }
     const publish = () => {
-      beforePublicNotifications?.();
-      for (const change of changes) {
-        if ("sessionKey" in change) {
-          const { facts: _facts, factsInvalidated: _invalidated, ...notification } = change;
-          notifyListeners(listeners, notification);
-        } else {
-          const { factsInvalidated: _invalidated, ...notification } = change;
-          notifyListeners(listeners, notification);
+      try {
+        beforePublicNotifications?.();
+      } finally {
+        for (const change of visible) {
+          if ("sessionKey" in change) {
+            const { facts: _facts, factsInvalidated: _invalidated, ...notification } = change;
+            notifyListeners(listeners, notification);
+          } else {
+            const { factsInvalidated: _invalidated, ...notification } = change;
+            notifyListeners(listeners, notification);
+          }
         }
       }
     };
-    if (!database || !deferSqlitePostCommitPublication(database, publish)) {
-      publish();
+    const publication: SqliteCommittedPublication = {
+      installFacts: publishFacts,
+      installProjection: prepareObservers,
+      invalidate() {
+        const invalidations: SessionRowChange[] = changes.map((change) => {
+          const invalidated: SessionRowChange =
+            "sessionKey" in change
+              ? { ...change, facts: undefined, factsInvalidated: true }
+              : { ...change, factsInvalidated: true };
+          invalidationSources.set(invalidated, sessionRowChangeSource(change));
+          if (privateFacts.has(change)) {
+            privateFacts.set(invalidated, undefined);
+          }
+          return invalidated;
+        });
+        // Notify both owners even if one cannot retire its failed installation.
+        const failures: unknown[] = [];
+        for (const [targets, batch] of [
+          [factListeners, invalidations],
+          [projectionListeners, invalidations.filter((change) => !privateFacts.has(change))],
+        ] as const) {
+          try {
+            install(targets, batch);
+          } catch (error) {
+            failures.push(error);
+          }
+        }
+        if (failures.length > 0) {
+          throw new AggregateError(failures, "Session publication invalidation failed");
+        }
+      },
+      notify: publish,
+    };
+    if (!database || !stageSqliteCommittedPublication(database, publication)) {
+      publishSqliteCommittedState(publication);
     }
   },
 };

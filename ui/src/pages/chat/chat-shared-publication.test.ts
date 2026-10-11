@@ -97,12 +97,28 @@ describe("shared publication observation", () => {
     }
   });
 
+  it("reports failed account discovery as unavailable options until a read succeeds", async () => {
+    const { controller, request } = setup();
+    await settled(controller);
+    request.mockRejectedValueOnce(new Error("GitHub publication options timed out"));
+    controller.view()?.onRefresh();
+    const failed = await settled(controller);
+    expect(failed.optionsUnavailable).toBe(true);
+    expect(failed.error).toBe("GitHub publication options timed out");
+    controller.view()?.onRefresh();
+    const recovered = await settled(controller);
+    expect(recovered.optionsUnavailable).toBe(false);
+    expect(recovered.error).toBeNull();
+  });
+
   it("recovers an unknown shared outcome only through its exact invocation key", async () => {
     const { controller, request } = setup();
     await settled(controller);
     request.mockRejectedValueOnce(new Error("The acknowledgement was lost"));
     controller.view()?.onPublish?.();
-    expect((await settled(controller)).locked).toBe(true);
+    const unknown = await settled(controller);
+    expect(unknown.locked).toBe(true);
+    expect(unknown.optionsUnavailable).toBe(false);
     const key = request.mock.calls.at(-1)![1].idempotencyKey;
     request.mockImplementation(async (method: string, params: Record<string, unknown>) => {
       if (method !== "sessions.github.options") {

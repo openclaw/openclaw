@@ -249,7 +249,10 @@
     padding: 8px var(--chat-stack-trailing-inset) 14px var(--chat-stack-leading-inset);
   }
 
-  .agent-chat__goal[data-expanded="true"] .agent-chat__goal-row {
+  .agent-chat__goal[data-expanded="true"] .agent-chat__goal-row,
+  .agent-chat__goal[data-expanded="true"] .agent-chat__goal-actions,
+  .agent-chat__goal[data-expanded="true"] .agent-chat__goal-detail,
+  .agent-chat__goal[data-expanded="true"] .agent-chat__goal-detail-content {
     display: contents;
   }
 
@@ -263,10 +266,6 @@
     grid-row: 1;
     grid-column: 2;
     align-items: center;
-  }
-
-  .agent-chat__goal[data-expanded="true"] .agent-chat__goal-actions {
-    display: contents;
   }
 
   .agent-chat__goal[data-expanded="true"] .agent-chat__goal-command-actions {
@@ -307,14 +306,6 @@
     justify-self: end;
   }
 
-  .agent-chat__goal[data-expanded="true"] .agent-chat__goal-detail {
-    display: contents;
-  }
-
-  .agent-chat__goal[data-expanded="true"] .agent-chat__goal-detail-content {
-    display: contents;
-  }
-
   .agent-chat__goal[data-expanded="true"] .agent-chat__goal-detail-objective {
     grid-row: 3;
     grid-column: 1 / -1;
@@ -331,20 +322,15 @@
     --chat-goal-scroll-mask-top: black;
     --chat-goal-scroll-mask-bottom: black;
 
-    -webkit-mask-image: linear-gradient(
+    --chat-goal-scroll-mask: linear-gradient(
       to bottom,
       var(--chat-goal-scroll-mask-top) 0,
       black 16px,
       black calc(100% - 22px),
       var(--chat-goal-scroll-mask-bottom) 100%
     );
-    mask-image: linear-gradient(
-      to bottom,
-      var(--chat-goal-scroll-mask-top) 0,
-      black 16px,
-      black calc(100% - 22px),
-      var(--chat-goal-scroll-mask-bottom) 100%
-    );
+    -webkit-mask-image: var(--chat-goal-scroll-mask);
+    mask-image: var(--chat-goal-scroll-mask);
   }
 
   .agent-chat__goal[data-expanded="true"]
@@ -570,16 +556,20 @@
   display: flex;
 }
 
-.session-progress-card__summary-title {
+.session-progress-card__summary-title,
+.session-progress-card__current {
   min-width: 0;
   overflow: hidden;
-  color: var(--text);
   font-size: 13px;
-  font-weight: 600;
   line-height: 18px;
   text-overflow: ellipsis;
   white-space: nowrap;
   transition: color 140ms ease;
+}
+
+.session-progress-card__summary-title {
+  color: var(--text);
+  font-weight: 600;
 }
 
 .session-progress-card__summary-chevron {
@@ -630,14 +620,7 @@
 }
 
 .session-progress-card__current {
-  min-width: 0;
-  overflow: hidden;
-  font-size: 13px;
   font-weight: 500;
-  line-height: 18px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  transition: color 140ms ease;
 }
 
 .session-progress-card__summary-count {
@@ -683,10 +666,25 @@
 }
 
 .session-progress-card--composer .session-progress-card__heading-actions {
+  min-width: 0;
+  overflow: hidden;
   color: var(--muted);
   font-size: 12px;
   font-weight: 500;
   font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.session-progress-card--composer .session-progress-card__heading-actions > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+@media (max-width: 400px) {
+  .session-progress-card--composer .session-progress-card__summary-title {
+    display: none;
+  }
 }
 
 .session-progress-card--composer .session-progress-card__step,

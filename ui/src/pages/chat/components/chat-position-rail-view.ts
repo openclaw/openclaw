@@ -11,9 +11,26 @@ import { resolveMessageDisplayMarkdown } from "../../../lib/chat/message-display
 import { normalizeMessage } from "../../../lib/chat/message-normalizer.ts";
 import { renderChatAuthorAvatar } from "./chat-author-avatar.ts";
 import type { ChatPositionIndex } from "./chat-position-projection.ts";
+import { POSITION_RAIL_MARKER_HEIGHT } from "./chat-transcript-geometry.ts";
 import type { ChatTranscriptSession } from "./chat-transcript-session.ts";
 
 const PREVIEW_LENGTH = 140;
+
+export function syncPositionRailVisibility(
+  scroller: HTMLElement | undefined,
+  overflowing: boolean,
+): boolean {
+  const rail = scroller?.closest<HTMLElement>(".chat-position-rail");
+  if (!rail || rail.hasAttribute("data-overflow") === overflowing) {
+    return false;
+  }
+  // A resize can make the whole conversation fit while its rail has focus.
+  if (!overflowing && rail.contains(rail.ownerDocument.activeElement)) {
+    rail.closest<HTMLElement>(".chat-thread")?.focus({ preventScroll: true });
+  }
+  rail.toggleAttribute("data-overflow", overflowing);
+  return true;
+}
 
 export function syncPositionRailTabStop(
   scroller: HTMLElement | undefined,
@@ -59,7 +76,6 @@ type PositionRailViewParams = {
   assistant?: PositionRailAssistant;
   markers: Readonly<ChatPositionIndex["markers"]>;
   renderedIndexes: readonly number[];
-  markerHeight: number;
   activeId: string | undefined;
   visibleIds: ReadonlySet<string>;
   rovingId: string;
@@ -83,7 +99,6 @@ export function renderChatPositionRailView({
   assistant,
   markers: candidates,
   renderedIndexes,
-  markerHeight,
   activeId,
   visibleIds,
   rovingId,
@@ -170,7 +185,7 @@ export function renderChatPositionRailView({
                       >
                         <button
                           class="chat-position-rail__marker"
-                          style=${`top: ${index * markerHeight}px`}
+                          style=${`top: ${index * POSITION_RAIL_MARKER_HEIGHT}px`}
                           type="button"
                           data-position-marker-id=${marker.id}
                           tabindex=${marker.id === rovingId ? "0" : "-1"}

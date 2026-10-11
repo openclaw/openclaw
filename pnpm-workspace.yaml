@@ -4,6 +4,7 @@ packages:
   - packages/*
   - extensions/*
   - examples/*
+  - tools/solid-lint
 
 minimumReleaseAge: 10080
 minimumReleaseAgeStrict: true
@@ -12,15 +13,30 @@ minimumReleaseAgeStrict: true
 minimumReleaseAgeExclude:
   - "@openai/codex"
   - "@openai/codex-*"
-  # Reviewed fs-safe 0.23.0 release and native helpers; remove after 2026-10-09T06:15:08.733Z.
-  - "@openclaw/fs-safe@0.23.0"
-  - "@openclaw/fs-safe-darwin-arm64@0.23.0"
-  - "@openclaw/fs-safe-darwin-x64@0.23.0"
-  - "@openclaw/fs-safe-linux-arm64-gnu@0.23.0"
-  - "@openclaw/fs-safe-linux-arm64-musl@0.23.0"
-  - "@openclaw/fs-safe-linux-x64-gnu@0.23.0"
-  - "@openclaw/fs-safe-linux-x64-musl@0.23.0"
-  - "@openclaw/fs-safe-win32-x64-msvc@0.23.0"
+  # Reviewed fs-safe 0.26.0 release and native helpers; remove after 2026-10-17T20:00:18.006Z.
+  - "@openclaw/fs-safe@0.26.0"
+  - "@openclaw/fs-safe-darwin-arm64@0.26.0"
+  - "@openclaw/fs-safe-darwin-x64@0.26.0"
+  - "@openclaw/fs-safe-freebsd-arm64@0.26.0"
+  - "@openclaw/fs-safe-freebsd-x64@0.26.0"
+  - "@openclaw/fs-safe-linux-arm64-gnu@0.26.0"
+  - "@openclaw/fs-safe-linux-arm64-musl@0.26.0"
+  - "@openclaw/fs-safe-linux-x64-gnu@0.26.0"
+  - "@openclaw/fs-safe-linux-x64-musl@0.26.0"
+  - "@openclaw/fs-safe-win32-arm64-msvc@0.26.0"
+  - "@openclaw/fs-safe-win32-x64-msvc@0.26.0"
+  # Reviewed proc-safe 0.2.0 release and native helpers; remove after 2026-10-18T04:40:03.765Z.
+  - "@openclaw/proc-safe@0.2.0"
+  - "@openclaw/proc-safe-darwin-arm64@0.2.0"
+  - "@openclaw/proc-safe-darwin-x64@0.2.0"
+  - "@openclaw/proc-safe-freebsd-arm64@0.2.0"
+  - "@openclaw/proc-safe-freebsd-x64@0.2.0"
+  - "@openclaw/proc-safe-linux-arm64-gnu@0.2.0"
+  - "@openclaw/proc-safe-linux-arm64-musl@0.2.0"
+  - "@openclaw/proc-safe-linux-x64-gnu@0.2.0"
+  - "@openclaw/proc-safe-linux-x64-musl@0.2.0"
+  - "@openclaw/proc-safe-win32-arm64-msvc@0.2.0"
+  - "@openclaw/proc-safe-win32-x64-msvc@0.2.0"
 
 # Isolated installs let pnpm reuse whole-package APFS clones instead of relinking every file.
 nodeLinker: isolated
@@ -38,34 +54,32 @@ overrides:
   "chevrotain>lodash-es": 4.18.1
   "@chevrotain/cst-dts-gen>lodash-es": 4.18.1
   "@chevrotain/gast>lodash-es": 4.18.1
-  "@agentclientprotocol/codex-acp@1.12.0>@openai/codex": 0.160.0
+  "@agentclientprotocol/codex-acp@2.1.1>@openai/codex": 0.160.0
   "@codemirror/commands@6.11.1>@codemirror/view": 6.43.13
   "@codemirror/view@6.43.13>@codemirror/state": 6.7.6
-  "@anthropic-ai/sdk": 0.127.0
-  "@anthropic-ai/vertex-sdk@0.19.10>google-auth-library": 11.1.0
+  "@anthropic-ai/sdk": 0.131.0
+  "@anthropic-ai/vertex-sdk@0.20.2>google-auth-library": 11.1.0
   "@opentelemetry/core": 2.11.0
   "@opentelemetry/propagator-jaeger": 2.11.0
-  "@aws-sdk/core": 3.978.0
-  "@aws-sdk/credential-provider-node": 3.972.83
-  "@aws-sdk/xml-builder": 3.972.40
-  "@hono/node-server": 2.1.1
+  "@aws-sdk/core": 3.978.1
+  "@aws-sdk/credential-provider-node": 3.972.84
+  "@aws-sdk/xml-builder": 3.972.41
+  "@hono/node-server": 2.1.3
   axios: 1.20.0
   fast-uri: 4.2.1
-  follow-redirects: 1.16.0
+  follow-redirects: 1.16.1
   defu: 6.1.7
-  fast-xml-parser: 5.11.1
+  fast-xml-parser: 5.11.2
   request: "npm:@cypress/request@4.0.1"
   request-promise: "npm:@cypress/request-promise@5.0.0"
   basic-ftp: 6.2.1
   brace-expansion: 5.0.12
+  # GHSA-68fv-2mgg-jv7q: source-map-js <1.2.2 event-loop DoS (via css-tree).
+  source-map-js: 1.2.2
   file-type: 22.1.1
   form-data: 4.0.6
-  "werift-ice@0.2.2>ip": "npm:neoip@3.1.0"
-  ip-address: 10.7.2
-  "mailauth@5.0.3>nodemailer": 10.0.10
-  "mailauth@5.0.3>joi": 18.2.9
-  # Mailauth pins vulnerable Undici; remove when its direct dependency is fixed.
-  "mailauth@5.0.3>undici": 8.10.2
+  ip-address: 10.7.3
+  "mailauth@7.1.0>nodemailer": 10.0.13
   minimatch: 10.2.6
   path-to-regexp: 8.4.2
   proxy-addr: 2.0.8
@@ -120,6 +134,5 @@ patchedDependencies:
   "@novnc/novnc@1.7.0": patches/@novnc__novnc@1.7.0.patch
   vitest@5.0.1: patches/vitest@5.0.1.patch
   "@awesome.me/webawesome@3.13.0": patches/@awesome.me__webawesome@3.13.0.patch
-  "@openclaw/proxyline@0.3.12": patches/@openclaw__proxyline@0.3.12.patch
   ghostty-web@0.4.0: patches/ghostty-web@0.4.0.patch
   chrome-devtools-mcp@1.10.1: patches/chrome-devtools-mcp@1.10.1.patch

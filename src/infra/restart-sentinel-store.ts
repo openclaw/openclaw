@@ -3,6 +3,7 @@ import { safeParseJson } from "@openclaw/normalization-core";
 import { isRecord as isPlainRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Selectable } from "kysely";
 import { z } from "zod";
+import type { SchemaContract } from "../../packages/gateway-protocol/src/schema-contract.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   executeSqliteQuerySync,
@@ -15,29 +16,16 @@ import { UpdateFailureFactSchema } from "./update-run-schema.js";
 type RestartSentinelStats = z.infer<typeof restartSentinelStatsSchema>;
 export type RestartSentinelContinuation = z.infer<typeof restartSentinelContinuationSchema>;
 
-export type RestartSentinelPayload = {
-  kind: "config-apply" | "config-auto-recovery" | "config-patch" | "update" | "restart";
-  status: "ok" | "error" | "skipped";
-  ts: number;
-  sessionKey?: string;
-  deliveryContext?: {
-    channel?: string;
-    to?: string;
-    accountId?: string;
-  };
-  threadId?: string;
-  message?: string | null;
+export type RestartSentinelPayload = SchemaContract<
+  Omit<z.input<typeof restartSentinelPayloadSchema>, "stats" | "continuation">
+> & {
   continuation?: RestartSentinelContinuation | null;
-  doctorHint?: string | null;
   stats?: RestartSentinelStats | null;
 };
 
-export type RestartSentinelEnvelope = {
+export type RestartSentinel = {
   version: 1;
   payload: RestartSentinelPayload;
-};
-
-export type RestartSentinel = RestartSentinelEnvelope & {
   /** Optimistic-concurrency revision backed by gateway_restart_sentinel.updated_at_ms. */
   revision: number;
 };
@@ -157,14 +145,6 @@ const restartSentinelPayloadSchema = z
 function parseRestartSentinelPayload(value: unknown): RestartSentinelPayload | null {
   const parsed = restartSentinelPayloadSchema.safeParse(value);
   return parsed.success ? parsed.data : null;
-}
-
-export function parseRestartSentinelEnvelope(value: unknown): RestartSentinelEnvelope | null {
-  if (!isPlainRecord(value) || value.version !== 1) {
-    return null;
-  }
-  const payload = parseRestartSentinelPayload(value.payload);
-  return payload ? { version: 1, payload } : null;
 }
 
 function parseRequiredJson(value: string | null): unknown {

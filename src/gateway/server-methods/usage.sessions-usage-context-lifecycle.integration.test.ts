@@ -2,6 +2,7 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import {
   loadSessionEntryReadOnly,
@@ -15,10 +16,17 @@ import * as sessionCostUsage from "../../infra/session-cost-usage.js";
 import type { SessionsUsageResult } from "../../shared/usage-types.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { invalidateOperatorRolePolicy } from "../operator-role-policy.js";
 import { coreGatewayHandlers } from "./core-handlers.js";
 import type { GatewayClient, GatewayRequestContext } from "./types.js";
+import * as usageSessionSelection from "./usage-session-selection.js";
 
-it.for(["session reset", "incognito transition", "revocation during target read"] as const)(
+it.for([
+  "session reset",
+  "incognito transition",
+  "revocation during target read",
+  "revocation after context read",
+] as const)(
   "does not expose revoked usage context after %s",
   async (change, { signal, onTestFinished }) => {
     const state = await createOpenClawTestState({ label: "usage-context-lifecycle" });
@@ -61,7 +69,7 @@ it.for(["session reset", "incognito transition", "revocation during target read"
             default: "guest",
             definitions: {
               guest: {
-                sessions: { others: "none" },
+                sessions: { others: change === "revocation after context read" ? "view" : "none" },
                 agents: "*",
                 scopes: ["operator.read", "operator.write"],
               },
@@ -140,10 +148,23 @@ it.for(["session reset", "incognito transition", "revocation during target read"
         .mockImplementation(async (params) => {
           const result = await actualLoad(params);
           summaryLoaded.resolve(result);
-          await release.promise;
+          if (change !== "revocation after context read") {
+            await release.promise;
+          }
           return result;
         });
       restoreSummaryLoader = () => summaryLoader.mockRestore();
+      if (change === "revocation after context read") {
+        const actualRead = usageSessionSelection.loadUsageSessionContext;
+        const reader = vi
+          .spyOn(usageSessionSelection, "loadUsageSessionContext")
+          .mockImplementation(async (...args) => {
+            await actualRead(...args);
+            targetReadStarted.resolve();
+            await release.promise;
+          });
+        restoreTargetReader = () => reader.mockRestore();
+      }
       if (change === "revocation during target read") {
         const actualRead = sessionEntryReads.withSessionEntryReadOnlyInWorker;
         const reader = vi
@@ -176,7 +197,7 @@ it.for(["session reset", "incognito transition", "revocation during target read"
         }),
       );
       const loaded = await Promise.race([
-        change === "revocation during target read"
+        change === "revocation during target read" || change === "revocation after context read"
           ? targetReadStarted.promise
           : summaryLoaded.promise,
         request.then(() => {
@@ -214,8 +235,19 @@ it.for(["session reset", "incognito transition", "revocation during target read"
         ...(change === "session reset" ? {} : { incognito: true }),
       });
 
-      releaseSummary();
-      await request;
+      if (change === "revocation after context read") {
+        invalidateOperatorRolePolicy(viewer.id);
+      }
+      const sql = change === "revocation after context read" ? observeHostDataSql() : undefined;
+      try {
+        releaseSummary();
+        await request;
+        if (sql) {
+          expect(sql.queries).toEqual([]);
+        }
+      } finally {
+        sql?.restore();
+      }
       expect(respond).toHaveBeenCalledOnce();
       if (change === "revocation during target read") {
         expect(summaryLoader).not.toHaveBeenCalled();

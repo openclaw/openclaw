@@ -1,5 +1,5 @@
 import { fileURLToPath } from "node:url";
-import { expect, vi, type Mock } from "vitest";
+import { expect, onTestFinished, vi, type Mock } from "vitest";
 import { setRuntimeConfigSnapshot } from "../config/config.js";
 import { loadSessionEntryReadOnly } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -23,9 +23,10 @@ import {
   ensureCanonicalUserProfileForEmail,
   setCanonicalUserProfileRole,
 } from "../state/user-profile-writes.js";
+import { currentGitHubPublicationConfig } from "./github-publication-availability.js";
+import { prepareGitHubPublicationRequesterV2 } from "./github-publication-requester.js";
 import { readGitHubPublicationRequest } from "./github-publication-store.js";
 import {
-  createGitHubPublicationRequesterFixture,
   createRealPublicationWorkspace,
   createTestGitHubPublicationCoordinator,
   githubPublicationTestMocks,
@@ -52,6 +53,39 @@ type Backend = "local" | "repository";
 type Coordinator = ReturnType<typeof createTestGitHubPublicationCoordinator>;
 type Requester = NonNullable<Parameters<Coordinator["requestForSession"]>[0]["requester"]>;
 export const guestScopes = [SESSION_READ_SCOPE, SESSION_WRITE_SCOPE];
+
+export async function createGitHubPublicationRequesterFixture(params: {
+  profileId: string;
+  scopes: readonly string[];
+  sessionKey: string;
+  agentId: string;
+  getCommittedRuntimeConfig?: () => OpenClawConfig;
+}) {
+  const [{ createOperatorWsClient }, { prepareGatewayConnectOperatorAccess }] = await Promise.all([
+    import("./server/ws-connection/authenticated-request-dispatch.test-support.js"),
+    import("./server/ws-connection/connect-operator-access.js"),
+  ]);
+  const client = createOperatorWsClient({
+    connId: params.profileId,
+    scopes: [...params.scopes],
+  });
+  client.authenticatedUserProfile = {
+    profileId: params.profileId,
+    displayName: null,
+    avatarRevision: "fixture",
+    hasAvatar: false,
+    updatedAt: 1,
+  };
+  prepareGatewayConnectOperatorAccess(client);
+  const context = {
+    getRuntimeConfig: currentGitHubPublicationConfig,
+    getCommittedRuntimeConfig: params.getCommittedRuntimeConfig ?? currentGitHubPublicationConfig,
+  };
+  const session = { sessionKey: params.sessionKey, agentId: params.agentId };
+  const captured = await prepareGitHubPublicationRequesterV2({ client, context }, session);
+  onTestFinished(captured.release);
+  return { ...captured, client, context, session };
+}
 
 async function createRequesterPolicySources(
   session: { sessionId: string; sessionKey: string },
@@ -284,7 +318,7 @@ export async function prepareVisitorPublicationFixture(f: {
     { createEmptyPluginRegistry },
   ] = await Promise.all([
     import("../plugins/loader.js"),
-    import("../plugins/services.js"),
+    import("../plugins/services.test-support.js"),
     import("../plugins/runtime.js"),
     import("../plugins/registry-empty.js"),
   ]);
@@ -350,8 +384,17 @@ export async function prepareVisitorPublicationFixture(f: {
   );
   const gateway: PluginRuntime["gateway"] = {
     isAvailable: async () => true,
+    async openPluginPanel() {
+      throw new Error("Unexpected plugin panel request");
+    },
     async readSessionFacts() {
       throw new Error("Unexpected session facts request");
+    },
+    async withSessionFacts() {
+      throw new Error("Unexpected session read scope");
+    },
+    subscribeSessionChanges() {
+      throw new Error("Unexpected session changes subscription");
     },
     async request() {
       throw new Error("Unexpected Gateway request");

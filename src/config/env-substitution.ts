@@ -1,28 +1,5 @@
-/**
- * Environment variable substitution for config values.
- *
- * Supports `${VAR_NAME}` syntax in string values, substituted at config load time.
- * - Only uppercase env vars are matched: `[A-Z_][A-Z0-9_]*`
- * - `${VAR_NAME:-fallback}` uses `fallback` when the var is unset or empty
- * - Escape with `$${}` to output literal `${}`
- * - Missing env vars without a fallback throw `MissingEnvVarError` with context
- *
- * @example
- * ```json5
- * {
- *   models: {
- *     providers: {
- *       "vercel-gateway": {
- *         apiKey: "${VERCEL_GATEWAY_API_KEY}"
- *       }
- *     }
- *   }
- * }
- * ```
- */
-
+import { isPlainObject } from "../infra/plain-object.js";
 import { appendConfigPathSegment } from "../shared/dot-path.js";
-import { isPlainObject } from "../utils.js";
 import { parseEnvTemplateSecretRef } from "./types.secrets.js";
 
 const ENV_VAR_NAME_PATTERN = /^[A-Z_][A-Z0-9_]*$/;
@@ -49,57 +26,11 @@ export type EnvTemplateToken = {
   defaultValue?: string;
 };
 
-type EnvToken = EnvTemplateToken & { end: number };
-
-// Nested fallbacks stay literal; their inner references are scanned independently.
-function parseEnvTokenBody(body: string): Omit<EnvTemplateToken, "kind"> | null {
-  if (ENV_VAR_NAME_PATTERN.test(body)) {
-    return { name: body };
-  }
-
-  const operatorIndex = body.indexOf(DEFAULT_VALUE_OPERATOR);
-  if (operatorIndex === -1) {
-    return null;
-  }
-
-  const name = body.slice(0, operatorIndex);
-  if (!ENV_VAR_NAME_PATTERN.test(name)) {
-    return null;
-  }
-
-  const defaultValue = body.slice(operatorIndex + DEFAULT_VALUE_OPERATOR.length);
-  if (defaultValue.includes("$") || defaultValue.includes("{")) {
-    return null;
-  }
-  return { name, defaultValue };
-}
-
 /** Rebuilds the authored placeholder text for a parsed token. */
 function renderEnvTemplateToken(token: EnvTemplateToken): string {
   return token.defaultValue === undefined
     ? `\${${token.name}}`
     : `\${${token.name}${DEFAULT_VALUE_OPERATOR}${token.defaultValue}}`;
-}
-
-function parseEnvTokenAt(value: string, index: number): EnvToken | null {
-  if (value[index] !== "$") {
-    return null;
-  }
-
-  // Parse escaped placeholders first so "$${VAR}" never resolves from env.
-  const escaped = value[index + 1] === "$" && value[index + 2] === "{";
-  if (escaped || value[index + 1] === "{") {
-    const start = index + (escaped ? 3 : 2);
-    const end = value.indexOf("}", start);
-    if (end !== -1) {
-      const body = parseEnvTokenBody(value.slice(start, end));
-      if (body) {
-        return { kind: escaped ? "escaped" : "substitution", ...body, end };
-      }
-    }
-  }
-
-  return null;
 }
 
 /** Shares the substitution grammar with write-back preservation, in authoring order. */
@@ -111,13 +42,35 @@ export function scanEnvTemplateTokens(value: string): EnvTemplateToken[] {
   }));
 }
 
-function* iterateEnvTemplateTokens(value: string): Generator<EnvToken & { start: number }> {
+function* iterateEnvTemplateTokens(
+  value: string,
+): Generator<EnvTemplateToken & { start: number; end: number }> {
   for (let index = value.indexOf("$"); index !== -1; index = value.indexOf("$", index + 1)) {
-    const token = parseEnvTokenAt(value, index);
-    if (token) {
-      yield { ...token, start: index };
-      index = token.end;
+    // Parse escaped placeholders first so "$${VAR}" never resolves from env.
+    const escaped = value[index + 1] === "$" && value[index + 2] === "{";
+    if (!escaped && value[index + 1] !== "{") {
+      continue;
     }
+    const start = index + (escaped ? 3 : 2);
+    const end = value.indexOf("}", start);
+    if (end === -1) {
+      continue;
+    }
+    const body = value.slice(start, end);
+    const operatorIndex = body.indexOf(DEFAULT_VALUE_OPERATOR);
+    const name = operatorIndex === -1 ? body : body.slice(0, operatorIndex);
+    const defaultValue =
+      operatorIndex === -1 ? undefined : body.slice(operatorIndex + DEFAULT_VALUE_OPERATOR.length);
+    // Nested fallbacks stay literal; their inner references are scanned independently.
+    if (
+      !ENV_VAR_NAME_PATTERN.test(name) ||
+      defaultValue?.includes("$") ||
+      defaultValue?.includes("{")
+    ) {
+      continue;
+    }
+    yield { kind: escaped ? "escaped" : "substitution", name, defaultValue, start: index, end };
+    index = end;
   }
 }
 
@@ -197,10 +150,10 @@ export function containsEnvVarReference(value: string): boolean {
   return false;
 }
 
-function substituteAny(
+/** Resolve config string templates, preserving unresolved text when onMissing is supplied. */
+export function resolveConfigEnvVars(
   value: unknown,
-  env: NodeJS.ProcessEnv,
-  path: string,
+  env: NodeJS.ProcessEnv = process.env,
   opts?: SubstituteOptions,
 ): unknown {
   // Resume one parent at a time so callbacks retain recursive depth-first order
@@ -243,28 +196,11 @@ function substituteAny(
     }
     return current;
   };
-  const result = visit(value, path);
+  const result = visit(value, "");
   for (let next = pending.at(-1); next; next = pending.at(-1)) {
     if (!next()) {
       pending.pop();
     }
   }
   return result;
-}
-
-/**
- * Resolves `${VAR_NAME}` environment variable references in config values.
- *
- * @param obj - The parsed config object (after JSON5 parse and $include resolution)
- * @param env - Environment variables to use for substitution (defaults to process.env)
- * @param opts - Options: `onMissing` callback to collect warnings instead of throwing.
- * @returns The config object with env vars substituted
- * @throws {MissingEnvVarError} If a referenced env var is not set or empty (unless `onMissing` is set)
- */
-export function resolveConfigEnvVars(
-  obj: unknown,
-  env: NodeJS.ProcessEnv = process.env,
-  opts?: SubstituteOptions,
-): unknown {
-  return substituteAny(obj, env, "", opts);
 }

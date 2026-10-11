@@ -68,6 +68,7 @@ type HeldGatewaySuspension = GatewaySuspendCoordinatorEntryBase & {
   deadlineAtMs: number;
   inspect?: Partial<GatewayActiveWorkInspectors>;
   handoff?: GatewaySuspendHandoffOwner;
+  committedStopOwner?: GatewaySuspendHandoffOwner;
   shutdown?: { signal: AbortSignal; phase: "interrupting" | "exiting" };
   commitAdmission?: () => boolean;
   nowMs: () => number;
@@ -76,6 +77,8 @@ type HeldGatewaySuspension = GatewaySuspendCoordinatorEntryBase & {
 /** Private identity of one live process-owning host iteration, never a wire token. */
 export type GatewaySuspendHandoffOwner = {
   isCurrent: () => boolean;
+  /** Transfers a validated suspension into this host's synchronous one-way shutdown. */
+  commitStop?: () => void;
 };
 
 type GatewaySchedulerRecovery = GatewaySuspendCoordinatorEntryBase & {
@@ -444,7 +447,19 @@ function handoffRefusal(held: HeldGatewaySuspension, owner: GatewaySuspendHandof
 export function armGatewaySuspendHandoff(params: {
   suspensionId: string;
   owner: GatewaySuspendHandoffOwner;
+  commit?: true;
 }): Result<GatewaySuspendHandoffResult, string> {
+  const committed = params.commit ? getRestartingSuspension() : undefined;
+  if (
+    committed?.suspensionId === params.suspensionId &&
+    committed.committedStopOwner === params.owner
+  ) {
+    return ok({
+      status: "committed",
+      suspensionId: committed.suspensionId,
+      expiresAtMs: committed.expiresAtMs,
+    });
+  }
   const held = COORDINATOR_STATE.current;
   if (held?.kind !== "held" || held.suspensionId !== params.suspensionId) {
     return resultError("gateway suspension id does not match");
@@ -455,6 +470,44 @@ export function armGatewaySuspendHandoff(params: {
   }
   if (held.handoff && held.handoff !== params.owner) {
     return resultError("gateway suspension already belongs to another host iteration");
+  }
+  if (params.commit) {
+    if (!params.owner.commitStop) {
+      return resultError("gateway host does not support committed suspension stop");
+    }
+    const snapshot = createGatewayActiveWorkSnapshot(held.inspect, {
+      ignoreTerminalSessions: held.terminalPolicy === "terminate",
+    });
+    if (snapshot.writeCustody.some(({ count }) => count > 0)) {
+      return resultError("gateway write custody is still pending");
+    }
+    const changed = handoffRefusal(held, params.owner);
+    if (changed) {
+      return resultError(changed);
+    }
+    held.handoff = params.owner;
+    try {
+      params.owner.commitStop();
+    } catch {
+      // The callback may already have committed shutdown. Never reopen admission
+      // or turn an unknown stop outcome into permission to replay native effects.
+      return resultError("gateway suspension stop commitment outcome is uncertain");
+    }
+    const signal = getGatewayRestartDrainSignal();
+    if (
+      COORDINATOR_STATE.retiredForLifecycleReset !== held ||
+      !signal.aborted ||
+      held.shutdown?.signal !== signal ||
+      !isGatewayRestartDraining()
+    ) {
+      return resultError("gateway suspension stop commitment outcome is uncertain");
+    }
+    held.committedStopOwner = params.owner;
+    return ok({
+      status: "committed",
+      suspensionId: held.suspensionId,
+      expiresAtMs: held.expiresAtMs,
+    });
   }
   held.handoff = params.owner;
   return ok({ status: "armed", suspensionId: held.suspensionId, expiresAtMs: held.expiresAtMs });
@@ -509,26 +562,7 @@ export function getGatewaySuspendStatus(
   includeLifecycle = false,
 ): GatewaySuspendStatusResult {
   const retired = getRestartingSuspension();
-  if (retired) {
-    if (retired.suspensionId !== suspensionId) {
-      return { status: "conflict", expiresAtMs: retired.expiresAtMs };
-    }
-    // Committed shutdown outlives the reversible lease. Only observation remains;
-    // never run expiry recovery or commit its invalidated admission here.
-    const snapshot = createGatewayActiveWorkSnapshot(retired.inspect, {
-      ignoreTerminalSessions: retired.terminalPolicy === "terminate",
-    });
-    return {
-      status: "draining",
-      ...(includeLifecycle ? { ownerId: retired.requestId, phase: retired.shutdown!.phase } : {}),
-      expiresAtMs: retired.expiresAtMs,
-      activeCount: snapshot.counts.totalActive,
-      blockers: snapshot.blockers,
-      writeCustody: snapshot.writeCustody,
-      retryAfterMs: GATEWAY_SUSPEND_RETRY_AFTER_MS,
-    };
-  }
-  const held = currentSuspension();
+  const held = retired ?? currentSuspension();
   if (held?.kind === "recovering") {
     return schedulerRecoveryResult();
   }
@@ -538,14 +572,25 @@ export function getGatewaySuspendStatus(
   if (held.suspensionId !== suspensionId) {
     return { status: "conflict", expiresAtMs: held.expiresAtMs };
   }
-  const snapshot = refreshHeldSuspension(held);
+  // Committed shutdown outlives the reversible lease. Only observation remains;
+  // never run expiry recovery or commit its invalidated admission here.
+  const snapshot = retired
+    ? createGatewayActiveWorkSnapshot(held.inspect, {
+        ignoreTerminalSessions: held.terminalPolicy === "terminate",
+      })
+    : refreshHeldSuspension(held);
   if (!snapshot) {
     return getGatewaySuspendStatus(suspensionId, includeLifecycle);
   }
-  if (!snapshot.idle) {
+  if (retired || !snapshot.idle) {
     return {
       status: "draining",
-      ...(includeLifecycle ? { ownerId: held.requestId, phase: "draining" as const } : {}),
+      ...(includeLifecycle
+        ? {
+            ownerId: held.requestId,
+            phase: retired ? retired.shutdown!.phase : ("draining" as const),
+          }
+        : {}),
       expiresAtMs: held.expiresAtMs,
       activeCount: snapshot.counts.totalActive,
       blockers: snapshot.blockers,
@@ -570,24 +615,10 @@ export function resumeGatewaySuspend(suspensionId: string): GatewaySuspendResume
     };
   }
   const held = currentSuspension();
-  if (held?.kind === "recovering") {
-    return {
-      ok: false,
-      reason: "scheduler-resume-failed",
-      retryAfterMs: GATEWAY_SCHEDULER_RECOVERY_RETRY_MS,
-    };
-  }
-  if (!held) {
-    return {
-      ok: true,
-      status: "running",
-      resumed: false,
-    };
-  }
-  if (held.suspensionId !== suspensionId) {
+  if (held?.kind === "held" && held.suspensionId !== suspensionId) {
     return { ok: false, reason: "suspension-mismatch" };
   }
-  if (!resumeAndReopen(held)) {
+  if (held?.kind === "recovering" || (held && !resumeAndReopen(held))) {
     return {
       ok: false,
       reason: "scheduler-resume-failed",
@@ -597,7 +628,7 @@ export function resumeGatewaySuspend(suspensionId: string): GatewaySuspendResume
   return {
     ok: true,
     status: "running",
-    resumed: true,
+    resumed: held !== null,
   };
 }
 

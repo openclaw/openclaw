@@ -67,10 +67,6 @@ export async function verifyReconciledWorkspaceFinal(
     }
   };
   try {
-    await fence(() => reconciliation.verifyStable());
-    if (acceptUnchanged) {
-      await fence(() => reconciliation.verifyLocalStable());
-    }
     // A late writer can mutate before renewal enrolls and SIGSTOPs it.
     await fence(() => quiescence.assertActive());
     await fence(() => reconciliation.verifyStable());

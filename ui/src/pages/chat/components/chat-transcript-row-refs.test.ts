@@ -60,81 +60,53 @@ describe("transcript mounted-row measurement", () => {
   beforeEach(installTranscriptDomMocks);
   afterEach(resetTranscriptTestDom);
 
-  it.each(["cached", "overscan"])(
-    "avoids layout reads for %s row mounts while scrolling",
-    async (kind) => {
-      const { rows, virtualizer, refs, readViewport, cleanup } = mountRows();
-      const indexes = kind === "cached" ? [0, 1, 2] : [6, 7, 8];
+  it.each([
+    { kind: "cached", scrolling: true, indexes: [0, 1, 2] },
+    { kind: "overscan", scrolling: true, indexes: [6, 7, 8] },
+    { kind: "cold idle", scrolling: false, indexes: [0, 1, 2] },
+    { kind: "cold scrolling", scrolling: true, indexes: [0, 1, 2] },
+    { kind: "later microtask", scrolling: true, indexes: [0, 1], deferred: true },
+  ])(
+    "defers $kind row measurement to observers without layout reads",
+    async ({ kind, scrolling, indexes, deferred }) => {
+      const { rows, virtualizer, refs, readViewport, cleanup } = mountRows(scrolling);
+      const mounted = indexes.map((index) => expectDefined(rows[index], "mounted row"));
+      let height = deferred ? 160 : 80;
+      const readHeight = vi.fn(() => height);
       try {
-        for (const index of indexes) {
+        for (const [position, index] of indexes.entries()) {
+          const row = mounted[position]!;
+          Object.defineProperty(row, "offsetHeight", { configurable: true, get: readHeight });
           if (kind === "cached") {
             virtualizer.resizeItem(index, 80);
           }
-          refs.forKey(String(index))(rows[index]);
+          if (deferred && index === 1) {
+            queueMicrotask(() => {
+              refs.forKey("1")(row);
+              queueMicrotask(() => {
+                height = 80;
+              });
+            });
+          } else {
+            refs.forKey(String(index))(row);
+          }
         }
         await Promise.resolve();
         await Promise.resolve();
         await Promise.resolve();
+        expect(readHeight).not.toHaveBeenCalled();
         expect(readViewport).not.toHaveBeenCalled();
-        for (const index of indexes) {
-          expect(observedElements.has(expectDefined(rows[index], "mounted row"))).toBe(true);
+        expect(mounted.every((row) => observedElements.has(row))).toBe(true);
+        for (const observer of resizeObservers) {
+          for (const row of mounted) {
+            observer.emitTarget(row, 800, height);
+          }
         }
+        expect([...virtualizer.itemSizeCache.values()]).toEqual(indexes.map(() => 80));
+        expect(readHeight).not.toHaveBeenCalled();
       } finally {
         cleanup();
       }
     },
   );
-
-  it.each([false, true])("lets observers measure cold rows (scrolling=%s)", async (scrolling) => {
-    const { rows, virtualizer, refs, readViewport, cleanup } = mountRows(scrolling);
-    const readHeight = vi.fn(() => 80);
-    for (const row of rows.slice(0, 3)) {
-      Object.defineProperty(row, "offsetHeight", { configurable: true, get: readHeight });
-    }
-    try {
-      for (let index = 0; index < 3; index++) {
-        refs.forKey(String(index))(rows[index]);
-      }
-      await Promise.resolve();
-      await Promise.resolve();
-      expect(readHeight).not.toHaveBeenCalled();
-      expect(readViewport).not.toHaveBeenCalled();
-      expect(rows.slice(0, 3).every((row) => observedElements.has(row))).toBe(true);
-      for (const observer of resizeObservers) {
-        for (const row of rows.slice(0, 3)) {
-          observer.emitTarget(row, 800, 80);
-        }
-      }
-      expect([...virtualizer.itemSizeCache.values()]).toEqual([80, 80, 80]);
-      expect(readHeight).not.toHaveBeenCalled();
-    } finally {
-      cleanup();
-    }
-  });
-
-  it("waits for preview clamps on rows mounted in a later microtask", async () => {
-    const { rows, virtualizer, refs, cleanup } = mountRows();
-    const secondRow = expectDefined(rows[1], "second row");
-    let height = 160;
-    Object.defineProperty(secondRow, "offsetHeight", { configurable: true, get: () => height });
-    try {
-      refs.forKey("0")(rows[0]);
-      queueMicrotask(() => {
-        refs.forKey("1")(secondRow);
-        queueMicrotask(() => {
-          height = 80;
-        });
-      });
-      await Promise.resolve();
-      await Promise.resolve();
-      await Promise.resolve();
-      for (const observer of resizeObservers) {
-        observer.emitTarget(secondRow, 800, height);
-      }
-      expect(virtualizer.itemSizeCache.get("1")).toBe(80);
-      expect(observedElements.has(secondRow)).toBe(true);
-    } finally {
-      cleanup();
-    }
-  });
 });

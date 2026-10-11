@@ -51,6 +51,14 @@ function renderStatusChips(status: LogbookStatusPayload): TemplateResult {
     : status.captureEnabled
       ? t("logbook.status.capturing", { seconds: String(status.captureIntervalSeconds) })
       : t("logbook.status.disabled");
+  const chip = (content: TemplateResult | string, kind = "", title?: string) => html`
+    <span
+      class=${`logbook__chip${kind ? ` logbook__chip--${kind}` : ""}`}
+      title=${title ?? nothing}
+    >
+      ${content}
+    </span>
+  `;
   return html`
     <div class="logbook__chips">
       <span class="logbook__chip ${capturing ? "logbook__chip--ok" : "logbook__chip--warn"}">
@@ -59,53 +67,44 @@ function renderStatusChips(status: LogbookStatusPayload): TemplateResult {
       </span>
       ${
         status.nodeName || status.nodeId
-          ? html`<span class="logbook__chip" title=${t("logbook.status.nodeHelp")}>
-              ${icons.monitor} ${status.nodeName ?? status.nodeId}
-            </span>`
+          ? chip(
+              html`${icons.monitor} ${status.nodeName ?? status.nodeId}`,
+              "",
+              t("logbook.status.nodeHelp"),
+            )
           : nothing
       }
       ${
         status.pendingFrames > 0
-          ? html`<span class="logbook__chip" title=${t("logbook.status.pendingHelp")}>
-              ${t("logbook.status.pending", { count: String(status.pendingFrames) })}
-            </span>`
+          ? chip(
+              t("logbook.status.pending", { count: String(status.pendingFrames) }),
+              "",
+              t("logbook.status.pendingHelp"),
+            )
           : nothing
       }
-      ${
-        status.analysisRunning
-          ? html`<span class="logbook__chip logbook__chip--busy"
-              >${t("logbook.status.analyzing")}</span
-            >`
-          : nothing
-      }
+      ${status.analysisRunning ? chip(t("logbook.status.analyzing"), "busy") : nothing}
       ${
         status.lastCaptureError
-          ? html`<span
-              class="logbook__chip logbook__chip--error"
-              title=${formatUiExternalText(status.lastCaptureError)}
-            >
-              ${t("logbook.status.captureError")}
-            </span>`
+          ? chip(
+              t("logbook.status.captureError"),
+              "error",
+              formatUiExternalText(status.lastCaptureError),
+            )
           : nothing
       }
       ${
         status.lastBatch?.status === "error"
-          ? html`<span
-              class="logbook__chip logbook__chip--error"
-              title=${formatUiExternalText(status.lastBatch.error)}
-            >
-              ${t("logbook.status.batchError")}
-            </span>`
+          ? chip(
+              t("logbook.status.batchError"),
+              "error",
+              formatUiExternalText(status.lastBatch.error),
+            )
           : nothing
       }
       ${
         status.visionModelSource === "missing"
-          ? html`<span
-              class="logbook__chip logbook__chip--warn"
-              title=${t("logbook.status.modelMissingHelp")}
-            >
-              ${t("logbook.status.modelMissing")}
-            </span>`
+          ? chip(t("logbook.status.modelMissing"), "warn", t("logbook.status.modelMissingHelp"))
           : nothing
       }
     </div>
@@ -350,7 +349,7 @@ export function renderLogbook(props: LogbookProps) {
   // The tab only renders while the plugin's descriptor is advertised, so
   // enablement gating lives in the shell; connectivity is the only guard here.
   const active = props.connected;
-  configureLogbookPolling(state, active ? props.client : null, active);
+  configureLogbookPolling(state, active ? props.client : null);
   if (active && !state.timeline && !state.loading && !state.error) {
     void loadLogbook(state, props.client);
   }
@@ -361,37 +360,33 @@ export function renderLogbook(props: LogbookProps) {
   const isToday = state.day === todayKey;
   const status = state.status;
   const cards = state.timeline?.cards ?? [];
+  const button = (
+    content: TemplateResult | string,
+    onClick: () => void,
+    disabled = false,
+    label?: string,
+  ) => html`<button
+    class="btn btn--small"
+    type="button"
+    aria-label=${label ?? nothing}
+    ?disabled=${disabled}
+    @click=${onClick}
+  >
+    ${content}
+  </button>`;
   return html`
     <section class="logbook">
       <header class="logbook__header">
         <div class="logbook__daynav">
-          <button
-            class="btn btn--small"
-            type="button"
-            aria-label=${t("logbook.nav.previousDay")}
-            @click=${() => void loadLogbook(state, props.client, { day: shiftDay(state.day, -1) })}
-          >
-            ‹
-          </button>
+          ${button("‹", () => void loadLogbook(state, props.client, { day: shiftDay(state.day, -1) }), false, t("logbook.nav.previousDay"))}
           <span class="logbook__day">${state.day}</span>
-          <button
-            class="btn btn--small"
-            type="button"
-            aria-label=${t("logbook.nav.nextDay")}
-            ?disabled=${isToday}
-            @click=${() => void loadLogbook(state, props.client, { day: shiftDay(state.day, 1) })}
-          >
-            ›
-          </button>
+          ${button("›", () => void loadLogbook(state, props.client, { day: shiftDay(state.day, 1) }), isToday, t("logbook.nav.nextDay"))}
           ${
             !isToday
-              ? html`<button
-                  class="btn btn--small"
-                  type="button"
-                  @click=${() => void loadLogbook(state, props.client, { today: true })}
-                >
-                  ${t("logbook.nav.today")}
-                </button>`
+              ? button(
+                  t("logbook.nav.today"),
+                  () => void loadLogbook(state, props.client, { today: true }),
+                )
               : nothing
           }
         </div>
@@ -399,37 +394,18 @@ export function renderLogbook(props: LogbookProps) {
         <div class="logbook__actions">
           ${
             state.status
-              ? html`<button
-                  class="btn btn--small"
-                  type="button"
-                  ?disabled=${state.actionPending || !state.status.captureEnabled}
-                  @click=${() =>
-                    void setLogbookCapturePaused(state, props.client, !state.status?.capturePaused)}
-                >
-                  ${
-                    state.status.capturePaused
-                      ? t("logbook.actions.resume")
-                      : t("logbook.actions.pause")
-                  }
-                </button>`
+              ? button(
+                  t(
+                    state.status.capturePaused ? "logbook.actions.resume" : "logbook.actions.pause",
+                  ),
+                  () =>
+                    void setLogbookCapturePaused(state, props.client, !state.status?.capturePaused),
+                  state.actionPending || !state.status.captureEnabled,
+                )
               : nothing
           }
-          <button
-            class="btn btn--small"
-            type="button"
-            ?disabled=${state.actionPending}
-            @click=${() => void runLogbookAnalysisNow(state, props.client)}
-          >
-            ${t("logbook.actions.analyzeNow")}
-          </button>
-          <button
-            class="btn btn--small"
-            type="button"
-            ?disabled=${state.loading}
-            @click=${() => void loadLogbook(state, props.client)}
-          >
-            ${icons.refresh}
-          </button>
+          ${button(t("logbook.actions.analyzeNow"), () => void runLogbookAnalysisNow(state, props.client), state.actionPending)}
+          ${button(icons.refresh, () => void loadLogbook(state, props.client), state.loading)}
         </div>
       </header>
       ${state.error ? html`<div class="callout danger" role="alert">${state.error}</div>` : nothing}

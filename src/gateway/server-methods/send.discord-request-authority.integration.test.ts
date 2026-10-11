@@ -5,7 +5,7 @@ import { onTrustedMessageAuditEvent } from "../../audit/message-audit-events.js"
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { getDeliveryQueueEntryStatus } from "../../infra/delivery-queue-sqlite.js";
+import { getDeliveryQueueEntryStatus } from "../../infra/delivery-queue-sqlite.test-support.js";
 import { isDeliveryRecoveryRetryEligible } from "../../infra/delivery-recovery.shared.js";
 import { prepareDeferredDeliveryAdmission } from "../../infra/outbound/deferred-delivery-admission.js";
 import { deliverOutboundPayloads } from "../../infra/outbound/deliver.js";

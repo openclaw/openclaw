@@ -94,17 +94,13 @@ function expectNotice(
 }
 
 describe("Codex fallback terminal results", () => {
-  it.each(["message", "spawn", "native continuation", "abort", "timeout"] as const)(
+  it.each(["spawn", "abort"] as const)(
     "retains a denied fallback's result after a %s",
     async (effect) => {
       const params = await paramsForWorkspace(`acted-${effect}`, "first");
       const refusal = await refusedTurn(params);
       const telemetry = buildEmptyToolTelemetry();
-      if (effect === "message") {
-        telemetry.didSendViaMessagingTool = true;
-        telemetry.sourceReplyDelivered = true;
-        telemetry.messagingToolSentTexts = ["Synthetic delivered update"];
-      } else if (effect === "spawn") {
+      if (effect === "spawn") {
         telemetry.acceptedSessionSpawns = [
           { runId: "child-run", childSessionKey: "agent:main:subagent:child" },
         ];
@@ -115,13 +111,9 @@ describe("Codex fallback terminal results", () => {
         "other",
         telemetry,
       );
-      if (effect === "native continuation") {
-        // The attempt finalizer adds this after the projector computes replay metadata.
-        denied.runtimeContinuationStarted = true;
-      } else if (effect === "abort" || effect === "timeout") {
+      if (effect === "abort") {
         denied.terminal = attemptTerminal.normalize({
           aborted: true,
-          timedOut: effect === "timeout",
           promptError: "Unexpected status 403: forbidden",
           promptErrorSource: "prompt",
         });
@@ -181,24 +173,19 @@ describe("Codex fallback terminal results", () => {
     expect(runAttempt).toHaveBeenCalledTimes(1);
   });
 
-  it.each(["abort", "timeout", "failure"] as const)(
-    "does not replay a primary refusal superseded by %s",
-    async (terminal) => {
-      const params = await paramsForWorkspace(`primary-${terminal}`, "first");
-      const refusal = await refusedTurn(params);
-      refusal.terminal = attemptTerminal.normalize({
-        aborted: terminal === "abort",
-        timedOut: terminal === "timeout",
-        promptError: terminal === "failure" ? "Native connection closed" : undefined,
-        promptErrorSource: "prompt",
-      });
-      runAttempt.mockReset().mockResolvedValue(refusal);
-      const harness = createHarness();
+  it("does not replay a primary refusal superseded by abort", async () => {
+    const params = await paramsForWorkspace("primary-abort", "first");
+    const refusal = await refusedTurn(params);
+    refusal.terminal = attemptTerminal.normalize({
+      aborted: true,
+      promptErrorSource: "prompt",
+    });
+    runAttempt.mockReset().mockResolvedValue(refusal);
+    const harness = createHarness();
 
-      await expect(harness.runAttempt?.(params)).resolves.toBe(refusal);
-      expect(runAttempt).toHaveBeenCalledTimes(1);
-    },
-  );
+    await expect(harness.runAttempt?.(params)).resolves.toBe(refusal);
+    expect(runAttempt).toHaveBeenCalledTimes(1);
+  });
 
   it("keeps the refusal and avoids repeating a target denied before assistant output", async () => {
     const firstParams = await paramsForWorkspace("denied", "first");

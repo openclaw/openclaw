@@ -17,6 +17,16 @@ vi.mock("../process/exec.js", async (importOriginal) => ({
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 
+it("gives the installed Gateway 330 seconds to drain and exit", () => {
+  const plist = buildLaunchAgentPlist({
+    label: "ai.openclaw.gateway",
+    programArguments: ["openclaw", "gateway"],
+    stdoutPath: "/dev/null",
+    stderrPath: "/dev/null",
+  });
+  expect(plist).toMatch(/<key>ExitTimeOut<\/key>\s*<integer>330<\/integer>/u);
+});
+
 describe("LaunchAgent environment round-trip", () => {
   it("preserves inline, file, and overlapping provenance after merging generated environment", async () => {
     const dir = dirs.make("openclaw-plist-provenance-");

@@ -12,23 +12,19 @@ const gatewayRegistry = new Map<string, GatewayPluginContract>();
 // collide with user-configured account IDs.
 const DEFAULT_ACCOUNT_KEY = "\0__default__";
 
-function resolveAccountKey(accountId?: string): string {
-  return accountId ?? DEFAULT_ACCOUNT_KEY;
-}
-
 export function registerGateway(
   accountId: string | undefined,
   gateway: GatewayPluginContract,
 ): void {
-  gatewayRegistry.set(resolveAccountKey(accountId), gateway);
+  gatewayRegistry.set(accountId ?? DEFAULT_ACCOUNT_KEY, gateway);
 }
 
 export function unregisterGateway(accountId?: string): void {
-  gatewayRegistry.delete(resolveAccountKey(accountId));
+  gatewayRegistry.delete(accountId ?? DEFAULT_ACCOUNT_KEY);
 }
 
 export function getGateway(accountId?: string): GatewayPluginContract | undefined {
-  return gatewayRegistry.get(resolveAccountKey(accountId));
+  return gatewayRegistry.get(accountId ?? DEFAULT_ACCOUNT_KEY);
 }
 
 export function clearGateways(): void {

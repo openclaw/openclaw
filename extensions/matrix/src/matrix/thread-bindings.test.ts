@@ -7,13 +7,15 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
   createPluginStateKeyedStoreForTests,
+  createPluginStateKeyedStoreV2ForTests,
   createPluginStateSyncKeyedStoreForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { getSessionBindingService, testing } from "openclaw/plugin-sdk/session-binding-runtime";
+import { SqliteWorkerError } from "openclaw/plugin-sdk/sqlite-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginRuntime } from "../../runtime-api.js";
-import { setMatrixRuntime } from "../runtime.js";
+import { getMatrixRuntime, setMatrixRuntime } from "../runtime.js";
 import {
   resolveMatrixStateFilePath,
   resolveMatrixStoragePaths,
@@ -146,6 +148,7 @@ describe("matrix thread bindings", () => {
       targetSessionKey?: string;
       lastActivityAt?: number;
       boundAt?: number;
+      idleTimeoutMs?: number;
     }>("matrix", {
       namespace: "thread-bindings",
       maxEntries: 10_000,
@@ -160,6 +163,7 @@ describe("matrix thread bindings", () => {
         parentConversationId?: string;
         targetSessionKey?: string;
         lastActivityAt?: number;
+        idleTimeoutMs?: number;
       }>,
     };
   }
@@ -196,6 +200,12 @@ describe("matrix thread bindings", () => {
     sendMessageMatrixMock.mockClear();
     setMatrixRuntime({
       state: {
+        openKeyedStoreV2: (options: OpenKeyedStoreOptions, authority) =>
+          createPluginStateKeyedStoreV2ForTests(
+            "matrix",
+            options,
+            authority ?? { assertCurrent() {} },
+          ),
         openKeyedStore: (options: OpenKeyedStoreOptions) =>
           createPluginStateKeyedStoreForTests("matrix", options),
         openSyncKeyedStore: (options: OpenKeyedStoreOptions) =>
@@ -304,7 +314,7 @@ describe("matrix thread bindings", () => {
   });
 
   it("posts intro messages inside existing Matrix threads for current placement", async () => {
-    const cfg = { agents: { list: [{ id: "main" }, { id: "molty" }] } };
+    const cfg = { agents: { entries: { main: {}, molty: {} } } };
     await createBindingManager({ cfg });
 
     const binding = await bindCurrentThread({
@@ -624,6 +634,291 @@ describe("matrix thread bindings", () => {
     }
   });
 
+  it("publishes a binding only after its worker write commits", async () => {
+    await createBindingManager();
+    const entered = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const state = getMatrixRuntime().state;
+    const openStore = state.openKeyedStoreV2;
+    const open = vi.spyOn(state, "openKeyedStoreV2").mockImplementation((options, authority) => {
+      const store = openStore(options, authority);
+      return {
+        ...store,
+        register: async (...args) => {
+          entered.resolve();
+          await release.promise;
+          await store.register(...args);
+        },
+      };
+    });
+    const binding = bindCurrentThread();
+    try {
+      await entered.promise;
+      expect(
+        await getSessionBindingService().inspectByConversationAsync(currentThreadConversation()),
+      ).toMatchObject({ status: "available", binding: null });
+    } finally {
+      release.resolve();
+      await binding;
+      open.mockRestore();
+    }
+    expect(
+      await getSessionBindingService().inspectByConversationAsync(currentThreadConversation()),
+    ).toMatchObject({
+      status: "available",
+      binding: { targetSessionKey: "agent:ops:subagent:child" },
+    });
+  });
+
+  it("settles due async activity before returning and coalesces only committed timestamps", async () => {
+    const manager = await createBindingManager();
+    const binding = await bindCurrentThread();
+    const bindingsPath = await resolveBindingsFilePath();
+    const touchedAt = binding.boundAt + 60_000;
+    const service = getSessionBindingService();
+
+    const touching = service.touchAsync(binding.bindingId, touchedAt, binding.conversation);
+    const snapshot = manager.persist();
+    await Promise.all([touching, snapshot]);
+    expect(await readPersistedLastActivityAt(bindingsPath)).toBe(touchedAt);
+
+    await service.touchAsync(binding.bindingId, touchedAt + 1_000, binding.conversation);
+    expect(await readPersistedLastActivityAt(bindingsPath)).toBe(touchedAt);
+    expect(manager.getByConversation(binding.conversation)?.lastActivityAt).toBe(touchedAt + 1_000);
+  });
+
+  it("keeps active bindings routable during coalesced touches and flushes the final activity", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-08T12:00:00.000Z"));
+    const manager = await createBindingManager({ idleTimeoutMs: 10_000, enableSweeper: true });
+    await vi.advanceTimersByTimeAsync(45_000);
+    const binding = await bindCurrentThread();
+    const bindingsPath = await resolveBindingsFilePath();
+    const service = getSessionBindingService();
+
+    for (let elapsed = 5_000; elapsed <= 15_000; elapsed += 5_000) {
+      await vi.advanceTimersByTimeAsync(5_000);
+      await service.touchAsync(binding.bindingId, Date.now(), binding.conversation);
+      const expected = {
+        bindingId: binding.bindingId,
+        expiresAt: Date.now() + 10_000,
+        metadata: { lastActivityAt: Date.now() },
+      };
+      expect(await service.resolveByConversationAsync(binding.conversation)).toMatchObject(
+        expected,
+      );
+      expect(await service.inspectByConversationAsync(binding.conversation)).toMatchObject({
+        status: "available",
+        binding: expected,
+      });
+    }
+    expect(manager.getByConversation(binding.conversation)?.lastActivityAt).toBe(
+      binding.boundAt + 15_000,
+    );
+    expect(await readPersistedLastActivityAt(bindingsPath)).toBe(binding.boundAt);
+
+    await vi.advanceTimersByTimeAsync(30_000);
+    await manager.stop();
+    expect(await readPersistedLastActivityAt(bindingsPath)).toBe(binding.boundAt + 15_000);
+  });
+
+  it.each(["bind", "unbind"] as const)(
+    "captures an explicit persistence snapshot after a queued %s settles",
+    async (operation) => {
+      const manager = await createBindingManager();
+      const original = operation === "unbind" ? await bindCurrentThread() : undefined;
+      const entered = Promise.withResolvers<void>();
+      const release = Promise.withResolvers<void>();
+      const state = getMatrixRuntime().state;
+      const openStore = state.openKeyedStoreV2;
+      let held = false;
+      const hold = async () => {
+        if (!held) {
+          held = true;
+          entered.resolve();
+          await release.promise;
+        }
+      };
+      const open = vi.spyOn(state, "openKeyedStoreV2").mockImplementation((options, authority) => {
+        const store = openStore(options, authority);
+        return options.namespace === "thread-bindings"
+          ? {
+              ...store,
+              register: async (...args) => {
+                await hold();
+                return await store.register(...args);
+              },
+              delete: async (...args) => {
+                await hold();
+                return await store.delete(...args);
+              },
+            }
+          : store;
+      });
+      const mutation = original
+        ? getSessionBindingService().unbind({ bindingId: original.bindingId, reason: "manual" })
+        : bindCurrentThread();
+      try {
+        await entered.promise;
+        const persisting = manager.persist();
+        release.resolve();
+        await Promise.all([mutation, persisting]);
+      } finally {
+        release.resolve();
+        await mutation;
+        open.mockRestore();
+      }
+      const persisted = await readPersistedBindings(await resolveBindingsFilePath());
+      const inspected = await getSessionBindingService().inspectByConversationAsync(
+        currentThreadConversation(),
+      );
+      if (operation === "bind") {
+        expect(persisted.bindings).toMatchObject([
+          { conversationId: "$thread", targetSessionKey: "agent:ops:subagent:child" },
+        ]);
+        expect(inspected).toMatchObject({
+          status: "available",
+          binding: { targetSessionKey: "agent:ops:subagent:child" },
+        });
+      } else {
+        expect(persisted.bindings).toEqual([]);
+        expect(inspected).toMatchObject({ status: "available", binding: null });
+      }
+    },
+  );
+
+  it.each(["before-commit", "after-commit"] as const)(
+    "reconciles a %s snapshot failure without leaking an unhandled rejection",
+    async (failurePoint) => {
+      const manager = await createBindingManager();
+      await bindCurrentThread({ conversationId: "$first" });
+      await bindCurrentThread({ conversationId: "$second" });
+      const state = getMatrixRuntime().state;
+      const openStore = state.openKeyedStoreV2;
+      let writes = 0;
+      const open = vi.spyOn(state, "openKeyedStoreV2").mockImplementation((options, authority) => {
+        const store = openStore(options, authority);
+        return options.namespace === "thread-bindings"
+          ? {
+              ...store,
+              register: async (...args) => {
+                writes += 1;
+                if (writes === 2 && failurePoint === "before-commit") {
+                  throw new Error("snapshot write failed");
+                }
+                await store.register(...args);
+                if (writes === 2) {
+                  throw new Error("snapshot write failed");
+                }
+              },
+            }
+          : store;
+      });
+      const onUnhandledRejection = vi.fn();
+      process.on("unhandledRejection", onUnhandledRejection);
+      let persisted: Awaited<ReturnType<typeof readPersistedBindings>>;
+      try {
+        await expect(
+          manager.setIdleTimeoutBySessionKeyAsync({
+            targetSessionKey: "agent:ops:subagent:child",
+            idleTimeoutMs: 5_000,
+          }),
+        ).rejects.toThrow("snapshot write failed");
+        // The worker read crosses the event-loop boundary where orphaned rejections surface.
+        persisted = await readPersistedBindings(await resolveBindingsFilePath());
+        expect(onUnhandledRejection).not.toHaveBeenCalled();
+      } finally {
+        process.off("unhandledRejection", onUnhandledRejection);
+        open.mockRestore();
+      }
+      expect(persisted.bindings.filter((binding) => binding.idleTimeoutMs === 5_000)).toHaveLength(
+        failurePoint === "before-commit" ? 1 : 2,
+      );
+      for (const record of persisted.bindings) {
+        expect(
+          await getSessionBindingService().inspectByConversationAsync(
+            currentThreadConversation({ conversationId: record.conversationId }),
+          ),
+        ).toMatchObject({
+          status: "available",
+          binding: { metadata: { idleTimeoutMs: record.idleTimeoutMs } },
+        });
+        expect(manager.getByConversation({ conversationId: record.conversationId! })).toMatchObject(
+          {
+            idleTimeoutMs: record.idleTimeoutMs,
+          },
+        );
+      }
+      await manager.persist();
+    },
+  );
+
+  it.each(["unknown-write", "failed-reconciliation"] as const)(
+    "retires uncertain binding projections and settles queued work after %s",
+    async (failure) => {
+      const manager = await createBindingManager();
+      await bindCurrentThread();
+      const state = getMatrixRuntime().state;
+      const openStore = state.openKeyedStoreV2;
+      const entered = Promise.withResolvers<void>();
+      const release = Promise.withResolvers<void>();
+      let reads = 0;
+      const open = vi.spyOn(state, "openKeyedStoreV2").mockImplementation((options, authority) => {
+        const store = openStore(options, authority);
+        return options.namespace === "thread-bindings"
+          ? {
+              ...store,
+              entries: async () => {
+                reads += 1;
+                if (reads > 1) {
+                  throw new Error("durable reconciliation unavailable");
+                }
+                return await store.entries();
+              },
+              register: async () => {
+                entered.resolve();
+                await release.promise;
+                if (failure === "unknown-write") {
+                  throw new Error("write failed", {
+                    cause: new SqliteWorkerError("worker outcome uncertain", "outcome-unknown"),
+                  });
+                }
+                throw new Error("snapshot write failed");
+              },
+            }
+          : store;
+      });
+      const mutation = manager.setIdleTimeoutBySessionKeyAsync({
+        targetSessionKey: "agent:ops:subagent:child",
+        idleTimeoutMs: 5_000,
+      });
+      const failedMutation = expect(mutation).rejects.toThrow(/restart the account/);
+      try {
+        await entered.promise;
+        const queued = manager.persist();
+        const failedQueued = expect(queued).rejects.toThrow(/retired/);
+        const stopped = manager.stop();
+        const failedStop = expect(stopped).rejects.toThrow(/retired/);
+        release.resolve();
+        await Promise.all([failedMutation, failedQueued, failedStop]);
+        trackedManagers.delete(manager);
+        expect(reads).toBe(failure === "unknown-write" ? 1 : 2);
+        expect(
+          getSessionBindingService().getCapabilities(currentThreadConversation()),
+        ).toMatchObject({
+          adapterAvailable: false,
+        });
+        expect(
+          await getSessionBindingService().inspectByConversationAsync(currentThreadConversation()),
+        ).toMatchObject({ binding: null });
+        expect(manager.listBindings()).toEqual([]);
+      } finally {
+        release.resolve();
+        open.mockRestore();
+      }
+    },
+  );
+
   it("persists the latest touched activity only after the debounce window", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-03-06T10:00:00.000Z"));
@@ -651,22 +946,29 @@ describe("matrix thread bindings", () => {
     }
   });
 
-  it("flushes pending touch persistence on stop", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-03-06T10:00:00.000Z"));
-    try {
-      const manager = await createBindingManager();
-      const binding = await bindCurrentThread();
-      const touchedAt = Date.parse("2026-03-06T12:00:00.000Z");
-      getSessionBindingService().touch(binding.bindingId, touchedAt);
+  it.each(["completed", "queued"] as const)(
+    "flushes a %s async touch on stop without leaving a delayed write",
+    async (touchState) => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date("2026-03-06T10:00:00.000Z"));
+      try {
+        const logVerboseMessage = vi.fn();
+        const manager = await createBindingManager({ logVerboseMessage });
+        const binding = await bindCurrentThread();
+        const touchedAt = binding.boundAt + 5_000;
+        const touching = manager.touchBindingAsync(binding.bindingId, touchedAt);
+        if (touchState === "completed") {
+          await touching;
+        }
 
-      await manager.stop();
-      vi.useRealTimers();
-
-      const bindingsPath = await resolveBindingsFilePath();
-      expect(await readPersistedLastActivityAt(bindingsPath)).toBe(touchedAt);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
+        await Promise.all([touching, manager.stop()]);
+        const bindingsPath = await resolveBindingsFilePath();
+        expect(await readPersistedLastActivityAt(bindingsPath)).toBe(touchedAt);
+        await vi.advanceTimersByTimeAsync(30_000);
+        expect(logVerboseMessage).not.toHaveBeenCalled();
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
 });
