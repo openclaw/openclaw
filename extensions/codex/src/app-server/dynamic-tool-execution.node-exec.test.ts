@@ -3,47 +3,61 @@ import {
   handleDynamicToolCallWithTimeout,
   resolveDynamicToolCallTimeoutMs,
 } from "./dynamic-tool-execution.js";
-import type { CodexDynamicToolCallResponse } from "./protocol.js";
+import type { CodexDynamicToolCallParams, CodexDynamicToolCallResponse } from "./protocol.js";
 
 const dynamicCallContext = { threadId: "thread-1", turnId: "turn-1", namespace: null };
 
-describe("foreground node execution watchdog", () => {
+describe("tool-owned execution watchdog", () => {
   afterEach(() => {
     vi.restoreAllMocks();
     vi.useRealTimers();
   });
 
-  it.each([
-    { timeoutSeconds: 900, executionTimeoutMs: 910_000, completionMs: 690_000 },
+  it.each<
+    Pick<CodexDynamicToolCallParams, "tool" | "arguments"> & {
+      executionTimeoutMs: number;
+      completionMs: number;
+    }
+  >([
     {
-      timeoutSeconds: Number.MAX_VALUE,
+      tool: "node_exec",
+      arguments: { command: "long-command", timeoutSeconds: 900 },
+      executionTimeoutMs: 910_000,
+      completionMs: 690_000,
+    },
+    {
+      tool: "node_exec",
+      arguments: { command: "long-command", timeoutSeconds: Number.MAX_VALUE },
       executionTimeoutMs: 2_147_483_647,
       completionMs: 2_147_000_001,
     },
+    {
+      tool: "automations",
+      arguments: { action: "run", jobId: "job", runMode: "force", timeoutMs: 1_000 },
+      executionTimeoutMs: 61_000,
+      completionMs: 1_500,
+    },
   ])(
-    "preserves foreground node execution with timeoutSeconds=$timeoutSeconds",
-    async ({ timeoutSeconds, executionTimeoutMs, completionMs }) => {
+    "preserves $tool execution through its owned completion budget",
+    async ({ tool, arguments: toolArguments, executionTimeoutMs, completionMs }) => {
       vi.useFakeTimers();
-      const call = {
+      const call: CodexDynamicToolCallParams = {
         ...dynamicCallContext,
-        callId: "call-node-exec",
-        tool: "node_exec",
-        arguments: {
-          command: "long-command",
-          timeoutSeconds,
-        },
+        callId: "call-tool-owned-budget",
+        tool,
+        arguments: toolArguments,
       };
       const getExecutionTimeoutMs = vi.fn(() => executionTimeoutMs);
       const completed: CodexDynamicToolCallResponse = {
         success: true,
-        contentItems: [{ type: "inputText", text: "command completed" }],
+        contentItems: [{ type: "inputText", text: "tool completed" }],
       };
       const toolBridge = {
         availableTools: [
           {
-            name: "node_exec",
-            label: "node_exec",
-            description: "Run a command on the node",
+            name: tool,
+            label: tool,
+            description: "Run with a tool-owned execution budget",
             parameters: {},
             execute: vi.fn(),
             getExecutionTimeoutMs,

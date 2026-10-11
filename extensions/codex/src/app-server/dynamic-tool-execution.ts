@@ -529,17 +529,15 @@ export function resolveDynamicToolCallTimeoutMs(params: {
   toolBridge?: Pick<CodexDynamicToolBridge, "availableTools">;
 }): number {
   const args = isJsonObject(params.call.arguments) ? params.call.arguments : undefined;
-  if (params.call.tool === "node_exec") {
-    const executionTimeoutMs = params.toolBridge?.availableTools
-      .find((tool) => tool.name === params.call.tool)
-      ?.getExecutionTimeoutMs?.(params.call.arguments);
-    if (executionTimeoutMs !== undefined) {
-      // Foreground node execution owns its command and transport budgets.
-      return addSafeTimeoutDelayGraceMs(
-        executionTimeoutMs,
-        CODEX_DYNAMIC_TOOL_TIMEOUT_SECONDS_GRACE_MS,
-      );
-    }
+  const executionTimeoutMs = params.toolBridge?.availableTools
+    .find((tool) => tool.name === params.call.tool)
+    ?.getExecutionTimeoutMs?.(params.call.arguments);
+  if (executionTimeoutMs !== undefined) {
+    // Tools own their execution and transport budgets; the harness adds completion grace.
+    return addSafeTimeoutDelayGraceMs(
+      executionTimeoutMs,
+      CODEX_DYNAMIC_TOOL_TIMEOUT_SECONDS_GRACE_MS,
+    );
   }
   if (
     params.call.tool === "openclaw" ||

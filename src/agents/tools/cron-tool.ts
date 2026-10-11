@@ -112,6 +112,10 @@ const CRON_SELF_REMOVE_SCOPE_ERROR = "Automations tool is restricted to the curr
 const CRON_RUN_MAX_WAIT_MS = 10 * 60_000;
 const CRON_RUN_ENQUEUE_TIMEOUT_MS = 60_000;
 
+function resolveCronRunWaitTimeoutMs(timeoutMs?: number): number {
+  return Math.min(timeoutMs ?? 60_000, CRON_RUN_MAX_WAIT_MS);
+}
+
 function readCronSelfRemoveOnlyJobId(opts: CronToolOptions | undefined) {
   return opts?.selfRemoveOnlyJobId?.trim() || undefined;
 }
@@ -260,6 +264,23 @@ export function createCronTool(opts?: CronToolOptions, deps?: CronToolDeps): Any
           : "also"
         : undefined,
     }),
+    getExecutionTimeoutMs: (args) => {
+      if (!isRecord(args)) {
+        return undefined;
+      }
+      try {
+        if (readToolStringParam(args, "action") !== "run") {
+          return undefined;
+        }
+        return (
+          resolveCronRunWaitTimeoutMs(readPositiveIntegerParam(args, "timeoutMs")) +
+          CRON_RUN_ENQUEUE_TIMEOUT_MS
+        );
+      } catch {
+        // Invalid input still reaches execute's validation under the ordinary watchdog.
+        return undefined;
+      }
+    },
     execute: async (_toolCallId, args, operationSignal) => {
       operationSignal?.throwIfAborted();
       const callGateway: typeof callGatewayTool = async <T>(
@@ -624,10 +645,7 @@ export function createCronTool(opts?: CronToolOptions, deps?: CronToolDeps): Any
               params.runMode === "due" || params.runMode === "force" ? params.runMode : "due";
             // The Gateway holds the request until the run records its outcome, so the model
             // learns the result in this call instead of scheduling a follow-up check.
-            const waitTimeoutMs = Math.min(
-              parsedGatewayOpts.timeoutMs ?? 60_000,
-              CRON_RUN_MAX_WAIT_MS,
-            );
+            const waitTimeoutMs = resolveCronRunWaitTimeoutMs(parsedGatewayOpts.timeoutMs);
             let result: Record<string, unknown>;
             try {
               result = await callGateway(
