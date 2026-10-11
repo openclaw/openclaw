@@ -6,6 +6,11 @@ import {
   resolveExpiresAtMsFromDurationMs,
 } from "@openclaw/normalization-core/number-coercion";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
+import {
+  getAgentEventLifecycleGeneration,
+  isAgentEventLifecycleGenerationCurrent,
+  registerAgentEventLifecycleRotationHandler,
+} from "../../infra/agent-events.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { retainBeforeToolCallForNativeHookRelay } from "./host-private-capabilities.js";
@@ -233,6 +238,7 @@ function registerNativeHookRelayInternal(
     setRelayLifetime(registration, {
       foregroundOpen: true,
       foregroundToken: Symbol("native-hook-relay-foreground"),
+      lifecycleGeneration: getAgentEventLifecycleGeneration(),
       policyReady,
       ...(retained ? { retained } : {}),
       ...(retention ? { retention } : {}),
@@ -637,6 +643,18 @@ function pruneExpiredNativeHookRelays(now = Date.now()): void {
     }
   }
 }
+
+// Rotation revokes retained authority, so it also retires the relays that carried it.
+// Relays admitted under the new generation, including same-id successors registered
+// by an owner's dispose callback, stay installed.
+registerAgentEventLifecycleRotationHandler("native-hook-relays", () => {
+  for (const [relayId, registration] of relays) {
+    const lifecycleGeneration = readRelayLifetime(registration)?.lifecycleGeneration;
+    if (lifecycleGeneration && !isAgentEventLifecycleGenerationCurrent(lifecycleGeneration)) {
+      unregisterNativeHookRelay(relayId, registration);
+    }
+  }
+});
 
 export const testing = {
   async clearNativeHookRelaysForTests(): Promise<void> {
