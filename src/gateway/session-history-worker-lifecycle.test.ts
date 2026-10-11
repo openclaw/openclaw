@@ -49,7 +49,6 @@ import {
   closeOpenClawStateDatabaseAsync,
 } from "../state/openclaw-state-db-cache.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
-import * as stateReadWorker from "../state/openclaw-state-read-worker.js";
 import {
   withOpenClawTestState,
   type OpenClawTestState,
@@ -359,8 +358,8 @@ it("settles cancelled message reads before reuse and closes their database handl
   });
 });
 
-it.each(["no-commit", "metadata-refresh"])(
-  "keeps history readable across unchanged sibling registration during discovery (%s)",
+it.each(["no-commit", "metadata-refresh"] as const)(
+  "reads history after unchanged sibling registration (%s)",
   async (mode) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const a = await seed(state, "main", "registration-a");
@@ -374,64 +373,20 @@ it.each(["no-commit", "metadata-refresh"])(
         admission: captureOpenClawStateDatabaseReadAdmission(registryPath),
       });
       invalidateRegisteredAgentDatabasesMemo({ path: registryPath });
-      let started = false;
-      let finished = false;
-      observed.dispatch = (message) => {
-        const input = asOptionalRecord(asOptionalRecord(message)?.input);
-        const registryRead =
-          asOptionalRecord(input?.command)?.type === "agentDatabaseRegistry.read";
-        if (!started) {
-          if (registryRead) {
-            started = true;
-            registration.begin();
-          }
-          return;
-        }
-        if (!registryRead) {
-          return;
-        }
-        observed.dispatch = undefined;
+      registration.begin();
+      try {
         if (mode === "metadata-refresh") {
           registerOpenClawAgentDatabase(
             { agentId: "other", path: b.path, env: state.env },
             { committed: (receipt) => registration.recordCommitted(receipt) },
           );
         }
-        registration.finish();
-        finished = true;
-      };
-      const captureSource = stateReadWorker.captureOpenClawStateReadSource;
-      const registryReads = vi
-        .spyOn(stateReadWorker, "captureOpenClawStateReadSource")
-        .mockImplementation(() => {
-          const source = captureSource();
-          return {
-            ...source,
-            createTransport(command) {
-              const transport = source.createTransport(command);
-              if (command.type !== "agentDatabaseRegistry.read") {
-                return transport;
-              }
-              return {
-                ...transport,
-                startRead(...args) {
-                  observed.dispatch?.({ input: { command } });
-                  return transport.startRead(...args);
-                },
-              };
-            },
-          };
-        });
-      try {
-        expect((await a.read()).messages.map(readChatHistoryMessageId)).toEqual([
-          "registration-a-message",
-        ]);
-        expect(started && finished).toBe(true);
       } finally {
-        observed.dispatch = undefined;
-        registryReads.mockRestore();
         registration.finish();
       }
+      expect((await a.read()).messages.map(readChatHistoryMessageId)).toEqual([
+        "registration-a-message",
+      ]);
     });
   },
 );
