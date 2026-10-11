@@ -919,6 +919,10 @@ suite.define(() => {
         .getByRole("button", { name: "All", exact: true })
         .click();
       await closeWorkboardFilters(recorded.page);
+      // Clear the single-column view's retained scroll offset so both drag endpoints are visible.
+      const board = recorded.page.locator(".workboard-board--page");
+      await board.evaluate((element) => element.scrollTo({ left: 0, behavior: "instant" }));
+      await expect.poll(() => board.evaluate((element) => element.scrollLeft)).toBe(0);
 
       const moveCount = (await gateway.getRequests("workboard.cards.move")).length;
       await recorded.page

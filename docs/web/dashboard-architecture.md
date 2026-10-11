@@ -414,14 +414,18 @@ Authenticated reads never use preview authentication or anonymous retry.
 Redirects are refused. Only this Actions read permits an upstream body up to
 1 MiB. Other GitHub JSON callers retain their 256 KiB default. The owner validates
 and projects at most 30 runs into a small response, without raw repository
-objects or secrets. A Gateway-local cache holds at most 32 successful results
-for 30 seconds. At most 32 concurrent callers can prepare or await reads.
+objects or secrets. A Gateway-local cache holds at most 32 successful results.
+For 30 seconds, reads reuse the result. Expired results return with `stale: true`
+while a single background refresh runs under the Gateway's execution owner.
+The first read still awaits GitHub. At most 32 concurrent callers can prepare
+or await reads, and at most 32 transports can remain in flight.
 The shared transport caches only validated projections under its captured
 credential scope. This internal cache write is not delivery to a widget.
 Every caller, including the initiator, followers, and cache hits, revalidates its
 own live authority before delivery. Removing one caller does not invalidate
-another authorized caller's result, and failed transport reads are not cached
-as success. See the
+another authorized caller's result. Failed refreshes log sanitized guidance and
+evict the old result; the next read retries through the normal error boundary.
+Failed transport reads are not cached as success. See the
 [authoring contract and example](/tools/show-widget#read-github-actions-runs).
 
 ### Modeled residual: WebRTC data channels

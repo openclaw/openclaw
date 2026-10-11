@@ -7,7 +7,7 @@ import { resolveChannelAccount } from "../../channels/account-resolution.js";
 import { resolveChannelDefaultAccountId } from "../../channels/plugins/helpers.js";
 import {
   createMessageActionDiscoveryContext,
-  resolveMessageActionDiscoveryForPlugin,
+  resolveMessageActionDiscoveryForPluginAsync,
 } from "../../channels/plugins/message-action-discovery.js";
 import { listReadOnlyChannelPluginsForConfig } from "../../channels/plugins/read-only.js";
 import type { AnyChannelPlugin as ChannelPlugin } from "../../channels/plugins/types.plugin.js";
@@ -201,15 +201,17 @@ async function resolveChannelReports(params: {
               }),
           })
         : undefined;
-    const discoveredActions = resolveMessageActionDiscoveryForPlugin({
-      pluginId: plugin.id,
-      actions: plugin.actions,
-      context: createMessageActionDiscoveryContext({
-        cfg,
-        accountId,
-      }),
-      includeActions: true,
-    }).actions;
+    const discoveredActions = (
+      await resolveMessageActionDiscoveryForPluginAsync({
+        pluginId: plugin.id,
+        actions: plugin.actions,
+        context: createMessageActionDiscoveryContext({
+          cfg,
+          accountId,
+        }),
+        includeActions: true,
+      })
+    ).actions;
     const actions = Array.from(new Set<string>(["send", "broadcast", ...discoveredActions]));
 
     reports.push({

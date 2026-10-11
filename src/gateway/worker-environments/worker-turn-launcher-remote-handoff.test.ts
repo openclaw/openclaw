@@ -19,7 +19,7 @@ import { saveMediaBuffer } from "../../media/store.js";
 import { runCommandWithTimeout, type SpawnResult } from "../../process/exec.js";
 import {
   buildWorkerConnectParams,
-  completeWorkerLaunchDescriptor,
+  parseWorkerLaunchDescriptor,
   type WorkerLaunchDescriptor,
 } from "../../worker/launch-descriptor.js";
 import { createAgentRuntimeApprovalAuthorityValidator } from "../agent-runtime-approval-authority.js";
@@ -148,9 +148,12 @@ describe("worker turn launcher remote handoff", () => {
           runId: "run-worker-turn",
           ownerEpoch: OWNER_EPOCH,
         });
-        descriptor = completeWorkerLaunchDescriptor(structuredClone(request.plan), {
-          kind: "unix",
-          socketPath: "/worker/gateway.sock",
+        descriptor = parseWorkerLaunchDescriptor({
+          ...structuredClone(request.plan),
+          connectionEndpoint: {
+            kind: "unix",
+            socketPath: "/worker/gateway.sock",
+          },
         });
         const connectFrame = {
           type: "req" as const,
@@ -418,9 +421,12 @@ describe("worker turn launcher remote handoff", () => {
       stageAttachments: vi.fn(async () => {}),
       launchTurn: vi.fn(async (request): Promise<SpawnResult> => {
         request.onDispatchReady?.();
-        descriptor = completeWorkerLaunchDescriptor(structuredClone(request.plan), {
-          kind: "unix",
-          socketPath: "/worker/gateway.sock",
+        descriptor = parseWorkerLaunchDescriptor({
+          ...structuredClone(request.plan),
+          connectionEndpoint: {
+            kind: "unix",
+            socketPath: "/worker/gateway.sock",
+          },
         });
         const completed = await openSessionManager();
         const leafId = await completed.appendMessageAsync(
