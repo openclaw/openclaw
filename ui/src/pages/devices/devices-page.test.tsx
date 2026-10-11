@@ -235,7 +235,7 @@ async function expectNoModal() {
   await vi.waitFor(() => expect(document.body.querySelector("openclaw-modal-dialog")).toBeNull());
 }
 
-function mountPaired(request: ReturnType<typeof vi.fn>) {
+function mountPaired(request: Parameters<typeof clientFor>[0]) {
   const { client } = clientFor(request);
   const fixture = gatewayFixture(gatewaySnapshot(client));
   const page = mountPage(fixture, {
