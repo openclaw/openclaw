@@ -219,7 +219,15 @@ describe("final delivery after plugin replacement", () => {
     fixture.sendText
       .mockRejectedValueOnce(Object.assign(new Error("socket reset"), { code: "ECONNRESET" }))
       .mockImplementationOnce(async (ctx) => {
-        await ctx.onDeliveryResult?.({ messageId: "accepted-retry-chunk" });
+        await ctx.onDeliveryResult?.({
+          messageId: "accepted-retry-chunk",
+          receipt: {
+            primaryPlatformMessageId: "accepted-retry-chunk",
+            platformMessageIds: ["accepted-retry-chunk"],
+            parts: [{ platformMessageId: "accepted-retry-chunk", kind: "text", index: 0 }],
+            sentAt: 1,
+          },
+        });
         throw new Error("second retry chunk rejected");
       });
     await expect(fixture.deliver()).resolves.toMatchObject({
