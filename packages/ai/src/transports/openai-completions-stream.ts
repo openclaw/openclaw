@@ -397,6 +397,7 @@ export async function processCompletionsStream(
     hint: "The provider may be stalled while parsing the tool payload; retry with a smaller tool surface or enable OPENCLAW_DEBUG_MODEL_PAYLOAD=tools to inspect exposed tools.",
   });
   const events = directMode ? guardedStream : iterateModelStream(guardedStream, options?.signal);
+  const maxUsageTokens = { prompt: 0, completion: 0, total: 0, reasoning: 0 };
   for await (const rawChunk of events) {
     throwIfModelStreamAborted(options?.signal);
     chunkPushedEvent = false;
@@ -413,9 +414,22 @@ export async function processCompletionsStream(
     }
     const choice = Array.isArray(chunk.choices) ? chunk.choices[0] : undefined;
     const usage = chunk.usage || choice?.usage;
-    const hasReasoningUsageActivity = Boolean(
-      asPositiveFiniteNumber(usage?.completion_tokens_details?.reasoning_tokens),
-    );
+    let hasUsageProgress = false;
+    let hasReasoningUsageActivity = false;
+    // Cumulative snapshots can repeat or regress; billing metadata is not model work.
+    for (const [counter, reported] of [
+      ["prompt", usage?.prompt_tokens],
+      ["completion", usage?.completion_tokens],
+      ["total", usage?.total_tokens],
+      ["reasoning", usage?.completion_tokens_details?.reasoning_tokens],
+    ] as const) {
+      const tokens = asPositiveFiniteNumber(reported) ?? 0;
+      if (tokens > maxUsageTokens[counter]) {
+        maxUsageTokens[counter] = tokens;
+        hasUsageProgress = true;
+        hasReasoningUsageActivity ||= counter === "reasoning";
+      }
+    }
     if (usage) {
       output.usage = parseOpenAICompletionsUsage(usage, model, {
         includeReasoningTokens: !directMode,
@@ -426,7 +440,7 @@ export async function processCompletionsStream(
     notifyLlmRequestActivity(
       options?.signal,
       Boolean(
-        usage ||
+        hasUsageProgress ||
         choice?.finish_reason ||
         (rawChoiceDelta &&
           (rawChoiceDelta.tool_calls?.length || hasOpenAICompletionsDeltaContent(rawChoiceDelta))),
