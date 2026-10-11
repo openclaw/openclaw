@@ -113,7 +113,12 @@ describe("resolveAdoptedTelegramDmThreadId", () => {
 
   it("leaves group chats alone", () => {
     const state = createTelegramDmTopicAdoptState();
-    const groupChat = { id: -100123, type: "supergroup" as const, title: "Group", is_forum: true };
+    const groupChat = {
+      id: -100123,
+      type: "supergroup" as const,
+      title: "Group",
+      is_forum: true as const,
+    };
     resolveAdoptedTelegramDmThreadId(topicCreated({ chat: groupChat }), state);
     expect(resolveAdoptedTelegramDmThreadId(rootMessage({ chat: groupChat }), state)).toBe(
       undefined,

@@ -47,7 +47,7 @@ export function resolveAdoptedTelegramDmThreadId(
     return undefined;
   }
   const from = message.from;
-  if (!from || typeof from.id !== "number" || from.is_bot === true) {
+  if (!from || typeof from.id !== "number" || from.is_bot) {
     return undefined;
   }
   const messageId = message.message_id;
