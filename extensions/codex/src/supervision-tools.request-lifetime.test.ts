@@ -1,6 +1,9 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { resolveCodexAppServerAuthProfileIdForAgent } from "./app-server/auth-profile.js";
+import {
+  resolveCodexAppServerAuthProfileIdForAgent,
+  resolveCodexAppServerAuthProfileIdAtEffect,
+} from "./app-server/auth-profile.js";
 import { resolveCodexSupervisionAppServerRuntimeOptions } from "./app-server/config-runtime.js";
 import { createClientHarness } from "./app-server/test-support.js";
 import { createCodexSupervisionTools } from "./supervision-tools.js";
@@ -18,6 +21,42 @@ describe("Codex supervision request lifetime", () => {
   beforeEach(() => {
     sharedClientMocks.getLeasedSharedCodexAppServerClient.mockReset();
     sharedClientMocks.releaseLeasedSharedCodexAppServerClient.mockReset();
+  });
+
+  it("uses the injected account selection at the final request guard", async () => {
+    const pluginConfig = {
+      appServer: { homeScope: "agent" as const },
+      supervision: { enabled: true, allowRawTranscripts: true },
+    };
+    const harness = createClientHarness({
+      onWrite(line, send) {
+        const request = JSON.parse(line) as { id: number };
+        send({
+          id: request.id,
+          result: { thread: { id: "thread-1", status: { type: "idle" } } },
+        });
+      },
+    });
+    sharedClientMocks.getLeasedSharedCodexAppServerClient.mockResolvedValue(harness.client);
+    const resolveAuthProfileIdAtEffect = vi.fn(() => "synthetic:account");
+    const tool = createCodexSupervisionTools({
+      getPluginConfig: () => pluginConfig,
+      senderIsOwner: true,
+      env: {},
+      resolveAuthProfileId: async () => "synthetic:account",
+      resolveAuthProfileIdAtEffect,
+      resolveRuntimeOptions: resolveCodexSupervisionAppServerRuntimeOptions,
+    }).find((candidate) => candidate.name === "codex_session_read")!;
+    try {
+      await expect(
+        tool.execute("read", { endpoint_id: "local", thread_id: "thread-1" }),
+      ).resolves.toMatchObject({
+        details: { response: { thread: { id: "thread-1" } } },
+      });
+      expect(resolveAuthProfileIdAtEffect).toHaveBeenCalled();
+    } finally {
+      harness.client.close();
+    }
   });
 
   it.each([
@@ -65,6 +104,7 @@ describe("Codex supervision request lifetime", () => {
           senderIsOwner: true,
           env: {},
           resolveAuthProfileId: resolveCodexAppServerAuthProfileIdForAgent,
+          resolveAuthProfileIdAtEffect: resolveCodexAppServerAuthProfileIdAtEffect,
           resolveRuntimeOptions: resolveCodexSupervisionAppServerRuntimeOptions,
         }).find((candidate) => candidate.name === toolName)!;
         const mutation = tool.execute("control", {

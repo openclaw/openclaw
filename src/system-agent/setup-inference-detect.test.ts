@@ -124,7 +124,7 @@ afterEach(() => {
 
 describe("setup inference discovery deadline", () => {
   it("waits for the worker's saved credentials before publishing candidates", async () => {
-    const requested = createDeferred<void>();
+    const requested = createDeferred();
     const loaded = createDeferred<AuthProfileStore>();
     fixture.loadAuthProfileStore.mockImplementationOnce(() => {
       requested.resolve();

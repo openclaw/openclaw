@@ -5,7 +5,7 @@ import type { AuthProfileStore } from "openclaw/plugin-sdk/provider-auth";
 
 type ProfileAuth = Pick<
   PluginRuntime["modelAuth"],
-  "ensureAuthProfileStoreAsync" | "resolveAuthProfileOrder"
+  "ensureAuthProfileStore" | "ensureAuthProfileStoreAsync" | "resolveAuthProfileOrder"
 >;
 type AuthProfileOrderConfig = Parameters<ProfileAuth["resolveAuthProfileOrder"]>[0]["cfg"];
 export const CODEX_APP_SERVER_AUTH_PROVIDER = "openai";
@@ -19,6 +19,7 @@ export type CodexAppServerAuthProfileLookup = {
 };
 
 export function createCodexAuthProfileSelection({
+  ensureAuthProfileStore,
   ensureAuthProfileStoreAsync,
   resolveAuthProfileOrder,
 }: ProfileAuth) {
@@ -50,23 +51,41 @@ export function createCodexAuthProfileSelection({
     return resolveCodexAppServerAuthProfileId({ ...params, store });
   }
 
+  /** Current account selection for a synchronous external-effect guard only. */
+  function resolveCodexAppServerAuthProfileIdAtEffect(
+    params: CodexAppServerAuthProfileLookup,
+  ): string | undefined {
+    const requested = params.authProfileId?.trim();
+    if (requested) {
+      return requested;
+    }
+    const agentDir = params.agentDir?.trim() || resolveDefaultAgentDir(params.config ?? {});
+    const store = params.authProfileStore ?? ensureAuthProfileStore(agentDir, storeOptions(params));
+    return resolveCodexAppServerAuthProfileId({ ...params, store });
+  }
+
+  function storeOptions(params: CodexAppServerAuthProfileLookup) {
+    return {
+      profileId: params.authProfileId,
+      allowKeychainPrompt: false,
+      config: params.config,
+      externalCliProviderIds: CODEX_APP_SERVER_EXTERNAL_CLI_PROVIDER_IDS,
+      ...(params.authProfileId ? { externalCliProfileIds: [params.authProfileId] } : {}),
+    };
+  }
+
   async function resolveCodexAppServerAuthProfileStore(
     params: CodexAppServerAuthProfileLookup,
   ): Promise<AuthProfileStore> {
     if (params.authProfileStore) {
       return params.authProfileStore;
     }
-    return ensureAuthProfileStoreAsync(params.agentDir, {
-      profileId: params.authProfileId,
-      allowKeychainPrompt: false,
-      config: params.config,
-      externalCliProviderIds: CODEX_APP_SERVER_EXTERNAL_CLI_PROVIDER_IDS,
-      ...(params.authProfileId ? { externalCliProfileIds: [params.authProfileId] } : {}),
-    });
+    return ensureAuthProfileStoreAsync(params.agentDir, storeOptions(params));
   }
   return {
     resolveCodexAppServerAuthProfileId,
     resolveCodexAppServerAuthProfileIdForAgent,
+    resolveCodexAppServerAuthProfileIdAtEffect,
     resolveCodexAppServerAuthProfileStore,
   };
 }

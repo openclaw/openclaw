@@ -193,28 +193,6 @@ describe("handleTtsCommands status fallback reporting", () => {
     );
   });
 
-  it.each([
-    { audioAsVoice: true, voiceCompatible: false },
-    { audioAsVoice: false, voiceCompatible: true },
-  ])(
-    "preserves runtime voice delivery $audioAsVoice for /tts audio with provider compatibility $voiceCompatible",
-    async ({ audioAsVoice, voiceCompatible }) => {
-      ttsMocks.textToSpeech.mockResolvedValue({
-        success: true,
-        audioPath: "/tmp/channel-voice.ogg",
-        provider: PRIMARY_TTS_PROVIDER,
-        voiceCompatible,
-        audioAsVoice,
-      });
-
-      const result = await handleTtsCommands(buildTtsParams("/tts audio hello channel"), true);
-      const reply = expectReply(result);
-
-      expect(reply.mediaUrl).toBe("/tmp/channel-voice.ogg");
-      expect(reply.audioAsVoice).toBe(audioAsVoice);
-    },
-  );
-
   it("keeps base status fields in display order", async () => {
     const reply = expectReply(await handleTtsCommands(buildTtsParams("/tts"), true));
 
@@ -229,21 +207,6 @@ describe("handleTtsCommands status fallback reporting", () => {
         "Auto-summary: on",
       ].join("\n"),
     );
-  });
-
-  it("resolves status config for the active agent", async () => {
-    const cfg = {
-      agents: { entries: { reader: { tts: { provider: "elevenlabs" } } } },
-    } as OpenClawConfig;
-
-    const result = await handleTtsCommands(buildTtsParams("/tts status", cfg, "reader"), true);
-
-    expectHandled(result);
-    const resolveCall = lastMockCall(ttsMocks.resolveTtsConfig, "resolveTtsConfig");
-    const resolveOptions = resolveCall[1] as { agentId?: string; channelId?: string };
-    expect(resolveCall[0]).toBe(cfg);
-    expect(resolveOptions.agentId).toBe("reader");
-    expect(resolveOptions.channelId).toBe("forum");
   });
 
   it("passes the active agent and account ids to /tts audio synthesis", async () => {

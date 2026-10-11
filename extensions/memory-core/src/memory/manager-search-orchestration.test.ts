@@ -5,6 +5,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { encodeMemoryEmbedding } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { resolveRuntimeWorkerUrl, WorkerTaskPool } from "openclaw/plugin-sdk/process-runtime";
+import { openOpenClawAgentDatabase } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { describe, expect, it, vi } from "vitest";
 import { recordMemoryEntryOrigins } from "../memory-entry-origins.js";
 import { forgetMemoryEntries } from "../memory-forget.js";
@@ -361,10 +362,7 @@ describe("memory index", () => {
     );
     await manager.sync({ reason: "test" });
 
-    const fields = manager as unknown as {
-      db: DatabaseSync;
-    };
-    const insertChunk = fields.db.prepare(
+    const insertChunk = openOpenClawAgentDatabase({ agentId: "main" }).db.prepare(
       "INSERT INTO memory_index_chunks (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     );
     for (let index = 0; index < 4096; index += 1) {

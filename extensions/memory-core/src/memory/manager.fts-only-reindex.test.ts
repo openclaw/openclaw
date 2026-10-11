@@ -584,7 +584,7 @@ describe("memory manager FTS-only reindex", () => {
 
   it("ignores persisted vector rebuild debt after reopening an FTS-only index", async () => {
     const memoryManager = await createManager({ provider: "none" });
-    const db = Reflect.get(memoryManager, "db") as DatabaseSync;
+    const db = openOpenClawAgentDatabase({ agentId: "main" }).db;
     db.prepare(
       `INSERT INTO memory_index_meta (key, value) VALUES ('memory_vector_rebuild_v1', '1')`,
     ).run();
@@ -711,8 +711,7 @@ describe("memory manager FTS-only reindex", () => {
     expect(manager.status().fts?.available).toBe(true);
     expect(Reflect.get(manager, "sessionsFullRetryDirty")).toBe(false);
 
-    const db = Reflect.get(manager, "db") as DatabaseSync;
-    expect(db).toBe(seedDb);
+    const db = seedDb;
     const countRows = (table: string, sourcePath: string) =>
       db.prepare(`SELECT COUNT(*) AS count FROM ${table} WHERE path = ?`).get(sourcePath);
     expect(

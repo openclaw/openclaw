@@ -16,6 +16,7 @@ import {
   createCapturedPluginRegistration,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import {
+  ensureAuthProfileStore,
   ensureAuthProfileStoreAsync,
   resolveAuthProfileOrder,
 } from "openclaw/plugin-sdk/provider-auth";
@@ -58,6 +59,7 @@ const explicitAgentConfig = {
 } as OpenClawConfig;
 
 const modelAuth = {
+  ensureAuthProfileStore,
   ensureAuthProfileStoreAsync,
   resolveAuthProfileOrder,
   resolveProviderIdForAuth,

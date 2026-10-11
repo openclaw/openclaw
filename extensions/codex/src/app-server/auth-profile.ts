@@ -4,6 +4,7 @@ import {
   resolveDefaultAgentDir,
 } from "openclaw/plugin-sdk/agent-harness-registration";
 import {
+  ensureAuthProfileStore,
   ensureAuthProfileStoreAsync,
   resolveAuthProfileOrder,
 } from "openclaw/plugin-sdk/provider-auth";
@@ -23,8 +24,13 @@ const PUBLIC_OPENAI_MODEL_PROVIDER = "openai";
 export const {
   resolveCodexAppServerAuthProfileId,
   resolveCodexAppServerAuthProfileIdForAgent,
+  resolveCodexAppServerAuthProfileIdAtEffect,
   resolveCodexAppServerAuthProfileStore,
-} = createCodexAuthProfileSelection({ ensureAuthProfileStoreAsync, resolveAuthProfileOrder });
+} = createCodexAuthProfileSelection({
+  ensureAuthProfileStore,
+  ensureAuthProfileStoreAsync,
+  resolveAuthProfileOrder,
+});
 
 export type CodexAppServerAuthRuntimeContext = CodexAppServerAuthProfileLookup & {
   authMode?: "prepared-api-key" | "profile";

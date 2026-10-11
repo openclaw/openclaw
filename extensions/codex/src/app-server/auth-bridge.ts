@@ -366,7 +366,7 @@ export async function resolveCodexAppServerPreparedAuthHandoff(params: {
 export async function resolveCodexAppServerAuthAccountCacheKey(
   params: CodexAppServerAuthProfileLookup,
 ): Promise<string | undefined> {
-  const profile = resolveCodexAppServerAuthProfile(params);
+  const profile = await resolveCodexAppServerAuthProfile(params);
   if (!profile) {
     return undefined;
   }

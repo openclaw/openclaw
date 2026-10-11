@@ -214,11 +214,11 @@ describe("speech provider registry", () => {
       isConfiguredAsync: async () => configured,
     };
     const fallback = { ...createSpeechProvider("fallback"), autoSelectOrder: 2 };
-    const providers = [first, fallback];
+    const availableProviders = [first, fallback];
     const config = resolveTtsConfig({});
     const selectionRegistry = createSpeechProviderRegistry({
-      getProvider: (id) => providers.find((provider) => provider.id === id),
-      listProviders: () => providers,
+      getProvider: (id) => availableProviders.find((provider) => provider.id === id),
+      listProviders: () => availableProviders,
     });
 
     expect(await resolveTtsProviderAsync(config, "/unused", selectionRegistry, {})).toBe("first");

@@ -65,7 +65,6 @@ import type { readSessionTranscriptModelContext } from "./session-accessor.sqlit
 import type { listSessionPendingInputReceipts } from "./session-accessor.sqlite-pending-input-receipts.js";
 import type { SessionTranscriptWatermark } from "./session-accessor.sqlite-transcript-watermark-read.js";
 import type {
-  SessionAccessScope,
   SessionEntryReadScope,
   SessionTranscriptReadScope,
 } from "./session-accessor.types.js";
@@ -106,7 +105,11 @@ import type {
   SessionRetirementReadResult,
   SessionRetirementReadWorkerInput,
 } from "./session-retirement-read.types.js";
-import type { SessionRowDatabaseFacts } from "./session-row-facts.types.js";
+import type {
+  SessionRowFactsWorkerInput,
+  SessionRowFactsWorkerResult,
+  SessionRowPresenceWorkerInput,
+} from "./session-row-facts.types.js";
 import type {
   SessionMembersWorkerInput,
   SessionMembershipFactsWorkerInput,
@@ -224,12 +227,6 @@ type SessionRowBackfillWorkerInput = {
   params: SessionRowTranscriptReadParams;
 };
 
-export type SessionRowPresenceWorkerInput = {
-  kind: "session-row-presence";
-  database: { agentId: string; path: string };
-  scope: SessionAccessScope & { databaseAgentId: string };
-};
-
 export type SessionEntryCurrentWorkerInput = Omit<SessionEntryReadWorkerInput, "kind"> & {
   kind: "session-entry-current";
   source?: SessionEntryCurrentSource;
@@ -260,18 +257,11 @@ type SessionStoreSummaryWorkerInput = {
 
 export const MAX_SESSION_ROW_FACTS_KEYS = 64;
 
-export type SessionRowFactsWorkerInput = {
-  kind: "session-row-facts";
-  database: { agentId: string; path: string };
-  env: NodeJS.ProcessEnv;
-  sessionKeys: readonly string[];
-  continuation?: CanonicalSessionReaderContinuation;
-};
-
-export type SessionRowFactsWorkerResult = {
-  kind: "session-row-facts";
-  rows: SessionRowDatabaseFacts[];
-};
+export type {
+  SessionRowFactsWorkerInput,
+  SessionRowFactsWorkerResult,
+  SessionRowPresenceWorkerInput,
+} from "./session-row-facts.types.js";
 
 type SessionMaintenanceReadWorkerInput = {
   kind: "session-maintenance-read";
@@ -643,7 +633,6 @@ export type SessionHistoryWorkerDatabase = SessionTranscriptInventoryReaders &
       params: SessionTranscriptSearchWorkerInput["params"],
       readIndexStatus: (signal: AbortSignal) => Promise<boolean>,
     ) => Promise<SessionTranscriptSearchResult>;
-    generation: number;
     assertCurrent: () => void;
     run: (
       prepare: () => Omit<SessionTranscriptHistoryWorkerInput, "database">,

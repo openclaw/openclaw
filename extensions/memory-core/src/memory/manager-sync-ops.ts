@@ -208,6 +208,10 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
       // the vector extension before text and FTS indexing can proceed.
       const vectorReady = syncProvider ? await this.ensureVectorReady() : false;
       const meta = this.readMeta();
+      // A sibling manager can publish different dimensions or an empty rebuild.
+      if (this.database.ensuredVectorDimensions !== meta?.vectorDims) {
+        this.database.ensuredVectorDimensions = undefined;
+      }
       // Resolve and index a targeted session against one corpus snapshot. A reset
       // between separate enumerations could otherwise replace the chosen identity.
       const targetSessionSync = hasTargetSessionRequest
@@ -559,7 +563,10 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
     try {
       await cleanupAgedMemoryReindexTempFiles(dbPath);
       const originalRevision = this.database.facts.revision;
-      const shadow = MemoryIndexDatabase.openShadow(tempDbPath, this.settings.store.vector.enabled);
+      const shadow = await MemoryIndexDatabase.openShadow(
+        tempDbPath,
+        this.settings.store.vector.enabled,
+      );
       shadowCleanup = shadow;
       shadow.vector.enabled = this.vector.enabled;
       shadow.vector.extensionPath = this.vector.extensionPath;
