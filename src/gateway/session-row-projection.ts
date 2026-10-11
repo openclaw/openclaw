@@ -602,28 +602,27 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
       prepareRowFacts: rowFacts.prepare,
     });
   const projection = {
+    ...rowReads.createSessionRowLookup({
+      state: () => ({
+        cfg,
+        scope,
+        stores,
+        disposed,
+        topologyDirty,
+        registryPrepared: !disposed && Boolean(inOwnerContext(subagents.snapshotIdentity)),
+      }),
+      lookup,
+      matching,
+      acquireEntry,
+      env,
+      runInOwner: inOwnerContext,
+    }),
     onSelectionChange: revisions.onSelectionChange,
     onFactsChange: revisions.onFactsChange,
     observeGeneration: generations.observeGeneration,
     readPreparedRowContext: () =>
       disposed ? undefined : inOwnerContext(() => metadata.readPrepared(epoch)),
     readPreparedSpawnedBy,
-    capture(query: records.Lookup) {
-      const row = lookup(query);
-      // Capture retains published identity while category facts wait for reconciliation.
-      return row &&
-        row.unresolvedDatabaseFacts !== "category" &&
-        !topologyDirty &&
-        !row.entry &&
-        row.storedEntry !== undefined &&
-        row.unresolvedDatabaseFacts !== true &&
-        inOwnerContext(subagents.snapshotIdentity)
-        ? (acquireEntry(row, row.storedEntry) ?? row)
-        : row;
-    },
-    findBySessionId(query: Parameters<typeof rowReads.findSessionRowById>[0]) {
-      return rowReads.findSessionRowById(query, { disposed, lookup, matching, scope });
-    },
     describe,
     ...rowRelations.createSessionRowAncestorReads({
       state: () => ({ cfg, context: metadata.current }),

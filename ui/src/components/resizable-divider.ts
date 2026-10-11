@@ -5,7 +5,7 @@ import "./resizable-divider.css";
 
 const DRAG_END_EVENTS = ["pointerup", "pointercancel", "blur"] as const;
 
-export type ResizableDividerProps = {
+type ResizableDividerProps = {
   splitRatio: number;
   minRatio: number;
   maxRatio: number;
@@ -18,7 +18,7 @@ export type ResizableDividerProps = {
 type ResizableDividerElement = SolidBridgeElement<ResizableDividerProps>;
 
 /** Dispatches resize-start, resize, and resize-end from the split-view separator. */
-export const ResizableDivider = defineSolidBridge<ResizableDividerProps>(
+defineSolidBridge<ResizableDividerProps>(
   "resizable-divider",
   (props, host) => {
     let startPosition = 0;

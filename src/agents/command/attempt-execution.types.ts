@@ -68,7 +68,6 @@ export type RunAgentAttemptParams = Pick<
     pluginsEnabled?: boolean;
     metadataSnapshot?: PluginMetadataSnapshot;
     pluginGeneration: PreparedModelRuntimePluginGeneration | undefined;
-    modelFallbacksOverride?: string[];
     modelFallbacksOverrideSource?: "configured";
     sessionHasHistory?: boolean;
     fallbackRuntimeState?: { originRuntime?: "cli" | "embedded" };

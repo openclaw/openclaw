@@ -5,6 +5,10 @@ import { emitAgentEvent } from "../../infra/agent-events.js";
 import { clearAgentRunTerminalWriteContext } from "../../infra/agent-run-terminal-writes.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
+  buildAgentHookContextChannelFields,
+  buildAgentHookContextIdentityFields,
+} from "../../plugins/hook-agent-context.js";
+import {
   MODEL_SELECTION_LOCKED_MESSAGE,
   ModelSelectionLockedError,
   isModelSelectionLocked,
@@ -273,6 +277,24 @@ export async function runEmbeddedAgentAttempt(params: RunEmbeddedAgentAttemptPar
         hasNewGeneratedMediaTaskForSessionKey(sessionKey, attemptMediaTaskIds, sessionAgentId);
       const fallbackResult = await runEmbeddedAgentEntry<AgentAttemptResult>({
         preparedRunAdmission: params.preparedRunAdmission,
+        modelResolve: {
+          prompt: body,
+          images: params.opts.images,
+          cwd,
+          modelSelectionLocked: isModelSelectionLocked(sessionEntry),
+          context: {
+            trigger: "user",
+            ...buildAgentHookContextChannelFields({
+              ...runContext,
+              sessionKey,
+              messageChannel,
+              messageProvider: params.opts.messageProvider ?? messageChannel,
+              messageTo: params.opts.replyTo ?? params.opts.to,
+              agentAccountId: runContext.accountId,
+            }),
+            ...buildAgentHookContextIdentityFields({ ...runContext, trigger: "user" }),
+          },
+        },
         selection: {
           cfg,
           provider,
@@ -465,7 +487,7 @@ export async function runEmbeddedAgentAttempt(params: RunEmbeddedAgentAttemptPar
                 [providerOverride, modelOverride, candidateRuntime],
               ),
               configuredAuthProfileId,
-              modelFallbacksOverride: effectiveFallbacksOverride,
+              modelFallbacksOverride: runOptions.modelFallbacksOverride,
               modelFallbacksOverrideSource:
                 params.opts.modelFallbacksOverride === undefined ? "configured" : undefined,
               originalProvider: provider,

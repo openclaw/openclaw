@@ -1118,9 +1118,7 @@ describe("createOllamaStreamFn streaming events", () => {
     const done = events.at(-1);
     assert(done?.type === "done", "Expected done event");
     expect(done.message.content).toEqual([
-      ...(visible
-        ? [{ type: "text", text: "Visible answer", textSignature: expect.any(String) }]
-        : []),
+      ...(visible ? [{ type: "text", text: "Visible answer" }] : []),
       { type: "toolCall", id: expect.any(String), name: "bash", arguments: { command: "ls" } },
     ]);
   });

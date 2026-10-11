@@ -46,10 +46,7 @@ import { prepareCronRunAdmission } from "../run-admission.js";
 import { resolveCronScheduledToolPolicy } from "../scheduled-tool-policy.js";
 import { resolveCronAuthenticatedChannelRequester } from "../tools-allow-provenance.js";
 import type { CronAgentExecutionPhaseUpdate } from "../types.js";
-import {
-  resolveCronChannelOutputPolicy,
-  resolveCurrentChannelTarget,
-} from "./channel-output-policy.js";
+import { resolveCronChannelOutputPolicy } from "./channel-output-policy.js";
 import { resolveCronPayloadOutcome } from "./helpers.js";
 import { resolveIsolatedCronPromptCacheKey } from "./prompt-cache-key.js";
 import { assertCronRuntimeAuthorityCandidate } from "./run-admission.js";
@@ -67,7 +64,7 @@ import {
   runCliAgent,
 } from "./run-execution.runtime.js";
 import type { CronRunExecutionParams } from "./run-execution.types.js";
-import { resolveCronFallbackOptions } from "./run-fallback-policy.js";
+import { prepareCronModelResolveInput, resolveCronFallbackOptions } from "./run-fallback-policy.js";
 import {
   setCronSessionAgentHarnessId,
   setCronSessionRuntimeModel,
@@ -113,7 +110,6 @@ function createCronPromptExecutor(
     onPromptCompleted: (run: CronCompletedPromptRun) => void;
   },
 ) {
-  const sessionFile = params.runSessionKey;
   const cronFallbacks = resolveCronFallbackOptions(params);
   const fastModeStartedAtMs = Date.now();
   const fastModeAutoProgressState: FastModeAutoProgressState = {
@@ -139,7 +135,6 @@ function createCronPromptExecutor(
     execTarget: params.job.toolsAllowExecTarget,
   });
   const { sourceDelivery, runId } = params;
-  const sourceReplyDeliveryMode = sourceDelivery.sourceReplyDeliveryMode;
   const messageChannel = sourceDelivery.target.channel ?? params.resolvedDelivery.channel;
   if (scheduledToolPolicy?.mode === "account") {
     const callerContext = resolveScheduledToolCallerContext({ scheduledToolPolicy });
@@ -241,8 +236,14 @@ function createCronPromptExecutor(
     } catch {
       // Non-canonicalizable job config: no grant registration for this run.
     }
+    const { modelResolve, currentChannelId } = await prepareCronModelResolveInput({
+      ...params,
+      prompt: promptText,
+      messageChannel,
+    });
     const fallbackResult = await runEmbeddedAgentEntry({
       preparedRunAdmission: cronAdmission.preparedRunAdmission,
+      modelResolve,
       selection: {
         cfg: params.cfgWithAgentDefaults,
         provider: params.liveSelection.provider,
@@ -421,7 +422,7 @@ function createCronPromptExecutor(
             messageChannel,
             agentAccountId: params.resolvedDelivery.accountId,
             extraSystemPrompt: params.deliverySystemPrompt,
-            sourceReplyDeliveryMode,
+            sourceReplyDeliveryMode: sourceDelivery.sourceReplyDeliveryMode,
             requireExplicitMessageTarget: sourceDelivery.messageTool.requireExplicitTarget,
             scheduledToolPolicy,
             onExecutionStarted: notifyExecutionStarted,
@@ -453,7 +454,7 @@ function createCronPromptExecutor(
             agentId: params.agentId,
             sessionId: params.cronSession.sessionEntry.sessionId,
             sessionKey: params.runSessionKey,
-            sessionFile,
+            sessionFile: params.runSessionKey,
             abortSignal: params.abortSignal,
           });
           try {
@@ -496,7 +497,7 @@ function createCronPromptExecutor(
                   sessionEntry: params.cronSession.sessionEntry,
                   contextWindow: params.cronSession.sessionEntry.contextWindow,
                   cleanupCliLiveSessionOnRunEnd: params.usesDetachedRunSession,
-                  sessionFile,
+                  sessionFile: params.runSessionKey,
                   storePath: params.cronSession.storePath,
                   persistAssistantTranscript: true,
                   modelProvider: providerOverride,
@@ -511,7 +512,7 @@ function createCronPromptExecutor(
                   cliSessionBinding: guardedCliSessionBinding,
                   cliSessionBindingFacts: {
                     extraSystemPromptStatic: params.deliverySystemPrompt,
-                    sourceReplyDeliveryMode,
+                    sourceReplyDeliveryMode: sourceDelivery.sourceReplyDeliveryMode,
                     requireExplicitMessageTarget: sourceDelivery.messageTool.requireExplicitTarget,
                   },
                   toolsAllow: resolveCliRuntimeToolsAllow(params.agentPayload?.toolsAllow),
@@ -570,11 +571,6 @@ function createCronPromptExecutor(
           provider: providerOverride,
           model: modelOverride,
         });
-        const currentChannelId = await resolveCurrentChannelTarget({
-          channel: messageChannel,
-          to: params.resolvedDelivery.to,
-          threadId: params.resolvedDelivery.threadId,
-        });
         // Embedded runs receive both the explicit route and the current-channel
         // id so message-tool policy can target the same chat as fallback delivery.
         const result = await runEmbeddedAgent({
@@ -595,8 +591,9 @@ function createCronPromptExecutor(
             [providerOverride, modelOverride, candidateRuntime],
           ).modelThinkingCapability,
           requestedRouteResolution: "resolved",
-          modelFallbacksOverride: cronFallbacks.fallbacksOverride,
+          modelFallbacksOverride: runOptions.modelFallbacksOverride,
           modelFallbacksOverrideSource: cronFallbacks.fallbacksOverrideSource,
+          resolvedModelSelection: runOptions.resolvedModelSelection,
           // Pairs the row's selection for live-switch comparison; cron lists stay job-owned.
           modelFallbackPolicy: params.cronSession.sessionEntry.modelFallbackPolicy,
           authProfileId: params.liveSelection.authProfileId,

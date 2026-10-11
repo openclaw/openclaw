@@ -710,6 +710,7 @@ export function runAgentAttempt(params: RunAgentAttemptParams) {
     toolBindings: params.opts.toolBindings,
     provider: embeddedAgentProvider,
     requestedRouteResolution: "resolved",
+    resolvedModelSelection: params.resolvedModelSelection,
     modelThinkingCapability: params.modelThinkingCapability,
     modelFallbacksOverride: params.modelFallbacksOverride,
     modelFallbacksOverrideSource: params.modelFallbacksOverrideSource,
