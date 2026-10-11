@@ -49,9 +49,8 @@ export function captureSessionEntrySnapshot(
 ): SqliteLifecycleTargetSnapshot[number] {
   let window: SessionEntryWindowFacts | undefined;
   if (selected.row.window_json !== undefined) {
-    // SAFETY: window_json is produced only by the typed window-column SQL projection or actor.window serialization.
     const row = selected.row.window_json
-      ? (JSON.parse(selected.row.window_json) as SessionEntryWindowRow)
+      ? (JSON.parse(selected.row.window_json) as SessionEntryWindowRow) // SAFETY: The window-column SQL projection or actor.window produces this JSON.
       : null;
     window = { sessionId: selected.row.current_session_id, row };
   }
