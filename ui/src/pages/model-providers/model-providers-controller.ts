@@ -1,4 +1,3 @@
-/* eslint-disable max-lines -- The page retains one synchronous mutation and connection owner; JSX lives in model-providers-page.tsx. */
 import { asNullableRecord as asConfigRecord } from "@openclaw/normalization-core/record-coerce";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ModelsProbeResult } from "../../api/types.ts";
@@ -6,12 +5,10 @@ import type { ApplicationContext } from "../../app/context.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { t } from "../../i18n/index.ts";
-import { listSelectableAgents, normalizeAgentLabel } from "../../lib/agents/display.ts";
 import { currentConfigObject } from "../../lib/config/config-state-model.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { canonicalModelAuthProviderId } from "../../lib/model-auth.ts";
 import * as modelCatalog from "../../lib/model-catalog-store.ts";
-import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import { GatewayPageController } from "../../lit/gateway-page-controller.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { UsageRefreshPolicy } from "../usage/refresh-policy.ts";
@@ -30,10 +27,7 @@ import {
 } from "./config-mutation.ts";
 import { ModelProviderCoreLoader, type ModelProviderRefreshReason } from "./core-load.ts";
 import {
-  buildModelProviderCards,
-  resolveDefaultModelPresentation,
-  buildUnconfiguredProviderOptions,
-  readModelProviderConfig,
+  buildModelProviderPresentation,
   type DefaultsDraft,
   type ModelProviderPendingLogout,
 } from "./data.ts";
@@ -608,30 +602,24 @@ export class ModelProvidersController extends ModelPageController {
   viewProps() {
     const gatewaySnapshot = this.context.gateway.snapshot;
     const operatorAuth = gatewaySnapshot.hello?.auth;
-    const agentsState = this.context.agents.state;
-    const agents = agentsState.agentsList?.agents ?? [];
-    const noSelectableAgents =
-      agentsState.agentsList !== null && listSelectableAgents(agents).length === 0;
-    const rosterError = agentsState.agentsList ? null : agentsState.agentsError;
-    const selected = agents.find(
-      (agent) => normalizeAgentId(agent.id) === this.state.selectedAgentId,
-    );
     const data = this.state.data ?? EMPTY_MODEL_PROVIDERS_DATA;
     const configObject = currentConfigObject(this.context.runtimeConfig.state);
-    const config = readModelProviderConfig(configObject);
     const catalog = modelCatalog.readAgentModelCatalog(
       gatewaySnapshot.client,
       this.state.selectedAgentId,
     );
-    const configuredDefaults = {
-      ...config.defaults,
-      ...readModelBehaviorConfig(asConfigRecord(asConfigRecord(configObject?.agents)?.defaults)),
-    };
-    const { defaults, configuredModels } = resolveDefaultModelPresentation(
-      catalog,
-      configuredDefaults,
-      this.state.defaultsDraft,
-    );
+    const { configuredDefaults, cards, noSelectableAgents, rosterError, agentLabel, values } =
+      buildModelProviderPresentation({
+        configObject,
+        behavior: readModelBehaviorConfig(
+          asConfigRecord(asConfigRecord(configObject?.agents)?.defaults),
+        ),
+        catalog,
+        data,
+        agentsState: this.context.agents.state,
+        agentId: this.state.selectedAgentId,
+        defaultsDraft: this.state.defaultsDraft,
+      });
     const stageDefaults = (patch: Partial<DefaultsDraft>) => {
       this.setState("defaultsDraft", {
         ...(this.state.defaultsDraft ?? configuredDefaults),
@@ -640,22 +628,6 @@ export class ModelProvidersController extends ModelPageController {
       this.setMessage("defaults", null);
       void this.saveDefaults();
     };
-    const cards = buildModelProviderCards({
-      ...data,
-      models: catalog?.models ?? null,
-      providerOutcomes: catalog.hasSnapshot
-        ? (catalog.providerOutcomes ?? [])
-        : data.providerOutcomes,
-      pendingProviders: catalog?.pendingProviders,
-      providerUsage: data.providerUsage?.ok ? data.providerUsage.value : null,
-      configProviders: config.providers,
-    });
-    const configuredProviderIds = new Set([
-      ...config.providers.map(({ key }) => key),
-      ...(data.authStatus?.providers
-        .filter((provider) => Boolean(provider.apiKey) || provider.profiles.length > 0)
-        .map((provider) => provider.provider) ?? []),
-    ]);
     const advertised = isGatewayMethodAdvertised(gatewaySnapshot, "models.probe");
     const usageAvailable = isGatewayMethodAdvertised(gatewaySnapshot, "codex.accountUsage");
     const login = this.login.pageActions;
@@ -677,27 +649,14 @@ export class ModelProvidersController extends ModelPageController {
       providerUsageFailed: data.providerUsage?.ok === false,
       supplementalLoading: this.loaderPending || this.supplemental.loading,
       updatedAt: data.updatedAt,
-      credentialAgentLabel: selected ? normalizeAgentLabel(selected) : this.state.selectedAgentId,
+      credentialAgentLabel: agentLabel,
       cards: noSelectableAgents ? [] : this.installedAgents.filterProviders(cards),
-      configuredModels,
-      decisionModels: catalog?.decisionModels ?? [],
-      defaultModels: defaults,
-      authStatus: data.authStatus,
-      automaticUtilityModel: catalog?.defaultModels?.automaticUtilityModel,
-      utilityRuntime: catalog?.defaultModels?.utilityRuntime,
-      thinkingLevel: defaults.thinkingLevel,
-      thinkingOverridden: defaults.thinkingOverridden,
-      fastMode: defaults.fastMode,
-      fastModeOverridden: defaults.fastModeOverridden,
+      ...values,
       catalogDiscovering: this.core.catalogLoading || Boolean(catalog?.pendingProviders?.length),
       catalogDiscoveryError: this.core.catalogLoading
         ? null
         : (this.core.catalogError ?? data.catalogError),
       configBusy: modelProviderConfigBusy(this.context),
-      unconfiguredProviders: buildUnconfiguredProviderOptions(
-        data.authStatus?.providerCapabilities,
-        configuredProviderIds,
-      ),
       canViewProfiles:
         gatewaySnapshot.phase === "connected" &&
         operatorAuth?.scopes !== undefined &&
@@ -757,13 +716,13 @@ export class ModelProvidersController extends ModelPageController {
       cards,
       installedAgentsAvailable: this.installedAgents.available(),
       scope: {
-        agentLabel: selected ? normalizeAgentLabel(selected) : this.state.selectedAgentId,
+        agentLabel,
         onConnect: login.onConnect,
         connectDisabled: login.connectDisabled || this.discovery.busy || this.state.addProviderOpen,
       },
       loginMessage: this.state.messages.connection ?? login.loginMessage,
       discovery: {
-        agentLabel: selected ? normalizeAgentLabel(selected) : this.state.selectedAgentId,
+        agentLabel,
         credentialChoices:
           data.authStatus?.providerCapabilities?.flatMap(
             (provider) => provider.loginOptions?.map((option) => option.id) ?? [],

@@ -1,4 +1,3 @@
-/* eslint-disable max-lines -- Keep model activation, reconnect recovery, and their synchronous state in one owner. */
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type {
   SystemAgentSetupActivateParams,
@@ -34,14 +33,11 @@ import { manualProviderActivation, revealManualProvider } from "./provider-picke
 import { createModelSetupDetectRequest, createModelSetupVerifyRequest } from "./rpc.ts";
 import {
   activationTargetId,
+  createModelSetupState,
   preparedModelPageState,
   updateModelSetupWizardDraft,
   mapActivationResult,
   type ModelSetupActivationState,
-  type ModelSetupPageState,
-  type ModelSetupVerifyState,
-  type ModelSetupWizardState,
-  type ModelSetupWizardDraft,
 } from "./state.ts";
 import { revealModelSetupFeedback, type ModelSetupViewProps } from "./view.tsx";
 import { ModelSetupWizardRunner, type ModelSetupWizardCompletion } from "./wizard-runner.ts";
@@ -65,41 +61,7 @@ export class ModelSetupController extends ModelPageController {
   credentialChoices: readonly string[] = [];
   onClose: (() => void) | undefined;
 
-  private readonly state: {
-    pageState: ModelSetupPageState;
-    activationState: ModelSetupActivationState;
-    verifyState: ModelSetupVerifyState;
-    wizardState: ModelSetupWizardState;
-    wizardMode: "auth" | "prepare" | "activate";
-    wizardDraft: ModelSetupWizardDraft;
-    manualProviderId: string;
-    manualApiKey: string;
-    manualError: string | null;
-    moreSignInOpen: boolean;
-    nativeSessionCatalogsEnabled: boolean;
-    iconUrls: Record<string, string>;
-    setupRefreshWarning: string | null;
-    detectionError: string | null;
-    detectionRequest: object | null;
-    cancellationNotice: string | null;
-  } = {
-    pageState: { phase: "loading" },
-    activationState: { phase: "idle" },
-    verifyState: { phase: "idle" },
-    wizardState: { phase: "idle" },
-    wizardMode: "auth",
-    wizardDraft: { stepId: null, value: undefined },
-    manualProviderId: "",
-    manualApiKey: "",
-    manualError: null,
-    moreSignInOpen: false,
-    nativeSessionCatalogsEnabled: false,
-    iconUrls: {},
-    setupRefreshWarning: null,
-    detectionError: null,
-    detectionRequest: null,
-    cancellationNotice: null,
-  };
+  private readonly state = createModelSetupState();
 
   private setState<K extends keyof typeof this.state>(key: K, value: (typeof this.state)[K]) {
     if (!Object.is(this.state[key], value)) {

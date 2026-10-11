@@ -45,8 +45,8 @@ export function ModelSetupSuccessDialog(props: {
   return (
     <>
       <openclaw-modal-dialog
-        prop:label={title()}
-        prop:description={description()}
+        label={title()}
+        description={description()}
         onModal-cancel={() => props.onClose()}
       >
         <section class="model-setup-success" role="status">

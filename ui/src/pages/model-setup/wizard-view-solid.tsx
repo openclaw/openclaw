@@ -18,7 +18,7 @@ export function ModelSetupWizard(props: WizardViewProps): JSX.Element {
   return (
     <Show when={props.state.phase !== "idle"}>
       <openclaw-modal-dialog
-        prop:label={t(copy().dialog)}
+        label={t(copy().dialog)}
         onModal-cancel={() => (canCancel() ? props.onCancel() : props.onClose())}
       >
         <div class="model-setup-wizard">
