@@ -4,14 +4,13 @@ import { existsSync } from "node:fs";
 import { getCompileCacheDir } from "node:module";
 import path from "node:path";
 import process from "node:process";
-import { resolveOpenClawCompileCacheDirectory } from "../node-compile-cache.mjs";
+import { enableOpenClawCompileCache as enableInstallCompileCache } from "../node-compile-cache.mjs";
 import { isForegroundGatewayRunArgv } from "./cli/gateway-run-argv.js";
 import {
   isForegroundGmailRunArgv,
   isTerminalInteractiveRespawnArgv,
   shouldKeepNativeHookRelayInProcess,
 } from "./cli/respawn-policy.js";
-import { enableOwnedNodeCompileCache } from "./infra/node-compile-cache-env.js";
 import { attachChildProcessBridge } from "./process/child-process-bridge.js";
 import { runRespawnChildWithSignalBridge } from "./process/respawn-child-runner.js";
 
@@ -30,22 +29,8 @@ function isSourceCheckoutInstallRoot(installRoot: string): boolean {
   );
 }
 
-function isNodeCompileCacheDisabled(env: NodeJS.ProcessEnv | undefined): boolean {
-  return env?.NODE_DISABLE_COMPILE_CACHE !== undefined;
-}
-
-function isNodeCompileCacheRequested(env: NodeJS.ProcessEnv | undefined): boolean {
-  return env?.NODE_COMPILE_CACHE !== undefined && !isNodeCompileCacheDisabled(env);
-}
-
-function shouldEnableOpenClawCompileCache(params: {
-  env?: NodeJS.ProcessEnv;
-  installRoot: string;
-}): boolean {
-  return (
-    !isNodeCompileCacheDisabled(params.env ?? process.env) &&
-    !isSourceCheckoutInstallRoot(params.installRoot)
-  );
+function isNodeCompileCacheRequested(env: NodeJS.ProcessEnv): boolean {
+  return env.NODE_COMPILE_CACHE !== undefined && env.NODE_DISABLE_COMPILE_CACHE === undefined;
 }
 
 type OpenClawCompileCacheRespawnPlan = {
@@ -134,15 +119,7 @@ export function enableOpenClawCompileCache(params: {
   env?: NodeJS.ProcessEnv;
   installRoot: string;
 }): void {
-  if (!shouldEnableOpenClawCompileCache(params)) {
-    return;
-  }
-  try {
-    const directory = resolveOpenClawCompileCacheDirectory(params);
-    if (directory) {
-      enableOwnedNodeCompileCache(directory);
-    }
-  } catch {
-    // Best-effort only; never block startup.
+  if (!isSourceCheckoutInstallRoot(params.installRoot)) {
+    enableInstallCompileCache(params);
   }
 }

@@ -34,7 +34,7 @@ async function sparseFile(file: string, bytes: number) {
   }
 }
 
-it("keeps inherited cache namespaces flat and retires superseded builds", async () => {
+it("keeps inherited cache namespaces flat and retains recently prepared builds", async () => {
   const root = tempDirs.make("openclaw-cache-builds-");
   await fs.mkdir(path.join(root, "dist"));
   await fs.writeFile(path.join(root, "package.json"), '{"version":"2026.9.6"}');
@@ -62,19 +62,23 @@ it("keeps inherited cache namespaces flat and retires superseded builds", async 
     await fs.mkdir(directory, { recursive: true });
     await sparseFile(path.join(directory, "bytecode"), 32 * MiB);
     await maintainOpenClawCompileCache(directory);
-    expect(await fs.readdir(path.dirname(directory))).toEqual([path.basename(directory)]);
+    expect((await fs.readdir(path.dirname(directory))).sort()).toEqual(
+      [...directories.values()].map((value) => path.basename(value)).sort(),
+    );
     inherited = directory;
   }
 });
 
-it("prunes old bytecode and caps a 600 MiB cache without touching neighboring caches", async () => {
+it("prunes old bytecode and caps 600 MiB across releases without touching neighboring caches", async () => {
   const root = tempDirs.make("openclaw-cache-retention-");
   const cache = path.join(root, "openclaw");
   const directory = path.join(cache, "2026.9.6", "1000-100");
+  const candidate = path.join(cache, "2026.9.7", "2000-100");
   await fs.mkdir(directory, { recursive: true });
+  await fs.mkdir(candidate, { recursive: true });
   await fs.writeFile(path.join(root, "another-app"), "keep");
   for (let index = 0; index < 6; index++) {
-    await sparseFile(path.join(directory, `bytecode-${index}`), 100 * MiB);
+    await sparseFile(path.join(index < 3 ? directory : candidate, `bytecode-${index}`), 100 * MiB);
   }
   const old = path.join(directory, "expired");
   await fs.writeFile(old, "old");
@@ -82,12 +86,15 @@ it("prunes old bytecode and caps a 600 MiB cache without touching neighboring ca
   await fs.utimes(old, expired, expired);
   await fs.utimes(cache, expired, expired);
   await maintainOpenClawCompileCache(directory);
-  const files = await fs.readdir(directory);
-  const bytes = (
-    await Promise.all(files.map(async (name) => (await fs.stat(path.join(directory, name))).size))
-  ).reduce((total, size) => total + size, 0);
+  const files = (await fs.readdir(cache, { recursive: true, withFileTypes: true }))
+    .filter((entry) => entry.isFile())
+    .map((entry) => path.join(entry.parentPath, entry.name));
+  const bytes = (await Promise.all(files.map(async (file) => (await fs.stat(file)).size))).reduce(
+    (total, size) => total + size,
+    0,
+  );
   expect(bytes).toBe(500 * MiB);
-  expect(files).not.toContain("expired");
+  expect(files).not.toContain(old);
   expect(await fs.readFile(path.join(root, "another-app"), "utf8")).toBe("keep");
 });
 

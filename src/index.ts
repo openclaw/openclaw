@@ -4,7 +4,16 @@ import { existsSync } from "node:fs";
 // Package executable entrypoint that forwards to the CLI bootstrap.
 import process from "node:process";
 import { fileURLToPath } from "node:url";
+import {
+  enableOpenClawCompileCache,
+  resolveOpenClawCompileCacheRespawnEnv,
+} from "../node-compile-cache.mjs";
 import { resolveCliArgvInvocation } from "./cli/argv-invocation.js";
+import { isForegroundGatewayRunArgv } from "./cli/gateway-run-argv.js";
+import {
+  isForegroundGmailRunArgv,
+  shouldKeepNativeHookRelayInProcess,
+} from "./cli/respawn-policy.js";
 import { tryRunUpdateAdmissionBeforeStartup } from "./cli/run-main-update-admission.js";
 import {
   configureGatewayStartupTraceConsoleFormatting,
@@ -117,7 +126,24 @@ if (!isMain) {
   } = await import("./library.js"));
 }
 
-if (isMain && !handledRootVersion && !handledAdmission) {
+const shouldRunCli = isMain && !handledRootVersion && !handledAdmission;
+const compileCacheRespawnEnv =
+  shouldRunCli &&
+  !isForegroundGmailRunArgv(process.argv) &&
+  !shouldKeepNativeHookRelayInProcess(process.argv, process.platform)
+    ? resolveOpenClawCompileCacheRespawnEnv({ installRoot: fileURLToPath(packageRootUrl) })
+    : undefined;
+if (compileCacheRespawnEnv) {
+  const args = [...process.execArgv, fileURLToPath(import.meta.url), ...process.argv.slice(2)];
+  // External supervisors require the serving Gateway to retain its listener PID.
+  if (process.execve && isForegroundGatewayRunArgv(process.argv)) {
+    process.execve(process.execPath, [process.execPath, ...args], compileCacheRespawnEnv);
+  }
+  const { runRespawnedChild } = await import("../node-runtime-recovery.mjs");
+  await runRespawnedChild(process.execPath, args, compileCacheRespawnEnv);
+}
+if (shouldRunCli && !compileCacheRespawnEnv) {
+  enableOpenClawCompileCache({ installRoot: fileURLToPath(packageRootUrl) });
   const [
     { formatCliFailureLines, formatCliJsonFailure, isExpectedCliError },
     { isJsonOutputModeActive },

@@ -1,3 +1,11 @@
+export function enableOpenClawCompileCache(params: {
+  installRoot: string;
+  env?: NodeJS.ProcessEnv;
+}): void;
+export function resolveOpenClawCompileCacheRespawnEnv(params: {
+  installRoot: string;
+  env?: NodeJS.ProcessEnv;
+}): NodeJS.ProcessEnv | undefined;
 export function resolveOpenClawCompileCacheDirectory(params: {
   installRoot: string;
   env?: NodeJS.ProcessEnv;
