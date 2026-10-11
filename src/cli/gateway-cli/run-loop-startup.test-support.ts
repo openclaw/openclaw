@@ -30,11 +30,8 @@ export function registerGatewayStartupFailureTests(
     "acquireGatewayLock" | "hasManagedProviderLocalServices" | "stopManagedProviderLocalServices"
   >,
 ): void {
-  const {
-    acquireGatewayLock,
-    hasManagedProviderLocalServices,
-    stopManagedProviderLocalServices,
-  } = fixtures;
+  const { acquireGatewayLock, hasManagedProviderLocalServices, stopManagedProviderLocalServices } =
+    fixtures;
   const createStartupOperations = async () => {
     const { createGatewayStartupOperations } = await import("./run-loop-startup.js");
     return createGatewayStartupOperations();

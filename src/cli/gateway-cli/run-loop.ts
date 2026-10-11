@@ -1269,7 +1269,9 @@ export async function runGatewayLoop(params: {
           try {
             await cleanup.waitForCleanup();
             if (cleanup.failed) {
-              throw new Error("gateway cleanup failed before Tailscale Serve recovery wait");
+              throw new Error("gateway cleanup failed before Tailscale Serve recovery wait", {
+                cause: err,
+              });
             }
             try {
               await iterationStartupOperations.drain();
@@ -1283,11 +1285,16 @@ export async function runGatewayLoop(params: {
             await cleanup.drainProcessResources();
             await cleanup.waitForCleanup();
             if (cleanup.failed) {
-              throw new Error("gateway process cleanup failed before Tailscale Serve recovery wait");
+              throw new Error(
+                "gateway process cleanup failed before Tailscale Serve recovery wait",
+                {
+                  cause: err,
+                },
+              );
             }
           } catch (cleanupError) {
             canWaitForTailscaleServe = false;
-            completeStartupFailure(maintenanceRequired?.code);
+            completeStartupFailure();
             throw new GatewayStartupCleanupError(err, cleanupError);
           }
           if (hasAdditionalStartupFailure) {
@@ -1298,20 +1305,20 @@ export async function runGatewayLoop(params: {
           await iterationStartupOperations.drain();
           if (installationReplacement) {
             canWaitForTailscaleServe = false;
-            completeStartupFailure(maintenanceRequired?.code);
+            completeStartupFailure();
             await exitReplacedInstallation(installationReplacement);
             break;
           }
           const stopCompletion = iterationStartupOperations.getStopCompletion();
           if (stopCompletion) {
             canWaitForTailscaleServe = false;
-            completeStartupFailure(maintenanceRequired?.code);
+            completeStartupFailure();
             await stopCompletion;
             break;
           }
           if (terminalExitCode !== undefined || shuttingDown) {
             canWaitForTailscaleServe = false;
-            completeStartupFailure(maintenanceRequired?.code);
+            completeStartupFailure();
             throw err;
           }
           completeStartupFailure(TAILSCALE_BACKEND_AUTH_REQUIRED_REASON);
