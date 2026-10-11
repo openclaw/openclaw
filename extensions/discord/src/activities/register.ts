@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/channel-plugin-common";
 import { createDiscordActivityHttpHandler } from "./http.js";
 import { createDiscordWidgetPresenter } from "./presenter.js";
@@ -22,7 +23,7 @@ export function registerDiscordActivities(api: OpenClawPluginApi): void {
   setDiscordActivitiesRuntime(runtime);
   const http = createDiscordActivityHttpHandler({
     runtime,
-    vendorAssetPath: api.resolvePath("assets/embedded-app-sdk.mjs"),
+    vendorAssetPath: resolveActivitySdkPath(api),
   });
   api.registerHttpRoute({
     path: DISCORD_ACTIVITY_ROUTE_PREFIX,
@@ -31,4 +32,13 @@ export function registerDiscordActivities(api: OpenClawPluginApi): void {
     handler: http.handleHttpRequest,
   });
   api.registerWidgetPresenter(createDiscordWidgetPresenter(runtime));
+}
+
+// Source checkouts and bundled dist builds keep the SDK in assets/; the standalone
+// npm package copies it to dist/assets/ beside the compiled entry.
+function resolveActivitySdkPath(api: OpenClawPluginApi): string {
+  const candidates = ["assets/embedded-app-sdk.mjs", "dist/assets/embedded-app-sdk.mjs"].map(
+    (input) => api.resolvePath(input),
+  );
+  return candidates.find((candidate) => fs.existsSync(candidate)) ?? candidates[0]!;
 }

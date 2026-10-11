@@ -1,3 +1,8 @@
+import fs from "node:fs/promises";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
+import os from "node:os";
+import path from "node:path";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/channel-plugin-common";
 import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -139,6 +144,47 @@ describe("Discord Activities registration", () => {
         }),
     ).toBe(true);
     expect(getDiscordActivitiesRuntime()).toBeDefined();
+  });
+
+  it.each([
+    { layout: "source checkout and bundled dist", asset: "assets/embedded-app-sdk.mjs" },
+    { layout: "standalone npm package", asset: "dist/assets/embedded-app-sdk.mjs" },
+  ])("serves the generated SDK from the $layout layout", async ({ asset }) => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-discord-activity-root-"));
+    const server = createServer();
+    try {
+      await fs.mkdir(path.join(root, path.dirname(asset)), { recursive: true });
+      await fs.writeFile(path.join(root, asset), "export class DiscordSDK {}\n");
+      const config = {
+        channels: {
+          discord: {
+            token: "test",
+            activities: { clientSecret: "secret", applicationId: "123" },
+          },
+        },
+      };
+      const test = createApi(config);
+      test.resolvePath.mockImplementation((input: string) => path.join(root, input));
+      registerDiscordActivities(test.api);
+      const handler = test.routes[0]!.handler;
+      server.on("request", (req, res) => void handler(req, res));
+      await new Promise<void>((resolve) => {
+        server.listen(0, "127.0.0.1", resolve);
+      });
+      const { port } = server.address() as AddressInfo;
+
+      const vendor = await fetch(
+        `http://127.0.0.1:${port}/discord/activity/vendor/embedded-app-sdk.mjs`,
+      );
+
+      expect(vendor.status).toBe(200);
+      await expect(vendor.text()).resolves.toBe("export class DiscordSDK {}\n");
+    } finally {
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      });
+      await fs.rm(root, { recursive: true, force: true });
+    }
   });
 
   it.each([
