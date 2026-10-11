@@ -27,7 +27,7 @@ import {
   resolveTelegramMessageThreadSpec,
 } from "./bot/helpers.js";
 import {
-  inspectTelegramConversationRoute,
+  inspectTelegramConversationRouteAsync,
   resolveTelegramTargetSession,
   touchTelegramConversationRoute,
 } from "./conversation-route.js";
@@ -144,7 +144,7 @@ async function resolveTelegramCommandAuth(params: {
     await resolveTelegramNativeCommandThreadContext({ msg, bot });
   const senderId = msg.from?.id ? String(msg.from.id) : "";
   const scopedConfig = params.resolveTelegramGroupConfig(chatId, threadSpec.id, cfg);
-  const inspectedRoute = inspectTelegramConversationRoute({
+  const inspectedRoute = await inspectTelegramConversationRouteAsync({
     cfg,
     accountId,
     chatId,
