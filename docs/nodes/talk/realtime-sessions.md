@@ -176,3 +176,44 @@ If the microphone disconnects or its permission is revoked, browser Talk ends
 the call and shows an error. Choose an available **Microphone input**, restore
 permission if needed, and start Talk again. An unexpected GPT-Live connection
 loss also ends the call with an error; automatic reconnection is not supported.
+
+## Buffered Gateway-relay audio
+
+Buffered clients can opt in with `talk.session.create` using `mode: "realtime"`,
+`transport: "gateway-relay"`, and `capabilities: ["audio-completeness-v1"]`.
+Require `audioDelivery: "audio-completeness-v1"` in the successful response before
+using this contract. Existing clients and other transports are unchanged.
+
+Each response emits these `talk.event` payloads, scoped by `relaySessionId`:
+
+- `audioStarted` carries an increasing `outputId`, including responses with no audio.
+- Every `audio` frame carries `output: { id, frameCount }`. On frames, `frameCount`
+  is the zero-based ordinal assigned **before** transport delivery, not the number
+  received by the client. Frames remain at most 960 bytes of 24 kHz mono PCM16.
+- Terminal `audioDone` carries `output: { id, frameCount }` with the total generated
+  frame count and `status: "completed" | "cancelled" | "failed" | "incomplete"`.
+  Marks are playback checkpoints, not completion. An empty completed response has
+  count zero.
+
+For this opt-in only, audio and boundary markers are not silently dropped under
+backpressure. The existing bounded Gateway transport closes a slow consumer
+instead of growing an unbounded queue. No audio is retained for retransmission;
+completeness tracking uses constant memory per relay. This is lossless-or-close,
+not a promise that a disconnected client will receive a terminal event.
+
+Buffer until the matching `completed` terminal, require the start marker and
+exactly the ordinals `0..frameCount-1` in arrival order, then enqueue playback at
+most once per `(relaySessionId, outputId)`. Reject missing, duplicate, reordered,
+unmarked, or wrong-output frames; a trailing drop is detectable from the final
+count. Ignore repeated terminals for already settled output IDs. Keep a monotonic
+settled-ID high-water mark rather than an unbounded set. Clients must cap their
+own audio buffer and discard an output on overflow; they must not play a prefix
+as if it were complete.
+
+`clear` invalidates all unplayed buffered outputs, including a completed output
+still queued for playback. A pending output receives a cancelled terminal first.
+`close`, errors, disconnect, session replacement, or a missing terminal invalidate
+pending buffers; never infer successful completion from connection closure.
+An invalidated output cannot become playable because of a later terminal. Resume
+only with a new output ID. This contract does not provide cross-session replay or
+exactly-once audible playback acknowledgements.

@@ -22,6 +22,7 @@ import {
 } from "../relay-session-lifecycle.js";
 import { markTalkVoiceSessionReady } from "../voice-selection.js";
 import { bindTalkRealtimeRelayAgentConsult } from "./agent-consult.js";
+import { RelayAudioCompleteness } from "./audio-completeness.js";
 import {
   buildAlreadyDeliveredToolResult,
   scheduleForcedAgentConsult,
@@ -99,7 +100,11 @@ export function createTalkRealtimeRelaySession(
     transcriptLookbackMs: RELAY_TRANSCRIPT_ECHO_LOOKBACK_MS,
     captureBridgeEvents: false,
   });
+  const audioCompleteness = params.clientCapabilities?.includes("audio-completeness-v1")
+    ? new RelayAudioCompleteness()
+    : undefined;
   const eventOwner = {
+    audioCompleteness,
     id: relaySessionId,
     context: params.context,
     connId: params.connId,
@@ -395,6 +400,7 @@ export function createTalkRealtimeRelaySession(
       const terminalTalkEvent = harness.talk.recentEvents.at(-1);
       emit({
         type: "audioDone",
+        ...(audioCompleteness ? { status: outcome.status } : {}),
         ...(currentOutputItemId ? { itemId: currentOutputItemId } : {}),
         ...(responseId ? { responseId } : {}),
         ...(terminalTalkEvent &&
@@ -625,6 +631,7 @@ export function createTalkRealtimeRelaySession(
     harness,
     capabilities: params.capabilities,
     outputOwnership,
+    audioCompleteness,
     sessionTarget: params.sessionTarget,
     expiresAtMs,
     cleanupTimer: setTimeout(() => {
@@ -678,6 +685,7 @@ export function createTalkRealtimeRelaySession(
     provider: params.provider.id,
     transport: "gateway-relay",
     relaySessionId,
+    ...(audioCompleteness ? { audioDelivery: "audio-completeness-v1" as const } : {}),
     audio: {
       inputEncoding: "pcm16",
       inputSampleRateHz: REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ.sampleRateHz,
