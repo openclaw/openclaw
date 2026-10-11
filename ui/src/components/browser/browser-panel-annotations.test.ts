@@ -1,5 +1,5 @@
 import type { BrowserAnnotationState } from "openclaw/plugin-sdk/browser-annotations";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { BROWSER_ANNOTATION_EVENT, type BrowserAnnotationDraft } from "./browser-annotation.ts";
 import {
@@ -8,8 +8,11 @@ import {
   setupBrowserPanelTestCleanup,
   stubScreenshotMedia,
 } from "./browser-panel-controller-test-support.ts";
+import type { BrowserPanelController } from "./browser-panel-controller.ts";
+import "./browser-panel.ts";
 
 setupBrowserPanelTestCleanup();
+afterEach(() => document.body.replaceChildren());
 
 function selected(): BrowserAnnotationState {
   return {
@@ -28,7 +31,96 @@ function selected(): BrowserAnnotationState {
   };
 }
 
+async function mountAnnotationPanel(
+  client: HTMLElementTagNameMap["openclaw-browser-panel"]["client"],
+) {
+  const panel = document.createElement("openclaw-browser-panel");
+  panel.embedded = true;
+  panel.presented = true;
+  panel.refreshOnPresentation = false;
+  panel.available = true;
+  panel.client = client;
+  panel.sessionKey = "agent:main:annotations";
+  document.body.append(panel);
+  await panel.updateComplete;
+  const controller = (panel as unknown as { browserPanelController: BrowserPanelController })
+    .browserPanelController;
+  controller.activeTargetId = "tab-a";
+  await controller.annotations.refresh();
+  return { panel, controller };
+}
+
 describe("plugin canvas annotations in the browser panel", () => {
+  it.each([
+    ["presented", false],
+    ["suppressed", true],
+  ] as const)("stops annotations before %s hides an embedded panel", async (property, value) => {
+    const { client, request } = createBrowserClient(async () => selected());
+    const { panel, controller } = await mountAnnotationPanel(client);
+    request.mockClear();
+
+    panel[property] = value;
+    await panel.updateComplete;
+
+    expect(request).toHaveBeenCalledWith("browser.request", {
+      method: "POST",
+      path: "/annotations",
+      body: { targetId: "tab-a", action: "stop", documentId: "document-1" },
+      tabScope: { sessionKey: "agent:main:annotations" },
+    });
+    expect(controller.annotations.state).toBeNull();
+  });
+
+  it("stops a pending color preview and ignores its result after hiding", async () => {
+    const preview = createDeferred<BrowserAnnotationState>();
+    const { client, request } = createBrowserClient(async (envelope) =>
+      envelope.body?.action === "control" ? preview.promise : selected(),
+    );
+    const { panel, controller } = await mountAnnotationPanel(client);
+    controller.annotations.control("preview", "palette-1", "#008800");
+    expect(controller.annotations.busy).toBe(true);
+    request.mockClear();
+    panel.presented = false;
+    await panel.updateComplete;
+    expect(request.mock.calls[0]?.[1]).toMatchObject({ body: { action: "stop" } });
+    preview.resolve(selected());
+    await preview.promise;
+    await panel.updateComplete;
+    expect(controller.annotations.state).toBeNull();
+    expect(controller.annotations.busy).toBe(false);
+  });
+
+  it.each(["session", "client", "dashboard", "availability", "remote-availability"])(
+    "does not reuse revoked %s authority when hiding in the same update",
+    async (revocation) => {
+      const { client, request } = createBrowserClient(async () => selected());
+      const { panel, controller } = await mountAnnotationPanel(client);
+      const replacement = createBrowserClient(async () => selected());
+      request.mockClear();
+      if (revocation === "session") {
+        panel.sessionKey = "agent:main:replacement";
+      } else if (revocation === "client") {
+        panel.client = replacement.client;
+      } else if (revocation === "dashboard") {
+        panel.dashboardTarget = {
+          sessionKey: "agent:main:replacement",
+          name: "preview",
+          instanceId: "replacement",
+          sessionScoped: true,
+        };
+      } else if (revocation === "availability") {
+        panel.available = false;
+      } else {
+        panel.remoteAvailable = false;
+      }
+      panel.presented = false;
+      await panel.updateComplete;
+      expect(request).not.toHaveBeenCalled();
+      expect(replacement.request).not.toHaveBeenCalled();
+      expect(controller.annotations.state).toBeNull();
+    },
+  );
+
   it("routes canvas clicks to the registered surface, not the remote game's buttons", async () => {
     const selection = createDeferred<BrowserAnnotationState>();
     const { client, request } = createBrowserClient(async (envelope) => {

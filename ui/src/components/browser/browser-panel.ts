@@ -41,7 +41,17 @@ class OpenClawBrowserPanel
   /** Gateway browser features remain separately gated on native hosts. */
   @property({ type: Boolean }) remoteAvailable = true;
   /** Full-page route takeovers (settings) own the viewport; the dock hides while one renders. */
-  @property({ type: Boolean }) suppressed = false;
+  private presentationSuppressed = false;
+  @property({ type: Boolean })
+  get suppressed(): boolean {
+    return this.presentationSuppressed;
+  }
+  set suppressed(value: boolean) {
+    if (value && !this.presentationSuppressed) {
+      this.suspendAnnotationsBeforeHide();
+    }
+    this.presentationSuppressed = value;
+  }
   /** Gateway HTTP resource mount used for the authenticated media fetch. */
   @property({ attribute: false }) resourceBasePath = "";
   /** Bearer credential for the assistant-media screenshot fetch. */
@@ -51,7 +61,17 @@ class OpenClawBrowserPanel
   /** The hosting side-panel header presents this panel's tabs. */
   @property({ type: Boolean }) tabsInHeader = false;
   /** This embedded instance is the active pane's visible Browser presenter. */
-  @property({ type: Boolean }) presented = false;
+  private presentationActive = false;
+  @property({ type: Boolean })
+  get presented(): boolean {
+    return this.presentationActive;
+  }
+  set presented(value: boolean) {
+    if (!value && this.presentationActive && this.embedded) {
+      this.suspendAnnotationsBeforeHide();
+    }
+    this.presentationActive = value;
+  }
   /** Whether presentation owns initial work instead of a pending explicit toggle. */
   @property({ type: Boolean }) refreshOnPresentation = true;
 
@@ -221,6 +241,14 @@ class OpenClawBrowserPanel
       this.consumedPreferredRevision = undefined;
     }
     return clientChanged || sessionChanged || dashboardChanged;
+  }
+
+  private suspendAnnotationsBeforeHide(): void {
+    if (this.browserPanelController.annotations.state) {
+      // Parent bindings can replace authority in the same update as visibility.
+      this.synchronizeBrowserContext();
+      this.browserPanelController.annotations.suspend();
+    }
   }
 
   private preferredRevision(): string | undefined {

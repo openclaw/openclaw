@@ -35,7 +35,7 @@ function setup() {
   canvas.getBoundingClientRect = () => new dom.window.DOMRect(10, 20, 160, 144);
   document.elementFromPoint = () => canvas;
   const dispatch = (command: BrowserAnnotationCommand) =>
-    document.__openclawAnnotationHost(command);
+    document["__openclawAnnotationHost"](command);
   return { dom, document, canvas, activation, dispatch };
 }
 

@@ -159,6 +159,21 @@ export class BrowserPanelAnnotations {
       : Promise.resolve();
   }
 
+  /** Retire page mode before hiding, even while a control request is pending. */
+  suspend(): void {
+    const scope = this.scope();
+    const state = this.state;
+    if (scope?.current() && state) {
+      // Dispatch while the existing client still owns presentation. Never retain
+      // a cleanup client that could bypass later session or connection revocation.
+      void this.request(scope.client, scope.targetId, {
+        action: "stop",
+        documentId: state.documentId,
+      }).catch(() => {});
+    }
+    this.reset();
+  }
+
   async send(): Promise<void> {
     if (this.busy) {
       return;

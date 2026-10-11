@@ -61,7 +61,9 @@ describe.runIf(process.env.OPENCLAW_BROWSER_ANNOTATIONS_E2E === "1")(
             path: "/annotations",
             body: { targetId: targetInfo.targetId, ...command },
             assertCurrent: () => {
-              if (!current) throw new Error("Session access revoked");
+              if (!current) {
+                throw new Error("Session access revoked");
+              }
             },
           });
         const initial = await call({ action: "state" });

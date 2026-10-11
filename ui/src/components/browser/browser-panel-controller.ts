@@ -93,7 +93,7 @@ export class BrowserPanelController implements ReactiveController {
   }
 
   suspendView(): void {
-    void this.annotations.stop();
+    this.annotations.suspend();
     this.native.cancelCapture();
     this.native.presentation.hide();
     this.input.resetCaptureState();
