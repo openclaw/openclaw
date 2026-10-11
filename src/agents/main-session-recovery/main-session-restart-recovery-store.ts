@@ -261,7 +261,13 @@ export async function recoverStore(params: {
           : undefined,
       );
       if (workStartBlock) {
-        skip(workStartBlock.retryable ? "work_start_pending" : "work_start_blocked");
+        skip(
+          workStartBlock.reason === "archived"
+            ? "archived"
+            : workStartBlock.retryable
+              ? "work_start_pending"
+              : "work_start_blocked",
+        );
         decision.reason = workStartBlock.reason;
         if (workStartBlock.retryable) {
           params.onPreparationPending?.({ ...target, sessionId: entry.sessionId });

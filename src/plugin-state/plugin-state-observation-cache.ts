@@ -39,11 +39,11 @@ const state = resolveGlobalSingleton(Symbol.for("openclaw.pluginStateObservation
       }
     } else if (change.kind === "committed") {
       for (const [key, fact] of change.receipt.facts) {
-        const id = JSON.stringify([identity, key]);
+        const entryKey = JSON.stringify([identity, key]);
         if (fact.kind === "unknown") {
-          entries.delete(id);
+          entries.delete(entryKey);
         } else {
-          entries.set(id, {
+          entries.set(entryKey, {
             identity,
             loaded: true,
             row: fact.kind === "postimage" ? fact.value : undefined,

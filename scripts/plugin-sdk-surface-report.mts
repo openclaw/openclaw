@@ -181,14 +181,14 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   // Released synchronous allowlist compatibility during the approved worker-read migration.
   "channel-pairing": 1,
   "channel-policy": 7,
+  // Released synchronous conversation binding APIs remain until the next Plugin SDK major.
+  "conversation-binding-inspection-runtime": 1,
+  "conversation-runtime": 3,
   "channel-send-result": 1,
   "reply-runtime": 1,
   "security-runtime": 1,
   // +2: approved released upstream-link writes retained during worker migration.
   "session-catalog": 2,
-  // Released synchronous conversation inspection and binding APIs remain until the next SDK major.
-  "conversation-binding-inspection-runtime": 1,
-  "conversation-runtime": 3,
   "session-store-runtime": 4,
   // +2: shipped Slack and Discord setup helpers retained through their package migration window.
   "setup-runtime": 2,
@@ -221,8 +221,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +7: approved prepared/data-only session patches and their authority contracts.
       // +4: CLI state-owner routing, Gateway owner guards, target selection, and timeout parsing.
       // +1: requester-bound transport effects for owner-routed plugin commands.
-      // +12: approved async command authorization and approval companions (#168482).
-      // +4: approved async conversation inspection and V2 binding exports (#168483).
+      // +12: async command authorization and native approval contracts (#168482).
+      // +4: async conversation inspection, routing, and V2 adapter registration (#168483).
       3672,
       env,
     ),
@@ -240,8 +240,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +3: approved prepared/data-only session patches and authority-bound routes.
       // +4: the same four CLI state-owner and transport functions.
       // +1: runWithLocalStateMutationOwner shares the existing transport authority scope.
-      // +8: approved async command authorization and approval companions (#168482).
-      // +3: approved async conversation inspection and V2 binding functions (#168483).
+      // +8: async command authorization and native approval helpers (#168482).
+      // +3: async conversation inspection, routing, and V2 adapter registration (#168483).
       2133,
       env,
     ),
@@ -251,7 +251,7 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +2: approved synchronous upstream-link write compatibility until the next Plugin SDK major.
       // +1: synchronous session entry getter remains until the next Plugin SDK major.
       // +6: released session callbacks and provider replay contracts during async migration.
-      // +4: released synchronous conversation APIs during the approved V2 binding migration (#168483).
+      // +4: released synchronous conversation binding contracts during V2 migration.
       158,
       env,
     ),
