@@ -127,7 +127,7 @@ describe("gateway lifecycle hub import boundaries", () => {
             primed = true;
             return hub;
           });
-          const { runGatewayLoop } = await import("./run-loop.js");
+          const { runGatewayLoop } = await import("./run-loop.test-support.js");
           abortSignal.throwIfAborted();
           await withIsolatedSignals(async ({ captureSignal }) => {
             const originalOn = process.on.bind(process);

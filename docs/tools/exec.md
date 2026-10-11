@@ -156,6 +156,8 @@ Set `tools.exec.reviewer.thinking` to `minimal`, `low`, `medium`, `high`, `xhigh
 
 Set `tools.exec.reviewer.fastMode` to `true` to request Fast processing on supported OpenAI Responses and ChatGPT/OAuth routes, or `false` for standard processing. For example, `reviewer: { model: "openai/gpt-5.6-terra", thinking: "low", fastMode: true }` requests both low reasoning effort and priority processing. Omit `fastMode` to preserve provider defaults. This setting is independent of the main agent's Fast mode and is also available per agent. Priority processing may cost more and remains subject to provider/model availability; other providers may ignore the setting.
 
+Reviewers marked as reasoning models automatically receive a bounded thinking allowance on top of the 1,024-token verdict budget, based on `thinking` (medium when omitted). The request stays within the model's advertised output limit. Non-reasoning reviewers keep the 1,024-token budget. No separate completion-budget setting is needed; an exhausted budget still falls back to human approval.
+
 Model preparation and completion each receive the configured `tools.exec.reviewer.timeoutMs` budget. A timeout returns to human approval immediately. Pending preparation and provider cleanup remain owned until they settle. Preparation that finishes after its timeout does not start a review.
 
 For embedded agent runs, the reviewer receives a bounded, redacted excerpt of the current conversation: user requests, assistant text, tool calls, and tool results, labeled by origin. It uses this context to judge whether a command serves the user's request. The excerpt is untrusted evidence, not instructions. Conversation context is unavailable for direct node `system.run` calls and widgets.

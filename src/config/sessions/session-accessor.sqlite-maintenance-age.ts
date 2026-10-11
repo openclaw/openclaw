@@ -20,7 +20,7 @@ export type SessionEntryMaintenanceAgeFact = {
   next: { at: number };
   recheckAt: number;
 };
-export type SessionEntryMaintenanceAgeCapture = { fact?: SessionEntryMaintenanceAgeFact };
+type SessionEntryMaintenanceAgeCapture = { fact?: SessionEntryMaintenanceAgeFact };
 type MaintenanceActivity = Pick<
   SessionEntry,
   "updatedAt" | "lastActivityAt" | "lastInteractionAt" | "sessionStartedAt" | "archivedAt"
@@ -89,8 +89,6 @@ type Activity = Parameters<typeof getSessionMaintenanceActivityAt>[0];
 export const SESSION_ENTRY_MAINTENANCE_INTERVAL_MS = 30 * 60 * 1_000;
 
 // Ordinary updates retain this age lower bound across entry-cache revision churn.
-// New active entries rotate the capture so in-flight count decisions observe them.
-// Maintenance readers enforce the recheck deadline, including paths without a kick.
 const ageFacts = new WeakMap<DatabaseSync, SessionEntryMaintenanceAgeCapture>();
 
 export function stageSessionEntryMaintenanceAgeFact(
@@ -135,20 +133,6 @@ export function readSessionEntryMaintenanceAgeFact(
   return fact;
 }
 
-/** Capture identity stays on the connection that owns maintenance planning. */
-export function captureSessionEntryMaintenanceAgeFact(
-  db: DatabaseSync,
-  maintenance: ResolvedSessionMaintenanceConfig,
-): SessionEntryMaintenanceAgeCapture {
-  readSessionEntryMaintenanceAgeFact(db, maintenance);
-  let capture = ageFacts.get(db);
-  if (!capture) {
-    capture = {};
-    ageFacts.set(db, capture);
-  }
-  return capture;
-}
-
 function isDashboardKey(key: string): boolean {
   return parseAgentSessionKey(key)?.rest.startsWith("dashboard:") === true;
 }
@@ -177,7 +161,6 @@ export function applySessionEntryMaintenanceAgeChange(
 ): void {
   const fact = ageFacts.get(db)?.fact;
   if (!fact) {
-    // An empty capture must also observe writes while Worker results are in flight.
     invalidateSessionEntryMaintenanceAgeFact(db);
     return;
   }

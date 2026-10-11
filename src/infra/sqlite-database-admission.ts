@@ -1,5 +1,4 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
@@ -11,8 +10,8 @@ import {
   SqliteDatabaseGenerationSlot,
   SqliteDatabaseAdmissionRegistry,
   type SqliteDatabaseAdmissionCursor,
-  SQLITE_DATABASE_GENERATION_LENGTH,
   readSqliteDatabaseAdmissions,
+  readSqliteDatabaseAdmissionIdentity as identity,
   readSqliteDatabaseFactRevision,
   activeSqliteDatabaseWriters as activeWriters,
   readSqliteDatabaseRecordWriteRevision as readWriteRevision,
@@ -23,38 +22,28 @@ import {
   isSqliteDatabaseAdmissionFactCurrent as valid,
   type Admission,
   type SqliteDatabaseAdmissions,
+  type SqliteDatabaseAdmissionKey,
+  type SqliteDatabaseAdmissionExchange as Exchange,
   type StagedAdmissionFact,
 } from "./sqlite-database-admission-record.js";
+import { createSqliteDatabaseWriteReceipts } from "./sqlite-database-write-receipts.js";
 import {
   getSqliteNativeAdmissionFacts,
   hasSqliteNativeAdmissionOperation,
 } from "./sqlite-native-admission.js";
-import { hasSqlitePostCommitScope, stageSqliteTransactionState } from "./sqlite-post-commit.js";
-import {
-  isSoleDatabaseFileDescriptor,
-  readDatabaseIdentityBirthtime,
-} from "./sqlite-worker-identity.js";
+import { stageSqliteTransactionState } from "./sqlite-post-commit.js";
+import { isSoleDatabaseFileDescriptor } from "./sqlite-worker-identity.js";
 
 export {
   readSqliteDatabaseAdmissions,
   createSqliteDatabaseAdmissionCursor,
   type SqliteDatabaseAdmissionCursor,
 } from "./sqlite-database-admission-record.js";
-export type { SqliteDatabaseAdmissions } from "./sqlite-database-admission-record.js";
+export type {
+  SqliteDatabaseAdmissions,
+  SqliteDatabaseAdmissionKey,
+} from "./sqlite-database-admission-record.js";
 export { beginSqliteDatabaseAdmissionOperation } from "./sqlite-native-admission.js";
-
-export type SqliteDatabaseAdmissionKey<T> = {
-  name: string;
-  read(this: void, value: unknown): T | undefined;
-  schemaDependent?: boolean;
-  writer?: "host";
-};
-
-type Exchange = (
-  admissions: SqliteDatabaseAdmissions,
-  location?: string,
-  create?: boolean,
-) => SqliteDatabaseAdmissions;
 
 const state = resolveGlobalSingleton(Symbol.for("openclaw.sqliteDatabaseAdmissions"), () => ({
   registry: new SqliteDatabaseAdmissionRegistry(),
@@ -75,9 +64,28 @@ const state = resolveGlobalSingleton(Symbol.for("openclaw.sqliteDatabaseAdmissio
   publication: 0,
 }));
 
-function identity(file: fs.BigIntStats): string {
-  return `${file.dev}:${file.ino}:${readDatabaseIdentityBirthtime(file)}`;
-}
+const scopedWrites = createSqliteDatabaseWriteReceipts({
+  admission,
+  pathAdmission,
+  readRevision: readSqliteDatabaseWriteRevision,
+  writer: (database) => state.dataWriters.get(database),
+  suspended: (database) => state.suspended.has(database),
+  exchange,
+  publish(record) {
+    state.registry.publish(record);
+    exchange(record);
+  },
+});
+export const {
+  withSqliteDatabaseWriteScope,
+  withoutSqliteDatabaseWriteScope,
+  readSqliteDatabaseScopedWriteToken,
+  readSqliteDatabaseScopedWriteTokenForPath,
+  readSqliteDatabasePendingScopedWriteToken,
+  readSqliteDatabaseWriteTokenForPath,
+  readSqliteDatabasePendingWriteToken,
+} = scopedWrites;
+export { sqliteSessionIdWriteScope } from "./sqlite-database-write-receipts.js";
 
 function exchange(target: string | Admission, create?: boolean): void {
   const current = state.exchange.getStore();
@@ -97,24 +105,6 @@ function exchange(target: string | Admission, create?: boolean): void {
   } finally {
     state.exchanging = false;
   }
-}
-
-function retainDescriptor(location: string, descriptor: number, opened: fs.BigIntStats): Admission {
-  const record: Admission = {
-    identity: identity(opened),
-    location,
-    descriptor,
-    descriptorOwner: 0,
-    generationId: randomUUID(),
-    generation: new SharedArrayBuffer(
-      Int32Array.BYTES_PER_ELEMENT * SQLITE_DATABASE_GENERATION_LENGTH,
-    ),
-    writers: new Map(),
-    facts: new Map(),
-  };
-  state.registry.records.set(record.identity, record);
-  state.registry.publish(record);
-  return record;
 }
 
 /** Identity descriptors stay open for the process: closing one can release SQLite's POSIX locks. */
@@ -144,7 +134,7 @@ export function retainSqliteDatabaseAdmissionLocation(location: string): void {
   if (!opened.isFile() || identity(opened) !== key) {
     throw new Error("SQLite database changed while retaining its admission identity");
   }
-  retainDescriptor(location, descriptor, opened);
+  state.registry.retainDescriptor(location, descriptor, opened);
 }
 
 function pathAdmission(location: string): Admission | undefined {
@@ -215,7 +205,7 @@ export function prepareSqliteDatabaseAdmission(
         throw creationError;
       }
       const opened = fs.fstatSync(descriptor, { bigint: true });
-      const record = retainDescriptor(filename, descriptor, opened);
+      const record = state.registry.retainDescriptor(filename, descriptor, opened);
       if (prepareSqliteDatabaseAdmission(filename) !== record.identity) {
         throw new Error("SQLite database changed identity during file creation", { cause: error });
       }
@@ -436,7 +426,8 @@ export function prepareSqliteDatabaseWriter(database: DatabaseSync): Admission |
 }
 
 /** Fence native writes through their transaction or implicit-cursor settlement. */
-export function beginSqliteDatabaseWrite(database: DatabaseSync): void {
+export function beginSqliteDatabaseWrite(database: DatabaseSync, unscoped = false): void {
+  scopedWrites.begin(database, unscoped);
   if (state.dataWriters.has(database)) {
     return;
   }
@@ -455,6 +446,7 @@ export function finishSqliteDatabaseWrite(database: DatabaseSync): void {
   const record = state.dataWriters.get(database);
   state.dataWriters.delete(database);
   state.localWriteRevisions.set(database, (state.localWriteRevisions.get(database) ?? 0) + 1);
+  scopedWrites.finish(database, record);
   if (record) {
     Atomics.add(new Int32Array(record.generation), SqliteDatabaseGenerationSlot.writeRevision, 1);
     Atomics.sub(new Int32Array(record.writers.get(threadId)!.cell), 2, 1);
@@ -474,34 +466,6 @@ export function readSqliteDatabaseWriteRevision(database: DatabaseSync): number 
       : undefined;
   }
   return readWriteRevision(record, state.dataWriters.get(database) === record ? 1 : 0, exchange);
-}
-
-/** Host row caches retain a physical identity and receipt without opening SQLite. */
-export function readSqliteDatabaseWriteTokenForPath(location: string): string | undefined {
-  const record = pathAdmission(location);
-  if (!record || isRetired(record)) {
-    return undefined;
-  }
-  const revision = readWriteRevision(record, 0, exchange);
-  return revision === undefined ? undefined : `${record.identity}:${revision}`;
-}
-
-/** The managed writer's next settlement advances its physical revision exactly once. */
-export function readSqliteDatabasePendingWriteToken(database: DatabaseSync): string | undefined {
-  if (
-    !database.isOpen ||
-    !database.isTransaction ||
-    !hasSqlitePostCommitScope(database) ||
-    state.suspended.has(database)
-  ) {
-    return undefined;
-  }
-  const record = state.dataWriters.get(database);
-  if (!record || isRetired(record)) {
-    return undefined;
-  }
-  const revision = readWriteRevision(record, 1, exchange);
-  return revision === undefined ? undefined : `${record.identity}:${(revision + 1) | 0}`;
 }
 
 /** TEMP-trigger owners already see their own writes and only need sibling settlement. */

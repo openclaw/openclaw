@@ -42,7 +42,7 @@ export type GatewayApprovalEventPublisher = {
   publishResolved: (kind: ChannelApprovalKind, resolved: unknown) => void;
 };
 
-export type GatewayApprovalEventPublisherV2 = GatewayApprovalEventPublisher & {
+type GatewayApprovalEventPublisherV2 = GatewayApprovalEventPublisher & {
   publishRequestedAsync: (kind: ChannelApprovalKind, request: unknown) => Promise<number>;
 };
 
