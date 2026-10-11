@@ -57,6 +57,62 @@ const reviewed = new Map([
     },
   ],
   [
+    "src/infra/update-managed-service-handoff-database.ts",
+    {
+      tier: "T2",
+      evidence:
+        "readManagedHandoffRepairMetadata and initializeLeaseSchema serve the managed update source-custody lease, a cross-process lock primitive.",
+    },
+  ],
+  [
+    "src/infra/update-managed-service-handoff-lease.ts",
+    {
+      tier: "T3",
+      evidence:
+        "createLeaseStore.admit is called by original-acquisition.ts from update/repair/triage CLI and the generated lease-source helper; retarget runs in HANDOFF_SCRIPT.",
+    },
+  ],
+  [
+    "src/infra/update-managed-service-handoff-mutation.ts",
+    {
+      tier: "T2",
+      evidence:
+        "createManagedHandoffMutationReader.childAliases implements managed source-custody lock validation; config/write-lock.ts and daemon/service-operation-lock.ts reach it through the lease owner.",
+    },
+  ],
+  [
+    "src/infra/update-managed-service-handoff-original-owner.ts",
+    {
+      tier: "T2",
+      evidence:
+        "readOriginalUpdateDependents serves cross-process source-custody lease acquisition/release, not ordinary Gateway state access.",
+    },
+  ],
+  [
+    "src/infra/update-managed-service-handoff-reclamation.ts",
+    {
+      tier: "T3",
+      evidence:
+        "observeManagedHandoffReclamation.readPairs is called only by lease.ts createLeaseStore admission in CLI/generated source helpers.",
+    },
+  ],
+  [
+    "src/infra/update-managed-service-handoff-rows.ts",
+    {
+      tier: "T2",
+      evidence:
+        "descendants/deleteRow/updateRow/readRetainedSources belong to cross-process managed source-custody locks. config/write-lock.ts and daemon/service-operation-lock.ts use assertSourceUnborrowed before effects; Gateway release settles the same lease.",
+    },
+  ],
+  [
+    "src/infra/update-managed-service-handoff-source-inspection.ts",
+    {
+      tier: "T2",
+      evidence:
+        "Schema discovery supports only the managed source-custody lock primitive's first admission and repair.",
+    },
+  ],
+  [
     "src/gateway/session-row-projection.ts",
     {
       priority: 2,
@@ -252,7 +308,10 @@ const reviewedOperations = new Map([
     [
       {
         tier: "T2",
-        operations: ["inspectGatewayCrashLoopBreakerInDatabase"],
+        operations: [
+          "inspectGatewayCrashLoopBreakerInDatabase",
+          "inspectGatewayCrashLoopBreakerInDatabase.latestStartedAt",
+        ],
         evidence:
           "Extracted from the existing gateway-boot-lifecycle.ts boot exception. Native inspectGatewayCrashLoopBreaker is only called by cli/gateway-cli/run.ts beginBoot before starting the Gateway; runtime inspection and recovery commit revalidation execute via gatewayBootReadOperations and gateway-boot-lifecycle.worker.ts in the existing state workers.",
       },
@@ -1654,13 +1713,19 @@ const reviewedOperations = new Map([
     "src/infra/restart-handoff.ts",
     [
       {
+        tier: "T2",
+        operations: ["selectGatewayRestartHandoffRowSync"],
+        evidence:
+          "Native reads only serve server-startup-bootstrap.ts boot admission, daemon CLI status.gather.ts, and Doctor gateway-daemon-flow.ts; ordinary Gateway runtime does not call this reader.",
+      },
+      {
         tier: "T3",
         operations: [
           "consumeGatewayRestartHandoffSync",
           "consumeGatewayRestartHandoffSync.removeCurrent",
         ],
         evidence:
-          "Only CLI gateway-cli/register-restart-handoff.ts:61 calls consumeGatewayRestartHandoffSync and its private removeCurrent helper; shared row reader also runs at Gateway boot and remains T1.",
+          "Only CLI gateway-cli/register-restart-handoff.ts:61 calls consumeGatewayRestartHandoffSync and its private removeCurrent helper.",
       },
     ],
   ],
@@ -1680,7 +1745,12 @@ const reviewedOperations = new Map([
     [
       {
         tier: "T3",
-        operations: ["writeRestartSentinelRowIfRevisionSync", "readRestartSentinelRowForKeySync"],
+        operations: [
+          "writeRestartSentinelRowIfRevisionSync",
+          "readRestartSentinelRowForKeySync",
+          "readRestartSentinelRevisionFloorSync",
+          "upsertRestartSentinelRowSync",
+        ],
         evidence:
           "src/infra/restart-sentinel.worker.ts:74,150 plus generated one-shot child in src/infra/update-managed-service-handoff.ts:101,439,1639,1649.",
       },
@@ -1750,9 +1820,11 @@ const reviewedOperations = new Map([
           "createSqliteAuditRecordKernel.entries",
           "createSqliteAuditRecordKernel.upsertPreparedRecord",
           "createSqliteAuditRecordKernel.latest",
+          "readAuditWriteState",
+          "pruneAuditRecords",
         ],
         evidence:
-          "Native entries/upsert serve state-migrations.audit-checkpoints.ts, audit-recovery.ts, audit-logs.ts and CLI audit-backup.ts. Native latest serves readRecentConfigAuditRecords in Doctor config flow and update-immutable-protection.ts. Transcript/greeting reads and CAS, plus config-journal snapshots, use the existing workers. Native config observation still reaches register/count/next/prune, which remain T1.",
+          "Native entries/upsert/count/next/prune serve state-migrations.audit-checkpoints.ts, audit-recovery.ts, audit-logs.ts and CLI audit-backup.ts. Native latest serves readRecentConfigAuditRecords in Doctor and update-immutable-protection.ts. Runtime config observations use diagnostic.register in sqlite-audit-record.worker.ts; no native register adapter remains.",
       },
     ],
   ],
@@ -1774,20 +1846,63 @@ const reviewedOperations = new Map([
     ],
   ],
   [
+    "src/infra/update-run-admission.ts",
+    [
+      {
+        tier: "T3",
+        operations: ["runUpdateRunAdmission"],
+        evidence:
+          "createUpdateRun is the only caller: Gateway/update campaigns dispatch updateRuns.create to update-run-mutation.worker.ts; native create calls are CLI update-command-run.ts and update-repair-command.ts. The existing-schema and bootstrap transactions retain the worker's transaction/commit admission callback.",
+      },
+    ],
+  ],
+  [
     "src/infra/update-run-ledger.ts",
     [
       {
         tier: "T3",
         operations: ["createUpdateRun"],
-        binding: "active",
         evidence:
-          "active initializer requires stale-run opt-in only from src/cli/update-cli/update-command-run.ts:304,310,313; guard src/infra/update-run-ledger.ts:127 excludes Gateway/campaign callers. Repairs: update-repair-command.ts:141; interruption: update-command-mutable-signals.ts:158.",
+          "Gateway server-methods/update.ts and update-startup-auto-run.ts use createUpdateRunAsync; update-run-mutation.worker.ts executes creation. Remaining native callers are update-command-run.ts and update-repair-command.ts. Legacy supersession remains an explicit CLI-only option.",
       },
       {
         tier: "T3",
         operations: ["reconcilePackageOwnerRefusal", "finishInterruptedUpdateBeforeActivation"],
         evidence:
-          "active initializer requires stale-run opt-in only from src/cli/update-cli/update-command-run.ts:304,310,313; guard src/infra/update-run-ledger.ts:127 excludes Gateway/campaign callers. Repairs: update-repair-command.ts:141; interruption: update-command-mutable-signals.ts:158.",
+          "Only update-repair-command.ts calls reconcilePackageOwnerRefusal; update-command-mutable-signals.ts calls finishInterruptedUpdateBeforeActivation under its CLI executor. Their package/activation custody checks remain intact.",
+      },
+    ],
+  ],
+  [
+    "src/infra/update-run-read.kernel.ts",
+    [
+      {
+        tier: "T3",
+        operations: ["readUpdateRunRecord", "hasStoredUpdateRecovery", "readUpdateRuns"],
+        evidence:
+          "Runtime reads dispatch through update-run-reader.ts to openclaw-state-read.worker.ts; mutations read their current record in update-run-mutation.worker.ts, reconciliation and interruption workers. Native readers serve CLI update-command-* / update-repair-command.ts, Doctor admission, update-migrated-finalize.worker.ts and update-repair-turn-worker.ts. Gateway update/report/restart/notice and startup campaign callers use async APIs; generated managed-handoff ledger reads execute in the helper child.",
+      },
+    ],
+  ],
+  [
+    "src/infra/update-run-recovery-store.ts",
+    [
+      {
+        tier: "T3",
+        operations: ["readRecoveryRows"],
+        evidence:
+          "Runtime mutation/reconciliation/interruption readers execute in existing workers. Native load/inspect recovery callers are update CLI repair, result, rollback and terminal owners plus CLI managed-handoff cleanup; no Gateway reader uses the synchronous recovery facade. Recovery exclusion is retained as activation/rollback custody, not removed as bookkeeping.",
+      },
+    ],
+  ],
+  [
+    "src/infra/update-run-write.ts",
+    [
+      {
+        tier: "T3",
+        operations: ["persistRun"],
+        evidence:
+          "Gateway update/run, boot observations, notices and startup campaigns use update-run-write.async.ts and the existing update-run-mutation.worker.ts writer. Remaining native mutateRun callers are CLI update-command-* and Doctor; update-migrated-finalize.worker.ts, reconciliation/interruption workers and the generated managed-handoff helper also own native transactions. No synchronous runtime fallback is retained.",
       },
     ],
   ],

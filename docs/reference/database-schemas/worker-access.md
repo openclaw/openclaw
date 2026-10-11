@@ -26,6 +26,31 @@ paths are migration debt, not a pattern to extend. The
 [migration inventory](/reference/database-schemas/worker-access-inventory) separates
 candidate main-thread paths from SQL already executing in workers.
 
+Node-host configuration writes and one-use GitHub setup handoffs use the existing
+shared-state writer. Handoff consumption deletes and returns the matching live
+row in one statement, so concurrent consumers cannot reuse it. Configuration
+observations enqueue audit history through the existing diagnostic writer and
+join their task's asynchronous cleanup; abrupt process exit can lose a pending
+best-effort observation. Update-run creation, completion, verification, and
+diagnostics from the Gateway likewise use the existing update-run worker.
+
+Conversation-binding receipts install exact cached postimages and tombstones.
+Ordered selection uses one statement, and multi-session listings select all
+requested keys together. Heartbeat claims use a conditional update returning the
+claimed row; outcome persistence selects its session owner inside the insert.
+Message-tool completion installs any missing additive table in its recording
+transaction and uses admitted schema facts thereafter. Fresh usage summaries do
+not query refresh-lock state. These changes preserve schema versions, retention,
+stored data, and update compatibility.
+
+Remaining synchronous compatibility debt includes released conversation-binding
+and proxy-capture SDK callbacks, opaque native Web Push guards, and the public
+prepared-workspace acquisition guard. Unbound incognito usage/outcome storage
+still belongs to its native process-held database until the incognito actor
+cutover. Hidden GitHub credentials retain their synchronous credential-lifecycle
+owner and current effect checks. Moving these calls requires their owning
+contract's cutover; reclassifying them as worker code would hide real debt.
+
 Agent turn preparation carries its admitted session entry into native model setup;
 credential dispatch still reads current ownership at its effect boundary.
 Cancellation preparation retains the session-generation owner without opening a
