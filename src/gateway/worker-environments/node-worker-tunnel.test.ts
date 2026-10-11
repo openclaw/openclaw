@@ -477,7 +477,7 @@ describe("node worker tunnel manager", () => {
     expect(prepareSync).toHaveBeenCalledWith(
       expect.objectContaining({
         environmentId: "environment-1",
-        generation: record.ownerEpoch,
+        ownerEpoch: record.ownerEpoch,
         localPath: "/gateway/workspace",
       }),
     );
