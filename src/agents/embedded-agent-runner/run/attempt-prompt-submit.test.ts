@@ -43,6 +43,7 @@ import {
   setActiveEmbeddedRun,
 } from "../runs.js";
 import { clearEmbeddedSessionPromptStates } from "../session-prompt-state.js";
+import { normalizeMessagesForLlmBoundary } from "./attempt-llm-boundary.js";
 import { prepareEmbeddedAttemptPromptAssembly } from "./attempt-prompt-build.js";
 import { forgetPromptBuildDrainCacheForRun } from "./attempt-prompt-helpers.js";
 import { submitEmbeddedAttemptPrompt } from "./attempt-prompt-submit.js";
@@ -170,6 +171,9 @@ describe("submitEmbeddedAttemptPrompt", () => {
         sessionManager,
         resourceLoader: { ...createResourceLoader(), getSystemPrompt: () => systemPrompt },
       });
+      const convert = session.agent.convertToLlm;
+      session.agent.convertToLlm = (messages) =>
+        convert(normalizeMessagesForLlmBoundary(messages, { includeTimestamp: false }));
       const transcriptPrompt = "Answer the new request with ACK.";
       const prependContext = "Prepared hook context. ".repeat(210);
       const appendContext = "End of prepared hook context.";

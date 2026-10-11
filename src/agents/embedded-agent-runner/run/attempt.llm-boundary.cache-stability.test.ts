@@ -94,13 +94,17 @@ function toolRound(round: number, api: "openai-completions" | "openai-responses"
     },
   ];
 }
-async function capture(api: "openai-completions" | "openai-responses", messages: AgentMessage[]) {
+async function capture(
+  api: "openai-completions" | "openai-responses",
+  messages: AgentMessage[],
+  boundaryOptions: NonNullable<Parameters<typeof normalizeMessagesForLlmBoundary>[1]> = options,
+) {
   let captured: Record<string, unknown> | undefined;
   const context = {
     systemPrompt: "Stable system prompt",
     messages: convertToLlm(
       relocateCurrentRuntimeContextCarrierToTail(
-        normalizeMessagesForLlmBoundary(messages, options),
+        normalizeMessagesForLlmBoundary(messages, boundaryOptions),
       ),
     ),
   };
@@ -337,6 +341,31 @@ describe("prompt-cache boundary regressions", () => {
     },
   );
 
+  it.each([
+    ["openai-completions", false],
+    ["openai-completions", true],
+    ["openai-responses", false],
+    ["openai-responses", true],
+  ] as const)(
+    "preserves inbound metadata across consecutive %s requests (append-only context=%s)",
+    async (api, appendOnlyRuntimeContext) => {
+      const metadata = 'Conversation info: ⟦openclaw:ctx⟧\n```json\n{"channel":"test"}\n```\n\n';
+      const active = [user(`${metadata}Check the deployment.`), ...toolRound(1, api)];
+      const boundaryOptions = { ...options, appendOnlyRuntimeContext };
+      const previous = await capture(api, active, boundaryOptions);
+      const next = await capture(
+        api,
+        [...active, answer, user("Next request", TS + 60000)],
+        boundaryOptions,
+      );
+      const field = api === "openai-completions" ? "messages" : "input";
+      const before = previous[field] as unknown[];
+      const after = next[field] as unknown[];
+      expect(JSON.stringify(before)).toContain("openclaw:ctx");
+      expect(JSON.stringify(after.slice(0, before.length))).toBe(JSON.stringify(before));
+    },
+  );
+
   it("preserves the full-history provider prefix through a completed tool loop on the next user turn", async () => {
     const active = [
       carrier("sender=Bob"),
@@ -391,7 +420,7 @@ describe("prompt-cache boundary regressions", () => {
     }
     messages.push(answer, user("next request", TS + 60000));
     const next = await capture("openai-responses", messages);
-    expect(JSON.stringify(next.input)).not.toContain("saved preference");
+    expect(JSON.stringify(next.input)).toContain("saved preference");
     expect(JSON.stringify(next.input)).not.toContain("sender=Bob");
     expect(
       resolveResponsesContinuationRequest(

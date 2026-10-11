@@ -9,10 +9,11 @@ import {
   createAssistantResultStream,
   testModel,
 } from "../../sessions/agent-session-loop-correctness.test-support.js";
+import { convertToLlm } from "../../sessions/messages.js";
 import { SessionManager } from "../../sessions/session-manager.js";
 import {
   installRuntimeContextMessageForPrompt,
-  installModelPromptTransform,
+  installModelPromptProjection,
   normalizeMessagesForLlmBoundary,
 } from "./attempt-llm-boundary.js";
 import { createUserTranscriptContextRegistry } from "./attempt-user-transcript-context-registry.js";
@@ -35,8 +36,8 @@ function createSession() {
 }
 const originalUser = (): UserMessage => ({ role: "user", content: "original", timestamp: 1 });
 const steeringUser = (): UserMessage => ({ role: "user", content: "steering", timestamp: 1 });
-const installPrompt = (session: Parameters<typeof installModelPromptTransform>[0]["session"]) =>
-  installModelPromptTransform({
+const installPrompt = (session: Parameters<typeof installModelPromptProjection>[0]["session"]) =>
+  installModelPromptProjection({
     session,
     transcriptPrompt: "original",
     prependContext: "before",
@@ -80,6 +81,7 @@ describe("active prompt steering context", () => {
     const requests: string[] = [];
     const agent = new Agent({
       initialState: { model: testModel, messages: manager.buildSessionContext().messages },
+      convertToLlm: (messages) => convertToLlm(normalizeMessagesForLlmBoundary(messages)),
       streamFn: (model, context) => {
         requests.push(JSON.stringify(context.messages));
         return createAssistantResultStream(
@@ -130,8 +132,13 @@ describe("active prompt steering context", () => {
         ...(mode === "rewritten key" ? { persistedUserIdempotencyKey: "before-hook-key" } : {}),
       });
       session.agent.state.messages.push(original);
+      await session.agent.transformContext(session.messages);
+      const capturedPrompt = session.messages.at(-1);
+      if (capturedPrompt?.role !== "user") {
+        throw new Error("Expected the captured source user prompt");
+      }
       const persisted = manager.appendMessageWithTranscriptAnchor({
-        ...original,
+        ...capturedPrompt,
         ...(mode === "keyless" ? {} : { idempotencyKey: "canonical-key" }),
       });
       contexts.record(original, persisted.message);
@@ -143,7 +150,9 @@ describe("active prompt steering context", () => {
       session.agent.state.messages = manager.buildSessionContext().messages;
       await session.agent.continue();
       const retry = session.messages;
-      const projected = await session.agent.transformContext(retry);
+      const projected = normalizeMessagesForLlmBoundary(
+        await session.agent.transformContext(retry),
+      );
       cleanup();
       cleanupPrompt();
       expect(persisted.message).not.toBe(original);
@@ -151,44 +160,6 @@ describe("active prompt steering context", () => {
       expect(projected.at(-2)).toMatchObject({ content: "before\n\noriginal" });
       expect(projected.at(-1)).toBe(steering.message);
       expect(session.messages).not.toContain(message);
-    },
-  );
-
-  it.each([
-    { replay: "rehydrated", ambiguous: false },
-    { replay: "rehydrated", ambiguous: true },
-    { replay: "retained", ambiguous: true },
-  ])(
-    "selects a carrierless keyless prompt from $replay history (same-time steering=$ambiguous)",
-    async ({ replay, ambiguous }) => {
-      const original = originalUser();
-      const manager = SessionManager.inMemory();
-      const session = createSession();
-      const cleanup = installPrompt(session);
-      await session.agent.transformContext([original]);
-      const persisted = manager.appendMessageWithTranscriptAnchor(original);
-      if (ambiguous) {
-        manager.appendMessage(steeringUser());
-      }
-      manager.appendCompaction("Earlier context was summarized.", persisted.entryId, 100);
-      const restored =
-        replay === "rehydrated"
-          ? SessionManager.fromEntries(manager.getPersistedEntries())
-          : manager;
-      const canonical = restored.buildSessionContext().messages;
-      expect(canonical.includes(original)).toBe(replay === "retained");
-      const projected = await session.agent.transformContext(canonical);
-      cleanup();
-      if (replay === "rehydrated" && ambiguous) {
-        expect(projected).toEqual(canonical);
-      } else {
-        expect(projected.at(ambiguous ? -2 : -1)).toMatchObject({
-          content: "before\n\noriginal",
-        });
-        if (ambiguous) {
-          expect(projected.at(-1)).toBe(canonical.at(-1));
-        }
-      }
     },
   );
 
@@ -214,7 +185,7 @@ describe("active prompt steering context", () => {
     expect(projected.at(-1)).toBe(kept.message);
   });
 
-  it("preserves the active prompt prefix through steering and retires it on cleanup", () => {
+  it("preserves user metadata through steering and runtime-context cleanup", () => {
     const session = createSession();
     const message = runtimeContext();
     const cleanup = installRuntimeContextMessageForPrompt({ session, message });
@@ -244,7 +215,7 @@ describe("active prompt steering context", () => {
     });
     expect(session.messages).not.toContain(message);
     expect(project()[0]).toMatchObject({
-      content: expect.not.stringContaining("Conversation info:"),
+      content: expect.stringContaining("Conversation info:"),
     });
     session.agent.state.messages.unshift(message);
     expect(project()).not.toContain(message);

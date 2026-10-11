@@ -8,7 +8,7 @@ import type { AgentMessage } from "../../runtime/index.js";
 import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
 import { findActiveUserMessageIndex, resolveUserTranscriptMessages } from "./attempt-history.js";
 import {
-  installModelPromptTransform,
+  installModelPromptProjection,
   normalizeMessagesForCurrentPromptBoundary,
   normalizeMessagesForLlmBoundary,
 } from "./attempt-llm-boundary.js";
@@ -180,7 +180,7 @@ describe("normalizeMessagesForLlmBoundary", () => {
     expect(findActiveUserMessageIndex(first)).toBe(0);
   });
 
-  it("strips historical metadata while preserving the active envelope through a tool continuation", () => {
+  it("preserves historical and active metadata through a tool continuation", () => {
     const current = `${conversation}Reply target of current user message: ⟦openclaw:ctx⟧\n\`\`\`json\n{"body":"quoted status body"}\n\`\`\`\n\nCurrent ask`;
     const input: AgentMessage[] = [
       user([{ type: "text", text: `${conversation}Old ask` }]),
@@ -200,9 +200,12 @@ describe("normalizeMessagesForLlmBoundary", () => {
       },
     ];
     const output = normalizeMessagesForLlmBoundary(input, options);
-    expect(contentOf(output[0])).toBe(stamped("Old ask"));
+    expect(contentOf(output[0])).toBe(stamped(`${conversation}Old ask`));
     expect(contentOf(output[2])).toBe(stamped(current, timestamp + 60000));
     expect(contentOf(input[0])).toEqual([{ type: "text", text: `${conversation}Old ask` }]);
+    const bare = normalizeMessagesForLlmBoundary(input, { ...options, includeTimestamp: false });
+    expect(contentOf(bare[0])).toBe(`${conversation}Old ask`);
+    expect(contentOf(bare[2])).toBe(current);
   });
 
   it("keeps attachment blocks while escaping a historical sender's code fence", () => {
@@ -290,7 +293,7 @@ describe("normalizeMessagesForLlmBoundary", () => {
     const current = user([{ type: "text", text: "Current ask" }], timestamp + 60000);
     const input = [historical, timestampedTextAssistant("Answer", 2), current];
     const output = normalizeMessagesForLlmBoundary(input, { ...options, includeTimestamp: false });
-    expect(contentOf(output[0])).toBe("Stored ask");
+    expect(contentOf(output[0])).toBe(`${conversation}Stored ask`);
     expect(contentOf(output[2])).toBe("Current ask");
     expect(output[0]).toHaveProperty("__openclaw", historical["__openclaw"]);
     expect(Reflect.get(expectDefined(output[0], "historical output"), "__openclaw")).toBe(
@@ -444,7 +447,7 @@ describe("normalizeMessagesForLlmBoundary", () => {
     };
     const session = { agent: { transformContext: originalTransform } };
     let armed = false;
-    const cleanup = installModelPromptTransform({
+    const cleanup = installModelPromptProjection({
       session,
       transcriptPrompt: "visible transcript prompt",
       modelPrompt: "private model prompt",
@@ -458,11 +461,11 @@ describe("normalizeMessagesForLlmBoundary", () => {
     const steered = await session.agent.transformContext([...messages, user("steering update", 2)]);
     cleanup();
     expect(contentOf(unarmed[0])).toEqual([{ type: "text", text: "visible transcript prompt" }]);
-    expect(contentOf(projected[0])).toEqual([{ type: "text", text: "private model prompt" }]);
-    expect(projected[0]).toHaveProperty(
-      "__openclawTranscriptPromptText",
-      "visible transcript prompt",
-    );
+    expect(contentOf(normalizeMessagesForLlmBoundary(projected)[0])).toBe("private model prompt");
+    expect(projected[0]).toHaveProperty("__openclaw.modelPromptProjection", {
+      version: 1,
+      text: "private model prompt",
+    });
     expect(steered).toEqual([projected[0], user("steering update", 2)]);
     const runtimeMessage = expectDefined(messages[0], "original prompt fixture");
     const boundaryOptions = {
