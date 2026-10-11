@@ -45,13 +45,16 @@ function owner(entries: ModelCatalogEntry[], current = true) {
 
 describe("existing-session recovery through the admitted owner", () => {
   it.each(["ready", "unavailable"] as const)(
-    "keeps the numeric authored-cap contract during synthetic recovery with %s capacity",
+    "keeps the configured authored-cap contract during synthetic recovery with %s capacity",
     (state) => {
       expect(
         resolveProjectedSessionContextTokens({
           entry: persisted("synthetic"),
           ...selection,
-          authoredContextTokens: 64_000,
+          configuredContextTokenLimits: {
+            effectiveConfiguredTokens: 64_000,
+            authoredContextTokenCap: 64_000,
+          },
           resolvedContextTokens: undefined,
           ownerCapacity:
             state === "ready" ? { state, contextTokens: 872_000, synthetic: false } : { state },

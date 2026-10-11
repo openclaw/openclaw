@@ -106,13 +106,11 @@ vi.mock("../../agents/context.js", () => ({
   resolveContextTokensForModel: () => 200_000,
   resolveModelContextTokenProjection: (): ModelContextTokenProjection => ({
     contextTokens: 200_000,
-    authoredContextTokens: undefined,
     configuredContextTokenLimits: undefined,
     source: "model",
   }),
   resolveContextTokenBudgetForModel: async (): Promise<ModelContextTokenProjection> => ({
     contextTokens: 200_000,
-    authoredContextTokens: undefined,
     configuredContextTokenLimits: undefined,
     source: "model",
   }),

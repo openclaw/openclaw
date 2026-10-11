@@ -4,7 +4,6 @@ import {
   resolveProjectedSessionContextTokenBudget,
   resolveProjectedSessionContextTokens,
   resolveProjectedSessionContextBudgetStatus,
-  resolveTrustedSessionContextTokens,
 } from "./context-token-provenance.js";
 import type { SessionEntry } from "./types.js";
 
@@ -14,10 +13,11 @@ const currentSelection = {
   agentHarnessId: "codex",
 };
 
-describe("resolveTrustedSessionContextTokens", () => {
+describe("persisted capacity through the current projection", () => {
   it("normalizes provider and harness but retains the exact producing model", () => {
     expect(
-      resolveTrustedSessionContextTokens({
+      resolveProjectedSessionContextTokens({
+        resolvedContextTokens: undefined,
         entry: {
           modelProvider: "OpenAI",
           model: "gpt-5.6-sol",
@@ -44,7 +44,8 @@ describe("resolveTrustedSessionContextTokens", () => {
     { name: "case-distinct model", patch: { model: "GPT-5.6-SOL" } },
   ])("rejects $name", ({ patch }) => {
     expect(
-      resolveTrustedSessionContextTokens({
+      resolveProjectedSessionContextTokens({
+        resolvedContextTokens: undefined,
         entry: {
           modelProvider: "openai",
           model: "gpt-5.6-sol",
@@ -60,7 +61,8 @@ describe("resolveTrustedSessionContextTokens", () => {
 
   it("preserves the native window owned by a locked legacy session", () => {
     expect(
-      resolveTrustedSessionContextTokens({
+      resolveProjectedSessionContextTokens({
+        resolvedContextTokens: undefined,
         entry: {
           modelSelectionLocked: true,
           contextTokens: 272_000,
@@ -75,7 +77,8 @@ describe("resolveTrustedSessionContextTokens", () => {
     { name: "model", patch: { model: "gpt-5.5" } },
   ])("rejects a locked window owned by a different $name", ({ patch }) => {
     expect(
-      resolveTrustedSessionContextTokens({
+      resolveProjectedSessionContextTokens({
+        resolvedContextTokens: undefined,
         entry: {
           modelProvider: "openai",
           model: "gpt-5.6-sol",
@@ -104,7 +107,10 @@ describe("resolveProjectedSessionContextTokens", () => {
         entry: matchingRuntimeEntry,
         ...currentSelection,
         resolvedContextTokens: 1_000_000,
-        authoredContextTokens: 1_000_000,
+        configuredContextTokenLimits: {
+          effectiveConfiguredTokens: 1_000_000,
+          authoredContextTokenCap: 1_000_000,
+        },
       }),
     ).toBe(1_000_000);
   });
@@ -186,7 +192,10 @@ describe("resolveProjectedSessionContextTokens", () => {
         },
         ...currentSelection,
         resolvedContextTokens: 272_000,
-        authoredContextTokens: 272_000,
+        configuredContextTokenLimits: {
+          effectiveConfiguredTokens: 272_000,
+          authoredContextTokenCap: 272_000,
+        },
       }),
     ).toBe(1_000_000);
   });

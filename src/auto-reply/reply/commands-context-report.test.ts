@@ -176,7 +176,6 @@ describe("buildContextReply", () => {
     };
     params.contextTokenProjection = {
       contextTokens: testCase.resolved,
-      authoredContextTokens: testCase.authored,
       configuredContextTokenLimits:
         testCase.authored === undefined
           ? undefined

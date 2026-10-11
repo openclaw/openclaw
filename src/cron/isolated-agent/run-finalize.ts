@@ -13,8 +13,8 @@ import {
 import { isSilentReplyPayloadText } from "../../auto-reply/tokens.js";
 import { SESSION_TOTAL_TOKENS_VERSION } from "../../config/sessions.js";
 import {
-  resolveProjectedSessionContextTokens,
-  resolveTrustedSessionContextTokens,
+  qualifySessionContextTokenSource,
+  resolveProjectedSessionContextTokenBudget,
 } from "../../config/sessions/context-token-provenance.js";
 import { resolveSourceDeliveryOutcome } from "../../infra/outbound/source-delivery-plan.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
@@ -101,43 +101,70 @@ export async function finalizeCronRun(params: {
   const runtimeContextTokens = resolvePositiveContextTokens(
     finalRunResult.meta?.agentMeta?.contextTokens,
   );
-  const { contextTokens: modelContextTokens, authoredContextTokens } = (
-    await cronContextRuntimeLoader.load()
-  ).resolveModelContextTokenProjection({
+  const agentHarnessId = normalizeOptionalString(finalRunResult.meta?.agentMeta?.agentHarnessId);
+  const contextRuntime =
+    runtimeContextTokens === undefined ? await cronContextRuntimeLoader.load() : undefined;
+  const contextParams = {
+    contextWindow: prepared.cronSession.sessionEntry.contextWindow,
+    profileId: execution.authProfileId,
+
+    nativeRuntime: agentHarnessId,
     cfg: prepared.cfgWithAgentDefaults,
     provider: providerUsed,
     model: modelUsed,
+    agentId: prepared.agentId,
+    agentDir: prepared.agentDir,
+    workspaceDir: prepared.workspaceDir,
     allowAsyncLoad: false,
-  });
-  const agentHarnessId = normalizeOptionalString(finalRunResult.meta?.agentMeta?.agentHarnessId);
-  const retainedRuntimeContextTokens = resolveTrustedSessionContextTokens({
-    entry: prepared.cronSession.sessionEntry,
+    allowUnscopedModelLookup: false,
+  };
+  let resolution = contextRuntime?.resolveModelContextTokenProjection(contextParams);
+  const contextSelection = {
+    authProfileId: execution.authProfileId,
     provider: providerUsed,
     model: modelUsed,
     agentHarnessId,
-  });
-  const projectedContextTokens = resolveProjectedSessionContextTokens({
+  };
+  const projectBudget = () =>
+    resolveProjectedSessionContextTokenBudget({
+      ...contextSelection,
+      entry: prepared.cronSession.sessionEntry,
+      resolvedContextTokens:
+        resolution?.source === "fallback" && resolution.contextTokensSource !== "synthetic"
+          ? undefined
+          : resolution?.contextTokens,
+      resolvedContextTokensSource:
+        resolution?.contextTokensSource ??
+        (resolution?.source === "model" ? "resolved-v1" : "resolved"),
+      configuredContextTokenLimits: resolution?.configuredContextTokenLimits,
+    });
+  let projected = projectBudget();
+  if (contextRuntime) {
+    resolution = await contextRuntime.resolveContextTokenBudgetForModel({
+      ...contextParams,
+      knownContextBudget: resolveProjectedSessionContextTokenBudget({
+        ...contextSelection,
+        entry: prepared.cronSession.sessionEntry,
+        resolvedContextTokens: undefined,
+      }),
+    });
+    projected = projectBudget();
+  }
+  const contextTokens =
+    runtimeContextTokens ??
+    projected?.contextTokens ??
+    resolution?.contextTokens ??
+    DEFAULT_CONTEXT_TOKENS;
+  const contextTokensSource = qualifySessionContextTokenSource({
     entry: prepared.cronSession.sessionEntry,
-    provider: providerUsed,
-    model: modelUsed,
-    agentHarnessId,
-    resolvedContextTokens: modelContextTokens,
-    authoredContextTokens,
+    authProfileId: execution.authProfileId,
+    source:
+      runtimeContextTokens !== undefined
+        ? (finalRunResult.meta?.agentMeta?.contextTokensSource ?? "runtime")
+        : projected
+          ? projected.contextTokensSource
+          : "resolved",
   });
-  const contextTokens = runtimeContextTokens ?? projectedContextTokens ?? DEFAULT_CONTEXT_TOKENS;
-  // Preserve persisted provenance only when the projector selected that owner;
-  // a current/authored clamp stays resolved so removed caps cannot stick.
-  const projectedUsesPersistedContext =
-    retainedRuntimeContextTokens !== undefined &&
-    (prepared.cronSession.sessionEntry.modelSelectionLocked === true ||
-      (authoredContextTokens === undefined &&
-        projectedContextTokens === retainedRuntimeContextTokens));
-  const contextTokensSource =
-    runtimeContextTokens !== undefined
-      ? (finalRunResult.meta?.agentMeta?.contextTokensSource ?? "resolved")
-      : projectedUsesPersistedContext
-        ? prepared.cronSession.sessionEntry.contextTokensSource
-        : "resolved";
 
   if (!params.isAborted()) {
     setCronSessionRuntimeModel({

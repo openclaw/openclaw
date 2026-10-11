@@ -52,6 +52,7 @@ export type CronRunnerStartedInfo = {
 
 /** Completed prompt result recorded by the outer execution owner. */
 export type CronCompletedPromptRun = {
+  authProfileId?: string | null;
   runResult: EmbeddedAgentRunResult;
   fallbackProvider: string;
   fallbackModel: string;

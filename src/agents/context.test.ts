@@ -132,7 +132,6 @@ describe("context token resolution", () => {
     };
     expect(resolveModelContextTokenProjection(params)).toEqual({
       contextTokens: 128_000,
-      authoredContextTokens: 1_000_000,
       configuredContextTokenLimits: {
         effectiveConfiguredTokens: 128_000,
         authoredContextTokenCap: 128_000,
@@ -247,7 +246,6 @@ describe("native owner isolation", () => {
       }),
     ).toEqual({
       contextTokens: undefined,
-      authoredContextTokens: undefined,
       configuredContextTokenLimits: {
         effectiveConfiguredTokens: undefined,
         authoredContextTokenCap: undefined,

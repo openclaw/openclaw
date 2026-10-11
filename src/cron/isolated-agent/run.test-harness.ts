@@ -1,10 +1,7 @@
 // Isolated run test harness builds cron run inputs, mocks, and assertions.
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { resolvePrimaryStringValue } from "@openclaw/normalization-core/string-coerce";
 import { vi } from "vitest";
-import {
-  type ContextTokenResolutionParams,
-  resolveAuthoredModelContextTokens,
-} from "../../agents/context-resolution.js";
+import type { ContextTokenResolutionParams } from "../../agents/context-resolution.js";
 import { resolveFastModeState as resolveFastModeStateImpl } from "../../agents/fast-mode.js";
 import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
 import { runInitialModelFallbackAttempt } from "../../agents/test-helpers/model-fallback-runner.test-support.js";
@@ -13,6 +10,7 @@ import { resolveAgentModelFallbackValues } from "../../config/model-input.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
+import { createCronContextRuntimeFixture } from "./run.test-context.js";
 
 // Central mock harness for isolated cron agent run orchestration tests.
 type CronSessionEntry = {
@@ -41,17 +39,6 @@ type SessionAccessorModule = typeof import("../../config/sessions/session-access
 let actualReplaceSessionEntry: SessionAccessorModule["replaceSessionEntry"];
 let actualLoadSessionEntry: SessionAccessorModule["loadSessionEntry"];
 
-function normalizeModelSelectionForTest(value: unknown): string | undefined {
-  const direct = normalizeOptionalString(value);
-  if (direct) {
-    return direct;
-  }
-  if (!value || typeof value !== "object") {
-    return undefined;
-  }
-  return normalizeOptionalString((value as { primary?: unknown }).primary);
-}
-
 function usesRealAccessorStore(storePath?: string): boolean {
   return Boolean(storePath && storePath !== "/tmp/store.json");
 }
@@ -78,6 +65,8 @@ export const runEmbeddedAgentMock = vi.fn();
 export const runCliAgentMock = vi.fn();
 export const lookupModelContextTokensMock =
   vi.fn<(params: ContextTokenResolutionParams) => number | undefined>();
+export const lookupModelContextBudgetTokensMock =
+  vi.fn<NonNullable<Parameters<typeof createCronContextRuntimeFixture>[1]>>();
 export const getCliSessionBindingMock = vi.fn();
 export const loadSessionEntryMock = vi.fn();
 const replaceSessionEntryMock = vi.fn();
@@ -186,12 +175,10 @@ vi.mock("./run-external-content.runtime.js", () => ({
   detectSuspiciousPatterns: detectSuspiciousPatternsMock,
 }));
 
-vi.mock("./run-context.runtime.js", () => ({
-  resolveModelContextTokenProjection: (params: ContextTokenResolutionParams) => ({
-    contextTokens: lookupModelContextTokensMock(params),
-    authoredContextTokens: resolveAuthoredModelContextTokens(params),
-  }),
-}));
+// mock-isolation: Isolate model discovery while exercising cron orchestration.
+vi.mock("./run-context.runtime.js", () =>
+  createCronContextRuntimeFixture(lookupModelContextTokensMock, lookupModelContextBudgetTokensMock),
+);
 
 vi.mock("../../web-search/runtime.js", () => ({
   hasUsableWebSearchProvider: hasUsableWebSearchProviderMock,
@@ -235,21 +222,17 @@ vi.mock("../../skills/runtime/cron-snapshot.runtime.js", () => ({
   },
 }));
 
+// mock-isolation: Cron orchestration uses authored catalog and selection facts, never live model discovery.
 vi.mock("./run-model-selection.runtime.js", () => ({
   DEFAULT_MODEL: "gpt-5.4",
   DEFAULT_PROVIDER: "openai",
-  loadPreparedModelCatalogSnapshot: async (params: unknown) => ({
-    entries: await loadModelCatalogMock(params),
-    routeVariants: [],
-  }),
   loadProviderScopedThinkingCatalog: async (params: unknown) => await loadModelCatalogMock(params),
   loadResolvedPublishedModelCatalogOwner: loadModelCatalogOwnerMock,
   publishedModelCatalogOwnerMatchesAgent: (owner: { agentId: string }, agentId: string) =>
     owner.agentId === agentId.trim().toLowerCase(),
   resolveAgentConfig: resolveAgentConfigMock,
-  resolveAgentWorkspaceDir: resolveAgentWorkspaceDirMock,
   getModelRefStatus: getModelRefStatusMock,
-  normalizeModelSelection: normalizeModelSelectionForTest,
+  normalizeModelSelection: resolvePrimaryStringValue,
   resolveAllowedModelRefCore: resolveAllowedModelRefMock,
   resolveConfiguredModelRef: resolveConfiguredModelRefMock,
   resolveHooksGmailModel: resolveHooksGmailModelMock,
@@ -265,7 +248,7 @@ vi.mock("./run-model-selection.runtime.js", () => ({
       { raw: cfg?.agents?.defaults?.subagents?.model, source: "default-subagent" as const },
       { raw: agentConfigOverride?.model, source: "agent" as const },
     ]) {
-      if (normalizeModelSelectionForTest(candidate.raw)) {
+      if (resolvePrimaryStringValue(candidate.raw)) {
         return candidate;
       }
     }
@@ -494,7 +477,7 @@ function resetRunConfigMocks(): void {
       | { model?: unknown; subagents?: { model?: unknown } }
       | undefined;
     const resolveOverride = (raw: unknown): string[] | undefined => {
-      const primary = normalizeModelSelectionForTest(raw);
+      const primary = resolvePrimaryStringValue(raw);
       if (!raw) {
         return undefined;
       }
@@ -521,7 +504,7 @@ function resetRunConfigMocks(): void {
       (cfg as { agents?: { defaults?: { subagents?: { model?: unknown } } } })?.agents?.defaults
         ?.subagents?.model,
       agentConfig?.model,
-    ].find((raw) => normalizeModelSelectionForTest(raw));
+    ].find((raw) => resolvePrimaryStringValue(raw));
     return resolveOverride(selectedConfig);
   });
   resolveAgentModelFallbacksOverrideMock.mockReturnValue(undefined);
@@ -614,6 +597,8 @@ function resetRunExecutionMocks(): void {
 }
 
 function resetRunOutcomeMocks(): void {
+  lookupModelContextBudgetTokensMock.mockReset();
+  lookupModelContextBudgetTokensMock.mockImplementation(lookupModelContextTokensMock);
   lookupModelContextTokensMock.mockReset();
   lookupModelContextTokensMock.mockReturnValue(undefined);
   pickLastNonEmptyTextFromPayloadsMock.mockReset();
