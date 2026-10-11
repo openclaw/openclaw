@@ -512,7 +512,10 @@ export function listOpenClawRegisteredAgentDatabases(
 
 /** Scoped publication witnesses are immediate; native registry rows remain demand-driven. */
 export function prepareOpenClawAgentDatabaseRegistrySnapshotRead(
-  inputOptions: AgentDatabaseRegistryListOptions = {},
+  inputOptions: AgentDatabaseRegistryListOptions & {
+    /** Destructive inspection reads current rows without retiring runtime witnesses. */
+    fresh?: true;
+  } = {},
   unchangedBy?: (
     mutation: AgentDatabaseRegistryMutation,
     entries: readonly OpenClawRegisteredAgentDatabase[] | undefined,
@@ -629,12 +632,13 @@ export function prepareOpenClawAgentDatabaseRegistrySnapshotRead(
           // Install the witness before the first await, including a read that later rejects.
           preparedWitness = witness;
           assertCurrent();
-          if (!memo.entries) {
+          let entries = options.fresh ? undefined : memo.entries;
+          if (!entries) {
             const reply = await inCapturedScope(() =>
               executeExistingOpenClawStateRead(
                 options,
                 { type: "agentDatabaseRegistry.read" },
-                { signal },
+                { signal, current: options.fresh },
               ),
             );
             if (reply && (!reply.ok || reply.type !== "agentDatabaseRegistry.read")) {
@@ -654,12 +658,16 @@ export function prepareOpenClawAgentDatabaseRegistrySnapshotRead(
             ) {
               return { result: { status: "unavailable" }, assertCurrent, followRegistration };
             }
-            memo.entries ??= result?.entries ?? [];
+            entries = options.fresh
+              ? (result?.entries ?? [])
+              : (memo.entries ??= result?.entries ?? []);
           }
-          const entries = cloneRegisteredAgentDatabases(memo.entries, options);
           assertCurrent();
           return {
-            result: { status: "available", entries },
+            result: {
+              status: "available",
+              entries: cloneRegisteredAgentDatabases(entries, options),
+            },
             assertCurrent,
             followRegistration,
           };

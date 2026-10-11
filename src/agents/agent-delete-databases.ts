@@ -82,6 +82,7 @@ export async function readAgentDeleteDatabaseRegistry(options: OpenClawStateData
   const read = await prepareOpenClawAgentDatabaseRegistrySnapshotRead({
     ...options,
     includeIncompatibleSchemaVersions: true,
+    fresh: true,
   }).read();
   read.assertCurrent();
   if (read.result.status !== "available") {

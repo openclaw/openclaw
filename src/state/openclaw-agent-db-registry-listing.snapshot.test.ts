@@ -107,6 +107,21 @@ it.each(["capture", "reader"] as const)(
   },
 );
 
+it("inspects fresh registry rows without replacing the publication memo or its witnesses", async () => {
+  const retained = prepareOpenClawAgentDatabaseRegistrySnapshotRead(options, () => false);
+  await retained.read();
+  const foreign = { ...entry, agentId: "foreign", path: "/fixture/foreign.sqlite" };
+  mocks.read.mockResolvedValue({ status: "available", entries: [foreign] });
+  const inspected = await prepareOpenClawAgentDatabaseRegistrySnapshotRead({
+    ...options,
+    fresh: true,
+  }).read();
+  expect(inspected.result).toEqual({ status: "available", entries: [foreign] });
+  expect(() => inspected.assertCurrent()).not.toThrow();
+  expect(() => retained.assertCurrent()).not.toThrow();
+  expect((await retained.read()).result).toEqual({ status: "available", entries });
+});
+
 it("retains scoped revocation before native registry rows are needed", async () => {
   const prepared = prepareOpenClawAgentDatabaseRegistrySnapshotRead(options, () => true);
   expect(() => prepared.assertCurrent()).not.toThrow();

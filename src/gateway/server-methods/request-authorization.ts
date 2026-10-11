@@ -323,6 +323,10 @@ export async function authorizeGatewayRequestPreDispatch(params: {
     let requestParams = params.requestParams;
     if (params.method === "chat.send" && !sessionPolicy) {
       const cfg = params.context.getRuntimeConfig();
+      const normalized = resolveChatSendAuthorizationParams(cfg, requestParams);
+      if (!normalized.ok) {
+        return { error: normalized.error };
+      }
       if (!assertChatRoutingCurrent) {
         const routing = captureSessionMutationRouting(
           cfg,
@@ -332,10 +336,6 @@ export async function authorizeGatewayRequestPreDispatch(params: {
         assertChatRoutingCurrent = () => routing(params.context.getRuntimeConfig());
       }
       assertChatRoutingCurrent();
-      const normalized = resolveChatSendAuthorizationParams(cfg, requestParams);
-      if (!normalized.ok) {
-        return { error: normalized.error };
-      }
       requestParams = normalized.value;
     }
     const projection =
