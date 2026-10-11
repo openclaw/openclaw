@@ -536,17 +536,20 @@ export function createProjectsHandlers(service: ProjectWorktreeService): Gateway
         const cfg = context.getRuntimeConfig();
         const host = resolveConfiguredGitHubHost(cfg);
         const apiBaseUrl = resolveConfiguredGitHubApiBaseUrl(cfg);
-        const assertCurrent = () => {
-          signal?.throwIfAborted();
-          if (hasCurrentClientAuthority?.() === false) {
-            throw new Error("Project requester authority changed during search");
-          }
+        const assertIdentityCurrent = () => {
           if (context.getRuntimeConfig() !== cfg) {
             throw new gitHubPublicApi.ControlUiGitHubError(
               502,
               "GitHub host changed during project search",
             );
           }
+        };
+        const assertCurrent = () => {
+          signal?.throwIfAborted();
+          if (hasCurrentClientAuthority?.() === false) {
+            throw new Error("Project requester authority changed during search");
+          }
+          assertIdentityCurrent();
         };
         assertCurrent();
         const nativeToken =
@@ -556,6 +559,8 @@ export function createProjectsHandlers(service: ProjectWorktreeService): Gateway
         assertCurrent();
         const result = await searchRemoteProjects(params.query, {
           assertCurrent,
+          assertIdentityCurrent,
+          trackExecution: (run) => context.trackExecution(run),
           signal,
           host,
           apiBaseUrl,

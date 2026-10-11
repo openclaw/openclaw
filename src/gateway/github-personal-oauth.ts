@@ -155,12 +155,16 @@ async function resolvePersonalGitHubStatus(
   try {
     // Receipts use the durable selection above; live status must additionally
     // prove the selected profile can authenticate without borrowing native auth.
-    await preparePersonalGitHubPublicationIdentity({
+    const identity = await preparePersonalGitHubPublicationIdentity({
       profileId: record.selection.profileId,
       accountId: record.selection.accountId,
       assertCurrent,
+      forDisplay: true,
     });
-    return revalidatePersonalGitHubStatus(action, status);
+    return {
+      ...revalidatePersonalGitHubStatus(action, status),
+      ...(identity.stale ? { stale: true } : {}),
+    };
   } catch {
     return { ...revalidatePersonalGitHubStatus(action, status), state: "unavailable" };
   }

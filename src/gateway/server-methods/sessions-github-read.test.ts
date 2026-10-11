@@ -1,7 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionGitHubStatusResult } from "../../../packages/gateway-protocol/src/schema/session-github-publication.js";
-import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, withinTest } from "../../../test/helpers/promise.js";
 import { clearGitHubCredentialVerificationCache } from "../../agents/github-oauth-client.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -127,6 +127,40 @@ describe("publication receipt reads", () => {
       clearGitHubCredentialVerificationCache();
       await fixture.invoke("sessions.github.options", { sessionKey });
       expect(mocks.runCommandBuffered).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  it("marks expired account options stale without waiting for GitHub", async ({ signal }) => {
+    vi.mocked(publicationAvailability.prepareCurrentGitHubPublicationOptionsIdentity).mockRestore();
+    vi.stubEnv("GH_TOKEN", "synthetic-options-stale-token");
+    const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    const refresh = createDeferredCore<Response>();
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(Response.json({ id: 7, login: "shared-bot", avatar_url: null }))
+      .mockReturnValue(refresh.promise);
+    await withReadFixture(async (fixture) => {
+      await fixture.invoke("sessions.github.options", { sessionKey });
+      now.mockReturnValue(61_001);
+      try {
+        const stale = await withinTest(
+          fixture.invoke("sessions.github.options", { sessionKey }),
+          signal,
+        );
+        expect(stale).toHaveBeenCalledWith(
+          true,
+          expect.objectContaining({
+            stale: true,
+            shared: { ...publisher, source: "system-detected" },
+          }),
+        );
+        expect(fetchMock).toHaveBeenCalledTimes(2);
+        fixture.disconnect();
+        const denied = await fixture.invoke("sessions.github.options", { sessionKey });
+        expect(denied.mock.calls[0]?.[0]).toBe(false);
+      } finally {
+        refresh.resolve(Response.json({ id: 7, login: "shared-bot", avatar_url: null }));
+      }
     });
   });
 
