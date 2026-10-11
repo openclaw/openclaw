@@ -49,9 +49,36 @@ export async function installChatLoadingReadinessObserver(page: Page): Promise<v
         stop();
       }
     };
-    const context = () =>
-      document.querySelector<HTMLElement & { context?: ApplicationContext }>("openclaw-app")
-        ?.context;
+    let application: ApplicationContext | undefined;
+    const receiveContext = (event: Event) => {
+      const provider = event as Event & { context?: unknown; contextTarget?: HTMLElement };
+      if (
+        provider.context !== "openclaw.application" ||
+        provider.contextTarget?.localName !== "openclaw-app"
+      ) {
+        return;
+      }
+      // The root announces its provider before startup sends connect. A temporary
+      // descendant can request that context without waiting for a rendered shell.
+      const consumer = document.createElement("span");
+      provider.contextTarget.append(consumer);
+      try {
+        consumer.dispatchEvent(
+          Object.assign(new Event("context-request", { bubbles: true, composed: true }), {
+            context: "openclaw.application",
+            contextTarget: consumer,
+            subscribe: false,
+            callback: (value: ApplicationContext) => {
+              application = value;
+            },
+          }),
+        );
+      } finally {
+        consumer.remove();
+      }
+    };
+    window.addEventListener("context-provider", receiveContext);
+    const context = () => application;
     const captureSource = (owner: ApplicationContext, socket: WebSocket) => {
       const { gateway, sessions } = owner;
       const { client, hello } = gateway.snapshot;
@@ -140,6 +167,13 @@ export async function installChatLoadingReadinessObserver(page: Page): Promise<v
         return super.send(data);
       }
     };
-    window.addEventListener("pagehide", cleanup, { once: true });
+    window.addEventListener(
+      "pagehide",
+      () => {
+        cleanup();
+        window.removeEventListener("context-provider", receiveContext);
+      },
+      { once: true },
+    );
   });
 }

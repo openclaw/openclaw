@@ -12,7 +12,7 @@ import {
 } from "../../../test/helpers/openclaw-test-instance.ts";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
 import { createRequireRecord } from "../../../test/helpers/record.js";
-import type { ApplicationContext } from "../app/context.ts";
+import { getControlUiContextHandle } from "../test-helpers/control-ui-e2e-context.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { pickerValue } from "../test-helpers/select-picker-e2e.ts";
@@ -502,18 +502,18 @@ suite.define(() => {
     const catalogParams: unknown[] = [];
     let rejectCatalogReplies = false;
     const publish = async (page: Page, id: string) => {
-      const publication = await page.evaluateHandle(() => {
-        const app = document.querySelector("openclaw-app") as HTMLElement & {
-          context: ApplicationContext;
-        };
-        const observed = { committed: false };
-        const stop = app.context.gateway.subscribeEvents((event) => {
-          if (event.event === "config.changed") {
-            observed.committed = true;
-          }
-        });
-        return { observed, stop };
-      });
+      const applicationHandle = await getControlUiContextHandle(page);
+      const publication = await applicationHandle
+        .evaluateHandle((application) => {
+          const observed = { committed: false };
+          const stop = application.gateway.subscribeEvents((event) => {
+            if (event.event === "config.changed") {
+              observed.committed = true;
+            }
+          });
+          return { observed, stop };
+        })
+        .finally(() => applicationHandle.dispose());
       const args = [
         "config",
         "set",
