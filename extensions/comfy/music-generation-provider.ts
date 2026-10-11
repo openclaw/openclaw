@@ -5,6 +5,7 @@ import type {
 import {
   DEFAULT_COMFY_MODEL,
   isComfyCapabilityConfigured,
+  isComfyCapabilityConfiguredAsync,
   runComfyWorkflow,
 } from "./workflow-runtime.js";
 
@@ -36,6 +37,8 @@ export function buildComfyMusicGenerationProvider(): MusicGenerationProvider {
         agentDir,
         capability: "music",
       }),
+    isConfiguredAsync: ({ cfg, agentDir }) =>
+      isComfyCapabilityConfiguredAsync({ cfg, agentDir, capability: "music" }),
     capabilities: {
       generate: {},
       edit: {

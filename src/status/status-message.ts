@@ -15,7 +15,6 @@ import { resolveCronStyleNow } from "../agents/current-time.js";
 import { DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { resolveExtraParams } from "../agents/embedded-agent-runner/extra-params.js";
 import { resolveFastModeState } from "../agents/fast-mode.js";
-import { resolveModelAuthMode } from "../agents/model-auth.js";
 import { findModelInCatalog } from "../agents/model-catalog-lookup.js";
 import {
   areRuntimeModelRefsEquivalent,
@@ -814,14 +813,12 @@ export function buildStatusMessageParts(args: StatusArgs) {
     .join(" · ");
 
   const selectedModelLabel = modelRefs.selected.label || "unknown";
-  const selectedAuthMode =
-    normalizeAuthMode(args.modelAuth) ?? resolveModelAuthMode(selectedLookupProvider, args.config);
+  const selectedAuthMode = normalizeAuthMode(args.modelAuth);
   const rawSelectedAuthLabelValue =
     selectedAuthMode && selectedAuthMode !== "unknown"
       ? (args.modelAuth ?? selectedAuthMode)
       : undefined;
-  const activeAuthMode =
-    normalizeAuthMode(args.activeModelAuth) ?? resolveModelAuthMode(activeProvider, args.config);
+  const activeAuthMode = normalizeAuthMode(args.activeModelAuth);
   const activeAuthLabelValue =
     activeAuthMode && activeAuthMode !== "unknown"
       ? (args.activeModelAuth ?? activeAuthMode)

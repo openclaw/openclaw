@@ -630,6 +630,20 @@ describe("normalizeAssistantReplayContent", () => {
     ]);
   });
 
+  it("preserves an identical canonical automation result after an assistant reply", () => {
+    const content = [{ type: "text", text: "Report ready" }];
+    const reply = bedrockAssistant(content, "stop", { output: 1, totalTokens: 1 });
+    const result = {
+      ...bedrockAssistant(content, "stop"),
+      api: OPENCLAW_TRANSCRIPT_ARTIFACT_API,
+      provider: "openclaw",
+      model: "automation-result",
+    };
+    const messages = [userMessage("report"), reply, result, userMessage("explain")];
+
+    expect(normalizeAssistantReplayContent(messages)).toEqual(messages);
+  });
+
   it("preserves adjacent identical assistant turns with nonzero usage", () => {
     const content = [{ type: "text", text: "intentional repeat" }];
     const first = bedrockAssistant(content, "stop", { output: 1, totalTokens: 1 });

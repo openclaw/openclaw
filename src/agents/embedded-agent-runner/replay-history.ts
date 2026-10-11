@@ -23,7 +23,10 @@ import {
   normalizeInputProvenance,
 } from "../../sessions/input-provenance.js";
 import { hasPersistedMedia } from "../../sessions/user-turn-media.js";
-import { isTranscriptOnlyOpenClawAssistantMessage } from "../../shared/transcript-only-openclaw-assistant.js";
+import {
+  isTranscriptOnlyOpenClawAssistantMessage,
+  OPENCLAW_TRANSCRIPT_ARTIFACT_PROVIDER,
+} from "../../shared/transcript-only-openclaw-assistant.js";
 import { rethrowIncognitoSessionError } from "../../state/incognito-session-error.js";
 import { stripStaleAssistantUsageBeforeLatestCompaction } from "../compaction-usage.js";
 import {
@@ -248,6 +251,14 @@ function normalizeAssistantReplayBlockContent(
 }
 
 function isBareDeliveryMirrorDuplicate(out: AgentMessage[], next: AssistantReplayMessage): boolean {
+  // Canonical automation results are visible conversation turns, not mirrors,
+  // even when they repeat the preceding reply without using model tokens.
+  if (
+    next.provider === OPENCLAW_TRANSCRIPT_ARTIFACT_PROVIDER &&
+    next.model === "automation-result"
+  ) {
+    return false;
+  }
   const previous = out.at(-1);
   if (!previous || previous.role !== "assistant") {
     return false;

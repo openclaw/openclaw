@@ -265,7 +265,7 @@ export async function startMeetingRealtimeEngine(params: {
     });
   };
 
-  const resolved = resolveMeetingRealtimeProvider({
+  const resolved = await resolveMeetingRealtimeProvider({
     config: params.config,
     fullConfig: params.fullConfig,
     providers: params.providers,

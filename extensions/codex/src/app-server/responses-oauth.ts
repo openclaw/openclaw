@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import {
   findPersistedAuthProfileCredential,
+  findPersistedAuthProfileCredentialAsync,
   isPendingOAuthRefreshFence,
   isSameOAuthRefreshGeneration,
   resolveApiKeyForProfile,
@@ -84,15 +85,15 @@ export async function resolveCodexResponsesOAuthProfileFingerprint(params: {
 }
 
 /** Keep OAuth refresh and persisted grant ownership in OpenClaw, outside native Codex auth. */
-export function createCodexResponsesOAuth(params: {
+export async function createCodexResponsesOAuth(params: {
   profileId: string;
   store: AuthProfileStore;
   fingerprint: string;
   agentDir?: string;
   config?: Parameters<typeof resolveApiKeyForProfile>[0]["cfg"];
-}): CodexResponsesOAuth {
+}): Promise<CodexResponsesOAuth> {
   const persisted =
-    Boolean(findPersistedAuthProfileCredential(params)) ||
+    Boolean(await findPersistedAuthProfileCredentialAsync(params)) ||
     params.store.runtimePersistedProfileIds?.includes(params.profileId) === true;
   const readCredential = () =>
     persisted
@@ -130,7 +131,9 @@ export function createCodexResponsesOAuth(params: {
   };
   return {
     async resolve(forceRefresh) {
-      const credential = readCredential();
+      const credential = persisted
+        ? await findPersistedAuthProfileCredentialAsync(params)
+        : params.store.profiles[params.profileId];
       validateCurrent(credential, lastCredential);
       const resolved = await resolveApiKeyForProfile({
         cfg: params.config,

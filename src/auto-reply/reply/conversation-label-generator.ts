@@ -13,8 +13,6 @@ import { resolveAutomaticUtilityRuntimeOverride } from "../../agents/utility-mod
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 
 const DEFAULT_MAX_LABEL_LENGTH = 128;
-// Reasoning models spend output tokens before emitting the short visible label.
-const CONVERSATION_LABEL_MAX_TOKENS = 4_096;
 const TIMEOUT_MS = 15_000;
 
 type LabelModelPhase = "utility" | "primary fallback";
@@ -167,7 +165,7 @@ async function runLabelAttempts(
         assertCurrent: params.assertCurrent,
         ...(params.operatorAuthority ? { operatorAuthority: params.operatorAuthority } : {}),
         outputTextPolicy: "strict-visible",
-        streamParams: { maxTokens: CONVERSATION_LABEL_MAX_TOKENS },
+        answerTokenBudget: 4_096,
       });
       assertCurrent();
       const partitioner = createReasoningTagTextPartitioner();
