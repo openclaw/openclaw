@@ -12,7 +12,7 @@ describe("sanitizeNodeWorkerDiagnostic", () => {
         "failed",
         String,
       ),
-    ).toBe("launch failed: token = ***");
+    ).toBe("launch failed: token = clawsw…7697");
   });
 });
 
