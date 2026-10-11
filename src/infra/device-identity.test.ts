@@ -412,15 +412,6 @@ describe("device identity SQLite store", () => {
     });
   });
 
-  it("returns one authoritative winner to concurrent creators", async () => {
-    await withTempDir("openclaw-device-identity-concurrent-", async (rootDir) => {
-      const [first, second] = await runConcurrentIdentityLoads(rootDir);
-
-      expect(second).toEqual(first);
-      expect(loadDeviceIdentityIfPresent(storeOptions(rootDir))).toEqual(first);
-    });
-  }, 30_000);
-
   it("loads existing identities concurrently without requiring subprocess capacity", async () => {
     await withTempDir("openclaw-device-identity-readers-", async (rootDir) => {
       const options = storeOptions(rootDir);

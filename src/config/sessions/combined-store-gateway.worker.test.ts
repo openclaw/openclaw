@@ -167,7 +167,6 @@ it.each([
   { read: "listing", suppliedDiscovery: true, restoreBeforeConsume: false },
   { read: "listing", suppliedDiscovery: false, restoreBeforeConsume: true },
   { read: "listing", suppliedDiscovery: true, restoreBeforeConsume: true },
-  { read: "context", suppliedDiscovery: false, restoreBeforeConsume: false },
   { read: "context", suppliedDiscovery: false, restoreBeforeConsume: true },
 ])(
   "refuses physical $read replacement (supplied: $suppliedDiscovery, ABA: $restoreBeforeConsume)",

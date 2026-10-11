@@ -54,6 +54,7 @@ import type { agentRecoveryOperations } from "./agent-deletion-recovery.worker.j
 import type { agentDeletionOperations } from "./agent-deletion.worker.js";
 import type { ClawAdoptionWorkerOperations } from "./claw-adoption.worker.js";
 import type { MachineStateWorkerOperations } from "./config-machine-state.worker.js";
+import type { PublicationWorkerOperations } from "./github-publication.worker-contract.js";
 import type { OnboardingRecommendationWriteOperations } from "./onboarding-recommendations.kernel.js";
 import type { AgentDatabaseRegistryWorkerOperations } from "./openclaw-agent-db-contract.js";
 import type { RepositoryWorkspaceWorkerOperations } from "./session-repository-workspaces.worker-contract.js";
@@ -122,7 +123,8 @@ export type RegisteredStateWorkerOperations = WorkerOperations<typeof gatewayBoo
   UserBackgroundWorkerOperations &
   UserProfileWorkerOperations &
   GitHubSetupWorkerOperations &
-  UserGitHubConnectionWorkerOperations;
+  UserGitHubConnectionWorkerOperations &
+  PublicationWorkerOperations;
 
 export const stateWorkerRegistry = createWorkerOperationRegistry<
   RegisteredStateWorkerOperations,
@@ -170,6 +172,8 @@ export const stateWorkerRegistry = createWorkerOperationRegistry<
     ),
   userGitHubConnections: () =>
     import("./user-github-connections.worker.js").then((m) => m.userGitHubConnectionOperations),
+  githubPublications: () =>
+    import("./github-publication.worker.js").then((m) => m.publicationOperations),
   userBackground: async () =>
     (await import("./user-background.worker.js")).userBackgroundOperations,
   userProfiles: () => import("./user-profiles.worker.js").then((m) => m.userProfileOperations),
