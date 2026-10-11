@@ -62,6 +62,7 @@ describe("personal navigation rail", () => {
         button.getAttribute("aria-label"),
       ),
     ).toEqual(["Pages", "Sessions", "Online"]);
+    const frame = sidebar.querySelector("aside.sidebar")!;
     const bottom = sidebar.querySelector(".sidebar-rail__bottom")!;
     expect(bottom.querySelector(".sidebar-footer-bar__home")).not.toBeNull();
     expect(bottom.querySelector("openclaw-sidebar-attention")).not.toBeNull();
@@ -72,6 +73,7 @@ describe("personal navigation rail", () => {
     await sidebar.updateComplete;
     expect(sidebar.querySelector(".sidebar-pages")).not.toBeNull();
     expect(sidebar.querySelector(".sidebar-session-content")).toBeNull();
+    expect(sidebar.querySelector("aside.sidebar")).toBe(frame);
     expect(sidebar.querySelector(".sidebar-rail__bottom")).toBe(bottom);
   });
 

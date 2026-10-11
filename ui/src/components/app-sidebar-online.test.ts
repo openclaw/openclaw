@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { Value } from "typebox/value";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { SessionsListParamsSchema } from "../../../packages/gateway-protocol/src/schema/sessions-list.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { PresenceEntry, SessionsListResult } from "../api/types.ts";
@@ -11,15 +11,19 @@ import {
   createTestSessionCapability,
   sessionsResult,
 } from "../lib/sessions/session-capability.test-support.ts";
+import { admitSidebarBootScope } from "../pages/chat/session-snapshot-prewarm.ts";
+import { SessionSnapshotStore } from "../pages/chat/session-snapshot-store.ts";
 import "../test-helpers/app-sidebar-suite.ts";
 import { selectSidebarView } from "../test-helpers/app-sidebar-setup.ts";
 import {
   createContext,
   createGatewayHarness,
+  createSidebarElement,
   mountSidebar,
   TWO_AGENTS,
   type SidebarLifecycleState,
 } from "../test-helpers/app-sidebar.ts";
+import { createApplicationContextProvider } from "../test-helpers/application-context.ts";
 import {
   createGatewayRequestMock,
   createTestGatewayClient,
@@ -27,6 +31,7 @@ import {
 import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";
 import "./app-sidebar.tsx";
 import { SidebarOwnerSessionCounts } from "./sidebar-owner-session-counts.ts";
+import type { SidebarSnapshotModel } from "./sidebar-snapshot-model.ts";
 
 const NOW = 1_800_000_000_000;
 const COUNTS = [
@@ -155,6 +160,54 @@ describe("sidebar people workload", () => {
   beforeEach(() => {
     vi.useFakeTimers();
     vi.setSystemTime(NOW);
+  });
+
+  it("keeps a pending snapshot hidden until newly present profiles have counts", async () => {
+    const snapshot = createDeferred<SidebarSnapshotModel | null>();
+    const delayedCounts = createDeferred<SessionsListResult>();
+    vi.spyOn(SessionSnapshotStore.prototype, "readSidebar").mockReturnValue(snapshot.promise);
+    const { gateway, sessions, summaryRequest } = createWorkloadGateway(
+      () => delayedCounts.promise,
+    );
+    gateway.publish({
+      hello: {
+        ...gateway.gateway.snapshot.hello!,
+        auth: { role: "operator", scopes: [], recoveryScope: "sidebar-profile-counts" },
+        snapshot: { presence: [] },
+      },
+    });
+    const retire = admitSidebarBootScope(gateway.gateway, {
+      scope: gateway.gateway.connection.gatewayUrl,
+      recoveryScope: "sidebar-profile-counts",
+      profileId: "ada",
+    });
+    onTestFinished(() => {
+      retire();
+      snapshot.resolve(null);
+      delayedCounts.resolve(summary());
+      sessions.dispose();
+    });
+    await sessions.refresh({ agentId: "main", limit: 1 });
+    const context = createContext(gateway.gateway, sessions, TWO_AGENTS);
+    const provider = createApplicationContextProvider(context);
+    const sidebar = await createSidebarElement();
+    provider.append(sidebar.hostElement);
+    document.body.append(provider);
+    await vi.dynamicImportSettled();
+    await settle(sidebar);
+    expect(sidebar.querySelector("aside.sidebar")).toBeNull();
+
+    gateway.publishEvent("presence", { presence: presence() });
+    sidebar.connected = true;
+    await settle(sidebar);
+    expect(summaryRequest).toHaveBeenCalledOnce();
+    expect(sidebar.sidebarSnapshotSettled()).toBe(false);
+    expect(sidebar.querySelector("aside.sidebar")).toBeNull();
+
+    delayedCounts.resolve(summary());
+    await settle(sidebar);
+    expect(sidebar.sidebarSnapshotSettled()).toBe(true);
+    expect(sidebar.querySelector("aside.sidebar")).not.toBeNull();
   });
 
   it.each([false, true])(

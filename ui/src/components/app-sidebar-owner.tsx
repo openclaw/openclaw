@@ -28,7 +28,11 @@ import "./theme-mode-toggle.ts";
 import "./tooltip.ts";
 import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
 import { SETTINGS_ROUTE_TARGETS } from "../pages/config/route-data.ts";
-import { renderAppSidebarOnline, sidebarOnlineOrder } from "./app-sidebar-online.tsx";
+import {
+  renderAppSidebarOnline,
+  resolveSidebarOnline,
+  sidebarOnlineOrder,
+} from "./app-sidebar-online.tsx";
 import { renderSidebarRail, renderSidebarPages, renderSidebarScope } from "./app-sidebar-rail.tsx";
 import { renderAppSidebarBrand } from "./app-sidebar-render.tsx";
 import "../styles/app-sidebar.css";
@@ -141,7 +145,7 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
     if (this.navigationView === "pages" && this.navigationCatalog.dashboards?.loading !== false) {
       return false;
     }
-    const people = sidebarOnlineOrder(this).users;
+    const people = resolveSidebarOnline(this).users;
     if (
       people.some((person) => person.identity?.type === "profile") &&
       this.sessionData.ownerCounts.counts === null &&
@@ -689,28 +693,23 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
     );
   }
 
-  renderSidebar(sessions: JSX.Element): JSX.Element {
-    const NewSessionMenu = dynamic(() => this.rosterRenderer?.SidebarNewSessionMenu);
-    const brand = renderAppSidebarBrand(
-      this,
-      <NewSessionMenu
-        host={this}
-        active={this.navigationVisible}
-        access={this.readNewSessionAccess()}
-      />,
-    );
-    const rail = renderSidebarRail(this);
-    const pages = renderSidebarPages(this);
-    const scope = renderSidebarScope(this);
-    const online = renderAppSidebarOnline(this);
-    const menus = this.sidebarMenus.render();
-    return (
-      <Show
-        when={
-          !this.sidebarSnapshotController.pending &&
-          !(this.sidebarSnapshot?.mode === "roster" && !this.rosterRenderer)
-        }
-      >
+  renderSidebar(Sessions: () => JSX.Element): JSX.Element {
+    const SidebarFrame = () => {
+      const NewSessionMenu = dynamic(() => this.rosterRenderer?.SidebarNewSessionMenu);
+      const brand = renderAppSidebarBrand(
+        this,
+        <NewSessionMenu
+          host={this}
+          active={this.navigationVisible}
+          access={this.readNewSessionAccess()}
+        />,
+      );
+      const rail = renderSidebarRail(this);
+      const pages = renderSidebarPages(this);
+      const scope = renderSidebarScope(this);
+      const online = renderAppSidebarOnline(this);
+      const menus = this.sidebarMenus.render();
+      return (
         <aside
           class="sidebar sidebar--rail"
           data-snapshot-state={this.sidebarSnapshot ? "cached" : "live"}
@@ -746,7 +745,7 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
                             class="sidebar-session-content"
                             hidden={Boolean(this.contextualSidebar)}
                           >
-                            {sessions}
+                            <Sessions />
                           </div>
                           {this.contextualSidebar?.render(
                             this.contextualSidebar.data,
@@ -793,6 +792,16 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
           </div>
           {menus}
         </aside>
+      );
+    };
+    return (
+      <Show
+        when={
+          !this.sidebarSnapshotController.pending &&
+          !(this.sidebarSnapshot?.mode === "roster" && !this.rosterRenderer)
+        }
+      >
+        <SidebarFrame />
       </Show>
     );
   }

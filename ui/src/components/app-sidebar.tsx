@@ -66,7 +66,7 @@ function AppSidebarContent(props: AppSidebarProps, host: HTMLElement): JSX.Eleme
   const mountDefaultView = (target: HTMLElement) =>
     runWithOwner(solidOwner, () => render(() => hostView.renderSessionsBody(), target));
   const SessionBody = () => hostView.renderSessionsBody();
-  const sessions = (
+  const Sessions = () => (
     <Show
       when={Boolean(hostView.sessionDataContext?.plugins.selectedReplacement("session-list"))}
       fallback={<SessionBody />}
@@ -83,7 +83,7 @@ function AppSidebarContent(props: AppSidebarProps, host: HTMLElement): JSX.Eleme
       />
     </Show>
   );
-  const content = hostView.renderSidebar(sessions);
+  const content = hostView.renderSidebar(Sessions);
   createEffect(
     () => {
       projection.revision();

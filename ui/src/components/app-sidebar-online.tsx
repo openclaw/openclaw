@@ -45,6 +45,22 @@ export function sidebarOnlineOrder(host: AppSidebarRenderHost): SidebarOnlineOrd
   return cached.order;
 }
 
+export function resolveSidebarOnline(host: AppSidebarRenderHost) {
+  const saved = host.sidebarSnapshot;
+  return sidebarOnlineOrder(host).resolve({
+    users:
+      saved?.onlineUsers ??
+      (host.sessionData.presencePayload
+        ? projectOnlinePresenceViewers(host.sessionData.presencePayload)
+        : null),
+    counts: saved ? new Map(saved.onlineCounts) : host.sessionData.ownerCounts.counts,
+    countsFailed: !saved && host.sessionData.ownerCounts.error !== null,
+    presentation: saved ? "snapshot" : "live",
+    sortMode: host.people.sortMode,
+    statusFilter: host.people.statusFilter,
+  });
+}
+
 export function renderAppSidebarOnline(host: AppSidebarRenderHost): JSX.Element {
   const sectionId = "online";
   const team = createMemo(() => host.sidebarAgentsMode === "roster");
@@ -53,21 +69,7 @@ export function renderAppSidebarOnline(host: AppSidebarRenderHost): JSX.Element 
   );
   const label = createMemo(() => t("presence.rosterTitle"));
   const snapshot = () => host.sidebarSnapshot;
-  const online = createMemo(() => {
-    const saved = snapshot();
-    return sidebarOnlineOrder(host).resolve({
-      users:
-        saved?.onlineUsers ??
-        (host.sessionData.presencePayload
-          ? projectOnlinePresenceViewers(host.sessionData.presencePayload)
-          : null),
-      counts: saved ? new Map(saved.onlineCounts) : host.sessionData.ownerCounts.counts,
-      countsFailed: !saved && host.sessionData.ownerCounts.error !== null,
-      presentation: saved ? "snapshot" : "live",
-      sortMode: host.people.sortMode,
-      statusFilter: host.people.statusFilter,
-    });
-  });
+  const online = createMemo(() => resolveSidebarOnline(host));
   const onlineUsers = () => online().users;
   const counts = () => online().counts;
   const listUsers = () => online().listUsers;
