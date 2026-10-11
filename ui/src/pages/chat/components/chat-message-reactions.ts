@@ -3,12 +3,11 @@ import { keyed } from "lit/directives/keyed.js";
 import type { MessageReactionSummary } from "../../../../../packages/gateway-protocol/src/index.js";
 import { t } from "../../../i18n/index.ts";
 import type { MessageReactionPlacement } from "./chat-message-reactions-view.tsx";
+import "./chat-message-reactions-view.tsx";
 
 export type MessageReactionAction = (messageId: string, emoji: string, remove: boolean) => void;
 
 const TOOLTIP_NAME_LIMIT = 3;
-
-import "./chat-message-reactions-view.tsx";
 
 export function ownReactionEmoji(
   reactions: readonly MessageReactionSummary[] | undefined,
