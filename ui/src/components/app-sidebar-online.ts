@@ -2,6 +2,7 @@ import { html, nothing } from "lit";
 import { repeat } from "lit/directives/repeat.js";
 import { html as staticHtml, literal } from "lit/static-html.js";
 import { presenceUserKey } from "../../../src/shared/presence-user.ts";
+import type { ApplicationGateway } from "../app/gateway.ts";
 import { t } from "../i18n/index.ts";
 import { renderHoverMarquee } from "../lib/hover-marquee.ts";
 import {
@@ -9,60 +10,63 @@ import {
   presenceActivityLabel,
   presenceViewerLabel,
   projectOnlinePresenceViewers,
-  type PresenceViewer,
 } from "../lib/presence-users.ts";
 import type { AppSidebarRenderHost } from "./app-sidebar-render.ts";
 import { renderSidebarSessionSectionHeader } from "./app-sidebar-session-section-header.ts";
 import { icons } from "./icons.ts";
 import { personActivityLink, personActivityRouting } from "./person-activity-link.ts";
+import { sidebarOnlineCountFor, SidebarOnlineOrder } from "./sidebar-online-order.ts";
 
-const onlineFaces = new WeakMap<AppSidebarRenderHost, readonly PresenceViewer[]>();
+const onlineOrders = new WeakMap<
+  AppSidebarRenderHost,
+  {
+    gateway: ApplicationGateway | undefined;
+    revision: number | undefined;
+    viewerId: string | undefined;
+    order: SidebarOnlineOrder;
+  }
+>();
+
+export function sidebarOnlineOrder(host: AppSidebarRenderHost): SidebarOnlineOrder {
+  const gateway = host.sessionDataContext?.gateway;
+  const revision = gateway?.connectionRevision;
+  const viewerId = host.sidebarSnapshot?.footer?.id ?? gateway?.snapshot.selfUser?.id;
+  let cached = onlineOrders.get(host);
+  if (
+    !cached ||
+    cached.gateway !== gateway ||
+    cached.revision !== revision ||
+    cached.viewerId !== viewerId
+  ) {
+    cached = { gateway, revision, viewerId, order: new SidebarOnlineOrder() };
+    onlineOrders.set(host, cached);
+  }
+  return cached.order;
+}
 
 export function renderAppSidebarOnline(host: AppSidebarRenderHost) {
   const sectionId = "online";
   const team = host.sidebarAgentsMode === "roster";
   const collapsed = team ? !host.teamOnlineExpanded : host.collapsedSessionSections.has(sectionId);
   const label = t("presence.rosterTitle");
-  let onlineUsers = projectOnlinePresenceViewers(host.sessionData.presencePayload);
-  const previousFaces = onlineFaces.get(host);
-  // Recheck activity ordering on each render, but retain equal facepile inputs.
-  if (
-    previousFaces?.length === onlineUsers.length &&
-    onlineUsers.every((user, index) => user === previousFaces[index])
-  ) {
-    onlineUsers = previousFaces;
-  } else {
-    onlineFaces.set(host, onlineUsers);
-  }
-
-  const counts = host.sessionData.ownerCounts.counts;
-  const countsFor = (user: PresenceViewer) =>
-    counts && user.identity?.type === "profile"
-      ? (counts.get(user.identity.id) ?? { open: 0, running: 0 })
-      : null;
-  // The default keeps presence groups and running-first ordering; explicit count sorts span groups.
-  const now = Date.now();
-  const activityOrder = { active: 0, idle: 1, unknown: 2 };
-  const running = (user: PresenceViewer) => Number((countsFor(user)?.running ?? 0) > 0);
+  const snapshot = host.sidebarSnapshot;
+  const {
+    users: onlineUsers,
+    listUsers,
+    counts,
+  } = sidebarOnlineOrder(host).resolve({
+    users:
+      snapshot?.onlineUsers ??
+      (host.sessionData.presencePayload
+        ? projectOnlinePresenceViewers(host.sessionData.presencePayload)
+        : null),
+    counts: snapshot ? new Map(snapshot.onlineCounts) : host.sessionData.ownerCounts.counts,
+    countsFailed: !snapshot && host.sessionData.ownerCounts.error !== null,
+    presentation: snapshot ? "snapshot" : "live",
+    sortMode: host.people.sortMode,
+    statusFilter: host.people.statusFilter,
+  });
   const filtered = host.people.statusFilter === "running";
-  const listUsers = onlineUsers
-    .filter((user) => !filtered || running(user) > 0)
-    .toSorted((a, b) => {
-      const order =
-        host.people.sortMode === "presence"
-          ? activityOrder[presenceViewerActivity(a, now)] -
-              activityOrder[presenceViewerActivity(b, now)] || running(b) - running(a)
-          : host.people.sortMode === "name"
-            ? 0
-            : (countsFor(b)?.[host.people.sortMode] ?? -1) -
-              (countsFor(a)?.[host.people.sortMode] ?? -1);
-      return (
-        order ||
-        presenceViewerLabel(a).localeCompare(presenceViewerLabel(b), undefined, {
-          sensitivity: "base",
-        })
-      );
-    });
   const routing = personActivityRouting(
     { basePath: host.basePath, navigate: (route, options) => host.onNavigate?.(route, options) },
     () => host.dismissTransientMenus(),
@@ -133,7 +137,7 @@ export function renderAppSidebarOnline(host: AppSidebarRenderHost) {
                 ${listUsers.length === 0 ? html`<span class="sidebar-session-empty-hint">${counts === null ? t("presence.sessions.unavailable") : t("presence.filters.noMatches")}</span>` : nothing}
                 ${repeat(listUsers, presenceUserKey, (user) => {
                   const activityState = presenceViewerActivity(user);
-                  const workload = countsFor(user);
+                  const workload = sidebarOnlineCountFor(counts, user);
                   const workloadLabel = workload
                     ? t("presence.sessions.counts", {
                         open: String(workload.open),
@@ -148,7 +152,7 @@ export function renderAppSidebarOnline(host: AppSidebarRenderHost) {
                   const tag = activity ? literal`a` : literal`button`;
                   return staticHtml`<div
                   class="sidebar-online__row"
-                  draggable=${user.identity?.type === "profile" ? "true" : "false"}
+                  draggable=${!snapshot && user.identity?.type === "profile" ? "true" : "false"}
                   @dragstart=${(event: DragEvent) => {
                     if (user.identity?.type === "profile") {
                       host.sessionOrganizer.startSidebarEntryDrag(event, {
@@ -213,6 +217,7 @@ export function renderAppSidebarOnline(host: AppSidebarRenderHost) {
                       ? html`<button
                           type="button"
                           class="sidebar-pages__pin"
+                          ?disabled=${Boolean(snapshot)}
                           aria-label=${t("nav.pin")}
                           @click=${() => {
                             if (user.identity?.type === "profile") {

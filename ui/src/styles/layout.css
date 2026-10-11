@@ -2519,7 +2519,7 @@ openclaw-settings-save-indicator:empty {
 
 @media (prefers-reduced-motion: no-preference) {
   @starting-style {
-    .sidebar-r .sidebar-zone-entry {
+    .sidebar-r .sidebar:not([data-snapshot-state="cached"]) .sidebar-zone-entry {
       opacity: 0;
       transform: translateX(-8px) scale(0.98);
     }

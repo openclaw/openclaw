@@ -247,7 +247,17 @@ export class OpenClawModalDialog extends OpenClawLitElement {
     this.#returnFocus = null;
     this.#returnFocusOverride = undefined;
     if (returnFocus?.isConnected) {
-      restoreFocus(returnFocus);
+      const activeElement = document.activeElement;
+      // The containing render may release background inertness after removing the modal.
+      queueMicrotask(() => {
+        if (
+          !this.isConnected &&
+          returnFocus.isConnected &&
+          document.activeElement === activeElement
+        ) {
+          restoreFocus(returnFocus);
+        }
+      });
     }
     super.disconnectedCallback();
   }
