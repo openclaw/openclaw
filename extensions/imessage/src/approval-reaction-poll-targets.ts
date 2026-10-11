@@ -84,10 +84,8 @@ const reportPersistentApprovalReactionError = createPluginStateErrorReporter(
 let pendingReactionPollTargetStore:
   | PluginStateKeyedStore<PendingIMessageApprovalReactionPollTarget, 2>
   | undefined;
-let pendingReactionPollTargetStoreDisabled = false;
 
-function disablePendingReactionPollTargetStore(error: unknown): void {
-  pendingReactionPollTargetStoreDisabled = true;
+function invalidatePendingReactionPollTargetStore(error: unknown): void {
   pendingReactionPollTargetStore = undefined;
   reportPersistentApprovalReactionError(error);
 }
@@ -95,9 +93,6 @@ function disablePendingReactionPollTargetStore(error: unknown): void {
 function getPendingReactionPollTargetStore():
   | PluginStateKeyedStore<PendingIMessageApprovalReactionPollTarget, 2>
   | undefined {
-  if (pendingReactionPollTargetStoreDisabled) {
-    return undefined;
-  }
   if (pendingReactionPollTargetStore) {
     return pendingReactionPollTargetStore;
   }
@@ -112,7 +107,7 @@ function getPendingReactionPollTargetStore():
       );
     return pendingReactionPollTargetStore;
   } catch (error) {
-    disablePendingReactionPollTargetStore(error);
+    invalidatePendingReactionPollTargetStore(error);
     return undefined;
   }
 }
@@ -194,7 +189,7 @@ export async function recordIMessageApprovalReactionPollTarget(params: {
       writes.push(
         store
           .register(key, target, { ttlMs: expiry.ttlMs })
-          .catch(disablePendingReactionPollTargetStore),
+          .catch(invalidatePendingReactionPollTargetStore),
       );
     }
   }
@@ -210,7 +205,7 @@ export async function deleteIMessageApprovalReactionPollTargets(
   for (const key of keys) {
     pendingReactionPollTargets.delete(key);
     if (store) {
-      deletions.push(store.delete(key).catch(disablePendingReactionPollTargetStore));
+      deletions.push(store.delete(key).catch(invalidatePendingReactionPollTargetStore));
     }
   }
   await Promise.all(deletions);
@@ -236,7 +231,7 @@ export async function listPendingIMessageApprovalReactionPollTargets(params: {
         pendingReactionPollTargets.set(entry.key, target);
       }
     } catch (error) {
-      disablePendingReactionPollTargetStore(error);
+      invalidatePendingReactionPollTargetStore(error);
     }
   }
   prunePendingReactionPollTargets(nowMs);
@@ -263,5 +258,4 @@ export async function listPendingIMessageApprovalReactionPollTargets(params: {
 export function clearIMessageApprovalReactionPollTargetsForTest(): void {
   pendingReactionPollTargets.clear();
   pendingReactionPollTargetStore = undefined;
-  pendingReactionPollTargetStoreDisabled = false;
 }

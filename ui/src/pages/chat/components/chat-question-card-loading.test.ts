@@ -10,7 +10,7 @@ import type { ChatQuestionCard, QuestionPanelProps } from "./chat-question-card.
 
 afterEach(() => {
   document.body.replaceChildren();
-  vi.doUnmock("./chat-question-panel.ts");
+  vi.doUnmock("./chat-question-panel.tsx");
   vi.restoreAllMocks();
 });
 
@@ -22,7 +22,7 @@ it("defers the question controls, retries failed loading, and mounts only the cu
     .fn<() => Promise<void>>()
     .mockReturnValueOnce(initialLoad.promise)
     .mockReturnValueOnce(retryLoad.promise);
-  vi.doMock(import("./chat-question-panel.ts"), async (importOriginal) => {
+  vi.doMock(import("./chat-question-panel.tsx"), async (importOriginal) => {
     const pending = load();
     loadStarted.resolve();
     await pending;
