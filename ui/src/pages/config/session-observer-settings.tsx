@@ -1,4 +1,3 @@
-import { nothing } from "lit";
 import { createMemo } from "solid-js";
 import type { SystemInfoResult } from "../../../../packages/gateway-protocol/src/index.js";
 import { dedupeByKey } from "../../../../src/shared/dedupe-by-key.js";
@@ -113,7 +112,7 @@ export function SessionObserverSettings(props: SessionObserverSettingsProps) {
                     ? renderProviderBrandIcon(option.provider, {
                         className: "model-picker__provider-icon",
                       })
-                    : nothing,
+                    : undefined,
                 showOptionTooltips: false,
                 className: "model-picker__select ",
                 onChange: (value: string) =>

@@ -10,12 +10,11 @@ import {
   LegacyConfigTierGroups,
   LegacyConfigMap,
   LegacyConfigStructuredDraft,
-  type LegacyConfigFormProps,
-  type LegacyConfigTierGroupsProps,
-  type LegacyNodeRenderer,
 } from "./config-form.compat.tsx";
 import type { ConfigNodeRenderParams } from "./config-form.node.shared.ts";
+import type { LegacyNodeRenderer } from "./config-form.node.ts";
 import { ConfigNode } from "./config-form.node.tsx";
+import type { LegacyConfigFormProps, LegacyConfigTierGroupsProps } from "./config-form.render.ts";
 
 export const ConfigFormHost = defineSolidBridge<{ props?: LegacyConfigFormProps }>(
   "openclaw-config-form",

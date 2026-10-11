@@ -1,8 +1,8 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ConfigFormStructuredDraftProps as SolidDraftProps } from "./config-form-structured-draft.tsx";
-import type { LegacyNodeRenderer } from "./config-form.compat.tsx";
 import { isSupportedConfigValueValid } from "./config-form.constraints.ts";
 import type { ConfigNodeRenderParams, ConfigNodeRenderer } from "./config-form.node.shared.ts";
+import type { LegacyNodeRenderer } from "./config-form.node.ts";
 import { schemaType } from "./config-form.shared.ts";
 
 export type ConfigFormStructuredDraftProps = Omit<SolidDraftProps, "renderNode"> & {
