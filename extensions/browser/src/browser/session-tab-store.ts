@@ -85,7 +85,10 @@ const browserSessionTabRecordSchema = z
         canonical.includes(record.profile) ||
         !canonical.every((entry, index) => entry === record.profileAliases?.[index])
       ) {
-        context.addIssue({ code: "custom", message: "profile aliases must be canonical" });
+        context.addIssue({
+          code: "custom",
+          message: "profile aliases must be sorted, unique, and exclude the primary profile",
+        });
       }
     }
     const cleanupFieldCount = [
