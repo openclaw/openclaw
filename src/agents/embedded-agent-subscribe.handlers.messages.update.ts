@@ -3,6 +3,7 @@ import { createInlineCodeState } from "../../packages/markdown-core/src/code-spa
 import { emitAgentEvent } from "../infra/agent-events.js";
 import type { AssistantMessage } from "../llm/types.js";
 import { resolveAssistantMessagePhase } from "../shared/chat-message-content.js";
+import { toolCallXmlTextFilter } from "../shared/text/assistant-visible-text.js";
 import { downgradedToolCallTextFilter } from "../shared/text/downgraded-tool-call-text.js";
 import { createTextProjection, trimTextFilter } from "../shared/text/text-projection.js";
 import { resolveCurrentSourceMessagingToolPartial } from "./embedded-agent-helpers/messaging-dedupe.js";
@@ -433,6 +434,7 @@ export function handleMessageUpdate(
             kind === "raw"
               ? createTextProjection([
                   downgradedToolCallTextFilter(),
+                  toolCallXmlTextFilter({ stripFunctionCallsXmlPayloads: true }, true),
                   trimTextFilter("both", { preserveCodeIndentation: true }),
                 ])
               : createAssistantVisibleStreamText(kind === "final" ? "final_answer" : undefined),
@@ -451,7 +453,7 @@ export function handleMessageUpdate(
       appendDelta = projected.delta;
       // Generic directives retain their raw chunk coordinates: restored trim whitespace
       // could otherwise make an inline tag look like an indented code block.
-      if (kind !== "raw") {
+      if (kind !== "raw" || next !== nextRawStreamText.trim()) {
         visibleDelta = projected.delta ?? (previousText.startsWith(next) ? "" : next);
       }
     }

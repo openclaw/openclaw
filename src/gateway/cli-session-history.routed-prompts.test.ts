@@ -20,17 +20,22 @@ function writeClaudeEntries(filePath: string, entries: readonly Record<string, u
 }
 
 describe("routed CLI prompts in chat history", () => {
-  it.each(["string", "text block"])(
-    "preserves unmatched routed %s provenance beneath switch-back context",
-    async (shape) => {
+  it.each(
+    ["string", "text block"].flatMap((shape) =>
+      ["messages occurred outside this Claude session", "earlier messages in this chat"].map(
+        (description) => ({ shape, description }),
+      ),
+    ),
+  )(
+    "preserves unmatched routed $shape provenance beneath $description context",
+    async ({ shape, description }) => {
       await withClaudeProjectsDir(async ({ filePath, readMessages }) => {
         const provenance: InputProvenance = {
           kind: "inter_session",
           sourceSessionKey: "agent:ops:main",
           sourceTool: "sessions_send",
         };
-        const note =
-          '[OpenClaw: 2 messages occurred outside this Claude session from 2026-10-10T22:30:29.302Z to 2026-10-10T22:30:43.592Z, using "mock/mock-model". Their contents are not included here. Before answering a question that may depend on these messages, call mcp__openclaw__sessions_history({"sessionKey":"agent:main:switch-back","limit":100}) to read them; page older messages with offset if needed.]';
+        const note = `[OpenClaw: 2 ${description} from 2026-10-10T22:30:29.302Z to 2026-10-10T22:30:43.592Z, using "mock/mock-model". Their contents are not included here. Before answering a question that may depend on these messages, call mcp__openclaw__sessions_history({"sessionKey":"agent:main:switch-back","limit":100}) to read them; page older messages with offset if needed.]`;
         const raw = `${note}\n\n${buildInterSessionPromptContext(provenance).text}\nPlease check the build.`;
         const content = shape === "string" ? raw : [{ type: "text", text: raw }];
         await writeClaudeEntries(filePath, [claudeUser(content, { uuid: "routed-switch-back" })]);
