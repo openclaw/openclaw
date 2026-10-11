@@ -50,6 +50,10 @@ import {
 } from "./daemon.js";
 import { createSignalEventHandler } from "./monitor/event-handler.js";
 import type { SignalEventHandlerDeps } from "./monitor/event-handler.types.js";
+import {
+  createSignalMonitorTaskRunner,
+  waitForSignalMonitorTeardown,
+} from "./monitor/task-runner.js";
 import { createSignalNativeReplyIdPlan } from "./native-reply.js";
 import { materializeSignalPresentationFallback } from "./presentation-fallback.js";
 import { registerSignalReactionTargetsForDeliveredPayload } from "./reaction-targets.js";
@@ -87,26 +91,6 @@ export type MonitorSignalOpts = {
   waitForTransportReady?: typeof waitForTransportReady;
   statusSink?: SignalStatusSink;
 };
-
-function createSignalMonitorTaskRunner(runtime: RuntimeEnv) {
-  const inFlight = new Set<Promise<void>>();
-  return {
-    runTask(task: () => Promise<void>): Promise<void> {
-      const trackedTask = Promise.resolve().then(task);
-      inFlight.add(trackedTask);
-      void trackedTask.catch((err: unknown) =>
-        runtime.error?.(`signal monitor task failed: ${String(err)}`),
-      );
-      void trackedTask.finally(() => inFlight.delete(trackedTask)).catch(() => undefined);
-      return trackedTask;
-    },
-    async waitForIdle(): Promise<void> {
-      while (inFlight.size > 0) {
-        await Promise.allSettled(inFlight);
-      }
-    },
-  };
-}
 
 const SIGNAL_ATTACHMENT_RPC_RESPONSE_HEADROOM_BYTES = 64 * 1024;
 const SIGNAL_BASE64_OVERHEAD_NUMERATOR = 4;
@@ -235,6 +219,7 @@ export async function deliverReplies(
         account,
         maxBytes,
         accountId,
+        assertDirectAdapterHandoff: params.assertDirectAdapterHandoff,
         ...(mediaUrl ? { mediaUrl } : {}),
         ...(replyToId
           ? {
@@ -449,6 +434,7 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
       runtime,
       channelRuntime: opts.channelRuntime,
       abortSignal: daemonLifecycle.abortSignal,
+      isDeliveryRetired: () => monitorTaskRunner.isDeliveryRetired(),
       runTrackedTask: (task) => {
         void monitorTaskRunner.runTask(task);
       },
@@ -508,10 +494,15 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
     }
     throw err;
   } finally {
-    await ingressMonitor?.stop();
-    // Daemon attachment finishes before monitor tasks start. Keep teardown open until both the
-    // child has exited and already-started reply work has drained.
-    await Promise.all([daemonLifecycle.stop(), monitorTaskRunner.waitForIdle()]);
+    // Bound receive/reply drain first. Then wait for observed daemon exit so a
+    // stuck signal-cli cannot report the channel complete.
+    const shuttingDownIngress = ingressMonitor;
+    await waitForSignalMonitorTeardown({
+      runtime,
+      stopIngress: shuttingDownIngress ? () => shuttingDownIngress.stop() : undefined,
+      stopDaemon: () => daemonLifecycle.stop(),
+      waitForIdle: (extras) => monitorTaskRunner.waitForIdle(extras),
+    });
     opts.abortSignal?.removeEventListener("abort", onAbort);
   }
 }

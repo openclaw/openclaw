@@ -256,6 +256,7 @@ export async function sendMessageSignal(
     return 8 * 1024 * 1024;
   })();
 
+  opts.assertDirectAdapterHandoff?.();
   let attachments: string[] | undefined;
   if (opts.mediaUrl?.trim()) {
     const resolved = await resolveOutboundAttachmentFromUrl(opts.mediaUrl.trim(), maxBytes, {

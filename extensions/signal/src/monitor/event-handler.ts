@@ -415,8 +415,16 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       humanDelay: resolveHumanDelayConfig(cfg, route.agentId),
       typingCallbacks,
     };
+    const authorizeDelivery = (supplied?: () => void) => {
+      if (deps.isDeliveryRetired?.()) {
+        throw new Error("signal delivery retired before send");
+      }
+      supplied?.();
+    };
     const delivery: ChannelInboundTurnPlan["delivery"] = {
       deliver: async (payload, _info) => {
+        const handoff = () => authorizeDelivery();
+        handoff();
         await deps.deliverReplies({
           cfg,
           replies: [payload],
@@ -430,6 +438,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
           textLimit: deps.textLimit,
           replyContext: nativeReplyContext,
           chatType: entry.isGroup ? "group" : "direct",
+          assertDirectAdapterHandoff: handoff,
         });
       },
       durable: (payload, info) => {
@@ -444,12 +453,15 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         const send: typeof sendMessageSignal = async (to, text, options) => {
           entry.turnAdoptionLifecycle?.abortSignal.throwIfAborted();
           deps.abortSignal?.throwIfAborted();
+          const handoff = () => authorizeDelivery(options?.assertDirectAdapterHandoff);
+          handoff();
           const result = await sendMessageSignal(to, text, {
             ...options,
             baseUrl: deps.baseUrl,
             account: deps.account,
             maxBytes: deps.mediaMaxBytes,
             accountId: deps.accountId,
+            assertDirectAdapterHandoff: handoff,
           });
           replyPlan.markSent();
           return result;

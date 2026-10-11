@@ -81,6 +81,10 @@ async function waitForSignalToolResultIngressIdle() {
   );
 }
 
+export function getSignalToolResultIngressQueue() {
+  return signalToolResultIngressQueue;
+}
+
 export async function receiveSignalPayloads(params: {
   payloads: unknown[];
   opts?: Partial<MonitorSignalOpts>;
