@@ -55,6 +55,7 @@ export const SessionListRowSchema = Type.Object(
       "key",
       "sessionId",
       "label",
+      "color",
       "worktree",
       "repositoryWorkspaceId",
       "repository",
