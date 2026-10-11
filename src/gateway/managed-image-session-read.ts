@@ -12,50 +12,32 @@ import { captureSessionStoreReadCandidate } from "../config/sessions/session-sto
 import { prepareSessionStoreTargetInventory } from "../config/sessions/session-store-target-inventory.js";
 import { prepareSessionStoreTargetInventoryRead } from "../config/sessions/session-store-target-runtime.js";
 import { withSessionHistoryWorkerDatabases } from "../config/sessions/session-transcript-worker-runtime.js";
-import {
-  resolveExistingAgentSessionStoreTargetsReadOnlyResult,
-  type SessionStoreTargetsReadCache,
-} from "../config/sessions/targets-read-availability.js";
+import { resolveExistingAgentSessionStoreTargetsReadOnlyResult } from "../config/sessions/targets-read-availability.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { assertExistingDatabaseIdentity } from "../infra/sqlite-worker-identity.js";
 import { normalizeSessionKeyPreservingOpaquePeerIds } from "../sessions/session-key-utils.js";
+import { isIncognitoSessionKey } from "../shared/incognito-session-key.js";
+import { isIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { SessionMetadataUnavailableError } from "../state/session-metadata-unavailable-error.js";
 import type { SessionTranscriptReadScope } from "./session-transcript-readers.js";
 import { resolveGatewaySessionStoreTargetInWorker } from "./session-utils-store-worker.js";
 import { loadGatewaySessionEntryReadOnly } from "./session-utils-store.js";
 
-export type SessionStoreAvailabilityRead = ReturnType<
-  typeof resolveExistingAgentSessionStoreTargetsReadOnlyResult
->;
+type ManagedImageSessionRead<T> = { kind: "ready"; value: T } | { kind: "missing" | "unavailable" };
 
-/** Native cleanup selection remains available until production incognito acquisition cuts over. */
-export function resolveNativeManagedImageSessionRead(params: {
+/** Unbound incognito state remains process-held until its acquisition owner cuts over. */
+function resolveUnboundIncognitoSessionRead(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
   agentId?: string;
   ownerAgentId: string;
   env: NodeJS.ProcessEnv;
   stateDir?: string;
-  storeAvailabilityCache?: Map<string, SessionStoreAvailabilityRead>;
-  storeTargetsReadCache?: SessionStoreTargetsReadCache;
 }): { kind: "ready"; scope: SessionTranscriptReadScope } | { kind: "missing" | "unavailable" } {
-  const {
-    cfg,
-    sessionKey,
-    agentId,
-    ownerAgentId,
+  const { cfg, sessionKey, agentId, ownerAgentId, env, stateDir } = params;
+  const discovery = resolveExistingAgentSessionStoreTargetsReadOnlyResult(cfg, ownerAgentId, {
     env,
-    stateDir,
-    storeAvailabilityCache,
-    storeTargetsReadCache,
-  } = params;
-  const discovery =
-    storeAvailabilityCache?.get(ownerAgentId) ??
-    resolveExistingAgentSessionStoreTargetsReadOnlyResult(cfg, ownerAgentId, {
-      cache: storeTargetsReadCache,
-      ...(stateDir ? { env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } } : {}),
-    });
-  storeAvailabilityCache?.set(ownerAgentId, discovery);
+  });
   if (!discovery.available) {
     return { kind: "unavailable" };
   }
@@ -112,7 +94,7 @@ export function resolveNativeManagedImageSessionRead(params: {
     : { kind: "missing" };
 }
 
-/** Serving keeps discovery and physical readers alive through response publication. */
+/** One selection owner serves media reads and distinguishes absence from unsafe cleanup. */
 export async function withManagedImageSessionRead<T>(
   params: {
     cfg: OpenClawConfig;
@@ -122,7 +104,7 @@ export async function withManagedImageSessionRead<T>(
     assertCurrent: () => void;
   },
   consume: (scope: SessionTranscriptReadScope, assertCurrent: () => void) => Promise<T>,
-): Promise<T | null> {
+): Promise<ManagedImageSessionRead<T>> {
   const { cfg, sessionKey, agentId, stateDir } = params;
   params.assertCurrent();
   const incognitoScope = {
@@ -139,17 +121,36 @@ export async function withManagedImageSessionRead<T>(
       params.assertCurrent,
       async (entry, assertCurrent) =>
         entry && !("kind" in binding)
-          ? consume(
-              {
-                ...incognitoScope,
-                storePath: binding.actor.path,
-                sessionEntry: entry,
-                sessionId: entry.sessionId,
-              },
-              assertCurrent,
-            )
-          : null,
+          ? {
+              kind: "ready" as const,
+              value: await consume(
+                {
+                  ...incognitoScope,
+                  storePath: binding.actor.path,
+                  sessionEntry: entry,
+                  sessionId: entry.sessionId,
+                },
+                assertCurrent,
+              ),
+            }
+          : { kind: "missing" as const },
     );
+  }
+  if (
+    isIncognitoSessionKey(sessionKey) ||
+    (cfg.session?.store && isIncognitoOpenClawAgentSqlitePath(cfg.session.store, incognitoScope))
+  ) {
+    const selected = resolveUnboundIncognitoSessionRead({
+      cfg,
+      sessionKey,
+      agentId,
+      ownerAgentId: agentId,
+      env: incognitoScope.env,
+      stateDir,
+    });
+    return selected.kind === "ready"
+      ? { kind: "ready", value: await consume(selected.scope, params.assertCurrent) }
+      : selected;
   }
   const { candidates, ...prepared } = prepareSessionStoreTargetInventory(cfg, [agentId], {
     ...process.env,
@@ -170,7 +171,7 @@ export async function withManagedImageSessionRead<T>(
   return inventoryRead.withRead(async (inventory, assertDiscoveryCurrent) => {
     const source = inventory.agents[0];
     if (!source?.result.available) {
-      return null;
+      return { kind: "unavailable" as const };
     }
     return withSessionHistoryWorkerDatabases(
       source.reads.map(({ database }) => ({ ...database, env: prepared.env })),
@@ -209,7 +210,7 @@ export async function withManagedImageSessionRead<T>(
               (error instanceof SessionMetadataUnavailableError &&
                 error.reason === "schema-missing")
             ) {
-              return null;
+              return { kind: "unavailable" as const };
             }
             throw error;
           }
@@ -218,29 +219,29 @@ export async function withManagedImageSessionRead<T>(
           }
           assertCurrent();
           if (exact.sharing?.placeholders.length) {
-            return null;
+            return { kind: "unavailable" as const };
           }
           let entry = exact.entries[0]?.entry;
           if (!entry) {
             const read = await reader.readEntryResult({ scope });
             assertCurrent();
             if (!read.ok) {
-              return null;
+              return { kind: "unavailable" as const };
             }
             entry = read.value;
           }
           if (entry) {
             if (matched) {
-              return null;
+              return { kind: "unavailable" as const };
             }
             matched = { ...scope, sessionEntry: entry, sessionId: entry.sessionId };
           }
         }
         if (matched) {
-          return consume(matched, assertCurrent);
+          return { kind: "ready" as const, value: await consume(matched, assertCurrent) };
         }
         if (path.resolve(stateDir) !== path.resolve(resolveStateDir())) {
-          return null;
+          return { kind: "missing" as const };
         }
         const fallback = await resolveGatewaySessionStoreTargetInWorker({
           cfg: prepared.config,
@@ -251,7 +252,7 @@ export async function withManagedImageSessionRead<T>(
         });
         assertCurrent();
         if (!fallback.readSource) {
-          return null;
+          return { kind: "missing" as const };
         }
         const database = fallback.readSource;
         return withSessionHistoryWorkerDatabases(
@@ -270,18 +271,24 @@ export async function withManagedImageSessionRead<T>(
               reader!.assertCurrent();
             };
             assertFallbackCurrent();
-            if (!read.ok || !read.value) {
-              return null;
+            if (!read.ok) {
+              return { kind: "unavailable" as const };
             }
-            return consume(
-              {
-                ...scope,
-                sessionKey,
-                sessionId: read.value.sessionId,
-                sessionEntry: read.value,
-              },
-              assertFallbackCurrent,
-            );
+            if (!read.value) {
+              return { kind: "missing" as const };
+            }
+            return {
+              kind: "ready" as const,
+              value: await consume(
+                {
+                  ...scope,
+                  sessionKey,
+                  sessionId: read.value.sessionId,
+                  sessionEntry: read.value,
+                },
+                assertFallbackCurrent,
+              ),
+            };
           },
         );
       },

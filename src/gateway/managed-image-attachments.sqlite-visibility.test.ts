@@ -14,6 +14,7 @@ import {
   publishEncodedSessionTranscriptArchive,
   resolveSqliteTranscriptArchivePath,
 } from "../config/sessions/session-accessor.sqlite-archive-artifact.js";
+import { replaceSessionEntry } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { rewriteSqliteTranscriptEventRowsInTransaction } from "../config/sessions/session-accessor.sqlite-transcript-store.js";
 import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import {
@@ -71,14 +72,22 @@ function message(id: string, parentId: string | null, content: unknown) {
   return { type: "message", id, parentId, timestamp, message: { role: "assistant", content } };
 }
 
-async function fixture(messageId = "attached") {
+async function fixture(messageId = "attached", incognito = false) {
   const agentId = "main";
   const sessionId = `managed-visibility-${randomUUID()}`;
-  const sessionKey = `agent:${agentId}:${sessionId}`;
+  const sessionKey = incognito
+    ? `agent:${agentId}:dashboard:incognito-${sessionId}`
+    : `agent:${agentId}:${sessionId}`;
   const storePath = path.join(stateDir, "agents", agentId, "sessions", "sessions.json");
   const scope = { agentId, sessionId, sessionKey, storePath };
   // This fixture owns the competing writer; background entry maintenance must not join it.
-  expect(ensureSessionEntrySync(scope, { sessionId, updatedAt: Date.now() })).toBe(true);
+  expect(
+    ensureSessionEntrySync(scope, {
+      sessionId,
+      updatedAt: Date.now(),
+      ...(incognito ? { incognito } : {}),
+    }),
+  ).toBe(true);
   const attachmentId = randomUUID();
   const body = Buffer.from("synthetic managed original\n");
   const mediaRoot = path.join(stateDir, "media");
@@ -171,7 +180,7 @@ describe("managed attachment SQLite visibility", () => {
   });
 
   it.each(["missing", "invalid-row", "ambiguous"] as const)(
-    "refuses a %s ownership source",
+    "refuses a %s ownership source without collecting its media",
     async (source) => {
       const f = await fixture();
       await seed(f, [message(f.messageId, null, [f.block])]);
@@ -196,9 +205,47 @@ describe("managed attachment SQLite visibility", () => {
         });
       }
       expect(await f.download()).toBeNull();
+      expect(await cleanupManagedOutgoingMediaRecords({ stateDir })).toMatchObject({
+        deletedRecordCount: 0,
+        retainedCount: 1,
+      });
+      expect(await readManagedImageRecord(f.attachmentId, stateDir)).not.toBeNull();
       expect(fs.existsSync(f.originalPath)).toBe(true);
     },
   );
+
+  it("collects media after an in-process session replacement invalidates the selected entry", async () => {
+    const f = await fixture();
+    await seed(f, [message(f.messageId, null, [f.block])]);
+    expect(await cleanupManagedOutgoingMediaRecords({ stateDir })).toMatchObject({
+      deletedRecordCount: 0,
+      retainedCount: 1,
+    });
+
+    await replaceSessionEntry(f.scope, { sessionId: "replacement-session", updatedAt: Date.now() });
+
+    expect(await cleanupManagedOutgoingMediaRecords({ stateDir })).toMatchObject({
+      deletedRecordCount: 1,
+      retainedCount: 0,
+    });
+    expect(await readManagedImageRecord(f.attachmentId, stateDir)).toBeNull();
+    expect(fs.existsSync(f.originalPath)).toBe(false);
+  });
+
+  it("retains and serves media owned by an unbound process-held incognito session", async () => {
+    // The running Gateway already owns a durable store beside its process-held sessions.
+    openOpenClawAgentDatabase({ agentId: "main" });
+    const f = await fixture("attached", true);
+    await seed(f, [message(f.messageId, null, [f.block])]);
+
+    expect(await f.download()).not.toBeNull();
+    expect(await cleanupManagedOutgoingMediaRecords({ stateDir })).toMatchObject({
+      deletedRecordCount: 0,
+      retainedCount: 1,
+    });
+    expect(await readManagedImageRecord(f.attachmentId, stateDir)).not.toBeNull();
+    expect(fs.existsSync(f.originalPath)).toBe(true);
+  });
 
   it("reads managed attachment membership without validating unrelated payloads", async () => {
     const f = await fixture();
