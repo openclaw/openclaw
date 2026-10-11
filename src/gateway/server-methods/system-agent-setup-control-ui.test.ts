@@ -165,6 +165,8 @@ describe("selected-agent Gateway detection and Model Setup consent", () => {
       page.routeData = { firstRun: true };
       provider.append(page);
       document.body.append(provider);
+      await waitForSolid(() => expect(request).toHaveBeenCalled());
+      await request.mock.results[0]!.value;
       await waitForSolid(() =>
         expect(page.querySelector('[data-auth-choice="custom-api-key"] button')).not.toBeNull(),
       );
