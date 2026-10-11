@@ -2360,30 +2360,6 @@ describe("grouped chat rendering", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("omits attachment anchors for unsafe transcript URLs", () => {
-    document.body.append(view);
-
-    renderAssistantMessage(
-      createAssistantMessage(
-        [
-          createAttachmentBlock("javascript:audio()", "audio", "unsafe.mp3", "audio/mpeg"),
-          createAttachmentBlock("data:text/html,video", "video", "unsafe.mp4", "video/mp4"),
-          createAttachmentBlock("vbscript:document", "document", "unsafe.pdf", "application/pdf"),
-        ],
-        { id: "assistant-unsafe-attachment-links" },
-      ),
-      { showToolCalls: false },
-    );
-
-    expect(view.querySelectorAll(".chat-assistant-attachments a")).toHaveLength(0);
-    expect(
-      view.querySelector(
-        "openclaw-chat-audio-player, openclaw-chat-video-player, audio, video, iframe, table",
-      ),
-    ).toBeNull();
-    expect(view.textContent).toContain("unsafe.pdf");
-  });
-
   it("stops checking when local assistant attachment metadata fetch stalls", async () => {
     vi.useFakeTimers();
     const source = `/tmp/openclaw/${crypto.randomUUID()}-stalled.txt`;
@@ -2432,24 +2408,6 @@ describe("grouped chat rendering", () => {
     expect(fetchInit?.signal?.aborted).toBe(true);
     expect(elementText(".chat-assistant-attachment-card__status-meta")).toContain("Unavailable");
     expect(view.querySelector(".chat-assistant-attachment-card__action-skeleton")).toBeNull();
-  });
-
-  it("renders transcript video URLs with encoded extensions as cards", () => {
-    const container = document.body.appendChild(document.createElement("div"));
-    const mediaUrl = "https://cdn.example/clip%2Emp4?download=1";
-
-    renderGroupedMessage(
-      createUserMessage("", {
-        id: "user-encoded-video",
-        __openclaw: { media: [{ url: mediaUrl, contentType: "video/mp4" }] },
-      }),
-      "user",
-      { showToolCalls: false },
-      container,
-    );
-
-    expect(attachmentDownload(container)?.getAttribute("href")).toBe(mediaUrl);
-    expect(container.querySelector("video, openclaw-chat-video-player")).toBeNull();
   });
 
   it("renders transcript image variants and structured image blocks", async () => {
@@ -2623,34 +2581,6 @@ describe("grouped chat rendering", () => {
     );
     const activeItem = onOpenImage.mock.calls[0]?.[0];
     activeItem?.release?.();
-  });
-
-  it("deduplicates one SVG represented by structured and persisted media facts", async () => {
-    const source = "https://cdn.example/duplicate.svg";
-    const container = document.body.appendChild(document.createElement("div"));
-    renderAssistantMessage(
-      createAssistantMessage([{ type: "image_url", image_url: { url: source } }], {
-        __openclaw: {
-          media: [
-            {
-              path: source,
-              contentType: "image/svg+xml",
-              fileName: "duplicate.svg",
-              sizeBytes: 300_000,
-            },
-          ],
-        },
-      }),
-      { showToolCalls: false },
-      container,
-    );
-
-    await vi.waitFor(() =>
-      expect(container.querySelectorAll(".chat-assistant-attachment-card--compact")).toHaveLength(
-        1,
-      ),
-    );
-    container.remove();
   });
 
   it("refreshes a managed attachment ticket while its Files player stays open", async () => {

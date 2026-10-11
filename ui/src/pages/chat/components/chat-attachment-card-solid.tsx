@@ -1,4 +1,3 @@
-import { createEffect } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { registerChatMessageMetadataEnglish } from "../../../i18n/locales/en-chat-message-metadata.ts";
 import { formatBytes } from "../../../lib/agents/display.ts";
@@ -12,28 +11,11 @@ import { resolveAttachmentFileIcon } from "./chat-attachment-file-icon.ts";
 
 registerEnglishCatalog(registerChatMessageMetadataEnglish);
 
-export function CompactAttachmentCard(
-  props: AttachmentCardHeaderOptions & {
-    elementRef?: (element: Element | undefined) => void;
-    onFocus?: () => void;
-  },
-) {
-  let element!: HTMLDivElement;
-  createEffect(
-    () => props.elementRef,
-    (callback) => {
-      callback?.(element);
-      return () => callback?.(undefined);
-    },
-  );
+export function CompactAttachmentCard(props: AttachmentCardHeaderOptions) {
   return (
     <div
-      ref={(node) => {
-        element = node;
-      }}
       class="chat-assistant-attachment-card chat-assistant-attachment-card--compact"
       data-openable={props.onExpand ? "" : undefined}
-      onFocusIn={() => props.onFocus?.()}
       onClick={(event) => openAttachmentCardFromClick(event, props.onExpand)}
     >
       <AttachmentCardHeader {...props} visualMode="large-placeholder" />

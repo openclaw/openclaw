@@ -60,15 +60,3 @@ it("updates pending download links and file metadata without replacing the card"
   expect(view.queryByText("report.pdf")).toBeNull();
   expect(view.getByText("revised.pdf")).toBeTruthy();
 });
-
-it("releases the viewport observation reference when the compact card is disposed", () => {
-  const elementRef = vi.fn();
-  const view = mountSolid(() => (
-    <CompactAttachmentCard kind="document" label="notes.txt" elementRef={elementRef} />
-  ));
-  flush();
-  const card = view.container.querySelector(".chat-assistant-attachment-card");
-  expect(elementRef).toHaveBeenLastCalledWith(card);
-  view.unmount();
-  expect(elementRef).toHaveBeenLastCalledWith(undefined);
-});
