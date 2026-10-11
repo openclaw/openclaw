@@ -13,6 +13,7 @@ Each entry cost at least one failed CI run, a reverted approach, or a blocked PR
 - **Ref callbacks are unowned.** `onCleanup` inside one never runs. Set up behavior in the component body or an owned ref factory.
 - **`guard` isn't `equals`.** A memo's `equals` runs after computing. Lit's `guard` skipped the render work entirely. Reproduce it with a dependency memo that compares the explicit dependency vector, read from an untracked render computation.
 - **Strict JSX types catch real bugs.** `aria-pressed` accepts `"true" | "false" | "mixed"`, not a boolean; a generic `onChange: (value: T) => …` doesn't narrow to `string` across the bridge. Fix the types, don't cast.
+- **Optional contexts need a real default.** Solid 2 treats `undefined` as unset even when passed to `createContext`; use `null` for an optional owner and keep standalone component tests in the proof.
 
 ## Interop
 
@@ -23,6 +24,8 @@ Each entry cost at least one failed CI run, a reverted approach, or a blocked PR
 - **Lit disconnection can mean parking.** `setConnected(false)` on a retained range must park nested Solid roots rather than recreate their controls on reveal. Preserve their presentation context and retire them with the containing range, including removal while already parked; otherwise sidebar return-focus targets and restored transcript geometry disappear.
 - **Commit timing exposes stale geometry state.** Solid's later measurement can reach the transcript end through a programmatic scroll after the pane rendered its latest button. Update the geometric affordance on that arrival while preserving reader intent; a maintenance correction must not unlock following. Hide it immediately when the end is reached: a delayed CSS visibility transition can otherwise leave the obsolete control visible after layout has settled.
 - **Refs can precede document adoption.** A Solid template element can still belong to an inert document when its ref runs, so `ownerDocument.defaultView` is null. Bind global listeners through an already mounted owner and retain that exact window for cleanup; otherwise hover-only Escape silently stops working while focused key handlers still pass.
+- **DOM retention and media custody have different lifetimes.** Keep a transcript root across same-task pane moves so retained table observers survive. Retire a pending inline-to-canonical image handoff synchronously at its media owner; deferring the entire disconnect lets cancelled preview pixels survive reconnection.
+- **Reader intent is a visible anchor, not a virtual offset.** Persistence can regroup rows above the viewport and legitimately change `scrollTop`. Assert the visible message stays in place and following remains locked; pinning the old offset rejects the correction that preserves the reader's position.
 
 ## Testing and tooling
 

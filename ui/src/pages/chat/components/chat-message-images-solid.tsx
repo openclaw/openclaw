@@ -41,6 +41,7 @@ import {
   type ImageBlock,
   type ImageRenderOptions,
 } from "./chat-message-media.ts";
+import { TranscriptMediaDisconnect } from "./chat-transcript-media-lifecycle.ts";
 
 const CANONICAL_IMAGE_HANDOFF_TIMEOUT_MS = 30_000;
 const MIN_CHAT_IMAGE_PREVIEW_WIDTH = 160;
@@ -72,9 +73,6 @@ type ImagePresentation = {
 class MessageImagePresentation {
   private active = true;
   constructor(private readonly notify: () => void) {}
-  private get isConnected() {
-    return this.active;
-  }
   private image: ImageBlock | undefined;
   private options: ImageRenderOptions | undefined;
   private element: HTMLImageElement | undefined;
@@ -88,7 +86,7 @@ class MessageImagePresentation {
   readonly observeFrame = (element: Element | undefined) => {
     this.stopObserving?.();
     this.stopObserving = undefined;
-    if (!element || !this.isConnected || this.admitted || isInlineImageSource(this.image?.url)) {
+    if (!element || !this.active || this.admitted || isInlineImageSource(this.image?.url)) {
       return;
     }
     const presentationKey = this.presentationKey;
@@ -99,7 +97,7 @@ class MessageImagePresentation {
     });
   };
   readonly admit = () => {
-    if (this.isConnected && !this.admitted) {
+    if (this.active && !this.admitted) {
       this.admitted = true;
       this.stopObserving?.();
       this.stopObserving = undefined;
@@ -108,7 +106,7 @@ class MessageImagePresentation {
   };
   // Resource updates stay in this part; row ResizeObserver owns layout changes.
   private readonly refreshImage = () => {
-    if (this.isConnected && this.image) {
+    if (this.active && this.image) {
       this.notify();
     }
   };
@@ -116,7 +114,7 @@ class MessageImagePresentation {
     // A removed IMG may finish after denial; it no longer owns displayed pixels.
     const element = event.currentTarget;
     if (
-      !this.isConnected ||
+      !this.active ||
       element !== this.previewElement ||
       !(element instanceof HTMLImageElement) ||
       !element.isConnected
@@ -178,7 +176,7 @@ class MessageImagePresentation {
     }
     this.image = image;
     this.options = options;
-    if (!this.isConnected) {
+    if (!this.active) {
       this.releaseRetainedImage();
       releaseChatMediaResourceSubscriber(this.refreshImage);
       return this.renderImagePlaceholder(image);
@@ -278,7 +276,7 @@ class MessageImagePresentation {
         // native load/error boundary replaces the detached decode preloader.
         retained.timeout = setTimeout(() => this.failImage(), CANONICAL_IMAGE_HANDOFF_TIMEOUT_MS);
       }
-      return this.present(this.renderImageElement(image, displayUrl, options));
+      return this.present(this.renderImageElement(image, displayUrl));
     }
     return this.renderManagedImage(image, options, subscriptionOptions, displayUrl);
   }
@@ -295,7 +293,7 @@ class MessageImagePresentation {
     if (!options?.onRequestUpdate && pending && this.pendingPreview !== pending) {
       this.pendingPreview = pending;
       void pending.then(() => {
-        if (this.pendingPreview === pending && this.isConnected && this.image) {
+        if (this.pendingPreview === pending && this.active && this.image) {
           this.pendingPreview = undefined;
           this.notify();
         }
@@ -303,7 +301,7 @@ class MessageImagePresentation {
     }
     return this.present(
       resource.value
-        ? this.renderImageElement(image, resource.value, options)
+        ? this.renderImageElement(image, resource.value)
         : this.renderImagePlaceholder(
             image,
             resource.value === null ? t("chat.imageLightbox.loadFailed") : undefined,
@@ -311,12 +309,8 @@ class MessageImagePresentation {
     );
   }
 
-  private renderImageElement(
-    image: ImageBlock,
-    previewUrl: string | undefined,
-    _options: ImageRenderOptions | undefined,
-  ): ImagePresentation {
-    return { image, previewUrl, managed: this.managed, state: previewUrl ? undefined : "loading" };
+  private renderImageElement(image: ImageBlock, previewUrl: string): ImagePresentation {
+    return { image, previewUrl, managed: this.managed };
   }
 
   renderPreviewElement(image: ImageBlock, url: string, title: string) {
@@ -388,6 +382,21 @@ class MessageImagePresentation {
   private present(value: ImagePresentation): ImagePresentation {
     return { ...value, key: this.presentationKey };
   }
+
+  readonly retireHandoff = () => {
+    if (this.retained?.status !== "retaining") {
+      return;
+    }
+    this.releaseRetainedImage();
+    this.retained = { status: "unavailable" };
+    this.previewElement?.removeEventListener("load", this.onSettled);
+    this.previewElement?.removeEventListener("error", this.onSettled);
+    this.previewElement?.remove();
+    this.previewElement = undefined;
+    this.element = undefined;
+    releaseChatMediaResourceSubscriber(this.refreshImage);
+    this.notify();
+  };
 
   dispose() {
     this.active = false;
@@ -637,11 +646,16 @@ function MessageImage(props: MessageImageProps): JSX.Element {
 function MessageImageContent(props: MessageImageProps): JSX.Element {
   const [revision, setRevision] = createSignal(0, { ownedWrite: true });
   const presentation = new MessageImagePresentation(() => setRevision((value) => value + 1));
+  const disconnect = useContext(TranscriptMediaDisconnect);
+  disconnect?.add(presentation.retireHandoff);
   const model = createMemo(() => {
     revision();
     return presentation.render(props.image, props.options);
   });
-  onCleanup(() => presentation.dispose());
+  onCleanup(() => {
+    disconnect?.delete(presentation.retireHandoff);
+    presentation.dispose();
+  });
   return (
     <Show when={model().key} keyed>
       {(_key) => <ImageFrame model={model()} presentation={presentation} options={props.options} />}

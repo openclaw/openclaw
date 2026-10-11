@@ -292,7 +292,7 @@ describe("chat transcript geometry", () => {
       expect(viewport.style.getPropertyValue("--chat-position-rail-viewport-height")).toBe("720px");
       expect(readInnerBounds).toHaveBeenCalledOnce();
 
-      // A disconnected shell retires its old column observation before remounting.
+      // A same-task move retains the column and reacquires its observation.
       transcript.hostDisconnected();
       render(nothing, region);
       await flushDeferredRowPrune();
@@ -307,7 +307,7 @@ describe("chat transcript geometry", () => {
         replacementViewport.querySelector(".chat-thread-inner"),
         "replacement rail column",
       );
-      expect(replacement).not.toBe(inner);
+      expect(replacement).toBe(inner);
       gutter = 100;
       innerWidth = 768;
       emitResize(
