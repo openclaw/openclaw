@@ -2,7 +2,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { ModelsAuthLoginFlowOptions } from "openclaw/plugin-sdk/provider-auth-login-flow-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
-import type { SessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import type { getSessionEntryAsync, SessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import {
   observeHostDataSql,
   useSessionStoreTempDirs,
@@ -27,7 +27,7 @@ import { telegramBotInfoForTest } from "./bot.create-telegram-bot.test-support.j
 const sessionDirs = useSessionStoreTempDirs(afterAll, "telegram-login-worker-");
 
 const loginSessionMocks = vi.hoisted(() => ({
-  getSessionEntry: vi.fn(),
+  getSessionEntry: vi.fn<typeof getSessionEntryAsync>(),
   loadSessionStore: vi.fn(),
   resolveStorePath: vi.fn(),
   prepareSessionEntryPatch: vi.fn(),
@@ -86,7 +86,7 @@ function resetLoginCommandMocks() {
   loginSessionMocks.getSessionEntry
     .mockReset()
     .mockImplementation(
-      ({ storePath, sessionKey }: { storePath: string; sessionKey: string }) =>
+      async ({ storePath, sessionKey }) =>
         loginSessionMocks.loadSessionStore(storePath)[sessionKey],
     );
   loginSessionMocks.resolveStorePath.mockReset().mockReturnValue("/tmp/openclaw-sessions.json");

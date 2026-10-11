@@ -1732,7 +1732,7 @@ describe("createTelegramBot", () => {
   });
 
   it("keeps hot-reloaded model pins on the next assembled turn", async () => {
-    using _sessionReader = vi
+    using _ = vi
       .spyOn(telegramBotDepsForTest, "getSessionEntryAsync")
       .mockImplementation(getSessionEntryAsync);
     const storePath = createTelegramTestStorePath("model-fresh-cfg");

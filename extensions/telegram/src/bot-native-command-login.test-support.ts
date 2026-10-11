@@ -9,7 +9,10 @@ import { readConfigFileSnapshotForWrite } from "openclaw/plugin-sdk/config-mutat
 import type { ModelsAuthLoginFlowResult } from "openclaw/plugin-sdk/provider-auth-login-flow-runtime";
 import { clearRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
-import type { prepareSessionEntryPatch } from "openclaw/plugin-sdk/session-store-runtime";
+import type {
+  getSessionEntryAsync,
+  prepareSessionEntryPatch,
+} from "openclaw/plugin-sdk/session-store-runtime";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { expect, type Mock, vi } from "vitest";
 import type { TelegramNativeCommandDeps } from "./bot-native-command-deps.runtime.js";
@@ -49,7 +52,7 @@ export function createOwnerLoginConfig(): OpenClawConfig {
 export async function prepareTelegramLoginSessionStore(
   directory: string,
   mocks: {
-    getSessionEntry: ReturnType<typeof vi.fn>;
+    getSessionEntry: Mock<typeof getSessionEntryAsync>;
     resolveStorePath: ReturnType<typeof vi.fn>;
     prepareSessionEntryPatch: Mock<typeof prepareSessionEntryPatch>;
   },
