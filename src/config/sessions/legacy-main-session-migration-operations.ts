@@ -37,7 +37,6 @@ import {
   withSqliteSessionDeletions,
 } from "./session-accessor.sqlite-deletion.js";
 import {
-  assertQuestionAliasRelocation,
   deleteLegacySessionEntryRows,
   readExactSessionEntryRow,
   writeSessionEntry,
@@ -58,6 +57,7 @@ import {
   runExclusiveSqliteSessionWrite,
 } from "./session-accessor.sqlite-scope.js";
 import { assertSessionTranscriptHot } from "./session-cold-storage-state.js";
+import { assertQuestionAliasRelocation } from "./session-question-recovery-owner.js";
 import { normalizeStoreSessionKey } from "./store-entry.js";
 import type { SessionEntry } from "./types.js";
 

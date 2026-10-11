@@ -4,8 +4,6 @@ import type { MaterializedSessionStateDeletePlan } from "./session-accessor.sqli
 import { readExactSessionEntryRowForCanonicalRepair } from "./session-accessor.sqlite-canonical-repair.js";
 import { sqliteSessionEntriesEqual } from "./session-accessor.sqlite-entry-equality.js";
 import {
-  assertQuestionAliasRelocation,
-  assertQuestionLifecycleWorker,
   deleteLegacySessionEntryRows,
   deleteSessionEntryRows,
   readExactSessionEntryRow,
@@ -31,6 +29,10 @@ import {
 import { appendSessionResetBoundary } from "./session-accessor.sqlite-reset-boundary.js";
 import type { ResolvedSqliteReadScope } from "./session-accessor.sqlite-scope.js";
 import { SessionEntryLifecycleUpsertConflictError } from "./session-mutation-conflict-error.js";
+import {
+  assertQuestionAliasRelocation,
+  assertQuestionLifecycleWorker,
+} from "./session-question-recovery-owner.js";
 import type { SessionEntry } from "./types.js";
 
 type ProjectedLifecycleCommitOptions = Omit<ProjectedLifecycleCommitInput, "maintenance"> & {

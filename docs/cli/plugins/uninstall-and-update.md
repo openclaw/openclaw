@@ -11,8 +11,8 @@ This page covers removing and updating installed plugins, and reloading edited
 plugin code without restarting the Gateway.
 
 With a running Gateway, ordinary uninstall waits for the package runtime owners
-to stop before removing files, and update refreshes the Gateway after the local
-package operation finishes. Without a running Gateway, these commands save changes
+to stop before removing files. Plugin updates require the Gateway to be stopped;
+they do not write alongside a running owner. Without a running Gateway, these commands save changes
 for its next startup. See [Install plugins](/cli/plugins/install#install) for
 installation sources and Gateway-host path requirements.
 
@@ -75,8 +75,8 @@ explicit npm spec overrides an ID-only selection of the same package; two
 different explicit specs for one package are rejected. Unknown targets and
 conflicting selections fail before updates start, including with `--dry-run`.
 The existing bulk updater processes plugin packages and then hook packs, retains
-successful updates when another package fails, and applies saved changes to the
-running Gateway with one final refresh.
+successful updates when another package fails, and saves changes for the next
+Gateway start. Stop the Gateway through its service owner before updating.
 
 Before activating a replacement, plugin updates apply its Doctor config repairs
 through the normal backed-up config writer. This preserves settings such as a

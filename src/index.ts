@@ -4,7 +4,6 @@ import { existsSync } from "node:fs";
 // Package executable entrypoint that forwards to the CLI bootstrap.
 import process from "node:process";
 import { fileURLToPath } from "node:url";
-import { disableExitUnsafeCompilers } from "./bootstrap/node-exit-safe-compilers.js";
 import { resolveCliArgvInvocation } from "./cli/argv-invocation.js";
 import { tryRunUpdateAdmissionBeforeStartup } from "./cli/run-main-update-admission.js";
 import {
@@ -17,9 +16,6 @@ import "./shared/detached-async-context.js";
 const isMain = isMainModule({
   currentFile: fileURLToPath(import.meta.url),
 });
-if (isMain) {
-  disableExitUnsafeCompilers();
-}
 const handledAdmission =
   isMain && (await tryRunUpdateAdmissionBeforeStartup(resolveCliArgvInvocation(process.argv)));
 const packageRootUrl = new URL("../", import.meta.url);
@@ -148,6 +144,7 @@ if (isMain && !handledRootVersion && !handledAdmission) {
   installDistEsmResolveFastPath(import.meta.url);
 
   const { defaultRuntime, restoreRuntimeTerminalState } = await import("./runtime.js");
+  const { exitAfterSignalExitBarriers } = await import("./cli/signal-exit-barrier.js");
 
   // Global error handlers to prevent silent crashes from unhandled rejections/exceptions.
   // These log the error and exit gracefully instead of crashing without trace.
@@ -178,7 +175,7 @@ if (isMain && !handledRootVersion && !handledAdmission) {
       console.error("[openclaw]", message);
     }
     restoreRuntimeTerminalState("uncaught exception", { resumeStdinIfPaused: false });
-    process.exit(1);
+    exitAfterSignalExitBarriers(1);
   });
 
   void runCliWithExitFinalization({

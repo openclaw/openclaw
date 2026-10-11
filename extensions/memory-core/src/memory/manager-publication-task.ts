@@ -105,6 +105,15 @@ export type MemoryPublicationOperations = {
       retainedDrift: boolean;
     }>;
   };
+  "source.replace.inline": {
+    input: {
+      header: MemorySourceIndexHeader;
+      rows: number;
+      fragments: MemoryPublicationFragment[];
+      state: MemoryPublicationState;
+    };
+    output: MemoryPublicationOperations["source.replace"]["output"];
+  };
   "source.delete": {
     input: {
       path: string;
