@@ -147,6 +147,7 @@ export type SessionExactEntriesWorkerResult = {
     identity: string;
     incarnation: string;
     filename: string;
+    canonicalPath?: string;
     birthtime?: string;
   };
   members?: Record<string, SessionMember[]>;
