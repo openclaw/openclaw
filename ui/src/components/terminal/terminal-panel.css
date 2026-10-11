@@ -1,6 +1,4 @@
-import { css } from "lit";
-
-export const terminalPanelStyles = css`
+openclaw-terminal-panel {
   .tp--bottom {
     left: var(--shell-nav-width, 0);
     right: 0;
@@ -30,7 +28,7 @@ export const terminalPanelStyles = css`
     height: 100%;
   }
   .tp-header .tabstrip-tab__icon {
-    color: var(--muted, #8a919e);
+    color: var(--muted);
   }
   /* Same glyph system as the side panel rail. Positioned so the session
      menu anchors to the header, not its mid-toolbar trigger: a
@@ -84,7 +82,7 @@ export const terminalPanelStyles = css`
     align-items: center;
     justify-content: space-between;
     padding: 4px 6px 7px;
-    color: var(--text, #d7dae0);
+    color: var(--text);
     font-size: 12px;
     font-weight: 600;
   }
@@ -92,14 +90,14 @@ export const terminalPanelStyles = css`
   .tp-session-refresh {
     border: 0;
     background: transparent;
-    color: var(--muted, #8a919e);
+    color: var(--muted);
     font: inherit;
     font-weight: 500;
     padding: 2px 4px;
   }
   .tp-session-refresh:hover,
   .tp-session-refresh:focus-visible {
-    color: var(--text, #d7dae0);
+    color: var(--text);
   }
   .tp-session {
     display: grid;
@@ -111,7 +109,7 @@ export const terminalPanelStyles = css`
     min-height: var(--menu-item-height);
     border-radius: var(--menu-item-radius);
     background: transparent;
-    color: var(--text, #d7dae0);
+    color: var(--text);
     padding: 7px 8px;
     text-align: left;
   }
@@ -132,7 +130,7 @@ export const terminalPanelStyles = css`
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    color: var(--muted, #8a919e);
+    color: var(--muted);
     font:
       11px ui-monospace,
       SFMono-Regular,
@@ -143,20 +141,20 @@ export const terminalPanelStyles = css`
       monospace;
   }
   .tp-session__state {
-    color: var(--muted, #8a919e);
+    color: var(--muted);
     font-size: 11px;
     white-space: nowrap;
   }
   .tp-session-empty {
     padding: 10px 8px;
-    color: var(--muted, #8a919e);
+    color: var(--muted);
     font-size: 12px;
   }
   .tp-viewport {
     position: relative;
     flex: 1;
     min-height: 0;
-    background: var(--bg, #0e1015);
+    background: var(--bg);
   }
   .tp-host {
     position: absolute;
@@ -172,7 +170,7 @@ export const terminalPanelStyles = css`
     gap: 12px;
     padding: 10px 12px;
     font-size: 12px;
-    color: var(--danger, #ff6b6b);
+    color: var(--danger);
   }
   .tp-error .btn {
     flex: 0 0 auto;
@@ -183,4 +181,172 @@ export const terminalPanelStyles = css`
     padding: 6px 10px;
     font: inherit;
   }
-`;
+
+  .rail-header__action:disabled {
+    pointer-events: none;
+  }
+  .tp-file-input {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+  .tp-drop-overlay {
+    position: absolute;
+    z-index: 4;
+    inset: 8px;
+    display: grid;
+    place-items: center;
+    border: 1px dashed var(--accent);
+    background: color-mix(in srgb, var(--bg) 88%, var(--accent));
+    color: var(--text);
+    font-size: 13px;
+    pointer-events: none;
+  }
+  .tp-upload-card {
+    position: absolute;
+    z-index: 5;
+    right: 10px;
+    bottom: 10px;
+    width: min(300px, calc(100% - 20px));
+    box-sizing: border-box;
+    padding: 9px 10px 10px;
+    border: 1px solid var(--border);
+    border-radius: 7px;
+    background: color-mix(in srgb, var(--bg) 94%, var(--text));
+    box-shadow: var(--overlay-shadow);
+    color: var(--text);
+    font-size: 11px;
+  }
+  .tp-upload-card--failed {
+    border-color: color-mix(in srgb, var(--danger) 55%, var(--border));
+  }
+  .tp-upload-card__header {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+  }
+  .tp-upload-card__copy {
+    flex: 1;
+    min-width: 0;
+  }
+  .tp-upload-card__title {
+    color: var(--text);
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+  }
+  .tp-upload-card--failed .tp-upload-card__title,
+  .tp-upload-card__error {
+    color: var(--danger);
+  }
+  .tp-upload-card__file {
+    margin-top: 2px;
+    overflow: hidden;
+    color: var(--muted);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .tp-upload-card__error {
+    margin-top: 6px;
+    line-height: 1.35;
+    overflow-wrap: anywhere;
+  }
+  .tp-upload-card__actions {
+    display: flex;
+    gap: 4px;
+  }
+  .tp-upload-card__recovery {
+    margin-top: 8px;
+  }
+  .tp-upload-card__action {
+    margin: -3px 0;
+    padding: 3px 5px;
+    border: 0;
+    border-radius: 4px;
+    background: transparent;
+    color: var(--muted);
+    font: inherit;
+    cursor: var(--cursor-action);
+  }
+  .tp-upload-card__action:hover {
+    background: color-mix(in srgb, var(--text) 10%, transparent);
+    color: var(--text);
+  }
+  .tp-upload-card__action:focus-visible {
+    outline: 1px solid var(--accent);
+    outline-offset: 1px;
+  }
+  .tp-upload-retry {
+    color: var(--accent);
+  }
+  .tp-upload-progress {
+    position: relative;
+    height: 3px;
+    margin-top: 8px;
+    overflow: hidden;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--border) 72%, transparent);
+  }
+  .tp-upload-progress__fill,
+  .tp-upload-progress__activity {
+    position: absolute;
+    inset-block: 0;
+    left: 0;
+    border-radius: inherit;
+    background: var(--accent);
+  }
+  .tp-upload-progress__fill {
+    transition: width 180ms ease-out;
+  }
+  .tp-upload-progress__activity {
+    width: 26%;
+    opacity: 0.7;
+    animation: tp-upload-progress 1.15s ease-in-out infinite;
+  }
+  .tp-upload-card--failed .tp-upload-progress__fill {
+    background: var(--danger);
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .tp-upload-progress__activity {
+      animation: none;
+      transform: none;
+    }
+  }
+
+  * {
+    scrollbar-width: thin;
+  }
+
+  ::-webkit-scrollbar {
+    width: var(--scrollbar-size);
+    height: var(--scrollbar-size);
+  }
+
+  ::-webkit-scrollbar-track,
+  ::-webkit-scrollbar-corner {
+    background: transparent;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background: var(--scrollbar-thumb);
+    background-clip: content-box;
+    border: var(--scrollbar-thumb-inset) solid transparent;
+    border-radius: var(--radius-full);
+  }
+
+  ::-webkit-scrollbar-thumb:hover,
+  :hover::-webkit-scrollbar-thumb {
+    background: var(--scrollbar-thumb-hover);
+    background-clip: content-box;
+  }
+}
+@keyframes tp-upload-progress {
+  from {
+    transform: translateX(-110%);
+  }
+  to {
+    transform: translateX(385%);
+  }
+}

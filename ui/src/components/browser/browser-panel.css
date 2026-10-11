@@ -1,8 +1,4 @@
-// Styles for <openclaw-browser-panel>. Kept beside the component to keep the
-// panel logic readable; visual language mirrors the operator terminal dock.
-import { css } from "lit";
-
-export const browserPanelStyles = css`
+openclaw-browser-panel {
   /* Docked panels get a single hairline separator on the inner edge so they
      read as layout, not as a floating card. The browser dock yields to the
      terminal dock's reserved edges so the two panels tile instead of
@@ -36,7 +32,7 @@ export const browserPanelStyles = css`
     align-items: center;
     gap: 4px;
     padding: 5px 8px;
-    border-bottom: 1px solid var(--border, #262b34);
+    border-bottom: 1px solid var(--border);
   }
   .bp-toolbar .bp-icon {
     display: inline-flex;
@@ -49,9 +45,9 @@ export const browserPanelStyles = css`
     border: 0;
     border-radius: 6px;
     background: transparent;
-    color: var(--muted, #8a919e);
+    color: var(--muted);
   }
-  /* Shadow-root icons need explicit dimensions in WebKit as well as Chromium. */
+  /* Keep toolbar artwork at the same size in WebKit and Chromium. */
   .bp-toolbar .bp-icon > svg,
   .bp-annotatebar .bp-btn > svg {
     width: 16px;
@@ -61,11 +57,6 @@ export const browserPanelStyles = css`
   .bp-toolbar .bp-icon[aria-busy="true"] > svg {
     animation: bp-toolbar-spin 1s linear infinite;
   }
-  @keyframes bp-toolbar-spin {
-    to {
-      transform: rotate(360deg);
-    }
-  }
   @media (prefers-reduced-motion: reduce) {
     .bp-toolbar .bp-icon[aria-busy="true"] > svg {
       animation: none;
@@ -73,8 +64,8 @@ export const browserPanelStyles = css`
   }
   .bp-toolbar .bp-icon:hover,
   .bp-toolbar .bp-icon:focus-visible {
-    background: color-mix(in srgb, var(--text, #d7dae0) 10%, transparent);
-    color: var(--text, #d7dae0);
+    background: color-mix(in srgb, var(--text) 10%, transparent);
+    color: var(--text);
   }
   .bp-url {
     flex: 1;
@@ -83,16 +74,16 @@ export const browserPanelStyles = css`
     padding: 0 12px;
     border: 1px solid transparent;
     border-radius: 14px;
-    background: color-mix(in srgb, var(--text, #d7dae0) 8%, transparent);
-    color: var(--text, #d7dae0);
+    background: color-mix(in srgb, var(--text) 8%, transparent);
+    color: var(--text);
     font-size: 12.5px;
     font-family: inherit;
     outline: none;
     text-overflow: ellipsis;
   }
   .bp-url:focus {
-    border-color: var(--accent, #ff5c5c);
-    background: var(--bg, #0e1015);
+    border-color: var(--accent);
+    background: var(--bg);
   }
   .bp-annotatebar {
     display: flex;
@@ -100,9 +91,9 @@ export const browserPanelStyles = css`
     gap: 8px;
     padding: 5px 10px;
     font-size: 12px;
-    color: var(--muted, #8a919e);
-    border-bottom: 1px solid var(--border, #262b34);
-    background: color-mix(in srgb, var(--accent, #ff5c5c) 7%, transparent);
+    color: var(--muted);
+    border-bottom: 1px solid var(--border);
+    background: color-mix(in srgb, var(--accent) 7%, transparent);
   }
   .bp-annotatebar__hint {
     flex: 1;
@@ -112,20 +103,20 @@ export const browserPanelStyles = css`
     white-space: nowrap;
   }
   .bp-btn {
-    border: 1px solid var(--border, #262b34);
+    border: 1px solid var(--border);
     background: transparent;
-    color: var(--text, #d7dae0);
+    color: var(--text);
     font-size: 12px;
     font-family: inherit;
     border-radius: 6px;
     padding: 3px 10px;
   }
   .bp-btn:hover {
-    background: color-mix(in srgb, var(--text, #d7dae0) 10%, transparent);
+    background: color-mix(in srgb, var(--text) 10%, transparent);
   }
   .bp-btn--primary {
-    border-color: var(--accent, #ff5c5c);
-    color: var(--accent, #ff5c5c);
+    border-color: var(--accent);
+    color: var(--accent);
   }
   .bp-viewport {
     position: relative;
@@ -134,7 +125,7 @@ export const browserPanelStyles = css`
     min-height: 0;
     flex-direction: column;
     overflow: auto;
-    background: var(--bg, #0e1015);
+    background: var(--bg);
     outline: none;
   }
   /* The tab panel's own body must stretch, otherwise an empty state sizes to its
@@ -197,9 +188,9 @@ export const browserPanelStyles = css`
     max-width: 320px;
     padding: 8px 10px;
     border-radius: 8px;
-    border: 1px solid var(--border, #262b34);
-    background: var(--bg, #0e1015);
-    box-shadow: var(--shadow-md, 0 4px 16px rgba(0, 0, 0, 0.3));
+    border: 1px solid var(--border);
+    background: var(--bg);
+    box-shadow: var(--shadow-md);
     font-size: 12px;
     pointer-events: none;
   }
@@ -210,12 +201,12 @@ export const browserPanelStyles = css`
     justify-content: space-between;
   }
   .bp-tooltip__selector {
-    color: var(--accent, #6ea8fe);
+    color: var(--accent);
     font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
     word-break: break-all;
   }
   .bp-tooltip__size {
-    color: var(--muted, #8a919e);
+    color: var(--muted);
     white-space: nowrap;
   }
   .bp-tooltip__row {
@@ -223,10 +214,10 @@ export const browserPanelStyles = css`
     justify-content: space-between;
     gap: 12px;
     margin-top: 4px;
-    color: var(--muted, #8a919e);
+    color: var(--muted);
   }
   .bp-tooltip__row span:last-child {
-    color: var(--text, #d7dae0);
+    color: var(--text);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -240,16 +231,22 @@ export const browserPanelStyles = css`
     height: 100%;
     padding: 20px;
     font-size: 12.5px;
-    color: var(--muted, #8a919e);
+    color: var(--muted);
     text-align: center;
   }
   .bp-note {
     padding: 6px 12px;
     font-size: 12px;
-    color: var(--muted, #8a919e);
-    border-bottom: 1px solid var(--border, #262b34);
+    color: var(--muted);
+    border-bottom: 1px solid var(--border);
   }
   .bp-note--error {
-    color: var(--danger, #ff6b6b);
+    color: var(--danger);
   }
-`;
+}
+
+@keyframes bp-toolbar-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
