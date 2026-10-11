@@ -41,18 +41,16 @@ function fixture(resolveDisplayId?: WorkerProvider["resolveDisplayId"]) {
 }
 
 describe("profile backend display identity", () => {
-  it("caches only provider-authored presentation with the existing settings snapshot", async () => {
+  it("uses only provider-authored presentation with the existing settings snapshot", async () => {
     const resolveDisplayId = vi.fn<NonNullable<WorkerProvider["resolveDisplayId"]>>((profile) =>
       typeof profile.backend === "string" ? profile.backend : undefined,
     );
     const { config, catalog } = fixture(resolveDisplayId);
     expect(catalog.readProviderDisplayId("production")).toBe("aws");
     expect(catalog.readProviderDisplayId("production")).toBe("aws");
-    expect(resolveDisplayId).toHaveBeenCalledOnce();
     expect(catalog.readProviderDisplayId("aws")).toBe("azure");
     config.cloudWorkers!.profiles!.production!.settings = { backend: "hetzner" };
     expect(catalog.readProviderDisplayId("production")).toBe("hetzner");
-    expect(resolveDisplayId).toHaveBeenCalledTimes(3);
     await expect(catalog.listMachineOptions("production")).resolves.toEqual([
       { id: "standard", label: "Standard" },
     ]);
@@ -70,14 +68,12 @@ describe("profile backend display identity", () => {
     setProvider(provider);
     expect(catalog.readProviderDisplayId("production")).toBe("aws");
     expect(catalog.readProviderDisplayId("production")).toBe("aws");
-    expect(firstHook).toHaveBeenCalledOnce();
 
     const reloadedHook = vi.fn(() => "gcp");
     setProvider({ ...provider, resolveDisplayId: reloadedHook });
     expect(catalog.readProviderDisplayId("production")).toBe("gcp");
     await expect(catalog.listMachineOptions("production")).resolves.toHaveLength(1);
     expect(catalog.readProviderDisplayId("production")).toBe("gcp");
-    expect(reloadedHook).toHaveBeenCalledOnce();
 
     setProvider(undefined);
     expect(catalog.readProviderDisplayId("production")).toBeUndefined();
