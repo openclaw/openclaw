@@ -543,6 +543,7 @@ export const CanvasWidgetView = defineSolidBridge<CanvasWidgetViewProps>(
   "openclaw-canvas-widget-view",
   (props, host) => {
     host.style.display = "contents";
+    host.style.minHeight = "";
     const context = useApplication();
     const [revision, setRevision] = createSignal(0, { ownedWrite: true });
     const [gatewayRevision, setGatewayRevision] = createSignal(0, { ownedWrite: true });
