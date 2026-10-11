@@ -44,7 +44,7 @@ export const SANDBOX_MEDIA_MAX_BYTES = STAGED_INPUT_MAX_BYTES;
  * admit larger inbound files, so staging follows that ceiling instead of
  * dropping them; it never falls below the shared staged-input floor.
  */
-export function resolveSandboxMediaMaxBytes(cfg: OpenClawConfig): number {
+function resolveSandboxMediaMaxBytes(cfg: OpenClawConfig): number {
   return Math.max(SANDBOX_MEDIA_MAX_BYTES, resolveChatAttachmentMaxBytes(cfg));
 }
 const SCP_STDERR_TAIL_CHARS = 16_384;

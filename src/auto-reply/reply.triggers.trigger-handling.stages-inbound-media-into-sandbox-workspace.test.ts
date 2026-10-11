@@ -3,14 +3,9 @@ import fs from "node:fs/promises";
 import path, { basename, dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveStagedInputMediaPaths } from "../media/staged-inputs.js";
 import { MEDIA_MAX_BYTES } from "../media/store.js";
-import {
-  resolveSandboxMediaMaxBytes,
-  SANDBOX_MEDIA_MAX_BYTES,
-  stageSandboxMedia,
-} from "./reply/stage-sandbox-media.js";
+import { SANDBOX_MEDIA_MAX_BYTES, stageSandboxMedia } from "./reply/stage-sandbox-media.js";
 import {
   createSandboxMediaContexts,
   createSandboxMediaStageConfig,
@@ -607,7 +602,6 @@ describe("stageSandboxMedia", () => {
         ...baseCfg,
         agents: { ...baseCfg.agents, defaults: { ...baseCfg.agents?.defaults, mediaMaxMb: 51 } },
       };
-      expect(resolveSandboxMediaMaxBytes(cfg)).toBe(51 * 1024 * 1024);
       const mediaPath = await writeInboundMedia(home, "above-default-limit.pdf", "");
       await fs.truncate(mediaPath, SANDBOX_MEDIA_MAX_BYTES + 1);
 
@@ -628,8 +622,29 @@ describe("stageSandboxMedia", () => {
     });
   });
 
-  it("never lowers the staging limit below the default", () => {
-    const cfg = { agents: { defaults: { mediaMaxMb: 5 } } } as OpenClawConfig;
-    expect(resolveSandboxMediaMaxBytes(cfg)).toBe(SANDBOX_MEDIA_MAX_BYTES);
+  it("keeps the default staging limit when mediaMaxMb is lower", async () => {
+    await withSandboxMediaTempHome("openclaw-triggers-", async (home) => {
+      const { cfg: baseCfg, workspaceDir, sandboxDir } = await setupSandboxWorkspace(home);
+      const cfg = {
+        ...baseCfg,
+        agents: { ...baseCfg.agents, defaults: { ...baseCfg.agents?.defaults, mediaMaxMb: 5 } },
+      };
+      const mediaPath = await writeInboundMedia(home, "above-low-media-limit.bin", "");
+      await fs.truncate(mediaPath, 10 * 1024 * 1024);
+
+      const { ctx, sessionCtx } = createSandboxMediaContexts(mediaPath);
+      const result = await stageSandboxMedia({
+        ctx,
+        sessionCtx,
+        cfg,
+        sessionKey: "agent:main:main",
+        workspaceDir,
+      });
+
+      const stagedPath = result.staged.get(0)!;
+      await expect(fs.stat(join(sandboxDir, stagedPath))).resolves.toMatchObject({
+        size: 10 * 1024 * 1024,
+      });
+    });
   });
 });
