@@ -5,6 +5,10 @@ import { runCommandWithTimeout } from "../../process/exec.js";
 
 export const WORKSPACE_RESULT_GIT_TIMEOUT_MS = 10 * 60_000;
 
+export function workspaceResultCheckpointInitArgs(): string[] {
+  return ["init", "--quiet", "--bare", "--object-format=sha1"];
+}
+
 export async function readWorkspaceResultGit(
   root: string,
   args: string[],
