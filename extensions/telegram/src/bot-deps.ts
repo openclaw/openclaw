@@ -23,6 +23,7 @@ import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/security-runtime";
 import {
   getSessionEntry,
+  getSessionEntryAsync,
   readSessionUpdatedAtAsync,
   readAmbientTranscriptWatermark,
   resolveAmbientTranscriptWatermarkKey,
@@ -81,6 +82,7 @@ const telegramBotImplementations = {
   getRuntimeConfig,
   resolveStorePath,
   getSessionEntry,
+  getSessionEntryAsync,
   readChannelAllowFromStore,
   readSessionUpdatedAtAsync,
   readAmbientTranscriptWatermark,

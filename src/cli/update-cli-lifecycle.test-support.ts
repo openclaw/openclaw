@@ -1,7 +1,7 @@
 import { EventEmitter } from "node:events";
-import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { createDirectorySync, createFileSync } from "@openclaw/fs-safe/advanced";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeEach, expect, vi } from "vitest";
 import * as sourceArtifactPreflight from "../../scripts/lib/source-update-artifact-preflight.mts";
@@ -236,18 +236,11 @@ export function registerUpdateCliLifecycle(fixture: UpdateCliLifecycleFixture): 
     if (sqliteHostPlatform !== "win32") {
       vi.spyOn(windowsPrivateDirectory, "createPrivateWindowsDirectory").mockImplementation(
         (directoryPath) => {
-          fsSync.mkdirSync(directoryPath, { mode: 0o700 });
+          createDirectorySync(directoryPath, { mode: 0o700 });
         },
       );
-      vi.spyOn(windowsPrivateDirectory, "createPrivateWindowsFile").mockImplementation((filePath) =>
-        fsSync.openSync(
-          filePath,
-          fsSync.constants.O_RDWR |
-            fsSync.constants.O_CREAT |
-            fsSync.constants.O_EXCL |
-            fsSync.constants.O_NOFOLLOW,
-          0o600,
-        ),
+      vi.spyOn(windowsPrivateDirectory, "createPrivateWindowsFile").mockImplementation((file) =>
+        createFileSync(file, { mode: 0o600 }),
       );
     }
     // Native-service platform simulations do not change the actual SQLite VFS.
