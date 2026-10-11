@@ -57,6 +57,62 @@ const reviewed = new Map([
     },
   ],
   [
+    "src/infra/update-managed-service-handoff-database.ts",
+    {
+      tier: "T2",
+      evidence:
+        "readManagedHandoffRepairMetadata and initializeLeaseSchema serve the managed update source-custody lease, a cross-process lock primitive.",
+    },
+  ],
+  [
+    "src/infra/update-managed-service-handoff-lease.ts",
+    {
+      tier: "T3",
+      evidence:
+        "createLeaseStore.admit is called by original-acquisition.ts from update/repair/triage CLI and the generated lease-source helper; retarget runs in HANDOFF_SCRIPT.",
+    },
+  ],
+  [
+    "src/infra/update-managed-service-handoff-mutation.ts",
+    {
+      tier: "T2",
+      evidence:
+        "createManagedHandoffMutationReader.childAliases implements managed source-custody lock validation; config/write-lock.ts and daemon/service-operation-lock.ts reach it through the lease owner.",
+    },
+  ],
+  [
+    "src/infra/update-managed-service-handoff-original-owner.ts",
+    {
+      tier: "T2",
+      evidence:
+        "readOriginalUpdateDependents serves cross-process source-custody lease acquisition/release, not ordinary Gateway state access.",
+    },
+  ],
+  [
+    "src/infra/update-managed-service-handoff-reclamation.ts",
+    {
+      tier: "T3",
+      evidence:
+        "observeManagedHandoffReclamation.readPairs is called only by lease.ts createLeaseStore admission in CLI/generated source helpers.",
+    },
+  ],
+  [
+    "src/infra/update-managed-service-handoff-rows.ts",
+    {
+      tier: "T2",
+      evidence:
+        "descendants/deleteRow/updateRow/readRetainedSources belong to cross-process managed source-custody locks. config/write-lock.ts and daemon/service-operation-lock.ts use assertSourceUnborrowed before effects; Gateway release settles the same lease.",
+    },
+  ],
+  [
+    "src/infra/update-managed-service-handoff-source-inspection.ts",
+    {
+      tier: "T2",
+      evidence:
+        "Schema discovery supports only the managed source-custody lock primitive's first admission and repair.",
+    },
+  ],
+  [
     "src/gateway/session-row-projection.ts",
     {
       priority: 2,
@@ -174,6 +230,31 @@ const reviewed = new Map([
 // Match lexical operation paths, not moving line numbers or whole mixed modules.
 const reviewedOperations = new Map([
   [
+    "src/agents/auth-profiles/sqlite-json.ts",
+    [
+      {
+        tier: "W",
+        operations: ["readAuthProfileRows"],
+        evidence:
+          "Only auth-profiles/store.worker.ts, plugin-model-catalog.worker.ts, and sqlite-readonly-native-payload.ts's auth-profile-rows worker call this batched reader; synchronous SDK cell readers remain T1.",
+      },
+    ],
+  ],
+  [
+    "src/agents/auth-profiles/shared-store-bootstrap.ts",
+    [
+      {
+        tier: "T2",
+        operations: [
+          "readSharedAuthLegacyRowsFromDatabase",
+          "hasPendingSharedAuthCleanupInDatabase",
+        ],
+        evidence:
+          "First-load legacy shared-auth admission and migration only: initializeFreshSharedAuthStore skips already-inspected ownership; shared-store-bootstrap.worker.ts and Doctor own remaining callers.",
+      },
+    ],
+  ],
+  [
     "src/plugin-state/plugin-state-store.reads.ts",
     [
       {
@@ -227,7 +308,10 @@ const reviewedOperations = new Map([
     [
       {
         tier: "T2",
-        operations: ["inspectGatewayCrashLoopBreakerInDatabase"],
+        operations: [
+          "inspectGatewayCrashLoopBreakerInDatabase",
+          "inspectGatewayCrashLoopBreakerInDatabase.latestStartedAt",
+        ],
         evidence:
           "Extracted from the existing gateway-boot-lifecycle.ts boot exception. Native inspectGatewayCrashLoopBreaker is only called by cli/gateway-cli/run.ts beginBoot before starting the Gateway; runtime inspection and recovery commit revalidation execute via gatewayBootReadOperations and gateway-boot-lifecycle.worker.ts in the existing state workers.",
       },
@@ -1127,9 +1211,10 @@ const reviewedOperations = new Map([
           "insertSandboxRegistryRowInDatabase",
           "insertSandboxRegistryRowIfMissingInDatabase",
           "readRegistryRows",
+          "readSandboxRegistryRowInDatabase",
         ],
         evidence:
-          "Registry mutations, including reservation and removal-intent selection, run only through registry-write.worker.ts -> executeSandboxRegistryCommand; import only registry-import.worker.ts. List helpers run through openclaw-state-read-registry.ts in the read worker. The row reader remains T1 for released synchronous sandbox callbacks held across provider waits and deferred process launch; see worker-access.md.",
+          "Registry mutations, including reservation and removal-intent selection, run only through registry-write.worker.ts -> executeSandboxRegistryCommand; import only registry-import.worker.ts. Read helpers run through openclaw-state-read-registry.ts in the read worker. Synchronous sandbox effect checks consume registry-currentness.ts facts maintained by committed receipts.",
       },
     ],
   ],
@@ -1194,6 +1279,12 @@ const reviewedOperations = new Map([
     [
       {
         tier: "T2",
+        operations: ["createWorktreeRemovalClaimsGuard", "releaseWorktreeRunLeaseRow"],
+        evidence:
+          "Synchronous removal-lock assertion immediately before filesystem/Git deletion and process-exit lock cleanup. Ordinary cleanup consumes the existing worker lease census.",
+      },
+      {
+        tier: "T2",
         operations: [
           "listRegistryWorktreesForMigration",
           "rewriteRegistryWorktreePathsForMigration",
@@ -1214,6 +1305,12 @@ const reviewedOperations = new Map([
     "src/agents/worktrees/run-lease-owner.ts",
     [
       {
+        tier: "T2",
+        operations: ["collectLiveRunLeases"],
+        evidence:
+          "Native caller is registry.ts assertWorktreeRemovalAvailable, a removal lock primitive; ordinary runtime lease reads and writes dispatch through shared-state workers.",
+      },
+      {
         tier: "W",
         operations: ["readWorktreeRunLeaseStateInDatabase", "assertRegistryMutationCustody"],
         evidence:
@@ -1225,10 +1322,16 @@ const reviewedOperations = new Map([
     "src/agents/worktrees/run-lease-store.kernel.ts",
     [
       {
+        tier: "T2",
+        operations: ["releaseWorktreeRunLeaseInDatabase"],
+        evidence:
+          "Native invocation is registry.ts process-exit lock cleanup; normal release dispatches through registry-run-end.worker.ts.",
+      },
+      {
         tier: "W",
         operations: ["admitWorktreeRunLeaseInDatabase"],
         evidence:
-          "worktrees/dispatch.worker.ts registers admission through WorkerWriteOperationContext.writeAdmitted; src/state/openclaw-state-worker-registry.ts loads the handler. Shared release/lease cleanup remain T1.",
+          "worktrees/dispatch.worker.ts registers admission through WorkerWriteOperationContext.writeAdmitted; src/state/openclaw-state-worker-registry.ts loads the handler. Native exit cleanup is classified separately as a lock primitive.",
       },
     ],
   ],
@@ -1610,13 +1713,19 @@ const reviewedOperations = new Map([
     "src/infra/restart-handoff.ts",
     [
       {
+        tier: "T2",
+        operations: ["selectGatewayRestartHandoffRowSync"],
+        evidence:
+          "Native reads only serve server-startup-bootstrap.ts boot admission, daemon CLI status.gather.ts, and Doctor gateway-daemon-flow.ts; ordinary Gateway runtime does not call this reader.",
+      },
+      {
         tier: "T3",
         operations: [
           "consumeGatewayRestartHandoffSync",
           "consumeGatewayRestartHandoffSync.removeCurrent",
         ],
         evidence:
-          "Only CLI gateway-cli/register-restart-handoff.ts:61 calls consumeGatewayRestartHandoffSync and its private removeCurrent helper; shared row reader also runs at Gateway boot and remains T1.",
+          "Only CLI gateway-cli/register-restart-handoff.ts:61 calls consumeGatewayRestartHandoffSync and its private removeCurrent helper.",
       },
     ],
   ],
@@ -1636,7 +1745,12 @@ const reviewedOperations = new Map([
     [
       {
         tier: "T3",
-        operations: ["writeRestartSentinelRowIfRevisionSync", "readRestartSentinelRowForKeySync"],
+        operations: [
+          "writeRestartSentinelRowIfRevisionSync",
+          "readRestartSentinelRowForKeySync",
+          "readRestartSentinelRevisionFloorSync",
+          "upsertRestartSentinelRowSync",
+        ],
         evidence:
           "src/infra/restart-sentinel.worker.ts:74,150 plus generated one-shot child in src/infra/update-managed-service-handoff.ts:101,439,1639,1649.",
       },
@@ -1706,9 +1820,11 @@ const reviewedOperations = new Map([
           "createSqliteAuditRecordKernel.entries",
           "createSqliteAuditRecordKernel.upsertPreparedRecord",
           "createSqliteAuditRecordKernel.latest",
+          "readAuditWriteState",
+          "pruneAuditRecords",
         ],
         evidence:
-          "Native entries/upsert serve state-migrations.audit-checkpoints.ts, audit-recovery.ts, audit-logs.ts and CLI audit-backup.ts. Native latest serves readRecentConfigAuditRecords in Doctor config flow and update-immutable-protection.ts. Transcript/greeting reads and CAS, plus config-journal snapshots, use the existing workers. Native config observation still reaches register/count/next/prune, which remain T1.",
+          "Native entries/upsert/count/next/prune serve state-migrations.audit-checkpoints.ts, audit-recovery.ts, audit-logs.ts and CLI audit-backup.ts. Native latest serves readRecentConfigAuditRecords in Doctor and update-immutable-protection.ts. Runtime config observations use diagnostic.register in sqlite-audit-record.worker.ts; no native register adapter remains.",
       },
     ],
   ],
@@ -1730,20 +1846,63 @@ const reviewedOperations = new Map([
     ],
   ],
   [
+    "src/infra/update-run-admission.ts",
+    [
+      {
+        tier: "T3",
+        operations: ["runUpdateRunAdmission"],
+        evidence:
+          "createUpdateRun is the only caller: Gateway/update campaigns dispatch updateRuns.create to update-run-mutation.worker.ts; native create calls are CLI update-command-run.ts and update-repair-command.ts. The existing-schema and bootstrap transactions retain the worker's transaction/commit admission callback.",
+      },
+    ],
+  ],
+  [
     "src/infra/update-run-ledger.ts",
     [
       {
         tier: "T3",
         operations: ["createUpdateRun"],
-        binding: "active",
         evidence:
-          "active initializer requires stale-run opt-in only from src/cli/update-cli/update-command-run.ts:304,310,313; guard src/infra/update-run-ledger.ts:127 excludes Gateway/campaign callers. Repairs: update-repair-command.ts:141; interruption: update-command-mutable-signals.ts:158.",
+          "Gateway server-methods/update.ts and update-startup-auto-run.ts use createUpdateRunAsync; update-run-mutation.worker.ts executes creation. Remaining native callers are update-command-run.ts and update-repair-command.ts. Legacy supersession remains an explicit CLI-only option.",
       },
       {
         tier: "T3",
         operations: ["reconcilePackageOwnerRefusal", "finishInterruptedUpdateBeforeActivation"],
         evidence:
-          "active initializer requires stale-run opt-in only from src/cli/update-cli/update-command-run.ts:304,310,313; guard src/infra/update-run-ledger.ts:127 excludes Gateway/campaign callers. Repairs: update-repair-command.ts:141; interruption: update-command-mutable-signals.ts:158.",
+          "Only update-repair-command.ts calls reconcilePackageOwnerRefusal; update-command-mutable-signals.ts calls finishInterruptedUpdateBeforeActivation under its CLI executor. Their package/activation custody checks remain intact.",
+      },
+    ],
+  ],
+  [
+    "src/infra/update-run-read.kernel.ts",
+    [
+      {
+        tier: "T3",
+        operations: ["readUpdateRunRecord", "hasStoredUpdateRecovery", "readUpdateRuns"],
+        evidence:
+          "Runtime reads dispatch through update-run-reader.ts to openclaw-state-read.worker.ts; mutations read their current record in update-run-mutation.worker.ts, reconciliation and interruption workers. Native readers serve CLI update-command-* / update-repair-command.ts, Doctor admission, update-migrated-finalize.worker.ts and update-repair-turn-worker.ts. Gateway update/report/restart/notice and startup campaign callers use async APIs; generated managed-handoff ledger reads execute in the helper child.",
+      },
+    ],
+  ],
+  [
+    "src/infra/update-run-recovery-store.ts",
+    [
+      {
+        tier: "T3",
+        operations: ["readRecoveryRows"],
+        evidence:
+          "Runtime mutation/reconciliation/interruption readers execute in existing workers. Native load/inspect recovery callers are update CLI repair, result, rollback and terminal owners plus CLI managed-handoff cleanup; no Gateway reader uses the synchronous recovery facade. Recovery exclusion is retained as activation/rollback custody, not removed as bookkeeping.",
+      },
+    ],
+  ],
+  [
+    "src/infra/update-run-write.ts",
+    [
+      {
+        tier: "T3",
+        operations: ["persistRun"],
+        evidence:
+          "Gateway update/run, boot observations, notices and startup campaigns use update-run-write.async.ts and the existing update-run-mutation.worker.ts writer. Remaining native mutateRun callers are CLI update-command-* and Doctor; update-migrated-finalize.worker.ts, reconciliation/interruption workers and the generated managed-handoff helper also own native transactions. No synchronous runtime fallback is retained.",
       },
     ],
   ],
@@ -2073,6 +2232,7 @@ const workerModules = new Set([
 
   "extensions/memory-core/src/memory/manager-embedding-cache.ts", // Cache SQL, including iterator reads, is called only by manager-publication.worker.ts.
   "extensions/memory-core/src/memory/manager-source-index-kernel.ts", // Hash reads and source mutations are called only by manager-publication.worker.ts.
+  "extensions/memory-core/src/memory/manager-retrieval-read.ts", // Search and publication workers own all SQL; host imports are types or the metadata key.
 
   "extensions/workboard/src/sqlite-store-kernel.ts", // Workboard SQLite worker backend factory only.
   "extensions/workboard/src/sqlite-store-sessions-board.ts", // Workboard worker kernel sessions-board store only.
@@ -2081,7 +2241,7 @@ const workerModules = new Set([
   "packages/memory-host-sdk/src/memory-entry-origins.ts", // Private memory SDK origin queries serve search and origin workers only.
 
   "src/agents/mcp-oauth-store.kernel.ts", // MCP OAuth write dispatcher and shared-state read worker only.
-  "src/agents/harness/native-hook-relay-store.kernel.ts", // native-hook-relay-store.worker.ts owns runtime SQL; clear is test-only.
+  "src/agents/harness/native-hook-relay-store.kernel.ts", // native-hook-relay-store.worker.ts owns all runtime SQL.
 
   "src/agents/subagents/completion/subagent-completion-queue-receipt.ts", // Completion mutation kernel runs through the session-delivery worker.
 
