@@ -157,8 +157,7 @@ export function resolveUpdateResultNextAction(params: {
         : servingVersion
           ? `Fix ${truncateUtf16Safe(result.reason ?? "the update failure", 240)} then run \`${formatCliCommand("openclaw update", env)}\` again.`
           : undefined,
-      result.reason !== "state-migrated-no-rollback" &&
-      (reason === "state-migration-started" || (!servingVersion && (reason || !detail)))
+      reason === "state-migration-started" || (!servingVersion && (reason || !detail))
         ? resolveUnsafeUpdateRecoveryGuidance(reason, env)
         : undefined,
     ]
