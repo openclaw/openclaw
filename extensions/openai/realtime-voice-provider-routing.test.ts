@@ -52,6 +52,7 @@ vi.mock("openclaw/plugin-sdk/provider-auth", async (importOriginal) => {
   return {
     ...actual,
     isProviderAuthProfileConfigured: mocks.isProviderAuthProfileConfiguredMock,
+    isProviderAuthProfileConfiguredAsync: mocks.isProviderAuthProfileConfiguredMock,
     resolveProviderAuthProfileApiKey: mocks.resolveProviderAuthProfileApiKeyMock,
   };
 });

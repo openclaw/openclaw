@@ -2,8 +2,8 @@
 import { isDeepStrictEqual } from "node:util";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import {
-  loadAuthProfileStoreForSecretsRuntime,
-  loadAuthProfileStoreWithoutExternalProfiles,
+  loadAuthProfileStoreForRuntimeAsync,
+  loadAuthProfileStoreWithoutExternalProfilesAsync,
 } from "../agents/auth-profiles.js";
 import {
   getRuntimeAuthProfileStoreCredentialsRevision,
@@ -71,6 +71,13 @@ const loadRuntimeOwnerAssignmentHelpers = createLazyRuntimeModule(
   () => import("./runtime-owner-assignments.js"),
 );
 
+function loadSecretsRuntimeAuthStore(agentDir?: string): Promise<AuthProfileStore> {
+  return loadAuthProfileStoreForRuntimeAsync(agentDir, {
+    readOnly: true,
+    allowKeychainPrompt: false,
+  });
+}
+
 async function resolveLoadablePluginOrigins(params: {
   plugins: Pick<PluginMetadataSnapshot, "plugins">;
 }): Promise<ReadonlyMap<string, PluginOrigin>> {
@@ -111,7 +118,7 @@ export async function prepareSecretsRuntimeSnapshot(params: {
   /** Skip config and web-tool refs when only auth-profile stores need materialization. */
   includeConfigRefs?: boolean;
   includeAuthStoreRefs?: boolean;
-  loadAuthStore?: (agentDir?: string) => AuthProfileStore;
+  loadAuthStore?: (agentDir?: string) => AuthProfileStore | Promise<AuthProfileStore>;
   manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
   pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "plugins" | "manifestRegistry">;
   /** Isolate known non-Gateway owners and retain unchanged last-known-good values when possible. */
@@ -134,7 +141,8 @@ export async function prepareSecretsRuntimeSnapshot(params: {
   const includeConfigRefs = params.includeConfigRefs ?? true;
   const includeAuthStoreRefs = params.includeAuthStoreRefs ?? true;
   let authStores: Array<{ agentDir: string; store: AuthProfileStore }> = [];
-  const fastPathLoadAuthStore = params.loadAuthStore ?? loadAuthProfileStoreWithoutExternalProfiles;
+  const fastPathLoadAuthStore =
+    params.loadAuthStore ?? loadAuthProfileStoreWithoutExternalProfilesAsync;
   const candidateDirs = params.agentDirs?.length
     ? uniqueStrings(params.agentDirs.map((entry) => resolveUserPath(entry, runtimeEnv)))
     : collectCandidateAgentDirs(resolvedConfig, runtimeEnv);
@@ -146,7 +154,7 @@ export async function prepareSecretsRuntimeSnapshot(params: {
         : null;
   let migrationDegradedOwners: DegradedSecretOwner[] = [];
   if (includeAuthStoreRefs) {
-    const loaded = loadAdmittedAuthStores({
+    const loaded = await loadAdmittedAuthStores({
       agentDirs: candidateDirs,
       env: runtimeEnv,
       loadAuthStore: fastPathLoadAuthStore,
@@ -222,9 +230,9 @@ export async function prepareSecretsRuntimeSnapshot(params: {
   }
 
   if (includeAuthStoreRefs) {
-    const loadAuthStore = params.loadAuthStore ?? loadAuthProfileStoreForSecretsRuntime;
+    const loadAuthStore = params.loadAuthStore ?? loadSecretsRuntimeAuthStore;
     if (!params.loadAuthStore) {
-      const loaded = loadAdmittedAuthStores({
+      const loaded = await loadAdmittedAuthStores({
         agentDirs: candidateDirs,
         env: runtimeEnv,
         loadAuthStore,
@@ -302,7 +310,7 @@ export async function prepareSecretsRuntimeSnapshot(params: {
     explicitAgentDirs,
     includeConfigRefs,
     includeAuthStoreRefs,
-    loadAuthStore: params.loadAuthStore ?? loadAuthProfileStoreForSecretsRuntime,
+    loadAuthStore: params.loadAuthStore ?? loadSecretsRuntimeAuthStore,
     loadablePluginOrigins,
     ...(manifestRegistry ? { manifestRegistry } : {}),
   });
@@ -541,7 +549,7 @@ function createSecretsRuntimeSnapshotActivation(snapshot: PreparedSecretsRuntime
       env: { ...process.env } as Record<string, string | undefined>,
       explicitAgentDirs: null,
       includeAuthStoreRefs: snapshot.authStores.length > 0,
-      loadAuthStore: loadAuthProfileStoreForSecretsRuntime,
+      loadAuthStore: loadSecretsRuntimeAuthStore,
       loadablePluginOrigins: new Map<string, PluginOrigin>(),
     } satisfies SecretsRuntimeRefreshContext);
 

@@ -59,7 +59,8 @@ vi.mock("./usage-write.js", async () => ({
 vi.mock("./store-runtime.js", async () => {
   const { storeMocks: mocks } = await import("./usage-fixture.test-support.js");
   return {
-    loadAuthProfileStoreWithoutExternalProfiles: mocks.loadAuthProfileStoreWithoutExternalProfiles,
+    loadAuthProfileStoreWithoutExternalProfilesAsync:
+      mocks.loadAuthProfileStoreWithoutExternalProfilesAsync,
     updateAuthProfileStoreWithLock: mocks.updateAuthProfileStoreWithLock,
     saveAuthProfileStore: mocks.saveAuthProfileStore,
   };
@@ -71,7 +72,7 @@ beforeEach(() => {
     (params: { agentDir?: string }) => params.agentDir,
   );
   storeMocks.saveAuthProfileStore.mockReset();
-  storeMocks.loadAuthProfileStoreWithoutExternalProfiles.mockReset();
+  storeMocks.loadAuthProfileStoreWithoutExternalProfilesAsync.mockReset();
   storeMocks.updateAuthProfileStoreWithLock.mockReset();
   resetAuthProfileUsageMocks();
   fetchMock.mockReset();
@@ -386,7 +387,7 @@ describe("markAuthProfileFailure — WHAM-aware Codex cooldowns", () => {
     mockLock?: boolean;
   }): Promise<void> {
     const dateNowSpy = vi.spyOn(Date, "now").mockReturnValue(params.now);
-    storeMocks.loadAuthProfileStoreWithoutExternalProfiles.mockReturnValue(params.store);
+    storeMocks.loadAuthProfileStoreWithoutExternalProfilesAsync.mockResolvedValue(params.store);
     if (params.mockLock !== false) {
       mockLockedUpdateForStore(params.store);
     }

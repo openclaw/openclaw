@@ -9,7 +9,7 @@ import type { DetectSetupInferenceDeps, SetupInferenceDetection } from "./setup-
 import { detectSetupInference } from "./setup-inference-detect.js";
 
 const fixture = vi.hoisted(() => ({
-  loadAuthProfileStore: vi.fn<() => AuthProfileStore>(),
+  loadAuthProfileStore: vi.fn<() => AuthProfileStore | Promise<AuthProfileStore>>(),
   withSetupProviderAuthMethod: vi.fn(),
 }));
 
@@ -30,7 +30,7 @@ vi.mock("../config/config.js", async (importOriginal) => ({
 }));
 vi.mock("../agents/auth-profiles/store-runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../agents/auth-profiles/store-runtime.js")>()),
-  loadAuthProfileStoreWithoutExternalProfiles: fixture.loadAuthProfileStore,
+  loadAuthProfileStoreWithoutExternalProfilesAsync: async () => fixture.loadAuthProfileStore(),
 }));
 vi.mock("./setup-provider-method.js", () => ({
   withSetupProviderAuthMethod: fixture.withSetupProviderAuthMethod,
@@ -123,6 +123,42 @@ afterEach(() => {
 });
 
 describe("setup inference discovery deadline", () => {
+  it("waits for the worker's saved credentials before publishing candidates", async () => {
+    const requested = createDeferred<void>();
+    const loaded = createDeferred<AuthProfileStore>();
+    fixture.loadAuthProfileStore.mockImplementationOnce(() => {
+      requested.resolve();
+      return loaded.promise;
+    });
+    const onPartial = vi.fn();
+    const detection = detectWithProvider(async () => null, [], { onPartial });
+    await requested.promise;
+    expect(onPartial).not.toHaveBeenCalled();
+    loaded.resolve({
+      version: 1,
+      profiles: {
+        "fixture:worker": {
+          type: "api_key",
+          provider: "fixture",
+          key: "fixture-worker-key",
+          setup: {
+            replacement: true,
+            modelRef: "fixture/worker-model",
+            configJson: "{}",
+            authChoice: choice.choiceId,
+            pluginId: choice.pluginId,
+          },
+        },
+      },
+    });
+    const result = await detection;
+    expect(result.candidates).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ modelRef: "fixture/worker-model", credentials: true }),
+      ]),
+    );
+  });
+
   it.each<{
     name: string;
     modelRef?: string;

@@ -160,7 +160,10 @@ vi.mock("./embedded-agent-runner/model.js", async (importOriginal) => ({
 vi.mock("./model-auth.js", () => ({
   applySecretRefHeaderSentinels: (model: unknown) => model,
   ensureAuthProfileStore: (...args: unknown[]) => ensureAuthProfileStoreMock(...args),
+  ensureAuthProfileStoreAsync: (...args: unknown[]) => ensureAuthProfileStoreMock(...args),
   ensureAuthProfileStoreWithoutExternalProfiles: (...args: unknown[]) =>
+    ensureAuthProfileStoreWithoutExternalProfilesMock(...args),
+  ensureAuthProfileStoreWithoutExternalProfilesAsync: (...args: unknown[]) =>
     ensureAuthProfileStoreWithoutExternalProfilesMock(...args),
   getApiKeyForModelCore: (...args: unknown[]) => getApiKeyForModelMock(...args),
   hasUsableCustomProviderApiKey: (...args: unknown[]) => hasUsableCustomProviderApiKeyMock(...args),

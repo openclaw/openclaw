@@ -610,6 +610,7 @@ vi.mock("./auth-profiles.js", async () => {
   return {
     ...actual,
     ensureAuthProfileStore: () => ({ profiles: {} }),
+    ensureAuthProfileStoreAsync: async () => ({ profiles: {} }),
   };
 });
 
@@ -620,6 +621,11 @@ vi.mock("./auth-profiles/store-runtime.js", async () => {
   return {
     ...actual,
     ensureAuthProfileStore: vi.fn(() => state.authProfileStoreMock),
+    ensureAuthProfileStoreAsync: vi.fn(async () => state.authProfileStoreMock),
+    findPersistedAuthProfileCredentialAsync: vi.fn(
+      async ({ profileId }: { profileId: string }) =>
+        state.authProfileStoreMock.profiles[profileId],
+    ),
   };
 });
 

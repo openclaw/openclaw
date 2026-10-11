@@ -140,6 +140,7 @@ export type ProviderResolveUsageAuthContext = {
   workspaceDir?: string;
   env: NodeJS.ProcessEnv;
   provider: string;
+  /** @deprecated Await resolveApiKeyCandidatesFromConfigAndStore instead. Removed at the next Plugin SDK major. */
   resolveApiKeyFromConfigAndStore: (params?: {
     providerIds?: string[];
     envDirect?: Array<string | undefined>;

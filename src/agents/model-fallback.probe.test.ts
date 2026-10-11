@@ -27,6 +27,8 @@ import {
 
 vi.mock("./auth-profiles/store-runtime.js", () => ({
   ensureAuthProfileStore: vi.fn(),
+  ensureAuthProfileStoreAsync: (...args: Parameters<typeof ensureAuthProfileStore>) =>
+    ensureAuthProfileStore(...args),
   loadAuthProfileStoreForRuntime: vi.fn(),
 }));
 vi.mock("./auth-profiles/usage.js", () => ({

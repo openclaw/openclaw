@@ -28,7 +28,7 @@ export function buildComfyVideoGenerationProvider(): VideoGenerationProvider {
     label: "ComfyUI",
     defaultModel: DEFAULT_COMFY_MODEL,
     models: [DEFAULT_COMFY_MODEL],
-    isConfigured: ({ cfg, agentDir }) =>
+    isConfiguredAsync: ({ cfg, agentDir }) =>
       isComfyCapabilityConfigured({
         cfg,
         agentDir,

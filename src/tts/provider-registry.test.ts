@@ -7,7 +7,8 @@ import {
   normalizeSpeechProviderId,
 } from "./provider-registry-core.js";
 import {
-  isTtsProviderConfigured,
+  isTtsProviderConfiguredAsync,
+  resolveTtsProviderAsync,
   resolvePreparedTtsProvider,
   resolveTtsProviderOrder,
 } from "./tts-provider-resolution.js";
@@ -184,7 +185,7 @@ describe("speech provider registry", () => {
     ).toBe("fallback");
   });
 
-  it("uses prepared provider objects for configuration without registry rediscovery", () => {
+  it("uses prepared provider objects for configuration without registry rediscovery", async () => {
     const resolveConfig = vi.fn(() => ({}));
     const isConfigured = vi.fn(() => true);
     const provider = {
@@ -194,11 +195,38 @@ describe("speech provider registry", () => {
     };
     const cfg = {} as OpenClawConfig;
 
-    expect(isTtsProviderConfigured(resolveTtsConfig(cfg), provider, cfg)).toBe(true);
+    expect(await isTtsProviderConfiguredAsync(resolveTtsConfig(cfg), provider, cfg)).toBe(true);
     expect(resolveConfig).toHaveBeenCalledOnce();
     expect(isConfigured).toHaveBeenCalledOnce();
     expect(mocks.canonicalizeSpeechProviderId).not.toHaveBeenCalled();
     expect(mocks.getSpeechProvider).not.toHaveBeenCalled();
+  });
+
+  it("selects providers through async availability and observes subsequent changes", async () => {
+    let configured = true;
+    const isConfigured = vi.fn(() => {
+      throw new Error("sync availability must not run");
+    });
+    const first = {
+      ...createSpeechProvider("first"),
+      autoSelectOrder: 1,
+      isConfigured,
+      isConfiguredAsync: async () => configured,
+    };
+    const fallback = { ...createSpeechProvider("fallback"), autoSelectOrder: 2 };
+    const providers = [first, fallback];
+    const config = resolveTtsConfig({});
+    const selectionRegistry = createSpeechProviderRegistry({
+      getProvider: (id) => providers.find((provider) => provider.id === id),
+      listProviders: () => providers,
+    });
+
+    expect(await resolveTtsProviderAsync(config, "/unused", selectionRegistry, {})).toBe("first");
+    configured = false;
+    expect(await resolveTtsProviderAsync(config, "/unused", selectionRegistry, {})).toBe(
+      "fallback",
+    );
+    expect(isConfigured).not.toHaveBeenCalled();
   });
 
   it("canonicalizes a voice-model alias omitted from the supplied inventory", () => {

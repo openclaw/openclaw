@@ -8,7 +8,7 @@ import { getProviderEnvVarsCore } from "../../secrets/provider-env-vars.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import type { AnyAgentTool } from "./common.js";
 import { isCapabilityProviderConfigured, resolveGenerateAction } from "./media-tool-shared.js";
-import { prepareToolAuthProfileStoreSource } from "./model-config.helpers.js";
+import { prepareToolAuthProfileStore } from "./model-config.helpers.js";
 
 export type MediaGenerateActionResult = {
   content: Array<{ type: "text"; text: string }>;
@@ -23,7 +23,7 @@ type MediaGenerateProviderAuth = {
 };
 
 export function createMediaGenerateExecute(params: {
-  options?: Parameters<typeof prepareToolAuthProfileStoreSource>[0] & {
+  options?: Parameters<typeof prepareToolAuthProfileStore>[0] & {
     workspaceDir?: string;
     agentSessionKey?: string;
     requesterAgentId?: string;
@@ -42,13 +42,12 @@ export function createMediaGenerateExecute(params: {
     const action = resolveGenerateAction(args);
     const options = params.options;
     if (action === "list") {
-      const authProfileStoreSource = await prepareToolAuthProfileStoreSource(options);
+      const authStore = await prepareToolAuthProfileStore(options);
       signal?.throwIfAborted();
       return params.list({
         workspaceDir: options?.workspaceDir,
         agentDir: options?.agentDir,
-        authStore: options?.authProfileStore,
-        authProfileStoreSource,
+        authStore,
       });
     }
     return action === "status"

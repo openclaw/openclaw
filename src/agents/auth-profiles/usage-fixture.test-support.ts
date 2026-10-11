@@ -11,7 +11,7 @@ export const storeMocks = {
     (params: { agentDir?: string }) => params.agentDir,
   ),
   saveAuthProfileStore: vi.fn(),
-  loadAuthProfileStoreWithoutExternalProfiles: vi.fn(),
+  loadAuthProfileStoreWithoutExternalProfilesAsync: vi.fn(),
   updateAuthProfileStoreWithLock: vi.fn().mockResolvedValue(null),
 };
 
@@ -67,7 +67,7 @@ export function resetAuthProfileUsageMocks() {
 
 export function mockLockedUpdateForStore(store: AuthProfileStore): void {
   usageMocks.readFresh.mockReturnValue(store);
-  storeMocks.loadAuthProfileStoreWithoutExternalProfiles.mockImplementation(() => store);
+  storeMocks.loadAuthProfileStoreWithoutExternalProfilesAsync.mockResolvedValue(store);
   storeMocks.updateAuthProfileStoreWithLock.mockImplementationOnce(
     async (lockParams: { updater: (store: AuthProfileStore) => boolean }) => {
       const freshStore = structuredClone(store);
@@ -79,7 +79,7 @@ export function mockLockedUpdateForStore(store: AuthProfileStore): void {
 
 export function mockLockedUpdatesForStore(store: AuthProfileStore): void {
   usageMocks.readFresh.mockReturnValue(store);
-  storeMocks.loadAuthProfileStoreWithoutExternalProfiles.mockImplementation(() => store);
+  storeMocks.loadAuthProfileStoreWithoutExternalProfilesAsync.mockResolvedValue(store);
   storeMocks.updateAuthProfileStoreWithLock.mockImplementation(
     async (lockParams: { updater: (store: AuthProfileStore) => boolean }) => {
       const freshStore = structuredClone(store);

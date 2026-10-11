@@ -35,7 +35,7 @@ const testMocks = vi.hoisted(() => ({
 vi.mock("./model-auth.js", () => ({
   ensureAuthProfileStore: testMocks.ensureAuthProfileStore,
   resolveAuthProfileOrder: testMocks.resolveAuthProfileOrder,
-  resolveModelAuthMode: testMocks.resolveModelAuthMode,
+  resolveModelAuthModeAsync: testMocks.resolveModelAuthMode,
 }));
 
 vi.mock("../plugins/cli-backends.runtime.js", () => ({

@@ -20,15 +20,20 @@ vi.mock("../../web-search/runtime-execution.js", () => ({}));
 vi.mock("../../agents/auth-profiles/store.js", () => ({
   getPreparedRuntimeAuthProfileStoreSnapshot: mocks.snapshot,
 }));
+// mock-isolation: Any persisted read violates this prepared-auth status contract.
 vi.mock("../../agents/auth-profiles.js", () => ({
   hasAnyAuthProfileStoreSource: mocks.persistedAuth,
   ensureAuthProfileStore: mocks.persistedAuth,
+  ensureAuthProfileStoreAsync: mocks.persistedAuth,
   ensureAuthProfileStoreWithoutExternalProfiles: mocks.persistedAuth,
+  ensureAuthProfileStoreWithoutExternalProfilesAsync: mocks.persistedAuth,
   listProfilesForProvider: (store: AuthProfileStore, provider: string) =>
     listProfilesForProvider(store, provider),
 }));
+// mock-isolation: Any persisted read violates this prepared-auth status contract.
 vi.mock("../../agents/auth-profiles/store-runtime.js", () => ({
   ensureAuthProfileStore: mocks.persistedAuth,
+  ensureAuthProfileStoreAsync: mocks.persistedAuth,
 }));
 vi.mock("./model-auth-agent-scope.js", () => ({
   resolveModelAuthAgentScope: () => ({ ok: true, agentId: "main", agentDir: "/synthetic/agent" }),

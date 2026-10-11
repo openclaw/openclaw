@@ -8,7 +8,7 @@ const {
   xaiTTSMock,
   listXaiTtsVoicesMock,
   xaiTTSStreamMock,
-  isProviderAuthProfileConfiguredMock,
+  isProviderAuthProfileConfiguredAsyncMock,
   resolveApiKeyForProviderMock,
 } = vi.hoisted(() => ({
   xaiTTSMock: vi.fn<typeof xaiTTS>(async () => Buffer.from("audio-bytes")),
@@ -22,7 +22,7 @@ const {
     }),
     release: vi.fn(async () => {}),
   })),
-  isProviderAuthProfileConfiguredMock: vi.fn(() => false),
+  isProviderAuthProfileConfiguredAsyncMock: vi.fn(async () => false),
   resolveApiKeyForProviderMock: vi.fn(async (): Promise<{ apiKey: string | undefined }> => ({
     apiKey: undefined,
   })),
@@ -35,7 +35,8 @@ vi.mock("./tts.js", () => ({
 }));
 
 vi.mock("openclaw/plugin-sdk/provider-auth", () => ({
-  isProviderAuthProfileConfigured: isProviderAuthProfileConfiguredMock,
+  isProviderAuthProfileConfigured: () => false,
+  isProviderAuthProfileConfiguredAsync: isProviderAuthProfileConfiguredAsyncMock,
 }));
 
 vi.mock("openclaw/plugin-sdk/provider-auth-runtime", () => ({
@@ -54,8 +55,8 @@ describe("xai speech provider", () => {
   afterEach(() => {
     xaiTTSMock.mockClear();
     xaiTTSStreamMock.mockClear();
-    isProviderAuthProfileConfiguredMock.mockReset();
-    isProviderAuthProfileConfiguredMock.mockReturnValue(false);
+    isProviderAuthProfileConfiguredAsyncMock.mockReset();
+    isProviderAuthProfileConfiguredAsyncMock.mockResolvedValue(false);
     resolveApiKeyForProviderMock.mockReset();
     resolveApiKeyForProviderMock.mockResolvedValue({ apiKey: undefined });
     listXaiTtsVoicesMock.mockReset();
@@ -142,7 +143,9 @@ describe("xai speech provider", () => {
     const provider = buildXaiSpeechProvider();
     const providerConfig = { apiKey: "   " };
 
-    expect(provider.isConfigured({ cfg: {}, providerConfig, timeoutMs: 5_000 })).toBe(false);
+    expect(await provider.isConfiguredAsync?.({ cfg: {}, providerConfig, timeoutMs: 5_000 })).toBe(
+      false,
+    );
     await expect(provider.listVoices?.({ apiKey: "   ", providerConfig })).resolves.toEqual(
       ["ara", "eve", "leo", "rex", "sal"].map((voice) => ({ id: voice, name: voice })),
     );

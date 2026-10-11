@@ -2,6 +2,8 @@
 export { resolveAuthProfileEligibility, resolveAuthProfileOrder } from "./auth-profiles/order.js";
 export {
   ensureAuthProfileStore,
+  ensureAuthProfileStoreAsync,
+  ensureAuthProfileStoreWithoutExternalProfilesAsync,
   loadAuthProfileStoreForRuntime,
   prepareAuthProfileProvider,
 } from "./auth-profiles/store-runtime.js";

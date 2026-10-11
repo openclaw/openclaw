@@ -58,7 +58,7 @@ const MODELS_ADD_DEPRECATED_TEXT =
   "⚠️ /models add is deprecated. Use /models to browse providers and /model to switch models.";
 
 vi.mock("../../agents/model-auth-label.js", () => ({
-  resolveModelAuthLabel: () => undefined,
+  resolveModelAuthLabelAsync: () => undefined,
 }));
 
 vi.mock("../../agents/provider-model-normalization.runtime.js", () => ({

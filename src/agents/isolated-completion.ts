@@ -48,7 +48,7 @@ import {
   resolveIsolatedCompletionProvider,
   resolveIsolatedCompletionRoute,
 } from "./isolated-completion-route.js";
-import { ensureAuthProfileStore } from "./model-auth.js";
+import { ensureAuthProfileStoreAsync } from "./model-auth.js";
 import {
   createModelCatalogSnapshotView,
   listModelCatalogObservedRoutes,
@@ -422,7 +422,7 @@ async function runIsolatedCompletionOwned(
         pluginRegistry: lease.snapshot.pluginRegistry,
       });
       assertCurrent();
-      const { selection, cliOwner } = resolveIsolatedCompletionRoute({
+      const { selection, cliOwner } = await resolveIsolatedCompletionRoute({
         provider,
         model: request.model,
         authProfileId: request.authProfileId,
@@ -491,7 +491,7 @@ async function runIsolatedCompletionOwned(
         let harnessAuth:
           | {
               model: Model;
-              store: ReturnType<typeof ensureAuthProfileStore>;
+              store: Awaited<ReturnType<typeof ensureAuthProfileStoreAsync>>;
               attempts: readonly PreparedAgentRuntimeAuthAttempt[];
             }
           | undefined;
@@ -521,7 +521,7 @@ async function runIsolatedCompletionOwned(
           }
           const runtimeModel = resolution.model;
           assertCurrent();
-          const authProfileStore = ensureAuthProfileStore(agentDir, {
+          const authProfileStore = await ensureAuthProfileStoreAsync(agentDir, {
             profileId: request.authProfileId,
             readOnly: true,
             allowKeychainPrompt: false,

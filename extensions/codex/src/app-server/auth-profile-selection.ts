@@ -5,7 +5,7 @@ import type { AuthProfileStore } from "openclaw/plugin-sdk/provider-auth";
 
 type ProfileAuth = Pick<
   PluginRuntime["modelAuth"],
-  "ensureAuthProfileStore" | "resolveAuthProfileOrder"
+  "ensureAuthProfileStoreAsync" | "resolveAuthProfileOrder"
 >;
 type AuthProfileOrderConfig = Parameters<ProfileAuth["resolveAuthProfileOrder"]>[0]["cfg"];
 export const CODEX_APP_SERVER_AUTH_PROVIDER = "openai";
@@ -19,12 +19,12 @@ export type CodexAppServerAuthProfileLookup = {
 };
 
 export function createCodexAuthProfileSelection({
-  ensureAuthProfileStore,
+  ensureAuthProfileStoreAsync,
   resolveAuthProfileOrder,
 }: ProfileAuth) {
   function resolveCodexAppServerAuthProfileId(params: {
     authProfileId?: string;
-    store: ReturnType<typeof ensureAuthProfileStore>;
+    store: AuthProfileStore;
     config?: AuthProfileOrderConfig;
   }): string | undefined {
     const requested = params.authProfileId?.trim();
@@ -38,21 +38,25 @@ export function createCodexAuthProfileSelection({
     })[0]?.trim();
   }
 
-  function resolveCodexAppServerAuthProfileIdForAgent(
+  async function resolveCodexAppServerAuthProfileIdForAgent(
     params: CodexAppServerAuthProfileLookup,
-  ): string | undefined {
+  ): Promise<string | undefined> {
+    const requested = params.authProfileId?.trim();
+    if (requested) {
+      return requested;
+    }
     const agentDir = params.agentDir?.trim() || resolveDefaultAgentDir(params.config ?? {});
-    const store = resolveCodexAppServerAuthProfileStore({ ...params, agentDir });
+    const store = await resolveCodexAppServerAuthProfileStore({ ...params, agentDir });
     return resolveCodexAppServerAuthProfileId({ ...params, store });
   }
 
-  function resolveCodexAppServerAuthProfileStore(
+  async function resolveCodexAppServerAuthProfileStore(
     params: CodexAppServerAuthProfileLookup,
-  ): AuthProfileStore {
+  ): Promise<AuthProfileStore> {
     if (params.authProfileStore) {
       return params.authProfileStore;
     }
-    return ensureAuthProfileStore(params.agentDir, {
+    return ensureAuthProfileStoreAsync(params.agentDir, {
       profileId: params.authProfileId,
       allowKeychainPrompt: false,
       config: params.config,

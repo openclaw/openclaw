@@ -75,7 +75,7 @@ import { resolveOAuthRefreshLockPath } from "./paths.js";
 import { withPersonalAuthProfileStore, type PersonalAuthProfileStore } from "./personal-store.js";
 import { resolveAuthProfileDatabasePath } from "./sqlite.js";
 import {
-  ensureAuthProfileStoreWithoutExternalProfiles,
+  ensureAuthProfileStoreWithoutExternalProfilesAsync,
   updateAuthProfileStoreWithLock,
 } from "./store-runtime.js";
 import { resolvePersistedAuthProfileOwnerAgentDir } from "./store.js";
@@ -147,16 +147,16 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
     return { apiKey, credential: accepted };
   }
 
-  function adoptNewerMainOAuthCredential(params: {
+  async function adoptNewerMainOAuthCredential(params: {
     profileId: string;
     agentDir?: string;
     credential: OAuthCredential;
-  }): OAuthCredential | null {
+  }): Promise<OAuthCredential | null> {
     if (!params.agentDir || isUserModelAuthProfileId(params.profileId)) {
       return null;
     }
     try {
-      const mainStore = ensureAuthProfileStoreWithoutExternalProfiles(undefined, {
+      const mainStore = await ensureAuthProfileStoreWithoutExternalProfilesAsync(undefined, {
         allowKeychainPrompt: false,
       });
       const mainCred = mainStore.profiles[params.profileId];
@@ -1033,7 +1033,7 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
       }
       credential = owned;
     }
-    const newerMainCredential = adoptNewerMainOAuthCredential({
+    const newerMainCredential = await adoptNewerMainOAuthCredential({
       profileId: params.profileId,
       agentDir: params.agentDir,
       credential,
@@ -1139,7 +1139,7 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
       }
       if (recoveryStoreLoaded && params.agentDir && !personalProfile && !recoveryBuildFailed) {
         try {
-          const mainStore = ensureAuthProfileStoreWithoutExternalProfiles(undefined, {
+          const mainStore = await ensureAuthProfileStoreWithoutExternalProfilesAsync(undefined, {
             allowKeychainPrompt: false,
           });
           const mainCred = mainStore.profiles[params.profileId];

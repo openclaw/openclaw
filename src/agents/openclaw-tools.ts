@@ -24,7 +24,10 @@ import {
   isToolWrappedWithBeforeToolCallHook,
   wrapToolWithBeforeToolCallHook,
 } from "./agent-tools.before-tool-call.js";
-import { hasAnyAuthProfileStoreSourceAsync } from "./auth-profiles/source-check.js";
+import {
+  ensureAuthProfileStoreWithoutExternalProfiles,
+  ensureAuthProfileStoreWithoutExternalProfilesAsync,
+} from "./auth-profiles/store-runtime.js";
 import { resolveOpenClawPluginToolsForOptions } from "./openclaw-plugin-tools.js";
 import { filterToolsByClientCaps } from "./openclaw-tools.client-caps.js";
 import { createHostedGatewayTools } from "./openclaw-tools.gateway.js";
@@ -44,6 +47,7 @@ import { createOpenClawSwarmToolGroups } from "./openclaw-tools.swarm.js";
 import { resolveTranscriptsTool } from "./openclaw-tools.transcripts.js";
 import type { OpenClawToolsOptions } from "./openclaw-tools.types.js";
 import { resolveWidgetPresentationForRun } from "./openclaw-tools.widget-presentation.js";
+import { getPreparedModelRuntimeAuthStore } from "./prepared-model-runtime-auth.js";
 import {
   withPreparedToolConstruction,
   type PreparedToolConstruction,
@@ -133,6 +137,13 @@ export async function createOpenClawToolsWithPreparation(
     config: captured.config,
     agentId: captured.requesterAgentIdOverride,
   });
+  captured.authProfileStore ??= captured.preparedModelRuntime
+    ? getPreparedModelRuntimeAuthStore(captured.preparedModelRuntime)
+    : undefined;
+  captured.authProfileStore ??= await ensureAuthProfileStoreWithoutExternalProfilesAsync(
+    captured.agentDir ?? resolveAgentDir(captured.config ?? {}, sessionAgentId),
+    { allowKeychainPrompt: false },
+  );
   const delegated = isEmbeddedMode()
     ? []
     : await createOpenClawDelegateToolsForRunAsync({ ...captured, sessionAgentId }, shared);
@@ -141,20 +152,15 @@ export async function createOpenClawToolsWithPreparation(
   const webSearchConfigured =
     captured.webSearchEnabled === false || captured.config?.tools?.web?.search?.enabled === false
       ? undefined
-      : await prepareWebSearchConfiguration(
-          {
-            config: captured.config,
-            agentDir: captured.agentDir ?? resolveAgentDir(captured.config ?? {}, sessionAgentId),
-            authStore: captured.authProfileStore,
-            ...(captured.authProfileStoreSource !== undefined
-              ? { resolveAuthProfileStoreSource: () => captured.authProfileStoreSource === true }
-              : {}),
-            runtimeWebSearch: getActiveRuntimeWebToolsMetadataFromState()?.search,
-          },
-          shared.reader
-            ? (agentDir) => hasAnyAuthProfileStoreSourceAsync(agentDir, shared.reader)
-            : undefined,
-        );
+      : await prepareWebSearchConfiguration({
+          config: captured.config,
+          agentDir: captured.agentDir ?? resolveAgentDir(captured.config ?? {}, sessionAgentId),
+          authStore: captured.authProfileStore,
+          ...(captured.authProfileStoreSource !== undefined
+            ? { resolveAuthProfileStoreSource: () => captured.authProfileStoreSource === true }
+            : {}),
+          runtimeWebSearch: getActiveRuntimeWebToolsMetadataFromState()?.search,
+        });
   shared.assertCurrent();
   captured.assertInvocationCurrent?.();
   const steps = createOpenClawToolsSteps(captured, delegated, webSearchConfigured);
@@ -174,8 +180,18 @@ export function createOpenClawTools(
   preparedDelegateTools?: AnyAgentTool[],
   preparedWebSearchConfigured?: boolean,
 ): AnyAgentTool[] {
+  const captured = { ...options };
+  const { sessionAgentId } = resolveSessionAgentIds({
+    sessionKey: captured.runSessionKey ?? captured.agentSessionKey,
+    config: captured.config,
+    agentId: captured.requesterAgentIdOverride,
+  });
+  captured.authProfileStore ??= ensureAuthProfileStoreWithoutExternalProfiles(
+    captured.agentDir ?? resolveAgentDir(captured.config ?? {}, sessionAgentId),
+    { allowKeychainPrompt: false },
+  );
   const steps = createOpenClawToolsSteps(
-    options,
+    captured,
     preparedDelegateTools,
     preparedWebSearchConfigured,
   );

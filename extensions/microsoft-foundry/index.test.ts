@@ -72,7 +72,7 @@ vi.mock("openclaw/plugin-sdk/provider-auth", async () => {
   );
   return {
     ...actual,
-    ensureAuthProfileStore: ensureAuthProfileStoreMock,
+    ensureAuthProfileStoreAsync: ensureAuthProfileStoreMock,
   };
 });
 

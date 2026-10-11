@@ -78,7 +78,7 @@ vi.mock("../../agents/model-fallback-attempt.js", () => ({
 
 vi.mock("../../agents/model-auth.js", () => ({
   isMissingProviderAuthError: () => false,
-  resolveModelAuthMode: () => "api-key",
+  resolveModelAuthModeAsync: () => "api-key",
 }));
 
 vi.mock("../../agents/embedded-agent.js", () => {

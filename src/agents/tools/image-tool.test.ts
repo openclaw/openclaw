@@ -50,6 +50,7 @@ import {
   testing,
 } from "./image-tool.test-support.js";
 import { resolveMediaToolInboundRoots } from "./media-tool-shared.js";
+import { createPdfTool } from "./pdf-tool.js";
 
 const publicSurfaceLoaderMocks = vi.hoisted(() => ({
   loadBundledPluginPublicArtifactModuleFromCandidatesSync: vi.fn(() => null),
@@ -1269,11 +1270,19 @@ describe("image tool implicit imageModel config", () => {
             },
           },
         };
-        expect(resolveImageModelConfigForTool({ cfg, agentDir })).toEqual({
-          primary: `${provider}/${model}`,
-        });
+        expect(
+          resolveImageModelConfigForTool({
+            cfg,
+            agentDir,
+            authStore: createAuthProfileStoreFixture({
+              [`${provider}:default`]: { type: "api_key", provider, key: "sk-test" },
+            }),
+          }),
+        ).toEqual({ primary: `${provider}/${model}` });
         if (checkTool) {
+          // Direct factories retain their shipped directory-backed auth contract.
           expect(typeof createImageTool({ config: cfg, agentDir })?.execute).toBe("function");
+          expect(typeof createPdfTool({ config: cfg, agentDir })?.execute).toBe("function");
         }
       });
     },

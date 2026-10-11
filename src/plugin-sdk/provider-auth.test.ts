@@ -367,13 +367,20 @@ async function runFallbackStoreCase(): Promise<FallbackStoreCaseResult> {
         .filter(([, profile]) => profile.provider === provider)
         .map(([profileId]) => profileId),
   }));
+  // mock-isolation: Profile-list tests use synthetic primary and fallback store snapshots.
   vi.doMock("../plugins/provider-auth-availability.js", async () => {
     const { createProviderAuthAvailability } =
       await import("../plugins/provider-auth-availability-core.js");
     const { findPersistedAuthProfileCredential } = await import("../agents/auth-profiles/store.js");
+    const { findPersistedAuthProfileCredentialAsync } =
+      await import("../agents/auth-profiles/store-runtime.js");
     return createProviderAuthAvailability({
       findPersistedAuthProfileCredential,
+      findPersistedAuthProfileCredentialAsync,
       ensureAuthProfileStore: vi.fn(() => primaryStore),
+      ensureAuthProfileStoreAsync: vi.fn(async () => primaryStore),
+      loadAuthProfileStoreWithoutExternalProfilesAsync: vi.fn(async () => fallbackStore),
+      loadAuthProfileStoreForRuntimeAsync: vi.fn(async () => primaryStore),
       loadAuthProfileStoreForSecretsRuntime: vi.fn(() => primaryStore),
       loadAuthProfileStoreWithoutExternalProfiles: vi.fn(() => fallbackStore),
     });
@@ -835,14 +842,24 @@ describe("provider auth profile helpers", () => {
           .filter(([, profile]) => profile.provider === provider)
           .map(([profileId]) => profileId),
     }));
+    // mock-isolation: Profile-list tests use this synthetic credential snapshot.
     vi.doMock("../plugins/provider-auth-availability.js", async () => {
       const { createProviderAuthAvailability } =
         await import("../plugins/provider-auth-availability-core.js");
       const { findPersistedAuthProfileCredential } =
         await import("../agents/auth-profiles/store.js");
+      const { findPersistedAuthProfileCredentialAsync } =
+        await import("../agents/auth-profiles/store-runtime.js");
       return createProviderAuthAvailability({
         findPersistedAuthProfileCredential,
+        findPersistedAuthProfileCredentialAsync,
         ensureAuthProfileStore: vi.fn(() => store),
+        ensureAuthProfileStoreAsync: vi.fn(async () => store),
+        loadAuthProfileStoreWithoutExternalProfilesAsync: vi.fn(async () => ({
+          version: 1,
+          profiles: {},
+        })),
+        loadAuthProfileStoreForRuntimeAsync: vi.fn(async () => store),
         loadAuthProfileStoreForSecretsRuntime: vi.fn(() => store),
         loadAuthProfileStoreWithoutExternalProfiles: vi.fn(() => ({ version: 1, profiles: {} })),
       });
@@ -911,14 +928,27 @@ describe("provider auth profile helpers", () => {
           .filter(([, profile]) => profile.provider === provider)
           .map(([profileId]) => profileId),
     }));
+    // mock-isolation: Availability controls the synthetic external CLI discovery snapshots.
     vi.doMock("../plugins/provider-auth-availability.js", async () => {
       const { createProviderAuthAvailability } =
         await import("../plugins/provider-auth-availability-core.js");
       const { findPersistedAuthProfileCredential } =
         await import("../agents/auth-profiles/store.js");
+      const { findPersistedAuthProfileCredentialAsync } =
+        await import("../agents/auth-profiles/store-runtime.js");
       return createProviderAuthAvailability({
         findPersistedAuthProfileCredential,
+        findPersistedAuthProfileCredentialAsync,
         ensureAuthProfileStore: vi.fn(() => primaryStore),
+        ensureAuthProfileStoreAsync: vi.fn(async () => primaryStore),
+        loadAuthProfileStoreWithoutExternalProfilesAsync: vi.fn(async () => ({
+          version: 1,
+          profiles: {},
+        })),
+        loadAuthProfileStoreForRuntimeAsync: vi.fn(
+          async (...args: Parameters<typeof loadAuthProfileStoreForSecretsRuntime>) =>
+            loadAuthProfileStoreForSecretsRuntime(...args),
+        ),
         loadAuthProfileStoreForSecretsRuntime,
         loadAuthProfileStoreWithoutExternalProfiles: vi.fn(() => ({ version: 1, profiles: {} })),
       });

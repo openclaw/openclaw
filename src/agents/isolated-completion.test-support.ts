@@ -66,6 +66,8 @@ vi.mock("./cli-execution-auth.js", () => ({
 vi.mock("./embedded-agent-runner/cli-backend-dispatch-eligibility.js", () => ({
   resolveEmbeddedCliBackendDispatchEligibility:
     isolatedCompletionMocks.resolveEmbeddedCliBackendDispatchEligibility,
+  resolveEmbeddedCliBackendDispatchEligibilityAsync:
+    isolatedCompletionMocks.resolveEmbeddedCliBackendDispatchEligibility,
 }));
 vi.mock("./embedded-agent-runner/model.js", () => ({
   resolveModelAsync: isolatedCompletionMocks.resolveModelAsync,
@@ -83,6 +85,7 @@ vi.mock("./model-runtime-aliases.js", () => ({
 }));
 vi.mock("./model-auth.js", () => ({
   ensureAuthProfileStore: isolatedCompletionMocks.ensureAuthProfileStore,
+  ensureAuthProfileStoreAsync: isolatedCompletionMocks.ensureAuthProfileStore,
   hasAvailableAuthForProvider: isolatedCompletionMocks.hasAvailableAuthForProvider,
 }));
 vi.mock("./prepared-model-runtime.js", () => ({

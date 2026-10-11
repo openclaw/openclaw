@@ -17,7 +17,7 @@ import {
   formatRemainingShort,
 } from "../../agents/auth-health.js";
 import {
-  ensureAuthProfileStoreWithoutExternalProfiles,
+  ensureAuthProfileStoreWithoutExternalProfilesAsync,
   externalCliDiscoveryForConfigStatus,
   listProfilesForProvider,
   resolveAuthProfileMetadata,
@@ -233,7 +233,7 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
       }
       const { agentDir } = scope;
       const authProvider = resolveProviderIdForAuth(provider, { config: cfg });
-      const store = ensureAuthProfileStoreWithoutExternalProfiles(agentDir);
+      const store = await ensureAuthProfileStoreWithoutExternalProfilesAsync(agentDir);
       const availableProfiles = listProfilesForProvider(store, provider);
       const removedProfiles =
         selection.profileIds ??
@@ -363,7 +363,7 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
         providerCapabilities,
       } = readModelAuthStatusFacts(preparedSnapshot, refreshRequested, now);
 
-      const providerUsageRuntime = getProviderUsageRuntimeSnapshot({
+      const providerUsageRuntime = await getProviderUsageRuntimeSnapshot({
         config: cfg,
         agentId,
         agentDir,

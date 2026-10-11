@@ -175,7 +175,7 @@ function createModelAuthModuleMock() {
   return {
     resolveEnvApiKey: resolveEnvApiKeyMock,
     resolveUsableCustomProviderApiKey: resolveUsableCustomProviderApiKeyMock,
-    resolveModelAuthMode: () => "api-key",
+    resolveModelAuthModeAsync: () => "api-key",
   };
 }
 

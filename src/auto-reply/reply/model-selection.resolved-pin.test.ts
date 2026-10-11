@@ -13,7 +13,7 @@ import { withStateDirEnv } from "../../test-helpers/state-dir-env.js";
 import { createModelSelectionState } from "./model-selection.js";
 
 vi.mock("../../agents/auth-profiles.runtime.js", () => ({
-  ensureAuthProfileStore: () => ({ version: 1, profiles: {} }),
+  ensureAuthProfileStoreAsync: () => ({ version: 1, profiles: {} }),
 }));
 
 afterEach(() => resetPluginRuntimeStateForTest());

@@ -887,7 +887,10 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
     applyAuthHeaderOverride: vi.fn((model: unknown) => model),
     applyLocalNoAuthHeaderOverride: vi.fn((model: unknown) => model),
     ensureAuthProfileStore: mockedEnsureAuthProfileStore,
+    ensureAuthProfileStoreAsync: mockedEnsureAuthProfileStore,
     ensureAuthProfileStoreWithoutExternalProfiles:
+      mockedEnsureAuthProfileStoreWithoutExternalProfiles,
+    ensureAuthProfileStoreWithoutExternalProfilesAsync:
       mockedEnsureAuthProfileStoreWithoutExternalProfiles,
     getApiKeyForModelCore: mockedGetApiKeyForModel,
     hasUsableCustomProviderApiKey: mockedHasUsableCustomProviderApiKey,

@@ -727,7 +727,7 @@ export async function loadCompactHooksHarness(options: { durableSession?: boolea
       getApiKeyForModelMock(params),
     hasUsableCustomProviderApiKey: vi.fn(() => false),
     resolveProviderEntryApiKeyProfileReference: resolveProviderEntryApiKeyProfileReferenceMock,
-    resolveModelAuthMode: vi.fn(() => "env"),
+    resolveModelAuthModeAsync: vi.fn(() => "env"),
     shouldPreferExplicitConfigApiKeyAuth: shouldPreferExplicitConfigApiKeyAuthMock,
   }));
 

@@ -8,13 +8,15 @@ import {
 const owner = vi.hoisted(() => ({
   credential: undefined as AuthProfileCredential | undefined,
   resolve: vi.fn(),
+  readCurrent: vi.fn<() => AuthProfileCredential | undefined>(),
 }));
 vi.mock("openclaw/plugin-sdk/agent-runtime", async (original) => {
   const actual = await original<typeof import("openclaw/plugin-sdk/agent-runtime")>();
   return {
     isPendingOAuthRefreshFence: actual.isPendingOAuthRefreshFence,
     isSameOAuthRefreshGeneration: actual.isSameOAuthRefreshGeneration,
-    findPersistedAuthProfileCredential: () => owner.credential,
+    findPersistedAuthProfileCredential: owner.readCurrent,
+    findPersistedAuthProfileCredentialAsync: async () => owner.credential,
     resolveApiKeyForProfile: owner.resolve,
   };
 });
@@ -35,6 +37,7 @@ function credential(subject = "subject") {
 beforeEach(() => {
   owner.credential = credential();
   owner.resolve.mockReset();
+  owner.readCurrent.mockReset().mockImplementation(() => owner.credential);
 });
 async function create() {
   const store: AuthProfileStore = {
@@ -51,6 +54,7 @@ async function create() {
 
 it("refreshes through the selected persisted OAuth owner and retains only same-subject authority", async () => {
   const auth = await create();
+  expect(owner.readCurrent).not.toHaveBeenCalled();
   owner.resolve.mockImplementation(async (params) => {
     expect(params.forceRefresh).toBe(true);
     expect(params.allowProfileFallback).toBe(false);

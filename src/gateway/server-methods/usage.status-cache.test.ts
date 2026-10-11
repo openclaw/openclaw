@@ -13,7 +13,7 @@ import { AsyncWorkScope } from "../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 
 const mocks = vi.hoisted(() => ({
-  ensureAuthProfileStore: vi.fn(),
+  ensureAuthProfileStoreAsync: vi.fn(),
   listProviderUsagePluginDescriptors: vi.fn(),
   loadProviderUsageSummary: vi.fn(),
 }));
@@ -24,7 +24,7 @@ vi.mock("../../agents/auth-profiles.js", async () => {
   );
   return {
     ...actual,
-    ensureAuthProfileStore: mocks.ensureAuthProfileStore,
+    ensureAuthProfileStoreAsync: mocks.ensureAuthProfileStoreAsync,
     externalCliDiscoveryForConfigStatus: vi.fn(() => undefined),
   };
 });
@@ -112,7 +112,7 @@ describe("usage.status provider usage cache", () => {
     vi.spyOn(Date, "now").mockImplementation(() => now);
     vi.clearAllMocks();
     clearModelAuthStatusUsageCache();
-    mocks.ensureAuthProfileStore.mockImplementation(() => store);
+    mocks.ensureAuthProfileStoreAsync.mockImplementation(() => store);
     mocks.listProviderUsagePluginDescriptors.mockReturnValue([providerDescriptor]);
     mocks.loadProviderUsageSummary.mockImplementation(async () => ({
       updatedAt: now,
@@ -254,7 +254,7 @@ describe("usage.status provider usage cache", () => {
   it("shares the credential-bound snapshot and invalidates it on rotation", async () => {
     await runUsageStatus();
     const usage = readProviderUsageStaleWhileRevalidate({
-      ...getProviderUsageRuntimeSnapshot({ config }),
+      ...(await getProviderUsageRuntimeSnapshot({ config })),
       now,
     });
     expect(usage.get("openai")?.windows[0]?.usedPercent).toBe(10);

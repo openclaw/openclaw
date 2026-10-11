@@ -6,7 +6,7 @@ import { resolveGeneratedMediaMaxBytes } from "openclaw/plugin-sdk/media-generat
 import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
 import { resolvePositiveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import {
-  isProviderApiKeyConfigured,
+  isProviderApiKeyConfiguredAsync,
   type AuthProfileStore,
 } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
@@ -563,11 +563,11 @@ function hasUnavailableComfyHeaderSecret(value: unknown, cfg?: OpenClawConfig): 
   });
 }
 
-export function isComfyCapabilityConfigured(params: {
+export async function isComfyCapabilityConfigured(params: {
   cfg?: OpenClawConfig;
   agentDir?: string;
   capability: ComfyCapability;
-}): boolean {
+}): Promise<boolean> {
   const { config } = getComfyConfig(params.cfg);
   const capabilityConfig = getComfyCapabilityConfig(config, params.capability);
   const hasWorkflow = Boolean(
@@ -590,7 +590,7 @@ export function isComfyCapabilityConfigured(params: {
   if (configuredApiKey.status === "configured_unavailable") {
     return false;
   }
-  return isProviderApiKeyConfigured({
+  return isProviderApiKeyConfiguredAsync({
     provider: "comfy",
     cfg: params.cfg,
     agentDir: params.agentDir,

@@ -30,6 +30,7 @@ const tempDirs = useSessionStoreTempDirs(afterAll, "cli-dispatch-history-");
 
 vi.mock("../model-auth.js", () => ({
   ensureAuthProfileStore,
+  ensureAuthProfileStoreAsync: ensureAuthProfileStore,
   resolveAuthProfileOrder,
   resolveModelAuthMode,
 }));

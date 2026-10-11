@@ -185,7 +185,7 @@ async function runWithModelFallbackInternal<T>(
       ? await modelFallbackAuthRuntimeLoader.load()
       : null;
   const authStore = authRuntime
-    ? authRuntime.ensureAuthProfileStore(params.agentDir, {
+    ? await authRuntime.ensureAuthProfileStoreAsync(params.agentDir, {
         profileId: userLockedAuthProfileId,
         externalCli: externalCliDiscoveryScoped({
           config: params.cfg,

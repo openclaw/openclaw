@@ -149,7 +149,7 @@ type AuthProfileRowsReader = Pick<
   "read" | "assertCurrent"
 >;
 
-type PreparedAuthProfileStoreReads = {
+export type PreparedAuthProfileStoreReads = {
   effectiveAgentDir: string | undefined;
   env: NodeJS.ProcessEnv;
   options: LoadAuthProfileStoreOptions;
@@ -160,6 +160,7 @@ type PreparedAuthProfileStoreReads = {
     options: LoadAuthProfileStoreOptions,
   ) => Promise<AuthProfileStore>;
   assertCurrent: () => void;
+  materializePersonalProfile: (store: AuthProfileStore) => Promise<AuthProfileStore>;
 };
 
 function captureReadOptions(
@@ -497,6 +498,20 @@ export function createAuthProfileStoreRuntimeReader({
       assertCurrent();
       return store;
     };
+    const materializePersonalProfile = async (store: AuthProfileStore) => {
+      if (!personalProfileId) {
+        return store;
+      }
+      if (sharedPreparationFailure) {
+        throw sharedPreparationFailure.error;
+      }
+      const personalProfile = await readUserModelAuthProfileAsync(
+        personalProfileId,
+        sharedContext!,
+      );
+      assertCurrent();
+      return materializePreparedPersonalAuthProfile(store, personalProfileId, personalProfile);
+    };
     const loadPrepared = async () => {
       if (selectedAgentPath) {
         await readOwner(
@@ -562,18 +577,7 @@ export function createAuthProfileStoreRuntimeReader({
           },
         );
       const store = inCapturedScope(load);
-      if (!personalProfileId) {
-        return store;
-      }
-      if (sharedPreparationFailure) {
-        throw sharedPreparationFailure.error;
-      }
-      const personalProfile = await readUserModelAuthProfileAsync(
-        personalProfileId,
-        sharedContext!,
-      );
-      assertCurrent();
-      return materializePreparedPersonalAuthProfile(store, personalProfileId, personalProfile);
+      return materializePersonalProfile(store);
     };
     let result: Result<T | AuthProfileStore, unknown>;
     try {
@@ -593,6 +597,7 @@ export function createAuthProfileStoreRuntimeReader({
               },
               readStore,
               assertCurrent,
+              materializePersonalProfile,
             })
           : loadPrepared()),
       };

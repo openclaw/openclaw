@@ -65,6 +65,7 @@ vi.mock("./embedded-agent-runner/model.js", () => ({
 
 vi.mock("./auth-profiles/store-runtime.js", () => ({
   ensureAuthProfileStore: hoisted.ensureAuthProfileStoreMock,
+  ensureAuthProfileStoreAsync: hoisted.ensureAuthProfileStoreMock,
 }));
 
 vi.mock("./auth-profiles/usage.js", () => ({

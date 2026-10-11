@@ -125,11 +125,11 @@ describe("qwen video generation provider", () => {
   it.each([
     ["sk-ws-qwen-standard-key", "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"],
     ["sk-qwen-legacy-standard-key", "https://dashscope.aliyuncs.com/compatible-mode/v1"],
-  ])("advertises Standard Qwen video credentials %s", (apiKey, baseUrl) => {
+  ])("advertises Standard Qwen video credentials %s", async (apiKey, baseUrl) => {
     clearQwenAuthEnvironment();
 
     expect(
-      qwenVideoGenerationProvider.isConfigured?.({
+      await qwenVideoGenerationProvider.isConfiguredAsync?.({
         cfg: qwenConfig({
           apiKey,
           baseUrl,
@@ -143,11 +143,11 @@ describe("qwen video generation provider", () => {
     "https://coding.dashscope.aliyuncs.com/v1",
     "https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1",
     "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1",
-  ])("does not advertise Wan video through subscription endpoint %s", (baseUrl) => {
+  ])("does not advertise Wan video through subscription endpoint %s", async (baseUrl) => {
     clearQwenAuthEnvironment();
 
     expect(
-      qwenVideoGenerationProvider.isConfigured?.({
+      await qwenVideoGenerationProvider.isConfiguredAsync?.({
         cfg: qwenConfig({
           apiKey: "sk-ws-qwen-standard-key",
           baseUrl,
@@ -156,11 +156,11 @@ describe("qwen video generation provider", () => {
     ).toBe(false);
   });
 
-  it("does not advertise a Coding or Token Plan API key on a Standard endpoint", () => {
+  it("does not advertise a Coding or Token Plan API key on a Standard endpoint", async () => {
     clearQwenAuthEnvironment();
 
     expect(
-      qwenVideoGenerationProvider.isConfigured?.({
+      await qwenVideoGenerationProvider.isConfiguredAsync?.({
         cfg: qwenConfig({
           apiKey: "sk-sp-qwen-subscription-key",
           baseUrl: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
@@ -169,19 +169,19 @@ describe("qwen video generation provider", () => {
     ).toBe(false);
   });
 
-  it("does not advertise an inherited Coding Plan environment key", () => {
+  it("does not advertise an inherited Coding Plan environment key", async () => {
     clearQwenAuthEnvironment();
     vi.stubEnv("QWEN_API_KEY", "sk-sp-qwen-coding-plan-key");
 
-    expect(qwenVideoGenerationProvider.isConfigured?.({ cfg: {} })).toBe(false);
+    expect(await qwenVideoGenerationProvider.isConfiguredAsync?.({ cfg: {} })).toBe(false);
   });
 
-  it("keeps explicit Standard config above an inherited Coding Plan environment key", () => {
+  it("keeps explicit Standard config above an inherited Coding Plan environment key", async () => {
     clearQwenAuthEnvironment();
     vi.stubEnv("QWEN_API_KEY", "sk-sp-qwen-coding-plan-key");
 
     expect(
-      qwenVideoGenerationProvider.isConfigured?.({
+      await qwenVideoGenerationProvider.isConfiguredAsync?.({
         cfg: qwenConfig({
           auth: "api-key",
           apiKey: "sk-ws-qwen-standard-key",
@@ -215,7 +215,9 @@ describe("qwen video generation provider", () => {
         { filterExternalAuthProfiles: false, syncExternalCli: false },
       );
 
-      expect(qwenVideoGenerationProvider.isConfigured?.({ cfg: {}, agentDir })).toBe(expected);
+      expect(await qwenVideoGenerationProvider.isConfiguredAsync?.({ cfg: {}, agentDir })).toBe(
+        expected,
+      );
     } finally {
       clearRuntimeAuthProfileStoreSnapshots();
       await fs.rm(agentDir, { force: true, recursive: true });

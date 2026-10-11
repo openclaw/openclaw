@@ -6,7 +6,7 @@ import {
   resolveSessionAgentId,
   resolveAgentModelFallbacksOverride,
 } from "../agents/agent-scope.js";
-import { ensureAuthProfileStore } from "../agents/auth-profiles/store-runtime.js";
+import { ensureAuthProfileStoreAsync } from "../agents/auth-profiles/store-runtime.js";
 import { waitForContextWindowCacheLoad } from "../agents/context.js";
 import { resolveFastModeState } from "../agents/fast-mode.js";
 import { resolveAgentHarnessAutoSelectionHint } from "../agents/harness/auto-selection.js";
@@ -85,17 +85,17 @@ const loadStatusPluginHealthRuntime = createLazyPromise(
   () => import("./status-plugin-health.runtime.js"),
 );
 
-function resolveCodexSyntheticUsageAuthProfileId(params: {
+async function resolveCodexSyntheticUsageAuthProfileId(params: {
   profileId: string | undefined;
   cfg: OpenClawConfig;
   agentDir?: string;
-}): string | undefined {
+}): Promise<string | undefined> {
   const normalizedProfileId = params.profileId?.trim();
   if (!normalizedProfileId) {
     return undefined;
   }
   try {
-    const store = ensureAuthProfileStore(params.agentDir, {
+    const store = await ensureAuthProfileStoreAsync(params.agentDir, {
       allowKeychainPrompt: false,
       config: params.cfg,
       readOnly: true,
@@ -360,7 +360,7 @@ export async function buildStatusReplyParts(
       sessionHarnessId: sessionEntry?.agentHarnessId,
     });
   const codexUsageAuthProfileId = useCodexSyntheticUsage
-    ? resolveCodexSyntheticUsageAuthProfileId({
+    ? await resolveCodexSyntheticUsageAuthProfileId({
         profileId: sessionEntry?.authProfileOverride,
         cfg,
         agentDir: statusAgentDir,

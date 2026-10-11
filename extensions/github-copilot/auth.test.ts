@@ -14,7 +14,7 @@ vi.mock("openclaw/plugin-sdk/provider-auth", async (importOriginal) => {
   const { normalizeOptionalString } = await import("openclaw/plugin-sdk/string-coerce-runtime");
   return {
     coerceSecretRef: coerceSecretRefMock,
-    ensureAuthProfileStore: ensureAuthProfileStoreMock,
+    ensureAuthProfileStoreAsync: ensureAuthProfileStoreMock,
     findNormalizedProviderValue,
     listProfilesForProvider: listProfilesForProviderMock,
     normalizeOptionalSecretInput: normalizeOptionalString,

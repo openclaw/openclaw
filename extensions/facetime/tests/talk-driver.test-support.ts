@@ -121,7 +121,7 @@ vi.mock("openclaw/plugin-sdk/realtime-voice", () => ({
     transcript.splice(0, Math.max(0, transcript.length - maxEntries));
     return entry;
   }),
-  resolveConfiguredRealtimeVoiceProvider: mocks.resolveProvider,
+  resolveConfiguredRealtimeVoiceProviderAsync: mocks.resolveProvider,
   resolveRealtimeVoiceAgentConsultTools: vi.fn(
     (policy: string, customTools: Array<{ name: string }> = []) => [
       ...(policy === "none" ? [] : [{ name: "openclaw_agent_consult" }]),

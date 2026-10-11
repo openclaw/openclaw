@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { XAI_REALTIME_MAX_PENDING_PLAYBACK_MARKS } from "./realtime-voice-config.js";
 import { buildXaiRealtimeVoiceProvider } from "./realtime-voice-provider.js";
 
-const { FakeWebSocket, isProviderAuthProfileConfiguredMock, resolveApiKeyForProviderMock } =
+const { FakeWebSocket, isProviderAuthProfileConfiguredAsyncMock, resolveApiKeyForProviderMock } =
   await vi.hoisted(() => import("./realtime-voice-socket.test-support.js"));
 
 vi.mock("./ws-runtime.js", () => ({
@@ -11,7 +11,8 @@ vi.mock("./ws-runtime.js", () => ({
 }));
 
 vi.mock("openclaw/plugin-sdk/provider-auth", () => ({
-  isProviderAuthProfileConfigured: isProviderAuthProfileConfiguredMock,
+  isProviderAuthProfileConfigured: () => false,
+  isProviderAuthProfileConfiguredAsync: isProviderAuthProfileConfiguredAsyncMock,
 }));
 
 vi.mock("openclaw/plugin-sdk/provider-auth-runtime", () => ({
@@ -135,8 +136,8 @@ describe("buildXaiRealtimeVoiceProvider", () => {
 
   beforeEach(() => {
     FakeWebSocket.instances = [];
-    isProviderAuthProfileConfiguredMock.mockReset();
-    isProviderAuthProfileConfiguredMock.mockReturnValue(false);
+    isProviderAuthProfileConfiguredAsyncMock.mockReset();
+    isProviderAuthProfileConfiguredAsyncMock.mockResolvedValue(false);
     resolveApiKeyForProviderMock.mockReset();
     resolveApiKeyForProviderMock.mockResolvedValue({ apiKey: undefined });
     delete process.env.XAI_API_KEY;
@@ -274,8 +275,8 @@ describe("buildXaiRealtimeVoiceProvider", () => {
   });
 
   it("resolves realtime auth from the selected agent directory", async () => {
-    isProviderAuthProfileConfiguredMock.mockImplementation(
-      ({ agentDir }) => agentDir === "/tmp/openclaw-molty-agent",
+    isProviderAuthProfileConfiguredAsyncMock.mockImplementation(
+      async ({ agentDir }) => agentDir === "/tmp/openclaw-molty-agent",
     );
     resolveApiKeyForProviderMock.mockImplementation(async ({ agentDir }) => ({
       apiKey: agentDir === "/tmp/openclaw-molty-agent" ? "xai-molty" : undefined,
@@ -289,7 +290,11 @@ describe("buildXaiRealtimeVoiceProvider", () => {
       },
     };
     expect(
-      buildXaiRealtimeVoiceProvider().isConfigured({ cfg, providerConfig: {}, agentId: "molty" }),
+      await buildXaiRealtimeVoiceProvider().isConfiguredAsync?.({
+        cfg,
+        providerConfig: {},
+        agentId: "molty",
+      }),
     ).toBe(true);
     const bridge = createTestBridge({ cfg, agentId: "molty", providerConfig: {} });
     const { connecting, socket } = await startRealtimeBridge(bridge);

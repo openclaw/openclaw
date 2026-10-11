@@ -1,5 +1,6 @@
 import { AGENT_HARNESS_COMPAT_RECORDS } from "./agent-harness-records.js";
 import { AGENT_LIST_RUNTIME_PROJECTION_COMPAT_RECORDS } from "./agent-list-runtime-projection-records.js";
+import { AUTH_ASYNC_COMPAT_RECORD } from "./auth-async-record.js";
 import { BINDING_PERSISTENCE_COMPAT_RECORDS } from "./binding-persistence-records.js";
 import { CHANNEL_PAIRING_COMPAT_RECORD } from "./channel-pairing-record.js";
 import { DEPRECATION_MARKING_COMPAT_RECORDS } from "./deprecation-marking.js";
@@ -34,6 +35,7 @@ const ACTIVATION_HINT_METADATA = {
 export const PLUGIN_COMPAT_RECORDS = [
   ...PLUGIN_SDK_REMOVED_EXPORT_RECORDS,
   ...AGENT_HARNESS_COMPAT_RECORDS,
+  AUTH_ASYNC_COMPAT_RECORD,
   ...BINDING_PERSISTENCE_COMPAT_RECORDS,
   CHANNEL_PAIRING_COMPAT_RECORD,
   MENTION_INBOX_COMPAT_RECORD,

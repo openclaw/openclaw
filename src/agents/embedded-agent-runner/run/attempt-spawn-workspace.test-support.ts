@@ -643,7 +643,7 @@ vi.mock("../../custom-api-registry.js", () => ({
 }));
 
 vi.mock("../../model-auth.js", () => ({
-  resolveModelAuthMode: () => undefined,
+  resolveModelAuthModeAsync: () => undefined,
 }));
 
 vi.mock("../../model-tool-support.js", async (importOriginal) => ({

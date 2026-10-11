@@ -20,7 +20,7 @@ vi.mock("./commands-models-catalog.js", () => ({
   }),
 }));
 vi.mock("../../agents/model-auth-label.js", () => ({
-  resolveModelAuthLabel: () => undefined,
+  resolveModelAuthLabelAsync: () => undefined,
 }));
 vi.mock("../../channels/plugins/index.js", () => ({
   getChannelPlugin: () => undefined,

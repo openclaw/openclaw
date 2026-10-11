@@ -1,7 +1,8 @@
 import { resolveAgentDir } from "openclaw/plugin-sdk/agent-scope-runtime";
 import {
   isProviderAuthProfileConfigured,
-  isProviderApiKeyConfigured,
+  isProviderAuthProfileConfiguredAsync,
+  isProviderApiKeyConfiguredAsync,
 } from "openclaw/plugin-sdk/provider-auth";
 import {
   createXaiVideoGenerationProviderMetadata as createXaiVideoGenerationProviderMetadataCore,
@@ -21,11 +22,12 @@ export {
   isXaiVideo15Model,
 } from "./capability-provider-metadata-factory.js";
 export function createXaiVideoGenerationProviderMetadata() {
-  return createXaiVideoGenerationProviderMetadataCore({ isProviderApiKeyConfigured });
+  return createXaiVideoGenerationProviderMetadataCore({ isProviderApiKeyConfiguredAsync });
 }
 export function createXaiRealtimeVoiceProviderMetadata() {
   return createXaiRealtimeVoiceProviderMetadataCore({
     isProviderAuthProfileConfigured,
+    isProviderAuthProfileConfiguredAsync,
     resolveAgentDir,
   });
 }

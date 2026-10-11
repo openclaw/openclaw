@@ -6,7 +6,7 @@ import { uniqueStrings } from "@openclaw/normalization-core/string-normalization
 import { resolveDefaultAgentDir } from "../agents/agent-scope-config.js";
 import { authProfileRuntimeMode } from "../agents/auth-profiles/runtime-scope.js";
 import { getRuntimeAuthProfileStoreSnapshotCore } from "../agents/auth-profiles/runtime-snapshots.js";
-import { hasAnyAuthProfileStoreSourceAsync } from "../agents/auth-profiles/source-check.js";
+import { ensureAuthProfileStoreWithoutExternalProfilesAsync } from "../agents/auth-profiles/store-runtime.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import { hasAuthProfileForProvider } from "../agents/tools/model-config.helpers.js";
 import {
@@ -73,14 +73,18 @@ function hasEntryCredential(
     resolveEnvValue: (configuredEnvVarId) =>
       (configuredEnvVarId ? readWebProviderEnvValue([configuredEnvVarId]) : undefined) ??
       readWebProviderEnvValue(provider.envVars),
-    resolveProviderAuthValue: (providerId) =>
-      hasAuthProfileForProvider({
+    resolveProviderAuthValue: (providerId) => {
+      if (!authStore) {
+        resolveAuthProfileStoreSource?.();
+      }
+      return hasAuthProfileForProvider({
         provider: providerId,
         authStore,
         authProfileStoreSource: resolveAuthProfileStoreSource?.(),
         agentDir:
           agentDir?.trim() || (authStore ? undefined : resolveDefaultAgentDir(config ?? {})),
-      }),
+      });
+    },
   });
 }
 
@@ -193,6 +197,7 @@ function resolveRuntimePreferredWebSearchProviderId(params: {
   runtimeWebSearch?: RuntimeWebSearchMetadata;
   providers?: PluginWebSearchProviderEntry[];
   agentDir?: string;
+  authStore?: AuthProfileStore;
   resolveAuthProfileStoreSource?: () => boolean;
 }): string | undefined {
   const runtimeProviderId = normalizeOptionalLowercaseString(
@@ -219,7 +224,7 @@ function resolveRuntimePreferredWebSearchProviderId(params: {
       provider,
       params.config,
       params.agentDir,
-      undefined,
+      params.authStore,
       params.resolveAuthProfileStoreSource,
     )
   ) {
@@ -340,13 +345,13 @@ async function resolveWebSearchCandidates(
     }
     // Resolve the earlier profile gate before reporting a later selection error.
   }
-  const authProfileStoreSource = await hasAnyAuthProfileStoreSourceAsync(agentDir);
+  const authStore = await ensureAuthProfileStoreWithoutExternalProfilesAsync(agentDir);
   return selectWebSearchCandidates(
-    options,
+    { ...options, authStore },
     context,
     providers,
     agentDir,
-    () => authProfileStoreSource,
+    () => true,
   );
 }
 
@@ -369,11 +374,13 @@ function selectWebSearchCandidates(
         runtimeWebSearch,
         providers,
         agentDir,
+        authStore: options?.authStore,
         resolveAuthProfileStoreSource,
       }),
       resolveWebSearchProviderId({
         config,
         agentDir,
+        authStore: options?.authStore,
         search,
         providers,
         resolveAuthProfileStoreSource,
@@ -402,7 +409,7 @@ function selectWebSearchCandidates(
           provider,
           config,
           agentDir,
-          undefined,
+          options?.authStore,
           resolveAuthProfileStoreSource,
         ),
       );
@@ -453,12 +460,14 @@ export function hasConfiguredWebSearchProvider(
   );
 }
 
-/** Prepare agent-scoped source facts without synchronous store discovery in tool assembly. */
+/** Prepare the agent-owned store once before synchronous provider selection. */
 export async function prepareWebSearchConfiguration(
   options: WebSearchConfigurationParams = {},
-  prepareAuthSource: (agentDir: string) => Promise<boolean> = hasAnyAuthProfileStoreSourceAsync,
+  prepareAuthStore: (
+    agentDir: string,
+  ) => Promise<AuthProfileStore> = ensureAuthProfileStoreWithoutExternalProfilesAsync,
 ): Promise<boolean> {
-  if (options.authStore || options.resolveAuthProfileStoreSource) {
+  if (options.authStore) {
     return hasConfiguredWebSearchProvider(options);
   }
   const agentDir = options.agentDir?.trim() || resolveDefaultAgentDir(options.config ?? {});
@@ -481,10 +490,11 @@ export async function prepareWebSearchConfiguration(
   if (configured || !needsAuthSource) {
     return configured;
   }
-  const hasSource = await prepareAuthSource(agentDir);
+  const preparedAuthStore = await prepareAuthStore(agentDir);
   return hasConfiguredWebSearchProvider({
     ...options,
-    resolveAuthProfileStoreSource: () => hasSource,
+    agentDir,
+    authStore: preparedAuthStore,
   });
 }
 

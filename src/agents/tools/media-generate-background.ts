@@ -32,7 +32,7 @@ import {
   applyAgentDefaultModelConfig,
   coerceToolModelConfig,
   hasToolModelConfig,
-  prepareToolAuthProfileStoreSource,
+  prepareToolAuthProfileStore,
   type ToolModelConfig,
 } from "./model-config.helpers.js";
 
@@ -184,9 +184,9 @@ export async function prepareMediaGenerationTask<
       : cfg,
   );
   const prepare = async () => {
-    const authProfileStoreSource = configuredModel
-      ? options?.authProfileStoreSource
-      : await prepareToolAuthProfileStoreSource(options);
+    const authStore = configuredModel
+      ? options?.authProfileStore
+      : await prepareToolAuthProfileStore(options);
     signal?.throwIfAborted();
     resources?.assertOpen();
     const modelConfig =
@@ -195,8 +195,7 @@ export async function prepareMediaGenerationTask<
         cfg,
         workspaceDir: options?.workspaceDir,
         agentDir: options?.agentDir,
-        authStore: options?.authProfileStore,
-        authProfileStoreSource,
+        authStore,
         modelConfig: cfg.agents?.defaults?.mediaModels?.[generationLabel],
         modelOverride: model,
         providers: params.resolveProviders(resources),

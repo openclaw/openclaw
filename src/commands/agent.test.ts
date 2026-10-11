@@ -100,10 +100,14 @@ vi.mock("../config/io.js", () => ({
   readConfigFileSnapshotForWrite: configIoMocks.readConfigFileSnapshotForWrite,
 }));
 
+// mock-isolation: Command fixtures use an empty credential map instead of host auth state.
 vi.mock("../agents/auth-profiles/store-runtime.js", () => {
   const createEmptyStore = () => ({ version: 1, profiles: {} });
   return {
     ensureAuthProfileStore: vi.fn(createEmptyStore),
+    ensureAuthProfileStoreAsync: vi.fn(async () => createEmptyStore()),
+    ensureAuthProfileStoreForLocalUpdateAsync: vi.fn(async () => createEmptyStore()),
+    ensureAuthProfileStoreWithoutExternalProfilesAsync: vi.fn(async () => createEmptyStore()),
     ensureAuthProfileStoreForLocalUpdate: vi.fn(createEmptyStore),
     loadAuthProfileStore: vi.fn(createEmptyStore),
     loadAuthProfileStoreForRuntime: vi.fn(createEmptyStore),

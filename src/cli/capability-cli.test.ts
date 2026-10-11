@@ -149,11 +149,11 @@ const mocks = vi.hoisted(() => ({
     attempts: [],
   })),
   setTtsProvider: vi.fn(),
-  getTtsProvider: vi.fn(() => "openai"),
+  getTtsProviderAsync: vi.fn(() => "openai"),
   listSpeechProviders: vi.fn(() => []),
   setTtsPersona: vi.fn(),
   resolveTtsConfig: vi.fn(() => ({ providerConfigs: {} })),
-  resolveExplicitTtsOverrides: vi.fn(
+  resolveExplicitTtsOverridesAsync: vi.fn(
     ({
       provider,
       modelId,
@@ -401,7 +401,7 @@ vi.mock("../video-generation/runtime.js", () => ({
 
 vi.mock("../tts/tts.js", () => ({
   getTtsPersona: vi.fn(() => undefined),
-  getTtsProvider: mocks.getTtsProvider,
+  getTtsProviderAsync: mocks.getTtsProviderAsync,
   listTtsPersonas: vi.fn(() => []),
   listSpeechVoices: vi.fn(async () => []),
   resolveTtsConfig: mocks.resolveTtsConfig,
@@ -409,7 +409,7 @@ vi.mock("../tts/tts.js", () => ({
   setTtsEnabled: vi.fn(),
   setTtsPersona: mocks.setTtsPersona,
   setTtsProvider: mocks.setTtsProvider,
-  resolveExplicitTtsOverrides: mocks.resolveExplicitTtsOverrides,
+  resolveExplicitTtsOverridesAsync: mocks.resolveExplicitTtsOverridesAsync,
   textToSpeech: mocks.textToSpeech,
 }));
 
@@ -1825,7 +1825,7 @@ describe("capability cli", () => {
 
   it("preserves explicit TTS selection without inventing overrides", async () => {
     await convertTts("--provider", "xiaomi");
-    expect(mocks.resolveExplicitTtsOverrides).toHaveBeenCalledWith(
+    expect(mocks.resolveExplicitTtsOverridesAsync).toHaveBeenCalledWith(
       expect.objectContaining({ provider: "xiaomi", modelId: undefined }),
     );
     expect(firstTextToSpeechCall()?.disableFallback).toBe(true);
