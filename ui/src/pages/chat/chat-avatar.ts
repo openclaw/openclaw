@@ -10,11 +10,11 @@ import {
   resolveLocalUserName,
 } from "../../app/user-identity.ts";
 import {
+  renderIdentityAvatar,
   identityAvatarClass,
   renderAgentIdentityAvatar,
   renderAgentAvatarHat,
   renderIdentityAvatarImage,
-  resolveIdentityAvatarView,
 } from "../../components/identity-avatar-view.ts";
 import { resolveAgentTextAvatar } from "../../lib/agents/display.ts";
 import type { AssistantIdentity } from "../../lib/assistant-identity.ts";
@@ -57,7 +57,9 @@ export function renderChatAvatar(
     if (sender.identity?.type === "agent") {
       return renderChatAuthorAvatar(sender, "chat-avatar assistant");
     }
-    return renderUserAvatarSlot(resolveIdentityAvatarView(sender), formatSenderLabel(sender) ?? "");
+    return renderIdentityAvatar(sender, (view) =>
+      renderUserAvatarSlot(view, formatSenderLabel(sender) ?? ""),
+    );
   }
   if (normalized === "assistant") {
     const name = assistant?.name?.trim() || "Assistant";

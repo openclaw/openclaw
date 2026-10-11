@@ -17,6 +17,7 @@ import type {
   SessionGroupMutationResult,
 } from "../../lib/sessions/session-capability.ts";
 import { registerSessionPluginAction } from "../../test-helpers/control-ui-plugin-action.ts";
+import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import {
   gatewayHelloForMethods,
   SESSION_MUTATION_TEST_METHODS,
@@ -47,7 +48,7 @@ const sessionRow = (key: string, extra: Partial<GatewaySessionRow> = {}): Gatewa
   ...extra,
 });
 async function mountMutation(sessions = createSessions()) {
-  const connection = createGateway({} as GatewayBrowserClient);
+  const connection = createGateway();
   const context = createContext(connection.gateway, sessions);
   return { page: await createPage(context), connection, context, sessions };
 }
@@ -108,7 +109,7 @@ describe("sessions page lifecycle", () => {
   it("pins from the page menu without changing shared pin metadata", async () => {
     const row = sessionRow("personal-pin", { pinned: true, sharingRole: "viewer" });
     const sessions = createSessions();
-    const connection = createGateway({} as GatewayBrowserClient);
+    const connection = createGateway();
     const context = createContext(connection.gateway, sessions);
     const page = await createRenderedPage(context, sessionsResult([row], 1));
     const menu = await openRowMenu(page, row);
@@ -269,7 +270,7 @@ describe("sessions page lifecycle", () => {
   it("patches color from the rendered session menu", async () => {
     const target = sessionRow("color");
     const sessions = createSessions();
-    const context = createContext(createGateway({} as GatewayBrowserClient).gateway, sessions);
+    const context = createContext(createGateway().gateway, sessions);
     const page = await createRenderedPage(context, sessionsResult([target], 1));
     const menu = await openRowMenu(page, target);
     const item = menu.querySelector<HTMLButtonElement>(
@@ -287,10 +288,7 @@ describe("sessions page lifecycle", () => {
 
   it("hides pinning for a lineage child", async () => {
     const target = sessionRow("dashboard:child", { parentSessionKey: "agent:main:parent" });
-    const context = createContext(
-      createGateway({} as GatewayBrowserClient).gateway,
-      createSessions(),
-    );
+    const context = createContext(createGateway().gateway, createSessions());
     const page = await createRenderedPage(context, sessionsResult([target], 1));
     expect((await openRowMenu(page, target)).querySelector('[value="toggle-pin"]')).toBeNull();
   });
@@ -575,7 +573,7 @@ describe("sessions page new group", () => {
       groupsPut: vi.fn(groupsPut),
       patch: vi.fn(async () => ({ ok: true as const, key, path: "", entry: { sessionId } })),
     });
-    const connection = createGateway({} as GatewayBrowserClient);
+    const connection = createGateway();
     connection.emit({
       hello: gatewayHelloForMethods(
         ["sessions.groups.put", "sessions.patch"],
@@ -623,7 +621,7 @@ describe("sessions page new group", () => {
     const { connection, page, sessions, messages } = await mount(groupsPut);
     const created = page.requestNewCategory(key);
     await vi.waitFor(() => expect(sessions.groupsPut).toHaveBeenCalledOnce());
-    connection.emit({ client: {} as GatewayBrowserClient });
+    connection.emit({ client: createTestGatewayClient(async () => ({ profiles: [] })) });
     pending.resolve("completed");
     await created;
     expect(sessions.patch).not.toHaveBeenCalled();
@@ -705,10 +703,7 @@ describe("sessions page plugin actions", () => {
     const row = sessionRow("review", { label: "Ready" });
     const managed = createManagedSessions();
     managed.sessions.state.result = sessionsResult([{ ...row, label: "Primary roster" }], 1);
-    const context = createContext(
-      createGateway({} as GatewayBrowserClient).gateway,
-      managed.sessions,
-    );
+    const context = createContext(createGateway().gateway, managed.sessions);
     const run = vi.fn<ControlUiAction["run"]>();
     const { entry } = registerSessionPluginAction(context, {
       id: "review",
@@ -789,7 +784,7 @@ describe("sessions page plugin actions", () => {
 
   it("revokes plugin navigation after detaching", async () => {
     const pending = createDeferred();
-    const mutableGateway = createGateway({} as GatewayBrowserClient);
+    const mutableGateway = createGateway();
     const context = createContext(mutableGateway.gateway, createSessions());
     const run = vi.fn(
       async ({ host, sessionKey, session }: Parameters<ControlUiAction["run"]>[0]) => {
