@@ -46,7 +46,6 @@ it.each(["settled", "retained"] as const)(
     const observed = acquisition.catch((error: unknown) => error);
     try {
       await cleanupEntered.promise;
-      const releaseReplacement = instance.reserveReplacement();
       expect(instance.retainedWorkCount).toBe(1);
       cleanup.reject(cleanupError);
       expect(await observed).toMatchObject({
@@ -58,7 +57,6 @@ it.each(["settled", "retained"] as const)(
       } else {
         expect(instance.retainedWorkCount).toBe(0);
       }
-      releaseReplacement();
     } finally {
       cleanup.reject(cleanupError);
       await observed;

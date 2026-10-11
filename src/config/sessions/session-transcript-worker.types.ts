@@ -20,6 +20,8 @@ import type {
   TrajectoryRetentionWorkerInput,
   TrajectoryRuntimeRetentionPlan,
 } from "../../trajectory/runtime-retention.contract.js";
+import type { SqliteTrajectoryRuntimeReadScope } from "../../trajectory/runtime-store.contract.js";
+import type { TrajectoryEvent } from "../../trajectory/types.js";
 import type {
   SessionActivitySummaryBatchInput,
   SessionActivitySummaryBatchResult,
@@ -302,9 +304,16 @@ type SessionBranchSummaryWorkerInput = {
   request: Omit<SessionBranchSummaryReadRequest, "database">;
 };
 
+type TrajectoryEventsWorkerInput = {
+  kind: "trajectory-events";
+  database: { agentId: string; path: string };
+  scope: SqliteTrajectoryRuntimeReadScope;
+};
+
 export type SessionHistoryWorkerInput =
   | SessionRetirementReadWorkerInput
   | TrajectoryRetentionWorkerInput
+  | TrajectoryEventsWorkerInput
   | SessionCleanupReadInput
   | BoardSnapshotWorkerInput
   | BoardWidgetDocumentWorkerInput
@@ -391,6 +400,7 @@ export type SessionTranscriptWorkerValues = SessionTranscriptInventoryWorkerValu
       kind: "session-retirement-read";
       result: SessionRetirementReadResult;
     };
+    "trajectory-events": { kind: "trajectory-events"; events: TrajectoryEvent[] };
     "trajectory-retention": {
       kind: "trajectory-retention";
       plan: TrajectoryRuntimeRetentionPlan;
@@ -555,6 +565,10 @@ export type SessionHistoryWorkerDatabase = SessionTranscriptInventoryReaders &
     readRetirement: CancellableSessionHistoryReader<
       SessionRetirementReadWorkerInput,
       SessionRetirementReadResult
+    >;
+    readTrajectoryEvents: CancellableSessionHistoryReader<
+      TrajectoryEventsWorkerInput,
+      TrajectoryEvent[]
     >;
     readTrajectoryRetention: (
       input: Omit<TrajectoryRetentionWorkerInput, "kind" | "database">,
