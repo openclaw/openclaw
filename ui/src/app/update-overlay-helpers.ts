@@ -293,7 +293,7 @@ export function projectUpdateStatusResponse(
   };
 }
 
-export function projectUpdateCheckoutResponse(
+function projectUpdateCheckoutResponse(
   response: UpdateRestartStatusResponse,
   current: { heldUpdateCampaignId: string | null; updateSchedule?: UpdateScheduleState | null },
 ) {
