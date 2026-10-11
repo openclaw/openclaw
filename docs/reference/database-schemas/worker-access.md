@@ -541,6 +541,16 @@ transcript receipts cannot certify complete pending-input and model-context
 facts. Native, SDK, recovery, and maintenance writers keep their existing
 publication and final-authority guards during this incremental cutover.
 
+Phase C entry readers share this bounded MAIN residency. Eligible exact-entry
+and ordered-cohort reads reuse complete actor state or its entry-only projection;
+a cold miss loads the requested entries in one existing worker batch. Complete
+entry commit receipts refresh the entry projection without claiming transcript,
+membership, or pending-input coverage. Missing ancillary facts still use the
+existing reader. Scoped receipt counters keep unrelated session writes from
+evicting resident entries, while a before/after write-token check preserves one
+consistent cohort. Physical-source and live-authority checks remain with the
+caller. Schemas, stored data, and update behavior are unchanged.
+
 Confirmed rollback leaves committed state intact. A lost reply reconciles
 against native commit evidence; an unknown outcome fences further commands and
 disclosure until a read rehydrates the original owner. Neither path replays the
@@ -4453,17 +4463,28 @@ history worker, with foreground priority and row-generation checks before
 publication. The host evaluates fallback notices using its current runtime plugin
 aliases; configuration and model policy do not travel to the read worker.
 
+Targeted Memory transcript notifications queue session identities directly. The
+indexing owner resolves their corpus and forgetting tombstones once when the
+queued sync runs, then uses that same snapshot for archive selection and indexing.
+An append or forgetting operation committed while the notification waits is
+therefore included without an earlier duplicate corpus read. Full startup scans,
+custom-store selection, archive cleanup, and forgetting semantics are unchanged.
+
 List pages wait for current selection metadata, then materialize their selected
 rows. Concurrent pages share bounded exact-row preparation; an admitted background
 batch may finish, and the remaining display drain resumes after those requests
 release their priority. Catalog-only replacement
 reuses complete accepted database facts for live resident rows while rebuilding
 their selected model presentation, without another worker transfer. Stored-data, configuration,
-physical-store, and lifecycle invalidations revoke those facts. Transcript updates
-revoke watermarks immediately even inside a coalesced presentation window. Cold
-archives retain no complete snapshot; exact archive reads remain bounded by the
-existing materialization cache. Schema, persisted data, and update behavior are
-unchanged.
+physical-store, and lifecycle invalidations revoke those facts. Entry-only receipts
+retain Board and transcript facts for the same session lifecycle; ACP and workspace
+facts remain reusable while their bindings are unchanged. Canonical transcript
+receipts replace the retained watermark before observers run, so summary freshness
+does not require another row read. Unmatched transcript notifications invalidate
+the watermark and use the existing bounded refresh. Summary-free streams keep
+their coalesced presentation window. Cold archives retain no complete snapshot;
+exact archive reads remain bounded by the existing materialization cache. Schema,
+persisted data, and update behavior are unchanged.
 
 Durable keyed RPCs prepare only their selected dirty or archived rows through the
 worker before synchronous presentation; placement waits recheck that preparation.
