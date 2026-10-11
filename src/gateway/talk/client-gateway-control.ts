@@ -19,6 +19,7 @@ import type {
   RealtimeVoiceAgentConsultRunner,
   RealtimeVoiceCloseDisposition,
   RealtimeVoiceToolCallEvent,
+  RealtimeVoiceTranscriptMetadata,
 } from "../../talk/provider-types.js";
 import {
   createRealtimeVoiceSessionHarness,
@@ -383,7 +384,12 @@ export function createTalkClientGatewayControlOwner(params: {
     rejectToolCall(event.callId, `Unsupported realtime Talk tool: ${event.name}`);
   };
 
-  const handleTranscript = (role: "user" | "assistant", text: string, final: boolean): void => {
+  const handleTranscript = (
+    role: "user" | "assistant",
+    text: string,
+    final: boolean,
+    metadata?: RealtimeVoiceTranscriptMetadata,
+  ): void => {
     if (!acceptingProviderTranscripts || (signal.aborted && !final)) {
       return;
     }
@@ -402,6 +408,8 @@ export function createTalkClientGatewayControlOwner(params: {
               ? "transcript.done"
               : "transcript.delta",
         turnId,
+        itemId: metadata?.itemId,
+        parentId: metadata?.responseId,
         payload: role === "assistant" ? { text } : { role, text },
         final,
       });

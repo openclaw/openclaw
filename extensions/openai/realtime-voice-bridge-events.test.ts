@@ -459,6 +459,42 @@ describe("OpenAI realtime voice bridge events", () => {
     await bridge.close();
   });
 
+  it("forwards provider item and response ids with transcripts", async () => {
+    const onTranscript = vi.fn();
+    const bridge = createNativeBridge({ onTranscript });
+    const socket = await connectReadyBridge(bridge);
+
+    emitServerEvent(socket, {
+      type: "conversation.item.input_audio_transcription.delta",
+      item_id: "item_user",
+      delta: "what time",
+    });
+    emitServerEvent(socket, {
+      type: "conversation.item.input_audio_transcription.completed",
+      item_id: "item_user",
+      transcript: "what time is it",
+    });
+    emitServerEvent(socket, {
+      type: "response.output_audio_transcript.delta",
+      item_id: "item_assistant",
+      response_id: "resp_1",
+      delta: "It is",
+    });
+    emitServerEvent(socket, {
+      type: "response.output_audio_transcript.done",
+      item_id: "item_assistant",
+      response_id: "resp_1",
+      transcript: "It is noon.",
+    });
+
+    expect(onTranscript.mock.calls).toEqual([
+      ["user", "what time", false, { itemId: "item_user" }],
+      ["user", "what time is it", true, { itemId: "item_user" }],
+      ["assistant", "It is", false, { itemId: "item_assistant", responseId: "resp_1" }],
+      ["assistant", "It is noon.", true, { itemId: "item_assistant", responseId: "resp_1" }],
+    ]);
+  });
+
   it("surfaces input transcription failures with their provider error details", async () => {
     const onError = vi.fn();
     const onEvent = vi.fn();

@@ -182,6 +182,13 @@ export type RealtimeVoicePlaybackItem = {
   audioEndMs: number;
 };
 
+export type RealtimeVoiceTranscriptMetadata = {
+  /** Replaces provisional text; omission retains incremental deltas. */
+  textMode?: "snapshot";
+  itemId?: string;
+  responseId?: string;
+};
+
 export type RealtimeVoiceBridgeCallbacks = {
   onAudio: (audio: Buffer, metadata?: RealtimeVoiceAudioChunkMetadata) => void;
   /** Retained native items in playback order; queued items have zero consumed duration.
@@ -191,12 +198,11 @@ export type RealtimeVoiceBridgeCallbacks = {
   onClearAudio: (reason?: RealtimeVoiceAudioClearReason) => void;
   /** Scoped acknowledgments are valid only for the provider connection that emitted the mark. */
   onMark?: (markName: string, acknowledge?: () => void) => void;
-  /** Snapshot metadata replaces provisional text; omission retains incremental deltas. */
   onTranscript?: (
     role: RealtimeVoiceRole,
     text: string,
     isFinal: boolean,
-    metadata?: { textMode: "snapshot" },
+    metadata?: RealtimeVoiceTranscriptMetadata,
   ) => void;
   /** Synchronously admits native control; only consult permits task fallthrough. Respond is call-bound. */
   handleDelegationInput?: (
