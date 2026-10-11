@@ -1997,10 +1997,16 @@ describe("buildGatewayCronService", () => {
         const completion = sendCronAnnouncePayloadStrictMock.mock.calls[0]?.[0];
         const failure = sendCronAnnouncePayloadStrictMock.mock.calls[1]?.[0];
         expect(completion?.completion).toBeDefined();
-        expect(completion?.payload.text).toBe("scheduled result");
+        expect(completion?.payload).toEqual([
+          expect.objectContaining({ text: "scheduled result" }),
+        ]);
         expect(deliverySignal?.aborted).toBe(true);
         expect(failure?.completion).toBeUndefined();
-        expect(failure?.payload.text).toContain('Automation "cancelled" failed 1 times');
+        expect(failure?.payload).toEqual(
+          expect.objectContaining({
+            text: expect.stringContaining('Automation "cancelled" failed 1 times'),
+          }),
+        );
         expect(failure?.abortSignal).not.toBe(deliverySignal);
         expect(failure?.abortSignal?.aborted).toBe(false);
         expect(state.cron.getJob(job.id)).toMatchObject({
