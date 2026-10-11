@@ -7,8 +7,10 @@ import type {
   SqliteWorkerOperationAdmission,
 } from "../../infra/sqlite-worker-operation-admission.js";
 import type { RetainedWorkerTransactionAdmission } from "../../infra/sqlite-worker-operation-settlement.js";
+import { projectSessionActorAuthority } from "./session-actor-command.js";
 import type {
   SessionActorAuthority,
+  SessionActorAuthorityFacts,
   SessionActorCommandContext,
   SessionActorCommitObserver,
   SessionActorHotState,
@@ -118,7 +120,7 @@ export function createSqliteSessionActorExecutor(
     observe?: (
       native: NativeAdmission,
       stage: "transaction" | "commit",
-      state: SessionActorHotState,
+      state: SessionActorAuthorityFacts,
       final: boolean,
     ) => void,
   ) => {
@@ -146,7 +148,7 @@ export function createSqliteSessionActorExecutor(
           throw new Error("Session actor admission belongs to another target");
         }
         // SAFETY: The private MessagePort already detached this snapshot from the paired kernel.
-        const snapshot = facts.snapshot as SessionActorHotState;
+        const snapshot = facts.snapshot as SessionActorAuthorityFacts;
         authority.authorize(request.stage, structuredClone(snapshot), facts.publication);
         observe?.(native, request.stage, snapshot, facts.final === true);
       } else if (
@@ -211,8 +213,8 @@ export function createSqliteSessionActorExecutor(
     type Outcome = SessionActorOutcome<SessionActorPhaseResults[Phase]>;
     const selected: {
       native?: NativeAdmission;
-      transactionSnapshot?: SessionActorHotState;
-      commitSnapshot?: SessionActorHotState;
+      transactionSnapshot?: SessionActorAuthorityFacts;
+      commitSnapshot?: SessionActorAuthorityFacts;
     } = {};
     let running: Promise<Outcome> | undefined;
     let committed: Extract<Outcome, { kind: "committed" }> | undefined;
@@ -278,7 +280,17 @@ export function createSqliteSessionActorExecutor(
                   selected.transactionSnapshot.version.epoch &&
                 selected.commitSnapshot.version.sequence ===
                   selected.transactionSnapshot.version.sequence + 1 &&
-                isDeepStrictEqual(receipt.postimage, selected.commitSnapshot)
+                isRecord(receipt.postimage) &&
+                isDeepStrictEqual(
+                  {
+                    target: receipt.postimage.target,
+                    version: receipt.postimage.version,
+                    entry: receipt.postimage.entry,
+                    writeToken: receipt.postimage.writeToken,
+                    dependencySessionIds: receipt.postimage.dependencySessionIds,
+                  },
+                  selected.commitSnapshot,
+                )
               ) {
                 // SAFETY: The paired native receipt owns the result type; the checks above match its command and postimage.
                 committed = structuredClone(evidence) as Extract<Outcome, { kind: "committed" }>;
@@ -300,7 +312,10 @@ export function createSqliteSessionActorExecutor(
                   (reply.value.kind === "stale-version" &&
                     captured.expected !== undefined &&
                     isDeepStrictEqual(reply.value.expected, captured.expected) &&
-                    isDeepStrictEqual(reply.value.postimage, selected.transactionSnapshot) &&
+                    isDeepStrictEqual(
+                      projectSessionActorAuthority(reply.value.postimage),
+                      selected.transactionSnapshot,
+                    ) &&
                     !isDeepStrictEqual(reply.value.postimage.version, captured.expected))) &&
                 (settled.kind === "not-entered" ||
                   native.admission.settlement?.kind === "completed")
