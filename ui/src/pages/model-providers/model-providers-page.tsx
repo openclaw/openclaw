@@ -1,7 +1,7 @@
 import { createEffect, createMemo, createSignal, onCleanup, onSettled, untrack } from "solid-js";
 import type { ApplicationContext } from "../../app/context-types.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
-import { defineSolidBridge } from "../../lit/solid-bridge.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../../lit/solid-bridge.ts";
 import { ModelProvidersController } from "./model-providers-controller.ts";
 import type { ModelProvidersRouteData } from "./route.ts";
 import {
@@ -54,6 +54,12 @@ export type ModelProvidersPageProps = {
   routeData?: ModelProvidersRouteData;
   loaderPending?: boolean;
 };
+
+declare global {
+  interface HTMLElementTagNameMap {
+    "openclaw-model-providers-page": SolidBridgeElement<ModelProvidersPageProps>;
+  }
+}
 
 export function ModelProvidersPageBody(props: ModelProvidersPageProps & { host: HTMLElement }) {
   const context: ApplicationContext = useApplication();

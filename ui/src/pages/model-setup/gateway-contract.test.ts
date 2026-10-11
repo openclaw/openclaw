@@ -1,20 +1,20 @@
 /* @vitest-environment jsdom */
-import "../../../ui/src/test-helpers/lit-warnings.setup.ts";
+import "../../test-helpers/lit-warnings.setup.ts";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { i18n } from "../../../ui/src/i18n/index.ts";
-import { createFirstRunContext } from "../../../ui/src/pages/model-setup/model-setup-first-run.test-support.ts";
-import { ModelSetupPage } from "../../../ui/src/pages/model-setup/model-setup-page.ts";
-import { createApplicationContextProvider } from "../../../ui/src/test-helpers/application-context.ts";
-import { createStorageMock } from "../../../ui/src/test-helpers/storage.ts";
-import { waitForFast } from "../../../ui/src/test-helpers/wait-for.ts";
-import { applyWizardMetadata } from "../../commands/onboard-helpers.js";
-import { createConfigFileSnapshot } from "../../config/io.snapshot-shared.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { loadPluginManifest } from "../../plugins/manifest.js";
-import { initializeNativeSessionCatalogPreferences } from "../../plugins/native-session-catalog-config.js";
-import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
-import { systemAgentHandlers } from "./system-agent.js";
+import { applyWizardMetadata } from "../../../../src/commands/onboard-helpers.js";
+import { createConfigFileSnapshot } from "../../../../src/config/io.snapshot-shared.js";
+import "./model-setup-page.tsx";
+import type { OpenClawConfig } from "../../../../src/config/types.openclaw.js";
+import { systemAgentHandlers } from "../../../../src/gateway/server-methods/system-agent.js";
+import { loadPluginManifest } from "../../../../src/plugins/manifest.js";
+import { initializeNativeSessionCatalogPreferences } from "../../../../src/plugins/native-session-catalog-config.js";
+import { createPluginMetadataSnapshotFixture } from "../../../../src/plugins/plugin-metadata.test-support.js";
+import { i18n } from "../../i18n/index.ts";
+import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
+import { createStorageMock } from "../../test-helpers/storage.ts";
+import { createFirstRunContext } from "./model-setup-first-run.test-support.ts";
 
 const braveManifestResult = loadPluginManifest(path.resolve("extensions/brave"));
 if (!braveManifestResult.ok) {
@@ -28,8 +28,8 @@ const fixture = vi.hoisted(() => ({
   additionalCatalog: false,
   providerCapabilities: false,
 }));
-vi.mock("../../config/config.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../config/config.js")>()),
+vi.mock("../../../../src/config/config.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../../src/config/config.js")>()),
   readConfigFileSnapshotWithPluginMetadata: async () => ({
     snapshot: createConfigFileSnapshot({
       path: "/tmp/synthetic-onboarding/openclaw.json",
@@ -80,15 +80,16 @@ vi.mock("../../config/config.js", async (importOriginal) => ({
     }),
   }),
 }));
-vi.mock("../../plugins/provider-install-catalog.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../plugins/provider-install-catalog.js")>()),
+vi.mock("../../../../src/plugins/provider-install-catalog.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../../src/plugins/provider-install-catalog.js")>()),
   resolveProviderInstallCatalogEntries: () => [],
 }));
-vi.mock("../../system-agent/setup-inference.js", () => ({
+vi.mock("../../../../src/system-agent/setup-inference.js", () => ({
   // Replace worker/process discovery only. Actual handler parameters, authored
   // config interpretation, consent decision, RPC client and UI all compose here.
   detectSetupInference: async (_deps: unknown, agentId?: string) => {
-    const { detectSetupInference } = await import("../../system-agent/setup-inference-detect.js");
+    const { detectSetupInference } =
+      await import("../../../../src/system-agent/setup-inference-detect.js");
     return detectSetupInference(
       {
         detectInferenceBackends: async () => [],
@@ -161,11 +162,11 @@ describe("selected-agent Gateway detection and Model Setup consent", () => {
         throw new Error(`Unexpected setup RPC: ${method}`);
       });
       const provider = createApplicationContextProvider(context);
-      const page = new ModelSetupPage();
+      const page = document.createElement("openclaw-model-setup-page");
       page.routeData = { firstRun: true };
       provider.append(page);
       document.body.append(provider);
-      await waitForFast(() =>
+      await waitForSolid(() =>
         expect(page.querySelector('[data-auth-choice="custom-api-key"] button')).not.toBeNull(),
       );
       expect(request.mock.calls).toEqual([
@@ -195,7 +196,7 @@ describe("selected-agent Gateway detection and Model Setup consent", () => {
         expect(page.querySelector('[data-auth-choice="mixed-search-api-key"]')).toBeNull();
       }
       page.querySelector<HTMLButtonElement>('[data-auth-choice="custom-api-key"] button')!.click();
-      await waitForFast(() =>
+      await waitForSolid(() =>
         expect(request.mock.calls.some(([method]) => method === "openclaw.setup.auth.start")).toBe(
           true,
         ),

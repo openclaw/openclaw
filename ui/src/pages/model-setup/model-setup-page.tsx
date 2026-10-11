@@ -1,6 +1,6 @@
 import { createEffect, createMemo, createSignal, onCleanup, onSettled, untrack } from "solid-js";
 import { useApplication } from "../../lib/reactive/context.ts";
-import { defineSolidBridge } from "../../lit/solid-bridge.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../../lit/solid-bridge.ts";
 import type { ModelSetupRouteData } from "./first-run-setup.ts";
 import { ModelSetupController } from "./model-setup-controller.ts";
 import { ModelSetupView } from "./view.tsx";
@@ -12,6 +12,12 @@ export type ModelSetupPageProps = {
   credentialChoices?: readonly string[];
   onClose?: () => void;
 };
+
+declare global {
+  interface HTMLElementTagNameMap {
+    "openclaw-model-setup-page": SolidBridgeElement<ModelSetupPageProps>;
+  }
+}
 
 export function ModelSetupContent(props: {
   controller: ModelSetupController;
