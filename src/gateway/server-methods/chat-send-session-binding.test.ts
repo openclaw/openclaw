@@ -437,8 +437,8 @@ it.each(
       } as unknown as GatewayRequestContext;
       type Source = {
         entered: ReturnType<typeof createDeferred<DispatchOptions>>;
-        release: ReturnType<typeof createDeferred>;
-        finished: ReturnType<typeof createDeferred>;
+        release: ReturnType<typeof createDeferred<void>>;
+        finished: ReturnType<typeof createDeferred<void>>;
         owned?: Parameters<typeof chatDispatch.startChatDispatch>[0];
         options?: DispatchOptions;
       };
