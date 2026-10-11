@@ -6,6 +6,10 @@ import { describe, expect, vi } from "vitest";
 import { ChannelsPairingListResultSchema } from "../../../packages/gateway-protocol/src/schema/channel-pairing.ts";
 import { ChannelsStatusResultSchema } from "../../../packages/gateway-protocol/src/schema/channels.ts";
 import {
+  PluginsCatalogBrowseResultSchema,
+  PluginsCatalogCategoriesResultSchema,
+} from "../../../packages/gateway-protocol/src/schema/plugins.ts";
+import {
   createControlUiMockGatewayInitScript,
   type ControlUiMockGateway,
   type ControlUiMockRequestHandler,
@@ -34,6 +38,20 @@ it("serves protocol-valid empty channel status and pairing defaults", async ({ g
   expect(Compile(ChannelsPairingListResultSchema).Check(pairing)).toBe(true);
   expect(pairing.accounts).toEqual([]);
   expect(pairing.requests).toEqual([]);
+});
+
+it("serves protocol-valid empty plugin discovery defaults", async ({ gatewayPage }) => {
+  gatewayPage.execute(createControlUiMockGatewayInitScript());
+  const { request } = gatewayPage.connect();
+  await flushMockTimers();
+
+  const categories = await request("plugin-categories", "plugins.catalog.categories", {});
+  expect(Compile(PluginsCatalogCategoriesResultSchema).Check(categories)).toBe(true);
+  expect(categories.categories).toEqual([]);
+
+  const catalog = await request("plugin-catalog", "plugins.catalog.browse", {});
+  expect(Compile(PluginsCatalogBrowseResultSchema).Check(catalog)).toBe(true);
+  expect(catalog.items).toEqual([]);
 });
 
 it("keeps handler responses and events on the requesting socket", async ({ gatewayPage }) => {
