@@ -227,8 +227,7 @@ export async function withSessionStoreTarget<T>(
       };
       return operation(target, {
         assertCurrent: assertTargetCurrent,
-        // A registration does not retarget an operation already bound to a physical store.
-        onRegistryChange: assertTargetCurrent,
+        onRegistryChange: registry.assertAdmissionCurrent,
         async refreshBeforeDispatch(assertRetainedTarget) {
           assertRetainedTarget();
           assertTargetCurrent();
