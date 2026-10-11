@@ -17,6 +17,7 @@ import type {
 } from "../config/sessions/session-accessor.types.js";
 import { captureIncognitoSessionBinding } from "../config/sessions/session-incognito-binding.js";
 import { prepareIncognitoSessionHistoryRead } from "../config/sessions/session-incognito-history-read.js";
+import type { SessionSourceAssertion } from "../config/sessions/session-source-authority.js";
 import type { SessionTranscriptContextProjectionSource } from "../config/sessions/session-transcript-context-read.js";
 import type { SessionTranscriptContextReader } from "../config/sessions/session-transcript-context-reader.js";
 import {
@@ -30,7 +31,10 @@ import type {
   TranscriptEntryAnchor,
 } from "../config/sessions/transcript-entry-anchor.js";
 import { captureSessionTranscriptTargetBinding } from "../config/sessions/transcript-target-binding.js";
-import { captureOwnedTranscriptWriteAssertion } from "../config/sessions/transcript-write-context.js";
+import {
+  captureOwnedTranscriptWriteAssertion,
+  withSessionTranscriptWriteAssertion,
+} from "../config/sessions/transcript-write-context.js";
 import {
   assertExistingDatabaseIdentity,
   readDatabasePathIdentitySync,
@@ -227,12 +231,21 @@ export type CodexSessionTranscriptMirrorWriteContext = Omit<
   }>;
 };
 
-/** Runs ordered optimistic mirror writes and returns each committed message's sequence. */
+/**
+ * Runs ordered optimistic mirror writes and returns each committed message's sequence.
+ * `assertCurrent` guards every commit; it is prepared before the writer is reserved,
+ * because its session-row reads cannot run while this write holds the database.
+ */
 export async function withCodexSessionTranscriptMirrorWrite<T>(
-  params: InternalSessionTranscriptWriteLockParams,
+  params: InternalSessionTranscriptWriteLockParams & { assertCurrent?: SessionSourceAssertion },
   run: (context: CodexSessionTranscriptMirrorWriteContext) => Promise<T> | T,
 ): Promise<T> {
-  return withMirrorWrite(params, run, "sequence");
+  const { assertCurrent, ...scope } = params;
+  return assertCurrent
+    ? withSessionTranscriptWriteAssertion(scope, assertCurrent, () =>
+        withMirrorWrite(scope, run, "sequence"),
+      )
+    : withMirrorWrite(scope, run, "sequence");
 }
 
 async function withMirrorWrite<T>(
