@@ -36,7 +36,7 @@ import {
 import { resolveCliStartupPolicy as resolveCliStartupPolicyForArgv } from "./command-startup-policy.js";
 import { maybeRunCliInContainer, parseCliContainerArgs } from "./container-target.js";
 import { tryRunGatewayServiceUpdateCapabilityProbe } from "./daemon-cli/update-capability.js";
-import { shouldStartLocalOnboarding } from "./fresh-install-config.js";
+import { resolveBareRootLaunchTarget } from "./fresh-install-config.js";
 import {
   isGatewayRunInvocationArgv,
   resolveGatewayCatalogCommandPath,
@@ -60,6 +60,7 @@ import {
   isDebugProxyCaptureEnvEnabled,
   isGatewayRunFastPathArgv,
   isRemoteAgentDispatchInvocation,
+  resolveBareRootLaunchError,
   resolveMissingPluginCommandMessage,
   shouldHandleBareRoot,
   shouldBootstrapCliProxyBeforeFastPath,
@@ -167,20 +168,6 @@ async function tryRunGatewayRunFastPath(
     process.exitCode = error.exitCode;
   }
   return true;
-}
-
-async function resolveBareRootLaunchTarget(): Promise<BareRootLaunchTarget> {
-  const { readConfigFileSnapshot } = await import("../config/config.js");
-  const snapshot = await readConfigFileSnapshot();
-  if (await shouldStartLocalOnboarding(snapshot)) {
-    return { kind: "onboarding" };
-  }
-  if (!snapshot.valid) {
-    return { kind: "onboarding", classic: true };
-  }
-  return resolveConfiguredTuiLaunchTarget(snapshot.config ?? snapshot.sourceConfig, {
-    hasConfiguredGateway: snapshot.sourceConfig.gateway !== undefined,
-  });
 }
 
 async function resolveConfiguredTuiLaunchTarget(
@@ -1171,19 +1158,17 @@ async function runCliWithPreparedOutputMode(
       await ensureCliEnvProxyDispatcher();
     }
     const bareRootLaunchTarget = shouldRunBareRootCommand
-      ? await resolveBareRootLaunchTarget()
+      ? await resolveBareRootLaunchTarget(resolveConfiguredTuiLaunchTarget)
       : null;
 
     if (bareRootLaunchTarget) {
-      const ttyMessage =
-        bareRootLaunchTarget.kind === "remote-gateway-inference"
-          ? "Remote Gateway inference setup needs an interactive TTY. Re-run `openclaw` in a terminal connected to this Gateway."
-          : bareRootLaunchTarget.kind === "onboarding"
-            ? bareRootLaunchTarget.classic
-              ? "OpenClaw config is invalid. Run `openclaw doctor --fix` before onboarding."
-              : "Onboarding needs an interactive TTY. Use `openclaw onboard --non-interactive --accept-risk ...` for automation."
-            : TUI_REQUIRES_TTY;
-      if (!requireInteractiveTty(ttyMessage)) {
+      const launchError = resolveBareRootLaunchError(
+        bareRootLaunchTarget,
+        process.stdin.isTTY && process.stdout.isTTY,
+      );
+      if (launchError) {
+        console.error(launchError);
+        process.exitCode = 1;
         return;
       }
       if (bareRootLaunchTarget.kind === "remote-gateway-inference") {
@@ -1197,29 +1182,31 @@ async function runCliWithPreparedOutputMode(
         await setupWizardCommand(bareRootLaunchTarget.classic ? { classic: true } : {});
         return;
       }
-      const { runTui } = await import("../tui/tui.js");
-      // Keep the final exit fallback armed if runtime handles survive shared-process teardown.
-      await runTui({
-        deliver: false,
-        ...(bareRootLaunchTarget.local
-          ? { local: true }
-          : {
-              config: bareRootLaunchTarget.config,
-              boundGateway: {
-                url: bareRootLaunchTarget.gatewayUrl,
-                ...(bareRootLaunchTarget.configuredRemote ? { configuredRemote: true } : {}),
-                ...(bareRootLaunchTarget.token ? { token: bareRootLaunchTarget.token } : {}),
-                ...(bareRootLaunchTarget.password
-                  ? { password: bareRootLaunchTarget.password }
-                  : {}),
-                ...(bareRootLaunchTarget.tlsFingerprint
-                  ? { tlsFingerprint: bareRootLaunchTarget.tlsFingerprint }
-                  : {}),
-              },
-            }),
-        forceProcessExitOnReturn: true,
-      });
-      return;
+      if (bareRootLaunchTarget.kind === "tui") {
+        const { runTui } = await import("../tui/tui.js");
+        // Keep the final exit fallback armed if runtime handles survive shared-process teardown.
+        await runTui({
+          deliver: false,
+          ...(bareRootLaunchTarget.local
+            ? { local: true }
+            : {
+                config: bareRootLaunchTarget.config,
+                boundGateway: {
+                  url: bareRootLaunchTarget.gatewayUrl,
+                  ...(bareRootLaunchTarget.configuredRemote ? { configuredRemote: true } : {}),
+                  ...(bareRootLaunchTarget.token ? { token: bareRootLaunchTarget.token } : {}),
+                  ...(bareRootLaunchTarget.password
+                    ? { password: bareRootLaunchTarget.password }
+                    : {}),
+                  ...(bareRootLaunchTarget.tlsFingerprint
+                    ? { tlsFingerprint: bareRootLaunchTarget.tlsFingerprint }
+                    : {}),
+                },
+              }),
+          forceProcessExitOnReturn: true,
+        });
+        return;
+      }
     }
 
     const shouldUseCliEnvProxy =

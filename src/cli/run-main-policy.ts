@@ -25,6 +25,7 @@ import {
 } from "./gateway-run-argv.js";
 import { getCoreCliParentDefaultHelpCommands } from "./program/core-command-descriptors.js";
 import { getSubCliParentDefaultHelpCommands } from "./program/subcli-descriptors.js";
+import type { BareRootLaunchTarget } from "./run-main.gateway-types.js";
 
 const ROOT_HELP_ALIASES = new Set(["tools", "help"]);
 const SETUP_ONBOARD_CONFIGURE_HELP_COMMANDS = new Set(["setup", "onboard", "configure"]);
@@ -303,4 +304,25 @@ export function resolveMissingPluginCommandMessage(
     );
   }
   return null;
+}
+
+export function resolveBareRootLaunchError(
+  target: BareRootLaunchTarget,
+  interactive: boolean,
+): string | undefined {
+  if (target.kind === "config-read-failure") {
+    return target.diagnostic;
+  }
+  if (interactive) {
+    return undefined;
+  }
+  if (target.kind === "remote-gateway-inference") {
+    return "Remote Gateway inference setup needs an interactive TTY. Re-run `openclaw` in a terminal connected to this Gateway.";
+  }
+  if (target.kind === "onboarding") {
+    return target.classic
+      ? "OpenClaw config is invalid. Run `openclaw doctor --fix` before onboarding."
+      : "Onboarding needs an interactive TTY. Use `openclaw onboard --non-interactive --accept-risk ...` for automation.";
+  }
+  return "OpenClaw TUI needs an interactive TTY. Use `openclaw agent --local ...` for automation.";
 }

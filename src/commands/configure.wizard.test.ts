@@ -71,6 +71,26 @@ describe("runConfigureWizard", () => {
     expect(mocks.writeConfigFile).not.toHaveBeenCalled();
   });
 
+  it("reports a read failure before configure prompts or repair advice", async () => {
+    mocks.readConfigFileSnapshot.mockResolvedValueOnce({
+      ...EMPTY_CONFIG_SNAPSHOT,
+      exists: true,
+      valid: false,
+      path: "/tmp/openclaw.json",
+      readError: { code: "EACCES" },
+      issues: [{ path: "", message: "Permission denied reading configuration" }],
+    });
+    const runtime = createRuntime();
+    await runConfigureWizard({}, runtime);
+    expect(mocks.clackOutro).toHaveBeenCalledWith(
+      expect.stringContaining("OpenClaw config could not be read"),
+    );
+    expect(mocks.clackOutro.mock.calls.flat().join("\n")).not.toContain("doctor --fix");
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(mocks.clackSelect).not.toHaveBeenCalled();
+    expect(mocks.writeConfigFile).not.toHaveBeenCalled();
+  });
+
   it("disables search when plugin policy leaves no available provider", async () => {
     mocks.resolveSearchProviderOptions.mockReturnValue([]);
     queueWizardPrompts({ select: [], confirm: [true, false] });

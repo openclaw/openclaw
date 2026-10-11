@@ -94,6 +94,35 @@ async function expectNonInteractiveBareCliError(
 describe("runCli exit behavior", () => {
   installRunMainTestHooks();
 
+  it.each([false, true])("reports an unreadable bare-root config with TTY=%s", async (tty) => {
+    const snapshot = {
+      exists: true,
+      valid: false,
+      sourceConfig: {},
+      path: "/tmp/openclaw.json",
+      issues: [{ path: "", errorCode: "CONFIG_READ_FAILED", message: "Missing include file" }],
+    };
+    readConfigFileSnapshotMock.mockResolvedValueOnce(snapshot);
+    const previousExitCode = process.exitCode;
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    process.exitCode = undefined;
+    try {
+      await withCliTty(tty, () => runCli(cliArgs()));
+      expect(process.exitCode).toBe(1);
+      const diagnostic = errorSpy.mock.calls.flat().join("\n");
+      expect(diagnostic).toContain("OpenClaw config could not be read");
+      expect(diagnostic).toContain("Missing include file");
+      expect(diagnostic).toContain("Resolve the read error shown above, then retry.");
+      expect(diagnostic).not.toContain("doctor --fix");
+      expect(readConfigFileSnapshotMock).toHaveBeenCalledTimes(1);
+      expect(setupWizardCommandMock).not.toHaveBeenCalled();
+      expect(runTuiMock).not.toHaveBeenCalled();
+    } finally {
+      errorSpy.mockRestore();
+      process.exitCode = previousExitCode;
+    }
+  });
+
   it.each([
     {
       label: "before the URL with split values",
@@ -573,6 +602,7 @@ describe("runCli exit behavior", () => {
     readConfigFileSnapshotMock.mockResolvedValueOnce({
       exists: true,
       valid: false,
+      issues: [],
       sourceConfig: { gateway: { mode: "local" } },
     });
 
@@ -587,6 +617,7 @@ describe("runCli exit behavior", () => {
     readConfigFileSnapshotMock.mockResolvedValueOnce({
       exists: true,
       valid: false,
+      issues: [],
       sourceConfig: { gateway: { mode: "local" } },
     });
     await expectNonInteractiveBareCliError(

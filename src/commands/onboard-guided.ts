@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { formatCliCommand } from "../cli/command-format.js";
+import { formatConfigReadFailureForCli } from "../cli/config-validation-output.js";
 import { isUnconfiguredConfigSource } from "../cli/fresh-install-config.js";
 import { hasResolvedRosterBeforeMigrations } from "../config/agent-roster-provenance.js";
 import { formatConfigIssueLines } from "../config/issue-format.js";
@@ -70,6 +71,12 @@ async function runGuidedOnboardingFlow(
 
   const { readConfigFileSnapshot } = await import("../config/config.js");
   const snapshot = await readConfigFileSnapshot();
+  const readFailure = formatConfigReadFailureForCli(snapshot);
+  if (readFailure) {
+    await prompter.outro(readFailure);
+    runtime.exit(1);
+    return null;
+  }
   if (snapshot.exists && !snapshot.valid) {
     const issues =
       snapshot.issues.length > 0

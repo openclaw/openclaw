@@ -9,11 +9,37 @@ describe("runGuidedOnboarding quick start", () => {
     localOnboarding,
     makeRuntime,
     promptAuthChoiceGrouped,
+    readConfigFileSnapshot,
     restoreTerminalState,
     runGuidedOnboardingImpl,
     setupApplyResult,
     setupDeps,
   } = setupGuidedCustodianTestSuite();
+
+  it("reports unreadable config before guided setup consent or discovery", async () => {
+    const snapshot = {
+      exists: true,
+      valid: false,
+      path: "/tmp/openclaw.json",
+      config: {},
+      readError: { code: "EACCES" },
+      issues: [{ path: "", message: "Permission denied reading configuration" }],
+    };
+    readConfigFileSnapshot.mockResolvedValueOnce(snapshot);
+    const prompter = createWizardPrompter();
+    const deps = setupDeps({ prompter });
+    const runtime = makeRuntime();
+    await runGuidedOnboardingImpl({ acceptRisk: true }, runtime, deps);
+    expect(prompter.outro).toHaveBeenCalledWith(
+      expect.stringContaining("OpenClaw config could not be read"),
+    );
+    expect(vi.mocked(prompter.outro).mock.calls.flat().join("\n")).not.toContain("doctor --fix");
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(prompter.select).not.toHaveBeenCalled();
+    expect(deps.detect).not.toHaveBeenCalled();
+    expect(deps.applySetup).not.toHaveBeenCalled();
+    expect(localOnboarding.persisted.config).toBeUndefined();
+  });
 
   it("quick start restores stdin before foreground launch", async () => {
     const prompter = createWizardPrompter(undefined, { selectValues: ["quick", "one"] });

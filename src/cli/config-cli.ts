@@ -1,4 +1,5 @@
 import type { Command } from "commander";
+import { configFailureHeading } from "../config/io.invalid-config.js";
 import { AUTO_MANAGED_CONFIG_META_PATHS } from "../config/io.meta.js";
 import { formatConfigIssueLines, normalizeConfigIssues } from "../config/issue-format.js";
 import { renderConfigValidationIssueLines } from "../config/issue-location.js";
@@ -23,6 +24,7 @@ import type {
 import { getAtPath, isConfigSchemaPath, parseConfigSetPath } from "./config-cli-path.js";
 import { isConfigMachineOutput, isConfigSetJsonParseOnly } from "./config-output-mode.js";
 import type { ConfigSetOptions } from "./config-set-input.js";
+import { formatConfigReadFailureForCli } from "./config-validation-output.js";
 import { formatCliJsonFailure } from "./failure-output.js";
 import { formatDocsHelp } from "./help-format.js";
 import { exitCliAfterOutput } from "./one-shot-exit.js";
@@ -255,7 +257,8 @@ async function runConfigValidate(opts: { json?: boolean; runtime?: RuntimeEnv } 
     const snapshot = await finishConfigValidationForCli(read);
     outputPath = snapshot.path;
     const shortPath = shortenHomePath(outputPath);
-    if (!snapshot.exists) {
+    const readFailure = formatConfigReadFailureForCli(snapshot);
+    if (!snapshot.exists && !readFailure) {
       if (opts.json) {
         writeRuntimeJson(
           runtime,
@@ -274,11 +277,13 @@ async function runConfigValidate(opts: { json?: boolean; runtime?: RuntimeEnv } 
       const issues = normalizeConfigIssues(snapshot.issues);
       if (opts.json) {
         writeRuntimeJson(runtime, {
-          ...formatCliJsonFailure(`OpenClaw config is invalid: ${shortPath}`),
+          ...formatCliJsonFailure(`${configFailureHeading(snapshot)}: ${shortPath}`),
           valid: false,
           path: outputPath,
           issues,
         });
+      } else if (readFailure) {
+        runtime.error(readFailure);
       } else {
         runtime.error(`Config needs correction: ${shortPath}`);
         for (const line of renderConfigValidationIssueLines(snapshot, "-")) {

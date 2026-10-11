@@ -1,8 +1,9 @@
 import fs from "node:fs/promises";
+import { Command } from "commander";
 import { afterEach, expect, it, vi } from "vitest";
 import { requireValidConfigFileSnapshot } from "../commands/config-validation.js";
 import { readConfigFileSnapshot } from "../config/io.js";
-import { ExitError, type RuntimeEnv } from "../runtime.js";
+import { defaultRuntime, ExitError, type RuntimeEnv } from "../runtime.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { ensureValidConfigSnapshotForCli } from "./config-cli-validation.js";
 import { ensureConfigReady, testApi } from "./program/config-guard.js";
@@ -23,7 +24,40 @@ function runtime() {
   };
 }
 
+async function validateConfig(host: RuntimeEnv, json: boolean) {
+  const { registerConfigCli } = await import("./config-cli.js");
+  const program = new Command();
+  registerConfigCli(program);
+  const spies = [
+    vi.spyOn(defaultRuntime, "log").mockImplementation(host.log),
+    vi.spyOn(defaultRuntime, "error").mockImplementation(host.error),
+    vi.spyOn(defaultRuntime, "writeJson").mockImplementation((value, space = 2) => {
+      host.log(JSON.stringify(value, undefined, space));
+    }),
+    vi.spyOn(defaultRuntime, "exit").mockImplementation(host.exit),
+  ];
+  try {
+    await program.parseAsync([
+      "node",
+      "openclaw",
+      "config",
+      "validate",
+      ...(json ? ["--json"] : []),
+    ]);
+  } finally {
+    for (const spy of spies) {
+      spy.mockRestore();
+    }
+  }
+}
+
 const entrypoints = [
+  { name: "config validate", run: (host: RuntimeEnv) => validateConfig(host, false) },
+  {
+    name: "JSON config validate",
+    json: true,
+    run: (host: RuntimeEnv) => validateConfig(host, true),
+  },
   {
     name: "gateway restart readiness",
     run: (host: RuntimeEnv) =>
@@ -60,11 +94,15 @@ it.each(entrypoints)(
       }
       const host = runtime();
       await expect(run(host)).rejects.toMatchObject({ name: "ExitError", code: 1 });
-      const diagnostic = host.error.mock.calls.flat().join("\n");
+      const diagnostic = [
+        ...host.error.mock.calls.flat(),
+        ...(json ? host.log.mock.calls.flat() : []),
+      ].join("\n");
       expect(diagnostic).toContain("OpenClaw config could not be read");
       expect(diagnostic).toContain("Failed to read include file: missing.json");
       expect(diagnostic).not.toContain("config is invalid");
       expect(diagnostic).not.toContain("doctor --fix");
+      expect(diagnostic).not.toContain("config schema");
       expect(await fs.readFile(state.configPath)).toEqual(before);
       if (json) {
         expect(host.log).toHaveBeenCalledTimes(1);

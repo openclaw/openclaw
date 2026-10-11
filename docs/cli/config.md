@@ -196,6 +196,8 @@ Schema refusals from `config set`, `config patch`, and `config unset` explain th
 
 Config read failures name the file being read and preserve the underlying error. Resolve the reported file-access or runtime problem, then retry; a read failure alone does not mean the settings need repair.
 
+If the configuration cannot be read, for example because an included file is missing or file access is denied, validation reports a read failure and asks you to resolve it and retry. Setup and configure use the same diagnosis. A read failure does not establish that the settings need schema correction or Doctor repair; the commands exit with status 1 and leave the configuration unchanged.
+
 Human validation diagnostics quote literal record keys, such as `agents.defaults.models["provider/model.v1"].alias`, instead of displaying the dot inside a key as nested traversal. Numeric array positions use brackets, such as `agents.entries.main.skills[0]`. The `issues[].path` field in `config validate --json` keeps its existing dot-joined representation.
 
 Validates the current config against the active schema without starting the gateway. It also checks provider/source compatibility for every registry-declared SecretRef, including disabled plugin or channel configuration. This strict command can report an inactive mismatch that does not block normal Gateway startup, where SecretRef resolution remains limited to effectively active surfaces.
@@ -217,7 +219,7 @@ after validation; startup checks them again before execution.
 </Note>
 
 <Note>
-If validation is already failing, start with `openclaw configure` or `openclaw doctor --fix`. `openclaw chat` does not bypass the invalid-config guard.
+For invalid settings, start with `openclaw configure` or `openclaw doctor --fix`. `openclaw chat` does not bypass the invalid-config guard.
 </Note>
 
 Provider and runtime `params` bags are intentionally typed as
