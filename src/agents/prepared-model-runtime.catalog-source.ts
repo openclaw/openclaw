@@ -71,23 +71,16 @@ export function preparedProviderCatalogCredentials(
   });
 }
 
-/** Reuse only catalog rows whose provider identity and credentials survived publication. */
-export function prepareRetainedProviderCatalog(
+function prepareRetainedProviderCatalogSeed(
   params: PreparedModelRuntimeCatalogAccessParams,
   normalizeProvider: (provider: string) => string,
   eligibleProviders: readonly string[],
   pluginFingerprint: string,
   nativeSource: string,
+  providerSource: (provider: string) => string,
 ) {
   const facts = params.agentFacts;
   const inventory = params.inventoryOwner.catalogInventory;
-  const providerSource = (provider: string) =>
-    preparedProviderCatalogSource(
-      params.agentFacts,
-      params.pluginGeneration,
-      provider,
-      normalizeProvider,
-    );
   // Full acquisition also discovers providers outside eligibleProviders; only a full refresh
   // reacquires them, so every provider whose own identity is unchanged keeps its rows.
   const providerSources = new Map(
@@ -149,6 +142,34 @@ export function prepareRetainedProviderCatalog(
   const unretainedProviders = [...(inventory?.providers.keys() ?? [])].filter(
     (provider) => !retainedProviders.has(provider),
   );
+  return { providerSources, retainedInventory, unretainedProviders };
+}
+
+/** Reuse only catalog rows whose provider identity and credentials survived publication. */
+export function prepareRetainedProviderCatalog(
+  params: PreparedModelRuntimeCatalogAccessParams,
+  normalizeProvider: (provider: string) => string,
+  eligibleProviders: readonly string[],
+  pluginFingerprint: string,
+  nativeSource: string,
+) {
+  const facts = params.agentFacts;
+  const providerSource = (provider: string) =>
+    preparedProviderCatalogSource(
+      params.agentFacts,
+      params.pluginGeneration,
+      provider,
+      normalizeProvider,
+    );
+  const { providerSources, retainedInventory, unretainedProviders } =
+    prepareRetainedProviderCatalogSeed(
+      params,
+      normalizeProvider,
+      eligibleProviders,
+      pluginFingerprint,
+      nativeSource,
+      providerSource,
+    );
   /** Providers a changed-only pass reacquires: changed source or credentials, or dropped rows. */
   const listChangedProviders = (
     published: PreparedModelCatalogInventory | undefined,
