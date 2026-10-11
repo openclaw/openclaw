@@ -265,8 +265,7 @@ describe("agent database permission repair", () => {
           import { syncBuiltinESMExports } from "node:module";
           const { openNodeSqliteDatabase } = await import(process.argv[2]);
           const { admitSqliteSchema } = await import(process.argv[3]);
-          const { captureSqliteDatabaseAdmissions, hasSqliteDatabaseSchemaAdmissionForPath,
-            retainSqliteDatabaseAdmissionLocation } = await import(process.argv[4]);
+          const { captureSqliteDatabaseAdmissions, hasSqliteDatabaseSchemaAdmissionForPath } = await import(process.argv[4]);
           const database = openNodeSqliteDatabase(process.argv[1]);
           database.exec("CREATE TABLE proof(value); INSERT INTO proof VALUES (0)");
           admitSqliteSchema(database);
@@ -277,7 +276,6 @@ describe("agent database permission repair", () => {
           }
           syncBuiltinESMExports();
           for (let index = 0; index < 16; index++) {
-            retainSqliteDatabaseAdmissionLocation(process.argv[1]);
             if (!hasSqliteDatabaseSchemaAdmissionForPath(process.argv[1])) throw new Error("lost schema admission");
             if (captureSqliteDatabaseAdmissions(undefined, { location: process.argv[1] }).length !== 1) throw new Error("lost descriptor facts");
             database.prepare("UPDATE proof SET value = value + 1").run();

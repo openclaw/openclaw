@@ -107,9 +107,6 @@ function exchange(target: string | Admission, create?: boolean): void {
 
 /** Identity descriptors stay open for the process: closing one can release SQLite's POSIX locks. */
 export function retainSqliteDatabaseAdmissionLocation(location: string): void {
-  if (state.registry.forLocation(location)) {
-    return;
-  }
   const observed = fs.statSync(location, { bigint: true });
   if (!observed.isFile()) {
     return;
@@ -136,7 +133,15 @@ export function retainSqliteDatabaseAdmissionLocation(location: string): void {
 }
 
 function pathAdmission(location: string): Admission | undefined {
+  const retained = state.registry.forLocation(location);
+  if (retained) {
+    return retained;
+  }
   exchange(location);
+  const shared = state.registry.forLocation(location);
+  if (shared) {
+    return shared;
+  }
   try {
     retainSqliteDatabaseAdmissionLocation(location);
     return state.registry.forLocation(location);
