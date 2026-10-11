@@ -1978,6 +1978,7 @@ src/config/sessions/session-accessor.sqlite-entry-facts.worker.ts
 src/config/sessions/session-accessor.sqlite-entry-receipt.ts
 src/config/sessions/session-accessor.sqlite-entry-worker-publication.ts
 src/config/sessions/session-transcript-authority.ts
+src/config/sessions/session-transcript-context-facts.ts
 src/config/sessions/session-accessor.sqlite-incognito-sharing.ts
 src/config/sessions/session-accessor.sqlite-maintenance-age-queries.ts
 src/config/sessions/session-accessor.sqlite-maintenance-age.ts

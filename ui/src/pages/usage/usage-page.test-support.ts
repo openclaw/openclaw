@@ -12,9 +12,13 @@ import { page as usageRoute } from "./route.ts";
 import type { UsageSessionEntry } from "./types.ts";
 import { UsagePageModel, type UsageRouteData } from "./usage-page-model.ts";
 
-export type TestUsagePage = HTMLElement & {
+export type TestUsagePage = Pick<
+  HTMLElement,
+  "querySelector" | "querySelectorAll" | "textContent" | "isConnected" | "remove"
+> & {
+  readonly element: HTMLElement;
   context: ApplicationContext;
-  routeData: UsageRouteData;
+  routeData: UsageRouteData | undefined;
   usageError: string | null;
   readonly usageResult: SessionsUsageResult | null;
   readonly usageCostSummary: CostUsageSummary | null;
@@ -143,7 +147,7 @@ export async function createPage(
   context: ApplicationContext = contextWithClient(client),
 ): Promise<TestUsagePage> {
   const content = renderView ? (await import("./usage-page.tsx")).UsagePageContent : undefined;
-  const page = document.createElement("div") as TestUsagePage;
+  const container = document.createElement("div");
   const [revision, setRevision] = createSignal(0);
   const notify = () => setRevision((value) => value + 1);
   let model = new UsagePageModel(context, notify);
@@ -170,7 +174,7 @@ export async function createPage(
             },
           });
         },
-        { container: page },
+        { container },
       ).unmount;
     }
   };
@@ -183,62 +187,90 @@ export async function createPage(
     model.dispose();
     pageCleanups.delete(cleanup);
   };
-  Object.defineProperties(page, {
-    context: {
-      get: () => model.context,
-      set: (next: ApplicationContext) => {
-        const routeData = model.routeData;
-        disposeView?.();
-        model.dispose();
-        model = new UsagePageModel(next, notify);
-        disposed = false;
-        pageCleanups.add(cleanup);
-        mount();
-        if (routeData) {
-          model.setRouteData(routeData);
-        }
-        notify();
-      },
+  const page: TestUsagePage = {
+    element: container,
+    querySelector: container.querySelector.bind(container),
+    querySelectorAll: container.querySelectorAll.bind(container),
+    get textContent() {
+      return container.textContent;
     },
-    routeData: {
-      get: () => model.routeData,
-      set: (data: UsageRouteData) => model.setRouteData(data),
+    get isConnected() {
+      return container.isConnected;
     },
-    usageError: { get: () => model.read().data.error },
-    usageResult: { get: () => model.usageResult },
-    usageCostSummary: { get: () => inspect().usageCostSummary },
-    usageLoading: { get: () => model.read().data.loading },
-    usageSelectedSessions: {
-      get: () => model.read().filters.selectedSessions,
-      set: (sessions: string[]) => {
-        inspect().usageSelectedSessions = sessions;
-        notify();
-      },
+    get context() {
+      return model.context;
     },
-    details: { get: () => inspect().details },
-    providerUsageStalled: { get: () => model.read().data.providerUsageStalled },
-    providerUsageSummary: { get: () => inspect().providerUsageSummary },
-    providerUsageUnavailable: { get: () => model.read().data.providerUsageUnavailable },
-    refreshPolicy: { get: () => inspect().refreshPolicy },
-    gateway: { get: () => inspect().gateway },
-    loadUsage: { value: () => inspect().loadUsage() },
-    requestUpdate: { value: notify },
-    render: { value: () => undefined },
-    updateComplete: {
-      get: async () => {
-        await Promise.resolve();
+    set context(next: ApplicationContext) {
+      const routeData = model.routeData;
+      disposeView?.();
+      model.dispose();
+      model = new UsagePageModel(next, notify);
+      disposed = false;
+      pageCleanups.add(cleanup);
+      mount();
+      if (routeData) {
+        model.setRouteData(routeData);
+      }
+      notify();
+    },
+    get routeData() {
+      return model.routeData;
+    },
+    set routeData(data: UsageRouteData | undefined) {
+      model.setRouteData(data);
+    },
+    get usageError() {
+      return model.read().data.error;
+    },
+    get usageResult() {
+      return model.usageResult;
+    },
+    get usageCostSummary() {
+      return inspect().usageCostSummary;
+    },
+    get usageLoading() {
+      return model.read().data.loading;
+    },
+    get usageSelectedSessions() {
+      return model.read().filters.selectedSessions;
+    },
+    set usageSelectedSessions(sessions: string[]) {
+      inspect().usageSelectedSessions = sessions;
+      notify();
+    },
+    get details() {
+      return inspect().details;
+    },
+    get providerUsageStalled() {
+      return model.read().data.providerUsageStalled;
+    },
+    get providerUsageSummary() {
+      return inspect().providerUsageSummary;
+    },
+    get providerUsageUnavailable() {
+      return model.read().data.providerUsageUnavailable;
+    },
+    get refreshPolicy() {
+      return inspect().refreshPolicy;
+    },
+    get gateway() {
+      return inspect().gateway;
+    },
+    loadUsage: () => inspect().loadUsage(),
+    requestUpdate: notify,
+    render: () => undefined,
+    get updateComplete() {
+      return Promise.resolve().then(() => {
         flush();
         return true;
-      },
+      });
     },
-    remove: {
-      value: () => {
-        cleanup();
-        HTMLElement.prototype.remove.call(page);
-      },
+    remove() {
+      cleanup();
+      container.remove();
     },
-  });
-  document.body.append(page);
+  };
+  document.body.append(container);
   pageCleanups.add(cleanup);
   mount();
   await page.updateComplete;
