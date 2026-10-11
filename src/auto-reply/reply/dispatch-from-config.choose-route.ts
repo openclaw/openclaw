@@ -43,6 +43,7 @@ import {
   captureDeliveredTranscriptMirror,
   mirrorDeliveredReplyToTranscript,
   transcriptMirrorForDeliveredPayload,
+  scopeCommandTranscriptId,
 } from "./dispatch-from-config.transcript.js";
 import type { NormalizeReplySkipReason } from "./normalize-reply.js";
 import {
@@ -209,7 +210,10 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
   const commandBlockMirror = (payload: ReplyPayload) => {
     const metadata = getReplyPayloadMetadata(payload);
     const commandText = normalizeOptionalString(resolveCommandContextText(ctx));
-    const commandId = normalizeOptionalString(state.messageIdForHook);
+    const commandId = scopeCommandTranscriptId(
+      normalizeOptionalString(state.messageIdForHook),
+      state.hookState.inboundClaimContext,
+    );
     if (
       ctx.CommandInterpretationSuppressed ||
       !commandText?.startsWith("/") ||
@@ -506,6 +510,9 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
       ? undefined
       : normalizeOptionalString(resolveCommandContextText(ctx));
     const isCommandReply = !hasTranscriptOwner && commandText?.startsWith("/");
+    const commandId = isCommandReply
+      ? scopeCommandTranscriptId(transcriptMirrorSourceId, state.hookState.inboundClaimContext)
+      : undefined;
     const transcriptMirror =
       sourceReplyTranscriptMirror ??
       ((state.normalizedCurrentSurface === "slack" || isCommandReply) &&
@@ -517,12 +524,10 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
               agentId: sessionAgentId,
               ...transcriptWriterMetadata(transcriptMirrorSessionBinding),
               preferText: true,
-              ...(isCommandReply && commandText && transcriptMirrorSourceId
-                ? { commandText, commandId: transcriptMirrorSourceId }
-                : {}),
+              ...(isCommandReply && commandText && commandId ? { commandText, commandId } : {}),
               ...(hasTranscriptOwner ? { transcriptOwner: true } : {}),
               idempotencyKey: transcriptMirrorSourceId
-                ? `channel-final:${transcriptMirrorSourceId}:${options.deliveryId ?? "single"}`
+                ? `channel-final:${commandId ?? transcriptMirrorSourceId}:${options.deliveryId ?? "single"}`
                 : undefined,
               deliveryMirror: {
                 kind: "channel-final",

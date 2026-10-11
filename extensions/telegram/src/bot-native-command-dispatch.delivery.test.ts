@@ -22,6 +22,7 @@ import {
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import {
   parseSqliteSessionFileMarker,
+  resolveStorePath,
   upsertSessionEntry,
 } from "openclaw/plugin-sdk/session-store-runtime";
 import {
@@ -182,6 +183,32 @@ describe("Telegram typed command delivery", () => {
 });
 
 describe("Telegram native argument menus", () => {
+  it("records native menus in the configured store despite a stale default binding", async () => {
+    const cfg = commandConfig();
+    const sessionKey = "agent:main:main";
+    await upsertSessionEntry({
+      agentId: "main",
+      storePath: resolveStorePath(undefined, { agentId: "main" }),
+      sessionKey,
+      entry: { sessionId: "stale-default", updatedAt: 1 },
+    });
+    await upsertSessionEntry({
+      agentId: "main",
+      storePath: cfg.session!.store!,
+      sessionKey,
+      entry: { sessionId: "configured-native", updatedAt: 1 },
+    });
+    const bot = await createBot(true, true, cfg, true);
+    await bot.handleUpdate({ update_id: 3100, message: commandMessage("/think") });
+    const latest = await readLatestAssistantTextByIdentity({
+      agentId: "main",
+      sessionKey,
+      sessionId: "configured-native",
+      storePath: cfg.session!.store!,
+    });
+    expect(latest?.text).toContain(sentMenu().text);
+  });
+
   it.each(["parent", "off"] as const)(
     "uses the %s model settings for a DM-topic keyboard",
     async (thinking) => {

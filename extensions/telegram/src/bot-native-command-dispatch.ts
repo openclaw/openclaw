@@ -411,10 +411,16 @@ export async function prepareTelegramCommandDispatch(
     linkPreview: runtimeTelegramCfg.linkPreview,
     richMessages,
   };
-  let transcriptSessionId = nativeCommandRuntime.getSessionEntry({
+  const storePath = nativeCommandRuntime.resolveStorePath(runtimeCfg.session?.store, {
     agentId: route.agentId,
-    sessionKey: auth.targetSessionKey,
-  })?.sessionId;
+  });
+  let transcriptSessionId = (
+    await nativeCommandRuntime.getSessionEntryAsync({
+      agentId: route.agentId,
+      sessionKey: auth.targetSessionKey,
+      storePath,
+    })
+  )?.sessionId;
   return {
     ...params,
     telegramDeps,

@@ -103,9 +103,12 @@ export async function executeTelegramPluginCommand(
   if (!dispatch) {
     return;
   }
-  const targetSessionEntry = dispatch.nativeCommandRuntime.getSessionEntry({
+  const targetSessionEntry = await dispatch.nativeCommandRuntime.getSessionEntryAsync({
     agentId: dispatch.route.agentId,
     sessionKey: dispatch.targetSessionKey,
+    storePath: dispatch.nativeCommandRuntime.resolveStorePath(dispatch.runtimeCfg.session?.store, {
+      agentId: dispatch.route.agentId,
+    }),
   });
   const from = dispatch.isGroup
     ? buildTelegramGroupFrom(dispatch.chatId, dispatch.threadSpec)

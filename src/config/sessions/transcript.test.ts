@@ -218,6 +218,32 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     expect(JSON.stringify(after)).not.toContain("secret-state");
   });
 
+  it("returns the command assistant identity and reports a blocked reply", async () => {
+    await writeTranscriptStore();
+    const params = {
+      sessionKey,
+      storePath: fixture.storePath(),
+      commandText: "/status",
+      commandId: "status-message",
+      replyText: "Ready",
+      replyId: "status-reply",
+    };
+    const result = await recordDeliveredCommandExchange(params);
+    expect(result.ok).toBe(true);
+    const events = await loadFixtureMessages();
+    expect(events.at(-1)).toMatchObject({
+      id: result.ok ? result.messageId : undefined,
+      message: { role: "assistant" },
+    });
+    const blocked = await recordDeliveredCommandExchange({
+      ...params,
+      commandId: "blocked-message",
+      replyId: "blocked-reply",
+      beforeMessageWrite: () => null,
+    });
+    expect(blocked).toMatchObject({ ok: false, code: "blocked" });
+  });
+
   it.each([
     {
       commandText: "/pair",

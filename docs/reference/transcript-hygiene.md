@@ -36,11 +36,12 @@ If you need transcript storage details, see
 
 ## Delivered command exchanges
 
-Slash commands and their delivered replies are ordinary conversation messages,
-not runtime-only prompt context. This includes native command menus, button
-selections, and directive acknowledgements. Login device codes, pairing codes,
-and login URLs are redacted before appending the exchange. These rows remain
-available to later provider requests and chat history without rewriting earlier
+Slash commands and their delivered replies from the shared dispatcher are ordinary
+conversation messages, not runtime-only prompt context. Telegram native command
+menus, button selections, and directive acknowledgements are also retained;
+other channels' native direct-send adapters are not covered. Login device codes,
+pairing codes, and login URLs are redacted before appending the exchange. These
+rows remain available to later provider requests and chat history without rewriting earlier
 rows. `/btw` and `/side` remain ephemeral.
 
 ## Failed attempts and recovery

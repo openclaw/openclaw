@@ -30,6 +30,7 @@ import {
 import {
   captureDeliveredTranscriptMirror,
   mirrorDeliveredReplyToTranscript,
+  scopeCommandTranscriptId,
 } from "./dispatch-from-config.transcript.js";
 import { DispatchSessionRefreshRequiredError } from "./dispatch-session-refresh-error.js";
 import { REPLY_ADMISSION_TICKET } from "./reply-admission-ticket.js";
@@ -97,7 +98,10 @@ export async function prepareDispatchOperation(state: PrepareDispatchOperationCo
         modelFull: `${selectedModel.provider}/${selectedModel.model}`,
         thinkingLevel: modelSelection.thinkLevel ?? "off",
       };
-      const commandId = normalizeOptionalString(state.messageIdForHook);
+      const commandId = scopeCommandTranscriptId(
+        normalizeOptionalString(state.messageIdForHook),
+        state.hookState.inboundClaimContext,
+      );
       const metadata =
         sessionKey && commandId
           ? {

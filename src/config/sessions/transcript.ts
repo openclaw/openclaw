@@ -653,7 +653,13 @@ async function appendExactAssistantMessageWithSource(
       ...(anchor ? { anchor } : {}),
     };
   }
-  const appendedResult = turn.messages[0];
+  const appendedResult = turn.messages.find(
+    ({ message }) =>
+      typeof message === "object" &&
+      message !== null &&
+      "role" in message &&
+      message.role === "assistant",
+  );
   if (!appendedResult) {
     return {
       ok: false,

@@ -528,9 +528,15 @@ describe("dispatchReplyFromConfig", () => {
     });
   });
 
-  it.each(["telegram", "discord", "slack"] as const)(
-    "records a delivered %s command exchange, using the delivered text",
-    async (channel) => {
+  it.each([
+    ["telegram", "command-account", "command-chat"],
+    ["telegram", "other-account", "command-chat"],
+    ["telegram", "command-account", "other-chat"],
+    ["discord", "command-account", "command-chat"],
+    ["slack", "command-account", "command-chat"],
+  ] as const)(
+    "records a delivered %s command exchange for account %s and conversation %s",
+    async (channel, accountId, conversationId) => {
       setNoAbort();
       const dispatcher = createReplyDispatcher({ deliver: vi.fn() });
       dispatcher.appendBeforeDeliver?.((payload) => ({
@@ -545,8 +551,12 @@ describe("dispatchReplyFromConfig", () => {
           Provider: channel,
           Surface: channel,
           OriginatingChannel: channel,
-          SessionKey: `agent:main:${channel}:direct:command`,
+          SessionKey: "agent:main:main",
           MessageSid: "command-message",
+          AccountId: accountId,
+          OriginatingTo: conversationId,
+          From: conversationId,
+          To: conversationId,
         }),
         cfg: emptyConfig,
         dispatcher,
@@ -556,7 +566,10 @@ describe("dispatchReplyFromConfig", () => {
       expect(transcriptMocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledWith(
         expect.objectContaining({
           text: "Thinking level set to low.",
-          command: { text: "/think low", idempotencyKey: "command-input:command-message" },
+          command: {
+            text: "/think low",
+            idempotencyKey: `command-input:["${channel}","${accountId}","${conversationId}","command-message"]`,
+          },
         }),
       );
     },
@@ -575,6 +588,10 @@ describe("dispatchReplyFromConfig", () => {
         OriginatingChannel: "telegram",
         SessionKey: "agent:main:main",
         MessageSid: "stop-message",
+        AccountId: "stop-account",
+        OriginatingTo: "stop-chat",
+        From: "stop-chat",
+        To: "stop-chat",
       }),
       cfg: emptyConfig,
       dispatcher,
@@ -584,7 +601,10 @@ describe("dispatchReplyFromConfig", () => {
     expect(transcriptMocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledWith(
       expect.objectContaining({
         text: "⚙️ Agent was aborted.",
-        command: { text: "/stop", idempotencyKey: "command-input:stop-message" },
+        command: {
+          text: "/stop",
+          idempotencyKey: 'command-input:["telegram","stop-account","stop-chat","stop-message"]',
+        },
       }),
     );
   });

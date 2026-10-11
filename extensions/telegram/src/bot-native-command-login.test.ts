@@ -19,6 +19,7 @@ import {
   createPrivateCommandContext,
   resetNativeCommandMenuMocks,
 } from "./bot-native-commands.menu-test-support.js";
+import type * as NativeCommandRuntime from "./bot-native-commands.runtime.js";
 import { telegramBotInfoForTest } from "./bot.create-telegram-bot.test-support.js";
 
 const sessionDirs = useSessionStoreTempDirs(afterAll, "telegram-login-worker-");
@@ -34,11 +35,13 @@ const loginSessionMocks = vi.hoisted(() => ({
   })),
 }));
 
-vi.mock("./bot-native-commands.runtime.js", () => ({
+vi.mock("./bot-native-commands.runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof NativeCommandRuntime>()),
   ensureConfiguredBindingRouteReady: vi.fn(async () => ({ ok: true })),
   finalizeInboundContext: vi.fn((ctx: unknown) => ctx),
   getAgentScopedMediaLocalRoots: vi.fn(() => []),
-  getSessionEntry: loginSessionMocks.getSessionEntry,
+  getSessionEntryAsync: loginSessionMocks.getSessionEntry,
+  resolveStorePath: loginSessionMocks.resolveStorePath,
   recordDeliveredCommandExchange: loginSessionMocks.recordDeliveredCommandExchange,
   resolveChunkMode: vi.fn(() => "length"),
   resolveThreadSessionKeys: vi.fn(

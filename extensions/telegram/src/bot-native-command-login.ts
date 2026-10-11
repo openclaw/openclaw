@@ -183,9 +183,12 @@ export async function executeTelegramLoginCommand(params: {
     let terminalMessage: string;
     let modelAccess: PreparedProviderModelAccess | undefined;
     try {
-      const targetSessionEntryAtStart = dispatch.nativeCommandRuntime.getSessionEntry({
+      const targetSessionEntryAtStart = await dispatch.nativeCommandRuntime.getSessionEntryAsync({
         agentId: dispatch.route.agentId,
         sessionKey: dispatch.targetSessionKey,
+        storePath: resolveStorePath(dispatch.runtimeCfg.session?.store, {
+          agentId: dispatch.route.agentId,
+        }),
       });
       const loginResult = await runProviderChannelLoginFlow({
         runLoginFlow:

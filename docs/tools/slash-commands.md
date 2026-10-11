@@ -64,10 +64,11 @@ command handling is enabled for the surface.
   </Accordion>
 </AccordionGroup>
 
-Command replies that you can see are part of the conversation on every channel,
-including native command menus and button selections. They appear in session
-history and later model context. Login codes, pairing codes, and login URLs are
-redacted in the recorded copy; the delivered login instructions are unchanged.
+Command replies delivered through the shared dispatcher are part of the conversation
+on every channel. Telegram native command menus and button selections are also
+retained; other channels' native direct-send adapters are not covered. These exchanges
+appear in session history and later model context. Login codes, pairing codes, and
+login URLs are redacted in the recorded copy; delivered login instructions are unchanged.
 `/new` and `/reset` record their command and confirmation in the new session,
 without changing the old transcript. `/stop` records the command with its abort
 notice. `/btw` and `/side` remain ephemeral; ordinary message edits and deletions
