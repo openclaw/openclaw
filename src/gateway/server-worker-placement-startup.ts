@@ -269,11 +269,7 @@ export function createGatewayWorkerPlacementRuntime(
             await run(workspace, assertCurrent);
           },
         }),
-      onActivated: ({ sessionId }) => {
-        const placement = params.placements.get(sessionId);
-        if (placement?.state !== "active") {
-          return;
-        }
+      onActivated: ({ sessionId }, placement) => {
         const environment = params.environments.get(placement.environmentId);
         if (
           environment?.state === "attached" &&

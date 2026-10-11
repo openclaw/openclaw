@@ -1,13 +1,19 @@
 /* @vitest-environment jsdom */
 
-import { render } from "lit";
+import { createSignal, flush } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { i18n } from "../../i18n/index.ts";
 import { pt_BR } from "../../i18n/locales/pt-BR.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import type { LogLevel } from "./log-lines.ts";
-import { renderLogs } from "./view.ts";
+import { LogsView, type LogsProps } from "./view.tsx";
 
-type LogsProps = Parameters<typeof renderLogs>[0];
+const views = new Map<Element, () => void>();
+function renderView(props: LogsProps, container: HTMLDivElement) {
+  views.get(container)?.();
+  views.set(container, mountSolid(() => <LogsView {...props} />, { container }).unmount);
+  flush();
+}
 
 function createLevelFilters(overrides: Partial<Record<LogLevel, boolean>> = {}) {
   return {
@@ -82,53 +88,99 @@ async function useTestPortugueseLogsLabels() {
 }
 
 afterEach(async () => {
+  for (const dispose of views.values()) {
+    dispose();
+  }
+  views.clear();
   vi.restoreAllMocks();
   i18n.registerTranslation("pt-BR", pt_BR);
   await i18n.setLocale("en");
 });
 
-describe("renderLogs", () => {
-  it("bounds time formatting setup per render while preserving localized timestamps", async () => {
+describe("LogsView", () => {
+  it("refreshes one formatter per locale, incoming-row, and filter update on the mounted view", async () => {
     const container = document.createElement("div");
     const validTimes = ["2026-09-22T12:00:37Z", "1970-01-01T00:00:00Z"];
+    const allTimes = [...validTimes, "not a timestamp", "", null, undefined];
     const props = createProps({
       status: { error: null, hasLoaded: true, stale: false, awaitingGateway: false },
-      entries: [...validTimes, "not a timestamp", "", null, undefined].map((time) => ({
+      entries: allTimes.map((time, index) => ({
         time,
         raw: "log entry",
+        message: index === 0 ? "keep initial" : "other entry",
       })),
     });
+    const [entries, setEntries] = createSignal(props.entries);
+    const [filterText, setFilterText] = createSignal("");
+    const NativeDateTimeFormat = Intl.DateTimeFormat;
+    let timeZone = "UTC";
+    // Model an OS timezone change while retaining native Intl timestamp formatting.
+    const formatterSetups = vi
+      .spyOn(Intl, "DateTimeFormat")
+      .mockImplementation(function (locales, options) {
+        return new NativeDateTimeFormat(locales, { ...options, timeZone });
+      });
     const timeCalls = vi.spyOn(Date.prototype, "toLocaleTimeString");
-    const formatterSetups = vi.spyOn(Intl, "DateTimeFormat");
-
-    for (const locale of ["en", "fr", "en"] as const) {
-      await i18n.setLocale(locale);
-      const expected = [
-        ...validTimes.map((time) =>
-          new Date(time).toLocaleTimeString(locale, { timeStyle: "short" }),
+    views.set(
+      container,
+      mountSolid(
+        () => (
+          <LogsView
+            {...props}
+            entries={entries()}
+            filterText={filterText()}
+            onFilterTextChange={setFilterText}
+          />
         ),
-        "not a timestamp",
-        "",
-        "",
-        "",
-      ];
-      timeCalls.mockClear();
-      formatterSetups.mockClear();
-      render(renderLogs(props), container);
+        { container },
+      ).unmount,
+    );
+    const filterInput = container.querySelector<HTMLInputElement>(".settings-input")!;
+
+    const expectTimes = (times: typeof allTimes, locale: string) => {
+      const native = new NativeDateTimeFormat(locale, { timeStyle: "short", timeZone });
+      const expected = times.map((time) => {
+        if (!time) {
+          return "";
+        }
+        const date = new Date(time);
+        return Number.isNaN(date.getTime()) ? time : native.format(date);
+      });
       expect(Array.from(container.querySelectorAll(".log-time"), (row) => row.textContent)).toEqual(
         expected,
       );
-      // Native toLocaleTimeString prepares its formatter internally too.
       expect(timeCalls.mock.calls.length + formatterSetups.mock.calls.length).toBeLessThanOrEqual(
         1,
       );
+      timeCalls.mockClear();
+      formatterSetups.mockClear();
+    };
+
+    flush();
+    expectTimes(allTimes, "en");
+    for (const locale of ["fr", "en"] as const) {
+      await i18n.setLocale(locale);
+      flush();
+      expectTimes(allTimes, locale);
     }
+
+    timeZone = "America/Los_Angeles";
+    const appendedTime = "2026-09-22T18:10:00Z";
+    setEntries([...props.entries, { time: appendedTime, raw: "keep appended" }]);
+    flush();
+    expectTimes([...allTimes, appendedTime], "en");
+
+    timeZone = "Asia/Tokyo";
+    filterInput.value = "keep";
+    filterInput.dispatchEvent(new Event("input", { bubbles: true }));
+    flush();
+    expectTimes([validTimes[0], appendedTime], "en");
   });
 
   it("does not claim the log is empty before the initial load completes", () => {
     const container = document.createElement("div");
 
-    render(renderLogs(createProps({ loading: true, entries: [] })), container);
+    renderView(createProps({ loading: true, entries: [] }), container);
 
     expect(container.textContent).not.toContain("No log entries.");
     expect(container.querySelector('[role="status"]')).not.toBeNull();
@@ -137,7 +189,7 @@ describe("renderLogs", () => {
   it("does not show loading when no initial request is pending", () => {
     const container = document.createElement("div");
 
-    render(renderLogs(createProps({ loading: false, entries: [] })), container);
+    renderView(createProps({ loading: false, entries: [] }), container);
 
     expect(container.textContent).not.toContain("No log entries.");
     expect(container.querySelector('[role="status"]')).toBeNull();
@@ -146,18 +198,16 @@ describe("renderLogs", () => {
   it("disables refresh actions while the gateway cannot accept them", () => {
     const container = document.createElement("div");
 
-    render(
-      renderLogs(
-        createProps({
-          refreshDisabled: true,
-          status: {
-            error: "logs unavailable",
-            hasLoaded: false,
-            stale: false,
-            awaitingGateway: false,
-          },
-        }),
-      ),
+    renderView(
+      createProps({
+        refreshDisabled: true,
+        status: {
+          error: "logs unavailable",
+          hasLoaded: false,
+          stale: false,
+          awaitingGateway: false,
+        },
+      }),
       container,
     );
 
@@ -177,7 +227,7 @@ describe("renderLogs", () => {
       const onExport = vi.fn();
       const container = document.createElement("div");
 
-      render(renderLogs(createProps({ filterText, onExport })), container);
+      renderView(createProps({ filterText, onExport }), container);
       buttonByText(container, buttonText).click();
 
       expect(onExport).toHaveBeenCalledWith(
@@ -190,17 +240,15 @@ describe("renderLogs", () => {
   it("renders the error and stale marker without a retry button or hiding loaded logs", () => {
     const container = document.createElement("div");
 
-    render(
-      renderLogs(
-        createProps({
-          status: {
-            error: "logs unavailable",
-            hasLoaded: true,
-            stale: true,
-            awaitingGateway: false,
-          },
-        }),
-      ),
+    renderView(
+      createProps({
+        status: {
+          error: "logs unavailable",
+          hasLoaded: true,
+          stale: true,
+          awaitingGateway: false,
+        },
+      }),
       container,
     );
 

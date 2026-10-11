@@ -711,6 +711,10 @@ facts from the actor's replica. Message payload hydration, admitted-user role
 validation, and cold or off-path history retain bounded reads; transcript metadata
 does not stand in for message contents.
 
+Host admission retains the snapshot already detached by the worker message port
+for private receipt comparison. Mutable policy callbacks receive their own copy;
+transaction and commit grants still recheck live authority in their original order.
+
 A cold actor read hydrates its entry, participants, membership, pending-input
 custody, and transcript metadata in one autocommit statement. A cold phase
 command uses that same statement inside its own write transaction, without a
