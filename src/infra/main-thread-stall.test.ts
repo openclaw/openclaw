@@ -72,7 +72,7 @@ describe("main-thread stall attribution", () => {
           elapse(1_700);
         });
         if (completion === "sync") {
-          return;
+          return undefined;
         }
         return completion === "resolved" ? Promise.resolve() : Promise.reject(new Error("load"));
       });
