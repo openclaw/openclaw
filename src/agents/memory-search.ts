@@ -45,6 +45,8 @@ export type ResolvedMemorySearchConfig = Omit<
   };
   remote?: Omit<Partial<NonNullable<ProducedMemorySearchConfig["remote"]>>, "batch"> & {
     batch?: NonNullable<ProducedMemorySearchConfig["remote"]>["batch"];
+    /** @deprecated Ignored; retained for SDK source compatibility until the next major. */
+    nonBatchConcurrency?: number;
   };
   store: Omit<ProducedMemorySearchConfig["store"], "vector"> & {
     vector: Omit<ProducedMemorySearchConfig["store"]["vector"], "extensionPath"> & {
