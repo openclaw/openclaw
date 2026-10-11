@@ -1,4 +1,4 @@
-import { formatErrorMessage } from "../infra/errors.js";
+import { formatErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { redactToolPayloadText } from "../logging/redact.js";
 import { redactRegisteredSecretValues } from "../logging/secret-redaction-registry.js";
 import { truncateUtf8Suffix } from "../utils/utf8-truncate.js";
