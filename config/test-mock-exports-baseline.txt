@@ -8936,7 +8936,6 @@
 ["src/node-host/node-worker-supervisor.mock.test-support.ts","./node-worker-launch-observation.js","1af75386b3c6e9f2eb18d98c874907054954a7cd210939b4d671e75a8e79d57a",1]
 ["src/node-host/node-worker-supervisor.mock.test-support.ts","./node-worker-launch-store.js","70b6f55eecbc0f6743b1807deaf1885343fe700df3309e66309b050ddde671fc",1]
 ["src/node-host/node-worker-supervisor.mock.test-support.ts","./node-worker-launch-transport.js","6d7effa5246b611f22aa4e31864d405bda459e4ab005c78ed1b9bb6599d35a8c",1]
-["src/node-host/node-worker-supervisor.mock.test-support.ts","./node-worker-process-identity.js","aa4436dd520525f4cf71649e1efc0236d257017fcd86b821c7d940bcbd2b97be",1]
 ["src/node-host/node-worker-supervisor.mock.test-support.ts","./node-worker-tree-control.js","ad28feee21a96928749b4af206391422196c646915406d6ec9afdc10aa47f364",1]
 ["src/node-host/node-worker-supervisor.mock.test-support.ts","./node-worker-turn-store.js","957b79797836f5faa1b656cdea76f0198554c332d63cb1d3d6d20f33bcb32f42",1]
 ["src/node-host/node-worker-workspace-git.test.ts","../process/exec.js","0cccaa88b24c7a4246d6616606bc284fdc91785b5287b262a3c96ff940f6dd20",1]
