@@ -22,6 +22,7 @@ import { readAgentDeletionJournalStatusInWorker } from "./agent-deletion-journal
 import {
   AGENT_DATABASE_PREFLIGHT_CONCURRENCY,
   AGENT_DATABASE_PREPARATION_CONCURRENCY,
+  AGENT_DATABASE_STARTUP_JOURNAL_CONCURRENCY,
   OPENCLAW_AGENT_SCHEMA_VERSION,
 } from "./openclaw-agent-db-contract.js";
 import {
@@ -129,6 +130,7 @@ class AgentDatabaseStartupAdmission {
   private progressTimer?: ReturnType<typeof setInterval>;
   private readonly opening = createPermitPool(AGENT_DATABASE_PREFLIGHT_CONCURRENCY);
   private readonly migrating = createPermitPool(AGENT_DATABASE_PREPARATION_CONCURRENCY);
+  private readonly journalReads = createPermitPool(AGENT_DATABASE_STARTUP_JOURNAL_CONCURRENCY);
   private preparedSchemaHeaders?: PreparedSchemaHeaders;
 
   get signal(): AbortSignal {
@@ -367,14 +369,22 @@ class AgentDatabaseStartupAdmission {
           };
           const assertNotDeleted = async () => {
             assertCurrent();
-            const deletion = await readAgentDeletionJournalStatusInWorker(
-              agentId,
-              { env },
-              this.signal,
-            );
-            assertCurrent();
-            if (deletion !== "absent") {
-              throw new Error(`Agent ${agentId} was deleted during startup inspection`);
+            // Readiness releases every deferred agent at once; without this bound the
+            // fan-out overflows the shared state-read pool's pending-task admission and
+            // a transient capacity rejection fails the agent permanently.
+            const releaseJournalRead = await this.journalReads.acquire({ signal: this.signal });
+            try {
+              const deletion = await readAgentDeletionJournalStatusInWorker(
+                agentId,
+                { env },
+                this.signal,
+              );
+              assertCurrent();
+              if (deletion !== "absent") {
+                throw new Error(`Agent ${agentId} was deleted during startup inspection`);
+              }
+            } finally {
+              releaseJournalRead?.();
             }
           };
           assertCurrent();
