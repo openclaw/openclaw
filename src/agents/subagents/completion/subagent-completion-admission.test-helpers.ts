@@ -76,6 +76,7 @@ export function records() {
     runId: "completion-run",
     taskRunId: "original-run",
     childSessionKey: "agent:main:subagent:child",
+    childSessionIdentity: { sessionId: "session-id", lifecycleRevision: "session-revision" },
     requesterSessionKey: "agent:main:main",
     requesterDisplayKey: "agent:main:main",
     requesterAgentId: "main",
@@ -236,4 +237,10 @@ export async function reopenCompletionFixtureOwners() {
 
 export function currentCompletionRun(input: { subagent: SubagentRunRecord }): SubagentRunRecord {
   return expectDefined(subagentRuns.get(input.subagent.runId), "published completion run");
+}
+
+export function readCompletionSystemEvents(database: OpenClawStateDatabase) {
+  return database.db
+    .prepare("SELECT id FROM delivery_queue_entries WHERE entry_kind = 'systemEvent'")
+    .all();
 }

@@ -2,8 +2,9 @@ import { runWithGatewayDetachedWorkContinuation } from "../../../process/gateway
 import { defaultRuntime } from "../../../runtime.js";
 import { isCronRunSessionKey } from "../../../sessions/session-key-utils.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
-import { retireSessionMcpRuntimeForSessionKey } from "../../agent-bundle-mcp-tools.js";
+import { retireSessionMcpRuntime } from "../../agent-bundle-mcp-tools.js";
 import { removeInternalSessionEffectsSession } from "../../internal-session-effects.js";
+import { resolveSubagentChildAuthority } from "./subagent-child-owner-match.js";
 import { markRequesterSettleWakePending } from "./subagent-delivery-state.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
 import { retireSubagentGatewayBinding } from "./subagent-registry-execution-cleanup.js";
@@ -27,6 +28,10 @@ export async function completeCleanupBookkeeping(
 ): Promise<void> {
   const params = context.options;
   let entry = getCurrentSubagentRunOwner(params.runs, cleanupParams.entry) ?? cleanupParams.entry;
+  const authority = resolveSubagentChildAuthority(entry);
+  if (authority.status === "mismatch") {
+    throw new Error(authority.error);
+  }
   const stateContext = cleanupParams.stateContext ?? captureOpenClawStateWorkerContext();
   // Bookkeeping can retire the row; detached child effects refresh currency below.
   const suppressSessionEffects = !context.sessionEffectsHostCurrent(entry);
@@ -34,6 +39,7 @@ export async function completeCleanupBookkeeping(
     assertSubagentRegistryWriteSourceCurrent(stateContext);
     if (
       cleanupParams.isCurrent?.() === false ||
+      resolveSubagentChildAuthority(current).status === "mismatch" ||
       context.sessionEffectsHostCurrent(current) === suppressSessionEffects
     ) {
       throw new Error("Subagent cleanup owner changed before bookkeeping.");
@@ -82,8 +88,8 @@ export async function completeCleanupBookkeeping(
     }
     if (entry.spawnMode !== "session") {
       runCleanupTail("bundle MCP cleanup", () =>
-        retireSessionMcpRuntimeForSessionKey({
-          sessionKey: entry.childSessionKey,
+        retireSessionMcpRuntime({
+          sessionId: entry.childSessionIdentity?.sessionId,
           reason: "subagent-run-cleanup",
           preserveActiveLeases: true,
           onError: (error, sessionId) => {

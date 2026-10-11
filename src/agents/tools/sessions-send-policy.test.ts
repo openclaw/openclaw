@@ -35,6 +35,7 @@ const sessions = [
   { key: requesterKey, agentId: "main", sessionId: "requester-session" },
   { key: subagentRequesterKey, agentId: "main", sessionId: "subagent-requester-session" },
   { key: workerKey, agentId: "worker", sessionId: workerSessionId, label: "delegation-worker" },
+  { key: "global", agentId: "worker", sessionId: "raw-worker-session", label: "raw-worker" },
   { key: "agent:stranger:main", agentId: "stranger", sessionId: "stranger-session" },
   {
     key: nativeChildKey,
@@ -311,6 +312,22 @@ describe("sessions_send directed policy at the tool boundary", () => {
     });
     expect(result.details).toMatchObject({ status: "ok", reply: replyText, watched: true });
     expect(watch).toHaveBeenCalledOnce();
+  });
+
+  it("reports a raw-target watch refusal without misreporting an accepted send", async () => {
+    const result = await send(configFor({ send: ["worker"], visibility: "all" }), {
+      label: "raw-worker",
+      agentId: "worker",
+      watch: true,
+    });
+    expect(result.details).toMatchObject({
+      status: "ok",
+      reply: replyText,
+      watched: false,
+      watchError: expect.stringContaining("agent-qualified"),
+    });
+    expect(gatewayMethods()).toContain("agent");
+    expect(gatewayMethods()).toContain("agent.wait");
   });
 
   it.each([requesterKey, subagentRequesterKey])(

@@ -238,6 +238,7 @@ describe("subagent parent recovery — durable yielded continuation", () => {
     const predecessor = makeRunRecord({
       runId,
       childSessionKey,
+      childSessionIdentity: { sessionId: "warm-restart-child-session" },
       expectsCompletionMessage: true,
       execution: {
         status: "interrupted",
@@ -355,6 +356,7 @@ describe("subagent parent recovery — durable yielded continuation", () => {
     const child = makeRunRecord({
       runId: "yielded-parent-child-run",
       childSessionKey: childKey,
+      childSessionIdentity: { sessionId: "yielded-parent-child-session" },
       requesterSessionKey: parentKey,
       requesterAgentId,
       requesterTurnRunId: parentRunId,
@@ -659,6 +661,7 @@ describe("subagent parent recovery — durable yielded continuation", () => {
         const child = makeRunRecord({
           runId: `yielded-child-${index}`,
           childSessionKey: `agent:main:subagent:yielded-child-${index}`,
+          childSessionIdentity: { sessionId: `yielded-child-session-${index}` },
           requesterSessionKey,
           requesterTurnRunId,
           requesterTurnYielded: true,
@@ -775,6 +778,7 @@ describe("subagent parent recovery — durable yielded continuation", () => {
       const stale = makeRunRecord({
         runId: "stale-child-run",
         childSessionKey: "agent:main:subagent:restart-child",
+        childSessionIdentity: { sessionId: "restart-child-run-session" },
         requesterSessionKey,
         requesterTurnRunId: staleRequesterTurnRunId,
         expectsCompletionMessage: true,
@@ -789,6 +793,7 @@ describe("subagent parent recovery — durable yielded continuation", () => {
         runId: "restart-child-run",
         taskRunId: supersededBy !== "superseded cancellation" ? stale.runId : undefined,
         childSessionKey: stale.childSessionKey,
+        childSessionIdentity: { sessionId: "restart-child-run-session" },
         requesterSessionKey,
         requesterTurnRunId,
         requesterTurnYielded: requesterYielded || undefined,
@@ -800,6 +805,7 @@ describe("subagent parent recovery — durable yielded continuation", () => {
       const sibling = makeRunRecord({
         runId: "restart-sibling-run",
         childSessionKey: "agent:main:subagent:restart-sibling",
+        childSessionIdentity: { sessionId: "restart-sibling-run-session" },
         requesterSessionKey,
         requesterTurnRunId,
         requesterTurnYielded: requesterYielded || undefined,
@@ -809,6 +815,7 @@ describe("subagent parent recovery — durable yielded continuation", () => {
       const nested = makeRunRecord({
         runId: "restart-nested-run",
         childSessionKey: "agent:main:subagent:restart-nested",
+        childSessionIdentity: { sessionId: "restart-nested-run-session" },
         requesterSessionKey: child.childSessionKey,
         requesterTurnRunId: child.runId,
         expectsCompletionMessage: true,

@@ -5,6 +5,7 @@ import { expectDefined } from "@openclaw/normalization-core/expect";
 import { expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../../test/helpers/promise.js";
 import { getRuntimeConfig } from "../../../config/config.js";
+import { loadExactSessionEntryReadOnly } from "../../../config/sessions/session-accessor.js";
 import { createAgentAdmissionController } from "../../../gateway/agent-turn/agent-admission-controller.js";
 import { createAgentDedupeLifecycle } from "../../../gateway/agent-turn/agent-dedupe-lifecycle.js";
 import { runWithChatAbortExecution } from "../../../gateway/chat-abort-lifecycle-internal.js";
@@ -32,6 +33,10 @@ import { createEmbeddedRunHandle } from "../../embedded-agent-runner/runs.test-s
 import { isSubagentRegistryWriteCommand } from "../../subagent-test-fixtures.test-helpers.js";
 import { killAllControlledSubagentRuns, killSubagentRunAdmin } from "./subagent-control.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
+import {
+  getSubagentExecutionCleanup,
+  retireSubagentGatewayBinding,
+} from "./subagent-registry-execution-cleanup.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import { markSubagentRunTerminated, registerSubagentRun } from "./subagent-registry.js";
 import { writeSubagentSessionEntry } from "./subagent-registry.persistence.test-support.js";
@@ -40,7 +45,7 @@ import { resolveSubagentSessionStatus } from "./subagent-session-metrics.js";
 
 const fixture = useSubagentControlFixture();
 
-async function seedExecutionTarget(name: string, task: string) {
+async function seedExecutionTarget(name: string, task: string, lifecycleRevision?: string) {
   const sessionKey = `agent:main:subagent:${name}`;
   const sessionId = `${name}-session`;
   const runId = `${name}-run`;
@@ -49,10 +54,13 @@ async function seedExecutionTarget(name: string, task: string) {
     agentId: "main",
     sessionKey,
     defaultSessionId: sessionId,
+    lifecycleRevision,
   });
   await registerSubagentRun({
     runId,
     childSessionKey: sessionKey,
+    childAgentId: "main",
+    sessionEntry: loadExactSessionEntryReadOnly({ agentId: "main", storePath, sessionKey })?.entry,
     requesterSessionKey: "agent:main:main",
     requesterAgentId: "main",
     requesterDisplayKey: "main",
@@ -65,6 +73,55 @@ async function seedExecutionTarget(name: string, task: string) {
   bindGatewayContextResolver(subagentRuns.get(runId)!, resolveGatewayContext);
   return { sessionKey, sessionId, runId, storePath, context, resolveGatewayContext };
 }
+
+it.each([
+  { original: undefined, current: undefined, matches: true },
+  { original: "original-revision", current: "original-revision", matches: true },
+  { original: undefined, current: "successor-revision", matches: false },
+  { original: "original-revision", current: undefined, matches: false },
+])(
+  "retains cleanup custody only for the recorded revision ($original -> $current)",
+  async ({ original, current, matches }) => {
+    const { sessionKey, sessionId, runId, context } = await seedExecutionTarget(
+      "cleanup-revision",
+      "Keep exact execution cleanup custody",
+      original,
+    );
+    const entry = subagentRuns.get(runId)!;
+    expect(entry.childSessionIdentity).toEqual({ sessionId, lifecycleRevision: original });
+    const registration = registerChatAbortController({
+      chatAbortControllers: context.chatAbortControllers,
+      runId,
+      sessionKey,
+      sessionId,
+      kind: "agent",
+      timeoutMs: 60_000,
+    });
+    const releaseTail = createDeferred();
+    const execution = runWithChatAbortExecution(
+      registration.entry,
+      () => releaseTail.promise,
+      registration.cleanup,
+    );
+    try {
+      retireSubagentGatewayBinding(entry);
+      const cleanup = getSubagentExecutionCleanup(entry, {
+        sessionId,
+        lifecycleRevision: current,
+      });
+      expect(cleanup !== undefined).toBe(matches);
+      if (matches) {
+        expect(cleanup?.isCurrent()).toBe(true);
+        expect(cleanup?.settlement).toBe(registration.entry?.executionSettlement);
+      }
+    } finally {
+      releaseTail.resolve();
+      await execution;
+      registration.cleanup();
+      context.chatAbortControllers.clear();
+    }
+  },
+);
 
 function observeExecutionJoin(entry: ChatAbortControllerEntry, selected: () => void) {
   const settlement = entry.executionSettlement!;
@@ -85,6 +142,7 @@ it.each(["abort", "interruption", "replacement", "already terminal"] as const)(
     const { sessionKey, sessionId, runId, storePath, context } = await seedExecutionTarget(
       "accepted-stop",
       "retain the selected cancellation outcome",
+      "accepted-stop-revision",
     );
     const registration = registerChatAbortController({
       chatAbortControllers: context.chatAbortControllers,
@@ -193,6 +251,7 @@ it.each(["declined", "throws"] as const)(
     const { sessionKey, sessionId, runId, context } = await seedExecutionTarget(
       "callback-stop",
       "retain callback cancellation until raw disposal settles",
+      "callback-stop-revision",
     );
     const registration = registerChatAbortController({
       chatAbortControllers: context.chatAbortControllers,
@@ -258,6 +317,7 @@ it("joins an execution registered while its accepted Stop awaits kill-claim pers
     await seedExecutionTarget(
       "late-execution-stop",
       "join the exact execution that accepts cancellation",
+      "late-execution-stop-revision",
     );
   const lifecycleGeneration = getAgentEventLifecycleGeneration();
   const io = { emitAcceptance: vi.fn(), emitFinal: vi.fn() };
@@ -449,7 +509,7 @@ it.each([
       controlScope: "children" as const,
     };
     for (const id of ["root", "child", "healthy"]) {
-      await writeSubagentSessionEntry({
+      const storePath = await writeSubagentSessionEntry({
         stateDir: fixture.stateDir,
         agentId: "main",
         sessionKey: key(id),
@@ -459,13 +519,18 @@ it.each([
       await registerSubagentRun({
         runId: id,
         childSessionKey: key(id),
+        childAgentId: "main",
         requesterSessionKey: id === "child" ? key("root") : requester,
         requesterAgentId: "main",
         requesterDisplayKey: requester,
         task: "retained cleanup ownership",
         cleanup: "keep",
         collect: id !== "root" || !retiresDuringStop,
-        sessionEntry: { sessionId: `${id}-session`, lifecycleRevision: `${id}-revision` },
+        sessionEntry: loadExactSessionEntryReadOnly({
+          agentId: "main",
+          storePath,
+          sessionKey: key(id),
+        })?.entry,
         expectsCompletionMessage: false,
       });
     }

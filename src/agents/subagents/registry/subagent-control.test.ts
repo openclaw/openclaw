@@ -13,7 +13,6 @@ import {
 } from "../../../config/sessions/session-accessor.js";
 import { applySessionEntryExactReplacements } from "../../../config/sessions/session-accessor.sqlite-replacement-projection.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
-import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { ensureContextEnginesInitialized } from "../../../context-engine/init.js";
 import { resolveContextEngine } from "../../../context-engine/registry.js";
 import {
@@ -30,13 +29,10 @@ import { enqueueSwarmRun } from "../swarm/swarm-scheduler.js";
 import { testing as swarmSchedulerTesting } from "../swarm/swarm-scheduler.test-support.js";
 import * as killSession from "./subagent-control-session.js";
 import { registerAdmissionDrainControlTests } from "./subagent-control.admission-drain.test-support.js";
-import {
-  buildControlledSubagentRunsReadContext,
-  killAllControlledSubagentRuns,
-  killSubagentRunAdmin,
-} from "./subagent-control.js";
+import { killAllControlledSubagentRuns, killSubagentRunAdmin } from "./subagent-control.js";
 import { registerLateDescendantControlTests } from "./subagent-control.late-registration.test-support.js";
 import { registerQueuedReservationFailureTests } from "./subagent-control.queued-failure.test-support.js";
+import { registerControlledSubagentReadTests } from "./subagent-control.reads.test-support.js";
 import {
   registerQueuedStopControlTests,
   registerRequestFrontierControlTests,
@@ -56,7 +52,33 @@ import {
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 const fixture = useSubagentControlFixture();
-const { cfgWithSessionStore, writeSessionStoreFixture } = useSubagentControlSessionStores();
+const { cfgWithSessionStore, writeSessionStoreFixture: writeSessionStore } =
+  useSubagentControlSessionStores();
+
+function withFixtureRevision<Entry extends { sessionId?: string; lifecycleRevision?: string }>(
+  entry: Entry,
+): Entry {
+  return entry.sessionId && !Object.hasOwn(entry, "lifecycleRevision")
+    ? { ...entry, lifecycleRevision: `${entry.sessionId}-revision` }
+    : entry;
+}
+
+function writeSessionStoreFixture(label: string, store: Record<string, unknown>) {
+  return writeSessionStore(
+    label,
+    Object.fromEntries(
+      Object.entries(store).map(([key, entry]) => [
+        key,
+        entry &&
+        typeof entry === "object" &&
+        "sessionId" in entry &&
+        typeof entry.sessionId === "string"
+          ? withFixtureRevision(entry)
+          : entry,
+      ]),
+    ),
+  );
+}
 
 type ControlRuntime = typeof import("./subagent-control.runtime.js");
 
@@ -127,6 +149,9 @@ async function addRun(overrides: SubagentRunRecordOverrides) {
     createdAt: Date.now() - 5_000,
     startedAt: Date.now() - 4_000,
     ...overrides,
+    ...(overrides.childSessionIdentity
+      ? { childSessionIdentity: withFixtureRevision(overrides.childSessionIdentity) }
+      : {}),
   });
   return subagentRuns.get(overrides.runId)!;
 }
@@ -172,6 +197,7 @@ describe("killSubagentRunAdmin", () => {
     await addRun({
       runId,
       childSessionKey,
+      childSessionIdentity: { sessionId: "sess-worker-finalizing" },
       controllerSessionKey: "agent:main:other-controller",
       requesterSessionKey: "agent:main:other-requester",
       requesterDisplayKey: "other-requester",
@@ -234,6 +260,7 @@ describe("killSubagentRunAdmin", () => {
       await addRun({
         runId,
         childSessionKey,
+        childSessionIdentity: { sessionId: `${suffix}-session` },
         task: "replacement work",
         generation,
         createdAt: Date.now() - 1_000,
@@ -267,6 +294,7 @@ describe("killSubagentRunAdmin", () => {
     const source = await addRun({
       runId: "run-fenced-recovery-source",
       childSessionKey,
+      childSessionIdentity: { sessionId },
       controllerSessionKey: "agent:main:controller",
       requesterSessionKey: "agent:main:requester",
       requesterDisplayKey: "requester",
@@ -351,6 +379,7 @@ describe("killSubagentRunAdmin", () => {
     const source = await addRun({
       runId,
       childSessionKey,
+      childSessionIdentity: { sessionId: "sess-fenced-same-id-successor" },
       controllerSessionKey: "agent:main:controller",
       requesterSessionKey: "agent:main:requester",
       requesterDisplayKey: "requester",
@@ -414,6 +443,7 @@ describe("killSubagentRunAdmin", () => {
     await addRun({
       runId: "run-steer-restart",
       childSessionKey,
+      childSessionIdentity: { sessionId: "steer-restart-session" },
       controllerSessionKey: "agent:main:controller",
       requesterSessionKey: "agent:main:requester",
       requesterDisplayKey: "requester",
@@ -458,11 +488,15 @@ describe("killSubagentRunAdmin", () => {
     },
   ])("$name", async ({ suffix, task, completed }) => {
     const childSessionKey = `agent:main:subagent:${suffix}`;
-    const current: SessionEntry = { sessionId: `sess-${suffix}`, updatedAt: Date.now() };
+    const current: SessionEntry = withFixtureRevision({
+      sessionId: `sess-${suffix}`,
+      updatedAt: Date.now(),
+    });
     const storePath = await writeSession(`admin-kill-${suffix}`, childSessionKey, current);
     const input = createSubagentRunRecord({
       runId: `run-${suffix}`,
       childSessionKey,
+      childSessionIdentity: current,
       controllerSessionKey: "agent:main:controller",
       requesterSessionKey: "agent:main:requester",
       requesterDisplayKey: "requester",
@@ -556,6 +590,7 @@ describe("killSubagentRunAdmin", () => {
     const run = await addRun({
       runId: "run-cascade-completion-race",
       childSessionKey,
+      childSessionIdentity: { sessionId: "sess-cascade-completion-race" },
       controllerSessionKey: "agent:main:controller",
       requesterSessionKey: "agent:main:requester",
       requesterDisplayKey: "requester",
@@ -565,6 +600,7 @@ describe("killSubagentRunAdmin", () => {
     await addRun({
       runId: "run-cascade-completion-child",
       childSessionKey: descendantSessionKey,
+      childSessionIdentity: { sessionId: "sess-cascade-completion-child" },
       controllerSessionKey: childSessionKey,
       requesterSessionKey: childSessionKey,
       requesterDisplayKey: "parent",
@@ -636,6 +672,7 @@ describe("killSubagentRunAdmin", () => {
     const run = await addRun({
       runId: "run-yield-race",
       childSessionKey,
+      childSessionIdentity: { sessionId: "sess-yield-race" },
       controllerSessionKey: "agent:main:controller",
       requesterSessionKey: "agent:main:requester",
       requesterDisplayKey: "requester",
@@ -712,6 +749,7 @@ describe("killSubagentRunAdmin", () => {
     await addRun({
       runId: "run-stale-admin",
       childSessionKey,
+      childSessionIdentity: { sessionId: "worker-stale-admin-session" },
       controllerSessionKey: "agent:main:other-controller",
       requesterSessionKey: "agent:main:other-requester",
       requesterDisplayKey: "other-requester",
@@ -722,6 +760,7 @@ describe("killSubagentRunAdmin", () => {
     await addRun({
       runId: "run-current-admin",
       childSessionKey,
+      childSessionIdentity: { sessionId: "worker-stale-admin-session" },
       controllerSessionKey: "agent:main:other-controller",
       requesterSessionKey: "agent:main:other-requester",
       requesterDisplayKey: "other-requester",
@@ -753,6 +792,7 @@ describe("controlled subagent cancellation races", () => {
       createSubagentRunRecord({
         runId: `run-old-${index}`,
         childSessionKey: `agent:main:subagent:generation-race-${index}`,
+        childSessionIdentity: { sessionId: `sess-generation-race-${index}` },
         controllerSessionKey,
         requesterSessionKey: controllerSessionKey,
         task: `old task ${index}`,
@@ -813,6 +853,7 @@ describe("controlled subagent cancellation races", () => {
         ...entry,
         runId: `run-successor-leaf-${index}`,
         childSessionKey: descendantKeys[index]!,
+        childSessionIdentity: { sessionId: `generation-leaf-${index}` },
         controllerSessionKey: entry.childSessionKey,
         requesterSessionKey: entry.childSessionKey,
         requesterDisplayKey: entry.childSessionKey,
@@ -857,6 +898,7 @@ describe("controlled subagent cancellation races", () => {
     const oldRunFixture = createSubagentRunRecord({
       runId: "run-persist-old",
       childSessionKey,
+      childSessionIdentity: { sessionId: "sess-persist-generation-race" },
       controllerSessionKey,
       requesterSessionKey: controllerSessionKey,
       task: "old persisted task",
@@ -905,6 +947,7 @@ describe("controlled subagent cancellation races", () => {
         ...oldRunFixture,
         runId: "run-persist-successor-leaf",
         childSessionKey: descendantSessionKey,
+        childSessionIdentity: { sessionId: "persist-successor-leaf-session" },
         controllerSessionKey: childSessionKey,
         requesterSessionKey: childSessionKey,
         requesterDisplayKey: childSessionKey,
@@ -944,6 +987,10 @@ describe("controlled subagent cancellation races", () => {
     const entry = await addRun({
       runId: "run-kill-session-reset",
       childSessionKey,
+      childSessionIdentity: {
+        sessionId: "sess-kill-session-reset",
+        lifecycleRevision: "revision-before-reset",
+      },
       task: "old session work",
     });
     const abort = vi.fn(() => true);
@@ -994,6 +1041,10 @@ describe("controlled subagent cancellation races", () => {
     const entry = await addRun({
       runId: "run-kill-session-patch-reset",
       childSessionKey,
+      childSessionIdentity: {
+        sessionId: "sess-kill-session-patch-reset",
+        lifecycleRevision: "revision-before-reset",
+      },
       task: "do not patch successor",
     });
     const patches: Array<Partial<SessionEntry> | null> = [];
@@ -1032,6 +1083,7 @@ describe("controlled subagent cancellation races", () => {
     const parentRun = await addRun({
       runId: "run-parent-current",
       childSessionKey: parentSessionKey,
+      childSessionIdentity: { sessionId: "kill-parent-session" },
       task: "current parent task",
       createdAt: Date.now() - 8_000,
       startedAt: Date.now() - 7_000,
@@ -1041,6 +1093,7 @@ describe("controlled subagent cancellation races", () => {
     await addRun({
       runId: "run-child-stale",
       childSessionKey,
+      childSessionIdentity: { sessionId: "kill-child-session" },
       controllerSessionKey: parentSessionKey,
       requesterSessionKey: parentSessionKey,
       requesterDisplayKey: parentSessionKey,
@@ -1049,6 +1102,7 @@ describe("controlled subagent cancellation races", () => {
     await addRun({
       runId: "run-child-current",
       childSessionKey,
+      childSessionIdentity: { sessionId: "kill-child-session" },
       controllerSessionKey: parentSessionKey,
       requesterSessionKey: parentSessionKey,
       requesterDisplayKey: parentSessionKey,
@@ -1061,6 +1115,7 @@ describe("controlled subagent cancellation races", () => {
     await addRun({
       runId: "run-leaf-active",
       childSessionKey: leafSessionKey,
+      childSessionIdentity: { sessionId: "kill-leaf-session" },
       controllerSessionKey: childSessionKey,
       requesterSessionKey: childSessionKey,
       requesterDisplayKey: childSessionKey,
@@ -1096,6 +1151,7 @@ describe("controlled subagent cancellation races", () => {
     const oldParentRun = await addRun({
       runId: "run-old-parent-current",
       childSessionKey: oldParentSessionKey,
+      childSessionIdentity: { sessionId: "old-parent-session" },
       task: "old parent task",
       createdAt: Date.now() - 8_000,
       startedAt: Date.now() - 7_000,
@@ -1105,11 +1161,13 @@ describe("controlled subagent cancellation races", () => {
     await addRun({
       runId: "run-new-parent-current",
       childSessionKey: newParentSessionKey,
+      childSessionIdentity: { sessionId: "new-parent-session" },
       task: "new parent task",
     });
     await addRun({
       runId: "run-child-stale-old-parent",
       childSessionKey,
+      childSessionIdentity: { sessionId: "shared-child-session" },
       controllerSessionKey: oldParentSessionKey,
       requesterSessionKey: oldParentSessionKey,
       requesterDisplayKey: oldParentSessionKey,
@@ -1122,6 +1180,7 @@ describe("controlled subagent cancellation races", () => {
     await addRun({
       runId: "run-child-current-new-parent",
       childSessionKey,
+      childSessionIdentity: { sessionId: "shared-child-session" },
       controllerSessionKey: newParentSessionKey,
       requesterSessionKey: newParentSessionKey,
       requesterDisplayKey: newParentSessionKey,
@@ -1132,6 +1191,7 @@ describe("controlled subagent cancellation races", () => {
     await addRun({
       runId: "run-leaf-active",
       childSessionKey: leafSessionKey,
+      childSessionIdentity: { sessionId: "shared-child-leaf-session" },
       controllerSessionKey: childSessionKey,
       requesterSessionKey: childSessionKey,
       requesterDisplayKey: childSessionKey,
@@ -1163,6 +1223,7 @@ describe("controlled subagent cancellation races", () => {
     const entry = await addRun({
       runId: "run-kill-recovery-admission",
       childSessionKey,
+      childSessionIdentity: { sessionId },
       controllerSessionKey,
       requesterSessionKey: controllerSessionKey,
       task: "kill recovery admission",
@@ -1237,6 +1298,7 @@ describe("controlled subagent cancellation races", () => {
     const entry = await addRun({
       runId: "run-kill-tombstone-failure",
       childSessionKey,
+      childSessionIdentity: { sessionId },
       controllerSessionKey,
       requesterSessionKey: controllerSessionKey,
       task: "kill tombstone failure",
@@ -1327,10 +1389,12 @@ describe("killAllControlledSubagentRuns", () => {
   it("preserves exactRunId authority when an in-flight launch remaps the same row", async () => {
     const runId = "launch-before-admission";
     const childSessionKey = "agent:main:subagent:launch-remap";
+    const sessionId = "launch-remap-session";
     const controllerSessionKey = "agent:main:main";
     await addRun({
       runId,
       childSessionKey,
+      childSessionIdentity: { sessionId },
       controllerSessionKey,
       requesterSessionKey: controllerSessionKey,
       task: "launch remap",
@@ -1340,7 +1404,6 @@ describe("killAllControlledSubagentRuns", () => {
       schedulerSlotId: runId,
       execution: { status: "queued" },
     });
-    const sessionId = "launch-remap-session";
     const storePath = await writeSession("launch-remap", childSessionKey, {
       sessionId,
       updatedAt: 1,
@@ -1403,6 +1466,7 @@ describe("killAllControlledSubagentRuns", () => {
       createSubagentRunRecord({
         runId: `agent-owned-${requesterAgentId}`,
         childSessionKey: `agent:${requesterAgentId}:subagent:worker`,
+        childSessionIdentity: { sessionId: `${requesterAgentId}-worker-session` },
         controllerSessionKey: "global",
         requesterSessionKey: "global",
         requesterAgentId,
@@ -1458,6 +1522,7 @@ describe("killAllControlledSubagentRuns", () => {
     const firstFixture = createSubagentRunRecord({
       runId: "run-bulk-persistence-failure-first",
       childSessionKey: "agent:main:subagent:bulk-persistence-failure-first",
+      childSessionIdentity: { sessionId: "bulk-persistence-first-session" },
       controllerSessionKey: "agent:main:main",
       task: "first bulk task",
       createdAt: Date.now() - 2_000,
@@ -1467,6 +1532,7 @@ describe("killAllControlledSubagentRuns", () => {
       ...firstFixture,
       runId: "run-bulk-persistence-failure-second",
       childSessionKey: "agent:main:subagent:bulk-persistence-failure-second",
+      childSessionIdentity: { sessionId: "bulk-persistence-second-session" },
       task: "second bulk task",
       createdAt: Date.now() - 1_000,
       execution: { status: "running", startedAt: Date.now() - 900 },
@@ -1497,12 +1563,14 @@ describe("killAllControlledSubagentRuns", () => {
   it("does not let a stale bulk entry suppress the current yielded entry", async () => {
     const childSessionKey = "agent:main:subagent:stale-kill-all-shadow-worker";
     const storePath = await writeSession("stale-kill-all-shadow", childSessionKey, {
+      sessionId: "shadow-session",
       updatedAt: Date.now(),
     });
 
     await addRun({
       runId: "run-stale-shadow",
       childSessionKey,
+      childSessionIdentity: { sessionId: "shadow-session" },
       task: "stale shadow task",
       createdAt: Date.now() - 9_000,
       startedAt: Date.now() - 8_000,
@@ -1511,6 +1579,7 @@ describe("killAllControlledSubagentRuns", () => {
     const currentShadowRun = await addRun({
       runId: "run-current-shadow",
       childSessionKey,
+      childSessionIdentity: { sessionId: "shadow-session" },
       task: "current shadow task",
       createdAt: Date.now() - 4_000,
       startedAt: Date.now() - 3_000,
@@ -1537,121 +1606,5 @@ describe("killAllControlledSubagentRuns", () => {
   });
 });
 
-describe("controlled subagent reads", () => {
-  it.each([
-    {
-      name: "control owner",
-      controllerSessionKey: "agent:main:main",
-      requesterSessionKey: "agent:main:telegram:direct:abc123",
-      expectedCount: 1,
-    },
-    {
-      name: "completion owner",
-      controllerSessionKey: "agent:main:telegram:direct:abc123",
-      requesterSessionKey: "agent:main:main",
-      expectedCount: 1,
-    },
-    {
-      name: "unrelated session",
-      controllerSessionKey: "agent:other:discord:direct:xyz",
-      requesterSessionKey: "agent:other:main",
-      expectedCount: 0,
-    },
-  ])(
-    "applies read visibility for the $name",
-    async ({ controllerSessionKey, requesterSessionKey, expectedCount }) => {
-      const childSessionKey = "agent:main:subagent:list-visibility";
-      await addRun({
-        runId: "run-list-visibility",
-        childSessionKey,
-        controllerSessionKey,
-        requesterSessionKey,
-        requesterDisplayKey: requesterSessionKey,
-        task: "visibility test",
-        createdAt: Date.now(),
-        startedAt: Date.now(),
-      });
-
-      const { runs: results } = await buildControlledSubagentRunsReadContext("agent:main:main");
-      expect(results).toHaveLength(expectedCount);
-      if (expectedCount === 1) {
-        expect(results[0]?.childSessionKey).toBe(childSessionKey);
-      }
-    },
-  );
-
-  it("uses one stable snapshot for listing and descendant counts", async () => {
-    const now = Date.now();
-    const rootSessionKey = "agent:main:main";
-    const parentSessionKey = "agent:main:subagent:status-parent";
-    await addRun({
-      runId: "run-status-parent",
-      childSessionKey: parentSessionKey,
-      controllerSessionKey: rootSessionKey,
-      requesterSessionKey: rootSessionKey,
-      requesterDisplayKey: rootSessionKey,
-      task: "status parent",
-      createdAt: now - 4_000,
-      startedAt: now - 3_500,
-      endedAt: now - 3_000,
-    });
-    await addRun({
-      runId: "run-status-child-1",
-      childSessionKey: `${parentSessionKey}:subagent:child-1`,
-      controllerSessionKey: parentSessionKey,
-      requesterSessionKey: parentSessionKey,
-      requesterDisplayKey: parentSessionKey,
-      task: "status child 1",
-      createdAt: now - 2_000,
-      startedAt: now - 1_500,
-    });
-
-    const context = await buildControlledSubagentRunsReadContext(rootSessionKey);
-
-    await addRun({
-      runId: "run-status-child-2",
-      childSessionKey: `${parentSessionKey}:subagent:child-2`,
-      controllerSessionKey: parentSessionKey,
-      requesterSessionKey: parentSessionKey,
-      requesterDisplayKey: parentSessionKey,
-      task: "status child 2",
-      createdAt: now - 1_000,
-      startedAt: now - 500,
-    });
-
-    expect(context.runs.map((run) => run.runId)).toEqual(["run-status-parent"]);
-    expect(context.list.pendingDescendants.get(parentSessionKey)).toBe(1);
-    expect(
-      (await buildControlledSubagentRunsReadContext(rootSessionKey)).list.pendingDescendants.get(
-        parentSessionKey,
-      ),
-    ).toBe(2);
-  });
-
-  it("partitions duplicate bare controller keys by owning agent", async () => {
-    const now = Date.now();
-    for (const agentId of ["research", "ops"]) {
-      await addRun({
-        runId: `run-${agentId}`,
-        childSessionKey: `agent:${agentId}:subagent:child`,
-        controllerSessionKey: "global",
-        requesterSessionKey: "global",
-        requesterAgentId: agentId,
-        requesterDisplayKey: "global",
-        task: `${agentId} task`,
-        createdAt: now,
-        startedAt: now,
-      });
-    }
-
-    const cfg = {
-      agents: {
-        ownership: "explicit",
-        entries: { research: {}, ops: {} },
-      },
-    } as OpenClawConfig;
-    const context = await buildControlledSubagentRunsReadContext("global", "research", cfg);
-    expect(context.runs.map((run) => run.runId)).toEqual(["run-research"]);
-  });
-});
+registerControlledSubagentReadTests(addRun);
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

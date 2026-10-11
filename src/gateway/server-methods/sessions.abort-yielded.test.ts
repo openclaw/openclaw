@@ -80,6 +80,8 @@ async function seedYieldedParent() {
   await registerSubagentRun({
     runId: childRunId,
     childSessionKey: childKey,
+    childAgentId: "main",
+    sessionEntry: loadSessionEntry({ agentId: "main", sessionKey: childKey }),
     requesterSessionKey: parentKey,
     requesterAgentId: "main",
     requesterDisplayKey: parentKey,
@@ -132,6 +134,8 @@ it.each(["unchanged", "new turn", "reset incarnation", "partial cancellation"] a
       await registerSubagentRun({
         runId: "broken-child-run",
         childSessionKey: brokenKey,
+        childAgentId: "broken",
+        sessionEntry: loadSessionEntry({ agentId: "broken", sessionKey: brokenKey }),
         requesterSessionKey: parentKey,
         requesterAgentId: "main",
         requesterDisplayKey: parentKey,

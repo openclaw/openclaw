@@ -225,6 +225,7 @@ it("injects complete lifecycle results into requester prompts and acknowledges o
     createSubagentRunRecord({
       runId: `child-run-${index}`,
       childSessionKey: `agent:main:subagent:steering-${index}`,
+      childSessionIdentity: { sessionId: `child-session-${index}` },
       requesterSessionKey,
       requesterDisplayKey: "main",
       task: "Return the complete findings",

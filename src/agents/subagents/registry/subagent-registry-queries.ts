@@ -1,3 +1,4 @@
+import { parseAgentSessionKey } from "../../../routing/session-key.js";
 import { matchesSubagentChildSessionOwner } from "./subagent-child-owner-match.js";
 import { isDeliverySuspended } from "./subagent-delivery-state.js";
 import {
@@ -143,10 +144,11 @@ export function listRunsForControllerFromRuns<T extends SubagentRunReadRecord>(
   if (!key) {
     return [];
   }
+  const keyOwner = parseAgentSessionKey(key)?.agentId;
   return [...runs.values()].filter(
     (entry) =>
       resolveControllerSessionKey(entry) === key &&
-      (!controllerAgentId || entry.requesterAgentId === controllerAgentId),
+      (!controllerAgentId || (keyOwner ?? entry.requesterAgentId) === controllerAgentId),
   );
 }
 
@@ -187,14 +189,12 @@ export type LatestSubagentRunReadIndex<T extends SubagentRunReadRecord = Subagen
 export function buildLatestSubagentRunReadIndexFromRuns<T extends SubagentRunReadRecord>(
   runs: Map<string, T>,
 ): LatestSubagentRunReadIndex<T> {
-  const latestRunByChildSessionKey = new Map<string, T>();
   const runsByChildSessionKey = new Map<string, T[]>();
   for (const entry of runs.values()) {
     const childSessionKey = entry.childSessionKey.trim();
     if (!childSessionKey) {
       continue;
     }
-    recordLatestSubagentRun(latestRunByChildSessionKey, childSessionKey, entry);
     const bucket = runsByChildSessionKey.get(childSessionKey) ?? [];
     bucket.push(entry);
     runsByChildSessionKey.set(childSessionKey, bucket);
@@ -202,11 +202,15 @@ export function buildLatestSubagentRunReadIndexFromRuns<T extends SubagentRunRea
   return {
     getLatestSubagentRun: (childSessionKey, childAgentId) => {
       const key = childSessionKey.trim();
-      return childAgentId === undefined
-        ? (latestRunByChildSessionKey.get(key) ?? null)
-        : (latestSubagentRun(runsByChildSessionKey.get(key) ?? [], (entry) =>
-            matchesSubagentChildSessionOwner(entry, key, childAgentId),
-          ) ?? null);
+      return (
+        latestSubagentRun(runsByChildSessionKey.get(key) ?? [], (entry) =>
+          matchesSubagentChildSessionOwner(
+            { childSessionKey: key, childAgentId: entry.childAgentId },
+            key,
+            childAgentId,
+          ),
+        ) ?? null
+      );
     },
   };
 }

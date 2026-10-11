@@ -61,6 +61,10 @@ it.each(["sweep", "cleanup"] as const)(
     const entry = createArchivedSubagentSweeperRun({
       childSessionKey: "global",
       childAgentId: "research",
+      childSessionIdentity: {
+        sessionId: "research-global",
+        lifecycleRevision: "research-revision",
+      },
     });
     const h = createSubagentSweeperHarness({}, entry);
     h.callGateway.mockImplementation(async (request) => {

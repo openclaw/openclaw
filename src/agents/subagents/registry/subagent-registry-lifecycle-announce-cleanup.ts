@@ -1,12 +1,16 @@
 import { hasSqliteWorkerOutcomeUnknown } from "../../../infra/sqlite-worker-contract.js";
 import { isSystemEventStoreCurrent } from "../../../infra/system-event-ownership.js";
 import { getGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
-import { parseAgentSessionKey } from "../../../routing/session-key.js";
 import { defaultRuntime } from "../../../runtime.js";
 import { normalizeDeliveryContext } from "../../../utils/delivery-context.shared.js";
 import { resolveSubagentRequesterAgentId } from "../../subagent-requester-owner.js";
 import { loadSessionEntryByKey } from "../announce/subagent-announce-delivery.runtime.js";
-import { matchesSubagentChildSessionOwner } from "./subagent-child-owner-match.js";
+import {
+  matchesSubagentChildSessionOwner,
+  resolveSubagentChildAgentId,
+  resolveSubagentChildAuthority,
+  warnLegacySubagentAuthority,
+} from "./subagent-child-owner-match.js";
 import {
   ensureDeliveryState,
   getDeliveryLastError,
@@ -120,10 +124,11 @@ export const startSubagentAnnounceCleanupFlow = (
 ): boolean => {
   const params = context.options;
   const publishedEntry = getCurrentSubagentRunOwner(params.runs, observedEntry);
-  if (!publishedEntry) {
+  if (!publishedEntry || resolveSubagentChildAuthority(publishedEntry).status === "mismatch") {
     return false;
   }
   let entry = publishedEntry;
+  warnLegacySubagentAuthority(entry, params.warn);
   let runId = entry.runId;
   const runtimeKey = getSubagentRunRuntimeKey(observedEntry);
   if (entry.killReconciliation) {
@@ -254,23 +259,22 @@ export const startSubagentAnnounceCleanupFlow = (
         return;
       }
       if (cleanup === "delete" && (await prepareChildSessionEffects())) {
-        const cleanupSessionEntry = await loadSessionEntryByKey(
+        const { sessionId, lifecycleRevision } = entry.childSessionIdentity ?? {};
+        const currentSession = await loadSessionEntryByKey(
           entry.childSessionKey,
-          parseAgentSessionKey(entry.childSessionKey) ? undefined : entry.childAgentId,
+          resolveSubagentChildAgentId(entry),
         );
-        const cleanupSessionIdentity =
-          cleanupSessionEntry?.sessionId && cleanupSessionEntry.lifecycleRevision
-            ? {
-                sessionId: cleanupSessionEntry.sessionId,
-                lifecycleRevision: cleanupSessionEntry.lifecycleRevision,
-              }
-            : undefined;
         const canDelete = await prepareChildSessionEffects();
-        if (canDelete && !cleanupSessionIdentity) {
+        if (canDelete && !currentSession) {
+          await suppressChildSessionEffects();
+        } else if (
+          canDelete &&
+          resolveSubagentChildAuthority(entry, currentSession).status !== "verified"
+        ) {
           // Without both lifecycle identities, key-only deletion could remove
           // a successor that reused this child session after cleanup yielded.
           await suppressChildSessionEffects();
-        } else if (canDelete && cleanupSessionIdentity) {
+        } else if (canDelete && sessionId && lifecycleRevision) {
           // This durable boundary prevents a late yield from reviving a run
           // after deletion may already have reached the gateway.
           await commit((draft) => {
@@ -282,10 +286,10 @@ export const startSubagentAnnounceCleanupFlow = (
             isCurrent: childSessionEffectsAllowed,
             prepareCurrent: prepareChildSessionEffects,
             childSessionKey: entry.childSessionKey,
-            childAgentId: entry.childAgentId,
+            childAgentId: resolveSubagentChildAgentId(entry),
             spawnMode: entry.spawnMode,
-            expectedSessionId: cleanupSessionIdentity.sessionId,
-            expectedLifecycleRevision: cleanupSessionIdentity.lifecycleRevision,
+            expectedSessionId: sessionId,
+            expectedLifecycleRevision: lifecycleRevision,
             onError: (error) =>
               params.warn("sessions.delete failed during subagent cleanup", {
                 error: buildSafeLifecycleErrorMeta(error),
@@ -552,6 +556,7 @@ export const startSubagentAnnounceCleanupFlow = (
         params.runSubagentAnnounceFlow({
           ...announceParams,
           childAgentId: entry.childAgentId,
+          childSessionIdentity: entry.childSessionIdentity,
           signal: deadline.signal,
           // Delivery expiry bounds admission; the requester owns its execution budget.
           onExecutionStarted: () => clearTimeout(deadlineTimer),

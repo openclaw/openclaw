@@ -15,6 +15,7 @@ import { createDeferredCore } from "../../../shared/deferred.js";
 import { getOpenClawStateWorkerOwner } from "../../../state/openclaw-state-worker-owner.js";
 import { createTestAdmittedRunContext } from "../../admitted-run-context.test-support.js";
 import { withGatewayToolCallerIdentity } from "../../tools/gateway-caller-context.js";
+import * as sessionEntryRuntime from "../announce/subagent-announce-delivery.runtime.js";
 import {
   SUBAGENT_ENDED_REASON_COMPLETE,
   SUBAGENT_ENDED_REASON_ERROR,
@@ -148,7 +149,6 @@ export function registerDirectSessionCleanupAuthorityTests({
   completeAndJoinCleanup,
   gatewayMocks,
   helperMocks,
-  sessionEntryReadMocks,
 }: {
   createRunEntry: typeof createLifecycleRunEntry;
   createLifecycleController: (
@@ -168,7 +168,6 @@ export function registerDirectSessionCleanupAuthorityTests({
     callGateway: Mock<(options: CallGatewayOptions) => Promise<Record<string, unknown>>>;
   };
   helperMocks: { persistSubagentSessionTiming: Mock<() => Promise<void>> };
-  sessionEntryReadMocks: { loadSessionEntryByKey: Mock };
 }) {
   it("commits cancellation of a yielded run before browser cleanup", async () => {
     const entry = createRunEntry({ expectsCompletionMessage: false });
@@ -253,7 +252,7 @@ export function registerDirectSessionCleanupAuthorityTests({
     );
   });
 
-  it("settles direct cleanup when the child changes during its deletion identity read", async () => {
+  it("settles direct cleanup when the child changes during its session existence read", async () => {
     const entry = createRunEntry({
       cleanup: "delete",
       expectsCompletionMessage: false,
@@ -261,9 +260,14 @@ export function registerDirectSessionCleanupAuthorityTests({
     });
     const runs = new Map([[entry.runId, entry]]);
     let current = true;
-    sessionEntryReadMocks.loadSessionEntryByKey.mockImplementationOnce(async () => {
+    using sessionRead = vi.spyOn(sessionEntryRuntime, "loadSessionEntryByKey");
+    sessionRead.mockImplementationOnce(async () => {
       current = false;
-      return { sessionId: "child-session-id", lifecycleRevision: "child-lifecycle-revision" };
+      return {
+        sessionId: "child-session-id",
+        lifecycleRevision: "child-lifecycle-revision",
+        updatedAt: 4_000,
+      };
     });
     const assertCurrent = () => {
       if (!current) {
@@ -295,6 +299,39 @@ export function registerDirectSessionCleanupAuthorityTests({
     expect(finalPostimage?.execution.status).toBe("terminal");
     expect(finalPostimage?.execution.suppressSessionEffects).toBe(true);
     expect(runs.has(entry.runId)).toBe(false);
+  });
+
+  it("retires direct cleanup without deleting a child lacking a lifecycle revision", async () => {
+    const entry = createRunEntry({
+      endedAt: 4_000,
+      cleanup: "delete",
+      expectsCompletionMessage: false,
+      childSessionIdentity: { sessionId: "child-session-id" },
+    });
+    const runs = new Map([[entry.runId, entry]]);
+    using sessionRead = vi.spyOn(sessionEntryRuntime, "loadSessionEntryByKey");
+    sessionRead.mockResolvedValueOnce({ sessionId: "child-session-id", updatedAt: 4_000 });
+    let finalPostimage: SubagentRunRecord | undefined;
+    const controller = createLifecycleController({
+      entry,
+      runs,
+      beforeWrite: ({ postimages }) => {
+        const postimage = postimages.get(entry.runId);
+        if (postimage) {
+          finalPostimage = postimage;
+        }
+      },
+    });
+    const join = observeRootWork();
+
+    expect(controller.startSubagentAnnounceCleanupFlow(entry)).toBe(true);
+    await join();
+
+    expect(sessionRead).not.toHaveBeenCalled();
+    expect(gatewayMocks.callGateway).not.toHaveBeenCalled();
+    expect(finalPostimage?.execution.suppressSessionEffects).toBe(true);
+    expect(runs.has(entry.runId)).toBe(false);
+    expect(controller.scheduledResumeTimers.size).toBe(0);
   });
 }
 

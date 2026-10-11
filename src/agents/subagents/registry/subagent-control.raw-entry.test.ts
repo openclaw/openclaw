@@ -33,9 +33,8 @@ import { createSubagentsTool } from "../../tools/subagents-tool.js";
 import { captureSubagentCompletionReply } from "../announce/subagent-announce-output.js";
 import { killAllControlledSubagentRuns, killSubagentRunAdmin } from "./subagent-control.js";
 import { createSubagentRunManager } from "./subagent-registry-run-manager.js";
-import { registerSubagentRun } from "./subagent-registry.js";
 import { writeSubagentSessionEntry } from "./subagent-registry.persistence.test-support.js";
-import { getSubagentRunByRunId } from "./subagent-registry.test-helpers.js";
+import { addSubagentRunForTests, getSubagentRunByRunId } from "./subagent-registry.test-helpers.js";
 
 vi.mock("./subagent-registry-run-manager.js", { spy: true });
 
@@ -69,6 +68,7 @@ it("cancelling a watched main/global child preserves the other agent's work", as
     { agentId: owner, storePath: childStorePath, sessionKey: "global" },
     {
       sessionId: childId,
+      lifecycleRevision: `${childId}-revision`,
       updatedAt: Date.now(),
       spawnedBy: parentKey,
       parentSessionKey: parentKey,
@@ -111,7 +111,7 @@ it("cancelling a watched main/global child preserves the other agent's work", as
     watch: true,
     timeoutSeconds: 0,
   });
-  expect(sent.details).toMatchObject({ status: "accepted", watched: true });
+  expect(sent.details).toMatchObject({ status: "accepted", watched: false });
   expect(dispatched).toHaveLength(1);
   expect(dispatched[0]).toMatchObject({ agentId: owner, sessionKey: "global" });
   expect.soft(getSubagentRunByRunId("watched-global-run")).toMatchObject({
@@ -228,6 +228,7 @@ async function prepareWatchedRawChildren() {
       { agentId, storePath, sessionKey: "global" },
       {
         sessionId: `${agentId}-global`,
+        lifecycleRevision: `${agentId}-global-revision`,
         updatedAt: Date.now(),
         spawnedBy: parentKey,
         parentSessionKey: parentKey,
@@ -449,8 +450,8 @@ it("keeps a watched registration current while the other raw owner commits", asy
   });
 });
 
-it.each(["admin", "bulk"] as const)(
-  "%s cancellation keeps legacy raw children separated by requester agent",
+it.each(["admin", "bulk", "tool"] as const)(
+  "%s cancellation refuses retained raw children without guessing their owner",
   async (action) => {
     const storePath = await writeSubagentSessionEntry({
       stateDir: fixture.stateDir,
@@ -468,7 +469,7 @@ it.each(["admin", "bulk"] as const)(
     };
     setRuntimeConfigSnapshot(cfg);
     for (const owner of ["research", "main"]) {
-      await registerSubagentRun({
+      await addSubagentRunForTests({
         runId: `${owner}-legacy`,
         childSessionKey: "global",
         requesterSessionKey: `agent:${owner}:main`,
@@ -476,32 +477,217 @@ it.each(["admin", "bulk"] as const)(
         requesterDisplayKey: owner,
         task: `${owner} work`,
         cleanup: "keep",
+        childSessionIdentity: { sessionId: "legacy-global" },
       });
     }
     const research = getSubagentRunByRunId("research-legacy")!;
     expect(research.childAgentId).toBeUndefined();
     expect(getSubagentRunByRunId("main-legacy")?.childAgentId).toBeUndefined();
+    const before = structuredClone(research);
+    const sessionBefore = loadSessionEntry({ agentId: "main", storePath, sessionKey: "global" });
+    const followup = createQueueTestRun({ prompt: "Retained queued followup" });
+    Object.assign(followup.run, { agentId: "research", sessionKey: "global" });
+    enqueueFollowupRun("global", followup, { mode: "followup" }, "none", undefined, false);
 
-    if (action === "admin") {
-      const result = await killSubagentRunAdmin({ cfg, sessionKey: "global", agentId: "research" });
-      expect(result).not.toHaveProperty("error");
-      expect(result).toMatchObject({ found: true, killed: true, runId: "research-legacy" });
-    } else {
-      const result = await killAllControlledSubagentRuns({
-        cfg,
-        controller: {
-          controllerSessionKey: "agent:research:main",
-          controllerAgentId: "research",
-          callerSessionKey: "agent:research:main",
-          callerIsSubagent: false,
-          controlScope: "children",
-        },
-        runs: [research],
-      });
-      expect(result).not.toHaveProperty("error");
-      expect(result).toMatchObject({ status: "ok", killed: 1 });
+    try {
+      if (action === "admin") {
+        const result = await killSubagentRunAdmin({
+          cfg,
+          sessionKey: "global",
+          agentId: "research",
+          expectedRunId: "research-legacy",
+        });
+        expect(result).toMatchObject({
+          found: true,
+          killed: false,
+          runId: "research-legacy",
+          cascadeKilled: 0,
+        });
+        expect(result).toHaveProperty(
+          "error",
+          expect.stringContaining("owning agent is unresolved"),
+        );
+      } else if (action === "tool") {
+        const result = await createSubagentsTool({
+          config: cfg,
+          agentId: "research",
+          agentSessionKey: "agent:research:main",
+        }).execute("cancel", { action: "cancel", runId: "research-legacy" });
+        expect(result.details).toMatchObject({
+          found: true,
+          killed: false,
+          cascadeKilled: 0,
+          error: expect.stringContaining("owning agent is unresolved"),
+        });
+      } else {
+        const result = await killAllControlledSubagentRuns({
+          cfg,
+          controller: {
+            controllerSessionKey: "agent:research:main",
+            controllerAgentId: "research",
+            callerSessionKey: "agent:research:main",
+            callerIsSubagent: false,
+            controlScope: "children",
+          },
+          runs: [research],
+        });
+        expect(result).toMatchObject({
+          status: "error",
+          killed: 0,
+          failed: 1,
+          error: expect.stringContaining("owning agent is unresolved"),
+        });
+      }
+      expect(getSubagentRunByRunId("research-legacy")).toEqual(before);
+      expect(getSubagentRunByRunId("main-legacy")?.execution.endedAt).toBeUndefined();
+      expect(loadSessionEntry({ agentId: "main", storePath, sessionKey: "global" })).toEqual(
+        sessionBefore,
+      );
+      expect(getExistingFollowupQueue("global")?.items).toContain(followup);
+      expect(fixture.cleanup).not.toHaveBeenCalled();
+      expect(fixture.gateway).not.toHaveBeenCalled();
+    } finally {
+      clearFollowupQueue("global");
     }
-    expect(getSubagentRunByRunId("research-legacy")?.execution.endedAt).toBeTypeOf("number");
-    expect(getSubagentRunByRunId("main-legacy")?.execution.endedAt).toBeUndefined();
+  },
+);
+
+it.each([
+  { sessionKey: "global", childAgentId: "main" },
+  { sessionKey: "agent:main:subagent:legacy", childAgentId: undefined },
+])(
+  "refuses exact cancellation of $sessionKey without its original incarnation despite a newer owned run",
+  async ({ sessionKey, childAgentId }) => {
+    const storePath = await writeSubagentSessionEntry({
+      stateDir: fixture.stateDir,
+      sessionKey,
+      agentId: "main",
+      defaultSessionId: "replacement",
+    });
+    const cfg: OpenClawConfig = { session: { store: storePath } };
+    await addSubagentRunForTests({
+      runId: "unbound-incarnation",
+      childSessionKey: sessionKey,
+      childAgentId,
+      requesterSessionKey: "agent:main:main",
+      childSessionIdentity: undefined,
+      generation: 1,
+    });
+    const sessionBefore = loadSessionEntry({ agentId: "main", storePath, sessionKey });
+    expect(sessionBefore).toBeDefined();
+    await addSubagentRunForTests({
+      runId: "next-incarnation",
+      childSessionKey: sessionKey,
+      childAgentId: "main",
+      requesterSessionKey: "agent:main:main",
+      childSessionIdentity: sessionBefore,
+      generation: 2,
+    });
+    const before = structuredClone(getSubagentRunByRunId("unbound-incarnation"));
+    const nextBefore = structuredClone(getSubagentRunByRunId("next-incarnation"));
+    fixture.worker.mockClear();
+    expect(
+      await killSubagentRunAdmin({
+        cfg,
+        sessionKey,
+        agentId: "main",
+        expectedRunId: "unbound-incarnation",
+      }),
+    ).toMatchObject({
+      found: true,
+      killed: false,
+      runId: "unbound-incarnation",
+      cascadeKilled: 0,
+      error: expect.stringContaining("original session incarnation is unresolved"),
+    });
+    expect(getSubagentRunByRunId("unbound-incarnation")).toEqual(before);
+    expect(getSubagentRunByRunId("next-incarnation")).toEqual(nextBefore);
+    expect(loadSessionEntry({ agentId: "main", storePath, sessionKey })).toEqual(sessionBefore);
+    expect(fixture.worker).not.toHaveBeenCalled();
+    expect(fixture.cleanup).not.toHaveBeenCalled();
+    expect(fixture.gateway).not.toHaveBeenCalled();
+    expect(fixture.capture).not.toHaveBeenCalled();
+    expect(fixture.announce).not.toHaveBeenCalled();
+    expect(fixture.wake).not.toHaveBeenCalled();
+  },
+);
+
+it.each(["registration", "execution target"] as const)(
+  "refuses cancellation when the %s omitted the successor's lifecycle revision",
+  async (identitySource) => {
+    const sessionKey = "agent:main:subagent:revision-reused-id";
+    const sessionId = "reused-session-id";
+    const runId = "revision-fenced-run";
+    const storePath = await writeSubagentSessionEntry({
+      stateDir: fixture.stateDir,
+      sessionKey,
+      agentId: "main",
+      defaultSessionId: sessionId,
+    });
+    const scope = { agentId: "main", storePath, sessionKey };
+    const lifecycleRevision = "successor-revision";
+    await addSubagentRunForTests({
+      runId,
+      childSessionKey: sessionKey,
+      childAgentId: "main",
+      requesterSessionKey: "agent:main:main",
+      childSessionIdentity: {
+        sessionId,
+        lifecycleRevision: identitySource === "registration" ? undefined : lifecycleRevision,
+      },
+      execution: {
+        status: "running",
+        ...(identitySource === "execution target"
+          ? { transcriptTarget: { agentId: "main", sessionKey, sessionId, storePath } }
+          : {}),
+      },
+    });
+    await replaceSessionEntry(scope, {
+      ...loadSessionEntry(scope)!,
+      lifecycleRevision,
+    });
+    const before = structuredClone(getSubagentRunByRunId(runId));
+    const sessionBefore = loadSessionEntry(scope);
+    const abort = vi.fn();
+    const handle = createEmbeddedRunHandle({ runId, abort });
+    abort.mockImplementation(() => clearActiveEmbeddedRun(sessionId, handle, sessionKey));
+    setActiveEmbeddedRun(sessionId, handle, sessionKey, undefined, "main");
+    const followup = createQueueTestRun({ prompt: "Successor's queued followup" });
+    Object.assign(followup.run, { agentId: "main", sessionKey, sessionId });
+    enqueueFollowupRun(sessionKey, followup, { mode: "followup" }, "none", undefined, false);
+    fixture.worker.mockClear();
+    try {
+      expect(
+        await killSubagentRunAdmin({
+          cfg: { session: { store: storePath } },
+          sessionKey,
+          agentId: "main",
+          expectedRunId: runId,
+        }),
+      ).toMatchObject({
+        found: true,
+        killed: false,
+        runId,
+        cascadeKilled: 0,
+        error: expect.stringContaining(
+          identitySource === "registration"
+            ? "original session incarnation is unresolved"
+            : "session changed during cancellation preparation",
+        ),
+      });
+      expect(getSubagentRunByRunId(runId)).toEqual(before);
+      expect(loadSessionEntry(scope)).toEqual(sessionBefore);
+      expect(getExistingFollowupQueue(sessionKey)?.items).toContain(followup);
+      expect(abort).not.toHaveBeenCalled();
+      expect(fixture.worker).not.toHaveBeenCalled();
+      expect(fixture.cleanup).not.toHaveBeenCalled();
+      expect(fixture.gateway).not.toHaveBeenCalled();
+      expect(fixture.capture).not.toHaveBeenCalled();
+      expect(fixture.announce).not.toHaveBeenCalled();
+      expect(fixture.wake).not.toHaveBeenCalled();
+    } finally {
+      clearActiveEmbeddedRun(sessionId, handle, sessionKey);
+      clearFollowupQueue(sessionKey);
+    }
   },
 );

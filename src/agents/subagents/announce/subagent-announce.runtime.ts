@@ -1,21 +1,24 @@
 import { readSessionEntryReadOnlyInWorker } from "../../../config/sessions/session-entry-read-runtime.js";
 import type { callGateway as GatewayCaller } from "../../../gateway/call.js";
 import { bindGatewayLifecycleRequest } from "../../../gateway/server-recovery-runtime-context.js";
-import { resolveAgentIdFromSessionKey } from "../../../routing/session-key.js";
+import { resolveSubagentChildAgentId } from "../registry/subagent-child-owner-match.js";
 import { withSubagentSessionSource } from "../spawn/subagent-session-source.js";
 export { dispatchGatewayMethodInProcess } from "../../../gateway/server-plugin-in-process-dispatch.js";
 export { getRuntimeConfig } from "../../../config/config.js";
-export {
-  resolveAgentIdFromSessionKey,
-  resolveSessionStorePathCore,
-} from "../../../config/sessions.js";
+export { resolveSessionStorePathCore } from "../../../config/sessions.js";
 
-export function readSubagentSessionEntry(
+export async function readSubagentSessionEntry(
   storePath: string,
   sessionKey: string,
   explicitAgentId?: string,
 ) {
-  const agentId = explicitAgentId ?? resolveAgentIdFromSessionKey(sessionKey);
+  const agentId = resolveSubagentChildAgentId({
+    childSessionKey: sessionKey,
+    childAgentId: explicitAgentId,
+  });
+  if (!agentId) {
+    return undefined;
+  }
   return withSubagentSessionSource({ agentId, storePath, sessionKey }, async () =>
     readSessionEntryReadOnlyInWorker({ storePath, sessionKey, agentId }),
   );

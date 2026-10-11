@@ -282,6 +282,8 @@ describe("subagent registry steer restarts", () => {
     return mod.registerSubagentRun({
       runId: params.runId,
       childSessionKey: params.childSessionKey,
+      childAgentId: "main",
+      sessionEntry: sessionStore[params.childSessionKey],
       requesterSessionKey: params.requesterSessionKey ?? MAIN_REQUESTER_SESSION_KEY,
       requesterDisplayKey: params.requesterDisplayKey ?? MAIN_REQUESTER_DISPLAY_KEY,
       requesterOrigin: params.requesterOrigin,

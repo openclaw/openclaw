@@ -99,9 +99,19 @@ it.each(["exact", "session cascade", "typed stop", "channel stop", "embedded sto
       ["bad", badKey],
       ["healthy", healthyKey],
     ] as const) {
+      const childAgentId = runId === "bad" || runId === "second-bad" ? "broken" : "main";
+      const storePath = await writeSubagentSessionEntry({
+        stateDir: fixture.stateDir,
+        agentId: childAgentId,
+        sessionKey: childSessionKey,
+        defaultSessionId: `${runId}-session`,
+      });
       await registerSubagentRun({
         runId,
         childSessionKey,
+        childAgentId,
+        sessionEntry: loadExactSessionEntryReadOnly({ storePath, sessionKey: childSessionKey })
+          ?.entry,
         requesterSessionKey: runId !== "root" ? rootKey : sessionKey,
         requesterAgentId: "main",
         requesterDisplayKey: "main",
@@ -254,7 +264,7 @@ it.each([
       ["bad", badKey, sessionKey],
       ["healthy", healthyKey, sessionKey],
     ] as const) {
-      await writeSubagentSessionEntry({
+      const storePath = await writeSubagentSessionEntry({
         stateDir: fixture.stateDir,
         agentId: runId === "bad" ? "broken" : "main",
         sessionKey: childSessionKey,
@@ -263,6 +273,9 @@ it.each([
       await registerSubagentRun({
         runId,
         childSessionKey,
+        childAgentId: runId === "bad" ? "broken" : "main",
+        sessionEntry: loadExactSessionEntryReadOnly({ storePath, sessionKey: childSessionKey })
+          ?.entry,
         requesterSessionKey,
         requesterAgentId: "main",
         requesterDisplayKey: requesterSessionKey,
@@ -446,6 +459,11 @@ it.for(["cascade native new", "RPC reset", "RPC delete"])(
     await registerSubagentRun({
       runId: "child",
       childSessionKey: childKey,
+      childAgentId: "child",
+      sessionEntry: loadExactSessionEntryReadOnly({
+        storePath: childStore,
+        sessionKey: childKey,
+      })?.entry,
       requesterSessionKey: sessionKey,
       requesterAgentId: "main",
       requesterDisplayKey: sessionKey,

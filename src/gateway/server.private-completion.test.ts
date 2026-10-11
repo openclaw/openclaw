@@ -783,6 +783,8 @@ describe("private subagent completion processing receipts", () => {
         await registerSubagentRun({
           runId: descendantRunId,
           childSessionKey,
+          childAgentId: "main",
+          sessionEntry: { sessionId: childSessionId },
           requesterSessionKey: sessionKey,
           requesterAgentId: "main",
           requesterTurnRunId: runId,

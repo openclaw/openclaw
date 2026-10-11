@@ -60,6 +60,7 @@ it.each([
       agentId: "main",
       sessionKey: childSessionKey,
       defaultSessionId: sessionId,
+      lifecycleRevision: `${sessionId}-revision`,
     });
     const commands: ProcessSession[] = [];
     let authorized = true;
@@ -149,7 +150,7 @@ it.each([
         generation,
         childSessionKey,
         childAgentId: "main",
-        childSessionIdentity: { sessionId },
+        childSessionIdentity: { sessionId, lifecycleRevision: `${sessionId}-revision` },
         requesterSessionKey,
         controllerSessionKey: requesterSessionKey,
         requesterAgentId: "main",
@@ -188,13 +189,17 @@ it.each([
           agentId: "main",
           sessionKey: nestedKey,
           defaultSessionId: nestedId,
+          lifecycleRevision: `${nestedId}-revision`,
         });
         const nested = createSubagentRunRecord({
           runId: "nested-completed-command",
           generation: 1,
           childSessionKey: nestedKey,
           childAgentId: "main",
-          childSessionIdentity: { sessionId: nestedId },
+          childSessionIdentity: {
+            sessionId: nestedId,
+            lifecycleRevision: `${nestedId}-revision`,
+          },
           requesterSessionKey: childSessionKey,
           controllerSessionKey: childSessionKey,
           requesterAgentId: "main",
@@ -409,10 +414,13 @@ it.each([
       agentId: "main",
       sessionKey: childSessionKey,
       defaultSessionId: sessionId,
+      lifecycleRevision: `${sessionId}-revision`,
     });
     await registerSubagentRun({
       runId,
       childSessionKey,
+      childAgentId: "main",
+      sessionEntry: { sessionId, lifecycleRevision: `${sessionId}-revision` },
       requesterSessionKey,
       requesterAgentId: "main",
       requesterDisplayKey: requesterSessionKey,

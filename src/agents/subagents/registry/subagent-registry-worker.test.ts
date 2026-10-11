@@ -528,6 +528,7 @@ it("settles a requester cohort while many children finish, wake, and one is kill
   }));
   const stopped = {
     ...entry("killed"),
+    childSessionIdentity: { sessionId: "killed-session" },
     collect: true,
     execution: {
       status: "running" as const,
@@ -538,6 +539,8 @@ it("settles a requester cohort while many children finish, wake, and one is kill
   await register(...children, stopped);
   const manager = createSubagentRunManager({
     runs: subagentRuns,
+    getChildSessionCandidates: (key) =>
+      [...subagentRuns.values()].filter((row) => row.childSessionKey === key),
     getRunsForChildSession: (key) =>
       [...subagentRuns.values()].filter((row) => row.childSessionKey === key),
     resumedRuns: new Set(),
@@ -849,7 +852,6 @@ it("retains prepared announcement authority across bookkeeping and revokes it fo
     readSubagentRun: (runId) => subagentRuns.get(runId),
     getRuntimeConfig: () => ({}),
     readSubagentSessionEntry: async () => undefined,
-    resolveAgentIdFromSessionKey: () => "main",
     resolveSessionStorePathCore: () => "/synthetic/sessions",
     findTranscriptEvent: async () => ({
       event: { message: { role: "assistant", content: [{ type: "text", text: "child result" }] } },

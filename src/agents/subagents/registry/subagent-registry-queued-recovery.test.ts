@@ -118,6 +118,8 @@ function createRegistrationFixture() {
   const options: SubagentManagerOptions = {
     acquireTerminalCompletionLock: async () => () => {},
     runs: subagentRuns,
+    getChildSessionCandidates: (key) =>
+      [...subagentRuns.values()].filter((row) => row.childSessionKey === key),
     getRunsForChildSession: (key) =>
       [...subagentRuns.values()].filter((run) => run.childSessionKey === key),
     resumedRuns: new Set(),
@@ -202,6 +204,8 @@ it.each(["restart", "restart with newer sibling", "confirmed Stop"] as const)(
           {
             runId,
             childSessionKey,
+            childAgentId: "main",
+            sessionEntry: fixture,
             requesterSessionKey: "agent:main:main",
             requesterDisplayKey: "main",
             requesterAgentId: "main",
@@ -326,6 +330,8 @@ it("settles an acknowledged queued launch failure through its captured native re
     {
       runId,
       childSessionKey,
+      childAgentId: "main",
+      sessionEntry: fixture,
       requesterSessionKey: "agent:main:main",
       requesterDisplayKey: "main",
       requesterAgentId: "main",
@@ -371,6 +377,8 @@ it("leaves an acknowledged collector rekey with its launch owner during restore 
   await manager.registerSubagentRun({
     runId,
     childSessionKey,
+    childAgentId: "main",
+    sessionEntry: fixture,
     requesterSessionKey: "agent:main:main",
     requesterAgentId: "main",
     requesterDisplayKey: "main",
@@ -435,6 +443,8 @@ it.each(["current", "during hydration", "reset", "replaced Gateway"] as const)(
       await manager.registerSubagentRun({
         runId,
         childSessionKey: `agent:main:subagent:${runId}`,
+        childAgentId: "main",
+        sessionEntry: fixture,
         requesterSessionKey: `agent:main:${runId}-requester`,
         requesterAgentId: "main",
         requesterTurnRunId: `${runId}-turn`,
@@ -549,6 +559,8 @@ it("retries retirement when registration supersedes another restored child durin
     manager.registerSubagentRun({
       runId,
       childSessionKey: `agent:main:subagent:${child}`,
+      childAgentId: "main",
+      sessionEntry: fixture,
       requesterSessionKey: "agent:main:retirement-requester",
       requesterAgentId: "main",
       requesterTurnRunId: expectsCompletionMessage ? "retirement-turn" : undefined,

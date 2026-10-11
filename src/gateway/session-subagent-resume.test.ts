@@ -51,12 +51,16 @@ async function updateRun(runId: string, update: (draft: SubagentRunRecord) => vo
 }
 
 // Seed the same paused registry state that the yield terminal observer records.
-async function arrangePausedChild(childSessionKey = "agent:main:subagent:resume-child") {
+async function arrangePausedChild(
+  childSessionKey = "agent:main:subagent:resume-child",
+  lifecycleRevision?: string,
+) {
   await writeSubagentSessionEntry({
     stateDir: fixture.stateDir,
     agentId: "main",
     sessionKey: childSessionKey,
     defaultSessionId: sessionId,
+    lifecycleRevision,
   });
   await writeSubagentSessionEntry({
     stateDir: fixture.stateDir,
@@ -67,6 +71,8 @@ async function arrangePausedChild(childSessionKey = "agent:main:subagent:resume-
   await registerSubagentRun({
     runId: previousRunId,
     childSessionKey,
+    childAgentId: "main",
+    sessionEntry: { sessionId, lifecycleRevision },
     requesterSessionKey: parent,
     controllerSessionKey: parent,
     requesterDisplayKey: parent,
@@ -85,6 +91,7 @@ async function arrangePausedChild(childSessionKey = "agent:main:subagent:resume-
     caller,
     childSessionKey,
     childSessionId: sessionId,
+    childLifecycleRevision: lifecycleRevision,
   });
   const prepare = (overrides: Partial<Parameters<typeof prepareParentSubagentResume>[0]> = {}) =>
     prepareParentSubagentResume({
@@ -94,7 +101,7 @@ async function arrangePausedChild(childSessionKey = "agent:main:subagent:resume-
       getSessionId: () => sessionId,
       runId: nextRunId,
       task: "Continue with the supplied answer",
-      assertAdmissionCurrent: vi.fn(),
+      assertAdmissionCurrent: vi.fn(() => ({ sessionId, lifecycleRevision, updatedAt: 1 })),
       ...overrides,
     });
   return { cfg, caller, entry, resume, prepare, childSessionKey };
@@ -103,7 +110,7 @@ async function arrangePausedChild(childSessionKey = "agent:main:subagent:resume-
 it.each(["agent:main:subagent:resume-child", "agent:main:dashboard:resume-child"])(
   "preserves the task and frozen completion batch for %s",
   async (childSessionKey) => {
-    const state = await arrangePausedChild(childSessionKey);
+    const state = await arrangePausedChild(childSessionKey, "original-incarnation");
     state.entry = await updateRun(previousRunId, (draft) => {
       draft.requesterSettleWake = {
         status: "pending",
@@ -135,6 +142,84 @@ it.each(["agent:main:subagent:resume-child", "agent:main:dashboard:resume-child"
     });
     expect(stored.has(previousRunId)).toBe(false);
     await expect(adopt()).rejects.toThrow(/paused/);
+  },
+);
+
+it.each([
+  { original: "original-incarnation", current: "successor-incarnation" },
+  { original: "original-incarnation", current: undefined },
+])(
+  "refuses a same-sessionId resume with changed lifecycle $original -> $current",
+  async ({ original, current }) => {
+    const state = await arrangePausedChild(undefined, original);
+    expect(() =>
+      bindParentSubagentResume({
+        ...state,
+        childSessionId: sessionId,
+        childLifecycleRevision: current,
+      }),
+    ).toThrow(/incarnation/);
+    const adopt = await state.prepare({
+      assertAdmissionCurrent: () => ({ sessionId, lifecycleRevision: current, updatedAt: 1 }),
+    });
+    await expect(adopt()).rejects.toThrow(/changed/);
+    expect(subagentRuns.has(nextRunId)).toBe(false);
+    expect(subagentRuns.get(previousRunId)).toBe(state.entry);
+    expect(loadSubagentRegistryFromSqlite().get(previousRunId)).toEqual(state.entry);
+  },
+);
+
+it.each(["identity", "revision"] as const)(
+  "resumes and delivers a restored legacy task without its original %s",
+  async (missing) => {
+    const state = await arrangePausedChild(undefined, "original-incarnation");
+    await updateRun(previousRunId, (draft) => {
+      if (missing === "identity") {
+        delete draft.childSessionIdentity;
+      } else {
+        delete draft.childSessionIdentity!.lifecycleRevision;
+      }
+    });
+    await restoreSubagentRunsFromDisk({ runs: subagentRuns });
+    await fixture.settle();
+    const originalIdentity = subagentRuns.get(previousRunId)?.childSessionIdentity;
+    const resume = bindParentSubagentResume({
+      ...state,
+      childSessionId: sessionId,
+      childLifecycleRevision: "original-incarnation",
+    });
+    const announce = fixture.announce.mockResolvedValue("delivered");
+    const adopt = await state.prepare({ resume });
+    await expect(adopt()).resolves.toBe(previousRunId);
+    expect(subagentRuns.get(nextRunId)).toMatchObject({
+      taskRunId: previousRunId,
+      requesterSessionKey: parent,
+      execution: { suppressSessionEffects: true },
+    });
+    expect(subagentRuns.get(nextRunId)?.childSessionIdentity).toEqual(originalIdentity);
+    emitAgentEvent({
+      runId: nextRunId,
+      stream: "lifecycle",
+      data: {
+        phase: "end",
+        endedAt: Date.now(),
+        terminalReply: { disposition: "visible", text: "The legacy task is complete." },
+      },
+    });
+    await fixture.settle();
+    expect(subagentRuns.get(nextRunId)?.execution).toMatchObject({
+      status: "terminal",
+      outcome: { status: "ok" },
+    });
+    expect(announce).toHaveBeenCalledWith(
+      expect.objectContaining({
+        childRunId: nextRunId,
+        requesterSessionKey: parent,
+        roundOneReply: "The legacy task is complete.",
+      }),
+    );
+    expect(subagentRuns.get(nextRunId)?.cleanupCompletedAt).toBeDefined();
+    expect(fixture.cleanup).not.toHaveBeenCalled();
   },
 );
 
@@ -178,7 +263,8 @@ it.each(["selection", "admission"] as const)(
 it.each(["resume", "cancel"] as const)(
   "preserves %s for retained release-era tasks without store provenance",
   async (action) => {
-    const state = await arrangePausedChild();
+    const lifecycleRevision = "original-incarnation";
+    const state = await arrangePausedChild(undefined, lifecycleRevision);
     const storePath = state.entry.controllerStorePath!;
     // v2026.9.5 registration persisted neither physical-store field.
     await updateRun(previousRunId, (draft) => {
@@ -191,7 +277,11 @@ it.each(["resume", "cancel"] as const)(
     await fixture.settle();
     expect(shouldResumeParentSubagent(state)).toBe(false);
     if (action === "resume") {
-      const resume = bindParentSubagentResume({ ...state, childSessionId: sessionId });
+      const resume = bindParentSubagentResume({
+        ...state,
+        childSessionId: sessionId,
+        childLifecycleRevision: lifecycleRevision,
+      });
       const adopt = await state.prepare({ resume });
       await expect(adopt()).resolves.toBe(previousRunId);
       expect(subagentRuns.get(nextRunId)?.taskRunId).toBe(previousRunId);
@@ -212,11 +302,12 @@ it.each(["resume", "cancel"] as const)(
   },
 );
 
-it.each(["cancel", "complete", "replace", "session", "caller", "admission"] as const)(
+it.each(["cancel", "complete", "replace", "session", "revision", "caller", "admission"] as const)(
   "rejects a %s race after preparing admission without creating a successor",
   async (race) => {
     const state = await arrangePausedChild();
-    const assertAdmissionCurrent = vi.fn();
+    let lifecycleRevision: string | undefined;
+    const assertAdmissionCurrent = vi.fn(() => ({ sessionId, lifecycleRevision, updatedAt: 1 }));
     let currentSessionId = sessionId;
     const adopt = await state.prepare({
       getSessionId: () => currentSessionId,
@@ -235,6 +326,9 @@ it.each(["cancel", "complete", "replace", "session", "caller", "admission"] as c
     }
     if (race === "session") {
       currentSessionId = "replaced-session";
+    }
+    if (race === "revision") {
+      lifecycleRevision = "successor-incarnation";
     }
     if (race === "caller") {
       state.caller.assertCurrent.mockImplementation(() => {

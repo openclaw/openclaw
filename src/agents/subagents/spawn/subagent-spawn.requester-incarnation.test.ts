@@ -240,7 +240,7 @@ it.each([
             ? spawnAcpDirect({ task: "window-bound work", agentId: "main", mode: "run" }, ctx)
             : maybeSpawnVisibleSession({
                 raw: { visible: true },
-                ...(globalRequester ? { agentId: "worker" } : {}),
+                ...(globalRequester ? { requestedAgentId: "worker" } : {}),
                 task: "window-bound work",
                 label: "",
                 runtime: "subagent",

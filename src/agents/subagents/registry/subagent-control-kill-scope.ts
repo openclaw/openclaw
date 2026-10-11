@@ -9,12 +9,14 @@ import {
 } from "../../../infra/agent-events.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../../../infra/sqlite-worker-contract.js";
-import { parseAgentSessionKey } from "../../../routing/session-key.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
-import { resolveSubagentRequesterAgentId } from "../../subagent-requester-owner.js";
 import { holdQueuedSwarmRun } from "../swarm/swarm-scheduler.js";
+import {
+  resolveSubagentChildAgentId,
+  resolveSubagentChildAuthority,
+} from "./subagent-child-owner-match.js";
 import { resolveSubagentChildSessionOwner } from "./subagent-child-session-owner.js";
 import {
   ensureSubagentControllerOwnsRun,
@@ -106,6 +108,7 @@ export async function withSubagentKillScope<T>(
     assertCurrent,
   };
   const selected = new Map<string, Set<string | undefined>>();
+  const unresolvedRunIds = new Set<string>();
   let selectedCount = 0;
   const releaseSessions: Array<SubagentKillSession["release"]> = [];
   const retirements: Array<ReturnType<typeof subagentRuns.captureRetirement>> = [];
@@ -133,9 +136,30 @@ export async function withSubagentKillScope<T>(
     const controller = owner ? { ...owner } : undefined;
     for (const snapshot of runs) {
       assertCurrent();
-      const childOwner = parseAgentSessionKey(snapshot.childSessionKey)
-        ? undefined
-        : (snapshot.childAgentId ?? resolveSubagentRequesterAgentId(params.cfg, snapshot));
+      const authority = resolveSubagentChildAuthority(snapshot);
+      if (authority.status !== "verified") {
+        if (
+          !unresolvedRunIds.has(snapshot.runId) &&
+          (!controller ||
+            !ensureSubagentControllerOwnsRun({ cfg: params.cfg, controller, entry: snapshot })) &&
+          ownsRoot?.(snapshot) !== false &&
+          parent?.canTraverse(false) !== false
+        ) {
+          unresolvedRunIds.add(snapshot.runId);
+          trees.push({
+            entry: snapshot,
+            isCurrent: () => false,
+            ownsRun: () => isSameSubagentRunOwner(subagentRuns.get(snapshot.runId), snapshot),
+            canTraverse: () => false,
+            prepareRead: () => undefined,
+            children: [],
+            errors: new Set([authority.error]),
+            discoveryFailed: true,
+          });
+        }
+        continue;
+      }
+      const childOwner = resolveSubagentChildAgentId(snapshot);
       const entry = getLatestOwnedSubagentRun(snapshot.childSessionKey, childOwner, params.cfg);
       const selectedForChild = selected.get(snapshot.childSessionKey) ?? new Set();
       if (!entry || !isSameSubagentRunOwner(entry, snapshot) || selectedForChild.has(childOwner)) {
@@ -282,6 +306,7 @@ export async function withSubagentKillScope<T>(
               () => assertSubagentRegistryWriteSourceCurrent(stateContext),
               selectedRun.execution.transcriptTarget,
               selectedRun.childAgentId,
+              selectedRun.childSessionIdentity,
             );
             releaseSessions.push(session.release);
             if (!tree.canTraverse(false)) {
@@ -307,7 +332,11 @@ export async function withSubagentKillScope<T>(
       const controller = controllerFor(tree);
       capture(
         pending,
-        listRunsForControllerFromRuns(resident, controller.controllerSessionKey),
+        listRunsForControllerFromRuns(
+          resident,
+          controller.controllerSessionKey,
+          controller.controllerAgentId,
+        ),
         tree.children,
         controller,
         tree,
@@ -376,7 +405,11 @@ export async function withSubagentKillScope<T>(
             sessionKeys: [controller.controllerSessionKey],
           }),
           (_selection, runs) =>
-            listRunsForControllerFromRuns(new Map(runs), controller.controllerSessionKey),
+            listRunsForControllerFromRuns(
+              new Map(runs),
+              controller.controllerSessionKey,
+              controller.controllerAgentId,
+            ),
           { sessionKeys: [controller.controllerSessionKey], descendants: false },
         );
         assertCurrent();

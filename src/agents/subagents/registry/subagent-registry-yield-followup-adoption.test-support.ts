@@ -3,6 +3,7 @@ import { describe, expect, it, vi, type Mock } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { AgentEventPayload } from "../../../infra/agent-events.js";
 import {
+  createSessionEntry,
   mockGatewayMethods,
   waitForFast,
   type SubagentRegistryHarness,
@@ -32,7 +33,7 @@ export function registerYieldFollowupAdoptionTests({
   bindWakeMutation: (entries: readonly SubagentRunRecord[]) => void;
   mocks: Pick<
     ReturnType<typeof createSubagentRegistryMockState>,
-    "callGateway" | "runSubagentAnnounceFlow" | "dispatchRecoveryAgent"
+    "callGateway" | "runSubagentAnnounceFlow" | "dispatchRecoveryAgent" | "entries"
   >;
   findRequesterRun: (runId: string, requesterSessionKey?: string) => SubagentRunRecord | undefined;
   getLifecycleHandler: () => (event: LifecycleEvent) => void;
@@ -132,9 +133,15 @@ export function registerYieldFollowupAdoptionTests({
       mockGatewayMethods(mocks.callGateway, { "agent.wait": { status: "pending" } });
       const runId = "run-late-yield";
       const childSessionKey = "agent:main:subagent:late-yield";
+      const sessionEntry = createSessionEntry({
+        sessionId: "sess-late-yield",
+        lifecycleRevision: "revision-late-yield",
+      });
+      mocks.entries[childSessionKey] = sessionEntry;
       await getRegistry().registerSubagentRun({
         runId,
         childSessionKey,
+        sessionEntry,
         task: "handle authoritative late yield",
       });
       const lifecycleHandler = getLifecycleHandler();
@@ -224,9 +231,14 @@ export function registerYieldFollowupAdoptionTests({
       mockGatewayMethods(mocks.callGateway, {
         "agent.wait": createDeferred<Record<string, unknown>>().promise,
       });
+      mocks.entries[CHILD_SESSION_KEY] = createSessionEntry({
+        sessionId: "sess-yield-followup",
+        lifecycleRevision: "revision-yield-followup",
+      });
       await getRegistry().registerSubagentRun({
         runId: PAUSED_RUN_ID,
         childSessionKey: CHILD_SESSION_KEY,
+        sessionEntry: mocks.entries[CHILD_SESSION_KEY],
         requesterSessionKey: ORIGINAL_REQUESTER,
         expectsCompletionMessage: true,
         task: "wait for the remote job",
@@ -248,6 +260,7 @@ export function registerYieldFollowupAdoptionTests({
       getRegistry().registerSubagentRun({
         runId: FOLLOW_UP_RUN_ID,
         childSessionKey: CHILD_SESSION_KEY,
+        sessionEntry: mocks.entries[CHILD_SESSION_KEY],
         requesterSessionKey: requesterSessionKey ?? "agent:main:main",
         controllerSessionKey: "agent:main:main",
         requesterDisplayKey: requesterSessionKey ?? "main",
@@ -276,9 +289,14 @@ export function registerYieldFollowupAdoptionTests({
           yielded: true,
         },
       });
+      mocks.entries[CHILD_SESSION_KEY] = createSessionEntry({
+        sessionId: "sess-yield-followup",
+        lifecycleRevision: "revision-yield-followup",
+      });
       await getRegistry().registerSubagentRun({
         runId: PAUSED_RUN_ID,
         childSessionKey: CHILD_SESSION_KEY,
+        sessionEntry: mocks.entries[CHILD_SESSION_KEY],
         requesterSessionKey,
         task: "wait for the remote job",
       });

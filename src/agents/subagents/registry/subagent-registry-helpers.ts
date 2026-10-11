@@ -330,6 +330,7 @@ export async function safeRemoveAttachmentsDir(
   try {
     await cleanupMaterializedSubagentAttachments({
       childSessionKey: entry.childSessionKey,
+      childAgentId: entry.childAgentId,
       attachmentId: entry.attachmentId,
       isCurrent,
     });

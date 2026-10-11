@@ -107,6 +107,8 @@ describe("subagent timing completion", () => {
     await registerSubagentRun({
       runId,
       childSessionKey,
+      childAgentId: "main",
+      sessionEntry: { sessionId: "session-overlap" },
       requesterSessionKey,
       requesterDisplayKey: "main",
       task: "Synthetic timing reproduction",

@@ -6,6 +6,7 @@ import {
   withinTest,
 } from "../../../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../../../config/config.js";
+import { loadSessionEntry } from "../../../config/sessions/session-accessor.js";
 import type { createGatewayInstanceRuntime } from "../../../gateway/server-instance-runtime.js";
 import type { GatewayRequestContext } from "../../../gateway/server-methods/types.js";
 import { dispatchGatewayMethodInProcess } from "../../../gateway/server-plugin-in-process-dispatch.js";
@@ -156,6 +157,11 @@ export function registerNativeCancellationCases<
         registerSubagentRun({
           runId: parentRunId,
           childSessionKey: parentSessionKey,
+          childAgentId: "main",
+          sessionEntry: expectDefined(
+            loadSessionEntry({ storePath: bound.storePath, sessionKey: parentSessionKey }),
+            "registered parent session",
+          ),
           requesterSessionKey: requester,
           controllerSessionKey: requester,
           requesterDisplayKey: requester,
@@ -202,6 +208,11 @@ export function registerNativeCancellationCases<
           registerSubagentRun({
             runId: targetRunId,
             childSessionKey: targetKey,
+            childAgentId: "main",
+            sessionEntry: expectDefined(
+              loadSessionEntry({ storePath: bound.storePath, sessionKey: targetKey }),
+              "registered cancellation target",
+            ),
             requesterSessionKey: parentSessionKey,
             controllerSessionKey: parentSessionKey,
             requesterDisplayKey: parentSessionKey,

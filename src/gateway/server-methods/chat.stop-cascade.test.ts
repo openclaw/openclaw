@@ -106,6 +106,8 @@ function createGuardedStopFixture() {
     await registerSubagentRun({
       runId,
       childSessionKey: scope.sessionKey,
+      childAgentId: "ops",
+      sessionEntry: loadSessionEntryReadOnly(scope),
       requesterSessionKey,
       requesterAgentId: "ops",
       requesterDisplayKey: requesterSessionKey,
@@ -310,6 +312,8 @@ it.each(["during drain", "after abort"] as const)(
     await registerSubagentRun({
       runId,
       childSessionKey: child.sessionKey,
+      childAgentId: "ops",
+      sessionEntry: loadSessionEntryReadOnly(child),
       requesterSessionKey: test.parent.sessionKey,
       requesterAgentId: "ops",
       requesterDisplayKey: test.parent.sessionKey,
@@ -504,6 +508,8 @@ it.each([
       await registerSubagentRun({
         runId,
         childSessionKey,
+        childAgentId: "main",
+        sessionEntry: loadSessionEntryReadOnly({ storePath, sessionKey: childSessionKey }),
         requesterSessionKey: sessionKey,
         requesterAgentId: "main",
         requesterDisplayKey: sessionKey,

@@ -83,14 +83,18 @@ export function registerAgentAbortSubagentTests() {
         },
         { context, reqId: runId, client },
       );
-      for (const [childSessionKey, requesterTurnRunId, queued] of [
-        [ownedChildSessionKey, runId, false],
-        ...(collect ? [[queuedChildSessionKey, runId, true] as const] : []),
-        [unrelatedChildSessionKey, "other-parent-turn", false],
+      for (const [childSessionKey, requesterTurnRunId, queued, sessionId] of [
+        [ownedChildSessionKey, runId, false, "active-collector-session"],
+        ...(collect
+          ? [[queuedChildSessionKey, runId, true, "queued-collector-session"] as const]
+          : []),
+        [unrelatedChildSessionKey, "other-parent-turn", false, "unrelated-child-session"],
       ] as const) {
         await registerSubagentRun({
           runId: childSessionKey,
           childSessionKey,
+          childAgentId: "main",
+          sessionEntry: { sessionId },
           controllerSessionKey:
             cascade && requesterTurnRunId !== runId ? "agent:main:other" : "agent:main:main",
           requesterSessionKey: "agent:main:main",

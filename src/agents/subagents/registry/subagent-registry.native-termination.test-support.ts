@@ -27,7 +27,11 @@ export function registerSupersededNativeTimingTest({
     const childSessionKey = "agent:main:subagent:released-timing-owner";
     mockPendingAgentWait();
     mocks.entries = {
-      [childSessionKey]: { sessionId: "sess-released-timing-owner", updatedAt: 1 },
+      [childSessionKey]: {
+        sessionId: "sess-released-timing-owner",
+        lifecycleRevision: "revision-released-timing-owner",
+        updatedAt: 1,
+      },
     };
     const originalEntry = structuredClone(mocks.entries[childSessionKey]);
     const apply = expectDefined(

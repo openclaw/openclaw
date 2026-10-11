@@ -8,6 +8,7 @@ import {
   withinTest,
 } from "../../../../test/helpers/promise.js";
 import { getRuntimeConfig } from "../../../config/config.js";
+import { loadExactSessionEntryReadOnly } from "../../../config/sessions/session-accessor.js";
 import { reactivateCompletedSubagentSession } from "../../../gateway/session-subagent-reactivation.js";
 import * as lifecycleAdmission from "../../../sessions/session-lifecycle-admission.js";
 import {
@@ -35,15 +36,18 @@ it("does not transfer a selected task cancellation to an admitted follow-up gene
   const owner = "agent:main:main";
   const sessionKey = "agent:main:subagent:selected-generation";
   const sessionId = "selected-generation-session";
-  await writeSubagentSessionEntry({
+  const storePath = await writeSubagentSessionEntry({
     stateDir: fixture.stateDir,
     agentId: "main",
     sessionKey,
     defaultSessionId: sessionId,
+    lifecycleRevision: `${sessionId}-revision`,
   });
   await registerSubagentRun({
     runId: "selected-original",
     childSessionKey: sessionKey,
+    childAgentId: "main",
+    sessionEntry: loadExactSessionEntryReadOnly({ agentId: "main", storePath, sessionKey })?.entry,
     requesterSessionKey: owner,
     requesterDisplayKey: owner,
     task: "Original work",
@@ -112,10 +116,14 @@ it.each(["before interruption", "after interruption", "after abort"] as const)(
       agentId: "main",
       sessionKey,
       defaultSessionId: sessionId,
+      lifecycleRevision: `${sessionId}-revision`,
     });
     await registerSubagentRun({
       runId,
       childSessionKey: sessionKey,
+      childAgentId: "main",
+      sessionEntry: loadExactSessionEntryReadOnly({ agentId: "main", storePath, sessionKey })
+        ?.entry,
       requesterSessionKey: "agent:main:main",
       requesterAgentId: "main",
       requesterDisplayKey: "main",
@@ -220,10 +228,14 @@ it.each([
       agentId: "main",
       sessionKey,
       defaultSessionId: sessionId,
+      lifecycleRevision: `${sessionId}-revision`,
     });
     await registerSubagentRun({
       runId,
       childSessionKey: sessionKey,
+      childAgentId: "main",
+      sessionEntry: loadExactSessionEntryReadOnly({ agentId: "main", storePath, sessionKey })
+        ?.entry,
       requesterSessionKey: "agent:main:main",
       requesterAgentId: "main",
       requesterDisplayKey: "main",
@@ -383,10 +395,17 @@ it("admin cancellation interrupts every sibling before waiting for any sibling t
       agentId: "main",
       sessionKey: sessionKey(id),
       defaultSessionId: `${id}-session`,
+      lifecycleRevision: `${id}-revision`,
     });
     await registerSubagentRun({
       runId: id,
       childSessionKey: sessionKey(id),
+      childAgentId: "main",
+      sessionEntry: loadExactSessionEntryReadOnly({
+        agentId: "main",
+        storePath,
+        sessionKey: sessionKey(id),
+      })?.entry,
       requesterSessionKey: id === "root" ? requester : owner,
       requesterAgentId: "main",
       requesterDisplayKey: requester,
@@ -519,6 +538,12 @@ it("keeps a late descendant queued when registered before capacity release on an
     registerSubagentRun({
       runId: id,
       childSessionKey: key(id),
+      childAgentId: "main",
+      sessionEntry: loadExactSessionEntryReadOnly({
+        agentId: "main",
+        storePath,
+        sessionKey: key(id),
+      })?.entry,
       requesterSessionKey: parents[id],
       controllerSessionKey: parents[id],
       swarmRequesterSessionKey: parents[id],
@@ -537,6 +562,7 @@ it("keeps a late descendant queued when registered before capacity release on an
       agentId: "main",
       sessionKey: key(id),
       defaultSessionId: `${id}-session`,
+      lifecycleRevision: `${id}-revision`,
     });
     if (id !== "g") {
       await register(id);

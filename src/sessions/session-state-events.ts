@@ -38,7 +38,6 @@ import type { SessionStateActorType } from "./session-state-event-kinds.js";
 import { beginAmbientWatchPrune } from "./session-state-events.ambient-read.js";
 import {
   getSessionStateKysely,
-  isNotifiableWatcherKey,
   rowToSessionStateEvent,
   type SessionStateEventInput,
 } from "./session-state-events.kernel.js";
@@ -49,6 +48,10 @@ import {
 import { pruneSessionStateEvents } from "./session-state-events.prune.js";
 import type { SessionStateReadOperations } from "./session-state-events.read.worker-contract.js";
 import type { SessionStateEventRecord } from "./session-state-events.types.js";
+import {
+  isSessionStateWatchAddress,
+  sessionStateWatchAgentId,
+} from "./session-state-events.watch-address.js";
 import type {
   SessionStateWatchAddress,
   SessionStateWorkerOperations,
@@ -399,7 +402,13 @@ export function listAmbientGroupWatchTargets(
         .where("watcher_session_key", "=", watcherSessionKey)
         .where("provenance", "=", SESSION_WATCH_PROVENANCE_AMBIENT_GROUP),
     ).rows;
-    return new Set(rows.map((row) => row.target_session_key));
+    return new Set(
+      rows
+        .map((row) => row.target_session_key)
+        .filter((targetSessionKey) =>
+          isSessionStateWatchAddress({ watcherSessionKey, targetSessionKey }),
+        ),
+    );
   } catch (error) {
     log.warn(`failed to list ambient group watch targets: ${String(error)}`);
     return new Set();
@@ -411,10 +420,7 @@ async function registerWatch(
   provenance: SessionWatchCursorProvenance,
   options: SessionWatchRegistrationOptions,
 ): Promise<boolean> {
-  if (
-    params.watcherSessionKey === params.targetSessionKey ||
-    !isNotifiableWatcherKey(params.watcherSessionKey)
-  ) {
+  if (params.watcherSessionKey === params.targetSessionKey || !isSessionStateWatchAddress(params)) {
     return false;
   }
   let prepared: PreparedSessionWatchCaller | undefined;
@@ -423,7 +429,7 @@ async function registerWatch(
     const isStoreCurrent = captureSystemEventStoreCurrentCheck(params.watcherSessionKey);
     const input = {
       ...params,
-      targetAgentId: params.targetAgentId ?? resolveAgentIdFromSessionKey(params.targetSessionKey),
+      targetAgentId: sessionStateWatchAgentId(params.targetSessionKey)!,
       provenance,
       now: options.now ?? Date.now(),
     };

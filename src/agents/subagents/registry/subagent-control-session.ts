@@ -22,7 +22,9 @@ import {
 } from "../../../state/openclaw-agent-execution.js";
 import { runOpenClawAgentWriteAdmission } from "../../../state/openclaw-agent-write-admission.js";
 import type { AgentRunSessionTarget } from "../../run-session-target.types.js";
+import { resolveSubagentChildAuthority } from "./subagent-child-owner-match.js";
 import { resolveSubagentChildSessionOwner } from "./subagent-child-session-owner.js";
+import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 export type SubagentKillSession = {
   agentId: string;
@@ -41,6 +43,7 @@ export async function prepareSubagentKillSession(
   assertOwner: () => void,
   expected?: AgentRunSessionTarget,
   childAgentId?: string,
+  original?: SubagentRunRecord["childSessionIdentity"],
 ): Promise<SubagentKillSession> {
   const childOwner = resolveSubagentChildSessionOwner(
     { childSessionKey: sessionKey, childAgentId },
@@ -71,10 +74,28 @@ export async function prepareSubagentKillSession(
         }
         const entry = read.value;
         if (
+          resolveSubagentChildAuthority(
+            { childSessionKey: sessionKey, childAgentId: agentId, childSessionIdentity: original },
+            entry,
+          ).status !== "verified"
+        ) {
+          throw new Error(
+            "Subagent original session incarnation is unresolved or changed; no child work was changed.",
+          );
+        }
+        if (
           selected?.sessionId &&
-          (entry?.sessionId !== selected.sessionId ||
-            (selected.expectedLifecycleRevision !== undefined &&
-              entry?.lifecycleRevision !== selected.expectedLifecycleRevision))
+          resolveSubagentChildAuthority(
+            {
+              childSessionKey: sessionKey,
+              childAgentId: agentId,
+              childSessionIdentity: {
+                sessionId: selected.sessionId,
+                lifecycleRevision: selected.expectedLifecycleRevision,
+              },
+            },
+            entry ?? null,
+          ).status !== "verified"
         ) {
           throw new Error("Subagent session changed during cancellation preparation");
         }

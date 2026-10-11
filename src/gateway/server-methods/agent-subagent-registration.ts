@@ -1,5 +1,5 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { resolveAgentIdFromSessionKey, resolveAgentMainSessionKey } from "../../config/sessions.js";
+import { resolveAgentMainSessionKey } from "../../config/sessions.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginSubagentRequesterContext } from "../../plugins/runtime/subagent-requester-context.js";
@@ -71,7 +71,7 @@ export async function registerPluginSubagentRunFromGateway(params: {
   cfg: OpenClawConfig;
   runId: string;
   childSessionKey: string;
-  childAgentId?: string;
+  childAgentId: string;
   task: string;
   requester?: PluginSubagentRequesterContext;
   pluginId?: string;
@@ -81,7 +81,7 @@ export async function registerPluginSubagentRunFromGateway(params: {
   const { childSessionKey } = params;
   const ownerSessionKey = resolveAgentMainSessionKey({
     cfg: params.cfg,
-    agentId: resolveAgentIdFromSessionKey(childSessionKey),
+    agentId: params.childAgentId,
   });
   const requesterSessionKey = params.requester?.sessionKey ?? ownerSessionKey;
   const {

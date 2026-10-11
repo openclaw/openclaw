@@ -240,6 +240,9 @@ it.each([
         await registerSubagentRun({
           runId,
           childSessionKey,
+          childAgentId: "main",
+          sessionEntry: loadExactSessionEntryReadOnly({ storePath, sessionKey: childSessionKey })
+            ?.entry,
           requesterSessionKey: sourceKey,
           requesterAgentId: "main",
           requesterDisplayKey: sourceKey,

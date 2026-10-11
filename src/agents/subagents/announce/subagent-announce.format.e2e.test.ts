@@ -464,7 +464,6 @@ describe("subagent announce formatting", () => {
       },
       ...gatewayDeps,
       readSubagentSessionEntry: (_storePath, sessionKey) => readSessionFixture(sessionKey),
-      resolveAgentIdFromSessionKey: () => "main",
       resolveSessionStorePathCore: () => "/tmp/sessions.json",
     });
     resolveAgentIdFromSessionKeySpy.mockReset().mockImplementation(() => "main");
@@ -711,7 +710,6 @@ describe("subagent announce formatting", () => {
       // readSubagentSessionEntry is intentionally omitted so the real reader runs.
       subagentAnnounceOutputTesting.setDepsForTest({
         ...gatewayDeps,
-        resolveAgentIdFromSessionKey: () => "main",
         resolveSessionStorePathCore: () => storePath,
       });
       await run();

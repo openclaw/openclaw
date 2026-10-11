@@ -15,6 +15,10 @@ import {
   clearPublishedSwarmCollectorOutput,
   updateSwarmCollectorCompletion,
 } from "../swarm/swarm-collector.js";
+import {
+  resolveSubagentChildAuthority,
+  warnLegacySubagentAuthority,
+} from "./subagent-child-owner-match.js";
 import { resolveSubagentChildSessionOwner } from "./subagent-child-session-owner.js";
 import {
   prepareSubagentKillSession,
@@ -40,8 +44,8 @@ import { completeTerminalEffects } from "./subagent-registry-terminal-effects.js
 import type { SubagentCompletionRequest, SubagentRunRecord } from "./subagent-registry.types.js";
 import { isSameSubagentRunOwner } from "./subagent-run-generation.js";
 import {
-  resolveSubagentRunDeadlineMs,
   resolveSubagentRunEffectiveEndedAt,
+  shouldPreservePublishedExplicitRunTimeout,
 } from "./subagent-run-timeout.js";
 
 const MISSING_REQUIRED_FINAL_REPLY_ERROR = "subagent run ended before producing a final reply";
@@ -49,26 +53,6 @@ const MISSING_REQUIRED_FINAL_REPLY_ERROR = "subagent run ended before producing 
 const browserCleanupLoader = createLazyImportLoader(
   () => import("../../../browser-lifecycle-cleanup.js"),
 );
-
-function shouldPreservePublishedExplicitRunTimeout(entry: SubagentRunRecord): boolean {
-  if (
-    entry.execution.outcome?.status !== "timeout" ||
-    typeof entry.execution.endedAt !== "number"
-  ) {
-    return false;
-  }
-  const deadlineMs = resolveSubagentRunDeadlineMs(entry);
-  if (deadlineMs === undefined || entry.execution.endedAt < deadlineMs) {
-    return false;
-  }
-  return (
-    entry.cleanupHandled === true ||
-    typeof entry.cleanupCompletedAt === "number" ||
-    typeof entry.endedHookEmittedAt === "number" ||
-    entry.delivery?.status === "delivered" ||
-    typeof entry.delivery?.announcedAt === "number"
-  );
-}
 
 function resolveTerminalRequest(
   entry: SubagentRunRecord,
@@ -157,7 +141,7 @@ export async function completeSubagentRunAttempt(
     ? getCurrentSubagentRunOwner(params.runs, completeParams.expectedEntry)
     : params.runs.get(completeParams.runId);
   const lifecycleGeneration = getAgentEventLifecycleGeneration();
-  if (!selectedOwner) {
+  if (!selectedOwner || resolveSubagentChildAuthority(selectedOwner).status === "mismatch") {
     return;
   }
   let releaseCompletionLock: (() => void) | undefined = await context.acquireTerminalCompletionLock(
@@ -170,6 +154,7 @@ export async function completeSubagentRunAttempt(
     throw new SubagentRegistryMutationRejectedError("Subagent terminal execution changed");
   }
   try {
+    warnLegacySubagentAuthority(selected, params.warn);
     const assertCurrent = () => {
       assertSubagentRegistryWriteSourceCurrent(stateContext);
       if (
@@ -197,13 +182,18 @@ export async function completeSubagentRunAttempt(
     }
     assertCurrent();
     assertSessionBinding();
-    if (selected.collect && !selected.collectorCompletion) {
+    if (
+      selected.collect &&
+      !selected.collectorCompletion &&
+      resolveSubagentChildAuthority(selected).status === "verified"
+    ) {
       collectorSession = await prepareSubagentKillSession(
         params.getRuntimeConfig(),
         selected.childSessionKey,
         assertCurrent,
         selected.execution.transcriptTarget,
         selected.childAgentId,
+        selected.childSessionIdentity,
       );
     }
     const now = Date.now();
@@ -381,7 +371,9 @@ function planTerminalCompletion(
   if (
     !recoveryRequested &&
     (entry.terminalOwner === "interrupted-recovery" ||
-      entry.execution.suppressSessionEffects === true) &&
+      (entry.execution.suppressSessionEffects === true &&
+        (entry.execution.status === "terminal" ||
+          resolveSubagentChildAuthority(entry).status !== "legacy-unverified"))) &&
     entry.killIntent === undefined
   ) {
     // Restart recovery already persisted the terminal winner for this exact
@@ -493,7 +485,11 @@ function planTerminalCompletion(
       completionReason = SUBAGENT_ENDED_REASON_KILLED;
       completionOutcome = { status: "error", error: killIntent.reason };
       entry.killIntent = undefined;
-      if (killOwnsCurrentLifecycle && entry.execution.suppressSessionEffects !== true) {
+      if (
+        killOwnsCurrentLifecycle &&
+        resolveSubagentChildAuthority(entry).status === "verified" &&
+        entry.execution.suppressSessionEffects !== true
+      ) {
         suppressSessionEffects = false;
         entry.execution = {
           ...entry.execution,

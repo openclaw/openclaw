@@ -7,6 +7,7 @@ import { registerSubagentRun } from "../../agents/subagents/registry/subagent-re
 import { enqueueSwarmRun } from "../../agents/subagents/swarm/swarm-scheduler.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import {
+  loadSessionEntry,
   loadTranscriptEvents,
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
@@ -80,6 +81,8 @@ async function queueCollector(sessionKey: string, groupId: string, runId: string
   await registerSubagentRun({
     runId,
     childSessionKey: sessionKey,
+    childAgentId: "main",
+    sessionEntry: loadSessionEntry({ agentId: "main", sessionKey }),
     requesterSessionKey: "agent:main:main",
     requesterAgentId: "main",
     requesterDisplayKey: "main",

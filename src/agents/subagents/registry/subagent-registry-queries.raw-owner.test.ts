@@ -8,6 +8,7 @@ import {
   getSubagentRunByChildSessionKeyFromRuns,
   buildSubagentRunReadIndexFromRuns,
   countActiveRunsForSessionFromRuns,
+  listRunsForControllerFromRuns,
 } from "./subagent-registry-queries.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { buildSubagentRunView } from "./subagent-run-view.js";
@@ -25,8 +26,8 @@ function toRunMap(runs: SubagentRunRecord[]) {
   return new Map(runs.map((run) => [run.runId, run]));
 }
 
-describe("raw child owner lookup compatibility", () => {
-  it("hides older owner rows behind the latest legacy row", () => {
+describe("recorded child owner lookup", () => {
+  it("preserves distinct owners and unresolved diagnostic rows", () => {
     const now = Date.now();
     const owners = ["main", undefined, "research"];
     const view = buildSubagentRunView({
@@ -42,13 +43,13 @@ describe("raw child owner lookup compatibility", () => {
       countPendingDescendantRuns: () => 0,
       now,
     });
-    expect(view.latest.map((entry) => entry.runId)).toEqual(["main"]);
+    expect(view.latest.map((entry) => entry.runId)).toEqual(["main", "legacy", "research"]);
   });
 
-  // Registry-level compatibility: tools always supply owners for new raw registrations.
   it.each([
+    [undefined, undefined],
     ["research", "research"],
-    ["invalid/owner", "legacy"],
+    ["invalid/owner", undefined],
   ])("retains legacy raw rows while selecting owner %s", (owner, expected) => {
     const runs = toRunMap(
       [undefined, "main", "research"].map((childAgentId, index) =>
@@ -61,6 +62,42 @@ describe("raw child owner lookup compatibility", () => {
       ),
     );
     expect(getSubagentRunByChildSessionKeyFromRuns(runs, "global", owner)?.runId).toBe(expected);
+  });
+
+  it("refuses an agent-qualified lookup when the selected owner disagrees", () => {
+    const run = makeRun({ runId: "qualified" });
+    expect(
+      getSubagentRunByChildSessionKeyFromRuns(toRunMap([run]), run.childSessionKey, "research"),
+    ).toBeNull();
+  });
+
+  it.each([
+    ["agent:research:main", undefined, "research", true],
+    ["agent:research:main", "main", "research", true],
+    ["agent:research:main", "main", "main", false],
+    ["global", "research", "research", true],
+    ["global", "research", "main", false],
+    ["global", undefined, "research", false],
+  ] as const)(
+    "scopes controller %s with requester owner %s to agent %s (matches=%s)",
+    (controllerSessionKey, requesterAgentId, controllerAgentId, matches) => {
+      const run = makeRun({ runId: "controlled", controllerSessionKey, requesterAgentId });
+      expect(
+        listRunsForControllerFromRuns(toRunMap([run]), controllerSessionKey, controllerAgentId),
+      ).toEqual(matches ? [run] : []);
+    },
+  );
+
+  it.each([
+    { childSessionKey: "agent:invalid/owner:child", childAgentId: undefined },
+    { childSessionKey: "agent:main:", childAgentId: "main" },
+    { childSessionKey: "agent:main:child", childAgentId: "research" },
+    { childSessionKey: "global", childAgentId: "invalid/owner" },
+  ])("refuses malformed or conflicting recorded ownership: %j", (identity) => {
+    const run = makeRun({ runId: "invalid", ...identity });
+    expect(
+      getSubagentRunByChildSessionKeyFromRuns(toRunMap([run]), run.childSessionKey, "main"),
+    ).toBeNull();
   });
 });
 

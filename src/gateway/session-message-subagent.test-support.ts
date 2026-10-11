@@ -26,6 +26,7 @@ export function registerRecoveredSubagentSessionEventTest({
     const entry = createSubagentRunRecord({
       runId: "run-recovered-subscriber",
       childSessionKey: "agent:main:subagent:recovered-subscriber",
+      childSessionIdentity: { sessionId: "sess-recovered-subscriber" },
       requesterSessionKey: "agent:main:parent",
       requesterDisplayKey: "parent",
       task: "finish recovered child work",

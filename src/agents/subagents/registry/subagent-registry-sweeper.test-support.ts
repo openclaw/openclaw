@@ -4,8 +4,8 @@ import * as stateWorker from "../../../state/openclaw-state-worker-store.js";
 import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
 import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
 import { createSubagentRegistrySweeper } from "./subagent-registry-sweeper.js";
-import type { SubagentRegistryWrite } from "./subagent-registry.store.kernel.js";
 import { subagentRunRowVersion } from "./subagent-registry.store.row.js";
+import type { SubagentRegistryWrite } from "./subagent-registry.store.types.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { isSameSubagentRunOwner } from "./subagent-run-generation.js";
 
@@ -13,6 +13,7 @@ export function createSubagentSweeperRun(): SubagentRunRecord {
   return createSubagentRunRecord({
     runId: "interrupted-run",
     childSessionKey: "agent:main:subagent:interrupted",
+    childSessionIdentity: { sessionId: "session-id", lifecycleRevision: "session-revision" },
     requesterSessionKey: "agent:main:main",
     requesterDisplayKey: "main",
     task: "recover after restart",
@@ -107,6 +108,7 @@ export function createSubagentSweeperHarness(
   const callGateway = vi.fn();
   const resumeRequesterSettleWake = vi.fn();
   const warn = vi.fn();
+  const startSubagentAnnounceCleanupFlow = vi.fn(() => true);
   const sweeper = createSubagentRegistrySweeper({
     runs,
     resumedRuns: new Set(),
@@ -117,7 +119,7 @@ export function createSubagentSweeperHarness(
     getGatewayRecoveryRuntime: () => runtime.current,
     finalizeInterruptedSubagentRun,
     resumeRequesterSettleWake,
-    startSubagentAnnounceCleanupFlow: vi.fn(() => true),
+    startSubagentAnnounceCleanupFlow,
     completeCleanupBookkeeping,
     isCleanupOwnerCurrent: (selected) =>
       isSameSubagentRunOwner(runs.get(selected.runId), selected) || !runs.has(selected.runId),
@@ -158,6 +160,7 @@ export function createSubagentSweeperHarness(
     finalizeInterruptedSubagentRun,
     notifyContextEngineSubagentEnded,
     resumeRequesterSettleWake,
+    startSubagentAnnounceCleanupFlow,
     runContextEngineSubagentEnded,
     sweeper,
     warn,

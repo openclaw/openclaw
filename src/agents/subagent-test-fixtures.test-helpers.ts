@@ -3,6 +3,7 @@ import type { InternalSessionEntry } from "../config/sessions.js";
 import type { SessionOrigin } from "../config/sessions/types.js";
 import type { SqliteWorkerCommand } from "../infra/sqlite-worker-contract.js";
 import { normalizeLegacySessionEntryDelivery } from "../infra/state-migrations.legacy-session-store.js";
+import { parseAgentSessionKey } from "../routing/session-key.js";
 import type { OpenClawStateWorkerOperations } from "../state/openclaw-state-worker-contract.js";
 import type { DomainScope } from "../state/openclaw-state-worker-store.types.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
@@ -210,6 +211,8 @@ export function createSubagentRunParams(
 ): RegisterSubagentRunParams {
   return {
     childSessionKey: "agent:main:subagent:child",
+    childAgentId: parseAgentSessionKey(overrides.childSessionKey)?.agentId ?? "main",
+    sessionEntry: { sessionId: "sess-child" },
     requesterSessionKey: "agent:main:main",
     requesterDisplayKey: "main",
     task: overrides.runId,

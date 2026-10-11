@@ -34,6 +34,8 @@ it.each(["completed", "failed"] as const)(
     await registerSubagentRun({
       runId: "run-old",
       childSessionKey,
+      childAgentId: "main",
+      sessionEntry: { sessionId: "steer-session" },
       requesterSessionKey: "agent:main:main",
       requesterDisplayKey: "main",
       task: "initial task",
