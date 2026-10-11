@@ -17,6 +17,7 @@ import {
   buildAgentPeerSessionKey,
   buildGroupHistoryKey,
   classifySessionKeyShape,
+  isFreeAcpSessionKey,
   parseAgentSessionKey,
   resolveAgentIdFromSessionKey,
   resolveEventSessionKey,
@@ -36,6 +37,20 @@ describe("agent id session-key boundary", () => {
     expect(() => resolveAgentIdFromSessionKey("agent::secret", "primary")).toThrow(
       "Malformed agent session key",
     );
+  });
+});
+
+describe("isFreeAcpSessionKey", () => {
+  it.each([
+    ["agent:claude:acp:11111111-2222-4333-8555-666666666666", true],
+    ["agent:codex:acp:bound-session", true],
+    ["agent:main:acp:binding:discord:default:9373ab192b2317f4", false],
+    ["agent:main:main", false],
+    ["agent:main:discord:channel:C1", false],
+    [undefined, false],
+    ["", false],
+  ])("classifies %s as free ACP: %s", (key, expected) => {
+    expect(isFreeAcpSessionKey(key)).toBe(expected);
   });
 });
 

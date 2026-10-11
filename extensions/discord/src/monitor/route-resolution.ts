@@ -11,6 +11,15 @@ import {
   resolveAgentIdFromSessionKey,
 } from "openclaw/plugin-sdk/routing";
 
+/**
+ * Local free-harness check (mirrors core `isFreeAcpSessionKey`). Kept plugin-local so this
+ * hot monitor path adds no new public SDK export.
+ */
+function isFreeAcpHarnessKey(sessionKey: string | undefined | null): boolean {
+  const rest = parseAgentSessionKey(sessionKey ?? undefined)?.rest?.toLowerCase();
+  return rest?.startsWith("acp:") === true && !rest.startsWith("acp:binding:");
+}
+
 export function buildDiscordRoutePeer(params: {
   isDirectMessage: boolean;
   isGroupDm: boolean;
@@ -115,6 +124,8 @@ export function resolveDiscordEffectiveRoute(params: {
     ...params.route,
     sessionKey: boundSessionKey,
     agentId: resolveAgentIdFromSessionKey(boundSessionKey),
+    // A free ACP key names an external harness; the routed channel agent keeps dispatch ownership.
+    ...(isFreeAcpHarnessKey(boundSessionKey) ? { ownerAgentId: params.route.agentId } : {}),
     lastRoutePolicy: deriveLastRoutePolicy({
       sessionKey: boundSessionKey,
       mainSessionKey: params.route.mainSessionKey,

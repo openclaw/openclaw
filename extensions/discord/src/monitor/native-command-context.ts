@@ -20,6 +20,8 @@ type BuildDiscordNativeCommandContextParams = {
   commandArgs: CommandArgs;
   sessionKey: string;
   commandTargetSessionKey: string;
+  /** Configured channel agent that owns dispatch when the session is a free ACP harness key. */
+  routeOwnerAgentId?: string;
   accountId: string;
   agentId: string;
   buildContext?: DiscordBuildInboundContext;
@@ -134,6 +136,7 @@ export async function buildDiscordNativeCommandContext(
     },
     route: {
       agentId: params.agentId,
+      ...(params.routeOwnerAgentId ? { ownerAgentId: params.routeOwnerAgentId } : {}),
       accountId: params.accountId,
       routeSessionKey: params.commandTargetSessionKey,
       dispatchSessionKey: params.sessionKey,
@@ -203,6 +206,7 @@ export async function buildDiscordNativeInteractionContext(
     ...context,
     ...targets,
     agentId: route.agentId,
+    routeOwnerAgentId: route.ownerAgentId,
     accountId: route.accountId,
     interactionId: interaction.rawData.id,
     channelId: channelContext.rawChannelId || "unknown",

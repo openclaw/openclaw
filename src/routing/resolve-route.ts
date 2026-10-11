@@ -65,6 +65,12 @@ export type ResolvedAgentRoute = {
   groupScope?: GroupScope;
   /** Internal session key used for persistence + concurrency. */
   sessionKey: string;
+  /**
+   * Configured agent that owns reply dispatch when `sessionKey` is a free ACP harness key
+   * (`agent:<harness>:acp:<id>`). The harness id is not a configured agent; execution, storage,
+   * and transcripts keep the bound key's agent scope.
+   */
+  ownerAgentId?: string;
   /** Convenience alias for direct-chat collapse. */
   mainSessionKey: string;
   /** Which session should receive inbound last-route updates. */

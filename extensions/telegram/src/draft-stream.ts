@@ -742,6 +742,23 @@ export function createTelegramDraftStream(params: {
     });
     // Joining a rotated first send can add a late-accepted superseded preview.
     retireSupersededPreviews();
+    // Retain only a preview whose visible content is confirmed delivered final
+    // content. stop() marks final before attempting the final edit, so a
+    // rejected edit leaves final set while the message still shows the stale
+    // preview; the lane then falls back to a separate send and teardown must
+    // delete the obsolete bubble instead of preserving it beside the fallback.
+    const finalContentDelivered =
+      streamState.final &&
+      (lastDeliveredText.trimEnd() === lastRequestedText.trimEnd() ||
+        remainingFinalContent() !== undefined);
+    if (finalContentDelivered) {
+      // The preview was finalized in place and now carries the delivered
+      // answer (same bubble the user watched transform). Deleting it here
+      // would drop delivered content seconds after delivery when a late
+      // teardown races the lane-level finalized flag. Teardown must retain it.
+      await drainProviderMessageObservations();
+      return;
+    }
     if (typeof messageId === "number" && Number.isFinite(messageId)) {
       scheduleDetachedDelete(messageId, visibleSince);
     }

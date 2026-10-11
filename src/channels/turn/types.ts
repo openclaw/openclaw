@@ -87,6 +87,8 @@ export type ConversationFacts = {
 
 export type RouteFacts = {
   agentId: string;
+  /** Configured agent that owns reply dispatch when the session is a free ACP harness key. */
+  ownerAgentId?: string;
   dmScope?: DmScope;
   accountId?: string;
   routeSessionKey: string;
