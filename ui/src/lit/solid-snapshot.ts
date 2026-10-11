@@ -7,6 +7,7 @@ export function renderSolidSnapshot(view: () => JSX.Element): DocumentFragment {
     createRoot((dispose) => {
       const host = document.createElement("div");
       try {
+        // Static artwork must be inserted before cloning, even during a parent commit.
         insert(host, view());
         const snapshot = document.createDocumentFragment();
         for (const child of host.childNodes) {

@@ -6,9 +6,10 @@ import { expect, it, vi } from "vitest";
 import { LitRouteHost } from "../app/lit-route-host.tsx";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { LitContent } from "./solid-bridge.ts";
+import { solidContent } from "./solid-content.tsx";
 import { renderSolidSnapshot } from "./solid-snapshot.ts";
 
-it("renders inert Solid artwork inside a connected Lit route", () => {
+it("renders inert Solid artwork inside a connected Lit route", async () => {
   const view = mountSolid(() => (
     <LitRouteHost
       renderValue={() =>
@@ -16,14 +17,16 @@ it("renders inert Solid artwork inside a connected Lit route", () => {
           <svg aria-label="Avatar artwork">
             <circle cx="4" cy="5" r="2" />
           </svg>
-        ))}`
+        ))}${solidContent(() => <strong>Solid child</strong>, {})}`
       }
     />
   ));
+  await Promise.resolve();
   flush();
   const artwork = view.container.querySelector('svg[aria-label="Avatar artwork"]');
   expect(artwork?.querySelector("circle")?.getAttribute("cx")).toBe("4");
   expect(artwork?.namespaceURI).toBe("http://www.w3.org/2000/svg");
+  expect(view.container.querySelector("strong")?.textContent).toBe("Solid child");
 });
 
 it("retains a Lit island's nodes and disconnects its directives on Solid disposal", () => {

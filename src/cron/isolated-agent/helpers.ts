@@ -92,7 +92,7 @@ export function pickSummaryFromOutput(text: string | undefined) {
 }
 
 /** Picks the last non-empty payload text while ignoring terminal error payloads first. */
-export function pickLastNonEmptyTextFromPayloads(
+function pickLastNonEmptyTextFromPayloads(
   payloads: Array<{ text?: string | undefined; isError?: boolean }>,
 ) {
   const successful = payloads

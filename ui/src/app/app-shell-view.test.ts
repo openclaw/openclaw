@@ -16,7 +16,7 @@ import { bootstrapApplication } from "./bootstrap.ts";
 
 setupSidebarTest();
 
-function mountShell() {
+async function mountShell() {
   const runtime = bootstrapApplication();
   const owner = new ShellOwner(document.createElement("openclaw-app-shell"), runtime);
   owner.routeState = { routeId: "chat" };
@@ -31,17 +31,18 @@ function mountShell() {
     owner.disconnect();
     runtime.stop();
   });
+  await Promise.resolve();
   flush();
   return { owner, runtime, view };
 }
 
-it("keeps one sidebar and outlet while navigation moves between desktop and drawer", () => {
+it("keeps one sidebar and outlet while navigation moves between desktop and drawer", async () => {
   let mobile = false;
   vi.stubGlobal(
     "matchMedia",
     vi.fn(() => ({ matches: mobile })),
   );
-  const { owner, view } = mountShell();
+  const { owner, view } = await mountShell();
   const sidebar = view.container.querySelector("openclaw-app-sidebar");
   const outlet = view.container.querySelector("openclaw-router-outlet");
   expect(sidebar).toBe(owner.navigationSidebar);
@@ -72,7 +73,7 @@ it("keeps one sidebar and outlet while navigation moves between desktop and draw
 });
 
 it("delegates the live shell to a workspace plugin and restores it after deselection", async () => {
-  const { runtime, owner, view } = mountShell();
+  const { runtime, owner, view } = await mountShell();
   const shell = view.container.querySelector(".shell");
   const sidebar = view.container.querySelector("openclaw-app-sidebar");
   const abort = new AbortController();

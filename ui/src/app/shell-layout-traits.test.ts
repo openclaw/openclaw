@@ -118,6 +118,7 @@ describe("shell layout publication", () => {
       content,
     );
     try {
+      await Promise.resolve();
       flush();
       expect(content.classList.contains("content--logs-page")).toBe(true);
       expect(content.querySelector("section")?.textContent).toBe("Logs");

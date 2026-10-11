@@ -1,6 +1,5 @@
 import { ContextProvider } from "@lit/context";
 import { insert, render, spread } from "@solidjs/web";
-import { nothing, render as renderLit } from "lit";
 import {
   createComponent,
   createRenderEffect,
@@ -9,7 +8,6 @@ import {
   flush,
   getOwner,
   onCleanup,
-  onSettled,
   runWithOwner,
   untrack,
 } from "solid-js";
@@ -18,6 +16,7 @@ import { shellLayoutOwnerForHost } from "../app/shell-layout-owner.ts";
 import { ShellLayoutProvider } from "../app/shell-layout-traits-solid.tsx";
 import { ApplicationProvider } from "../lib/reactive/context.ts";
 import type { JSX } from "../types/solid-elements.d.ts";
+import { mountLitContent } from "./solid-content.tsx";
 
 /** Temporary DOM-context bridge for unported Lit descendants; delete at cutover. */
 export function connectLegacyApplicationContext(
@@ -40,16 +39,22 @@ export function connectLegacyApplicationContext(
 export function createLitContentRef(value: () => unknown): (element: HTMLElement) => void {
   const owner = getOwner();
   let host: HTMLElement;
-  let part: ReturnType<typeof renderLit> | undefined;
+  let mount: ReturnType<typeof mountLitContent> | undefined;
+  let disposed = false;
   onCleanup(() => {
-    part?.setConnected(false);
-    renderLit(nothing, host);
+    disposed = true;
+    mount?.dispose();
   });
-  onSettled(() => {
-    // Initial refs are detached; layout directives need the connected host.
+  queueMicrotask(() => {
+    if (disposed) {
+      return;
+    }
+    // Wait for connection outside Solid's flush: Lit can mount another Solid island.
     runWithOwner(owner, () => {
+      const content = mountLitContent(undefined, host, { host });
+      mount = content;
       createRenderEffect(value, (next) => {
-        part = renderLit(next, host, { host });
+        content.update(next);
       });
     });
   });
@@ -382,17 +387,14 @@ export function LitContent(props: {
   if (className) {
     host.className = className;
   }
-  let part: ReturnType<typeof renderLit> | undefined;
-  // Parent observers discover controls in these stateless fragments immediately.
+  const mount = mountLitContent(undefined, host, { host });
+  // Commit Lit descendants before post-render observers inspect the host.
   createRenderEffect(
     () => props.render(),
     (template) => {
-      part = renderLit(template, host, { host });
+      mount.update(template);
     },
   );
-  onCleanup(() => {
-    part?.setConnected(false);
-    renderLit(nothing, host);
-  });
+  onCleanup(mount.dispose);
   return host;
 }
