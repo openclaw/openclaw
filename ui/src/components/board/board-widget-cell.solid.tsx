@@ -323,13 +323,8 @@ function BoardWidgetCellContent(
     },
   );
   onSettled(() => {
-    // A nested bridge settles before its returned host is inserted by the parent.
-    queueMicrotask(() => {
-      if (connected) {
-        frame.connect();
-        requestUpdate();
-      }
-    });
+    frame.connect();
+    requestUpdate();
   });
   onCleanup(() => {
     connected = false;

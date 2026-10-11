@@ -1,3 +1,4 @@
+import type { AcpReplayWorkerOperations } from "../acp/event-ledger.worker-contract.js";
 import type { AcpSessionWriteOperations } from "../acp/runtime/session-meta-write.worker-contract.js";
 import type { AuthProfileWorkerOperations } from "../agents/auth-profiles/store.worker-contract.js";
 import type { NativeHookRelayStoreWorkerOperations } from "../agents/harness/native-hook-relay-store.worker-contract.js";
@@ -51,6 +52,8 @@ import type { SkillWorkshopWorkerOperations } from "../skills/workshop/changes.w
 import type { TranscriptWriteOperations } from "../transcripts/store-write.worker-contract.js";
 import type { agentRecoveryOperations } from "./agent-deletion-recovery.worker.js";
 import type { agentDeletionOperations } from "./agent-deletion.worker.js";
+import type { ClawAdoptionWorkerOperations } from "./claw-adoption.worker.js";
+import type { MachineStateWorkerOperations } from "./config-machine-state.worker.js";
 import type { OnboardingRecommendationWriteOperations } from "./onboarding-recommendations.kernel.js";
 import type { AgentDatabaseRegistryWorkerOperations } from "./openclaw-agent-db-contract.js";
 import type { RepositoryWorkspaceWorkerOperations } from "./session-repository-workspaces.worker-contract.js";
@@ -65,6 +68,8 @@ export type RegisteredStateWorkerOperations = WorkerOperations<typeof gatewayBoo
   WorkerOperations<typeof agentRecoveryOperations> &
   WorkerOperations<typeof localWorkspaceOperations> &
   ClawProvenanceWriteOperations &
+  ClawAdoptionWorkerOperations &
+  MachineStateWorkerOperations &
   GeneratedHtmlProvenanceOperations &
   MentionWorkerOperations &
   ConfigSnapshotWorkerOperations &
@@ -96,6 +101,7 @@ export type RegisteredStateWorkerOperations = WorkerOperations<typeof gatewayBoo
   NodeWorkerJournalWorkerOperations &
   ChannelIngressWorkerOperations &
   AcpSessionWriteOperations &
+  AcpReplayWorkerOperations &
   SkillUploadWorkerOperations &
   SkillLibraryWorkerOperations &
   SkillWorkshopWorkerOperations &
@@ -122,6 +128,9 @@ export const stateWorkerRegistry = createWorkerOperationRegistry<
   RegisteredStateWorkerOperations,
   WorkerWriteOperationContext
 >({
+  clawAdoption: () => import("./claw-adoption.worker.js").then((m) => m.clawAdoptionOperations),
+  machineState: () =>
+    import("./config-machine-state.worker.js").then((m) => m.machineStateOperations),
   agentDeletion: () => import("./agent-deletion.worker.js").then((m) => m.agentDeletionOperations),
   agentRecovery: () =>
     import("./agent-deletion-recovery.worker.js").then((m) => m.agentRecoveryOperations),
@@ -177,6 +186,7 @@ export const stateWorkerRegistry = createWorkerOperationRegistry<
       (m) => m.pluginModelCatalogCredentialReadOperations,
     ),
   plugins: () => import("../plugins/state.worker.js").then((m) => m.pluginRuntimeOperations),
+  acpReplay: () => import("../acp/event-ledger.worker.js").then((m) => m.acpReplayOperations),
   acp: () =>
     import("../acp/runtime/session-meta-write.worker.js").then((m) => m.acpSessionOperations),
   skillLibrary: () =>

@@ -1,7 +1,7 @@
 import { ContextProvider } from "@lit/context";
 import { cleanup, fireEvent, render } from "@solidjs/testing-library";
 import { LitElement, html } from "lit";
-import { createSignal, flush, onCleanup } from "solid-js";
+import { createEffect, createSignal, flush, onCleanup } from "solid-js";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { applicationContext, type ApplicationContext } from "../app/context.ts";
 import { ShellLayoutOwner } from "../app/shell-layout-owner.ts";
@@ -10,7 +10,7 @@ import { ApplicationProvider, useApplication } from "../lib/reactive/context.ts"
 import { createApplicationContextProvider } from "../test-helpers/application-context.ts";
 import { collectGarbageForTest } from "../test-helpers/garbage-collection.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "./solid-bridge.ts";
+import { defineSolidBridge, LitContent, type SolidBridgeElement } from "./solid-bridge.ts";
 
 type Props = { label: string; enabled: boolean; count: number; payload: object | null };
 type Methods = { show(): void; close(): void; setPayload(value: object): object };
@@ -234,6 +234,29 @@ it("delivers the original bubbling, cancelable event with its exact detail", asy
   expect(received?.defaultPrevented).toBe(true);
 });
 
+it("runs nested bridge effects after the parent render scope", () => {
+  const Ready = defineSolidBridge(
+    "openclaw-solid-bridge-effect-test",
+    () => {
+      const [ready, setReady] = createSignal(false);
+      createEffect(
+        () => true,
+        () => {
+          setReady(true);
+        },
+      );
+      return <output>{ready() ? "ready" : "pending"}</output>;
+    },
+    { properties: {} },
+  );
+  const view = render(() => (
+    <section>
+      <Ready />
+    </section>
+  ));
+  expect(view.container.querySelector("output")?.textContent).toBe("ready");
+});
+
 it("uses a single Solid-owned host and preserves reactive props, children, events, and disposal", async () => {
   const [label, setLabel] = createSignal("solid");
   const action = vi.fn();
@@ -266,6 +289,19 @@ it("uses a single Solid-owned host and preserves reactive props, children, event
   view.unmount();
   await Promise.resolve();
   expect(disposed).toHaveBeenCalledTimes(1);
+});
+
+it("accepts property publication while a Solid owner adopts a mounted bridge", async () => {
+  const host = createHost();
+  document.body.append(host);
+  await host.updateComplete;
+  const view = render(() => {
+    host.label = "adopted";
+    return <div>{host}</div>;
+  });
+  await host.updateComplete;
+  expect(view.container.querySelector("output")?.textContent).toBe("adopted:0:false");
+  expect(mounted).toHaveBeenCalledTimes(1);
 });
 
 it.each(["attribute", "Solid props"])(
@@ -471,4 +507,40 @@ it("releases a disconnected Solid root while the custom element itself is retain
   expect(control.deref()).toBeUndefined();
   expect(weak.deref()).toBeUndefined();
   expect(host.isConnected).toBe(false);
+});
+
+it("updates a Lit leaf without replacing its input and releases it with its Solid owner", () => {
+  const [label, setLabel] = createSignal("First");
+  const view = mountSolid(() => (
+    <LitContent render={() => html`<label>${label()}<input /></label>`} />
+  ));
+  try {
+    flush();
+    const input = view.container.querySelector("input")!;
+    input.value = "Draft";
+    setLabel("Second");
+    flush();
+    expect(view.container.textContent).toBe("Second");
+    expect(view.container.querySelector("input")).toBe(input);
+    expect(input.value).toBe("Draft");
+  } finally {
+    view.unmount();
+  }
+  expect(view.container.childNodes).toHaveLength(0);
+});
+
+it("keeps sanitized content directly inside its styled host", () => {
+  const view = mountSolid(() => (
+    <LitContent
+      tag="div"
+      class="chat-text"
+      render={() =>
+        html`<p>Summary</p>
+          <pre>Result</pre>`
+      }
+    />
+  ));
+  flush();
+  expect(view.container.querySelector(".chat-text > p")?.textContent).toBe("Summary");
+  expect(view.container.querySelector(".chat-text > :last-child")?.tagName).toBe("PRE");
 });

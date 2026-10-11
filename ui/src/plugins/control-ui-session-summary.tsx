@@ -278,6 +278,7 @@ function SessionHistory(props: PluginSessionSummaryProps & { scope: SummaryScope
                   </Show>
                 </header>
                 <SanitizedHtml
+                  tag="div"
                   class="sidebar-markdown"
                   html={toSanitizedMarkdownHtml(message().text)}
                 />

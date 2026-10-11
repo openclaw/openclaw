@@ -172,12 +172,7 @@ function BoardViewContent(props: BoardViewProps, host: BoardViewElement) {
     () => view(),
     (current) => {
       host.toggleAttribute("data-initial-loading", current.loading);
-      // Nested bridge roots flush while this parent is still being inserted.
-      queueMicrotask(() => {
-        if (!disposed) {
-          state.reconcileInitialPresentation();
-        }
-      });
+      state.reconcileInitialPresentation();
     },
   );
   onSettled(() => {

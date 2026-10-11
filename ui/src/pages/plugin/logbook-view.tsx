@@ -304,6 +304,7 @@ function Standup(props: {
       >
         {(standup) => (
           <SanitizedHtml
+            tag="div"
             class="logbook-standup__body markdown-body"
             html={toSanitizedMarkdownHtml(standup().text)}
           />
