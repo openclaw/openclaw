@@ -201,7 +201,7 @@ jobs:
       trusted_reason: ${{ steps.validate.outputs.trusted_reason }}
     steps:
       - name: Prepare Git owner
-        uses: openclaw/openclaw/.github/actions/git-owner@a8fe1a587bb86ffece5dd20d2b8091c82658030f
+        uses: openclaw/openclaw/.github/actions/git-owner@88095dc00eef288c3829909d4dc64a9e249fa7ef
 
       - name: Checkout selected ref
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

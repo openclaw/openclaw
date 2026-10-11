@@ -113,7 +113,7 @@ jobs:
       cache_write_allowed: ${{ steps.candidate_trust.outputs.cache_write_allowed }}
     steps:
       - name: Prepare Git owner
-        uses: openclaw/openclaw/.github/actions/git-owner@a379bbd73e30b84a89aca4d54744ab9ca19082e7
+        uses: openclaw/openclaw/.github/actions/git-owner@88095dc00eef288c3829909d4dc64a9e249fa7ef
 
       - name: Checkout target metadata
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -351,7 +351,7 @@ jobs:
 
       - name: Prepare Git owner
         if: steps.lane.outputs.run == 'true'
-        uses: openclaw/openclaw/.github/actions/git-owner@a379bbd73e30b84a89aca4d54744ab9ca19082e7
+        uses: openclaw/openclaw/.github/actions/git-owner@88095dc00eef288c3829909d4dc64a9e249fa7ef
 
       - name: Checkout OpenClaw
         if: steps.lane.outputs.run == 'true'
@@ -766,7 +766,7 @@ jobs:
       REQUESTED_REPEAT: ${{ inputs.repeat || '3' }}
     steps:
       - name: Prepare Git owner
-        uses: openclaw/openclaw/.github/actions/git-owner@a379bbd73e30b84a89aca4d54744ab9ca19082e7
+        uses: openclaw/openclaw/.github/actions/git-owner@88095dc00eef288c3829909d4dc64a9e249fa7ef
 
       - name: Checkout OpenClaw source target
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -1152,7 +1152,7 @@ jobs:
 
       - name: Prepare Git owner
         if: steps.lane.outputs.run == 'true'
-        uses: openclaw/openclaw/.github/actions/git-owner@a379bbd73e30b84a89aca4d54744ab9ca19082e7
+        uses: openclaw/openclaw/.github/actions/git-owner@88095dc00eef288c3829909d4dc64a9e249fa7ef
 
       - name: Checkout performance publisher helper
         if: steps.lane.outputs.run == 'true'
@@ -1619,7 +1619,7 @@ jobs:
           fi
 
       - name: Prepare Git owner
-        uses: openclaw/openclaw/.github/actions/git-owner@a379bbd73e30b84a89aca4d54744ab9ca19082e7
+        uses: openclaw/openclaw/.github/actions/git-owner@88095dc00eef288c3829909d4dc64a9e249fa7ef
 
       - name: Checkout Gateway concurrency target
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
