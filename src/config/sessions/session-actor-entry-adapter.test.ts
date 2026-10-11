@@ -261,7 +261,6 @@ describe("generic session entry APIs with actor memory storage", () => {
       const resume = createDeferredCore();
       const pending = applySessionEntryExactReplacements({
         ...params,
-        includeSessionWindowOwner: undefined,
         sessionKeys: [scope.sessionKey, siblingKey],
         update: async (rows) => {
           entered.resolve();

@@ -213,8 +213,10 @@ it("reads unbound sibling and batch sharing from the captured owner", async () =
       },
       authority,
     );
-    expect(prepared.facts.readCurrent(cfg).target?.entry.label).toBe("Sibling postimage");
-    expect(prepared.source.target?.entry.label).toBe("Sibling postimage");
+    expect(prepared.facts.readCurrent(cfg).target?.entry).toMatchObject({
+      label: "Sibling postimage",
+    });
+    expect(prepared.source.target?.entry).toMatchObject({ label: "Sibling postimage" });
     memorySessionActorOwners.closeDatabase(owner);
     const replacement = memorySessionActorOwners.get(owner);
     owners.push(replacement);

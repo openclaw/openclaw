@@ -313,8 +313,8 @@ describe("memory transcript reports and edits", () => {
       sessionTarget: scope,
       request: createRequest({
         messages: [
-          { role: "user", content: "one", timestamp: 1 },
-          { role: "user", content: "two", timestamp: 2 },
+          { role: "user", content: [{ type: "text", text: "one" }], timestamp: 1 },
+          { role: "user", content: [{ type: "text", text: "two" }], timestamp: 2 },
         ],
       }),
       assertCurrent: () => undefined,
@@ -334,7 +334,7 @@ describe("memory transcript reports and edits", () => {
         ...params,
         request: {
           ...params.request,
-          messages: [{ role: "user", content: "changed", timestamp: 1 }],
+          messages: [{ role: "user", content: [{ type: "text", text: "changed" }], timestamp: 1 }],
         },
       }),
     ).toEqual({ ok: false, reason: "invalid-batch" });

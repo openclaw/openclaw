@@ -16,6 +16,7 @@ import {
 import type { TrajectoryEvent } from "../../trajectory/types.js";
 import { appendTranscriptMessage, upsertSessionEntryCore } from "./session-accessor.js";
 import type { SessionActorAuthority } from "./session-actor-contract.js";
+import { createSessionActorMemoryConversations } from "./session-actor-memory-conversation-contract.js";
 import { memorySessionActorOwners } from "./session-actor-memory-owner.js";
 import { mutateSessionActorMemorySideEffects } from "./session-actor-memory-side-effects.js";
 import { createSessionActorMemoryState } from "./session-actor-memory-state.js";
@@ -455,9 +456,12 @@ it("bounds message-tool outcome rows by occurrence time and insertion order", ()
     ...row,
     id: index + 1,
   }));
+  const conversations = createSessionActorMemoryConversations();
   const context: SessionActorMemoryStorageContext = {
     ...location,
     state,
+    conversations,
+    editConversations: () => conversations,
     get: () => state,
     *entries() {
       yield [sessionKey, state];

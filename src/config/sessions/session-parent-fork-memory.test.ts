@@ -14,6 +14,7 @@ import {
   runWithSessionActorStorage,
   type SessionActorStorageBinding,
 } from "./session-actor-storage-binding.js";
+import type { InternalSessionEntry } from "./types.js";
 
 // The real adapters must never open native storage or allocate database workers.
 vi.mock("node:sqlite", async (importOriginal) => ({
@@ -62,7 +63,7 @@ async function fixture(childAgent = "main") {
     lifecycleRevision: "parent-lifecycle",
     updatedAt: 1,
     incognito: true,
-  };
+  } satisfies InternalSessionEntry;
   const events = [
     {
       type: "session",
