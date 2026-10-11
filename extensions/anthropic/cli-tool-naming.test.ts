@@ -35,7 +35,7 @@ describe("Claude CLI tool naming guidance", () => {
     const once = transformPrompt(TOOLING_PROMPT);
 
     expect(once).toBeTypeOf("string");
-    if (once === undefined) {
+    if (typeof once !== "string") {
       throw new Error("Claude CLI did not produce a transformed system prompt");
     }
     expect(transformPrompt(once)).toBe(once);
