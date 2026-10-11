@@ -1,9 +1,11 @@
+import type WaTabGroup from "@awesome.me/webawesome/dist/components/tab-group/tab-group.js";
+
 export type { JSX } from "@solidjs/web";
 
 declare module "@solidjs/web" {
   namespace JSX {
     interface IntrinsicElements {
-      "wa-tab-group": HTMLAttributes<HTMLElement> & {
+      "wa-tab-group": HTMLAttributes<WaTabGroup> & {
         "prop:active"?: string;
         activation?: "auto" | "manual";
         "without-scroll-controls"?: boolean;
@@ -14,10 +16,11 @@ declare module "@solidjs/web" {
         active?: boolean;
         "prop:tabIndex"?: number;
       };
-      "wa-tab-panel": HTMLAttributes<HTMLElement> & {
-        name?: string;
-        active?: boolean;
-      };
+      "wa-tab-panel": HTMLAttributes<HTMLElement> &
+        Properties<HTMLElement> & {
+          name?: string;
+          active?: boolean;
+        };
       "resizable-divider": Omit<HTMLAttributes<HTMLElement>, "onResize"> & {
         "prop:orientation": "horizontal" | "vertical";
         "prop:label": string;

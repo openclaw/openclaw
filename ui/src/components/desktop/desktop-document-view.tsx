@@ -42,7 +42,7 @@ export function DesktopDocumentView(props: DesktopDocumentViewOptions) {
               autocomplete="off"
               autocapitalize="off"
               spellcheck="false"
-              tabIndex={-1}
+              tabindex={-1}
               aria-label={t("desktop.keyboardInput")}
               disabled={props.state !== "connected" || !props.controlling}
               value={props.keyboardInputValue}

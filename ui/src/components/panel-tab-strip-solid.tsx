@@ -406,7 +406,7 @@ function TabGroupView<T extends SolidPanelTabStripTab>(props: PanelTabStripProps
                   slot="nav"
                   class="rail-header__action tabstrip-tab__close"
                   type="button"
-                  tabIndex={selected() ? 0 : -1}
+                  tabindex={selected() ? 0 : -1}
                   aria-label={tab().closeLabel}
                   onKeyDown={(event: KeyboardEvent) => {
                     if (
