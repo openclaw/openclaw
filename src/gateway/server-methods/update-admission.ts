@@ -87,7 +87,7 @@ export async function admitGatewayUpdateRequest(request: GatewayRequestHandlerOp
       undefined,
       errorShape(
         ErrorCodes.INVALID_REQUEST,
-        "This OCM version does not support an explicit Git update target.",
+        "This OCM version does not support an explicit update target.",
       ),
     );
     return null;

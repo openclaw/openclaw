@@ -132,7 +132,9 @@ export class UpdateCampaignController {
     }
   }
 
-  adopt(expectedTarget?: TrackedDevUpdateTarget): UpdateCampaignAdoptionResult {
+  adopt(
+    expectedTarget?: TrackedDevUpdateTarget | Extract<UpdateCampaignTarget, { kind: "package" }>,
+  ): UpdateCampaignAdoptionResult {
     const campaign = this.campaign;
     const target = this.target;
     if (!campaign || !target) {
@@ -143,9 +145,11 @@ export class UpdateCampaignController {
     }
     if (
       expectedTarget &&
-      (target.kind !== "git" ||
-        target.upstreamRef !== expectedTarget.upstreamRef ||
-        target.upstreamSha !== expectedTarget.upstreamSha)
+      ("kind" in expectedTarget
+        ? target.kind !== "package" || target.version !== expectedTarget.version
+        : target.kind !== "git" ||
+          target.upstreamRef !== expectedTarget.upstreamRef ||
+          target.upstreamSha !== expectedTarget.upstreamSha)
     ) {
       return { status: "mismatch" };
     }

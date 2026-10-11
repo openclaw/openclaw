@@ -70,6 +70,35 @@ providers ignore barge-in and end the session on an explicit output stop.
 - `update.status` refreshes and returns the latest update restart sentinel, including the post-restart running version when available.
 - `wizard.start`, `wizard.next`, `wizard.status`, and `wizard.cancel` expose the onboarding wizard over WS RPC.
 
+### Exact update targets
+
+For an npm-owned global installation on the stable or beta channel, an operator
+can pin `update.run` to an exact package version:
+
+```json
+{ "target": { "kind": "package", "version": "2026.9.5" } }
+```
+
+`version` must be an exact three-part numeric version (at most 64 characters),
+without a `v` prefix, prerelease, build suffix, whitespace, range, tag, or package
+URL. This is a one-operation target, not a channel change. Other native package
+managers, Git installations, and the dev channel return `unsupported-update-target`;
+extended-stable returns `extended-stable-tag-unsupported`. Host-owned, immutable,
+and externally supervised installations retain their existing owner refusals.
+OCM rejects explicit targets rather than silently selecting its default release.
+
+An existing campaign must match the requested version exactly. A mismatch returns
+`update-target-campaign-mismatch` without changing that campaign; an applying
+campaign returns `update-campaign-applying`. These refusals happen before update
+handoff. The existing npm updater still owns metadata, integrity, schema, service,
+and recovery checks. Handoff acceptance is not completed installation: retain
+the returned `runId` and read `update.runs.get` and `update.status` after
+reconnecting. Do not blindly replay a request whose outcome is unknown.
+
+The optional Git target and omitted-target behavior are unchanged. Older
+Gateways reject package targets; clients must report unsupported targeting instead
+of retrying without the target, which could install a different version.
+
 ## Agent and workspace helpers
 
 - `agents.list` returns gateway-visible agent entries, including effective model/runtime metadata and optional semantic `kind` (`agent` or `system`). Entries with recorded creation provenance also include `createdVia` (`operator`, `agent`, or `claw`), nullable `creatorAgentId`, and millisecond `createdAt`; entries without provenance omit those fields. Clients advertise the `agent-kind` handshake capability to receive the complete typed roster; clients without it keep the legacy selector-safe roster without system rows. Kind-aware clients exclude `system` rows from ordinary selectors while retaining them in diagnostic views. Older v4 gateways may return rows without `kind`.

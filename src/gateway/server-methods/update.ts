@@ -26,6 +26,7 @@ import {
 import { normalizeGatewayRestartDelayMs, scheduleGatewayRestart } from "../../infra/restart.js";
 import { detectRespawnSupervisor } from "../../infra/supervisor-markers.js";
 import {
+  EXTENDED_STABLE_TAG_UNSUPPORTED_REASON,
   normalizeUpdateChannel,
   resolveEffectiveUpdateChannel,
 } from "../../infra/update-channels.js";
@@ -181,7 +182,10 @@ export const updateHandlers: GatewayRequestHandlers = {
       trigger,
       origin,
       before: { version: VERSION },
-      ...(params.target ? { target: { kind: "git", sha: params.target.upstreamSha } } : {}),
+      target:
+        params.target?.kind === "git"
+          ? { kind: "git", sha: params.target.upstreamSha }
+          : params.target,
     });
     const runId = run.runId;
     const warn = (message: string) => context?.logGateway?.warn(message);
@@ -304,18 +308,30 @@ export const updateHandlers: GatewayRequestHandlers = {
         installKind: status.installKind,
         git: status.git,
       }).channel;
-      const explicitDevTarget = params.target
-        ? devUpdateTargetFromGitTarget(params.target)
-        : undefined;
+      const explicitPackageTarget = params.target?.kind === "package" ? params.target : undefined;
+      const explicitDevTarget =
+        params.target?.kind === "git" ? devUpdateTargetFromGitTarget(params.target) : undefined;
       let targetFailureReason =
         explicitDevTarget && (installSurface.kind !== "git" || effectiveChannel !== "dev")
           ? "unsupported-update-target"
           : explicitDevTarget && explicitDevTarget.upstreamRef !== status.git?.upstream
             ? "update-target-upstream-mismatch"
             : undefined;
+      // Exact package targets retain npm ownership and extended-stable's target policy.
+      if (explicitPackageTarget) {
+        if (
+          installSurface.kind !== "global" ||
+          installSurface.mode !== "npm" ||
+          effectiveChannel === "dev"
+        ) {
+          targetFailureReason = "unsupported-update-target";
+        } else if (effectiveChannel === "extended-stable") {
+          targetFailureReason = EXTENDED_STABLE_TAG_UNSUPPORTED_REASON;
+        }
+      }
       const adoption = targetFailureReason
         ? undefined
-        : updateLifecycle.campaign?.adopt(explicitDevTarget);
+        : updateLifecycle.campaign?.adopt(explicitPackageTarget ?? explicitDevTarget);
       if (adoption?.status === "mismatch") {
         targetFailureReason = "update-target-campaign-mismatch";
       } else if (adoption?.status === "applying") {
@@ -328,10 +344,11 @@ export const updateHandlers: GatewayRequestHandlers = {
         adoptedCampaign?.target.kind === "git"
           ? devUpdateTargetFromGitTarget(adoptedCampaign.target)
           : undefined;
-      const adoptedPackageTargetVersion =
-        adoptedCampaign?.target.kind === "package"
+      const packageTargetVersion =
+        explicitPackageTarget?.version ??
+        (adoptedCampaign?.target.kind === "package"
           ? adoptedCampaign.target.version.trim() || undefined
-          : undefined;
+          : undefined);
       const devTarget = explicitDevTarget ?? adoptedDevTarget;
       recordUpdateRunPhase(runId, "requested", {
         ...(adoptedCampaign
@@ -339,9 +356,9 @@ export const updateHandlers: GatewayRequestHandlers = {
           : {}),
         target: {
           channel: effectiveChannel,
-          kind: installSurface.kind === "git" ? "git" : "package",
+          kind: params.target?.kind ?? (installSurface.kind === "git" ? "git" : "package"),
           ...(devTarget ? { sha: devTarget.upstreamSha } : {}),
-          ...(adoptedPackageTargetVersion ? { version: adoptedPackageTargetVersion } : {}),
+          ...(packageTargetVersion ? { version: packageTargetVersion } : {}),
         },
       });
       if (adoptedCampaign) {
@@ -353,14 +370,14 @@ export const updateHandlers: GatewayRequestHandlers = {
       }
       sentinelMeta.target = devTarget
         ? `${devTarget.upstreamRef}@${devTarget.upstreamSha}`
-        : adoptedPackageTargetVersion
-          ? `version ${adoptedPackageTargetVersion}`
+        : packageTargetVersion
+          ? `version ${packageTargetVersion}`
           : `${effectiveChannel} channel`;
       const acknowledgeUpdate = async (beforeVersion: string | null) => {
         if (refuseUnauthorizedChatUpdate()) {
           return false;
         }
-        const targetVersion = adoptedPackageTargetVersion ?? getUpdateAvailable()?.latestVersion;
+        const targetVersion = packageTargetVersion ?? getUpdateAvailable()?.latestVersion;
         const acknowledgedRun = recordUpdateRunPhase(runId, "requested", {
           before: { version: beforeVersion ?? VERSION },
           ...(targetVersion ? { target: { version: targetVersion } } : {}),
@@ -524,7 +541,7 @@ export const updateHandlers: GatewayRequestHandlers = {
             restartDrainTimeoutMs: resolveGatewayRestartDeferralTimeoutMs(),
             restartDelayMs: requestedRestartDelayMs === undefined ? 0 : restartDelayMs,
             ...(handoffChannel ? { channel: handoffChannel } : {}),
-            ...(adoptedPackageTargetVersion ? { tag: adoptedPackageTargetVersion } : {}),
+            ...(packageTargetVersion ? { tag: packageTargetVersion } : {}),
             ...(devTarget ? { devTarget } : {}),
             meta: sentinelMeta,
             handoffId,

@@ -286,14 +286,23 @@ export const UpdateRunParamsSchema = closedObject({
   restartDelayMs: Type.Optional(Type.Integer({ minimum: 0 })),
   timeoutMs: Type.Optional(Type.Integer({ minimum: 1 })),
   target: Type.Optional(
-    closedObject({
-      kind: Type.Literal("git"),
-      upstreamRef: Type.String({
-        minLength: 1,
-        pattern: "^[^\\s\\u0000-\\u001f\\u007f-\\u009f]+$",
+    Type.Union([
+      closedObject({
+        kind: Type.Literal("package"),
+        version: Type.String({
+          maxLength: 64,
+          pattern: "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(?![\\s\\S])",
+        }),
       }),
-      upstreamSha: Type.String({ pattern: "^[a-fA-F0-9]{40}$" }),
-    }),
+      closedObject({
+        kind: Type.Literal("git"),
+        upstreamRef: Type.String({
+          minLength: 1,
+          pattern: "^[^\\s\\u0000-\\u001f\\u007f-\\u009f]+$",
+        }),
+        upstreamSha: Type.String({ pattern: "^[a-fA-F0-9]{40}$" }),
+      }),
+    ]),
   ),
 });
 

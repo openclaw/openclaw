@@ -170,7 +170,7 @@ describe("update protocol schemas", () => {
     expect(Value.Check(UpdateRunParamsSchema, { requester: { senderId: 123 } })).toBe(false);
   });
 
-  it("accepts only closed, exact tracked Git targets for update.run", () => {
+  it("accepts closed, exact tracked Git targets for update.run", () => {
     const target = {
       kind: "git",
       upstreamRef: "origin/main",
@@ -191,6 +191,38 @@ describe("update protocol schemas", () => {
     ]) {
       expect(Value.Check(UpdateRunParamsSchema, { target: invalidTarget })).toBe(false);
     }
+  });
+
+  it("accepts only exact package versions, not package specs or moving tags", () => {
+    expect(
+      Value.Check(UpdateRunParamsSchema, { target: { kind: "package", version: "2026.9.5" } }),
+    ).toBe(true);
+    for (const version of [
+      "",
+      "latest",
+      "beta",
+      "^2026.9.5",
+      "2026.9",
+      "v2026.9.5",
+      "2026.09.5",
+      "2026.9.5-beta.1",
+      "2026.9.5+build",
+      " 2026.9.5",
+      "2026.9.5\n",
+      `${"1".repeat(61)}.1.1`,
+      "file:./openclaw.tgz",
+      "https://example.com/openclaw.tgz",
+      "openclaw@2026.9.5",
+    ]) {
+      expect(Value.Check(UpdateRunParamsSchema, { target: { kind: "package", version } })).toBe(
+        false,
+      );
+    }
+    expect(
+      Value.Check(UpdateRunParamsSchema, {
+        target: { kind: "package", version: "2026.9.5", url: "https://example.com/openclaw.tgz" },
+      }),
+    ).toBe(false);
   });
 
   it("accepts an optional explicit checkout refresh", () => {
