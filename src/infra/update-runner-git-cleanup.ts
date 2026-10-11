@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { formatErrorMessage } from "./errors.js";
 import { trimLogTail } from "./restart-sentinel.js";
+import { createUpdateErrorFact } from "./update-failure-facts.js";
 import { formatUpdateCleanupCommand } from "./update-maintenance.js";
 import { UpdateRequesterRevokedError } from "./update-requester-authority.js";
 import { MAX_LOG_CHARS, runStep } from "./update-runner-command.js";
@@ -10,21 +11,34 @@ import type { CommandRunner } from "./update-runner-types.js";
 
 const PREFLIGHT_CLEANUP_TIMEOUT_MS = 60_000;
 
-async function reportCleanupProgress(report: () => void | Promise<void>) {
+/** Only reporting failed; no runtime or process-settlement verdict is implied. */
+export class GitCleanupReportingError extends AggregateError {
+  constructor(primary: unknown, reportingFailures: unknown[]) {
+    super([primary, ...reportingFailures], "Git update and cleanup reporting failed", {
+      cause: primary,
+    });
+  }
+}
+
+async function reportCleanupProgress(
+  report: () => void | Promise<void>,
+  onReportingError: (error: unknown) => void,
+) {
   try {
     await report();
   } catch (error) {
     // Closed forward reporting does not revoke this temporary worktree's cleanup.
     const refusal = error instanceof Error ? error.cause : undefined;
+    if (hasCommandProcessCleanupError(error) || error instanceof AggregateError) {
+      throw error;
+    }
     if (
-      hasCommandProcessCleanupError(error) ||
-      error instanceof AggregateError ||
       !(
         error instanceof UpdateRequesterRevokedError ||
         refusal instanceof UpdateRequesterRevokedError
       )
     ) {
-      throw error;
+      onReportingError(error);
     }
   }
 }
@@ -40,7 +54,12 @@ async function repairPreflightCleanup(worktreeDir: string, preflightRoot: string
 }
 
 export async function cleanupGitPreflight(
-  params: { gitRoot: string; step: StepFactory; runCommand: CommandRunner },
+  params: {
+    gitRoot: string;
+    step: StepFactory;
+    runCommand: CommandRunner;
+    onCleanupReportingError?: (error: unknown) => void;
+  },
   worktreeDir: string,
   preflightRoot: string,
 ) {
@@ -51,6 +70,11 @@ export async function cleanupGitPreflight(
       params.gitRoot,
     ),
     runCommand: params.runCommand,
+  };
+  const reportingFailures: unknown[] = [];
+  const onReportingError = (error: unknown) => {
+    reportingFailures.push(error);
+    params.onCleanupReportingError?.(error);
   };
   // Cancellation ends candidate work, not cleanup of the worktree and its Git metadata.
   // Keep cleanup commands in the owned process tree with their existing bounded budget.
@@ -71,7 +95,8 @@ export async function cleanupGitPreflight(
     ...options,
     progress: {
       ...options.progress,
-      onStepStart: (step) => reportCleanupProgress(() => options.progress?.onStepStart?.(step)),
+      onStepStart: (step) =>
+        reportCleanupProgress(() => options.progress?.onStepStart?.(step), onReportingError),
       onStepComplete: undefined,
     },
     runCommand: runCleanupCommand,
@@ -120,12 +145,31 @@ export async function cleanupGitPreflight(
       message: `Skipped preflight cleanup. Remove the retained temporary copy with: ${formatUpdateCleanupCommand(preflightRoot)}. Reason: ${removeStep.stderrTail || "temporary worktree removal failed"}`,
     };
   }
-  await reportCleanupProgress(() =>
-    options.progress?.onStepComplete?.({
-      ...removeStep,
-      index: options.stepIndex,
-      total: options.totalSteps,
-    }),
+  await reportCleanupProgress(
+    () =>
+      options.progress?.onStepComplete?.({
+        ...removeStep,
+        index: options.stepIndex,
+        total: options.totalSteps,
+      }),
+    onReportingError,
   );
+  if (reportingFailures.length > 0) {
+    // Reporting is not runtime verification and cannot revoke private scratch cleanup.
+    options.results?.push({
+      name: "preflight-cleanup-reporting",
+      command: "",
+      cwd: options.cwd,
+      durationMs: 0,
+      exitCode: 0,
+      advisory: {
+        kind: "recoverable-maintenance",
+        message: "Preflight cleanup reporting failed; cleanup was still attempted.",
+      },
+      failureFacts: reportingFailures.map((error) =>
+        createUpdateErrorFact("preflight-cleanup-reporting", error, options.env),
+      ),
+    });
+  }
   return removed;
 }
