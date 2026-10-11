@@ -67,7 +67,7 @@ overrides:
   file-type: 22.1.1
   form-data: 4.0.6
   ip-address: 10.7.3
-  "mailauth@7.1.0>nodemailer": 10.0.13
+  "mailauth@7.1.0>nodemailer": 10.0.14
   minimatch: 10.2.6
   path-to-regexp: 8.4.2
   proxy-addr: 2.0.8
