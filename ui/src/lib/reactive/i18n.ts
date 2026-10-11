@@ -74,3 +74,4 @@ export function projectI18n(source: TranslationSource) {
 const translation = projectI18n(i18n);
 export const t = translation.t;
 export const getLocale = translation.locale;
+export const i18nRevision = translation.revision;
