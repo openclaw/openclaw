@@ -17,7 +17,7 @@ import { withPluginStateWorkerReceipt } from "./plugin-state-publication.js";
 import {
   compareAndApplyPluginStateEntry,
   observePluginStateEntry,
-} from "./plugin-state-store.comparison.js";
+} from "./plugin-state-store.comparison.worker.js";
 import {
   withPluginStateDatabaseReadOnly,
   wrapPluginStateError,

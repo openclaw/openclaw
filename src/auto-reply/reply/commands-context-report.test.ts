@@ -9,7 +9,7 @@ import { persistSessionTranscriptTurn } from "../../config/sessions/session-acce
 import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { buildContextReply } from "./commands-context-report.js";
-import { buildCommandContext } from "./commands-context.js";
+import { buildCommandContextForTest as buildCommandContext } from "./commands-context.test-support.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 import { stripStructuralPrefixes } from "./mentions.js";
 import { buildTestCtx } from "./test-ctx.js";
