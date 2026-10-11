@@ -93,12 +93,15 @@ function isUnsupportedOptionalTimeoutConfigRejection(key: string, error: unknown
   );
 }
 
-export function isRejectedThinkingConfigOption(key: string, error: unknown): boolean {
+/**
+ * The adapter represents the thinking key but refuses this level as a value.
+ * Narrower than {@link isRejectedThinkingConfigOption}: an outright unsupported
+ * control is excluded, because losing the control itself is a binding problem
+ * rather than a level the backend merely cannot name.
+ */
+export function isRejectedThinkingConfigValue(key: string, error: unknown): boolean {
   if (!isThinkingConfigKey(key)) {
     return false;
-  }
-  if (isUnsupportedControlRejection(error)) {
-    return true;
   }
   const description = describeConfigOptionRejection(error);
   const describesConfigOption =
@@ -110,6 +113,13 @@ export function isRejectedThinkingConfigOption(key: string, error: unknown): boo
     ACP_CONFIG_REJECTION_CODE_RE.test(description) &&
     CONFIG_OPTION_REJECTION_RE.test(description)
   );
+}
+
+function isRejectedThinkingConfigOption(key: string, error: unknown): boolean {
+  if (!isThinkingConfigKey(key)) {
+    return false;
+  }
+  return isUnsupportedControlRejection(error) || isRejectedThinkingConfigValue(key, error);
 }
 
 export async function resolveManagerRuntimeCapabilities(params: {

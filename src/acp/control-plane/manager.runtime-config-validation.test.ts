@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  AcpRuntimeError,
   AcpSessionManager,
   baseCfg,
   createRuntime,
@@ -174,4 +175,26 @@ describe("AcpSessionManager runtime config validation", () => {
       expect(state.currentMeta?.runtimeOptions).toEqual({ thinking: "high" });
     },
   );
+
+  it("still surfaces a thinking control the adapter cannot take at all", async () => {
+    const sessionKey = "agent:claude:acp:config";
+    const { manager, runtimeState, state } = setup(
+      readySessionMeta({ agent: "claude", runtimeOptions: { thinking: "high" } }),
+    );
+    runtimeState.setConfigOption.mockImplementation(async () => {
+      throw new AcpRuntimeError("ACP_BACKEND_UNSUPPORTED_CONTROL", "Live off is unsupported");
+    });
+
+    // Tolerance covers a level the adapter cannot name, not a control it has lost.
+    await expect(
+      manager.setSessionConfigOption({
+        cfg: baseCfg,
+        sessionKey,
+        key: "thinking",
+        value: "off",
+        tolerateRejectedThinking: true,
+      }),
+    ).rejects.toMatchObject({ code: "ACP_BACKEND_UNSUPPORTED_CONTROL" });
+    expect(state.currentMeta?.runtimeOptions).toEqual({ thinking: "high" });
+  });
 });

@@ -3,7 +3,7 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { AcpRuntimeError, withAcpRuntimeErrorBoundary } from "../runtime/errors.js";
 import {
-  isRejectedThinkingConfigOption,
+  isRejectedThinkingConfigValue,
   resolveManagerRuntimeCapabilities,
 } from "./manager.runtime-controls.js";
 import type { ManagerRuntimeHandleCache } from "./manager.runtime-handle-cache.js";
@@ -163,9 +163,10 @@ export async function runSetManagerSessionConfigOption(
     });
   } catch (error) {
     // Automatic reconciliation replays an inherited thinking level the adapter may
-    // not represent. Keep the accepted selection instead of failing the caller;
-    // explicit operator commands still surface the rejection.
-    if (params.tolerateRejectedThinking && isRejectedThinkingConfigOption(wireKey, error)) {
+    // not be able to name. Keep the accepted selection instead of failing the
+    // caller; explicit operator commands still surface the rejection, and so does
+    // an adapter that cannot take the control at all.
+    if (params.tolerateRejectedThinking && isRejectedThinkingConfigValue(wireKey, error)) {
       return resolveRuntimeOptionsFromMeta(meta);
     }
     throw error;
