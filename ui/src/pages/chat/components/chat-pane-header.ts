@@ -1,5 +1,7 @@
 import type WaDropdown from "@awesome.me/webawesome/dist/components/dropdown/dropdown.js";
+import type WaPopover from "@awesome.me/webawesome/dist/components/popover/popover.js";
 import { html, nothing, type TemplateResult } from "lit";
+import { ref } from "lit/directives/ref.js";
 import { buildControlUiResourcePath } from "../../../../../src/gateway/control-ui-resource-routes.js";
 import type { GatewaySessionRow, SessionBranch } from "../../../api/types.ts";
 import type { ApplicationContext } from "../../../app/context.ts";
@@ -20,6 +22,7 @@ import { renderSessionColorDot } from "../../../components/session-color.ts";
 import { renderSessionOwnerChip } from "../../../components/session-owner-chip.ts";
 import { isCloudWorkerPlacementState } from "../../../components/session-row-badges.ts";
 import "../../../components/tooltip.ts";
+import { syncPopoverExpanded, syncPopoverLabel } from "../../../components/web-awesome-popover.ts";
 import "../../../components/workspace-icon.ts";
 import { t } from "../../../i18n/index.ts";
 import { formatRelativeTimestamp } from "../../../lib/format.ts";
@@ -405,6 +408,15 @@ export function renderChatPaneHeader(props: ChatPaneHeaderProps) {
                 <wa-dropdown
                   class="chat-pane__branches-menu"
                   placement="bottom-end"
+                  @wa-hide=${(event: Event) => {
+                    const menu = event.currentTarget;
+                    if (event.target === menu && menu instanceof HTMLElement) {
+                      const help = menu.querySelector<WaPopover>(".chat-pane__versions-help");
+                      if (help) {
+                        help.open = false;
+                      }
+                    }
+                  }}
                   @wa-select=${(event: CustomEvent<{ item: { value?: string } }>) => {
                     const leafEntryId = event.detail.item.value;
                     const branch = props.branches.find(
@@ -428,8 +440,35 @@ export function renderChatPaneHeader(props: ChatPaneHeaderProps) {
                     title=${props.branchSwitchDisabledReason ?? t("chat.sessionHeader.branches")}
                     aria-label=${t("chat.sessionHeader.branches")}
                   >
-                    ${icons.gitBranch}
+                    ${icons.history}
                   </button>
+                  <div class="chat-pane__versions-heading">
+                    <span>${t("chat.sessionHeader.branches")}</span>
+                    <button
+                      id=${`versions-help-${props.paneId}`}
+                      class="btn btn--ghost btn--icon chat-pane__versions-info"
+                      type="button"
+                      autofocus
+                      aria-label=${t("chat.sessionHeader.versionsHelpLabel")}
+                      aria-haspopup="dialog"
+                      aria-expanded="false"
+                      aria-controls=${`versions-help-content-${props.paneId}`}
+                    >
+                      ${icons.info}
+                    </button>
+                    <wa-popover
+                      ${ref(syncPopoverLabel)}
+                      id=${`versions-help-content-${props.paneId}`}
+                      class="chat-pane__versions-help"
+                      for=${`versions-help-${props.paneId}`}
+                      aria-label=${t("chat.sessionHeader.versionsHelpLabel")}
+                      placement="bottom-end"
+                      @wa-show=${syncPopoverExpanded}
+                      @wa-hide=${syncPopoverExpanded}
+                    >
+                      ${t("chat.sessionHeader.versionsHelp")}
+                    </wa-popover>
+                  </div>
                   ${props.branches.map((branch) => {
                     const updatedAt = Date.parse(branch.updatedAt ?? "");
                     const relativeTime = formatRelativeTimestamp(updatedAt, { fallback: "" });
@@ -456,6 +495,7 @@ export function renderChatPaneHeader(props: ChatPaneHeaderProps) {
                         ${
                           branch.active
                             ? html`<span
+                                slot="details"
                                 class="chat-pane__branch-active"
                                 aria-label=${t("chat.sessionHeader.activeBranch")}
                                 >${icons.check}</span

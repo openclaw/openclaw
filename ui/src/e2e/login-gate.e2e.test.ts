@@ -12,7 +12,7 @@ import {
   controlUiSessionUrl,
   installMockGateway,
 } from "../test-helpers/control-ui-e2e.ts";
-import { controlUiE2eBuiltModuleRequest } from "./control-ui-built-module.test-support.ts";
+import { controlUiE2eRouteStylesheetRequest } from "./control-ui-built-module.test-support.ts";
 import {
   createControlUiE2eSuite,
   holdModuleResponse,
@@ -752,14 +752,15 @@ suite.define(() => {
   it("keeps generic help collapsed until requested when there is no failure", async () => {
     const context = await suite.browser.newContext({ viewport: { height: 900, width: 1280 } });
     const page = await context.newPage();
-    const chatModule = await holdModuleResponse(
+    // Hold route-only CSS so startup stays pending without blocking the lazy login module.
+    const chatStyles = await holdModuleResponse(
       page,
-      controlUiE2eBuiltModuleRequest("ui/src/pages/chat/route-entry.ts"),
+      controlUiE2eRouteStylesheetRequest("chat", "new"),
     );
 
     try {
       await renderLoginGate(page, suite.server.baseUrl);
-      await chatModule.request;
+      await chatStyles.request;
       const mounting = mountLoginGate(page, null);
       void mounting.catch(() => {});
       // Let fixture mounting begin before the startup route can finish loading.
@@ -770,7 +771,7 @@ suite.define(() => {
               ?.startupPending,
         ),
       ).toBe(true);
-      chatModule.release();
+      chatStyles.release();
       await mounting;
       expect(await page.locator(".login-gate__failure").count()).toBe(0);
 
@@ -781,7 +782,7 @@ suite.define(() => {
       await help.locator("summary").click();
       expect(await page.locator(".login-gate__steps").isVisible()).toBe(true);
     } finally {
-      chatModule.release();
+      chatStyles.release();
       await page.unrouteAll({ behavior: "wait" });
       await closeContext(context);
     }

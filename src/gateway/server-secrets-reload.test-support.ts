@@ -32,7 +32,9 @@ export function registerGatewaySecretCredentialReloadCases(
     await reload();
 
     expect(stopChannel).not.toHaveBeenCalled();
-    expect(startChannel.mock.calls).toEqual([["slack", "ops", { preserveManualStop: true }]]);
+    expect(startChannel.mock.calls).toEqual([
+      ["slack", "ops", { reason: "secrets-reload", preserveManualStop: true }],
+    ]);
     expect(respond).toHaveBeenCalledWith(true, { ok: true, warningCount: 0 });
   });
 
@@ -44,7 +46,9 @@ export function registerGatewaySecretCredentialReloadCases(
     await reload();
 
     expect(stopChannel).not.toHaveBeenCalled();
-    expect(startChannel.mock.calls).toEqual([["slack", "ops", { preserveManualStop: true }]]);
+    expect(startChannel.mock.calls).toEqual([
+      ["slack", "ops", { reason: "secrets-reload", preserveManualStop: true }],
+    ]);
     expect(listActiveDegradedSecretOwners()).toContainEqual(expect.objectContaining(owner));
     expect(respond).toHaveBeenCalledWith(true, { ok: true, warningCount: 0 });
   });
@@ -98,6 +102,8 @@ export function registerGatewaySecretCredentialReloadCases(
 
     expect(isManuallyStopped).toHaveBeenCalledWith("slack", "Ops Team");
     expect(stopChannel).not.toHaveBeenCalled();
-    expect(startChannel.mock.calls).toEqual([["slack", "Ops Team", { preserveManualStop: true }]]);
+    expect(startChannel.mock.calls).toEqual([
+      ["slack", "Ops Team", { reason: "secrets-reload", preserveManualStop: true }],
+    ]);
   });
 }
