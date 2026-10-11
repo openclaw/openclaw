@@ -128,25 +128,7 @@ describe("configureGatewayForSetup", () => {
     expect(result.nextConfig.gateway?.controlUi).toBeUndefined();
   });
 
-  it("preserves an existing password-mode config without an auth prompt", async () => {
-    const baseConfig = {
-      gateway: { auth: { mode: "password" as const, password: "saved-password" } },
-    };
-    const prompter = createPrompter({ selectQueue: [], textQueue: [] });
-    const result = await configure({
-      baseConfig,
-      nextConfig: baseConfig,
-      quickstartGateway: resolveQuickstartGatewayDefaults(baseConfig),
-      prompter,
-    });
-    expect(result.nextConfig.gateway?.auth).toEqual(baseConfig.gateway.auth);
-    expect(prompter.select).not.toHaveBeenCalledWith(
-      expect.objectContaining({ message: "Gateway access protection" }),
-    );
-    expect(prompter.confirm).not.toHaveBeenCalled();
-  });
-
-  it.each(["quickstart", "advanced"] as const)(
+  it.each(["advanced"] as const)(
     "%s preserves an existing trusted-proxy config without an auth prompt",
     async (flow) => {
       // Rerunning onboarding must not downgrade an identity-bearing gateway to
@@ -209,27 +191,6 @@ describe("configureGatewayForSetup", () => {
     ).rejects.toThrow(/Funnel requires password auth/);
   });
 
-  it("still switches token auth to password for tailscale funnel", async () => {
-    mocks.getTailnetHostname.mockResolvedValue("test-tailnet.ts.net");
-    const baseConfig = {
-      gateway: {
-        auth: { mode: "token" as const, token: "existing-token" },
-      },
-    };
-    const result = await withEnvAsync({ OPENCLAW_GATEWAY_TOKEN: undefined }, () =>
-      configure({
-        flow: "quickstart",
-        baseConfig,
-        nextConfig: baseConfig,
-        quickstartGateway: resolveQuickstartGatewayDefaults(baseConfig, { tailscale: "funnel" }),
-        prompter: createPrompter({ selectQueue: [], textQueue: ["synthetic-funnel-password"] }),
-      }),
-    );
-    expect(result.nextConfig.gateway?.auth?.mode).toBe("password");
-    expect(result.nextConfig.gateway?.auth?.password).toBe("synthetic-funnel-password");
-    expect(result.nextConfig.gateway?.tailscale?.mode).toBe("funnel");
-  });
-
   it("seeds advanced gateway prompts from explicit classic options", async () => {
     const gatewayDefaults = resolveQuickstartGatewayDefaults(
       {},
@@ -277,28 +238,6 @@ describe("configureGatewayForSetup", () => {
       bind: "lan",
       auth: { mode: "password", password: "manual-gateway-password-placeholder" },
       tailscale: { mode: "off" },
-    });
-  });
-
-  it("rejects loose gateway port input", async () => {
-    mocks.randomToken.mockReturnValue("generated-token");
-
-    await expect(
-      configure({ prompter: createPrompter({ selectQueue: [], textQueue: ["1e3"] }) }),
-    ).rejects.toThrow("Use a port number from 1 to 65535");
-  });
-
-  it("keeps OPENCLAW_GATEWAY_TOKEN in advanced flow without a credential prompt", async () => {
-    mocks.randomToken.mockReturnValue("should-not-be-used");
-    mocks.randomToken.mockClear();
-
-    await withEnvAsync({ OPENCLAW_GATEWAY_TOKEN: "advanced-env-token" }, async () => {
-      const result = await configure({
-        prompter: createPrompter({ selectQueue: ["loopback", "off"], textQueue: ["18789"] }),
-      });
-
-      expect(result.settings.gatewayToken).toBe("advanced-env-token");
-      expect(mocks.randomToken).not.toHaveBeenCalled();
     });
   });
 

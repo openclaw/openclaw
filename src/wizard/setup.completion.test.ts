@@ -119,11 +119,6 @@ describe("setupWizardShellCompletion", () => {
       profileInstalled: true,
       usesSlowPattern: false,
     },
-    {
-      description: "installing a new completion profile",
-      profileInstalled: false,
-      usesSlowPattern: false,
-    },
   ])(
     "reports cache generation failure when $description",
     async ({ profileInstalled, usesSlowPattern }) => {

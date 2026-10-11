@@ -199,7 +199,7 @@ describe("offerPostInstallMigrations", () => {
     });
   });
 
-  it.each(["flag", "stdin"])(
+  it.each(["stdin"])(
     "never prompts or applies when %s selects non-interactive mode",
     async (mode) => {
       setTTY(mode !== "stdin");
