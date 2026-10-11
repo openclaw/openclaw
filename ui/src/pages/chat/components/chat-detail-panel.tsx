@@ -41,6 +41,8 @@ import type { FileEditorViewHandle } from "./file-editor-view.ts";
 
 registerEnglishCatalog(registerFilePreviewEnglish);
 
+export type ChatDetailPanel = SolidBridgeElement<ChatDetailPanelProps>;
+
 function DetailPanel(props: ChatDetailPanelProps, host: SolidBridgeElement<ChatDetailPanelProps>) {
   let disposed = false;
   let invalidateRender = () => {};
@@ -701,7 +703,7 @@ function DetailPanel(props: ChatDetailPanelProps, host: SolidBridgeElement<ChatD
     presented: () => true,
     read: renderPanel,
   });
-  invalidateRender = lifecycle.invalidate;
+  invalidateRender = () => lifecycle.invalidate();
   createEffect(
     () => lifecycle.snapshot(),
     () => {
@@ -751,3 +753,9 @@ export const ChatDetailPanel = defineSolidBridge("openclaw-chat-detail-panel", D
     onOpenImage: { default: null, attribute: false },
   },
 });
+
+declare global {
+  interface HTMLElementTagNameMap {
+    "openclaw-chat-detail-panel": ChatDetailPanel;
+  }
+}
