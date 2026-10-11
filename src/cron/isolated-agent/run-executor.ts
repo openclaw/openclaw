@@ -448,6 +448,7 @@ function createCronPromptExecutor(
             fastModeStartedAtMs,
             fastModeAutoProgressState,
             isFinalFallbackAttempt: runOptions.isFinalFallbackAttempt,
+            onDeferredTurnSendLedgerScope: runOptions.onDeferredTurnSendLedgerScope,
             contextEngineLogicalTurnLease: runOptions.contextEngineLogicalTurnLease,
             onContextEngineTurnCandidate: runOptions.onContextEngineTurnCandidate,
             userTurnTranscriptRecorder,

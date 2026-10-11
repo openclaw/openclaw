@@ -526,6 +526,28 @@ describe("settlePreparedCliRun per-turn send ledger terminal cleanup", () => {
     expect(peekTurnSendCount({ sessionKey: ledgerSessionKey, runId, targetKey })).toBe(0);
   });
 
+  it("hands a final candidate's scope to an enclosing owner instead of clearing", async () => {
+    // The owner may retry a live model switch (or cron a continuation prompt) with this runId,
+    // so even the final fallback attempt must leave the budget for the owner's terminal.
+    const runId = "run-final-with-owner";
+    commitSend(runId);
+    let deferredScope:
+      | Parameters<NonNullable<RunCliAgentParams["onDeferredTurnSendLedgerScope"]>>[0]
+      | undefined;
+
+    await settlePreparedCliRun({
+      context: makeContext({
+        runId,
+        isFinalFallbackAttempt: true,
+        onDeferredTurnSendLedgerScope: (scope) => (deferredScope = scope),
+      }),
+      run: async () => okResult,
+    });
+
+    expect(peekTurnSendCount({ sessionKey: ledgerSessionKey, runId, targetKey })).toBe(1);
+    expect(deferredScope).toEqual({ agentId, sessionKey: grantSessionKey, runId });
+  });
+
   it("does NOT clear when a non-final fallback candidate fails mid-turn", async () => {
     const runId = "run-fallback";
     commitSend(runId);

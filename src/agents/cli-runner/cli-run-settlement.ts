@@ -190,35 +190,30 @@ async function retireCliRunMcpRuntime(
   });
 }
 
-// The per-turn send budget spans the whole logical turn, including provider fallbacks that
-// reuse the runId (turn-send-ledger.ts). A prepared CLI run is one fallback candidate, so
-// per-candidate settlement is the ledger's terminal owner ONLY for the final candidate of a
-// chain that forwards isFinalFallbackAttempt to its candidates and marks the last one true.
-// Two owners drive such a chain: cron (its own runWithModelFallback in isolated-agent/run.ts)
-// and auto-reply channel delivery (which re-forwards the flag into the CLI runParams via
-// agent-runner-cli-candidate.ts). Every other candidate defers to an outer logical-run owner
-// and must NOT clear:
-//   - isFinalFallbackAttempt === false — a non-final candidate of a flag-forwarding chain. A
-//     later candidate reuses this runId and must inherit the committed counts. Even a candidate
-//     that returns without throwing is not terminal: runWithModelFallback may reclassify a
-//     "successful" result as retryable and drive another candidate, so a non-throwing non-final
-//     candidate is NOT evidence the chain stopped. The enclosing owner's `finally` clears after
-//     the whole chain and covers an early success that does end it.
-//   - isFinalFallbackAttempt === undefined — a CLI candidate dispatched inside an
-//     embedded/command-rpc run (cli-backend-dispatch.ts strips the flag), or a run with no send
-//     tool. It never forwards the flag; the embedded runner's fallback-chain `finally`
-//     (run-entry.ts) owns the terminal and clears the same runId after the whole chain.
-// Every one of these paths — cron, auto-reply, and embedded dispatch — has an enclosing owner
-// whose terminal `finally` clears this runId (isolated-agent/run.ts or run-entry.ts), so a
-// deferred candidate always reaches one. It hands its prepared canonical scope to that owner via
-// the owner callback so it deletes the exact loopback-written slot it cannot rebuild from its
-// own raw identity. On the final candidate the self-clear here and the
-// enclosing finally overlap on one runId — a harmless double-delete, since the final candidate
-// runs last with no later send. Clearing was previously gated on `!threw`, which wrongly treated
-// a non-throwing but retryable non-final candidate as terminal and wiped the counts the next
-// candidate needed.
-function isCliSettlementTurnSendLedgerTerminal(context: PreparedCliRunContext): boolean {
-  return context.params.isFinalFallbackAttempt === true;
+// The per-turn send budget spans the whole logical turn, including provider fallbacks and live
+// model-switch retries that reuse the runId (turn-send-ledger.ts). A prepared CLI run is one
+// fallback candidate, so it is the ledger's terminal owner only when nothing encloses it:
+//   - An enclosing logical-run owner (run-entry.ts, reached from auto-reply, command, cron, and
+//     embedded CLI dispatch) passes onDeferredTurnSendLedgerScope. The candidate always hands
+//     its prepared canonical scope there, even when it is the final fallback attempt: that owner
+//     may retry a live model switch, or cron may run a continuation prompt, under the same runId,
+//     and it deletes the exact loopback-written slot it cannot rebuild from its raw identity.
+//   - Without an owner callback, only the final candidate of a flag-forwarding chain
+//     (isFinalFallbackAttempt === true) clears. A non-final candidate must not: a later
+//     candidate reuses this runId and must inherit the committed counts, and even a
+//     non-throwing candidate may be reclassified as retryable and followed by another one.
+// Clearing was previously gated on `!threw`, which wrongly treated a non-throwing but retryable
+// non-final candidate as terminal and wiped the counts the next candidate needed.
+function releaseCliSettlementTurnSendLedgerScope(context: PreparedCliRunContext): void {
+  const scope = context.turnSendLedgerScope;
+  if (!scope) {
+    return;
+  }
+  if (context.params.onDeferredTurnSendLedgerScope) {
+    context.params.onDeferredTurnSendLedgerScope(scope);
+  } else if (context.params.isFinalFallbackAttempt === true) {
+    clearTurnSendLedgerForRun(scope);
+  }
 }
 
 export async function settlePreparedCliRun(params: {
@@ -306,13 +301,7 @@ export async function settlePreparedCliRun(params: {
     }
     return outcome.result;
   } finally {
-    if (context.turnSendLedgerScope) {
-      if (isCliSettlementTurnSendLedgerTerminal(context)) {
-        clearTurnSendLedgerForRun(context.turnSendLedgerScope);
-      } else {
-        context.params.onDeferredTurnSendLedgerScope?.(context.turnSendLedgerScope);
-      }
-    }
+    releaseCliSettlementTurnSendLedgerScope(context);
   }
 }
 
