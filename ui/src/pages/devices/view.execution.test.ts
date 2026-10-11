@@ -30,6 +30,9 @@ describe("devices exec approvals rendering", () => {
     });
     const section = getSection(container, "Exec approvals");
 
+    expect(section.textContent).toContain(
+      "Allowlist and approval policy for exec host=gateway/node.",
+    );
     expect(
       getSettingsRow(section, "Security").querySelector<HTMLSelectElement>("select")?.value,
     ).toBe("full");

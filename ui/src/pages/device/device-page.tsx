@@ -1,5 +1,4 @@
 import { createSignal, onCleanup } from "@solidjs/signals";
-import type { JSX as SolidJSX } from "@solidjs/web";
 import { For, Show } from "solid-js";
 import { deviceSettingsGroupLabelKey } from "../../app-navigation.ts";
 import type {
@@ -32,7 +31,7 @@ import "./device.css";
 declare module "@solidjs/web" {
   namespace JSX {
     interface IntrinsicElements {
-      "openclaw-native-chrome-setup": SolidJSX.HTMLAttributes<HTMLElement>;
+      "openclaw-native-chrome-setup": HTMLAttributes<HTMLElement>;
     }
   }
 }

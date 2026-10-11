@@ -1,4 +1,6 @@
 /* @vitest-environment jsdom */
+
+import type WaDropdownItem from "@awesome.me/webawesome/dist/components/dropdown-item/dropdown-item.js";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { openDesktopFocus } from "../../components/desktop/desktop-focus-window.ts";
@@ -64,9 +66,9 @@ function findButton(scope: Element, label: string): HTMLButtonElement {
   return button;
 }
 
-function selectMenuItem(scope: Element, value: string): Element {
+function selectMenuItem(scope: Element, value: string): WaDropdownItem {
   const item = expectDefined(
-    scope.querySelector(`wa-dropdown-item[value="${value}"]`),
+    scope.querySelector<WaDropdownItem>(`wa-dropdown-item[value="${value}"]`),
     `menu item ${value}`,
   );
   item.dispatchEvent(new CustomEvent("wa-select", { bubbles: true, detail: { item: { value } } }));
@@ -428,7 +430,7 @@ describe("devices inventory rendering", () => {
 
     const row = getSettingsRow(container, "Browser");
     expect(row.querySelector(".device-entry__remove")).toBeNull();
-    expect(selectMenuItem(row, "remove").getAttribute("variant")).toBe("danger");
+    expect(selectMenuItem(row, "remove").variant).toBe("danger");
 
     expect(removed).toEqual([
       { id: "op-only", name: "Browser", removeNode: false, removeDevice: true },
@@ -1020,22 +1022,20 @@ describe("devices access gating", () => {
     for (const label of ["Approve", "Reject", "Rotate", "Revoke", "Save"]) {
       expect(findButton(container, label).disabled).toBe(true);
     }
-    const remove = getSettingsRow(container, "Device One").querySelector(
+    const remove = getSettingsRow(container, "Device One").querySelector<WaDropdownItem>(
       'wa-dropdown-item[value="remove"]',
     );
-    expect(remove?.hasAttribute("disabled")).toBe(true);
+    expect(remove?.disabled).toBe(true);
     expect(remove?.getAttribute("title")).toContain("operator.pairing");
-    const editAlias = getSettingsRow(container, "Device One").querySelector(
+    const editAlias = getSettingsRow(container, "Device One").querySelector<WaDropdownItem>(
       'wa-dropdown-item[value="editAlias"]',
     );
-    expect(editAlias?.hasAttribute("disabled")).toBe(true);
+    expect(editAlias?.disabled).toBe(true);
     expect(editAlias?.getAttribute("title")).toContain("operator.pairing");
     selectMenuItem(getSettingsRow(container, "Device One"), "remove");
     selectMenuItem(getSettingsRow(container, "Device One"), "editAlias");
     for (const action of ["approve", "reject"]) {
-      expect(
-        selectMenuItem(getSettingsRow(container, "Pending node"), action).hasAttribute("disabled"),
-      ).toBe(true);
+      expect(selectMenuItem(getSettingsRow(container, "Pending node"), action).disabled).toBe(true);
     }
     expect(onInventoryRemove).not.toHaveBeenCalled();
     expect(onDeviceRename).not.toHaveBeenCalled();

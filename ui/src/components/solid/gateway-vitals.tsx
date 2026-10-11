@@ -1,4 +1,3 @@
-import type { JSX as SolidJSX } from "@solidjs/web";
 import { createMemo } from "solid-js";
 import { registerDebugEnglish } from "../../i18n/locales/en-debug.ts";
 import { formatDurationCompact } from "../../lib/format-duration.ts";
@@ -13,7 +12,7 @@ import type { SparklineSample } from "../sparkline-tile.ts";
 declare module "@solidjs/web" {
   namespace JSX {
     interface IntrinsicElements {
-      "openclaw-sparkline": SolidJSX.HTMLAttributes<HTMLElement> & {
+      "openclaw-sparkline": HTMLAttributes<HTMLElement> & {
         "prop:label": string;
         "prop:sub"?: string;
         "prop:samples": readonly SparklineSample[];

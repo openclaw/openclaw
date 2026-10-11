@@ -202,7 +202,7 @@ export function ExecApprovals(props: ExecApprovalsState) {
         title={t("devices.execApprovals.title")}
         description={
           <>
-            {t("devices.execApprovals.subtitlePrefix")}
+            {t("devices.execApprovals.subtitlePrefix")}{" "}
             <span class="mono">exec host=gateway/node</span>.
           </>
         }

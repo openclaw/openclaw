@@ -105,13 +105,13 @@ export function DeviceEntryMenu(props: {
             <Show when={action().visible}>
               <wa-dropdown-item
                 value={action().value}
-                disabled={action().pairing && !props.devices.canManagePairing}
+                prop:disabled={action().pairing && !props.devices.canManagePairing}
                 title={
                   action().pairing && !props.devices.canManagePairing
                     ? t("devices.readOnly.pairingRequired")
                     : undefined
                 }
-                variant={action().value === "remove" ? "danger" : undefined}
+                prop:variant={action().value === "remove" ? "danger" : "default"}
               >
                 {t(action().labelKey)}
               </wa-dropdown-item>
