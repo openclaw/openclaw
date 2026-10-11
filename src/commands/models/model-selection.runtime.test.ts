@@ -92,6 +92,52 @@ describe("model command provider preparation", () => {
     return JSON.parse(fs.readFileSync(configPath, "utf8"));
   }
 
+  it.each(["alias", "model", "imageModel"] as const)(
+    "rejects unknown providers for %s without changing config bytes",
+    async (command) => {
+      await isolated(async () => {
+        const before = fs.readFileSync(configPath, "utf8");
+        const operation =
+          command === "alias"
+            ? modelsAliasesAddCommand("local", "ollmaa/qwen3:4b", runtime)
+            : changeFallbacksCommand(
+                { label: "Fallbacks", key: command, action: "add" },
+                "ollmaa/qwen3:4b",
+                runtime,
+              );
+        await expect(operation).rejects.toThrow('Unknown model provider "ollmaa"');
+        expect(fs.readFileSync(configPath, "utf8")).toBe(before);
+      });
+    },
+  );
+
+  it("warns and saves when the plugin inventory is empty", async () => {
+    config.plugins = { enabled: false };
+    await isolated(async () => {
+      await modelsAliasesAddCommand("local", "ollmaa/qwen3:4b", runtime);
+      await changeFallbacksCommand(
+        { label: "Fallbacks", key: "model", action: "add" },
+        "ollmaa/qwen3:4b",
+        runtime,
+      );
+      await changeFallbacksCommand(
+        { label: "Image fallbacks", key: "imageModel", action: "add" },
+        "ollmaa/qwen3:4b",
+        runtime,
+      );
+      expect(readConfig().agents?.defaults).toMatchObject({
+        model: { fallbacks: ["ollmaa/qwen3:4b"] },
+        imageModel: { fallbacks: ["ollmaa/qwen3:4b"] },
+        models: { "ollmaa/qwen3:4b": { alias: "local" } },
+      });
+      expect(
+        vi
+          .mocked(runtime.error)
+          .mock.calls.filter(([message]) => String(message).includes("could not be verified")),
+      ).toHaveLength(3);
+    });
+  });
+
   it.each([
     { raw: "fixture/legacy", expected: "fixture/current" },
     { raw: "fixture/LEGACY", expected: "fixture/LEGACY" },
@@ -437,7 +483,18 @@ describe("model command provider preparation", () => {
             })?.registry,
           ).toBe(registry);
           expect(fs.readFileSync(marker, "utf8")).toBe("registered\n");
-          const run = () => modelsAliasesAddCommand("friendly", "compat/legacy", runtime);
+          const run = async () => {
+            await modelsAliasesAddCommand("friendly", "compat/legacy", runtime);
+            await modelsSetCommand("friendly", runtime);
+            await modelsSetCommand("friendly", runtime, "imageModel");
+            for (const key of ["model", "imageModel"] as const) {
+              await changeFallbacksCommand(
+                { label: "Fallbacks", key, action: "add" },
+                "friendly",
+                runtime,
+              );
+            }
+          };
           if (scope === "exact") {
             await run();
           } else {
@@ -451,6 +508,21 @@ describe("model command provider preparation", () => {
             [`compat/${model}`]: { ...entry, alias: "friendly" },
           });
           expect(runtime.log).toHaveBeenCalledWith(`Alias friendly -> compat/${model}`);
+          for (const key of ["model", "imageModel"] as const) {
+            expect(readConfig().agents?.defaults?.[key]).toEqual({
+              primary: `compat/${model}`,
+              fallbacks: [`compat/${model}`],
+            });
+          }
+          if (scope === "empty") {
+            expect(
+              vi
+                .mocked(runtime.error)
+                .mock.calls.filter(([message]) =>
+                  String(message).includes("could not be verified"),
+                ),
+            ).toHaveLength(5);
+          }
           expect(fs.readFileSync(marker, "utf8")).toBe(
             "registered\n".repeat(scope === "exact" ? 2 : 1),
           );
