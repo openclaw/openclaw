@@ -26,7 +26,13 @@ export const agentSessionRunProviderCompaction: unique symbol = Symbol(
 );
 
 type AgentSessionCompactionOutcome =
-  | { status: "completed"; tokensBefore: number; tokensAfter: number; willRetry: boolean }
+  | {
+      status: "completed";
+      tokensBefore: number;
+      tokensAfter: number;
+      willRetry: boolean;
+      qualityDegraded?: true;
+    }
   | { status: "skipped"; reason: string }
   | { status: "failed"; reason: string }
   | { status: "aborted" };

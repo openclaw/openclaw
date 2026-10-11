@@ -126,15 +126,8 @@ export function readConfigMachineStateRowInDatabase(database: DatabaseSync, key:
       .select(["value_json", "updated_at_ms"])
       .where("state_key", "=", stateKey),
   );
-  // Workers return cold reads to the host; a concurrent host write must win installation.
+  // This host read is synchronous; worker results install through getTtsMachinePathAdmission.
   if (isMainThread) {
-    const published =
-      stateKey === "tts.prefsPath"
-        ? getSqliteDatabaseAdmission(database, ttsPathAdmission)
-        : undefined;
-    if (published) {
-      return published.row;
-    }
     publishConfigMachineStateRow(database, stateKey, row);
   }
   return row;

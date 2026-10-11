@@ -79,6 +79,30 @@ describe("plugin state data-only comparison", () => {
     expect(messages).not.toHaveBeenCalled();
   });
 
+  it.each([{ action: "set" }, { action: "keep" }] as const)(
+    "converges after an unannounced native deletion ($action)",
+    async ({ action }) => {
+      const { store, legacy, native } = fixture(`native-deletion-${action}`);
+      legacy.register("counter", { count: 1 });
+      const before = await store.observe("counter");
+      const { db } = native();
+      // Native binding transactions carry their own receipt, without plugin-state postimages.
+      executeSqliteQuerySync(db, getPluginStateKysely(db).deleteFrom("plugin_state_entries"));
+      const change =
+        action === "set"
+          ? ({ operation: "update", action, value: { count: 2 } } as const)
+          : ({ operation: "update", action } as const);
+      const conflict = await store.compareAndApply("counter", before.comparison, change);
+      expect(conflict).toMatchObject({ status: "conflict", current: { value: undefined } });
+      if (conflict.status !== "conflict") {
+        throw new Error("Expected the deleted row to conflict");
+      }
+      expect(await store.compareAndApply("counter", conflict.current.comparison, change)).toEqual({
+        status: action === "set" ? "applied" : "unchanged",
+      });
+    },
+  );
+
   it.each([
     { operation: "update", present: true },
     { operation: "delete", present: true },

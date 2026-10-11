@@ -258,8 +258,13 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
         });
         session = createdSession.session;
         session[agentSessionSetContextReplacementHook](
-          (tokensAfter, tokensBefore) =>
-            recordCompaction({ tokensBefore, tokensAfter, compactionKind: "context-engine" }),
+          (tokensAfter, tokensBefore, details) =>
+            recordCompaction({
+              tokensBefore,
+              tokensAfter,
+              compactionKind: "context-engine",
+              details,
+            }),
           assertActive,
         );
         session.setBaseSystemPrompt(systemPromptText.trim());
