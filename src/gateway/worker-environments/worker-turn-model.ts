@@ -53,5 +53,10 @@ export async function prepareWorkerTurnModel(params: {
     agentRuntime: "openclaw",
     level: params.turn.thinkLevel,
   });
-  return { model, reasoning, transcriptPolicy: approved.transcriptPolicy };
+  return {
+    model,
+    reasoning,
+    transcriptPolicy: approved.transcriptPolicy,
+    inference: "prepared" in approved ? approved : undefined,
+  };
 }

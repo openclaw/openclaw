@@ -29,6 +29,7 @@ import {
   type WorkerInferenceExecutionParams,
 } from "./inference-runtime.js";
 import * as workerTurnOwners from "./placement-turn-claim-events.js";
+import { prepareWorkerTurnModel } from "./worker-turn-model.js";
 
 type Deps = {
   applyStreamPolicy: typeof extraParamsRuntime.applyExtraParamsToAgent;
@@ -346,9 +347,36 @@ export function setup(
     traceId: "1".repeat(32),
     spanId: "2".repeat(16),
   });
+  const withPreparedInference = async <T>(
+    run: () => Promise<T>,
+    input = params(request(), vi.fn()),
+  ) => {
+    await using lease = await acquireRuntimeLease({
+      config: options.config ?? config,
+      agentId: sessionTarget.agentId,
+      agentDir: "/gateway-agent",
+    });
+    const { inference } = await prepareWorkerTurnModel({
+      target: sessionTarget,
+      modelRef: input.request.modelRef,
+      runtimeSnapshot: lease.snapshot,
+      inferencePlacement: "gateway",
+      turn: { abortSignal: input.signal, workspaceDir: WORKSPACE },
+      assertCurrent: () => {
+        if (!input.isCurrent()) {
+          throw new Error("Worker inference source is no longer current");
+        }
+      },
+    });
+    vi.spyOn(workerTurnOwners, "getWorkerTurnInference").mockReturnValue(inference);
+    return await run();
+  };
   return {
     applyStreamPolicy,
-    executor: executeWorkerInference,
+    executor: (input: Execution) =>
+      withPreparedInference(() => executeWorkerInference(input), input),
+    executePrepared: executeWorkerInference,
+    withPreparedInference,
     acquireRuntimeLease,
     prepareModel,
     releaseRuntime,
@@ -363,7 +391,6 @@ export function setup(
 export function params(
   inferenceRequest: WorkerInferenceStartParams,
   emit: Execution["emit"],
-  runtimeConfig: OpenClawConfig = config,
 ): Execution {
   return {
     identity,
@@ -372,6 +399,5 @@ export function params(
     signal: new AbortController().signal,
     emit,
     isCurrent: () => true,
-    config: runtimeConfig,
   };
 }

@@ -66,7 +66,6 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
   const tunnelLifecycle = createWorkerEnvironmentTransportLifecycle(options);
   const inference = createWorkerInferenceManager({
     execute: options.executeInference,
-    getConfig: options.getConfig,
     ...(options.inferenceStore ? { store: options.inferenceStore } : {}),
   });
   let reconcileInFlight: Promise<void> | undefined;

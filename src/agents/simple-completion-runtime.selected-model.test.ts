@@ -7,10 +7,12 @@ import {
   type WorkerInferenceExecutionParams,
 } from "../gateway/worker-environments/inference-runtime.js";
 import * as workerTurnOwner from "../gateway/worker-environments/placement-turn-claim-events.js";
+import { prepareWorkerTurnModel } from "../gateway/worker-environments/worker-turn-model.js";
 import { resetPluginLoaderTestStateForTest } from "../plugins/loader.test-fixtures.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import * as sessionAuthRuntime from "./auth-profiles/session-override.js";
+import { acquireAgentRunPreparedModelRuntime } from "./prepared-model-runtime.js";
 import { resetPreparedModelRuntimeSnapshotsForTest } from "./prepared-model-runtime.test-support.js";
 import type { BoundAgentRunSessionTarget } from "./run-session-target.types.js";
 import {
@@ -164,9 +166,23 @@ module.exports = {
           ["plain", "plain"],
         ] as const) {
           if (mode === "worker") {
-            const result = await executeWorkerInference(
-              workerRequest(cfg, provider, raw, sessionTarget),
-            );
+            await using lease = await acquireAgentRunPreparedModelRuntime({
+              config: cfg,
+              agentId: "main",
+              agentDir: state.agentDir(),
+              workspaceDir: state.workspaceDir,
+            });
+            const request = workerRequest(provider, raw, sessionTarget);
+            const { inference } = await prepareWorkerTurnModel({
+              target: sessionTarget,
+              modelRef: request.request.modelRef,
+              runtimeSnapshot: lease.snapshot,
+              inferencePlacement: "gateway",
+              turn: { workspaceDir: state.workspaceDir },
+              assertCurrent() {},
+            });
+            vi.spyOn(workerTurnOwner, "getWorkerTurnInference").mockReturnValue(inference);
+            const result = await executeWorkerInference(request);
             expect(result).toMatchObject({
               type: "done",
               message: {
@@ -216,13 +232,11 @@ module.exports = {
 });
 
 function workerRequest(
-  config: OpenClawConfig,
   provider: string,
   model: string,
   sessionTarget: BoundAgentRunSessionTarget,
 ): WorkerInferenceExecutionParams {
   return {
-    config,
     sessionTarget,
     identity: {
       environmentId: "selected-test",

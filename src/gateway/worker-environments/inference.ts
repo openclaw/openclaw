@@ -302,7 +302,6 @@ export function createWorkerInferenceManager(options: WorkerInferenceManagerOpti
     let outcome: WorkerInferenceTerminalOutcome;
     let failure: { error: unknown } | undefined;
     try {
-      const config = options.getConfig?.();
       outcome = await options.execute({
         identity: entry.identity,
         request: entry.request,
@@ -340,7 +339,6 @@ export function createWorkerInferenceManager(options: WorkerInferenceManagerOpti
           entry.seq = nextSeq;
         },
         isCurrent: () => durableFence(entry) === null,
-        ...(config ? { config } : {}),
       });
     } catch (caught) {
       const error = preserveInferenceAuthorityFailure(caught, entry.authorityFailure);

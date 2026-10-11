@@ -6,7 +6,6 @@ import type {
   WorkerInferenceEventParams,
   WorkerInferenceStartParams,
 } from "../../../packages/gateway-protocol/src/schema/worker-inference.js";
-import { resolveAgentDir } from "../../agents/agent-scope.js";
 import { applyExtraParamsToAgent } from "../../agents/embedded-agent-runner/extra-params.js";
 import { wrapStreamFnWithDiagnosticModelCallEvents } from "../../agents/embedded-agent-runner/run/attempt.model-diagnostic-events.js";
 import { applyRuntimeContextCarrierRetention } from "../../agents/embedded-agent-runner/run/runtime-context-prompt.js";
@@ -15,11 +14,8 @@ import { resolveEmbeddedAgentStream } from "../../agents/embedded-agent-runner/s
 import { mapThinkingLevel } from "../../agents/embedded-agent-runner/utils.js";
 import { resolveFastModeForElapsed, resolveFastModeState } from "../../agents/fast-mode.js";
 import { splitTrailingAuthProfile } from "../../agents/model-ref-profile.js";
-import { acquireAgentRunPreparedModelRuntime } from "../../agents/prepared-model-runtime.js";
 import { registerProviderStreamForModel } from "../../agents/provider-stream.js";
 import { normalizeUsage, hasObservedModelUsage, toDiagnosticUsage } from "../../agents/usage.js";
-import { getRuntimeConfig } from "../../config/config.js";
-import { readSessionEntryInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import { emitAgentEventForRunContext } from "../../infra/agent-events.js";
 import { getAgentRunContext } from "../../infra/agent-run-registry.js";
 import { emitTrustedDiagnosticEvent, isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
@@ -40,7 +36,6 @@ import type {
 import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
 import { estimateUsageCost, resolveModelCostConfig } from "../../utils/usage-format.js";
 import { WORKER_PROVIDER_REPLAY_LOCAL_RETRY_MESSAGE } from "../../worker/transcript-message.js";
-import { resolveApprovedWorkerModel } from "./inference-model.js";
 import {
   ERROR_MESSAGES,
   inferenceError,
@@ -50,9 +45,10 @@ import {
 import { createWorkerToolCallStream } from "./inference-tool-call-stream.js";
 import {
   getWorkerTurnToolSurface,
+  getWorkerTurnInference,
   readWorkerTurnPromptCacheContext,
 } from "./placement-turn-claim-events.js";
-import { boundedWorkerError, formatWorkerInferenceError } from "./worker-error.js";
+import { formatWorkerInferenceError } from "./worker-error.js";
 
 type WorkerInferenceStreamEvent = WorkerInferenceEventParams["event"];
 export type WorkerInferenceExecutor = import("./inference.js").WorkerInferenceExecutor;
@@ -133,50 +129,25 @@ export const executeWorkerInference: WorkerInferenceExecutor = async (params) =>
   if (signal.aborted || !params.isCurrent()) {
     return inferenceError("cancelled");
   }
-  const assertCurrent = () => {
-    signal.throwIfAborted();
-    if (!params.isCurrent()) {
-      throw new Error("Worker inference source is no longer current");
-    }
-  };
   const promptCacheContext = readWorkerTurnPromptCacheContext(identity);
-  if (!promptCacheContext) {
+  const approved = getWorkerTurnInference(identity);
+  if (!promptCacheContext || !approved) {
     return inferenceError("session-not-attached");
   }
-  const config = params.config ?? getRuntimeConfig();
   const runContext = getAgentRunContext(request.runId);
-  const sessionEntry = await readSessionEntryInWorker(params.sessionTarget, assertCurrent);
-  assertCurrent();
-  if (sessionEntry?.sessionId !== request.sessionId) {
-    return inferenceError("session-not-attached");
-  }
-  const target = { ...params.sessionTarget, sessionEntry };
+  const target = { ...params.sessionTarget, sessionEntry: approved.sessionEntry };
   const context = buildContext(request.context);
   if (!context) {
     return inferenceError("invalid-context");
   }
-  if (splitTrailingAuthProfile(`${request.modelRef.provider}/${request.modelRef.model}`).profile) {
+  if (
+    splitTrailingAuthProfile(`${request.modelRef.provider}/${request.modelRef.model}`).profile ||
+    request.modelRef.provider !== approved.modelRef.provider ||
+    request.modelRef.model !== approved.modelRef.model
+  ) {
     return inferenceError("model-not-approved");
   }
-  await using runtimeLease = await acquireAgentRunPreparedModelRuntime({
-    config,
-    agentId: target.agentId,
-    agentDir: resolveAgentDir(config, target.agentId),
-  });
-  const approved = await resolveApprovedWorkerModel({
-    target,
-    modelRef: request.modelRef,
-    signal,
-    runtimeSnapshot: runtimeLease.snapshot,
-    assertCurrent,
-  });
-  if (!approved) {
-    return inferenceError("model-not-approved");
-  }
-  return await withPluginRuntimeGenerationScope(runtimeLease.snapshot, async () => {
-    if ("error" in approved) {
-      return inferenceError("provider-error", undefined, boundedWorkerError(approved.error, 256));
-    }
+  return await withPluginRuntimeGenerationScope(approved.runtimeSnapshot, async () => {
     const prepared = approved.prepared;
     // Keep logical identity separate from transport endpoint encoding.
     const modelIdentity: WorkerInferenceModelIdentity = {

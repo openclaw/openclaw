@@ -9,7 +9,6 @@ import type {
   WorkerInferenceTerminalOutcome,
 } from "../../../packages/gateway-protocol/src/schema/worker-inference.js";
 import type { BoundAgentRunSessionTarget } from "../../agents/run-session-target.types.js";
-import type { OpenClawConfig } from "../../config/types.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
 import type { WorkerInferenceStore, WorkerInferenceTurnInput } from "./inference-store.js";
 
@@ -30,7 +29,6 @@ export type WorkerInferenceExecutor = (params: {
   emit: (event: WorkerInferenceEventParams["event"]) => void;
   isCurrent(): boolean;
   sessionTarget: BoundAgentRunSessionTarget;
-  config?: OpenClawConfig;
 }) => Promise<WorkerInferenceTerminalOutcome>;
 
 export type RevalidateInference = () => WorkerInferenceFenceReason | null;
@@ -83,7 +81,6 @@ export type ActiveInference = {
 export type WorkerInferenceManagerOptions = {
   execute: WorkerInferenceExecutor;
   store?: WorkerInferenceStore;
-  getConfig?: () => OpenClawConfig;
   requestMaxBytes?: number;
   streamMaxBytes?: number;
 };
