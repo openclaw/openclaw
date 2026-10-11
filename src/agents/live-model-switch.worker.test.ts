@@ -184,6 +184,7 @@ describe("live model switch worker persistence", () => {
     for (const newer of [
       { providerOverride: "other-provider" },
       { modelOverride: "gpt-5.5" },
+      { modelFallbackPolicy: "configured" as const },
       { agentRuntimeOverride: "codex" },
       { authProfileOverride: "profile-b" },
       { authProfileOverrideSource: "auto" as const },

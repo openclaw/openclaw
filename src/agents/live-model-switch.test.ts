@@ -327,6 +327,38 @@ describe("live model switch", () => {
   });
 
   describe("shouldSwitchToLiveModel", () => {
+    it.each([undefined, "configured"] as const)(
+      "carries persisted fallback policy %s through a live route switch",
+      async (modelFallbackPolicy) => {
+        const selection = await resolvePendingSelection({
+          providerOverride: "openai",
+          modelOverride: "gpt-5.4",
+          modelFallbackPolicy,
+        });
+        if (!selection) {
+          throw new Error("Expected a pending live model selection");
+        }
+        const error = new mod.LiveSessionModelSwitchError(selection);
+        expect(error.modelFallbackPolicy).toBe(modelFallbackPolicy);
+      },
+    );
+
+    it.each([
+      { current: "configured" as const, next: undefined },
+      { current: undefined, next: "configured" as const },
+    ])("switches when only fallback policy changes to $next", async ({ current, next }) => {
+      const selection = await resolvePendingSelection(
+        {
+          providerOverride: "anthropic",
+          modelOverride: "claude-opus-4-6",
+          modelFallbackPolicy: next,
+        },
+        { currentModelFallbackPolicy: current },
+      );
+      expect(selection).toMatchObject({ provider: "anthropic", model: "claude-opus-4-6" });
+      expect(selection?.modelFallbackPolicy).toBe(next);
+    });
+
     it("returns undefined when liveModelSwitchPending is false", async () => {
       state.loadSessionStoreMock.mockReturnValue({
         main: {
@@ -508,6 +540,7 @@ describe("live model switch", () => {
       it.each([
         { field: "provider", newer: { providerOverride: "other-provider" } },
         { field: "model", newer: { modelOverride: "gpt-5.5" } },
+        { field: "fallback policy", newer: { modelFallbackPolicy: "configured" } },
         { field: "runtime", newer: { agentRuntimeOverride: "codex" } },
         { field: "auth profile", newer: { authProfileOverride: "profile-b" } },
         { field: "auth source", newer: { authProfileOverrideSource: "auto" } },

@@ -493,6 +493,9 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
       modelSelectionLocked: preparedSessionState.sessionEntry?.modelSelectionLocked === true,
       hasSessionModelOverride: runHasSessionModelOverride,
       modelOverrideSource: runHasSessionModelOverride ? runModelOverrideSource : undefined,
+      modelFallbackPolicy: runHasSessionModelOverride
+        ? preparedSessionState.sessionEntry?.modelFallbackPolicy
+        : undefined,
       hasAutoFallbackProvenance: runHasAutoFallbackProvenance || undefined,
       // Visible spawn children keep dashboard keys; declared spawn lineage routes
       // them to the subagent fallback ladder like hidden subagent sessions.

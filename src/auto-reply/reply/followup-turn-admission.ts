@@ -146,6 +146,7 @@ export async function admitFollowupTurn(params: {
           : undefined,
         hasSessionModelOverride: selected.hasSessionModelOverride,
         modelOverrideSource: selected.modelOverrideSource,
+        modelFallbackPolicy: selected.modelFallbackPolicy,
         authProfileId: selected.authProfileId,
         authProfileIdSource: selected.authProfileIdSource,
         thinkLevel: selected.thinkLevel,

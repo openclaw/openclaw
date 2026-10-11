@@ -311,6 +311,7 @@ export async function recoverEmbeddedRunAttempt(input: {
     defaultModel: DEFAULT_MODEL,
     currentProvider: preparedRuntime.provider,
     currentModel: preparedRuntime.modelId,
+    currentModelFallbackPolicy: params.modelFallbackPolicy,
     currentAgentRuntimeOverride: params.agentHarnessRuntimeOverride,
     currentAuthProfileId: preparedRuntime.preferredProfileId,
     currentAuthProfileIdSource: params.authProfileIdSource,
@@ -334,7 +335,9 @@ export async function recoverEmbeddedRunAttempt(input: {
         `${preparedRuntime.provider}/${preparedRuntime.modelId} -> ${requestedSelection.provider}/${requestedSelection.model}`,
     );
     recordRecoveryDecision("accepted", "live_model_switch");
-    throw new LiveSessionModelSwitchError(requestedSelection);
+    throw new LiveSessionModelSwitchError(requestedSelection, {
+      modelFallbackPolicy: params.modelFallbackPolicy,
+    });
   }
   const assistantSignal =
     attemptAssistant?.stopReason === "error"

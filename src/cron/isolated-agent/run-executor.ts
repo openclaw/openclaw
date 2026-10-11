@@ -64,10 +64,7 @@ import {
   runCliAgent,
 } from "./run-execution.runtime.js";
 import type { CronRunExecutionParams } from "./run-execution.types.js";
-import {
-  prepareCronModelResolveInput,
-  resolveCronFallbacksOverride,
-} from "./run-fallback-policy.js";
+import { prepareCronModelResolveInput, resolveCronFallbackOptions } from "./run-fallback-policy.js";
 import {
   setCronSessionAgentHarnessId,
   setCronSessionRuntimeModel,
@@ -113,15 +110,7 @@ function createCronPromptExecutor(
     onPromptCompleted: (run: CronCompletedPromptRun) => void;
   },
 ) {
-  const cronFallbacksOverride =
-    params.modelFallbacksOverride ??
-    resolveCronFallbacksOverride({
-      cfg: params.cfg,
-      job: params.job,
-      agentId: params.agentId,
-      useSubagentFallbacks: params.useSubagentFallbacks,
-      inheritDefaultFallbacksForAgentStringModel: params.inheritDefaultFallbacksForAgentStringModel,
-    });
+  const cronFallbacks = resolveCronFallbackOptions(params);
   const fastModeStartedAtMs = Date.now();
   const fastModeAutoProgressState: FastModeAutoProgressState = {
     offAnnounced: false,
@@ -265,7 +254,7 @@ function createCronPromptExecutor(
           params.liveSelection.authProfileIdSource === "user"
             ? params.liveSelection.authProfileId
             : undefined,
-        fallbacksOverride: cronFallbacksOverride,
+        ...cronFallbacks,
       },
       identity: {
         runId,
@@ -603,7 +592,10 @@ function createCronPromptExecutor(
           ).modelThinkingCapability,
           requestedRouteResolution: "resolved",
           modelFallbacksOverride: runOptions.modelFallbacksOverride,
+          modelFallbacksOverrideSource: runOptions.modelFallbacksOverrideSource,
           resolvedModelSelection: runOptions.resolvedModelSelection,
+          // Pairs the row's selection for live-switch comparison; cron lists stay job-owned.
+          modelFallbackPolicy: params.cronSession.sessionEntry.modelFallbackPolicy,
           authProfileId: params.liveSelection.authProfileId,
           authProfileIdSource: params.liveSelection.authProfileId
             ? params.liveSelection.authProfileIdSource

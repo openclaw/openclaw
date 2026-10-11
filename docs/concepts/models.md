@@ -78,6 +78,10 @@ Removing an explicit default model policy from an included config preserves an e
 
 ## Selection source and fallback strictness
 
+Strict session selections remain the default. For explicit per-session resilience
+and configurable backup ordering, see [Opt-in session preferences](/concepts/model-failover#opt-in-session-preferences)
+and [Preferred fallback peers](/concepts/model-failover#preferred-fallback-peers).
+
 The same `provider/model` behaves differently depending on where it came from:
 
 | Source                                               | Behavior                                                                                                                                                                                                                                                                                                                               |

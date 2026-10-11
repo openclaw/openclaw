@@ -12,6 +12,8 @@ export const AgentRuntimePolicySchema = z
 const AgentModelRuntimeEntrySchema = z.strictObject({
   /** Optional display/lookup alias for this provider/model entry. */
   alias: z.string().optional(),
+  /** Prefer these already-configured fallback candidates when this model is selected. */
+  fallbackPriority: z.array(z.string().trim().min(1)).optional(),
   /** Provider-specific API parameters (e.g., GLM-4.7 thinking mode). */
   params: z.record(z.string(), z.unknown()).optional(),
   /** Optional agent execution runtime for this specific provider/model entry. */
@@ -40,6 +42,7 @@ export const AgentModelMapSchema = z
   .superRefine((models, ctx) => {
     for (const [ref, entry] of Object.entries(models)) {
       for (const [key, message] of [
+        ["fallbackPriority", "Fallback priority requires an exact provider/model entry."],
         ["pickerRuntimes", "Picker runtimes require an exact provider/model entry."],
         [
           "codeMode",

@@ -450,8 +450,11 @@ export async function buildEmbeddedRunExecutionParams(params: {
   // Retain the base-input snapshot across thinking and vision discovery.
   const snapshot = { ...params };
   const config = snapshot.run.config;
-  const { modelFallbackAvailability, fallbacksOverride: modelFallbacksOverride } =
-    resolveModelFallbackOptions(snapshot.run);
+  const {
+    modelFallbackAvailability,
+    fallbacksOverride: modelFallbacksOverride,
+    fallbacksOverrideSource: modelFallbacksOverrideSource,
+  } = resolveModelFallbackOptions(snapshot.run);
   let modelThinkingCapability: PreparedModelThinkingCapability | undefined;
   if (snapshot.agentRuntime) {
     // Keep the lifecycle-owned catalog module lazy until this turn has a selected runtime.
@@ -510,7 +513,9 @@ export async function buildEmbeddedRunExecutionParams(params: {
     requestedRouteResolution: "resolved" as const,
     modelSelectionLocked: snapshot.run.modelSelectionLocked,
     modelFallbackAvailability,
+    modelFallbackPolicy: snapshot.run.modelFallbackPolicy,
     modelFallbacksOverride,
+    modelFallbacksOverrideSource,
     ...authProfile,
     thinkLevel: snapshot.run.thinkLevel,
     fastMode: snapshot.run.fastMode,

@@ -480,6 +480,7 @@ export async function applySessionModelSelectionInternal(
       nextModel: model,
       nextRouteResolution: "resolved",
       nextModelOverrideSource: request.isDefault ? undefined : "user",
+      nextModelFallbackPolicy: persistedEntry.modelFallbackPolicy,
       nextAuthProfileId: persistedEntry.authProfileOverride,
       nextAuthProfileIdSource: resolveCollapsedSessionAuthPinSource(persistedEntry),
       nextThinking: {

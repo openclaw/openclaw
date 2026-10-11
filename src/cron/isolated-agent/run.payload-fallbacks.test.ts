@@ -9,9 +9,12 @@ import { setupRunCronIsolatedAgentTurnSuite } from "./run.suite-helpers.js";
 import {
   isCliProviderMock,
   loadRunCronIsolatedAgentTurn,
+  makeCronSession,
+  makeCronSessionEntry,
   mockRunCronFallbackPassthrough,
   patchSessionEntryMock,
   resolveAgentConfigMock,
+  resolveCronSessionMock,
   resolveEffectiveAgentRuntimeMock,
   runCliAgentMock,
   runEmbeddedAgentMock,
@@ -174,4 +177,39 @@ describe("runCronIsolatedAgentTurn — payload.fallbacks", () => {
       modelFallbacksOverride: ["openai/gpt-5.2", "zai/glm-5"],
     });
   });
+
+  it.each([undefined, "configured"] as const)(
+    "pairs stored fallback policy %s with the run for live-switch comparison only",
+    async (modelFallbackPolicy) => {
+      mockRunCronFallbackPassthrough();
+      resolveCronSessionMock.mockReturnValue(
+        makeCronSession({
+          sessionEntry: makeCronSessionEntry({
+            providerOverride: "openai",
+            modelOverride: "gpt-5.4",
+            modelOverrideSource: "user",
+            modelFallbackPolicy,
+          }),
+          isNewSession: false,
+        }),
+      );
+
+      const result = await runCronIsolatedAgentTurn(
+        makeIsolatedAgentParamsFixture({
+          job: makeIsolatedAgentJobFixture({
+            sessionTarget: "session:existing-cron-session",
+            payload: { kind: "agentTurn", message: "test", fallbacks: ["anthropic/claude"] },
+          }),
+          sessionKey: "existing-cron-session",
+        }),
+      );
+
+      expect(result.status).toBe("ok");
+      const embeddedRun = runEmbeddedAgentMock.mock.calls[0]?.[0];
+      // A matching pending selection must not restart the attempt; the job's list stays absolute.
+      expect(embeddedRun?.modelFallbackPolicy).toBe(modelFallbackPolicy);
+      expect(embeddedRun?.modelFallbacksOverride).toStrictEqual(["anthropic/claude"]);
+      expect(embeddedRun?.modelFallbacksOverrideSource).toBeUndefined();
+    },
+  );
 });

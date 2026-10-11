@@ -95,6 +95,21 @@ export function resolveCronFallbacksOverride(params: {
   });
 }
 
+/** Keeps configured priorities distinct from explicit payload/preflight candidate lists. */
+export function resolveCronFallbackOptions(
+  params: Parameters<typeof resolveCronFallbacksOverride>[0] & {
+    modelFallbacksOverride?: string[];
+  },
+): { fallbacksOverride: string[] | undefined; fallbacksOverrideSource: "configured" | undefined } {
+  const explicitFallbacks =
+    params.modelFallbacksOverride !== undefined ||
+    (params.job.payload.kind === "agentTurn" && params.job.payload.fallbacks !== undefined);
+  return {
+    fallbacksOverride: params.modelFallbacksOverride ?? resolveCronFallbacksOverride(params),
+    fallbacksOverrideSource: explicitFallbacks ? undefined : "configured",
+  };
+}
+
 /** Builds the ordered model candidates used by cron preflight checks. */
 export function resolveCronPreflightCandidates(params: {
   cfg: OpenClawConfig;
@@ -105,14 +120,13 @@ export function resolveCronPreflightCandidates(params: {
   useSubagentFallbacks?: boolean;
   inheritDefaultFallbacksForAgentStringModel?: boolean;
 }): ModelCandidate[] {
-  const fallbacksOverride = resolveCronFallbacksOverride(params);
   return resolveModelCandidateChain({
     cfg: params.cfg,
     agentId: params.agentId,
     provider: params.provider,
     model: params.model,
     requestedRouteResolution: "resolved",
-    fallbacksOverride,
+    ...resolveCronFallbackOptions(params),
   });
 }
 

@@ -4,7 +4,9 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { resolveAuthProfileOrder } from "../auth-profiles/order.js";
 import { ensureAuthProfileStore } from "../auth-profiles/store-runtime.js";
+import { cliBackendAcceptsAuthProfileForwarding } from "../cli-execution-auth.js";
 import { buildAgentRuntimeAuthPlan } from "../runtime-plan/auth.js";
+import type { RunAgentAttemptParams } from "./attempt-execution.types.js";
 
 type HarnessAuthProfileSelection = {
   authProfileId?: string;
@@ -95,4 +97,20 @@ export function resolveHarnessAuthProfileSelection(params: {
         authProfileProvider: harnessAuthProvider,
       }
     : { authProfileProvider: params.authProfileProvider };
+}
+
+/** Command candidates forward auth only through a runtime that explicitly supports it. */
+export function allowsCommandCliAuthProfileForwarding(
+  params: Pick<RunAgentAttemptParams, "cfg" | "sessionAgentId">,
+  isCliExecutionProvider: boolean,
+  cliExecutionProvider: string,
+): boolean {
+  return (
+    isCliExecutionProvider &&
+    cliBackendAcceptsAuthProfileForwarding({
+      provider: cliExecutionProvider,
+      config: params.cfg,
+      agentId: params.sessionAgentId,
+    })
+  );
 }

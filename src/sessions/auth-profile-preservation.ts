@@ -107,6 +107,7 @@ export function applyModelOverrideWithAuthProfileCompatibility(
     profileOverride: params.profileOverride,
     profileOverrideSource: params.profileOverrideSource || undefined,
     selectionSource: params.selectionSource || undefined,
+    modelFallbackPolicy: params.modelFallbackPolicy,
     explicitDefaultSelection: params.explicitDefaultSelection,
     markLiveSwitchPending: params.markLiveSwitchPending,
     preserveAuthProfileOverride:

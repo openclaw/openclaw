@@ -9,6 +9,7 @@ import { createTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import { sleepWithAbort } from "../../../infra/backoff.js";
 import { flushDiagnosticsTimeline } from "../../../infra/diagnostics-timeline.js";
 import { withEnvAsync } from "../../../test-utils/env.js";
+import * as liveModelSwitch from "../../live-model-switch.js";
 import {
   buildEmbeddedRunnerAssistant,
   createMockUsage,
@@ -38,6 +39,13 @@ vi.mock("../../../infra/backoff.js", async (importOriginal) => ({
 const tempDirs = createTempDirTracker();
 const requireRecord = createRequireRecord("record", "expected-label-object-capitalized");
 afterEach(() => tempDirs.cleanup());
+
+it("compares the admitted fallback policy during attempt recovery", async ({ onTestFinished }) => {
+  const selection = vi.spyOn(liveModelSwitch, "shouldSwitchToLiveModel");
+  onTestFinished(() => selection.mockRestore());
+  await recoverAfterTransportDrop({ modelFallbackPolicy: "configured" });
+  expect(selection.mock.calls[0]?.[0].currentModelFallbackPolicy).toBe("configured");
+});
 
 it.each(["ECONNREFUSED"])(
   "fails fast on %s for setup while normal runs retain connection retries",

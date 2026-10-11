@@ -26,6 +26,7 @@ export function resolveModelFallbackOptions(
     sessionKey: run.sessionKey,
     hasSessionModelOverride: run.hasSessionModelOverride === true,
     modelOverrideSource: run.modelOverrideSource,
+    modelFallbackPolicy: run.modelFallbackPolicy,
     hasAutoFallbackProvenance: run.hasAutoFallbackProvenance === true,
     modelSelectionLocked: run.modelSelectionLocked,
     subagentSpawnLineage: run.subagentSpawnLineage,
@@ -40,6 +41,8 @@ export function resolveModelFallbackOptions(
     sessionKey: run.runtimePolicySessionKey ?? run.sessionKey,
     modelFallbackAvailability,
     fallbacksOverride: modelFallbackOverrideFromAvailability(modelFallbackAvailability),
+    fallbacksOverrideSource:
+      modelFallbackAvailability.kind === "active" ? ("configured" as const) : undefined,
   };
 }
 
@@ -54,6 +57,7 @@ export function buildRunEntrySelection(
     requestedRouteResolution: selection.requestedRouteResolution,
     agentDir: selection.agentDir,
     fallbacksOverride: selection.fallbacksOverride,
+    fallbacksOverrideSource: selection.fallbacksOverrideSource,
     userLockedAuthProfileId: run.authProfileIdSource === "user" ? run.authProfileId : undefined,
   };
 }
@@ -97,6 +101,20 @@ export async function resolveRunModelHasVision(params: {
   return modelSupportsInput(findModelInCatalog(catalog, provider, model), "image");
 }
 
+/** Keep run-entry's candidate chain and its provenance together; hook chains carry none. */
+export function buildCandidateChainParams(
+  options: Pick<
+    AgentFallbackCandidateCommonParams,
+    "resolvedModelSelection" | "modelFallbacksOverride" | "modelFallbacksOverrideSource"
+  >,
+) {
+  return {
+    resolvedModelSelection: options.resolvedModelSelection,
+    modelFallbacksOverride: options.modelFallbacksOverride,
+    modelFallbacksOverrideSource: options.modelFallbacksOverrideSource,
+  };
+}
+
 /** Project prepared turn facts shared by the CLI and embedded runtime adapters. */
 export function buildFallbackCandidateTurnParams(params: AgentFallbackCandidateCommonParams) {
   const { turn } = params;
@@ -111,8 +129,7 @@ export function buildFallbackCandidateTurnParams(params: AgentFallbackCandidateC
     fastModeStartedAtMs: params.fastModeStartedAtMs,
     fastModeAutoProgressState: params.fastModeAutoProgressState,
     isFinalFallbackAttempt: params.isFinalFallbackAttempt,
-    resolvedModelSelection: params.resolvedModelSelection,
-    modelFallbacksOverride: params.modelFallbacksOverride,
+    ...buildCandidateChainParams(params),
     prompt: turn.commandBody,
     transcriptPrompt: turn.transcriptCommandBody,
     media: turn.followupRun.media,

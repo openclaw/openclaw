@@ -57,6 +57,7 @@ type SessionModelOverrideSelection = Pick<
   | "modelOverride"
   | "providerOverride"
   | "modelOverrideSource"
+  | "modelFallbackPolicy"
   | "modelOverrideRouteResolution"
   | "agentRuntimeOverride"
 >;
@@ -68,6 +69,8 @@ export function selectSessionModelOverride(
     modelOverride: entry.modelOverride,
     providerOverride: entry.providerOverride,
     modelOverrideSource: entry.modelOverrideSource,
+    // The session preference travels with its selection across rollover.
+    modelFallbackPolicy: entry.modelOverride ? entry.modelFallbackPolicy : undefined,
     modelOverrideRouteResolution: entry.modelOverrideRouteResolution,
     agentRuntimeOverride: entry.agentRuntimeOverride,
   };
@@ -95,6 +98,11 @@ export function inheritSessionSelection(
       : {}),
     ...(inheritModelSelection && parentEntry.modelOverrideSource
       ? { modelOverrideSource: parentEntry.modelOverrideSource }
+      : {}),
+    ...(inheritModelSelection &&
+    parentEntry.modelOverride &&
+    parentEntry.modelFallbackPolicy === "configured"
+      ? { modelFallbackPolicy: parentEntry.modelFallbackPolicy }
       : {}),
     ...(inheritModelSelection && parentEntry.modelOverrideRouteResolution
       ? { modelOverrideRouteResolution: parentEntry.modelOverrideRouteResolution }
