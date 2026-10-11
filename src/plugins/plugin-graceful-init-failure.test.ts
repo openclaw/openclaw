@@ -59,6 +59,7 @@ function readPluginId(pluginPath: string): string {
 async function loadPlugins(
   pluginPaths: string[],
   warnings?: string[],
+  errors?: string[],
   previousRegistry?: NonNullable<Parameters<typeof loadOpenClawPlugins>[0]>["previousRegistry"],
 ) {
   clearPluginLoaderCache();
@@ -77,7 +78,7 @@ async function loadPlugins(
     logger: {
       info: () => {},
       debug: () => {},
-      error: () => {},
+      error: (message: string) => errors?.push(message),
       warn: (message: string) => warnings?.push(message),
     },
     onlyPluginIds: allow,
@@ -158,7 +159,12 @@ describe("graceful plugin initialization failure", () => {
         status: "error",
         failurePhase: "validation",
       });
-      const replacement = await loadPlugins([broken.file, healthy.file], undefined, registry);
+      const replacement = await loadPlugins(
+        [broken.file, healthy.file],
+        undefined,
+        undefined,
+        registry,
+      );
       expect(requirePluginEntry(replacement, "shallow-schema-plugin")).toBe(
         requirePluginEntry(registry, "shallow-schema-plugin"),
       );
@@ -227,5 +233,30 @@ describe("graceful plugin initialization failure", () => {
     expect(summary).toContain("validation: warn-validation");
     expect(summary).toContain("openclaw plugins inspect <id> --runtime --json");
     expect(summary).toContain("openclaw plugins list");
+  });
+
+  it("summarizes error-level blocked hook registrations at startup", async () => {
+    // The plugin loads cleanly and reports as healthy; only this summary says
+    // that one of its handlers was refused and will never fire.
+    const blocked = writePlugin({
+      id: "conversation-blocked",
+      body: `module.exports = { id: "conversation-blocked", register(api) {
+    api.on("before_prompt_build", () => undefined);
+  } };`,
+    });
+
+    const warnings: string[] = [];
+    const errors: string[] = [];
+    const registry = await loadPlugins([blocked.file], warnings, errors);
+
+    // The plugin itself is fine — that is the whole problem.
+    expect(requirePluginEntry(registry, "conversation-blocked").status).toBe("loaded");
+
+    const summary = errors.find((entry) => entry.includes("hook registrations blocked"));
+    expect(summary).toBeDefined();
+    expect(summary).toContain("conversation-blocked");
+    expect(summary).toContain("those handlers will never run");
+    expect(summary).toContain("/status plugins");
+    expect(summary).toContain("openclaw plugins inspect <id> --runtime --json");
   });
 });

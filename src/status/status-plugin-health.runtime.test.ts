@@ -163,6 +163,35 @@ describe("runtime plugin health snapshot", () => {
     });
   });
 
+  it("projects blocked hook registrations from the active runtime registry", async () => {
+    const registry = createEmptyPluginRegistry();
+    registry.blockedHooks.push({
+      pluginId: "openclaw-beads",
+      hookName: "before_prompt_build",
+      reason: "conversation-access-missing",
+      severity: "error",
+      configPath: "plugins.entries.openclaw-beads.hooks.allowConversationAccess",
+      message: 'typed hook "before_prompt_build" was NOT registered',
+      source: "/tmp/openclaw-beads/index.js",
+    });
+    setActivePluginRegistry(registry, "openclaw-beads", "default", "/tmp/ws");
+
+    // `source` is a host path; it stays out of the chat-facing snapshot.
+    expect((await collectRuntimePluginHealthSnapshot()).blockedHooks).toEqual([
+      {
+        pluginId: "openclaw-beads",
+        hookName: "before_prompt_build",
+        reason: "conversation-access-missing",
+        severity: "error",
+        message: 'typed hook "before_prompt_build" was NOT registered',
+      },
+    ]);
+  });
+
+  it("reports no blocked hooks when there is no active runtime registry", async () => {
+    expect((await collectRuntimePluginHealthSnapshot()).blockedHooks).toEqual([]);
+  });
+
   it("includes core-owned runtime tool quarantines from this process", async () => {
     await withStateDirEnv("openclaw-status-tool-quarantine-core-", async () => {
       setActivePluginRegistry(createEmptyPluginRegistry(), "empty", "default", "/tmp/ws");

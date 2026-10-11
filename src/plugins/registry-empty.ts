@@ -87,5 +87,6 @@ export function createEmptyPluginRegistry(): PluginRegistry {
     gatewayMethodDescriptors: [],
     coreGatewayMethodNames: [],
     diagnostics: [],
+    blockedHooks: [],
   };
 }
