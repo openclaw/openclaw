@@ -1,15 +1,18 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { extractErrorCode } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import pLimit from "p-limit";
 
 export const DEFAULT_OPEN_SHELL_MIRROR_EXCLUDE_DIRS = ["hooks", "git-hooks", ".git"] as const;
+const NESTED_MIRROR_EXCLUDE_DIRS = new Set([".git"]);
 const COPY_TREE_FS_CONCURRENCY = 16;
+const log = createSubsystemLogger("openshell");
 
-function createExcludeMatcher(excludeDirs?: readonly string[]) {
+function createExcludeMatcher(excludeDirs?: readonly string[], exactNames = false) {
   const excluded = new Set((excludeDirs ?? []).map((d) => normalizeLowercaseStringOrEmpty(d)));
-  return (name: string) => excluded.has(normalizeLowercaseStringOrEmpty(name));
+  return (name: string) => excluded.has(exactNames ? name : normalizeLowercaseStringOrEmpty(name));
 }
 
 const runLimitedFs = pLimit(COPY_TREE_FS_CONCURRENCY);
@@ -27,6 +30,7 @@ async function reconcileMirrorPath(params: {
   sourcePath?: string;
   targetPath: string;
   replace: boolean;
+  excludeDirs?: readonly string[];
 }): Promise<boolean> {
   const targetStats = await lstatIfExists(params.targetPath);
   // Preserve host entries mirror transport cannot represent and their ancestor directories.
@@ -48,9 +52,16 @@ async function reconcileMirrorPath(params: {
       sourceDir,
       targetDir: params.targetPath,
       replace: params.replace,
+      excludeDirs: params.excludeDirs,
+      nested: true,
     });
     // A remote file cannot replace a directory containing preserved host entries.
     if (sourceDir || preservedEntries) {
+      if (sourceFile) {
+        log.warn(
+          `OpenShell mirror kept host directory ${params.targetPath} because it contains preserved host entries; skipped the sandbox file at that path.`,
+        );
+      }
       return preservedEntries;
     }
     await runLimitedFs(fs.rmdir, params.targetPath);
@@ -70,9 +81,13 @@ async function reconcileMirrorDirectory(params: {
   targetDir: string;
   replace: boolean;
   excludeDirs?: readonly string[];
+  nested?: boolean;
 }): Promise<boolean> {
   const { sourceDir } = params;
-  const isExcluded = createExcludeMatcher(params.excludeDirs);
+  const isExcluded = createExcludeMatcher(params.excludeDirs, params.nested);
+  const nestedExcludeDirs = params.excludeDirs?.filter((dir) =>
+    NESTED_MIRROR_EXCLUDE_DIRS.has(normalizeLowercaseStringOrEmpty(dir)),
+  );
   await runLimitedFs(fs.mkdir, params.targetDir, { recursive: true });
   const sourceEntries = new Set(
     sourceDir ? await runLimitedFs(async () => await fs.readdir(sourceDir)) : [],
@@ -90,10 +105,11 @@ async function reconcileMirrorDirectory(params: {
             sourceDir && sourceEntries.has(entry) ? path.join(sourceDir, entry) : undefined,
           targetPath: path.join(params.targetDir, entry),
           replace: params.replace,
+          excludeDirs: nestedExcludeDirs,
         }),
       ),
   );
-  let preservedEntries = false;
+  let preservedEntries = targetEntries.some(isExcluded);
   for (const result of results) {
     if (result.status === "rejected") {
       throw result.reason;

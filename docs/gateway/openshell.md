@@ -418,9 +418,18 @@ canonical paths (via realpath) before every read, write, mkdir, remove, and
 rename, rejecting mid-path symlinks. A symlink swap or a remounted local
 workspace cannot redirect file access outside the mirrored tree.
 
-Workspace synchronization excludes `.git`, `hooks`, and `git-hooks` in both
+Workspace synchronization excludes `.git` at every depth, including nested
+repositories, and the workspace-root `hooks` and `git-hooks` directories in both
 directions. Repository credentials, history, and trusted hook code remain on
 the OpenClaw Gateway host instead of being copied into an untrusted sandbox.
+Host `.git` entries are preserved even when the sandbox deletes or replaces
+their parent directory. If the sandbox has a file where the host has a directory
+containing `.git`, the host directory and its Git metadata are kept, the
+sandbox file is skipped, and a warning names the skipped path. Nested `hooks` directories, such as application source
+folders, still synchronize normally.
+Nested exclusions match the exact name `.git`, including submodule gitdir files;
+names such as `.GIT` or `.git` with surrounding spaces still synchronize.
+Workspace-root exclusion matching remains case-insensitive.
 
 Mirror synchronization never copies entries it cannot represent, such as
 symlinks, FIFOs, or Unix sockets, into either workspace. Existing host entries
