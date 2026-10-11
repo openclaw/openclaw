@@ -300,7 +300,6 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     const result = await recordDeliveredCommandExchange({
       sessionKey,
       storePath: fixture.storePath(),
-      config: { logging: { redactSensitive: "off" } },
       commandText,
       replyText: "Configuration updated.",
       commandId: "config-command",
