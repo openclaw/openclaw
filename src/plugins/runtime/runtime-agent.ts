@@ -109,18 +109,11 @@ async function runWithSessionWorkAdmission<T>(
   return runAdmittedWork();
 
   async function runAdmittedWork(): Promise<T> {
-    // Capture native identity before yielding so queued work cannot adopt a replacement.
-    const initialEntry = source
-      ? await readSessionEntryReadOnlyInWorker({
-          storePath: params.storePath,
-          sessionKey: params.sessionKey,
-          readConsistency: "latest",
-        })
-      : getSessionEntry({
-          storePath: params.storePath,
-          sessionKey: params.sessionKey,
-          readConsistency: "latest",
-        });
+    const initialEntry = await readSessionEntryReadOnlyInWorker({
+      storePath: params.storePath,
+      sessionKey: params.sessionKey,
+      readConsistency: "latest",
+    });
     const lifecycleAbortController = new AbortController();
     const admission = await beginSessionWorkAdmission({
       scope: params.storePath,

@@ -1,4 +1,4 @@
-import { getSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
+import { getSessionEntryAsync, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { runDetachedWebhookWork } from "openclaw/plugin-sdk/webhook-request-guards";
 import type { MattermostPost } from "./client.js";
 import type { MattermostInteractionResponse } from "./interactions.js";
@@ -112,7 +112,7 @@ export function createMattermostModelPickerInteractionHandler(
       agentId: eventPlan.route.agentId,
       sessionKey: eventPlan.thread.sessionKey,
     };
-    const sessionEntry = getSessionEntry({
+    const sessionEntry = await getSessionEntryAsync({
       storePath: resolveStorePath(cfg.session?.store, { agentId: modelSessionRoute.agentId }),
       sessionKey: modelSessionRoute.sessionKey,
       readConsistency: "latest",
@@ -132,10 +132,11 @@ export function createMattermostModelPickerInteractionHandler(
     }
 
     if (pickerState.action !== "select") {
-      const currentModel = resolveMattermostModelPickerCurrentModel({
+      const currentModel = await resolveMattermostModelPickerCurrentModel({
         cfg,
         route: modelSessionRoute,
         data,
+        sessionEntry,
       });
       const viewParams = {
         ownerUserId: pickerState.ownerUserId,
@@ -193,11 +194,14 @@ export function createMattermostModelPickerInteractionHandler(
         sourcePostId,
         kind: "model picker",
       });
-      const currentModel = resolveMattermostModelPickerCurrentModel({
+      const currentModel = await resolveMattermostModelPickerCurrentModel({
         cfg,
         route: modelSessionRoute,
         data,
-        readConsistency: "latest",
+        sessionEntry: await getSessionEntryAsync({
+          storePath: resolveStorePath(cfg.session?.store, { agentId: modelSessionRoute.agentId }),
+          sessionKey: modelSessionRoute.sessionKey,
+        }),
       });
       const view = renderMattermostModelsPickerView({
         ownerUserId: pickerState.ownerUserId,

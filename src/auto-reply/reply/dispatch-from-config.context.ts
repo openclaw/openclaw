@@ -4,7 +4,6 @@ import { normalizeChatType } from "../../channels/chat-type.js";
 import { readConversationBindingRouteFacts } from "../../channels/conversation-binding-route-facts.js";
 import { resolveGroupSessionKey } from "../../config/sessions/group.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
-import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
 import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -179,13 +178,14 @@ export async function resolveDispatchResetAdmission(params: {
   ) {
     try {
       hasParentForkSource = Boolean(
-        loadSessionEntryReadOnly({
-          agentId: params.agentId,
-          storePath: params.storePath,
-          sessionKey: parentSessionKey,
-          readConsistency: "latest",
-          clone: false,
-        })?.sessionId,
+        (
+          await readSessionEntryReadOnlyInWorker({
+            agentId: params.agentId,
+            storePath: params.storePath,
+            sessionKey: parentSessionKey,
+            readConsistency: "latest",
+          })
+        )?.sessionId,
       );
     } catch {
       hasParentForkSource = false;

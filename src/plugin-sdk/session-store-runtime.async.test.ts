@@ -25,6 +25,9 @@ import {
   getSessionEntry,
   getSessionEntryAsync,
   getSessionEntryByIdAsync,
+  readAmbientTranscriptWatermarkAsync,
+  resolveAmbientTranscriptWatermarkKey,
+  upsertSessionEntry,
 } from "./session-store-runtime.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterAll);
@@ -51,6 +54,47 @@ const completeEntry: InternalSessionEntry = {
     writerRunId: "synthetic-writer",
   },
 };
+
+it("reads committed watermark updates off the host and ignores a reset predecessor", async () => {
+  const env = { OPENCLAW_STATE_DIR: tempDirs.make("sdk-async-watermark-") };
+  const scope = { agentId: "main", env, sessionKey: "agent:main:telegram:group:room" };
+  const key = resolveAmbientTranscriptWatermarkKey({
+    channel: "telegram",
+    accountId: "default",
+    conversationId: "room",
+  });
+  let entry = {
+    sessionId: "before-reset",
+    updatedAt: 1,
+    ambientTranscriptWatermarks: {
+      [key]: { sessionId: "before-reset", messageId: "11", updatedAt: 1 },
+    },
+  };
+  const read = async () => {
+    const sql = observeHostDataSql();
+    try {
+      const watermark = await readAmbientTranscriptWatermarkAsync({ ...scope, key });
+      expect(sql.queries).toEqual([]);
+      return watermark;
+    } finally {
+      sql.restore();
+    }
+  };
+  await upsertSessionEntry({ ...scope, entry });
+  expect(await read()).toMatchObject({ messageId: "11" });
+
+  entry = {
+    ...entry,
+    ambientTranscriptWatermarks: {
+      [key]: { sessionId: "before-reset", messageId: "12", updatedAt: 2 },
+    },
+  };
+  await upsertSessionEntry({ ...scope, entry });
+  expect(await read()).toMatchObject({ messageId: "12" });
+
+  await upsertSessionEntry({ ...scope, entry: { ...entry, sessionId: "after-reset" } });
+  expect(await read()).toBeUndefined();
+});
 
 it.each(["durable", "incognito"] as const)(
   "selects the most recently updated duplicate ID only when requested in %s sessions",

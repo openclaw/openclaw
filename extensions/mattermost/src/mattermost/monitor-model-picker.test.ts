@@ -18,7 +18,7 @@ vi.mock("openclaw/plugin-sdk/webhook-request-guards", () => ({
 vi.mock("./model-picker.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./model-picker.js")>()),
   parseMattermostModelPickerContext: mocks.parseContext,
-  resolveMattermostModelPickerCurrentModel: () => "openai/gpt-5.4",
+  resolveMattermostModelPickerCurrentModel: async () => "openai/gpt-5.4",
 }));
 
 vi.mock("./monitor-auth.js", () => ({

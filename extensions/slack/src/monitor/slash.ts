@@ -17,9 +17,9 @@ import {
   listNativeCommandSpecsForConfig,
   prepareSkillCommandsForAgents,
   parseCommandArgs,
-  resolveCommandArgMenu,
+  resolveCommandArgMenuAsync,
   resolveEffectiveAgentRuntime,
-  resolveStoredModelOverride,
+  resolveStoredModelOverrideAsync,
   type CommandArgs,
   resolveNativeCommandSessionTargets,
 } from "openclaw/plugin-sdk/command-auth-native";
@@ -40,7 +40,7 @@ import type {
 } from "openclaw/plugin-sdk/plugin-command-runtime";
 import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
 import { danger, logVerbose, warn } from "openclaw/plugin-sdk/runtime-env";
-import { getSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
+import { getSessionEntryAsync, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -112,11 +112,11 @@ const loadPluginCommandRuntime = createLazyRuntimeModule(
   () => import("openclaw/plugin-sdk/plugin-command-runtime"),
 );
 
-function resolveSlackCommandMenuModelContext(params: {
+async function resolveSlackCommandMenuModelContext(params: {
   cfg: SlackMonitorContext["cfg"];
   agentId: string;
   sessionKey: string;
-}): { provider?: string; model?: string; agentRuntime?: string } {
+}): Promise<{ provider?: string; model?: string; agentRuntime?: string }> {
   if (!params.sessionKey.trim()) {
     return {};
   }
@@ -126,16 +126,16 @@ function resolveSlackCommandMenuModelContext(params: {
       agentId: params.agentId,
     });
     const storePath = resolveStorePath(params.cfg.session?.store, { agentId: params.agentId });
-    const entry = getSessionEntry({ storePath, sessionKey: params.sessionKey });
+    const entry = await getSessionEntryAsync({ storePath, sessionKey: params.sessionKey });
     let provider: string | undefined;
     let model: string | undefined;
     if (entry?.modelOverrideSource === "auto" && normalizeOptionalString(entry.modelOverride)) {
       provider = defaultModel.provider;
       model = defaultModel.model;
     } else {
-      const override = resolveStoredModelOverride({
+      const override = await resolveStoredModelOverrideAsync({
         sessionEntry: entry,
-        loadSessionEntry: (sessionKey) => getSessionEntry({ storePath, sessionKey }),
+        loadSessionEntry: (sessionKey) => getSessionEntryAsync({ storePath, sessionKey }),
         sessionKey: params.sessionKey,
         defaultProvider: defaultModel.provider,
       });
@@ -586,7 +586,7 @@ export function createSlackCommandHandler(params: {
             : undefined;
         const menuModelContext =
           menuNeedsModelContext && menuRoute
-            ? resolveSlackCommandMenuModelContext({
+            ? await resolveSlackCommandMenuModelContext({
                 cfg,
                 agentId: menuRoute.agentId,
                 sessionKey: menuRoute.sessionKey,
@@ -606,7 +606,7 @@ export function createSlackCommandHandler(params: {
                 readOnly: true,
               })
             : undefined;
-        const menu = resolveCommandArgMenu({
+        const menu = await resolveCommandArgMenuAsync({
           command: commandDefinition,
           args: commandArgs,
           cfg,

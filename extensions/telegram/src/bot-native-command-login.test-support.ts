@@ -10,7 +10,6 @@ import type { ModelsAuthLoginFlowResult } from "openclaw/plugin-sdk/provider-aut
 import { clearRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import type { prepareSessionEntryPatch } from "openclaw/plugin-sdk/session-store-runtime";
-import { observeHostDataSql } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { expect, type Mock, vi } from "vitest";
 import type { TelegramNativeCommandDeps } from "./bot-native-command-deps.runtime.js";
@@ -68,23 +67,12 @@ export async function prepareTelegramLoginSessionStore(
     entry: { sessionId: "telegram-login", updatedAt: 1, authProfileOverride: "openai:prior" },
   });
   mocks.getSessionEntry.mockImplementation(
-    (requested: Parameters<typeof store.getSessionEntry>[0]) =>
-      store.getSessionEntry({ ...requested, storePath: scope.storePath }),
+    (requested: Parameters<typeof store.getSessionEntryAsync>[0]) =>
+      store.getSessionEntryAsync({ ...requested, storePath: scope.storePath }),
   );
   mocks.resolveStorePath.mockReturnValue(scope.storePath);
-  const queries: string[] = [];
-  mocks.prepareSessionEntryPatch.mockImplementationOnce(
-    async (write: Parameters<typeof store.prepareSessionEntryPatch>[0]) => {
-      const sql = observeHostDataSql();
-      try {
-        return await store.prepareSessionEntryPatch(write);
-      } finally {
-        queries.push(...sql.queries);
-        sql.restore();
-      }
-    },
-  );
-  return { store, scope, queries };
+  mocks.prepareSessionEntryPatch.mockImplementation(store.prepareSessionEntryPatch);
+  return { store, scope };
 }
 
 export async function registerLoginCommand(params: {

@@ -7,7 +7,7 @@ import {
 } from "openclaw/plugin-sdk/number-runtime";
 import { finalizeInboundContext } from "openclaw/plugin-sdk/reply-runtime";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
-import { getSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
+import { getSessionEntryAsync, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { ResolvedMattermostAccount } from "../mattermost/accounts.js";
 import { getMattermostRuntime } from "../runtime.js";
@@ -690,7 +690,7 @@ async function handleSlashCommandAsync(params: {
   const to = kind === "direct" ? `user:${senderId}` : `channel:${channelId}`;
   const pickerEntry = resolveMattermostModelPickerEntry(commandText);
   if (pickerEntry) {
-    const sessionEntry = getSessionEntry({
+    const sessionEntry = await getSessionEntryAsync({
       storePath: resolveStorePath(cfg.session?.store, { agentId: route.agentId }),
       sessionKey: route.sessionKey,
       readConsistency: "latest",
@@ -705,10 +705,11 @@ async function handleSlashCommandAsync(params: {
       return;
     }
 
-    const currentModel = resolveMattermostModelPickerCurrentModel({
+    const currentModel = await resolveMattermostModelPickerCurrentModel({
       cfg,
       route,
       data,
+      sessionEntry,
     });
     const viewParams = { ownerUserId: senderId, data, currentModel };
     const view =

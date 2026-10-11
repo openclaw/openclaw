@@ -8,7 +8,7 @@ import {
   buildCommandTextFromArgs,
   findCommandByNativeName,
   parseCommandArgs,
-  resolveCommandArgMenu,
+  resolveCommandArgMenuAsync,
   serializeCommandArgs,
   type CommandArgs,
   type NativeCommandSpec,
@@ -16,7 +16,7 @@ import {
 import type { PluginCommandNativeCandidate } from "openclaw/plugin-sdk/plugin-command-runtime";
 import { getRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { createSubsystemLogger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { getSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import { getSessionEntryAsync } from "openclaw/plugin-sdk/session-store-runtime";
 import { resolveDiscordAccountDmPolicy } from "../accounts.js";
 import { Command, type CommandInteraction, type CommandOptions } from "../internal/discord.js";
 import { resolveDiscordDmCommandAccess } from "./dm-command-auth.js";
@@ -456,7 +456,7 @@ async function dispatchDiscordCommandInteraction(
   const menu =
     command.key === "verbose" && bindingReadiness?.ok === false
       ? null
-      : resolveCommandArgMenu({
+      : await resolveCommandArgMenuAsync({
           command,
           args: commandArgs,
           cfg,
@@ -509,7 +509,7 @@ async function dispatchDiscordCommandInteraction(
       (isThreadChannel ? threadBindings.getByThreadId(rawChannelId)?.agentId : undefined) ||
       routeState.configuredBinding?.statefulTarget.agentId ||
       effectiveRoute.agentId;
-    const targetSessionEntry = getSessionEntry({
+    const targetSessionEntry = await getSessionEntryAsync({
       agentId: pluginCommandAgentId,
       sessionKey: effectiveRoute.sessionKey,
     });

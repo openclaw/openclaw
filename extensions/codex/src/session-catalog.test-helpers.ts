@@ -638,6 +638,7 @@ export function createRuntime(
     agent: {
       session: {
         getSessionEntry: session.getSessionEntry,
+        getSessionEntryAsync: session.getSessionEntryAsync,
         createSessionEntry,
         listSessionEntries: vi.fn((listParams) => {
           const agentPrefix = listParams?.agentId ? `agent:${listParams.agentId}:` : undefined;

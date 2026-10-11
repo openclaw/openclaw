@@ -37,7 +37,7 @@ vi.mock("./reply-dispatcher.js", () => ({
   })),
 }));
 vi.mock("./reasoning-preview.js", () => ({
-  resolveFeishuReasoningPreviewEnabled: vi.fn(() => false),
+  resolveFeishuReasoningPreviewEnabled: vi.fn(async () => false),
 }));
 vi.mock("./bot-group-name.js", () => ({ resolveGroupName: vi.fn(async () => undefined) }));
 vi.mock("openclaw/plugin-sdk/conversation-runtime", async () => {

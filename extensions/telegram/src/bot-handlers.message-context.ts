@@ -1,11 +1,11 @@
 import type { Message } from "grammy/types";
 import { formatMediaPlaceholderText } from "openclaw/plugin-sdk/channel-inbound";
-import { resolveStoredModelOverride } from "openclaw/plugin-sdk/command-auth-native";
+import { resolveStoredModelOverrideAsync } from "openclaw/plugin-sdk/command-auth-native";
 import type { OpenClawConfig, TelegramAccountConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolvePromptHistoryLimit } from "openclaw/plugin-sdk/number-runtime";
 import {
-  getSessionEntry,
-  readAmbientTranscriptWatermark,
+  getSessionEntryAsync,
+  readAmbientTranscriptWatermarkAsync,
   resolveAmbientTranscriptWatermarkKey,
 } from "openclaw/plugin-sdk/session-store-runtime";
 import { asFiniteNumber } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -152,7 +152,7 @@ export function createTelegramMessageSessionRuntime({
   RegisterTelegramHandlerParams,
   "accountId" | "resolveTelegramGroupConfig" | "telegramDeps"
 >) {
-  const loadSessionEntry = telegramDeps.getSessionEntry ?? getSessionEntry;
+  const loadSessionEntry = telegramDeps.getSessionEntryAsync ?? getSessionEntryAsync;
   const resolveTelegramSessionState = async (params: ResolveTelegramSessionStateParams) => {
     const dmThreadId = params.threadSpec.scope === "dm" ? params.threadSpec.id : undefined;
     const { topicConfig } = resolveTelegramGroupConfig(
@@ -175,8 +175,8 @@ export function createTelegramMessageSessionRuntime({
     const storePath = telegramDeps.resolveStorePath(params.runtimeCfg.session?.store, {
       agentId: route.agentId,
     });
-    const entry = loadSessionEntry({ storePath, sessionKey });
-    const storedOverride = resolveStoredModelOverride({
+    const entry = await loadSessionEntry({ storePath, sessionKey });
+    const storedOverride = await resolveStoredModelOverrideAsync({
       sessionEntry: entry,
       loadSessionEntry: (parentSessionKey) =>
         loadSessionEntry({ storePath, sessionKey: parentSessionKey }),
@@ -207,9 +207,9 @@ export function createTelegramMessageSessionRuntime({
     };
   };
 
-  const resolvePromptContextAmbientWatermark = (
+  const resolvePromptContextAmbientWatermark = async (
     params: ResolvePromptContextAmbientWatermarkParams,
-  ): TelegramAmbientTranscriptWatermark | undefined => {
+  ): Promise<TelegramAmbientTranscriptWatermark | undefined> => {
     if (!params.isGroup) {
       return undefined;
     }
@@ -221,7 +221,9 @@ export function createTelegramMessageSessionRuntime({
       conversationId: String(params.chatId),
       ...(params.resolvedThreadId !== undefined ? { threadId: params.resolvedThreadId } : {}),
     });
-    return (telegramDeps.readAmbientTranscriptWatermark ?? readAmbientTranscriptWatermark)({
+    return await (
+      telegramDeps.readAmbientTranscriptWatermarkAsync ?? readAmbientTranscriptWatermarkAsync
+    )({
       storePath: params.storePath,
       sessionKey: params.sessionKey,
       key,

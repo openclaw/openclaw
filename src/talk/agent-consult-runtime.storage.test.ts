@@ -16,7 +16,10 @@ import {
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
-import { consultRealtimeVoiceAgent } from "./agent-consult-runtime.js";
+import {
+  consultRealtimeVoiceAgent,
+  prepareRealtimeVoiceAgentExecutionContext,
+} from "./agent-consult-runtime.js";
 
 let state: OpenClawTestState;
 beforeEach(async () => {
@@ -27,6 +30,54 @@ afterEach(async () => {
 });
 
 describe("voice consult concrete store ownership", () => {
+  it("refreshes prepared policy and delivery after an in-process write without a native read", async () => {
+    const cfg: OpenClawConfig = {
+      agents: { entries: { main: { workspace: state.workspaceDir } } },
+    };
+    const agentRuntime = createRuntimeAgent();
+    const sessionKey = "agent:main:voice-preparation";
+    const storePath = state.statePath("consult", "sessions.sqlite");
+    const target = { agentId: "main", sessionKey, storePath };
+    const prepare = () =>
+      prepareRealtimeVoiceAgentExecutionContext({
+        cfg,
+        agentRuntime,
+        ...target,
+        messageProvider: "voice",
+      });
+    const nativeRead = vi.spyOn(agentRuntime.session, "getSessionEntry").mockImplementation(() => {
+      throw new Error("voice preparation must use the session worker");
+    });
+    try {
+      await replaceSessionEntry(target, {
+        sessionId: "voice-session",
+        updatedAt: 1,
+        permissionMode: "workspace",
+      });
+      expect((await prepare()).toolAuthorityOverlay.permissionMode).toBe("workspace");
+
+      await replaceSessionEntry(target, {
+        sessionId: "voice-session",
+        updatedAt: 2,
+        permissionMode: "guarded",
+        delivery: normalizeSessionDeliveryState({
+          context: { channel: "discord", to: "channel:updated", accountId: "updated-account" },
+        }),
+      });
+      expect(await prepare()).toMatchObject({
+        sessionEntry: { permissionMode: "guarded", updatedAt: 2 },
+        deliveryContext: { channel: "discord", to: "channel:updated" },
+        toolAuthorityOverlay: {
+          permissionMode: "guarded",
+          messageProvider: "discord",
+          agentAccountId: "updated-account",
+        },
+      });
+    } finally {
+      nativeRead.mockRestore();
+    }
+  });
+
   it("preserves live run identity through transcript storage and redaction", async () => {
     const runIdPrefix = "zoom-meetings:zoom_meeting_11111111-2222-4333-8444-123456789012";
     const cfg: OpenClawConfig = {

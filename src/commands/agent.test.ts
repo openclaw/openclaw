@@ -126,7 +126,7 @@ vi.mock("../agents/auth-profiles/source-check.js", () => ({
 vi.mock("../auto-reply/reply/session-stable-reply-mode.js", () => ({
   // Session-stable policy has owner coverage in the reply resolver suite. This
   // command suite only owns forwarding its result into CLI binding facts.
-  resolveSessionStableReplyMode: vi.fn(() => "automatic"),
+  resolveSessionStableReplyMode: vi.fn(async () => "automatic"),
 }));
 
 vi.mock("../agents/harness/selection.js", () => ({

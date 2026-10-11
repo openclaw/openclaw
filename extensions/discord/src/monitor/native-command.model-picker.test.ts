@@ -183,7 +183,7 @@ function mockModelCommandPipeline(modelCommand = createModelCommandDefinition())
     name === "model" ? modelCommand : undefined,
   );
   vi.spyOn(commandRegistryModule, "listChatCommands").mockReturnValue([modelCommand]);
-  vi.spyOn(commandRegistryModule, "resolveCommandArgMenu").mockReturnValue(null);
+  vi.spyOn(commandRegistryModule, "resolveCommandArgMenuAsync").mockResolvedValue(null);
 }
 
 function createModelsViewSelectData(): PickerSelectData {
@@ -231,10 +231,7 @@ type ApplySelectionParams = Parameters<typeof applyDiscordModelPickerSelection>[
 function applySelection({
   result,
   ...selection
-}: Pick<
-  ApplySelectionParams,
-  "resolveCurrentModel" | "resolveCurrentRuntime" | "selectedRuntime"
-> & {
+}: Pick<ApplySelectionParams, "resolveCurrentSelection" | "selectedRuntime"> & {
   result: Awaited<ReturnType<DispatchDiscordCommandInteraction>>;
 }) {
   return applyDiscordModelPickerSelection({
@@ -671,8 +668,10 @@ describe("Discord model picker interactions", () => {
     const recordRecentSpy = vi
       .spyOn(modelPickerPreferencesModule, "recordDiscordModelPickerRecentModel")
       .mockResolvedValue();
-    const resolveCurrentModel = vi.fn(() => "openai/gpt-4.1");
-    const resolveCurrentRuntime = vi.fn(() => "codex");
+    const resolveCurrentSelection = vi.fn(async () => ({
+      modelRef: "openai/gpt-4.1",
+      runtime: "codex",
+    }));
     const result = await applySelection({
       result: {
         accepted: true,
@@ -681,8 +680,7 @@ describe("Discord model picker interactions", () => {
           isError: true,
         },
       },
-      resolveCurrentModel,
-      resolveCurrentRuntime,
+      resolveCurrentSelection,
     });
 
     expect(result).toEqual({
@@ -690,8 +688,7 @@ describe("Discord model picker interactions", () => {
       noticeMessage:
         "Model change was not applied because the session changed.\nCurrent selection: openai/gpt-4.1 with runtime codex.",
     });
-    expect(resolveCurrentModel).toHaveBeenCalledOnce();
-    expect(resolveCurrentRuntime).toHaveBeenCalledOnce();
+    expect(resolveCurrentSelection).toHaveBeenCalledOnce();
     expect(recordRecentSpy).not.toHaveBeenCalled();
   });
 
@@ -710,8 +707,10 @@ describe("Discord model picker interactions", () => {
           hiddenFinalReply: { text: "scope-aware core notice" },
         },
         selectedRuntime,
-        resolveCurrentModel: () => "openai/gpt-4o",
-        resolveCurrentRuntime: () => currentRuntime,
+        resolveCurrentSelection: async () => ({
+          modelRef: "openai/gpt-4o",
+          runtime: currentRuntime,
+        }),
       });
 
       expect(result.status).toBe(expectedStatus);
@@ -1117,17 +1116,13 @@ describe("Discord model picker interactions", () => {
         accepted: true,
         effectiveRoute,
       },
-      resolveCurrentModel: (route) => {
+      resolveCurrentSelection: async (route) => {
         seenRoutes.push(route);
-        return "openai/gpt-4.1";
-      },
-      resolveCurrentRuntime: (route) => {
-        seenRoutes.push(route);
-        return "auto";
+        return { modelRef: "openai/gpt-4.1", runtime: "auto" };
       },
     });
 
-    expect(seenRoutes).toEqual([effectiveRoute, effectiveRoute]);
+    expect(seenRoutes).toEqual([effectiveRoute]);
     expect(result).toEqual({
       status: "mismatch",
       effectiveModelRef: "openai/gpt-4.1",
@@ -1137,22 +1132,22 @@ describe("Discord model picker interactions", () => {
   });
 
   it("reports a rejected hidden /model dispatch without reading authoritative state", async () => {
-    const resolveCurrentModel = vi.fn(() => "openai/gpt-4.1");
-    const resolveCurrentRuntime = vi.fn(() => "auto");
+    const resolveCurrentSelection = vi.fn(async () => ({
+      modelRef: "openai/gpt-4.1",
+      runtime: "auto",
+    }));
     const result = await applySelection({
       result: {
         accepted: false,
       },
-      resolveCurrentModel,
-      resolveCurrentRuntime,
+      resolveCurrentSelection,
     });
 
     expect(result).toEqual({
       status: "rejected",
       noticeMessage: "❌ Failed to apply openai/gpt-4o. Try /model openai/gpt-4o directly.",
     });
-    expect(resolveCurrentModel).not.toHaveBeenCalled();
-    expect(resolveCurrentRuntime).not.toHaveBeenCalled();
+    expect(resolveCurrentSelection).not.toHaveBeenCalled();
   });
 
   it("loads model picker data from the effective bound route", async () => {

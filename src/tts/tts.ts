@@ -40,6 +40,7 @@ export {
   resolveExplicitTtsOverridesAsync,
   resolveTtsConfig,
   resolveTtsPrefsPath,
+  resolveTtsPrefsPathAsync,
   resolveTtsProviderOrder,
   setLastTtsAttempt,
   setSummarizationEnabled,

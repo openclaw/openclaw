@@ -29,6 +29,7 @@ export {
   resolveTtsAutoMode,
   resolveTtsConfig,
   resolveTtsPrefsPath,
+  resolveTtsPrefsPathAsync,
   setTtsMachinePrefsPathResolver,
   type ResolvedTtsConfig,
   type ResolvedTtsModelOverrides,
