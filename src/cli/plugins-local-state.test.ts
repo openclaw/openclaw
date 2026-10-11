@@ -36,12 +36,14 @@ vi.mock("../infra/gateway-lock.js", async (importOriginal) => ({
 }));
 
 // mock-isolation: Exercise the real command ownership decision without opening a worker database.
-vi.mock("../infra/gateway-state-owner.js", () => ({
+vi.mock("../infra/gateway-state-owner.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/gateway-state-owner.js")>()),
   captureGatewayStateOwner: () => undefined,
   tryBorrowGatewayStateOwner: () => undefined,
 }));
 // mock-isolation: Database settlement is covered by the shared local-state-owner process suite.
-vi.mock("../state/openclaw-state-db-async-lifecycle.js", () => ({
+vi.mock("../state/openclaw-state-db-async-lifecycle.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../state/openclaw-state-db-async-lifecycle.js")>()),
   createOpenClawDatabaseMaintenanceScope: () => ({
     run: async (run: () => Promise<unknown>) => run(),
     close: async () => {},

@@ -238,13 +238,12 @@ export async function runPluginsRegistryCommand(opts: PluginRegistryOptions): Pr
   if (opts.refresh) {
     const { refreshPluginRegistry } = await import("../plugins/plugin-registry-refresh.js");
     const refresh = (assertCurrent: () => void) =>
-      withPluginLifecycleLease({}, async (lease) => {
+      withPluginLifecycleLease({ assertCurrent }, async (lease) => {
         const config = getRuntimeConfig();
         const index = await refreshPluginRegistry({
           config,
           reason: "manual",
           lease,
-          assertCurrent,
         });
         const inspection = await inspectPluginRegistry({ config });
         if (inspection.state !== "fresh") {

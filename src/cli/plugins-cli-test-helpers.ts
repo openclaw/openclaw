@@ -286,14 +286,6 @@ vi.mock("./plugins-lifecycle-client.js", () => ({
   resolvePluginLifecycleGateway: () => resolvePluginLifecycleGatewayMock(),
 }));
 
-// mock-isolation: These command fixtures own synthetic storage; ownership has a separate boundary suite.
-vi.mock("./plugins-local-state.js", () => ({
-  runWithLocalPluginState: async (
-    _command: string,
-    run: (assertCurrent: () => void) => Promise<unknown>,
-  ) => run(() => {}),
-}));
-
 vi.mock("../config/io.factory.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../config/io.factory.js")>();
   return {
