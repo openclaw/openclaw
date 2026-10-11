@@ -331,7 +331,7 @@ export function renderSidebarSessionSortMenuForController(
           title: option.label,
         }))}
         ariaLabel={label()}
-        {...{ className: "sidebar-session-menu-segmented" }}
+        class="sidebar-session-menu-segmented"
         onChange={onChange}
       />
     </div>

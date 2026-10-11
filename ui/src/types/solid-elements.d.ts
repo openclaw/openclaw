@@ -1,4 +1,5 @@
 import "@solidjs/web";
+export type { JSX } from "@solidjs/web";
 import type WaDropdownItem from "@awesome.me/webawesome/dist/components/dropdown-item/dropdown-item.js";
 import type WaDropdown from "@awesome.me/webawesome/dist/components/dropdown/dropdown.js";
 import type WaOption from "@awesome.me/webawesome/dist/components/option/option.js";
@@ -205,6 +206,9 @@ declare module "@solidjs/web" {
       "wa-tab-panel": HTMLAttributes<WaTabPanel> &
         Properties<WaTabPanel> &
         Partial<Pick<WaTabPanel, "name" | "active">>;
+    }
+    interface SVGAttributes<T> {
+      "xml:space"?: "default" | "preserve";
     }
   }
 }

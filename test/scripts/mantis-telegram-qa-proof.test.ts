@@ -182,12 +182,14 @@ describe("canonical Telegram QA evidence contract", () => {
   });
 });
 
-describe("protected stationary workflow admission", () => {
+describe("protected workflow admission", () => {
   const sha = "a".repeat(40),
     main = "b".repeat(40);
   it.each([
     "complete",
     "main",
+    "advanced-main",
+    "wrong-main-base",
     "unprotected",
     "moved-pin",
     "not-ancestor",
@@ -233,20 +235,24 @@ describe("protected stationary workflow admission", () => {
         return Response.json({
           status: fault === "not-ancestor" ? "diverged" : "ahead",
           merge_base_commit: { sha },
-          base_commit: { sha },
+          base_commit: { sha: fault === "wrong-main-base" ? main : sha },
         });
       }
       throw new Error("Unexpected trust route");
     };
     const admission = assertRequestWorkflowRef({
       repository: "openclaw/openclaw",
-      ref: fault === "main" ? "refs/heads/main" : "refs/heads/qa-proof",
+      ref: ["main", "advanced-main", "wrong-main-base"].includes(fault)
+        ? "refs/heads/main"
+        : "refs/heads/qa-proof",
       sha,
       token: "synthetic-only",
       fetchImpl,
     });
-    if (["complete", "main"].includes(fault)) {
+    if (["complete", "main", "advanced-main"].includes(fault)) {
       await expect(admission).resolves.toBeUndefined();
+    } else if (fault === "wrong-main-base") {
+      await expect(admission).rejects.toThrow("Workflow SHA is not verified main ancestry");
     } else {
       await expect(admission).rejects.toThrow();
     }

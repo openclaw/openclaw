@@ -280,3 +280,9 @@ if (!customElements.get("openclaw-session-menu")) {
 }
 
 export type { SessionMenu };
+
+declare global {
+  interface HTMLElementTagNameMap {
+    "openclaw-session-menu": SessionMenu;
+  }
+}

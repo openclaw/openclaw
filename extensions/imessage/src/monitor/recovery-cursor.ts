@@ -24,6 +24,7 @@ const LEGACY_CATCHUP_CURSOR_NAMESPACE = "imessage.catchup-cursors";
 const LEGACY_CATCHUP_CURSOR_MAX_ENTRIES = 256;
 
 type RecoveryCursor = { lastRowid: number };
+let cursorWrites: Promise<unknown> = Promise.resolve();
 
 function openRecoveryCursorStore() {
   return getIMessageRuntime().state.openKeyedStoreV2<RecoveryCursor>(RECOVERY_CURSOR_STORE_OPTIONS);
@@ -103,27 +104,24 @@ function decideRecoveryCursorUpdate(
   return { lastRowid: update.rowid };
 }
 
-async function applyRecoveryCursorUpdate(
+function applyRecoveryCursorUpdate(
   key: string,
   update: RecoveryCursorUpdate,
 ): Promise<RecoveryCursor | undefined> {
-  const store = openRecoveryCursorStore();
-  let observation = await store.observe(key);
-  for (;;) {
-    const next = decideRecoveryCursorUpdate(observation.value, update);
+  // This module owns cursor writes. Serialize ordinary concurrent completions;
+  // direct writes by another owner during this operation are best effort.
+  const write = cursorWrites.then(async () => {
+    const store = openRecoveryCursorStore();
+    const current = await store.lookup(key);
+    const next = decideRecoveryCursorUpdate(current, update);
     if (!next) {
-      return observation.value;
+      return current;
     }
-    const result = await store.compareAndApply(key, observation.comparison, {
-      operation: "update",
-      action: "set",
-      value: next,
-    });
-    if (result.status !== "conflict") {
-      return next;
-    }
-    observation = result.current;
-  }
+    await store.register(key, next);
+    return next;
+  });
+  cursorWrites = write.catch(() => {});
+  return write;
 }
 
 async function readRecoveryCursor(accountId: string, dbIdentity: string): Promise<number | null> {

@@ -4,6 +4,7 @@ import {
   GATEWAY_BOOT_REASON_MAX_UTF16_CODE_UNITS,
   type GatewayBootLifecycleCompletion,
 } from "../../infra/gateway-boot-lifecycle.js";
+import { TailscaleBackendStoppedError } from "../../infra/tailscale-backend-stopped-error.js";
 import type { GatewayDrainReason } from "../../process/gateway-work-admission.js";
 import type { GatewayRunSignalRequest } from "./run-loop-request.js";
 
@@ -62,10 +63,14 @@ export function formatStartupFailureCompletion(
   error: unknown,
   startupReason?: GatewayBootLifecycleCompletion["startupReason"],
 ): GatewayBootLifecycleCompletion {
+  // Only the exact pre-channel prerequisite error qualifies. Cleanup failures wrap it and
+  // remain genuine unclean boots; matching error messages never bypass the breaker.
+  const reason =
+    startupReason ?? (error instanceof TailscaleBackendStoppedError ? error.code : undefined);
   return {
     outcome: "startup_failed",
     reason: truncateUtf16Safe(formatErrorMessage(error), GATEWAY_BOOT_REASON_MAX_UTF16_CODE_UNITS),
-    ...(startupReason ? { startupReason } : {}),
+    ...(reason ? { startupReason: reason } : {}),
   };
 }
 

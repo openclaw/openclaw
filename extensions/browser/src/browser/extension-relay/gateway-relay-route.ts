@@ -74,13 +74,13 @@ async function resolveGatewayRelay(resource: string) {
     throw new Error("Gateway relay profile is unavailable");
   }
   const lifecycle = getProfileLifecycle(runtime);
-  const generation = lifecycle.generation;
+  const profileSignal = lifecycle.controller.signal;
   return {
     relay,
     profileName,
     assertCurrent: () => {
       if (
-        lifecycle.generation !== generation ||
+        profileSignal.aborted ||
         lifecycle.transitionReason ||
         lifecycle.terminal ||
         getBrowserControlState() !== state ||

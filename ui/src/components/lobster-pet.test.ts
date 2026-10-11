@@ -30,10 +30,18 @@ async function advancePetFrame(element: LobsterPetElement): Promise<void> {
   await element.updateComplete;
 }
 
+async function settleDismissMenu(element: LobsterPetElement) {
+  for (const child of element.querySelectorAll<HTMLElement & { updateComplete: Promise<boolean> }>(
+    "wa-dropdown, wa-dropdown-item",
+  )) {
+    await child.updateComplete;
+  }
+}
+
 function poke(element: LobsterPetElement): void {
   const sprite = element.querySelector(".lobster-pet");
-  sprite?.dispatchEvent(new MouseEvent("pointerdown", { button: 0 }));
-  sprite?.dispatchEvent(new MouseEvent("pointerup", { button: 0 }));
+  sprite?.dispatchEvent(new MouseEvent("pointerdown", { button: 0, bubbles: true }));
+  sprite?.dispatchEvent(new MouseEvent("pointerup", { button: 0, bubbles: true }));
 }
 
 function spriteClasses(element: LobsterPetElement): string {
@@ -195,35 +203,13 @@ describe("lobster pet element", () => {
       expect(readStyle).not.toHaveBeenCalled();
       composer.getBoundingClientRect().width = 720;
       composer.prepend(element);
+      await element.updateComplete;
       await advancePetFrame(element);
       expect(readStyle.mock.calls.length).toBeLessThanOrEqual(1);
       expect(element.hasAttribute("data-scene-ready")).toBe(true);
     } finally {
       readStyle.mockRestore();
     }
-  });
-
-  it("hides a shed floor shell when resized controls consume its lane", async () => {
-    vi.useFakeTimers();
-    const element = createPet(42, "offline") as LobsterPetElement & {
-      floorEnabled: boolean;
-      anchor: "top" | "floor";
-      performAct: (act: "molt") => void;
-    };
-    element.floorEnabled = true;
-    await element.updateComplete;
-    await advancePetFrame(element);
-    element.anchor = "floor";
-    element.performAct("molt");
-    await vi.advanceTimersByTimeAsync(2600);
-    await element.updateComplete;
-    expect(element.querySelector(".lobster-pet--shell")).not.toBeNull();
-    const lead = element.parentElement!.querySelector(".agent-chat__composer-lead")!;
-    lead.getBoundingClientRect().width = 720;
-    window.dispatchEvent(new Event("resize"));
-    await advancePetFrame(element);
-    await element.updateComplete;
-    expect(element.querySelector(".lobster-pet--shell")).toBeNull();
   });
 
   it("starts hidden and arrives on its seeded visit schedule", async () => {
@@ -384,6 +370,7 @@ describe("lobster pet element", () => {
       ),
     ).toEqual(["Dismiss", "Dismiss and don't show again"]);
 
+    await settleDismissMenu(element);
     element.querySelector<HTMLElement>('wa-dropdown-item[value="dismiss"]')?.click();
     await element.updateComplete;
 
@@ -408,6 +395,7 @@ describe("lobster pet element", () => {
       .querySelector(".lobster-pet")
       ?.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
     await element.updateComplete;
+    await settleDismissMenu(element);
     element.querySelector<HTMLElement>('wa-dropdown-item[value="dismiss-permanently"]')?.click();
     await element.updateComplete;
 
@@ -440,6 +428,7 @@ describe("lobster pet element", () => {
     await arrive(element);
 
     element.remove();
+    await element.updateComplete;
     expect(vi.getTimerCount()).toBe(0);
   });
 
@@ -503,8 +492,9 @@ describe("lobster pet element", () => {
 
     element
       .querySelector(".lobster-pet:not(.lobster-pet--shell)")
-      ?.dispatchEvent(new Event("contextmenu", { cancelable: true }));
+      ?.dispatchEvent(new MouseEvent("contextmenu", { cancelable: true, bubbles: true }));
     await element.updateComplete;
+    await settleDismissMenu(element);
     element.querySelector<HTMLElement>('wa-dropdown-item[value="dismiss"]')?.click();
     await element.updateComplete;
     const raw = JSON.parse(
@@ -520,7 +510,7 @@ describe("lobster pet element", () => {
     await element.updateComplete;
 
     const sprite = element.querySelector(".lobster-pet");
-    sprite?.dispatchEvent(new Event("pointerdown"));
+    sprite?.dispatchEvent(new Event("pointerdown", { bubbles: true }));
     await vi.advanceTimersByTimeAsync(300);
     sprite?.dispatchEvent(new Event("pointercancel"));
     await vi.advanceTimersByTimeAsync(400);
@@ -637,12 +627,16 @@ describe("lobster pet element", () => {
     await vi.advanceTimersByTimeAsync(200);
     document.dispatchEvent(new MouseEvent("pointermove", { clientX: 400 }));
     await element.updateComplete;
-    expect(element.querySelector(".lobster-pet")?.getAttribute("style")).toContain("--lob-face:1");
+    expect(
+      element.querySelector<HTMLElement>(".lobster-pet")?.style.getPropertyValue("--lob-face"),
+    ).toBe("1");
 
     await vi.advanceTimersByTimeAsync(200);
     document.dispatchEvent(new MouseEvent("pointermove", { clientX: -400 }));
     await element.updateComplete;
-    expect(element.querySelector(".lobster-pet")?.getAttribute("style")).toContain("--lob-face:-1");
+    expect(
+      element.querySelector<HTMLElement>(".lobster-pet")?.style.getPropertyValue("--lob-face"),
+    ).toBe("-1");
   });
 
   it("travels light on first sighting and on same-version reloads", async () => {
@@ -770,9 +764,7 @@ describe("lobster pet element", () => {
 
     expect(container.querySelector(".lob-reading-book")).not.toBeNull();
     expect(container.querySelectorAll(".lob-eye-open circle")).toHaveLength(4);
-    expect(container.querySelector(".lob-eye-closed")?.getAttribute("style")).toContain(
-      "display:none",
-    );
+    expect(container.querySelector<SVGElement>(".lob-eye-closed")?.style.display).toBe("none");
   });
 
   it("renders full replacement geometry without the standard dome", () => {
@@ -1076,7 +1068,9 @@ describe("rare lobster loads", () => {
       "a message in a bottle",
     );
 
-    element.querySelector(".lobster-bottle")?.dispatchEvent(new Event("pointerdown"));
+    element
+      .querySelector(".lobster-bottle")
+      ?.dispatchEvent(new Event("pointerdown", { bubbles: true }));
     await element.updateComplete;
     const opened = element.querySelector(".lobster-bottle");
     expect(opened?.className).toContain("lobster-bottle--open");

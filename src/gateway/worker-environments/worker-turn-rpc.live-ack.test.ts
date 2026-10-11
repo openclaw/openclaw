@@ -150,7 +150,7 @@ describe("worker live ACK ownership", () => {
 type WorkerEnvironmentServiceOptions = support.WorkerEnvironmentServiceOptions;
 
 describe("worker ACK ordering", () => {
-  support.setupWorkerEnvironmentServiceSuite({ reuseReadWorkers: true });
+  support.setupWorkerEnvironmentServiceSuite();
 
   it.each(["transcript", "terminal"] as const)(
     "does not return a successful %s ACK when persistence rejects",
