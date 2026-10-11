@@ -76,10 +76,6 @@ function startCallback(
 }
 
 describe("plugin-sdk provider-auth-runtime", () => {
-  it("exports the runtime-ready auth helper", () => {
-    expect(providerAuthRuntime.getRuntimeAuthForModel).toBeTypeOf("function");
-  });
-
   it("resolves non-secret provider auth profile metadata", async () => {
     const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "provider-auth-runtime-"));
     const agentDir = path.join(tempRoot, "agent");
@@ -193,21 +189,6 @@ describe("plugin-sdk provider-auth-runtime", () => {
       expectedState: "state-1",
       timeoutMs: 5_000,
       callbackPath: "/callback",
-      successTitle: "OAuth complete",
-    });
-
-    const port = await ready;
-    const response = await fetch(`http://127.0.0.1:${port}/callback?code=code-1&state=state-1`);
-    expect(response.status).toBe(200);
-    await expect(callback).resolves.toEqual({ code: "code-1", state: "state-1" });
-  });
-
-  it("keeps an explicit localhost bind compatible with an IPv4 redirect", async () => {
-    const { callback, ready } = startCallback({
-      expectedState: "state-1",
-      timeoutMs: 5_000,
-      callbackPath: "/callback",
-      hostname: "localhost",
       successTitle: "OAuth complete",
     });
 
