@@ -127,7 +127,6 @@ it("delegates paste-api-key to the live owner without local credential admission
       allowLocalBackendAuthNone: true,
       scopes: ["operator.admin"],
       requiredCapabilities: ["local-state-owner-routing-v1", "models-auth-set-api-key-owner-v1"],
-      prepareDispatchCurrent: expect.any(Function),
       assertDispatchCurrent: expect.any(Function),
     }),
   );
