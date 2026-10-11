@@ -28,7 +28,10 @@ export async function resolveOpenRouterGenerationRequestContext(params: {
   return resolveProviderHttpRequestConfig({
     baseUrl: params.cfg.models?.providers?.openrouter?.baseUrl,
     defaultBaseUrl: OPENROUTER_BASE_URL,
-    allowPrivateNetwork: false,
+    // Private endpoints stay refused unless the operator opts in with
+    // models.providers.openrouter.request.allowPrivateNetwork: true.
+    allowPrivateNetwork:
+      params.cfg.models?.providers?.openrouter?.request?.allowPrivateNetwork === true,
     defaultHeaders: {
       Authorization: `Bearer ${auth.apiKey}`,
       ...(params.jsonContentType ? { "Content-Type": "application/json" } : {}),

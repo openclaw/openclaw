@@ -177,7 +177,6 @@ describe("openrouter image generation provider", () => {
 
   it("applies configured image request transport without weakening private-network policy", async () => {
     const requestPolicy = {
-      allowPrivateNetwork: true,
       headers: { "X-OpenRouter-Trace": "image-trace" },
       auth: { mode: "authorization-bearer" as const, token: "override-image-token" },
       proxy: { mode: "explicit-proxy" as const, url: "http://proxy.example.test:8443" },
@@ -253,6 +252,53 @@ describe("openrouter image generation provider", () => {
     expect(requireGeneratedImage(result, 0).buffer.toString()).toBe("png");
     expect(release).toHaveBeenCalledOnce();
   });
+
+  it.each([
+    { optIn: undefined, expected: false },
+    { optIn: false, expected: false },
+    { optIn: true, expected: true },
+  ])(
+    "allows a private base only when the operator opts in (request.allowPrivateNetwork: $optIn)",
+    async ({ optIn, expected }) => {
+      const release = vi.fn(async () => {});
+      postJsonRequestMock.mockImplementation(async () => ({
+        response: Response.json({
+          choices: [
+            {
+              message: {
+                images: [{ image_url: { url: "data:image/png;base64,cG5n" } }],
+              },
+            },
+          ],
+        }),
+        release,
+      }));
+
+      await buildOpenRouterImageGenerationProvider().generateImage({
+        provider: "openrouter",
+        model: "google/gemini-3.1-flash-image-preview",
+        prompt: "draw through a private gateway",
+        cfg: {
+          models: {
+            providers: {
+              openrouter: {
+                baseUrl: "http://10.0.0.5:8443/api/v1",
+                ...(optIn === undefined ? {} : { request: { allowPrivateNetwork: optIn } }),
+                models: [],
+              },
+            },
+          },
+        },
+      });
+
+      expect(requireOpenRouterConfigRequest()).toMatchObject({
+        baseUrl: "http://10.0.0.5:8443/api/v1",
+        allowPrivateNetwork: expected,
+      });
+      expect(requireOpenRouterPostRequest()).toMatchObject({ allowPrivateNetwork: expected });
+      expect(release).toHaveBeenCalledOnce();
+    },
+  );
 
   it("uses a 180s default timeout when no request timeout is provided", async () => {
     const release = vi.fn(async () => {});
