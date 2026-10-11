@@ -236,7 +236,7 @@ function resolveMessageCut(
     // data property instead of rebinding the copy's prototype.
     prefix.push(
       entry && entry.parentId !== node.parentId
-        ? ({ ...entry, parentId: node.parentId } as TranscriptEvent)
+        ? { ...entry, parentId: node.parentId }
         : node.entry,
     );
   }

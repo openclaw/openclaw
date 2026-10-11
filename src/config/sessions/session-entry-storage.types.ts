@@ -1,5 +1,6 @@
 import type { Selectable, SqlBool } from "kysely";
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
+import type { SessionEntryWindowRow } from "./session-entry-window.types.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
 type SessionEntryRow = Selectable<DB["session_nodes"]>;
@@ -26,6 +27,6 @@ export type ResolvedSessionEntryRow = {
     Partial<Pick<SessionEntryRow, "legacy_acp_migration_json">> & {
       board_present?: SqlBool;
       member_ids_json?: string;
-      window_json?: string | null;
+      window?: SessionEntryWindowRow | null;
     };
 };

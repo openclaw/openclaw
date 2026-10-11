@@ -54,7 +54,10 @@ export type SqliteSessionEntrySnapshotPatchParams = {
   validateCanonicalKeys: boolean;
   options: SqliteSessionEntryPatchOptions;
   selection: SessionEntryPatchSelection;
-  readSnapshot: (database: OpenClawAgentDatabase) => SqliteLifecycleTargetSnapshot;
+  readSnapshot: (
+    database: OpenClawAgentDatabase,
+    includeWindowFacts?: true,
+  ) => SqliteLifecycleTargetSnapshot;
   resolved: ResolvedSqliteScope;
   sessionKey: string;
   storePath: string;

@@ -593,7 +593,20 @@ export function createSessionMutations(host: SessionMutationsHost) {
       if (!hasPendingRowPatches()) {
         return;
       }
-      const identity = pendingRowIdentity(host.snapshot(), row, sourceAgentId);
+      const snapshot = host.snapshot();
+      const identity = pendingRowIdentity(snapshot, row, sourceAgentId);
+      const current = host.findRow(
+        (candidate, agentId) =>
+          candidate.sessionId === row.sessionId &&
+          pendingRowIdentity(snapshot, candidate, agentId) === identity,
+      );
+      if (
+        current?.updatedAt != null &&
+        row.updatedAt != null &&
+        row.updatedAt < current.updatedAt
+      ) {
+        return;
+      }
       for (const owner of rowPatches) {
         owner.observe(row, names, identity);
       }
@@ -609,6 +622,7 @@ export function createSessionMutations(host: SessionMutationsHost) {
       return mapSessionResultRows(archived, (row) => applyPendingRow(row, sourceAgentId));
     },
     observeArchiveState: archiveState.observe,
+    observeArchiveRead: archiveState.observeRead,
     confirmArchiveState: archiveState.confirm,
     reset,
     retireModelOverride: modelOverrides.retire,

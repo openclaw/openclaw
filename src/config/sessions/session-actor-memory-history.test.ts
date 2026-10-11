@@ -20,7 +20,7 @@ const message = (
   content: string,
   extra: Record<string, unknown> = {},
 ) => ({
-  type: "message",
+  type: "message" as const,
   id,
   parentId,
   timestamp: "2026-10-11T00:00:00.000Z",
@@ -63,7 +63,8 @@ async function fixture(events: unknown[]) {
       )
     ).kind,
   ).toBe("committed");
-  const append = async (event: unknown) => {
+  const append = async (event: ReturnType<typeof message>) => {
+    const { message: payload, ...envelope } = event;
     expect(
       (
         await storage.mutate(
@@ -71,7 +72,12 @@ async function fixture(events: unknown[]) {
             type: "session.metadata.append",
             input: {
               scope: { agentId: "main", sessionKey, sessionId, storePath },
-              event: JSON.stringify(event),
+              event: envelope,
+              message: {
+                messageJson: JSON.stringify(payload),
+                cwd: "/synthetic",
+                validateTurn: false,
+              },
               options: {},
             },
           },

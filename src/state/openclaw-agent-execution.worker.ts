@@ -61,7 +61,6 @@ import {
 } from "./openclaw-agent-execution-domain.js";
 import { createAgentDatabaseMaintenanceOwner } from "./openclaw-agent-execution-maintenance.js";
 import {
-  loadAgentTranscriptOperations,
   loadAgentTranscriptReadOperations,
   loadAgentReplacementOperations,
   loadAgentRestartRecoveryOperations,
@@ -83,9 +82,12 @@ import {
   loadAgentPendingInputOperations,
   loadAgentArchivePruningOperations,
   loadUsageCacheOperations,
-  prepareAgentTranscript,
   type RegisteredAgentWorkerOperations,
 } from "./openclaw-agent-execution-operations.js";
+import {
+  loadAgentTranscriptOperations,
+  prepareAgentTranscript,
+} from "./openclaw-agent-execution-transcript.worker.js";
 import { loadAgentVoiceSessionOperations } from "./openclaw-agent-execution-voice-operations.js";
 import type { AgentWorkerOperationContext } from "./openclaw-agent-operation-context.js";
 import {

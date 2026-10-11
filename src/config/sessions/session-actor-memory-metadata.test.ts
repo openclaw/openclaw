@@ -206,6 +206,34 @@ describe("memory actor metadata storage", () => {
     expect(actor.snapshot(authority)?.transcript.anchors.map((anchor) => anchor.entryId)).toEqual([
       "copied-user",
     ]);
+    const side = {
+      ...source,
+      id: "side-copy",
+      parentId: "copied-user",
+      appendMode: "side" as const,
+    };
+    committed(
+      await storage.mutate(
+        {
+          type: "session.transcript.rewrite",
+          input: {
+            scope,
+            appendParentId: "copied-user",
+            version: after.version,
+            entries: [side],
+            sources: [[side.id, source]],
+          },
+        },
+        authority,
+      ),
+    );
+    expect((await hydrate(storage)).events.at(-1)).toMatchObject({
+      id: "side-copy",
+      appendMode: "side",
+    });
+    expect(actor.snapshot(authority)?.transcript.anchors.map((anchor) => anchor.entryId)).toEqual([
+      "copied-user",
+    ]);
   });
 
   it("replaces only an exact suffix, preserves opaque custom data, and invalidates old cursors", async () => {

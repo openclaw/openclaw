@@ -269,6 +269,17 @@ const reviewedOperations = new Map([
     ],
   ],
   [
+    "src/config/sessions/session-accessor.sqlite-lifecycle-state.ts",
+    [
+      {
+        tier: "T2",
+        operations: ["assertRawSessionEntryRemovalUnchanged"],
+        evidence:
+          "Doctor-only raw-row removal: commands/doctor-session-canonical-keys.ts constructs expectedRawEntryJson; lifecycle-state.ts and projection-state.ts call this guard only for that removal variant. Ordinary lifecycle reads and writes remain T1.",
+      },
+    ],
+  ],
+  [
     "src/agents/auth-profiles/sqlite-json.ts",
     [
       {
@@ -1120,7 +1131,13 @@ const reviewedOperations = new Map([
           "compareAndCertifyCanonicalSessionValidationBatch",
         ],
         evidence:
-          "Only session-accessor.sqlite-mutation-worker.runtime.ts:375,280,381 calls these operations in the mutation-worker message handler. Shared host readiness hasPendingCanonicalSessionValidation stays T1.",
+          "Only session-accessor.sqlite-mutation-worker.runtime.ts:375,280,381 calls these operations in the mutation-worker message handler.",
+      },
+      {
+        tier: "T2",
+        operations: ["hasPendingCanonicalSessionValidation"],
+        evidence:
+          "Native readiness is startup-migration.ts:359 via session-canonical-validation-readiness.ts:91. Runtime request-authorization.ts:461 and session-row-prepared-read.ts:240 pass captured PendingCanonicalValidation.source and skip that probe; the other caller is the mutation worker's has-pending operation.",
       },
     ],
   ],

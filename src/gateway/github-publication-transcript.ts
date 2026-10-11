@@ -37,7 +37,7 @@ export async function reportGitHubPublicationTranscript(
     resolveCanonicalSessionEntryFromStoreKeys: typeof import("./session-utils.js").resolveCanonicalSessionEntryFromStoreKeys;
     resolveGatewaySessionStoreTargetWithStore: typeof import("./session-utils.js").resolveGatewaySessionStoreTargetWithStore;
   }>,
-  coordinator: Pick<GitHubPublicationCoordinator, "markReported">,
+  coordinator: Pick<GitHubPublicationCoordinator, "markReportedAsync">,
   params: {
     sessionId: string;
     sessionKey: string;
@@ -100,5 +100,5 @@ export async function reportGitHubPublicationTranscript(
   if (!appended.ok) {
     throw new Error("GitHub publication transcript owner changed", { cause: appended.error });
   }
-  coordinator.markReported(params.result.requestId);
+  await coordinator.markReportedAsync(params.result.requestId);
 }

@@ -105,7 +105,11 @@ export function createSessionActorWorker(
       throw new Error("Session actor lost its physical database owner");
     }
   };
-  const read = (database: OpenClawAgentDatabase, target: SessionActorTarget) => {
+  const read = (
+    database: OpenClawAgentDatabase,
+    target: SessionActorTarget,
+    retry = true,
+  ): SessionActorStoredState => {
     requireTarget(target);
     const resident = residents.get(target.sessionKey)?.state;
     const currentToken = token(database, target, resident?.hot.dependencySessionIds);
@@ -133,6 +137,10 @@ export function createSessionActorWorker(
       revision === undefined ||
       readSqliteDatabaseWriteRevision(database.db) !== revision
     ) {
+      // Worker retirement can invalidate every database while this snapshot is being read.
+      if (retry) {
+        return read(database, target, false);
+      }
       throw new Error("Session actor changed while hydrating");
     }
     hydrated.hot.writeToken = hydratedToken;

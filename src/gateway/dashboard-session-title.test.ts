@@ -19,6 +19,7 @@ vi.mock("../config/sessions/session-accessor.js", () => ({
 vi.mock("../config/sessions/session-entry-read-runtime.js", () => ({
   readSessionEntryReadOnlyInWorker: loadSessionEntry,
 }));
+// mock-isolation: Title orchestration tests supply transcript reads without starting workers.
 vi.mock("./session-transcript-title-reader.js", () => ({
   readSessionTitleFieldsFromTranscriptAsync: readSessionTitleFieldsFromTranscript,
 }));
@@ -284,19 +285,24 @@ describe("maybeGenerateDashboardSessionTitle", () => {
 
   it("retries a historical session from the transcript's first user message", async () => {
     const entry = { ...baseEntry, systemSent: true };
-    readSessionTitleFieldsFromTranscript.mockReturnValue({
+    const transcript = createDeferredCore<{
+      firstUserMessage: string;
+      lastMessagePreview: string;
+    }>();
+    readSessionTitleFieldsFromTranscript.mockReturnValue(transcript.promise);
+    mockSessionUpdate(entry);
+
+    const naming = maybeGenerateDashboardSessionTitle({
+      ...titleParams(entry),
+      currentUserMessage: "Latest follow-up",
+      userMessage: "Latest follow-up",
+    });
+    expect(generateConversationLabelWithFallback).not.toHaveBeenCalled();
+    transcript.resolve({
       firstUserMessage: "[Mon 2026-08-10 12:00 UTC] Original release plan",
       lastMessagePreview: "Latest follow-up",
     });
-    mockSessionUpdate(entry);
-
-    await expect(
-      maybeGenerateDashboardSessionTitle({
-        ...titleParams(entry),
-        currentUserMessage: "Latest follow-up",
-        userMessage: "Latest follow-up",
-      }),
-    ).resolves.toBe(true);
+    await expect(naming).resolves.toBe(true);
 
     expect(generateConversationLabelWithFallback.mock.calls[0]?.[0]?.userMessage).toBe(
       "Original release plan",

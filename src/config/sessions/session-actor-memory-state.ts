@@ -73,7 +73,7 @@ export function advanceSessionActorMemoryState(state: SessionActorMemoryState): 
   state.hot.completionKeys = [...state.completions.keys()];
 }
 
-export function emptySessionActorMemoryTranscript(): SessionActorHotState["transcript"] {
+function emptySessionActorMemoryTranscript(): SessionActorHotState["transcript"] {
   return {
     watermark: { generation: null, maxSeq: null },
     version: { generation: null, rawSeq: null, updatedAt: null },

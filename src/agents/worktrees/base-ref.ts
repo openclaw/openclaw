@@ -20,6 +20,7 @@ import { estimateWorktreeGitBytes } from "./capacity.js";
 import { withWorktreeGitConfig } from "./checkout-git-config.js";
 import { hasWorktreeUnknownOutcome } from "./errors.js";
 import { commandError, listGitWorktrees, requireGit, runGit } from "./git.js";
+import { timeWorktreePreparationPhase } from "./preparation-timing.js";
 import type { CreateManagedWorktreeParams } from "./types.js";
 
 const log = createSubsystemLogger("agents/worktrees");
@@ -216,14 +217,18 @@ export async function withWorktreeBasePreparation<T>(
       if (!attempt) {
         const started: RemoteDefaultAttempt = {
           ownerInvalidated: false,
-          pending: fetchRemoteDefault(repository.repoRoot, options).then(async (base) => {
+          pending: timeWorktreePreparationPhase("baseRefresh", () =>
+            fetchRemoteDefault(repository.repoRoot, options),
+          ).then(async (base) => {
             // The creation cohort shares hydration before any checkout, including local main.
             const preparationKey = randomUUID();
-            await estimateWorktreeGitBytes(repository.repoRoot, base.commit, {
-              signal,
-              assertCurrent: options.beforeRun,
-              preparationKey,
-            });
+            await timeWorktreePreparationPhase("baseHydration", () =>
+              estimateWorktreeGitBytes(repository.repoRoot, base.commit, {
+                signal,
+                assertCurrent: options.beforeRun,
+                preparationKey,
+              }),
+            );
             base.preparationKey = preparationKey;
             options.beforeRun();
             return base;
@@ -237,11 +242,8 @@ export async function withWorktreeBasePreparation<T>(
         attempt.pending = owned(
           attempt,
           attempt.pending.then(async (base) => {
-            const warning = await fastForwardLocalDefault(
-              repository,
-              base.branch,
-              base.commit,
-              options,
+            const warning = await timeWorktreePreparationPhase("baseFastForward", () =>
+              fastForwardLocalDefault(repository, base.branch, base.commit, options),
             );
             return warning
               ? {
@@ -254,7 +256,7 @@ export async function withWorktreeBasePreparation<T>(
       }
       let selected: Awaited<typeof attempt.pending>;
       try {
-        selected = await attempt.pending;
+        selected = await timeWorktreePreparationPhase("baseWait", () => attempt.pending);
       } catch (error) {
         // Unconfirmed native work retains recovery custody even after this caller is revoked.
         if (hasWorktreeUnknownOutcome(error)) {

@@ -253,14 +253,15 @@ function trackSchemaChanges(
       owner.transactionRead = true;
     }
     const changesReadScope = schemaChange || dataChange || control !== undefined;
-    if (changesReadScope) {
-      owner.mutationDepth += 1;
-    }
     const temporaryWrite = mutation.temporaryWriteTables?.every((table) =>
       owner.isolatedTempTables.has(table),
     );
     if ((dataChange && !temporaryWrite) || mainSchemaChange) {
       beginSqliteDatabaseWrite(database, mainSchemaChange || owner.nativeDepth > 0);
+    }
+    // Writer admission can throw before a native operation owns the matching decrement.
+    if (changesReadScope) {
+      owner.mutationDepth += 1;
     }
     owner.nativeDepth += 1;
     const finishAdmissions = beginSqliteDatabaseAdmissionOperation(database);

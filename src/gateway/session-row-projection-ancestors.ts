@@ -176,7 +176,6 @@ export function createSessionRowAncestorReads(owner: {
   prepareExactRows: (queries: readonly records.Lookup[]) => Promise<void> | undefined;
   prepareSelection: () => Promise<void> | undefined;
   retainExactPreparation: () => () => void;
-  assertExactRowsPrepared: (queries: readonly records.Lookup[]) => void;
   retainArchiveRows: () => { update: (ids: readonly string[]) => void; release: () => void };
   describe: SessionRowReadView["describe"];
   inOwnerContext: ReturnType<typeof AsyncLocalStorage.snapshot>;
@@ -282,7 +281,6 @@ export function createSessionRowAncestorReads(owner: {
                 if (owner.membership.needsPreparation(() => targets)) {
                   return membershipPending;
                 }
-                owner.assertExactRowsPrepared(targets);
                 return consume(read);
               },
               options?.selection ? owner.prepareSelection : undefined,

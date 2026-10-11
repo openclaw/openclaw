@@ -27,7 +27,7 @@ import type { SessionActorMemoryStorageContext } from "./session-actor-memory-st
 import { preserveSqliteSameKeySessionRolloverLineage } from "./session-entry-lineage.js";
 import { planSessionMessageCut } from "./session-message-cut-plan.js";
 import { normalizeStoreSessionKey } from "./store-entry.js";
-import { mergeSessionEntry } from "./types.js";
+import { mergeSessionEntry, type InternalSessionEntry as SessionEntry } from "./types.js";
 
 export function readSessionActorMemoryForkQuery(
   context: SessionActorMemoryStorageContext,
@@ -115,20 +115,25 @@ function commitParentFork(
       parentEntry: structuredClone(parentEntry),
       fork: { sessionId, sessionFile: targetKey },
     }) ?? input.patch?.forked;
-  const next = mergeSessionEntry(base, {
-    ...patch,
-    forkSource: { sessionKey: parentKey, sessionId: parentEntry.sessionId },
-    forkedFromParent: true,
+  const next: SessionEntry = {
+    ...mergeSessionEntry(base, {
+      ...patch,
+      forkSource: { sessionKey: parentKey, sessionId: parentEntry.sessionId },
+      forkedFromParent: true,
+      sessionId,
+      totalTokens: undefined,
+      totalTokensFresh: false,
+      totalTokensVersion: undefined,
+      cliSessionBindings: forkCliSessionBindings(
+        parentEntry,
+        input.supportsCliFork ?? (() => false),
+      ),
+      cliSessionIds: undefined,
+      claudeCliSessionId: undefined,
+    }),
     lifecycleRunId: undefined,
     lastRunId: undefined,
-    sessionId,
-    totalTokens: undefined,
-    totalTokensFresh: false,
-    totalTokensVersion: undefined,
-    cliSessionBindings: forkCliSessionBindings(parentEntry, input.supportsCliFork ?? (() => false)),
-    cliSessionIds: undefined,
-    claudeCliSessionId: undefined,
-  });
+  };
   const target = context.edit(targetKey);
   const sessionEntry = installSessionActorMemoryEntry(target, next);
   const events = createSessionActorMemoryEvents({ ...context, state: target });
@@ -239,4 +244,5 @@ export function executeSessionActorMemoryForkCommand(
       return { ...plan.result, entry };
     }
   }
+  throw new Error("Unknown memory fork command");
 }

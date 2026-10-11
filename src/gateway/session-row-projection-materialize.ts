@@ -125,7 +125,6 @@ export function createSessionRowMaterializer(owner: {
   rows: ReadonlyMap<string, records.Row>;
   dirty: Set<string>;
   prepare: () => records.Inputs["cfg"];
-  revision: () => number;
   acquireEntry: (row: records.Row, entry: records.Row["storedEntry"]) => records.Row | undefined;
   materialize: (
     row: records.Row,
@@ -151,8 +150,7 @@ export function createSessionRowMaterializer(owner: {
         if (offset > 0 && performance.now() - started >= 12) {
           break;
         }
-        const current = owner.rows.get(id),
-          revision = owner.revision();
+        const current = owner.rows.get(id);
         const databaseFacts = accepted
           ? current?.pendingDatabaseFacts
           : current?.retainedDatabaseFacts;
@@ -172,11 +170,7 @@ export function createSessionRowMaterializer(owner: {
           owner.forgetBackfill(id);
           continue;
         }
-        if (
-          row &&
-          owner.materialize(row, configuredAgentIds, readRow, databaseFacts) &&
-          owner.revision() === revision
-        ) {
+        if (row && owner.materialize(row, configuredAgentIds, readRow, databaseFacts)) {
           row.pendingDatabaseFacts = undefined;
           row.retainedDatabaseFacts = databaseFacts;
           owner.dirty.delete(id);
@@ -185,9 +179,6 @@ export function createSessionRowMaterializer(owner: {
           if (accepted && records.ready(row) && row.entry.archivedAt !== undefined) {
             owner.retainArchived(row);
           }
-        }
-        if (owner.revision() !== revision) {
-          break;
         }
       }
     });
@@ -211,7 +202,6 @@ export function createSessionRowMaterializer(owner: {
         return;
       }
       const cfg = owner.prepare();
-      const revision = owner.revision();
       withAgentRosterFactsBatch(cfg, () => {
         for (const id of ids) {
           const current = owner.rows.get(id);
@@ -228,9 +218,6 @@ export function createSessionRowMaterializer(owner: {
                 : current,
               databaseFacts?.entry,
             );
-          if (owner.revision() !== revision) {
-            break;
-          }
           if (row && databaseFacts) {
             row.preparedAcpMeta = databaseFacts.acpMeta;
             row.preparedRuntimeOwnership = databaseFacts.runtimeOwnership;

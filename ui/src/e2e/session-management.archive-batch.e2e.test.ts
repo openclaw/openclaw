@@ -10,6 +10,7 @@ import {
   installMockGateway,
   requireRecord,
   sessionsListResponse,
+  waitForConfirmModal,
 } from "./session-management.test-support.ts";
 
 const suite = createSessionManagementE2eSuite();
@@ -95,6 +96,24 @@ suite.define(() => {
       ).toBe(true);
       await captureUiProof(suite, page, "sidebar-multi-select-archive-menu.png");
       await page.keyboard.press("A");
+      let confirm = await waitForConfirmModal(page);
+      await confirm.getByText("This selection contains active work.", { exact: false }).waitFor();
+      await captureUiProof(suite, page, "sidebar-multi-select-archive-confirm.png");
+      expect(await gateway.getRequests("sessions.patchMany")).toEqual([]);
+      if (scenario === "refreshed") {
+        await confirm.getByRole("button", { name: "Cancel", exact: true }).click();
+        for (const key of batchKeys) {
+          await rowFor(key).waitFor({ state: "visible" });
+        }
+        expect(await gateway.getRequests("sessions.patchMany")).toEqual([]);
+        await rowFor(batchKeys[0]).click({ button: "right" });
+        await page
+          .locator("openclaw-session-menu")
+          .getByRole("menuitem", { name: "Archive 3" })
+          .click();
+        confirm = await waitForConfirmModal(page);
+      }
+      await confirm.getByRole("button", { name: "Archive 3", exact: true }).click();
 
       const patchMany = await gateway.waitForRequest("sessions.patchMany");
       for (const key of batchKeys) {

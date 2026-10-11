@@ -9,11 +9,6 @@ import {
   withoutSqliteDatabaseWriteScope,
   withSqliteDatabaseWriteScope,
 } from "../../infra/sqlite-database-admission.js";
-import {
-  getSqliteReadScopeRevision,
-  readSqliteNativeMutationRevision,
-  type SqliteReadScopeRevision,
-} from "../../infra/sqlite-schema-facts.js";
 import { getChildLogger } from "../../logging/logger.js";
 import { communicationEntryBinding } from "../../sessions/communication-admission.js";
 import { isIncognitoSessionKey } from "../../shared/incognito-session-key.js";
@@ -35,7 +30,6 @@ import {
 import { sessionSharingEntriesEqual } from "./session-accessor.sqlite-entry-cache.types.js";
 import type { SqliteLifecycleTargetSnapshot } from "./session-accessor.sqlite-entry-equality.js";
 import {
-  parseReadableSessionEntryData,
   readExactSessionEntryRow,
   readSessionEntryTargetRow,
   type ResolvedSessionEntryRow,
@@ -50,11 +44,7 @@ import {
   deleteSessionNodeArtifacts,
 } from "./session-accessor.sqlite-node-artifacts.js";
 import { hasSqliteSessionOwnerColumns } from "./session-accessor.sqlite-owner-projection.js";
-import { withProjectedParticipants } from "./session-accessor.sqlite-participant-projection.js";
-import {
-  prepareSessionEntryWindowRow,
-  type SessionEntryWindowFacts,
-} from "./session-accessor.sqlite-provenance.js";
+import { prepareSessionEntryWindowRow } from "./session-accessor.sqlite-provenance.js";
 import { collectSessionStateIdsForEntry } from "./session-accessor.sqlite-references.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import { bindSessionNode, bindSessionRoot } from "./session-accessor.sqlite-session-row.js";
@@ -76,7 +66,14 @@ import {
   splitSessionEntrySnapshots,
   writeSessionEntrySnapshots,
 } from "./session-entry-snapshots.js";
+import type { SessionEntryWindowFacts } from "./session-entry-window.types.js";
+import {
+  createSessionEntryWriteRow,
+  type SessionEntryWritePostimage,
+  type SessionEntryWritePostimages,
+} from "./session-entry-write-postimage.js";
 import { resolveSessionPublicShare } from "./session-public-share.js";
+import { readStagedSessionTranscriptUpdatedAt } from "./session-transcript-authority.js";
 import {
   projectCanonicalSessionEntryShape,
   stripRuntimeOnlySessionSkillsFields,
@@ -100,32 +97,7 @@ export {
 export {
   readSessionIdentitySnapshot,
   readSessionEntrySelectionSnapshot,
-  readUnchangedLifecycleTargetSnapshot,
 } from "./session-accessor.sqlite-entry-snapshot.js";
-
-const writtenEntryPostimages = new WeakMap<
-  SessionEntry,
-  {
-    database: OpenClawAgentDatabase["db"];
-    sessionKey: string;
-    revision: SqliteReadScopeRevision;
-    entry: SessionEntry;
-  }
->();
-
-/** Only the exact writer result can lend its persisted projection before another mutation. */
-export function readWrittenSessionEntryPostimage(
-  database: OpenClawAgentDatabase,
-  sessionKey: string,
-  written: SessionEntry,
-): SessionEntry | undefined {
-  const postimage = writtenEntryPostimages.get(written);
-  return postimage?.database === database.db &&
-    postimage.sessionKey === sessionKey &&
-    postimage.revision === getSqliteReadScopeRevision(database.db)
-    ? postimage.entry
-    : undefined;
-}
 
 export function resolveLifecyclePrimaryEntry(
   database: Pick<OpenClawAgentDatabase, "agentId" | "db">,
@@ -133,14 +105,7 @@ export function resolveLifecyclePrimaryEntry(
   options: { allowCanonicalMove?: boolean; includeWindowFacts?: true } = {},
 ): SqliteLifecycleTargetSnapshot[number] | undefined {
   const row = readSessionEntryTargetRow(database, target, options);
-  return row?.entry
-    ? captureSessionEntrySnapshot(
-        database,
-        { entry: row.entry, row: row.row },
-        target.storeKeys.map((key) => key.trim()),
-        [row.row],
-      )
-    : undefined;
+  return row?.entry ? captureSessionEntrySnapshot({ entry: row.entry, row: row.row }) : undefined;
 }
 
 export function readLifecycleTargetSnapshot(
@@ -174,6 +139,7 @@ export function deleteSessionEntryRows(
     deleteOwnedWindows?: boolean;
     deliveryCleanupKeys?: readonly string[];
     validatedEntry?: SessionEntry;
+    postimages?: SessionEntryWritePostimages;
   } = {},
 ): void {
   // Doctor supplies the exact row it validated; the runtime parser deliberately rejects that shape.
@@ -221,6 +187,11 @@ export function deleteSessionEntryRows(
               .where("session_id", "=", window.session_id),
           ),
       );
+      for (const postimage of options.postimages?.values() ?? []) {
+        if (postimage.window.session_id === window.session_id) {
+          postimage.window = { ...postimage.window, session_key: survivingNode.session_key };
+        }
+      }
     }
   }
   const remainingWindow = options.deleteOwnedWindows
@@ -259,6 +230,7 @@ export function deleteSessionEntryRows(
       }
     },
   );
+  options.postimages?.delete(sessionKey);
   publishSessionEntryCacheInvalidation(database, { sessionKey, facts: { kind: "removed" } });
 }
 
@@ -330,7 +302,11 @@ export function deleteLegacySessionEntryRows(
   database: OpenClawAgentDatabase,
   legacyKeys: string[],
   sessionKey: string,
-  options: { rehomeMembers?: boolean; validatedEntries?: ReadonlyMap<string, SessionEntry> } = {},
+  options: {
+    rehomeMembers?: boolean;
+    validatedEntries?: ReadonlyMap<string, SessionEntry>;
+    postimages?: SessionEntryWritePostimages;
+  } = {},
 ): void {
   if (legacyKeys.length === 0) {
     return;
@@ -346,9 +322,10 @@ export function deleteLegacySessionEntryRows(
     if (previousEntry) {
       commitSqliteSessionDeletion(legacyKey, previousEntry);
     }
-    rehomeSessionWindows(database, sessionKey, [legacyKey]);
+    rehomeSessionWindows(database, sessionKey, [legacyKey], options.postimages);
     copySessionNodeArtifactsForRepair(database, database, [legacyKey], sessionKey, {
       includeMembers: options.rehomeMembers,
+      postimages: options.postimages,
     });
     withSqliteDatabaseWriteScope(database.db, [legacyKey], () =>
       executeSqliteQuerySync(
@@ -356,6 +333,11 @@ export function deleteLegacySessionEntryRows(
         db.deleteFrom("session_nodes").where("session_key", "=", legacyKey),
       ),
     );
+    options.postimages?.delete(legacyKey);
+    const canonicalPostimage = options.postimages?.get(sessionKey);
+    if (canonicalPostimage) {
+      canonicalPostimage.changed = true;
+    }
     publishSessionEntryCacheInvalidation(database, { sessionKey: legacyKey });
   }
   publishSessionEntryCacheInvalidation(database, { sessionKey });
@@ -366,6 +348,7 @@ export function rehomeSessionWindows(
   database: OpenClawAgentDatabase,
   canonicalKey: string,
   previousKeys: Iterable<string>,
+  postimages?: SessionEntryWritePostimages,
 ): void {
   const legacyKeys = uniqueStrings([...previousKeys].map((key) => key.trim())).filter(
     (key) => key && key !== canonicalKey,
@@ -384,6 +367,11 @@ export function rehomeSessionWindows(
         .where("session_key", "in", legacyKeys),
     ),
   );
+  for (const postimage of postimages?.values() ?? []) {
+    if (legacyKeys.includes(postimage.window.session_key)) {
+      postimage.window = { ...postimage.window, session_key: canonicalKey };
+    }
+  }
 }
 
 export function writeSessionEntry(
@@ -398,13 +386,11 @@ export function writeSessionEntry(
     providerReviewMutation?: boolean;
     /** Canonical row revalidated in this write transaction; null proves absence. */
     canonicalPreviousEntry?: SessionEntry | null;
-    /** Participant facts were acquired at this native revision, not borrowed from a CAS snapshot. */
-    canonicalPreviousEntryRevision?: SqliteReadScopeRevision;
     /** Raw canonical columns from the same transaction, for exact no-op comparison. */
     canonicalPreviousRow?: ResolvedSessionEntryRow["row"];
     canonicalPreviousWindow?: SessionEntryWindowFacts;
-    /** A synchronous guard changed storage after the comparison snapshot was acquired. */
-    forceSnapshotWrite?: boolean;
+    canonicalPreviousSideTables?: SessionEntryWritePostimage["sideTables"];
+    postimages?: SessionEntryWritePostimages;
     consumePendingReset?: boolean;
     preserveNodeSuggestions?: boolean;
     previousEntry?: SessionEntry | null;
@@ -415,7 +401,6 @@ export function writeSessionEntry(
   if (actor && sessionKey !== actor.hot.target.sessionKey) {
     throw new Error("Session actor cannot write a lookup sibling");
   }
-  const inputRevision = getSqliteReadScopeRevision(database.db);
   if (!options.allowStoredAliases) {
     assertCanonicalSessionKeyWrite(sessionKey);
     assertCanonicalSessionEntryLineageWrite(entry);
@@ -436,7 +421,13 @@ export function writeSessionEntry(
     options.canonicalPreviousEntry !== undefined ||
     (options.allowStoredAliases && options.previousEntry !== undefined)
       ? undefined
-      : readExactSessionEntryRow(database, sessionKey);
+      : readExactSessionEntryRow(
+          database,
+          sessionKey,
+          "full",
+          undefined,
+          options.postimages ? true : undefined,
+        );
   const canonicalPreviousEntry =
     options.canonicalPreviousEntry !== undefined
       ? (options.canonicalPreviousEntry ?? undefined)
@@ -445,13 +436,21 @@ export function writeSessionEntry(
         : canonicalRead?.entry;
   const canonicalPreviousRow =
     options.canonicalPreviousRow ?? actor?.entryRows.get(sessionKey)?.row ?? canonicalRead?.row;
-  const mutationRevision = readSqliteNativeMutationRevision(database.db);
-  const previousRevision =
-    options.canonicalPreviousEntry === undefined
-      ? getSqliteReadScopeRevision(database.db)
-      : options.canonicalPreviousEntryRevision === inputRevision
-        ? inputRevision
-        : undefined;
+  const canonicalFacts = canonicalRead && captureSessionEntrySnapshot(canonicalRead);
+  const canonicalPreviousSideTables =
+    options.canonicalPreviousSideTables ??
+    canonicalFacts?.sideTables ??
+    (actor
+      ? {
+          memberIdsJson: JSON.stringify(actor.hot.members.map((member) => member.identityId)),
+          hasBoard: actor.hasBoard,
+        }
+      : canonicalPreviousEntry === undefined
+        ? { memberIdsJson: "[]", hasBoard: false }
+        : undefined);
+  if (options.postimages && !canonicalPreviousSideTables) {
+    throw new Error("Session entry postimage requires prepared side-table facts");
+  }
   if (
     canonicalPreviousEntry?.sessionId === normalizedEntry.sessionId &&
     canonicalPreviousEntry.lifecycleRevision === normalizedEntry.lifecycleRevision &&
@@ -554,10 +553,9 @@ export function writeSessionEntry(
   const canonicalEntry = stripRuntimeOnlySessionSkillsFields(
     projectCanonicalSessionEntryShape({ ...normalizedEntry }),
   );
-  const persisted = splitSessionEntrySnapshots(
-    canonicalEntry,
-    options.forceSnapshotWrite ? "complete" : { previousEntry: canonicalPreviousEntry },
-  );
+  const persisted = splitSessionEntrySnapshots(canonicalEntry, {
+    previousEntry: canonicalPreviousEntry,
+  });
   const sessionNode = bindSessionNode({
     entry: canonicalEntry,
     entryJson: persisted.entryJson,
@@ -568,8 +566,6 @@ export function writeSessionEntry(
   const nodeChanged =
     options.allowStoredAliases === true ||
     canonicalPreviousRow === undefined ||
-    mutationRevision === undefined ||
-    readSqliteNativeMutationRevision(database.db) !== mutationRevision ||
     Object.entries(sessionNode).some(([key, value]) => previousColumns.get(key) !== value);
   if (!options.allowStoredAliases) {
     // SQLite binds TEXT as UTF-8. Validate that exact projection before any write,
@@ -631,20 +627,16 @@ export function writeSessionEntry(
         entry: normalizedEntry,
         previousEntry,
         retainOwner: retainWindowOwner,
-        prepared: options.canonicalPreviousWindow,
+        prepared: options.canonicalPreviousWindow ?? canonicalFacts?.window,
+        stagedTranscriptUpdatedAt: actor
+          ? undefined
+          : readStagedSessionTranscriptUpdatedAt(database, normalizedEntry.sessionId),
       });
       const queries = getSessionEntryWriteQueries(database.db);
-      // Serialization hooks must not certify side-table facts they changed while preparing bytes.
-      const sideMetadataUnchanged =
-        previousRevision !== undefined &&
-        previousRevision === getSqliteReadScopeRevision(database.db);
-      // Native guards or serialization hooks may have changed the row after acquisition.
-      const writeNode =
-        nodeChanged || readSqliteNativeMutationRevision(database.db) !== mutationRevision;
       const writeGeneration =
-        writeNode || persisted.snapshotsChanged
+        nodeChanged || persisted.snapshotsChanged
           ? trackSessionEntryCacheWrite(database, () => {
-              if (writeNode) {
+              if (nodeChanged) {
                 queries.node(sessionNode);
               }
               if (persisted.snapshotsChanged) {
@@ -652,7 +644,7 @@ export function writeSessionEntry(
               }
             })
           : undefined;
-      if (writeNode) {
+      if (nodeChanged) {
         advanceSessionEntryMaintenanceAgeFact(database.db, {
           sessionKey,
           entry: normalizedEntry,
@@ -679,108 +671,103 @@ export function writeSessionEntry(
           updatedAt,
         });
       }
-      return { writeGeneration, window, sideMetadataUnchanged };
+      return { writeGeneration, window, conversationWritten: conversation !== null };
     },
   );
-  if (
-    mutationRevision !== undefined &&
-    readSqliteNativeMutationRevision(database.db) === mutationRevision
-  ) {
-    return normalizedEntry;
-  }
-  publishSessionEntryCacheInvalidation(
-    database,
-    {
-      sessionKey,
-      entry: normalizedEntry,
-      sharingUnchanged:
-        !options.allowStoredAliases &&
-        sessionSharingEntriesEqual(canonicalPreviousEntry, {
-          ...normalizedEntry,
+  const changed =
+    nodeChanged ||
+    persisted.snapshotsChanged ||
+    written.window.changed ||
+    written.conversationWritten;
+  if (changed) {
+    publishSessionEntryCacheInvalidation(
+      database,
+      {
+        sessionKey,
+        entry: normalizedEntry,
+        sharingUnchanged:
+          !options.allowStoredAliases &&
+          sessionSharingEntriesEqual(canonicalPreviousEntry, {
+            ...normalizedEntry,
+            owner: canonicalPreviousEntry?.owner,
+          }),
+        entryJson: persisted.entryJson,
+        snapshotEntry: canonicalEntry,
+        snapshots: persisted.snapshotsChanged ? persisted.snapshots : undefined,
+        sideMetadata: structuredClone({
           owner: canonicalPreviousEntry?.owner,
+          participants: canonicalPreviousEntry?.participants,
+          participantCount: canonicalPreviousEntry?.participantCount,
         }),
-      entryJson: persisted.entryJson,
-      snapshotEntry: canonicalEntry,
-      snapshots: persisted.snapshotsChanged ? persisted.snapshots : undefined,
-      sideMetadata: structuredClone({
-        owner: canonicalPreviousEntry?.owner,
-        participants: canonicalPreviousEntry?.participants,
-        participantCount: canonicalPreviousEntry?.participantCount,
-      }),
-      previousEntry: canonicalPreviousEntry,
-      ...(!options.allowStoredAliases
-        ? {
-            facts: {
-              kind: "entry" as const,
-              previousSessionId: canonicalPreviousEntry?.sessionId,
-              sessionId: normalizedEntry.sessionId,
-              category: normalizedEntry.category?.trim() || null,
-              communicationBinding: communicationEntryBinding(normalizedEntry),
-              clearMembers:
-                canonicalPreviousEntry !== undefined &&
-                canonicalPreviousEntry.sessionId !== normalizedEntry.sessionId,
-              lifecycleChanged:
-                canonicalPreviousEntry?.sessionId !== normalizedEntry.sessionId ||
-                canonicalPreviousEntry?.lifecycleRevision !== normalizedEntry.lifecycleRevision,
-            },
-          }
-        : {}),
-    },
-    written.writeGeneration,
-  );
-  if (actor) {
-    const previousRow = actor.entryRows.get(sessionKey)?.row;
-    const row = {
-      ...previousRow,
-      ...sessionNode,
-      session_diff_baseline_json: JSON.stringify(canonicalEntry.sessionDiffBaseline) ?? null,
-      skills_snapshot_json: JSON.stringify(canonicalEntry.skillsSnapshot) ?? null,
-      system_prompt_report_json: JSON.stringify(canonicalEntry.systemPromptReport) ?? null,
-    };
-    const persistedEntry = parseReadableSessionEntryData(database, row, "full");
-    if (!persistedEntry) {
-      throw new Error("Session actor entry write lost its persisted identity");
-    }
-    const committedEntry = withProjectedParticipants(persistedEntry, actor.hot.participants);
-    actor.entryRows.set(sessionKey, {
-      entry: structuredClone(committedEntry),
-      row,
-    });
-    actor.hot.entry = structuredClone(committedEntry);
-    if (actor.window) {
-      actor.window = {
-        ...actor.window,
-        ...written.window.row,
-        created_at: actor.window.created_at,
-        session_key:
-          canonicalPreviousEntry?.sessionId === normalizedEntry.sessionId
-            ? actor.window.session_key
-            : written.window.row.session_key,
-      };
-    }
-  }
-  const revision = getSqliteReadScopeRevision(database.db);
-  if (!options.allowStoredAliases && written.sideMetadataUnchanged && revision) {
-    const postimage = projectSessionEntryCacheUpdate(
-      persisted.entryJson,
-      structuredClone({
-        owner: canonicalPreviousEntry?.owner,
-        ...(canonicalPreviousEntry?.sessionId === normalizedEntry.sessionId
+        previousEntry: canonicalPreviousEntry,
+        ...(!options.allowStoredAliases
           ? {
-              participants: canonicalPreviousEntry.participants,
-              participantCount: canonicalPreviousEntry.participantCount,
+              facts: {
+                kind: "entry" as const,
+                previousSessionId: canonicalPreviousEntry?.sessionId,
+                sessionId: normalizedEntry.sessionId,
+                category: normalizedEntry.category?.trim() || null,
+                communicationBinding: communicationEntryBinding(normalizedEntry),
+                clearMembers:
+                  canonicalPreviousEntry !== undefined &&
+                  canonicalPreviousEntry.sessionId !== normalizedEntry.sessionId,
+                lifecycleChanged:
+                  canonicalPreviousEntry?.sessionId !== normalizedEntry.sessionId ||
+                  canonicalPreviousEntry?.lifecycleRevision !== normalizedEntry.lifecycleRevision,
+              },
             }
           : {}),
-      }),
+      },
+      written.writeGeneration,
     );
-    if (postimage) {
-      writtenEntryPostimages.set(normalizedEntry, {
-        database: database.db,
-        sessionKey,
-        revision,
-        entry: postimage,
-      });
-    }
   }
-  return normalizedEntry;
+  const persistedEntry =
+    actor || options.postimages
+      ? projectSessionEntryCacheUpdate(
+          persisted.entryJson,
+          structuredClone({
+            ...(canonicalPreviousEntry?.owner ? { owner: canonicalPreviousEntry.owner } : {}),
+            ...(canonicalPreviousEntry?.participants
+              ? { participants: canonicalPreviousEntry.participants }
+              : {}),
+            ...(canonicalPreviousEntry?.participantCount !== undefined
+              ? { participantCount: canonicalPreviousEntry.participantCount }
+              : {}),
+          }),
+          canonicalEntry,
+          persisted.snapshotsChanged ? persisted.snapshots : undefined,
+        )
+      : undefined;
+  const row = persistedEntry
+    ? createSessionEntryWriteRow({
+        previous: canonicalPreviousRow,
+        node: sessionNode,
+        snapshots: persisted.snapshots,
+        snapshotsChanged: persisted.snapshotsChanged,
+        window: written.window.postimage,
+      })
+    : undefined;
+  if (actor && persistedEntry && row) {
+    actor.entryRows.set(sessionKey, {
+      entry: structuredClone(persistedEntry),
+      row,
+    });
+    actor.hot.entry = structuredClone(persistedEntry);
+    actor.window = written.window.postimage;
+  }
+  if (options.postimages && persistedEntry && row && canonicalPreviousSideTables) {
+    options.postimages.set(sessionKey, {
+      changed,
+      entry: persistedEntry,
+      row,
+      window: written.window.postimage,
+      sideTables: {
+        ...canonicalPreviousSideTables,
+        ...(canonicalPreviousEntry && canonicalPreviousEntry.sessionId !== normalizedEntry.sessionId
+          ? { memberIdsJson: "[]" }
+          : {}),
+      },
+    });
+  }
+  return persistedEntry ? structuredClone(persistedEntry) : normalizedEntry;
 }

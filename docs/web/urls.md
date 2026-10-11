@@ -81,8 +81,9 @@ Incognito sessions always use the literal-key form, even when their keys end
 in a UUID. For example, an Incognito link looks like
 `/chat/main/dashboard/incognito-12345678-90ab-cdef-1234-567890abcdef`.
 Incognito sessions are excluded from short-id and display-name discovery;
-their exact links still require administrator access and work only while the
-session exists. Reopen an existing session from the sidebar to replace an old
+their exact links still require administrator access and can be reloaded while the
+session exists in the running Gateway. Reloading the browser does not end the
+session; restarting the Gateway does. Reopen an existing session from the sidebar to replace an old
 short-id link that reports **Session not found**.
 
 Literal rest segments exactly equal to `.` or `..` use `~dot` and `~dotdot` so
