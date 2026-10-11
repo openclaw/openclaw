@@ -3,6 +3,7 @@ import { expect, it, vi } from "vitest";
 import type { SqliteWorkerCommand } from "../../infra/sqlite-worker-contract.js";
 import {
   createSqliteWorkerOperationAdmission,
+  requestSqliteWorkerOperationAdmission,
   withSqliteWorkerOperationAdmission,
 } from "../../infra/sqlite-worker-operation-admission.js";
 import {
@@ -209,9 +210,9 @@ async function withActor(
             commands.push(command.type);
             const completion = Promise.withResolvers<SqliteWorkerOperationSettlement>();
             const retained = { settled: completion.promise };
-            const admission = createSqliteWorkerOperationAdmission((_request, grant) => {
-              grant();
-            });
+            const admission = createSqliteWorkerOperationAdmission((request, grant) =>
+              authorize(request, { admission, retained }, grant),
+            );
             const dropped = fault.reply === "unknown";
             const postMessage = admission.port.postMessage.bind(admission.port);
             const wire = vi
@@ -232,11 +233,7 @@ async function withActor(
               port: admission.port,
             };
             admit = (stage, publication) =>
-              authorize(
-                { stage, facts: { identity, publication } },
-                { admission, retained },
-                () => true,
-              );
+              requestSqliteWorkerOperationAdmission({ stage, facts: { identity, publication } });
             try {
               await kernel.prepare(command);
               const value = withSqliteWorkerOperationAdmission(native, () =>
@@ -512,6 +509,41 @@ it("preserves native commit through worker publication, reply, and observer fail
     });
     expect(observer).toHaveBeenCalledOnce();
     expect(actor.snapshot(authority)?.entry?.updatedAt).toBe(123);
+  });
+});
+
+it("isolates mutable policy callbacks from admitted snapshots and committed state", async () => {
+  await withActor(async ({ actor }) => {
+    const initial = await actor.read(authority);
+    const stages: string[] = [];
+    const result = await actor.patch(
+      {
+        commandId: "detached-policy",
+        phaseId: "turn",
+        reducers: [{ kind: "activity", updatedAt: 123 }],
+      },
+      {
+        assertCurrent() {},
+        authorize(stage, snapshot) {
+          stages.push(stage);
+          if (snapshot.entry) {
+            snapshot.entry.sessionId = "policy-mutated";
+          }
+          snapshot.version = { epoch: "policy-mutated", sequence: -1 };
+          snapshot.transcript.anchors.length = 0;
+        },
+      },
+    );
+    expect(result).toMatchObject({
+      kind: "committed",
+      receipt: {
+        beforeVersion: initial.version,
+        postimage: { entry: { sessionId: initial.entry?.sessionId, updatedAt: 123 } },
+      },
+    });
+    expect(stages).toContain("transaction");
+    expect(stages).toContain("commit");
+    expect(actor.snapshot(authority)?.entry?.sessionId).toBe(initial.entry?.sessionId);
   });
 });
 
