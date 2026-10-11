@@ -1,13 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SessionLeafControl } from "../../agents/sessions/session-manager-types.js";
-import type { SessionActorAuthority } from "./session-actor-contract.js";
+import type { SessionActorAuthority, SessionActorStorage } from "./session-actor-contract.js";
 import { createMemorySessionActorOwner } from "./session-actor-memory.js";
 import type { SessionActorStorageBinding } from "./session-actor-storage-binding.js";
 import { runWithSessionActorStorage } from "./session-actor-storage-binding.js";
-import type {
-  SessionActorStorage,
-  SessionActorStorageOutcome,
-} from "./session-actor-storage-contract.js";
+import type { SessionActorStorageOutcome } from "./session-actor-storage-contract.js";
 import { readSessionTranscriptIndexStatus } from "./session-transcript-projection-writer.js";
 import {
   isSessionTranscriptIndexReconcileRunning,

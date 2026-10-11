@@ -1,10 +1,11 @@
 import { afterEach, describe, expect, it } from "vitest";
-import type { SessionActor, SessionActorAuthority } from "./session-actor-contract.js";
-import { createMemorySessionActorOwner } from "./session-actor-memory.js";
 import type {
+  SessionActor,
+  SessionActorAuthority,
   SessionActorStorage,
-  SessionActorStorageOutcome,
-} from "./session-actor-storage-contract.js";
+} from "./session-actor-contract.js";
+import { createMemorySessionActorOwner } from "./session-actor-memory.js";
+import type { SessionActorStorageOutcome } from "./session-actor-storage-contract.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
 const parentKey = "agent:main:dashboard:incognito-fork-parent";

@@ -5,12 +5,13 @@ import {
   resolveExplicitIncognitoAgentSqliteTarget,
   resolveIncognitoOpenClawAgentSqlitePath,
 } from "../../state/openclaw-agent-db.paths.js";
-import type { SessionActor, SessionActorTarget } from "./session-actor-contract.js";
-import { memorySessionActorOwners } from "./session-actor-memory-owner.js";
 import type {
+  SessionActor,
+  SessionActorTarget,
   SessionActorStorage,
-  SessionActorStorageAuthority,
-} from "./session-actor-storage-contract.js";
+} from "./session-actor-contract.js";
+import { memorySessionActorOwners } from "./session-actor-memory-owner.js";
+import type { SessionActorStorageAuthority } from "./session-actor-storage-contract.js";
 
 /** A caller-selected memory owner; resolving a binding never acquires another backend. */
 export type SessionActorStorageBinding = {

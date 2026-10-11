@@ -14,8 +14,8 @@ import type {
   SessionActorPhaseResults,
   SessionActorReducer,
   SessionActorTarget,
+  SessionActorStorage,
 } from "./session-actor-contract.js";
-import type { SessionActorStorage } from "./session-actor-storage-contract.js";
 
 export type SessionActorExecutorGuards = {
   target: SessionActorTarget;

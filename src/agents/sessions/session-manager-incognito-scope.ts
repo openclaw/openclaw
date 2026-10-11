@@ -1,14 +1,14 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { SessionTranscriptRuntimeTarget } from "../../config/sessions/session-accessor.types.js";
-import type { SessionActor } from "../../config/sessions/session-actor-contract.js";
+import type {
+  SessionActor,
+  SessionActorStorage,
+} from "../../config/sessions/session-actor-contract.js";
 import {
   getSessionActorStorageBinding,
   runWithSessionActorStorage,
 } from "../../config/sessions/session-actor-storage-binding.js";
-import type {
-  SessionActorStorageAuthority,
-  SessionActorStorage,
-} from "../../config/sessions/session-actor-storage-contract.js";
+import type { SessionActorStorageAuthority } from "../../config/sessions/session-actor-storage-contract.js";
 import {
   captureIncognitoSessionBinding,
   withIncognitoSessionBinding,

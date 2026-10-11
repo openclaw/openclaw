@@ -9,12 +9,6 @@ import type {
 } from "../../session-cards/session-actor-progress-card-contract.js";
 import type { SessionGoalOperationErrorCode } from "./goals-operations.types.js";
 import type {
-  SessionActor,
-  SessionActorAuthority,
-  SessionActorHotState,
-  SessionActorLifetime,
-} from "./session-actor-contract.js";
-import type {
   SessionActorMemoryCollaborationReads,
   SessionActorMemoryCollaborationWrites,
 } from "./session-actor-memory-collaboration-contract.js";
@@ -55,6 +49,7 @@ import type {
   SessionActorMemoryUsageReads,
   SessionActorMemoryUsageWrites,
 } from "./session-actor-memory-usage-contract.js";
+import type { SessionActorAuthority, SessionActorHotState } from "./session-actor-state.types.js";
 import type { PendingInputCustodyCandidate } from "./session-pending-input-history.types.js";
 import type { TranscriptAppendRefusal } from "./session-transcript-writer-claim-error.js";
 
@@ -130,29 +125,4 @@ export type SessionActorStorageAuthority = SessionActorAuthority & {
     candidate: PendingInputCustodyCandidate,
     currentSessionId: string | undefined,
   ): boolean;
-};
-
-type SessionActorStorageCommitObserver<Value> = {
-  committed(outcome: Extract<SessionActorStorageOutcome<Value>, { kind: "committed" }>): void;
-};
-
-/** Bound at acquisition; shares the actor's accepted work, FIFO, and state owner. */
-export type SessionActorStorage = {
-  /** Synchronous current facts for an actual effect; never reads an uninstalled working copy. */
-  readCurrent<Key extends keyof SessionActorStorageReads>(
-    query: { type: Key; input: SessionActorStorageReads[Key]["input"] },
-    authority: SessionActorStorageAuthority,
-  ): SessionActorStorageReads[Key]["output"];
-  /** Acquire a separately releasable handle from this already-selected owner. */
-  acquire(sessionKey: string, lifetime?: SessionActorLifetime): Promise<SessionActor>;
-
-  read<Key extends keyof SessionActorStorageReads>(
-    query: { type: Key; input: SessionActorStorageReads[Key]["input"] },
-    authority: SessionActorStorageAuthority,
-  ): Promise<SessionActorStorageReads[Key]["output"]>;
-  mutate<Key extends keyof SessionActorStorageWrites>(
-    command: { type: Key; input: SessionActorStorageWrites[Key]["input"] },
-    authority: SessionActorStorageAuthority,
-    observer?: SessionActorStorageCommitObserver<SessionActorStorageWrites[Key]["output"]>,
-  ): Promise<SessionActorStorageOutcome<SessionActorStorageWrites[Key]["output"]>>;
 };
