@@ -1,4 +1,4 @@
-import { render, spread, type JSX } from "@solidjs/web";
+import { render, spread } from "@solidjs/web";
 import {
   createComponent,
   createRenderEffect,
@@ -11,7 +11,7 @@ import { applicationContext, type ApplicationContext } from "../app/context.ts";
 import { shellLayoutOwnerForHost } from "../app/shell-layout-owner.ts";
 import { ShellLayoutProvider } from "../app/shell-layout-traits-solid.tsx";
 import { ApplicationProvider } from "../lib/reactive/context.ts";
-export type * from "../types/solid-elements.d.ts";
+import type { JSX } from "../types/solid-elements.d.ts";
 
 type Property<T> = {
   default: T;

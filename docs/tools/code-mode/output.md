@@ -76,7 +76,7 @@ metadata; `web_search` declares its exact normalized results/answer/error/raw
 union as a complete quick-index hint. Filesystem contracts return structured
 read text, image, truncation, and optional-not-found outcomes; explicit edit
 change state plus diff/patch data; and apply-patch path summaries. Missing
-canonical daily notes (`memory/YYYY-MM-DD.md`) return an optional `not_found`
+standard daily notes (`memory/YYYY-MM-DD.md`) return an optional `not_found`
 result even when `optional` is omitted; other missing paths throw unless
 `optional: true` is explicitly supplied. When the quick index declares the
 fields, one cell can compose discovery and delivery without a separate
@@ -129,7 +129,7 @@ The contract rules are strict:
   `details` after normal tool hooks and before a catalog call returns. An
   invalid schema cannot run the tool; a mismatch fails without printing the
   value.
-- Compact hints are deterministic and bounded. Handle `describe()` exposes
+- Compact hints follow fixed rules and size limits. Handle `describe()` exposes
   the full trusted schema when the compact hint is insufficient.
 - Installed plugin code is already trusted local code. Remote MCP and client
   metadata remains untrusted and cannot opt into these quick-index hints.

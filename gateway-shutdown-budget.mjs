@@ -41,7 +41,7 @@ export const resolveShutdownReserveMs = (shutdownTimeoutMs) => {
 // here rather than in the launcher so both use the same escalation policy.
 const RESPAWN_SIGNAL_EXIT_GRACE_MS = 1_000;
 export const RESPAWN_SIGNAL_FORCE_KILL_GRACE_MS = 1_000;
-export const RESPAWN_SIGNAL_HARD_EXIT_GRACE_MS = 1_000;
+const RESPAWN_SIGNAL_HARD_EXIT_GRACE_MS = 1_000;
 
 // Every runRespawnedChild call site stamps one of these. The compile-cache
 // marker is also used by a different respawner, but that one refuses foreground

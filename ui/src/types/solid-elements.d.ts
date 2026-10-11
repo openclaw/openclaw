@@ -8,11 +8,10 @@ import "../components/agent-row-chip.ts";
 import type { MascotMood } from "../components/mascot-pose.ts";
 import type { OpenClawModalDialog } from "../components/modal-dialog.ts";
 import type { SelectPicker } from "../components/select-picker.ts";
+export type { JSX } from "@solidjs/web";
 
 // These hosts keep their existing renderer until their owning migration lane lands.
-type LegacyAttributes<T extends HTMLElement> = JSX.HTMLAttributes<T> & {
-  [Key in keyof T as Key extends string ? `prop:${Key}` : never]?: T[Key];
-};
+type LegacyAttributes<T extends HTMLElement> = JSX.HTMLAttributes<T> & JSX.Properties<T>;
 
 declare module "@solidjs/web" {
   namespace JSX {
@@ -28,12 +27,14 @@ declare module "@solidjs/web" {
         mood?: MascotMood;
         "prop:size"?: number;
       };
-      "wa-dropdown": LegacyAttributes<WaDropdown> &
-        Partial<Pick<WaDropdown, "placement">> & {
+      "wa-dropdown": HTMLAttributes<WaDropdown> &
+        Properties<WaDropdown> & {
+          placement?: WaDropdown["placement"];
           "onWa-select"?: (event: CustomEvent<{ item: WaDropdownItem }>) => void;
+          "onWa-after-hide"?: (event: CustomEvent<void>) => void;
         };
-      "wa-dropdown-item": LegacyAttributes<WaDropdownItem> &
-        Partial<Pick<WaDropdownItem, "value" | "type" | "variant" | "disabled">>;
+      "wa-dropdown-item": HTMLAttributes<WaDropdownItem> &
+        Properties<WaDropdownItem> & { value?: WaDropdownItem["value"] };
       "wa-popover": LegacyAttributes<WaPopover> &
         Partial<Pick<WaPopover, "for" | "placement">> & {
           "onWa-show"?: (event: Event) => void;
@@ -41,6 +42,9 @@ declare module "@solidjs/web" {
         };
       "wa-tab-group": LegacyAttributes<WaTabGroup> & Partial<Pick<WaTabGroup, "activation">>;
       "wa-tab": LegacyAttributes<WaTab> & Partial<Pick<WaTab, "panel" | "active">>;
+    }
+    interface SVGAttributes<T> {
+      "xml:space"?: "default" | "preserve";
     }
   }
 }

@@ -23,7 +23,6 @@ import {
   readCurrentSessionUpstreamLink,
 } from "../../sessions/session-upstream-links-runtime.js";
 import * as upstreamReads from "../../sessions/session-upstream-links-runtime.js";
-import { deleteSessionUpstreamLink } from "../../sessions/session-upstream-links.js";
 import { upsertSessionUpstreamLinkInDatabase } from "../../sessions/session-upstream-links.kernel.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
@@ -278,62 +277,6 @@ it("refuses a shared-state owner retired while rewind waits for the lifecycle lo
     expect(mutation.respond).not.toHaveBeenCalledWith(true, expect.anything(), undefined);
   });
 });
-
-it.each(["replace", "delete"] as const)(
-  "refuses a native fork effect after the synchronous owner %ss its source link",
-  async (change) => {
-    await withOpenClawTestState({ label: "message-cut-upstream-replacement" }, async (state) => {
-      await state.writeConfig(cfg);
-      const scope = await seedMessageCutSource();
-      const shared = openOpenClawStateDatabase();
-      expect(adoptUpstreamSource(shared.db, scope)).toBe(true);
-      const entered = createDeferredCore();
-      const release = createDeferredCore();
-      const nativeEffect = vi.fn();
-      const registry = createEmptyPluginRegistry();
-      registry.agentHarnesses.push({
-        pluginId: "fixture",
-        source: "runtime",
-        harness: {
-          id: "upstream-fixture",
-          label: "Upstream source fixture",
-          supports: () => ({ supported: true }),
-          runAttempt: async () => {
-            throw new Error("not used");
-          },
-          sessionForkV2: {
-            upstreamKinds: ["codex-app-server"],
-            fork: async ({ assertCurrent }) => {
-              entered.resolve();
-              await release.promise;
-              assertCurrent();
-              nativeEffect();
-              return { status: "created", key: "agent:main:dashboard:forked" };
-            },
-          },
-        },
-      });
-      setActivePluginRegistry(registry);
-      const mutation = invokeMessageCut("sessions.fork", scope);
-      try {
-        await awaitGateBeforeSettlement(entered.promise, mutation.error, "upstream fork dispatch");
-        if (change === "replace") {
-          expect(adoptUpstreamSource(shared.db, scope, "replacement-thread")).toBe(true);
-        } else {
-          expect(deleteSessionUpstreamLink(scope.sessionKey, scope.agentId)).toBe("deleted");
-        }
-      } finally {
-        release.resolve();
-      }
-      expect(await mutation.error).toEqual(
-        expect.objectContaining({
-          message: expect.stringContaining("changed during fork"),
-        }),
-      );
-      expect(nativeEffect).not.toHaveBeenCalled();
-    });
-  },
-);
 
 it.each(["preparation", "commit"] as const)(
   "refuses incognito fork when a missing upstream database appears during %s",

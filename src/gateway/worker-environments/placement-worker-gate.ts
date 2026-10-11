@@ -1,5 +1,5 @@
 import {
-  placementTurnOwner,
+  projectPlacementTurnClaim,
   projectWorkerSessionTurnClaim,
   serializeWorkerSessionTurnClaim,
   type WorkerSessionPlacementRecord,
@@ -61,18 +61,11 @@ function claimForOwnerRevocation(
   if (
     (record?.state !== "active" && record?.state !== "draining") ||
     record.environmentId !== binding.environmentId ||
-    record.activeOwnerEpoch !== binding.ownerEpoch ||
-    !record.turnClaim
+    record.activeOwnerEpoch !== binding.ownerEpoch
   ) {
     return undefined;
   }
-  return {
-    sessionId: record.sessionId,
-    claimId: record.turnClaim.claimId,
-    runId: record.turnClaim.runId,
-    placementGeneration: record.turnClaim.generation,
-    owner: placementTurnOwner(record),
-  };
+  return projectPlacementTurnClaim(record);
 }
 
 export function createWorkerSessionPlacementGate(

@@ -19,6 +19,7 @@ import {
 } from "../sessions/user-turn-transcript.js";
 import type { AssistantErrorTranscript } from "./assistant-error-transcript.js";
 import { isMidTurnPrecheckAssistantError } from "./embedded-agent-runner/run/midturn-precheck.js";
+import { readPersistedImageBlockFactIndexes } from "./embedded-agent-runner/run/prompt-image-metadata.js";
 import {
   resolveLiveToolResultMaxChars,
   truncateToolResultMessage,
@@ -68,6 +69,30 @@ type GuardedSessionManager = SessionManager &
       },
     ) => void;
   };
+
+function publishPersistedUserEnvelope(
+  runtime: PersistedUserTurnMessage | undefined,
+  persisted: PersistedUserTurnMessage,
+): void {
+  // Admission can freeze an unchanged input when it is already storage-canonical.
+  if (!runtime || runtime === persisted || Object.isFrozen(runtime)) {
+    return;
+  }
+  // Publish once, before model transforms. Replay must use the same envelope;
+  // runtime content and non-enumerable media/steering facts remain prepared.
+  const content = runtime.content;
+  const imageFactIndexes = readPersistedImageBlockFactIndexes(runtime);
+  for (const key of Object.keys(runtime)) {
+    Reflect.deleteProperty(runtime, key);
+  }
+  Object.assign(runtime, persisted, { content });
+  if (imageFactIndexes) {
+    runtime["__openclaw"] = {
+      ...runtime["__openclaw"],
+      mediaImageBlockFactIndexes: imageFactIndexes,
+    };
+  }
+}
 
 /**
  * Apply the tool-result guard to a SessionManager exactly once and expose
@@ -325,6 +350,7 @@ export function guardSessionManager(
     onUserMessagePersisted: async (message, persistence) => {
       const runtimeMessage = runtimeUserMessageByPersistedMessage.get(message);
       runtimeUserMessageByPersistedMessage.delete(message);
+      publishPersistedUserEnvelope(runtimeMessage, persistence.persistedMessage);
       const recorder = takeRuntimeUserTurnTranscriptRecorder(message);
       recorder?.markRuntimePersisted(persistence.persistedMessage, persistence.anchor, {
         appended: persistence.appended,
@@ -334,6 +360,13 @@ export function guardSessionManager(
     onUserMessagePersistenceSuppressed: async (message) => {
       const runtimeMessage = runtimeUserMessageByPersistedMessage.get(message);
       runtimeUserMessageByPersistedMessage.delete(message);
+      const recorder = takeRuntimeUserTurnTranscriptRecorder(message);
+      publishPersistedUserEnvelope(
+        runtimeMessage,
+        recorder?.getPersistedMessage?.() ??
+          preparedUserTurnTranscriptRecorder?.getPersistedMessage?.() ??
+          message,
+      );
       await opts?.onUserMessagePersistenceSuppressed?.(message, runtimeMessage);
     },
     onUserMessageBlocked: opts?.onUserMessageBlocked,

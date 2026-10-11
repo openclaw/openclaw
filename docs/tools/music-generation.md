@@ -24,8 +24,9 @@ ready so it can tell the user and attach the finished audio. The completion
 agent follows the session's visible-reply contract: automatic final reply
 when configured, or `message(action="send")` when the session requires the
 message tool. If the requester session is inactive or its wake fails and
-generated audio is still missing from the reply, OpenClaw sends an
-idempotent direct fallback with just the missing audio.
+generated audio is still missing from the reply, OpenClaw sends a
+direct fallback with just the missing audio. Retries do not post the same audio
+again.
 
 ## Quick start
 
@@ -340,7 +341,7 @@ Legacy flat fields such as `maxInputImages`, `supportsLyrics`, and
 `supportsFormat` are **not** enough to advertise edit support. Providers
 should declare `generate` and `edit` explicitly so live tests, contract
 tests, and the shared `music_generate` tool can validate mode support
-deterministically.
+from those declarations.
 
 ## Live tests
 
