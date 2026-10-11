@@ -98,7 +98,7 @@ export function renderSidebarMentionItem(params: {
                   <a
                     class="sidebar-issues-panel__action sidebar-issues-panel__action--primary"
                     href={target().href}
-                    onClick={(event: MouseEvent) => {
+                    onClick={(event) => {
                       if (!shouldHandleNavigationClick(event)) {
                         return;
                       }
@@ -442,7 +442,7 @@ export function SidebarIssueItem(props: {
               class="sidebar-issues-panel__navigation-link"
               href={pathForRoute(action().routeId, props.handlers.basePath)}
               data-issue-row-focus
-              onClick={(event: MouseEvent) => {
+              onClick={(event) => {
                 if (!shouldHandleNavigationClick(event)) {
                   return;
                 }
@@ -545,7 +545,7 @@ export function renderSidebarApprovalRow(props: SidebarApprovalRowProps) {
                     command: command(),
                   })}
                   disabled={props.busy || !props.canGrant || expired()}
-                  onClick={(event: Event) => props.onDecision(event, props.approval.id, decision)}
+                  onClick={(event) => props.onDecision(event, props.approval.id, decision)}
                 >
                   {label()}
                 </button>

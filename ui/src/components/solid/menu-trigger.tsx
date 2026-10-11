@@ -7,7 +7,7 @@ export function renderMenuTrigger(
     <button
       slot="trigger"
       type="button"
-      tabIndex={-1}
+      tabindex={-1}
       aria-hidden="true"
       aria-label={label}
       style={{

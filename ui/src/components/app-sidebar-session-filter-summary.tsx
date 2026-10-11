@@ -1,4 +1,4 @@
-import { createMemo, For } from "solid-js";
+import { createMemo, For, Show } from "solid-js";
 import { readPresenceEntries, resolveCurrentSelfUser } from "../app/user-profile.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import type { SessionListHost } from "./app-sidebar-session-render-types.ts";
@@ -59,7 +59,9 @@ function renderSessionFilterSummary(host: SessionListHost) {
     >
       <span class="sidebar-session-filter-summary__lead" aria-hidden="true">
         <span class="sidebar-session-filter-summary__glyph">
-          {owner() ? renderSessionOwnerAvatar(owner()) : <Icon name="archive" />}
+          <Show when={owner()} fallback={<Icon name="archive" />}>
+            {(value) => renderSessionOwnerAvatar(value())}
+          </Show>
         </span>
         <span class="sidebar-session-filter-summary__clear">
           <Icon name="x" />
@@ -113,7 +115,7 @@ export function renderSidebarSessionFilter(
           : undefined
       }
       aria-haspopup="dialog"
-      aria-expanded={String(host.sidebarMenus.sessionSortMenuPosition !== null)}
+      aria-expanded={host.sidebarMenus.sessionSortMenuPosition !== null ? "true" : "false"}
       onClick={(event: MouseEvent) => {
         if (event.currentTarget instanceof HTMLElement) {
           host.sidebarMenus.togglePositionedMenu("sessionSort", event.currentTarget);

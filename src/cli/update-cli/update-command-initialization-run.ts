@@ -121,7 +121,7 @@ export async function initializeAndRunUpdate(
               const { root, serviceRoot } = selection.refusal
                 ? selection.refusal.report
                 : { root: selection.target.root, serviceRoot: selection.target.managedServiceRoot };
-              const packageAdmission = { serviceRoot };
+              const packageAdmission = { serviceRoot, dryRun: opts.dryRun };
               const originalCaptureWarnings: string[] = [];
               const initialization: InitializedUpdate = {
                 ...selection,

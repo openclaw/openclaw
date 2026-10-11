@@ -1,11 +1,13 @@
+import type WaDropdownItem from "@awesome.me/webawesome/dist/components/dropdown-item/dropdown-item.js";
 import { createSignal } from "solid-js";
 import { expect, it, vi } from "vitest";
 import { mountSolid as render } from "../test-helpers/mount-solid.ts";
 import { flush } from "../test-helpers/solid-settle.ts";
 import {
   renderSidebarCustomizeMenu,
-  renderSidebarDropdown,
+  SidebarDropdown,
   renderSidebarNavLink,
+  renderSidebarMoreMenu,
 } from "./app-sidebar-nav-menus.tsx";
 
 it("keeps modified sidebar links native and handles ordinary navigation", () => {
@@ -34,19 +36,50 @@ it("keeps modified sidebar links native and handles ordinary navigation", () => 
   expect(navigate).toHaveBeenCalledOnce();
 });
 
-it("delivers the Web Awesome selection event from the Solid dropdown", () => {
-  const select = vi.fn();
+it("preserves native modified clicks before the More menu emits its selection", async () => {
+  const navigate = vi.fn();
   const view = render(() =>
-    renderSidebarDropdown({
+    renderSidebarMoreMenu({
       position: { x: 12, y: 30 },
-      className: "sidebar-menu-test",
-      label: "Sidebar actions",
-      onSelect: select,
+      basePath: "",
+      activeRouteId: undefined,
+      sidebarEntries: [],
+      isRouteEnabled: (route) => route === "usage",
+      onNavigateRoute: navigate,
+      onPreloadRoute: vi.fn(),
+      onCancelPreload: vi.fn(),
+      onEditPinnedItems: vi.fn(),
       onTabAway: vi.fn(),
       onClose: vi.fn(),
-      content: <span>Actions</span>,
     }),
   );
+  flush();
+  const item = view.container.querySelector<WaDropdownItem>('wa-dropdown-item[value="usage"]')!;
+  await item.updateComplete;
+  const link = item.querySelector("a")!;
+  for (const modifier of [{ ctrlKey: true }, { metaKey: true }]) {
+    const click = new MouseEvent("click", { bubbles: true, cancelable: true, ...modifier });
+    link.dispatchEvent(click);
+    expect(click.defaultPrevented).toBe(false);
+    expect(navigate).not.toHaveBeenCalled();
+  }
+  link.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+  expect(navigate).toHaveBeenCalledExactlyOnceWith("usage");
+});
+
+it("delivers the Web Awesome selection event from the Solid dropdown", () => {
+  const select = vi.fn();
+  const view = render(() => (
+    <SidebarDropdown
+      position={{ x: 12, y: 30 }}
+      class="sidebar-menu-test"
+      label="Sidebar actions"
+      onSelect={select}
+      onTabAway={vi.fn()}
+      onClose={vi.fn()}
+      content={<span>Actions</span>}
+    />
+  ));
   flush();
   const dropdown = view.container.querySelector("wa-dropdown");
   expect(dropdown).not.toBeNull();

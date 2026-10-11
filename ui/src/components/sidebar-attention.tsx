@@ -285,33 +285,30 @@ function renderSidebarAttentionContent(props: SidebarAttentionProps, host: HTMLE
           </span>
         </Show>
       </button>
-      <Show when={panelOpen() && panelRenderer() && mentions}>
-        {() => {
-          const Panel = panelRenderer()!;
-          return (
-            <Panel
-              context={context}
-              mentions={mentions}
-              entries={attention.read()}
-              onApprovalDecision={(event, id, decision) => void decideApproval(event, id, decision)}
-              onClose={() => closePanel(true)}
-              onDismiss={(dismissal) => context.sidebarAttention.dismiss(dismissal)}
-              onKeydown={handlePanelKeydown}
-              onNavigate={(route, options) => {
-                closePanel(false);
-                (props.onNavigate ?? context.navigate)(route, options);
-              }}
-              onOpen={(item) => void open(item)}
-              onScroll={syncOverflowCue}
-              onSelectTab={selectTab}
-              overflowAbove={overflowAbove()}
-              overflowBelow={overflowBelow()}
-              panelPosition={panelPosition()}
-              selectedTab={selectedTab()}
-              watchUpdateProgress={props.watchUpdateProgress}
-            />
-          );
-        }}
+      <Show when={panelOpen() && panelRenderer()} keyed>
+        {(Panel) => (
+          <Panel
+            context={context}
+            mentions={mentions}
+            entries={attention.read()}
+            onApprovalDecision={(event, id, decision) => void decideApproval(event, id, decision)}
+            onClose={() => closePanel(true)}
+            onDismiss={(dismissal) => context.sidebarAttention.dismiss(dismissal)}
+            onKeydown={handlePanelKeydown}
+            onNavigate={(route, options) => {
+              closePanel(false);
+              (props.onNavigate ?? context.navigate)(route, options);
+            }}
+            onOpen={(item) => void open(item)}
+            onScroll={syncOverflowCue}
+            onSelectTab={selectTab}
+            overflowAbove={overflowAbove()}
+            overflowBelow={overflowBelow()}
+            panelPosition={panelPosition()}
+            selectedTab={selectedTab()}
+            watchUpdateProgress={props.watchUpdateProgress}
+          />
+        )}
       </Show>
     </Show>
   );

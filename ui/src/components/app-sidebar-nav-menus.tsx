@@ -48,9 +48,9 @@ export function renderSidebarMenuAction(
   );
 }
 
-export function renderSidebarDropdown(params: {
+export function SidebarDropdown(params: {
   position: SidebarMenuPosition;
-  className: string;
+  class: string;
   label: string;
   onSelect: (item: Element) => void;
   onTabAway: () => void;
@@ -59,7 +59,7 @@ export function renderSidebarDropdown(params: {
 }): JSX.Element {
   return (
     <wa-dropdown
-      class={params.className}
+      class={params.class}
       prop:open={true}
       placement="bottom-start"
       prop:distance={0}
@@ -167,15 +167,15 @@ function renderMoreMenuRoute(params: SidebarMoreMenuParams, routeId: SidebarNavR
       aria-current={active() ? "page" : undefined}
       onPointerEnter={(event: Event) => params.onPreloadRoute(routeId, event)}
       onPointerLeave={params.onCancelPreload}
-      onClick={(event: MouseEvent) => {
-        if (!shouldHandleNavigationClick(event)) {
-          // wa-select also fires for native clicks; mark them so it does not add SPA navigation.
-          if (event.currentTarget instanceof Element) {
-            event.currentTarget.setAttribute("data-native-navigation", "");
+      ref={(item) => {
+        // Web Awesome selects synchronously, before Solid's delegated click handler.
+        item.addEventListener("click", (event) => {
+          if (!shouldHandleNavigationClick(event)) {
+            item.setAttribute("data-native-navigation", "");
+            return;
           }
-          return;
-        }
-        event.preventDefault();
+          event.preventDefault();
+        });
       }}
     >
       <a href={pathForRoute(routeId, params.basePath)} tabindex="-1">
@@ -192,37 +192,35 @@ export function renderSidebarMoreMenu(params: SidebarMoreMenuParams): JSX.Elemen
   const moreRoutes = createMemo(() =>
     sidebarMoreRoutes(params.sidebarEntries).filter((routeId) => params.isRouteEnabled(routeId)),
   );
-  return renderSidebarDropdown({
-    ...params,
-    className: "sidebar-customize-menu sidebar-more-menu",
-    get label() {
-      return t("nav.more");
-    },
-    onSelect: (item) => {
-      if (item.hasAttribute("data-native-navigation")) {
-        item.removeAttribute("data-native-navigation");
-        return;
-      }
-      const value = item.getAttribute("value") ?? undefined;
-      if (value === "customize") {
-        params.onEditPinnedItems();
-        return;
-      }
-      const route = moreRoutes().find((routeId) => routeId === value);
-      if (route) {
-        params.onNavigateRoute(route);
-      }
-    },
-    get content() {
-      return (
+  return (
+    <SidebarDropdown
+      {...params}
+      class="sidebar-customize-menu sidebar-more-menu"
+      label={t("nav.more")}
+      onSelect={(item) => {
+        if (item.hasAttribute("data-native-navigation")) {
+          item.removeAttribute("data-native-navigation");
+          return;
+        }
+        const value = item.getAttribute("value") ?? undefined;
+        if (value === "customize") {
+          params.onEditPinnedItems();
+          return;
+        }
+        const route = moreRoutes().find((routeId) => routeId === value);
+        if (route) {
+          params.onNavigateRoute(route);
+        }
+      }}
+      content={
         <>
           <For each={moreRoutes()}>{(routeId) => renderMoreMenuRoute(params, routeId)}</For>
           <div class="sidebar-customize-menu__separator" role="separator" />
           {renderSidebarMenuAction("customize", t("nav.customize"), "penLine")}
         </>
-      );
-    },
-  });
+      }
+    />
+  );
 }
 
 type SidebarCustomizeMenuParams = {
@@ -256,30 +254,28 @@ export function renderSidebarCustomizeMenu(params: SidebarCustomizeMenuParams): 
       label: entry.value.label,
     })),
   ]);
-  return renderSidebarDropdown({
-    ...params,
-    className: "sidebar-customize-menu sidebar-pin-editor-menu",
-    get label() {
-      return t("nav.customize");
-    },
-    onSelect: (item) => {
-      const value = item.getAttribute("value") ?? undefined;
-      if (value === "reset") {
-        params.onReset();
-      } else if (value?.startsWith("plugin:")) {
-        const key = value.slice("plugin:".length);
-        if (params.pluginNavigation.some((entry) => entry.key === key)) {
-          params.onTogglePlugin(key);
+  return (
+    <SidebarDropdown
+      {...params}
+      class="sidebar-customize-menu sidebar-pin-editor-menu"
+      label={t("nav.customize")}
+      onSelect={(item) => {
+        const value = item.getAttribute("value") ?? undefined;
+        if (value === "reset") {
+          params.onReset();
+        } else if (value?.startsWith("plugin:")) {
+          const key = value.slice("plugin:".length);
+          if (params.pluginNavigation.some((entry) => entry.key === key)) {
+            params.onTogglePlugin(key);
+          }
+        } else {
+          const route = SIDEBAR_NAV_ROUTES.find((routeId) => routeId === value);
+          if (route) {
+            params.onToggleRoute(route);
+          }
         }
-      } else {
-        const route = SIDEBAR_NAV_ROUTES.find((routeId) => routeId === value);
-        if (route) {
-          params.onToggleRoute(route);
-        }
-      }
-    },
-    get content() {
-      return (
+      }}
+      content={
         <>
           <div class="sidebar-customize-menu__title">{t("nav.customize")}</div>
           {params.preferencesBrowserOnly ? (
@@ -305,9 +301,9 @@ export function renderSidebarCustomizeMenu(params: SidebarCustomizeMenuParams): 
           <div class="sidebar-customize-menu__separator" role="separator" />
           {renderSidebarMenuAction("reset", t("nav.customizeReset"), "refresh")}
         </>
-      );
-    },
-  });
+      }
+    />
+  );
 }
 
 export function renderSidebarPluginNavigationMenu(params: {
@@ -317,20 +313,18 @@ export function renderSidebarPluginNavigationMenu(params: {
   onTabAway: () => void;
   onClose: (restoreFocus: boolean) => void;
 }): JSX.Element {
-  return renderSidebarDropdown({
-    ...params,
-    className: "sidebar-customize-menu sidebar-plugin-navigation-menu",
-    get label() {
-      return params.item.label;
-    },
-    onSelect: (item) => {
-      const value = item.getAttribute("value");
-      if (value) {
-        void params.onSelect(value);
-      }
-    },
-    get content() {
-      return (
+  return (
+    <SidebarDropdown
+      {...params}
+      class="sidebar-customize-menu sidebar-plugin-navigation-menu"
+      label={params.item.label}
+      onSelect={(item) => {
+        const value = item.getAttribute("value");
+        if (value) {
+          void params.onSelect(value);
+        }
+      }}
+      content={
         <For each={params.item.actions ?? []}>
           {(action) => {
             const icon =
@@ -345,7 +339,7 @@ export function renderSidebarPluginNavigationMenu(params: {
                   { "session-menu__item--destructive": action.destructive },
                 ]}
                 value={action.id}
-                variant={action.destructive ? "danger" : "neutral"}
+                variant={action.destructive ? "danger" : "default"}
               >
                 <span slot="icon" class="nav-item__icon" aria-hidden="true">
                   {icon}
@@ -355,7 +349,7 @@ export function renderSidebarPluginNavigationMenu(params: {
             );
           }}
         </For>
-      );
-    },
-  });
+      }
+    />
+  );
 }

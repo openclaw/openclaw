@@ -286,3 +286,41 @@ declare global {
     "openclaw-session-menu": SessionMenu;
   }
 }
+
+type SessionMenuProperties = Pick<
+  SessionMenu,
+  | "session"
+  | "selectionCount"
+  | "lastActive"
+  | "snoozeAllowed"
+  | "involvingMeContext"
+  | "compact"
+  | "anchor"
+  | "trigger"
+  | "disabled"
+  | "navigationAllowed"
+  | "copyMarkdownAllowed"
+  | "splitAllowed"
+  | "actionDisabledReasons"
+  | "forkDisabled"
+  | "forkFromLastCompleted"
+  | "archiveAllowed"
+  | "deleteAllowed"
+  | "cloudWorkerStopAllowed"
+  | "groups"
+  | "currentOwner"
+  | "work"
+  | "pluginActions"
+  | "onClose"
+  | "onAction"
+>;
+
+declare module "@solidjs/web" {
+  namespace JSX {
+    interface IntrinsicElements {
+      "openclaw-session-menu": HTMLAttributes<SessionMenu> & {
+        [Key in keyof SessionMenuProperties as `prop:${Key}`]?: SessionMenuProperties[Key];
+      };
+    }
+  }
+}

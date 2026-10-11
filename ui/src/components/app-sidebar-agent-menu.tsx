@@ -9,7 +9,7 @@ import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../lib/external-link
 import { openExternalUrlSafe } from "../lib/open-external-url.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { renderSidebarMenuAction } from "./app-sidebar-nav-menus.tsx";
-import type { IconName } from "./icons.ts";
+import type { IconName } from "./icon-data.ts";
 import {
   AGENT_VALUE_PREFIX,
   renderSidebarAgentMenuSwitcher,
@@ -384,7 +384,7 @@ export function renderSidebarAgentMenu(params: SidebarAgentMenuParams): JSX.Elem
           type="search"
           aria-label={t("agentChip.search")}
           placeholder={t("agentChip.search")}
-          prop:value={params.query}
+          value={params.query}
           onInput={(event) => {
             params.onQueryChange(event.currentTarget.value);
           }}

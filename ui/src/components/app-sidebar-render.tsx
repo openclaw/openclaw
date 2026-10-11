@@ -33,10 +33,7 @@ import { formatSidebarBuildSubtitle } from "./sidebar-build-chip-format.ts";
 import { renderGatewayStatus } from "./solid/gateway-status.tsx";
 import { Icon } from "./solid/icon.tsx";
 import { renderNewSessionLink } from "./solid/new-session-link.tsx";
-import {
-  renderSessionLeadingState,
-  renderSessionRowBadges,
-} from "./solid/session-presentation.tsx";
+import { renderSessionLeadingState, SessionRowBadges } from "./solid/session-presentation.tsx";
 import "./theme-brand-icon.ts";
 
 export type AppSidebarRenderHost = AppSidebarSessionNavigationElement & {
@@ -169,18 +166,20 @@ function renderSidebarWorkspaceHeader(host: AppSidebarRenderHost): JSX.Element {
   const currentBranding = () => host.sessionDataContext?.theme.branding ?? currentThemeBranding();
   const cached = () => (host.sidebarSnapshot?.brand.agentId ? null : host.sidebarSnapshot?.brand);
   const brand = () => cached() ?? readSidebarBrandPresentation(host);
-  const branding = createMemo(() =>
-    cached()
-      ? {
-          ...currentBranding(),
-          brandName: brand().name,
-          brandIcon: brand().icon,
-          artwork: brand().iconUrl
-            ? { icons: { [brand().icon]: { url: brand().iconUrl } } }
-            : undefined,
-        }
-      : currentBranding(),
-  );
+  const branding = createMemo(() => {
+    const current = currentBranding();
+    const saved = cached();
+    if (!saved) {
+      return current;
+    }
+    const url = saved.iconUrl;
+    return {
+      ...current,
+      brandName: saved.name,
+      brandIcon: saved.icon,
+      artwork: url ? { icons: { [saved.icon]: { url } } } : undefined,
+    };
+  });
   const name = () => brand().name;
   const menuOpen = () => host.sidebarMenus.agentMenuPosition !== null;
   return (
@@ -189,7 +188,7 @@ function renderSidebarWorkspaceHeader(host: AppSidebarRenderHost): JSX.Element {
         type="button"
         class="sidebar-workspace-header__main"
         aria-haspopup="menu"
-        aria-expanded={String(menuOpen())}
+        aria-expanded={menuOpen() ? "true" : "false"}
         aria-label={`${name()} · ${t("agentChip.workspaceMenuLabel")}`}
         onPointerMove={(event: PointerEvent) => {
           if (event.currentTarget instanceof HTMLElement) {
@@ -345,12 +344,16 @@ export function renderAppSidebarFooterBar(host: AppSidebarRenderHost): JSX.Eleme
   const gatewayPrimaryTag = () => (gateway()?.isPrimary ? t("nav.gateway.primaryTag") : null);
   const identityMenuLabel = () => t("profilePage.identity.menuButtonLabel", { name: selfLabel() });
   const statusLabel = () => (connectionStatus() ? t(`connection.${connectionStatus()}`) : null);
-  const identityDetail = () =>
-    statusLabel()
-      ? statusLabel()
-      : gateway()
-        ? `${gateway().name}${gatewayPrimaryTag() ? `, ${gatewayPrimaryTag()}` : ""}`
-        : buildSubtitle();
+  const identityDetail = () => {
+    const status = statusLabel();
+    const selectedGateway = gateway();
+    return (
+      status ??
+      (selectedGateway
+        ? `${selectedGateway.name}${gatewayPrimaryTag() ? `, ${gatewayPrimaryTag()}` : ""}`
+        : buildSubtitle())
+    );
+  };
   const announcement = () => statusLabel() ?? (host.connected ? t("nav.gateway.connected") : "");
   return (
     <div class="sidebar-footer-bar sidebar-footer-bar--one-action">
@@ -391,14 +394,12 @@ export function renderAppSidebarFooterBar(host: AppSidebarRenderHost): JSX.Eleme
                       </span>,
                     ).leadingIndicator
                   }
-                  {renderSessionRowBadges({
-                    get outboxAttentionCount() {
-                      return session().outboxAttentionCount;
-                    },
-                    get hasComposerDraft() {
-                      return session().hasComposerDraft;
-                    },
-                  })}
+                  {
+                    <SessionRowBadges
+                      outboxAttentionCount={session().outboxAttentionCount}
+                      hasComposerDraft={session().hasComposerDraft}
+                    />
+                  }
                 </>
               )}
             </Show>
@@ -414,7 +415,7 @@ export function renderAppSidebarFooterBar(host: AppSidebarRenderHost): JSX.Eleme
         type="button"
         class="sidebar-identity-card"
         aria-haspopup="menu"
-        aria-expanded={String(host.sidebarMenus.identityMenuPosition !== null)}
+        aria-expanded={host.sidebarMenus.identityMenuPosition !== null ? "true" : "false"}
         title={
           identityDetail() ? `${identityMenuLabel()}: ${identityDetail()}` : identityMenuLabel()
         }
@@ -443,7 +444,7 @@ export function renderAppSidebarFooterBar(host: AppSidebarRenderHost): JSX.Eleme
             })
           ) : gateway() ? (
             <span class="sidebar-identity-card__gateway" aria-hidden="true">
-              <span class="sidebar-gateway-name">{gateway().name}</span>
+              <span class="sidebar-gateway-name">{gateway()?.name}</span>
               {gatewayPrimaryTag() ? (
                 <span class="sidebar-gateway-primary">{gatewayPrimaryTag()}</span>
               ) : undefined}
@@ -523,8 +524,10 @@ export function renderAppSidebarPluginTab(
 ): JSX.Element {
   const ref = () => ({ pluginId: tab().pluginId, id: tab().id });
   const key = () => pluginTabKey(ref());
-  const routePlacement = () =>
-    tab().placement?.startsWith("route:") ? tab().placement.slice("route:".length) : "";
+  const routePlacement = () => {
+    const placement = tab().placement;
+    return placement?.startsWith("route:") ? placement.slice("route:".length) : "";
+  };
   const routeId = createMemo(() => {
     const route = routePlacement();
     return isRouteId(route) ? route : null;

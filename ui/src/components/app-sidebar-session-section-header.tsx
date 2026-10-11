@@ -77,7 +77,7 @@ export function renderSidebarSessionSectionHeader(params: {
           class="sidebar-session-group-status"
           tabindex="-1"
           aria-label={params.status.label}
-          aria-expanded={String(params.status.expanded)}
+          aria-expanded={params.status.expanded ? "true" : "false"}
           title={params.status.title ?? undefined}
           onClick={params.status.onToggle}
         >

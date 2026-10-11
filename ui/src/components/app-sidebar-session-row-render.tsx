@@ -13,7 +13,7 @@ import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
 import { rowDemandsVisibility } from "./app-sidebar-session-types.ts";
 import { resolveSidebarSessionRowSubtitle } from "./session-row-subtitle.ts";
 import { Icon } from "./solid/icon.tsx";
-import { renderSidebarSessionSubtitle } from "./solid/session-presentation.tsx";
+import { SidebarSessionSubtitle } from "./solid/session-presentation.tsx";
 import "./elapsed-time.ts";
 import "./tooltip.ts";
 const SIDEBAR_VISIBLE_CHILD_SESSION_LIMIT = 4;
@@ -105,8 +105,9 @@ function renderRecentSessionRow(params: RecentSessionParams) {
       event,
       event.currentTarget.querySelector<HTMLElement>(".sidebar-recent-session__link"),
       (trigger, x, y) => {
-        if (display()?.catalogMenu) {
-          host().sidebarMenus.catalogMenu.open(display().catalogMenu, x, y, trigger ?? undefined);
+        const catalogMenu = display()?.catalogMenu;
+        if (catalogMenu) {
+          host().sidebarMenus.catalogMenu.open(catalogMenu, x, y, trigger ?? undefined);
           return;
         }
         if (!host().sidebarSnapshot) {
@@ -178,7 +179,7 @@ function renderRecentSessionRow(params: RecentSessionParams) {
     }),
   );
   const rowDraggable = createMemo(() => groupWriteAccess().allowed);
-  const marqueeLabelTemplate = createMemo(() => {
+  const marqueeLabelTemplate = () => {
     const teamValue = team();
     const labelValue = label();
     return renderHoverMarquee(
@@ -188,7 +189,7 @@ function renderRecentSessionRow(params: RecentSessionParams) {
       </>,
       "sidebar-recent-session__name",
     );
-  });
+  };
   const marqueeLabel = createMemo(() =>
     display() ? (
       <Show
@@ -200,7 +201,7 @@ function renderRecentSessionRow(params: RecentSessionParams) {
         ])}
         keyed
       >
-        {() => marqueeLabelTemplate()}
+        {(_identity) => marqueeLabelTemplate()}
       </Show>
     ) : (
       marqueeLabelTemplate()
@@ -249,29 +250,25 @@ function renderRecentSessionRow(params: RecentSessionParams) {
         <span class="sidebar-recent-session__text">
           <span class="sidebar-recent-session__title-row">{marqueeLabel()}</span>
           <span class="sidebar-recent-session__details">
-            {session().channelPresentation ? (
-              <span class="sidebar-recent-session__channel">
-                <span class="sr-only">
-                  {t("sessionHovercard.linkedChannel", {
-                    channel: session().channelPresentation.channelLabel,
-                  })}
+            <Show when={session().channelPresentation}>
+              {(channel) => (
+                <span class="sidebar-recent-session__channel">
+                  <span class="sr-only">
+                    {t("sessionHovercard.linkedChannel", {
+                      channel: channel().channelLabel,
+                    })}
+                  </span>
+                  <span aria-hidden="true">{channel().channelLabel}</span>
                 </span>
-                <span aria-hidden="true">{session().channelPresentation.channelLabel}</span>
-              </span>
-            ) : undefined}
-            {team()
-              ? undefined
-              : renderSidebarSessionSubtitle({
-                  get subtitle() {
-                    return subtitle();
-                  },
-                  get narration() {
-                    return narration();
-                  },
-                  get toolName() {
-                    return toolName();
-                  },
-                })}
+              )}
+            </Show>
+            {team() ? undefined : (
+              <SidebarSessionSubtitle
+                subtitle={subtitle()}
+                narration={narration()}
+                toolName={toolName()}
+              />
+            )}
             {indicators.content}
           </span>
         </span>
@@ -281,7 +278,7 @@ function renderRecentSessionRow(params: RecentSessionParams) {
           class={`sidebar-child-session-toggle ${!team() && session().runningChildCount > 0 ? "sidebar-child-session-toggle--running" : !team() && session().failedChildCount > 0 ? "sidebar-child-session-toggle--failed" : ""}`}
           type="button"
           data-child-session-toggle={session().key}
-          aria-expanded={String(childrenExpanded())}
+          aria-expanded={childrenExpanded() ? "true" : "false"}
           aria-label={t(
             childrenExpanded()
               ? "sessionsView.hideChildSessions"
@@ -363,7 +360,7 @@ function renderRecentSessionRow(params: RecentSessionParams) {
             title={t("chat.sidebar.openSessionMenu")}
             aria-label={`${t("chat.sidebar.openSessionMenu")}: ${label()}`}
             aria-haspopup="menu"
-            aria-expanded={String(menuOpen())}
+            aria-expanded={menuOpen() ? "true" : "false"}
             onClick={(event) => {
               event.stopPropagation();
               host().toggleSessionMenu(session(), event.currentTarget, display()?.catalogMenu);

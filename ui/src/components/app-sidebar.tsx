@@ -114,6 +114,10 @@ function AppSidebarContent(props: AppSidebarProps, host: HTMLElement): JSX.Eleme
 
 export type AppSidebarMethods = {
   dismissTransientMenus(): boolean;
+  expandedAgentId(): string;
+  findSidebarHovercardRowByKey(
+    sessionKey: string,
+  ): ReturnType<AppSidebarOwner["findSidebarHovercardRowByKey"]> | undefined;
   promoteCreatedSession(sessionKey: string): void;
 };
 export type AppSidebarElement = SolidBridgeElement<AppSidebarProps, AppSidebarMethods>;
@@ -126,6 +130,9 @@ export const AppSidebar = defineSolidBridge<AppSidebarProps, AppSidebarMethods>(
     properties: appSidebarProperties,
     methods: {
       dismissTransientMenus: dismissSidebarTransientMenus,
+      expandedAgentId: (host) => sidebarOwners.get(host)?.expandedAgentId() ?? "",
+      findSidebarHovercardRowByKey: (host, key) =>
+        sidebarOwners.get(host)?.findSidebarHovercardRowByKey(key),
       promoteCreatedSession: promoteSidebarCreatedSession,
     },
   },

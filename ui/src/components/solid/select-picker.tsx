@@ -2,7 +2,7 @@ import type { PickerOption, PickerParams } from "../select-picker.ts";
 import "../select-picker.ts";
 
 // The unported picker owns its menu and callback content inside this host.
-export function renderPicker(params: PickerParams<PickerOption>) {
+export function Picker(params: PickerParams<PickerOption>) {
   return (
     <openclaw-select-picker
       class={[

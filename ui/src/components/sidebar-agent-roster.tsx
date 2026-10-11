@@ -78,12 +78,7 @@ function useRoster(props: RosterProps) {
     props.active === false ? store().snapshot : projection().read(),
   );
   const [avatarRevision, setAvatarRevision] = createSignal(0, { ownedWrite: true });
-  const avatars = new IdentityAvatarController({
-    addController: () => {},
-    removeController: () => {},
-    requestUpdate: () => setAvatarRevision((value) => value + 1),
-    updateComplete: Promise.resolve(true),
-  });
+  const avatars = new IdentityAvatarController(() => setAvatarRevision((value) => value + 1));
   onSettled(() => {
     avatars.hostConnected();
     return () => avatars.hostDisconnected();
@@ -259,7 +254,7 @@ function SidebarAgentRosterContent(
                           isCollapsed() ? "agentsHome.expandAgent" : "agentsHome.collapseAgent",
                           { agent: card().name },
                         )}
-                        aria-expanded={String(!isCollapsed())}
+                        aria-expanded={isCollapsed() ? "false" : "true"}
                         onClick={() => toggleAgent(card().id)}
                       >
                         <span class="sidebar-agent-roster__chevron" aria-hidden="true">
@@ -319,7 +314,8 @@ function SidebarAgentRosterContent(
                           return `${t("agentChip.newConversation")}: ${card().name}`;
                         },
                         get disabledReason() {
-                          return access().allowed ? undefined : access().reason;
+                          const currentAccess = access();
+                          return currentAccess.allowed ? undefined : currentAccess.reason;
                         },
                         onOpen: (id, target) => roster.host().requestOpenNewSession(id, target),
                       })}
@@ -329,6 +325,8 @@ function SidebarAgentRosterContent(
                         onWa-show={() => roster.host().dismissTransientMenus()}
                         onWa-select={(event: WaSelectEvent) => {
                           switch (event.detail.item.getAttribute("value")) {
+                            case null:
+                              break;
                             case "main":
                               roster.host().openMainSession(card().id);
                               break;
@@ -454,7 +452,7 @@ function SidebarNewSessionMenuContent(
           type="button"
           class="sidebar-brand__icon sidebar-brand__header-control sidebar-brand__new-thread"
           aria-label={t("agentChip.newConversation")}
-          title={access().allowed ? t("agentChip.newConversation") : access().reason}
+          title={props.access.allowed ? t("agentChip.newConversation") : props.access.reason}
           disabled={!access().allowed || roster.cards().length === 0}
         >
           <Icon name="plus" />
@@ -474,7 +472,7 @@ function SidebarNewSessionMenuContent(
               <a
                 class="sidebar-agent-roster__link"
                 href={`${pathForRoute("new-session", roster.host().basePath)}${newSessionSearch(card().id)}`}
-                tabIndex={-1}
+                tabindex={-1}
               >
                 <span class="sidebar-agent-roster__avatar" aria-hidden="true">
                   <AgentIdentityAvatar agent={card()} />

@@ -50,3 +50,13 @@ export function renderThemeBrandIcon(
 }
 
 export type { ThemeBrandIcon };
+
+declare module "@solidjs/web" {
+  namespace JSX {
+    interface IntrinsicElements {
+      "openclaw-theme-brand-icon": HTMLAttributes<ThemeBrandIcon> & {
+        "prop:branding"?: ThemeBranding;
+      };
+    }
+  }
+}

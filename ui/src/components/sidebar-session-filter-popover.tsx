@@ -103,7 +103,7 @@ function renderSidebarSessionFilterPopover(
     return (
       <div
         class="sidebar-session-filter-panel"
-        tabIndex={-1}
+        tabindex={-1}
         role="dialog"
         aria-label={props.label ?? ""}
         aria-modal={isMobileNavLayout() ? "true" : undefined}
@@ -134,7 +134,7 @@ function renderSidebarSessionFilterPopover(
         <button
           type="button"
           class="sidebar-session-filter-panel__backdrop"
-          tabIndex={-1}
+          tabindex={-1}
           aria-label={t("common.close")}
           onClick={() => close(true)}
         />

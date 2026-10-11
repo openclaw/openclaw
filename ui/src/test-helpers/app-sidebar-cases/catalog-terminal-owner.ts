@@ -78,7 +78,8 @@ describe("AppSidebar catalog terminal ownership", () => {
         ]),
       );
       sidebar.terminalAvailable = true;
-      sidebar.onNavigate = vi.fn();
+      const onNavigate = vi.fn();
+      sidebar.onNavigate = onNavigate;
       await sidebar.updateComplete;
       const row = sidebar.querySelector('[data-session-key*="thread-1"]') as HTMLElement;
       row.dispatchEvent(
@@ -101,7 +102,7 @@ describe("AppSidebar catalog terminal ownership", () => {
       menu.onAction("terminal");
       expect(select).toHaveBeenCalledWith("main");
       expect(selection.state.selectedId).toBe("main");
-      expect(sidebar.onNavigate).toHaveBeenCalledWith("terminal", {
+      expect(onNavigate).toHaveBeenCalledWith("terminal", {
         pathname: "/terminal",
         search: "?catalog=codex&host=gateway%3Alocal&thread=thread-1&sourceHomeId=selected-home",
         hash: "",
@@ -233,7 +234,8 @@ describe("AppSidebar catalog deletion", () => {
           ? "agent:main:catalog:codex:gateway%3Alocal:thread-1"
           : "agent:main:main";
         sidebar.activeRouteId = "chat";
-        sidebar.onNavigate = vi.fn();
+        const onNavigate = vi.fn();
+        sidebar.onNavigate = onNavigate;
         await sidebar.updateComplete;
         const cancelled = await selectCatalogDelete(sidebar);
         expect(request).not.toHaveBeenCalledWith("sessions.catalog.archive", expect.anything());
@@ -259,13 +261,13 @@ describe("AppSidebar catalog deletion", () => {
         ]);
         expect(sidebar.querySelector('[data-session-key*="thread-1"]')).toBeNull();
         if (open) {
-          expect(sidebar.onNavigate).toHaveBeenCalledWith("chat", {
+          expect(onNavigate).toHaveBeenCalledWith("chat", {
             pathname: "/chat",
             search: "",
             hash: "",
           });
         } else {
-          expect(sidebar.onNavigate).not.toHaveBeenCalled();
+          expect(onNavigate).not.toHaveBeenCalled();
         }
       } finally {
         restoreDialog();

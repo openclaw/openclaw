@@ -4,7 +4,7 @@ import {
   roleScopesAllow,
 } from "../../shared/operator-scope-compat.js";
 import { prepareUserProfileRolePolicyAuthority } from "../../state/user-channel-identity-operations.js";
-import { resolvePersonalGitHubOwner } from "../../state/user-github-connections.js";
+import { captureResidentUserProfileAccess } from "../../state/user-profile-list.js";
 import type { PersonalGitHubAction, PersonalGitHubActionV2 } from "../github-personal-oauth.js";
 import { readGitHubPublicationSession } from "../github-publication-availability.js";
 import { GitHubPublicationSessionChangedError } from "../github-publication-failure.js";
@@ -266,12 +266,19 @@ function preparePersonalGitHubAction(
       throw new Error("My GitHub requires a current authenticated human Gateway connection.");
     }
     const profile = client.authenticatedUserProfile?.profileId;
-    const owner = profile ? resolvePersonalGitHubOwner(profile) : undefined;
-    if (!owner) {
+    if (!profile) {
       throw new Error("My GitHub requires a verified durable user profile; sign in and try again.");
     }
-    currentGitHubClient(options, scope, owner);
-    return owner;
+    const current = captureResidentUserProfileAccess(profile).assertCurrent();
+    if (current.merged_into) {
+      throw new Error("My GitHub requires a verified durable user profile; sign in and try again.");
+    }
+    currentGitHubClient(options, scope, {
+      profileId: current.id,
+      role: current.role ?? null,
+      githubLogin: current.githubLogin,
+    });
+    return current.id;
   };
   const owner = resolveOwner();
   return {

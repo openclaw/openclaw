@@ -4,10 +4,10 @@ import { t } from "../../lib/reactive/i18n.ts";
 import type { SessionOwnerOption } from "../session-owner-chip.ts";
 import { syncDropdownItemRadio } from "../web-awesome.ts";
 import { Icon } from "./icon.tsx";
-import { renderCompactSessionMenuNavigationItem } from "./session-menu-compact.tsx";
+import { renderCompactSessionMenuNavigationItem as CompactSessionMenuNavigationItem } from "./session-menu-compact.tsx";
 import { renderSessionOwnerAvatar, renderSessionOwnerChip } from "./session-presentation.tsx";
 
-export function renderSidebarMenuRadioItem(params: {
+export function SidebarMenuRadioItem(params: {
   value: string;
   checked: boolean;
   label: string;
@@ -21,7 +21,7 @@ export function renderSidebarMenuRadioItem(params: {
       value={params.value}
       role="menuitemradio"
       aria-label={params.label}
-      aria-checked={String(params.checked)}
+      aria-checked={params.checked ? "true" : "false"}
       ref={(element) => syncDropdownItemRadio(element, params.checked)}
     >
       <span slot="details" class="session-menu__check" aria-hidden="true">
@@ -35,7 +35,7 @@ export function renderSidebarMenuRadioItem(params: {
   );
 }
 
-export function renderSidebarOwnerOptions(params: {
+export function SidebarOwnerOptions(params: {
   owners: readonly SessionOwnerOption[];
   ownerFilterId: string | null;
   selfOwnerId: string | null;
@@ -43,32 +43,24 @@ export function renderSidebarOwnerOptions(params: {
 }): JSX.Element {
   return (
     <For each={params.owners}>
-      {(owner) =>
-        renderSidebarMenuRadioItem({
-          get value() {
-            return `owner:${owner.id}`;
-          },
-          get checked() {
-            return params.ownerFilterId === owner.id;
-          },
-          get label() {
-            return owner.id === params.selfOwnerId
+      {(owner) => (
+        <SidebarMenuRadioItem
+          value={`owner:${owner.id}`}
+          checked={params.ownerFilterId === owner.id}
+          label={
+            owner.id === params.selfOwnerId
               ? t("sessionsView.ownerYou", { name: owner.label ?? owner.id })
-              : (owner.label ?? owner.id);
-          },
-          get owner() {
-            return owner;
-          },
-          get submenu() {
-            return params.submenu;
-          },
-        })
-      }
+              : (owner.label ?? owner.id)
+          }
+          owner={owner}
+          submenu={params.submenu}
+        />
+      )}
     </For>
   );
 }
 
-export function renderSidebarOwnerFilter(params: {
+export function SidebarOwnerFilter(params: {
   owners: readonly SessionOwnerOption[];
   ownerFilterId: string | null;
   involvingMe: boolean;
@@ -80,11 +72,12 @@ export function renderSidebarOwnerFilter(params: {
   const involvingMe = () => params.involvingMe;
   const selectedOwner = createMemo(() => owners().find((owner) => owner.id === ownerFilterId()));
   const selectedName = createMemo(() => selectedOwner()?.label ?? selectedOwner()?.id);
-  const accessibleLabel = createMemo(() =>
-    selectedName()
-      ? t("sessionsView.specificOwnerSelected", { name: selectedName() })
-      : t("sessionsView.specificOwnerAvailable", { count: String(owners().length) }),
-  );
+  const accessibleLabel = createMemo(() => {
+    const name = selectedName();
+    return name
+      ? t("sessionsView.specificOwnerSelected", { name })
+      : t("sessionsView.specificOwnerAvailable", { count: String(owners().length) });
+  });
   const details = createMemo(() =>
     selectedOwner() ? (
       <>
@@ -99,45 +92,29 @@ export function renderSidebarOwnerFilter(params: {
     <Show when={owners().length > 0 || ownerFilterId() !== null || involvingMe()}>
       <div class="session-menu__separator" role="separator" />
       <div class="sidebar-session-sort-menu__title">{t("sessionsView.owners")}</div>
-      {renderSidebarMenuRadioItem({
-        value: "owner:",
-        get checked() {
-          return ownerFilterId() === null && !involvingMe();
-        },
-        get label() {
-          return t("sessionsView.allOwners");
-        },
-      })}
-      {renderSidebarMenuRadioItem({
-        value: "involving-me",
-        get checked() {
-          return involvingMe();
-        },
-        get label() {
-          return t("sessionsView.involvingMe");
-        },
-      })}
+      <SidebarMenuRadioItem
+        value="owner:"
+        checked={ownerFilterId() === null && !involvingMe()}
+        label={t("sessionsView.allOwners")}
+      />
+      <SidebarMenuRadioItem
+        value="involving-me"
+        checked={involvingMe()}
+        label={t("sessionsView.involvingMe")}
+      />
       {owners().length > 0 ? (
         params.compact ? (
-          renderCompactSessionMenuNavigationItem({
-            value: "compact:open-specific-owner",
-            get label() {
-              return t("sessionsView.specificOwner");
-            },
-            get icon() {
-              return <Icon name="users" />;
-            },
-            get details() {
-              return (
-                <span class="session-menu__shortcut sidebar-session-owner-selection">
-                  {details()}
-                </span>
-              );
-            },
-            get accessibleLabel() {
-              return accessibleLabel();
-            },
-          })
+          <CompactSessionMenuNavigationItem
+            value="compact:open-specific-owner"
+            label={t("sessionsView.specificOwner")}
+            icon={<Icon name="users" />}
+            details={
+              <span class="session-menu__shortcut sidebar-session-owner-selection">
+                {details()}
+              </span>
+            }
+            accessibleLabel={accessibleLabel()}
+          />
         ) : (
           <wa-dropdown-item
             class="sidebar-session-sort-menu__item sidebar-session-owner-submenu sidebar-session-choice-submenu"
@@ -151,10 +128,7 @@ export function renderSidebarOwnerFilter(params: {
             >
               {details()}
             </span>
-            {renderSidebarOwnerOptions({
-              ...params,
-              submenu: true,
-            })}
+            <SidebarOwnerOptions {...params} submenu />
           </wa-dropdown-item>
         )
       ) : undefined}

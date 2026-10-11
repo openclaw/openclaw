@@ -145,22 +145,21 @@ function renderAgentRow(
               class="sidebar-agent-menu__pin"
               aria-label={`${pinLabel()}: ${label()}`}
               title={pinLabel()}
-              aria-pressed={String(pinned())}
+              aria-pressed={pinned() ? "true" : "false"}
               tabindex="-1"
-              onClick={async (event: MouseEvent) => {
-                event.stopPropagation();
-                const button = event.currentTarget;
-                if (!(button instanceof HTMLButtonElement)) {
-                  return;
-                }
-                // Moving a keyed row into pinned-first order can drop native focus.
-                const focused = button === document.activeElement;
-                await params.onTogglePinnedAgent(agentId());
-                if (focused && button.isConnected) {
-                  button.focus({
-                    preventScroll: true,
-                  });
-                }
+              onClick={(event) => {
+                void (async () => {
+                  event.stopPropagation();
+                  const button = event.currentTarget;
+                  // Moving a keyed row into pinned-first order can drop native focus.
+                  const focused = button === document.activeElement;
+                  await params.onTogglePinnedAgent(agentId());
+                  if (focused && button.isConnected) {
+                    button.focus({
+                      preventScroll: true,
+                    });
+                  }
+                })();
               }}
             >
               <Icon name="pin" />

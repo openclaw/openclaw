@@ -81,7 +81,7 @@ function SidebarUpdateCardContent(props: SidebarUpdateCardProps, host: HTMLEleme
     () => props.updateSchedule?.campaign?.state,
     (state) => {
       if (state !== "countdown" && state !== "waiting-for-idle") {
-        return;
+        return undefined;
       }
       const timer = setInterval(() => setNow(Date.now()), 1000);
       return () => clearInterval(timer);
@@ -300,7 +300,7 @@ function SidebarUpdateCardContent(props: SidebarUpdateCardProps, host: HTMLEleme
             class="sidebar-update-card__hold"
             type="button"
             disabled={holdingCampaignId() === current().id}
-            onClick={() => holdUpdate(current().id)}
+            onClick={() => void holdUpdate(current().id)}
           >
             {t("updates.holdOneHour")}
           </button>
@@ -326,7 +326,7 @@ function SidebarUpdateCardContent(props: SidebarUpdateCardProps, host: HTMLEleme
           type="button"
           disabled={refreshInFlight()}
           aria-busy={refreshInFlight() ? "true" : "false"}
-          onClick={refreshControlUi}
+          onClick={() => void refreshControlUi()}
         >
           <span class="sidebar-update-card__icon" aria-hidden="true">
             <Icon name="refresh" />
@@ -402,7 +402,7 @@ function SidebarUpdateCardContent(props: SidebarUpdateCardProps, host: HTMLEleme
         <button
           class={["sidebar-update-card__action", { "sidebar-update-card__action--busy": busy() }]}
           type="button"
-          aria-disabled={props.canUpdate ? null : "true"}
+          aria-disabled={props.canUpdate ? undefined : "true"}
           disabled={busy()}
           onClick={startUpdate}
         >
@@ -411,8 +411,8 @@ function SidebarUpdateCardContent(props: SidebarUpdateCardProps, host: HTMLEleme
           </span>
           <span
             class="sidebar-update-card__text"
-            role={countdownActive() ? "timer" : null}
-            aria-live={countdownActive() ? "off" : null}
+            role={countdownActive() ? "timer" : undefined}
+            aria-live={countdownActive() ? "off" : undefined}
           >
             {text()}
           </span>
@@ -424,8 +424,8 @@ function SidebarUpdateCardContent(props: SidebarUpdateCardProps, host: HTMLEleme
       <Show when={Boolean(statusBanner() || actionable())}>
         <div
           class="sidebar-update-card"
-          role={campaign() ? null : "status"}
-          aria-live={campaign() ? null : "polite"}
+          role={campaign() ? undefined : "status"}
+          aria-live={campaign() ? undefined : "polite"}
         >
           {renderStatus()}
           <Show when={actionable()}>

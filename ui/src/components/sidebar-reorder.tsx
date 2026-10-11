@@ -41,30 +41,32 @@ export function renderSidebarReorderMenu(params: {
             ?.toggleAttribute("disabled", adjacent(menu, position) === null);
         }
       }}
-      onWa-select={async (event: WaSelectEvent) => {
-        const position = event.detail.item.getAttribute("value");
-        if (position === "remove") {
-          params.onRemove?.();
-          return;
-        }
-        if (position !== "before" && position !== "after") {
-          return;
-        }
-        const menu = event.currentTarget;
-        if (!(menu instanceof HTMLElement)) {
-          return;
-        }
-        const target = adjacent(menu, position);
-        if (target) {
-          const trigger = menu.querySelector<HTMLButtonElement>("button[slot=trigger]");
-          await params.onMove(target, position);
-          // Moving a keyed DOM row can drop focus; do not reclaim it from another control.
-          if (trigger?.isConnected && document.activeElement === document.body) {
-            trigger.focus({
-              preventScroll: true,
-            });
+      onWa-select={(event: WaSelectEvent) => {
+        void (async () => {
+          const position = event.detail.item.getAttribute("value");
+          if (position === "remove") {
+            params.onRemove?.();
+            return;
           }
-        }
+          if (position !== "before" && position !== "after") {
+            return;
+          }
+          const menu = event.currentTarget;
+          if (!(menu instanceof HTMLElement)) {
+            return;
+          }
+          const target = adjacent(menu, position);
+          if (target) {
+            const trigger = menu.querySelector<HTMLButtonElement>("button[slot=trigger]");
+            await params.onMove(target, position);
+            // Moving a keyed DOM row can drop focus; do not reclaim it from another control.
+            if (trigger?.isConnected && document.activeElement === document.body) {
+              trigger.focus({
+                preventScroll: true,
+              });
+            }
+          }
+        })();
       }}
     >
       <button

@@ -87,6 +87,15 @@ describe("Control UI build chunking", () => {
       ],
       ["/tmp/openclaw-pnpm-node-modules/@noble/ed25519/index.js", "gateway-runtime"],
       ["/repo/ui/src/lib/gateway-methods.ts", "gateway-runtime"],
+      [
+        new URL("../components/sidebar-update-card.tsx", import.meta.url).pathname,
+        "sidebar-update-runtime",
+      ],
+      [
+        new URL("../styles/sidebar-update-card.css", import.meta.url).pathname,
+        "sidebar-update-runtime",
+      ],
+      [new URL("../pages/cron/cron-page.tsx", import.meta.url).pathname, "cron-page"],
       ["/repo/ui/src/components/config-form.shared.ts", undefined],
       ["/repo/ui/src/lib/clipboard.ts", undefined],
       ["/repo/ui/src/build-info.ts", undefined],
@@ -150,6 +159,7 @@ describe("Control UI build chunking", () => {
       true,
     );
     expect(bootGroup.test(`${repoRoot}/ui/src/pages/chat/chat-page.ts`)).toBe(false);
+    expect(bootGroup.test(`${repoRoot}/ui/src/pages/cron/cron-page.tsx`)).toBe(false);
     // Fetched shared chunks once co-located the chat view with modules New Session needs.
     expect(bootGroup.test(`${repoRoot}/ui/src/pages/chat/chat-view.ts`)).toBe(false);
     expect(bootGroup.test(`${repoRoot}/ui/src/styles/chat.ts`)).toBe(false);

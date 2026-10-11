@@ -8,7 +8,7 @@ import { readSessionMethodAccess } from "../lib/session-method-access.ts";
 import type { CatalogProjectGrouping } from "../lib/sessions/catalog-project-grouping.ts";
 import type { SidebarSessionsGrouping } from "../lib/sessions/grouping.ts";
 import { SETTINGS_ROUTE_TARGETS } from "../pages/config/route-data.ts";
-import { renderSidebarDropdown } from "./app-sidebar-nav-menus.tsx";
+import { SidebarDropdown } from "./app-sidebar-nav-menus.tsx";
 import { countSidebarSessionFilters } from "./app-sidebar-session-filter-summary.tsx";
 import {
   SIDEBAR_SESSION_SORT_OPTIONS,
@@ -18,13 +18,13 @@ import { renderSessionOwnerAvatar as renderPickerOwnerAvatar } from "./session-o
 import type { SidebarFilterMenuView, SidebarMenusController } from "./sidebar-menus-controller.tsx";
 import { SidebarSessionFilterPopover } from "./sidebar-session-filter-popover.tsx";
 import { Icon } from "./solid/icon.tsx";
-import { renderPicker } from "./solid/select-picker.tsx";
+import { Picker } from "./solid/select-picker.tsx";
 import { renderCompactSessionMenuFrame } from "./solid/session-menu-compact.tsx";
 import { SettingsSegmented, SettingsToggle } from "./solid/settings-ui.tsx";
 import {
-  renderSidebarMenuRadioItem,
-  renderSidebarOwnerFilter,
-  renderSidebarOwnerOptions,
+  SidebarMenuRadioItem,
+  SidebarOwnerFilter,
+  SidebarOwnerOptions,
 } from "./solid/sidebar-owner-filter.tsx";
 
 type SidebarSessionGroupMenuAction =
@@ -56,18 +56,15 @@ export function renderSidebarSessionGroupMenuForController(
   }
   const trigger = controller.sessionGroupMenuTrigger;
   const groupDefaultsStatus = () => host.sessionDataContext?.sessions.groupsStatus() ?? "idle";
-  const groupActionMethods = createMemo(
-    () =>
-      ({
-        "group-defaults": "sessions.groups.update",
-        "rename-group": "sessions.groups.rename",
-        "new-group": "sessions.groups.put",
-        "delete-group": "sessions.groups.delete",
-      }) as const,
-  );
+  const groupActionMethods = {
+    "group-defaults": "sessions.groups.update",
+    "rename-group": "sessions.groups.rename",
+    "new-group": "sessions.groups.put",
+    "delete-group": "sessions.groups.delete",
+  } as const;
   const actionDisabledReasons = createMemo(() =>
     Object.fromEntries(
-      Object.entries(groupActionMethods()).flatMap(([action, method]) => {
+      Object.entries(groupActionMethods).flatMap(([action, method]) => {
         const access = readSessionMethodAccess(host.sessionDataContext?.gateway.snapshot, {
           method,
           requiredScope: "operator.write",
@@ -106,16 +103,12 @@ export function renderSidebarSessionGroupMenuForController(
   );
   return (
     <Show when={menu} keyed>
-      {(_identity) =>
-        renderSidebarDropdown({
-          get position() {
-            return menu;
-          },
-          className: "session-menu sidebar-session-group-menu",
-          get label() {
-            return t("sessionsView.groupMenu", { group: menu.group });
-          },
-          onSelect: (item) => {
+      {(_identity) => (
+        <SidebarDropdown
+          position={menu}
+          class="session-menu sidebar-session-group-menu"
+          label={t("sessionsView.groupMenu", { group: menu.group })}
+          onSelect={(item) => {
             const value = item.getAttribute("value") ?? undefined;
             if (
               (value === "group-defaults" ||
@@ -145,40 +138,38 @@ export function renderSidebarSessionGroupMenuForController(
                   break;
               }
             }
-          },
-          onTabAway: () => trigger?.focus(),
-          onClose: (restoreFocus) => {
+          }}
+          onTabAway={() => trigger?.focus()}
+          onClose={(restoreFocus) => {
             if (controller.sessionGroupMenu === menu) {
               controller.closeSessionGroupMenu({ restoreFocus });
             }
-          },
-          get content() {
-            return (
-              <>
-                {renderAction(
-                  "group-defaults",
-                  groupDefaultsStatus() === "unavailable"
-                    ? `${t("common.retry")}: ${t("sessionsView.groupDefaultsMenu")}`
-                    : t("sessionsView.groupDefaultsMenu"),
-                  <Icon name="settings" />,
-                )}
-                {renderAction(
-                  "rename-group",
-                  t("sessionsView.renameGroupMenu"),
-                  <Icon name="edit" />,
-                )}
-                {renderAction("new-group", t("sessionsView.newGroup"), <Icon name="folder" />)}
-                <div class="session-menu__separator" role="separator" />
-                {renderAction(
-                  "delete-group",
-                  t("sessionsView.deleteGroupMenu"),
-                  <Icon name="trash" />,
-                )}
-              </>
-            );
-          },
-        })
-      }
+          }}
+          content={
+            <>
+              {renderAction(
+                "group-defaults",
+                groupDefaultsStatus() === "unavailable"
+                  ? `${t("common.retry")}: ${t("sessionsView.groupDefaultsMenu")}`
+                  : t("sessionsView.groupDefaultsMenu"),
+                <Icon name="settings" />,
+              )}
+              {renderAction(
+                "rename-group",
+                t("sessionsView.renameGroupMenu"),
+                <Icon name="edit" />,
+              )}
+              {renderAction("new-group", t("sessionsView.newGroup"), <Icon name="folder" />)}
+              <div class="session-menu__separator" role="separator" />
+              {renderAction(
+                "delete-group",
+                t("sessionsView.deleteGroupMenu"),
+                <Icon name="trash" />,
+              )}
+            </>
+          }
+        />
+      )}
     </Show>
   );
 }
@@ -212,18 +203,12 @@ export function renderSidebarCatalogViewMenuForController(
   );
   return (
     <Show when={`${position.catalogId}:${position.x}:${position.y}`} keyed>
-      {(_identity) =>
-        renderSidebarDropdown({
-          get position() {
-            return position;
-          },
-          get className() {
-            return `sidebar-session-sort-menu sidebar-catalog-view-menu${ownerFilter().compact ? " session-menu--compact" : ""}`;
-          },
-          get label() {
-            return t("chat.sidebar.catalogViewOptions");
-          },
-          onSelect: (item) => {
+      {(_identity) => (
+        <SidebarDropdown
+          position={position}
+          class={`sidebar-session-sort-menu sidebar-catalog-view-menu${ownerFilter().compact ? " session-menu--compact" : ""}`}
+          label={t("chat.sidebar.catalogViewOptions")}
+          onSelect={(item) => {
             const value = item.getAttribute("value") ?? undefined;
             const view = sidebarFilterMenuViewForValue(value);
             if (view) {
@@ -245,35 +230,35 @@ export function renderSidebarCatalogViewMenuForController(
               host.hideSessionCatalog(position.catalogId);
               controller.closePositionedMenu("catalogView");
             }
-          },
-          ...controller.positionedMenuHandlers("catalogView"),
-          get content() {
-            return ownerFilter().compact && controller.filterMenuView === "specific-owner" ? (
+          }}
+          {...controller.positionedMenuHandlers("catalogView")}
+          content={
+            ownerFilter().compact && controller.filterMenuView === "specific-owner" ? (
               renderCompactSessionMenuFrame(
-                renderSidebarOwnerOptions({ ...ownerFilter(), submenu: false }),
+                <SidebarOwnerOptions {...ownerFilter()} submenu={false} />,
               )
             ) : (
               <>
                 <div class="sidebar-session-sort-menu__title">{t("sessionsView.groupBy")}</div>
                 <For each={groupingOptions()}>
-                  {(option) =>
-                    renderSidebarMenuRadioItem({
-                      value: `grouping:${option.grouping}`,
-                      checked: host.catalogProjectGrouping === option.grouping,
-                      label: option.label,
-                    })
-                  }
+                  {(option) => (
+                    <SidebarMenuRadioItem
+                      value={`grouping:${option.grouping}`}
+                      checked={host.catalogProjectGrouping === option.grouping}
+                      label={option.label}
+                    />
+                  )}
                 </For>
-                {renderSidebarOwnerFilter(ownerFilter())}
+                <SidebarOwnerFilter {...ownerFilter()} />
                 <div class="session-menu__separator" role="separator" />
                 <wa-dropdown-item class="sidebar-session-sort-menu__item" value="hide-catalog">
                   <span class="session-menu__text">{t("chat.sidebar.hideFromSidebar")}</span>
                 </wa-dropdown-item>
               </>
-            );
-          },
-        })
-      }
+            )
+          }
+        />
+      )}
     </Show>
   );
 }
@@ -286,11 +271,17 @@ export function renderSidebarSessionSortMenuForController(
   if (!position) {
     return undefined;
   }
-  const sessionSources = createMemo(() => SETTINGS_ROUTE_TARGETS.sessionSources);
+  const sessionSources = SETTINGS_ROUTE_TARGETS.sessionSources;
   const rosterMode = () => host.sidebarAgentsMode === "roster";
   const grouping = () => host.effectiveSessionsGrouping();
   const owners = () => (host.sessionOwnershipVisibility.filters ? host.sessionOwnerOptions : []);
   const ownerFilterId = () => (host.sessionOwnerFilterActive ? host.sessionOwnerFilterId : null);
+  const unavailableOwner = createMemo(() => {
+    const id = ownerFilterId();
+    return id !== null && !owners().some((owner) => owner.id === id)
+      ? [{ value: `owner:${id}`, label: id }]
+      : [];
+  });
   const involvingMe = () => host.sessionInvolvingMeFilterActive;
   const selfOwnerId = () => host.sessionDataContext?.gateway.snapshot.selfUser?.id ?? null;
   const peopleSortAvailable = () => host.sessionPeopleSortAvailable();
@@ -346,7 +337,7 @@ export function renderSidebarSessionSortMenuForController(
       type="button"
       role="switch"
       id={id}
-      aria-checked={String(checked())}
+      aria-checked={checked() ? "true" : "false"}
       class="sidebar-session-menu-switch"
       onClick={() => onChange(!checked())}
     >
@@ -406,49 +397,39 @@ export function renderSidebarSessionSortMenuForController(
                 {ownerVisible() ? (
                   <div class="sidebar-session-menu-row">
                     <label for="sidebar-sessions-owner">{t("sessionsView.owners")}</label>
-                    {renderPicker({
-                      id: "sidebar-sessions-owner",
-                      get label() {
-                        return t("sessionsView.owners");
-                      },
-                      get value() {
-                        return ownerValue();
-                      },
-                      searchable: "always",
-                      get sheet() {
-                        return sheet();
-                      },
-                      showOptionTooltips: false,
-                      renderLeading: (option) => {
+                    <Picker
+                      id="sidebar-sessions-owner"
+                      label={t("sessionsView.owners")}
+                      value={ownerValue()}
+                      searchable="always"
+                      sheet={sheet()}
+                      showOptionTooltips={false}
+                      renderLeading={(option) => {
                         const owner = owners().find(
                           (entry) => `owner:${entry.id}` === option.value,
                         );
                         // The unported picker consumes this callback as Lit content.
                         return owner ? renderPickerOwnerAvatar(owner) : undefined;
-                      },
-                      get options() {
-                        return [
-                          { value: "all", label: t("sessionsView.allOwners") },
-                          { value: "involving-me", label: t("sessionsView.involvingMe") },
-                          ...owners().map((owner) => ({
-                            value: `owner:${owner.id}`,
-                            label:
-                              owner.id === selfOwnerId()
-                                ? t("sessionsView.ownerYou", { name: owner.label ?? owner.id })
-                                : (owner.label ?? owner.id),
-                          })),
-                          ...(ownerFilterId() !== null &&
-                          !owners().some((owner) => owner.id === ownerFilterId())
-                            ? [{ value: `owner:${ownerFilterId()}`, label: ownerFilterId() }]
-                            : []),
-                        ];
-                      },
-                      onChange: (value) =>
+                      }}
+                      options={[
+                        { value: "all", label: t("sessionsView.allOwners") },
+                        { value: "involving-me", label: t("sessionsView.involvingMe") },
+                        ...owners().map((owner) => ({
+                          value: `owner:${owner.id}`,
+                          label:
+                            owner.id === selfOwnerId()
+                              ? t("sessionsView.ownerYou", { name: owner.label ?? owner.id })
+                              : (owner.label ?? owner.id),
+                        })),
+                        ...unavailableOwner(),
+                      ]}
+                      onChange={(value) =>
                         host.setSessionOwnerFilter(
                           value.startsWith("owner:") ? value.slice("owner:".length) : null,
                           value === "involving-me",
-                        ),
-                    })}
+                        )
+                      }
+                    />
                   </div>
                 ) : undefined}
                 {segmented(
@@ -482,91 +463,67 @@ export function renderSidebarSessionSortMenuForController(
                 <div class="sidebar-session-menu-heading">
                   <h3 id="sidebar-sessions-display-label">{t("chat.sidebar.menuDisplay")}</h3>
                 </div>
-                {rosterMode()
-                  ? undefined
-                  : renderPicker({
-                      id: "sidebar-sessions-group",
-                      get label() {
-                        return t("sessionsView.groupBy");
-                      },
-                      get value() {
-                        return grouping();
-                      },
-                      variant: "submenu",
-                      get sheet() {
-                        return sheet();
-                      },
-                      showOptionTooltips: false,
-                      get options() {
-                        return [
-                          { value: "category", label: t("sessionsView.groupByCategory") },
-                          { value: "project", label: t("chat.sidebar.catalogGroupByProject") },
-                          ...(peopleSortAvailable()
-                            ? [{ value: "person", label: t("sessionsView.groupByPerson") }]
-                            : []),
-                          { value: "none", label: t("sessionsView.groupByNone") },
-                        ];
-                      },
-                      onChange: (value) => {
-                        // SAFETY: This picker emits only the category, project, person, and none options above.
-                        host.sessionOrganizer.setSessionsGrouping(value as SidebarSessionsGrouping);
-                      },
-                    })}
-                {renderPicker({
-                  id: "sidebar-sessions-sort",
-                  get label() {
-                    return t("chat.sidebar.sortBy");
-                  },
-                  get value() {
-                    return host.effectiveSessionSortMode();
-                  },
-                  variant: "submenu",
-                  get sheet() {
-                    return sheet();
-                  },
-                  showOptionTooltips: false,
-                  get options() {
-                    return SIDEBAR_SESSION_SORT_OPTIONS.filter(
-                      (option) => option.mode !== "people" || peopleSortAvailable(),
-                    ).map((option) => ({ value: option.mode, label: t(option.labelKey) }));
-                  },
-                  onChange: (value) => {
+                {rosterMode() ? undefined : (
+                  <Picker
+                    id="sidebar-sessions-group"
+                    label={t("sessionsView.groupBy")}
+                    value={grouping()}
+                    variant="submenu"
+                    sheet={sheet()}
+                    showOptionTooltips={false}
+                    options={[
+                      { value: "category", label: t("sessionsView.groupByCategory") },
+                      { value: "project", label: t("chat.sidebar.catalogGroupByProject") },
+                      ...(peopleSortAvailable()
+                        ? [{ value: "person", label: t("sessionsView.groupByPerson") }]
+                        : []),
+                      { value: "none", label: t("sessionsView.groupByNone") },
+                    ]}
+                    onChange={(value) => {
+                      // SAFETY: This picker emits only the category, project, person, and none options above.
+                      host.sessionOrganizer.setSessionsGrouping(value as SidebarSessionsGrouping);
+                    }}
+                  />
+                )}
+                <Picker
+                  id="sidebar-sessions-sort"
+                  label={t("chat.sidebar.sortBy")}
+                  value={host.effectiveSessionSortMode()}
+                  variant="submenu"
+                  sheet={sheet()}
+                  showOptionTooltips={false}
+                  options={SIDEBAR_SESSION_SORT_OPTIONS.filter(
+                    (option) => option.mode !== "people" || peopleSortAvailable(),
+                  ).map((option) => ({ value: option.mode, label: t(option.labelKey) }))}
+                  onChange={(value) => {
                     const option = SIDEBAR_SESSION_SORT_OPTIONS.find(
                       (entry) => entry.mode === value,
                     );
                     if (option) {
                       host.setSessionSortMode(option.mode);
                     }
-                  },
-                })}
-                {rosterMode()
-                  ? undefined
-                  : renderPicker({
-                      id: "sidebar-sessions-empty",
-                      get label() {
-                        return t("sessionsView.hideEmptyGroups");
-                      },
-                      get value() {
-                        return host.sessionsEmptyGroupsMode;
-                      },
-                      variant: "submenu",
-                      get sheet() {
-                        return sheet();
-                      },
-                      showOptionTooltips: false,
-                      get options() {
-                        return EMPTY_GROUPS_OPTIONS.map((option) => ({
-                          value: option.mode,
-                          label: t(option.labelKey),
-                        }));
-                      },
-                      onChange: (value) => {
-                        const option = EMPTY_GROUPS_OPTIONS.find((entry) => entry.mode === value);
-                        if (option && controller.sessionSortMenuPosition === position) {
-                          host.setSessionsEmptyGroupsMode(option.mode);
-                        }
-                      },
-                    })}
+                  }}
+                />
+                {rosterMode() ? undefined : (
+                  <Picker
+                    id="sidebar-sessions-empty"
+                    label={t("sessionsView.hideEmptyGroups")}
+                    value={host.sessionsEmptyGroupsMode}
+                    variant="submenu"
+                    sheet={sheet()}
+                    showOptionTooltips={false}
+                    options={EMPTY_GROUPS_OPTIONS.map((option) => ({
+                      value: option.mode,
+                      label: t(option.labelKey),
+                    }))}
+                    onChange={(value) => {
+                      const option = EMPTY_GROUPS_OPTIONS.find((entry) => entry.mode === value);
+                      if (option && controller.sessionSortMenuPosition === position) {
+                        host.setSessionsEmptyGroupsMode(option.mode);
+                      }
+                    }}
+                  />
+                )}
                 {switchItem(
                   "sidebar-sessions-preview",
                   () => t("sessionsView.showSessionPreview"),
@@ -579,17 +536,17 @@ export function renderSidebarSessionSortMenuForController(
                   id="sidebar-sessions-sources"
                   class="sidebar-session-filter-footer"
                   href={
-                    pathForRoute(sessionSources().routeId, host.basePath) +
-                    sessionSources().search +
-                    sessionSources().hash
+                    pathForRoute(sessionSources.routeId, host.basePath) +
+                    sessionSources.search +
+                    sessionSources.hash
                   }
                   onClick={(event: MouseEvent) => {
                     if (shouldHandleNavigationClick(event)) {
                       event.preventDefault();
                       controller.closePositionedMenu("sessionSort");
-                      host.onNavigate?.(sessionSources().routeId, {
-                        search: sessionSources().search,
-                        hash: sessionSources().hash,
+                      host.onNavigate?.(sessionSources.routeId, {
+                        search: sessionSources.search,
+                        hash: sessionSources.hash,
                       });
                     }
                   }}

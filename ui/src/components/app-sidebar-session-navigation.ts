@@ -62,6 +62,7 @@ import {
 import {
   visibleSidebarSessionCatalogs,
   sidebarCatalogLiveRows,
+  sidebarChildSessionParents,
   sidebarSessionSnoozeWakeRows,
 } from "./app-sidebar-session-snooze-visibility.ts";
 import {
@@ -312,32 +313,12 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase 
   }
 
   private childSessionParents(): Set<string> {
-    const revalidating = new Set<string>();
-    const pending = [...this.visibleSessionRowsInOrder()];
-    for (const session of pending) {
-      pending.push(...session.children);
-      if (
-        session.childLoadParentKeys?.length &&
-        (session.visuallyActive || this.isSessionChildrenExpanded(session))
-      ) {
-        for (const key of session.childLoadParentKeys) {
-          revalidating.add(key);
-        }
-      }
-    }
+    const rows = this.visibleSessionRowsInOrder();
     const grouped = this.groupedSessionSource;
     const homeAgents = grouped
       ? grouped.agentIds.filter((id) => !grouped.collapsedAgentIds.has(id))
       : [this.expandedAgentId()];
-    for (const agentId of homeAgents) {
-      const mainRow = this.mainSessionRow(agentId);
-      if (mainRow?.childSessions?.length) {
-        for (const key of this.projectHomeSession(mainRow, agentId).childLoadParentKeys ?? []) {
-          revalidating.add(key);
-        }
-      }
-    }
-    return revalidating;
+    return sidebarChildSessionParents(rows, homeAgents, this);
   }
 
   protected applySessionOwnerFilter(

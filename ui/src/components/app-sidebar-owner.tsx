@@ -6,12 +6,10 @@ import type {
   WorktreesBranchesResult,
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { SessionObserverDigest } from "../../../packages/gateway-protocol/src/schema/sessions.js";
-import { isSessionRouteId, pathForRoute } from "../app-route-paths.ts";
+import { isSessionRouteId } from "../app-route-paths.ts";
 import type { NativeGatewaysSnapshot } from "../app/native-gateways.runtime.ts";
 import { beginNativeWindowDragFromTopInset } from "../app/native-window-drag.ts";
-import { rosterActivityStore } from "../lib/agents/roster-activity-store.ts";
 import { createIdleImport } from "../lib/idle-import.ts";
-import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import {
   buildCatalogSessionKey,
@@ -26,12 +24,8 @@ import { showToast } from "../lib/toast.ts";
 import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
 import "./theme-mode-toggle.ts";
 import "./tooltip.ts";
-import { SETTINGS_ROUTE_TARGETS } from "../pages/config/route-data.ts";
-import {
-  renderAppSidebarOnline,
-  resolveSidebarOnline,
-  sidebarOnlineOrder,
-} from "./app-sidebar-online.tsx";
+import { renderAppSidebarOnline, sidebarOnlineOrder } from "./app-sidebar-online.tsx";
+import { hidePersonalSidebarCatalog } from "./app-sidebar-personal-navigation.ts";
 import { renderSidebarRail, renderSidebarPages, renderSidebarScope } from "./app-sidebar-rail.tsx";
 import { renderAppSidebarBrand } from "./app-sidebar-render.tsx";
 import type { SessionCatalogGroupsRenderer } from "./app-sidebar-session-catalog-render.tsx";
@@ -51,7 +45,6 @@ import {
   loadStoredSidebarCatalogGrouping,
   SIDEBAR_HIDDEN_SESSION_CATALOGS_CHANGED_EVENT,
   SIDEBAR_SESSION_PAGE_SIZE,
-  setStoredSessionCatalogHidden,
   storeSidebarCatalogGrouping,
   type SidebarRecentSession,
   type SidebarToolActivity,
@@ -65,7 +58,10 @@ import { SessionOrganizerController } from "./session-organizer-controller.ts";
 import { SidebarContextController } from "./sidebar-context-controller.ts";
 import { SidebarMenusController } from "./sidebar-menus-controller.tsx";
 import { SidebarPeopleController } from "./sidebar-people-controller.ts";
-import { captureSidebarSnapshotModel } from "./sidebar-snapshot-capture.ts";
+import {
+  captureSidebarSnapshotModel,
+  isSidebarSnapshotSettled,
+} from "./sidebar-snapshot-capture.ts";
 import { SidebarSnapshotController } from "./sidebar-snapshot-controller.ts";
 import type { SidebarSnapshotModel } from "./sidebar-snapshot-model.ts";
 import { Icon } from "./solid/icon.tsx";
@@ -131,38 +127,7 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
   }
 
   sidebarSnapshotSettled(): boolean {
-    const context = this.context;
-    if (!this.connected || !context) {
-      return false;
-    }
-    if (context.gateway.snapshot.selfUser?.id && !this.navigationCatalog.scopesReady) {
-      return false;
-    }
-    if (this.navigationView === "pages" && this.navigationCatalog.dashboards?.loading !== false) {
-      return false;
-    }
-    const people = resolveSidebarOnline(this).users;
-    if (
-      people.some((person) => person.identity?.type === "profile") &&
-      this.sessionData.ownerCounts.counts === null &&
-      this.sessionData.ownerCounts.error === null
-    ) {
-      return false;
-    }
-    if (this.sidebarAgentsMode === "roster") {
-      const roster = rosterActivityStore(context).snapshot;
-      return (
-        Boolean(this.rosterRenderer) &&
-        (roster.membershipReady || roster.error !== null) &&
-        !roster.loading &&
-        roster.involvingMe === this.sidebarSessionOwnerFilter().involvingMe
-      );
-    }
-    return (
-      !this.sessionData.sessionsLoading &&
-      (Boolean(this.sessionData.sessionMutationError ?? context.sessions.state.error) ||
-        (Boolean(this.sessionData.sessionsResult) && !context.sessions.presentation.resultCached))
-    );
+    return isSidebarSnapshotSettled(this, Boolean(this.rosterRenderer));
   }
 
   captureSidebarSnapshot(): SidebarSnapshotModel | null {
@@ -228,29 +193,32 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
   private narration: SidebarSessionNarrationController | null = null;
   private narrationLoad: Promise<void> | null = null;
   private readonly sidebarContext = new SidebarContextController(this);
-  private readonly subscriptions = new SubscriptionsController(this)
-    .effect(
-      () => this.sidebarSnapshotController,
-      (snapshot) => {
-        snapshot.connect();
-        return () => snapshot.disconnect();
-      },
-    )
-    .watchStore(() => this.sidebarSnapshotController)
-    .effect(
-      () => this.context?.gateway,
-      (gateway) => gateway.subscribeEvents((event) => this.narration?.handleEvent(event)),
-    )
-    .watchStore(() => this.context?.agentIdentity)
-    .watchStore(
-      () => this.context?.theme,
-      () => this.syncCommunityInviteState(),
-    )
-    .watchStore(
-      () => this.context?.config,
-      () => this.syncCommunityInviteState(),
-    )
-    .watchStore(() => this.context?.plugins);
+  constructor(...args: ConstructorParameters<typeof AppSidebarSessionNavigationElement>) {
+    super(...args);
+    new SubscriptionsController(this)
+      .effect(
+        () => this.sidebarSnapshotController,
+        (snapshot) => {
+          snapshot.connect();
+          return () => snapshot.disconnect();
+        },
+      )
+      .watchStore(() => this.sidebarSnapshotController)
+      .effect(
+        () => this.context?.gateway,
+        (gateway) => gateway.subscribeEvents((event) => this.narration?.handleEvent(event)),
+      )
+      .watchStore(() => this.context?.agentIdentity)
+      .watchStore(
+        () => this.context?.theme,
+        () => this.syncCommunityInviteState(),
+      )
+      .watchStore(
+        () => this.context?.config,
+        () => this.syncCommunityInviteState(),
+      )
+      .watchStore(() => this.context?.plugins);
+  }
   get nativeGatewaySnapshot(): NativeGatewaysSnapshot | null {
     // SAFETY: The macOS dashboard injects its encoded gateway snapshot at this key; browsers leave it unset.
     const snapshot = (window as Window & { __OPENCLAW_NATIVE_GATEWAYS__?: NativeGatewaysSnapshot })[
@@ -444,8 +412,8 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
 
   private syncCommunityInviteState() {
     if (
-      this.context?.theme.branding.communityLinks === false ||
-      this.context?.config.current.communityInvite !== true ||
+      !this.context?.theme.branding.communityLinks ||
+      !this.context?.config.current.communityInvite ||
       !isCommunityInviteEligible()
     ) {
       this.communityInvitePresentation = "unavailable";
@@ -530,38 +498,7 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
   }
 
   hideSessionCatalog(catalogId: string): void {
-    const label =
-      this.sessionData.sessionCatalogs.find((catalog) => catalog.id === catalogId)?.label ??
-      catalogId;
-    setStoredSessionCatalogHidden(catalogId, true);
-    // Reuse the settings-search destination for the Sidebar preferences block so the
-    // toast opens the same place the rest of the app calls "Appearance > Sidebar".
-    const recovery = SETTINGS_ROUTE_TARGETS.appearanceSidebar;
-    const recoveryHref =
-      pathForRoute(recovery.routeId, this.basePath) + recovery.search + recovery.hash;
-    // The section disappears instantly and its only standing recovery lives on another
-    // page, so the outcome is announced where the action happened: undo here, plus a
-    // link that opens the re-enable block for after the toast is gone. Longer than the
-    // 6s default because that text is a recovery instruction, not an acknowledgement.
-    const message = this.ownerDocument.createDocumentFragment();
-    const recoveryLink = this.ownerDocument.createElement("a");
-    recoveryLink.className = "session-link";
-    recoveryLink.href = recoveryHref;
-    recoveryLink.textContent = t("chat.sidebar.sectionHiddenRecovery");
-    recoveryLink.addEventListener("click", (event) => {
-      if (!shouldHandleNavigationClick(event)) {
-        return;
-      }
-      event.preventDefault();
-      this.onNavigate?.(recovery.routeId, { search: recovery.search, hash: recovery.hash });
-    });
-    message.append(t("chat.sidebar.sectionHidden", { section: label }), " ", recoveryLink);
-    showToast({
-      message,
-      actionLabel: t("common.undo"),
-      onAction: () => setStoredSessionCatalogHidden(catalogId, false),
-      durationMs: 12_000,
-    });
+    hidePersonalSidebarCatalog(this, catalogId);
   }
 
   renderPinnedSidebarSession(session: () => SidebarRecentSession): JSX.Element {
@@ -767,16 +704,19 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
               </Show>
             </div>
             <div class="sidebar-shell__invite">
-              <Show when={this.communityInvitePresentation === "shown"}>
-                <SidebarCommunityInvite
-                  onDismiss={this.dismissCommunityInvite}
-                  mode={this.context.theme.resolvedMode}
-                />
+              <Show
+                when={
+                  this.communityInvitePresentation === "shown" && this.context.theme.resolvedMode
+                }
+              >
+                {(mode) => (
+                  <SidebarCommunityInvite onDismiss={this.dismissCommunityInvite} mode={mode()} />
+                )}
               </Show>
             </div>
             <div class="sidebar-shell__footer">
               <Show when={this.devGitBranch}>
-                <openclaw-tooltip prop:content={this.devGitBranch}>
+                <openclaw-tooltip prop:content={this.devGitBranch ?? undefined}>
                   <div class="sidebar-footer-branch">
                     <span class="sidebar-footer-branch__icon" aria-hidden="true">
                       <Icon name="gitBranch" />

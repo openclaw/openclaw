@@ -112,15 +112,18 @@ export function renderSidebarAgentMenuForController(
     activeId = () => chipAgent().activeId,
     agent = () => chipAgent().agent,
     agents = () => chipAgent().agents,
-    identity = () => chipAgent().identity,
     identities = () => chipAgent().identities;
+  const activeName = createMemo(() => {
+    const current = chipAgent();
+    return current.agent ? normalizeAgentLabel(current.agent, current.identity) : "";
+  });
   return (
     <SidebarAgentMenu
       {...{
         position,
         basePath: host.basePath,
         activeId: agent() ? activeId() : "",
-        activeName: agent() ? normalizeAgentLabel(agent(), identity()) : "",
+        activeName: activeName(),
         agents: agents(),
         identities: identities(),
         pinnedAgentIds: host.pinnedAgentIds,
@@ -187,6 +190,10 @@ export function renderSidebarIdentityMenuForController(
       : null;
   const context = () => host.sessionDataContext;
   const overlaySnapshot = () => context()?.overlays.snapshot;
+  const profileViewer = createMemo(() => {
+    const user = selfUser();
+    return user ? { ...user, watchedSessions: [] } : undefined;
+  });
   const updateAttentionDismissal = createMemo(() =>
     resolveUpdateAttentionDismissal({
       gatewayBootId: context()?.gateway.snapshot.hello?.server?.bootId,
@@ -222,7 +229,7 @@ export function renderSidebarIdentityMenuForController(
         basePath: host.basePath,
         gatewayVersion: host.gatewayVersion,
         updateAttentionDismissed: updateAttentionDismissed(),
-        profileViewer: selfUser() ? { ...selfUser(), watchedSessions: [] } : undefined,
+        profileViewer: profileViewer(),
         canRetryConnection: canRetryGatewayStatus(host.connectionStatus),
         themeMode: host.themeMode,
         triggerWidth: position.width,
@@ -384,8 +391,9 @@ export function renderSidebarSessionMenuForController(
           prop:onAction={(action: SessionMenuAction) => {
             const actionContext = context();
             const actionSignal = pluginActionSignal();
-            if (batchRows()) {
-              void host.sessionOrganizer.runBatchSessionAction(action, batchRows(), allUnread());
+            const batch = batchRows();
+            if (batch) {
+              void host.sessionOrganizer.runBatchSessionAction(action, batch, allUnread());
               return;
             }
             switch (action.kind) {

@@ -99,7 +99,7 @@ export function renderSidebarOutboxItem(params: {
             href={view().target.href}
             aria-label={t("attention.outbox.review")}
             data-issue-row-focus
-            onClick={(event: MouseEvent) => {
+            onClick={(event) => {
               if (!shouldHandleNavigationClick(event)) {
                 return;
               }

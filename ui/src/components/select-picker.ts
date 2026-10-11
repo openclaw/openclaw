@@ -660,3 +660,13 @@ export function renderPicker<Option extends PickerOption>(params: PickerParams<O
     .params=${params}
   ></openclaw-select-picker>`;
 }
+
+declare module "@solidjs/web" {
+  namespace JSX {
+    interface IntrinsicElements {
+      "openclaw-select-picker": HTMLAttributes<SelectPicker> & {
+        "prop:params": SelectPicker["params"];
+      };
+    }
+  }
+}

@@ -17,12 +17,13 @@ import { renderHoverMarquee } from "../lib/solid/hover-marquee.tsx";
 import {
   formatSidebarTimestamp,
   normalizeCatalogTimestamp,
+  type CatalogSessionMenuRequest,
 } from "./app-sidebar-session-catalogs.ts";
 import type { SessionCatalogGroupsParams } from "./app-sidebar-session-render-types.ts";
 import { Icon } from "./solid/icon.tsx";
 import {
-  renderSessionGlyph,
-  renderSessionRowBadges,
+  SessionGlyph,
+  SessionRowBadges,
   sessionRunVisibility,
 } from "./solid/session-presentation.tsx";
 const CATALOG_CONTROL_SELECTORS = [
@@ -124,7 +125,7 @@ export function renderCatalogSessionRow(
   );
   const href = createMemo(() => target().href),
     navigation = createMemo(() => target().options);
-  const catalogMenu = createMemo(() => ({
+  const catalogMenu = createMemo<CatalogSessionMenuRequest>(() => ({
     key: catalogKey(),
     agentId: params.newSessionAgentId,
     routeId,
@@ -208,29 +209,19 @@ export function renderCatalogSessionRow(
         }}
       >
         <span class="sidebar-session-indicator">
-          {running()
-            ? renderSessionGlyph({
-                get content() {
-                  return undefined;
-                },
-                get running() {
-                  return running();
-                },
-                get runVisibility() {
-                  return sessionRunVisibility();
-                },
-              })
-            : undefined}
+          {running() ? (
+            <SessionGlyph
+              content={undefined}
+              running={running()}
+              runVisibility={sessionRunVisibility()}
+            />
+          ) : undefined}
         </span>
         <span class="sidebar-recent-session__text">
           <span class="sidebar-recent-session__title-row"> {marqueeLabel} </span>
           <span class="sidebar-recent-session__details">
             <span class="sidebar-recent-session__details-endcap">
-              {renderSessionRowBadges({
-                get pullRequest() {
-                  return readSession().pullRequest;
-                },
-              })}
+              {<SessionRowBadges pullRequest={readSession().pullRequest} />}
             </span>
           </span>
         </span>
@@ -244,7 +235,7 @@ export function renderCatalogSessionRow(
             title={t("chat.sidebar.openSessionMenu")}
             aria-label={t("chat.sidebar.openSessionMenu")}
             aria-haspopup="menu"
-            aria-expanded={String(menuOpen())}
+            aria-expanded={menuOpen() ? "true" : "false"}
             onClick={(event) => {
               event.stopPropagation();
               const trigger = event.currentTarget;

@@ -15,7 +15,7 @@ import {
   renderSessionLeadingState,
   sessionRunVisibility,
   renderTeamSessionSlots,
-  renderSessionRowBadges,
+  SessionRowBadges,
 } from "./solid/session-presentation.tsx";
 import { EMPTY_VIEWER_IDENTITIES } from "./viewer-facepile.ts";
 import "./elapsed-time.ts";
@@ -30,6 +30,12 @@ export function renderSidebarSessionIndicators(
 ) {
   const team = createMemo(() => host.sidebarAgentsMode === "roster");
   const ownAttention = createMemo(() => readSession().ownAttention ?? readSession().attention);
+  const hasApproval = createMemo(() => {
+    const attention = ownAttention();
+    return attention.kind === "question"
+      ? attention.requests.some((request) => request.kind === "approval")
+      : !team() && attention.kind === "approval";
+  });
   const childrenExpanded = createMemo(() => host.isSessionChildrenExpanded(readSession()));
   const initialPullRequest = createMemo(() => readSession().pullRequest ?? display?.pullRequest);
   const pullRequest = createMemo(() => {
@@ -82,14 +88,16 @@ export function renderSidebarSessionIndicators(
   // archive attribution visible; the participant count includes unshown faces.
   const selfUser = createMemo(() => host.sessionDataContext?.gateway.snapshot.selfUser);
   const selfProfileId = createMemo(() => selfUser()?.identity?.id ?? selfUser()?.id);
-  const ownerRepeatedByFilter = createMemo(
-    () =>
+  const ownerRepeatedByFilter = createMemo(() => {
+    const actor = ownerActor();
+    return (
       ownerAttribution() !== "archived" &&
-      ownerActor()?.identity?.type === "profile" &&
-      ownerActor().identity.id === selfProfileId() &&
-      (host.sessionInvolvingMeFilterActive || host.sessionOwnerFilterId === ownerActor().id) &&
-      (readSession().participantCount ?? readSession().participants?.length ?? 0) === 0,
-  );
+      actor?.identity?.type === "profile" &&
+      actor.identity.id === selfProfileId() &&
+      (host.sessionInvolvingMeFilterActive || host.sessionOwnerFilterId === actor.id) &&
+      (readSession().participantCount ?? readSession().participants?.length ?? 0) === 0
+    );
+  });
   const leadingOwner = createMemo(() => {
     const ownerRepeatedByFilterValue = ownerRepeatedByFilter();
     const teamValue = team();
@@ -110,7 +118,7 @@ export function renderSidebarSessionIndicators(
     }),
   );
   const runVisibility = createMemo(() => sessionRunVisibility());
-  const teamSummary = createMemo(
+  const teamSummary = createMemo<Parameters<typeof renderTeamSessionSlots>>(
     () =>
       headerSummary ?? [
         [readSession()],
@@ -195,20 +203,21 @@ export function renderSidebarSessionIndicators(
       ) : undefined}
     </>
   );
-  const trail = createMemo(() =>
-    hasTrail() ? (
+  const trail = createMemo(() => {
+    const currentSession = readSession();
+    return hasTrail() ? (
       <span class="session-row-trail" id={metaId()}>
         {snoozed() ? (
           t("sessionsView.snoozeWakes", {
             time: formatSessionSnoozeWakeTime(readSession().snoozedUntil!),
           })
-        ) : readSession().runtimeMs != null ? (
-          readSession().hasActiveRun ? (
+        ) : currentSession.runtimeMs != null ? (
+          currentSession.hasActiveRun ? (
             <openclaw-elapsed-time
-              prop:startMs={readSession().runtimeSampledAt! - readSession().runtimeMs}
+              prop:startMs={currentSession.runtimeSampledAt! - currentSession.runtimeMs}
             />
           ) : (
-            (formatDurationCompact(readSession().runtimeMs) ?? "0ms")
+            (formatDurationCompact(currentSession.runtimeMs) ?? "0ms")
           )
         ) : (
           <openclaw-elapsed-time
@@ -217,8 +226,8 @@ export function renderSidebarSessionIndicators(
           />
         )}
       </span>
-    ) : undefined,
-  );
+    ) : undefined;
+  });
   return {
     get running() {
       return running();
@@ -278,46 +287,22 @@ export function renderSidebarSessionIndicators(
               <Icon name="clock" />
             </span>
           ) : undefined}
-          {renderSessionRowBadges({
-            get isChild() {
-              return readSession().isChild;
-            },
-            get incognito() {
-              return readSession().incognito;
-            },
-            get placementState() {
-              return readSession().placementState;
-            },
-            get placementProviderId() {
-              return readSession().placementProviderId;
-            },
-            get placementProfileId() {
-              return readSession().placementProfileId;
-            },
-            get placementMachine() {
-              return readSession().placementMachine;
-            },
-            get diskSpaceStatus() {
-              return readSession().diskSpaceStatus;
-            },
-            get workspaceConflictCount() {
-              return readSession().workspaceConflictCount;
-            },
-            get outboxAttentionCount() {
-              return readSession().outboxAttentionCount;
-            },
-            get hasComposerDraft() {
-              return readSession().hasComposerDraft === true;
-            },
-            get pullRequest() {
-              return pullRequest();
-            },
-            get hasApproval() {
-              return ownAttention().kind === "question"
-                ? ownAttention().requests.some((request) => request.kind === "approval")
-                : !team() && ownAttention().kind === "approval";
-            },
-          })}
+          {
+            <SessionRowBadges
+              isChild={readSession().isChild}
+              incognito={readSession().incognito}
+              placementState={readSession().placementState}
+              placementProviderId={readSession().placementProviderId}
+              placementProfileId={readSession().placementProfileId}
+              placementMachine={readSession().placementMachine}
+              diskSpaceStatus={readSession().diskSpaceStatus}
+              workspaceConflictCount={readSession().workspaceConflictCount}
+              outboxAttentionCount={readSession().outboxAttentionCount}
+              hasComposerDraft={readSession().hasComposerDraft === true}
+              pullRequest={pullRequest()}
+              hasApproval={hasApproval()}
+            />
+          }
           {team() ? trail() : undefined}{" "}
           {team() ? renderTeamSessionSlots(...teamSummary()) : undefined}
           {!team() && stateDescription() ? (

@@ -194,6 +194,7 @@ function inboxEntryIdentity(
     case "update":
       return entry.type;
   }
+  return entry satisfies never;
 }
 
 export function SidebarAttentionPanel(props: SidebarAttentionPanelParams) {
@@ -361,7 +362,7 @@ export function SidebarAttentionPanel(props: SidebarAttentionPanelParams) {
                     aria-controls="sidebar-issues-tabpanel"
                     class="hub-tab"
                     prop:active={props.selectedTab === tab}
-                    prop:tabIndex={props.selectedTab === tab ? 0 : -1}
+                    tabindex={props.selectedTab === tab ? 0 : -1}
                     aria-selected={props.selectedTab === tab ? "true" : "false"}
                     onClick={(event) => {
                       if (event.detail > 0 || event.isTrusted) {
@@ -389,7 +390,7 @@ export function SidebarAttentionPanel(props: SidebarAttentionPanelParams) {
               class="sidebar-issues-panel__list"
               role="tabpanel"
               aria-labelledby={`sidebar-issues-tab-${props.selectedTab}`}
-              tabIndex={0}
+              tabindex={0}
               onScroll={() => props.onScroll()}
             >
               <Show when={showMentionStatus()}>

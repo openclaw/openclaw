@@ -26,41 +26,6 @@ import {
 } from "../../lib/sessions/session-menu-navigation.ts";
 import { pluginSessionMenuActions } from "../../plugins/control-ui-actions.ts";
 
-type SessionMenuElement = HTMLElementTagNameMap["openclaw-session-menu"];
-type SessionMenuProperties = Pick<
-  SessionMenuElement,
-  | "session"
-  | "compact"
-  | "anchor"
-  | "trigger"
-  | "disabled"
-  | "navigationAllowed"
-  | "copyMarkdownAllowed"
-  | "splitAllowed"
-  | "actionDisabledReasons"
-  | "forkDisabled"
-  | "forkFromLastCompleted"
-  | "archiveAllowed"
-  | "deleteAllowed"
-  | "cloudWorkerStopAllowed"
-  | "groups"
-  | "currentOwner"
-  | "work"
-  | "pluginActions"
-  | "onClose"
-  | "onAction"
->;
-
-declare module "@solidjs/web" {
-  namespace JSX {
-    interface IntrinsicElements {
-      "openclaw-session-menu": HTMLAttributes<SessionMenuElement> & {
-        [Key in keyof SessionMenuProperties as `prop:${Key}`]: SessionMenuProperties[Key];
-      };
-    }
-  }
-}
-
 type SessionsPageMenuAction = Exclude<SessionMenuAction, { kind: "snooze" | "wake" }>;
 
 export type SessionsPageMenuProps = {

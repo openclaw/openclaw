@@ -36,13 +36,13 @@ function SidebarBuildChipContent(props: SidebarBuildChipProps, host: HTMLElement
         <a
           class="sidebar-footer-build"
           href={pathForRoute("about", props.basePath)}
-          role={props.variant === "identity" ? "menuitem" : null}
+          role={props.variant === "identity" ? "menuitem" : undefined}
           aria-label={
             props.updateAttentionDismissed
               ? `${t("aboutPage.artifactDetails")}. ${t("updates.sidebar.availableTitle")}`
               : t("aboutPage.artifactDetails")
           }
-          onClick={(event: MouseEvent) => {
+          onClick={(event) => {
             if (!shouldHandleNavigationClick(event)) {
               return;
             }
@@ -82,11 +82,7 @@ export const SidebarBuildChip = defineSolidBridge<SidebarBuildChipProps>(
 
 const COPY_FEEDBACK_MS = 1_500;
 
-async function copyBuildCommit(event: Event, commit: string, idleLabel: string) {
-  const button = event.currentTarget;
-  if (!(button instanceof HTMLButtonElement)) {
-    return;
-  }
+async function copyBuildCommit(button: HTMLButtonElement, commit: string, idleLabel: string) {
   const copied = await copyToClipboard(commit);
   button.dataset.copied = copied ? "1" : "0";
   button.setAttribute("aria-label", t(copied ? "aboutPage.copiedCommit" : "common.copyFailed"));
@@ -133,7 +129,7 @@ function renderSidebarServerDetails(
                 type="button"
                 class="sidebar-build-hover-card__copy"
                 aria-label={copyLabel}
-                onClick={(event: Event) => void copyBuildCommit(event, commit, copyLabel)}
+                onClick={(event) => void copyBuildCommit(event.currentTarget, commit, copyLabel)}
               >
                 <span class="sidebar-build-hover-card__copy-idle" aria-hidden="true">
                   <Icon name="copy" />

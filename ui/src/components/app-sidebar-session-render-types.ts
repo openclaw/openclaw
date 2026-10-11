@@ -1,4 +1,4 @@
-import type { JSX } from "@solidjs/web";
+import type { JSX as SolidJSX } from "@solidjs/web";
 import type { SessionObserverDigest } from "../../../packages/gateway-protocol/src/schema/sessions.js";
 import type { GatewaySessionRow } from "../api/types.ts";
 import type { NavigationRouteId } from "../app-navigation.ts";
@@ -11,7 +11,12 @@ import type {
 import type { CatalogSessionKey } from "../lib/sessions/catalog-key.ts";
 import type { CatalogProjectGrouping } from "../lib/sessions/catalog-project-grouping.ts";
 import type { SidebarSessionsGrouping } from "../lib/sessions/grouping.ts";
+import type { SolidBridgeElement } from "../lit/solid-bridge.ts";
 import type { NewSessionTarget } from "../pages/new-session/location.ts";
+import type {
+  ControlUiPluginView,
+  ControlUiPluginContributions,
+} from "../plugins/control-ui-view.runtime.ts";
 import type {
   CatalogBackingSessionDisplay,
   CatalogSessionMenuRequest,
@@ -27,10 +32,21 @@ import type {
   SidebarToolActivity,
   SidebarSessionStatusFilter,
 } from "./app-sidebar-session-types.ts";
+import type { CatalogSessionMenu } from "./catalog-session-menu.ts";
+import type { ApprovalCountdown } from "./exec-approval-card.ts";
+import "./mcp-app-catalog.tsx";
+import "./menu-surface.ts";
+import type { RelativeTime } from "./relative-time.ts";
 import type { SessionDataController } from "./session-data-controller.ts";
 import type { SessionOrganizerController } from "./session-organizer-controller.ts";
 import type { SessionOwnerOption } from "./session-owner-chip.ts";
 import type { SidebarMenusController } from "./sidebar-menus-controller.tsx";
+import type { AgentAvatarProps } from "./solid/agent-avatar.tsx";
+import type { ChannelAvatarProps } from "./solid/channel-avatar.tsx";
+import type { SessionOwnerChipProps } from "./solid/session-owner-chip.tsx";
+import type { ViewerAvatarProps, ViewerFacepileProps } from "./solid/viewer-facepile.tsx";
+import type { ThemeModeToggle } from "./theme-mode-toggle.ts";
+import "./tooltip.ts";
 
 export interface SessionListHost {
   readonly sidebarSnapshot?: import("./sidebar-snapshot-model.ts").SidebarSnapshotModel | null;
@@ -154,7 +170,7 @@ export type SessionCatalogGroupsParams = {
   renderLiveRow: (
     row: () => GatewaySessionRow,
     display: CatalogBackingSessionDisplay,
-  ) => JSX.Element;
+  ) => SolidJSX.Element;
   onToggleSection: (sectionId: string) => void;
   draggingSectionId: string | null;
   sectionDropTarget: {
@@ -217,3 +233,52 @@ export type PersonHeaders = {
   presence: ReadonlyMap<string, PresenceActivity>;
   selfProfileId?: string;
 };
+
+type BridgeAttributes<Props> = SolidJSX.HTMLAttributes<SolidBridgeElement<Props>> & {
+  [Key in keyof Props as `prop:${Key & string}`]?: Props[Key];
+};
+
+// These contracts are UI-local; public SDK declarations must not import renderer modules.
+declare module "@solidjs/web" {
+  namespace JSX {
+    interface IntrinsicElements {
+      "openclaw-agent-avatar": BridgeAttributes<AgentAvatarProps>;
+      "openclaw-approval-countdown": HTMLAttributes<ApprovalCountdown> &
+        Properties<ApprovalCountdown>;
+      "openclaw-catalog-session-menu": HTMLAttributes<CatalogSessionMenu> &
+        Properties<CatalogSessionMenu> & {
+          "prop:onAction"?: CatalogSessionMenu["onAction"];
+          "prop:onClose"?: CatalogSessionMenu["onClose"];
+        };
+      "openclaw-channel-avatar": BridgeAttributes<ChannelAvatarProps>;
+      "openclaw-mcp-app-catalog": HTMLAttributes<
+        HTMLElementTagNameMap["openclaw-mcp-app-catalog"]
+      > &
+        Properties<HTMLElementTagNameMap["openclaw-mcp-app-catalog"]> &
+        Partial<Pick<HTMLElementTagNameMap["openclaw-mcp-app-catalog"], "surface">>;
+      "openclaw-menu-surface": HTMLAttributes<HTMLElementTagNameMap["openclaw-menu-surface"]> &
+        Properties<HTMLElementTagNameMap["openclaw-menu-surface"]>;
+      "openclaw-plugin-contributions": HTMLAttributes<ControlUiPluginContributions> &
+        Properties<ControlUiPluginContributions> & {
+          "prop:agentId"?: ControlUiPluginContributions["agentId"];
+          "prop:navigationMenus"?: ControlUiPluginContributions["navigationMenus"];
+        };
+      "openclaw-plugin-view": HTMLAttributes<ControlUiPluginView> &
+        Properties<ControlUiPluginView> & {
+          "prop:props"?: ControlUiPluginView["props"];
+          "prop:defaultView"?: ControlUiPluginView["defaultView"];
+          "prop:mountDefaultView"?: ControlUiPluginView["mountDefaultView"];
+          "prop:replacementCompanion"?: ControlUiPluginView["replacementCompanion"];
+          "prop:defaultHost"?: ControlUiPluginView["defaultHost"];
+        };
+      "openclaw-relative-time": HTMLAttributes<RelativeTime> & Properties<RelativeTime>;
+      "openclaw-session-owner-chip": BridgeAttributes<SessionOwnerChipProps> &
+        Partial<Pick<SessionOwnerChipProps, "size" | "attribution">>;
+      "openclaw-theme-mode-toggle": HTMLAttributes<ThemeModeToggle> & Properties<ThemeModeToggle>;
+      "openclaw-viewer-avatar": BridgeAttributes<ViewerAvatarProps> &
+        Pick<ViewerAvatarProps, "variant">;
+      "openclaw-viewer-facepile": BridgeAttributes<ViewerFacepileProps> &
+        Pick<ViewerAvatarProps, "variant">;
+    }
+  }
+}

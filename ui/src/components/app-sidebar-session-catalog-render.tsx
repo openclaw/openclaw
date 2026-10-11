@@ -186,13 +186,14 @@ function renderCatalogHostGroup(
                   ? `catalog-project:${readCatalog().id}:${readHost().hostId}:${group().legacySectionKey}`
                   : null,
               );
-              const collapsedSectionId = createMemo(() =>
-                params.collapsedSections.has(sectionId)
+              const collapsedSectionId = createMemo(() => {
+                const legacyId = legacySectionId();
+                return params.collapsedSections.has(sectionId)
                   ? sectionId
-                  : legacySectionId() && params.collapsedSections.has(legacySectionId())
-                    ? legacySectionId()
-                    : null,
-              );
+                  : legacyId && params.collapsedSections.has(legacyId)
+                    ? legacyId
+                    : null;
+              });
               const collapsed = createMemo(() => collapsedSectionId() !== null);
               return (
                 <div class="sidebar-session-catalog-project" role="listitem">
@@ -200,7 +201,7 @@ function renderCatalogHostGroup(
                     type="button"
                     class="sidebar-session-catalog-project__head"
                     data-session-catalog-project={group().key}
-                    aria-expanded={String(!collapsed())}
+                    aria-expanded={collapsed() ? "false" : "true"}
                     title={group().title}
                     onClick={() => params.onToggleSection(collapsedSectionId() ?? sectionId)}
                   >
@@ -338,7 +339,8 @@ function renderCatalogGroup(
         get reorder() {
           return {
             label: readCatalog().label,
-            onMove: (target, position) => params.onReorderSection(sectionId, target, position),
+            onMove: (target: string, position: "before" | "after") =>
+              params.onReorderSection(sectionId, target, position),
           };
         },
         onContextMenu: (event) => {
@@ -357,7 +359,7 @@ function renderCatalogGroup(
               <button
                 type="button"
                 class="sidebar-session-group-toggle"
-                aria-expanded={String(!collapsed())}
+                aria-expanded={collapsed() ? "false" : "true"}
                 aria-label={
                   hasError() ? `${readCatalog().label}: ${errorHelp()}` : readCatalog().label
                 }
@@ -388,7 +390,7 @@ function renderCatalogGroup(
                 title={t("chat.sidebar.catalogViewOptions")}
                 aria-label={t("chat.sidebar.catalogViewOptions")}
                 aria-haspopup="menu"
-                aria-expanded={String(params.viewMenuOpenCatalogId === readCatalog().id)}
+                aria-expanded={params.viewMenuOpenCatalogId === readCatalog().id ? "true" : "false"}
                 onClick={(event) => {
                   event.stopPropagation();
                   params.onOpenViewMenu(readCatalog().id, event.currentTarget);
@@ -440,7 +442,7 @@ function renderCatalogGroup(
               class="sidebar-session-catalog-load-more"
               data-session-catalog-load-more={readCatalog().id}
               disabled={loadingMore()}
-              aria-busy={String(loadingMore())}
+              aria-busy={loadingMore() ? "true" : "false"}
               onClick={() => params.onLoadMore(readCatalog().id)}
             >
               {t("chat.selectors.loadMoreSessions")}

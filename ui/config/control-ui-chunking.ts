@@ -66,9 +66,12 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "ui/src/i18n/locales/en-login.ts":
     case "ui/src/lib/gateway-secret-shape.ts":
       return "login-runtime";
-    case "ui/src/components/sidebar-update-card.ts":
+    case "ui/src/components/sidebar-update-card.tsx":
     case "ui/src/styles/sidebar-update-card.css":
       return "sidebar-update-runtime";
+    case "ui/src/pages/cron/cron-page.tsx":
+      // Keep the optional page out of shared boot discovery after regrouping.
+      return "cron-page";
     case "ui/src/pages/chat/session-snapshot-database.ts":
       // Warm boot reads while the Gateway connects; the chat boot group made it wait for the whole route.
       return "session-snapshot-database";
@@ -164,10 +167,9 @@ export function createControlUiCodeSplitting(options: { includeBootGroups?: bool
                 // them (and therefore other routes) into its eagerly imported chunk.
                 priority: 8 - index,
                 includeDependenciesRecursively: true,
-                // Shared boot needs a smaller partition cap because its dense chat
-                // modules can exceed the compressed-size budget after regrouping.
+                // Keep shared chunks together without exceeding the compressed-size budget.
                 minSize: 16 * 1024,
-                maxSize: (route === "shared" ? 1344 : 1408) * 1024,
+                maxSize: 1408 * 1024,
               };
             }),
             ...(["shared", "new", "chat"] as const).map((route) => {

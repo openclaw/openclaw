@@ -56,7 +56,7 @@ function SessionAttentionIcon(props: { attention: SidebarSessionAttention }) {
           role={label() ? "img" : undefined}
           aria-label={label()}
           aria-hidden={label() ? undefined : "true"}
-          tabIndex={label() ? 0 : undefined}
+          tabindex={label() ? 0 : undefined}
           onFocusIn={(event) => {
             if (label()) {
               event.stopPropagation();
@@ -99,7 +99,7 @@ type SessionGlyphOptions = {
   ring?: SessionGlyphRing;
   runVisibility?: SessionRunVisibility;
 };
-function SessionGlyph(props: SessionGlyphOptions) {
+export function SessionGlyph(props: SessionGlyphOptions) {
   const label = () =>
     props.runningLabel ?? t(props.queued ? "sessionsView.statusQueued" : "sessionsView.activeRun");
   const glyph = () => (
@@ -150,9 +150,7 @@ function SessionGlyph(props: SessionGlyphOptions) {
     </Show>
   );
 }
-export function renderSessionGlyph(options: SessionGlyphOptions): JSX.Element {
-  return <SessionGlyph {...options} />;
-}
+
 export function renderSessionUnreadBadge(): JSX.Element {
   return (
     <span
@@ -163,7 +161,7 @@ export function renderSessionUnreadBadge(): JSX.Element {
   );
 }
 
-function SessionRowBadges(props: SessionRowBadgesParams) {
+export function SessionRowBadges(props: SessionRowBadgesParams) {
   const badges = createMemo(() => resolveSessionRowBadges(props, t));
   return (
     <Show when={badges().length}>
@@ -196,39 +194,30 @@ function SessionRowBadges(props: SessionRowBadgesParams) {
     </Show>
   );
 }
-export function renderSessionRowBadges(params: SessionRowBadgesParams): JSX.Element {
-  return <SessionRowBadges {...params} />;
-}
 
 type SidebarSessionSubtitle = ReturnType<typeof resolveSidebarSessionSubtitle>;
-function SidebarSessionSubtitle(props: { value: SidebarSessionSubtitle }) {
+export function SidebarSessionSubtitle(props: SidebarSessionSubtitle) {
   const label = () =>
-    props.value.toolName ? `${t("chat.toolCards.tool")}: ${props.value.toolName}` : undefined;
+    props.toolName ? `${t("chat.toolCards.tool")}: ${props.toolName}` : undefined;
   return (
-    <Show when={props.value.subtitle}>
-      <Show when={props.value.toolName}>
+    <Show when={props.subtitle}>
+      <Show when={props.toolName}>
         <openclaw-tooltip prop:content={label()} prop:describe={false}>
           <span class="sidebar-session-tool" role="img" aria-label={label()}>
-            <Icon name={resolveToolDisplayIcon(props.value.toolName ?? "")} />
+            <Icon name={resolveToolDisplayIcon(props.toolName ?? "")} />
           </span>
         </openclaw-tooltip>
       </Show>
       <Show
-        when={props.value.narration}
-        keyed
-        fallback={<span class="sidebar-recent-session__subtitle">{props.value.subtitle}</span>}
+        when={props.narration}
+        fallback={<span class="sidebar-recent-session__subtitle">{props.subtitle}</span>}
       >
-        {() => (
-          <span class="sidebar-recent-session__subtitle sidebar-recent-session__subtitle--narration">
-            {props.value.subtitle}
-          </span>
-        )}
+        <span class="sidebar-recent-session__subtitle sidebar-recent-session__subtitle--narration">
+          {props.subtitle}
+        </span>
       </Show>
     </Show>
   );
-}
-export function renderSidebarSessionSubtitle(value: SidebarSessionSubtitle): JSX.Element {
-  return <SidebarSessionSubtitle value={value} />;
 }
 
 export function renderSessionOwnerChip(
@@ -371,12 +360,12 @@ export function renderTeamSessionSlots(
         <Icon name="globe" />
       </span>
     ) : active ? (
-      renderSessionGlyph({
-        content: undefined,
-        running: true,
-        queued: active === queued,
-        runVisibility,
-      })
+      <SessionGlyph
+        content={undefined}
+        running={true}
+        queued={active === queued}
+        runVisibility={runVisibility}
+      />
     ) : rows.length === 1 && rows[0]?.isChild ? (
       renderSessionIdleState(rows[0])
     ) : undefined;
@@ -468,21 +457,26 @@ export function renderSessionLeadingState(
   if (iconContent !== undefined) {
     return {
       running,
-      leadingIndicator: renderSessionGlyph({
-        content: iconContent,
-        ...runState,
-        badge:
-          session.unread && !running && !trailingState ? renderSessionUnreadBadge() : undefined,
-      }),
+      leadingIndicator: (
+        <SessionGlyph
+          content={iconContent}
+          {...runState}
+          badge={
+            session.unread && !running && !trailingState ? renderSessionUnreadBadge() : undefined
+          }
+        />
+      ),
     };
   }
   const child = session.isChild && !trailingState;
   if (child && !session.channelAvatarUrl) {
     return {
       running,
-      leadingIndicator: running
-        ? renderSessionGlyph({ content: undefined, ...runState })
-        : renderSessionIdleState(session),
+      leadingIndicator: running ? (
+        <SessionGlyph content={undefined} {...runState} />
+      ) : (
+        renderSessionIdleState(session)
+      ),
     };
   }
   const ownerChip =
@@ -499,21 +493,24 @@ export function renderSessionLeadingState(
   if (session.channelAvatarUrl) {
     return {
       running,
-      leadingIndicator: renderSessionGlyph({
-        content: (
-          <ChannelAvatarContent
-            routeUrl={session.channelAvatarUrl}
-            authTokens={avatarAuth?.authTokens ?? []}
-            authReady={avatarAuth?.authReady ?? false}
-          >
-            {ownerChip}
-          </ChannelAvatarContent>
-        ),
-        ...runState,
-        badge:
-          session.unread && !running && !trailingState ? renderSessionUnreadBadge() : undefined,
-        circular: true,
-      }),
+      leadingIndicator: (
+        <SessionGlyph
+          content={
+            <ChannelAvatarContent
+              routeUrl={session.channelAvatarUrl}
+              authTokens={avatarAuth?.authTokens ?? []}
+              authReady={avatarAuth?.authReady ?? false}
+            >
+              {ownerChip}
+            </ChannelAvatarContent>
+          }
+          {...runState}
+          badge={
+            session.unread && !running && !trailingState ? renderSessionUnreadBadge() : undefined
+          }
+          circular={true}
+        />
+      ),
     };
   }
   if (ownerChip) {
@@ -533,23 +530,26 @@ export function renderSessionLeadingState(
     renderedOwnerIdentities.set(session, renderedIdentities);
     return {
       running,
-      leadingIndicator: renderSessionGlyph({
-        content: ownerChip,
-        ...runState,
-        badge:
-          session.unread && !running && !trailingState ? renderSessionUnreadBadge() : undefined,
-        circular: true,
-        ring: stackedParticipants > 0 ? "pair" : "circle",
-      }),
+      leadingIndicator: (
+        <SessionGlyph
+          content={ownerChip}
+          {...runState}
+          badge={
+            session.unread && !running && !trailingState ? renderSessionUnreadBadge() : undefined
+          }
+          circular={true}
+          ring={stackedParticipants > 0 ? "pair" : "circle"}
+        />
+      ),
       renderedIdentities,
     };
   }
   return {
     running,
-    leadingIndicator: runState.running
-      ? renderSessionGlyph({ content: undefined, ...runState })
-      : session.unread && !trailingState
-        ? renderSessionIdleState(session)
-        : undefined,
+    leadingIndicator: runState.running ? (
+      <SessionGlyph content={undefined} {...runState} />
+    ) : session.unread && !trailingState ? (
+      renderSessionIdleState(session)
+    ) : undefined,
   };
 }

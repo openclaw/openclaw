@@ -37,22 +37,16 @@ export function renderSessionSection(params: {
       ? personHeadersValue?.presence.get(personIdentityValue.id)
       : undefined;
   });
-  const personCard = createMemo(
-    () =>
-      personOwner() &&
-      personIdentity()?.type === "profile" &&
-      personIdentity().id !== personHeaders()?.selfProfileId,
-  );
+  const personCard = createMemo(() => {
+    const owner = personOwner();
+    const identity = owner?.identity;
+    return owner && identity?.type === "profile" && identity.id !== personHeaders()?.selfProfileId
+      ? { id: owner.id, identity }
+      : undefined;
+  });
   const personCardKey = createMemo(() => {
     const personCardValue = personCard();
-    const personOwnerValue = personOwner();
-    const personIdentityValue = personIdentity();
-    return personCardValue
-      ? presenceUserKey({
-          id: personOwnerValue.id,
-          identity: personIdentityValue,
-        })
-      : undefined;
+    return personCardValue ? presenceUserKey(personCardValue) : undefined;
   });
   const presenceLabel = createMemo(() => {
     const presenceValue = presence();
@@ -164,15 +158,16 @@ export function renderSessionSection(params: {
       </span>
     </span>
   );
-  const ownerAvatar = createMemo(() =>
-    personOwner() ? (
+  const ownerAvatar = createMemo(() => {
+    const owner = personOwner();
+    return owner ? (
       <span class="sidebar-session-group-toggle__person">
         <openclaw-viewer-avatar
-          prop:identity={personOwner().identity}
+          prop:identity={owner.identity}
           prop:user={{
-            id: personOwner().id,
-            name: personOwner().label,
-            avatarUrl: personOwner().avatarUrl,
+            id: owner.id,
+            name: owner.label,
+            avatarUrl: owner.avatarUrl,
             watchedSessions: [],
           }}
           prop:markAsViewer={false}
@@ -191,8 +186,8 @@ export function renderSessionSection(params: {
           />
         ) : undefined}
       </span>
-    ) : undefined,
-  );
+    ) : undefined;
+  });
   const labelText = createMemo(() =>
     renderHoverMarquee(label(), "sidebar-recent-sessions__label-text"),
   );
@@ -272,16 +267,17 @@ export function renderSessionSection(params: {
             get reorder() {
               return {
                 label: label(),
-                onMove: (target, position) =>
+                onMove: (target: string, position: "before" | "after") =>
                   host().sessionOrganizer.reorderSidebarSection(section().id, target, position),
               };
             },
             get onContextMenu() {
-              return group()
+              const currentGroup = group();
+              return currentGroup
                 ? (event: MouseEvent) => {
                     event.preventDefault();
                     host().sidebarMenus.openSessionGroupMenu(
-                      group(),
+                      currentGroup,
                       event.clientX,
                       event.clientY,
                       null,
@@ -297,7 +293,7 @@ export function renderSessionSection(params: {
                       <button
                         type="button"
                         class="sidebar-session-group-toggle sidebar-session-group-toggle--lead"
-                        aria-expanded={String(!collapsed())}
+                        aria-expanded={collapsed() ? "false" : "true"}
                         aria-label={label()}
                         onClick={() => host().toggleSection(section().id)}
                       >
@@ -323,7 +319,7 @@ export function renderSessionSection(params: {
                     <button
                       type="button"
                       class="sidebar-session-group-toggle"
-                      aria-expanded={String(!collapsed())}
+                      aria-expanded={collapsed() ? "false" : "true"}
                       aria-label={label()}
                       title={section().project?.path ?? undefined}
                       onClick={() => host().toggleSection(section().id)}
@@ -363,35 +359,39 @@ export function renderSessionSection(params: {
                         onOpen: (agentId, target) => host().requestOpenNewSession(agentId, target),
                       })
                     : undefined}
-                  {group() ? (
-                    <button
-                      type="button"
-                      class="sidebar-session-group-actions"
-                      title={t("sessionsView.groupMenu", {
-                        group: group(),
-                      })}
-                      aria-label={t("sessionsView.groupMenu", {
-                        group: group(),
-                      })}
-                      aria-haspopup="menu"
-                      aria-expanded={String(
-                        host().sidebarMenus.sessionGroupMenu?.group === group(),
-                      )}
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        const trigger = event.currentTarget;
-                        const rect = trigger.getBoundingClientRect();
-                        host().sidebarMenus.openSessionGroupMenu(
-                          group(),
-                          rect.right,
-                          rect.bottom + 4,
-                          trigger,
-                        );
-                      }}
-                    >
-                      <Icon name="moreHorizontal" />
-                    </button>
-                  ) : undefined}
+                  <Show when={group()}>
+                    {(currentGroup) => (
+                      <button
+                        type="button"
+                        class="sidebar-session-group-actions"
+                        title={t("sessionsView.groupMenu", {
+                          group: currentGroup(),
+                        })}
+                        aria-label={t("sessionsView.groupMenu", {
+                          group: currentGroup(),
+                        })}
+                        aria-haspopup="menu"
+                        aria-expanded={
+                          host().sidebarMenus.sessionGroupMenu?.group === currentGroup()
+                            ? "true"
+                            : "false"
+                        }
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          const trigger = event.currentTarget;
+                          const rect = trigger.getBoundingClientRect();
+                          host().sidebarMenus.openSessionGroupMenu(
+                            currentGroup(),
+                            rect.right,
+                            rect.bottom + 4,
+                            trigger,
+                          );
+                        }}
+                      >
+                        <Icon name="moreHorizontal" />
+                      </button>
+                    )}
+                  </Show>
                 </>
               );
             },

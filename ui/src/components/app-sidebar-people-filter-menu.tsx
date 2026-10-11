@@ -4,7 +4,7 @@ import { isMobileNavLayout } from "../app/mobile-nav-layout.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import type { SidebarMenusController } from "./sidebar-menus-controller.tsx";
 import { SidebarSessionFilterPopover } from "./sidebar-session-filter-popover.tsx";
-import { renderPicker } from "./solid/select-picker.tsx";
+import { Picker } from "./solid/select-picker.tsx";
 
 const SORT_OPTIONS = [
   { value: "presence", labelKey: "presence.filters.presence" },
@@ -39,62 +39,46 @@ export function renderSidebarPeopleFilterMenuForController(
           class="sidebar-session-sort-menu sidebar-people-filter-menu"
           anchor={controller.peopleFilterMenuTrigger}
           label={t("presence.filters.label")}
-          initialFocusSelector={"#sidebar-people-status"}
+          initialFocusSelector="#sidebar-people-status"
           onClose={controller.positionedMenuHandlers("peopleFilter").onClose}
           content={
             <>
               <div class="sidebar-session-menu-section">
-                {renderPicker({
-                  id: "sidebar-people-status",
-                  get label() {
-                    return t("sessionsView.status");
-                  },
-                  get value() {
-                    return people().statusFilter;
-                  },
-                  variant: "submenu",
-                  get sheet() {
-                    return sheet();
-                  },
-                  showOptionTooltips: false,
-                  get options() {
-                    return [
-                      { value: "all", label: t("sessionsView.all") },
-                      { value: "running", label: t("common.running") },
-                    ];
-                  },
-                  onChange: (value) => {
+                <Picker
+                  id="sidebar-people-status"
+                  label={t("sessionsView.status")}
+                  value={people().statusFilter}
+                  variant="submenu"
+                  sheet={sheet()}
+                  showOptionTooltips={false}
+                  options={[
+                    { value: "all", label: t("sessionsView.all") },
+                    { value: "running", label: t("common.running") },
+                  ]}
+                  onChange={(value) => {
                     if (value === "all" || value === "running") {
                       commit(() => people().setStatusFilter(value));
                     }
-                  },
-                })}
-                {renderPicker({
-                  id: "sidebar-people-sort",
-                  get label() {
-                    return t("chat.sidebar.sortBy");
-                  },
-                  get value() {
-                    return people().sortMode;
-                  },
-                  variant: "submenu",
-                  get sheet() {
-                    return sheet();
-                  },
-                  showOptionTooltips: false,
-                  get options() {
-                    return SORT_OPTIONS.map((option) => ({
-                      value: option.value,
-                      label: t(option.labelKey),
-                    }));
-                  },
-                  onChange: (value) => {
+                  }}
+                />
+                <Picker
+                  id="sidebar-people-sort"
+                  label={t("chat.sidebar.sortBy")}
+                  value={people().sortMode}
+                  variant="submenu"
+                  sheet={sheet()}
+                  showOptionTooltips={false}
+                  options={SORT_OPTIONS.map((option) => ({
+                    value: option.value,
+                    label: t(option.labelKey),
+                  }))}
+                  onChange={(value) => {
                     const option = SORT_OPTIONS.find((entry) => entry.value === value);
                     if (option) {
                       commit(() => people().setSortMode(option.value));
                     }
-                  },
-                })}
+                  }}
+                />
               </div>
               {changed() ? (
                 <footer class="sidebar-session-menu-footer">

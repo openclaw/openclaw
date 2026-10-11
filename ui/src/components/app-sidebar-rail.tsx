@@ -54,7 +54,7 @@ export function renderSidebarRail(host: AppSidebarRenderHost): JSX.Element {
                 class="sidebar-rail__button"
                 data-navigation-view={view}
                 aria-label={viewLabel(view)}
-                aria-pressed={String(host.navigationView === view)}
+                aria-pressed={host.navigationView === view ? "true" : "false"}
                 onClick={() => {
                   host.navigationView = view;
                   if (view === "online") {
@@ -135,7 +135,7 @@ function renderRailPin(
         : session()?.label ||
           plugin()?.value.label ||
           tab()?.label ||
-          t("presence.sessions.unavailable");
+          t(entry.type === "session" ? "sessionsView.openSession" : "tabs.plugin");
   const person = () =>
     entry.type === "person"
       ? personActivityLink(
@@ -249,7 +249,7 @@ function renderRailPin(
         drop()?.entry === serialized ? `sidebar-zone-entry--drop-${drop()?.position}` : undefined,
       ]}
       data-sidebar-entry={serialized}
-      draggable={String(!host.sidebarSnapshot)}
+      draggable={!host.sidebarSnapshot ? "true" : "false"}
       onDragStart={(event) => host.sessionOrganizer.startSidebarEntryDrag(event, entry)}
       onDragEnd={() => host.sessionOrganizer.finishSidebarEntryDrag()}
       onDragOver={(event) => host.sessionOrganizer.handleSidebarZoneDragOver(event, serialized)}
@@ -348,7 +348,7 @@ export function renderSidebarPages(host: AppSidebarRenderHost): JSX.Element {
         <button
           type="button"
           class="btn btn--sm"
-          onClick={() => void host.navigationCatalog.loadMoreDashboards()}
+          onClick={() => host.navigationCatalog.loadMoreDashboards()}
         >
           {t("chat.selectors.loadMoreSessions")}
         </button>
@@ -378,7 +378,7 @@ export function renderSidebarScope(host: AppSidebarRenderHost): JSX.Element {
                 type="button"
                 class="sidebar-rail__button"
                 aria-label={t(scope === "mine" ? "nav.scopeMine" : "nav.scopeAll")}
-                aria-pressed={String(host.effectiveNavigationScope === scope)}
+                aria-pressed={host.effectiveNavigationScope === scope ? "true" : "false"}
                 onClick={() => host.setNavigationScope(scope)}
               >
                 <Icon name={scope === "mine" ? "target" : "users"} />

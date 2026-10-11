@@ -72,7 +72,7 @@ function Elapsed(props: {
   const date = createMemo(() => new Date(props.timestamp));
   return (
     <time
-      dateTime={date().toISOString()}
+      datetime={date().toISOString()}
       title={date().toLocaleString(i18n.getLocale())}
       aria-label={
         props.display === "minute-compact" ? undefined : date().toLocaleString(i18n.getLocale())

@@ -525,8 +525,9 @@ describe("sidebar people workload", () => {
       .mockReturnValueOnce(late.promise)
       .mockReturnValue(boundary === "viewer replacement" ? current.promise : late.promise);
     const { sidebar, gateway, provider, summaryRequest } = await mountWorkload(response);
+    const ownerCounts = sidebar.sessionData.ownerCounts;
     expect(counts(sidebar, "ada")).toEqual(["1", "7"]);
-    void sidebar.sessionData.ownerCounts.refresh();
+    void ownerCounts.refresh();
     expect(summaryRequest).toHaveBeenCalledTimes(2);
 
     if (boundary === "disconnect") {
@@ -554,7 +555,7 @@ describe("sidebar people workload", () => {
     if (boundary === "viewer replacement") {
       expect(counts(sidebar, "ada")).toEqual([]);
     } else if (boundary !== "scope replacement") {
-      expect(sidebar.sessionData.ownerCounts.counts).toBeNull();
+      expect(ownerCounts.counts).toBeNull();
     } else {
       expect(counts(sidebar, "ada")).toEqual(["2"]);
     }
@@ -563,7 +564,7 @@ describe("sidebar people workload", () => {
     if (boundary === "viewer replacement") {
       expect(counts(sidebar, "ada")).toEqual([]);
     } else if (boundary !== "scope replacement") {
-      expect(sidebar.sessionData.ownerCounts.counts).toBeNull();
+      expect(ownerCounts.counts).toBeNull();
     } else {
       expect(counts(sidebar, "ada")).toEqual(["2"]);
     }

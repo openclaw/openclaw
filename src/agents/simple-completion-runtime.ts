@@ -11,7 +11,10 @@ import {
   resolveProviderRuntimePluginHandle,
 } from "../plugins/provider-hook-runtime.js";
 import { prepareProviderRuntimeAuth } from "../plugins/provider-runtime.runtime.js";
-import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
+import {
+  runOutsidePluginRuntimeGenerationScope,
+  withPluginRuntimeGenerationScope,
+} from "../plugins/runtime/generation-scope.js";
 import { runWithAsyncWorkResources } from "../shared/async-work-resources.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveAgentDir, resolveAgentWorkspaceDir, resolveDefaultAgentId } from "./agent-scope.js";
@@ -458,16 +461,34 @@ export async function acquireSimpleCompletionModelForAgent(
   );
 }
 
-/** Captures metadata before the caller selects the model to materialize. */
+type SimpleCompletionAcquisitionParams = Omit<
+  PrepareSimpleCompletionModelForAgentParams,
+  "agentId" | "modelRef" | "useUtilityModel" | "useAsyncModelResolution"
+> & { agentId?: string };
+
+type SimpleCompletionRequestResolver = (manifestPlugins?: PluginMetadataSnapshot) => {
+  selection: Omit<AgentSimpleCompletionSelection, "agentDir">;
+  shorthandModelId?: string;
+} | null;
+
+/**
+ * Captures metadata before the caller selects the model to materialize.
+ * Each acquisition is new work: retained callers, such as context engines that restore a
+ * predecessor turn's context, select from the committed inventory instead of a retired one.
+ */
 export async function acquireSimpleCompletionModelWithSelection(
-  params: Omit<
-    PrepareSimpleCompletionModelForAgentParams,
-    "agentId" | "modelRef" | "useUtilityModel" | "useAsyncModelResolution"
-  > & { agentId?: string },
-  resolveRequest: (manifestPlugins?: PluginMetadataSnapshot) => {
-    selection: Omit<AgentSimpleCompletionSelection, "agentDir">;
-    shorthandModelId?: string;
-  } | null,
+  params: SimpleCompletionAcquisitionParams,
+  resolveRequest: SimpleCompletionRequestResolver,
+): Promise<AcquiredSimpleCompletionModelForAgent> {
+  return await runOutsidePluginRuntimeGenerationScope(() =>
+    acquireCommittedSimpleCompletionModel(params, resolveRequest),
+  );
+}
+
+// Selection, metadata, and the prepared lease all come from the caller's current inventory.
+async function acquireCommittedSimpleCompletionModel(
+  params: SimpleCompletionAcquisitionParams,
+  resolveRequest: SimpleCompletionRequestResolver,
 ): Promise<AcquiredSimpleCompletionModelForAgent> {
   const blocked = requiredWorkerHelperError(params.cfg);
   if (blocked) {

@@ -79,7 +79,7 @@ function renderIdentityGateways(
               class="sidebar-customize-menu__item"
               value={`gateway:${encodeURIComponent(gateway().id)}`}
               role="menuitemradio"
-              aria-checked={String(selected())}
+              aria-checked={selected() ? "true" : "false"}
               ref={(element) => syncDropdownItemRadio(element, selected())}
               onClick={openWindow}
               onContextMenu={openWindow}
@@ -230,7 +230,7 @@ export function renderSidebarIdentityMenu(params: SidebarIdentityMenuParams): JS
             {profileName()}
           </span>
           {profileEmail() ? (
-            <span class="sidebar-identity-menu__email" title={profileEmail()}>
+            <span class="sidebar-identity-menu__email" title={profileEmail() ?? undefined}>
               {profileEmail()}
             </span>
           ) : undefined}

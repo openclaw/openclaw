@@ -67,7 +67,7 @@ function renderRosterLoadMore(
         class="sidebar-session-pagination__button"
         aria-label={loading ? t("common.loading") : t("chat.selectors.loadMoreRosterSessions")}
         disabled={loading}
-        aria-busy={String(loading)}
+        aria-busy={loading ? "true" : "false"}
         onClick={() => {
           // The request owner changes before the DOM commits the disabled attribute.
           // A repeated activation must not reveal local rows during that read.

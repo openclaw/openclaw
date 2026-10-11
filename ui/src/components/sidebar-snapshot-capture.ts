@@ -5,7 +5,7 @@ import { loadSettings } from "../app/settings.ts";
 import type { AuthenticatedUser } from "../app/user-profile.ts";
 import { rosterActivityStore } from "../lib/agents/roster-activity-store.ts";
 import { presenceViewerLastActivity } from "../lib/presence-users.ts";
-import { sidebarOnlineOrder } from "./app-sidebar-online.tsx";
+import { resolveSidebarOnline, sidebarOnlineOrder } from "./app-sidebar-online.tsx";
 import { readSidebarBrandPresentation, type AppSidebarRenderHost } from "./app-sidebar-render.tsx";
 import type { SidebarVisibleSections } from "./app-sidebar-session-projection.ts";
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
@@ -24,6 +24,44 @@ function displayUser(user: AuthenticatedUser | null | undefined) {
         identity: user.identity?.type === "profile" ? user.identity : undefined,
       }
     : null;
+}
+
+export function isSidebarSnapshotSettled(
+  host: AppSidebarRenderHost,
+  rosterRendererReady: boolean,
+): boolean {
+  const context = host.sessionDataContext;
+  if (!host.connected || !context) {
+    return false;
+  }
+  if (context.gateway.snapshot.selfUser?.id && !host.navigationCatalog.scopesReady) {
+    return false;
+  }
+  if (host.navigationView === "pages" && host.navigationCatalog.dashboards?.loading !== false) {
+    return false;
+  }
+  const people = resolveSidebarOnline(host).users;
+  if (
+    people.some((person) => person.identity?.type === "profile") &&
+    host.sessionData.ownerCounts.counts === null &&
+    host.sessionData.ownerCounts.error === null
+  ) {
+    return false;
+  }
+  if (host.sidebarAgentsMode === "roster") {
+    const roster = rosterActivityStore(context).snapshot;
+    return (
+      rosterRendererReady &&
+      (roster.membershipReady || roster.error !== null) &&
+      !roster.loading &&
+      roster.involvingMe === host.sidebarSessionOwnerFilter().involvingMe
+    );
+  }
+  return (
+    !host.sessionData.sessionsLoading &&
+    (Boolean(host.sessionData.sessionMutationError ?? context.sessions.state.error) ||
+      (Boolean(host.sessionData.sessionsResult) && !context.sessions.presentation.resultCached))
+  );
 }
 
 export function captureSidebarSnapshotModel(

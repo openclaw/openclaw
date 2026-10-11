@@ -1,1 +1,1 @@
-export { EMPTY_VIEWER_IDENTITIES, ViewerAvatar, ViewerFacepile } from "./solid/viewer-facepile.tsx";
+export { EMPTY_VIEWER_IDENTITIES } from "./solid/viewer-facepile.tsx";

@@ -27,13 +27,8 @@ export type SidebarAgentCardProps = {
 
 function SidebarAgentCardContent(props: SidebarAgentCardProps, host: HTMLElement) {
   host.style.display = "contents";
-  const [revision, setRevision] = createSignal(0);
-  const avatarLoader = new IdentityAvatarController({
-    addController() {},
-    removeController() {},
-    requestUpdate: () => queueMicrotask(() => setRevision((value) => value + 1)),
-    updateComplete: Promise.resolve(true),
-  });
+  const [revision, setRevision] = createSignal(0, { ownedWrite: true });
+  const avatarLoader = new IdentityAvatarController(() => setRevision((value) => value + 1));
   avatarLoader.hostConnected();
   onCleanup(() => avatarLoader.hostDisconnected());
   const avatar = createMemo(() => {
@@ -56,10 +51,10 @@ function SidebarAgentCardContent(props: SidebarAgentCardProps, host: HTMLElement
         type="button"
         class="sidebar-agent-card__main"
         aria-haspopup="menu"
-        aria-expanded={String(props.menuOpen)}
+        aria-expanded={props.menuOpen ? "true" : "false"}
         aria-label={`${props.agentName} · ${menuLabel()}`}
-        onPointerMove={(event: PointerEvent) => {
-          if (props.switcherAvailable && event.currentTarget instanceof HTMLElement) {
+        onPointerMove={(event) => {
+          if (props.switcherAvailable) {
             props.onMenuPointerMove?.(event.currentTarget, event);
           }
         }}
@@ -69,11 +64,9 @@ function SidebarAgentCardContent(props: SidebarAgentCardProps, host: HTMLElement
           // handler from dismissing hover-open state before click can pin it.
           event.stopPropagation();
         }}
-        onClick={(event: MouseEvent) => {
+        onClick={(event) => {
           event.stopPropagation();
-          if (event.currentTarget instanceof HTMLElement) {
-            props.onToggleMenu?.(event.currentTarget);
-          }
+          props.onToggleMenu?.(event.currentTarget);
         }}
       >
         <span

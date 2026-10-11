@@ -15,7 +15,7 @@ import {
   type SessionPullRequestSnapshotStore,
 } from "../lib/session-pull-requests.ts";
 import { parseAgentSessionKey, scopedSessionArtifactKey } from "../lib/sessions/session-key.ts";
-import type { AppSidebarSessionNavigationElement } from "./app-sidebar-session-navigation.ts";
+import type { AppSidebarElement } from "./app-sidebar.tsx";
 import { personActivityRouting, type PersonActivityRouting } from "./person-activity-link.ts";
 import { createPortaledHovercard, PortaledHovercardController } from "./portaled-hovercard.ts";
 import { renderSessionHovercard } from "./session-hovercard.ts";
@@ -277,7 +277,7 @@ export class SessionProgressHovercardProvider extends ReactiveElement {
     }
     const agentId =
       parseAgentSessionKey(sessionKey)?.agentId ??
-      target.closest<AppSidebarSessionNavigationElement>("openclaw-app-sidebar")?.expandedAgentId();
+      target.closest<AppSidebarElement>("openclaw-app-sidebar")?.expandedAgentId();
     if (!agentId) {
       return;
     }
@@ -384,9 +384,9 @@ export class SessionProgressHovercardProvider extends ReactiveElement {
       return;
     }
     const sidebarRow =
-      this.querySelector<AppSidebarSessionNavigationElement>(
-        "openclaw-app-sidebar",
-      )?.findSidebarHovercardRowByKey(sessionKey);
+      this.querySelector<AppSidebarElement>("openclaw-app-sidebar")?.findSidebarHovercardRowByKey(
+        sessionKey,
+      );
     const pullRequests = this.pullRequests?.get(artifactKey);
     const currentProgressCard = this.progressCards?.get(session);
     if (currentProgressCard !== undefined) {

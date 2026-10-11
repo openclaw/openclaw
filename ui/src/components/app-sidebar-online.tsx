@@ -93,7 +93,7 @@ export function renderAppSidebarOnline(host: AppSidebarRenderHost): JSX.Element 
               <button
                 type="button"
                 class="sidebar-session-group-toggle"
-                aria-expanded={String(!collapsed())}
+                aria-expanded={!collapsed() ? "true" : "false"}
                 aria-label={label()}
                 onClick={() => {
                   if (team()) {
@@ -128,7 +128,9 @@ export function renderAppSidebarOnline(host: AppSidebarRenderHost): JSX.Element 
                   aria-label={t("presence.filters.label")}
                   title={t("presence.filters.label")}
                   aria-haspopup="dialog"
-                  aria-expanded={String(host.sidebarMenus.peopleFilterMenuPosition !== null)}
+                  aria-expanded={
+                    host.sidebarMenus.peopleFilterMenuPosition !== null ? "true" : "false"
+                  }
                   onClick={(event: MouseEvent) => {
                     if (event.currentTarget instanceof HTMLElement) {
                       host.sidebarMenus.togglePositionedMenu("peopleFilter", event.currentTarget);
