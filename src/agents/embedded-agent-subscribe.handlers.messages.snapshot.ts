@@ -138,11 +138,11 @@ export function reconcileBlockReplySnapshot(
     if (index > (snapshot.parts.at(-1)?.index ?? 0)) {
       return snapshot.blockText;
     }
-    return extractAssistantStreamSnapshot(ctx, snapshot.message, {
-      throughIndex: index,
-      observedText: "",
+    const prefix = extractAssistantStreamSnapshot(ctx, snapshot.message, {
+      throughIndex: index - 1,
       final: false,
     }).blockText;
+    return prefix + (snapshot.parts.find((part) => part.index === index)?.separator ?? "");
   };
   const scope = ctx.state.blockReplyScopeStart;
   const scopePosition = (snapshot: typeof next) => {

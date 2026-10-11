@@ -846,9 +846,13 @@ function createServerMcpRuntime(
       return catalog;
     }
     if (!catalog) {
+      const retryExitedProcess = currentSession?.transportType === "stdio";
       const loadedCatalog = await loadCatalog();
-      // A previously healthy server may have exited during this refresh.
-      return loadedCatalog.diagnostics?.length && lastListedCatalog && !currentSession
+      // Recover a previously healthy process once; HTTP list failures retain their diagnostic.
+      return retryExitedProcess &&
+        loadedCatalog.diagnostics?.length &&
+        lastListedCatalog &&
+        !currentSession
         ? loadCatalog()
         : loadedCatalog;
     }

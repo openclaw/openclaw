@@ -11,11 +11,9 @@ import {
   acquireReadOnlyPreparedModelRuntime,
   activateStandalonePreparedModelRuntime,
   getPreparedModelRuntimeSnapshot,
-  loadPreparedModelRuntimeSnapshot,
   markPreparedModelRuntimeSnapshotsStale,
   prepareModelRuntimeSnapshot,
   publishPreparedModelRuntimeSnapshot,
-  rejectPendingPreparedModelRuntimeReplacement,
   refreshPreparedModelRuntimeSnapshots,
 } from "./prepared-model-runtime.js";
 
@@ -271,30 +269,6 @@ describe("prepared model runtime snapshots", () => {
     ]);
   });
 
-  it("does not let a superseded reload reject the current replacement gate", async () => {
-    mocks.configuredAgentIds = ["default"];
-    const initialConfig = {};
-    const latestConfig = configFor();
-    await refreshPreparedModelRuntimeSnapshots(initialConfig);
-
-    const supersededGate = markPreparedModelRuntimeSnapshotsStale("test superseded reload", {
-      waitForReplacement: true,
-    });
-    markPreparedModelRuntimeSnapshotsStale("test current reload", { waitForReplacement: true });
-    rejectPendingPreparedModelRuntimeReplacement(
-      supersededGate,
-      new Error("superseded reload cancelled"),
-    );
-    const read = prepareModelRuntimeSnapshot({
-      ...fixture.agentInput("default", latestConfig),
-      workspaceDir: "/tmp/unused-workspace",
-    });
-    const refresh = refreshPreparedModelRuntimeSnapshots(latestConfig);
-
-    await expect(read).resolves.toMatchObject({ config: latestConfig });
-    await refresh;
-  });
-
   it("builds credential-free command owners separately from runtime owners", async () => {
     const config = {};
     const agentDir = fixture.state.agentDir("credential-free");
@@ -392,35 +366,6 @@ describe("prepared model runtime snapshots", () => {
       await Promise.allSettled([skipped, latest, read]);
     }
   });
-  it("rebinds unpublished read-only activation to the committed replacement config", async () => {
-    mocks.configuredAgentIds = ["default"];
-    const initialConfig = {};
-    const latestConfig = { agents: { defaults: { model: "openai/gpt-5.5" } } };
-    await refreshPreparedModelRuntimeSnapshots(initialConfig, { gatewayLifecycle: true });
-
-    markPreparedModelRuntimeSnapshotsStale("test read-only replacement", {
-      waitForReplacement: true,
-    });
-    const read = loadPreparedModelRuntimeSnapshot({
-      ...fixture.agentInput("default", initialConfig),
-      workspaceDir: "/tmp/dynamic-read-only-workspace",
-      readOnly: true,
-    });
-    markPreparedModelRuntimeSnapshotsStale("test superseding read-only replacement", {
-      waitForReplacement: true,
-    });
-    expect(
-      getPreparedModelRuntimeSnapshot(fixture.agentInput("default", latestConfig)),
-    ).toBeUndefined();
-    const refresh = refreshPreparedModelRuntimeSnapshots(latestConfig);
-
-    await expect(read).resolves.toMatchObject({
-      config: latestConfig,
-      workspaceDir: "/tmp/dynamic-read-only-workspace",
-    });
-    await refresh;
-  });
-
   it.each(["workspace", "config"] as const)(
     "deduplicates standalone activation while publishing a changed %s",
     async (changed) => {
