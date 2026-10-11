@@ -282,12 +282,24 @@ function buildTalkCatalog(config: OpenClawConfig, params: TalkCatalogParams) {
   );
   const activeRealtimeProvider = realtimeSelection.activeProvider;
   const speechAvailable = isSecretOwnerAvailable("capability", "talk:speech");
+  // Clients key stt-tts availability off speech readiness the same way they key
+  // dictation off transcription.ready: a usable speech provider means Talk can
+  // run in stt-tts mode even when no realtime voice provider is configured
+  // (#165363).
+  const speechReady =
+    Boolean(activeSpeechProvider) &&
+    speechAvailable &&
+    configuredOrFalse(() => {
+      const setup = buildTalkTtsConfig(config);
+      return !("error" in setup);
+    });
 
   return {
     modes: ["realtime", "stt-tts", "transcription"],
     transports: ["webrtc", "provider-websocket", "gateway-relay", "managed-room"],
     brains: ["agent-consult", "direct-tools", "none"],
     speech: {
+      ready: speechReady,
       ...(activeSpeechProvider ? { activeProvider: activeSpeechProvider } : {}),
       providers: listSpeechProviders(config).map((provider) => {
         const entry: Record<string, unknown> = {
@@ -311,6 +323,10 @@ function buildTalkCatalog(config: OpenClawConfig, params: TalkCatalogParams) {
               });
             }),
           modes: ["stt-tts"],
+          // stt-tts sessions run through the managed-room transport; the
+          // session-create path rejects every other transport for this mode
+          // (#165363).
+          transports: ["managed-room"],
           brains: ["agent-consult"],
         };
         if (provider.models) {
