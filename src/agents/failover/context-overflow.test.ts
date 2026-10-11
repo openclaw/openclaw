@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   classifyFailoverReason,
+  classifyFailoverSignal,
   isContextOverflowError,
   isLikelyContextOverflowError,
   isProviderRequestSizeCeilingError,
@@ -21,6 +22,22 @@ describe("isLikelyContextOverflowError", () => {
         'Error rendering prompt with jinja template: "Cannot apply filter upper to type UndefinedValue". You can override the prompt template in model settings.',
       ),
     ).toBe(false);
+  });
+});
+
+const LM_STUDIO_LOADED_CONTEXT_OVERFLOW =
+  "Trying to keep the first 15857 tokens when context the overflows. However, the model is loaded with context length of only 4096 tokens, which is not enough. Try to load the model with a larger context length, or provide a shorter input.";
+const LM_STUDIO_LOADED_CONTEXT_OVERFLOW_QUOTED = `400 " ${LM_STUDIO_LOADED_CONTEXT_OVERFLOW} Error Data: n/a, Additional Data: n/a"`;
+
+describe("LM Studio loaded context length overflow", () => {
+  it.each([
+    ["raw refusal", LM_STUDIO_LOADED_CONTEXT_OVERFLOW],
+    ["400 JSON-quoted refusal", LM_STUDIO_LOADED_CONTEXT_OVERFLOW_QUOTED],
+  ])("classifies the %s as context overflow", (_name, message) => {
+    expect(classifyFailoverReason(message)).toBe("context_overflow");
+    expect(classifyFailoverSignal({ status: 400, message })).toEqual({
+      kind: "context_overflow",
+    });
   });
 });
 

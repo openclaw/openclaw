@@ -65,6 +65,9 @@ describe("provider overflow messages", () => {
     "code 1210: tokens in request more than max tokens allowed",
     "code 1261: Prompt exceeds max length",
     "500 Context size has been exceeded.",
+    "Trying to keep the first 15857 tokens when context the overflows. However, the model is loaded with context length of only 4096 tokens, which is not enough. Try to load the model with a larger context length, or provide a shorter input.",
+    '400 " Trying to keep the first 15857 tokens when context the overflows. However, the model is loaded with context length of only 4096 tokens, which is not enough. Try to load the model with a larger context length, or provide a shorter input. Error Data: n/a, Additional Data: n/a"',
+    '{"error":" Trying to keep the first 15857 tokens when context the overflows. However, the model is loaded with context length of only 4096 tokens, which is not enough. Try to load the model with a larger context length, or provide a shorter input. Error Data: n/a, Additional Data: n/a"}',
   ])("detects %s", (text) => {
     expect(isContextOverflow(errorMessage(text), 262_144)).toBe(true);
   });

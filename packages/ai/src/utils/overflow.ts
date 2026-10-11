@@ -23,6 +23,8 @@ const ASSISTANT_OVERFLOW_PATTERNS = [
   /exceeds the limit of \d+/i, // GitHub Copilot
   /(?:exceeds the available context size|context size has been exceeded)/i, // llama.cpp server
   /greater than the context length/i, // LM Studio
+  /when context the overflows/i, // LM Studio (keeps their "context the overflows" typo)
+  /model is loaded with context length of only \d[\d,]* tokens/i, // LM Studio
   /context window exceeds limit/i, // MiniMax
   /exceeded model token limit/i, // Kimi For Coding
   /tokens? in request more than max tokens? allowed/i, // Z.AI / Zhipu GLM error 1210
