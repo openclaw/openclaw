@@ -21,6 +21,11 @@ const METRICS = [
   "todoSolid2",
 ] as const satisfies readonly (keyof MigrationMetrics)[];
 
+const LIT_INTEROP_EXCEPTIONS: Readonly<Record<string, string>> = {
+  "ui/src/lit/solid-bridge.test.tsx":
+    "Proves Lit callers keep working through the Solid bridge; deleted with the bridge at cutover.",
+};
+
 function flatten(counts: ReadonlyMap<string, MigrationMetrics>) {
   return new Map(
     [...counts].flatMap(([file, row]) =>
@@ -38,13 +43,7 @@ function totals(counts: ReadonlyMap<string, MigrationMetrics>) {
   );
 }
 
-// Advisory until Lit pages can mount Solid components (the Solid bridge). Feature work
-// in unported Lit UI must keep landing; enforcement returns with that transition.
-export function main(
-  root = process.cwd(),
-  argv = process.argv.slice(2),
-  { enforce = false }: { enforce?: boolean } = {},
-) {
+export function main(root = process.cwd(), argv = process.argv.slice(2)) {
   try {
     const args = parseRatchetArgs(argv);
     if (args.prune) {
@@ -67,6 +66,23 @@ export function main(
       new Map([...sources].filter(([file]) => changed.has(file)));
     const currentCounts = countMigrationSources(root, changedSources(currentSources));
     const baseCounts = countMigrationSources(root, changedSources(previous));
+    for (const [file, reason] of Object.entries(LIT_INTEROP_EXCEPTIONS)) {
+      if (!reason.trim()) {
+        throw new Error(`Lit interop exception ${file} requires a reason.`);
+      }
+      const current = currentCounts.get(file);
+      if (current) {
+        console.log(
+          `Lit interop exception ${file}: litImports=${current.litImports}, htmlTemplates=${current.htmlTemplates}. ${reason}`,
+        );
+      }
+      for (const counts of [currentCounts, baseCounts]) {
+        const row = counts.get(file);
+        if (row) {
+          counts.set(file, { ...row, litImports: 0, htmlTemplates: 0 });
+        }
+      }
+    }
     const increasedTotals = compareRatchetCounts(
       totals(currentCounts),
       totals(baseCounts),
@@ -89,12 +105,10 @@ export function main(
             ).increased.map(({ entry, current, allowed }) => `${entry}: ${current} > ${allowed}`),
           },
         ],
-        enforce
-          ? "Lit sites may move between ui/src files, but each metric's total must not grow. Use Solid or offset new sites with removals in the same change."
-          : "Advisory only: Lit growth is reported, not enforced, until Solid components can be mounted from Lit pages.",
+        "Lit sites may move between ui/src files, but each metric's total must not grow. Use Solid or offset new sites with removals in the same change.",
       )
     ) {
-      return enforce ? 1 : 0;
+      return 1;
     }
     console.log(`Control UI Lit ratchet OK (${changed.size} changed files, base ${base}).`);
     return 0;
