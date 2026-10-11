@@ -12,6 +12,7 @@ import { resolveSandboxConfigForAgent } from "../../agents/sandbox/config.js";
 import { slugifySessionKey } from "../../agents/sandbox/shared.js";
 import { getAgentWorkspaceAccess } from "../../agents/workspace-access.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { resolveChatAttachmentMaxBytes } from "../../gateway/chat-attachment-policy.js";
 import { logVerbose } from "../../globals.js";
 import { root as fsRoot, FsSafeError, readLocalFileSafely } from "../../infra/fs-safe.js";
 import { retryAsync } from "../../infra/retry.js";
@@ -37,6 +38,15 @@ import { CONFIG_DIR } from "../../utils.js";
 import type { RuntimeMsgContext as MsgContext, TemplateContext } from "../templating.js";
 
 export const SANDBOX_MEDIA_MAX_BYTES = STAGED_INPUT_MAX_BYTES;
+
+/**
+ * Per-file staging ceiling. Operators who raise `agents.defaults.mediaMaxMb`
+ * admit larger inbound files, so staging follows that ceiling instead of
+ * dropping them; it never falls below the shared staged-input floor.
+ */
+export function resolveSandboxMediaMaxBytes(cfg: OpenClawConfig): number {
+  return Math.max(SANDBOX_MEDIA_MAX_BYTES, resolveChatAttachmentMaxBytes(cfg));
+}
 const SCP_STDERR_TAIL_CHARS = 16_384;
 
 // Attachment indexes are the staging identity. Callers use this map to detect
@@ -59,6 +69,7 @@ export async function stageSandboxMedia(params: {
   abortSignal?: AbortSignal;
 }): Promise<StageSandboxMediaResult> {
   const { ctx, sessionCtx, cfg, sessionKey, workspaceDir, abortSignal } = params;
+  const stagingMaxBytes = resolveSandboxMediaMaxBytes(cfg);
   abortSignal?.throwIfAborted();
   const media = normalizeMediaFacts(ctx.media);
   const pathEntries = media.flatMap((fact, index) =>
@@ -178,7 +189,7 @@ export async function stageSandboxMedia(params: {
         : { root: await fsRoot(effectiveWorkspaceDir) };
       const { buffer } = await readLocalFileSafely({
         filePath: sourcePath,
-        maxBytes: SANDBOX_MEDIA_MAX_BYTES,
+        maxBytes: stagingMaxBytes,
       });
       // A completed read must not start a new copy after cancellation.
       abortSignal?.throwIfAborted();
@@ -203,7 +214,7 @@ export async function stageSandboxMedia(params: {
             buffer,
             media[entry.index]?.contentType,
             "inbound",
-            SANDBOX_MEDIA_MAX_BYTES,
+            stagingMaxBytes,
             path.basename(source),
             undefined,
             { assertCommitAllowed: () => abortSignal?.throwIfAborted() },

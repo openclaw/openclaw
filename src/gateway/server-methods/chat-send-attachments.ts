@@ -79,6 +79,12 @@ async function prestageMediaPathOffloads(params: {
       ]);
     params.abortSignal.throwIfAborted();
     params.assertWorkAdmissionCurrent();
+    // Same ceiling as stageSandboxMedia's resolveSandboxMediaMaxBytes: raising
+    // mediaMaxMb admits larger files, so staging must accept them too.
+    const stagingMaxBytes = Math.max(
+      SANDBOX_MEDIA_MAX_BYTES,
+      resolveChatAttachmentMaxBytes(params.cfg),
+    );
     const refsByManagedPath = (refs: OffloadedRef[]): MediaFact[] =>
       refs.map((ref) => ({
         path: ref.path,
@@ -86,7 +92,8 @@ async function prestageMediaPathOffloads(params: {
         fileName: ref.label,
         workspaceDir: path.dirname(ref.path),
       }));
-    // Host-readable managed PDFs above the staging cap do not need a sandbox copy.
+    // Host-readable managed PDFs above the default staging cap do not need a
+    // sandbox copy, even when mediaMaxMb raises the cap for other files.
     const refsToStage = mediaPathRefs.filter(
       (ref) => !(ref.sizeBytes > SANDBOX_MEDIA_MAX_BYTES && isManagedInboundPdfOffloadRef(ref)),
     );
@@ -126,18 +133,16 @@ async function prestageMediaPathOffloads(params: {
       return refsByManagedPath(mediaPathRefs);
     }
 
-    // The parser admits more than the sandbox can stage. Reject non-PDF files
-    // in that gap as permanent 4xx instead of a retryable staging failure.
-    const oversizedForSandbox = refsToStage.filter(
-      (ref) => ref.sizeBytes > SANDBOX_MEDIA_MAX_BYTES,
-    );
+    // The parser and staging share the mediaMaxMb ceiling. Keep a permanent 4xx
+    // for any non-PDF ref that still exceeds it instead of a retryable failure.
+    const oversizedForSandbox = refsToStage.filter((ref) => ref.sizeBytes > stagingMaxBytes);
     if (oversizedForSandbox.length > 0) {
       const details = oversizedForSandbox
         .map((ref) => `${ref.label} (${ref.sizeBytes} bytes)`)
         .join(", ");
       throw new UnsupportedAttachmentError(
         "non-image-too-large-for-sandbox",
-        `attachments exceed sandbox staging limit (${SANDBOX_MEDIA_MAX_BYTES} bytes): ${details}`,
+        `attachments exceed sandbox staging limit (${stagingMaxBytes} bytes): ${details}`,
       );
     }
 
