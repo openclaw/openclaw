@@ -21,6 +21,8 @@ const toolTurnCompletionByAgent = new WeakMap<object, InternalToolTurnCompletion
 type InternalReadyToolCall = { toolCallId: string; args: unknown };
 
 export type InternalToolBatchLifecycle = {
+  /** Native canonical-target admission may serialize a deferred invocation batch. */
+  executionMode?: "sequential";
   /**
    * Commit admitted calls in assistant order as they launch: prepared calls just
    * before their implementations start, argument-validation rejections when the

@@ -1,6 +1,7 @@
 import { Type } from "typebox";
 import { getAgentToolExecutionContext } from "../../../packages/agent-core/src/tool-execution-context.js";
 import type { UnsettledRequesterChild } from "../subagents/registry/subagent-registry-requester-yield.js";
+import { markToolTurnHandoffOwner } from "../tool-invocation-metadata.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readToolStringParam } from "./common.js";
 
@@ -78,7 +79,7 @@ export function createSessionsYieldTool(opts?: {
   ) => SessionsYieldClaimResult | Promise<SessionsYieldClaimResult>;
   onYield?: SessionsYieldCallback;
 }): AnyAgentTool {
-  return {
+  return markToolTurnHandoffOwner({
     label: "Yield",
     name: "sessions_yield",
     // Turn-lifecycle contract: spawn flows instruct the model to yield, so the
@@ -147,5 +148,5 @@ export function createSessionsYieldTool(opts?: {
         ...(acknowledgment ? { acknowledgment } : {}),
       });
     },
-  };
+  });
 }
