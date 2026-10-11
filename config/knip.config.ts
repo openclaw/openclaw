@@ -875,6 +875,13 @@ const config = {
         "src/lib/reactive/*.ts!",
         "!src/lib/reactive/*.test.ts!",
         "src/solid-smoke/solid-smoke.tsx!",
+        // Solid presentation primitives (#168576) and the chat render lifecycle (#168657) land
+        // before their page and chat consumers; drop each entry with its first production importer.
+        "src/components/solid/*.tsx!",
+        "!src/components/solid/*.test.tsx!",
+        "src/components/icon-data*.ts!",
+        "src/app/shell-layout-traits-solid.tsx!",
+        "src/pages/chat/solid-render-lifecycle.ts!",
       ],
       // Workboard lazy-loads Three.js at runtime; Knip's dependency pass misses it.
       ignoreDependencies: ["three"],

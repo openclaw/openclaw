@@ -267,7 +267,6 @@ export class SessionSnapshotStore implements ChatCacheObserver {
   // cooldown bounds the resulting redundant fetches without per-row IDB reads.
   private readonly savedAtBySession = new Map<string, number>();
   private savedAtSeed: Promise<void> | null = null;
-  private savedAtSeedRetirements: Set<string> | null = null;
   private cancelScheduledWrite: (() => void) | null = null;
   private writeChain = Promise.resolve();
 
@@ -400,7 +399,6 @@ export class SessionSnapshotStore implements ChatCacheObserver {
   }
 
   forgetScope(prefix: string): void {
-    this.savedAtSeedRetirements?.add(prefix);
     for (const key of new Set([
       ...this.revisions.keys(),
       ...this.pending.keys(),
@@ -453,31 +451,15 @@ export class SessionSnapshotStore implements ChatCacheObserver {
   }
 
   private async seedSavedAtIndex(): Promise<void> {
-    const retiredScopes = new Set<string>();
-    this.savedAtSeedRetirements = retiredScopes;
-    const generation = snapshotStoreGeneration;
-    const revisions = new Map(this.revisions);
-    try {
-      const records = await readSnapshotMetadata();
-      if (generation !== snapshotStoreGeneration) {
-        return;
-      }
-      if (!records) {
-        this.resetSavedAtIndex();
-        return;
-      }
-      for (const record of records) {
-        if (
-          [...retiredScopes].some((prefix) => record.sessionKey.startsWith(prefix)) ||
-          (revisions.get(record.sessionKey) ?? 0) !== (this.revisions.get(record.sessionKey) ?? 0)
-        ) {
-          continue;
-        }
-        const current = this.savedAtBySession.get(record.sessionKey) ?? 0;
-        this.savedAtBySession.set(record.sessionKey, Math.max(current, record.savedAt));
-      }
-    } finally {
-      this.savedAtSeedRetirements = null;
+    const records = await readSnapshotMetadata();
+    if (!records) {
+      this.resetSavedAtIndex();
+      return;
+    }
+    // This index only avoids redundant prefetches; concurrent eviction may leave it stale.
+    for (const record of records) {
+      const current = this.savedAtBySession.get(record.sessionKey) ?? 0;
+      this.savedAtBySession.set(record.sessionKey, Math.max(current, record.savedAt));
     }
   }
 

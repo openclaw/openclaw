@@ -59,7 +59,7 @@ export function resolveEmbeddedRunEffectiveModel(
           provider: contextConfigProvider,
           model: params.modelId,
           nativeRuntime: params.agentHarnessId,
-        }).authoredContextTokenCap;
+        }).configuredContextTokens;
   return {
     ...resolved,
     ...(authoredContextTokenCap === undefined ? {} : { authoredContextTokenCap }),

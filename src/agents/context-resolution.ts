@@ -163,7 +163,7 @@ export function resolveAnthropicFixedContextWindow(
   return ANTHROPIC_CONTEXT_1M_TOKENS;
 }
 
-/** Resolves an authored cap without lowering it to discovered model metadata. */
+/** Resolves explicit configured inputs separately from their effective context limits. */
 export function resolveConfiguredContextTokenLimits(
   params: Pick<
     ContextTokenResolutionParams,
@@ -181,6 +181,7 @@ export function resolveConfiguredContextTokenLimits(
   ) => number | null | undefined = normalizePositiveContextTokens,
 ): {
   effectiveConfiguredTokens?: number;
+  configuredContextTokens?: number;
   authoredContextTokenCap?: number;
   configuredContextWindow?: number;
   fixedContextWindow?: number;
@@ -245,6 +246,7 @@ function resolveConfiguredContextTokenLimitsForModel(
         : Math.min(configuredContextTokens, configuredTokenLimit);
   return {
     configuredContextWindow,
+    configuredContextTokens,
     fixedContextWindow,
     effectiveConfiguredTokens,
     authoredContextTokenCap:
