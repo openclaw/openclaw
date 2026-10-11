@@ -1,24 +1,28 @@
+import {
+  captureIncognitoSessionOperation,
+  withIncognitoSessionBinding,
+} from "../../config/sessions/session-incognito-binding.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { captureOpenClawStateReadContext } from "../../state/openclaw-state-worker-context.js";
 import {
   matchesAcpSessionRuntimeLocator,
   resolveAcpSessionControlOwner,
-  type AcpSessionRuntimeLocator,
 } from "./session-control-owner.js";
-import type { AcpSessionControlConstraint } from "./session-meta-control.types.js";
+import type {
+  AcpSessionRuntimeLocator,
+  AcpSessionControlConstraint,
+} from "./session-meta-control.types.js";
 import {
   assertAcpSessionMutationEntry,
+  captureAcpSessionEntryBinding,
   type AcpSessionEntryExpectation,
 } from "./session-meta-entry.kernel.js";
-import {
-  buildAcpDatabaseSessionKey,
-  legacyAcpDatabaseSessionKeys,
-  resolveLegacyFreeAcpSessionKey,
-} from "./session-meta-keys.js";
+import { buildAcpDatabaseSessionKey } from "./session-meta-keys.js";
 import { captureAcpSessionReadContext } from "./session-meta-read-context.js";
 import { withAcpSessionEntryRead } from "./session-meta-read.js";
 import { readAcpSessionMetaForEntry } from "./session-meta-readonly.js";
@@ -30,13 +34,46 @@ type AcpSessionControlReadResult = {
   constraint?: AcpSessionControlConstraint;
 };
 
-/** Retain source custody; each effect gets a fresh metadata join, never a presence cache. */
-export async function prepareAcpSessionControlRead(params: {
+type AcpSessionControlReadParams = {
   cfg: OpenClawConfig;
   sessionKey: string;
   agentId?: string;
   assertCurrent?: () => void;
-}) {
+};
+
+/** Retain source custody; each effect gets a fresh metadata join, never a presence cache. */
+export function prepareAcpSessionControlRead(params: AcpSessionControlReadParams) {
+  const binding = captureIncognitoSessionOperation(params);
+  if (!binding) {
+    return prepareAcpSessionControlReadOwned(params);
+  }
+  return binding.actor.sessions.withSharedState(async () => {
+    const released = createDeferredCore();
+    void binding.actor.sessions.withSharedState(() => released.promise);
+    try {
+      const prepared = await withIncognitoSessionBinding(binding, () =>
+        prepareAcpSessionControlReadOwned(params),
+      );
+      return {
+        ...prepared,
+        readCurrent: (cfg: OpenClawConfig) =>
+          withIncognitoSessionBinding(binding, () => prepared.readCurrent(cfg)),
+        release() {
+          try {
+            prepared.release();
+          } finally {
+            released.resolve();
+          }
+        },
+      };
+    } catch (error) {
+      released.resolve();
+      throw error;
+    }
+  });
+}
+
+async function prepareAcpSessionControlReadOwned(params: AcpSessionControlReadParams) {
   const captured = await captureAcpSessionReadContext(params);
   const target = resolveSessionStorePathForAcp({ ...params, ...captured });
   const databasePath = resolveOpenClawStateSqlitePath(captured.env);
@@ -149,13 +186,7 @@ export async function prepareAcpSessionControlRead(params: {
     }
     const ownerKey = resolveAcpSessionControlOwner(entry);
     initial ??= {
-      entry: entry
-        ? {
-            sessionId: entry.sessionId,
-            lifecycleRevision: entry.lifecycleRevision,
-            sessionStartedAt: entry.sessionStartedAt,
-          }
-        : null,
+      entry: entry ? captureAcpSessionEntryBinding(entry) : null,
       ownerKey,
     };
     let constraint: AcpSessionControlConstraint | undefined;
@@ -165,20 +196,10 @@ export async function prepareAcpSessionControlRead(params: {
         sharedSource: { path: databasePath, identity: { ...shared.admission.identity } },
         agentId: target.agentId,
         sessionKey: read.storeSessionKey,
-        entry: entry
-          ? {
-              sessionId: entry.sessionId,
-              lifecycleRevision: entry.lifecycleRevision,
-              sessionStartedAt: entry.sessionStartedAt,
-            }
-          : undefined,
+        entry: entry ? captureAcpSessionEntryBinding(entry) : undefined,
         ownerKey,
         read: {
-          keys: [
-            buildAcpDatabaseSessionKey(read.storeSessionKey, target.agentId),
-            ...legacyAcpDatabaseSessionKeys(read.storeSessionKey, target.agentId, cfg),
-          ],
-          legacyKey: resolveLegacyFreeAcpSessionKey(read.storeSessionKey),
+          keys: [buildAcpDatabaseSessionKey(read.storeSessionKey, target.agentId)],
         },
       };
     }

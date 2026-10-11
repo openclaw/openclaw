@@ -16,21 +16,20 @@ type Job = {
   id: string;
   name: string;
   schedule: { kind: string; at?: string; everyMs?: number };
-  payload: {
-    kind: string;
-    message: string;
-    toolsAllow?: string[];
-    toolsAllowIsDefault?: boolean;
-  };
+  payload: { kind: string; message: string; toolsAllow?: string[] };
   sessionTarget: string;
   delivery: { mode: string };
   enabled: boolean;
   deleteAfterRun?: boolean;
   state: { nextRunAtMs: number };
 };
-type ToolCall = { action: string; job: Job };
+type ToolCall = { action: string; job?: Job; jobId?: string; includeDisabled?: boolean };
 
-function historyMessages(calls: ToolCall[], shape: HistoryShape) {
+function historyMessages(
+  calls: ToolCall[],
+  shape: HistoryShape,
+  errorCallIndexes: readonly number[] = [],
+) {
   const messages = calls.flatMap<Record<string, unknown>>((input, index) => {
     const id = `automation-${index}`;
     if (shape === "nested") {
@@ -39,7 +38,8 @@ function historyMessages(calls: ToolCall[], shape: HistoryShape) {
           toolName: "automations",
           toolCallId: id,
           input,
-          text: JSON.stringify({ id: input.job.id }),
+          text: JSON.stringify(input.job ? { id: input.job.id } : { ok: true }),
+          isError: errorCallIndexes.includes(index),
         }),
       ];
     }
@@ -66,7 +66,7 @@ function job(name: string, index: number): Job {
     id: `job-${index}`,
     name,
     schedule: { kind: "every", everyMs: 3_600_000 },
-    payload: { kind: "agentTurn", message: "", toolsAllow: ["automations", "read"] },
+    payload: { kind: "agentTurn", message: "", toolsAllow: ["*"] },
     sessionTarget: "isolated",
     delivery: { mode: "none" },
     enabled: false,
@@ -81,7 +81,9 @@ async function runSchedulingFixture(
     historyError?: Error;
     persistentHistoryError?: boolean;
     onHistoryRead?: () => void;
+    initialHistoryCallCount?: number;
     mutateCalls?: (calls: ToolCall[]) => void;
+    errorCallIndexes?: readonly number[];
     mutateJobs?: (jobs: Job[]) => void;
     mutateRestartedJobs?: (jobs: Job[]) => void;
     oneShotRunCount?: number;
@@ -95,9 +97,8 @@ async function runSchedulingFixture(
           entry.payload.message = `${policy} authority`;
           if (index < 2) {
             entry.schedule = { kind: "at", at: new Date(now + 86_400_000).toISOString() };
-            entry.payload.toolsAllowIsDefault = true;
           } else {
-            entry.payload.toolsAllow = index === 2 ? ["read"] : [];
+            entry.payload.toolsAllow = index === 2 ? ["read", "skills_read"] : [];
           }
           return entry;
         })
@@ -109,12 +110,10 @@ async function runSchedulingFixture(
               ? { kind: "at", at: new Date(now + 240_000).toISOString() }
               : { kind: "every", everyMs: 20_000 };
           entry.deleteAfterRun = index === 0;
-          entry.payload.toolsAllowIsDefault = true;
           entry.payload.message = `Reply exactly QA-MODEL-${schedule.toUpperCase()}-PAYLOAD-${suffix}`;
           return entry;
         });
   const calls: ToolCall[] = structuredClone(jobs).map((entry, index) => {
-    delete entry.payload.toolsAllowIsDefault;
     if (kind === "recurring" || index === 0) {
       delete entry.payload.toolsAllow;
     } else {
@@ -124,7 +123,7 @@ async function runSchedulingFixture(
   });
   options.mutateCalls?.(calls);
   options.mutateJobs?.(jobs);
-  const history = historyMessages(calls, shape);
+  const history = historyMessages(calls, shape, options.errorCallIndexes);
   let restarted = false;
   let recurringReads = 0;
   let historyReads = 0;
@@ -141,7 +140,12 @@ async function runSchedulingFixture(
           ? "agent:qa:qa-channel:group:group:qa-cron-authority"
           : `agent:qa:qa-channel:direct:dm:cron-model-author-${suffix}`,
       );
-      return { messages: history };
+      return {
+        messages:
+          historyReads === 1 && options.initialHistoryCallCount !== undefined
+            ? historyMessages(calls.slice(0, options.initialHistoryCallCount), shape)
+            : history,
+      };
     }
     if (method === "sessions.list") {
       return {
@@ -268,30 +272,79 @@ describe("scheduling YAML canonical tool proof", () => {
     expect(historyReads).toBeGreaterThan(1);
     expect(Date.now()).toBe(now + 250);
   });
-  it.each(["direct", "nested"] as const)(
-    "accepts authority evidence in %s history",
-    async (shape) => {
-      const { result, restarted, removed } = await runSchedulingFixture("authority", shape);
+  it("accepts read-derived skill authority without admitting unrelated tools", async () => {
+    const { result, restarted, removed } = await runSchedulingFixture("authority", "nested", {
+      mutateJobs: (jobs) => {
+        const overbroad = jobs[2];
+        assert.ok(overbroad);
+        overbroad.payload.toolsAllow = ["skills_read", "read"];
+      },
+    });
+    expect(result.status).toBe("pass");
+    expect(restarted).toBe(true);
+    expect(removed).toEqual(["job-0", "job-1", "job-2", "job-3"]);
+  });
+
+  it.each(["authority", "recurring"] as const)(
+    "ignores a rejected %s add attempt before successful mutations",
+    async (kind) => {
+      const { result, restarted, removed } = await runSchedulingFixture(kind, "nested", {
+        mutateCalls: (calls) => {
+          assert.ok(calls[0]);
+          calls.unshift(structuredClone(calls[0]));
+        },
+        errorCallIndexes: [0],
+      });
       expect(result.status).toBe("pass");
       expect(restarted).toBe(true);
-      expect(removed).toEqual(["job-0", "job-1", "job-2", "job-3"]);
+      expect(removed).toEqual(
+        kind === "authority" ? ["job-0", "job-1", "job-2", "job-3"] : ["job-1"],
+      );
     },
   );
 
   it.each(["direct", "nested"] as const)(
-    "accepts one-shot/recurring evidence alongside other owners in %s history",
+    "allows %s read-only introspection around two adds",
     async (shape) => {
-      const { result, restarted, removed } = await runSchedulingFixture("recurring", shape);
+      const { result, restarted, removed } = await runSchedulingFixture("recurring", shape, {
+        mutateCalls: (calls) => {
+          calls.unshift({ action: "list", includeDisabled: true });
+          calls.push(...["status", "get", "runs"].map((action) => ({ action, jobId: "job-0" })));
+        },
+      });
       expect(result.status).toBe("pass");
       expect(restarted).toBe(true);
       expect(removed).toEqual(["job-1"]);
     },
   );
 
+  it.each(["direct", "nested"] as const)(
+    "waits for the second add after list plus the first add in %s history",
+    async (shape) => {
+      const { result, historyReads } = await runSchedulingFixture("recurring", shape, {
+        mutateCalls: (calls) => calls.unshift({ action: "list", includeDisabled: true }),
+        initialHistoryCallCount: 2,
+      });
+      expect(result.status).toBe("pass");
+      expect(historyReads).toBe(2);
+      expect(Date.now()).toBe(now + 250);
+    },
+  );
+
+  it("rejects an unrequested mutation alongside read-only introspection and two adds", async () => {
+    await expect(
+      runSchedulingFixture("recurring", "nested", {
+        mutateCalls: (calls) => {
+          calls.unshift({ action: "list", includeDisabled: true });
+          calls.push({ action: "run", jobId: "job-0" });
+        },
+      }),
+    ).rejects.toThrow(/expected exactly two/);
+  });
+
   it.each([
     { code: "UNAVAILABLE", retryable: false, method: "chat.history" },
     { code: "INVALID_REQUEST", retryable: true, method: "chat.history" },
-    { code: "UNAVAILABLE", retryable: true, method: "sessions.list" },
     { code: "UNAVAILABLE", retryable: true, method: undefined },
   ])("propagates history error $code/$retryable/$method without retry", async (input) => {
     const historyError = Object.assign(new Error("fixture history failure"), {
@@ -328,25 +381,22 @@ describe("scheduling YAML canonical tool proof", () => {
   });
 
   it.each([
-    ["omitted", 0, ["automations", "read", "exec"], true, /omitted policy/],
-    ["wildcard", 1, ["automations", "read"], false, /wildcard policy/],
-    ["overbroad", 2, ["read", "exec"], false, /overbroad policy/],
-    ["empty", 3, ["read"], false, /empty policy/],
-  ] as const)(
-    "rejects incorrect persisted %s authority",
-    async (_label, index, tools, marker, message) => {
-      await expect(
-        runSchedulingFixture("authority", "nested", {
-          mutateJobs: (jobs) => {
-            const target = jobs[index];
-            assert.ok(target);
-            target.payload.toolsAllow = [...tools];
-            target.payload.toolsAllowIsDefault = marker;
-          },
-        }),
-      ).rejects.toThrow(message);
-    },
-  );
+    ["omitted", 0, ["automations", "read"], /omitted policy/],
+    ["wildcard", 1, ["automations", "read"], /wildcard policy/],
+    ["overbroad", 2, ["read", "skills_read", "exec"], /overbroad policy/],
+    ["overbroad duplicate", 2, ["read", "skills_read", "skills_read"], /overbroad policy/],
+    ["empty", 3, ["read"], /empty policy/],
+  ] as const)("rejects incorrect persisted %s authority", async (_label, index, tools, message) => {
+    await expect(
+      runSchedulingFixture("authority", "nested", {
+        mutateJobs: (jobs) => {
+          const target = jobs[index];
+          assert.ok(target);
+          target.payload.toolsAllow = [...tools];
+        },
+      }),
+    ).rejects.toThrow(message);
+  });
 
   it.each(["authority", "recurring"] as const)("rejects extra %s add calls", async (kind) => {
     await expect(
@@ -354,6 +404,9 @@ describe("scheduling YAML canonical tool proof", () => {
         mutateCalls: (calls) => {
           assert.ok(calls[0]);
           calls.push(structuredClone(calls[0]));
+          if (kind === "recurring") {
+            calls.unshift({ action: "list", includeDisabled: true });
+          }
         },
       }),
     ).rejects.toThrow(/expected exactly (four|two)/);
@@ -400,7 +453,7 @@ describe("scheduling YAML canonical tool proof", () => {
         runSchedulingFixture(kind, "nested", {
           mutateRestartedJobs: (jobs) => {
             assert.ok(jobs[0]);
-            jobs[0].payload.toolsAllow = ["*"];
+            jobs[0].payload.toolsAllow = ["read"];
           },
         }),
       ).rejects.toThrow(/authority changed across restart/);
@@ -418,11 +471,11 @@ describe("scheduling YAML canonical tool proof", () => {
     ).rejects.toThrow(/recurring job did not remain scheduled/);
   });
 
-  it.each(["at", "every"])("rejects a replayed %s job with a new identity", async (schedule) => {
+  it("rejects a replayed one-shot job with a new identity", async () => {
     await expect(
       runSchedulingFixture("recurring", "nested", {
         mutateRestartedJobs: (jobs) => {
-          jobs.push(job(`qa-model-${schedule}-${suffix}`, 98));
+          jobs.push(job(`qa-model-at-${suffix}`, 98));
         },
       }),
     ).rejects.toThrow(/unexpected scenario cron jobs/);

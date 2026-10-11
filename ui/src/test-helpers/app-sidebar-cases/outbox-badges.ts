@@ -2,23 +2,24 @@ import { describe, expect, it } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import "../../components/app-sidebar.ts";
 import { createGateway, createSessions, mountSidebar } from "../app-sidebar.ts";
+import { settleRoster } from "./roster.test-support.ts";
 
 describe("AppSidebar outbox attention badges", () => {
-  it("shows draft pencils for active and inactive sessions with stored composer text", async () => {
+  it("shows active and inactive draft pencils while suppressing Incognito roster rows", async () => {
     const draftKey = "agent:main:draft-thread";
     const activeDraftKey = "agent:main:active-draft-thread";
     const plainKey = "agent:main:plain-thread";
+    const incognitoKey = "agent:main:private-thread";
     const gateway = createGateway({} as GatewayBrowserClient);
-    const { sidebar } = await mountSidebar(
-      gateway,
-      createSessions("main", [draftKey, activeDraftKey, plainKey]),
-    );
+    const sessions = createSessions("main", [draftKey, activeDraftKey, plainKey, incognitoKey]);
+    sessions.state.result!.sessions.find((row) => row.key === incognitoKey)!.incognito = true;
+    const { sidebar } = await mountSidebar(gateway, sessions);
     sidebar.activeRouteId = "chat";
     sidebar.sessionKey = activeDraftKey;
     sidebar.storedOutboxes = {
       total: 0,
       attentionCountForSession: () => 0,
-      hasSessionDraft: (sessionKey) => sessionKey === draftKey || sessionKey === activeDraftKey,
+      hasSessionDraft: (sessionKey) => sessionKey !== plainKey,
     };
     await sidebar.updateComplete;
 
@@ -32,6 +33,9 @@ describe("AppSidebar outbox attention badges", () => {
     expect(
       sidebar.querySelector(`[data-session-key="${plainKey}"] .session-row-badge--draft`),
     ).toBeNull();
+    const incognitoRow = sidebar.querySelector(`[data-session-key="${incognitoKey}"]`);
+    expect(incognitoRow).not.toBeNull();
+    expect(incognitoRow?.querySelector(".session-row-badge--draft")).toBeNull();
   });
 
   it("shows delivery attention and removes the badge when empty", async () => {
@@ -79,11 +83,18 @@ describe("AppSidebar outbox attention badges", () => {
     };
     await sidebar.updateComplete;
 
-    const badges = sidebar.querySelectorAll(".nav-item--home .session-row-badge--attention");
+    sidebar.connected = true;
+    sidebar.sidebarAgentsMode = "roster";
+    await settleRoster(sidebar);
+    const badges = sidebar.querySelectorAll(
+      '[data-agent-group="main"] .sidebar-agent-roster__header .session-row-badge--attention',
+    );
     expect(badges).toHaveLength(1);
     expect(badges[0]?.textContent).toContain("3");
     expect(
-      sidebar.querySelector('.nav-item--home .session-row-badge--draft[aria-label="Unsent draft"]'),
+      sidebar.querySelector(
+        '[data-agent-group="main"] .sidebar-agent-roster__header .session-row-badge--draft[aria-label="Unsent draft"]',
+      ),
     ).not.toBeNull();
   });
 });

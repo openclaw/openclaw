@@ -41,6 +41,8 @@ export async function evaluateDecisionInRegistry(
   registry: PluginRegistry | null,
   config: OpenClawConfig,
   consumerId?: string,
+  isAdmissible?: () => boolean,
+  canDispatch?: () => boolean,
 ): Promise<DecisionOutcome> {
   const options = { ...inputOptions };
   if (
@@ -129,22 +131,19 @@ export async function evaluateDecisionInRegistry(
     assertCurrent();
     // Root callers carry their own work signal: provider replacement may still allow fallback.
     // Prepared views additionally lose consumer authority when their finite view is released.
-    if (rootCaller) {
-      const result = await entry.host.evaluate(
-        submitted,
-        { ...options, signal: modelSignal },
-        selected.model,
-        config,
-        registry,
-        consumerId,
-      );
-      assertCurrent();
-      return result;
+    let signal = modelSignal;
+    if (!rootCaller) {
+      if (!authority?.() || !lifetime) {
+        throw new Error("Decision consumer authority closed.");
+      }
+      signal = AbortSignal.any([modelSignal, lifetime]);
+      signal.throwIfAborted();
     }
-    if (!authority?.() || !lifetime) {
-      throw new Error("Decision consumer authority closed.");
+    // Admission-only preferences stop new evaluations after preparation. Do not
+    // pass them to the provider: admitted work retains independent live guards.
+    if ((canDispatch && !canDispatch()) || (isAdmissible && !isAdmissible())) {
+      return skipped({ status: "unavailable", reason: "disabled" });
     }
-    const signal = AbortSignal.any([modelSignal, lifetime]);
     const result = await entry.host.evaluate(
       submitted,
       { ...options, signal },
@@ -152,10 +151,13 @@ export async function evaluateDecisionInRegistry(
       config,
       registry,
       consumerId,
+      isAdmissible,
     );
-    signal.throwIfAborted();
+    if (!rootCaller) {
+      signal.throwIfAborted();
+    }
     assertCurrent();
-    if (!authority()) {
+    if (!rootCaller && !authority?.()) {
       throw new Error("Decision consumer authority closed.");
     }
     return result;

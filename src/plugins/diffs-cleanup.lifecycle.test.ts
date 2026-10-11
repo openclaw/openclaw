@@ -13,7 +13,7 @@ import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { loadBundledPluginFacade } from "../test-utils/bundled-plugin-public-surface.js";
 import { PluginInstance } from "./plugin-instance.js";
 import { createPluginRegistry } from "./registry.js";
-import { startPluginServices, type PluginServicesHandle } from "./services.js";
+import { startPluginServices, type PluginServicesHandle } from "./services.test-support.js";
 import { createPluginRecord } from "./status.test-helpers.js";
 import type { OpenClawPluginDefinition } from "./types.js";
 

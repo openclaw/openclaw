@@ -125,6 +125,10 @@ export interface DecisionProviderV1 {
       readonly signal: AbortSignal;
       /** Deadline on the same process-local performance.now() time base. */
       readonly deadlineMonotonicMs: number;
+      /** Host-owned request admission. Check synchronously immediately before external I/O.
+       * False closes this evaluation; a thrown authority assertion remains terminal.
+       * Omission preserves explicit evaluations and older hosts. */
+      readonly isAdmissible?: () => boolean;
     },
   ): Promise<ProviderDecisionOutcome>;
 }

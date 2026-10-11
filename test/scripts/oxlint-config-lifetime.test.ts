@@ -16,6 +16,8 @@ const { createTempDir } = createScriptTestHarness();
 
 it("keeps concurrent compiler input identity stable when lint retires its config", async () => {
   const root = fs.realpathSync(createTempDir("oxlint-config-lifetime-"));
+  // Keep artifact ownership inside this fixture when its temp directory has a checkout ancestor.
+  fs.mkdirSync(path.join(root, ".git"));
   const config = path.join(root, ".oxlintrc.json");
   fs.writeFileSync(config, JSON.stringify({ rules: { "max-lines": "error" } }));
   fs.writeFileSync(path.join(root, "source.ts"), "export const value = 1;\n");
@@ -62,10 +64,9 @@ it("keeps concurrent compiler input identity stable when lint retires its config
       before = snapshot();
       before.signature("tsconfig.json", [], ["source.ts"]);
     }
-    const captured = before;
-    expect(() =>
-      snapshot().seal("tsconfig.json", [], ["source.ts"], captured, Date.now()),
-    ).not.toThrow();
+    expect(snapshot().signature("tsconfig.json", [], ["source.ts"])).toBe(
+      before.signature("tsconfig.json", [], ["source.ts"]),
+    );
     expect(compilerBlocked).toBe(true);
   } finally {
     await compiler.release();

@@ -17,6 +17,7 @@ import {
   removeTemporaryArtifacts,
   reportRetainedUpdateRuntime,
 } from "./temp-artifact-cleanup.js";
+import { ignoreMissingUpdateCandidateFile } from "./update-candidate-files.js";
 import { withUpdateCandidateIoBudget } from "./update-candidate-io.js";
 import { prepareUpdateCandidatePluginTrees } from "./update-candidate-plugin-tree.js";
 import type { ResolvedGlobalInstallTarget } from "./update-global.js";
@@ -188,12 +189,7 @@ async function runWithRetainedUpdateRuntime<T>(
           const roots = new Map<string, string>();
           for (const name of ["package.json", "dist", "node_modules"]) {
             const entry = path.join(sourceRoot, name);
-            const present = await fs.lstat(entry).catch((error: unknown) => {
-              if (hasErrnoCode(error, "ENOENT")) {
-                return undefined;
-              }
-              throw error;
-            });
+            const present = await fs.lstat(entry).catch(ignoreMissingUpdateCandidateFile);
             assertCurrent();
             if (present) {
               roots.set(entry, project(entry));
@@ -206,16 +202,22 @@ async function runWithRetainedUpdateRuntime<T>(
             targetStateDir: privateRoot,
             candidateRoot,
             retainedHostRoot: sourceRoot,
+            // Missing optional peers must not pull unrelated ancestor installations
+            // into a retained runtime. Explicit linked dependency owners still travel.
+            retainedDependencyRoot: packageOwner
+              ? resolvePathViaExistingAncestorSync(path.resolve(packageOwner))
+              : sourceRoot,
             onProgress: assertCurrent,
           });
           const inventoryMs = Math.round(performance.now() - inventoryStartedAt);
           const materializationStartedAt = performance.now();
           const counts = await withUpdateCandidateIoBudget(
-            { directory: privateRoot, bytes: plan.bytes, timeoutMs },
-            async (signal) =>
+            { directory: privateRoot, bytes: plan.bytes, timeoutMs, progress: "reported" },
+            async (signal, reportProgress) =>
               await linkUpdateCandidatePluginTrees(plan, {
                 targetStateDir: privateRoot,
                 candidateRoot,
+                onMaterialized: reportProgress,
                 onProgress: () => {
                   signal.throwIfAborted();
                 },
@@ -253,11 +255,15 @@ async function runWithRetainedUpdateRuntime<T>(
       closing = true;
       // A signal can arrive during projection; stop and join its last filesystem write.
       await preparation?.catch(() => undefined);
-      const retained = directory;
-      if (retained) {
-        await removeTemporaryArtifacts(retained, "Updater runtime", (error) => {
-          reportRetainedUpdateRuntime(retained, `cleanup failed: ${formatErrorMessage(error)}`);
-        });
+      if (directory) {
+        if (prepared) {
+          reportRetainedUpdateRuntime(
+            directory,
+            "worker generation settled; cleanup deferred to the next eligible update or openclaw doctor --fix",
+          );
+        } else {
+          await removeTemporaryArtifacts(directory, "Updater runtime");
+        }
       }
       unregister?.();
     },

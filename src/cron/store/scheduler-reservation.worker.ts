@@ -2,23 +2,17 @@ import { getSqliteWorkerStateContext } from "../../infra/sqlite-worker-state-con
 import type { OpenClawStateDatabase } from "../../state/openclaw-state-db-contract.js";
 import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
 import { tryCronScheduleIdentity } from "../schedule-identity.js";
-import { isJobEnabled } from "../service/jobs-scheduling.js";
-import { resolveCronNotificationQueueOwner } from "../service/notification-intents.js";
+import { isJobEnabled, resolveNextRunAtMsOrDisable } from "../service/jobs-scheduling.js";
 import type { CronJobPolicyContext } from "../service/state.js";
-import { resolveNextRunAtMsOrDisable } from "../service/timer-trigger.js";
 import type { CronJob } from "../types.js";
 import {
   findActiveCronRunReceiptInDatabase,
   finishCronRunReceiptInDatabase,
 } from "./run-receipt-store.js";
-import type { CronRuntimeMutationContracts } from "./runtime-mutation.types.js";
-import {
-  createCronMutationLogger,
-  prepareCronRuntimeMutation,
-  retainCronRuntimeMutationOutcome,
-} from "./runtime-mutation.worker.js";
+import { createCronMutationLogger } from "./runtime-mutation.worker.js";
 import { mutateCronRuntimeRowsInDatabase } from "./runtime-rows.kernel.js";
 import type {
+  CronRuntimeMutationContracts,
   CronReservationReleasePolicy,
   CronRuntimeWorkerOperations,
 } from "./runtime-worker.types.js";
@@ -29,7 +23,7 @@ type SchedulerReleaseInput = Omit<
   "policy"
 > & { policy: SchedulerReleasePolicy };
 type PreparedReservation =
-  CronRuntimeMutationContracts["cron.releaseReservations"]["preparation"]["reservations"][number];
+  CronRuntimeMutationContracts["cron.releaseReservations"]["snapshot"]["reservations"][number];
 
 function clearMatchingReservationMarkers(job: CronJob, reservation: PreparedReservation): boolean {
   let changed = false;
@@ -63,19 +57,7 @@ export function releaseSchedulerReservationsInWorker(
         storeKey: input.storeKey,
         jobIds,
         mutate({ jobs, receiptSchema }) {
-          const preparation = prepareCronRuntimeMutation("cron.releaseReservations", input.nonce, {
-            deletionBlocked: false,
-            notificationNeedsDefault:
-              policy.kind === "startup-settlement" &&
-              policy.deferredJobs.some(({ jobId }) => {
-                const job = jobs.get(jobId);
-                return (
-                  job !== undefined &&
-                  isJobEnabled(job) &&
-                  !resolveCronNotificationQueueOwner(job, "auto-disabled").agentId
-                );
-              }),
-          });
+          const preparation = input.snapshot;
           const outcome: CronRuntimeMutationContracts["cron.releaseReservations"]["outcome"] = {
             jobs: [],
             notifications: [],
@@ -182,12 +164,7 @@ export function releaseSchedulerReservationsInWorker(
           return { upsertJobIds: outcome.jobs.map((job) => job.id), value: outcome };
         },
       });
-      return retainCronRuntimeMutationOutcome(
-        "cron.releaseReservations",
-        db,
-        input.nonce,
-        committed.value,
-      );
+      return { outcome: committed.value };
     },
     { database, path: database.path, env: getSqliteWorkerStateContext().environment },
     {

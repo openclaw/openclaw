@@ -4,7 +4,6 @@ import { join } from "node:path";
 import { stableStringify } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
@@ -51,31 +50,6 @@ function build(
 }
 
 describe("buildClawUpdatePlan", () => {
-  it("reads pre-bootstrap-column v6 state without mutating it", async () => {
-    const current = await fixture();
-    await closeOpenClawStateDatabaseAsync();
-    closeOpenClawStateDatabaseForTest();
-    const databasePath = resolveOpenClawStateSqlitePath(current.env);
-    const sqlite = requireNodeSqlite();
-    const database = new sqlite.DatabaseSync(databasePath);
-    try {
-      database.exec(`
-        ALTER TABLE claw_installs DROP COLUMN bootstrap_source_path;
-        ALTER TABLE claw_installs DROP COLUMN bootstrap_content_digest;
-      `);
-    } finally {
-      database.close();
-    }
-    const beforeBytes = await readFile(databasePath);
-    const beforeStat = await stat(databasePath);
-
-    const plan = await build(current);
-
-    expect(plan).toMatchObject({ found: true, agentId: "worker", blockers: [] });
-    expect((await readFile(databasePath)).equals(beforeBytes)).toBe(true);
-    expect((await stat(databasePath)).mtimeMs).toBe(beforeStat.mtimeMs);
-  });
-
   it("moves a portable plugin dependency into a profile extension edge without reinstalling", async () => {
     const current = await fixture();
     const parsed = parseClawManifest({

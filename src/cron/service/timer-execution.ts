@@ -16,16 +16,17 @@ import { cronScriptFailureMetadata } from "../script-failure.js";
 import { appendCronPayloadText, cronStreamScheduleKey } from "../stream-schedule.js";
 import type {
   CronJob,
+  CronJobExecutionResult,
   CronStoredJob,
   CronNextCheckProposal,
   CronRunOutcome,
   CronRunTelemetry,
+  CronRunDeliveryResult,
+  CronTriggerEvalOutcome,
 } from "../types.js";
 import { abortErrorMessage, timeoutErrorMessage } from "./execution-errors.js";
-import type { CronRunDeliveryResult, CronServiceState } from "./state.js";
+import type { CronServiceState } from "./state.js";
 import {
-  type CronJobExecutionResult,
-  type CronTriggerEvalOutcome,
   type ExecuteJobCoreOptions,
   resolveMainSessionCronDeliveryContext,
 } from "./timer-execution-timeout.js";
@@ -89,6 +90,7 @@ export async function executeJobCore(
       };
     }
     const evaluation = await evaluator({
+      deliveryAttemptFence: options?.deliveryAttemptFence ?? null,
       job,
       script: job.trigger.script,
       state: job.state.triggerState,
@@ -357,6 +359,7 @@ async function executeDetachedCronJob(
       };
     }
     const res = await state.deps.runCommandJob({
+      deliveryAttemptFence: options?.deliveryAttemptFence ?? null,
       job,
       abortSignal,
     });
@@ -403,6 +406,7 @@ async function executeDetachedCronJob(
   }
 
   const res = await state.deps.runIsolatedAgentJob({
+    deliveryAttemptFence: options?.deliveryAttemptFence ?? null,
     job,
     admissionSource:
       job.owner?.sessionKey ||
@@ -472,6 +476,7 @@ async function executeScriptCronJob(
     };
   }
   const result = await state.deps.runScriptJob({
+    deliveryAttemptFence: options?.deliveryAttemptFence ?? null,
     job,
     streamBatch: options?.streamBatch,
     abortSignal,

@@ -25,7 +25,7 @@ scenario:
     - Exact worker NO_REPLY stays private while required parent completion represents missing child output visibly exactly once.
     - Gateway restart does not replay prior terminal payloads or synthesize interruption notices for already-settled handoffs, and a post-restart completion is delivered exactly once.
     - Direct fallback strips protected internal metadata before one channel delivery.
-    - A private parent consumes a child-only nonce and media reference, spawns a second child with messaging denied, remains silent, and does not replay either result after restart.
+    - A private parent consumes a child-only nonce and media reference, spawns a second child with messaging denied, records its reviewed outcome internally, and does not send or replay either result on the channel.
   docsRefs:
     - docs/tools/subagents.md
     - docs/help/testing.md
@@ -327,7 +327,7 @@ flow:
                   senderId:
                     ref: privateConversationId
                   senderName: QA Private Completion Operator
-                  text: "Subagent terminal reply QA check: private. Review the first child internally, use its result to start a second child, and remain silent after each completion."
+                  text: "Subagent terminal reply QA check: private. Review the first child internally, use its result to start a second child, and keep both completion reports private."
                 saveAs: privateIngress
               - call: waitForCondition
                 saveAs: privateRuns
@@ -347,23 +347,23 @@ flow:
                   expr: "privateSpawns.length === 2 && privateSpawns.every((request) => request.plannedToolArgs?.completionTarget === 'parent') && /QA-PARENT-PRIVATE-CHILD1-[A-F0-9]{32}/.test(privateSpawns[1].plannedToolArgs.task)"
                   message:
                     expr: "`private parent did not consume the first result to spawn exactly one second child: ${JSON.stringify(privateSpawns)}`"
-              # The debug prompt omits protected runtime carriers; inspect the actual
-              # latest user input consumed by the private continuation instead.
-              - set: privateCompletionCarrier
+              # Inspect the actual request: compatible endpoints retain runtime
+              # carriers in the user role, separately from the user-authored turn.
+              - set: privateCompletionProjection
                 value:
                   expr: |-
-                    (() => {
-                      const rawInput = privateSpawns[1].body?.input;
-                      const input = Array.isArray(rawInput) ? rawInput : typeof rawInput === 'string' ? [{ role: 'user', content: rawInput }] : [];
-                      const content = input.findLast((item) => item.role === 'user')?.content;
-                      const text = typeof content === 'string' ? content.trim() : Array.isArray(content) ? content.filter((part) => part.type === 'input_text').map((part) => part.text).join('\n').trim() : '';
-                      const projection = /<conversation_context>\n([\s\S]*)\n<\/conversation_context>\n\nCurrent user request:\n([\s\S]*)$/.exec(text);
-                      return projection?.[2] ?? text;
+                    (async () => {
+                      const { normalizeResponsesInput, extractLastUserText, extractCurrentRuntimeContextTexts } = await qaImport('./providers/mock-openai/mock-openai-input.js');
+                      const input = normalizeResponsesInput(privateSpawns[1].body?.input);
+                      const readText = (item) => typeof item?.content === 'string' ? item.content.trim() : Array.isArray(item?.content) ? item.content.filter((part) => part.type === 'input_text' || part.type === 'text').map((part) => part.text).join('\n').trim() : '';
+                      const userText = extractLastUserText(input).trim();
+                      const runtimeContext = [...input.filter((item) => item.role === 'developer' || item.role === 'system').map(readText), ...extractCurrentRuntimeContextTexts(input.filter((item) => item.role === 'user'))].join('\n');
+                      return { userText, runtimeContext };
                     })()
               - assert:
-                  expr: "privateCompletionCarrier.includes('Internal task completion event') && /MEDIA:[^\\n]*qa-private-result\\.png/.test(privateCompletionCarrier)"
+                  expr: "privateCompletionProjection.userText.includes('Continue the OpenClaw runtime event.') && !/QA-PARENT-PRIVATE-CHILD1-|MEDIA:/.test(privateCompletionProjection.userText) && privateCompletionProjection.runtimeContext.includes('Internal task completion event') && /MEDIA:[^\\n]*qa-private-result\\.png/.test(privateCompletionProjection.runtimeContext)"
                   message:
-                    expr: "`The actual private completion carrier lost the child's media reference: ${JSON.stringify({ carrier: privateCompletionCarrier.slice(0, 8192), childSessionKeys: privateRuns.map((run) => run.childSessionKey) })}`"
+                    expr: "`The private completion was not split into runtime context and a generic user turn: ${JSON.stringify({ projection: privateCompletionProjection, childSessionKeys: privateRuns.map((run) => run.childSessionKey) })}`"
               - set: privateParentIds
                 value:
                   expr: "privateSpawns.map((request) => request.sessionId)"
@@ -414,7 +414,9 @@ flow:
                   lambda:
                     params:
                       - text
-                    expr: "config.parentAcknowledgment.startsWith(String(text ?? '').trim()) || (privateTelegramWire && String(text ?? '').trim() === '<b>Working</b>')"
+                    # Only the required ingress turn's public spawn status is visible;
+                    # private child labels, result prose, and media remain forbidden.
+                    expr: "config.parentAcknowledgment.startsWith(String(text ?? '').trim()) || (privateTelegramWire && ['<b>Working</b>', '<b>Working</b>\\nSub-agent: running', '<b>Working</b>\\nLast activity: Sub-agent'].includes(String(text ?? '').trim()))"
               - assert:
                   expr: "privateIngress.id && privateOutbound.length === 2 && privateAcknowledgments.length === 1 && privateOutbound.every((message) => message.conversation.id === privateConversationId && (privateTelegramWire || message.replyToId === privateIngress.id) && (message.attachments?.length ?? 0) === 0 && isPrivateKickoffText(message.text))"
                   message:

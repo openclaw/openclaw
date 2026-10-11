@@ -69,7 +69,7 @@ run:
 4. Add eligible client tools supplied for the current run.
 5. Keep core coding primitives and direct-only tools model-visible and index
    compact descriptors for the remaining catalog-eligible tools.
-6. Add a deterministic, bounded, policy-filtered capability directory to the
+6. Add a size-limited capability directory selected by fixed rules and filtered by policy to the
    cache-stable system-prompt prefix.
 7. Expose the structured search, describe, and call tools or the compact
    directory surface alongside those stable, directly callable tools.
@@ -466,19 +466,19 @@ The regression proves:
 pnpm test:live -- src/agents/tool-search.live.test.ts
 ```
 
-This opt-in probe uses configured OpenAI credentials; without them it is skipped.
+This opt-in check uses configured OpenAI credentials; without them it is skipped.
 It compares direct exposure, the unset default, and both explicit Tool Search modes with small and large
 synthetic catalogs through the OpenClaw runner. A verification code created inside
-the target tool proves actual execution. The probe checks policy-denied and
+the target tool proves actual execution. The check covers policy-denied and
 direct-only tools, deferred schemas, and transcript delivery without forcing a
 model tool choice. It reports request bytes, discovery and call counts, schema
 recovery, and elapsed time. Small catalogs are measured rather than assumed to
-benefit from compaction. A successful probe is not a cross-provider reliability
+benefit from compaction. A successful check is not a cross-provider reliability
 benchmark.
 
 ## Failure behavior
 
-Tool Search should fail closed:
+Tool Search should reject unavailable or disallowed tools:
 
 - if a tool is not in the effective policy, search should not return it
 - if a selected tool becomes unavailable, `tool_call` should fail

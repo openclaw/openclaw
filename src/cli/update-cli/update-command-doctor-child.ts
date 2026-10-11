@@ -1,18 +1,28 @@
 import fs from "node:fs/promises";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { hasErrnoCode } from "../../infra/errors.js";
+import { revokeSqliteDatabaseAdmissionsForPath } from "../../infra/sqlite-database-admission.js";
+import {
+  createUpdateDoctorProcessCustody,
+  type UpdateDoctorProcessNamespace,
+} from "../../infra/update-doctor-process-custody.js";
+import { UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV } from "../../infra/update-doctor-result.js";
 import type { UpdateRequester } from "../../infra/update-requester-authority.js";
 import type { UpdateRecoveryFence } from "../../infra/update-run-recovery.js";
+import type { UpdateStepResult } from "../../infra/update-step-result.js";
 import {
   CommandProcessCleanupError,
   createSanitizedCommandError,
+  readCommandProcessFailure,
 } from "../../process/exec-result.js";
 import {
+  resolveCommandEnv,
   runUtf8CommandWithTimeout,
   type CommandOptions,
   type SpawnResult,
 } from "../../process/exec.js";
 import { parseOpenClawSchemaVersions } from "../../state/openclaw-schema-versions.js";
+import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { withUpdateCommandExecutorChild } from "./update-command-executor.js";
 import type { UpdateDoctorInput } from "./update-command-migrated-types.js";
 import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
@@ -60,19 +70,15 @@ export async function inspectUpdateDoctorChildSupport(
     );
   }
   assertCurrent();
-  let contract: unknown;
-  try {
-    contract = JSON.parse(result.stdout);
-  } catch {
-    // A broken check is not evidence of an older, supported CLI contract.
-  }
+  // A broken check is not evidence of an older, supported CLI contract.
+  const contract = safeParseJsonRecord(result.stdout);
   if (
     result.code !== 0 ||
     result.termination !== "exit" ||
     result.cleanup !== "normal" ||
     result.outputLimitExceeded ||
     result.outputErrorStream ||
-    !isRecord(contract) ||
+    !contract ||
     !parseOpenClawSchemaVersions(contract)
   ) {
     throw new UpdateCommandRecoveryPendingError("Target Doctor capability could not be inspected.");
@@ -92,7 +98,87 @@ export type UpdateDoctorChildContext = {
   /** The parent mutation fence is suspended while its child owns effects. */
   assertRequesterCurrent: () => void;
   onStateHandoff?: () => void;
+  onProcessSettlement?: (step: UpdateStepResult) => void;
 };
+
+/** Both delegated and standalone update Doctors publish through the same result channel. */
+export async function runUpdateDoctorProcess(
+  context: {
+    runId: string;
+    root: string;
+    processNamespace?: UpdateDoctorProcessNamespace;
+    /** Only the delegated worker waits for the complete private grant before Doctor effects. */
+    privateInputContract?: "delegated-doctor";
+    onProcessSettlement?: (step: UpdateStepResult) => void;
+  },
+  argv: string[],
+  options: CommandOptions,
+): Promise<SpawnResult> {
+  const resultPath = options.env?.[UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV]?.trim();
+  if (!resultPath) {
+    throw new UpdateCommandRecoveryPendingError(
+      "Doctor process custody requires its result channel.",
+    );
+  }
+  const statePath = resolveOpenClawStateSqlitePath(resolveCommandEnv({ argv, ...options }));
+  const custody = await createUpdateDoctorProcessCustody(
+    context.runId,
+    context.root,
+    resultPath,
+    context.processNamespace,
+    context.privateInputContract,
+  );
+  try {
+    let outcome: { result: SpawnResult } | { error: unknown };
+    try {
+      outcome = {
+        result: await runUtf8CommandWithTimeout(argv, {
+          ...options,
+          killProcessTree: true,
+          requireProcessTreeExtinction: true,
+        }),
+      };
+    } catch (error) {
+      outcome = { error };
+    }
+    const settlement = await custody.settle(
+      "result" in outcome ? outcome.result : readCommandProcessFailure(outcome.error),
+    );
+    if (settlement) {
+      const error = new CommandProcessCleanupError(
+        "error" in outcome ? { cause: outcome.error } : undefined,
+      );
+      error.message = settlement.stderrTail ?? "Doctor process settlement could not be recorded.";
+      try {
+        context.onProcessSettlement?.(settlement);
+      } catch (cause) {
+        if (settlement.exitCode !== 0) {
+          throw new AggregateError([error, cause], error.message, { cause });
+        }
+        if ("error" in outcome) {
+          throw new AggregateError([outcome.error, cause], "Doctor settlement recording failed", {
+            cause,
+          });
+        }
+        throw cause;
+      }
+      if (settlement.exitCode !== 0) {
+        throw error;
+      }
+    }
+    if ("error" in outcome) {
+      throw outcome.error;
+    }
+    return outcome.result;
+  } finally {
+    try {
+      // Doctor can migrate in another process, outside this parent's admission publication cells.
+      revokeSqliteDatabaseAdmissionsForPath(statePath);
+    } finally {
+      custody.close();
+    }
+  }
+}
 
 /** Package and finalization Doctors use the same private-input/native-child owner. */
 export async function withUpdateDoctorChild<T>(
@@ -119,25 +205,36 @@ export async function withUpdateDoctorChild<T>(
         root: params.root,
         requester: context.requester,
       };
-      return await operation(async (argv, options) => {
-        const result = await runUtf8CommandWithTimeout(argv, {
-          ...options,
-          input: JSON.stringify(input),
-          beforeInput: (pid, spawnedArgv) => {
-            context.assertRequesterCurrent();
-            bindChild(pid, spawnedArgv);
-            // Only the bound target may read state-backed policy after migration.
-            // The parent retains identity and native custody, never schema admission.
-            context.onStateHandoff?.();
+      return await operation((argv, options) =>
+        runUpdateDoctorProcess(
+          {
+            ...context,
+            root: params.root,
+            privateInputContract: "delegated-doctor",
+            processNamespace: {
+              roots: [
+                executor.childKey,
+                ...(executor.originalChildKey ? [executor.originalChildKey] : []),
+                ...(executor.retainedChildKey ? [executor.retainedChildKey] : []),
+                ...(executor.slot ? [executor.slot.childKey] : []),
+              ],
+              databaseIdentity: executor.databaseIdentity,
+            },
           },
-          killProcessTree: true,
-          requireProcessTreeExtinction: true,
-        });
-        if (result.cleanup === "forced" || result.cleanup === "uncertain") {
-          throw new CommandProcessCleanupError();
-        }
-        return result;
-      });
+          argv,
+          {
+            ...options,
+            input: JSON.stringify(input),
+            beforeInput: (pid, spawnedArgv) => {
+              context.assertRequesterCurrent();
+              bindChild(pid, spawnedArgv);
+              // Only the bound target may read state-backed policy after migration.
+              // The parent retains identity and native custody, never schema admission.
+              context.onStateHandoff?.();
+            },
+          },
+        ),
+      );
     },
   );
 }

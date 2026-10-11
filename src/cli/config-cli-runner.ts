@@ -21,14 +21,11 @@ import { danger, info } from "../globals.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { ExitError, writeRuntimeJson } from "../runtime.js";
+import { dedupeByKey } from "../shared/dedupe-by-key.js";
 import { toDotPath } from "../shared/dot-path.js";
 import { parseConfigPathArrayIndex } from "../shared/path-array-index.js";
 import { formatCliCommand } from "./command-format.js";
-import {
-  formatPluginInstallConfigSetError,
-  type ConfigMutationOptions,
-  type ConfigSetOperation,
-} from "./config-cli-input.js";
+import type { ConfigMutationOptions, ConfigSetOperation } from "./config-cli-input.js";
 import {
   normalizeConfigMutationExplicitSetPath,
   normalizeConfigMutationModelRefs,
@@ -93,62 +90,34 @@ function remapSuppliedPathsAfterDelete(
   });
 }
 
-function valueHasAutoManagedChild(value: unknown, childPath: readonly PathSegment[]): boolean {
-  let cursor: unknown = value;
-  for (const segment of childPath) {
-    if (!isRecord(cursor) || !Object.hasOwn(cursor, segment)) {
-      return false;
-    }
-    cursor = cursor[segment];
-  }
-  return cursor !== undefined;
-}
-
-function operationClobbersAncestorChild(
-  operation: ConfigSetOperation,
-  managedPath: readonly PathSegment[],
-  merge?: boolean,
-): boolean {
-  if (operation.mutation === "delete") {
-    return true;
-  }
-  const childPath = managedPath.slice(operation.requestedPath.length);
-  const isMerge = operation.mutation === "merge" || (merge && operation.mutation !== "replace");
-  return isMerge ? valueHasAutoManagedChild(operation.value, childPath) : true;
-}
-
 function findAutoManagedMetaTargets(
   operations: readonly ConfigSetOperation[],
   merge?: boolean,
 ): readonly PathSegment[][] {
   const matches: PathSegment[][] = [];
-  const seen = new Set<string>();
-  const record = (path: readonly PathSegment[]) => {
-    const key = toDotPath(path);
-    if (!seen.has(key)) {
-      seen.add(key);
-      matches.push([...path]);
-    }
-  };
   for (const operation of operations) {
     const direct = AUTO_MANAGED_CONFIG_META_PATHS.some((path) =>
       pathStartsWith(operation.requestedPath, path),
     );
     if (direct) {
-      record(operation.requestedPath);
+      matches.push(operation.requestedPath);
       continue;
     }
+    const mergesValue =
+      operation.mutation !== "delete" &&
+      (operation.mutation === "merge" || (merge && operation.mutation !== "replace"));
     for (const managedPath of AUTO_MANAGED_CONFIG_META_PATHS) {
+      const childPath = managedPath.slice(operation.requestedPath.length);
       if (
         operation.requestedPath.length < managedPath.length &&
         pathStartsWith(managedPath, operation.requestedPath) &&
-        operationClobbersAncestorChild(operation, managedPath, merge)
+        (!mergesValue || getAtPath(operation.value, childPath).value !== undefined)
       ) {
-        record(managedPath);
+        matches.push([...managedPath]);
       }
     }
   }
-  return matches;
+  return dedupeByKey(matches, toDotPath);
 }
 
 function formatAutoManagedMetaError(paths: readonly PathSegment[][]): string {
@@ -275,7 +244,16 @@ export async function runConfigOperations(params: {
       pathStartsWith(requestedPath, PLUGIN_INSTALL_RECORD_PATH_PREFIX),
     )
   ) {
-    throw new Error(formatPluginInstallConfigSetError());
+    throw new Error(
+      [
+        "plugins.installs is managed by the plugin index and cannot be edited with config set.",
+        "",
+        "Use plugin commands instead:",
+        `  ${formatCliCommand("openclaw plugins install <spec>")}`,
+        `  ${formatCliCommand("openclaw plugins update <plugin-id>")}`,
+        `  ${formatCliCommand("openclaw plugins uninstall <plugin-id>")}`,
+      ].join("\n"),
+    );
   }
   const autoManagedTargets = findAutoManagedMetaTargets(operations, options.merge);
   if (autoManagedTargets.length > 0) {
@@ -417,6 +395,7 @@ export async function runConfigOperations(params: {
       pathTokens: operation.pathTokens,
       quotedNumericSegments: operation.quotedNumericSegments,
       schema: mutationSchema?.schema as JsonSchemaRecord | undefined,
+      command: params.successMode,
     };
     let suppliedPaths: PathSegment[][];
     if (merge) {
@@ -427,6 +406,7 @@ export async function runConfigOperations(params: {
         path: operation.setPath,
         value: operation.value,
         allowReplace: options.replace || operation.mutation === "replace",
+        command: params.successMode,
       });
       setAtPath(next, operation.setPath, operation.value, pathOptions);
       suppliedPaths = [operation.setPath];
@@ -476,7 +456,7 @@ export async function runConfigOperations(params: {
     previousEnv: preparedPreviousValues.resolutionEnv,
   };
   if (options.dryRun) {
-    const topology = prepareConfigWriteTopology({
+    const topology = await prepareConfigWriteTopology({
       snapshot,
       pluginMetadataSnapshot: mutationStart.writeOptions.basePluginMetadataSnapshot,
       nextConfig: authoredNextConfig,

@@ -7,15 +7,19 @@ waived by success on another surface.
 
 ## Older updater checks
 
-Before freezing a release, refresh `scripts/lib/update-compat-inventory.json`
-from every release in the supported upgrade window. Verify each downloaded npm
-tarball against its published `dist.integrity` before extraction, then run
+`scripts/lib/update-compat-inventory.json` is test-fixture maintenance, not a
+packaging or publish gate: npm preflight, prepack, `release-check`, and
+`release:prep` never consult live npm dist-tags, so another release moving
+`latest` or `beta` cannot invalidate a validated candidate. Refresh it on
+`main` (stable closeout or a normal PR) from every release in the supported
+upgrade window. Verify each downloaded npm tarball against its published
+`dist.integrity` before extraction, then run
 `pnpm update:compat:gen --release '<unpacked-dir>=<verified-integrity>'`, repeating
 `--release` for every supported version. Generation replaces the recorded set:
 keep empty entries, drop expired versions and their historical corrections, and
-never hand-edit recorded origins. Run `pnpm update:compat:check`; both npm
-`latest` and `beta` must be covered. Repeat the generation arguments with
-`--check` for an offline regeneration check.
+never hand-edit recorded origins. `pnpm update:compat:check` remains a manual
+maintainer report of npm `latest`/`beta` coverage. Repeat the generation
+arguments with `--check` for an offline regeneration check.
 
 Run every recorded `update-first-hop-compat*` lane and the upgrade survivor lane
 from the oldest supported release. Native Windows proof must invoke the old
@@ -112,14 +116,12 @@ also defers Package Acceptance Telegram, broad live/E2E, QA-live and Parallels.
 Package Telegram deferral applies to beta-profile `main` too, but it does not
 qualify for `npm-beta-v1`.
 
-FRV `normalCi` Windows Node shards are policy-advisory (`windows-node-ci`).
-Eligible `normalCi` failures with authenticated `recorded-flake` receipts are
-also advisory; all other selected failures block. Decide blocker or flake for
-every failure, rerun flakes on the same Release SHA at most twice, and file a
-fix-in-parallel issue/PR on `main`. Do not re-cut, change tooling, or start another
-FRV for a flake. See the [CI skill](../../release-openclaw-ci/SKILL.md#publication-requirements).
-Other children and package/install/update, artifact, and evidence gates stay
-strict; extending classification beyond `normalCi` is follow-up work.
+FRV `normalCi` Windows Node shards and all other selected failures block. Decide
+blocker or flake for every failure,
+rerun flakes on the same Release SHA at most twice, and file a fix-in-parallel
+issue/PR on `main`. Do not re-cut, change tooling, or start another FRV solely
+to clear a flake; the selected job must still pass before publication. See the
+[CI skill](../../release-openclaw-ci/SKILL.md#publication-requirements).
 Native platform publication remains independent and follows its own gates.
 All-group cross-OS qualification requires all nine Linux/Windows/macOS
 install/upgrade pairs. Focused recovery may select individual lanes but does

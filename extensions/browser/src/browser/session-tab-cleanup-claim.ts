@@ -3,6 +3,8 @@
  * A concurrent touch or competing sweep cannot delete another generation's row.
  */
 import { randomUUID } from "node:crypto";
+import { resolveGlobalMap } from "openclaw/plugin-sdk/global-singleton";
+import { createSubsystemLogger } from "openclaw/plugin-sdk/logging-core";
 import type { SessionEntryCurrentPreparation } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
@@ -23,6 +25,8 @@ import {
   withoutBrowserSessionTabCleanup,
 } from "./session-tab-store.js";
 import type { DurableTab } from "./session-tab-tracking.js";
+
+const log = createSubsystemLogger("browser").child("service").child("session-tabs");
 
 export type CleanupKind = "lifecycle" | "sweep";
 
@@ -50,7 +54,57 @@ export type CloseParams = SessionEntryCurrentPreparation & {
     | null
     | Promise<ResolvedBrowserConfig | null>;
   onWarn?: (message: string) => void;
+  onDebug?: (message: string) => void;
 };
+
+const deferredTabDiagnosticsSymbol = Symbol.for(
+  "openclaw.browser.session-tabs.deferred-diagnostics",
+);
+
+/** Defensive bound: live deferrals are already forgotten as their rows settle. */
+const MAX_DEFERRED_TAB_DIAGNOSTICS = 512;
+
+function deferredTabDiagnostics(): Map<string, string> {
+  return resolveGlobalMap(deferredTabDiagnosticsSymbol);
+}
+
+/** Records a deferral, returning true when the row has not reported it yet. */
+function recordDeferredTabDiagnostic(tab: DurableTab, reason: string): boolean {
+  const diagnostics = deferredTabDiagnostics();
+  if (diagnostics.get(tab.storageKey) === reason) {
+    return false;
+  }
+  // Re-insert so the least recently reported deferral is evicted first.
+  diagnostics.delete(tab.storageKey);
+  diagnostics.set(tab.storageKey, reason);
+  if (diagnostics.size > MAX_DEFERRED_TAB_DIAGNOSTICS) {
+    const oldest = diagnostics.keys().next();
+    if (!oldest.done) {
+      diagnostics.delete(oldest.value);
+    }
+  }
+  return true;
+}
+
+/** Lets a settled row report the next outage instead of staying muted forever. */
+function forgetDeferredTabDiagnostic(tab: DurableTab): void {
+  const diagnostics = deferredTabDiagnostics();
+  diagnostics.delete(tab.storageKey);
+}
+
+/** Warn once per deferral; repeated sweeps remain visible at debug level. */
+function reportDeferredTab(params: CloseParams, tab: DurableTab, reason: string): void {
+  const message = `deferred tracked browser tab ${tab.nativeTargetId}: ${reason}`;
+  if (recordDeferredTabDiagnostic(tab, reason)) {
+    params.onWarn?.(message);
+    return;
+  }
+  if (params.onDebug) {
+    params.onDebug(message);
+    return;
+  }
+  log.debug(message);
+}
 
 type CloseIfCurrent = (
   dispatch: () => Promise<CloseTrackedCdpTargetResult>,
@@ -115,6 +169,7 @@ async function deleteClaimedTab(
   authority: BrowserSessionTabAuthority,
   onWarn?: (message: string) => void,
 ): Promise<void> {
+  forgetDeferredTabDiagnostic(tab);
   try {
     if (tab.dashboard?.state === "stopping") {
       await updateBrowserSessionTab(
@@ -135,10 +190,7 @@ async function deleteClaimedTab(
     }
     await deleteBrowserSessionTabIf(
       tab.storageKey,
-      (current) => {
-        const record = parseBrowserSessionTabRecord(current);
-        return matchesCleanupAttempt(record, tab);
-      },
+      (current) => matchesCleanupAttempt(parseBrowserSessionTabRecord(current), tab),
       authority,
     );
   } catch (error) {
@@ -257,9 +309,7 @@ export async function closeDurableTab(
   }
   if (outcome.status === "unavailable") {
     if (outcome.reason === "extension-relay-unavailable") {
-      params.onWarn?.(
-        `deferred tracked browser tab ${tab.nativeTargetId}: extension relay runtime unavailable`,
-      );
+      reportDeferredTab(params, tab, "extension relay runtime unavailable");
       return 0;
     }
     // Expire unreachable ordinary tabs before they fill the bounded tracking store.
@@ -271,13 +321,11 @@ export async function closeDurableTab(
       await deleteClaimedTab(tab, authority, params.onWarn);
       return 0;
     }
-    params.onWarn?.(`deferred tracked browser tab ${tab.nativeTargetId}: ${outcome.reason}`);
+    reportDeferredTab(params, tab, outcome.reason);
     return 0;
   }
   if (outcome.status === "ownership-mismatch") {
     params.onWarn?.(`retired tracked browser tab ${tab.nativeTargetId}: ownership mismatch`);
-    await deleteClaimedTab(tab, authority, params.onWarn);
-    return 0;
   }
   await deleteClaimedTab(tab, authority, params.onWarn);
   return outcome.status === "closed" ? 1 : 0;

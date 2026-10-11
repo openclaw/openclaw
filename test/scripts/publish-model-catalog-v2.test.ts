@@ -10,6 +10,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   assembleModelCatalogBundleV2,
   parsePublishModelCatalogArgs,
+  projectRecommendedModels,
   runPublishModelCatalog,
   serializeModelCatalogBundle,
   serializeModelCatalogBundleV2,
@@ -45,14 +46,14 @@ function fixtureRoot() {
         modelsDev: { "fixture-native": "upstream" },
         providers: {
           anthropic: {
-            recommendedModels: ["missing"],
+            // Retired manifest authoring field: ignored, never published.
+            recommendedModels: ["seed-0"],
             models: seeds.map((model, index) =>
               index === 0 ? { ...model, cost: { input: 0.5 } } : model,
             ),
           },
           openai: {
             defaultModel: "seed-0",
-            recommendedModels: ["seed-2", "seed-0"],
             models: seeds,
           },
           "fixture-native": {
@@ -77,6 +78,11 @@ function fixtureRoot() {
         },
       },
     }),
+  );
+  fs.mkdirSync(path.join(root, "scripts", "lib"), { recursive: true });
+  fs.writeFileSync(
+    path.join(root, "scripts", "lib", "recommended-models.json"),
+    JSON.stringify(["seed-2", "paid", "seed-0"]),
   );
   return root;
 }
@@ -157,11 +163,21 @@ function pairFixture(existing = true) {
 }
 
 describe("publish model catalog v2", () => {
-  it.each([true, false])(
-    "publishes through both output symlinks and keeps the links (existing=%s)",
-    async (existing) => {
+  it.each([
+    { existing: true, linked: false },
+    { existing: true, linked: true },
+    { existing: false, linked: true },
+  ])(
+    "publishes the pair and cleans only owned recovery (existing=$existing linked=$linked)",
+    async ({ existing, linked }) => {
       const fixture = pairFixture(existing);
+      const parent = path.dirname(fixture.outputs[0]);
+      const parentMode = fs.statSync(parent).mode;
+      fs.writeFileSync(path.join(parent, "unrelated"), "preserve");
       const targets = fixture.outputs.map((file, index) => {
+        if (!linked) {
+          return { file, target: file, link: undefined };
+        }
         const target = path.join(`${path.dirname(file)}-target`, "catalog.json");
         fs.mkdirSync(path.dirname(target));
         if (existing) {
@@ -181,14 +197,18 @@ describe("publish model catalog v2", () => {
       });
       await expect(fixture.run()).resolves.toMatchObject({ wrote: true });
       targets.forEach(({ file, target, link }, index) => {
-        expect(fs.lstatSync(file).isSymbolicLink()).toBe(true);
-        expect(fs.readlinkSync(file)).toBe(link);
+        expect(fs.lstatSync(file).isSymbolicLink()).toBe(linked);
+        if (link) {
+          expect(fs.readlinkSync(file)).toBe(link);
+        }
         expect(JSON.parse(fs.readFileSync(target, "utf8")).schemaVersion).toBe(index + 1);
         expect(fs.readFileSync(file)).toEqual(fs.readFileSync(target));
         expect(
           fs.readdirSync(path.dirname(target)).filter((name) => name.startsWith(".catalog-pair-")),
         ).toEqual([]);
       });
+      expect(fs.statSync(parent).mode).toBe(parentMode);
+      expect(fs.readFileSync(path.join(parent, "unrelated"), "utf8")).toBe("preserve");
     },
   );
 
@@ -210,35 +230,45 @@ describe("publish model catalog v2", () => {
     });
   });
 
-  it("rejects a real second-parent failure before replacing v1", async () => {
+  it.each([
+    { phase: "parent", error: /EEXIST|ENOTDIR/u },
+    { phase: "prepare", error: "fixture second prepare ENOSPC" },
+    { phase: "publish", error: "fixture publication write ENOSPC" },
+  ])("preserves outputs and recovery on second-output $phase failure", async ({ phase, error }) => {
     const fixture = pairFixture();
-    fs.unlinkSync(fixture.outputs[1]);
-    fs.rmdirSync(path.dirname(fixture.outputs[1]));
-    fs.writeFileSync(path.dirname(fixture.outputs[1]), "not a directory");
-    await expect(fixture.run()).rejects.toThrow(/EEXIST|ENOTDIR/u);
-    expect(fs.readFileSync(fixture.outputs[0], "utf8")).toBe("previous v1");
-    expect(fixture.recovery(0)).toEqual([]);
-  });
-
-  it("keeps both existing outputs when the second prepared write fails", async () => {
-    const fixture = pairFixture();
-    const write = fs.writeFileSync;
-    vi.spyOn(fs, "writeFileSync").mockImplementation((file, data, options) => {
-      if (
-        typeof file === "number" &&
-        typeof data === "string" &&
-        data.includes('"schemaVersion": 2')
-      ) {
-        write(file, "partial");
-        throw new Error("fixture second prepare ENOSPC");
+    if (phase === "parent") {
+      fs.unlinkSync(fixture.outputs[1]);
+      fs.rmdirSync(path.dirname(fixture.outputs[1]));
+      fs.writeFileSync(path.dirname(fixture.outputs[1]), "not a directory");
+    } else {
+      const write = fs.writeFileSync;
+      vi.spyOn(fs, "writeFileSync").mockImplementation((file, data, options) => {
+        if (
+          typeof file === (phase === "prepare" ? "number" : "string") &&
+          typeof data === "string" &&
+          data.includes('"schemaVersion": 2')
+        ) {
+          write(file, "partial", options);
+          throw new Error(String(error));
+        }
+        return write(file, data, options);
+      });
+    }
+    await expect(fixture.run()).rejects.toThrow(error);
+    if (phase === "publish") {
+      expect(JSON.parse(fs.readFileSync(fixture.outputs[0], "utf8")).schemaVersion).toBe(1);
+      expect(fixture.recovery(0)).toHaveLength(1);
+      expect(fixture.recovery(1)).toHaveLength(1);
+    } else {
+      expect(fs.readFileSync(fixture.outputs[0], "utf8")).toBe("previous v1");
+      expect(fixture.recovery(0)).toEqual([]);
+      if (phase === "prepare") {
+        expect(fixture.recovery(1)).toEqual([]);
       }
-      return write(file, data, options);
-    });
-    await expect(fixture.run()).rejects.toThrow("fixture second prepare ENOSPC");
-    fixture.outputs.forEach((file, index) => {
-      expect(fs.readFileSync(file, "utf8")).toBe(`previous v${index + 1}`);
-      expect(fixture.recovery(index)).toEqual([]);
-    });
+    }
+    if (phase !== "parent") {
+      expect(fs.readFileSync(fixture.outputs[1], "utf8")).toBe("previous v2");
+    }
   });
 
   it.each([false, true])(
@@ -284,71 +314,14 @@ describe("publish model catalog v2", () => {
     },
   );
 
-  it("retains recovery after a partial second publication write", async () => {
-    const fixture = pairFixture();
-    const write = fs.writeFileSync;
-    vi.spyOn(fs, "writeFileSync").mockImplementation((file, data, options) => {
-      if (
-        typeof file === "string" &&
-        typeof data === "string" &&
-        data.includes('"schemaVersion": 2')
-      ) {
-        write(file, "partial", options);
-        throw new Error("fixture publication write ENOSPC");
-      }
-      return write(file, data, options);
-    });
-    await expect(fixture.run()).rejects.toThrow("fixture publication write ENOSPC");
-    expect(JSON.parse(fs.readFileSync(fixture.outputs[0], "utf8")).schemaVersion).toBe(1);
-    expect(fs.readFileSync(fixture.outputs[1], "utf8")).toBe("previous v2");
-    expect(fixture.recovery(0)).toHaveLength(1);
-    expect(fixture.recovery(1)).toHaveLength(1);
-  });
-
-  it("preserves an observed destination replacement before the second publication", async () => {
-    const fixture = pairFixture();
-    const rename = fs.promises.rename;
-    vi.spyOn(fs.promises, "rename").mockImplementation(async (source, destination) => {
-      await rename(source, destination);
-      if (destination === fixture.outputs[0]) {
-        fs.unlinkSync(fixture.outputs[1]);
-        fs.writeFileSync(fixture.outputs[1], "foreign replacement");
-      }
-    });
-    await expect(fixture.run()).rejects.toThrow("output changed during preparation");
-    expect(fs.readFileSync(fixture.outputs[1], "utf8")).toBe("foreign replacement");
-    expect(fixture.recovery(0)).toHaveLength(1);
-    expect(fixture.recovery(1)).toHaveLength(1);
-  });
-
-  it("does not roll back foreign replacements after an uncertain second rename", async () => {
-    const fixture = pairFixture();
-    const rename = fs.promises.rename;
-    vi.spyOn(fs.promises, "rename").mockImplementation(async (source, destination) => {
-      await rename(source, destination);
-      if (destination === fixture.outputs[1]) {
-        for (const file of fixture.outputs) {
-          fs.unlinkSync(file);
-          fs.writeFileSync(file, "foreign replacement");
-        }
-        throw new Error("fixture post-rename failure");
-      }
-    });
-    await expect(fixture.run()).rejects.toThrow("fixture post-rename failure");
-    fixture.outputs.forEach((file, index) => {
-      expect(fs.readFileSync(file, "utf8")).toBe("foreign replacement");
-      expect(fixture.recovery(index)).toHaveLength(1);
-    });
-  });
-
   it("reports cleanup failure without rejecting a successfully published pair", async () => {
     const fixture = pairFixture();
-    const unlink = fs.unlinkSync;
-    vi.spyOn(fs, "unlinkSync").mockImplementation((file) => {
+    const remove = fs.rmSync;
+    vi.spyOn(fs, "rmSync").mockImplementation((file, options) => {
       if (String(file).includes(".catalog-pair-")) {
         throw new Error("fixture cleanup EACCES");
       }
-      unlink(file);
+      remove(file, options);
     });
     await expect(fixture.run()).resolves.toMatchObject({ wrote: true });
     fixture.outputs.forEach((file, index) => {
@@ -358,147 +331,6 @@ describe("publish model catalog v2", () => {
     expect(fixture.warnings.mock.calls.flat().join("")).toContain(
       "pair published; recovery cleanup failed",
     );
-  });
-
-  it.each([
-    ["directory", "dev"],
-    ["directory", "ino"],
-    ["directory", "changed"],
-    ["file", "dev"],
-    ["file", "ino"],
-    ["file", "changed"],
-  ] as const)("retains a substituted recovery %s with %s identity", async (entry, identity) => {
-    const fixture = pairFixture();
-    const rename = fs.promises.rename;
-    const lstat = fs.lstatSync;
-    let replacement = "";
-    vi.spyOn(fs.promises, "rename").mockImplementation(async (source, destination) => {
-      await rename(source, destination);
-      if (destination !== fixture.outputs[1]) {
-        return;
-      }
-      const [dir] = fixture.recovery(0);
-      if (!dir) {
-        throw new Error("fixture recovery is missing");
-      }
-      const target = entry === "directory" ? dir : path.join(dir, "next.json");
-      const previous = lstat(target, { bigint: true });
-      fs.renameSync(target, `${target}.original`);
-      if (entry === "directory") {
-        fs.mkdirSync(target);
-        for (const name of ["next.json", "previous.json", "RECOVERY.txt"]) {
-          fs.renameSync(path.join(`${target}.original`, name), path.join(target, name));
-          fs.writeFileSync(path.join(target, name), "foreign replacement");
-        }
-      } else {
-        fs.writeFileSync(target, "foreign replacement");
-      }
-      replacement = entry === "directory" ? path.join(target, "next.json") : target;
-      vi.spyOn(fs, "lstatSync").mockImplementation((file, options) => {
-        const current = lstat(file, options);
-        if (file === target && current) {
-          // Only cleanup sees Windows' unknown path-stat identity; publication uses the host.
-          vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-          return Object.assign(current, {
-            dev: identity === "dev" ? 0n : previous.dev,
-            ino: identity === "ino" ? 0n : previous.ino + (identity === "changed" ? 1n : 0n),
-          });
-        }
-        return current;
-      });
-    });
-    await expect(fixture.run()).resolves.toMatchObject({ wrote: true });
-    expect(fs.readFileSync(replacement, "utf8")).toBe("foreign replacement");
-    fixture.outputs.forEach((file, index) => {
-      expect(JSON.parse(fs.readFileSync(file, "utf8")).schemaVersion).toBe(index + 1);
-    });
-    expect(fixture.warnings.mock.calls.flat().join("")).toContain(
-      "pair published; recovery cleanup failed; retained",
-    );
-  });
-
-  it.each([
-    ["directory", "dev"],
-    ["directory", "ino"],
-    ["file", "dev"],
-    ["file", "ino"],
-  ] as const)("retains recovery %s when %s differs above 2^53", async (entry, field) => {
-    const fixture = pairFixture();
-    const lstat = fs.lstatSync;
-    const fstat = fs.fstatSync;
-    const open = fs.openSync;
-    const close = fs.closeSync;
-    const rename = fs.promises.rename;
-    const descriptors = new Set<number>();
-    let published = false;
-    const original = 2n ** 53n;
-    const replacement = original + 1n;
-    expect(Number(original)).toBe(Number(replacement));
-    const recoveryEntry = (file: fs.PathLike) => {
-      const name = path.basename(String(file));
-      return entry === "directory" ? name.startsWith(".catalog-pair-") : name === "next.json";
-    };
-    vi.spyOn(fs, "openSync").mockImplementation((file, flags, mode) => {
-      const fd = open(file, flags, mode);
-      descriptors.delete(fd);
-      if (recoveryEntry(file)) {
-        descriptors.add(fd);
-      }
-      return fd;
-    });
-    vi.spyOn(fs, "closeSync").mockImplementation((fd) => {
-      close(fd);
-      descriptors.delete(fd);
-    });
-    vi.spyOn(fs, "fstatSync").mockImplementation((fd, options) => {
-      const stat = fstat(fd, options);
-      return descriptors.has(fd)
-        ? Object.assign(stat, { [field]: options?.bigint ? original : Number(original) })
-        : stat;
-    });
-    vi.spyOn(fs, "lstatSync").mockImplementation((file, options) => {
-      const stat = lstat(file, options);
-      const identity = published ? replacement : original;
-      return stat && recoveryEntry(file)
-        ? Object.assign(stat, { [field]: options?.bigint ? identity : Number(identity) })
-        : stat;
-    });
-    vi.spyOn(fs.promises, "rename").mockImplementation(async (source, destination) => {
-      await rename(source, destination);
-      if (destination === fixture.outputs[1]) {
-        published = true;
-      }
-    });
-    const unlink = vi.spyOn(fs, "unlinkSync");
-    await expect(fixture.run()).resolves.toMatchObject({ wrote: true });
-    expect(unlink).not.toHaveBeenCalled();
-    fixture.outputs.forEach((file, index) => {
-      expect(JSON.parse(fs.readFileSync(file, "utf8")).schemaVersion).toBe(index + 1);
-      const [dir] = fixture.recovery(index);
-      if (!dir) {
-        throw new Error("fixture recovery is missing");
-      }
-      expect(fs.readFileSync(path.join(dir, "previous.json"), "utf8")).toBe(
-        `previous v${index + 1}`,
-      );
-    });
-    expect(fixture.warnings.mock.calls.flat().join("")).toContain(
-      `recovery ${entry} identity is unknown or changed`,
-    );
-  });
-
-  it("replaces an existing pair and removes only its recovery artifacts", async () => {
-    const fixture = pairFixture();
-    const parent = path.dirname(fixture.outputs[0]);
-    const parentMode = fs.statSync(parent).mode;
-    fs.writeFileSync(path.join(parent, "unrelated"), "preserve");
-    await expect(fixture.run()).resolves.toMatchObject({ wrote: true });
-    fixture.outputs.forEach((file, index) => {
-      expect(JSON.parse(fs.readFileSync(file, "utf8")).schemaVersion).toBe(index + 1);
-      expect(fixture.recovery(index)).toEqual([]);
-    });
-    expect(fs.statSync(parent).mode).toBe(parentMode);
-    expect(fs.readFileSync(path.join(parent, "unrelated"), "utf8")).toBe("preserve");
   });
 
   it("adds an explicit second output while keeping --out as v1", () => {
@@ -592,9 +424,10 @@ describe("publish model catalog v2", () => {
     expect(v1.minVersion).toBe("2026.7.0");
     expect(v2.models).toHaveLength(203);
     expect(v2.providers.openai?.defaultModel).toBe("seed-0");
-    expect(v2.providers.openai?.recommendedModels).toEqual(["seed-2", "seed-0"]);
-    expect(v1.providers.openai).not.toHaveProperty("recommendedModels");
-    expect(v2.providers.anthropic).not.toHaveProperty("recommendedModels");
+    expect(v2.providers.openai?.recommendedModels).toEqual(["seed-2"]);
+    expect(v2.providers.anthropic?.recommendedModels).toEqual(["seed-2"]);
+    expect(v2.providers["fixture-native"]?.recommendedModels).toEqual(["paid"]);
+    expect(v1.providers.anthropic).not.toHaveProperty("recommendedModels");
     expect(
       v2.models.find((model) => model.provider === "anthropic" && model.id === "seed-0")?.pricing,
     ).toEqual({
@@ -712,5 +545,74 @@ describe("publish model catalog v2", () => {
     await expect(
       runPublishModelCatalog({ rootDir, args: ["--out", "same.json", "--out-v2", "./same.json"] }),
     ).rejects.toThrow("different files");
+  });
+
+  it.each([
+    { problem: "vendor prefix", list: ["anthropic/claude-opus-5"], error: "not a canonical" },
+    { problem: "duplicate", list: ["seed-2", "seed-2"], error: "duplicate model id seed-2" },
+    {
+      problem: "oversized",
+      list: Array.from({ length: 201 }, (_, index) => `seed-${index}`),
+      error: "at most 200",
+    },
+  ])("fails publication on a recommended list with a $problem", async ({ list, error }) => {
+    const rootDir = fixtureRoot();
+    fs.writeFileSync(
+      path.join(rootDir, "scripts", "lib", "recommended-models.json"),
+      JSON.stringify(list),
+    );
+    const out = path.join(rootDir, "v1.json");
+    fs.writeFileSync(out, "previous v1");
+    await expect(
+      runPublishModelCatalog({ rootDir, sourceCommit: "fixture", args: ["--out", out] }),
+    ).rejects.toThrow(error);
+    expect(fs.readFileSync(out, "utf8")).toBe("previous v1");
+  });
+
+  it("projects the global list onto each provider's own ids", () => {
+    expect(
+      projectRecommendedModels(
+        [
+          "claude-opus-5.5",
+          "gpt-6.1-sol",
+          "glm-5.3",
+          "mistral-medium-3.5",
+          "gpt-6-sol",
+          "claude-opus-5",
+          "kimi-k3",
+        ],
+        [
+          { id: "claude-opus-5" },
+          { id: "claude-opus-5-5-fast" },
+          { id: "claude-opus-5-5-20260901" },
+          { id: "claude-opus-5-5" },
+          { id: "accounts/fireworks/models/glm-5p3" },
+          { id: "mistral-medium-2604", name: "Mistral Medium 3.5" },
+          { id: "gpt-6-sol" },
+        ],
+      ),
+    ).toEqual([
+      "claude-opus-5-5",
+      "accounts/fireworks/models/glm-5p3",
+      "mistral-medium-2604",
+      "gpt-6-sol",
+    ]);
+  });
+
+  it("projects only served rows", () => {
+    expect(
+      projectRecommendedModels(
+        ["claude-opus-5.5", "claude-opus-5", "gpt-6.1-sol", "kimi-k3"],
+        [
+          // A retired newer family member does not hide its served predecessor.
+          { id: "claude-opus-5-5", status: "deprecated" },
+          { id: "claude-opus-5" },
+          // A retired shorter alias does not win over a served dated id.
+          { id: "gpt-6.1-sol", status: "disabled" },
+          { id: "gpt-6.1-sol-20261001" },
+          { id: "kimi-k3", replacedBy: "kimi-k3.1" },
+        ],
+      ),
+    ).toEqual(["claude-opus-5", "gpt-6.1-sol-20261001"]);
   });
 });

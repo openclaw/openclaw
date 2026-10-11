@@ -2,6 +2,9 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { AsyncWorkScope, runOutsideAsyncWorkScope } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
+import { materializeErrorStack } from "./error-graph-internal.js";
+import { runWithMainThreadTask } from "./main-thread-stall.js";
 
 export type GatewaySchedulerClock = {
   now: () => number;
@@ -25,7 +28,10 @@ type ScheduleParams = {
 export type GatewaySchedulerScope = Pick<
   GatewayScheduler,
   "signal" | "now" | "schedule" | "beginClose" | "stop"
->;
+> & {
+  /** Preserve synchronous retirement when this owner has no running work. */
+  close: () => Promise<void> | undefined;
+};
 
 type ScheduleOwner = {
   signal: AbortSignal;
@@ -34,6 +40,7 @@ type ScheduleOwner = {
 
 type ScheduledWork = {
   id: string;
+  diagnosticName: string;
   atMs: number;
   elapsedAtMs?: number;
   everyMs?: number;
@@ -107,18 +114,24 @@ export class GatewayScheduler {
     };
     const beginClose = () => {
       controller.abort();
+      materializeErrorStack(controller.signal.reason);
       for (const job of owner.jobs) {
         this.cancel(job);
       }
+    };
+    const close = () => {
+      beginClose();
+      const running = [...owner.jobs].flatMap((job) => job.running ?? []);
+      return running.length > 0 ? Promise.all(running).then(() => undefined) : undefined;
     };
     return {
       signal: owner.signal,
       now: () => this.now(),
       schedule: (params) => this.scheduleOwned(params, owner),
       beginClose,
+      close,
       stop: async () => {
-        beginClose();
-        await Promise.all([...owner.jobs].flatMap((job) => job.running ?? []));
+        await close();
       },
     };
   }
@@ -141,6 +154,12 @@ export class GatewayScheduler {
     const previous = cancelled ? undefined : this.jobs.get(params.id);
     const job: ScheduledWork = {
       id: params.id,
+      // Dynamic suffixes can contain session IDs or paths; maintenance names are code-owned.
+      diagnosticName: `scheduler:${
+        params.id.startsWith("maintenance:")
+          ? params.id.split(":").slice(0, 3).join(":")
+          : params.id.split(/[:/]/u, 1)[0]!
+      }`,
       run: params.run,
       everyMs: params.everyMs,
       atMs,
@@ -192,6 +211,7 @@ export class GatewayScheduler {
 
   beginClose(): void {
     this.controller.abort();
+    materializeErrorStack(this.controller.signal.reason);
     this.timerGeneration += 1;
     this.cancelTimer?.();
     this.cancelTimer = undefined;
@@ -225,11 +245,13 @@ export class GatewayScheduler {
     const next = this.nextWakeAtMs;
     if (next !== null) {
       const nowMs = this.now();
-      // Node clamps larger delays to 1ms. Long deadlines retain their absolute due time.
-      const delayMs = Math.min(2_147_483_647, Math.max(0, next - nowMs));
-      this.cancelTimer = this.clock.arm(
-        () => (generation === this.timerGeneration ? this.wake(nowMs + delayMs) : undefined),
-        delayMs,
+      // Node truncates fractional delays and clamps overflow to 1ms; never arm before due.
+      const delayMs = Math.min(2_147_483_647, Math.max(0, Math.ceil(next - nowMs)));
+      this.cancelTimer = runInDetachedAsyncContext(() =>
+        this.clock.arm(
+          () => (generation === this.timerGeneration ? this.wake(nowMs + delayMs) : undefined),
+          delayMs,
+        ),
       );
     }
   }
@@ -246,7 +268,7 @@ export class GatewayScheduler {
       .toSorted(
         (a, b) => this.remaining(a, nowMs, elapsedMs) - this.remaining(b, nowMs, elapsedMs),
       );
-    const started: Promise<void>[] = [];
+    let started: Promise<void>[] | undefined;
     if (nowMs - expectedAtMs > 60_000) {
       log.debug(`late wake by ${nowMs - expectedAtMs}ms; coalescing ${due.length} due jobs`);
     }
@@ -264,17 +286,22 @@ export class GatewayScheduler {
         if (job.everyMs === undefined) {
           this.jobs.delete(job.id);
         }
-        started.push(this.run(job));
+        const running = this.run(job);
+        if (running) {
+          (started ??= []).push(running);
+        }
       }
     } finally {
       this.dispatching = false;
       this.arm();
     }
-    return Promise.all(started).then(() => undefined);
+    return started ? Promise.all(started).then(() => undefined) : undefined;
   }
 
-  private run(job: ScheduledWork): Promise<void> {
-    log.debug(`running ${job.id}`);
+  private run(job: ScheduledWork): Promise<void> | void {
+    // Cadence jobs can run every few milliseconds (event-loop sampling runs every 20ms),
+    // so only one-shot runs are worth a debug line.
+    log[job.everyMs === undefined ? "debug" : "trace"](`running ${job.id}`);
     const done = createDeferredCore();
     const work = new AsyncWorkScope();
     job.running = done.promise;
@@ -294,13 +321,15 @@ export class GatewayScheduler {
     };
     let result: void | Promise<unknown> = undefined;
     try {
-      result = job.context(() => work.run(job.run));
+      result = job.context(() =>
+        runWithMainThreadTask(job.diagnosticName, () => work.run(job.run)),
+      );
     } catch (error) {
       log.error(`${job.id} failed: ${String(error)}`);
     }
     if (!result && !work.hasPendingWork) {
       finish();
-      return done.promise;
+      return;
     }
     void Promise.resolve(result)
       .catch((error: unknown) => log.error(`${job.id} failed: ${String(error)}`))

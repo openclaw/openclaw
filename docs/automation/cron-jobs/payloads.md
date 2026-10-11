@@ -22,10 +22,9 @@ Every job carries exactly one payload kind, chosen by flag:
 | Command       | `--command <shell>` or `--command-argv <json>` | A shell/process on the Gateway host, no model call         |
 | Script        | `--script <file\|->`                           | A headless code-mode script using the owning agent's tools |
 
-System-owned monitor jobs are gateway-converged and cannot be created or edited through the CLI or API. The `heartbeat` kind creates one heartbeat monitor job per heartbeat-enabled agent (see [Heartbeat](/gateway/heartbeat)). The weekly Skill Workshop review is a normal isolated `agentTurn` job with a reserved declaration key. Both appear in `openclaw cron list`; use `--all` to include disabled rows.
-The `skillCollectionReview` payload kind is not accepted. Stored rows that use it are replaced with the canonical review job.
+System-owned monitor jobs are gateway-converged and cannot be created or edited through the CLI or API. The `heartbeat` kind creates one heartbeat monitor job per heartbeat-enabled agent (see [Heartbeat](/gateway/heartbeat)). Monitor jobs appear in `openclaw cron list`; use `--all` to include disabled rows.
 
-Skill collection review runs every 7 days. It is enabled when `skills.workshop.autonomous.mode` is `auto`; `propose` and `off` keep the system-owned job disabled. In `auto` mode, a review stays disabled when every statically resolvable model candidate is known to lack rooted execution support. Its display name includes `no-rooted-runtime`; inspect disabled rows with `openclaw cron list --all --json`. A supported fallback keeps the job enabled. Stored session model/runtime preferences and unknown eligibility also keep it enabled, with final checks at execution time. The Gateway converges these jobs at startup and after config reload. Convergence clears the reason and restores auto-mode enablement when the configured chain becomes eligible or unknown. Scheduled reviews require automations. When `cron.enabled` is `false` or `OPENCLAW_SKIP_CRON=1`, the Gateway logs a startup warning and does not run scheduled reviews. There is no separate weekly Gateway timer.
+The weekly Skill Workshop curator (declaration key `skill-collection-review:<agentId>`, and the older `skillCollectionReview` payload kind) is retired. The Gateway deletes those stored rows when it loads the cron store and creates no replacement; the declaration-key namespace stays reserved. Learned-skill cleanup now runs without a schedule; see [Unused-skill cleanup](/tools/skill-workshop#unused-skill-cleanup).
 
 ### Agent-turn options
 
@@ -57,16 +56,28 @@ Skill collection review runs every 7 days. It is enabled when `skills.workshop.a
   Restrict which tools the job can use, for example `--tools exec,read`. Pass `--tools ""` for an empty allowlist that disables all agent tools, including tools used by a condition trigger.
 </ParamField>
 
-New jobs that can run tools always store an explicit tool policy. Jobs created by an agent
-are capped to the tools available to that creating turn, and the agent cannot widen the
-stored list. Jobs created by an authenticated operator without `--tools` store an
-unrestricted `*` policy; `automations edit --clear-tools` restores that explicit unrestricted
-policy. Existing jobs that predate an explicit tool policy retain their current behavior
-until their tool policy is explicitly edited or the job is recreated.
+New jobs that can run tools always store an explicit tool policy. A job created without
+`--tools` (or with `*`) stores `*`: each run uses the owner session's current tool policy,
+including its group, agent, sandbox, and runtime restrictions. An agent that requests a
+finite list is capped to the tools available to its creating turn and cannot widen the
+stored list. `automations edit --clear-tools` restores `*`. Existing jobs that predate an
+explicit tool policy retain their current behavior until their tool policy is explicitly
+edited or the job is recreated. Agent-created script payloads, condition triggers, and jobs
+whose creator captured Codex app authority store the creating turn's tools instead: scripts
+reach MCP only through servers their list names, and app authority is bound to that list.
+
+Earlier releases saved a copy of the creating turn's tool list on agent-created agent turns.
+That copy could miss tools the creator had, such as the native shell. Those jobs now run with
+their owner conversation's tools, like a `*` job; the stored copy is left as it is. Jobs whose
+creator captured Codex app authority keep using their copy.
 
 Changing an account-bound job to a payload that does not run tools and later back
 to an agent turn preserves its account restriction. A payload conversion does not
 reauthorize that job as an operator-created job.
+
+Doctor checks scheduled tool authority only for agent turns, script payloads, and
+jobs with a condition script. A command payload without a condition script does
+not need agent-tool provenance; its retained account restriction stays unchanged.
 
 Management edits cannot restore missing policy metadata as operator authority.
 For a legacy job that has lost its policy, an authenticated operator can explicitly
@@ -83,6 +94,12 @@ information on supported channel plugins without an inbound chat. Operator-creat
 jobs use the current operator read policy. Agent-created jobs retain their recorded
 creator origin and account, and the channel's delegated read restrictions still
 apply. Delivery settings do not grant read access.
+
+Manual runs use the same scheduled execution context as timer-fired runs after
+the request passes admission. Ending the chat turn or tool call that started a
+run does not expire the job's tool access. The job still uses its stored authority
+and current tool restrictions; starting it manually does not grant the caller's
+extra permissions to the job.
 
 Current global, agent, profile, and provider tool policy is checked when each new
 scheduled message invocation starts. Configuration changes apply to later invocations;
@@ -143,6 +160,8 @@ while the response is pending.
 
 `--model` sets the job's primary model; it does not replace a session `/model` override, so configured fallback chains still apply on top of it. An unresolved or disallowed model fails the run with an explicit validation error rather than silently falling back to the default. If a job has `--model` but no explicit or configured fallback list, OpenClaw passes an empty fallback override instead of silently appending the agent primary as a hidden retry target.
 
+A fallback after a provider timeout continues the same scheduled turn and reuses its saved user input. Failed attempts do not complete the turn or duplicate the scheduled prompt.
+
 Pick the model for the job's difficulty, not the agent's default. Routine
 automation - summaries, triage, classification, status checks - runs well on a
 lighter model, which is cheaper and faster per run and adds up across a
@@ -162,9 +181,9 @@ When a runtime reports token usage without a cost, automation estimates use the 
 
 If a run hits a live model-switch handoff, the scheduler retries with the switched provider/model and persists that selection (and any new auth profile) for the active run. Retries are bounded: after the initial attempt plus 2 switch retries, the scheduler aborts instead of looping.
 
-Before an isolated run starts, OpenClaw checks reachable local endpoints for configured `api: "ollama"` and `api: "openai-completions"` providers whose `baseUrl` is loopback, private-network, or `.local`. This preflight walks the job's configured fallback chain and only marks the run `skipped` once every candidate is unreachable; `--fallbacks ""` keeps that walk strict to just the primary model. A down endpoint records the run as `skipped` with a clear error instead of starting a model call. The result is cached for 5 minutes per endpoint (not per job or model), so many due jobs sharing a dead local Ollama/vLLM/SGLang/LM Studio server cost one probe instead of a request storm. Skipped preflight runs do not increment execution-error backoff; set `failureAlert.includeSkipped` to opt into repeated skip alerts.
+Before an isolated run starts, OpenClaw checks reachable local endpoints for configured `api: "ollama"` and `api: "openai-completions"` providers whose `baseUrl` is loopback, private-network, or `.local`. This preflight walks the job's configured fallback chain and only marks the run `skipped` once every candidate is unreachable; `--fallbacks ""` keeps that walk strict to just the primary model. A down endpoint records the run as `skipped` with a clear error instead of starting a model call. The result is cached for 5 minutes per endpoint (not per job or model), so many due jobs sharing a dead local Ollama/vLLM/SGLang/LM Studio server cost one check instead of a request storm. Skipped preflight runs do not increment execution-error backoff; set `failureAlert.includeSkipped` to opt into repeated skip alerts.
 
-Client-side preflight timeouts are not cached. The next scheduled run probes the endpoint again instead of inheriting a timeout from another run.
+Client-side preflight timeouts are not cached. The next scheduled run checks the endpoint again instead of inheriting a timeout from another run.
 
 ### Command payloads
 
@@ -178,7 +197,7 @@ Command payloads are an operator-admin Gateway automation surface, not an agent 
 
 ```bash
 openclaw automations create "*/15 * * * *" \
-  --name "Queue depth probe" \
+  --name "Queue depth check" \
   --command "scripts/check-queue.sh" \
   --command-cwd "/srv/app" \
   --announce \
@@ -251,9 +270,10 @@ judgment and move the repeatable parts into code:
 - When a run fails, make it fail instead of posting the error yourself: throw from
   trigger or script payload JavaScript, or exit non-zero from a command payload. A
   script that returns an error field still succeeds. The scheduler owns failure
-  accounting:
-  [failure notifications](/automation/cron-jobs/delivery#failure-notifications)
-  already wait for consecutive failed runs, so a one-off outage stays quiet.
+  accounting: only the
+  [failure alert](/automation/cron-jobs/delivery#failure-notifications) waits for
+  consecutive failed runs; the run's own output still follows the job's delivery
+  setting.
 
 ## Execution styles
 
@@ -278,11 +298,15 @@ only when it needs Codex app access. See
 
 Agent-turn jobs default to the creating conversation when the create request carries session context. Callers without a session key, including CLI and API callers that do not supply one, fall back to `isolated`. System events and heartbeats still default to `main`; command and script payloads still default to `isolated`.
 
+An explicitly isolated agent-turn job created from a conversation keeps that conversation's identity for delivery. With default `announce` delivery and no explicit or remembered external route, its final result is committed into the creating conversation, including WebChat/Control UI. The run remains isolated and does not read the conversation's history. See [Automation delivery](/automation/cron-jobs/delivery) for generation checks, duplicate prevention, and external-route behavior.
+
 <AccordionGroup>
   <Accordion title="Main session vs current vs isolated vs custom">
     **Main session** jobs enqueue a system event into the owning agent's main session and optionally wake the heartbeat (`--wake now` or `--wake next-heartbeat`). The event is processed with that session's existing context and last delivery context. Internal automation turns do not extend daily or idle reset freshness; only visible user activity updates session freshness. **Current-session** jobs execute in a detached run session, read a bounded tail of the conversation captured when the job was created, and commit the final visible assistant result back to that exact conversation. **Isolated** jobs run a dedicated agent turn with a fresh session. **Custom sessions** (`session:xxx`) persist context across runs, enabling workflows like daily standups that build on previous summaries.
 
     `current` binds conversation context and result delivery, not the original agent execution or its worktree. The detached run has its own session identity and uses the scheduled agent's workspace and captured tool restrictions. It does not inherit the conversation's cloud worker placement. Messages sent to the job's cron session address its latest detached run, independently of the bound conversation. In-flight turns sent through that stable cron key are canceled if the key is reassigned. A task-specific checkout path in the prompt does not grant access to it. Before using a job to continue repository work, verify that its execution environment can access the required checkout and tools; otherwise keep the work with its existing execution owner. A result committed to the conversation does not itself resume the original agent.
+
+    Custom-session agent turns wait for active work in that session before preparing or resetting its context, so a scheduled tick cannot invalidate an in-progress compaction.
 
     Custom-session agent turns use the existing session’s saved workspace and working directory, including its managed worktree. Requester-scoped jobs may use a saved workspace only for their owning conversation; trusted operator-scheduled jobs can target another conversation’s saved workspace. A missing, retired, or mismatched worktree stops the run instead of falling back to the agent’s default workspace. Filesystem containment and the job’s tool restrictions still apply; a path in the job prompt does not grant access. Persistent-session rollover keeps the saved workspace binding, permission mode, containment root, and inherited tool restrictions; detached runs do not inherit this workspace context. A new `session:custom-id` without an existing session starts in the configured agent workspace. Use `delivery: { mode: "none" }` without an external target for quiet named-session work that needs no runner fallback announcement.
 
@@ -295,13 +319,13 @@ Agent-turn jobs default to the creating conversation when the create request car
     A new transcript/session id per run. OpenClaw carries safe preferences (thinking/fast/verbose settings, labels, explicit user-selected model/auth overrides), but does not inherit ambient conversation context from an older automation session row: channel/group routing, send or queue policy, elevation, origin, or ACP runtime binding. Use `current` or `session:<id>` when a recurring job should deliberately build on the same conversation context.
   </Accordion>
   <Accordion title="Unattended run contract">
-    Isolated automation and hook agent turns are explicitly unattended: no one is present to clarify or approve. The final reply must be the deliverable rather than a plan, acknowledgement, or request for input. The agent returns `NO_REPLY` when nothing needs doing and states failures plainly; the scheduler owns retry and failure-alert policy.
+    Isolated automation and hook agent turns are explicitly unattended: no one is present to clarify or approve. The final reply must be the deliverable rather than a plan, acknowledgement, or request for input. The agent returns `NO_REPLY` when nothing needs doing. When the task failed or is blocked, the reply starts with `AUTOMATION_FAILED` on its own line, followed by what failed and what it tried. The scheduler records that run as an error with the remaining text as its error, delivers that text instead of the token when the job announces, and applies the normal retry, failure-alert, and owner-repair policy. When the run hands its work to a subagent, the child's settled final answer is classified the same way. Only an exact first line counts; a reply that mentions the token elsewhere is ordinary output.
 
     For trusted scheduled jobs, the job's own instructions win when they intentionally ask for a question or plan, and the agent may remove a job that is no longer needed. External hook turns receive only the common unattended contract; they do not receive that override or self-removal guidance across the external-content boundary.
 
   </Accordion>
   <Accordion title="Subagent and Discord delivery">
-    When isolated automation runs orchestrate subagents, delivery prefers the final descendant output over stale parent interim text. If descendant tasks are still running or settling, OpenClaw suppresses that partial parent update instead of announcing it. This includes a yielded orchestrator waiting for its successor to start and completed descendants whose result delivery is still pending. The wait shares the existing run deadline and stops on cancellation.
+    When isolated automation runs orchestrate subagents, delivery prefers the final descendant output over stale parent interim text. If descendant tasks are still running or settling, OpenClaw suppresses that partial parent update instead of announcing it. This includes a yielded orchestrator waiting for its successor to start and completed descendants whose result delivery is still pending. The wait shares the existing run deadline and stops on cancellation. A `delivery.mode: "none"` run whose turn only handed work to a child waits for the child under the same deadline and records the child's final reply as the run output without sending it. A child that deliberately stays silent (`NO_REPLY`) leaves a quiet successful run; a child that times out or ends without a reply fails the run.
 
     For text-only Discord announce targets, OpenClaw sends the canonical final assistant text once instead of replaying both streamed/intermediate text and the final answer. Media and structured Discord payloads are still delivered separately so attachments and components are not dropped.
 

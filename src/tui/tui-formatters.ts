@@ -27,16 +27,6 @@ const BIDI_CONTROL_GLOBAL_RE = /[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/g
 const RTL_ISOLATE_START = "\u2067";
 const RTL_ISOLATE_END = "\u2069";
 
-/** Keep routing/provider/profile details in session state, not the compact footer. */
-function formatModelFooter(params: {
-  model?: string | null;
-  thinkingLevel?: string | null;
-}): string {
-  const model = splitTrailingAuthProfile(params.model ?? "").model || "unknown";
-  const thinkingLevel = params.thinkingLevel?.trim();
-  return thinkingLevel && thinkingLevel !== "off" ? `${model} ${thinkingLevel}` : model;
-}
-
 /** Format the compact TUI footer from authoritative session and process state. */
 export function formatTuiFooter(params: {
   agentLabel: string;
@@ -46,6 +36,9 @@ export function formatTuiFooter(params: {
   deliver: boolean;
 }): string {
   const { sessionInfo } = params;
+  // Keep routing/provider/profile details in session state, not the compact footer.
+  const model = splitTrailingAuthProfile(sessionInfo.model ?? "").model || "unknown";
+  const thinkingLevel = params.thinkingLevel?.trim();
   const fastLabel =
     sessionInfo.fastMode === "auto" || sessionInfo.fastMode === "ultrafast"
       ? `fast:${sessionInfo.fastMode}`
@@ -61,7 +54,7 @@ export function formatTuiFooter(params: {
   const footer = [
     `agent ${params.agentLabel}`,
     `session ${params.sessionLabel}`,
-    formatModelFooter({ model: sessionInfo.model, thinkingLevel: params.thinkingLevel }),
+    thinkingLevel && thinkingLevel !== "off" ? `${model} ${thinkingLevel}` : model,
     formatGoalFooter(sessionInfo.goal),
     fastLabel,
     verbose !== "off" ? `verbose ${verbose}` : null,
@@ -76,9 +69,7 @@ export function formatTuiFooter(params: {
 }
 
 export function sanitizeTerminalControlsAndBinary(text: string): string {
-  const hasAnsi = text.includes("\u001b") || text.includes("\u009b") || text.includes("\u009d");
-  const withoutAnsi = hasAnsi ? stripAnsi(text) : text;
-  const withoutControlChars = withoutAnsi.replace(RENDER_CONTROL_CHARS_RE, "");
+  const withoutControlChars = stripAnsi(text).replace(RENDER_CONTROL_CHARS_RE, "");
   const withoutBidiControls = BIDI_CONTROL_RE.test(withoutControlChars)
     ? withoutControlChars.replace(BIDI_CONTROL_GLOBAL_RE, "")
     : withoutControlChars;
@@ -248,7 +239,10 @@ function formatTuiAssistantContent(message: unknown, contentText: string): strin
     const code = attachment?.code;
     const kind = attachment?.kind;
     if (
-      (code === "file-not-found" || code === "unsupported-format" || code === "delivery-failed") &&
+      (code === "file-not-found" ||
+        code === "unsupported-format" ||
+        code === "delivery-failed" ||
+        code === "invalid-reference") &&
       (kind === "image" || kind === "audio" || kind === "video" || kind === "document")
     ) {
       // Assistant attachment labels can contain private paths or capability URLs.
@@ -276,15 +270,14 @@ function formatTuiAssistantContent(message: unknown, contentText: string): strin
 }
 
 function formatAssistantErrorFromRecord(record: Record<string, unknown>): string {
-  const stopReason = typeof record.stopReason === "string" ? record.stopReason : "";
-  if (stopReason !== "error") {
+  if (record.stopReason !== "error") {
     return "";
   }
   const errorMessage = typeof record.errorMessage === "string" ? record.errorMessage : "";
   return formatRawAssistantErrorForUi(errorMessage);
 }
 
-function collectBlockStrings(content: unknown, type: "text" | "thinking"): string[] {
+function collectBlockStrings(content: unknown, type: string, key = type): string[] {
   if (!Array.isArray(content)) {
     return [];
   }
@@ -294,7 +287,7 @@ function collectBlockStrings(content: unknown, type: "text" | "thinking"): strin
       continue;
     }
     const rec = block as Record<string, unknown>;
-    const value = rec[type];
+    const value = rec[key];
     if (rec.type === type && typeof value === "string") {
       parts.push(value);
     }
@@ -337,48 +330,17 @@ export function extractContentFromMessage(message: unknown): string {
   return formatAssistantErrorFromRecord(record);
 }
 
-function extractAssistantRenderableContent(record: Record<string, unknown>): string {
-  const visible = sanitizeRenderableText(extractAssistantPhaseText(record) ?? "").trim();
-  const pairingQr = extractPairingQrTerminalText(record);
-  const content = [visible, pairingQr].filter(Boolean).join("\n\n").trim();
-  if (content) {
-    return content;
-  }
-  return formatAssistantErrorFromRecord(record);
-}
-
 function extractPairingQrTerminalText(record: Record<string, unknown>): string {
-  const content = record.content;
-  if (!Array.isArray(content)) {
-    return "";
-  }
-  const parts: string[] = [];
-  for (const block of content) {
-    if (!block || typeof block !== "object") {
-      continue;
-    }
-    const blockRecord = block as Record<string, unknown>;
-    if (
-      blockRecord.type === "openclaw_pairing_qr" &&
-      typeof blockRecord.terminalText === "string"
-    ) {
-      const text = sanitizeRenderableText(blockRecord.terminalText).trim();
-      if (text) {
-        parts.push(text);
-      }
-    }
-  }
-  return parts.join("\n\n").trim();
+  return collectBlockStrings(record.content, "openclaw_pairing_qr", "terminalText")
+    .map((text) => sanitizeRenderableText(text).trim())
+    .filter(Boolean)
+    .join("\n\n");
 }
 
 function extractTextBlocks(content: unknown, opts?: { includeThinking?: boolean }): string {
   if (typeof content === "string") {
     return sanitizeRenderableText(content).trim();
   }
-  if (!Array.isArray(content)) {
-    return "";
-  }
-
   const textParts = collectBlockStrings(content, "text").map(sanitizeRenderableText);
   const thinkingParts =
     opts?.includeThinking === true
@@ -386,8 +348,8 @@ function extractTextBlocks(content: unknown, opts?: { includeThinking?: boolean 
       : [];
 
   return composeThinkingAndContent({
-    thinkingText: thinkingParts.join("\n").trim(),
-    contentText: textParts.join("\n").trim(),
+    thinkingText: thinkingParts.join("\n"),
+    contentText: textParts.join("\n"),
     showThinking: opts?.includeThinking ?? false,
   });
 }
@@ -432,7 +394,10 @@ export function extractTextFromMessage(
     return "";
   }
   if (record.role === "assistant") {
-    const contentText = extractAssistantRenderableContent(record);
+    const visible = sanitizeRenderableText(extractAssistantPhaseText(record) ?? "").trim();
+    const pairingQr = extractPairingQrTerminalText(record);
+    const contentText =
+      [visible, pairingQr].filter(Boolean).join("\n\n") || formatAssistantErrorFromRecord(record);
     return composeThinkingAndContent({
       // History is stateless; the stream assembler retains hidden thinking for later toggles.
       thinkingText: opts?.includeThinking ? extractThinkingFromMessage(record) : "",
@@ -471,9 +436,6 @@ export function isCommandMarkedMessage(message: unknown): boolean {
 }
 
 function formatTokens(total?: number | null, context?: number | null) {
-  if (total == null && context == null) {
-    return "tokens ?";
-  }
   const totalLabel = total == null ? "?" : formatTokenCount(total);
   if (context == null) {
     return `tokens ${totalLabel}`;
@@ -485,18 +447,16 @@ function formatTokens(total?: number | null, context?: number | null) {
   return `tokens ${totalLabel}/${formatTokenCount(context)}${pct !== null ? ` (${pct}%)` : ""}`;
 }
 
-function formatGoalUsage(goal: SessionGoal): string | null {
-  if (goal.tokenBudget === undefined) {
-    return goal.tokensUsed > 0 ? formatTokenCount(goal.tokensUsed) : null;
-  }
-  return `${formatTokenCount(goal.tokensUsed)}/${formatTokenCount(goal.tokenBudget)}`;
-}
-
 function formatGoalFooter(goal?: SessionGoal): string | null {
   if (!goal) {
     return null;
   }
-  const usage = formatGoalUsage(goal);
+  const usage =
+    goal.tokenBudget === undefined
+      ? goal.tokensUsed > 0
+        ? formatTokenCount(goal.tokensUsed)
+        : null
+      : `${formatTokenCount(goal.tokensUsed)}/${formatTokenCount(goal.tokenBudget)}`;
   const suffix = usage ? ` (${usage})` : "";
   switch (goal.status) {
     case "active":
@@ -532,10 +492,7 @@ export function formatContextUsageLine(params: {
 }
 
 export function formatPrimitiveString(value: unknown, fallback = ""): string {
-  if (typeof value === "string") {
-    return value;
-  }
-  if (typeof value === "number" || typeof value === "boolean") {
+  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
     return String(value);
   }
   return fallback;

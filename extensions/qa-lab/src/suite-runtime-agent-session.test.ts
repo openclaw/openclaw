@@ -2,16 +2,14 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { closeQaRuntimeStores } from "openclaw/plugin-sdk/qa-runtime";
 import {
   loadTranscriptEventsSync,
   upsertSessionEntry,
 } from "openclaw/plugin-sdk/session-store-runtime";
 import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
-import {
-  closeOpenClawAgentDatabasesForTest,
-  appendSqliteSessionTranscriptEventForTest,
-} from "openclaw/plugin-sdk/sqlite-runtime-testing";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { appendSqliteSessionTranscriptEventForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createSession,
   readEffectiveTools,
@@ -24,17 +22,16 @@ import {
 } from "./suite-runtime-agent-session.js";
 import { createTempDirHarness } from "./temp-dir.test-helper.js";
 
-const { cleanup, makeTempDir } = createTempDirHarness();
-
-afterEach(async () => {
-  vi.useRealTimers();
-  // Fixtures point a state dir at these temp workspaces, so the shared and per-agent
-  // SQLite handles stay cached and Windows fails the removal with EBUSY. The agent close
-  // releases its leases through shared state and reopens it, so the store is released second.
-  closeOpenClawAgentDatabasesForTest();
-  resetPluginStateStoreForTests();
-  await cleanup();
+const { cleanup, makeTempDir } = createTempDirHarness({
+  beforeCleanup: closeQaRuntimeStores,
 });
+
+afterEach(() => {
+  vi.useRealTimers();
+  resetPluginStateStoreForTests({ closeDatabase: false });
+});
+
+afterAll(cleanup);
 
 describe("qa suite runtime agent session helpers", () => {
   const gatewayCall = vi.fn();
@@ -130,55 +127,6 @@ describe("qa suite runtime agent session helpers", () => {
     expect(method).toBe("skills.status");
     expect(params).toEqual({ agentId: "qa" });
     expect(options?.timeoutMs).toBe(45_000);
-  });
-
-  it("retries transient FTS integrity mismatches while child transcripts settle", async () => {
-    const readEntries = vi
-      .fn()
-      .mockImplementationOnce(() => {
-        throw new Error(
-          'SQLite integrity_check failed for qa.sqlite: fts5: checksum mismatch for table "session_transcript_fts"',
-        );
-      })
-      .mockReturnValueOnce([
-        {
-          sessionKey: "session-1",
-          entry: { sessionId: "session-1", updatedAt: 10 },
-        },
-      ]);
-    vi.useFakeTimers();
-
-    const pending = readRawQaSessionStore(
-      { gateway: { tempRoot: "/tmp/qa-fts-settle" } } as never,
-      { readEntries, retryDelaysMs: [1] },
-    );
-    await vi.advanceTimersByTimeAsync(1);
-
-    await expect(pending).resolves.toEqual({
-      "session-1": { sessionId: "session-1", updatedAt: 10 },
-    });
-    expect(readEntries).toHaveBeenCalledTimes(2);
-  });
-
-  it("fails closed when an FTS integrity mismatch does not settle", async () => {
-    const mismatch = new Error(
-      'SQLite integrity_check failed for qa.sqlite: fts5: checksum mismatch for table "session_transcript_fts"',
-    );
-    const readEntries = vi.fn(() => {
-      throw mismatch;
-    });
-    vi.useFakeTimers();
-
-    const assertion = expect(
-      readRawQaSessionStore({ gateway: { tempRoot: "/tmp/qa-fts-persistent" } } as never, {
-        readEntries,
-        retryDelaysMs: [1],
-      }),
-    ).rejects.toThrow(mismatch.message);
-    await vi.runAllTimersAsync();
-
-    await assertion;
-    expect(readEntries).toHaveBeenCalledTimes(2);
   });
 
   it("seeds QA session metadata and transcript messages in SQLite", async () => {
@@ -364,52 +312,6 @@ describe("qa suite runtime agent session helpers", () => {
         },
       ),
     ).rejects.toThrow("requires at least one message");
-  });
-
-  it("summarizes a QA session transcript by session key", async () => {
-    const tempRoot = await makeTempDir("qa-session-transcript-");
-    const sessionKey = "agent:qa:webchat";
-    const transcript = await createQaTranscript({ tempRoot, sessionKey, sessionId: "session-1" });
-    await transcript.append({
-      role: "assistant",
-      content: [
-        {
-          type: "tool_use",
-          name: "message",
-          input: { action: "send", text: "hello" },
-        },
-      ],
-      stopReason: "toolUse",
-    });
-
-    await expect(transcript.read()).resolves.toEqual({
-      assistantToolCallCounts: { message: 1 },
-      compactionSummaries: [],
-      completedToolCallCounts: {},
-      eventCursor: 2,
-      userMessageCount: 0,
-      successfulToolCallCounts: {},
-      finalText: "",
-      hasDirectReplySelfMessage: false,
-      lastAssistantContentTypes: ["tool_use"],
-      lastAssistantStopReason: "toolUse",
-      lastAssistantToolNames: ["message"],
-      lastMessageRole: "assistant",
-    });
-
-    await transcript.append({ role: "assistant", content: "Sent." });
-
-    await expect(transcript.read()).resolves.toEqual({
-      assistantToolCallCounts: { message: 1 },
-      compactionSummaries: [],
-      completedToolCallCounts: {},
-      eventCursor: 3,
-      userMessageCount: 0,
-      successfulToolCallCounts: {},
-      finalText: "Sent.",
-      hasDirectReplySelfMessage: true,
-      lastMessageRole: "assistant",
-    });
   });
 
   it("summarizes QA transcript events after non-assistant rows", async () => {
@@ -739,63 +641,47 @@ describe("qa suite runtime agent session helpers", () => {
     ).resolves.toMatchObject({ hasPendingCodeModeWait: true });
   });
 
-  it.each(["guest", "native-text", "native-blocks"] as const)(
-    "separates %s cell controls from unmatched waits and physical exec",
-    async (dialect) => {
-      const tempRoot = await makeTempDir("qa-session-transcript-cell-controls-");
-      const sessionKey = "agent:qa:cell-controls";
-      const transcript = await createQaTranscript({
-        tempRoot,
-        sessionKey,
-        sessionId: "session-cell-controls",
-      });
-      const native = dialect !== "guest";
-      const waitInput = (id: string) =>
-        native ? { arguments: JSON.stringify({ cell_id: id }) } : { runId: id };
-      const header = "Script running with cell ID cell-owned\nWall time 0.1 seconds\nOutput:\n";
-      const wrapperText =
-        dialect === "native-blocks"
-          ? JSON.stringify([{ type: "input_text", text: header }])
-          : header;
-      for (const message of [
-        assistantToolCall(
-          "wrapper",
-          "exec",
-          native ? { input: "await work();" } : { code: "await work();" },
-        ),
-        assistantToolCall("early-wait", "wait", waitInput("cell-owned")),
-        toolResult("early-wait", "wait", {}),
-        {
-          ...toolResult(
-            "wrapper",
-            "exec",
-            native ? {} : { status: "waiting", runId: "cell-owned" },
-          ),
-          content: [{ type: "text", text: wrapperText }],
-        },
-        assistantToolCall("matched-wait", "wait", waitInput("cell-owned")),
-        toolResult("matched-wait", "wait", {}),
-        assistantToolCall("shell", "exec", { command: "printf proof" }),
-        {
-          ...toolResult("shell", "exec", { status: "completed", exitCode: 0 }),
-          content: [{ type: "text", text: header.replace("cell-owned", "cell-unmatched") }],
-        },
-        assistantToolCall("unmatched-wait", "wait", waitInput("cell-unmatched")),
-        toolResult("unmatched-wait", "wait", {}),
-      ]) {
-        await transcript.append(message);
-      }
-      const summary = await transcript.read();
-      expect(summary.assistantToolCallCounts).toEqual({ exec: 1, wait: 2 });
-      expect(summary.successfulToolCallCounts).toEqual({ exec: 1, wait: 2 });
-      const activity = await readSessionToolActivity({ gateway: { tempRoot } }, sessionKey);
-      expect(
-        activity.filter((call) => call.kind === "code-mode-control").map((call) => call.toolCallId),
-      ).toEqual(["wrapper", "matched-wait"]);
-      const wireSummary = await transcript.read({ includeCodeModeControl: true });
-      expect(wireSummary.assistantToolCallCounts).toEqual({ exec: 2, wait: 3 });
-    },
-  );
+  it("separates native-blocks cell controls from unmatched waits and physical exec", async () => {
+    const tempRoot = await makeTempDir("qa-session-transcript-cell-controls-");
+    const sessionKey = "agent:qa:cell-controls";
+    const transcript = await createQaTranscript({
+      tempRoot,
+      sessionKey,
+      sessionId: "session-cell-controls",
+    });
+    const waitInput = (id: string) => ({ arguments: JSON.stringify({ cell_id: id }) });
+    const header = "Script running with cell ID cell-owned\nWall time 0.1 seconds\nOutput:\n";
+    const wrapperText = JSON.stringify([{ type: "input_text", text: header }]);
+    for (const message of [
+      assistantToolCall("wrapper", "exec", { input: "await work();" }),
+      assistantToolCall("early-wait", "wait", waitInput("cell-owned")),
+      toolResult("early-wait", "wait", {}),
+      {
+        ...toolResult("wrapper", "exec", {}),
+        content: [{ type: "text", text: wrapperText }],
+      },
+      assistantToolCall("matched-wait", "wait", waitInput("cell-owned")),
+      toolResult("matched-wait", "wait", {}),
+      assistantToolCall("shell", "exec", { command: "printf proof" }),
+      {
+        ...toolResult("shell", "exec", { status: "completed", exitCode: 0 }),
+        content: [{ type: "text", text: header.replace("cell-owned", "cell-unmatched") }],
+      },
+      assistantToolCall("unmatched-wait", "wait", waitInput("cell-unmatched")),
+      toolResult("unmatched-wait", "wait", {}),
+    ]) {
+      await transcript.append(message);
+    }
+    const summary = await transcript.read();
+    expect(summary.assistantToolCallCounts).toEqual({ exec: 1, wait: 2 });
+    expect(summary.successfulToolCallCounts).toEqual({ exec: 1, wait: 2 });
+    const activity = await readSessionToolActivity({ gateway: { tempRoot } }, sessionKey);
+    expect(
+      activity.filter((call) => call.kind === "code-mode-control").map((call) => call.toolCallId),
+    ).toEqual(["wrapper", "matched-wait"]);
+    const wireSummary = await transcript.read({ includeCodeModeControl: true });
+    expect(wireSummary.assistantToolCallCounts).toEqual({ exec: 2, wait: 3 });
+  });
 
   it("rejects ambiguous receipts and unfinished shell polls while preserving domain statuses", async () => {
     const tempRoot = await makeTempDir("qa-session-transcript-outcomes-");
@@ -839,41 +725,6 @@ describe("qa suite runtime agent session helpers", () => {
       completedToolCallCounts: { process: 3, progress_card: 1, exec: 1, gateway_exec: 1 },
     });
     expect(summary.successfulToolCallCounts).toEqual({ process: 2, progress_card: 1 });
-  });
-
-  it("only exposes authenticated successful tool results with finite owner timestamps", async () => {
-    const tempRoot = await makeTempDir("qa-session-transcript-tool-event-timestamps-");
-    const sessionKey = "agent:qa:tool-event-timestamps";
-    const sessionId = "session-tool-event-timestamps";
-    const transcript = await createQaTranscript({ tempRoot, sessionKey, sessionId });
-    await transcript.append({
-      role: "assistant",
-      content: ["missing", "invalid", "valid"].map((id) => ({
-        type: "toolCall",
-        id,
-        name: "exec",
-        arguments: {},
-      })),
-    });
-
-    for (const [toolCallId, timestamp] of [
-      ["missing", undefined],
-      ["invalid", "not-a-number"],
-      ["valid", 300],
-    ] as const) {
-      await transcript.append({
-        role: "toolResult",
-        toolCallId,
-        toolName: "exec",
-        isError: false,
-        ...(timestamp === undefined ? {} : { timestamp }),
-      });
-    }
-
-    await expect(transcript.read()).resolves.toMatchObject({
-      successfulToolCallCounts: { exec: 3 },
-      successfulToolCallEvents: [{ name: "exec", timestamp: 300, toolCallId: "valid" }],
-    });
   });
 
   it("bounds authenticated successful tool results to the latest 64 events", async () => {

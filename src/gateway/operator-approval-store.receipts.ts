@@ -80,163 +80,125 @@ function operatorApprovalPolicyRefs(record: OperatorApprovalRecord): string[] {
 
 function operatorApprovalRemediation(
   record: OperatorApprovalRecord,
-): DecisionReceiptV1["remediation"] {
-  if (record.status === "allowed") {
-    return [];
-  }
+): DecisionReceiptV1["remediation"][number] {
   switch (record.terminalReason) {
     case "timeout":
-      return [
-        {
-          code: "request_approval_again",
-          text: "Request the action again and resolve the new approval before its deadline.",
-        },
-      ];
+      return {
+        code: "request_approval_again",
+        text: "Request the action again and resolve the new approval before its deadline.",
+      };
     case "no-route":
-      return [
-        {
-          code: "restore_approval_route",
-          text: "Connect an eligible approval client or configure an approval delivery route, then request the action again.",
-        },
-      ];
+      return {
+        code: "restore_approval_route",
+        text: "Connect an eligible approval client or configure an approval delivery route, then request the action again.",
+      };
     case "run-aborted":
       if (
         record.resolver?.kind === "system" &&
         (record.resolver.id === "permission-change" ||
           record.resolver.id === "approval-scope-closed")
       ) {
-        return [
-          {
-            code: "request_approval_again",
-            text: "Request the action again under the current permissions if it is still needed.",
-          },
-        ];
+        return {
+          code: "request_approval_again",
+          text: "Request the action again under the current permissions if it is still needed.",
+        };
       }
-      return [
-        {
-          code: "start_new_run",
-          text: "Start a new run and request the action again if it is still needed.",
-        },
-      ];
+      return {
+        code: "start_new_run",
+        text: "Start a new run and request the action again if it is still needed.",
+      };
     case "gateway-restart":
-      return [
-        {
-          code: "request_after_restart",
-          text: "After the Gateway is available, request the action again to create a current approval.",
-        },
-      ];
+      return {
+        code: "request_after_restart",
+        text: "After the Gateway is available, request the action again to create a current approval.",
+      };
     case "malformed-verdict":
-      return [
-        {
-          code: "submit_supported_decision",
-          text: "Request the action again and resolve it with one of the decisions shown by the approval prompt.",
-        },
-      ];
+      return {
+        code: "submit_supported_decision",
+        text: "Request the action again and resolve it with one of the decisions shown by the approval prompt.",
+      };
     case "storage-corrupt":
-      return [
-        {
-          code: "inspect_state_integrity",
-          text: "Run openclaw doctor and inspect the shared state database before requesting the action again.",
-        },
-      ];
+      return {
+        code: "inspect_state_integrity",
+        text: "Run openclaw doctor and inspect the shared state database before requesting the action again.",
+      };
     default:
-      return [
-        {
-          code: "review_and_request_again",
-          text: "Review the denial, then request the action again only if an eligible reviewer should reconsider it.",
-        },
-      ];
+      return {
+        code: "review_and_request_again",
+        text: "Review the denial, then request the action again only if an eligible reviewer should reconsider it.",
+      };
   }
 }
 
-function projectOperatorApprovalReceipt(
-  record: OperatorApprovalRecord,
+function operatorApprovalReceiptIdentity(
+  sourceRef: string,
   context: OperatorApprovalReceiptContext,
-): DecisionReceiptV1 {
-  const allowed = record.status === "allowed";
-  const sourceRef = record.resolutionRef;
+) {
   return {
-    schemaVersion: 1,
+    schemaVersion: 1 as const,
     receiptId: `approval:${sourceRef}`,
     contextId: context.contextId,
     executionId: context.executionId,
     runId: context.runId,
     actionId: sourceRef,
-    occurredAt: record.resolvedAtMs ?? record.updatedAtMs,
-    action: {
-      family: record.kind,
-      operation: "approval",
-      summary: allowed
-        ? `A ${record.kind} approval allowed the requested action.`
-        : `A ${record.kind} approval stopped the requested action.`,
-    },
-    decision: {
-      outcome: allowed ? "allowed" : "denied",
-      reasonCode: operatorApprovalReasonCode(record),
-    },
-    enforcement: {
-      coverageState: "enforced",
-      evaluatorRef: `operator-approval:${record.resolver?.kind ?? "system"}`,
-      policyRefs: operatorApprovalPolicyRefs(record),
-      grantRefs: allowed ? [`operator-approval-grant:${sourceRef}`] : [],
-      contextFieldsUsed: ["contextId", "executionId", "runId"],
-    },
     source: {
-      owner: "operator_approvals",
+      owner: "operator_approvals" as const,
       recordRef: sourceRef,
       decisionBoundary: "gateway.operator-approval.first-answer",
     },
-    missingEvidence: [],
-    remediation: operatorApprovalRemediation(record),
   };
 }
 
-function projectUnlinkedOperatorApprovalReceipt(
+function projectOperatorApprovalReceipt(
   record: OperatorApprovalRecord,
   context: OperatorApprovalReceiptContext,
-  linkState: Exclude<OperatorApprovalExecutionLinkState, "exact">,
+  linkState: OperatorApprovalExecutionLinkState,
 ): DecisionReceiptV1 {
+  const exact = linkState === "exact";
+  const allowed = record.status === "allowed";
   const sourceRef = record.resolutionRef;
-  const receiptId = `approval-unlinked:${createHash("sha256")
-    .update(sourceRef, "utf8")
-    .update("\0", "utf8")
-    .update(context.contextId, "utf8")
-    .digest("base64url")}`;
   return {
-    schemaVersion: 1,
-    receiptId,
-    contextId: context.contextId,
-    executionId: context.executionId,
-    runId: context.runId,
-    actionId: sourceRef,
+    ...operatorApprovalReceiptIdentity(sourceRef, context),
+    ...(exact
+      ? {}
+      : {
+          receiptId: `approval-unlinked:${createHash("sha256")
+            .update(sourceRef, "utf8")
+            .update("\0", "utf8")
+            .update(context.contextId, "utf8")
+            .digest("base64url")}`,
+        }),
     occurredAt: record.resolvedAtMs ?? record.updatedAtMs,
     action: {
       family: record.kind,
       operation: "approval",
-      summary: `A terminal ${record.kind} approval shares this run correlation, but its retained binding does not match this exact execution.`,
+      summary: !exact
+        ? `A terminal ${record.kind} approval shares this run correlation, but its retained binding does not match this exact execution.`
+        : allowed
+          ? `A ${record.kind} approval allowed the requested action.`
+          : `A ${record.kind} approval stopped the requested action.`,
     },
-    decision: {
-      outcome: "unknown",
-      reasonCode: `operator_approval_execution_link_${linkState}`,
-    },
+    decision: exact
+      ? { outcome: allowed ? "allowed" : "denied", reasonCode: operatorApprovalReasonCode(record) }
+      : { outcome: "unknown", reasonCode: `operator_approval_execution_link_${linkState}` },
     enforcement: {
-      coverageState: "unknown",
+      coverageState: exact ? "enforced" : "unknown",
+      ...(exact ? { evaluatorRef: `operator-approval:${record.resolver?.kind ?? "system"}` } : {}),
       policyRefs: operatorApprovalPolicyRefs(record),
-      grantRefs: [],
+      grantRefs: exact && allowed ? [`operator-approval-grant:${sourceRef}`] : [],
       contextFieldsUsed: ["contextId", "executionId", "runId"],
     },
-    source: {
-      owner: "operator_approvals",
-      recordRef: sourceRef,
-      decisionBoundary: "gateway.operator-approval.first-answer",
-    },
-    missingEvidence: ["decision.execution_link"],
-    remediation: [
-      {
-        code: "inspect_exact_approval_binding",
-        text: "Treat this approval only as run-correlated; inspect its retained execution binding before trusting attribution.",
-      },
-    ],
+    missingEvidence: exact ? [] : ["decision.execution_link"],
+    remediation: exact
+      ? allowed
+        ? []
+        : [operatorApprovalRemediation(record)]
+      : [
+          {
+            code: "inspect_exact_approval_binding",
+            text: "Treat this approval only as run-correlated; inspect its retained execution binding before trusting attribution.",
+          },
+        ],
   };
 }
 
@@ -257,12 +219,7 @@ function projectCorruptOperatorApprovalReceipt(
       ? row.updated_at_ms
       : 0;
   return {
-    schemaVersion: 1,
-    receiptId: `approval:${sourceRef}`,
-    contextId: context.contextId,
-    executionId: context.executionId,
-    runId: context.runId,
-    actionId: sourceRef,
+    ...operatorApprovalReceiptIdentity(sourceRef, context),
     occurredAt,
     action: { family: kind, operation: "approval" },
     decision: { outcome: "unknown", reasonCode: "operator_approval_record_corrupt" },
@@ -271,11 +228,6 @@ function projectCorruptOperatorApprovalReceipt(
       policyRefs: [],
       grantRefs: [],
       contextFieldsUsed: ["runId"],
-    },
-    source: {
-      owner: "operator_approvals",
-      recordRef: sourceRef,
-      decisionBoundary: "gateway.operator-approval.first-answer",
     },
     missingEvidence: ["operator_approval.valid"],
     remediation: [
@@ -478,12 +430,10 @@ function terminalApprovalReceiptPageRows(params: {
   if (rows.length === 1 && rows[0]?.page_present === 0) {
     return [];
   }
-  return rows.map((row) => {
-    if (row.page_present !== 1) {
-      throw new Error("operator approval page snapshot is malformed");
-    }
-    return row;
-  });
+  if (rows.some((row) => row.page_present !== 1)) {
+    throw new Error("operator approval page snapshot is malformed");
+  }
+  return rows;
 }
 
 function materializeBoundedOperatorApprovalRow(
@@ -661,10 +611,7 @@ export function pageOperatorApprovalReceiptsForRunInDatabase(
         receipt = projectCorruptOperatorApprovalReceipt(snapshot, params.context);
       } else {
         const linkState = operatorApprovalExecutionLinkState(row, params.context);
-        receipt =
-          linkState === "exact"
-            ? projectOperatorApprovalReceipt(record, params.context)
-            : projectUnlinkedOperatorApprovalReceipt(record, params.context, linkState);
+        receipt = projectOperatorApprovalReceipt(record, params.context, linkState);
       }
     }
     return { receipt, selectorId: operatorApprovalSelectorId(snapshot) };

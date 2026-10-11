@@ -2,10 +2,7 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { clearAgentHarnesses } from "../../agents/harness/registry.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import {
-  onDiagnosticEvent,
-  type DiagnosticMessageProcessedEvent,
-} from "../../infra/diagnostic-events.js";
+import { onDiagnosticEvent, type DiagnosticEventPayload } from "../../infra/diagnostic-events.js";
 import type { ReplyPayload } from "../types.js";
 import {
   createDispatcher,
@@ -66,7 +63,7 @@ async function dispatchReplyFixture(params: {
 }
 
 describe("dispatchReplyFromConfig pre-run directive rejection", () => {
-  let processedEvents: DiagnosticMessageProcessedEvent[];
+  let processedEvents: Extract<DiagnosticEventPayload, { type: "message.processed" }>[];
   let unsubscribe: () => void;
 
   beforeAll(async () => {
@@ -92,9 +89,6 @@ describe("dispatchReplyFromConfig pre-run directive rejection", () => {
     sessionBindingMocks.resolveByConversation.mockReset().mockReturnValue(null);
     sessionStoreMocks.currentEntry = undefined;
     sessionStoreMocks.loadSessionStoreEntry
-      .mockReset()
-      .mockImplementation(() => sessionStoreMocks.currentEntry);
-    sessionStoreMocks.readSessionEntry
       .mockReset()
       .mockImplementation(() => sessionStoreMocks.currentEntry);
     diagnosticMocks.logMessageProcessed.mockClear();

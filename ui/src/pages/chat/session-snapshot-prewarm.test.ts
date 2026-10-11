@@ -9,8 +9,8 @@ import { clearStoredChatSnapshots } from "./session-snapshot-invalidation.runtim
 import { prewarmChatSnapshot } from "./session-snapshot-prewarm.ts";
 import * as snapshots from "./session-snapshot-store.ts";
 
-const key = "agent:main:routed";
-const otherKey = "agent:main:other";
+const key = 'scope:["wss://cache.example","account-a"]\u0000agent:main:routed';
+const otherKey = 'scope:["wss://cache.example","account-a"]\u0000agent:main:other';
 const stored: ChatSessionSnapshot = {
   messages: [{ role: "assistant", content: "Stored conversation" }],
   sessionId: "session-1",
@@ -53,6 +53,7 @@ describe("routed transcript prewarm", () => {
   it("reads raw records without validation and rejects malformed prewarm when consumed", async () => {
     await seed();
     const invalid = {
+      projectionVersion: 2,
       savedAt: Date.now(),
       sessionKey: key,
       sessionId: stored.sessionId,

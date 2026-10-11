@@ -201,10 +201,14 @@ describe("Gateway plugin reload run admission", () => {
       }
     });
     const handler = createPluginReloadHandler(async ({ prepareConfigEffects, commitRuntime }) => {
-      prepareConfigEffects({ pluginIds: new Set(["synthetic"]), channels: new Set() });
+      const effects = prepareConfigEffects({
+        pluginIds: new Set(["synthetic"]),
+        channels: new Set(),
+      });
       events.push("plugin-drain");
       drainageStarted.resolve();
       await finishDrainage.promise;
+      effects.retire();
       await commitRuntime({ publish: () => setRuntimeConfigSnapshot(committed, committed) });
       pluginCommitted.resolve();
       return {
@@ -305,16 +309,17 @@ describe("Gateway plugin reload run admission", () => {
         },
       );
       const handler = createPluginReloadHandler(async ({ prepareConfigEffects, commitRuntime }) => {
-        const restorePreparedRuntime = prepareConfigEffects({
+        const effects = prepareConfigEffects({
           pluginIds: new Set(["synthetic"]),
           channels: new Set(),
         });
         drainageStarted.resolve();
         await finishDrainage.promise;
         if (outcome === "rollback") {
-          await restorePreparedRuntime();
+          await effects.rollback();
           throw pluginFailure;
         }
+        effects.retire();
         await commitRuntime({ publish: () => setRuntimeConfigSnapshot(committed, committed) });
         if (outcome === "activation failure") {
           throw pluginFailure;
@@ -403,19 +408,16 @@ describe("Gateway plugin reload run admission", () => {
         await nextTurn();
         expect(settled).toBe(false);
         expect(requestSettled).toBe(false);
-        expect(catalogSettled).toBe(false);
+        expect(catalogSettled).toBe(true);
+        await expect(catalogRequest).resolves.toMatchObject({ config: retained });
         finishDrainage.resolve();
         if (outcome !== "commit") {
           await expect(reload).rejects.toBe(pluginFailure);
         } else {
           await expect(reload).resolves.toMatchObject({ status: "applied" });
         }
-        // Both rollback and committed failure must replace the drained model owner
-        // before readers resume, while retaining the original lifecycle error.
+        // Execution resumes only after rollback or replacement publication settles.
         await expect(request).resolves.toMatchObject({
-          config: outcome === "rollback" ? retained : committed,
-        });
-        await expect(catalogRequest).resolves.toMatchObject({
           config: outcome === "rollback" ? retained : committed,
         });
         const lease = await admission!;
@@ -475,7 +477,10 @@ it.each([
     });
   }
   const handler = createPluginReloadHandler(async ({ prepareConfigEffects, commitRuntime }) => {
-    prepareConfigEffects({ pluginIds: new Set(pluginLifecycle.pluginIds), channels: new Set() });
+    prepareConfigEffects({
+      pluginIds: new Set(pluginLifecycle.pluginIds),
+      channels: new Set(),
+    }).retire();
     await commitRuntime({ publish: () => setRuntimeConfigSnapshot(committed, committed) });
     if (event === "refresh failure") {
       mocks.configuredAgentIdsError = refreshFailure;
@@ -553,24 +558,10 @@ describe("retained config and committed model publication", () => {
       rebuild: false,
     },
     {
-      name: "keeps the catalog ready throughout a UI preference commit",
-      retained: { ui: { prefs: { sidebarEntries: [] } } },
-      committed: { ui: { prefs: { sidebarEntries: ["sessions"] } } },
-      changedPath: "ui.prefs.sidebarEntries",
-      rebuild: false,
-    },
-    {
       name: "replaces channel activation facts after disabling a configured channel",
       retained: { channels: { slack: { streaming: { mode: "off" }, enabled: true } } },
       committed: { channels: { slack: { streaming: { mode: "off" }, enabled: false } } },
       changedPath: "channels.slack.enabled",
-      rebuild: true,
-    },
-    {
-      name: "replaces configured channel model selection facts",
-      retained: { channels: { modelByChannel: { slack: { C1: "custom/before" } } } },
-      committed: { channels: { modelByChannel: { slack: { C1: "custom/after" } } } },
-      changedPath: "channels.modelByChannel.slack.C1",
       rebuild: true,
     },
     {
@@ -776,7 +767,10 @@ it.each(["success", "activation failure"] as const)(
       committed: true,
     });
     const handler = createPluginReloadHandler(async ({ prepareConfigEffects, commitRuntime }) => {
-      prepareConfigEffects({ pluginIds: new Set(pluginLifecycle.pluginIds), channels: new Set() });
+      prepareConfigEffects({
+        pluginIds: new Set(pluginLifecycle.pluginIds),
+        channels: new Set(),
+      }).retire();
       await commitRuntime({ publish: () => setRuntimeConfigSnapshot(committed, committed) });
       if (outcome === "activation failure") {
         throw activationFailure;

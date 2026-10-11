@@ -19,6 +19,10 @@ export function retirePreparedModelRuntimeGeneration(
   const retirement = owner.generationRetirement;
   owner.generationRetirement = undefined;
   retirement?.abort();
+  if (retirement?.signal.reason instanceof Error) {
+    // Retained signals must not keep the retiring caller's lazy stack frames alive.
+    void retirement.signal.reason.stack;
+  }
 }
 
 type ModelRuntimeClose = (error: Error) => Promise<void>;
@@ -95,4 +99,70 @@ export function createPreparedModelRuntimeReplacement(): PreparedModelRuntimeRep
   // when a reload fails before any request reaches the stale generation.
   void promise.catch(() => undefined);
   return { gateId: Symbol("prepared-model-runtime-replacement"), promise, resolve, reject };
+}
+
+/** Execution waits for plugin replacement while the active publication remains readable. */
+export function createPreparedModelRuntimePluginDrain(
+  getCancellationSignal: () => AbortSignal,
+  hasPendingPublication: () => boolean,
+) {
+  let pending: PreparedModelRuntimeReplacement | undefined;
+  return {
+    get pending() {
+      return pending;
+    },
+    begin: () => {
+      capturePreparedModelRuntimeLifetime();
+      getCancellationSignal().throwIfAborted();
+      if (pending) {
+        throw new Error("Prepared model runtime plugin drain is already pending");
+      }
+      const drain = createPreparedModelRuntimeReplacement();
+      pending = drain;
+      const unregister = registerPreparedModelRuntimeClose(async (error) => {
+        unregister();
+        if (pending === drain) {
+          pending = undefined;
+        }
+        drain.reject(error);
+      });
+      return {
+        pendingPublication: hasPendingPublication(),
+        release: () => {
+          unregister();
+          if (pending === drain) {
+            pending = undefined;
+            drain.resolve();
+          }
+        },
+      };
+    },
+    async runAfter(
+      queue: { enqueue: (task: () => Promise<void>) => Promise<void> },
+      run: () => Promise<void>,
+    ): Promise<void> {
+      const assertCurrent = capturePreparedModelRuntimeLifetime();
+      for (;;) {
+        const reservation = pending;
+        if (reservation) {
+          await reservation.promise;
+          continue;
+        }
+        assertCurrent();
+        let started = false;
+        await queue.enqueue(async () => {
+          assertCurrent();
+          if (pending) {
+            return;
+          }
+          started = true;
+          await run();
+        });
+        if (started) {
+          return;
+        }
+        // A newer reservation must release the queue before waiting for its drain.
+      }
+    },
+  };
 }

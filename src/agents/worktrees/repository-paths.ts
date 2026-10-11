@@ -6,7 +6,7 @@ import { insideGitCheckout, runGit } from "./git.js";
 export async function resolveCheckoutRootFromRealPath(
   requested: string,
   requestedLabel: string,
-): Promise<string> {
+): Promise<{ root: string; commit: string }> {
   const rootResult = await runGit(requested, [
     "rev-parse",
     "--show-toplevel",
@@ -45,5 +45,8 @@ export async function resolveCheckoutRootFromRealPath(
   if (!root) {
     throw new WorktreeRepositoryError(`not a git checkout: ${requestedLabel}`);
   }
-  return await fs.realpath(normalizeGitPathForFilesystem(root));
+  return {
+    root: await fs.realpath(normalizeGitPathForFilesystem(root)),
+    commit: output.slice(separator + 1),
+  };
 }

@@ -1,5 +1,11 @@
 import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
+import { z } from "zod";
 import type { ChannelIngressQueue } from "../channels/message/ingress-queue.js";
+import type {
+  ChannelIngressLegacyImport,
+  ChannelIngressLegacyImportResult,
+} from "../channels/message/ingress-queue.migration.js";
+import type { ChannelDoctorConfigMutation } from "../channels/plugins/types.adapters.js";
 import type { LegacyConfigRule } from "../config/legacy.shared.js";
 import type { SessionAcpMeta, SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.js";
@@ -79,6 +85,11 @@ export type PluginDoctorStateMigrationContext = {
     namespace: string,
     entries: readonly PluginDoctorRawStateEntry[],
   ) => { deleted: number; changed: number };
+  /** Offline repair only: verified backup, exact row comparison, and one atomic update. */
+  repairPluginStateEntries?: (
+    namespace: string,
+    replacements: readonly { entry: PluginDoctorRawStateEntry; value: unknown }[],
+  ) => Promise<{ changes: string[]; warnings: string[] }>;
   /** Owner-bound ingress queue access, one entry per manifest-declared channel;
    *  the host fixes the channel identity and doctor state directory. Older test
    *  hosts may omit it. */
@@ -103,6 +114,13 @@ export type PluginDoctorChannelIngressQueueInspection<TPayload, TMetadata = unkn
  *  the runtime proxy's accessor, minus the state-dir override the host fixes. */
 export type PluginDoctorChannelIngressQueueAccess = {
   channelId: string;
+  /** Offline migration authority, checked again immediately before filesystem effects. */
+  assertCurrent?: () => void;
+  /** Offline-only import with canonical IDs; terminal tombstones never become pending work. */
+  importLegacyEntries?: (params: {
+    accountId: string;
+    entries: readonly ChannelIngressLegacyImport[];
+  }) => ChannelIngressLegacyImportResult;
   /** Inspection-only access, available in every phase including detection. */
   openChannelIngressQueueForInspection: <TPayload, TMetadata = unknown>(options?: {
     accountId?: string;
@@ -194,9 +212,19 @@ export type PluginDoctorStateMigrationEntry = {
   migration: PluginDoctorStateMigration;
 };
 
+export type PluginDoctorProviderRename = {
+  from: string;
+  to: string;
+  baseUrl: string;
+};
+
 export type PluginDoctorContractModule = {
+  historicalWebhookListener?: unknown;
+  /** Retained host artifacts can migrate listener settings while plugin repairs stay deferred. */
+  normalizeHistoricalWebhookConfig?: unknown;
   legacyConfigRules?: unknown;
   normalizeCompatibilityConfig?: unknown;
+  providerRenames?: unknown;
   resolveSessionStoreAgentIds?: unknown;
   /**
    * @deprecated Declare static ownership in openclaw.plugin.json sessionRouteStateOwners.
@@ -206,10 +234,9 @@ export type PluginDoctorContractModule = {
   stateMigrations?: unknown;
 };
 
-export type PluginDoctorCompatibilityNormalizer = (params: { cfg: OpenClawConfig }) => {
-  config: OpenClawConfig;
-  changes: string[];
-};
+export type PluginDoctorCompatibilityNormalizer = (params: {
+  cfg: OpenClawConfig;
+}) => ChannelDoctorConfigMutation;
 
 type PluginDoctorSessionStoreAgentIdsResolver = (params: {
   cfg: OpenClawConfig;
@@ -266,12 +293,52 @@ function coercePluginDoctorStateMigrations(value: unknown): PluginDoctorStateMig
   }));
 }
 
+function coerceProviderRenames(value: unknown): PluginDoctorProviderRename[] {
+  return z
+    .array(
+      z
+        .object({
+          from: z.string().regex(/^[a-z0-9][a-z0-9._-]*$/),
+          to: z.string().regex(/^[a-z0-9][a-z0-9._-]*$/),
+          baseUrl: z.string().url(),
+        })
+        .refine(({ from, to }) => from !== to),
+    )
+    .parse(value ?? []);
+}
+
 /** Coerce a loaded doctor contract once for both registry use and declaration validation. */
-export function coercePluginDoctorContractModule(mod: PluginDoctorContractModule) {
+export function coercePluginDoctorContractModule(
+  mod: PluginDoctorContractModule,
+  allowedChannels?: readonly string[],
+) {
   const defaultExport = (mod as { default?: PluginDoctorContractModule }).default;
+  const historicalWebhookListener = z
+    .object({
+      channelId: z
+        .string()
+        .trim()
+        .min(1)
+        .refine(
+          (id) => !allowedChannels || allowedChannels.includes(id),
+          "Historical webhook listener channel must belong to the plugin",
+        ),
+      port: z.number().int().min(1).max(65535),
+      host: z.string().trim().min(1).optional(),
+      preserveAuthoredActivation: z.literal(true).optional(),
+    })
+    .optional()
+    .parse(
+      mod.historicalWebhookListener === undefined
+        ? defaultExport?.historicalWebhookListener
+        : mod.historicalWebhookListener,
+    );
   const rules = coerceLegacyConfigRules(defaultExport?.legacyConfigRules ?? mod.legacyConfigRules);
   const normalizeCompatibilityConfig = coerceNormalizeCompatibilityConfig(
     mod.normalizeCompatibilityConfig ?? defaultExport?.normalizeCompatibilityConfig,
+  );
+  const normalizeHistoricalWebhookConfig = coerceNormalizeCompatibilityConfig(
+    mod.normalizeHistoricalWebhookConfig ?? defaultExport?.normalizeHistoricalWebhookConfig,
   );
   const resolveSessionStoreAgentIds = coerceSessionStoreAgentIdsResolver(
     mod.resolveSessionStoreAgentIds ?? defaultExport?.resolveSessionStoreAgentIds,
@@ -282,18 +349,29 @@ export function coercePluginDoctorContractModule(mod: PluginDoctorContractModule
   const stateMigrations = coercePluginDoctorStateMigrations(
     mod.stateMigrations ?? defaultExport?.stateMigrations,
   );
+  const providerRenames = coerceProviderRenames(
+    mod.providerRenames ?? defaultExport?.providerRenames,
+  );
   const summary: Record<keyof PluginManifestDoctorContract, boolean> = {
-    configRepair: rules.length > 0 || Boolean(normalizeCompatibilityConfig),
+    configRepair:
+      rules.length > 0 || Boolean(normalizeCompatibilityConfig) || providerRenames.length > 0,
     resolveSessionStoreAgentIds: Boolean(resolveSessionStoreAgentIds),
     sessionRouteStateOwners: sessionRouteStateOwners.length > 0,
     stateMigrations: stateMigrations.length > 0,
   };
   return {
+    historicalWebhookListener,
+    normalizeHistoricalWebhookConfig,
     rules,
     normalizeCompatibilityConfig,
+    providerRenames,
     resolveSessionStoreAgentIds,
     sessionRouteStateOwners,
     stateMigrations,
     summary,
   };
 }
+
+export type PluginDoctorHistoricalWebhookListener = NonNullable<
+  ReturnType<typeof coercePluginDoctorContractModule>["historicalWebhookListener"]
+>;

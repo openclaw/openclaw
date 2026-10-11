@@ -1,10 +1,10 @@
 import type { z } from "zod";
-import type { InstallRecordBase } from "./types.installs.js";
 import type {
   HookMappingConfigInput,
   HooksGmailConfigInput,
   InternalHooksConfigInput,
 } from "./zod-schema.hooks.js";
+import type { InstallRecordBase } from "./zod-schema.installs.js";
 import type { OpenClawSchemaShape } from "./zod-schema.root-shape.js";
 
 export type HookMappingConfig = Omit<HookMappingConfigInput, "channel"> & {
@@ -12,10 +12,7 @@ export type HookMappingConfig = Omit<HookMappingConfigInput, "channel"> & {
   channel?: "last" | (string & {});
 };
 
-export type HookMappingMatch = NonNullable<HookMappingConfigInput["match"]>;
-export type HookMappingTransform = NonNullable<HookMappingConfigInput["transform"]>;
 export type HookSessionMode = NonNullable<HookMappingConfigInput["sessionMode"]>;
-export type HooksGmailConfig = HooksGmailConfigInput;
 export type HooksGmailTailscaleMode = NonNullable<
   NonNullable<HooksGmailConfigInput["tailscale"]>["mode"]
 >;
@@ -24,8 +21,6 @@ export type HookConfig = NonNullable<NonNullable<InternalHooksConfigInput["entri
 export type HookInstallRecord = InstallRecordBase & {
   hooks?: string[];
 };
-
-export type InternalHooksConfig = InternalHooksConfigInput;
 
 type HooksSchemaInput = NonNullable<z.input<typeof OpenClawSchemaShape.hooks>>;
 

@@ -159,6 +159,13 @@ describe("printDaemonStatus", () => {
 
   it("preserves Gateway metadata and input while redacting private definitions in JSON", () => {
     const server = { version: "2026.5.6", buildId: "build-2026.5.6", connId: "conn-1" };
+    const extraService: ExtraGatewayService = {
+      platform: "linux",
+      label: "sibling.service",
+      detail: "unit: /etc/systemd/system/sibling.service",
+      sourcePath: "/etc/systemd/system/sibling.service",
+      scope: "system",
+    };
     const command: GatewayServiceCommandConfig = {
       programArguments: ["node"],
       environment: {
@@ -175,12 +182,21 @@ describe("printDaemonStatus", () => {
     };
     const original = structuredClone(command);
     printDaemonStatus(
-      { service: { command }, rpc: { ok: true, server } },
+      { service: { command }, rpc: { ok: true, server }, extraServices: [extraService] },
       { json: true, deep: true },
     );
     expect(runtime.writeJson).toHaveBeenCalledOnce();
     const payload = runtime.writeJson.mock.calls[0]?.[0];
     expect(payload).toHaveProperty("rpc.server", server);
+    expect(payload).toHaveProperty("extraServices", [
+      {
+        platform: "linux",
+        label: "sibling.service",
+        detail: "unit: /etc/systemd/system/sibling.service",
+        scope: "system",
+      },
+    ]);
+    expect(extraService.sourcePath).toBe("/etc/systemd/system/sibling.service");
     expect(payload).not.toHaveProperty("service.command.managedDefinition");
     expect(payload).not.toHaveProperty("service.command.managedOverrides");
     expect(payload).not.toHaveProperty("service.command.definitionPaths");
@@ -393,9 +409,12 @@ describe("printDaemonStatus", () => {
     expectMockLineContains(runtime.error, "Gateway port 18789 is not listening");
     expectMockLineContains(runtime.error, "/Users/test/Library/Logs/openclaw/gateway.log");
     expectMockLineContains(runtime.error, "Logs (stdout and stderr):");
+    expect(output()).not.toContain("Warm-up:");
+    expect(output()).toContain("Readiness is not confirmed");
     const errors = output(runtime.error);
     expect(errors).not.toContain("suppressed");
-    expect(errors.match(/Last gateway error:/g)).toHaveLength(1);
+    expect(errors.match(/Recent Gateway log error/g)).toHaveLength(1);
+    expect(errors).toContain("may be from an earlier run");
   });
 
   it("does not claim an indeterminate port is not listening", () => {
@@ -422,6 +441,34 @@ describe("printDaemonStatus", () => {
     expect(errors).not.toContain("Gateway port 18789 is not listening");
   });
 
+  it("names a disabled custom Scheduled Task and explains how to re-enable it", () => {
+    const platform = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    try {
+      printDaemonStatus({
+        service: {
+          label: "Scheduled Task",
+          loadedText: "registered",
+          notLoadedText: "not registered",
+          runtime: { status: "stopped", state: "Disabled" },
+          command: {
+            programArguments: [],
+            environment: { OPENCLAW_WINDOWS_TASK_NAME: "OpenClaw Custom Gateway" },
+          },
+        },
+      });
+    } finally {
+      platform.mockRestore();
+    }
+
+    const errors = output(runtime.error);
+    expect(errors).toContain("Scheduled Task 'OpenClaw Custom Gateway' is registered but DISABLED");
+    expect(errors).toContain("openclaw gateway start");
+    expect(errors).toContain("openclaw doctor --fix");
+    expect(errors).toContain("to re-enable it");
+    expect(errors).toContain('schtasks /Query /TN "OpenClaw Custom Gateway"');
+    expect(errors).not.toContain("likely exited immediately");
+  });
+
   it("prints GUI-session recovery guidance for the service profile", () => {
     printDaemonStatus({
       service: {
@@ -443,16 +490,18 @@ describe("printDaemonStatus", () => {
     expectMockLineContains(runtime.error, "openclaw --profile work gateway restart");
   });
 
-  it("prints successful connectivity and capability separately", () => {
+  it("prints connectivity and capability without a service config summary", () => {
     printDaemonStatus({
       service: runningService,
+      config: { cli: { path: "/tmp/openclaw.json", exists: true, valid: true } },
       gateway,
       rpc: { ok: true, kind: "connect", capability: "write_capable", url: gateway.probeUrl },
     });
-    expectMockLineContains(runtime.log, "Connectivity probe: ok");
+    expectMockLineContains(runtime.log, "Connectivity check: ok");
     expect(
       runtime.log.mock.calls.map(([line]) => line).filter((line) => line.startsWith("Capability:")),
     ).toEqual(["Capability: write-capable"]);
+    expect(output(runtime.error)).not.toContain("doctor --fix");
   });
 
   it("passes daemon TLS state to dashboard link rendering", () => {
@@ -617,7 +666,7 @@ describe("printDaemonStatus", () => {
       runtimeLabel: "running",
       runtimeText: "running (pid 8000)",
       targetRole: "diagnostic-only",
-      suffix: " (diagnostic only, not the probe target)",
+      suffix: " (diagnostic only, not the check target)",
       rpcOk: false,
     },
     {
@@ -676,7 +725,7 @@ describe("printDaemonStatus", () => {
     },
   );
 
-  it("keeps the warm-up hint (not owns-port guidance) when healthy is reachability-only and a stale gateway PID is still held", () => {
+  it("does not claim ownership or warm-up from reachability when a stale gateway PID is still held", () => {
     // inspectGatewayRestart can set healthy from reachability after ownership failed,
     // while still returning non-empty staleGatewayPids. That must not be treated as
     // owns-port proof, or this message would contradict the stale-PID diagnostic below.
@@ -695,7 +744,8 @@ describe("printDaemonStatus", () => {
     });
 
     const logged = output();
-    expect(logged).toContain("Warm-up: launch agents can take a few seconds");
+    expect(logged).toContain("Readiness is not confirmed");
+    expect(logged).not.toContain("Warm-up:");
     expect(logged).not.toContain("Gateway process is running and owns the gateway port");
     const errors = output(runtime.error);
     expect(errors).toContain("Gateway runtime PID does not own the listening port");
@@ -834,10 +884,10 @@ describe("printDaemonStatus", () => {
 
     const errors = output(runtime.error);
     const logs = output();
-    expect(errors).toContain("Read probe: timed out under event-loop load");
+    expect(errors).toContain("Read check: timed out under event-loop load");
     expect(errors).toContain("Gateway event loop: degraded max=5100ms p99=5079ms util=1 cpu=0.94");
     expect(logs).toContain("Gateway accepted the connection");
-    expect(errors).not.toContain("Connectivity probe: failed");
+    expect(errors).not.toContain("Connectivity check: failed");
     expect(logs).not.toContain("not a warm-up delay");
   });
   it("does not warn about the service install when it matches the CLI version", () => {

@@ -72,11 +72,16 @@ await fs.writeFile(
 );
 const config: OpenClawConfig = {
   agents: {
-    defaults: { workspace: path.join(root, "workspace"), model: `${provider}/model` },
+    ownership: "explicit",
+    defaults: {
+      systemAgent: { agentId: "main" },
+      workspace: path.join(root, "workspace"),
+      model: `${provider}/model`,
+    },
     entries: Object.fromEntries(
       Array.from({ length: 32 }, (_, index) => [
         index === 0 ? "main" : `agent-${index}`,
-        { default: index === 0, workspace: path.join(root, `workspace-${index}`) },
+        { workspace: path.join(root, `workspace-${index}`) },
       ]),
     ),
   },
@@ -93,7 +98,7 @@ const config: OpenClawConfig = {
   },
 };
 await fs.writeFile(process.env.OPENCLAW_CONFIG_PATH!, JSON.stringify(config));
-await runGatewayLoop({
+const code = await runGatewayLoop({
   ownsProcessLifecycle: true,
   start: async (startup) => {
     const server = await startGatewayServerCore(0, {
@@ -116,13 +121,7 @@ await runGatewayLoop({
     setImmediate(() => trace("gateway-ready-degraded"));
     return server;
   },
-  runtime: {
-    log: () => {},
-    error: (...args) => console.error(...args),
-    exit: (code) => {
-      assert.notEqual(getPreparedModelRuntimeStartupStatus()?.degraded, false);
-      trace(`process-exit:${code}`);
-      process.exit(code);
-    },
-  },
 });
+assert.notEqual(getPreparedModelRuntimeStartupStatus()?.degraded, false);
+trace(`process-exit:${code}`);
+process.exitCode = code;

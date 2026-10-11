@@ -84,9 +84,9 @@ The reusable live/E2E workflow asks `scripts/test-docker-all.mjs --plan-json` wh
 Release Docker coverage runs smaller chunked jobs with `OPENCLAW_SKIP_DOCKER_BUILD=1` so each chunk verifies and loads only the artifact-backed image kind it needs (or pulls it under explicit `existing-only` reuse) and executes multiple lanes through the same weighted scheduler:
 
 - `OPENCLAW_DOCKER_ALL_PROFILE=release-path`
-- `OPENCLAW_DOCKER_ALL_CHUNK=core | package-update-openai | package-update-onboarding | package-update-migrations | package-update-self-upgrade | plugins-runtime-plugins | plugins-runtime-services | plugins-runtime-install-a..h | openwebui`
+- `OPENCLAW_DOCKER_ALL_CHUNK=core | package-update-openai | package-update-restart-auth | package-update-onboarding | package-update-migrations | package-update-self-upgrade | plugins-runtime-plugins | plugins-runtime-services | plugins-runtime-install-a..h | openwebui`
 
-Current release Docker chunks are `core`, `package-update-openai`, `package-update-onboarding`, `package-update-migrations`, `package-update-self-upgrade`, `plugins-runtime-plugins`, `plugins-runtime-services`, `plugins-runtime-install-a` through `plugins-runtime-install-h`, and `openwebui`. `package-update-openai` includes the live Codex plugin package lane, which installs the candidate OpenClaw package, installs the Codex plugin from `codex_plugin_spec` or a same-ref tarball with explicit Codex CLI install approval, runs Codex CLI preflight and same-session agent turns, then runs a zero-retry medium-thinking turn that sends progress, reads randomized workspace inputs, writes their exact artifact, and sends completion. `plugins-runtime-core`, `plugins-runtime`, and `plugins-integrations` remain aggregate plugin/runtime aliases. The `install-e2e` lane alias remains the aggregate manual rerun alias for both provider installer lanes.
+Current release Docker chunks are `core`, `package-update-openai`, `package-update-restart-auth`, `package-update-onboarding`, `package-update-migrations`, `package-update-self-upgrade`, `plugins-runtime-plugins`, `plugins-runtime-services`, `plugins-runtime-install-a` through `plugins-runtime-install-h`, and `openwebui`. `package-update-openai` includes the live Codex plugin package lane, which installs the candidate OpenClaw package, installs the Codex plugin from `codex_plugin_spec` or a same-ref tarball with explicit Codex CLI install approval, runs Codex CLI preflight and same-session agent turns, then runs a zero-retry medium-thinking turn that sends progress, reads randomized workspace inputs, writes their exact artifact, and sends completion. `plugins-runtime-core`, `plugins-runtime`, and `plugins-integrations` remain aggregate plugin/runtime aliases. The `install-e2e` lane alias remains the aggregate manual rerun alias for both provider installer lanes.
 
 The stable/full Docker `core` chunk includes `live-anthropic-cache`. It sends eight
 bounded requests through the candidate package's Anthropic provider and managed
@@ -114,19 +114,20 @@ survivor and ten minutes for setup and artifacts total 205 minutes, rounded up.
 Targeted first-hop jobs retain their 60-minute job budget. Phase and update-step
 durations are printed in the lane log.
 
-Authenticated update restart uses a 2,280-second container budget and a
-2,580-second (43-minute) lane budget: hosted run `36506342273` exceeded 1,515
-seconds, multiplied by roughly 1.5 with another 300 seconds for host-side work.
-Its restart command took 856 seconds in hosted run `36506210440` and 993 seconds
-on four-CPU Crabbox; 993 × 1.5 gives a lane-specific 1,500-second command timeout.
-The shared 900-second command default stays unchanged. The `package-update-openai`
-job allows 160 minutes: its five weight-three npm lanes serialize under the npm
-limit of five, with budgets of 30 + 30 + 20 + 25 + 43 = 148 minutes. The ten-minute
-chat lane overlaps them; ten minutes for setup and artifacts gives 158 minutes,
-rounded to 160. CI's 60-minute `docker-seed-e2e` job does not select
-`update-restart-auth`, so its budget stays unchanged.
+Authenticated update restart uses a 3,420-second container budget and a
+3,720-second (62-minute) lane budget. Hosted release checks on October 6–7 passed
+in 1,678–2,290 seconds and also hit the former 2,280-second container cap during
+recovery. A roughly 1.5× slow-host margin on 2,290 seconds gives 3,420 seconds,
+with another 300 seconds for host-side work. Its restart command took 856 seconds
+in hosted run `36506210440` and 993 seconds on four-CPU Crabbox; 993 × 1.5 gives
+a lane-specific 1,500-second command timeout. The shared 900-second command default
+stays unchanged. The separate `package-update-restart-auth` job allows 75 minutes,
+matching targeted restart-auth jobs and leaving 13 minutes beyond the lane budget
+for setup and artifacts. The remaining `package-update-openai` job allows 60 minutes.
+These enclosing budgets do not resolve a recovery command that remains pending
+after the restarted Gateway becomes healthy.
 
-Provider-neutral package checks run in three balanced rows: onboarding and install switching, channel/published migrations, and self-upgrades. This avoids serializing eight npm-heavy lanes behind one runner's npm resource limit. The aggregate `package-update-core` and `package-update` names remain available for manual runs. The `package-update-openai` row also runs root-managed VPS upgrade and authenticated update restart proof. Scheduler resource limits remain unchanged. Credential preflight failures remain blocking while the following diagnostic pool drains non-live lanes; earlier setup failures and cancellation still prevent execution.
+Provider-neutral package checks run in three balanced rows: onboarding and install switching, channel/published migrations, and self-upgrades. This avoids serializing eight npm-heavy lanes behind one runner's npm resource limit. The aggregate `package-update-core` and `package-update` names remain available for manual runs. The `package-update-openai` row also runs root-managed VPS upgrade; `package-update-restart-auth` owns authenticated update restart proof. Scheduler resource limits remain unchanged. Credential preflight failures remain blocking while the following diagnostic pool drains non-live lanes; earlier setup failures and cancellation still prevent execution.
 
 OpenWebUI runs as a standalone `openwebui` chunk on a dedicated large-disk Blacksmith runner whenever stable or full release-path coverage requests it, even when the reusable workflow routes supported jobs to GitHub-hosted runners. Keeping the external image pull separate prevents the large image from competing with the shared package and plugin images in `plugins-runtime-services`; legacy aggregate plugin/runtime chunks still include OpenWebUI for compatible manual reruns. Bundled-channel update lanes retry once for transient npm network failures.
 

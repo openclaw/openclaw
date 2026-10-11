@@ -42,11 +42,7 @@ import {
   shouldPreserveLocalCliSharedAuthScopes,
   shouldSkipLocalBackendSelfPairing,
 } from "./handshake-auth-helpers.js";
-import {
-  buildHandshakeAuthLogKey,
-  HandshakeAuthLogLimiter,
-  shouldLimitMissingCredentialAuthLog,
-} from "./handshake-auth-log-limiter.js";
+import { HandshakeAuthLogLimiter } from "./handshake-auth-log-limiter.js";
 import type {
   AuthenticatedGatewayConnect,
   GatewayConnectPhaseContext,
@@ -191,25 +187,14 @@ async function authenticateGatewayConnectCore(
       client: connectParams.client,
       isLocalClient,
     });
-    const authLogDecision = shouldLimitMissingCredentialAuthLog({
+    const suppressedText = unauthorizedHandshakeLogLimiter.missingCredentialLogSuffix({
       reason: failedAuth.reason,
+      remoteAddr,
+      client: clientLabel,
+      mode: connectParams.client.mode,
       authProvided,
-    })
-      ? unauthorizedHandshakeLogLimiter.register(
-          buildHandshakeAuthLogKey({
-            reason: failedAuth.reason,
-            remoteAddr,
-            client: clientLabel,
-            mode: connectParams.client.mode,
-            authProvided,
-          }),
-        )
-      : { shouldLog: true, suppressedSinceLastLog: 0 };
-    if (authLogDecision.shouldLog) {
-      const suppressedText =
-        authLogDecision.suppressedSinceLastLog > 0
-          ? ` suppressed=${authLogDecision.suppressedSinceLastLog}`
-          : "";
+    });
+    if (suppressedText !== undefined) {
       logWsControl.warn(
         `unauthorized conn=${connId} peer=${formatForLog(peerLabel)} remote=${remoteAddr ?? "?"} client=${formatForLog(clientLabel)} ${connectParams.client.mode} v${formatForLog(connectParams.client.version)} role=${role} scopes=${scopes.length} auth=${authProvided} device=${device ? "yes" : "no"} platform=${formatForLog(connectParams.client.platform)} instance=${formatForLog(connectParams.client.instanceId ?? "n/a")} host=${formatForLog(requestHost ?? "n/a")} origin=${formatForLog(requestOrigin ?? "n/a")} ua=${formatForLog(requestUserAgent ?? "n/a")} reason=${failedAuth.reason ?? "unknown"} guidance=${formatForLog(authMessage)}${suppressedText}`,
       );
@@ -238,24 +223,30 @@ async function authenticateGatewayConnectCore(
       connectParams.scopes = scopes;
     }
   };
-  let pairingLocality = resolvePairingLocality({
-    connectParams,
-    isLocalClient,
-    requestHost,
-    requestOrigin,
-    remoteAddress: remoteAddr,
-    hasProxyHeaders,
-    hasBrowserOriginHeader,
-    sharedAuthOk,
-    authMethod,
-  });
-  let skipLocalBackendSelfPairing = shouldSkipLocalBackendSelfPairing({
-    connectParams,
-    locality: pairingLocality,
-    hasBrowserOriginHeader,
-    sharedAuthOk,
-    authMethod,
-  });
+  const resolvePairingContext = () => {
+    const pairingLocality = resolvePairingLocality({
+      connectParams,
+      isLocalClient,
+      requestHost,
+      requestOrigin,
+      remoteAddress: remoteAddr,
+      hasProxyHeaders,
+      hasBrowserOriginHeader,
+      sharedAuthOk,
+      authMethod,
+    });
+    return {
+      pairingLocality,
+      skipLocalBackendSelfPairing: shouldSkipLocalBackendSelfPairing({
+        connectParams,
+        locality: pairingLocality,
+        hasBrowserOriginHeader,
+        sharedAuthOk,
+        authMethod,
+      }),
+    };
+  };
+  let { pairingLocality, skipLocalBackendSelfPairing } = resolvePairingContext();
   const preserveLocalCliSharedAuthScopes = shouldPreserveLocalCliSharedAuthScopes({
     connectParams,
     locality: pairingLocality,
@@ -280,7 +271,6 @@ async function authenticateGatewayConnectCore(
       sharedAuthOk,
       authOk,
       hasSharedAuth,
-      isLocalClient,
     });
     // Device-less shared auth clears self-declared scopes by default.
     // Only first-party local control paths preserve scopes: backend self-
@@ -364,24 +354,7 @@ async function authenticateGatewayConnectCore(
   ({ authResult, authOk, authMethod } = authDecision);
   const deviceTokenSharedGatewaySessionGeneration =
     authDecision.deviceTokenSharedGatewaySessionGeneration;
-  pairingLocality = resolvePairingLocality({
-    connectParams,
-    isLocalClient,
-    requestHost,
-    requestOrigin,
-    remoteAddress: remoteAddr,
-    hasProxyHeaders,
-    hasBrowserOriginHeader,
-    sharedAuthOk,
-    authMethod,
-  });
-  skipLocalBackendSelfPairing = shouldSkipLocalBackendSelfPairing({
-    connectParams,
-    locality: pairingLocality,
-    hasBrowserOriginHeader,
-    sharedAuthOk,
-    authMethod,
-  });
+  ({ pairingLocality, skipLocalBackendSelfPairing } = resolvePairingContext());
   if (!authOk) {
     if (startupPending && bootstrapTokenCandidate) {
       await rejectGatewayStartupConnect(context);

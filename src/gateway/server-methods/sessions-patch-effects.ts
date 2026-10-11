@@ -28,7 +28,7 @@ export async function publishSessionPatchEffects(params: {
       targetAgentId: string;
     };
   }>;
-}): Promise<void> {
+}): Promise<boolean> {
   const archivedSessionKeys = new Set<string>();
   for (const { target, entry, accessChanged } of params.targets) {
     triggerSessionPatchHook({
@@ -89,6 +89,7 @@ export async function publishSessionPatchEffects(params: {
       );
     }
   }
+  return archivedSessionKeys.size > 0;
 }
 
 /** Only applied assignments may repair the catalog; detached and status-model no-ops cannot. */

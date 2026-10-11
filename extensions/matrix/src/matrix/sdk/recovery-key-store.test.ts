@@ -17,6 +17,7 @@ import {
   writeMatrixRecoveryKeyStateForPathAsync,
   type MatrixSnapshotStateRuntime,
 } from "../crypto-state-store.js";
+import { createMatrixCryptoApi } from "./crypto.test-support.js";
 import { LogService } from "./logger.js";
 import { MatrixRecoveryKeyStore } from "./recovery-key-store.js";
 import type { MatrixCryptoBootstrapApi, MatrixSecretStorageStatus } from "./types.js";
@@ -33,23 +34,23 @@ function createTempRecoveryKeyPath(): string {
   return path.join(dir, "recovery-key.json");
 }
 
-function writeLegacyRecoveryKey(
+async function writeStoredRecoveryKey(
   recoveryKeyPath: string,
   keyId: string,
   bytes: number[],
   encodedPrivateKey?: string,
 ) {
-  fs.writeFileSync(
+  await writeMatrixRecoveryKeyStateForPathAsync({
     recoveryKeyPath,
-    JSON.stringify({
+    stateRuntime: getMatrixRuntime().state,
+    payload: {
       version: 1,
-      createdAt: "2026-03-12T00:00:00.000Z",
+      createdAt: "2026-07-01T00:00:00.000Z",
       keyId,
       encodedPrivateKey,
       privateKeyBase64: Buffer.from(bytes).toString("base64"),
-    }),
-    "utf8",
-  );
+    },
+  });
 }
 
 function createGeneratedRecoveryKey(params: {
@@ -82,18 +83,15 @@ function createBootstrapSecretStorageMock(errorMessage?: string) {
 }
 
 function createRecoveryKeyCrypto(params: {
-  bootstrapSecretStorage: ReturnType<typeof vi.fn>;
-  createRecoveryKeyFromPassphrase: ReturnType<typeof vi.fn>;
+  bootstrapSecretStorage: MatrixCryptoBootstrapApi["bootstrapSecretStorage"];
+  createRecoveryKeyFromPassphrase: MatrixCryptoBootstrapApi["createRecoveryKeyFromPassphrase"];
   status: MatrixSecretStorageStatus;
 }): MatrixCryptoBootstrapApi {
-  return {
-    on: vi.fn(),
-    bootstrapCrossSigning: vi.fn(async () => {}),
+  return createMatrixCryptoApi({
     bootstrapSecretStorage: params.bootstrapSecretStorage,
     createRecoveryKeyFromPassphrase: params.createRecoveryKeyFromPassphrase,
     getSecretStorageStatus: vi.fn(async () => params.status),
-    requestOwnUserVerification: vi.fn(async () => null),
-  } as unknown as MatrixCryptoBootstrapApi;
+  });
 }
 
 function bootstrapSecretStorageCallArg(
@@ -163,9 +161,9 @@ async function runSecretStorageBootstrapScenario(params: {
 function holdRecoveryWrites() {
   const entered = createDeferred<void>();
   const release = createDeferred<void>();
-  const original = getMatrixRuntime().state.openKeyedStore;
+  const original = getMatrixRuntime().state.openKeyedStoreV2;
   const runtime: MatrixSnapshotStateRuntime = {
-    openKeyedStore: <T>(options: Parameters<typeof original>[0]) => {
+    openKeyedStoreV2: <T>(options: Parameters<typeof original>[0]) => {
       const store = original<T>(options);
       const compareAndApply = store.compareAndApply;
       if (!compareAndApply) {
@@ -381,72 +379,51 @@ describe("MatrixRecoveryKeyStore", () => {
     }
   });
 
-  it.each(["worker", "released-host"] as const)(
-    "keeps failed writes best-effort and drains later writes on the %s store",
-    async (mode) => {
-      const recoveryKeyPath = createTempRecoveryKeyPath();
-      const original = getMatrixRuntime().state.openKeyedStore;
-      const failure = new Error("synthetic persistence failure");
-      let failNext = true;
-      const warn = vi.spyOn(LogService, "warn").mockImplementation(() => {});
-      const stateRuntime: MatrixSnapshotStateRuntime = {
-        openKeyedStore: <T>(options: Parameters<typeof original>[0]) => {
-          const backing = original<T>(options);
-          const compare = backing.compareAndApply;
-          const update = backing.update;
-          if (!compare || !update) {
-            throw new Error("expected real SQLite mutation support");
-          }
-          const failFirst = () => {
+  it("keeps failed writes best-effort and drains later writes on the worker store", async () => {
+    const recoveryKeyPath = createTempRecoveryKeyPath();
+    const original = getMatrixRuntime().state.openKeyedStoreV2;
+    const failure = new Error("synthetic persistence failure");
+    let failNext = true;
+    const warn = vi.spyOn(LogService, "warn").mockImplementation(() => {});
+    const stateRuntime: MatrixSnapshotStateRuntime = {
+      openKeyedStoreV2: <T>(options: Parameters<typeof original>[0]) => {
+        const backing = original<T>(options);
+        return {
+          ...backing,
+          compareAndApply: async (...args: Parameters<typeof backing.compareAndApply>) => {
             if (failNext) {
               failNext = false;
               throw failure;
             }
-          };
-          return mode === "worker"
-            ? {
-                ...backing,
-                compareAndApply: async (...args: Parameters<typeof compare>) => {
-                  failFirst();
-                  return compare(...args);
-                },
-              }
-            : {
-                ...backing,
-                observe: undefined,
-                compareAndApply: undefined,
-                update: async (...args: Parameters<typeof update>) => {
-                  failFirst();
-                  return update(...args);
-                },
-              };
-        },
-      };
-      const store = new MatrixRecoveryKeyStore(recoveryKeyPath, stateRuntime);
-      const callbacks = store.buildCryptoCallbacks();
-      try {
-        await store.drainPendingPersistence();
-        callbacks.cacheSecretStorageKey?.("failed", {}, new Uint8Array([1]));
-        await expect(
-          callbacks.getSecretStorageKey?.({ keys: { failed: {} } }, "fixture"),
-        ).resolves.toEqual(["failed", new Uint8Array([1])]);
-        expect(await store.getSecretStorageKeyCandidate("failed")).toBeNull();
-        expect(warn).toHaveBeenCalledWith(
-          "MatrixClientLite",
-          "Failed to persist recovery key:",
-          failure,
-        );
-        callbacks.cacheSecretStorageKey?.("saved", {}, new Uint8Array([2]));
-        await store.close();
-        expect(await readStoredRecoveryKey(recoveryKeyPath)).toMatchObject({
-          keyId: "saved",
-          privateKeyBase64: "Ag==",
-        });
-      } finally {
-        await store.close();
-      }
-    },
-  );
+            return backing.compareAndApply(...args);
+          },
+        };
+      },
+    };
+    const store = new MatrixRecoveryKeyStore(recoveryKeyPath, stateRuntime);
+    const callbacks = store.buildCryptoCallbacks();
+    try {
+      await store.drainPendingPersistence();
+      callbacks.cacheSecretStorageKey?.("failed", {}, new Uint8Array([1]));
+      await expect(
+        callbacks.getSecretStorageKey?.({ keys: { failed: {} } }, "fixture"),
+      ).resolves.toEqual(["failed", new Uint8Array([1])]);
+      expect(await store.getSecretStorageKeyCandidate("failed")).toBeNull();
+      expect(warn).toHaveBeenCalledWith(
+        "MatrixClientLite",
+        "Failed to persist recovery key:",
+        failure,
+      );
+      callbacks.cacheSecretStorageKey?.("saved", {}, new Uint8Array([2]));
+      await store.close();
+      expect(await readStoredRecoveryKey(recoveryKeyPath)).toMatchObject({
+        keyId: "saved",
+        privateKeyBase64: "Ag==",
+      });
+    } finally {
+      await store.close();
+    }
+  });
 
   it.each(["SDK callback", "reset candidate"] as const)(
     "does not return a durable key after closure during a %s read",
@@ -467,8 +444,8 @@ describe("MatrixRecoveryKeyStore", () => {
       const releaseRead = createDeferred<void>();
       let delayRead = false;
       const stateRuntime: MatrixSnapshotStateRuntime = {
-        openKeyedStore: <T>(options: Parameters<typeof runtime.openKeyedStore>[0]) => {
-          const backing = runtime.openKeyedStore<T>(options);
+        openKeyedStoreV2: <T>(options: Parameters<typeof runtime.openKeyedStoreV2>[0]) => {
+          const backing = runtime.openKeyedStoreV2<T>(options);
           return {
             ...backing,
             async lookup(key: string) {
@@ -504,12 +481,11 @@ describe("MatrixRecoveryKeyStore", () => {
 
   it("loads a stored recovery key for requested secret-storage keys", async () => {
     const recoveryKeyPath = createTempRecoveryKeyPath();
-    writeLegacyRecoveryKey(recoveryKeyPath, "SSSS", [1, 2, 3, 4]);
+    await writeStoredRecoveryKey(recoveryKeyPath, "SSSS", [1, 2, 3, 4]);
 
     const store = new MatrixRecoveryKeyStore(recoveryKeyPath);
     await store.drainPendingPersistence();
     expect(fs.existsSync(recoveryKeyPath)).toBe(false);
-    expect(fs.existsSync(`${recoveryKeyPath}.migrated`)).toBe(true);
     const callbacks = store.buildCryptoCallbacks();
     expect(await store.getSecretStorageKeyCandidate("SSSS")).toEqual(new Uint8Array([1, 2, 3, 4]));
     const resolved = await callbacks.getSecretStorageKey?.(
@@ -527,29 +503,60 @@ describe("MatrixRecoveryKeyStore", () => {
     expect(resolvedFromMultipleKeys?.[0]).toBe("SSSS");
   });
 
-  it("keeps a readable legacy recovery key usable when SQLite migration fails", async () => {
-    const recoveryKeyPath = createTempRecoveryKeyPath();
-    writeLegacyRecoveryKey(recoveryKeyPath, "SSSS", [1, 2, 3, 4]);
-    vi.spyOn(getMatrixRuntime().state, "openKeyedStore").mockImplementation(() => {
-      throw new Error("sqlite unavailable");
-    });
+  it.each([false, true])(
+    "refuses retired recovery-key JSON without replacing state (SQLite key present=%s)",
+    async (hasStoredKey) => {
+      const recoveryKeyPath = createTempRecoveryKeyPath();
+      if (hasStoredKey) {
+        await writeStoredRecoveryKey(recoveryKeyPath, "CURRENT", [4, 3, 2, 1]);
+      }
+      const previousState = await readMatrixRecoveryKeyStateForPathAsync(
+        recoveryKeyPath,
+        getMatrixRuntime().state,
+      );
+      const legacyJson = JSON.stringify({
+        version: 1,
+        createdAt: "2026-03-12T00:00:00.000Z",
+        keyId: "SSSS",
+        privateKeyBase64: "AQIDBA==",
+      });
+      fs.writeFileSync(recoveryKeyPath, legacyJson, "utf8");
+      const warn = vi.spyOn(LogService, "warn").mockImplementation(() => {});
+      const store = new MatrixRecoveryKeyStore(recoveryKeyPath);
+      const callbacks = store.buildCryptoCallbacks();
+      const remediation =
+        'Install OpenClaw 2026.9.5, run "openclaw doctor --fix", and start the Matrix channel once to migrate it, then upgrade to latest.';
 
-    const store = new MatrixRecoveryKeyStore(recoveryKeyPath);
-    const callbacks = store.buildCryptoCallbacks();
-    const resolved = await callbacks.getSecretStorageKey?.(
-      { keys: { SSSS: { name: "test" } } },
-      "m.cross_signing.master",
-    );
+      try {
+        await expect(store.getRecoveryKeySummary()).rejects.toThrow(remediation);
+        await expect(store.getSecretStorageKeyCandidate("SSSS")).rejects.toThrow(remediation);
+        await expect(
+          callbacks.getSecretStorageKey?.({ keys: { SSSS: {} } }, "m.cross_signing.master"),
+        ).rejects.toThrow(remediation);
 
-    expect(resolved?.[0]).toBe("SSSS");
-    expect(Array.from(resolved?.[1] ?? [])).toEqual([1, 2, 3, 4]);
-    expect(fs.existsSync(recoveryKeyPath)).toBe(true);
-  });
+        callbacks.cacheSecretStorageKey?.("NEW", {}, new Uint8Array([9, 8, 7]));
+        await expect(store.drainPendingPersistence()).resolves.toBeUndefined();
+        expect(warn).toHaveBeenCalledWith(
+          "MatrixClientLite",
+          "Failed to persist recovery key:",
+          expect.objectContaining({ message: expect.stringContaining(remediation) }),
+        );
+        expect(
+          await readMatrixRecoveryKeyStateForPathAsync(recoveryKeyPath, getMatrixRuntime().state),
+        ).toEqual(previousState);
+        expect(fs.readFileSync(recoveryKeyPath, "utf8")).toBe(legacyJson);
+        expect(fs.existsSync(`${recoveryKeyPath}.migrated`)).toBe(false);
+      } finally {
+        await store.close();
+      }
+    },
+  );
 
-  it("migrates a custom legacy recovery key filename without colliding with the default key", async () => {
+  it("loads a custom recovery key filename without colliding with the default key", async () => {
     const dir = tempDirs.make("matrix-recovery-key-store-");
     const recoveryKeyPath = path.join(dir, "recovery.key");
-    writeLegacyRecoveryKey(recoveryKeyPath, "CUSTOM", [4, 3, 2, 1]);
+    await writeStoredRecoveryKey(path.join(dir, "recovery-key.json"), "DEFAULT", [1, 2, 3, 4]);
+    await writeStoredRecoveryKey(recoveryKeyPath, "CUSTOM", [4, 3, 2, 1]);
 
     const store = new MatrixRecoveryKeyStore(recoveryKeyPath);
     const callbacks = store.buildCryptoCallbacks();
@@ -565,13 +572,12 @@ describe("MatrixRecoveryKeyStore", () => {
         path.join(dir, "recovery-key.json"),
         getMatrixRuntime().state,
       ),
-    ).toBeNull();
+    ).toMatchObject({ keyId: "DEFAULT", privateKeyBase64: "AQIDBA==" });
     expect(
       (await readMatrixRecoveryKeyStateForPathAsync(recoveryKeyPath, getMatrixRuntime().state))
         ?.keyId,
     ).toBe("CUSTOM");
     expect(fs.existsSync(recoveryKeyPath)).toBe(false);
-    expect(fs.existsSync(`${recoveryKeyPath}.migrated`)).toBe(true);
   });
 
   it("persists cached secret-storage keys in SQLite state", async () => {
@@ -627,21 +633,18 @@ describe("MatrixRecoveryKeyStore", () => {
 
   it("rebinds stored recovery key to server default key id when it changes", async () => {
     const recoveryKeyPath = createTempRecoveryKeyPath();
-    writeLegacyRecoveryKey(recoveryKeyPath, "OLD", [1, 2, 3, 4]);
+    await writeStoredRecoveryKey(recoveryKeyPath, "OLD", [1, 2, 3, 4]);
     const store = new MatrixRecoveryKeyStore(recoveryKeyPath);
 
     const bootstrapSecretStorage = vi.fn(async () => {});
     const createRecoveryKeyFromPassphrase = vi.fn(async () => {
       throw new Error("should not be called");
     });
-    const crypto = {
-      on: vi.fn(),
-      bootstrapCrossSigning: vi.fn(async () => {}),
+    const crypto = createMatrixCryptoApi({
       bootstrapSecretStorage,
       createRecoveryKeyFromPassphrase,
       getSecretStorageStatus: vi.fn(async () => ({ ready: true, defaultKeyId: "NEW" })),
-      requestOwnUserVerification: vi.fn(async () => null),
-    } as unknown as MatrixCryptoBootstrapApi;
+    });
 
     await store.bootstrapSecretStorageWithRecoveryKey(crypto);
 
@@ -736,7 +739,7 @@ describe("MatrixRecoveryKeyStore", () => {
     const storedEncoded = encodeRecoveryKey(
       new Uint8Array(Array.from({ length: 32 }, (_, i) => (i + 1) % 255)),
     );
-    writeLegacyRecoveryKey(
+    await writeStoredRecoveryKey(
       recoveryKeyPath,
       "OLD",
       Array.from({ length: 32 }, (_, i) => (i + 1) % 255),
@@ -752,16 +755,13 @@ describe("MatrixRecoveryKeyStore", () => {
       keyId: "NEW",
     });
 
-    const crypto = {
-      on: vi.fn(),
-      bootstrapCrossSigning: vi.fn(async () => {}),
+    const crypto = createMatrixCryptoApi({
       bootstrapSecretStorage: vi.fn(async () => {}),
       createRecoveryKeyFromPassphrase: vi.fn(async () => {
         throw new Error("should not be called");
       }),
       getSecretStorageStatus: vi.fn(async () => ({ ready: true, defaultKeyId: "NEW" })),
-      requestOwnUserVerification: vi.fn(async () => null),
-    } as unknown as MatrixCryptoBootstrapApi;
+    });
 
     await store.bootstrapSecretStorageWithRecoveryKey(crypto);
 
@@ -775,7 +775,7 @@ describe("MatrixRecoveryKeyStore", () => {
     const oldEncoded = encodeRecoveryKey(
       new Uint8Array(Array.from({ length: 32 }, (_, i) => i + 1)),
     );
-    writeLegacyRecoveryKey(
+    await writeStoredRecoveryKey(
       recoveryKeyPath,
       "OLD",
       Array.from({ length: 32 }, (_, i) => i + 1),

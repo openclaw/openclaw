@@ -13,6 +13,7 @@ import {
   type DeclarationLookup,
 } from "./native-declaration-filesystem.mts";
 import { nativeTypeScriptToolchainFiles } from "./native-typescript-toolchain.mts";
+import { pluginSdkEntrypoints } from "./plugin-sdk-entries.mts";
 
 export const LOCAL_SDK_ROOT = "packages/plugin-sdk/dist";
 export const BOUNDARY_CACHE_ROOT = ".artifacts/extension-package-boundary";
@@ -26,6 +27,41 @@ export const BOUNDARY_PLUGIN_UNITS = [
   ["telegram", "api"],
   ["whatsapp", "api"],
 ] as const;
+
+/** The hashed native compiler/API owns declaration bytes; Node's major fences its client. */
+export function boundaryRuntimeVersion() {
+  return `node-${process.versions.node.split(".")[0]}`;
+}
+
+export function sdkBoundaryUnit(roots?: string[]) {
+  return {
+    id: "plugin-sdk",
+    outDir: LOCAL_SDK_ROOT,
+    config: "packages/plugin-sdk/tsconfig.json",
+    rootDir: ".",
+    roots,
+    required: roots
+      ? roots.map((source) => `${LOCAL_SDK_ROOT}/${source.replace(/\.([cm]?)tsx?$/u, ".d.$1ts")}`)
+      : pluginSdkEntrypoints.map((entry) => `${LOCAL_SDK_ROOT}/src/plugin-sdk/${entry}.d.ts`),
+  };
+}
+
+/** One request format seals both local preparation and transported SDK receipts. */
+export function boundaryPreparationArgs(
+  rootDir: string,
+  unit: { config: string; outDir: string; rootDir: string; roots?: string[] },
+) {
+  return [
+    path.join(rootDir, "scripts/compile-extension-boundary.mts"),
+    JSON.stringify({
+      configFile: unit.config,
+      roots: unit.roots,
+      inputReceipt: `${unit.outDir}/.inputs.json`,
+      compilerOptions: { outDir: unit.outDir, rootDir: unit.rootDir, declarationMap: false },
+      emit: true,
+    }),
+  ];
+}
 
 const GENERATOR_INPUTS = [
   "pnpm-lock.yaml",
@@ -74,6 +110,7 @@ export class BoundaryInputSnapshot extends CompilerInputSnapshot {
     const require = createRequire(path.join(boundary.root, "package.json"));
     const nativePackage = assertInput(require.resolve("typescript/package.json"));
     super(boundary.root, {
+      runtimeVersion: boundaryRuntimeVersion(),
       toolchainFiles: nativeTypeScriptToolchainFiles(nativePackage, assertInput),
       generatorInputs: [...GENERATOR_INPUTS, ...generatorInputs],
       assertInput,
@@ -182,7 +219,7 @@ export class BoundaryInputSnapshot extends CompilerInputSnapshot {
     const pending = lookups.filter(
       (lookup) => !this.lookupFacts.has(`${lookup.kind}\0${lookup.path}`),
     );
-    // Match byte/topology snapshot lifetime; a new before/after owner probes again.
+    // Match byte/topology snapshot lifetime; a new snapshot probes again.
     if (pending.length) {
       const observed = replayDeclarationLookups(
         this.rootDir,
@@ -240,20 +277,16 @@ export class BoundaryInputSnapshot extends CompilerInputSnapshot {
     args: string[],
     inputReceipt: string,
     outputs: string[],
-    before: BoundaryInputSnapshot,
-    startedAt: number,
     outputRoot?: string,
   ): ArtifactRecord {
     const { inputs, lookups } = this.readReceipt(inputReceipt);
     if (!outputs.includes(portableRelativePath(this.rootDir, this.boundary.assert(inputReceipt)))) {
       throw new Error("Bounded compiler receipt is absent from its output inventory");
     }
-    // Fresh compilation still seals the entire namespace before narrowing reuse.
-    const sealed = this.seal(config, args, inputs, before, startedAt, outputRoot);
     const fingerprint = this.resolutionFingerprint(lookups);
     return {
       version: ARTIFACT_CACHE_VERSION,
-      ...sealed,
+      inputs,
       signature: this.signature(config, args, inputs, outputRoot, fingerprint),
       outputs: Object.fromEntries(outputs.map((file) => [file, this.hash(file)])),
     };

@@ -1,4 +1,4 @@
-// Vitest shared config wires the shared test shard.
+// Threads inherit admission; forks also run this bootstrap in their own process.
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -14,6 +14,7 @@ import {
 } from "../../scripts/lib/vitest-local-scheduling.mts";
 import type { LocalVitestScheduling } from "../../scripts/lib/vitest-local-scheduling.mts";
 import { resolveTestBunSourceArgs } from "../../src/test-utils/bun-process.ts";
+import { controlUiSolidPlugin } from "../../ui/config/control-ui-solid.ts";
 import {
   BUNDLED_PLUGIN_ROOT_DIR,
   BUNDLED_PLUGIN_TEST_GLOB,
@@ -29,9 +30,7 @@ import { DEFAULT_VITEST_TEST_TIMEOUT_MS } from "./vitest.timeouts.ts";
 import { compiledSubprocessesPlugin } from "./vitest.worker-artifacts.ts";
 
 if (process.versions.bun) {
-  // Removal: delete this Vitest bootstrap after oven-sh/bun#42349 ships in supported Bun.
-  const { ensureSqliteLibrarySelected } = await import("../../src/infra/bun-sqlite-library.ts");
-  ensureSqliteLibrarySelected();
+  await import("./vitest.sqlite-preload.mts");
 }
 
 export type { LocalVitestScheduling };
@@ -51,7 +50,7 @@ export const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)
 export const nonIsolatedRunnerPath = path.join(repoRoot, "test", "non-isolated-runner.ts");
 const vitestConfigFiles = fs
   .readdirSync(path.join(repoRoot, "test", "vitest"), { withFileTypes: true })
-  .filter((entry) => entry.isFile() && /\.(?:mjs|ts)$/u.test(entry.name))
+  .filter((entry) => entry.isFile() && /\.(?:mjs|mts|ts)$/u.test(entry.name))
   .map((entry) => `test/vitest/${entry.name}`)
   .toSorted((left, right) => left.localeCompare(right));
 export function resolveRepoRootPath(value: string): string {
@@ -149,6 +148,11 @@ export const sharedVitestConfig = {
   root: repoRoot,
   envDir: false as const,
   plugins: [
+    // Node tests also import UI renderers. Keep their compiler off non-UI sources.
+    ...controlUiSolidPlugin([
+      `${repoRoot.replaceAll("\\", "/")}/ui/**/*.tsx`,
+      `${repoRoot.replaceAll("\\", "/")}/extensions/*/browser/**/*.tsx`,
+    ]),
     {
       name: "openclaw:node-worker-policy",
       config: () => ({
@@ -492,6 +496,9 @@ export const sharedVitestConfig = {
       sourcePackageAlias("media-core", "read-byte-stream-with-limit"),
       sourcePackageAlias("media-core"),
       sourcePackageAlias("retry"),
+      sourcePackageAlias("worker-runtime", "worker"),
+      sourcePackageAlias("worker-runtime", "lifecycle"),
+      sourcePackageAlias("worker-runtime"),
       sourcePackageAlias("session-url-contract", "parse"),
       sourcePackageAlias("session-url-contract", "session-key-normalization"),
       sourcePackageAlias("session-url-contract", "share-build"),
@@ -512,6 +519,8 @@ export const sharedVitestConfig = {
   test: {
     dir: repoRoot,
     root: repoRoot,
+    // Solid defaults unspecified test environments to jsdom; preserve Node's default.
+    environment: "node",
     // Emit completed cases even under agent detection so healthy runs feed the output watchdog.
     reporters: ["verbose", ...(process.env.GITHUB_ACTIONS === "true" ? ["github-actions"] : [])],
     testTimeout: DEFAULT_VITEST_TEST_TIMEOUT_MS,
@@ -559,7 +568,7 @@ export const sharedVitestConfig = {
       "test/setup.extensions.ts",
       "test/setup-openclaw-runtime.ts",
       ...vitestConfigFiles,
-      "test/vitest/**/*.{ts,mjs}",
+      "test/vitest/**/*.{ts,mts,mjs}",
     ].map(resolveRepoRootPath),
     include: [
       "src/**/*.test.ts",

@@ -5,6 +5,7 @@ import path from "node:path";
 import process from "node:process";
 import { BUILD_STAMP_FILE, RUNTIME_POSTBUILD_STAMP_FILE } from "./local-build-metadata-paths.mts";
 import { hasDirtyRuntimePostBuildInputs, hasDirtySourceTree } from "./run-node-input-state.mts";
+import { shouldCopyStaticExtensionAssets } from "./static-extension-assets.mts";
 
 export { BUILD_STAMP_FILE, RUNTIME_POSTBUILD_STAMP_FILE };
 
@@ -19,6 +20,7 @@ type BuildMetadataParams = {
   fs?: typeof fs;
   env?: NodeJS.ProcessEnv;
   now?: () => number;
+  inputSignature?: string | null;
   spawnSync?: BuildMetadataSpawnSync;
 };
 
@@ -71,7 +73,7 @@ export function writeBuildStamp(params: BuildMetadataParams = {}) {
   fsImpl.mkdirSync(distRoot, { recursive: true });
   fsImpl.writeFileSync(
     buildStampPath,
-    `${JSON.stringify({ builtAt: now(), head, inputsClean: resolveInputsClean(params, "build") })}\n`,
+    `${JSON.stringify({ builtAt: now(), head, inputsClean: resolveInputsClean(params, "build"), ...(params.inputSignature ? { inputSignature: params.inputSignature } : {}) })}\n`,
     "utf8",
   );
   return buildStampPath;
@@ -97,6 +99,8 @@ export function writeRuntimePostBuildStamp(params: BuildMetadataParams = {}) {
         syncedAt: now(),
         ...(head ? { head } : {}),
         inputsClean: resolveInputsClean(params, "runtime"),
+        staticAssets: shouldCopyStaticExtensionAssets({ env: params.env ?? process.env }),
+        ...(params.inputSignature ? { inputSignature: params.inputSignature } : {}),
       },
       null,
       2,

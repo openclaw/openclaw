@@ -20,28 +20,14 @@ import type { AgentRunRequest } from "../server-methods/agent-request-types.js";
 import { normalizeRpcAttachmentsToChatAttachments } from "../server-methods/attachment-normalize.js";
 import type { GatewayRequestHandlerOptions } from "../server-methods/types.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
-import { loadSessionEntry, resolveSessionStoreKey } from "../session-utils.js";
+import { loadGatewaySessionEntryReadOnlyInWorker } from "../session-utils-store-worker.js";
+import { resolveSessionStoreKey } from "../session-utils.js";
 import { formatForLog } from "../ws-log.js";
 import { setGatewayDedupeEntries } from "./agent-dedupe.js";
-import { respondUnavailableAgentSessionForKey } from "./agent-handler-helpers.js";
+import { respondUnavailableAgentSession } from "./agent-handler-helpers.js";
 import type { AgentTurnContext } from "./types.js";
 
 type ExplicitRecipientSession = Awaited<ReturnType<typeof resolveAgentExplicitRecipientSession>>;
-
-type AgentRequestRouting = {
-  normalizedAttachments: ReturnType<typeof normalizeRpcAttachmentsToChatAttachments>;
-  requestedBestEffortDeliver?: boolean;
-  knownAgents: string[];
-  agentId?: string;
-  requestedSessionId?: string;
-  requestedToRaw?: string;
-  sessionKeyFromTo?: string;
-  requestedSessionKeyRaw?: string;
-  requestedSessionKey?: string;
-  explicitRecipientSession?: ExplicitRecipientSession;
-  preAcceptedReservedSessionKey?: string;
-  preAttachmentSession?: { canonicalKey: string; sessionId: string };
-};
 
 export async function prepareAgentRequestRouting(params: {
   request: AgentRunRequest;
@@ -60,7 +46,8 @@ export async function prepareAgentRequestRouting(params: {
     sessionId?: string;
   }) => void;
   clearDedupe: () => void;
-}): Promise<AgentRequestRouting | undefined> {
+  assertCurrent?: () => void;
+}) {
   const rejectInvalidRequest = (message: string): undefined => {
     params.respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, message));
     return undefined;
@@ -68,10 +55,6 @@ export async function prepareAgentRequestRouting(params: {
   const normalizedAttachments = normalizeRpcAttachmentsToChatAttachments(
     params.request.attachments,
   );
-  const requestedBestEffortDeliver =
-    typeof params.request.bestEffortDeliver === "boolean"
-      ? params.request.bestEffortDeliver
-      : undefined;
   const knownAgents = listAgentIds(params.cfg);
   const agentIdRaw = normalizeOptionalString(params.request.agentId) ?? "";
   let agentId = agentIdRaw ? normalizeAgentId(agentIdRaw) : undefined;
@@ -90,10 +73,12 @@ export async function prepareAgentRequestRouting(params: {
       ? requestedToRaw
       : undefined;
   const requestedSessionKeyRaw = requestedSessionKeyParam ?? sessionKeyFromTo;
-  if (requestedSessionKeyRaw) {
+  const agentSelectionKey =
+    requestedSessionKeyRaw ?? (!requestedSessionId && !agentId ? "main" : undefined);
+  if (agentSelectionKey) {
     const requestedSessionAgent = resolveRequestedSessionAgentId(
       params.cfg,
-      requestedSessionKeyRaw,
+      agentSelectionKey,
       agentId,
     );
     if (!requestedSessionAgent.ok) {
@@ -115,14 +100,6 @@ export async function prepareAgentRequestRouting(params: {
       return rejectInvalidRequest(formatForLog(error));
     }
   }
-  if (!requestedSessionKeyRaw && !requestedSessionId && !agentId) {
-    const implicitMainOwner = resolveRequestedSessionAgentId(params.cfg, "main");
-    if (!implicitMainOwner.ok) {
-      params.respond(false, undefined, implicitMainOwner.error);
-      return undefined;
-    }
-    agentId = implicitMainOwner.agentId;
-  }
   const explicitRecipientChannel = normalizeMessageChannel(params.request.channel);
   const explicitRecipient =
     !requestedSessionKeyRaw &&
@@ -140,9 +117,7 @@ export async function prepareAgentRequestRouting(params: {
     try {
       explicitRecipientSession = await resolveAgentExplicitRecipientSession({
         cfg: params.cfg,
-        agentId: explicitRecipient.agentId,
-        channel: explicitRecipient.channel,
-        to: explicitRecipient.to,
+        ...explicitRecipient,
         accountId: normalizeOptionalString(params.request.accountId),
         threadId: params.request.threadId,
       });
@@ -174,27 +149,68 @@ export async function prepareAgentRequestRouting(params: {
   if (expectedSessionTargetError) {
     return rejectInvalidRequest(expectedSessionTargetError);
   }
-  if (
-    requestedSessionKey &&
-    respondUnavailableAgentSessionForKey({
-      sessionKey: requestedSessionKey,
-      requestedSessionId,
-      isRawModelRun: params.isRawModelRun,
-      agentId,
-      respond: params.respond,
-    })
-  ) {
-    params.clearDedupe();
-    return undefined;
+  let loaded: Awaited<ReturnType<typeof loadGatewaySessionEntryReadOnlyInWorker>> | undefined;
+  if (requestedSessionKey) {
+    // Reserve before the worker read yields, including ordinary session keys.
+    params.reserveDedupe(requestedSessionKey, agentId);
+    try {
+      loaded = await loadGatewaySessionEntryReadOnlyInWorker({
+        cfg: params.cfg,
+        key: requestedSessionKey,
+        agentId,
+        projection: "list",
+        excludeInternalEffects: true,
+        assertActive: params.assertCurrent,
+      });
+      const unavailable = respondUnavailableAgentSession({
+        loaded,
+        requestedSessionId,
+        isRawModelRun: params.isRawModelRun,
+        respond: params.respond,
+        assertCurrent: params.assertCurrent,
+      });
+      if (unavailable instanceof Promise ? await unavailable : unavailable) {
+        params.clearDedupe();
+        return undefined;
+      }
+    } catch (error) {
+      params.clearDedupe();
+      throw error;
+    }
   }
-  if (
-    dropReboundExecApprovalFollowup({
-      ...params,
-      requestedSessionKeyRaw,
-      agentId,
-    })
-  ) {
-    return undefined;
+  if (params.execApprovalFollowupApprovalId && requestedSessionKeyRaw) {
+    const expectedSessionId = normalizeOptionalString(
+      params.request.execApprovalFollowupExpectedSessionId,
+    );
+    const currentSessionId = normalizeOptionalString(loaded?.entry?.sessionId);
+    if (
+      isExecApprovalFollowupSessionRebound({
+        expectedSessionId,
+        resolvedSessionId: currentSessionId,
+      })
+    ) {
+      emitDiagnosticEvent({
+        type: "exec.approval.followup_suppressed",
+        approvalId: params.execApprovalFollowupApprovalId,
+        reason: "session_rebound",
+        phase: "gateway_preflight",
+      });
+      params.context.logGateway.info(
+        `Dropping stale exec approval followup ${params.execApprovalFollowupApprovalId}: session ${requestedSessionKeyRaw} rebound (expected ${expectedSessionId}, current ${currentSessionId}) before the approval resolved`,
+      );
+      const droppedPayload = {
+        runId: params.runId,
+        status: "ok" as const,
+        summary: "exec approval followup dropped: session was reset before the approval resolved",
+      };
+      setGatewayDedupeEntries({
+        dedupe: params.context.dedupe,
+        keys: params.agentDedupeKeys,
+        entry: { ts: Date.now(), ok: true, payload: droppedPayload },
+      });
+      params.respond(true, droppedPayload, undefined, { runId: params.runId });
+      return undefined;
+    }
   }
   const preAcceptedReservedSessionKey =
     requestedSessionKey &&
@@ -208,13 +224,6 @@ export async function prepareAgentRequestRouting(params: {
   // Keyless runs still need the run-id reservation before asynchronous preparation,
   // otherwise concurrent callers can dispatch the same id without a session owner.
   params.reserveDedupe(preAcceptedReservedSessionKey, agentId);
-  const loaded = requestedSessionKey
-    ? loadSessionEntry(requestedSessionKey, {
-        ...(agentId ? { agentId } : {}),
-        clone: false,
-        projection: "list",
-      })
-    : undefined;
   if (loaded) {
     params.bindDedupeSessionTarget({
       sessionKey: loaded.canonicalKey,
@@ -224,7 +233,7 @@ export async function prepareAgentRequestRouting(params: {
   }
   return {
     normalizedAttachments,
-    requestedBestEffortDeliver,
+    requestedBestEffortDeliver: params.request.bestEffortDeliver,
     knownAgents,
     agentId,
     requestedSessionId,
@@ -238,63 +247,4 @@ export async function prepareAgentRequestRouting(params: {
       ? { canonicalKey: loaded.canonicalKey, sessionId: loaded.entry.sessionId }
       : undefined,
   };
-}
-
-function dropReboundExecApprovalFollowup(params: {
-  request: AgentRunRequest;
-  requestedSessionKeyRaw?: string;
-  agentId?: string;
-  execApprovalFollowupApprovalId?: string;
-  runId: string;
-  agentDedupeKeys: string[];
-  context: AgentTurnContext;
-  respond: GatewayRequestHandlerOptions["respond"];
-}): boolean {
-  if (!params.execApprovalFollowupApprovalId || !params.requestedSessionKeyRaw) {
-    return false;
-  }
-  const expectedSessionId = normalizeOptionalString(
-    params.request.execApprovalFollowupExpectedSessionId,
-  );
-  let currentSessionId: string | undefined;
-  try {
-    currentSessionId = normalizeOptionalString(
-      loadSessionEntry(params.requestedSessionKeyRaw, {
-        ...(params.agentId ? { agentId: params.agentId } : {}),
-        clone: false,
-        projection: "list",
-      }).entry?.sessionId,
-    );
-  } catch {
-    currentSessionId = undefined;
-  }
-  if (
-    !isExecApprovalFollowupSessionRebound({
-      expectedSessionId,
-      resolvedSessionId: currentSessionId,
-    })
-  ) {
-    return false;
-  }
-  emitDiagnosticEvent({
-    type: "exec.approval.followup_suppressed",
-    approvalId: params.execApprovalFollowupApprovalId,
-    reason: "session_rebound",
-    phase: "gateway_preflight",
-  });
-  params.context.logGateway.info(
-    `Dropping stale exec approval followup ${params.execApprovalFollowupApprovalId}: session ${params.requestedSessionKeyRaw} rebound (expected ${expectedSessionId}, current ${currentSessionId}) before the approval resolved`,
-  );
-  const droppedPayload = {
-    runId: params.runId,
-    status: "ok" as const,
-    summary: "exec approval followup dropped: session was reset before the approval resolved",
-  };
-  setGatewayDedupeEntries({
-    dedupe: params.context.dedupe,
-    keys: params.agentDedupeKeys,
-    entry: { ts: Date.now(), ok: true, payload: droppedPayload },
-  });
-  params.respond(true, droppedPayload, undefined, { runId: params.runId });
-  return true;
 }

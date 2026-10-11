@@ -20,6 +20,12 @@ import {
 } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { z } from "zod";
+import {
+  captureDirectoryIdentity,
+  directoryIdentitySchema,
+  sameDirectoryIdentity,
+  type DirectoryIdentity,
+} from "./crabbox-staging-identity.mts";
 
 const outputNames = ["captures", "runs"] as const;
 const maxEntries = 100_000;
@@ -37,11 +43,8 @@ function artifactPath(path: string) {
   );
 }
 
-export const crabboxArtifactIdentitySchema = z.strictObject({
-  dev: z.string(),
-  ino: z.string(),
-});
-export type CrabboxArtifactIdentity = z.infer<typeof crabboxArtifactIdentitySchema>;
+export const crabboxArtifactIdentitySchema = directoryIdentitySchema;
+export type CrabboxArtifactIdentity = DirectoryIdentity;
 
 const entrySchema = z.discriminatedUnion("kind", [
   z.strictObject({ path: z.string().refine(artifactPath), kind: z.literal("directory") }),
@@ -76,17 +79,13 @@ export const crabboxArtifactEvidenceSchema = z.discriminatedUnion("kind", [
 export type CrabboxArtifactEvidence = z.infer<typeof crabboxArtifactEvidenceSchema>;
 type CopiedEvidence = Extract<CrabboxArtifactEvidence, { kind: "copied" }>;
 
-function identity(stat: BigIntStats): CrabboxArtifactIdentity {
-  return { dev: String(stat.dev), ino: String(stat.ino) };
-}
-
-function sameIdentity(stat: BigIntStats, expected: CrabboxArtifactIdentity) {
-  return String(stat.dev) === expected.dev && String(stat.ino) === expected.ino;
-}
-
-function directory(path: string, expected?: CrabboxArtifactIdentity) {
+function directory(path: string, expected?: CrabboxArtifactIdentity, legacyBeforeNs?: bigint) {
   const stat = lstatSync(path, { bigint: true });
-  if (!stat.isDirectory() || (expected && !sameIdentity(stat, expected))) {
+  if (
+    !stat.isDirectory() ||
+    (expected &&
+      !sameDirectoryIdentity(captureDirectoryIdentity(path, stat), expected, legacyBeforeNs))
+  ) {
     throw new Error("artifact directory is missing, replaced, or not a real directory: " + path);
   }
   return stat;
@@ -129,7 +128,7 @@ function names(path: string) {
 function privateDirectory(path: string) {
   mkdirSync(path, { mode: 0o700 });
   chmodSync(path, 0o700);
-  return identity(directory(path));
+  return captureDirectoryIdentity(path, directory(path));
 }
 
 function hashFile(
@@ -286,7 +285,7 @@ function inventory(
       walk(path, name, target);
     }
   }
-  if (!sameFile(rootStat, directory(root, identity(rootStat)))) {
+  if (!sameFile(rootStat, directory(root, captureDirectoryIdentity(root, rootStat)))) {
     throw new Error("artifact root changed during inspection");
   }
   return entries.toSorted((left, right) =>
@@ -298,10 +297,11 @@ function sourceInventory(
   source: string,
   expected: CrabboxArtifactIdentity,
   target?: () => CopyTarget,
+  legacyBeforeNs?: bigint,
 ) {
-  const before = directory(source, expected);
+  const before = directory(source, expected, legacyBeforeNs);
   const entries = inventory(join(source, ".crabbox"), { target });
-  if (!sameFile(before, directory(source, expected))) {
+  if (!sameFile(before, directory(source, expected, legacyBeforeNs))) {
     throw new Error("artifact source checkout changed during inspection");
   }
   return entries;
@@ -337,7 +337,12 @@ function overlaps(left: string, right: string) {
   return contains(left, right) || contains(right, left);
 }
 
-function verifyDestination(sourceCheckout: string, evidence: CopiedEvidence, partial = false) {
+function verifyDestination(
+  sourceCheckout: string,
+  evidence: CopiedEvidence,
+  partial = false,
+  legacyBeforeNs?: bigint,
+) {
   const repository = evidence.repository.path;
   const retainedRoot = join(repository, ".crabbox", "wrapper-artifacts");
   if (
@@ -351,10 +356,10 @@ function verifyDestination(sourceCheckout: string, evidence: CopiedEvidence, par
       "artifact preservation destination is not independent of the disposable checkout",
     );
   }
-  directory(repository, evidence.repository.identity);
-  directory(join(repository, ".crabbox"), evidence.parents.crabbox);
-  directory(retainedRoot, evidence.parents.wrapperArtifacts);
-  const stat = directory(evidence.destination.path, evidence.destination.identity);
+  directory(repository, evidence.repository.identity, legacyBeforeNs);
+  directory(join(repository, ".crabbox"), evidence.parents.crabbox, legacyBeforeNs);
+  directory(retainedRoot, evidence.parents.wrapperArtifacts, legacyBeforeNs);
+  const stat = directory(evidence.destination.path, evidence.destination.identity, legacyBeforeNs);
   if (process.platform !== "win32" && (stat.mode & 0o777n) !== 0o700n) {
     throw new Error("preserved artifact destination permissions changed");
   }
@@ -362,10 +367,10 @@ function verifyDestination(sourceCheckout: string, evidence: CopiedEvidence, par
     inventory(evidence.destination.path, { destination: true }),
     partial ? evidence.entries : copiedEntries(evidence.entries),
   );
-  directory(repository, evidence.repository.identity);
-  directory(join(repository, ".crabbox"), evidence.parents.crabbox);
-  directory(retainedRoot, evidence.parents.wrapperArtifacts);
-  directory(evidence.destination.path, evidence.destination.identity);
+  directory(repository, evidence.repository.identity, legacyBeforeNs);
+  directory(join(repository, ".crabbox"), evidence.parents.crabbox, legacyBeforeNs);
+  directory(retainedRoot, evidence.parents.wrapperArtifacts, legacyBeforeNs);
+  directory(evidence.destination.path, evidence.destination.identity, legacyBeforeNs);
 }
 
 /** Revalidate saved outputs; only missing source entries can be tolerated after partial disposal. */
@@ -373,11 +378,19 @@ export function verifyPreservedCrabboxArtifacts(
   sourceCheckout: string,
   value: CrabboxArtifactEvidence,
   allowMissing = false,
+  legacyBeforeNs?: bigint,
 ): void {
   const evidence = crabboxArtifactEvidenceSchema.parse(value);
   const sourceStat = optionalDirectory(sourceCheckout);
   const source = sourceStat ? realpathSync(sourceCheckout) : resolve(sourceCheckout);
-  if (sourceStat && !sameIdentity(sourceStat, evidence.sourceIdentity)) {
+  if (
+    sourceStat &&
+    !sameDirectoryIdentity(
+      captureDirectoryIdentity(source, sourceStat),
+      evidence.sourceIdentity,
+      legacyBeforeNs,
+    )
+  ) {
     throw new Error("artifact source checkout was replaced");
   }
   if (evidence.kind === "none") {
@@ -385,19 +398,19 @@ export function verifyPreservedCrabboxArtifacts(
       throw new Error("no-output evidence contains artifacts requiring preservation");
     }
   } else {
-    verifyDestination(source, evidence);
+    verifyDestination(source, evidence, false, legacyBeforeNs);
   }
   sameInventory(
-    sourceStat ? sourceInventory(source, evidence.sourceIdentity) : [],
+    sourceStat ? sourceInventory(source, evidence.sourceIdentity, undefined, legacyBeforeNs) : [],
     evidence.entries,
     allowMissing,
   );
   if (sourceStat) {
-    directory(source, evidence.sourceIdentity);
+    directory(source, evidence.sourceIdentity, legacyBeforeNs);
   }
 }
 
-function flushDescriptor(fd: number) {
+export function flushDescriptor(fd: number) {
   try {
     fsyncSync(fd);
     return true;
@@ -413,7 +426,7 @@ function flushDescriptor(fd: number) {
   }
 }
 
-function flushDirectory(path: string) {
+export function flushDirectory(path: string) {
   // Native Windows cannot flush directories through this Node API; its stage owner
   // already withholds durable orphan-recovery authority on that platform.
   if (process.platform === "win32") {
@@ -444,18 +457,22 @@ export function preserveCrabboxArtifacts(
   sourceCheckout: string,
   repositoryRoot: string,
   expectedRepositoryIdentity?: CrabboxArtifactIdentity,
+  legacyBeforeNs?: bigint,
 ): CrabboxArtifactEvidence | undefined {
   if (sourceCheckout === repositoryRoot) {
     return undefined;
   }
-  const sourceIdentity = identity(directory(sourceCheckout));
+  const sourceIdentity = captureDirectoryIdentity(sourceCheckout, directory(sourceCheckout));
   const source = realpathSync(sourceCheckout);
   const state: { copied?: CopiedEvidence } = {};
   const completed: CrabboxArtifactEntry[] = [];
   try {
     const entries = sourceInventory(source, sourceIdentity, () => {
       if (!state.copied) {
-        const repositoryIdentity = identity(directory(repositoryRoot, expectedRepositoryIdentity));
+        const repositoryIdentity = captureDirectoryIdentity(
+          repositoryRoot,
+          directory(repositoryRoot, expectedRepositoryIdentity, legacyBeforeNs),
+        );
         const repository = realpathSync(repositoryRoot);
         const crabbox = join(repository, ".crabbox");
         const retainedRoot = join(crabbox, "wrapper-artifacts");
@@ -477,10 +494,13 @@ export function preserveCrabboxArtifacts(
           entries: [],
           repository: { path: repository, identity: repositoryIdentity },
           parents: {
-            crabbox: identity(directory(crabbox)),
-            wrapperArtifacts: identity(directory(retainedRoot)),
+            crabbox: captureDirectoryIdentity(crabbox, directory(crabbox)),
+            wrapperArtifacts: captureDirectoryIdentity(retainedRoot, directory(retainedRoot)),
           },
-          destination: { path: destination, identity: identity(directory(destination)) },
+          destination: {
+            path: destination,
+            identity: captureDirectoryIdentity(destination, directory(destination)),
+          },
         };
       }
       return {

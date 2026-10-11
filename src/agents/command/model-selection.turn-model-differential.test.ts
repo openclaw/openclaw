@@ -110,11 +110,14 @@ vi.mock("../provider-auth-aliases.js", () => ({
 vi.mock("../session-runtime-compat.js", () => ({
   resolveSessionRuntimeOverrideForProvider: () => undefined,
 }));
-vi.mock("../thinking-runtime.js", () => ({
-  needsThinkHydration: () => false,
-  normalizeThinkingCatalogProviders: (catalog: unknown) => catalog,
-  resolveEffectiveAgentRuntime: () => undefined,
-}));
+vi.mock("../thinking-runtime.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../thinking-runtime.js")>();
+  return {
+    ...actual,
+    normalizeThinkingCatalogProviders: (catalog: unknown) => catalog,
+    resolveEffectiveAgentRuntime: () => undefined,
+  };
+});
 vi.mock("../../plugins/runtime.js", () => ({ requireActivePluginRegistry: () => ({}) }));
 vi.mock("../../sessions/agent-harness-session-key.js", () => ({
   isValidAgentHarnessSessionStoreEntry: () => false,
@@ -129,6 +132,7 @@ vi.mock("./attempt-execution.shared.js", () => ({
   persistAgentSession: async ({ entry }: { entry?: SessionEntry }) => entry,
 }));
 vi.mock("./model-ref.js", () => ({
+  normalizeExplicitOverrideInput: (value: string) => value.trim() || undefined,
   normalizeAgentCommandModelRef: (_cfg: OpenClawConfig, provider: string, model: string) => ({
     provider,
     model,
@@ -144,9 +148,6 @@ vi.mock("./model-ref.js", () => ({
       ? { provider: raw.slice(0, slash), model: raw.slice(slash + 1) }
       : { provider: defaultProvider, model: raw };
   },
-}));
-vi.mock("./prepare.js", () => ({
-  normalizeExplicitOverrideInput: (value: string) => value.trim() || undefined,
 }));
 vi.mock("./runtime-loaders.js", () => ({
   loadTranscriptResolveRuntime: async () => ({

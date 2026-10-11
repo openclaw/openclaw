@@ -1,6 +1,7 @@
 // Cron mutation rollback, publication ordering, and failure recovery.
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { observeCronStoreCommits } from "../../../test/helpers/cron/runtime-mutation.js";
+import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { AgentDeletionCommitUncertainError } from "../../agents/agent-lifecycle-registry.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import * as cronSchedule from "../schedule.js";
@@ -94,47 +95,58 @@ describe("cron service ops persist rollback", () => {
     expect((await loadCronStore(storePath)).jobs).toEqual([]);
   });
 
-  it("rolls back an added job from the live store when persist fails", async () => {
-    const { storePath } = await makeStorePath();
-    const now = Date.parse("2026-06-09T00:00:00.000Z");
-    const state = createOkIsolatedCronState({ storePath, now });
-
-    await writeCronStoreSnapshot({ storePath, jobs: [] });
-    await withCronJobWriteFailure(storePath, async () => {
-      await expect(add(state, makeCreateInput("daily cleanup"))).rejects.toThrow("disk full");
-    });
-
-    expect(state.timer).toBeNull();
-    expect(state.store?.jobs ?? []).toEqual([]);
-    const listed = await list(state, { includeDisabled: true });
-    if (state.timer) {
-      state.timer.cancel();
-    }
-    expect(listed).toEqual([]);
-    const loaded = await loadCronStore(storePath);
-    expect(loaded.jobs).toEqual([]);
-  });
-
-  it("keeps the pre-update job in the live store when persist fails", async () => {
-    const { storePath } = await makeStorePath();
-    const now = Date.parse("2026-06-09T00:00:00.000Z");
-    const state = createOkIsolatedCronState({ storePath, now });
-
-    const job = await add(state, makeCreateInput("daily cleanup"));
-    if (state.timer) {
-      state.timer.cancel();
-    }
-
-    await withCronJobWriteFailure(storePath, async () => {
-      await expect(update(state, job.id, { name: "renamed cleanup" })).rejects.toThrow("disk full");
-    });
-
-    const inMemory = state.store?.jobs.find((entry) => entry.id === job.id);
-    expect(inMemory?.name).toBe("daily cleanup");
-    const loaded = await loadCronStore(storePath);
-    const stored = loaded.jobs.find((entry) => entry.id === job.id);
-    expect(stored?.name).toBe("daily cleanup");
-  });
+  it.each(["add", "update", "remove"] as const)(
+    "rolls back a failed %s in live and durable state",
+    async (operation) => {
+      const { storePath } = await makeStorePath();
+      const now = Date.parse("2026-06-09T00:00:00.000Z");
+      const state = createOkIsolatedCronState({ storePath, now });
+      const job =
+        operation === "add" ? undefined : await add(state, makeCreateInput("daily cleanup"));
+      state.timer?.cancel();
+      if (job && operation === "remove") {
+        job.state.startupCatchupAtMs = now + 5_000;
+      }
+      if (!job) {
+        await writeCronStoreSnapshot({ storePath, jobs: [] });
+      }
+      const liveBefore = structuredClone(state.store?.jobs ?? []);
+      const durableBefore = (await loadCronStore(storePath)).jobs;
+      await withCronJobWriteFailure(storePath, async () => {
+        const mutation = job
+          ? operation === "update"
+            ? update(state, job.id, { name: "renamed cleanup" })
+            : remove(state, job.id)
+          : add(state, makeCreateInput("daily cleanup"));
+        await expect(mutation).rejects.toThrow("disk full");
+      });
+      expect(state.store?.jobs ?? []).toEqual(liveBefore);
+      expect((await loadCronStore(storePath)).jobs).toEqual(durableBefore);
+      if (job && operation === "update") {
+        expect(state.store?.jobs.find((entry) => entry.id === job.id)?.name).toBe("daily cleanup");
+        expect(
+          (await loadCronStore(storePath)).jobs.find((entry) => entry.id === job.id)?.name,
+        ).toBe("daily cleanup");
+      }
+      if (job && operation === "remove") {
+        expect(state.store?.jobs[0]?.state.startupCatchupAtMs).toBe(now + 5_000);
+      }
+      if (!job) {
+        expect(state.timer).toBeNull();
+        expect(await list(state, { includeDisabled: true })).toEqual([]);
+        state.timer?.cancel();
+        const recovered = await add(state, makeCreateInput("daily cleanup"));
+        state.timer?.cancel();
+        expect((await list(state, { includeDisabled: true })).map((entry) => entry.id)).toEqual([
+          recovered.id,
+        ]);
+        state.timer?.cancel();
+        expect((await loadCronStore(storePath)).jobs.map((entry) => entry.id)).toEqual([
+          recovered.id,
+        ]);
+      }
+    },
+  );
 
   it("does not clone the store before a missing or invalid update reaches commit", async () => {
     const { storePath } = await makeStorePath();
@@ -154,67 +166,6 @@ describe("cron service ops persist rollback", () => {
     if (state.timer) {
       state.timer.cancel();
     }
-  });
-
-  it("keeps a removed job in the live store when persist fails", async () => {
-    const { storePath } = await makeStorePath();
-    const now = Date.parse("2026-06-09T00:00:00.000Z");
-    const state = createOkIsolatedCronState({ storePath, now });
-
-    const job = await add(state, makeCreateInput("daily cleanup"));
-    if (state.timer) {
-      state.timer.cancel();
-    }
-
-    await withCronJobWriteFailure(storePath, async () => {
-      await expect(remove(state, job.id)).rejects.toThrow("disk full");
-    });
-
-    expect(state.store?.jobs.map((entry) => entry.id)).toEqual([job.id]);
-    const loaded = await loadCronStore(storePath);
-    expect(loaded.jobs.map((entry) => entry.id)).toEqual([job.id]);
-  });
-
-  it("restores a job's catch-up deferral when a remove persist fails", async () => {
-    const { storePath } = await makeStorePath();
-    const now = Date.parse("2026-06-09T00:00:00.000Z");
-    const state = createOkIsolatedCronState({ storePath, now });
-
-    const job = await add(state, makeCreateInput("daily cleanup"));
-    if (state.timer) {
-      state.timer.cancel();
-    }
-    job.state.startupCatchupAtMs = now + 5_000;
-
-    await withCronJobWriteFailure(storePath, async () => {
-      await expect(remove(state, job.id)).rejects.toThrow("disk full");
-    });
-
-    expect(state.store?.jobs[0]?.state.startupCatchupAtMs).toBe(now + 5_000);
-    expect(state.store?.jobs.map((entry) => entry.id)).toEqual([job.id]);
-  });
-
-  it("recovers after a failed persist so the next mutation succeeds", async () => {
-    const { storePath } = await makeStorePath();
-    const now = Date.parse("2026-06-09T00:00:00.000Z");
-    const state = createOkIsolatedCronState({ storePath, now });
-
-    await writeCronStoreSnapshot({ storePath, jobs: [] });
-    await withCronJobWriteFailure(storePath, async () => {
-      await expect(add(state, makeCreateInput("daily cleanup"))).rejects.toThrow("disk full");
-    });
-    const job = await add(state, makeCreateInput("daily cleanup"));
-    if (state.timer) {
-      state.timer.cancel();
-    }
-
-    const listed = await list(state, { includeDisabled: true });
-    if (state.timer) {
-      state.timer.cancel();
-    }
-    expect(listed.map((entry) => entry.id)).toEqual([job.id]);
-    const loaded = await loadCronStore(storePath);
-    expect(loaded.jobs.map((entry) => entry.id)).toEqual([job.id]);
   });
 
   it.each(["mutation"] as const)(
@@ -332,8 +283,9 @@ describe("cron service ops persist rollback", () => {
         expect(enqueueSystemEvent).not.toHaveBeenCalled();
         expect(requestHeartbeat).not.toHaveBeenCalled();
         const persisted = await loadCronStore(storePath);
-        expect(persisted.jobs.find((job) => job.id === removed.id)).toBeUndefined();
-        expect(persisted.jobs.find((job) => job.id === malformed.id)?.enabled).toBe(false);
+        expect(persisted.jobs.find((job) => job.id === removed.id)?.agentId).toBe("doomed");
+        expect(persisted.jobs.find((job) => job.id === malformed.id)?.enabled).toBe(true);
+        expect(readCronJobScratchState(storePath, removed.id)).toEqual(scratchBefore);
         if (outcome === "failed") {
           throw new Error("roster commit failed");
         }
@@ -342,6 +294,30 @@ describe("cron service ops persist rollback", () => {
         }
         return "roster committed";
       });
+      const scratchWrites = trackSqliteStatementExecutions(
+        openOpenClawStateDatabase().db,
+        ["deletes"] as const,
+        (sql) => (sql.includes('delete from "cron_job_scratch"') ? "deletes" : null),
+      );
+      onTestFinished(scratchWrites.restore);
+      if (outcome !== "failed") {
+        await withCronJobWriteFailure(storePath, async () => {
+          const first = removeAgentJobsTransactional(state, "doomed", commit);
+          if (outcome === "uncertain") {
+            await expect(first).rejects.toBeInstanceOf(AgentDeletionCommitUncertainError);
+          } else {
+            await expect(first).rejects.toThrow(
+              "Agent roster committed, but cron cleanup did not complete",
+            );
+          }
+        });
+        expect((await loadCronStore(storePath)).jobs.some((job) => job.id === removed.id)).toBe(
+          true,
+        );
+        expect(readCronJobScratchState(storePath, removed.id)).toEqual(scratchBefore);
+        expect(enqueueSystemEvent).not.toHaveBeenCalled();
+        expect(requestHeartbeat).not.toHaveBeenCalled();
+      }
       const transaction = removeAgentJobsTransactional(state, "doomed", commit);
       if (outcome === "committed") {
         await expect(transaction).resolves.toBe("roster committed");
@@ -355,8 +331,9 @@ describe("cron service ops persist rollback", () => {
       }
 
       const rolledBack = outcome === "failed";
+      expect(scratchWrites.counts.deletes).toBe(0);
       const notificationCount = rolledBack ? 0 : 1;
-      expect(commit).toHaveBeenCalledOnce();
+      expect(commit).toHaveBeenCalledTimes(outcome === "failed" ? 1 : 2);
       expect(enqueueSystemEvent).toHaveBeenCalledTimes(notificationCount);
       expect(requestHeartbeat).toHaveBeenCalledTimes(notificationCount);
       expect(state.store?.jobs.some((job) => job.id === removed.id)).toBe(rolledBack);

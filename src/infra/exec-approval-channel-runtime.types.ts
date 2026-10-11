@@ -1,4 +1,3 @@
-// Defines channel-native approval runtime contracts.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type {
   ApprovalRequestInput,
@@ -8,12 +7,9 @@ import type {
 } from "./approval-types.js";
 import type { ExecApprovalRequest, ExecApprovalResolved } from "./exec-approvals.js";
 
-type ApprovalRequestEvent = ApprovalRequestInput;
-
-/** Adapter implemented by a channel to deliver and finalize native approval prompts. */
 export type ExecApprovalChannelRuntimeAdapter<
   TPending,
-  TRequest extends ApprovalRequestEvent = ExecApprovalRequest,
+  TRequest extends ApprovalRequestInput = ExecApprovalRequest,
   TResolved extends ApprovalResolvedEvent = ExecApprovalResolved,
 > = {
   label: string;
@@ -39,9 +35,20 @@ export type ExecApprovalChannelRuntimeAdapter<
   nowMs?: () => number;
 };
 
-/** Runtime handle used by approval bootstrap code to manage a channel-native approval client. */
+export type ExecApprovalChannelRuntimeAdapterAsync<
+  TPending,
+  TRequest extends ApprovalRequestInput = ExecApprovalRequest,
+  TResolved extends ApprovalResolvedEvent = ExecApprovalResolved,
+> = Omit<
+  ExecApprovalChannelRuntimeAdapter<TPending, TRequest, TResolved>,
+  "isConfigured" | "shouldHandle"
+> & {
+  isConfigured: () => boolean | Promise<boolean>;
+  shouldHandle: (request: NormalizedApprovalRequest<TRequest>) => boolean | Promise<boolean>;
+};
+
 export type ExecApprovalChannelRuntime<
-  TRequest extends ApprovalRequestEvent = ExecApprovalRequest,
+  TRequest extends ApprovalRequestInput = ExecApprovalRequest,
   TResolved extends ApprovalResolvedEvent = ExecApprovalResolved,
 > = {
   start: () => Promise<void>;

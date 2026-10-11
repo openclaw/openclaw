@@ -2,6 +2,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { performance } from "node:perf_hooks";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { createDeferredCore } from "./deferred.js";
+import { runInDetachedAsyncContext } from "./detached-async-context.js";
 import { resolveGlobalSingleton } from "./global-singleton.js";
 
 const MAX_WRITERS_PER_TURN = 4;
@@ -21,7 +22,6 @@ export type StoreWriterQueue = {
   wake?: () => void;
 };
 
-/** Store writer queues keyed by the canonical store path. */
 type StoreWriterQueues = Map<string, StoreWriterQueue>;
 
 /** Request-owned monotonic timestamps; queued work may be rejected without entering. */
@@ -41,6 +41,11 @@ const activeStoreWriters = resolveGlobalSingleton(
   Symbol.for("openclaw.activeStoreWriters"),
   () => new AsyncLocalStorage<ActiveStoreWriter>(),
 );
+
+/** Detached follow-up retains caller authority, but cannot borrow its writer locks. */
+export function runOutsideStoreWriterContext<T>(run: () => T): T {
+  return activeStoreWriters.exit(run);
+}
 
 // Independently draining stores share one event loop, including separately bundled callers.
 const writerTurn = resolveGlobalSingleton(
@@ -83,7 +88,7 @@ function claimStoreWriterTurn(immediate: boolean): Promise<void> | undefined {
   return undefined;
 }
 
-function isActiveStoreWriter(
+export function isActiveStoreWriter(
   queues: StoreWriterQueues,
   storePath: string,
   keys?: ReadonlySet<string>,
@@ -106,6 +111,17 @@ function isActiveStoreWriter(
   return false;
 }
 
+/** Development-only reader cleanup guards consume the existing writer context. */
+export function assertStoreWriterReleased(queues: StoreWriterQueues, operation: string): void {
+  let writer = activeStoreWriters.getStore();
+  while (writer) {
+    if (writer.active && writer.queues === queues) {
+      throw new Error(`Cannot ${operation} while holding a store writer`);
+    }
+    writer = writer.parent;
+  }
+}
+
 async function runActiveStoreWriter<T>(
   queues: StoreWriterQueues,
   storePath: string,
@@ -126,19 +142,6 @@ async function runActiveStoreWriter<T>(
     }
     writer.active = false;
   }
-}
-
-function getOrCreateStoreWriterQueue(
-  queues: StoreWriterQueues,
-  storePath: string,
-): StoreWriterQueue {
-  const existing = queues.get(storePath);
-  if (existing) {
-    return existing;
-  }
-  const created: StoreWriterQueue = { pending: [], drainPromise: null };
-  queues.set(storePath, created);
-  return created;
 }
 
 async function drainStoreWriterQueue(queues: StoreWriterQueues, storePath: string): Promise<void> {
@@ -228,7 +231,6 @@ async function drainStoreWriterQueue(queues: StoreWriterQueues, storePath: strin
   }
 }
 
-/** Runs one store write after prior writes for the same store path have finished. */
 export async function runQueuedStoreWrite<T>(params: {
   queues: StoreWriterQueues;
   storePath: string;
@@ -268,7 +270,12 @@ export async function runQueuedStoreWrite<T>(params: {
   // A queued writer retains its caller's authority, never the preceding writer's
   // async context. The active-writer scope still belongs to actual execution.
   const runInAsyncContext = AsyncLocalStorage.snapshot();
-  const queue = getOrCreateStoreWriterQueue(params.queues, params.storePath);
+  let existingQueue = params.queues.get(params.storePath);
+  if (!existingQueue) {
+    existingQueue = { pending: [], drainPromise: null };
+    params.queues.set(params.storePath, existingQueue);
+  }
+  const queue = existingQueue;
   let detach = () => {};
   const completion = new Promise<T>((resolve, reject) => {
     detach = () => params.signal?.removeEventListener("abort", abort);
@@ -299,7 +306,7 @@ export async function runQueuedStoreWrite<T>(params: {
     queue.pending.push(task);
     queue.wake?.();
     params.signal?.addEventListener("abort", abort, { once: true });
-    void drainStoreWriterQueue(params.queues, params.storePath);
+    runInDetachedAsyncContext(() => void drainStoreWriterQueue(params.queues, params.storePath));
   });
   if (params.signal) {
     // Observe cleanup without adding a settlement hop to the writer's result.

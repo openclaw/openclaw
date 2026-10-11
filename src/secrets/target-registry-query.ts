@@ -1,4 +1,3 @@
-/** Query helpers for discovering secret target registry entries. */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { formatConcreteConfigPath, type ConcreteConfigPathSegment } from "../shared/dot-path.js";
@@ -31,40 +30,23 @@ let compiledCoreSecretTargetRegistryState: CompiledSecretTargetRegistryState | n
 // Channel contract entries are process-stable; plugin install/reload is the owner of freshness.
 const compiledChannelOpenClawTargets = new Map<string, CompiledTargetRegistryEntry[] | null>();
 
-function buildTargetTypeIndex(
-  compiledSecretTargetRegistry: CompiledTargetRegistryEntry[],
-): Map<string, CompiledTargetRegistryEntry[]> {
-  const byType = new Map<string, CompiledTargetRegistryEntry[]>();
-  const append = (type: string, entry: CompiledTargetRegistryEntry) => {
-    const existing = byType.get(type);
-    if (existing) {
-      existing.push(entry);
-      return;
-    }
-    byType.set(type, [entry]);
-  };
-  for (const entry of compiledSecretTargetRegistry) {
-    append(entry.targetType, entry);
-    for (const alias of entry.targetTypeAliases ?? []) {
-      append(alias, entry);
-    }
-  }
-  return byType;
-}
-
-function buildConfigTargetIdIndex(
+function indexSecretTargets(
   entries: CompiledTargetRegistryEntry[],
+  key: "id" | "targetType",
 ): Map<string, CompiledTargetRegistryEntry[]> {
-  const byId = new Map<string, CompiledTargetRegistryEntry[]>();
+  const index = new Map<string, CompiledTargetRegistryEntry[]>();
   for (const entry of entries) {
-    const existing = byId.get(entry.id);
-    if (existing) {
-      existing.push(entry);
-      continue;
+    const keys = [entry[key], ...(key === "targetType" ? (entry.targetTypeAliases ?? []) : [])];
+    for (const value of keys) {
+      const existing = index.get(value);
+      if (existing) {
+        existing.push(entry);
+      } else {
+        index.set(value, [entry]);
+      }
     }
-    byId.set(entry.id, [entry]);
   }
-  return byId;
+  return index;
 }
 
 function compileSecretTargetRegistryState(registry: SecretTargetRegistryEntry[]) {
@@ -77,12 +59,12 @@ function compileSecretTargetRegistryState(registry: SecretTargetRegistryEntry[])
   );
   return {
     authProfilesCompiledSecretTargets,
-    authProfilesTargetsById: buildConfigTargetIdIndex(authProfilesCompiledSecretTargets),
+    authProfilesTargetsById: indexSecretTargets(authProfilesCompiledSecretTargets, "id"),
     compiledSecretTargetRegistry,
     knownTargetIds: new Set(compiledSecretTargetRegistry.map((entry) => entry.id)),
     openClawCompiledSecretTargets,
-    openClawTargetsById: buildConfigTargetIdIndex(openClawCompiledSecretTargets),
-    targetsByType: buildTargetTypeIndex(compiledSecretTargetRegistry),
+    openClawTargetsById: indexSecretTargets(openClawCompiledSecretTargets, "id"),
+    targetsByType: indexSecretTargets(compiledSecretTargetRegistry, "targetType"),
   };
 }
 
@@ -278,7 +260,6 @@ function toResolvedPlanTarget(
 /**
  * Lists the full secrets target registry in public, serializable form.
  */
-/** Lists all configured secret target registry entries. */
 export function listSecretTargetRegistryEntries(): SecretTargetRegistryEntry[] {
   return getCompiledSecretTargetRegistryState().compiledSecretTargetRegistry.map((entry) =>
     Object.assign(
@@ -306,9 +287,6 @@ export function listSecretTargetRegistryEntries(): SecretTargetRegistryEntry[] {
   );
 }
 
-/**
- * Narrows unknown input to a target id currently present in the compiled registry.
- */
 export function isKnownSecretTargetId(value: unknown): value is string {
   return (
     typeof value === "string" && getCompiledSecretTargetRegistryState().knownTargetIds.has(value)
@@ -323,9 +301,6 @@ export function isKnownCoreSecretTargetId(value: unknown): value is string {
   );
 }
 
-/**
- * Resolves a secrets apply-plan target against registered target type and path patterns.
- */
 export function resolvePlanTargetAgainstRegistry(candidate: {
   type: string;
   pathSegments: string[];
@@ -345,7 +320,7 @@ export function resolvePlanTargetAgainstRegistry(candidate: {
       return null;
     }
     const channelEntries = getCompiledChannelOpenClawTargets(explicitChannelId) ?? [];
-    const channelTypeEntries = buildTargetTypeIndex(channelEntries).get(candidate.type);
+    const channelTypeEntries = indexSecretTargets(channelEntries, "targetType").get(candidate.type);
     if (channelTypeEntries) {
       return resolvePlanTargetAgainstEntries(candidate, channelTypeEntries);
     }
@@ -415,9 +390,6 @@ export function resolveSecretPlanTargetByPathCore(params: {
   );
 }
 
-/**
- * Resolves an openclaw.json config path to the matching plan-capable secrets target.
- */
 export function resolveConfigSecretTargetByPath(
   pathSegments: string[],
   pathTokens: readonly ConcreteConfigPathSegment[] = pathSegments,
@@ -445,7 +417,6 @@ export function resolveConfigSecretTargetByPath(
   );
 }
 
-/** Discovers configured secret-bearing values in openclaw.json. */
 export function discoverConfigSecretTargets(
   config: OpenClawConfig,
   options: {
@@ -456,9 +427,6 @@ export function discoverConfigSecretTargets(
   return discoverConfigSecretTargetsByIds(config, undefined, options);
 }
 
-/**
- * Discovers configured openclaw.json targets, optionally limited to selected registry ids.
- */
 export function discoverConfigSecretTargetsByIds(
   config: OpenClawConfig,
   targetIds?: Iterable<string>,
@@ -483,7 +451,7 @@ export function discoverConfigSecretTargetsByIds(
       ? [...coreState.openClawCompiledSecretTargets, ...configuredChannelEntries]
       : null;
   const configuredEntriesById = configuredEntries
-    ? buildConfigTargetIdIndex(configuredEntries)
+    ? indexSecretTargets(configuredEntries, "id")
     : null;
   const canUseConfiguredEntries =
     configuredEntries !== null &&
@@ -500,9 +468,6 @@ export function discoverConfigSecretTargetsByIds(
   return discoverSecretTargetsFromEntries(config, discoveryEntries);
 }
 
-/**
- * Discovers secret-bearing values in auth-profiles.json store objects.
- */
 export function discoverAuthProfileSecretTargets(
   store: unknown,
   targetIds?: Iterable<string>,
@@ -517,9 +482,6 @@ export function discoverAuthProfileSecretTargets(
   return discoverSecretTargetsFromEntries(store, discoveryEntries);
 }
 
-/**
- * Lists auth-profile target entries that participate in plaintext/unresolved-ref audit.
- */
 export function listAuthProfileSecretTargetEntries(): SecretTargetRegistryEntry[] {
   return getCoreSecretTargetRegistry().filter(
     (entry) => entry.configFile === "auth-profile-store" && entry.includeInAudit,

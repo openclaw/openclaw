@@ -21,9 +21,9 @@ import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
+import * as stateWorker from "../state/openclaw-state-worker-store.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import {
-  createWebPushVapidKeyPair,
   deleteWebPushApprovalDeliveryTargets,
   withBoundWebPushSubscriptionByEndpoint,
   hashWebPushEndpoint,
@@ -43,6 +43,7 @@ import {
   registerWebPushSubscription,
   resolveVapidKeys,
 } from "./push-web.js";
+import { runSqliteReadOperationSync } from "./sqlite-schema-facts.js";
 
 let tmpDir: string;
 const defaultDevicePreferences = { enabled: true, label: "" };
@@ -136,6 +137,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   await closeOpenClawStateDatabaseAsync();
   await fs.rm(tmpDir, { recursive: true, force: true });
 });
@@ -177,13 +179,11 @@ function startExpiredWebPushBroadcast(
 describe("resolveVapidKeys", () => {
   it("generates one durable SQLite VAPID identity", async () => {
     const keys = await resolveVapidKeys(tmpDir);
-    expect(keys).toEqual(
-      createWebPushVapidKeyPair(
-        "test-public-key-base64url",
-        "test-private-key-base64url",
-        "https://openclaw.ai",
-      ),
-    );
+    expect(keys).toEqual({
+      publicKey: "test-public-key-base64url",
+      privateKey: "test-private-key-base64url",
+      subject: "https://openclaw.ai",
+    });
     expect(await readPersistedVapidKeyPair(tmpDir)).toEqual(keys);
 
     await closeOpenClawStateDatabaseAsync();
@@ -216,8 +216,8 @@ describe("resolveVapidKeys", () => {
 
   it("converges concurrent first-use generation on the first committed identity", async () => {
     vi.mocked(webPush.generateVAPIDKeys)
-      .mockReturnValueOnce(createWebPushVapidKeyPair("public-a", "private-a", "ignored"))
-      .mockReturnValueOnce(createWebPushVapidKeyPair("public-b", "private-b", "ignored"));
+      .mockReturnValueOnce({ publicKey: "public-a", privateKey: "private-a" })
+      .mockReturnValueOnce({ publicKey: "public-b", privateKey: "private-b" });
 
     const [first, second] = await Promise.all([resolveVapidKeys(tmpDir), resolveVapidKeys(tmpDir)]);
 
@@ -227,11 +227,11 @@ describe("resolveVapidKeys", () => {
   });
 
   it("prefers a complete environment override without persisting it", async () => {
-    const environmentKeys = createWebPushVapidKeyPair(
-      "env-public",
-      "env-private",
-      "mailto:env@test.com",
-    );
+    const environmentKeys = {
+      publicKey: "env-public",
+      privateKey: "env-private",
+      subject: "mailto:env@test.com",
+    };
     const envSnapshot = captureEnv([
       "OPENCLAW_VAPID_PUBLIC_KEY",
       "OPENCLAW_VAPID_PRIVATE_KEY",
@@ -260,13 +260,11 @@ describe("resolveVapidKeys", () => {
     setTestEnvValue("OPENCLAW_VAPID_SUBJECT", "   ");
     try {
       const keys = await resolveVapidKeys(tmpDir);
-      expect(keys).toEqual(
-        createWebPushVapidKeyPair(
-          "test-public-key-base64url",
-          "test-private-key-base64url",
-          "https://openclaw.ai",
-        ),
-      );
+      expect(keys).toEqual({
+        publicKey: "test-public-key-base64url",
+        privateKey: "test-private-key-base64url",
+        subject: "https://openclaw.ai",
+      });
       expect(await readPersistedVapidKeyPair(tmpDir)).toEqual(keys);
       expect(vi.mocked(webPush.generateVAPIDKeys)).toHaveBeenCalledTimes(1);
     } finally {
@@ -336,8 +334,13 @@ describe("subscription CRUD", () => {
     ]);
   });
 
-  it("keeps legacy unbound rows test-only until browser reconciliation", async () => {
+  it("retains bound-subscription presence until registration or removal changes it", async () => {
+    const execute = vi.spyOn(stateWorker, "executeOpenClawStateWorker");
     expect(await hasBoundWebPushSubscriptions(tmpDir)).toBe(false);
+    execute.mockClear();
+    expect(await hasBoundWebPushSubscriptions(tmpDir)).toBe(false);
+    expect(await hasBoundWebPushSubscriptions(tmpDir)).toBe(false);
+    expect(execute).not.toHaveBeenCalled();
     await registerSubscription(endpoint);
     expect(await readBoundSubscriptions(tmpDir)).toEqual([]);
     expect(await hasBoundWebPushSubscriptions(tmpDir)).toBe(false);
@@ -352,6 +355,9 @@ describe("subscription CRUD", () => {
       binding: { deviceId: "browser-device", userProfileId: null },
     });
     expect(await hasBoundWebPushSubscriptions(tmpDir)).toBe(true);
+    execute.mockClear();
+    expect(await hasBoundWebPushSubscriptions(tmpDir)).toBe(true);
+    expect(execute).not.toHaveBeenCalled();
     expect(await readBoundSubscriptions(tmpDir)).toEqual([
       {
         ...rebound,
@@ -360,6 +366,24 @@ describe("subscription CRUD", () => {
         devicePreferences: defaultDevicePreferences,
       },
     ]);
+    await registerSubscription(endpoint);
+    expect(await hasBoundWebPushSubscriptions(tmpDir)).toBe(false);
+    await registerSubscription(endpoint, {
+      binding: { deviceId: "browser-device", userProfileId: null },
+    });
+    expect(await hasBoundWebPushSubscriptions(tmpDir)).toBe(true);
+    expect(
+      await clearBoundWebPushSubscription({
+        endpoint,
+        expectedDeviceId: "browser-device",
+        expectedUserProfileId: null,
+        baseDir: tmpDir,
+      }),
+    ).toBe(true);
+    expect(await hasBoundWebPushSubscriptions(tmpDir)).toBe(false);
+    execute.mockClear();
+    expect(await hasBoundWebPushSubscriptions(tmpDir)).toBe(false);
+    expect(execute).not.toHaveBeenCalled();
   });
 
   it("preserves bindings when an older writer updates only the original columns", async () => {
@@ -607,7 +631,11 @@ describe("approval delivery target persistence", () => {
     const database = openOpenClawStateDatabase({
       env: { ...process.env, OPENCLAW_STATE_DIR: tmpDir },
     });
-    expect(tableExists(database.db, "web_push_approval_deliveries")).toBe(false);
+    expect(
+      runSqliteReadOperationSync(database.db, () =>
+        tableExists(database.db, "web_push_approval_deliveries"),
+      ),
+    ).toBe(false);
 
     expect(
       (
@@ -619,7 +647,11 @@ describe("approval delivery target persistence", () => {
         })
       ).toSorted(),
     ).toEqual([first.subscriptionId, second.subscriptionId].toSorted());
-    expect(tableExists(database.db, "web_push_approval_deliveries")).toBe(true);
+    expect(
+      runSqliteReadOperationSync(database.db, () =>
+        tableExists(database.db, "web_push_approval_deliveries"),
+      ),
+    ).toBe(true);
     await closeOpenClawStateDatabaseAsync();
 
     const expectedSubscriptionIds = [first, second]
@@ -881,6 +913,20 @@ describe("sending", () => {
     await broadcast.finish();
 
     expect(await listWebPushSubscriptions(tmpDir)).toEqual([replacement]);
+  });
+
+  it("refreshes bound-subscription presence after expired-delivery cleanup", async () => {
+    await registerSubscription("https://push.example.com/expired-bound", {
+      binding: { deviceId: "browser-device", userProfileId: null },
+    });
+    expect(await hasBoundWebPushSubscriptions(tmpDir)).toBe(true);
+    vi.mocked(webPush.sendNotification).mockRejectedValueOnce(
+      Object.assign(new Error("gone"), { statusCode: 410 }),
+    );
+    expect(await broadcastWebPush({ title: "Expired" }, tmpDir)).toEqual([
+      expect.objectContaining({ ok: false, statusCode: 410 }),
+    ]);
+    expect(await hasBoundWebPushSubscriptions(tmpDir)).toBe(false);
   });
 
   it("does not delete an expired subscription after a legacy claim appears", async ({ signal }) => {

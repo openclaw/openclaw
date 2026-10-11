@@ -1,40 +1,16 @@
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
-import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
+import {
+  executeSqliteQuerySync,
+  getNodeSqliteKysely,
+  sqliteStringSet,
+} from "../../infra/kysely-sync.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
-import type { ConversationKind } from "./conversation-identity.js";
-import {
-  parseStoredConversationRouteContext,
-  type ConversationRouteContext,
-} from "./conversation-route-context.js";
+import type { ConversationReadQuery, ConversationRecord } from "./conversation-registry.types.js";
+import { parseStoredConversationRouteContext } from "./conversation-route-context.js";
 import { parseSessionEntryJson } from "./session-accessor.sqlite-status.js";
 
 const CONVERSATION_REF_PATTERN = /^conv_[a-f0-9]{32}$/u;
-
-export type ConversationRecord = {
-  conversationRef: string;
-  channel: string;
-  accountId: string;
-  kind: ConversationKind;
-  peerId: string;
-  target: string;
-  parentConversationRef?: string;
-  threadId?: string;
-  nativeChannelId?: string;
-  nativeDirectUserId?: string;
-  label?: string;
-  sessionId?: string;
-  sessionKey?: string;
-  role?: "participant" | "primary" | "related";
-  /** True when this address has been linked to a session in this agent store. */
-  observedFromSession?: true;
-  /** Exact contextual facts from the authoritative inbound route. */
-  routeContext?: ConversationRouteContext;
-  /** True when authoritative ingress observed empty or populated route context. */
-  routeContextObserved?: true;
-  firstSeenAt: number;
-  lastSeenAt: number;
-};
 
 function normalizeConversationRef(value: string): string {
   const normalized = value.trim().toLowerCase();
@@ -49,88 +25,9 @@ type MappedConversationRow = {
   record: ConversationRecord;
 };
 
-function mapConversationRow(row: {
-  account_id: string;
-  associated_session_id: string | null;
-  channel: string;
-  conversation_id: string;
-  conversation_created_at: number;
-  conversation_updated_at: number;
-  first_seen_at: number | null;
-  kind: string;
-  label: string | null;
-  last_seen_at: number | null;
-  delivery_target: string;
-  native_channel_id: string | null;
-  native_direct_user_id: string | null;
-  parent_conversation_id: string | null;
-  peer_id: string;
-  role: string | null;
-  route_context_json: string | null;
-  current_session_id: string | null;
-  current_entry_json: string | null;
-  current_session_key: string | null;
-  thread_id: string | null;
-}): MappedConversationRow | null {
-  if (row.kind !== "direct" && row.kind !== "group" && row.kind !== "channel") {
-    return null;
-  }
-  const role =
-    row.role === "primary" || row.role === "participant" || row.role === "related"
-      ? row.role
-      : undefined;
-  const currentEntry = row.current_entry_json
-    ? parseSessionEntryJson({ entry_json: row.current_entry_json })
-    : null;
-  const hasCurrentBinding = currentEntry?.sessionId === row.current_session_id;
-  const associationIsCurrent =
-    hasCurrentBinding && row.associated_session_id === row.current_session_id;
-  const routeContext = parseStoredConversationRouteContext(
-    row.route_context_json,
-    row.last_seen_at,
-  );
-  return {
-    associationIsCurrent,
-    record: {
-      conversationRef: row.conversation_id,
-      channel: row.channel,
-      accountId: row.account_id,
-      kind: row.kind,
-      peerId: row.peer_id,
-      target: row.delivery_target,
-      ...(row.parent_conversation_id ? { parentConversationRef: row.parent_conversation_id } : {}),
-      ...(row.thread_id ? { threadId: row.thread_id } : {}),
-      ...(row.native_channel_id ? { nativeChannelId: row.native_channel_id } : {}),
-      ...(row.native_direct_user_id ? { nativeDirectUserId: row.native_direct_user_id } : {}),
-      ...(row.label ? { label: row.label } : {}),
-      // Only the current session_nodes row can bind an address. The joined
-      // window row may be historical after reset, rebind, or deletion.
-      ...(role && hasCurrentBinding && row.current_session_id && row.current_session_key
-        ? {
-            sessionId: row.current_session_id,
-            sessionKey: row.current_session_key,
-            role,
-          }
-        : {}),
-      ...(role ? { observedFromSession: true as const } : {}),
-      ...(routeContext ? { routeContextObserved: true as const } : {}),
-      ...(routeContext?.context ? { routeContext: routeContext.context } : {}),
-      firstSeenAt: row.first_seen_at ?? row.conversation_created_at,
-      lastSeenAt: row.last_seen_at ?? row.conversation_updated_at,
-    },
-  };
-}
-
 export function selectConversationRowsFromDatabase(
   database: Pick<OpenClawAgentDatabase, "db">,
-  options: {
-    channel?: string;
-    conversationRef?: string;
-    limit?: number;
-    primarySession?: { sessionId: string; sessionKey: string };
-    currentBindingOnly?: boolean;
-    currentSession?: { sessionKey: string; sessionId: string };
-  } = {},
+  options: ConversationReadQuery = {},
 ): ConversationRecord[] {
   const db = getNodeSqliteKysely<
     Pick<
@@ -180,6 +77,13 @@ export function selectConversationRowsFromDatabase(
       normalizeConversationRef(options.conversationRef),
     );
   }
+  if (options.conversationRefs !== undefined) {
+    query = query.where(
+      "c.conversation_id",
+      "in",
+      sqliteStringSet(options.conversationRefs.map(normalizeConversationRef)),
+    );
+  }
   if (options.currentSession) {
     query = query
       .where("sn.session_key", "=", options.currentSession.sessionKey)
@@ -218,6 +122,57 @@ export function selectConversationRowsFromDatabase(
       .orderBy((eb) => eb.fn.coalesce("sc.last_seen_at", "c.updated_at"), "desc")
       .orderBy("sn.updated_at", "desc"),
   ).rows;
+  const mapConversationRow = (row: (typeof rows)[number]): MappedConversationRow | null => {
+    if (row.kind !== "direct" && row.kind !== "group" && row.kind !== "channel") {
+      return null;
+    }
+    const role =
+      row.role === "primary" || row.role === "participant" || row.role === "related"
+        ? row.role
+        : undefined;
+    const currentEntry = row.current_entry_json
+      ? parseSessionEntryJson({ entry_json: row.current_entry_json })
+      : null;
+    const hasCurrentBinding = currentEntry?.sessionId === row.current_session_id;
+    const associationIsCurrent =
+      hasCurrentBinding && row.associated_session_id === row.current_session_id;
+    const routeContext = parseStoredConversationRouteContext(
+      row.route_context_json,
+      row.last_seen_at,
+    );
+    return {
+      associationIsCurrent,
+      record: {
+        conversationRef: row.conversation_id,
+        channel: row.channel,
+        accountId: row.account_id,
+        kind: row.kind,
+        peerId: row.peer_id,
+        target: row.delivery_target,
+        ...(row.parent_conversation_id
+          ? { parentConversationRef: row.parent_conversation_id }
+          : {}),
+        ...(row.thread_id ? { threadId: row.thread_id } : {}),
+        ...(row.native_channel_id ? { nativeChannelId: row.native_channel_id } : {}),
+        ...(row.native_direct_user_id ? { nativeDirectUserId: row.native_direct_user_id } : {}),
+        ...(row.label ? { label: row.label } : {}),
+        // Only the current session_nodes row can bind an address. The joined
+        // window row may be historical after reset, rebind, or deletion.
+        ...(role && hasCurrentBinding && row.current_session_id && row.current_session_key
+          ? {
+              sessionId: row.current_session_id,
+              sessionKey: row.current_session_key,
+              role,
+            }
+          : {}),
+        ...(role ? { observedFromSession: true as const } : {}),
+        ...(routeContext ? { routeContextObserved: true as const } : {}),
+        ...(routeContext?.context ? { routeContext: routeContext.context } : {}),
+        firstSeenAt: row.first_seen_at ?? row.conversation_created_at,
+        lastSeenAt: row.last_seen_at ?? row.conversation_updated_at,
+      },
+    };
+  };
   const unique = new Map<string, MappedConversationRow>();
   for (const row of rows) {
     const existing = unique.get(row.conversation_id);

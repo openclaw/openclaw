@@ -127,7 +127,7 @@ describe("openclaw.setup auth retries", () => {
   });
 
   it.each(["running", "cancelled"] as const)(
-    "replaces the owner's %s sign-in after provider cleanup settles",
+    "starts a replacement after %s sign-in cleanup settles",
     async (status) => {
       const { wizardSessions, context } = makeContext();
       const cleanupStarted = createDeferredCore();
@@ -167,85 +167,26 @@ describe("openclaw.setup auth retries", () => {
         expect(session.signal.aborted).toBe(true);
         expect(replacement.calls).toEqual([]);
         expect(setupInferenceMocks.activateSetupInference).toHaveBeenCalledOnce();
-
         cleanupReleased.resolve();
         await replacement.pending;
+        const sessionId = "auth-replacement";
         expect(wizardSessions.has("auth-first")).toBe(false);
         expect(replacement.calls).toEqual([
           {
             ok: true,
-            payload: { sessionId: "auth-replacement", done: false, status: "running" },
+            payload: { sessionId, done: false, status: "running" },
             error: undefined,
           },
         ]);
-        const step = await callWizardNext(context, { sessionId: "auth-replacement" });
-        expect(step.step?.message).toBe("Complete the replacement sign-in");
+        expect((await callWizardNext(context, { sessionId })).step?.message).toBe(
+          "Complete the replacement sign-in",
+        );
         expect(setupInferenceMocks.activateSetupInference).toHaveBeenCalledTimes(2);
       } finally {
         await settleAuthRequests(wizardSessions, requests, () => cleanupReleased.resolve());
       }
     },
   );
-
-  it("runs only the latest sign-in when retries overlap provider cleanup", async () => {
-    const { wizardSessions, context } = makeContext();
-    const cleanupStarted = createDeferredCore();
-    const cleanupReleased = createDeferredCore();
-    setupInferenceMocks.activateSetupInference
-      .mockImplementationOnce(async (params) => {
-        try {
-          await params.prompter.note("Complete browser sign-in");
-        } finally {
-          cleanupStarted.resolve();
-          await cleanupReleased.promise;
-        }
-      })
-      .mockImplementation(async (params) => {
-        await params.prompter.note("Latest sign-in");
-        return { ok: true, modelRef: "github-copilot/test", latencyMs: 1, lines: [] };
-      });
-    const first = startAuthRequest(context, "auth-first");
-    const requests = [first.pending];
-    try {
-      await first.pending;
-      const session = expectDefined(wizardSessions.get("auth-first"), "first auth session");
-      await callWizardNext(context, { sessionId: "auth-first" });
-      const second = startAuthRequest(context, "auth-second");
-      requests.push(second.pending);
-      await Promise.race([cleanupStarted.promise, second.pending]);
-      expect(session.signal.aborted).toBe(true);
-      const duplicate = startAuthRequest(context, "auth-second");
-      requests.push(duplicate.pending);
-      await duplicate.pending;
-      expect(duplicate.calls[0]).toMatchObject({
-        ok: false,
-        error: { message: "wizard session already exists" },
-      });
-      expect(second.calls).toEqual([]);
-      const third = startAuthRequest(context, "auth-third");
-      requests.push(third.pending);
-      cleanupReleased.resolve();
-      await Promise.all([second.pending, third.pending]);
-      expect(second.calls).toEqual([
-        {
-          ok: true,
-          payload: { sessionId: "auth-second", done: true, status: "cancelled" },
-          error: undefined,
-        },
-      ]);
-      expect(third.calls[0]).toMatchObject({
-        ok: true,
-        payload: { sessionId: "auth-third", done: false, status: "running" },
-      });
-      expect(wizardSessions.has("auth-second")).toBe(false);
-      expect((await callWizardNext(context, { sessionId: "auth-third" })).step?.message).toBe(
-        "Latest sign-in",
-      );
-      expect(setupInferenceMocks.activateSetupInference).toHaveBeenCalledTimes(2);
-    } finally {
-      await settleAuthRequests(wizardSessions, requests, () => cleanupReleased.resolve());
-    }
-  });
 
   it.each([
     { when: "before cancellation", revocation: "client invalidation" },

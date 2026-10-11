@@ -6,9 +6,9 @@ import {
   appendTranscriptEvent,
   appendTranscriptMessage,
   replaceSessionEntry,
-  replaceTranscriptEvents,
   waitForSessionTranscriptProjection,
 } from "../config/sessions/session-accessor.js";
+import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import type {
   SessionHistoryReadParams,
   SessionHistorySnapshot,
@@ -16,7 +16,10 @@ import type {
 import { reconcileSessionTranscriptIndexInTransaction } from "../config/sessions/session-transcript-index.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
-import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import {
+  withOpenClawTestState,
+  type OpenClawTestState,
+} from "../test-utils/openclaw-test-state.js";
 import { resolveCurrentUserProfileDisplay } from "./current-user-profile-display.js";
 import {
   assistantTextMessage,
@@ -39,15 +42,19 @@ function readSnapshot(params: SessionHistoryReadParams): Promise<SessionHistoryS
   });
 }
 
+function historyTarget(state: OpenClawTestState, sessionId: string) {
+  return {
+    agentId: "main",
+    sessionId,
+    sessionKey: `agent:main:${sessionId}`,
+    storePath: path.join(state.sessionsDir(), "sessions.json"),
+  };
+}
+
 describe("session history snapshot reads", () => {
   test("keeps commentary fallback rows reachable across SQLite cursor pages", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const target = {
-        agentId: "main",
-        sessionId: "history-commentary-cursor",
-        sessionKey: "agent:main:history-commentary-cursor",
-        storePath: path.join(state.sessionsDir(), "sessions.json"),
-      };
+      const target = historyTarget(state, "history-commentary-cursor");
       const messages = [
         userTextMessage("check the workspace", 1),
         {
@@ -124,12 +131,7 @@ describe("session history snapshot reads", () => {
     },
   ])("carries $name from the transcript worker into incremental SSE", async (fixture) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const target = {
-        agentId: "main",
-        sessionId: "history-pending-state",
-        sessionKey: "agent:main:history-pending-state",
-        storePath: path.join(state.sessionsDir(), "sessions.json"),
-      };
+      const target = historyTarget(state, "history-pending-state");
       const entry = { sessionId: target.sessionId, updatedAt: 1 };
       await replaceSessionEntry(target, entry);
       await replaceTranscriptEvents(target, [
@@ -154,14 +156,16 @@ describe("session history snapshot reads", () => {
       });
       expect(snapshot.history.items).toBe(snapshot.history.messages);
       const history = SessionHistorySseState.fromSnapshot({ target, snapshot });
-      const appended = history.appendInlineMessage({
-        message: {
-          role: "assistant",
-          content: textContent("The next reply"),
-          stopReason: "stop",
-          __openclaw: { runId: "run-pending" },
-        },
-      });
+      const appended = (
+        await history.prepareInlineMessage({
+          message: {
+            role: "assistant",
+            content: textContent("The next reply"),
+            stopReason: "stop",
+            __openclaw: { runId: "run-pending" },
+          },
+        })
+      )();
       if (fixture.assistantErrorPending) {
         expect(appended).toEqual({ shouldRefresh: true });
       } else {
@@ -176,18 +180,12 @@ describe("session history snapshot reads", () => {
   test.each([
     { cursor: "1", expectedSeq: undefined },
     { cursor: "8", expectedSeq: 7 },
-    { cursor: "9", expectedSeq: 8 },
     { cursor: "99", expectedSeq: 8 },
   ])(
     "keeps cursor $cursor stable when messages append during its read",
     async ({ cursor, expectedSeq }) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-        const target = {
-          agentId: "main",
-          sessionId: "history-cursor-append",
-          sessionKey: "agent:main:history-cursor-append",
-          storePath: path.join(state.sessionsDir(), "sessions.json"),
-        };
+        const target = historyTarget(state, "history-cursor-append");
         await replaceTranscriptEvents(target, [
           { type: "session", version: 3, id: target.sessionId },
           ...Array.from({ length: 8 }, (_, index) => ({
@@ -316,12 +314,7 @@ describe("session history snapshot reads", () => {
     },
   ])("recovers cursor continuation across $name", async (fixture) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const target = {
-        agentId: "main",
-        sessionId: "history-cursor-prefix-change",
-        sessionKey: "agent:main:history-cursor-prefix-change",
-        storePath: path.join(state.sessionsDir(), "sessions.json"),
-      };
+      const target = historyTarget(state, "history-cursor-prefix-change");
       await replaceTranscriptEvents(target, [
         { type: "session", version: 3, id: target.sessionId },
         ...fixture.events,
@@ -393,12 +386,7 @@ describe("session history snapshot reads", () => {
     "keeps same-sequence siblings at the head of %s cursor history",
     async (source) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-        const target = {
-          agentId: "main",
-          sessionId: "history-cursor-siblings",
-          sessionKey: "agent:main:history-cursor-siblings",
-          storePath: path.join(state.sessionsDir(), "sessions.json"),
-        };
+        const target = historyTarget(state, "history-cursor-siblings");
         const messages = [
           userTextMessage("send both here", 1),
           {

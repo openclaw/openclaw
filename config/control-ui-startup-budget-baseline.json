@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 371771,
-  "reason": "Approved by @steipete for PR #158567 on 2026-09-27: measured startup bundle 371,771 B after main reconciliation and canonical boot-module regeneration, +1,015 B (0.27%) over the previous baseline. Paired baseline and cap retain the 512 B growth and 64 B build-variance allowances, yielding a 372,347 B enforcement limit.",
-  "updatedAt": "2026-09-27"
+  "startupJsGzipBytes": 374285,
+  "reason": "Personal backgrounds: Peter authorized fix and landing on 2026-10-10 after the scoped 1,407 B (0.38%) cap proposal. Paired candidate measured 374,285 B before the final deferred-drain repair and 374,327 B afterward; the 42 B difference stays within the existing 512 B growth allowance. Retain the 64 B build-variance allowance and all request, CSS, asset, and route budgets.",
+  "updatedAt": "2026-10-10"
 }

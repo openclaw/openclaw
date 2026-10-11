@@ -1,4 +1,5 @@
 import type { SystemAgentChatParams } from "@openclaw/gateway-protocol";
+import { runOutsidePreparedModelRuntimePluginGenerationScope } from "../agents/prepared-model-runtime-generation-scope.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type {
   SystemAgentSession,
@@ -76,11 +77,6 @@ function createCaptureRuntime(): CaptureRuntime {
     },
     read: () => lines.join("\n").trim(),
   };
-}
-
-function formatOperationError(error: unknown): string {
-  const message = error instanceof Error ? error.message : String(error);
-  return `That did not go through: ${message}`;
 }
 
 export function redactSensitiveCommandText(text: string): string {
@@ -358,7 +354,7 @@ export class ChatTurnRouter {
     approvalArmed: boolean,
     uiContext?: SystemAgentChatParams["context"],
   ): Promise<SystemAgentChatReply> {
-    const overview = await this.callbacks.loadOverview();
+    await this.callbacks.requireVerifiedInference();
     const agentTurn = this.options.runAgentTurn ?? runSystemAgentTurn;
     const resolutionMarker = this.proposalResolution
       ? `[proposal-resolved] The previously pending proposal was ${this.proposalResolution}. Do not present it as pending.\n`
@@ -375,14 +371,19 @@ export class ChatTurnRouter {
         : text
     }`;
     // The runtime already owns recovery; a terminal failure must not start another inference turn.
-    const loopReply = await agentTurn({
-      input: loopInput,
-      overview,
-      surface: this.options.surface ?? "cli",
-      approvalArmed,
-      ...(this.options.operatorApprovalOnly ? { operatorApprovalOnly: true } : {}),
-      session: this.agentSession,
-    });
+    const runTurn = () =>
+      agentTurn({
+        input: loopInput,
+        surface: this.options.surface ?? "cli",
+        approvalArmed,
+        ...(this.options.operatorApprovalOnly ? { operatorApprovalOnly: true } : {}),
+        session: this.agentSession,
+      });
+    const requesterAgentId = this.options.requesterAgentId?.trim();
+    const loopReply =
+      requesterAgentId && requesterAgentId !== this.agentSession.verifiedInference.execution.agentId
+        ? await runOutsidePreparedModelRuntimePluginGenerationScope(runTurn)
+        : await runTurn();
     if (!loopReply?.text) {
       throw new SystemAgentInferenceUnavailableError("agent-turn");
     }
@@ -567,7 +568,8 @@ export class ChatTurnRouter {
         throw error;
       }
       if (!(error instanceof SystemAgentOperationExitError)) {
-        capture.error(formatOperationError(error));
+        const message = error instanceof Error ? error.message : String(error);
+        capture.error(`That did not go through: ${message}`);
       }
       return undefined;
     }

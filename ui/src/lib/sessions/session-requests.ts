@@ -9,6 +9,7 @@ import { SESSION_ARCHIVE_REQUEST_OPTIONS } from "../../../../src/shared/session-
 import { SIDEBAR_SESSION_ROSTER_LIMIT } from "../../../../src/shared/session-list-limits.ts";
 import type { SessionsListResult, SessionsPatchResult } from "../../api/types.ts";
 import type { SessionPatch } from "./patch.ts";
+import { appendSessionResults } from "./reconcile.ts";
 import type {
   SessionDeleteOptions,
   SessionListOptions,
@@ -36,6 +37,9 @@ export function dashboardSessionListQuery(agentId?: string | null): SessionListO
   const normalizedAgentId = agentId?.trim();
   return {
     ...DEFAULT_SESSION_LIST_QUERY,
+    rowMode: "compact",
+    source: "dashboard",
+    excludeDock: true,
     hasBoard: true,
     archivedFilter: "all",
     ...(normalizedAgentId ? { agentId: normalizedAgentId } : {}),
@@ -50,6 +54,8 @@ export function sessionProgressTargetQuery(agentId?: string | null): SessionList
   const normalizedAgentId = agentId?.trim();
   return {
     ...DEFAULT_SESSION_LIST_QUERY,
+    source: "dashboard",
+    excludeDock: false,
     archivedFilter: "all",
     ...(normalizedAgentId ? { agentId: normalizedAgentId } : {}),
   };
@@ -73,9 +79,12 @@ export function buildSessionRequestParams(
 
 export function buildSessionListParams(options: SessionListOptions = {}): SessionsListParams {
   const params: SessionsListParams = {
+    rowMode: "compact",
+    source: options.source ?? "chat-pane",
     includeGlobal: true,
     includeUnknown: true,
     configuredAgentsOnly: true,
+    excludeDock: options.excludeDock ?? true,
   };
   if (options.limit === undefined) {
     params.limit = DEFAULT_SESSION_LIST_QUERY.limit;
@@ -137,28 +146,68 @@ export function buildSessionListParams(options: SessionListOptions = {}): Sessio
 
 export function normalizeManagedSessionListQuery(
   options: SessionListOptions,
-): Readonly<SessionsListParams & { limit: number }> {
+): Readonly<SessionsListParams & { limit: number; pageSize?: number }> {
   const { offset: _offset, append: _append, ...queryOptions } = options;
   const limit =
     typeof options.limit === "number" && options.limit > 0
       ? Math.floor(options.limit)
       : DEFAULT_SESSION_LIST_QUERY.limit;
-  return Object.freeze({ ...buildSessionListParams({ ...queryOptions, limit }), limit });
+  return Object.freeze({
+    ...buildSessionListParams({ ...queryOptions, limit }),
+    limit,
+    ...(options.pageSize ? { pageSize: options.pageSize } : {}),
+  });
+}
+
+export function sessionListQueryKey(options: SessionListOptions): string {
+  const { source: _source, ...query } = normalizeManagedSessionListQuery(options);
+  return JSON.stringify(query);
 }
 
 export async function requestSessionList(
   client: SessionRequestClient,
-  options: SessionListOptions = {},
+  options: SessionListOptions,
+  isCurrent: () => boolean,
 ): Promise<SessionsListResult | null> {
-  return requestSessionListParams(client, buildSessionListParams(options));
+  return requestSessionListParams(client, buildSessionListParams(options), isCurrent);
 }
 
 export async function requestSessionListParams(
   client: SessionRequestClient,
-  params: Readonly<SessionsListParams>,
+  query: Readonly<SessionsListParams & { pageSize?: number }>,
+  isCurrent: () => boolean,
 ): Promise<SessionsListResult | null> {
-  const result = await client.request<SessionsListResult | undefined>("sessions.list", params);
-  return result ?? null;
+  const { pageSize, ...params } = query;
+  if (!pageSize || !params.limit || params.limit <= pageSize) {
+    return (await client.request<SessionsListResult | undefined>("sessions.list", params)) ?? null;
+  }
+  // The Gateway enriches only a bounded prefix per response. Page the requested
+  // window here so initial loads and retained-window refreshes keep the same fields.
+  let result: SessionsListResult | null = null;
+  let offset = params.offset ?? 0;
+  for (let remaining = params.limit; remaining > 0; remaining -= pageSize) {
+    if (!isCurrent()) {
+      return null;
+    }
+    const page = await client.request<SessionsListResult | undefined>("sessions.list", {
+      ...params,
+      limit: Math.min(remaining, pageSize),
+      ...(offset > 0 ? { offset } : {}),
+    });
+    if (!isCurrent() || !page) {
+      return null;
+    }
+    result = result ? appendSessionResults(result, page) : page;
+    if (!page.hasMore || page.sessions.length === 0) {
+      break;
+    }
+    const nextOffset = page.nextOffset ?? offset + page.sessions.length;
+    if (nextOffset <= offset) {
+      throw new Error("Session list pagination did not advance.");
+    }
+    offset = nextOffset;
+  }
+  return result;
 }
 
 export function requestSessionPatch(

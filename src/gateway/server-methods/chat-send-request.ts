@@ -15,6 +15,7 @@ import type {
   ChatSendParamsSchema,
   QueueMode,
 } from "../../../packages/gateway-protocol/src/schema/logs-chat.js";
+import { isAbortRequestText } from "../../auto-reply/reply/abort-primitives.js";
 import { isBtwRequestText } from "../../auto-reply/reply/btw-command.js";
 import {
   captureChatWorkContext,
@@ -36,13 +37,12 @@ import {
   isBrowserOperatorUiClient,
   isOperatorUiClient,
 } from "../../utils/message-channel.js";
-import { isChatStopCommandText } from "../chat-abort.js";
 import type { ChatAttachment } from "../chat-attachments.js";
 import { sanitizeChatSendMessageInput } from "../chat-input-sanitize.js";
+import { hasGatewayAdminScope } from "../operator-scopes.js";
 import { normalizeRpcAttachmentsToChatAttachments } from "./attachment-normalize.js";
 import { normalizeChatHumanMentions } from "./chat-human-mentions.js";
 import {
-  hasGatewayAdminScope,
   normalizeExplicitChatSendOrigin,
   normalizeOptionalChatSystemReceipt,
   type ChatSendExplicitOrigin,
@@ -95,8 +95,9 @@ export function normalizeChatSendRequest(params: {
   trustedSystemInput?: boolean;
   goalResume?: SessionGoalOperation & { action: "resume" };
   providerReviewAcknowledgment?: ProviderReviewAcknowledgment;
-}): NormalizeChatSendRequestResult {
+}): NormalizeChatSendRequestResult | Promise<NormalizeChatSendRequestResult> {
   const chatSendReceivedAtMs = performance.now();
+  const reject = (error: string) => ({ ok: false as const, error });
   const client = params.client;
   const clientInfo = client?.connect?.client;
   const supportsTaskSuggestions =
@@ -105,10 +106,9 @@ export function normalizeChatSendRequest(params: {
     hasGatewayClientCap(params.client?.connect?.caps, GATEWAY_CLIENT_CAPS.TASK_SUGGESTIONS);
   const controlUiReconnectResume = resolveControlUiReconnectResumeParams(params.params, clientInfo);
   if (!validateChatSendParams(controlUiReconnectResume.params)) {
-    return {
-      ok: false,
-      error: `invalid chat.send params: ${formatValidationErrors(validateChatSendParams.errors)}`,
-    };
+    return reject(
+      `invalid chat.send params: ${formatValidationErrors(validateChatSendParams.errors)}`,
+    );
   }
 
   const p = controlUiReconnectResume.params as ChatSendRequestParams;
@@ -132,7 +132,7 @@ export function normalizeChatSendRequest(params: {
       p.fastMode !== undefined ||
       p.timeoutMs !== undefined)
   ) {
-    return { ok: false, error: "Provider continuation no longer matches the reviewed input." };
+    return reject("Provider continuation no longer matches the reviewed input.");
   }
   const suppressCommandInterpretation = p.suppressCommandInterpretation === true;
   const explicitOriginResult = normalizeExplicitChatSendOrigin({
@@ -152,13 +152,11 @@ export function normalizeChatSendRequest(params: {
     !params.trustedSystemInput &&
     !hasGatewayAdminScope(params.client)
   ) {
-    return {
-      ok: false,
-      error:
-        p.systemInputProvenance || p.systemProvenanceReceipt || suppressCommandInterpretation
-          ? "system provenance fields require admin scope"
-          : "originating route fields require admin scope",
-    };
+    return reject(
+      p.systemInputProvenance || p.systemProvenanceReceipt || suppressCommandInterpretation
+        ? "system provenance fields require admin scope"
+        : "originating route fields require admin scope",
+    );
   }
 
   const sanitizedMessageResult = sanitizeChatSendMessageInput(p.message);
@@ -176,11 +174,9 @@ export function normalizeChatSendRequest(params: {
       p.suppressCommandInterpretation !== undefined ||
       sanitizedMessageResult.message !== p.message.normalize("NFC"))
   ) {
-    return {
-      ok: false,
-      error:
-        "Goal start requires a nonempty objective of at most 16000 characters, without queue or system-input options.",
-    };
+    return reject(
+      "Goal start requires a nonempty objective of at most 16000 characters, without queue or system-input options.",
+    );
   }
   if (
     p.intent &&
@@ -194,50 +190,38 @@ export function normalizeChatSendRequest(params: {
       controlUiReconnectResume.resumeRequested)
   ) {
     // Recovery reads the persisted input and session settings, not transient run overrides.
-    return {
-      ok: false,
-      error:
-        "Goal start uses the session settings and local delivery; per-request runtime or routing overrides are not supported.",
-    };
+    return reject(
+      "Goal start uses the session settings and local delivery; per-request runtime or routing overrides are not supported.",
+    );
   }
   const systemReceiptResult = normalizeOptionalChatSystemReceipt(p.systemProvenanceReceipt);
   if (!systemReceiptResult.ok) {
     return systemReceiptResult;
   }
 
-  const goalOperation =
-    params.goalResume ??
-    (p.intent
-      ? {
-          action: "start" as const,
-          operationId: p.idempotencyKey,
-          issuedAtMs: p.intent.issuedAtMs,
-          objective: p.message,
-          requestFingerprint: fingerprintSessionGoalRequest([p, hasGatewayAdminScope(client)]),
-        }
-      : undefined);
+  const hasGoalOperation = params.goalResume !== undefined || p.intent !== undefined;
   const commandInterpretationSuppressed =
-    suppressCommandInterpretation || goalOperation !== undefined || providerReview !== undefined;
+    suppressCommandInterpretation || hasGoalOperation || providerReview !== undefined;
   // This text comes from the current provider review, not a browser-supplied command.
   const inboundMessage = p.intent || providerReview ? p.message : sanitizedMessageResult.message;
   const systemInputProvenance = params.goalResume
     ? { kind: "internal_system" as const, sourceTool: "session_goal_resume" }
     : normalizeInputProvenance(p.systemInputProvenance);
   if (!params.trustedSystemInput && isProgressCardRefreshInputProvenance(systemInputProvenance)) {
-    return { ok: false, error: "Progress refresh input is reserved for progressCard.refresh." };
+    return reject("Progress refresh input is reserved for progressCard.refresh.");
   }
   const systemProvenanceReceipt = systemReceiptResult.receipt;
-  const stopCommand = !commandInterpretationSuppressed && isChatStopCommandText(inboundMessage);
+  const stopCommand = !commandInterpretationSuppressed && isAbortRequestText(inboundMessage);
   if (p.toolBindings) {
     if (
       !client ||
       !isBrowserCopilotClient(clientInfo) ||
       client.pairedClientId !== clientInfo?.id
     ) {
-      return { ok: false, error: "run tool bindings require a paired browser copilot" };
+      return reject("run tool bindings require a paired browser copilot");
     }
     if (!hasGatewayClientCap(client.connect.caps, GATEWAY_CLIENT_CAPS.RUN_TOOL_BINDINGS)) {
-      return { ok: false, error: "run tool bindings require client capability" };
+      return reject("run tool bindings require client capability");
     }
   }
   if (
@@ -245,16 +229,16 @@ export function normalizeChatSendRequest(params: {
     !stopCommand &&
     (!p.toolBindings || !Object.hasOwn(p.toolBindings, "browser"))
   ) {
-    return { ok: false, error: "browser copilot runs require an explicit browser tool binding" };
+    return reject("browser copilot runs require an explicit browser tool binding");
   }
   // The browser plugin owns the binding schema and validates it while tools are
   // constructed, before model execution. Gateway owns only paired-client admission.
   const turnKind =
     !commandInterpretationSuppressed && isBtwRequestText(inboundMessage) ? "btw" : "main";
   const normalizedAttachments = normalizeRpcAttachmentsToChatAttachments(p.attachments);
-  const rawMessage = goalOperation || providerReview ? inboundMessage : inboundMessage.trim();
+  const rawMessage = hasGoalOperation || providerReview ? inboundMessage : inboundMessage.trim();
   if (!rawMessage && normalizedAttachments.length === 0) {
-    return { ok: false, error: "message or attachment required" };
+    return reject("message or attachment required");
   }
   const mentions = normalizeChatHumanMentions(
     p.message,
@@ -264,43 +248,36 @@ export function normalizeChatSendRequest(params: {
   if (!mentions.ok) {
     return mentions;
   }
+  const ordinaryChat =
+    !hasGoalOperation &&
+    !stopCommand &&
+    turnKind === "main" &&
+    !rawMessage.startsWith("/") &&
+    !rawMessage.startsWith("!");
   if (
     mentions.value &&
     (!isBrowserOperatorUiClient(clientInfo) ||
       !client?.authenticatedUserProfile ||
       client.internal?.syntheticClient ||
       client.internal?.senderAttribution ||
-      goalOperation ||
       systemInputProvenance ||
       systemProvenanceReceipt ||
       explicitOriginResult.value ||
       suppressCommandInterpretation ||
-      stopCommand ||
-      turnKind !== "main" ||
-      rawMessage.startsWith("/") ||
-      rawMessage.startsWith("!"))
+      !ordinaryChat)
   ) {
-    return {
-      ok: false,
-      error:
-        "Human mentions require a signed-in Control UI chat. Remove the selected mentions to use this mode.",
-    };
+    return reject(
+      "Human mentions require a signed-in Control UI chat. Remove the selected mentions to use this mode.",
+    );
   }
-  if (
-    p.workContext &&
-    (goalOperation ||
-      stopCommand ||
-      turnKind !== "main" ||
-      rawMessage.startsWith("/") ||
-      rawMessage.startsWith("!"))
-  ) {
-    return { ok: false, error: "Working context is only supported for ordinary chat messages." };
+  if (p.workContext && !ordinaryChat) {
+    return reject("Working context is only supported for ordinary chat messages.");
   }
   const workContext = p.workContext
     ? { snapshot: captureChatWorkContext(p.workContext), text: rawMessage }
     : undefined;
   if (workContext && !workContext.snapshot.page) {
-    return { ok: false, error: "Working context requires a nonempty page." };
+    return reject("Working context requires a nonempty page.");
   }
   const modelMessage = workContext
     ? [rawMessage, formatChatWorkContext(workContext.snapshot)].filter(Boolean).join("\n\n")
@@ -314,31 +291,43 @@ export function normalizeChatSendRequest(params: {
     ]),
   );
 
-  return {
-    ok: true,
-    value: {
-      chatSendReceivedAtMs,
-      clientInfo,
-      supportsTaskSuggestions,
-      p,
-      ...(params.providerReviewAcknowledgment
-        ? { providerReviewAcknowledgment: params.providerReviewAcknowledgment }
-        : {}),
-      ...(goalOperation ? { goalOperation } : {}),
-      explicitOrigin: explicitOriginResult.value,
-      inboundMessage: workContext ? modelMessage : inboundMessage,
-      ...(workContext ? { workContext } : {}),
-      systemInputProvenance,
-      systemProvenanceReceipt,
-      suppressCommandInterpretation: commandInterpretationSuppressed,
-      toolBindings: p.toolBindings,
-      stopCommand,
-      turnKind,
-      normalizedAttachments,
-      rawMessage: modelMessage,
-      requestIdentity,
-      ...(mentions.value ? { mentions: mentions.value } : {}),
-      reconnectResumeRequested: controlUiReconnectResume.resumeRequested,
-    },
+  const value: NormalizedChatSendRequest = {
+    chatSendReceivedAtMs,
+    clientInfo,
+    supportsTaskSuggestions,
+    p,
+    ...(params.providerReviewAcknowledgment
+      ? { providerReviewAcknowledgment: params.providerReviewAcknowledgment }
+      : {}),
+    ...(params.goalResume ? { goalOperation: params.goalResume } : {}),
+    explicitOrigin: explicitOriginResult.value,
+    inboundMessage: modelMessage,
+    ...(workContext ? { workContext } : {}),
+    systemInputProvenance,
+    systemProvenanceReceipt,
+    suppressCommandInterpretation: commandInterpretationSuppressed,
+    toolBindings: p.toolBindings,
+    stopCommand,
+    turnKind,
+    normalizedAttachments,
+    rawMessage: modelMessage,
+    requestIdentity,
+    ...(mentions.value ? { mentions: mentions.value } : {}),
+    reconnectResumeRequested: controlUiReconnectResume.resumeRequested,
   };
+  if (p.intent && !params.goalResume) {
+    const goalStart = {
+      action: "start" as const,
+      operationId: p.idempotencyKey,
+      issuedAtMs: p.intent.issuedAtMs,
+      objective: p.message,
+    };
+    return fingerprintSessionGoalRequest([p, hasGatewayAdminScope(client)]).then(
+      (requestFingerprint) => ({
+        ok: true,
+        value: { ...value, goalOperation: { ...goalStart, requestFingerprint } },
+      }),
+    );
+  }
+  return { ok: true, value };
 }

@@ -47,19 +47,13 @@ function queueRemovedProfileCleanup(params: {
   current: BrowserServerState;
   name: string;
   runtime: ProfileRuntimeState;
-  initial: boolean;
 }) {
-  const actor = getProfileLifecycle(params.runtime);
-  if (!params.initial && (!actor.blockedReason || actor.transitionReason)) {
-    return;
-  }
   params.runtime.lastTargetId = null;
   void beginProfileTransition({
     state: params.current,
     runtime: params.runtime,
-    reason: params.initial ? "profile removed from config" : "profile removal cleanup retry",
+    reason: "profile removed from config",
     terminal: "config-removed",
-    advanceConfigRevision: params.initial,
     closeRelay: params.runtime.profile.driver === "extension",
     exposeReason: true,
   })
@@ -109,25 +103,11 @@ function applyResolvedConfig(
   };
   for (const [name, runtime] of current.profiles) {
     const actor = getProfileLifecycle(runtime);
-    if (actor.terminal === "config-removed") {
-      queueRemovedProfileCleanup({ current, name, runtime, initial: false });
-      continue;
-    }
     if (actor.terminal) {
       continue;
     }
     const nextProfile = resolveProfile(current.resolved, name);
     if (nextProfile) {
-      if (actor.blockedReason && !actor.transitionReason) {
-        void beginProfileTransition({
-          state: current,
-          runtime,
-          reason: "profile invariant cleanup retry",
-          captureProfileResources: false,
-          exposeReason: true,
-        }).catch(() => {});
-        continue;
-      }
       const changed = changedProfileInvariants(
         runtime.profile,
         nextProfile,
@@ -141,7 +121,6 @@ function applyResolvedConfig(
           state: current,
           runtime,
           reason,
-          advanceConfigRevision: true,
           closeRelay: previousProfile.driver === "extension",
           exposeReason: true,
         }).catch(() => {});
@@ -150,11 +129,11 @@ function applyResolvedConfig(
       runtime.profile = nextProfile;
       continue;
     }
-    queueRemovedProfileCleanup({ current, name, runtime, initial: true });
+    // Failed cleanup stays visible; an explicit stop or restart repairs it.
+    queueRemovedProfileCleanup({ current, name, runtime });
   }
 }
 
-/** Refreshes the Browser runtime's resolved config from disk when hot reload is enabled. */
 export function refreshResolvedBrowserConfigFromDisk(params: {
   current: BrowserServerState;
   refreshConfigFromDisk: boolean;

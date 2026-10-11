@@ -53,8 +53,8 @@ const boundary = {
 
 vi.mock("openclaw/plugin-sdk/session-catalog", async (importOriginal) => ({
   ...(await importOriginal()),
-  deleteSessionUpstreamLink: linkMocks.delete,
-  upsertSessionUpstreamLink: linkMocks.upsert,
+  deleteSessionUpstreamLinkAsync: linkMocks.delete,
+  upsertSessionUpstreamLinkAsync: linkMocks.upsert,
 }));
 
 vi.mock("./transcript-mirror.js", async (importOriginal) => ({
@@ -130,7 +130,7 @@ describe("forkCodexUpstreamSession", () => {
         return transport.client;
       });
       const config = {
-        agents: { list: [{ id: "main", agentDir: stateDir, workspace: stateDir }] },
+        agents: { entries: { main: { agentDir: stateDir, workspace: stateDir } } },
       };
       const pluginConfig = {
         appServer: {
@@ -385,7 +385,7 @@ describe("forkCodexUpstreamSession", () => {
       await expect(
         forkCodexUpstreamSession(params, {
           bindingStore: {
-            read: vi.fn(() => ({
+            readAsync: vi.fn(async () => ({
               threadId: "thread-canonical",
               connectionScope: "supervision",
               supervisionSourceThreadId:
@@ -447,7 +447,9 @@ describe("forkCodexUpstreamSession", () => {
     );
 
     const result = await forkCodexUpstreamSession(forkParams(), {
-      bindingStore: { read: vi.fn(() => undefined) } as unknown as CodexAppServerBindingStore,
+      bindingStore: {
+        readAsync: vi.fn(async () => undefined),
+      } as unknown as CodexAppServerBindingStore,
       controlFactory,
       harnessRuntimeId: "codex",
       runtime: createPluginRuntimeMock(),
@@ -468,7 +470,7 @@ describe("forkCodexUpstreamSession", () => {
 
       const result = await forkCodexUpstreamSession(forkParams(), {
         bindingStore: {
-          read: vi.fn(() => ({
+          readAsync: vi.fn(async () => ({
             threadId: "thread-canonical",
             connectionScope: "supervision",
             supervisionSourceThreadId: "thread-source",

@@ -1,4 +1,5 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { racePromiseWithAbortSignal } from "openclaw/plugin-sdk/time-runtime";
 import {
   enumerateConversationKeyForms,
   type IMessageApprovalConversationKey,
@@ -32,14 +33,9 @@ function beginIMessageApprovalControlBinding(params: {
 }): { close: () => void } {
   const keys = bindingKeys(params.accountId, params.conversation);
   const { promise, resolve } = createDeferred<void>();
-  let closed = false;
   const window: BindingWindow = {
     done: promise,
     close: () => {
-      if (closed) {
-        return;
-      }
-      closed = true;
       for (const key of keys) {
         const windows = pendingByConversation.get(key);
         windows?.delete(window);
@@ -76,17 +72,11 @@ async function waitForIMessageApprovalControlBinding(params: {
   if (params.abortSignal?.aborted) {
     throw approvalControlBindingAbortError(params.abortSignal);
   }
-  let detachAbort = () => {};
-  const aborted = new Promise<never>((_resolve, reject) => {
-    const onAbort = () => reject(approvalControlBindingAbortError(params.abortSignal));
-    params.abortSignal?.addEventListener("abort", onAbort, { once: true });
-    detachAbort = () => params.abortSignal?.removeEventListener("abort", onAbort);
-  });
-  try {
-    await Promise.race([Promise.race([...windows].map((window) => window.done)), aborted]);
-  } finally {
-    detachAbort();
-  }
+  await racePromiseWithAbortSignal(
+    Promise.race([...windows].map((window) => window.done)),
+    params.abortSignal,
+    approvalControlBindingAbortError,
+  );
   return true;
 }
 

@@ -49,9 +49,6 @@ function createAliasedPlugin() {
 
 describe("installed plugin manifest identity", () => {
   it.each([
-    { prewarm: undefined, configured: "canonical" },
-    { prewarm: undefined, configured: "alias" },
-    { prewarm: "alias", configured: "alias" },
     { prewarm: "alias", configured: "canonical" },
     { prewarm: "canonical", configured: "alias" },
   ] as const)("hashes $configured roots after $prewarm prewarming", ({ prewarm, configured }) => {

@@ -11,6 +11,9 @@ import { isDangerousHostEnvVarName } from "../infra/host-env-security.js";
 import { isRenderableAvatarImageDataUrl } from "../shared/avatar-limits.js";
 import {
   CLAW_BOOTSTRAP_FILE_NAMES,
+  CLAW_EXTENSION_FORMATS,
+  CLAW_PACKAGE_KINDS,
+  CLAW_PACKAGE_SOURCE,
   CLAW_SCHEMA_VERSION,
   type ClawDiagnostic,
   type ClawOpenClawAgentSettings,
@@ -82,7 +85,7 @@ const exactVersion = nonEmptyString.refine(
 );
 const clawHubPackageName = nonEmptyString.refine(
   isCanonicalClawHubPackageName,
-  "ClawHub package references must use their canonical lowercase name.",
+  "ClawHub package references must use their lowercase name.",
 );
 const portableEnvKey = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
@@ -119,8 +122,8 @@ const openClawExtensionSchema = z
   .object({
     id: agentId,
     kind: z.literal("plugin"),
-    format: z.enum(["openclaw", "claude", "codex", "cursor"]),
-    source: z.literal("clawhub"),
+    format: z.enum(CLAW_EXTENSION_FORMATS),
+    source: z.literal(CLAW_PACKAGE_SOURCE),
     ref: clawHubPackageName,
     version: exactVersion,
   })
@@ -352,8 +355,8 @@ const workspaceSchema = z
 
 const packageSchema = z
   .object({
-    kind: z.enum(["skill", "plugin"]),
-    source: z.literal("clawhub"),
+    kind: z.enum(CLAW_PACKAGE_KINDS),
+    source: z.literal(CLAW_PACKAGE_SOURCE),
     ref: clawHubPackageName,
     version: exactVersion,
   })

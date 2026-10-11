@@ -4,19 +4,21 @@ import type { MemoryEntryOrigin } from "openclaw/plugin-sdk/memory-core-host-eng
 import { resolveRuntimeWorkerUrl } from "openclaw/plugin-sdk/process-runtime";
 import {
   openOpenClawAgentSqliteWorkerStore,
-  resolveOpenClawAgentSqlitePath,
   runOpenClawAgentWriteAdmission,
-  withOpenClawAgentDatabaseAsync,
+  withOpenClawAgentDatabaseRuntime,
 } from "openclaw/plugin-sdk/sqlite-runtime";
-import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import { DREAMS_FILENAMES, readDreamsFile } from "./dreaming-dreams-file.js";
-import type {
-  MemoryEntryOriginOperations,
-  MemoryOriginDeletion,
-  MemoryOriginRecord,
-  MemorySessionTombstone,
-  MemoryOriginReadTarget,
+import {
+  captureMemoryAgentDatabaseOptions,
+  captureMemoryAgentReadTarget,
+} from "./memory-agent-database.js";
+import {
+  MEMORY_SESSION_TOMBSTONE_BATCH_SIZE,
+  type MemoryEntryOriginOperations,
+  type MemoryOriginDeletion,
+  type MemoryOriginRecord,
 } from "./memory-entry-origins-task.js";
+import { captureMemoryMutationAuthority } from "./memory-mutation-authority.js";
 import { extractPromotionKeys } from "./short-term-promotion-memory-write.js";
 
 export type { MemoryEntryOrigin };
@@ -28,12 +30,7 @@ const loadMemoryCpuProcessEntrypoints = createLazyRuntimeModule(
 const loadMemoryCpuWorkerRuntime = createLazyRuntimeModule(
   () => import("./memory/manager-cpu-worker-runtime.js"),
 );
-type OriginDatabaseOptions = ReturnType<typeof captureOriginDatabaseOptions>;
-
-function captureOriginDatabaseOptions(agentId: string) {
-  const env = { ...process.env, OPENCLAW_STATE_DIR: resolveStateDir() };
-  return { agentId, env, path: resolveOpenClawAgentSqlitePath({ agentId, env }) };
-}
+type OriginDatabaseOptions = ReturnType<typeof captureMemoryAgentDatabaseOptions>;
 
 async function executeOriginCommand<Key extends "record" | "delete">(
   options: OriginDatabaseOptions,
@@ -50,7 +47,7 @@ async function executeOriginCommand<Key extends "record" | "delete">(
         assertOriginal?.();
         assertAdmission();
       };
-      return withOpenClawAgentDatabaseAsync(
+      return withOpenClawAgentDatabaseRuntime(
         options,
         async ({ db }) => {
           const worker = await openOpenClawAgentSqliteWorkerStore<MemoryEntryOriginOperations>(
@@ -74,47 +71,51 @@ async function executeOriginCommand<Key extends "record" | "delete">(
   );
 }
 
-function captureOriginReadTarget(
-  options: Parameters<typeof withOpenClawAgentDatabaseAsync>[0],
-): MemoryOriginReadTarget {
-  return {
-    agentId: options.agentId,
-    databasePath: resolveOpenClawAgentSqlitePath(options),
-    stateDir: resolveStateDir(options.env),
-  };
-}
-
 export async function listMemoryEntryOrigins(
   params: {
     agentId: string;
     sessionIds?: readonly string[];
     entryKeys?: readonly string[];
   },
-  options?: Parameters<typeof withOpenClawAgentDatabaseAsync>[0],
+  options?: Parameters<typeof withOpenClawAgentDatabaseRuntime>[0],
 ): Promise<MemoryEntryOrigin[]> {
   if (params.sessionIds?.length === 0 || params.entryKeys?.length === 0) {
     return [];
   }
-  const target = captureOriginReadTarget(options ?? captureOriginDatabaseOptions(params.agentId));
+  const target = captureMemoryAgentReadTarget(
+    options ?? captureMemoryAgentDatabaseOptions(params.agentId),
+  );
   const filters = {
     ...(params.sessionIds ? { sessionIds: [...params.sessionIds] } : {}),
     ...(params.entryKeys ? { entryKeys: [...params.entryKeys] } : {}),
   };
-  const { runMemoryOriginRows } = await loadMemoryCpuWorkerRuntime();
-  return runMemoryOriginRows(target, filters);
+  const { runMemoryOriginRead } = await loadMemoryCpuWorkerRuntime();
+  return (await runMemoryOriginRead({ ...target, ...filters, kind: "origin-rows" })).rows;
 }
 
-export async function listMemorySessionTombstones(params: {
+export async function findForgottenMemorySessionIds(params: {
   agentId: string;
-  sessionIds?: readonly string[];
-}): Promise<MemorySessionTombstone[]> {
-  if (params.sessionIds?.length === 0) {
-    return [];
+  sessionIds: readonly string[];
+}): Promise<Set<string>> {
+  const forgotten = new Set<string>();
+  if (params.sessionIds.length === 0) {
+    return forgotten;
   }
-  const target = captureOriginReadTarget(captureOriginDatabaseOptions(params.agentId));
-  const sessionIds = params.sessionIds ? [...params.sessionIds] : undefined;
-  const { runMemoryTombstoneRows } = await loadMemoryCpuWorkerRuntime();
-  return runMemoryTombstoneRows(target, sessionIds);
+  const target = captureMemoryAgentReadTarget(captureMemoryAgentDatabaseOptions(params.agentId));
+  const sessionIds = [...params.sessionIds];
+  const { runMemoryOriginRead } = await loadMemoryCpuWorkerRuntime();
+  for (let start = 0; start < sessionIds.length; start += MEMORY_SESSION_TOMBSTONE_BATCH_SIZE) {
+    const page = sessionIds.slice(start, start + MEMORY_SESSION_TOMBSTONE_BATCH_SIZE);
+    const { indices } = await runMemoryOriginRead({
+      ...target,
+      sessionIds: page,
+      kind: "session-tombstones",
+    });
+    for (const index of indices) {
+      forgotten.add(page[index]!);
+    }
+  }
+  return forgotten;
 }
 
 export async function recordMemoryEntryOrigins(
@@ -135,10 +136,14 @@ export async function recordMemoryEntryOrigins(
       observedAt: origin.observedAt,
     })),
   };
-  return executeOriginCommand(captureOriginDatabaseOptions(params.agentId), {
-    type: "record",
-    input,
-  });
+  return executeOriginCommand(
+    captureMemoryAgentDatabaseOptions(params.agentId),
+    {
+      type: "record",
+      input,
+    },
+    captureMemoryMutationAuthority(),
+  );
 }
 
 async function deleteMemoryEntryOrigins(
@@ -150,16 +155,16 @@ async function deleteMemoryEntryOrigins(
     return 0;
   }
   assertOriginal();
-  const target = captureOriginReadTarget(options);
+  const target = captureMemoryAgentReadTarget(options);
   const filters = {
     entryKeys: [...params.entryKeys],
     ...(params.sessionIds ? { sessionIds: [...params.sessionIds] } : {}),
   };
-  const { runMemoryOriginExists } = await loadMemoryCpuWorkerRuntime();
+  const { runMemoryOriginRead } = await loadMemoryCpuWorkerRuntime();
   assertOriginal();
-  const existing = await runMemoryOriginExists(target, filters);
+  const { exists } = await runMemoryOriginRead({ ...target, ...filters, kind: "origin-exists" });
   assertOriginal();
-  if (!existing) {
+  if (!exists) {
     return 0;
   }
   return executeOriginCommand(options, { type: "delete", input: params }, assertOriginal);
@@ -193,7 +198,7 @@ export async function reserveMemoryEntryOrigins(params: {
   if (affectedKeys.length === 0) {
     return async () => {};
   }
-  const owners = [...new Set(params.agentIds)].toSorted().map(captureOriginDatabaseOptions);
+  const owners = [...new Set(params.agentIds)].toSorted().map(captureMemoryAgentDatabaseOptions);
   const reservations: Array<{
     params: MemoryOriginDeletion;
     options: OriginDatabaseOptions;
@@ -268,7 +273,7 @@ export async function pruneMemoryEntryOrigins(params: {
   if (entryKeys.length === 0) {
     return;
   }
-  const owners = [...new Set(params.agentIds)].map(captureOriginDatabaseOptions);
+  const owners = [...new Set(params.agentIds)].map(captureMemoryAgentDatabaseOptions);
   // Keep diary origins through backup rotation; callers hold the workspace lock.
   const diaries = await Promise.all(
     DREAMS_FILENAMES.map((name) =>
@@ -276,7 +281,7 @@ export async function pruneMemoryEntryOrigins(params: {
     ),
   );
   const diaryKeys = new Set(diaries.flatMap(extractPromotionKeys));
-  const { runMemoryIndexedOriginKeys } = await loadMemoryCpuWorkerRuntime();
+  const { runMemoryOriginRead } = await loadMemoryCpuWorkerRuntime();
   for (const options of owners) {
     await runOpenClawAgentWriteAdmission(
       options,
@@ -285,7 +290,11 @@ export async function pruneMemoryEntryOrigins(params: {
         // A sibling may still index an older shared MEMORY snapshot. Retain its
         // lineage until that agent can identify and purge those derived records.
         assertCurrent();
-        const indexed = new Set(await runMemoryIndexedOriginKeys(captureOriginReadTarget(options)));
+        const { keys } = await runMemoryOriginRead({
+          ...captureMemoryAgentReadTarget(options),
+          kind: "origin-index-keys",
+        });
+        const indexed = new Set(keys);
         assertCurrent();
         await deleteMemoryEntryOrigins(
           {

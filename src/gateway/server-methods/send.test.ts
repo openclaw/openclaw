@@ -10,15 +10,10 @@ import {
   GatewayErrorDetailCodes,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
 import { jsonResult } from "../../agents/tools/common.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import { createChannelPartialDeliveryError } from "../../channels/turn/delivery-result.js";
 import type { SessionTranscriptAppendResult } from "../../config/sessions/transcript.js";
-import {
-  claimAgentRunDelegatedAuthority,
-  releaseAgentRunDelegatedAuthority,
-} from "../../infra/agent-run-registry.js";
 import { OutboundDeliveryError } from "../../infra/outbound/deliver-types.js";
 import { resolveOutboundTargetWithPlugin } from "../../infra/outbound/targets-resolve-shared.js";
 import { buildOutboundMediaLoadOptions } from "../../media/load-options.js";
@@ -33,18 +28,17 @@ import {
 } from "../../test-utils/channel-plugins.js";
 import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { createAgentRuntimeApprovalAuthorityValidator } from "../agent-runtime-approval-authority.js";
 import { bindInProcessSessionDeliveryGeneration } from "../in-process-session-delivery.js";
-import {
-  mintMessageActionTurnCapability,
-  revokeMessageActionTurnCapability,
-} from "../message-action-turn-capability.js";
+import { revokeMessageActionTurnCapability } from "../message-action-turn-capability.js";
 import { DEDUPE_MAX, DEDUPE_TTL_MS } from "../server-constants.js";
 import { startGatewayMaintenanceTimers } from "../server-maintenance.js";
 import { createGatewayMaintenanceStateForTest } from "../test-helpers.maintenance-state.js";
+import { registerSendDeliveryAttemptTests } from "./send.delivery-attempt.test-support.js";
+import { registerSendSessionRoutingTests } from "./send.session-routing.test-support.js";
 import {
   agentRuntimeClientForTests as agentRuntimeClient,
   createTelegramSourceSendRequest,
+  createMessageActionTurnClientForTests,
   directCliClientForTests as directCliClient,
   firstRespondCall,
   messageActionContextFromSessionKeyForTests,
@@ -77,20 +71,14 @@ const mocks = vi.hoisted(() => ({
   cancelRestartRecoveryTerminalDelivery: vi.fn(async () => "cleared" as const),
   completeRestartRecoveryTerminalDelivery: vi.fn(async () => "recorded" as const),
   recordSessionMetaFromInbound: vi.fn(async () => ({ ok: true })),
-  resolveOutboundTarget: vi.fn<ResolveOutboundTarget>(() => ({ ok: true, to: "resolved" })),
+  resolveOutboundTarget: vi.fn<ResolveOutboundTarget>(async () => ({ ok: true, to: "resolved" })),
   resolveOutboundSessionRoute: vi.fn(),
   ensureOutboundSessionEntry: vi.fn(async () => undefined),
   resolveMessageChannelSelection: vi.fn(),
   dispatchChannelMessageAction: vi.fn(),
-  sendPoll: vi.fn<
-    () => Promise<{
-      messageId: string;
-      toJid?: string;
-      channelId?: string;
-      conversationId?: string;
-      pollId?: string;
-    }>
-  >(async () => ({ messageId: "poll-1" })),
+  sendPoll: vi.fn<NonNullable<NonNullable<ChannelPlugin["outbound"]>["sendPoll"]>>(async () => ({
+    messageId: "poll-1",
+  })),
   getChannelPlugin: vi.fn(),
   loadOpenClawPlugins: vi.fn(),
   getRuntimeConfigSnapshot: vi.fn(),
@@ -210,8 +198,14 @@ vi.mock("../session-utils.js", async () => {
   };
 });
 
-const { invokeGatewayMessageMethod, runSend, runSendWithClient, runPoll, runMessageActionRequest } =
-  createMessageMethodTestDriver(() => sendHandlers);
+const {
+  invokeGatewayMessageMethod,
+  runSend,
+  runSendWithClient,
+  runPoll,
+  runMessageActionRequest,
+  runTelegramTerminalAction,
+} = createMessageMethodTestDriver(() => sendHandlers);
 
 async function withTempOpenClawStateDir<T>(test: (stateDir: string) => Promise<T>): Promise<T> {
   const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
@@ -258,56 +252,6 @@ function mockDeliverySuccess(messageId: string) {
 const { registerMessageThreadAddressingPlugin, registerMessageActionPlugin } =
   createMessageMethodPluginFixtures(mocks);
 
-async function runTelegramTerminalAction(params: {
-  sessionId: string;
-  idempotencyKey: string;
-  sourceTurnId: string;
-  toolCallId: string;
-  message: string;
-  sessionKey?: string;
-  sourceReplySessionKey?: string;
-  sourceReplyFinal?: boolean;
-  context?: GatewayRequestContext;
-}) {
-  const sessionKey = params.sessionKey ?? "agent:main:telegram:direct:chat-123";
-  return runMessageActionRequest(
-    {
-      channel: "telegram",
-      action: "send",
-      params: {
-        to: "chat-123",
-        message: params.message,
-      },
-      sessionKey,
-      sessionId: params.sessionId,
-      agentId: "main",
-      idempotencyKey: params.idempotencyKey,
-    },
-    {
-      internal: {
-        agentRuntimeIdentity: {
-          kind: "agentRuntime",
-          agentId: "main",
-          sessionKey,
-          messageActionContext: {
-            expiresAtMs: Date.now() + 60_000,
-            sessionId: params.sessionId,
-            sourceReplySessionKey: params.sourceReplySessionKey,
-            sourceReplyFinal: params.sourceReplyFinal ?? true,
-            sourceReplyToolCallId: params.toolCallId,
-            toolContext: {
-              currentChannelProvider: "telegram",
-              currentChannelId: "chat-123",
-              currentSourceTurnId: params.sourceTurnId,
-            },
-          },
-        },
-      },
-    },
-    params.context,
-  );
-}
-
 async function expectRejectedSend(params: Record<string, unknown>, message: string) {
   const { respond } = await runSend({
     to: "channel:C1",
@@ -323,38 +267,6 @@ async function expectRejectedSend(params: Record<string, unknown>, message: stri
   return response;
 }
 
-function createLiveTurn(sessionKey: string, runId: string) {
-  const operationalRunInstance = createOperationalRunInstanceRef(runId);
-  const delegatedAuthority = claimAgentRunDelegatedAuthority(operationalRunInstance);
-  const turnCapability = mintMessageActionTurnCapability({ agentId: "main", runId, sessionKey });
-  return {
-    turnCapability,
-    client: {
-      internal: {
-        agentRuntimeIdentity: {
-          kind: "agentRuntime" as const,
-          agentId: "main",
-          sessionKey,
-          operationalRunInstance,
-          delegatedAuthority: { kind: "local" as const, ...delegatedAuthority },
-          messageActionContext: {
-            ...messageActionContextFromSessionKeyForTests(sessionKey),
-            turnCapability,
-          },
-        },
-      },
-    },
-    context: {
-      ...makeContext(),
-      validateAgentRuntimeApprovalAuthority: createAgentRuntimeApprovalAuthorityValidator(),
-    },
-    dispose() {
-      revokeMessageActionTurnCapability(turnCapability);
-      releaseAgentRunDelegatedAuthority(delegatedAuthority);
-    },
-  };
-}
-
 function fixedStoreContext(): GatewayRequestContext {
   return {
     ...makeContext(),
@@ -362,7 +274,7 @@ function fixedStoreContext(): GatewayRequestContext {
       session: { store: "/tmp/shared-sessions.sqlite", scope: "global" },
       agents: {
         ownership: "explicit",
-        list: [{ id: "ops" }, { id: "research" }],
+        entries: { ops: {}, research: {} },
         defaults: { sessionStore: { agentId: "ops" } },
       },
     }),
@@ -404,7 +316,7 @@ describe("gateway send mirroring", () => {
       canonicalKey: sessionKey,
       entry: undefined,
     }));
-    mocks.resolveOutboundTarget.mockReturnValue({ ok: true, to: "resolved" });
+    mocks.resolveOutboundTarget.mockResolvedValue({ ok: true, to: "resolved" });
     mocks.resolveOutboundSessionRoute.mockImplementation(
       async ({ agentId, channel }: { agentId?: string; channel?: string }) => ({
         sessionKey:
@@ -937,7 +849,10 @@ describe("gateway send mirroring", () => {
       },
     );
     const sessionKey = "agent:main:slack:channel:C1";
-    const turn = createLiveTurn(sessionKey, "read-turn-revocation");
+    const { client, context, turnCapability, close } = createMessageActionTurnClientForTests({
+      sessionKey,
+      runId: "read-turn-revocation",
+    });
     try {
       const request = runMessageActionRequest(
         {
@@ -947,11 +862,11 @@ describe("gateway send mirroring", () => {
           sessionKey,
           idempotencyKey: "read-turn-revocation",
         },
-        turn.client,
-        turn.context,
+        client,
+        context,
       );
       await entered.promise;
-      revokeMessageActionTurnCapability(turn.turnCapability);
+      revokeMessageActionTurnCapability(turnCapability);
       resume.resolve(null);
       const { respond } = await request;
       expect(firstRespondCall(respond)[0]).toBe(false);
@@ -959,9 +874,11 @@ describe("gateway send mirroring", () => {
       expect(providerRequest).not.toHaveBeenCalled();
     } finally {
       resume.resolve(null);
-      turn.dispose();
+      close();
     }
   });
+
+  registerSendDeliveryAttemptTests({ mocks, invokeGatewayMessageMethod, mockDeliverySuccess });
 
   it("does not send after turn capability closes while delegated authority remains active", async () => {
     const enteredDelivery = createDeferred<null>();
@@ -977,7 +894,15 @@ describe("gateway send mirroring", () => {
       },
     );
     const sessionKey = "agent:main:slack:channel:C1";
-    const turn = createLiveTurn(sessionKey, "run-turn-capability-race");
+    const {
+      client,
+      context,
+      turnCapability: messageActionTurnCapability,
+      close,
+    } = createMessageActionTurnClientForTests({
+      sessionKey,
+      runId: "run-turn-capability-race",
+    });
 
     try {
       const request = runSendWithClient(
@@ -988,11 +913,11 @@ describe("gateway send mirroring", () => {
           sessionKey,
           idempotencyKey: "idem-send-turn-capability-race",
         },
-        turn.client,
-        turn.context,
+        client,
+        context,
       );
       await enteredDelivery.promise;
-      expect(revokeMessageActionTurnCapability(turn.turnCapability)).toBe(true);
+      expect(revokeMessageActionTurnCapability(messageActionTurnCapability)).toBe(true);
       resumeDelivery.resolve(null);
 
       const { respond } = await request;
@@ -1000,7 +925,7 @@ describe("gateway send mirroring", () => {
       expect(firstRespondCall(respond)[2]?.message).toContain("authority is no longer active");
       expect(platformSend).not.toHaveBeenCalled();
     } finally {
-      turn.dispose();
+      close();
     }
   });
 
@@ -1185,13 +1110,6 @@ describe("gateway send mirroring", () => {
       { channel: "definitely-not-a-real-channel-xyz" },
       "unsupported channel: definitely-not-a-real-channel-xyz",
     );
-  });
-
-  it("returns invalid request when send channel selection is ambiguous", async () => {
-    mocks.resolveMessageChannelSelection.mockRejectedValueOnce(
-      new Error("Channel is required when multiple channels are configured: telegram, slack"),
-    );
-    await expectRejectedSend({}, "Channel is required");
   });
 
   it("includes optional poll delivery identifiers in the gateway payload", async () => {
@@ -1385,7 +1303,7 @@ describe("gateway send mirroring", () => {
       null,
       {
         ...makeContext(),
-        getRuntimeConfig: () => ({ agents: { list: [{ id: "main" }, { id: "work" }] } }),
+        getRuntimeConfig: () => ({ agents: { entries: { main: {}, work: {} } } }),
       } as GatewayRequestContext,
     );
 
@@ -1396,68 +1314,15 @@ describe("gateway send mirroring", () => {
     expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();
   });
 
-  it("updates mirror session keys and delivery thread ids when Slack routing derives a thread", async () => {
-    registerMessageThreadAddressingPlugin("slack");
-    mockDeliverySuccess("m-thread-derived");
-    mocks.getChannelPlugin.mockReturnValueOnce(undefined);
-    mocks.resolveOutboundSessionRoute.mockResolvedValueOnce({
-      sessionKey: "agent:main:slack:channel:c1:thread:1710000000.9999",
-      baseSessionKey: "agent:main:slack:channel:c1",
-      peer: { kind: "channel", id: "c1" },
-      chatType: "channel",
-      from: "slack:channel:C1",
-      to: "channel:C1",
-      threadId: "1710000000.9999",
-    });
-
-    await runSend({
-      to: "channel:C1",
-      message: "threaded",
-      channel: "slack",
-      sessionKey: "agent:main:slack:channel:c1",
-      idempotencyKey: "idem-thread-derived",
-    });
-
-    expect(ensureSessionEntryCall()?.route?.sessionKey).toBe(
-      "agent:main:slack:channel:c1:thread:1710000000.9999",
-    );
-    expect(ensureSessionEntryCall()?.route?.baseSessionKey).toBe("agent:main:slack:channel:c1");
-    expect(ensureSessionEntryCall()?.route?.threadId).toBe("1710000000.9999");
-    expect(deliveryCall()?.threadId).toBe("1710000000.9999");
-    expect(deliveryCall()?.mirror?.sessionKey).toBe(
-      "agent:main:slack:channel:c1:thread:1710000000.9999",
-    );
-  });
-
-  it("preserves the provided session when Slack derives a thread for a different base session", async () => {
-    registerMessageThreadAddressingPlugin("slack");
-    mockDeliverySuccess("m-thread-mismatch");
-    mocks.resolveOutboundSessionRoute.mockResolvedValueOnce({
-      sessionKey: "agent:main:slack:channel:c2:thread:1710000000.9999",
-      baseSessionKey: "agent:main:slack:channel:c2",
-      peer: { kind: "channel", id: "c2" },
-      chatType: "channel",
-      from: "slack:channel:C2",
-      to: "channel:C2",
-      threadId: "1710000000.9999",
-    });
-
-    await runSend({
-      to: "channel:C2",
-      message: "threaded",
-      channel: "slack",
-      sessionKey: "agent:main:slack:channel:c1",
-      threadId: "1710000000.9999",
-      idempotencyKey: "idem-thread-mismatch",
-    });
-
-    expect(deliveryCall()?.threadId).toBe("1710000000.9999");
-    expect(deliveryCall()?.session?.key).toBe("agent:main:slack:channel:c1");
-    expect(deliveryCall()?.mirror?.sessionKey).toBe("agent:main:slack:channel:c1");
+  registerSendSessionRoutingTests({
+    mocks,
+    runSend,
+    mockDeliverySuccess,
+    registerMessageThreadAddressingPlugin,
   });
 
   it("returns invalid request when outbound target resolution fails", async () => {
-    mocks.resolveOutboundTarget.mockReturnValue({
+    mocks.resolveOutboundTarget.mockResolvedValue({
       ok: false,
       error: new Error("target not found"),
     });
@@ -1970,9 +1835,9 @@ describe("gateway send mirroring", () => {
         `send-test-canonical-${registrySeq}`,
       );
       mocks.resolveMessageChannelSelection.mockResolvedValue({ channel: "twitch", plugin });
-      mocks.resolveOutboundTarget.mockImplementation((target) =>
+      mocks.resolveOutboundTarget.mockImplementation(async (target) =>
         expectDefined(
-          resolveOutboundTargetWithPlugin({ plugin, target }),
+          await resolveOutboundTargetWithPlugin({ plugin, target }),
           "registered plugin resolves outbound targets",
         ),
       );
@@ -2151,7 +2016,7 @@ describe("gateway send mirroring", () => {
       {
         ...makeContext(),
         getRuntimeConfig: () => ({
-          agents: { list: [{ id: "main" }, { id: "work" }] },
+          agents: { entries: { main: {}, work: {} } },
           tools: { allow: ["read"] },
         }),
       } as GatewayRequestContext,
@@ -2218,7 +2083,7 @@ describe("gateway send mirroring", () => {
           {
             ...makeContext(),
             getRuntimeConfig: () => ({
-              agents: { list: [{ id: "main" }, { id: "work" }] },
+              agents: { entries: { main: {}, work: {} } },
               tools: {
                 allow: ["read"],
                 toolsBySender: { "username:blocked-user": { deny: ["read"] } },

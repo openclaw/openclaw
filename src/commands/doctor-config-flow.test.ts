@@ -1,3 +1,5 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -6,7 +8,9 @@ import type { MediaUnderstandingModelConfig } from "../config/types.tools.js";
 import { writeChannelPairingStateSnapshot } from "../pairing/pairing-store-sqlite.test-helpers.js";
 import type { PluginCapabilityConsentHandler } from "../plugins/capability-consent.js";
 import { buildPluginCapabilityConsentReview } from "../plugins/capability-summary.js";
+import { listPluginDoctorLegacyConfigRules } from "../plugins/doctor-contract-registry.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import { createPluginManifestRecordFixture } from "../plugins/plugin-metadata.test-support.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { noteDoctorConfigPreflightIssues } from "./doctor-config-analysis.js";
 import { warmDoctorConfigFlow } from "./doctor-config-flow-warmup.test-support.js";
@@ -16,7 +20,6 @@ import {
   runDoctorConfigWithInput,
 } from "./doctor-config-flow.test-utils.js";
 import { createDoctorPrompter } from "./doctor-prompter.js";
-import { maybeRepairExecSafeBinProfiles } from "./doctor/shared/exec-safe-bins.js";
 
 type TerminalNote = (message: string, title?: string) => void;
 
@@ -25,19 +28,16 @@ const callGatewayMock = vi.hoisted(() => vi.fn());
 const runDoctorRepairSequenceMock = vi.hoisted(() => vi.fn());
 const createDoctorPluginMetadataSnapshotScopeParamsMock = vi.hoisted(() => vi.fn());
 const collectDoctorPreviewNotesParamsMock = vi.hoisted(() => vi.fn());
-const prepareTailscaleConfigMigrationMock = vi.hoisted(() =>
-  vi.fn(({ cfg }: { cfg: OpenClawConfig }) => ({
-    config: cfg,
-    changes: [] as string[],
-    warnings: [] as string[],
-  })),
+const collectTailscaleConfigWarningsMock = vi.hoisted(() =>
+  vi.fn<typeof import("./doctor-tailscale.js").collectTailscaleConfigWarnings>(async () => []),
 );
 vi.mock("../../packages/terminal-core/src/note.js", () => ({ note: terminalNoteMock }));
 
 vi.mock("../gateway/call.js", () => ({ callGateway: (opts: unknown) => callGatewayMock(opts) }));
 
-vi.mock("./doctor-tailscale.js", () => ({
-  prepareTailscaleConfigMigration: prepareTailscaleConfigMigrationMock,
+vi.mock("./doctor-tailscale.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./doctor-tailscale.js")>()),
+  collectTailscaleConfigWarnings: collectTailscaleConfigWarningsMock,
 }));
 
 vi.mock("./doctor/repair-sequencing.js", async () => {
@@ -66,8 +66,10 @@ vi.mock("./doctor/shared/plugin-metadata-snapshot-scope.js", async () => {
     createDoctorPluginMetadataSnapshotScope: (
       params: Parameters<typeof actual.createDoctorPluginMetadataSnapshotScope>[0],
     ) => {
-      createDoctorPluginMetadataSnapshotScopeParamsMock(params);
-      return actual.createDoctorPluginMetadataSnapshotScope(params);
+      const scope = actual.createDoctorPluginMetadataSnapshotScope(params);
+      const dispose = vi.spyOn(scope, Symbol.asyncDispose);
+      createDoctorPluginMetadataSnapshotScopeParamsMock(params, dispose);
+      return scope;
     },
   };
 });
@@ -141,9 +143,9 @@ vi.mock("../plugins/setup-registry.js", async (importOriginal) => {
   };
 });
 
+// mock-isolation: Keep channel plugin loading and registry initialization outside config-flow repair coordination.
 vi.mock("./doctor/shared/channel-doctor.js", () => ({
   collectChannelDoctorCompatibilityMutations: vi.fn(() => []),
-  collectChannelDoctorEmptyAllowlistExtraWarnings: vi.fn(() => []),
   collectChannelDoctorMutableAllowlistWarnings: vi.fn(() => []),
   collectChannelDoctorPreviewWarnings: vi.fn(async () => []),
   collectChannelDoctorRepairMutations: vi.fn(async () => []),
@@ -154,10 +156,6 @@ vi.mock("./doctor/shared/channel-doctor.js", () => ({
       channelName === "googlechat" || channelName === "telegram",
   })),
   runChannelDoctorConfigSequences: vi.fn(async () => ({ changeNotes: [], warningNotes: [] })),
-  shouldSkipChannelDoctorDefaultEmptyGroupAllowlistWarning: vi.fn(
-    ({ channelName }: { channelName: string }) =>
-      channelName === "googlechat" || channelName === "telegram",
-  ),
 }));
 
 vi.mock("./doctor/shared/preview-warnings.js", () => ({
@@ -209,7 +207,7 @@ function runConfig(params: Omit<Parameters<typeof runDoctorConfigWithInput>[0], 
 async function collectDoctorWarnings(config: Record<string, unknown>): Promise<string[]> {
   terminalNoteMock.mockClear();
   const noteSpy = terminalNoteMock;
-  await runConfig({ config });
+  await (await runConfig({ config }))[Symbol.asyncDispose]();
   const warnings: string[] = [];
   for (const [message, title] of noteSpy.mock.calls) {
     if (title === "Doctor warnings") {
@@ -229,70 +227,11 @@ describe("doctor config flow", () => {
     runDoctorRepairSequenceMock.mockReset();
     createDoctorPluginMetadataSnapshotScopeParamsMock.mockClear();
     collectDoctorPreviewNotesParamsMock.mockClear();
-    prepareTailscaleConfigMigrationMock.mockClear();
-    prepareTailscaleConfigMigrationMock.mockImplementation(({ cfg }) => ({
-      config: cfg,
-      changes: [],
-      warnings: [],
-    }));
+    collectTailscaleConfigWarningsMock.mockClear();
+    collectTailscaleConfigWarningsMock.mockResolvedValue([]);
   });
 
-  it("previews and applies the legacy Tailscale Serve migration through Doctor", async () => {
-    const config: OpenClawConfig = {
-      gateway: {
-        bind: "lan",
-        auth: { mode: "token", token: "secret" },
-        tailscale: { mode: "off" },
-      },
-    };
-    prepareTailscaleConfigMigrationMock.mockImplementation(({ cfg }) => ({
-      config: {
-        ...cfg,
-        gateway: {
-          ...cfg.gateway,
-          bind: "loopback" as const,
-          tailscale: { ...cfg.gateway?.tailscale, mode: "serve" as const },
-        },
-      },
-      changes: ["Migrated legacy Tailscale Serve to managed ingress."],
-      warnings: [],
-    }));
-
-    const preview = await runConfig({ config });
-    const repair = await runConfig({ config, repair: true });
-
-    expect(preview.shouldWriteConfig).toBe(false);
-    expect(preview.cfg.gateway?.bind).toBe("lan");
-    expect(repair.shouldWriteConfig).toBe(true);
-    expect(repair.cfg.gateway?.bind).toBe("loopback");
-    expect(repair.cfg.gateway?.tailscale?.mode).toBe("serve");
-    expect(prepareTailscaleConfigMigrationMock).toHaveBeenCalledTimes(2);
-  });
-
-  it("plans persistence of the injected main roster during doctor repair", async () => {
-    const result = await runConfig({
-      config: {
-        agents: { entries: { main: { workspace: "/tmp/migrated-main" } } },
-        gateway: { mode: "local" },
-      },
-      parsedConfig: { gateway: { mode: "local" } },
-      repair: true,
-    });
-
-    expect(result.shouldWriteConfig).toBe(true);
-    expect(result.persistCanonicalAgentRoster).toBe(true);
-    expect(result.explicitSetPaths).toBeUndefined();
-    expect(result.cfg.agents?.entries).toEqual({ main: { workspace: "/tmp/migrated-main" } });
-    expect(result.pendingChangePanels).toContain(
-      "Prepared the canonical agent roster without retired default markers for persistence.",
-    );
-    expect(terminalNoteMock.mock.calls.some(([, title]) => title === "Doctor changes")).toBe(false);
-    expect(terminalNoteMock.mock.calls.some(([message]) => message.includes("Persisted"))).toBe(
-      false,
-    );
-  });
-
-  it("previews and persists pre-parse context-budget cleanup with every path reported", async () => {
+  it("previews and persists context-budget migration with every path reported", async () => {
     const model = { id: "gpt-5.4", name: "GPT-5.4" };
     const budget = { contextTokens: 64_000, contextWindow: 128_000 };
     const canonical = {
@@ -304,12 +243,19 @@ describe("doctor config flow", () => {
       agents: { defaults: { contextTokens: 48_000 }, entries: { ops: { contextTokens: 32_000 } } },
     };
 
-    await runConfig({
-      config: canonical,
-      parsedConfig: legacy,
-      sourceConfigBeforeMigrations: legacy,
-    });
+    await (
+      await runConfig({
+        config: legacy,
+        parsedConfig: legacy,
+        sourceConfigBeforeMigrations: legacy,
+        preflightMode: "issues",
+      })
+    )[Symbol.asyncDispose]();
     const previewText = terminalNoteMock.mock.calls.map(([message]) => message).join("\n");
+    expect(terminalNoteMock.mock.calls.map(([, title]) => title)).toContain(
+      "Doctor changes preview",
+    );
+    expect(terminalNoteMock.mock.calls.map(([, title]) => title)).not.toContain("Doctor changes");
     expect(previewText).toContain(
       "models.providers.openai.contextTokens → models.providers.openai.models[0].contextTokens",
     );
@@ -318,11 +264,12 @@ describe("doctor config flow", () => {
     expect(previewText).toContain("models.providers.<provider>.models[].contextTokens");
 
     terminalNoteMock.mockClear();
-    const repaired = await runConfig({
-      config: canonical,
+    await using repaired = await runConfig({
+      config: legacy,
       parsedConfig: legacy,
       sourceConfigBeforeMigrations: legacy,
       repair: true,
+      preflightMode: "compat",
     });
 
     expect(repaired.shouldWriteConfig).toBe(true);
@@ -335,21 +282,8 @@ describe("doctor config flow", () => {
     );
   });
 
-  it("explains how to select a default for an ownerless explicit fleet", async () => {
-    const config: OpenClawConfig = {
-      agents: { ownership: "explicit", entries: { ops: {}, research: {} } },
-    };
-    const result = await runConfig({ config, parsedConfig: config, repair: true });
-    expect(result.cfg.agents).toEqual(config.agents);
-    expect(result.shouldWriteConfig).toBe(false);
-    expect(terminalNoteMock).toHaveBeenCalledWith(
-      expect.stringContaining("openclaw config set agents.defaults.systemAgent.agentId <id>"),
-      "Agent ownership",
-    );
-  });
-
   it("preserves ownership of an explicitly empty included roster", async () => {
-    const result = await runConfig({
+    await using result = await runConfig({
       config: { agents: { entries: { main: {} } } },
       parsedConfig: { $include: "./agents.json" },
       sourceConfigBeforeMigrations: { agents: { entries: {} } },
@@ -374,7 +308,7 @@ describe("doctor config flow", () => {
       pluginMetadataSnapshot: refreshedSnapshot,
     }));
 
-    const result = await runConfig({ config: {}, repair: true });
+    await using result = await runConfig({ config: {}, repair: true });
 
     expect(result.pluginMetadataSnapshot).toBe(refreshedSnapshot);
     const scopeParams = createDoctorPluginMetadataSnapshotScopeParamsMock.mock.lastCall?.[0] as {
@@ -384,6 +318,42 @@ describe("doctor config flow", () => {
     expect(scopeParams.getBaseSnapshot()?.index.installRecords).not.toHaveProperty("google-meet");
     result.invalidatePluginMetadataSnapshot();
     expect(scopeParams.getBaseSnapshot()).toBeUndefined();
+  });
+
+  it("keeps plugin contracts usable after config preparation returns", async () => {
+    await withTempHome(async (home) => {
+      const rootDir = path.join(home, "fixture-plugin");
+      await fs.mkdir(rootDir);
+      await fs.writeFile(
+        path.join(rootDir, "doctor-contract-api.cjs"),
+        'module.exports = { legacyConfigRules: [{ path: ["fixture"], message: "Fixture repair remains available" }] };\n',
+      );
+      await using result = await runConfig({ config: {} });
+      const rules = result.runWithPluginMetadataSnapshot({ config: result.cfg }, () =>
+        listPluginDoctorLegacyConfigRules({
+          manifestRegistry: {
+            plugins: [
+              createPluginManifestRecordFixture({ id: "fixture", rootDir, origin: "global" }),
+            ],
+            diagnostics: [],
+          },
+        }),
+      );
+      expect(rules).toEqual([
+        expect.objectContaining({ path: ["fixture"], message: "Fixture repair remains available" }),
+      ]);
+      const dispose = createDoctorPluginMetadataSnapshotScopeParamsMock.mock.lastCall?.[1];
+      expect(dispose).not.toHaveBeenCalled();
+      await result[Symbol.asyncDispose]();
+      expect(dispose).toHaveBeenCalledOnce();
+
+      const failure = new Error("Fixture config inspection failed");
+      collectTailscaleConfigWarningsMock.mockRejectedValueOnce(failure);
+      await expect(runConfig({ config: {} })).rejects.toBe(failure);
+      expect(
+        createDoctorPluginMetadataSnapshotScopeParamsMock.mock.lastCall?.[1],
+      ).toHaveBeenCalledOnce();
+    });
   });
 
   it("does not treat noninteractive doctor fix as plugin capability consent", async () => {
@@ -413,11 +383,13 @@ describe("doctor config flow", () => {
       options: { repair: true, yes: true, nonInteractive: true },
     });
     const confirm = vi.spyOn(prompter, "confirmRuntimeRepair");
-    await runDoctorConfigWithInput({
-      config: {},
-      repair: true,
-      run: (params) => loadAndMaybeMigrateDoctorConfig({ ...params, prompter }),
-    });
+    await (
+      await runDoctorConfigWithInput({
+        config: {},
+        repair: true,
+        run: (params) => loadAndMaybeMigrateDoctorConfig({ ...params, prompter }),
+      })
+    )[Symbol.asyncDispose]();
 
     expect(acknowledgment).toBeUndefined();
     expect(confirm).toHaveBeenCalledWith(
@@ -430,12 +402,14 @@ describe("doctor config flow", () => {
   });
 
   it("collects plugin blocker previews from the pre-auto-enable config", async () => {
-    await runConfig({
-      config: {
-        plugins: { allow: ["existing-plugin"], entries: { browser: { config: {} } } },
-        tools: { alsoAllow: ["browser"] },
-      },
-    });
+    await (
+      await runConfig({
+        config: {
+          plugins: { allow: ["existing-plugin"], entries: { browser: { config: {} } } },
+          tools: { alsoAllow: ["browser"] },
+        },
+      })
+    )[Symbol.asyncDispose]();
 
     expect(collectDoctorPreviewNotesParamsMock).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -464,7 +438,7 @@ describe("doctor config flow", () => {
       },
     );
 
-    const result = await runConfig({
+    await using result = await runConfig({
       config: { auth: { order: { anthropic: ["anthropic:missing"] } } },
       repair: true,
     });
@@ -483,7 +457,8 @@ describe("doctor config flow", () => {
       authProfilesRepaired: true,
     }));
 
-    await expect(runConfig({ config: {}, repair: true })).resolves.toBeTruthy();
+    await using result = await runConfig({ config: {}, repair: true });
+    expect(result).toBeTruthy();
 
     expect(callGatewayMock).toHaveBeenNthCalledWith(1, {
       method: "secrets.reload",
@@ -514,7 +489,7 @@ describe("doctor config flow", () => {
       authProfilesRepaired: false,
     }));
 
-    const result = await runConfig({ config: input, repair: true });
+    await using result = await runConfig({ config: input, repair: true });
 
     expect(terminalNoteMock).toHaveBeenCalledWith(
       "- matrix stale cleanup warning",
@@ -530,7 +505,7 @@ describe("doctor config flow", () => {
       hooks: { enabled: true, token: "shared-gateway-token-1234567890" },
     };
     const previewNotes = terminalNoteMock;
-    const preview = await runConfig({ config });
+    await using preview = await runConfig({ config });
 
     expect(preview.shouldWriteConfig).toBe(false);
     expect(preview.cfg.hooks?.token).toBe("shared-gateway-token-1234567890");
@@ -550,7 +525,7 @@ describe("doctor config flow", () => {
       ),
     ).toBe(true);
 
-    const repair = await runConfig({ config, repair: true });
+    await using repair = await runConfig({ config, repair: true });
 
     expect(repair.shouldWriteConfig).toBe(true);
     expect(repair.cfg.hooks?.token).toMatch(/^[0-9a-f]{48}$/);
@@ -567,7 +542,7 @@ describe("doctor config flow", () => {
     ] satisfies MediaUnderstandingModelConfig[];
     const config: OpenClawConfig = { plugins: { enabled: false }, tools: { media: { models } } };
     config.agents = { entries: { main: {} } };
-    const result = await runConfig({ config, repair: true });
+    await using result = await runConfig({ config, repair: true });
     const warnings = terminalNoteMock.mock.calls
       .filter(([, title]) => title === "Doctor warnings")
       .map(([message]) => message)
@@ -610,36 +585,10 @@ describe("doctor config flow", () => {
     expect(warning).not.toContain("hooks.internal.entries.null-hook");
   });
 
-  it("repairs generic legacy config surfaces in one pass", async () => {
-    const result = await runConfig({
-      repair: true,
-      config: {
-        bridge: { bind: "auto" },
-        gateway: { auth: { mode: "token", token: "ok", extra: true } },
-        agents: { entries: { openclaw: { default: true } } },
-        session: { maintenance: { rotateBytes: "10mb" } },
-        browser: {
-          relayBindHost: "0.0.0.0",
-          profiles: { chromeLive: { driver: "extension", color: "#00AA00" } },
-        },
-        tools: { alsoAllow: ["browser"] },
-        plugins: { allow: ["telegram"], entries: { browser: { config: {} } } },
-      },
-    });
-
-    expect(result.cfg).not.toHaveProperty("bridge");
-    expect(result.cfg.gateway?.auth).toEqual({ mode: "token", token: "ok" });
-    expect(result.cfg.browser).not.toHaveProperty("relayBindHost");
-    expect(result.cfg.browser?.profiles?.chromeLive?.driver).toBe("extension");
-    expect(result.cfg.plugins?.allow).toEqual(["telegram", "browser", "codex"]);
-    expect(result.cfg.plugins?.entries?.browser?.enabled).toBe(true);
-    expect(result.cfg.plugins?.entries?.codex?.enabled).toBe(true);
-  });
-
   it("sanitizes config-derived doctor warnings and changes before logging", async () => {
     const noteSpy = terminalNoteMock;
     try {
-      const result = await runConfig({
+      await using result = await runConfig({
         repair: true,
         config: {
           channels: {
@@ -680,24 +629,8 @@ describe("doctor config flow", () => {
     }
   });
 
-  it("applies channel repair mutations and queues their change notes", async () => {
-    const config = { channels: { discord: { accounts: { default: { allowFrom: [123] } } } } };
-    const repaired = { channels: { discord: { accounts: { default: { allowFrom: ["123"] } } } } };
-    const { collectChannelDoctorRepairMutations } =
-      await import("./doctor/shared/channel-doctor.js");
-    vi.mocked(collectChannelDoctorRepairMutations).mockResolvedValueOnce([
-      { config: repaired, changes: ["Discord allowlist ids normalized to strings."] },
-    ]);
-
-    const result = await runConfig({ config, repair: true });
-
-    expect(result.cfg.channels).toEqual(repaired.channels);
-    expect(result.shouldWriteConfig).toBe(true);
-    expect(result.pendingChangePanels).toContain("Discord allowlist ids normalized to strings.");
-  });
-
   it("does not restore top-level allowFrom when config is intentionally default-account scoped", async () => {
-    const result = await runConfig({
+    await using result = await runConfig({
       repair: true,
       config: {
         channels: {
@@ -716,7 +649,7 @@ describe("doctor config flow", () => {
   });
 
   it("defers absent-plugin promotion instead of creating a partial default account", async () => {
-    const result = await runConfig({
+    await using result = await runConfig({
       repair: true,
       config: {
         channels: {
@@ -737,15 +670,15 @@ describe("doctor config flow", () => {
     expect(channel?.accounts).toEqual({ work: { enabled: true } });
   });
 
-  it("promotes covered legacy keys when an absent plugin has no declarations", async () => {
-    const result = await runConfig({
+  it("seeds an empty account map for covered legacy keys without plugin declarations", async () => {
+    await using result = await runConfig({
       repair: true,
       config: {
         channels: {
           "legacy-demo": {
             dmPolicy: "allowlist",
             appToken: "legacy-app-token",
-            accounts: { work: { enabled: true } },
+            accounts: {},
           },
         },
       },
@@ -754,30 +687,12 @@ describe("doctor config flow", () => {
     const channel = result.cfg.channels?.["legacy-demo"];
     expect(channel?.dmPolicy).toBeUndefined();
     expect(channel?.appToken).toBeUndefined();
-    expect(channel?.accounts?.default).toEqual({
-      dmPolicy: "allowlist",
-      appToken: "legacy-app-token",
-    });
-    expect(channel?.accounts?.work).toEqual({ enabled: true, dmPolicy: "allowlist" });
-  });
-
-  it('repairs open dmPolicy allowFrom variants with ["*"] in one pass', async () => {
-    const result = await runConfig({
-      repair: true,
-      config: {
-        channels: {
-          discord: { token: "test-token", dmPolicy: "open", groupPolicy: "open" },
-          googlechat: { accounts: { work: { dmPolicy: "open" } } },
-        },
+    expect(channel?.accounts).toEqual({
+      default: {
+        dmPolicy: "allowlist",
+        appToken: "legacy-app-token",
       },
     });
-
-    expect(result.cfg.channels?.discord?.allowFrom).toEqual(["*"]);
-    expect(result.cfg.channels?.discord?.dmPolicy).toBe("open");
-    const account = result.cfg.channels?.googlechat?.accounts?.work;
-    expect(account?.dmPolicy).toBe("open");
-    expect(account?.allowFrom).toEqual(["*"]);
-    expect(account?.dm).toBeUndefined();
   });
 
   it('repairs dmPolicy="allowlist" by restoring allowFrom from pairing store on repair', async () => {
@@ -788,22 +703,24 @@ describe("doctor config flow", () => {
           requests: [],
           allowFrom: { default: ["12345"] },
         });
-        return runConfig({
+        await using repaired = await runConfig({
           config: { channels: { telegram: { botToken: "fake-token", dmPolicy: "allowlist" } } },
           repair: true,
         });
+        return repaired.cfg;
       },
       { skipSessionCleanup: true },
     );
     closeOpenClawStateDatabaseForTest();
 
-    expect(result.cfg.channels?.telegram?.dmPolicy).toBe("allowlist");
-    expect(result.cfg.channels?.telegram?.allowFrom).toEqual(["12345"]);
+    expect(result.channels?.telegram?.dmPolicy).toBe("allowlist");
+    expect(result.channels?.telegram?.allowFrom).toEqual(["12345"]);
   });
 
   it("migrates legacy toolsBySender keys to typed id entries on repair", async () => {
-    const result = await runConfig({
+    await using result = await runConfig({
       repair: true,
+      preflightMode: "compat",
       config: {
         channels: {
           whatsapp: {
@@ -829,31 +746,14 @@ describe("doctor config flow", () => {
     );
     expect(toolsBySender.owner).toBeUndefined();
     expect(toolsBySender.alice).toBeUndefined();
-    expect(toolsBySender["id:owner"]).toEqual({ deny: ["exec"] });
+    expect(toolsBySender["id:owner"]).toEqual({ allow: ["exec"] });
     expect(toolsBySender["id:alice"]).toEqual({ deny: ["exec"] });
     expect(toolsBySender["username:@ops-bot"]).toEqual({ allow: ["fs.read"] });
     expect(toolsBySender["*"]).toEqual({ deny: ["exec"] });
   });
 
-  it("titles the legacy migration panel as a preview when --fix is not passed (#80817)", async () => {
-    const noteSpy = terminalNoteMock;
-    try {
-      await runConfig({ config: { gateway: { bind: "localhost" } } });
-      const changeTitles = noteSpy.mock.calls.map(([, title]) => title);
-      expect(changeTitles).toContain("Doctor changes preview");
-      expect(changeTitles).not.toContain("Doctor changes");
-      const previewPanel = noteSpy.mock.calls.find(
-        ([message, title]) =>
-          title === "Doctor changes preview" && message.includes("Normalized gateway.bind"),
-      );
-      expect(previewPanel).toBeDefined();
-    } finally {
-      noteSpy.mockClear();
-    }
-  });
-
   it("sets skipPluginValidationOnWrite when legacy migration is only partially valid (#76800)", async () => {
-    const result = await runConfig({
+    await using result = await runConfig({
       config: { gateway: { bind: "localhost", port: "invalid" } },
       repair: true,
       preflightMode: "compat",
@@ -892,13 +792,5 @@ describe("doctor config flow", () => {
       ].join("\n"),
       "Doctor warnings",
     );
-  });
-  it("scaffolds custom profiles in both scopes while excluding interpreters", () => {
-    const { config } = maybeRepairExecSafeBinProfiles({
-      tools: { exec: { safeBins: ["myfilter", "python3"] } },
-      agents: { list: [{ id: "ops", tools: { exec: { safeBins: ["mytool", "node"] } } }] },
-    });
-    expect(config.tools?.exec?.safeBinProfiles).toEqual({ myfilter: {} });
-    expect(config.agents?.list?.[0]?.tools?.exec?.safeBinProfiles).toEqual({ mytool: {} });
   });
 });

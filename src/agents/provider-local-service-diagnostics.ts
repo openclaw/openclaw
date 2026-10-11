@@ -1,4 +1,5 @@
 import { isSensitiveFieldKey, redactSensitiveText } from "../logging/redact.js";
+import { truncateUtf8Suffix } from "../utils/utf8-truncate.js";
 
 const LOCAL_SERVICE_OUTPUT_TAIL_MAX_BYTES = 8 * 1024;
 
@@ -42,19 +43,7 @@ export function appendLocalServiceOutputTail(
       redacted = redacted.replaceAll(value, "[redacted]");
     }
   }
-  const bytes = Buffer.from(redacted);
-  if (bytes.byteLength <= LOCAL_SERVICE_OUTPUT_TAIL_MAX_BYTES) {
-    return redacted;
-  }
-  let start = bytes.byteLength - LOCAL_SERVICE_OUTPUT_TAIL_MAX_BYTES;
-  while (start < bytes.byteLength) {
-    const byte = bytes.at(start);
-    if (byte === undefined || (byte & 0xc0) !== 0x80) {
-      break;
-    }
-    start += 1;
-  }
-  return bytes.subarray(start).toString("utf8");
+  return truncateUtf8Suffix(redacted, LOCAL_SERVICE_OUTPUT_TAIL_MAX_BYTES);
 }
 
 export function formatLocalServiceDiagnosticTail(diagnostics: LocalServiceDiagnostics): string {

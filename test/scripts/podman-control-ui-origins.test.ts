@@ -181,38 +181,28 @@ describe.each(["seed", "sync"] as const)("Podman %s Control UI origins", (operat
   });
 
   it.each([
-    ["[]", "expected top-level object"],
-    ['{"gateway":[]}', "expected gateway object"],
-    ['{"gateway":{"controlUi":[]}}', "expected gateway.controlUi object"],
-  ])("leaves invalid config %s unchanged and preserves CLI fallback", (input, error) => {
-    const fixture = runPodman(operation, input);
+    ["[]", "expected top-level object", true],
+    ['{"gateway":[]}', "expected gateway object", true],
+    ['{"gateway":{"controlUi":[]}}', "expected gateway.controlUi object", true],
+    ["{", "malformed", true],
+    ["{}", "no-python", false],
+  ] as const)("preserves config on %s failure (%s)", (input, error, python) => {
+    const fixture = runPodman(operation, input, python);
     expect(fixture.output).toBe(input);
     expect(fixture.mode).toBe(0o640);
-    expect(fixture.result.stderr).toBe(`${fixture.configPath}: ${error}\n`);
-    expect(fixture.calls.includes("config set gateway.controlUi.allowedOrigins")).toBe(
-      operation === "sync",
-    );
-  });
-
-  it("preserves malformed-JSON diagnostics and the existing file", () => {
-    const fixture = runPodman(operation, "{");
-    expect(fixture.output).toBe("{");
-    expect(fixture.mode).toBe(0o640);
-    expect(fixture.result.stderr).toBe(
-      `Warning: unable to ${operation} gateway.controlUi.allowedOrigins in ${fixture.configPath}: existing config is not strict JSON (Expecting property name enclosed in double quotes: line 1 column 2 (char 1)). Leaving file unchanged.\n`,
-    );
-    expect(fixture.calls.includes("config set gateway.controlUi.allowedOrigins")).toBe(
-      operation === "sync",
-    );
-  });
-
-  it("warns without changing config or invoking CLI fallback when Python is absent", () => {
-    const fixture = runPodman(operation, "{}", false);
-    expect(fixture.output).toBe("{}");
-    expect(fixture.mode).toBe(0o640);
-    expect(fixture.result.stderr).toBe(
-      `Warning: python3 not found; unable to ${operation} gateway.controlUi.allowedOrigins in ${fixture.configPath}.\n`,
-    );
-    expect(fixture.calls).not.toContain("config set");
+    const diagnostic =
+      error === "malformed"
+        ? `Warning: unable to ${operation} gateway.controlUi.allowedOrigins in ${fixture.configPath}: existing config is not strict JSON (Expecting property name enclosed in double quotes: line 1 column 2 (char 1)). Leaving file unchanged.\n`
+        : error === "no-python"
+          ? `Warning: python3 not found; unable to ${operation} gateway.controlUi.allowedOrigins in ${fixture.configPath}.\n`
+          : `${fixture.configPath}: ${error}\n`;
+    expect(fixture.result.stderr).toBe(diagnostic);
+    if (python) {
+      expect(fixture.calls.includes("config set gateway.controlUi.allowedOrigins")).toBe(
+        operation === "sync",
+      );
+    } else {
+      expect(fixture.calls).not.toContain("config set");
+    }
   });
 });

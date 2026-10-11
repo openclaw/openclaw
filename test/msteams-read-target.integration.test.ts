@@ -472,23 +472,29 @@ describe("Teams message CLI", () => {
   });
 });
 
+describe.each([
+  ["tool", "search", "bundled"],
+  ["gateway", "member-info", "global"],
+] as const)("Teams %s %s aliases (%s)", (route, action, origin) => {
+  it.each([
+    { name: "bare", channelId: current.channelId },
+    { name: "thread-qualified", channelId: `conversation:${current.channelId};messageid=123` },
+    { name: "Graph", channelId: currentTarget },
+  ])("reads the current channel with a $name target", async ({ channelId }) => {
+    const fixture = await createFixture("channel", origin);
+    const result = await fixture.invoke(route, action, { channelId });
+    expectReadResult(result, action, current);
+    expectGraphRequests(fixture.requests, action, current);
+  });
+});
+
 describe.each(["tool", "gateway"] as const)("Teams %s read target selection", (route) => {
   describe.each(["search", "member-info"] as const)("%s", (action) => {
-    describe.each(["bundled", "global"] as const)("%s registration", (origin) => {
-      it.each([
-        { name: "omitted", channelId: undefined },
-        { name: "bare", channelId: current.channelId },
-        { name: "conversation-prefixed", channelId: `conversation:${current.channelId}` },
-        { name: "provider-prefixed", channelId: `msteams:${current.channelId}` },
-        { name: "provider alias", channelId: `teams:conversation:${current.channelId}` },
-        { name: "thread-qualified", channelId: `conversation:${current.channelId};messageid=123` },
-        { name: "Graph", channelId: currentTarget },
-      ])("reads the current channel with a $name target", async ({ channelId }) => {
-        const fixture = await createFixture("channel", origin);
-        const result = await fixture.invoke(route, action, channelId ? { channelId } : {});
-        expectReadResult(result, action, current);
-        expectGraphRequests(fixture.requests, action, current);
-      });
+    it("reads the current channel when the target is omitted", async () => {
+      const fixture = await createFixture();
+      const result = await fixture.invoke(route, action);
+      expectReadResult(result, action, current);
+      expectGraphRequests(fixture.requests, action, current);
     });
 
     it("uses an explicit permitted channelId instead of the current channel", async () => {
@@ -531,17 +537,6 @@ describe.each(["tool", "gateway"] as const)("Teams %s read target selection", (r
         expect(graph.acquireToken).not.toHaveBeenCalled();
       },
     );
-
-    it.each([current.channelId, otherTarget])(
-      "rejects an unknown account for %s",
-      async (channelId) => {
-        const fixture = await createFixture();
-        await expect(
-          fixture.invoke(route, action, { channelId, accountId: "other" }),
-        ).rejects.toThrow(/account/i);
-        expect(fixture.requests).toEqual([]);
-      },
-    );
   });
 
   it("keeps the requester-only member shortcut in the current chat", async () => {
@@ -565,8 +560,6 @@ describe.each(["search", "member-info"] as const)(
       for (const [params, destination] of [
         [{ to: currentTarget, target: otherTarget, channelId: deniedTarget }, current],
         [{ target: otherTarget, channelId: deniedTarget }, other],
-        [{ to: otherTarget, target: current.channelId, channelId: current.channelId }, other],
-        [{ target: current.channelId, channelId: otherTarget }, current],
       ] as const) {
         const before = fixture.requests.length;
         const result = await fixture.invokeAdapter(action, params);

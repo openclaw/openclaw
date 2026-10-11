@@ -1,11 +1,11 @@
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import {
   loadSessionEntry as loadInternalSessionEntry,
   replaceSessionEntry as replaceInternalSessionEntry,
 } from "../config/sessions/session-accessor.js";
 import type { SessionEntry as ConfigSessionEntry } from "../config/sessions/types.js";
+import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import {
   getSessionEntry,
   listSessionEntries,
@@ -15,7 +15,7 @@ import {
   type SessionEntry,
 } from "./session-store-runtime.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-sdk-session-recovery-");
 const publicPendingProjectIsPrivate: "pendingProjectGitUrl" extends keyof SessionEntry
   ? false
   : true = true;
@@ -30,7 +30,7 @@ describe("session-store-runtime recovery boundary", () => {
   let storePath: string;
 
   beforeEach(() => {
-    tempDir = tempDirs.make("openclaw-sdk-session-recovery-");
+    tempDir = sessionDirs.make();
     storePath = path.join(tempDir, "sessions.json");
   });
 

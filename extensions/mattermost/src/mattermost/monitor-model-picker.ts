@@ -10,25 +10,11 @@ import {
   resolveMattermostModelPickerCurrentModel,
 } from "./model-picker.js";
 import { authorizeMattermostCommandInvocation } from "./monitor-auth.js";
-import {
-  buildMattermostModelPickerSelectMessageSid,
-  resolveMattermostInteractionReplyRootId,
-} from "./monitor-context.js";
-import { buildMattermostEventPlan, type MattermostEventPlan } from "./monitor-event-plan.js";
+import { buildMattermostModelPickerSelectMessageSid } from "./monitor-context.js";
+import { buildMattermostEventPlan } from "./monitor-event-plan.js";
+import { dispatchMattermostInteractionReply } from "./monitor-interaction-dispatch.js";
 import type { MattermostMonitorContext } from "./monitor-types.js";
-import { deliverMattermostReplyPayload } from "./reply-delivery.js";
-import type { ReplyPayload } from "./runtime-api.js";
 import { buildPreparedModelsProviderData } from "./runtime-api.js";
-import { sendMessageMattermost } from "./send.js";
-
-type RunModelPickerCommandParams = {
-  commandText: string;
-  commandAuthorized: boolean;
-  eventPlan: MattermostEventPlan;
-  senderName: string;
-  messageSid: string;
-  sourcePostId: string;
-};
 
 export type MattermostModelPickerInteractionHandler = (params: {
   payload: {
@@ -47,75 +33,6 @@ export function createMattermostModelPickerInteractionHandler(
 ): MattermostModelPickerInteractionHandler {
   const { account, cfg, core, pairing, resources, runtime } = monitor;
   const { resolveChannelInfo, updateModelPickerPost } = resources;
-
-  const runModelPickerCommand = async (params: RunModelPickerCommandParams): Promise<void> => {
-    const { channelDisplay, channelId, kind, roomLabel, route, thread } = params.eventPlan;
-    const fromLabel =
-      kind === "direct"
-        ? `Mattermost DM from ${params.senderName}`
-        : `Mattermost message in ${roomLabel} from ${params.senderName}`;
-    const ctxPayload = params.eventPlan.finalizeContext({
-      Body: params.commandText,
-      BodyForAgent: params.commandText,
-      RawBody: params.commandText,
-      CommandBody: params.commandText,
-      ConversationLabel: fromLabel,
-      GroupSubject: kind !== "direct" ? channelDisplay || roomLabel : undefined,
-      SenderName: params.senderName,
-      MessageSid: params.messageSid,
-      Timestamp: Date.now(),
-      WasMentioned: true,
-      CommandAuthorized: params.commandAuthorized,
-      CommandSource: "native" as const,
-    });
-    const { replyOptions, replyPipeline, tableMode, textLimit } =
-      params.eventPlan.createReplyPlan();
-    await core.channel.inbound.dispatch({
-      cfg,
-      channel: "mattermost",
-      accountId: account.accountId,
-      route: {
-        agentId: route.agentId,
-        dmScope: route.dmScope,
-        sessionKey: thread.sessionKey,
-      },
-      ctxPayload,
-      delivery: {
-        observeMessageSent: true,
-        // Picker-triggered confirmations should stay immediate.
-        deliver: async (payload: ReplyPayload) => {
-          const trimmedPayload = {
-            ...payload,
-            text: core.channel.text.convertMarkdownTables(payload.text ?? "", tableMode).trim(),
-          };
-          return await deliverMattermostReplyPayload({
-            core,
-            cfg,
-            payload: trimmedPayload,
-            channelId,
-            accountId: account.accountId,
-            agentId: route.agentId,
-            replyToId: resolveMattermostInteractionReplyRootId({
-              kind,
-              threadRootId: thread.effectiveReplyToId,
-              replyToId: trimmedPayload.replyToId,
-              interactionMessageSid: params.messageSid,
-              sourcePostId: params.sourcePostId,
-            }),
-            textLimit,
-            // The picker path already converts and trims text before delivery.
-            tableMode: "off",
-            sendMessage: sendMessageMattermost,
-          });
-        },
-        onError: (err, info) => {
-          runtime.error?.(`mattermost model picker ${info.kind} reply failed: ${String(err)}`);
-        },
-      },
-      replyPipeline,
-      replyOptions,
-    });
-  };
 
   return async (params) => {
     const pickerState = parseMattermostModelPickerContext(params.context);
@@ -249,13 +166,32 @@ export function createMattermostModelPickerInteractionHandler(
     // The HTTP response returns before the command finishes. Reserve a new root
     // while the request is still admitted so session dispatch survives that ack.
     void runDetachedWebhookWork(async () => {
-      await runModelPickerCommand({
-        commandText: `/model ${targetModelRef}`,
-        commandAuthorized: auth.commandAuthorized,
-        eventPlan,
-        senderName: params.userName,
-        messageSid,
-        sourcePostId: params.post.id || params.payload.post_id,
+      const commandText = `/model ${targetModelRef}`;
+      const sourcePostId = params.post.id || params.payload.post_id;
+      const { channelDisplay, kind, roomLabel } = eventPlan;
+      const fromLabel =
+        kind === "direct"
+          ? `Mattermost DM from ${params.userName}`
+          : `Mattermost message in ${roomLabel} from ${params.userName}`;
+      const ctxPayload = eventPlan.finalizeContext({
+        Body: commandText,
+        BodyForAgent: commandText,
+        RawBody: commandText,
+        CommandBody: commandText,
+        ConversationLabel: fromLabel,
+        GroupSubject: kind !== "direct" ? channelDisplay || roomLabel : undefined,
+        SenderName: params.userName,
+        MessageSid: messageSid,
+        Timestamp: Date.now(),
+        WasMentioned: true,
+        CommandAuthorized: auth.commandAuthorized,
+        CommandSource: "native" as const,
+      });
+      await dispatchMattermostInteractionReply(monitor, eventPlan, {
+        ctxPayload,
+        interactionMessageSid: messageSid,
+        sourcePostId,
+        kind: "model picker",
       });
       const currentModel = resolveMattermostModelPickerCurrentModel({
         cfg,

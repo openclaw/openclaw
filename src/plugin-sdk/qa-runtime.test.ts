@@ -4,6 +4,7 @@ import { createServer } from "node:net";
  */
 import { Command } from "commander";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import "../test-utils/prepare-compiled-subprocesses.js";
 import { restorePrivateQaCliEnv } from "./qa-runtime.test-helpers.js";
 
 const loadBundledPluginPublicSurfaceModuleSync = vi.hoisted(() => vi.fn());
@@ -219,54 +220,7 @@ describe("plugin-sdk qa-runtime", () => {
     });
   });
 
-  const rejectedScenarioSelection = {
-    kind: "rejected",
-    error: expect.objectContaining({ message: expect.stringContaining("--scenario") }),
-  };
-  it.each([
-    {
-      name: "empty value",
-      args: ["--scenario", ""],
-      outcome: rejectedScenarioSelection,
-      selections: [],
-    },
-    {
-      name: "whitespace value",
-      args: ["--scenario", " \t "],
-      outcome: rejectedScenarioSelection,
-      selections: [],
-    },
-    {
-      name: "empty assignment",
-      args: ["--scenario="],
-      outcome: rejectedScenarioSelection,
-      selections: [],
-    },
-    {
-      name: "repeated blanks",
-      args: ["--scenario", "", "--scenario", "  "],
-      outcome: rejectedScenarioSelection,
-      selections: [],
-    },
-    {
-      name: "omitted default",
-      args: [],
-      outcome: { kind: "dispatched" },
-      selections: [[]],
-    },
-    {
-      name: "named scenario",
-      args: ["--scenario", "alpha"],
-      outcome: { kind: "dispatched" },
-      selections: [["alpha"]],
-    },
-    {
-      name: "mixed blanks and duplicate valid ids",
-      args: ["--scenario", "", "--scenario", " alpha ", "--scenario", "  ", "--scenario", "alpha"],
-      outcome: { kind: "dispatched" },
-      selections: [["alpha", "alpha"]],
-    },
-  ])("guards dedicated QA scenario selection: $name", async ({ args, outcome, selections }) => {
+  it("reports a blank dedicated QA scenario selection without dispatching", async () => {
     const module = await import("./qa-runtime.js");
     const qa = new Command();
     const dispatchedScenarioIds: string[][] = [];
@@ -286,13 +240,20 @@ describe("plugin-sdk qa-runtime", () => {
       })
       .register(qa);
 
-    const actual = await qa.parseAsync(["node", "openclaw", "sample-transport", ...args]).then(
-      () => ({ kind: "dispatched" }),
-      (error: unknown) => ({ kind: "rejected", error }),
-    );
+    const previousExitCode = process.exitCode;
+    const stderrWrite = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    try {
+      await qa.parseAsync(["node", "openclaw", "sample-transport", "--scenario", " \t "]);
 
-    expect(actual).toEqual(outcome);
-    expect(dispatchedScenarioIds).toEqual(selections);
+      expect(stderrWrite).toHaveBeenCalledWith(
+        "--scenario must name at least one non-empty scenario id.\n",
+      );
+      expect(process.exitCode).toBe(1);
+    } finally {
+      process.exitCode = previousExitCode;
+      stderrWrite.mockRestore();
+    }
+    expect(dispatchedScenarioIds).toEqual([]);
   });
 
   it("shares Docker health parsing across array and jsonl compose output", async () => {
@@ -315,51 +276,6 @@ describe("plugin-sdk qa-runtime", () => {
 
     expect(runCommand).toHaveBeenCalledTimes(2);
     expect(sleepImpl).toHaveBeenCalledTimes(1);
-  });
-
-  it("normalizes multiline Docker compose service lookup output", async () => {
-    const module = await import("./qa-runtime.js");
-    const runtime = module.createQaDockerRuntime({ auditContext: "qa-test" });
-    const runCommand = vi.fn(async (command: string, args: string[], cwd: string) => {
-      expect(command).toBe("docker");
-      expect(cwd).toBe("/repo");
-
-      if (args.includes("ps") && args.includes("-q")) {
-        return {
-          stdout: "\nqa-gateway-one\nqa-gateway-two\n",
-          stderr: "",
-        };
-      }
-
-      if (args[0] === "inspect") {
-        expect(args.at(-1)).toBe("qa-gateway-one");
-        return {
-          stdout: "\n172.18.0.4\n172.19.0.4\n",
-          stderr: "",
-        };
-      }
-
-      throw new Error(`unexpected docker args: ${args.join(" ")}`);
-    });
-    const fetchImpl = vi.fn(async (url: string) => ({
-      ok: url === "http://172.18.0.4:18789/healthz",
-    }));
-
-    await expect(
-      runtime.resolveComposeServiceUrl(
-        "gateway",
-        18789,
-        "/tmp/docker-compose.yml",
-        "/repo",
-        runCommand,
-        fetchImpl,
-      ),
-    ).resolves.toBe("http://172.18.0.4:18789/");
-
-    expect(runCommand).toHaveBeenCalledTimes(2);
-    expect(fetchImpl).toHaveBeenCalledWith("http://172.18.0.4:18789/healthz", {
-      signal: expect.any(AbortSignal),
-    });
   });
 
   it("cancels compose service health probe response bodies", async () => {

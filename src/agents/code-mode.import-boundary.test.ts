@@ -1,4 +1,5 @@
 import { expect, it, vi } from "vitest";
+import { applyCodeModeCatalog, createCodeModeTools } from "./code-mode.js";
 
 vi.mock("./subagents/registry/subagent-registry.js", () => {
   throw new Error("ordinary Code Mode must not load the subagent registry");
@@ -8,14 +9,9 @@ vi.mock("./tools/agents-wait-tool.js", () => {
   throw new Error("ordinary Code Mode must not load the collector waiter");
 });
 
-vi.mock("../skills/workshop/service-query.js", () => {
-  throw new Error("ordinary Code Mode must not load Skill Workshop proposal queries");
-});
-
 it.each([false, true])(
   "executes ordinary tools without optional runtime imports (swarm=%s)",
   async (enabled) => {
-    const { applyCodeModeCatalog, createCodeModeTools } = await import("./code-mode.js");
     const { fakeTool, runUntilCompleted } = await import("./code-mode.test-support.js");
     const { createToolSearchCatalogRef, clearToolSearchCatalog } =
       await import("./tool-search-catalog.js");

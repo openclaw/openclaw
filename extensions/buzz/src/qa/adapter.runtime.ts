@@ -206,8 +206,7 @@ export async function createBuzzQaTransportAdapter(
       }) as Pick<OpenClawConfig, "channels" | "messages">,
     waitReady: async ({ gateway, timeoutMs, pollIntervalMs }) =>
       await waitForBuzzChannelRunning({
-        // Buzz is currently single-account; the QA bus keeps its portable SUT
-        // label while Gateway status reports the plugin's canonical account id.
+        // QA config uses the default account; the bus keeps its portable SUT label.
         accountId: BUZZ_GATEWAY_ACCOUNT_ID,
         gateway,
         timeoutMs,

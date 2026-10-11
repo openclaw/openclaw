@@ -11,6 +11,7 @@ import {
   mockMainSessionEntry,
   waitForAssertion,
 } from "./agent.test-harness.js";
+import { getAgentTestStorePath } from "./agent.user-turn-recorder.test-support.js";
 import { expectSubagentFollowupReactivation } from "./subagent-followup.test-helpers.js";
 
 const mocks = getAgentTestMocks();
@@ -23,8 +24,7 @@ export function registerAgentSendEventTests(): void {
       runId: "run-old",
       childSessionKey,
       controllerSessionKey: "agent:main:main",
-      ownerKey: "agent:main:main",
-      scopeKind: "session",
+      requesterSessionKey: "agent:main:main",
       requesterDisplayKey: "main",
       task: "initial task",
       cleanup: "keep" as const,
@@ -39,7 +39,7 @@ export function registerAgentSendEventTests(): void {
 
     mocks.loadSessionEntry.mockReturnValue({
       cfg: {},
-      storePath: "/tmp/sessions.json",
+      storePath: getAgentTestStorePath(),
       entry: {
         sessionId: "sess-followup",
         updatedAt,
@@ -56,6 +56,7 @@ export function registerAgentSendEventTests(): void {
       return await updater(store);
     });
     mocks.getLatestSubagentRunByChildSessionKey.mockReturnValueOnce(completedRun);
+    mocks.getLatestLiveSubagentRunByChildSessionKey.mockReturnValue(completedRun);
     mocks.replaceSubagentRunAfterSteer.mockReturnValueOnce(true);
     const sessionRow = {
       key: childSessionKey,
@@ -100,7 +101,6 @@ export function registerAgentSendEventTests(): void {
     expectSubagentFollowupReactivation({
       replaceSubagentRunAfterSteerMock: mocks.replaceSubagentRunAfterSteer,
       broadcastToConnIds,
-      completedRun,
       childSessionKey,
       status: "running",
       task: "follow-up",
@@ -220,8 +220,8 @@ export function registerAgentGlobalGoalEventTest(): void {
     mocks.listAgentIds.mockReturnValue(["main", "work"]);
     mocks.resolveExplicitAgentSessionKey.mockReturnValue("global");
     mocks.loadSessionEntry.mockReturnValue({
-      cfg: { agents: { list: [{ id: "main" }, { id: "work" }] }, session: { scope: "global" } },
-      storePath: "/tmp/sessions.json",
+      cfg: { agents: { entries: { main: {}, work: {} } }, session: { scope: "global" } },
+      storePath: getAgentTestStorePath(),
       entry: {
         sessionId: "global-session-id",
         updatedAt: Date.now(),

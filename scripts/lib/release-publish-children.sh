@@ -39,7 +39,8 @@ record_postpublish_diagnostics() {
     CHILD_PLUGIN_CLAWHUB_RUN_ID="${plugin_clawhub_run_id:-${CHILD_PLUGIN_CLAWHUB_RUN_ID:-}}" \
     CHILD_PLUGIN_CLAWHUB_BOOTSTRAP_RUN_ID="${plugin_clawhub_bootstrap_run_id:-${CHILD_PLUGIN_CLAWHUB_BOOTSTRAP_RUN_ID:-}}" \
     CHILD_OPENCLAW_NPM_RUN_ID="${openclaw_npm_run_id:-${CHILD_OPENCLAW_NPM_RUN_ID:-}}" \
-    node --import tsx "${GITHUB_WORKSPACE}/.release-harness/scripts/lib/release-beta-verifier.ts" "$1" \
+    node --import "${GITHUB_WORKSPACE}/.release-harness/scripts/tsx.mjs" \
+      "${GITHUB_WORKSPACE}/.release-harness/scripts/lib/release-beta-verifier.ts" "$1" \
     || echo "Warning: postpublish diagnostics unavailable; primary result unchanged." >&2
 }
 
@@ -660,7 +661,7 @@ resolve_openclaw_npm_publish_state() {
     "https://registry.npmjs.org/-/npm/v1/attestations/openclaw@${release_version}" \
     -o "${provenance_path}"
   published_sha512="$(sha512sum "${published_tarball_path}" | awk '{print $1}')"
-  resume_state="$(node --import tsx "${GITHUB_WORKSPACE}/.release-harness/scripts/openclaw-npm-resume-run.mts" \
+  resume_state="$(node --import "${GITHUB_WORKSPACE}/.release-harness/scripts/tsx.mjs" "${GITHUB_WORKSPACE}/.release-harness/scripts/openclaw-npm-resume-run.mts" \
     --repo "${GITHUB_REPOSITORY}" \
     --run-id "${OPENCLAW_NPM_RESUME_RUN_ID}" \
     --version "${release_version}" \
@@ -725,7 +726,7 @@ write_clawhub_runtime_state() {
   if [[ "${RELEASE_NPM_DIST_TAG}" == "extended-stable" || "${clawhub_failed}" != "0" ]]; then
     force_skip_clawhub=true
   fi
-  node --import tsx \
+  node --import "${GITHUB_WORKSPACE}/.release-harness/scripts/tsx.mjs" \
     "${GITHUB_WORKSPACE}/.release-harness/scripts/openclaw-release-clawhub-runtime-state.ts" \
     --repository "${GITHUB_REPOSITORY}" \
     --wait-for-clawhub "${WAIT_FOR_CLAWHUB}" \
@@ -742,7 +743,7 @@ render_github_release_notes() {
   local metadata_file="${3:-}"
   local regular_stable_version=""
   local -a render_args=(
-    node --import tsx "${GITHUB_WORKSPACE}/.release-harness/scripts/render-github-release-notes.mts"
+    node --import "${GITHUB_WORKSPACE}/.release-harness/scripts/tsx.mjs" "${GITHUB_WORKSPACE}/.release-harness/scripts/render-github-release-notes.mts"
     --root "${GITHUB_WORKSPACE}" --ref "${TARGET_SHA}"
     --tag "${RELEASE_TAG}"
     --repository "${GITHUB_REPOSITORY}"
@@ -779,6 +780,10 @@ verify_release_tag_target() {
     echo "Release tag ${RELEASE_TAG} no longer exists on origin." >&2
     exit 1
   fi
+  if [[ -n "${SIGNED_RELEASE_TAG_OBJECT_SHA:-}" && "${direct_sha}" != "${SIGNED_RELEASE_TAG_OBJECT_SHA}" ]]; then
+    echo "Release tag ${RELEASE_TAG} changed after signature verification: expected tag object ${SIGNED_RELEASE_TAG_OBJECT_SHA}, found ${direct_sha:-<missing>}." >&2
+    exit 1
+  fi
   if [[ "${remote_sha}" != "${TARGET_SHA}" ]]; then
     echo "Release tag ${RELEASE_TAG} moved: expected ${TARGET_SHA}, found ${remote_sha}." >&2
     exit 1
@@ -794,7 +799,7 @@ canonical_release_body_matches() {
   if [[ "${RELEASE_EVIDENCE_MODE}" != "authorized-beta-focused-v1" && -f "${FULL_RELEASE_VALIDATION_MANIFEST_DIR:-}/full-release-validation-manifest.json" ]] && grep -q '^### Release verification$' "$body_file"; then
     verify_args+=(--validation-manifest "${FULL_RELEASE_VALIDATION_MANIFEST_DIR}/full-release-validation-manifest.json")
   fi
-  node --import tsx "${GITHUB_WORKSPACE}/.release-harness/scripts/render-github-release-notes.mts" \
+  node --import "${GITHUB_WORKSPACE}/.release-harness/scripts/tsx.mjs" "${GITHUB_WORKSPACE}/.release-harness/scripts/render-github-release-notes.mts" \
     "${verify_args[@]}"
 }
 
@@ -1167,7 +1172,7 @@ upload_release_evidence_assets() {
 
 wait_for_core_npm_visibility() {
   local version="${RELEASE_TAG#v}" selector="${RELEASE_NPM_DIST_TAG}" started=$SECONDS
-  local deadline=$((SECONDS + ${RELEASE_NPM_VISIBILITY_TIMEOUT_SECONDS:-600})) document state last_state=""
+  local deadline=$((SECONDS + ${RELEASE_NPM_VISIBILITY_TIMEOUT_SECONDS:-1800})) document state last_state=""
   while true; do
     state="registry unavailable"
     if document="$(curl -fsSL --connect-timeout 10 --max-time 60 \
@@ -1301,7 +1306,7 @@ verify_published_release() {
   OPENCLAW_NPM_EXPECTED_WORKFLOW_REF="${openclaw_npm_expected_workflow_ref}" \
     OPENCLAW_NPM_EXPECTED_WORKFLOW_SHA="${openclaw_npm_expected_workflow_sha}" \
     OPENCLAW_NPM_EXPECTED_RUN_ATTEMPT="${openclaw_npm_run_attempt}" \
-    node --import tsx \
+    node --import "${GITHUB_WORKSPACE}/.release-harness/scripts/tsx.mjs" \
       "${GITHUB_WORKSPACE}/.release-harness/scripts/${verifier}" \
       "${verify_args[@]}"
 

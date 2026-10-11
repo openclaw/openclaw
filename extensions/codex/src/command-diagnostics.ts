@@ -21,7 +21,6 @@ import {
   deletePendingCodexDiagnosticsConfirmation,
   formatCodexDiagnosticsTargetLines,
   formatCodexDiagnosticsUploadResult,
-  formatDiagnosticsUsage,
   normalizeDiagnosticsReason,
   parseDiagnosticsArgs,
   readCodexDiagnosticsConfirmationScope,
@@ -54,7 +53,6 @@ export async function handleCodexDiagnosticsFeedback(
   context: PluginCommandContext,
   pluginConfig: unknown,
   args: string,
-  commandPrefix: string,
 ): Promise<PluginCommandResult> {
   const ctx = { ...context };
   if (ctx.senderIsOwner !== true) {
@@ -62,7 +60,13 @@ export async function handleCodexDiagnosticsFeedback(
   }
   const parsed = parseDiagnosticsArgs(args);
   if (parsed.action === "usage") {
-    return { text: formatDiagnosticsUsage(commandPrefix) };
+    return {
+      text: [
+        "Usage: /codex diagnostics [note]",
+        "Usage: /codex diagnostics confirm <token>",
+        "Usage: /codex diagnostics cancel <token>",
+      ].join("\n"),
+    };
   }
   if (parsed.action === "confirm") {
     return {
@@ -72,29 +76,39 @@ export async function handleCodexDiagnosticsFeedback(
   if (parsed.action === "cancel") {
     return { text: cancelCodexDiagnosticsFeedback(ctx, parsed.token) };
   }
+  if (!(await hasAnyCodexDiagnosticsIdentity(ctx))) {
+    return {
+      text: "Cannot send Codex diagnostics because this command did not include a stable session identity.",
+    };
+  }
+  const targets = await resolveCodexDiagnosticsTargets(deps, ctx);
+  if (targets.length === 0) {
+    return { text: NO_DIAGNOSTICS_THREAD };
+  }
   if (ctx.diagnosticsUploadApproved === true) {
     return {
-      text: await sendCodexDiagnosticsFeedbackForContext(deps, ctx, pluginConfig, parsed.note),
+      text: await sendCodexDiagnosticsFeedbackForTargets(
+        deps,
+        ctx,
+        pluginConfig,
+        parsed.note,
+        targets,
+      ),
     };
   }
   if (ctx.diagnosticsPreviewOnly === true) {
     return {
-      text: await previewCodexDiagnosticsFeedbackApproval(deps, ctx, parsed.note),
+      text: previewCodexDiagnosticsFeedbackApproval(targets, ctx, parsed.note),
     };
   }
-  return await requestCodexDiagnosticsFeedbackApproval(deps, ctx, parsed.note, commandPrefix);
+  return requestCodexDiagnosticsFeedbackApproval(targets, ctx, parsed.note);
 }
 
-async function requestCodexDiagnosticsFeedbackApproval(
-  deps: CodexCommandDeps,
+function requestCodexDiagnosticsFeedbackApproval(
+  targets: CodexDiagnosticsTarget[],
   ctx: PluginCommandContext,
   note: string,
-  commandPrefix: string,
-): Promise<PluginCommandResult> {
-  const targets = await requireCodexDiagnosticsTargets(deps, ctx);
-  if (typeof targets === "string") {
-    return { text: targets };
-  }
+): PluginCommandResult {
   const now = Date.now();
   const cooldownMessage = readCodexDiagnosticsTargetsCooldownMessage(targets, ctx, now);
   if (cooldownMessage) {
@@ -116,8 +130,8 @@ async function requestCodexDiagnosticsFeedbackApproval(
     ...readCodexDiagnosticsConfirmationScope(ctx),
     now,
   });
-  const confirmCommand = `${commandPrefix} confirm ${token}`;
-  const cancelCommand = `${commandPrefix} cancel ${token}`;
+  const confirmCommand = `/codex diagnostics confirm ${token}`;
+  const cancelCommand = `/codex diagnostics cancel ${token}`;
   const displayReason = reason ? formatCodexDisplayText(reason) : undefined;
   const lines = [
     targets.length === 1 ? "Codex runtime thread detected." : "Codex runtime threads detected.",
@@ -156,15 +170,11 @@ async function requestCodexDiagnosticsFeedbackApproval(
   };
 }
 
-async function previewCodexDiagnosticsFeedbackApproval(
-  deps: CodexCommandDeps,
+function previewCodexDiagnosticsFeedbackApproval(
+  targets: CodexDiagnosticsTarget[],
   ctx: PluginCommandContext,
   note: string,
-): Promise<string> {
-  const targets = await requireCodexDiagnosticsTargets(deps, ctx);
-  if (typeof targets === "string") {
-    return targets;
-  }
+): string {
   const cooldownMessage = readCodexDiagnosticsTargetsCooldownMessage(targets, ctx, Date.now(), {
     includeThreadId: false,
   });
@@ -196,7 +206,16 @@ async function confirmCodexDiagnosticsFeedback(
     return "Cannot send Codex diagnostics because this command did not include a stable session identity.";
   }
   const currentTargets = pending.privateRouted
-    ? resolvePendingCodexDiagnosticsTargets(deps, pending.targets, ctx.config)
+    ? (
+        await Promise.all(
+          pending.targets.map(async (target) => {
+            const binding = await deps.bindingStore.readAsync(target.identity);
+            return binding?.threadId
+              ? [resolveCodexDiagnosticsTarget(target, binding, ctx.config)]
+              : [];
+          }),
+        )
+      ).flat()
     : await resolveCodexDiagnosticsTargets(deps, ctx);
   if (!codexDiagnosticsTargetsMatch(pending.targets, currentTargets)) {
     return "The Codex diagnostics sessions changed before confirmation. Run /diagnostics again for the current threads.";
@@ -207,7 +226,7 @@ async function confirmCodexDiagnosticsFeedback(
     pluginConfig,
     pending.note ?? "",
     currentTargets,
-    { cooldownScope: pending.scopeKey },
+    pending.scopeKey,
   );
 }
 
@@ -223,33 +242,20 @@ function cancelCodexDiagnosticsFeedback(ctx: PluginCommandContext, token: string
   ].join("\n");
 }
 
-async function sendCodexDiagnosticsFeedbackForContext(
-  deps: CodexCommandDeps,
-  ctx: PluginCommandContext,
-  pluginConfig: unknown,
-  note: string,
-): Promise<string> {
-  const targets = await requireCodexDiagnosticsTargets(deps, ctx);
-  if (typeof targets === "string") {
-    return targets;
-  }
-  return await sendCodexDiagnosticsFeedbackForTargets(deps, ctx, pluginConfig, note, targets);
-}
-
 async function sendCodexDiagnosticsFeedbackForTargets(
   deps: CodexCommandDeps,
   ctx: PluginCommandContext,
   pluginConfig: unknown,
   note: string,
   targets: CodexDiagnosticsTarget[],
-  options: { cooldownScope?: string } = {},
+  cooldownScope?: string,
 ): Promise<string> {
   if (targets.length === 0) {
     return NO_DIAGNOSTICS_THREAD;
   }
   const now = Date.now();
   const cooldownMessage = readCodexDiagnosticsTargetsCooldownMessage(targets, ctx, now, {
-    cooldownScope: options.cooldownScope,
+    cooldownScope,
   });
   if (cooldownMessage) {
     return cooldownMessage;
@@ -314,7 +320,7 @@ async function sendCodexDiagnosticsFeedbackForTargets(
       ? normalizeOptionalString(response.value.threadId)
       : undefined;
     sent.push({ ...target, threadId: responseThreadId ?? target.threadId });
-    recordCodexDiagnosticsUpload(target.threadId, ctx, now, options.cooldownScope);
+    recordCodexDiagnosticsUpload(target.threadId, ctx, now, cooldownScope);
   }
   return formatCodexDiagnosticsUploadResult(sent, failed);
 }
@@ -345,17 +351,6 @@ function consumeCodexDiagnosticsConfirmation(
   }
   deletePendingCodexDiagnosticsConfirmation(token);
   return pending;
-}
-
-async function requireCodexDiagnosticsTargets(
-  deps: CodexCommandDeps,
-  ctx: PluginCommandContext,
-): Promise<CodexDiagnosticsTarget[] | string> {
-  if (!(await hasAnyCodexDiagnosticsIdentity(ctx))) {
-    return "Cannot send Codex diagnostics because this command did not include a stable session identity.";
-  }
-  const targets = await resolveCodexDiagnosticsTargets(deps, ctx);
-  return targets.length > 0 ? targets : NO_DIAGNOSTICS_THREAD;
 }
 
 async function hasAnyCodexDiagnosticsIdentity(ctx: PluginCommandContext): Promise<boolean> {
@@ -418,7 +413,7 @@ async function resolveCodexDiagnosticsTargets(
       continue;
     }
     seenBindingKeys.add(key);
-    const binding = deps.bindingStore.read(candidate.identity);
+    const binding = await deps.bindingStore.readAsync(candidate.identity);
     if (!binding?.threadId || seenThreadIds.has(binding.threadId)) {
       continue;
     }
@@ -433,15 +428,10 @@ function resolvePendingCodexDiagnosticsTargets(
   targets: readonly CodexDiagnosticsTarget[],
   config?: PluginCommandContext["config"],
 ): CodexDiagnosticsTarget[] {
-  const resolved: CodexDiagnosticsTarget[] = [];
-  for (const target of targets) {
+  return targets.flatMap((target) => {
     const binding = deps.bindingStore.read(target.identity);
-    if (!binding?.threadId) {
-      continue;
-    }
-    resolved.push(resolveCodexDiagnosticsTarget(target, binding, config));
-  }
-  return resolved;
+    return binding?.threadId ? [resolveCodexDiagnosticsTarget(target, binding, config)] : [];
+  });
 }
 
 function resolveCodexDiagnosticsTarget(

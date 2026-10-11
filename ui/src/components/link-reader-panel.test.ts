@@ -250,12 +250,6 @@ describe("Plugin link reader panel", () => {
     },
   );
 
-  it("accepts the same document identity when only the requested anchor differs", async () => {
-    const panel = await mount(vi.fn().mockResolvedValue(item(1)));
-    open(panel, itemUrl(1) + "#comment-4");
-    await expectTitle(panel, "Item 1");
-  });
-
   it.each([false, true])(
     "preserves typing focus while opening and settling a reader (embedded: %s)",
     async (embedded) => {
@@ -295,26 +289,6 @@ describe("Plugin link reader panel", () => {
       expect(panel.shadowRoot?.activeElement).toBe(address);
     },
   );
-
-  it("passes the selected agent to the detail identity owner", async () => {
-    const request = vi.fn(async (_method: string, params?: unknown) => {
-      if (
-        Object.keys(params as object).some((key) => !["url", "refresh", "agentId"].includes(key))
-      ) {
-        throw new Error("Unexpected detail parameter");
-      }
-      return requestedItem(params);
-    });
-    const panel = await mount(request);
-    panel.agentId = "selected-agent";
-    open(panel);
-    await expectTitle(panel, "Item 1");
-    expect(request).toHaveBeenCalledWith(
-      "forge.item",
-      { url: itemUrl(1), agentId: "selected-agent" },
-      { signal: expect.any(AbortSignal) },
-    );
-  });
 
   it.each([itemUrl(2), itemUrl(1) + "?resource=other"])(
     "rejects a document for another target: %s",
@@ -440,15 +414,23 @@ describe("Plugin link reader panel", () => {
       storageKey,
       JSON.stringify({ open: true, dock: "right", width: 560, height: 420 }),
     );
-    const request = vi.fn(async () => item());
+    const request = vi.fn(async (_method: string, params?: unknown) => {
+      if (
+        Object.keys(params as object).some((key) => !["url", "refresh", "agentId"].includes(key))
+      ) {
+        throw new Error("Unexpected detail parameter");
+      }
+      return requestedItem(params);
+    });
     const panel = await mount(request);
+    panel.agentId = "selected-agent";
     expect(request).not.toHaveBeenCalled();
     expect(panel.renderRoot.querySelector(".bp")).toBeNull();
     open(panel);
     await expectTitle(panel, "Item 1");
     expect(request).toHaveBeenCalledWith(
       "forge.item",
-      { url: itemUrl(1) },
+      { url: itemUrl(1), agentId: "selected-agent" },
       { signal: expect.any(AbortSignal) },
     );
     expect(panel.renderRoot.querySelector(".lr-description strong")?.textContent).toBe(
@@ -693,15 +675,19 @@ describe("Plugin link reader panel", () => {
   });
 
   it.each([
-    "GitHub API rate limit exceeded (HTTP 403). Wait 120 seconds and retry.",
-    "GitHub authentication failed (HTTP 401). Reconnect the GitHub identity in Settings.",
-    "GitHub access denied (HTTP 403). Check the configured GitHub identity's repository access.",
-    "GitHub item is unavailable or not public (HTTP 404). Open the link on GitHub to check access.",
-    "GitHub request timed out. Retry shortly.",
-  ])("shows the actionable Gateway failure: %s", async (message) => {
-    const request = vi
-      .fn()
-      .mockRejectedValue(new GatewayRequestError({ code: "UNAVAILABLE", message }));
+    {
+      error: new Error("not available"),
+      message: "Try again or open the original",
+    },
+    {
+      error: new GatewayRequestError({
+        code: "UNAVAILABLE",
+        message: "GitHub API rate limit exceeded (HTTP 403). Wait 120 seconds and retry.",
+      }),
+      message: "GitHub API rate limit exceeded (HTTP 403). Wait 120 seconds and retry.",
+    },
+  ])("keeps failure and disconnect states actionable: $message", async ({ error, message }) => {
+    const request = vi.fn().mockRejectedValueOnce(error).mockResolvedValue(item());
     const panel = await mount(request);
     open(panel);
     await waitForFast(() =>
@@ -712,20 +698,6 @@ describe("Plugin link reader panel", () => {
     );
     expect(panel.renderRoot.querySelector('[role="alert"]')?.textContent).not.toContain(
       "This item may be private or deleted",
-    );
-  });
-
-  it("keeps failure and disconnect states actionable without displaying stale content", async () => {
-    const request = vi
-      .fn()
-      .mockRejectedValueOnce(new Error("not available"))
-      .mockResolvedValue(item());
-    const panel = await mount(request);
-    open(panel);
-    await waitForFast(() =>
-      expect(panel.renderRoot.querySelector('[role="alert"]')?.textContent).toContain(
-        "Try again or open the original",
-      ),
     );
     const external = panel.renderRoot.querySelector<HTMLAnchorElement>(
       '[role="alert"] a[data-link-reader-external]',

@@ -1,26 +1,22 @@
-import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import process from "node:process";
 import { expectDefined } from "@openclaw/normalization-core";
-import { colorize, isRich, theme } from "../../packages/terminal-core/src/theme.js";
+import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
+import { theme } from "../../packages/terminal-core/src/theme.js";
 import { loadPinnedRuntimeConfigAsync } from "../config/runtime-snapshot.js";
 import {
   runProxyValidation,
   type ProxyValidationResult,
 } from "../infra/net/proxy/proxy-validation.js";
+import { spawnCommand } from "../process/exec-spawn.js";
 import { ensureDebugProxyCa } from "../proxy-capture/ca.js";
 import { buildDebugProxyCoverageReport } from "../proxy-capture/coverage.js";
 import { resolveDebugProxySettings, applyDebugProxyEnv } from "../proxy-capture/env.js";
 import { startDebugProxyServer } from "../proxy-capture/proxy-server.js";
-import {
-  finalizeDebugProxyCaptureAsync,
-  initializeDebugProxyCaptureAsync,
-} from "../proxy-capture/runtime.js";
-import { acquireDebugProxyCaptureStoreAsync } from "../proxy-capture/store.async.js";
-import type { AsyncDebugProxyCaptureStore } from "../proxy-capture/store.types.js";
 import type { CaptureQueryPreset } from "../proxy-capture/types.js";
 import { defaultRuntime, writeRuntimeJson } from "../runtime.js";
-import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
+import { withProxyCaptureOwner } from "./proxy-capture-owner.js";
 import { resolveSubprocessExitCode } from "./subprocess-exit-code.js";
 
 async function finalizeProxyCommand(errors: unknown[], finalizers: Array<() => Promise<void>>) {
@@ -40,55 +36,61 @@ async function finalizeProxyCommand(errors: unknown[], finalizers: Array<() => P
 }
 
 export async function runDebugProxyStartCommand(opts: { host?: string; port?: number }) {
-  const settings = resolveDebugProxySettings();
-  const { environment: env } = captureOpenClawStateWorkerContext();
-  const errors: unknown[] = [];
-  const finalizers: Array<() => Promise<void>> = [];
+  let releaseSignals: (() => void) | undefined;
   try {
-    if (settings.enabled) {
-      finalizers.push(() => finalizeDebugProxyCaptureAsync(settings));
-      await initializeDebugProxyCaptureAsync("proxy-start", settings);
-    }
-    const lease = await acquireDebugProxyCaptureStoreAsync({ env });
-    const { store } = lease;
-    finalizers.push(lease.release);
-    if (!settings.enabled) {
-      finalizers.unshift(() => store.endSession(settings.sessionId));
-      await store.upsertSession({
-        id: settings.sessionId,
-        startedAt: Date.now(),
-        mode: "proxy-start",
-        sourceScope: "openclaw",
-        sourceProcess: "openclaw",
-        proxyUrl: settings.proxyUrl,
-      });
-    }
-    const ca = await ensureDebugProxyCa(settings.certDir);
-    const server = await startDebugProxyServer({
-      host: opts.host,
-      port: opts.port,
-      settings,
-      env,
+    await withProxyCaptureOwner(async (store, ownerSignal) => {
+      const workSignal = getAsyncWorkSignal();
+      const signal = workSignal ? AbortSignal.any([ownerSignal, workSignal]) : ownerSignal;
+      const settings = resolveDebugProxySettings();
+      const errors: unknown[] = [];
+      const finalizers: Array<() => Promise<void>> = [];
+      try {
+        finalizers.unshift(() => store.endSession(settings.sessionId));
+        await store.upsertSession({
+          id: settings.sessionId,
+          startedAt: Date.now(),
+          mode: "proxy-start",
+          sourceScope: "openclaw",
+          sourceProcess: "openclaw",
+          proxyUrl: settings.proxyUrl,
+        });
+        const ca = await ensureDebugProxyCa(settings.certDir);
+        signal.throwIfAborted();
+        const server = await startDebugProxyServer({
+          host: opts.host,
+          port: opts.port,
+          settings,
+          captureStore: store,
+        });
+        finalizers.unshift(() => server.stop());
+        signal.throwIfAborted();
+        process.stdout.write(`Debug proxy: ${server.proxyUrl}\n`);
+        process.stdout.write(`CA cert: ${ca.certPath}\n`);
+        process.stdout.write(`Capture DB: ${store.dbPath}\n`);
+        process.stdout.write("Press Ctrl+C to stop.\n");
+        await new Promise<void>((resolve) => {
+          const onSignal = () => resolve();
+          releaseSignals = () => {
+            process.off("SIGINT", onSignal);
+            process.off("SIGTERM", onSignal);
+            signal.removeEventListener("abort", onSignal);
+          };
+          process.on("SIGINT", onSignal);
+          process.on("SIGTERM", onSignal);
+          signal.addEventListener("abort", onSignal, { once: true });
+          if (signal.aborted) {
+            onSignal();
+          }
+        });
+      } catch (error) {
+        errors.push(error);
+      }
+      await finalizeProxyCommand(errors, finalizers);
     });
-    finalizers.unshift(() => server.stop());
-    process.stdout.write(`Debug proxy: ${server.proxyUrl}\n`);
-    process.stdout.write(`CA cert: ${ca.certPath}\n`);
-    process.stdout.write(`Capture DB: ${store.dbPath}\n`);
-    process.stdout.write("Press Ctrl+C to stop.\n");
-    await new Promise<void>((resolve) => {
-      const onSignal = () => {
-        process.off("SIGINT", onSignal);
-        process.off("SIGTERM", onSignal);
-        resolve();
-      };
-      process.on("SIGINT", onSignal);
-      process.on("SIGTERM", onSignal);
-    });
-  } catch (error) {
-    errors.push(error);
+  } finally {
+    // Signal custody lasts through capture writes and native lease retirement.
+    releaseSignals?.();
   }
-  await finalizeProxyCommand(errors, finalizers);
-  process.exit(0);
 }
 
 export async function runDebugProxyRunCommand(opts: {
@@ -100,55 +102,90 @@ export async function runDebugProxyRunCommand(opts: {
   if (opts.commandArgs.length === 0) {
     throw new Error("proxy run requires a command after --");
   }
-  const sessionId = randomUUID();
-  const baseSettings = resolveDebugProxySettings();
-  const settings = {
-    ...baseSettings,
-    sessionId,
-  };
-  const { environment: env } = captureOpenClawStateWorkerContext();
-  const lease = await acquireDebugProxyCaptureStoreAsync({ env });
-  const { store } = lease;
-  const errors: unknown[] = [];
-  const finalizers = [() => store.endSession(sessionId), lease.release];
+  let releaseSignals: (() => void) | undefined;
   try {
-    await store.upsertSession({
-      id: sessionId,
-      startedAt: Date.now(),
-      mode: "proxy-run",
-      sourceScope: "openclaw",
-      sourceProcess: "openclaw",
-      proxyUrl: undefined,
+    await withProxyCaptureOwner(async (store, ownerSignal) => {
+      const workSignal = getAsyncWorkSignal();
+      const signal = workSignal ? AbortSignal.any([ownerSignal, workSignal]) : ownerSignal;
+      const sessionId = randomUUID();
+      const baseSettings = resolveDebugProxySettings();
+      const settings = {
+        ...baseSettings,
+        sessionId,
+      };
+      const errors: unknown[] = [];
+      const finalizers = [() => store.endSession(sessionId)];
+      try {
+        await store.upsertSession({
+          id: sessionId,
+          startedAt: Date.now(),
+          mode: "proxy-run",
+          sourceScope: "openclaw",
+          sourceProcess: "openclaw",
+          proxyUrl: undefined,
+        });
+        signal.throwIfAborted();
+        const server = await startDebugProxyServer({
+          host: opts.host,
+          port: opts.port,
+          settings,
+          captureStore: store,
+        });
+        finalizers.unshift(() => server.stop());
+        signal.throwIfAborted();
+        const [command, ...args] = opts.commandArgs;
+        const childEnv = {
+          ...applyDebugProxyEnv(process.env, {
+            proxyUrl: server.proxyUrl,
+            sessionId,
+            certDir: settings.certDir,
+          }),
+          ...server.captureEnv,
+        };
+        // The command owner cancels this child and joins its exit/stdio before
+        // the proxy and capture lease are retired. Keep inherited terminal I/O.
+        const child = spawnCommand([expectDefined(command, "proxy cli.runtime command"), ...args], {
+          stdio: "inherit",
+          env: childEnv,
+          cwd: process.cwd(),
+          cancelSignal: signal,
+          reject: false,
+        });
+        let childSettled = false;
+        const onSigint = () => {
+          if (!childSettled) {
+            child.kill("SIGINT");
+          }
+        };
+        const onSigterm = () => {
+          if (!childSettled) {
+            child.kill("SIGTERM");
+          }
+        };
+        releaseSignals = () => {
+          process.off("SIGINT", onSigint);
+          process.off("SIGTERM", onSigterm);
+        };
+        process.on("SIGINT", onSigint);
+        process.on("SIGTERM", onSigterm);
+        try {
+          const result = await child;
+          if (result.failed && result.exitCode === undefined && result.signal === undefined) {
+            throw toErrorObject(result, "Proxy child failed during launch or output capture");
+          }
+          process.exitCode = resolveSubprocessExitCode(result.exitCode, result.signal);
+        } finally {
+          childSettled = true;
+        }
+      } catch (error) {
+        errors.push(error);
+      }
+      await finalizeProxyCommand(errors, finalizers);
     });
-    const server = await startDebugProxyServer({
-      host: opts.host,
-      port: opts.port,
-      settings,
-      env,
-    });
-    finalizers.unshift(() => server.stop());
-    const [command, ...args] = opts.commandArgs;
-    const childEnv = applyDebugProxyEnv(process.env, {
-      proxyUrl: server.proxyUrl,
-      sessionId,
-      certDir: settings.certDir,
-    });
-    await new Promise<void>((resolve, reject) => {
-      const child = spawn(expectDefined(command, "proxy cli.runtime command"), args, {
-        stdio: "inherit",
-        env: childEnv,
-        cwd: process.cwd(),
-      });
-      child.once("error", reject);
-      child.once("exit", (code, signal) => {
-        process.exitCode = resolveSubprocessExitCode(code, signal);
-        resolve();
-      });
-    });
-  } catch (error) {
-    errors.push(error);
+  } finally {
+    // Signal custody lasts through capture writes and native lease retirement.
+    releaseSignals?.();
   }
-  await finalizeProxyCommand(errors, finalizers);
 }
 
 function redactProxyUrl(value: string | undefined): string | undefined {
@@ -169,31 +206,15 @@ function redactProxyUrl(value: string | undefined): string | undefined {
   }
 }
 
-function getProxyValidationTextColors() {
-  const rich = isRich();
-  const apply = (color: (value: string) => string) => (value: string) =>
-    colorize(rich, color, value);
-  return {
-    heading: apply(theme.heading),
-    success: apply(theme.success),
-    error: apply(theme.error),
-    muted: apply(theme.muted),
-    warn: apply(theme.warn),
-  };
-}
-
-function formatProxyCheckLine(
-  check: ProxyValidationResult["checks"][number],
-  colors: ReturnType<typeof getProxyValidationTextColors>,
-): string {
-  const icon = check.ok ? colors.success("✓") : colors.error("✗");
-  const paddedKind = colors.muted(check.kind.padEnd(7, " "));
+function formatProxyCheckLine(check: ProxyValidationResult["checks"][number]): string {
+  const icon = check.ok ? theme.success("✓") : theme.error("✗");
+  const paddedKind = theme.muted(check.kind.padEnd(7, " "));
   const status =
     check.status === undefined
       ? ""
-      : ` ${check.ok ? colors.success(`HTTP ${check.status}`) : colors.error(`HTTP ${check.status}`)}`;
+      : ` ${check.ok ? theme.success(`HTTP ${check.status}`) : theme.error(`HTTP ${check.status}`)}`;
   const detail = check.error
-    ? ` — ${check.ok ? colors.muted(check.error) : colors.error(check.error)}`
+    ? ` — ${check.ok ? theme.muted(check.error) : theme.error(check.error)}`
     : "";
   return `  ${icon} ${paddedKind} ${check.url}${status}${detail}`;
 }
@@ -218,33 +239,31 @@ function formatProxyValidationNextStep(result: ProxyValidationResult): string | 
 }
 
 function formatProxyValidationText(result: ProxyValidationResult): string {
-  const colors = getProxyValidationTextColors();
-  const redactedProxyUrl = redactProxyUrl(result.config.proxyUrl);
   const lines = [
-    result.ok ? colors.success("Proxy validation passed") : colors.error("Proxy validation failed"),
+    result.ok ? theme.success("Proxy validation passed") : theme.error("Proxy validation failed"),
     "",
-    colors.heading("Proxy"),
-    `  Source: ${colors.muted(result.config.source)}`,
-    `  URL:    ${redactedProxyUrl ?? colors.muted("not configured")}`,
+    theme.heading("Proxy"),
+    `  Source: ${theme.muted(result.config.source)}`,
+    `  URL:    ${result.config.proxyUrl ?? theme.muted("not configured")}`,
   ];
 
   if (result.config.errors.length > 0) {
-    lines.push("", colors.heading("Problems"));
+    lines.push("", theme.heading("Problems"));
     for (const error of result.config.errors) {
-      lines.push(`  - ${colors.error(error)}`);
+      lines.push(`  - ${theme.error(error)}`);
     }
   }
 
   if (result.checks.length > 0) {
-    lines.push("", colors.heading("Checks"));
+    lines.push("", theme.heading("Checks"));
     for (const check of result.checks) {
-      lines.push(formatProxyCheckLine(check, colors));
+      lines.push(formatProxyCheckLine(check));
     }
   }
 
   const nextStep = formatProxyValidationNextStep(result);
   if (nextStep) {
-    lines.push("", colors.heading("Next steps"), `  ${colors.warn(nextStep)}`);
+    lines.push("", theme.heading("Next steps"), `  ${theme.warn(nextStep)}`);
   }
 
   return `${lines.join("\n")}\n`;
@@ -290,17 +309,8 @@ export async function runProxyValidateCommand(opts: {
   }
 }
 
-async function withCaptureStore(action: (store: AsyncDebugProxyCaptureStore) => Promise<void>) {
-  const lease = await acquireDebugProxyCaptureStoreAsync();
-  try {
-    await action(lease.store);
-  } finally {
-    await lease.release();
-  }
-}
-
 export async function runDebugProxySessionsCommand(opts: { json?: boolean; limit?: number }) {
-  await withCaptureStore(async (store) => {
+  await withProxyCaptureOwner(async (store) => {
     const sessions = await store.listSessions(opts.limit ?? 20);
     writeRuntimeJson(defaultRuntime, opts.json ? { sessions } : sessions);
   });
@@ -311,7 +321,7 @@ export async function runDebugProxyQueryCommand(opts: {
   preset: CaptureQueryPreset;
   sessionId?: string;
 }) {
-  await withCaptureStore(async (store) => {
+  await withProxyCaptureOwner(async (store) => {
     const rows = await store.queryPreset(opts.preset, opts.sessionId);
     writeRuntimeJson(defaultRuntime, opts.json ? { rows } : rows);
   });
@@ -323,14 +333,14 @@ export async function runDebugProxyCoverageCommand() {
 }
 
 export async function runDebugProxyPurgeCommand() {
-  await withCaptureStore(async (store) => {
+  await withProxyCaptureOwner(async (store) => {
     const result = await store.purgeAll();
     process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
   });
 }
 
 export async function readDebugProxyBlobCommand(opts: { blobId: string }) {
-  await withCaptureStore(async (store) => {
+  await withProxyCaptureOwner(async (store) => {
     const content = await store.readBlob(opts.blobId);
     if (content == null) {
       throw new Error(`Unknown blob: ${opts.blobId}`);

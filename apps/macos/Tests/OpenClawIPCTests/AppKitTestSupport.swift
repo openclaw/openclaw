@@ -58,11 +58,11 @@ enum AppKitTestSupport {
         diagnosticContext: String? = nil) async throws -> [AnyObject]
     {
         let before = diagnosticContext.map { _ in self.accessibilityDiagnosticState(in: root) }
-        // SwiftUI materializes its virtual accessibility children after a real client request.
+        // Prime SwiftUI's virtual children without depending on the application's changing window list.
         let result = await Task.detached {
             let application = AXUIElementCreateApplication(ProcessInfo.processInfo.processIdentifier)
-            var windows: CFTypeRef?
-            return AXUIElementCopyAttributeValue(application, kAXWindowsAttribute as CFString, &windows)
+            var children: CFTypeRef?
+            return AXUIElementCopyAttributeValue(application, kAXChildrenAttribute as CFString, &children)
         }.value
         let after = diagnosticContext.map { _ in self.accessibilityDiagnosticState(in: root) }
         try #require(result == .success, diagnosticContext.map {
@@ -109,36 +109,38 @@ enum AppKitTestSupport {
         description: String,
         matching find: ([AnyObject]) -> AnyObject?) async throws -> AnyObject
     {
-        let deadline = ContinuousClock.now + .seconds(3)
         var observedElements: [AnyObject] = []
-        repeat {
-            window.contentView?.layoutSubtreeIfNeeded()
-            let elements = try await self.accessibilityElements(in: window)
-            observedElements = elements
-            if let element = find(elements) {
-                return element
+        var found: AnyObject?
+        do {
+            try await TestWait.state("accessibility element \(description)") {
+                window.contentView?.layoutSubtreeIfNeeded()
+                let elements = try await self.accessibilityElements(in: window)
+                observedElements = elements
+                found = find(elements)
+                return found != nil
             }
-            try await Task.sleep(for: .milliseconds(20))
-        } while ContinuousClock.now < deadline
-        let toolbarItems: String = (window.toolbar?.items ?? []).map {
-            "\($0.itemIdentifier.rawValue): view=\(String(describing: $0.view))"
-        }.joined(separator: "\n")
-        let accessibility: String = observedElements.map {
-            let role = String(describing: $0.accessibilityRole?())
-            let title = String(describing: self.accessibilityTitle(of: $0))
-            let label = String(describing: $0.accessibilityLabel?())
-            let value: Any? = $0.accessibilityValue?()
-            let identifier = String(describing: $0.accessibilityIdentifier?())
-            return "role=\(role) title=\(title) label=\(label) value=\(String(describing: value)) identifier=\(identifier)"
-        }.joined(separator: "\n")
-        throw InteractionFailure(message: """
-        The rendered window must expose \(description)
-        appActive=\(NSApp.isActive) windowVisible=\(window.isVisible) windowKey=\(window.isKeyWindow)
-        Toolbar items:
-        \(toolbarItems)
-        Accessibility elements:
-        \(accessibility)
-        """)
+        } catch is CancellationError {
+            let toolbarItems: String = (window.toolbar?.items ?? []).map {
+                "\($0.itemIdentifier.rawValue): view=\(String(describing: $0.view))"
+            }.joined(separator: "\n")
+            let accessibility: String = observedElements.map {
+                let role = String(describing: $0.accessibilityRole?())
+                let title = String(describing: self.accessibilityTitle(of: $0))
+                let label = String(describing: $0.accessibilityLabel?())
+                let value: Any? = $0.accessibilityValue?()
+                let identifier = String(describing: $0.accessibilityIdentifier?())
+                return "role=\(role) title=\(title) label=\(label) value=\(String(describing: value)) identifier=\(identifier)"
+            }.joined(separator: "\n")
+            throw InteractionFailure(message: """
+            The rendered window must expose \(description)
+            appActive=\(NSApp.isActive) windowVisible=\(window.isVisible) windowKey=\(window.isKeyWindow)
+            Toolbar items:
+            \(toolbarItems)
+            Accessibility elements:
+            \(accessibility)
+            """)
+        }
+        return try #require(found)
     }
 
     static func openMenu(
@@ -280,12 +282,10 @@ enum AppKitTestSupport {
         ]
         try JSONSerialization.data(withJSONObject: request, options: [.sortedKeys])
             .write(to: directory.appendingPathComponent("\(name)-capture-request.json"), options: .atomic)
-        let deadline = ContinuousClock.now + .seconds(30)
         let acknowledged = directory.appendingPathComponent(acknowledgement).path
-        while !FileManager.default.fileExists(atPath: acknowledged), ContinuousClock.now < deadline {
-            try await Task.sleep(for: .milliseconds(100))
+        try await TestWait.state("external screenshot \(name)") {
+            FileManager.default.fileExists(atPath: acknowledged)
         }
-        try #require(FileManager.default.fileExists(atPath: acknowledged), "The external screenshot must complete")
     }
 
     static func record(menu: NSMenu, content: NSView?, name: String) throws {

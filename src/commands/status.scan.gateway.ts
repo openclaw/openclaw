@@ -52,7 +52,7 @@ export async function scanStatusJsonGateway(
     () => {
       const timeoutMs = resolveStatusGatewayProbeTimeoutMs(opts);
       if (timeoutMs === 0) {
-        projectionError = "Gateway probe budget exhausted before status projection.";
+        projectionError = "Gateway check budget exhausted before status projection.";
         return Promise.resolve(null);
       }
       return callGateway<StatusSummary>({

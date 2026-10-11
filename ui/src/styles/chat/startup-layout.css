@@ -32,14 +32,8 @@
   --chat-thread-max-width: 48rem;
   /* Keep overlays clear of the edge-hugging scrollbar and add room on wide screens. */
   --chat-thread-gutter: 18px;
-  /* Composer box insets. The docked progress card derives its own edge from
-     both, so the two never overlap and their bottoms stay on one line. */
   --chat-composer-side-inset: 36px;
   --chat-composer-bottom-gap: 14px;
-  /* Docked progress-card width. Kept in step with PROGRESS_CARD_DOCK_MIN_GUTTER_PX
-     in chat-pane-rails.ts, which gates the placement on a gutter wide enough for
-     this card plus the gutter stack's insets. */
-  --chat-progress-dock-width: 250px;
   --chat-thread-side-inset: clamp(6px, 1vw, 12px);
 
   position: relative;
@@ -65,7 +59,6 @@
   }
 }
 
-/* Chat thread - scrollable middle section, transparent */
 .chat-thread-viewport,
 .chat-thread {
   --chat-thread-padding-top: clamp(20px, 3vh, 28px);
@@ -107,6 +100,15 @@
   /* Allow shrinking for flex scroll behavior */
   border-radius: var(--radius-md);
   background: transparent;
+}
+
+/* Embedded transcripts size against their pane, not the desktop viewport.
+   Avatar-free threads need only a small reading inset at narrow widths. */
+@container chat-conversation (max-width: 560px) {
+  .chat-thread--direct {
+    --chat-thread-gutter: 12px;
+    --chat-thread-side-inset: 0px;
+  }
 }
 
 /* Keep short-pane insets with their defaults: shared CSS chunks can load the
@@ -159,6 +161,19 @@
   min-width: 0;
   min-height: 0;
   max-height: var(--chat-footer-max-height);
+}
+
+.creation-composer {
+  display: flex;
+  flex: 0 1 auto;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+  max-height: var(--chat-footer-max-height, 60%);
+}
+
+.creation-composer > .callout {
+  margin-inline: var(--chat-composer-side-inset, 16px);
 }
 
 /* The fade stays inside the transcript viewport; footer controls never cover it. */
@@ -235,7 +250,6 @@
   padding-inline-end: var(--chat-avatar-gutter);
 }
 
-/* User messages on right */
 .chat-group.user {
   --chat-user-content-align: end;
   flex-direction: row-reverse;
@@ -278,7 +292,6 @@
   border: 1px solid var(--border);
 }
 
-/* Minimal Bubble Design - dynamic width based on content */
 .chat-bubble {
   position: relative;
   display: block;
@@ -360,26 +373,20 @@
 }
 
 .chat-pane__header-leading,
-.chat-pane__header-center,
 .chat-pane__header-trailing {
   display: flex;
   min-width: 0;
   align-items: center;
-}
-
-.chat-pane__header-leading,
-.chat-pane__header-trailing {
   gap: 8px;
 }
 
-.chat-pane__header-center {
-  position: relative;
-  justify-self: center;
-}
-
 .chat-pane__header-trailing {
+  flex-wrap: wrap;
   flex-shrink: 0;
+  justify-content: flex-end;
+  max-width: 100%;
   margin-left: auto;
+  row-gap: 0;
   justify-self: end;
 }
 
@@ -409,7 +416,7 @@
 }
 
 /* The title hugs its text so the segments after it stay adjacent (the trail's
-   shared 8px gap provides the spacing); it may shrink with ellipsis
+   shared gap provides the spacing); it may shrink with ellipsis
    when space runs out, and the action row pushes itself to the right edge. */
 .chat-pane__session-title {
   display: inline-flex;
@@ -526,12 +533,9 @@
     max-width: none;
   }
 
-  .chat-pane__workspace-chip span {
-    display: none;
-  }
-
   /* The project name is gone at this width, so the separator would trail an
      icon-only pill and read as punctuation with nothing on its left. */
+  .chat-pane__workspace-chip span,
   .chat-pane__project-row + .chat-pane__session-trail > .chat-pane__crumb-sep:first-child {
     display: none;
   }
@@ -672,7 +676,7 @@ openclaw-chat-sidebar-region,
 .sidebar-region__primary[hidden],
 .sidebar-region:not(.sidebar-region--open) [data-region-header="side"],
 .sidebar-region--expanded:not(.sidebar-region--expanded-side) [data-region-header="side"],
-.sidebar-region--expanded-side .sidebar-region__header {
+.sidebar-region--expanded-side > .sidebar-region__header {
   display: none;
 }
 
@@ -728,10 +732,7 @@ openclaw-chat-sidebar-region,
 }
 
 .sidebar-region:not(.sidebar-region--open) .side-panel__empty-body,
-.sidebar-region--expanded .side-panel__empty-body {
-  display: none;
-}
-
+.sidebar-region--expanded .side-panel__empty-body,
 .side-panel__panel[hidden] {
   display: none;
 }

@@ -107,7 +107,7 @@ Reduce the number of Feishu/Lark API calls with two optional flags:
 | `"group_topic"`        | One session per topic thread; falls back to the group session    |
 | `"group_topic_sender"` | One session per (topic + sender); falls back to (group + sender) |
 
-For the topic scopes, native Feishu/Lark topic groups use the event `thread_id` (`omt_*`) as the canonical topic session key. If a native topic starter event omits `thread_id`, OpenClaw hydrates it from Feishu before routing the turn. Normal group replies that OpenClaw turns into threads keep using the reply root message ID (`om_*`) so the first turn and follow-up turns stay in the same session.
+For the topic scopes, native Feishu/Lark topic groups use the event `thread_id` (`omt_*`) as the topic session key. If a native topic starter event omits `thread_id`, OpenClaw hydrates it from Feishu before routing the turn. Normal group replies that OpenClaw turns into threads keep using the reply root message ID (`om_*`) so the first turn and follow-up turns stay in the same session.
 
 Set `replyInThread: "enabled"` (top-level or per group) to make bot replies create or continue a Feishu topic thread instead of replying inline. `topicSessionMode` is the deprecated predecessor of `groupSessionScope`; prefer `groupSessionScope`.
 
@@ -156,7 +156,6 @@ Feishu/Lark supports ACP for DMs and group thread messages. Feishu/Lark ACP is t
   agents: {
     entries: {
       codex: {
-        default: true,
         runtime: {
           type: "acp",
           acp: {
@@ -210,8 +209,13 @@ Use `bindings` to route Feishu/Lark DMs or groups to different agents.
 ```json5
 {
   agents: {
+    ownership: "explicit",
+    defaults: {
+      heartbeat: { agentId: "main" },
+      systemAgent: { agentId: "main" },
+    },
     entries: {
-      main: { default: true },
+      main: { workspace: "~/.openclaw/workspace" },
       "agent-a": { workspace: "/home/user/agent-a" },
       "agent-b": { workspace: "/home/user/agent-b" },
     },
@@ -231,7 +235,9 @@ Use `bindings` to route Feishu/Lark DMs or groups to different agents.
         peer: { kind: "group", id: "oc_zzz" },
       },
     },
+    { agentId: "main", match: { channel: "feishu", accountId: "*" } },
   ],
+  talk: { agentId: "main" },
 }
 ```
 

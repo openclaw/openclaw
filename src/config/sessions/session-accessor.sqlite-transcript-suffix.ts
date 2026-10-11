@@ -3,6 +3,10 @@ import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
 } from "../../infra/kysely-sync.js";
+import {
+  sqliteSessionIdWriteScope,
+  withSqliteDatabaseWriteScope,
+} from "../../infra/sqlite-database-admission.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import type { TranscriptEvent } from "./session-accessor.sqlite-contract.js";
 import {
@@ -392,6 +396,10 @@ export function replaceSqliteTranscriptSuffixInTransaction(
   database: OpenClawAgentDatabase,
   resolved: ResolvedTranscriptScope,
   plan: SqliteTranscriptSuffixMutationPlan,
+  projection: {
+    scheduleProjectionReconcile?: boolean;
+    onProjectionReconcileNeeded?: () => void;
+  } = {},
 ): void {
   const db = getSessionKysely(database.db);
   if (
@@ -467,20 +475,24 @@ export function replaceSqliteTranscriptSuffixInTransaction(
     insertEvents,
     retainedCustomDataIds,
   );
-  executeSqliteQuerySync(
-    database.db,
-    db
-      .deleteFrom("transcript_event_identities")
-      .where("session_id", "=", resolved.sessionId)
-      .where("seq", ">=", plan.startSeq),
+  withSqliteDatabaseWriteScope(database.db, [sqliteSessionIdWriteScope(resolved.sessionId)], () =>
+    executeSqliteQuerySync(
+      database.db,
+      db
+        .deleteFrom("transcript_event_identities")
+        .where("session_id", "=", resolved.sessionId)
+        .where("seq", ">=", plan.startSeq),
+    ),
   );
-  executeSqliteQuerySync(
-    database.db,
-    db
-      .deleteFrom("transcript_events")
-      .where("session_id", "=", resolved.sessionId)
-      .where("seq", ">=", plan.startSeq)
-      .$if(stagedData !== undefined, (query) => query.where("seq", "<", stagedData!.startSeq)),
+  withSqliteDatabaseWriteScope(database.db, [sqliteSessionIdWriteScope(resolved.sessionId)], () =>
+    executeSqliteQuerySync(
+      database.db,
+      db
+        .deleteFrom("transcript_events")
+        .where("session_id", "=", resolved.sessionId)
+        .where("seq", ">=", plan.startSeq)
+        .$if(stagedData !== undefined, (query) => query.where("seq", "<", stagedData!.startSeq)),
+    ),
   );
   insertTranscriptRowsWithoutProjectionInTransaction(
     database,
@@ -511,12 +523,14 @@ export function replaceSqliteTranscriptSuffixInTransaction(
   );
   pruneTranscriptReactionsInTransaction(database, resolved, [...suffixIdentityKeys.keys()]);
   if (stagedData) {
-    executeSqliteQuerySync(
-      database.db,
-      db
-        .deleteFrom("transcript_events")
-        .where("session_id", "=", resolved.sessionId)
-        .where("seq", ">=", stagedData.startSeq),
+    withSqliteDatabaseWriteScope(database.db, [sqliteSessionIdWriteScope(resolved.sessionId)], () =>
+      executeSqliteQuerySync(
+        database.db,
+        db
+          .deleteFrom("transcript_events")
+          .where("session_id", "=", resolved.sessionId)
+          .where("seq", ">=", stagedData.startSeq),
+      ),
     );
   }
 
@@ -565,13 +579,18 @@ export function replaceSqliteTranscriptSuffixInTransaction(
     );
     const replacementEventId = replacementByIdempotencyKey.get(key);
     if (!currentOwner && replacementEventId) {
-      executeSqliteQuerySync(
+      withSqliteDatabaseWriteScope(
         database.db,
-        db
-          .updateTable("transcript_event_identities")
-          .set({ message_idempotency_key: key })
-          .where("session_id", "=", resolved.sessionId)
-          .where("event_id", "=", replacementEventId),
+        [sqliteSessionIdWriteScope(resolved.sessionId)],
+        () =>
+          executeSqliteQuerySync(
+            database.db,
+            db
+              .updateTable("transcript_event_identities")
+              .set({ message_idempotency_key: key })
+              .where("session_id", "=", resolved.sessionId)
+              .where("event_id", "=", replacementEventId),
+          ),
       );
     }
   }
@@ -593,7 +612,8 @@ export function replaceSqliteTranscriptSuffixInTransaction(
     });
   } else {
     markSessionTranscriptIndexDirtyInTransaction(database.db, resolved.sessionId);
-    scheduleTranscriptProjectionReconcile(database, resolved.sessionId, true, {});
+    projection.onProjectionReconcileNeeded?.();
+    scheduleTranscriptProjectionReconcile(database, resolved.sessionId, true, projection);
   }
   touchTranscriptMutationInTransaction(database, resolved.sessionId);
 }

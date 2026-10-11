@@ -44,6 +44,19 @@ Anthropic and OpenCode Go model shards instead. Focused reruns can still use the
 aggregate `native-live-src-gateway-profiles-anthropic` or
 `native-live-src-gateway-profiles-opencode-go` handles.
 
+When repo/live coverage is selected, every profile also runs `live-cache`:
+stored provider floors, transport-prefix assertions, and live agent scenarios for
+Anthropic Messages and OpenAI Responses. The transport scenario also selects
+OpenRouter when its credential is present. The agent scenario forces full-history
+requests and rehydrates persisted prompt state; it does not restart a Gateway
+process or cover retained HTTP continuation requests.
+This is included in default stable/full validation; beta without soak retains
+its deferred repo/live coverage. See
+[Prompt-cache regression coverage](/help/testing/suites#prompt-cache-regression-coverage)
+for commands, estimated cost, and the distinction from offline admitted-agent
+and authenticated Gateway chat/subagent-completion coverage with an in-process server
+stop/start.
+
 ## Focused reruns
 
 Use `rerun_group` to avoid repeating unrelated release boxes:
@@ -72,7 +85,7 @@ dispatches may use it only as a deliberate manual aggregate of `qa-parity` and
 filters are also accepted for `all`.
 Mismatches fail before scheduling and never widen to an unfiltered run.
 Valid filter ids are defined in the reusable live/E2E workflow, including
-`docker-live-models`, `live-gateway-docker`,
+`live-cache`, `docker-live-models`, `live-gateway-docker`,
 `live-gateway-anthropic-docker`, `live-gateway-google-docker`,
 `live-gateway-minimax-docker`, `live-gateway-advisory-docker`,
 `live-cli-backend-docker`, `live-cli-cache-docker`, `live-acp-bind-docker`, and
@@ -92,10 +105,8 @@ All-group runs must keep every OS/suite pair: `-f cross_os_suite_filter=ubuntu,w
 or `packaged-fresh,installer-fresh,packaged-upgrade` are accepted, while any all-group
 filter that omits one of the nine Linux/Windows/macOS install and upgrade pairs is
 rejected before scheduling. All selected cross-OS outcomes block on failure. Every all-group run must retain
-all nine install/upgrade combinations. Selected lanes must succeed except
-`normalCi`'s policy-derived `windows-node-ci` and authenticated `recorded-flake`
-jobs; see [record a flake](/reference/full-release-validation/continuation#record-a-flake).
-Other children stay strict. No operator waiver can authorize publication with
+all nine install/upgrade combinations. Every selected lane must succeed. No
+operator waiver can authorize publication with
 failed selected tests. Stable publication requires stable/full evidence,
 soak, and blocking performance.
 

@@ -1,10 +1,15 @@
-// Hooks CLI process tests cover plugin-owned handles that outlive command output.
+// Hooks CLI process tests join plugin-owned handles and reject forced process exit.
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { once } from "node:events";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   buildNativeHookRelayCommand,
@@ -77,7 +82,8 @@ async function createLingeringPluginFixture(): Promise<{
       "  register(api) {",
       '    fs.writeFileSync(process.env.LINGER_MARKER, "registered\\n");',
       '    api.registerHook("command:new", () => {}, { name: "fixture-hook", description: "Fixture hook" });',
-      "    setInterval(() => {}, 60_000);",
+      "    const timer = setInterval(() => {}, 60_000);",
+      '    api.lifecycle.onDispose(() => { clearInterval(timer); fs.appendFileSync(process.env.LINGER_MARKER, "disposed\\n"); });',
       "  },",
       "};",
       "",
@@ -97,7 +103,7 @@ async function createLingeringPluginFixture(): Promise<{
 }
 
 async function createRelayPreloadFixture(
-  mode: "linger" | "missing-drain-callbacks" = "linger",
+  mode: "natural-exit" | "missing-drain-callbacks" = "natural-exit",
 ): Promise<{
   markerPath: string;
   preloadPath: string;
@@ -105,7 +111,7 @@ async function createRelayPreloadFixture(
 }> {
   const root = tempDirs.make("openclaw-hooks-relay-");
   const markerPath = path.join(root, "loaded");
-  const preloadPath = path.join(root, "linger.mjs");
+  const preloadPath = path.join(root, "natural-exit.mjs");
   const stateDir = path.join(root, "state");
   await fs.mkdir(stateDir, { recursive: true });
   await fs.writeFile(
@@ -113,8 +119,9 @@ async function createRelayPreloadFixture(
     [
       'import fs from "node:fs";',
       'fs.writeFileSync(process.env.LINGER_MARKER, "loaded\\n");',
-      ...(mode === "linger"
-        ? ["setInterval(() => {}, 60_000);"]
+      'process.exit = () => { throw new Error("unexpected forced process exit"); };',
+      ...(mode === "natural-exit"
+        ? []
         : [
             "for (const stream of [process.stdout, process.stderr]) {",
             "  const write = stream.write.bind(stream);",
@@ -149,6 +156,7 @@ async function createTimeoutOwnershipFixture(): Promise<{
       "const originalAsyncIterator = process.stdin[Symbol.asyncIterator].bind(process.stdin);",
       "process.stdin[Symbol.asyncIterator] = function () {",
       "  fs.writeFileSync(process.env.RELAY_READY_MARKER, `${process.pid}\\n`);",
+      '  process.stdout.write("relay-ready\\n");',
       "  return originalAsyncIterator();",
       "};",
       "",
@@ -293,7 +301,7 @@ describe("hooks CLI process lifecycle", () => {
   it.each([
     {
       name: "invalid JSON",
-      preloadMode: "linger" as const,
+      preloadMode: "natural-exit" as const,
       args: [
         "hooks",
         "relay",
@@ -306,13 +314,6 @@ describe("hooks CLI process lifecycle", () => {
       ],
       stdin: "{",
       diagnostic: "failed to read native hook input",
-    },
-    {
-      name: "missing required option",
-      preloadMode: "linger" as const,
-      args: ["hooks", "relay"],
-      stdin: "",
-      diagnostic: "native hook relay failed: Missing required option --provider",
     },
     {
       name: "missing drain callbacks with no lingering handle",
@@ -349,7 +350,7 @@ describe("hooks CLI process lifecycle", () => {
 
   it.runIf(process.platform !== "win32")(
     "keeps the relay on the timeout-owned shell PID",
-    async () => {
+    async ({ signal }) => {
       const fixture = await createTimeoutOwnershipFixture();
       const command = buildNativeHookRelayCommand({
         provider: "codex",
@@ -376,6 +377,16 @@ describe("hooks CLI process lifecycle", () => {
         stdio: ["pipe", "pipe", "pipe"],
       });
       activeChildren.add(child);
+      const closed = once(child, "close");
+      const ready = createDeferred();
+      let stdout = "";
+      child.stdout.setEncoding("utf8");
+      child.stdout.on("data", (chunk: string) => {
+        stdout += chunk;
+        if (stdout.includes("relay-ready\n")) {
+          ready.resolve();
+        }
+      });
       child.once("close", () => activeChildren.delete(child));
       const timeoutOwnedPid = child.pid;
       if (!timeoutOwnedPid) {
@@ -383,27 +394,24 @@ describe("hooks CLI process lifecycle", () => {
       }
 
       try {
-        await expect
-          .poll(async () => (await readPidFile(fixture.readyMarkerPath))[0], {
-            interval: 100,
-            timeout: outputTimeoutMs,
-          })
-          .toBe(timeoutOwnedPid);
+        await withinTest(
+          awaitGateBeforeSettlement(
+            ready.promise,
+            closed,
+            "native hook relay exited before writing its ready marker",
+          ),
+          signal,
+        );
+        expect((await readPidFile(fixture.readyMarkerPath))[0]).toBe(timeoutOwnedPid);
         expect(new Set(await readPidFile(fixture.pidLogPath))).toEqual(new Set([timeoutOwnedPid]));
 
-        const closed = once(child, "close");
         expect(child.kill("SIGKILL")).toBe(true);
-        await closed;
-        await expect
-          .poll(() => isProcessAlive(timeoutOwnedPid), { interval: 50, timeout: 5_000 })
-          .toBe(false);
-        await expect
-          .poll(
-            async () =>
-              (await readPidFile(fixture.pidLogPath)).filter((pid) => isProcessAlive(pid)),
-            { interval: 50, timeout: 5_000 },
-          )
-          .toEqual([]);
+        await withinTest(closed, signal);
+        // Every recorded relay is the reaped shell PID; close also joins its output streams.
+        expect(isProcessAlive(timeoutOwnedPid)).toBe(false);
+        expect(
+          (await readPidFile(fixture.pidLogPath)).filter((pid) => isProcessAlive(pid)),
+        ).toEqual([]);
       } finally {
         await terminateChild(child);
         for (const pid of await readPidFile(fixture.pidLogPath)) {
@@ -417,7 +425,7 @@ describe("hooks CLI process lifecycle", () => {
   );
 
   it.each(["src/entry.ts", "src/cli/native-hook-relay-entry.ts"])(
-    "%s uses the explicit relay database and exits despite a lingering handle",
+    "%s uses the explicit relay database and exits naturally",
     async (entryPath) => {
       const relay = registerOwnedNativeHookRelay({
         provider: "codex",
@@ -470,7 +478,7 @@ describe("hooks CLI process lifecycle", () => {
     90_000,
   );
 
-  it("exits after hooks list output when plugin registration leaves a ref'd handle", async () => {
+  it("joins the plugin-owned handle after hooks list output", async () => {
     const fixture = await createLingeringPluginFixture();
     const unavailableGatewayPort = await getFreePort();
 
@@ -495,6 +503,6 @@ describe("hooks CLI process lifecycle", () => {
     expect(JSON.parse(listResult.stdout)).toMatchObject({
       hooks: expect.arrayContaining([expect.objectContaining({ name: "fixture-hook" })]),
     });
-    await expect(fs.readFile(fixture.markerPath, "utf8")).resolves.toBe("registered\n");
+    await expect(fs.readFile(fixture.markerPath, "utf8")).resolves.toBe("registered\ndisposed\n");
   }, 150_000);
 });

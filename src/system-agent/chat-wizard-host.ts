@@ -6,7 +6,6 @@ import type {
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import {
   sanitizeWizardStepForClient,
   WizardSession,
@@ -116,7 +115,6 @@ const HOSTED_SETUP = {
     capability: "gateway",
   },
 } as const;
-const loadHostedRuntime = createLazyRuntimeModule(() => import("./hosted-setup.runtime.js"));
 
 function formatWizardOptions(step: WizardStep): string[] {
   return (step.options ?? []).map((option, index) => {
@@ -392,7 +390,7 @@ export class ChatWizardHost {
         return run
           ? await run(channel, prompter, beforePersistentApply, assertPersistentEffectCurrent)
           : await (
-              await loadHostedRuntime()
+              await import("./hosted-setup.runtime.js")
             ).runHostedChannelSetup(
               channel,
               prompter,
@@ -411,7 +409,7 @@ export class ChatWizardHost {
       kind,
       label: setup.label,
       run: async (prompter) =>
-        await (run ?? (await loadHostedRuntime())[setup.runtime])(
+        await (run ?? (await import("./hosted-setup.runtime.js"))[setup.runtime])(
           prompter,
           this.options.beforePersistentApply,
         ),
@@ -434,7 +432,7 @@ export class ChatWizardHost {
       label: "memory import",
       memoryImportProviders: providers,
       run: async (prompter) =>
-        await (run ?? (await loadHostedRuntime()).runHostedMemoryImport)(
+        await (run ?? (await import("./hosted-setup.runtime.js")).runHostedMemoryImport)(
           prompter,
           this.options.beforePersistentApply,
           (value) => providers.push(value),
@@ -515,7 +513,7 @@ export class ChatWizardHost {
           try {
             return {
               text: await (
-                await loadHostedRuntime()
+                await import("./hosted-setup.runtime.js")
               ).renderMemoryImport(
                 bridge.completion.memoryImport,
                 this.options.dependencies?.appendAuditEntry,
@@ -526,7 +524,7 @@ export class ChatWizardHost {
             log.warn(`memory import completed without audit entry: ${formatErrorMessage(error)}`);
             return {
               text: await (
-                await loadHostedRuntime()
+                await import("./hosted-setup.runtime.js")
               ).renderMemoryImport(bridge.completion.memoryImport, async () => ""),
               configWritten: false,
             };
@@ -551,7 +549,7 @@ export class ChatWizardHost {
       if (bridge.kind === "memory-import") {
         try {
           await (
-            await loadHostedRuntime()
+            await import("./hosted-setup.runtime.js")
           ).auditMemoryImport(
             bridge.completion.memoryImportProviders ?? [],
             this.options.dependencies?.appendAuditEntry,

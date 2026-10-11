@@ -12,7 +12,10 @@ import {
 } from "openclaw/plugin-sdk/realtime-voice-provider";
 import WebSocket from "ws";
 import type { OpenAIRealtimeHost } from "./realtime-host.js";
-import { readRealtimeErrorDetail } from "./realtime-provider-shared.js";
+import {
+  readRealtimeErrorDetail,
+  resolveOpenAIRealtimeRequestHeaders,
+} from "./realtime-provider-shared.js";
 import { buildOpenAIRealtimeSidebandUrl } from "./realtime-quicksilver-wire.js";
 import {
   OpenAIRealtimeEvents,
@@ -30,7 +33,6 @@ import {
   isOpenAIRealtimeStartupAuthFailure,
   requireOpenAIRealtimeApiKey,
   requireOpenAIRealtimePlatformAuth,
-  resolveOpenAIRealtimeEnvApiKey,
   resolveOpenAIRealtimeSecretInput,
   type OpenAIRealtimeUserMessageOptions,
   type OpenAIRealtimeVoiceBridgeConfig,
@@ -423,30 +425,29 @@ export class OpenAIRealtimeBridge extends OpenAIRealtimeEvents implements Realti
       )}`;
       return {
         url,
-        headers: this.runtime.resolveProviderRequestHeaders({
-          provider: "openai",
-          baseUrl: url,
-          capability: "audio",
-          transport: "websocket",
-          defaultHeaders: { "api-key": apiKey },
-        }) ?? { "api-key": apiKey },
+        headers: resolveOpenAIRealtimeRequestHeaders(
+          this.runtime,
+          url,
+          { "api-key": apiKey },
+          "websocket",
+        ),
       };
     }
 
     if (hasOpenAIRealtimeConfiguredApiKeyInput(cfg.apiKey)) {
       const directApiKey = resolveOpenAIRealtimeSecretInput(cfg.apiKey);
-      if (directApiKey.status === "missing") {
+      if (!directApiKey) {
         throw new Error(OPENAI_REALTIME_PLATFORM_AUTH_REQUIRED);
       }
-      return this.resolveApiKeyConnectionParams(directApiKey.value, model);
+      return this.resolveApiKeyConnectionParams(directApiKey, model);
     }
 
     if (cfg.azureEndpoint) {
-      const directApiKey = resolveOpenAIRealtimeEnvApiKey();
-      if (directApiKey.status === "missing") {
+      const directApiKey = resolveOpenAIRealtimeSecretInput(process.env.OPENAI_API_KEY);
+      if (!directApiKey) {
         throw new Error(OPENAI_REALTIME_API_KEY_REQUIRED);
       }
-      return this.resolveApiKeyConnectionParams(directApiKey.value, model);
+      return this.resolveApiKeyConnectionParams(directApiKey, model);
     }
 
     return this.resolveDefaultConnectionParams(model);
@@ -464,7 +465,7 @@ export class OpenAIRealtimeBridge extends OpenAIRealtimeEvents implements Realti
       },
       this.runtime,
     );
-    return this.resolveApiKeyConnectionParams(auth.value, model);
+    return this.resolveApiKeyConnectionParams(auth, model);
   }
 
   private resolveApiKeyConnectionParams(
@@ -473,7 +474,18 @@ export class OpenAIRealtimeBridge extends OpenAIRealtimeEvents implements Realti
   ): { url: string; headers: Record<string, string> } {
     const cfg = this.config;
     let url: string;
-    if (cfg.azureEndpoint) {
+    if (cfg.baseUrl) {
+      const endpoint = new URL(cfg.baseUrl);
+      // Signed endpoint queries can depend on the original escaping of other fields.
+      const query = endpoint.search
+        ? endpoint.search
+            .slice(1)
+            .split("&")
+            .filter((part) => !new URLSearchParams(part).has("model"))
+        : [];
+      endpoint.search = [...query, `model=${encodeURIComponent(model)}`].join("&");
+      url = endpoint.toString();
+    } else if (cfg.azureEndpoint) {
       const base = cfg.azureEndpoint
         .replace(/\/$/, "")
         .replace(/^http(s?):/, (_, secure: string) => `ws${secure}:`);
@@ -483,17 +495,14 @@ export class OpenAIRealtimeBridge extends OpenAIRealtimeEvents implements Realti
         ? buildOpenAIRealtimeSidebandUrl(cfg.callId)
         : `wss://api.openai.com/v1/realtime?model=${encodeURIComponent(model)}`;
     }
-    const defaultHeaders = { Authorization: `Bearer ${apiKey}` };
     return {
       url,
-      headers:
-        this.runtime.resolveProviderRequestHeaders({
-          provider: "openai",
-          baseUrl: url,
-          capability: "audio",
-          transport: "websocket",
-          defaultHeaders,
-        }) ?? defaultHeaders,
+      headers: resolveOpenAIRealtimeRequestHeaders(
+        this.runtime,
+        url,
+        { Authorization: `Bearer ${apiKey}` },
+        "websocket",
+      ),
     };
   }
 

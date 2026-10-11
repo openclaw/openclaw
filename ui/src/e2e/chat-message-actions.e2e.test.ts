@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { chromium, type Browser, type Locator, type Page } from "playwright";
 import { beforeEach, afterAll, beforeAll, describe, expect, it } from "vitest";
+import { CHAT_MESSAGE_MAX_CHARS } from "../../../packages/gateway-protocol/src/schema/chat-history-constants.js";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   canRunPlaywrightChromium,
@@ -94,13 +95,21 @@ async function expectHoverTooltip(button: Locator, text: string): Promise<void> 
           >("wa-tooltip");
         const body = tooltip?.shadowRoot?.querySelector<HTMLElement>('[part="body"]');
         const bounds = body?.getBoundingClientRect();
+        // Apple modifier glyphs pair hidden text with an aria-hidden SVG whose
+        // markup whitespace is in textContent but never rendered or announced.
+        const readableText = (node: Node): string =>
+          node instanceof Element && node.getAttribute("aria-hidden") === "true"
+            ? ""
+            : node instanceof Text
+              ? node.data
+              : Array.from(node.childNodes, readableText).join("");
         return {
           anchorMatches: tooltip?.anchor === element,
           height: bounds?.height ?? 0,
           hidden: body?.hidden ?? true,
           open: tooltip?.hasAttribute("open") ?? false,
           popupActive: tooltip?.popup?.active ?? false,
-          text: tooltip?.textContent?.trim() ?? "",
+          text: tooltip ? readableText(tooltip).trim() : "",
           width: bounds?.width ?? 0,
         };
       }),
@@ -622,7 +631,9 @@ describeControlUiE2e("Control UI chat message actions", () => {
       const file = group.locator("a").filter({ hasText: "tooltip-proof.txt" });
       await file.hover();
       await expect.poll(() => openTooltip.count()).toBe(1);
-      expect(await openTooltip.textContent()).toContain("/workspace/tooltip-proof.txt");
+      const filePath = group.locator("openclaw-tooltip[open] .markdown-file-tooltip__path");
+      await filePath.waitFor({ state: "visible" });
+      expect(await filePath.textContent()).toBe("/workspace/tooltip-proof.txt");
       expect(await popupStyle()).toEqual(metadataStyle);
       expect(await file.getAttribute("title")).toBe("");
       await screenshot(page, "tooltip-file-hint.png");
@@ -909,7 +920,7 @@ describeControlUiE2e("Control UI chat message actions", () => {
       expect(fullMessageRequest.params).toMatchObject({
         sessionKey: "agent:main:main",
         messageId: "assistant-full-message",
-        maxChars: 500_000,
+        maxChars: CHAT_MESSAGE_MAX_CHARS,
       });
       await expect
         .poll(() => fullTextBubble.locator(".chat-text").textContent())

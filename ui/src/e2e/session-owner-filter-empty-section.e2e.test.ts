@@ -52,7 +52,12 @@ suite.define(() => {
 
       try {
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:owner-0"));
-        const filter = page.getByRole("button", { name: "Filter & sort" });
+        // These cases exercise the extra owner/involvement filters inside All, not Mine.
+        await page
+          .locator(".sidebar-navigation-scope")
+          .getByRole("button", { name: "All", exact: true })
+          .click();
+        const filter = page.getByRole("button", { name: "Filter & sort", exact: true });
         const menu = page.locator(".sidebar-session-sort-menu");
         await filter.click();
         await chooseSidebarMenuOption(menu.page(), "Group by", "Person");

@@ -89,18 +89,15 @@ function createCliFixture(startupCssGzipBytes = 15, deferredCssGzipBytes = 15) {
     path.resolve("src/gateway/control-ui-route-preloads.ts"),
     path.join(gatewayDir, "control-ui-route-preloads.ts"),
   );
-  fs.copyFileSync(
-    path.resolve("scripts/lib/check-limits.mts"),
-    path.join(scriptLibDir, "check-limits.mts"),
-  );
-  fs.copyFileSync(
-    path.resolve("scripts/lib/control-ui-i18n-config.ts"),
-    path.join(scriptLibDir, "control-ui-i18n-config.ts"),
-  );
-  fs.copyFileSync(
-    path.resolve("scripts/lib/control-ui-i18n-config.json"),
-    path.join(scriptLibDir, "control-ui-i18n-config.json"),
-  );
+  for (const file of [
+    "check-limits.mts",
+    "control-ui-i18n-config.ts",
+    "control-ui-i18n-config.json",
+    "record-shared.mjs",
+    "regexp.mjs",
+  ]) {
+    fs.copyFileSync(path.resolve("scripts/lib", file), path.join(scriptLibDir, file));
+  }
   fs.writeFileSync(
     path.join(scriptsDir, "tsx.mjs"),
     `await import(${JSON.stringify(tsxImport)});\n`,
@@ -198,6 +195,7 @@ function createMetrics(startupJsGzipBytes: number) {
 
 const looseBudgets = {
   startupJsRequests: 10,
+  routeBootJsRequests: 35,
   startupCssRequests: 10,
   startupJsGzipBytes: 100_000,
   startupCssGzipBytes: 100_000,
@@ -255,6 +253,7 @@ describe("Control UI performance budgets", () => {
     writeAsset("chat-e.css", { rawBytes: 25, gzipBytes: 10, brotliBytes: 8 });
     writeAsset("new-f.js", { rawBytes: 150, gzipBytes: 60, brotliBytes: 45 });
     writeAsset("lazy-g.js", { rawBytes: 300, gzipBytes: 90, brotliBytes: 65 });
+    fs.writeFileSync(path.join(distDir, "assets/art.webp"), Buffer.alloc(17));
 
     const metrics = collectControlUiPerformanceMetrics(distDir);
 
@@ -285,8 +284,7 @@ describe("Control UI performance budgets", () => {
     expect(report).toContain("chat boot JS: 3 requests, 135 B gzip");
     expect(report).toContain("70 B beyond initial-entry JS");
     expect(report).toContain("new boot JS: 3 requests, 125 B gzip");
-
-    writeAsset("chat-d.js", { rawBytes: 200, gzipBytes: 50, brotliBytes: 40 });
+    writeAsset("chat-d.js", { rawBytes: 180, gzipBytes: 50, brotliBytes: 40 });
     const smaller = collectControlUiPerformanceMetrics(distDir);
     expect(formatControlUiPerformanceReport(smaller, looseBudgets, null, 512, metrics)).toContain(
       "chat boot JS gzip vs base: 135 B -> 115 B (-20 B); requests 3 -> 3",
@@ -298,6 +296,7 @@ describe("Control UI performance budgets", () => {
     const metrics = collectControlUiPerformanceMetrics(distDir);
     const budgets = {
       startupJsRequests: 0,
+      routeBootJsRequests: 35,
       startupCssRequests: 1,
       startupJsGzipBytes: 30,
       startupCssGzipBytes: 20,
@@ -315,6 +314,20 @@ describe("Control UI performance budgets", () => {
     expect(formatControlUiPerformanceReport(metrics, budgets)).toContain(
       "route boot accounting: unavailable (build has no route preload templates)",
     );
+  });
+
+  it.each(["chat", "new"] as const)("enforces the %s boot JS request limit", (route) => {
+    const initial = createMetrics(40);
+    const boot = { ...initial.startup, js: { ...initial.startup.js, requests: 35 } };
+    const metrics = { ...initial, routeBoot: { chat: boot, new: boot } };
+
+    expect(evaluateControlUiPerformanceBudgets(metrics)).toEqual([]);
+
+    metrics.routeBoot[route] = { ...boot, js: { ...boot.js, requests: 36 } };
+    expect(evaluateControlUiPerformanceBudgets(metrics)).toEqual([
+      { metric: `${route} boot JS requests`, actual: 36, limit: 35, unit: "count" },
+    ]);
+    expect(formatControlUiPerformanceReport(metrics)).toContain("limit: 35 requests");
   });
 
   it.each([
@@ -547,6 +560,7 @@ describe("Control UI performance budgets", () => {
     const metrics = createMetrics(43_009);
     const budgets = {
       startupJsRequests: 1,
+      routeBootJsRequests: 35,
       startupCssRequests: 1,
       startupJsGzipBytes: 43_008,
       startupCssGzipBytes: 20,

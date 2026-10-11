@@ -122,7 +122,7 @@ describe("ollama provider policy public artifact", () => {
     });
   });
 
-  it.each(["glm-5.2", "deepseek-v4-pro:cloud"])(
+  it.each(["glm-5.2", "glm-5.3", "deepseek-v4-pro:cloud"])(
     "exposes full native effort for cloud model %s when lightweight projections omit metadata",
     (modelId) => {
       expect(resolveThinkingProfile({ provider: "ollama-cloud", modelId }).levels).toEqual([
@@ -134,6 +134,25 @@ describe("ollama provider policy public artifact", () => {
       ]);
     },
   );
+
+  it.each([undefined, null])("uses the implicit native API for discovered tiers (%s)", (api) => {
+    const profile = resolveThinkingProfile({
+      provider: "ollama",
+      modelId: "custom-thinking-model",
+      api,
+      reasoning: true,
+      thinkingLevelMap: { minimal: "minimal", xhigh: "xhigh" },
+    });
+    expect(profile.levels.map(({ id }) => id)).toEqual([
+      "off",
+      "minimal",
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max",
+    ]);
+  });
 
   it.each(["minimax-m2.7", "custom-thinking-model"])(
     "does not invent effort levels for catalog-light cloud model %s",

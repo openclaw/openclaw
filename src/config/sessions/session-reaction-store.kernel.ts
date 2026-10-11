@@ -6,16 +6,10 @@ import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { SessionWorkStartInvalidatedError } from "./lifecycle.js";
 import { readSessionEntryInstanceId } from "./session-accessor.sqlite-entry-identity.js";
 import { reactionDb, reactionRows, summarizeReactions } from "./session-reaction-store.read.js";
-import type { StoredMessageReactionSummary } from "./session-reaction-store.types.js";
-
-export type SetSessionReactionParams = {
-  messageId: string;
-  emoji: string;
-  identityId: string;
-  identityLabel?: string;
-  remove?: boolean;
-  expectedSessionId: string;
-};
+import type {
+  SessionReactionWrite,
+  SetSessionReactionParams,
+} from "./session-reaction-store.types.js";
 
 export class SessionReactionLimitError extends Error {
   constructor() {
@@ -31,12 +25,6 @@ export class SessionReactionMessageMissingError extends Error {
     this.name = "SessionReactionMessageMissingError";
   }
 }
-
-/** `changed` is false for an add that already exists or a remove with nothing to remove. */
-export type SessionReactionWrite = {
-  reactions: StoredMessageReactionSummary[];
-  changed: boolean;
-};
 
 export function setSessionReactionInDatabase(
   database: OpenClawAgentDatabase,
@@ -58,10 +46,14 @@ export function setSessionReactionInDatabase(
   const existing = rows.some(
     (row) => row.emoji === params.emoji && row.identity_id === params.identityId,
   );
+  if (params.remove ? !existing : existing) {
+    return {
+      reactions: summarizeReactions(rows),
+      newestRemainingEmoji: rows.at(-1)?.emoji,
+      changed: false,
+    };
+  }
   if (params.remove) {
-    if (!existing) {
-      return { reactions: summarizeReactions(rows), changed: false };
-    }
     executeSqliteQuerySync(
       database.db,
       db
@@ -73,9 +65,6 @@ export function setSessionReactionInDatabase(
         .where("identity_id", "=", params.identityId),
     );
   } else {
-    if (existing) {
-      return { reactions: summarizeReactions(rows), changed: false };
-    }
     const count =
       executeSqliteQueryTakeFirstSync(
         database.db,
@@ -118,17 +107,17 @@ export function setSessionReactionInDatabase(
       }),
     );
   }
-  return {
-    reactions: summarizeReactions(
-      executeSqliteQuerySync(
-        database.db,
-        reactionRows(database, sessionKey, params.expectedSessionId).where(
-          "message_id",
-          "=",
-          params.messageId,
-        ),
-      ).rows,
+  const remainingRows = executeSqliteQuerySync(
+    database.db,
+    reactionRows(database, sessionKey, params.expectedSessionId).where(
+      "message_id",
+      "=",
+      params.messageId,
     ),
+  ).rows;
+  return {
+    reactions: summarizeReactions(remainingRows),
+    newestRemainingEmoji: remainingRows.at(-1)?.emoji,
     changed: true,
   };
 }

@@ -1,4 +1,4 @@
-// Shared row mutations for synchronous session signals and the shared-state worker.
+// Connection-bound signal mutations execute in the shared-state worker.
 import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
@@ -23,8 +23,9 @@ import {
   type SessionStateActorType,
   type SessionStateEventKind,
 } from "./session-state-event-kinds.js";
+import type { SessionStateEventRecord } from "./session-state-events.types.js";
 import {
-  rowToSessionUpstreamLink,
+  readSessionUpstreamLinkInDatabase,
   type SessionUpstreamLink,
 } from "./session-upstream-links.kernel.js";
 
@@ -49,19 +50,6 @@ type SessionStateDatabase = Pick<
 >;
 type SessionStateEventsTable = OpenClawStateKyselyDatabase["session_state_events"];
 export type SessionStateEventRow = Selectable<SessionStateEventsTable>;
-export type SessionStateEventRecord = {
-  sequence: number;
-  sessionKey: string;
-  sessionId?: string;
-  agentId: string;
-  kind: SessionStateEventKind;
-  actorType: SessionStateActorType;
-  actorId?: string;
-  runId?: string;
-  occurredAt: number;
-  summary: string;
-  payload?: Record<string, unknown>;
-};
 
 export function rowToSessionStateEvent(row: SessionStateEventRow): SessionStateEventRecord {
   const payload = row.payload_json ? safeParseJsonRecord(row.payload_json) : undefined;
@@ -130,15 +118,8 @@ export function isSessionStateUpstreamCurrentInDatabase(
   db: DatabaseSync,
   expected: SessionUpstreamLink,
 ): boolean {
-  const row = executeSqliteQueryTakeFirstSync(
-    db,
-    getNodeSqliteKysely<Pick<OpenClawStateKyselyDatabase, "session_upstream_links">>(db)
-      .selectFrom("session_upstream_links")
-      .selectAll()
-      .where("session_key", "=", expected.sessionKey)
-      .where("agent_id", "=", expected.agentId),
-  );
-  return row !== undefined && isDeepStrictEqual(rowToSessionUpstreamLink(row), expected);
+  const current = readSessionUpstreamLinkInDatabase(db, expected.sessionKey, expected.agentId);
+  return current !== undefined && isDeepStrictEqual(current, expected);
 }
 
 export function normalizeOptionalSqliteNumber(

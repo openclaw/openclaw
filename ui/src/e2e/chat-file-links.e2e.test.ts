@@ -78,6 +78,8 @@ describeControlUiE2e("Control UI chat file links", () => {
           root: "/workspace",
           sessionKey: "agent:main:main",
           file: {
+            previewKind: "text",
+            contentEncoding: "utf8",
             content: "export const loaded = true;\n",
             kind: "read",
             missing: false,
@@ -398,6 +400,8 @@ describeControlUiE2e("Control UI chat file links", () => {
                 response: {
                   root: "/workspace",
                   file: {
+                    previewKind: "text",
+                    contentEncoding: "utf8",
                     content: initialText,
                     hash: "before-hash",
                     kind: "modified",
@@ -413,6 +417,8 @@ describeControlUiE2e("Control UI chat file links", () => {
                 response: {
                   root: "/workspace",
                   file: {
+                    previewKind: "text",
+                    contentEncoding: "utf8",
                     content: initialText,
                     hash: "before-hash",
                     kind: "modified",
@@ -468,7 +474,10 @@ describeControlUiE2e("Control UI chat file links", () => {
         .toMatchObject({ path: "packages/app" });
       await expect
         .poll(() =>
-          page.getByRole("button", { name: "All", exact: true }).getAttribute("aria-pressed"),
+          page
+            .getByRole("group", { name: "Filter files", exact: true })
+            .getByRole("button", { name: "All", exact: true })
+            .getAttribute("aria-pressed"),
         )
         .toBe("true");
       const browserRow = page

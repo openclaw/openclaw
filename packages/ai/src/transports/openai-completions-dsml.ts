@@ -6,17 +6,7 @@ import {
   longestDsmlTokenPrefixSuffixLength,
 } from "./deepseek-dsml-grammar.js";
 import { measureUtf8AppendBytes } from "./openai-transport-shared.js";
-
-export type RecoveredDeepSeekDsmlToolCall = {
-  kind: "toolCall";
-  name: string;
-  arguments: Record<string, unknown>;
-  partialArgs: string;
-};
-
-export type DeepSeekDsmlRecoveredPart =
-  | { kind: "text"; text: string }
-  | RecoveredDeepSeekDsmlToolCall;
+import type { RecoveredTextToolCall, TextToolCallRecoveryPart } from "./text-tool-call-recovery.js";
 
 const DEEPSEEK_DSML_TOOL_KINDS = ["tool_calls", "tool_call", "function_calls"] as const;
 const DEEPSEEK_DSML_TOOL_OPEN_TOKENS = DEEPSEEK_DSML_MARKERS.flatMap((marker) =>
@@ -59,8 +49,8 @@ export function createDsmlRecoverer() {
     blockScanState = { offset: 0 };
   };
 
-  const consume = (final: boolean): DeepSeekDsmlRecoveredPart[] => {
-    const output: DeepSeekDsmlRecoveredPart[] = [];
+  const consume = (final: boolean): TextToolCallRecoveryPart[] => {
+    const output: TextToolCallRecoveryPart[] = [];
     while (buffer) {
       const open = activeOpenToken
         ? { index: 0, token: activeOpenToken }
@@ -175,8 +165,8 @@ export function createDsmlRecoverer() {
   };
 }
 
-function parseDeepSeekDsmlToolCallBlock(body: string): RecoveredDeepSeekDsmlToolCall[] {
-  const toolCalls: RecoveredDeepSeekDsmlToolCall[] = [];
+function parseDeepSeekDsmlToolCallBlock(body: string): RecoveredTextToolCall[] {
+  const toolCalls: RecoveredTextToolCall[] = [];
   const invokeOpenRegex = new RegExp(`<${DEEPSEEK_DSML_MARKER_PATTERN}invoke\\b([^<>]*)>`, "g");
   let openMatch: RegExpExecArray | null;
   while ((openMatch = invokeOpenRegex.exec(body)) !== null) {
@@ -200,7 +190,7 @@ function parseDeepSeekDsmlToolCallBlock(body: string): RecoveredDeepSeekDsmlTool
       kind: "toolCall",
       name: invokeName,
       arguments: parsedArguments,
-      partialArgs: JSON.stringify(parsedArguments),
+      partialJson: JSON.stringify(parsedArguments),
     });
   }
   return toolCalls;
@@ -220,9 +210,21 @@ function parseDeepSeekDsmlInvokeArguments(body: string): Record<string, unknown>
     }
     const rawValue = parameterMatch[3] ?? "";
     if (rawValue.length === 0) {
-      continue;
+      const stringAttribute = Array.from(
+        (parameterMatch[2] ?? "").matchAll(
+          /(?:^|\s)([^\s=]+)=(?:"([^"]*)"|'([^']*)'|([^\s"']+))(?=\s|$)/g,
+        ),
+      ).find((attribute) => attribute[1] === "string");
+      if ((stringAttribute?.[2] ?? stringAttribute?.[3] ?? stringAttribute?.[4]) !== "true") {
+        continue;
+      }
     }
-    args[name] = decodeDeepSeekDsmlText(rawValue);
+    Object.defineProperty(args, name, {
+      value: decodeDeepSeekDsmlText(rawValue),
+      enumerable: true,
+      configurable: true,
+      writable: true,
+    });
   }
   if (Object.keys(args).length > 0) {
     return args;

@@ -1,80 +1,48 @@
-// Control UI tests cover the agents skills panel.
 import { render } from "lit";
 import { describe, expect, it } from "vitest";
 import type { SkillStatusEntry } from "../../api/types.ts";
 import { installBrowserHistoryIsolation } from "../../test-helpers/browser-history.ts";
+import { createSkill } from "../skills/view.test-support.ts";
 import { renderAgentSkills } from "./panels-skills.ts";
 
 installBrowserHistoryIsolation();
 
-function createSkill(
-  name: string,
-  options: { source?: string; bundled?: boolean; blockedByAgentFilter?: boolean } = {},
-): SkillStatusEntry {
+type Params = Parameters<typeof renderAgentSkills>[0];
+function skillsParams(skills: SkillStatusEntry[], overrides: Partial<Params> = {}): Params {
   return {
-    name,
-    description: `${name} skill`,
-    source: options.source ?? "openclaw-managed",
-    bundled: options.bundled ?? false,
-    filePath: `/tmp/skills/${name}/SKILL.md`,
-    baseDir: `/tmp/skills/${name}`,
-    skillKey: name,
-    always: false,
-    disabled: false,
-    blockedByAllowlist: false,
-    blockedByAgentFilter: options.blockedByAgentFilter ?? false,
-    eligible: true,
-    platformIncompatible: false,
-    modelVisible: !options.blockedByAgentFilter,
-    userInvocable: true,
-    commandVisible: !options.blockedByAgentFilter,
-    requirements: { bins: [], anyBins: [], env: [], config: [], os: [] },
-    missing: { bins: [], anyBins: [], env: [], config: [], os: [] },
-    configChecks: [],
-    install: [],
+    agentId: "main",
+    canPatchConfig: true,
+    canUpdateConfig: true,
+    report: { workspaceDir: "/tmp/workspace", managedSkillsDir: "/tmp/skills", skills },
+    loading: false,
+    error: null,
+    activeAgentId: "main",
+    configForm: { agents: { entries: { main: {} } } },
+    configLoading: false,
+    configSaving: false,
+    configDirty: false,
+    filter: "",
+    onFilterChange: () => undefined,
+    onRefresh: () => undefined,
+    onToggle: () => undefined,
+    onClear: () => undefined,
+    onDisableAll: () => undefined,
+    onConfigReload: () => undefined,
+    onConfigSave: () => undefined,
+    ...overrides,
   };
 }
 
 describe("agents skills panel (browser)", () => {
   it("shows matches from default-collapsed groups while filtering", async () => {
     const container = document.createElement("div");
-    const params: Parameters<typeof renderAgentSkills>[0] = {
-      agentId: "main",
-      canPatchConfig: true,
-      canUpdateConfig: true,
-      report: {
-        workspaceDir: "/tmp/workspace",
-        managedSkillsDir: "/tmp/skills",
-        agentId: "main",
-        skills: [
-          createSkill("Unique Built In Match", {
-            source: "openclaw-bundled",
-            bundled: true,
-          }),
-          createSkill("Installed Distractor"),
-        ],
-      },
-      loading: false,
-      error: null,
-      activeAgentId: "main",
-      configForm: { agents: { entries: { main: { default: true } } } },
-      configLoading: false,
-      configSaving: false,
-      configDirty: false,
-      filter: "",
-      onFilterChange: () => undefined,
-      onRefresh: () => undefined,
-      onToggle: () => undefined,
-      onClear: () => undefined,
-      onDisableAll: () => undefined,
-      onConfigReload: () => undefined,
-      onConfigSave: () => undefined,
-    };
-
+    const params = skillsParams([
+      createSkill({ name: "Unique Built In Match", source: "openclaw-bundled", bundled: true }),
+      createSkill({ name: "Installed Distractor", source: "openclaw-managed" }),
+    ]);
     render(renderAgentSkills(params), container);
     await Promise.resolve();
-    const builtInGroup = container.querySelector<HTMLDetailsElement>(".agent-skills-group");
-    expect(builtInGroup?.open).toBe(false);
+    expect(container.querySelector<HTMLDetailsElement>(".agent-skills-group")?.open).toBe(false);
 
     render(renderAgentSkills({ ...params, filter: "Unique Built In Match" }), container);
     await Promise.resolve();
@@ -86,152 +54,103 @@ describe("agents skills panel (browser)", () => {
     );
   });
 
-  it("reflects an inherited default skill allowlist", async () => {
+  it("keeps learned Workshop skills on under an allowlist", async () => {
     const container = document.createElement("div");
-
     render(
-      renderAgentSkills({
-        agentId: "main",
-        canPatchConfig: true,
-        canUpdateConfig: true,
-        report: {
-          workspaceDir: "/tmp/workspace",
-          managedSkillsDir: "/tmp/skills",
-          agentId: "main",
-          agentSkillFilter: ["github"],
-          skills: [createSkill("github"), createSkill("weather", { blockedByAgentFilter: true })],
-        },
-        loading: false,
-        error: null,
-        activeAgentId: "main",
-        configForm: {
-          agents: {
-            defaults: { skills: ["github"] },
-            entries: { main: { default: true } },
-          },
-        },
-        configLoading: false,
-        configSaving: false,
-        configDirty: false,
-        filter: "",
-        onFilterChange: () => undefined,
-        onRefresh: () => undefined,
-        onToggle: () => undefined,
-        onClear: () => undefined,
-        onDisableAll: () => undefined,
-        onConfigReload: () => undefined,
-        onConfigSave: () => undefined,
-      }),
-      container,
-    );
-    await Promise.resolve();
-
-    expect(container.querySelector(".callout.info")?.textContent).toContain(
-      "inherits the default skill allowlist",
-    );
-    expect(
-      Array.from(container.querySelectorAll<HTMLElement>(".agent-skill-row wa-switch")).map(
-        (toggle) => (toggle as HTMLElement & { checked: boolean }).checked,
+      renderAgentSkills(
+        skillsParams(
+          [
+            createSkill({ name: "github", source: "openclaw-managed" }),
+            createSkill({ name: "budget", source: "openclaw-workshop" }),
+          ],
+          { configForm: { agents: { entries: { main: { skills: ["github"] } } } } },
+        ),
       ),
-    ).toEqual([true, false]);
-    const buttons = Array.from(container.querySelectorAll<HTMLButtonElement>("button"));
-    expect(buttons[0]?.disabled).toBe(false);
-    expect(buttons[1]?.disabled).toBe(true);
-  });
-
-  it("gates allowlist clearing separately from staged config edits", async () => {
-    const container = document.createElement("div");
-    render(
-      renderAgentSkills({
-        agentId: "main",
-        canPatchConfig: false,
-        canUpdateConfig: true,
-        report: {
-          workspaceDir: "/tmp/workspace",
-          managedSkillsDir: "/tmp/skills",
-          skills: [],
-        },
-        loading: false,
-        error: null,
-        activeAgentId: "main",
-        configForm: { agents: { entries: { main: { skills: ["coding-agent"] } } } },
-        configLoading: false,
-        configSaving: false,
-        configDirty: false,
-        filter: "",
-        onFilterChange: () => undefined,
-        onRefresh: () => undefined,
-        onToggle: () => undefined,
-        onClear: () => undefined,
-        onDisableAll: () => undefined,
-        onConfigReload: () => undefined,
-        onConfigSave: () => undefined,
-      }),
       container,
     );
     await Promise.resolve();
 
-    const buttons = Array.from(container.querySelectorAll<HTMLButtonElement>("button"));
-    expect(buttons[0]?.disabled).toBe(false);
-    expect(buttons[1]?.disabled).toBe(true);
+    const learnedRow = Array.from(container.querySelectorAll(".agent-skill-row")).find((row) =>
+      row.textContent?.includes("budget"),
+    );
+    const toggle = learnedRow?.querySelector<HTMLInputElement>("input.settings-toggle__input");
+    expect(toggle?.checked).toBe(true);
+    expect(toggle?.disabled).toBe(true);
+    expect(learnedRow?.textContent).toContain("archive in Workshop to hide");
+    expect(container.textContent).toContain("2/2");
   });
+
+  it.each(["inherited", "explicit without patch access"])(
+    "gates clearing a %s allowlist separately from staged edits",
+    async (mode) => {
+      const inherited = mode === "inherited";
+      const container = document.createElement("div");
+      const skills = inherited
+        ? [
+            createSkill({ name: "github", source: "openclaw-managed" }),
+            createSkill({
+              name: "weather",
+              source: "openclaw-managed",
+              blockedByAgentFilter: true,
+              modelVisible: false,
+              commandVisible: false,
+            }),
+          ]
+        : [];
+      render(
+        renderAgentSkills(
+          skillsParams(skills, {
+            canPatchConfig: inherited,
+            configForm: {
+              agents: inherited
+                ? { defaults: { skills: ["github"] }, entries: { main: {} } }
+                : { entries: { main: { skills: ["coding-agent"] } } },
+            },
+          }),
+        ),
+        container,
+      );
+      await Promise.resolve();
+      if (inherited) {
+        expect(container.querySelector(".callout.info")?.textContent).toContain(
+          "inherits the default skill allowlist",
+        );
+        expect(
+          Array.from(
+            container.querySelectorAll<HTMLInputElement>(
+              ".agent-skill-row input.settings-toggle__input",
+            ),
+          ).map((toggle) => toggle.checked),
+        ).toEqual([true, false]);
+      }
+      const buttons = container.querySelectorAll<HTMLButtonElement>("button");
+      expect(buttons[0]?.disabled).toBe(false);
+      expect(buttons[1]?.disabled).toBe(true);
+    },
+  );
 
   it("explains an unsatisfied one-of binary requirement", async () => {
     const container = document.createElement("div");
-    const skill: SkillStatusEntry = {
-      ...createSkill("coding-agent", { source: "openclaw-bundled", bundled: true }),
+    const requirements = {
+      bins: [],
+      anyBins: ["claude", "codex", "opencode"],
+      env: [],
+      config: [],
+      os: [],
+    };
+    const skill = createSkill({
       name: "Coding Agent",
-      description: "Delegate coding work to an available coding CLI.",
+      source: "openclaw-bundled",
+      bundled: true,
       eligible: false,
       modelVisible: false,
       commandVisible: false,
-      requirements: {
-        bins: [],
-        anyBins: ["claude", "codex", "opencode"],
-        env: [],
-        config: [],
-        os: [],
-      },
-      missing: {
-        bins: [],
-        anyBins: ["claude", "codex", "opencode"],
-        env: [],
-        config: [],
-        os: [],
-      },
+      requirements,
+      missing: requirements,
       install: [{ id: "node-codex", kind: "node", label: "Install Codex CLI", bins: ["codex"] }],
-    };
-
-    render(
-      renderAgentSkills({
-        agentId: "main",
-        canPatchConfig: true,
-        canUpdateConfig: true,
-        report: {
-          workspaceDir: "/tmp/workspace",
-          managedSkillsDir: "/tmp/skills",
-          skills: [skill],
-        },
-        loading: false,
-        error: null,
-        activeAgentId: "main",
-        configForm: { agents: { entries: { main: { default: true } } } },
-        configLoading: false,
-        configSaving: false,
-        configDirty: false,
-        filter: "",
-        onFilterChange: () => undefined,
-        onRefresh: () => undefined,
-        onToggle: () => undefined,
-        onClear: () => undefined,
-        onDisableAll: () => undefined,
-        onConfigReload: () => undefined,
-        onConfigSave: () => undefined,
-      }),
-      container,
-    );
+    });
+    render(renderAgentSkills(skillsParams([skill])), container);
     await Promise.resolve();
-
     expect(container.querySelector(".agent-skill-row")?.textContent).toContain(
       "bin:any of (claude, codex, opencode)",
     );

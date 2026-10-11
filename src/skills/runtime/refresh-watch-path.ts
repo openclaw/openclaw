@@ -30,15 +30,15 @@ export const DEFAULT_SKILLS_WATCH_IGNORED: RegExp[] = [
   /(^|[\\/])\.git([\\/]|$)/,
   /(^|[\\/])node_modules([\\/]|$)/,
   /(^|[\\/])dist([\\/]|$)/,
-  // Python virtual environments and caches
   /(^|[\\/])\.venv([\\/]|$)/,
   /(^|[\\/])venv([\\/]|$)/,
   /(^|[\\/])__pycache__([\\/]|$)/,
   /(^|[\\/])\.mypy_cache([\\/]|$)/,
   /(^|[\\/])\.pytest_cache([\\/]|$)/,
-  // Build artifacts and caches
   /(^|[\\/])build([\\/]|$)/,
   /(^|[\\/])\.cache([\\/]|$)/,
+  // Workshop version snapshots; discovery skips dot directories too.
+  /(^|[\\/])\.archive([\\/]|$)/,
 ];
 
 export const isIgnoredSkillsWatchPath = (candidate: string): boolean =>

@@ -8,6 +8,7 @@ import {
   isCronActiveJobMarkerCurrent,
 } from "../active-jobs.js";
 import { resolveAdmittedCronCompletionStatus } from "../completion-status.js";
+import type { CronCompletionDeliveryFence } from "../delivery-attempt-fence.js";
 import { resolveCronDeliveryPlan } from "../delivery-plan.js";
 import { createCronRunDiagnosticsFromError } from "../run-diagnostics.js";
 import type { CronRunReceiptHandle } from "../store/run-receipt.types.js";
@@ -21,6 +22,7 @@ import {
   CRON_AGENT_SETUP_WATCHDOG_MS,
   settleTimedOutCronRun,
 } from "./agent-watchdog.js";
+import { createCronCompletionDeliveryFence } from "./delivery-attempt-fence.js";
 import { abortErrorMessage, isSetupTimeoutErrorText } from "./execution-errors.js";
 import {
   assertServiceCronRunReceiptCurrent,
@@ -65,6 +67,7 @@ async function deliverPrimaryWebhook(
   progress: CronRunProgress,
   assertRunCurrent?: () => Promise<void>,
   activeJobMarker?: CronActiveJobMarker,
+  deliveryAttemptFence?: CronCompletionDeliveryFence,
 ): Promise<CronCoreRunOutcome> {
   const settle = (settledResult: CronCoreRunOutcome) => {
     // Publish the terminal delivery fact before this async function resolves;
@@ -119,8 +122,13 @@ async function deliverPrimaryWebhook(
     result,
     outcome: { status: "delivered" },
   });
+  let webhookAdapterEntered = false;
   try {
+    await deliveryAttemptFence?.beforeAttempt();
+    deliveryAttemptFence?.assertCurrent();
+    webhookAdapterEntered = true;
     const outcome = await state.deps.sendCronWebhook({
+      assertCurrent: deliveryAttemptFence?.assertCurrent,
       job,
       abortSignal,
       onDeliveryState: (delivery) => {
@@ -168,7 +176,9 @@ async function deliverPrimaryWebhook(
       withPrimaryWebhookTrace({
         job,
         result,
-        outcome: progress.webhookDelivery ?? { status: "unknown" },
+        outcome: progress.webhookDelivery ?? {
+          status: webhookAdapterEntered ? "unknown" : "not-delivered",
+        },
         error: deliveryError,
       }),
     );
@@ -196,6 +206,15 @@ async function executeJobCoreWithTimeoutUnfinalized(
           receiptSource.context,
           runAbortController.signal,
         )
+    : undefined;
+  const deliveryAttemptFence = opts?.runReceipt
+    ? createCronCompletionDeliveryFence({
+        state,
+        job,
+        handle: opts.runReceipt,
+        activeJobMarker: opts.activeJobMarker,
+        signal: runAbortController.signal,
+      })
     : undefined;
   const operatorCancellationMarker = Symbol("cron-operator-cancelled");
   const operatorCancellation = createDeferredCore<typeof operatorCancellationMarker>();
@@ -236,6 +255,11 @@ async function executeJobCoreWithTimeoutUnfinalized(
     const result: CronCoreRunOutcome = {
       status: "error",
       error,
+      // A timeout raised by this service-owned watchdog is authoritative even
+      // when the interrupted main-session heartbeat has no model attribution.
+      ...(interruption !== "cancelled" && {
+        errorClassification: { kind: "reason", reason: "timeout" },
+      }),
       // The abort race must retain attribution already reported by the runner.
       ...(execution && {
         provider: execution.provider,
@@ -318,6 +342,7 @@ async function executeJobCoreWithTimeoutUnfinalized(
     const resolveHeartbeatTimeoutMs = state.deps.resolveHeartbeatTimeoutMs;
     const executionIdentity = opts?.executionIdentity;
     const coreOptions: ExecuteJobCoreOptions = {
+      deliveryAttemptFence,
       activeJobMarker: opts?.activeJobMarker,
       owningCronLaneTaskMarker: opts?.owningCronLaneTaskMarker,
       streamBatch: opts?.streamBatch,
@@ -363,6 +388,7 @@ async function executeJobCoreWithTimeoutUnfinalized(
         progress,
         assertRunCurrent,
         opts?.activeJobMarker,
+        deliveryAttemptFence,
       );
     });
     // Timeout/cancel projects an outcome before an abort-ignoring core settles;
@@ -418,7 +444,7 @@ export function authorCronRunCompletion<
     | "delivered"
     | "deliveryAttempted"
   >,
->(_state: CronServiceState, job: CronJob, result: T) {
+>(job: CronJob, result: T) {
   const deliveryState =
     result.deliveryState ??
     resolveDeliveryState({
@@ -449,5 +475,5 @@ export async function executeJobCoreWithTimeout(
   opts?: CronCoreRunOptions,
 ) {
   const result = await executeJobCoreWithTimeoutUnfinalized(state, job, opts);
-  return authorCronRunCompletion(state, job, result);
+  return authorCronRunCompletion(job, result);
 }

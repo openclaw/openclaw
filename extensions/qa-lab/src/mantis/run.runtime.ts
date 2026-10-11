@@ -3,10 +3,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { root } from "openclaw/plugin-sdk/security-runtime";
+import { normalizeOptionalString as trimToValue } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { ensureRepoBoundDirectory, resolveRepoRelativeOutputDir } from "../cli-paths.js";
-import { trimToValue } from "../mantis-options.runtime.js";
 import {
-  copyMantisLaneArtifact,
+  copyMantisLaneArtifacts,
   createMantisRunStaging,
   publishMantisRunOutput,
   readMantisLaneResult,
@@ -41,7 +41,6 @@ import {
 import { attachMantisFailureArtifact } from "./run-failure.runtime.js";
 
 export type MantisBeforeAfterOptions = {
-  allowFailures?: boolean;
   baseline?: string;
   candidate?: string;
   commandRunner?: MantisCommandRunner;
@@ -86,7 +85,6 @@ const MANTIS_SCENARIO_CONFIGS: Record<string, MantisScenarioConfig> = {
     candidateLabel: "Candidate queued -> thinking -> done",
     candidateScreenshotAlt: "Candidate Discord status reaction timeline",
     defaultBaselineRef: DEFAULT_BASELINE_REF,
-    id: DEFAULT_SCENARIO,
     title: "Mantis Discord Status Reactions QA",
   },
   [DISCORD_THREAD_FILEPATH_ATTACHMENT_SCENARIO]: {
@@ -97,7 +95,6 @@ const MANTIS_SCENARIO_CONFIGS: Record<string, MantisScenarioConfig> = {
     candidateLabel: "Candidate includes filePath attachment",
     candidateScreenshotAlt: "Candidate Discord thread reply with filePath attachment",
     defaultBaselineRef: "81349cdc2a9d5143fd0991ed858b739e7d96e05c",
-    id: DISCORD_THREAD_FILEPATH_ATTACHMENT_SCENARIO,
     title: "Mantis Discord Thread Attachment QA",
   },
 };
@@ -188,7 +185,6 @@ async function runLane(params: {
     timeoutMs: params.commandTimeouts["worktree-add"],
   } satisfies MantisCommandExecution;
   let worktreeOwnership: MantisDirectoryOwnership | undefined;
-  let worktreePrepared = false;
   let workloadFailed = false;
   let workloadError: unknown;
   let cleanupFailed = false;
@@ -214,7 +210,6 @@ async function runLane(params: {
       directoryPath: worktreeDir,
       repoRoot: params.repoRoot,
     });
-    worktreePrepared = true;
     assertMantisCommandNotAborted({
       command: "git",
       args: worktreeAddArgs,
@@ -280,21 +275,7 @@ async function runLane(params: {
       publishedLaneDir: stagedLaneDir,
       scenario: params.scenario,
     });
-    const copiedScreenshot = await copyMantisLaneArtifact({
-      kind: "screenshot",
-      lane: params.lane,
-      result,
-    });
-    const copiedVideo = await copyMantisLaneArtifact({
-      kind: "video",
-      lane: params.lane,
-      result,
-    });
-    stagedResult = {
-      ...result,
-      screenshotPath: copiedScreenshot ?? result.screenshotPath,
-      videoPath: copiedVideo ?? result.videoPath,
-    };
+    stagedResult = await copyMantisLaneArtifacts({ lane: params.lane, result });
   } catch (error) {
     workloadFailed = true;
     workloadError = error;
@@ -302,7 +283,7 @@ async function runLane(params: {
   // Both failures are collected before either is rethrown, so cleanup cannot
   // overwrite the workload failure or lose its diagnostic cause.
   try {
-    if (worktreePrepared) {
+    if (worktreeOwnership) {
       if (workloadError instanceof MantisCommandCleanupError) {
         throw new Error(
           `Mantis preserved ${worktreeDir}: command descendants may still be running`,
