@@ -98,9 +98,7 @@ describe("personal publication authority and recovery", () => {
       coordinator,
     } = await createPersonalPublicationFixture());
   });
-  afterEach(() => {
-    vi.unstubAllGlobals();
-  });
+  afterEach(() => vi.unstubAllGlobals());
 
   it("rejects a pending personal confirmation after the real reset preserves its session ID", async () => {
     const workspace = await createRealPublicationWorkspace("push");
