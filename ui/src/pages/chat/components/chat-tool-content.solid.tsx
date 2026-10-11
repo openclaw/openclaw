@@ -2,6 +2,7 @@ import { asNullableRecord, isRecord } from "@openclaw/normalization-core/record-
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { For, Show, createEffect, createMemo } from "solid-js";
 import { isMarkdownBlockArtText } from "../../../components/markdown-text.ts";
+import "../../../components/panel-elements.ts";
 import { CopyButton } from "../../../components/solid/copy-button.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
 import "../../../components/tooltip.ts";

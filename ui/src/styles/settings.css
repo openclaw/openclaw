@@ -783,7 +783,8 @@ openclaw-appearance-background .settings-background-preview .session-background_
   cursor: var(--cursor-action);
 }
 
-.settings-row:not(.settings-row--stacked) .settings-row__control > .settings-select {
+.settings-row:not(.settings-row--stacked) .settings-row__control > .settings-select,
+.settings-row:not(.settings-row--stacked) .settings-row__control > .lit-content > .settings-select {
   width: auto;
   min-width: min(220px, 100%);
 }
@@ -805,6 +806,12 @@ openclaw-appearance-background .settings-background-preview .session-background_
 .settings-row:not(.settings-row--stacked) .settings-row__control > .settings-input,
 .settings-row:not(.settings-row--stacked) .settings-row__control > .settings-secret,
 .settings-row:not(.settings-row--stacked) .settings-row__control > .settings-phone-presentation,
+.settings-row:not(.settings-row--stacked) .settings-row__control > .lit-content > .settings-input,
+.settings-row:not(.settings-row--stacked) .settings-row__control > .lit-content > .settings-secret,
+.settings-row:not(.settings-row--stacked)
+  .settings-row__control
+  > .lit-content
+  > .settings-phone-presentation,
 .settings-row:not(.settings-row--stacked) .settings-row__control > .settings-input-with-hint {
   width: 340px;
 }
@@ -830,7 +837,8 @@ openclaw-appearance-background .settings-background-preview .session-background_
   overflow-wrap: anywhere;
 }
 
-.settings-row--stacked .settings-row__control > .settings-phone-presentation {
+.settings-row--stacked .settings-row__control > .settings-phone-presentation,
+.settings-row--stacked .settings-row__control > .lit-content > .settings-phone-presentation {
   flex: 1 1 auto;
   width: 100%;
 }
@@ -839,6 +847,10 @@ openclaw-appearance-background .settings-background-preview .session-background_
    text width turns −/+ stepper rows into a stretched bar. */
 .settings-row:not(.settings-row--stacked)
   .settings-row__control
+  > input[type="number"].settings-input,
+.settings-row:not(.settings-row--stacked)
+  .settings-row__control
+  > .lit-content
   > input[type="number"].settings-input {
   width: 110px;
 }
@@ -847,13 +859,18 @@ openclaw-appearance-background .settings-background-preview .session-background_
    quiet-hours window into two bars. */
 .settings-row:not(.settings-row--stacked)
   .settings-row__control
+  > input[type="time"].settings-input,
+.settings-row:not(.settings-row--stacked)
+  .settings-row__control
+  > .lit-content
   > input[type="time"].settings-input {
   width: auto;
 }
 
 /* Stacked rows (config form arrays/maps) give the control full width; the
    wrapper must grow or the inner 100% resolves against fit-content. */
-.settings-row--stacked .settings-row__control > .settings-secret {
+.settings-row--stacked .settings-row__control > .settings-secret,
+.settings-row--stacked .settings-row__control > .lit-content > .settings-secret {
   flex: 1 1 auto;
 }
 
