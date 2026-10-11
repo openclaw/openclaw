@@ -109,7 +109,6 @@ export async function runMemoryOriginRead<Kind extends MemoryOriginReadInput["ki
       "origin-rows": "origin rows",
       "session-tombstones": "tombstone rows",
       "origin-exists": "origin existence",
-      "origin-index-keys": "indexed origin keys",
     }[request.kind],
   );
 }
