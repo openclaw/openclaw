@@ -1364,8 +1364,6 @@
 ["extensions/qa-lab/src/manual-lane.runtime.test.ts","./lab-server.js","125e9d66e20ff7e78036afb73f88182144d522204aa83456e3654fa4b1a6f05b",1]
 ["extensions/qa-lab/src/manual-lane.runtime.test.ts","./providers/server-runtime.js","f942fc8d5895638287985b2d4e2ccda82071f565e98d8f61c5531a35a240ee13",1]
 ["extensions/qa-lab/src/manual-lane.runtime.test.ts","./qa-transport-registry.js","5dda7ccaf68d473f3e66b9479ffa87ee5cf753762fb099ee50a5c4254b843041",1]
-["extensions/qa-lab/src/model-selection.runtime.test.ts","openclaw/plugin-sdk/agent-runtime","de0302915d137e22b56923a9b8754cb715f05afe2cf0c5446cbde9f819f4aa7b",1]
-["extensions/qa-lab/src/model-selection.runtime.test.ts","openclaw/plugin-sdk/provider-auth","d552d420b1bb1be7f9827ee5a62bcc62e041b9bb941e9daea9135cea6e0f71b1",1]
 ["extensions/qa-lab/src/node-exec.test.ts","openclaw/plugin-sdk/process-runtime","b16471867358979b51355e078b4e9633553fc7957b4c94ea2836b095e67bcec4",1]
 ["extensions/qa-lab/src/profile-evidence-sharding.test.ts","./live-transports/cli.js","84d8f8c7afb0c2318d630480cfea38e729e2a355320ac99518020ec6d6210ad9",1]
 ["extensions/qa-lab/src/suite-launch.configured-discovery.test.ts","openclaw/plugin-sdk/run-command","f726dd306d915337c96c41dd4e775caf711c86477824190a808659558de36e03",1]
