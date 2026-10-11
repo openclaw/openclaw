@@ -20,8 +20,11 @@ vi.mock("../../state/user-channel-identity-operations.js", () => ({
     isCurrent: () => true,
   }),
 }));
-vi.mock("../../state/user-github-connections.js", () => ({
-  resolvePersonalGitHubOwner: (profile: string) => profile,
+// mock-isolation: Authorization policy fixtures do not open or hydrate the profile database.
+vi.mock("../../state/user-profile-list.js", () => ({
+  captureResidentUserProfileAccess: (profileId: string) => ({
+    assertCurrent: () => ({ id: profileId, role: null }),
+  }),
 }));
 vi.mock("../operator-role-policy.js", () => ({
   resolveOperatorRolePolicy: () => (mocks.roleScopes ? { scopes: mocks.roleScopes } : null),

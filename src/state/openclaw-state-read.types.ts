@@ -285,6 +285,8 @@ export type OpenClawStateReadCommand =
   | { type: "workerPlacements.changeSnapshot"; profileIds?: string[] }
   | { type: "nodeHost.config" }
   | { type: "tts.prefsPath" }
+  | { type: "voicewake.triggers" }
+  | { type: "voicewake.routing" }
   | { type: "operator.channelPolicy" }
   | { type: "preparedPoolPresence.read" }
   | {
@@ -572,7 +574,12 @@ export type OpenClawStateReadResult =
       placements: WorkerSessionPlacementChangeSnapshot[];
     }
   | {
-      type: "nodeHost.config" | "operator.channelPolicy" | "tts.prefsPath";
+      type:
+        | "nodeHost.config"
+        | "operator.channelPolicy"
+        | "tts.prefsPath"
+        | "voicewake.triggers"
+        | "voicewake.routing";
       row: ConfigMachineStateRow | undefined;
     }
   | {
