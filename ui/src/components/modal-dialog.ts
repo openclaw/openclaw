@@ -125,6 +125,7 @@ function createModalPolicy(host: OpenClawModalDialog, props: ModalDialogProperti
   let dismissing = false;
   let returnFocus: HTMLElement | null = null;
   let returnOverride: HTMLElement | null | undefined;
+  let returnFocusPending = false;
   let openingInteraction = false;
   let initialFocusPending = false;
   let focusBeforeChrome: HTMLElement | null = null;
@@ -153,6 +154,12 @@ function createModalPolicy(host: OpenClawModalDialog, props: ModalDialogProperti
     target.focus({ preventScroll: true });
   };
 
+  const clearReturnFocus = () => {
+    returnFocus = null;
+    returnOverride = undefined;
+    returnFocusPending = false;
+  };
+
   const restoreReturnFocus = () => {
     if (dialog.open) {
       return;
@@ -167,30 +174,33 @@ function createModalPolicy(host: OpenClawModalDialog, props: ModalDialogProperti
       active === host.ownerDocument.documentElement ||
       active === returnFocus ||
       containsComposed(dialog, active);
-    returnFocus = null;
-    returnOverride = undefined;
     if (suppressed && active === original) {
       original?.blur();
     }
     if (!target?.isConnected || !mayRestore) {
+      clearReturnFocus();
       return;
     }
     if (!isInert(target)) {
+      clearReturnFocus();
       restoreFocus(target);
       return;
     }
+    // Teardown can take over if the containing render removes us before inertness clears.
+    returnFocusPending = true;
     const version = ++focusReturnVersion;
     const connected = host.isConnected;
     // A containing render can release background inertness after removing us.
     queueMicrotask(() => {
-      if (
-        version === focusReturnVersion &&
-        host.isConnected === connected &&
-        !dialog.open &&
-        target.isConnected &&
-        !isInert(target) &&
-        activeElement(host) === active
-      ) {
+      if (version !== focusReturnVersion || host.isConnected !== connected || dialog.open) {
+        return;
+      }
+      if (!target.isConnected || activeElement(host) !== active) {
+        clearReturnFocus();
+        return;
+      }
+      if (!isInert(target)) {
+        clearReturnFocus();
         restoreFocus(target);
       }
     });
@@ -211,6 +221,9 @@ function createModalPolicy(host: OpenClawModalDialog, props: ModalDialogProperti
         focusReturnVersion += 1;
         // Reversing a pending close preserves the native dialog's original opener.
         if (!dialog.open) {
+          if (returnFocusPending) {
+            clearReturnFocus();
+          }
           returnFocus = activeElement(host);
           if (returnFocus) {
             overlay.setReturnTarget(returnFocus);
@@ -273,6 +286,10 @@ function createModalPolicy(host: OpenClawModalDialog, props: ModalDialogProperti
   const policy: ModalPolicy = {
     request,
     setReturnFocusTarget(target) {
+      if (returnFocusPending) {
+        focusReturnVersion += 1;
+        clearReturnFocus();
+      }
       returnOverride = target;
     },
     getOverlayContainer: () => overlayContainer,
@@ -284,9 +301,13 @@ function createModalPolicy(host: OpenClawModalDialog, props: ModalDialogProperti
     },
     connect() {
       focusReturnVersion += 1;
+      if (returnFocusPending) {
+        clearReturnFocus();
+      }
       request(host.open);
     },
     disconnect() {
+      focusReturnVersion += 1;
       detaching = true;
       try {
         overlay.retire();

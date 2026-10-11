@@ -201,6 +201,39 @@ describe.runIf(browserMode)("modal native focus ownership", () => {
     },
   );
 
+  it.each(["immediate", "queued"] as const)(
+    "hands off deferred focus after an accepted close and %s removal",
+    async (removal) => {
+      const background = document.createElement("div");
+      const trigger = document.createElement("button");
+      background.append(trigger);
+      container.append(background);
+      trigger.focus();
+      const { modal, dialog } = await mountModal(container, "palette");
+
+      background.inert = true;
+      modal.hide();
+      expect(dialog.open).toBe(false);
+      const remove = () => {
+        modal.remove();
+        background.inert = false;
+      };
+      if (removal === "immediate") {
+        remove();
+      } else {
+        await new Promise<void>((resolve) => {
+          queueMicrotask(() => {
+            remove();
+            resolve();
+          });
+        });
+      }
+
+      await Promise.resolve();
+      expect(document.activeElement).toBe(trigger);
+    },
+  );
+
   it.each(["replacement", "suppressed"] as const)(
     "preserves the original opener after reversing a pending close (%s)",
     async (mode) => {

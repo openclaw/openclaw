@@ -3,9 +3,9 @@ import { AsyncDirective } from "lit/async-directive.js";
 import { directive, type ElementPart } from "lit/directive.js";
 import { ref } from "lit/directives/ref.js";
 import { repeat } from "lit/directives/repeat.js";
-import { icons } from "./icons.ts";
+import { nativeTabs } from "./hub-tabs.ts";
 import "./tooltip.ts";
-import { nativeTabs } from "./tabs.ts";
+import { icons } from "./icons.ts";
 
 export type PanelTabStripTab = {
   id: string;
