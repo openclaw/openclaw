@@ -16,7 +16,7 @@
  */
 
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
-import { isMap, isScalar, isSeq, type Pair } from "yaml";
+import { isMap, isSeq, type Node } from "yaml";
 import type { MdAst } from "./ast.js";
 import { setMdOcPath } from "./edit.js";
 import { rebuildMdRaw } from "./emit.js";
@@ -27,7 +27,7 @@ import type { JsonlAst } from "./jsonl/ast.js";
 import { appendJsonlOcPath as appendJsonlLine, setJsonlOcPath } from "./jsonl/edit.js";
 import { resolveJsonlOcPath } from "./jsonl/resolve.js";
 import type { OcPath } from "./oc-path.js";
-import { formatOcPath, isPattern, OcPathError, parseArrayIndexSegment } from "./oc-path.js";
+import { formatOcPath, isPattern, OcPathError } from "./oc-path.js";
 import { resolveMdOcPath } from "./resolve.js";
 import { guardSentinel } from "./sentinel.js";
 import { slugify } from "./slug.js";
@@ -228,9 +228,9 @@ function resolveYamlToUniversal(ast: YamlAst, path: OcPath): OcMatch | null {
     return { kind: "root", ast, line: 1 };
   }
   if (m.kind === "scalar" || m.kind === "pair") {
-    return yamlScalarToMatch(m.value, yamlLine(ast, m.path));
+    return yamlScalarToMatch(m.value, yamlLine(ast, m.node));
   }
-  return { kind: "node", descriptor: `yaml-${m.kind}`, line: yamlLine(ast, m.path) };
+  return { kind: "node", descriptor: `yaml-${m.kind}`, line: yamlLine(ast, m.node) };
 }
 
 function yamlScalarToMatch(value: unknown, line: number): OcMatch {
@@ -257,32 +257,9 @@ function yamlScalarToText(value: unknown): string {
   return JSON.stringify(value) ?? "";
 }
 
-function yamlLine(ast: YamlAst, path: readonly string[]): number {
-  let node: unknown = ast.doc.contents;
-  for (const segment of path) {
-    if (node === null || typeof node !== "object") {
-      break;
-    }
-    if (isSeq(node)) {
-      const index = parseArrayIndexSegment(segment, node.items.length);
-      if (index === null) {
-        break;
-      }
-      node = node.items[index] ?? null;
-      continue;
-    }
-    if (isMap(node)) {
-      const pair = (node as { items: readonly Pair[] }).items.find((entry) => {
-        const key = isScalar(entry.key) ? entry.key.value : entry.key;
-        return String(key) === segment;
-      });
-      node = pair?.value ?? null;
-      continue;
-    }
-    break;
-  }
-  const range = (node as { range?: readonly [number, number, number] } | null)?.range;
-  if (range === undefined) {
+function yamlLine(ast: YamlAst, node: Node): number {
+  const range = node.range;
+  if (range == null) {
     return 1;
   }
   return ast.lineCounter.linePos(range[0]).line;
@@ -370,7 +347,7 @@ function resolveYamlInsertion(ast: YamlAst, info: InsertionInfo): InsertionMatch
   if (m.kind === "pair" || m.kind === "scalar") {
     return null;
   }
-  return { kind: "insertion-point", container: `yaml-${m.kind}`, line: yamlLine(ast, m.path) };
+  return { kind: "insertion-point", container: `yaml-${m.kind}`, line: yamlLine(ast, m.node) };
 }
 
 /**

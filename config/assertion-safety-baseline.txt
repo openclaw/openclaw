@@ -616,7 +616,7 @@ extensions/nostr/src/nostr-profile-http.ts	1
 extensions/nostr/src/nostr-profile-import.ts	1
 extensions/nvidia/provider-catalog.ts	1
 extensions/oc-path/src/oc-path/find.ts	9
-extensions/oc-path/src/oc-path/universal.ts	4
+extensions/oc-path/src/oc-path/universal.ts	2
 extensions/oc-path/src/oc-path/yaml/edit.ts	2
 extensions/oc-path/src/oc-path/yaml/resolve.ts	4
 extensions/ollama/index.ts	5

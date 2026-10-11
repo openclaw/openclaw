@@ -166,6 +166,70 @@ describe("universal verbs — yaml dispatch", () => {
   });
 });
 
+describe("universal verbs — yaml typed keys", () => {
+  it.each([
+    ["first: ignored\n.nan: original\n", "NaN", 2],
+    ["first: ignored\n? [1, 2]\n: original\n", '"[1,2]"', 3],
+    [
+      "%YAML 1.1\n---\n2001-12-15: original\n",
+      `"${new Date("2001-12-15T00:00:00Z").toString()}"`,
+      3,
+    ],
+  ])(
+    "keeps read locations without creating unaddressable replacement keys: %s",
+    (raw, key, line) => {
+      const { ast } = parseYaml(raw);
+      const path = parseOcPath(`oc://x.yaml/${key}`);
+      expect(resolveOcPath(ast, path)).toMatchObject({ valueText: "original", line });
+      expect(setOcPath(ast, path, "updated")).toMatchObject({ ok: false, reason: "unresolved" });
+      expect(ast.raw).toBe(raw);
+    },
+  );
+
+  it.each(["200", "true", "null"])("edits the resolved %s key", (key) => {
+    const { ast } = parseYaml(`${key}: original\n`);
+    const path = parseOcPath(`oc://x.yaml/${key}`);
+    expect(resolveOcPath(ast, path)).toMatchObject({ valueText: "original", line: 1 });
+    const result = setOcPath(ast, path, "updated");
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.ast.raw).toBe(`${key}: updated\n`);
+    }
+  });
+
+  it.each([
+    ["200", "200", '"200"'],
+    ["200", '"200"', "200"],
+    ["true", "true", '"true"'],
+    ["true", '"true"', "true"],
+  ])("keeps resolve and set on the first %s key (%s before %s)", (segment, first, second) => {
+    const { ast } = parseYaml(`${first}: original\n${second}: untouched\n`);
+    const path = parseOcPath(`oc://x.yaml/${segment}`);
+    expect(resolveOcPath(ast, path)).toMatchObject({ valueText: "original", line: 1 });
+    const result = setOcPath(ast, path, "updated");
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.ast.raw).toBe(`${first}: updated\n${second}: untouched\n`);
+    }
+  });
+
+  it.each([
+    ["description: ok", "+summary", '"success"', "description: ok\n    summary: success"],
+    ["[one]", "+", '"two"', "[ one, two ]"],
+    ["[one]", "+0", '"zero"', "[ zero, one ]"],
+  ])("inserts %s via %s under a numeric key", (contents, marker, value, expected) => {
+    const { ast } = parseYaml(`responses:\n  200:\n    ${contents}\n`);
+    const path = parseOcPath(`oc://x.yaml/responses/200/${marker}`);
+    expect(resolveOcPath(ast, path)).toMatchObject({ kind: "insertion-point", line: 3 });
+    const result = setOcPath(ast, path, value);
+    expect(result.ok).toBe(true);
+    if (result.ok && result.ast.kind === "yaml") {
+      expect(result.ast.doc.getIn(["responses", 200])).toBeDefined();
+      expect(result.ast.raw).toContain(expected);
+    }
+  });
+});
+
 describe("universal verbs — yaml insertion", () => {
   it("appends to an empty yaml seq with `+`", () => {
     const { ast } = parseYaml("items: []\n");

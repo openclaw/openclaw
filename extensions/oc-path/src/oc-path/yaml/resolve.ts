@@ -10,20 +10,28 @@ import type { YamlAst } from "./ast.js";
 
 type YamlOcPathMatch =
   | { readonly kind: "root"; readonly node: YamlAst }
-  | { readonly kind: "scalar"; readonly value: unknown; readonly path: readonly string[] }
+  | {
+      readonly kind: "scalar";
+      readonly value: unknown;
+      readonly path: readonly unknown[];
+      readonly node: Node;
+    }
   | {
       readonly kind: "map";
-      readonly path: readonly string[];
+      readonly path: readonly unknown[];
+      readonly node: Node;
     }
   | {
       readonly kind: "seq";
-      readonly path: readonly string[];
+      readonly path: readonly unknown[];
+      readonly node: Node;
     }
   | {
       readonly kind: "pair";
       readonly key: string;
       readonly value: unknown;
-      readonly path: readonly string[];
+      readonly path: readonly unknown[];
+      readonly node: Node;
     };
 
 export function resolveYamlOcPath(ast: YamlAst, path: OcPath): YamlOcPathMatch | null {
@@ -40,7 +48,7 @@ function walkNode(
   node: Node | null,
   segments: readonly string[],
   i: number,
-  walked: readonly string[],
+  walked: readonly unknown[],
 ): YamlOcPathMatch | null {
   if (node === null) {
     return null;
@@ -49,13 +57,13 @@ function walkNode(
 
   if (seg === undefined) {
     if (isMap(node)) {
-      return { kind: "map", path: walked };
+      return { kind: "map", path: walked, node };
     }
     if (isSeq(node)) {
-      return { kind: "seq", path: walked };
+      return { kind: "seq", path: walked, node };
     }
     if (isScalar(node)) {
-      return { kind: "scalar", value: node.value, path: walked };
+      return { kind: "scalar", value: node.value, path: walked, node };
     }
     return null;
   }
@@ -78,13 +86,16 @@ function walkNode(
     if (pair === undefined) {
       return null;
     }
-    const childWalked = [...walked, seg];
+    // Preserve primitive key types; object identities do not survive cloning for writes.
+    const key = isScalar(pair.key) ? pair.key.value : pair.key;
+    const childWalked = [...walked, key !== null && typeof key === "object" ? seg : key];
     if (i === segments.length - 1 && isScalar(pair.value)) {
       return {
         kind: "pair",
         key: seg,
         value: pair.value.value,
         path: childWalked,
+        node: pair.value,
       };
     }
     return walkNode(pair.value as Node, segments, i + 1, childWalked);
