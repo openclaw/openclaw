@@ -26,6 +26,7 @@ export {
 } from "../infra/sqlite-database-admission.js";
 export { setSqliteBusyTimeout } from "../infra/sqlite-busy-timeout.js";
 export { admitSqliteSchema, getAdmittedSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
+export { setSqliteBusyTimeout } from "../infra/sqlite-busy-timeout.js";
 export {
   assertTransactionUsable,
   runSqliteDeferredTransactionSync,
