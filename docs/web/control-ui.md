@@ -142,11 +142,12 @@ The chat header keeps **Share**, **Layout**, and the session menu together.
 **Layout** contains focus, split, swap, panel selection, and dock-position actions,
 with their keyboard shortcuts. Open **Subagents** there or from the side-panel
 **+** menu to inspect child runs, including swarm workers. An empty conversation
-starts with the panel closed. The first running batch opens it automatically;
-closing it keeps it closed for that batch. Finished results stay open until you
-close them. While the parent waits on subagents, a muted line above the composer
-shows the count, child name and elapsed time, with **View** to open the panel. The panel loads all child
-pages automatically and groups running and finished work,
+starts with the panel closed. The first running batch adds it automatically,
+preserving another panel you selected; closing it keeps it closed for that batch.
+Finished results stay open until you close them. While the parent waits on
+subagents, a muted line above the composer shows the count, child name and elapsed
+time, with **View** to open the panel. The panel loads all child pages automatically
+and groups running and finished work,
 keeping children waiting on their own descendants under **Running**. It shows
 elapsed time and available tool activity, and opens each child's existing
 view-only transcript beside the parent. Avatar-free child transcripts do not reserve

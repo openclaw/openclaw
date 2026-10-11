@@ -4,7 +4,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { installTitleTooltips } from "../../../components/tooltip-title.ts";
 import { i18n } from "../../../i18n/index.ts";
 import { KEYBOARD_SHORTCUT_COMBOS } from "../../../lib/keyboard-shortcut-contract.ts";
-import { selectChatLayoutAction } from "../../../test-helpers/chat-layout-menu.ts";
+import {
+  openChatLayoutMenu,
+  selectChatLayoutAction,
+} from "../../../test-helpers/chat-layout-menu.ts";
 import { openSlot, setSidebarOpen } from "../sidebar-layout.ts";
 import "../../../styles.css";
 import "../../../styles/chat/startup-layout.css";
@@ -117,7 +120,13 @@ describe.skipIf(typeof HTMLElement.prototype.checkVisibility !== "function")(
         ".chat-pane__layout-trigger",
       )!;
       const menu = fixture.container.querySelector(".chat-pane__layout-menu")!;
-      await page.elementLocator(trigger).click();
+      const shown = vi.fn();
+      menu.addEventListener("wa-after-show", shown, { once: true });
+      await openChatLayoutMenu({
+        container: fixture.container,
+        click: (element: HTMLElement) => page.elementLocator(element).click(),
+      });
+      expect(shown).toHaveBeenCalledOnce();
       await userEvent.keyboard("{Escape}");
       await expect.poll(() => menu.hasAttribute("open")).toBe(false);
       expect(document.activeElement).toBe(trigger);
@@ -131,7 +140,16 @@ describe.skipIf(typeof HTMLElement.prototype.checkVisibility !== "function")(
         );
         expect(document.activeElement).toBe(trigger);
       }
+      for (const expectedCount of [3, 4]) {
+        trigger.click();
+        menu.querySelector<HTMLElement>('[value="side-panel"]')!.click();
+        await expect.poll(() => observations.length).toBe(expectedCount);
+        expect(menu.hasAttribute("open")).toBe(false);
+        expect(document.activeElement).toBe(trigger);
+      }
       expect(observations).toEqual([
+        { open: false, focused: true },
+        { open: false, focused: true },
         { open: false, focused: true },
         { open: false, focused: true },
       ]);

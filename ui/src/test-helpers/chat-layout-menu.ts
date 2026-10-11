@@ -14,6 +14,18 @@ function isChatLayoutMenuOpen(element: Element): boolean {
   );
 }
 
+function waitForMenuShow(menu: Element): Promise<void> {
+  return new Promise((resolve) => {
+    const shown = (event: Event) => {
+      if (event.target === menu) {
+        menu.removeEventListener("wa-after-show", shown);
+        resolve();
+      }
+    };
+    menu.addEventListener("wa-after-show", shown);
+  });
+}
+
 async function waitForMenuClose(menu: ElementHandle<Element> | HTMLElement): Promise<void> {
   await expect
     .poll(
@@ -35,14 +47,24 @@ export async function openChatLayoutMenu(
       throw new Error("Expected a chat Layout menu");
     }
     if (!menu.hasAttribute("open")) {
+      const shown = waitForMenuShow(menu);
       await scope.click(trigger);
+      await shown;
     }
     return menu;
   }
   const trigger = scope.getByRole("button", { name: "Layout", exact: true }).first();
   const menu = trigger.locator("..");
   if ((await menu.getAttribute("open")) === null) {
-    await trigger.click();
+    const element = await menu.elementHandle();
+    if (!element) {
+      throw new Error("Expected a chat Layout menu");
+    }
+    try {
+      await Promise.all([element.evaluate(waitForMenuShow), trigger.click()]);
+    } finally {
+      await element.dispose();
+    }
   }
   return menu;
 }

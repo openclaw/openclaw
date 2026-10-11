@@ -1,3 +1,4 @@
+import type WaDropdown from "@awesome.me/webawesome/dist/components/dropdown/dropdown.js";
 import { html, nothing, type TemplateResult } from "lit";
 import { buildControlUiResourcePath } from "../../../../../src/gateway/control-ui-resource-routes.js";
 import type { GatewaySessionRow, SessionBranch } from "../../../api/types.ts";
@@ -641,7 +642,15 @@ function renderChatPaneLayoutMenu(props: ChatPaneHeaderProps) {
     @wa-select=${(event: CustomEvent<{ item: { value?: string } }>) => {
       const action = allActions.find((candidate) => candidate.id === event.detail.item.value);
       if (event.currentTarget && action && action.kind !== "status" && !action.disabled) {
-        pendingLayoutActions.set(event.currentTarget, action.onActivate);
+        event.preventDefault();
+        const menu = event.currentTarget as WaDropdown;
+        pendingLayoutActions.set(menu, action.onActivate);
+        // Opening and closing in one Lit update skips the hide event. Let the
+        // opening update commit before asking Web Awesome to close.
+        void menu.updateComplete.then(() => {
+          menu.open = false;
+          menu.querySelector<HTMLElement>('[slot="trigger"]')?.focus({ preventScroll: true });
+        });
       }
     }}
     @wa-after-hide=${(event: Event) => {
