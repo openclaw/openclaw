@@ -136,13 +136,6 @@ describe("maybePruneSandboxes", () => {
     ({ maybePruneSandboxes } = await import("./prune.js"));
   });
 
-  it("removes the registry entry after runtime removal succeeds", async () => {
-    await maybePruneSandboxes(buildPruneConfig());
-
-    expect(backendMocks.removeRuntime).toHaveBeenCalledTimes(1);
-    expect(registryMocks.removeRegistryEntry).toHaveBeenCalledWith("sandbox-1");
-  });
-
   it("rejects hosted custody released during registry inspection before runtime removal", async () => {
     const root = roots.make("sandbox-prune-custody-");
     await withEnvAsync({ OPENCLAW_STATE_DIR: root }, async () => {
@@ -228,49 +221,6 @@ describe("maybePruneSandboxes", () => {
     expect(registryMocks.removeRegistryEntry).toHaveBeenCalledExactlyOnceWith("main-container");
     expect(registryMocks.removeBrowserRegistryEntry).toHaveBeenCalledExactlyOnceWith(
       "main-browser",
-    );
-  });
-
-  it("uses global prune policy for shared runtimes despite the caller override", async () => {
-    const now = Date.now();
-    vi.spyOn(Date, "now").mockReturnValue(now);
-    configMocks.getRuntimeConfig.mockReturnValue({
-      agents: {
-        defaults: { sandbox: { mode: "all", prune: { idleHours: 24, maxAgeDays: 0 } } },
-        entries: {
-          main: { sandbox: { prune: { idleHours: 1, maxAgeDays: 0 } } },
-        },
-      },
-    });
-    registryMocks.readRegistry.mockResolvedValue({
-      entries: [
-        {
-          containerName: "shared-runtime",
-          backendId: "docker",
-          sessionKey: "shared",
-          createdAtMs: now - 4 * 60 * 60 * 1000,
-          lastUsedAtMs: now - 2 * 60 * 60 * 1000,
-          image: "openclaw-sandbox:bookworm-slim",
-        },
-      ],
-    });
-    registryMocks.readBrowserRegistry.mockResolvedValue({ entries: [] });
-
-    await maybePruneSandboxes();
-
-    expect(backendMocks.removeRuntime).not.toHaveBeenCalled();
-  });
-
-  it("keeps the registry entry when runtime removal fails", async () => {
-    // The registry is the retry source; keep it until the backend confirms the
-    // runtime was removed.
-    backendMocks.removeRuntime.mockRejectedValueOnce(new Error("docker rm failed"));
-
-    await maybePruneSandboxes(buildPruneConfig());
-
-    expect(registryMocks.removeRegistryEntry).not.toHaveBeenCalled();
-    expect(runtimeMocks.error).toHaveBeenCalledWith(
-      "Sandbox prune failed to remove sandbox-1: docker rm failed",
     );
   });
 

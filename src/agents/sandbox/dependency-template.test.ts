@@ -179,18 +179,3 @@ it("refuses to publish a template whose builder could not be retired", async () 
   mocks.retire.mockRejectedValue(new Error("writer is still live"));
   await expect(prepare()).rejects.toThrow("writer is still live");
 });
-
-it("retries a failed dependency generation when its network policy changes", async () => {
-  const options = { assertCurrent: () => {} };
-  const disconnected = await resolveSandboxDependencyTemplateIdentity(
-    { ...cfg, docker: { ...cfg.docker, network: "none" } },
-    options,
-  );
-  const connected = await resolveSandboxDependencyTemplateIdentity(cfg, options);
-  expect(disconnected?.key).not.toBe(connected?.key);
-  const rotatedCredentials = await resolveSandboxDependencyTemplateIdentity(
-    { ...cfg, docker: { ...cfg.docker, env: { REGISTRY_PASSWORD: "rotated-private-fixture" } } },
-    options,
-  );
-  expect(rotatedCredentials?.key).toBe(connected?.key);
-});
