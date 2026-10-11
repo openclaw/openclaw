@@ -37,7 +37,7 @@ import {
   CODEX_APP_SERVER_BINDING_NAMESPACE,
 } from "./session-binding-store.js";
 import { createCodexAppServerBindingStore, sessionBindingIdentity } from "./session-binding.js";
-import { createCodexRuntimeTestBindingStateStore } from "./session-binding.sqlite.test-helpers.js";
+import { createCodexSqliteTestBindingStateStore } from "./session-binding.sqlite.test-helpers.js";
 import {
   getLeasedSharedCodexAppServerClient,
   releaseLeasedSharedCodexAppServerClient,
@@ -118,10 +118,11 @@ export async function createCanonicalForkFixture(params: {
   );
   const storePath = resolveStorePath(config.session?.store, { agentId: "main" });
   const bindingStore = createCodexAppServerBindingStore(
-    createCodexRuntimeTestBindingStateStore(runtime, {
+    createCodexSqliteTestBindingStateStore({
       namespace: CODEX_APP_SERVER_BINDING_NAMESPACE,
       maxEntries: CODEX_APP_SERVER_BINDING_MAX_ENTRIES,
       overflowPolicy: "reject-new",
+      env: { ...process.env },
     }),
   );
   const captured = createCapturedPluginRegistration({ id: "codex", config });

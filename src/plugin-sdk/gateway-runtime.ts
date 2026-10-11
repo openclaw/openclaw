@@ -39,7 +39,10 @@ export { createOperatorApprovalsGatewayClient } from "../gateway/operator-approv
 export { ErrorCodes, errorShape } from "../../packages/gateway-protocol/src/schema/error-codes.js";
 
 export type { GatewayRequestHandlerOptions } from "../gateway/server-methods/types.js";
-export { captureLocalStateMutationGuard } from "../gateway/server-methods/local-state-owner.js";
+export {
+  captureLocalStateMutationGuard,
+  runWithLocalStateMutationOwner,
+} from "../gateway/server-methods/local-state-owner.js";
 export { isImplicitLocalGatewayTargetFromCli } from "../cli/gateway-rpc.js";
 
 export {

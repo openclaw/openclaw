@@ -8,6 +8,7 @@ import { createDeferredCore } from "../../../../src/shared/deferred.js";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import { selectApplicationSession } from "../../app/agent-selection.ts";
+import { togglePinnedSession } from "../../app/bootstrap-navigation-preferences.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { renderAgentScopeControl } from "../../components/agent-scope-control.ts";
 import { requestCloudWorkerStop } from "../../components/cloud-worker-stop.runtime.ts";
@@ -172,6 +173,7 @@ class SessionsPage extends OpenClawLightDomElement {
   });
   private readonly subscriptions = new SubscriptionsController(this)
     .watchStore(() => this.context?.agentIdentity)
+    .watchStore(() => this.context?.navigation)
     .effect(
       () => this.context?.agentSelection,
       (agentSelection) => this.observeAgentScope(agentSelection),
@@ -1219,9 +1221,7 @@ class SessionsPage extends OpenClawLightDomElement {
         }
         switch (action.kind) {
           case "toggle-pin":
-            void this.patchSession(row.key, { pinned: row.pinned !== true }, undefined, undefined, {
-              sessionScope: true,
-            });
+            togglePinnedSession(context.navigation, row.key);
             break;
           case "toggle-involving-me": {
             const scope = this.captureRequestScope();
