@@ -1,6 +1,8 @@
+import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { MessagePort } from "node:worker_threads";
+import { resolveRuntimeWorkerUrl } from "openclaw/plugin-sdk/process-runtime";
 import {
   hasSqliteWorkerOutcomeUnknown,
   readSqliteDatabaseWriteTokenForPath,
@@ -12,9 +14,13 @@ import {
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { Client } from "pg";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { workboardSqliteBackendEntrypoint } from "./sqlite-backend-entrypoint.test-support.js";
 import { createWorkboardDatabase } from "./sqlite-store-schema.js";
+import { createWorkboardSqliteStores } from "./sqlite-store.js";
+import { workboardTestDatabaseInput } from "./test/database-config.js";
 
-const postgresUrl = process.env.OPENCLAW_EXPERIMENTAL_POSTGRES_URL;
+const postgresInput = workboardTestDatabaseInput();
+const postgresUrl = postgresInput?.connection;
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe.skipIf(!postgresUrl)("experimental PostgreSQL workboard admission and receipts", () => {
@@ -48,7 +54,7 @@ describe.skipIf(!postgresUrl)("experimental PostgreSQL workboard admission and r
   }
 
   function openDatabase(dbPath: string) {
-    const owner = createWorkboardDatabase(dbPath);
+    const owner = createWorkboardDatabase(dbPath, undefined, postgresInput);
     owners.push(owner);
     const db = owner.db;
     if (!(db instanceof PostgresSyncConnection)) {
@@ -57,6 +63,59 @@ describe.skipIf(!postgresUrl)("experimental PostgreSQL workboard admission and r
     schemas.add(db.schema);
     return { db, close: owner.close };
   }
+
+  it("resolves a host SecretRef and hands the configured connection to the worker", async () => {
+    const dbPath = databasePath();
+    const file = path.join(path.dirname(dbPath), "connection.json");
+    fs.writeFileSync(file, JSON.stringify({ dsn: postgresUrl }), { mode: 0o600 });
+    const stores = createWorkboardSqliteStores({
+      dbPath,
+      workerModuleUrl: resolveRuntimeWorkerUrl(workboardSqliteBackendEntrypoint),
+      config: {
+        database: {
+          engine: "postgres",
+          postgres: {
+            connection: { source: "file", provider: "database", id: "/dsn" },
+            schemaPrefix: "configured",
+          },
+        },
+        secrets: { providers: { database: { source: "file", path: file } } },
+      },
+    });
+    try {
+      await stores.ready;
+      await stores.boards.register("configured", {
+        version: 1,
+        board: { id: "configured", name: "Configured", createdAt: 1, updatedAt: 2 },
+      });
+      using anchor = new DatabaseSync(dbPath, { readOnly: true });
+      const schema = anchor.prepare("SELECT schema FROM openclaw_engine_anchor").get()?.schema;
+      expect(schema).toMatch(/^configured_workboard_[0-9a-f]{16}$/);
+      if (typeof schema !== "string") {
+        throw new Error("Missing configured schema");
+      }
+      schemas.add(schema);
+      expect(
+        (await observer.query(`SELECT name FROM ${quoteIdentifier(schema)}.workboard_boards`)).rows,
+      ).toEqual([{ name: "Configured" }]);
+    } finally {
+      await stores.close();
+    }
+  });
+
+  it("refuses an unreachable configured server without creating SQLite workboard tables", async () => {
+    const dbPath = databasePath();
+    expect(() =>
+      createWorkboardDatabase(dbPath, undefined, {
+        connection: "postgresql://127.0.0.1:1/unreachable",
+        schemaPrefix: "openclaw",
+      }),
+    ).toThrow(/database.postgres.connection.*server availability/);
+    using anchor = new DatabaseSync(dbPath, { readOnly: true });
+    expect(
+      anchor.prepare("SELECT name FROM sqlite_schema WHERE name LIKE 'workboard_%'").all(),
+    ).toEqual([]);
+  });
 
   it("retains a real SQLite anchor and reopens the same PostgreSQL schema", async () => {
     const dbPath = databasePath();
@@ -253,22 +312,17 @@ describe.skipIf(!postgresUrl)("experimental PostgreSQL workboard admission and r
     };
     const before = snapshotAnchor();
     expect(before.workboardTables).toEqual([]);
+    let failure: unknown;
     try {
-      vi.stubEnv("OPENCLAW_EXPERIMENTAL_POSTGRES_URL", undefined);
-      let failure: unknown;
-      try {
-        owners.push(createWorkboardDatabase(dbPath));
-      } catch (error) {
-        failure = error;
-      }
-      expect(failure).toMatchObject({ message: expect.stringContaining(schema) });
-      expect(failure).toMatchObject({
-        message: expect.stringContaining("OPENCLAW_EXPERIMENTAL_POSTGRES_URL"),
-      });
-      expect(snapshotAnchor()).toEqual(before);
-    } finally {
-      vi.stubEnv("OPENCLAW_EXPERIMENTAL_POSTGRES_URL", postgresUrl);
+      owners.push(createWorkboardDatabase(dbPath));
+    } catch (error) {
+      failure = error;
     }
+    expect(failure).toMatchObject({ message: expect.stringContaining(schema) });
+    expect(failure).toMatchObject({
+      message: expect.stringContaining("database.engine"),
+    });
+    expect(snapshotAnchor()).toEqual(before);
     const reopened = openDatabase(dbPath);
     expect(reopened.db.schema).toBe(schema);
     expect(
@@ -284,7 +338,7 @@ describe.skipIf(!postgresUrl)("experimental PostgreSQL workboard admission and r
     await observer.query(
       `UPDATE ${quoteIdentifier(schema)}.openclaw_schema_meta SET version = 4 WHERE store = 'workboard'`,
     );
-    expect(() => createWorkboardDatabase(dbPath)).toThrow(/expected.*3/i);
+    expect(() => createWorkboardDatabase(dbPath, undefined, postgresInput)).toThrow(/expected.*3/i);
     expect(
       (
         await observer.query<{ version: number }>(
@@ -309,7 +363,7 @@ describe.skipIf(!postgresUrl)("experimental PostgreSQL workboard admission and r
       `UPDATE ${quoteIdentifier(schema)}.openclaw_schema_meta SET store_id = $1 WHERE store = 'workboard'`,
       [otherId],
     );
-    expect(() => createWorkboardDatabase(dbPath)).toThrow(
+    expect(() => createWorkboardDatabase(dbPath, undefined, postgresInput)).toThrow(
       new RegExp(`${originalId}.*${otherId}|${otherId}.*${originalId}`),
     );
     expect(
@@ -328,7 +382,7 @@ describe.skipIf(!postgresUrl)("experimental PostgreSQL workboard admission and r
       existing.exec("CREATE TABLE workboard_boards (id TEXT PRIMARY KEY, name TEXT)");
       existing.prepare("INSERT INTO workboard_boards VALUES (?, ?)").run("local", "Keep me");
     }
-    expect(() => createWorkboardDatabase(dbPath)).toThrow(
+    expect(() => createWorkboardDatabase(dbPath, undefined, postgresInput)).toThrow(
       "Existing SQLite workboard data cannot switch engines",
     );
     using preserved = new DatabaseSync(dbPath, { readOnly: true });

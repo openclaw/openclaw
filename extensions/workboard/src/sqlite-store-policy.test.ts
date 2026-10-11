@@ -28,7 +28,7 @@ vi.mock("openclaw/plugin-sdk/plugin-state-runtime", () => ({
   configureSqliteConnectionPragmas,
 }));
 
-import { createWorkboardSqliteKernel } from "./sqlite-store-kernel.js";
+import { createWorkboardSqliteKernel } from "./test/database-config.js";
 
 describe("Workboard SQLite policy", () => {
   beforeEach(() => {

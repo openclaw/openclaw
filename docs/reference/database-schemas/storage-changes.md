@@ -88,18 +88,21 @@ Prose, fragments without a statement prefix, and substitutions are ignored, acce
 
 ### Experimental PostgreSQL engine (workboard pilot)
 
-`OPENCLAW_EXPERIMENTAL_POSTGRES_URL` selects PostgreSQL for the workboard plugin
-store only. This environment variable is for development and conformance testing,
-not supported deployment configuration. SQLite remains the supported store and
-the default when the variable is unset; updates require no configuration or data
-migration for SQLite stores. Other OpenClaw stores continue to use SQLite.
+`database.engine: "postgres"` selects the experimental PostgreSQL engine for
+workboard only. Set `database.postgres.connection` to a PostgreSQL DSN, preferably
+through a SecretRef. The host resolves the secret before opening the worker;
+missing or unresolvable connections and unreachable servers fail without falling
+back to SQLite. SQLite remains the supported default (`database.engine: "sqlite"`),
+and updates require no configuration or migration for SQLite stores. Other stores
+continue to use SQLite. A follow-up adapter will generalize selection to every
+store and add Doctor reporting.
 
 The workboard database path holds a small SQLite anchor with a durable store
 UUID. Its first 16 hexadecimal characters select the PostgreSQL schema
-`openclaw_workboard_<uuid-prefix>`; moving the anchor preserves that identity.
+`<schemaPrefix>_workboard_<uuid-prefix>` (prefix defaults to `openclaw`); moving the anchor preserves that identity.
 Back up and restore both the anchor and its PostgreSQL schema together.
 The pilot refuses an existing SQLite workboard store containing data; it does
-not port that data to PostgreSQL. Opening an anchor without the experimental URL
+not port that data to PostgreSQL. Opening an anchor with the SQLite engine
 refuses and names its PostgreSQL schema; it never creates SQLite workboard tables
 in the anchor. This check runs once per open, never per operation. The connection
 owns its `search_path`.

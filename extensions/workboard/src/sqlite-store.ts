@@ -8,6 +8,7 @@ import {
   runSqliteWorkerStoreWrite,
 } from "openclaw/plugin-sdk/sqlite-runtime";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
+import { resolveWorkboardDatabaseInput } from "./database-config.js";
 import type { WorkboardPersistence, WorkboardWriteAuthority } from "./persistence-types.js";
 import type {
   WorkboardSqliteOperations,
@@ -23,17 +24,22 @@ type WorkboardSqliteStores = WorkboardPersistence & {
 };
 
 export function createWorkboardSqliteStores(options: {
+  config?: Parameters<typeof resolveWorkboardDatabaseInput>[0];
   dbPath?: string;
   workerModuleUrl: URL;
 }): WorkboardSqliteStores {
   const databasePath = path.resolve(
     options.dbPath ?? path.join(resolveStateDir(), "plugins", "workboard", "workboard.sqlite"),
   );
-  const worker = openSqliteWorkerStore<WorkboardSqliteWorkerOperations>({
-    moduleUrl: options.workerModuleUrl,
-    databasePath,
-    input: undefined,
-  });
+  const postgres = options.config?.database?.engine === "postgres";
+  const selectedDatabase = resolveWorkboardDatabaseInput(options.config ?? {});
+  const worker = selectedDatabase.then((input) =>
+    openSqliteWorkerStore<WorkboardSqliteWorkerOperations>({
+      moduleUrl: options.workerModuleUrl,
+      databasePath,
+      input,
+    }),
+  );
   let ownedConnection: number | undefined;
   let brokerClosed = false;
   let brokerCleanup = false;
@@ -104,7 +110,7 @@ export function createWorkboardSqliteStores(options: {
   ): Promise<WorkboardSqliteOperations[K]["output"]> {
     const authority = writes ? writeAuthority.getStore() : undefined;
     const store = await worker;
-    if (writes && process.env.OPENCLAW_EXPERIMENTAL_POSTGRES_URL) {
+    if (writes && postgres) {
       const result = unwrapWorkboardSqliteResult(
         await runSqliteWorkerStoreWrite(
           store,

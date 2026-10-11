@@ -12,6 +12,7 @@ import {
   type PostgresSyncConnection,
   type SqliteDatabaseAdmissionKey,
 } from "openclaw/plugin-sdk/sqlite-worker-runtime";
+import type { WorkboardDatabaseInput } from "./database-config.js";
 import { openWorkboardPostgresDatabase } from "./postgres-store.js";
 import { SCHEMA_VERSION, WORKBOARD_SCHEMA_SQL } from "./workboard-schema.js";
 export type WorkboardSqlConnection = DatabaseSync | PostgresSyncConnection;
@@ -29,7 +30,7 @@ function refusePostgresAnchor(db: DatabaseSync): void {
   try {
     const anchor = db.prepare("SELECT schema FROM openclaw_engine_anchor LIMIT 1").get();
     throw new Error(
-      `This workboard store lives in PostgreSQL schema ${String(anchor?.schema ?? "unknown")}; set OPENCLAW_EXPERIMENTAL_POSTGRES_URL.`,
+      `This workboard store lives in PostgreSQL schema ${String(anchor?.schema ?? "unknown")}; set database.engine to postgres and configure database.postgres.connection.`,
     );
   } catch (error) {
     if (!(error instanceof Error) || error.message !== "no such table: openclaw_engine_anchor") {
@@ -107,6 +108,7 @@ function prepareWorkboardDatabasePath(dbPath: string): void {
 export function createWorkboardDatabase(
   dbPath: string,
   retainClose?: (close: () => void) => void,
+  postgresInput?: WorkboardDatabaseInput,
 ): {
   db: WorkboardSqlConnection;
   close: () => void;
@@ -130,7 +132,7 @@ export function createWorkboardDatabase(
   };
   try {
     retainClose?.(close);
-    if (!process.env.OPENCLAW_EXPERIMENTAL_POSTGRES_URL) {
+    if (!postgresInput) {
       refusePostgresAnchor(db);
     }
     maintenance = configureSqliteConnectionPragmas(db, {
@@ -141,8 +143,8 @@ export function createWorkboardDatabase(
       foreignKeys: true,
       synchronous: "NORMAL",
     });
-    if (process.env.OPENCLAW_EXPERIMENTAL_POSTGRES_URL) {
-      postgres = openWorkboardPostgresDatabase(db, process.env.OPENCLAW_EXPERIMENTAL_POSTGRES_URL);
+    if (postgresInput) {
+      postgres = openWorkboardPostgresDatabase(db, postgresInput);
     } else {
       ensureWorkboardSchema(db);
     }

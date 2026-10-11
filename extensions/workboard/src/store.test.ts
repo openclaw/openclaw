@@ -11,9 +11,11 @@ import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PersistedWorkboardCard, WorkboardCardStore } from "./persistence-types.js";
 import { workboardSqliteBackendEntrypoint } from "./sqlite-backend-entrypoint.test-support.js";
-import { createWorkboardSqliteKernel } from "./sqlite-store-kernel.js";
-import { createWorkboardSqliteStores } from "./sqlite-store.js";
 import { WorkboardStore } from "./store.js";
+import {
+  createWorkboardSqliteKernel,
+  createWorkboardSqliteStores,
+} from "./test/database-config.js";
 import { codexExecution } from "./test/execution.js";
 import { createKernelStores } from "./test/sqlite-kernel.js";
 import { sqliteOnly as test } from "./test/sqlite-only.js";
