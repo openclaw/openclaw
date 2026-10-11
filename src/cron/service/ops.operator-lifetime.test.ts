@@ -22,8 +22,8 @@ import {
   createOperatorClient,
 } from "../../gateway/server-plugin-in-process-dispatch.test-support.js";
 import { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
+import { runInDetachedAsyncContext } from "../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { runInDetachedAsyncContext } from "../../shared/detached-async-context.js";
 import { CronService } from "../service.js";
 import { saveCronStore } from "../store.js";
 import { stop } from "./ops-lifecycle.js";

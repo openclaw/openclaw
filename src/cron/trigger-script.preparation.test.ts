@@ -29,7 +29,7 @@ import {
   withPluginRuntimeRegistryScope,
 } from "../plugins/runtime/gateway-request-scope.js";
 import { getPluginRuntimeLoadContext } from "../plugins/runtime/load-context.js";
-import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
+import { runInDetachedAsyncContext } from "../shared/async-work-scope.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createCronScriptRuntimeFixture as createCronScriptRuntime } from "./trigger-script.test-helpers.js";
 
