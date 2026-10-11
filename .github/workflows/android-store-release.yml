@@ -105,8 +105,8 @@ jobs:
       - name: Setup Ruby
         uses: ruby/setup-ruby@14594264cd68ce8a2345dd349bc3d138a4ef85c8 # v1.327.0
         with:
-          ruby-version: "3.4.10"
-          bundler: "4.0.21"
+          ruby-version: "3.4.11"
+          bundler: "4.0.22"
           bundler-cache: false
           working-directory: apps/android
 
@@ -114,9 +114,9 @@ jobs:
         working-directory: apps/android
         run: |
           set -euo pipefail
-          bundle _4.0.21_ install --jobs 4 --retry 3
-          bundle _4.0.21_ check
-          test "$(bundle _4.0.21_ exec ruby -e 'require "fastlane"; print Fastlane::VERSION')" = "2.240.1"
+          bundle _4.0.22_ install --jobs 4 --retry 3
+          bundle _4.0.22_ check
+          test "$(bundle _4.0.22_ exec ruby -e 'require "fastlane"; print Fastlane::VERSION')" = "2.240.1"
 
       - name: Create apps-signing read token
         id: apps-signing-token

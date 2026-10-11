@@ -32,20 +32,13 @@ export function acquirePreparedMediaCapabilityProviders(
   // Execute through the composed view so nested lookups retain adopted donor registrations.
   const invocations = source.resources.createInvocationScope(registry);
   const claim = source.resources.retain();
+  const wrapProvider = <T>(provider: T) => invocations.wrap(provider);
   return {
     providers: {
-      mediaUnderstandingProviders: providers.mediaUnderstandingProviders?.map((provider) =>
-        invocations.wrap(provider),
-      ),
-      imageGenerationProviders: providers.imageGenerationProviders?.map((provider) =>
-        invocations.wrap(provider),
-      ),
-      videoGenerationProviders: providers.videoGenerationProviders?.map((provider) =>
-        invocations.wrap(provider),
-      ),
-      musicGenerationProviders: providers.musicGenerationProviders?.map((provider) =>
-        invocations.wrap(provider),
-      ),
+      mediaUnderstandingProviders: providers.mediaUnderstandingProviders?.map(wrapProvider),
+      imageGenerationProviders: providers.imageGenerationProviders?.map(wrapProvider),
+      videoGenerationProviders: providers.videoGenerationProviders?.map(wrapProvider),
+      musicGenerationProviders: providers.musicGenerationProviders?.map(wrapProvider),
     },
     assertOpen,
     release: () => {

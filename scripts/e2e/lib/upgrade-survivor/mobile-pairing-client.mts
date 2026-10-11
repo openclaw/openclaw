@@ -885,16 +885,18 @@ async function verifyReconnect(params: {
 }): Promise<void> {
   const WebSocket = loadWebSocket(params.packageRoot);
   await assertMissingPassword({ WebSocket, credentials: params.credentials });
-  const node = await connect({
-    WebSocket,
-    url: params.credentials.url,
-    client: params.credentials.client,
-    mode: "node",
-    role: "node",
-    scopes: params.credentials.node.scopes,
-    auth: { token: params.credentials.node.token },
-    identity: params.credentials.identity,
-  });
+  const connectRole = (role: ConnectRole) =>
+    connect({
+      WebSocket,
+      url: params.credentials.url,
+      client: params.credentials.client,
+      mode: role === "node" ? "node" : "ui",
+      role,
+      scopes: params.credentials[role].scopes,
+      auth: { token: params.credentials[role].token },
+      identity: params.credentials.identity,
+    });
+  const node = await connectRole("node");
   let operator: ConnectResult | undefined;
   try {
     const nodeTransition = persistHelloCredential({
@@ -903,16 +905,7 @@ async function verifyReconnect(params: {
       hello: node.hello,
     });
     writePrivateJson(params.credentialsFile, params.credentials);
-    operator = await connect({
-      WebSocket,
-      url: params.credentials.url,
-      client: params.credentials.client,
-      mode: "ui",
-      role: "operator",
-      scopes: params.credentials.operator.scopes,
-      auth: { token: params.credentials.operator.token },
-      identity: params.credentials.identity,
-    });
+    operator = await connectRole("operator");
     const operatorTransition = persistHelloCredential({
       credentials: params.credentials,
       role: "operator",

@@ -116,6 +116,7 @@ export async function withInterruptedTurn(
     compactedInput?: boolean;
     selectedOwner?: boolean;
     sharedStore?: boolean;
+    admittedReceipt?: boolean;
   } = {},
 ) {
   await withOpenClawTestState({ label: "interrupted-keyed-replay" }, async (state) => {
@@ -224,6 +225,16 @@ export async function withInterruptedTurn(
     closeOpenClawAgentDatabasesForTest();
     const recorder = makeRecorder();
     await recorder.stageApproved!({ runId, assertCurrent: () => {} });
+    if (options.admittedReceipt) {
+      recorder.markRuntimePersisted(
+        previous.getPersistedMessage?.(),
+        previous.getAdmissionReceipt(),
+        {
+          appended: false,
+        },
+      );
+      await recorder.waitForRuntimePersistence();
+    }
     const attempt = {
       config: {},
       contextTokenBudget: 8000,

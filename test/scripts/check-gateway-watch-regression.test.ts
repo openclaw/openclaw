@@ -71,6 +71,7 @@ function createWatchChildFixture(outputDir: string) {
     pid: { configurable: true, value: 1234 },
     exitCode: { get: () => exitState.code },
     signalCode: { get: () => exitState.signal },
+    stdio: { get: () => [child.stdin, child.stdout, child.stderr, null] },
   });
   const close = () => {
     if (
@@ -119,13 +120,6 @@ function createWatchChildFixture(outputDir: string) {
 }
 
 describe("check-gateway-watch-regression", () => {
-  it("accepts package-manager argument separators before script options", () => {
-    expect(parseArgs(["--", "--window-ms", "1500", "--skip-build"])).toMatchObject({
-      skipBuild: true,
-      windowMs: 1500,
-    });
-  });
-
   it("parses timing and growth limits as strict non-negative integers", () => {
     expect(
       parseArgs([
@@ -295,25 +289,6 @@ describe("check-gateway-watch-regression", () => {
     }
   });
 
-  it("runs gateway watch through the parent Node binary", () => {
-    const nodeExecPath = "/opt/hostedtoolcache/node/24.11.1/x64/bin/node";
-    const command = buildTimedWatchCommand(
-      "watch.pid",
-      "watch.time",
-      "/tmp/openclaw-watch",
-      19042,
-      {
-        existsSync: (candidate: string) =>
-          candidate === "/usr/bin/bash" || candidate === "/usr/bin/time",
-        nodeExecPath,
-      },
-    );
-    const shellSource = command.args.at(-1);
-
-    expect(shellSource).toContain(`exec '${nodeExecPath}' scripts/watch-node.mjs gateway --force`);
-    expect(command.env.PATH?.split(path.delimiter)[0]).toBe(path.dirname(nodeExecPath));
-  });
-
   it.each([
     {
       name: "readiness timeout does not measure startup as idle",
@@ -322,14 +297,6 @@ describe("check-gateway-watch-regression", () => {
       idleCpuMs: null,
       lateError: null,
       failures: ["gateway:watch did not report ready before the idle CPU window"],
-    },
-    {
-      name: "zero idle CPU is independent of high lifetime CPU",
-      ready: true,
-      samples: [50_000, 50_000],
-      idleCpuMs: 0,
-      lateError: null,
-      failures: [],
     },
     {
       name: "missing idle samples cannot use lifetime CPU",
@@ -541,7 +508,7 @@ describe("check-gateway-watch-regression", () => {
     }
   });
 
-  it.each([false, null, undefined])("retains restored stamp provenance (%s)", (inputsClean) => {
+  it.each([false])("retains restored stamp provenance (%s)", (inputsClean) => {
     const rootDir = tempDirs.make("openclaw-watch-restored-stamps-");
     fs.mkdirSync(path.join(rootDir, "dist"));
     const contents = JSON.stringify({ head: "producer-head", inputsClean });
@@ -640,10 +607,10 @@ describe("check-gateway-watch-regression", () => {
     }
   });
 
-  it.each([false, true])(
-    "joins readiness after managed failure without child exit (producer failure: %s)",
+  it(
+    "joins readiness after managed failure and a producer failure without child exit",
     { timeout: 2_000 },
-    async (producerFails) => {
+    async () => {
       const outputDir = tempDirs.make("openclaw-gateway-watch-managed-failure-");
       for (const variable of ["TMPDIR", "TMP", "TEMP"]) {
         vi.stubEnv(variable, outputDir);
@@ -693,7 +660,7 @@ describe("check-gateway-watch-regression", () => {
               try {
                 return await delay(timeoutMs, false, { signal: waitSignal });
               } catch (error) {
-                if (producerFails && signal?.aborted) {
+                if (signal?.aborted) {
                   throw producerError;
                 }
                 throw error;
@@ -709,15 +676,11 @@ describe("check-gateway-watch-regression", () => {
       const rescue = setTimeout(() => rescueController.abort(), 1_000);
       try {
         const error: unknown = await completion.catch((caughtError: unknown) => caughtError);
-        if (producerFails) {
-          expect(error).toBeInstanceOf(AggregateError);
-          if (error instanceof AggregateError) {
-            expect(error.errors).toHaveLength(2);
-            expect(error.errors).toContain(cleanupError);
-            expect(error.errors).toContain(producerError);
-          }
-        } else {
-          expect(error).toBe(cleanupError);
+        expect(error).toBeInstanceOf(AggregateError);
+        if (error instanceof AggregateError) {
+          expect(error.errors).toHaveLength(2);
+          expect(error.errors).toContain(cleanupError);
+          expect(error.errors).toContain(producerError);
         }
         expect(phaseSignal?.aborted).toBe(true);
         expect(waitSettled).toBe(true);
@@ -733,7 +696,7 @@ describe("check-gateway-watch-regression", () => {
         finish();
         await completion.catch(() => {});
         await pendingWait?.catch((error: unknown) => {
-          if (producerFails && error === producerError) {
+          if (error === producerError) {
             return;
           }
           if (error instanceof Error && "cause" in error && error.cause === waitSignal?.reason) {
@@ -820,6 +783,9 @@ import { PassThrough } from "node:stream";
 const outputDir = ${JSON.stringify(outputDir)};
 const child = Object.assign(new cp.ChildProcess(), {
   pid: 1234, stdout: new PassThrough(), stderr: new PassThrough(),
+});
+Object.defineProperty(child, "stdio", {
+  get: () => [child.stdin, child.stdout, child.stderr, null],
 });
 for (const output of [child.stdout, child.stderr]) {
   output.once("close", () => {

@@ -8,10 +8,8 @@ import { afterAll, describe, expect, it } from "vitest";
 import type { SessionHeader } from "../agents/sessions/session-manager.js";
 import { createReadTool } from "../agents/sessions/tools/read.js";
 import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
-import {
-  replaceSessionEntry,
-  replaceTranscriptEvents,
-} from "../config/sessions/session-accessor.js";
+import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
+import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,

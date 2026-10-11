@@ -13,6 +13,7 @@ import {
   releaseChatAttachmentPayloads,
 } from "../chat/attachment-payload-store.ts";
 import { buildInitialChatSubmission } from "../chat/user-message-content.ts";
+import { retainCreatedComposer, type CreationComposer } from "./creation-composer.ts";
 import type { InstantThreadHandoff } from "./instant-thread-handoff.ts";
 import { retainRejectedInitialTurn } from "./rejected-initial-turn.ts";
 import type { StartedSessionNavigation } from "./started-session-navigation.ts";
@@ -56,6 +57,7 @@ function retainInitialSessionTurn(options: InitialTurn, retryAfter?: Promise<boo
 export async function completeInitialSessionTurn(
   options: InitialTurn & {
     instant: InstantThreadHandoff | undefined;
+    composer?: CreationComposer;
     navigation: StartedSessionNavigation;
     isCurrent: () => boolean;
     clearDraft: (releasePayloads: boolean, keepPending?: boolean) => Promise<void>;
@@ -111,6 +113,10 @@ export async function completeInitialSessionTurn(
     ) {
       options.onAccepted?.();
       return;
+    }
+    if (options.composer) {
+      options.composer.accept(result);
+      retainCreatedComposer(context, key, options.composer);
     }
     instant?.admitted(key, agentId);
     await options.navigation.navigate(

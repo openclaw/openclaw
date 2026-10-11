@@ -5,6 +5,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { normalizeChatType, type ChatType } from "../channels/chat-type.js";
 import { parseSqliteSessionEntryRecord } from "../config/sessions/session-entry-json.js";
 import type { SessionEntry } from "../config/sessions/types.js";
+import { getAdmittedSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
 import { SqliteSchemaMismatchError } from "../infra/sqlite-schema-issues.js";
 import { normalizeAccountId } from "../routing/account-id.js";
 import { buildConversationRef, normalizeConversationPeerId } from "../routing/conversation-ref.js";
@@ -354,7 +355,12 @@ export function ensureSessionAdditiveColumns(db: DatabaseSync): void {
   ensureColumn(db, "session_transcript_active_events", "context_eligible INTEGER");
   ensureColumn(db, "session_nodes", "project_id TEXT");
   ensureColumn(db, "session_conversations", "route_context_json TEXT");
-  if (tableExists(db, "session_conversations")) {
+  if (
+    tableExists(db, "session_conversations") &&
+    !getAdmittedSqliteSchemaFacts(db)?.triggers.has(
+      "session_conversations_route_context_invalidate_after_update",
+    )
+  ) {
     // Same-version older writers leave the envelope byte-identical. Clear it on their update so
     // stale owner facts cannot survive a downgrade/re-upgrade cycle with an unchanged timestamp.
     db.exec(`
@@ -406,23 +412,6 @@ export function ensureSessionEntryValidityProjection(db: DatabaseSync): void {
       "ALTER TABLE session_nodes ADD COLUMN entry_valid INTEGER NOT NULL DEFAULT 0 CHECK (entry_valid IN (-1, 0, 1))",
     );
   }
-  db.exec(`
-    CREATE TRIGGER IF NOT EXISTS session_nodes_entry_valid_after_insert
-    AFTER INSERT ON session_nodes
-    BEGIN
-      UPDATE session_nodes SET entry_valid = 0 WHERE session_key = NEW.session_key;
-    END;
-    CREATE TRIGGER IF NOT EXISTS session_nodes_entry_valid_after_entry_update
-    AFTER UPDATE OF entry_json ON session_nodes
-    BEGIN
-      UPDATE session_nodes SET entry_valid = 0 WHERE session_key = NEW.session_key;
-    END;
-    CREATE TRIGGER IF NOT EXISTS session_nodes_entry_valid_after_identity_update
-    AFTER UPDATE OF current_session_id, updated_at ON session_nodes
-    BEGIN
-      UPDATE session_nodes SET entry_valid = 0 WHERE session_key = NEW.session_key;
-    END;
-  `);
   const selectPending = db.prepare(
     "SELECT current_session_id, entry_json, session_key, updated_at FROM session_nodes WHERE entry_valid = 0 ORDER BY session_key LIMIT 256",
   );

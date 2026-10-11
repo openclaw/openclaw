@@ -300,7 +300,7 @@ export function sessionSnapshotIssueToHealthFinding(
     target: issue.cachedPath,
     requirement: `Current bundled skill path: ${issue.expectedPath}`,
     fixHint:
-      "No repair is needed for this historical metadata. Doctor preserves migration originals; active sessions use canonical SQLite state and the current runtime skill catalog.",
+      "No repair is needed for this historical metadata. Doctor preserves migration originals; active sessions use stored SQLite state and the current runtime skill catalog.",
   };
 }
 
@@ -335,7 +335,7 @@ export async function noteSessionSnapshotHealth(params: SessionSnapshotScanOptio
   const lines = [
     `- Found ${affectedSessions.size} session${affectedSessions.size === 1 ? "" : "s"} with stale cached session metadata paths.`,
     `  Live bundled skills root is healthy: ${shortenHomePath(bundledSkillsDir)}`,
-    "  Historical metadata references an inactive runtime root. Originals are preserved; active sessions use canonical SQLite state and the current runtime skill catalog. No cleanup or session reset is needed.",
+    "  Historical metadata references an inactive runtime root. Originals are preserved; active sessions use stored SQLite state and the current runtime skill catalog. No cleanup or session reset is needed.",
   ];
   let shown = 0;
   for (const [storePath, findings] of findingsByStore) {
@@ -347,9 +347,6 @@ export async function noteSessionSnapshotHealth(params: SessionSnapshotScanOptio
         )} -> ${shortenHomePath(finding.expectedPath)}`,
       );
       shown += 1;
-      if (shown >= 10) {
-        break;
-      }
     }
     if (shown >= 10) {
       break;

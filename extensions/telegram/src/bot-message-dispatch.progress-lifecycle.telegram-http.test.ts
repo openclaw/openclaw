@@ -19,9 +19,7 @@ import { apiThrottler } from "./bot.runtime.js";
 import { deliverReplies, deliverStructuredReplies } from "./bot/delivery.replies.js";
 import { resolveTelegramTestUpload } from "./send.telegram-http.test-support.js";
 
-const DELIVERY_WARNING =
-  "I couldn't confirm the reply reached Telegram. Check OpenClaw chat history for the answer before retrying the task.";
-const DELIVERY_WARNING_PREFIX = "I couldn't confirm the reply reached Telegram.";
+const DELIVERY_WARNING = "I couldn't deliver my reply. Please ask again.";
 
 describe("Telegram progress custody and delivery outcomes through HTTP", () => {
   const http = createTelegramDispatchHttpFixture();
@@ -36,11 +34,12 @@ describe("Telegram progress custody and delivery outcomes through HTTP", () => {
   } = http;
   afterEach(() => vi.restoreAllMocks());
 
-  it("reports a definite owner rejection without an ambiguous-delivery warning", async () => {
+  it("reports an owner rejection silently without claiming a network failure", async () => {
     await dispatchProgressTurn(async () => {}, {
       mode: "off",
       toolProgress: false,
       cfg: { agents: { ownership: "explicit", entries: { main: {}, other: {} } } },
+      telegramCfg: { silentErrorReplies: true },
       finalReply: { text: "The requested answer." },
       allowErrors: true,
     });
@@ -58,12 +57,11 @@ describe("Telegram progress custody and delivery outcomes through HTTP", () => {
     } finally {
       db.close();
     }
-    expect([...visibleMessages.values()]).toEqual([
-      "I couldn't send the reply to Telegram. Check OpenClaw chat history for the answer and the Gateway logs for the delivery error.",
-    ]);
-    expect(calls.some((call) => String(call.fields.text).includes(DELIVERY_WARNING_PREFIX))).toBe(
-      false,
-    );
+    expect([...visibleMessages.values()]).toEqual([DELIVERY_WARNING]);
+    const notice = calls.find((call) => call.fields.text === DELIVERY_WARNING);
+    expect(notice?.fields.reply_markup).toBeUndefined();
+    expect(notice?.fields.disable_notification).toBe(true);
+    expect(JSON.stringify(calls)).not.toContain("network problem");
   });
 
   it.each(["rejected", "no-message-id", "stopped", "media", "buttons"] as const)(
@@ -187,8 +185,7 @@ describe("Telegram progress custody and delivery outcomes through HTTP", () => {
       expect(
         calls.filter(
           (call) =>
-            call.method === "sendMessage" &&
-            String(call.fields.text).startsWith(DELIVERY_WARNING_PREFIX),
+            call.method === "sendMessage" && String(call.fields.text).startsWith(DELIVERY_WARNING),
         ),
       ).toHaveLength(outcome === "empty-hook" ? 0 : 1);
       if (outcome === "empty-hook") {
@@ -238,9 +235,7 @@ describe("Telegram progress custody and delivery outcomes through HTTP", () => {
     expect(floodedAt).toHaveLength(3);
     expect(floodedAt[2]! - floodedAt[0]!).toBeGreaterThanOrEqual(10_000);
     expect([...visibleMessages.values()]).toEqual(["The command failed."]);
-    expect(calls.some((call) => String(call.fields.text).startsWith(DELIVERY_WARNING_PREFIX))).toBe(
-      false,
-    );
+    expect(calls.some((call) => String(call.fields.text).startsWith(DELIVERY_WARNING))).toBe(false);
   });
 
   it("preserves a post-progress error final when Telegram rejects cleanup", async () => {

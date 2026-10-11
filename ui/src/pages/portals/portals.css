@@ -37,13 +37,17 @@
   background: var(--accent-subtle);
 }
 
-.portals-rail__title {
+.portals-rail__title,
+.portals-preview__url span:first-child {
   overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.portals-rail__title {
   color: var(--text-strong);
   font-size: 0.86rem;
   font-weight: 650;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .portals-rail__port,
@@ -95,12 +99,6 @@
 .portals-preview__url:hover,
 .portals-preview__url:focus-visible {
   color: var(--text);
-}
-
-.portals-preview__url span:first-child {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .portals-preview__url svg {

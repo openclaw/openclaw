@@ -19,53 +19,64 @@ import {
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => afterEach(cleanup));
 
+function menuNames(cfg: OpenClawConfig, workspace: string) {
+  const agentMenu = listSkillCommandsForAgents({ cfg, agentIds: ["main"] });
+  const workspaceMenu = listSkillCommandsForWorkspace({
+    cfg,
+    workspaceDir: workspace,
+    agentId: "main",
+  });
+  expect(workspaceMenu.map((command) => command.skillName)).toEqual(
+    agentMenu.map((command) => command.skillName),
+  );
+  return agentMenu.map((command) => command.skillName);
+}
+
 describe("skill command discovery through workspace loading", () => {
-  describe.each([
-    ["sync", listSkillCommandsForAgents],
-    ["async", prepareSkillCommandsForAgents],
-  ] as const)("%s agent command discovery", (_mode, discover) => {
-    it("keeps distinct commands across workspaces with truncated-name collisions", async () => {
-      const root = tempDirs.make("agent-skill-command-collision-");
-      const firstName = `${"a".repeat(31)}-one`;
-      const secondName = `${"a".repeat(31)}-two`;
-      const firstWorkspace = path.join(root, "first");
-      const secondWorkspace = path.join(root, "second");
-      for (const [workspace, name] of [
-        [firstWorkspace, firstName],
-        [secondWorkspace, secondName],
-      ] as const) {
-        await writeSkill({
-          dir: path.join(workspace, "skills", name),
-          name,
-          description: "Agent command",
+  it("keeps distinct commands across workspaces with truncated-name collisions", async () => {
+    const root = tempDirs.make("agent-skill-command-collision-");
+    const firstName = `${"a".repeat(31)}-one`;
+    const secondName = `${"a".repeat(31)}-two`;
+    const firstWorkspace = path.join(root, "first");
+    const secondWorkspace = path.join(root, "second");
+    for (const [workspace, name] of [
+      [firstWorkspace, firstName],
+      [secondWorkspace, secondName],
+    ] as const) {
+      await writeSkill({
+        dir: path.join(workspace, "skills", name),
+        name,
+        description: "Agent command",
+      });
+    }
+    const bundledSkillsDir = path.join(root, "bundled");
+    await fs.mkdir(bundledSkillsDir);
+    const cfg = {
+      plugins: { enabled: false },
+      agents: {
+        entries: {
+          first: { workspace: firstWorkspace, skills: [firstName] },
+          second: { workspace: secondWorkspace, skills: [secondName] },
+        },
+      },
+      skills: { allowBundled: [] },
+    } satisfies OpenClawConfig;
+    await withEnvAsync(
+      { OPENCLAW_STATE_DIR: root, OPENCLAW_BUNDLED_SKILLS_DIR: bundledSkillsDir },
+      async () => {
+        const commands = await prepareSkillCommandsForAgents({
+          cfg,
+          agentIds: ["first", "second"],
         });
-      }
-      const bundledSkillsDir = path.join(root, "bundled");
-      await fs.mkdir(bundledSkillsDir);
-      const cfg = {
-        plugins: { enabled: false },
-        agents: {
-          entries: {
-            first: { workspace: firstWorkspace, skills: [firstName] },
-            second: { workspace: secondWorkspace, skills: [secondName] },
+        expect(commands.map(({ skillName, name }) => ({ skillName, name }))).toEqual([
+          { skillName: firstName, name: `${"a".repeat(31)}_` },
+          {
+            skillName: secondName,
+            name: `${"a".repeat(30)}_2`,
           },
-        },
-        skills: { allowBundled: [] },
-      } satisfies OpenClawConfig;
-      await withEnvAsync(
-        { OPENCLAW_STATE_DIR: root, OPENCLAW_BUNDLED_SKILLS_DIR: bundledSkillsDir },
-        async () => {
-          const commands = await discover({ cfg, agentIds: ["first", "second"] });
-          expect(commands.map(({ skillName, name }) => ({ skillName, name }))).toEqual([
-            { skillName: firstName, name: `${"a".repeat(31)}_` },
-            {
-              skillName: secondName,
-              name: `${"a".repeat(30)}_2`,
-            },
-          ]);
-        },
-      );
-    });
+        ]);
+      },
+    );
   });
 
   it("includes a registered remote workspace absent from the Gateway filesystem", async () => {
@@ -261,4 +272,44 @@ describe("skill command discovery through workspace loading", () => {
       );
     },
   );
+
+  it("keeps Gateway commands without exposing a stale remote workspace copy", async () => {
+    const root = tempDirs.make("remote-skill-menu-");
+    const workspace = path.join(root, "workspace");
+    const gatewaySkills = path.join(root, "gateway-skills");
+    await writeSkill({
+      dir: path.join(gatewaySkills, "gateway-command"),
+      name: "gateway-command",
+      description: "Gateway-owned command",
+    });
+    await writeSkill({
+      dir: path.join(workspace, "skills", "workspace-command"),
+      name: "workspace-command",
+      description: "Stale Gateway workspace copy",
+    });
+    const cfg: OpenClawConfig = {
+      plugins: { enabled: false },
+      skills: { load: { extraDirs: [gatewaySkills] } },
+      agents: {
+        entries: {
+          main: { workspace, skills: ["gateway-command", "workspace-command"] },
+        },
+      },
+    };
+    const loadSkills = vi.fn(() => {
+      throw new Error("Harness unavailable");
+    });
+    const release = registerAgentWorkspaceAccess(workspace, {
+      bridge: { readFile: vi.fn(), writeFile: vi.fn(), stat: vi.fn() },
+      loadSkills,
+    });
+    try {
+      expect(menuNames(cfg, workspace)).toEqual(["gateway-command"]);
+      expect(loadSkills).not.toHaveBeenCalled();
+    } finally {
+      release();
+    }
+    expect(menuNames(cfg, workspace)).toEqual(["gateway-command"]);
+    expect(loadSkills).not.toHaveBeenCalled();
+  });
 });

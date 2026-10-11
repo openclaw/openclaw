@@ -3,6 +3,7 @@ import { assertConfigWriteAllowedInCurrentMode } from "../config/config.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { CLAWHUB_INSTALL_ERROR_CODE } from "../plugins/clawhub.js";
 import { loadConfigForInstall, PluginInstallConfigError } from "../plugins/install-config.js";
+import { installManagedPlugin } from "../plugins/management-mutations.js";
 import { hasPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
 import { defaultRuntime } from "../runtime.js";
 import { resolveClawHubInstallConfirmation } from "./clawhub-install-confirmation.js";
@@ -17,6 +18,7 @@ import {
   type RunPluginInstallCommandParams,
 } from "./plugins-install-preflight.js";
 import { resolvePluginLifecycleGateway } from "./plugins-lifecycle-client.js";
+import { runWithLocalPluginState } from "./plugins-local-state.js";
 
 const DEPRECATED_DANGEROUS_FORCE_UNSAFE_INSTALL_WARNING =
   "--dangerously-force-unsafe-install is deprecated and no longer affects plugin installs because built-in install-time dangerous-code scanning has been removed. Configure security.installPolicy for operator-owned install decisions.";
@@ -80,7 +82,18 @@ export async function runPluginInstallCommand(params: RunPluginInstallCommandPar
       applyRuntime: params.applyRuntime,
       beforePersistentApply: params.beforePersistentApply,
       invalidateRuntimeCache: params.invalidateRuntimeCache ?? true,
-      ...(gateway ? { install: createGatewayPluginInstaller(gateway) } : {}),
+      install: gateway
+        ? createGatewayPluginInstaller(gateway)
+        : (installParams) =>
+            runWithLocalPluginState("install", (assertCurrent) =>
+              installManagedPlugin({
+                ...installParams,
+                beforePersistentApply: () => {
+                  assertCurrent();
+                  installParams.beforePersistentApply?.();
+                },
+              }),
+            ),
       allowBundledFallback: sourcePlan?.allowBundledFallback,
       logger: createPluginInstallLogger(runtime),
       confirmInstall: resolveClawHubInstallConfirmation(),

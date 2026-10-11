@@ -83,13 +83,13 @@ test("retains one archive Worker across refused and interleaved reclamation oper
         databaseOptions,
       ),
     );
-    let refusalPoint: "admission-request" | "commit-request" | undefined;
+    let refusalPoint: "admission-request" | undefined;
     let superseded = false;
     const create = sqliteArchive.createSqliteTranscriptArchiveWorker;
     const spawn = vi
       .spyOn(sqliteArchive, "createSqliteTranscriptArchiveWorker")
-      .mockImplementation((data) => {
-        const worker = create(data);
+      .mockImplementation((data, nativeLocations) => {
+        const worker = create(data, nativeLocations);
         worker.prependListener("message", (message: { type: string }) => {
           if (message.type === refusalPoint) {
             superseded = true;
@@ -127,11 +127,7 @@ test("retains one archive Worker across refused and interleaved reclamation oper
         ];
         for (const operation of plans) {
           const refusals =
-            operation.kind === "maintenance-statistics"
-              ? []
-              : operation.kind === "entry"
-                ? (["admission-request", "commit-request"] as const)
-                : (["admission-request"] as const);
+            operation.kind === "maintenance-statistics" ? [] : (["admission-request"] as const);
           for (const point of refusals) {
             refusalPoint = point;
             await expect(
@@ -178,11 +174,13 @@ test.each(["path", "root"] as const)(
       const { plan } = createEntryFixture(scope, databaseOptions);
       const spawned: Worker[] = [];
       const create = sqliteArchive.createSqliteTranscriptArchiveWorker;
-      vi.spyOn(sqliteArchive, "createSqliteTranscriptArchiveWorker").mockImplementation((data) => {
-        const worker = create(data);
-        spawned.push(worker);
-        return worker;
-      });
+      vi.spyOn(sqliteArchive, "createSqliteTranscriptArchiveWorker").mockImplementation(
+        (data, nativeLocations) => {
+          const worker = create(data, nativeLocations);
+          spawned.push(worker);
+          return worker;
+        },
+      );
       try {
         await runSqliteSessionReclamation({
           forceInProcess: false,
@@ -236,11 +234,13 @@ test("binds first shared-state creation without host SQL and reuses reclamation 
     );
     const workers: Worker[] = [];
     const spawn = sqliteArchive.createSqliteTranscriptArchiveWorker;
-    vi.spyOn(sqliteArchive, "createSqliteTranscriptArchiveWorker").mockImplementation((data) => {
-      const worker = spawn(data);
-      workers.push(worker);
-      return worker;
-    });
+    vi.spyOn(sqliteArchive, "createSqliteTranscriptArchiveWorker").mockImplementation(
+      (data, nativeLocations) => {
+        const worker = spawn(data, nativeLocations);
+        workers.push(worker);
+        return worker;
+      },
+    );
     const reclaim = async (index: number) => {
       const diagnostics: SqliteSessionReclamationDiagnostics = {};
       const fixture = entries[index];
@@ -302,29 +302,31 @@ test.each(["established", "first-created"] as const)(
       const spawn = sqliteArchive.createSqliteTranscriptArchiveWorker;
       let child: Worker | undefined;
       let revoked = false;
-      vi.spyOn(sqliteArchive, "createSqliteTranscriptArchiveWorker").mockImplementation((data) => {
-        const worker = spawn(data);
-        child = worker;
-        worker.prependListener("message", (message: SqliteReclamationWorkerMessage) => {
-          if (message.type === "lease") {
-            // Native acquisition already committed, but its notification has not reached the owner.
-            const physical = readDatabasePathIdentitySync(sharedPath);
-            const receipt = message.receipt;
-            expect(receipt.sharedStateIdentity).toBe(physical.key);
-            expect(receipt.sharedStatePath).toBe(sharedPath);
-            expect(receipt.agentId).toBe(databaseOptions.agentId);
-            expect(receipt.path).toBe(databaseOptions.path);
-            expect(receipt.ownerPid).toBe(process.pid);
-            expect(admission.identity.key.startsWith("path:")).toBe(
-              sharedState === "first-created",
-            );
-            stateCache.clearOpenClawStateDatabaseOpenFailure(sharedPath);
-            revoked = true;
-            expect(() => admission.assertCurrent()).toThrow("read admission changed");
-          }
-        });
-        return worker;
-      });
+      vi.spyOn(sqliteArchive, "createSqliteTranscriptArchiveWorker").mockImplementation(
+        (data, nativeLocations) => {
+          const worker = spawn(data, nativeLocations);
+          child = worker;
+          worker.prependListener("message", (message: SqliteReclamationWorkerMessage) => {
+            if (message.type === "lease") {
+              // Native acquisition already committed, but its notification has not reached the owner.
+              const physical = readDatabasePathIdentitySync(sharedPath);
+              const receipt = message.receipt;
+              expect(receipt.sharedStateIdentity).toBe(physical.key);
+              expect(receipt.sharedStatePath).toBe(sharedPath);
+              expect(receipt.agentId).toBe(databaseOptions.agentId);
+              expect(receipt.path).toBe(databaseOptions.path);
+              expect(receipt.ownerPid).toBe(process.pid);
+              expect(admission.identity.key.startsWith("path:")).toBe(
+                sharedState === "first-created",
+              );
+              stateCache.clearOpenClawStateDatabaseOpenFailure(sharedPath);
+              revoked = true;
+              expect(() => admission.assertCurrent()).toThrow("read admission changed");
+            }
+          });
+          return worker;
+        },
+      );
       try {
         await expect(
           runSqliteSessionReclamation({

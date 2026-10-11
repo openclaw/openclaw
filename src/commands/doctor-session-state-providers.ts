@@ -452,12 +452,7 @@ export async function runPluginSessionStateDoctorRepairs(params: {
         return (
           repair &&
           isRecord(entry) &&
-          applySessionRouteStateRepair({
-            sessionKey,
-            entry,
-            repair,
-            now: repairedAt,
-          })
+          applySessionRouteStateRepair({ sessionKey, entry, repair, now: repairedAt })
         );
       };
       if (params.store.kind === "sqlite") {
@@ -466,8 +461,8 @@ export async function runPluginSessionStateDoctorRepairs(params: {
           sessionKeys: [...repairsByKey.keys()],
           storePath: params.store.path,
           update: (currentEntries) => {
-            const replacements = currentEntries.flatMap(({ entry, sessionKey }) =>
-              repairEntry(sessionKey, entry) ? [{ entry, sessionKey }] : [],
+            const replacements = currentEntries.filter(({ entry, sessionKey }) =>
+              repairEntry(sessionKey, entry),
             );
             return { replacements, result: replacements.length };
           },

@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
+import { isPrimarySessionTranscriptFileName } from "../config/sessions/artifacts.js";
 import {
   isLegacySessionRecordOwnedByTarget,
   shouldFilterLegacySessionRecordsByTarget,
@@ -16,11 +17,11 @@ import {
   withDeferredPluginMigrationsCurrent,
 } from "../infra/deferred-plugin-migrations.js";
 import {
-  DeferredPluginSessionImportSchema,
   hasDeferredPluginSessionImport,
   prepareSessionSourceVerification,
   readDeferredPluginSessionImport,
   readDeferredPluginSessionImportReceipt,
+  readStaleDeferredPluginSessionImport,
   rebuildDeferredPluginSessionSourceIndex,
   resolveVerifiedSessionSource,
   type DeferredPluginSessionImport,
@@ -49,6 +50,7 @@ import {
   readTranscriptFingerprint,
   resolveTargetSqlitePath,
 } from "../infra/session-sqlite-migration-readers.js";
+import { DeferredPluginSessionImportSchema } from "../infra/state-migrations.deferred-session-import.js";
 import { markLegacyMigrationSourceRemovedInDatabase } from "../infra/state-migrations.receipts.js";
 import {
   createRetainedAgentDatabaseMatcher,
@@ -78,6 +80,9 @@ export function retireDeferredPluginSessionImport(
     return;
   }
   const recorded = DeferredPluginSessionImportSchema.parse(JSON.parse(receipt.reportJson));
+  if (recorded.superseded) {
+    return;
+  }
   const hasRemainingSources = () =>
     statMigrationPath(params.target.storePath) ||
     recorded.sources.some((source) => statMigrationPath(source.path));
@@ -184,7 +189,7 @@ export async function prepareRetainedSessionImport(
         code: fs.existsSync(params.target.storePath)
           ? "retained_plugin_source_conflict"
           : "historical_transcript_deferred",
-        message: `${artifactPath}: ${reason} Canonical SQLite sessions remain authoritative. Preserve this input and its backups. Restore the verified original at ${sourcePath}, then run openclaw doctor --session-sqlite recover --session-sqlite-all-agents against the same state/config.`,
+        message: `${artifactPath}: ${reason} The SQLite sessions remain the active records. Preserve this input and its backups. Restore the verified original at ${sourcePath}, then run openclaw doctor --session-sqlite recover --session-sqlite-all-agents against the same state/config.`,
       });
     },
   };
@@ -192,10 +197,12 @@ export async function prepareRetainedSessionImport(
     try {
       if (params.mode === "import" || params.mode === "recover") {
         if (await rebuildDeferredPluginSessionSourceIndex(sourceVerification)) {
-          issues.push({
-            code: "retained_plugin_source_index_rebuilt",
-            message: `Rebuilt the verified source index and database binding from the deferred import receipt: ${params.target.storePath}. Canonical SQLite sessions were not replayed.`,
-          });
+          if (!readStaleDeferredPluginSessionImport(sourceVerification)) {
+            issues.push({
+              code: "retained_plugin_source_index_rebuilt",
+              message: `Rebuilt the verified source index and database binding from the deferred import receipt: ${params.target.storePath}. Existing SQLite sessions were not reimported.`,
+            });
+          }
         }
         retireDeferredPluginSessionImport(sourceVerification);
       }
@@ -203,6 +210,37 @@ export async function prepareRetainedSessionImport(
     } catch (error) {
       issues.push({ code: "retained_plugin_source_conflict", message: formatErrorMessage(error) });
       return undefined;
+    }
+  }
+  const staleImport = isSqliteStore
+    ? undefined
+    : readStaleDeferredPluginSessionImport(sourceVerification);
+  if (staleImport) {
+    issues.push({
+      code: "retained_plugin_receipt_superseded",
+      message: `Session import receipt is bound to a different database (${staleImport.databaseIdentity}); it cannot certify ${sqlitePath}. ${staleImport.superseded ? "Preserved the superseded receipt in migration_runs." : "Doctor import will preserve and supersede it."} Retained originals will be checked against live session state without replacing current settings.`,
+    });
+    for (const source of staleImport.sources) {
+      if (!isPrimarySessionTranscriptFileName(path.basename(source.path))) {
+        continue;
+      }
+      let detail = "";
+      try {
+        const current = statMigrationPath(source.path);
+        // The importer validates present inputs; a foreign receipt cannot veto their current bytes.
+        if (current?.isFile() && current.size > 0) {
+          continue;
+        }
+        if (resolveVerifiedSessionSource(source, sourceVerification.resolvedTarget, params.env)) {
+          continue;
+        }
+      } catch (error) {
+        detail = ` ${formatErrorMessage(error)}`;
+      }
+      issues.push({
+        code: "historical_transcript_deferred",
+        message: `Retained history source unavailable: ${source.path}.${detail} The foreign receipt cannot prove its history exists in ${sqlitePath}; restore this original from a verified backup and rerun openclaw doctor --fix.`,
+      });
     }
   }
   const retainedIndex = retainedImport?.sources.find(
@@ -231,7 +269,7 @@ export async function prepareRetainedSessionImport(
     );
     sourceVerification.verification.clear();
   }
-  return { retainedImport, sourceConflicts, sourceVerification, retainedIndexPath };
+  return { retainedImport, staleImport, sourceConflicts, sourceVerification, retainedIndexPath };
 }
 
 /** Compare current rows for diagnosis only; changed index values never gain receipt authority. */
@@ -264,7 +302,7 @@ function appendRetainedIndexComparison(
       const canonical = current.get(sessionKey);
       let message: string;
       if (!canonical || canonical.sessionId !== entry.sessionId) {
-        message = "Retained session identity differs from the current canonical SQLite row.";
+        message = "Retained session identity differs from the current SQLite row.";
       } else {
         const sourceFields = new Map(Object.entries(entry));
         const canonicalFields = new Map(Object.entries(canonical));
@@ -279,18 +317,18 @@ function appendRetainedIndexComparison(
         if (!changedFields.length) {
           continue;
         }
-        message = `Retained session identity matches canonical SQLite, but metadata differs: ${changedFields.join(", ")}.`;
+        message = `Retained session identity matches the SQLite records, but metadata differs: ${changedFields.join(", ")}.`;
       }
       issues.push({
         code: "retained_plugin_source_conflict",
         sessionKey,
-        message: `${message} Canonical values were kept; the retained index remains protected for recovery.`,
+        message: `${message} Existing values were kept; the retained index remains protected for recovery.`,
       });
     }
   } catch (error) {
     issues.push({
       code: "retained_plugin_source_conflict",
-      message: `Could not compare retained session metadata: ${formatErrorMessage(error)}. Canonical SQLite sessions were not changed.`,
+      message: `Could not compare retained session metadata: ${formatErrorMessage(error)}. Existing SQLite sessions were not changed.`,
     });
   }
 }
@@ -400,7 +438,7 @@ export async function archiveConflictingRetainedSessionSources(
         code: params.verifiedEmpty
           ? "retained_empty_transcript_superseded"
           : "retained_plugin_source_conflict",
-        message: `${source}: ${reason} Preserved at ${move.archivePath}; canonical SQLite sessions were not replayed.`,
+        message: `${source}: ${reason} Preserved at ${move.archivePath}; existing SQLite sessions were not reimported.`,
       });
     } catch (error) {
       report.issues.push({

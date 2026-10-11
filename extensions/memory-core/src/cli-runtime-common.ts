@@ -11,6 +11,7 @@ import {
   shortenHomePath,
   theme,
   withManager,
+  withProgressTotals,
 } from "openclaw/plugin-sdk/memory-core-host-runtime-cli";
 import {
   listAgentIds,
@@ -24,11 +25,78 @@ import { formatMemoryCoreSidecarNotice, resolveForeignMemorySlotOwner } from "./
 import type { MemoryCommandOptions } from "./cli.types.js";
 import type { MemoryCoreAcquireLocalService } from "./memory/embedding-local-service.js";
 import { getMemorySearchManager } from "./memory/index.js";
+import type { MemoryCoreRuntimeHost } from "./memory/runtime-host.js";
 import type { ShortTermAuditSummary } from "./short-term-promotion.js";
 const { warn } = theme;
 export type MemoryManager = NonNullable<
   Awaited<ReturnType<typeof getMemorySearchManager>>["manager"]
 >;
+
+export async function syncMemoryWithProgress(params: {
+  sync: NonNullable<MemoryManager["sync"]>;
+  options: Pick<MemoryCommandOptions, "force" | "verbose">;
+  elapsed?: boolean;
+  onError?: (error: unknown) => void;
+}): Promise<void> {
+  const startedAt = params.elapsed ? Date.now() : 0;
+  let lastLabel = "Indexing memory…";
+  let lastCompleted = 0;
+  let lastTotal = 0;
+  const formatDuration = (elapsedMs: number) => {
+    const seconds = Math.floor(elapsedMs / 1000);
+    return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
+  };
+  const buildLabel = () => {
+    const elapsedMs = Math.max(1, Date.now() - startedAt);
+    const elapsed = formatDuration(elapsedMs);
+    if (lastTotal <= 0 || lastCompleted <= 0) {
+      return `${lastLabel} · elapsed ${elapsed}`;
+    }
+    const remainingMs = Math.max(0, ((lastTotal - lastCompleted) * elapsedMs) / lastCompleted);
+    return `${lastLabel} · elapsed ${elapsed} · eta ${formatDuration(remainingMs)}`;
+  };
+  await withProgressTotals(
+    { label: lastLabel, total: 0, fallback: params.options.verbose ? "line" : undefined },
+    async (update, progress) => {
+      const interval = params.elapsed
+        ? setInterval(() => progress.setLabel(buildLabel()), 1000)
+        : undefined;
+      try {
+        await params.sync({
+          reason: "cli",
+          force: Boolean(params.options.force),
+          progress: (syncUpdate) => {
+            if (syncUpdate.label) {
+              lastLabel = syncUpdate.label;
+            }
+            lastCompleted = syncUpdate.completed;
+            lastTotal = syncUpdate.total;
+            update({
+              completed: syncUpdate.completed,
+              total: syncUpdate.total,
+              label: params.elapsed ? buildLabel() : syncUpdate.label,
+            });
+            if (params.elapsed) {
+              progress.setLabel(buildLabel());
+            } else if (syncUpdate.label) {
+              progress.setLabel(syncUpdate.label);
+            }
+          },
+        });
+      } catch (error) {
+        if (!params.onError) {
+          throw error;
+        }
+        params.onError(error);
+      } finally {
+        if (interval !== undefined) {
+          clearInterval(interval);
+        }
+      }
+    },
+  );
+}
+
 type MemoryManagerPurpose = Parameters<typeof getMemorySearchManager>[0]["purpose"];
 function isMemorySecretOwnerFailure(error: unknown, message: string): boolean {
   const candidate = error && typeof error === "object" ? (error as Record<string, unknown>) : {};
@@ -85,31 +153,12 @@ async function loadMemoryCommandConfig(
     };
   }
 }
-function emitMemorySecretResolveDiagnostics(
-  diagnostics: string[],
-  params?: { json?: boolean },
-): void {
-  if (diagnostics.length === 0) {
-    return;
-  }
-  const toStderr = params?.json === true;
-  for (const entry of diagnostics) {
-    const message = warn(`[secrets] ${entry}`);
-    if (toStderr) {
-      defaultRuntime.error(message);
-    } else {
-      defaultRuntime.log(message);
-    }
-  }
+function emitMemoryCommandWarning(message: string, toStderr: boolean): void {
+  defaultRuntime[toStderr ? "error" : "log"](warn(message));
 }
 /** Tells the operator that a Memory Core command acts on its sidecar index only. */
 export function emitMemoryCoreSidecarNotice(owner: string, params?: { json?: boolean }): void {
-  const message = warn(formatMemoryCoreSidecarNotice(owner));
-  if (params?.json) {
-    defaultRuntime.error(message);
-  } else {
-    defaultRuntime.log(message);
-  }
+  emitMemoryCommandWarning(formatMemoryCoreSidecarNotice(owner), Boolean(params?.json));
 }
 export function resolveMemoryPluginConfig(cfg: OpenClawConfig): Record<string, unknown> {
   const entry = asNullableRecord(cfg.plugins?.entries?.["memory-core"]);
@@ -128,19 +177,19 @@ export function formatAuditCounts(audit: ShortTermAuditSummary): string {
   const suffix = scriptCoverage ? ` · scripts=${scriptCoverage}` : "";
   return `${audit.entryCount} entries · ${audit.promotedCount} promoted · ${audit.conceptTaggedEntryCount} concept-tagged · ${audit.spacedEntryCount} spaced${suffix}`;
 }
-export function resolveMemoryAgent(cfg: OpenClawConfig, agent?: string) {
+function resolveExplicitMemoryAgent(cfg: OpenClawConfig, agent?: string): string | undefined {
   const trimmed = agent?.trim();
   if (agent !== undefined && !trimmed) {
     throw new Error("--agent must not be blank");
   }
-  return trimmed ? resolveConfiguredAgentId(cfg, trimmed) : resolveDefaultAgentId(cfg);
+  return trimmed ? resolveConfiguredAgentId(cfg, trimmed) : undefined;
+}
+export function resolveMemoryAgent(cfg: OpenClawConfig, agent?: string) {
+  return resolveExplicitMemoryAgent(cfg, agent) ?? resolveDefaultAgentId(cfg);
 }
 export function resolveMemoryAgentIds(cfg: OpenClawConfig, agent?: string): string[] {
-  const trimmed = agent?.trim();
-  if (agent !== undefined && !trimmed) {
-    throw new Error("--agent must not be blank");
-  }
-  return trimmed ? [resolveConfiguredAgentId(cfg, trimmed)] : listAgentIds(cfg);
+  const explicit = resolveExplicitMemoryAgent(cfg, agent);
+  return explicit === undefined ? listAgentIds(cfg) : [explicit];
 }
 export function formatExtraPaths(workspaceDir: string, extraPaths: MemoryExtraPath[]): string[] {
   return normalizeExtraMemoryPathEntries(workspaceDir, extraPaths).map((entry) => {
@@ -155,6 +204,7 @@ export async function withMemoryCommand(params: {
   purpose?: MemoryManagerPurpose;
   inspectSources?: boolean;
   acquireLocalService?: MemoryCoreAcquireLocalService;
+  runInBackgroundContext?: MemoryCoreRuntimeHost["runInBackgroundContext"];
   /** Refuse instead of answering from the sidecar index when another plugin owns the slot. */
   requiresMemorySlot?: boolean;
   run: (context: { manager: MemoryManager; cfg: OpenClawConfig; agentId: string }) => Promise<void>;
@@ -166,7 +216,9 @@ export async function withMemoryCommand(params: {
     params.commandName,
     params.purpose === "status" ? "read_only_status" : undefined,
   );
-  emitMemorySecretResolveDiagnostics(diagnostics, { json });
+  for (const entry of diagnostics) {
+    emitMemoryCommandWarning(`[secrets] ${entry}`, json === true);
+  }
   const slotOwner = resolveForeignMemorySlotOwner(cfg);
   if (slotOwner && params.requiresMemorySlot) {
     const message = `${params.commandName} reads only Memory Core's sidecar index, but plugins.slots.memory selects "${slotOwner}". Search the selected memory through the agent's memory tools or the ${slotOwner} plugin's own commands.`;
@@ -193,6 +245,7 @@ export async function withMemoryCommand(params: {
           purpose: params.purpose,
           inspectSources: params.inspectSources,
           acquireLocalService: params.acquireLocalService,
+          runInBackgroundContext: params.runInBackgroundContext,
         }),
       onMissing: (error) => {
         if (!error?.trim()) {

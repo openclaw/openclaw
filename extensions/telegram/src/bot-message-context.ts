@@ -250,9 +250,7 @@ export const buildTelegramMessageContext = async ({
     return null;
   }
 
-  const requireTopic = directConfig?.requireTopic;
-  const topicRequiredButMissing = !isGroup && requireTopic === true && dmThreadId == null;
-  if (topicRequiredButMissing) {
+  if (!isGroup && directConfig?.requireTopic === true && dmThreadId == null) {
     logVerbose(`Blocked telegram DM ${chatId}: requireTopic=true but no topic present`);
     return null;
   }

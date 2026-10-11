@@ -7,11 +7,15 @@ import { requireDirectorySync, syncDirectory } from "./directory-durability.js";
 import { retainMutationAuthority } from "./mutation-authority.js";
 import { packageActivationIdentityOrAbsent as entryIdentity } from "./package-update-activation-custody.js";
 import type { PackageActivationDescriptor } from "./package-update-activation-journal.js";
-import { assertPackagePathIdentity } from "./package-update-filesystem.js";
+import {
+  assertPackagePathIdentity,
+  createPackagePathAssertion,
+} from "./package-update-filesystem.js";
 import {
   createPackageIntegrityReader,
   isPackageIntegrityResourceError,
   packageIntegrityDifferences,
+  type PackageIntegrityFingerprint,
   PackageIntegrityMismatchError,
 } from "./package-update-integrity.js";
 
@@ -30,20 +34,14 @@ export async function copyPackagePublicationTree(
     const from = path.join(source, relative);
     const to = path.join(destination, relative);
     const original = fs.lstatSync(from, { bigint: true });
-    const assertSource = () => {
-      assertParents();
-      assertPackagePathIdentity(from, original);
-    };
+    const assertSource = createPackagePathAssertion(from, original, assertParents);
     if (original.isDirectory()) {
       if (relative) {
         await root.mkdir(relative, { private: true, assertBeforeMutation: assertSource });
       }
       assertSource();
       const directory = fs.lstatSync(to, { bigint: true });
-      const assertDirectory = () => {
-        assertSource();
-        assertPackagePathIdentity(to, directory);
-      };
+      const assertDirectory = createPackagePathAssertion(to, directory, assertSource);
       const children = await fsp.readdir(from);
       assertDirectory();
       for (const child of children) {
@@ -118,6 +116,7 @@ export function createPackagePublicationTreeMatcher(
   onWarning: (message: string) => void,
 ) {
   let candidateWarningRecorded = false;
+  const verified = new WeakMap<PackageIntegrityFingerprint, PackageIntegrityFingerprint>();
   return async (
     file: string,
     expected: PackageActivationDescriptor["candidate"],
@@ -138,13 +137,20 @@ export function createPackagePublicationTreeMatcher(
     // files are not re-read. A recovery process parses one without and re-reads all.
     if ("digest" in expected) {
       try {
-        const observed = await createPackageIntegrityReader().tree(file, logical, expected);
+        const observed = await createPackageIntegrityReader().tree(
+          file,
+          logical,
+          verified.get(expected) ?? expected,
+        );
         if (!isDeepStrictEqual(observed, expected)) {
           throw new PackageIntegrityMismatchError(
             `Package publication object changed: ${file}`,
             packageIntegrityDifferences(expected, observed),
           );
         }
+        // A fresh preparation read may predate digest reuse eligibility. Keep
+        // later settled observations, but always compare with the original bytes.
+        verified.set(expected, observed);
         return true;
       } catch (error) {
         if (expected !== candidate || !isPackageIntegrityResourceError(error)) {

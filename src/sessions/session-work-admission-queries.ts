@@ -1,9 +1,13 @@
-import { normalizeSessionIdentities } from "./session-lifecycle-identity.js";
+import {
+  collectSessionIdentityTargets,
+  normalizeSessionIdentities,
+} from "./session-lifecycle-identity.js";
 
 type ReleasableSessionWorkAdmission = {
   phase: "pending" | "acquired";
   owner?: symbol;
   released: Promise<void>;
+  isSettling?: () => boolean;
 };
 
 type SessionWorkAdmissionReleaseParams = {
@@ -31,6 +35,39 @@ export function createSessionWorkAdmissionQueries<T extends ReleasableSessionWor
     return matching;
   }
 
+  function isSessionWorkAdmissionActive(
+    scope: string,
+    identities: Iterable<string | undefined>,
+  ): boolean {
+    return normalizeSessionIdentities(scope, identities).some((identity) =>
+      [...(admissionsByIdentity.get(identity) ?? [])].some(
+        (admission) => admission.phase === "acquired",
+      ),
+    );
+  }
+
+  /** Active session identities grouped by their authoritative store/lifecycle scope. */
+  function collectActiveSessionWorkAdmissions(
+    owners?: ReadonlySet<object>,
+  ): Map<string, Set<string>> {
+    const identities = [...admissionsByIdentity]
+      .filter(([, admissions]) =>
+        [...admissions].some(
+          (admission) => admission.phase === "acquired" && (!owners || owners.has(admission)),
+        ),
+      )
+      .map(([identity]) => identity);
+    return collectSessionIdentityTargets(identities);
+  }
+
+  /** Unique admitted turns; one lease can be indexed under several identities. */
+  function getActiveSessionWorkAdmissionCount(): number {
+    return collectSessionWorkAdmissions(
+      admissionsByIdentity.keys(),
+      (admission) => admission.phase === "acquired",
+    ).size;
+  }
+
   function sessionWorkAdmissionRelease(
     params: SessionWorkAdmissionReleaseParams,
     matches: (admission: T) => boolean,
@@ -54,9 +91,13 @@ export function createSessionWorkAdmissionQueries<T extends ReleasableSessionWor
 
   /** Completion of a named owner that is starting or actively working on a session. */
   function getSessionWorkAdmissionOwnerRelease(
-    params: SessionWorkAdmissionReleaseParams & { owner: symbol },
+    params: SessionWorkAdmissionReleaseParams & { owner: symbol; phase?: "acquired" },
   ): Promise<void> | undefined {
-    return sessionWorkAdmissionRelease(params, (admission) => admission.owner === params.owner);
+    return sessionWorkAdmissionRelease(
+      params,
+      (admission) =>
+        admission.owner === params.owner && (!params.phase || admission.phase === params.phase),
+    );
   }
 
   /** Wait for exact prior owners, including queued work, without waiting on inherited admission. */
@@ -76,10 +117,31 @@ export function createSessionWorkAdmissionQueries<T extends ReleasableSessionWor
     );
   }
 
+  /** Capture terminal owners without waiting on a live turn or a later successor. */
+  function getTerminalSessionWorkAdmissionRelease(
+    params: SessionWorkAdmissionReleaseParams,
+  ): Promise<void> | false {
+    const current = currentAdmissions();
+    const admissions = collectSessionWorkAdmissions(
+      normalizeSessionIdentities(params.scope, params.identities),
+      (admission) => admission.phase === "acquired" && !current?.has(admission),
+    );
+    if ([...admissions].some((admission) => !admission.isSettling?.())) {
+      return false;
+    }
+    return Promise.all([...admissions].map((admission) => admission.released)).then(
+      () => undefined,
+    );
+  }
+
   return {
     collectSessionWorkAdmissions,
+    collectActiveSessionWorkAdmissions,
+    getActiveSessionWorkAdmissionCount,
+    isSessionWorkAdmissionActive,
     getSessionWorkAdmissionRelease,
     getSessionWorkAdmissionOwnerRelease,
     getCompetingSessionWorkAdmissionRelease,
+    getTerminalSessionWorkAdmissionRelease,
   };
 }

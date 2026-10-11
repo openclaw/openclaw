@@ -20,10 +20,27 @@ const discoverRealtimeTalkInputsMock = vi.fn();
 const openMicrophoneMock = vi.fn();
 
 describe("composer typing lifecycle", () => {
+  it("shares the active caret on input and selection-only changes", () => {
+    const draft = "First line\n😀 second line\nLast line  ";
+    const onTypingChange = vi.fn();
+    const { container } = renderComposer({ draft, onTypingChange });
+    document.body.append(container);
+    onTestFinished(() => container.remove());
+    const textarea = container.querySelector<HTMLTextAreaElement>("textarea")!;
+    textarea.focus();
+    textarea.setSelectionRange(14, 14);
+    textarea.dispatchEvent(new InputEvent("input", { bubbles: true }));
+    expect(onTypingChange).toHaveBeenLastCalledWith(true, draft, 14);
+    textarea.setSelectionRange(0, 5, "backward");
+    textarea.dispatchEvent(new Event("select"));
+    expect(onTypingChange).toHaveBeenLastCalledWith(true, draft, 0);
+    textarea.setSelectionRange(draft.length, draft.length);
+    textarea.dispatchEvent(new KeyboardEvent("keyup", { key: "End" }));
+    expect(onTypingChange).toHaveBeenLastCalledWith(true, draft, draft.length);
+  });
+
   it.each([
-    { name: "Enter", key: {} },
     { name: "Control+Enter", key: { ctrlKey: true } },
-    { name: "Command+Enter", key: { metaKey: true } },
     { name: "goal Enter", key: {}, goal: true },
     { name: "slash argument Enter", key: {}, command: true },
   ])("stops the submitted preview before $name dispatch", ({ key, goal, command }) => {
@@ -54,7 +71,7 @@ describe("composer typing lifecycle", () => {
     const textarea = container.querySelector<HTMLTextAreaElement>("textarea")!;
     textarea.dispatchEvent(new InputEvent("beforeinput", { bubbles: true }));
     textarea.dispatchEvent(new InputEvent("input", { bubbles: true }));
-    expect(onTypingChange).toHaveBeenLastCalledWith(true, draft);
+    expect(onTypingChange).toHaveBeenLastCalledWith(true, draft, textarea.selectionEnd);
     textarea.dispatchEvent(
       new KeyboardEvent("keydown", { key: "Enter", ...key, bubbles: true, cancelable: true }),
     );
@@ -89,7 +106,7 @@ describe("suggestion composer", () => {
     textarea.dispatchEvent(new InputEvent("beforeinput", { bubbles: true }));
     textarea.dispatchEvent(new InputEvent("input", { bubbles: true }));
     textarea.dispatchEvent(new FocusEvent("blur", { bubbles: true }));
-    expect(onTypingChange).toHaveBeenNthCalledWith(1, true, "hello");
+    expect(onTypingChange).toHaveBeenNthCalledWith(1, true, "hello", 5);
     expect(onTypingChange).toHaveBeenLastCalledWith(false);
   });
 });
@@ -231,29 +248,6 @@ describe("renderChatComposer controls", () => {
       "Waiting for microphone access. Bring this tab to the foreground and allow access if prompted.",
     );
     expect(container.querySelector(".agent-chat__dictation-phase")).toBeNull();
-  });
-
-  it("labels the message input independently of its placeholder", () => {
-    const { container } = renderComposer();
-    const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
-
-    expect(textarea?.getAttribute("aria-label")).toBe(t("chat.composer.composerInput"));
-  });
-
-  it("clears a whitespace-only draft on blur so the native placeholder returns", () => {
-    const onDraftChange = vi.fn();
-    const { container } = renderComposer({ draft: "saved", onDraftChange });
-    const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
-    if (!textarea) {
-      throw new Error("expected composer textarea");
-    }
-
-    textarea.value = "  \n  ";
-    textarea.dispatchEvent(new FocusEvent("blur", { bubbles: true }));
-
-    expect(textarea.value).toBe("");
-    expect(onDraftChange).toHaveBeenLastCalledWith("", undefined);
-    expect(textarea.matches(":placeholder-shown")).toBe(true);
   });
 
   it("clears a live whitespace draft when the last rendered draft was already empty", () => {

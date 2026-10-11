@@ -1,7 +1,10 @@
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
+import { runWithSqliteBusyTimeout } from "../../infra/sqlite-busy-timeout.js";
+import { isSqliteLockError } from "../../infra/sqlite-error-diagnostics.js";
 import { withSqlitePostCommitPublications } from "../../infra/sqlite-post-commit.js";
 import {
   assertTransactionUsable,
+  runSqliteImmediateTransactionSync,
   runSqliteWorkerTransactionSync,
 } from "../../infra/sqlite-transaction.js";
 import type {
@@ -12,6 +15,11 @@ import type {
 import type { SqliteWorkerDatabaseContext } from "../../infra/sqlite-worker-database-context.js";
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../../state/openclaw-state-db-contract.js";
+import {
+  publishUnchangedSessionTranscriptAuthority,
+  readStagedSessionTranscriptAuthority,
+  type SessionTranscriptAuthorityReceipt,
+} from "./session-transcript-authority.js";
 import {
   isSessionTranscriptIndexStatusClean,
   maintainSessionTranscriptIndexStatus,
@@ -39,7 +47,11 @@ export type TranscriptProjectionRebuildOperations = {
   };
   finalize: {
     input: { plan: PreparedSessionTranscriptProjectionMetadata; claimId: number };
-    output: { finalized: boolean; sessionKey?: string };
+    output: {
+      finalized: boolean;
+      sessionKey?: string;
+      transcriptPublication?: readonly SessionTranscriptAuthorityReceipt[];
+    };
   };
 };
 
@@ -63,21 +75,45 @@ export function bindSqliteWorkerBackend(_input: undefined, context: SqliteWorker
   function execute(
     command: SqliteWorkerCommand<TranscriptProjectionPublicationOperations>,
   ): TranscriptProjectionPublicationOperations[keyof TranscriptProjectionPublicationOperations]["output"];
-  function execute(command: SqliteWorkerCommand<TranscriptProjectionPublicationOperations>) {
-    if (
-      (command.type === "preflight" || command.type === "sweep") &&
-      isSessionTranscriptIndexStatusClean(db)
-    ) {
-      return { sessionIds: [], hasMore: false, traversalComplete: true };
+  function execute(
+    command: SqliteWorkerCommand<TranscriptProjectionPublicationOperations>,
+  ): TranscriptProjectionPublicationOperations[keyof TranscriptProjectionPublicationOperations]["output"] {
+    if (command.type === "preflight" || command.type === "sweep") {
+      if (isSessionTranscriptIndexStatusClean(db)) {
+        return { sessionIds: [], hasMore: false, traversalComplete: true };
+      }
+      // Derived maintenance has no prepared row or publication facts. Admit the whole
+      // bounded effect, then reread rows without waiting for the host under a write lock.
+      context.admit("transaction");
+      context.admit("commit");
+      let entered = false;
+      try {
+        return runWithSqliteBusyTimeout(db, 0, () =>
+          runSqliteImmediateTransactionSync(
+            db,
+            () => {
+              entered = true;
+              return maintainSessionTranscriptIndexStatus(db);
+            },
+            {
+              operationLabel: `sessions.transcript-index.${command.type}`,
+              beginLockFailureReporting: "suppress",
+            },
+          ),
+        );
+      } catch (error) {
+        if (entered || !isSqliteLockError(error)) {
+          throw error;
+        }
+        // The existing drain yields and obtains fresh grants on its next attempt.
+        return { sessionIds: [], hasMore: true, traversalComplete: false };
+      }
     }
     return withSqlitePostCommitPublications(db, () =>
       runSqliteWorkerTransactionSync(
         context,
         () => {
           switch (command.type) {
-            case "preflight":
-            case "sweep":
-              return maintainSessionTranscriptIndexStatus(db);
             case "claim":
               return claimPreparedSessionTranscriptProjectionInTransaction(
                 db,
@@ -103,7 +139,17 @@ export function bindSqliteWorkerBackend(_input: undefined, context: SqliteWorker
                       .where("session_id", "=", command.input.plan.sessionId),
                   )
                 : undefined;
-              return { finalized, ...(session ? { sessionKey: session.session_key } : {}) };
+              if (session) {
+                publishUnchangedSessionTranscriptAuthority(
+                  { db, path: context.databasePath },
+                  session.session_key,
+                );
+              }
+              return {
+                finalized,
+                ...(session ? { sessionKey: session.session_key } : {}),
+                transcriptPublication: readStagedSessionTranscriptAuthority({ db }),
+              };
             }
           }
           throw new Error("Unknown transcript projection publication operation");

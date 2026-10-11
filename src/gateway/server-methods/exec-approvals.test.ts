@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { applyExecApprovalsUpdate } from "../../infra/exec-approvals-mutation.kernel.js";
 import type { ExecApprovalsFile } from "../../infra/exec-approvals.js";
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { withTempDir } from "../../test-utils/temp-dir.js";
@@ -204,18 +205,13 @@ describe("exec approvals gateway methods", () => {
           let current = true;
           let commitObserved = false;
           const before = actual.readExecApprovalsSnapshot();
-          const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
-          const admissionSpy = vi
-            .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
-            .mockImplementation((admit, attachment) =>
-              createAdmission((request, grant) => {
-                if (request.stage === "commit") {
-                  commitObserved = true;
-                  current = false;
-                }
-                admit(request, grant);
-              }, attachment),
-            );
+          const admissionSpy = probe.admission(workerAdmission, (request, grant, admit) => {
+            if (request.stage === "commit") {
+              commitObserved = true;
+              current = false;
+            }
+            admit(request, grant);
+          });
           ensureExecApprovalsSnapshotMock.mockImplementationOnce(
             actual.ensureExecApprovalsSnapshot,
           );

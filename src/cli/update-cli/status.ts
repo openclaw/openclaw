@@ -164,6 +164,18 @@ async function inspectUpdateStatus(opts: UpdateStatusOptions): Promise<void> {
   const channelLabel = channelInfo.label;
 
   const updateAvailability = resolveUpdateAvailability(update);
+  let immutableCoverage;
+  let immutableCoverageLines: string[] = [];
+  if (update.immutable) {
+    try {
+      const { inspectImmutableUpdateCoverage, formatImmutableUpdateCoverage } =
+        await import("../../infra/update-immutable-inspection.js");
+      immutableCoverage = await inspectImmutableUpdateCoverage({ root: update.immutable.root });
+      immutableCoverageLines = formatImmutableUpdateCoverage(immutableCoverage);
+    } catch (error) {
+      immutableCoverageLines = [`Immutable coverage unavailable: ${formatErrorMessage(error)}`];
+    }
+  }
 
   const runStatus = await readUpdateRunStatus();
   const recoveryStatus = await readUpdateRecoverySetStatus();
@@ -263,6 +275,10 @@ async function inspectUpdateStatus(opts: UpdateStatusOptions): Promise<void> {
         config: configChannel,
       },
       availability: updateAvailability,
+      ...(immutableCoverage ? { immutableCoverage } : {}),
+      ...(update.immutable && !immutableCoverage
+        ? { immutableCoverageError: immutableCoverageLines[0] }
+        : {}),
       ...(runtimeFindings.length > 0 ? { runtimeFindings } : {}),
       ...(serviceDefinition ? { serviceDefinition } : {}),
       ...(lastGatewayInstallationReplacement ? { lastGatewayInstallationReplacement } : {}),
@@ -292,18 +308,42 @@ async function inspectUpdateStatus(opts: UpdateStatusOptions): Promise<void> {
             ? update.packageManager
             : "unknown";
 
+  const immutable = update.immutable;
+  const activation = immutable?.activation;
+  const lastActivation = immutable?.lastActivation;
+  const verifiedGateway = lastActivation?.gateway;
   const rows = [
     { Item: "Install", Value: installLabel },
     { Item: "Channel", Value: channelLabel },
-    ...(update.immutable
+    ...(immutable
       ? [
           {
             Item: "Immutable activation",
-            Value: update.immutable.activation
-              ? `${update.immutable.activation.phase} (${update.immutable.activation.operationId})`
-              : update.immutable.activationEnabled
+            Value: activation
+              ? `pending recovery · ${activation.phase} (${activation.operationId})`
+              : immutable.activationEnabled
                 ? "enabled"
                 : "preparation only",
+          },
+        ]
+      : []),
+    ...(activation?.failure ? [{ Item: "Immutable failure", Value: activation.failure }] : []),
+    ...(activation?.recoveryCommand
+      ? [{ Item: "Recovery command (external Node)", Value: activation.recoveryCommand }]
+      : []),
+    ...(lastActivation
+      ? [
+          {
+            Item: "Last immutable activation",
+            Value: `${lastActivation.outcome === "succeeded" ? "accepted" : "restored"} · ${lastActivation.selectedSha} · verified ${new Date(lastActivation.verifiedAtMs).toISOString()} (${lastActivation.operationId})`,
+          },
+        ]
+      : []),
+    ...(verifiedGateway
+      ? [
+          {
+            Item: "Last verified Gateway",
+            Value: `version ${verifiedGateway.version} · build ${verifiedGateway.buildId} · PID ${verifiedGateway.pid} · boot ${verifiedGateway.bootId}`,
           },
         ]
       : []),
@@ -360,6 +400,10 @@ async function inspectUpdateStatus(opts: UpdateStatusOptions): Promise<void> {
     }).trimEnd(),
   );
   defaultRuntime.log("");
+
+  for (const line of immutableCoverageLines) {
+    defaultRuntime.log(safeMessage(line));
+  }
 
   if (lastGatewayInstallationReplacement) {
     const { reason, completedAtMs } = lastGatewayInstallationReplacement;

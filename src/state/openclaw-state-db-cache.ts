@@ -14,7 +14,10 @@ import {
   isSqliteLockError,
   sqlitePrimaryResultCode,
 } from "../infra/sqlite-error-diagnostics.js";
-import type { SqliteFileGeneration } from "../infra/sqlite-file-generation.js";
+import {
+  sameSqliteFileGeneration,
+  type SqliteFileGeneration,
+} from "../infra/sqlite-file-generation.js";
 import {
   confirmSqliteFileIntegrity,
   type SqliteIntegrityConfirmation,
@@ -36,7 +39,6 @@ import {
   isOpenClawDatabaseMaintenanceResourceOwned,
   observeOpenClawDatabaseMaintenanceResource,
   type OpenClawDatabaseMaintenanceScope,
-  type OpenClawStateDatabaseAsyncResource,
   type OpenClawStateDatabaseReadAdmission,
 } from "./openclaw-state-db-async-lifecycle.js";
 import {
@@ -425,20 +427,20 @@ export function clearOpenClawStateDatabaseOpenFailure(pathname: string): void {
 /** Validate the canonical terminal fact before acquiring a domain-operation lease. */
 export async function getOpenClawStateDatabaseTerminalFailureAsync(
   context: OpenClawStateWorkerContext,
+  signal?: AbortSignal,
 ): Promise<Error | undefined> {
   context.admission.assertCurrent();
   const failure = await terminalOpenLatch.getAsync(
     context.admission.databasePath,
-    async (_path, generation) => {
-      const { inspectOpenClawStateDatabase } = await import("./openclaw-state-worker-store.js");
-      const matches = await inspectOpenClawStateDatabase(context, {
-        type: "database.generationMatches",
-        input: { generation },
-      });
-      if (matches === undefined) {
-        throw new Error("Recorded shared-state database generation is unavailable");
-      }
-      return matches;
+    async (pathname, generation) => {
+      const { readSqliteFileGeneration } =
+        await import("../infra/sqlite-file-generation-worker.js");
+      signal?.throwIfAborted();
+      context.admission.assertCurrent();
+      const current = await readSqliteFileGeneration(pathname, signal);
+      signal?.throwIfAborted();
+      context.admission.assertCurrent();
+      return sameSqliteFileGeneration(generation, current);
     },
   );
   context.admission.assertCurrent();
@@ -448,11 +450,9 @@ export async function getOpenClawStateDatabaseTerminalFailureAsync(
 /** Reject shared-state access after a process-local terminal failure. */
 function assertOpenClawStateDatabaseOpenAllowed(pathname: string, ownership?: "cached-read"): void {
   const resolvedPath = resolveDatabasePath({ path: pathname });
-  if (ownership === "cached-read") {
-    assertStateDatabaseReadAllowed(pathname);
-  } else {
-    assertStateDatabaseAccessAllowed(pathname);
-  }
+  const assertAllowed =
+    ownership === "cached-read" ? assertStateDatabaseReadAllowed : assertStateDatabaseAccessAllowed;
+  assertAllowed(pathname);
   const { identity } = asyncResources.capture(resolvedPath);
   const terminalFailure = terminalOpenLatch.get(resolvedPath);
   if (terminalFailure) {
@@ -586,11 +586,7 @@ export function closeOpenClawStateDatabase(options?: OpenClawStateDatabaseCloseO
 }
 
 /** Register a resource owner before it can admit any shared-state worker opens. */
-export function registerOpenClawStateDatabaseAsyncResource(
-  resource: OpenClawStateDatabaseAsyncResource,
-): () => void {
-  return asyncResources.register(resource);
-}
+export const registerOpenClawStateDatabaseAsyncResource = asyncResources.register;
 
 /** Capture the canonical read generation before any asynchronous worker admission. */
 export const captureOpenClawStateDatabaseReadAdmission = asyncResources.capture;

@@ -314,23 +314,19 @@ export async function sendMessageSignal(
   };
   let nativeReplyStatus: "sent" | "fallback" | undefined;
   let result: SignalSendRpcResult | undefined;
-  if (quote) {
-    try {
-      result = await signalRpcRequest<SignalSendRpcResult>(
-        "send",
-        { ...params, ...quote.params },
-        sendOpts,
-      );
-      nativeReplyStatus = "sent";
-    } catch (error) {
-      if (!isSignalQuoteMetadataRejection(error)) {
-        throw error;
-      }
-      result = await signalRpcRequest<SignalSendRpcResult>("send", params, sendOpts);
-      nativeReplyStatus = "fallback";
+  try {
+    result = await signalRpcRequest<SignalSendRpcResult>(
+      "send",
+      quote ? { ...params, ...quote.params } : params,
+      sendOpts,
+    );
+    nativeReplyStatus = quote ? "sent" : undefined;
+  } catch (error) {
+    if (!quote || !isSignalQuoteMetadataRejection(error)) {
+      throw error;
     }
-  } else {
     result = await signalRpcRequest<SignalSendRpcResult>("send", params, sendOpts);
+    nativeReplyStatus = "fallback";
   }
   assertSignalRecipientDelivery(result, target);
   const timestamp = result?.timestamp;

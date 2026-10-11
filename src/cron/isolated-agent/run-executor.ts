@@ -31,7 +31,6 @@ import {
 } from "../../agents/scheduled-tool-policy.js";
 import { withLocalSessionPlacementTurnSettlement } from "../../agents/session-placement-admission.js";
 import { resolveSessionRuntimeOverrideForProvider } from "../../agents/session-runtime-compat.js";
-import { needsThinkHydration } from "../../agents/thinking-runtime.js";
 import { resolveAgentLifecycleTerminalMetadata } from "../../auto-reply/reply/agent-lifecycle-terminal.js";
 import type { VerboseLevel } from "../../auto-reply/thinking.js";
 import type { CliSessionBinding } from "../../config/sessions.js";
@@ -228,6 +227,7 @@ function createCronPromptExecutor(
       scheduledToolPolicy,
       executionIdentity: params.executionIdentity,
     });
+    params.onPromptAdmission(cronAdmission);
     const onExecutionStarted = async (info?: CronRunnerStartedInfo) => {
       params.onExecutionStarted?.(info);
       await params.executionIdentity?.onExecutionStarted?.();
@@ -347,8 +347,7 @@ function createCronPromptExecutor(
         const thinkingSelectionKey = `${providerOverride}/${modelOverride}\0${candidateRuntime}`;
         if (
           (candidateConfiguredThinkLevel !== "off" || candidateRuntime !== "openclaw") &&
-          hydratedThinkingSelection !== thinkingSelectionKey &&
-          needsThinkHydration(thinkingCatalog, providerOverride, modelOverride, candidateRuntime)
+          hydratedThinkingSelection !== thinkingSelectionKey
         ) {
           hydratedThinkingSelection = thinkingSelectionKey;
           const runtimeCatalog = await params.loadThinkingCatalog(
@@ -645,7 +644,6 @@ function createCronPromptExecutor(
       })
       .finally(() => {
         unregisterCronRunExecSource();
-        cronAdmission.close();
       });
     const executionError =
       params.lifecycle.getDeferredError() ??

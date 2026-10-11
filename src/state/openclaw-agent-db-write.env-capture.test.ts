@@ -2,7 +2,6 @@ import { afterEach, expect, it, vi } from "vitest";
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import type { SqliteIntegrityOperation } from "../infra/sqlite-integrity.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import type { StoreWriterQueue } from "../shared/store-writer-queue.js";
 import { withMockedPlatform } from "../test-utils/vitest-spies.js";
 import type {
   OpenClawAgentDatabase,
@@ -27,6 +26,7 @@ const boundary = vi.hoisted(() => {
       signal?.throwIfAborted();
     }),
     cache: {
+      terminal: { peek: () => undefined },
       pending: new Map<string, PendingAgentDatabaseOpen>(),
       activePending: new Set<PendingAgentDatabaseOpen>(),
       databases: new Map<string, OpenClawAgentDatabase>(),
@@ -58,8 +58,8 @@ vi.mock("../config/state-dir.js", () => ({
 vi.mock("./openclaw-agent-db.paths.js", () => ({
   resolveOpenClawAgentSqlitePath: boundary.route,
 }));
+// mock-isolation: Capture environment before queued admission without opening real databases.
 vi.mock("./openclaw-agent-write-admission.js", () => ({
-  SQLITE_SESSION_WRITER_QUEUES: new Map<string, StoreWriterQueue>(),
   runOpenClawAgentWriteAdmission: boundary.admit,
 }));
 vi.mock("./openclaw-agent-db-lifecycle.js", () => ({

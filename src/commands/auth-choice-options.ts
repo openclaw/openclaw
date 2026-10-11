@@ -73,10 +73,9 @@ export function buildAuthChoiceGroups(params: {
   groups: AuthChoiceGroup[];
   skipOption?: AuthChoiceOption;
 } {
-  const optionByValue = new Map<AuthChoice, AuthChoiceOption>();
-  for (const option of CORE_AUTH_CHOICE_OPTIONS) {
-    optionByValue.set(option.value, option);
-  }
+  const optionByValue = new Map<AuthChoice, AuthChoiceOption>(
+    CORE_AUTH_CHOICE_OPTIONS.map((option) => [option.value, option]),
+  );
   for (const {
     option: { group, ...option },
     providerId,
@@ -136,12 +135,10 @@ export function buildAuthChoiceGroups(params: {
       options: [option],
     });
   }
-  const groups = Array.from(groupsById.values())
-    .map((group) => {
-      group.options = group.options.toSorted(compareAssistantOptions);
-      return group;
-    })
-    .toSorted(compareAuthChoiceGroups);
+  for (const group of groupsById.values()) {
+    group.options = group.options.toSorted(compareAssistantOptions);
+  }
+  const groups = Array.from(groupsById.values()).toSorted(compareAuthChoiceGroups);
 
   const skipOption = params.includeSkip
     ? ({ value: "skip", label: "Skip for now" } satisfies AuthChoiceOption)

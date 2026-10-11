@@ -29,13 +29,27 @@ import {
   normalizePendingFinalDeliveryPayloads,
 } from "./pending-final-delivery.js";
 import { claimNextQueuedFollowupRequestFrom, enqueueFollowupRun } from "./queue.js";
-import { isReplyOperationSuperseded } from "./reply-operation-abort.js";
+import {
+  isReplyOperationSuperseded,
+  resolveReplyOperationAbortReason,
+} from "./reply-operation-abort.js";
 import { recordReplyOperationAgentTurn } from "./reply-operation-run-state.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
 import { replyRunRegistry } from "./reply-run-registry.js";
 import { createReplyRestartRecoveryClaimController } from "./restart-recovery-claim.js";
 import { resolveReplySourceTurnId } from "./source-turn-id.js";
 import { buildStalledTurnRecoveryRun, STALLED_TURN_GUIDANCE } from "./stalled-turn-recovery.js";
+
+export function prependCompactionNotices(
+  result: ReplyPayload | ReplyPayload[] | undefined,
+  notices: readonly ReplyPayload[],
+  operation: ReplyOperation,
+): ReplyPayload | ReplyPayload[] | undefined {
+  if (notices.length === 0 || resolveReplyOperationAbortReason(operation)) {
+    return result;
+  }
+  return [...notices, ...(Array.isArray(result) ? result : result ? [result] : [])];
+}
 
 /** Continues a saved stalled request once, retaining its final-feedback obligation. */
 export function continueStalledReplyTurn({
@@ -112,6 +126,7 @@ type ExecutePreparedReplyAgentRunInput = Omit<
     getActiveSessionEntry: () => SessionEntry | undefined;
     isRestartRecoveryArmed: () => Promise<boolean>;
     sendDirectCompactionNotice: ((phase: CompactionNoticePhase) => Promise<void>) | undefined;
+    onCompactionNoticePayload?: (payload: ReplyPayload) => void;
     setRunFollowupTurn: (runner: FinalizeReplyAgentRunInput["runFollowupTurn"]) => void;
     setActiveSessionEntry: (entry: SessionEntry | undefined) => void;
     shouldEmitToolOutput: () => boolean;

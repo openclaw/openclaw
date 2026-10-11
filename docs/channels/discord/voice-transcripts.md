@@ -165,6 +165,6 @@ During capture, notes update about every five minutes when new speech has been
 saved. A quiet room does not trigger repeated summaries. Capture stop drains the
 received speech and saves final notes.
 They use the agent's utility model, falling back to its primary model and then
-deterministic heuristic notes if model generation fails. Read stored notes with
+rule-based notes if model generation fails. Read stored notes with
 the `transcripts` tool, the [CLI](/cli/transcripts), or the Control UI Meetings
 page. The tool's `summarize` action regenerates notes from the stored transcript.

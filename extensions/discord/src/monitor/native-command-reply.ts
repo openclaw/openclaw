@@ -166,9 +166,9 @@ export async function deliverDiscordInteractionReply(params: {
     try {
       const result = await safeDiscordInteractionCall("interaction send", async () => {
         const sent =
-          !preferFollowUp && !payloadDelivered
-            ? await interaction.reply(payloadLocal)
-            : await interaction.followUp(payloadLocal);
+          await interaction[!preferFollowUp && !payloadDelivered ? "reply" : "followUp"](
+            payloadLocal,
+          );
         payloadDelivered = true;
         if (firstMessage && componentBuild) {
           // Initial callbacks need not return a message; callback input supplies its ID later.

@@ -12,14 +12,15 @@ import { drainGlobalSingletonLifecycleState } from "../../shared/global-singleto
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { formatCliCommand } from "../command-format.js";
 import { measureGatewayBootstrapStep } from "../startup-trace.js";
+import { resolveGatewayShutdownBudget } from "./run-loop-shutdown-budget.js";
 
 const lifecycleRuntimeLoader = createLazyImportLoader(() => import("./lifecycle.runtime.js"));
 
 /** Prime lifecycle code and acquire initial custody before installing signal handlers. */
-export async function prepareGatewayRunLoop(params: {
-  lockPort?: number;
-  lifecycleLockDeadlineMs?: number;
-}) {
+export async function prepareGatewayRunLoop(
+  params: { lockPort?: number; lifecycleLockDeadlineMs?: number },
+  logger: Pick<SubsystemLogger, "info" | "warn">,
+) {
   // Updates rotate dist chunks; signal handling must retain this exact runtime.
   const lifecycleRuntime = await measureGatewayBootstrapStep(
     "cli.bootstrap.lifecycle-runtime",
@@ -32,6 +33,8 @@ export async function prepareGatewayRunLoop(params: {
   );
   const supervisorMode = supervisor?.kind ?? null;
   const restartDecision = lifecycleRuntime.resolveGatewayRestartDecision();
+  // Resolve the native deadline before acquiring custody that needs final settlement.
+  const startupBudget = await resolveGatewayShutdownBudget(supervisorMode, logger);
   const lock = await measureGatewayBootstrapStep("cli.bootstrap.gateway-lock", () =>
     acquireGatewayLock({
       port: params.lockPort,
@@ -42,7 +45,7 @@ export async function prepareGatewayRunLoop(params: {
         : {}),
     }),
   );
-  return { lifecycleRuntime, supervisor, supervisorMode, restartDecision, lock };
+  return { lifecycleRuntime, supervisor, supervisorMode, restartDecision, startupBudget, lock };
 }
 
 export type GatewayRunLoopStartOptions = Pick<
@@ -143,10 +146,12 @@ export function createGatewayStartupOperations(): {
   close(): void;
   cancelledWith(error: unknown): boolean;
   failedWith(error: unknown): boolean;
-  stopCompletion?: Promise<void>;
+  getStopCompletion(): Promise<void> | undefined;
+  retainStopCompletion(completion: Promise<void>): void;
   drain(): Promise<void>;
 } {
   const scope = new AsyncWorkScope();
+  let stopCompletion: Promise<void> | undefined;
   let failure: { error: unknown } | undefined;
   // A process-group stop can kill a child before its separate admission owner is cancelled.
   const cancelledWith = (error: unknown) =>
@@ -171,6 +176,10 @@ export function createGatewayStartupOperations(): {
   };
   return {
     run,
+    getStopCompletion: () => stopCompletion,
+    retainStopCompletion: (completion) => {
+      stopCompletion = completion;
+    },
     close: () => scope.beginClose(),
     cancelledWith,
     failedWith: (error: unknown) => failure !== undefined && failure.error === error,
@@ -189,6 +198,7 @@ export function createGatewayStartupOperations(): {
 export async function prepareGatewayRestartIteration(
   runtime: typeof import("./lifecycle.runtime.js"),
   logger: Pick<SubsystemLogger, "warn">,
+  isCurrent: () => boolean,
 ): Promise<void> {
   // Retire stale activity counts and timers; execution owners restore durable work.
   const {
@@ -209,6 +219,10 @@ export async function prepareGatewayRestartIteration(
   abortActiveCronTaskRuns("Gateway restarting.");
   const cronTaskDrain = await waitForActiveCronTaskRuns(1_000);
   const cronDrain = await waitForActiveCronJobs(1_000);
+  // A terminal decision made during these joins must not reopen root admission.
+  if (!isCurrent()) {
+    return;
+  }
   if (!cronTaskDrain.drained || !cronDrain.drained) {
     logger.warn(
       `cron run drain timed out during restart lifecycle reset after retiring old cron admission; ${cronTaskDrain.active} task handle(s) and ${cronDrain.active} active marker(s) remain after aborting old cron runs`,
@@ -228,5 +242,7 @@ export async function prepareGatewayRestartIteration(
   } catch (error) {
     logger.warn(`failed to reset ambient runtime state: ${formatErrorMessage(error)}`);
   }
-  markGatewayRestartTrace("restart.next-start");
+  if (isCurrent()) {
+    markGatewayRestartTrace("restart.next-start");
+  }
 }

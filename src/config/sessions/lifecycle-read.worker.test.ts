@@ -1,6 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import { runInDetachedAsyncContext } from "../../shared/detached-async-context.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../../state/openclaw-agent-db.js";
 import {
   withOpenClawTestState,
@@ -11,7 +12,7 @@ import { upsertSessionEntryCore } from "./session-accessor.entry.js";
 import {
   replaceTranscriptEvents,
   replaceTranscriptEventsSync,
-} from "./session-accessor.sqlite-transcript-write.js";
+} from "./session-accessor.sqlite-transcript-write.test-support.js";
 import * as transcriptReaders from "./session-transcript-execution-read.js";
 
 function scopeFor(state: OpenClawTestState) {
@@ -91,8 +92,10 @@ it.each(["rewrite", "close"] as const)(
                     replaceTranscriptEventsSync(scope, [{ ...header, timestamp: "2027" }]),
                   ).toBe(true);
                 } else {
-                  // Close revokes now and joins this accepted read after it refuses disclosure.
-                  closing = closeOpenClawAgentDatabaseByPathAsync(scope.storePath);
+                  // The independent close revokes now, then joins the read after disclosure is refused.
+                  closing = runInDetachedAsyncContext(() =>
+                    closeOpenClawAgentDatabaseByPathAsync(scope.storePath),
+                  );
                 }
               }
               return facts;

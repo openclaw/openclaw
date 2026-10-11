@@ -22,6 +22,7 @@ import {
   resolveAuthProfileDatabaseOwnerId,
   resolveAuthProfileDatabasePath,
 } from "./auth-profiles/sqlite.js";
+import { MODELS_JSON_STATE } from "./models-config-state.js";
 import type { PluginModelCatalogAuthSnapshot } from "./plugin-model-catalog-auth.js";
 import {
   withPluginModelCatalogPublicationLocks,
@@ -570,6 +571,40 @@ export async function replacePersistedPluginModelCatalogs(params: {
         input: { planned: [...planned], authSnapshot, env: options.env },
       }),
     ),
+  );
+}
+
+/** Removes only cached endpoints known to belong to a just-removed config entry. */
+export async function pruneRemovedProviderPluginModelCatalogs(params: {
+  agentDir: string;
+  removedProviderBaseUrls: Readonly<Record<string, string>>;
+}): Promise<boolean> {
+  if (Object.keys(params.removedProviderBaseUrls).length === 0) {
+    return false;
+  }
+  // Discovery plans hold this queue through publication; prune after older plans settle.
+  return await MODELS_JSON_STATE.writeQueue.enqueue(
+    path.join(params.agentDir, "models.json"),
+    async () => {
+      const options = pluginModelCatalogDatabaseOptions(params.agentDir);
+      options.path = resolvePathViaExistingAncestorSync(options.path);
+      try {
+        await stat(options.path);
+      } catch (error) {
+        if (hasErrnoCode(error, "ENOENT")) {
+          return false;
+        }
+        throw error;
+      }
+      return await withPluginModelCatalogPublicationLocks([options.path], () =>
+        withPluginModelCatalogWorker(options, false, (scope) =>
+          scope.execute({
+            type: "catalog.pruneRemovedProviders",
+            input: { removedProviderBaseUrls: { ...params.removedProviderBaseUrls } },
+          }),
+        ),
+      );
+    },
   );
 }
 

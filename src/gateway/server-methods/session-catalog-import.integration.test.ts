@@ -19,7 +19,10 @@ import { getActivePluginRegistry, setActivePluginRegistry } from "../../plugins/
 import { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import type { SessionCatalogProvider } from "../../plugins/session-catalog.js";
 import { listSessionStateEventsSince } from "../../sessions/session-state-events.js";
-import { readSessionUpstreamLink } from "../../sessions/session-upstream-links.js";
+import {
+  captureSessionUpstreamLinkReadSource,
+  prepareSessionUpstreamLink,
+} from "../../sessions/session-upstream-links-runtime.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { prepareGatewayRecipientProfile } from "../expected-profile.js";
@@ -442,7 +445,13 @@ describe("sessions.catalog.import with durable Gateway owners", () => {
       expect(fixture.read).not.toHaveBeenCalledWith(
         expect.objectContaining({ displayName: expect.anything() }),
       );
-      expect(readSessionUpstreamLink(fixture.key, "main")).toBeUndefined();
+      expect(
+        await prepareSessionUpstreamLink(
+          captureSessionUpstreamLinkReadSource(),
+          fixture.key,
+          "main",
+        ),
+      ).toBeUndefined();
       expect(
         (await listSessionStateEventsSince(fixture.key, "main", 0)).events.filter(
           (event) => event.kind === "imported",
@@ -680,25 +689,24 @@ describe("sessions.catalog.import with durable Gateway owners", () => {
         { id: "later-2", type: "agentMessage", text: "Revoked later reply" },
       );
       let revoked = false;
-      const withWriteLock = transcriptRuntime.withSessionTranscriptWriteLock;
-      vi.spyOn(transcriptRuntime, "withSessionTranscriptWriteLock").mockImplementation(
-        (params, run) =>
-          withWriteLock(params, (transcript) =>
-            run({
-              ...transcript,
-              appendMessage: async (options) => {
-                const result = await transcript.appendMessage(options);
-                if (
-                  result?.appended &&
-                  JSON.stringify(options.message).includes("First later reply")
-                ) {
-                  fixture.config.gateway!.roles!.definitions!.reader!.sessions.others = "none";
-                  revoked = true;
-                }
-                return result;
-              },
-            }),
-          ),
+      const withWrite = transcriptRuntime.withSessionTranscriptWrite;
+      vi.spyOn(transcriptRuntime, "withSessionTranscriptWrite").mockImplementation((params, run) =>
+        withWrite(params, (transcript) =>
+          run({
+            ...transcript,
+            appendMessage: async (options) => {
+              const result = await transcript.appendMessage(options);
+              if (
+                result?.appended &&
+                JSON.stringify(options.message).includes("First later reply")
+              ) {
+                fixture.config.gateway!.roles!.definitions!.reader!.sessions.others = "none";
+                revoked = true;
+              }
+              return result;
+            },
+          }),
+        ),
       );
       const response = await fixture.call();
       expect(revoked).toBe(true);

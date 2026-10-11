@@ -52,13 +52,8 @@ export function volatileTabsBySession(): Map<string, Map<string, VolatileSession
   return resolveGlobalMap(volatileStateSymbol);
 }
 
-type VolatileTabCleanup = {
-  registrations: VolatileSessionTab[];
-  promise: Promise<number>;
-};
-
 /** Keeps one in-flight volatile target close shared across Browser plugin bundles. */
-export function volatileTabCleanupByTarget(): Map<string, VolatileTabCleanup> {
+export function volatileTabCleanupByTarget(): Map<string, Promise<number>> {
   return resolveGlobalMap(volatileCleanupStateSymbol);
 }
 

@@ -9,10 +9,8 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { WorkerTaskError, WorkerTaskPool } from "../infra/worker-task-pool.js";
 import type { Model } from "../llm/types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import {
-  captureRemoteModelCatalogSnapshot,
-  type ActiveRemoteModelCatalog,
-} from "../model-catalog/remote-overlay.js";
+import { captureRemoteModelCatalogSnapshot } from "../model-catalog/remote-overlay.js";
+import { resolveCodexClientVersion } from "../plugin-sdk/codex-client-version-runtime.js";
 import {
   getPluginCacheRetirementSignal,
   getPluginMetadataSnapshotCache,
@@ -28,9 +26,7 @@ import { listManifestSyntheticAuthProviderRefs } from "../plugins/synthetic-auth
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { cloneAuthProfileStore } from "./auth-profiles/clone.js";
 import { getPreparedSharedAuthStoreOwnership } from "./auth-profiles/path-resolve.js";
-import type { AuthProfileStore, SharedAuthStoreOwnership } from "./auth-profiles/types.js";
-import type { ModelCatalogAuthLabels } from "./model-catalog-auth-labels.js";
-import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
+import { PREPARED_MODEL_CATALOG_WORKER_TIMEOUT_MS } from "./model-catalog-timeouts.js";
 import {
   fingerprintPreparedModelCatalogGeneration,
   fingerprintPreparedModelWorkerRequest,
@@ -39,6 +35,12 @@ import {
   CatalogWorkerTaskPool,
   GATEWAY_CATALOG_WORKERS,
 } from "./prepared-model-catalog-worker.pool.js";
+import type {
+  PreparedModelCatalogWorkerInput,
+  PreparedModelCatalogWorkerTask,
+  PreparedModelWorkerCommand,
+  PreparedModelWorkerResult,
+} from "./prepared-model-catalog-worker.types.js";
 import {
   PreparedModelCatalogAdmissionStalledError,
   PreparedModelCatalogGenerationMismatchError,
@@ -60,75 +62,7 @@ import {
   listRegistrySyntheticAuthProviderRefs,
   scopeSyntheticAuthProviderRefs,
 } from "./prepared-model-runtime.synthetic-auth.js";
-import type { PreparedModelRuntimeInput } from "./prepared-model-runtime.types.js";
 import type { AuthStorageData } from "./sessions/auth-storage.js";
-
-export type PreparedModelCatalogWorkerInput = Readonly<{
-  generationFingerprint: string;
-  remoteCatalog: ActiveRemoteModelCatalog | null;
-  input: PreparedModelRuntimeInput & { env: NodeJS.ProcessEnv };
-  sourceConfigForSecrets: PreparedModelRuntimeInput["config"];
-  configResolutionFacts: ReturnType<typeof serializeConfigResolutionFacts>;
-  sourceConfigResolutionFacts: ReturnType<typeof serializeConfigResolutionFacts>;
-  authStore: AuthProfileStore;
-  sharedAuthStoreOwnership?: SharedAuthStoreOwnership;
-  providerIds: readonly string[];
-  catalogFacts: Pick<
-    PreparedModelRuntimeAgentFacts,
-    "configuredModelRefs" | "configuredRuntimeModels"
-  >;
-  preferBuiltPluginArtifacts: boolean;
-  pluginMetadataSnapshot: Omit<PluginMetadataSnapshot, "normalizePluginId">;
-}>;
-
-export type PreparedModelCatalogWorkerTask = {
-  value: PreparedModelCatalogWorkerInput;
-  request: PreparedModelWorkerRequest;
-};
-
-type PreparedModelWorkerCommand =
-  | Readonly<{ kind: "catalog"; providerIds?: readonly string[] }>
-  | Readonly<{
-      kind: "auth-refresh";
-      profileIds?: readonly string[];
-      providerIds: readonly string[];
-    }>;
-
-export type PreparedModelWorkerRequest = PreparedModelWorkerCommand &
-  Readonly<{
-    syntheticAuth: PreparedSyntheticAuthFacts;
-    clawInstallSchemaVersions: ReturnType<typeof captureClawInstallSchemaVersionFacts>;
-  }>;
-
-export type PreparedModelWorkerResult =
-  | Readonly<
-      PreparedModelRuntimeAuth & {
-        status: "ok";
-        generationFingerprint: string;
-        credentials: Readonly<AuthStorageData>;
-      } & (
-          | {
-              kind: "catalog";
-              snapshot: ModelCatalogSnapshot;
-              runtimeModels: Map<string, Model[]>;
-              providerExpiries: Map<string, number>;
-              hookRows: Map<string, Set<string>>;
-              configuredRuntimeModels: PreparedModelRuntimeCatalogFacts["configuredRuntimeModels"];
-              providerAuthLabels: ModelCatalogAuthLabels;
-            }
-          | { kind: "auth-refresh" }
-        )
-    >
-  | Readonly<{
-      status: "generation-mismatch";
-      generationFingerprint: string;
-      reconstructedFingerprint: string;
-    }>
-  | Readonly<{ status: "failed"; error: string }>;
-
-// Parent probes, queued requests and admitted provider discovery are bounded independently.
-// Native plugin admission belongs to the worker generation, outside its refresh deadline.
-export const PREPARED_MODEL_CATALOG_WORKER_TIMEOUT_MS = 180_000;
 
 const log = createSubsystemLogger("agents/prepared-model-runtime");
 type CatalogPool = WorkerTaskPool<PreparedModelCatalogWorkerTask, PreparedModelWorkerResult>;
@@ -177,12 +111,9 @@ async function getGatewayCatalogPool(
 ): Promise<GatewayCatalogPool> {
   const cache = getPluginMetadataSnapshotCache(metadata);
   getPluginCacheRetirementSignal(cache).throwIfAborted();
-  if (gatewayCatalog.rotating) {
-    await gatewayCatalog.rotating;
-    return getGatewayCatalogPool(input, metadata, environmentFingerprint);
-  }
-  if (gatewayCatalog.current?.recovery) {
-    await gatewayCatalog.current.recovery;
+  const pending = gatewayCatalog.rotating ?? gatewayCatalog.current?.recovery;
+  if (pending) {
+    await pending;
     return getGatewayCatalogPool(input, metadata, environmentFingerprint);
   }
   if (gatewayCatalog.current?.cache === cache) {
@@ -347,6 +278,7 @@ type PreparedModelCatalogWorker = Readonly<{
   loadCatalog: (
     providerIds?: readonly string[],
     onRecovery?: (error: Error) => void,
+    refresh?: boolean,
   ) => Promise<
     Pick<PreparedModelRuntimeCatalogFacts, "modelCatalog" | "configuredRuntimeModels"> & {
       runtimeModels: Map<string, Model[]>;
@@ -377,7 +309,7 @@ export function createPreparedModelCatalogWorker(
   let pendingAuth:
     | { key: string; promise: ReturnType<PreparedModelCatalogWorker["loadAuth"]> }
     | undefined;
-  const captures = new Map<AbortController, Promise<PreparedSyntheticAuthFacts>>();
+  const captures = new Map<AbortController, Promise<unknown>>();
   const tasks = new Map<
     Promise<PreparedModelWorkerResult>,
     { onRecovery?: (error: Error) => void }
@@ -487,36 +419,52 @@ export function createPreparedModelCatalogWorker(
       const capture = withPluginRuntimeGenerationScope(
         { metadataSnapshot, pluginRegistry: params.pluginRegistry },
         () =>
-          captureProviderSyntheticAuthFacts({
-            config: input.config,
-            env: input.env,
-            workspaceDir: input.workspaceDir,
-            providerRefs:
-              command.kind === "catalog" && !command.providerIds
-                ? [
-                    ...manifestRefs,
-                    // Full discovery also runs credential-only providers, whose runtime hooks can
-                    // answer for refs no manifest declares (such as the provider's own id). The
-                    // closed worker cannot probe those refs, so capture them here.
-                    ...listRegistrySyntheticAuthProviderRefs(params.pluginRegistry),
-                    ...workerInput.providerIds,
-                  ]
-                : [
-                    ...providerScope,
-                    ...scopeSyntheticAuthProviderRefs(manifestRefs, providerScope),
-                  ],
-            signal: controller.signal,
-          }),
+          Promise.all([
+            captureProviderSyntheticAuthFacts({
+              config: input.config,
+              env: input.env,
+              workspaceDir: input.workspaceDir,
+              providerRefs:
+                command.kind === "catalog" && !command.providerIds
+                  ? [
+                      ...manifestRefs,
+                      // Full discovery also runs credential-only providers, whose runtime hooks can
+                      // answer for refs no manifest declares (such as the provider's own id). The
+                      // closed worker cannot probe those refs, so capture them here.
+                      ...listRegistrySyntheticAuthProviderRefs(params.pluginRegistry),
+                      ...workerInput.providerIds,
+                    ]
+                  : [
+                      ...providerScope,
+                      ...scopeSyntheticAuthProviderRefs(manifestRefs, providerScope),
+                    ],
+              signal: controller.signal,
+            }),
+            // Codex turns run in this process, so its binary decision is what discovery reports.
+            command.kind === "catalog" &&
+            (!command.providerIds || command.providerIds.includes("openai"))
+              ? resolveCodexClientVersion({
+                  config: input.config,
+                  env: input.env,
+                  agentDir: input.agentDir,
+                })
+              : undefined,
+          ]),
       );
       captures.set(controller, capture);
       let syntheticAuth: PreparedSyntheticAuthFacts;
+      let codexClientVersion: string | undefined;
       try {
-        syntheticAuth = await capture;
+        [syntheticAuth, codexClientVersion] = await capture;
       } finally {
         captures.delete(controller);
       }
       controller.signal.throwIfAborted();
-      const value = { ...command, syntheticAuth };
+      const value = {
+        ...command,
+        syntheticAuth,
+        ...(codexClientVersion ? { codexClientVersion } : {}),
+      };
       const shared = gatewayOwned
         ? await getGatewayCatalogPool(workerInput, metadataSnapshot, environmentFingerprint)
         : undefined;
@@ -629,11 +577,8 @@ export function createPreparedModelCatalogWorker(
   };
 
   return {
-    loadCatalog: async (providerIds, onRecovery) => {
-      const message = await request(
-        { kind: "catalog", ...(providerIds ? { providerIds } : {}) },
-        onRecovery,
-      );
+    loadCatalog: async (providerIds, onRecovery, refresh) => {
+      const message = await request({ kind: "catalog", providerIds, refresh }, onRecovery);
       if (message.kind !== "catalog") {
         throw new Error("prepared model catalog worker returned an auth refresh result");
       }

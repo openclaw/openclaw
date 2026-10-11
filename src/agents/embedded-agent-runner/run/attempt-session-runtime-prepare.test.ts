@@ -1,5 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { buildSessionContext } from "../../../../packages/agent-core/src/harness/session/session.js";
+import { awaitGateBeforeSettlement } from "../../../../test/helpers/promise.js";
+import type { SessionEntryCohortReader } from "../../../config/sessions/session-entry-read-runtime.types.js";
+import {
+  captureOwnedTranscriptWriteAssertion,
+  getOwnedSessionTranscriptReader,
+} from "../../../config/sessions/transcript-write-context.js";
+import { createDeferredCore } from "../../../shared/deferred.js";
 import type { SessionEntry } from "../../sessions/session-manager-types.js";
 
 const mocks = vi.hoisted(() => ({
@@ -95,6 +102,7 @@ function createFixture() {
     trackPromptSettlePromise,
   };
   const contextGuards = {
+    checkMidTurnPrecheck: vi.fn(),
     getAfterTurnCheckpoint: vi.fn(() => null),
     remove: vi.fn(),
     takePendingMidTurnPrecheckRequest: vi.fn(() => null),
@@ -224,6 +232,9 @@ function createFixture() {
     systemPrompt: { systemPromptText: "initial prompt" },
     sessionLock: {
       transcriptLifecycle: {},
+      ownedTranscriptWriteContext: {
+        withTranscriptWrite: async (operation: () => unknown) => await operation(),
+      },
       withOwnedTranscriptWrite: vi.fn(async (operation: () => unknown) => {
         order.push("owned-boundary");
         return await operation();
@@ -238,6 +249,7 @@ function createFixture() {
   return {
     abortActiveSession,
     activeSession,
+    agentSession,
     anthropicPayloadLogger,
     boundary,
     buildAbortSettlePromise,
@@ -264,6 +276,115 @@ beforeEach(() => {
 });
 
 describe("prepareEmbeddedAttemptSessionRuntime", () => {
+  it("re-pins personal bootstrap when the selected profile changes between attempts", async () => {
+    const fixture = createFixture();
+    fixture.transcriptPolicy.inHistorySystemUpdates = true;
+    const entries: SessionEntry[] = [];
+    const appendCustomEntryAsync = async (customType: string, data: unknown) => {
+      entries.push({
+        type: "custom",
+        customType,
+        data,
+        id: `profile-marker-${entries.length}`,
+        parentId: null,
+        timestamp: "2026-10-01T00:00:00Z",
+      });
+    };
+    Object.assign(fixture.sessionManager, {
+      getBranch: () => entries,
+      getSessionTarget: () => undefined,
+      getSessionId: () => "shared-profile-session",
+      appendCustomEntryAsync,
+    });
+    Object.assign(fixture.activeSession, { agent: { state: { messages: [] } } });
+    mocks.retainSessionPromptState.mockImplementation(() => ({
+      state: { toolResults: { projected: true } },
+      [Symbol.dispose]: () => {},
+    }));
+    for (const profile of ["alice", "bob", undefined]) {
+      fixture.input.attempt.bootstrapUserProfileId = profile;
+      const runtime = await prepareEmbeddedAttemptSessionRuntime(fixture.input);
+      const prompt = `## User\n${profile ?? "Shared"} guidance`;
+      const prepared = await runtime.prepareSystemPromptUpdate!(prompt, true);
+      expect(prepared.restart).toBe(true);
+      expect(prepared.systemPrompt).toBe(prompt);
+      prepared.commit();
+      await persistSessionSystemPrompt(runtime.sessionPromptState, appendCustomEntryAsync);
+    }
+  });
+
+  it.each(["current", "run-revoked", "reader-revoked"] as const)(
+    "keeps constructor transcript authority across preparation when %s",
+    async (outcome) => {
+      const fixture = createFixture();
+      const run = new AbortController();
+      const readerLifetime = new AbortController();
+      const target = {
+        agentId: "main",
+        sessionKey: "agent:main:context-propagation",
+        sessionId: "context-propagation",
+        storePath: "/state/openclaw-agent.sqlite",
+        env: { OPENCLAW_STATE_DIR: "/state" },
+      };
+      const reader: SessionEntryCohortReader = {
+        database: { agentId: target.agentId, path: target.storePath, env: target.env },
+        sessionKey: target.sessionKey,
+        logicalAgentId: target.agentId,
+        storePaths: [target.storePath],
+        assertCurrent: () => readerLifetime.signal.throwIfAborted(),
+        withRead: async () => {
+          throw new Error("Constructor propagation does not execute a database cohort");
+        },
+      };
+      fixture.input.sessionLock.ownedTranscriptWriteContext = {
+        sessionTarget: target,
+        sessionReader: reader,
+        assertCommitAllowed: () => run.signal.throwIfAborted(),
+        withTranscriptWrite: async (operation) => await operation(),
+      };
+      const entered = createDeferredCore();
+      const resume = createDeferredCore();
+      let assertOriginalWriter: (() => void) | undefined;
+      mocks.prepareAgentSession.mockImplementationOnce(async (input) => {
+        const selected = getOwnedSessionTranscriptReader(target);
+        expect(selected).toBe(reader);
+        expect(getOwnedSessionTranscriptReader({ ...target, sessionId: "other" })).toBeUndefined();
+        assertOriginalWriter = captureOwnedTranscriptWriteAssertion(target);
+        entered.resolve();
+        await resume.promise;
+        selected!.assertCurrent();
+        assertOriginalWriter();
+        input.onSessionCreated(fixture.activeSession);
+        return fixture.agentSession;
+      });
+      const preparing = prepareEmbeddedAttemptSessionRuntime(fixture.input);
+      const refused = new Error(`Transcript preparation ${outcome}`);
+      try {
+        await awaitGateBeforeSettlement(entered.promise, preparing, "Constructor was not reached");
+        expect(getOwnedSessionTranscriptReader(target)).toBeUndefined();
+        expect(fixture.resources.session).toBeUndefined();
+        if (outcome === "run-revoked") {
+          run.abort(refused);
+        } else if (outcome === "reader-revoked") {
+          readerLifetime.abort(refused);
+        }
+        resume.resolve();
+        if (outcome === "current") {
+          await preparing;
+          expect(fixture.resources.session).toBe(fixture.activeSession);
+          run.abort(refused);
+          expect(() => assertOriginalWriter!()).toThrow(refused);
+        } else {
+          await expect(preparing).rejects.toBe(refused);
+          expect(fixture.resources.session).toBeUndefined();
+        }
+      } finally {
+        resume.resolve();
+        await preparing.catch(() => {});
+      }
+    },
+  );
+
   it.each(["unadmitted", "append-rejected", "committed-then-rejected"] as const)(
     "re-pins the current rendering after a route retirement is %s",
     async (interruption) => {

@@ -29,6 +29,7 @@ import {
   latestChanges,
   renderMutationButton,
   renderUses,
+  renderWorkshopChangeText,
   UNUSED_ARCHIVE_DAYS,
   unusedDays,
   type SkillWorkshopViewProps,
@@ -187,18 +188,13 @@ function renderLibrary(snapshot: WorkshopSnapshot, props: SkillWorkshopViewProps
           mode: "buttons",
           ariaLabel: t("skillWorkshop.skills.filterAria"),
           value: props.filter,
-          options: [
-            {
-              value: "active",
-              label: html`${t("skillWorkshop.skills.active")}
-                <span class="settings-count">${list.skills.length}</span>`,
-            },
-            {
-              value: "archived",
-              label: html`${t("skillWorkshop.skills.archived")}
-                <span class="settings-count">${archived.length}</span>`,
-            },
-          ],
+          options: (["active", "archived"] as const).map((value) => ({
+            value,
+            label: html`${t(`skillWorkshop.skills.${value}`)}
+              <span class="settings-count"
+                >${value === "active" ? list.skills.length : archived.length}</span
+              >`,
+          })),
           onChange: props.onFilter,
         })}
         ${
@@ -239,7 +235,7 @@ function renderLibrary(snapshot: WorkshopSnapshot, props: SkillWorkshopViewProps
                 )
             : archived.length === 0
               ? renderSettingsEmpty(t("skillWorkshop.skills.noneArchived"), { carapace: true })
-              : archived.map((skill) => renderArchivedRow(skill, props))
+              : archived.map((skill) => renderSkillRow(skill, snapshot, props))
         }
       </div>
     </section>
@@ -254,13 +250,14 @@ function renderLibrary(snapshot: WorkshopSnapshot, props: SkillWorkshopViewProps
 }
 
 function renderSkillRow(
-  skill: SkillWorkshopSkillSummary,
+  skill: SkillWorkshopSkillSummary | SkillsWorkshopListResult["archived"][number],
   snapshot: WorkshopSnapshot,
   props: SkillWorkshopViewProps,
 ) {
   const selected = props.viewer?.target.name === skill.name;
-  const change = latestChanges(snapshot.changes).get(skill.name);
-  const unused = unusedDays(skill, change, props.mode);
+  const archived = "versions" in skill;
+  const change = archived ? undefined : latestChanges(snapshot.changes).get(skill.name);
+  const unused = archived ? null : unusedDays(skill, change, props.mode);
   const undo = change ? undoMutationFor(change, snapshot.list) : null;
   return html`<div class="sw-row ${selected ? "sw-row--selected" : ""}">
     <button
@@ -269,32 +266,40 @@ function renderSkillRow(
       aria-current=${selected ? "true" : nothing}
       @click=${() => props.onSelectSkill(skill.name)}
     >
-      <span class="sw-row__top">
-        <span class="sw-row__name">${skill.name}</span>
-        ${
-          unused !== null
-            ? html`<span
-                class="sw-badge sw-badge--warning"
-                title=${t("skillWorkshop.unused.title", { days: String(UNUSED_ARCHIVE_DAYS) })}
-                >${t("skillWorkshop.unused.badge", { days: String(unused) })}</span
-              >`
-            : html`<span class="sw-row__uses">${renderUses(skill.useCount)}</span>`
-        }
-      </span>
-      ${skill.description ? html`<span class="sw-row__desc">${skill.description}</span>` : nothing}
+      ${
+        archived
+          ? html`
+              <span class="sw-row__name">${skill.name}</span>
+              ${
+                skill.versions[0]
+                  ? html`<span class="sw-row__desc"
+                      >${t("skillWorkshop.skills.archivedAgo", {
+                        time: formatRelativeTimestamp(skill.versions[0].createdAtMs),
+                      })}</span
+                    >`
+                  : nothing
+              }
+            `
+          : html`<span class="sw-row__top">
+                <span class="sw-row__name">${skill.name}</span>
+                ${
+                  unused !== null
+                    ? html`<span
+                        class="sw-badge sw-badge--warning"
+                        title=${t("skillWorkshop.unused.title", { days: String(UNUSED_ARCHIVE_DAYS) })}
+                        >${t("skillWorkshop.unused.badge", { days: String(unused) })}</span
+                      >`
+                    : html`<span class="sw-row__uses">${renderUses(skill.useCount)}</span>`
+                }
+              </span>
+              ${skill.description ? html`<span class="sw-row__desc">${skill.description}</span>` : nothing}`
+      }
     </button>
     ${
       change
         ? html`<div class="sw-row__change">
             <span class="sw-row__change-text">
-              <span class="sw-row__change-who"
-                >${t(`skillWorkshop.changes.actors.${change.actor}`)}
-                ${t(`skillWorkshop.changes.actions.${change.action}`)}</span
-              >
-              ${change.summary ? html`<span class="sw-row__change-why">${change.summary}</span>` : nothing}
-              <span class="sw-row__change-when"
-                >${formatRelativeTimestamp(change.createdAtMs)}</span
-              >
+              ${renderWorkshopChangeText(change, "sw-row__change-")}
             </span>
             ${
               undo
@@ -310,32 +315,5 @@ function renderSkillRow(
           </div>`
         : nothing
     }
-  </div>`;
-}
-
-function renderArchivedRow(
-  skill: SkillsWorkshopListResult["archived"][number],
-  props: SkillWorkshopViewProps,
-) {
-  const selected = props.viewer?.target.name === skill.name;
-  const latest = skill.versions[0];
-  return html`<div class="sw-row ${selected ? "sw-row--selected" : ""}">
-    <button
-      type="button"
-      class="sw-row__main"
-      aria-current=${selected ? "true" : nothing}
-      @click=${() => props.onSelectSkill(skill.name)}
-    >
-      <span class="sw-row__name">${skill.name}</span>
-      ${
-        latest
-          ? html`<span class="sw-row__desc"
-              >${t("skillWorkshop.skills.archivedAgo", {
-                time: formatRelativeTimestamp(latest.createdAtMs),
-              })}</span
-            >`
-          : nothing
-      }
-    </button>
   </div>`;
 }

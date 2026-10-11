@@ -2,6 +2,8 @@
 export type PluginInstanceLifecycle = {
   readonly signal: AbortSignal;
   onDispose: (dispose: () => void | Promise<void>) => () => void;
+  /** Detach caller context while retaining this instance's current registry and host resources. */
+  runInBackgroundContext: <T>(run: () => T) => T;
 };
 
 /** Execution and host cleanup retain the same instance admission. */

@@ -18,6 +18,7 @@ import {
   resolveSlackBlocksText,
   resolveSlackMessageText as resolveSharedSlackMessageText,
 } from "./block-text.js";
+import { pruneExpiredMapEntries } from "./lru-map-cache.js";
 import { resolveSlackTimestampMs } from "./message-handler/timestamp.js";
 
 export type SlackThreadStarter = {
@@ -39,16 +40,7 @@ const THREAD_STARTER_CACHE_TTL_MS = 6 * 60 * 60_000;
 const THREAD_STARTER_CACHE_MAX = 2000;
 
 function evictThreadStarterCache(): void {
-  const now = asDateTimestampMs(Date.now());
-  if (now === undefined) {
-    THREAD_STARTER_CACHE.clear();
-    return;
-  }
-  for (const [cacheKey, entry] of THREAD_STARTER_CACHE.entries()) {
-    if (asDateTimestampMs(entry.expiresAt) === undefined || entry.expiresAt <= now) {
-      THREAD_STARTER_CACHE.delete(cacheKey);
-    }
-  }
+  pruneExpiredMapEntries(THREAD_STARTER_CACHE, Date.now());
   pruneMapToMaxSize(THREAD_STARTER_CACHE, THREAD_STARTER_CACHE_MAX);
 }
 
@@ -194,6 +186,17 @@ type SlackRepliesPageMessage = NonNullable<ConversationsRepliesResponse["message
 
 const SLACK_THREAD_HISTORY_MAX_PAGES = 3;
 
+function toSlackHistoryMessage(message: SlackRepliesPageMessage, text: string | undefined) {
+  return {
+    text: text ?? formatSlackFilePlaceholder(message.files),
+    userId: message.user,
+    botId: message.bot_id,
+    ts: message.ts,
+    files: message.files,
+    attachments: message.attachments,
+  };
+}
+
 /**
  * Fetches the most recent messages in a Slack thread (excluding the current message).
  * Used to populate thread context when a new thread session starts.
@@ -282,14 +285,7 @@ export async function resolveSlackThreadHistory(params: {
       return [];
     }
 
-    return retained.map(([message, text]) => ({
-      text: text ?? formatSlackFilePlaceholder(message.files),
-      userId: message.user,
-      botId: message.bot_id,
-      ts: message.ts,
-      files: message.files,
-      attachments: message.attachments,
-    }));
+    return retained.map(([message, text]) => toSlackHistoryMessage(message, text));
   } catch (err) {
     params.assertCurrent?.();
     params.onOmission?.(formatErrorMessage(err));
@@ -346,14 +342,7 @@ export async function resolveSlackChannelHistory(params: {
       if (!text && !message.files?.length) {
         continue;
       }
-      messages.push({
-        text: text ?? formatSlackFilePlaceholder(message.files),
-        userId: message.user,
-        botId: message.bot_id,
-        ts: message.ts,
-        files: message.files,
-        attachments: message.attachments,
-      });
+      messages.push(toSlackHistoryMessage(message, text));
     }
     cursor = response.response_metadata?.next_cursor?.trim() || undefined;
     if (!cursor || scanned >= params.limit) {

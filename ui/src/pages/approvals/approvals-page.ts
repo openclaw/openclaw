@@ -130,8 +130,7 @@ class ApprovalsPage extends OpenClawLightDomElement {
   @state() private grantsError: string | null = null;
   @state() private revokingGrantId: string | null = null;
   @state() private nextCursor: string | null = null;
-  @state() private loading = false;
-  @state() private loadingMore = false;
+  @state() private loadKind: "reset" | "more" | null = null;
   @state() private error: string | null = null;
   @state() private connected = false;
   @state() private approvalsAccess = true;
@@ -169,7 +168,7 @@ class ApprovalsPage extends OpenClawLightDomElement {
           return;
         }
         this.historyRefreshPending = true;
-        if (!this.loading && !this.loadingMore) {
+        if (this.loadKind === null) {
           void this.loadPage(true);
         }
       });
@@ -189,8 +188,7 @@ class ApprovalsPage extends OpenClawLightDomElement {
 
   private resetHistory(clearData: boolean) {
     this.requestGeneration += 1;
-    this.loading = false;
-    this.loadingMore = false;
+    this.loadKind = null;
     this.historyRefreshPending = false;
     this.revokingGrantId = null;
     if (clearData) {
@@ -224,7 +222,7 @@ class ApprovalsPage extends OpenClawLightDomElement {
       snapshot.client &&
       this.approvalsAccess &&
       !this.hasLoaded &&
-      !this.loading
+      this.loadKind !== "reset"
     ) {
       void this.loadPage(true);
     }
@@ -239,8 +237,7 @@ class ApprovalsPage extends OpenClawLightDomElement {
       !this.connected ||
       !this.approvalsAccess ||
       !readGatewayOperatorAccess(gateway.snapshot).canReviewApprovals ||
-      this.loading ||
-      this.loadingMore
+      this.loadKind !== null
     ) {
       return;
     }
@@ -251,10 +248,8 @@ class ApprovalsPage extends OpenClawLightDomElement {
     }
     if (reset) {
       this.historyRefreshPending = false;
-      this.loading = true;
-    } else {
-      this.loadingMore = true;
     }
+    this.loadKind = reset ? "reset" : "more";
     this.error = null;
     const isCurrent = () => this.isCurrentRequest(client, gateway, generation);
     try {
@@ -281,8 +276,7 @@ class ApprovalsPage extends OpenClawLightDomElement {
       }
     } finally {
       if (isCurrent()) {
-        this.loading = false;
-        this.loadingMore = false;
+        this.loadKind = null;
         if (this.historyRefreshPending) {
           void this.loadPage(true);
         }
@@ -433,7 +427,7 @@ class ApprovalsPage extends OpenClawLightDomElement {
   }
 
   private renderTable() {
-    if (this.loading && this.items.length === 0) {
+    if (this.loadKind === "reset" && this.items.length === 0) {
       return renderSettingsLoadingSkeleton({ label: t("approvalHistory.loading") });
     }
     return html`
@@ -442,7 +436,7 @@ class ApprovalsPage extends OpenClawLightDomElement {
           class="data-table approval-history-table settings-table--stacked"
           role="table"
           aria-labelledby="approval-history-title"
-          aria-busy=${this.loading || this.loadingMore ? "true" : "false"}
+          aria-busy=${this.loadKind !== null ? "true" : "false"}
         >
           <thead>
             <tr>
@@ -493,9 +487,12 @@ class ApprovalsPage extends OpenClawLightDomElement {
           ${
             this.nextCursor
               ? html`
-                  <button ?disabled=${this.loadingMore} @click=${() => void this.loadPage(false)}>
+                  <button
+                    ?disabled=${this.loadKind === "more"}
+                    @click=${() => void this.loadPage(false)}
+                  >
                     ${
-                      this.loadingMore
+                      this.loadKind === "more"
                         ? t("approvalHistory.loadingMore")
                         : t("approvalHistory.loadMore")
                     }

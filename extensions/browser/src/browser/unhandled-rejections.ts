@@ -2,10 +2,7 @@ import { collectErrorGraphCandidates } from "openclaw/plugin-sdk/error-runtime";
 import { registerUnhandledRejectionHandler } from "openclaw/plugin-sdk/runtime-env";
 import { asOptionalObjectRecord, readStringField } from "openclaw/plugin-sdk/string-coerce-runtime";
 
-const PLAYWRIGHT_DIALOG_METHODS = new Set([
-  "Page.handleJavaScriptDialog",
-  "Dialog.handleJavaScriptDialog",
-]);
+const PLAYWRIGHT_DIALOG_METHODS = ["Page.handleJavaScriptDialog", "Dialog.handleJavaScriptDialog"];
 
 const NO_DIALOG_MESSAGE = "no dialog is showing";
 
@@ -27,13 +24,12 @@ function isPlaywrightDialogRaceUnhandledRejection(reason: unknown): boolean {
     }
 
     const method = readStringField(error, "method");
-    if (method && PLAYWRIGHT_DIALOG_METHODS.has(method)) {
+    if (
+      PLAYWRIGHT_DIALOG_METHODS.some(
+        (playwrightMethod) => method === playwrightMethod || message.includes(playwrightMethod),
+      )
+    ) {
       return true;
-    }
-    for (const playwrightMethod of PLAYWRIGHT_DIALOG_METHODS) {
-      if (message.includes(playwrightMethod)) {
-        return true;
-      }
     }
   }
 

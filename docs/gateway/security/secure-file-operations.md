@@ -7,7 +7,7 @@ title: "Secure file operations"
 
 OpenClaw uses [`@openclaw/fs-safe`](https://github.com/openclaw/fs-safe) for security-sensitive local file operations: root-bounded reads/writes, atomic replacement, archive extraction, temp workspaces, JSON state, and secret-file handling.
 
-It is a **library guardrail** for trusted OpenClaw code that receives untrusted path names, not a sandbox. Host filesystem permissions, OS users, containers, and the agent/tool policy still define the real blast radius.
+It is a **library guardrail** for trusted OpenClaw code that receives untrusted path names, not a sandbox. Host filesystem permissions, OS users, containers, and the agent/tool policy still define the potential damage.
 
 <a id="default-javascript-fallback" />
 
@@ -32,7 +32,7 @@ OPENCLAW_FS_SAFE_NATIVE_MODE=off
 # Prefer native primitives when the installed platform helper loads.
 OPENCLAW_FS_SAFE_NATIVE_MODE=auto
 
-# Fail closed when an operation lacks the required native capability.
+# Refuse operations that lack the required native capability.
 OPENCLAW_FS_SAFE_NATIVE_MODE=require
 ```
 
@@ -74,7 +74,7 @@ before lookup, even if a filesystem alias could point back inside the boundary.
 Use a relative path or the admitted root's host and share spelling. Host and
 share comparisons ignore ASCII case; Unicode lookalikes do not identify the same
 host. OpenClaw preserves valid local plugin aliases, including short names and
-trusted roots whose canonical location is a network share.
+trusted roots whose resolved filesystem location is a network share.
 
 Do not strip `\\?\` or `\\.\` indiscriminately to work around a rejection.
 Ambiguous namespace spellings can change which host or device Windows reaches.

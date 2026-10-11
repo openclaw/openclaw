@@ -195,14 +195,16 @@ export async function updateFinalizeCommand(
                 error instanceof DoctorMaintenanceRefusalError &&
                 error.refusal.kind === "deferred"
               ) {
+                const nextAction = `Stop the Gateway through its service owner, stop other OpenClaw processes using this state, then rerun \`${formatCliCommand("openclaw update repair")}\`.`;
                 const warnings = normalizeUpdatePostInstallDoctorWarnings([
-                  `Doctor and plugin maintenance remain pending. Resolve the maintenance refusal, then run ${formatCliCommand("openclaw update repair")}. ${error.message}`,
+                  `Doctor and plugin maintenance remain pending. ${nextAction} ${error.message}`,
                 ]);
                 lifecycle.recordWarnings(warnings);
                 defaultRuntime.error(warnings[0]);
                 if (opts.json) {
                   defaultRuntime.writeJson({
                     status: "warning",
+                    nextAction,
                     mode: "finalize",
                     root,
                     restart: false,
@@ -210,9 +212,11 @@ export async function updateFinalizeCommand(
                     postUpdate: { doctor: { status: "warning", warnings } },
                   });
                 } else {
-                  defaultRuntime.log(theme.warn("Update finalization completed with warnings."));
+                  defaultRuntime.log(
+                    theme.warn(`Doctor maintenance remains pending. ${nextAction}`),
+                  );
                 }
-                lifecycle.complete(0);
+                lifecycle.complete(0, nextAction);
                 return;
               }
               if (!lifecycle.completed) {
@@ -317,16 +321,10 @@ async function updateFinalizeCommandInternal(
 ): Promise<() => Promise<void>> {
   const { root, nodeRunner, preFinalizeConfig, requestedChannel, channel } = prepared;
   let doctorWarnings: string[] = [];
-  const doctorWarningTimes = new Map<string, number>();
   const onDoctorWarnings = (warnings: string[]) => {
     doctorWarnings = normalizeUpdatePostInstallDoctorWarnings([
       ...new Set([...doctorWarnings, ...warnings]),
     ]);
-    for (const warning of doctorWarnings) {
-      if (!doctorWarningTimes.has(warning)) {
-        doctorWarningTimes.set(warning, Date.now());
-      }
-    }
     lifecycle.recordWarnings(doctorWarnings);
   };
 
@@ -431,13 +429,7 @@ async function updateFinalizeCommandInternal(
         });
         const resolvedWarnings = await readResolvedDeferredPluginMigrationWarnings(doctorWarnings);
         phase.assertCurrent();
-        doctorWarnings = doctorWarnings.filter((warning) => {
-          const completedAtMs = resolvedWarnings.get(warning);
-          return (
-            completedAtMs === undefined ||
-            completedAtMs < (doctorWarningTimes.get(warning) ?? Infinity)
-          );
-        });
+        doctorWarnings = doctorWarnings.filter((warning) => !resolvedWarnings.has(warning));
         await persistValidatedDowngradeConfig(result.configSnapshot, phase.assertCurrent);
         return result;
       },

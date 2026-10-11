@@ -8,7 +8,9 @@ import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import * as databaseIdentity from "../infra/sqlite-worker-identity.js";
+import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
 import {
   detectSharedAuthStoreMigration,
   migrateSharedAuthStore,
@@ -217,25 +219,13 @@ describe("auth profile sqlite store", () => {
   it("memoizes legacy inspection and follows Doctor's ownership flip", async () => {
     await withAgentDirEnv("openclaw-auth-shared-memo-", async (agentDir, stateDir) => {
       writePersistedAuthProfileStoreRaw(apiKeyStore("sk-legacy"), agentDir);
-      const runOperation = stateWorker.runOpenClawStateWorkerOperation;
       let sourceInspections = 0;
-      const inspection = vi
-        .spyOn(stateWorker, "runOpenClawStateWorkerOperation")
-        .mockImplementation((context, operation, options) =>
-          runOperation(
-            context,
-            (scope) =>
-              operation({
-                execute(command, executeOptions) {
-                  if (command.type === "authProfiles.bootstrap") {
-                    sourceInspections += 1;
-                  }
-                  return scope.execute(command, executeOptions);
-                },
-              }),
-            options,
-          ),
-        );
+      const inspection = probe.command(stateWorker, (command, executeOptions, scope) => {
+        if (command.type === "authProfiles.bootstrap") {
+          sourceInspections += 1;
+        }
+        return scope.execute(command, executeOptions);
+      });
 
       try {
         for (const key of ["sk-first", "sk-second"]) {
@@ -317,7 +307,7 @@ describe("auth profile sqlite store", () => {
       const inspection = vi
         .spyOn(databaseIdentity, "inspectDatabasePathIdentitySync")
         .mockImplementation((pathname) => {
-          if (path.resolve(pathname) === path.resolve(sourcePath)) {
+          if (!sourceInspectionFailed && path.resolve(pathname) === path.resolve(sourcePath)) {
             sourceInspectionFailed = true;
             throw Object.assign(new Error("permission denied"), { code: "EACCES" });
           }
@@ -397,9 +387,9 @@ describe("auth profile sqlite store", () => {
     });
   });
 
-  it("keeps auth schema classifications fresh after external schema changes", async () => {
+  it("keeps auth schema classifications fresh after owner schema changes", async () => {
     await withAgentDirEnv("openclaw-auth-sqlite-invalid-schema-", (agentDir) => {
-      const database = new DatabaseSync(resolveAuthProfileDatabasePath(agentDir));
+      const database = openNodeSqliteDatabase(resolveAuthProfileDatabasePath(agentDir));
       const createTable = `
         CREATE TABLE auth_profile_store (
           store_key TEXT NOT NULL PRIMARY KEY,

@@ -11,7 +11,6 @@ import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import { resolveInternalSessionEffectsIdentity } from "../../config/sessions/internal-session-key.js";
-import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
 import { validateSessionTranscriptContextAnchor } from "../../config/sessions/session-accessor.sqlite-model-context.js";
 import { readSessionTranscriptAnchorsAsync } from "../../config/sessions/session-transcript-anchor-read.js";
 import { SessionTranscriptReadFenceError } from "../../config/sessions/session-transcript-read-fence.js";
@@ -31,6 +30,7 @@ import type { ExperienceReviewCandidate } from "./experience-review-scheduler.js
 import { listWorkshopChanges } from "./library.js";
 import { assertSkillReviewRunSucceeded, postWorkshopChangeNotice } from "./review-outcome.js";
 import { runSkillWorkshopReview } from "./review-run.js";
+import { workshopReviewRunId } from "./review-undo.js";
 
 const log = createSubsystemLogger("skills/workshop");
 
@@ -109,7 +109,7 @@ async function runSkillExperienceReviewInner(candidate: ExperienceReviewCandidat
   const { agentId } = foregroundPromptContext;
   const { sessionKey } = candidate.source;
   const config = candidate.config;
-  const runId = `skill-workshop-review:${randomUUID()}`;
+  const runId = workshopReviewRunId(randomUUID());
   const reviewSession = resolveInternalSessionEffectsIdentity({ agentId, runId });
   const origin = foregroundPromptContext.cronCreatorCallerOrigin;
   const capability = origin ? createCronCreatorAuthorityCapability(runId, origin) : undefined;
@@ -195,21 +195,7 @@ async function runSkillExperienceReviewInner(candidate: ExperienceReviewCandidat
     // fs-safe requires synchronous authority immediately before mutation.
     // SDK sync writers bypass the FIFO; the connection-local witness misses
     // foreign commits. Retain this fence until the next SDK major retires them.
-    const current = loadSessionEntryReadOnly({
-      ...source,
-      hydrateSkillPromptRefs: false,
-      readConsistency: "latest",
-    });
-    if (
-      current?.sessionId !== generation.sessionId ||
-      (current.lifecycleRevision ?? null) !== generation.lifecycleRevision ||
-      current.permissionMode !== sourceEntry.permissionMode
-    ) {
-      throw new Error(
-        "Skill experience review source session was deleted, reset, or changed permissions.",
-      );
-    }
-    validateSessionTranscriptContextAnchor(source, candidate.source);
+    validateSessionTranscriptContextAnchor(source, candidate.source, sourceEntry);
   };
   const preparedRunAdmission = prepareAgentRunAdmission({
     cfg: config,

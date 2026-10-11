@@ -32,11 +32,12 @@ import type {
   ReplySessionInitializationCommitResult,
 } from "./session-accessor.types.js";
 import { assertCanonicalSqliteSessionKeysCurrent } from "./session-canonical-key.js";
+import type { SessionColdArchive } from "./session-cold-storage-state.js";
 import { assertSessionEntryCohortScope } from "./session-entry-cohort-scope.js";
 import type { SessionEntryCohortReader } from "./session-entry-read-runtime.types.js";
 import {
   SessionEntryLifecycleUpsertConflictError,
-  SessionMaintenancePreservationConflictError,
+  SqliteSessionMutationConflictError,
 } from "./session-mutation-conflict-error.js";
 import { resolveReplySessionInitializationUpserts } from "./session-reset-entry.js";
 import type { ReplySessionInitializationUpsertDescriptor } from "./session-reset.types.js";
@@ -178,10 +179,14 @@ export async function loadReplySessionInitializationSnapshot(
   options: {
     reader?: SessionEntryCohortReader;
     includeLifecycle?: boolean;
+    includeColdMetadata?: boolean;
     assertCurrent?: () => void;
   } = {},
 ): Promise<
-  ReplySessionInitializationSnapshot & { lifecycleTimestamps?: SessionLifecycleTimestamps }
+  ReplySessionInitializationSnapshot & {
+    lifecycleTimestamps?: SessionLifecycleTimestamps;
+    coldArchives?: Array<Omit<SessionColdArchive, "archive_blob">>;
+  }
 > {
   const { reader, includeLifecycle = false, assertCurrent = () => {} } = options;
   assertSessionInitializationAgentScope(params.agentId, params.sessionKey);
@@ -189,6 +194,7 @@ export async function loadReplySessionInitializationSnapshot(
   const storePath = resolveSessionStorePathForScope(params);
   let store: Record<string, SessionEntry>;
   let lifecycleTimestamps: SessionLifecycleTimestamps | undefined;
+  let coldArchives: Array<Omit<SessionColdArchive, "archive_blob">> | undefined;
   if (reader) {
     const sessionKey = assertSessionEntryCohortScope(reader, { ...params, storePath });
     const prepared = await reader.withRead(
@@ -200,16 +206,19 @@ export async function loadReplySessionInitializationSnapshot(
           ]),
         ],
         replyInitializationSessionKey: sessionKey,
+        ...(options.includeColdMetadata ? { includeColdMetadata: true } : {}),
         ...(includeLifecycle ? { lifecycleSessionKey: sessionKey } : {}),
       },
       assertCurrent,
       (read) => ({
         store: Object.fromEntries(read.entries.map(({ sessionKey: key, entry }) => [key, entry])),
         lifecycleTimestamps: includeLifecycle ? read.lifecycleTimestamps : undefined,
+        coldArchives: read.coldArchives,
       }),
     );
     store = prepared.store;
     lifecycleTimestamps = prepared.lifecycleTimestamps;
+    coldArchives = prepared.coldArchives;
   } else {
     const { database, source, assertSourceCurrent } = captureReplySessionInitializationSource({
       ...params,
@@ -233,6 +242,7 @@ export async function loadReplySessionInitializationSnapshot(
     },
     revision: createReplySessionInitializationRevision(currentEntry),
     ...(lifecycleTimestamps ? { lifecycleTimestamps } : {}),
+    ...(coldArchives ? { coldArchives } : {}),
   };
 }
 
@@ -397,7 +407,10 @@ export async function commitReplySessionInitialization(params: {
     }
   } catch (error) {
     if (
-      !(error instanceof SessionMaintenancePreservationConflictError) &&
+      !(
+        error instanceof SqliteSessionMutationConflictError &&
+        error.operationLabel === "session maintenance"
+      ) &&
       (!(error instanceof SessionEntryLifecycleUpsertConflictError) ||
         error.sessionKey !== resolved.normalizedKey)
     ) {

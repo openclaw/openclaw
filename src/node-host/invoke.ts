@@ -22,6 +22,7 @@ import {
   resolveExecApprovalsFromFile,
   updateExecApprovals,
   type ExecAsk,
+  type ExecCommandSegment,
   type ExecApprovalsFile,
   type ExecApprovalsSnapshot,
   type ExecSecurity,
@@ -91,10 +92,6 @@ type NodeHostPrivateInvokeRuntime = NodeHostInvokeRuntime & {
   workerComputer?: NodeWorkerComputer;
 };
 
-type SystemWhichParams = {
-  bins: string[];
-};
-
 type McpToolsCallParams = ReturnType<typeof decodeMcpToolsCallParams>;
 
 type SystemExecApprovalsSetParams = {
@@ -129,6 +126,8 @@ async function buildSystemRunAllowAlwaysCoverage(params: {
 }) {
   const cwd = params.cwd ?? undefined;
   const shellWrapper = extractShellWrapperCommand(params.argv, params.rawCommand);
+  let segments: ExecCommandSegment[];
+  let complete = true;
   if (shellWrapper.isWrapper) {
     if (!shellWrapper.command) {
       return { complete: false, patterns: [] };
@@ -143,32 +142,25 @@ async function buildSystemRunAllowAlwaysCoverage(params: {
       return { complete: false, patterns: [] };
     }
     const candidates = authorizationPlan.groups.flatMap((group) => group.candidates);
-    const reusableSegments = candidates
+    segments = candidates
       .filter((candidate) => candidate.allowAlways)
       .map((candidate) => candidate.sourceSegment);
-    const coverage = resolveAllowAlwaysPatternCoverage({
-      segments: reusableSegments,
-      cwd,
-      env: params.env,
-      platform: process.platform,
-      strictInlineEval: params.strictInlineEval,
-    });
-    return {
-      ...coverage,
-      complete: coverage.complete && reusableSegments.length === candidates.length,
-    };
+    complete = segments.length === candidates.length;
+  } else {
+    const analysis = analyzeArgvCommand({ argv: params.argv, cwd, env: params.env });
+    if (!analysis.ok) {
+      return { complete: false, patterns: [] };
+    }
+    segments = analysis.segments;
   }
-  const analysis = analyzeArgvCommand({ argv: params.argv, cwd, env: params.env });
-  if (!analysis.ok) {
-    return { complete: false, patterns: [] };
-  }
-  return resolveAllowAlwaysPatternCoverage({
-    segments: analysis.segments,
+  const coverage = resolveAllowAlwaysPatternCoverage({
+    segments,
     cwd,
     env: params.env,
     platform: process.platform,
     strictInlineEval: params.strictInlineEval,
   });
+  return { ...coverage, complete: coverage.complete && complete };
 }
 
 export type { NodeInvokeRequestPayload, SkillBinsProvider } from "./invoke-types.js";
@@ -203,10 +195,7 @@ function requireExecApprovalsBaseHash(
   }
 }
 
-function resolveExecutable(bin: string, env?: Record<string, string>) {
-  if (bin.includes("/") || bin.includes("\\")) {
-    return null;
-  }
+async function handleSystemWhich(rawBins: unknown[], env?: Record<string, string>) {
   const extensions =
     process.platform === "win32"
       ? (
@@ -222,24 +211,20 @@ function resolveExecutable(bin: string, env?: Record<string, string>) {
       : [""];
   const envPath =
     env?.PATH ?? env?.Path ?? process.env.PATH ?? process.env.Path ?? DEFAULT_NODE_PATH;
-  for (const dir of envPath.split(path.delimiter).filter(Boolean)) {
-    for (const ext of extensions) {
-      const candidate = path.join(dir, bin + ext);
-      if (fs.existsSync(candidate)) {
-        return candidate;
-      }
-    }
-  }
-  return null;
-}
-
-async function handleSystemWhich(params: SystemWhichParams, env?: Record<string, string>) {
-  const bins = normalizeStringEntries(params.bins);
+  const directories = envPath.split(path.delimiter).filter(Boolean);
   const found: Record<string, string> = {};
-  for (const bin of bins) {
-    const pathLocal = resolveExecutable(bin, env);
-    if (pathLocal) {
-      found[bin] = pathLocal;
+  bins: for (const bin of normalizeStringEntries(rawBins)) {
+    if (bin.includes("/") || bin.includes("\\")) {
+      continue;
+    }
+    for (const dir of directories) {
+      for (const ext of extensions) {
+        const candidate = path.join(dir, bin + ext);
+        if (fs.existsSync(candidate)) {
+          found[bin] = candidate;
+          continue bins;
+        }
+      }
     }
   }
   return { bins: found };
@@ -339,21 +324,17 @@ async function dispatchInvoke(
     gatewayCloudflareAccess: runtime.gatewayCloudflareAccess,
     signal: runtime.signal,
   });
-  if (workerSupervisorResult.handled) {
-    if (workerSupervisorResult.ok) {
-      await response.json(workerSupervisorResult.payload);
-    } else {
-      await response.error(workerSupervisorResult.code, workerSupervisorResult.message);
-    }
-    return;
-  }
-  if (command === NODE_DEVICE_APPS_COMMAND) {
-    const result = await invokeDeviceApps({
-      paramsJSON: frame.paramsJSON,
-      sharingEnabled: runtime.installedAppsSharingEnabled === true,
-      ...(runtime.installedAppsPlatform ? { platform: runtime.installedAppsPlatform } : {}),
-      ...(runtime.scanInstalledApps ? { scan: runtime.scanInstalledApps } : {}),
-    });
+  const result = workerSupervisorResult.handled
+    ? workerSupervisorResult
+    : command === NODE_DEVICE_APPS_COMMAND
+      ? await invokeDeviceApps({
+          paramsJSON: frame.paramsJSON,
+          sharingEnabled: runtime.installedAppsSharingEnabled === true,
+          ...(runtime.installedAppsPlatform ? { platform: runtime.installedAppsPlatform } : {}),
+          ...(runtime.scanInstalledApps ? { scan: runtime.scanInstalledApps } : {}),
+        })
+      : undefined;
+  if (result) {
     if (result.ok) {
       await response.json(result.payload);
     } else {
@@ -477,25 +458,21 @@ async function dispatchInvoke(
     return;
   }
 
-  if (command === "system.which") {
-    try {
-      const params = decodeParams<SystemWhichParams>(frame.paramsJSON);
-      if (!Array.isArray(params.bins)) {
-        throw new Error("INVALID_REQUEST: bins required");
-      }
-      const env = sanitizeHostExecEnv({ blockPathOverrides: true });
-      const payload = await handleSystemWhich(params, env);
-      await response.json(payload);
-    } catch (err) {
-      await response.invalid(err);
-    }
-    return;
-  }
-
-  if (command === NODE_FS_LIST_DIR_COMMAND || command === NODE_TERMINAL_UPLOAD_COMMAND) {
+  if (
+    command === "system.which" ||
+    command === NODE_FS_LIST_DIR_COMMAND ||
+    command === NODE_TERMINAL_UPLOAD_COMMAND
+  ) {
     try {
       const params = decodeParams<Record<string, unknown>>(frame.paramsJSON);
-      if (command === NODE_FS_LIST_DIR_COMMAND) {
+      if (command === "system.which") {
+        if (!Array.isArray(params.bins)) {
+          throw new Error("INVALID_REQUEST: bins required");
+        }
+        const env = sanitizeHostExecEnv({ blockPathOverrides: true });
+        const payload = await handleSystemWhich(params.bins, env);
+        await response.json(payload);
+      } else if (command === NODE_FS_LIST_DIR_COMMAND) {
         if (params.path !== undefined && typeof params.path !== "string") {
           throw new Error("INVALID_REQUEST: path must be a string");
         }
