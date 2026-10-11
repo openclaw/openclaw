@@ -25,6 +25,7 @@ import type {
   SessionTranscriptRuntimeTarget,
 } from "./session-accessor.types.js";
 import type { CanonicalSessionReaderContinuation } from "./session-canonical-key.js";
+import { readRetainedSessionEntryFacts } from "./session-entry-read-facts.js";
 import { captureIncognitoSessionSource } from "./session-incognito-binding.js";
 import { resolveSessionStorePathForScope } from "./session-store-path.js";
 import { captureSessionTranscriptTargetBinding } from "./transcript-target-binding.js";
@@ -111,6 +112,27 @@ export async function resolveSessionTranscriptRuntimeTarget(
   const target = await withSessionStoreReaderInWorker(
     bound,
     async ({ reader, database, logicalAgentId, continuation, assertCurrent }) => {
+      const sessionKey = resolveSqliteSessionKey(bound.sessionKey, logicalAgentId);
+      const current = sessionKey
+        ? readRetainedSessionEntryFacts(database, { sessionKeys: [sessionKey] })
+        : undefined;
+      const entry = current?.entries.find((row) => row.sessionKey === sessionKey)?.entry;
+      if (entry?.sessionId === bound.sessionId) {
+        assertCurrent();
+        return {
+          agentId: logicalAgentId,
+          sessionId: bound.sessionId,
+          sessionKey,
+          storePath: database.path,
+          ...(options.keyFormat
+            ? {
+                selectedSessionId: entry.sessionId,
+                selectedLifecycleRevision: entry.lifecycleRevision ?? null,
+              }
+            : {}),
+        };
+      }
+      // Historical windows and keyless lookups need the persisted session-ID index.
       const selected = await reader.readRuntimeTarget({
         scope: {
           agentId: logicalAgentId,

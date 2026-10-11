@@ -491,7 +491,10 @@ type AgentHarnessContract<
   /** OpenClaw tool capabilities an indivisible native surface requires from effective profiles. */
   conversationToolPolicyNativeTools?: readonly string[];
   supports(ctx: AgentHarnessSupportContext): AgentHarnessSupport;
-  /** Synchronous private ownership read; no discovery, auth loading, or native connection setup. */
+  /**
+   * Synchronous private ownership read; no discovery, auth loading, or native connection setup.
+   * @deprecated Implement resolveSessionRuntimeOwnershipAsync; removed in the next Plugin SDK major.
+   */
   resolveSessionRuntimeOwnership?(params: {
     config?: OpenClawConfig;
     agentId?: string;
@@ -502,6 +505,19 @@ type AgentHarnessContract<
     readPreviousSessionId?: () => string | undefined;
     assertCurrent: () => void;
   }): AgentHarnessSessionRuntimeOwnership | undefined;
+  /** Worker-backed private ownership read, without discovery or native connection setup. */
+  resolveSessionRuntimeOwnershipAsync?(params: {
+    version: 2;
+    config?: OpenClawConfig;
+    agentId?: string;
+    sessionId: string;
+    sessionKey?: string;
+    storePath?: string;
+    /** Latest predecessor of this exact physical session; valid only during this invocation. */
+    readPreviousSessionId: () => Promise<string | undefined>;
+    /** Revalidate the retained caller after awaited work and before returning ownership. */
+    assertCurrent: () => void;
+  }): Promise<AgentHarnessSessionRuntimeOwnership | undefined>;
   /** Lets this harness resolve forwarded profiles or its own native credentials. */
   authBootstrap?: "harness";
   /**

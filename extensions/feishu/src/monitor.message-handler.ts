@@ -98,22 +98,6 @@ type FeishuMessageDebounceEntry = {
   abandoned?: boolean;
 };
 
-function dedupeFeishuDebounceEntriesByDedupeKey(
-  entries: FeishuMessageDebounceEntry[],
-): FeishuMessageDebounceEntry[] {
-  const seen = new Set<string>();
-  return entries.filter(({ messageDedupeKey }) => {
-    if (!messageDedupeKey) {
-      return true;
-    }
-    if (seen.has(messageDedupeKey)) {
-      return false;
-    }
-    seen.add(messageDedupeKey);
-    return true;
-  });
-}
-
 function resolveFeishuDebounceMentions(params: {
   entries: FeishuMessageEvent[];
   botOpenId?: string;
@@ -288,28 +272,18 @@ export function createFeishuMessageReceiveHandler({
                 await settle();
                 return;
               }
-              const dedupedEntries = dedupeFeishuDebounceEntriesByDedupeKey(activeEntries);
-              const freshEntries: FeishuMessageDebounceEntry[] = [];
-              for (const entry of dedupedEntries) {
-                if (!(await hasProcessedMessage(entry.messageDedupeKey, accountId, log))) {
-                  freshEntries.push(entry);
-                }
-              }
-              const dispatchEntry = freshEntries.at(-1);
-              if (!dispatchEntry) {
-                await settle();
-                return;
-              }
+              // Admission already holds one exclusive claim for each logical message.
+              const dispatchEntry = last;
               const dispatchDedupeKey = dispatchEntry.messageDedupeKey;
               if (!lifecycle) {
-                await recordSuppressedMessageIds(dedupedEntries, dispatchDedupeKey);
+                await recordSuppressedMessageIds(activeEntries, dispatchDedupeKey);
               }
-              const combinedText = freshEntries
+              const combinedText = activeEntries
                 .map((entry) => resolveDebounceText(entry.event))
                 .filter(Boolean)
                 .join("\n");
               const mergedMentions = resolveFeishuDebounceMentions({
-                entries: freshEntries.map((entry) => entry.event),
+                entries: activeEntries.map((entry) => entry.event),
                 botOpenId: getBotOpenId(accountId),
               });
               await dispatchFeishuMessage(

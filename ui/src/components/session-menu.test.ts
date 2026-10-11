@@ -16,6 +16,7 @@ import {
   createSessionOwnerMenuHarness,
   sessionOwnerProfiles,
 } from "../test-helpers/session-owner-menu.ts";
+import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import { waitForFast } from "../test-helpers/wait-for.ts";
 import type { SessionMenuAction } from "./session-menu.ts";
 
@@ -146,11 +147,9 @@ describe("session menu", () => {
         onClose,
       });
       const submenu = menuItem(menu, "Assign to…");
-      expect(
-        menuItemLabels(menuItem(menu, "Session settings")).filter((label) =>
-          label.startsWith("Assign to"),
-        ),
-      ).toEqual(["Assign to…"]);
+      expect(menuItemLabels(menu).filter((label) => label.startsWith("Assign to"))).toEqual([
+        "Assign to…",
+      ]);
       await waitForFast(() =>
         expect(menuItemLabels(submenu)).toEqual([
           "Me",
@@ -160,7 +159,7 @@ describe("session menu", () => {
         ]),
       );
       const selected = menuItem(menu, selectedLabel);
-      expect(selected.getAttribute("role")).toBe("menuitemradio");
+      await waitForSolid(() => expect(selected.getAttribute("role")).toBe("menuitemradio"));
       expect(selected.getAttribute("aria-checked")).toBe("true");
       expect(selected.disabled).toBe(true);
       expect(selected.querySelector("[slot='details']")).not.toBeNull();
@@ -192,6 +191,86 @@ describe("session menu", () => {
         context,
       });
       expect(batch.textContent).not.toContain("Assign to");
+    },
+  );
+
+  it.each([
+    { name: "self only", names: ["Ada"], agents: [], expected: false },
+    { name: "two offline people", names: ["Ada", "Bob"], agents: [], expected: true },
+    {
+      name: "one human and an agent",
+      names: ["Ada"],
+      agents: [{ id: "research:one" }],
+      expected: true,
+    },
+    {
+      name: "duplicate and merged profiles",
+      names: ["Ada", "Ada", "Merged"],
+      agents: [],
+      expected: false,
+    },
+    {
+      name: "typed identity collision",
+      names: ["Ada"],
+      agents: [{ id: "profile-ada" }],
+      expected: true,
+    },
+  ])(
+    "shows root assignment for eligible directory identities: $name",
+    async ({ names, agents, expected }) => {
+      const profiles = sessionOwnerProfiles(...names);
+      for (const profile of profiles.profiles) {
+        if (profile.displayName === "Merged") {
+          profile.mergedInto = "profile-ada";
+        }
+      }
+      const owner = createSessionOwnerMenuHarness(() => profiles);
+      owner.context.agents.state.agentsList!.agents = agents;
+      const menu = await mountMenu({ context: owner.context });
+      await waitForFast(() => expect(owner.request).toHaveBeenCalledWith("users.list", {}));
+      await waitForFast(() => expect(menu.textContent).not.toContain("Loading"));
+      expect(menuItemLabels(menu).includes("Assign to…")).toBe(expected);
+      expect(menuItemLabels(menuItem(menu, "Advanced"))).not.toContain("Assign to…");
+    },
+  );
+
+  it("keeps known assignees while refreshing and coalesces repeated opens", async () => {
+    const owner = createSessionOwnerMenuHarness(() => sessionOwnerProfiles("Ada", "Bob"));
+    owner.context.agents.state.agentsList!.agents = [];
+    const menu = await mountMenu({ context: owner.context });
+    await waitForFast(() => expect(menuItemLabels(menu)).toContain("Assign to…"));
+    const pending = deferred<ReturnType<typeof sessionOwnerProfiles>>();
+    owner.request.mockImplementation(() => pending.promise);
+    const open = () => menu.querySelector("wa-dropdown")!.dispatchEvent(new Event("wa-show"));
+    open();
+    open();
+    await menu.updateComplete;
+    expect(owner.request).toHaveBeenCalledTimes(2);
+    expect(menuItemLabels(menu)).toContain("Assign to…");
+    pending.resolve(sessionOwnerProfiles("Ada"));
+    await waitForFast(() => expect(menuItemLabels(menu)).not.toContain("Assign to…"));
+  });
+
+  it.each([false, true])(
+    "keeps archive choices in one root entry (compact=%s)",
+    async (compact) => {
+      const onAction = vi.fn();
+      const menu = await mountMenu({ compact, session: { hasChildren: true }, onAction });
+      expect(menuItemLabels(menu)).toContain("Archive session");
+      expect(menuItemLabels(menu)).not.toContain("Archive session and children…");
+      if (compact) {
+        selectMenuValue(menu, "compact:open-archive");
+        await menu.updateComplete;
+        expect(menuItem(menu, "Back").getAttribute("value")).toBe("compact:back");
+      }
+      const choices = compact ? menu : menuItem(menu, "Archive session");
+      expect(menuItemLabels(choices)).toEqual([
+        ...(compact ? ["Back"] : []),
+        "Session only",
+        "Archive session and children…",
+      ]);
+      selectMenuValue(menu, "archive-tree");
+      expect(onAction).toHaveBeenCalledWith({ kind: "archive-tree" });
     },
   );
 
@@ -229,15 +308,15 @@ describe("session menu", () => {
     });
 
     expect(menu.querySelector("[slot='submenu']")).toBeNull();
-    expect(menuItemLabels(menu)).toContain("Open in");
-    expect(menuItemLabels(menu)).toContain("Session settings");
-    expect(menuItemLabels(menu)).not.toContain("Assign to…");
+    expect(menuItemLabels(menu)).not.toContain("Open in");
+    expect(menuItemLabels(menu)).toContain("Advanced");
+    expect(menuItemLabels(menu)).toContain("Assign to…");
     expect(menuItemLabels(menu)).not.toContain("Icon & color");
     expect(menuItemLabels(menu)).toContain("Move to group");
 
     for (const [view, labels] of [
       ["open-in", ["Back", "New tab", "New window", "Cursor", "VS Code", "Windsurf", "Zed"]],
-      ["copy", ["Back", "Session link", "Preview link", "Conversation as Markdown", "Session ID"]],
+      ["copy", ["Back", "Preview link", "Conversation as Markdown", "Session ID"]],
       ["assign-owner", ["Back", "Me", "Research owner"]],
       ["icon", ["Back"]],
       ["group", ["Back", "Research", "Operations", "New group"]],
@@ -270,14 +349,11 @@ describe("session menu", () => {
       labels: [
         "Rename…",
         "Mark as unread",
+        "Copy link",
+        "Move to group",
         "Move to top level",
         "Archive session",
-        "Session settings",
-        "Move to group",
-        "Fork conversation",
-        "Copy",
-        "Open in",
-        "Delete…",
+        "Advanced",
       ],
     },
     {
@@ -374,31 +450,24 @@ describe("session menu", () => {
     },
   );
 
-  it("groups copy actions under one keyboard shortcut", async () => {
+  it("copies the common link directly while keeping other formats in Advanced", async () => {
     const calls: string[] = [];
     const menu = await mountMenu({
       onClose: () => calls.push("close"),
       onAction: (action) => calls.push(action.kind),
     });
-    const copy = menuItem(menu, "Session ID");
-
-    expect(copy.disabled).toBe(false);
-    const copyGroup = menuItem(menu, "Copy");
-    expect(copyGroup.querySelector(".session-menu__shortcut")?.textContent).toBe("C");
-    expect(copyGroup.getAttribute("aria-keyshortcuts")).toBe("C");
-    expect(menuItemLabels(copyGroup)).toEqual([
-      "Session link",
+    const link = menuItem(menu, "Copy link");
+    expect(link.getAttribute("aria-keyshortcuts")).toBe("C");
+    expect(menu.querySelectorAll('[value="copy-session-link"]')).toHaveLength(1);
+    expect(menuItemLabels(menuItem(menu, "Copy details"))).toEqual([
       "Preview link",
       "Conversation as Markdown",
       "Session ID",
     ]);
     press(document, "c");
-    await copyGroup.updateComplete;
-    expect((copyGroup as SessionMenuItem & { submenuOpen: boolean }).submenuOpen).toBe(true);
-    expect(calls).toEqual([]);
-
-    copy.click();
-
+    expect(calls).toEqual(["close", "copy-session-link"]);
+    calls.length = 0;
+    menuItem(menu, "Session ID").click();
     expect(calls).toEqual(["close", "copy-session-id"]);
   });
 
@@ -414,7 +483,7 @@ describe("session menu", () => {
 
     expect(menuItem(menu, "Session ID").disabled).toBe(true);
     expect(menuItem(menu, "Conversation as Markdown").disabled).toBe(true);
-    expect(menuItemLabels(menuItem(menu, "Copy"))).toEqual([
+    expect(menuItemLabels(menuItem(menu, "Copy details"))).toEqual([
       "Conversation as Markdown",
       "Session ID",
     ]);
@@ -611,7 +680,7 @@ describe("session menu", () => {
     const set = submenu.querySelector<HTMLButtonElement>(".session-menu__icon-set");
     expect(input).not.toBeNull();
     expect(input?.getAttribute("aria-label")).toBe("Custom icon");
-    expect(document.activeElement).toBe(input);
+    await waitForSolid(() => expect(document.activeElement).toBe(input));
     expect(set?.disabled).toBe(true);
 
     if (!input) {
@@ -639,6 +708,7 @@ describe("session menu", () => {
     press(input, "Enter");
 
     expect(calls).toEqual([`set-icon:${icon}`]);
+    expect(document.activeElement).toBe(input);
   });
 
   it("returns from custom entry on Escape without closing the menu", async () => {

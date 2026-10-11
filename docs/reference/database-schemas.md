@@ -23,6 +23,27 @@ CLI, Doctor, cron, and plugin child processes must route mutations through the
 Gateway or acquire exclusive ownership while it is stopped. First admission,
 migration, repair, and final live-authority checks retain their existing owners.
 
+Once Gateway startup holds exclusive state ownership, it inspects the previous
+Gateway lease directly in a read-only worker instead of copying the shared
+database. Fresh or unverifiable owners still prevent startup; Doctor's schema
+repair admission keeps its private snapshot.
+
+Borrowed worker transactions obtain their initial host grant before `BEGIN
+IMMEDIATE`; writes with domain or publication facts still revalidate those facts
+at commit. Transcript-index preflight and sweep instead admit one bounded derived
+maintenance effect before attempting a nonblocking `BEGIN IMMEDIATE`. They reread
+all source rows inside that transaction and make no host requests while holding
+the writer lock. Contention returns pending work to the existing yielding drain,
+which obtains fresh grants on its next attempt. The final grant linearizes this
+internal maintenance against subsequent revocation; it is never retained across
+asynchronous work or a lock wait. Schemas, stored formats, retention, permissions,
+and update behavior are unchanged.
+
+Database-fact readers do not contact the host inside a transaction. Missing writer
+registrations or unpublished facts remain unknown until the transaction closes;
+schema readers retain their conservative snapshot validation. The next read
+outside the transaction can refresh those facts through the existing owner.
+
 Native SQLite initialization reads the loaded library's version and extension
 capability in one query before admitting real state databases. Auth-profile
 readers install their lock-wait timeout at connection open.
@@ -64,6 +85,12 @@ reusable after the snapshot ends. Autocommit caches use the owning writer's rece
 Closing a connection clears its prepared statements
 and row caches, while physical-database admission survives for the process lifetime.
 
+Worker dispatch carries snapshots prepared by the admission owner when it publishes
+facts or writer custody. Unchanged requests reuse the registry revision without
+scanning every database or rebuilding fact maps. Shared revocation cells still
+invalidate transferred facts immediately; retirement removes the published snapshot.
+This changes no schema, stored bytes, or update behavior.
+
 Shared-state content-version checks reuse the physical database's admitted version
 facts across handles and workers. Ordinary commits, transactions, and connection
 closure do not force another marker read. The migration owner publishes replacement
@@ -85,6 +112,14 @@ timeout once, immediately after acquiring the write transaction, and carries an
 inherited lock deadline without rereading the connection's timeout. FIFO,
 lock-wait budgets, schemas, stored data, and update behavior are unchanged.
 
+Activity-summary batches read metadata, ancestry, and bounded messages in one
+native snapshot. Transcript appends fold an existing window's recency into their
+final mutation-watermark write; rejected duplicates still record attempt recency.
+Connections retain their owner-set busy timeout and skip unchanged assignments.
+The audit writer retains the earliest expiry and skips empty pruning until it is
+due, invalidating that fact on rollback or maintenance. Audit retention, transcript
+timestamp semantics, schemas, and update behavior are unchanged.
+
 The admitted catalog includes index names and trigger definitions alongside tables.
 Canonical session validation consumes these definitions without another catalog scan.
 First canonical index admission shares the schema contract reader's batched metadata snapshot
@@ -99,13 +134,18 @@ commits do not repeat schema validation. Schemas, stored bytes, and update behav
 are unchanged.
 
 Admitted schema facts survive data-only transaction settlement. Committed write
-receipts invalidate cached row facts. Transaction-local views of
+receipts invalidate cached row facts. A settled write releases its receipt fence
+even when an independent read cursor remains open on the same connection. Active
+write cursors and explicit transactions retain their fence until settlement.
+Rejected writer discovery leaves no native mutation depth behind, so a later
+committed write still invalidates cached rows.
+This changes no schema, stored data, or update behavior. Transaction-local views of
 schema facts end with their SQLite snapshot; the next transaction consumes the
 process's published facts without repeating validation.
 
 Progress-card writes reuse the transaction's admitted table facts. The schema owner creates the lazy table only when it is absent and publishes the committed facts for every handle and worker. A rolled-back installation remains absent until the next normal installation transaction. Stored cards, revision tombstones, schema versions, and upgrade or downgrade behavior are unchanged.
 
-The agent-database execution owner retains up to four idle physical-agent executors in least-recently-used order. Borrowing an executor refreshes its independent 30-minute idle timeout; a fifth idle executor evicts the least recently used one. Configuration changes to the agent roster or storage paths stop warm retention and drain affected executors after their last borrower settles. Already-admitted work retains its original physical store; new requests resolve the current configuration. Explicit database closure and Gateway shutdown still revoke and drain the existing lifecycle resources. This changes no schema, stored bytes, or update behavior.
+The agent-database execution owner retains up to four idle physical-agent executors in least-recently-used order. Borrowing an executor refreshes its independent 30-minute idle timeout; a fifth idle executor evicts the least recently used one. Configuration changes to the agent roster or storage paths leave existing executors to expire normally. Already-admitted work retains its original physical store; new requests resolve the current configuration. Explicit database closure and Gateway shutdown still revoke and drain the existing lifecycle resources. This changes no schema, stored bytes, or update behavior.
 
 Creating an agent database at an admitted absent path revokes the previous file's
 retained validation before worker preparation. A recreated file cannot borrow that
@@ -176,7 +216,41 @@ use the existing primary key and require no schema or data migration.
 Session entry writes batch their saved snapshot fields in one upsert, preserving
 per-field revision triggers and rollback.
 
-Canonical main-key policy reads use writer-invalidated facts at the current read revision. Local SQL mutations, including raw and trigger-driven writes, admitted schema changes, and snapshot identity invalidate retained values. Native mutation and transaction-control callbacks and authorizer-controlled reads continue querying the policy. Policy facts do not grant canonical admission or continuation authority.
+Canonical main-key policy, external-supervision ownership, and the machine-owned
+TTS preference path are loaded once for the physical database and shared across
+handles and workers. Their owning writers publish committed replacements;
+unrelated writes do not invalidate these facts. The Gateway owns runtime writes.
+Other processes must use that owner or run while it is stopped, except established
+updater handoff, restart-sentinel, and update-finalization writers, which retain their
+own lifecycle fences. Ownership claims require exclusive offline custody. Explicit
+ownership inspection and Doctor still read the database, and live lifecycle and lease checks
+remain at effect boundaries. Cached policy facts do not grant canonical admission
+or continuation authority. Main-key writer publications carry a host revision, so
+workers can retain an absent publication without polling after unrelated writes.
+Nested workers forward only the host completeness they actually received. The shared
+generation layout keeps write receipts in slot 5 and host-publication completeness
+in slot 6; these independent witnesses never share a counter.
+Present main-key values are data facts: unrelated DDL cannot retire a committed
+config postimage. A missing policy row stays with the connection's read revision
+until the schema owner's seed or canonical writer makes the policy available.
+Uncertain rollback can discard a data fact and require one repair read before reuse.
+
+The Mentions Inbox retains its committed head through the same physical owner.
+An unchanged head skips snapshot worker dispatch. A changed or uncertain mutation
+reads the head and retained sources in one atomic query before resuming its FIFO;
+an unknown write outcome never authorizes replay. Session-entry mutation generations
+live in JavaScript beside their connection. TEMP triggers observe exact session
+and participant writes, and rollback invalidates generations without selecting a
+TEMP counter row. Auth-profile readers use admitted catalog facts for tables,
+views, and absence instead of querying the catalog for each read. These changes
+preserve schemas, stored bytes, durability, retention, permissions, and update behavior.
+
+The device-pair notifier retains an empty subscriber and delivery-receipt state
+for its service lifetime, so idle scheduled scans do not reread both stores.
+Its own writes across Gateway and agent registries invalidate that fact, including
+uncertain outcomes, and service restart reloads it. Active notifications retain
+their current subscription checks and delivery receipts; persisted subscriptions
+and receipt retention are unchanged.
 
 The Gateway does not schedule daily full-database scans. Admission-requested
 background checks stay limited to the requested agent database: `quick_check`

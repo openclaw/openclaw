@@ -76,40 +76,21 @@ extension View {
 
     @ViewBuilder
     func openClawGlassButton(prominent: Bool = false, tint: Color? = nil) -> some View {
-        if #available(iOS 26.0, *) {
-            if prominent {
-                self
-                    .font(OpenClawType.subheadSemiBold)
-                    .buttonStyle(.glassProminent)
-                    .tint(tint ?? OpenClawBrand.accentFill)
-            } else {
-                self
-                    .font(OpenClawType.subheadSemiBold)
-                    .buttonStyle(.glass)
-                    .tint(tint)
-            }
-        } else if prominent {
+        if prominent {
             self
                 .font(OpenClawType.subheadSemiBold)
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(.glassProminent)
                 .tint(tint ?? OpenClawBrand.accentFill)
         } else {
             self
                 .font(OpenClawType.subheadSemiBold)
-                .buttonStyle(.bordered)
+                .buttonStyle(.glass)
                 .tint(tint)
         }
     }
 
-    @ViewBuilder
     func openClawGlassSurface() -> some View {
-        if #available(iOS 26.0, *) {
-            self.glassEffect(.regular, in: .rect(cornerRadius: OpenClawProMetric.controlRadius))
-        } else {
-            self.background(
-                .regularMaterial,
-                in: RoundedRectangle(cornerRadius: OpenClawProMetric.controlRadius, style: .continuous))
-        }
+        self.glassEffect(.regular, in: .rect(cornerRadius: OpenClawProMetric.controlRadius))
     }
 }
 
@@ -209,18 +190,12 @@ struct OpenClawSidebarToolbarItem: ToolbarContent {
 
     @ToolbarContentBuilder
     var body: some ToolbarContent {
-        if #available(iOS 26.0, *) {
-            ToolbarItem(placement: self.placement) {
-                OpenClawSidebarControlButton(action: self.action)
-            }
-            // Sidebar reveal is intentionally background-free in every host;
-            // suppress the toolbar's automatic glass so it cannot reappear.
-            .sharedBackgroundVisibility(.hidden)
-        } else {
-            ToolbarItem(placement: self.placement) {
-                OpenClawSidebarControlButton(action: self.action)
-            }
+        ToolbarItem(placement: self.placement) {
+            OpenClawSidebarControlButton(action: self.action)
         }
+        // Sidebar reveal is intentionally background-free in every host;
+        // suppress the toolbar's automatic glass so it cannot reappear.
+        .sharedBackgroundVisibility(.hidden)
     }
 }
 
@@ -228,11 +203,7 @@ struct OpenClawGlassControlGroup<Content: View>: View {
     @ViewBuilder let content: Content
 
     var body: some View {
-        if #available(iOS 26.0, *) {
-            GlassEffectContainer(spacing: 8) {
-                self.content
-            }
-        } else {
+        GlassEffectContainer(spacing: 8) {
             self.content
         }
     }

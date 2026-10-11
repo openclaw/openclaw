@@ -236,6 +236,11 @@ export function registerForegroundUpdateStopTests({
             first.resolve(true);
           }
           await vi.advanceTimersByTimeAsync(0);
+          if (scenario === "close-deadline") {
+            expect(runtime.exit).not.toHaveBeenCalled();
+            closing.resolve();
+            await vi.advanceTimersByTimeAsync(0);
+          }
           expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(1);
           expect(close).toHaveBeenCalledOnce();
           expect(respawnGatewayProcessForUpdate).not.toHaveBeenCalled();

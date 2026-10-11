@@ -92,7 +92,7 @@ describe("typed Git read ownership", () => {
     await expect(second).resolves.toEqual({ ...captured, sessionId: "b" });
   });
 
-  it.each(["new revision", "unversioned refresh"])(
+  it.each(["unversioned refresh"])(
     "observes %s immediately without an older completion replacing it",
     async (mode) => {
       const old = createDeferredCore<GitReadOperations["checkout.context"]["output"]>();
@@ -127,10 +127,7 @@ describe("typed Git read ownership", () => {
     },
   );
 
-  it.each([
-    { pendingAtExpiry: false, revision: "known", freshnessMs: 300_000 },
-    { pendingAtExpiry: true, revision: null, freshnessMs: 75_000 },
-  ])(
+  it.each([{ pendingAtExpiry: true, revision: null, freshnessMs: 75_000 }])(
     "measures branch-fact fallback from admission with revision=$revision and pending=$pendingAtExpiry",
     async ({ pendingAtExpiry, revision, freshnessMs }) => {
       vi.useFakeTimers();

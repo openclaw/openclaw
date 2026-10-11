@@ -305,7 +305,9 @@ suite.define(() => {
       await row.getByRole("button", { name: "Open session menu" }).click();
       const archiveItem = menuHost.getByRole("menuitem", { name: "Archive session" });
       expect(await archiveItem.isDisabled()).toBe(false);
+      await menuHost.getByRole("menuitem", { name: "Advanced", exact: true }).click();
       expect(await menuHost.getByRole("menuitem", { name: "Delete…" }).isDisabled()).toBe(true);
+      await page.keyboard.press("ArrowLeft");
       await activateSelfRemovingControl(archiveItem);
       const dialog = await waitForConfirmModal(page);
       await dialog
@@ -952,6 +954,7 @@ suite.define(() => {
       await row.waitFor({ state: "visible", timeout: 10_000 });
 
       await row.getByRole("button", { name: "Open session menu" }).click();
+      await page.getByRole("menuitem", { name: "Advanced", exact: true }).click();
       await activateSelfRemovingControl(
         page.locator("openclaw-session-menu").getByRole("menuitem", { name: "Delete…" }),
       );

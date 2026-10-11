@@ -63,7 +63,7 @@ export function createSlackSystemEventTestHarness(overrides?: SlackSystemEventTe
     resolveUserName: async (userId: string) => ({
       name: overrides?.userNames?.[userId] ?? "alice",
     }),
-    resolveSlackSystemEventRoute: () => ({ agentId: "main", sessionKey: "agent:main:main" }),
+    resolveSlackSystemEventRoute: async () => ({ agentId: "main", sessionKey: "agent:main:main" }),
     getSlackAssistantThreadContext: () => undefined,
     isSlackManagedViewThread: async () => false,
     isSlackAgentView: async () => true,

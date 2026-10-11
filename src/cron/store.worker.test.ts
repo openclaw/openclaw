@@ -520,7 +520,7 @@ it.each(["add", "update", "remove", "authority invalidation", "runtime update"] 
 );
 
 it.each(["rename", "disable", "remove", "add"] as const)(
-  "reconciles a committed %s when its worker reply is lost without replay",
+  "reloads durable %s state after reply loss without claiming completion or replay",
   async (mutation) => {
     await withOpenClawTestState({ label: "cron-guarded-lost-reply" }, async (fixture) => {
       const storePath = fixture.statePath("cron", "jobs.json");
@@ -584,35 +584,33 @@ it.each(["rename", "disable", "remove", "add"] as const)(
         expect(result).toBe("reply-lost");
         expect(dropped.wasDropped()).toBe(true);
         expect(dropped.attempts).toEqual(["cron.mutateJobs"]);
-        expect(completion.isCommitted()).toBe(true);
-        expect(resolveName(mutation === "add" ? "added" : "first")).toBe(
+        expect(completion.isCommitted()).toBe(false);
+        expect(() => resolveName(mutation === "add" ? "added" : "first")).toThrow("need refresh");
+        expect(marker.jobRemoved).not.toBe(true);
+        expect(marker.cancellation?.kind).not.toBe("requested");
+        expect(onEvent).not.toHaveBeenCalled();
+        await dropped.waitForExit();
+        const persisted = (await loadCronJobsStoreWithConfigJobs(storePath)).store.jobs;
+        const refreshed = await service.list({ includeDisabled: true });
+        const byId = (left: { id: string }, right: { id: string }) =>
+          left.id.localeCompare(right.id);
+        expect(refreshed.toSorted(byId)).toEqual(persisted.toSorted(byId));
+        const refreshedName = await prepareCronJobNameResolver(["first", "added"], storePath);
+        expect(refreshedName(mutation === "add" ? "added" : "first")).toBe(
           mutation === "remove" ? undefined : mutation === "add" ? "accepted add" : "accepted edit",
         );
         if (mutation === "remove") {
-          expect.soft(service.getJob("first")).toBeUndefined();
-          expect.soft(marker.jobRemoved).toBe(true);
-        } else {
-          expect
-            .soft(service.getJob(mutation === "add" ? "added" : "first")?.name)
-            .toBe(mutation === "add" ? "accepted add" : "accepted edit");
-        }
-        if (mutation === "remove" || mutation === "disable") {
-          expect.soft(marker.cancellation?.kind).toBe("requested");
-        }
-        expect.soft(onEvent).toHaveBeenCalledWith(
-          expect.objectContaining({
-            jobId: mutation === "add" ? "added" : "first",
-            action: mutation === "remove" ? "removed" : mutation === "add" ? "added" : "updated",
-          }),
-        );
-        await dropped.waitForExit();
-        const persisted = (await loadCronJobsStoreWithConfigJobs(storePath)).store.jobs;
-        if (mutation === "remove") {
           expect(persisted.some((job) => job.id === "first")).toBe(false);
+          expect(service.getJob("first")).toBeUndefined();
         } else {
-          expect(
-            persisted.find((job) => job.id === (mutation === "add" ? "added" : "first"))?.name,
-          ).toBe(mutation === "add" ? "accepted add" : "accepted edit");
+          const current = persisted.find(
+            (job) => job.id === (mutation === "add" ? "added" : "first"),
+          );
+          expect(current?.name).toBe(mutation === "add" ? "accepted add" : "accepted edit");
+          if (mutation === "disable") {
+            expect(current?.enabled).toBe(false);
+          }
+          expect(service.getJob(current!.id)).toEqual(current);
         }
       } finally {
         await dropped.close();
@@ -624,7 +622,7 @@ it.each(["rename", "disable", "remove", "add"] as const)(
 );
 
 it.each([false, true])(
-  "retains base-session cleanup after a committed removal loses its reply (active=%s)",
+  "does not claim removal cleanup after an unknown reply (active=%s)",
   async (active) => {
     await withOpenClawTestState({ label: "cron-removed-reply-cleanup" }, async (fixture) => {
       const storePath = fixture.statePath("cron", "jobs.json");
@@ -642,35 +640,26 @@ it.each([false, true])(
         runIsolatedAgentJob: async () => ({ status: "skipped" }),
       });
       const service = new CronService({ ...state.deps, sessionStorePath });
-      const cleanupCalled = createDeferred();
-      const cleanup = vi
-        .spyOn(sessionReaper, "removeCronJobBaseSession")
-        .mockImplementation(async () => {
-          cleanupCalled.resolve();
-          return true;
-        });
+      const cleanup = vi.spyOn(sessionReaper, "removeCronJobBaseSession").mockResolvedValue(true);
       const marker = active ? markCronJobActive(job.id) : undefined;
-      if (marker) {
-        marker.cancellation = {
-          kind: "bound",
-          cancel() {
-            throw new Error("cancellation listener failed");
-          },
-        };
-      }
       const dropped = loseFirstCronMutationReply("cron.mutateJobs");
       try {
         await expect(service.remove(job.id)).rejects.toThrow();
         expect(dropped.wasDropped()).toBe(true);
+        expect(dropped.attempts).toEqual(["cron.mutateJobs"]);
+        await dropped.waitForExit();
+        expect(
+          (await loadCronJobsStoreWithConfigJobs(storePath)).store.jobs.some(
+            (row) => row.id === job.id,
+          ),
+        ).toBe(false);
+        await service.list({ includeDisabled: true });
         expect(service.getJob(job.id)).toBeUndefined();
         if (marker) {
-          expect(marker.jobRemoved).toBe(true);
-          expect(cleanup).not.toHaveBeenCalled();
+          expect(marker.jobRemoved).not.toBe(true);
           clearCronJobActive(job.id, marker);
         }
-        await cleanupCalled.promise;
-        expect(cleanup).toHaveBeenCalledTimes(1);
-        expect(cleanup).toHaveBeenCalledWith({ agentId: "main", jobId: job.id, sessionStorePath });
+        expect(cleanup).not.toHaveBeenCalled();
       } finally {
         await dropped.close();
         clearCronJobActive(job.id, marker);

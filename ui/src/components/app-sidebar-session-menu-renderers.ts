@@ -344,12 +344,8 @@ export function renderSidebarSessionSortMenuForController(controller: SidebarMen
   const sessionSources = SETTINGS_ROUTE_TARGETS.sessionSources;
   const rosterMode = host.sidebarAgentsMode === "roster";
   const grouping = host.effectiveSessionsGrouping();
-  const owners = host.sessionOwnershipVisibility.filters ? host.sessionOwnerOptions : [];
-  const ownerFilterId = host.sessionOwnerFilterActive ? host.sessionOwnerFilterId : null;
-  const involvingMe = host.sessionInvolvingMeFilterActive;
-  const selfOwnerId = host.sessionDataContext?.gateway.snapshot.selfUser?.id ?? null;
   const peopleSortAvailable = host.sessionPeopleSortAvailable();
-  // Reset covers the panel; the toolbar dot still counts only Owners and Status.
+  // Reset covers the panel; the toolbar dot counts only Status.
   const settingsChanged =
     countSidebarSessionFilters(host) > 0 ||
     host.sessionsShowCron ||
@@ -357,14 +353,8 @@ export function renderSidebarSessionSortMenuForController(controller: SidebarMen
     host.sessionsShowPreview ||
     host.effectiveSessionSortMode() !== "created" ||
     (!rosterMode && (grouping !== "category" || host.sessionsEmptyGroupsMode !== "filtering"));
-  const ownerVisible = owners.length > 0 || ownerFilterId !== null || involvingMe;
   // The mobile sheet has no hover or room for flyouts: choices open as sheet pages.
   const sheet = isMobileNavLayout();
-  const ownerValue = involvingMe
-    ? "involving-me"
-    : ownerFilterId !== null
-      ? `owner:${ownerFilterId}`
-      : "all";
   const segmented = <T extends string>(
     id: string,
     label: string,
@@ -377,7 +367,7 @@ export function renderSidebarSessionSortMenuForController(controller: SidebarMen
       value,
       options: options.map((option) => ({ ...option, title: option.label })),
       ariaLabel: label,
-      className: "sidebar-session-menu-segmented",
+      class: "sidebar-session-menu-segmented",
       onChange,
     })}
   </div>`;
@@ -423,10 +413,9 @@ export function renderSidebarSessionSortMenuForController(controller: SidebarMen
                       (event.currentTarget as HTMLElement)
                         .closest(".sidebar-session-filter-panel")
                         ?.querySelector<HTMLElement>(
-                          '#sidebar-sessions-status wa-radio[value="active"]',
+                          '#sidebar-sessions-status input[type="radio"][value="active"]',
                         )
                         ?.focus();
-                      host.setSessionOwnerFilter(null);
                       host.sessionOrganizer.setSessionsStatusFilter("active");
                       host.sessionOrganizer.setSessionsShowCron(false);
                       host.sessionOrganizer.setSessionsShowSystem(false);
@@ -446,45 +435,6 @@ export function renderSidebarSessionSortMenuForController(controller: SidebarMen
                 : nothing
             }
           </div>
-          ${
-            ownerVisible
-              ? html`<div class="sidebar-session-menu-row">
-                  <label for="sidebar-sessions-owner">${t("sessionsView.owners")}</label>
-                  ${renderPicker({
-                    id: "sidebar-sessions-owner",
-                    label: t("sessionsView.owners"),
-                    value: ownerValue,
-                    searchable: "always",
-                    sheet,
-                    showOptionTooltips: false,
-                    renderLeading: (option) => {
-                      const owner = owners.find((entry) => `owner:${entry.id}` === option.value);
-                      return owner ? renderSessionOwnerAvatar(owner) : nothing;
-                    },
-                    options: [
-                      { value: "all", label: t("sessionsView.allOwners") },
-                      { value: "involving-me", label: t("sessionsView.involvingMe") },
-                      ...owners.map((owner) => ({
-                        value: `owner:${owner.id}`,
-                        label:
-                          owner.id === selfOwnerId
-                            ? t("sessionsView.ownerYou", { name: owner.label ?? owner.id })
-                            : (owner.label ?? owner.id),
-                      })),
-                      ...(ownerFilterId !== null &&
-                      !owners.some((owner) => owner.id === ownerFilterId)
-                        ? [{ value: `owner:${ownerFilterId}`, label: ownerFilterId }]
-                        : []),
-                    ],
-                    onChange: (value) =>
-                      host.setSessionOwnerFilter(
-                        value.startsWith("owner:") ? value.slice("owner:".length) : null,
-                        value === "involving-me",
-                      ),
-                  })}
-                </div>`
-              : nothing
-          }
           ${segmented(
             "sidebar-sessions-status",
             t("sessionsView.status"),

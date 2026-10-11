@@ -4,6 +4,7 @@ import type { ControlUiNavigationItem } from "../../../../src/plugin-sdk/control
 import { readStyleSheet } from "../../../../test/helpers/ui-style-fixtures.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { icons } from "../../components/icons.ts";
+import { selectSidebarView } from "../app-sidebar-setup.ts";
 import {
   createGateway,
   createGatewayHarness,
@@ -78,7 +79,7 @@ function pluginNavigation(
 }
 
 describe("AppSidebar interleaved zone", () => {
-  it("keeps pinned sessions outside the optional page budget", async () => {
+  it("keeps personal rail pins outside the session-list page budget", async () => {
     const keys = [
       "agent:main:session-0",
       ...Array.from({ length: 40 }, (_, index) => `agent:main:session-${index + 1}`),
@@ -95,8 +96,13 @@ describe("AppSidebar interleaved zone", () => {
     const gateway = createGateway({} as GatewayBrowserClient);
     const { sidebar } = await mountSidebar(gateway, sessions.sessions);
 
-    expect(sidebar.querySelectorAll(".sidebar-recent-session")).toHaveLength(41);
-    expect(sidebar.querySelector(".sidebar-session-pagination")).toBeNull();
+    sidebar.sidebarEntries = keys.slice(0, 31).map((key) => `session:${key}`);
+    await sidebar.updateComplete;
+    expect(sidebar.querySelectorAll(".sidebar-rail__pin")).toHaveLength(31);
+    expect(
+      sidebar.querySelectorAll(".sidebar-session-content .sidebar-recent-session"),
+    ).toHaveLength(10);
+    expect(sidebar.querySelector(".sidebar-session-pagination")).not.toBeNull();
   });
 
   it("keeps a pinned session visible outside the first-page budget", async () => {
@@ -121,8 +127,14 @@ describe("AppSidebar interleaved zone", () => {
     const gateway = createGateway({} as GatewayBrowserClient);
     const { sidebar } = await mountSidebar(gateway, sessions.sessions);
 
-    expect(sidebar.querySelectorAll(".sidebar-recent-session")).toHaveLength(11);
-    expect(sidebar.querySelector(`[data-session-key="${pinnedKey}"]`)).not.toBeNull();
+    sidebar.sidebarEntries = [`session:${pinnedKey}`];
+    await sidebar.updateComplete;
+    expect(
+      sidebar.querySelectorAll(".sidebar-session-content .sidebar-recent-session"),
+    ).toHaveLength(10);
+    expect(
+      sidebar.querySelector(`.sidebar-rail [data-sidebar-entry="session:${pinnedKey}"] a`),
+    ).not.toBeNull();
     expect(sidebar.querySelector('[data-session-key="agent:main:session-10"]')).not.toBeNull();
     expect(sidebar.querySelector('[data-session-key="agent:main:extra"]')).toBeNull();
   });
@@ -209,17 +221,21 @@ describe("AppSidebar interleaved zone", () => {
     sidebar.sidebarEntries = ["route:usage", "session:agent:main:alpha", "route:plugins"];
     await sidebar.updateComplete;
 
-    const labels = [...sidebar.querySelectorAll<HTMLElement>(".sidebar-zone-entry")].map((entry) =>
-      entry.querySelector(".nav-item__text, .sidebar-recent-session__name")?.textContent?.trim(),
+    const labels = [...sidebar.querySelectorAll<HTMLElement>(".sidebar-rail__pin")].map(
+      (entry) =>
+        entry.querySelector("a")?.getAttribute("aria-label") ??
+        entry.querySelector(".nav-item__text")?.textContent?.trim(),
     );
     expect(labels).toEqual(["Usage", "Alpha", "Plugins"]);
     expect(sidebar.querySelector('[data-session-section="pinned"]')).toBeNull();
-    const pinnedRow = sidebar.querySelector('[data-session-key="agent:main:alpha"]');
-    const pinnedTree = pinnedRow?.closest(".sidebar-session-tree");
-    expect(pinnedRow?.hasAttribute("role")).toBe(false);
-    expect(pinnedTree?.hasAttribute("role")).toBe(false);
-    expect(pinnedRow?.closest('[role="list"]')).toBeNull();
-    expect(sidebar.querySelector(".nav-item--home")?.hasAttribute("draggable")).toBe(false);
+    const pinnedLink = sidebar.querySelector(
+      '.sidebar-rail [data-sidebar-entry="session:agent:main:alpha"] a',
+    );
+    expect(pinnedLink?.hasAttribute("role")).toBe(false);
+    expect(pinnedLink?.closest('[role="list"]')).toBeNull();
+    expect(sidebar.querySelector(".sidebar-footer-bar__home")?.hasAttribute("draggable")).toBe(
+      false,
+    );
   });
 
   it.each([
@@ -242,14 +258,17 @@ describe("AppSidebar interleaved zone", () => {
         ],
       },
     });
-    await sidebar.updateComplete;
+    sidebar.sidebarEntries = ["route:cron"];
+    await selectSidebarView(sidebar, "pages");
 
     const entry = sidebar.querySelector<HTMLAnchorElement>(
-      '[data-sidebar-entry="plugin:logbook/logbook"] > .nav-item',
+      '.sidebar-pages [data-sidebar-entry="plugin:logbook/logbook"] > .nav-item',
     );
     expect(entry?.textContent).toContain("Logbook");
     expect(entry?.getAttribute("href")).toBe(href);
-    const pluginEntry = zoneEntry(sidebar, "plugin:logbook/logbook");
+    const pluginEntry = sidebar.querySelector<HTMLElement>(
+      '.sidebar-pages [data-sidebar-entry="plugin:logbook/logbook"]',
+    )!;
     expect(pluginEntry.draggable).toBe(true);
     const onUpdate = vi.fn((entries: string[]) => {
       sidebar.sidebarEntries = entries;
@@ -263,9 +282,9 @@ describe("AppSidebar interleaved zone", () => {
     dispatchDragEvent(target, "drop", dataTransfer);
     await sidebar.updateComplete;
     expect(onUpdate).toHaveBeenCalled();
-    const ordered = [...sidebar.querySelectorAll<HTMLElement>("[data-sidebar-entry]")].map(
-      (row) => row.dataset.sidebarEntry,
-    );
+    const ordered = [
+      ...sidebar.querySelectorAll<HTMLElement>(".sidebar-rail [data-sidebar-entry]"),
+    ].map((row) => row.dataset.sidebarEntry);
     expect(ordered.indexOf("plugin:logbook/logbook")).toBeLessThan(ordered.indexOf("route:cron"));
     zoneEntry(sidebar, "plugin:logbook/logbook").querySelector<HTMLAnchorElement>("a")?.click();
     const location = new URL(href, window.location.origin);
@@ -284,13 +303,18 @@ describe("AppSidebar interleaved zone", () => {
       },
     });
     await sidebar.updateComplete;
-    expect(sidebar.querySelector('[data-sidebar-entry="plugin:logbook/logbook"]')).toBeNull();
+    expect(
+      sidebar.querySelector('.sidebar-pages [data-sidebar-entry="plugin:logbook/logbook"]'),
+    ).toBeNull();
+    expect(
+      sidebar.querySelector('.sidebar-rail [data-sidebar-entry="plugin:logbook/logbook"] a'),
+    ).toBeNull();
   });
 
   it("reorders default-visible plugin destinations with ordinary pinned pages", async () => {
     const { sidebar, context } = await mountZone();
     pluginNavigation(context, sidebar, ["review", "notes"], true);
-    sidebar.sidebarEntries = ["route:usage"];
+    sidebar.sidebarEntries = ["route:usage", "plugin:example/review", "plugin:example/notes"];
     const onUpdate = vi.fn((entries: string[]) => {
       sidebar.sidebarEntries = entries;
     });
@@ -317,7 +341,9 @@ describe("AppSidebar interleaved zone", () => {
     ).toEqual(sidebar.sidebarEntries);
     pluginNavigation(context, sidebar, []);
     await sidebar.updateComplete;
-    expect(sidebar.querySelector('[data-sidebar-entry="plugin:example/review"]')).toBeNull();
+    expect(
+      sidebar.querySelector('.sidebar-rail [data-sidebar-entry="plugin:example/review"] a'),
+    ).toBeNull();
     pluginNavigation(context, sidebar, ["notes", "review"], true);
     await sidebar.updateComplete;
     expect(
@@ -343,9 +369,12 @@ describe("AppSidebar interleaved zone", () => {
     expect(openPage).toHaveBeenCalledWith({ id: "review" });
   });
 
-  it("keeps nested plugin links in block flow before the following sidebar entry", async () => {
+  it("keeps plugin destinations flat in Pages and separate from ordered rail pins", async () => {
     const stylesheet = document.createElement("style");
-    stylesheet.textContent = readStyleSheet("ui/src/styles/sidebar-reorder.css");
+    stylesheet.textContent = [
+      readStyleSheet("ui/src/styles/sidebar-reorder.css"),
+      readStyleSheet("ui/src/styles/sidebar-rail.css"),
+    ].join("\n");
     document.head.append(stylesheet);
     const originalLocation = window.location.href;
     onTestFinished(() => {
@@ -354,54 +383,95 @@ describe("AppSidebar interleaved zone", () => {
     });
     window.history.replaceState(null, "", "/plugin?plugin=example&id=notes");
     const { sidebar, context } = await mountZone();
-    pluginNavigation(context, sidebar, ["boards", "review", "notes"], false, (id) =>
-      id === "boards" ? {} : { parent: "boards" },
+    const openPage = pluginNavigation(
+      context,
+      sidebar,
+      ["boards", "review", "notes"],
+      false,
+      (id) => (id === "boards" ? {} : { parent: "boards" }),
     );
     sidebar.sidebarEntries = ["plugin:example/boards", "plugin:example/notes", "route:usage"];
-    await sidebar.updateComplete;
-    const entry = zoneEntry(sidebar, "plugin:example/boards");
-    await entry.querySelector<LitElement>("openclaw-plugin-contributions")!.updateComplete;
-    expect(entry.querySelectorAll(".nav-item--child")).toHaveLength(2);
-    // The parent link and its children share one block group inside the flex row,
-    // so the row keeps its reorder menu and grows with the list.
-    const group = entry.querySelector<HTMLElement>(".nav-item-group")!;
-    const parent = group.querySelector("a")!;
-    const children = group.querySelector<HTMLElement>(".nav-item__children")!;
-    expect(group.parentElement?.tagName).toBe("OPENCLAW-PLUGIN-CONTRIBUTIONS");
-    expect(group.firstElementChild).toBe(parent);
-    expect(parent.nextElementSibling).toBe(children);
-    expect(entry.querySelectorAll('[aria-current="page"]')).toHaveLength(1);
+    await selectSidebarView(sidebar, "pages");
+    const pages = sidebar.querySelector<HTMLElement>(".sidebar-pages")!;
+    const entries = [
+      ...pages.querySelectorAll<HTMLElement>('[data-sidebar-entry^="plugin:example/"]'),
+    ];
+    await Promise.all(
+      entries.map(
+        (entry) => entry.querySelector<LitElement>("openclaw-plugin-contributions")!.updateComplete,
+      ),
+    );
+    expect(entries.map((entry) => entry.dataset.sidebarEntry)).toEqual([
+      "plugin:example/boards",
+      "plugin:example/review",
+      "plugin:example/notes",
+    ]);
     expect(
-      entry.querySelector('[aria-current="page"]')?.classList.contains("nav-item--child"),
-    ).toBe(true);
-    expect(getComputedStyle(entry).display).toBe("flex");
-    expect(getComputedStyle(group).display).toBe("block");
-    expect(children.getBoundingClientRect().top).toBeGreaterThanOrEqual(
-      parent.getBoundingClientRect().bottom - 1,
-    );
-    expect(entry.getBoundingClientRect().height).toBeGreaterThanOrEqual(
-      parent.getBoundingClientRect().height + children.getBoundingClientRect().height - 1,
-    );
-    const menu = entry.querySelector(".sidebar-reorder-menu")!;
-    expect(menu.parentElement).toBe(entry);
-    const pinned = zoneEntry(sidebar, "plugin:example/notes");
-    expect(entry.nextElementSibling).toBe(pinned);
-    expect(pinned.querySelector(".nav-item__children")).toBeNull();
-    expect(pinned.querySelector(".nav-item-group")).toBeNull();
-    expect(pinned.getBoundingClientRect().top).toBeGreaterThanOrEqual(
-      children.getBoundingClientRect().bottom - 1,
-    );
-    const ordinary = zoneEntry(sidebar, "route:usage");
-    expect(pinned.nextElementSibling).toBe(ordinary);
-    expect(getComputedStyle(ordinary).display).toBe("flex");
+      entries.flatMap((entry) =>
+        [...entry.querySelectorAll("a")].map((link) => link.getAttribute("href")),
+      ),
+    ).toEqual([
+      "/plugin?plugin=example&id=boards",
+      "/plugin?plugin=example&id=review",
+      "/plugin?plugin=example&id=notes",
+    ]);
+    expect(
+      pages.querySelectorAll(".nav-item-group, .nav-item__children, .nav-item--child"),
+    ).toHaveLength(0);
+    expect(pages.querySelectorAll('[aria-current="page"]')).toHaveLength(1);
+    const selected = entries[2]!.querySelector<HTMLAnchorElement>('a[aria-current="page"]')!;
+    expect(selected.getAttribute("aria-label")).toBe("notes");
+    expect(selected.classList.contains("nav-item--active")).toBe(true);
+    selected.click();
+    expect(openPage).toHaveBeenCalledExactlyOnceWith({ id: "notes" });
+    // JSDOM owns structure and CSS contracts; real browser siblings own pixel geometry.
+    for (const entry of entries) {
+      const row = entry.closest<HTMLElement>(".sidebar-pages__entry")!;
+      const pin = row.querySelector<HTMLButtonElement>(".sidebar-pages__pin")!;
+      expect(row.firstElementChild).toBe(entry);
+      expect(entry.nextElementSibling).toBe(pin);
+      expect(getComputedStyle(row).display).toBe("flex");
+      expect(getComputedStyle(row).alignItems).toBe("center");
+      expect(getComputedStyle(entry).display).toBe("flex");
+      expect(getComputedStyle(entry).flexGrow).toBe("1");
+      expect(getComputedStyle(pin).flexShrink).toBe("0");
+      expect(getComputedStyle(pin).flexBasis).toBe("28px");
+      expect(entry.querySelector(".sidebar-reorder-menu")).toBeNull();
+    }
+    // Pinned references remain separate icon controls.
+    for (const id of ["boards", "notes"]) {
+      const railEntry = sidebar.querySelector<HTMLElement>(
+        `.sidebar-rail [data-sidebar-entry="plugin:example/${id}"]`,
+      )!;
+      await railEntry.querySelector<LitElement>("openclaw-plugin-contributions")!.updateComplete;
+      expect(railEntry.querySelectorAll("a")).toHaveLength(1);
+      expect(railEntry.querySelector(".nav-item__children")).toBeNull();
+      expect(railEntry.querySelector("a")?.getAttribute("aria-label")).toBe(id);
+      expect(railEntry.querySelector(".sidebar-reorder-trigger")).toBeNull();
+    }
+    expect(
+      [...sidebar.querySelectorAll<HTMLElement>(".sidebar-rail__pin")].map(
+        (entry) => entry.dataset.sidebarEntry,
+      ),
+    ).toEqual(sidebar.sidebarEntries);
+    expect(sidebar.sidebarEntries).toEqual([
+      "plugin:example/boards",
+      "plugin:example/notes",
+      "route:usage",
+    ]);
   });
 
-  it("hides an unavailable plugin pin without deleting its saved position", async () => {
+  it("retains an unavailable plugin reference without exposing its former destination", async () => {
     const { sidebar, context } = await mountZone();
     pluginNavigation(context, sidebar, []);
     sidebar.sidebarEntries = ["plugin:example/review", "route:usage"];
     await sidebar.updateComplete;
-    expect(sidebar.querySelector('[data-sidebar-entry="plugin:example/review"]')).toBeNull();
+    expect(
+      sidebar.querySelector('.sidebar-rail [data-sidebar-entry="plugin:example/review"]'),
+    ).toBeNull();
+    expect(
+      sidebar.querySelector('.sidebar-rail [data-sidebar-entry="plugin:example/review"] a'),
+    ).toBeNull();
     expect(sidebar.sidebarEntries).toEqual(["plugin:example/review", "route:usage"]);
   });
 
@@ -417,11 +487,7 @@ describe("AppSidebar interleaved zone", () => {
     sidebar.onUpdateSidebarEntries = (entries) => {
       sidebar.sidebarEntries = entries;
     };
-    const nav = sidebar.querySelector<HTMLElement>(".sidebar-nav");
-    nav?.dispatchEvent(
-      new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 20, clientY: 20 }),
-    );
-    await sidebar.updateComplete;
+    await selectSidebarView(sidebar, "pages");
     const icon = document.createElement("div");
     for (const [id, expectedIcon] of [
       ["review", "activity"],
@@ -429,21 +495,30 @@ describe("AppSidebar interleaved zone", () => {
     ] as const) {
       render(icons[expectedIcon], icon);
       expect(
-        sidebar.querySelector(`wa-dropdown-item[value="plugin:example/${id}"] svg`)?.outerHTML,
+        sidebar.querySelector(
+          `.sidebar-pages [data-sidebar-entry="plugin:example/${id}"] .nav-item__icon svg`,
+        )?.outerHTML,
       ).toBe(icon.querySelector("svg")?.outerHTML);
     }
-    sidebar.querySelector(".sidebar-pin-editor-menu")!.dispatchEvent(
-      new CustomEvent("wa-select", {
-        cancelable: true,
-        detail: { item: { value: "plugin:example/review" } },
-      }),
-    );
+    const review = sidebar.querySelector(
+      '.sidebar-pages [data-sidebar-entry="plugin:example/review"]',
+    )!;
+    const unpin = review
+      .closest(".sidebar-pages__entry")!
+      .querySelector<HTMLButtonElement>('[aria-label="Unpin"]')!;
+    expect(unpin).not.toBeNull();
+    unpin.click();
     await sidebar.updateComplete;
     expect(sidebar.sidebarEntries).toEqual(["route:usage"]);
     register();
     await sidebar.updateComplete;
     expect(sidebar.sidebarEntries).toEqual(["route:usage"]);
-    expect(sidebar.querySelector('[data-sidebar-entry="plugin:example/review"]')).toBeNull();
+    expect(
+      sidebar.querySelector('.sidebar-rail [data-sidebar-entry="plugin:example/review"]'),
+    ).toBeNull();
+    expect(
+      sidebar.querySelector('.sidebar-pages [data-sidebar-entry="plugin:example/review"]'),
+    ).not.toBeNull();
   });
 
   it("writes reordered entries after a route drop", async () => {
@@ -488,14 +563,8 @@ describe("AppSidebar interleaved zone", () => {
     dispatchDragEvent(target, "dragover", dataTransfer, 11);
     dispatchDragEvent(target, "drop", dataTransfer, 11);
 
-    await waitForFast(() =>
-      expect(sessions.patch).toHaveBeenCalledWith(
-        "agent:main:alpha",
-        { pinned: true },
-        { agentId: "main", expectedSessionId: "session:agent:main:alpha" },
-      ),
-    );
-    // The slot write waits for the pin patch to land.
+    expect(sessions.patch).not.toHaveBeenCalled();
+    // A personal reference write does not mutate or wait for shared session state.
     await waitForFast(() =>
       expect(onUpdate).toHaveBeenCalledWith([
         "route:usage",
@@ -533,7 +602,11 @@ describe("AppSidebar interleaved zone", () => {
     const target = zoneEntry(sidebar, "route:plugins");
     const dataTransfer = createDataTransferStub();
     dispatchDragEvent(source, "dragstart", dataTransfer);
+    await sidebar.updateComplete;
+    expect(sidebar.querySelector(".sidebar-rail__pins--drag-active")).toBeNull();
     dispatchDragEvent(target, "dragover", dataTransfer);
+    await sidebar.updateComplete;
+    expect(sidebar.querySelector(".sidebar-rail__pins--drag-active")).toBeNull();
     dispatchDragEvent(target, "drop", dataTransfer);
     await sidebar.updateComplete;
     await vi.dynamicImportSettled();
@@ -563,7 +636,7 @@ describe("AppSidebar interleaved zone", () => {
   });
 
   it.each([false, true])(
-    "only unpins optional plugin destinations (defaultVisible: %s)",
+    "unpins personal plugin shortcuts regardless of catalog defaults (defaultVisible: %s)",
     async (defaultVisible) => {
       const { sidebar, context } = await mountZone();
       pluginNavigation(context, sidebar, ["review"], defaultVisible);
@@ -582,11 +655,7 @@ describe("AppSidebar interleaved zone", () => {
       dispatchDragEvent(target, "dragover", dataTransfer);
       dispatchDragEvent(target, "drop", dataTransfer);
 
-      if (defaultVisible) {
-        expect(onUpdate).not.toHaveBeenCalled();
-      } else {
-        expect(onUpdate).toHaveBeenCalledWith(["route:usage"]);
-      }
+      expect(onUpdate).toHaveBeenCalledWith(["route:usage"]);
     },
   );
 
@@ -609,8 +678,8 @@ describe("AppSidebar interleaved zone", () => {
     sidebar.onUpdateSidebarEntries = onUpdate;
     await sidebar.updateComplete;
 
-    // agent-b's session is not loaded here: it renders nothing but keeps its slot.
-    expect(sidebar.querySelector('[data-sidebar-entry="session:agent:b:remote"]')).toBeNull();
+    const unresolved = sidebar.querySelector('[data-sidebar-entry="session:agent:b:remote"]');
+    expect(unresolved).toBeNull();
 
     sidebar
       .querySelector<HTMLButtonElement>(
@@ -620,6 +689,7 @@ describe("AppSidebar interleaved zone", () => {
     await waitForFast(() =>
       expect(onUpdate).toHaveBeenCalledWith(["session:agent:b:remote", "route:usage"]),
     );
+    expect(sessions.patch).not.toHaveBeenCalled();
   });
 
   it("keeps pinned rows first in shift-range selection order", async () => {

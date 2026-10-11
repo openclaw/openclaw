@@ -36,7 +36,7 @@ import {
 import {
   getLeasedSharedCodexAppServerClient,
   releaseCodexAppServerClientLease,
-  withLeasedCodexAppServerClientStartSelectionRetry,
+  withCodexAppServerClientRequestScope,
   type CodexAppServerClientLease,
   type CodexAppServerClientOptions,
 } from "./app-server/shared-client.js";
@@ -93,7 +93,7 @@ async function runBoundTurn(params: {
     config: params.config,
   });
   const identity = { kind: "conversation" as const, bindingId: params.data.bindingId };
-  const binding = params.bindingStore.read(identity);
+  const binding = await params.bindingStore.readAsync(identity);
   if (!binding?.threadId) {
     throw new Error("bound Codex conversation has no thread binding");
   }
@@ -102,7 +102,7 @@ async function runBoundTurn(params: {
     identity,
     threadId: binding.threadId,
     run: async () => {
-      const current = params.bindingStore.read(identity);
+      const current = await params.bindingStore.readAsync(identity);
       if (!isSameCodexAppServerThreadOwner(current, binding)) {
         throw new Error("Codex conversation binding changed before its turn.");
       }
@@ -163,7 +163,7 @@ async function runBoundTurn(params: {
         authProfileId: binding.authProfileId,
         ...agentLookup,
       } satisfies CodexAppServerClientOptions;
-      let client = await getLeasedSharedCodexAppServerClient(clientOptions);
+      const client = await getLeasedSharedCodexAppServerClient(clientOptions);
       const clientLease: CodexAppServerClientLease = { client };
       let activeTurnId: string | undefined;
       let activeTurnCleanup: () => void = () => undefined;
@@ -207,7 +207,7 @@ async function runBoundTurn(params: {
           if (!networkProxyBindingChanged && binding.clientId === client.getInstanceId()) {
             await assertResumeInputAllowed();
           }
-          const result = await withLeasedCodexAppServerClientStartSelectionRetry({
+          const result = await withCodexAppServerClientRequestScope({
             lease: clientLease,
             options: clientOptions,
             run: async (requestClient, connectionRequestOptions) => {
@@ -251,9 +251,6 @@ async function runBoundTurn(params: {
                 requestResume: (request) =>
                   requestClient.request("thread/resume", request, requestOptions()),
               });
-            },
-            onClientChange: (nextClient) => {
-              client = nextClient;
             },
           });
           const response = networkProxyBindingChanged

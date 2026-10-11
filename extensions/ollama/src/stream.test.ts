@@ -215,6 +215,16 @@ describe("createOllamaStreamFn thinking events", () => {
       const done = events.find((event) => event.type === "done") as {
         message?: { content?: Array<{ type: string; text?: string; textSignature?: string }> };
       };
+      expect(events.find((event) => event.type === "toolcall_delta")).toMatchObject({
+        partial: {
+          content: expect.arrayContaining([
+            expect.objectContaining({ partialJson: JSON.stringify({ path }) }),
+          ]),
+        },
+      });
+      expect(done.message?.content?.find((block) => block.type === "toolCall")).not.toHaveProperty(
+        "partialJson",
+      );
       const text = expectDefined(
         done.message?.content?.find((block) => block.type === "text"),
         "terminal Ollama text",

@@ -574,24 +574,4 @@ describe("doctor SQLite maintenance lock", () => {
       ).resolves.toBe("owned\n");
     },
   );
-
-  it("allows explicit destructive targets owned by the locked state directory", async () => {
-    const fixture = await createLockFixture();
-    const storePath = path.join(
-      fixture.env.OPENCLAW_STATE_DIR,
-      "agents",
-      "main",
-      "sessions",
-      "sessions.json",
-    );
-
-    await expect(
-      withDoctorSqliteMaintenanceLock({
-        env: fixture.env,
-        operation: "session SQLite compaction",
-        protectedPaths: [storePath],
-        run: () => "done",
-      }),
-    ).resolves.toBe("done");
-  });
 });

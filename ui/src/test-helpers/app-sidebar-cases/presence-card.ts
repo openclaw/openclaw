@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import { focusSidebarPersonWithKeyboard } from "../app-sidebar-setup.ts";
+import { focusSidebarPersonWithKeyboard, selectSidebarView } from "../app-sidebar-setup.ts";
 import { createGatewayHarness, createSessionsHarness, mountSidebar } from "../app-sidebar.ts";
 import { settleLitElement } from "../lit-settle.ts";
 import "../../components/app-sidebar.ts";
@@ -47,6 +47,7 @@ describe("AppSidebar person activity card", () => {
     sessions.publishList({ result: null });
     const { sidebar } = await mountSidebar(gateway.gateway, sessions.sessions);
     sidebar.connected = true;
+    await selectSidebarView(sidebar, "online");
     gateway.publishEvent("presence", {
       presence: [
         // Family, platform, mode, client ID, misleading host. Duplicate tabs collapse.

@@ -215,7 +215,7 @@ the current turn:
   standing orders, and workflows
 - [Agents](/concepts/agent) for the agent model, sessions, memory, and
   multi-agent coordination
-- [Tools and custom providers](/gateway/config-tools) for the canonical tool
+- [Tools and custom providers](/gateway/config-tools) for the tool
   policy reference
 - [Plugins](/tools/plugin) for plugin installation and management
 - [Plugin SDK](/plugins/sdk-overview) for plugin author reference

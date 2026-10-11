@@ -2766,7 +2766,7 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
         caller.mode === "read-write" ||
         (typeof caller.mode === "string" && caller.mode.includes("'read-write'")),
     );
-    expect(writeAuthorizedCallers).toHaveLength(4);
+    expect(writeAuthorizedCallers).toHaveLength(5);
     expect(writeAuthorizedCallers).toEqual(
       expect.arrayContaining([
         {
@@ -2783,6 +2783,11 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
           file: ".github/workflows/vitest-cache-warm.yml",
           mode: "read-write",
           step: expect.objectContaining({ name: "Setup Node environment" }),
+        },
+        {
+          file: ".github/workflows/vitest-cache-warm.yml",
+          mode: "read-write",
+          step: expect.objectContaining({ name: "Setup release build runtime and cache" }),
         },
       ]),
     );
@@ -3398,6 +3403,58 @@ server.listen(0, "127.0.0.1", () => {
       ).trim();
       expect(warmerKey.startsWith(otherRuntimePrefix)).toBe(false);
     }
+  });
+
+  it("warms full builds with the release runtime without changing test cache selectors", () => {
+    const warmer = parse(readFileSync(".github/workflows/vitest-cache-warm.yml", "utf8"));
+    const npm = parse(readFileSync(".github/workflows/openclaw-npm-preflight.yml", "utf8"));
+    const frv = parse(readFileSync(".github/workflows/full-release-validation.yml", "utf8"));
+    const steps = warmer.jobs.warm.steps as WorkflowStep[];
+    const setup = expectDefined(
+      steps.find((step) => step.id === "setup-node-env"),
+      "test setup",
+    );
+    const buildSetup = expectDefined(
+      steps.find((step) => step.with?.["build-all-cache-scope"] === "full"),
+      "release build setup",
+    );
+    const buildVersion = String(buildSetup.with?.["node-version"]).replace(
+      /\$\{\{ env\.([A-Z_]+) \}\}/gu,
+      (_: string, key: string) => warmer.env[key],
+    );
+    expect(buildVersion).toBe(npm.env.NODE_VERSION);
+    expect(buildVersion).toBe(frv.env.NODE_VERSION);
+    expect(buildSetup.if).toBe("${{ matrix.platform == 'linux' }}");
+    expect(buildSetup.with?.["install-deps"]).toBe("false");
+    expect(setup.with).not.toHaveProperty("node-version");
+    expect(setup.with).not.toHaveProperty("build-all-cache-scope");
+    const build = expectDefined(
+      steps.find((step) => step.name === "Warm build cache"),
+      "build",
+    );
+    const save = expectDefined(
+      steps.find((step) => step.name === "Save build-all cache"),
+      "save",
+    );
+    expect(save.with?.key).toBe(`\${{ steps.${buildSetup.id}.outputs.build-all-cache-key }}`);
+    const restore = expectDefined(
+      steps.find((step) => step.name === "Restore test Node runtime"),
+      "restore test runtime",
+    );
+    expect(restore.with?.["node-version"]).toBe("${{ steps.test-node.outputs.version }}");
+    expect(restore.with?.["cache-mode"]).toBe("off");
+    expect(restore.with?.["install-deps"]).toBe("false");
+    const ordered = [
+      setup,
+      steps.find((step) => step.id === "test-node"),
+      steps.find((step) => step.name === "Save compiled Vitest workers"),
+      buildSetup,
+      build,
+      save,
+      restore,
+      steps.find((step) => step.name === "Warm transform and compile caches"),
+    ].map((step) => steps.indexOf(expectDefined(step, "ordered warming step")));
+    expect(ordered).toEqual(ordered.toSorted((a, b) => a - b));
   });
 
   it("persists Node 26 minimum declarations through trusted bounded artifacts", () => {

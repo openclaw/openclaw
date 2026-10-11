@@ -130,6 +130,8 @@ async function runCliShimInner(moduleUrl, options, nodeArgs) {
     // A managed parent hands cleanup to this responsive shim. Synchronous
     // preparation stays in our child's group until its own owner is ready.
     const { runManagedCommand } = await import("./managed-child-process.mts");
+    let childSignal;
+    let interrupted = false;
     const exitCode = await runManagedCommand({
       bin: nodeExecutable,
       args: commandArgs,
@@ -138,9 +140,22 @@ async function runCliShimInner(moduleUrl, options, nodeArgs) {
       stdio: options.stdio ?? "inherit",
       signalKillGraceMs: options.forceKillDelayMs,
       requireProcessTreeExit: true,
+      waitForCleanupRelease: true,
       shell: false,
+      onSignal() {
+        interrupted = true;
+      },
+      onReady(child) {
+        child.once("exit", (_code, signal) => {
+          childSignal = signal;
+        });
+      },
     });
     writeFailureTrailer(options.failureTool, exitCode);
+    if (childSignal && !interrupted) {
+      process.kill(process.pid, childSignal);
+      return;
+    }
     process.exitCode = exitCode;
     return;
   }

@@ -46,8 +46,8 @@ export function dispatchCronNotification(
 }
 
 /**
- * Starts the repair turn in the conversation that owns the job. A lost request needs no
- * fallback here: the incident records it, so the job's next failure sends the normal alert.
+ * Starts the repair turn in the conversation that owns the job. Request failures are logged;
+ * terminal one-shots send their fallback alert, while recurring jobs alert on the next failure.
  */
 function requestFailureRepair(
   state: CronServiceState,
@@ -57,7 +57,14 @@ function requestFailureRepair(
   const owner = state.store?.jobs.find((job) => job.id === jobId)?.owner;
   const sessionKey = owner?.sessionKey?.trim();
   const repairId = notification.job.state.lastFailureNotificationId;
+  const failed = (err: unknown) => {
+    state.deps.log.warn({ jobId, err: String(err) }, "cron: failure repair request failed");
+    if (notification.fallback) {
+      dispatchCronNotification(state, { ...notification.fallback, routing: notification.routing });
+    }
+  };
   if (!sessionKey || !repairId || !state.deps.runCronFailureRepair) {
+    failed(new Error("Missing failure repair runner, owner session, or repair ID"));
     return;
   }
   void state.deps
@@ -68,9 +75,7 @@ function requestFailureRepair(
       sessionKey,
       message: notification.text,
     })
-    .catch((err: unknown) => {
-      state.deps.log.warn({ jobId, err: String(err) }, "cron: failure repair request failed");
-    });
+    .catch(failed);
 }
 
 type FailureAlertCycle = {
@@ -90,7 +95,7 @@ async function recordFailureAlertOutcome(
   cycle: FailureAlertCycle,
   outcome: CronFailureNotificationDelivery,
 ): Promise<FailureAlertRecordResult> {
-  let ownsCycle = false;
+  let ownsCycle: boolean | undefined;
   try {
     return await locked(state, async () => {
       if (state.stopped || state.lifecycleGeneration !== cycle.lifecycleGeneration) {
@@ -121,11 +126,10 @@ async function recordFailureAlertOutcome(
             throw new Error("Cron failure-alert owner retired");
           }
         },
-        prepare(facts) {
-          ownsCycle = facts.ownsCycle;
-          return { value: {}, assertCurrent() {} };
-        },
+        // A replacement alert may race dispatch; the worker checks its persisted cycle.
+        snapshot: {},
         publish(committed) {
+          ownsCycle = committed.job !== undefined;
           if (committed.job) {
             noteCronJobsStoreCommit(storeKey);
             applyCronRuntimeRowsToState(state, [committed.job], [], { publish: false });
@@ -140,7 +144,7 @@ async function recordFailureAlertOutcome(
       { jobId: cycle.jobId, err: formatErrorMessage(err) },
       "cron: failed to record failure-alert outcome",
     );
-    return ownsCycle ? "persistence-failed" : "stale";
+    return ownsCycle === false ? "stale" : "persistence-failed";
   }
 }
 

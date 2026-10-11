@@ -118,6 +118,8 @@ export function createGatewayWorkerPlacementRuntime(
   });
   const workspaceOperations = createWorkerWorkspaceOperationCoordinator();
   const {
+    ready: githubPublicationReady,
+    close: closeGitHubPublication,
     coordinator: githubPublication,
     prepareAcceptedWorkspacePublication,
     publishAcceptedWorkspace,
@@ -195,11 +197,12 @@ export function createGatewayWorkerPlacementRuntime(
       errorMessage: `Session ${identity.sessionKey} changed before node-backed placement recovery`,
     });
     assertCurrent(getRuntimeConfig());
-    const runtime = sessionRuntime.resolveWorkerPlacementSessionRuntime({
+    const runtime = await sessionRuntime.resolveWorkerPlacementSessionRuntimeAsync({
       cfg: config,
       entry,
       agentId: target.agentId,
       sessionKey: target.canonicalKey,
+      assertCurrent: () => assertCurrent(getRuntimeConfig()),
     });
     const { executionMode, devicePlacement } =
       sessionRuntime.resolveWorkerPlacementCapabilities(runtime);
@@ -266,11 +269,7 @@ export function createGatewayWorkerPlacementRuntime(
             await run(workspace, assertCurrent);
           },
         }),
-      onActivated: ({ sessionId }) => {
-        const placement = params.placements.get(sessionId);
-        if (placement?.state !== "active") {
-          return;
-        }
+      onActivated: ({ sessionId }, placement) => {
         const environment = params.environments.get(placement.environmentId);
         if (
           environment?.state === "attached" &&
@@ -538,7 +537,12 @@ export function createGatewayWorkerPlacementRuntime(
           uninstallPlacementAdmission();
         }
         const currentStop = (async () => {
-          await Promise.allSettled([changes.stop(), ...operations.values()]);
+          await Promise.allSettled([
+            changes.stop(),
+            githubPublicationReady,
+            ...operations.values(),
+          ]);
+          await closeGitHubPublication();
           await nodeWorkspaceRetention.stop();
           await scope.stop();
           await params.environments.stop();
@@ -561,6 +565,7 @@ export function createGatewayWorkerPlacementRuntime(
       return null;
     };
     try {
+      await githubPublicationReady;
       // Track startup reconciliation in the placement slot so a concurrent
       // close prelude drains it before uninstalling guards and stopping environments.
       for (const reconcile of [

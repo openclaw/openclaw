@@ -66,7 +66,9 @@ async function read(
     inputBytes:
       command.type === "probe"
         ? Buffer.byteLength(command.parent)
-        : command.paths.reduce((bytes, pathname) => bytes + Buffer.byteLength(pathname), 0),
+        : command.type === "acl"
+          ? Buffer.byteLength(command.path)
+          : command.paths.reduce((bytes, pathname) => bytes + Buffer.byteLength(pathname), 0),
     signal: options.signal,
     timeoutMs: WORKTREE_CHECKOUT_TIMEOUT_MS,
   });
@@ -111,6 +113,13 @@ export const nativeWorktreeFilesystem = {
       throw new Error("Native worktree check returned an invalid reply");
     }
     return reply.backend;
+  },
+  async readAcl(this: void, path: string, options: WorktreeFilesystemOptions) {
+    const reply = await read({ type: "acl", path }, options);
+    if (reply.type !== "acl") {
+      throw new Error("Native worktree ACL inspection returned an invalid reply");
+    }
+    return reply.acl;
   },
   async readMetadata(this: void, paths: string[], options: WorktreeFilesystemOptions) {
     const reply = await read({ type: "metadata", paths }, options);

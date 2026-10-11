@@ -42,6 +42,13 @@ suite.define(() => {
             },
             pullRequest: { numbers: [42], state: "open" },
             sharingRole: "owner",
+            owner: {
+              actor: {
+                type: "human",
+                id: "synthetic-scope-viewer",
+                label: "Synthetic scope viewer",
+              },
+            },
             visibility: "shared",
             spawnedCwd: "/synthetic/scope-review",
           },

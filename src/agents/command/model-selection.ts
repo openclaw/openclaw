@@ -64,7 +64,6 @@ import { resolveOperatorModelDefault } from "../operator-model-policy.js";
 import { resolveProviderIdForAuth } from "../provider-auth-aliases.js";
 import { resolveSessionRuntimeOverrideForProvider } from "../session-runtime-compat.js";
 import {
-  needsThinkHydration,
   normalizeThinkingCatalogProviders,
   resolveEffectiveAgentRuntime,
 } from "../thinking-runtime.js";
@@ -527,10 +526,9 @@ export async function resolveEmbeddedModelSelection(params: {
       : params.configuredThinkingCatalog;
   if (
     params.pluginsEnabled &&
-    (primaryConfiguredThinkLevel !== "off" || thinkingRuntime !== "openclaw") &&
-    needsThinkHydration(catalogForThinking, provider, model, thinkingRuntime)
+    (primaryConfiguredThinkLevel !== "off" || thinkingRuntime !== "openclaw")
   ) {
-    // Thinking capability is a per-model fact; never materialize the full live catalog here.
+    // Read the admitted observation even when static/configured reasoning is already known.
     const { loadProviderScopedThinkingCatalog } = await import("../model-catalog.runtime.js");
     const runtimeCatalog = normalizeThinkingCatalogProviders(
       await loadProviderScopedThinkingCatalog({

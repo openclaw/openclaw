@@ -8,8 +8,8 @@ import { makeUserMessage } from "../../test/helpers/user-message.js";
 import {
   persistSessionTranscriptTurn,
   replaceSessionEntry,
-  replaceTranscriptEvents,
 } from "../config/sessions/session-accessor.js";
+import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { transcriptMessage } from "../config/sessions/transcript-message.test-support.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";

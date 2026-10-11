@@ -262,7 +262,7 @@ export function finalizeOpenAICompletionsToolCalls(
   }
 
   type FinalToolCall = ToolCall & {
-    partialArgs?: unknown;
+    partialJson?: unknown;
   };
   const toolCalls = output.content.filter(isToolCall) as FinalToolCall[];
   const rejectToolCalls = () => {
@@ -275,15 +275,15 @@ export function finalizeOpenAICompletionsToolCalls(
       (call) =>
         typeof call.name !== "string" ||
         call.name.trim().length === 0 ||
-        typeof call.partialArgs !== "string" ||
-        call.partialArgs.trim().length === 0,
+        typeof call.partialJson !== "string" ||
+        call.partialJson.trim().length === 0,
     )
   ) {
     rejectToolCalls();
     return;
   }
   try {
-    finalizeTerminalToolCallArguments(toolCalls, (call) => call.partialArgs);
+    finalizeTerminalToolCallArguments(toolCalls, (call) => call.partialJson);
   } catch {
     rejectToolCalls();
     return;
@@ -294,7 +294,7 @@ export function finalizeOpenAICompletionsToolCalls(
     if (!block || !isToolCall(block)) {
       continue;
     }
-    delete (block as { partialArgs?: string }).partialArgs;
+    delete (block as { partialJson?: string }).partialJson;
     delete (block as { streamIndex?: number }).streamIndex;
     options.onConfirmedToolCall?.(block, contentIndex);
   }

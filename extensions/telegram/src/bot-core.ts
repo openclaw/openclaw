@@ -5,12 +5,10 @@ import {
 } from "openclaw/plugin-sdk/channel-policy";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
-  registerSessionBindingAdapter,
   resolveThreadBindingIdleTimeoutMsForChannel,
   resolveThreadBindingMaxAgeMsForChannel,
   resolveThreadBindingSpawnPolicy,
   unregisterSessionBindingAdapter,
-  type SessionBindingAdapter,
 } from "openclaw/plugin-sdk/conversation-runtime";
 import { formatErrorMessage, formatUncaughtError } from "openclaw/plugin-sdk/error-runtime";
 import {
@@ -27,6 +25,10 @@ import {
   type RuntimeEnv,
 } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  registerSessionBindingAdapterV2,
+  type SessionBindingAdapterV2,
+} from "openclaw/plugin-sdk/thread-bindings-runtime";
 import { resolveTelegramAccountOwnerAgentId } from "./account-owner.js";
 import { getOrCreateAccountThrottler } from "./account-throttler.js";
 import { resolveTelegramAccount } from "./accounts.js";
@@ -307,21 +309,22 @@ export async function createTelegramBotCore(
     telegramDeps,
     resolveTelegramGroupConfig,
   };
-  const { nativeCommandNames, nativeCommandCallbackDispatcher } = registerTelegramNativeCommands({
-    ...botContext,
-    cfg,
-    accountId: account.accountId,
-    telegramCfg,
-    mediaMaxBytes,
-    nativeEnabled,
-    nativeSkillsEnabled,
-    resolveGroupPolicy,
-    shouldSkipUpdate,
-    telegramDeps: {
-      ...telegramDeps,
-      sendMessageTelegram: defaultTelegramNativeCommandDeps.sendMessageTelegram,
-    },
-  });
+  const { nativeCommandNames, nativeCommandCallbackDispatcher } =
+    await registerTelegramNativeCommands({
+      ...botContext,
+      cfg,
+      accountId: account.accountId,
+      telegramCfg,
+      mediaMaxBytes,
+      nativeEnabled,
+      nativeSkillsEnabled,
+      resolveGroupPolicy,
+      shouldSkipUpdate,
+      telegramDeps: {
+        ...telegramDeps,
+        sendMessageTelegram: defaultTelegramNativeCommandDeps.sendMessageTelegram,
+      },
+    });
   const messageContext = {
     ...botContext,
     nativeCommandNames,
@@ -361,17 +364,37 @@ export async function createTelegramBotCore(
         maxAgeMs: resolveThreadBindingMaxAgeMsForChannel(threadBindingScope),
       })
     : null;
-  const disabledBindingAdapter: SessionBindingAdapter | undefined = threadBindingManager
+  let bindingOwnerStopped = false;
+  const disabledBindingAdapter: SessionBindingAdapterV2 | undefined = threadBindingManager
     ? undefined
     : {
+        version: 2,
+        assertCurrent: () => {
+          if (bindingOwnerStopped) {
+            throw new Error("Telegram thread binding manager was retired");
+          }
+        },
         channel: "telegram",
         accountId: account.accountId,
         capabilities: { bindSupported: false, unbindSupported: false, placements: [] },
+        touchAsync: async () => {},
+        listBySessionAsync: async () => [],
+        resolveByConversationAsync: async () => null,
+        inspectByConversationAsync: async () => null,
+        inspectByConversationsAsync: async (refs) => ({
+          bindings: refs.map(() => null),
+          assertCurrent: () => {
+            if (bindingOwnerStopped) {
+              throw new Error("Telegram thread binding manager was retired");
+            }
+          },
+        }),
         listBySession: () => [],
         resolveByConversation: () => null,
       };
   bot.stop = (async (...args: Parameters<typeof originalStop>) => {
     if (disabledBindingAdapter) {
+      bindingOwnerStopped = true;
       unregisterSessionBindingAdapter({
         channel: "telegram",
         accountId: account.accountId,
@@ -385,7 +408,7 @@ export async function createTelegramBotCore(
     }
   }) as typeof bot.stop;
   if (disabledBindingAdapter) {
-    registerSessionBindingAdapter(disabledBindingAdapter);
+    registerSessionBindingAdapterV2(disabledBindingAdapter);
   }
 
   return bot;

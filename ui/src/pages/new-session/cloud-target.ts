@@ -85,7 +85,10 @@ function formatUnavailableReason(
 ) {
   if (remediation === "enable-session-hosting") {
     return html`<div>${t("newSession.sessionHostingAction")}</div>
-      <code class="new-session-page__command">openclaw connect --service --session-host</code>`;
+      <code class="new-session-page__command"
+        >openclaw config set nodeHost.workerRuns.enabled true</code
+      >
+      <code class="new-session-page__command">openclaw node install --force</code>`;
   }
   if (remediation === "update-device") {
     return html`<div>${t("newSession.updateAction")}</div>

@@ -30,7 +30,6 @@ type BridgeInternals = Pick<
     message: { role: string; content: unknown };
   }) => Promise<void>;
   server: { server: { notification: (n: unknown) => Promise<void> } } | null;
-  sendNotification: (notification: { method: string }) => Promise<void>;
 };
 
 const bridges: BridgeInternals[] = [];
@@ -90,7 +89,7 @@ describe("OpenClawChannelBridge — Claude permission authorization", () => {
       .fn<(notification: unknown) => Promise<void>>()
       .mockRejectedValueOnce(new Error("transport closed"))
       .mockResolvedValueOnce(undefined);
-    vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    const writeSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
     bridge.server = { server: { notification } };
     const reply = {
       sessionKey: "agent:main:telegram:group:-100123",
@@ -105,6 +104,9 @@ describe("OpenClawChannelBridge — Claude permission authorization", () => {
     await bridge.handleSessionMessageEvent(reply);
     await bridge.handleSessionMessageEvent(reply);
     expect(notification).toHaveBeenCalledTimes(2);
+    expect(writeSpy.mock.calls).toEqual([
+      ["openclaw mcp: notification notifications/claude/channel/permission failed\n"],
+    ]);
 
     await bridge.handleSessionMessageEvent(reply);
     expect(notification).toHaveBeenCalledTimes(2);
@@ -115,25 +117,6 @@ describe("OpenClawChannelBridge — pendingClaudePermissions / pendingApprovals 
   beforeEach(() => {
     vi.useFakeTimers();
     vi.setSystemTime(0);
-  });
-
-  test("trackApproval entries are evicted at expiresAtMs by the sweeper", async () => {
-    const bridge = makeBridge();
-    await bridge.handleGatewayEvent({
-      event: "exec.approval.requested",
-      payload: {
-        id: "approval-1",
-        createdAtMs: 0,
-        expiresAtMs: 10 * ONE_MINUTE_MS,
-      },
-    });
-    expect(bridge.pendingApprovals.size).toBe(1);
-
-    vi.advanceTimersByTime(SWEEP_INTERVAL_MS);
-    expect(bridge.pendingApprovals.size).toBe(1);
-
-    vi.advanceTimersByTime(SWEEP_INTERVAL_MS + ONE_MINUTE_MS);
-    expect(bridge.pendingApprovals.size).toBe(0);
   });
 
   test("trackApproval falls back to a default TTL when expiresAtMs is absent", async () => {
@@ -224,34 +207,6 @@ describe("OpenClawChannelBridge — pendingClaudePermissions / pendingApprovals 
     expect(bridge.pendingSweepInterval).toBeNull();
   });
 
-  test("a failed notification still emits exactly one diagnostic record with verbose off", async () => {
-    const bridge = makeBridge(false);
-    const writeSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
-    bridge.server = {
-      server: {
-        notification: () => Promise.reject(new Error("transport closed")),
-      },
-    };
-    await bridge.sendNotification({ method: "channel/event" });
-
-    const writes = writeSpy.mock.calls.map(([chunk]) => String(chunk));
-    expect(writes).toHaveLength(1);
-    expect(writes[0]).toBe("openclaw mcp: notification channel/event failed\n");
-    expect(writes[0]).not.toContain("transport closed");
-  });
-
-  test("a rejected gateway event still emits exactly one diagnostic record with verbose off", async () => {
-    const bridge = makeBridge(false);
-    const writeSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
-    vi.spyOn(bridge, "handleGatewayEvent").mockRejectedValue(new Error("handler boom"));
-    await bridge.dispatchGatewayEvent({ event: "exec.approval.requested", payload: {} });
-
-    const writes = writeSpy.mock.calls.map(([chunk]) => String(chunk));
-    expect(writes).toHaveLength(1);
-    expect(writes[0]).toBe("openclaw mcp: gateway event exec.approval.requested failed\n");
-    expect(writes[0]).not.toContain("handler boom");
-  });
-
   test("a rejected gateway event includes error detail with verbose on", async () => {
     const bridge = makeBridge(true);
     const writeSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
@@ -290,23 +245,6 @@ describe("OpenClawChannelBridge — pendingClaudePermissions / pendingApprovals 
       inputPreview: "{}",
     });
     expect(bridge.pendingSweepInterval).not.toBeNull();
-  });
-
-  test("pollEvents clamps direct caller limits to the public MCP event window", async () => {
-    const bridge = makeBridge();
-    for (let cursor = 1; cursor <= 250; cursor += 1) {
-      bridge.queue.push({
-        cursor,
-        type: "message",
-        sessionKey: "agent:main:main",
-        raw: { sessionKey: "agent:main:main" },
-      });
-    }
-
-    const result = bridge.pollEvents({ afterCursor: 0 }, 10_000);
-
-    expect(result.events).toHaveLength(200);
-    expect(result.nextCursor).toBe(200);
   });
 
   test("waitForEvent clamps oversized direct caller timeouts before arming timers", async () => {

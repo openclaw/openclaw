@@ -8,6 +8,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import * as databaseIdentity from "../infra/sqlite-worker-identity.js";
 import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
 import {
@@ -386,9 +387,9 @@ describe("auth profile sqlite store", () => {
     });
   });
 
-  it("keeps auth schema classifications fresh after external schema changes", async () => {
+  it("keeps auth schema classifications fresh after owner schema changes", async () => {
     await withAgentDirEnv("openclaw-auth-sqlite-invalid-schema-", (agentDir) => {
-      const database = new DatabaseSync(resolveAuthProfileDatabasePath(agentDir));
+      const database = openNodeSqliteDatabase(resolveAuthProfileDatabasePath(agentDir));
       const createTable = `
         CREATE TABLE auth_profile_store (
           store_key TEXT NOT NULL PRIMARY KEY,

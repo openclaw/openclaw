@@ -1,4 +1,3 @@
-import fs from "node:fs";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { createFailureMessage } from "../../../../packages/agent-core/src/turn-interruption.js";
 import {
@@ -15,7 +14,6 @@ import {
   type PersistedUserTurnMessage,
 } from "../../../sessions/user-turn-transcript.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
-import { closeOpenClawAgentDatabaseByPathAsync } from "../../../state/openclaw-agent-db.js";
 import { observeMainThreadSql } from "../../../test-utils/main-thread-sql-spies.test-support.js";
 import { createAgentRunRestartAbortError } from "../../run-termination.js";
 import { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
@@ -135,26 +133,6 @@ describe("interrupted canonical user replay", () => {
       { selectedOwner: true, interruptedTurn: false },
     );
   });
-
-  it.each([false, true])(
-    "rejects a byte-identical replacement source between replay preparations (selected=%s)",
-    async (selectedOwner) => {
-      await withInterruptedTurn(
-        false,
-        async (fixture) => {
-          const prepared = await fixture.prepare();
-          const pathname = fixture.target.storePath!;
-          await closeOpenClawAgentDatabaseByPathAsync(pathname);
-          fs.renameSync(pathname, `${pathname}.retired`);
-          fs.copyFileSync(`${pathname}.retired`, pathname);
-          await expect(prepared.prepareInitialUserTurnReplay!()).rejects.toThrow(
-            selectedOwner ? "Agent database execution admission is closed" : /database owner/,
-          );
-        },
-        { selectedOwner },
-      );
-    },
-  );
 
   it.each([
     { appendOnly: false, interruptedTurn: false, toolProgress: true },

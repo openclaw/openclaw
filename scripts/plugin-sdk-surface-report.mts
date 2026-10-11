@@ -134,8 +134,9 @@ function readPluginSdkEntrypointBudgetEnv(
 const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   // +1 each: legacy AgentHarness remains projected through the core and plugin-entry
   // compatibility barrels while external harnesses migrate to AgentHarnessV2.
-  core: 3,
-  "plugin-entry": 1,
+  // +2 each: released provider replay contracts remain while plugins adopt async V2.
+  core: 5,
+  "plugin-entry": 3,
   // Shipped synchronous capture remains available while plugins migrate to async capture.
   "proxy-capture": 9,
   routing: 1,
@@ -180,6 +181,9 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   // Released synchronous allowlist compatibility during the approved worker-read migration.
   "channel-pairing": 1,
   "channel-policy": 7,
+  // Released synchronous conversation binding APIs remain until the next Plugin SDK major.
+  "conversation-binding-inspection-runtime": 1,
+  "conversation-runtime": 3,
   "channel-send-result": 1,
   "reply-runtime": 1,
   "security-runtime": 1,
@@ -190,6 +194,9 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   "setup-runtime": 2,
   "reply-history": 6,
   "provider-auth": 15,
+  // Released synchronous command discovery remains while plugins adopt worker-backed preparation.
+  "command-auth-native": 1,
+  "skill-commands-runtime": 2,
 } satisfies Record<string, number>);
 
 export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env) {
@@ -214,8 +221,16 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +2: approved async upstream-link writes with released sync compatibility.
       // -8: retired Skill Workshop proposal hook types.
       // +3: approved async session entry reads and typed incognito refusal on the existing subpath.
+      // +7: approved prepared/data-only session patches and their authority contracts.
       // +4: CLI state-owner routing, Gateway owner guards, target selection, and timeout parsing.
-      3648,
+      // +1: requester-bound transport effects for owner-routed plugin commands.
+      // +5: approved sync-to-async replacements: inspectConversationBinding,
+      // resolveCommandAuthorization, createApproverRestrictedNativeApprovalCapability,
+      // createChannelApprovalNativeRuntimeAdapter, and createLazyChannelApprovalNativeRuntimeAdapter.
+      // +1: approved final-delivery capture ownership predicate for channel transcript mirrors.
+      // +7: approved GitHub publication V2 requester/action contracts: five types and two preparers.
+      // +3: approved async skill-command preparation pairs on two existing entrypoints.
+      3672,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -229,8 +244,14 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: resolve the controller from the current invocation registry.
       // +2: approved async upstream-link writes with released sync compatibility.
       // +3: approved async session entry reads and typed incognito refusal on the existing subpath.
+      // +3: approved prepared/data-only session patches and authority-bound routes.
       // +4: the same four CLI state-owner and transport functions.
-      2118,
+      // +1: runWithLocalStateMutationOwner shares the existing transport authority scope.
+      // +5: the five awaited inspection, authorization, and approval factory replacements above.
+      // +1: the same final-delivery capture ownership predicate.
+      // +2: prepareGitHubPublicationRequesterV2 and preparePersonalGitHubSessionActionV2.
+      // +3: the same skill-command preparation replacements.
+      2133,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
@@ -238,7 +259,10 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // Remove deprecated sync channel envelope helpers and their compat records at the next Plugin SDK major.
       // +2: approved synchronous upstream-link write compatibility until the next Plugin SDK major.
       // +1: synchronous session entry getter remains until the next Plugin SDK major.
-      148,
+      // +6: released session callbacks and provider replay contracts during async migration.
+      // +4: released synchronous conversation binding contracts during V2 migration.
+      // +3: released synchronous skill-command list helpers during async migration.
+      161,
       env,
     ),
     publicWildcardReexports: readPluginSdkSurfaceBudgetEnv(

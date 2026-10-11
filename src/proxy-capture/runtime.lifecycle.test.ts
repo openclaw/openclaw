@@ -749,7 +749,6 @@ describe("async capture lifecycle", () => {
         payload: ${JSON.stringify(payload)},
       }, settings);
       process.kill(process.pid, ${JSON.stringify(signal)});
-      setTimeout(() => process.exit(99), 10_000);
     `;
       const child = runRuntimeScript(root, script, [], { HOME: root, XDG_CACHE_HOME: root });
       expect(child.error, child.stderr).toBeUndefined();

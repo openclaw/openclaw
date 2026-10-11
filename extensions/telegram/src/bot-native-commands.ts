@@ -46,7 +46,7 @@ type RegisterTelegramNativeCommandsParams = Omit<
   shouldSkipUpdate: (ctx: TelegramUpdateKeyContext) => boolean;
 };
 
-export const registerTelegramNativeCommands = ({
+export const registerTelegramNativeCommands = async ({
   cfg,
   telegramCfg,
   nativeEnabled,
@@ -54,10 +54,10 @@ export const registerTelegramNativeCommands = ({
   shouldSkipUpdate,
   telegramDeps = defaultTelegramNativeCommandDeps,
   ...executorParams
-}: RegisterTelegramNativeCommandsParams): {
+}: RegisterTelegramNativeCommandsParams): Promise<{
   nativeCommandNames: ReadonlyMap<string, string>;
   nativeCommandCallbackDispatcher?: TelegramNativeCommandCallbackDispatcher;
-} => {
+}> => {
   const { bot, runtime, accountId, opts } = executorParams;
   const boundRoute =
     nativeEnabled && nativeSkillsEnabled
@@ -70,7 +70,7 @@ export const registerTelegramNativeCommands = ({
   }
   const skillCommands =
     nativeEnabled && nativeSkillsEnabled && boundRoute
-      ? telegramDeps.listSkillCommandsForAgents({ cfg, agentIds: [boundRoute.agentId] })
+      ? await telegramDeps.prepareSkillCommandsForAgents({ cfg, agentIds: [boundRoute.agentId] })
       : [];
   const pluginCommandRuntime = createPluginCommandRuntime();
   const pluginCommandSpecs = pluginCommandRuntime.listNativeCandidates("telegram");
@@ -185,7 +185,7 @@ export const registerTelegramNativeCommands = ({
   const syncTelegramMenuCommands =
     telegramDeps.syncTelegramMenuCommands ?? syncTelegramMenuCommandsRuntime;
   // Telegram only limits menu entries; hidden commands remain callable.
-  syncTelegramMenuCommands({
+  void syncTelegramMenuCommands({
     bot,
     runtime,
     commandsToRegister,

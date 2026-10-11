@@ -165,7 +165,8 @@ after an upgrade or restart, without delaying Gateway readiness. Failed
 preparation reports the database's repair guidance. Watched file changes can
 then update the index without a search or agent turn. Retiring an
 instance closes its managers, including file watchers, timers, and session
-listeners. Plugin reload also stops and restarts the retained Memory Core
+listeners. A session startup scan still in progress stops after its current
+step, so disabling or replacing the plugin does not wait for it. Plugin reload also stops and restarts the retained Memory Core
 service around publication, so its managers use the current embedding providers,
 including providers loaded on demand, without waiting for a search or turn. If
 reload fails after draining managers, recovery restarts their previous services

@@ -638,11 +638,13 @@ describe("agents add command", () => {
         { hasAutomationFlags: false },
       );
 
-      expect(createAgent).toHaveBeenCalledWith({
-        name: "Work",
-        workspace: "/tmp/work",
-        transformConfig,
-      });
+      expect(createAgent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          name: "Work",
+          workspace: "/tmp/work",
+          transformConfig,
+        }),
+      );
       expect(transformConfig).not.toHaveBeenCalled();
       expect(runtime.exit).not.toHaveBeenCalled();
       expect(runtime.error).not.toHaveBeenCalled();

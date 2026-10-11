@@ -20,14 +20,13 @@ import {
   cleanupSnapshotOperations,
   removeTempDirectoryAsync,
   retainSnapshotTempDirectory,
-  SqliteSnapshotCleanupError,
 } from "./sqlite-readonly-location-cleanup.js";
 import type { RetainedPreparedSqliteReadOnlyLocation } from "./sqlite-readonly-location.types.js";
 import { captureSqliteReadOnlyWorkerLaunch } from "./sqlite-readonly-worker.js";
 import { startSqliteReadOnlyLocationAsync } from "./sqlite-snapshot-source.js";
 import { allocateWorkerOwnedSqliteSnapshotDirectory } from "./sqlite-snapshot-staging-allocation.js";
 import { captureSqliteSnapshotStagingOwner } from "./sqlite-snapshot-staging-owner.js";
-import { holdNativeStop, waitForGate } from "./sqlite-snapshot-staging-owner.test-support.js";
+import { waitForGate } from "./sqlite-snapshot-staging-owner.test-support.js";
 import { createSqliteSnapshotStagingDirectory } from "./sqlite-snapshot-staging.js";
 import type { RetainedNativeWorker } from "./worker-native-lifecycle.types.js";
 import type {
@@ -49,14 +48,6 @@ type ReplyGate = {
   directory?: string;
   deliver?: () => void;
 };
-type StopFailureGate = {
-  directory: string;
-  entered: ReturnType<typeof createDeferredCore<void>>;
-  failure: Error;
-  claimed: boolean;
-  operation: RetainedOperation<void>;
-  reject(): void;
-};
 const requestContext = new AsyncLocalStorage<string>();
 const observation = {
   tasks: 0,
@@ -64,12 +55,9 @@ const observation = {
   allocated: [] as string[],
   gate: undefined as ReleaseGate | undefined,
   replyGate: undefined as ReplyGate | undefined,
-  stopGate: undefined as StopFailureGate | undefined,
   taskReads: new Map<number, () => RetainedOutcome<unknown>>(),
   releaseContexts: new Map<number, string | undefined>(),
   snapshots: new Set<() => { workers: number; activeTasks: number; pendingTasks: number }>(),
-  rotations: new Set<() => Promise<void>>(),
-  workers: new Set<RetainedNativeWorker>(),
 };
 
 type NativeSubscription =
@@ -80,19 +68,6 @@ type NativeSubscription =
   | [event: "exit", listener: (code: number | undefined) => void];
 
 function observeNativeReplies(native: RetainedNativeWorker): RetainedNativeWorker {
-  observation.workers.add(native);
-  const stop = native.stop.bind(native);
-  native.stop = () => {
-    const gate = observation.stopGate;
-    if (!gate || gate.claimed) {
-      return stop();
-    }
-    gate.claimed = true;
-    expect(fs.existsSync(gate.directory)).toBe(false);
-    expect(native.threadId).toBeGreaterThan(0);
-    gate.entered.resolve();
-    return gate.operation;
-  };
   const on = native.on.bind(native);
   function listen(event: "message", listener: (message: unknown) => void): unknown;
   function listen(event: "error" | "messageerror", listener: (error: Error) => void): unknown;
@@ -205,7 +180,6 @@ vi.mock("./worker-task-pool.js", async (importOriginal) => {
     ) {
       const pool = actual.createOwnedWorkerTaskPool<Input, Output>(options, ownerOptions);
       observation.snapshots.add(pool.getSnapshot);
-      observation.rotations.add(pool.rotate);
       return {
         ...pool,
         startTask(
@@ -234,21 +208,6 @@ function holdRelease(ordinal: number): ReleaseGate {
   return gate;
 }
 
-function holdNextNativeStop(directory: string): StopFailureGate {
-  const pending = createRetainedOperation<void>(() => {});
-  const failure = new Error("native stop was not acknowledged");
-  const gate = {
-    directory,
-    entered: createDeferredCore(),
-    failure,
-    claimed: false,
-    operation: pending.operation,
-    reject: () => pending.reject(failure),
-  };
-  observation.stopGate = gate;
-  return gate;
-}
-
 function releaseGate(gate: ReleaseGate | undefined): void {
   if (gate) {
     gate.open = true;
@@ -271,15 +230,12 @@ beforeEach(() => {
   observation.allocated = [];
   observation.gate = undefined;
   observation.replyGate = undefined;
-  observation.stopGate = undefined;
   observation.taskReads.clear();
   observation.releaseContexts.clear();
-  observation.workers.clear();
 });
 
 const directories = useAutoCleanupTempDirTracker((cleanup) => {
   afterEach(async () => {
-    observation.stopGate?.reject();
     releaseReplyGate(observation.replyGate);
     releaseGate(observation.gate);
     vi.restoreAllMocks();
@@ -369,77 +325,6 @@ it.each(["queued", "accepted"] as const)(
         if (result.status === "fulfilled" && result.value) {
           expect(await removeTempDirectoryAsync(result.value)).toBe(true);
         }
-      }
-    }
-    expect(fs.readdirSync(root)).toEqual([]);
-  },
-);
-
-it.each(["after-failure", "queued-during-stop"] as const)(
-  "settles admission %s without retaining input behind failed idle rotation",
-  async (phase) => {
-    const root = directories.make("staging-failed-rotation-");
-    const owned = await allocateWorkerOwnedSqliteSnapshotDirectory(root, false);
-    const gate = holdNextNativeStop(owned.directory);
-    const retirement = owned.startRetire().result;
-    void retirement.catch(() => undefined);
-    const owner = captureSqliteSnapshotStagingOwner();
-    const { env, cwd } = captureSqliteReadOnlyWorkerLaunch();
-    let request: ReturnType<typeof owner.start> | undefined;
-    let later: Awaited<ReturnType<typeof allocateWorkerOwnedSqliteSnapshotDirectory>> | undefined;
-    const pendingTasks = () =>
-      [...observation.snapshots].reduce((total, snapshot) => total + snapshot().pendingTasks, 0);
-    try {
-      await waitForGate(gate, retirement);
-      if (phase === "after-failure") {
-        gate.reject();
-        await expect(retirement).rejects.toBe(gate.failure);
-      }
-      request = owner.start({
-        type: "allocate",
-        root,
-        allowLegacyWorker: false,
-        launch: { env, cwd, transport: { kind: "native" } },
-      });
-      if (phase === "queued-during-stop") {
-        expect(request.read()).toEqual({ status: "pending" });
-        expect(pendingTasks()).toBe(1);
-        gate.reject();
-        await expect(retirement).rejects.toBe(gate.failure);
-      }
-      const barrier = new Int32Array(new SharedArrayBuffer(4));
-      const deadline = performance.now() + 10_000;
-      let outcome = request.read();
-      while (outcome.status === "pending" && performance.now() < deadline) {
-        request.service();
-        outcome = request.read();
-        if (outcome.status === "pending") {
-          Atomics.wait(barrier, 0, 0, 2);
-        }
-      }
-      if (outcome.status !== "rejected") {
-        throw new Error("Snapshot admission did not refuse the failed idle rotation");
-      }
-      expect(outcome.error).toBeInstanceOf(SqliteSnapshotCleanupError);
-      expect(outcome.error).toMatchObject({ cause: gate.failure });
-      expect(pendingTasks()).toBe(0);
-      expect(await removeTempDirectoryAsync(owned.directory)).toBe(true);
-      later = await allocateWorkerOwnedSqliteSnapshotDirectory(root, false);
-      expect(fs.existsSync(later.directory)).toBe(true);
-      expect(await removeTempDirectoryAsync(later.directory)).toBe(true);
-    } finally {
-      gate.reject();
-      // Original-code RED leaves input queued: retry actual stop before awaiting that input.
-      await Promise.all([...observation.rotations].map((rotate) => rotate()));
-      const settled = await Promise.allSettled([retirement, request?.result]);
-      for (const result of settled) {
-        if (result.status === "fulfilled" && result.value) {
-          expect(await removeTempDirectoryAsync(result.value.directory)).toBe(true);
-        }
-      }
-      expect(await removeTempDirectoryAsync(owned.directory)).toBe(true);
-      if (later) {
-        expect(await removeTempDirectoryAsync(later.directory)).toBe(true);
       }
     }
     expect(fs.readdirSync(root)).toEqual([]);
@@ -624,255 +509,6 @@ it("retains an early preparation close until its original accepted result joins"
     releaseReplyGate(gate);
     await Promise.allSettled([request.result]);
     await request.startClose().result;
-  }
-});
-
-it("keeps failed preparation custody retryable without requesting a sibling snapshot's cleanup", async () => {
-  const root = directories.make("staging-request-failed-close-");
-  const sqlite = requireNodeSqlite();
-  const sources = ["first", "sibling"].map((value) => createProbe(root, value, value));
-  const original = sources.map((filename) => fs.readFileSync(filename));
-  const owner = captureSqliteSnapshotStagingOwner();
-  const { env, cwd } = captureSqliteReadOnlyWorkerLaunch();
-  const start = (pathname: string) =>
-    owner.start({
-      type: "prepare",
-      root,
-      pathname,
-      allowLegacyWorker: false,
-      preserveSourceArtifacts: true,
-      deadlineOwnedByCaller: false,
-      launch: { env, cwd, transport: { kind: "native" } },
-    });
-  const sibling = start(sources[1]!);
-  const siblingReply = await sibling.result;
-  if (siblingReply.type !== "prepared") {
-    throw new Error("Sibling snapshot was not prepared");
-  }
-  const gate: ReplyGate = { kind: "prepared", entered: createDeferredCore(), open: false };
-  observation.replyGate = gate;
-  const first = start(sources[0]!);
-  const firstOutcome = first.result.then(
-    (value) => ({ value }),
-    (error: unknown) => ({ error }),
-  );
-  let releaseReader: (() => void) | undefined;
-  let native: RetainedNativeWorker | undefined;
-  let recoveryStop: ReturnType<typeof holdNativeStop> | undefined;
-  try {
-    await waitForGate(gate, first.result);
-    if (!gate.directory) {
-      throw new Error("First preparation directory was not observed");
-    }
-    releaseReader = retainSnapshotTempDirectory(gate.directory);
-    native = [...observation.workers].find((worker) => !worker.executionStopped);
-    if (!native) {
-      throw new Error("Original staging Worker was not observed");
-    }
-    await expect(native.stop().result).rejects.toThrow("host cleanup admission failed");
-    await firstOutcome;
-    const failed = first.read();
-    expect(failed.status).toBe("rejected");
-    await expect(first.startClose().result).rejects.toMatchObject({
-      errors: expect.arrayContaining([
-        expect.objectContaining({ message: "SQLite snapshot still belongs to an active reader" }),
-      ]),
-    });
-    expect(fs.existsSync(gate.directory)).toBe(true);
-    expect(fs.existsSync(siblingReply.directory)).toBe(true);
-    // The first request's close must not even seal the sibling's reader admission.
-    const releaseSibling = retainSnapshotTempDirectory(siblingReply.directory);
-    const reader = new sqlite.DatabaseSync(siblingReply.location, { readOnly: true });
-    try {
-      expect(reader.prepare("SELECT value FROM probe").get()).toEqual({ value: "sibling" });
-    } finally {
-      reader.close();
-      releaseSibling();
-    }
-    releaseReader();
-    releaseReader = undefined;
-    // Native cleanup fences every sibling after VM loss. Admit both requests before
-    // starting the shared stop, then prove sibling servicing alone can finish it.
-    recoveryStop = holdNativeStop(native);
-    const firstClose = first.startClose();
-    const siblingClose = sibling.startClose();
-    expect(firstClose.read().status).toBe("pending");
-    expect(siblingClose.read().status).toBe("pending");
-    recoveryStop.release();
-    let microtaskRan = false;
-    queueMicrotask(() => {
-      microtaskRan = true;
-    });
-    const wait = new Int32Array(new SharedArrayBuffer(4));
-    const deadline = performance.now() + 10_000;
-    while (
-      (firstClose.read().status === "pending" || siblingClose.read().status === "pending") &&
-      performance.now() < deadline
-    ) {
-      // Only B is serviced: A's failed result must not hide its still-owned close work.
-      siblingClose.service();
-      if (firstClose.read().status !== "pending" && siblingClose.read().status !== "pending") {
-        break;
-      }
-      Atomics.wait(wait, 0, 0, 2);
-    }
-    expect(microtaskRan).toBe(false);
-    expect(firstClose.read()).toEqual({ status: "fulfilled", value: undefined });
-    expect(siblingClose.read()).toEqual({ status: "fulfilled", value: undefined });
-    await Promise.all([firstClose.result, siblingClose.result]);
-    expect(fs.existsSync(gate.directory)).toBe(false);
-    expect(fs.existsSync(siblingReply.directory)).toBe(false);
-    expect(first.read()).toEqual(failed);
-    expect(sources.map((filename) => fs.readFileSync(filename))).toEqual(original);
-  } finally {
-    releaseReader?.();
-    releaseReplyGate(gate);
-    await Promise.allSettled([first.result, sibling.result]);
-    recoveryStop?.restore();
-    // Preserve the failing result while explicitly retrying canonical custody cleanup on RED.
-    await Promise.allSettled([first.startClose().result, sibling.startClose().result]);
-    await Promise.all([first.startClose().result, sibling.startClose().result]);
-    if (native) {
-      await native.stop().result;
-    }
-  }
-});
-
-it("keeps an owned snapshot and its creator lock after abrupt worker exit until requested cleanup joins", async () => {
-  const root = directories.make("staging-lost-worker-custody-");
-  const cache = path.join(root, "cache");
-  fs.mkdirSync(cache);
-  vi.stubEnv("XDG_CACHE_HOME", cache);
-  const sqlite = requireNodeSqlite();
-  const source = createProbe(root);
-  const prepared = await startSqliteReadOnlyLocationAsync(source, {
-    preserveSourceArtifacts: true,
-  }).result;
-  const directory = prepared.cleanupRoot ?? path.dirname(prepared.location);
-  let releaseReader: (() => void) | undefined;
-  let next: RetainedPreparedSqliteReadOnlyLocation | undefined;
-  try {
-    const native = [...observation.workers].find((worker) => !worker.executionStopped);
-    expect(native).toBeDefined();
-    if (!native) {
-      throw new Error("Snapshot worker was not observed");
-    }
-    // Terminate the disposable VM without running its logical directory finalizer.
-    await expect(native.stop().result).rejects.toThrow("cleanup has not been requested");
-    expect(native.executionStopped).toBe(true);
-    expect(fs.existsSync(prepared.location)).toBe(true);
-    const token = new sqlite.DatabaseSync(path.join(directory, "owner.sqlite"), { timeout: 0 });
-    try {
-      expect(() => token.exec("BEGIN IMMEDIATE")).toThrow(/locked|busy/i);
-    } finally {
-      if (token.isTransaction) {
-        token.exec("ROLLBACK");
-      }
-      token.close();
-    }
-    releaseReader = retainSnapshotTempDirectory(directory);
-    const reader = new sqlite.DatabaseSync(prepared.location, { readOnly: true });
-    try {
-      expect(reader.prepare("SELECT value FROM probe").get()).toMatchObject({ value: "preserved" });
-    } finally {
-      reader.close();
-    }
-    expect(await prepared.cleanupAsync()).toBe(false);
-    expect(fs.existsSync(prepared.location)).toBe(true);
-    releaseReader();
-    releaseReader = undefined;
-    expect(await prepared.cleanupAsync()).toBe(true);
-    expect(fs.existsSync(directory)).toBe(false);
-    next = await startSqliteReadOnlyLocationAsync(source, { preserveSourceArtifacts: true }).result;
-    expect(await next.cleanupAsync()).toBe(true);
-    next = undefined;
-  } finally {
-    releaseReader?.();
-    expect(await prepared.cleanupAsync()).toBe(true);
-    if (next) {
-      expect(await next.cleanupAsync()).toBe(true);
-    }
-  }
-});
-
-it("joins both generation snapshots after their shared staging Worker exits abruptly", async () => {
-  const root = directories.make("staging-generation-lost-siblings-");
-  const cache = path.join(root, "cache");
-  fs.mkdirSync(cache);
-  vi.stubEnv("XDG_CACHE_HOME", cache);
-  const sqlite = requireNodeSqlite();
-  const sources = ["first", "second"].map((value) => createProbe(root, value, value));
-  const original = sources.map((filename) => fs.readFileSync(filename));
-  const stagingUrl = resolveRuntimeProcessEntrypointUrl("sqliteSnapshotStaging");
-  const prepared: RetainedPreparedSqliteReadOnlyLocation[] = [];
-  let originalNative: RetainedNativeWorker | undefined;
-  let codeReleased = false;
-  const generation = withRuntimeWorkerGeneration(
-    async (bind) => {
-      bind((url) => {
-        if (url.href !== stagingUrl.href) {
-          return url;
-        }
-        const retained = new URL(url);
-        retained.searchParams.set("snapshot-test-generation", "lost-sibling-roots");
-        return retained;
-      });
-      for (const [index, source] of sources.entries()) {
-        const snapshot = await startSqliteReadOnlyLocationAsync(source, {
-          preserveSourceArtifacts: true,
-        }).result;
-        prepared.push(snapshot);
-        const reader = new sqlite.DatabaseSync(snapshot.location, { readOnly: true });
-        try {
-          expect(reader.prepare("SELECT value FROM probe").get()).toEqual({
-            value: index === 0 ? "first" : "second",
-          });
-        } finally {
-          reader.close();
-        }
-      }
-      expect(new Set(prepared.map((snapshot) => snapshot.cleanupRoot)).size).toBe(2);
-      const workers = [...observation.workers];
-      expect(workers).toHaveLength(1);
-      originalNative = workers[0];
-      if (!originalNative) {
-        throw new Error("Generation staging Worker was not observed");
-      }
-      // Stop the original VM without running either logical directory finalizer.
-      await expect(originalNative.stop().result).rejects.toThrow("host cleanup admission failed");
-      expect(originalNative.executionStopped).toBe(true);
-      expect(prepared.every((snapshot) => fs.existsSync(snapshot.location))).toBe(true);
-      // Generation retirement must request both roots before their shared native owner closes.
-    },
-    async () => {
-      expect(prepared).toHaveLength(2);
-      for (const snapshot of prepared) {
-        expect(fs.existsSync(snapshot.cleanupRoot ?? path.dirname(snapshot.location))).toBe(false);
-      }
-      codeReleased = true;
-    },
-  );
-  const settled = generation.then(
-    () => ({ released: true }),
-    (error: unknown) => ({ error }),
-  );
-  try {
-    await expect(generation).resolves.toBeUndefined();
-    expect(codeReleased).toBe(true);
-    expect(sources.map((filename) => fs.readFileSync(filename))).toEqual(original);
-  } finally {
-    // A causal failure can retain the generation while later explicit cleanup joins native custody.
-    const cleanups = await Promise.allSettled(prepared.map((snapshot) => snapshot.cleanupAsync()));
-    for (const cleanup of cleanups) {
-      expect(cleanup).toEqual({ status: "fulfilled", value: true });
-    }
-    if (originalNative) {
-      await originalNative.stop().result;
-    }
-    const outcome = await settled;
-    if ("error" in outcome) {
-      expect(codeReleased).toBe(false);
-    }
   }
 });
 

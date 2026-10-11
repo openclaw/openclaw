@@ -7,6 +7,7 @@ import type {
   ControlUiSessionPullRequestSnapshot,
 } from "../../../src/gateway/control-ui-contract.js";
 import { i18n, t } from "../i18n/index.ts";
+import { registerGitHubEnglish } from "../i18n/locales/en-github.ts";
 import type { SidebarSessionHovercardRow } from "./app-sidebar-session-types.ts";
 import { icons } from "./icons.ts";
 import {
@@ -27,10 +28,12 @@ import "./session-hovercard.css";
 import "./tooltip.ts";
 import "./viewer-facepile.ts";
 
+registerGitHubEnglish();
+
 // Preserve the pre-dropdown facepile footprint; further identities remain linked in the menu.
 const MAX_VISIBLE_ATTRIBUTION_PARTICIPANTS = 4;
 
-function participantLabel(participant: SessionParticipant): string {
+export function participantLabel(participant: SessionParticipant): string {
   return participant.label?.trim() || participant.identity.id;
 }
 
@@ -113,7 +116,7 @@ function sessionAgeBucket(diffMs: number): { value: number; unit: SessionAgeUnit
   return bucketRelativeTimeMs(Math.abs(diffMs));
 }
 
-function formatSessionAge(timestamp: number | null | undefined, suffix: boolean): string {
+export function formatSessionAge(timestamp: number | null | undefined, suffix: boolean): string {
   if (typeof timestamp !== "number" || !Number.isFinite(timestamp)) {
     return "";
   }
@@ -148,7 +151,10 @@ function formatSessionAge(timestamp: number | null | undefined, suffix: boolean)
   }).format(value);
 }
 
-function sessionAttribution(row: SidebarSessionHovercardRow, selfUserId: string | undefined) {
+export function sessionAttribution(
+  row: SidebarSessionHovercardRow,
+  selfUserId: string | undefined,
+) {
   const creator = row.createdActor;
   const creatorLabel = creator?.label?.trim() || creator?.id?.trim();
   const participantIds = new Set<string>();
@@ -271,9 +277,9 @@ function renderSessionAttribution({
           .routeUrl=${row.channelAvatarUrl}
           .authTokens=${avatarAuth?.authTokens ?? []}
           .authReady=${avatarAuth?.authReady ?? false}
-          .fallback=${avatarFallback}
           aria-hidden="true"
-        ></openclaw-channel-avatar>`
+          >${avatarFallback}</openclaw-channel-avatar
+        >`
       : avatarPerson
         ? html`<openclaw-viewer-avatar
             class="session-hovercard__creator-avatar"

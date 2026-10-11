@@ -6,8 +6,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage, hasErrnoCode } from "../../infra/errors.js";
 import { removePathWithinRoot } from "../../infra/fs-safe-remove.js";
 import { pathExists, root } from "../../infra/fs-safe.js";
-import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
-import { executeOpenClawStateWorker } from "../../state/openclaw-state-worker-store.js";
+import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import {
   dispatchCommittedSkillChangeBestEffort,
   hasCommittedSkillChangeHooks,
@@ -23,9 +22,9 @@ import {
 import { parseSkillFrontmatter } from "../loading/frontmatter.js";
 import { bumpSkillsSnapshotVersion } from "../runtime/refresh-state.js";
 import { scanSkillFile, scanSupportFilePath } from "../security/skill-bundle-scan.js";
+import { recordWorkshopChange } from "./changes.js";
 import type { WorkshopActor, WorkshopChange } from "./changes.kernel.js";
 import { resolveSkillWorkshopConfig } from "./config.js";
-import { withSkillLocks } from "./skill-locks.js";
 import {
   listVersions,
   pruneVersions,
@@ -36,6 +35,8 @@ import {
   type WorkshopChangeAction,
 } from "./skill-versions.js";
 import { resolveWorkshopSkillsDir } from "./skills-root.js";
+
+export { listWorkshopChanges } from "./changes.js";
 
 export type WorkshopMutationContext = {
   config: OpenClawConfig;
@@ -69,12 +70,12 @@ const ARCHIVE_DIR = ".archive";
 // The Agent Skills limit. Authoring guidance asks for ~160 bytes, but a hard 160 cap forced
 // lossy description rewrites whenever a review patched an older skill, and blocked restores.
 const MAX_DESCRIPTION_BYTES = 1024;
-const MAX_CHANGES_LIMIT = 500;
 // New names follow the Agent Skills limit. Earlier releases named learned skills with
 // normalizeSkillIndexName and no length cap, so existing skills are matched by charset and
 // the filesystem's 255-byte name limit only; otherwise they stay loaded but unmanageable.
 const NEW_SKILL_NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,62}$/;
 const EXISTING_SKILL_NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,254}$/;
+const skillLocks = new KeyedAsyncQueue();
 
 function emptyForMissingDirectory(error: unknown): never[] {
   if (hasErrnoCode(error, "ENOENT")) {
@@ -309,6 +310,14 @@ async function requireLiveSkill(paths: SkillPaths, name: string): Promise<void> 
   );
 }
 
+/** Sorted acquisition keeps overlapping multi-skill mutations from deadlocking. */
+async function withSkillLocks<T>(keys: readonly string[], run: () => Promise<T>): Promise<T> {
+  const [first, ...rest] = [...new Set(keys)].toSorted((a, b) => a.localeCompare(b));
+  return first === undefined
+    ? await run()
+    : await skillLocks.enqueue(first, () => withSkillLocks(rest, run));
+}
+
 /** Serializes one skill's mutation, then publishes the snapshot bump and change row. */
 async function mutateSkill(
   ctx: WorkshopMutationContext,
@@ -352,10 +361,7 @@ async function mutateSkill(
       ...(ctx.runId ? { runId: ctx.runId } : {}),
       createdAtMs: Date.now(),
     };
-    await executeOpenClawStateWorker(captureOpenClawStateWorkerContext(), {
-      type: "skills.workshop.changes.record",
-      input: change,
-    });
+    await recordWorkshopChange(change);
     if (before || after) {
       await dispatchCommittedSkillChangeBestEffort({
         action: !before ? "created" : after ? "updated" : "removed",
@@ -668,20 +674,5 @@ export async function restoreWorkshopSkill(
       await fs.rm(staging, { recursive: true, force: true });
       await fs.rm(previous, { recursive: true, force: true });
     }
-  });
-}
-
-export async function listWorkshopChanges(
-  agentId: string,
-  options: { limit?: number; beforeMs?: number; runId?: string } = {},
-): Promise<WorkshopChange[]> {
-  return await executeOpenClawStateWorker(captureOpenClawStateWorkerContext(), {
-    type: "skills.workshop.changes.list",
-    input: {
-      agentId,
-      limit: Math.min(Math.max(Math.trunc(options.limit ?? 50), 1), MAX_CHANGES_LIMIT),
-      ...(options.beforeMs !== undefined ? { beforeMs: options.beforeMs } : {}),
-      ...(options.runId ? { runId: options.runId } : {}),
-    },
   });
 }

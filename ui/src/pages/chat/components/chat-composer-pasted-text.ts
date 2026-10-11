@@ -9,6 +9,7 @@ import {
 } from "../attachment-payload-store.ts";
 import type { ChatAttachmentControlsProps } from "./chat-attachment-controls.types.ts";
 import { currentAttachments, removeDraftAttachment } from "./chat-attachment-draft.ts";
+import { renderAttachmentRemove } from "./chat-attachment-file.ts";
 
 function readTextFromDataUrl(dataUrl: string): string | null {
   const match = /^data:([^,]*),(.*)$/s.exec(dataUrl);
@@ -110,16 +111,6 @@ export function renderComposerPastedText(att: ChatAttachment, props: ChatAttachm
     .scope=${att.id}
     .onOpen=${open}
     .composerAction=${renderRestoreAction()}
-    .composerRemoveAction=${html`<openclaw-tooltip .content=${removeLabel}>
-      <button
-        class="chat-attachment-remove"
-        type="button"
-        aria-label=${removeLabel}
-        ?disabled=${props.disabled}
-        @click=${remove}
-      >
-        ${icons.x}
-      </button>
-    </openclaw-tooltip>`}
+    .composerRemoveAction=${renderAttachmentRemove(removeLabel, props.disabled, remove)}
   ></openclaw-chat-pasted-text>`;
 }
