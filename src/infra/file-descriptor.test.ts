@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 import {
   copyFileHandle,
   hashFileDescriptorSync,
@@ -22,13 +23,22 @@ beforeEach(() => {
 afterEach(() => vi.restoreAllMocks());
 
 describe("pinned file descriptors", () => {
-  it.each(["hard link", "restored-mtime rewrite"] as const)(
-    "rechecks a %s between the digest and final path observation",
-    async (change) => {
+  it.each([
+    ["hard link", "native"],
+    ["restored-mtime rewrite", "native"],
+    ["hard link", "linux"],
+    ["restored-mtime rewrite", "linux"],
+    ["hard link", "android"],
+    ["restored-mtime rewrite", "android"],
+  ] as const)(
+    "rechecks a %s between the digest and final path observation (%s birthtime)",
+    async (change, birthtime) => {
+      if (birthtime !== "native") {
+        mockProcessPlatform(birthtime);
+      }
       const file = path.join(directory, "snapshot");
       await fs.writeFile(file, Buffer.alloc(8192, 0x61));
       await fs.utimes(file, 1_700_000_000, 1_700_000_000);
-      const expected = fsSync.lstatSync(file, { bigint: true });
       const read = fsSync.readSync;
       let hashed = false;
       vi.spyOn(fsSync, "readSync").mockImplementation((...args: Parameters<typeof read>) => {
@@ -38,6 +48,7 @@ describe("pinned file descriptors", () => {
       });
       let mutated = false;
       const advanceCtime = createFileMutationClock({
+        birthtimeFromCtime: birthtime !== "native",
         beforeLstatSync: (pathname) => {
           if (pathname !== file || !hashed || mutated) {
             return;
@@ -52,6 +63,7 @@ describe("pinned file descriptors", () => {
           advanceCtime(expected);
         },
       });
+      const expected = fsSync.lstatSync(file, { bigint: true });
       if (change === "hard link") {
         expect(hashFileMutationSnapshotSync(file, expected)).toBe(
           createHash("sha256").update(Buffer.alloc(8192, 0x61)).digest("hex"),
