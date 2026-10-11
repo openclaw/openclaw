@@ -15,7 +15,7 @@ import type { SessionEntryCreationOperation } from "./session-accessor.sqlite-en
 import type { SessionEntryCommitContext } from "./session-entry-commit-context.js";
 import type { SessionOwnerAssignment } from "./session-entry-provenance.js";
 import type { CapturedSessionEntryReadSource } from "./session-entry-read-source.types.js";
-import type { SessionEntryProjection } from "./session-entry-snapshots.js";
+import type { SessionEntryProjection } from "./session-entry-snapshot-values.js";
 import type { SessionSourceAssertion } from "./session-source-authority.js";
 import type { SessionTranscriptContextVersion } from "./session-transcript-context-version.types.js";
 import type {

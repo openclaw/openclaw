@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import fs, { type BigIntStats, type Stats } from "node:fs";
 import path from "node:path";
 import type { DatabaseSync as HandoffDatabase } from "node:sqlite";
+import { FsSafeError } from "@openclaw/fs-safe/errors";
 import { root as openLockRoot, type Root } from "@openclaw/fs-safe/root";
 import { sql } from "kysely";
 import { z } from "zod";
@@ -239,20 +240,24 @@ function createMissingDatabaseFile(
   parentReceipt: HandoffDirectoryReceipt,
 ): void {
   let descriptor: number | undefined;
+  let privateFile: ReturnType<typeof createPrivateWindowsFile> | undefined;
   try {
-    descriptor =
-      process.platform === "win32"
-        ? createPrivateWindowsFile(databasePath)
-        : fs.openSync(
-            databasePath,
-            fs.constants.O_RDWR |
-              fs.constants.O_CREAT |
-              fs.constants.O_EXCL |
-              fs.constants.O_NOFOLLOW,
-            0o600,
-          );
+    if (process.platform === "win32") {
+      privateFile = createPrivateWindowsFile(databasePath);
+      descriptor = privateFile.fd;
+    } else {
+      descriptor = fs.openSync(
+        databasePath,
+        fs.constants.O_RDWR | fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_NOFOLLOW,
+        0o600,
+      );
+    }
   } catch (error) {
-    if (!hasErrnoCode(error, "EEXIST")) {
+    const alreadyExists =
+      process.platform === "win32"
+        ? error instanceof FsSafeError && error.code === "already-exists"
+        : hasErrnoCode(error, "EEXIST");
+    if (!alreadyExists) {
       throw error;
     }
   }
@@ -277,7 +282,9 @@ function createMissingDatabaseFile(
     const directorySync = syncDirectorySync(parentReceipt);
     requireDirectorySync(directorySync, "Managed handoff lease directory");
   } finally {
-    if (descriptor !== undefined) {
+    if (privateFile) {
+      privateFile.close();
+    } else if (descriptor !== undefined) {
       fs.closeSync(descriptor);
     }
   }

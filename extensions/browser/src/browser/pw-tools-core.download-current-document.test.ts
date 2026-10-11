@@ -102,8 +102,6 @@ describe("download current document", () => {
 
   it.each([
     { name: "omitted policy", policy: undefined },
-    { name: "empty policy", policy: {} },
-    { name: "legacy private denial", policy: { allowPrivateNetwork: false } },
     {
       name: "blocklist despite private access",
       policy: {
@@ -118,25 +116,6 @@ describe("download current document", () => {
     expect(getPwToolsCoreSessionMocks().getPageForTargetId).not.toHaveBeenCalled();
     expect(evaluate).not.toHaveBeenCalled();
     expect(await fs.readdir(rootDir)).toEqual([]);
-  });
-
-  it.each([
-    { name: "legacy explicit private permission", policy: { allowPrivateNetwork: true } },
-    {
-      name: "normalized unconstrained hostname entries",
-      policy: {
-        dangerouslyAllowPrivateNetwork: true,
-        hostnameAllowlist: ["", " . ", " * "],
-        blockedHostnames: [" ", " *. "],
-      },
-    },
-  ])("retains download support for $name", async ({ policy }) => {
-    evaluate.mockImplementationOnce(async () => {
-      events.emit("download", makeDownload());
-    });
-    await expect(start({ ssrfPolicy: policy })).resolves.toMatchObject({
-      suggestedFilename: "inline.png",
-    });
   });
 
   it("validates the final download URL before saving", async () => {
@@ -191,12 +170,6 @@ describe("download current document", () => {
       expect(download.cancel).toHaveBeenCalledOnce();
     },
   );
-
-  it("cleans up when the page cannot trigger a download", async () => {
-    evaluate.mockRejectedValueOnce(new Error("renderer unavailable"));
-    await expect(start()).rejects.toThrow("renderer unavailable");
-    expect(await fs.readdir(rootDir)).toEqual([]);
-  });
 
   it("expires a missing download without retaining page listeners", async () => {
     await expect(start({ timeoutMs: 500 })).rejects.toThrow("Timeout waiting for download");

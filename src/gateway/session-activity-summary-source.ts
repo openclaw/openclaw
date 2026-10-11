@@ -16,7 +16,6 @@ import {
   prepareSqliteTranscriptReadScope,
   toDatabaseOptions,
 } from "../config/sessions/session-accessor.sqlite-scope.js";
-import { readSessionTranscriptWatermarkInDatabase } from "../config/sessions/session-accessor.sqlite-transcript-watermark.js";
 import { resolveSessionTranscriptReadFence } from "../config/sessions/session-transcript-read-fence.js";
 import { startSessionTranscriptIndexReconcile } from "../config/sessions/session-transcript-reconcile.js";
 import { redactToolPayloadText } from "../logging/redact.js";
@@ -51,10 +50,10 @@ export function readActivitySummaryBatch(
       ) {
         previous = undefined;
       }
-      const watermark = readSessionTranscriptWatermarkInDatabase(
-        projection.database,
-        projection.resolved.sessionId,
-      );
+      const watermark = {
+        generation: projection.version.generation,
+        maxSeq: projection.version.rawSeq,
+      };
       const covered = previous?.coveredMessages ?? 0;
       let batchSize = Math.min(64, snapshot.totalMessages - covered);
       const readPage = (maxMessages: number, includeEarlier = false) =>

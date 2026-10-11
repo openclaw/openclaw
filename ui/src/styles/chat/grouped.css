@@ -1600,9 +1600,7 @@ button.chat-reply-attribution__target:disabled {
 
 .chat-group.user.chat-group--peer
   .chat-bubble--with-images
-  > .chat-message-avatar-anchor:not(
-    :has(.chat-text, .chat-message-disclosure, .chat-json-collapse)
-  ) {
+  > .chat-message-avatar-anchor:not(:has(.chat-text, .chat-message-disclosure)) {
   display: contents;
 }
 

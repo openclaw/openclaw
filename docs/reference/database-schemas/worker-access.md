@@ -26,6 +26,20 @@ paths are migration debt, not a pattern to extend. The
 [migration inventory](/reference/database-schemas/worker-access-inventory) separates
 candidate main-thread paths from SQL already executing in workers.
 
+Managed outgoing media cleanup uses the same retained session reader as media
+serving. Durable session discovery and entry reads execute in the existing
+read workers; bound incognito reads use their actor. Cleanup distinguishes an
+unavailable or ambiguous store from a missing transcript reference and retains
+media when ownership cannot be read. It no longer keeps a separate native
+session selector or discovery cache. Stored media, retention policy, schemas,
+and update behavior are unchanged.
+
+Session accessor kernels remain mixed where released synchronous SDK methods,
+opaque transaction callbacks, or unbound process-held incognito readers still
+call them. A worker caller does not make the shared kernel worker-only. The
+inventory retains those calls as migration debt; raw-row removal guarded by
+Doctor's `expectedRawEntryJson` variant is an offline repair exception.
+
 Node-host configuration writes and one-use GitHub setup handoffs use the existing
 shared-state writer. Handoff consumption deletes and returns the matching live
 row in one statement, so concurrent consumers cannot reuse it. Configuration
@@ -241,6 +255,29 @@ Authored config files, compare-and-set checks, rollback, audit, and metadata
 semantics are unchanged.
 
 ## SDK session writer migration
+
+Historical dashboard title generation uses the same awaited transcript reader as
+incognito title generation. Its bounded title probes and watermark cache run in
+the existing history worker. Full suffix replacement derives its retained prefix
+from the canonical rows already compared inside the writer transaction; it does
+not reread the derived active-event prefix. Unsupported direct edits to derived
+rows are repaired by reconciliation rather than checked on every replacement.
+
+The session S–Z inventory still includes shared native kernels. They must not be
+marked worker-only merely because their ordinary durable callers use workers:
+
+| Native owner                            | Shared kernels and remaining contract                                                                                                                                                                                                                                                                |
+| --------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| SessionManager and transcript SDK       | Suffix reads/writes, transcript state, identity, parent, store, cursors, snapshots, statistics, anchors, and message rewrite retain released synchronous methods and opaque callbacks.                                                                                                               |
+| Unbound incognito storage               | Reports, projection reconciliation, search, matching, cold storage, eviction, pending inputs, categories, reactions, and suggestions still accept process-held native databases. Actor-bound callers use the existing workers; retiring the native paths requires the incognito acquisition cutover. |
+| Synchronous completion and dispatch     | Pending-input completion and turn append retain released callbacks. Chat-start acceptance and CLI history effect guards also retain native watermark reads.                                                                                                                                          |
+| Sharing and worktree authority          | Membership/source-disclosure and worktree-deletion guards retain their current native checks at the effect boundary.                                                                                                                                                                                 |
+| Store discovery and canonical admission | Native fixed-store topology, cleanup selection, and canonical-key admission remain mixed with worker readers. The pending-canonical-validation probe is startup/Doctor-only; runtime carries its captured source to the worker.                                                                      |
+
+These are explicit residuals, not additional synchronous exceptions. Their owner
+cutovers must preserve the released contracts and remove the superseded native
+paths together. Shared snapshot and payload kernels keep SQL-side projections
+that avoid materializing large retained values.
 
 Session entry SDK callers use `prepareSessionEntryPatch` for one host preparation
 followed by the existing exact-snapshot worker commit, or `applySessionEntryPatch`
@@ -682,11 +719,22 @@ completion contract.
 
 ### Session phase actor
 
-The shared session actor contract serves durable and incognito sessions. The actor
-lives inside the canonical agent execution worker and shares its physical writer
-queue; it does not introduce another database, worker service, or writer owner.
-Durable actors bind the physical database identity and session key. Incognito
-actors bind the existing memory database's handle and incarnation.
+The shared session actor contract separates phase batching and caller lifetime
+from storage. The durable backend lives inside the canonical agent execution
+worker and shares its physical writer queue. The memory backend owns incognito
+entries, transcript bytes, pending inputs, and completion outcomes in process
+memory. It opens no SQLite database and allocates no database worker. Backend
+selection happens once at acquisition; commands never fall back to another store.
+
+Memory actors serialize commands for the same session and publish complete
+postimages before acknowledgement. Releasing a caller drains its accepted work
+without deleting the session. Session closure invalidates its old handles and
+discards its state; database closure discards all of that owner's sessions. A
+later acquisition creates empty state without reviving an old handle. A process
+exit loses this memory by design. Existing transport teardown still guards
+external effects; work already handed to a transport may finish during closure.
+Talk's voice-session metadata retains its separately selected durable owner;
+incognito transcript storage does not change its reservation or confirmation contract.
 
 Native incognito acquisition returns `not-actor-owned`; those sessions keep
 their existing owner and get no actor savings until Phase E / P12. The actor
@@ -694,7 +742,9 @@ has no native incognito adapter. Worker-backed incognito acquisition selects
 the captured memory execution owner. Closing that owner invalidates captured
 targets; acquisition cannot revive its old run authority or create a replacement
 memory database. Follow-on input, turn, and delivery cutovers must honor the
-native decline until P12 selects the worker-backed actor.
+native decline until all entry, transcript, history, and side-data consumers move
+to the memory backend together. Explicit memory acquisition is available for that
+cutover; it never mirrors an existing native or worker-backed incognito database.
 
 Agent attempts retain this actor for SessionManager transcript and tool-result
 appends. Each append captures its exact committed snapshot before fallible
@@ -752,6 +802,9 @@ The MAIN replica retains complete committed hot state. A synchronous snapshot
 reads installed facts; an ordered read joins the existing physical writer FIFO
 and requests actor state only on a miss. Commit receipts identify the command,
 phase, and before/after version, and install before command acknowledgement.
+If a receipt supersedes an in-flight read, that read uses the current replica.
+An empty replica permits one worker-read retry. A replacement before disclosure
+is reacquired once and authorized again; revoked authority still refuses the read.
 Existing session publications and in-process write receipts invalidate only
 the affected logical keys and shared transcript/window dependencies. Unrelated
 session snapshots survive. Raw writes with unknown coverage, schema changes,
@@ -951,6 +1004,15 @@ migrations are complete. Outside writers must use the Gateway or hold exclusive
 ownership while it is stopped. Schemas, stored bytes, retention, and update
 behavior are unchanged; published updaters need no migration for these
 process-local facts.
+
+Transcript projection readers carry generation, raw sequence, mutation time, and
+cold-state facts through their existing synchronous read snapshot. Bounded context
+consumers reuse those facts for watermark and hot-state reads; managed native writes,
+rollback, and the end of the snapshot retire them. Activity recap selection, ancestry,
+and byte-bounded pages share that same snapshot rather than reopening it for each
+step. The SQL projections that exclude large payloads remain in the database.
+These facts do not replace live permission or replay-admission checks. No schema,
+retention, stored bytes, or update behavior changes.
 
 ### Approval, placement, and workspace receipts
 

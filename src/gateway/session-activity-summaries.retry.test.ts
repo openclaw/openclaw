@@ -223,6 +223,41 @@ describe("Activity recap admission, refresh, and provider recovery", () => {
     expect(readWatermark).not.toHaveBeenCalled();
   });
 
+  it("refreshes the bounded recap source after a committed append", async () => {
+    const target = await addSession(1);
+    const transcript = scope(target);
+    const initial = readActivitySummaryBatch({ scope: transcript })!;
+    expect(initial.snapshot.totalMessages).toBe(1);
+    expect(initial.page.events).toMatchObject([
+      { event: { message: { role: "user", content: "Request 1" } } },
+    ]);
+    const previous = {
+      version: 1 as const,
+      formatRevision: ACTIVITY_SUMMARY_FORMAT_REVISION,
+      text: result.text,
+      updatedAt: 1,
+      sessionId: transcript.sessionId,
+      ...initial.watermark,
+      leafEntryId: initial.snapshot.activeLeafEntryId ?? null,
+      coveredMessages: 1,
+      totalMessages: 1,
+      omittedContent: false,
+    };
+
+    await appendWork(target);
+
+    const appended = readActivitySummaryBatch({ scope: transcript, previous })!;
+    expect(appended.covered).toBe(1);
+    expect(appended.snapshot.totalMessages).toBe(2);
+    expect(appended.page.scannedMessages).toBe(1);
+    expect(appended.page.events).toMatchObject([
+      { event: { message: { role: "assistant", content: "Verified additional work." } } },
+    ]);
+    expect(appended.watermark.generation).toBe(initial.watermark.generation);
+    expect(appended.watermark.maxSeq).toBeGreaterThan(initial.watermark.maxSeq!);
+    expect(appended.omitted).toBe(false);
+  });
+
   it("rebuilds a dirty imported projection before retrying the recap", async () => {
     const target = { agentId: "main", key: "agent:main:unindexed-recap" };
     const transcript = scope(target);

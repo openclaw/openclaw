@@ -147,7 +147,7 @@ it.each(["none", "middleware", "handler"] as const)(
           ...defaultTelegramBotDeps,
           syncTelegramMenuCommands: (params) => (menuSync = syncTelegramMenuCommands(params)),
           getRuntimeConfig: () => cfg,
-          listSkillCommandsForAgents: () => [],
+          prepareSkillCommandsForAgents: async () => [],
           readChannelAllowFromStore: async () => [],
         },
         runtime: {
