@@ -28,6 +28,7 @@ import {
 import {
   appendSessionTranscriptMessageByIdentity,
   readLatestAssistantTextByIdentity,
+  readVisibleSessionTranscriptMessageEntries,
 } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -145,6 +146,60 @@ describe("Telegram typed command delivery", () => {
         reply_parameters: expect.objectContaining({ message_id: 100, quote: "Photo to check" }),
       }),
     );
+  });
+
+  it("records a quoted command once when native quoting requires fallback delivery", async () => {
+    const cfg = commandConfig();
+    cfg.channels!.telegram!.replyToMode = "first";
+    const scope = {
+      agentId: "main",
+      sessionKey: "agent:main:main",
+      sessionId: "quoted-command",
+      storePath: cfg.session!.store!,
+    };
+    await upsertSessionEntry({
+      ...scope,
+      entry: { sessionId: scope.sessionId, updatedAt: 1 },
+    });
+    await appendSessionTranscriptMessageByIdentity({
+      ...scope,
+      message: { role: "assistant", content: "Earlier answer", timestamp: 1 },
+    });
+    harness.replySpy.mockResolvedValue({ text: "Thinking level set to low.", replyToId: "30102" });
+    const bot = await createBot(true, true, cfg);
+    await bot.handleUpdate({
+      update_id: 3002,
+      message: {
+        ...commandMessage("/think low"),
+        message_id: 30102,
+        reply_to_message: {
+          message_id: 100,
+          date: 1736380790,
+          chat,
+          from,
+          text: "Earlier answer",
+        },
+        quote: { text: "Earlier answer", position: 0 },
+      },
+    });
+    expect(apiCalls).toHaveBeenCalledWith(
+      "sendMessage",
+      expect.objectContaining({
+        text: "Thinking level set to low.",
+        reply_parameters: expect.objectContaining({ message_id: 100, quote: "Earlier answer" }),
+      }),
+    );
+    const messages = (await readVisibleSessionTranscriptMessageEntries(scope)).map(
+      ({ message }) => ({
+        role: message.role,
+        content: message.content,
+      }),
+    );
+    expect(messages).toEqual([
+      { role: "assistant", content: "Earlier answer" },
+      { role: "user", content: [{ type: "text", text: "/think low" }] },
+      { role: "assistant", content: [{ type: "text", text: "Thinking level set to low." }] },
+    ]);
   });
 
   it("preserves the builtin catalog choice when a plugin registers fast", async () => {

@@ -12,7 +12,11 @@ import {
 } from "openclaw/plugin-sdk/channel-outbound";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime";
-import { copyReplyPayloadMetadata, type ReplyPayload } from "openclaw/plugin-sdk/reply-payload";
+import {
+  copyReplyPayloadMetadata,
+  hasReplyPayloadFinalDeliveryCapture,
+  type ReplyPayload,
+} from "openclaw/plugin-sdk/reply-payload";
 import { isSingleUseReplyToMode } from "openclaw/plugin-sdk/reply-reference";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import {
@@ -283,7 +287,10 @@ export async function sendPayload(
     }
   }
   try {
-    const transcriptMirror = createTelegramTranscriptMirror(turn, sourceTurn);
+    // The shared dispatcher records this exchange after delivery completes.
+    const transcriptMirror = hasReplyPayloadFinalDeliveryCapture(payload)
+      ? undefined
+      : createTelegramTranscriptMirror(turn, sourceTurn);
     const result = await (turn.telegramDeps.deliverStructuredReplies ?? deliverStructuredReplies)({
       ...createDeliveryBaseOptions(turn),
       replyToMode: effectiveReplyToMode,
