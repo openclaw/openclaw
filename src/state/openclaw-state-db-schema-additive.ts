@@ -1,10 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
-import { parseSqliteTableDefinition } from "../infra/sqlite-schema-contract-assembly.js";
 import { assertSqliteSchemaContains } from "../infra/sqlite-schema-contract.js";
-import {
-  getAdmittedSqliteSchemaFacts,
-  type SqliteSchemaFacts,
-} from "../infra/sqlite-schema-facts.js";
 import { extractSqliteTableSchema } from "../infra/sqlite-schema-sql.js";
 import {
   ORDERED_STARTUP_ADDITIVE_STATE_COLUMNS as columns,
@@ -33,8 +28,7 @@ function ensureTable(
 
 export function ensureRepositoryWorkspacePendingResultSchema(database: DatabaseSync): void {
   const table = "worker_workspace_pending_results";
-  const sql = getAdmittedSqliteSchemaFacts(database)?.tableSql.get(table);
-  if (sql && parseSqliteTableDefinition(sql, table).columns.has("repository_workspace_id")) {
+  if (tableHasColumn(database, table, "repository_workspace_id")) {
     return;
   }
   ensureColumn(database, table, "repository_workspace_id TEXT");
@@ -96,22 +90,8 @@ export function ensureConfigRevisionKeySchema(database: DatabaseSync): void {
   });
 }
 
-const journalAvailability = new WeakMap<SqliteSchemaFacts, boolean>();
-
 export function assertAgentDeletionJournalAvailable(database: DatabaseSync): void {
-  const schema = getAdmittedSqliteSchemaFacts(database);
-  let available = schema && journalAvailability.get(schema);
-  if (available === undefined) {
-    const sql = schema?.tableSql.get("agent_deletion_journal");
-    available = schema
-      ? sql !== undefined &&
-        parseSqliteTableDefinition(sql, "agent_deletion_journal").columns.has("agent_id")
-      : tableHasColumn(database, "agent_deletion_journal", "agent_id");
-    if (schema) {
-      journalAvailability.set(schema, available);
-    }
-  }
-  if (!available) {
+  if (!tableHasColumn(database, "agent_deletion_journal", "agent_id")) {
     throw new Error(
       "Agent deletion journal missing; run openclaw doctor --fix to reconstruct it before restoring or deleting agents.",
     );
@@ -133,8 +113,7 @@ export function reconstructAgentDeletionJournalSchema(
 }
 
 export function ensureAgentDatabaseLeaseSchema(database: DatabaseSync): void {
-  const sql = getAdmittedSqliteSchemaFacts(database)?.tableSql.get("agent_database_leases");
-  if (sql && parseSqliteTableDefinition(sql, "agent_database_leases").columns.has("provenance")) {
+  if (tableHasColumn(database, "agent_database_leases", "provenance")) {
     return;
   }
   ensureTable(database, "agent_database_leases");
