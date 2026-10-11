@@ -22,7 +22,9 @@ export function createMarkdownRef(
   createEffect(
     () => [owner(), read()] as const,
     ([reconciler, value]) => {
-      if (!reconciler) return;
+      if (!reconciler) {
+        return;
+      }
       reconciler.setConnected(value.connected ?? true);
       if (typeof value.content === "string") {
         reconciler.updateHtml(value.content, value.media, value.incremental);
