@@ -252,12 +252,12 @@ function TriggerRows(props: CronProps) {
                     id="cron-trigger-script"
                     class="settings-input cron-trigger-script mono"
                     rows="8"
-                    spellCheck="false"
+                    spellcheck="false"
                     aria-invalid={props.fieldErrors.triggerScript ? "true" : "false"}
                     aria-describedby={
                       props.fieldErrors.triggerScript ? errorIdForField("triggerScript") : undefined
                     }
-                    prop:value={props.form.triggerScript}
+                    value={props.form.triggerScript}
                     onInput={(event) => {
                       const target = event.currentTarget;
                       if (target instanceof HTMLTextAreaElement) {

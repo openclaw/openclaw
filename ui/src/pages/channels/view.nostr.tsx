@@ -73,7 +73,7 @@ export function NostrCard(props: ChannelsProps) {
       | NostrProfile
       | null
       | undefined;
-    return accountProfile ?? nostr()?.profile;
+    return accountProfile ?? nostr()?.profile ?? null;
   });
   const renderProfileSection = () => {
     const { name, displayName, about, picture, nip05 } = profile() ?? {};

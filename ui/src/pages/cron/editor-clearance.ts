@@ -1,9 +1,9 @@
 /** Reserve the part of the existing scrollport obscured by sticky actions. */
-export function reserveCronEditorClearance(host: HTMLElement) {
+export function reserveCronEditorClearance(host: HTMLElement): (() => void) | undefined {
   const footer = host.querySelector<HTMLElement>(".cron-editor-actions");
   const scroller = host.closest<HTMLElement>(".content");
   if (!footer || !scroller) {
-    return;
+    return undefined;
   }
   const previousPadding = scroller.style.scrollPaddingBlockEnd;
   const measure = () => {

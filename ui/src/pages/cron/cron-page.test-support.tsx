@@ -174,7 +174,8 @@ export function createPage(
   context: ApplicationContext,
   options: { render?: boolean } = {},
 ): CronTestPage {
-  const page = document.createElement("div") as CronTestPage;
+  // SAFETY: The native mount host receives the controller facade below before it is returned.
+  const page = document.createElement("section") as CronTestPage;
   document.body.append(page);
   let controller!: CronPageController;
   let hideView!: () => void;

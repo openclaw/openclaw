@@ -141,7 +141,7 @@ function Toolbar(
             <input
               type="search"
               class="settings-input"
-              prop:value={props.jobsQuery}
+              value={props.jobsQuery}
               aria-label={t("cron.list.searchPlaceholder")}
               placeholder={t("cron.list.searchPlaceholder")}
               onInput={(e) =>

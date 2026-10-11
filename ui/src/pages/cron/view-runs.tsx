@@ -215,7 +215,7 @@ export function RunsSection(props: CronRunsSectionProps) {
   const sortLabel = () =>
     props.runsSortDir === "asc" ? t("cron.runs.oldestFirst") : t("cron.runs.newestFirst");
   return (
-    <div class="cron-runs" aria-busy={String(props.runsState === "pending")}>
+    <div class="cron-runs" aria-busy={props.runsState === "pending" ? "true" : "false"}>
       {props.conditionActivity ? (
         <ConditionActivity activity={props.conditionActivity} />
       ) : undefined}
@@ -227,7 +227,7 @@ export function RunsSection(props: CronRunsSectionProps) {
           <input
             type="search"
             class="settings-input"
-            prop:value={props.runsQuery}
+            value={props.runsQuery}
             aria-label={t("cron.runs.searchRuns")}
             placeholder={t("cron.runs.searchPlaceholder")}
             onInput={(e) =>
@@ -297,13 +297,19 @@ export function RunsSection(props: CronRunsSectionProps) {
               <span>{sortLabel()}</span>
               <Icon name="chevronDown" />
             </button>
-            <wa-dropdown-item value="desc" aria-current={String(props.runsSortDir === "desc")}>
+            <wa-dropdown-item
+              value="desc"
+              aria-current={props.runsSortDir === "desc" ? "true" : "false"}
+            >
               {t("cron.runs.newestFirst")}
               <span slot="details" aria-hidden="true">
                 {props.runsSortDir === "desc" ? <Icon name="check" /> : undefined}
               </span>
             </wa-dropdown-item>
-            <wa-dropdown-item value="asc" aria-current={String(props.runsSortDir === "asc")}>
+            <wa-dropdown-item
+              value="asc"
+              aria-current={props.runsSortDir === "asc" ? "true" : "false"}
+            >
               {t("cron.runs.oldestFirst")}
               <span slot="details" aria-hidden="true">
                 {props.runsSortDir === "asc" ? <Icon name="check" /> : undefined}

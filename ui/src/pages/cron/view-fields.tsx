@@ -149,7 +149,7 @@ export function CronInput(props: FormProps & CronInputOptions) {
       class={props.mono ? "settings-input mono" : "settings-input"}
       type={props.type}
       aria-required={props.required ? "true" : undefined}
-      prop:value={props.form[props.field]}
+      value={props.form[props.field]}
       list={props.list}
       disabled={props.disabled ?? false}
       aria-invalid={props.errorKey ? (error() ? "true" : "false") : undefined}

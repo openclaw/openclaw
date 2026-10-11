@@ -200,14 +200,16 @@ export function renderChannelPairingQueue(props: ChannelsProps) {
             ) : (
               requests().map((request) => renderRequest(request, props))
             )}
-            {snapshot() ? (
-              <div class="channels-pairing-help">
-                {t("channels.pairing.limits", {
-                  count: String(snapshot().limits.pendingPerAccount),
-                  minutes: String(Math.round(snapshot().limits.ttlMs / 60_000)),
-                })}
-              </div>
-            ) : undefined}
+            <Show when={snapshot()}>
+              {(current) => (
+                <div class="channels-pairing-help">
+                  {t("channels.pairing.limits", {
+                    count: String(current().limits.pendingPerAccount),
+                    minutes: String(Math.round(current().limits.ttlMs / 60_000)),
+                  })}
+                </div>
+              )}
+            </Show>
           </>
         )}
       </SettingsSection>
@@ -295,7 +297,7 @@ function PairingPromptContent(params: {
     <label class="channels-pairing-dialog__option">
       <input
         type="checkbox"
-        prop:checked={params.prompt[field]}
+        checked={params.prompt[field]}
         onChange={(event) =>
           params.props.onPairingPromptChange({ [field]: event.currentTarget.checked })
         }

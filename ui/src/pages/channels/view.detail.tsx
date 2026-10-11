@@ -182,7 +182,7 @@ function ChannelStatusBody(params: {
           <button
             class="btn"
             disabled={params.props.channels.channelsLoading}
-            aria-busy={String(params.props.channels.channelsLoading)}
+            aria-busy={params.props.channels.channelsLoading ? "true" : "false"}
             onClick={() => params.props.onRefresh(true)}
           >
             {t(params.props.channels.channelsLoading ? "common.refreshing" : "common.probe")}

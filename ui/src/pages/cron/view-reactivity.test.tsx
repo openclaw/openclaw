@@ -64,7 +64,7 @@ it("publishes refreshed runtime facts from the mutable selected job", () => {
   expect(counts()[0]).toBe("2");
 });
 
-it("keeps the pagination count and load action current while the next page is pending", () => {
+it("keeps pagination and suggestion nodes current while a query is pending", () => {
   const onLoadMoreJobs = vi.fn();
   const [props, setProps] = createSignal(
     createCronViewProps({
@@ -72,18 +72,38 @@ it("keeps the pagination count and load action current while the next page is pe
       jobsTotal: 12,
       jobsHasMore: true,
       onLoadMoreJobs,
+      timezoneSuggestions: ["UTC", "Europe/Vienna"],
     }),
   );
   const view = mountSolid(() => <CronView {...props()} />);
   const button = getElement(view.container, ".cron-load-more", HTMLButtonElement);
+  const timezones = getElement(view.container, "#cron-tz-suggestions", HTMLDataListElement);
+  const options = [...timezones.querySelectorAll("option")];
+  expect(options.map((option) => option.value)).toEqual(["UTC", "Europe/Vienna"]);
   expect(view.container.querySelector(".cron-table__footer")?.textContent).toContain("2 of 12");
   button.click();
   expect(onLoadMoreJobs).toHaveBeenCalledOnce();
-  setProps((previous) => ({ ...previous, jobsLoadingMore: true }));
+  setProps((previous) => ({
+    ...previous,
+    jobsQuery: "i",
+    loading: true,
+    jobsLoadingMore: true,
+    timezoneSuggestions: [...previous.timezoneSuggestions],
+  }));
   flush();
   expect(view.container.querySelector(".cron-load-more")).toBe(button);
   expect(button.disabled).toBe(true);
   expect(button.textContent).toContain("Loading");
+  expect(view.container.querySelector("#cron-tz-suggestions")).toBe(timezones);
+  expect(timezones.querySelectorAll("option")[0]).toBe(options[0]);
+  expect(timezones.querySelectorAll("option")[1]).toBe(options[1]);
+  setProps((previous) => ({ ...previous, timezoneSuggestions: ["Europe/Vienna", "Asia/Tokyo"] }));
+  flush();
+  expect(view.container.querySelector("#cron-tz-suggestions")).toBe(timezones);
+  expect([...timezones.querySelectorAll("option")].map((option) => option.value)).toEqual([
+    "Europe/Vienna",
+    "Asia/Tokyo",
+  ]);
 });
 
 it("retains history controls and forwards the current transcript target after refresh", () => {

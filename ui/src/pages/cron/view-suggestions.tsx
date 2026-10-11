@@ -12,7 +12,7 @@ export function CronSuggestionLists(
     | "accountSuggestions"
   >,
 ) {
-  return createMemo(() =>
+  const lists = createMemo(() =>
     Object.entries({
       "cron-agent-suggestions": props.agentSuggestions,
       "cron-thinking-suggestions": props.thinkingSuggestions,
@@ -20,13 +20,17 @@ export function CronSuggestionLists(
       "cron-delivery-to-suggestions": props.deliveryToSuggestions,
       "cron-failure-alert-to-suggestions": props.failureAlertToSuggestions,
       "cron-delivery-account-suggestions": props.accountSuggestions,
-    }).map(([id, options]) => {
-      const clean = normalizeUniqueStringEntries(options);
-      return clean.length === 0 ? undefined : (
-        <datalist id={id}>
-          <For each={clean}>{(value) => <option value={value} />}</For>
+    })
+      .map(([id, options]) => ({ id, options: normalizeUniqueStringEntries(options) }))
+      .filter((list) => list.options.length > 0),
+  );
+  return (
+    <For each={lists()} keyed={(list) => list.id}>
+      {(list) => (
+        <datalist id={list().id}>
+          <For each={list().options}>{(value) => <option value={value} />}</For>
         </datalist>
-      );
-    }),
+      )}
+    </For>
   );
 }

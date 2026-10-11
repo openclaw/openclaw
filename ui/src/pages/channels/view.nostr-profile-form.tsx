@@ -72,7 +72,7 @@ export function renderNostrProfileForm(params: {
       <textarea
         id={inputId}
         class="settings-input"
-        prop:value={value()}
+        value={value()}
         placeholder={t(`channels.nostr.${placeholderKey}`)}
         maxlength="2000"
         rows="3"
@@ -86,7 +86,7 @@ export function renderNostrProfileForm(params: {
         id={inputId}
         class="settings-input"
         type={type}
-        prop:value={value()}
+        value={value()}
         placeholder={t(`channels.nostr.${placeholderKey}`)}
         maxlength="256"
         aria-describedby={descriptionIds() || undefined}
@@ -198,7 +198,7 @@ export function renderNostrProfileForm(params: {
 
           <button
             class="btn"
-            aria-expanded={String(params.state.showAdvanced)}
+            aria-expanded={params.state.showAdvanced ? "true" : "false"}
             onClick={() => params.callbacks.onToggleAdvanced()}
           >
             {params.state.showAdvanced ? t("common.hideAdvanced") : t("common.showAdvanced")}

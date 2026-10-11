@@ -11,6 +11,7 @@ import { applicationContext, type ApplicationContext } from "../app/context.ts";
 import { shellLayoutOwnerForHost } from "../app/shell-layout-owner.ts";
 import { ShellLayoutProvider } from "../app/shell-layout-traits-solid.tsx";
 import { ApplicationProvider } from "../lib/reactive/context.ts";
+export type * from "../types/solid-elements.d.ts";
 
 type Property<T> = {
   default: T;

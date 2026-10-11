@@ -30,7 +30,7 @@ function JobsFilter(
       <select
         class="settings-select"
         data-test-id={props.testId}
-        prop:value={props.value}
+        value={props.value}
         onChange={(event: Event) => {
           if (event.currentTarget instanceof HTMLSelectElement) {
             void props.onJobsFiltersChange({

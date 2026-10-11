@@ -52,7 +52,7 @@ export function Editor(
     <fieldset
       class="cron-editor"
       disabled={props.busy || !props.canManage || systemOwned()}
-      aria-busy={String(props.busy)}
+      aria-busy={props.busy ? "true" : "false"}
     >
       <PromptSection {...props} payloadLocked={payloadLocked()} isAgentTurn={isAgentTurn()} />{" "}
       <GeneralSection {...props} />
@@ -196,7 +196,7 @@ function PromptSection(
               id="cron-payload-text"
               class="code-block cron-payload-code"
               data-test-id="cron-payload-code"
-              tabIndex="0"
+              tabindex="0"
               role="region"
               aria-label={promptLabel()}
             >
@@ -211,8 +211,8 @@ function PromptSection(
               id="cron-payload-text"
               class="settings-input"
               rows="6"
-              prop:value={payloadText()}
-              readOnly={props.payloadLocked}
+              value={payloadText()}
+              readonly={props.payloadLocked}
               aria-required="true"
               placeholder={t("cron.form.promptPlaceholder")}
               aria-invalid={props.fieldErrors.payloadText ? "true" : "false"}
@@ -236,8 +236,8 @@ function PromptSection(
             <input
               id={inputIdForField("payloadKind")}
               class="settings-input"
-              prop:value={lockedPayloadLabel()}
-              readOnly
+              value={lockedPayloadLabel()}
+              readonly
             />
           }
         />

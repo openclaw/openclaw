@@ -1,5 +1,6 @@
 import { render, nothing } from "lit";
 import { createEffect, onCleanup, untrack } from "solid-js";
+export type * from "../types/solid-elements.d.ts";
 
 /** A temporary leaf boundary for shared template helpers whose owners still use Lit. */
 export function LitContent(props: {

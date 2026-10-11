@@ -1,4 +1,3 @@
-import { createMemo } from "solid-js";
 import { isSystemMonitorDeclaration } from "../../../../src/cron/system-owned-declaration.js";
 import type { CronJob } from "../../api/types.ts";
 import { Icon } from "../../components/solid/icon.tsx";
@@ -7,24 +6,28 @@ import { t } from "../../lib/reactive/i18n.ts";
 import type { CronProps } from "./view-types.ts";
 import "../../components/web-awesome.ts";
 export function ErrorBanner(props: { error: string | null }) {
-  return createMemo(() =>
-    props.error ? (
-      <div class="cron-error-banner" role="alert">
-        {props.error}
-      </div>
-    ) : undefined,
+  return (
+    <>
+      {props.error ? (
+        <div class="cron-error-banner" role="alert">
+          {props.error}
+        </div>
+      ) : undefined}
+    </>
   );
 }
 export function AdminRequired(props: CronProps) {
-  return createMemo(() =>
-    props.canManage ? undefined : (
-      <div class="cron-admin-note" role="note">
-        <span aria-hidden="true">
-          <Icon name="lock" />
-        </span>
-        <span>{t("cron.adminRequired")}</span>
-      </div>
-    ),
+  return (
+    <>
+      {props.canManage ? undefined : (
+        <div class="cron-admin-note" role="note">
+          <span aria-hidden="true">
+            <Icon name="lock" />
+          </span>
+          <span>{t("cron.adminRequired")}</span>
+        </div>
+      )}
+    </>
   );
 }
 // Run now and pause/resume are visible controls (rows and detail header);
