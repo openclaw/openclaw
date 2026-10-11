@@ -348,18 +348,8 @@ export async function runReplyAgent(
     return undefined;
   }
 
-  const bindQueueDisposition = () => {
-    const observe = followupRun.onQueueDisposition;
-    followupRun.onQueueDisposition = (disposition) => {
-      observe?.(disposition);
-      if (
-        replyOperationRunState &&
-        (disposition !== "queue-cap-old" || replyOperationRunState.admission?.status !== "accepted")
-      ) {
-        replyOperationRunState.admission = { status: "skipped", reason: "queue-cap" };
-      }
-    };
-  };
+  const bindQueueDisposition = () =>
+    replyRunState.bindReplyOperationQueueDisposition(followupRun, replyOperationRunState);
 
   if (
     effectiveShouldSteer &&

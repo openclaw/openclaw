@@ -186,7 +186,7 @@ it.each(["worker", "native"] as const)(
               sessionKey: `agent:${agentId}:dashboard:incognito-receipt`,
               env,
             },
-            entry: { sessionId: "native-receipt", updatedAt: 1, incognito: true },
+            entry: { sessionId: "native-receipt", updatedAt: 1, incognito: true as const },
           };
     const exercise = async () => {
       await replaceSessionEntry(scope, {
@@ -215,10 +215,12 @@ it.each(["worker", "native"] as const)(
     if (owner === "worker") {
       await withIncognitoSessionActor(actor, exercise);
     } else {
+      vi.stubEnv("OPENCLAW_STATE_DIR", env.OPENCLAW_STATE_DIR);
       try {
         await exercise();
         expect(existsSync(nativePath)).toBe(false);
       } finally {
+        vi.unstubAllEnvs();
         await closeOpenClawAgentDatabaseByPathAsync(nativePath, agentId);
       }
     }

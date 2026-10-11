@@ -189,7 +189,7 @@ describe("pending-final delivery completion", () => {
       agentId: "main",
       env: { OPENCLAW_STATE_DIR: tmpDir },
     });
-    const scope = { sessionKey, storePath: nativePath };
+    const scope = { sessionKey, storePath: nativePath, env: { OPENCLAW_STATE_DIR: tmpDir } };
     const nativeCompletion = { ...completion, storePath: nativePath };
     try {
       await replaceSessionEntry(scope, {
@@ -205,19 +205,19 @@ describe("pending-final delivery completion", () => {
         },
       });
       await expect(
-        settlePendingFinalDelivery(nativeCompletion, "queued", ["prepared"]),
+        settlePendingFinalDelivery(nativeCompletion, "queued", ["prepared"], { stateDir: tmpDir }),
       ).resolves.toEqual({ state: "queued" });
       expect(loadSessionEntry(scope)?.pendingFinalDelivery?.deliveries).toEqual([
         { id: completion.deliveryId, state: "queued" },
       ]);
       await expect(
-        settlePendingFinalDelivery(nativeCompletion, "delivered", ["queued"]),
+        settlePendingFinalDelivery(nativeCompletion, "delivered", ["queued"], { stateDir: tmpDir }),
       ).resolves.toEqual({ state: "delivered" });
       expect(loadSessionEntry(scope)?.pendingFinalDelivery?.deliveries).toEqual([
         { id: completion.deliveryId, state: "delivered" },
       ]);
       await expect(
-        settlePendingFinalDelivery(nativeCompletion, "queued", ["prepared"]),
+        settlePendingFinalDelivery(nativeCompletion, "queued", ["prepared"], { stateDir: tmpDir }),
       ).resolves.toEqual({ state: "stale" });
       expect(loadSessionEntry(scope)?.pendingFinalDelivery?.deliveries).toEqual([
         { id: completion.deliveryId, state: "delivered" },
