@@ -484,7 +484,14 @@ describe("managed handoff database publication", () => {
   it("recovers the same inode when its first writer crashes before schema initialization", async () => {
     const script = `
       import fs from "node:fs";
-      fs.fsyncSync = () => {
+      const sync = fs.fsyncSync;
+      fs.fsyncSync = (descriptor) => {
+        if (!fs.existsSync(process.argv[1]) ||
+            fs.fstatSync(descriptor, { bigint: true }).ino !==
+            fs.statSync(process.argv[1], { bigint: true }).ino) {
+          sync(descriptor);
+          return;
+        }
         fs.writeSync(1, "before-schema\\n");
         Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0);
       };
