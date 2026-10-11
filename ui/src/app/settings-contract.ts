@@ -121,7 +121,6 @@ export type UiSettings = {
   sidebarPreTeamScope?: string | null; // null remembers All agents; undefined means unset.
   sidebarCollapsedAgentIds?: string[];
   sidebarEntries: string[]; // Ordered personal navigation references
-  navigationScope: "mine" | "all";
   sidebarLiveActivity?: boolean; // Latest activity under running sidebar sessions (default true)
   chatMessageMaxWidth?: string; // Browser-local centered chat transcript max width
   chatBubbleSessionKeys?: string[]; // Browser-local speech bubbles per canonical session, scoped to this Gateway

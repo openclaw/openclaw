@@ -54,7 +54,7 @@ function progressCard(): ProgressCard {
 
 const updateCards = new WeakMap<HTMLElement, (input: SessionHovercardInput) => void>();
 
-function renderSolidCard(input: SessionHovercardInput, container = document.createElement("div")) {
+function renderCard(input: SessionHovercardInput, container = document.createElement("div")) {
   const update = updateCards.get(container);
   if (update) {
     update(input);
@@ -105,8 +105,7 @@ function attributionSummary(container: ParentNode): string {
     .trim();
 }
 
-describe("Solid session hovercard", () => {
-  const renderCard = renderSolidCard;
+describe("session hovercard", () => {
   it.each([undefined, "Validation worker"])(
     "shows the full failure above the notepad (child: %s)",
     (childLabel) => {

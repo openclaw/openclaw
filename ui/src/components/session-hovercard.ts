@@ -1,8 +1,8 @@
 import { bucketRelativeTimeMs, type RelativeTimeUnit } from "@openclaw/normalization-core";
 import type { SessionParticipant } from "../../../packages/gateway-protocol/src/schema/session-participant.js";
 import { i18n, t } from "../i18n/index.ts";
-import type { SessionCreatedActor } from "../lib/session-owner.ts";
 import type { SidebarSessionHovercardRow } from "./app-sidebar-session-types.ts";
+import type { SessionCreatedActor } from "./session-owner-chip.ts";
 
 export function participantLabel(participant: SessionParticipant): string {
   return participant.label?.trim() || participant.identity.id;

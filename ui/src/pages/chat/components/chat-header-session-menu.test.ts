@@ -52,7 +52,6 @@ function settings(): UiSettings {
     navCollapsed: false,
     navWidth: 280,
     sidebarEntries: [],
-    navigationScope: "mine",
   };
 }
 
