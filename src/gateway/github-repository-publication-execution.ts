@@ -1,6 +1,7 @@
 import type { PreparedGitHubPublicationIdentity } from "../agents/github-tool-identity.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RepositoryGitHubPublicationRow } from "../state/github-publication-read.types.js";
+import { encodeGitHubPublicationRequester } from "../state/github-publication-requester.js";
 import { getSessionRepositoryWorkspaceStore } from "../state/session-repository-workspaces.js";
 import {
   bindPersonalGitHubPublicationSelection,
@@ -11,6 +12,7 @@ import {
 import { GitHubPublicationRequesterUnavailableError } from "./github-publication-failure.js";
 import { projectGitHubPublicationResult } from "./github-publication-receipt.js";
 import {
+  isGitHubPublicationRequesterV2,
   restoreGitHubPublicationRequester,
   type GitHubPublicationRequesterPolicyV2,
 } from "./github-publication-requester.js";
@@ -53,6 +55,7 @@ export function createRepositoryGitHubPublicationExecution(params: {
       assertCustody: () => void;
       assertCurrent?: () => void;
       action?: PersonalGitHubSessionAction | PersonalGitHubSessionActionV2;
+      requester?: GitHubPublicationRequesterPolicyV2;
       worker?: boolean;
     },
   ) => {
@@ -97,7 +100,8 @@ export function createRepositoryGitHubPublicationExecution(params: {
     ) {
       throw new Error("My GitHub publication owner changed.");
     }
-    let requester: Awaited<ReturnType<typeof restoreGitHubPublicationRequester>> | undefined;
+    let requester: GitHubPublicationRequesterPolicyV2 | undefined;
+    let releaseRequester: (() => void) | undefined;
     const getRequester = () => {
       if (!requester) {
         throw new GitHubPublicationRequesterUnavailableError();
@@ -148,11 +152,23 @@ export function createRepositoryGitHubPublicationExecution(params: {
     };
     try {
       if (row.owner_profile_id === null) {
-        requester = await restoreGitHubPublicationRequester(
-          row.requester_authority_json,
-          { sessionKey: row.session_key, agentId: row.agent_id },
-          getCommittedRuntimeConfig,
-        );
+        if (
+          worker &&
+          context.requester &&
+          isGitHubPublicationRequesterV2(context.requester) &&
+          encodeGitHubPublicationRequester(context.requester.snapshot) ===
+            row.requester_authority_json
+        ) {
+          requester = context.requester;
+        } else {
+          const restored = await restoreGitHubPublicationRequester(
+            row.requester_authority_json,
+            { sessionKey: row.session_key, agentId: row.agent_id },
+            getCommittedRuntimeConfig,
+          );
+          requester = restored;
+          releaseRequester = restored.release;
+        }
       }
       assertExecution();
       if (
@@ -223,7 +239,7 @@ export function createRepositoryGitHubPublicationExecution(params: {
       }
       throw error;
     } finally {
-      requester?.release();
+      releaseRequester?.();
       if (execution) {
         active.delete(row.request_id);
       }

@@ -347,7 +347,10 @@ export function createRepositoryGitHubPublicationCoordinator(params: {
       if (input.selection?.source === "personal") {
         throw new Error("My GitHub publication requires direct personal authorization.");
       }
-      const loaded = isGitHubPublicationRequesterV2(input.requester)
+      const workerRequester = isGitHubPublicationRequesterV2(input.requester)
+        ? input.requester
+        : undefined;
+      const loaded = workerRequester
         ? await loadGatewaySessionEntryReadOnlyInWorker({
             cfg: getCommittedRuntimeConfig(),
             key: input.sessionKey!,
@@ -382,7 +385,8 @@ export function createRepositoryGitHubPublicationCoordinator(params: {
           await execute(row, {
             assertCustody,
             assertCurrent: input.requester.assertInvocationCurrent,
-            worker: isGitHubPublicationRequesterV2(input.requester),
+            requester: workerRequester,
+            worker: Boolean(workerRequester),
           }),
       );
     },
