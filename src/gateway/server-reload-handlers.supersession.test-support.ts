@@ -261,6 +261,7 @@ export function registerGatewaySupersededReloadTests({
         routeHandoff: true,
       });
       expect(startChannel).toHaveBeenCalledWith("discord", undefined, {
+        reason: "config-reload",
         preserveManualStop: true,
         skipUnavailableAccounts: true,
       });
