@@ -27,6 +27,12 @@ export async function admitCompletionFixtureDatabase(): Promise<void> {
   await loadPendingSessionDeliveries(captureOpenClawStateWorkerContext());
 }
 
+export function readCompletionSystemEvents(database: OpenClawStateDatabase) {
+  return database.db
+    .prepare("SELECT id FROM delivery_queue_entries WHERE entry_kind = 'systemEvent'")
+    .all();
+}
+
 export function seedSubagentCompletionDelivery(params: {
   subagent: SubagentRunRecord;
   databaseOptions?: OpenClawStateDatabaseOptions;

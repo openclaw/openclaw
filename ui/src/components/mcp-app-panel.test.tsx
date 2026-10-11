@@ -10,8 +10,8 @@ import {
 } from "../test-helpers/solid-application-context.tsx";
 import { flush, waitForSolid } from "../test-helpers/solid-settle.ts";
 import type { McpAppOpenDetail } from "./mcp-app-launch.ts";
-import { McpAppPanel } from "./mcp-app-panel.ts";
-import type { McpAppViewProps } from "./mcp-app-view.ts";
+import type { McpAppViewProps } from "./mcp-app-view-controller.ts";
+import { McpAppPanel } from "./solid/mcp-app-panel.tsx";
 
 // mock-isolation: Exercise panel retirement without registering the real iframe protocol view.
 vi.mock("./mcp-app-view-registration.ts", () => ({

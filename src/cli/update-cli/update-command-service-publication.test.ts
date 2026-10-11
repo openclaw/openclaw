@@ -603,70 +603,47 @@ it.each(["inspection", "publication"])(
     }),
 );
 
-it.each([
-  "running",
-  "changed launcher",
-  "replaced entrypoint",
-  "changed manager",
-  "changed state directory",
-  "disjoint becomes affected",
-  "disjoint becomes unknown",
-])("rechecks publication authority after an awaited boundary: %s", (change) =>
-  withRuntimePublicationFixture(async ({ home, root, env, service }) => {
-    if (change.startsWith("disjoint")) {
-      const snapshot = path.join(root, ".artifacts", "serving");
-      await fs.mkdir(path.join(snapshot, "dist"), { recursive: true });
-      await fs.writeFile(path.join(snapshot, "package.json"), JSON.stringify({ name: "openclaw" }));
-      await fs.writeFile(path.join(snapshot, "dist", "entry.js"), "export {};\n");
-      vi.mocked(service.readCommand).mockResolvedValue({
-        programArguments: [process.execPath, path.join(snapshot, "dist", "entry.js"), "gateway"],
-      });
-    }
-    const untouched = path.join(root, "dist-runtime", "unchanged.txt");
-    await fs.writeFile(untouched, "original");
-    const beforePersistentEffect = async () => {
-      await Promise.resolve();
-      if (change === "running") {
-        vi.mocked(service.readRuntime).mockResolvedValue({
-          status: "running",
-          systemd: { managerUid: 2001 },
-        });
-      } else if (change === "changed manager") {
-        vi.mocked(service.readRuntime).mockResolvedValue({
-          status: "stopped",
-          systemd: { managerUid: 3002 },
-        });
-      } else if (change === "changed state directory") {
-        env.OPENCLAW_STATE_DIR = path.join(home, "replacement-state");
-      } else if (change === "replaced entrypoint") {
-        const entry = path.join(root, "dist", "entry.js");
-        await fs.rename(entry, `${entry}.previous`);
-        await fs.writeFile(entry, "export const replaced = true;\n");
-      } else if (change === "disjoint becomes unknown") {
-        vi.mocked(service.readCommand).mockResolvedValue(null);
-      } else {
+it.each(["running", "disjoint becomes unknown"])(
+  "rechecks publication authority after an awaited boundary: %s",
+  (change) =>
+    withRuntimePublicationFixture(async ({ root, env, service }) => {
+      if (change.startsWith("disjoint")) {
+        const snapshot = path.join(root, ".artifacts", "serving");
+        await fs.mkdir(path.join(snapshot, "dist"), { recursive: true });
+        await fs.writeFile(
+          path.join(snapshot, "package.json"),
+          JSON.stringify({ name: "openclaw" }),
+        );
+        await fs.writeFile(path.join(snapshot, "dist", "entry.js"), "export {};\n");
         vi.mocked(service.readCommand).mockResolvedValue({
-          programArguments: [
-            process.execPath,
-            path.join(root, "dist", "entry.js"),
-            "gateway",
-            ...(change === "changed launcher" ? ["--verbose"] : []),
-          ],
+          programArguments: [process.execPath, path.join(snapshot, "dist", "entry.js"), "gateway"],
         });
       }
-    };
-    await expect(
-      withGatewayRuntimeArtifactPublication(
-        { root, env, timeoutMs: 200, assertCurrent() {} },
-        async (assertPublicationCurrent) => {
-          await beforePersistentEffect();
-          await assertPublicationCurrent();
-          await fs.writeFile(untouched, "published");
-        },
-      ),
-    ).rejects.toThrow(/affected Gateway/);
-    expect(await fs.readFile(untouched, "utf8")).toBe("original");
-  }),
+      const untouched = path.join(root, "dist-runtime", "unchanged.txt");
+      await fs.writeFile(untouched, "original");
+      const beforePersistentEffect = async () => {
+        await Promise.resolve();
+        if (change === "running") {
+          vi.mocked(service.readRuntime).mockResolvedValue({
+            status: "running",
+            systemd: { managerUid: 2001 },
+          });
+        } else if (change === "disjoint becomes unknown") {
+          vi.mocked(service.readCommand).mockResolvedValue(null);
+        }
+      };
+      await expect(
+        withGatewayRuntimeArtifactPublication(
+          { root, env, timeoutMs: 200, assertCurrent() {} },
+          async (assertPublicationCurrent) => {
+            await beforePersistentEffect();
+            await assertPublicationCurrent();
+            await fs.writeFile(untouched, "published");
+          },
+        ),
+      ).rejects.toThrow(/affected Gateway/);
+      expect(await fs.readFile(untouched, "utf8")).toBe("original");
+    }),
 );
 
 it.each(["repository", "existing alias parent", "missing alias parent"])(

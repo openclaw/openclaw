@@ -9,6 +9,7 @@ import {
 } from "../../../state/openclaw-state-db.js";
 import { isDeliverySuspended } from "../registry/subagent-delivery-state.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
+import { mutateSubagentRuns } from "../registry/subagent-registry-persistence.js";
 import { bindSubagentRunRuntimeKey } from "../registry/subagent-run-generation.js";
 import {
   blockSubagentCompletionDelivery,
@@ -181,7 +182,11 @@ describe("requester receipts after completion expiry", () => {
         changed.delivery!.generation = 2;
       }
       if (cut !== "host incarnation" && cut !== "registry write") {
-        seedSubagentCompletionDelivery({ subagent: changed, databaseOptions: { database } });
+        await mutateSubagentRuns(
+          [changed.runId],
+          () => ({ value: undefined, postimages: new Map([[changed.runId, changed]]) }),
+          { runs: subagentRuns },
+        );
       }
       if (cut === "registry write") {
         database.db.exec(

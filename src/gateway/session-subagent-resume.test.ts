@@ -283,7 +283,7 @@ it("rejects a foreign task replacement instead of accepting untracked work", asy
   );
   await expect(adopt()).rejects.toThrow(/changed/);
   expect(subagentRuns.has(nextRunId)).toBe(false);
-  expect(subagentRuns.get(previousRunId)).toEqual(replacement);
+  expect(subagentRuns.get(previousRunId)).toBe(state.entry);
   const stored = loadSubagentRegistryFromSqlite();
   expect(stored.has(nextRunId)).toBe(false);
   expect(stored.get(previousRunId)).toEqual(replacement);

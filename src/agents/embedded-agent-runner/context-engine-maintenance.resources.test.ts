@@ -118,6 +118,73 @@ async function withResources(
   });
 }
 
+it.each(["active", "final"] as const)("refuses to reschedule during %s disposal", async (phase) => {
+  await withResources(async (_db, schedule) => {
+    const disposalStarted = createDeferredCore();
+    const releaseDisposal = createDeferredCore();
+    const maintenanceStarted = createDeferredCore();
+    const releaseMaintenance = createDeferredCore();
+    const maintain = vi.fn(async () => unchanged);
+    if (phase === "final") {
+      maintain.mockImplementationOnce(async () => {
+        maintenanceStarted.resolve();
+        await releaseMaintenance.promise;
+        return unchanged;
+      });
+    }
+    const contextEngine = engine(maintain);
+    contextEngine.dispose = async () => {
+      disposalStarted.resolve();
+      await releaseDisposal.promise;
+    };
+    const admitted = vi.fn();
+    const failed = vi.fn();
+    const resources = { closeFactoryWork: vi.fn(async () => {}), release: vi.fn(async () => {}) };
+    const keepProcessAlive = () => {};
+    process.on("SIGTERM", keepProcessAlive);
+    try {
+      if (phase === "final") {
+        await schedule(engine(maintain));
+        await maintenanceStarted.promise;
+      }
+      await schedule(contextEngine);
+      if (phase === "final") {
+        // The pending engine is disposed in final cleanup, not by the active-run loop.
+        process.emit("SIGTERM", "SIGTERM");
+        releaseMaintenance.resolve();
+      }
+      await disposalStarted.promise;
+      await runContextEngineMaintenance({
+        contextEngine,
+        sessionId: "resources",
+        sessionKey: "agent:main:maintenance-resources",
+        sessionFile: "agent:main:maintenance-resources",
+        reason: "turn",
+        onDeferredMaintenance: admitted,
+        onDeferredMaintenanceFailure: failed,
+        factoryResources: resources,
+      });
+      expect(admitted).not.toHaveBeenCalled();
+      expect(failed).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          message: expect.stringContaining(
+            phase === "final" ? "finishing cleanup" : "was disposed",
+          ),
+        }),
+      );
+      expect(resources.closeFactoryWork).not.toHaveBeenCalled();
+      expect(resources.release).not.toHaveBeenCalled();
+      releaseDisposal.resolve();
+      await waitForDeferredTurnMaintenanceForSession("agent:main:maintenance-resources");
+      expect(maintain).toHaveBeenCalledOnce();
+    } finally {
+      releaseMaintenance.resolve();
+      releaseDisposal.resolve();
+      process.off("SIGTERM", keepProcessAlive);
+    }
+  });
+});
+
 it.each(["maintenance", "disposal"] as const)(
   "joins actual %s descendants before maintenance completion",
   async (phase) => {

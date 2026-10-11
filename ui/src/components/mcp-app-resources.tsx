@@ -33,7 +33,7 @@ export type McpAppResourceMentionDetail = {
   resource: McpAppResourceLink;
 };
 type McpAppResourcesProps = { sessionKey: string; agentId: string };
-export type McpAppResourcesElement = SolidBridgeElement<McpAppResourcesProps>;
+type McpAppResourcesElement = SolidBridgeElement<McpAppResourcesProps>;
 
 function McpAppResourcesContent(props: McpAppResourcesProps & { host: HTMLElement }) {
   const context = useApplication();
@@ -253,7 +253,7 @@ function McpAppResourcesContent(props: McpAppResourcesProps & { host: HTMLElemen
   );
 }
 
-export const McpAppResources = defineSolidBridge<McpAppResourcesProps>(
+defineSolidBridge<McpAppResourcesProps>(
   "openclaw-mcp-app-resources",
   (props, host) => <McpAppResourcesContent {...props} host={host} />,
   {

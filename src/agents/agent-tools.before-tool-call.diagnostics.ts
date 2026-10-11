@@ -516,30 +516,12 @@ export function emitToolBlockedSecurityEvent(params: {
   trace?: DiagnosticTraceContext;
   paramsSummary?: DiagnosticToolParamsSummary;
 }): void {
-  const control =
-    params.deniedReason === "client-voice-confirmation"
-      ? ({
-          policyId: "talk-client-voice-confirmation",
-          controlId: "talk-client-voice-confirmation",
-          family: "approval",
-        } as const)
-      : params.deniedReason === "tool-loop"
-        ? ({
-            policyId: "tool-loop-detection",
-            controlId: "tool-loop-detection",
-            family: "authorization",
-          } as const)
-        : params.deniedReason === "plugin-approval"
-          ? ({
-              policyId: "plugin-tool-approval",
-              controlId: "plugin-tool-approval",
-              family: "approval",
-            } as const)
-          : ({
-              policyId: "plugin-before-tool-call",
-              controlId: "before-tool-call",
-              family: "approval",
-            } as const);
+  const policyId =
+    params.deniedReason === "tool-loop"
+      ? "tool-loop-detection"
+      : params.deniedReason === "plugin-approval"
+        ? "plugin-tool-approval"
+        : "plugin-before-tool-call";
   emitTrustedSecurityEvent({
     category: "tool",
     action: "tool.execution.blocked",
@@ -556,13 +538,13 @@ export function emitToolBlockedSecurityEvent(params: {
       ...(params.toolIdentity.toolOwner ? { owner: params.toolIdentity.toolOwner } : {}),
     },
     policy: {
-      id: control.policyId,
+      id: policyId,
       decision: "deny",
       reason: params.deniedReason,
     },
     control: {
-      id: control.controlId,
-      family: control.family,
+      id: policyId === "plugin-before-tool-call" ? "before-tool-call" : policyId,
+      family: policyId === "tool-loop-detection" ? "authorization" : "approval",
     },
     attributes: {
       tool_source: params.toolIdentity.toolSource,

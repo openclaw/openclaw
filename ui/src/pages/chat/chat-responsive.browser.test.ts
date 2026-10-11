@@ -28,6 +28,7 @@ import {
   getBoundingBox,
   getRect,
   readUiCss,
+  mountMcpAppSurfaceFixture,
   rectsOverlap,
   waitForLayoutSettled,
   type ControlRect,
@@ -1503,46 +1504,33 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       if (!realChatServer) {
         throw new Error("Expected the Control UI server to be ready");
       }
-      await page.goto(realChatServer.baseUrl, { waitUntil: "domcontentloaded" });
-      await page.addScriptTag({
-        type: "module",
-        url: new URL("src/components/mcp-app-view-registration.ts", realChatServer.baseUrl).href,
+      const provider = await mountMcpAppSurfaceFixture(page, realChatServer.baseUrl);
+      const backgrounds = await provider.evaluate(async (owner: HTMLElement) => {
+        await customElements.whenDefined("mcp-app-view");
+        const readFrameBackground = async (boardSurface?: string) => {
+          if (boardSurface) {
+            owner.style.setProperty("--board-surface", boardSurface);
+          } else {
+            owner.style.removeProperty("--board-surface");
+          }
+          const view = document.createElement("mcp-app-view") as HTMLElement & {
+            updateComplete: Promise<boolean>;
+          };
+          owner.replaceChildren(view);
+          await view.updateComplete;
+          const mount = view.querySelector(".mount");
+          if (!mount) {
+            throw new Error("MCP App mount is missing");
+          }
+          const frame = document.createElement("iframe");
+          mount.append(frame);
+          return getComputedStyle(frame).backgroundColor;
+        };
+        return {
+          dashboard: await readFrameBackground("rgb(12, 34, 56)"),
+          inline: await readFrameBackground(),
+        };
       });
-      const contextHelpers = await page.evaluateHandle<
-        typeof import("../../test-helpers/application-context.ts")
-      >('import("/src/test-helpers/application-context.ts")');
-      const backgrounds = await contextHelpers.evaluate(
-        async ({ createApplicationContextProvider, createApplicationGateway }) => {
-          // SAFETY: This style fixture never binds a session; only its Gateway projection is read.
-          const context = {
-            gateway: createApplicationGateway().gateway,
-          } as import("../../app/context.ts").ApplicationContext;
-          await customElements.whenDefined("mcp-app-view");
-          const readFrameBackground = async (boardSurface?: string) => {
-            const owner = createApplicationContextProvider(context);
-            if (boardSurface) {
-              owner.style.setProperty("--board-surface", boardSurface);
-            }
-            const view = document.createElement("mcp-app-view") as HTMLElement & {
-              updateComplete: Promise<boolean>;
-            };
-            owner.append(view);
-            document.body.replaceChildren(owner);
-            await view.updateComplete;
-            const mount = view.querySelector(".mount");
-            if (!mount) {
-              throw new Error("MCP App mount is missing");
-            }
-            const frame = document.createElement("iframe");
-            mount.append(frame);
-            return getComputedStyle(frame).backgroundColor;
-          };
-          return {
-            dashboard: await readFrameBackground("rgb(12, 34, 56)"),
-            inline: await readFrameBackground(),
-          };
-        },
-      );
 
       expect(backgrounds.dashboard).toBe("rgb(12, 34, 56)");
       expect(backgrounds.inline).toBe("rgba(0, 0, 0, 0)");

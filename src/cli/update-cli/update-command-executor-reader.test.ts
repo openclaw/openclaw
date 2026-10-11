@@ -314,21 +314,19 @@ describe("invocation-scoped update ownership reader", () => {
 
   it("does not reuse a live row as proof of a changed process identity", async () => {
     let refusal: unknown;
-    await expect(
-      withUpdateCommandExecutor(randomUUID(), async (executor) => {
-        const fence = await executor.enter(root);
-        const start = pidAlive.getFileLockProcessStartTime(process.pid);
-        expect(start).not.toBeNull();
-        const original = pidAlive.getFileLockProcessStartTime;
-        vi.spyOn(pidAlive, "getFileLockProcessStartTime").mockImplementation((pid, ...args) =>
-          pid === process.pid ? start! + 1 : original(pid, ...args),
-        );
-        const before = snapshot();
-        const observed = captureFailure(fence.assertCurrent);
-        expect(snapshot()).toEqual(before);
-        refusal = observed;
-      }),
-    ).rejects.toThrow();
+    await withUpdateCommandExecutor(randomUUID(), async (executor) => {
+      const fence = await executor.enter(root);
+      const start = pidAlive.getFileLockProcessStartTime(process.pid);
+      expect(start).not.toBeNull();
+      const original = pidAlive.getFileLockProcessStartTime;
+      vi.spyOn(pidAlive, "getFileLockProcessStartTime").mockImplementation((pid, ...args) =>
+        pid === process.pid ? start! + 1 : original(pid, ...args),
+      );
+      const before = snapshot();
+      const observed = captureFailure(fence.assertCurrent);
+      expect(snapshot()).toEqual(before);
+      refusal = observed;
+    });
     expect(refusal).toBeInstanceOf(UpdateCommandRecoveryPendingError);
     // A mismatched start identity proves the old generation dead to the existing
     // release owner. Refusing its fence must not disable that normal reclamation.

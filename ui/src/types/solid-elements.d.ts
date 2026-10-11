@@ -7,12 +7,12 @@ export type { JSX } from "@solidjs/web";
 declare module "@solidjs/web" {
   namespace JSX {
     interface IntrinsicElements {
-      "openclaw-modal-dialog": HTMLAttributes<HTMLElement> & {
-        label: string;
-        description?: string;
-        "onModal-cancel"?: (event: Event) => void;
+      "openclaw-tooltip": HTMLAttributes<HTMLElementTagNameMap["openclaw-tooltip"]> & {
+        "prop:content"?: string;
+        placement?: HTMLElementTagNameMap["openclaw-tooltip"]["placement"];
+        "open-on-click"?: boolean;
+        "auto-size"?: boolean;
       };
-      "openclaw-tooltip": HTMLAttributes<HTMLElement> & { "prop:content": string };
       "wa-dropdown": HTMLAttributes<WaDropdown> &
         Properties<WaDropdown> & {
           placement?: WaDropdown["placement"];

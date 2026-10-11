@@ -11,7 +11,7 @@ import {
 import type { AgentDatabaseRequestExecutionSource } from "../../state/openclaw-agent-execution-admission-contract.js";
 import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
 import { runOpenClawAgentWorkerWrite } from "../../state/openclaw-agent-write-admission.js";
-import { loadSessionEntry } from "./session-accessor.sqlite-entry.js";
+import { resolveSessionEntry } from "./session-accessor.sqlite-exact-read.js";
 import { resolveSqliteSessionKey } from "./session-accessor.sqlite-scope-helpers.js";
 import type { SessionAccessScope, SessionEntryTargetPatchScope } from "./session-accessor.types.js";
 import {
@@ -24,6 +24,7 @@ import {
   isNativeSessionEntryRead,
 } from "./session-entry-read-request.js";
 import type { SessionEntryCohortReader } from "./session-entry-read-runtime.types.js";
+import type { CapturedSessionEntryReadSource } from "./session-entry-read-source.types.js";
 import {
   captureIncognitoSessionBinding,
   withIncognitoSessionEntry,
@@ -75,7 +76,14 @@ export async function readSessionEntryInWorker(
   }
   // Incognito still belongs to its process-held native owner until that owner's complete cutover.
   if (isNativeSessionEntryRead(scope, agentId)) {
-    const entry = loadSessionEntry(scope);
+    let readSource: CapturedSessionEntryReadSource | undefined;
+    const { existing: entry } = resolveSessionEntry(scope, {
+      onReadSource: onReadTarget
+        ? (source) => {
+            readSource = source;
+          }
+        : undefined,
+    });
     if (onReadTarget) {
       const nativeAgentId = agentId ?? normalizeAgentId(scope.defaultAgentId);
       const sessionKey = resolveSqliteSessionKey(scope.sessionKey, nativeAgentId);
@@ -85,6 +93,7 @@ export async function readSessionEntryInWorker(
         storePath:
           scope.storePath ??
           resolveIncognitoOpenClawAgentSqlitePath({ agentId: nativeAgentId, env }),
+        readSource,
         target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
       });
     }

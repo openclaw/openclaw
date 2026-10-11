@@ -195,12 +195,6 @@ async function inspectLoadedSystemOwnership(
         if (installed.status !== "absent") {
           return installed;
         }
-        if (await readLoaded()) {
-          return { status: "loaded", unitName };
-        }
-        if (owner !== (await readOwner())) {
-          throw unavailable();
-        }
         return { status: "absent", unitName };
       } catch (error) {
         return unverifiableSystemOwnership(
@@ -238,9 +232,7 @@ async function inspectSystemSystemdOwnership(
   if (installed.status !== "absent") {
     return installed;
   }
-  // Close the manager-query-to-filesystem-snapshot race. Publication and
-  // activation repeat the complete probe because root installers share no lock.
-  return await querySystemManager(unitName, run);
+  return { status: "absent", unitName };
 }
 
 function formatSystemSystemdOwnershipError(ownership: SystemSystemdConflict): string {
