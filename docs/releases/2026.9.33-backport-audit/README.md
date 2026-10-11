@@ -1,6 +1,6 @@
 # 2026.9.33 preparation and backport audit
 
-This is a preparation PR from shipped **2026.9.9**, not a frozen or publishable release candidate. **No product backport is applied, no proposal set is approved, and no tag or package is published.** The branch contains version metadata, the shipped-updater compatibility inventory, an existing version-sensitive test-fixture repair, and this audit/proposal handoff.
+This is a preparation PR from shipped **2026.9.9**, not a frozen or publishable release candidate. **The eleven audit proposals remain unapplied; one separately scoped, CI-required runtime repair is included. No proposal set is approved, and no tag or package is published.** The branch contains version metadata, the shipped-updater compatibility inventory, CI repairs, and this audit/proposal handoff.
 
 ## Frozen source bounds
 
@@ -29,6 +29,14 @@ The 253 September-only commits outside the merge base are why a clean pick or a 
 Mechanical inventory/probe completion, a cached diff, and a clean cherry-pick are not semantic review or release qualification. All 11 repair groups below remain proposals. The complete semantic audit is **incomplete**.
 
 An `already-covered` row marked `mechanical-equivalence-only` is an empty probe, not a completed behavior review. Its unread production delta remains carry-forward.
+
+## CI-required runtime repair
+
+PR CI on `7606c0406765877713b2cf85e50bc59e115d52be` exposed a completed child follow-up failing with `replacement subagent source changed before commit`. Upstream [b725cc7](https://github.com/openclaw/openclaw/commit/b725cc7b27f64ae1b1cf72eccc0bd5959d982839) already addresses this defect: admit and persist the browser-cleanup claim before dispatch, then drain newly admitted predecessor writes before replacement. The September adaptation preserves the exact durable-source comparison, existing synchronous session-effect guards, duplicate-cleanup exclusion, and caller/source retirement checks; it does not import main's later session-effect or registry refactors.
+
+The unchanged eight-file Gateway replays passed 30/30 on macOS and 30/30 on Linux/arm64, so those are not causal proof. Adapted real-worker controls fail four of twelve cases on unchanged production code, including the same replacement error. With the runtime repair, the twelve-file focused group passes 253/253 on each platform, including the original Gateway flow, duplicate browser cleanup, and caller/source retirement guards. Command wall times were 236.209 seconds on macOS and 256.643 seconds on Linux/arm64; all fourteen test/owner inputs were unchanged during each run. `ci-dispositions.json` records the source-bound proof. Required static/review results and hosted exact-head CI are owned by the preparation PR. Full release qualification remains pending.
+
+This is a repair under the request to make PR CI pass, separate from the eleven proposal groups below. Frozen `commits.jsonl`, carry-forward rows, and review-depth counts describe the original audit snapshot; the later CI disposition supersedes b725cc7's original blocked/unreviewed status for this narrow adaptation only. The semantic audit remains incomplete and its accepted cursor is not advanced.
 
 ## Proposed repairs
 
@@ -59,7 +67,7 @@ Two source commits need minimal baseline adaptations. The unapplied, test-inclus
 - Runtime groups: six standalone actual-owner boundary executions assert expected baseline defects or patched recovery/negative controls. They are not native-suite, full-CLI or release-matrix passes.
 - Snapshot after attempts initially stopped before tests on a compiler namespace-lease race during concurrent SDK output writes. The final successful after-proof used stable owned topology; earlier tooling failures are not product failures or discarded product-test retries.
 
-No product source in this PR uses these adaptations. The final PR evidence owns preparation checks and exact-head SDK/config review; proof here describes disposable baseline experiments, not an already-approved staged product candidate.
+No product source in this PR uses the eleven proposal adaptations. The final PR evidence owns preparation checks and exact-head SDK/config review; proof here describes disposable baseline experiments, not an already-approved staged product candidate.
 
 Preparation checks passed for generated release metadata and the shipped-updater inventory. The complete changed postbuild fixture passed **143 tests**, with a measured single-worker command wall cost of **34.858 seconds**. An initial full build completed runtime/support-package bundling but stopped during unified declaration compilation because this audit's JSON files were added concurrently and its input-stability guard rejected the changed namespace. **No complete successful build is claimed.** The failed stage is atomic; it did not publish a partial declaration generation.
 
@@ -102,7 +110,7 @@ Pinned main's root version is still 2026.9.9. A later-month beta does not satisf
 - `audit.json`: exact bounds, measured counts and explicit incomplete/cursor/approval/freeze state.
 - `commits.jsonl`: one row per frozen source commit. Each row carries the full immutable SHA, subject, file count, logical scopes and NUL-separated complete-path-inventory digest, plus review/probe/decision/group/gap state. Advisory identifiers in public source text/path scopes are redacted; altered subjects are marked. The source commit itself owns the full path/diff inventory; it is not duplicated into a multi-megabyte report.
 - `stable-issues.jsonl`: one row per issue; no private comment bodies or advisory details.
-- `proposals.json`: complete proposed-set closure and observed proof; no product changes applied.
+- `proposals.json`: complete proposed-set closure and observed proof; none of these eleven proposals is applied.
 - `carry-forward.json`: 30 blocked runtime groups, six companion requests, unknown publication owners and the early Gateway unread/reviewed-but-unclosed SHA sets. These remain unresolved, including mechanical-only equivalents.
 - `publication.json` and `ci-dispositions.json`: coordinated artifact/qualification obligations.
 

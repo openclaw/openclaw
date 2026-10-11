@@ -22,6 +22,7 @@ import {
   captureSubagentRunMutationSnapshot,
   publishSubagentRunPostimages,
   SubagentRegistryWriteError,
+  waitForPendingSubagentRegistryWrites,
 } from "./subagent-registry-persistence.js";
 import type { SubagentCompletionRequest, SubagentRunRecord } from "./subagent-registry.types.js";
 
@@ -385,21 +386,60 @@ async function completeTerminalCleanup(
         !(await refreshSessionEffectsSuppression()) &&
         entry.browserCleanupDispatchedAt === undefined
       ) {
-        entry.browserCleanupDispatchedAt = Date.now();
-        dispatchedBrowserCleanup = true;
-        try {
-          await cleanupBrowserSessions({
-            sessionKeys: [entry.childSessionKey],
-            isCurrent: () =>
-              isSessionEffectsOwnerCurrent() && !context.shouldSuppressSessionEffects(entry),
-            onWarn: (msg) => params.warn(msg, { runId: entry.runId }),
-          });
-        } catch (error) {
-          params.warn("failed to cleanup browser sessions for completed subagent", {
-            error: buildSafeLifecycleErrorMeta(error),
-            runId: maskLifecycleIdentifier(completeParams.runId, "run"),
-            childSessionKey: maskLifecycleIdentifier(entry.childSessionKey, "session"),
-          });
+        while (isSessionEffectsOwnerCurrent() && entry.browserCleanupDispatchedAt === undefined) {
+          const pending = waitForPendingSubagentRegistryWrites(
+            [entry.runId],
+            args.stateContext.admission,
+          );
+          if (pending) {
+            await pending;
+            continue;
+          }
+          // Claim and admit persistence together: a follow-up must never compare
+          // an untracked cleanup marker against the exact durable source row.
+          const dispatchedAt = Date.now();
+          entry.browserCleanupDispatchedAt = dispatchedAt;
+          try {
+            await params.persistAsyncOrThrow(
+              args.stateContext,
+              {
+                assertCurrent: () => {
+                  if (!isSessionEffectsOwnerCurrent()) {
+                    throw new Error("Subagent browser cleanup lost its original owner");
+                  }
+                },
+              },
+              entry.runId,
+            );
+          } catch (error) {
+            if (
+              error instanceof SubagentRegistryWriteError &&
+              error.outcome === "not-committed" &&
+              entry.browserCleanupDispatchedAt === dispatchedAt
+            ) {
+              delete entry.browserCleanupDispatchedAt;
+            }
+            throw error;
+          }
+          if (!isSessionEffectsOwnerCurrent() || context.shouldSuppressSessionEffects(entry)) {
+            return;
+          }
+          dispatchedBrowserCleanup = true;
+          try {
+            await cleanupBrowserSessions({
+              sessionKeys: [entry.childSessionKey],
+              isCurrent: () =>
+                isSessionEffectsOwnerCurrent() && !context.shouldSuppressSessionEffects(entry),
+              onWarn: (msg) => params.warn(msg, { runId: entry.runId }),
+            });
+          } catch (error) {
+            params.warn("failed to cleanup browser sessions for completed subagent", {
+              error: buildSafeLifecycleErrorMeta(error),
+              runId: maskLifecycleIdentifier(completeParams.runId, "run"),
+              childSessionKey: maskLifecycleIdentifier(entry.childSessionKey, "session"),
+            });
+          }
+          break;
         }
       }
     }

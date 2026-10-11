@@ -93,6 +93,82 @@
       "remainingGates": [
         "Resolve relevant current-tooling optimizer closure and retained scenario inventory before freezing an exact release candidate."
       ]
+    },
+    {
+      "id": "subagent-browser-cleanup-follow-up",
+      "decision": "applied-ci-repair",
+      "orderedSourceSHAs": [
+        "b725cc7b27f64ae1b1cf72eccc0bd5959d982839"
+      ],
+      "ownerPaths": [
+        "src/agents/subagents/registry/subagent-registry-terminal-effects.ts",
+        "src/gateway/session-subagent-reactivation.ts"
+      ],
+      "companionPaths": [
+        "src/agents/subagents/registry/subagent-registry-task-replacement.test.ts",
+        "src/gateway/server.heartbeat-store-lifecycle.product-proof.test.ts"
+      ],
+      "originalInventoryDisposition": "Blocked conflicted/unreviewed row in the frozen initial audit; this later disposition supersedes that status for the adapted cleanup-claim/follow-up contract only. The original inventory counts and accepted cursor are not advanced.",
+      "coverage": "Persist the browser-cleanup claim through the existing native worker before browser dispatch; drain actual newly admitted predecessor writes before replacement. Preserve exact durable-source comparison, duplicate browser exclusion, rollback on known non-commit, and original source/caller guards. Adapt only to the shipped synchronous session-effect contract; no mainline session-effect or registry refactor.",
+      "baseline": {
+        "head": "7606c0406765877713b2cf85e50bc59e115d52be",
+        "failed": 4,
+        "passed": 8,
+        "total": 12,
+        "commandWallSeconds": 30.648,
+        "entryPoint": "pnpm test src/agents/subagents/registry/subagent-registry-task-replacement.test.ts --maxWorkers=1",
+        "symptom": "Held browser cleanup and native cleanup acknowledgement-before-publication expose the exact replacement error and preserve source/caller retirement negative controls."
+      },
+      "localProof": {
+        "entryPoint": "pnpm test <focusedTargets> --maxWorkers=1",
+        "focusedTargets": [
+          "src/agents/subagents/registry/subagent-registry-task-replacement.test.ts",
+          "src/agents/subagents/registry/subagent-registry-lifecycle.test.ts",
+          "src/agents/subagents/registry/subagent-registry-context-cleanup.test.ts",
+          "src/gateway/session-subagent-reactivation.test.ts",
+          "src/gateway/server.portals.session.test.ts",
+          "src/gateway/server.request-lifetime.test.ts",
+          "src/gateway/server.startup-recovery-webchat.test.ts",
+          "src/gateway/server.operator-observer-lifetime.test.ts",
+          "src/gateway/server.heartbeat-store-lifecycle.product-proof.test.ts",
+          "src/gateway/server.spawn-broker.test.ts",
+          "src/gateway/server.users-preferences.test.ts",
+          "src/gateway/server.worker-placement-startup-context.test.ts"
+        ],
+        "macOS": {
+          "node": "24.16.0",
+          "passed": 253,
+          "total": 253,
+          "files": 12,
+          "commandWallSeconds": 236.209,
+          "sourcesUnchanged": true
+        },
+        "linuxArm64": {
+          "node": "24.19.0",
+          "passed": 253,
+          "total": 253,
+          "files": 12,
+          "commandWallSeconds": 256.643,
+          "sourcesUnchanged": true,
+          "sourceBase": "9c04627f49d1471eaf5e0af04118a2bd809b8c28",
+          "committedCorrections": [
+            "95541748739ac72c8bce1e3ba1f40a798f0a55d0",
+            "7606c0406765877713b2cf85e50bc59e115d52be"
+          ],
+          "scope": "Disposable source probe with matching hashes for all twelve test inputs and the two runtime owners; not a full prepared-package qualification."
+        },
+        "sourceSha256": {
+          "src/gateway/session-subagent-reactivation.ts": "f6073340f0d64bbb1220b75eaec03aaff11f80fcc7bed340393e0d9a8bf0b16f",
+          "src/agents/subagents/registry/subagent-registry-terminal-effects.ts": "ef94dac8302ed636f480a8233e0cb30c5c9104ed98140cf8797ce6e6134dbac6",
+          "src/agents/subagents/registry/subagent-registry-task-replacement.test.ts": "2a2ada542dee35458bfb91eb424e9c3e744abfd1a80356066f919eaa4ef3d726"
+        }
+      },
+      "validationStatus": "Local focused proof passed on both platforms. Required pre-push static/review results and terminal hosted exact-head CI are tracked on the preparation PR; local passes do not imply hosted CI or full release qualification.",
+      "updateBehavior": "Uses existing 9.9 registry payload fields, schema, worker mutation owner and APIs; no migration or update-driver change. Published-driver x exact-candidate release qualification remains unrun.",
+      "remainingGates": [
+        "Required static/review results and terminal exact-head PR CI are owned by the preparation PR.",
+        "Exact-candidate full-release/package/Docker/published-driver qualification before candidate freeze."
+      ]
     }
   ]
 }

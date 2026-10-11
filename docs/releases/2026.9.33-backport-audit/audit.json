@@ -35,7 +35,7 @@
   "securityStatus": "cleared",
   "semanticAuditComplete": false,
   "acceptedCursorAdvanced": false,
-  "productBackportsApplied": 0,
+  "productBackportsApplied": 1,
   "proposedGroups": 11,
   "proposalSetApproved": false,
   "releaseFrozen": false,
@@ -47,5 +47,9 @@
   "currentReviewsAvailable": 3127,
   "currentReviewsFullyRead": 1,
   "currentProductionApplicabilityProbes": 2758,
-  "historicalTestOnlyApplicabilityProbes": 2
+  "historicalTestOnlyApplicabilityProbes": 2,
+  "postAuditCiRepairSourceShas": [
+    "b725cc7b27f64ae1b1cf72eccc0bd5959d982839"
+  ],
+  "productBackportScope": "One CI-required 9.9-owner adaptation; all eleven original audit proposals remain unapplied. Frozen inventory decisions and review-depth counts describe the original captured audit; ci-dispositions.json records the subsequent repair."
 }
