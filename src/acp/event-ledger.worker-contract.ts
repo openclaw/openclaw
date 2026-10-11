@@ -1,7 +1,9 @@
 import type { SessionUpdate } from "@agentclientprotocol/sdk";
-import type { WorkerOperations } from "../state/worker-operation-registry.js";
-import type { AcpEventLedger, AcpMutableLedgerState } from "./event-ledger.types.js";
-import type { acpReplayOperations } from "./event-ledger.worker.js";
+import type {
+  AcpEventLedger,
+  AcpEventLedgerReplay,
+  AcpMutableLedgerState,
+} from "./event-ledger.types.js";
 
 export type AcpReplayLimits = Omit<AcpMutableLedgerState, "now">;
 export type AcpReplayStartInput = {
@@ -18,4 +20,12 @@ export type AcpReplayReadInput =
   | { kind: "id"; sessionId: string }
   | { kind: "bound"; sessionId: string; sessionKey: string }
   | { kind: "key"; sessionKey: string };
-export type AcpReplayWorkerOperations = WorkerOperations<typeof acpReplayOperations>;
+export type AcpReplayWorkerOperations = {
+  "acpReplay.start": { input: AcpReplayStartInput; output: void };
+  "acpReplay.append": { input: AcpReplayAppendInput; output: void };
+  "acpReplay.incomplete": {
+    input: { sessionId: string; sessionKey: string; now: number };
+    output: void;
+  };
+  "acpReplay.read": { input: AcpReplayReadInput; output: AcpEventLedgerReplay };
+};

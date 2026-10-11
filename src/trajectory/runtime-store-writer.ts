@@ -51,10 +51,8 @@ import {
   scheduleSqliteTrajectoryRuntimeRetention,
   settleIncognitoTrajectoryRuntimeRetention,
 } from "./runtime-retention.js";
-import {
-  appendSqliteTrajectoryRuntimeEvents,
-  type SqliteTrajectoryRuntimeAppend,
-} from "./runtime-store.sqlite.js";
+import type { SqliteTrajectoryRuntimeAppend } from "./runtime-store.contract.js";
+import { appendSqliteTrajectoryRuntimeEvents } from "./runtime-store.sqlite.js";
 import type { TrajectoryEvent } from "./types.js";
 
 type TrajectoryRuntimeSinkParams = {

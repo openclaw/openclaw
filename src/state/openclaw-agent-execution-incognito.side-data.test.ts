@@ -21,7 +21,7 @@ import { settleIncognitoTrajectoryRuntimeRetention } from "../trajectory/runtime
 import { createSqliteTrajectoryRuntimeSink } from "../trajectory/runtime-store-writer.js";
 import {
   appendSqliteTrajectoryRuntimeEvents,
-  loadSqliteTrajectoryRuntimeEvents,
+  loadSqliteTrajectoryRuntimeEventRowsSync,
 } from "../trajectory/runtime-store.sqlite.js";
 import { createTrajectoryEvent } from "../trajectory/runtime-store.test-support.js";
 import {
@@ -406,7 +406,7 @@ it("preserves native incognito trajectory age and global-budget retention", asyn
           .toSorted((a, b) => a.sessionId.localeCompare(b.sessionId));
         const nativeRuns = [];
         for (const sessionId of names) {
-          const events = await loadSqliteTrajectoryRuntimeEvents({ ...native, sessionId });
+          const events = loadSqliteTrajectoryRuntimeEventRowsSync({ ...native, sessionId });
           if (events.length) {
             nativeRuns.push({ sessionId, events: events.length });
           }

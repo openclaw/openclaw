@@ -5,6 +5,7 @@ import type {
   SessionEntriesCurrentCheck,
 } from "../config/sessions/session-entry-current.types.js";
 import { assertStateDatabaseReadAllowed } from "../infra/gateway-state-owner.js";
+import { hasSqliteDatabaseSchemaAdmissionForIdentity } from "../infra/sqlite-database-admission.js";
 import type { SqliteWorkerStore } from "../infra/sqlite-worker-contract.js";
 import type {
   SqliteWorkerAdmissionFactory,
@@ -130,7 +131,7 @@ async function execute<Key extends keyof PluginStateWorkerOperations>(
   const databasePath =
     capturedContext?.admission.databasePath ?? resolveOpenClawStateSqlitePath(env ?? process.env);
   const description = pluginStateWorkerOperations[command.type];
-  let dispatched = false;
+  let operationStarted = false;
   let order: PluginStateCommandOrder | undefined;
   let installObservation: ReturnType<typeof preparePluginStateObservationCacheRead> | undefined;
   try {
@@ -166,41 +167,48 @@ async function execute<Key extends keyof PluginStateWorkerOperations>(
         readPluginStateObservationCache(identity, { ...typedCommand.input, key }),
       );
       if (cached.every((entry) => entry !== undefined)) {
+        operationStarted = true;
         context.admission.assertCurrent();
         assertStateDatabaseReadAllowed(databasePath);
         assertAdmission?.();
-        if (typedCommand.type === "pluginState.observe") {
-          const observation = observationFromCachedPluginState(
-            identity,
-            databasePath,
-            typedCommand.input,
-            cached[0]!,
-          );
-          // SAFETY: This branch handles only the observe command's observation output.
-          return observation as PluginStateWorkerRequests[Key]["output"];
-        }
-        const values = cached.map(({ row }): Result<unknown, PluginStateWorkerFailure> => {
-          try {
-            return ok<unknown, PluginStateWorkerFailure>(
-              row ? parseStoredJson(row.value_json, "lookup", databasePath) : undefined,
+        // Quarantine revokes these admitted facts; the worker owns refusal and recovery.
+        if (hasSqliteDatabaseSchemaAdmissionForIdentity(identity)) {
+          if (typedCommand.type === "pluginState.observe") {
+            const observation = observationFromCachedPluginState(
+              identity,
+              databasePath,
+              typedCommand.input,
+              cached[0]!,
             );
-          } catch (error) {
-            if (error instanceof PluginStateStoreError && error.code === "PLUGIN_STATE_CORRUPT") {
-              return err<unknown, PluginStateWorkerFailure>(capturePluginStateWorkerFailure(error));
-            }
-            throw error;
+            // SAFETY: This branch handles only the observe command's observation output.
+            return observation as PluginStateWorkerRequests[Key]["output"];
           }
-        });
-        if (typedCommand.type === "pluginState.lookupMany") {
-          // SAFETY: Each slot preserves lookupMany's independent decoding result.
-          return values as PluginStateWorkerRequests[Key]["output"];
+          const values = cached.map(({ row }): Result<unknown, PluginStateWorkerFailure> => {
+            try {
+              return ok<unknown, PluginStateWorkerFailure>(
+                row ? parseStoredJson(row.value_json, "lookup", databasePath) : undefined,
+              );
+            } catch (error) {
+              if (error instanceof PluginStateStoreError && error.code === "PLUGIN_STATE_CORRUPT") {
+                return err<unknown, PluginStateWorkerFailure>(
+                  capturePluginStateWorkerFailure(error),
+                );
+              }
+              throw error;
+            }
+          });
+          if (typedCommand.type === "pluginState.lookupMany") {
+            // SAFETY: Each slot preserves lookupMany's independent decoding result.
+            return values as PluginStateWorkerRequests[Key]["output"];
+          }
+          const value = values[0]!;
+          if (!value.ok) {
+            throw restorePluginStateWorkerFailure(value.error);
+          }
+          // SAFETY: This branch handles only the lookup command's decoded value.
+          return value.value as PluginStateWorkerRequests[Key]["output"];
         }
-        const value = values[0]!;
-        if (!value.ok) {
-          throw restorePluginStateWorkerFailure(value.error);
-        }
-        // SAFETY: This branch handles only the lookup command's decoded value.
-        return value.value as PluginStateWorkerRequests[Key]["output"];
+        operationStarted = false;
       }
       if (typedCommand.type === "pluginState.observe") {
         installObservation = preparePluginStateObservationCacheRead(identity, typedCommand.input);
@@ -217,7 +225,7 @@ async function execute<Key extends keyof PluginStateWorkerOperations>(
       import("../infra/sqlite-worker-operation-admission.js"),
     ]);
     const operation = async (scope: Scope) => {
-      dispatched = true;
+      operationStarted = true;
       const result = await scope.execute<Key>(
         command.input === undefined
           ? command
@@ -294,8 +302,8 @@ async function execute<Key extends keyof PluginStateWorkerOperations>(
     throw wrapPluginStateError(
       error,
       description.operation,
-      dispatched ? description.code : "PLUGIN_STATE_OPEN_FAILED",
-      dispatched ? description.message : "Failed to open the plugin state database.",
+      operationStarted ? description.code : "PLUGIN_STATE_OPEN_FAILED",
+      operationStarted ? description.message : "Failed to open the plugin state database.",
       databasePath,
     );
   } finally {

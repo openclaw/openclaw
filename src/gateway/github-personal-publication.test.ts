@@ -43,6 +43,7 @@ import {
   callPersonalPublicationRpc,
   createForeignPublicationSession,
   createPersonalPublicationFixture,
+  preparePersonalPublicationProfileCatalog,
   readPersonalPublicationFixtureStatus,
   personalPublicationAccount as account,
   expectPersonalPublicationReplay,
@@ -404,6 +405,7 @@ describe("personal publication authority and recovery", () => {
     ).toThrow("not found");
     const count = commands.length;
     await closeStateDatabaseForTest();
+    await preparePersonalPublicationProfileCatalog();
     coordinator = createTestGitHubPublicationCoordinator({
       placements: createWorkerSessionPlacementStore({ database: openOpenClawStateDatabase() }),
     });
@@ -650,6 +652,7 @@ describe("personal publication authority and recovery", () => {
     });
     const count = commands.length;
     await closeStateDatabaseForTest();
+    await preparePersonalPublicationProfileCatalog();
     placements = createWorkerSessionPlacementStore({ database: openOpenClawStateDatabase() });
     coordinator = createTestGitHubPublicationCoordinator({ placements });
     requirePersonalGitHubPublicationConfirmation(placements.workspaceResultInstanceId());

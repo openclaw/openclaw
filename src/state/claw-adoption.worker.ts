@@ -1,5 +1,5 @@
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
-import type { ClawPackageAdoption } from "./claw-package-adoption.js";
+import type { ClawPackageAdoption } from "./claw-adoption.types.js";
 import type { DB } from "./openclaw-state-db.generated.js";
 import type { WorkerOperations, WorkerWriteOperationContext } from "./worker-operation-registry.js";
 

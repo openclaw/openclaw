@@ -39,6 +39,13 @@ afterEach(() => {
   profileCatalogs.clear();
 });
 
+/** Gateway startup prepares profile authority again after database admission closes. */
+export async function preparePersonalPublicationProfileCatalog() {
+  const catalog = await prepareUserProfileCatalog();
+  profileCatalogs.add(catalog);
+  return catalog;
+}
+
 export function readPersonalPublicationFixtureStatus(
   fixture: Pick<
     Awaited<ReturnType<typeof createPersonalPublicationFixture>>,
@@ -99,8 +106,7 @@ export async function expectPersonalPublicationReplay(
 export async function createPersonalPublicationFixture() {
   const owner = (await ensureCanonicalUserProfileForEmail("alice@example.test")).id;
   const otherOwner = (await ensureCanonicalUserProfileForEmail("bob@example.test")).id;
-  const profileCatalog = await prepareUserProfileCatalog();
-  profileCatalogs.add(profileCatalog);
+  const profileCatalog = await preparePersonalPublicationProfileCatalog();
   const generation = randomUUID();
   const personalToken = `synthetic-personal-credential-${generation}`;
   updateUserGitHubConnection(
@@ -250,8 +256,7 @@ export async function restartPersonalPublicationFixture(
   resetGatewayWorkAdmission();
   await closeOpenClawAgentDatabasesAsync();
   fixture.profileCatalog.release();
-  fixture.profileCatalog = await prepareUserProfileCatalog();
-  profileCatalogs.add(fixture.profileCatalog);
+  fixture.profileCatalog = await preparePersonalPublicationProfileCatalog();
   fixture.placements = createWorkerSessionPlacementStore({ database: openOpenClawStateDatabase() });
   await fixture.placements.recoverWorkerSessionToolOperationsAfterRestart();
   fixture.placements.clearLocalTurnClaimsAfterRestart();

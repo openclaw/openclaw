@@ -20,7 +20,7 @@ import type {
   TrajectoryRetentionWorkerInput,
   TrajectoryRuntimeRetentionPlan,
 } from "../../trajectory/runtime-retention.contract.js";
-import type { SqliteTrajectoryRuntimeReadScope } from "../../trajectory/runtime-store.sqlite.js";
+import type { SqliteTrajectoryRuntimeReadScope } from "../../trajectory/runtime-store.contract.js";
 import type { TrajectoryEvent } from "../../trajectory/types.js";
 import type {
   SessionActivitySummaryBatchInput,

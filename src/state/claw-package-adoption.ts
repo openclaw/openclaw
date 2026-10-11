@@ -1,14 +1,7 @@
+import type { ClawPackageAdoption } from "./claw-adoption.types.js";
 import type { OpenClawStateDatabaseOptions } from "./openclaw-state-db-contract.js";
 import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
 import { runOpenClawStateWorkerOperation } from "./openclaw-state-worker-store.js";
-
-export type ClawPackageAdoption = {
-  kind: "skill" | "plugin";
-  source: "clawhub";
-  ref: string;
-  version?: string;
-  workspace?: string;
-};
 
 /** Records an explicit non-Claw claim through the canonical package owner. */
 export async function markClawPackageIndependentlyOwned(

@@ -714,6 +714,12 @@ export function suspendSqliteDatabaseAdmission(database: DatabaseSync, suspended
 
 export function hasSqliteDatabaseSchemaAdmissionForPath(location: string): boolean {
   const record = pathAdmission(location);
+  return record ? hasSqliteDatabaseSchemaAdmissionForIdentity(record.identity) : false;
+}
+
+/** Consume the already captured physical identity without another filesystem lookup. */
+export function hasSqliteDatabaseSchemaAdmissionForIdentity(identity: string): boolean {
+  const record = state.registry.records.get(identity);
   const fact = record?.facts.get("sqlite-schema");
   return Boolean(record && fact && valid(record, fact));
 }

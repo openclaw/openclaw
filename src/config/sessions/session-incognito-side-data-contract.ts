@@ -19,7 +19,7 @@ import type { deleteTrajectoryRuntimeRetention } from "../../trajectory/runtime-
 import type {
   SqliteTrajectoryRuntimeAppend,
   SqliteTrajectoryRuntimeReadScope,
-} from "../../trajectory/runtime-store.sqlite.js";
+} from "../../trajectory/runtime-store.contract.js";
 import type { TrajectoryEvent } from "../../trajectory/types.js";
 import type { readLegacyAcpMigrationContextInDatabase } from "./session-accessor.sqlite-acp-provenance.js";
 import type { SessionParticipantRecord } from "./session-accessor.sqlite-participant-projection.js";

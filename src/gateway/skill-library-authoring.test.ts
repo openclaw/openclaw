@@ -98,11 +98,11 @@ describe("human personal namespace authority", () => {
     const { db } = openOpenClawStateDatabase();
     try {
       db.setAuthorizer(() => constants.SQLITE_DENY);
-      expect(run.assertWorkspaceCurrent).not.toThrow();
+      await expect(run.assertWorkspaceCurrent()).resolves.toBeUndefined();
       db.setAuthorizer(null);
       setUserProfileRole(alice.id, "reader");
       db.setAuthorizer(() => constants.SQLITE_DENY);
-      expect(run.assertWorkspaceCurrent).toThrow("current administrator authority");
+      await expect(run.assertWorkspaceCurrent()).rejects.toThrow("current administrator authority");
     } finally {
       db.setAuthorizer(null);
       run.close();
