@@ -4,7 +4,7 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   extractQaMessageText,
-  readQaMessageFunctionCalls,
+  readQaMessageToolCalls,
   readQaTranscriptMessages,
 } from "./runtime-transcript.js";
 
@@ -150,31 +150,15 @@ function parseJsonArguments(value: unknown): unknown {
 }
 
 function hasCurrentChatMessageSend(message: Record<string, unknown>) {
-  const rawContent = message.content;
-  if (Array.isArray(rawContent)) {
-    for (const block of rawContent) {
-      if (!isRecord(block)) {
-        continue;
-      }
-      const type = readNonEmptyString(block.type)?.toLowerCase();
-      if (
-        type !== "tool_use" &&
-        type !== "toolcall" &&
-        type !== "tool_call" &&
-        type !== "function_call"
-      ) {
-        continue;
-      }
-      if (
-        isCurrentChatMessageSend(block.name, block.input ?? block.arguments ?? block.args ?? null)
-      ) {
-        return true;
-      }
-    }
-  }
-
-  for (const call of readQaMessageFunctionCalls(message)) {
-    if (isCurrentChatMessageSend(call.tool, call.args)) {
+  for (const { block, tool, args } of readQaMessageToolCalls(message, {
+    includeFunctionCalls: true,
+  })) {
+    if (
+      isCurrentChatMessageSend(
+        tool,
+        block ? (block.input ?? block.arguments ?? block.args ?? null) : args,
+      )
+    ) {
       return true;
     }
   }

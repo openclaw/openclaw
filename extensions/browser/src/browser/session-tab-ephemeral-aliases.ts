@@ -17,15 +17,6 @@ type VolatileAliasTarget = {
   tabKey: string;
 };
 
-const durableAliasStateSymbol = Symbol.for(
-  "openclaw.browser.session-tabs.interaction-storage-keys",
-);
-const durableExactStateSymbol = Symbol.for(
-  "openclaw.browser.session-tabs.exact-interaction-storage-keys",
-);
-const volatileAliasStateSymbol = Symbol.for("openclaw.browser.session-tabs.volatile-aliases");
-const volatileExactStateSymbol = Symbol.for("openclaw.browser.session-tabs.exact-volatile-aliases");
-
 function interactionKey(identity: AliasIdentity): string {
   const route = browserSessionTabRouteKey(identity.route ?? { kind: "browser-control" });
   return `${identity.sessionKey}\u0000${route}\u0000${identity.profile ?? ""}\u0000${identity.targetId}`;
@@ -38,82 +29,91 @@ function normalizedAliases<T extends string | undefined>(
   return new Set([primary, ...normalizeTrimmedStringList(aliases)]);
 }
 
-function durableKeysByInteraction(kind: "alias" | "exact" = "alias"): Map<string, Set<string>> {
-  return resolveGlobalMap(kind === "exact" ? durableExactStateSymbol : durableAliasStateSymbol);
-}
-
-function removeAliasTarget<T extends Set<string> | Map<string, VolatileAliasTarget>>(
-  mappings: Map<string, T>,
-  targetKey: string,
-): void {
-  for (const [key, targets] of mappings) {
-    targets.delete(targetKey);
-    if (targets.size === 0) {
-      mappings.delete(key);
-    }
-  }
-}
-
-export function resetDurableTabAliases(): void {
-  durableKeysByInteraction().clear();
-  durableKeysByInteraction("exact").clear();
-}
-
-export function clearDurableTabAliases(storageKey: string): void {
-  removeAliasTarget(durableKeysByInteraction(), storageKey);
-  removeAliasTarget(durableKeysByInteraction("exact"), storageKey);
-}
-
-export function rememberDurableTabAliases(
-  identity: AliasIdentity,
-  aliases: Array<string | undefined>,
-  storageKey: string,
-  profileAliases: Array<string | undefined> = [],
-): void {
-  clearDurableTabAliases(storageKey);
-  const mappings = durableKeysByInteraction();
-  const exactMappings = durableKeysByInteraction("exact");
-  for (const profile of normalizedAliases(identity.profile, profileAliases)) {
-    const exactKey = interactionKey({ ...identity, profile });
-    const exactStorageKeys = exactMappings.get(exactKey) ?? new Set<string>();
-    exactStorageKeys.add(storageKey);
-    exactMappings.set(exactKey, exactStorageKeys);
-    for (const targetId of normalizedAliases(identity.targetId, aliases)) {
-      const key = interactionKey({ ...identity, profile, targetId });
-      const storageKeys = mappings.get(key) ?? new Set<string>();
-      storageKeys.add(storageKey);
-      mappings.set(key, storageKeys);
-    }
-  }
-}
-
-function readAliasCandidates<T>(
-  targets: { size: number; values: () => Iterator<T, undefined> } | undefined,
+function createTabAliasIndex<T>(
+  aliasSymbol: string,
+  exactSymbol: string,
+  keyOf: (target: T) => string,
 ) {
+  const mappings = (kind: "alias" | "exact") =>
+    resolveGlobalMap<string, Map<string, T>>(
+      Symbol.for(kind === "exact" ? exactSymbol : aliasSymbol),
+    );
+  const clear = (targetKey: string) => {
+    for (const kind of ["alias", "exact"] as const) {
+      const index = mappings(kind);
+      for (const [key, targets] of index) {
+        targets.delete(targetKey);
+        if (targets.size === 0) {
+          index.delete(key);
+        }
+      }
+    }
+  };
   return {
-    target: targets?.size === 1 ? targets.values().next().value : undefined,
-    hasCandidates: (targets?.size ?? 0) > 0,
+    clear,
+    reset: () => {
+      mappings("alias").clear();
+      mappings("exact").clear();
+    },
+    forget: (identity: AliasIdentity) => {
+      mappings("alias").delete(interactionKey(identity));
+      mappings("exact").delete(interactionKey(identity));
+    },
+    remember: (
+      identity: AliasIdentity,
+      aliases: Array<string | undefined>,
+      target: T,
+      profileAliases: Array<string | undefined> = [],
+    ) => {
+      const targetKey = keyOf(target);
+      clear(targetKey);
+      const add = (kind: "alias" | "exact", identity: AliasIdentity) => {
+        const index = mappings(kind);
+        const key = interactionKey(identity);
+        const targets = index.get(key) ?? new Map<string, T>();
+        targets.set(targetKey, target);
+        index.set(key, targets);
+      };
+      for (const profile of normalizedAliases(identity.profile, profileAliases)) {
+        add("exact", { ...identity, profile });
+        for (const targetId of normalizedAliases(identity.targetId, aliases)) {
+          add("alias", { ...identity, profile, targetId });
+        }
+      }
+    },
+    read: (identity: AliasIdentity, kind: "alias" | "exact" = "alias") => {
+      const targets = mappings(kind).get(interactionKey(identity));
+      return {
+        target: targets?.size === 1 ? targets.values().next().value : undefined,
+        hasCandidates: (targets?.size ?? 0) > 0,
+      };
+    },
   };
 }
 
-export function readDurableTabAlias(identity: AliasIdentity, kind: "alias" | "exact" = "alias") {
-  return readAliasCandidates(durableKeysByInteraction(kind).get(interactionKey(identity)));
-}
+const durableAliases = createTabAliasIndex(
+  "openclaw.browser.session-tabs.interaction-storage-keys",
+  "openclaw.browser.session-tabs.exact-interaction-storage-keys",
+  (storageKey: string) => storageKey,
+);
+
+export const resetDurableTabAliases = durableAliases.reset;
+export const clearDurableTabAliases = durableAliases.clear;
+export const rememberDurableTabAliases = durableAliases.remember;
+export const readDurableTabAlias = durableAliases.read;
 
 function volatileAliasTargetKey(target: VolatileAliasTarget): string {
   return JSON.stringify([target.sessionKey, target.tabKey]);
 }
 
-function volatileAliasesByInteraction(
-  kind: "alias" | "exact" = "alias",
-): Map<string, Map<string, VolatileAliasTarget>> {
-  return resolveGlobalMap(kind === "exact" ? volatileExactStateSymbol : volatileAliasStateSymbol);
-}
+const volatileAliases = createTabAliasIndex(
+  "openclaw.browser.session-tabs.volatile-aliases",
+  "openclaw.browser.session-tabs.exact-volatile-aliases",
+  volatileAliasTargetKey,
+);
 
 export function clearVolatileTabAliases(sessionKey: string, tabKey: string): void {
-  const targetKey = volatileAliasTargetKey({ sessionKey, tabKey });
-  removeAliasTarget(volatileAliasesByInteraction(), targetKey);
-  removeAliasTarget(volatileAliasesByInteraction("exact"), targetKey);
+  volatileAliases.clear(volatileAliasTargetKey({ sessionKey, tabKey }));
 }
 
 export function rememberVolatileTabAliases(
@@ -122,29 +122,13 @@ export function rememberVolatileTabAliases(
   tabKey: string,
   profileAliases: Array<string | undefined> = [],
 ): void {
-  clearVolatileTabAliases(identity.sessionKey, tabKey);
-  const target = { sessionKey: identity.sessionKey, tabKey };
-  const mappings = volatileAliasesByInteraction();
-  const exactMappings = volatileAliasesByInteraction("exact");
-  for (const profile of normalizedAliases(identity.profile, profileAliases)) {
-    const exactKey = interactionKey({ ...identity, profile });
-    const exactTargets = exactMappings.get(exactKey) ?? new Map<string, VolatileAliasTarget>();
-    exactTargets.set(volatileAliasTargetKey(target), target);
-    exactMappings.set(exactKey, exactTargets);
-    for (const targetId of normalizedAliases(identity.targetId, aliases)) {
-      const key = interactionKey({ ...identity, profile, targetId });
-      const targets = mappings.get(key) ?? new Map<string, VolatileAliasTarget>();
-      targets.set(volatileAliasTargetKey(target), target);
-      mappings.set(key, targets);
-    }
-  }
+  volatileAliases.remember(
+    identity,
+    aliases,
+    { sessionKey: identity.sessionKey, tabKey },
+    profileAliases,
+  );
 }
 
-export function readVolatileTabAlias(identity: AliasIdentity, kind: "alias" | "exact" = "alias") {
-  return readAliasCandidates(volatileAliasesByInteraction(kind).get(interactionKey(identity)));
-}
-
-export function forgetVolatileTabAlias(identity: AliasIdentity): void {
-  volatileAliasesByInteraction().delete(interactionKey(identity));
-  volatileAliasesByInteraction("exact").delete(interactionKey(identity));
-}
+export const readVolatileTabAlias = volatileAliases.read;
+export const forgetVolatileTabAlias = volatileAliases.forget;
