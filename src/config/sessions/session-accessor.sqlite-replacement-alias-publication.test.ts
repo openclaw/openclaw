@@ -20,7 +20,10 @@ import {
 import { replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
 import { listTranscriptInstancesFromDatabase } from "./session-accessor.sqlite-history.js";
 import { recordSessionParticipant } from "./session-accessor.sqlite-participants.native.js";
-import { applySessionEntryCanonicalReplacements } from "./session-accessor.sqlite-replacement-projection.js";
+import {
+  applySessionEntryCanonicalReplacements,
+  applySessionEntryExactReplacements,
+} from "./session-accessor.sqlite-replacement-projection.js";
 import { listSessionMembersInDatabase } from "./session-sharing-store.kernel.js";
 import { addSessionMember } from "./session-sharing-store.native.js";
 
@@ -45,7 +48,7 @@ it("persists and publishes a snapshot restored by a later canonical replacement"
       }
     });
     try {
-      await applySessionEntryCanonicalReplacements({
+      await applySessionEntryExactReplacements({
         storePath: database.path,
         sessionKeys: [sessionKey],
         update: () => ({
@@ -53,12 +56,10 @@ it("persists and publishes a snapshot restored by a later canonical replacement"
           replacements: [
             {
               sessionKey,
-              previousSessionKeys: [],
               entry: { ...entry, updatedAt: 2, skillsSnapshot: { prompt: "new", skills: [] } },
             },
             {
               sessionKey,
-              previousSessionKeys: [],
               entry: { ...entry, updatedAt: 3, label: "final" },
             },
           ],
