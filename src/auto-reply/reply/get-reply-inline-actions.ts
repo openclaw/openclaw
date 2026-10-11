@@ -416,7 +416,10 @@ export async function handleInlineActions(
           );
         }
         // The execution owner can observe revocation while arming cancellation.
+        await opts?.awaitSessionDiffBaseline?.();
         opts?.abortSignal?.throwIfAborted();
+        opts?.operatorAuthority?.assertCurrent();
+        command.assertOwnerCurrent?.();
         const result = asOptionalObjectRecord(
           await tool.execute(toolCallId, toolArgs, opts?.abortSignal),
         );
@@ -523,6 +526,10 @@ export async function handleInlineActions(
 
   const runCommands = async (commandInput: typeof command) => {
     const { handleCommands } = await commandsRuntimeLoader.load();
+    await opts?.awaitSessionDiffBaseline?.();
+    opts?.abortSignal?.throwIfAborted();
+    opts?.operatorAuthority?.assertCurrent();
+    commandInput.assertOwnerCurrent?.();
     const result = await handleCommands({
       ...commandParams,
       // Command handlers mutate the continuation context and retain the dispatch context.

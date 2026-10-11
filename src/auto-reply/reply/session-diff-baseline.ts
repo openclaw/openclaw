@@ -22,6 +22,14 @@ export async function prepareReplySessionDiffBaseline(params: {
     sessionKey: sessionState.sessionKey,
     storePath: sessionState.storePath,
   });
-  sessionState.sessionEntry = entry;
-  sessionState.sessionEntryHandle.replaceCurrent(entry);
+  const current = sessionState.sessionEntryHandle.getCurrent() ?? sessionState.sessionEntry;
+  if (current.sessionId === entry.sessionId) {
+    const next = {
+      ...current,
+      sessionDiffBaseline: entry.sessionDiffBaseline,
+      sessionDiffBaselineCapture: entry.sessionDiffBaselineCapture,
+    };
+    sessionState.sessionEntry = next;
+    sessionState.sessionEntryHandle.replaceCurrent(next);
+  }
 }

@@ -294,6 +294,7 @@ export async function executeFollowupTurn(params: {
     abortSignal: turn.operation.abortSignal,
     toolsAllow: turn.queued.toolsAllow,
     disableTools: turn.queued.disableTools,
+    awaitSessionDiffBaseline: turn.queued.runObservers?.awaitSessionDiffBaseline,
     onAgentRunStart: turn.queued.runObservers?.onAgentRunStart,
     onAgentRunTerminalOutcome: turn.queued.runObservers?.onAgentRunTerminalOutcome,
     onModelSelected: turn.queued.runObservers?.onModelSelected,

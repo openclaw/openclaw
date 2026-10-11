@@ -385,6 +385,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     agentHarnessId: string;
   } = {
     providerReviewAcknowledgment: params.providerReviewAcknowledgment,
+    awaitSessionDiffBaseline: params.awaitSessionDiffBaseline,
     pluginRuntimeRefreshPending: pluginRefresh.isPending,
     registerPluginRuntimeRefreshConsumer: (isCurrent) => {
       if (attemptControls.isCurrent()) {

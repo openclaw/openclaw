@@ -97,6 +97,7 @@ type FollowupRunObservers = Pick<
   GetReplyOptions,
   "onAgentRunStart" | "onAgentRunTerminalOutcome" | "onModelSelected"
 > & {
+  awaitSessionDiffBaseline?: () => Promise<void>;
   prepareAssistantTranscriptMessage?: PrepareAssistantTranscriptMessage;
   resolveReplyDelivery?: ReplyDeliveryObserver;
   onDeliberateSilentTerminalReply?: () => void;
