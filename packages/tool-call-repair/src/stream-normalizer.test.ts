@@ -96,6 +96,59 @@ describe("normalizePlainTextToolCallStreamEvents", () => {
     expect(textDeltas(events)).toEqual([raw]);
     expectTerminalContent(events, terminal, textContent(raw));
   });
+
+  it.each<[string, Record<string, unknown>[], string[], string]>([
+    [
+      "keeps a replayed false prefix stable when a call marker spans chunks",
+      streamDeltas(" [read]\n", "<function=read>"),
+      [" [read]\n"],
+      "<function=read>",
+    ],
+    [
+      "holds a stacked function call whose marker spans chunks",
+      streamDeltas('[tool:read]\n{"path":"a"}<funct', "ion=read></function>"),
+      [],
+      "<function=read>",
+    ],
+    [
+      "holds a stacked Harmony call whose marker spans chunks",
+      streamDeltas('[tool:read]\n{"path":"a"} <|channel|>', "commentary to=read code<|message|>  "),
+      [],
+      "<|channel|>",
+    ],
+  ])("%s", async (_name, source, visible, hidden) => {
+    const events = await normalize(source);
+    expect(textDeltas(events)).toEqual(visible);
+    expect(JSON.stringify(events)).not.toContain(hidden);
+    const unsplit = await normalize([
+      streamTextDelta(source.map((event) => event.delta as string).join("")),
+    ]);
+    expect(textDeltas(events)).toEqual(textDeltas(unsplit));
+  });
+
+  it.each([
+    [
+      "replays a false prefix that a cumulative text_end completes",
+      "hello\n[read]\n{}",
+      "hello\n[read]\n{}\nX\n  ",
+    ],
+    [
+      "hides a split function marker completed only by a cumulative text_end",
+      "hello\n[read]\n{}",
+      "hello\n[read]\n{}\n<function=read>",
+    ],
+    [
+      "hides a split function call completed only by a cumulative text_end",
+      "hello\n[read]\n{}",
+      "hello\n[read]\n{}\n<function=read></function>",
+    ],
+  ])("%s", async (_name, delta, full) => {
+    const split = await normalize([streamTextDelta(delta), textEnd(full)]);
+    const unsplit = await normalize([streamTextDelta(full), textEnd(full)]);
+    expect(textDeltas(split).join("")).toBe(textDeltas(unsplit).join(""));
+    expect(eventTypes(split).includes("text_end")).toBe(eventTypes(unsplit).includes("text_end"));
+    expect(JSON.stringify(split)).not.toContain("<function=read>");
+  });
   it("preserves prose that invalidates an over-cap XML prefix", async () => {
     const prefix = overCapXml.slice(0, -"</function>".length);
     const visible = "Visible answer";
@@ -626,5 +679,102 @@ describe("normalizePlainTextToolCallStreamEvents protected ranges", () => {
       },
     );
     expectLiteral(events, text, textContent(text));
+  });
+});
+
+describe("normalizePlainTextToolCallStreamEvents trim replay ordering", () => {
+  it("drains buffered reasoning when a terminal trim clears the candidate", async () => {
+    const prefix = `[read]${" ".repeat(300)}`;
+    const events = await normalize([
+      streamTextDelta(prefix),
+      streamTextDelta("nope\n<function=read>"),
+      { type: "thinking_delta", contentIndex: 0, delta: "checking" },
+    ]);
+    expect(textDeltas(events)).toEqual([`${prefix}nope\n`]);
+    expect(eventTypes(events)).toContain("thinking_delta");
+    expect(JSON.stringify(events)).not.toContain("<function=read>");
+  });
+
+  it("replays each prefix segment at its original content index", async () => {
+    const events = await normalize([
+      streamTextDelta("[read]", 0),
+      streamTextDelta("x\n<function=read>", 1),
+    ]);
+    expect(
+      events
+        .filter((event) => event.type === "text_delta")
+        .map((event) => [event.contentIndex, event.delta]),
+    ).toEqual([
+      [0, "[read]"],
+      [1, "x\n"],
+    ]);
+    expect(JSON.stringify(events)).not.toContain("<function=read>");
+  });
+
+  it("keeps a trimmed cumulative snapshot local to the retained content block", async () => {
+    const events = await normalize([
+      streamTextDelta("[read]", 0),
+      streamTextDelta("x\n<function=read>", 1),
+      textEnd("x\n<function=read></function>", 1),
+    ]);
+    expect(
+      events
+        .filter((event) => event.type === "text_delta")
+        .map((event) => [event.contentIndex, event.delta]),
+    ).toEqual([
+      [0, "[read]"],
+      [1, "x\n"],
+    ]);
+    expect(JSON.stringify(events)).not.toContain("<function=read>");
+  });
+
+  it("replays a decided prefix and buffered reasoning in arrival order", async () => {
+    const events = await normalize([
+      streamTextDelta("[read]"),
+      { type: "thinking_delta", contentIndex: 0, delta: "checking" },
+      streamTextDelta("\n<function=read>"),
+    ]);
+    expect(events.map((event) => [event.type, event.delta])).toEqual([
+      ["text_delta", "[read]"],
+      ["thinking_delta", "checking"],
+      ["text_delta", "\n"],
+    ]);
+    expect(JSON.stringify(events)).not.toContain("<function=read>");
+  });
+});
+
+describe("normalizePlainTextToolCallStreamEvents terminal trim drains", () => {
+  const trimmedPrefix = `[read]${" ".repeat(300)}`;
+  const trimmedVisible = `${trimmedPrefix}nope\n`;
+  const trimmedDeltas = [streamTextDelta(trimmedPrefix), streamTextDelta("nope\n<function=read>")];
+  const queuedReasoning = { type: "thinking_delta", contentIndex: 0, delta: "checking" };
+
+  it("drains buffered reasoning when a done trim clears the candidate", async () => {
+    const events = await normalize([
+      ...trimmedDeltas,
+      queuedReasoning,
+      doneEvent("stop", assistantMessage(textContent("visible only"))),
+    ]);
+    expect(textDeltas(events)).toEqual([trimmedVisible]);
+    expect(eventTypes(events)).toContain("thinking_delta");
+    expect(JSON.stringify(events)).not.toContain("<function=read>");
+  });
+
+  it("drains buffered reasoning when an error trim clears the candidate", async () => {
+    const events = await normalize([
+      ...trimmedDeltas,
+      queuedReasoning,
+      errorEvent(assistantMessage(textContent("visible only"))),
+    ]);
+    expect(textDeltas(events)).toEqual([trimmedVisible]);
+    expect(eventTypes(events)).toContain("thinking_delta");
+    expect(JSON.stringify(events)).not.toContain("<function=read>");
+  });
+
+  it("drains buffered reasoning at the candidate queue cap", async () => {
+    const events = await normalize([...trimmedDeltas, ...lifecycles]);
+    expect(textDeltas(events)).toEqual([trimmedVisible]);
+    expect(eventTypes(events)).toContain("thinking_start");
+    expect(JSON.stringify(events)).not.toContain("<function=read>");
   });
 });
