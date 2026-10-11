@@ -75,7 +75,11 @@ SQLite format, schema-version, integrity, canonical-index, and
 table-existence validation runs once per physical database per process load,
 on its first admission. The admitted facts are shared with all workers and
 handles, including later opens and reopens after idle close. File identity uses
-volume, inode, and stable birthtime checked with `fstat`, not SQL. A replaced or
+volume, inode, and stable birthtime captured once with `fstat` on the retained
+admission descriptor, not SQL. Admission lookups and established borrowers reuse
+those shared facts without checking the pathname again. Native open and reopen
+still identify replacement files, and creation witnesses retain their physical
+file check. A replaced or
 restored file needs its own first validation. Migration and repair owners validate
 their changes and publish the new facts after successful DDL settlement; later
 runtime consumers do not recheck them. Doctor and explicit verification retain
