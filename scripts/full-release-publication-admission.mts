@@ -145,9 +145,10 @@ function retainSource(root: string, sha: string, store: string, tooling: boolean
   if (sizes.length !== objectIds.length + 1 || sizes.at(-1) !== "") {
     throw new Error("invalid publication source object-size response");
   }
+  // This retained pack is local and short-lived; skip cross-object delta search.
   const pack = localGit(
     root,
-    ["pack-objects", "--stdout", "--no-reuse-delta", "--no-reuse-object"],
+    ["pack-objects", "--stdout", "--no-reuse-delta", "--no-reuse-object", "--window=0"],
     objectInput,
   );
   localGit(store, ["index-pack", "--stdin"], pack);
