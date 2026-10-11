@@ -55,6 +55,7 @@ import {
 import {
   getAcceptedChatHistorySession,
   getChatHistoryLoadState,
+  isInitialChatHistoryUnavailable,
   isChatHistoryRetrying,
 } from "./chat-history-state.ts";
 import { sameChatPanePresence } from "./chat-pane-presence.ts";
@@ -125,7 +126,9 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
     // Coalesce active-pane boot data only; settled and inactive panes keep immediate updates.
     if (
       this.active &&
+      this.state &&
       this.transcriptLoading &&
+      isInitialChatHistoryUnavailable(this.state) &&
       this.hasUpdated &&
       this.isConnected &&
       this.presented &&
