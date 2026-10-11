@@ -2,6 +2,7 @@ import { reloadSessionMcpRuntimes } from "../agents/agent-bundle-mcp-tools.js";
 import { listAgentIds } from "../agents/agent-roster.js";
 import { tryResolveConfiguredAgentWorkspaceDir } from "../agents/agent-scope-config.js";
 import { refreshContextWindowCache } from "../agents/context.js";
+import { PreparedModelRuntimePublicationSupersededError } from "../agents/prepared-model-runtime.errors.js";
 import {
   advancePreparedModelRuntimeConfig,
   beginPreparedModelRuntimePluginDrain,
@@ -650,6 +651,10 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
         await refreshModelRuntimeSnapshots(nextConfig);
       }
     } catch (err) {
+      if (err instanceof PreparedModelRuntimePublicationSupersededError && !isCurrent()) {
+        // The newer config owns model publication; cancellation creates no restart debt.
+        throw createReloadCancellationError(true);
+      }
       scheduleRecoveryRestart("prepared model runtime reload", err);
       return "applied-restart-required";
     } finally {
