@@ -182,6 +182,8 @@ These service re-pins leave state and configuration untouched; run Doctor
 separately when you need repairs or migrations.
 If a shell profile cannot be safely updated, installation continues and prints
 manual PATH setup commands; existing Gateway services are still re-pinned.
+Service setup receives the caller's original temporary-directory environment,
+so the service never retains the installer's disposable scratch directory.
 
 On macOS, the installer uses `OPENCLAW_SQLITE_LIBRARY` when set; otherwise it
 ensures Homebrew SQLite is installed and exports `HOMEBREW_PREFIX`. It validates

@@ -3552,7 +3552,8 @@ install_with_bun() {
     registry="${OPENCLAW_INSTALL_NPM_REGISTRY:-https://registry.npmjs.org}"
     mktempfile pin
     mktempfile version
-    if [[ ! "$OPENCLAW_VERSION" =~ ^[a-zA-Z0-9][a-zA-Z0-9._+-]*$ || "$(to_lowercase_ascii "$OPENCLAW_VERSION")" == main ]]; then
+    if is_explicit_package_install_spec "$OPENCLAW_VERSION" ||
+        [[ ! "$OPENCLAW_VERSION" =~ ^[a-zA-Z0-9][a-zA-Z0-9._+-]*$ || "$(to_lowercase_ascii "$OPENCLAW_VERSION")" == main ]]; then
         if [[ -z "$BUN_PATH" ]]; then
             ui_error "Bun needs a published npm version or dist-tag. For local tarballs, paths, or git specs, supply --bun-path with the matching OpenClaw fork."
             return 2
@@ -3615,6 +3616,7 @@ install_with_bun() {
     local bun_work
     bun_work="$(mktemp -d)"
     TMPFILES+=("$bun_work")
+    local caller_tmpdir="${TMPDIR-}" caller_tmpdir_set="${TMPDIR+x}"
     local TMPDIR="$bun_work"
     export TMPDIR
     [[ -n "$BUN_PATH" ]] || stage_bun "$target"
@@ -3679,7 +3681,15 @@ install_with_bun() {
     if [[ -n "$old_claw" && "$old_claw" != "$OPENCLAW_BIN" ]]; then
         ui_info "Bun bin directory now takes precedence over ${old_claw} in this session."
     fi
-    if is_gateway_daemon_loaded "$OPENCLAW_BIN"; then
+    local gateway_loaded=false
+    if is_gateway_daemon_loaded "$OPENCLAW_BIN"; then gateway_loaded=true; fi
+    # Service installation persists TMPDIR; never record installer scratch.
+    if [[ -n "$caller_tmpdir_set" ]]; then
+        TMPDIR="$caller_tmpdir"
+    else
+        unset TMPDIR
+    fi
+    if [[ "$gateway_loaded" == true ]]; then
         run_quiet_step "Pinning existing Gateway to Bun" "$OPENCLAW_BIN" gateway install --runtime bun --runtime-path "$BUN_PATH" --force
     elif [[ "$NO_ONBOARD" != 1 ]] && ! has_openclaw_config; then
         if is_promptable; then

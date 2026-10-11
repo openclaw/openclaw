@@ -61,6 +61,7 @@ case "$1" in
     case "$1" in
       --version) echo "OpenClaw \${CLI_VERSION:-${version}}" ;;
       daemon) printf '{"service":{"loaded":%s}}\\n' "\${SERVICE_LOADED:-false}" ;;
+      gateway) printf '%s' "\${TMPDIR-unset}" > "$FIXTURE_ROOT/service-tmpdir" ;;
     esac
     ;;
   *) exit 78 ;;
@@ -275,6 +276,7 @@ describe("install.sh Bun runtime", () => {
       }
       const target = join(f.home, ".openclaw/tools", `bun-${tag}`, "bun");
       expect(sha(readFileSync(target))).toBe(f.artifact.executableSha256);
+      expect(readFileSync(join(f.root, "service-tmpdir"), "utf8")).toBe(f.tmp);
       expect(readFileSync(join(f.root, "effects"), "utf8")).toBe(
         `add:add -g --trust openclaw@${version} launcher:${target}\ncli:--version\ncli:daemon status --json\ncli:gateway install --runtime bun --runtime-path ${target} --force\n`,
       );
@@ -293,19 +295,32 @@ describe("install.sh Bun runtime", () => {
     },
   );
 
-  it("accepts an explicit fork for a custom package", () => {
+  it.each(["./local.tgz", "local.tgz", "local.tar.gz"])(
+    "accepts an explicit fork for custom package %s",
+    (spec) => {
+      const f = fixture();
+      const result = f.run([
+        "--runtime",
+        "bun",
+        "--bun-path",
+        f.bun,
+        "--version",
+        spec,
+        "--no-onboard",
+      ]);
+      expect(result.status, output(result)).toBe(0);
+      expect(existsSync(join(f.root, "requests"))).toBe(false);
+    },
+  );
+
+  it("keeps TMPDIR unset for service installation when the caller omits it", () => {
     const f = fixture();
-    const result = f.run([
-      "--runtime",
-      "bun",
-      "--bun-path",
-      f.bun,
-      "--version",
-      "./local.tgz",
-      "--no-onboard",
-    ]);
+    const result = f.run(["--runtime", "bun", "--no-onboard"], {
+      SERVICE_LOADED: "true",
+      TMPDIR: undefined,
+    });
     expect(result.status, output(result)).toBe(0);
-    expect(existsSync(join(f.root, "requests"))).toBe(false);
+    expect(readFileSync(join(f.root, "service-tmpdir"), "utf8")).toBe("unset");
   });
 
   it.each(["tag", "revision", "asset", "executable", "sha256", "executableSha256"])(
