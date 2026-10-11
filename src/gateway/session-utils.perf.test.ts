@@ -365,18 +365,19 @@ describe("session list resolver cache", () => {
             inputs.mockRestore();
           }
           catalogSpy.mockClear();
-          const key = "agent:main:dashboard:catalog-0";
+          const updatedKey = "agent:main:dashboard:catalog-2";
           for (let update = 0; update < 4; update++) {
-            store[key] = { ...store[key]!, label: `Metadata update ${update}` };
-            writeResidentEntries({ [key]: store[key]! }, 1);
+            store[updatedKey] = { ...store[updatedKey]!, label: `Metadata update ${update}` };
+            writeResidentEntries({ [updatedKey]: store[updatedKey]! }, 1);
             const updated = await listProjectedSessions({ projection, opts: { limit: 80 } });
-            expect(updated.sessions.find((row) => row.key === key)).toMatchObject({
+            expect(updated.sessions.find((row) => row.key === updatedKey)).toMatchObject({
               label: `Metadata update ${update}`,
-              contextTokens: revision * 10_000,
+              contextTokens: revision * 20_000,
             });
           }
           expect(catalogSpy.mock.calls.length).toBeLessThanOrEqual(warmCatalogReads * 4);
           catalogSpy.mockClear();
+          const key = "agent:main:dashboard:catalog-0";
           const patch = projectSessionPatchResult({
             cfg,
             canonicalKey: key,
