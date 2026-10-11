@@ -1,3 +1,4 @@
+import "../../worker-heap-flag.mjs";
 import { basename } from "node:path";
 import { fileURLToPath } from "node:url";
 import { MessagePort, Worker } from "node:worker_threads";
@@ -10,7 +11,6 @@ import type { WorkerRetirementReason } from "@openclaw/worker-runtime";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type { DiagnosticMemoryUsage } from "./diagnostic-process-types.js";
 import { runWithMainThreadTask } from "./main-thread-stall.js";
-import "./worker-ancestry.js";
 import { normalizeDiagnosticWorkerScript } from "./worker-diagnostic-script.js";
 
 type WorkerCpuHandle = {

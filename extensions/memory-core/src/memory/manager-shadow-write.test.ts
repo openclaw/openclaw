@@ -10,7 +10,10 @@ import { observeHostDataSql } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { seedMemoryForgetTombstones } from "../test-helpers.js";
 import { MemoryIndexDatabase } from "./manager-database-context.js";
-import { createManagerIndexFixture } from "./manager-index.test-support.js";
+import {
+  createManagerIndexFixture,
+  memoryIndexFixtureWriter,
+} from "./manager-index.test-support.js";
 import { MemorySourceIndexKernel } from "./manager-source-index-kernel.js";
 
 const { closeAllMemorySearchManagers, getMemorySearchManager } = await import("./index.js");
@@ -94,8 +97,9 @@ describe("private session source staging", () => {
           sql.restore();
         }
       }
+      const databasePath = db.location()!;
       await manager.close();
-      const entries = await fs.readdir(path.dirname(db.location()!));
+      const entries = await fs.readdir(path.dirname(databasePath));
       expect(entries.filter((name) => name.includes(".memory-reindex-"))).toEqual([]);
     },
   );
@@ -126,9 +130,9 @@ describe("private session source staging", () => {
 
   it("releases publication capacity and retries cleanup after a close failure", async () => {
     const { manager } = await setup();
-    const open = sqliteRuntime.openOpenClawAgentSqliteWorkerStore;
+    const open = sqliteRuntime.openOpenClawAgentSqliteWorkerStoreV2;
     const probeReleased: Array<() => Promise<unknown>> = [];
-    vi.spyOn(sqliteRuntime, "openOpenClawAgentSqliteWorkerStore").mockImplementation(
+    vi.spyOn(sqliteRuntime, "openOpenClawAgentSqliteWorkerStoreV2").mockImplementation(
       async (...args) => {
         const worker = await open(...args);
         probeReleased.push(() =>
@@ -201,6 +205,7 @@ describe("private session source staging", () => {
 
   it("drains accepted staging before manager close releases its database", async () => {
     const { manager, db } = await setup();
+    const inspection = memoryIndexFixtureWriter(manager);
     const entered = createDeferred<void>();
     const resume = createDeferred<void>();
     // oxlint-disable-next-line typescript/unbound-method -- Invoked with the intercepted database owner.
@@ -231,8 +236,9 @@ describe("private session source staging", () => {
       expect(closed).toBe(false);
       resume.resolve();
       await Promise.all([sync, close]);
+      expect(db.isOpen).toBe(false);
       expect(
-        db.prepare("SELECT source FROM memory_index_sources WHERE source='sessions'").all(),
+        inspection.prepare("SELECT source FROM memory_index_sources WHERE source='sessions'").all(),
       ).toEqual([{ source: "sessions" }]);
     } finally {
       resume.resolve();
@@ -362,8 +368,9 @@ describe("private session source staging", () => {
     expect(db.prepare("SELECT path, text FROM memory_index_chunks ORDER BY path").all()).toEqual(
       before,
     );
+    const databasePath = db.location()!;
     await manager.close();
-    const entries = await fs.readdir(path.dirname(db.location()!));
+    const entries = await fs.readdir(path.dirname(databasePath));
     expect(entries.filter((name) => name.includes(".memory-reindex-"))).toEqual([]);
   });
 });

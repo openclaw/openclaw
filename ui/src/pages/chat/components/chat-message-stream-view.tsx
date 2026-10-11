@@ -406,7 +406,7 @@ function WorkGroupSummaryBody(props: {
               </span>
               <Show when={props.options.expanded && props.summary.total > 0}>
                 <span class="chat-work-group__total">
-                  {"·\n                "}
+                  {" · "}
                   {t(`chat.workRun.toolCalls${props.summary.total === 1 ? "One" : "Many"}`, {
                     count: String(props.summary.total),
                   })}
@@ -415,14 +415,14 @@ function WorkGroupSummaryBody(props: {
               <For each={props.summary.outcomes} keyed={(outcome) => outcome.kind}>
                 {(outcome) => (
                   <span class="chat-activity-group__outcome muted">
-                    {"· "}
+                    {" · "}
                     {outcome().label}
                   </span>
                 )}
               </For>
               <Show when={props.summary.toolOutcomes !== litNothing}>
                 <span class="chat-work-group__outcomes">
-                  {"· "}
+                  {" · "}
                   <LitContent value={props.summary.toolOutcomes} />
                 </span>
               </Show>

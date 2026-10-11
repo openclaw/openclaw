@@ -598,6 +598,36 @@ const reviewedOperations = new Map([
     ],
   ],
   [
+    "src/gateway/github-publication-store.ts",
+    [
+      {
+        tier: "W",
+        operations: [
+          "listSharedGitHubPublicationsInDatabase",
+          "markSharedGitHubPublicationReportedInDatabase",
+          "assertSharedGitHubPublicationClaimInDatabase",
+          "bindAcceptedGitHubPublicationClaimSnapshotInDatabase",
+        ],
+        evidence:
+          "List is called by state/github-publication.read.worker.ts and github-publication-defer.kernel.ts whose selector only runs in state/github-publication.worker.ts. Report/snapshot are called only by that mutation worker; claim assertion by its snapshot kernel and state/github-publication-request.worker.ts. Native store adapters remain T1.",
+      },
+    ],
+  ],
+  [
+    "src/gateway/github-repository-publication-store.ts",
+    [
+      {
+        tier: "W",
+        operations: [
+          "markRepositoryGitHubPublicationReportedInDatabase",
+          "failStaleRepositoryGitHubPublicationInDatabase",
+        ],
+        evidence:
+          "Only state/github-publication.worker.ts repositoryMutation report/retire calls these kernels. Native stale-request and reporting adapters retain their separate SQL and T1 classification.",
+      },
+    ],
+  ],
+  [
     "src/gateway/operator-approval-store.kernel.ts",
     [
       {
@@ -1079,6 +1109,15 @@ const reviewedOperations = new Map([
   [
     "src/gateway/github-personal-publication-store.ts",
     [
+      {
+        tier: "W",
+        operations: [
+          "requirePersonalGitHubPublicationConfirmationInDatabase",
+          "markPersonalGitHubPublicationReportedInDatabase",
+        ],
+        evidence:
+          "Only state/github-publication.worker.ts personalMutation restart/report calls these kernels. Native confirmation and reporting adapters retain their separate SQL and existing classification.",
+      },
       {
         tier: "T2",
         operations: ["requirePersonalGitHubPublicationConfirmation"],
@@ -2323,6 +2362,7 @@ const workerModules = new Set([
 
   "src/state/backup-run-records.kernel.ts", // Backup record writes are called only by the shared-state worker runtime.
   "src/state/github-personal-publication-lifecycle.ts", // Receipt SQL runs in shared-state worker dispatch; host helper enqueues commands.
+  "src/state/github-publication-source.kernel.ts", // Only github-publication-source.worker.ts:63,80; its reader is instantiated by openclaw-state.worker.ts:234.
   "src/state/openclaw-state-lease-worker.ts", // Lease transaction dispatch is called only by the shared-state worker backend.
   "src/state/openclaw-state-worker-runtime.ts",
   "src/state/session-repository-workspaces.kernel.ts", // SQL callers are shared-state workspace dispatch and the state read worker.
@@ -2416,12 +2456,31 @@ function ownerOf(file) {
   return parts.slice(0, depth).join("/");
 }
 
+/**
+ * @typedef {object} InventoryCall
+ * @property {string} primitive
+ * @property {number} line
+ * @property {number} column
+ * @property {string} operation
+ * @property {string} [binding]
+ * @property {string[]} [guards]
+ * @property {{namespace: string, module: string, arguments: string[]}} [forwarding]
+ */
+
 function findCalls(source) {
   const names = new Map([...primitives.keys()].map((name) => [name, name]));
+  const namespaces = new Map();
   for (const statement of source.statements) {
     const bindings = ts.isImportDeclaration(statement)
       ? statement.importClause?.namedBindings
       : undefined;
+    if (
+      bindings &&
+      ts.isNamespaceImport(bindings) &&
+      ts.isStringLiteral(statement.moduleSpecifier)
+    ) {
+      namespaces.set(bindings.name.text, statement.moduleSpecifier.text);
+    }
     if (bindings && ts.isNamedImports(bindings)) {
       for (const element of bindings.elements) {
         const imported = element.propertyName?.text ?? element.name.text;
@@ -2431,13 +2490,16 @@ function findCalls(source) {
       }
     }
   }
+  /** @type {InventoryCall[]} */
   const calls = [];
-  function visit(node, parentOperation, parentBinding, parentGuards = []) {
+  function visit(node, parentOperation, parentBinding, parentGuards, parentOwner, parent) {
     let operation = parentOperation;
     let binding = parentBinding;
-    let guards = parentGuards;
+    let guards = parentGuards ?? [];
+    let owner = parentOwner;
     // Callback SQL needs its own proof; neither an initializer nor a caller's guard covers it.
     if (ts.isFunctionLikeDeclaration(node)) {
+      owner = node;
       binding = undefined;
       guards = [];
     } else if (ts.isVariableDeclaration(node) && node.initializer) {
@@ -2455,10 +2517,17 @@ function findCalls(source) {
       operation = operation ? `${operation}.${node.name.text}` : node.name.text;
     }
     if (ts.isIfStatement(node)) {
-      visit(node.expression, operation, binding, guards);
-      visit(node.thenStatement, operation, binding, [...guards, node.expression.getText(source)]);
+      visit(node.expression, operation, binding, guards, owner, node);
+      visit(
+        node.thenStatement,
+        operation,
+        binding,
+        [...guards, node.expression.getText(source)],
+        owner,
+        node,
+      );
       if (node.elseStatement) {
-        visit(node.elseStatement, operation, binding, guards);
+        visit(node.elseStatement, operation, binding, guards, owner, node);
       }
       return;
     }
@@ -2474,6 +2543,35 @@ function findCalls(source) {
         const { line, character } = source.getLineAndCharacterOfPosition(
           expression.getStart(source),
         );
+        const namespace =
+          ts.isPropertyAccessExpression(expression) && ts.isIdentifier(expression.expression)
+            ? expression.expression.text
+            : undefined;
+        const forwarding =
+          namespace &&
+          namespaces.has(namespace) &&
+          owner &&
+          ts.isFunctionDeclaration(owner) &&
+          (owner.name?.text === called || owner.name?.text === `${called}Legacy`) &&
+          parent &&
+          ts.isReturnStatement(parent) &&
+          parent.expression === node &&
+          owner.body?.statements.includes(parent) &&
+          owner.parameters.length === node.arguments.length &&
+          owner.parameters.every(
+            (parameter, index) =>
+              ts.isIdentifier(parameter.name) &&
+              !parameter.initializer &&
+              !parameter.dotDotDotToken &&
+              ts.isIdentifier(node.arguments[index]) &&
+              parameter.name.text === node.arguments[index].text,
+          )
+            ? {
+                namespace,
+                module: namespaces.get(namespace),
+                arguments: node.arguments.map((argument) => argument.text),
+              }
+            : undefined;
         calls.push({
           primitive,
           line: line + 1,
@@ -2481,10 +2579,11 @@ function findCalls(source) {
           operation,
           ...(binding === undefined ? {} : { binding }),
           ...(guards.length === 0 ? {} : { guards }),
+          ...(forwarding ? { forwarding } : {}),
         });
       }
     }
-    node.forEachChild((child) => visit(child, operation, binding, guards));
+    node.forEachChild((child) => visit(child, operation, binding, guards, owner, node));
   }
   visit(source, "");
   return calls;
@@ -2542,6 +2641,14 @@ export function inventory(root = defaultRoot, ref = "", staged = false) {
   return files
     .flatMap((file, index) => {
       const calls = findCalls(sources[index]);
+      /** @type {Map<string, {
+       * file: string,
+       * owner: string,
+       * tier: string,
+       * priority: number,
+       * calls: InventoryCall[],
+       * evidence: Set<string>
+       * }>} */
       const groups = new Map();
       for (const call of calls) {
         const classification = classify(file, call.operation, call.binding, call.guards);
@@ -2556,10 +2663,14 @@ export function inventory(root = defaultRoot, ref = "", staged = false) {
         group.evidence.add(classification.evidence);
         groups.set(classification.tier, group);
       }
-      return [...groups.values()].map((group) => {
-        group.evidence = [...group.evidence].join("; ");
-        return group;
-      });
+      return [...groups.values()].map((group) => ({
+        file: group.file,
+        owner: group.owner,
+        tier: group.tier,
+        priority: group.priority,
+        calls: group.calls,
+        evidence: [...group.evidence].join("; "),
+      }));
     })
     .toSorted(
       (a, b) =>

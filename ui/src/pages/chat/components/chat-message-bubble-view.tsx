@@ -18,6 +18,7 @@ import { resolveMessageDisplayMarkdown } from "../../../lib/chat/message-display
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { presentedContent } from "../../../lit/presentation-binding.ts";
 import { LitContent, solidContent } from "../../../lit/solid-content.tsx";
+import "../../../plugins/control-ui-view.runtime.ts";
 import { assistantMessageIsInterrupted } from "../chat-assistant-reply.ts";
 import { renderAsyncQuestionSummary } from "./chat-async-question.ts";
 import "../../../components/person-reference.ts";
@@ -45,7 +46,6 @@ import {
   renderToolApprovalReviews,
   renderToolCard,
   renderToolIcon,
-  renderPluginToolResult,
   syncToolDisclosureOverflow,
 } from "./chat-tool-cards.ts";
 import {
@@ -53,6 +53,7 @@ import {
   renderRawOutputToggle,
   renderToolOutcome,
 } from "./chat-tool-content.ts";
+import { toolResultSurfaceProps } from "./chat-tool-render-model.ts";
 import { renderWorkspaceConflictTranscriptMessage } from "./chat-workspace-conflict.ts";
 import { renderToolPreview } from "./widget-card.ts";
 
@@ -570,24 +571,33 @@ function ToolMessageFallback(props: ContentProps) {
 }
 
 function ToolMessage(props: ContentProps) {
+  const fallback = solidContent(ToolMessageFallback, {
+    get state() {
+      return props.state;
+    },
+    get messageKey() {
+      return props.messageKey;
+    },
+    get options() {
+      return props.options;
+    },
+    get onOpenSidebar() {
+      return props.onOpenSidebar;
+    },
+  });
   return (
-    <LitContent
-      value={renderPluginToolResult(
-        props.state().singleToolCard,
-        { ...props.state().toolRenderOptions, expanded: props.state().toolMessageExpanded },
-        solidContent(ToolMessageFallback, {
-          state: props.state,
-          get messageKey() {
-            return props.messageKey;
-          },
-          get options() {
-            return props.options;
-          },
-          get onOpenSidebar() {
-            return props.onOpenSidebar;
-          },
-        }),
+    <Show when={props.state().singleToolCard} fallback={<LitContent value={fallback} />}>
+      {(card) => (
+        <openclaw-plugin-view
+          prop:surface="tool-result"
+          prop:props={toolResultSurfaceProps(card(), {
+            ...props.state().toolRenderOptions,
+            expanded: props.state().toolMessageExpanded,
+          })}
+          prop:defaultView={fallback}
+          prop:presented={props.options.presented ?? true}
+        />
       )}
-    />
+    </Show>
   );
 }

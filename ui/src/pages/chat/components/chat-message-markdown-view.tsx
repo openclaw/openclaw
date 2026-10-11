@@ -27,7 +27,7 @@ import {
   type MessageReactionOptions,
   ownReactionEmoji,
 } from "./chat-message-reaction-model.ts";
-import "./chat-message-reactions.ts";
+import { MessageReactionPicker } from "./chat-message-reactions-view.tsx";
 
 registerEnglishCatalog(registerChatMessageMetadataEnglish);
 
@@ -169,14 +169,14 @@ export function MessageActions(props: {
         <LitContent value={renderCopyAsMarkdownButton(props.details!.markdown!)} />
       </Show>
       <Show when={props.details?.reactionMessageId && props.options.onReact}>
-        <openclaw-message-reaction-picker
+        <MessageReactionPicker
           class="chat-reaction-action"
           placement={props.options.reactionPlacement ?? "bottom-start"}
-          prop:activeEmoji={ownReactionEmoji(
+          activeEmoji={ownReactionEmoji(
             props.options.messageReactions?.get(props.details!.reactionMessageId!),
             props.options.userId,
           )}
-          prop:onSelect={(emoji: string, remove: boolean) =>
+          onSelect={(emoji: string, remove: boolean) =>
             props.options.onReact?.(props.details!.reactionMessageId!, emoji, remove)
           }
         />

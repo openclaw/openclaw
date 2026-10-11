@@ -156,7 +156,7 @@ type VoiceSessionFacts = Readonly<
   >
 >;
 /** Synchronous tool policy reads the current record without a separate freshness probe. */
-export function readVoiceSessionFacts(
+function readVoiceSessionFacts(
   agentId: string,
   voiceSessionId: string,
   options?: Pick<OpenClawAgentDatabaseOptions, "env" | "path">,

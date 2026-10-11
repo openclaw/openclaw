@@ -27,20 +27,6 @@ import { DiffBlock } from "./chat-diff-render.solid.tsx";
 import type { SidebarContent } from "./chat-sidebar-content-types.ts";
 import { toolWorkspacePath, type ToolRenderOptions } from "./chat-tool-render-model.ts";
 
-declare module "@solidjs/web" {
-  namespace JSX {
-    interface IntrinsicElements {
-      "wa-tab-group": HTMLAttributes<HTMLElement> & {
-        "prop:active": string;
-        activation: "auto";
-        "without-scroll-controls": boolean;
-      };
-      "wa-tab": HTMLAttributes<HTMLElement> & { panel: string; "prop:active": boolean };
-      "wa-tab-panel": HTMLAttributes<HTMLElement> & { name: string; "prop:active": boolean };
-    }
-  }
-}
-
 function handleRawDetailsToggle(event: Event) {
   // SAFETY: Only the raw-details HTML button installs this handler.
   const button = event.currentTarget as HTMLButtonElement;
@@ -160,7 +146,7 @@ function WorkspaceFilePath(props: {
   );
 }
 
-export function ToolOutcome(props: { outcome: ToolCardOutcome; exitCode?: number }) {
+function ToolOutcome(props: { outcome: ToolCardOutcome; exitCode?: number }) {
   const label = () =>
     props.outcome === "failed" && props.exitCode !== undefined
       ? t("chat.toolCards.exitCode", { code: String(props.exitCode) })
@@ -545,7 +531,7 @@ export function ExpandedToolCardContent(props: { card: ToolCard; options: ToolRe
 }
 
 const defaults: ToolRenderOptions = { messageKey: "" };
-export const ToolContentHost = defineSolidBridge<{
+defineSolidBridge<{
   card: ToolCard | null;
   options: ToolRenderOptions;
 }>(
@@ -562,12 +548,12 @@ export const ToolContentHost = defineSolidBridge<{
     },
   },
 );
-export const RawOutputHost = defineSolidBridge<{ text: string }>(
+defineSolidBridge<{ text: string }>(
   "openclaw-chat-tool-raw",
   (props) => <RawOutputToggle text={props.text} />,
   { properties: { text: { default: "", attribute: false } } },
 );
-export const ToolOutcomeHost = defineSolidBridge<{ outcome: ToolCardOutcome; exitCode?: number }>(
+defineSolidBridge<{ outcome: ToolCardOutcome; exitCode?: number }>(
   "openclaw-chat-tool-outcome",
   (props) => <ToolOutcome outcome={props.outcome} exitCode={props.exitCode} />,
   {

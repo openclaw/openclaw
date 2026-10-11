@@ -4,11 +4,17 @@ import { SqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
 import { isIncognitoSessionKey } from "../../shared/incognito-session-key.js";
 import { isIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
+import { captureSessionPendingInputWorkerCustody } from "./session-accessor.sqlite-pending-inputs.js";
 import { withSessionEntryWorker } from "./session-accessor.sqlite-replacement-worker.js";
 import { resolveSqliteSessionKey } from "./session-accessor.sqlite-scope-helpers.js";
 import type { SessionEntryTargetPatchScope } from "./session-accessor.types.js";
-import type { SessionActor, SessionActorLifetime } from "./session-actor-contract.js";
+import type {
+  SessionActor,
+  SessionActorAuthority,
+  SessionActorLifetime,
+} from "./session-actor-contract.js";
 import { captureIncognitoSessionOperation } from "./session-incognito-binding.js";
+import { SessionPendingInputCustodyError } from "./session-pending-input-custody-error.js";
 
 export type SessionInputActorBinding = {
   phase: "acceptInput" | "adoptRun";
@@ -153,7 +159,24 @@ export async function getSessionInputActor(scope: { agentId: string; sessionKey:
   ) {
     throw new Error("Input actor differs from the recorder's admitted target");
   }
-  return { ...acquired, phase: binding.phase };
+  const custody = captureSessionPendingInputWorkerCustody();
+  return {
+    ...acquired,
+    phase: binding.phase,
+    snapshot(authority: SessionActorAuthority) {
+      try {
+        return acquired.actor.snapshot(authority);
+      } catch (error) {
+        // A closed input actor must remain a custody refusal, not enable fallback.
+        if (custody) {
+          throw new SessionPendingInputCustodyError("Pending input actor is unavailable", {
+            cause: error,
+          });
+        }
+        throw error;
+      }
+    },
+  };
 }
 
 export function throwSessionInputActorFailure(

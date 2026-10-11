@@ -2791,7 +2791,9 @@ describe("chat slash menu accessibility", () => {
       if (kind === "skill") {
         expect(container.querySelector(selector)?.textContent).toContain("Loading skills");
         expect(container.querySelectorAll(".skill-menu [role='option']")).toHaveLength(0);
-        keydownComposer(container, "Escape");
+        getComposerTextarea(container).focus();
+        const escape = keydownComposer(container, "Escape");
+        expect(escape.defaultPrevented).toBe(true);
       } else {
         inputDraft(container, "plain first message");
       }

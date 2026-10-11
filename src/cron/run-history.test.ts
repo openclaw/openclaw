@@ -78,6 +78,64 @@ it.each(["asc", "desc"] as const)("orders history timestamps and ties %s", (sort
   );
 });
 
+it("seeks linked runs before pagination without confusing public ids or ambiguous aliases", () => {
+  const record = (
+    id: string,
+    sessionId: string,
+    runAtMs: number,
+    jobId = "job",
+  ): CronRunRecord => ({
+    id,
+    jobId,
+    status: "succeeded",
+    createdAt: runAtMs,
+    endedAt: runAtMs + 1,
+    detail: { kind: "cron-run", storeKey: "store", status: "ok", runId: id, sessionId, runAtMs },
+  });
+  const target = record("target", "target-session", 10);
+  const records = [
+    target,
+    ...Array.from({ length: 50 }, (_, i) => record(`recent-${i}`, `session-${i}`, 100 + i)),
+  ];
+  const seek = (runId: string, rows = records) =>
+    projectCronRunHistoryPage(rows, {
+      storeKey: "store",
+      jobId: "job",
+      runId,
+      limit: 1,
+    }).entries.map((entry) => entry.runId);
+  for (const alias of ["target", "target-session", "cron:job:10"]) {
+    expect(seek(alias)).toEqual(["target"]);
+  }
+  expect(seek("cron:other:10")).toEqual([]);
+  expect(seek("target-session", [...records, record("collision", "target-session", 20)])).toEqual(
+    [],
+  );
+  expect(seek("cron:job:10", [...records, record("same-start", "another-session", 10)])).toEqual(
+    [],
+  );
+  expect(
+    projectCronRunHistoryPage([...records, record("hidden", "target-session", 20)], {
+      storeKey: "store",
+      jobId: "job",
+      runId: "target-session",
+      entryFilter: (entry) => entry.runId === "target",
+    }).entries,
+  ).toEqual([]);
+  expect(seek("target", [...records, record("alias-collision", "target", 20)])).toEqual(["target"]);
+  expect(
+    seek("target-session", [...records, record("other-job", "target-session", 20, "other")]),
+  ).toEqual(["target"]);
+  expect(
+    projectCronRunHistoryPage(records, {
+      storeKey: "store",
+      jobId: "job",
+      runId: "target",
+      entryFilter: () => false,
+    }).entries,
+  ).toEqual([]);
+});
+
 it("retains history across worker reads, isolates stores, and recovers only an exact receipt", async () => {
   await withOpenClawTestState(
     { layout: "state-only", prefix: "cron-native-history-" },

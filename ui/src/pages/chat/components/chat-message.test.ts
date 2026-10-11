@@ -8,6 +8,7 @@ import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
 import { setAvatarGatewayOrigin } from "../../../lib/identity-avatar-context.ts";
 import * as localStorageModule from "../../../local-storage.ts";
 import { prepareChatHistoryFixture } from "../../../test-helpers/chat-activity-fixtures.ts";
+import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import * as chatAvatar from "../chat-avatar.ts";
 import { attachHistoryActivity } from "../chat-history-request.ts";
 import { buildCachedChatItems } from "../chat-thread.ts";
@@ -39,7 +40,7 @@ import {
   type TestMessageEntry,
 } from "./chat-message.test-support.ts";
 import { settleToolBridges } from "./chat-tool-render.test-support.ts";
-import "./chat-detail-panel.ts";
+import "./chat-detail-panel.tsx";
 
 let view: HTMLDivElement;
 const localStorageValues = new Map<string, string>();
@@ -1815,7 +1816,8 @@ describe("grouped chat rendering", () => {
     expect(blocks[0]?.querySelector("code")?.textContent).toBe("Opened page");
   });
 
-  it("keeps top-level tool-name results collapsed", () => {
+  it("keeps top-level tool-name results collapsed", async () => {
+    document.body.append(view);
     markdownRenderMock.mockClear();
     renderAssistantMessage(
       createAssistantMessage("A long tool result that should stay behind the disclosure.", {
@@ -1824,6 +1826,7 @@ describe("grouped chat rendering", () => {
       { isToolMessageExpanded: () => false },
     );
 
+    await settleToolBridges(view);
     expectElement(view, ".chat-bubble--tool-shell", HTMLElement);
     expectElement(view, ".chat-tool-msg-summary", HTMLButtonElement);
     expect(view.querySelector(".chat-tool-msg-body")).toBeNull();
@@ -2303,7 +2306,8 @@ describe("grouped chat rendering", () => {
   });
 
   describe("omitted historical images", () => {
-    it("keeps omitted media visible beside a standalone tool result", () => {
+    it("keeps omitted media visible beside a standalone tool result", async () => {
+      document.body.append(view);
       renderAssistantMessage(
         createToolResultMessage("call-history-image", "read_file", [
           {
@@ -2316,6 +2320,7 @@ describe("grouped chat rendering", () => {
         { isToolMessageExpanded: () => false },
       );
 
+      await settleToolBridges(view);
       expect(view.querySelector(".chat-tool-msg-summary")).not.toBeNull();
       expect(view.textContent).toContain("Omitted from history");
       expect(view.textContent).toContain("2.0 KB");
@@ -2441,10 +2446,11 @@ describe("grouped chat rendering", () => {
         },
       }),
     );
-    await flushAssistantAttachmentAvailabilityChecks();
-    expect(
-      view.querySelector<HTMLImageElement>(".chat-message-image")?.getAttribute("src"),
-    ).toContain(`source=${encodeURIComponent(firstSource)}`);
+    await waitForSolid(() =>
+      expect(
+        view.querySelector<HTMLImageElement>(".chat-message-image")?.getAttribute("src"),
+      ).toContain(`source=${encodeURIComponent(firstSource)}`),
+    );
 
     renderUserMedia(
       createUserMessage("", {
@@ -2457,15 +2463,16 @@ describe("grouped chat rendering", () => {
         },
       }),
     );
-    await flushAssistantAttachmentAvailabilityChecks();
-    expect(
-      [...view.querySelectorAll<HTMLImageElement>(".chat-message-image")].map((image) =>
-        image.getAttribute("src"),
-      ),
-    ).toEqual([
-      expect.stringContaining(`source=${encodeURIComponent(firstSource)}`),
-      expect.stringContaining(`source=${encodeURIComponent(secondSource)}`),
-    ]);
+    await waitForSolid(() =>
+      expect(
+        [...view.querySelectorAll<HTMLImageElement>(".chat-message-image")].map((image) =>
+          image.getAttribute("src"),
+        ),
+      ).toEqual([
+        expect.stringContaining(`source=${encodeURIComponent(firstSource)}`),
+        expect.stringContaining(`source=${encodeURIComponent(secondSource)}`),
+      ]),
+    );
 
     renderAssistantMessage(
       createAssistantMessage([{ type: "input_image", image_url: "data:image/png;base64,cG5n" }]),
@@ -2891,8 +2898,10 @@ describe("grouped chat rendering", () => {
     },
   ])(
     "renders a $label inside its assistant bubble",
-    ({ content, overrides, options, bubbleSelector, docId, title, toolSummary }) => {
+    async ({ content, overrides, options, bubbleSelector, docId, title, toolSummary }) => {
+      document.body.append(view);
       renderAssistantMessage(createAssistantMessage(content, overrides), options);
+      await settleToolBridges(view);
       const bubble = expectElement(view, bubbleSelector, HTMLElement);
       const widget = expectCanvasWidget(view, { docId, title });
       expect(bubble.contains(widget)).toBe(true);

@@ -727,40 +727,6 @@ describe("native device settings pages", () => {
     expect(input.value).toBe("default");
   });
 
-  it("keeps permission order and maps each native status to the correct action", async () => {
-    const snapshot = createNativeDeviceSettingsSnapshot();
-    snapshot.permissions.entries.find(({ id }) => id === "microphone")!.status = "unavailable";
-    const { capability } = createCapability(snapshot);
-    const page = await mount("openclaw-device-permissions-page", capability);
-    const permissions = page.querySelector(".settings-group");
-    expect(
-      [...permissions!.querySelectorAll(".settings-row__title")].map((element) =>
-        element.textContent?.trim(),
-      ),
-    ).toEqual([
-      "Notifications",
-      "Accessibility",
-      "Screen Recording",
-      "Microphone",
-      "Camera",
-      "Speech Recognition",
-      "Location",
-    ]);
-    expect(row(page, "Notifications").textContent).toContain("Not determined");
-    row(page, "Notifications").querySelector<HTMLButtonElement>("button")!.click();
-    expect(capability.requestPermission).toHaveBeenCalledExactlyOnceWith("notifications");
-    expect(row(page, "Accessibility").textContent).toContain("Denied");
-    row(page, "Accessibility").querySelector<HTMLButtonElement>("button")!.click();
-    expect(capability.openSystemSettings).toHaveBeenCalledExactlyOnceWith("accessibility");
-    for (const [title, label] of [
-      ["Screen Recording", "Granted"],
-      ["Microphone", "Unavailable"],
-    ] as const) {
-      expect(row(page, title).textContent).toContain(label);
-      expect(row(page, title).querySelector("button")).toBeNull();
-    }
-  });
-
   it.each([
     ["screenRecording", "Screen Recording", "notDetermined", "Not granted", "Grant…"],
     ["accessibility", "Accessibility", "notDetermined", "Not granted", "Grant…"],

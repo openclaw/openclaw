@@ -5,8 +5,8 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import { i18n } from "../../i18n/index.ts";
 import type { PluginDiscoveryEntry } from "../../lib/plugins/index.ts";
-import { waitForFast } from "../../test-helpers/wait-for.ts";
-import { createModelSetupIconLoader } from "../model-setup/model-setup-icon-loader.ts";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
+import { createModelSetupIconLoader } from "../model-setup/model-setup-icon-loader.tsx";
 import type { ModelSetupPageState } from "../model-setup/state.ts";
 import {
   createClient,
@@ -20,6 +20,7 @@ import {
   createResult,
   mountPage,
   resetPluginsPageTestState,
+  settlePlugins,
 } from "./plugins-page.test-support.ts";
 
 function stubUrls(value: () => string = () => "blob:icon") {
@@ -107,18 +108,18 @@ it("loads artwork for rendered category cards and expands without per-card metad
   const { page } = await mountIcons(gateway, createResult(), "/plugins");
   const cards = () => page.querySelectorAll(".plugin-catalog-card");
   const images = () => page.querySelectorAll(".plugin-catalog-card img");
-  await waitForFast(() => expect(cards().length).toBeGreaterThan(0));
+  await waitForSolid(() => expect(cards().length).toBeGreaterThan(0));
   const visible = cards().length;
   expect(visible).toBeLessThan(items.length);
-  await waitForFast(() => expect(fetchMock).toHaveBeenCalledTimes(visible));
-  await waitForFast(() => expect(images()).toHaveLength(visible));
+  await waitForSolid(() => expect(fetchMock).toHaveBeenCalledTimes(visible));
+  await waitForSolid(() => expect(images()).toHaveLength(visible));
   page
     .querySelector<HTMLButtonElement>(
       '[data-catalog-section="web"] .plugin-catalog-section__view-all',
     )!
     .click();
-  await waitForFast(() => expect(cards()).toHaveLength(items.length));
-  await waitForFast(() => expect(images()).toHaveLength(items.length));
+  await waitForSolid(() => expect(cards()).toHaveLength(items.length));
+  await waitForSolid(() => expect(images()).toHaveLength(items.length));
   expect(request.mock.calls.map(([method]) => method)).not.toContain("plugins.catalog.get");
 });
 
@@ -149,20 +150,20 @@ it("uses late publisher enrichment after package 404 without retrying the packag
     throw new Error(`Unexpected method: ${method}`);
   });
   const { page } = await mountIcons(gateway, result, "/settings/plugins/workboard");
-  await waitForFast(() => expect(fetchMock).toHaveBeenCalledOnce());
-  await waitForFast(() =>
+  await waitForSolid(() => expect(fetchMock).toHaveBeenCalledOnce());
+  await waitForSolid(() =>
     expect(
       page.querySelector(".plugin-catalog-detail__hero .plugins-tile.skeleton"),
     ).not.toBeNull(),
   );
   catalog.resolve(detail);
-  await waitForFast(() =>
+  await waitForSolid(() =>
     expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
       "/__openclaw__/plugin-icon/workboard",
       `/__openclaw__/catalog-icon/${encodeURIComponent(authorUrl)}`,
     ]),
   );
-  await waitForFast(() =>
+  await waitForSolid(() =>
     expect(page.querySelector(".plugin-catalog-detail__hero img")?.getAttribute("src")).toBe(
       "blob:author",
     ),
@@ -185,7 +186,7 @@ it("keeps the monogram fallback when a proxied SVG exceeds the safe icon subset"
     gateway,
     createResult(createPlugin({ id: "unsafe-icon", name: "Unsafe Icon", hasIcon: true })),
   );
-  await waitForFast(() =>
+  await waitForSolid(() =>
     expect(
       page.querySelector('[data-plugin-id="unsafe-icon"] .plugins-tile--fallback')?.textContent,
     ).toContain("UI"),
@@ -275,14 +276,16 @@ it("times out and retries a missed icon only after removal and re-add", async ()
   eligible(true);
   loader.reconcile();
   expect(fetchMock).toHaveBeenCalledTimes(2);
-  await waitForFast(() => expect(published).toHaveBeenLastCalledWith({ [iconUrl]: "blob:icon-1" }));
+  await waitForSolid(() =>
+    expect(published).toHaveBeenLastCalledWith({ [iconUrl]: "blob:icon-1" }),
+  );
 });
 
 it("revokes before invalidation publication and publishes both empty resets", async () => {
   const { loader, fetchMock, published, revoke } = setupIcons();
   fetchMock.mockResolvedValueOnce(iconResponse());
   loader.reconcile();
-  await waitForFast(() => expect(published).toHaveBeenCalledOnce());
+  await waitForSolid(() => expect(published).toHaveBeenCalledOnce());
   loader.invalidate(iconUrl);
   expect(revoke).toHaveBeenCalledWith("blob:icon-1");
   expect(revoke.mock.invocationCallOrder[0]).toBeLessThan(
@@ -337,6 +340,7 @@ it("keeps a pending detail icon on its skeleton until the image loads", async ()
   expect(image?.getAttribute("src")).toBe("blob:loaded-icon");
   expect(icon()?.classList.contains("skeleton")).toBe(true);
   image?.dispatchEvent(new Event("load"));
+  await settlePlugins();
   expect(icon()?.classList.contains("skeleton")).toBe(false);
 });
 

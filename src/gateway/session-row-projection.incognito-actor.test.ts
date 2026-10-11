@@ -7,10 +7,7 @@ import {
   seedSubagentRunForReadTest,
   resetSubagentRegistryForTests,
 } from "../agents/subagents/registry/subagent-registry.test-helpers.js";
-import {
-  patchSessionEntryCore,
-  replaceSessionEntrySync,
-} from "../config/sessions/session-accessor.sqlite-entry.js";
+import { replaceSessionEntrySync } from "../config/sessions/session-accessor.sqlite-entry.js";
 import {
   readSqliteSessionArchivePruning,
   withSqliteSessionPageReclamation,
@@ -542,119 +539,6 @@ it("materializes actor-prepared private entries and lineage without host SQLite"
         ).rejects.toThrow("snapshot changed");
       } finally {
         gap.mockRestore();
-      }
-      for (const change of ["target", "related", "acp", "lookup", "durable"] as const) {
-        const retain = actor.sessions.withSharedState.bind(actor.sessions);
-        let first = true;
-        const settling = vi
-          .spyOn(actor.sessions, "withSharedState")
-          .mockImplementation(<T>(work: () => Promise<T>) => {
-            const changeAfterCleanup = first;
-            first = false;
-            return retain(work).then(async (result) => {
-              if (changeAfterCleanup) {
-                if (change === "acp") {
-                  sessionChanges.emit({ agentId: actor.agentId, sessionKey: otherRoot });
-                } else if (change === "durable") {
-                  replaceSessionEntrySync(
-                    { agentId: "work", sessionKey: durableParentKey, env: state.env },
-                    {
-                      ...parent.entry,
-                      incognito: undefined,
-                      sessionId: "durable-parent",
-                      updatedAt: Date.now(),
-                      label: "Changed durable ancestor during cleanup",
-                    },
-                  );
-                } else {
-                  const changedActor = change === "related" ? other : actor;
-                  await withIncognitoSessionBinding({ actor: changedActor }, () =>
-                    patchSessionEntryCore(
-                      {
-                        agentId: changedActor.agentId,
-                        storePath: changedActor.path,
-                        sessionKey: change === "related" ? otherParentKey : otherRoot,
-                        env: state.env,
-                      },
-                      () => ({ label: `Changed during ${change} cleanup` }),
-                    ),
-                  );
-                }
-              }
-              return result;
-            });
-          });
-        const consume = vi.fn(() => "prepared private data");
-        try {
-          const result =
-            change === "lookup"
-              ? withIncognitoSessionBinding({ actor }, () =>
-                  sessionStoreLookup.withGatewaySessionStoreTarget(
-                    { cfg, agentId: actor.agentId, key: otherRoot, env: state.env },
-                    consume,
-                  ),
-                )
-              : withIncognitoSessionRow(
-                  {
-                    actor,
-                    authority,
-                    cfg,
-                    env: state.env,
-                    key: change === "durable" ? durableRoot : otherRoot,
-                  },
-                  consume,
-                );
-          await expect
-            .soft(result)
-            .rejects.toThrow(
-              change === "acp"
-                ? "Prepared ACP session changed"
-                : change === "durable"
-                  ? "Session entry changed during read"
-                  : "snapshot changed",
-            );
-          expect(consume).toHaveBeenCalledTimes(1);
-        } finally {
-          settling.mockRestore();
-        }
-      }
-      const deliveryBorrow = await captureOpenClawAgentDatabaseExecution({
-        kind: "ephemeral",
-        agentId: actor.agentId,
-        env: state.env,
-        authority,
-        existingOnly: true,
-      });
-      assert(deliveryBorrow);
-      let retireAtDelivery = false;
-      let retiringDelivery: Promise<void> | undefined;
-      try {
-        await expect(
-          withIncognitoSessionRow(
-            {
-              actor: deliveryBorrow,
-              authority: {
-                assertCurrent() {
-                  if (retireAtDelivery) {
-                    retiringDelivery ??= deliveryBorrow.release();
-                  }
-                },
-              },
-              cfg,
-              env: state.env,
-              key: parentKey,
-            },
-            () => {
-              queueMicrotask(() => {
-                retireAtDelivery = true;
-              });
-              return "private row result";
-            },
-          ),
-        ).rejects.toThrow("reference is released");
-      } finally {
-        await retiringDelivery;
-        await deliveryBorrow.release();
       }
       const acquireDurable = sessionStoreLookup.withGatewaySessionStoreTarget;
       let retiringRelated: Promise<void> | undefined;

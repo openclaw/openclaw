@@ -27,8 +27,7 @@ import { renderAgentRunFrame } from "./chat-agent-run-frame.ts";
 import { buildChatArchiveNotice, renderChatDivider, renderChatNotice } from "./chat-divider.ts";
 import * as groups from "./chat-message-group-view.tsx";
 import { assistantMediaPolicyKey, getChatMediaRenderVersion } from "./chat-message-media.ts";
-import * as streams from "./chat-message-stream-view.tsx";
-import type { StreamGroupOptions } from "./chat-message-stream.ts";
+import { renderUnplacedSubagentWait, type StreamGroupOptions } from "./chat-message-stream.ts";
 import { renderRealtimeTalkConversation } from "./chat-realtime-controls.ts";
 import { createReplyPreviewResolver } from "./chat-reply-preview.ts";
 import {
@@ -553,7 +552,7 @@ export function projectChatTranscript(props: ChatThreadProps, transcript: ChatTr
   if (subagentWait && !subagents.placedWait && !searchFiltering) {
     appendContent(
       "waiting-subagents",
-      streams.renderSolidUnplacedSubagentWait(props.sessionKey, subagentWait, streamGroupOptions),
+      renderUnplacedSubagentWait(props.sessionKey, subagentWait, streamGroupOptions),
     );
   }
   const typingIndicator = renderChatTypingIndicator(

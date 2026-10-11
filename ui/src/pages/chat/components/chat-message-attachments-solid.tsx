@@ -3,9 +3,9 @@ import { For, Match, Show, Switch, createMemo } from "solid-js";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { LitContent, solidContent } from "../../../lit/solid-content.tsx";
 import { renderCompactAttachmentCard } from "./chat-attachment-card.ts";
-import "./chat-audio-player.ts";
+import "./chat-audio-player.tsx";
 import "./chat-svg-attachment.tsx";
-import "./chat-video-player.ts";
+import "./chat-video-player.tsx";
 import {
   isCrossOriginHttpSource,
   safeAttachmentHref,

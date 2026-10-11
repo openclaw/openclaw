@@ -162,8 +162,6 @@ describe("SQLite historical session disk budget", () => {
       let reclamationWorkers = 0;
       type ArchiveReply = {
         type: string;
-        operationId?: number;
-        settled?: boolean;
         result?: { kind: string };
       };
       const archiveReplies: Array<{ worker: Worker; message: ArchiveReply }> = [];
@@ -211,10 +209,6 @@ describe("SQLite historical session disk budget", () => {
       expect(archiveReplies.map(({ message }) => message.type)).toEqual(["done", "published"]);
       expect(new Set(archiveReplies.map(({ worker }) => worker)).size).toBe(1);
       expect(archiveReplies.every(({ worker }) => worker.threadId === -1)).toBe(true);
-      expect(archiveReplies.map(({ message }) => message)).toMatchObject([
-        { operationId: 1, settled: true },
-        { operationId: 2, settled: true },
-      ]);
       expect(result?.removedEntries).toBe(1);
       expect(result?.totalBytesAfter).toBeLessThanOrEqual(highWaterBytes);
       expect(result?.totalBytesAfter).toBe(

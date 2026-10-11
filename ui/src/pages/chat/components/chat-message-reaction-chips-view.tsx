@@ -6,6 +6,7 @@ import {
   messageReactionOptions,
   ownReactionEmoji,
 } from "./chat-message-reaction-model.ts";
+import { MessageReactionPicker } from "./chat-message-reactions-view.tsx";
 
 function reactorsLabel(reaction: MessageReactionSummary, userId: string | null | undefined) {
   const you = t("chat.reactions.you");
@@ -72,12 +73,12 @@ export function GroupMessageReactions(props: {
           }}
         </For>
         <Show when={options().onReact}>
-          <openclaw-message-reaction-picker
+          <MessageReactionPicker
             class="chat-reaction-chip chat-reaction-chip--add"
             compact
             placement={options().reactionPlacement ?? "bottom-start"}
-            prop:activeEmoji={own()}
-            prop:onSelect={(emoji: string, remove: boolean) =>
+            activeEmoji={own()}
+            onSelect={(emoji: string, remove: boolean) =>
               options().onReact?.(messageId()!, emoji, remove)
             }
           />

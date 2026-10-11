@@ -22,11 +22,11 @@ import {
 import { t } from "../../../lib/reactive/i18n.ts";
 import { LitContent } from "../../../lit/solid-content.tsx";
 import { hydrateLinkFavicons } from "../link-favicon-loader.ts";
+import { ChatCommentPins } from "./chat-comment-pins.tsx";
 import {
   CHAT_HISTORY_BOUNDARY_HEIGHT_PX,
   renderChatHistoryBoundary,
 } from "./chat-history-boundary.ts";
-import "./chat-comment-pins.ts";
 import { ChatPositionRail } from "./chat-position-rail-solid.tsx";
 import {
   handleTranscriptContextMenu,
@@ -75,8 +75,10 @@ export function ChatThread(input: {
       return { session, projection };
     }),
   );
-  const routeLoading = () =>
-    input.props.routeLoadingSkeleton && current().projection.showLoadingSkeleton;
+  const showLoadingSkeleton = createMemo(() => current().projection.showLoadingSkeleton);
+  const isEmpty = createMemo(() => current().projection.isEmpty);
+  const searchOpen = createMemo(() => current().projection.searchOpen);
+  const routeLoading = createMemo(() => input.props.routeLoadingSkeleton && showLoadingSkeleton());
   const commentPins = () =>
     input.props.commentAttachments?.some((attachment) => attachment.selectionAnnotation);
   const prefetchRef = createLinkReaderPrefetchRef(() => [
@@ -103,30 +105,27 @@ export function ChatThread(input: {
   const sentinel = () =>
     input.props.historyPagination ? <div class="chat-history-sentinel" /> : undefined;
   const contents = () => {
-    const projection = current().projection;
     if (routeLoading()) {
       return <LoadingState />;
     }
-    if (projection.showLoadingSkeleton || projection.isEmpty) {
+    if (showLoadingSkeleton() || isEmpty()) {
       return (
         <div class="chat-thread-inner">
           {sentinel()}
-          {projection.isEmpty && !projection.showLoadingSkeleton
-            ? historyHeader()?.template
-            : undefined}
-          {projection.showLoadingSkeleton ? (
+          {isEmpty() && !showLoadingSkeleton() ? historyHeader()?.template : undefined}
+          {showLoadingSkeleton() ? (
             <PanelLoadingSkeleton variant="chat" label={t("chat.thread.loading")} />
           ) : undefined}
-          {projection.isEmpty && !projection.showLoadingSkeleton && !projection.searchOpen ? (
+          {isEmpty() && !showLoadingSkeleton() && !searchOpen() ? (
             <LitContent value={renderWelcomeState({ ...input.props, onModelSetup: undefined })} />
           ) : undefined}
-          {projection.isEmpty && projection.searchOpen ? (
+          {isEmpty() && searchOpen() ? (
             <div class="agent-chat__empty">{t("chat.thread.noMatches")}</div>
           ) : undefined}
         </div>
       );
     }
-    return projection.renderRows(sentinel(), historyHeader());
+    return current().projection.renderRows(sentinel(), historyHeader());
   };
   return (
     <div class="chat-thread-viewport">
@@ -215,10 +214,10 @@ export function ChatThread(input: {
         />
         {contents()}
         {commentPins() ? (
-          <openclaw-chat-comment-pins
-            prop:attachments={input.props.commentAttachments}
-            prop:sessionKey={input.props.sessionKey}
-            prop:disabled={input.props.commentsDisabled ?? false}
+          <ChatCommentPins
+            attachments={input.props.commentAttachments}
+            sessionKey={input.props.sessionKey}
+            disabled={input.props.commentsDisabled ?? false}
           />
         ) : undefined}
       </div>
