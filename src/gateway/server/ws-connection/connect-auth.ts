@@ -385,8 +385,9 @@ async function authenticateGatewayConnectCore(
     return undefined;
   }
   // Verify the signature against the browser's original scopes before applying
-  // the ingress default; an omitted or empty request receives the full ceiling.
-  if (ingressAuthenticated && scopes.length === 0) {
+  // the ingress default; an omitted or empty request receives the full ceiling,
+  // including returning browsers that present their device token.
+  if (remoteIngress && scopes.length === 0) {
     scopes = [...remoteIngress.operatorScopeCeiling];
     connectParams.scopes = scopes;
   }

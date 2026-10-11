@@ -451,6 +451,15 @@ describe("remote Control UI ingress production composition", () => {
       await expectReadWriteWithoutAdmin(peer, "returning browser");
     });
     await usePeer(await openRemote(), async (peer) => {
+      // The embedded UI reconnects with its stored token and no explicit scopes.
+      expectHello(
+        await connect(peer, { identity, auth: { deviceToken }, scopes: [] }),
+        "device-token",
+        SCOPES,
+      );
+      await expectReadWriteWithoutAdmin(peer, "returning embedded browser");
+    });
+    await usePeer(await openRemote(), async (peer) => {
       expectHello(await connect(peer, { identity }), "remote-ingress", SCOPES);
     });
     await usePeer(await openDirect(), async (peer) => {
