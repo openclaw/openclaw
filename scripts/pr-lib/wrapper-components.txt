@@ -1277,6 +1277,7 @@ src/plugins/clawhub-error-codes.ts
 src/plugins/command-execution-lock.ts
 src/plugins/compat/agent-harness-records.ts
 src/plugins/compat/agent-list-runtime-projection-records.ts
+src/plugins/compat/auth-async-record.ts
 src/plugins/compat/channel-pairing-record.ts
 src/plugins/compat/deprecation-marking.ts
 src/plugins/compat/media-legacy-projection.ts
@@ -1292,6 +1293,7 @@ src/plugins/compat/registry-records.ts
 src/plugins/compat/registry.ts
 src/plugins/compat/reply-tool-authority-record.ts
 src/plugins/compat/session-persistence-records.ts
+src/plugins/compat/skill-command-discovery-record.ts
 src/plugins/compat/skill-proposal-hooks-record.ts
 src/plugins/compat/tts-preferences-record.ts
 src/plugins/compat/watched-sessions.ts
