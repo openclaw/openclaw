@@ -1,6 +1,8 @@
+import { readFileSync } from "node:fs";
 import type { Context, StreamOptions, Tool } from "@openclaw/llm-core";
-import { describe, expect, it } from "vitest";
-import { OPENAI_DEFAULT_MODEL } from "../../../../extensions/openai/default-models.js";
+import { normalizeModelCatalog } from "@openclaw/model-catalog-core/model-catalog-normalize";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { assert, describe, expect, it } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../../test/helpers/promise.js";
 import { createOpenAIResponsesTransportStreamFn } from "./openai-responses-client.js";
 import type { OpenAIResponsesOptions } from "./openai-responses-contracts.js";
@@ -8,6 +10,7 @@ import {
   createResponsesLoopbackServer,
   responsesLoopbackModel,
 } from "./openai-responses-loopback.test-support.js";
+import { supportsResponsesReasoningUpdate } from "./openai-responses-reasoning-update.js";
 
 const numberTool = {
   name: "record_value",
@@ -62,6 +65,20 @@ function responseEvents(first: boolean, responseId = first ? "resp_number" : "re
 }
 
 it("preserves reasoning controls in concurrent same-session SSE requests", async () => {
+  const manifest: unknown = JSON.parse(
+    readFileSync(
+      new URL("../../../../extensions/openai/openclaw.plugin.json", import.meta.url),
+      "utf8",
+    ),
+  );
+  assert(isRecord(manifest), "Expected the registered OpenAI model catalog");
+  const catalog = normalizeModelCatalog(manifest.modelCatalog, {
+    ownedProviders: new Set(["openai"]),
+  });
+  const reasoningModel = catalog?.providers?.openai?.models.find((entry) =>
+    supportsResponsesReasoningUpdate({ model: entry.id, reasoning: { effort: "low" }, input: [] }),
+  );
+  assert(reasoningModel, "Expected a registered model supporting reasoning controls");
   const server = await createResponsesLoopbackServer((turn) =>
     responseEvents(false, `resp_${turn}`),
   );
@@ -80,7 +97,7 @@ it("preserves reasoning controls in concurrent same-session SSE requests", async
       onResponse,
     };
     const stream = await createOpenAIResponsesTransportStreamFn()(
-      { ...responsesLoopbackModel, id: OPENAI_DEFAULT_MODEL.split("/")[1], reasoning: true },
+      { ...responsesLoopbackModel, id: reasoningModel.id, reasoning: true },
       { messages },
       options,
     );

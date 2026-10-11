@@ -331,7 +331,7 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
             request: params as ResponsesContinuationRequest,
             restoreRequest,
           });
-          // Persisted effort controls still apply when another request owns the cache.
+          // SAFETY: Restoration preserves SDK parameters and adds validated reasoning input controls.
           params = (continuationClaim?.fullRequest ?? restoreRequest()) as typeof params;
         }
         const observePrompt = createResponsesPromptEgressObserver(
