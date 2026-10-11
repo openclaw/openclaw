@@ -157,7 +157,7 @@ export function json(value: unknown): string {
 }
 export const queryWorkerEnvironmentStore = (db: DatabaseSync) => getNodeSqliteKysely<WorkerDb>(db);
 function environmentRows(db: DatabaseSync) {
-  // REAL keeps corrupt oversized ports readable so endpoint validation reports them.
+  // Double precision preserves validation of oversized ports without PostgreSQL REAL rounding.
   return queryWorkerEnvironmentStore(db)
     .selectFrom("worker_environments")
     .leftJoin(
@@ -166,7 +166,9 @@ function environmentRows(db: DatabaseSync) {
       "worker_environments.environment_id",
     )
     .selectAll("worker_environments")
-    .select((eb) => eb.cast<number | null>("ports.port", "real").as("ssh_fallback_port"))
+    .select((eb) =>
+      eb.cast<number | null>("ports.port", "double precision").as("ssh_fallback_port"),
+    )
     .orderBy("worker_environments.created_at_ms")
     .orderBy("worker_environments.environment_id")
     .orderBy("ports.position");
