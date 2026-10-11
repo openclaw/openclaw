@@ -349,7 +349,7 @@ export function createControlUiSessionPullRequestSubscriptions(deps: Subscriptio
         });
       inflight.set(sessionKey, {
         promise,
-        refresh: Boolean(refresh),
+        refresh,
         state,
       });
       return promise;

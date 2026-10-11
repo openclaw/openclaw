@@ -349,7 +349,7 @@ export function cleanClaudeCliImportedUserDisplay(message: unknown): unknown {
     ...message,
     content: content.map((block, index) =>
       index === firstTextIndex && isRecord(block) && typeof block.text === "string"
-        ? { ...block, text: stripCliPromptDecorations(block.text) }
+        ? Object.assign({}, block, { text: stripCliPromptDecorations(block.text) })
         : block,
     ),
   };
