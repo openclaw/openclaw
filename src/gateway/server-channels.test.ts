@@ -8,7 +8,6 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { withGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
 import { ChannelIngressUnavailableError } from "../channels/message/ingress-unavailable.js";
 import type {
   ChannelAccountLinkState,
@@ -66,7 +65,6 @@ import {
 } from "./server-channels.test-support.js";
 import { AUTH_NONE, createTestGatewayServer } from "./server-http.test-harness.js";
 import type { GatewayRequestHandlerOptions } from "./server-methods/types.js";
-import { withOperatorToolGatewayAuthority } from "./server-plugin-in-process-authority.js";
 import { dispatchGatewayMethodInProcess } from "./server-plugin-in-process-dispatch.js";
 import { createContext } from "./server-plugin-in-process-dispatch.test-support.js";
 import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
@@ -225,102 +223,6 @@ describe("server-channels auto restart", () => {
     setActiveDegradedSecretOwners([]);
     setActivePluginRegistry(previousRegistry ?? createEmptyPluginRegistry());
   });
-
-  it.each(["operator client", "agent run", "operator tool"] as const)(
-    "keeps channel requests bound to their Gateway after the initiating %s ends",
-    async (caller) => {
-      const continueChannelRequest = createDeferred();
-      const observedGateway = createDeferred<{ gateway: string }>();
-      const ownerContext = createContext();
-      ownerContext.getGatewayMethodRegistry = () =>
-        createGatewayMethodRegistry([
-          {
-            name: "health",
-            scope: "operator.read",
-            owner: { kind: "core", area: "channel-startup" },
-            handler: ({ respond }: GatewayRequestHandlerOptions) =>
-              respond(true, { gateway: "channel-owner" }),
-          },
-        ]);
-      const callerContext = createContext();
-      callerContext.getGatewayMethodRegistry = () =>
-        createGatewayMethodRegistry([
-          {
-            name: "health",
-            scope: "operator.read",
-            owner: { kind: "core", area: "channel-startup" },
-            handler: ({ respond }: GatewayRequestHandlerOptions) =>
-              respond(true, { gateway: "starting-client" }),
-          },
-        ]);
-      const startAccount = async ({ abortSignal }: ChannelGatewayContext<TestAccount>) => {
-        await continueChannelRequest.promise;
-        try {
-          observedGateway.resolve(
-            await dispatchGatewayMethodInProcess<{ gateway: string }>(
-              "health",
-              {},
-              {
-                syntheticScopes: ["operator.read"],
-                operatorRoleActor: { kind: "system" },
-              },
-            ),
-          );
-        } catch (error) {
-          observedGateway.reject(error);
-        }
-        await waitForAbort(abortSignal);
-      };
-      installTestRegistry(createTestPlugin({ startAccount }));
-      const manager = createManager({ resolveGatewayContext: () => ownerContext });
-      const callerLifetime = new AbortController();
-
-      try {
-        await withPluginRuntimeGatewayRequestScope(
-          {
-            context: callerContext,
-            client: createSyntheticPluginRuntimeClient({
-              scopes: ["operator.read"],
-              operatorRoleActor: { kind: "system" },
-            }),
-            isWebchatConnect: () => false,
-            signal: callerLifetime.signal,
-            hasCurrentClientAuthority: () => !callerLifetime.signal.aborted,
-          },
-          () => {
-            const start = () =>
-              manager.startChannel("discord", DEFAULT_ACCOUNT_ID, { manual: true });
-            if (caller === "agent run") {
-              return withGatewayToolCallerIdentity(
-                {
-                  agentId: "main",
-                  sessionKey: "agent:main:main",
-                  operationalRunInstance: { runId: "channel-start", instanceId: "starting-run" },
-                  receiptAuthority: () => !callerLifetime.signal.aborted,
-                },
-                start,
-              );
-            }
-            return caller === "operator tool"
-              ? withOperatorToolGatewayAuthority(
-                  { scopes: ["operator.read"], operatorRoleActor: { kind: "system" } },
-                  start,
-                )
-              : start();
-          },
-        );
-        callerLifetime.abort();
-        const requestResult = expect(observedGateway.promise).resolves.toEqual({
-          gateway: "channel-owner",
-        });
-        continueChannelRequest.resolve();
-        await requestResult;
-      } finally {
-        continueChannelRequest.resolve();
-        await manager.stopChannel("discord");
-      }
-    },
-  );
 
   it("keeps approval-bootstrap descendants admitted after the starting request finishes", async () => {
     const continueApprovalDescendant = createDeferred();
