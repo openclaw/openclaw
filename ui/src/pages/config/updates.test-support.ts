@@ -3,7 +3,8 @@ import { vi } from "vitest";
 import type { ApplicationUpdateOverlaySnapshot } from "../../app/overlays-types.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
-import { Updates, type UpdatesViewProps } from "./updates.tsx";
+import type { UpdatesViewProps } from "./updates-types.ts";
+import { Updates } from "./updates.tsx";
 
 export type UpdatesViewOverrides = Partial<Omit<UpdatesViewProps, "update">> & {
   update?: Partial<ApplicationUpdateOverlaySnapshot>;

@@ -1,6 +1,7 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Accessor } from "@solidjs/signals";
 import type { JSX } from "@solidjs/web";
+import type { nothing, TemplateResult } from "lit";
 import { isSensitiveConfigPath } from "../../../src/config/sensitive-paths.js";
 import type { ConfigUiHints } from "../api/types.ts";
 import { t } from "../i18n/index.ts";
@@ -56,6 +57,9 @@ export type ConfigNodeRenderParams = {
 };
 
 export type ConfigNodeRenderer = (params: Accessor<ConfigNodeRenderParams>) => JSX.Element;
+export type LegacyNodeRenderer = (
+  params: ConfigNodeRenderParams,
+) => TemplateResult | typeof nothing;
 
 export function configChildRenderOptions(params: ConfigNodeRenderParams) {
   return {

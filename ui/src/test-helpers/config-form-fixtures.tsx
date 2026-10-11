@@ -6,7 +6,8 @@ import { JsonTextarea } from "../components/config-form.node.json.tsx";
 import { NumberInput, SelectInput, TextInput } from "../components/config-form.node.scalar.tsx";
 import type { ConfigNodeRenderParams } from "../components/config-form.node.shared.ts";
 import { renderNode } from "../components/config-form.node.tsx";
-import { ConfigForm, type ConfigFormProps } from "../components/config-form.render.tsx";
+import { ConfigForm } from "../components/config-form.render.tsx";
+import type { ConfigFormProps } from "../components/config-form.shared.ts";
 import { mountSolid } from "./mount-solid.ts";
 import { flush } from "./solid-settle.ts";
 

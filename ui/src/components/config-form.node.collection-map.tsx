@@ -4,10 +4,10 @@ import { containsRedactedSentinel } from "../lib/config-form-utils.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import {
   openCollectionDraft,
+  ConfigCollectionDraftHost,
   type ConfigFormCollectionDraftCommit,
   type ConfigFormCollectionDraftProps,
 } from "./config-form-collection-draft.tsx";
-import { ConfigCollectionDraftHost } from "./config-form.bridge.tsx";
 import { defaultValue, NO_SAFE_DEFAULT } from "./config-form.constraints.ts";
 import {
   configChildRenderOptions,

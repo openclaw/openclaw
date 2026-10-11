@@ -1,20 +1,15 @@
 import { Show } from "solid-js";
 import { defineSolidBridge } from "../lit/solid-bridge.ts";
-import {
-  ConfigFormCollectionDraftContent,
-  type ConfigFormCollectionDraftProperties,
-} from "./config-form-collection-draft.tsx";
-import type { ConfigFormStructuredDraftProps } from "./config-form-structured-draft.ts";
+import "./config-form-collection-draft.tsx";
+import "./config-form-structured-draft.tsx";
 import {
   LegacyConfigForm,
   LegacyConfigTierGroups,
   LegacyConfigMap,
-  LegacyConfigStructuredDraft,
 } from "./config-form.compat.tsx";
-import type { ConfigNodeRenderParams } from "./config-form.node.shared.ts";
-import type { LegacyNodeRenderer } from "./config-form.node.ts";
+import type { ConfigNodeRenderParams, LegacyNodeRenderer } from "./config-form.node.shared.ts";
 import { ConfigNode } from "./config-form.node.tsx";
-import type { LegacyConfigFormProps, LegacyConfigTierGroupsProps } from "./config-form.render.ts";
+import type { LegacyConfigFormProps, LegacyConfigTierGroupsProps } from "./config-form.shared.ts";
 
 export const ConfigFormHost = defineSolidBridge<{ props?: LegacyConfigFormProps }>(
   "openclaw-config-form",
@@ -50,37 +45,6 @@ export const ConfigMapHost = defineSolidBridge<{
     properties: {
       params: { default: undefined, attribute: false },
       renderNode: { default: undefined, attribute: false },
-    },
-  },
-);
-
-export const ConfigStructuredDraftHost = defineSolidBridge<{
-  props?: ConfigFormStructuredDraftProps;
-}>(
-  "openclaw-config-form-structured-draft",
-  (props) => <LegacyConfigStructuredDraft props={props.props} />,
-  { properties: { props: { default: undefined, attribute: false } } },
-);
-
-export const ConfigCollectionDraftHost = defineSolidBridge<
-  ConfigFormCollectionDraftProperties,
-  { openDraft(): void }
->(
-  "openclaw-config-form-collection-draft",
-  (props, host) => (
-    <ConfigFormCollectionDraftContent props={props.props} draftOpen={props.draftOpen} host={host} />
-  ),
-  {
-    properties: {
-      props: { default: undefined, attribute: false },
-      draftOpen: { default: false, attribute: false },
-    },
-    methods: {
-      openDraft: (host) => {
-        if (!host.props?.disabled) {
-          host.draftOpen = true;
-        }
-      },
     },
   },
 );

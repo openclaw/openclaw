@@ -5,7 +5,7 @@ import {
   renderAnalyzedFormFixture,
   renderConfigFormFixture,
 } from "../test-helpers/config-form-fixtures.tsx";
-import type { ConfigFormProps } from "./config-form.render.tsx";
+import type { ConfigFormProps } from "./config-form.shared.ts";
 import { analyzeConfigSchema, type JsonSchema } from "./config-form.ts";
 
 function renderConfigForm(

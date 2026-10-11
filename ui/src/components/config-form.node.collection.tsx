@@ -4,12 +4,12 @@ import { getLocale, t } from "../lib/reactive/i18n.ts";
 import { ConfigFormArrayIdentity } from "./config-form-array-identity.ts";
 import {
   openCollectionDraft,
+  ConfigCollectionDraftHost,
   type ConfigFormCollectionDraftCommit,
   type ConfigFormCollectionDraftProps,
 } from "./config-form-collection-draft.tsx";
 import { copyWithPathPatch } from "./config-form-copy-on-write.ts";
 import { arrayItemSchema } from "./config-form.array-items.ts";
-import { ConfigCollectionDraftHost } from "./config-form.bridge.tsx";
 import {
   arrayConstraintCandidates,
   arrayInputConstraints,

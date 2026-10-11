@@ -12,10 +12,7 @@ import "../../components/update-run-view.ts";
 import type { UpdateScheduleState } from "../../api/types.ts";
 import { deviceSettingsGroupLabelKey } from "../../app-navigation.ts";
 import type { NativeDeviceSettingsCapability } from "../../app/native-device-settings.ts";
-import type {
-  ApplicationUpdateOverlaySnapshot,
-  UpdateFailureReportNotice,
-} from "../../app/overlays-types.ts";
+import type { UpdateFailureReportNotice } from "../../app/overlays-types.ts";
 import {
   formatUpdateCampaignLabel,
   getUpdateGitComparison,
@@ -36,37 +33,9 @@ import { formatDateTimeMs, formatTimeAgo } from "../../lib/format.ts";
 import { projectNativeDeviceSettings } from "../../lib/reactive/application-native.ts";
 import { getLocale, registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { UpdatesStatus } from "./updates-status.tsx";
+import { UPDATES_CHANNELS, type UpdatesChannel, type UpdatesViewProps } from "./updates-types.ts";
 
 registerEnglishCatalog(registerSettingsEnglish);
-const UPDATES_CHANNELS = ["stable", "beta", "dev", "extended-stable"] as const;
-type UpdatesChannel = (typeof UPDATES_CHANNELS)[number];
-export type UpdatesViewProps = {
-  update: ApplicationUpdateOverlaySnapshot;
-  nativeDeviceSettings?: NativeDeviceSettingsCapability | null;
-  configObject: Record<string, unknown>;
-  gatewayVersion: string | null;
-  controlUiCommit: string | null;
-  controlUiCommitAt: string | null;
-  controlUiBuiltAt: string | null;
-  connected: boolean;
-  configBusy: boolean;
-  canAdmin: boolean;
-  canUpdate: boolean;
-  canCheckStatus: boolean;
-  canHoldUpdate: boolean;
-  canReport: boolean;
-  canDiagnose: boolean;
-  updateBusy: boolean;
-  nowMs?: number;
-  onChannelChange: (channel: UpdatesChannel) => void;
-  onUpdateChecksChange: (enabled: boolean) => void;
-  onAutomaticUpdatesChange: (enabled: boolean) => void;
-  onUpdateNow: () => void;
-  onHoldUpdate: () => Promise<boolean>;
-  onCheckStatus: () => Promise<boolean>;
-  onReportFailure: (attemptId: string) => Promise<void>;
-  onDiagnoseFailure: (attemptId: string) => void;
-};
 
 function DeviceUpdates(props: { capability?: NativeDeviceSettingsCapability | null }) {
   const native = createMemo(() => {

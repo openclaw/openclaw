@@ -1,12 +1,10 @@
 import type { JSX } from "@solidjs/web";
 import { LitContent } from "../lit/solid-bridge.ts";
-import type { ConfigFormStructuredDraftProps } from "./config-form-structured-draft.ts";
-import { ConfigFormStructuredDraftContent } from "./config-form-structured-draft.tsx";
 import { ConfigMapField } from "./config-form.node.collection-map.tsx";
-import type { LegacyNodeRenderer } from "./config-form.node.ts";
+import type { LegacyNodeRenderer } from "./config-form.node.shared.ts";
 import { renderNode } from "./config-form.node.tsx";
-import type { LegacyConfigFormProps, LegacyConfigTierGroupsProps } from "./config-form.render.ts";
 import { ConfigForm, ConfigTierGroups } from "./config-form.render.tsx";
+import type { LegacyConfigFormProps, LegacyConfigTierGroupsProps } from "./config-form.shared.ts";
 
 export function LegacyConfigForm(props: { props: LegacyConfigFormProps }): JSX.Element {
   return (
@@ -45,22 +43,6 @@ export function LegacyConfigMap(props: {
         ) : (
           renderNode(params)
         )
-      }
-    />
-  );
-}
-export function LegacyConfigStructuredDraft(props: {
-  props?: ConfigFormStructuredDraftProps;
-}): JSX.Element {
-  return (
-    <ConfigFormStructuredDraftContent
-      props={
-        props.props && {
-          ...props.props,
-          renderNode:
-            props.props.renderSolidNode ??
-            ((params) => <LitContent render={() => props.props?.renderNode?.(params())} />),
-        }
       }
     />
   );

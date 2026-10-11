@@ -2,21 +2,17 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { JSX } from "@solidjs/web";
 import { createEffect, createSignal, Show, untrack } from "solid-js";
 import { t } from "../lib/reactive/i18n.ts";
+import { defineSolidBridge, LitContent } from "../lit/solid-bridge.ts";
 import { copyWithPathPatch } from "./config-form-copy-on-write.ts";
+import type {
+  ConfigFormStructuredDraftModel,
+  ConfigFormStructuredDraftProps,
+} from "./config-form-structured-draft.ts";
 import { isSupportedConfigValueValid } from "./config-form.constraints.ts";
-import type { ConfigNodeRenderer, ConfigNodeRenderParams } from "./config-form.node.shared.ts";
 import { configFieldId, schemaType } from "./config-form.shared.ts";
 
-export type ConfigFormStructuredDraftProps = {
-  identity: string;
-  sourceIdentity: unknown;
-  initialValue: Record<string, unknown> | unknown[];
-  params: ConfigNodeRenderParams;
-  renderNode: ConfigNodeRenderer;
-};
-
 export function ConfigFormStructuredDraftContent(props: {
-  props?: ConfigFormStructuredDraftProps;
+  props?: ConfigFormStructuredDraftModel;
 }): JSX.Element {
   const [draftValue, setDraftValue] = createSignal<Record<string, unknown> | unknown[] | undefined>(
     untrack(() => props.props && structuredClone(props.props.initialValue)),
@@ -106,3 +102,22 @@ export function ConfigFormStructuredDraftContent(props: {
     </Show>
   );
 }
+
+export const ConfigStructuredDraftHost = defineSolidBridge<{
+  props?: ConfigFormStructuredDraftProps;
+}>(
+  "openclaw-config-form-structured-draft",
+  (props) => (
+    <ConfigFormStructuredDraftContent
+      props={
+        props.props && {
+          ...props.props,
+          renderNode:
+            props.props.renderSolidNode ??
+            ((params) => <LitContent render={() => props.props?.renderNode?.(params())} />),
+        }
+      }
+    />
+  ),
+  { properties: { props: { default: undefined, attribute: false } } },
+);

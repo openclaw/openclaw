@@ -1,6 +1,5 @@
 import type { JSX as SolidJSX } from "@solidjs/web";
 import { createMemo, For, Show } from "solid-js";
-import type { ConfigUiHints } from "../api/types.ts";
 import { getLocale, t } from "../lib/reactive/i18n.ts";
 import { SECTION_META } from "./config-form.meta.ts";
 import { ConfigNode } from "./config-form.node.tsx";
@@ -10,6 +9,8 @@ import {
   humanize,
   localizedHintForPath,
   schemaType,
+  type ConfigFormProps,
+  type ConfigTierGroupsProps,
   type JsonSchema,
 } from "./config-form.shared.ts";
 import { splitConfigSchemaByTier } from "./config-form.tiers.ts";
@@ -31,43 +32,6 @@ declare module "@solidjs/web" {
     }
   }
 }
-
-export type ConfigFormProps = {
-  schema: JsonSchema | null;
-  uiHints: ConfigUiHints;
-  value: Record<string, unknown> | null;
-  rawAvailable?: boolean;
-  disabled?: boolean;
-  unsupportedPaths?: string[];
-  searchQuery?: string;
-  activeSection?: string | null;
-  activeSubsection?: string | null;
-  showAdvanced?: boolean;
-  forceAdvancedSection?: string | null;
-  onShowAdvanced: () => void;
-  onHideAdvanced?: () => void;
-  sectionActions?: SolidJSX.Element;
-  showSectionDocs?: boolean;
-  sectionPrelude?: SolidJSX.Element;
-  embedded?: boolean;
-  revealSensitive?: boolean;
-  maskSensitive?: boolean;
-  isSensitivePathRevealed?: (path: Array<string | number>) => boolean;
-  onToggleSensitivePath?: (path: Array<string | number>) => void;
-  onPatch: (path: Array<string | number>, value: unknown) => void;
-  onRemove?: (path: Array<string | number>) => void;
-};
-
-export type ConfigTierGroupsProps = {
-  schema: JsonSchema;
-  path: Array<string | number>;
-  hints: ConfigUiHints;
-  revealAdvanced: boolean;
-  onShowAdvanced: () => void;
-  onHideAdvanced?: () => void;
-  renderTier: (node: () => JsonSchema) => SolidJSX.Element;
-  commonPrelude?: SolidJSX.Element;
-};
 
 export function ConfigTierGroups(props: ConfigTierGroupsProps): SolidJSX.Element {
   const split = createMemo(() =>

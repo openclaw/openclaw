@@ -1,7 +1,7 @@
 import type { JSX as SolidJSX } from "@solidjs/web";
 import { Show, createEffect, createMemo, createSignal } from "solid-js";
 import { t } from "../lib/reactive/i18n.ts";
-import type { SolidBridgeElement } from "../lit/solid-bridge.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../lit/solid-bridge.ts";
 import { configValuesEqual, isSupportedConfigValueValid } from "./config-form.constraints.ts";
 import { coerceConfigFormNumberString } from "./config-form.numeric.ts";
 import { schemaMayAcceptString, schemaType, type JsonSchema } from "./config-form.shared.ts";
@@ -44,6 +44,29 @@ export type ConfigFormCollectionDraft = SolidBridgeElement<
   ConfigFormCollectionDraftProperties,
   { openDraft(): void }
 >;
+
+export const ConfigCollectionDraftHost = defineSolidBridge<
+  ConfigFormCollectionDraftProperties,
+  { openDraft(): void }
+>(
+  "openclaw-config-form-collection-draft",
+  (props, host) => (
+    <ConfigFormCollectionDraftContent props={props.props} draftOpen={props.draftOpen} host={host} />
+  ),
+  {
+    properties: {
+      props: { default: undefined, attribute: false },
+      draftOpen: { default: false, attribute: false },
+    },
+    methods: {
+      openDraft: (host) => {
+        if (!host.props?.disabled) {
+          host.draftOpen = true;
+        }
+      },
+    },
+  },
+);
 
 function parseValue(
   schema: JsonSchema,

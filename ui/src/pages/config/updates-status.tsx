@@ -5,7 +5,7 @@ import {
 } from "../../app/update-schedule-projection.ts";
 import { SettingsStatus } from "../../components/solid/settings-ui.tsx";
 import { getLocale, t } from "../../lib/reactive/i18n.ts";
-import type { UpdatesViewProps } from "./updates.tsx";
+import type { UpdatesViewProps } from "./updates-types.ts";
 
 export function UpdatesStatus(props: UpdatesViewProps) {
   const status = createMemo(() => {
