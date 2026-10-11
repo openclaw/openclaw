@@ -90,7 +90,7 @@ flow:
                   expr: "`SLACK-QA-COMMENTARY-DONE-${suffix}`"
               - set: execCommand
                 value:
-                  expr: "`grep '${toolMarker}' /dev/null || sleep 5`"
+                  expr: "`printf '%s' '${toolMarker}' >/dev/null; sleep 5; printf '%s\\\\n' 'SLACK-QA-OUTPUT-${suffix}'`"
               - set: requestCursor
                 value:
                   expr: "(await fetchJson(`${env.mock.baseUrl}/debug/request-cursor`)).cursor"

@@ -6,6 +6,7 @@ import type { GatewayPageController } from "../../lit/gateway-page-controller.ts
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { PluginSettingsEditor, type PluginSettingsEditorProps } from "./settings-editor.tsx";
 import type { PluginSettingsEditorModel } from "./settings-model.ts";
+import { renderPluginSettingsInventory as PluginSettingsInventory } from "./settings-view.tsx";
 import "../../styles.css";
 import "../../styles/settings.css";
 
@@ -86,6 +87,60 @@ afterEach(() => {
   document.body.replaceChildren();
 });
 describe("grouped plugin settings", () => {
+  it("keeps typing and focus in Advanced settings when configuration updates", async () => {
+    const [value, setValue] = createSignal({ plugins: { label: "" } });
+    const schema = objectSchema({ label: { type: "string", title: "Label" } });
+    const onPatch = vi.fn((_path: Array<string | number>, next: unknown) => {
+      setValue({ plugins: { label: String(next) } });
+    });
+    const mounted = mountSolid(() => (
+      <PluginSettingsInventory
+        tab="advanced"
+        query=""
+        result={null}
+        connected
+        loading={false}
+        error={null}
+        busy={{}}
+        messages={{}}
+        iconUrls={{}}
+        canMutate
+        mutationBlockedReason={null}
+        configValue={value()}
+        configHints={{}}
+        configUnsupportedPaths={[]}
+        advancedSchema={schema}
+        canEditConfig
+        configBusy={false}
+        configSchemaLoading={false}
+        configError={null}
+        onConfigPatch={onPatch}
+        onConfigRemove={vi.fn()}
+        onConfigReadRetry={vi.fn()}
+        onConfigWriteRetry={vi.fn()}
+        onConfigReload={vi.fn()}
+        onRefresh={vi.fn()}
+        onTabChange={vi.fn()}
+        onQueryChange={vi.fn()}
+        onIconError={vi.fn()}
+        onSetEnabled={vi.fn()}
+        onUninstall={vi.fn()}
+        pluginHref={() => "#"}
+        onOpenPlugin={vi.fn()}
+      />
+    ));
+    await settle();
+    const input = mounted.container.querySelector<HTMLInputElement>('input[aria-label="Label"]')!;
+    input.focus();
+    for (const text of ["a", "ab"]) {
+      input.value = text;
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      await settle();
+      expect(document.activeElement).toBe(input);
+      expect(input.value).toBe(text);
+      expect(onPatch).toHaveBeenLastCalledWith(["plugins", "label"], text);
+    }
+  });
   it("navigates authored sections without hiding settings and omits the rail for flat schemas", async () => {
     const { editor, model, update } = await mount();
     const links = [...editor.querySelectorAll<HTMLAnchorElement>(".plugin-editor__nav a")];

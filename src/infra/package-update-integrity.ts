@@ -165,16 +165,17 @@ export function packageStatUnchanged(left: BigIntStats, right: BigIntStats): boo
 
 /** Read-only, bounded observations. These do not exclude writers or seal an inode. */
 export function createPackageIntegrityReader(timeoutMs = UPDATE_RUNNER_TIMEOUT_MS) {
-  const startedAtMonotonicMs = performance.now();
+  const now = () => performance.now();
+  const startedAtMonotonicMs = now();
   const budget = Number.isFinite(timeoutMs) ? Math.max(1, timeoutMs) : UPDATE_RUNNER_TIMEOUT_MS;
-  const deadline = Date.now() + budget;
+  const deadlineAtMonotonicMs = startedAtMonotonicMs + budget;
   const timing = {
     readerId: `${process.pid}:${++readerSequence}`,
     timeOriginUnixMs: performance.timeOrigin,
     startedAtMonotonicMs,
     budgetMs: budget,
-    deadlineClock: "wall",
-    deadlineAtUnixMs: deadline,
+    deadlineClock: "monotonic",
+    deadlineAtMonotonicMs,
   };
   let timeoutObservedAtMonotonicMs: number | undefined;
   let pendingIo = 0;
@@ -221,7 +222,11 @@ export function createPackageIntegrityReader(timeoutMs = UPDATE_RUNNER_TIMEOUT_M
 
   async function read<T>(operation: () => Promise<T>, closeLate?: (value: T) => Promise<void>) {
     let pending: Promise<T> | undefined;
-    const value = await awaitWithinDeadline(() => (pending = trackIo(operation)), deadline);
+    const value = await awaitWithinDeadline(
+      () => (pending = trackIo(operation)),
+      deadlineAtMonotonicMs,
+      now,
+    );
     if (value === ABSOLUTE_DEADLINE_EXPIRED) {
       timeoutObservedAtMonotonicMs ??= performance.now();
       // An OS read cannot always be canceled. Close late descriptors and never
@@ -241,7 +246,10 @@ export function createPackageIntegrityReader(timeoutMs = UPDATE_RUNNER_TIMEOUT_M
 
   async function close(resource: { close: () => Promise<void> }) {
     const closing = trackIo(() => resource.close()).catch(() => {});
-    if ((await awaitWithinDeadline(() => closing, deadline)) === ABSOLUTE_DEADLINE_EXPIRED) {
+    if (
+      (await awaitWithinDeadline(() => closing, deadlineAtMonotonicMs, now)) ===
+      ABSOLUTE_DEADLINE_EXPIRED
+    ) {
       timeoutObservedAtMonotonicMs ??= performance.now();
     }
   }

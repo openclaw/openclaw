@@ -231,44 +231,55 @@ function InstalledInventory(props: InventoryProps): JSX.Element {
     </>
   );
 }
-function renderAdvanced(options: InventoryProps): JSX.Element {
-  if (!options.connected) {
-    return <SettingsEmpty message={t("pluginsPage.connectToManage")} carapace={true} />;
-  }
-  const schema = options.advancedSchema;
-  const value = options.configValue;
-  if (!schema || !value) {
-    return options.configError ? (
-      renderRetryError(options.configError, options.onConfigReadRetry)
-    ) : options.configSchemaLoading || !options.configValue ? (
-      <SettingsLoadingSkeleton rows={4} carapace={true} />
-    ) : (
-      <SettingsEmpty message={t("pluginsPage.schemaUnavailable")} carapace={true} />
-    );
-  }
+function AdvancedSettings(options: InventoryProps): JSX.Element {
+  const config = createMemo(() => {
+    const schema = options.advancedSchema;
+    const value = options.configValue;
+    return schema && value ? { schema, value } : null;
+  });
   return (
-    <>
-      <LitContent
-        render={() =>
-          renderNode({
-            rawAvailable: false,
-            maskSensitive: true,
-            schema,
-            value: value.plugins ?? {},
-            path: ["plugins"],
-            hints: options.configHints,
-            unsupported: new Set(options.configUnsupportedPaths),
-            disabled: !options.canEditConfig || options.configBusy,
-            showLabel: false,
-            onPatch: options.onConfigPatch,
-            onRemove: options.onConfigRemove,
-          })
+    <Show
+      when={options.connected}
+      fallback={<SettingsEmpty message={t("pluginsPage.connectToManage")} carapace />}
+    >
+      <Show
+        when={config()}
+        fallback={
+          options.configError ? (
+            renderRetryError(options.configError, options.onConfigReadRetry)
+          ) : options.configSchemaLoading || !options.configValue ? (
+            <SettingsLoadingSkeleton rows={4} carapace />
+          ) : (
+            <SettingsEmpty message={t("pluginsPage.schemaUnavailable")} carapace />
+          )
         }
-      />
-      {options.configError
-        ? renderRetryError(options.configError, options.onConfigWriteRetry)
-        : null}
-    </>
+      >
+        {(current) => (
+          <>
+            <LitContent
+              render={() =>
+                renderNode({
+                  rawAvailable: false,
+                  maskSensitive: true,
+                  schema: current().schema,
+                  value: current().value.plugins ?? {},
+                  path: ["plugins"],
+                  hints: options.configHints,
+                  unsupported: new Set(options.configUnsupportedPaths),
+                  disabled: !options.canEditConfig || options.configBusy,
+                  showLabel: false,
+                  onPatch: options.onConfigPatch,
+                  onRemove: options.onConfigRemove,
+                })
+              }
+            />
+            {options.configError
+              ? renderRetryError(options.configError, options.onConfigWriteRetry)
+              : null}
+          </>
+        )}
+      </Show>
+    </Show>
   );
 }
 export function renderPluginSettingsInventory(props: InventoryProps): JSX.Element {
@@ -316,7 +327,7 @@ export function renderPluginSettingsInventory(props: InventoryProps): JSX.Elemen
               }
               carapace={true}
             >
-              {renderAdvanced(props)}
+              <AdvancedSettings {...props} />
             </SettingsSection>
           </div>
         </>

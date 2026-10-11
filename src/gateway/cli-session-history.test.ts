@@ -513,26 +513,39 @@ describe("cli session history", () => {
     expect(readRecord(readRecord(merged[0])["__openclaw"]).externalId).toBe("exact-id");
   });
 
-  it("keeps drift-note order after an edited exact identity", () => {
-    const laterNote = CLAUDE_RESUME_DRIFT_NOTES[1];
-    const earlierLocal = { role: "user", content: "Original ask", timestamp: 1_000 };
-    const exactMeta = cliMeta("exact-user");
-    const exactLocal = user("Edited ask", 1_001, exactMeta);
-    const laterImport = user(`${laterNote}\n\nOriginal ask`, 1_003, {
-      ...exactMeta,
-      externalId: "later-user",
-    });
+  it.each(["edited", "unchanged"])(
+    "keeps drift-note order after an %s exact identity",
+    (change) => {
+      const laterNote = CLAUDE_RESUME_DRIFT_NOTES[1];
+      const earlierLocal = { role: "user", content: "Original ask", timestamp: 1_000 };
+      const exactMeta = cliMeta("exact-user");
+      const exactLocal = user(
+        change === "edited" ? "Edited ask" : "Original ask",
+        1_001,
+        exactMeta,
+      );
+      const laterImport = user(`${laterNote}\n\nOriginal ask`, 1_003, {
+        ...exactMeta,
+        externalId: "later-user",
+      });
 
-    const merged = mergeImportedChatHistoryMessages({
-      localMessages: [earlierLocal, exactLocal],
-      importedMessages: [
-        user(`${CLAUDE_RESUME_DRIFT_NOTES[0]}\n\nOriginal ask`, 1_002, exactMeta),
-        laterImport,
-      ],
-    });
+      const merged = mergeImportedChatHistoryMessages({
+        localMessages: [earlierLocal, exactLocal],
+        importedMessages: [
+          user(
+            change === "edited"
+              ? `${CLAUDE_RESUME_DRIFT_NOTES[0]}\n\nOriginal ask`
+              : "Original ask",
+            1_002,
+            exactMeta,
+          ),
+          laterImport,
+        ],
+      });
 
-    expect(merged).toEqual([earlierLocal, exactLocal, laterImport]);
-  });
+      expect(merged).toEqual([earlierLocal, exactLocal, laterImport]);
+    },
+  );
 
   it("keeps drift-note order after an exact image turn", () => {
     const laterNote = CLAUDE_RESUME_DRIFT_NOTES[1];

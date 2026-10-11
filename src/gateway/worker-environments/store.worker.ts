@@ -46,7 +46,6 @@ function mutation<Name extends Method, Result>(
     return runOpenClawStateWriteTransaction(
       (transactionDatabase) => {
         const { db } = transactionDatabase;
-        requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
         const now = () => input.nowMs ?? Date.now();
         const store = createWorkerEnvironmentStoreKernel(transactionDatabase, now);
         const changesBefore = readTotalChanges(db);

@@ -5,6 +5,7 @@ import {
   createTestGatewayScheduler,
 } from "../../test-utils/gateway-scheduler-clock.js";
 import * as support from "./service.test-support.js";
+import { WorkerEnvironmentInventoryClosedError } from "./store-errors.js";
 import { WorkerTunnelOwnerDisconnectedError } from "./tunnel-contract.js";
 import type { WorkerTunnelManager } from "./tunnel.js";
 
@@ -307,7 +308,7 @@ describe("worker environment service", () => {
     expect(prune).toHaveBeenCalledOnce();
   });
 
-  it("propagates non-lock terminal cleanup failures", async () => {
+  it("propagates terminal cleanup failures", async () => {
     const error = Object.assign(new Error("disk I/O error"), { code: "SQLITE_IOERR" });
     const prune = vi
       .spyOn(support.testState.store, "pruneTerminalEnvironments")
@@ -640,14 +641,26 @@ describe("worker environment service", () => {
     expect(destroy).toHaveBeenCalledTimes(1);
   });
 
-  it("drains accepted operations after reconciliation rejects during shutdown", async () => {
+  it.each([false, true])(
+    "settles inventory retirement during reconciliation (stopping=%s)",
+    async (stopping) => {
+      const ready = createDeferred();
+      const closed = new WorkerEnvironmentInventoryClosedError();
+      vi.spyOn(support.testState.store, "ready").mockReturnValue(ready.promise);
+      const service = support.createService(support.createProvider());
+      const reconciliation = service.reconcileOnce("retired-environment");
+      const result = stopping
+        ? expect(reconciliation).resolves.toBeUndefined()
+        : expect(reconciliation).rejects.toBe(closed);
+      const stopped = stopping ? service.stop() : undefined;
+      ready.reject(closed);
+      await result;
+      await stopped;
+    },
+  );
+
+  it("drains accepted operations after readiness rejects during shutdown", async () => {
     const durableStore = support.testState.store;
-    support.testState.store = {
-      ...support.testState.store,
-      listForReconcile() {
-        throw new Error("reconcile database read failed");
-      },
-    };
     const { promise: bootstrapPending, resolve: finishBootstrap } = createDeferred();
     support.testState.bootstrapWorker = vi.fn(async () => {
       await bootstrapPending;
@@ -661,24 +674,31 @@ describe("worker environment service", () => {
     await support.waitForFast(() =>
       expect(support.testState.bootstrapWorker).toHaveBeenCalledTimes(1),
     );
-    const reconciliation = workerService.reconcileOnce();
-    const reconciliationResult = expect(reconciliation).rejects.toThrow(
-      "reconcile database read failed",
-    );
-    let stopped = false;
-    const stopping = workerService.stop().then(() => {
-      stopped = true;
-    });
+    try {
+      vi.spyOn(durableStore, "ready").mockRejectedValueOnce(
+        new Error("reconcile database read failed"),
+      );
+      const reconciliation = workerService.reconcileOnce("reconcile-failure");
+      const reconciliationResult = expect(reconciliation).rejects.toThrow(
+        "reconcile database read failed",
+      );
+      let stopped = false;
+      const stopping = workerService.stop().then(() => {
+        stopped = true;
+      });
 
-    await reconciliationResult;
-    await Promise.resolve();
-    expect(stopped).toBe(false);
-    finishBootstrap?.();
+      await reconciliationResult;
+      await Promise.resolve();
+      expect(stopped).toBe(false);
+      finishBootstrap?.();
 
-    await expect(creation).resolves.toMatchObject({ state: "ready" });
-    await stopping;
-    expect(stopped).toBe(true);
-    expect(durableStore.list()).toHaveLength(1);
+      await expect(creation).resolves.toMatchObject({ state: "ready" });
+      await stopping;
+      expect(stopped).toBe(true);
+      expect(durableStore.list()).toHaveLength(1);
+    } finally {
+      finishBootstrap();
+    }
   });
 
   it("starts without blocking gateway startup and drains reconciliation on stop", async () => {

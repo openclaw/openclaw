@@ -1,6 +1,16 @@
 import { parseModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
-import { For, Show, createEffect, createMemo, createSignal, onCleanup, untrack } from "solid-js";
+import {
+  For,
+  Show,
+  createEffect,
+  createMemo,
+  createSignal,
+  getOwner,
+  isDisposed,
+  onCleanup,
+  untrack,
+} from "solid-js";
 import type {
   WebSearchStatusParams,
   WebSearchStatusResult,
@@ -74,6 +84,8 @@ function SettingsSelectRow(props: {
 
 function SearchPageContent() {
   const context = useApplication();
+  const owner = getOwner();
+  const active = () => owner !== null && !isDisposed(owner);
   const [result, setResult] = createSignal<WebSearchStatusResult | null>(null);
   const [error, setError] = createSignal("");
   const [loading, setLoading] = createSignal(false);
@@ -86,7 +98,6 @@ function SearchPageContent() {
   const [query, setQuery] = createSignal(untrack(() => t("searchPage.queryDefault")));
   let selectedAgent = "";
   let configRevision = "";
-  let disposed = false;
   let loadingActive = false;
   let testingActive = false;
   let queryInput: HTMLInputElement | undefined;
@@ -99,14 +110,18 @@ function SearchPageContent() {
     () => undefined,
     () => untrack(syncRuntime),
   );
-  const { gateway, revision: gatewayRevision } = useGatewayPage({
+  const gateway = useGatewayPage({
     getGateway: () => context.gateway,
     onIdentityChange: () => {
       resetModelOnConnect = true;
       setModel("");
       setSetupProvider("");
     },
-    invalidateRequests: () => invalidate(),
+    invalidateRequests: () => {
+      if (active()) {
+        invalidate();
+      }
+    },
     ensureInitialData: () => {
       const agentChanged = syncAgent();
       // Identity resets are synchronous authority; Solid publishes their view next microtask.
@@ -128,7 +143,6 @@ function SearchPageContent() {
   const stopRuntime = runtimeView.subscribe(() => untrack(syncRuntime));
   const stopSelection = selectionProjection.subscribe(() => untrack(syncAgent));
   onCleanup(() => {
-    disposed = true;
     stopRuntime();
     stopSelection();
   });
@@ -166,13 +180,7 @@ function SearchPageContent() {
     };
   }
 
-  function connected() {
-    gatewayRevision();
-    return gateway.connected;
-  }
-
   function canEdit() {
-    gatewayRevision();
     runtimeView.read();
     return (
       gateway.connected &&
@@ -198,7 +206,7 @@ function SearchPageContent() {
     setError("");
     const selected = selection(modelValue);
     const current = () =>
-      !disposed &&
+      active() &&
       gateway.isCurrent(scope) &&
       JSON.stringify(selection()) === JSON.stringify(selected);
     if (canEdit()) {
@@ -233,12 +241,12 @@ function SearchPageContent() {
         }
       }
     } catch (cause) {
-      if (!disposed) {
+      if (active()) {
         setError(formatUiError(cause));
       }
     } finally {
       loadingActive = false;
-      if (!disposed) {
+      if (active()) {
         setLoading(false);
         if (!current() && gateway.connected) {
           void load();
@@ -302,7 +310,7 @@ function SearchPageContent() {
     }
     const selected = selection();
     const current = () =>
-      !disposed &&
+      active() &&
       gateway.isCurrent(scope) &&
       JSON.stringify(selection()) === JSON.stringify(selected);
     testingActive = true;
@@ -324,7 +332,7 @@ function SearchPageContent() {
       }
     } finally {
       testingActive = false;
-      if (!disposed) {
+      if (active()) {
         setTesting(false);
       }
     }
@@ -401,7 +409,7 @@ function SearchPageContent() {
       <SettingsPageHeader title={t("tabs.search")} subtitle={t("subtitles.search")} />
       <SettingsWorkspace>
         <SettingsPage>
-          {!connected() ? <SettingsEmpty message={t("searchPage.offline")} /> : undefined}
+          {!gateway.connected ? <SettingsEmpty message={t("searchPage.offline")} /> : undefined}
           {error() ? (
             <div role="alert" class="callout danger">
               {error()}
@@ -462,7 +470,7 @@ function SearchPageContent() {
                       value={selectionProjection.read().state.selectedId ?? ""}
                       options={agentOptions()}
                       onChange={(agent) => context.settingsAgentSelection.set(agent)}
-                      disabled={!connected()}
+                      disabled={!gateway.connected}
                     />
                     <SettingsRow
                       title={t("searchPage.model")}
@@ -474,7 +482,7 @@ function SearchPageContent() {
                               label: t("searchPage.model"),
                               value: model(),
                               options: modelOptions(),
-                              disabled: !connected(),
+                              disabled: !gateway.connected,
                               onChange: (value) => {
                                 setModel(value);
                                 void load(value);
@@ -505,7 +513,7 @@ function SearchPageContent() {
                     actions={
                       <button
                         class="btn btn--sm"
-                        disabled={loading() || testing() || !connected()}
+                        disabled={loading() || testing() || !gateway.connected}
                         onClick={() => void load()}
                       >
                         {t("searchPage.refresh")}
@@ -561,7 +569,7 @@ function SearchPageContent() {
                               testing() ||
                               loading() ||
                               !isSearchConfigSettled(configState()) ||
-                              !connected()
+                              !gateway.connected
                             }
                             onClick={() => void test(renderScope)}
                           >

@@ -1,10 +1,25 @@
-import type WaDialog from "@awesome.me/webawesome/dist/components/dialog/dialog.js";
 import "@awesome.me/webawesome/dist/components/dialog/dialog.js";
+import type WaDialog from "@awesome.me/webawesome/dist/components/dialog/dialog.js";
+import type { JSX as SolidJSX } from "@solidjs/web";
 import { css, html, type PropertyValues } from "lit";
 import { property } from "lit/decorators.js";
 import { acquireNativeOverlayOcclusion } from "../lib/native-overlay-occlusion.ts";
 import { composedParent } from "../lib/navigation-click.ts";
 import { OpenClawLitElement } from "../lit/openclaw-element.ts";
+
+type ModalDialogAttributes = SolidJSX.HTMLAttributes<HTMLElement> & {
+  label: string;
+  description?: string;
+  "onModal-cancel"?: (event: Event) => void;
+};
+
+declare module "@solidjs/web" {
+  namespace JSX {
+    interface IntrinsicElements {
+      "openclaw-modal-dialog": ModalDialogAttributes;
+    }
+  }
+}
 
 const modalLayers = (document.openClawModalLayers ??= new Set<HTMLElement>());
 
@@ -484,16 +499,5 @@ declare global {
 
   interface HTMLElementTagNameMap {
     "openclaw-modal-dialog": OpenClawModalDialog;
-  }
-}
-
-declare module "@solidjs/web" {
-  namespace JSX {
-    interface IntrinsicElements {
-      "openclaw-modal-dialog": HTMLAttributes<OpenClawModalDialog> & {
-        label: string;
-        "onModal-cancel"?: (event: Event) => void;
-      };
-    }
   }
 }

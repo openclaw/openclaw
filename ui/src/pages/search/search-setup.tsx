@@ -70,7 +70,7 @@ function SearchConfigField(
 export function SearchSetup(
   props: SearchSettingsProps & {
     context: ApplicationContext;
-    gateway: GatewayPageController;
+    gateway: Pick<GatewayPageController, "capture" | "isCurrent" | "epoch" | "connected">;
     provider: SearchProvider;
   },
 ) {

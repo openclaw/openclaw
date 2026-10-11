@@ -212,7 +212,7 @@ export function readSqliteDatabaseFactRevision(
 export function activeSqliteDatabaseWriters(
   record: Admission,
   index: 0 | 2,
-  refresh: (record: Admission) => void,
+  refresh?: (record: Admission) => void,
 ): number | undefined {
   const generation = new Int32Array(record.generation);
   let registrations = Atomics.load(generation, SqliteDatabaseGenerationSlot.writerCount);
@@ -220,6 +220,9 @@ export function activeSqliteDatabaseWriters(
     [...record.writers.values()].filter(({ cell }) => Atomics.load(new Int32Array(cell), 1) === 1)
       .length;
   if (known() < registrations) {
+    if (!refresh) {
+      return undefined;
+    }
     refresh(record);
     registrations = Atomics.load(generation, SqliteDatabaseGenerationSlot.writerCount);
     if (known() < registrations) {
@@ -238,7 +241,7 @@ export function activeSqliteDatabaseWriters(
 export function readSqliteDatabaseRecordWriteRevision(
   record: Admission,
   ownWriters: number,
-  refresh: (record: Admission) => void,
+  refresh?: (record: Admission) => void,
 ): number | undefined {
   const cell = new Int32Array(record.generation);
   const revision = Atomics.load(cell, SqliteDatabaseGenerationSlot.writeRevision);

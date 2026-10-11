@@ -335,8 +335,7 @@ function SessionsTable(props: SessionsProps) {
         <SettingsSegmented<SessionArchivedFilter>
           value={props.statusFilter}
           ariaLabel={t("sessionsView.sessionState")}
-          // oxlint-disable-next-line solid/no-react-specific-props -- The shared SettingsSegmented API owns this prop.
-          className="sessions-view-segment"
+          class="sessions-view-segment"
           options={[
             { value: "active", label: t("common.active") },
             {

@@ -126,20 +126,17 @@ class SkillsPageState {
   }
 
   get client() {
-    this.gatewayRevision();
     return this.gateway.client;
   }
 
   get connected() {
-    this.gatewayRevision();
     return this.gateway.connected;
   }
 
   private clawhubSearchTimer: ReturnType<typeof setTimeout> | null = null;
   private routeDataInitialized = false;
   private routeDataEnabled = true;
-  readonly gateway: ReturnType<typeof useGatewayPage>["gateway"];
-  private readonly gatewayRevision: () => number;
+  readonly gateway: ReturnType<typeof useGatewayPage>;
   readonly library: SkillLibraryController;
   private readonly clawhubIcons: PluginIconController;
   private searchAbort: AbortController | null = null;
@@ -171,15 +168,13 @@ class SkillsPageState {
         },
       });
     }
-    const scope = useGatewayPage({
+    this.gateway = useGatewayPage({
       getGateway: () => this.context.gateway,
       invalidateRequests: () => this.resetLoadedSkillState(),
       ensureInitialData: () => this.ensureInitialData(),
     });
-    this.gateway = scope.gateway;
-    this.gatewayRevision = scope.revision;
     const controller = new SkillLibraryController(
-      { ...scope.host, requestUpdate: changed },
+      { requestUpdate: changed },
       this.gateway,
       () => this.context.config,
     );
@@ -208,7 +203,6 @@ class SkillsPageState {
       },
     );
     createEffect(() => config?.revision(), changed);
-    createEffect(() => scope.revision(), changed);
     createEffect(
       () => this.agentSelection,
       (selection) => {
@@ -461,15 +455,11 @@ class SkillsPageState {
   }
 
   private canUpdateSkills(): boolean {
-    return canCallGatewayMethod(this.context?.gateway?.snapshot, "skills.update", "operator.admin");
+    return canCallGatewayMethod(this.gateway.snapshot, "skills.update", "operator.admin");
   }
 
   private canInstallSkills(): boolean {
-    return canCallGatewayMethod(
-      this.context?.gateway?.snapshot,
-      "skills.install",
-      "operator.admin",
-    );
+    return canCallGatewayMethod(this.gateway.snapshot, "skills.install", "operator.admin");
   }
 
   private canInstallFromClawHub(): boolean {

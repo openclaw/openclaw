@@ -1,6 +1,5 @@
 import { assertSessionEntryCurrentAdmission } from "../config/sessions/session-entry-current-admission.js";
 import type { SessionEntryCurrentCheck } from "../config/sessions/session-entry-current.types.js";
-import { assertDatabasePathIdentity } from "../infra/sqlite-worker-identity.js";
 import { createSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
 import {
   executeExistingOpenClawStateRead,
@@ -31,7 +30,6 @@ export function captureSessionUpstreamLinkReadSource(
     present: identity.key.startsWith("file:"),
     assertCurrent() {
       context.admission.assertCurrent();
-      assertDatabasePathIdentity(context.admission.databasePath, identity);
     },
   };
 }
