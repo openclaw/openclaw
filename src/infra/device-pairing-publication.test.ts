@@ -84,7 +84,13 @@ beforeEach(() => {
 
 test("keeps committed node bindings across bootstrap writes and caller-owned row edits", async () => {
   const snapshot = await readDevicePairingNodeSnapshot(baseDir);
-  expect(await readDevicePairingNodeSnapshot(baseDir)).toBe(snapshot);
+  const read = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
+  try {
+    expect(await readDevicePairingNodeSnapshot(baseDir)).toBe(snapshot);
+    expect(read).not.toHaveBeenCalled();
+  } finally {
+    read.mockRestore();
+  }
   expect(Object.isFrozen(snapshot)).toBe(true);
   expect(Object.isFrozen(snapshot.paired)).toBe(true);
   expect(Object.isFrozen(snapshot.paired[0]!.tokens!.node)).toBe(true);
@@ -592,14 +598,9 @@ test.each(["worker commit", "sibling owner commit"] as const)(
   },
 );
 
-test("retires prepared nodes after a sibling owner commit and database close", async () => {
+test("retires prepared nodes after a native owner commit and database close", async () => {
   const snapshot = await readDevicePairingNodeSnapshot(baseDir);
-  const other = openNodeSqliteDatabase(database.path);
-  try {
-    other.prepare("DELETE FROM device_pairing_paired WHERE device_id = ?").run("node");
-  } finally {
-    other.close();
-  }
+  persistDevicePairingStoreState({ pendingById: {}, pairedByDeviceId: {} }, baseDir, "paired");
   const deleted = await readDevicePairingNodeSnapshot(baseDir);
   expect(deleted).not.toBe(snapshot);
   expect(deleted.paired).toEqual([]);

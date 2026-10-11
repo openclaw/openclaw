@@ -396,11 +396,15 @@ const run = () =>
             stdio: ["pipe", "ignore", "ignore"],
           },
         );
+        // The fixture owns this child, not the completed update operation. Release
+        // it only after the parent has observed the real stall diagnostic.
+        process.stdin.once("end", () => child.stdin.end());
+        process.stdin.resume();
         await runCliDisposer(
           "fixture-stdin-child",
           () =>
             new Promise<void>((resolve) => {
-              child.once("exit", () => resolve());
+              child.once("close", () => resolve());
             }),
         );
       }

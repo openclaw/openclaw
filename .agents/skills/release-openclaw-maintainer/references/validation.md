@@ -7,15 +7,19 @@ waived by success on another surface.
 
 ## Older updater checks
 
-Before freezing a release, refresh `scripts/lib/update-compat-inventory.json`
-from every release in the supported upgrade window. Verify each downloaded npm
-tarball against its published `dist.integrity` before extraction, then run
+`scripts/lib/update-compat-inventory.json` is test-fixture maintenance, not a
+packaging or publish gate: npm preflight, prepack, `release-check`, and
+`release:prep` never consult live npm dist-tags, so another release moving
+`latest` or `beta` cannot invalidate a validated candidate. Refresh it on
+`main` (stable closeout or a normal PR) from every release in the supported
+upgrade window. Verify each downloaded npm tarball against its published
+`dist.integrity` before extraction, then run
 `pnpm update:compat:gen --release '<unpacked-dir>=<verified-integrity>'`, repeating
 `--release` for every supported version. Generation replaces the recorded set:
 keep empty entries, drop expired versions and their historical corrections, and
-never hand-edit recorded origins. Run `pnpm update:compat:check`; both npm
-`latest` and `beta` must be covered. Repeat the generation arguments with
-`--check` for an offline regeneration check.
+never hand-edit recorded origins. `pnpm update:compat:check` remains a manual
+maintainer report of npm `latest`/`beta` coverage. Repeat the generation
+arguments with `--check` for an offline regeneration check.
 
 Run every recorded `update-first-hop-compat*` lane and the upgrade survivor lane
 from the oldest supported release. Native Windows proof must invoke the old

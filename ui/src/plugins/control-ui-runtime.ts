@@ -65,6 +65,7 @@ export class ControlUiPluginRuntime implements ControlUiPluginCapability {
   private readonly listeners = new Set<() => void>();
   private readonly loadingOwners = new Set<Omit<ControlUiPluginOwner, "host">>();
   private loadingCatalog: "pending" | Set<string> | null = null;
+  private catalogStatus: "pending" | "complete" | "failed" = "pending";
   private readonly stops: ControlUiDisposer[] = [];
   private client: GatewayBrowserClient | null = null;
   private connectionId: string | null = null;
@@ -98,6 +99,17 @@ export class ControlUiPluginRuntime implements ControlUiPluginCapability {
 
   get hasPlugins(): boolean {
     return this.owners.size > 0 || this.loadingOwners.size > 0;
+  }
+
+  get registryStatus(): "pending" | "complete" | "failed" {
+    if (this.catalogStatus === "failed") {
+      return "failed";
+    }
+    return this.catalogStatus === "complete" &&
+      this.loadingCatalog === null &&
+      this.loadingOwners.size === 0
+      ? "complete"
+      : "pending";
   }
 
   isLoading(pluginId: string): boolean {
@@ -174,6 +186,10 @@ export class ControlUiPluginRuntime implements ControlUiPluginCapability {
     this.client = client;
     this.connectionId = connectionId;
     this.diagnostics = [];
+    this.catalogStatus =
+      client && !isGatewayMethodAdvertised(snapshot, "plugins.controlUi.list")
+        ? "complete"
+        : "pending";
     this.publish();
     if (client && isGatewayMethodAdvertised(snapshot, "plugins.controlUi.list")) {
       const reuseBootstrap = this.firstConnection;
@@ -194,6 +210,7 @@ export class ControlUiPluginRuntime implements ControlUiPluginCapability {
       this.disposeOwner(owner);
     }
     this.loadingOwners.clear();
+    this.catalogStatus = "pending";
     this.loadingCatalog = "pending";
     this.publish();
     const current = () =>
@@ -208,6 +225,7 @@ export class ControlUiPluginRuntime implements ControlUiPluginCapability {
         return;
       }
       this.diagnostics = catalog.diagnostics;
+      this.catalogStatus = "complete";
       const installed = new Set(catalog.plugins.map((plugin) => plugin.pluginId));
       this.loadingCatalog = installed;
       for (const [id, owner] of this.owners) {
@@ -273,6 +291,9 @@ export class ControlUiPluginRuntime implements ControlUiPluginCapability {
       this.publish();
     } catch (error) {
       if (current()) {
+        if (this.loadingCatalog === "pending") {
+          this.catalogStatus = "failed";
+        }
         this.loadingCatalog = null;
         this.reportError("host", error);
         this.publish();
@@ -572,6 +593,7 @@ export class ControlUiPluginRuntime implements ControlUiPluginCapability {
 
   private retireOwners(): void {
     this.refreshGeneration += 1;
+    this.catalogStatus = "pending";
     this.loadingCatalog = null;
     if (this.grantTimer !== null) {
       clearInterval(this.grantTimer);

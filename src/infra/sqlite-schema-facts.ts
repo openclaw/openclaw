@@ -277,7 +277,7 @@ function trackSchemaChanges(
       owner.isolatedTempTables.has(table),
     );
     if ((dataChange && !temporaryWrite) || mainSchemaChange) {
-      beginSqliteDatabaseWrite(database);
+      beginSqliteDatabaseWrite(database, mainSchemaChange || owner.nativeDepth > 0);
     }
     owner.nativeDepth += 1;
     const finishAdmissions = beginSqliteDatabaseAdmissionOperation(database);
@@ -418,7 +418,8 @@ function trackSchemaChanges(
         schemaChange: unexpected,
         mainSchemaChange: unexpected,
         temporaryTableSchemaChange: false,
-        dataChange: true,
+        // Known generation triggers change no rows and must not revoke in-flight reads.
+        dataChange: unexpected || schema.kind !== "generation",
         temporaryWriteTables: [],
         control: undefined,
       });

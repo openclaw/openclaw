@@ -75,13 +75,3 @@ export function createContext(
     },
   } as unknown as ApplicationContext;
 }
-
-/** Simulates the operator connecting the same application context to another Gateway. */
-export function reconnectGateway(context: ApplicationContext, request: ReturnType<typeof vi.fn>) {
-  Object.assign(context.gateway, {
-    snapshot: {
-      ...context.gateway.snapshot,
-      client: createContext(request).gateway.snapshot.client,
-    },
-  });
-}

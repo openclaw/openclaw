@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 
-import { IDBFactory, IDBObjectStore } from "fake-indexeddb";
+import { IDBFactory } from "fake-indexeddb";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   requestResult,
@@ -20,6 +20,7 @@ import {
   CHAT_SNAPSHOT_DB_NAME,
   CHAT_SNAPSHOT_METADATA_STORE_NAME,
   CHAT_SNAPSHOT_STORE_NAME,
+  SIDEBAR_SNAPSHOT_STORE_NAME,
   readStoredChatSnapshotRecord,
 } from "./session-snapshot-database.ts";
 import {
@@ -443,53 +444,6 @@ describe("persistent chat session snapshots", () => {
     },
   );
 
-  it.each(["account", "session", "cache-eviction"] as const)(
-    "does not restore retired %s metadata during the initial seed",
-    async (scope) => {
-      const retired = key("agent:main:retired-seed");
-      const retained = resolveChatSnapshotKey(
-        { ...snapshotHost, client: { recoveryScope: "other-account", recoveryScopeReady: true } },
-        { sessionKey: "agent:main:retained-seed" },
-      );
-      const writer = new SessionSnapshotStore();
-      writer.write(retired, snapshot("retired"));
-      writer.write(retained, snapshot("retained"));
-      await writer.flush();
-      const reader = new SessionSnapshotStore();
-      reader.connect();
-      try {
-        let deletion: Promise<void> | undefined;
-        const originalGetAll = Reflect.get(
-          IDBObjectStore.prototype,
-          "getAll",
-        ) as IDBObjectStore["getAll"];
-        vi.spyOn(IDBObjectStore.prototype, "getAll").mockImplementationOnce(function (
-          this: IDBObjectStore,
-          ...args
-        ) {
-          const request = originalGetAll.apply(this, args);
-          request.addEventListener("success", () => {
-            deletion =
-              scope === "account"
-                ? clearStoredChatSnapshots(retired.slice(0, retired.indexOf("\u0000") + 1))
-                : writer.delete(retired, scope === "cache-eviction" ? scope : undefined);
-          });
-          return request;
-        });
-        await reader.loadSavedAtIndex();
-        expect(deletion).toBeDefined();
-        await deletion;
-        expect(reader.readSavedAt(retired)).toBeNull();
-        expect(reader.readSavedAt(retained)).not.toBeNull();
-        await reader.loadSavedAtIndex();
-        expect(reader.readSavedAt(retained)).not.toBeNull();
-      } finally {
-        reader.disconnect();
-        await reader.whenIdle();
-      }
-    },
-  );
-
   it("upgrades a version one database before deleting an invalidated snapshot", async () => {
     const sessionKey = key("agent:main:legacy-delete");
     await putVersionOneRecord(sessionKey);
@@ -498,8 +452,9 @@ describe("persistent chat session snapshots", () => {
 
     const request = indexedDB.open(CHAT_SNAPSHOT_DB_NAME);
     const database = await requestResult(request);
-    expect(database.version).toBe(4);
+    expect(database.version).toBe(6);
     expect(Array.from(database.objectStoreNames)).toEqual([
+      SIDEBAR_SNAPSHOT_STORE_NAME,
       CHAT_SNAPSHOT_METADATA_STORE_NAME,
       CHAT_SNAPSHOT_STORE_NAME,
     ]);

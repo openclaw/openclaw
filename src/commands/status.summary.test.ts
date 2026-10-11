@@ -14,7 +14,9 @@ import {
 } from "./status.summary.test-support.js";
 
 const statusSummaryMocks = vi.hoisted(() => ({
-  hasConfiguredChannelsForReadOnlyScope: vi.fn(() => true),
+  hasConfiguredChannelsForReadOnlyScopeAsync: vi.fn<
+    typeof import("../plugins/channel-plugin-ids.js").hasConfiguredChannelsForReadOnlyScopeAsync
+  >(async () => true),
   buildChannelSummary: vi.fn(async () => ["ok"]),
   resolveProviderStaticModel: vi.fn(),
   listSessionEntriesCore: vi.fn<
@@ -27,8 +29,10 @@ const statusSummaryMocks = vi.hoisted(() => ({
     vi.fn<typeof import("../config/sessions/session-accessor.js").loadExactSessionEntryReadOnly>(),
 }));
 
+// mock-isolation: Keep plugin discovery outside this status aggregation fixture.
 vi.mock("../plugins/channel-plugin-ids.js", () => ({
-  hasConfiguredChannelsForReadOnlyScope: statusSummaryMocks.hasConfiguredChannelsForReadOnlyScope,
+  hasConfiguredChannelsForReadOnlyScopeAsync:
+    statusSummaryMocks.hasConfiguredChannelsForReadOnlyScopeAsync,
 }));
 
 vi.mock("../status/summary.runtime.js", () => ({
@@ -197,7 +201,7 @@ describe("getStatusSummary", () => {
     setActiveDegradedPlugins([]);
     clearActiveCredentialDegradedOwner("account", "telegram:work");
     setActiveDegradedSecretOwners([]);
-    statusSummaryMocks.hasConfiguredChannelsForReadOnlyScope.mockReturnValue(true);
+    statusSummaryMocks.hasConfiguredChannelsForReadOnlyScopeAsync.mockResolvedValue(true);
     statusSummaryMocks.resolveProviderStaticModel.mockReset();
     statusSummaryMocks.listSessionEntriesCore.mockReturnValue([]);
     vi.mocked(peekSystemEvents).mockReset().mockReturnValue([]);
@@ -401,13 +405,13 @@ describe("getStatusSummary", () => {
   });
 
   it("skips channel summary imports when no channels are configured", async () => {
-    statusSummaryMocks.hasConfiguredChannelsForReadOnlyScope.mockReturnValue(false);
+    statusSummaryMocks.hasConfiguredChannelsForReadOnlyScopeAsync.mockResolvedValue(false);
 
     const summary = await getStatusSummary();
 
     expect(summary.channelSummary).toStrictEqual([]);
     expect(summary.linkChannel).toBeUndefined();
-    expect(statusSummaryMocks.hasConfiguredChannelsForReadOnlyScope).toHaveBeenCalledWith({
+    expect(statusSummaryMocks.hasConfiguredChannelsForReadOnlyScopeAsync).toHaveBeenCalledWith({
       config: {},
     });
     expect(buildChannelSummary).not.toHaveBeenCalled();

@@ -1,6 +1,5 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
-  registerSessionBindingAdapter,
   resolveThreadBindingLifecycle,
   unregisterSessionBindingAdapter,
 } from "openclaw/plugin-sdk/conversation-runtime";
@@ -10,7 +9,10 @@ import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { runQueuedStoreWrite } from "openclaw/plugin-sdk/sqlite-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { createAccountScopedBindingAdapter } from "openclaw/plugin-sdk/thread-bindings-session-runtime";
+import {
+  createAccountScopedBindingAdapterV2,
+  registerSessionBindingAdapterV2,
+} from "openclaw/plugin-sdk/thread-bindings-session-runtime";
 import { loadTelegramSendModule } from "./send-runtime.js";
 import {
   loadBindingsFromStore,
@@ -269,7 +271,8 @@ async function initializeThreadBindingManager(
 
   const projectSessionBinding = (record: TelegramThreadBindingRecord) =>
     toSessionBindingRecord(record, { idleTimeoutMs, maxAgeMs });
-  const sessionBindingAdapter = createAccountScopedBindingAdapter({
+  const sessionBindingAdapter = createAccountScopedBindingAdapterV2({
+    assertCurrent: assertManagerCurrent,
     channel: "telegram",
     accountId,
     capabilities: {
@@ -388,6 +391,26 @@ async function initializeThreadBindingManager(
       });
     },
     project: projectSessionBinding,
+    // Reads consume only facts published by this manager after worker commits.
+    listBySessionKeyAsync: async (key) => manager.listBySessionKey(key),
+    getByConversationAsync: async (ref) => manager.getByConversationId(ref.conversationId),
+    inspectByConversationAsync: async (ref) => manager.getByConversationId(ref.conversationId),
+    inspectByConversations: (refs) => {
+      const records = refs.map((ref) => manager.getByConversationId(ref.conversationId));
+      return {
+        records,
+        assertCurrent: () => {
+          assertManagerCurrent();
+          if (
+            refs.some(
+              (ref, index) => manager.getByConversationId(ref.conversationId) !== records[index],
+            )
+          ) {
+            throw new Error("Telegram thread binding selection changed");
+          }
+        },
+      };
+    },
     listBySessionKey: manager.listBySessionKey,
     getByConversation: (ref) => manager.getByConversationId(ref.conversationId),
     touchConversation: (conversationId, at) => {
@@ -411,7 +434,7 @@ async function initializeThreadBindingManager(
       }),
   });
 
-  registerSessionBindingAdapter(sessionBindingAdapter);
+  registerSessionBindingAdapterV2(sessionBindingAdapter);
 
   const sweeperEnabled = params.enableSweeper !== false;
   if (sweeperEnabled) {
@@ -551,9 +574,9 @@ function createSyncLifecycleSetter<Field extends TelegramThreadBindingLifecycleF
   };
 }
 
-/** @deprecated Use the Async counterpart. Retained through the next Plugin SDK major. */
+/** @deprecated Use setTelegramThreadBindingIdleTimeoutBySessionKeyAsync; removed in the next Plugin SDK major. */
 export const setTelegramThreadBindingIdleTimeoutBySessionKey =
   createSyncLifecycleSetter("idleTimeoutMs");
 
-/** @deprecated Use the Async counterpart. Retained through the next Plugin SDK major. */
+/** @deprecated Use setTelegramThreadBindingMaxAgeBySessionKeyAsync; removed in the next Plugin SDK major. */
 export const setTelegramThreadBindingMaxAgeBySessionKey = createSyncLifecycleSetter("maxAgeMs");

@@ -11,6 +11,7 @@ import { bindPreparedModelRuntimeAuth } from "../../agents/prepared-model-runtim
 import { markPreparedModelCatalogFull } from "../../agents/prepared-model-runtime.full-catalog.js";
 import type { PreparedModelRuntimeSnapshot } from "../../agents/prepared-model-runtime.types.js";
 import { runCommandWithRuntime } from "../../cli/cli-utils.js";
+import * as localStateOwner from "../../cli/local-state-owner.js";
 import * as runtimeConfig from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import * as gateway from "../../gateway/call.js";
@@ -98,6 +99,14 @@ function createOwner(
 }
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.spyOn(localStateOwner, "runWithLocalStateOwner").mockImplementation(async ({ runLocal }) =>
+    runLocal({
+      config: cfg,
+      env: process.env,
+      signal: new AbortController().signal,
+      assertCurrent() {},
+    }),
+  );
   vi.spyOn(runtimeConfig, "getRuntimeConfig").mockReturnValue(cfg);
   vi.spyOn(configLoader, "loadModelsConfigWithSource").mockResolvedValue({
     sourceConfig: cfg,
@@ -137,6 +146,7 @@ describe("models list published transport", () => {
     expect(configLoader.loadModelsConfigWithSource).not.toHaveBeenCalled();
     expect(catalog.withPreparedModelCatalogOwner).not.toHaveBeenCalled();
     expect(proxyLifecycle.startProxy).not.toHaveBeenCalled();
+    expect(localStateOwner.runWithLocalStateOwner).not.toHaveBeenCalled();
     expect(gateway.callGateway).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({
         requiredCapabilities: ["published-model-catalog"],
@@ -367,7 +377,7 @@ describe("models list published transport", () => {
         expect.objectContaining({
           agentId: "work",
           readOnly: !refresh,
-          ...(refresh ? { refreshFullCatalog: true } : {}),
+          ...(refresh ? { refreshFullCatalog: true, persistOfflineRefresh: true } : {}),
         }),
         expect.any(Function),
       );
@@ -381,9 +391,13 @@ describe("models list published transport", () => {
         2,
       );
       if (refresh) {
+        expect(localStateOwner.runWithLocalStateOwner).toHaveBeenCalledWith(
+          expect.objectContaining({ method: "models.list", onForeignOwner: "refuse" }),
+        );
         expect(proxyLifecycle.startProxy).toHaveBeenCalledExactlyOnceWith(cfg.proxy);
         expect(proxyLifecycle.stopProxy).toHaveBeenCalledExactlyOnceWith(handle);
       } else {
+        expect(localStateOwner.runWithLocalStateOwner).not.toHaveBeenCalled();
         expect(proxyLifecycle.startProxy).not.toHaveBeenCalled();
       }
     },
