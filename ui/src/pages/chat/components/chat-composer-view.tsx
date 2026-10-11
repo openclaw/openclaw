@@ -1,9 +1,9 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { createMemo, createRenderEffect, onCleanup, Show, untrack } from "solid-js";
 import "../../../styles/chat/composer-surface.css";
-import "../../../components/mcp-app-catalog.ts";
-import "../../../components/mcp-app-context-strip.ts";
-import "../../../components/mcp-app-resources.ts";
+import "../../../components/mcp-app-catalog.tsx";
+import "../../../components/solid/mcp-app-context-strip.tsx";
+import "../../../components/mcp-app-resources.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { t } from "../../../i18n/index.ts";
 import { clearCompositionEnd } from "../../../lib/ime.ts";

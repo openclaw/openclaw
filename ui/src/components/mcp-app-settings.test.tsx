@@ -2,7 +2,7 @@ import { createSignal } from "solid-js";
 import { describe, expect, it, vi } from "vitest";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { flush } from "../test-helpers/solid-settle.ts";
-import { McpAppSettingsForm } from "./mcp-app-settings.ts";
+import { McpAppSettingsForm } from "./solid/mcp-app-settings.tsx";
 
 describe("native app settings", () => {
   it("renders effective grouped values and sends edits only through explicit save", () => {

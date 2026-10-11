@@ -3,13 +3,10 @@ import type WaDropdownItem from "@awesome.me/webawesome/dist/components/dropdown
 import type WaDropdown from "@awesome.me/webawesome/dist/components/dropdown/dropdown.js";
 import type WaPopup from "@awesome.me/webawesome/dist/components/popup/popup.js";
 import type WaSwitch from "@awesome.me/webawesome/dist/components/switch/switch.js";
-import type { McpAppCatalog } from "../components/mcp-app-catalog.ts";
-import type { McpAppContextStrip } from "../components/mcp-app-context-strip.ts";
-import type {
-  McpAppResources,
-  McpAppResourceMentionDetail,
-} from "../components/mcp-app-resources.ts";
+import "../components/mcp-app-catalog.tsx";
+import type { McpAppResourceMentionDetail } from "../components/mcp-app-resources.tsx";
 import type { OpenClawModalDialog } from "../components/modal-dialog.ts";
+import type { McpAppContextStripElement as McpAppContextStrip } from "../components/solid/mcp-app-context-strip.tsx";
 import type { ChatPastedText } from "../pages/chat/components/chat-pasted-text.ts";
 import type { ChatQuestionCard } from "../pages/chat/components/chat-question-card.ts";
 import "@solidjs/web";
@@ -17,11 +14,11 @@ import "../components/tooltip.ts";
 export type { JSX } from "@solidjs/web";
 
 type Tooltip = HTMLElementTagNameMap["openclaw-tooltip"];
+type McpAppCatalog = HTMLElementTagNameMap["openclaw-mcp-app-catalog"];
+type McpAppResources = HTMLElementTagNameMap["openclaw-mcp-app-resources"];
 
 declare global {
   interface HTMLElementTagNameMap {
-    "openclaw-mcp-app-catalog": McpAppCatalog;
-    "openclaw-mcp-app-resources": McpAppResources;
     "openclaw-mcp-app-context-strip": McpAppContextStrip;
   }
 }
@@ -90,6 +87,8 @@ declare module "@solidjs/web" {
         content?: string;
         disabled?: boolean;
         "open-on-click"?: boolean;
+        placement?: Tooltip["placement"];
+        "auto-size"?: boolean;
       };
       "wa-dropdown": HTMLAttributes<WaDropdown> &
         Properties<WaDropdown> & {

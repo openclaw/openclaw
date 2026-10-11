@@ -19,7 +19,6 @@ import {
 import {
   captureOwnedManagedUpdatePreflightContext,
   resolveOwnedManagedUpdatePreflightEnv,
-  revalidateUpdateDatabaseContext,
 } from "./update-command-managed-context.js";
 import { collectServiceInspectionFailureFacts } from "./update-command-result.js";
 import type { ManagedServiceRootRedirect } from "./update-command-service-context-types.js";
@@ -177,7 +176,7 @@ export async function inspectUpdateDatabaseContexts(
   });
 }
 
-/** Recheck the admitted service and stores together before mutable update work. */
+/** Check target schema support; native service effects validate their own authority. */
 export async function revalidateUpdateDatabaseContexts(
   params: Omit<Parameters<typeof inspectUpdateDatabaseContexts>[0], "roots" | "expectedServices">,
   admission: Awaited<ReturnType<typeof inspectUpdateDatabaseContexts>> | undefined,
@@ -189,13 +188,6 @@ export async function revalidateUpdateDatabaseContexts(
       "Database admission was not inspected.",
     );
   }
-  await inspectUpdateManagedServices({
-    ...params,
-    roots: [...admission.services.keys()],
-    expectedServices: admission.services,
-    expectedForeground: admission.foreground,
-  });
-  admission.contexts = await Promise.all(admission.contexts.map(revalidateUpdateDatabaseContext));
   const installedContexts = params.candidateAdmissionChecks?.includes("database-schema")
     ? admission.contexts.filter((context) => !isCandidateAdmissionContextCovered(context.env))
     : admission.contexts;

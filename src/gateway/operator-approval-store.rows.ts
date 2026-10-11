@@ -450,7 +450,7 @@ export function expirePendingRow(params: {
       .returningAll(),
   );
   operatorApprovalPublication.stagePostimages(params.database.db, changed.rows);
-  return selectOperatorApprovalRow(params.database, params.id);
+  return changed.rows[0];
 }
 
 export function requireDecodedRecord(row: OperatorApprovalRow): OperatorApprovalRecord {

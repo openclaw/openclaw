@@ -246,6 +246,14 @@ describe("session groups catalog", () => {
       cwd: "/repos/client",
       worktree: true,
     });
+    await updateSessionGroupDefaults("Customer", { cwd: "/repos/updated", worktree: false }, env);
+    expect(readSessionGroupCatalog(env)).toMatchObject({
+      groups: [
+        { name: "Other", position: 0 },
+        { name: "Customer", position: 1 },
+      ],
+      defaults: [{ name: "Other" }, { name: "Customer", cwd: "/repos/updated", worktree: false }],
+    });
   });
 
   it("rejects renaming an unknown group after defaults schema activation", async () => {

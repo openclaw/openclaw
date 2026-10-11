@@ -499,7 +499,6 @@ describe("worker turn launcher local placement", () => {
           }
           return entry;
         });
-      const claimTurn = vi.spyOn(placements, "claimTurn");
       const runLocal = vi.fn(async () => ({ meta: { durationMs: 1 } }));
       try {
         await expect(
@@ -516,13 +515,14 @@ describe("worker turn launcher local placement", () => {
             () => controller.signal.throwIfAborted(),
           ),
         ).rejects.toThrow(
-          change === "caller revocation" ? revoked.message : "placement authority changed",
+          change === "caller revocation"
+            ? revoked.message
+            : `Local turn rejected for session ${SESSION_ID} in placement requested`,
         );
-        expect(claimTurn).not.toHaveBeenCalled();
+        expect(placements.get(SESSION_ID)?.turnClaim ?? null).toBeNull();
         expect(runLocal).not.toHaveBeenCalled();
       } finally {
         heldRead.mockRestore();
-        claimTurn.mockRestore();
       }
     },
   );

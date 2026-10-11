@@ -25,7 +25,7 @@ export function isPendingProvisioningEnvironment(
 }
 
 export function createInterruptedWorkerProvisioningRetainer(options: {
-  placements: Pick<WorkerDispatchPlacementStore, "get" | "getAsync">;
+  placements: Pick<WorkerDispatchPlacementStore, "getAsync">;
   environments: Pick<WorkerEnvironmentService, "get" | "recordError">;
   isShuttingDown?: () => boolean;
 }) {
@@ -34,18 +34,19 @@ export function createInterruptedWorkerProvisioningRetainer(options: {
     owned: WorkerDispatchPlacement,
     error: unknown,
   ): Promise<WorkerDispatchPlacement | undefined> => {
-    const current = await placements.getAsync(owned.sessionId);
     if (
       error instanceof WorkerPlacementAdmissionTargetError ||
       error instanceof WorkerDispatchTargetChangedError ||
-      !options.isShuttingDown?.() ||
+      !options.isShuttingDown?.()
+    ) {
+      return undefined;
+    }
+    const current = await placements.getAsync(owned.sessionId);
+    if (
       current?.state !== "provisioning" ||
       current.state !== owned.state ||
       current.generation !== owned.generation ||
-      current.environmentId !== owned.environmentId ||
-      current.sessionKey !== owned.sessionKey ||
-      current.agentId !== owned.agentId ||
-      current.executionMode !== owned.executionMode
+      current.environmentId !== owned.environmentId
     ) {
       return undefined;
     }
@@ -53,26 +54,7 @@ export function createInterruptedWorkerProvisioningRetainer(options: {
     if (!environment || !isPendingProvisioningEnvironment(environment, current.environmentId)) {
       return undefined;
     }
-    const assertCurrent = () => {
-      const latest = placements.get(owned.sessionId);
-      if (
-        latest?.state !== current.state ||
-        latest.generation !== current.generation ||
-        latest.environmentId !== current.environmentId ||
-        latest.sessionKey !== current.sessionKey ||
-        latest.agentId !== current.agentId ||
-        latest.executionMode !== current.executionMode ||
-        !isPendingProvisioningEnvironment(
-          environments.get(environment.environmentId),
-          current.environmentId,
-        )
-      ) {
-        throw new Error("Worker provisioning owner changed before shutdown retention");
-      }
-    };
-    // Explicit Stop must win while the diagnostic waits for the database worker.
-    await environments.recordError(environment, error, assertCurrent);
-    assertCurrent();
+    await environments.recordError(environment, error);
     return current;
   };
 }

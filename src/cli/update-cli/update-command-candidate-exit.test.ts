@@ -57,7 +57,6 @@ vi.mock("./update-command-managed-context.js", async (original) => ({
   ...(await original<typeof import("./update-command-managed-context.js")>()),
   captureOwnedManagedUpdateContext: async () => undefined,
   captureOwnedManagedUpdatePreflightContext: mocks.captureManagedPreflight,
-  revalidateUpdateDatabaseContext: async (context: unknown) => context,
 }));
 vi.mock("./update-command-service.js", async (original) => ({
   ...(await original<typeof import("./update-command-service.js")>()),
