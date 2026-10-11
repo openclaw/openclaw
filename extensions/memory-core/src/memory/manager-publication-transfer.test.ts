@@ -156,7 +156,7 @@ describe("bounded memory publication transfer", () => {
         fts: { enabled: false, available: false },
       };
       const scalar = bind();
-      expect(scalar.execute({ type: "vector.retireLegacy", input: { state } })).toEqual({
+      expect(scalar.execute({ type: "vector.retireLegacy", input: { state } })).toMatchObject({
         ok: true,
         value: true,
       });
@@ -300,7 +300,7 @@ describe("bounded memory publication transfer", () => {
           input: { ...command.input, expectedRevision: command.input.expectedRevision + 1 },
         }),
       ).toEqual({ ok: true, value: false });
-      expect(backend.execute(command)).toEqual({ ok: true, value: true });
+      expect(backend.execute(command)).toMatchObject({ ok: true, value: true });
       expect(db.prepare("SELECT hash, embedding FROM memory_embedding_cache").all()).toEqual([
         { hash: "current", embedding: encodeMemoryEmbedding([-0, 0.25]) },
       ]);

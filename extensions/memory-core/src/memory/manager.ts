@@ -411,6 +411,7 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
     const run = async () => {
       let outcome: MemorySyncOutcome;
       await this.publishedDatabase.withPublicationGeneration(async () => {
+        await this.publishedDatabase.refreshFacts();
         const hadBootstrapFailure = this.embeddingBootstrapFailure !== undefined;
         let forceFtsOnly =
           this.embeddingBootstrapFailure !== undefined &&

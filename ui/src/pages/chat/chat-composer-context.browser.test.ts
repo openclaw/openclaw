@@ -6,7 +6,7 @@ import "../../styles.css";
 import "../../styles/chat.ts";
 import "../../styles/chat/composer.css";
 import "../../styles/chat/composer-progress.css";
-import { createComposerProps } from "./chat-composer.test-support.ts";
+import { createComposerContainer, createComposerProps } from "./chat-composer.test-support.ts";
 import { renderChatComposer, resetChatComposerState } from "./components/chat-composer.ts";
 import { installChatComposerPickerDismissal } from "./components/chat-picker-overlay.ts";
 
@@ -16,7 +16,7 @@ let viewport: { width: number; height: number };
 
 beforeEach(() => {
   viewport = { width: window.innerWidth, height: window.innerHeight };
-  container = document.createElement("div");
+  container = createComposerContainer();
   document.body.append(container);
   releaseDismissal = installChatComposerPickerDismissal(document);
 });

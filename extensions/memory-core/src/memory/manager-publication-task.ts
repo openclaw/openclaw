@@ -1,6 +1,7 @@
 import type { ensureMemoryIndexSchema } from "openclaw/plugin-sdk/memory-core-host-engine-schema";
 import type { loadMemoryEmbeddingCache } from "./manager-embedding-cache.js";
 import type { MemoryIndexMeta, MemoryIndexProviderIdentity } from "./manager-reindex-state.js";
+import type { MemoryDatabaseFacts } from "./manager-retrieval-read.js";
 import type { MemoryShadowConnection, MemoryShadowFailure } from "./manager-shadow-task.js";
 import type { MemorySourceIndexHeader } from "./manager-source-index-kernel.js";
 import type {
@@ -30,14 +31,10 @@ export type MemoryEmbeddingCacheMutation =
   | { kind: "upsert"; header: MemoryEmbeddingCacheHeader; entries: MemoryEmbeddingCacheEntry[] }
   | { kind: "clear"; identities: MemoryIndexProviderIdentity[] };
 export type MemoryPublicationResult<T> =
-  | { ok: true; value: T }
+  | { ok: true; value: T; facts?: MemoryDatabaseFacts; writeToken?: string }
   | { ok: false; error: MemoryShadowFailure; entered: boolean; committed: boolean };
 export type MemoryPublicationOperations = {
   "connection.inspect": { input: undefined; output: MemoryShadowConnection };
-  "meta.write": {
-    input: { meta: MemoryIndexMeta };
-    output: MemoryPublicationResult<void>;
-  };
   "vector.ensure": {
     input: { dimensions: number; currentDimensions?: number; state: MemoryPublicationState };
     output: MemoryPublicationResult<void>;
@@ -46,6 +43,8 @@ export type MemoryPublicationOperations = {
     input: { state: MemoryPublicationState };
     output: MemoryPublicationResult<boolean>;
   };
+  "index.facts": { input: undefined; output: MemoryDatabaseFacts };
+  "index.writeMetadata": { input: MemoryIndexMeta; output: MemoryPublicationResult<void> };
   "schema.admit": {
     input: Pick<
       Parameters<typeof ensureMemoryIndexSchema>[0],

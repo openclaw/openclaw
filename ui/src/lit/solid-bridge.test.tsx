@@ -237,6 +237,44 @@ it("uses a single Solid-owned host and preserves reactive props, children, event
   expect(disposed).toHaveBeenCalledTimes(1);
 });
 
+it.each(["attribute", "Solid props"])(
+  "honors the public setter when updating %s",
+  async (input) => {
+    const tag = `openclaw-solid-setter-${crypto.randomUUID()}`;
+    const SetterBridge = defineSolidBridge<{ label: string }>(
+      tag,
+      (props, host) => {
+        const property = Object.getOwnPropertyDescriptor(host, "label")!;
+        Object.defineProperty(host, "label", {
+          ...property,
+          set(value: string) {
+            property.set!.call(host, value.toUpperCase());
+          },
+        });
+        onCleanup(() => Object.defineProperty(host, "label", property));
+        return <output>{props.label}</output>;
+      },
+      { properties: { label: { default: "initial" } } },
+    );
+    const [label, setLabel] = createSignal("initial");
+    const view = mountSolid(() =>
+      input === "attribute" ? document.createElement(tag) : <SetterBridge label={label()} />,
+    );
+    const host = view.container.querySelector(tag) as SolidBridgeElement<{ label: string }>;
+    await host.updateComplete;
+
+    if (input === "attribute") {
+      host.setAttribute("label", "normalized");
+    } else {
+      setLabel("normalized");
+      flush();
+    }
+    expect(host.label).toBe("NORMALIZED");
+    await host.updateComplete;
+    expect(host.querySelector("output")?.textContent).toBe("NORMALIZED");
+  },
+);
+
 it("provides the existing Lit application context, rebinds replacements, and unsubscribes", async () => {
   const seen = vi.fn();
   const ContextBridge = defineSolidBridge(

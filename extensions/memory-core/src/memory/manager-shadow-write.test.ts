@@ -6,6 +6,7 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import * as storage from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { SqliteWorkerError } from "openclaw/plugin-sdk/sqlite-runtime";
 import * as sqliteRuntime from "openclaw/plugin-sdk/sqlite-runtime";
+import { observeHostDataSql } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { seedMemoryForgetTombstones } from "../test-helpers.js";
 import { MemoryIndexDatabase } from "./manager-database-context.js";
@@ -88,6 +89,13 @@ describe("private session source staging", () => {
           .toString("hex")
           .toUpperCase();
         expect(vectors).toEqual(sessionChunks.map(({ id }) => ({ id, embedding })));
+        const sql = observeHostDataSql();
+        try {
+          await manager.sync({ reason: "after-shadow-publication" });
+          expect(sql.queries).toEqual([]);
+        } finally {
+          sql.restore();
+        }
       }
       const databasePath = db.location()!;
       await manager.close();

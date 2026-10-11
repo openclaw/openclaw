@@ -36,7 +36,6 @@ import {
   type MemoryIndexMeta,
   type MemoryIndexProviderIdentity,
 } from "./manager-reindex-state.js";
-import { readMemoryIndexMetadata } from "./manager-retrieval-read.js";
 import { MemorySyncOutcomeLedger } from "./manager-sync-outcome.js";
 import { requiresMemoryVectorRebuild } from "./manager-vector-rebuild-state.js";
 import type { MemoryCoreRuntimeHost } from "./runtime-host.js";
@@ -355,20 +354,11 @@ export abstract class MemoryManagerSyncBase extends MemoryManagerDatabaseContext
   }
 
   protected hasIndexedChunks(): boolean {
-    return (
-      this.database.hasIndex &&
-      this.db.prepare(`SELECT 1 as found FROM memory_index_chunks LIMIT 1`).get() !== undefined
-    );
+    return this.database.facts.hasIndexedChunks;
   }
 
   protected hasSemanticChunks(): boolean {
-    if (!this.database.hasIndex) {
-      return false;
-    }
-    const row = this.db
-      .prepare(`SELECT 1 as found FROM memory_index_chunks WHERE model != 'fts-only' LIMIT 1`)
-      .get() as { found?: number } | undefined;
-    return row?.found === 1;
+    return this.database.facts.hasSemanticChunks;
   }
 
   protected resolveConfiguredIndexIdentity() {
@@ -453,12 +443,16 @@ export abstract class MemoryManagerSyncBase extends MemoryManagerDatabaseContext
     });
   }
 
-  protected resetVectorState(): void {
-    this.database.vectorReady = null;
+  protected resetVectorState(vectorIndexComplete: boolean): void {
+    // Shadow publication replaces index rows, not this handle's loaded extension.
+    const extensionLoaded = vectorIndexComplete && this.vector.available === true;
+    this.database.vectorReady = extensionLoaded ? Promise.resolve(true) : null;
+    if (!extensionLoaded) {
+      this.vector.available = null;
+      this.vector.loadError = undefined;
+    }
     this.database.ensuredVectorDimensions = undefined;
-    this.vector.available = null;
     this.vector.semanticAvailable = undefined;
-    this.vector.loadError = undefined;
     this.vector.dims = undefined;
     this.database.vectorDegradedWriteWarningShown = false;
   }
@@ -615,23 +609,10 @@ export abstract class MemoryManagerSyncBase extends MemoryManagerDatabaseContext
   }
 
   protected readMeta(): MemoryIndexMeta | null {
-    if (!this.database.hasIndex) {
-      return null;
-    }
-    const { meta, serialized } = readMemoryIndexMetadata(this.db);
-    this.database.lastMetaSerialized = serialized;
-    return meta;
+    return this.database.facts.meta;
   }
 
-  protected async writeMeta(meta: MemoryIndexMeta): Promise<void> {
-    const value = JSON.stringify(meta);
-    if (this.database.lastMetaSerialized === value) {
-      return;
-    }
-    const database = this.database;
-    await database.updateIndexStructure({ type: "meta.write", input: { meta } }, () =>
-      this.assertDatabaseMutationCurrent(database),
-    );
-    database.lastMetaSerialized = value;
+  protected writeMeta(meta: MemoryIndexMeta): Promise<void> {
+    return this.database.writeMetadata(meta);
   }
 }

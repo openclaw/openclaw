@@ -23,16 +23,16 @@ type PublicationRetry = <T>(
   prepare: () => Promise<boolean>,
 ) => Promise<T | undefined>;
 
-export async function retryMemoryPublication<T>(
-  run: () => Promise<MemoryPublicationResult<T>>,
-  busyTimeoutMs: number,
-  prepare: () => Promise<boolean> = async () => true,
-): Promise<T | undefined> {
-  const deadline = performance.now() + busyTimeoutMs;
-  while (await prepare()) {
-    const result = await run();
+export async function retryMemoryPublication<T>(params: {
+  run: () => Promise<MemoryPublicationResult<T>>;
+  prepare: () => Promise<boolean>;
+  busyTimeoutMs: number;
+}): Promise<Extract<MemoryPublicationResult<T>, { ok: true }> | undefined> {
+  const deadline = performance.now() + params.busyTimeoutMs;
+  while (await params.prepare()) {
+    const result = await params.run();
     if (result.ok) {
-      return result.value;
+      return result;
     }
     const code = result.error.errcode === undefined ? undefined : result.error.errcode & 0xff;
     if (result.entered || (code !== 5 && code !== 6) || performance.now() >= deadline) {

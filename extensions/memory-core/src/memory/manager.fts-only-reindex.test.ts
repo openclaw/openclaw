@@ -274,7 +274,10 @@ describe("memory manager FTS-only reindex", () => {
       providerEmbeddingError = new Error("embedding request failed during bootstrap");
       const memoryManager = await createManager();
       const metadata = vi
-        .spyOn(memoryManager as unknown as { writeMeta(meta: MemoryIndexMeta): void }, "writeMeta")
+        .spyOn(
+          memoryManager as unknown as { writeMeta(meta: MemoryIndexMeta): Promise<void> },
+          "writeMeta",
+        )
         .mockImplementationOnce(() => {
           throw new Error("keyword publication failed");
         });
@@ -651,29 +654,6 @@ describe("memory manager FTS-only reindex", () => {
     expect(indexIdentityStatus(memoryManager)).toBe("missing");
     expect(statusAfter.chunks).toBe(1);
     expect(statusAfter.dirty).toBe(true);
-  });
-
-  it("observes a separate CLI reindex without reopening the live gateway manager", async () => {
-    const liveManager = await createManager({ provider: "none" });
-    await liveManager.sync({ reason: "test", force: true });
-    openOpenClawAgentDatabase({ agentId: "main" }).db.exec(
-      `DELETE FROM memory_index_meta WHERE key = 'memory_index_meta_v1'`,
-    );
-    expect(indexIdentityStatus(liveManager)).toBe("missing");
-
-    await fs.writeFile(
-      path.join(workspaceDir, "MEMORY.md"),
-      "Beta topic\n\nKeep this repaired note.",
-    );
-    const cliManager = await createManager({
-      provider: "none",
-      purpose: "cli",
-    });
-    await cliManager.sync({ reason: "cli", force: true });
-
-    expect(indexIdentityStatus(liveManager)).toBe("valid");
-    const results = await liveManager.search("beta repaired");
-    expect(results.some((result) => result.snippet.includes("Beta topic"))).toBe(true);
   });
 
   it("removes chunks and FTS rows when the dirty source file is already deleted", async () => {

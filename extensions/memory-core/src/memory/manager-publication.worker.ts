@@ -16,6 +16,7 @@ import {
   openNodeSqliteDatabase,
   resolveExistingSqliteFileUri,
   requestSqliteWorkerOperationAdmission,
+  readSqliteDatabasePendingWriteToken,
   runSqliteImmediateTransactionSync,
   supportsNodeSqliteExtensionLoading,
   tableExists,
@@ -38,10 +39,11 @@ import type {
   MemoryPublicationOperations,
   MemoryPublicationResult,
 } from "./manager-publication-task.js";
-import { MEMORY_INDEX_META_KEY, readMemoryIndexMetadata } from "./manager-retrieval-read.js";
+import { MEMORY_INDEX_META_KEY, readMemoryDatabaseFacts } from "./manager-retrieval-read.js";
 import {
   assertMemoryShadowIdentity,
   readMemoryShadowIdentity,
+  readMemoryConnectionPragmas,
   type MemoryShadowConnection,
   type MemoryShadowFailure,
 } from "./manager-shadow-task.js";
@@ -121,7 +123,7 @@ async function openShadowBackend(
     configureMemorySqliteWalMaintenance(db, { busyTimeoutMs: 5_000, databasePath });
     const connection = existing ?? {
       fileIdentity: readMemoryShadowIdentity(databasePath),
-      pragmas: readConnectionPragmas(db),
+      pragmas: readMemoryConnectionPragmas(db, "Invalid memory publication connection policy"),
     };
     return {
       ...createPublicationBackend(connection, databasePath, db, true, (stage) =>
@@ -171,16 +173,6 @@ function readConnectionPragma(
     throw new Error("Invalid memory publication connection policy");
   }
   return value;
-}
-
-function readConnectionPragmas(db: DatabaseSync): MemoryShadowConnection["pragmas"] {
-  return {
-    busy_timeout: readConnectionPragma(db, "busy_timeout"),
-    synchronous: readConnectionPragma(db, "synchronous"),
-    foreign_keys: readConnectionPragma(db, "foreign_keys"),
-    journal_size_limit: readConnectionPragma(db, "journal_size_limit"),
-    checkpoint_fullfsync: readConnectionPragma(db, "checkpoint_fullfsync"),
-  };
 }
 
 function createPublicationBackend(
@@ -236,6 +228,7 @@ function createPublicationBackend(
   ): MemoryPublicationResult<T> => {
     let entered = false;
     let committed = false;
+    let writeToken: string | undefined;
     let restoredBusyTimeout = false;
     const restoreBusyTimeout = () => {
       if (!restoredBusyTimeout) {
@@ -258,11 +251,12 @@ function createPublicationBackend(
         withCommit: (commit) => {
           assertPath();
           admit("commit");
+          writeToken = readSqliteDatabasePendingWriteToken(db);
           commit();
           committed = true;
         },
       });
-      return { ok: true, value };
+      return { ok: true, value, writeToken };
     } catch (error) {
       return { ok: false, error: failure(error), entered, committed };
     } finally {
@@ -282,6 +276,8 @@ function createPublicationBackend(
         { withCommit: hooks.withCommit },
       ),
     );
+  const withFacts = <T>(result: MemoryPublicationResult<T>): MemoryPublicationResult<T> =>
+    result.ok ? { ...result, facts: readMemoryDatabaseFacts(db) } : result;
   const writeMeta = (value: string) => {
     executeSqliteQuerySync(
       db,
@@ -302,14 +298,23 @@ function createPublicationBackend(
       assertPath();
       if (command.type === "connection.inspect") {
         return "kind" in input
-          ? { fileIdentity: input.fileIdentity, pragmas: readConnectionPragmas(db) }
+          ? {
+              fileIdentity: input.fileIdentity,
+              pragmas: readMemoryConnectionPragmas(
+                db,
+                "Invalid memory publication connection policy",
+              ),
+            }
           : input;
+      }
+      if (command.type === "index.facts") {
+        return readMemoryDatabaseFacts(db);
       }
       if (command.type === "schema.admit") {
         // Storage/STRICT migration must disable foreign keys before BEGIN.
         db.exec("PRAGMA foreign_keys = OFF");
         try {
-          return write(() => ensureMemoryIndexSchema({ ...command.input, db }));
+          return withFacts(write(() => ensureMemoryIndexSchema({ ...command.input, db })));
         } finally {
           if (db.isOpen) {
             db.exec(`PRAGMA foreign_keys = ${input.pragmas.foreign_keys}`);
@@ -322,14 +327,14 @@ function createPublicationBackend(
       if (command.type === "source.chunks") {
         return readMemorySourceChunks(db, command.input.source, command.input.path);
       }
-      if (command.type === "meta.write") {
-        return write(() => writeMeta(JSON.stringify(command.input.meta)));
+      if (command.type === "index.writeMetadata") {
+        return withFacts(write(() => writeMeta(JSON.stringify(command.input))));
       }
       if (command.type === "source.state") {
         return loadMemorySourceFileState({ db, ...command.input });
       }
       if (command.type === "source.refresh") {
-        return write(() => refreshMemorySessionSourceState(db, command.input));
+        return withFacts(write(() => refreshMemorySessionSourceState(db, command.input)));
       }
       if (command.type === "session.current") {
         return hasMemorySessionTombstone(db, command.input.agentId, command.input.sessionId)
@@ -456,46 +461,48 @@ function createPublicationBackend(
         if (!Number.isSafeInteger(dimensions) || dimensions <= 0) {
           throw new Error("Memory vector dimensions must be a positive integer");
         }
-        const { meta } = readMemoryIndexMetadata(db);
+        const { meta, hasIndexedChunks } = readMemoryDatabaseFacts(db);
         const currentDimensions = meta ? meta.vectorDims : command.input.currentDimensions;
         if (currentDimensions === dimensions && tableExists(db, MEMORY_INDEX_VECTOR_TABLE)) {
           return { ok: true, value: undefined };
         }
         loadExtension(command.input.state.extensionPath);
-        return write(() => {
-          db.exec(`DROP TABLE IF EXISTS ${MEMORY_INDEX_VECTOR_TABLE}`);
-          db.exec(
-            `CREATE VIRTUAL TABLE ${MEMORY_INDEX_VECTOR_TABLE} USING vec0(\n` +
-              `  id TEXT PRIMARY KEY,\n  embedding FLOAT[${dimensions}]\n)`,
-          );
-          if (
-            meta &&
-            !meta.vectorDims &&
-            !db.prepare("SELECT 1 FROM memory_index_chunks LIMIT 1").get()
-          ) {
-            writeMeta(JSON.stringify({ ...meta, vectorDims: dimensions }));
-          }
-        });
+        return withFacts(
+          write(() => {
+            db.exec(`DROP TABLE IF EXISTS ${MEMORY_INDEX_VECTOR_TABLE}`);
+            db.exec(
+              `CREATE VIRTUAL TABLE ${MEMORY_INDEX_VECTOR_TABLE} USING vec0(\n` +
+                `  id TEXT PRIMARY KEY,\n  embedding FLOAT[${dimensions}]\n)`,
+            );
+            if (meta && !meta.vectorDims && !hasIndexedChunks) {
+              writeMeta(JSON.stringify({ ...meta, vectorDims: dimensions }));
+            }
+          }),
+        );
       }
       loadExtension(command.input.state.extensionPath);
       if (command.type === "database.publish") {
         const publication = command.input;
-        return transact((hooks) => {
-          assertMemoryShadowIdentity(publication.sourcePath, publication.sourceIdentity);
-          publishMemoryDatabaseTables({
-            ...publication,
-            targetDb: db,
-            onBegin: () => {
-              hooks.onBegin();
-              assertMemoryShadowIdentity(publication.sourcePath, publication.sourceIdentity);
-            },
-            withCommit: hooks.withCommit,
-          });
-        });
+        return withFacts(
+          transact((hooks) => {
+            assertMemoryShadowIdentity(publication.sourcePath, publication.sourceIdentity);
+            publishMemoryDatabaseTables({
+              ...publication,
+              targetDb: db,
+              onBegin: () => {
+                hooks.onBegin();
+                assertMemoryShadowIdentity(publication.sourcePath, publication.sourceIdentity);
+              },
+              withCommit: hooks.withCommit,
+            });
+          }),
+        );
       }
       if (command.type === "source.delete") {
-        return write(() =>
-          new MemorySourceIndexKernel(db, command.input.state).deleteIfCurrent(command.input),
+        return withFacts(
+          write(() =>
+            new MemorySourceIndexKernel(db, command.input.state).deleteIfCurrent(command.input),
+          ),
         );
       }
       let header: MemorySourceIndexHeader;
@@ -516,6 +523,7 @@ function createPublicationBackend(
         header = staged.header;
         rows = readPublicationRows<MemorySourceIndexRow>(staged.fragments);
       }
+      let facts: ReturnType<typeof readMemoryDatabaseFacts> | undefined;
       const outcome = write(() => {
         if (
           header.source === "sessions" &&
@@ -530,13 +538,15 @@ function createPublicationBackend(
           header,
           rows,
         );
+        facts = readMemoryDatabaseFacts(db);
         return {
           beforeRevision,
-          databaseRevision: readMemoryDatabaseRevision(db),
+          databaseRevision: facts.revision,
           retainedDrift,
         };
       });
-      return command.type === "source.replace.inline" ? outcome : finish(outcome);
+      const published = outcome.ok ? { ...outcome, facts } : outcome;
+      return command.type === "source.replace.inline" ? published : finish(published);
     },
     close() {
       discard();

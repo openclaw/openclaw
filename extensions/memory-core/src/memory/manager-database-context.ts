@@ -19,11 +19,12 @@ import {
   type SqliteWorkerStore,
   runQueuedStoreWrite,
   readOpenClawAgentDatabaseIdentity,
+  readSqliteDatabaseWriteTokenForPath,
   supportsOpenClawAgentDatabaseExecution,
   type StoreWriterQueue,
 } from "openclaw/plugin-sdk/sqlite-runtime";
 import { memoryCpuProcessEntrypoints } from "./manager-cpu-entrypoints.js";
-import { runMemorySourceState } from "./manager-cpu-worker-runtime.js";
+import { runMemoryDatabaseFacts, runMemorySourceState } from "./manager-cpu-worker-runtime.js";
 import { memoryDatabaseTableExists } from "./manager-db-kernel.js";
 import { closeMemoryDatabase, openMemoryDatabaseReadOnlyAtPath } from "./manager-db.js";
 import { withMemoryIndexGeneration } from "./manager-index-generation-lease.js";
@@ -39,6 +40,7 @@ import {
   publishMemorySource,
   retryMemoryPublication,
 } from "./manager-publication.js";
+import type { MemoryDatabaseFacts } from "./manager-retrieval-read.js";
 import {
   assertMemoryShadowIdentity,
   readMemoryShadowIdentity,
@@ -75,10 +77,11 @@ async function initializePublishedMemory(
     if (!schema) {
       return undefined;
     }
-    return await retryMemoryPublication(
-      () => worker.execute({ type: "schema.admit", input: schema }, assertCurrent),
-      5_000,
-    );
+    return await retryMemoryPublication({
+      run: () => worker.execute({ type: "schema.admit", input: schema }, assertCurrent),
+      busyTimeoutMs: 5_000,
+      prepare: async () => true,
+    });
   } finally {
     await worker.close();
   }
@@ -89,6 +92,7 @@ export class MemoryIndexDatabase {
   private nativeWriterActive = false;
   private publicationWorker?: Promise<PublicationWorker>;
   private schemaAdmission?: Promise<void>;
+  private factsToken?: string;
   private shadow?: {
     path: string;
     identity: MemoryShadowConnection["fileIdentity"];
@@ -136,6 +140,9 @@ export class MemoryIndexDatabase {
     );
     try {
       database.fts.enabled = params.schema.ftsEnabled;
+      if (params.maintenanceSource) {
+        database.installFacts(params.maintenanceSource.facts);
+      }
       if (
         params.maintenanceSource &&
         (!database.fts.enabled || params.maintenanceSource.fts.available)
@@ -146,11 +153,19 @@ export class MemoryIndexDatabase {
           database.hasIndex &&
           database.fts.enabled &&
           memoryDatabaseTableExists(database.db, "main", MEMORY_INDEX_FTS_TABLE);
+        if (database.hasIndex) {
+          database.installFacts(
+            await runMemoryDatabaseFacts(params.writeOptions.path, params.agentId),
+          );
+        }
       } else if (admitted) {
-        database.fts.available = admitted.ftsAvailable;
-        database.fts.loadError = admitted.ftsError;
-        if (params.schema.ftsEnabled && admitted.ftsError) {
-          log.warn(`fts unavailable: ${admitted.ftsError}`);
+        if (admitted.facts) {
+          database.installFacts(admitted.facts, admitted.writeToken);
+        }
+        database.fts.available = admitted.value.ftsAvailable;
+        database.fts.loadError = admitted.value.ftsError;
+        if (params.schema.ftsEnabled && admitted.value.ftsError) {
+          log.warn(`fts unavailable: ${admitted.value.ftsError}`);
         }
       }
       return database;
@@ -217,7 +232,13 @@ export class MemoryIndexDatabase {
   } = { enabled: false, available: false };
   vectorReady: Promise<boolean> | null = null;
   ensuredVectorDimensions: number | undefined;
-  lastMetaSerialized: string | null = null;
+  facts: MemoryDatabaseFacts = {
+    meta: null,
+    serialized: null,
+    revision: 0,
+    hasIndexedChunks: false,
+    hasSemanticChunks: false,
+  };
   vectorDegradedWriteWarningShown = false;
   closed = false;
 
@@ -228,6 +249,47 @@ export class MemoryIndexDatabase {
     readonly writeOptions?: Parameters<typeof openOpenClawAgentSqliteWorkerStoreV2>[0],
     readonly hasIndex = true,
   ) {}
+
+  private writeToken(): string | undefined {
+    const filename = this.shadow?.path ?? this.writeOptions?.path;
+    return filename ? readSqliteDatabaseWriteTokenForPath(filename) : undefined;
+  }
+
+  private installFacts(facts: MemoryDatabaseFacts, token?: string): void {
+    this.facts = facts;
+    this.factsToken = token;
+  }
+
+  async refreshFacts(): Promise<void> {
+    if (!this.hasIndex || this.readOnly) {
+      return;
+    }
+    const token = this.writeToken();
+    if (token !== undefined && token === this.factsToken) {
+      return;
+    }
+    this.installFacts(
+      await this.executePublication({ type: "index.facts", input: undefined }, () => {
+        if (this.closed || !this.db.isOpen) {
+          throw new Error("Memory database owner closed before reading index facts");
+        }
+      }),
+      token,
+    );
+  }
+
+  async writeMetadata(meta: NonNullable<MemoryDatabaseFacts["meta"]>): Promise<void> {
+    if (this.facts.serialized === JSON.stringify(meta)) {
+      return;
+    }
+    await this.retryPublication(() =>
+      this.executePublication({ type: "index.writeMetadata", input: meta }, () => {
+        if (this.closed || !this.db.isOpen) {
+          throw new Error("Memory database owner closed before writing index metadata");
+        }
+      }),
+    );
+  }
 
   get isShadow(): boolean {
     return this.shadow !== undefined;
@@ -445,7 +507,15 @@ export class MemoryIndexDatabase {
     prepare: () => Promise<boolean> = async () => true,
   ): Promise<T | undefined> {
     const worker = await this.getPublicationWorker();
-    return retryMemoryPublication(run, worker.busyTimeoutMs, prepare);
+    const result = await retryMemoryPublication({
+      run,
+      busyTimeoutMs: worker.busyTimeoutMs,
+      prepare,
+    });
+    if (result?.facts) {
+      this.installFacts(result.facts, result.writeToken);
+    }
+    return result?.value;
   }
 
   read<Key extends "source.hash" | "source.chunks" | "cache.read" | "session.current">(
@@ -583,7 +653,7 @@ export class MemoryIndexDatabase {
     );
   }
 
-  async updateIndexStructure<Key extends "meta.write" | "vector.ensure" | "vector.retireLegacy">(
+  async updateIndexStructure<Key extends "vector.ensure" | "vector.retireLegacy">(
     command: { type: Key; input: MemoryPublicationOperations[Key]["input"] },
     assertCurrent: () => void,
   ) {

@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
+import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import { SQLITE_WORKER_MAX_MESSAGE_BYTES } from "../../infra/sqlite-worker-contract.js";
@@ -739,7 +740,7 @@ describe("conversation registry", () => {
         deliveryTarget: peerId,
       })!,
     );
-    const write = (index: number, updatedAt: number) =>
+    const write = (index: number, updatedAt: number, routeContext?: { guildId: string }) =>
       runOpenClawAgentWriteTransaction((database) => {
         const identity = identities[index]!;
         upsertConversationIdentities(
@@ -750,7 +751,7 @@ describe("conversation registry", () => {
         linkSessionConversation({
           database,
           sessionId,
-          conversation: { identity, role: "primary" },
+          conversation: { identity, role: "primary", routeContext },
           updatedAt,
         });
       }, options);
@@ -771,7 +772,21 @@ describe("conversation registry", () => {
       snapshots.push([...installed.keys()].toSorted());
     });
     try {
-      write(1, 20);
+      const database = openOpenClawAgentDatabase(options);
+      const associationReads = trackSqliteStatementExecutions(database.db, ["route"], (sql) =>
+        sql.startsWith('select "last_seen_at", "route_context_json" from "session_conversations"')
+          ? "route"
+          : null,
+      );
+      try {
+        write(1, 20, { guildId: "receipt-guild" });
+        expect(associationReads.counts.route).toBe(0);
+      } finally {
+        associationReads.restore();
+      }
+      expect(await readConversation(scope, identities[1]!.conversationRef)).toMatchObject({
+        routeContext: { guildId: "receipt-guild" },
+      });
       const oldPrimary = JSON.stringify([
         "association",
         sessionId,
