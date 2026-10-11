@@ -4,8 +4,8 @@ import { patchSettings } from "../app/settings.ts";
 import * as dex from "./lobster-dex.ts";
 import * as contract from "./lobster-pet-contract.ts";
 import type { LobsterPetDismissMenuPosition } from "./lobster-pet-dismiss-menu.tsx";
+import * as lobsterLook from "./lobster-pet-identity.ts";
 import { LobsterPetInteractions } from "./lobster-pet-interactions.ts";
-import * as lobsterLook from "./lobster-pet-look.ts";
 import * as plans from "./lobster-pet-plans.ts";
 import type { LobsterPetSceneProps } from "./lobster-pet-scene-view.tsx";
 import {
@@ -152,11 +152,13 @@ export class LobsterPetController {
 
   constructor(
     private readonly host: HTMLElement,
-    private readonly notify: () => void,
+    private notify: () => void,
     private readonly disableVisits: () => void,
   ) {}
 
-  connect() {
+  connect(notify: () => void) {
+    this.notify = notify;
+    this.look = null;
     this.active = true;
     this.geometry.connect();
     this.traffic.connect();
@@ -168,14 +170,20 @@ export class LobsterPetController {
     this.active = false;
     document.removeEventListener("visibilitychange", this.handleVisibilityChange);
     this.clearActTimers();
+    this.restartPending = false;
+    this.scheduledVisiting = false;
+    this.presence = "out";
+    this.act = null;
     this.timers.clear("visitTimer", "leaveTimer", "shellTimer", "vigilTimer");
     this.geometry.dispose();
     this.traffic.dispose();
     this.interactions.dispose();
+    this.notify = () => {};
   }
 
   update(props: LobsterPetProps) {
     const changed = new Map<string, unknown>();
+    // SAFETY: the bridge supplies only the declared LobsterPetProps keys (plus unused children).
     for (const key of Object.keys(props) as (keyof LobsterPetProps)[]) {
       if (!Object.is(this[key], props[key])) {
         changed.set(key, this[key]);
@@ -183,7 +191,9 @@ export class LobsterPetController {
     }
     Object.assign(this, props);
     this.reconcile(changed);
-    this.notify();
+    if (this.active) {
+      this.notify();
+    }
   }
 
   private refresh() {
@@ -268,6 +278,7 @@ export class LobsterPetController {
         this.trackVigil();
       }
     }
+    // SAFETY: update records this typed property before replacing it with the next props.
     const previousCritters = (changed.get("critters") as readonly string[] | undefined) ?? [];
     const critters = this.critters ?? [];
     const crittersChanged =

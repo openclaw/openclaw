@@ -128,6 +128,15 @@ describe("theme visitors and resident presence", () => {
       await element.updateComplete;
       expect(element.querySelector(".lobster-pet--passer")).toBeNull();
 
+      const parent = element.parentElement!;
+      element.remove();
+      await element.updateComplete;
+      parent.append(element);
+      await element.updateComplete;
+      await vi.advanceTimersByTimeAsync(10_000);
+      await element.updateComplete;
+      expect(element.querySelector(".lobster-pet--passer")).toBeNull();
+
       element.seed = 55;
       await element.updateComplete;
       await vi.advanceTimersByTimeAsync(9000);

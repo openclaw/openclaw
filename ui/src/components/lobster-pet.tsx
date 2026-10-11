@@ -4,19 +4,22 @@ import { LobsterPetController, type LobsterPetProps } from "./lobster-pet-contro
 import { LobsterPetDismissMenu } from "./lobster-pet-dismiss-menu.tsx";
 import { LobsterPetScene } from "./lobster-pet-scene-view.tsx";
 
+// A bridge remount retires the view, not the host's once-per-load visitor history.
+const pets = new WeakMap<HTMLElement, LobsterPetController>();
+
 export const LobsterPet = defineSolidBridge<LobsterPetProps>(
   "openclaw-lobster-pet",
   (props, host) => {
     const [revision, setRevision] = createSignal(0);
-    const pet = new LobsterPetController(
-      host,
-      () => setRevision((n) => n + 1),
-      () => {
+    const notify = () => setRevision((n) => n + 1);
+    const pet =
+      pets.get(host) ??
+      new LobsterPetController(host, notify, () => {
         host.visitsEnabled = false;
-      },
-    );
+      });
+    pets.set(host, pet);
     onSettled(() => {
-      pet.connect();
+      pet.connect(notify);
       pet.update({ ...props });
     });
     createEffect(

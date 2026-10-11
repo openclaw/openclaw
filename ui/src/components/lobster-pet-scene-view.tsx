@@ -13,7 +13,7 @@ import type {
   LobsterPetMode,
   LobsterPetPaletteId,
 } from "./lobster-pet-contract.ts";
-import { createLobsterPetLook, lobsterLookStyle, lobsterPetName } from "./lobster-pet-look.ts";
+import { createLobsterPetLook, lobsterLookStyle, lobsterPetName } from "./lobster-pet-identity.ts";
 import {
   lobsterLanePoint,
   lobsterTravelDuration,
@@ -21,8 +21,11 @@ import {
   type LobsterSceneTravel,
 } from "./lobster-pet-scene.ts";
 import { Balloon, BottleSvg, PASSER_SPRITES, PASSER_TITLES } from "./lobster-pet-sprites.tsx";
-import { THEME_CRITTER_SPRITES } from "./theme-flair-artwork.tsx";
-import { THEME_CRITTER_TITLES, themeCritterBaseStyle } from "./theme-flair-sprites.ts";
+import {
+  THEME_CRITTER_SPRITES,
+  THEME_CRITTER_TITLES,
+  themeCritterBaseStyle,
+} from "./theme-flair-artwork.tsx";
 
 const PASSER_SPRITES_BY_KIND: Partial<Record<string, () => JSX.Element>> = {
   ...PASSER_SPRITES,
