@@ -207,7 +207,7 @@ test("required placement survives disconnect but stops setup when committed call
   vi.spyOn(placementLifecycleStore, "createPlacementLifecycleWorkerOps").mockImplementation(
     (options) => {
       const lifecycle = createLifecycle(options);
-      const startDispatch = lifecycle.startDispatch;
+      const startDispatch = lifecycle.startDispatch.bind(lifecycle);
       lifecycle.startDispatch = async (...args) => {
         const placement = await startDispatch(...args);
         const current = hold;
