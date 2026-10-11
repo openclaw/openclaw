@@ -1785,15 +1785,41 @@ describe("diagnostics-otel service", () => {
           skillSource: "workspace",
           activation: "read",
           toolName: "read",
+          skillFingerprint: "0f4c2a1b3d5e7f9a",
           trace: createTestTrace(TOOL_SPAN_ID, CHILD_SPAN_ID),
         },
       ],
+      // The counter call stays fingerprint-free: bundle provenance is span-only.
       metrics: [["counter", "openclaw.skill.used", [[1, skillAttributes]]]],
       span: {
         name: "openclaw.skill.used",
-        attributes: skillAttributes,
+        attributes: {
+          ...skillAttributes,
+          "openclaw.skill.fingerprint": "0f4c2a1b3d5e7f9a",
+        },
         omittedText: ["run-should-not-export", "session-should-not-export"],
       },
+    },
+    {
+      name: "skill usage fingerprint without tracing",
+      signals: ["metrics"],
+      trusted: true,
+      events: [
+        {
+          type: "skill.used",
+          agentId: "main",
+          runId: "run-should-not-export",
+          sessionKey: "session-should-not-export",
+          skillName: "tiny-llm-brainstorm",
+          skillSource: "workspace",
+          activation: "read",
+          toolName: "read",
+          skillFingerprint: "0f4c2a1b3d5e7f9a",
+        },
+      ],
+      // Tracing off: accounting is intact and the fingerprint does no exporter work.
+      metrics: [["counter", "openclaw.skill.used", [[1, skillAttributes]]]],
+      stateOmits: ["0f4c2a1b3d5e7f9a"],
     },
     {
       name: "tool loop",

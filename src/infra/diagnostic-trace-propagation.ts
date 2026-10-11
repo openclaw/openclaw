@@ -80,6 +80,11 @@ export function registerDiagnosticTracePropagationBridge(
   };
 }
 
+/** Whether an exporter-owned tracing consumer is active in this process. */
+export function hasActiveDiagnosticTracePropagation(): boolean {
+  return activeDiagnosticTracePropagationBridge() !== undefined;
+}
+
 export function shouldPrepareDiagnosticTracePropagation(event: unknown): boolean {
   const bridge = activeDiagnosticTracePropagationBridge();
   if (!bridge?.prepareEvent) {

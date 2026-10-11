@@ -526,6 +526,7 @@ export function wrapToolWithBeforeToolCallHook(
           toolName: normalizedToolName,
           toolParams: executeParams,
           ctx,
+          toolCallId,
         });
         if (skillMatch && terminalDiagnostic.type === "tool.execution.completed") {
           recordSkillUsed({ ctx, match: skillMatch, toolName: normalizedToolName, toolCallId });

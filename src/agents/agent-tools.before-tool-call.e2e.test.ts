@@ -43,8 +43,13 @@ import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { setPluginToolMeta } from "../plugins/tool-metadata.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import {
+  materializeSkillResources,
+  prepareSkillResourceDelivery,
+} from "../skills/runtime/resources.js";
 import { consumeRunSkillUsage } from "../skills/runtime/run-usage.js";
 import { createCanonicalFixtureSkill } from "../skills/test-support/test-helpers.js";
+import type { SkillSnapshot } from "../skills/types.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import {
   type HookContext,
@@ -54,10 +59,16 @@ import {
   wrapToolWithBeforeToolCallHook,
 } from "./agent-tools.before-tool-call.js";
 import { createOpenClawCodingTools } from "./agent-tools.js";
+import {
+  createSkillInstructionDeliveryCache,
+  createSkillInstructionDeliveryMarkers,
+  wrapReadToolWithSkillContent,
+} from "./agent-tools.read.js";
 import { createExecTool } from "./bash-tools.exec-run.js";
 import { createWriteTool } from "./sessions/index.js";
 import type { AnyAgentTool } from "./tools/common.js";
 import { callGatewayTool } from "./tools/gateway.js";
+import { createInstalledSkillTools } from "./tools/installed-skill-tools.js";
 
 const CRITICAL_THRESHOLD = 20;
 const GLOBAL_CIRCUIT_BREAKER_THRESHOLD = 30;
@@ -1633,6 +1644,623 @@ describe("before_tool_call loop detection behavior", () => {
       expect(JSON.stringify(emitted[1])).not.toContain(skillFilePath);
       expect(privateData[0]?.skillUsage?.skillFile).toBe(skillFilePath);
       expect(JSON.stringify(emitted)).not.toContain("display name");
+    });
+  });
+
+  const fingerprintWorkspaceDir = path.join("/tmp", "openclaw-skill-fingerprint");
+  const pondBaseDir = path.join(fingerprintWorkspaceDir, ".agents", "skills", "pond");
+  const pondLocator = path.join(pondBaseDir, "SKILL.md");
+  const pondInstructions = "# Pond\ncomplete instructions";
+
+  function asSkillUsageTextResult(text: string) {
+    return {
+      content: [{ type: "text" as const, text }],
+      details: { kind: "text" as const, content: text },
+    };
+  }
+
+  function extractSkillReadText(result: unknown): string {
+    const content = (result as { content?: unknown } | null | undefined)?.content;
+    if (!Array.isArray(content)) {
+      return "";
+    }
+    const textBlock = content.find(
+      (block): block is { type: "text"; text: string } =>
+        typeof block === "object" &&
+        block !== null &&
+        (block as { type?: unknown }).type === "text",
+    );
+    return textBlock?.text ?? "";
+  }
+
+  function createSkillDeliveryState() {
+    return {
+      cache: createSkillInstructionDeliveryCache(),
+      markers: createSkillInstructionDeliveryMarkers(),
+    };
+  }
+
+  function createSkillFingerprintContext(params: {
+    delivery: ReturnType<typeof createSkillDeliveryState>;
+    entryBundleFingerprint?: string;
+    skillsSnapshot?: SkillSnapshot;
+  }): HookContext {
+    return {
+      agentId: "main",
+      sessionKey: "session-key",
+      loopDetection: { enabled: false },
+      skillsSnapshot: params.skillsSnapshot ?? {
+        prompt: "",
+        skills: [{ name: "pond" }],
+        resolvedSkills: [
+          {
+            ...createCanonicalFixtureSkill({
+              name: "pond",
+              description: "Pond skill",
+              filePath: pondLocator,
+              baseDir: pondBaseDir,
+              source: "workspace",
+            }),
+            ...(params.entryBundleFingerprint
+              ? { bundleFingerprint: params.entryBundleFingerprint }
+              : {}),
+          },
+        ],
+      },
+      skillInstructionDeliveryMarkers: params.delivery.markers,
+    };
+  }
+
+  function createDeliveryWrappedRead(
+    execute: ReturnType<typeof vi.fn>,
+    bundleFingerprint: string | undefined,
+    delivery: ReturnType<typeof createSkillDeliveryState>,
+  ) {
+    return wrapToolWithBeforeToolCallHook(
+      wrapReadToolWithSkillContent(
+        asAgentTool({ name: "read", execute }),
+        [
+          {
+            filePath: pondLocator,
+            ...(bundleFingerprint ? { bundleFingerprint } : {}),
+          },
+        ],
+        {
+          instructionDeliveryCache: delivery.cache,
+          instructionDeliveryMarkers: delivery.markers,
+        },
+      ),
+      createSkillFingerprintContext({ delivery, entryBundleFingerprint: bundleFingerprint }),
+    );
+  }
+
+  const pondGenerationOneScript = "#!/bin/sh\nprintf pond-one\n";
+  const pondGenerationTwoScript = "#!/bin/sh\nprintf pond-two\n";
+
+  async function pondFileRead(_toolCallId: unknown, params: unknown) {
+    const filePath = (params as { path?: string }).path;
+    return asSkillUsageTextResult(await fs.readFile(filePath!, "utf8"));
+  }
+
+  async function createPondSource() {
+    const workspace = tempDirs.make("openclaw-skill-fingerprint-source-");
+    const baseDir = path.join(workspace, "skills", "pond");
+    await fs.mkdir(path.join(baseDir, "scripts"), { recursive: true });
+    await fs.writeFile(
+      path.join(baseDir, "SKILL.md"),
+      "---\nname: pond\ndescription: Pond skill\n---\n# Pond\ncomplete instructions\n",
+    );
+    return { workspace, baseDir };
+  }
+
+  async function materializePondGeneration(params: {
+    workspace: string;
+    checkScript: string;
+    scope: { sessionId: string; workspaceDir: string };
+  }) {
+    // Real producer routes: delivery prep reads the source tree through the
+    // resource owner; scoped materialization rm/mkdir's the revision-keyed
+    // directory, so each generation owns its own paths.
+    await fs.writeFile(
+      path.join(params.workspace, "skills", "pond", "scripts", "check.sh"),
+      params.checkScript,
+    );
+    const snapshot: SkillSnapshot = {
+      prompt: "",
+      skills: [{ name: "pond" }],
+      resolvedSkills: [
+        createCanonicalFixtureSkill({
+          name: "pond",
+          description: "Pond skill",
+          filePath: path.join(params.workspace, "skills", "pond", "SKILL.md"),
+          baseDir: path.join(params.workspace, "skills", "pond"),
+          source: "openclaw-workspace",
+        }),
+      ],
+    };
+    const delivery = await prepareSkillResourceDelivery(snapshot, () => {}, [], params.workspace);
+    return await materializeSkillResources(delivery!, () => {}, params.scope);
+  }
+
+  function createMaterializedDeliveryRead(params: {
+    execute: ReturnType<typeof vi.fn>;
+    delivery: ReturnType<typeof createSkillDeliveryState>;
+    materialized: Awaited<ReturnType<typeof materializeSkillResources>>;
+  }) {
+    return wrapToolWithBeforeToolCallHook(
+      wrapReadToolWithSkillContent(
+        asAgentTool({ name: "read", execute: params.execute }),
+        (params.materialized.snapshot.resolvedSkills ?? []).map((skill) => ({
+          filePath: skill.filePath,
+          ...(skill.bundleFingerprint ? { bundleFingerprint: skill.bundleFingerprint } : {}),
+        })),
+        {
+          instructionDeliveryCache: params.delivery.cache,
+          instructionDeliveryMarkers: params.delivery.markers,
+        },
+      ),
+      createSkillFingerprintContext({
+        delivery: params.delivery,
+        skillsSnapshot: params.materialized.snapshot,
+      }),
+    );
+  }
+
+  it("attributes read activations to the settled delivery fingerprint of their invocation", async () => {
+    // Fingerprint acquisition is a retained-field lookup at emission: the
+    // wrapper adds no hashing or filesystem reads for telemetry, so hash and
+    // read counts are structurally unchanged; the execute-count assertion
+    // below pins the no-extra-reads property on the already-served route.
+    const delivery = createSkillDeliveryState();
+    const execute = vi.fn().mockResolvedValue(asSkillUsageTextResult(pondInstructions));
+    const tool = createDeliveryWrappedRead(execute, "fp-generation-b", delivery);
+
+    await withSkillUsageDiagnosticEvents(async (emitted, _private, flush) => {
+      await tool.execute("skill-read-fp", { path: pondLocator }, undefined, undefined);
+      await flush();
+      let used = emitted.filter((evt) => evt.type === "skill.used");
+      expect(used).toHaveLength(1);
+      expectEventFields(used[0], {
+        type: "skill.used",
+        activation: "read",
+        skillName: "pond",
+        skillFingerprint: "fp-generation-b",
+      });
+
+      // An already-served re-read inherits the prior qualifying delivery's marker.
+      await tool.execute("skill-read-fp-again", { path: pondLocator }, undefined, undefined);
+      await flush();
+      used = emitted.filter((evt) => evt.type === "skill.used");
+      expect(used).toHaveLength(2);
+      expectEventFields(used[1], {
+        toolCallId: "skill-read-fp-again",
+        skillFingerprint: "fp-generation-b",
+      });
+      expect(execute).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("attributes within-generation already-served re-reads while support-file reads emit no skill usage", async () => {
+    // Real producer routes ground the sequence: delivery prep reads the source
+    // tree and materialization writes the revision-keyed copy the reader serves.
+    const source = await createPondSource();
+    const first = await materializePondGeneration({
+      workspace: source.workspace,
+      checkScript: pondGenerationOneScript,
+      scope: { sessionId: "skill-fingerprint-within-generation", workspaceDir: source.workspace },
+    });
+    try {
+      const entry = first.snapshot.resolvedSkills![0]!;
+      const revision = entry.bundleFingerprint!;
+      const supportFilePath = path.join(entry.baseDir, "scripts", "check.sh");
+      const delivery = createSkillDeliveryState();
+      const execute = vi.fn(pondFileRead);
+      const tool = createMaterializedDeliveryRead({ execute, delivery, materialized: first });
+      // A real qualifying delivery settles outside the captured window.
+      const firstRead = await tool.execute(
+        "within-generation-read",
+        { path: entry.filePath },
+        undefined,
+        undefined,
+      );
+      expect(extractSkillReadText(firstRead)).toContain("complete instructions");
+      await new Promise<void>((resolve) => setImmediate(resolve));
+
+      await withSkillUsageDiagnosticEvents(async (emitted, _private, flush) => {
+        // The already-served re-read short-circuits in the delivery cache: no
+        // reader call, and the emission still identifies the settled delivery.
+        const reRead = await tool.execute(
+          "within-generation-already-served",
+          { path: entry.filePath },
+          undefined,
+          undefined,
+        );
+        expect(extractSkillReadText(reRead)).toContain("already served whole");
+        // A support-file read serves the materialized generation's real bytes but
+        // is not an instruction delivery: the matcher covers instruction paths
+        // only, so no skill.used fires at all (emission-surface boundary).
+        const supportRead = await tool.execute(
+          "within-generation-support-read",
+          { path: supportFilePath },
+          undefined,
+          undefined,
+        );
+        expect(extractSkillReadText(supportRead)).toBe(pondGenerationOneScript);
+        await flush();
+        expect(execute).toHaveBeenCalledTimes(2);
+        const used = emitted.filter((evt) => evt.type === "skill.used");
+        expect(used).toHaveLength(1);
+        expectEventFields(used[0], {
+          type: "skill.used",
+          toolCallId: "within-generation-already-served",
+          activation: "read",
+          skillFingerprint: revision,
+        });
+      });
+    } finally {
+      await first.cleanup();
+    }
+  });
+
+  it("delivers a real second materialization while stale generation paths read as missing", async () => {
+    const source = await createPondSource();
+    const scope = {
+      sessionId: "skill-fingerprint-cross-generation",
+      workspaceDir: source.workspace,
+    };
+    const first = await materializePondGeneration({
+      workspace: source.workspace,
+      checkScript: pondGenerationOneScript,
+      scope,
+    });
+    let second: Awaited<ReturnType<typeof materializeSkillResources>> | undefined;
+    try {
+      const entryB = first.snapshot.resolvedSkills![0]!;
+      const delivery = createSkillDeliveryState();
+      const turnOneExecute = vi.fn(pondFileRead);
+      const turnOne = createMaterializedDeliveryRead({
+        execute: turnOneExecute,
+        delivery,
+        materialized: first,
+      });
+      await turnOne.execute("cross-turn-one-read", { path: entryB.filePath }, undefined, undefined);
+      // Drain the pre-listener emission so it cannot leak into the captured window.
+      await new Promise<void>((resolve) => setImmediate(resolve));
+
+      // The worker route releases the scoped materialization at turn end; the
+      // next turn's support-file edit delivers a new revision through a real
+      // second materialization into a new revision-keyed path.
+      await first.cleanup();
+      second = await materializePondGeneration({
+        workspace: source.workspace,
+        checkScript: pondGenerationTwoScript,
+        scope,
+      });
+      const entryC = second.snapshot.resolvedSkills![0]!;
+      // Real materialization is revision-keyed and scoped: the support-file edit
+      // yields a new bundle identity at a new path, and P_B no longer exists.
+      expect(entryC.bundleFingerprint).not.toBe(entryB.bundleFingerprint);
+      expect(entryC.filePath).not.toBe(entryB.filePath);
+      await expect(fs.stat(entryB.filePath)).rejects.toMatchObject({ code: "ENOENT" });
+
+      const turnTwoExecute = vi.fn(pondFileRead);
+      const turnTwo = createMaterializedDeliveryRead({
+        execute: turnTwoExecute,
+        delivery,
+        materialized: second,
+      });
+      await withSkillUsageDiagnosticEvents(async (emitted, _private, flush) => {
+        // Cross-generation reads are fresh deliveries on the new keyed path:
+        // the current generation C is delivered and emitted, never B.
+        const fresh = await turnTwo.execute(
+          "cross-turn-two-fresh",
+          { path: entryC.filePath },
+          undefined,
+          undefined,
+        );
+        expect(extractSkillReadText(fresh)).toContain("complete instructions");
+        // The stale path is outside the current wrapper's entry set and gone
+        // from disk: the read ENOENTs and no skill usage fires for it.
+        await expect(
+          turnTwo.execute("cross-stale-read", { path: entryB.filePath }, undefined, undefined),
+        ).rejects.toMatchObject({ code: "ENOENT" });
+        await flush();
+        const used = emitted.filter((evt) => evt.type === "skill.used");
+        expect(used).toHaveLength(1);
+        expectEventFields(used[0], {
+          toolCallId: "cross-turn-two-fresh",
+          activation: "read",
+          skillFingerprint: entryC.bundleFingerprint!,
+        });
+        expect(turnTwoExecute).toHaveBeenCalledTimes(2);
+      });
+    } finally {
+      await first.cleanup().catch(() => undefined);
+      await second?.cleanup().catch(() => undefined);
+    }
+  });
+
+  it("omits the fingerprint for read activations without a qualifying delivery", async () => {
+    const truncatedResult = {
+      content: [{ type: "text" as const, text: "partial" }],
+      details: { kind: "truncated" as const },
+    };
+    const imageResult = {
+      content: [{ type: "image" as const, data: "", mimeType: "image/png" }],
+      details: { kind: "image" as const, content: "", mimeType: "image/png" },
+    };
+    const truncatedExecute = vi.fn().mockResolvedValue(truncatedResult);
+    const truncatedTool = createDeliveryWrappedRead(
+      truncatedExecute,
+      "fp-generation-b",
+      createSkillDeliveryState(),
+    );
+    const imageExecute = vi.fn().mockResolvedValue(imageResult);
+    const imageTool = createDeliveryWrappedRead(
+      imageExecute,
+      "fp-generation-b",
+      createSkillDeliveryState(),
+    );
+    const thrownExecute = vi.fn().mockRejectedValue(new Error("skill read failed"));
+    const thrownTool = createDeliveryWrappedRead(
+      thrownExecute,
+      "fp-generation-b",
+      createSkillDeliveryState(),
+    );
+
+    await withSkillUsageDiagnosticEvents(async (emitted, _private, flush) => {
+      await truncatedTool.execute(
+        "truncated-skill-read",
+        { path: pondLocator },
+        undefined,
+        undefined,
+      );
+      await imageTool.execute("image-skill-read", { path: pondLocator }, undefined, undefined);
+      await flush();
+      const used = emitted.filter((evt) => evt.type === "skill.used");
+      // Truncated (oversized or paged) and non-text outcomes reset their delivery,
+      // so both completed activations emit without a fingerprint association.
+      expect(used).toHaveLength(2);
+      expectEventFields(used[0], { toolCallId: "truncated-skill-read", skillName: "pond" });
+      expect(used[0]).not.toHaveProperty("skillFingerprint");
+      expectEventFields(used[1], { toolCallId: "image-skill-read", skillName: "pond" });
+      expect(used[1]).not.toHaveProperty("skillFingerprint");
+
+      await expect(
+        thrownTool.execute("thrown-skill-read", { path: pondLocator }, undefined, undefined),
+      ).rejects.toThrow("skill read failed");
+      await flush();
+      // A thrown read never completes, so no skill usage emission fires at all.
+      expect(emitted.filter((evt) => evt.type === "skill.used")).toHaveLength(2);
+    });
+  });
+
+  it("omits the fingerprint for node locator reads that run no bundle preparation", async () => {
+    const nodeLocator = "node://node-1/skills/remote-skill/SKILL.md";
+    const delivery = createSkillDeliveryState();
+    const tool = wrapToolWithBeforeToolCallHook(
+      wrapReadToolWithSkillContent(
+        asAgentTool({ name: "read", execute: vi.fn() }),
+        [{ filePath: nodeLocator, readContent: pondInstructions }],
+        {
+          instructionDeliveryCache: delivery.cache,
+          instructionDeliveryMarkers: delivery.markers,
+        },
+      ),
+      {
+        agentId: "main",
+        sessionKey: "session-key",
+        loopDetection: { enabled: false },
+        skillsSnapshot: {
+          prompt: "",
+          skills: [{ name: "remote-skill" }],
+          resolvedSkills: [
+            createCanonicalFixtureSkill({
+              name: "remote-skill",
+              description: "Remote skill",
+              filePath: nodeLocator,
+              baseDir: "node://node-1/skills/remote-skill",
+              source: "openclaw-node",
+            }),
+          ],
+        },
+        skillInstructionDeliveryMarkers: delivery.markers,
+      },
+    );
+
+    await withSkillUsageDiagnosticEvents(async (emitted, _private, flush) => {
+      const result = await tool.execute(
+        "node-skill-read",
+        { path: nodeLocator },
+        undefined,
+        undefined,
+      );
+      await flush();
+      expect(extractSkillReadText(result)).toBe(pondInstructions);
+      const used = emitted.filter((evt) => evt.type === "skill.used");
+      expect(used).toHaveLength(1);
+      expectEventFields(used[0], { skillName: "remote-skill", activation: "read" });
+      expect(used[0]).not.toHaveProperty("skillFingerprint");
+    });
+  });
+
+  it("treats an epoch clear between settlement and emission as an unknown association", async () => {
+    const delivery = createSkillDeliveryState();
+    const execute = vi.fn().mockResolvedValue(asSkillUsageTextResult(pondInstructions));
+    const tool = wrapToolWithBeforeToolCallHook(
+      wrapReadToolWithSkillContent(
+        asAgentTool({ name: "read", execute }),
+        [{ filePath: pondLocator, bundleFingerprint: "fp-generation-b" }],
+        {
+          instructionDeliveryCache: delivery.cache,
+          instructionDeliveryMarkers: delivery.markers,
+        },
+      ),
+      {
+        ...createSkillFingerprintContext({
+          delivery,
+          entryBundleFingerprint: "fp-generation-b",
+        }),
+        onToolOutcome: () => {
+          delivery.cache.clear();
+          delivery.markers.clear();
+        },
+      },
+    );
+
+    await withSkillUsageDiagnosticEvents(async (emitted, _private, flush) => {
+      await tool.execute("epoch-clear-read", { path: pondLocator }, undefined, undefined);
+      await flush();
+      const used = emitted.filter((evt) => evt.type === "skill.used");
+      expect(used).toHaveLength(1);
+      expectEventFields(used[0], { skillName: "pond", activation: "read" });
+      // The compaction clear dropped the in-flight unconsumed settlement marker.
+      expect(used[0]).not.toHaveProperty("skillFingerprint");
+    });
+  });
+
+  it("emits no skill usage for a read blocked before execution", async () => {
+    hookRunner.hasHooks.mockImplementation((hookName: string) => hookName === "before_tool_call");
+    hookRunner.runBeforeToolCall.mockResolvedValue({
+      block: true,
+      blockReason: "blocked by policy",
+    });
+    const delivery = createSkillDeliveryState();
+    const execute = vi.fn().mockResolvedValue(asSkillUsageTextResult(pondInstructions));
+    const tool = createDeliveryWrappedRead(execute, "fp-generation-b", delivery);
+
+    await withDiagnosticEvents(async (emitted, flush) => {
+      await tool.execute("blocked-skill-read", { path: pondLocator }, undefined, undefined);
+      await flush();
+      expect(execute).not.toHaveBeenCalled();
+      expect(emitted.some((evt) => evt.type === "skill.used")).toBe(false);
+    });
+  });
+
+  it("attributes skills_read and command activations only from a retained delivery generation", async () => {
+    const delivery = createSkillDeliveryState();
+    const ctx = createSkillFingerprintContext({
+      delivery,
+      entryBundleFingerprint: "fp-generation-b",
+    });
+    const unstampedCtx = createSkillFingerprintContext({ delivery });
+    const instructionsExecute = vi.fn().mockResolvedValue(asSkillUsageTextResult(pondInstructions));
+    const stampedSkillsRead = wrapToolWithBeforeToolCallHook(
+      asAgentTool({ name: "skills_read", execute: instructionsExecute }),
+      ctx,
+    );
+    const unstampedSkillsRead = wrapToolWithBeforeToolCallHook(
+      asAgentTool({ name: "skills_read", execute: instructionsExecute }),
+      unstampedCtx,
+    );
+    const commandExecute = vi.fn().mockResolvedValue(asSkillUsageTextResult("sent"));
+    const stampedCommand = wrapToolWithBeforeToolCallHook(
+      asAgentTool({ name: "message", execute: commandExecute }),
+      {
+        ...ctx,
+        skillCommand: {
+          commandName: "pond_command",
+          skillFile: pondLocator,
+          skillName: "pond",
+          skillSource: "workspace",
+          toolName: "message",
+        },
+      },
+    );
+    const unstampedCommand = wrapToolWithBeforeToolCallHook(
+      asAgentTool({ name: "message", execute: commandExecute }),
+      {
+        ...unstampedCtx,
+        skillCommand: {
+          commandName: "pond_command",
+          skillFile: pondLocator,
+          skillName: "pond",
+          skillSource: "workspace",
+          toolName: "message",
+        },
+      },
+    );
+
+    await withSkillUsageDiagnosticEvents(async (emitted, _private, flush) => {
+      await stampedSkillsRead.execute(
+        "skills-read-stamped",
+        { name: "pond" },
+        undefined,
+        undefined,
+      );
+      await unstampedSkillsRead.execute(
+        "skills-read-unstamped",
+        { name: "pond" },
+        undefined,
+        undefined,
+      );
+      await stampedCommand.execute(
+        "command-stamped",
+        { commandName: "pond_command" },
+        undefined,
+        undefined,
+      );
+      await unstampedCommand.execute(
+        "command-unstamped",
+        { commandName: "pond_command" },
+        undefined,
+        undefined,
+      );
+      await flush();
+      const used = emitted.filter((evt) => evt.type === "skill.used");
+      expect(used).toHaveLength(4);
+      expectEventFields(used[0], {
+        toolCallId: "skills-read-stamped",
+        activation: "read",
+        skillFingerprint: "fp-generation-b",
+      });
+      // A name/source snapshot match alone is not bundle identity: unstamped
+      // discovery entries omit the fingerprint instead of guessing one.
+      expectEventFields(used[1], { toolCallId: "skills-read-unstamped", skillName: "pond" });
+      expect(used[1]).not.toHaveProperty("skillFingerprint");
+      expectEventFields(used[2], {
+        toolCallId: "command-stamped",
+        activation: "command",
+        skillFingerprint: "fp-generation-b",
+      });
+      expectEventFields(used[3], { toolCallId: "command-unstamped", activation: "command" });
+      expect(used[3]).not.toHaveProperty("skillFingerprint");
+    });
+  });
+
+  it("attributes the installed skills_read tool route from the stamped catalog entry", async () => {
+    const delivery = createSkillDeliveryState();
+    const tools = createInstalledSkillTools([
+      {
+        name: "pond",
+        description: "Pond skill",
+        location: pondLocator,
+        source: { filePath: pondLocator, readContent: pondInstructions },
+        promptListed: true,
+      },
+    ]);
+    const skillReadTool = tools.find((tool) => tool.name === "skills_read")!;
+    const tool = wrapToolWithBeforeToolCallHook(
+      skillReadTool,
+      createSkillFingerprintContext({ delivery, entryBundleFingerprint: "fp-generation-b" }),
+    );
+
+    await withSkillUsageDiagnosticEvents(async (emitted, _private, flush) => {
+      const result = await tool.execute(
+        "installed-skills-read",
+        { name: "pond" },
+        undefined,
+        undefined,
+      );
+      await flush();
+      expect(extractSkillReadText(result)).toBe(pondInstructions);
+      const used = emitted.filter((evt) => evt.type === "skill.used");
+      expect(used).toHaveLength(1);
+      expectEventFields(used[0], {
+        toolCallId: "installed-skills-read",
+        activation: "read",
+        skillFingerprint: "fp-generation-b",
+      });
     });
   });
 

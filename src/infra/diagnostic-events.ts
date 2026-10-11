@@ -542,6 +542,12 @@ export type DiagnosticSkillUsedEvent = DiagnosticSessionEvent & {
   skillName: string;
   skillSource: DiagnosticSkillTelemetrySource;
   activation: DiagnosticSkillActivation;
+  /**
+   * Retained content fingerprint of the delivered skill bundle associated with
+   * this invocation (per-emission delivery provenance); omitted when no
+   * qualifying delivery association is established.
+   */
+  skillFingerprint?: string;
   toolName?: string;
   toolCallId?: string;
 };

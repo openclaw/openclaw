@@ -1,3 +1,4 @@
+import { hasActiveDiagnosticTracePropagation } from "../../infra/diagnostic-trace-propagation.js";
 import { prepareSkillLibrarySelection } from "../../skills/library/selection.js";
 import {
   buildSkillSnapshot,
@@ -8,11 +9,29 @@ import {
   applySkillEnvOverridesFromSnapshot,
 } from "../../skills/runtime/env-overrides.js";
 import { resolveSkillResourceCandidates } from "../../skills/runtime/resource-candidates.js";
+import type { SkillEntry, SkillSnapshot } from "../../skills/types.js";
 import { prepareInstalledSkillCatalog } from "../installed-skill-runtime.js";
 import type { SandboxContext } from "../sandbox/types.js";
 import { isToolExecutionAllowed } from "../tool-policy-shared.js";
 import type { EmbeddedRunAttemptParams } from "./run/types.js";
 import { prepareRuntimeSkillEntries } from "./skills-prompt.js";
+
+/**
+ * Tracing-gated ordinary-local producer of retained bundle identities. Gated on
+ * the active trace-propagation consumer — the bridge trusted exporters register
+ * exactly while traces are active — never the process-diagnostics dispatcher
+ * flag, so a diagnostics-on, tracing-off install hashes nothing. The
+ * resource-delivery module is imported lazily inside the gate so runs without
+ * an active tracing consumer never load it for stamping.
+ */
+async function stampOrdinaryLocalBundleIdentities(params: {
+  snapshot: SkillSnapshot | undefined;
+  libraryEntries: SkillEntry[];
+  workspaceDir?: string;
+}) {
+  const { stampLocalSkillBundleIdentities } = await import("../../skills/runtime/resources.js");
+  return stampLocalSkillBundleIdentities(params);
+}
 
 /** Prepares readable skills and owns environment rollback until the caller takes custody. */
 export async function prepareEmbeddedSkills(params: {
@@ -46,6 +65,7 @@ export async function prepareEmbeddedSkills(params: {
       skillsPrompt: "",
       skillsSnapshotForRun: undefined,
       skillReadResources: undefined,
+      skillDeliveredIdentityAcquirers: undefined,
       codeModeSkills: [],
       installedSkills: [],
     };
@@ -102,6 +122,21 @@ export async function prepareEmbeddedSkills(params: {
           {},
           params.assertCurrent ?? (() => {}),
         );
+    // Ordinary local runs stamp the retained bundle identity of the entries
+    // they serve at this preparation boundary, matching the worker, session,
+    // and transfer producers, and arm delivery-time identity acquisition for
+    // the live-served entries the read wrapper delivers. Gated on the active
+    // tracing consumer, checked once per preparation: zero bundle hashing or
+    // acquisition while tracing is inactive, one discovery walk per loaded
+    // bundle per preparation, and delivery acquisition once per generation.
+    const stampedSkills =
+      !params.sandbox?.enabled && hasActiveDiagnosticTracePropagation()
+        ? await stampOrdinaryLocalBundleIdentities({
+            snapshot: skillsSnapshot,
+            libraryEntries,
+            workspaceDir: skillsWorkspaceDir,
+          })
+        : { snapshot: skillsSnapshot, libraryEntries, deliveredIdentityAcquirers: undefined };
     params.assertCurrent?.();
     // Preparation may yield to abort/revocation. Apply process-wide overrides only
     // once all filesystem work has settled and this caller can take custody.
@@ -118,7 +153,7 @@ export async function prepareEmbeddedSkills(params: {
               config: params.attempt.config,
             });
     const installedSkills = prepareInstalledSkillCatalog({
-      snapshot: skillsSnapshot,
+      snapshot: stampedSkills.snapshot,
       workspaceDir: skillsWorkspaceDir,
       sandbox: params.sandbox,
       assertCurrent: params.assertCurrent,
@@ -128,13 +163,14 @@ export async function prepareEmbeddedSkills(params: {
     // Sandboxes keep their existing materialized paths; never resolve host library pins there.
     const skillReadResources = params.sandbox?.enabled
       ? undefined
-      : resolveSkillResourceCandidates(skillsSnapshot, libraryEntries);
+      : resolveSkillResourceCandidates(stampedSkills.snapshot, stampedSkills.libraryEntries);
     return {
       restoreSkillEnv,
       skillReadResources,
+      skillDeliveredIdentityAcquirers: stampedSkills.deliveredIdentityAcquirers,
       skillUsagePaths,
       skillsPrompt,
-      skillsSnapshotForRun: skillsSnapshot,
+      skillsSnapshotForRun: stampedSkills.snapshot,
       codeModeSkills,
       installedSkills,
     };
