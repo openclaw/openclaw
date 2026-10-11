@@ -19,6 +19,58 @@ function expectElement<T extends Element>(element: T | null | undefined, label: 
 }
 
 describe("config form map integrity", () => {
+  it.each<{ action: string; expected: Record<string, string> }>([
+    { action: "add", expected: { primary: "kept", "custom-2": "" } },
+    { action: "rename to declared field", expected: { primary: "kept" } },
+    { action: "rename to constructor", expected: { constructor: "kept" } },
+  ])(
+    "keeps custom keys separate from declared and inherited keys: $action",
+    ({ action, expected }) => {
+      const analysis = analyzeConfigSchema({
+        type: "object",
+        properties: {
+          aliases: {
+            type: "object",
+            properties: { "custom-1": { type: "string" } },
+            additionalProperties: { type: "string" },
+          },
+        },
+      });
+      const state = createInitialConfigState();
+      state.configSchema = analysis.schema;
+      state.configForm = { aliases: { primary: "kept" } };
+      const container = document.createElement("div");
+      const renderValue = () =>
+        renderAnalyzedFormFixture(container, analysis, {
+          value: state.configForm,
+          onPatch: (path, value) => updateConfigFormValue(state, path, value),
+        });
+      renderValue();
+      if (action === "add") {
+        expectElement(
+          Array.from(container.querySelectorAll("button")).find(
+            (button) => button.textContent?.trim() === "Add Entry",
+          ),
+          "add custom entry",
+        ).click();
+      } else {
+        const key = expectElement(
+          container.querySelector<HTMLInputElement>('[aria-label="Key: primary"]'),
+          "custom entry key",
+        );
+        key.value = action === "rename to declared field" ? "custom-1" : "constructor";
+        key.dispatchEvent(new Event("change", { bubbles: true }));
+      }
+      expect(JSON.parse(serializeFormForSubmit(state))).toEqual({ aliases: expected });
+      renderValue();
+      expect(
+        Array.from(
+          container.querySelectorAll<HTMLInputElement>('.cfg-map input[placeholder="Key"]'),
+        ).map((input) => input.value),
+      ).toEqual(Object.keys(expected));
+    },
+  );
+
   it.each(["defaults", "agent"])(
     "round-trips the %s model Code Mode field without losing sibling settings",
     (scope) => {
