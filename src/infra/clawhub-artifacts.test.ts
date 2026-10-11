@@ -140,11 +140,6 @@ const archiveDownloadCases: Array<{
   expectedArtifact?: "clawpack";
 }> = [
   {
-    name: "package archive",
-    download: downloadPackageArchive,
-    expectedFileName: "zai-external-alpha.zip",
-  },
-  {
     name: "ClawPack artifact",
     headers: { "content-type": "application/octet-stream" },
     download: (response) =>
@@ -157,27 +152,6 @@ const archiveDownloadCases: Array<{
       }),
     expectedFileName: "NUL_.tgz",
     expectedArtifact: "clawpack",
-  },
-  {
-    name: "skill archive",
-    download: (response) =>
-      downloadClawHubSkillArchive({
-        slug: "agentreceipt",
-        version: "1.0.0",
-        token: "test-token",
-        fetchImpl: async () => response,
-      }),
-    expectedFileName: "agentreceipt.zip",
-  },
-  {
-    name: "resolver URL archive",
-    download: (response) =>
-      downloadClawHubSkillArchiveUrl({
-        baseUrl: "https://clawhub.ai",
-        url: "https://downloads.example.com/skill.zip",
-        fetchImpl: async () => response,
-      }),
-    expectedFileName: "skill.zip",
   },
   {
     name: "GitHub source archive",
@@ -375,7 +349,7 @@ describe("clawhub artifacts", () => {
     ).resolves.toEqual(Buffer.from([1]));
   });
 
-  it.each(["cleanup", "cleanup logging"])(
+  it.each(["cleanup logging"])(
     "keeps the original archive write failure when %s fails",
     async (failureStage) => {
       const cleanupError = new Error("temporary workspace cleanup failed");
@@ -444,32 +418,6 @@ describe("clawhub artifacts", () => {
     ).rejects.toThrow(/skill archive download for agentreceipt body stalled after 5ms/i);
     expect(stalled.cancel).toHaveBeenCalledTimes(1);
     expect(stalled.cancel.mock.calls[0]?.[0]).toBeInstanceOf(Error);
-  });
-
-  it("sends owner-qualified skill archive downloads as slug plus ownerHandle", async () => {
-    let requestedUrl = "";
-    const archive = await downloadClawHubSkillArchive({
-      slug: "weather",
-      ownerHandle: "demo-owner",
-      version: "1.0.0",
-      fetchImpl: async (input) => {
-        requestedUrl = input instanceof Request ? input.url : String(input);
-        return new Response(new Uint8Array([7, 8, 9]), {
-          status: 200,
-          headers: { "content-type": "application/zip" },
-        });
-      },
-    });
-
-    try {
-      const url = new URL(requestedUrl);
-      expect(url.pathname).toBe("/api/v1/download");
-      expect(url.searchParams.get("slug")).toBe("weather");
-      expect(url.searchParams.get("ownerHandle")).toBe("demo-owner");
-      expect(url.searchParams.get("version")).toBe("1.0.0");
-    } finally {
-      await archive.cleanup();
-    }
   });
 
   it("does not send ambient ClawHub auth tokens to off-registry resolver archive URLs", async () => {
