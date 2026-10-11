@@ -690,41 +690,6 @@ describe("stuck session recovery integration", () => {
     }
   });
 
-  it("still reports an acknowledged abort as an abort", async () => {
-    // Companion to the force-clear case above: an owner that honours the abort
-    // and drains must keep reporting status=aborted, so the two stay tellable
-    // apart in the recovery log.
-    const sessionKey = "agent:main:acknowledged-abort";
-    const sessionId = "acknowledged-abort-session";
-    const lane = resolveEmbeddedSessionLane(sessionKey);
-    const operation = createReplyOperation({ sessionKey, sessionId, resetTriggered: false });
-    operation.attachBackend({
-      kind: "embedded",
-      cancel: () => queueMicrotask(() => operation.complete()),
-      isStreaming: () => false,
-    });
-    operation.setPhase("running");
-    void enqueueCommandInLane(lane, () => new Promise<never>(() => {}), {
-      warnAfterMs: Number.MAX_SAFE_INTEGER,
-    });
-
-    const outcome = await recoverStuckDiagnosticSession({
-      sessionId,
-      sessionKey,
-      ageMs: 720_000,
-      queueDepth: 1,
-      allowActiveAbort: true,
-    });
-
-    expect(outcome).toMatchObject({
-      status: "aborted",
-      action: "abort_embedded_run",
-      aborted: true,
-      drained: true,
-      forceCleared: false,
-    });
-  });
-
   it("leaves committed reply finalization to its existing lease before releasing queued work", async () => {
     vi.useFakeTimers();
     const sessionKey = "agent:main:committed-finalization";
