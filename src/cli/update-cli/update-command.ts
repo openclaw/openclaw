@@ -109,7 +109,7 @@ async function updateCommandWithRuntime(
       defaultRuntime.error("Warning: Debug HTTP capture is disabled during update dry runs.");
     }
     const { updateStateNeedsInitialization } = await import("./update-command-initialization.js");
-    assertUpdatePackageActivationAdmission(root, { serviceRoot });
+    assertUpdatePackageActivationAdmission(root, { serviceRoot, dryRun: inputOpts.dryRun });
     const needsInitialization = await updateStateNeedsInitialization(env);
     const captureOriginal =
       !inputOpts.dryRun &&
