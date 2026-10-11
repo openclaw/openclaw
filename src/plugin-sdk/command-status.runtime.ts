@@ -68,15 +68,18 @@ export async function resolveDirectStatusReplyForSessionCore(
     statusModel.provider;
   const selectedModel =
     statusEntry?.modelOverride?.trim() || statusEntry?.model?.trim() || statusModel.model;
+  const modelSelectionEntry = statusEntry ? structuredClone(statusEntry) : undefined;
+  const modelSelectionStore = modelSelectionEntry
+    ? { ...statusLoaded.store, [statusSessionKey]: modelSelectionEntry }
+    : statusLoaded.store;
   const modelState = await createModelSelectionState({
     cfg: statusCfg,
     agentId: statusAgentId,
     agentCfg,
-    sessionEntry: statusEntry,
-    sessionStore: statusLoaded.store,
+    sessionEntry: modelSelectionEntry,
+    sessionStore: modelSelectionStore,
     sessionKey: statusSessionKey,
     parentSessionKey: statusEntry?.parentSessionKey,
-    storePath: statusLoaded.storePath,
     defaultProvider,
     defaultModel,
     provider: selectedProvider,

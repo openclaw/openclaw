@@ -1,8 +1,11 @@
 // Discord tests cover native command.status direct plugin behavior.
+import fs from "node:fs/promises";
 import { ChannelType } from "discord-api-types/v10";
 import * as channelInbound from "openclaw/plugin-sdk/channel-inbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { setRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import type * as SessionTranscriptRuntime from "openclaw/plugin-sdk/session-transcript-runtime";
+import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { installDiscordIngressTestRuntime } from "../test-support/ingress-runtime.js";
 import * as nativeCommandRoute from "./native-command-route.js";
@@ -13,6 +16,7 @@ const runtimeModuleMocks = vi.hoisted(() => ({
   dispatchReplyWithDispatcher: vi.fn(),
   loadWebMedia: vi.fn(),
   resolveDirectStatusReplyForSession: vi.fn(),
+  useActualStatusResolver: false,
   recordDeliveredCommandExchange: vi.fn(async () => ({ ok: true })),
 }));
 
@@ -27,10 +31,19 @@ vi.mock("openclaw/plugin-sdk/reply-dispatch-runtime", async () => {
   };
 });
 
-vi.mock("openclaw/plugin-sdk/command-status-runtime", () => ({
-  resolveDirectStatusReplyForSession: (...args: unknown[]) =>
-    runtimeModuleMocks.resolveDirectStatusReplyForSession(...args),
-}));
+vi.mock("openclaw/plugin-sdk/command-status-runtime", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("openclaw/plugin-sdk/command-status-runtime")>();
+  return {
+    ...actual,
+    resolveDirectStatusReplyForSession: (
+      ...args: Parameters<typeof actual.resolveDirectStatusReplyForSession>
+    ) =>
+      runtimeModuleMocks.useActualStatusResolver
+        ? actual.resolveDirectStatusReplyForSession(...args)
+        : runtimeModuleMocks.resolveDirectStatusReplyForSession(...args),
+  };
+});
 
 vi.mock("openclaw/plugin-sdk/session-transcript-runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof SessionTranscriptRuntime>()),
@@ -181,6 +194,7 @@ describe("discord native /status", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    runtimeModuleMocks.useActualStatusResolver = false;
     runtimeModuleMocks.dispatchReplyWithDispatcher.mockResolvedValue({
       counts: {
         final: 0,
@@ -246,6 +260,74 @@ describe("discord native /status", () => {
         commandId: expect.stringMatching(/^discord:default:/),
       }),
     );
+  });
+
+  it("renders native /status with a saved auth profile without changing persisted selection", async () => {
+    runtimeModuleMocks.useActualStatusResolver = true;
+    await withOpenClawTestState({ label: "discord-status-saved-profile" }, async (state) => {
+      const sessionKey = "agent:main:main";
+      const storePath = state.statePath("agents", "main", "sessions", "sessions.json");
+      const cfg = {
+        ...createConfig(),
+        plugins: { enabled: false },
+        session: { mainKey: "main", store: storePath },
+        agents: {
+          entries: { main: {} },
+          defaults: { model: "openai/gpt-4o", thinkingDefault: "off", reasoningDefault: "off" },
+        },
+      } as OpenClawConfig;
+      const entry = {
+        sessionId: "discord-status-session",
+        updatedAt: 1,
+        modelProvider: "openai",
+        model: "gpt-4o",
+        authProfileOverride: "openai:fixture",
+        authProfileOverrideSource: "auto",
+      };
+
+      await state.writeConfig(cfg);
+      setRuntimeConfigSnapshot(cfg, cfg);
+      await state.writeAuthProfiles({
+        version: 1,
+        profiles: {
+          "openai:fixture": { type: "api_key", provider: "openai", key: "fixture-key" },
+        },
+      });
+      await state.writeJson("agents/main/sessions/sessions.json", { [sessionKey]: entry });
+
+      const command = await createStatusCommand(cfg);
+      const interaction = createInteraction();
+      await (command as { run: (interaction: unknown) => Promise<void> }).run(interaction);
+
+      const payload = firstMockArg(interaction.followUp, "interaction.followUp") as {
+        content?: unknown;
+        embeds?: Array<{ description?: unknown }>;
+      };
+      const renderedText = [
+        payload.content,
+        ...(payload.embeds ?? []).map((embed) => embed.description),
+      ]
+        .filter((value): value is string => typeof value === "string")
+        .join("\n");
+      const persisted = JSON.parse(await fs.readFile(storePath, "utf8")) as Record<
+        string,
+        typeof entry
+      >;
+
+      expect(renderedText).toContain("gpt-4o");
+      expect(interaction.followUp).toHaveBeenCalledOnce();
+      expect(persisted[sessionKey]).toEqual(entry);
+      console.log(
+        "DISCORD_NATIVE_STATUS_PROOF",
+        JSON.stringify({
+          command: "/status",
+          renderedModelLine: renderedText.split("\n").find((line) => line.includes("gpt-4o")),
+          savedProfile: persisted[sessionKey]?.authProfileOverride,
+          persistedSelectionUnchanged: true,
+          transport: "local Discord interaction fixture",
+        }),
+      );
+    });
   });
 
   it.each([false, true])(
