@@ -108,7 +108,7 @@ type ChildObservation = Pick<ChildProcess, "pid" | "exitCode" | "signalCode"> & 
 };
 
 /** Failure-only metadata; never retain command arguments, environment, paths, or output. */
-export function createFixtureDiagnostics(name: string) {
+export function createFixtureDiagnostics(name: string, writeReport?: (message: string) => void) {
   const startedAt = performance.now();
   const records: object[] = [];
   let dropped = 0;
@@ -204,7 +204,7 @@ export function createFixtureDiagnostics(name: string) {
         return;
       }
       reported = true;
-      console.error(
+      (writeReport ?? console.error)(
         "[fixture-lifecycle] " +
           JSON.stringify({
             name: label(name),
