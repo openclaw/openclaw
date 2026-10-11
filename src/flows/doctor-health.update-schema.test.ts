@@ -20,8 +20,7 @@ import {
   openOpenClawAgentDatabase,
   OPENCLAW_AGENT_SCHEMA_VERSION,
 } from "../state/openclaw-agent-db.js";
-import { OPENCLAW_AGENT_SCHEMA_SQL } from "../state/openclaw-agent-schema.js";
-import { withoutSessionEntrySnapshotsSchema } from "../state/openclaw-agent-session-snapshots-schema.js";
+import { OPENCLAW_AGENT_SCHEMA_V24_SQL } from "../state/openclaw-agent-schema-v24.test-support.js";
 import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
@@ -341,14 +340,14 @@ describe("Doctor schema bumps under an updating parent", () => {
         }
         await closeOpenClawAgentDatabasesAsync();
         await closeOpenClawStateDatabaseAsync();
-        // Real v23 storage, not a v24 image with only its metadata downgraded.
+        // Frozen v24 storage preserves the exact input to the candidate schema migration.
         fs.unlinkSync(agent);
         const seed = new DatabaseSync(agent);
         try {
-          seed.exec(withoutSessionEntrySnapshotsSchema(OPENCLAW_AGENT_SCHEMA_SQL));
-          seed.exec(`PRAGMA user_version = 23;
+          seed.exec(OPENCLAW_AGENT_SCHEMA_V24_SQL);
+          seed.exec(`PRAGMA user_version = 24;
             INSERT INTO schema_meta(meta_key, role, schema_version, agent_id, app_version, created_at, updated_at)
-            VALUES ('primary', 'agent', 23, 'main', '2026.9.4', 1, 1)`);
+            VALUES ('primary', 'agent', 24, 'main', '2026.9.9', 1, 1)`);
           seed.exec(
             "INSERT INTO cache_entries(scope,key,value_json,expires_at,updated_at) VALUES('test','retained','{\"keep\":true}',NULL,1)",
           );
@@ -370,7 +369,7 @@ describe("Doctor schema bumps under an updating parent", () => {
               agentId: "main",
               path: agent,
               env: state.env,
-              schemaVersion: 23,
+              schemaVersion: 24,
             });
           }
           await closeOpenClawStateDatabaseAsync();

@@ -279,7 +279,9 @@ it.each([
           : config,
     });
   const failure = await (
-    scope === "scoped" ? withAgentDatabaseStartupAdmission(inspect) : inspect()
+    scope === "scoped"
+      ? withAgentDatabaseStartupAdmission(inspect, { deferInspections: false })
+      : inspect()
   ).catch((error: unknown) => error);
   const message = String(failure);
   if (scope === "unscoped") {

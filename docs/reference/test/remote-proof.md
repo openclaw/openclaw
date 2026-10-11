@@ -39,14 +39,14 @@ base, dependency inputs, and Testbox preparation fingerprint under
 dependencies, preparation, and workflow inputs, including immediately before
 delegation. Source-only edits and commits can reuse that prepared box. The
 allocation receipt remains unchanged, while each command records its current
-source revision and syncs the checkout. A HEAD change during that command's
-preparation still stops delegation; rerun from the current candidate.
+source revision and syncs the checkout. Source edits during preparation are best
+effort; finish editing before starting proof, or rerun from the intended candidate.
 This source-refresh contract belongs to the OpenClaw wrapper's trusted task
 path; it does not permit raw native callers or untrusted proof to reuse a
 lease across revisions.
 Older or missing receipts require stopping the owned lease and allocating a
 fresh one through the wrapper. `OPENCLAW_TESTBOX_ALLOW_STALE` cannot bypass
-these checks. All providers require Crabbox 0.69.0 or newer.
+these checks. All providers require Crabbox 0.73.0 or newer.
 
 The Testbox workflow registers a separate disposable checkout for native sync.
 The hydrated execution workspace stays at its original absolute path, so native
@@ -255,14 +255,15 @@ tracking and the final raw transport tree use separate indexes, preserving the
 same ignored-file and untracked-file selection rules. The wrapper reports copied
 and reused file counts and preparation time.
 Commits on the same retained source ref keep the mirror reusable; each command
-still records its full current witness and rechecks the source revision before sealing.
+records its captured source witness.
 
 The mirror remains exclusively locked for the entire command, including artifact
 preservation and lease-claim restoration. An overlapping run from the same worktree
 prints a message and builds an independent fresh capsule. Only completed cleanup
 records an idle mirror for reuse; a missing witness, unsupported staging location,
-or unresolved owner uses fresh staging. Changed source during freezing fails the
-run. Cache metadata, payload, witness repository or ref, or Git-version mismatches
+or unresolved owner uses fresh staging. Avoid editing source during freezing;
+the capsule uses its captured selection and bytes without a final source rescan.
+Cache metadata, payload, witness repository or ref, or Git-version mismatches
 rebuild cold before upload. Source enumeration and metadata checks still scale with the repository;
 source-byte copying and hashing scale with changed files on warm runs.
 Private mirrors disable Git hooks and fsmonitor; source enumeration also disables

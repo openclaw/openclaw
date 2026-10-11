@@ -106,16 +106,13 @@ it.each(["sibling", "restart", "memory-and-plugin", "session-store"] as const)(
             started.resolve(next);
             return next;
           },
-          runtime: {
-            log() {},
-            error() {},
-            exit(code) {
-              exitCode = code;
-              exited.resolve(code);
-            },
-          },
           completeBoot,
-        }).catch(started.reject);
+        })
+          .then((code) => {
+            exitCode = code;
+            exited.resolve(code);
+          })
+          .catch(started.reject);
         server = await started.promise;
         stop = process.listeners("SIGINT").find((listener) => !previousStops.has(listener));
         assert(stop);

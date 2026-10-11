@@ -50,7 +50,6 @@ import { createWorkerTranscriptCommitter } from "./transcript-commit.js";
 import {
   applyPreparedTranscriptCommit,
   prepareTranscriptCommit,
-  type TranscriptCommitInput,
 } from "./transcript-commit.kernel.js";
 import {
   createInterruptedCommitter,
@@ -63,6 +62,7 @@ import {
   SESSION_ID,
   ZERO_USAGE,
 } from "./transcript-commit.test-support.js";
+import type { TranscriptCommitInput } from "./transcript-commit.types.js";
 
 type WorkerTranscriptCommitter = ReturnType<typeof createWorkerTranscriptCommitter>;
 

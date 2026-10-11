@@ -31,7 +31,6 @@ import type {
   SqliteSessionArtifactPreparationDiagnostics,
 } from "./session-accessor.sqlite-contract.js";
 import type { SqliteLifecycleTargetSnapshot } from "./session-accessor.sqlite-entry-equality.js";
-import type { SqliteSessionEntryRevision } from "./session-accessor.sqlite-entry-revision.js";
 import type { SessionEntryMaintenanceAgeChange } from "./session-accessor.sqlite-maintenance-age.js";
 import type {
   SessionEntryCommitContext,
@@ -198,12 +197,6 @@ export type SessionEntryMaintenanceInput = {
   storePath: string;
 };
 
-type SessionMaintenanceAgeSnapshot = {
-  incarnation: string;
-  revision: SqliteSessionEntryRevision;
-  capture: number;
-};
-
 export type SessionMaintenanceLiveProtection = Pick<
   SessionEntryMaintenanceInput,
   "activeSessionKeys" | "preservation"
@@ -222,13 +215,10 @@ export type SessionMaintenanceMetadataCommand =
       kind: "maintenance-age";
       ageChanges?: readonly SessionEntryMaintenanceAgeChange[];
       maintenance: ResolvedSessionMaintenanceConfig;
-      expected?: SessionMaintenanceAgeSnapshot;
-      /** A no-op reader rechecks the same policy instead of borrowing a writer snapshot. */
-      readOnly?: { input: SessionEntryMaintenanceInput; snapshot: SessionMaintenanceAgeSnapshot };
+      readOnly?: { input: SessionEntryMaintenanceInput };
     }
   | {
       kind: "maintenance-plan";
-      ageOwner?: string;
       ageChanges?: readonly SessionEntryMaintenanceAgeChange[];
       input: SessionEntryMaintenanceInput;
     };
@@ -241,7 +231,6 @@ export type SessionMaintenanceMetadataResult =
   | {
       kind: "maintenance-plan";
       value: SessionEntryMaintenancePlan;
-      ageSnapshot: SessionMaintenanceAgeSnapshot;
       nextAt: number | undefined;
       readOnlyInput?: SessionEntryMaintenanceInput;
     };
@@ -327,8 +316,8 @@ export type SqliteSessionReclamationResult =
       kind: "maintenance-finalize";
       value: {
         archivedTranscripts: SessionLifecycleArchivedTranscript[];
-        changedEntries: SessionEntryRemovalPlan[];
-        committedEntries: SessionEntryRemovalPlan[];
+        /** Positions in the captured plan; never echo its saved entry snapshots. */
+        committedEntryIndices: number[];
       };
     }
   | { kind: "entry"; value: DeleteSessionEntryLifecycleResult }

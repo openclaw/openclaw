@@ -4,6 +4,7 @@ import { createRuntimeImportGraph } from "../../scripts/lib/runtime-import-closu
 
 const repoRoot = path.resolve(import.meta.dirname, "../..");
 const staticDependencyCache = new Map<string, readonly string[]>();
+const rawImportPattern = /(?:\?|&)raw(?:&|$)/;
 
 export function findSourceImportBackedges(
   entry: string | readonly string[],
@@ -34,17 +35,19 @@ export function findSourceImportBackedges(
         graph ??= createRuntimeImportGraph(repoRoot, entries, {
           includeCommonJs: true,
           sourceImports: true,
-          // Vite query suffixes select asset handling without changing the source file.
-          normalizeSpecifier: (specifier) => specifier.split("?", 1)[0]!,
+          // Keep raw imports distinguishable from executable source dependencies.
+          normalizeSpecifier: (specifier) =>
+            rawImportPattern.test(specifier) ? specifier : specifier.split("?", 1)[0]!,
         });
         const resolved: string[] = [];
         for (const { specifier, resolvedFileName } of graph.dependencies(file)) {
-          // Browser stylesheets are assets, but misspelled paths still fail this guard.
+          const assetPath = specifier.split("?", 1)[0]!;
+          // Stylesheets and raw file contents are assets; missing paths still fail.
           if (
             specifier.startsWith(".") &&
-            specifier.endsWith(".css") &&
+            (assetPath.endsWith(".css") || rawImportPattern.test(specifier)) &&
             fs
-              .statSync(path.resolve(path.dirname(file), specifier), { throwIfNoEntry: false })
+              .statSync(path.resolve(path.dirname(file), assetPath), { throwIfNoEntry: false })
               ?.isFile()
           ) {
             continue;

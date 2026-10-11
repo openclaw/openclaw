@@ -34,7 +34,6 @@ import type {
 import type * as deviceAuth from "../infra/device-auth-store.kernel.js";
 import type { DeviceIdentity } from "../infra/device-identity-store.js";
 import type { RestartLifecycleWorkerOperations } from "../infra/restart-lifecycle.worker.js";
-import type { SqliteFileGeneration } from "../infra/sqlite-file-generation.js";
 import type {
   SqliteWalPeriodicRequest,
   SqliteWalPeriodicResult,
@@ -49,7 +48,11 @@ import type {
 import type { UpdateRunWriteOperations } from "../infra/update-run-mutation.types.js";
 import type { UpdateRunReconciliationOperations } from "../infra/update-run-reconciliation.types.js";
 import type { PluginStateWorkerOperations } from "../plugin-state/plugin-state-worker-contract.js";
-import type { PluginMetadataStateSelector } from "../plugins/installed-plugin-index-row.js";
+import type {
+  PluginMetadataStateKey,
+  PluginMetadataStateRow,
+  PluginMetadataStateSelector,
+} from "../plugins/installed-plugin-index-row.js";
 import type { CaptureWorkerOperations } from "../proxy-capture/store.worker-contract.js";
 import type { SecretStoreConfigRefWrite } from "../secrets/store/secret-store-config-ref.kernel.js";
 import type { SecretStoreExpiryCutoffs } from "../secrets/store/secret-store-expiry.kernel.js";
@@ -184,6 +187,13 @@ export type OpenClawStateWorkerOperations = RegisteredStateWorkerOperations &
       input: Omit<Parameters<typeof secretWrites.deleteSecretStoreEntryInDatabase>[0], "database">;
       output: void;
     };
+    "secrets.allowedHosts": {
+      input: Omit<
+        Parameters<typeof secretWrites.updateSecretStoreAllowedHostsInDatabase>[0],
+        "database"
+      >;
+      output: void;
+    };
     "secrets.purge": { input: SecretStoreExpiryCutoffs; output: number };
     "secrets.writeForConfigRef": {
       input: SecretStoreConfigRefWrite;
@@ -200,8 +210,11 @@ export type OpenClawStateWorkerOperations = RegisteredStateWorkerOperations &
       output: SessionGroupCatalogMutationResult;
     };
     "plugins.metadata.read": {
-      input: { selector: PluginMetadataStateSelector; artifactPreservingReadOnly?: boolean };
-      output: { value_json: string } | undefined;
+      input: (
+        | { selector: PluginMetadataStateSelector }
+        | { stateKeys: readonly PluginMetadataStateKey[] }
+      ) & { artifactPreservingReadOnly?: boolean };
+      output: { value_json: string } | PluginMetadataStateRow[] | undefined;
     };
     "claws.install-schema-versions": {
       input: { artifactPreservingReadOnly: boolean };
@@ -220,7 +233,6 @@ export type OpenClawStateWorkerOperations = RegisteredStateWorkerOperations &
 
 /** Internal inspection cannot open canonical state or execute a domain command. */
 export type OpenClawStateWorkerInspectionOperations = {
-  "database.generationMatches": { input: { generation: SqliteFileGeneration }; output: boolean };
   "database.inspectIdle": { input: undefined; output: "healthy" | "retire" };
 };
 

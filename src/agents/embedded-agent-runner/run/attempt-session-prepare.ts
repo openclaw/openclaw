@@ -62,10 +62,7 @@ import { buildAfterTurnRuntimeContext } from "./attempt-prompt-helpers.js";
 import { resolveExistingAttemptTranscriptState } from "./attempt-transcript-helpers.js";
 import type { EmbeddedAttemptTranscriptLifecycle } from "./attempt-transcript-lifecycle.js";
 import { createUserTranscriptContextRegistry } from "./attempt-user-transcript-context-registry.js";
-import {
-  installMessageToolOnlyTerminalHook,
-  installToolAuthoredSourceReplyTerminalHook,
-} from "./message-tool-terminal.js";
+import { installMessageToolOnlyTerminalHook } from "./message-tool-terminal.js";
 import {
   type InitialUserTurnReplayPreparation,
   prepareInitialPersistedUserTurnCohort,
@@ -99,6 +96,7 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
   agentDir: string;
   clientToolPreparation: ClientToolPreparation;
   effectiveCwd: string;
+  effectiveWorkspace: string;
   getCurrentAttemptPluginMetadataSnapshot: () => PluginMetadataSnapshot | undefined;
   initialSystemPrompt: string;
   markStage: (stage: string) => void;
@@ -136,10 +134,8 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
   const extensionFactories = buildEmbeddedExtensionFactories({
     cfg: attempt.config,
     sessionManager: input.sessionManager,
-    provider: attempt.provider,
-    modelId: attempt.modelId,
+    workspaceDir: input.effectiveWorkspace,
     model: attempt.model,
-    contextTokenBudget: attempt.contextTokenBudget,
     agentId: input.sessionAgentId,
     sessionId: attempt.sessionId,
     sessionKey: attempt.sessionKey ?? attempt.sandboxSessionKey,
@@ -259,10 +255,6 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
     hasRepliedRef: attempt.hasRepliedRef,
     sessionKey: attempt.sessionKey,
   });
-  installToolAuthoredSourceReplyTerminalHook({
-    agent: activeSession.agent,
-    sourceReplyCapableToolNames: clientToolRuntime.sourceReplyCapableToolNames,
-  });
   input.markStage("agent-session");
 
   return {
@@ -315,6 +307,7 @@ export async function prepareEmbeddedAttemptSessionBoundary(input: {
   sessionManager: ReturnType<typeof guardSessionManager>;
   setActiveSessionSystemPrompt: (systemPrompt: string) => void;
 }): Promise<{
+  getUserTranscriptContexts?: () => LlmBoundaryOptions["userTranscriptContexts"];
   boundaryTimezone: string | undefined;
   includeBoundaryTimestamp: boolean;
   orphanRepair: ReturnType<typeof resolveOrphanRepairPlan>;
@@ -476,6 +469,7 @@ export async function prepareEmbeddedAttemptSessionBoundary(input: {
   };
 
   return {
+    getUserTranscriptContexts: input.getUserTranscriptContexts,
     boundaryTimezone,
     includeBoundaryTimestamp: !preserveExactPrompt,
     orphanRepair,

@@ -128,19 +128,14 @@ export type PageState = {
   roleRefsFrame?: Frame;
   /** Target-cache entry owned by the current role refs. */
   roleRefsTargetKey?: string;
-  /** Cache generation restored or stored by this Page. */
-  roleRefsTargetGeneration?: number;
-  /** Main-frame navigation observed before this Page could be bound to its target. */
-  roleRefsInvalidBeforeGeneration?: number;
-  /** Any frame changed before target binding; invalidates only page-wide aria refs. */
-  roleRefsAriaInvalidBeforeGeneration?: number;
+  /** Navigation observed before target discovery invalidates the eventual cache entry. */
+  roleRefsInvalidated?: boolean;
 };
 
 export type RoleRefs = NonNullable<PageState["roleRefs"]>;
 export type RoleRefsCacheEntry = {
   refs: RoleRefs;
   mode?: NonNullable<PageState["roleRefsMode"]>;
-  generation: number;
 };
 
 export type ContextState = {
@@ -157,11 +152,6 @@ export const MAX_NETWORK_REQUESTS = 500;
 export const MAX_RECENT_DIALOGS = 20;
 export const OBSERVED_DIALOG_TIMEOUT_MS = 120_000;
 
-export type PendingBrowserConnection = {
-  attempt: { cancelled: boolean; retired?: ConnectedBrowser };
-  promise: Promise<ConnectedBrowser>;
-};
-
 export type PlaywrightConnectionRetirement = {
   readonly retired: boolean;
   /** Capture handles created by already-admitted work before cleanup begins. */
@@ -170,8 +160,7 @@ export type PlaywrightConnectionRetirement = {
 };
 
 export const cachedByCdpUrl = new Map<string, ConnectedBrowser>();
-export const connectingByCdpUrl = new Map<string, PendingBrowserConnection>();
-export const retainedClosingByCdpUrl = new Map<string, Set<ConnectedBrowser>>();
+export const connectingByCdpUrl = new Map<string, Promise<ConnectedBrowser>>();
 export const closeConnectionPromises = new WeakMap<ConnectedBrowser, Promise<void>>();
 export const PLAYWRIGHT_CONNECTION_CLOSE_TIMEOUT_MS = 2_000;
 export const blockedTargetsByCdpUrl = new Set<string>();

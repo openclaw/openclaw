@@ -5,7 +5,9 @@ import { inspect } from "node:util";
 import { afterAll, beforeAll, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
+import { runWithCliHistoryWriter } from "../../config/sessions/cli-history-boundary.js";
 import { persistCompactionBoundaryWithSessionEntryAsync } from "../../config/sessions/session-accessor.sqlite-compaction-runtime.js";
+import { patchSessionEntryCore } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import { withIncognitoSessionActor } from "../../config/sessions/session-incognito-binding.js";
 import { readSessionTranscriptModelContextAsync } from "../../config/sessions/session-transcript-context-read.js";
 import { captureSessionTranscriptTargetBinding } from "../../config/sessions/transcript-target-binding.js";
@@ -16,7 +18,10 @@ import { applyLoggingConfig, resetLogger } from "../../logging/logger.js";
 import { registerSecretValueForRedaction } from "../../logging/secret-redaction-registry.js";
 import { resetSecretRedactionRegistryForTest } from "../../logging/secret-redaction-registry.test-support.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
+import {
+  resolveIncognitoOpenClawAgentSqlitePath,
+  resolveOpenClawAgentSqlitePath,
+} from "../../state/openclaw-agent-db.paths.js";
 import type { IncognitoAgentDatabaseExecution } from "../../state/openclaw-agent-execution-incognito.js";
 import { useIncognitoActorProbe } from "../../state/openclaw-agent-execution-incognito.test-support.js";
 import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
@@ -198,14 +203,19 @@ it("retargets another session on its retained actor outside the opening scope", 
   expect(manager.buildSessionContext().messages).toMatchObject([
     { role: "user", content: "destination history" },
   ]);
+  const otherEnv = { OPENCLAW_STATE_DIR: tempDirs.make("retarget-other-namespace-") };
   await expect(
     manager.setSessionTargetAsync(
       captureSessionTranscriptTargetBinding({
         ...destination,
-        env: { OPENCLAW_STATE_DIR: tempDirs.make("retarget-other-namespace-") },
+        env: otherEnv,
+        storePath: resolveIncognitoOpenClawAgentSqlitePath({
+          agentId: actor.agentId,
+          env: otherEnv,
+        }),
       }),
     ),
-  ).rejects.toThrow("Explicit incognito database target does not match its agent and state root");
+  ).rejects.toThrow("another incognito actor");
   expect(manager.getSessionTarget()).toMatchObject(destination);
   await manager.appendMessageAsync(makeUserMessage("retained destination write", 2));
   await manager.reloadPersistedTranscriptAsync();
@@ -527,6 +537,80 @@ it("persists messages, metadata, suffixes, rewrites and branches on the actor wi
   } finally {
     sql.restore();
   }
+});
+
+it("advances the captured CLI writer boundary through actor metadata commits", async () => {
+  const target = await create("cli-metadata");
+  const historyTarget = {
+    sessionKey: target.sessionKey,
+    sessionId: target.sessionId,
+    lifecycleRevision: "initial",
+  };
+  await withIncognitoSessionActor(actor, async () => {
+    const manager = await SessionManager.openAsync(target);
+    const { watermark } = await actor.sessions.history(authority, {
+      type: "session.history.watermark",
+      input: historyTarget,
+    });
+    const runId = "synthetic-cli-run";
+    const authFingerprint = "a".repeat(64);
+    await patchSessionEntryCore(target, () => ({
+      activeWriterRunId: runId,
+      cliHistoryBoundary: {
+        version: 1,
+        sessionId: target.sessionId,
+        state: "known",
+        ...watermark,
+        authFingerprint,
+        writerRunId: runId,
+      },
+    }));
+    let current = true;
+    const assertCurrent = () => {
+      if (!current) {
+        throw new Error("CLI writer revoked");
+      }
+    };
+    await runWithCliHistoryWriter(
+      {
+        target,
+        runId,
+        authFingerprint,
+        lifecycleRevision: "initial",
+        assertCurrent,
+        assertReadable: assertCurrent,
+      },
+      async () => {
+        await manager.appendCustomEntryAsync("cli-metadata", { synthetic: true });
+        const after = await actor.sessions.history(authority, {
+          type: "session.history.watermark",
+          input: historyTarget,
+        });
+        const entry = (await actor.sessions.read(authority, { sessionKey: target.sessionKey }))
+          .entry;
+        expect(entry).toMatchObject({
+          cliHistoryBoundary: {
+            ...after.watermark,
+            writerRunId: runId,
+            authFingerprint,
+          },
+        });
+        expect(after.watermark.maxSeq).toBe((watermark.maxSeq ?? -1) + 1);
+        current = false;
+        await expect(manager.appendCustomEntryAsync("refused", {})).rejects.toThrow(
+          "CLI writer revoked",
+        );
+        expect(
+          (
+            await actor.sessions.history(authority, {
+              type: "session.history.watermark",
+              input: historyTarget,
+            })
+          ).watermark,
+        ).toEqual(after.watermark);
+      },
+    );
+  });
 });
 
 it("rolls back fresh-message refusal and fences queued authority before mutation", async () => {

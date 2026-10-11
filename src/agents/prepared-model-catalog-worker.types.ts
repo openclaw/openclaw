@@ -39,7 +39,7 @@ export type PreparedModelCatalogWorkerTask = {
 };
 
 export type PreparedModelWorkerCommand =
-  | Readonly<{ kind: "catalog"; providerIds?: readonly string[] }>
+  | Readonly<{ kind: "catalog"; providerIds?: readonly string[]; refresh?: boolean }>
   | Readonly<{
       kind: "auth-refresh";
       profileIds?: readonly string[];
@@ -50,6 +50,8 @@ export type PreparedModelWorkerRequest = PreparedModelWorkerCommand &
   Readonly<{
     syntheticAuth: PreparedSyntheticAuthFacts;
     clawInstallSchemaVersions: ReturnType<typeof captureClawInstallSchemaVersionFacts>;
+    /** Codex client version decided by the parent; absent means the bundled pin. */
+    codexClientVersion?: string;
   }>;
 
 export type PreparedModelWorkerResult =

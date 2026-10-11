@@ -1,6 +1,7 @@
 // Native delivery contract for approval prompts and responses.
 import type {
   ChannelApprovalNativeAdapter,
+  ChannelApprovalNativeAdapterAsync,
   ChannelApprovalNativeSurface,
   ChannelApprovalNativeTarget,
 } from "../channels/plugins/approval-native.types.js";
@@ -32,7 +33,7 @@ export async function resolveChannelNativeApprovalDeliveryPlan(params: {
   accountId?: string | null;
   approvalKind: ChannelApprovalKind;
   request: ApprovalRequest;
-  adapter?: ChannelApprovalNativeAdapter | null;
+  adapter?: ChannelApprovalNativeAdapter | ChannelApprovalNativeAdapterAsync | null;
 }): Promise<ChannelApprovalNativeDeliveryPlan> {
   const adapter = params.adapter;
   const emptyPlan: ChannelApprovalNativeDeliveryPlan = {
@@ -44,33 +45,24 @@ export async function resolveChannelNativeApprovalDeliveryPlan(params: {
     return emptyPlan;
   }
 
-  const capabilities = adapter.describeDeliveryCapabilities({
+  const deliveryContext = () => ({
     cfg: params.cfg,
     accountId: params.accountId,
     approvalKind: params.approvalKind,
     request: params.request,
   });
+  const capabilities = await adapter.describeDeliveryCapabilities(deliveryContext());
   if (!capabilities.enabled) {
     return emptyPlan;
   }
 
   const originTarget =
     capabilities.supportsOriginSurface && adapter.resolveOriginTarget
-      ? ((await adapter.resolveOriginTarget({
-          cfg: params.cfg,
-          accountId: params.accountId,
-          approvalKind: params.approvalKind,
-          request: params.request,
-        })) ?? null)
+      ? ((await adapter.resolveOriginTarget(deliveryContext())) ?? null)
       : null;
   const approverDmTargets =
     capabilities.supportsApproverDmSurface && adapter.resolveApproverDmTargets
-      ? await adapter.resolveApproverDmTargets({
-          cfg: params.cfg,
-          accountId: params.accountId,
-          approvalKind: params.approvalKind,
-          request: params.request,
-        })
+      ? await adapter.resolveApproverDmTargets(deliveryContext())
       : [];
 
   const plannedTargets: ChannelApprovalNativePlannedTarget[] = [];

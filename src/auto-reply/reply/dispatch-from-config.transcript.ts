@@ -20,6 +20,18 @@ type TranscriptMirror = NonNullable<ReplyPayloadMetadata["sourceReplyTranscriptM
   deliveryMirror?: SessionTranscriptDeliveryMirror;
 };
 
+function transcriptMirrorExpectations(mirror: TranscriptMirror) {
+  return {
+    ...(mirror.expectedSessionId ? { expectedSessionId: mirror.expectedSessionId } : {}),
+    ...(mirror.expectedLifecycleRevision !== undefined
+      ? { expectedLifecycleRevision: mirror.expectedLifecycleRevision }
+      : {}),
+    ...(mirror.expectedWriterRunId !== undefined
+      ? { expectedWriterRunId: mirror.expectedWriterRunId }
+      : {}),
+  };
+}
+
 export async function mirrorDeliveredReplyToTranscript(params: {
   metadata?: TranscriptMirror;
   cfg: OpenClawConfig;
@@ -32,13 +44,7 @@ export async function mirrorDeliveredReplyToTranscript(params: {
     const result = await appendAssistantMessageToSessionTranscript({
       sessionKey: mirror.sessionKey,
       agentId: mirror.agentId,
-      ...(mirror.expectedSessionId ? { expectedSessionId: mirror.expectedSessionId } : {}),
-      ...(mirror.expectedLifecycleRevision !== undefined
-        ? { expectedLifecycleRevision: mirror.expectedLifecycleRevision }
-        : {}),
-      ...(mirror.expectedWriterRunId !== undefined
-        ? { expectedWriterRunId: mirror.expectedWriterRunId }
-        : {}),
+      ...transcriptMirrorExpectations(mirror),
       text: mirror.text,
       mediaUrls: mirror.preferText && mirror.text ? undefined : mirror.mediaUrls,
       idempotencyKey: mirror.idempotencyKey,
@@ -103,13 +109,7 @@ export function captureDeliveredTranscriptMirror(params: {
       deliveredMetadata = transcriptMirrorForDeliveredPayload(
         {
           ...payloadMirror,
-          ...(metadata.expectedSessionId ? { expectedSessionId: metadata.expectedSessionId } : {}),
-          ...(metadata.expectedLifecycleRevision !== undefined
-            ? { expectedLifecycleRevision: metadata.expectedLifecycleRevision }
-            : {}),
-          ...(metadata.expectedWriterRunId !== undefined
-            ? { expectedWriterRunId: metadata.expectedWriterRunId }
-            : {}),
+          ...transcriptMirrorExpectations(metadata),
           storePath: metadata.storePath,
         },
         payload,

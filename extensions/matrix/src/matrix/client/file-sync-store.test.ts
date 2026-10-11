@@ -119,12 +119,12 @@ describe("SqliteBackedMatrixSyncStore", () => {
 
   it("keeps a cache generation intact while another store instance publishes", async () => {
     const runtime = getMatrixRuntime();
-    const openStore = runtime.state.openKeyedStore.bind(runtime.state);
+    const openStore = runtime.state.openKeyedStoreV2.bind(runtime.state);
     const metadataRead = createDeferred<void>();
     const releaseRead = createDeferred<void>();
     const writeStarted = vi.fn();
     let pauseReads = false;
-    vi.spyOn(runtime.state, "openKeyedStore").mockImplementation((options) => {
+    vi.spyOn(runtime.state, "openKeyedStoreV2").mockImplementation((options) => {
       const store = openStore(options);
       if (options.namespace !== "sync-cache") {
         return store;
@@ -179,10 +179,10 @@ describe("SqliteBackedMatrixSyncStore", () => {
 
   it("joins deletion before freezing or persisting newer sync data", async () => {
     const runtime = getMatrixRuntime();
-    const openStore = runtime.state.openKeyedStore.bind(runtime.state);
+    const openStore = runtime.state.openKeyedStoreV2.bind(runtime.state);
     const deleting = createDeferred<void>();
     const release = createDeferred<void>();
-    vi.spyOn(runtime.state, "openKeyedStore").mockImplementation((options) => {
+    vi.spyOn(runtime.state, "openKeyedStoreV2").mockImplementation((options) => {
       const store = openStore(options);
       return {
         ...store,
@@ -319,7 +319,7 @@ describe("SqliteBackedMatrixSyncStore", () => {
 
   it("fails persistence instead of silently dropping sync data when sqlite is unavailable", async () => {
     const runtime = getMatrixRuntime();
-    vi.spyOn(runtime.state, "openKeyedStore").mockImplementation(() => {
+    vi.spyOn(runtime.state, "openKeyedStoreV2").mockImplementation(() => {
       throw new Error("sqlite unavailable");
     });
 

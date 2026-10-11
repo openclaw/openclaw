@@ -146,12 +146,8 @@ export function notifyStoredChatOutboxChanges(): void {
 }
 
 function handleStoredChatOutboxStorageChange(event: StorageEvent): void {
-  if (event.key === null && event.storageArea) {
-    projectedStoreByStorage.get(event.storageArea)?.clear();
-    notifyStoredChatOutboxChanges();
-    return;
-  }
   if (
+    (event.key === null && event.storageArea) ||
     event.key?.startsWith(STORAGE_KEY_PREFIX) ||
     event.key?.startsWith(LEGACY_STORAGE_KEY_PREFIX) ||
     event.key?.startsWith(PREVIOUS_STORAGE_KEY_PREFIX) ||

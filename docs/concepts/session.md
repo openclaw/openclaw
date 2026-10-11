@@ -39,7 +39,7 @@ Session lists, model filters, previews, and sharing controls also retain the
 stored conversation's agent, rather than the aggregate view's default agent.
 Renaming, pinning, or editing session metadata retains the existing message
 preview without rereading the transcript. New messages, transcript replacements,
-and completed transcript repairs refresh previews; changes to model selection
+completed transcript repairs, and cold-storage restoration refresh previews; changes to model selection
 or fallback state refresh the relevant model facts.
 Stopping with `/stop`, deleting, resetting, or archiving a session cancels only that agent's work for
 the selected conversation. Another agent's active turn and queued messages are
@@ -164,6 +164,10 @@ Lossless Claw remain independent and can run alongside it. See
 and runtime details.
 
 ## Session lifecycle
+
+Independent sessions can initialize their first turns concurrently. Requests for
+the same session remain ordered; parent forks and resets retain their shared-state
+coordination.
 
 Sessions are reused until you reset them manually or opt into an automatic reset policy:
 

@@ -11,6 +11,7 @@ import {
   latestChanges,
   renderMutationButton,
   renderUses,
+  renderWorkshopChangeText,
   UNUSED_ARCHIVE_DAYS,
   unusedDays,
   type SkillWorkshopViewProps,
@@ -48,11 +49,12 @@ export function renderDetail(
   const created = history.findLast((entry) => entry.action === "create");
   const change = latestChanges(snapshot.changes).get(target.name);
   const unused = skill ? unusedDays(skill, change, props.mode) : null;
-  const description =
-    skill?.description ||
-    (viewer.status === "ready" && target.filePath === "SKILL.md"
+  const ownDescription =
+    viewer.status === "ready" && target.filePath === "SKILL.md"
       ? splitFrontmatter(viewer.result.content).description
-      : undefined);
+      : undefined;
+  // A saved version describes itself; the live inventory describes today's copy.
+  const description = target.versionId ? ownDescription : skill?.description || ownDescription;
   const meta = [
     skill ? renderUses(skill.useCount) : null,
     skill?.lastUsedAtMs
@@ -212,7 +214,7 @@ function renderInstructions(viewer: WorkshopViewer, props: SkillWorkshopViewProp
     }
     ${
       viewer.current !== undefined
-        ? renderDiff(splitFrontmatter(viewer.current).body, body)
+        ? renderDiff(viewer.current, viewer.result.content)
         : renderMarkdown(body)
     }
   `;
@@ -301,14 +303,7 @@ function renderHistory(
       const undo = undoMutationFor(change, snapshot.list);
       return html`<li class="sw-timeline__item ${index === 0 ? "sw-timeline__item--latest" : ""}">
         <span class="sw-timeline__dot" aria-hidden="true"></span>
-        <div class="sw-timeline__text">
-          <span class="sw-timeline__who"
-            >${t(`skillWorkshop.changes.actors.${change.actor}`)}
-            ${t(`skillWorkshop.changes.actions.${change.action}`)}</span
-          >
-          ${change.summary ? html`<span class="sw-timeline__why">${change.summary}</span>` : nothing}
-          <span class="sw-timeline__when">${formatRelativeTimestamp(change.createdAtMs)}</span>
-        </div>
+        <div class="sw-timeline__text">${renderWorkshopChangeText(change, "sw-timeline__")}</div>
         <div class="sw-timeline__actions">
           ${
             change.versionId && retained.has(change.versionId)
@@ -416,7 +411,10 @@ function diffLines(before: string, after: string): DiffLine[] | null {
   return lines;
 }
 
-/** Reads like the change itself: the saved version's lines in red, today's in green. */
+/**
+ * Reads like the change itself: the saved version's lines in red, today's in green.
+ * Frontmatter is compared too, so a metadata-only change is not reported as a match.
+ */
 function renderDiff(current: string, version: string) {
   const lines = diffLines(version, current);
   if (lines === null || lines.every((line) => line.kind === "same")) {
@@ -424,7 +422,7 @@ function renderDiff(current: string, version: string) {
       lines === null ? "skillWorkshop.viewer.diffTooLarge" : "skillWorkshop.viewer.noDiff",
     );
     return html`<p class="sw-diff__same">${message}</p>
-      ${renderMarkdown(version)}`;
+      ${renderMarkdown(splitFrontmatter(version).body)}`;
   }
   const sign = (kind: DiffLine["kind"]) => (kind === "add" ? "+" : kind === "remove" ? "−" : "");
   return html`<div class="sw-diff">

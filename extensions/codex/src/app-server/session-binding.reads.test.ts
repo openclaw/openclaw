@@ -180,7 +180,7 @@ describe("Codex app-server binding reads", () => {
     );
     const store = createLazyCodexAppServerBindingStore({
       ...state,
-      asyncReads: { lookup, lookupMany },
+      asyncReads: { ...state.asyncReads, lookup, lookupMany },
     });
     const first = { kind: "conversation" as const, bindingId: "first" };
     const invalid = { kind: "conversation" as const, bindingId: " " };
@@ -218,7 +218,10 @@ describe("Codex app-server binding reads", () => {
     const last = { kind: "conversation" as const, bindingId: "last" };
     const binding = { threadId: "owned", cwd: "/repo" };
     state.register(bindingStoreKey(last), { version: 1, state: "active", binding });
-    const legacy = createLazyCodexAppServerBindingStore(state);
+    const legacy = createLazyCodexAppServerBindingStore({
+      ...state,
+      asyncReads: { ...state.asyncReads, lookupMany: undefined },
+    });
     expect(await collect(legacy.readMany([first, last]))).toEqual([undefined, binding]);
     const lookupMany = vi.fn(async (keys: readonly string[]) => {
       if (keys.length > 10_000) {

@@ -297,11 +297,10 @@ export async function recoverPendingWorkspaceResults(
                 !reclaimResult
               );
             };
-            const currentPreservesEnvironment = () =>
-              canPreserveEnvironment(
-                placements.get(pending.sessionId),
-                placements.getPlacementMove(pending.sessionId) ?? null,
-              );
+            const currentPreservesEnvironment = () => {
+              const current = placements.readCurrentMoveAuthority(pending.sessionId);
+              return canPreserveEnvironment(current.placement, current.move ?? null);
+            };
             const preserveEnvironment = !finishBlockedMove && currentPreservesEnvironment();
             const currentCheck: PlacementTurnClaimCurrentCheck = {
               assertPlacementCurrent(current, move) {
@@ -321,6 +320,19 @@ export async function recoverPendingWorkspaceResults(
                   !placements.validateWorkspaceResultClaim(turnClaim))
               ) {
                 throw new Error("Recovered workspace result lost its active environment owner");
+              }
+            };
+            const destroyResultEnvironment = async () => {
+              if (!preserveEnvironment && !finishBlockedMove) {
+                const assertMoveCurrent = await prepareGatewayMove(
+                  active,
+                  turnClaim,
+                  recovery.assertCurrent,
+                );
+                await destroyPendingEnvironment(
+                  active,
+                  assertMoveCurrent ?? recovery.assertCurrent,
+                );
               }
             };
             const completeResult = () => {
@@ -414,17 +426,7 @@ export async function recoverPendingWorkspaceResults(
                 recovery.assertCurrent();
                 await placements.closeWorkerTurnToolState(turnClaim);
               }
-              if (!preserveEnvironment && !finishBlockedMove) {
-                const assertMoveCurrent = await prepareGatewayMove(
-                  active,
-                  turnClaim,
-                  recovery.assertCurrent,
-                );
-                await destroyPendingEnvironment(
-                  active,
-                  assertMoveCurrent ?? recovery.assertCurrent,
-                );
-              }
+              await destroyResultEnvironment();
               await prepareAcceptedPublication(deps, turnClaim);
               await deps.publishAcceptedWorkspace?.(turnClaim);
               await completeResult();
@@ -507,19 +509,7 @@ export async function recoverPendingWorkspaceResults(
                 await settleRecoveredResult(
                   { stagedResultRef: ownedStagedResultRef, conflictPaths },
                   {
-                    beforeComplete: async () => {
-                      if (!preserveEnvironment && !finishBlockedMove) {
-                        const assertMoveCurrent = await prepareGatewayMove(
-                          active,
-                          turnClaim,
-                          recovery.assertCurrent,
-                        );
-                        await destroyPendingEnvironment(
-                          active,
-                          assertMoveCurrent ?? recovery.assertCurrent,
-                        );
-                      }
-                    },
+                    beforeComplete: destroyResultEnvironment,
                     complete: completeResult,
                   },
                 );

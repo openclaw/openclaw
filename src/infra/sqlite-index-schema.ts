@@ -8,7 +8,7 @@ import {
   type SqliteIntegrityDiagnostics,
   type SqliteIntegrityOperation,
 } from "./sqlite-integrity.js";
-import { runSqlitePinnedReadSnapshotSync } from "./sqlite-pinned-read-snapshot.js";
+import { runSqliteSchemaReadSnapshotSync } from "./sqlite-pinned-read-snapshot.js";
 import {
   createSqliteTableContractReader,
   getCanonicalSqliteNamedIndexContracts,
@@ -97,7 +97,7 @@ export function repairCanonicalSqliteIndexes(
   }
   const repairIndexes = new Set<CanonicalSqliteNamedIndexContract>();
   // One read snapshot also avoids a network lock round trip per metadata query.
-  runSqlitePinnedReadSnapshotSync(db, () => {
+  runSqliteSchemaReadSnapshotSync(db, () => {
     const readTable = createSqliteTableContractReader(db);
     for (const tableName of getCanonicalSqliteTableNames(schemaSql)) {
       assertSqliteIdentifier(tableName);

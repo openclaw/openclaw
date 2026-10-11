@@ -57,28 +57,29 @@ export function canPlanAutomaticConfigRepair(snapshot: ConfigFileSnapshot): bool
   );
 }
 
-function prepareAutomaticConfigRepairWrite(snapshot: ConfigFileSnapshot, config: OpenClawConfig) {
+async function prepareAutomaticConfigRepairWrite(
+  snapshot: ConfigFileSnapshot,
+  config: OpenClawConfig,
+) {
   const unsetPaths = resolveManagedUnsetPathsForWrite(undefined);
+  const topology = await prepareConfigWriteTopology({
+    snapshot,
+    nextConfig: config,
+    options: { persistCanonicalAgentRoster: true },
+    unsetPaths,
+    env: process.env,
+  });
   return stampConfigWriteMetadata(
-    applyUnsetPathsForWrite(
-      prepareConfigWriteTopology({
-        snapshot,
-        nextConfig: config,
-        options: { persistCanonicalAgentRoster: true },
-        unsetPaths,
-        env: process.env,
-      }).nextConfig,
-      unsetPaths,
-    ),
+    applyUnsetPathsForWrite(topology.nextConfig, unsetPaths),
     undefined,
     snapshot.parsed,
   );
 }
 
-function planConfigRepair(
+async function planConfigRepair(
   snapshot: ConfigFileSnapshot,
   pluginContracts: boolean,
-): AutomaticConfigRepairPlan | null {
+): Promise<AutomaticConfigRepairPlan | null> {
   if (!canPlanAutomaticConfigRepair(snapshot)) {
     return null;
   }
@@ -116,12 +117,15 @@ function planConfigRepair(
   const writeConfig = pluginContracts
     ? restoreDoctorConfigEnvRefs(config, prepareDoctorConfigReferenceSource(snapshot))
     : config;
-  const validation = withPluginContracts(() => {
+  const validation = await withPluginContracts(async () => {
     const validationConfig = omitDeferredPluginMigrationConfig(config, deferredPluginMigrations);
     const validated = pluginContracts
-      ? validateConfigObjectWithPlugins(prepareAutomaticConfigRepairWrite(snapshot, writeConfig), {
-          deferredPluginMigrations,
-        })
+      ? validateConfigObjectWithPlugins(
+          await prepareAutomaticConfigRepairWrite(snapshot, writeConfig),
+          {
+            deferredPluginMigrations,
+          },
+        )
       : { ...validateConfigObjectRaw(validationConfig), warnings: snapshot.warnings };
     const issues = (pluginContracts ? findDoctorLegacyConfigIssues : findLegacyConfigIssues)(
       validationConfig,
@@ -154,9 +158,9 @@ function planConfigRepair(
 }
 
 /** Admits only complete, deterministic single-file legacy migrations. */
-export function planAutomaticConfigRepair(
+export async function planAutomaticConfigRepair(
   snapshot: ConfigFileSnapshot,
-): AutomaticConfigRepairPlan | null {
+): Promise<AutomaticConfigRepairPlan | null> {
   return planConfigRepair(snapshot, true);
 }
 
@@ -164,8 +168,8 @@ export function planAutomaticConfigRepair(
  * Backup inventory and restore overlap checks need legacy roots without changing state.
  * Full plugin-contract validation belongs to Doctor's repair plan.
  */
-export function resolveLegacyConfigSnapshotForBackup(snapshot: ConfigFileSnapshot) {
-  return snapshot.valid ? snapshot : planConfigRepair(snapshot, false)?.snapshot;
+export async function resolveLegacyConfigSnapshotForBackup(snapshot: ConfigFileSnapshot) {
+  return snapshot.valid ? snapshot : (await planConfigRepair(snapshot, false))?.snapshot;
 }
 
 /** Commits a planned repair against the exact snapshot admitted by its caller. */

@@ -120,7 +120,7 @@ export class ConnectionPage extends OpenClawLightDomElement {
     this.sessionKeyBaseline = snapshot.sessionKey;
     this.syncDiagnosticsPolling();
     if (wasSystemInfoUnavailable && !this.systemInfoUnavailable) {
-      void this.loadSystemInfo();
+      void this.loadDiagnostic("system-info");
     }
   }
 
@@ -158,115 +158,92 @@ export class ConnectionPage extends OpenClawLightDomElement {
   }
 
   private refreshDiagnostics() {
-    void this.measurePing();
-    void this.loadSystemInfo();
+    void this.loadDiagnostic("ping");
+    void this.loadDiagnostic("system-info");
   }
 
-  private async measurePing() {
+  private async loadDiagnostic(kind: "ping" | "system-info") {
     const gatewaySource = this.gateway.gateway;
     const scope = this.gateway.capture();
+    const isPing = kind === "ping";
+    const requestKey = isPing ? "pingRequest" : "systemInfoRequest";
     if (
       !gatewaySource ||
       gatewaySource !== this.context.gateway ||
       !scope ||
-      this.pingRequest ||
+      (!isPing && this.systemInfoUnavailable) ||
+      this[requestKey] ||
       document.visibilityState === "hidden"
     ) {
       return;
     }
     const request = new AbortController();
-    this.pingRequest = request;
+    this[requestKey] = request;
     const isCurrent = () =>
-      this.pingRequest === request &&
+      this[requestKey] === request &&
       this.isConnected &&
       document.visibilityState !== "hidden" &&
       this.context.gateway === gatewaySource &&
       this.gateway.isCurrent(scope);
-    const started = performance.now();
+    const started = isPing ? performance.now() : 0;
     try {
-      // This RPC reads in-memory state; discard its payload and measure only the round trip.
-      await scope.client.request(
-        "last-heartbeat",
-        {},
-        {
-          timeoutMs: SYSTEM_INFO_POLL_INTERVAL_MS,
-          signal: request.signal,
-        },
-      );
-      if (!isCurrent()) {
-        return;
-      }
-      this.pingSamples = [
-        ...this.pingSamples.slice(-(CONNECTION_PING_SAMPLE_LIMIT - 1)),
-        { at: Date.now(), value: performance.now() - started },
-      ];
-      this.ping = summarizeConnectionPing(this.pingSamples.map((sample) => sample.value));
-      this.pingFailed = false;
-    } catch {
-      if (isCurrent()) {
-        this.pingFailed = true;
-      }
-    } finally {
-      if (this.pingRequest === request) {
-        this.pingRequest = null;
-      }
-    }
-  }
-
-  private async loadSystemInfo() {
-    const gatewaySource = this.gateway.gateway;
-    const scope = this.gateway.capture();
-    if (
-      !gatewaySource ||
-      gatewaySource !== this.context.gateway ||
-      !scope ||
-      this.systemInfoUnavailable ||
-      this.systemInfoRequest ||
-      document.visibilityState === "hidden"
-    ) {
-      return;
-    }
-    const request = new AbortController();
-    this.systemInfoRequest = request;
-    const isCurrent = () =>
-      this.systemInfoRequest === request &&
-      this.isConnected &&
-      document.visibilityState !== "hidden" &&
-      this.context.gateway === gatewaySource &&
-      this.gateway.isCurrent(scope);
-    try {
-      const sample = await readSystemInfo(gatewaySource, request.signal);
-      if (!isCurrent()) {
-        return;
-      }
-      this.systemInfo = sample.value;
-      this.diagnosticsPolling.stop();
-      this.diagnosticsPolling.start();
-      if (this.statusHistory.at(-1)?.at !== sample.at) {
-        this.statusHistory = [
-          ...this.statusHistory.slice(-(CONNECTION_PING_SAMPLE_LIMIT - 1)),
+      if (isPing) {
+        // This RPC reads in-memory state; discard its payload and measure only the round trip.
+        await scope.client.request(
+          "last-heartbeat",
+          {},
           {
-            at: sample.at,
-            status: {
-              eventLoop: sample.value.eventLoop,
-              processMemory: sample.value.processMemory,
-            },
+            timeoutMs: SYSTEM_INFO_POLL_INTERVAL_MS,
+            signal: request.signal,
           },
+        );
+        if (!isCurrent()) {
+          return;
+        }
+        this.pingSamples = [
+          ...this.pingSamples.slice(-(CONNECTION_PING_SAMPLE_LIMIT - 1)),
+          { at: Date.now(), value: performance.now() - started },
         ];
+        this.ping = summarizeConnectionPing(this.pingSamples.map((sample) => sample.value));
+        this.pingFailed = false;
+      } else {
+        const sample = await readSystemInfo(gatewaySource, request.signal);
+        if (!isCurrent()) {
+          return;
+        }
+        this.systemInfo = sample.value;
+        this.diagnosticsPolling.stop();
+        this.diagnosticsPolling.start();
+        if (this.statusHistory.at(-1)?.at !== sample.at) {
+          this.statusHistory = [
+            ...this.statusHistory.slice(-(CONNECTION_PING_SAMPLE_LIMIT - 1)),
+            {
+              at: sample.at,
+              status: {
+                eventLoop: sample.value.eventLoop,
+                processMemory: sample.value.processMemory,
+              },
+            },
+          ];
+        }
+        this.statusFailed = false;
       }
-      this.statusFailed = false;
     } catch (error) {
       if (!isCurrent()) {
         return;
       }
-      this.statusFailed = true;
-      if (isMissingOperatorReadScopeError(error) || isUnknownSystemInfoMethodError(error)) {
-        this.systemInfo = null;
-        this.systemInfoUnavailable = true;
+      if (isPing) {
+        this.pingFailed = true;
+      } else {
+        this.statusFailed = true;
+        if (isMissingOperatorReadScopeError(error) || isUnknownSystemInfoMethodError(error)) {
+          this.systemInfo = null;
+          this.systemInfoUnavailable = true;
+        }
       }
     } finally {
-      if (this.systemInfoRequest === request) {
-        this.systemInfoRequest = null;
+      if (this[requestKey] === request) {
+        this[requestKey] = null;
       }
     }
   }

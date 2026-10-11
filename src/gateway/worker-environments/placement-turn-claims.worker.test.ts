@@ -80,6 +80,9 @@ async function workerClaim(name: string) {
 
 function losePlacementReply(sessionId: string, outcome: "committed" | "unknown") {
   if (outcome === "unknown") {
+    vi.spyOn(operationAdmission, "observeSqliteWorkerCommittedFacts").mockImplementationOnce(
+      () => {},
+    );
     const createAdmission = operationAdmission.createSqliteWorkerOperationAdmission;
     vi.spyOn(operationAdmission, "createSqliteWorkerOperationAdmission").mockImplementationOnce(
       (admit, attachment) => {
@@ -496,6 +499,28 @@ it.each(["committed", "unknown", "reentrant"] as const)(
   },
 );
 
+it("replays the same local claim without replacing its identity or a successor", async () => {
+  const requested = input("idempotent");
+  const claim = await placements.claimTurn(requested);
+  const replay = await placements.claimTurn(requested);
+  expect(replay).toEqual(claim);
+  await expect(placements.claimTurn({ ...requested, agentId: "another-agent" })).rejects.toThrow(
+    "placement identity changed",
+  );
+  await expect(placements.claimTurn({ ...requested, runId: "another-run" })).rejects.toBeInstanceOf(
+    ActiveTurnClaimError,
+  );
+  expect(placements.get(requested.sessionId)?.turnClaim).toMatchObject({
+    claimId: requested.claimId,
+    runId: requested.runId,
+  });
+  await placements.releaseTurn(replay);
+  const successor = await placements.claimTurn({ ...requested, claimId: "successor" });
+  await placements.releaseTurnIfOwned(claim);
+  expect(placements.get(requested.sessionId)?.turnClaim?.claimId).toBe("successor");
+  await placements.releaseTurn(successor);
+});
+
 it("preserves same-session FIFO and cannot conditionally release a successor", async () => {
   const first = input("fifo");
   const successor = { ...first, claimId: "claim-fifo-next", runId: "run-fifo-next" };
@@ -691,7 +716,7 @@ it("keeps a later same-byte native claim authoritative when the old release repl
       write: (operation) =>
         runOpenClawStateWriteTransaction(({ db }) => operation(db), { database }),
     });
-    const replacement = native.claimTurn(requested);
+    const replacement = native.claimTurn(requested).claim;
     next = await placements.prepareTurnClaimAuthority(replacement);
     expect(next.isCurrent()).toBe(true);
     delivered = true;

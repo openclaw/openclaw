@@ -29,6 +29,7 @@ import {
   type DatabaseFileIdentity,
 } from "../infra/sqlite-worker-identity.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
+import { IncognitoSessionMissingError } from "../state/incognito-session-error.js";
 import { readOpenClawAgentDatabaseIdentity } from "../state/openclaw-agent-db-identity.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
 import {
@@ -107,6 +108,7 @@ type SqliteBoardStoreOptions = {
     assertCurrent?: () => void;
     /** Captured by the future activation owner; ordinary production routing remains native. */
     incognito?: { actor: IncognitoSessionActor; authority: IncognitoSessionAuthority };
+    absent?: { assertCurrent(): void };
   };
   env?: NodeJS.ProcessEnv;
 };
@@ -168,6 +170,12 @@ export class SqliteBoardStore implements BoardStore {
     prepare?: () => Promise<void>,
   ): Promise<T> {
     const resolved = this.options.resolveSession(target);
+    if (resolved.absent) {
+      options?.assertCurrent?.();
+      this.assertTargetCurrent(target, resolved);
+      resolved.absent.assertCurrent();
+      throw new IncognitoSessionMissingError();
+    }
     const env = cloneEnvWithPlatformSemantics(this.options.env ?? process.env);
     env.OPENCLAW_STATE_DIR = resolveStateDir(env);
     const databaseOptions = {
@@ -307,13 +315,12 @@ export class SqliteBoardStore implements BoardStore {
                 "board database closed or changed; retry",
               );
             }
-            // First-use schema work must precede the worker's strict native-open validation.
-            ensureBoardSchema(database);
             if (
               nativeSource ||
               typeof readOpenClawAgentDatabaseIdentity(database).identity === "symbol"
             ) {
               // Released opaque/cross-store guards keep synchronous authority and mutation together.
+              ensureBoardSchema(database);
               return runOpenClawAgentWriteTransaction(
                 (current) => {
                   assertPreparedCurrent();
@@ -446,6 +453,14 @@ export class SqliteBoardStore implements BoardStore {
   ): Promise<Awaited<T>> {
     const capturedTarget = { ...target };
     const resolved = this.options.resolveSession(capturedTarget);
+    if (resolved.absent) {
+      this.assertTargetCurrent(capturedTarget, resolved);
+      resolved.absent.assertCurrent();
+      const result = await consume(undefined, resolved.sessionKey);
+      this.assertTargetCurrent(capturedTarget, resolved);
+      resolved.absent.assertCurrent();
+      return result;
+    }
     const env = captureSessionTranscriptStorageEnvironment(this.options.env ?? process.env);
     const captured = {
       agentId: resolved.agentId,

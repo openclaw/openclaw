@@ -23,7 +23,7 @@ import {
   type CurrentTranscriptProjection,
 } from "./session-accessor.sqlite-projection-read.js";
 import { readActiveTranscriptEntryAnchorFromProjection } from "./session-accessor.sqlite-transcript-anchor.js";
-import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.js";
+import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import {
   readActiveTranscriptEntryAnchorAsync,
   readSessionTranscriptAnchorsAsync,
@@ -114,6 +114,49 @@ it("keeps replay tails metadata-only unless message payloads are selected", asyn
       anchor: { entryId: "tagged" },
       message: { role: "assistant", content: "selected answer" },
     });
+  });
+});
+
+it("settles callback-owned tail reads while independent history waits on the writer", async () => {
+  await withOpenClawTestState({ label: "writer-owned-transcript-tail" }, async (state) => {
+    const scope = transcriptScope(state);
+    await replaceTranscriptEvents(scope, events);
+    openOpenClawAgentDatabase({ agentId: scope.agentId, path: scope.storePath });
+    const independentRead = createDeferred();
+    const blockedHistory = createDeferred<never>();
+    void blockedHistory.promise.catch(() => {});
+    const spy = vi.spyOn(historyLane.pool, "run").mockImplementation(() => {
+      independentRead.resolve();
+      return blockedHistory.promise;
+    });
+    let accepted = false;
+    const reading = readSessionTranscriptAnchorsAsync(
+      scope,
+      { entryIds: ["question"], afterSeq: 1, includeMessagesForRunId: "answer-run" },
+      undefined,
+      (facts) => {
+        expect(facts.anchors).toEqual(
+          expect.arrayContaining([expect.objectContaining({ entryId: "question" })]),
+        );
+        expect(facts.tail?.entries).toContainEqual(
+          expect.objectContaining({ entryId: "answer", runId: "answer-run" }),
+        );
+        accepted = true;
+      },
+    );
+    try {
+      await Promise.race([
+        reading,
+        independentRead.promise.then(() => {
+          throw new Error("Tail acceptance waited on independent history custody");
+        }),
+      ]);
+      expect(accepted).toBe(true);
+    } finally {
+      blockedHistory.reject(new Error("Synthetic history custody released"));
+      await reading.catch(() => {});
+      spy.mockRestore();
+    }
   });
 });
 
@@ -327,20 +370,35 @@ it("borrows one ready projection for anchors and payloads without extending its 
       path: scope.storePath,
     });
     const resolved = { ...scope, path: database.path };
+    database.db
+      .prepare("UPDATE session_windows SET transcript_updated_at = 41 WHERE session_id = ?")
+      .run(scope.sessionId);
     const selection = {
       entryIds: ["question", "answer"],
       afterSeq: 1,
       includeMessagesForRunId: "answer-run",
+      includeWatermark: true,
     };
     const readMessage = await anchorKernel.prepareSessionTranscriptAnchorMessageReader(selection);
     const peer = new DatabaseSync(database.path);
-    const statements = trackSqliteStatementExecutions(database.db, ["readiness"], (sql) =>
-      sql.includes('"session_transcript_index_state"') ? "readiness" : null,
+    const statements = trackSqliteStatementExecutions(
+      database.db,
+      ["readiness", "watermark"],
+      (sql) =>
+        sql.includes('"session_transcript_index_state"')
+          ? "readiness"
+          : sql.includes('as "max_seq"')
+            ? "watermark"
+            : null,
     );
     let borrowed: CurrentTranscriptProjection | undefined;
     try {
       const result = readCurrentProjectionSnapshot(database, resolved, (projection) => {
         borrowed = projection;
+        expect(projection.version).toMatchObject({ rawSeq: 4, updatedAt: 41 });
+        peer
+          .prepare("UPDATE session_windows SET transcript_updated_at = 42 WHERE session_id = ?")
+          .run(scope.sessionId);
         peer
           .prepare(
             "UPDATE session_transcript_index_state SET needs_rebuild = 1 WHERE session_id = ?",
@@ -381,6 +439,7 @@ it("borrows one ready projection for anchors and payloads without extending its 
       expect(result).toMatchObject({
         kind: "value",
         value: {
+          watermark: { generation: borrowed?.version.generation, maxSeq: 4 },
           anchors: [
             { entryId: "question", rawSeq: 1 },
             { entryId: "answer", rawSeq: 2 },
@@ -398,6 +457,7 @@ it("borrows one ready projection for anchors and payloads without extending its 
         },
       });
       expect(statements.counts.readiness).toBe(1);
+      expect(statements.counts.watermark).toBe(0);
       expect(borrowed).toBeDefined();
       expect(() => readActiveTranscriptEntryAnchorFromProjection(borrowed!, "question")).toThrow(
         "requires its selected session snapshot",

@@ -82,9 +82,7 @@ function resolveOpenAICompletionsMaxTokens(
   if (options?.maxTokens) {
     return { maxTokens: options.maxTokens, clampToModelMaxTokens: true };
   }
-  const paramsMaxTokens = resolveMaxTokensParam(
-    (model as { params?: Record<string, unknown> }).params,
-  );
+  const paramsMaxTokens = resolveMaxTokensParam(model.params);
   if (paramsMaxTokens) {
     return { maxTokens: paramsMaxTokens, clampToModelMaxTokens: false };
   }
@@ -246,7 +244,7 @@ type CompletionsRequestPolicy =
 type CompletionsRequest = Record<string, unknown> & {
   model: string;
   messages: unknown[];
-  stream: true;
+  stream: boolean;
   tools?: ReturnType<typeof convertTools>["tools"];
 };
 
@@ -297,10 +295,10 @@ export function buildOpenAICompletionsRequest(
   const params: CompletionsRequest = {
     model: model.id,
     messages,
-    stream: true,
+    stream: (options?.streaming ?? model.params?.streaming) !== false,
     ...resolveOpenAIPromptCacheParams(model, cacheRetention, compat),
   };
-  if (compat.supportsUsageInStreaming) {
+  if (params.stream && compat.supportsUsageInStreaming) {
     params.stream_options = { include_usage: true };
   }
   if (compat.supportsStore) {
@@ -361,7 +359,12 @@ export function buildOpenAICompletionsRequest(
       } else if (hasToolCallHistory(context.messages)) {
         params.tools = [];
       }
-      if (policy.mode === "direct" && compat.zaiToolStream && converted.tools.length > 0) {
+      if (
+        policy.mode === "direct" &&
+        params.stream &&
+        compat.zaiToolStream &&
+        converted.tools.length > 0
+      ) {
         params.tool_stream = true;
       }
       if (policy.mode === "managed" && options?.toolChoice) {
@@ -421,7 +424,11 @@ export function buildOpenAICompletionsRequest(
               simpleReasoning,
             )) ??
         (usesBinaryOpenRouterThinking ? undefined : "high"));
-  const reasoning = resolveOpenAIRequestReasoning(model, requestedEffort);
+  const reasoning = resolveOpenAIRequestReasoning(
+    model,
+    requestedEffort,
+    compat.reasoningEffortForOff,
+  );
   const { effort, thinkingEnabled } = reasoning;
   {
     const maxTokenBudget =
@@ -456,8 +463,17 @@ export function buildOpenAICompletionsRequest(
       effectiveContextTokens !== undefined
     ) {
       const estimatedInputTokens = estimateOpenAICompletionsInputTokens(params);
-      const remainingBudget = Math.max(1, effectiveContextTokens - estimatedInputTokens - 1);
+      const remainingBudget = Math.max(0, effectiveContextTokens - estimatedInputTokens - 1);
       if (clampedMaxTokens > remainingBudget) {
+        if (remainingBudget < MIN_USEFUL_OUTPUT_TOKENS) {
+          throw Object.assign(
+            new Error(
+              `Context window exceeded: estimated input ${estimatedInputTokens} leaves only ` +
+                `${remainingBudget} output tokens within the ${effectiveContextTokens}-token context.`,
+            ),
+            { code: "context_length_exceeded" },
+          );
+        }
         clampedMaxTokens = remainingBudget;
         emitModelTransportDebug(
           log,
@@ -465,22 +481,6 @@ export function buildOpenAICompletionsRequest(
             `model=${model.id} requested=${effectiveMaxTokens} output=${clampedMaxTokens} ` +
             `effectiveContext=${effectiveContextTokens} estimatedInput=${estimatedInputTokens}`,
         );
-        if (remainingBudget < MIN_USEFUL_OUTPUT_TOKENS) {
-          if (model.reasoning && thinkingEnabled !== false) {
-            throw Object.assign(
-              new Error(
-                `Context window exceeded: estimated input ${estimatedInputTokens} leaves only ` +
-                  `${remainingBudget} output tokens within the ${effectiveContextTokens}-token context.`,
-              ),
-              { code: "context_length_exceeded" },
-            );
-          }
-          log.warn(
-            `[completions] insufficient_output_budget provider=${model.provider} api=${model.api} ` +
-              `model=${model.id} output=${clampedMaxTokens} ` +
-              `effectiveContext=${effectiveContextTokens} estimatedInput=${estimatedInputTokens}`,
-          );
-        }
       }
     }
     if (policy.mode === "direct" ? options?.maxTokens : clampedMaxTokens) {

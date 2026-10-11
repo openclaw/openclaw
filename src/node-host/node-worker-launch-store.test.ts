@@ -119,7 +119,7 @@ describe("node worker launch admitted schema", () => {
     return { ...opened, opened, env, kernel, admission };
   }
 
-  it("shares admitted facts across warm launch joins without suppressing operation freshness", () => {
+  it("shares admitted facts across warm launch joins without freshness probes", () => {
     const { db, kernel, admission } = kernelFixture();
     try {
       const pending = kernel.get("schema-launch")!;
@@ -154,8 +154,7 @@ describe("node worker launch admitted schema", () => {
               ),
             ).toEqual(receipt);
           }
-          // Each launch read probes freshness once, not once per optional companion join.
-          expect(reads.counts).toEqual({ schema: 0, dataVersion: 9, launch: 9 });
+          expect(reads.counts).toEqual({ schema: 0, dataVersion: 0, launch: 9 });
           expect(reads.rowCounts.launch).toBe(9);
         } finally {
           reads.restore();
@@ -213,7 +212,7 @@ describe("node worker launch admitted schema", () => {
     }
   });
 
-  it("observes foreign companion commits after the current snapshot without inventing certificates", () => {
+  it("observes foreign companion row commits after the current snapshot without inventing certificates", () => {
     const { db, path, kernel, admission } = kernelFixture();
     // Native connection bypasses in-process schema publications, like a separate worker.
     const foreign = new (requireNodeSqlite().DatabaseSync)(path);
@@ -226,12 +225,12 @@ describe("node worker launch admitted schema", () => {
         nowMs: NOW_MS,
       });
       expect(legacy.workerDescendantsReaped).toBeUndefined();
+      db.exec(
+        extractSqliteTableSchema(OPENCLAW_STATE_SCHEMA_SQL, "node_worker_launch_process_scopes"),
+      );
       db.exec("BEGIN");
       try {
         expect(readNodeWorkerLaunchReceipt(db, legacy.launchId)).toEqual(legacy);
-        foreign.exec(
-          extractSqliteTableSchema(OPENCLAW_STATE_SCHEMA_SQL, "node_worker_launch_process_scopes"),
-        );
         foreign
           .prepare(
             "INSERT INTO node_worker_launch_process_scopes (launch_id, scope_kind, descendants_reaped) VALUES (?, 'linux-subreaper', NULL)",

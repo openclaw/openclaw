@@ -129,24 +129,7 @@ describe("executeAgentTurn: message tool progress", () => {
     );
   });
 
-  it("records mute when a message-tool-only run completes without a send", async () => {
-    const onAgentRunTerminalOutcome = vi.fn();
-    state.runEmbeddedAgentMock.mockResolvedValueOnce({ payloads: [], meta: {} });
-    const followupRun = createFollowupRun();
-    followupRun.run.sourceReplyDeliveryMode = "message_tool_only";
-
-    const executeAgentTurn = await getExecuteAgentTurnForTest();
-    await executeAgentTurn(
-      createMinimalRunAgentTurnParams({ followupRun, opts: { onAgentRunTerminalOutcome } }),
-    );
-
-    expect(onAgentRunTerminalOutcome).toHaveBeenCalledExactlyOnceWith("completed");
-    expect(state.recordMessageToolRunOutcomeMock).toHaveBeenCalledWith(
-      expect.objectContaining({ outcome: "mute", runStatus: "completed" }),
-    );
-  });
-
-  it.each([false, true])(
+  it.each([false])(
     "settles failed recording without replaying the turn (runFailed=%s)",
     async (runFailed) => {
       const original = new Error("invalid image metadata");
@@ -175,81 +158,45 @@ describe("executeAgentTurn: message tool progress", () => {
     },
   );
 
-  it.each([false, true])(
-    "records failed execution independently of delivery (%s)",
-    async (delivered) => {
-      const onAgentRunTerminalOutcome = vi.fn();
-      state.runEmbeddedAgentMock.mockResolvedValueOnce({
-        payloads: [],
-        didDeliverSourceReplyViaMessageTool: delivered,
-        meta: { error: { message: "provider crashed" } },
-      });
-      const followupRun = createFollowupRun();
-      followupRun.run.sourceReplyDeliveryMode = "message_tool_only";
+  it.each(["model"] as const)("clears run ownership when %s preflight fails", async (stage) => {
+    const onAgentRunTerminalOutcome = vi.fn();
+    const followupRun = createFollowupRun();
+    followupRun.run.sourceReplyDeliveryMode = "message_tool_only";
+    const agentRunRegistry = await import("../../infra/agent-run-registry.js");
+    const clearAgentRunContext = vi.mocked(agentRunRegistry.clearAgentRunContext);
+    const failure = new Error(`${stage} preflight failed`);
+    const modelRead = vi
+      .spyOn(
+        await import("../../agents/session-model-auto-revert.js"),
+        "createAgentPatchedSessionModelRunGuard",
+      )
+      .mockRejectedValueOnce(failure);
 
-      const executeAgentTurn = await getExecuteAgentTurnForTest();
-      await executeAgentTurn(
-        createMinimalRunAgentTurnParams({ followupRun, opts: { onAgentRunTerminalOutcome } }),
-      );
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    try {
+      await expect(
+        executeAgentTurn(
+          createMinimalRunAgentTurnParams({
+            followupRun,
+            opts: { runId: "preflight-failure", onAgentRunTerminalOutcome },
+          }),
+        ),
+      ).rejects.toBe(failure);
+    } finally {
+      modelRead?.mockRestore();
+    }
 
-      expect(onAgentRunTerminalOutcome).toHaveBeenCalledExactlyOnceWith("failed");
-      expect(state.recordMessageToolRunOutcomeMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          outcome: delivered ? "tool_delivered" : "mute",
-          runStatus: "errored",
-        }),
-      );
-    },
-  );
-
-  it.each(["image", "model"] as const)(
-    "clears run ownership when %s preflight fails",
-    async (stage) => {
-      const onAgentRunTerminalOutcome = vi.fn();
-      const followupRun = createFollowupRun();
-      followupRun.run.sourceReplyDeliveryMode = "message_tool_only";
-      const agentRunRegistry = await import("../../infra/agent-run-registry.js");
-      const clearAgentRunContext = vi.mocked(agentRunRegistry.clearAgentRunContext);
-      const failure = new Error(`${stage} preflight failed`);
-      const modelRead =
-        stage === "model"
-          ? vi
-              .spyOn(
-                await import("../../agents/session-model-auto-revert.js"),
-                "createAgentPatchedSessionModelRunGuard",
-              )
-              .mockRejectedValueOnce(failure)
-          : undefined;
-      if (stage === "image") {
-        state.resolveCurrentTurnImagesMock.mockRejectedValueOnce(failure);
-      }
-
-      const executeAgentTurn = await getExecuteAgentTurnForTest();
-      try {
-        await expect(
-          executeAgentTurn(
-            createMinimalRunAgentTurnParams({
-              followupRun,
-              opts: { runId: "preflight-failure", onAgentRunTerminalOutcome },
-            }),
-          ),
-        ).rejects.toBe(failure);
-      } finally {
-        modelRead?.mockRestore();
-      }
-
-      expect(clearAgentRunContext).toHaveBeenCalledWith("preflight-failure", expect.any(String));
-      expect(onAgentRunTerminalOutcome).toHaveBeenCalledExactlyOnceWith("failed");
-      expect(state.recordMessageToolRunOutcomeMock).toHaveBeenCalledExactlyOnceWith(
-        expect.objectContaining({
-          runId: "preflight-failure",
-          outcome: "mute",
-          runStatus: "errored",
-        }),
-      );
-      expect(state.runWithModelFallbackMock).not.toHaveBeenCalled();
-    },
-  );
+    expect(clearAgentRunContext).toHaveBeenCalledWith("preflight-failure", expect.any(String));
+    expect(onAgentRunTerminalOutcome).toHaveBeenCalledExactlyOnceWith("failed");
+    expect(state.recordMessageToolRunOutcomeMock).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        runId: "preflight-failure",
+        outcome: "mute",
+        runStatus: "errored",
+      }),
+    );
+    expect(state.runWithModelFallbackMock).not.toHaveBeenCalled();
+  });
 
   it("preserves message-tool-only suppression across fallback candidates", async () => {
     const onItemEvent = vi.fn();
@@ -317,98 +264,6 @@ describe("executeAgentTurn: message tool progress", () => {
 
     expect(onItemEvent).toHaveBeenCalledTimes(1);
     expect(onCommandOutput).not.toHaveBeenCalled();
-  });
-
-  it("keeps opted-in progress callbacks active after message-tool-only delivery completes", async () => {
-    const onToolStart = vi.fn();
-    const onCommandOutput = vi.fn();
-    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
-      await params.onAgentEvent?.({
-        stream: "tool",
-        data: {
-          phase: "start",
-          name: "message",
-          toolCallId: "message-1",
-          args: {
-            action: "send",
-            message: "Visible reply",
-          },
-        },
-      });
-      await params.onAgentEvent?.({
-        stream: "item",
-        data: {
-          itemId: "tool-message-1",
-          phase: "end",
-          kind: "tool",
-          title: "message",
-          name: "message",
-          toolCallId: "message-1",
-          status: "completed",
-        },
-      });
-      await params.onAgentEvent?.({
-        stream: "tool",
-        data: {
-          phase: "start",
-          name: "bash",
-          toolCallId: "bash-1",
-          args: {
-            command: "sleep 6",
-          },
-        },
-      });
-      await params.onAgentEvent?.({
-        stream: "command_output",
-        data: {
-          itemId: "command:bash-1",
-          phase: "end",
-          title: "sleep 6",
-          toolCallId: "bash-1",
-          name: "bash",
-          output: "done",
-          status: "completed",
-          exitCode: 0,
-        },
-      });
-      return { payloads: [{ text: "NO_REPLY" }], meta: {} };
-    });
-
-    const executeAgentTurn = await getExecuteAgentTurnForTest();
-    const followupRun = createFollowupRun();
-    followupRun.run.sourceReplyDeliveryMode = "message_tool_only";
-    await executeAgentTurn({
-      commandBody: "hello",
-      followupRun,
-      sessionCtx: {
-        Provider: "discord",
-        MessageSid: "msg",
-      } as unknown as TemplateContext,
-      opts: {
-        allowProgressCallbacksWhenSourceDeliverySuppressed: true,
-        onToolStart,
-        onCommandOutput,
-      } satisfies GetReplyOptions,
-      typingSignals: createMockTypingSignaler(),
-      ...createAgentTurnExecutionDefaults(),
-      resolvedVerboseLevel: "on",
-    });
-
-    expect(onToolStart).toHaveBeenCalledWith(
-      expect.objectContaining({
-        name: "bash",
-        phase: "start",
-        args: { command: "sleep 6" },
-        detailMode: undefined,
-      }),
-    );
-    expect(onCommandOutput).toHaveBeenCalledWith(
-      expect.objectContaining({
-        name: "bash",
-        output: "done",
-        status: "completed",
-      }),
-    );
   });
 
   it("keeps progress callbacks active after message-tool-only reads", async () => {

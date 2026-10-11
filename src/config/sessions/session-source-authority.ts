@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { throwSqliteLifecycleErrors } from "../../infra/sqlite-lifecycle-errors.js";
 import type { CapturedSessionEntryReadSource } from "./session-entry-read-source.types.js";
+import type { SessionPendingInputAuthorityFacts } from "./session-pending-input-authority.js";
 import type { SessionTranscriptContextVersion } from "./session-transcript-context-version.types.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
@@ -25,6 +26,21 @@ export type SessionSourcePredicateFacts = {
   members?: readonly string[];
 };
 
+/** Current source facts supplied by the mutation's own transaction. */
+export type SessionSourceTransactionGrant = {
+  source: CapturedSessionEntryReadSource;
+  agentId: string;
+  sessionKey: string;
+  assertCurrent: (facts: SessionPendingInputAuthorityFacts) => void;
+};
+
+export type SessionSourceWriteGrant = {
+  assertCurrent: () => void;
+  assertLifetimeCurrent: () => void;
+  release: () => void | Promise<void>;
+  transaction?: SessionSourceTransactionGrant;
+};
+
 export type SessionSourceValidation = {
   refusedSource?: { index: number; facts: SessionSourcePredicateFacts };
   conversationMatches: Array<{
@@ -35,8 +51,11 @@ export type SessionSourceValidation = {
 };
 
 export type PreparedSessionSourceAuthority = {
+  transaction?: SessionSourceTransactionGrant;
   /** Process-held sources require native atomicity when writing a durable target. */
   nativeSource?: boolean;
+  /** Released SDK callbacks can perform arbitrary synchronous SQLite reads. */
+  opaqueCommitGuard?: boolean;
   /** Wrapper checks need a native transaction unless the caller owns a prepared commit hook. */
   hasOpaqueCheck?: boolean;
   assertCurrent: () => void;
@@ -54,10 +73,16 @@ export type PreparedSessionSourceAuthority = {
 
 export type SessionSourceAssertion = (() => void) & {
   nativeSource?: boolean;
+  opaqueCommitGuard?: boolean;
   /** Checks the scope owner without invoking storage-dependent source predicates. */
   assertScopeCurrent?: () => void;
   prepareSessionSource?: () => Promise<PreparedSessionSourceAuthority>;
   prepareSessionSourceScope?: () => Promise<PreparedSessionSourceAuthority | undefined>;
+};
+
+/** Sources supplied to worker mutation APIs must own asynchronous predicate preparation. */
+export type PreparedSessionSourceAssertion = SessionSourceAssertion & {
+  prepareSessionSource: () => Promise<PreparedSessionSourceAuthority>;
 };
 
 /** Public boolean callbacks stay callable; bundled owners also carry their prepared writer source. */
@@ -104,7 +129,7 @@ const sessionSourceScopes = new AsyncLocalStorage<
 /** Classify request/SDK callbacks before adapters compose them with prepared internal authority. */
 export function captureExternalSessionCommitGuard(guard: SessionSourceAssertion | undefined) {
   return guard && !guard.prepareSessionSource
-    ? Object.assign(() => guard(), { nativeSource: true })
+    ? Object.assign(() => guard(), { nativeSource: true, opaqueCommitGuard: true })
     : guard;
 }
 
@@ -128,7 +153,21 @@ export async function prepareSessionSourceAuthority(
 ): Promise<PreparedSessionSourceAuthority> {
   return assertion?.prepareSessionSource
     ? assertion.prepareSessionSource()
-    : { assertCurrent: () => assertion?.(), checks: [], nativeSource: assertion?.nativeSource };
+    : {
+        assertCurrent: () => assertion?.(),
+        checks: [],
+        nativeSource: assertion?.nativeSource,
+        opaqueCommitGuard: assertion?.opaqueCommitGuard,
+      };
+}
+
+/** Bootstrap grants consume prepared liveness, never opaque or native source reads. */
+export function assertPreparedSessionSourceCurrent(source: PreparedSessionSourceAuthority): void {
+  if (source.assertPreparedCurrent) {
+    source.assertPreparedCurrent();
+  } else if (!source.nativeSource) {
+    source.assertCurrent();
+  }
 }
 
 export async function prepareSessionSourceScope(
@@ -155,6 +194,7 @@ export function bindPreparedSessionSourceAssertion(
     assertRetained,
     Object.assign(() => prepared.assertCurrent(), {
       nativeSource: prepared.nativeSource,
+      opaqueCommitGuard: prepared.opaqueCommitGuard,
       prepareSessionSource: () => {
         assertRetained();
         return prepareSessionSourceAuthority(retainedSource);
@@ -212,7 +252,7 @@ export async function runWithSessionSourceScope<T>(
 export function createDynamicSessionSourceAssertion(
   select: () => SessionSourceAssertion | undefined,
   refuse: () => never,
-): SessionSourceAssertion {
+): PreparedSessionSourceAssertion {
   const prepareSelected = <T>(
     prepare: (assertion: SessionSourceAssertion | undefined) => Promise<T>,
   ) => {
@@ -226,7 +266,7 @@ export function createDynamicSessionSourceAssertion(
       }),
     );
   };
-  const assertion: SessionSourceAssertion = Object.assign(
+  const assertion: PreparedSessionSourceAssertion = Object.assign(
     () => {
       const scoped = sessionSourceScopes.getStore()?.get(assertion);
       return scoped ? scoped.assertCurrent() : select()?.();
@@ -250,7 +290,7 @@ export function composeSessionSourceAssertion(
     preparedCheck: (assertSources: () => void) => void;
     hasOpaqueCheck?: boolean;
   },
-): SessionSourceAssertion {
+): PreparedSessionSourceAssertion {
   function prepare(scoped: true): Promise<PreparedSessionSourceAuthority | undefined>;
   function prepare(scoped?: false): Promise<PreparedSessionSourceAuthority>;
   async function prepare(scoped = false): Promise<PreparedSessionSourceAuthority | undefined> {
@@ -259,11 +299,7 @@ export function composeSessionSourceAssertion(
     const release = () => releaseSessionSourceAuthorities(prepared);
     const assertPreparedSources = () => {
       for (const source of prepared) {
-        if (source.assertPreparedCurrent) {
-          source.assertPreparedCurrent();
-        } else if (!source.nativeSource) {
-          source.assertCurrent();
-        }
+        assertPreparedSessionSourceCurrent(source);
       }
     };
     try {
@@ -283,6 +319,7 @@ export function composeSessionSourceAssertion(
             ...(scoped ? { assertPreparedCurrent: () => source?.assertScopeCurrent?.() } : {}),
             checks: [],
             nativeSource: source?.nativeSource,
+            opaqueCommitGuard: source?.opaqueCommitGuard,
           },
         );
       }
@@ -291,6 +328,7 @@ export function composeSessionSourceAssertion(
       }
       return {
         nativeSource: prepared.some((source) => source.nativeSource),
+        opaqueCommitGuard: prepared.some((source) => source.opaqueCommitGuard),
         hasOpaqueCheck: options?.hasOpaqueCheck || prepared.some((source) => source.hasOpaqueCheck),
         assertCurrent: () => check(() => prepared.forEach((source) => source.assertCurrent())),
         assertPreparedCurrent: () => (options?.preparedCheck ?? check)(assertPreparedSources),
@@ -327,7 +365,7 @@ export function composeSessionSourceAssertion(
       throw failure;
     }
   }
-  const assertion: SessionSourceAssertion = Object.assign(
+  const assertion: PreparedSessionSourceAssertion = Object.assign(
     () => {
       const scoped = sessionSourceScopes.getStore()?.get(assertion);
       return scoped ? scoped.assertCurrent() : check(() => sources.forEach((source) => source?.()));

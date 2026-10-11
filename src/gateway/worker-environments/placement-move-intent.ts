@@ -1,7 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import type { Selectable } from "kysely";
-import type { SessionMoveTarget } from "../../../packages/gateway-protocol/src/schema/session-placement.js";
 import { WORKER_PROTOCOL_MAX_IDENTIFIER_LENGTH } from "../../../packages/gateway-protocol/src/schema/worker-protocol-primitives.js";
 import {
   executeSqliteQuerySync,
@@ -18,6 +17,11 @@ import type {
 } from "../../state/openclaw-state-db.generated.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "../../state/openclaw-state-schema.js";
 import { drainWorkerSessionPlacement } from "./placement-drain.js";
+import type {
+  WorkerPlacementMoveIntent,
+  WorkerPlacementMoveSource,
+  WorkerPlacementMoveTarget,
+} from "./placement-move-intent.types.js";
 import {
   isForceAbandonedWorkerPlacement,
   normalizeEpoch,
@@ -42,25 +46,6 @@ type MoveSourceCompletion = {
   operationId: string;
   sessionId: string;
   expectedGeneration: number;
-};
-
-export type WorkerPlacementMoveTarget = SessionMoveTarget;
-
-export type WorkerPlacementMoveSource = {
-  generation: number;
-  environmentId: string;
-  ownerEpoch: number;
-};
-
-export type WorkerPlacementMoveIntent = {
-  operationId: string;
-  sessionId: string;
-  source: WorkerPlacementMoveSource;
-  target: WorkerPlacementMoveTarget;
-  abandonSource: boolean;
-  lastError: string | null;
-  createdAtMs: number;
-  updatedAtMs: number;
 };
 
 const moveQuery = (db: DatabaseSync) => getNodeSqliteKysely<MoveDatabase>(db);

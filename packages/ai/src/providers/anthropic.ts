@@ -7,6 +7,7 @@ import type { AnthropicContextManagementOptions, AnthropicOptions } from "../pro
 import {
   isAnthropicReplayRejection,
   suppressAnthropicCompaction,
+  type AnthropicCompactionBlock,
 } from "../transports/anthropic-compaction-replay.js";
 import {
   buildAnthropicRequest,
@@ -25,7 +26,7 @@ import {
   finalizeTransportStream,
   notifyProviderHttpResponse,
 } from "../transports/transport-stream-shared.js";
-import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../transports/transport-utils.js";
+import { streamFragmentError } from "../transports/transport-utils.js";
 import type {
   AssistantMessageEvent,
   Context,
@@ -110,12 +111,7 @@ async function* iterateAnthropicEvents(
       const event = parseJsonWithRepair(sse.data) as RawMessageStreamEvent;
       yield event;
     } catch (error) {
-      // Frame payloads carry model output, so surface the shared malformed-fragment
-      // error instead of echoing them. The SyntaxError stays reachable on `cause`.
-      if (error instanceof SyntaxError) {
-        throw new Error(MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE, { cause: error });
-      }
-      throw error;
+      throw streamFragmentError(error);
     }
   }
 }
@@ -136,7 +132,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicComp
     const refusalBuffer = usesClaudeStreamingRefusalContract(model)
       ? createDeferredEventBuffer<AssistantMessageEvent>(stream)
       : undefined;
-    let usedCompactionReplay = false;
+    let replayedCompaction: AnthropicCompactionBlock | undefined;
 
     try {
       const {
@@ -155,7 +151,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicComp
         serverSideFallback,
         claudeCodeVersion,
       );
-      usedCompactionReplay = builtParams.usedCompactionReplay;
+      replayedCompaction = builtParams.replayedCompaction;
       const { params, headers } = await prepareAnthropicRequest(
         builtParams.params,
         model,
@@ -197,8 +193,8 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicComp
         refusalBuffer.discard();
         output.content = [];
       }
-      if (usedCompactionReplay && isAnthropicReplayRejection(error)) {
-        suppressAnthropicCompaction(output, model, requestOptions);
+      if (replayedCompaction && isAnthropicReplayRejection(error)) {
+        suppressAnthropicCompaction(output, model, requestOptions, replayedCompaction);
       }
       stream.push({ type: "error", reason: terminal.stopReason, error: output });
       stream.end();
@@ -245,6 +241,7 @@ export const streamSimpleAnthropic: StreamFunction<
     anthropicServerCompaction: options?.anthropicServerCompaction,
     anthropicCompactThreshold: options?.anthropicCompactThreshold,
     cacheTtlPruning: options?.cacheTtlPruning,
+    onCompactionRejected: options?.onCompactionRejected,
     authProfileId: options?.authProfileId,
     maxTokens: clampMaxTokensToModel(model, options?.maxTokens ?? model.maxTokens),
     toolChoice: options?.toolChoice,

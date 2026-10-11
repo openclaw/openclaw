@@ -8,6 +8,7 @@ import { tryReadJson } from "./json-files.js";
 import { parseRegistryNpmSpec } from "./npm-registry-spec.js";
 import { isPackageUpdateRecoveryArtifactName } from "./package-update-backup-paths.js";
 import { hasNodeErrorCode, isPathInside } from "./path-guards.js";
+import { ignoreMissingUpdateCandidateFile } from "./update-candidate-files.js";
 import type { UpdateCandidatePluginCodeLink } from "./update-candidate-plugin-code-links.js";
 import { copyUpdateCandidatePluginFiles } from "./update-candidate-plugin-file.js";
 import {
@@ -73,12 +74,7 @@ async function dependencyOwner(
     if (
       await fs.stat(path.join(directory, "package.json")).then(
         () => true,
-        (error: unknown) => {
-          if (hasNodeErrorCode(error, "ENOENT")) {
-            return false;
-          }
-          throw error;
-        },
+        (error: unknown) => ignoreMissingUpdateCandidateFile(error) ?? false,
       )
     ) {
       return directory;
@@ -105,6 +101,8 @@ export async function prepareUpdateCandidatePluginTrees(params: {
   candidateRoot: string;
   /** Retain selected host entries and the dependency owners reached from them. */
   retainedHostRoot?: string;
+  /** Installed runtime lookups stop at the package manager's owning project. */
+  retainedDependencyRoot?: string;
   onProgress?: () => void | Promise<void>;
 }): Promise<UpdateCandidatePluginTreePlan> {
   return await withUpdateCandidatePluginFileHashing((hashFile) =>
@@ -231,6 +229,10 @@ async function prepareUpdateCandidatePluginTreesWithHashing(
     if (!isRecord(manifest)) {
       return;
     }
+    const boundary =
+      params.retainedDependencyRoot && isPathInside(params.retainedDependencyRoot, directory)
+        ? params.retainedDependencyRoot
+        : undefined;
     const names = new Set<string>();
     for (const field of ["dependencies", "optionalDependencies", "peerDependencies"]) {
       const dependencies = manifest[field];
@@ -272,7 +274,7 @@ async function prepareUpdateCandidatePluginTreesWithHashing(
             break;
           }
         }
-        if (path.dirname(ancestor) === ancestor) {
+        if (ancestor === boundary || path.dirname(ancestor) === ancestor) {
           // Missing optional dependencies remain absent; validation owns required ones.
           break;
         }
@@ -401,12 +403,7 @@ async function prepareUpdateCandidatePluginTreesWithHashing(
       if (!exists) {
         continue;
       }
-      const real = await fs.realpath(source).catch((error: unknown) => {
-        if (hasNodeErrorCode(error, "ENOENT")) {
-          return undefined;
-        }
-        throw error;
-      });
+      const real = await fs.realpath(source).catch(ignoreMissingUpdateCandidateFile);
       discovered.push({ source, real });
     }
     hosts.clear();

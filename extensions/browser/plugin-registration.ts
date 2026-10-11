@@ -60,16 +60,8 @@ function deriveChatTypeFromSessionKey(
   sessionKey: string | undefined,
 ): "direct" | "group" | "channel" | undefined {
   const tokens = new Set(sessionKey?.toLowerCase().split(":") ?? []);
-  if (tokens.has("group")) {
-    return "group";
-  }
-  if (tokens.has("channel")) {
-    return "channel";
-  }
-  if (tokens.has("direct") || tokens.has("dm")) {
-    return "direct";
-  }
-  return undefined;
+  const chatType = (["group", "channel", "direct"] as const).find((kind) => tokens.has(kind));
+  return chatType ?? (tokens.has("dm") ? "direct" : undefined);
 }
 
 type BrowserToolOptions = NonNullable<

@@ -17,6 +17,138 @@ function collectVisibleText(output: OpenAICompletionsOutput): string {
 }
 
 describe("openai completions stream", () => {
+  it.each([false, true])(
+    "publishes cumulative tool input before execution (direct=%s)",
+    async (direct) => {
+      const model = makeCompletionsModel();
+      const output = createAssistantOutput(model);
+      const snapshots: unknown[] = [];
+      await processCompletionsStream(
+        streamChunks([
+          makeCompletionsChunk({
+            tool_calls: [
+              {
+                index: 0,
+                id: "write-progress",
+                type: "function",
+                function: { name: "write", arguments: '{"content":"first' },
+              },
+            ],
+          }),
+          makeCompletionsChunk({
+            tool_calls: [
+              {
+                index: 1,
+                id: "edit-progress",
+                type: "function",
+                function: { name: "edit", arguments: '{"newText":"second' },
+              },
+            ],
+          }),
+          makeCompletionsChunk({ tool_calls: [{ index: 0, function: { arguments: ' line"}' } }] }),
+          makeCompletionsChunk({ tool_calls: [{ index: 1, function: { arguments: ' line"}' } }] }),
+          makeCompletionsChunk({}, "tool_calls"),
+        ]),
+        output,
+        model,
+        {
+          push: (event) => {
+            if (event.type === "toolcall_delta") {
+              snapshots.push(structuredClone(event.partial.content[event.contentIndex]));
+            }
+          },
+        },
+        direct
+          ? { mode: "direct", beforeContentBlock() {}, provisionalCommentaryTags: new Map() }
+          : undefined,
+      );
+      expect(snapshots).toEqual([
+        expect.objectContaining({ id: "write-progress", partialJson: '{"content":"first' }),
+        expect.objectContaining({ id: "edit-progress", partialJson: '{"newText":"second' }),
+        expect.objectContaining({ id: "write-progress", partialJson: '{"content":"first line"}' }),
+        expect.objectContaining({ id: "edit-progress", partialJson: '{"newText":"second line"}' }),
+      ]);
+      expect(output.content).toEqual([
+        {
+          type: "toolCall",
+          id: "write-progress",
+          name: "write",
+          arguments: { content: "first line" },
+        },
+        {
+          type: "toolCall",
+          id: "edit-progress",
+          name: "edit",
+          arguments: { newText: "second line" },
+        },
+      ]);
+    },
+  );
+
+  it.each([
+    ["length", ["<thi", "nk>unfinished reasoning"], ""],
+    ["length", ["Answer. ", "<reasoning>unfinished\n\nreasoning"], "Answer. "],
+    ["content_filter", ["<thinking>unfinished reasoning"], ""],
+    ["stop", ["<thi", "nk>Recovered answer."], "Recovered answer."],
+    ["stop", ["Use <think> in prose"], "Use <think> in prose"],
+    ["length", ["<think>hidden</think>", "Answer."], "Answer."],
+    ["length", ["Use `<think>` in code. <thi"], "Use `<think>` in code. <thi"],
+    ["length", ["Answer </think> remains visible."], "Answer </think> remains visible."],
+  ] as const)("finalizes content-only tags on %s: %j", async (finishReason, content, expected) => {
+    const model = makeCompletionsModel();
+    const output = createAssistantOutput(model);
+    const events: CapturedStreamEvent[] = [];
+
+    await processCompletionsStream(
+      streamChunks([
+        ...content.map((text) => makeCompletionsChunk({ content: text })),
+        makeCompletionsChunk({}, finishReason),
+      ]),
+      output,
+      model,
+      { push: (event) => events.push(event) },
+      { emitReasoning: false },
+    );
+
+    expect(collectVisibleText(output)).toBe(expected);
+    expect(
+      events
+        .filter((event) => event.type === "text_delta")
+        .map((event) => event.delta)
+        .join(""),
+    ).toBe(expected);
+    expect(output.stopReason).toBe(finishReason === "content_filter" ? "error" : finishReason);
+  });
+
+  it.each(["abort", "error"] as const)("does not recover unfinished tags after %s", async (end) => {
+    const model = makeCompletionsModel();
+    const output = createAssistantOutput(model);
+    const abort = new AbortController();
+    const events: CapturedStreamEvent[] = [];
+    async function* interruptedStream() {
+      yield makeCompletionsChunk({ content: "Answer. <think>unfinished reasoning" });
+      if (end === "abort") {
+        abort.abort();
+      } else {
+        throw new Error("Provider disconnected");
+      }
+    }
+
+    await expect(
+      processCompletionsStream(
+        interruptedStream(),
+        output,
+        model,
+        { push: (event) => events.push(event) },
+        { signal: abort.signal, emitReasoning: false },
+      ),
+    ).rejects.toThrow(end === "abort" ? "Request was aborted" : "Provider disconnected");
+    expect(collectVisibleText(output)).toBe("Answer. ");
+    expect(
+      events.filter((event) => event.type === "text_delta").map((event) => event.delta),
+    ).toEqual(["Answer. "]);
+  });
+
   it("partitions inline reasoning tags out of OpenAI-compatible visible text", async () => {
     const model = makeCompletionsModel({
       id: "MiniMax-M2.7",

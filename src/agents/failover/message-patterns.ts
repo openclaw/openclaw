@@ -79,6 +79,11 @@ const AMBIGUOUS_AUTH_ERROR_PATTERNS = [
   "permission_error",
 ] as const satisfies readonly ErrorPattern[];
 
+// Diagnostic counts and identifiers can equal 401/403 without an authentication failure.
+// Require a leading status, HTTP/status context, or a structured status/code field.
+const AUTH_HTTP_STATUS_RE =
+  /^\s*(?:401|403)\b|\b(?:http(?:[ _-]?status)?|status(?:[ _-]?code)?|response(?:[ _-]?code)?|error(?:[ _-]?code)?)\b[\s:=#"'(]{0,6}(?:401|403)\b|["'](?:status|code)["']\s*:\s*["']?(?:401|403)\b/i;
+
 const COMMON_AUTH_ERROR_PATTERNS = [
   "incorrect api key",
   "invalid token",
@@ -92,8 +97,7 @@ const COMMON_AUTH_ERROR_PATTERNS = [
   "insufficient permission",
   /missing scopes?:/i,
   "expired",
-  /\b401\b/,
-  /\b403\b/,
+  AUTH_HTTP_STATUS_RE,
   "no credentials found",
   "no api key found",
   /\bfailed to (?:extract|parse|validate|decode)\b.*\btoken\b/,
@@ -295,6 +299,19 @@ function matchesErrorPatterns(raw: string, patterns: readonly ErrorPattern[]): b
 
 export function matchesFormatErrorPattern(raw: string): boolean {
   return matchesErrorPatterns(raw, ERROR_PATTERNS.format);
+}
+export function isUnsupportedReasoningEffortParameterError(raw: string): boolean {
+  if (/supported values(?: are)?:/i.test(raw)) {
+    return false;
+  }
+  return (
+    /\b(?:unknown|unrecognized|unsupported|unexpected)\s+(?:field|parameter|(?:keyword\s+)?argument)\s*:?\s*["'`\\]*reasoning_effort(?![\w./-])/i.test(
+      raw,
+    ) ||
+    /(?<![\w./-])reasoning_effort["'`\\]*\s+(?:parameter\s+)?(?:is\s+)?(?:not supported|unsupported)\b/i.test(
+      raw,
+    )
+  );
 }
 export function isSessionTranscriptValidationErrorMessage(raw: string): boolean {
   return /\b(?:invalid session transcript entry|persisted legacy session transcripts require doctor\/import migration)\b/i.test(

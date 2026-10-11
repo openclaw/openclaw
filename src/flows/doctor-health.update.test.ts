@@ -25,7 +25,9 @@ const mocks = vi.hoisted(() => ({
   updateCommand: vi.fn<typeof import("../cli/update-cli/update-command.js").updateCommand>(),
   triageCommand: vi.fn(async () => undefined),
   outro: vi.fn(),
+  confirmCustody: vi.fn<() => Promise<boolean>>(),
   config: vi.fn<() => OpenClawConfig>(),
+  disposeConfig: vi.fn<() => Promise<void>>(async () => undefined),
   runContributions: vi.fn<(ctx: DoctorHealthFlowContext) => Promise<void>>(),
   packageRoot: vi.fn<() => string | undefined>(),
   stateMigrationReceipts: [] as LegacyStateMigrationStepReceipt[],
@@ -45,6 +47,7 @@ vi.mock("../commands/doctor-prompter.js", async (importOriginal) => {
     createDoctorPrompter: (params: Parameters<typeof actual.createDoctorPrompter>[0]) => ({
       ...actual.createDoctorPrompter(params),
       confirm: async () => true,
+      confirmRuntimeRepair: mocks.confirmCustody,
     }),
   };
 });
@@ -82,8 +85,10 @@ vi.mock("../commands/doctor-platform-notes.js", () => ({
   noteStartupOptimizationHints: () => undefined,
 }));
 
+// mock-isolation: Exercise Doctor flow outcomes without config preparation or plugin resources.
 vi.mock("../commands/doctor-config-flow.js", () => ({
   loadAndMaybeMigrateDoctorConfig: async () => ({
+    [Symbol.asyncDispose]: mocks.disposeConfig,
     cfg: mocks.config(),
     shouldWriteConfig: true,
     stateMigrationStepReceipts: mocks.stateMigrationReceipts,
@@ -116,9 +121,11 @@ describe("runDoctorHealthFlow update outcomes", () => {
     vi.stubEnv("OPENCLAW_SUPERVISOR_MODE", undefined);
     vi.stubEnv("OPENCLAW_UPDATE_IN_PROGRESS", undefined);
     mocks.offerUpdate.mockReset().mockResolvedValue({ updated: false });
+    mocks.confirmCustody.mockReset().mockResolvedValue(true);
     mocks.updateCommand.mockReset();
     mocks.triageCommand.mockReset().mockResolvedValue(undefined);
     mocks.config.mockReset().mockReturnValue({});
+    mocks.disposeConfig.mockClear();
     mocks.packageRoot.mockReturnValue(undefined);
     mocks.outro.mockClear();
     mocks.runContributions.mockReset().mockResolvedValue(undefined);
@@ -220,6 +227,7 @@ describe("runDoctorHealthFlow update outcomes", () => {
         const inspectionWarning =
           "core/doctor/auth-profiles [update-inspection-deferred]: Run openclaw doctor after activation.";
         mocks.runContributions.mockImplementation(async (ctx) => {
+          expect(mocks.disposeConfig).not.toHaveBeenCalled();
           ctx.updateWarnings = [inspectionWarning];
           ctx.updateBudget = {
             agentCount: 480,
@@ -260,6 +268,7 @@ describe("runDoctorHealthFlow update outcomes", () => {
           } else {
             await runDoctorHealthFlow(runtime, { nonInteractive: true });
           }
+          expect(mocks.disposeConfig).toHaveBeenCalledOnce();
           const result = await consumeUpdatePostInstallDoctorResult(resultPath);
           expect(result?.status).toBe(refused ? "error" : "ok");
           expect(result?.warnings).toHaveLength(refused ? 2 : noisy ? 32 : 4);
@@ -296,6 +305,12 @@ describe("runDoctorHealthFlow update outcomes", () => {
         typeof import("../commands/doctor-update.js")
       >("../commands/doctor-update.js");
       mocks.offerUpdate.mockImplementation(maybeOfferUpdateBeforeDoctor);
+      // Custody and real SQLite settlement are covered by the managed flow fixture.
+      // This owner exercises update handoff and consent ordering without another repair boot.
+      const maintenance = await import("../commands/doctor-maintenance.js");
+      const beginMaintenance = vi
+        .spyOn(maintenance, "beginDoctorMaintenance")
+        .mockResolvedValue(undefined);
       const stdinIsTty = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
       Object.defineProperty(process.stdin, "isTTY", { configurable: true, value: true });
       try {
@@ -329,6 +344,9 @@ describe("runDoctorHealthFlow update outcomes", () => {
             await doctor;
           }
           expect(mocks.updateCommand).toHaveBeenCalledOnce();
+          expect(mocks.offerUpdate).toHaveBeenCalledOnce();
+          expect(mocks.confirmCustody).not.toHaveBeenCalled();
+          expect(beginMaintenance).not.toHaveBeenCalled();
           expect(mocks.config).not.toHaveBeenCalled();
           expect(mocks.runContributions).not.toHaveBeenCalled();
           expect(mocks.outro).not.toHaveBeenCalledWith("Doctor complete.");

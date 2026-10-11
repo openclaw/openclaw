@@ -1,7 +1,13 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import {
+  projectAmbientTranscriptWatermark,
+  type AmbientTranscriptWatermarkUpdate,
+} from "./ambient-transcript-watermark-projection.js";
 import { buildRestartRecoveryClaimCleanupPatch } from "./restart-recovery-state.js";
 import { preserveSqliteSameKeySessionRolloverLineage } from "./session-entry-lineage.js";
 import { projectCompactionAccountingPatch } from "./session-entry-projection.js";
+import type { buildSessionCreationStamp } from "./session-entry-provenance.js";
+import { preserveGenerationPrivateFields } from "./session-entry-public-patch.js";
 import {
   projectSessionEntryUsageUpdate,
   type SessionEntryUsageUpdate,
@@ -27,6 +33,13 @@ type ExpectedSession = Pick<SessionEntry, "sessionId"> &
 /** Closed internal operations; arbitrary updater callbacks retain prepare/CAS. */
 export type SessionEntryPatchOperation = (
   | { kind: "fields"; patch: Partial<SessionEntry> }
+  | { kind: "public-fields"; patch: Partial<SessionEntry> }
+  | { kind: "ambient-transcript-watermark"; watermark: AmbientTranscriptWatermarkUpdate }
+  | {
+      kind: "ensure-identity";
+      sessionId: string;
+      creation: ReturnType<typeof buildSessionCreationStamp>;
+    }
   | { kind: "usage-accounting"; usage: SessionEntryUsageUpdate }
   | { kind: "pending-final-settle"; settlement: PendingFinalDeliverySettlementInput }
   | {
@@ -60,26 +73,43 @@ export type SessionEntryPatchOperation = (
       kind: "compaction-accounting";
       accounting: Parameters<typeof projectCompactionAccountingPatch>[1];
     }
-) & { expected?: ExpectedSession };
+) & { expected?: ExpectedSession | null };
 
 export function reduceSessionEntryPatch(
   operation: SessionEntryPatchOperation,
   entry: SessionEntry,
+  existingEntry: SessionEntry | undefined,
 ): Partial<SessionEntry> | null {
   const expected = operation.expected;
+  const expectedEntry = operation.kind === "public-fields" ? existingEntry : entry;
   if (
-    expected &&
-    (entry.sessionId !== expected.sessionId ||
-      (Object.hasOwn(expected, "lifecycleRevision") &&
-        entry.lifecycleRevision !== expected.lifecycleRevision) ||
-      (Object.hasOwn(expected, "activeWriterRunId") &&
-        entry.activeWriterRunId !== expected.activeWriterRunId))
+    (expected === null && existingEntry !== undefined) ||
+    (expected &&
+      (!expectedEntry ||
+        expectedEntry.sessionId !== expected.sessionId ||
+        (Object.hasOwn(expected, "lifecycleRevision") &&
+          expectedEntry.lifecycleRevision !== expected.lifecycleRevision) ||
+        (Object.hasOwn(expected, "activeWriterRunId") &&
+          expectedEntry.activeWriterRunId !== expected.activeWriterRunId)))
   ) {
+    if (operation.kind === "public-fields") {
+      throw new Error("Session entry changed before the conditional patch committed");
+    }
     return null;
   }
   switch (operation.kind) {
+    case "ensure-identity":
+      return existingEntry?.sessionId
+        ? null
+        : existingEntry
+          ? { sessionId: operation.sessionId }
+          : { ...operation.creation, sessionId: operation.sessionId };
     case "fields":
       return operation.patch;
+    case "public-fields":
+      return preserveGenerationPrivateFields(entry, operation.patch);
+    case "ambient-transcript-watermark":
+      return projectAmbientTranscriptWatermark(entry, operation.watermark);
     case "compaction-accounting":
       return projectCompactionAccountingPatch(entry, operation.accounting);
     case "usage-accounting":

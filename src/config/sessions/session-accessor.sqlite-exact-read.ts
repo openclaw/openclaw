@@ -59,6 +59,12 @@ type ResolvedSqliteSessionEntry = {
   normalizedKey: string;
 };
 
+type SessionEntryFactReader = (
+  database: Pick<OpenClawAgentDatabase, "agentId" | "db" | "path">,
+  sessionKey: string,
+  projection: SessionEntryReadScope["projection"],
+) => SessionEntry | undefined;
+
 /** Private prepared reads must reject a different physical owner at the captured path. */
 export function loadSessionEntryReadOnlyInScope(
   scope: SessionEntryReadScope & { databaseAgentId: string },
@@ -82,6 +88,8 @@ export function resolveSessionEntry(
     continuation?: CanonicalSessionReaderContinuation;
     onReadSource?: (source: CapturedSessionEntryReadSource) => void;
     onReadError?: (error: unknown, database: OpenClawAgentDatabase["db"]) => never;
+    readFacts?: SessionEntryFactReader;
+    capturedDatabase?: Parameters<SessionEntryFactReader>[0];
   } = {},
 ): ResolvedSqliteSessionEntry {
   // A prepared reader retains its physical locator; rediscovery would escape that custody.
@@ -106,9 +114,9 @@ export function resolveSessionEntry(
   const read = (
     database: Pick<OpenClawAgentDatabase, "agentId" | "db" | "path">,
   ): ResolvedSqliteSessionEntry => {
-    let selected: ReturnType<typeof readQualifiedSessionEntryRow> = undefined;
+    let selected: { entry: SessionEntry | null; row: { session_key: string } } | undefined;
     let failure: { error: unknown } | undefined;
-    if (options.onReadError) {
+    if (options.onReadError && !options.readFacts) {
       try {
         // Let the admission owner's snapshot-required control exception reach that owner.
         assertCanonicalSqliteSessionKeysCurrent(database);
@@ -122,13 +130,18 @@ export function resolveSessionEntry(
     if (!failure) {
       try {
         const projection = options.readOnly ? options.projection : "full";
-        selected =
-          options.keyFormat === "agent-qualified"
-            ? readQualifiedSessionEntryRow(database, resolved.agentId, resolved.sessionKey, {
-                allowCanonicalMove: options.allowCanonicalMove,
-                projection,
-              })
-            : readSessionEntryRow(database, resolved.sessionKey, projection);
+        if (options.readFacts) {
+          const entry = options.readFacts(database, resolved.sessionKey, projection);
+          selected = entry ? { entry, row: { session_key: resolved.sessionKey } } : undefined;
+        } else {
+          selected =
+            options.keyFormat === "agent-qualified"
+              ? readQualifiedSessionEntryRow(database, resolved.agentId, resolved.sessionKey, {
+                  allowCanonicalMove: options.allowCanonicalMove,
+                  projection,
+                })
+              : readSessionEntryRow(database, resolved.sessionKey, projection);
+        }
       } catch (error) {
         if (!options.onReadError) {
           throw error;
@@ -159,13 +172,16 @@ export function resolveSessionEntry(
     };
   };
   if (options.readOnly) {
-    const result = withOpenClawAgentDatabaseReadOnly(
-      (database) =>
-        readWithCanonicalSessionReaderContinuation(database, options.continuation, () =>
-          read(database),
-        ),
-      toDatabaseOptions(resolved),
-    );
+    const readOnly = (database: Parameters<SessionEntryFactReader>[0]) =>
+      options.readFacts
+        ? read(database)
+        : readWithCanonicalSessionReaderContinuation(database, options.continuation, () =>
+            read(database),
+          );
+    if (options.capturedDatabase) {
+      return readOnly(options.capturedDatabase);
+    }
+    const result = withOpenClawAgentDatabaseReadOnly(readOnly, toDatabaseOptions(resolved));
     return result.found
       ? result.value
       : { existing: undefined, legacyKeys: [], normalizedKey: resolved.sessionKey };
@@ -202,6 +218,8 @@ export function loadSessionEntryReadOnlyResultInScope(
   scope: SessionEntryReadScope & { databaseAgentId?: string },
   continuation?: CanonicalSessionReaderContinuation,
   onReadSource?: (source: CapturedSessionEntryReadSource) => void,
+  readFacts?: SessionEntryFactReader,
+  capturedDatabase?: Parameters<SessionEntryFactReader>[0],
 ): Result<SessionEntry | undefined, unknown> {
   try {
     return ok(
@@ -211,6 +229,8 @@ export function loadSessionEntryReadOnlyResultInScope(
         projection: scope.projection,
         continuation,
         onReadSource,
+        readFacts,
+        capturedDatabase,
         onReadError(error, database) {
           throw new SessionEntryDataReadError(error, database);
         },
@@ -351,7 +371,10 @@ export function loadExactSessionEntryCandidates(
 
 /** Loads a visible current ID, falling back to legacy trimmed IDs only on an exact miss. */
 export function loadSessionEntryByIdReadOnly(
-  scope: Omit<SessionEntryReadScope, "sessionKey"> & { sessionId: string },
+  scope: Omit<SessionEntryReadScope, "sessionKey"> & {
+    sessionId: string;
+    orderBy?: "updatedAt";
+  },
 ): ExactSessionEntry | undefined {
   const resolved = resolveSqliteScope({ ...scope, sessionKey: "" });
   const result = withOpenClawAgentDatabaseReadOnly(

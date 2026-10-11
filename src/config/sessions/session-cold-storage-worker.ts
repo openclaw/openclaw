@@ -11,6 +11,10 @@ import {
   getNodeSqliteKysely,
   iterateSqliteQuerySync,
 } from "../../infra/kysely-sync.js";
+import {
+  sqliteSessionIdWriteScope,
+  withSqliteDatabaseWriteScope,
+} from "../../infra/sqlite-database-admission.js";
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
@@ -25,9 +29,10 @@ import {
   readSessionStateDeleteSnapshot,
   sqliteSessionStateDeleteSnapshotsEqual,
 } from "./session-accessor.sqlite-delete-snapshot.js";
-import type { SessionStateDeleteSnapshot } from "./session-accessor.sqlite-delete-snapshot.types.js";
 import { resolveTranscriptAppendRefusal } from "./session-accessor.sqlite-transcript-write-guard.js";
 import {
+  decodeSessionColdRecords,
+  MAX_COLD_ARCHIVE_BYTES,
   readVerifiedSessionColdArchive,
   resolveSessionColdArchivePath,
   sessionColdRecordSchema,
@@ -51,9 +56,18 @@ import {
   readSessionColdTranscript,
   type SessionColdArchive,
 } from "./session-cold-storage-state.js";
-import type { SessionColdMutationResult } from "./session-cold-storage.types.js";
+import type {
+  SessionColdExternalization,
+  SessionColdMutationResult,
+  SessionColdPlan,
+  SessionColdPrepared,
+} from "./session-cold-storage.types.js";
 import type { SessionSourceValidation } from "./session-source-authority.js";
 import { readSessionSourceValidation } from "./session-source-predicate.worker.js";
+import {
+  publishUnchangedSessionTranscriptAuthority,
+  readStagedSessionTranscriptAuthority,
+} from "./session-transcript-authority.js";
 import {
   createSessionTranscriptFtsInserter,
   deleteSessionTranscriptFtsRowsInTransaction,
@@ -66,22 +80,6 @@ import {
 import { resolveSessionWorkStartError } from "./session-work-start.js";
 import { prepareTranscriptPayload, transcriptEventJsonSql } from "./transcript-payload.js";
 
-const MAX_COLD_ARCHIVE_BYTES = 64 * 1024 * 1024;
-
-type SessionColdPlan = {
-  databaseOptions: OpenClawAgentDatabaseOptions & { path: string };
-  sessionId: string;
-  snapshot: SessionStateDeleteSnapshot;
-};
-type SessionColdPrepared = {
-  plan: SessionColdPlan;
-  archive: SessionColdArchive;
-  envelopeBytes: number;
-};
-type SessionColdExternalization = {
-  archive: Omit<SessionColdArchive, "archive_blob">;
-  envelopeBytes: number;
-};
 export type SessionColdPreparationWorkerData = {
   type: "sqlite-transcript-archive-v2";
   operation: "cold-prepare";
@@ -420,35 +418,6 @@ export async function prepareSessionColdBatchInWorker(
   return result;
 }
 
-function decodeSessionColdRecords(
-  bytes: Uint8Array,
-  archive: SessionColdArchive,
-): SessionColdRecord[] {
-  const records = zlib
-    .zstdDecompressSync(bytes, { maxOutputLength: MAX_COLD_ARCHIVE_BYTES })
-    .toString("utf8")
-    .trimEnd()
-    .split("\n")
-    .map((line) => sessionColdRecordSchema.parse(JSON.parse(line)));
-  const header = records[0];
-  const events = records.filter((record) => record.kind === "event");
-  if (
-    header?.kind !== "header" ||
-    header.sessionId !== archive.session_id ||
-    header.generation !== archive.generation ||
-    records.slice(1).some((record) => record.kind === "header") ||
-    events.length !== archive.event_count ||
-    events.at(-1)?.row.seq !== archive.last_seq ||
-    events.reduce((sum, event) => sum + Buffer.byteLength(event.row.event_json), 0) +
-      events.length -
-      1 !==
-      archive.raw_bytes
-  ) {
-    throw new Error("Cold transcript archive metadata does not match its contents");
-  }
-  return records;
-}
-
 export async function prepareSessionColdRestoreInWorker(
   plan: Extract<SessionColdMutationPlan, { kind: "cold-restore" }>,
 ): Promise<SessionColdRecord[]> {
@@ -523,19 +492,24 @@ export function mutateSessionColdTranscriptInWorker(
             continue;
           }
           verifyPublishedSessionColdArchive(plan.databaseOptions.path, prepared.archive);
-          executeSqliteQuerySync(
-            database.db,
-            db.insertInto("session_transcript_cold_archives").values(prepared.archive),
-          );
-          executeSqliteQuerySync(
-            database.db,
-            db.deleteFrom("transcript_events").where("session_id", "=", sessionId),
-          );
-          archivedIds.push(sessionId);
-          executeSqliteQuerySync(
-            database.db,
-            db.deleteFrom("session_transcript_index_state").where("session_id", "=", sessionId),
-          );
+          withSqliteDatabaseWriteScope(database.db, [sqliteSessionIdWriteScope(sessionId)], () => {
+            executeSqliteQuerySync(
+              database.db,
+              db.insertInto("session_transcript_cold_archives").values(prepared.archive),
+            );
+            executeSqliteQuerySync(
+              database.db,
+              db.deleteFrom("transcript_events").where("session_id", "=", sessionId),
+            );
+            archivedIds.push(sessionId);
+            executeSqliteQuerySync(
+              database.db,
+              db.deleteFrom("session_transcript_index_state").where("session_id", "=", sessionId),
+            );
+          });
+          if (fresh.sessionKey) {
+            publishUnchangedSessionTranscriptAuthority(database, fresh.sessionKey);
+          }
           result.archivedTranscripts++;
         }
         if (archivedIds.length > 0) {
@@ -553,12 +527,17 @@ export function mutateSessionColdTranscriptInWorker(
             continue;
           }
           verifyPublishedSessionColdArchive(plan.databaseOptions.path, archive);
-          executeSqliteQuerySync(
+          withSqliteDatabaseWriteScope(
             database.db,
-            db
-              .updateTable("session_transcript_cold_archives")
-              .set({ storage: "file", archive_blob: null })
-              .where("session_id", "=", archive.session_id),
+            [sqliteSessionIdWriteScope(archive.session_id)],
+            () =>
+              executeSqliteQuerySync(
+                database.db,
+                db
+                  .updateTable("session_transcript_cold_archives")
+                  .set({ storage: "file", archive_blob: null })
+                  .where("session_id", "=", archive.session_id),
+              ),
           );
           result.externalizedTranscripts++;
         }
@@ -626,57 +605,61 @@ export function mutateSessionColdTranscriptInWorker(
         }
         const session_id = plan.sessionId;
         const insertFts = createSessionTranscriptFtsInserter(database.db, session_id);
-        for (const record of records) {
-          switch (record.kind) {
-            case "header":
-              break;
-            case "event":
-              executeSqliteQuerySync(
-                database.db,
-                db.insertInto("transcript_events").values({
-                  session_id,
-                  seq: record.row.seq,
-                  created_at: record.row.created_at,
-                  ...prepareTranscriptPayload(database.db, record.row.event_json),
-                }),
-              );
-              break;
-            case "identity":
-              executeSqliteQuerySync(
-                database.db,
-                db.insertInto("transcript_event_identities").values({ session_id, ...record.row }),
-              );
-              break;
-            case "active":
-              executeSqliteQuerySync(
-                database.db,
-                db
-                  .insertInto("session_transcript_active_events")
-                  .values({ session_id, ...record.row }),
-              );
-              break;
-            case "index":
-              executeSqliteQuerySync(
-                database.db,
-                db
-                  .insertInto("session_transcript_index_state")
-                  .values({ session_id, ...record.row }),
-              );
-              break;
-            case "fts":
-              insertFts({
-                messageId: record.row.message_id,
-                text: record.row.text,
-                role: record.row.role,
-                timestamp: record.row.timestamp,
-              });
-              break;
+        withSqliteDatabaseWriteScope(database.db, [sqliteSessionIdWriteScope(session_id)], () => {
+          for (const record of records) {
+            switch (record.kind) {
+              case "header":
+                break;
+              case "event":
+                executeSqliteQuerySync(
+                  database.db,
+                  db.insertInto("transcript_events").values({
+                    session_id,
+                    seq: record.row.seq,
+                    created_at: record.row.created_at,
+                    ...prepareTranscriptPayload(database.db, record.row.event_json),
+                  }),
+                );
+                break;
+              case "identity":
+                executeSqliteQuerySync(
+                  database.db,
+                  db
+                    .insertInto("transcript_event_identities")
+                    .values({ session_id, ...record.row }),
+                );
+                break;
+              case "active":
+                executeSqliteQuerySync(
+                  database.db,
+                  db
+                    .insertInto("session_transcript_active_events")
+                    .values({ session_id, ...record.row }),
+                );
+                break;
+              case "index":
+                executeSqliteQuerySync(
+                  database.db,
+                  db
+                    .insertInto("session_transcript_index_state")
+                    .values({ session_id, ...record.row }),
+                );
+                break;
+              case "fts":
+                insertFts({
+                  messageId: record.row.message_id,
+                  text: record.row.text,
+                  role: record.row.role,
+                  timestamp: record.row.timestamp,
+                });
+                break;
+            }
           }
-        }
-        executeSqliteQuerySync(
-          database.db,
-          db.deleteFrom("session_transcript_cold_archives").where("session_id", "=", session_id),
-        );
+          executeSqliteQuerySync(
+            database.db,
+            db.deleteFrom("session_transcript_cold_archives").where("session_id", "=", session_id),
+          );
+        });
         result.restored = true;
         result.sessionKey = executeSqliteQueryTakeFirstSync(
           database.db,
@@ -686,6 +669,10 @@ export function mutateSessionColdTranscriptInWorker(
             .where("session_id", "=", session_id),
         )?.session_key;
       }
+      if (result.restored && result.sessionKey) {
+        publishUnchangedSessionTranscriptAuthority(database, result.sessionKey);
+      }
+      result.transcriptPublication = readStagedSessionTranscriptAuthority(database);
       onCommit(database, sourceValidation);
       sourceGuard?.assertForeign();
       return result;
