@@ -64,7 +64,7 @@ describe("command announcement session policy", () => {
         abortSignal: new AbortController().signal,
         completion: { job, runStartedAt: 1000, deliveryAttemptFence: null },
       });
-      expect(result).toEqual({ status: "sent" });
+      expect(result).toEqual({ status: "sent", payloads: [] });
       expect(mocks.loadSessionEntryReadOnly).not.toHaveBeenCalled();
       expect(mocks.warn).not.toHaveBeenCalled();
       expect(mocks.bindOutboundSessionEntry).not.toHaveBeenCalled();

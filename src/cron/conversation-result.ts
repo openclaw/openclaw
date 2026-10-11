@@ -50,13 +50,33 @@ export type CronResultConversation = {
   diagnostics?: CronRunDiagnostics;
 };
 
-export async function resolveCronResultConversation(params: {
+type CronResultConversationParams = {
   config: OpenClawConfig;
   agentId: string;
   delivery: DeliveryTargetResolution;
   source?: CronConversationResultParams["conversation"];
+  sourceSessionKey?: string;
   deliveryAttemptFence: CronCompletionDeliveryFence | null;
-}): Promise<CronResultConversation> {
+};
+
+/** Resolve existing context without creating a destination or changing its remembered route. */
+export async function resolveCronResultConversation(
+  params: CronResultConversationParams,
+): Promise<CronResultConversation> {
+  return resolveCronResultConversationEntry(params, false);
+}
+
+/** Bind destination context only after a confirmed external delivery. */
+export async function bindCronResultConversation(
+  params: CronResultConversationParams,
+): Promise<CronResultConversation> {
+  return resolveCronResultConversationEntry(params, true);
+}
+
+async function resolveCronResultConversationEntry(
+  params: CronResultConversationParams,
+  bindDestination: boolean,
+): Promise<CronResultConversation> {
   if (!params.delivery.ok) {
     return { conversation: params.source };
   }
@@ -85,6 +105,7 @@ export async function resolveCronResultConversation(params: {
     };
   }
   if (
+    !bindDestination &&
     params.source &&
     route.sessionKey ===
       toAgentStoreSessionKey({
@@ -95,23 +116,30 @@ export async function resolveCronResultConversation(params: {
   ) {
     return { conversation: { ...params.source, sessionKey: route.sessionKey } };
   }
-  await params.deliveryAttemptFence?.beforeAttempt();
-  await bindOutboundSessionEntry({
-    cfg: params.config,
-    channel: params.delivery.channel,
-    accountId: params.delivery.accountId,
-    route,
-    assertCommitAllowed: () => params.deliveryAttemptFence?.assertCurrent(),
+  const storePath = resolveSessionStorePathCore(params.config.session?.store, {
+    agentId: params.agentId,
   });
+  if (bindDestination) {
+    await params.deliveryAttemptFence?.beforeAttempt();
+    await bindOutboundSessionEntry({
+      cfg: params.config,
+      channel: params.delivery.channel,
+      accountId: params.delivery.accountId,
+      route,
+      sourceSessionKey: params.sourceSessionKey,
+      assertCommitAllowed: () => params.deliveryAttemptFence?.assertCurrent(),
+    });
+  }
   const entry = await readSessionEntryInWorker({
     sessionKey: route.sessionKey,
-    storePath: resolveSessionStorePathCore(params.config.session?.store, {
-      agentId: params.agentId,
-    }),
+    storePath,
     readConsistency: "latest",
   });
   if (!entry) {
-    throw new Error("cron destination conversation is unavailable");
+    if (bindDestination) {
+      throw new Error("cron destination conversation is unavailable");
+    }
+    return {};
   }
   return {
     conversation: {

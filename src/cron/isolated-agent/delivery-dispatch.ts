@@ -2,7 +2,6 @@
 import type { NormalizeReplySkipReason } from "../../auto-reply/reply/normalize-reply-skip-reason.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import { resolveControlUiSessionUrl } from "../../config/control-ui-link-base.js";
-import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { toAgentStoreSessionKey } from "../../routing/session-key.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
@@ -243,38 +242,28 @@ export async function dispatchCronDelivery(
   const conversationRuntime = await conversationResult.load();
   let conversationResolution: CronResultConversation = {};
   let conversationError: string | undefined;
+  const conversationParams = {
+    config: params.cfgWithAgentDefaults,
+    agentId: params.agentId,
+    delivery: params.resolvedDelivery,
+    source:
+      params.sourceSessionKey && params.sourceSessionGeneration
+        ? { sessionKey: params.sourceSessionKey, ...params.sourceSessionGeneration }
+        : undefined,
+    sourceSessionKey: params.runSessionKey,
+    deliveryAttemptFence: params.deliveryAttemptFence,
+  };
   try {
-    conversationResolution = await conversationRuntime.resolveCronResultConversation({
-      config: params.cfgWithAgentDefaults,
-      agentId: params.agentId,
-      delivery: params.resolvedDelivery,
-      source:
-        params.sourceSessionKey && params.sourceSessionGeneration
-          ? { sessionKey: params.sourceSessionKey, ...params.sourceSessionGeneration }
-          : undefined,
-      deliveryAttemptFence: params.deliveryAttemptFence,
-    });
+    conversationResolution =
+      await conversationRuntime.resolveCronResultConversation(conversationParams);
   } catch (error) {
     if (!params.resolvedDelivery.ok && !sentByTool) {
       return failTarget(formatErrorMessage(error));
     }
     conversationError = formatErrorMessage(error);
   }
-  const { conversation } = conversationResolution;
+  let { conversation } = conversationResolution;
   diagnostics = conversationResolution.diagnostics;
-  const executionOwnsResult =
-    params.job.sessionTarget.startsWith("session:") &&
-    conversation &&
-    toAgentStoreSessionKey({
-      agentId: params.agentId,
-      requestKey: conversation.sessionKey,
-      mainKey: params.cfgWithAgentDefaults.session?.mainKey,
-    }) ===
-      toAgentStoreSessionKey({
-        agentId: params.agentId,
-        requestKey: params.agentSessionKey,
-        mainKey: params.cfgWithAgentDefaults.session?.mainKey,
-      });
   if (!conversation && !params.resolvedDelivery.ok && !sentByTool) {
     if (params.job.sessionTarget === "current") {
       return failTarget("current cron delivery is missing its source session binding");
@@ -303,7 +292,7 @@ export async function dispatchCronDelivery(
         jobId: params.job.id,
         target: {
           ...params.resolvedDelivery,
-          sessionKey: conversation?.sessionKey,
+          sessionKey: params.resolvedDelivery.sessionRoute?.sessionKey,
         },
         payload: deliveryPayloads,
         tts: { auto: params.ttsAuto },
@@ -314,16 +303,6 @@ export async function dispatchCronDelivery(
         }),
         abortSignal: params.abortSignal ?? new AbortController().signal,
         bestEffort: params.deliveryBestEffort,
-        sessionGeneration: conversation
-          ? {
-              agentId: params.agentId,
-              storePath: resolveSessionStorePathCore(params.cfgWithAgentDefaults.session?.store, {
-                agentId: params.agentId,
-              }),
-              ...conversation,
-              lifecycleRevision: conversation.lifecycleRevision ?? null,
-            }
-          : undefined,
         completion: {
           job: params.job,
           runStartedAt: params.runStartedAt,
@@ -333,6 +312,9 @@ export async function dispatchCronDelivery(
           mayHaveReachedRecipient ||= reachedRecipient;
         },
       });
+      if (sent.status === "sent") {
+        deliveryPayloads = sent.payloads;
+      }
       record(
         sent.status === "sent"
           ? "delivered"
@@ -369,8 +351,31 @@ export async function dispatchCronDelivery(
       return finish();
     }
   }
+  if (params.resolvedDelivery.ok) {
+    try {
+      const bound = await conversationRuntime.bindCronResultConversation(conversationParams);
+      conversation = bound.conversation;
+      conversationError = undefined;
+    } catch (error) {
+      conversation = undefined;
+      conversationError = formatErrorMessage(error);
+    }
+  }
+  const executionOwnsResult =
+    params.job.sessionTarget.startsWith("session:") &&
+    conversation &&
+    toAgentStoreSessionKey({
+      agentId: params.agentId,
+      requestKey: conversation.sessionKey,
+      mainKey: params.cfgWithAgentDefaults.session?.mainKey,
+    }) ===
+      toAgentStoreSessionKey({
+        agentId: params.agentId,
+        requestKey: params.agentSessionKey,
+        mainKey: params.cfgWithAgentDefaults.session?.mainKey,
+      });
   // A persistent execution in this destination already owns its transcript entry.
-  if (conversation && !executionOwnsResult) {
+  if (conversation && !executionOwnsResult && deliveryPayloads.length > 0) {
     deliveryAttempted = true;
     try {
       const committed = await conversationRuntime.commitCronConversationResult({
@@ -380,7 +385,7 @@ export async function dispatchCronDelivery(
         runStartedAt: params.runStartedAt,
         conversation,
         payloads: deliveryPayloads,
-        text: synthesizedText,
+        text: params.resolvedDelivery.ok || sentByTool ? undefined : synthesizedText,
         signal: params.abortSignal,
         deliveryAttemptFence: params.deliveryAttemptFence,
       });

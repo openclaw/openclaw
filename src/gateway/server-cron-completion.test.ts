@@ -32,6 +32,11 @@ import { OutboundDeliveryError } from "../infra/outbound/deliver-types.js";
 import * as outboundSession from "../infra/outbound/outbound-session.js";
 import { getChildLogger } from "../logging.js";
 import {
+  initializeGlobalHookRunner,
+  resetGlobalHookRunner,
+} from "../plugins/hook-runner-global.js";
+import { addTestHook } from "../plugins/hooks.test-helpers.js";
+import {
   captureActivePluginRegistrySnapshot,
   restoreActivePluginRegistrySnapshot,
   setActivePluginRegistry,
@@ -51,7 +56,11 @@ import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.
 import { finalizeCronCompletionAnnouncement } from "./server-cron-completion.js";
 import * as assistantContent from "./server-methods/chat-assistant-content.js";
 
-async function createCompletionFixture(state: OpenClawTestState, kind: "script" | "command") {
+async function createCompletionFixture(
+  state: OpenClawTestState,
+  kind: "script" | "command",
+  hookText?: string,
+) {
   const storePath = path.join(state.sessionsDir(), "sessions.json");
   const source = {
     agentId: "main",
@@ -129,21 +138,31 @@ async function createCompletionFixture(state: OpenClawTestState, kind: "script" 
     channel: "telegram",
     messageId: "notification-message",
   });
-  setActivePluginRegistry(
-    createTestRegistry([
-      {
-        pluginId: "telegram",
-        source: "test",
-        plugin: {
-          ...createChannelTestPluginBase({
-            id: "telegram",
-            config: { listAccountIds: () => ["default", "work"] },
-          }),
-          outbound: { deliveryMode: "direct", sendText },
-        },
+  const pluginRegistry = createTestRegistry([
+    {
+      pluginId: "telegram",
+      source: "test",
+      plugin: {
+        ...createChannelTestPluginBase({
+          id: "telegram",
+          config: { listAccountIds: () => ["default", "work"] },
+        }),
+        outbound: { deliveryMode: "direct", sendText },
       },
-    ]),
-  );
+    },
+  ]);
+  if (hookText !== undefined) {
+    addTestHook({
+      registry: pluginRegistry,
+      pluginId: "telegram",
+      hookName: "message_sending",
+      handler: () => ({ content: hookText }),
+    });
+  }
+  setActivePluginRegistry(pluginRegistry);
+  if (hookText !== undefined) {
+    initializeGlobalHookRunner(pluginRegistry);
+  }
   const logger = getChildLogger({ module: "cron-completion-test" });
   const warn = vi.spyOn(logger, "warn").mockImplementation(() => {});
   const text = kind === "script" ? "Script finished" : "Command finished";
@@ -159,7 +178,15 @@ async function createCompletionFixture(state: OpenClawTestState, kind: "script" 
   const assertResult = async (scope = destination) => {
     expect(await messages(scope)).toEqual([
       expect.objectContaining({
-        content: [{ type: "text", text }],
+        content: [
+          {
+            type: "text",
+            text:
+              scope.sessionKey === source.sessionKey
+                ? text
+                : `${text}\nInspect: https://automation.example.test/automations?job=${kind}-job&run=cron%3A${kind}-job%3A1000`,
+          },
+        ],
         model: "automation-result",
         openclawAutomation: { kind: "cron", jobId: job.id, runId: `cron:${job.id}:1000` },
       }),
@@ -279,6 +306,9 @@ async function createCompletionFixture(state: OpenClawTestState, kind: "script" 
     },
     async dispose() {
       clearCronJobActive(job.id, marker);
+      if (hookText !== undefined) {
+        resetGlobalHookRunner();
+      }
       await finishCronRunReceiptAsync({ handle: receipt, status: "ok", finishedAtMs: 2000 });
     },
   };
@@ -306,6 +336,31 @@ async function withCompletionFixture(
 // Command execution and script evaluation belong to their respective runner suites.
 describe("completion announcement", () => {
   const kind = "script";
+
+  it("commits the effective post-hook payload shown to the recipient", async () => {
+    await withOpenClawTestState({ layout: "state-only" }, async (state) => {
+      const registry = captureActivePluginRegistrySnapshot();
+      const fixture = await createCompletionFixture(state, "command", "Redacted cron update");
+      try {
+        await expect(fixture.finalize({ text: "Sensitive cron update" })).resolves.toMatchObject({
+          delivered: true,
+        });
+        expect(fixture.sendText).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({ text: "Redacted cron update" }),
+        );
+        expect(await fixture.messages(fixture.destination)).toEqual([
+          expect.objectContaining({
+            content: [{ type: "text", text: "Redacted cron update" }],
+          }),
+        ]);
+        await fixture.assertNoOtherResults();
+      } finally {
+        await fixture.dispose();
+        vi.restoreAllMocks();
+        restoreActivePluginRegistrySnapshot(registry);
+      }
+    });
+  });
 
   it.each([
     { kind: "script", failure: "none" },

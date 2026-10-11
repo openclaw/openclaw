@@ -10,7 +10,6 @@ import { getLoadedChannelPluginForRead } from "../channels/plugins/registry-load
 import { normalizeAnyChannelId } from "../channels/registry-normalize.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import { createOutboundSendDeps } from "../cli/outbound-send-deps.js";
-import type { SessionDeliveryGeneration } from "../config/sessions/session-delivery-generation.types.js";
 import type { OpenClawConfig } from "../config/types.js";
 import type { TtsAutoMode } from "../config/types.tts.js";
 import { outboundDeliveryQueueName } from "../infra/outbound/delivery-queue-namespaces.js";
@@ -44,7 +43,7 @@ type CronAnnounceTarget = {
 };
 
 type CronAnnounceResult =
-  | { status: "sent" }
+  | { status: "sent"; payloads: ReplyPayload[] }
   | { status: "suppressed"; reason: string; skipReason?: NormalizeReplySkipReason };
 
 /** Sends only the configured notification. It never selects or writes a model transcript. */
@@ -59,7 +58,6 @@ export async function sendCronAnnouncePayloadStrict(params: {
   bestEffort?: boolean;
   tts?: { auto?: TtsAutoMode };
   inspectionUrl?: string;
-  sessionGeneration?: SessionDeliveryGeneration;
   completion?: {
     job: CronJob;
     runStartedAt: number;
@@ -90,13 +88,14 @@ export async function sendCronAnnouncePayloadStrict(params: {
         delivery,
       })
     : undefined;
-  const queueName = outboundDeliveryQueueName({ sessionGeneration: params.sessionGeneration });
+  const queueName = outboundDeliveryQueueName({});
   if (id) {
     try {
       if (await isCompletedDirectCronDelivery(id, queueName)) {
         fence?.assertCurrent();
         params.onDeliveryAttempt?.(true);
-        return { status: "sent" };
+        // Completed receipts retain no payload projection; never reconstruct one from new input.
+        return { status: "sent", payloads: [] };
       }
     } catch (error) {
       if (!params.bestEffort) {
@@ -138,42 +137,39 @@ export async function sendCronAnnouncePayloadStrict(params: {
     signal: params.abortSignal,
     shouldRetryError: () => !recipientReached,
     run: async () => {
+      const deliveredPayloads: ReplyPayload[] = [];
       await fence?.beforeAttempt();
       params.abortSignal.throwIfAborted();
       fence?.assertCurrent();
-      const result = await sendDurableMessageBatchCore(
-        {
-          cfg: params.cfg,
-          channel: delivery.channel,
-          to: delivery.to,
-          accountId: delivery.accountId,
-          threadId: delivery.threadId,
-          payloads,
-          session,
-          identity,
-          bestEffort: params.bestEffort === true,
-          durability: params.bestEffort === true ? "best_effort" : "required",
-          ...(id
-            ? {
-                deliveryIntentId: id,
-                reusePendingDeliveryIntent: true,
-                completionRetention: DIRECT_CRON_DELIVERY_COMPLETION_RETENTION,
-              }
-            : {}),
-          deps: createOutboundSendDeps(params.deps),
-          signal: params.abortSignal,
-          assertDirectAdapterHandoff: fence?.assertCurrent,
-          onDeliveryResult: () => {
-            if (!recipientReached) {
-              recipientReached = true;
-              params.onDeliveryAttempt?.(true);
+      const result = await sendDurableMessageBatchCore({
+        cfg: params.cfg,
+        channel: delivery.channel,
+        to: delivery.to,
+        accountId: delivery.accountId,
+        threadId: delivery.threadId,
+        payloads,
+        session,
+        identity,
+        bestEffort: params.bestEffort === true,
+        durability: params.bestEffort === true ? "best_effort" : "required",
+        ...(id
+          ? {
+              deliveryIntentId: id,
+              reusePendingDeliveryIntent: true,
+              completionRetention: DIRECT_CRON_DELIVERY_COMPLETION_RETENTION,
             }
-          },
+          : {}),
+        deps: createOutboundSendDeps(params.deps),
+        signal: params.abortSignal,
+        assertDirectAdapterHandoff: fence?.assertCurrent,
+        onDeliveredPayload: (payload) => deliveredPayloads.push(payload),
+        onDeliveryResult: () => {
+          if (!recipientReached) {
+            recipientReached = true;
+            params.onDeliveryAttempt?.(true);
+          }
         },
-        undefined,
-        undefined,
-        params.sessionGeneration,
-      );
+      });
       if (!recipientReached) {
         recipientReached = durableMessageBatchMayHaveReachedRecipient(result);
         params.onDeliveryAttempt?.(recipientReached);
@@ -188,13 +184,13 @@ export async function sendCronAnnouncePayloadStrict(params: {
         }))
       ) {
         fence?.assertCurrent();
-        return { status: "sent" as const };
+        return { status: "sent" as const, payloads: deliveredPayloads };
       }
       if (result.status === "failed" || result.status === "partial_failed") {
         throw result.error;
       }
       return result.status === "sent"
-        ? { status: "sent" as const }
+        ? { status: "sent" as const, payloads: deliveredPayloads }
         : {
             status: "suppressed" as const,
             reason: recipientReached ? "adapter_returned_no_identity" : result.reason,

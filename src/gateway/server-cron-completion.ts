@@ -1,10 +1,10 @@
 import type { NormalizeReplySkipReason } from "../auto-reply/reply/normalize-reply-skip-reason.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import { resolveControlUiAutomationRunUrl } from "../config/control-ui-link-base.js";
-import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { CronResultConversation } from "../cron/conversation-result.js";
 import {
+  bindCronResultConversation,
   commitCronConversationResult,
   resolveCronResultConversation,
 } from "../cron/conversation-result.js";
@@ -118,23 +118,26 @@ export async function finalizeCronCompletionAnnouncement(params: {
     }
     let conversationResult: CronResultConversation = {};
     let conversationError: string | undefined;
+    const conversationParams = {
+      config: cfg,
+      agentId,
+      delivery: resolved,
+      source: params.job.sourceConversation,
+      sourceSessionKey: resolveCronDeliverySessionKey(params.job),
+      deliveryAttemptFence: params.deliveryAttemptFence,
+    };
     try {
-      conversationResult = await resolveCronResultConversation({
-        config: cfg,
-        agentId,
-        delivery: resolved,
-        source: params.job.sourceConversation,
-        deliveryAttemptFence: params.deliveryAttemptFence,
-      });
+      conversationResult = await resolveCronResultConversation(conversationParams);
     } catch (error) {
       if (!resolved.ok) {
         throw error;
       }
       conversationError = formatErrorMessage(error);
     }
-    const { conversation } = conversationResult;
+    let { conversation } = conversationResult;
+    let effectivePayloads = normalized.payload;
     diagnostics = mergeCronRunDiagnostics(diagnostics, conversationResult.diagnostics);
-    if (conversation && params.runStartedAtMs === undefined) {
+    if ((conversation || resolved.ok) && params.runStartedAtMs === undefined) {
       throw new Error("cron result is missing its occurrence start time");
     }
     if (!resolved.ok && !conversation) {
@@ -146,18 +149,10 @@ export async function finalizeCronCompletionAnnouncement(params: {
         cfg,
         agentId,
         jobId: params.job.id,
-        target: { ...resolved, sessionKey: conversation?.sessionKey },
+        target: { ...resolved, sessionKey: resolved.sessionRoute?.sessionKey },
         payload: normalized.payload,
         inspectionUrl: inspectUrl,
         abortSignal,
-        sessionGeneration: conversation
-          ? {
-              agentId,
-              storePath: resolveSessionStorePathCore(cfg.session?.store, { agentId }),
-              ...conversation,
-              lifecycleRevision: conversation.lifecycleRevision ?? null,
-            }
-          : undefined,
         ...(params.runStartedAtMs === undefined
           ? {}
           : {
@@ -194,18 +189,26 @@ export async function finalizeCronCompletionAnnouncement(params: {
       }
       deliveryState.status = "delivered";
       deliveryState.delivered = true;
+      effectivePayloads = result.payloads;
+      try {
+        const bound = await bindCronResultConversation(conversationParams);
+        conversation = bound.conversation;
+        conversationError = undefined;
+      } catch (error) {
+        conversationError = formatErrorMessage(error);
+      }
     }
     if (conversationError) {
       throw new Error(conversationError);
     }
-    if (conversation && params.runStartedAtMs !== undefined) {
+    if (conversation && params.runStartedAtMs !== undefined && effectivePayloads.length > 0) {
       const committed = await commitCronConversationResult({
         config: cfg,
         agentId,
         jobId: params.job.id,
         runStartedAt: params.runStartedAtMs,
         conversation,
-        payloads: normalized.payload,
+        payloads: effectivePayloads,
         signal: abortSignal,
         deliveryAttemptFence: params.deliveryAttemptFence,
       });

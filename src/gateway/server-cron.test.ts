@@ -92,8 +92,9 @@ const {
   fetchWithSsrFGuardMock: vi.fn(),
   sendCronAnnouncePayloadStrictMock: vi.fn<
     typeof import("../cron/delivery.js").sendCronAnnouncePayloadStrict
-  >(async () => ({
+  >(async ({ payload }) => ({
     status: "sent",
+    payloads: Array.isArray(payload) ? payload : [payload],
     results: [{ channel: "telegram", messageId: "cron-message" }],
     receipt: {
       primaryPlatformMessageId: "cron-message",

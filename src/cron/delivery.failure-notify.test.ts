@@ -5,6 +5,7 @@ import {
   OutboundDeliveryError,
   PlatformMessageNotDispatchedError,
 } from "../infra/outbound/deliver-types.js";
+import type { DeliverOutboundPayloadsParams } from "../infra/outbound/deliver.js";
 import { sendCronAnnouncePayloadStrict } from "./delivery.js";
 import { makeJob } from "./isolated-agent.test-harness.js";
 
@@ -54,7 +55,17 @@ describe("sendCronAnnouncePayloadStrict", () => {
       status: undefined,
       pendingEntry: null,
     });
-    mocks.deliverOutboundPayloads.mockReset().mockResolvedValue([{ ok: true }]);
+    mocks.deliverOutboundPayloads
+      .mockReset()
+      .mockImplementation(async (params: DeliverOutboundPayloadsParams) => {
+        for (const payload of params.payloads) {
+          params.onDeliveredPayload?.({
+            text: payload.text ?? "",
+            mediaUrls: payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []),
+          });
+        }
+        return [{ ok: true }];
+      });
   });
 
   it("sends all prepared payloads under one destination-scoped intent", async () => {
@@ -68,7 +79,13 @@ describe("sendCronAnnouncePayloadStrict", () => {
       payload: payloads,
       completion: { job, runStartedAt: 1000, deliveryAttemptFence: null },
     });
-    expect(result).toEqual({ status: "sent" });
+    expect(result).toEqual({
+      status: "sent",
+      payloads: [
+        { text: "Readiness 65 today", mediaUrls: [] },
+        { text: "", mediaUrls: ["https://example.test/chart.png"] },
+      ],
+    });
     expect(mocks.deliverOutboundPayloads).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({
         channel: "telegram",
@@ -95,7 +112,10 @@ describe("sendCronAnnouncePayloadStrict", () => {
     mocks.deliverOutboundPayloads.mockRejectedValueOnce(rejected);
     const result = send({ abortSignal: signal });
     await vi.runAllTimersAsync();
-    await expect(result).resolves.toEqual({ status: "sent" });
+    await expect(result).resolves.toEqual({
+      status: "sent",
+      payloads: [{ text: "Automation failed", mediaUrls: [] }],
+    });
     expect(mocks.deliverOutboundPayloads).toHaveBeenCalledTimes(2);
     for (const [request] of mocks.deliverOutboundPayloads.mock.calls) {
       expect(request.abortSignal).toBe(signal);
