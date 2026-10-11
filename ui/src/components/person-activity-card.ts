@@ -287,7 +287,7 @@ class PersonActivityCard extends Directive {
   }
 }
 
-export const renderPersonActivityCard = directive(PersonActivityCard);
+const renderPersonActivityCard = directive(PersonActivityCard);
 
 /** The card owner keeps its Lit children separate from either host renderer. */
 export function updatePersonActivityCard(container: HTMLElement, input?: PersonCardInput | string) {
