@@ -565,6 +565,79 @@ describe("tool-loop-detection", () => {
     });
   });
 
+  it("blocks repeated memory searches despite timing and decayed-score drift", () => {
+    const loop = createLoop("memory_search", { query: "alpha" });
+    loop.repeat(CRITICAL_THRESHOLD, (index) => ({
+      content: [{ type: "text", text: `volatile rendering ${index}` }],
+      details: {
+        results: [
+          {
+            path: "memory/notes.md",
+            startLine: 1,
+            endLine: 2,
+            score: 0.42 + index * 1e-9,
+            vectorScore: 0.5,
+            snippet: "status: nothing new",
+            source: "memory",
+          },
+        ],
+        provider: "none",
+        mode: "fts",
+        debug: {
+          backend: "builtin",
+          effectiveMode: "fts",
+          hits: 1,
+          managerMs: 1 + index,
+          searchMs: 3 + index,
+          toolMs: 5 + index,
+          outsideSearchMs: 2 + index,
+        },
+      },
+    }));
+    expect(loop.detect()).toMatchObject({
+      stuck: true,
+      level: "critical",
+      detector: "generic_repeat",
+    });
+  });
+
+  it.each([
+    [
+      "ordered hits",
+      (index: number) => ({
+        results:
+          index % 2 === 0
+            ? [
+                { path: "memory/a.md", snippet: "a" },
+                { path: "memory/b.md", snippet: "b" },
+              ]
+            : [
+                { path: "memory/b.md", snippet: "b" },
+                { path: "memory/a.md", snippet: "a" },
+              ],
+        debug: { backend: "builtin" },
+      }),
+    ],
+    [
+      "stable debug state",
+      (index: number) => ({
+        results: [{ path: "memory/a.md", snippet: "a" }],
+        debug: { backend: index % 2 === 0 ? "builtin" : "sqlite" },
+      }),
+    ],
+  ] as const)("does not critically block progressing memory-search %s", (_label, details) => {
+    const loop = createLoop("memory_search", { query: "alpha" });
+    loop.repeat(CRITICAL_THRESHOLD, (index) => ({
+      content: [{ type: "text", text: "ignored structured rendering" }],
+      details: details(index),
+    }));
+    expect(loop.detect()).toMatchObject({
+      stuck: true,
+      level: "warning",
+      detector: "generic_repeat",
+    });
+  });
+
   it("blocks changing-argument unknown-tool retries only at the threshold", () => {
     const loop = createLoop("exec", { command: "echo next" });
     for (let index = 0; index < UNKNOWN_TOOL_THRESHOLD - 1; index++) {

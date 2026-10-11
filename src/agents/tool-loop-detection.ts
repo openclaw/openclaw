@@ -251,6 +251,34 @@ function stripVolatileSendIds(value: unknown): unknown {
   return stripped;
 }
 
+const VOLATILE_MEMORY_SEARCH_DEBUG_KEYS = new Set([
+  "managerMs",
+  "searchMs",
+  "toolMs",
+  "outsideSearchMs",
+]);
+
+function getMemorySearchToolOutcome(details: Record<string, unknown>): unknown | undefined {
+  if (!Array.isArray(details.results)) {
+    return undefined;
+  }
+  const results = details.results.map((result) => {
+    if (!isPlainObject(result)) {
+      return result;
+    }
+    const { score: _score, ...stableResult } = result;
+    return stableResult;
+  });
+  const debug = isPlainObject(details.debug)
+    ? Object.fromEntries(
+        Object.entries(details.debug).filter(
+          ([key]) => !VOLATILE_MEMORY_SEARCH_DEBUG_KEYS.has(key),
+        ),
+      )
+    : details.debug;
+  return { ...details, results, debug };
+}
+
 function isVolatileSendResult(toolName: string, params: unknown): boolean {
   if (toolName === "sessions_send") {
     return true;
@@ -298,6 +326,12 @@ function hashToolOutcome(
   }
   if (isError) {
     return { resultHash: digestToolOutcome(result) };
+  }
+  if (toolName === "memory_search") {
+    const outcome = getMemorySearchToolOutcome(details);
+    if (outcome !== undefined) {
+      return { resultHash: digestToolOutcome(outcome) };
+    }
   }
   if ((toolName === "computer" || toolName === "progress_card") && result.isError !== true) {
     const outcome =
