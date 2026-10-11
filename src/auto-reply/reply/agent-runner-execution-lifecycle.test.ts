@@ -61,6 +61,18 @@ const compactionTarget = {
 };
 
 describe("executeAgentTurn: run lifecycle and ownership", () => {
+  it("retains the settled writer without inventing a compaction", async () => {
+    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+      params.onCompactionAccounting?.({ kind: "durable", count: 0, target: compactionTarget });
+      return { payloads: [{ text: "ok" }], meta: {} };
+    });
+
+    const result = await execution.executeAgentTurn(createMinimalRunAgentTurnParams());
+
+    expect(result.outcome).toMatchObject({ kind: "settled", sessionWriter: compactionTarget });
+    expect(result.outcome.compaction).toBeUndefined();
+  });
+
   it("classifies cancellation raised by the real deferred lifecycle owner", async () => {
     state.runEmbeddedAgentMock.mockImplementationOnce(
       async (params: RunEmbeddedAgentInternalParams) => {

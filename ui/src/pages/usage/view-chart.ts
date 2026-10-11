@@ -98,7 +98,7 @@ export function renderDailyChartCompact(
         ${renderSettingsSegmented({
           mode: "buttons",
           variant: "accent",
-          className: "small sessions-toggle",
+          class: "small sessions-toggle",
           value: dailyChartMode,
           onChange: onDailyChartModeChange,
           onReselect: onDailyChartModeChange,

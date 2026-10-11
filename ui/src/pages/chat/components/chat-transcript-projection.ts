@@ -40,7 +40,6 @@ import {
   getTranscriptState,
   type ChatThreadProps,
 } from "./chat-thread-interactions.ts";
-import { renderWorkGroupBrowserTabPreviews } from "./chat-tool-cards.ts";
 import { projectTranscriptActivity } from "./chat-transcript-activity.ts";
 import { latestTranscriptAnnouncement } from "./chat-transcript-announcement.ts";
 import {
@@ -61,6 +60,7 @@ import {
   trackTranscriptRenderDependencies,
 } from "./chat-transcript-render-guard.ts";
 import type { ChatTranscriptSession, TranscriptHeader } from "./chat-transcript-session.ts";
+import { projectTranscriptWorkPreviews } from "./chat-transcript-work-previews.ts";
 import { projectTurnVideoMessages } from "./chat-turn-video-gallery.ts";
 import { renderChatTypingIndicator } from "./chat-typing-indicator.ts";
 import { resolveAssistantDisplayAvatar } from "./chat-welcome.ts";
@@ -68,8 +68,6 @@ import { renderTurnRecapRow } from "./chat-working-indicator.ts";
 import "./chat-subagent-activity-live.ts";
 
 type ChatRenderItem = ReturnType<typeof coalesceAgentRunFrames>[number];
-const workPreviewCache =
-  createTranscriptMemo<ReturnType<typeof renderWorkGroupBrowserTabPreviews>>();
 const persistedMessageIds = createTranscriptMemo<Set<string | null>>();
 
 export function projectChatTranscript(props: ChatThreadProps, transcript: ChatTranscriptSession) {
@@ -115,6 +113,7 @@ export function projectChatTranscript(props: ChatThreadProps, transcript: ChatTr
     streamSegments: props.streamSegments,
     stream: props.stream ?? null,
     reasoning,
+    showReasoning,
     streamStartedAt: props.streamStartedAt,
     queue: props.queue,
     initialTurnId: props.initialTurnId,
@@ -174,20 +173,13 @@ export function projectChatTranscript(props: ChatThreadProps, transcript: ChatTr
   const { messageRowKeysById, transcriptMessageKeys, loadedReplySources, positionIndex, rows } =
     projectTranscriptIndex(transcriptChain, expandedToolCards, props);
   const latestBrowserTabsKey = JSON.stringify([...(latestBrowserTabs ?? [])]);
-  const workPreviews = workPreviewCache(
-    transcriptChain.workGroups,
-    [
-      expandedToolCards,
-      getExpansionStateVersion(expandedToolCards),
-      props.sessionKey,
-      latestBrowserTabsKey,
-    ],
-    () =>
-      renderWorkGroupBrowserTabPreviews(
-        transcriptChain.workGroups.filter((item) => !expandedToolCards.get(item.key)),
-        { sessionKey: props.sessionKey, latestBrowserTabs },
-      ),
-  );
+  const workPreviews = projectTranscriptWorkPreviews(transcriptChain.workGroups, {
+    sessionKey: props.sessionKey,
+    expanded: expandedToolCards,
+    latestBrowserTabs,
+    latestBrowserTabsKey,
+    bubbleMode: props.chatBubbleMode,
+  });
   const questionPrompts = new Map(
     (props.questionPrompts ?? []).map((prompt) => [prompt.id, prompt]),
   );
@@ -331,6 +323,7 @@ export function projectChatTranscript(props: ChatThreadProps, transcript: ChatTr
     githubRepo: props.githubRepo,
     githubRepositories: props.githubRepositories,
     showAssistantAvatar: avatarPlacement === "gutter",
+    bubbleMode: props.chatBubbleMode === true && !searchFiltering,
   } satisfies StreamGroupOptions;
   const streamGroupOptions = {
     ...sharedMessageRenderOptions,
@@ -476,6 +469,7 @@ export function projectChatTranscript(props: ChatThreadProps, transcript: ChatTr
       const workExpanded = expandedToolCards.get(item.key) ?? false;
       return renderWorkGroupSummary(item, {
         expanded: workExpanded,
+        bubbleMode: props.chatBubbleMode === true && !searchFiltering,
         browserTabPreviews: workPreviews.get(item.key),
         onToggle: () => toggleToolCardExpanded(item.key, workExpanded),
       });
@@ -604,6 +598,7 @@ export function projectChatTranscript(props: ChatThreadProps, transcript: ChatTr
     Boolean(props.loadFullAssistantMessage),
     showReasoning,
     props.showToolCalls,
+    props.chatBubbleMode,
     Boolean(props.runActive),
     activityRunId,
     activityGroupKey,

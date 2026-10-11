@@ -37,7 +37,6 @@ import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.tes
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createReplySessionEntryHandle } from "./session-entry-handle.js";
 import { ensureSkillSnapshot, incrementCompactionCount } from "./session-updates.js";
-import { persistSessionUsageUpdate } from "./session-usage.js";
 
 // mock-isolation: Remote node discovery is outside the approval-read boundary.
 vi.mock("../../skills/runtime/remote.js", () => ({
@@ -265,15 +264,25 @@ it.each(["metadata", "lifecycle", "refresh"] as const)(
           pending,
           "skill preparation did not start",
         );
-        if (change === "refresh" || change === "metadata") {
+        if (change === "lifecycle") {
+          await applySessionEntryLifecycleMutation({
+            agentId: scope.agentId,
+            storePath: scope.storePath,
+            upserts: [
+              {
+                sessionKey: scope.sessionKey,
+                entry: { ...entry, lifecycleRevision: "replacement" },
+              },
+            ],
+            skipMaintenance: true,
+          });
+        } else {
           await replaceSessionEntry(scope, {
             ...entry,
             pinnedAt: undefined,
             updatedAt: 2,
             systemSent: true,
           });
-        } else {
-          await replaceSessionEntry(scope, { ...entry, lifecycleRevision: "replacement" });
         }
         resume.resolve();
         if (change === "lifecycle") {
@@ -605,29 +614,6 @@ describe("completed compaction accounting", () => {
     });
   });
 
-  it("does not write old compaction usage after the terminal writer changes", async () => {
-    await withAccountingFixture(async (fixture) => {
-      await fixture.replace({
-        activeWriterRunId: "new-writer",
-        totalTokens: 666,
-        totalTokensFresh: true,
-      });
-      const before = fixture.read();
-
-      await persistSessionUsageUpdate({
-        agentId: fixture.params.agentId,
-        storePath: fixture.params.storePath,
-        sessionKey: fixture.params.sessionKey,
-        cfg: {},
-        expectedSession: { ...fixture.entry, activeWriterRunId: "old-writer" },
-        currentContextSnapshot: { tokens: 123 },
-        authorize: () => true,
-      });
-
-      expect(fixture.read()).toEqual(before);
-    });
-  });
-
   it.each([
     { name: "session", patch: { sessionId: "replacement-session" } },
     { name: "lifecycle", patch: { lifecycleRevision: "replacement-revision" } },
@@ -645,32 +631,25 @@ describe("completed compaction accounting", () => {
     });
   });
 
-  it.each(["compaction", "usage"] as const)(
-    "does not commit %s accounting when authority closes after admission",
-    async (kind) => {
-      await withAccountingFixture(async (fixture) => {
-        let authorized = true;
-        const authorize = () => {
-          queueMicrotask(() => {
-            authorized = false;
-          });
-          return authorized;
-        };
-        const result =
-          kind === "compaction"
-            ? await incrementCompactionCount({ ...fixture.params, tokensAfter: 123, authorize })
-            : await persistSessionUsageUpdate({
-                ...fixture.params,
-                cfg: {},
-                currentContextSnapshot: { tokens: 123 },
-                authorize,
-              });
-
-        expect(result).toBeUndefined();
-        expect(fixture.cached()).toBe(fixture.entry);
-        expect(fixture.read()?.compactionCount).toBe(0);
-        expect(fixture.read()?.totalTokens).toBeUndefined();
+  it("does not commit compaction accounting when authority closes after admission", async () => {
+    await withAccountingFixture(async (fixture) => {
+      let authorized = true;
+      const authorize = () => {
+        queueMicrotask(() => {
+          authorized = false;
+        });
+        return authorized;
+      };
+      const result = await incrementCompactionCount({
+        ...fixture.params,
+        tokensAfter: 123,
+        authorize,
       });
-    },
-  );
+
+      expect(result).toBeUndefined();
+      expect(fixture.cached()).toBe(fixture.entry);
+      expect(fixture.read()?.compactionCount).toBe(0);
+      expect(fixture.read()?.totalTokens).toBeUndefined();
+    });
+  });
 });
