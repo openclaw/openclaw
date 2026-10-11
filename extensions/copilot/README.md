@@ -10,7 +10,7 @@ openclaw plugins install @openclaw/copilot
 
 Restart the Gateway after installing or updating the plugin.
 
-The harness claims the canonical subscription `github-copilot` provider plus
+The harness claims the `github-copilot` subscription provider plus
 custom BYOK provider entries that the Copilot SDK can represent. Manifest-owned
 native provider ids stay with their owning runtimes. The harness is opt-in only:
 selection requires explicit `agentRuntime.id: "copilot"` on a model or provider
