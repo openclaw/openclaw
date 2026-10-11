@@ -11,6 +11,7 @@ import {
   SessionGoalOperationError,
   type SessionGoalOperation,
 } from "../../config/sessions/goals-operations.js";
+import { getSessionActorStorageBinding } from "../../config/sessions/session-actor-storage-binding.js";
 import {
   captureIncognitoSessionBinding,
   withIncognitoSessionBinding,
@@ -25,7 +26,10 @@ import {
 } from "../../config/sessions/session-source-authority.js";
 import { resolvePluginSessionOwnershipError } from "../session-plugin-ownership.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
-import { captureIncognitoSessionMutationFacts } from "../session-sharing-incognito.js";
+import {
+  captureIncognitoSessionMutationFacts,
+  captureSessionActorMutationFacts,
+} from "../session-sharing-incognito.js";
 import { captureSessionMutationRouting } from "../session-sharing-preparation.js";
 import { prepareSessionSharingSource } from "../session-sharing-source.js";
 import {
@@ -81,13 +85,16 @@ async function handleSessionGoalMutation(
       new SessionMutationAuthorizationChangedError(
         errorShape(ErrorCodes.INVALID_REQUEST, "Session changed before its Goal update; retry."),
       );
-    const binding = captureIncognitoSessionBinding({
+    const actorTarget = {
       agentId: target.agentId,
       sessionKey: target.storeKey,
       storePath: target.storePath,
-    });
-    const actorFacts =
-      binding && captureIncognitoSessionMutationFacts(binding, target.storeKey, false);
+    };
+    const memory = getSessionActorStorageBinding(actorTarget);
+    const binding = memory ? undefined : captureIncognitoSessionBinding(actorTarget);
+    const actorFacts = memory
+      ? captureSessionActorMutationFacts(memory, target.storeKey, false)
+      : binding && captureIncognitoSessionMutationFacts(binding, target.storeKey, false);
     const assertRouting = captureSessionMutationRouting(cfg, sessionChanged);
     const assertTarget = (current: ReturnType<typeof resolveSessionSharingTarget>) => {
       // Reset can keep the same session ID. Fence the lifecycle and resolved store as well.
@@ -119,7 +126,9 @@ async function handleSessionGoalMutation(
     const assertCurrent = () => {
       options.sessionMutationCommitGuard?.();
       authorization.authorization?.assertCurrent();
-      assertRouting(context.getRuntimeConfig());
+      if (!memory) {
+        assertRouting(context.getRuntimeConfig());
+      }
       assertTarget(
         actorFacts
           ? actorFacts.readCurrent().target
@@ -130,9 +139,14 @@ async function handleSessionGoalMutation(
             }),
       );
     };
-    assertCurrent();
+    if (!memory) {
+      assertCurrent();
+    }
     const source: SessionSourceAssertion = Object.assign(assertCurrent, {
       async prepareSessionSource() {
+        if (memory) {
+          return { assertCurrent, checks: [] };
+        }
         const authority = await prepareSessionSourceAuthority(
           composeSessionSourceAssertion([
             captureExternalSessionCommitGuard(options.sessionMutationCommitGuard),
@@ -197,7 +211,9 @@ async function handleSessionGoalMutation(
       requestFingerprint: await fingerprintSessionGoalRequest({ method, ...request }),
       goalId: request.goalId,
     };
-    assertCurrent();
+    if (!memory) {
+      assertCurrent();
+    }
     if (request.action === "resume") {
       const { handleSessionGoalResumeChat } = await import("./chat-send-handler.js");
       await handleSessionGoalResumeChat(

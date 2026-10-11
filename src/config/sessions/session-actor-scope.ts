@@ -14,6 +14,10 @@ import type {
   SessionActorTarget,
 } from "./session-actor-contract.js";
 import { createSessionActorFactory } from "./session-actor-durable.js";
+import {
+  getSessionActorStorageBinding,
+  runWithSessionActorStorage,
+} from "./session-actor-storage-binding.js";
 import { captureIncognitoSessionSource } from "./session-incognito-binding.js";
 
 /** Reprepare only an explicitly refused version, never an uncertain accepted write. */
@@ -22,6 +26,9 @@ export async function runSessionActorCommand<Value>(
   authority: SessionActorAuthority,
   command: (snapshot: SessionActorHotState | undefined) => Promise<SessionActorOutcome<Value>>,
 ): Promise<SessionActorOutcome<Value>> {
+  if (actor.target.database.kind === "memory") {
+    return command(undefined);
+  }
   const outcome = await command(actor.snapshot(authority));
   return outcome.kind === "stale-version" ? command(outcome.postimage) : outcome;
 }
@@ -34,6 +41,15 @@ export async function withSessionActor<T>(
 ): Promise<T | undefined> {
   lifetime.assertAdmission?.();
   lifetime.assertCurrent();
+  const memory = getSessionActorStorageBinding(input);
+  if (memory) {
+    const actor = await memory.actor.storage!.acquire(input.sessionKey, lifetime);
+    try {
+      return await runWithSessionActorStorage({ ...memory, actor }, () => consume(actor));
+    } finally {
+      await actor.release();
+    }
+  }
   const source = captureIncognitoSessionSource(input);
   if (source && "kind" in source) {
     return undefined;

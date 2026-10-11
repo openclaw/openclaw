@@ -22,6 +22,7 @@ import {
   type ResolvedTranscriptReadScope,
 } from "./session-accessor.sqlite-scope.js";
 import type { SessionTranscriptRuntimeTarget } from "./session-accessor.types.js";
+import { captureSessionActorTranscriptRead } from "./session-actor-transcript-read.js";
 import { readRestoredSessionTranscript } from "./session-cold-storage-read.js";
 import type { SessionEntryCohortRequest } from "./session-entry-read.types.js";
 import type { IncognitoSessionActor } from "./session-incognito-actor.js";
@@ -141,6 +142,71 @@ export function prepareSessionTranscriptHydration(
   signal?: AbortSignal,
   lane?: SessionHistoryWorkerLane,
 ): SessionTranscriptHydrationReader {
+  const memory = captureSessionActorTranscriptRead(source, signal);
+  if (memory) {
+    const version = () => ({ generation: null, rawSeq: null, updatedAt: null });
+    return {
+      target: memory.target,
+      assertCurrent: memory.assertCurrent,
+      read: async () => {
+        if (!memory.missing) {
+          return memory.read("session.history.hydrate", { limits });
+        }
+        memory.assertCurrent();
+        return limits
+          ? {
+              kind: "bounded",
+              snapshot: {
+                activeLeafEntryId: null,
+                version: version(),
+                events: [],
+                opaqueParents: new Map(),
+                parents: new Map(),
+                firstKeptRanges: new Map(),
+                persistedSuffixStartSeq: 0,
+                boundaryCount: 0,
+                serializedBytes: 0,
+                totalEvents: 0,
+                transcriptMutationAt: null,
+                truncated: false,
+                completeActivePath: true,
+              },
+            }
+          : {
+              kind: "full",
+              snapshot: { events: [], eventJson: [], eventSeqs: [], version: version() },
+            };
+      },
+      readCurrentTurnEntry: async (request) => {
+        if (!memory.missing) {
+          return memory.read("session.history.current-turn-entry", request);
+        }
+        memory.assertCurrent();
+        return { kind: "current-turn-entry", version: version() };
+      },
+      readMaintenance: async (request) => {
+        if (!memory.missing) {
+          return memory.read("session.history.maintenance", { request });
+        }
+        memory.assertCurrent();
+        return { kind: "transcript-maintenance" };
+      },
+      readRecentActiveEvents: async (maxEvents) => {
+        if (!memory.missing) {
+          return memory.read("session.history.recent-active-events", { maxEvents });
+        }
+        memory.assertCurrent();
+        return [];
+      },
+      readLatestActiveMessage: async () => {
+        if (!memory.missing) {
+          return memory.read("session.history.latest-active-message", {});
+        }
+        memory.assertCurrent();
+        return undefined;
+      },
+    };
+  }
   const incognito = captureIncognitoSessionHistoryBinding(source);
   if (incognito) {
     return prepareIncognitoSessionTranscriptHydration({ ...incognito, limits, signal });

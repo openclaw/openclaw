@@ -35,6 +35,8 @@ import type {
   SessionMessageCutMutationParams,
   SessionMessageCutMutationResult,
 } from "./session-accessor.types.js";
+import { getSessionActorStorageBinding } from "./session-actor-storage-binding.js";
+import { readSessionActorStorageResult } from "./session-actor-storage-result.js";
 import {
   captureIncognitoSessionSource,
   publishIncognitoSessionEntry,
@@ -124,12 +126,6 @@ async function mutateSqliteSessionAtMessage(
   const sourceKey = normalizeStoreSessionKey(params.sessionStoreKey ?? params.sessionKey);
   const targetKey =
     mode === "fork" ? normalizeStoreSessionKey(params.targetKey ?? params.sessionKey) : sourceKey;
-  const resolved = resolveSqliteScope({
-    ...(params.agentId ? { agentId: params.agentId } : {}),
-    ...(params.env ? { env: params.env } : {}),
-    sessionKey: sourceKey,
-    ...(params.storePath ? { storePath: params.storePath } : {}),
-  });
   const intent: SessionMessageCutIntent = {
     canonicalSourceKey,
     creation: params.creation ? structuredClone(params.creation) : undefined,
@@ -141,6 +137,40 @@ async function mutateSqliteSessionAtMessage(
     sourceKey,
     targetKey,
   };
+  const memory = getSessionActorStorageBinding({ ...params, sessionKey: sourceKey });
+  if (memory) {
+    let authorityError: unknown;
+    const outcome = await memory.actor.storage!.mutate(
+      {
+        type: "session.messageCut",
+        input: { intent, sourceRepositoryWorkspaceId: preconditions?.sourceRepositoryWorkspaceId },
+      },
+      {
+        authorize: (stage, facts, publication) =>
+          memory.authority.authorize(stage, facts, publication),
+        assertCurrent() {
+          try {
+            memory.authority.assertCurrent();
+            params.commitGuard?.();
+            preconditions?.assertUpstreamCurrent?.();
+          } catch (error) {
+            authorityError = error;
+            throw error;
+          }
+        },
+      },
+    );
+    if (outcome.kind === "rolled-back" && authorityError) {
+      throw authorityError;
+    }
+    return readSessionActorStorageResult(outcome);
+  }
+  const resolved = resolveSqliteScope({
+    ...(params.agentId ? { agentId: params.agentId } : {}),
+    ...(params.env ? { env: params.env } : {}),
+    sessionKey: sourceKey,
+    ...(params.storePath ? { storePath: params.storePath } : {}),
+  });
   const options = toDatabaseOptions(resolved);
   const binding = isMainThread ? captureIncognitoSessionSource(params) : undefined;
   if (binding && "kind" in binding) {

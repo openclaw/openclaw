@@ -1,8 +1,12 @@
 import { isDeepStrictEqual } from "node:util";
+import { clearSessionActorProgressCardForReset } from "../../session-cards/session-actor-progress-card-memory.js";
+import type { ConversationRouteContext } from "./conversation-route-context.js";
+import { syncSessionActorMemoryConversations } from "./session-actor-memory-conversation.js";
 import type {
   SessionActorMemoryEntryCommand,
   SessionActorMemoryEntryQuery,
 } from "./session-actor-memory-entry-contract.js";
+import { validateSessionActorMemoryEntryGuards } from "./session-actor-memory-entry-guards.js";
 import { installSessionActorMemoryEntry } from "./session-actor-memory-entry-install.js";
 import { createSessionActorMemoryEvents } from "./session-actor-memory-events.js";
 import type { SessionActorMemoryStorageContext } from "./session-actor-memory-storage-context.js";
@@ -29,30 +33,64 @@ export function readSessionActorMemoryEntryQuery(
   query: SessionActorMemoryEntryQuery,
 ) {
   switch (query.type) {
-    case "session.entry.read":
-      return (
-        context.state.hot.entry && projectEntry(context.state.hot.entry, query.input.projection)
-      );
+    case "session.entry.creation":
+      return {
+        existingEntry: context.state.hot.entry,
+        targetEntry: context.state.hot.entry,
+        labelInUse: Boolean(
+          query.input.label &&
+          [...context.entries()].some(
+            ([key, state]) =>
+              key !== context.state.hot.target.sessionKey &&
+              state.hot.entry?.label === query.input.label,
+          ),
+        ),
+      };
+    case "session.entry.read": {
+      const entry = query.input.sessionKey
+        ? context.get(query.input.sessionKey)?.hot.entry
+        : context.state.hot.entry;
+      return entry && projectEntry(entry, query.input.projection);
+    }
     case "session.entry.readById":
       for (const [sessionKey, state] of context.entries()) {
         const entry =
           state.hot.entry?.sessionId === query.input.sessionId
             ? state.hot.entry
-            : state.historicalWindows.get(query.input.sessionId)?.hot.entry;
+            : query.input.currentOnly
+              ? undefined
+              : state.historicalWindows.get(query.input.sessionId)?.hot.entry;
         if (entry) {
           context.get(sessionKey);
           return { sessionKey, entry: projectEntry(entry, query.input.projection) };
         }
       }
       return undefined;
-    case "session.entries.read":
+    case "session.entries.read": {
+      const selected = query.input.sessionKeys && new Set(query.input.sessionKeys);
       return [...context.entries()].flatMap(([sessionKey, state]) => {
         if (!state.hot.entry) {
+          return [];
+        }
+        if (
+          selected &&
+          !selected.has(sessionKey) &&
+          !(
+            query.input.includeSessionWindowOwner &&
+            (state.hot.entry.sessionId === query.input.includeSessionWindowOwner ||
+              state.historicalWindows.has(query.input.includeSessionWindowOwner))
+          ) &&
+          !(
+            query.input.includeLabelOwners &&
+            state.hot.entry.label === query.input.includeLabelOwners
+          )
+        ) {
           return [];
         }
         context.get(sessionKey);
         return [{ sessionKey, entry: projectEntry(state.hot.entry, query.input.projection) }];
       });
+    }
   }
 }
 
@@ -72,14 +110,69 @@ export function executeSessionActorMemoryEntryCommand(
 ) {
   const { state } = context;
   const sessionKey = state.hot.target.sessionKey;
-  const install = (key: string, entry: SessionEntry) => {
+  const install = (
+    key: string,
+    entry: SessionEntry,
+    options?: Parameters<typeof installSessionActorMemoryEntry>[2] & {
+      routeContext?: ConversationRouteContext | null;
+    },
+  ) => {
     const target = context.edit(key);
-    return installSessionActorMemoryEntry(target, entry);
+    const previous = target.hot.entry;
+    const installed = installSessionActorMemoryEntry(target, entry, options);
+    if (options?.routeContext !== undefined) {
+      syncSessionActorMemoryConversations(
+        target,
+        context.editConversations(),
+        previous,
+        options.routeContext,
+      );
+    }
+    return installed;
+  };
+  const replace = (
+    replacement: import("./session-actor-memory-entry-contract.js").SessionActorMemoryEntryReplacement,
+  ) => {
+    requireExpectedEntry(
+      context.get(replacement.sessionKey)?.hot.entry,
+      replacement.expected,
+      command.type,
+    );
+    if (!replacement.entry) {
+      context.remove(replacement.sessionKey);
+      return undefined;
+    }
+    const entry = install(
+      replacement.sessionKey,
+      {
+        ...replacement.entry,
+        ...(replacement.label === undefined ? {} : { label: replacement.label }),
+        ...(replacement.owner ? { owner: replacement.owner } : {}),
+      },
+      { routeContext: replacement.routeContext },
+    );
+    if (replacement.transcriptEvents) {
+      const target = context.edit(replacement.sessionKey);
+      const events = createSessionActorMemoryEvents({ ...context, state: target });
+      for (const event of replacement.transcriptEvents) {
+        events.writeEvent(event);
+      }
+    }
+    if (
+      replacement.label &&
+      [...context.entries()].some(
+        ([key, value]) =>
+          key !== replacement.sessionKey && value.hot.entry?.label === replacement.label,
+      )
+    ) {
+      throw new Error(`Session label already exists: ${replacement.label}`);
+    }
+    return entry;
   };
   switch (command.type) {
     case "session.entry.create": {
       const input = command.input;
-      requireExpectedEntry(state.hot.entry, undefined, command.type);
+      requireExpectedEntry(state.hot.entry, input.expected, command.type);
       const label = input.label ?? input.entry.label;
       if (
         label &&
@@ -91,20 +184,36 @@ export function executeSessionActorMemoryEntryCommand(
         error.name = "SessionLabelConflictError";
         throw error;
       }
-      install(sessionKey, {
-        ...input.entry,
-        ...(label !== undefined ? { label } : {}),
-        ...(input.owner ? { owner: input.owner } : {}),
-      });
+      install(
+        sessionKey,
+        {
+          ...input.entry,
+          ...(label !== undefined ? { label } : {}),
+          ...(input.owner ? { owner: input.owner } : {}),
+        },
+        { routeContext: input.routeContext },
+      );
       const events = createSessionActorMemoryEvents(context);
-      for (const event of input.transcriptEvents ?? [
-        createSessionTranscriptHeader({ sessionId: input.entry.sessionId, cwd: input.cwd }),
-      ]) {
+      for (const event of input.transcriptEvents ??
+        (state.events.length
+          ? []
+          : [
+              createSessionTranscriptHeader({ sessionId: input.entry.sessionId, cwd: input.cwd }),
+            ])) {
         events.writeEvent(event);
       }
       return state.hot.entry!;
     }
     case "session.entry.patch": {
+      if (command.input.prepareIf && !state.hot.entry?.liveModelSwitchPending) {
+        return undefined;
+      }
+      if (command.input.expected) {
+        requireExpectedEntry(state.hot.entry, command.input.expected.entry, command.type);
+      }
+      if (!validateSessionActorMemoryEntryGuards(context, command.input.guards)) {
+        return undefined;
+      }
       const writeBase = state.hot.entry ?? command.input.fallbackEntry;
       if (!writeBase) {
         return undefined;
@@ -115,28 +224,21 @@ export function executeSessionActorMemoryEntryCommand(
         sessionKey,
         operation: command.input.operation,
         preserveActivity: command.input.preserveActivity,
+        replaceEntry: command.input.replaceEntry,
       });
-      return next ? install(sessionKey, next) : state.hot.entry;
+      return next ? install(sessionKey, next, command.input) : state.hot.entry;
     }
     case "session.entry.replace": {
-      requireExpectedEntry(state.hot.entry, command.input.expected, command.type);
-      if (!command.input.entry) {
-        context.remove(sessionKey);
-        return undefined;
-      }
-      return install(sessionKey, command.input.entry);
+      return replace({ ...command.input, sessionKey });
     }
     case "session.entry.replacements": {
       const removedSessionKeys: string[] = [];
       const updatedSessionKeys: string[] = [];
       for (const replacement of command.input.replacements) {
-        const current = context.get(replacement.sessionKey);
-        requireExpectedEntry(current?.hot.entry, replacement.expected, command.type);
+        replace(replacement);
         if (replacement.entry) {
-          install(replacement.sessionKey, replacement.entry);
           updatedSessionKeys.push(replacement.sessionKey);
         } else {
-          context.remove(replacement.sessionKey);
           removedSessionKeys.push(replacement.sessionKey);
         }
       }
@@ -146,10 +248,10 @@ export function executeSessionActorMemoryEntryCommand(
       const previousEntry = state.hot.entry;
       const input = command.input;
       requireExpectedEntry(previousEntry, input.expected, command.type);
-      const progressCardReset = Boolean(
+      const writeBoundary = Boolean(
         input.resetBoundary && previousEntry && !isDeepStrictEqual(previousEntry, input.nextEntry),
       );
-      if (progressCardReset && input.resetBoundary && previousEntry) {
+      if (writeBoundary && input.resetBoundary && previousEntry) {
         const events = createSessionActorMemoryEvents(context);
         if (!state.events.length) {
           events.writeEvent(
@@ -166,7 +268,15 @@ export function executeSessionActorMemoryEntryCommand(
           }),
         );
       }
-      const nextEntry = install(sessionKey, input.nextEntry);
+      const progressCardReset = Boolean(
+        writeBoundary &&
+        input.resetBoundary?.context === "clear" &&
+        clearSessionActorProgressCardForReset(state),
+      );
+      const nextEntry = install(sessionKey, input.nextEntry, {
+        consumePendingReset: true,
+        routeContext: input.routeContext,
+      });
       return {
         archivedTranscripts: [],
         previousEntry,

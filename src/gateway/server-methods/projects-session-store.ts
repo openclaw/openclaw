@@ -1,12 +1,57 @@
+import path from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import {
   mergeCombinedSessionStore,
   prepareCombinedSessionStore,
 } from "../../config/sessions/combined-store-gateway.js";
+import { memorySessionActorOwners } from "../../config/sessions/session-actor-memory-owner.js";
+import type { SessionActorStorageBinding } from "../../config/sessions/session-actor-storage-binding.js";
 import type { withIncognitoSessionStoreEntries } from "../../config/sessions/session-incognito-binding.js";
 import type { SessionRowProjection } from "../session-row-projection.js";
 import { prepareSessionRowSelection } from "../session-utils-list.js";
 
 export type IncognitoStores = Parameters<Parameters<typeof withIncognitoSessionStoreEntries>[0]>[0];
+
+export function readMemoryProjectStores(binding: SessionActorStorageBinding) {
+  binding.actor.assertReadable();
+  const root = path.resolve(binding.path, "../../../..");
+  return memorySessionActorOwners
+    .list()
+    .filter((owner) => path.resolve(owner.path, "../../../..") === root)
+    .map((owner) => ({
+      agentId: owner.agentId,
+      storePath: owner.path,
+      entries: owner
+        .listSessions(binding.authority)
+        .flatMap(({ target, entry, members }) =>
+          entry ? [{ sessionKey: target.sessionKey, entry, members }] : [],
+        ),
+    }));
+}
+
+/** Only changed disclosure authority retires a prepared private project listing. */
+export function assertMemoryProjectStoresCurrent(
+  binding: SessionActorStorageBinding,
+  stores: ReturnType<typeof readMemoryProjectStores>,
+): void {
+  const current = readMemoryProjectStores(binding);
+  for (const store of stores) {
+    const entries = current.find((candidate) => candidate.storePath === store.storePath);
+    for (const selected of store.entries) {
+      const latest = entries?.entries.find(
+        (candidate) => candidate.sessionKey === selected.sessionKey,
+      );
+      const fields = ["sessionId", "lifecycleRevision", "createdActor", "visibility"] as const;
+      if (
+        !latest ||
+        fields.some((field) => !isDeepStrictEqual(selected.entry[field], latest.entry[field])) ||
+        !isDeepStrictEqual(selected.members, latest.members)
+      ) {
+        throw new Error("Project access changed while preparing the listing. Retry the request.");
+      }
+    }
+  }
+}
 
 export function loadProjectSessionStore(
   projection: SessionRowProjection,

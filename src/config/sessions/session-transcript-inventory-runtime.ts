@@ -6,6 +6,7 @@ import type {
 import { isIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { cloneEnvWithPlatformSemantics } from "../config-env-vars.js";
 import { listSessionTranscriptArchivesReadOnly } from "./session-accessor.sqlite-history.js";
+import { getSessionActorStorageBinding } from "./session-actor-storage-binding.js";
 import {
   readSessionEntryInWorker,
   withSessionStoreReaderInWorker,
@@ -21,6 +22,11 @@ import { resolveSessionStorePathForScope } from "./session-store-path.js";
 import type { SessionArchiveInventoryScope } from "./session-transcript-inventory.types.js";
 
 export async function listSessionTranscriptArchivesInWorker(input: SessionArchiveInventoryScope) {
+  const memory = getSessionActorStorageBinding(input);
+  if (memory) {
+    memory.actor.snapshot(memory.authority);
+    return [];
+  }
   const source = captureIncognitoSessionSource(input);
   const scope = {
     ...input,
@@ -69,6 +75,13 @@ export async function readSessionTranscriptCorpusInWorker(
   prepareArtifacts: () => Promise<readonly SessionTranscriptCorpusArtifact[]>,
 ) {
   const input = { agentId: scope.normalizedAgentId, storePath: scope.storePath, env: scope.env };
+  const memory = getSessionActorStorageBinding(input);
+  if (memory) {
+    return memory.actor.storage!.read(
+      { type: "session.corpus.list", input: { options } },
+      memory.authority,
+    );
+  }
   return withSessionStoreReaderInWorker(
     input,
     async ({
@@ -109,6 +122,16 @@ export async function readSessionTranscriptCorpusInWorker(
 }
 
 export async function resolveMemorySessionTargetsInWorker(input: MemorySessionSelectors) {
+  const memory = getSessionActorStorageBinding(input);
+  if (memory) {
+    return memory.actor.storage!.read(
+      {
+        type: "session.memory.targets",
+        input: { selectors: { ...input, storePath: memory.path } },
+      },
+      memory.authority,
+    );
+  }
   const scope = {
     ...input,
     env: cloneEnvWithPlatformSemantics(process.env),

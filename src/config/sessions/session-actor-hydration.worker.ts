@@ -368,6 +368,7 @@ export function hydrateSessionActorState(
       writeToken,
       dependencySessionIds: [],
       entry,
+      hasBoard: Boolean(selected?.actor_has_board),
       participants,
       members,
       pendingInputs: [],

@@ -150,7 +150,7 @@ describe("actor-owned memory storage", () => {
     expect(reset).toMatchObject({
       kind: "committed",
       value: {
-        progressCardReset: true,
+        progressCardReset: false,
         previousSessionId: "session-1",
         nextEntry: { sessionId: "session-2" },
       },

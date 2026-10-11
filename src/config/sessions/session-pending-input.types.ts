@@ -6,6 +6,7 @@ import type {
   SessionInputCompletions,
 } from "../../state/openclaw-agent-db.generated.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
+import type { SessionActorStorageBinding } from "./session-actor-storage-binding.js";
 import type { SessionPendingInputAuthority } from "./session-pending-input-authority.js";
 import type { SessionPendingInputState } from "./session-pending-input-receipt.types.js";
 
@@ -23,6 +24,7 @@ export type SessionPendingInputPage = {
 };
 export type SessionPendingInputRow = Selectable<SessionPendingInputs>;
 export type SessionPendingInputOwner = {
+  sessionActor?: SessionActorStorageBinding;
   agentId?: string;
   databaseAgentId?: string;
   inputId: string;

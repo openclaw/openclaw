@@ -5,6 +5,10 @@ import {
   buildSessionPreviewItems,
   projectSessionDisplayMessage,
 } from "../../gateway/session-display-projection.js";
+import {
+  SOURCE_PAGE_MAX_BYTES,
+  SOURCE_PAGE_MAX_MESSAGES,
+} from "../../gateway/session-transcript-source-pages.js";
 import { hasInterSessionUserProvenance } from "../../sessions/input-provenance.js";
 import { NESTED_TOOL_ACTIVITY_CUSTOM_TYPE } from "../../sessions/nested-tool-activity.js";
 import { matchesTranscriptEvent } from "../../sessions/transcript-visible-record.js";
@@ -25,6 +29,7 @@ import {
   type SessionActorMemoryHistoryRow,
 } from "./session-actor-memory-history-navigation.js";
 import type { SessionActorMemoryWindow } from "./session-actor-memory-state.js";
+import { readSessionActorMemoryTranscriptStats } from "./session-actor-memory-usage.js";
 import { isIndexedSessionEntry } from "./session-entry-codec.js";
 import { extractSessionBranchHeadline } from "./session-message-cut-content.js";
 import { readSessionTranscriptAccountingTail } from "./session-transcript-accounting-policy.js";
@@ -257,19 +262,8 @@ export function readSessionActorMemoryHistoryFacts(
   query: SessionActorMemoryHistoryFactsQuery,
 ): SessionActorMemoryHistoryFactsReads[keyof SessionActorMemoryHistoryFactsReads]["output"] {
   switch (query.type) {
-    case "session.history.stats": {
-      const updatedAt = window.hot.transcript.version.updatedAt;
-      return {
-        eventCount: window.events.length,
-        maxSeq: window.events.at(-1)?.rawSeq ?? 0,
-        sizeBytes:
-          window.events.reduce((bytes, row) => bytes + Buffer.byteLength(row.eventJson), 0) +
-          Math.max(0, window.events.length - 1),
-        ...(updatedAt === null
-          ? {}
-          : { lastMutationAtMs: updatedAt, lastObservedMutationAtMs: updatedAt }),
-      };
-    }
+    case "session.history.stats":
+      return readSessionActorMemoryTranscriptStats(window);
     case "session.history.watermark":
       return { kind: "transcript-watermark", watermark: window.hot.transcript.watermark };
     case "session.history.message-presence":
@@ -434,5 +428,29 @@ export function readSessionActorMemoryHistoryFacts(
     }
     case "session.history.bounded-tail":
       return boundedTail(window, navigation, query.input.options);
+    case "session.history.visitor-source": {
+      const rows = navigation.visibleMessages;
+      const start = resolveIntegerOption(query.input.offset, 0, { min: 0, max: rows.length });
+      const messages: Array<{ message: unknown; seq: number }> = [];
+      let end = start;
+      let bytes = 0;
+      for (const row of rows.slice(start, start + SOURCE_PAGE_MAX_MESSAGES)) {
+        if (row.serializedBytes > SOURCE_PAGE_MAX_BYTES) {
+          throw new Error(
+            `Transcript source message exceeds the ${SOURCE_PAGE_MAX_BYTES}-byte page limit`,
+          );
+        }
+        if (bytes + row.serializedBytes > SOURCE_PAGE_MAX_BYTES) {
+          break;
+        }
+        bytes += row.serializedBytes;
+        end++;
+        const message = asOptionalRecord(row.event)?.message;
+        if (message !== undefined) {
+          messages.push({ message, seq: row.messagePosition! + 1 });
+        }
+      }
+      return { messages, ...(end < rows.length ? { nextOffset: end } : {}) };
+    }
   }
 }

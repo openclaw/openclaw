@@ -7,6 +7,7 @@ import {
 } from "../../packages/gateway-protocol/src/index.js";
 import { prepareSessionEntryMutationDatabases } from "../config/sessions/session-accessor.entry-mutation.js";
 import { patchSessionEntryCore } from "../config/sessions/session-accessor.js";
+import { getSessionActorStorageBinding } from "../config/sessions/session-actor-storage-binding.js";
 import {
   composeSessionSourceAssertion,
   sessionEntryCommitGuardOptions,
@@ -14,6 +15,7 @@ import {
 } from "../config/sessions/session-source-authority.js";
 import type { InternalSessionEntry as SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { isIncognitoSessionKey } from "../routing/session-key.js";
 import { runExclusiveSessionLifecycleMutation } from "../sessions/session-lifecycle-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { ADMIN_SCOPE } from "./operator-scopes.js";
@@ -79,6 +81,20 @@ export function prepareGatewaySessionLifecycleTargets(params: {
     preparedDatabase = prepared;
   });
   const preparations = params.targets.map(async ({ target, entry, storageReady }, index) => {
+    const memory = isIncognitoSessionKey(target.canonicalKey)
+      ? getSessionActorStorageBinding({})
+      : undefined;
+    if (memory) {
+      return {
+        matchesCurrent() {
+          memory.actor.assertCurrent();
+          memory.authority.assertCurrent();
+          return true;
+        },
+        bindCreation() {},
+        release() {},
+      };
+    }
     let preparedStorage: { assertCurrent(): void } | undefined;
     const targetStorageReady = storageReady?.then((prepared) => {
       preparedStorage = prepared;

@@ -2,6 +2,7 @@ import {
   resolveSqliteScope,
   toDatabaseOptions,
 } from "../config/sessions/session-accessor.sqlite-scope.js";
+import { getSessionActorStorageBinding } from "../config/sessions/session-actor-storage-binding.js";
 import type { SessionCollaborationScope } from "../config/sessions/session-collaboration-scope.js";
 import {
   captureIncognitoSessionOperation,
@@ -24,6 +25,7 @@ import {
   writeSessionProgressCard,
 } from "../session-cards/progress-card-store.js";
 import type { ProgressCardWorkerOperations } from "../session-cards/progress-card-store.worker.js";
+import { createSessionActorProgressCardStore } from "../session-cards/session-actor-progress-card-store.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
 import {
   isIncognitoOpenClawAgentSqlitePath,
@@ -124,6 +126,10 @@ export const progressCardStore = {
     sessionKey: string,
     agentId?: string,
   ): Promise<ReturnType<typeof readSessionProgressCard>> {
+    const actorBinding = getSessionActorStorageBinding({ sessionKey, agentId });
+    if (actorBinding) {
+      return createSessionActorProgressCardStore(() => actorBinding).get(sessionKey, agentId);
+    }
     const source = captureIncognitoSessionSource({ sessionKey, agentId });
     if (source && "kind" in source) {
       return null;
@@ -164,6 +170,14 @@ export const progressCardStore = {
     },
     agentId?: string,
   ): Promise<{ card: ReturnType<typeof readSessionProgressCard> }> {
+    const actorBinding = getSessionActorStorageBinding({ sessionKey, agentId });
+    if (actorBinding) {
+      return createSessionActorProgressCardStore(() => actorBinding).put(
+        sessionKey,
+        input,
+        agentId,
+      );
+    }
     const incognito = captureIncognitoSessionOperation({ sessionKey, agentId });
     if (incognito) {
       return createIncognitoProgressCardStore(() => ({

@@ -1,5 +1,6 @@
 import type { SessionTreeEntry } from "@openclaw/agent-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { iterateSessionContextMessages } from "../../../packages/agent-core/src/harness/session/session.js";
 import {
   isSyntheticMissingToolResult,
   SYNTHETIC_MISSING_TOOL_RESULT_DETAIL_KEY,
@@ -13,6 +14,7 @@ import { normalizeSessionContextEntryBoundaries } from "./session-entry-navigati
 import type {
   SessionModelContextLimits,
   SessionTranscriptModelContext,
+  SessionTranscriptContextSnapshot,
 } from "./session-history-read.types.js";
 import {
   MODEL_CONTEXT_NAVIGATION_KEYS,
@@ -208,4 +210,22 @@ export function readSessionActorMemoryContext(
     },
     limits,
   );
+}
+
+/** Full-fidelity context uses the same path and boundary policy as the native reader. */
+export function readSessionActorMemoryContextMessages(
+  window: SessionActorMemoryWindow,
+): SessionTranscriptContextSnapshot {
+  const tree = scanSessionTranscriptTree(window.events.map((row) => row.event));
+  const entries = normalizeSessionContextEntryBoundaries(
+    selectSessionTranscriptTreePathNodes(tree, tree.leafId).flatMap((node) =>
+      isIndexedSessionEntry(node.entry) ? [{ ...node.entry, parentId: node.parentId }] : [],
+    ),
+    tree.nodes,
+  );
+  return {
+    messages: Array.from(iterateSessionContextMessages(entries)),
+    header: window.events.find((row) => isRecord(row.event) && row.event.type === "session")?.event,
+    version: window.hot.transcript.version,
+  };
 }

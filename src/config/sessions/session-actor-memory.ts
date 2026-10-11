@@ -2,14 +2,25 @@ import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { parseAgentSessionKey, toAgentStoreSessionKey } from "../../routing/session-key.js";
 import { isIncognitoSessionKey } from "../../shared/incognito-session-key.js";
+import type { ConversationReadQuery } from "./conversation-registry.types.js";
 import type {
   SessionActorAuthority,
   SessionActorFactory,
+  SessionActorLifetime,
   SessionActorOutcome,
   SessionActorPhaseResults,
 } from "./session-actor-contract.js";
 import { createSessionActorWithExecutor } from "./session-actor-executor.js";
+import {
+  createSessionActorMemoryConversations,
+  cloneSessionActorMemoryConversations,
+} from "./session-actor-memory-conversation-contract.js";
+import {
+  selectSessionActorMemoryConversations,
+  syncSessionActorMemoryConversations,
+} from "./session-actor-memory-conversation.js";
 import { createSessionActorMemoryPending } from "./session-actor-memory-pending.js";
+import { publishSessionActorMemoryChanges } from "./session-actor-memory-publication.js";
 import { validateSessionActorMemoryRecoveryInput } from "./session-actor-memory-recovery.js";
 import { validateSessionActorMemorySources } from "./session-actor-memory-sources.js";
 import {
@@ -41,7 +52,18 @@ export function createMemorySessionActorOwner(options: { agentId: string; path: 
     handle: randomUUID(),
     incarnation: randomUUID(),
   });
+  let conversations = createSessionActorMemoryConversations();
   const sessions = new Map<string, SessionActorMemoryRecord>();
+  let nextSearchOrder = 0;
+  const prepareInstall = (
+    state: import("./session-actor-memory-state.js").SessionActorMemoryState,
+  ) => {
+    state.events = state.events.map((row) =>
+      row.searchOrder === undefined
+        ? { ...row, createdAt: row.createdAt ?? Date.now(), searchOrder: nextSearchOrder++ }
+        : row,
+    );
+  };
   let queue = Promise.resolve();
   const enqueue = <T>(run: () => T): Promise<T> => {
     const result = queue.then(run);
@@ -89,7 +111,17 @@ export function createMemorySessionActorOwner(options: { agentId: string; path: 
       };
       return createSessionActorWithExecutor({
         target,
-        lifetime,
+        lifetime: {
+          ...lifetime,
+          assertCurrent() {
+            current();
+            lifetime.assertCurrent();
+          },
+          assertReadable() {
+            current();
+            lifetime.assertReadable();
+          },
+        },
         createExecutor(guards) {
           const snapshot = (authority: SessionActorAuthority) => {
             const hot = structuredClone(current().hot);
@@ -106,6 +138,13 @@ export function createMemorySessionActorOwner(options: { agentId: string; path: 
               current,
               enqueue,
               guards,
+              acquire: (requestedKey, acquiredLifetime = lifetime) =>
+                factory.acquire({ database: identity, sessionKey: requestedKey }, acquiredLifetime),
+              prepareInstall,
+              conversations: () => conversations,
+              installConversations: (value) => {
+                conversations = value;
+              },
             }),
             snapshot,
             read: (authority) => enqueue(() => snapshot(authority)),
@@ -134,6 +173,24 @@ export function createMemorySessionActorOwner(options: { agentId: string; path: 
                       (key) => (key === sessionKey ? working : sessions.get(key)?.state),
                       identity.incarnation,
                       sources,
+                      (query) =>
+                        selectSessionActorMemoryConversations(
+                          {
+                            conversations,
+                            entries: () =>
+                              sessions
+                                .entries()
+                                .map(
+                                  ([key, record]) =>
+                                    [key, key === sessionKey ? working : record.state] as [
+                                      string,
+                                      typeof working,
+                                    ],
+                                ),
+                            get: (key) => (key === sessionKey ? working : sessions.get(key)?.state),
+                          },
+                          query,
+                        ),
                     );
                   const pending = createSessionActorMemoryPending(working, { ...options, admit });
                   const transcript = createSessionActorMemoryTranscript({
@@ -160,6 +217,16 @@ export function createMemorySessionActorOwner(options: { agentId: string; path: 
                     mutatePendingInput: (value) => pending.mutate(value),
                     admit,
                   });
+                  let changedConversations = conversations;
+                  if (!isDeepStrictEqual(before.hot.entry, working.hot.entry)) {
+                    changedConversations = cloneSessionActorMemoryConversations(conversations);
+                    syncSessionActorMemoryConversations(
+                      working,
+                      changedConversations,
+                      before.hot.entry,
+                    );
+                  }
+                  prepareInstall(working);
                   advanceSessionActorMemoryState(working);
                   // This is the sole effect boundary; no asynchronous work runs inside it.
                   authority.authorize("commit", structuredClone(working.hot));
@@ -174,7 +241,12 @@ export function createMemorySessionActorOwner(options: { agentId: string; path: 
                     applied,
                   });
                   session.state = working;
+                  conversations = changedConversations;
                   try {
+                    publishSessionActorMemoryChanges(
+                      { ...options, incarnation: identity.incarnation },
+                      [{ sessionKey, before: before.hot, after: working.hot }],
+                    );
                     observer?.committed(
                       // SAFETY: Shared phase dispatch preserves the command/result correlation.
                       structuredClone(committed) as Extract<
@@ -203,19 +275,86 @@ export function createMemorySessionActorOwner(options: { agentId: string; path: 
       });
     },
   };
+  const readSession = (sessionKey: string, authority: SessionActorAuthority) => {
+    assertOpen();
+    const record = sessions.get(sessionKey);
+    if (!record || record.closed) {
+      return undefined;
+    }
+    const hot = structuredClone(record.state.hot);
+    authority.authorize("commit", hot);
+    authority.assertCurrent();
+    return hot;
+  };
   return {
+    ...options,
     identity,
     ...factory,
+    readSession,
+    readConversations(query: ConversationReadQuery, authority: SessionActorAuthority) {
+      assertOpen();
+      const rows = selectSessionActorMemoryConversations(
+        {
+          conversations,
+          entries: () =>
+            sessions
+              .entries()
+              .map(([key, record]) => [key, record.state] as [string, typeof record.state]),
+          get(key) {
+            readSession(key, authority);
+            return sessions.get(key)?.state;
+          },
+        },
+        query,
+      );
+      authority.assertCurrent();
+      return structuredClone(rows);
+    },
+    readSessionById(sessionId: string, authority: SessionActorAuthority) {
+      assertOpen();
+      for (const [sessionKey, record] of sessions) {
+        if (record.closed) {
+          continue;
+        }
+        const window =
+          record.state.hot.entry?.sessionId === sessionId
+            ? record.state
+            : record.state.historicalWindows.get(sessionId);
+        if (!window?.hot.entry) {
+          continue;
+        }
+        authority.authorize("commit", structuredClone(record.state.hot));
+        authority.assertCurrent();
+        return { sessionKey, entry: structuredClone(window.hot.entry) };
+      }
+      return undefined;
+    },
+    listSessions(authority: SessionActorAuthority) {
+      return [...sessions.keys()].flatMap((key) => readSession(key, authority) ?? []);
+    },
+    acquireExisting(sessionKey: string, lifetime: SessionActorLifetime) {
+      assertOpen();
+      const record = sessions.get(sessionKey);
+      return !record || record.closed
+        ? Promise.resolve(undefined)
+        : factory.acquire({ database: identity, sessionKey }, lifetime);
+    },
     closeSession(sessionKey: string) {
       const session = sessions.get(sessionKey);
       if (session) {
         session.closed = true;
       }
       sessions.delete(sessionKey);
+      if (session) {
+        publishSessionActorMemoryChanges({ ...options, incarnation: identity.incarnation }, [
+          { sessionKey, before: session.state.hot, after: undefined },
+        ]);
+      }
     },
     close() {
       closed = true;
       sessions.clear();
+      conversations = createSessionActorMemoryConversations();
     },
   };
 }

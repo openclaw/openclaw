@@ -33,10 +33,12 @@ import {
 } from "../config/sessions/session-accessor.js";
 import { runWithSessionEntryCreationPublication } from "../config/sessions/session-accessor.sqlite-entry-cache.js";
 import type { SessionEntryCreationOperation } from "../config/sessions/session-accessor.sqlite-entry-cache.types.js";
+import { getSessionActorStorageBinding } from "../config/sessions/session-actor-storage-binding.js";
 import { createSessionDiffBaselineCaptureClaim } from "../config/sessions/session-diff-baseline-capture.js";
 import { buildSessionParentLink } from "../config/sessions/session-entry-lineage.js";
 import { projectPublicSessionEntry } from "../config/sessions/session-entry-projection.js";
 import { buildSessionCreationStamp } from "../config/sessions/session-entry-provenance.js";
+import { withSessionEntriesFromStoresInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import {
   createInternalHookEvent,
   hasInternalHookListeners,
@@ -191,12 +193,20 @@ export async function createGatewaySession(
       return invalidSessionRequest("incognito sessions are web-only");
     }
     const durableStorePath = resolveSessionStorePathCore(params.cfg.session?.store, { agentId });
-    const durableEntry = loadExactSessionEntryFromStoreReadOnly({
+    const durableLookup = {
       agentId,
       storePath: durableStorePath,
       sessionKey: explicitTargetKey,
-      projection: "list",
-    });
+      projection: "list" as const,
+    };
+    const memory = getSessionActorStorageBinding({ agentId, sessionKey: explicitTargetKey });
+    // A legacy durable collision contains user data and must still block creation.
+    const durableEntry = memory
+      ? await withSessionEntriesFromStoresInWorker(
+          [{ ...durableLookup, sessionKeys: [explicitTargetKey] }],
+          ([read]) => read!.result.entries[0]?.entry,
+        )
+      : loadExactSessionEntryFromStoreReadOnly(durableLookup);
     if (durableEntry || loadGatewaySessionEntryReadOnly(explicitTargetKey).entry) {
       return invalidSessionRequest("incognito is immutable and requires a new session key");
     }
@@ -226,11 +236,13 @@ export async function createGatewaySession(
   }
   // Capture the requested incarnation before worker discovery yields to authority preparation.
   const initialTargetEntry = explicitTargetKey
-    ? resolveSessionEntryAccessTarget({
-        cfg: params.cfg,
-        sessionKey: explicitTargetKey,
-        agentId,
-      }).entry
+    ? getSessionActorStorageBinding({ sessionKey: explicitTargetKey, agentId })
+      ? loadGatewaySessionEntryReadOnly(explicitTargetKey, { agentId }, params.cfg).entry
+      : resolveSessionEntryAccessTarget({
+          cfg: params.cfg,
+          sessionKey: explicitTargetKey,
+          agentId,
+        }).entry
     : undefined;
   if (
     explicitTargetKey &&
