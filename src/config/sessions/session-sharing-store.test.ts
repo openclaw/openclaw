@@ -280,6 +280,8 @@ describe("session sharing store", () => {
         { identityId: "zoe", addedBy: "owner", addedAt: 2 },
       ]);
       expect(isSessionMember(scope, "alice")).toBe(true);
+      expect(removeSessionMember(scope, "alice", { addedBy: "owner", addedAt: 2 })).toBeNull();
+      expect(listSessionMembers(scope)).toHaveLength(2);
       expect(removeSessionMember(scope, "alice")).toEqual({
         identityId: "alice",
         addedBy: "owner",

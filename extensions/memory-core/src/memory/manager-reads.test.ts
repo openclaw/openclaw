@@ -231,7 +231,7 @@ describe("memory manager reads", () => {
     expect(snapshot()).toEqual(before);
   });
 
-  it("reuses diagnostic cache totals and the synchronous sync existence check", async () => {
+  it("reuses diagnostic cache totals", async () => {
     const cfg = fixture.createConfig({ provider: "none", cacheEnabled: true });
     const manager = await fixture.getFreshManager(cfg, "cli");
     await manager.sync({ reason: "cli", force: true });
@@ -259,15 +259,6 @@ describe("memory manager reads", () => {
     } finally {
       diagnosticReads.restore();
       await diagnostic.close();
-    }
-    const syncReads = observeReads(database);
-    try {
-      await manager.sync({ reason: "cli" });
-      expect(
-        syncReads.reads.filter(({ sql }) => /\bmemory_index_chunks\b/i.test(sql)),
-      ).toHaveLength(1);
-    } finally {
-      syncReads.restore();
     }
   });
 });

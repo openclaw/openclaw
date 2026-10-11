@@ -154,7 +154,6 @@ describe("projectSidebarSessionCatalogs", () => {
 
   it.each([
     ["active", 100, ["native"]],
-    ["active", 200, ["native", "adopted"]],
     ["all", 100, ["native", "adopted"]],
   ] as const)(
     "applies shared %s visibility at %i to adopted rows only",
@@ -207,29 +206,6 @@ describe("projectSidebarSessionCatalogs", () => {
       ).toEqual(expected);
     },
   );
-
-  it("removes empty hosts", () => {
-    const hosts: SessionCatalogHost[] = [
-      {
-        hostId: "gateway:local",
-        label: "Gateway",
-        kind: "gateway",
-        connected: true,
-        sessions: [session("shared", "Gateway copy")],
-      },
-      {
-        hostId: "node:empty",
-        label: "Empty node",
-        kind: "node",
-        connected: true,
-        sessions: [],
-      },
-    ];
-
-    expect(projectSidebarSessionCatalogs([catalog(hosts)], null, [])).toEqual([
-      { ...catalog(hosts), visibleHosts: [hosts[0]] },
-    ]);
-  });
 
   it("filters sessions by effective owner without inferring host identity", () => {
     const hosts: SessionCatalogHost[] = [

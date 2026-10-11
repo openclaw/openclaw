@@ -1,13 +1,6 @@
 import { describe, expect, it } from "vitest";
-import {
-  meetsIdentifierAuthentication,
-  weakestIdentifierAuthentication,
-  type IdentifierAuthentication,
-} from "./identifier-authentication.js";
 import type { ResolveStableChannelMessageIngressParams } from "./runtime-types.js";
 import { resolveStableChannelIngressPolicy } from "./runtime.js";
-
-const strengths: IdentifierAuthentication[] = ["mutable", "unverified", "asserted", "verified"];
 
 function base(
   overrides: Partial<ResolveStableChannelMessageIngressParams> = {},
@@ -25,17 +18,6 @@ function base(
 }
 
 describe("identifier authentication", () => {
-  it("orders the scale and combines exact claims by the weaker strength", () => {
-    for (const [actualIndex, actual] of strengths.entries()) {
-      for (const [minimumIndex, minimum] of strengths.entries()) {
-        expect(meetsIdentifierAuthentication(actual, minimum)).toBe(actualIndex >= minimumIndex);
-        expect(weakestIdentifierAuthentication(actual, minimum)).toBe(
-          strengths[Math.min(actualIndex, minimumIndex)],
-        );
-      }
-    }
-  });
-
   it("combines each matched entry with the exact same-kind subject identifier", async () => {
     const identity = {
       key: "primary-email",

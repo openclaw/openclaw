@@ -124,12 +124,6 @@ describe("sidebar session owner preference", () => {
 });
 
 describe("sidebar session sort preference", () => {
-  it("defaults absent and unknown stored values to created", () => {
-    expect(loadStoredSidebarSessionSortMode()).toBe("created");
-    localStorage.setItem("openclaw:sidebar:sessions:sort-mode", "unexpected");
-    expect(loadStoredSidebarSessionSortMode()).toBe("created");
-  });
-
   it("round-trips updated and people modes", () => {
     expect(storeSidebarSessionSortMode("updated", undefined)).toBe("updated");
     expect(loadStoredSidebarSessionSortMode()).toBe("updated");

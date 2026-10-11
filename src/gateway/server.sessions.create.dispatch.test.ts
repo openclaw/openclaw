@@ -167,8 +167,8 @@ test("chat.send deletes a session before its pending dashboard title finishes", 
     await dispatchAdmissionsReleased;
     expect(isSessionWorkAdmissionActive(storePath, [sessionKey])).toBe(false);
 
-    // Metadata-only naming must not delay deletion, even while its model is blocked.
-    const deletion = directSessionReq<{ deleted: boolean }>("sessions.delete", {
+    // Use the dispatching Gateway's terminal drain while its metadata-only title is blocked.
+    const deletion = rpcReq<{ deleted: boolean }>(ws, "sessions.delete", {
       key: sessionKey,
     });
     deletionCleanup = deletion.catch(() => {});

@@ -31,6 +31,8 @@ Internal updates, including subagent completion reports, also use this steering 
 
 In the built-in runtime, each steered user input gets its own delivered answer in order. A later answer does not replace a completed answer to an earlier input, even when steering skipped its pending tools.
 
+Recording a steering receipt while another input is being persisted keeps the active turn running. Accepted inputs remain in order and reach the next available model boundary.
+
 A steered channel reply carries that message's quoted or forwarded context into
 the model input. Quoted content stays conversation data; commands and answers to
 pending questions use the literal incoming text. Text-only transcript entries
