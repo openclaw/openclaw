@@ -1,4 +1,4 @@
-import { createSignal } from "solid-js";
+import { createRenderEffect, createSignal } from "solid-js";
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { ApplicationContext } from "../app/context.ts";
@@ -17,15 +17,22 @@ import type { McpAppViewProps } from "./mcp-app-view.ts";
 vi.mock("./mcp-app-view-registration.ts", () => ({
   McpAppView: (
     props: Pick<McpAppViewProps, "sessionKey" | "agentId" | "viewId" | "title" | "deepLink">,
-  ) => (
-    <mcp-app-view
-      prop:sessionKey={props.sessionKey}
-      prop:agentId={props.agentId}
-      prop:viewId={props.viewId}
-      prop:title={props.title}
-      prop:deepLink={props.deepLink}
-    />
-  ),
+  ) => {
+    const view = document.createElement("mcp-app-view");
+    createRenderEffect(
+      () => ({
+        sessionKey: props.sessionKey,
+        agentId: props.agentId,
+        viewId: props.viewId,
+        title: props.title,
+        deepLink: props.deepLink,
+      }),
+      (values) => {
+        Object.assign(view, values);
+      },
+    );
+    return view;
+  },
 }));
 
 it("retains the old app and its launch target until teardown finishes", async () => {
