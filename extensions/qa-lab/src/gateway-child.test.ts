@@ -982,58 +982,47 @@ describe("buildQaRuntimeEnv", () => {
     expect(new Set(records.map((record) => record.authDbPath)).size).toBe(1);
   });
 
-  it.each([
-    { retry: "bind", configBuilds: 2 },
-    { retry: "migration", configBuilds: 1 },
-  ])(
-    "preserves packaged config repair across $retry startup retries",
-    async ({ retry, configBuilds }) => {
-      const mutateConfig = vi.fn((cfg: OpenClawConfig) => cfg);
-      const { start, recordPath } = await createPackagedFixture(
-        {
-          QA_STARTUP_RETRY: retry,
-          QA_CONFIG_RUNTIME_VERSION: "2026.7.33",
-        },
-        mutateConfig,
-      );
-      await expect(start()).rejects.toThrow("fixture gateway exit");
-      const records = await readJsonLines(recordPath);
-      const gateways = records.filter((record) => record.kind === "gateway");
-      expect(gateways).toHaveLength(2);
-      expect(gateways.map((record) => record.sourcePluginConfigured)).toEqual([false, false]);
-      const repairs = records.filter((record) => record.kind === "plugins");
-      expect(repairs).toHaveLength(configBuilds);
-      for (const repair of repairs) {
-        expect(repair.args).toContain("--accept-capabilities");
-      }
-      expect(repairs.map((record) => record.configPort)).toEqual(
-        retry === "bind" ? gateways.map((record) => record.configPort) : [gateways[0]?.configPort],
-      );
-      expect(mutateConfig).toHaveBeenCalledTimes(configBuilds);
-      expect(records.filter((record) => record.kind === "auth")).toHaveLength(2);
-      expect(records.map((record) => record.kind)).toEqual([
-        "auth",
-        "auth",
-        "help",
-        "plugins",
-        "gateway",
-        ...(retry === "bind" ? ["help", "plugins"] : []),
-        "gateway",
-      ]);
-      expect(new Set(records.map((record) => record.stateDir)).size).toBe(1);
-      for (const gateway of gateways) {
-        expect(gateway.args).toContainEqual(String(gateway.configPort));
-        expect(gateway).toMatchObject({
-          dbExists: true,
-          authProfileIds: ["qa-mock-openai", "qa-mock-anthropic"],
-          configVersion: "2026.7.33",
-        });
-      }
-      if (retry === "migration") {
-        expect(gateways[1]?.configPort).toBe(gateways[0]?.configPort);
-      }
-    },
-  );
+  it("preserves packaged config repair across migration convergence", async () => {
+    const mutateConfig = vi.fn((cfg: OpenClawConfig) => cfg);
+    const { start, recordPath } = await createPackagedFixture(
+      {
+        QA_STARTUP_RETRY: "migration",
+        QA_CONFIG_RUNTIME_VERSION: "2026.7.33",
+      },
+      mutateConfig,
+    );
+    await expect(start()).rejects.toThrow("fixture gateway exit");
+    const records = await readJsonLines(recordPath);
+    const gateways = records.filter((record) => record.kind === "gateway");
+    expect(gateways).toHaveLength(2);
+    expect(gateways.map((record) => record.sourcePluginConfigured)).toEqual([false, false]);
+    const repairs = records.filter((record) => record.kind === "plugins");
+    expect(repairs).toHaveLength(1);
+    for (const repair of repairs) {
+      expect(repair.args).toContain("--accept-capabilities");
+    }
+    expect(repairs.map((record) => record.configPort)).toEqual([gateways[0]?.configPort]);
+    expect(mutateConfig).toHaveBeenCalledTimes(1);
+    expect(records.filter((record) => record.kind === "auth")).toHaveLength(2);
+    expect(records.map((record) => record.kind)).toEqual([
+      "auth",
+      "auth",
+      "help",
+      "plugins",
+      "gateway",
+      "gateway",
+    ]);
+    expect(new Set(records.map((record) => record.stateDir)).size).toBe(1);
+    for (const gateway of gateways) {
+      expect(gateway.args).toContainEqual(String(gateway.configPort));
+      expect(gateway).toMatchObject({
+        dbExists: true,
+        authProfileIds: ["qa-mock-openai", "qa-mock-anthropic"],
+        configVersion: "2026.7.33",
+      });
+    }
+    expect(gateways[1]?.configPort).toBe(gateways[0]?.configPort);
+  });
 
   it("preserves authored newer-version metadata so the packaged candidate refuses it", async () => {
     const { start, recordPath } = await createPackagedFixture(

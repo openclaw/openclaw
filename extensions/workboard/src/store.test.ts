@@ -239,7 +239,7 @@ describe("WorkboardStore", () => {
     await expect(store.get(card.id)).resolves.toBeUndefined();
   });
 
-  it("reports committed reference cleanup revisions after a concurrent peer edit", async () => {
+  it("reports a reference cleanup conflict without overwriting a concurrent peer edit", async () => {
     await using harness = createConcurrentSqliteHarness("openclaw-workboard-delete-references-");
     const parent = await harness.host.create({ title: "Selected parent" });
     const child = await harness.host.create({ title: "Selected child" });
@@ -265,28 +265,12 @@ describe("WorkboardStore", () => {
     });
     cleanup.resume();
     const result = await outcome;
-    expect(result).not.toHaveProperty("error");
-    const current = await harness.host.get(child.id);
-    expect(current?.metadata?.links?.some((link) => link.targetCardId === parent.id) ?? false).toBe(
-      false,
-    );
-
-    expect(current?.metadata?.comments).toEqual(beforeCleanup.metadata?.comments);
-    expect(current?.metadata?.links).toEqual(
-      beforeCleanup.metadata?.links?.filter((link) => link.targetCardId !== parent.id),
-    );
-    expect(result).toEqual({
-      value: {
-        deleted: true,
-        referenceUpdates: [
-          {
-            id: child.id,
-            previousUpdatedAt: beforeCleanup.updatedAt,
-            updatedAt: current?.updatedAt,
-          },
-        ],
-      },
+    expect(result).toMatchObject({
+      error: { name: "WorkboardCardConflictError", current: beforeCleanup },
     });
+    const current = await harness.host.get(child.id);
+    expect(current).toEqual(beforeCleanup);
+    await expect(harness.host.get(parent.id)).resolves.toBeUndefined();
     await expect(harness.host.get(unrelated.id)).resolves.toEqual(unrelated);
     await expect(
       harness.operation.delete(child.id, { expectedUpdatedAt: current?.updatedAt }),
@@ -362,7 +346,7 @@ describe("WorkboardStore", () => {
   });
 
   it.each([false, true])(
-    "converges cross-host session captures with archived=%s",
+    "preserves the winning cross-host session capture with archived=%s",
     async (archived) => {
       await using harness = createConcurrentSqliteHarness("openclaw-workboard-capture-");
       const { operation: first, host: second, paused } = harness;
@@ -374,11 +358,9 @@ describe("WorkboardStore", () => {
         await second.archive(captured.id, true);
       }
       const pause = archived ? paused.pauseNextWrite() : undefined;
-      const pending = first.captureSession({
-        title: "Captured by host A",
-        sessionKey,
-        boardId: "ops",
-      });
+      const pending = first
+        .captureSession({ title: "Captured by host A", sessionKey, boardId: "ops" })
+        .catch((error: unknown) => error);
       if (pause) {
         await pause.reached;
       }
@@ -388,18 +370,22 @@ describe("WorkboardStore", () => {
         boardId: "other",
       });
       pause?.resume();
-      const left = await pending;
-      expect(left.id).toBe(right.id);
-      expect(left.id).toMatch(
+      const result = await pending;
+      if (archived) {
+        expect(result).toMatchObject({ name: "WorkboardCardConflictError", current: right });
+      } else {
+        expect(result).toEqual(right);
+      }
+      await expect(first.get(right.id)).resolves.toEqual(right);
+      expect(right.id).toMatch(
         /^[0-9a-f]{8}-[0-9a-f]{4}-8[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
       );
-      expect(left).toEqual(right);
       if (archived) {
-        expect(left.metadata?.archivedAt).toBeUndefined();
+        expect(right.metadata?.archivedAt).toBeUndefined();
       } else {
-        expect(["ops", "other"]).toContain(left.metadata?.automation?.boardId);
+        expect(["ops", "other"]).toContain(right.metadata?.automation?.boardId);
       }
-      await expect(first.list()).resolves.toEqual([left]);
+      await expect(first.list()).resolves.toEqual([right]);
     },
   );
 
