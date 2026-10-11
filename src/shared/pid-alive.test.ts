@@ -291,18 +291,31 @@ describe("native process identity policy", () => {
     expect(kill).not.toHaveBeenCalled();
   });
 
-  it.each([null, { ...identity(), exited: true }])(
-    "does not recover an absent or exited owner through ps",
-    (value) => {
+  describe.each([
+    { owner: "absent", value: null },
+    { owner: "exited", value: { ...identity(), exited: true } },
+  ])("$owner native owner", ({ value }) => {
+    it.each([
+      { probe: "success", definitelyDead: true },
+      { probe: "ESRCH", definitelyDead: true },
+      { probe: "EPERM", definitelyDead: false },
+    ])("does not recover through ps (signal probe=$probe)", ({ probe, definitelyDead }) => {
       nativeIdentity.mockReturnValue(value);
+      // The synthetic PID must not inherit the host's signal permissions.
+      vi.spyOn(process, "kill").mockImplementation(() => {
+        if (probe !== "success") {
+          throw Object.assign(new Error("process probe failed"), { code: probe });
+        }
+        return true;
+      });
       const shell = vi.spyOn(childProcess, "execFileSync");
       expect(getFileLockProcessStartTime(42)).toBeNull();
       expect(getProcessInstanceStartTime(42)).toBeNull();
       expect(isPidAlive(42)).toBe(false);
-      expect(isPidDefinitelyDead(42)).toBe(true);
+      expect(isPidDefinitelyDead(42)).toBe(definitelyDead);
       expect(shell).not.toHaveBeenCalled();
-    },
-  );
+    });
+  });
 
   it.each(["darwin", "freebsd", "win32"] as const)(
     "never declares a hidden %s process dead",
