@@ -81,6 +81,7 @@ class DevicesPage extends OpenClawLightDomElement {
   @state() private canAdmin = false;
   @state() private execApprovalsTarget: "gateway" | "node" = "gateway";
   @state() private execApprovalsTargetNodeId: string | null = null;
+  @state() private pendingPairingActions = new Set<string>();
   private readonly dialogs = new DevicesDialogController({
     canManagePairing: () => this.canManagePairing,
     gatewayConnected: () => this.gateway.connected,
@@ -326,6 +327,14 @@ class DevicesPage extends OpenClawLightDomElement {
     this.resetInventoryDetails();
   }
 
+  private pairingActionKey(
+    kind: "device" | "node",
+    requestId: string,
+    action: "approve" | "reject",
+  ): string {
+    return `${kind}:${requestId}:${action}`;
+  }
+
   private async runPageTask<T>(
     task: (pageState: DevicesPageDataState) => T | Promise<T>,
   ): Promise<T> {
@@ -552,6 +561,7 @@ class DevicesPage extends OpenClawLightDomElement {
           devicesList: devices.devicesList,
           canPairDevice: this.canAdmin,
           canManagePairing: this.canManagePairing,
+          pendingPairingActions: this.pendingPairingActions,
           canAdmin: this.canAdmin,
           configForm: currentConfigObject(config),
           configLoading: config.configLoading,
@@ -572,16 +582,40 @@ class DevicesPage extends OpenClawLightDomElement {
             }
           },
           onDeviceApprove: (requestId) => {
-            if (this.canManagePairing) {
-              void this.runPageTask((pageState) => approveDevicePairing(pageState, requestId));
+            if (!this.canManagePairing) {
+              return;
             }
+            const key = this.pairingActionKey("device", requestId, "approve");
+            if (this.pendingPairingActions.has(key)) {
+              return;
+            }
+            this.pendingPairingActions = new Set(this.pendingPairingActions).add(key);
+            void this.runPageTask((pageState) =>
+              approveDevicePairing(pageState, requestId),
+            ).finally(() => {
+              const next = new Set(this.pendingPairingActions);
+              next.delete(key);
+              this.pendingPairingActions = next;
+            });
           },
           onDeviceReject: (requestId) =>
             void this.dialogs.confirmPairingReject("device", requestId),
           onNodeApprove: (requestId) => {
-            if (this.canManagePairing) {
-              void this.runPageTask((pageState) => approveNodePairingRequest(pageState, requestId));
+            if (!this.canManagePairing) {
+              return;
             }
+            const key = this.pairingActionKey("node", requestId, "approve");
+            if (this.pendingPairingActions.has(key)) {
+              return;
+            }
+            this.pendingPairingActions = new Set(this.pendingPairingActions).add(key);
+            void this.runPageTask((pageState) =>
+              approveNodePairingRequest(pageState, requestId),
+            ).finally(() => {
+              const next = new Set(this.pendingPairingActions);
+              next.delete(key);
+              this.pendingPairingActions = next;
+            });
           },
           onNodeReject: (requestId) => void this.dialogs.confirmPairingReject("node", requestId),
           onInventoryRemove: (entry) =>

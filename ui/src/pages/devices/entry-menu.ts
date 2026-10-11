@@ -49,6 +49,9 @@ export function renderDeviceEntryMenu(
       labelKey: "devices.inventory.approve",
       visible: entry.pendingRequestId,
       pairing: true,
+      disabled:
+        Boolean(entry.pendingRequestId) &&
+        props.pendingPairingActions.has(`node:${entry.pendingRequestId}:approve`),
       run: () => entry.pendingRequestId && props.onNodeApprove(entry.pendingRequestId),
     },
     {
@@ -104,7 +107,7 @@ export function renderDeviceEntryMenu(
           ? html`
               <wa-dropdown-item
                 value=${action.value}
-                ?disabled=${action.pairing && !props.canManagePairing}
+                ?disabled=${(action.pairing && !props.canManagePairing) || Boolean(action.disabled)}
                 title=${action.pairing && !props.canManagePairing ? t("devices.readOnly.pairingRequired") : nothing}
                 variant=${action.value === "remove" ? "danger" : nothing}
                 >${t(action.labelKey)}</wa-dropdown-item

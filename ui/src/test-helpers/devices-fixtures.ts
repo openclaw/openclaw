@@ -57,6 +57,7 @@ export function createDevicesViewProps(overrides: Partial<DevicesProps> = {}): D
     },
     canPairDevice: true,
     canManagePairing: true,
+    pendingPairingActions: new Set(),
     canAdmin: true,
     configForm: null,
     configLoading: false,
