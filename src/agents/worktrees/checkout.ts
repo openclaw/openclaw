@@ -115,7 +115,7 @@ async function estimateTemplateCloneBytes(
   }
 }
 
-// Path-dependent filters and per-worktree configuration need a fresh checkout.
+// Path-dependent filters and sparse configuration need a fresh checkout.
 // Hash effective checkout configuration so policy changes retire the cache.
 async function checkoutKey(
   options: CheckoutOptions,
@@ -136,7 +136,7 @@ async function checkoutKey(
     return undefined;
   }
   const config = await git.require(
-    options.repoRoot,
+    options.destination,
     ["config", "--null", "--list"],
     gitOptions(options),
   );
@@ -149,7 +149,7 @@ async function checkoutKey(
       continue;
     }
     if (
-      /^(filter\.|includeif\.|core\.(attributesfile|worktree|sparsecheckout|splitindex)$|extensions\.worktreeconfig$|index\.sparse$)/u.test(
+      /^(filter\.|includeif\.|core\.(attributesfile|worktree|sparsecheckout|splitindex)$|index\.sparse$)/u.test(
         key,
       )
     ) {
@@ -157,6 +157,23 @@ async function checkoutKey(
       return undefined;
     }
     checkoutConfig.push(field);
+  }
+  if (git.sourceOnly) {
+    // The isolated policy hides native config, but a sparse checkout can already
+    // have changed the retained index and files. Bind that worktree's config too.
+    const fields = (
+      await requireGit(
+        options.destination,
+        ["config", "--null", "--show-scope", "--list"],
+        gitOptions(options),
+      )
+    ).split("\0");
+    checkoutConfig.push(
+      ...fields.filter(
+        (field, index) =>
+          index % 2 === 1 && fields[index - 1] === "worktree" && !field.startsWith("branch."),
+      ),
+    );
   }
   // Outside-tree attributes can select transforms that depend on the checkout path.
   // Leave those repositories with Git until a backend models that contract.
@@ -171,7 +188,7 @@ async function checkoutKey(
   // checkout cleanup cannot race an admitted Git process.
   const attributePaths = await Promise.allSettled(
     ["GIT_ATTR_GLOBAL", "GIT_ATTR_SYSTEM"].map((variable) =>
-      git.run(options.repoRoot, ["var", variable], gitOptions(options)),
+      git.run(options.destination, ["var", variable], gitOptions(options)),
     ),
   );
   for (const probe of attributePaths) {
@@ -238,6 +255,17 @@ async function prepareTemplate(options: CheckoutOptions) {
         reuseOnly: options.deferGitCheckout,
         requireSpace: options.requireSpace,
         validate: async (existing, templateOptions) => {
+          // --list includes this worktree's config.worktree when the extension is enabled.
+          // A clean sparse template can otherwise look identical to a full checkout.
+          if (
+            (await checkoutKey(
+              { ...options, ...templateOptions, destination: existing.path },
+              commit,
+              git,
+            )) !== contentKey
+          ) {
+            return false;
+          }
           const status = await git.run(
             existing.path,
             ["status", "--porcelain=v2", "--branch", "-z", "--untracked-files=all", "--ignored"],
@@ -265,6 +293,15 @@ async function prepareTemplate(options: CheckoutOptions) {
             ["worktree", "add", "--detach", "--no-checkout", "--", preparing.path, commit],
             checkoutGitOptions({ ...options, ...templateOptions }),
           );
+          if (
+            (await checkoutKey(
+              { ...options, ...templateOptions, destination: preparing.path },
+              commit,
+              git,
+            )) !== contentKey
+          ) {
+            throw new Error("Template and target checkout configurations differ");
+          }
           setWorktreePreparationTemplate("cold", { reason: "template-checkout" });
           await git.require(
             preparing.path,

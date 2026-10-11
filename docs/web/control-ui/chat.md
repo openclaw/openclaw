@@ -12,6 +12,18 @@ sidebarTitle: "Chat"
 
 How the chat pane behaves: the session rail, the composer, and how the transcript renders.
 
+Enable **Settings → Labs → Speech bubbles** to try the experimental view (off by default).
+While enabled, Home uses bubbles by default. The session menu’s **View → Speech bubbles**
+option changes only that conversation. Explicit choices stay in this browser for this
+Gateway; disabling the lab restores the standard view without clearing them. Re-enabling
+the lab restores those choices, including an explicit Home opt-out.
+The first message in each group points toward its existing avatar; later messages
+keep rounded corners. Commentary stays in the transcript, while labeled activity
+rows expand to show the usual tool cards and output. Animated dots mark the current
+working state, not completed work. Startup, approval, question, and subagent-wait
+controls keep their distinct presentation. Text appears as it arrives, including
+short fragments before a tool call or the final response.
+
 Tool activity shows a tool-specific icon beside its purpose or details instead of
 repeating the tool name. When no distinct purpose or detail is available, the row
 shows the tool label instead of leaving the text blank. Hover the icon to see the

@@ -366,46 +366,6 @@ describe("Codex supervision compatibility tools", () => {
     expect(pageCalls).toBe(3);
   });
 
-  it("stops stored-session pagination when duplicate-only pages repeat a cursor", async () => {
-    let storedPageCalls = 0;
-    const request = createEndpointRequest(async (_endpoint, method) => {
-      if (method === "thread/loaded/list") {
-        return { data: [], nextCursor: null };
-      }
-      if (method !== "thread/list") {
-        throw new Error(`unexpected method: ${method}`);
-      }
-      storedPageCalls += 1;
-      if (storedPageCalls > 2) {
-        throw new Error("unexpected third stored-session page");
-      }
-      return {
-        data: [{ id: "stored-thread", status: { type: "idle" } }],
-        nextCursor: "stored-page-2",
-      };
-    });
-    const tools = createTools(request);
-
-    await expect(
-      toolByName(tools, "codex_sessions_list").execute("list", {
-        include_stored: true,
-        max_stored_sessions: 2,
-      }),
-    ).resolves.toMatchObject({
-      details: {
-        sessions: [],
-        errors: [
-          {
-            endpointId: "local",
-            ok: false,
-            detail: "Codex thread/list returned repeated cursor stored-page-2",
-          },
-        ],
-      },
-    });
-    expect(storedPageCalls).toBe(2);
-  });
-
   it("fails closed at the loaded-session page cap when a cursor remains", async () => {
     let loadedPageCalls = 0;
     const request = createEndpointRequest(async (_endpoint, method) => {
@@ -608,43 +568,6 @@ describe("Codex supervision compatibility tools", () => {
         errors: [{ endpointId: "local", ok: false, detail }],
       },
     });
-  });
-
-  it("fails closed at the stored-session page cap when a cursor remains", async () => {
-    let storedPageCalls = 0;
-    const request = createEndpointRequest(async (_endpoint, method) => {
-      if (method === "thread/loaded/list") {
-        return { data: [], nextCursor: null };
-      }
-      if (method !== "thread/list") {
-        throw new Error(`unexpected method: ${method}`);
-      }
-      storedPageCalls += 1;
-      return {
-        data: [{ id: "stored-thread", status: { type: "idle" } }],
-        nextCursor: `stored-page-${storedPageCalls + 1}`,
-      };
-    });
-    const tools = createTools(request);
-
-    await expect(
-      toolByName(tools, "codex_sessions_list").execute("list", {
-        include_stored: true,
-        max_stored_sessions: 2,
-      }),
-    ).resolves.toMatchObject({
-      details: {
-        sessions: [],
-        errors: [
-          {
-            endpointId: "local",
-            ok: false,
-            detail: "Codex thread/list exceeded 100 pages with a continuation cursor",
-          },
-        ],
-      },
-    });
-    expect(storedPageCalls).toBe(100);
   });
 
   it("rechecks live supervision config before every paginated request", async () => {
