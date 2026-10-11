@@ -38,6 +38,7 @@ import {
   readToolStringParam,
   scheduleToolProgress,
 } from "./common.js";
+import type { WebFetchTransport } from "./web-fetch-transport.js";
 import {
   extractBasicHtmlContent,
   htmlToMarkdown,
@@ -80,6 +81,7 @@ const DEFAULT_FETCH_USER_AGENT =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_7_2) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36";
 
 const FETCH_CACHE = new Map<string, CacheEntry<Record<string, unknown>>>();
+const HOST_FETCH_CACHES = new WeakMap<object, typeof FETCH_CACHE>();
 
 // Accept and Accept-Language are part of the fetch/readability contract,
 // User-Agent has its own tools.web.fetch.userAgent key, and Undici owns
@@ -319,6 +321,7 @@ async function spillWebFetchContent(
   wrapped: WebFetchWrappedContent,
   maxChars: number,
   sourceTruncated: boolean,
+  assertWriteAllowed?: () => void,
 ): Promise<WebFetchWrappedContent> {
   if (!wrapped.truncated) {
     return sourceTruncated ? { ...wrapped, truncated: true } : wrapped;
@@ -327,6 +330,8 @@ async function spillWebFetchContent(
   // uses this fixed file cap so vanished pages can still be read after truncation.
   const content = truncateUtf16Safe(value, WEB_FETCH_SPILL_MAX_CHARS);
   const spillChars = content.length;
+  // Extraction can yield after acquisition admission. Recheck at the content effect.
+  assertWriteAllowed?.();
   const spillPath = await writePrivateTempFile(
     "openclaw-web-fetch",
     wrapWebContent(content, "web_fetch"),
@@ -369,6 +374,8 @@ function normalizeContentType(value: string | null | undefined): string | undefi
 
 type WebFetchRuntimeParams = {
   url: string;
+  toolCallId: string;
+  transport?: WebFetchTransport;
   extractMode: ExtractMode;
   maxChars: number;
   maxResponseBytes: number;
@@ -426,6 +433,7 @@ async function buildWebFetchPayload(params: {
   extractMode: ExtractMode;
   maxChars: number;
   tookMs: number;
+  assertWriteAllowed?: () => void;
 }): Promise<Record<string, unknown>> {
   const payload = isRecord(params.payload) ? params.payload : {};
   let metadataTruncated = false;
@@ -470,6 +478,7 @@ async function buildWebFetchPayload(params: {
     wrapWebFetchContent(rawText, bodyMaxChars),
     bodyMaxChars,
     payload.truncated === true,
+    params.assertWriteAllowed,
   );
   const providerRawLength =
     resolveOptionalIntegerOption(payload.rawLength, { min: 0 }) ?? wrapped.rawLength;
@@ -526,6 +535,7 @@ async function buildWebFetchPayload(params: {
 
 async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string, unknown>> {
   throwIfFetchAborted(params.signal);
+  params.transport?.assertInvocationCurrent();
   const parsedUrl = URL.parse(params.url);
   if (!parsedUrl || !["http:", "https:"].includes(parsedUrl.protocol)) {
     throw new Error("Invalid URL: must be http or https");
@@ -540,8 +550,11 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
     `user-agent:${sha256Hex(params.userAgent)}`,
     params.providerCacheKey ? `provider:${params.providerCacheKey}` : "",
     params.ssrfPolicy ? `ssrf-policy:${sha256Hex(JSON.stringify(params.ssrfPolicy))}` : "",
-    params.useTrustedEnvProxy ? "trusted-env-proxy" : "",
+    !params.transport && params.useTrustedEnvProxy ? "trusted-env-proxy" : "",
     headersCacheKey ? `headers:${headersCacheKey}` : "",
+    params.transport
+      ? `limits:${params.maxResponseBytes}:${params.maxRedirects}:${params.timeoutSeconds}:readability:${params.readabilityEnabled}`
+      : "",
   ].filter(Boolean);
   const cacheKey = normalizeCacheKey(
     [
@@ -549,24 +562,36 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
       ...cacheDiscriminators,
     ].join(":"),
   );
-  const cached = readCache(FETCH_CACHE, cacheKey, params.cacheTtlMs);
+  let cache = FETCH_CACHE;
+  if (params.transport) {
+    const scope = params.transport.cacheScope ?? params.transport;
+    cache = HOST_FETCH_CACHES.get(scope) ?? new Map();
+    HOST_FETCH_CACHES.set(scope, cache);
+  }
+  const cached = readCache(cache, cacheKey, params.cacheTtlMs);
   if (cached) {
     return { ...cached.value, cached: true };
   }
 
   // Preserve the direct fetch's rejection; replacing it with signal.reason would
   // discard the transport's own error detail.
-  const payload = await fetchWebPayload(params);
+  const payload = await fetchWebPayload(
+    params.transport ? { ...params, url: parsedUrl.href } : params,
+  );
   // Publish only after guard release: cancellation or cleanup failure must not
   // leave a successful cache entry for a call that never returned its content.
   throwIfFetchAborted(params.signal);
-  writeCache(FETCH_CACHE, cacheKey, payload, params.cacheTtlMs);
+  params.transport?.assertInvocationCurrent();
+  writeCache(cache, cacheKey, payload, params.cacheTtlMs);
   return payload;
 }
 
 async function fetchWebPayload(params: WebFetchRuntimeParams): Promise<Record<string, unknown>> {
   const start = Date.now();
   async function fetchProviderPayload(urlToFetch: string): Promise<Record<string, unknown> | null> {
+    if (params.transport) {
+      return null;
+    }
     const tookMs = Date.now() - start;
     const providerFallback = await params.resolveProviderFallback();
     throwIfFetchAborted(params.signal);
@@ -599,18 +624,11 @@ async function fetchWebPayload(params: WebFetchRuntimeParams): Promise<Record<st
   let release: () => Promise<void>;
   let finalUrl = params.url;
   try {
-    const { fetchWithWebToolsNetworkGuard } = await loadWebGuardedFetch();
-    const result = await fetchWithWebToolsNetworkGuard({
+    const request = {
       url: params.url,
       maxRedirects: params.maxRedirects,
       timeoutSeconds: params.timeoutSeconds,
       signal: params.signal,
-      lookupFn: params.lookupFn,
-      useEnvProxy: params.useTrustedEnvProxy,
-      policy: params.ssrfPolicy,
-      capture: params.headers
-        ? { sensitiveRequestHeaderNames: Object.keys(params.headers) }
-        : undefined,
       init: {
         // Preserve casing and order on the wire; operator headers are already collision-free.
         headers: {
@@ -620,7 +638,26 @@ async function fetchWebPayload(params: WebFetchRuntimeParams): Promise<Record<st
           ...params.headers,
         },
       },
-    });
+    };
+    const result = params.transport
+      ? await params.transport.acquire({
+          ...request,
+          toolCallId: params.toolCallId,
+          init: { ...request.init, method: "GET" },
+          maxResponseBytes: params.maxResponseBytes,
+          ssrfPolicy: params.ssrfPolicy,
+        })
+      : await (
+          await loadWebGuardedFetch()
+        ).fetchWithWebToolsNetworkGuard({
+          ...request,
+          lookupFn: params.lookupFn,
+          useEnvProxy: params.useTrustedEnvProxy,
+          policy: params.ssrfPolicy,
+          capture: params.headers
+            ? { sensitiveRequestHeaderNames: Object.keys(params.headers) }
+            : undefined,
+        });
     res = result.response;
     finalUrl = result.finalUrl;
     release = result.release;
@@ -632,7 +669,7 @@ async function fetchWebPayload(params: WebFetchRuntimeParams): Promise<Record<st
       );
     }
   } catch (error) {
-    if (error instanceof SsrFBlockedError || params.signal?.aborted) {
+    if (params.transport || error instanceof SsrFBlockedError || params.signal?.aborted) {
       throw error;
     }
     const payload = await fetchProviderPayload(finalUrl);
@@ -643,14 +680,28 @@ async function fetchWebPayload(params: WebFetchRuntimeParams): Promise<Record<st
   }
 
   try {
+    if (params.transport) {
+      throwIfFetchAborted(params.signal);
+      params.transport.assertInvocationCurrent();
+      const normalizedFinalUrl = normalizeProviderFinalUrl(finalUrl);
+      if (!normalizedFinalUrl) {
+        throw new Error("web_fetch transport returned an invalid final HTTP(S) URL.");
+      }
+      finalUrl = normalizedFinalUrl;
+    }
     if (!res.ok) {
       throwIfFetchAborted(params.signal);
       const payload = await fetchProviderPayload(params.url);
       if (payload) {
         return payload;
       }
-      const rawDetailResult = await readResponseText(res, { maxBytes: DEFAULT_ERROR_MAX_BYTES });
+      const rawDetailResult = await readResponseText(res, {
+        maxBytes: params.transport
+          ? Math.min(DEFAULT_ERROR_MAX_BYTES, params.maxResponseBytes)
+          : DEFAULT_ERROR_MAX_BYTES,
+      });
       throwIfFetchAborted(params.signal);
+      params.transport?.assertInvocationCurrent();
       const detail = formatWebFetchErrorDetail({
         detail: rawDetailResult.text,
         contentType: res.headers.get("content-type"),
@@ -663,6 +714,7 @@ async function fetchWebPayload(params: WebFetchRuntimeParams): Promise<Record<st
     const normalizedContentType = normalizeContentType(contentType) ?? "application/octet-stream";
     const bodyResult = await readResponseText(res, { maxBytes: params.maxResponseBytes });
     throwIfFetchAborted(params.signal);
+    params.transport?.assertInvocationCurrent();
     const body = bodyResult.text;
     const responseTruncatedWarning = bodyResult.truncated
       ? `Response body incomplete after ${bodyResult.bytesRead} bytes.`
@@ -683,7 +735,9 @@ async function fetchWebPayload(params: WebFetchRuntimeParams): Promise<Record<st
           return payload;
         }
         throw new Error(
-          "Web fetch extraction failed: Readability disabled and no fetch provider is available.",
+          params.transport
+            ? "Web fetch extraction failed: Readability is disabled for host-acquired HTML."
+            : "Web fetch extraction failed: Readability disabled and no fetch provider is available.",
         );
       }
       let extracted = await extractReadableContent({
@@ -707,10 +761,13 @@ async function fetchWebPayload(params: WebFetchRuntimeParams): Promise<Record<st
           extractMode: params.extractMode,
         });
         if (!basic?.text) {
-          const providerLabel =
-            (await params.resolveProviderFallback())?.provider.label ?? "provider fallback";
+          const providerLabel = params.transport
+            ? undefined
+            : ((await params.resolveProviderFallback())?.provider.label ?? "provider fallback");
           throw new Error(
-            `Web fetch extraction failed: Readability, ${providerLabel}, and basic HTML cleanup returned no content.`,
+            params.transport
+              ? "Web fetch extraction failed: Readability and basic HTML cleanup returned no content."
+              : `Web fetch extraction failed: Readability, ${providerLabel}, and basic HTML cleanup returned no content.`,
           );
         }
         extracted = { ...basic, extractor: "raw-html" };
@@ -745,6 +802,12 @@ async function fetchWebPayload(params: WebFetchRuntimeParams): Promise<Record<st
       extractMode: params.extractMode,
       maxChars: params.maxChars,
       tookMs: Date.now() - start,
+      assertWriteAllowed: params.transport
+        ? () => {
+            throwIfFetchAborted(params.signal);
+            params.transport?.assertInvocationCurrent();
+          }
+        : undefined,
     });
   } finally {
     if (!res.bodyUsed) {
@@ -753,6 +816,10 @@ async function fetchWebPayload(params: WebFetchRuntimeParams): Promise<Record<st
       void res.body?.cancel().catch(() => undefined);
     }
     await release();
+    if (params.transport) {
+      throwIfFetchAborted(params.signal);
+      params.transport.assertInvocationCurrent();
+    }
   }
 }
 
@@ -763,6 +830,7 @@ export function createWebFetchTool(options?: {
   lateBindRuntimeConfig?: boolean;
   lookupFn?: LookupFn;
   hostnameAllowlistRef?: { value?: string[] };
+  transport?: WebFetchTransport;
 }): AnyAgentTool | null {
   const fetch = resolveFetchConfig(options?.config);
   if (fetch?.enabled === false) {
@@ -775,7 +843,7 @@ export function createWebFetchTool(options?: {
     description: "Fetch URL; extract readable markdown/text. Lightweight; no browser automation.",
     parameters: WebFetchSchema,
     outputSchema: WebFetchOutputSchema,
-    execute: async (_toolCallId, args, signal, onUpdate) => {
+    execute: async (toolCallId, args, signal, onUpdate) => {
       const {
         config,
         preferRuntimeProviders,
@@ -791,16 +859,17 @@ export function createWebFetchTool(options?: {
       if (executionFetch?.enabled === false) {
         throw new Error("web_fetch is disabled.");
       }
-      if (providerSelectionId) {
+      if (providerSelectionId && !options?.transport) {
         assertSecretOwnerAvailable(
           "capability",
           runtimeWebSecretOwnerId("fetch", providerSelectionId),
         );
       }
-      const providerCacheKey =
-        normalizeOptionalLowercaseString(runtimeWebFetch?.selectedProvider) ??
-        normalizeOptionalLowercaseString(runtimeWebFetch?.providerConfigured) ??
-        normalizeOptionalLowercaseString(executionFetch?.provider);
+      const providerCacheKey = options?.transport
+        ? undefined
+        : (normalizeOptionalLowercaseString(runtimeWebFetch?.selectedProvider) ??
+          normalizeOptionalLowercaseString(runtimeWebFetch?.providerConfigured) ??
+          normalizeOptionalLowercaseString(executionFetch?.provider));
       const readabilityEnabled = executionFetch?.readability !== false;
       const userAgent =
         (typeof executionFetch?.userAgent === "string" && executionFetch.userAgent) ||
@@ -843,6 +912,8 @@ export function createWebFetchTool(options?: {
       try {
         const result = await runWebFetch({
           url,
+          toolCallId,
+          transport: options?.transport,
           extractMode,
           maxChars: resolveIntegerOption(
             maxChars ?? executionFetch?.maxChars,
@@ -873,6 +944,10 @@ export function createWebFetchTool(options?: {
           signal,
           resolveProviderFallback,
         });
+        if (options?.transport) {
+          throwIfFetchAborted(signal);
+          options.transport.assertInvocationCurrent();
+        }
         return jsonResult(result);
       } finally {
         clearProgressTimer();

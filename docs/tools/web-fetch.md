@@ -4,6 +4,7 @@ read_when:
   - You want to fetch a URL and extract readable content
   - You need to configure web_fetch or its Firecrawl fallback
   - You want to understand web_fetch limits and caching
+  - You are binding host-owned acquisition to the native web_fetch tool
 title: "Web fetch"
 sidebarTitle: "Web Fetch"
 ---
@@ -299,6 +300,84 @@ outbound policy after DNS resolution.
   operator-controlled proxies that still enforce outbound policy after DNS
   resolution
 - `web_fetch` is best-effort -- some sites need the [Web Browser](/tools/browser)
+
+## Host acquisition transport
+
+Embedding hosts can pass `webFetchTransport` through the existing
+`createOpenClawCodingToolsAsync` factory from
+`openclaw/plugin-sdk/agent-harness`. Core assembly also accepts it through
+`createOpenClawToolsAsync`. This binds acquisition to the native `web_fetch`;
+it does not register a replacement tool, add model arguments, or add an
+`openclaw.json` setting. Without a transport, standalone behavior is unchanged.
+
+The transport has three members:
+
+| Member                      | Contract                                                                                                                                                                                                                                                                                                          |
+| --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `assertInvocationCurrent()` | Required synchronous live-authority check. Throw if the captured invocation is closed, replaced, or no longer authorized. Core checks before cache lookup and after awaited acquisition, body reading, and cleanup, before caching or returning success.                                                          |
+| `acquire(request)`          | Required async acquisition. Return `{ response: Response, finalUrl: string, release: () => Promise<void> }`. `finalUrl` must be the final admitted HTTP(S) destination. Core calls `release` once after processing, including on errors and cancellation. Clean up acquisitions that reject inside the transport. |
+| `cacheScope`                | Optional opaque object identifying an equivalent host cache audience and policy. Defaults to the transport object's identity. See cache rules below.                                                                                                                                                              |
+
+The request supplies the exact normalized HTTP(S) `url`, correlation-only
+`toolCallId`, `init.method: "GET"`, native/operator request headers in
+`init.headers`, optional caller `signal`, `timeoutSeconds`, `maxRedirects`,
+`maxResponseBytes`, and the applicable `ssrfPolicy` (including a host-provided
+hostname allowlist). URL normalization happens before host admission and cache
+lookup; that same normalized URL appears in the result.
+
+Capture trusted user, tenant, session, and run context in the transport's
+closures. Neither the URL nor a tool-call ID establishes authority. Never copy
+trusted context out of model-controlled arguments. After awaited admission,
+the host must recheck live authority immediately before each network side
+effect, including redirects and retries. A core after-response check does not
+replace that host check.
+
+### Network and processing ownership
+
+The selected transport is exclusive. Refusal, thrown errors, HTTP failures, and
+extraction failures never trigger direct HTTP or a fetch-provider fallback.
+Unused provider credentials do not gate host acquisition. Native HTML
+extraction, Markdown/text conversion, JSON formatting, truncation, spill files,
+terminal presentation, and untrusted-content wrapping still process the returned
+response. Disabling Readability still prevents native HTML extraction.
+
+The host owns URL/DNS/SSRF admission and the supplied network policy on every
+destination, redirect counting, safe cross-origin header/credential forwarding,
+and any proxy routing. OpenClaw does not run its default DNS guard or environment
+proxy path around host acquisition. Treat configured request headers as
+sensitive; do not log their values or blindly forward credentials on redirects.
+
+The host must enforce the supplied timeout and cancellation through response-body
+consumption, stop owned network work, and bound any buffering before returning
+a response. Core separately caps retained response bytes before parsing and
+rejects late results after cancellation or authority revocation. This cap does
+not bound a host transport that buffers the entire response first.
+After asynchronous extraction, core rechecks cancellation and live invocation
+authority immediately before initiating a truncated-content spill write.
+
+User controls remain authoritative: disabled fetch is not constructed, and
+retained tools reject execution when runtime fetch configuration disables it.
+Normal coding-tool policy continues to filter denied tools, including
+`group:web`, when surfaces are assembled/rebuilt. Hosts must retain their normal
+tool-policy and invocation lifecycle; the transport is not a tool grant.
+
+### Host cache rules
+
+Host caches never share entries with the default HTTP/provider cache. A cache
+hit skips `acquire`, but not the invocation check, cancellation check, or runtime
+fetch-enable check. Reusing the same transport object across tool construction
+reuses its cache. To share across separately bound invocations, explicitly share
+a `cacheScope` object only when transport behavior, audience, credentials, and
+host policy are equivalent. Replace the scope when any of those change. Do not
+reuse a scope merely because two runs have the same URL.
+
+Within a scope, entries are separated by normalized URL, extraction mode,
+output limit, response-byte limit, redirect limit, timeout, Readability setting,
+network policy, user agent, and hashed operator headers. Host-only policy and
+credentials are not visible to core, so scope rotation is the host's responsibility.
+The existing TTL and `cacheTtlMinutes: 0` controls still apply. Entries are bounded
+per scope and scopes are weakly held; core does not publish failed, cancelled,
+revoked, or cleanup-failed calls into the cache.
 
 ## Tool profiles
 
