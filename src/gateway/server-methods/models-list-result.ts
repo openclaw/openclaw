@@ -233,9 +233,7 @@ async function prepareOwnedModelsListResult({
   ]);
   const evaluateNative: typeof projector.evaluateNative = (entry, host, runtimeId) => {
     const native = projector.evaluateNative(entry, host, runtimeId);
-    return native !== host && currentConfig() !== requestConfig
-      ? { ...native, availability: false }
-      : native;
+    return native !== host && !isCurrent() ? { ...native, availability: false } : native;
   };
   const { normalizeProvider, providerFilter, matchesProvider } = createModelsListProviderFilter({
     config: cfg,
