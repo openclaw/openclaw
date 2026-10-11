@@ -146,11 +146,11 @@ hashing. Plugin lifecycle operations prepare fresh metadata in their own cache
 generation. Account health and authentication state are not part of the
 immutable package inventory.
 
-An explicit refresh clears the current operation's discovery cache. Already
-running scopes keep their captured metadata, including enclosing scopes; a new
-operation observes the refreshed inventory. Each process normally owns one
-Gateway. Overlapping independent Gateways in one process are best effort rather
-than coordinated owners of the same inventory.
+An explicit install or refresh clears mutable discovery caches for the command,
+so its next metadata phase observes the updated inventory. Immutable runtime
+generations keep their captured metadata. Each process normally owns one Gateway.
+Overlapping independent Gateways in one process are best effort rather than
+coordinated owners of the same inventory.
 
 Native SDK alias resolution retains each importing file's canonical path, root
 membership, and alias targets in that same generation. Alias registration or

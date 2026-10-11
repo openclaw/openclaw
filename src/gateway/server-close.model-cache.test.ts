@@ -3,7 +3,6 @@ import fs from "node:fs";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
 import type { ModelCatalogEntry } from "../agents/model-catalog.types.js";
-import { PreparedModelRuntimePublicationSupersededError } from "../agents/prepared-model-runtime.errors.js";
 import { acquireReadOnlyPreparedModelRuntime } from "../agents/prepared-model-runtime.js";
 import { registerPreparedModelRuntimeClose } from "../agents/prepared-model-runtime.lifecycle.js";
 import type {
@@ -274,10 +273,9 @@ it(
       releaseBuild.resolve();
       await Promise.all(builds.map(({ completion }) => completion));
       await expect(first).rejects.toBe(shutdownError);
-      await expect(queued).rejects.toThrow(PreparedModelRuntimePublicationSupersededError);
-      await expect(queued).rejects.toThrow(
-        `prepared model runtime publication was superseded for ${agentDir}`,
-      );
+      await expect(queued).rejects.toMatchObject({
+        message: "prepared model runtime process lifetime closed",
+      });
       await aClose;
       const retiredWarmMessage = `Plugin ${warmId} was reloaded or disabled; use its current tools.`;
       expect(() => readPolicy(warmEntry, "lazy")).toThrow(retiredWarmMessage);
