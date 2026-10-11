@@ -531,7 +531,10 @@ describe("assistant panel", () => {
         workspace: "/worktrees/research",
       });
 
-      const disconnectedContext = workContext();
+      const detachedHome = panel.querySelector<HTMLElement & { workContext?: ChatWorkContext }>(
+        "openclaw-home-session",
+      );
+      const disconnectedContext = detachedHome?.workContext;
       panel.remove();
       request.mockResolvedValueOnce({
         ...agents.state.agentsList,
@@ -540,7 +543,7 @@ describe("assistant panel", () => {
       await agents.refreshList();
       setGatewaySnapshot({ hello });
       await panel.updateComplete;
-      expect(workContext()).toEqual(disconnectedContext);
+      expect(detachedHome?.workContext).toEqual(disconnectedContext);
 
       provider.append(panel);
       await panel.updateComplete;

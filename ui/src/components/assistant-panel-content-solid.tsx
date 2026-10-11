@@ -1,0 +1,119 @@
+import { createEffect, createMemo, onSettled, untrack } from "solid-js";
+import type { RouteId } from "../app-route-paths.ts";
+import type { ApplicationContext } from "../app/context.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../lit/solid-bridge.ts";
+import { useSolidControllerHost } from "../lit/solid-controller-host.ts";
+import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
+import {
+  buildHomeWorkContext,
+  subscribeChatWorkContext,
+  type ChatWorkContext,
+} from "../pages/chat/chat-work-context.ts";
+import {
+  custodianSessionStore,
+  type CustodianSessionStore,
+} from "../pages/custodian/custodian-session-store.ts";
+import "../pages/custodian/custodian-surface.ts";
+import "./home-session.runtime.ts";
+import "../styles/assistant-panel-content.css";
+
+type Props = {
+  active: boolean;
+  destination: "home" | "custodian" | "session";
+  sessionKey: string;
+  agentId: string;
+  sessionContext?: ChatWorkContext;
+  context?: ApplicationContext;
+  pageRouteId: RouteId;
+  pageSessionKey: string;
+  pageAgentId: string;
+  store?: CustodianSessionStore;
+};
+export type OpenClawAssistantPanelContent = SolidBridgeElement<Props>;
+export const AssistantPanelContent = defineSolidBridge<Props>(
+  "openclaw-assistant-panel-content",
+  (props, element) => {
+    const { host, revision } = useSolidControllerHost(() => [props.store, props.context]);
+    const store = () => props.store ?? custodianSessionStore;
+    new SubscriptionsController(host)
+      .watchStore(store)
+      .watch(
+        () => props.context,
+        (context, notify) => subscribeChatWorkContext(context, notify),
+      )
+      .watchStore(() => props.context?.sessions)
+      .watchStore(() => props.context?.agents)
+      .watchStore(() => props.context?.gateway);
+    onSettled(() => {
+      element.dispatchEvent(
+        new CustomEvent("assistant-custodian-store", { detail: untrack(store), bubbles: true }),
+      );
+    });
+    createEffect(
+      () => props.active && props.destination === "custodian",
+      (visible) => {
+        if (visible) {
+          void untrack(store).refreshTranscriptIfIdle();
+        }
+      },
+    );
+    const variant = () => {
+      revision();
+      return store().activeVariant;
+    };
+    const workContext = createMemo(() => {
+      revision();
+      return (
+        props.sessionContext ??
+        (props.context
+          ? buildHomeWorkContext(
+              props.context,
+              props.pageRouteId,
+              props.pageSessionKey,
+              props.pageAgentId,
+            )
+          : undefined)
+      );
+    });
+    return (
+      <>
+        {props.active ? (
+          props.destination !== "custodian" ? (
+            <openclaw-home-session
+              prop:sessionKey={props.sessionKey}
+              prop:agentId={props.agentId}
+              prop:workContext={workContext()}
+            />
+          ) : (
+            <openclaw-custodian-surface
+              prop:store={store()}
+              prop:onboarding={variant() === "onboarding"}
+              prop:newAgentIntent={variant() === "new-agent"}
+              compact
+            />
+          )
+        ) : undefined}
+      </>
+    );
+  },
+  {
+    properties: {
+      active: { default: false, type: Boolean },
+      destination: { default: "custodian" },
+      sessionKey: { default: "" },
+      agentId: { default: "" },
+      sessionContext: { default: undefined, attribute: false },
+      context: { default: undefined, attribute: false },
+      pageRouteId: { default: "chat" },
+      pageSessionKey: { default: "" },
+      pageAgentId: { default: "" },
+      store: { default: undefined, attribute: false },
+    },
+  },
+);
+
+declare global {
+  interface HTMLElementTagNameMap {
+    "openclaw-assistant-panel-content": OpenClawAssistantPanelContent;
+  }
+}

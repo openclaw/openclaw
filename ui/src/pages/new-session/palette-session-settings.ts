@@ -1,4 +1,5 @@
 import { html, nothing, svg } from "lit";
+import type { ReactiveControllerHost } from "lit";
 import { ref } from "lit/directives/ref.js";
 import type { ApplicationContext } from "../../app/context.ts";
 import { strokeIcon } from "../../components/icons-tools.ts";
@@ -10,7 +11,6 @@ import { registerCommandPaletteEnglish } from "../../i18n/locales/en-command-pal
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
 import { KEYBOARD_SHORTCUT_COMBOS } from "../../lib/keyboard-shortcut-contract.ts";
 import { pathDisplayName } from "../../lib/path-display.ts";
-import type { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import type { NewSessionDraftController } from "./draft-controller.ts";
 import {
   environmentPlacementRuntime,
@@ -57,7 +57,8 @@ export class PaletteSessionSettings {
   private query = "";
 
   constructor(
-    private readonly host: OpenClawLightDomElement,
+    private readonly host: ReactiveControllerHost &
+      Pick<HTMLElement, "ownerDocument" | "querySelector" | "querySelectorAll">,
     private readonly id: string,
   ) {}
 

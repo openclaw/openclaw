@@ -1,8 +1,8 @@
+import { expect, it } from "vitest";
 /* @vitest-environment jsdom */
-import { render } from "lit";
-import { afterEach, beforeEach, expect, it } from "vitest";
+import { mountSolid } from "../test-helpers/mount-solid.ts";
 import type { CommandPaletteItem } from "./command-palette-catalog-search.ts";
-import { renderCommandPaletteResult } from "./command-palette-result.ts";
+import { CommandPaletteResult } from "./command-palette-result.tsx";
 
 const item: CommandPaletteItem = {
   id: "session-fixture",
@@ -12,19 +12,14 @@ const item: CommandPaletteItem = {
   action: "session:agent:main:fixture",
   session: { key: "agent:main:fixture", kind: "direct", updatedAt: 1 },
 };
-let container: HTMLDivElement;
-beforeEach(() => {
-  container = document.createElement("div");
-  document.body.append(container);
-});
-afterEach(() => container.remove());
-
 it.each([
   { label: "İstanbul needle", query: "NEEDLE", expected: "needle" },
   { label: "Literal [a+b] query", query: "[a+b]", expected: "[a+b]" },
   { label: "<img src=x onerror=alert(1)> needle", query: "<img", expected: "<img" },
 ])("highlights literal text safely in $label", ({ label, query, expected }) => {
-  render(renderCommandPaletteResult({ ...item, label }, query), container);
+  const { container } = mountSolid(() => (
+    <CommandPaletteResult item={{ ...item, label }} query={query} />
+  ));
   expect(container.querySelector("mark")?.textContent).toBe(expected);
   expect(container.querySelector(".cmd-palette__item-title")?.textContent?.trim()).toBe(label);
   expect(container.querySelector(".cmd-palette__item-title img")).toBeNull();
@@ -77,18 +72,17 @@ it.each([
 }>)(
   "renders safe $name descriptions",
   ({ catalog, description, query, contents, nodes, forbidden }) => {
-    render(
-      renderCommandPaletteResult(
-        {
+    const { container } = mountSolid(() => (
+      <CommandPaletteResult
+        item={{
           ...item,
           session: catalog ? undefined : item.session,
           category: catalog ? "skills" : "messages",
           description,
-        },
-        query,
-      ),
-      container,
-    );
+        }}
+        query={query}
+      />
+    ));
     const snippet = container.querySelector(".cmd-palette__item-desc")!;
     for (const [selector, text] of nodes) {
       expect(snippet.querySelector(selector)?.textContent).toBe(text);
@@ -135,7 +129,9 @@ it.each([
     expected: "See example guide.",
   },
 ])("keeps a passive match cue for $description", ({ description, query, expected }) => {
-  render(renderCommandPaletteResult({ ...item, description }, query), container);
+  const { container } = mountSolid(() => (
+    <CommandPaletteResult item={{ ...item, description }} query={query} />
+  ));
   const snippet = container.querySelector(".cmd-palette__item-desc")!;
   expect(snippet.textContent).toBe(expected);
   expect(snippet.querySelector("mark")?.textContent?.toLowerCase()).toBe(query.toLowerCase());
@@ -143,9 +139,9 @@ it.each([
 });
 
 it.each([true, false])("uses only explicit session ownership: %s", (hasOwner) => {
-  render(
-    renderCommandPaletteResult(
-      {
+  const { container } = mountSolid(() => (
+    <CommandPaletteResult
+      item={{
         ...item,
         session: {
           ...item.session!,
@@ -161,12 +157,11 @@ it.each([true, false])("uses only explicit session ownership: %s", (hasOwner) =>
               }
             : undefined,
         },
-      },
-      "needle",
-      hasOwner ? { id: "main", name: "Assistant" } : { id: "main" },
-    ),
-    container,
-  );
+      }}
+      query="needle"
+      agent={hasOwner ? { id: "main", name: "Assistant" } : { id: "main" }}
+    />
+  ));
   expect(container.textContent).not.toContain("Former owner");
   if (hasOwner) {
     expect(container.textContent).toContain("Owned by Current owner");

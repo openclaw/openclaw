@@ -8,7 +8,10 @@ import {
 import type { DockPanelLayoutStore, DockPanelPlacement } from "./dock-panel-layout.ts";
 import "./resizable-divider.ts";
 
-type DockLayoutHost = ReactiveControllerHost & { readonly isConnected: boolean };
+type DockLayoutHost = ReactiveControllerHost & {
+  readonly isConnected: boolean;
+  readonly elementHost?: HTMLElement;
+};
 
 type DockLayoutControllerOptions<TDock extends DockPanelPlacement> = {
   layout: DockPanelLayoutStore<TDock>;
@@ -145,7 +148,7 @@ export class DockLayoutController<TDock extends DockPanelPlacement> implements R
     );
   }
 
-  private resize(event: CustomEvent<{ splitRatio: number }>): void {
+  resize(event: CustomEvent<{ splitRatio: number }>): void {
     const horizontal = this.dock === "bottom";
     const minimum = horizontal ? this.options.layout.minHeight : this.options.layout.minWidth;
     const maximum = horizontal ? this.options.layout.maxHeight() : this.maxWidth();
@@ -164,24 +167,39 @@ export class DockLayoutController<TDock extends DockPanelPlacement> implements R
     return this.dock === "bottom" ? window.innerHeight : window.innerWidth;
   }
 
-  renderResizer(classPrefix: string, label: string): TemplateResult | typeof nothing {
+  get resizerProps() {
     if (this.isFullscreen() || this.dock === "main") {
-      return nothing;
+      return undefined;
     }
     const horizontal = this.dock === "bottom";
     const size = this.size();
     const minimum = horizontal ? this.options.layout.minHeight : this.options.layout.minWidth;
     const maximum = horizontal ? this.options.layout.maxHeight() : this.maxWidth();
     const current = horizontal ? this.height : this.width;
+    return {
+      orientation: horizontal ? ("horizontal" as const) : ("vertical" as const),
+      splitRatio: 1 - current / size,
+      minRatio: 1 - maximum / size,
+      maxRatio: 1 - minimum / size,
+      measureRatio: () => 1 - (horizontal ? this.height : this.width) / this.size(),
+      measureSize: () => this.size(),
+    };
+  }
+
+  renderResizer(classPrefix: string, label: string): TemplateResult | typeof nothing {
+    const props = this.resizerProps;
+    if (!props) {
+      return nothing;
+    }
     return html`<resizable-divider
       class="${classPrefix}-resizer ${classPrefix}-resizer--${this.dock}"
-      .orientation=${horizontal ? "horizontal" : "vertical"}
+      .orientation=${props.orientation}
       .label=${label}
-      .splitRatio=${1 - current / size}
-      .minRatio=${1 - maximum / size}
-      .maxRatio=${1 - minimum / size}
-      .measureRatio=${() => 1 - (horizontal ? this.height : this.width) / this.size()}
-      .measureSize=${() => this.size()}
+      .splitRatio=${props.splitRatio}
+      .minRatio=${props.minRatio}
+      .maxRatio=${props.maxRatio}
+      .measureRatio=${props.measureRatio}
+      .measureSize=${props.measureSize}
       @resize=${(event: CustomEvent<{ splitRatio: number }>) => this.resize(event)}
       @resize-end=${() => this.persist()}
     ></resizable-divider>`;
@@ -202,7 +220,9 @@ export class DockLayoutController<TDock extends DockPanelPlacement> implements R
   private reservesViewport(): boolean {
     return (
       !this.isFullscreen() &&
-      !(this.host instanceof HTMLElement && this.host.hasAttribute("embedded"))
+      !(this.host instanceof HTMLElement ? this.host : this.host.elementHost)?.hasAttribute(
+        "embedded",
+      )
     );
   }
 

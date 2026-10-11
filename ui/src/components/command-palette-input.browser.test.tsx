@@ -1,7 +1,10 @@
-import { html, nothing, render } from "lit";
+import { createSignal } from "solid-js";
+import type { ComponentProps } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { mountSolid } from "../test-helpers/mount-solid.ts";
+import { flush } from "../test-helpers/solid-settle.ts";
 import "../styles.css";
-import { renderCommandPaletteInput } from "./command-palette-input.ts";
+import { CommandPaletteInput } from "./command-palette-input.tsx";
 
 const hasBrowserLayout = !navigator.userAgent.toLowerCase().includes("jsdom");
 const onInputRef = () => undefined;
@@ -12,10 +15,26 @@ const nextFrame = () =>
 
 describe.skipIf(!hasBrowserLayout)("command palette input layout", () => {
   let host: HTMLDivElement | undefined;
+  let unmount: (() => void) | undefined;
+  let update: ((next: ComponentProps<typeof CommandPaletteInput>) => void) | undefined;
+  const renderInput = (props: ComponentProps<typeof CommandPaletteInput>) => {
+    if (update) {
+      update(props);
+    } else {
+      const [current, setCurrent] = createSignal(props);
+      update = (next) => setCurrent(() => next);
+      unmount = mountSolid(() => <CommandPaletteInput {...current()} />, {
+        container: host!,
+      }).unmount;
+    }
+    flush();
+  };
 
   afterEach(() => {
     if (host) {
-      render(nothing, host);
+      unmount?.();
+      unmount = undefined;
+      update = undefined;
       host.remove();
       host = undefined;
     }
@@ -32,9 +51,9 @@ describe.skipIf(!hasBrowserLayout)("command palette input layout", () => {
       placeholder: "Search or start a task…",
       onInputRef,
       onValueChange: () => undefined,
-      actions: html`<button type="button">Settings</button>`,
+      actions: <button type="button">Settings</button>,
     };
-    const part = render(renderCommandPaletteInput(props), host);
+    renderInput(props);
     await document.fonts.ready;
     // Initial layout installs ResizeObserver; its first delivery schedules
     // the next frame. Observe result navigation after that commit completes.
@@ -50,7 +69,7 @@ describe.skipIf(!hasBrowserLayout)("command palette input layout", () => {
     input.focus();
     input.setSelectionRange(5, 11, "backward");
     settings.focus();
-    render(renderCommandPaletteInput({ ...props, activeDescendant: "next-result" }), host);
+    renderInput({ ...props, activeDescendant: "next-result" });
     await nextFrame();
     expect(document.activeElement).toBe(settings);
     expect(input.value).toBe(props.value);
@@ -62,14 +81,11 @@ describe.skipIf(!hasBrowserLayout)("command palette input layout", () => {
     expect(measureContent).not.toHaveBeenCalled();
     expect(input.clientHeight).toBe(originalHeight);
 
-    part.setConnected(false);
     host.remove();
     host.style.width = "320px";
     document.body.append(host);
-    part.setConnected(true);
-    await nextFrame();
+    await vi.waitFor(() => expect(input.clientHeight).toBeGreaterThan(originalHeight));
     expect(measureContent).toHaveBeenCalled();
-    expect(input.clientHeight).toBeGreaterThan(originalHeight);
     expect(input.value).toBe(props.value);
   });
 
@@ -84,7 +100,7 @@ describe.skipIf(!hasBrowserLayout)("command palette input layout", () => {
         props.value = value;
       },
     };
-    render(renderCommandPaletteInput(props), host);
+    renderInput(props);
     const input = host.querySelector("textarea")!;
     const entry = host.querySelector(".cmd-palette__entry")!;
     await vi.waitFor(() => expect(input.style.overflowY).toBe("auto"));
@@ -94,7 +110,7 @@ describe.skipIf(!hasBrowserLayout)("command palette input layout", () => {
     input.dispatchEvent(new Event("scroll"));
     const previousScroll = input.scrollTop;
 
-    render(renderCommandPaletteInput({ ...props, activeDescendant: "next-result" }), host);
+    renderInput({ ...props, activeDescendant: "next-result" });
     await new Promise<void>((resolve) => {
       requestAnimationFrame(() => resolve());
     });
@@ -115,7 +131,7 @@ describe.skipIf(!hasBrowserLayout)("command palette input layout", () => {
 
     input.value += "\nContinue writing";
     input.dispatchEvent(new Event("input", { bubbles: true }));
-    render(renderCommandPaletteInput(props), host);
+    renderInput(props);
     await new Promise<void>((resolve) => {
       requestAnimationFrame(() => resolve());
     });
@@ -126,7 +142,7 @@ describe.skipIf(!hasBrowserLayout)("command palette input layout", () => {
     input.scrollTop = 0;
     input.setRangeText("Edit the beginning: ", 0, 0, "end");
     input.dispatchEvent(new Event("input", { bubbles: true }));
-    render(renderCommandPaletteInput(props), host);
+    renderInput(props);
     await new Promise<void>((resolve) => {
       requestAnimationFrame(() => resolve());
     });
@@ -136,18 +152,17 @@ describe.skipIf(!hasBrowserLayout)("command palette input layout", () => {
   it("grows down through three lines, keeps actions fixed and fades clear of the far-right scrollbar", async () => {
     host = document.body.appendChild(document.createElement("div"));
     host.style.cssText = "width: 740px; max-width: 100%;";
-    render(
-      renderCommandPaletteInput({
-        value: "One line",
-        placeholder: "Search or start a task…",
-        onInputRef,
-        onValueChange: () => undefined,
-        actions: html`<button type="button" class="cmd-palette__create">
+    renderInput({
+      value: "One line",
+      placeholder: "Search or start a task…",
+      onInputRef,
+      onValueChange: () => undefined,
+      actions: (
+        <button type="button" class="cmd-palette__create">
           New session<kbd>Ctrl+Enter</kbd>
-        </button>`,
-      }),
-      host,
-    );
+        </button>
+      ),
+    });
     const input = host.querySelector("textarea")!;
     const entry = host.querySelector<HTMLElement>(".cmd-palette__entry")!;
     const actions = host.querySelector<HTMLElement>(".cmd-palette__input-actions")!;
