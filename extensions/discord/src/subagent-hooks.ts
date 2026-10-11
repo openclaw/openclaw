@@ -4,10 +4,11 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   listThreadBindingsBySessionKey,
+  listThreadBindingsBySessionKeyAsync,
+  type ThreadBindingRecord,
   type ThreadBindingTargetKind,
   unbindThreadBindingsBySessionKeyAsync,
 } from "./monitor/thread-bindings.js";
-import { ensureBindingsLoadedAsync } from "./monitor/thread-bindings.state.js";
 
 type DiscordSubagentEndedEvent = {
   targetSessionKey: string;
@@ -56,12 +57,21 @@ function shouldResolveDiscordDeliveryTarget(event: DiscordSubagentDeliveryTarget
   );
 }
 
+/** @deprecated Use handleDiscordSubagentDeliveryTargetAsync; removed in the next Plugin SDK major. */
 export function handleDiscordSubagentDeliveryTarget(
   event: DiscordSubagentDeliveryTargetEvent,
 ): DiscordSubagentDeliveryTargetResult {
-  return shouldResolveDiscordDeliveryTarget(event)
-    ? resolveDiscordDeliveryTarget(event)
-    : undefined;
+  if (!shouldResolveDiscordDeliveryTarget(event)) {
+    return undefined;
+  }
+  return resolveDiscordDeliveryTarget(
+    event,
+    listThreadBindingsBySessionKey({
+      targetSessionKey: event.childSessionKey,
+      accountId: event.requesterOrigin?.accountId?.trim() || undefined,
+      targetKind: "subagent",
+    }),
+  );
 }
 
 export async function handleDiscordSubagentDeliveryTargetAsync(
@@ -70,20 +80,20 @@ export async function handleDiscordSubagentDeliveryTargetAsync(
   if (!shouldResolveDiscordDeliveryTarget(event)) {
     return undefined;
   }
-  await ensureBindingsLoadedAsync();
-  return resolveDiscordDeliveryTarget(event);
+  const bindings = await listThreadBindingsBySessionKeyAsync({
+    targetSessionKey: event.childSessionKey,
+    accountId: event.requesterOrigin?.accountId?.trim() || undefined,
+    targetKind: "subagent",
+  });
+  return resolveDiscordDeliveryTarget(event, bindings);
 }
 
 function resolveDiscordDeliveryTarget(
   event: DiscordSubagentDeliveryTargetEvent,
+  bindings: ThreadBindingRecord[],
 ): DiscordSubagentDeliveryTargetResult {
   const requesterAccountId = event.requesterOrigin?.accountId?.trim();
   const requesterThreadId = normalizeOptionalStringifiedId(event.requesterOrigin?.threadId);
-  const bindings = listThreadBindingsBySessionKey({
-    targetSessionKey: event.childSessionKey,
-    ...(requesterAccountId ? { accountId: requesterAccountId } : {}),
-    targetKind: "subagent",
-  });
   const binding =
     (requesterThreadId
       ? bindings.find(

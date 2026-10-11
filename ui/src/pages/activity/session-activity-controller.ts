@@ -19,7 +19,6 @@ import {
   CURRENT_WORK_CHANGE_LIMIT,
   reconcileCurrentWork,
   type CurrentWorkChange,
-  type CurrentWorkFence,
 } from "./current-work.ts";
 import {
   canonicalSessionActivityLocation,
@@ -84,8 +83,6 @@ export class SessionActivityController {
   private bucketRollover?: ReturnType<typeof setTimeout>;
   private pendingChanges: CurrentWorkChange[] = [];
   private changesOverflowed = false;
-  private readonly currentWorkFences = new Map<string, CurrentWorkFence>();
-  private retirementOverflowed = false;
   private readonly historyRows = createSessionRowProvenance();
   private historyRevision = 0;
   private normalizedLocation = "";
@@ -161,8 +158,6 @@ export class SessionActivityController {
     this.filters = null;
     this.pendingChanges.length = 0;
     this.changesOverflowed = false;
-    this.currentWorkFences.clear();
-    this.retirementOverflowed = false;
     this.historyRows.reset();
     this.normalizedLocation = "";
   }
@@ -443,20 +438,9 @@ export class SessionActivityController {
     }
   }
 
-  private reconcileCurrentWork(
-    result: SessionsListResult,
-    changes: Iterable<CurrentWorkChange>,
-    acceptRead = false,
-  ) {
-    const next = reconcileCurrentWork(
-      result,
-      changes,
-      this.currentWorkFences,
-      this.retirementOverflowed,
-      acceptRead,
-    );
-    this.retirementOverflowed = next.retirementOverflowed;
-    return next;
+  private reconcileCurrentWork(result: SessionsListResult, changes: Iterable<CurrentWorkChange>) {
+    // A late snapshot may briefly restore a retired row; the next refresh corrects it.
+    return reconcileCurrentWork(result, changes);
   }
 
   load(
@@ -538,8 +522,6 @@ export class SessionActivityController {
     this.requestState = reason === "retry" ? "retrying" : "loading";
     this.error = undefined;
     if (!sameQuery) {
-      this.currentWorkFences.clear();
-      this.retirementOverflowed = false;
       this.historyRows.reset();
       this.resetSummaries();
       this.result = undefined;
@@ -552,10 +534,7 @@ export class SessionActivityController {
       .then((result) => {
         if (this.pending === pending) {
           if (filters === "current") {
-            if (!this.changesOverflowed) {
-              this.retirementOverflowed = false;
-            }
-            const next = this.reconcileCurrentWork(result, this.pendingChanges, true);
+            const next = this.reconcileCurrentWork(result, this.pendingChanges);
             this.incomplete = this.changesOverflowed || next.requiresRefresh;
             if (this.incomplete) {
               this.eventRefresh.schedule();
