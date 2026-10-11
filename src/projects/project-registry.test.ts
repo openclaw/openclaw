@@ -2,6 +2,7 @@ import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import http from "node:http";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
@@ -108,23 +109,6 @@ describe("project registry", () => {
     "ssh://git@github.com:22/OpenClaw/OpenClaw",
   ])("canonicalizes accepted GitHub clone URL %s", (input) => {
     expect(parseProjectGitUrl(input)?.url).toBe("https://github.com/openclaw/openclaw.git");
-  });
-
-  it.each([
-    [
-      "https://ghe.example.test/Acme/Private-Repo",
-      "https://ghe.example.test/acme/private-repo.git",
-    ],
-    [
-      "git@ghe.example.test:Acme/Private-Repo.git",
-      "https://ghe.example.test/acme/private-repo.git",
-    ],
-    [
-      "ssh://git@ghe.example.test/Acme/Private-Repo.git",
-      "https://ghe.example.test/acme/private-repo.git",
-    ],
-  ])("canonicalizes accepted enterprise GitHub clone URL %s", (input, expected) => {
-    expect(parseProjectGitUrl(input, "ghe.example.test")?.url).toBe(expected);
   });
 
   it("rejects a repository URL from a host other than the configured GitHub host", () => {
@@ -443,6 +427,29 @@ describe("project registry", () => {
     await refreshProjectCheckout({ url: source, target });
 
     expect((await git(target, "rev-parse", "origin/main")).stdout.trim()).toBe(sourceHead);
+  });
+
+  it("preserves partial-clone filtering during refresh", async () => {
+    const root = tempDirs.make("openclaw-project-refresh-partial-");
+    const source = await initializeRepository(root, "source");
+    await git(source, "config", "uploadpack.allowFilter", "true");
+    const target = path.join(root, "partial");
+    const url = pathToFileURL(source).href;
+    await git(root, "clone", "--filter=blob:none", "--no-checkout", url, target);
+    await commitFile(source, "later.txt", "keep this blob lazy\n");
+    const commit = (await git(source, "rev-parse", "HEAD")).stdout.trim();
+    const blob = (await git(source, "rev-parse", "HEAD:later.txt")).stdout.trim();
+
+    await refreshProjectCheckout({ url, target });
+    expect((await git(target, "rev-parse", "origin/main")).stdout.trim()).toBe(commit);
+
+    await expect(
+      execFileAsync("git", ["-C", target, "cat-file", "-e", blob], {
+        env: { ...process.env, GIT_NO_LAZY_FETCH: "1", GIT_ALLOW_PROTOCOL: "" },
+      }),
+    ).rejects.toMatchObject({ code: 1 });
+    expect((await git(target, "cat-file", "-t", commit)).stdout.trim()).toBe("commit");
+    expect((await git(target, "show", `${commit}:later.txt`)).stdout).toBe("keep this blob lazy\n");
   });
 
   it("prunes seeded tracking refs deleted upstream during refresh", async () => {

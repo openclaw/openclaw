@@ -42,7 +42,7 @@ How it maps:
   - In sandboxed sessions, both host and node control require `agents.defaults.sandbox.browser.allowHostControl=true`. Existing-session profiles cannot use the sandbox browser. When a bridge is available, they use the host unless a node is explicitly selected, subject to the same host-control policy.
   - With an enabled node pin, no sandbox bridge, and host control allowed, the tool description identifies the configured node as the default. Other configurations retain the existing tool description; the guidance does not depend on live node connectivity.
 
-This keeps the agent deterministic and avoids brittle selectors.
+This lets the agent reuse captured element references instead of brittle selectors.
 
 Example agent tool arguments (reuse a `targetId` from `tabs` or `open`):
 

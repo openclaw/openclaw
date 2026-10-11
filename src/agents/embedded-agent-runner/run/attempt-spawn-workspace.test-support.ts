@@ -204,7 +204,7 @@ const hoisted = vi.hoisted((): AttemptBaseMocks => {
     flushPendingToolResultsAsync: vi.fn(async () => undefined),
     clearPendingToolResults: vi.fn(),
     reloadPersistedTranscriptAsync: vi.fn(async () => undefined),
-    clearNextUserMessagePersistenceSuppression: vi.fn(),
+    setNextUserMessagePersistence: vi.fn(),
     removeTrailingEntriesAsync: vi.fn(async () => 0),
   };
   return {

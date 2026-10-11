@@ -132,7 +132,7 @@ bare spec installs through npm. Raw `@openclaw/*`
 specs that match bundled plugins also resolve to the bundled copy before npm
 fallback. Use `npm:@openclaw/<plugin>@<version>` to deliberately install the
 external npm package instead of the bundled copy. Use `clawhub:`, `npm:`,
-`git:`, or `npm-pack:` for deterministic source selection. See
+`git:`, or `npm-pack:` to select the source explicitly. See
 [`openclaw plugins`](/cli/plugins#install) for the full command contract.
 
 For npm installs, unpinned specs and `@latest` choose the newest stable
@@ -221,7 +221,7 @@ Key policy rules:
 - OpenAI-family Codex routing keeps provider and runtime plugin boundaries
   separate: legacy Codex model refs are legacy config that doctor repairs,
   while the bundled `codex` plugin owns Codex app-server runtime for
-  canonical `openai/*` agent refs, explicit `agentRuntime.id: "codex"`, and
+  current `openai/*` agent refs, explicit `agentRuntime.id: "codex"`, and
   legacy `codex/*` refs.
 
 When `plugins.allow` is unset and non-bundled plugins are auto-discovered from

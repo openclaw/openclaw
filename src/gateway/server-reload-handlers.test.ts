@@ -9,13 +9,22 @@ import {
   withinTest,
 } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { resolveAgentDir } from "../agents/agent-scope-config.js";
 import { prepareRuntimeAuthProfileStoreSnapshots } from "../agents/auth-profiles/runtime-snapshots.js";
 import { addSession, markBackgrounded, markExited } from "../agents/bash-process-registry.js";
 import { createProcessSessionFixture } from "../agents/bash-process-registry.test-helpers.js";
 import { resetProcessRegistryForTests } from "../agents/bash-process-registry.test-support.js";
+import {
+  encodePluginModelCatalogRelativePath,
+  loadPersistedPluginModelCatalogsReadOnly,
+  PLUGIN_MODEL_CATALOG_GENERATED_BY,
+  replacePersistedPluginModelCatalogs,
+  type PersistedPluginModelCatalog,
+} from "../agents/plugin-model-catalog.js";
 import type { ChannelPlugin } from "../channels/plugins/types.public.js";
 import { prepareConfigRuntimeEnv } from "../config/config-env-vars.js";
 import type { ConfigWriteNotification } from "../config/config.js";
+import { applyModelDefaults } from "../config/defaults.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -79,6 +88,7 @@ import {
   getActiveSecretsRuntimeSnapshotRevision,
   type PreparedSecretsRuntimeSnapshot,
 } from "../secrets/runtime.js";
+import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import {
   createGatewaySchedulerClock,
@@ -1567,6 +1577,140 @@ describe("gateway hot reload model state", () => {
       ...(agentIds ? { agentIds } : {}),
     });
   }
+
+  it.each([
+    {
+      name: "removes the normalized authored endpoint",
+      providerKey: "ollama",
+      nextProviderKey: undefined,
+      authoredBaseUrl: "HTTPS://OLLAMA.EXAMPLE:443/v1/",
+      cachedBaseUrl: "https://ollama.example/v1",
+      removed: true,
+    },
+    {
+      name: "retains a nonmatching local discovery endpoint",
+      providerKey: "ollama",
+      nextProviderKey: undefined,
+      authoredBaseUrl: "https://ollama.example/v1",
+      cachedBaseUrl: "http://127.0.0.1:11434",
+      removed: false,
+    },
+    {
+      name: "retains discovery when no endpoint was authored",
+      providerKey: "ollama",
+      nextProviderKey: undefined,
+      authoredBaseUrl: undefined,
+      cachedBaseUrl: "http://127.0.0.1:11434",
+      removed: false,
+    },
+    {
+      name: "removes a provider configured with an uppercase key",
+      providerKey: "OLLAMA",
+      nextProviderKey: undefined,
+      authoredBaseUrl: "https://ollama.example/v1",
+      cachedBaseUrl: "https://ollama.example/v1",
+      removed: true,
+    },
+    {
+      name: "retains discovery when only provider key spelling changes",
+      providerKey: "ollama",
+      nextProviderKey: "OLLAMA",
+      authoredBaseUrl: "https://ollama.example/v1",
+      cachedBaseUrl: "https://ollama.example/v1",
+      removed: false,
+    },
+  ])(
+    "$name before refreshing a removed provider without discovery",
+    async ({ providerKey, nextProviderKey, authoredBaseUrl, cachedBaseUrl, removed }) => {
+      const root = autoCleanupTempDirs.make("openclaw-provider-removal-reload-");
+      const agentDirs = [path.join(root, "main"), path.join(root, "secondary")] as const;
+      const initialConfig = {
+        agents: {
+          entries: {
+            main: { agentDir: agentDirs[0] },
+            secondary: { agentDir: agentDirs[1] },
+          },
+        },
+        models: {
+          providers: {
+            [providerKey]: {
+              ...(authoredBaseUrl ? { baseUrl: authoredBaseUrl } : {}),
+              api: "ollama",
+              models: [],
+            },
+          },
+        },
+      } as OpenClawConfig;
+      const nextConfig: OpenClawConfig = {
+        agents: initialConfig.agents,
+        models: {
+          providers: nextProviderKey
+            ? { [nextProviderKey]: initialConfig.models!.providers![providerKey]! }
+            : {},
+        },
+      };
+      const contents = JSON.stringify({
+        generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY,
+        providers: {
+          ollama: {
+            baseUrl: cachedBaseUrl,
+            api: "ollama",
+            models: [{ id: "cached-model", name: "Cached model" }],
+          },
+        },
+      });
+      const expected = [
+        {
+          pluginId: "ollama",
+          contents: removed
+            ? JSON.stringify({ generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY, providers: {} })
+            : contents,
+        },
+      ];
+      try {
+        for (const agentId of ["main", "secondary"]) {
+          const agentDir = resolveAgentDir(initialConfig, agentId);
+          await replacePersistedPluginModelCatalogs({
+            agentDir,
+            pluginCatalogWrites: { [encodePluginModelCatalogRelativePath("ollama")]: contents },
+          });
+        }
+        const loadedConfig = applyModelDefaults(initialConfig);
+        if (!authoredBaseUrl) {
+          expect(loadedConfig.models?.providers?.[providerKey]?.baseUrl).toBe(
+            "http://127.0.0.1:11434",
+          );
+        }
+        hoisted.runtimeConfig.value = loadedConfig;
+        setRuntimeConfigSnapshot(loadedConfig, initialConfig);
+        const logReload = { info: vi.fn(), warn: vi.fn() };
+        const { applyHotReload, setState } = createReloadHandlersForTest(logReload);
+        let catalogsAtRefresh: PersistedPluginModelCatalog[][] = [];
+        // A static cache refresh must already see the removal even when discovery is unavailable.
+        hoisted.refreshPreparedModelRuntimeSnapshots.mockImplementationOnce(async (config) => {
+          expect(config).toBe(nextConfig);
+          expect(setState).toHaveBeenCalledOnce();
+          catalogsAtRefresh = agentDirs.map((agentDir) =>
+            loadPersistedPluginModelCatalogsReadOnly(agentDir),
+          );
+        });
+
+        const application = await applyHotReload(
+          buildGatewayReloadPlan([`models.providers.${providerKey}`]),
+          nextConfig,
+        );
+        expect(logReload.warn.mock.calls).toEqual([]);
+        expect(application).toBe("applied");
+        expectPreparedModelRefresh(nextConfig);
+        expect(catalogsAtRefresh).toEqual(agentDirs.map(() => expected));
+        for (const agentDir of agentDirs) {
+          expect(loadPersistedPluginModelCatalogsReadOnly(agentDir)).toEqual(expected);
+        }
+      } finally {
+        await closeOpenClawAgentDatabasesAsync();
+      }
+    },
+  );
 
   it("keeps a supervised on-exit child alive exactly once across lazy cron reload", ({ signal }) =>
     fixtureLifetime.run(async () => {

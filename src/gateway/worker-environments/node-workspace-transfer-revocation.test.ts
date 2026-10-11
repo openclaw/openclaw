@@ -56,7 +56,6 @@ describe("workspace upload cancellation", () => {
       environmentId: "environment",
       ownerEpoch: 1,
       sessionId: "session",
-      generation: 1,
       localPath,
       isAuthorized: () => !owner.signal.aborted,
       signal: owner.signal,
@@ -279,7 +278,6 @@ describe("attachment transfer revocation", () => {
       environmentId: "environment",
       ownerEpoch: 1,
       sessionId: "session",
-      generation: 1,
       localPath: workspaceDir,
       isAuthorized: () => true,
     });
@@ -494,7 +492,6 @@ describe("durable credential revocation fencing", () => {
         environmentId: "environment",
         ownerEpoch: 1,
         sessionId: "session",
-        generation: 1,
         localPath,
         isAuthorized: () => true,
       });
@@ -535,7 +532,6 @@ describe("durable credential revocation fencing", () => {
       environmentId: "environment",
       ownerEpoch: 1,
       sessionId: "session",
-      generation: 1,
       localPath,
       isAuthorized: () => true,
     });
@@ -694,7 +690,6 @@ describe("durable credential revocation fencing through the real store", () => {
       environmentId,
       ownerEpoch,
       sessionId,
-      generation: ownerEpoch,
       localPath,
       isAuthorized: () => true,
     });

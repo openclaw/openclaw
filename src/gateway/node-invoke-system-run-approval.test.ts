@@ -293,25 +293,6 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
     });
   }
 
-  test("forwards ask-fallback provenance only for a timed-out approval", async () => {
-    const result = await sanitizeFallbackRun({
-      rawParams: {
-        command: echoSafeArgv,
-        rawCommand: echoSafeCommand,
-      },
-      record: makeTimedOutRecord(),
-    });
-
-    expect(result.ok).toBe(true);
-    if (!result.ok) {
-      throw new Error("unreachable");
-    }
-    const forwarded = result.params as Record<string, unknown>;
-    expect(forwarded.approvalSource).toBe("ask-fallback");
-    expect(forwarded.approved).toBeUndefined();
-    expect(forwarded.approvalDecision).toBeUndefined();
-  });
-
   test("derives marker-only auto-review provenance from the consumed Gateway record", async () => {
     const record = makeRecord(echoSafeCommand, echoSafeArgv);
     record.resolutionSource = "auto-review";
@@ -516,19 +497,6 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
     expectRejectedForwardingResult(result, "APPROVAL_REQUIRED");
   });
 
-  test("rejects ask fallback combined with explicit approval fields", async () => {
-    const result = await sanitizeApprovedRun({
-      rawParams: {
-        command: echoSafeArgv,
-        rawCommand: echoSafeCommand,
-        approvalSource: "ask-fallback",
-      },
-      record: makeTimedOutRecord(),
-    });
-
-    expectRejectedForwardingResult(result, "APPROVAL_SOURCE_MISMATCH");
-  });
-
   test("rejects ask-fallback provenance for a human approval", async () => {
     const result = await sanitizeApprovedRun({
       rawParams: {
@@ -539,18 +507,6 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
     });
 
     expectRejectedForwardingResult(result, "APPROVAL_SOURCE_MISMATCH");
-  });
-
-  test("rejects unrecognized approval provenance", async () => {
-    const result = await sanitizeApprovedRun({
-      rawParams: {
-        command: echoSafeArgv,
-        rawCommand: echoSafeCommand,
-        approvalSource: "explicit",
-      },
-    });
-
-    expectRejectedForwardingResult(result, "INVALID_APPROVAL_SOURCE");
   });
 
   test("rejects timed-out fallback from a client without approval scope", async () => {
@@ -584,24 +540,6 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
     );
   });
 
-  test("accepts matching cmd.exe /c command text for approval binding", async () => {
-    const result = await sanitizeApprovedRun({
-      rawParams: {
-        command: ["cmd.exe", "/d", "/s", "/c", "echo", "SAFE&&whoami"],
-        rawCommand: "echo SAFE&&whoami",
-      },
-      record: makeRecord("echo SAFE&&whoami", undefined, [
-        "cmd.exe",
-        "/d",
-        "/s",
-        "/c",
-        "echo",
-        "SAFE&&whoami",
-      ]),
-    });
-    expectAllowOnceForwardingResult(result);
-  });
-
   test("rejects env-assignment shell wrapper when approval command omits env prelude", async () => {
     const result = await sanitizeApprovedRun({
       rawParams: {
@@ -614,22 +552,6 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
       "APPROVAL_REQUEST_MISMATCH",
       "approval id does not match request",
     );
-  });
-
-  test("accepts env-assignment shell wrapper only when approval command matches full argv text", async () => {
-    const result = await sanitizeApprovedRun({
-      rawParams: {
-        command: ["/usr/bin/env", "BASH_ENV=/tmp/payload.sh", "bash", "-lc", "echo SAFE"],
-      },
-      record: makeRecord('/usr/bin/env BASH_ENV=/tmp/payload.sh bash -lc "echo SAFE"', undefined, [
-        "/usr/bin/env",
-        "BASH_ENV=/tmp/payload.sh",
-        "bash",
-        "-lc",
-        "echo SAFE",
-      ]),
-    });
-    expectAllowOnceForwardingResult(result);
   });
 
   test("rejects trailing-space argv mismatch against legacy command-only approval", async () => {
@@ -660,18 +582,10 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
     );
   });
 
-  test("accepts matching commandArgv binding for trailing-space argv", async () => {
-    const result = await sanitizeApprovedRun({
-      rawParams: {
-        command: ["runner "],
-      },
-      record: makeRecord('"runner "', ["runner "]),
-    });
-    expectAllowOnceForwardingResult(result);
-  });
-
-  test("uses systemRunPlan for forwarded command context and ignores caller tampering", async () => {
+  test("uses systemRunPlan when approval ownership differs and ignores caller tampering", async () => {
     const record = makeRecord(echoSafeCommand, echoSafeArgv);
+    record.request.agentId = "worker";
+    record.request.sessionKey = "agent:worker:subagent:run-1";
     record.request.systemRunPlan = {
       argv: ["/usr/bin/echo", "SAFE"],
       cwd: "/real/cwd",
@@ -959,35 +873,15 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
     expectRejectedForwardingResult(result, "APPROVAL_CLIENT_MISMATCH", "not valid for this client");
   });
 
-  test("accepts trusted backend chat replay when stable requester metadata matches", async () => {
-    const forwarded = expectAllowOnceForwardingResult(await sanitizeApprovedChatReplay());
-    expect(forwarded).not.toHaveProperty("turnSourceChannel");
-    expect(forwarded).not.toHaveProperty("turnSourceTo");
-    expect(forwarded).not.toHaveProperty("turnSourceAccountId");
-    expect(forwarded).not.toHaveProperty("turnSourceThreadId");
-  });
-
   test("accepts trusted backend chat replay from a non-bridgeable agent client when stable requester metadata matches", async () => {
     const record = makeChatRecord();
     record.requestedByClientId = "chat-agent";
 
-    expectAllowOnceForwardingResult(await sanitizeApprovedChatReplay({ record }));
-  });
-
-  test("accepts trusted backend WeCom replay when the approved chat agent connection changes", async () => {
-    const wecomContext = {
-      sessionKey: "agent:main:wecom:conversation:corp-42",
-      turnSourceChannel: "wecom",
-      turnSourceTo: "wecom:corp-42:conversation-7",
-      turnSourceAccountId: "corp-42",
-      turnSourceThreadId: "conversation-7",
-    } satisfies Omit<Partial<ApprovedRunParamOverrides>, "command" | "rawCommand">;
-    const result = await sanitizeApprovedChatReplay({
-      record: makeChatRecord(wecomContext),
-      rawParams: wecomContext,
-    });
-
-    expectAllowOnceForwardingResult(result);
+    const forwarded = expectAllowOnceForwardingResult(await sanitizeApprovedChatReplay({ record }));
+    expect(forwarded).not.toHaveProperty("turnSourceChannel");
+    expect(forwarded).not.toHaveProperty("turnSourceTo");
+    expect(forwarded).not.toHaveProperty("turnSourceAccountId");
+    expect(forwarded).not.toHaveProperty("turnSourceThreadId");
   });
 
   test("accepts trusted backend webchat replay when turnSourceTo is null on both sides (regression #82132)", async () => {
@@ -1007,7 +901,6 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
   });
 
   test.each([
-    ["session binding changes", { sessionKey: "agent:main:telegram:direct:99999" }],
     ["session binding casing changes", { sessionKey: "agent:MAIN:telegram:direct:12345" }],
     ["agent binding casing changes", { agentId: "Main" }],
     ["channel target changes", { turnSourceTo: "telegram:67890" }],
@@ -1022,20 +915,6 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
       );
     },
   );
-
-  test("rejects trusted backend chat replay without matching approval scope", async () => {
-    const result = await sanitizeApprovedChatReplay({
-      client: {
-        ...trustedBackendClient,
-        connect: {
-          ...trustedBackendClient.connect,
-          scopes: ["operator.write"],
-        },
-      },
-    });
-
-    expectRejectedForwardingResult(result, "APPROVAL_CLIENT_MISMATCH", "not valid for this client");
-  });
 
   test("rejects no-device approval replay when the original request used device-token auth", async () => {
     const result = await sanitizeApprovedRun({

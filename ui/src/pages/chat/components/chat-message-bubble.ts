@@ -79,6 +79,7 @@ import {
   renderToolOutcome,
   type ToolRenderOptions,
 } from "./chat-tool-content.ts";
+import { renderChatBubbleActivity } from "./chat-working-indicator.ts";
 import { renderWorkspaceConflictTranscriptMessage } from "./chat-workspace-conflict.ts";
 import { renderToolPreview } from "./widget-card.ts";
 
@@ -183,6 +184,7 @@ export function renderGroupedMessage(
     agentId?: string;
     duplicateCount?: number;
     showReasoning: boolean;
+    bubbleMode?: boolean;
     showToolCalls?: boolean;
     runActive?: boolean;
     asyncQuestions?: AsyncQuestionPresentation;
@@ -315,6 +317,13 @@ export function renderGroupedMessage(
   const extractedThinking =
     opts.showReasoning && role === "assistant" ? extractThinkingCached(message) : null;
   const reasoningMarkdown = extractedThinking ? `_Reasoning:_\n\n${extractedThinking}` : null;
+  const reasoningContent = reasoningMarkdown
+    ? html`<div class="chat-thinking">
+        ${unsafeHTML(
+          toSanitizedMarkdownHtml(reasoningMarkdown, { codeBlockInteraction: "interactive" }),
+        )}
+      </div>`
+    : nothing;
   const markdown =
     (normalizedRole === "user" ? opts.messageActions?.markdown : undefined) ??
     (displayMarkdown || null);
@@ -560,15 +569,13 @@ export function renderGroupedMessage(
     )}
     ${isStandaloneToolMessage ? assistantViewContent : nothing}
     ${
-      reasoningMarkdown
-        ? html`<div class="chat-thinking">
-            ${unsafeHTML(
-              toSanitizedMarkdownHtml(reasoningMarkdown, {
-                codeBlockInteraction: "interactive",
-              }),
-            )}
-          </div>`
-        : nothing
+      reasoningMarkdown && opts.bubbleMode
+        ? renderChatBubbleActivity(
+            reasoningContent,
+            t("chat.view.activityDetails"),
+            opts.isStreaming,
+          )
+        : reasoningContent
     }
     ${isStandaloneToolMessage ? nothing : assistantViewContent}
     ${
