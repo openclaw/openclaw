@@ -50,6 +50,8 @@ import {
   type SessionEntryMaintenanceApply,
 } from "./session-accessor.sqlite-maintenance-store.js";
 import { SqliteReclamationInputsChangedError } from "./session-accessor.sqlite-reclamation-worker-diagnostics.js";
+import { MaintenancePreservationRequiredError } from "./session-mutation-conflict-error.js";
+import { readSessionMaintenancePreservation } from "./store-maintenance-preserve-snapshot.js";
 
 type MaintenancePlan = Extract<
   SqliteSessionReclamationPlan,
@@ -62,8 +64,6 @@ type MaintenancePlan = Extract<
   }
 >;
 
-class MaintenancePreservationRequiredError extends Error {}
-
 function prepareWorkerAgeFact(
   database: Pick<OpenClawAgentDatabase, "db">,
   plan: Extract<SessionMaintenanceMetadataCommand, { kind: "maintenance-plan" }>,
@@ -74,12 +74,7 @@ function prepareWorkerAgeFact(
 }
 
 function readPreservation(input: SessionEntryMaintenanceInput) {
-  if (input.preservation === null) {
-    throw new MaintenancePreservationRequiredError(
-      "SQLite maintenance requires session preservation",
-    );
-  }
-  return input.preservation;
+  return readSessionMaintenancePreservation(input.preservation);
 }
 
 /** Retain the snapshot connection; its revision fences age facts, not unrelated row writes. */

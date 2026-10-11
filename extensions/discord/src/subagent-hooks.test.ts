@@ -23,7 +23,8 @@ const hookMocks = vi.hoisted(() => {
 
 let registerDiscordSubagentHooks: typeof import("../subagent-hooks-api.js").registerDiscordSubagentHooks;
 
-vi.mock("./monitor/thread-bindings.js", () => ({
+vi.mock("./monitor/thread-bindings.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./monitor/thread-bindings.js")>()),
   listThreadBindingsBySessionKeyAsync: hookMocks.listThreadBindingsBySessionKeyAsync,
   unbindThreadBindingsBySessionKeyAsync: hookMocks.unbindThreadBindingsBySessionKeyAsync,
 }));

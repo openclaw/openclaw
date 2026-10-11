@@ -32,6 +32,7 @@ import { appendSessionResetBoundary } from "./session-accessor.sqlite-reset-boun
 import type { ResolvedSqliteReadScope } from "./session-accessor.sqlite-scope.js";
 import type { SessionEntryWritePostimages } from "./session-entry-write-postimage.js";
 import { SessionEntryLifecycleUpsertConflictError } from "./session-mutation-conflict-error.js";
+import { readSessionMaintenancePreservation } from "./store-maintenance-preserve-snapshot.js";
 import type { SessionEntry } from "./types.js";
 
 type ProjectedLifecycleCommitOptions = Omit<ProjectedLifecycleCommitInput, "maintenance"> & {
@@ -271,14 +272,10 @@ export function commitPreparedSessionEntryLifecycleMutationInDatabase(
       if (!maintenance) {
         return emptySessionEntryMaintenancePlan();
       }
-      const preservation = maintenance.preservation;
-      if (!preservation) {
-        throw new Error("Worker lifecycle mutation requires maintenance preservation");
-      }
       return applySessionEntryMaintenanceInDatabase(
         current,
         maintenance,
-        () => preservation,
+        () => readSessionMaintenancePreservation(maintenance.preservation),
         options?.onArchived,
         undefined,
         postimages,

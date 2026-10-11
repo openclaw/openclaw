@@ -9,6 +9,7 @@ import {
   makeEmbeddedRunnerAttempt,
 } from "../../test-helpers/embedded-agent-runner-e2e-fixtures.js";
 import { createUsageAccumulator } from "../usage-accumulator.js";
+import { handleEmbeddedAssistantFailure } from "./assistant-failure.js";
 import { recoverEmbeddedRunAttempt } from "./attempt-recovery.js";
 import type { EmbeddedRunAttemptWithReceiptEvidence } from "./attempt-result.js";
 import { createEmbeddedRunContextRecoveryState } from "./context-recovery-state.js";
@@ -313,4 +314,58 @@ export async function recoverAfterTransportDrop(scenario: TransportDropScenario 
     failoverRetryController,
     onAgentEvent,
   };
+}
+
+export function handleAssistantFailureAfterRecovery(
+  fixture: Awaited<ReturnType<typeof recoverAfterTransportDrop>>,
+  previousRetryFailoverReason: Parameters<
+    typeof handleEmbeddedAssistantFailure
+  >[0]["previousRetryFailoverReason"] = null,
+) {
+  const { attempt, erroredAssistant: assistant, failoverRetryController: failover } = fixture;
+  return handleEmbeddedAssistantFailure({
+    runInput: {
+      runParams: {
+        sessionId: "session:transport-drop",
+        sessionFile: "/tmp/provider-recovery-test/session.jsonl",
+        runId: "run:transport-drop",
+        workspaceDir: "/tmp/provider-recovery-test",
+        prompt: "Continue",
+        timeoutMs: 60_000,
+      },
+      fallbackConfigured: true,
+      suspendForFailure: vi.fn(),
+      agentDir: "/tmp/provider-recovery-test",
+      isProbeSession: false,
+    },
+    normalizedAttempt: {
+      attempt,
+      attemptAssistant: assistant,
+      currentAttemptAssistant: assistant,
+      terminalState: resolveEmbeddedRunAttemptTerminalState({ attempt, assistant }),
+      activeErrorContext: { provider: "openai", model: "synthetic-model" },
+    },
+    preparedRuntime: {
+      provider: "openai",
+      modelId: "synthetic-model",
+      model: { id: "synthetic-model" },
+      attemptedThinking: new Set(["off"]),
+      attemptAuthProfileStore: { version: 1, profiles: {} },
+      maybeRefreshRuntimeAuthForAuthError: vi.fn(async () => false),
+    },
+    runtime: {
+      thinkLevel: "off",
+      lastProfileId: undefined,
+      pluginHarnessOwnsTransport: false,
+    },
+    providerOwner: undefined,
+    getThinkLevel: () => "off",
+    runtimeAuthRetry: false,
+    failover,
+    emptyErrorRetries: 0,
+    overloadProfileRotations: 0,
+    previousRetryFailoverReason,
+    traceAttempts: [],
+    suspensionSessionId: "session:transport-drop",
+  });
 }

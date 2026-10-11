@@ -3712,8 +3712,7 @@ describe("gateway Gmail hot reload handlers", () => {
     "preserves terminals when a failed $kind restriction is replaced (cron cleanup fails: $cronCleanupFails)",
     async ({ kind, cronCleanupFails }) => {
       vi.useFakeTimers();
-      const clock = createGatewaySchedulerClock();
-      const scheduler = createTestGatewayScheduler(clock.clock);
+      const { clock, scheduler } = createConfigReloadTestClock();
       const initialConfig: OpenClawConfig = {
         gateway: { reload: {}, terminal: { enabled: true } },
       };

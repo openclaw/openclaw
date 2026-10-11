@@ -22,6 +22,7 @@ import { readExactSessionEntryRow } from "./session-accessor.sqlite-entry-store.
 import { replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
 import { applySessionEntryLifecycleMutation } from "./session-accessor.sqlite-projection.js";
 import * as reclamation from "./session-accessor.sqlite-reclamation-run.js";
+import { runSessionEntryWorkerOperation } from "./session-entry-patch.js";
 import {
   SessionEntryLifecycleUpsertConflictError,
   SqliteSessionMutationConflictError,
@@ -151,6 +152,66 @@ function maintenanceFixture() {
     },
   };
 }
+
+it.each([false, true])(
+  "acquires lifecycle maintenance inventory only for selected work (stale=%s)",
+  async (stale) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const f = fixture();
+      if (stale) {
+        replaceSessionEntrySync(
+          { ...f.scope, sessionKey: "agent:main:stale-maintenance" },
+          { sessionId: "stale-maintenance", updatedAt: 1 },
+        );
+      }
+      const original = f.read();
+      const staleOriginal = f.read("agent:main:stale-maintenance");
+      const prepare = vi.fn(async () => {
+        throw new Error("Worker placement inventory changed");
+      });
+      const unregister = registerSessionMaintenancePreserveKeysProvider(prepare);
+      try {
+        const updated = { ...original!, label: "ordinary turn update" };
+        const mutation = applySessionEntryLifecycleMutation({
+          ...f.scope,
+          upserts: [{ sessionKey: f.scope.sessionKey, entry: updated }],
+        });
+        if (stale) {
+          await expect(mutation).rejects.toThrow("Worker placement inventory changed");
+          expect(f.read()).toEqual(original);
+          expect(f.read("agent:main:stale-maintenance")).toEqual(staleOriginal);
+          expect(prepare).toHaveBeenCalledOnce();
+        } else {
+          await expect(mutation).resolves.toMatchObject({ afterCount: 1 });
+          expect(f.read()).toEqual(updated);
+          expect(prepare).not.toHaveBeenCalled();
+        }
+      } finally {
+        unregister();
+      }
+    });
+  },
+);
+
+it("rejects an unadmitted maintenance response without a completed rollback", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const f = fixture();
+    const original = f.read();
+    await expect(
+      runSessionEntryWorkerOperation<{ kind: "test-lifecycle" }, "rolled-back">({
+        database: { agentId: "main", path: f.scope.storePath },
+        agentId: "main",
+        assertCurrent() {},
+        candidateKind: "test-lifecycle",
+        readRolledBackResult: () => ({ value: "rolled-back" }),
+        run: (_worker, commit) =>
+          commit(async () => ({ kind: "maintenance-preservation-required" })),
+        onCommitted: () => "rolled-back",
+      }),
+    ).rejects.toThrow("no confirmed native completion and commit receipt");
+    expect(f.read()).toEqual(original);
+  });
+});
 
 async function runMaintenanceDrift(
   f: ReturnType<typeof maintenanceFixture>,

@@ -182,14 +182,26 @@ export async function applySessionEntryLifecycleMutation(
               !reclamationOptions ||
               (hasPreparedNativeSessionDeletion() &&
                 !captureNativeSessionWorkerDeletion(deletedOwners));
-            const preparedPreservation = params.skipMaintenance
-              ? undefined
-              : await prepareSessionMaintenancePreservation(params.storePath, {
-                  native: nativeMaintenance,
-                });
+            const lazyPreservation =
+              !params.skipMaintenance &&
+              !nativeMaintenance &&
+              upserts.length > 0 &&
+              removals.length === 0 &&
+              params.maintenanceOverride === undefined &&
+              !projected.upsertedEntries.some(
+                ({ resetBoundary, entry, expectedEntry }) =>
+                  resetBoundary !== undefined ||
+                  (expectedEntry !== undefined && entry.sessionId !== expectedEntry.sessionId),
+              );
+            let preparedPreservation =
+              params.skipMaintenance || lazyPreservation
+                ? undefined
+                : await prepareSessionMaintenancePreservation(params.storePath, {
+                    native: nativeMaintenance,
+                  });
             try {
               if (reclamationOptions && !nativeMaintenance) {
-                const maintenance: SessionEntryMaintenanceInput | null = preparedPreservation
+                const maintenance: SessionEntryMaintenanceInput | null = !params.skipMaintenance
                   ? {
                       activeSessionKey: params.activeSessionKey ?? "",
                       archiveDirectory: resolveSqliteTranscriptArchiveDirectory(resolved),
@@ -198,7 +210,7 @@ export async function applySessionEntryLifecycleMutation(
                         ...resolveMaintenanceConfig(),
                         ...params.maintenanceOverride,
                       }),
-                      preservation: preparedPreservation.capture(),
+                      preservation: preparedPreservation?.capture() ?? null,
                       storePath: params.storePath,
                     }
                   : null;
@@ -219,8 +231,8 @@ export async function applySessionEntryLifecycleMutation(
                   }
                 };
                 if (upserts.length > 0 && execution && !hasPreparedNativeSessionDeletion()) {
-                  return withArchivePublication(
-                    await commitSessionLifecycleProjectionInWorker({
+                  const commit = () =>
+                    commitSessionLifecycleProjectionInWorker({
                       database: reclamationOptions,
                       execution,
                       assertCurrent,
@@ -239,8 +251,24 @@ export async function applySessionEntryLifecycleMutation(
                         maintenance,
                         descendantRunBasis: params.descendantRunBasis,
                       },
-                    }),
+                    });
+                  const result = await commit();
+                  if (!("kind" in result)) {
+                    return withArchivePublication(result);
+                  }
+                  if (!lazyPreservation || !maintenance) {
+                    throw new Error("Lifecycle maintenance omitted its required preservation");
+                  }
+                  // The worker rolled back before requesting the selected victims' protection.
+                  preparedPreservation = await prepareSessionMaintenancePreservation(
+                    params.storePath,
                   );
+                  maintenance.preservation = preparedPreservation.capture();
+                  const completed = await commit();
+                  if ("kind" in completed) {
+                    throw new Error("Lifecycle maintenance rejected its prepared preservation");
+                  }
+                  return withArchivePublication(completed);
                 }
                 const result = await runSqliteSessionReclamation({
                   forceInProcess: false,

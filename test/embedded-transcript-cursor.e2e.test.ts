@@ -8,6 +8,7 @@ import {
   listSessionEntriesCore,
   loadSessionEntry,
 } from "../src/config/sessions/session-accessor.js";
+import { parseRawTranscriptCursor } from "../src/config/sessions/session-transcript-raw-cursor.js";
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
 import { connectGatewayClient, disconnectGatewayClient } from "../src/gateway/test-helpers.e2e.js";
 import { writeOpenAiResponsesText } from "./helpers/openai-responses-sse.js";
@@ -77,6 +78,7 @@ describe("embedded transcript cursor settlement", () => {
           throw new Error(`expected bootstrap page, got ${bootstrap.kind}`);
         }
         expect(bootstrap.hasMore).toBe(false);
+        const cursorStages = [describeCursorStage("initial-turn", bootstrap)];
 
         const reset = await runAgentTurn(client, instance, "/new");
         expect(
@@ -93,7 +95,11 @@ describe("embedded transcript cursor settlement", () => {
           maxEvents: 100,
         });
 
-        expect(resumed.kind, `${JSON.stringify(resumed)}\n${instance.logs()}`).toBe("page");
+        cursorStages.push(describeCursorStage("next-turn", resumed));
+        expect(
+          resumed.kind,
+          `${JSON.stringify({ resumed, cursorStages })}\n${instance.logs()}`,
+        ).toBe("page");
         if (resumed.kind !== "page") {
           throw new Error(`expected resumed page, got ${resumed.kind}`);
         }
@@ -117,6 +123,20 @@ describe("embedded transcript cursor settlement", () => {
     },
   );
 });
+
+function describeCursorStage(
+  stage: string,
+  result: Awaited<ReturnType<typeof readSessionTranscriptRawDelta>>,
+) {
+  return {
+    stage,
+    kind: result.kind,
+    ...("cursor" in result
+      ? { cursor: result.cursor, decodedCursor: parseRawTranscriptCursor(result.cursor) }
+      : {}),
+    ...("reason" in result ? { reason: result.reason } : {}),
+  };
+}
 
 function createTestConfig(baseUrl: string): OpenClawConfig {
   return {

@@ -1,8 +1,5 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import {
-  hasOutboundReplyContent,
-  resolveSendableOutboundReplyParts,
-} from "openclaw/plugin-sdk/reply-payload";
+import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
 import { scopeCommandTranscriptId } from "../../config/sessions/command-transcript.js";
 import { logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -33,12 +30,9 @@ import {
   runWithDispatchAbortSignal,
 } from "./dispatch-from-config.abort.js";
 import { admittedSessionSettingsRestrictRuntime } from "./dispatch-from-config.events.js";
-import {
-  hasExecApprovalPayload,
-  requiresDurableToolResultDelivery,
-} from "./dispatch-from-config.payloads.js";
 import { suppressPendingFinalDelivery } from "./dispatch-from-config.pending-final.js";
 import type { PrepareDispatchOperationReadyState } from "./dispatch-from-config.prepare-operation.js";
+import { createDispatchProgress } from "./dispatch-from-config.progress.js";
 import { runReplyDispatchHook } from "./dispatch-from-config.reply-dispatch-hook.js";
 import { createSessionMetadataChangeNotifier } from "./dispatch-from-config.session-metadata.js";
 import {
@@ -88,115 +82,28 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
     sessionKey,
     sessionStoreEntry,
     sessionTtsAuto,
-    shouldEmitVerboseProgressAsync,
-    shouldRouteToOriginating,
     traceReplyPhase,
     trackDispatchLifecycleWork,
     turnLedger,
   } = state;
-  const shouldSuppressProgressDelivery = async () =>
-    state.sendPolicyDenied ||
-    (state.suppressDelivery && !(await shouldDeliverVerboseProgressDespiteSourceSuppression()));
-  // The released reply_dispatch getter retains its synchronous contract.
-  const shouldSendToolSummaries = () =>
-    params.replyOptions?.suppressToolProgressMessages !== true && state.shouldEmitVerboseProgress();
-  const shouldSendToolSummariesAsync = async () =>
-    params.replyOptions?.suppressToolProgressMessages !== true &&
-    (await shouldEmitVerboseProgressAsync());
   const { notifySessionMetadataChanges, routeState } = createSessionMetadataChangeNotifier(
     params.onSessionMetadataChanges,
   );
-  const allowsVerboseProgressDespiteSourceSuppression = () =>
-    state.suppressAutomaticSourceDelivery &&
-    state.sourceReplyDeliveryMode === "message_tool_only" &&
-    ctx.InboundEventKind !== "room_event" &&
-    !state.sendPolicyDenied;
-  const shouldDeliverVerboseProgressDespiteSourceSuppression = async () =>
-    allowsVerboseProgressDespiteSourceSuppression() && (await shouldSendToolSummariesAsync());
-  const shouldSuppressProgressDeliverySync = () =>
-    state.sendPolicyDenied ||
-    (state.suppressDelivery &&
-      !(allowsVerboseProgressDespiteSourceSuppression() && shouldSendToolSummaries()));
-  const shouldDeliverForcedToolProgressDespiteSourceSuppression = () =>
-    allowsVerboseProgressDespiteSourceSuppression() &&
-    params.replyOptions?.forceToolResultProgress === true;
-  let finalReplyDeliveryStarted = false;
+  const {
+    shouldSuppressProgressDelivery,
+    shouldSuppressProgressDeliverySync,
+    shouldSendToolSummaries,
+    shouldSendToolSummariesAsync,
+    shouldDeliverVerboseProgressDespiteSourceSuppression,
+    shouldDeliverForcedToolProgressDespiteSourceSuppression,
+    shouldSuppressLateTextOnlyToolProgress,
+    flushPendingCommentaryProgress,
+    noteCommentaryProgress,
+    shouldSuppressMessageToolOnlyTextErrorProgress,
+    markFinalReplyDeliveryStarted,
+  } = createDispatchProgress(state);
   const isSessionWriterDeliveryAuthorized = (payload: ReplyPayload) =>
     isDispatchFinalReplySessionWriterAuthorized(payload, sessionStoreEntry.storePath, sessionKey);
-  const shouldSuppressLateTextOnlyToolProgress = (payload: ReplyPayload) =>
-    finalReplyDeliveryStarted && !requiresDurableToolResultDelivery(payload);
-  // Durable inter-tool commentary lane: with verbose progress on, preamble
-  // items become standalone progress messages like tool summaries. The latest
-  // text per item id is buffered (snapshot producers re-emit the same item)
-  // and flushed when the producer moves on, always before the final reply.
-  let pendingCommentaryProgress: { itemId?: string; text: string } | null = null;
-  const flushedCommentaryItems = new Set<string>();
-  const deliverCommentaryProgressMessage = async (text: string) => {
-    if (!(await shouldSendToolSummariesAsync()) || (await shouldSuppressProgressDelivery())) {
-      return;
-    }
-    if (state.isDispatchOperationAborted()) {
-      return;
-    }
-    const payload: ReplyPayload = { text: `💬 ${text}` };
-    if (shouldSuppressLateTextOnlyToolProgress(payload)) {
-      return;
-    }
-    state.assertProgressCurrent();
-    if (shouldRouteToOriginating) {
-      await sendPayloadAsync(payload);
-    } else {
-      markInboundDedupeReplayUnsafe();
-      turnLedger.sendQueued("tool", payload);
-    }
-  };
-  const flushPendingCommentaryProgress = async () => {
-    const pending = pendingCommentaryProgress;
-    pendingCommentaryProgress = null;
-    const text = pending?.text.trim();
-    if (!text) {
-      return;
-    }
-    if (pending?.itemId) {
-      flushedCommentaryItems.add(pending.itemId);
-    }
-    await deliverCommentaryProgressMessage(text);
-  };
-  const noteCommentaryProgress = async (payload: { itemId?: string; progressText?: string }) => {
-    const itemId = payload.itemId?.trim() || undefined;
-    if (finalReplyDeliveryStarted || (itemId && flushedCommentaryItems.has(itemId))) {
-      return;
-    }
-    const text = payload.progressText ?? "";
-    const updatesBufferedItem =
-      pendingCommentaryProgress !== null &&
-      ((pendingCommentaryProgress.itemId !== undefined &&
-        pendingCommentaryProgress.itemId === itemId) ||
-        pendingCommentaryProgress.text.trim() === text.trim());
-    if (!text.trim()) {
-      // Empty commentary with an item id means the producer retracted that
-      // item; drop it if it has not been sent yet.
-      if (updatesBufferedItem) {
-        pendingCommentaryProgress = null;
-      }
-      return;
-    }
-    if (pendingCommentaryProgress && !updatesBufferedItem) {
-      await flushPendingCommentaryProgress();
-    }
-    pendingCommentaryProgress = { itemId, text };
-  };
-  const shouldSuppressMessageToolOnlyTextErrorProgress = async (payload: ReplyPayload) => {
-    if (
-      state.sourceReplyDeliveryMode !== "message_tool_only" ||
-      (await state.shouldEmitFullVerboseProgressAsync()) ||
-      payload.isError !== true
-    ) {
-      return false;
-    }
-    const reply = resolveSendableOutboundReplyParts(payload);
-    return !reply.hasMedia && !hasExecApprovalPayload(payload);
-  };
   const captionedFinalTtsContext = {
     cfg,
     preparedTtsPreferences: state.preparedTtsPreferences,
@@ -216,6 +123,7 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
       state.hookState.inboundClaimContext,
     );
     if (
+      (state.isInternalWebchatTurn && params.replyOptions?.userTurnTranscriptRecorder) ||
       ctx.CommandInterpretationSuppressed ||
       !commandText?.startsWith("/") ||
       !commandId ||
@@ -406,7 +314,7 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
     const hasVisibleFinalContent = hasOutboundReplyContent(payload, { trimText: true });
     if (hasVisibleFinalContent) {
       markInboundDedupeReplayUnsafe();
-      finalReplyDeliveryStarted = true;
+      markFinalReplyDeliveryStarted();
     }
     const shouldAttachDeferredText = deferFinalTtsText && isCaptionedFinalTextPayload(payload);
     const deferredRawText = shouldAttachDeferredText
@@ -514,7 +422,10 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
     const commandText = ctx.CommandInterpretationSuppressed
       ? undefined
       : normalizeOptionalString(resolveCommandContextText(ctx));
-    const isCommandReply = !hasTranscriptOwner && commandText?.startsWith("/");
+    const isCommandReply =
+      !(state.isInternalWebchatTurn && params.replyOptions?.userTurnTranscriptRecorder) &&
+      !hasTranscriptOwner &&
+      commandText?.startsWith("/");
     const commandId = isCommandReply
       ? scopeCommandTranscriptId(transcriptMirrorSourceId, state.hookState.inboundClaimContext)
       : undefined;

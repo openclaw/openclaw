@@ -116,11 +116,11 @@ it("reuses provider policy artifacts after a model config hot reload", async () 
   const loadCandidates = artifacts.loadBundledPluginPublicArtifactModuleFromCandidatesSync;
   const candidateLoader = vi
     .spyOn(artifacts, "loadBundledPluginPublicArtifactModuleFromCandidatesSync")
-    .mockImplementation(function <T extends object>(params: Parameters<typeof loadCandidates>[0]) {
+    .mockImplementation((params) => {
       if (modelRequests.getStore()) {
         candidateLoads += 1;
       }
-      return loadCandidates<T>(params);
+      return loadCandidates(params);
     });
   let policyLookups = 0;
   const versions = new Set<number | undefined>();

@@ -3,6 +3,8 @@ import {
   readErrorCauses,
 } from "@openclaw/normalization-core/error-coercion";
 
+export class MaintenancePreservationRequiredError extends Error {}
+
 export class SqliteSessionMutationConflictError extends Error {
   constructor(readonly operationLabel: string) {
     super(`SQLite session state changed while preparing ${operationLabel}`);

@@ -46,7 +46,7 @@ afterAll(async () => {
   await state?.cleanup();
 });
 
-it("persists recovery when restart cancellation precedes shutdown marking", async () => {
+it("persists recovery before a restart-aborted registration retires", async () => {
   const childKey = "agent:main:dashboard:child";
   const mainKey = "agent:main:dashboard:main";
   const chatAbortControllers = new Map<string, ChatAbortControllerEntry>();
@@ -112,6 +112,17 @@ it("persists recovery when restart cancellation precedes shutdown marking", asyn
       });
     }
     registrations[1]!.controller.abort(createAgentRunRestartAbortError());
+    emitAgentEvent({
+      runId: `${mainKey}:run`,
+      sessionKey: mainKey,
+      sessionId: `${mainKey}:session`,
+      stream: "lifecycle",
+      data: { phase: "end", aborted: true, stopReason: "restart", endedAt: 2_000 },
+    });
+    await joinPersistence();
+    registrations[1]!.cleanup();
+    expect(read(mainKey).status).toBe("interrupted");
+    expect(read(mainKey).mainRestartRecovery?.cycleId).toEqual(expect.any(String));
     const warnings: string[] = [];
     await prepareGatewayRunShutdown({
       resolveGatewayContext: () => undefined,
