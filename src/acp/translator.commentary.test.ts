@@ -162,6 +162,17 @@ describe("ACP commentary reclassification", () => {
     },
   );
 
+  it("advances an item's boundary within an already displayed multi-item preview", async () => {
+    const h = await createHarness();
+    await h.chat("Checking files.\nReading config.");
+    await h.preamble("first", "Checking");
+    await h.preamble("first", "Checking files.", { preamble: {} });
+    await h.preamble("second", "Reading config.", { preamble: {} });
+    await h.chat("Done.", { state: "final" });
+    await h.prompt;
+    expect(h.updates()).toEqual(["Checking files.\nReading config.", "Done."]);
+  });
+
   it.each([
     { deferred: false, chatFirst: false },
     { deferred: true, chatFirst: false },

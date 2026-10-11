@@ -507,6 +507,8 @@ export interface AssistantMessage {
     mediaUrls?: string[];
     replyToCurrent?: true;
     replyToId?: string;
+    /** @deprecated Ignored; omit this field. Retained until the next Plugin SDK major. */
+    textPhaseRequiresTerminal?: true;
     /** Parsed once at the assistant write boundary; delivery resolves policy from these facts. */
     tts?: AssistantDeliveryTtsFacts;
   };

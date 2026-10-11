@@ -102,6 +102,11 @@ commentary/final channels distinguish narration from final answers. Reasoning
 visibility settings and private-tag filtering also continue to apply; preserving
 visible text does not expose hidden reasoning.
 
+Provider plugins should omit `openclawDelivery.textPhaseRequiresTerminal`.
+This field, shipped in `v2026.10.1`, is now ignored. Its optional SDK type remains
+source-compatible until the next Plugin SDK major; removal also requires explicit
+breaking-release approval. It cannot enable retroactive phase inference.
+
 ### Media delivery with block streaming
 
 When a plugin uses `before_agent_finalize` to validate the built-in runtime's
