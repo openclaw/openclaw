@@ -41,8 +41,31 @@ export type ScrollDirection = (typeof ScrollDirection)[keyof typeof ScrollDirect
 export type CuaDriverSession = Pick<DirectCuaDriverSession, keyof DirectCuaDriverSession> & {
   readonly generation: string;
   prepareAvailability?(): Promise<void>;
+  prepareExecution?(signal?: AbortSignal): Promise<void>;
   resetAvailabilityCache(): void;
 };
+
+function isExpiredSessionError(sdk: CuaDriverSdk, error: unknown): boolean {
+  return (
+    sdk.DriverError.Tool.instanceOf(error) &&
+    error.inner.errorCode === "permission_denied" &&
+    error.inner.message === "Permission denied: authorization context expired"
+  );
+}
+
+function driverToolError(sdk: CuaDriverSdk, error: unknown): unknown {
+  if (!sdk.DriverError.Tool.instanceOf(error)) {
+    return error;
+  }
+  return new Error(
+    "CUA_DRIVER_TOOL_ERROR: " +
+      error.inner.tool +
+      ": " +
+      error.inner.message +
+      (error.inner.errorCode ? " (" + error.inner.errorCode + ")" : ""),
+    { cause: error },
+  );
+}
 
 function asyncOptions(signal?: AbortSignal) {
   return signal ? { signal } : undefined;
@@ -235,7 +258,11 @@ class DirectCuaDriverSession {
       try {
         await this.session.endSession({ session: this.publicSession });
       } catch (error) {
-        failure ??= error;
+        // Expiry already ended this authorization. Still release every native
+        // resource, but do not make physical close fail on this refusal.
+        if (!isExpiredSessionError(this.sdk, error)) {
+          failure ??= error;
+        }
       }
     }
     try {
@@ -280,8 +307,13 @@ function unavailableError(failure: unknown): Error {
 }
 
 class LazyCuaDriverSession implements CuaDriverSession {
-  // The execution owns this generation before and after its lazy runtime loads.
-  readonly generation = randomUUID();
+  // Keep refs stable across lazy loading, but revoke them on session replacement.
+  private currentGeneration = randomUUID();
+  get generation(): string {
+    return this.currentGeneration;
+  }
+  private loadedSdk: CuaDriverSdk | undefined;
+  private preparePromise: Promise<void> | undefined;
   private runtime: DirectCuaDriverSession | undefined;
   private loadPromise: Promise<DirectCuaDriverSession> | undefined;
   private loadFailure: unknown;
@@ -299,6 +331,7 @@ class LazyCuaDriverSession implements CuaDriverSession {
     }
     const loadPromise = this.loadSdk()
       .then((sdk) => {
+        this.loadedSdk = sdk;
         this.runtime = new DirectCuaDriverSession(sdk);
         return this.runtime;
       })
@@ -354,6 +387,51 @@ class LazyCuaDriverSession implements CuaDriverSession {
     }
   }
 
+  async prepareExecution(signal?: AbortSignal): Promise<void> {
+    signal?.throwIfAborted();
+    if (!this.preparePromise) {
+      const prepare = (async () => {
+        const runtime = await this.requireRuntime();
+        if (this.disposed) {
+          throw unavailableError(new Error("cua-computer is stopping"));
+        }
+        try {
+          // Check authority before dispatch, never replay the requested action.
+          await runtime.getSessionState(signal);
+        } catch (error) {
+          const sdk = this.loadedSdk;
+          if (!sdk || !isExpiredSessionError(sdk, error)) {
+            throw sdk ? driverToolError(sdk, error) : error;
+          }
+          await runtime.dispose();
+          this.runtime = undefined;
+          this.currentGeneration = randomUUID();
+          signal?.throwIfAborted();
+          if (this.disposed) {
+            throw unavailableError(new Error("cua-computer is stopping"));
+          }
+          this.runtime = new DirectCuaDriverSession(sdk);
+          await this.runtime.getSessionState(signal).catch((replacementError: unknown) => {
+            throw driverToolError(sdk, replacementError);
+          });
+        }
+        if (this.disposed) {
+          throw unavailableError(new Error("cua-computer is stopping"));
+        }
+      })();
+      this.preparePromise = prepare;
+      void prepare
+        .finally(() => {
+          if (this.preparePromise === prepare) {
+            this.preparePromise = undefined;
+          }
+        })
+        .catch(() => {});
+    }
+    await this.preparePromise;
+    signal?.throwIfAborted();
+  }
+
   private readonly bindRuntime = createLazyRuntimeMethodBinder(() => this.requireRuntime());
   getDesktopState = this.bindRuntime((runtime) => runtime.getDesktopState.bind(runtime));
   callTool = this.bindRuntime((runtime) => runtime.callTool.bind(runtime));
@@ -377,6 +455,8 @@ class LazyCuaDriverSession implements CuaDriverSession {
     } catch {
       // A failed load has no native resources to release.
     }
+    // Mark disposed before waiting, so expiry recovery cannot reopen authority.
+    await this.preparePromise?.catch(() => {});
     await this.runtime?.dispose();
   }
 }
