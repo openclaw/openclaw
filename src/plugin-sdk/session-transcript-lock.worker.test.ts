@@ -9,6 +9,7 @@ import {
   withinTest,
 } from "../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import { createNativeSessionBindingAuthority } from "../agents/harness/native-session/binding-authority.js";
 import { recordChannelFeedbackEvent } from "../channels/feedback-reflection.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
@@ -136,7 +137,7 @@ it.each([false, true])(
   },
 );
 
-it("rechecks the Codex prepared guard at the worker commit grant", async () => {
+it("prepares Codex guard reads and rechecks authority at the worker commit grant", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
     const scope = await seed(env);
     let current = true;
@@ -157,7 +158,17 @@ it("rechecks the Codex prepared guard at the worker commit grant", async () => {
         inCommit = false;
       }
     });
-    const guard = composeSessionTranscriptWriteAssertion([], () => {
+    const binding = createNativeSessionBindingAuthority(
+      [
+        {
+          read: scope,
+          sessionId: scope.sessionId,
+          createSupersededError: () => new Error("Codex session superseded"),
+        },
+      ],
+      () => {},
+    );
+    const guard = composeSessionTranscriptWriteAssertion([binding.assertLegacyCurrent], () => {
       checkedCommit ||= inCommit;
       if (!current) {
         throw new Error("Codex write authority revoked");

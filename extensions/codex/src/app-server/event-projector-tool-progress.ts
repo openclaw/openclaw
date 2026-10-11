@@ -393,6 +393,13 @@ export class CodexToolProgressProjection {
     });
   }
 
+  recordToolFailure(id: string, toolName: string, sideEffectEvidence = false): void {
+    this.metas.set(id, { ...this.metas.get(id), toolName, isError: true });
+    if (sideEffectEvidence) {
+      this.sideEffectingNativeIds.add(id);
+    }
+  }
+
   recordTranscriptCall(params: ToolTranscriptCallInput): void {
     if (!shouldEmitTranscriptToolProgress(params.name)) {
       this.transcriptProgressSuppressedIds.add(params.id);
