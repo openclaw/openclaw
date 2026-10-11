@@ -12,6 +12,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   beginSessionWorkAdmission,
+  getCompetingSessionWorkAdmissionRelease,
   getSessionWorkAdmissionOwnerRelease,
   type SessionWorkAdmissionLease,
 } from "../sessions/session-lifecycle-admission.js";
@@ -232,6 +233,18 @@ export async function runWithAgentCommandRecoveryOwner<
       commandAdmission?.release();
       commandAdmission = undefined;
     };
+    // Capture prior replies before joining the command FIFO. Their terminal accounting
+    // must finish before a direct command can replace the session writer.
+    let predecessorReply =
+      params.mode === "claim" &&
+      params.opts.sessionEffects !== "internal" &&
+      !params.opts.mainRestartRecoveryOwnerLease
+        ? getCompetingSessionWorkAdmissionRelease({
+            scope: target.storePath,
+            identities: [target.sessionKey, target.previousSessionId ?? target.sessionId],
+            owner: REPLY_WORK_ADMISSION_OWNER,
+          })
+        : undefined;
     let pendingOwner = recoveryOwnerRelease();
     let acquired: AcquiredRecoveryOwner | undefined;
     for (;;) {
@@ -285,10 +298,16 @@ export async function runWithAgentCommandRecoveryOwner<
           // Only the reply owner is a predecessor. Later RPC admissions may already
           // be acquired while their commands queue behind this command's FIFO lease.
           pendingOwner = pendingReply ?? replyOwnerRelease();
+          predecessorReply = undefined;
         }
         if (!pendingOwner) {
           throw error;
         }
+        continue;
+      }
+      if (!acquired && predecessorReply) {
+        pendingOwner = predecessorReply;
+        predecessorReply = undefined;
         continue;
       }
       pendingOwner = acquired ? undefined : recoveryOwnerRelease();
