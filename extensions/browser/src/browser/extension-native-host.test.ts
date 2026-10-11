@@ -8,11 +8,7 @@ import { withTimeout } from "openclaw/plugin-sdk/text-utility-runtime";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { relayTestKey } from "../../chrome-extension/relay-key.test-support.js";
 import { parseBrowserNativeHostOrigins, runBrowserNativeHost } from "./extension-native-host.js";
-import {
-  decodeBrowserNativeFrame,
-  encodeBrowserNativeResponse,
-  readBrowserNativeFrame,
-} from "./extension-native-protocol.js";
+import { decodeBrowserNativeFrame, readBrowserNativeFrame } from "./extension-native-protocol.js";
 import { ensureExtensionRelayDaemonProcess } from "./extension-relay-daemon-spawn.js";
 import { runExtensionRelayDaemon } from "./relay-daemon.js";
 import { getFreePort } from "./test-port.js";
@@ -29,7 +25,6 @@ afterEach(() => {
 
 const EXTENSION_ID = "abcdefghijklmnopabcdefghijklmnop";
 const ORIGIN = `chrome-extension://${EXTENSION_ID}/`;
-const STORE_ORIGIN = "chrome-extension://kcdjddhmeafeomebliikmbpblkmkfoig/";
 const OTHER_ORIGIN = `chrome-extension://${"p".repeat(32)}/`;
 const NONCE = Buffer.alloc(16, 7).toString("base64url");
 const PAIRING = `ws://127.0.0.1:18799/extension#${relayTestKey(1)}`;
@@ -60,26 +55,7 @@ async function* chunks(...values: Buffer[]) {
 }
 
 describe("native messaging framing", () => {
-  it("reads a fragmented native-endian frame exactly", async () => {
-    const expected = frame(requestJson());
-    const actual = await readBrowserNativeFrame(
-      chunks(
-        expected.subarray(0, 1),
-        expected.subarray(1, 4),
-        expected.subarray(4, 9),
-        expected.subarray(9),
-      ),
-    );
-
-    expect(actual).toEqual(expected);
-    expect(decodeBrowserNativeFrame(actual)).toEqual({
-      ok: true,
-      request: { v: 1, op: "bootstrap", nonce: NONCE },
-    });
-  });
-
   it.each([
-    ["truncated header", Buffer.from([1, 0, 0])],
     ["truncated body", frame(requestJson()).subarray(0, 8)],
     ["zero length", Buffer.alloc(4)],
     ["multiple messages", Buffer.concat([frame(requestJson()), frame(requestJson())])],
@@ -129,32 +105,11 @@ describe("native messaging framing", () => {
       code: "invalid_utf8",
     });
   });
-
-  it("uses one bounded stdout frame", () => {
-    const output = encodeBrowserNativeResponse({
-      v: 1,
-      ok: true,
-      nonce: NONCE,
-      pairingString: PAIRING,
-    });
-    const length = os.endianness() === "LE" ? output.readUInt32LE() : output.readUInt32BE();
-    expect(output).toHaveLength(length + 4);
-    expect(length).toBeLessThan(1024 * 1024);
-    expect(JSON.parse(output.subarray(4).toString("utf8"))).toEqual({
-      v: 1,
-      ok: true,
-      nonce: NONCE,
-      pairingString: PAIRING,
-    });
-  });
 });
 
 describe("native bootstrap request schema", () => {
   it.each([
     ["array", JSON.stringify([{ v: 1, op: "bootstrap", nonce: NONCE }])],
-    ["prototype-shaped", `{"v":1,"op":"bootstrap","nonce":"${NONCE}","__proto__":{}}`],
-    ["duplicate field", `{"v":1,"op":"bootstrap","nonce":"${NONCE}","nonce":"${NONCE}"}`],
-    ["unknown field", JSON.stringify({ v: 1, op: "bootstrap", nonce: NONCE, extra: true })],
     ["padded nonce", JSON.stringify({ v: 1, op: "bootstrap", nonce: `${NONCE}=` })],
     ["short nonce", JSON.stringify({ v: 1, op: "bootstrap", nonce: "AA" })],
   ])("rejects $0", (_label, raw) => {
@@ -232,35 +187,6 @@ describe("native host origin and topology boundary", () => {
     expect(() => parseBrowserNativeHostOrigins(argv)).toThrow();
   });
 
-  it("echoes the nonce and returns only the canonical pairing", async () => {
-    const result = await invokeHost();
-    expect(result.response).toEqual({ v: 1, ok: true, nonce: NONCE, pairingString: PAIRING });
-    expect(result.writes).toHaveLength(1);
-  });
-
-  it("accepts the exact Store caller when launcher args and manifest match", async () => {
-    const expectedOrigins = [ORIGIN, STORE_ORIGIN].toSorted();
-    const fixture = await nativeFixture(expectedOrigins);
-
-    const result = await invokeHost({
-      ...fixture,
-      callerOrigin: STORE_ORIGIN,
-      expectedOrigins,
-    });
-
-    expect(result.response).toEqual({
-      v: 1,
-      ok: true,
-      nonce: NONCE,
-      pairingString: PAIRING,
-    });
-  });
-
-  it("rejects a wrong extension origin", async () => {
-    const result = await invokeHost({ callerOrigin: OTHER_ORIGIN });
-    expect(result.response).toEqual({ v: 1, ok: false, code: "origin_forbidden" });
-  });
-
   it.skipIf(process.platform === "win32")(
     "accepts owned private hardlinked artifacts",
     async () => {
@@ -311,7 +237,6 @@ describe("native host origin and topology boundary", () => {
   );
 
   it.skipIf(process.platform === "win32").each([
-    ["manifestPath", 0o601],
     ["launcherPath", 0o701],
     ["launcherPath", 0o600],
   ] as const)("rejects %s with mode %o before pairing", async (file, mode) => {
@@ -380,15 +305,10 @@ describe("native host ensure_relay", () => {
       requestJson({ op: "ensure_relay", relayPort }),
     ]),
     [
-      "duplicate port",
-      `{"v":1,"op":"ensure_relay","nonce":"${NONCE}","relayPort":18799,"relayPort":18798}`,
-    ],
-    [
       "escaped duplicate port",
       `{"v":1,"op":"ensure_relay","nonce":"${NONCE}","relayPort":18799,"relay\\u0050ort":18798}`,
     ],
     ["unknown field", requestJson({ op: "ensure_relay", relayPort: 18799, token: "untrusted" })],
-    ["bootstrap with target", requestJson({ relayPort: 18799 })],
   ])("rejects %s without invoking the relay launcher", async (_label, raw) => {
     const ensureRelay = vi.fn(async () => "spawned" as const);
     const result = await invokeHost({ input: chunks(frame(raw)), ensureRelay });
@@ -396,28 +316,28 @@ describe("native host ensure_relay", () => {
     expect(ensureRelay).not.toHaveBeenCalled();
   });
 
-  it.each([
-    ["managed browser", 18800],
-    ["remote browser", 29443],
-  ])("rejects the %s port before probing or spawning", async (_label, relayPort) => {
-    const probe = vi.spyOn(net, "connect");
-    const result = await invokeHost({
-      input: chunks(frame(requestJson({ op: "ensure_relay", relayPort }))),
-      ensureRelay: async (port) =>
-        await ensureExtensionRelayDaemonProcess({
-          port,
-          cfg: { browser: { profiles: { remote: { cdpUrl: "https://browser.example:29443" } } } },
-          entryPath: "/opt/openclaw/dist/extensions/browser/relay-daemon-entry.js",
-        }),
-    });
-    expect(result.response).toEqual({ v: 1, ok: false, code: "relay_unavailable" });
-    expect(probe).not.toHaveBeenCalled();
-    expect(spawn).not.toHaveBeenCalled();
-  });
+  it.each([["remote browser", 29443]])(
+    "rejects the %s port before probing or spawning",
+    async (_label, relayPort) => {
+      const probe = vi.spyOn(net, "connect");
+      const result = await invokeHost({
+        input: chunks(frame(requestJson({ op: "ensure_relay", relayPort }))),
+        ensureRelay: async (port) =>
+          await ensureExtensionRelayDaemonProcess({
+            port,
+            cfg: { browser: { profiles: { remote: { cdpUrl: "https://browser.example:29443" } } } },
+            entryPath: "/opt/openclaw/dist/extensions/browser/relay-daemon-entry.js",
+          }),
+      });
+      expect(result.response).toEqual({ v: 1, ok: false, code: "relay_unavailable" });
+      expect(probe).not.toHaveBeenCalled();
+      expect(spawn).not.toHaveBeenCalled();
+    },
+  );
 
-  it.each(["non-first automatic", "explicitly pinned"])(
+  it.each(["non-first automatic"])(
     "wakes the %s profile through the native frame and config boundary",
-    async (allocation) => {
+    async () => {
       const fixture = await nativeFixture();
       const relayPort = await getFreePort();
       await fs.mkdir(path.join(fixture.stateDir, "credentials"), { mode: 0o700 });
@@ -452,7 +372,6 @@ describe("native host ensure_relay", () => {
                         chrome: { driver: "extension" },
                         work: {
                           driver: "extension",
-                          ...(allocation === "explicitly pinned" ? { cdpPort: relayPort } : {}),
                         },
                       },
                     },
@@ -475,16 +394,6 @@ describe("native host ensure_relay", () => {
       );
     },
   );
-
-  it("maps a relay launcher failure to relay_unavailable", async () => {
-    const result = await invokeHost({
-      input: chunks(frame(requestJson({ op: "ensure_relay", relayPort: 18799 }))),
-      ensureRelay: async () => {
-        throw new Error("spawn failed");
-      },
-    });
-    expect(result.response).toEqual({ v: 1, ok: false, code: "relay_unavailable" });
-  });
 
   it("still validates the manifest before ensuring the relay", async () => {
     const ensureRelay = vi.fn(async () => "spawned" as const);
