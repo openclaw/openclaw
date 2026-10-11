@@ -8,8 +8,6 @@ import {
 } from "../lit/presentation-binding.ts";
 import { MarkdownBlocks } from "./markdown-blocks-owner.ts";
 
-export { MarkdownBlocks } from "./markdown-blocks-owner.ts";
-
 class MarkdownBlocksDirective extends PresentationAsyncDirective {
   private root?: HTMLElement;
   private owner?: MarkdownBlocks;
