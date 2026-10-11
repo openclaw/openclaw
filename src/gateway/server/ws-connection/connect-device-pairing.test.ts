@@ -472,6 +472,7 @@ describe("gateway connect pairing exemptions", () => {
       expect(personalStatus).toHaveBeenCalledExactlyOnceWith({
         owner: "gateway-owner",
         assertCurrent: expect.any(Function),
+        signal: expect.any(AbortSignal),
       });
       expect(personalAuthorize).not.toHaveBeenCalled();
       const afterRepair = await rpcReq<UsersListResult>(reconnect, "users.list", {});

@@ -16,6 +16,7 @@ vi.mock("../session-utils.js", () => ({
 vi.mock("../../agents/tools/gateway-caller-context.js", () => ({
   getGatewayToolCallerIdentity: () => undefined,
 }));
+// mock-isolation: Exercise request permissions without opening profile storage.
 vi.mock("../../state/user-channel-identity-operations.js", () => ({
   prepareUserProfileRolePolicyAuthority: async (profileId: string) => ({
     profileId,

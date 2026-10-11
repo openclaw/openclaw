@@ -34,7 +34,11 @@ import {
   readUserGitHubConnection,
   resolvePersonalGitHubOwner,
 } from "../../state/user-github-connections.js";
-import { updateUserGitHubConnection } from "../../state/user-github-connections.test-support.js";
+import {
+  expireUserGitHubAccessToken,
+  expireUserGitHubAuthorization,
+  updateUserGitHubConnection,
+} from "../../state/user-github-connections.test-support.js";
 import { getUserProfileListItem } from "../../state/user-profile-list-item.test-support.js";
 import { linkCanonicalUserProfileEmail } from "../../state/user-profile-writes.js";
 import { linkEmail, setUserProfileRole } from "../../state/user-profile-writes.worker.js";
@@ -136,39 +140,6 @@ function preparePoll(client = alice) {
         throw new Error("Expected pending device authorization");
       }
       return { ...current, pending: { ...current.pending, nextPollAtMs: Date.now() } };
-    },
-    () => {},
-  );
-}
-function expireAuthorization() {
-  updateUserGitHubConnection(
-    owner(),
-    (current) => {
-      if (current?.pending?.kind !== "device") {
-        throw new Error("Expected pending device authorization");
-      }
-      const expiresAtMs = Date.now() - 1;
-      return {
-        ...current,
-        pending: {
-          ...current.pending,
-          createdAtMs: expiresAtMs - 900000,
-          expiresAtMs,
-          nextPollAtMs: expiresAtMs,
-        },
-      };
-    },
-    () => {},
-  );
-}
-function expireAccessToken() {
-  updateUserGitHubConnection(
-    owner(),
-    (current) => {
-      if (current?.selection.kind !== "connected") {
-        throw new Error("Expected connection");
-      }
-      return { ...current, selection: { ...current.selection, accessExpiresAtMs: Date.now() - 1 } };
     },
     () => {},
   );
@@ -712,7 +683,7 @@ describe("personal GitHub through authenticated Gateway RPC", () => {
         invalidateOperatorRolePolicy(owner());
       }
       if (race === "expiry") {
-        expireAuthorization();
+        expireUserGitHubAuthorization(owner());
       }
       waiting.resolve({ status: "authorized", tokens });
       const response = await pending;
@@ -758,7 +729,7 @@ describe("personal GitHub through authenticated Gateway RPC", () => {
             await rpc(alice, "users.github.disconnect");
           }
           if (race === "expiry") {
-            expireAuthorization();
+            expireUserGitHubAuthorization(owner());
           }
         }
         return result;
@@ -913,7 +884,7 @@ describe("personal GitHub through authenticated Gateway RPC", () => {
     "rechecks %s credentials after acquiring the refresh lease",
     async (kind) => {
       const connected = await connect();
-      expireAccessToken();
+      expireUserGitHubAccessToken(owner());
       const current =
         kind === "fresh"
           ? connected
@@ -950,7 +921,7 @@ describe("personal GitHub through authenticated Gateway RPC", () => {
     if (connection.selection.kind !== "connected") {
       throw new Error("Expected connection");
     }
-    expireAccessToken();
+    expireUserGitHubAccessToken(owner());
     const refresh = createDeferredCore<{ status: "refreshed"; tokens: typeof tokens }>();
     network.refresh.mockReturnValueOnce(refresh.promise);
     const pending = lifecycle.personal.refresh(owner());
@@ -981,7 +952,7 @@ describe("personal GitHub through authenticated Gateway RPC", () => {
     if (connection.selection.kind !== "connected") {
       throw new Error("Expected connection");
     }
-    expireAccessToken();
+    expireUserGitHubAccessToken(owner());
     const refresh = createDeferredCore<{ status: "refreshed"; tokens: typeof tokens }>();
     network.refresh.mockReturnValueOnce(refresh.promise);
     const pending = lifecycle.personal.refresh(owner());
@@ -1004,7 +975,7 @@ describe("personal GitHub through authenticated Gateway RPC", () => {
       if (connection.selection.kind !== "connected") {
         throw new Error("Expected connection");
       }
-      expireAccessToken();
+      expireUserGitHubAccessToken(owner());
       const db = openOpenClawStateDatabase().db;
       db.exec(
         "CREATE TRIGGER reject_rotation BEFORE UPDATE ON secret_store_entries WHEN NEW.value LIKE '%synthetic-rotated-refresh%' BEGIN SELECT RAISE(ABORT, 'synthetic write failure'); END",
@@ -1029,7 +1000,7 @@ describe("personal GitHub through authenticated Gateway RPC", () => {
     if (connection.selection.kind !== "connected") {
       throw new Error("Expected connection");
     }
-    expireAccessToken();
+    expireUserGitHubAccessToken(owner());
     const refreshed = createDeferredCore<{ status: "refreshed"; tokens: typeof tokens }>();
     network.refresh.mockReturnValueOnce(refreshed.promise);
     const pending = lifecycle.personal.refresh(owner());
