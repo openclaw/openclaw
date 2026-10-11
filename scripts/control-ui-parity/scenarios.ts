@@ -61,6 +61,7 @@ export type Scene = {
   prepare?: (page: Page, gateway: MockGatewayControls) => Promise<void>;
   scrollTo?: string;
   loading?: boolean;
+  serviceWorkers?: "allow" | "block";
 };
 const configPages = new Set<string>(CONFIG_PAGE_IDS);
 function routeScene(route: RouteId): Scene {

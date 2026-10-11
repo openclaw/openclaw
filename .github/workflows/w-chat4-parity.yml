@@ -82,6 +82,7 @@ jobs:
               "core-lint": ["node", "scripts/run-oxlint.mjs", "--tsconfig", "config/tsconfig/oxlint.core.json", "src/plugin-state/plugin-state-observation-cache.ts", "src/infra/sqlite-worker-plugin-comparison.test.ts"],
               "export-names": ["node", "--import", "./scripts/tsx.mjs", "scripts/check-export-name-collisions.mts"],
               "sdk-surface": ["pnpm", "test", "test/scripts/plugin-sdk-surface-report.test.ts", "--maxWorkers=1"],
+              "metadata-e2e": ["node", "scripts/run-vitest.mjs", "run", "--config", "test/vitest/vitest.ui-e2e.config.ts", "--configLoader", "runner", "--project", "ui-e2e-bundled", "ui/src/e2e/chat-metadata-observation.e2e.test.ts", "--maxWorkers=1"],
           }
           results = []
           for label, tree in [("base", Path(os.environ["RUNNER_TEMP"]) / "w-chat4-base"), ("head", root)]:
@@ -89,7 +90,7 @@ jobs:
                   log = output / f"{label}-{name}.txt"
                   print(f"::group::{label}: {' '.join(command)}", flush=True)
                   with log.open("w") as stream:
-                      result = subprocess.run(command, cwd=tree, stdout=stream, stderr=subprocess.STDOUT)
+                      result = subprocess.run(command, cwd=tree, stdout=stream, stderr=subprocess.STDOUT, env={**os.environ, "OPENCLAW_UI_E2E_SKIP_REAL_GATEWAY": "1"})
                   print(log.read_text(), flush=True)
                   print(f"Exit code: {result.returncode}\n::endgroup::", flush=True)
                   results.append({"tree": label, "check": name, "command": command, "exitCode": result.returncode})

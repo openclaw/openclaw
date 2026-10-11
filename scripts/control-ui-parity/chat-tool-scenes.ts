@@ -131,6 +131,8 @@ export const chatToolScenes: Scene[] = [
   {
     id: "chat-tools-html-preview",
     label: "Chat: HTML file preview in its sandbox",
+    // Playwright's blocking init script throws when it enters the opaque inner frame.
+    serviceWorkers: "allow",
     path: `/chat?session=${sessionKey}`,
     ready: ".chat-thread",
     scenario: {

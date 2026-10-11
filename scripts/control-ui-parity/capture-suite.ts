@@ -120,7 +120,7 @@ suite.define(() => {
                 colorScheme: profile.theme,
                 locale: "en-US",
                 timezoneId: "UTC",
-                serviceWorkers: "block",
+                serviceWorkers: scene.serviceWorkers ?? "block",
                 deviceScaleFactor: 1,
                 forcedColors: profile.forced ? "active" : "none",
                 reducedMotion: profile.reduced ? "reduce" : "no-preference",
