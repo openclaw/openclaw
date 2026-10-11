@@ -1,19 +1,19 @@
-import { nothing, type TemplateResult } from "lit";
 import type { KeyboardShortcutCombo } from "../../../lib/keyboard-shortcut-contract.ts";
+import { emptyLegacyContent, type LegacyTemplateResult } from "../../../lit/solid-content.tsx";
 import type { SidebarSlotId } from "../sidebar-layout.ts";
 
 export type SidebarPanelDefinition = {
   slot: SidebarSlotId;
   label: string;
-  icon: TemplateResult;
+  icon: LegacyTemplateResult;
   shortcut?: KeyboardShortcutCombo;
   available: boolean;
-  content: TemplateResult | typeof nothing | null;
-  loading: TemplateResult;
-  headerAction?: TemplateResult;
+  content: LegacyTemplateResult | typeof emptyLegacyContent | null;
+  loading: LegacyTemplateResult;
+  headerAction?: LegacyTemplateResult;
   empty: {
     description: string;
-    action?: TemplateResult;
+    action?: LegacyTemplateResult;
   };
 };
 

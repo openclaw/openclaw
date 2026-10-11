@@ -51,7 +51,7 @@ type LazyElement = readonly [tagName: string, loadModule: () => Promise<unknown>
 const LAZY_SIDEBAR_ELEMENTS: Partial<Record<LazyElementKey, LazyElement>> = {
   region: [
     "openclaw-chat-sidebar-region",
-    () => import("./components/chat-sidebar-region.runtime.ts"),
+    () => import("./components/chat-sidebar-region.runtime.tsx"),
   ],
   // Not a slot key: the detail slot also renders tool output and status
   // templates synchronously, so only its panel branch waits for this element.

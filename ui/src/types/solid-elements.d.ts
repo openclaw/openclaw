@@ -62,7 +62,7 @@ declare module "@solidjs/web" {
         "prop:measureRatio": () => number;
         "prop:measureSize": () => number;
         onResize: (event: CustomEvent<{ splitRatio: number }>) => void;
-        "onResize-end": () => void;
+        "onResize-end"?: () => void;
       };
       "openclaw-tooltip": HTMLAttributes<HTMLElementTagNameMap["openclaw-tooltip"]> & {
         "prop:content"?: string;
@@ -105,6 +105,24 @@ declare module "@solidjs/web" {
         ElementProperties<Pick<HTMLElementTagNameMap["openclaw-session-owner-chip"], "owner">> & {
           size?: HTMLElementTagNameMap["openclaw-session-owner-chip"]["size"];
         };
+      "openclaw-chat-pdf-preview": HTMLAttributes<
+        HTMLElementTagNameMap["openclaw-chat-pdf-preview"]
+      > &
+        ElementProperties<
+          Pick<
+            HTMLElementTagNameMap["openclaw-chat-pdf-preview"],
+            "src" | "sourceIdentity" | "label" | "mimeType" | "sizeBytes"
+          >
+        >;
+      "openclaw-mcp-app-catalog": HTMLAttributes<
+        HTMLElementTagNameMap["openclaw-mcp-app-catalog"]
+      > &
+        ElementProperties<
+          Pick<
+            HTMLElementTagNameMap["openclaw-mcp-app-catalog"],
+            "sessionKey" | "agentId" | "filePath"
+          >
+        > & { surface?: HTMLElementTagNameMap["openclaw-mcp-app-catalog"]["surface"] };
       "openclaw-agent-row-chip": HTMLAttributes<HTMLElement> & {
         "prop:agentId"?: string;
       };

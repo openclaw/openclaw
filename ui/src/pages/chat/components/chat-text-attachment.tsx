@@ -340,18 +340,22 @@ function TextAttachment(props: TextAttachmentProps, host: SolidBridgeElement<Tex
   );
 }
 
-defineSolidBridge<TextAttachmentProps>("openclaw-chat-text-attachment", TextAttachment, {
-  properties: {
-    plainText: { default: false },
-    actions: { default: undefined, attribute: false },
-    embedSandboxMode: { default: "scripts" },
-    src: { default: "" },
-    sourceIdentity: { default: "" },
-    label: { default: "" },
-    mimeType: { default: "" },
-    sizeBytes: { default: undefined, type: Number },
+export const ChatTextAttachment = defineSolidBridge<TextAttachmentProps>(
+  "openclaw-chat-text-attachment",
+  TextAttachment,
+  {
+    properties: {
+      plainText: { default: false },
+      actions: { default: undefined, attribute: false },
+      embedSandboxMode: { default: "scripts" },
+      src: { default: "" },
+      sourceIdentity: { default: "" },
+      label: { default: "" },
+      mimeType: { default: "" },
+      sizeBytes: { default: undefined, type: Number },
+    },
   },
-});
+);
 declare global {
   interface HTMLElementTagNameMap {
     "openclaw-chat-text-attachment": SolidBridgeElement<TextAttachmentProps>;

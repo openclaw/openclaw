@@ -5379,7 +5379,7 @@ const PR_EXEMPT_RUNTIME_TEST_FILES = [
   "ui/src/pages/chat/components/chat-header-session-menu.test.ts",
   "ui/src/pages/chat/components/chat-html-file.browser.test.ts",
   "ui/src/pages/chat/components/chat-image-loading.browser.test.ts",
-  "ui/src/pages/chat/components/chat-pane-header.browser.test.ts",
+  "ui/src/pages/chat/components/chat-pane-header.browser.test.tsx",
   "ui/src/pages/chat/components/chat-sidebar-file-view.browser.test.ts",
   "ui/src/pages/chat/critical-observer-notice.e2e.test.ts",
   "ui/src/pages/chat/dashboard-presentation-defaults.test.ts",
