@@ -1,3 +1,4 @@
+import { isUtf8 } from "node:buffer";
 import fs from "node:fs/promises";
 import { password } from "@clack/prompts";
 import { readByteStreamWithLimit } from "@openclaw/media-core/read-byte-stream-with-limit";
@@ -10,6 +11,16 @@ import {
 
 const SECRET_STORE_IMPORT_MAX_BYTES = 16 * 1024 * 1024;
 
+function decodeInput(bytes: Buffer, source: string): string {
+  if (!isUtf8(bytes)) {
+    throw new SecretStoreValidationError(
+      "SECRET_STORE_INPUT_ENCODING",
+      `${source} must be valid UTF-8.`,
+    );
+  }
+  return bytes.toString("utf8");
+}
+
 async function readBoundedStdin(maxBytes: number): Promise<string> {
   const bytes = await readByteStreamWithLimit(process.stdin, {
     maxBytes,
@@ -21,7 +32,7 @@ async function readBoundedStdin(maxBytes: number): Promise<string> {
         `Stdin input exceeds ${limit} bytes.`,
       ),
   });
-  return bytes.toString("utf8");
+  return decodeInput(bytes, "Stdin input");
 }
 
 async function readBoundedFile(pathname: string, maxBytes: number): Promise<string> {
@@ -40,7 +51,7 @@ async function readBoundedFile(pathname: string, maxBytes: number): Promise<stri
         `Input file exceeds ${maxBytes} bytes: ${pathname}`,
       );
     }
-    return (await readFileDescriptorBounded(file.fd, maxBytes)).toString("utf8");
+    return decodeInput(await readFileDescriptorBounded(file.fd, maxBytes), "Input file");
   } finally {
     await file.close();
   }
