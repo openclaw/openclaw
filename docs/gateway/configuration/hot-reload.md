@@ -37,6 +37,9 @@ Creation prepares the new agent's runtime database before publishing its config 
 Overlapping creation and deletion preserve unchanged agents' prepared model generations
 and session creation. Registry discovery follows completed roster publications;
 removing an agent still revokes access to that agent's stores.
+Concurrent writers release each completed reload's lifecycle lease through the shared
+writer queue, so a busy database does not leave later reloads waiting for lease expiry.
+A database-open refusal for a deleting agent leaves other agents' admitted work usable.
 Overlapping agent edits can supersede an earlier model-runtime refresh. If that
 refresh fails, the newer config retries the unfinished preparation without
 requiring a Gateway restart, including when the newer edit does not change models.

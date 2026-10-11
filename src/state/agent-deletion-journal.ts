@@ -74,12 +74,15 @@ type AgentDeletionPathFenceSnapshot = {
   }>;
 };
 
+/** Deletion ownership refusal is distinct from an unhealthy native database. */
+export class AgentDatabaseDeletionRefusedError extends Error {}
+
 function assertAgentDeletionIdentityClaimAllowed(
   claimAgentId: string,
   deletedAgentId: string | undefined,
 ): void {
   if (deletedAgentId && normalizeAgentId(claimAgentId) === normalizeAgentId(deletedAgentId)) {
-    throw new Error(
+    throw new AgentDatabaseDeletionRefusedError(
       `OpenClaw agent database is unavailable while agent ${normalizeAgentId(deletedAgentId)} is deleted.`,
     );
   }
@@ -217,7 +220,9 @@ export function assertAgentDeletionPathFence(
       journalFenceFields.every((field) => candidate.row[field] === row[field]),
     );
     if (row.cleanup_completed !== 1 && !entry) {
-      throw new Error("Agent deletion journal changed while preparing a database claim.");
+      throw new AgentDatabaseDeletionRefusedError(
+        "Agent deletion journal changed while preparing a database claim.",
+      );
     }
     assertAgentDeletionIdentityClaimAllowed(snapshot.claimAgentId, row.agent_id);
     if (row.cleanup_completed === 1) {
@@ -231,7 +236,7 @@ export function assertAgentDeletionPathFence(
           targetPath === fence.canonicalPath || isPathInside(fence.canonicalPath, targetPath),
       );
       if (blockedPath) {
-        throw new Error(
+        throw new AgentDatabaseDeletionRefusedError(
           `OpenClaw agent database ${blockedPath} is unavailable while agent ${row.agent_id} deletion owns ${fence.path}.`,
         );
       }

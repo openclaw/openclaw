@@ -4226,6 +4226,8 @@ describe("gateway Gmail hot reload handlers", () => {
     "preserves terminals when a failed $kind restriction is replaced (cron cleanup fails: $cronCleanupFails)",
     async ({ kind, cronCleanupFails }) => {
       vi.useFakeTimers();
+      const clock = createGatewaySchedulerClock();
+      const scheduler = createTestGatewayScheduler(clock.clock);
       const initialConfig: OpenClawConfig = {
         gateway: { reload: {}, terminal: { enabled: true } },
       };
@@ -4277,6 +4279,7 @@ describe("gateway Gmail hot reload handlers", () => {
         });
       const { requestRecoveryRestart, restartEmitted } = createRecoveryRestartMock();
       const reloader = startManagedGatewayConfigReloader({
+        scheduler,
         initialConfig,
         readSnapshot: writer.readSnapshot,
         subscribeToWrites: writer.subscribeToWrites,
@@ -4313,7 +4316,7 @@ describe("gateway Gmail hot reload handlers", () => {
 
       try {
         const rejected = writeConfig(rejectedConfig, 1);
-        await vi.advanceTimersByTimeAsync(0);
+        await clock.wake();
         await expect(rejected).resolves.toBe("failed");
         expect(policy.resolve()).toMatchObject({ ok: false, block: { kind } });
         expect(livePty.killed).toBe(false);
@@ -4331,7 +4334,7 @@ describe("gateway Gmail hot reload handlers", () => {
           },
           2,
         );
-        await vi.advanceTimersByTimeAsync(0);
+        await clock.wake();
         await expect(recovered).resolves.toBe("applied");
         expect(livePty.killed).toBe(false);
         expect(pendingPty.killed).toBe(false);
@@ -4342,7 +4345,7 @@ describe("gateway Gmail hot reload handlers", () => {
           { ...disabledConfig, ...(cronCleanupFails ? { cron: { enabled: true } } : {}) },
           3,
         );
-        await vi.advanceTimersByTimeAsync(0);
+        await clock.wake();
         await expect(accepted).resolves.toBe(
           cronCleanupFails ? "applied-restart-required" : "applied",
         );
@@ -4362,6 +4365,7 @@ describe("gateway Gmail hot reload handlers", () => {
         await pending;
         manager.disposeAll();
         await reloader.stop();
+        await scheduler.stop();
       }
     },
   );
