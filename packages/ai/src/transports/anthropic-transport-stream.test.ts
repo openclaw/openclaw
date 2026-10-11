@@ -507,8 +507,6 @@ describe("anthropic transport stream", () => {
       { type: "content_block_stop", index: 0 },
       anthropicContentBlockStart(1, { type: "text", text: "partial " }),
       { type: "content_block_stop", index: 1 },
-      // Starting a tool call tags the preceding text as commentary before
-      // the classifier declines mid-turn.
       anthropicContentBlockStart(2, {
         type: "tool_use",
         id: "call_1",
@@ -1059,7 +1057,7 @@ describe("anthropic transport stream", () => {
     }
   });
 
-  it("defers a pre-tool text block's text_end until it carries the commentary phase", async () => {
+  it("preserves a pre-tool text block without inferring a commentary phase", async () => {
     mockSse([
       anthropicMessageStart({ id: "msg_defer", usage: { input_tokens: 5, output_tokens: 0 } }),
       anthropicContentBlockStart(0, { type: "text", text: "" }),
@@ -1071,22 +1069,22 @@ describe("anthropic transport stream", () => {
     ]);
     const stream = await startTransportStream();
     const order: string[] = [];
-    let textEndPhase: unknown;
+    const textSignatures: unknown[] = [];
     for await (const event of stream as AsyncIterable<{
       type: string;
       contentIndex?: number;
       partial?: { content?: Array<{ textSignature?: string }> };
     }>) {
       order.push(event.type);
-      if (event.type === "text_end" && typeof event.contentIndex === "number") {
-        const signature = event.partial?.content?.[event.contentIndex]?.textSignature;
-        textEndPhase =
-          typeof signature === "string"
-            ? (JSON.parse(signature) as { phase?: string }).phase
-            : undefined;
+      if (event.type === "text_end" || event.type === "toolcall_start") {
+        textSignatures.push(event.partial?.content?.[0]?.textSignature);
       }
     }
-    expect(textEndPhase).toBe("commentary");
+    expect(textSignatures).toEqual([undefined, undefined]);
+    expect((await stream.result()).content[0]).toEqual({
+      type: "text",
+      text: "I'll check the repo.",
+    });
     expect(order.filter((type) => type === "text_end")).toHaveLength(1);
     expect(order.indexOf("text_end")).toBeLessThan(order.indexOf("toolcall_start"));
   });

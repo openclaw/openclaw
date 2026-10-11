@@ -554,6 +554,7 @@ async function executeScriptCronJob(
     deliverySuppressionReason: result.deliverySuppressionReason,
     deliveryState: result.deliveryState,
     delivery: result.delivery,
+    diagnostics: result.diagnostics,
     nextCheck: result.nextCheck,
     scriptStateChanged: result.stateChanged === true,
     ...(result.stateChanged === true ? { scriptState: result.state } : {}),

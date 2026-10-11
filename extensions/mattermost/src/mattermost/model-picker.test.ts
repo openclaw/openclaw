@@ -281,5 +281,16 @@ describe("Mattermost model picker", () => {
         }),
       }),
     ).toBe("anthropic/claude-sonnet-4-5");
+    expect(
+      await resolveMattermostModelPickerCurrentModel({
+        cfg,
+        route: {
+          agentId: "support",
+          sessionKey: `${parentSessionKey}:thread:new-thread`,
+        },
+        data,
+        sessionEntry: undefined,
+      }),
+    ).toBe("anthropic/claude-sonnet-4-5");
   });
 });

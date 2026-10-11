@@ -28,7 +28,7 @@ const ACTION_IDS = {
   back: "mdlback",
 } as const;
 
-type MattermostModelPickerEntry =
+export type MattermostModelPickerEntry =
   | { kind: "summary" }
   | { kind: "providers" }
   | { kind: "models"; provider: string };
@@ -200,16 +200,17 @@ export async function resolveMattermostModelPickerCurrentModel(params: {
     });
     const loadSessionEntry = (sessionKey: string) =>
       getSessionEntryAsync({
+        agentId: params.route.agentId,
         storePath,
         sessionKey,
       });
     const sessionEntry = params.sessionEntry;
     const override = await resolveStoredModelOverrideAsync({
       sessionEntry,
-      loadSessionEntry,
       sessionKey: params.route.sessionKey,
       parentSessionKey: sessionEntry?.parentSessionKey,
       defaultProvider: params.data.resolvedDefault.provider,
+      loadSessionEntry,
     });
     if (!override?.model) {
       return fallback;

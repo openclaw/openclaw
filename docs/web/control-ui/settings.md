@@ -744,7 +744,8 @@ authorized response arrives and starts the reader from its first page, whether
 downloaded remain yours.
 
 Configure capture in **Settings → Communications → Meeting capture**, which also
-links back to the library. Administrators can change the existing
+links back to the library. When opened from Meetings, **Back to app** returns to
+the same meeting and library filters. Administrators can change the existing
 `transcripts.enabled` setting and add, edit, or remove `transcripts.autoStart`
 sources. Edits preserve account and source locators, titles, and custom session
 IDs through the shared config draft. Form changes auto-save through the standard

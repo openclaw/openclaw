@@ -153,19 +153,19 @@ Isolated `automations add` jobs default to `--announce` delivery. Use `--no-deli
 Isolated automation chat delivery is shared between the agent and the runner:
 
 - The agent can send directly using the `message` tool when a chat route is available.
-- `announce` fallback-delivers the final reply only when the agent did not send directly to the resolved target.
+- `announce` sends the final result unless a verified matching send already did so, then adds confirmed delivery to the destination chat's transcript.
 - `webhook` posts the finished payload to a URL.
-- `none` disables runner fallback delivery.
+- `none` disables automatic conversation results and external notifications.
 
-For an isolated agent-turn job bound at creation to a routeless conversation, `announce` commits the final visible result there instead. WebChat shows it live and after reload, and retrying the commit does not duplicate it. A deleted or reset creating conversation records a delivery failure. Explicit channel, recipient, account, and thread settings keep normal channel resolution; `webhook` and `none` are unchanged. See [Automation delivery](/automation/cron-jobs/delivery).
+Agent, command, and script results belong to the chat or topic that receives them. An explicit different destination gets the result instead of the creating conversation, including for CLI and older jobs without a creating session. With no external route, the creating conversation receives it; WebChat shows the same message live and after reload. Retries do not duplicate results. Resetting an explicitly configured external destination does not stop delivery: the result enters its current session. Implicit agent-turn announcements and routeless WebChat results fail if the creating conversation was deleted or reset; recreate the job or set explicit external delivery coordinates. Command and script announcements retain an already resolved route without a source-generation check, as before. A confirmed external send remains delivered, with a warning if the conversation write fails. See [Automation delivery](/automation/cron-jobs/delivery).
 
 Use `automations add|create --webhook <url>` or `automations edit <job-id> --webhook <url>` to set webhook delivery. Do not combine `--webhook` with chat delivery flags such as `--announce`, `--no-deliver`, `--channel`, `--to`, `--thread-id`, or `--account`.
 
-`automations edit <job-id>` can unset individual delivery routing fields with `--clear-channel`, `--clear-to`, `--clear-thread-id`, and `--clear-account` (each is rejected when combined with its matching set flag). Unlike `--no-deliver`, which only disables runner fallback delivery, these remove the stored field so the job resolves that part of its route from defaults again.
+`automations edit <job-id>` can unset individual delivery routing fields with `--clear-channel`, `--clear-to`, `--clear-thread-id`, and `--clear-account` (each is rejected when combined with its matching set flag). Unlike `--no-deliver`, which disables automatic results and notifications, these remove the stored field so the job resolves that part of its route from defaults again.
 
-`--announce` is runner fallback delivery for the final reply. `--no-deliver` disables that fallback but does not remove the agent's `message` tool when a chat route is available.
+`--announce` enables the conversation result and notification flow. `--no-deliver` disables that automatic flow but does not remove the agent's `message` tool when a chat route is available.
 
-Reminders created from an active chat preserve the live chat delivery target for fallback announce delivery. Internal session keys may be lowercase. Do not use them as a source of truth for case-sensitive provider IDs such as Matrix room IDs.
+Reminders created from an active chat preserve the live chat delivery target for announce delivery. Internal session keys may be lowercase. Do not use them as a source of truth for case-sensitive provider IDs such as Matrix room IDs.
 
 ### Failure delivery
 
@@ -263,6 +263,8 @@ The automation `--model` is a **job primary**, not a chat-session `/model` overr
 - An empty per-job fallback list (`--fallbacks ""` or `fallbacks: []` in the job payload/API) makes the run strict.
 - When a job has `--model` but no fallback list is configured, OpenClaw passes an explicit empty fallback override. The agent primary is therefore not appended as a hidden retry target.
 - Local-provider preflight checks walk configured fallbacks before marking a run `skipped`.
+
+When every local provider is unreachable, `automations runs` and `automations show` retain the skipped status and preflight reason. Start the provider or correct its configured endpoint. Repeated preflight skips use the existing failure-alert route and threshold without requiring `failureAlert.includeSkipped`, while explicit alert opt-outs still apply. Recurring jobs stay enabled and resume on a later scheduled run once reachability is checked again; endpoint results are cached for up to five minutes.
 
 `openclaw doctor` reports jobs that already have `payload.model` set, including provider namespace counts and mismatches against `agents.defaults.model`. Use that check when auth, provider, or billing behavior looks different between live chat and scheduled jobs.
 

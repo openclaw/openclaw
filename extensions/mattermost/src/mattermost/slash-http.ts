@@ -7,7 +7,6 @@ import {
 } from "openclaw/plugin-sdk/number-runtime";
 import { finalizeInboundContext } from "openclaw/plugin-sdk/reply-runtime";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
-import { getSessionEntryAsync, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { ResolvedMattermostAccount } from "../mattermost/accounts.js";
 import { getMattermostRuntime } from "../runtime.js";
@@ -17,20 +16,13 @@ import {
   sendMattermostTyping,
   type MattermostChannel,
 } from "./client.js";
-import {
-  renderMattermostModelSummaryView,
-  renderMattermostModelsPickerView,
-  renderMattermostProviderPickerView,
-  resolveMattermostModelPickerCurrentModel,
-  resolveMattermostModelPickerEntry,
-} from "./model-picker.js";
+import { resolveMattermostModelPickerEntry } from "./model-picker.js";
 import {
   authorizeMattermostCommandInvocation,
   normalizeMattermostAllowList,
 } from "./monitor-auth.js";
 import { deliverMattermostReplyPayload } from "./reply-delivery.js";
 import {
-  buildPreparedModelsProviderData,
   isRequestBodyLimitError,
   logTypingFailure,
   readRequestBodyWithLimit,
@@ -50,6 +42,7 @@ import {
   type MattermostCommandResponse,
   type MattermostSlashCommandPayload,
 } from "./slash-commands.js";
+import { deliverMattermostSlashModelPicker } from "./slash-model-picker.js";
 
 type SlashHttpHandlerParams = {
   account: ResolvedMattermostAccount;
@@ -688,47 +681,22 @@ async function handleSlashCommandAsync(params: {
       : `Mattermost message in ${roomLabel} from ${senderName}`;
 
   const to = kind === "direct" ? `user:${senderId}` : `channel:${channelId}`;
+  const messageSid = triggerId ?? `slash-${Date.now()}`;
   const pickerEntry = resolveMattermostModelPickerEntry(commandText);
   if (pickerEntry) {
-    const sessionEntry = await getSessionEntryAsync({
-      storePath: resolveStorePath(cfg.session?.store, { agentId: route.agentId }),
-      sessionKey: route.sessionKey,
-      readConsistency: "latest",
-    });
-    const data = await buildPreparedModelsProviderData(cfg, route.agentId, { sessionEntry });
-    if (data.providers.length === 0) {
-      await sendMessageMattermost(
-        `channel:${channelId}`,
-        [data.refreshWarning, "No models available."].filter(Boolean).join("\n\n"),
-        { cfg, accountId: account.accountId },
-      );
-      return;
-    }
-
-    const currentModel = await resolveMattermostModelPickerCurrentModel({
+    const hasModels = await deliverMattermostSlashModelPicker({
       cfg,
       route,
-      data,
-      sessionEntry,
+      accountId: account.accountId,
+      channelId,
+      senderId,
+      commandText,
+      messageSid,
+      entry: pickerEntry,
     });
-    const viewParams = { ownerUserId: senderId, data, currentModel };
-    const view =
-      pickerEntry.kind === "summary"
-        ? renderMattermostModelSummaryView(viewParams)
-        : pickerEntry.kind === "providers"
-          ? renderMattermostProviderPickerView(viewParams)
-          : renderMattermostModelsPickerView({
-              ...viewParams,
-              provider: pickerEntry.provider,
-              page: 1,
-            });
-
-    await sendMessageMattermost(
-      `channel:${channelId}`,
-      [data.refreshWarning, view.text].filter(Boolean).join("\n\n"),
-      { cfg, accountId: account.accountId, buttons: view.buttons },
-    );
-    runtime.log?.(`delivered model picker to ${to}`);
+    if (hasModels) {
+      runtime.log?.(`delivered model picker to ${to}`);
+    }
     return;
   }
 
@@ -756,7 +724,7 @@ async function handleSlashCommandAsync(params: {
     SenderId: senderId,
     Provider: "mattermost" as const,
     Surface: "mattermost" as const,
-    MessageSid: triggerId ?? `slash-${Date.now()}`,
+    MessageSid: messageSid,
     Timestamp: Date.now(),
     WasMentioned: true,
     CommandAuthorized: commandAuthorized,

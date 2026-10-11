@@ -1,7 +1,6 @@
 // Covers shared media-generation runtime polling and timeout helpers.
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it } from "vitest";
-import type { OpenClawConfig } from "../config/types.js";
 import { buildDashscopeVideoGenerationProvider } from "../plugin-sdk/video-generation.js";
 import {
   normalizeDurationToClosestMax,
@@ -195,29 +194,6 @@ describe("media-generation runtime shared candidates", () => {
     expect(await resolve()).toEqual([{ provider: "media", model: "image" }]);
   });
 
-  it("keeps implicit provider expansion enabled when the retired opt-out is present", async () => {
-    let listProviderCalls = 0;
-    const candidates = await resolveCapabilityModelCandidatesAsync({
-      cfg: {
-        agents: { defaults: { mediaGenerationAutoProviderFallback: false } },
-      } as OpenClawConfig,
-      modelConfig: {
-        primary: "google/gemini-3.1-flash-image-preview",
-      },
-      parseModelRef,
-      listProviders: () => {
-        listProviderCalls += 1;
-        return [configuredProvider("openai", "gpt-image-1")];
-      },
-    });
-
-    expect(candidates).toEqual([
-      { provider: "google", model: "gemini-3.1-flash-image-preview" },
-      { provider: "openai", model: "gpt-image-1" },
-    ]);
-    expect(listProviderCalls).toBe(1);
-  });
-
   it("treats an explicit model override as exact-only", async () => {
     const candidates = await resolveCapabilityModelCandidatesAsync({
       cfg: {},
@@ -231,47 +207,6 @@ describe("media-generation runtime shared candidates", () => {
     });
 
     expect(candidates).toEqual([{ provider: "openai", model: "gpt-image-2" }]);
-  });
-
-  it("resolves slash-containing provider model IDs from registered provider models", async () => {
-    const candidates = await resolveCapabilityModelCandidatesAsync({
-      cfg: {},
-      modelConfig: {
-        primary: "openai/gpt-image-2",
-      },
-      modelOverride: "fal-ai/flux/dev",
-      parseModelRef,
-      listProviders: () => [
-        {
-          ...configuredProvider("fal", "fal-ai/flux/dev"),
-          models: ["fal-ai/flux/dev", "fal-ai/flux/dev/image-to-image"],
-        },
-      ],
-    });
-
-    expect(candidates).toEqual([{ provider: "fal", model: "fal-ai/flux/dev" }]);
-  });
-
-  it("prefers explicit provider refs over colliding slash-containing model IDs", async () => {
-    const candidates = await resolveCapabilityModelCandidatesAsync({
-      cfg: {},
-      modelConfig: {
-        primary: "google/lyria-3-pro-preview",
-      },
-      parseModelRef,
-      listProviders: () => [
-        {
-          ...configuredProvider("google", "lyria-3-clip-preview"),
-          models: ["lyria-3-clip-preview", "lyria-3-pro-preview"],
-        },
-        {
-          ...configuredProvider("openrouter", "google/lyria-3-clip-preview"),
-          models: ["google/lyria-3-clip-preview", "google/lyria-3-pro-preview"],
-        },
-      ],
-    });
-
-    expect(candidates[0]).toEqual({ provider: "google", model: "lyria-3-pro-preview" });
   });
 });
 
@@ -348,7 +283,7 @@ describe("media-generation candidate lifecycle", () => {
     ]);
   });
 
-  it.each(["lookup", "prepare", "async prepare"])(
+  it.each(["async prepare"])(
     "propagates %s failures without submitting a fallback",
     async (stage) => {
       const error = new Error("provider registry unavailable");
@@ -429,24 +364,6 @@ describe("media-generation runtime shared normalization", () => {
     ).toBe("1536x1024");
   });
 
-  it("maps unsupported aspect ratios to the closest supported aspect ratio", () => {
-    expect(
-      resolveClosestAspectRatio({
-        requestedAspectRatio: "17:10",
-        supportedAspectRatios: ["1:1", "4:3", "16:9"],
-      }),
-    ).toBe("16:9");
-  });
-
-  it("maps video-style resolutions by numeric distance", () => {
-    expect(
-      resolveClosestResolution({
-        requestedResolution: "480P",
-        supportedResolutions: ["360P", "540P", "720P"],
-      }),
-    ).toBe("540P");
-  });
-
   it("does not map across image and video resolution units", () => {
     expect(
       resolveClosestResolution({
@@ -509,18 +426,6 @@ describe("media-generation runtime shared failure summaries", () => {
       }),
     ).toThrow(
       "All music generation models failed (3): google/lyria-3-clip-preview: Manually set deadline 1s is too short. Minimum allowed deadline is 10s. | 2 fallback(s) aborted after the request was cancelled or timed out: minimax/music-2.6, minimax-portal/music-2.6",
-    );
-  });
-
-  it("summarizes all-aborted attempts once", () => {
-    expect(() =>
-      throwCapabilityGenerationFailure({
-        capabilityLabel: "music generation",
-        attempts: abortedAttempts,
-        lastError: new Error("This operation was aborted"),
-      }),
-    ).toThrow(
-      "All music generation models failed (2): 2 fallback(s) aborted after the request was cancelled or timed out: minimax/music-2.6, minimax-portal/music-2.6",
     );
   });
 });

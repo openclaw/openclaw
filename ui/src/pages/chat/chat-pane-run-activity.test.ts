@@ -1,13 +1,18 @@
 /* @vitest-environment jsdom */
 
-import { render } from "lit";
-import { afterEach, describe, expect, it } from "vitest";
+import { expectDefined } from "@openclaw/normalization-core";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
+import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
 import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.ts";
 import { createRefreshChatPane } from "./chat-pane-history.test-support.ts";
-import { renderChat } from "./chat-view.ts";
+import { renderChatPropsInto } from "./chat-view.test-helpers.ts";
 import { resetChatComposerState } from "./components/chat-composer.ts";
+import {
+  installTranscriptDomMocks,
+  resetTranscriptTestDom,
+} from "./components/chat-transcript.test-support.ts";
 
 function sessionsResult(rows: GatewaySessionRow[]): SessionsListResult {
   return {
@@ -20,7 +25,11 @@ function sessionsResult(rows: GatewaySessionRow[]): SessionsListResult {
 }
 
 describe.each([false, true])("chat run activity (recovery ready: %s)", (recoveryScopeReady) => {
-  afterEach(() => resetChatComposerState());
+  beforeEach(installTranscriptDomMocks);
+  afterEach(() => {
+    resetChatComposerState();
+    resetTranscriptTestDom();
+  });
 
   it.each([
     {
@@ -79,8 +88,8 @@ describe.each([false, true])("chat run activity (recovery ready: %s)", (recovery
     state.sessionsResult = sessionsResult([parent, child]);
     pane.render();
 
-    const container = document.createElement("div");
-    render(renderChat(pane.chatProps!), container);
+    const container = createApplicationContextProvider(context);
+    renderChatPropsInto(container, expectDefined(pane.chatProps, "chat props"));
 
     expect(pane.chatProps?.canAbort).toBe(true);
     expect(

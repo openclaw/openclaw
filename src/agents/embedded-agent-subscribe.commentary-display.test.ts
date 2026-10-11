@@ -80,65 +80,37 @@ function toolBlock(id: string, name: string) {
   return { type: "toolCall" as const, id, name, arguments: {} };
 }
 describe("commentary preambles", () => {
-  it.each([{ api: "anthropic-messages" }, { api: "openai-completions" }] satisfies Array<{
-    api: "anthropic-messages" | "openai-completions";
-  }>)(
-    "transfers the current $api display to formatted commentary while preserving raw output",
-    async ({ api }) => {
+  it.each(["anthropic-messages", "openai-completions"] as const)(
+    "preserves unphased %s narration inline across a tool call",
+    async (api) => {
       const onAgentEvent = vi.fn();
       const { emit, subscription, snapshot, drain } = commentaryHarness({ onAgentEvent });
       const narration = "Checking the workspace.\n\n```sh\n  pwd\n```";
       emit({ type: "message_start", message: textMessage("", api) });
       update(emit, textMessage(narration, api), { type: "text_delta", delta: narration });
       await subscription.waitForPendingEvents();
-      await drain();
-      const initial = onAgentEvent.mock.calls.find(([event]) => event.stream === "assistant")?.[0];
-      expect(initial?.data.text).toContain("Checking the workspace.");
       expect(await snapshot()).toContain("Checking the workspace.");
 
-      const commentary: TestAssistant = {
-        role: "assistant",
-        api,
+      const toolMessage: TestAssistant = {
+        ...textMessage(narration, api),
         stopReason: "toolUse",
-        content: [textBlock(narration, "commentary-0", "commentary"), toolBlock("exec_0", "exec")],
+        content: [{ type: "text", text: narration }, toolBlock("exec_0", "exec")],
       };
-      update(emit, commentary, { type: "toolcall_start", contentIndex: 1, partial: commentary });
-      emit({ type: "message_end", message: commentary });
+      update(emit, toolMessage, { type: "toolcall_start", contentIndex: 1, partial: toolMessage });
+      emit({ type: "message_end", message: toolMessage });
       await subscription.waitForPendingEvents();
       await drain();
-      const events = onAgentEvent.mock.calls.map(([event]) => event);
-      expect(events).toMatchObject([
-        {
-          stream: "assistant",
-          data: {
-            itemId: initial.data.itemId,
-            text: expect.stringContaining("Checking the workspace."),
-          },
-        },
-        {
-          stream: "item",
-          data: {
-            kind: "preamble",
-            itemId: "commentary-0",
-            phase: "update",
-            progressText: narration,
-          },
-        },
-        {
-          stream: "item",
-          data: { kind: "preamble", itemId: "commentary-0", phase: "end", progressText: narration },
-        },
-      ]);
-      expect(await snapshot()).toBe("");
+      expect(await snapshot()).toBe(narration);
+      expect(onAgentEvent.mock.calls.some(([event]) => event.stream === "item")).toBe(false);
 
       emit({ type: "message_start", message: textMessage("", api) });
       update(emit, textMessage("Next answer.", api), { type: "text_delta", delta: "Next answer." });
+      emit({
+        type: "message_end",
+        message: { ...textMessage("Next answer.", api), stopReason: "stop" },
+      });
       await subscription.waitForPendingEvents();
-      await drain();
-      const next = onAgentEvent.mock.calls.at(-1)?.[0];
-      expect(next).toMatchObject({ stream: "assistant", data: { text: "Next answer." } });
-      expect(next.data.itemId).not.toBe(initial.data.itemId);
-      expect(await snapshot()).toBe("Next answer.");
+      expect(await snapshot()).toBe(`${narration}\n\nNext answer.`);
     },
   );
 
