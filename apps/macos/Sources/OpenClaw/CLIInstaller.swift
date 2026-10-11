@@ -226,9 +226,10 @@ enum CLIInstaller {
         expectedVersion: String? = GatewayEnvironment.expectedGatewayVersionString(),
         installedCLI: GatewayLaunchAgentManager.InstalledServiceCLI? = nil,
         serviceProfile: AppProfile = .current,
-        usesBundledRuntime: Bool = true) async -> Status
+        usesBundledRuntime: Bool = true,
+        homeDirectory: URL = FileManager().homeDirectoryForCurrentUser) async -> Status
     {
-        let location = self.managedExecutableLocation()
+        let location = self.managedExecutableLocation(homeDirectory: homeDirectory)
         if let installedCLI {
             let environment = GatewayLaunchAgentManager.daemonEnvironment(
                 installedCLI: installedCLI,
@@ -246,20 +247,20 @@ enum CLIInstaller {
                authority.file == nil
             {
                 return await self.managedStatus(
-                    expectedVersion: expectedVersion, installedCLI: authority.cli, usesBundledRuntime: false)
+                    expectedVersion: expectedVersion,
+                    installedCLI: authority.cli,
+                    serviceProfile: serviceProfile,
+                    usesBundledRuntime: false,
+                    homeDirectory: homeDirectory)
             }
             return .missing(location: location)
         }
 
         let preferredPaths = await CommandResolver.preferredPathsAsync()
-        let status = await self.status(
+        return await self.status(
             location: location,
             expectedVersion: expectedVersion,
             preferredPaths: preferredPaths)
-        if status.isReady {
-            self.rememberValidated(status, defaults: AppDefaults.standard)
-        }
-        return status
     }
 
     static func status(location: String) async -> Status {
@@ -424,6 +425,7 @@ enum CLIInstaller {
                 await statusHandler("Install failed: \(error.localizedDescription)")
                 return false
             }
+            self.rememberValidated(managedStatus, defaults: AppDefaults.standard)
             let parsed = self.parseInstallEvents(response.stdout)
             let installedVersion = parsed.last { $0.event == "done" }?.version
             let summary = installedVersion.map { "Installed openclaw \($0)." } ?? "Installed openclaw."
@@ -564,13 +566,14 @@ enum CLIInstaller {
         targetVersion: String,
         restartGateway: Bool = true,
         repair: Bool = false,
+        homeDirectory: URL = FileManager().homeDirectoryForCurrentUser,
         installedCLI: GatewayLaunchAgentManager.InstalledServiceCLI? = nil,
         checkCurrent: (@MainActor @Sendable () async throws -> Void)? = nil,
         onDispatch: (@MainActor @Sendable () throws -> Void)? = nil,
         statusHandler: @escaping @MainActor @Sendable (String) async -> Void) async
         -> ManagedCLIUpdateOutcome
     {
-        let executable = self.managedExecutableLocation()
+        let executable = self.managedExecutableLocation(homeDirectory: homeDirectory)
         await statusHandler(repair
             ? String(localized: "Repairing the OpenClaw Gateway update…")
             : String(format: String(localized: "Updating the OpenClaw Gateway to %@…"), targetVersion))
@@ -639,13 +642,15 @@ enum CLIInstaller {
         let managedStatus = await self.managedStatus(
             expectedVersion: targetVersion,
             installedCLI: installedCLI,
-            usesBundledRuntime: false)
+            usesBundledRuntime: false,
+            homeDirectory: homeDirectory)
         guard case let .ready(_, installedVersion) = managedStatus else {
             let message = String(localized: "Gateway update finished, but verification failed.")
             await statusHandler(message)
             return .failure(message: message, details: managedStatus.message)
         }
 
+        self.rememberValidated(managedStatus, defaults: AppDefaults.standard)
         self.rememberInstallPolicy(.exact(targetVersion))
         NotificationCenter.default.post(name: .openclawCLIInstalled, object: nil)
         await statusHandler(String(
