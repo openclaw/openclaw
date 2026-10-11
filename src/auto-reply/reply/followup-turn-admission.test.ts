@@ -8,6 +8,7 @@ const state = vi.hoisted(() => ({
   admitReply: vi.fn(),
   buildPreflightFailureText: vi.fn(),
   loadEntry: vi.fn(),
+  queueDepth: vi.fn(() => 0),
   preflight: vi.fn(),
   recheckFallbackProbe: vi.fn(),
   refreshGoal: vi.fn(),
@@ -45,6 +46,16 @@ vi.mock("./queue.js", () => ({
 
 vi.mock("../../config/sessions/session-accessor.js", () => ({
   loadSessionEntry: (...args: unknown[]) => state.loadEntry(...args),
+}));
+
+// mock-isolation: Admission uses controlled canonical facts without opening a worker database.
+vi.mock("../../config/sessions/session-entry-read-runtime.js", () => ({
+  readSessionEntryReadOnlyInWorker: async () => state.loadEntry(),
+}));
+// mock-isolation: Pending inputs are controlled independently of this admission.
+vi.mock("./queue/enqueue.js", () => ({
+  getFollowupQueueDepth: () => state.queueDepth(),
+  enqueueFollowupRun: vi.fn(),
 }));
 
 vi.mock("../../sessions/send-policy.js", () => ({
@@ -113,6 +124,7 @@ function createDefaults(overrides: Record<string, unknown> = {}) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  state.queueDepth.mockReturnValue(0);
   state.sendPolicy = "allow";
   state.shouldNotifyCompaction = false;
   state.resolveSendPolicy.mockImplementation(() => state.sendPolicy);
@@ -124,7 +136,100 @@ beforeEach(() => {
   state.refreshGoal.mockImplementation((context) => context);
 });
 
+function createActiveGoalEntry(): SessionEntry {
+  return {
+    sessionId: "queued-session",
+    updatedAt: 1,
+    goal: {
+      schemaVersion: 1,
+      id: "goal",
+      objective: "Finish",
+      status: "active",
+      createdAt: 1,
+      updatedAt: 1,
+      tokenStart: 0,
+      tokensUsed: 0,
+      continuationTurns: 0,
+    },
+  };
+}
+
 describe("admitFollowupTurn", () => {
+  it.each([
+    "paused",
+    "blocked",
+    "complete",
+    "budget_limited",
+    "usage_limited",
+    "replaced",
+    "cleared",
+    "new input",
+  ] as const)("drops an automatic Goal nudge when admission observes %s", async (change) => {
+    const operation = createOperation();
+    const original = createActiveGoalEntry();
+    const onQueuedFollowupAdmitted = vi.fn(async () => {});
+    const onQueuedFollowupSettled = vi.fn(async () => {});
+    const current = structuredClone(original);
+    if (change === "replaced") {
+      current.goal!.id = "replacement";
+    } else if (change === "cleared") {
+      current.goal = undefined;
+    } else if (change === "new input") {
+      state.queueDepth.mockReturnValue(1);
+    } else {
+      current.goal!.status = change;
+    }
+    state.admitReply.mockResolvedValue({ status: "owned", operation, sessionEntry: current });
+    state.loadEntry.mockReturnValue(current);
+    const result = await admitFollowupTurn({
+      queued: createRun({
+        goalContinuation: { sessionId: "queued-session", goalId: "goal" },
+      }),
+      defaults: createDefaults({
+        sessionEntry: original,
+        storePath: "/fixture/sessions.json",
+        opts: { onQueuedFollowupAdmitted, onQueuedFollowupSettled },
+      }),
+    });
+    expect(result).toMatchObject({ kind: "skipped", reason: "goal-inactive", operation });
+    expect(onQueuedFollowupAdmitted).toHaveBeenCalledOnce();
+    expect(onQueuedFollowupSettled).toHaveBeenCalledOnce();
+    expect(operation.complete).not.toHaveBeenCalled();
+    expect(state.preflight).not.toHaveBeenCalled();
+  });
+
+  it("rechecks the Goal after awaited compaction preparation", async () => {
+    const operation = createOperation();
+    const original = createActiveGoalEntry();
+    const onQueuedFollowupAdmitted = vi.fn(async () => {});
+    const onQueuedFollowupSettled = vi.fn(async () => {});
+    let current = original;
+    state.admitReply.mockResolvedValue({ status: "owned", operation, sessionEntry: original });
+    state.loadEntry.mockImplementation(() => current);
+    state.preflight.mockImplementation(async () => {
+      current = {
+        ...original,
+        updatedAt: 2,
+        goal: { ...original.goal!, status: "paused", updatedAt: 2 },
+      };
+      return original;
+    });
+    const result = await admitFollowupTurn({
+      queued: createRun({
+        goalContinuation: { sessionId: "queued-session", goalId: "goal" },
+      }),
+      defaults: createDefaults({
+        sessionEntry: original,
+        storePath: "/fixture/sessions.json",
+        opts: { onQueuedFollowupAdmitted, onQueuedFollowupSettled },
+      }),
+    });
+    expect(result).toMatchObject({ kind: "skipped", reason: "goal-inactive", operation });
+    expect(onQueuedFollowupAdmitted).toHaveBeenCalledOnce();
+    expect(onQueuedFollowupSettled).toHaveBeenCalledOnce();
+    expect(operation.complete).not.toHaveBeenCalled();
+  });
+
   it.each([
     { sessionKey: " agent:main:session ", expected: "agent:main:session" },
     { sessionKey: undefined, expected: "legacy-target" },

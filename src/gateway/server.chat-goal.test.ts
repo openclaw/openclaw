@@ -40,6 +40,7 @@ import type {
   RespondFn,
 } from "./server-methods/types.js";
 import { pendingChatSendDedupeKey } from "./server-shared.js";
+import { registerGoalAutomaticContinuationCases } from "./server.chat-goal-continuation.test-support.js";
 import {
   createGoalChatStartRequest,
   readGoalChatUserMessages,
@@ -189,7 +190,7 @@ function installReplyDispatchHook(eligibleDispatchKinds?: readonly ["acp"]) {
 }
 
 async function rpc(
-  method: "chat.send" | "chat.history" | "chat.abort" | "sessions.goal.update",
+  method: "chat.send" | "chat.history" | "chat.abort" | "sessions.abort" | "sessions.goal.update",
   params: Record<string, unknown>,
   onResponse?: RespondFn,
   requestClient: GatewayClient = client,
@@ -247,6 +248,8 @@ async function waitForModelRun(count = 1) {
 }
 
 describe("Goal chat admission and continuation", () => {
+  registerGoalAutomaticContinuationCases(scope, runEmbeddedAgent, rpc, goalStart, userMessages);
+
   registerGoalChatRestartSettlementCase({
     scope,
     createStorePath() {

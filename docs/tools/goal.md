@@ -12,9 +12,10 @@ title: "Goal"
 <a id="goal" />
 
 A **goal** is one durable objective attached to the current OpenClaw session.
-It gives the agent and the operator a shared target for long-running work,
-without turning that target into a background task, reminder, cron job, or
-standing order.
+It gives the agent and the operator a shared target for long-running work.
+In built-in chat runs, OpenClaw continues pursuing an active goal after a normal
+turn finishes, even when the model ends with a final reply instead of calling
+another tool. A goal is not a reminder, cron job, or standing order.
 
 Goals are session state: they move with the session key, survive process
 restarts, and appear in `/goal`, the model-facing goal tools, and the TUI
@@ -175,6 +176,33 @@ OpenClaw keeps the line compact by truncating long objectives. Paused,
 blocked, budget-limited, usage-limited, and complete goals are not injected,
 so an operator stop remains in effect until the goal is resumed.
 
+## Automatic continuation
+
+After a built-in chat or auto-reply turn finishes normally, OpenClaw checks the
+current goal and its token usage. If the same goal is still active, it queues a
+hidden internal nudge: **Advance the active goal; keep it active until fully
+achieved.** Each successfully settled continuation makes the same check; this
+is not a one-shot retry or a fixed number of extra turns.
+
+The normal follow-up queue owns these turns. They wait for the previous turn's
+execution and delivery to settle, use normal session admission and permissions,
+and do not appear as new human messages. Queued user input and existing
+child/tool continuations take precedence; the nudge does not run alongside them.
+The goal and session are checked again at admission, so a stale queued nudge
+cannot pursue a cleared, replaced, completed, blocked, paused, or limited goal.
+
+**Stop** cancels the current work and pending follow-ups; it does not mark an
+unfinished goal complete. Pause prevents further goal turns. Terminal errors
+and timeouts pause the goal as described above. Resuming a paused or limited
+goal remains an explicit operator action, not something the continuation does.
+
+Automatic nudges apply to built-in chat/auto-reply execution, not native Codex,
+other external runtimes, heartbeat turns, or independent scheduled work. They
+use the existing queue and run lifecycle rather than a periodic background
+scanner. A saved active goal alone does not start a new process or create a
+schedule after shutdown; normal session recovery or another admitted turn
+provides the next execution opportunity.
+
 ## Control UI
 
 Select **Goal** from the command picker with Enter, Tab, or a click, then type
@@ -306,7 +334,9 @@ session key, not the transport, so two surfaces sharing a session key see the
 same goal.
 
 Goal state is not a delivery directive: it does not force replies through a
-channel, change queue behavior, approve tools, or schedule work.
+channel or approve tools. Automatic continuation uses the ordinary follow-up
+queue and its delivery, cancellation, and admission rules; it does not create
+a cron schedule or bypass an existing continuation owner.
 
 ## Troubleshooting
 

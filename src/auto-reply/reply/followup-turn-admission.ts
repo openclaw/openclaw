@@ -4,6 +4,7 @@ import { renderAgentHarnessPreflightUserMessage } from "../../agents/embedded-ag
 import { normalizeChatType } from "../../channels/chat-type.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
+import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import type { TypingMode } from "../../config/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { GatewayContextResolver } from "../../gateway/server-methods/types.js";
@@ -28,6 +29,7 @@ import {
 } from "./compaction-notice.js";
 import { settleQueuedFollowupPresentation } from "./followup-presentation.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
+import { isGoalContinuationCurrent } from "./goal-continuation.js";
 import { refreshActiveGoalContext } from "./inbound-meta.js";
 import {
   admitFollowupRunLifecycle,
@@ -35,7 +37,9 @@ import {
   resolveFollowupAbortSignal,
   type FollowupRun,
 } from "./queue.js";
+import { getFollowupQueueDepth } from "./queue/enqueue.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
+import { getReplyOperationSessionReader } from "./reply-run-registry.state.js";
 import { admitReplyTurn } from "./reply-turn-admission.js";
 import {
   createReplySessionEntryHandle,
@@ -80,7 +84,7 @@ type FollowupAdmissionResult =
   | { kind: "deferred"; reason: "active-run" }
   | {
       kind: "skipped";
-      reason: "aborted" | "lifecycle-invalidated";
+      reason: "aborted" | "lifecycle-invalidated" | "goal-inactive";
       operation?: ReplyOperation;
     };
 
@@ -169,6 +173,7 @@ export async function admitFollowupTurn(params: {
   const admittedSelectionEntry = selectionEntry ? { ...selectionEntry } : undefined;
   operation.retainFailureUntilComplete();
   let queuedFollowupAdmitted = false;
+  let admissionFailed = false;
   try {
     await admitFollowupRunLifecycle(params.queued);
     if (isFollowupRunAborted(params.queued)) {
@@ -221,6 +226,14 @@ export async function admitFollowupTurn(params: {
       (admittedEntry === undefined && initialEntry?.sessionId === operation.sessionId
         ? initialEntry
         : undefined);
+    const goalContinuation = params.queued.goalContinuation;
+    if (
+      goalContinuation &&
+      (!isGoalContinuationCurrent(goalContinuation, activeEntry) ||
+        getFollowupQueueDepth(replySessionKey ?? "") > 0)
+    ) {
+      return { kind: "skipped", reason: "goal-inactive", operation };
+    }
     const lifecycleRevisionChanged =
       operation.sessionId === params.queued.run.sessionId &&
       activeEntry?.sessionId === operation.sessionId &&
@@ -477,12 +490,36 @@ export async function admitFollowupTurn(params: {
         turn,
       );
     }
+    if (goalContinuation) {
+      const currentEntry =
+        replySessionKey && params.defaults.storePath
+          ? await readSessionEntryReadOnlyInWorker(
+              { storePath: params.defaults.storePath, sessionKey: replySessionKey },
+              undefined,
+              getReplyOperationSessionReader(operation),
+            )
+          : session.current();
+      assertOperatorCurrent();
+      if (
+        operation.abortSignal.aborted ||
+        !isGoalContinuationCurrent(goalContinuation, currentEntry) ||
+        getFollowupQueueDepth(replySessionKey ?? "") > 0
+      ) {
+        return { kind: "skipped", reason: "goal-inactive", operation };
+      }
+    }
+    // Only a returned turn transfers presentation cleanup to the runner.
+    queuedFollowupAdmitted = false;
     return { kind: "admitted", turn };
   } catch (error) {
+    admissionFailed = true;
+    throw error instanceof Error ? error : new Error(formatErrorMessage(error));
+  } finally {
     if (queuedFollowupAdmitted) {
       await settleQueuedFollowupPresentation(params.defaults.opts?.onQueuedFollowupSettled);
     }
-    operation.complete();
-    throw error instanceof Error ? error : new Error(formatErrorMessage(error));
+    if (admissionFailed) {
+      operation.complete();
+    }
   }
 }
