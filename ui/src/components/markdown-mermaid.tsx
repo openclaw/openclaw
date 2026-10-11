@@ -184,9 +184,11 @@ function MermaidContent(props: MermaidProps, host: MermaidElement) {
           aria-label={t("chat.mermaid.options")}
           onWa-select={(event) => {
             const action = event.detail.item.value;
-            if (action === "expand") setExpanded(true);
-            else if (action === "source" || action === "diagram")
+            if (action === "expand") {
+              setExpanded(true);
+            } else if (action === "source" || action === "diagram") {
               setShowSource(action === "source");
+            }
           }}
         >
           <button
