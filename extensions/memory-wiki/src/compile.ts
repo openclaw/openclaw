@@ -672,13 +672,20 @@ function buildRelatedBlockBody(
   );
   const sourcePages = uniquePages(page.sourceIds.flatMap((id) => pagesById.get(id) ?? []));
   const backlinkKeys = new Set(
-    [page.relativePath, page.title, ...(page.id ? [page.id] : [])].map(normalizeComparableTarget),
+    [
+      page.relativePath,
+      path.posix.basename(page.relativePath),
+      page.title,
+      ...(page.id ? [page.id] : []),
+    ].map(normalizeComparableTarget),
   );
   const backlinks = uniquePages(
     otherPages.filter(
       (candidate) =>
         candidate.sourceIds.includes(page.id ?? "") ||
-        candidate.linkTargets.some((target) => backlinkKeys.has(normalizeComparableTarget(target))),
+        candidate.linkTargets.some((target) =>
+          backlinkKeys.has(normalizeComparableTarget(target.split("#")[0] ?? "")),
+        ),
     ),
   );
   const backlinkPages =
