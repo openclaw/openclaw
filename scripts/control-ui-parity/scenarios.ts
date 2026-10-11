@@ -290,7 +290,7 @@ export const scenes: Scene[] = [
     Object.assign({}, modelSettingsPage, {
       id: `models-login-${stage}`,
       label: `Models: sign-in ${stage}`,
-      prepare: async (page) => {
+      prepare: async (page: Page) => {
         await page.locator("[data-models-connect]").click();
         const dialog = page.locator(".model-provider-login");
         await dialog.waitFor();
