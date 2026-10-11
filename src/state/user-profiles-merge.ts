@@ -56,8 +56,11 @@ export function mergeUserProfiles(
     );
   }
   mergeUserModelAccounts(db, sourceProfileId, targetProfileId);
-  mergeUserGitHubConnection(db, sourceProfileId, targetProfileId, (ids) =>
-    mutation?.retireGitHubProfiles?.(ids),
+  mergeUserGitHubConnection(
+    db,
+    sourceProfileId,
+    targetProfileId,
+    mutation?.publishGitHubConnections?.bind(mutation),
   );
   for (const mergedProfileId of sourceProfileIds) {
     mergeUserBackgroundImages(db, mergedProfileId, targetProfileId);

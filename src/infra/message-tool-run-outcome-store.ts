@@ -28,8 +28,6 @@ import {
   runOpenClawAgentWorkerWrite,
   runOpenClawAgentWriteAdmission,
 } from "../state/openclaw-agent-write-admission.js";
-import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
-import { captureOpenClawStateReadContext } from "../state/openclaw-state-worker-context.js";
 import {
   hydrateOpenClawStateWorkerError,
   retainOpenClawStateWorkerErrorPayload,
@@ -42,7 +40,6 @@ import type { MessageToolRunOutcomeWorkerOperations } from "./message-tool-run-o
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import { throwSqliteLifecycleErrors } from "./sqlite-lifecycle-errors.js";
-import { readDatabasePathIdentitySync } from "./sqlite-worker-identity.js";
 import { createSqliteWorkerOperationAdmission } from "./sqlite-worker-operation-admission.js";
 
 /** Records one bounded completion fact before the run's owner retires. */
@@ -109,45 +106,16 @@ export async function recordMessageToolRunOutcome(params: {
   }
   const storePath = scope.storePath ?? resolveOpenClawAgentSqlitePath(scope);
   const candidates = captureSessionStoreReadCandidates(storePath);
-  const identities = new Map(
-    candidates
-      .filter((candidate) => !candidate.scope)
-      .map((candidate) => {
-        const identity = readDatabasePathIdentitySync(candidate.path);
-        return [identity.canonicalPath, identity] as const;
-      }),
-  );
   const admission = resolveSqliteWriteAdmissionScope({ ...scope, storePath });
-  const shared = captureOpenClawStateReadContext(resolveOpenClawStateSqlitePath(env));
   // Retain discovery custody before queuing; close must not turn waiting work into a fresh open.
   await withSessionHistoryWorkerReadCandidates(candidates, async (custody) => {
-    const assertCaptured = () => {
-      custody.assertCurrent();
-      shared.admission.assertCurrent();
-    };
+    const assertCaptured = () => custody.assertCurrent();
     const prepare = () =>
       withSessionStoreTarget(
         { agentId: scope.agentId, storePath, env, candidates },
         async (target, owner) => {
           const options = { ...target.database, env };
-          const identity =
-            identities.get(options.path) ?? readDatabasePathIdentitySync(options.path);
-          if (!identities.has(options.path) && identity.key.startsWith("file:")) {
-            throw new Error("Message-tool outcome target appeared after source capture");
-          }
-          const execution = captureOpenClawAgentDatabaseExecution(
-            options,
-            identity.key.startsWith("file:")
-              ? {
-                  expectedIdentity: {
-                    kind: "file",
-                    physicalIdentity: identity.key.slice("file:".length),
-                    nativeLocation: identity.canonicalPath,
-                    birthtime: identity.birthtime,
-                  },
-                }
-              : { expectedCreationIdentity: identity },
-          );
+          const execution = captureOpenClawAgentDatabaseExecution(options);
           const assertCurrent = () => {
             assertCaptured();
             owner.assertCurrent();
@@ -192,19 +160,15 @@ export async function recordMessageToolRunOutcome(params: {
                       input: undefined,
                     },
                   );
-                await worker.run(async (writer) => {
-                  for (const command of [
-                    { type: "prepare", input: undefined },
-                    { type: "record", input: values },
-                  ] as const) {
-                    const result = await writer.execute(command);
-                    if (!result.ok) {
-                      const error = new Error("Message-tool outcome transaction failed");
-                      retainOpenClawStateWorkerErrorPayload(error, result.error);
-                      throw hydrateOpenClawStateWorkerError(error, { includeOrdinary: true });
-                    }
-                  }
-                }, assertCurrent);
+                const result = await worker.execute(
+                  { type: "record", input: values },
+                  assertCurrent,
+                );
+                if (!result.ok) {
+                  const error = new Error("Message-tool outcome transaction failed");
+                  retainOpenClawStateWorkerErrorPayload(error, result.error);
+                  throw hydrateOpenClawStateWorkerError(error, { includeOrdinary: true });
+                }
               },
               true,
             );

@@ -21,11 +21,6 @@ import {
 } from "../../../talk/agent-consult-tool.js";
 import { controlRealtimeVoiceAgentRun } from "../../../talk/agent-run-control.js";
 import {
-  authorizeClientVoiceConfirmation,
-  bindAuthorizedClientVoiceConfirmation,
-  type ClientVoiceConfirmationGrant,
-} from "../../../talk/client-voice-confirmation.js";
-import {
   assertClientVoiceSessionOpen,
   resolveOpenClientVoiceSessionId,
 } from "../../../talk/client-voice-session-read.js";
@@ -40,6 +35,7 @@ import {
   createOrResumeClientVoiceSession,
   registerClientVoiceConsultRun,
 } from "../../../talk/client-voice-session.js";
+import { captureGatewayOperatorRunAuthority } from "../../operator-run-authority.js";
 import { resolveSandboxedSessionCreation } from "../../operator-session-run.js";
 import { readGatewayRequestMutationAuthority } from "../../server-methods/session-mutation-guards.js";
 import type { GatewayRequestHandlers } from "../../server-methods/types.js";
@@ -108,7 +104,6 @@ export const talkClientHandlers: GatewayRequestHandlers = {
         });
         const errors: unknown[] = [];
         try {
-          let confirmationGrant: ClientVoiceConfirmationGrant | undefined;
           const assertPreparationCurrent = () => {
             assertStoreCurrent?.();
             requester.assertPreparationCurrent();
@@ -146,7 +141,7 @@ export const talkClientHandlers: GatewayRequestHandlers = {
           request.sessionMutationAuthorization?.assertCurrent();
           // Shipped clients may consult without ever creating a voice session (old app,
           // restarted gateway, ambiguous open records). Implicitly create one instead of
-          // erroring so confirmation and mutation evidence stay always-on.
+          // erroring so voice identity and mutation evidence stay always-on.
           let selectedVoiceSessionId =
             explicitVoiceSessionId ??
             relaySessionId ??
@@ -216,7 +211,7 @@ export const talkClientHandlers: GatewayRequestHandlers = {
           }
           assertStoreCurrent?.();
           request.sessionMutationAuthorization?.assertCurrent();
-          const parsedArgs = parseRealtimeVoiceAgentConsultArgs(params.args ?? {});
+          parseRealtimeVoiceAgentConsultArgs(params.args ?? {});
           const origin = assertClientVoiceSessionOpen(
             { agentId, sessionKey: params.sessionKey, voiceSessionId },
             physicalSource,
@@ -226,19 +221,12 @@ export const talkClientHandlers: GatewayRequestHandlers = {
               "relay-owned voice sessions require relaySessionId and connection ownership",
             );
           }
-          if (parsedArgs.confirmationId) {
-            confirmationGrant = authorizeClientVoiceConfirmation({
-              agentId,
-              voiceSessionId,
-              confirmationId: parsedArgs.confirmationId,
-            });
-          }
           // Only validated calls may replace the legacy client's connection binding.
           if (connId && !relaySessionId) {
             physicalSource.assertCurrent();
             rememberLegacyVoiceBinding({ connId, sessionKey: params.sessionKey, voiceSessionId });
           }
-          return { voiceSessionId, confirmationGrant, physicalSource };
+          return { voiceSessionId, physicalSource };
         } catch (error) {
           errors.push(error);
           throw error;
@@ -258,11 +246,12 @@ export const talkClientHandlers: GatewayRequestHandlers = {
         respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, formatForLog(err)));
         return;
       }
-      const { voiceSessionId, confirmationGrant } = preparedVoiceSession;
+      const { voiceSessionId } = preparedVoiceSession;
 
       const result = await startTalkRealtimeAgentConsult(request, {
         sessionTarget: target,
         callId: params.callId,
+        requestedVoiceSessionId: explicitVoiceSessionId ?? relaySessionId,
         args: params.args ?? {},
         relaySessionId: normalizeOptionalString(params.relaySessionId),
         connId,
@@ -292,9 +281,6 @@ export const talkClientHandlers: GatewayRequestHandlers = {
           try {
             assertWorkAdmissionCurrent();
             request.sessionMutationAuthorization?.assertCurrent();
-            if (confirmationGrant) {
-              bindAuthorizedClientVoiceConfirmation({ grant: confirmationGrant, runId });
-            }
             return release;
           } catch (error) {
             if (!onRegistered) {
@@ -388,7 +374,14 @@ export const talkClientHandlers: GatewayRequestHandlers = {
   "talk.client.steer": defineValidatedGatewayHandler(
     "talk.client.steer",
     validateTalkClientSteerParams,
-    async ({ params, respond, client, context, sessionMutationAuthorization }) => {
+    async ({
+      params,
+      respond,
+      client,
+      context,
+      sessionMutationAuthorization,
+      hasCurrentClientAuthority,
+    }) => {
       try {
         const target =
           sessionMutationAuthorization?.talkSessionTarget ??
@@ -411,21 +404,33 @@ export const talkClientHandlers: GatewayRequestHandlers = {
           );
           return;
         }
-        const result = await controlRealtimeVoiceAgentRun({
-          sessionKey: target.canonicalKey,
-          runTarget,
-          getToolAuthorityOverlay: () =>
-            prepareTalkClientControlAuthority({
-              config: context.getRuntimeConfig(),
-              agentRuntime: createPluginRuntime().agent,
-              sessionTarget: target,
-              source: runTarget.toolAuthoritySource,
-              authority: resolveTalkAgentConsultAuthority(client?.connect?.scopes, client),
-            }),
-          text: params.text,
-          mode: params.mode,
+        const captured = await captureGatewayOperatorRunAuthority({
+          client: client ?? null,
+          context,
+          hasCurrentClientAuthority,
         });
-        respond(true, result, undefined);
+        try {
+          const result = await controlRealtimeVoiceAgentRun({
+            sessionKey: target.canonicalKey,
+            runTarget,
+            getToolAuthorityOverlay: () =>
+              prepareTalkClientControlAuthority({
+                config: context.getRuntimeConfig(),
+                agentRuntime: createPluginRuntime().agent,
+                sessionTarget: target,
+                source: runTarget.toolAuthoritySource,
+                authority: {
+                  ...resolveTalkAgentConsultAuthority(client?.connect?.scopes, client),
+                  operatorAuthority: captured?.authority,
+                },
+              }),
+            text: params.text,
+            mode: params.mode,
+          });
+          respond(true, result, undefined);
+        } finally {
+          captured?.release();
+        }
       } catch (err) {
         respond(false, undefined, talkRequestError(err));
       }
