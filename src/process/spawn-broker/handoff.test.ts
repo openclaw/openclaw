@@ -1,5 +1,6 @@
 import { deepStrictEqual } from "node:assert/strict";
 import { once } from "node:events";
+import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { spawnBrokerCommand } from "./execa-client.js";
 import { createSpawnBrokerHost, type SpawnBrokerHost } from "./host.js";
@@ -42,6 +43,45 @@ describe.skipIf(skipBrokerTests)("spawn broker pipe handoff", () => {
     await closed;
     expect(await output).toBe("a".repeat(2 * 1024 * 1024));
   });
+
+  it.each(["pause", "resume-then-pause"] as const)(
+    "keeps a caller's %s request while publishing the output pipe",
+    async (mode) => {
+      const child = host.spawn(
+        process.execPath,
+        [
+          "-e",
+          `process.stdin.once('data', () => process.stdout.write('held', () => process.send('written')));
+           process.on('message', () => process.exit(0));
+           process.stdin.resume();`,
+        ],
+        { stdio: ["pipe", "pipe", "ignore", "ipc"] },
+      );
+      await child.ready();
+      const chunks: Buffer[] = [];
+      child.stdout!.on("data", (chunk: Buffer) => chunks.push(chunk));
+      try {
+        if (mode === "resume-then-pause") {
+          const resumed = once(child.stdout!, "resume");
+          child.stdout!.resume();
+          await resumed;
+        }
+        child.stdout!.pause();
+        const written = once(child, "message");
+        child.stdin!.write("go");
+        await written;
+        await yieldToEventLoop();
+        expect(child.stdout!.isPaused()).toBe(true);
+        expect(chunks).toEqual([]);
+      } finally {
+        const closed = once(child, "close");
+        child.stdout!.resume();
+        child.send("exit");
+        await closed;
+      }
+      expect(Buffer.concat(chunks).toString()).toBe("held");
+    },
+  );
 
   it.each(
     (["native", "unbuffered", "buffered"] as const).flatMap((transport) =>
