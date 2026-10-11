@@ -2,6 +2,7 @@ import { asNullableRecord, isRecord } from "@openclaw/normalization-core/record-
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { For, Show, createEffect, createMemo } from "solid-js";
 import { isMarkdownBlockArtText } from "../../../components/markdown-text.ts";
+import "../../../components/panel-elements.ts";
 import { CopyButton } from "../../../components/solid/copy-button.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
 import "../../../components/tooltip.ts";
@@ -26,14 +27,6 @@ import { HighlightedCommand } from "./chat-command-highlight.solid.tsx";
 import { DiffBlock } from "./chat-diff-render.solid.tsx";
 import type { SidebarContent } from "./chat-sidebar-content-types.ts";
 import { toolWorkspacePath, type ToolRenderOptions } from "./chat-tool-render-model.ts";
-
-declare module "@solidjs/web" {
-  namespace JSX {
-    interface IntrinsicElements {
-      "wa-tab-panel": HTMLAttributes<HTMLElement> & { name: string; "prop:active": boolean };
-    }
-  }
-}
 
 function handleRawDetailsToggle(event: Event) {
   // SAFETY: Only the raw-details HTML button installs this handler.

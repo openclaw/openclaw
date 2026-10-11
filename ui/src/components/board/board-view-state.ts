@@ -97,6 +97,7 @@ export class BoardViewState {
       previous?.session.sessionKey !== next.session.sessionKey ||
       previous?.snapshot?.sessionKey !== next.snapshot?.sessionKey;
     if (ownerChanged) {
+      this.actionError = "";
       this.initialLoading = true;
       this.host.scrollTop = 0;
       this.visitedTabs.clear();
@@ -106,7 +107,10 @@ export class BoardViewState {
       this.focusName = "";
     }
     if (snapshotChanged) {
-      this.actionError = "";
+      // Recovery reads can publish unchanged state after a failed mutation.
+      if (previous?.snapshot?.revision !== next.snapshot?.revision) {
+        this.actionError = "";
+      }
       const previousByName = new Map(
         previous?.snapshot?.widgets.map((widget) => [widget.name, widget]),
       );

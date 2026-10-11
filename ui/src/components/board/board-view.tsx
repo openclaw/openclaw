@@ -104,6 +104,7 @@ function BoardViewContent(props: BoardViewProps, host: BoardViewElement) {
         present: true,
         options: {
           widget: widgetsByName.get(rect.name),
+          boardRevision: snapshot?.revision ?? 0,
           rect,
           contentHeightPx: state.contentHeights.get(rect.name),
           fitAutoContent: props.fitAutoContent,

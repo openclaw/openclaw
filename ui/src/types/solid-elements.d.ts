@@ -2,6 +2,7 @@ import type WaDropdownItem from "@awesome.me/webawesome/dist/components/dropdown
 import type WaDropdown from "@awesome.me/webawesome/dist/components/dropdown/dropdown.js";
 import type WaPopover from "@awesome.me/webawesome/dist/components/popover/popover.js";
 import type WaTabGroup from "@awesome.me/webawesome/dist/components/tab-group/tab-group.js";
+import type WaTabPanel from "@awesome.me/webawesome/dist/components/tab-panel/tab-panel.js";
 import type WaTab from "@awesome.me/webawesome/dist/components/tab/tab.js";
 import type { JSX } from "@solidjs/web";
 import type { MascotMood } from "../components/mascot-pose.ts";
@@ -14,13 +15,6 @@ type LegacyAttributes<T extends HTMLElement> = JSX.HTMLAttributes<T> & JSX.Prope
 declare module "@solidjs/web" {
   namespace JSX {
     interface IntrinsicElements {
-      "wa-tab-group": HTMLAttributes<WaTabGroup> &
-        Properties<WaTabGroup> & {
-          activation?: WaTabGroup["activation"];
-          "without-scroll-controls"?: boolean;
-          "onWa-tab-show"?: (event: CustomEvent<{ name: string }>) => void;
-        };
-      "wa-tab": HTMLAttributes<WaTab> & Properties<WaTab> & { panel?: string };
       "openclaw-sparkline": HTMLAttributes<HTMLElement> & {
         "prop:label": string;
         "prop:sub"?: string;
@@ -30,6 +24,20 @@ declare module "@solidjs/web" {
         "prop:stackColors"?: readonly string[];
         "prop:autorange"?: boolean;
         autorange?: boolean;
+      };
+      "wa-tab-group": HTMLAttributes<WaTabGroup> & {
+        "prop:active": string;
+        activation: "auto" | "manual";
+        "without-scroll-controls": boolean;
+      };
+      "wa-tab": HTMLAttributes<WaTab> & {
+        panel: string;
+        "prop:active"?: boolean;
+        "prop:tabIndex"?: number;
+      };
+      "wa-tab-panel": HTMLAttributes<WaTabPanel> & {
+        name: string;
+        "prop:active": boolean;
       };
       "openclaw-tooltip": HTMLAttributes<HTMLElementTagNameMap["openclaw-tooltip"]> & {
         "prop:content"?: string;

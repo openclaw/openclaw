@@ -33,8 +33,8 @@ export function BoardTabs(props: {
         <wa-tab-group
           class="board-tabs__track"
           prop:active={props.activeTabId}
-          prop:activation="manual"
-          prop:withoutScrollControls={true}
+          activation="manual"
+          without-scroll-controls
           onWa-tab-show={(event: CustomEvent<{ name: string }>) => props.onTabShow(event)}
         >
           <For each={visible()} keyed={(tab) => tab.tabId}>
@@ -47,7 +47,7 @@ export function BoardTabs(props: {
                     "board-tabs__tab--drop": tab().tabId === props.hoverTabId,
                   },
                 ]}
-                prop:panel={tab().tabId}
+                panel={tab().tabId}
                 prop:active={tab().tabId === props.activeTabId}
                 data-board-tab-id={tab().tabId}
               >

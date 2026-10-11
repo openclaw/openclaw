@@ -3,4 +3,4 @@ export type {
   BoardWidgetCellCallbacks,
   BoardWidgetCellHandle,
   BoardWidgetCellProps,
-} from "./board-widget-cell.solid.tsx";
+} from "./board-widget-cell-options.ts";

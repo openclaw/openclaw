@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import { serialize } from "node:v8";
@@ -12,6 +13,7 @@ import {
 import {
   publishSqliteCommittedState,
   stageSqliteCommittedPublication,
+  stageSqliteTransactionState,
 } from "../infra/sqlite-post-commit.js";
 import { SQLITE_WORKER_MAX_MESSAGE_BYTES } from "../infra/sqlite-worker-contract.js";
 import {
@@ -36,6 +38,9 @@ type Rows = {
 type Row = Rows[keyof Rows];
 
 type Receipt = SqliteCommitReceipt<Row>;
+export type GitHubPublicationAuthorityReceipt =
+  | Receipt
+  | { kind: "unknown"; identity: string | symbol };
 type Change =
   | { kind: "committed"; receipt: Receipt }
   | { kind: "unknown"; identity: string | symbol }
@@ -43,6 +48,10 @@ type Change =
 
 const state = resolveGlobalSingleton(Symbol.for("openclaw.githubPublicationReceipts"), () => ({
   sources: new WeakMap<DatabaseSync, SqliteCommitSource>(),
+  capture: new AsyncLocalStorage<{
+    db: DatabaseSync;
+    facts: Map<string, SqliteCommittedFact<Row>>;
+  }>(),
   facts: new Set<(change: Change) => void>(),
 }));
 
@@ -107,6 +116,23 @@ export function deferGitHubPublicationDeletionReceipt(
   );
 }
 
+/** Capture the same authority rows as native writes, including their lifecycle sidecars. */
+export function captureGitHubPublicationWorkerReceipt<T extends object>(
+  db: DatabaseSync,
+  write: () => T,
+): T & { authority: GitHubPublicationAuthorityReceipt } {
+  const facts = new Map<string, SqliteCommittedFact<Row>>();
+  return state.capture.run({ db, facts }, () => {
+    const value = write();
+    const authority = createGitHubPublicationReceipt(db, facts);
+    const receipt: T & { authority: GitHubPublicationAuthorityReceipt } = { ...value, authority };
+    if (serialize(receipt).byteLength > SQLITE_WORKER_MAX_MESSAGE_BYTES) {
+      receipt.authority = { kind: "unknown", identity: authority.source.identity };
+    }
+    return receipt;
+  });
+}
+
 function stageGitHubPublicationRow<Kind extends keyof Rows>(
   db: DatabaseSync,
   kind: Kind,
@@ -116,10 +142,18 @@ function stageGitHubPublicationRow<Kind extends keyof Rows>(
   delete value.title;
   delete value.body;
   delete value.next_action;
-  const receipt = createGitHubPublicationReceipt(
-    db,
-    new Map([[JSON.stringify([kind, row.request_id]), { kind: "postimage", value }]]),
-  );
+  const key = JSON.stringify([kind, row.request_id]);
+  const fact = { kind: "postimage", value } as const;
+  const capture = state.capture.getStore();
+  if (capture?.db === db) {
+    const previous = capture.facts.get(key);
+    stageSqliteTransactionState(db, {
+      stage: () => capture.facts.set(key, fact),
+      commit() {},
+      rollback: () => (previous ? capture.facts.set(key, previous) : capture.facts.delete(key)),
+    });
+  }
+  const receipt = createGitHubPublicationReceipt(db, new Map([[key, fact]]));
   const next = publication(receipt);
   if (!stageSqliteCommittedPublication(db, next) && !db.isTransaction) {
     publishSqliteCommittedState(next);
@@ -130,6 +164,24 @@ function stageGitHubPublicationRow<Kind extends keyof Rows>(
 export function withGitHubPublicationDeletionReceipt(
   createAdmission: SqliteWorkerAdmissionFactory,
   context: OpenClawStateWorkerContext,
+): SqliteWorkerAdmissionFactory {
+  return withGitHubPublicationReceipt(createAdmission, context, false);
+}
+
+/** Register before presentation observers so every reply sees installed authority facts. */
+export function withGitHubPublicationWorkerReceipt(
+  createAdmission: SqliteWorkerAdmissionFactory,
+  context: OpenClawStateWorkerContext,
+  publish: (facts: unknown) => void,
+): SqliteWorkerAdmissionFactory {
+  return withGitHubPublicationReceipt(createAdmission, context, true, publish);
+}
+
+function withGitHubPublicationReceipt(
+  createAdmission: SqliteWorkerAdmissionFactory,
+  context: OpenClawStateWorkerContext,
+  mutation: boolean,
+  publish?: (facts: unknown) => void,
 ): SqliteWorkerAdmissionFactory {
   return (operation) => {
     const owner = createAdmission(operation);
@@ -174,12 +226,14 @@ export function withGitHubPublicationDeletionReceipt(
       owner.admission.finish();
       throw error;
     }
-    observeSqliteWorkerCommittedFacts(owner.admission, ({ facts }) => {
+    observeSqliteWorkerCommittedFacts(owner.admission, ({ facts: payload }) => {
       try {
         (context.assertPublicationCurrent ?? context.admission.assertCurrent)();
+        const facts = mutation && isRecord(payload) ? payload.authority : payload;
         if (isRecord(facts) && facts.kind === "unknown" && facts.identity === identity()) {
           received = true;
           install({ kind: "unknown", identity: identity() });
+          publish?.(payload);
           return;
         }
         if (
@@ -194,21 +248,35 @@ export function withGitHubPublicationDeletionReceipt(
             keys: [...facts.facts.keys()],
           }) ||
           ![...facts.facts].every(([key, fact]) => {
-            if (typeof key !== "string" || !isRecord(fact) || fact.kind !== "absent") {
+            if (typeof key !== "string" || !isRecord(fact)) {
               return false;
             }
             const decoded: unknown = JSON.parse(key);
+            if (
+              !(
+                Array.isArray(decoded) &&
+                decoded.length === 2 &&
+                (mutation
+                  ? ["shared", "personal", "repository", "shared-lifecycle", "personal-lifecycle"]
+                  : ["personal", "repository", "personal-lifecycle"]
+                ).includes(decoded[0]) &&
+                typeof decoded[1] === "string"
+              )
+            ) {
+              return false;
+            }
             return (
-              Array.isArray(decoded) &&
-              decoded.length === 2 &&
-              ["personal", "repository", "personal-lifecycle"].includes(decoded[0]) &&
-              typeof decoded[1] === "string"
+              fact.kind === "absent" ||
+              (mutation &&
+                fact.kind === "postimage" &&
+                isRecord(fact.value) &&
+                fact.value.request_id === decoded[1])
             );
           })
         ) {
-          throw new Error("GitHub publication deletion receipt is invalid");
+          throw new Error("GitHub publication authority receipt is invalid");
         }
-        // SAFETY: The envelope and every exact tombstone key are validated above.
+        // SAFETY: The private worker owns row shapes; the envelope and exact keys were checked above.
         const receipt = facts as Receipt;
         installing = true;
         publishSqliteCommittedState(
@@ -223,6 +291,7 @@ export function withGitHubPublicationDeletionReceipt(
           }),
         );
         received = true;
+        publish?.(payload);
       } catch (error) {
         install({ kind: "unknown", identity: identity() });
         throw error;

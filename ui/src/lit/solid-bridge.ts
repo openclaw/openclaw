@@ -334,7 +334,7 @@ export function LitContent(props: {
   if (tag === "span") {
     host.style.display = "contents";
   }
-  const className = untrack(() => props.class);
+  const className = untrack(() => props.class ?? "lit-content");
   if (className) {
     host.className = className;
   }

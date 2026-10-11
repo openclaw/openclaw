@@ -46,6 +46,7 @@ export type BoardWidgetCellCallbacks = {
 
 export type BoardWidgetCellProps = {
   widget?: BoardWidget;
+  boardRevision?: number;
   rect?: BoardGridRect;
   contentHeightPx?: number;
   fitAutoContent?: boolean;

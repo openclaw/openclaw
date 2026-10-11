@@ -7,7 +7,7 @@ import { acquireNativeOverlayOcclusion } from "../lib/native-overlay-occlusion.t
 import { composedParent } from "../lib/navigation-click.ts";
 import { OpenClawLitElement } from "../lit/openclaw-element.ts";
 
-type ModalDialogAttributes = SolidJSX.HTMLAttributes<HTMLElement> & {
+type ModalDialogAttributes = SolidJSX.HTMLAttributes<OpenClawModalDialog> & {
   label: string;
   manual?: boolean;
   description?: string;

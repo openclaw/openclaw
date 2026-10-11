@@ -61,12 +61,6 @@ import {
 import { BoardWidgetFrameLifecycle } from "./board-widget-frame.tsx";
 import "../web-awesome.ts";
 
-export type {
-  BoardWidgetCellCallbacks,
-  BoardWidgetCellHandle,
-  BoardWidgetCellProps,
-} from "./board-widget-cell-options.ts";
-
 const loadMcpAppView = () => import("../mcp-app-view-registration.ts");
 const cells = new WeakMap<HTMLElement, BoardWidgetCellHandle>();
 
@@ -251,10 +245,12 @@ function BoardWidgetCellContent(
     },
   });
   let previousWidget = untrack(() => props.widget);
+  let previousBoardRevision = untrack(() => props.boardRevision);
   createEffect(
     () =>
       [
         props.widget,
+        props.boardRevision,
         props.callbacks,
         props.sessionKey,
         active(),
@@ -263,8 +259,18 @@ function BoardWidgetCellContent(
       ] as const,
     () =>
       untrack(() => {
-        if (previousWidget && previousWidget !== props.widget) {
+        if (previousBoardRevision !== props.boardRevision) {
           actionError = "";
+        }
+        previousBoardRevision = props.boardRevision;
+        if (previousWidget && previousWidget !== props.widget) {
+          if (
+            previousWidget.name !== props.widget?.name ||
+            previousWidget.instanceId !== props.widget?.instanceId ||
+            previousWidget.revision !== props.widget?.revision
+          ) {
+            actionError = "";
+          }
           frame.widgetChanged(previousWidget, props.widget);
           requestUpdate();
         }
@@ -667,6 +673,7 @@ export const BoardWidgetCell = defineSolidBridge<BoardWidgetCellProps, BoardWidg
   {
     properties: {
       widget: { default: undefined, attribute: false },
+      boardRevision: { default: 0, type: Number },
       rect: { default: undefined, attribute: false },
       contentHeightPx: { default: undefined, attribute: false },
       fitAutoContent: { default: false, type: Boolean },
