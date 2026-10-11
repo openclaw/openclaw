@@ -192,7 +192,9 @@ SQLite before installing OpenClaw. Fresh interactive onboarding receives
 exact Bun runtime path. `--no-onboard` leaves a fresh installation without a
 service; existing installed services are still re-pinned.
 
-`--bun-path` accepts an absolute, executable OpenClaw fork path. For published
+`--bun-path` accepts an absolute, executable OpenClaw fork path whose filename is
+`bun` or `bun.exe` (case-insensitive), matching the Gateway runtime-pin contract.
+Other filenames are refused before package installation or shell-profile changes. For published
 versions it must match the pin, including its executable hash. A custom package
 spec requires this option; its installed pin is checked before invoking the CLI.
 Git-checkout builds require Node/pnpm and cannot use `--runtime bun`. Windows,
