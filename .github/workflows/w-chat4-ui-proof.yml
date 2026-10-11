@@ -1,0 +1,92 @@
+# Temporary interruption diagnosis. Remove once its base/head evidence is recorded.
+name: W-CHAT-4 UI shard proof
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+permissions:
+  contents: read
+concurrency:
+  group: w-chat4-ui-proof-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+jobs:
+  ui-shard-proof:
+    if: github.event.pull_request.head.repo.full_name == github.repository && github.head_ref == 'solid2/w-chat-4' && !github.event.pull_request.draft
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      BASE_SHA: ${{ github.event.pull_request.base.sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: ./.github/actions/setup-node-env
+        with:
+          node-version: 24.21.0
+          install-bun: "false"
+          cache-mode: restore
+      - uses: ./.github/actions/setup-test-bun
+      - name: Install capture browser
+        run: node --import ./scripts/tsx.mjs scripts/ensure-playwright-chromium.mts
+      - name: Prepare base
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$HEAD_SHA"
+          base="$(git merge-base "$HEAD_SHA" "$BASE_SHA")"
+          base_tree="$RUNNER_TEMP/w-chat4-ui-base"
+          git worktree add --detach "$base_tree" "$base"
+          python3 - "$GITHUB_WORKSPACE" "$base_tree" <<'PY'
+          from pathlib import Path
+          import sys
+          root, base = map(Path, sys.argv[1:])
+          paths = [root / "node_modules", root / "ui/node_modules"]
+          for group in ["packages", "extensions", "tools"]:
+              paths.extend((root / group).glob("*/node_modules"))
+          for source in paths:
+              target = base / source.relative_to(root)
+              if source.exists() and not target.exists():
+                  target.parent.mkdir(parents=True, exist_ok=True)
+                  target.symlink_to(source, target_is_directory=True)
+          PY
+          mkdir -p .artifacts/w-chat4-ui-proof
+          printf '%s\n' "$base" > .artifacts/w-chat4-ui-proof/base-sha.txt
+          printf '%s\n' "$HEAD_SHA" > .artifacts/w-chat4-ui-proof/head-sha.txt
+      - name: Record the same UI shard on base and head
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          import subprocess
+          root = Path(os.environ["GITHUB_WORKSPACE"])
+          output = root / ".artifacts/w-chat4-ui-proof"
+          command = ["timeout", "--signal=TERM", "--kill-after=15s", "10m", "node", "--import", "./scripts/tsx.mjs", "scripts/ci-run-node-test-shard.mts"]
+          environment = {
+              **os.environ,
+              "OPENCLAW_CI_TEST_RUNTIME_POLICY": "bun-compatible",
+              "OPENCLAW_NODE_TEST_CONFIGS_JSON": '["ui/vitest.config.ts"]',
+              "OPENCLAW_NODE_TEST_PLAN_CONCURRENCY": "1",
+              "OPENCLAW_NODE_TEST_VITEST_ARGS_JSON": '["--maxWorkers","3","--reporter=verbose","--reporter=github-actions","--reporter=./scripts/lib/vitest-resource-reporter.mts","--shard=2/3"]',
+          }
+          environment.pop("OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64", None)
+          results = []
+          for label, tree in [("base", Path(os.environ["RUNNER_TEMP"]) / "w-chat4-ui-base"), ("head", root)]:
+              log = output / f"{label}.txt"
+              with log.open("w") as stream:
+                  result = subprocess.run(command, cwd=tree, env=environment, stdout=stream, stderr=subprocess.STDOUT)
+              print(f"{label}: exit {result.returncode}; log {log}", flush=True)
+              results.append({"tree": label, "command": command, "exitCode": result.returncode})
+          (output / "results.json").write_text(json.dumps(results, indent=2) + "\n")
+          PY
+      - name: Upload diagnostic evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: w-chat4-ui-proof-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .artifacts/w-chat4-ui-proof
+          retention-days: 7
+          if-no-files-found: error
