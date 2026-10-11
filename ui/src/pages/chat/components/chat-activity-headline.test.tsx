@@ -1,10 +1,17 @@
 /* @vitest-environment jsdom */
 
-import { html, nothing, render } from "lit";
+import { nothing, render } from "lit";
+import { createSignal, flush } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentActivityItem } from "../../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { projectAgentToolActivity } from "../../../../../src/infra/agent-activity-events.js";
-import { activityHeadline, type ActivityHeadline } from "./chat-activity-headline.ts";
+import { SolidContentPresentation } from "../../../lit/solid-content.tsx";
+import { mountSolid } from "../../../test-helpers/mount-solid.ts";
+import {
+  ChatActivityHeadline,
+  type ChatActivityHeadlineProps,
+} from "./chat-activity-headline.solid.tsx";
+import type { ActivityHeadline } from "./chat-activity-headline.ts";
 import { renderActivityGroup } from "./chat-message-group.ts";
 import {
   createAssistantMessage,
@@ -16,22 +23,63 @@ import {
 import { renderToolFixture, settleToolBridges } from "./chat-tool-render.test-support.ts";
 
 let container: HTMLDivElement;
+let updateHeadline: ((props: ChatActivityHeadlineProps) => void) | undefined;
+let presentHeadline: ((active: boolean) => void) | undefined;
 beforeEach(() => {
   vi.useFakeTimers();
   vi.setSystemTime(10_000);
   container = document.createElement("div");
+  updateHeadline = undefined;
+  presentHeadline = undefined;
 });
 afterEach(() => {
-  render(nothing, container);
+  if (!updateHeadline) {
+    render(nothing, container);
+  }
   vi.useRealTimers();
 });
+
+function advanceTimersByTime(ms: number) {
+  vi.advanceTimersByTime(ms);
+  flush();
+}
 
 function operation(key: string, status: ActivityHeadline["status"] = "running"): ActivityHeadline {
   return { key, title: "Read " + key, status };
 }
 
+function drawHeadline(props: ChatActivityHeadlineProps) {
+  if (!updateHeadline) {
+    mountSolid(
+      () => {
+        const [current, setCurrent] = createSignal(props);
+        const [active, setActive] = createSignal(true);
+        updateHeadline = setCurrent;
+        presentHeadline = setActive;
+        return (
+          <SolidContentPresentation value={active}>
+            <button>
+              <ChatActivityHeadline {...current()} />
+            </button>
+          </SolidContentPresentation>
+        );
+      },
+      { container },
+    );
+  } else {
+    updateHeadline(props);
+    flush();
+  }
+  return {
+    setConnected: (active: boolean) => {
+      presentHeadline?.(active);
+      flush();
+    },
+  };
+}
+
 function update(activity: ActivityHeadline | undefined, scope = "session:run") {
-  return render(html`<button>${activityHeadline(scope, activity, "2 reads")}</button>`, container);
+  return drawHeadline({ scope, activity, summary: "2 reads" });
 }
 
 function label() {
@@ -41,47 +89,45 @@ function label() {
 describe("activity headline cadence", () => {
   it("holds new copy for three seconds and replaces pending work instead of replaying a backlog", () => {
     update(operation("first"));
-    vi.advanceTimersByTime(400);
+    advanceTimersByTime(400);
     update(operation("discarded"));
-    vi.advanceTimersByTime(400);
+    advanceTimersByTime(400);
     update(operation("latest"));
-    vi.advanceTimersByTime(2_199);
+    advanceTimersByTime(2_199);
     expect(label()).toBe("Read first…");
-    vi.advanceTimersByTime(1);
+    advanceTimersByTime(1);
     expect(label()).toBe("Read latest…");
     expect(vi.getTimerCount()).toBe(0);
 
     update(operation("next"));
-    vi.advanceTimersByTime(2_999);
+    advanceTimersByTime(2_999);
     expect(label()).toBe("Read latest…");
-    vi.advanceTimersByTime(1);
+    advanceTimersByTime(1);
     expect(label()).toBe("Read next…");
-    vi.advanceTimersByTime(30_000);
+    advanceTimersByTime(30_000);
     expect(label()).toBe("Read next…");
     expect(vi.getTimerCount()).toBe(0);
   });
 
   it("keeps outcome labels with a held purpose and drops them beside the count", () => {
     const draw = (activity: ActivityHeadline) =>
-      render(
-        html`<button>
-          ${activityHeadline("session:run", activity, "2 reads · 1 unknown", undefined, undefined, [
-            "1 unknown",
-          ])}
-        </button>`,
-        container,
-      );
+      drawHeadline({
+        scope: "session:run",
+        activity,
+        summary: "2 reads · 1 unknown",
+        outcomes: ["1 unknown"],
+      });
     const outcomes = () =>
       [...container.querySelectorAll(".chat-activity-group__outcome")].map(
         (node) => node.textContent,
       );
     draw(operation("first"));
-    vi.advanceTimersByTime(100);
+    advanceTimersByTime(100);
     // A step with no title waits its turn; the purpose still on show keeps its label.
     draw({ ...operation("untitled"), title: "" });
     expect(label()).toBe("Read first…");
     expect(outcomes()).toEqual(["1 unknown"]);
-    vi.advanceTimersByTime(2_900);
+    advanceTimersByTime(2_900);
     // The count line carries the outcome itself.
     expect(label()).toBe("2 reads · 1 unknown");
     expect(outcomes()).toEqual([]);
@@ -94,7 +140,7 @@ describe("activity headline cadence", () => {
     expect(label()).toBe("2 reads");
     expect(container.querySelector(".chat-activity-group__label--live")).toBeNull();
     expect(vi.getTimerCount()).toBe(0);
-    vi.advanceTimersByTime(3_000);
+    advanceTimersByTime(3_000);
     expect(label()).toBe("2 reads");
     update(operation("fresh"));
     expect(label()).toBe("Read fresh…");
@@ -102,13 +148,13 @@ describe("activity headline cadence", () => {
 
   it("starts a fresh dwell when a new scope reuses the same operation identity", () => {
     update(operation("first"));
-    vi.advanceTimersByTime(2_000);
+    advanceTimersByTime(2_000);
     update(operation("stale"));
     update(operation("first"), "new-scope");
     update(operation("next"), "new-scope");
-    vi.advanceTimersByTime(2_999);
+    advanceTimersByTime(2_999);
     expect(label()).toBe("Read first…");
-    vi.advanceTimersByTime(1);
+    advanceTimersByTime(1);
     expect(label()).toBe("Read next…");
   });
 
@@ -118,7 +164,7 @@ describe("activity headline cadence", () => {
     expect(vi.getTimerCount()).toBe(1);
     root.setConnected(false);
     expect(vi.getTimerCount()).toBe(0);
-    vi.advanceTimersByTime(3_000);
+    advanceTimersByTime(3_000);
     expect(label()).toBe("Read first…");
     root.setConnected(true);
     expect(label()).toBe("Read pending…");
@@ -219,11 +265,11 @@ it("keeps the icon paired with the held purpose and restores the aggregate icon"
   await draw([exec]);
   expect(icon()?.getAttribute("aria-label")).toBe("exec");
   const execSvg = icon()?.innerHTML;
-  vi.advanceTimersByTime(100);
+  advanceTimersByTime(100);
   await draw([exec, search]);
   expect(label()).toBe("Inspect source…");
   expect(icon()?.getAttribute("aria-label")).toBe("exec");
-  vi.advanceTimersByTime(2_900);
+  advanceTimersByTime(2_900);
   await settleToolBridges(container);
   expect(label()).toBe('for "API docs"…');
   expect(icon()?.getAttribute("aria-label")).toBe("web_search");
@@ -262,7 +308,7 @@ it("keeps the headline and its dwell across disclosure toggles with accessible c
   summary.click();
   expect(onToggle).toHaveBeenCalledWith("activity:current", false);
 
-  vi.advanceTimersByTime(1_000);
+  advanceTimersByTime(1_000);
   draw([prepared("first", "completed")]);
   expanded = true;
   draw([prepared("first", "completed"), prepared("next")]);
@@ -270,9 +316,9 @@ it("keeps the headline and its dwell across disclosure toggles with accessible c
   expect(summary.getAttribute("aria-expanded")).toBe("true");
   expect(body.hidden).toBe(false);
   expect(container.querySelector(".chat-activity-group__summary")).toBe(summary);
-  vi.advanceTimersByTime(1_999);
+  advanceTimersByTime(1_999);
   expect(label()).toBe("Read first");
-  vi.advanceTimersByTime(1);
+  advanceTimersByTime(1);
   expect(label()).toBe("Read next…");
   expanded = false;
   draw([prepared("first", "completed"), prepared("next", "completed")]);
@@ -289,7 +335,7 @@ it("retains the latest completed operation between tools and returns to counts w
   render(renderActivityGroup(groups, { ...liveOptions, runActive: false }), container);
   expect(label()).toBe("1 read");
   expect(vi.getTimerCount()).toBe(0);
-  vi.advanceTimersByTime(3_000);
+  advanceTimersByTime(3_000);
   expect(label()).toBe("1 read");
 });
 
@@ -313,7 +359,7 @@ it.each(["failed", "blocked"] as const)(
     );
     expect(label()).toBe("Read urgent");
     expect(vi.getTimerCount()).toBe(0);
-    vi.advanceTimersByTime(3_000);
+    advanceTimersByTime(3_000);
     expect(label()).toBe("Read urgent");
   },
 );
@@ -337,7 +383,7 @@ it("selects only visible activity from the matching run and newest eligible grou
   expect(label()).toBe("3 reads");
   render(renderActivityGroup(groups, { ...liveOptions, activityRunId: "absent-run" }), container);
   expect(label()).toBe("3 reads");
-  vi.advanceTimersByTime(3_000);
+  advanceTimersByTime(3_000);
   expect(label()).toBe("3 reads");
 });
 
@@ -503,7 +549,7 @@ it.each([false, true])(
   "refreshes a held operation when completion and the next start coexist (duplicate start: %s)",
   (duplicateStart) => {
     render(renderActivityGroup([group("current", [prepared("first")])], liveOptions), container);
-    vi.advanceTimersByTime(200);
+    advanceTimersByTime(200);
     const settled = [
       ...(duplicateStart ? [prepared("first")] : []),
       prepared("first", "completed"),
@@ -517,7 +563,7 @@ it.each([false, true])(
       container,
     );
     expect(label()).toBe("Read first");
-    vi.advanceTimersByTime(2_800);
+    advanceTimersByTime(2_800);
     expect(label()).toBe("Read next…");
   },
 );

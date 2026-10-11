@@ -1,7 +1,7 @@
 import { onCleanup } from "solid-js";
 
 /** Preserve native bubbling order when an enclosing custom element consumes events. */
-export function nativeListener<EventName extends "click" | "keydown">(
+export function nativeListener<EventName extends "click" | "keydown" | "keyup">(
   type: EventName,
   handle: (event: HTMLElementEventMap[EventName]) => void,
 ) {

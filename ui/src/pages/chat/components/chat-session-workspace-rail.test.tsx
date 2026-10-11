@@ -1,8 +1,9 @@
 /* @vitest-environment jsdom */
 
-import { render } from "lit";
+import { createSignal, flush } from "solid-js";
 import { afterEach, assert, describe, expect, it, vi } from "vitest";
-import { renderSessionWorkspaceRail } from "./chat-session-workspace-rail.ts";
+import { mountSolid } from "../../../test-helpers/mount-solid.ts";
+import { SessionWorkspaceRail } from "./chat-session-workspace-rail-solid.tsx";
 import { getSessionWorkspace, loadSessionWorkspace } from "./chat-session-workspace-state.ts";
 import type { SessionWorkspaceProps } from "./chat-session-workspace-types.ts";
 import {
@@ -29,6 +30,18 @@ function createWorkspace(overrides: Partial<SessionWorkspaceProps> = {}): Sessio
   };
 }
 
+function mountWorkspace(workspace: SessionWorkspaceProps) {
+  const [current, setCurrent] = createSignal(workspace);
+  const view = mountSolid(() => <SessionWorkspaceRail workspace={current()} />);
+  return {
+    ...view,
+    update(this: void, next: SessionWorkspaceProps) {
+      setCurrent({ ...next });
+      flush();
+    },
+  };
+}
+
 afterEach(() => {
   document.body.replaceChildren();
   vi.unstubAllGlobals();
@@ -47,8 +60,7 @@ describe("session workspace path actions", () => {
       list: { sessionKey: "agent:main:workspace", root: "/workspace", files: [] },
       onBrowsePath,
     });
-    const mount = document.body.appendChild(document.createElement("div"));
-    render(renderSessionWorkspaceRail(workspace), mount);
+    const { container: mount } = mountWorkspace(workspace);
     const parent = mount.querySelector<HTMLButtonElement>('button[aria-label=".."]');
     if (scenario.parent === null) {
       expect(parent).toBeNull();
@@ -61,7 +73,8 @@ describe("session workspace path actions", () => {
     }
   });
 
-  it("keeps path-only session rows selected after their read and refresh", async () => {
+  it("keeps path-only rows selected and their actions focused after read and refresh", async () => {
+    vi.stubGlobal("navigator", { clipboard: { writeText: vi.fn().mockResolvedValue(undefined) } });
     const file = { kind: "modified", path: "README.md", name: "README.md", missing: false };
     const result = { sessionKey: "agent:main:current", root: "/workspace", files: [file] };
     const state = {
@@ -82,14 +95,15 @@ describe("session workspace path actions", () => {
     } as unknown as SessionWorkspaceHost;
     createSessionWorkspaceProps(state, { expanded: true });
     await vi.waitFor(() => expect(createSessionWorkspaceProps(state).list).not.toBeNull());
-    const container = document.createElement("div");
-    const renderRows = () =>
-      render(
-        renderSessionWorkspaceRail(createSessionWorkspaceProps(state, { expanded: true })),
-        container,
-      );
+    const { container, update } = mountWorkspace(
+      createSessionWorkspaceProps(state, { expanded: true }),
+    );
+    const renderRows = () => update(createSessionWorkspaceProps(state, { expanded: true }));
     renderRows();
-    container.querySelector<HTMLButtonElement>(".chat-workspace-rail__file-open")!.click();
+    const preview = container.querySelector<HTMLButtonElement>('button[aria-label="Preview"]');
+    assert(preview);
+    preview.focus();
+    preview.click();
     await vi.waitFor(() =>
       expect(state.sessionWorkspaceState?.previews[0]?.content.kind).toBe("file"),
     );
@@ -97,12 +111,21 @@ describe("session workspace path actions", () => {
     expect(container.querySelector(".chat-workspace-rail__file--active")?.textContent).toContain(
       "README.md",
     );
+    expect(document.activeElement).toBe(preview);
+    const copy = container.querySelector<HTMLButtonElement>('button[aria-label="Copy path"]');
+    assert(copy);
+    copy.focus();
+    copy.click();
+    await vi.waitFor(() => expect(copy.getAttribute("aria-label")).toBe("Copied!"));
     loadSessionWorkspace(state, getSessionWorkspace(state), true);
     await vi.waitFor(() => expect(createSessionWorkspaceProps(state).loading).toBe(false));
     renderRows();
     expect(container.querySelector(".chat-workspace-rail__file--active")?.textContent).toContain(
       "README.md",
     );
+    expect(document.activeElement).toBe(copy);
+    expect(container.querySelector('button[aria-label="Copied!"]')).toBe(copy);
+    expect(copy.parentElement?.querySelector('[role="status"]')?.textContent).toBe("Copied!");
   });
 
   it.each(["C:\\synthetic\\very-long-workspace-prefix"])(
@@ -128,8 +151,8 @@ describe("session workspace path actions", () => {
         activeId: `file:${paths[1]}`,
         onOpenFile,
       });
-      const mount = document.body.appendChild(document.createElement("div"));
-      const renderRows = () => render(renderSessionWorkspaceRail(workspace), mount);
+      const { container: mount, update } = mountWorkspace(workspace);
+      const renderRows = () => update(workspace);
       const labels = () =>
         [...mount.querySelectorAll(".chat-workspace-rail__file-name")].map(
           (row) => row.textContent,
@@ -188,8 +211,7 @@ describe("session workspace path actions", () => {
       },
       onOpenFile,
     });
-    const mount = document.body.appendChild(document.createElement("div"));
-    render(renderSessionWorkspaceRail(workspace), mount);
+    const { container: mount } = mountWorkspace(workspace);
 
     const row = mount.querySelector<HTMLElement>(`${testCase.selector} .chat-workspace-rail__file`);
     expect(row).toBeInstanceOf(HTMLElement);
@@ -231,9 +253,7 @@ describe("session workspace path actions", () => {
         ],
       },
     });
-    const mount = document.body.appendChild(document.createElement("div"));
-
-    render(renderSessionWorkspaceRail(workspace), mount);
+    const { container: mount, update } = mountWorkspace(workspace);
     const [changed, artifacts] = mount.querySelectorAll("details");
     assert(changed && artifacts, "Expected Changed and Artifacts disclosures");
     expect(changed.open).toBe(true);
@@ -241,13 +261,13 @@ describe("session workspace path actions", () => {
     changed.querySelector("summary")!.click();
     artifacts.querySelector("summary")!.click();
 
-    render(renderSessionWorkspaceRail({ ...workspace, activeId: "artifact:portrait-1" }), mount);
+    update({ ...workspace, activeId: "artifact:portrait-1" });
 
     expect(changed.open).toBe(false);
     expect(artifacts.open).toBe(true);
     artifacts.querySelector("summary")!.click();
     workspace.browserSearch = "IMAGE";
-    render(renderSessionWorkspaceRail(workspace), mount);
+    update(workspace);
 
     expect(mount.querySelectorAll(".chat-workspace-rail__group")).toHaveLength(1);
     expect(mount.querySelector("summary")?.textContent).toContain("Artifacts");
@@ -257,10 +277,10 @@ describe("session workspace path actions", () => {
     expect(mount.querySelector<HTMLInputElement>('input[type="search"]')?.value).toBe("IMAGE");
 
     workspace.browserSearch = "";
-    render(renderSessionWorkspaceRail(workspace), mount);
+    update(workspace);
     mount.querySelector("summary")!.click();
     expect(mount.querySelector("details")?.open).toBe(false);
-    render(renderSessionWorkspaceRail({ ...workspace, filter: "changed" }), mount);
+    update({ ...workspace, filter: "changed" });
 
     expect(mount.querySelectorAll("details")).toHaveLength(1);
     expect(mount.querySelector("details")?.open).toBe(true);
@@ -287,8 +307,8 @@ describe("session workspace path actions", () => {
           ...(scenario.browser ? { browser: { path: "", entries: [] } } : {}),
         },
       });
-      const mount = document.body.appendChild(document.createElement("div"));
-      const renderRows = () => render(renderSessionWorkspaceRail(workspace), mount);
+      const { container: mount, update } = mountWorkspace(workspace);
+      const renderRows = () => update(workspace);
       workspace.onSearch = (search) => {
         workspace.browserSearch = search;
         if (workspace.list?.browser) {
@@ -378,8 +398,7 @@ describe("session workspace path actions", () => {
           },
         },
       });
-      const mount = document.body.appendChild(document.createElement("div"));
-      render(renderSessionWorkspaceRail(workspace), mount);
+      const { container: mount, update } = mountWorkspace(workspace);
       expect(
         Array.from(
           mount.querySelectorAll(".chat-workspace-rail__file-name"),
@@ -393,7 +412,7 @@ describe("session workspace path actions", () => {
       ]);
       expect(mount.querySelector<HTMLInputElement>('input[type="search"]')?.value).toBe(query);
 
-      render(renderSessionWorkspaceRail({ ...workspace, browserSearch: "   " }), mount);
+      update({ ...workspace, browserSearch: "   " });
       expect(mount.querySelectorAll(".chat-workspace-rail__file-name")).toHaveLength(6);
     },
   );

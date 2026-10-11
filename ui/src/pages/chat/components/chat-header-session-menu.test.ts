@@ -397,14 +397,17 @@ describe("chat header session menu", () => {
       select(menu, "compact:open-view");
     }
     await menu.updateComplete;
-    expect(item(menu, "Speech bubbles").checked).toBe(false);
+    const bubbleItem = item(menu, "Speech bubbles");
+    expect(bubbleItem.checked).toBe(false);
     select(menu, "view:speech-bubbles");
     expect(onSettingsChange).toHaveBeenLastCalledWith({
       chatBubbleSessionKeys: ["agent:main:main", "agent:main:other"],
     });
     menu.settings = { ...menu.settings, ...onSettingsChange.mock.calls[0]![0] };
     await menu.updateComplete;
-    expect(item(menu, "Speech bubbles").checked).toBe(true);
+    // The open checkbox keeps its DOM identity and keyboard navigation position.
+    expect(item(menu, "Speech bubbles")).toBe(bubbleItem);
+    expect(bubbleItem.checked).toBe(true);
     menu.session = { ...menu.session, target: { key: "agent:main:third" } };
     await menu.updateComplete;
     expect(item(menu, "Speech bubbles").checked).toBe(false);

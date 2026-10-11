@@ -80,7 +80,7 @@ declare module "@solidjs/web" {
             HTMLElementTagNameMap["openclaw-viewer-facepile"],
             "staticParticipants" | "totalCount" | "maxVisible" | "personActivity"
           >
-        >;
+        > & { variant?: "session" };
       "openclaw-viewer-avatar": HTMLAttributes<HTMLElementTagNameMap["openclaw-viewer-avatar"]> &
         ElementProperties<
           Pick<
