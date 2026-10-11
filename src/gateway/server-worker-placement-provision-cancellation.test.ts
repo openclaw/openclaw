@@ -61,7 +61,7 @@ describe("dispatch Stop before provider allocation", () => {
     { identity: REQUEST.sessionKey, inherited: true },
   ])("preserves active $identity work (inherited: $inherited)", async ({ identity, inherited }) => {
     moveDestinationMocks.resolveGatewaySessionTarget().storeKeys.push("legacy-session-alias");
-    workspace.preflight.mockResolvedValue(undefined);
+    workspace.preflight.mockReset().mockResolvedValue(undefined);
     const placements = createWorkerSessionPlacementStore({ database: support.testState.stateDb });
     const environments = support.createService(support.createProvider());
     vi.spyOn(environments, "prepareProjectIntent").mockRejectedValue(
