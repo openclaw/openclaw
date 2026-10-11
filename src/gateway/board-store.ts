@@ -42,22 +42,26 @@ function resolveGatewaySessionDatabase(
 export const boardStore = new SqliteBoardStore({
   resolveSession: ({ sessionKey, agentId }) => {
     const scope = captureGatewaySessionStoreScope(sessionKey, agentId);
-    const memory = captureSessionActorStorageOwner(scope, { assertCurrent() {} });
+    const assertCurrent = () => {
+      const current = captureGatewaySessionStoreScope(sessionKey, agentId);
+      if (
+        current.agentId !== scope.agentId ||
+        current.storePath !== scope.storePath ||
+        current.sessionKey !== scope.sessionKey
+      ) {
+        throw new BoardValidationError("invalid_operation", "board session changed; retry");
+      }
+    };
+    const memory = captureSessionActorStorageOwner(scope, {
+      assertCurrent,
+      authorize: assertCurrent,
+    });
     const database = memory
       ? { agentId: memory.agentId, path: memory.path, sessionKey: scope.sessionKey }
       : resolveGatewaySessionDatabase(sessionKey, agentId);
     return {
       ...database,
-      assertCurrent() {
-        const current = captureGatewaySessionStoreScope(sessionKey, agentId);
-        if (
-          current.agentId !== scope.agentId ||
-          current.storePath !== scope.storePath ||
-          current.sessionKey !== scope.sessionKey
-        ) {
-          throw new BoardValidationError("invalid_operation", "board session changed; retry");
-        }
-      },
+      assertCurrent,
     };
   },
 });

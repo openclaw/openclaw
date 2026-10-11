@@ -25,6 +25,7 @@ import {
 import { loadSessionEntryForAdmission } from "../../config/sessions/session-accessor.sqlite-entry-admission.js";
 import { memorySessionActorOwners } from "../../config/sessions/session-actor-memory-owner.js";
 import { withSessionActorStorage } from "../../config/sessions/session-actor-storage-binding.js";
+import { readSessionTranscriptWatermarkAsync } from "../../config/sessions/session-transcript-watermark.js";
 import * as historyReaders from "../../config/sessions/session-transcript-worker-readers.js";
 import { withOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context.js";
 import { createStructuredOutboundPayloadPlan } from "../../infra/outbound/payloads.js";
@@ -37,7 +38,6 @@ import { closeOpenClawAgentDatabaseByPathAsync } from "../../state/openclaw-agen
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { projectChatDisplayMessage } from "../chat-display-projection.js";
-import * as sessionTranscriptReaders from "../session-transcript-readers.js";
 import {
   buildAssistantReplyContentFromInputs,
   extractAssistantDisplayText,
@@ -218,9 +218,7 @@ describe("chat delivery watermark preparation", () => {
         message: { role: "assistant", content: "Shared-store answer." },
       });
       expect(appended?.ok).toBe(true);
-      expect(
-        await sessionTranscriptReaders.readSessionTranscriptWatermarkAsync(scope),
-      ).toMatchObject({
+      expect(await readSessionTranscriptWatermarkAsync(scope)).toMatchObject({
         maxSeq: 1,
       });
       await closeOpenClawAgentDatabaseByPathAsync(storePath, "main");
@@ -239,9 +237,7 @@ describe("chat delivery watermark preparation", () => {
           };
         });
       try {
-        await expect(
-          sessionTranscriptReaders.readSessionTranscriptWatermarkAsync(scope),
-        ).rejects.toThrow("revoked");
+        await expect(readSessionTranscriptWatermarkAsync(scope)).rejects.toThrow("revoked");
       } finally {
         readerSpy.mockRestore();
       }

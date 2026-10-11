@@ -5,8 +5,10 @@ import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js
 import {
   loadSessionEntry,
   loadTranscriptEventsSync,
+  replaceSessionEntry,
   replaceSessionEntrySync,
 } from "../../../config/sessions/session-accessor.js";
+import { memorySessionActorOwners } from "../../../config/sessions/session-actor-memory-owner.js";
 import { projectionLane } from "../../../config/sessions/session-transcript-worker-resources.js";
 import { captureSessionTranscriptTargetBinding } from "../../../config/sessions/transcript-target-binding.js";
 import {
@@ -62,7 +64,7 @@ type InitialWriterFixture = {
   admission: PreparedAgentRunAdmission;
   controller: AbortController;
   manager: SessionManager;
-  openManager: () => SessionManager;
+  openManager: () => Promise<SessionManager>;
   promptState: Awaited<ReturnType<typeof createEmbeddedRunSessionPromptState>>;
   preparedSessionTarget: NonNullable<EmbeddedRunAttemptInternalParams["preparedSessionTarget"]>;
   replaceAdmission: () => Promise<void>;
@@ -108,12 +110,17 @@ async function withInitialWriter(
         runId,
       };
       if (options.existing) {
-        replaceSessionEntrySync(target, {
+        const entry: InternalSessionEntry = {
           sessionId,
           updatedAt: 1,
           lifecycleRevision: "existing-revision",
           ...(options.incognito ? { incognito: true } : {}),
-        });
+        };
+        if (options.incognito) {
+          await replaceSessionEntry(target, entry);
+        } else {
+          replaceSessionEntrySync(target, entry);
+        }
         const claim = await claimAgentSessionWriter(runParams);
         expect(claim?.expectedWriterRunId).toBe(runId);
         runParams.sessionTarget = { ...target, ...claim };
@@ -149,13 +156,21 @@ async function withInitialWriter(
           externalAbortController,
         });
         prepared = transcript;
-        const openManager = () =>
-          SessionManager.open({ ...target, ...promptState.sessionWriterFence }, state.workspaceDir);
-        const runFixture = () =>
+        const openManager = async () =>
+          options.incognito
+            ? await SessionManager.openAsync(
+                { ...target, ...promptState.sessionWriterFence },
+                state.workspaceDir,
+              )
+            : SessionManager.open(
+                { ...target, ...promptState.sessionWriterFence },
+                state.workspaceDir,
+              );
+        const runFixture = async () =>
           run({
             admission,
             controller,
-            manager: openManager(),
+            manager: await openManager(),
             openManager,
             promptState,
             preparedSessionTarget,
@@ -187,6 +202,12 @@ async function withInitialWriter(
       } finally {
         for (const owner of admissions) {
           owner.close();
+        }
+        if (options.incognito) {
+          memorySessionActorOwners.closeDatabase({
+            agentId: target.agentId,
+            path: target.storePath,
+          });
         }
       }
     }
@@ -254,9 +275,21 @@ describe("admitted lazy session writer", () => {
     async (incognito) => {
       await withInitialWriter(
         async ({ manager, runParams, target, transcript }) => {
-          if (incognito) {
-            expect(transcript.ownedTranscriptWriteContext.sessionActor).toBeUndefined();
-          }
+          const actor = transcript.ownedTranscriptWriteContext.sessionActor!.actor;
+          expect(actor.target.database.kind).toBe(incognito ? "memory" : "file");
+          const readPersisted = () => {
+            if (!incognito) {
+              return loadTranscriptEventsSync(target);
+            }
+            const result = actor.storage!.readCurrent(
+              { type: "session.history.hydrate", input: { sessionId: target.sessionId } },
+              { assertCurrent() {}, authorize() {} },
+            );
+            if (result.kind !== "full") {
+              throw new Error("Expected the committed memory transcript");
+            }
+            return result.snapshot.events;
+          };
           await manager.appendMessageAsync(userMessage);
           installSessionToolResultGuard(manager);
           const toolCall = (id: string) =>
@@ -265,7 +298,7 @@ describe("admitted lazy session writer", () => {
             });
           await manager.appendMessageAsync(toolCall("committed-result"));
           const acknowledge = vi.fn(() => {
-            expect(loadTranscriptEventsSync(target).at(-1)).toMatchObject({
+            expect(readPersisted().at(-1)).toMatchObject({
               type: "message",
               message: { role: "toolResult", toolCallId: "committed-result" },
             });
@@ -285,7 +318,7 @@ describe("admitted lazy session writer", () => {
           expect(acknowledge).toHaveBeenCalledOnce();
 
           await manager.appendMessageAsync(toolCall("refused-result"));
-          const before = loadTranscriptEventsSync(target);
+          const before = readPersisted();
           await claimAgentSessionWriter({ ...runParams, runId: "replacement-result-writer" });
           const refusedAcknowledgement = vi.fn();
           await expect(
@@ -297,7 +330,7 @@ describe("admitted lazy session writer", () => {
             ),
           ).rejects.toThrow(SessionTranscriptWriterClaimReboundError);
           expect(refusedAcknowledgement).not.toHaveBeenCalled();
-          expect(loadTranscriptEventsSync(target)).toEqual(before);
+          expect(readPersisted()).toEqual(before);
         },
         { existing: true, incognito },
       );
@@ -720,7 +753,7 @@ describe("admitted lazy session writer", () => {
         expect(identities).toEqual([]);
         expect(isSessionWorkAdmissionActive(target.storePath, [target.sessionKey])).toBe(true);
 
-        openManager().appendMessage(userMessage);
+        (await openManager()).appendMessage(userMessage);
         expect(promptState.sessionWriterFence?.expectedWriterRunId).toBe(runParams.runId);
         expect(loadSessionEntry(target)).toMatchObject({ activeWriterRunId: runParams.runId });
         expect(identities).toHaveLength(1);

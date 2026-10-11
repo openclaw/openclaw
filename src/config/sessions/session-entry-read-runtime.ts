@@ -10,6 +10,7 @@ import { retainOpenClawAgentDatabaseReadCandidates } from "../../state/openclaw-
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { cloneEnvWithPlatformSemantics } from "../config-env-vars.js";
 import { resolveStateDir } from "../state-dir.js";
+import { isInternalSessionEffectsKey } from "./internal-session-key.js";
 import { resolveSessionLifecycleTimestampsWithHeader } from "./lifecycle-timestamps.js";
 import { matchesPluginHostCleanupSession } from "./plugin-host-cleanup.js";
 import {
@@ -418,18 +419,32 @@ export async function withSessionEntriesFromStoreInWorker<T>(
     assertMemoryExactReadSource(input.preparedSource, memory.source);
     const projection =
       input.snapshotFields ?? (!input.projection || input.projection === "full" ? "full" : "list");
-    const selected = input.selection
-      ? memory.readById(input.selection.sessionId, projection, input.selection.orderBy)
-      : undefined;
-    const entries = input.selection
-      ? selected
-        ? [selected]
-        : []
-      : input.sessionKeys.flatMap((key) => {
-          const sessionKey = resolveSqliteSessionKey(key, memory.agentId);
-          const entry = memory.read(sessionKey, projection);
-          return entry ? [{ sessionKey, entry }] : [];
-        });
+    const selection = input.selection;
+    let entries: SessionEntrySummary[];
+    if (!selection) {
+      entries = input.sessionKeys.flatMap((key) => {
+        const sessionKey = resolveSqliteSessionKey(key, memory.agentId);
+        const entry = memory.read(sessionKey, projection);
+        return entry ? [{ sessionKey, entry }] : [];
+      });
+    } else if (selection.kind === "session-id") {
+      const selected = memory.readById(selection.sessionId, projection, selection.orderBy);
+      entries = selected ? [selected] : [];
+    } else {
+      entries = memory
+        .entries(projection)
+        .filter(
+          ({ sessionKey, entry }) =>
+            !isInternalSessionEffectsKey(sessionKey) &&
+            (selection.kind === "label"
+              ? entry.label === selection.label
+              : sessionKey === selection.sessionIdOrKey ||
+                entry.sessionId === selection.sessionIdOrKey),
+        );
+      entries.sort((left, right) =>
+        left.sessionKey < right.sessionKey ? -1 : left.sessionKey > right.sessionKey ? 1 : 0,
+      );
+    }
     const facts = new Map(entries.map(({ sessionKey }) => [sessionKey, memory.facts(sessionKey)]));
     const database = { agentId: memory.agentId, path: memory.path, env: input.env ?? process.env };
     const result: SessionExactEntriesWorkerResult = {

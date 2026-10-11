@@ -11,6 +11,7 @@ import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent
 import { maybeGenerateSessionTitle } from "./dashboard-session-title.js";
 
 const generate = vi.hoisted(() => vi.fn());
+// mock-isolation: Supply inference results without loading model runtimes; title persistence uses the real memory actor.
 vi.mock("../auto-reply/reply/conversation-label-generator.js", () => ({
   generateConversationLabelWithFallback: generate,
 }));

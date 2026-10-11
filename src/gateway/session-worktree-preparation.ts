@@ -178,7 +178,11 @@ async function prepareSpawnParentWorktreeSource(
   };
   const scope = { agentId, sessionKey: parent.canonicalKey, storePath: parent.storePath };
   const assertRouting = captureSessionMutationRouting(parent.cfg, refuse, [scope]);
-  const metadata = captureSessionEntryMetadataRead(scope);
+  const assertHostCurrent = () => {
+    options.signal?.throwIfAborted();
+    assertRouting(getRuntimeConfig());
+  };
+  const metadata = captureSessionEntryMetadataRead(scope, assertHostCurrent);
   const parentSource = captureSessionEntrySourceAssertion({
     scope,
     readSource: parent.capturedReadSource,
@@ -195,10 +199,7 @@ async function prepareSpawnParentWorktreeSource(
         refuse();
       }
     },
-    assertHostCurrent: () => {
-      options.signal?.throwIfAborted();
-      assertRouting(getRuntimeConfig());
-    },
+    assertHostCurrent,
     refuse,
   });
   if (!parent.entry.worktree) {
@@ -700,7 +701,6 @@ export async function prepareSessionWorktreeCreation(params: {
       },
     };
   }
-  const source = params.titleSource;
   // Empty creates have no persisted generation until the lifecycle owner commits.
   const title =
     !name && !params.label && lifecycleTarget.entry && lifecycleTarget.titleModelSelection !== null
@@ -715,7 +715,7 @@ export async function prepareSessionWorktreeCreation(params: {
           sessionKey: lifecycleTarget.key,
           storePath: lifecycleTarget.storePath,
           currentUserMessage: params.currentUserMessage,
-          userMessage: source,
+          userMessage: params.titleSource,
           commitGuard,
           withSource,
           onError: params.onTitleError,

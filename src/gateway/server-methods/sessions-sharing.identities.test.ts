@@ -11,7 +11,7 @@ import {
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import * as sharingStore from "../../config/sessions/session-sharing-store.js";
-import { listSessionMembers } from "../../config/sessions/session-sharing-store.js";
+import { readSessionMembersInWorker } from "../../config/sessions/session-sharing-store.js";
 import { addSessionMember } from "../../config/sessions/session-sharing-store.native.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import * as admission from "../../infra/sqlite-worker-operation-admission.js";
@@ -583,7 +583,9 @@ describe("session sharing authority", () => {
           release.resolve();
           await rejected;
           expect(respond).not.toHaveBeenCalled();
-          expect(listSessionMembers({ agentId: "main", sessionKey })).toEqual([]);
+          expect(
+            (await readSessionMembersInWorker({ agentId: "main", sessionKey })).members,
+          ).toEqual([]);
         } finally {
           release.resolve();
           await Promise.allSettled([pending]);

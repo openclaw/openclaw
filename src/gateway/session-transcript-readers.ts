@@ -5,10 +5,7 @@ import {
 import type { SessionTranscriptReadScope } from "../config/sessions/session-accessor.sqlite-contract.js";
 import type { SessionTranscriptBoundedMessageTailOptions } from "../config/sessions/session-accessor.sqlite-projection-read.js";
 import { bindSessionTranscriptStoreScope } from "../config/sessions/session-accessor.transcript-target.js";
-import {
-  captureSessionActorStorageOwner,
-  withSessionActorStorage,
-} from "../config/sessions/session-actor-storage-binding.js";
+import { withSessionActorStorage } from "../config/sessions/session-actor-storage-binding.js";
 import { captureSessionActorTranscriptRead } from "../config/sessions/session-actor-transcript-read.js";
 import type { SessionTranscriptAccountingOptions } from "../config/sessions/session-transcript-accounting.types.js";
 import { captureSessionTranscriptStorageEnvironment } from "../config/sessions/transcript-target-binding.js";
@@ -31,7 +28,6 @@ import type {
 export type { SessionTranscriptReadScope } from "./session-transcript-read.types.js";
 export { capArrayByJsonBytes } from "./session-utils.fs.js";
 export { attachOpenClawTranscriptMeta } from "./session-transcript-entry-message.js";
-export { readSessionTranscriptVisibleMessageDeltaCore } from "../config/sessions/session-accessor.sqlite-active-events.js";
 
 function captureHistoryReadScope(scope: SessionTranscriptReadScope): SessionTranscriptReadScope {
   const target = bindSessionTranscriptStoreScope(scope);
@@ -243,8 +239,6 @@ export async function readSessionMessageByIdAsync(
   );
 }
 
-export { readSessionTranscriptWatermarkAsync } from "../config/sessions/session-transcript-watermark.js";
-
 /** Keep exact membership and selected payload reads in the owning history backend. */
 export const readSessionMessagesMatchingIdAsync = createHistoryPageReader(
   (reader, scope, messageId: string) => reader.readSessionMessagesMatchingIdAsync(scope, messageId),
@@ -276,18 +270,17 @@ export async function readSessionMessageCountAsync(
 }
 
 export async function readSessionReactionsAsync(scope: SessionTranscriptReadScope) {
-  const authority = { assertCurrent() {} };
-  const memory = captureSessionActorStorageOwner(scope, authority);
+  const memory = captureSessionActorTranscriptRead(scope);
   if (memory) {
     return (
       (await withSessionActorStorage(
-        scope,
+        memory.target,
         {
           lifetime: {
-            assertCurrent: memory.authority.assertCurrent,
-            assertReadable: memory.authority.assertCurrent,
+            assertCurrent: memory.assertCurrent,
+            assertReadable: memory.assertCurrent,
           },
-          authority: memory.authority,
+          authority: { assertCurrent: memory.assertCurrent, authorize: memory.assertCurrent },
         },
         (binding) =>
           binding.actor.storage.read(

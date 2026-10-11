@@ -7,7 +7,6 @@ import {
 } from "../config/sessions/session-actor-storage-binding.js";
 import {
   isSessionMember,
-  listSessionMembers,
   readSessionMembersInWorker,
 } from "../config/sessions/session-sharing-store.js";
 import { prepareSessionSourceAuthority } from "../config/sessions/session-source-authority.js";
@@ -164,16 +163,15 @@ it("reads unbound sibling and batch sharing from the captured owner", async () =
       ),
     ).toMatchObject({ kind: "committed" });
     expect(isSessionMember(scope, "sibling-reader")).toBe(true);
-    expect(listSessionMembers(scope)).toEqual([
+    expect((await readSessionMembersInWorker(scope)).members).toEqual([
       { identityId: "sibling-reader", addedBy: "owner", addedAt: 1 },
     ]);
-    expect((await readSessionMembersInWorker(scope)).members).toHaveLength(1);
     await sibling.storage!.mutate(
       { type: "session.collaboration.remove", input: { identityId: "sibling-reader" } },
       authority,
     );
     expect(isSessionMember(scope, "sibling-reader")).toBe(false);
-    expect(listSessionMembers(scope)).toEqual([]);
+    expect((await readSessionMembersInWorker(scope)).members).toEqual([]);
     expect(
       await readSessionMembersInWorker({
         agentId: "other",

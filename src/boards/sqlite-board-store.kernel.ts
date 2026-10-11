@@ -1,11 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import type { BoardOp, BoardSnapshot } from "../../packages/gateway-protocol/src/index.js";
 import type { SessionEntry } from "../config/sessions/types.js";
-import {
-  executeSqliteQuerySync,
-  getNodeSqliteKysely,
-  sqliteStringSet,
-} from "../infra/kysely-sync.js";
+import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import {
   runSqliteDeferredTransactionSync,
   runSqliteImmediateTransactionSync,
@@ -302,26 +298,6 @@ export function hasBoardSession(
   } catch {
     return false;
   }
-}
-
-export function readBoardSessionKeys(
-  database: BoardDatabaseHandle,
-  sessionKeys: readonly string[],
-): Set<string> {
-  // Read-only connections cannot run the lazy DDL; pre-existing v13 databases
-  // have no board tables until their first write.
-  if (sessionKeys.length === 0 || !tableExists(database.db, "board_widgets")) {
-    return new Set();
-  }
-  const db = getNodeSqliteKysely<BoardDatabase>(database.db);
-  const query = db.selectFrom("board_tabs").select("session_key").distinct();
-  // Every persisted widget belongs to a tab.
-  return new Set(
-    executeSqliteQuerySync(
-      database.db,
-      query.where("session_key", "in", sqliteStringSet(sessionKeys)),
-    ).rows.map((row) => row.session_key),
-  );
 }
 
 export function readBoardSnapshotWithHtmlViewMetadata(

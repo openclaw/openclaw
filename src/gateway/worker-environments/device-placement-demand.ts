@@ -1,5 +1,4 @@
 import { loadExactSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
-import { captureSessionEntryMetadataRead } from "../../config/sessions/session-entry-source-authority.js";
 import { captureGatewaySessionWorkAdmissions } from "../../sessions/session-lifecycle-admission.js";
 import type { GatewayContextResolver } from "../server-methods/types.js";
 import { DEVICE_WORKER_PROVIDER_ID } from "./device-provider-identity.js";
@@ -57,13 +56,10 @@ function projectDemand(
         sessionKey: placement.sessionKey,
         agentId: placement.agentId,
       };
-      const metadata = captureSessionEntryMetadataRead(target);
-      const entry = metadata
-        ? metadata.readCurrent()
-        : loadExactSessionEntryReadOnly({
-            ...target,
-            projection: "list",
-          })?.entry;
+      const entry = loadExactSessionEntryReadOnly({
+        ...target,
+        projection: "list",
+      })?.entry;
       if (entry?.sessionId !== placement.sessionId) {
         continue;
       }

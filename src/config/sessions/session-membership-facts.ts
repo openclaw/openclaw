@@ -33,7 +33,7 @@ export function readSessionMembershipFactsInDatabase(
 }
 
 /** Connection-bound catalog rows; the transport supplies its own store identity. */
-export function readSessionMembershipRowsInDatabase(
+function readSessionMembershipRowsInDatabase(
   database: Pick<OpenClawAgentDatabase, "agentId" | "db">,
   sessionKeys?: readonly string[],
 ): SessionMembershipFact[] {

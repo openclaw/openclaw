@@ -89,7 +89,15 @@ async function prepareSessionGenerationLease(
   if (!isSessionGenerationFacts(input)) {
     throw new SessionDeliveryGenerationUnavailableError();
   }
-  const memory = captureSessionActorStorageOwner(input, { assertCurrent() {}, authorize() {} });
+  const memory = captureSessionActorStorageOwner(
+    {
+      agentId: input.agentId,
+      storePath: input.storePath,
+      sessionKey: input.sessionKey,
+      env: input.env,
+    },
+    { assertCurrent() {}, authorize() {} },
+  );
   if (memory) {
     return prepareMemorySessionGeneration(memory, input, onRevoked);
   }

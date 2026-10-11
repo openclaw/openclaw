@@ -1,22 +1,13 @@
 import { isDeepStrictEqual } from "node:util";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
-import type { SessionLifecycleArtifactCleanupParams } from "./session-accessor.lifecycle-types.js";
 import { collectSessionStateIdsForEntry } from "./session-accessor.sqlite-references.js";
+import type {
+  MemoryLifecycleArtifactInput,
+  MemoryLifecycleArtifactPlan,
+} from "./session-actor-memory-entry-contract.js";
 import type { SessionActorMemoryWindow } from "./session-actor-memory-state.js";
 import type { SessionActorMemoryStorageContext } from "./session-actor-memory-storage-context.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
-
-export type MemoryLifecycleArtifactInput = Pick<
-  SessionLifecycleArtifactCleanupParams,
-  | "sessionKeySegmentPrefix"
-  | "transcriptContentMarker"
-  | "orphanTranscriptMinAgeMs"
-  | "pluginOwnerId"
-> & { nowMs: number };
-export type MemoryLifecycleArtifactPlan = {
-  entries: Array<{ sessionKey: string; expected: SessionEntry }>;
-  windows: Array<{ sessionKey: string; sessionId: string }>;
-};
 
 /** Selection stays with the memory owner; no transcript bodies cross this boundary. */
 export function planMemoryLifecycleArtifacts(

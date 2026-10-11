@@ -151,7 +151,13 @@ export function readSessionTitleFieldsFromTranscript(
   input: SessionTranscriptReadScope,
   opts?: SessionTitleReadOptions,
 ): SessionTitleFields {
-  const memory = captureSessionActorStorageOwner(input, { assertCurrent() {} });
+  const read = captureSessionActorTranscriptRead(input);
+  const memory =
+    read &&
+    captureSessionActorStorageOwner(input, {
+      assertCurrent: read.assertCurrent,
+      authorize: read.assertCurrent,
+    });
   if (memory) {
     const key =
       input.sessionKey ??

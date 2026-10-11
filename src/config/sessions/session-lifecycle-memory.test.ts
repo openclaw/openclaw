@@ -30,6 +30,7 @@ const external = vi.hoisted(() => ({
   ),
   prepareReceipt: vi.fn(),
 }));
+// mock-isolation: Stage external workspace cleanup while the real memory actor owns session lifecycle changes.
 vi.mock("../../state/session-repository-workspaces.js", () => ({
   createSessionRepositoryWorkspaceStore: () => ({
     path: "/synthetic/shared.sqlite",
@@ -37,9 +38,11 @@ vi.mock("../../state/session-repository-workspaces.js", () => ({
   }),
   findSessionRepositoryWorkspaces: external.findWorkspaces,
 }));
+// mock-isolation: Synthetic companion cleanup uses its own admission, without acquiring a shared-state database.
 vi.mock("../../state/openclaw-state-worker-context.js", () => ({
   captureOpenClawStateWorkerContext: () => ({ admission: { assertCurrent() {} } }),
 }));
+// mock-isolation: Control external receipt settlement without opening the durable publication store.
 vi.mock("../../state/github-personal-publication-lifecycle.js", () => ({
   preparePersonalGitHubSessionReceiptDeletion: external.prepareReceipt,
 }));

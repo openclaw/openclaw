@@ -355,6 +355,7 @@ export function createSessionRowPlacementProjection(
         | Extract<ReturnType<typeof withCanonicalSessionValidationDeferral>, { kind: "pending" }>
         | undefined;
       let preparedQueries: readonly Lookup[] = [];
+      let hasPrivateQueries = false;
       let selectedIds: readonly string[] = [];
       const privateTargets = new Map<string, PrivatePlacementTarget>();
       const privateRepositories = new Map<string, PreparedPrivateSessionRepository>();
@@ -370,16 +371,19 @@ export function createSessionRowPlacementProjection(
           privateSelections = [];
           privateTargets.clear();
           preparedQueries = queries(cfg);
+          hasPrivateQueries = false;
           const ids: string[] = [];
           for (const query of preparedQueries) {
             const key = privateSessionRowReadKey(cfg, query);
+            hasPrivateQueries ||= key !== undefined;
             const privateMemory = key
               ? captureSessionActorStorageOwner(
                   { ...query, sessionKey: query.key, sessionActor: memory, env },
-                  { assertCurrent: assertActive },
+                  { assertCurrent: assertActive, authorize: assertActive },
                 )
               : undefined;
             const snapshot = privateMemory?.owner?.readSession(query.key, privateMemory.authority);
+            const assertSessionCurrent = privateMemory?.owner?.captureSessionReadGuard(query.key);
             const row = privateMemory
               ? snapshot?.entry &&
                 createIncognitoSessionRow({
@@ -393,7 +397,9 @@ export function createSessionRowPlacementProjection(
                     identity: snapshot.version.epoch,
                     assertCurrent() {
                       assertActive();
-                      privateMemory.owner?.assertCurrent();
+                      assertSessionCurrent?.();
+                      privateMemory.binding?.actor.assertReadable();
+                      privateMemory.authority.assertCurrent();
                     },
                   },
                 })
@@ -494,7 +500,7 @@ export function createSessionRowPlacementProjection(
             exact = previous;
           }
         };
-        return memory || binding
+        return hasPrivateQueries
           ? withBoundIncognitoSessionRows(cfg, preparedQueries, consumePrepared, env)
           : consumePrepared();
       };
@@ -508,7 +514,7 @@ export function createSessionRowPlacementProjection(
       };
       const assertPublicationCurrent = (placementCurrent = true) => {
         // Only actor-backed preparation retains resources past the synchronous consumer.
-        if (!memory && !binding) {
+        if (!hasPrivateQueries) {
           return;
         }
         assertActive();

@@ -140,14 +140,12 @@ function filterSessionMessagesMatchingId(messages: unknown[], messageId: string)
 }
 
 /** Select and format one admitted projection; acquisition and archive fallback stay outside. */
-export function selectSessionTranscriptProjection<
-  Selection extends SessionTranscriptProjectionSelection,
->(
+function selectSessionTranscriptProjection<Selection extends SessionTranscriptProjectionSelection>(
   projection: CurrentTranscriptProjection,
   selection: Selection,
   sessionFile?: string,
 ): SessionTranscriptProjectionSelectionResults[Selection["kind"]];
-export function selectSessionTranscriptProjection(
+function selectSessionTranscriptProjection(
   projection: CurrentTranscriptProjection,
   selection: SessionTranscriptProjectionSelection,
   sessionFile?: string,

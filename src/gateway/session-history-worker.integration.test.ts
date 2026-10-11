@@ -9,7 +9,7 @@ import {
   replaceSessionEntry,
   waitForSessionTranscriptProjection,
 } from "../config/sessions/session-accessor.js";
-import { readTranscriptDisplayDelta } from "../config/sessions/session-accessor.sqlite-history-events.js";
+import { readTranscriptDisplayDelta } from "../config/sessions/session-accessor.sqlite-history-events.test-support.js";
 import { readActiveTranscriptEntryAnchor } from "../config/sessions/session-accessor.sqlite-transcript-anchor.js";
 import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { readSessionColdTranscript } from "../config/sessions/session-cold-storage-state.js";

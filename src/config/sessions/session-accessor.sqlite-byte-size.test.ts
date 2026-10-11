@@ -21,7 +21,7 @@ import { readTranscriptRawDelta } from "./session-accessor.sqlite-delta.js";
 import {
   readRecentSessionTranscriptHistoryEvents,
   readTranscriptDisplayDelta,
-} from "./session-accessor.sqlite-history-events.js";
+} from "./session-accessor.sqlite-history-events.test-support.js";
 import { readActiveTranscriptStats } from "./session-accessor.sqlite-history.test-support.js";
 import { readTranscriptEventRows } from "./session-accessor.sqlite-read.js";
 import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";

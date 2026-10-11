@@ -202,7 +202,7 @@ export async function executeQueuedContextEngineCompaction(input: {
   } = input;
   const incognito = captureSessionActorStorageOwner(runtimeTarget, {
     assertCurrent() {
-      host.assertActive();
+      host.assertActive?.();
     },
     authorize() {},
   });

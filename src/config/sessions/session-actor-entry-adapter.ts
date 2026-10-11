@@ -66,7 +66,7 @@ export async function patchSessionActorEntryInScope(
 }
 
 /** Async callbacks keep one compare-and-swap; closed reducers apply directly to current state. */
-export async function patchSessionActorEntry(
+async function patchSessionActorEntry(
   binding: SessionActorStorageBinding,
   params: Pick<SqliteSessionEntrySnapshotPatchParams, "update" | "options" | "sessionKey">,
 ) {
@@ -235,7 +235,7 @@ export async function createSessionActorEntryWithTranscriptInScope<TError>(
 }
 
 /** The entry, label claim, transcript and owner assignment install in one actor command. */
-export async function createSessionActorEntryWithTranscript<TError>(
+async function createSessionActorEntryWithTranscript<TError>(
   binding: SessionActorStorageBinding,
   env: NodeJS.ProcessEnv,
   createEntry: (

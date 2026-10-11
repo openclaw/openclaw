@@ -335,12 +335,16 @@ export function readResidentSessionRow(
 }
 
 export function readSessionRowEntry(row: records.Row) {
-  const memory = captureSessionActorStorageOwner(
-    { ...row.storeTarget, sessionKey: row.key },
-    { assertCurrent() {} },
-  );
-  if (memory && isIncognitoSessionKey(row.key)) {
-    return memory.owner?.readSession(row.key, memory.authority)?.entry;
+  if (isIncognitoSessionKey(row.key)) {
+    const source = row.privateSource;
+    if (!source) {
+      throw new Error("Incognito session rows require their actor source");
+    }
+    const memory = captureSessionActorStorageOwner(
+      { ...row.storeTarget, sessionKey: row.key },
+      { assertCurrent: source.assertCurrent, authorize: source.assertCurrent },
+    );
+    return memory?.owner?.readSession(row.key, memory.authority)?.entry;
   }
   const result = withOpenClawAgentDatabaseReadOnly(
     (database) => {
@@ -358,6 +362,7 @@ export function readSessionRowEntry(row: records.Row) {
 
 /** Exact incognito acquisition never admits an ephemeral store to the resident roster. */
 function readIncognitoSessionRow(params: {
+  assertCurrent: () => void;
   cfg: records.Inputs["cfg"];
   key: string;
   agentId: string;
@@ -366,12 +371,13 @@ function readIncognitoSessionRow(params: {
   const { key, agentId, storePath } = params;
   const memory = captureSessionActorStorageOwner(
     { agentId, sessionKey: key, storePath },
-    { assertCurrent() {} },
+    { assertCurrent: params.assertCurrent, authorize: params.assertCurrent },
   );
   const current = memory?.owner?.readSession(key, memory.authority);
   if (!current?.entry || !memory) {
     return undefined;
   }
+  const assertSessionCurrent = memory.owner?.captureSessionReadGuard(key);
   return records.createIncognitoSessionRow({
     ...params,
     storePath: memory.path,
@@ -380,7 +386,7 @@ function readIncognitoSessionRow(params: {
     source: {
       identity: current.version.epoch,
       assertCurrent() {
-        memory.owner?.assertCurrent();
+        assertSessionCurrent?.();
         memory.binding?.actor.assertReadable();
         memory.authority.assertCurrent();
       },
@@ -390,6 +396,7 @@ function readIncognitoSessionRow(params: {
 
 /** Bind discovery and resident identity reads to the projection's current owner. */
 export function createSessionRowLookup(owner: {
+  assertCurrent: () => void;
   state: () => {
     cfg: records.Inputs["cfg"];
     scope: ReturnType<typeof prepareSessionRowScopes>;
@@ -450,6 +457,7 @@ export function createSessionRowLookup(owner: {
       const { disposed, scope } = owner.state();
       return findSessionRowById(query, {
         disposed,
+        assertCurrent: owner.assertCurrent,
         scope,
         lookup: owner.lookup,
         matching: owner.matching,
@@ -463,6 +471,7 @@ function findSessionRowById(
   query: { sessionId: string; agentId?: string; storePath?: string; federated?: boolean },
   owner: {
     disposed: boolean;
+    assertCurrent: () => void;
     lookup: (query: records.Lookup) => records.Row | undefined;
     matching: (query: records.Query, kind?: string) => records.Row[];
     scope: ReturnType<typeof prepareSessionRowScopes>;
@@ -471,7 +480,10 @@ function findSessionRowById(
   if (owner.disposed) {
     return [];
   }
-  const memory = captureSessionActorStorageOwner(query, { assertCurrent() {} });
+  const memory = captureSessionActorStorageOwner(query, {
+    assertCurrent: owner.assertCurrent,
+    authorize: owner.assertCurrent,
+  });
   if (
     memory &&
     query.agentId &&
@@ -527,6 +539,7 @@ function findSessionRowById(
 export function lookupSessionRow(
   query: records.Lookup,
   owner: {
+    assertCurrent: () => void;
     cfg: records.Inputs["cfg"];
     rows: ReadonlyMap<string, records.Row>;
     byKey: ReadonlyMap<string, ReadonlySet<string>>;
@@ -560,7 +573,13 @@ export function lookupSessionRow(
       agentId,
     });
     if (isIncognitoSessionKey(key)) {
-      return readIncognitoSessionRow({ cfg: owner.cfg, key, agentId, storePath: query.storePath });
+      return readIncognitoSessionRow({
+        assertCurrent: owner.assertCurrent,
+        cfg: owner.cfg,
+        key,
+        agentId,
+        storePath: query.storePath,
+      });
     }
   } while (key !== query.key);
   return undefined;

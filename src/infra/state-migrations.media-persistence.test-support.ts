@@ -8,8 +8,17 @@ import {
   SESSION_ARCHIVE_ZSTD_SUFFIX,
 } from "../config/sessions/archive-compression.js";
 import { reconcileSessionTranscriptIndexInTransaction } from "../config/sessions/session-transcript-index.js";
-import { prepareMemorySessionTranscriptProjection } from "../config/sessions/session-transcript-projection-rebuild.js";
+import {
+  extractTranscriptIndexEntry,
+  hasTranscriptMessage,
+  shouldProjectActiveEvent,
+  transcriptEventContextEligibility,
+} from "../config/sessions/session-transcript-projection-append.js";
 import { transcriptEventJsonSql } from "../config/sessions/transcript-payload.js";
+import {
+  scanSessionTranscriptTree,
+  selectSessionTranscriptTreePathNodes,
+} from "../config/sessions/transcript-tree.js";
 import { registerOpenClawAgentDatabase } from "../state/openclaw-agent-db-registry.js";
 import type { DB } from "../state/openclaw-agent-db.generated.js";
 import {
@@ -145,40 +154,40 @@ function seedHistoricalTranscriptProjection(
   sessionId: string,
   events: readonly FixtureEvent[],
 ): void {
-  const firstTimestamp = Number(events[0]?.timestamp ?? 1);
-  const plan = prepareMemorySessionTranscriptProjection(
-    sessionId,
-    null,
-    new Map(
-      events.map((event, seq) => [
-        seq,
-        {
-          seq,
-          event_json: JSON.stringify(event),
-          created_at: Number(event.timestamp ?? firstTimestamp) + 100,
-        },
-      ]),
-    ),
-    `generation-${sessionId}`,
-  );
-  if (!plan) {
+  if (events.length === 0) {
     return;
   }
+  const firstTimestamp = Number(events[0]?.timestamp ?? 1);
+  const tree = scanSessionTranscriptTree(events);
+  const visiblePath = selectSessionTranscriptTreePathNodes(tree, tree.leafId);
+  const activeIndexes =
+    visiblePath.length > 0
+      ? visiblePath.map((node) => node.index)
+      : tree.hasLeafControl
+        ? []
+        : events.map((_, index) => index);
+  // Keep fixture writes on the historical schema; current projection readers need newer columns.
   const active = database.prepare(`INSERT INTO session_transcript_active_events
     (session_id,active_position,event_seq,message_position,context_eligible) VALUES(?,?,?,?,?)`);
-  for (const row of plan.activeRows) {
-    active.run(
-      sessionId,
-      row.activePosition,
-      row.eventSeq,
-      row.messagePosition,
-      row.contextEligible,
-    );
-  }
   const fts = database.prepare(`INSERT INTO session_transcript_fts
     (text,session_id,message_id,role,timestamp) VALUES(?,?,?,?,?)`);
-  for (const row of plan.ftsRows) {
-    fts.run(row.text, sessionId, row.messageId, row.role, row.timestamp);
+  let activeEventCount = 0;
+  let activeMessageCount = 0;
+  for (const index of activeIndexes) {
+    const event = events[index];
+    const row = extractTranscriptIndexEntry(event, Number(event.timestamp ?? firstTimestamp) + 100);
+    if (row) {
+      fts.run(row.text, sessionId, row.messageId, row.role, row.timestamp);
+    }
+    if (shouldProjectActiveEvent(event)) {
+      active.run(
+        sessionId,
+        activeEventCount++,
+        index,
+        hasTranscriptMessage(event) ? activeMessageCount++ : null,
+        transcriptEventContextEligibility(event),
+      );
+    }
   }
   database
     .prepare(`INSERT INTO session_transcript_index_state
@@ -186,10 +195,10 @@ function seedHistoricalTranscriptProjection(
     VALUES(?,?,?,0,?,?,?)`)
     .run(
       sessionId,
-      plan.sourceIndexedSeq,
-      plan.leafEventId,
-      plan.activeEventCount,
-      plan.activeMessageCount,
+      events.length - 1,
+      tree.appendParentId,
+      activeEventCount,
+      activeMessageCount,
       firstTimestamp,
     );
 }

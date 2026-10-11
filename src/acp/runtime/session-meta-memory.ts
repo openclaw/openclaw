@@ -33,7 +33,7 @@ export function acquireAcpMemorySession(params: AcpSessionEntryReadInput, create
     },
     {
       create,
-      lifetime: { assertCurrent },
+      lifetime: { assertCurrent, assertReadable: assertCurrent },
       authority: { assertCurrent, authorize: assertCurrent },
     },
   );

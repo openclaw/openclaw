@@ -13,9 +13,11 @@ vi.mock("../agents/utility-model.js", () => ({ resolveUtilityModelRefForAgent })
 vi.mock("../auto-reply/reply/conversation-label-generator.js", () => ({
   generateConversationLabelWithFallback,
 }));
+// mock-isolation: Title orchestration writes synthetic entry state instead of acquiring a persistence owner.
 vi.mock("../config/sessions/session-accessor.js", () => ({
   patchSessionEntryCore: updateSessionEntry,
 }));
+// mock-isolation: Read the same synthetic entry state as the write fixture without starting session workers.
 vi.mock("../config/sessions/session-entry-read-runtime.js", () => ({
   readSessionEntryReadOnlyInWorker: loadSessionEntry,
 }));

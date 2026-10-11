@@ -30,8 +30,13 @@ export async function withMemorySessionRows<T>(
   consume: (rows: ReadonlyMap<string, Row | undefined>) => T,
   env: NodeJS.ProcessEnv,
 ): Promise<T> {
-  const authority = binding?.authority ?? { assertCurrent() {} };
   let active = true;
+  const assertActive = () => {
+    if (!active) {
+      throw new Error("Memory row consumer is no longer active");
+    }
+  };
+  const authority = binding?.authority ?? { assertCurrent: assertActive, authorize: assertActive };
   const releases: Array<() => void | Promise<void>> = [];
   const presentations: Array<{
     key: string;
@@ -69,9 +74,7 @@ export async function withMemorySessionRows<T>(
       }
       const selected = { actor, authority, agentId: namespace.agentId, path: namespace.path };
       const assertCurrent = () => {
-        if (!active) {
-          throw new Error("Memory row consumer is no longer active");
-        }
+        assertActive();
         actor.assertReadable();
         authority.assertCurrent();
       };

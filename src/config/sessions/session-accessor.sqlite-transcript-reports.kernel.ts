@@ -18,7 +18,6 @@ import type {
   PreparedTranscriptReport,
   SelectedTranscriptReport,
   TranscriptReportSelection,
-  TranscriptReport,
 } from "./session-accessor.sqlite-transcript-reports.types.js";
 import { appendTranscriptEventInTransaction } from "./session-accessor.sqlite-transcript-store.js";
 import { assertSessionTranscriptHot } from "./session-cold-storage-state.js";
@@ -119,37 +118,6 @@ export function prepareTranscriptReportSelection(
     (seq) => readReportEvent(database, resolved.sessionId, seq),
     selection,
   );
-}
-
-/** Process-held reports select and append without crossing their native transaction boundary. */
-export function appendSessionTranscriptReportInTransaction(
-  database: OpenClawAgentDatabase,
-  resolved: ResolvedTranscriptScope,
-  report: TranscriptReport,
-): void {
-  const facts = prepareTranscriptReportSelection(
-    database,
-    resolved,
-    report.kind === "assistant"
-      ? { kind: "assistant", responseId: report.message.responseId }
-      : report,
-  );
-  if (facts.suppressed) {
-    return;
-  }
-  if (report.kind === "assistant") {
-    appendSelectedTranscriptReportInTransaction(database, resolved, facts.appendParentId, report);
-    return;
-  }
-  const selected = report.selectReport(facts.latest);
-  if (selected) {
-    appendSelectedTranscriptReportInTransaction(
-      database,
-      resolved,
-      facts.appendParentId,
-      prepareCustomTranscriptReport(selected, facts.appendParentId),
-    );
-  }
 }
 
 /** The producer has settled; only its committed answer may replace the buffered fallback. */

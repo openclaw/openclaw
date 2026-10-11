@@ -58,7 +58,7 @@ export async function createReplyTranscriptFixture(
       message: persisted,
       ...(parentId ? { parentId } : {}),
     });
-    if (!result?.ok) {
+    if (!result.messageId) {
       throw new Error("Expected committed receipt fixture message");
     }
     // Tool-bearing assistant updates intentionally have no top-level runId.

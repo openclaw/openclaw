@@ -390,12 +390,18 @@ export async function maybeGenerateDashboardSessionTitle(
 export async function maybeGenerateSessionTitle(params: SessionTitleParams): Promise<boolean> {
   const sessionKey = resolveStoredSessionKeyForAgentStore(params);
   const scope = { agentId: params.agentId, sessionKey, storePath: params.storePath };
+  const assertCurrent = () => params.commitGuard?.();
   const memory = captureSessionActorStorageOwner(scope, {
-    assertCurrent: () => params.commitGuard?.(),
+    assertCurrent,
+    authorize: assertCurrent,
   });
-  if (memory && !memory.owner?.readSession(sessionKey, memory.authority)?.entry) return false;
+  if (memory && !memory.owner?.readSession(sessionKey, memory.authority)?.entry) {
+    return false;
+  }
+  const assertMemorySessionCurrent = memory?.owner?.captureSessionReadGuard(sessionKey);
   const assertMemoryCurrent = () => {
-    memory?.owner?.assertCurrent();
+    assertMemorySessionCurrent?.();
+    memory?.binding?.actor.assertReadable();
     memory?.authority.assertCurrent();
   };
   const requestTarget = {

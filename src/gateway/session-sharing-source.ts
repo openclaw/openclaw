@@ -51,14 +51,7 @@ export async function prepareSessionSharingSource(
       assertCallerCurrent,
     );
   if (read) {
-    if (
-      target.agentId !== read.location.agentId ||
-      (target.readSource &&
-        !isSameSessionSharingSource(
-          { readSource: read.source, storePath: read.location.path },
-          target,
-        ))
-    ) {
+    if (target.agentId !== read.location.agentId || target.storePath !== read.location.path) {
       throw new Error("Session sharing source changed");
     }
     let active = true;
@@ -72,9 +65,7 @@ export async function prepareSessionSharingSource(
     assertCurrent();
     return {
       actorSource: true as const,
-      get source() {
-        return read.source;
-      },
+      source: undefined,
       get target() {
         return read.readCurrent().target;
       },

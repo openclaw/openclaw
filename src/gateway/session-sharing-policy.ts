@@ -130,9 +130,6 @@ export function resolveSessionSharingTarget(params: {
 }): SessionSharingTarget | null {
   const captured = captureSessionSharingIncognitoTarget(params);
   if (captured) {
-    if (captured.target?.readSource) {
-      params.onReadSource?.(captured.target.readSource);
-    }
     return captured.target;
   }
   const target = resolveGatewaySessionStoreTargetWithStore({
@@ -269,7 +266,7 @@ export function prepareSessionSharingTargets(params: {
     cfg: params.cfg,
     targets: durableTargets.map(({ sessionKey, agentId }) => ({ key: sessionKey, agentId })),
     projection: "list",
-  }).map((result) => {
+  }).map((result): Result<SessionSharingTarget | null, unknown> => {
     if (!result.ok) {
       return result;
     }

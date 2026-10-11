@@ -34,6 +34,26 @@ import {
 } from "../state/openclaw-state-worker-error.js";
 import { captureGatewaySessionStoreScope } from "./board-store.js";
 
+function captureProgressCardTarget(
+  sessionKey: string,
+  agentId?: string,
+  assertCallerCurrent?: () => void,
+) {
+  const scope = captureGatewaySessionStoreScope(sessionKey, agentId);
+  const assertCurrent = () => {
+    assertCallerCurrent?.();
+    const current = captureGatewaySessionStoreScope(sessionKey, agentId);
+    if (
+      current.agentId !== scope.agentId ||
+      current.storePath !== scope.storePath ||
+      current.sessionKey !== scope.sessionKey
+    ) {
+      throw new Error("Progress-card session changed; retry");
+    }
+  };
+  return { scope, assertCurrent };
+}
+
 export const progressCardStore: ProgressCardStore = {
   async get(
     sessionKey: string,
@@ -47,14 +67,14 @@ export const progressCardStore: ProgressCardStore = {
       return createSessionActorProgressCardStore(() => selected).get(sessionKey, agentId);
     }
     const env = captureSessionTranscriptStorageEnvironment(process.env);
-    const scope = captureGatewaySessionStoreScope(sessionKey, agentId);
+    const { scope, assertCurrent } = captureProgressCardTarget(sessionKey, agentId);
     if (isIncognitoSessionKey(scope.sessionKey)) {
       return (
         (await withSessionActorStorage(
           { ...scope, env },
           {
-            lifetime: { assertCurrent() {}, assertReadable() {} },
-            authority: { assertCurrent() {} },
+            lifetime: { assertCurrent, assertReadable: assertCurrent },
+            authority: { assertCurrent, authorize: assertCurrent },
           },
           (binding) =>
             createSessionActorProgressCardStore(() => binding).get(scope.sessionKey, scope.agentId),
@@ -90,15 +110,18 @@ export const progressCardStore: ProgressCardStore = {
       steps: input.steps,
       expectedRevision: input.expectedRevision,
     });
-    const assertCurrent = () => input.assertCurrent?.();
-    const resolved = captureGatewaySessionStoreScope(sessionKey, agentId);
+    const { scope: resolved, assertCurrent } = captureProgressCardTarget(
+      sessionKey,
+      agentId,
+      input.assertCurrent,
+    );
     const env = captureSessionTranscriptStorageEnvironment(process.env);
     if (isIncognitoSessionKey(resolved.sessionKey)) {
       const result = await withSessionActorStorage(
         { ...resolved, env },
         {
-          lifetime: { assertCurrent() {}, assertReadable() {} },
-          authority: { assertCurrent: () => input.assertCurrent?.() },
+          lifetime: { assertCurrent, assertReadable: assertCurrent },
+          authority: { assertCurrent, authorize: assertCurrent },
         },
         (binding) =>
           createSessionActorProgressCardStore(() => binding).put(

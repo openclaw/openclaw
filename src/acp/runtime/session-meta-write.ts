@@ -87,9 +87,6 @@ async function mutateAcpSessionMeta(
       }
       const entry = read.value;
       const readerScope = readOwner.scope;
-      if (readOwner.kind === "native") {
-        return mutateNative();
-      }
       if (!readerScope?.storePath) {
         throw new Error("ACP mutation has no retained canonical source");
       }

@@ -45,7 +45,10 @@ import {
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
 import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
-import { addSessionMember, listSessionMembers } from "../config/sessions/session-sharing-store.js";
+import {
+  addSessionMember,
+  readSessionMembersInWorker,
+} from "../config/sessions/session-sharing-store.js";
 import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-state.js";
 import type { InternalSessionEntry as SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -497,7 +500,7 @@ describe("agentCommand", () => {
           expect(vi.mocked(runEmbeddedAgent).mock.calls).toHaveLength(restart + 1);
           expect(loadSessionEntry(priorScope)).toEqual(priorEntry);
           expect(await loadTranscriptEvents(priorScope)).toEqual(transcript);
-          expect(listSessionMembers(priorScope)).toEqual([member]);
+          expect((await readSessionMembersInWorker(priorScope)).members).toEqual([member]);
           expect(listSessionEntriesCore({ storePath }).map(({ sessionKey }) => sessionKey)).toEqual(
             [priorScope.sessionKey],
           );

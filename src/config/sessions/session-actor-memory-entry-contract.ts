@@ -3,12 +3,9 @@ import type {
   DeleteSessionEntryLifecycleResult,
   ResetSessionEntryLifecycleResult,
   SessionResetBoundaryWrite,
+  SessionLifecycleArtifactCleanupParams,
 } from "./session-accessor.lifecycle-types.js";
 import type { SessionEntryCreateWithTranscriptContext } from "./session-accessor.types.js";
-import type {
-  MemoryLifecycleArtifactInput,
-  MemoryLifecycleArtifactPlan,
-} from "./session-actor-memory-lifecycle-artifacts.js";
 import type { SessionEntryPatchOperation } from "./session-entry-patch-operation.js";
 import type { SessionEntryPatchCommit } from "./session-entry-patch.types.js";
 import type { SessionOwnerAssignment } from "./session-entry-provenance.js";
@@ -16,6 +13,18 @@ import type { SessionEntryProjection } from "./session-entry-snapshot-values.js"
 import type { SessionMaintenancePreservationSnapshot } from "./store-maintenance-preserve-snapshot.types.js";
 import type { ResolvedSessionMaintenanceConfig } from "./store-maintenance.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
+
+export type MemoryLifecycleArtifactInput = Pick<
+  SessionLifecycleArtifactCleanupParams,
+  | "sessionKeySegmentPrefix"
+  | "transcriptContentMarker"
+  | "orphanTranscriptMinAgeMs"
+  | "pluginOwnerId"
+> & { nowMs: number };
+export type MemoryLifecycleArtifactPlan = {
+  entries: Array<{ sessionKey: string; expected: SessionEntry }>;
+  windows: Array<{ sessionKey: string; sessionId: string }>;
+};
 
 export type SessionActorMemoryEntryReads = {
   "session.lifecycle.artifacts": {
@@ -46,7 +55,7 @@ export type SessionActorMemoryEntryReads = {
 };
 
 /** Prepared overwrites compare the actual entry; typed patches need no read round trip. */
-export type SessionActorMemoryEntryReplacement = {
+type SessionActorMemoryEntryReplacement = {
   sessionKey: string;
   expected: SessionEntry | undefined;
   entry: SessionEntry | undefined;

@@ -10,7 +10,10 @@ import {
   resetSessionEntryLifecycle,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
-import { addSessionMember, listSessionMembers } from "../config/sessions/session-sharing-store.js";
+import {
+  addSessionMember,
+  readSessionMembersInWorker,
+} from "../config/sessions/session-sharing-store.js";
 import { onSessionIdentityMutation } from "../sessions/session-lifecycle-events.js";
 import {
   openOpenClawAgentDatabase,
@@ -314,7 +317,7 @@ it("invalidates committed compaction access after the run is aborted and removed
       expect(params.chatAbortControllers.has(runId)).toBe(false);
       expect(readGatewayAccessRevision()).toBeGreaterThan(revision);
       expect(loadSessionEntry(scope)?.visibility).toBeUndefined();
-      expect(listSessionMembers(scope)).toEqual([]);
+      expect((await readSessionMembersInWorker(scope)).members).toEqual([]);
     } finally {
       abort();
       run.cleanup();

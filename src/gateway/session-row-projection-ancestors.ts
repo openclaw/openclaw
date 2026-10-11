@@ -24,6 +24,7 @@ export function createSessionRowRelationReads(owner: {
   env: NodeJS.ProcessEnv;
   inOwnerContext: ReturnType<typeof AsyncLocalStorage.snapshot>;
   isReady: () => boolean;
+  assertCurrent: () => void;
   preparedContext: () => SessionRowReadView["state"]["rowContext"] | undefined;
   lookup: (query: records.Lookup) => records.Row | undefined;
   config: () => records.Inputs["cfg"];
@@ -52,7 +53,10 @@ export function createSessionRowRelationReads(owner: {
             }
             const selected = captureSessionActorStorageOwner(
               { agentId, sessionKey: storedKey, sessionActor: memory, env: owner.env },
-              memory?.authority ?? { assertCurrent() {} },
+              memory?.authority ?? {
+                assertCurrent: owner.assertCurrent,
+                authorize: owner.assertCurrent,
+              },
             );
             return selected?.owner?.readSession(storedKey, selected.authority)?.entry;
           },

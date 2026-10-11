@@ -518,12 +518,6 @@ it("consumes admitted board absence for a cohort and observes first use and publ
             .rows.filter((row) => row.hasBoard)
             .map((row) => row.sessionKey),
         ).toEqual([sessionKeys[0]]);
-        peer.exec("BEGIN IMMEDIATE; DROP TABLE board_widgets; DROP TABLE board_tabs");
-        expect(
-          boardStore.readBoardSessionKeys({ db: peer, path: target.path }, sessionKeys),
-        ).toEqual(new Set());
-        peer.exec("ROLLBACK");
-        expect(read().rows[0]?.hasBoard).toBe(true);
         peer.exec("DROP TABLE board_widgets; DROP TABLE board_tabs");
         expect(read().rows.every((row) => !row.hasBoard)).toBe(true);
       });

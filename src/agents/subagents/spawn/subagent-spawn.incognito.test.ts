@@ -31,6 +31,7 @@ vi.mock("node:worker_threads", async (importOriginal) => ({
     throw new Error("Memory subagent capability lookup allocated a database worker");
   }),
 }));
+// mock-isolation: Exercise memory session creation without loading the spawn barrel's Gateway/channel runtime.
 vi.mock("./subagent-spawn.runtime.js", async () => ({
   upsertSessionEntryCore: (
     await import("../../../config/sessions/session-accessor.sqlite-entry.js")

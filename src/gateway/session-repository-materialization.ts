@@ -58,11 +58,14 @@ async function materializeCapturedRepositoryWorkspace(
   params: Parameters<typeof materializeSessionRepositoryWorkspaceOnGateway>[0],
   initial: ReturnType<typeof loadGatewaySessionEntryReadOnly>,
 ): Promise<void> {
-  const metadata = captureSessionEntryMetadataRead({
-    agentId: params.agentId,
-    sessionKey: initial.canonicalKey,
-    storePath: initial.storePath,
-  });
+  const metadata = captureSessionEntryMetadataRead(
+    {
+      agentId: params.agentId,
+      sessionKey: initial.canonicalKey,
+      storePath: initial.storePath,
+    },
+    params.assertCurrent,
+  );
   if (initial.entry?.sessionId !== params.sessionId) {
     throw new Error("Session changed before repository materialization");
   }

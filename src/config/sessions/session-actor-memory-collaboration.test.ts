@@ -19,11 +19,7 @@ import {
   recordSessionParticipantInWorker,
   removeSessionMemberInWorker,
 } from "./session-sharing-store.async.js";
-import {
-  isSessionMember,
-  listSessionMembers,
-  readSessionMembersInWorker,
-} from "./session-sharing-store.js";
+import { isSessionMember, readSessionMembersInWorker } from "./session-sharing-store.js";
 import { listSessionSuggestions } from "./session-suggestion-store.read.js";
 
 vi.mock("node:sqlite", async (importOriginal) => ({
@@ -129,7 +125,7 @@ describe("memory collaboration through the public adapters", () => {
       const snapshot = await readSessionMembersInWorker(scope);
       expect(snapshot.members).toEqual([{ identityId: "viewer", addedBy: "owner", addedAt: 20 }]);
       snapshot.members.length = 0;
-      expect(listSessionMembers(scope)).toHaveLength(1);
+      expect((await readSessionMembersInWorker(scope)).members).toHaveLength(1);
     } finally {
       stop();
     }

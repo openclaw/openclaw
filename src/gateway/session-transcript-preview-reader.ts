@@ -43,7 +43,7 @@ export async function readBoundedSessionPreviewItemsAsync(
 }
 
 /** Native and worker display reads share widening, projection, and the older-page boundary. */
-export function readSessionDisplayPreviewItems(
+function readSessionDisplayPreviewItems(
   maxItems: number,
   maxChars: number,
   readPage: (

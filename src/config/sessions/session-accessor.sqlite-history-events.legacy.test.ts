@@ -4,7 +4,7 @@ import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-messa
 import { createNestedToolActivity } from "../../sessions/nested-tool-activity.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { appendTranscriptEvent, persistSessionTranscriptTurn } from "./session-accessor.js";
-import { readRecentSessionTranscriptHistoryEvents } from "./session-accessor.sqlite-history-events.js";
+import { readRecentSessionTranscriptHistoryEvents } from "./session-accessor.sqlite-history-events.test-support.js";
 import {
   historyEventId,
   readActiveTranscriptStats,

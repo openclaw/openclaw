@@ -84,11 +84,12 @@ export function commitSessionActorMemoryMessageRewrite(
   const changed = input.message !== undefined;
   if (changed) {
     const event = canonicalizeTranscriptEventMedia({ ...current.event, message: input.message });
+    const eventJson = JSON.stringify(event);
     createSessionActorMemoryEvents(context).replaceRows(
       context.state.events.map((row) =>
-        row.rawSeq === current.seq ? { ...row, event, eventJson: JSON.stringify(event) } : row,
+        row.rawSeq === current.seq ? { ...row, event, eventJson } : row,
       ),
-      { preserveGeneration: isSteerConfirmationRewrite(current.event, event) },
+      { preserveGeneration: isSteerConfirmationRewrite(current.eventJson, eventJson) },
     );
   }
   const generation = context.state.hot.transcript.version.generation;

@@ -175,17 +175,19 @@ export async function handleSessionHistoryHttpRequest(
   if (!authResult) {
     return true;
   }
+  const assertResponseCurrent = () => {
+    if (res.destroyed || res.writableEnded) {
+      throw new Error("Session history response closed");
+    }
+  };
   const source = captureSessionActorStorageOwner(
     { sessionKey: canonicalKey },
-    {
-      assertCurrent() {
-        if (res.destroyed || res.writableEnded) throw new Error("Session history response closed");
-      },
-    },
+    { assertCurrent: assertResponseCurrent, authorize: assertResponseCurrent },
   );
+  const assertSessionCurrent = source?.owner?.captureSessionReadGuard(canonicalKey);
   const assertSourceCurrent = () => {
     source?.authority.assertCurrent();
-    source?.owner?.assertCurrent();
+    assertSessionCurrent?.();
   };
   return serveAuthorizedSessionHistory(
     req,

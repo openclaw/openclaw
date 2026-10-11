@@ -28,7 +28,8 @@ vi.mock("node:worker_threads", async (importOriginal) => ({
     throw new Error("Memory Gateway effects allocated a worker");
   }),
 }));
-vi.mock("./server-methods/session-goal-change.js", () => ({
+vi.mock("./server-methods/session-goal-change.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./server-methods/session-goal-change.js")>()),
   publishCommittedSessionGoalChange: vi.fn(async () => {}),
 }));
 const projection = vi.hoisted(() => ({

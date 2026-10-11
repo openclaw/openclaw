@@ -64,7 +64,9 @@ export async function findTranscriptEvent(
 ): Promise<{ event: TranscriptEvent } | undefined> {
   const memory = captureSessionActorTranscriptRead(scope);
   if (memory) {
-    return memory.missing ? undefined : memory.read("session.history.match", { match });
+    return memory.missing
+      ? undefined
+      : (await memory.read("session.history.match", { match })).result;
   }
   const captured = {
     ...scope,

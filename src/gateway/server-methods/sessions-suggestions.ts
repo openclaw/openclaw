@@ -219,7 +219,7 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
           await projection.prepareMembership();
         }
       }
-      let selected: ReturnType<typeof readCollaborationTarget> = undefined;
+      let selected: ReturnType<typeof readCollaborationTarget> = null;
       const readCurrent = () => {
         if (
           signal?.aborted ||

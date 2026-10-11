@@ -1,11 +1,6 @@
 import type { AgentMessage } from "../../../packages/agent-core/src/types.js";
 import type { SessionTranscriptContextVersion } from "../../config/sessions/session-accessor.sqlite-contract.js";
-import {
-  readSessionTranscriptContextMessages,
-  type readSessionTranscriptModelContext,
-  validateSessionTranscriptContextAdmission,
-  validateSessionTranscriptContextVersion,
-} from "../../config/sessions/session-accessor.sqlite-model-context.js";
+import type { readSessionTranscriptModelContext } from "../../config/sessions/session-accessor.sqlite-model-context.js";
 import type { SessionTranscriptRuntimeTarget } from "../../config/sessions/session-accessor.types.js";
 import type {
   SessionModelContextLimits,
@@ -199,32 +194,8 @@ export async function readSessionManagerContextAsync<T>(
         messages.return(undefined);
       }
     };
-    const consume = async () => {
-      assertCurrent();
-      const snapshot = readSessionTranscriptContextMessages(
-        captured,
-        (messages, header, version) => ({
-          messages: [...messages],
-          header,
-          version,
-        }),
-      );
-      assertCurrent();
-      const result = await consumeSnapshot(snapshot);
-      assertCurrent();
-      if (!readSessionManagerActorTranscript(captured, snapshot.version)) {
-        if (admission) {
-          validateSessionTranscriptContextAdmission(captured, admission);
-        } else {
-          validateSessionTranscriptContextVersion(captured, snapshot.version);
-        }
-      }
-      assertCurrent();
-      return result;
-    };
     return withSessionTranscriptReadSource(
       captured,
-      consume,
       async ({ scope, expectedIdentity, owner, assertCurrent: assertReadOwner }) => {
         const readTarget = {
           ...scope,

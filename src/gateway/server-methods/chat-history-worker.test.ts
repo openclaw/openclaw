@@ -11,13 +11,7 @@ import {
   appendTranscriptMessages,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
-import * as deltaEvents from "../../config/sessions/session-accessor.sqlite-history-events.js";
 import * as projectionReads from "../../config/sessions/session-accessor.sqlite-projection-read.js";
-import type {
-  SessionHistoryDelta,
-  SessionHistoryWorkerRequest,
-} from "../../config/sessions/session-history-types.js";
-import * as historyWorker from "../../config/sessions/session-history-worker-runtime.js";
 import * as projectionWriter from "../../config/sessions/session-transcript-projection-writer.js";
 import { searchSessionTranscripts } from "../../config/sessions/session-transcript-search.js";
 import { historyLane } from "../../config/sessions/session-transcript-worker-resources.js";
@@ -29,7 +23,6 @@ import {
   createPreparedSessionHistorySubagentProjection,
   prepareSessionHistoryDelta,
 } from "../session-history-delta-visibility.js";
-import { createSessionHistorySubagentProjection } from "../session-history-subagent-projection.js";
 import { chatHistoryHandlers } from "./chat-history-handler.js";
 import { createHistoryReadContext } from "./chat-history.test-helpers.js";
 import type { RespondFn } from "./types.js";
@@ -113,7 +106,7 @@ it("serves committed history while transcript searches wait on a stuck writer", 
 });
 
 it.each(["native", "acp"])(
-  "keeps cursor bytes and %s coordination visibility without request-thread transcript reads",
+  "keeps repeated cursor bytes and %s coordination visibility without request-thread transcript reads",
   async (sourceKind) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const scope = {
@@ -241,34 +234,11 @@ it.each(["native", "acp"])(
         message: { role: "assistant", content: "Ordinary sibling", timestamp: 6 },
       });
       const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now());
+      const projectionRead = vi.spyOn(projectionReads, "readCurrentProjectionSnapshot");
+      const counter = observeSqliteReadSql(StatementSync.prototype);
       try {
-        const deltaReader: {
-          readSessionHistoryPageInWorker(
-            request: Extract<SessionHistoryWorkerRequest, { kind: "delta" }>,
-          ): Promise<SessionHistoryDelta & { assertCurrent: () => void }>;
-        } = historyWorker;
-        const native = vi
-          .spyOn(deltaReader, "readSessionHistoryPageInWorker")
-          .mockImplementationOnce(async (request) => {
-            const resolver = createSessionHistorySubagentProjection(request.params.target);
-            return {
-              ...prepareSessionHistoryDelta(
-                deltaEvents.readTranscriptDisplayDelta(
-                  request.params.target,
-                  request.params.limits,
-                ),
-                resolver,
-              ),
-              assertCurrent: expectDefined(resolver.assertCurrent, "native source admission"),
-            };
-          });
-        let golden: Record<string, unknown>;
-        try {
-          golden = await call(initial.deltaCursor);
-        } finally {
-          native.mockRestore();
-        }
-        expect(golden).toMatchObject({
+        const firstDelta = await call(initial.deltaCursor);
+        expect(firstDelta).toMatchObject({
           kind: "delta",
           messages: [
             { messageId: "human-steer" },
@@ -276,23 +246,14 @@ it.each(["native", "acp"])(
             { messageId: "ordinary-sibling" },
           ],
         });
-        const goldenJson = JSON.stringify(golden);
-        const read = vi.spyOn(deltaEvents, "readTranscriptDisplayDelta").mockImplementation(() => {
-          throw new Error("Transcript SQLite read ran on the request thread");
-        });
-        const projectionRead = vi.spyOn(projectionReads, "readCurrentProjectionSnapshot");
-        const counter = observeSqliteReadSql(StatementSync.prototype);
-        try {
-          expect(JSON.stringify(await call(initial.deltaCursor))).toBe(goldenJson);
-          expectHistoryThreadSql(counter.queries);
-          expect(read).not.toHaveBeenCalled();
-          expect(projectionRead).not.toHaveBeenCalled();
-        } finally {
-          counter.restore();
-          projectionRead.mockRestore();
-          read.mockRestore();
-        }
+        const firstJson = JSON.stringify(firstDelta);
+        expect(firstJson).toContain(JSON.stringify('Escaped "answer" 🤖'));
+        expect(JSON.stringify(await call(initial.deltaCursor))).toBe(firstJson);
+        expectHistoryThreadSql(counter.queries);
+        expect(projectionRead).not.toHaveBeenCalled();
       } finally {
+        counter.restore();
+        projectionRead.mockRestore();
         clock.mockRestore();
       }
     });

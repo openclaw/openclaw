@@ -44,17 +44,13 @@ export function captureSessionSharingMemoryFacts(
   let owner = captured.owner;
   const canonicalKey = toAgentStoreSessionKey({ agentId, requestKey: target.sessionKey });
   const location = { agentId, path };
-  const readSource = () => {
-    // A creation admission may precede its owner; pin the first owner it observes.
-    owner ??= memorySessionActorOwners.read(location);
-    return owner && { ...location, databaseIdentity: owner.identity.incarnation };
-  };
   const readCurrent = () => {
     assertCurrent();
     captured.binding?.actor.assertReadable();
-    const source = readSource();
+    // A creation admission may precede its owner; pin the first owner it observes.
+    owner ??= memorySessionActorOwners.read(location);
     const current = owner?.readSession(canonicalKey, captured.authority);
-    if (!current?.entry || !source) {
+    if (!current?.entry) {
       if (!allowMissing) {
         throw new SessionMutationFactsUnavailableError();
       }
@@ -69,7 +65,7 @@ export function captureSessionSharingMemoryFacts(
         storeKey: canonicalKey,
         storeKeys: [canonicalKey],
         storePath: path,
-        readSource: source,
+        readSource: undefined,
         entry: current.entry,
       },
       members: current.members,
@@ -78,9 +74,6 @@ export function captureSessionSharingMemoryFacts(
   };
   return {
     location,
-    get source() {
-      return readSource();
-    },
     assertCurrent: () => void readCurrent(),
     readCurrent,
   };
@@ -95,7 +88,7 @@ export function readSessionSharingMemoryFacts(target: IncognitoSessionSharingTar
         throw new SessionMutationFactsUnavailableError();
       }
     });
-    return facts && { ...facts.readCurrent(), source: facts.source, location: facts.location };
+    return facts && { ...facts.readCurrent(), location: facts.location };
   } finally {
     active = false;
   }

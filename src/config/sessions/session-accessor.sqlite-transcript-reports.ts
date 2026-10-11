@@ -134,7 +134,7 @@ async function withReportWorker<T>(
       {
         agentId: namespace.agentId,
         path: namespace.path,
-        sessionKey: scope.sessionKey,
+        sessionKey: scope.sessionKey ?? "",
         sessionId: scope.sessionId ?? "",
       },
       scope,

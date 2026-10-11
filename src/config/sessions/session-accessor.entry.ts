@@ -213,7 +213,7 @@ export async function readResolvedSessionEntriesInWorker(
         canonicalKey,
         requestedKey,
         storeKey: canonicalKey,
-        entry: memory.read(canonicalKey, projection === "worktree" ? projection : undefined),
+        entry: memory.read(canonicalKey, projection === "worktree" ? "list" : undefined),
       });
       continue;
     }
@@ -413,7 +413,7 @@ function resolveSessionEntryStoreTarget(
     return {
       agentId: memory.agentId,
       canonicalKey,
-      entry: memory.read(canonicalKey, projection),
+      entry: memory.read(canonicalKey, projection === "worktree" ? "list" : undefined),
       requestedKey,
       storeKey: canonicalKey,
       storePath: memory.path,

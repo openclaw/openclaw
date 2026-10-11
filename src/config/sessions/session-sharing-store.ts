@@ -10,10 +10,8 @@ import {
 } from "./session-actor-storage-binding.js";
 import type { SessionCollaborationScope } from "./session-collaboration-scope.js";
 import { withSessionStoreReaderInWorker } from "./session-entry-read-runtime.js";
-import type { SessionMember } from "./session-membership-facts.types.js";
 import {
   hasSessionMemberInDatabase,
-  listSessionMembersInDatabase,
   type SessionMembersSnapshot,
 } from "./session-sharing-store.kernel.js";
 import { projectionLane } from "./session-transcript-worker-resources.js";
@@ -45,14 +43,6 @@ function readMemorySessionMembers(
       ? memory.binding.actor.snapshot(memory.authority)
       : memory.owner?.readSession(scope.sessionKey, memory.authority);
   return structuredClone({ entry: current?.entry, members: current?.members ?? [] });
-}
-
-export function listSessionMembers(scope: SessionAccessScope): SessionMember[] {
-  const memory = readMemorySessionMembers(scope);
-  if (memory) {
-    return memory.members;
-  }
-  return readSessionMembers(scope, [], listSessionMembersInDatabase);
 }
 
 /** Current management metadata and evidence share the projection worker's read snapshot. */

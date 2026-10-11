@@ -110,10 +110,12 @@ export class SqliteBoardStore implements BoardStore {
   ): Promise<{ value: T }> | undefined {
     const resolved = this.options.resolveSession(target);
     const assertCurrent = () => this.assertTargetCurrent(target, resolved);
-    const authority = { assertCurrent, authorize() {} };
+    const authority = { assertCurrent, authorize: assertCurrent };
     const scope = { ...resolved, storePath: resolved.path, env: this.options.env };
     const memory = captureSessionActorStorageOwner(scope, authority);
-    if (!memory) return undefined;
+    if (!memory) {
+      return undefined;
+    }
     return withSessionActorStorage(
       scope,
       {
@@ -122,9 +124,13 @@ export class SqliteBoardStore implements BoardStore {
       },
       async (binding) => ({ value: await consume(createSessionActorBoardStore(() => binding)) }),
     ).then(async (result) => {
-      if (result) return result;
+      if (result) {
+        return result;
+      }
       assertCurrent();
-      if (missing) return { value: await missing() };
+      if (missing) {
+        return { value: await missing() };
+      }
       throw new BoardValidationError(
         "not_found",
         `board session not found: ${resolved.sessionKey}`,
@@ -323,7 +329,7 @@ export class SqliteBoardStore implements BoardStore {
   async getSnapshotWithHtmlViewMetadata(
     target: BoardSessionTarget,
   ): Promise<BoardSnapshotWithHtmlViewMetadata> {
-    const memory = this.useMemory(
+    const memory = this.useMemory<BoardSnapshotWithHtmlViewMetadata>(
       target,
       (store) => store.getSnapshotWithHtmlViewMetadata(target),
       () => ({
@@ -331,7 +337,9 @@ export class SqliteBoardStore implements BoardStore {
         htmlViewMetadata: new Map(),
       }),
     );
-    if (memory) return (await memory).value;
+    if (memory) {
+      return (await memory).value;
+    }
     return this.consumeSnapshotWithHtmlViewMetadata(target, (snapshot) => snapshot);
   }
 
@@ -410,7 +418,11 @@ export class SqliteBoardStore implements BoardStore {
       (store) => store.useSnapshot(target, consume),
       async () => consume({ sessionKey: target.sessionKey, revision: 0, tabs: [], widgets: [] }),
     );
-    if (memory) return (await memory).value;
+    if (memory) {
+      return await (
+        await memory
+      ).value;
+    }
     return this.consumeSnapshotWithHtmlViewMetadata(target, ({ snapshot }) => consume(snapshot));
   }
 
@@ -424,7 +436,11 @@ export class SqliteBoardStore implements BoardStore {
       (store) => store.useWidgetDocument(target, name, consume),
       async () => consume(undefined),
     );
-    if (memory) return (await memory).value;
+    if (memory) {
+      return await (
+        await memory
+      ).value;
+    }
     return this.consumeWidgetDocument(target, name, consume);
   }
 
@@ -456,7 +472,9 @@ export class SqliteBoardStore implements BoardStore {
     }
     const capturedOps = structuredClone(ops);
     const memory = this.useMemory(target, (store) => store.applyOps(target, capturedOps, options));
-    if (memory) return (await memory).value;
+    if (memory) {
+      return (await memory).value;
+    }
     return this.write(
       target,
       options,
@@ -473,7 +491,9 @@ export class SqliteBoardStore implements BoardStore {
   async putWidget(params: BoardWidgetMaterializedPutParams, options?: BoardWidgetWriteOptions) {
     let preparedParams = structuredClone(params);
     const memory = this.useMemory(params, (store) => store.putWidget(preparedParams, options));
-    if (memory) return (await memory).value;
+    if (memory) {
+      return (await memory).value;
+    }
     const viewGeneration = randomBytes(16).toString("hex");
     const content = preparedParams.content;
     const resolveInteraction = options?.resolveMcpAppInteraction;
@@ -520,7 +540,9 @@ export class SqliteBoardStore implements BoardStore {
     const memory = this.useMemory(target, (store) =>
       store.grant(target, name, decision, revision, instanceId, options),
     );
-    if (memory) return (await memory).value;
+    if (memory) {
+      return (await memory).value;
+    }
     return this.write(
       target,
       options,
@@ -558,7 +580,9 @@ export class SqliteBoardStore implements BoardStore {
       (store) => store.readWidgetMcpApp(target, name),
       () => undefined,
     );
-    if (memory) return (await memory).value;
+    if (memory) {
+      return (await memory).value;
+    }
     return this.consumeWidgetDocument(
       target,
       name,

@@ -223,7 +223,7 @@ export function createSubagentRegistryMockState() {
       } catch (error) {
         read = { ok: false, error };
       }
-      const result = await consume(read, { kind: "native", assertCurrent });
+      const result = await consume(read, { kind: "file", assertCurrent });
       assertCurrent();
       return result;
     },

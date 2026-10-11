@@ -69,7 +69,7 @@ function captureControllerMemoryFacts(
                     input: {
                       sessionId: request.key.trim(),
                       currentOnly: true,
-                      projection: "sharing",
+                      projection: "list",
                     },
                   },
                   memory.authority,

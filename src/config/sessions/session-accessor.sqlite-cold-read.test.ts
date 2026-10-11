@@ -33,7 +33,7 @@ import {
 } from "../../test-utils/openclaw-test-state.js";
 import { copySqliteSessionOwnedStateForCanonicalRepair } from "./session-accessor.sqlite-canonical-repair.js";
 import { replaceSessionEntry } from "./session-accessor.sqlite-entry.js";
-import { readRecentSessionTranscriptHistoryEvents } from "./session-accessor.sqlite-history-events.js";
+import { readRecentSessionTranscriptHistoryEvents } from "./session-accessor.sqlite-history-events.test-support.js";
 import {
   hasSessionTranscriptEventsSync,
   readTranscriptMutationStateSync,

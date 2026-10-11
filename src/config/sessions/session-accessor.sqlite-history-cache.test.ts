@@ -16,10 +16,8 @@ import {
   replaceSessionEntrySync,
   withTranscriptWriteTransaction,
 } from "./session-accessor.js";
-import {
-  readRecentSessionTranscriptHistoryEvents,
-  readSessionTranscriptHistoryEventPage,
-} from "./session-accessor.sqlite-history-events.js";
+import { readSessionTranscriptHistoryEventPage } from "./session-accessor.sqlite-history-events.js";
+import { readRecentSessionTranscriptHistoryEvents } from "./session-accessor.sqlite-history-events.test-support.js";
 import {
   historyEventId,
   readSessionTranscriptHistoryEventCount,

@@ -32,23 +32,20 @@ import type { SubagentCoordinationDisplayResolver } from "./session-transcript-r
 import type { GatewaySessionStoreReadSources } from "./session-utils-store.types.js";
 
 /** Source and run facts live only for one history operation, on its admitted database. */
-export function createBoundSessionHistorySubagentProjection(
+function createBoundSessionHistorySubagentProjection(
   readSnapshot: <T>(read: (projection: CurrentTranscriptProjection) => T) => T,
   stateDatabase: PreparedSessionHistoryReadTarget["stateDatabase"],
   readSourceDatabases: () => GatewaySessionStoreReadSources | undefined,
-  preparedSource?: (sessionKey: string) => boolean | undefined,
 ): SubagentCoordinationDisplayResolver {
   const runs = new Map<
     string,
     ReturnType<typeof readSessionTranscriptRunInputVisibilityFromProjection>
   >();
-  const readBoundSource = createBoundSessionHistorySubagentSource(
+  const readSource = createBoundSessionHistorySubagentSource(
     readSnapshot,
     stateDatabase,
     readSourceDatabases,
   );
-  const readSource = (sessionKey: string) =>
-    preparedSource?.(sessionKey) ?? readBoundSource(sessionKey);
   return {
     isSubagentSession: readSource,
     isSubagentRunMessage(runId, messageSeq) {

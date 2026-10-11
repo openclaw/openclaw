@@ -489,7 +489,7 @@ export function createMcpAppWorkspaceUploadProvider(params: {
   agentId: string;
   assertCurrent: () => void;
 }): McpFormResourceUpload {
-  const metadata = captureSessionEntryMetadataRead(params);
+  const metadata = captureSessionEntryMetadataRead(params, params.assertCurrent);
   const initial = metadata?.readCurrent();
   return async (request) => {
     const assertCurrent = () => {

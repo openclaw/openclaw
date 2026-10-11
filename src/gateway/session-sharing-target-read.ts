@@ -71,7 +71,7 @@ export function isSameSessionSharingTarget(
   );
 }
 
-/** Reuse admitted sharing facts; aliases, excluded rows, and incognito keep native custody. */
+/** Reuse admitted sharing facts; other targets retain their prepared storage custody. */
 export async function prepareSessionSharingRead(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
@@ -98,7 +98,6 @@ export async function prepareSessionSharingRead(params: {
       !params.preserveQualifiedAddress &&
       resident &&
       source?.path === resident.storePath &&
-      typeof source.databaseIdentity === "string" &&
       isConfiguredSessionStoreAgentId(cfg, resident.agentId) &&
       source.path === configuredSource.physicalPath
         ? { ...resident, readSource: source }
@@ -177,11 +176,7 @@ export const readProjectedSessionMutationTarget = (
   }
   const readSource = projection.readSource({ ...query, storePath: state.target.storePath });
   // Legacy selectors and filesystem aliases retain the native candidate-selection contract.
-  if (
-    !readSource ||
-    readSource.path !== state.target.storePath ||
-    typeof readSource.databaseIdentity !== "string"
-  ) {
+  if (!readSource || readSource.path !== state.target.storePath) {
     return { status: "unavailable" };
   }
   assertExistingDatabaseIdentity(
@@ -233,7 +228,7 @@ export function readSessionMutationTarget(params: {
           storePath: resolveSessionStorePathCore(params.cfg.session?.store, { agentId }),
         },
       });
-      return { target: facts?.target ?? null, preparedReadSource: facts?.source };
+      return { target: facts?.target ?? null };
     }
     const projection = getSessionRowProjection(params.context);
     const projected =

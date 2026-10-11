@@ -48,7 +48,7 @@ export function createRepositoryWorkspaceMutationService(options: {
         sessionId: params.sessionId,
         storePath: resolveSessionStorePathForScope(params),
       };
-      const source = captureSessionEntryMetadataRead(scope);
+      const source = captureSessionEntryMetadataRead(scope, params.assertCurrent);
       const assertCallerCurrent = () => {
         source?.assertCurrent();
         params.assertCurrent();

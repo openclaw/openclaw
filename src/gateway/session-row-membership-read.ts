@@ -4,6 +4,7 @@ import {
 } from "../config/sessions/combined-store-gateway.js";
 import type { GatewaySessionStoreDiscovery } from "../config/sessions/combined-store-paths.js";
 import type { SessionEntrySummary } from "../config/sessions/session-accessor.types.js";
+import type { CapturedSessionEntryReadSource } from "../config/sessions/session-entry-read-source.types.js";
 import { projectionLane } from "../config/sessions/session-transcript-worker-resources.js";
 import { withSessionHistoryWorkerDatabases } from "../config/sessions/session-transcript-worker-runtime.js";
 import { MAX_SESSION_ROW_FACTS_KEYS } from "../config/sessions/session-transcript-worker.types.js";
@@ -171,16 +172,16 @@ export function createSessionRowMembershipReadAccess(params: {
       const members = row && membership.membership(row.storeTarget.storePath, row.key);
       return members ? new Set(members) : undefined;
     },
-    readSource(target: records.Row | records.Lookup) {
+    readSource(target: records.Row | records.Lookup): CapturedSessionEntryReadSource | undefined {
       const row = "storeTarget" in target ? target : params.lookup(target);
       if (!row) {
         throw new Error("Session store changed while preparing authorization");
       }
-      const source = params.stores().get(row.storeTarget.storePath);
-      // Incognito rows retain their process-local locator and native lifetime guard.
-      if (!source && isIncognitoSessionKey(row.key)) {
+      // Memory rows retain actor custody and never describe a physical database source.
+      if (isIncognitoSessionKey(row.key)) {
         return undefined;
       }
+      const source = params.stores().get(row.storeTarget.storePath);
       if (!source || !params.owner().isCurrent(row)) {
         throw new Error("Session store changed while preparing authorization");
       }

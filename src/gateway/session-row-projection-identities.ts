@@ -127,15 +127,16 @@ export function createSessionRowCreatorIndex() {
                 .flatMap(({ entry }) =>
                   entry?.incognito && entry.createdActor?.id ? [entry.createdActor] : [],
                 ) ?? [])
-            : memorySessionActorOwners
-                .list()
-                .flatMap((owner) =>
-                  owner
-                    .listSessions({ assertCurrent() {} })
-                    .flatMap(({ entry }) =>
-                      entry?.incognito && entry.createdActor?.id ? [entry.createdActor] : [],
-                    ),
-                )),
+            : memorySessionActorOwners.list().flatMap((owner) =>
+                owner
+                  .listSessions({
+                    assertCurrent: owner.assertCurrent,
+                    authorize: owner.assertCurrent,
+                  })
+                  .flatMap(({ entry }) =>
+                    entry?.incognito && entry.createdActor?.id ? [entry.createdActor] : [],
+                  ),
+              )),
         ];
       });
     },

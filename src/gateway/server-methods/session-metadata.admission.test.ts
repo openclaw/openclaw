@@ -9,7 +9,7 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import {
   addSessionMember,
-  listSessionMembers,
+  readSessionMembersInWorker,
 } from "../../config/sessions/session-sharing-store.js";
 import { addSessionSuggestion } from "../../config/sessions/session-suggestion-store.js";
 import { listSessionSuggestions } from "../../config/sessions/session-suggestion-store.read.js";
@@ -189,7 +189,7 @@ describe("session metadata writer admission", () => {
           expect(existsSync(options.path)).toBe(false);
           for (const target of [retired, replacement]) {
             expect(loadSessionEntry(target)).toEqual(originalEntry);
-            expect(listSessionMembers(target)).toEqual([]);
+            expect((await readSessionMembersInWorker(target)).members).toEqual([]);
             expect(await listSessionSuggestions(target)).toEqual([]);
           }
         } finally {
@@ -224,7 +224,7 @@ describe("session metadata writer admission", () => {
               : { sessionKey: scope.sessionKey, identityId: other.id };
       const read = async () => ({
         owner: loadSessionEntry(scope)?.owner,
-        members: listSessionMembers(scope),
+        members: (await readSessionMembersInWorker(scope)).members,
         suggestions: await listSessionSuggestions(scope),
       });
       const before = structuredClone(await read());
@@ -249,9 +249,9 @@ describe("session metadata writer admission", () => {
         if (method === "sessions.assignOwner") {
           expect(loadSessionEntry(scope)?.owner?.actor).toEqual({ type: "human", id: other.id });
         } else if (method.startsWith("session.members")) {
-          expect(listSessionMembers(scope).map((member) => member.identityId)).toEqual(
-            method === "session.members.add" ? [other.id] : [],
-          );
+          expect(
+            (await readSessionMembersInWorker(scope)).members.map((member) => member.identityId),
+          ).toEqual(method === "session.members.add" ? [other.id] : []);
         } else {
           expect(await listSessionSuggestions(scope)).toEqual([
             expect.objectContaining({
@@ -325,7 +325,7 @@ describe("session metadata writer admission", () => {
           expect(request.errors.length === 1 || request.respond.mock.calls[0]?.[0] === false).toBe(
             true,
           );
-          expect(listSessionMembers(scope)).toEqual([]);
+          expect((await readSessionMembersInWorker(scope)).members).toEqual([]);
           expect(await listSessionSuggestions(scope)).toEqual([]);
           if (kind === "owner") {
             expect(loadSessionEntry(scope)?.owner).toBeUndefined();

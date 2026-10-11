@@ -19,7 +19,7 @@ import {
   waitForSessionTranscriptProjection,
   type SessionTranscriptReadScope,
 } from "./session-accessor.js";
-import { readRecentSessionTranscriptHistoryEvents } from "./session-accessor.sqlite-history-events.js";
+import { readRecentSessionTranscriptHistoryEvents } from "./session-accessor.sqlite-history-events.test-support.js";
 import {
   insertSyntheticHistory,
   readSessionTranscriptHistoryEventCount,

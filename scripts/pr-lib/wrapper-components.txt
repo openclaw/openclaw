@@ -2252,3 +2252,12 @@ src/shared/text/xml-tag-at.ts
 src/shared/widget-theme.ts
 packages/markdown-core/package.json
 src/state/openclaw-agent-db-worker-admission.ts
+src/config/sessions/legacy-compaction-history.ts
+src/config/sessions/session-accessor.sqlite-references.ts
+src/config/sessions/session-actor-memory-conversation-owner.ts
+src/config/sessions/session-actor-memory-lifecycle-artifacts.ts
+src/config/sessions/session-actor-memory-message-rewrite.ts
+src/config/sessions/session-manual-compact-entry.ts
+src/config/sessions/session-manual-compact-selection.ts
+src/config/sessions/store-maintenance-plan.ts
+src/config/sessions/store-maintenance-preserve-snapshot.ts

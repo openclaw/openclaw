@@ -25,7 +25,6 @@ import { captureSessionStoreReadCandidates } from "./session-store-target-invent
 import { withSessionHistoryWorkerReadCandidates } from "./session-transcript-worker-resources.js";
 
 export { SessionReactionLimitError, SessionReactionMessageMissingError };
-export type { StoredMessageReactionSummary } from "./session-reaction-store.types.js";
 
 function restoreReactionError(error: unknown): never {
   if (error instanceof Error) {
