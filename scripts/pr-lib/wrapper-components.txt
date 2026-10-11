@@ -344,8 +344,6 @@ src/agents/worktrees/repository-paths.ts
 src/agents/worktrees/run-end-lifecycle.ts
 src/agents/sandbox/registry-lifecycle.ts
 src/agents/sandbox/registry-publication.ts
-src/config/sessions/session-questions-custody-error.ts
-src/state/openclaw-agent-questions-schema.ts
 src/config/sessions/session-actor-transaction.ts
 src/infra/sqlite-database-write-receipts.ts
 src/state/openclaw-agent-execution-incognito-session-actors.ts
@@ -1725,7 +1723,6 @@ src/state/openclaw-agent-pending-inputs-schema.ts
 src/state/openclaw-agent-progress-card-schema.ts
 src/state/openclaw-agent-schema-inspection-response.ts
 src/state/openclaw-agent-schema-inspection-worker.ts
-src/state/openclaw-agent-schema-migration-finalize.ts
 src/state/openclaw-agent-schema.sql
 src/state/openclaw-agent-schema.ts
 src/state/openclaw-agent-session-participants-schema.ts
