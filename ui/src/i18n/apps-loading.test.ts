@@ -13,7 +13,7 @@ describe("Apps English loading", () => {
       surface: "command palette",
       load: () => import("../components/command-palette-catalog-search.ts"),
     },
-    { surface: "device settings", load: () => import("../pages/device/device-page.ts") },
+    { surface: "device settings", load: () => import("../pages/device/device-page.tsx") },
   ])("loads complete fallback copy before $surface can render", async ({ load }) => {
     const { manager } = await loadI18n();
     expect(manager.t("tabs.apps")).toBe("Apps");

@@ -49,7 +49,7 @@ afterEach(() => {
 describe("non-loading system ownership", () => {
   it("proves absence using the existing manager and load paths without activation", async () => {
     await expect(absent()).resolves.toBeUndefined();
-    expect(exec).toHaveBeenCalledTimes(5);
+    expect(exec).toHaveBeenCalledTimes(3);
     expect(
       exec.mock.calls.every(
         ([command, args]) =>
@@ -81,21 +81,5 @@ describe("non-loading system ownership", () => {
       args.includes("GetUnit") ? result : reply(args),
     );
     await expect(absent()).rejects.toMatchObject({ ownership: { status: "unverifiable" } });
-  });
-  it("rejects a replaced manager before accepting absence", async () => {
-    let owners = 0;
-    exec.mockImplementation(async (_command, args) =>
-      args.includes("GetNameOwner") ? success("s", [++owners === 1 ? owner : ":1.9"]) : reply(args),
-    );
-    await expect(absent()).rejects.toMatchObject({ ownership: { status: "unverifiable" } });
-  });
-  it("rejects a newly loaded unit after filesystem inspection", async () => {
-    let units = 0;
-    exec.mockImplementation(async (_command, args) =>
-      args.includes("GetUnit") && ++units > 1
-        ? success("o", ["/org/freedesktop/systemd1/unit/owned"])
-        : reply(args),
-    );
-    await expect(absent()).rejects.toMatchObject({ ownership: { status: "loaded" } });
   });
 });

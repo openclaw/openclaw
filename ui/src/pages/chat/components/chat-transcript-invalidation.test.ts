@@ -475,6 +475,8 @@ describe("chat transcript invalidation", () => {
   );
 
   it("keeps settled history idle across unchanged rerenders", async () => {
+    // A minute rollover intentionally invalidates rows; this case keeps time unchanged.
+    vi.spyOn(Date, "now").mockReturnValue(1_700_000_010_000);
     const props = threadProps("pane-unchanged-rerender");
     saveChatSessionScrollPosition(props.paneId, props.sessionKey, {
       scrollTop: 0,

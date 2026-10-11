@@ -28,6 +28,7 @@ import {
   getBoundingBox,
   getRect,
   readUiCss,
+  mountMcpAppSurfaceFixture,
   rectsOverlap,
   waitForLayoutSettled,
   type ControlRect,
@@ -1503,27 +1504,19 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       if (!realChatServer) {
         throw new Error("Expected the Control UI server to be ready");
       }
-      await installResponsiveChatGateway(page);
-      await page.goto(realChatServer.baseUrl, { waitUntil: "domcontentloaded" });
-      await page.addScriptTag({
-        type: "module",
-        url: new URL("src/components/mcp-app-view-registration.ts", realChatServer.baseUrl).href,
-      });
-      const backgrounds = await page.evaluate(async () => {
+      const provider = await mountMcpAppSurfaceFixture(page, realChatServer.baseUrl);
+      const backgrounds = await provider.evaluate(async (owner: HTMLElement) => {
         await customElements.whenDefined("mcp-app-view");
-        await customElements.whenDefined("openclaw-app");
-        const app = document.querySelector("openclaw-app")!;
-        await app.updateComplete;
         const readFrameBackground = async (boardSurface?: string) => {
-          const owner = document.createElement("div");
           if (boardSurface) {
             owner.style.setProperty("--board-surface", boardSurface);
+          } else {
+            owner.style.removeProperty("--board-surface");
           }
           const view = document.createElement("mcp-app-view") as HTMLElement & {
             updateComplete: Promise<boolean>;
           };
-          owner.append(view);
-          app.append(owner);
+          owner.replaceChildren(view);
           await view.updateComplete;
           const mount = view.querySelector(".mount");
           if (!mount) {
@@ -1531,9 +1524,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
           }
           const frame = document.createElement("iframe");
           mount.append(frame);
-          const background = getComputedStyle(frame).backgroundColor;
-          owner.remove();
-          return background;
+          return getComputedStyle(frame).backgroundColor;
         };
         return {
           dashboard: await readFrameBackground("rgb(12, 34, 56)"),

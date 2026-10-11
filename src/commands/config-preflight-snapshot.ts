@@ -8,7 +8,6 @@ import {
   type ConfigSnapshotReadOptions,
 } from "../config/io.js";
 import type { PreparedConfigRecovery } from "../config/io.types.js";
-import { describeConfigSnapshotInputChange } from "../config/snapshot-inputs.js";
 import type { ConfigFileSnapshot } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { DeferredPluginMigration } from "../infra/deferred-plugin-migrations.js";
@@ -26,7 +25,6 @@ import {
   refuseStartupMigrationsForLiveGatewayOwner,
   rethrowStartupConfigFailure,
   throwStartupMigrationGuardRejected,
-  throwStartupMigrationIdentityChanged,
 } from "./doctor-startup-migration-refusal.js";
 import { addDoctorLegacyIssues } from "./doctor/shared/legacy-config-issues.js";
 
@@ -167,16 +165,14 @@ export async function readAdmittedConfigSnapshot(params: {
             let read = await measureDoctorConfigPreflightStep("admission.plugin-config", () =>
               params.readSnapshot(coreRecovery ? { isolateEnv: true } : undefined),
             );
-            assertPreflightConfigUnchanged(selected, read.snapshot);
+            if (isConfigReadFailure(read.snapshot)) {
+              throw createConfigReadError(read.snapshot);
+            }
             const recovery = await measureDoctorConfigPreflightStep(
               "admission.config-recovery",
               () => createConfigIO(recoveryOptions).prepareConfigRecovery(read.snapshot),
             );
-            if (Boolean(coreRecovery) !== Boolean(recovery)) {
-              throwStartupMigrationIdentityChanged();
-            }
             if (recovery) {
-              assertPreflightConfigUnchanged(candidate, recovery.snapshot);
               read = {
                 snapshot: recovery.snapshot,
                 pluginMetadataSnapshot: recovery.pluginMetadataSnapshot,
@@ -207,21 +203,6 @@ export async function readAdmittedConfigSnapshot(params: {
       return rethrowStartupConfigFailure(error);
     }
   });
-}
-
-export function assertPreflightConfigUnchanged(
-  before: ConfigFileSnapshot,
-  after: ConfigFileSnapshot,
-): void {
-  // Unavailable bytes cannot prove input drift or authorize a terminal refusal.
-  const unreadable = [before, after].find(isConfigReadFailure);
-  if (unreadable) {
-    throw createConfigReadError(unreadable);
-  }
-  const change = describeConfigSnapshotInputChange(before, after);
-  if (change) {
-    throwStartupMigrationIdentityChanged(change);
-  }
 }
 
 /** Admission runs before lease acquisition: even acquiring a lease commits SQLite writes. */

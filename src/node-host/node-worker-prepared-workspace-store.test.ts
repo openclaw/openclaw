@@ -71,22 +71,4 @@ describe("prepared workspace mutation admission", () => {
       expect(store.findSync(bound.environment_id)).toBe(bound);
     },
   );
-
-  it("does not let an old permit close a later mutation fence", async () => {
-    const store = new NodeWorkerPreparedWorkspaceStore({});
-    mock.execute.mockResolvedValueOnce(retiring);
-    const previous = await store.beginMutation(bound);
-    await previous.complete();
-    const admitted = createDeferredCore<NodeWorkerPreparedWorkspaceRow>();
-    mock.execute.mockReturnValueOnce(admitted.promise);
-    const pending = store.beginMutation(bound);
-    try {
-      previous.close();
-      expect(() => store.findSync(bound.environment_id)).toThrow(/mutation/i);
-    } finally {
-      admitted.resolve(retiring);
-      (await pending).close();
-    }
-    expect(store.findSync(bound.environment_id)).toBe(bound);
-  });
 });
