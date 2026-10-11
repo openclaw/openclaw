@@ -115,18 +115,19 @@ const RECOVERABLE_AGENT_WAIT_ERROR_PATTERNS: readonly RegExp[] = [
   /socket hang up/i,
 ];
 
-function isRecoverableAgentWaitError(error: string | undefined): boolean {
-  const message = error?.trim();
-  if (!message) {
-    return false;
-  }
-  if (message.includes("gateway timeout") || message.includes("gateway request timeout")) {
-    return false;
-  }
-  return (
-    hasRetryableConnectionErrorCode(message) ||
-    RECOVERABLE_AGENT_WAIT_ERROR_PATTERNS.some((pattern) => pattern.test(message))
-  );
+function normalizeAgentWaitError(error: string): AgentWaitResult {
+  const timedOut = error.includes("gateway timeout") || error.includes("gateway request timeout");
+  const message = error.trim();
+  const retryable =
+    !timedOut &&
+    message &&
+    (hasRetryableConnectionErrorCode(message) ||
+      RECOVERABLE_AGENT_WAIT_ERROR_PATTERNS.some((pattern) => pattern.test(message)));
+  return {
+    status: timedOut ? "timeout" : "error",
+    error,
+    ...(retryable ? { retryableTransportError: true as const } : {}),
+  };
 }
 
 function normalizePendingRunIds(runIds: Iterable<string>): Set<string> {
@@ -216,15 +217,7 @@ export async function waitForAgentRun(params: {
       wait,
     );
   } catch (err) {
-    const error = formatErrorMessage(err);
-    return {
-      status:
-        error.includes("gateway timeout") || error.includes("gateway request timeout")
-          ? "timeout"
-          : "error",
-      error,
-      ...(isRecoverableAgentWaitError(error) ? { retryableTransportError: true as const } : {}),
-    };
+    return normalizeAgentWaitError(formatErrorMessage(err));
   }
 }
 
