@@ -166,14 +166,36 @@ describe("agent-runner-utils", () => {
 
     it("keeps native Discord context when dashboard options are present", () => {
       const turn = makeTurn();
+      const hasRepliedRef = { value: false };
+      turn.opts = { ...turn.opts, hasRepliedRef };
       turn.sessionCtx = { Provider: "discord", To: "channel:123", AccountId: "work" };
+      hoisted.getChannelPluginMock.mockReturnValue({
+        threading: {
+          buildToolContext: () => ({
+            currentChannelId: "channel:123",
+            currentMessagingTarget: "channel:source-alias",
+            currentThreadTs: "thread-456",
+            replyToMode: "first",
+            hasRepliedRef,
+            sameChannelThreadRequired: true,
+          }),
+        },
+      });
       const token = mintReplyMessageActionTurnCapability(turn, source.runId);
       try {
         const authority = resolveMessageActionTurnAuthorization({ ...source, token });
         expect(authority).toMatchObject({
           requesterAccountId: "work",
-          toolContext: { currentChannelProvider: "discord", currentChannelId: "channel:123" },
+          toolContext: {
+            currentChannelProvider: "discord",
+            currentChannelId: "channel:123",
+            currentMessagingTarget: "channel:source-alias",
+            currentThreadTs: "thread-456",
+            replyToMode: "first",
+            sameChannelThreadRequired: true,
+          },
         });
+        expect(authority?.toolContext?.hasRepliedRef).toBe(hasRepliedRef);
         expect(authority?.assertDashboardReadCurrent).toBeUndefined();
         expect(resolveCurrentPromptReaction({ ...source, token })).toBeUndefined();
         expect(turn.opts?.dashboardReadAdmission?.assertCurrent).not.toHaveBeenCalled();

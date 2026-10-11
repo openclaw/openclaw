@@ -2868,6 +2868,10 @@ describe("message tool sandbox passthrough", () => {
           requesterSenderId: "forged-sender",
           currentChannelProvider: "discord",
           currentChannelId: "forged-current",
+          currentThreadTs: "forged-thread",
+          currentMessagingTarget: "forged-alias",
+          currentMessageId: "forged-message",
+          replyToMode: "all",
         },
         action: {
           target: "discord:123",
@@ -2896,8 +2900,13 @@ describe("message tool sandbox passthrough", () => {
       expect(call?.requesterSenderE164).toBe("+15551234567");
       expect(call?.toolContext).toMatchObject({
         currentChannelProvider: "discord",
-        currentChannelId: "forged-current",
+        currentChannelId: "trusted-current",
+        currentChatType: "channel",
       });
+      expect(call?.toolContext?.currentThreadTs).toBeUndefined();
+      expect(call?.toolContext?.currentMessagingTarget).toBeUndefined();
+      expect(call?.toolContext?.currentMessageId).toBeUndefined();
+      expect(call?.toolContext?.replyToMode).toBeUndefined();
       expect(call?.messageActionAuthorization).toMatchObject({
         requesterAccountId: "trusted-account",
         requesterSenderId: "trusted-sender",
@@ -2912,7 +2921,7 @@ describe("message tool sandbox passthrough", () => {
       });
       expect(call?.toolContext).toMatchObject({
         currentChannelProvider: "discord",
-        currentChannelId: "forged-current",
+        currentChannelId: "trusted-current",
         skipCrossContextDecoration: true,
       });
     },
