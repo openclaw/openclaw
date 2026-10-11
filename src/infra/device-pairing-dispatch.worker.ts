@@ -63,6 +63,9 @@ export function devicePairingMutation<Input, Result>(
               beforeRevision: resolveDevicePairingStoreRevision(before),
               revision: resolveDevicePairingStoreRevision(after),
               changed,
+              bindings: Object.values(after).map((device) =>
+                prepareDevicePairingBinding(device.deviceId, device),
+              ),
               ...(tokensReplaced ? { tokensReplaced } : {}),
               ...(workerEnvironment ? { workerEnvironment } : {}),
             };

@@ -25,6 +25,13 @@ export function executeDevicePairingRead(
     readDevicePairingStoreStateFromDatabase(db),
   );
   const common = { ok: true as const, sourceAdmitted: true as const, revision };
+  let bindings = bindingsBySnapshot.get(state);
+  if (!bindings) {
+    bindings = Object.values(state.pairedByDeviceId).map((device) =>
+      prepareDevicePairingBinding(device.deviceId, device),
+    );
+    bindingsBySnapshot.set(state, bindings);
+  }
   if (command.type === "devicePairing.lookup") {
     const deviceId = command.deviceId.trim();
     const device = Object.hasOwn(state.pairedByDeviceId, deviceId)
@@ -34,14 +41,14 @@ export function executeDevicePairingRead(
       ...common,
       type: command.type,
       device,
-      bindings: [prepareDevicePairingBinding(deviceId, device)],
+      bindings,
     };
   }
   if (command.type === "devicePairing.bootstrapContext") {
     return {
       ...common,
       type: command.type,
-      bindings: [],
+      bindings,
       context: getBoundDeviceBootstrapContextFromRecords(
         readDeviceBootstrapTokenRecordsFromDatabase(db),
         command.input,
@@ -54,14 +61,7 @@ export function executeDevicePairingRead(
       record && command.nowMs - (record.refreshedAtMs ?? record.ts) <= 5 * 60 * 1000
         ? (({ refreshedAtMs: _refreshedAtMs, ...request }) => request)(record)
         : null;
-    return { ...common, type: command.type, pending, bindings: [] };
-  }
-  let bindings = bindingsBySnapshot.get(state);
-  if (!bindings) {
-    bindings = Object.values(state.pairedByDeviceId).map((device) =>
-      prepareDevicePairingBinding(device.deviceId, device),
-    );
-    bindingsBySnapshot.set(state, bindings);
+    return { ...common, type: command.type, pending, bindings };
   }
   return {
     ...common,

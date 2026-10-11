@@ -51,7 +51,7 @@ async function readPairing(
       return undefined;
     }
     if (reply?.ok && "bindings" in reply) {
-      publication.publish(reply.revision, reply.bindings, reply.type === "devicePairing.list");
+      publication.publish(reply.revision, reply.bindings, true);
     } else if (!reply) {
       publication.publish("missing", [], true);
     }

@@ -50,6 +50,7 @@ export type DevicePairingCommitReceipt = {
   beforeRevision: string;
   revision: string;
   changed: DevicePairingBindingFact[];
+  bindings: DevicePairingBindingFact[];
   tokensReplaced?: { deviceId: string; roles: string[] };
   workerEnvironment?: CloudWorkerSetupCompletionPublication;
 };

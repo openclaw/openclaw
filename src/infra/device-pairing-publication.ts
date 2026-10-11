@@ -1,3 +1,4 @@
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { freezeJsonSnapshot } from "../shared/immutable-data.js";
 import { roleScopesAllow } from "../shared/operator-scope-compat.js";
@@ -15,6 +16,9 @@ import type {
   DevicePairingNodeSnapshot,
 } from "./device-pairing-read.types.js";
 import type { PairedDevice } from "./device-pairing.types.js";
+import { inspectDatabasePathIdentitySync } from "./sqlite-worker-identity.js";
+
+const log = createSubsystemLogger("device-pairing");
 
 type Publication = {
   identity: string;
@@ -39,6 +43,16 @@ function notifyPairingSources(publication: Publication, deviceIds?: readonly str
   }
 }
 
+function retirePairingProjection(publication: Publication) {
+  publication.epoch++;
+  publication.nodes = undefined;
+  publication.complete = false;
+  publication.pending.clear();
+  for (const [deviceId, row] of publication.rows) {
+    publication.rows.set(deviceId, freezeJsonSnapshot({ ...row, binding: null }));
+  }
+}
+
 const publications = resolveGlobalSingleton(
   Symbol.for("openclaw.devicePairingPublications"),
   () => {
@@ -52,18 +66,21 @@ const publications = resolveGlobalSingleton(
             publication.identity === identity.key ||
             publication.canonicalPath === identity.canonicalPath
           ) {
-            state.delete(path);
-            notifyPairingSources(publication);
+            retirePairingProjection(publication);
           }
         }
       },
     });
     registerOpenClawStateDatabaseLifecycleListener((event) => {
-      if (event.kind === "opened") {
+      if (event.kind === "opened" || event.kind === "failure-cleared") {
         return;
       }
       for (const [path, publication] of state) {
         if (path === event.path || publication.identity === event.identity?.key) {
+          if (event.kind === "closed" && event.reason !== "evicted") {
+            retirePairingProjection(publication);
+            continue;
+          }
           state.delete(path);
           notifyPairingSources(publication);
         }
@@ -213,13 +230,13 @@ export function captureDevicePairingPublication(admission: OpenClawStateDatabase
           }
           const replaced = receipt.beforeRevision !== captured.revision;
           if (replaced) {
-            captured.complete = false;
             captured.rows.clear();
           }
           if (receipt.revision !== captured.revision) {
             captured.nodes = undefined;
           }
-          install(receipt.changed);
+          install(replaced ? receipt.bindings : receipt.changed);
+          captured.complete ||= replaced;
           captured.revision = receipt.revision;
           captured.blocked = false;
           captured.mutation = undefined;
@@ -284,29 +301,63 @@ export function capturePublishedOperatorDeviceSource(
   );
   const publication = publications.get(path);
   if (!publication) {
+    log.warn("operator_pairing_authority_invalidated", {
+      reason: "publication_missing",
+      deviceId: identity.deviceId,
+    });
     throw new Error("Operator device source requires its original current pairing publication");
   }
   const expected = Object.freeze({ ...identity });
   const requestedScopes = [...scopes];
   let released = false;
+  let reported = false;
   const assertCurrent = () => {
     for (const service of publication.pending) {
       service();
     }
     const receipt = publication.mutation?.receipt;
     const prospective = receipt?.changed.find((row) => row.deviceId === expected.deviceId);
-    const binding = prospective
-      ? prospective.operatorBinding
-      : publication.rows.get(expected.deviceId)?.operatorBinding;
-    if (
-      released ||
-      publications.get(path) !== publication ||
-      publication.blocked ||
-      (receipt && receipt.beforeRevision !== publication.revision) ||
-      !binding ||
-      binding.identity !== expected.key ||
-      !roleScopesAllow({ role: "operator", requestedScopes, allowedScopes: binding.scopes })
-    ) {
+    const binding =
+      receipt && receipt.beforeRevision !== publication.revision
+        ? receipt.bindings.find((row) => row.deviceId === expected.deviceId)?.operatorBinding
+        : prospective
+          ? prospective.operatorBinding
+          : publication.rows.get(expected.deviceId)?.operatorBinding;
+    let reason = released
+      ? "source_released"
+      : publications.get(path) !== publication
+        ? "publication_replaced"
+        : publication.blocked
+          ? "publication_blocked"
+          : !binding
+            ? "operator_binding_missing"
+            : binding.identity !== expected.key
+              ? "operator_token_changed"
+              : !roleScopesAllow({
+                    role: "operator",
+                    requestedScopes,
+                    allowedScopes: binding.scopes,
+                  })
+                ? "operator_scopes_reduced"
+                : undefined;
+    if (!reason && !publication.complete) {
+      try {
+        if (inspectDatabasePathIdentitySync(path)?.key !== publication.identity)
+          reason = "database_identity_changed";
+      } catch {
+        reason = "database_identity_unavailable";
+      }
+    }
+    if (reason) {
+      if (!reported) {
+        reported = true;
+        log.warn("operator_pairing_authority_invalidated", {
+          reason,
+          deviceId: expected.deviceId,
+          revision: publication.revision,
+          complete: publication.complete,
+        });
+      }
       throw new Error("Operator device source requires its original current pairing publication");
     }
   };

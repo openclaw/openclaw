@@ -123,11 +123,15 @@ function notifyOpenClawStateDatabaseLifecycle(event: OpenClawStateDatabaseLifecy
   }
 }
 
-function notifyOpenClawStateDatabaseClosed(database: StateDatabaseHandle): void {
+function notifyOpenClawStateDatabaseClosed(
+  database: StateDatabaseHandle,
+  reason: "retired" | "evicted" = "retired",
+): void {
   notifyOpenClawStateDatabaseLifecycle({
     kind: "closed",
     path: database.path,
     identity: requireOpenClawStateDatabaseIdentity(database),
+    reason,
   });
 }
 
@@ -311,7 +315,7 @@ function evictCachedOpenClawStateDatabase(database: OpenClawStateDatabase): bool
   // but it must never remain discoverable as the process-wide shared handle.
   asyncResources.invalidate(database.path);
   cachedDatabases.delete(database.path);
-  notifyOpenClawStateDatabaseClosed(database);
+  notifyOpenClawStateDatabaseClosed(database, "evicted");
   // A poisoned cache owner is not the database lifecycle owner. PASSIVE avoids
   // waiting on readers or resetting recovery frames another connection needs.
   closeOpenClawStateDatabaseHandle(database, { checkpointMode: "PASSIVE" });

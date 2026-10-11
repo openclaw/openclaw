@@ -61,7 +61,8 @@ function commitReceipt(value: unknown): DevicePairingCommitReceipt {
     typeof value.beforeRevision !== "string" ||
     typeof value.revision !== "string" ||
     !Array.isArray(value.changed) ||
-    !value.changed.every(
+    !Array.isArray(value.bindings) ||
+    ![...value.changed, ...value.bindings].every(
       (entry) =>
         isRecord(entry) &&
         typeof entry.deviceId === "string" &&
@@ -114,6 +115,7 @@ function commitReceipt(value: unknown): DevicePairingCommitReceipt {
     kind: "devicePairing",
     beforeRevision: value.beforeRevision,
     revision: value.revision,
+    bindings: structuredClone(value.bindings),
     ...(tokensReplaced ? { tokensReplaced } : {}),
     ...(workerEnvironment ? { workerEnvironment } : {}),
     changed: value.changed.map((entry) => ({

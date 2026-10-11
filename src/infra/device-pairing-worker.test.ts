@@ -323,8 +323,8 @@ test("reconnect receipts ignore pending rows while invalidating sibling pairing 
     await expect(
       updatePairedDeviceMetadata("paired-minimal", { displayName: "Reconnected" }, baseDir),
     ).resolves.toBe(true);
-    expect(() => getPublishedPairedDeviceBinding("paired-rich", baseDir)).toThrow(
-      "requires a current worker publication",
+    expect(getPublishedPairedDeviceBinding("paired-rich", baseDir)?.identity).not.toBe(
+      previousBinding?.identity,
     );
     const tokenParams = {
       deviceId: "paired-rich",
