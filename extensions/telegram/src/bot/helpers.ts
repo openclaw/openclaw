@@ -22,6 +22,7 @@ import {
   resolveTelegramEffectiveDmPolicy,
   type NormalizedAllowFrom,
 } from "../bot-access.js";
+import { resolveAdoptedTelegramDmThreadId } from "../dm-topic-adopt.js";
 import type { TelegramThreadSpec } from "../thread-spec.js";
 import { buildTelegramConversationId } from "../topic-conversation.js";
 import {
@@ -356,6 +357,10 @@ export function resolveTelegramMessageThreadSpec(
   if (message.chat.is_direct_messages === true) {
     const id = parseStrictPositiveInteger(message.direct_messages_topic?.topic_id);
     return id === undefined ? { scope: "none" } : { id, scope: "direct-messages" };
+  }
+  const adoptedDmThreadId = resolveAdoptedTelegramDmThreadId(message);
+  if (adoptedDmThreadId !== undefined) {
+    return { id: adoptedDmThreadId, scope: "dm" };
   }
   const isGroup = message.chat.type === "group" || message.chat.type === "supergroup";
   return resolveTelegramThreadSpec({

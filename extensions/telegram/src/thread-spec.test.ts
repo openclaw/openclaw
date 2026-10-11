@@ -1,7 +1,43 @@
 // Telegram tests cover canonical thread-scope resolution and encoding.
 import type { Message } from "grammy/types";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { buildTelegramThreadParams, resolveTelegramMessageThreadSpec } from "./bot/helpers.js";
+import { resetTelegramDmTopicAdoptStateForTest } from "./dm-topic-adopt.js";
+
+describe("resolveTelegramMessageThreadSpec client-created DM topics", () => {
+  beforeEach(() => {
+    resetTelegramDmTopicAdoptStateForTest();
+  });
+
+  const chat = { id: 1001, type: "private" };
+  const from = { id: 1001, is_bot: false, first_name: "User" };
+  const topicCreated = {
+    message_id: 500,
+    date: 1_760_000_000,
+    chat,
+    from,
+    message_thread_id: 500,
+    is_topic_message: true,
+    forum_topic_created: { name: "hello", icon_color: 0, is_name_implicit: true },
+  } as unknown as Message;
+  const rootMessage = {
+    message_id: 501,
+    date: 1_760_000_000,
+    chat,
+    from,
+    text: "hello",
+  } as unknown as Message;
+
+  it("routes the root message delivered right after forum_topic_created into that topic", () => {
+    expect(resolveTelegramMessageThreadSpec(topicCreated)).toEqual({ id: 500, scope: "dm" });
+    expect(resolveTelegramMessageThreadSpec(rootMessage)).toEqual({ id: 500, scope: "dm" });
+    expect(resolveTelegramMessageThreadSpec(rootMessage)).toEqual({ id: 500, scope: "dm" });
+  });
+
+  it("keeps a root DM message without a preceding topic creation in the root session", () => {
+    expect(resolveTelegramMessageThreadSpec(rootMessage)).toEqual({ scope: "dm" });
+  });
+});
 
 describe("resolveTelegramMessageThreadSpec", () => {
   it.each([
