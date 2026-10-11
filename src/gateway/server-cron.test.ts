@@ -6,7 +6,8 @@ import path from "node:path";
 import { setImmediate as waitForImmediate } from "node:timers/promises";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { observeCronJobCommits } from "../../test/helpers/cron/runtime-mutation.js";
+import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { createRequireRecord } from "../../test/helpers/record.js";
 import { AgentDeletionCommitUncertainError } from "../agents/agent-lifecycle-registry.js";
 import {
@@ -2926,13 +2927,24 @@ describe("buildGatewayCronService", () => {
       });
 
       loadConfigMock.mockReturnValue(reloadedCfg);
-      await expect(state.cron.run(job.id, "force")).resolves.toEqual({ ok: true, ran: true });
+      await expect(state.cron.run(job.id, "force")).resolves.toEqual({
+        ok: true,
+        ran: false,
+        reason: "not-due",
+      });
       expect(runCronIsolatedAgentTurnMock).not.toHaveBeenCalled();
-      expect(await state.cron.readJob(job.id)).toMatchObject({
-        state: {
-          lastRunStatus: "error",
-          lastError: expect.stringContaining("cron job agent is unavailable: yinze"),
-        },
+      const skipped = openOpenClawStateDatabase()
+        .db.prepare(
+          "SELECT status, error_text FROM cron_run_receipts WHERE store_key = ? AND job_id = ? ORDER BY started_at_ms DESC LIMIT 1",
+        )
+        .get(cronStoreKey(getCronState(state).deps.storePath), job.id);
+      const skippedJob = await state.cron.readJob(job.id);
+      expect(skippedJob?.state.queuedAtMs).toBeUndefined();
+      expect(skippedJob?.state.runningAtMs).toBeUndefined();
+      expect(skippedJob?.state.runningReceiptId).toBeUndefined();
+      expect(skipped).toMatchObject({
+        status: "skipped",
+        error_text: expect.stringContaining("cron job agent is unavailable: yinze"),
       });
     });
   });
@@ -3167,7 +3179,7 @@ describe("buildGatewayCronService", () => {
     requestHeartbeatAndWaitMock,
   });
 
-  it("cleans a failed scheduled activation before a later cron-expression tick executes", async () => {
+  it("retries a failed scheduled activation using the committed request", async ({ signal }) => {
     vi.useFakeTimers();
     const now = Date.parse("2026-08-13T18:15:00.000Z");
     vi.setSystemTime(now);
@@ -3193,7 +3205,7 @@ describe("buildGatewayCronService", () => {
             )
             .all(storeKey, job.id);
         expect(receipts()).toEqual([]);
-        // Real reservation/activation writes; only this synthetic fault is injected.
+        // Real request/activation writes; only this synthetic fault is injected.
         database.exec(`
           CREATE TRIGGER fail_gateway_cron_activation
           AFTER UPDATE OF state_json ON cron_jobs
@@ -3207,27 +3219,37 @@ describe("buildGatewayCronService", () => {
         `);
         vi.setSystemTime(now + 60_000);
         clock.setTime(Date.now());
-        // The published timer-test entry calls the real scheduler and joins the tick.
+        // The timer-test entry calls the real scheduler.
         await expect(onCronTimer(cronState)).rejects.toThrow(
           "injected scheduled activation failure",
         );
         const failedReceipts = receipts();
         expect(failedReceipts).toHaveLength(1);
-        expect(failedReceipts[0]).toMatchObject({ status: "skipped" });
-        expect(cronState.queuedRunReservationsByJobId.has(job.id)).toBe(false);
-        expect(cronState.runAdmission.active).toBe(0);
+        expect(failedReceipts[0]).toMatchObject({ status: "running" });
         expect(cronState.activeTimerTicks).toBe(0);
         const afterFailure = (await loadCronStore(cronState.deps.storePath)).jobs.find(
           (entry) => entry.id === job.id,
         );
-        expect(afterFailure?.state.queuedAtMs).toBeUndefined();
+        expect(afterFailure?.state.queuedAtMs).toBe(now + 60_000);
+        expect(afterFailure?.state.runningReceiptId).toBeUndefined();
         expect(afterFailure?.state.runningAtMs).toBeUndefined();
         expect(runCronIsolatedAgentTurnMock).not.toHaveBeenCalled();
         database.exec("DROP TRIGGER fail_gateway_cron_activation");
 
-        vi.setSystemTime(now + 120_000);
-        clock.setTime(Date.now());
-        await onCronTimer(cronState);
+        const completed = createDeferred();
+        const stopObserving = observeCronJobCommits(job.id, (runtime) => {
+          if (runtime.lastRunStatus === "ok" && runtime.runningAtMs === undefined) {
+            completed.resolve();
+          }
+        });
+        try {
+          vi.setSystemTime(now + 120_000);
+          clock.setTime(Date.now());
+          await onCronTimer(cronState);
+          await withinTest(completed.promise, signal);
+        } finally {
+          stopObserving();
+        }
         expect(runCronIsolatedAgentTurnMock).toHaveBeenCalledOnce();
         expectIsolatedRunFields({ job: expect.objectContaining({ id: job.id }) });
         const afterTick = (await loadCronStore(cronState.deps.storePath)).jobs.find(
@@ -3236,12 +3258,9 @@ describe("buildGatewayCronService", () => {
         expect(afterTick?.state).toMatchObject({ lastRunStatus: "ok" });
         expect(afterTick?.state.queuedAtMs).toBeUndefined();
         expect(afterTick?.state.runningAtMs).toBeUndefined();
-        expect(receipts()).toHaveLength(2);
-        expect(receipts()).toEqual(
-          expect.arrayContaining([failedReceipts[0], expect.objectContaining({ status: "ok" })]),
-        );
-        expect(cronState.queuedRunReservationsByJobId.has(job.id)).toBe(false);
-        expect(cronState.runAdmission.active).toBe(0);
+        expect(receipts()).toEqual([
+          expect.objectContaining({ receipt_id: failedReceipts[0]?.receipt_id, status: "ok" }),
+        ]);
         expect(cronState.activeTimerTicks).toBe(0);
       } finally {
         database.exec("DROP TRIGGER IF EXISTS fail_gateway_cron_activation");
@@ -3289,8 +3308,6 @@ describe("buildGatewayCronService", () => {
           ).id,
       );
       expect(new Set(attemptedIds)).toEqual(new Set(jobIds));
-      expect(getCronState(state).queuedRunReservationsByJobId.size).toBe(0);
-      expect(getCronState(state).runAdmission.active).toBe(0);
       expect(getCronState(state).activeTimerTicks).toBe(0);
     } finally {
       state.cron.stop();

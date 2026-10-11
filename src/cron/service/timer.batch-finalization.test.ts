@@ -150,12 +150,9 @@ function observeInactiveJobs(jobIds: string[]) {
 }
 
 describe("cron batch outcome finalization", () => {
-  it.each([
-    { trigger: "scheduled", installSuccessor: false },
-    { trigger: "startup", installSuccessor: true },
-  ] as const)(
-    "supersedes a stale $trigger outcome (successor=$installSuccessor)",
-    async ({ trigger, installSuccessor }) => {
+  it.each(["scheduled", "startup"] as const)(
+    "supersedes a stale %s outcome when its owner becomes unavailable",
+    async (trigger) => {
       const job = dueJob(`${trigger}-superseded`);
       const runner = blockedRunner();
       let ownerAvailable = true;
@@ -166,17 +163,10 @@ describe("cron batch outcome finalization", () => {
       const batch = startBatch(trigger, state);
       try {
         await runner.started.promise;
-        if (installSuccessor) {
-          const stored = await loadCronStore(storePath);
-          stored.jobs[0]!.state.runningAtMs = DUE_AT + 1;
-          await saveCronStore(storePath, stored);
-        }
         ownerAvailable = false;
         runner.release.resolve({ status: "ok", summary: "stale completion" });
         await batch;
-        expect((await loadCronStore(storePath)).jobs[0]?.state.runningAtMs).toBe(
-          installSuccessor ? DUE_AT + 1 : undefined,
-        );
+        expect((await loadCronStore(storePath)).jobs[0]?.state.runningAtMs).toBeUndefined();
         const receipt = openOpenClawStateDatabase()
           .db.prepare(
             "SELECT status FROM cron_run_receipts WHERE store_key = ? AND job_id = ? ORDER BY started_at_ms DESC LIMIT 1",
@@ -200,7 +190,7 @@ describe("cron batch outcome finalization", () => {
     const runIsolatedAgentJob = vi.fn(async () => {
       expect((await loadCronStore(storePath)).jobs[0]?.state.runningAtMs).toBe(startedAt);
       expect(state.store?.jobs[0]?.state.runningAtMs).toBe(startedAt);
-      expect(state.store?.jobs[0]?.state.lastError).toBeUndefined();
+      expect(state.store?.jobs[0]?.state.lastError).toBe("previous failure");
       return { status: "ok" as const, summary: "finished before terminal store failure" };
     });
     const { state, storePath } = await fixture([job], {
@@ -436,7 +426,6 @@ describe("cron batch outcome finalization", () => {
       expect(persisted?.state.lastRunStatus).toBe("ok");
       expect(persisted?.state.runningAtMs).toBeUndefined();
       expect(findCronTask(job.id)?.status).toBe("succeeded");
-      expect(state.queuedRunReservationsByJobId.size).toBe(0);
       expect(isCronJobActive(job.id)).toBe(false);
     } finally {
       await finishBatch(state, batch, runner);
@@ -465,7 +454,6 @@ describe("cron batch outcome finalization", () => {
       const persisted = (await loadCronStore(storePath)).jobs.find((job) => job.id === second.id);
       expect(persisted?.state.lastRunStatus).toBe("ok");
       expect(persisted?.state.runningAtMs).toBeUndefined();
-      expect(state.queuedRunReservationsByJobId.size).toBe(0);
       expect(isCronJobActive(first.id)).toBe(false);
       expect(isCronJobActive(second.id)).toBe(false);
     } finally {
@@ -475,7 +463,7 @@ describe("cron batch outcome finalization", () => {
     }
   });
 
-  it("releases unstarted startup reservations when terminal finalization fails", async () => {
+  it("leaves unrequested startup jobs untouched when terminal finalization fails", async () => {
     const first = dueJob("startup-failed-write-before-stop");
     const unstarted = dueJob("startup-unstarted-after-failed-write");
     const runIsolatedAgentJob = vi.fn(async () => ({
@@ -493,7 +481,6 @@ describe("cron batch outcome finalization", () => {
       );
       expect(persisted?.state.queuedAtMs).toBeUndefined();
       expect(persisted?.state.runningAtMs).toBeUndefined();
-      expect(state.queuedRunReservationsByJobId.size).toBe(0);
       expect(isCronJobActive(first.id)).toBe(false);
       expect(isCronJobActive(unstarted.id)).toBe(false);
     } finally {
@@ -503,16 +490,15 @@ describe("cron batch outcome finalization", () => {
     }
   });
 
-  it.each([{ trigger: "startup", concurrency: 1, deleteAfterRun: false }] as const)(
+  it.each([{ trigger: "startup", deleteAfterRun: false }] as const)(
     "persists a completed $trigger job before its sibling drains",
-    async ({ trigger, concurrency, deleteAfterRun }) => {
+    async ({ trigger, deleteAfterRun }) => {
       const first = dueJob(`${trigger}-finished`, { deleteAfterRun });
       const second = dueJob(`${trigger}-blocked`);
       const runner = blockedRunner(second.id);
       const events: CronEvent[] = [];
       const { state, storePath } = await fixture([first, second], {
         runIsolatedAgentJob: runner.run,
-        testAdmissionLimit: concurrency,
         onEvent: (event) => events.push(event),
       });
 
@@ -547,7 +533,6 @@ describe("cron batch outcome finalization", () => {
         await finishBatch(state, batch, runner);
       }
       expect(findCronTask(second.id)?.status).toBe("succeeded");
-      expect(state.queuedRunReservationsByJobId.size).toBe(0);
     },
   );
 
@@ -628,7 +613,6 @@ describe("cron batch outcome finalization", () => {
       }
 
       expect(findCronTask(lastJob.id)?.status).toBe("succeeded");
-      expect(state.queuedRunReservationsByJobId.size).toBe(0);
     },
   );
 });

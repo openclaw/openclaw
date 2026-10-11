@@ -4,7 +4,6 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, vi } from "vitest";
-import { DEFAULT_CRON_MAX_CONCURRENT_RUNS } from "../../../src/config/cron-limits.js";
 import { clearSessionStoreCacheForTest } from "../../../src/config/sessions/store-writer-state.js";
 import { createRunningCronServiceState } from "../../../src/cron/service.test-harness.js";
 import { createCronServiceState, type CronServiceDeps } from "../../../src/cron/service/state.js";
@@ -44,9 +43,8 @@ type CronRegressionDefaults =
 
 export function createCronRegressionState(
   deps: Omit<CronServiceDeps, CronRegressionDefaults> &
-    Partial<Pick<CronServiceDeps, CronRegressionDefaults>> & { testAdmissionLimit?: number },
+    Partial<Pick<CronServiceDeps, CronRegressionDefaults>>,
 ) {
-  const { testAdmissionLimit, ...stateParams } = deps;
   const state = createCronServiceState({
     scheduler: createTestGatewayScheduler(),
     nowMs: () => Date.now(),
@@ -54,11 +52,8 @@ export function createCronRegressionState(
     log: noopLogger,
     enqueueSystemEvent: vi.fn(),
     requestHeartbeat: vi.fn(),
-    ...stateParams,
+    ...deps,
   });
-  if (testAdmissionLimit !== undefined) {
-    state.runAdmission.active = DEFAULT_CRON_MAX_CONCURRENT_RUNS - testAdmissionLimit;
-  }
   return state;
 }
 

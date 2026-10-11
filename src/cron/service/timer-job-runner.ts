@@ -274,13 +274,7 @@ async function executeJobCoreWithTimeoutUnfinalized(
     };
     return withPrimaryWebhookInterruption({ job, result, error: deliveryError });
   };
-  const reservation = opts?.runReceipt ? state.queuedRunReservationsByJobId.get(job.id) : undefined;
-  if (
-    !isCronActiveJobMarkerCurrent(opts?.activeJobMarker) ||
-    (opts?.runReceipt &&
-      (reservation?.runReceipt.receiptId !== opts.runReceipt.receiptId ||
-        reservation.lifecycleGeneration !== state.lifecycleGeneration))
-  ) {
+  if (!isCronActiveJobMarkerCurrent(opts?.activeJobMarker)) {
     runAbortController.abort("Gateway restarting.");
     return await createInterruptionOutcome("cancelled");
   }

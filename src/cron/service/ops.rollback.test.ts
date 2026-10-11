@@ -12,7 +12,7 @@ import { loadCronStore } from "../store.js";
 import { cronStoreKey } from "../store/key.js";
 import { add, remove, removeAgentJobsTransactional, update } from "./ops-mutations.js";
 import { list } from "./ops-read.js";
-import { inspectManualRunDisposition } from "./ops-run-preparation.js";
+import { run } from "./ops-run.js";
 import { createOkIsolatedCronStateFactory } from "./ops.test-support.js";
 
 const { logger, makeStorePath } = setupCronServiceSuite({
@@ -385,7 +385,7 @@ describe("cron service ops persist rollback", () => {
     });
 
     try {
-      await expect(inspectManualRunDisposition(state, job.id)).resolves.toEqual({
+      await expect(run(state, job.id)).resolves.toEqual({
         ok: true,
         ran: false,
         reason: "not-due",

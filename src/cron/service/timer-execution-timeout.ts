@@ -9,7 +9,6 @@ import type { CronActiveJobMarker } from "../active-jobs.js";
 import type { CronCompletionDeliveryFence } from "../delivery-attempt-fence.js";
 import type { CronRunReceiptSettlementDisposition } from "../store/run-receipt-store.js";
 import type { CronRunReceiptHandle } from "../store/run-receipt.types.js";
-import type { StartupDeferredJob } from "../store/runtime-worker.types.js";
 import type {
   CronAgentExecutionPhaseUpdate,
   CronAgentExecutionStarted,
@@ -49,7 +48,6 @@ export type TimedCronRunOutcome = CronJobExecutionResult & {
   deliveryState: CronResolvedDeliveryState;
   isolatedAgentSetupTimeout?: IsolatedAgentSetupTimeoutSignal;
   activeJobMarker?: CronActiveJobMarker;
-  reservationIdentity?: object;
   runReceipt?: CronRunReceiptHandle;
   runReceiptContext?: OpenClawStateWorkerContext;
   receiptSettlementDisposition?: CronRunReceiptSettlementDisposition;
@@ -84,23 +82,6 @@ export type IsolatedAgentSetupTimeoutResult = {
   job: CronJob;
   isolatedAgentSetupTimeout?: IsolatedAgentSetupTimeoutSignal;
 };
-
-export type StartupCatchupCandidate = {
-  jobId: string;
-  job: CronJob;
-  reservedAtMs: number;
-  reservationIdentity: object;
-};
-
-export type StartupCatchupPlan = {
-  lifecycleGeneration: number;
-  candidates: StartupCatchupCandidate[];
-  deferredJobs: StartupDeferredJob[];
-};
-
-export type StartupCatchupExecution =
-  | { ok: true; outcomes: TimedCronRunOutcome[] }
-  | { ok: false; outcomes: TimedCronRunOutcome[]; error: unknown };
 
 export type ExecuteJobCoreOptions = {
   deliveryAttemptFence?: CronCompletionDeliveryFence;
