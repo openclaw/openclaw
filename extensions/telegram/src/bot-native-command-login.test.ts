@@ -31,6 +31,10 @@ const loginSessionMocks = vi.hoisted(() => ({
   loadSessionStore: vi.fn(),
   resolveStorePath: vi.fn(),
   prepareSessionEntryPatch: vi.fn(),
+  recordDeliveredCommandExchange: vi.fn(async () => ({
+    ok: true,
+    target: { sessionId: "login-session" },
+  })),
 }));
 
 // mock-isolation: Keep session database startup outside the command fixture.
@@ -43,6 +47,8 @@ vi.mock("./bot-native-commands.runtime.js", () => ({
       typeof import("openclaw/plugin-sdk/session-store-runtime").getSessionEntryAsync
     >[0],
   ) => loginSessionMocks.getSessionEntry(params),
+  resolveStorePath: loginSessionMocks.resolveStorePath,
+  recordDeliveredCommandExchange: loginSessionMocks.recordDeliveredCommandExchange,
   resolveChunkMode: vi.fn(() => "length"),
   resolveThreadSessionKeys: vi.fn(
     ({
@@ -75,6 +81,7 @@ vi.mock("openclaw/plugin-sdk/session-store-runtime", async () => {
 
 function resetLoginCommandMocks() {
   resetNativeCommandMenuMocks();
+  loginSessionMocks.recordDeliveredCommandExchange.mockClear();
   loginSessionMocks.loadSessionStore.mockReset().mockReturnValue({});
   loginSessionMocks.getSessionEntry
     .mockReset()

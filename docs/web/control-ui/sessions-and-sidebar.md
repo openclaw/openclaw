@@ -208,6 +208,7 @@ Custom groups, Created sort, When filtering for empty groups, and message previe
 Display choices never add a filter dot. Tab moves between rows; Left and Right choose within a segmented
 status control. **Owners** opens a picker with owner avatars and a search field;
 type to filter owners by name, and Escape clears the search before closing.
+The selected owner keeps its known display name when a status filter leaves no sessions.
 **Group by**, **Sort by**, and **Hide empty groups** show their current choices
 and open submenus on hover or click. Right opens a submenu and Left closes it (reversed in RTL);
 Up and Down move between choices, and Enter selects. Automation, system sessions,

@@ -18,6 +18,16 @@ For the personal-agent default — one rolling conversation shared by all your
 DM channels, with group activity and background work flowing into it — see
 [The main session](/concepts/main-session).
 
+Delivered command exchanges from the shared dispatcher are conversation history
+too. OpenClaw appends the user's command and delivered reply as ordinary
+user/assistant messages. Telegram native menus, button selections, and setting
+acknowledgements are also retained; other channels' native direct-send adapters
+are not covered. Later turns and chat history can read these exchanges. Login,
+pairing, and sensitive `/config set` or `/debug set` values are redacted before storage.
+`/new` and `/reset` put their confirmation exchange in the new session; they do not
+rewrite the old session. `/btw` and `/side` stay ephemeral, and message edits or
+deletions do not rewrite earlier transcript rows.
+
 ## How messages are routed
 
 | Source          | Behavior                      |

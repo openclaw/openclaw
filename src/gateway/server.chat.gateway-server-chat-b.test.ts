@@ -3162,36 +3162,14 @@ describe("gateway server chat", () => {
     },
   );
 
-  {
-    let identityContext: GatewayRequestContext | undefined;
-    const identityResponses: unknown[] = [];
-    registerChatConnectionIdentityTest({
-      withDirectChatSession,
-      prepareSession: () => writeStoredMainSession(makeDoneSessionEntry()),
-      waitForSessionWork: getDirectChatSessionWorkRelease,
-      sendControlUiChat: (params) => {
-        identityContext = params.context;
-        return sendControlUiChat({
-          ...params,
-          respond: (...args) => {
-            identityResponses.push(args);
-            params.respond(...args);
-          },
-        });
-      },
-      readTranscript: () => {
-        console.info(
-          "connection identity diagnostic",
-          JSON.stringify({
-            responses: identityResponses,
-            warnings: identityContext && vi.mocked(identityContext.logGateway.warn).mock.calls,
-            errors: identityContext && vi.mocked(identityContext.logGateway.error).mock.calls,
-          }),
-        );
-        return loadTranscriptEventsSync(makeMainSessionScope(testState.sessionStorePath));
-      },
-    });
-  }
+  registerChatConnectionIdentityTest({
+    withDirectChatSession,
+    prepareSession: () => writeStoredMainSession(makeDoneSessionEntry()),
+    waitForSessionWork: getDirectChatSessionWorkRelease,
+    sendControlUiChat,
+    readTranscript: () =>
+      loadTranscriptEventsSync(makeMainSessionScope(testState.sessionStorePath)),
+  });
 
   test("chat.send preserves a terminal source claim before admitting the next turn", async () => {
     const { storePath } = openDirectChatSession();

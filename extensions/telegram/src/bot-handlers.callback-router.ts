@@ -9,6 +9,7 @@ import {
 } from "openclaw/plugin-sdk/models-provider-runtime";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { recordDeliveredCommandExchange } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import {
   hasTelegramApprovalCallbackPrefix,
@@ -392,6 +393,17 @@ export function createTelegramCallbackRouter({
             throw new TelegramRetryableCallbackError(editErr);
           }
         }
+        const session = await resolveSessionState();
+        await recordDeliveredCommandExchange({
+          config: runtimeCfg,
+          agentId: session.agentId,
+          sessionKey: session.sessionKey,
+          expectedSessionId: session.sessionEntry?.sessionId,
+          commandText: `/commands ${page}`,
+          commandId: `telegram:${accountId}:${callback.id}`,
+          replyId: String(callbackMessage.message_id),
+          replyText: result.text,
+        });
         return;
       }
 
@@ -415,6 +427,24 @@ export function createTelegramCallbackRouter({
           );
           return { sessionState: session, modelData: providerData };
         });
+        let commandText = "/model";
+        const showModelReply = async (...args: Parameters<typeof editMessageWithButtons>) => {
+          await editMessageWithButtons(...args);
+          const [text, buttons] = args;
+          await recordDeliveredCommandExchange({
+            config: runtimeCfg,
+            agentId: sessionState.agentId,
+            sessionKey: sessionState.sessionKey,
+            expectedSessionId: sessionState.sessionEntry?.sessionId,
+            commandText,
+            commandId: `telegram:${accountId}:${callback.id}`,
+            replyId: String(callbackMessage.message_id),
+            replyText: [
+              text.replace(/<[^>]*>/g, ""),
+              ...(buttons ?? []).map((row) => row.map((button) => button.text).join(", ")),
+            ].join("\n"),
+          });
+        };
         const { byProvider, providers, resolvedDefault: activeResolvedDefault } = modelData;
         const providerInfos: ProviderInfo[] = providers.map((provider) => ({
           id: provider,
@@ -422,15 +452,12 @@ export function createTelegramCallbackRouter({
         }));
         const showChangedModelPicker = () =>
           retryModelAction(() =>
-            editMessageWithButtons(
-              MODEL_PICKER_CHANGED_MESSAGE,
-              buildProviderKeyboard(providerInfos),
-            ),
+            showModelReply(MODEL_PICKER_CHANGED_MESSAGE, buildProviderKeyboard(providerInfos)),
           );
 
         if (modelCallback.type === "providers" || modelCallback.type === "back") {
           if (providers.length === 0) {
-            await retryModelAction(() => editMessageWithButtons("No providers available.", []));
+            await retryModelAction(() => showModelReply("No providers available.", []));
             return;
           }
           const notice = [...(modelData.modelMenu?.byProvider.values() ?? [])]
@@ -438,7 +465,7 @@ export function createTelegramCallbackRouter({
             .filter(Boolean)
             .join("\n");
           await retryModelAction(() =>
-            editMessageWithButtons(
+            showModelReply(
               [modelData.refreshWarning, "Select a provider:", notice].filter(Boolean).join("\n\n"),
               buildProviderKeyboard(providerInfos),
             ),
@@ -454,6 +481,7 @@ export function createTelegramCallbackRouter({
             return;
           }
           const { provider, page } = listSelection;
+          commandText = `/model ${provider} ${page}`;
           const models = [...modelSet].toSorted((left, right) => left.localeCompare(right));
           const totalPages = calculateTotalPages(models.length);
           const safePage = Math.max(1, Math.min(page, totalPages));
@@ -478,10 +506,7 @@ export function createTelegramCallbackRouter({
             availability,
           })}\nSelecting a model also applies its configured runtime.`;
           await retryModelAction(() =>
-            editMessageWithButtons(
-              [modelData.refreshWarning, text].filter(Boolean).join("\n\n"),
-              buttons,
-            ),
+            showModelReply([modelData.refreshWarning, text].filter(Boolean).join("\n\n"), buttons),
           );
           return;
         }
@@ -495,6 +520,7 @@ export function createTelegramCallbackRouter({
           return;
         }
 
+        commandText = `/model ${selection.provider}/${selection.model}`;
         try {
           const storePath = telegramDeps.resolveStorePath(runtimeCfg.session?.store, {
             agentId: sessionState.agentId,
@@ -548,7 +574,7 @@ export function createTelegramCallbackRouter({
             }),
           );
           if (applied.status !== "applied") {
-            await editMessageWithButtons(`❌ ${applied.message}`, []);
+            await showModelReply(`❌ ${applied.message}`, []);
             return;
           }
           const defaultAuthProfileNotice =
@@ -565,14 +591,14 @@ export function createTelegramCallbackRouter({
           const scopeText = isDefaultSelection
             ? `Session model selection cleared.${defaultAuthProfileNotice ? ` ${defaultAuthProfileNotice}` : ""} ${runtimeText} New replies use the agent's configured default.`
             : `Session-only model selection. ${runtimeText} The agent default in openclaw.json is unchanged. This chat keeps the model selection across /new and /reset; use /model default -s to clear the session model selection.`;
-          await editMessageWithButtons(`✅ Model ${actionText}\n\n${scopeText}`, [], {
+          await showModelReply(`✅ Model ${actionText}\n\n${scopeText}`, [], {
             parse_mode: "HTML",
           });
         } catch (err) {
           if (err instanceof TelegramRetryableCallbackError) {
             throw err;
           }
-          await editMessageWithButtons(`❌ Failed to change model: ${String(err)}`, []);
+          await showModelReply(`❌ Failed to change model: ${String(err)}`, []);
         }
         return;
       }

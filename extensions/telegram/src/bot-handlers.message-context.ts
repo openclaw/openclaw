@@ -175,11 +175,11 @@ export function createTelegramMessageSessionRuntime({
     const storePath = telegramDeps.resolveStorePath(params.runtimeCfg.session?.store, {
       agentId: route.agentId,
     });
-    const entry = await loadSessionEntry({ storePath, sessionKey });
+    const entry = await loadSessionEntry({ agentId: route.agentId, storePath, sessionKey });
     const storedOverride = await resolveStoredModelOverrideAsync({
       sessionEntry: entry,
       loadSessionEntry: (parentSessionKey) =>
-        loadSessionEntry({ storePath, sessionKey: parentSessionKey }),
+        loadSessionEntry({ agentId: route.agentId, storePath, sessionKey: parentSessionKey }),
       sessionKey,
       defaultProvider: resolveDefaultModelForAgent({
         cfg: params.runtimeCfg,
