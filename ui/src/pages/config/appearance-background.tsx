@@ -12,7 +12,8 @@ export function AppearanceBackgroundContent(
   props: AppearanceBackgroundProps & { host: HTMLElement },
 ) {
   const context = createMemo(() => props.context ?? useApplication());
-  const [revision, publish] = createSignal(0);
+  // Plain controllers can notify while a descendant or bridge owns the current scope.
+  const [revision, publish] = createSignal(0, { ownedWrite: true });
   const controller = new AppearanceBackgroundController(() => publish((value) => value + 1));
   const viewProps = createMemo(() => {
     revision();

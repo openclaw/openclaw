@@ -76,7 +76,9 @@ export function AppearanceBackground(props: AppearanceBackgroundView) {
                                 ]}
                                 data-background-source={source}
                                 aria-label={t(`configView.appearance.background.${source}`)}
-                                aria-pressed={String(preference().source.kind === source)}
+                                aria-pressed={
+                                  preference().source.kind === source ? "true" : "false"
+                                }
                                 disabled={
                                   props.busy ||
                                   (source === "custom" && !props.hasImage && !props.uploadAllowed)
@@ -200,7 +202,7 @@ export function AppearanceBackground(props: AppearanceBackgroundView) {
                       aria-label={t("configView.appearance.background.visibility")}
                       aria-describedby="settings-background-visibility-hint"
                       aria-valuetext={`${visibility()}%`}
-                      prop:value={String(visibility())}
+                      value={String(visibility())}
                       disabled={disabled()}
                       onPointerDown={(event) => props.onPreviewStart(event)}
                       onPointerUp={(event) => props.onPreviewEnd(event)}
@@ -284,7 +286,7 @@ export function AppearanceBackground(props: AppearanceBackgroundView) {
                 },
               ]}
             >
-              {props.message.text}
+              {props.message.text}{" "}
               {props.onRetry ? (
                 <>
                   <button

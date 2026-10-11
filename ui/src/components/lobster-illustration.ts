@@ -1,4 +1,3 @@
-import type { JSX } from "@solidjs/web";
 import { property } from "lit/decorators.js";
 import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
 import type { LobsterPetLook } from "./lobster-pet-contract.ts";

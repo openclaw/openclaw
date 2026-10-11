@@ -20,6 +20,7 @@ export type UpdatesPageProps = {
   configObject: Record<string, unknown>;
   configBusy: boolean;
   updateBusy: boolean;
+  nowMs?: number;
 };
 
 export function UpdatesPage(props: UpdatesPageProps) {
@@ -45,6 +46,7 @@ export function UpdatesPage(props: UpdatesPageProps) {
       canReport={canReportUpdateFailure(snapshot())}
       canDiagnose={canCallGatewayMethod(snapshot(), "openclaw.chat", "operator.admin")}
       updateBusy={props.updateBusy}
+      nowMs={props.nowMs}
       onChannelChange={(channel) =>
         props.context.runtimeConfig.patchForm(["update", "channel"], channel)
       }

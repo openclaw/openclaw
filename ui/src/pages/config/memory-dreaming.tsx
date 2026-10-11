@@ -240,7 +240,7 @@ function DreamingField(props: { settings: DreamingSettingsProps; spec: DreamingF
               spellcheck="false"
               aria-label={t(props.spec.labelKey)}
               disabled={props.settings.disabled}
-              prop:value={text()}
+              value={text()}
               placeholder={defaultValue()}
               onChange={(event) => {
                 const input = event.currentTarget;
@@ -333,7 +333,7 @@ function DreamingModelPicker(props: DreamingModelPickerProps) {
         aria-label={t("cron.form.customModel")}
         aria-invalid="false"
         placeholder={props.placeholder}
-        prop:value={props.value}
+        value={props.value}
         hidden={!props.value || props.value === customValue()}
         disabled={props.disabled}
         onChange={(event) => props.onChange(event.currentTarget.value)}

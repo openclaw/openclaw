@@ -33,7 +33,8 @@ import {
 import { UpdateGitRevisions } from "../../components/solid/update-git-revisions.tsx";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { formatDateTimeMs, formatTimeAgo } from "../../lib/format.ts";
-import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
+import { projectNativeDeviceSettings } from "../../lib/reactive/application-native.ts";
+import { locale, registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { UpdatesStatus } from "./updates-status.tsx";
 
 registerEnglishCatalog(registerSettingsEnglish);
@@ -68,7 +69,11 @@ export type UpdatesViewProps = {
 };
 
 function DeviceUpdates(props: { capability?: NativeDeviceSettingsCapability | null }) {
-  const snapshot = () => props.capability?.snapshot;
+  const native = createMemo(() => {
+    const capability = props.capability;
+    return capability ? projectNativeDeviceSettings(capability) : null;
+  });
+  const snapshot = () => native()?.read();
   const updates = () => snapshot()?.updates;
   return (
     <Show when={snapshot() && updates()}>
@@ -474,6 +479,10 @@ export function Updates(props: UpdatesViewProps) {
     settings().channel === "dev" && props.update.updateSchedule?.install?.kind === "package";
   const campaign = () => props.update.updateSchedule?.campaign;
   const separateCampaign = () => run() && campaign() && run()!.origin.campaignId !== campaign()!.id;
+  const campaignLabel = () => {
+    locale();
+    return formatUpdateCampaignLabel(props.update.updateSchedule, props.nowMs);
+  };
   const showHold = () => {
     const currentCampaign = campaign();
     const holdActive =
@@ -654,7 +663,7 @@ export function Updates(props: UpdatesViewProps) {
               control={
                 <div>
                   <span role="timer" aria-live="off">
-                    {formatUpdateCampaignLabel(props.update.updateSchedule, props.nowMs)}
+                    {campaignLabel()}
                   </span>
                   <UpdateGitRevisions
                     schedule={props.update.updateSchedule}

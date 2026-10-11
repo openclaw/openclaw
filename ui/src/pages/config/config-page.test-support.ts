@@ -1,6 +1,7 @@
 import { createComponent, createSignal } from "solid-js";
 import { resolveThemeBranding } from "../../../../packages/gateway-protocol/src/theme.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { loadSettings } from "../../app/settings.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
 import { flush } from "../../test-helpers/solid-settle.ts";
@@ -38,6 +39,7 @@ export function completeConfigContext(context: ApplicationContext): ApplicationC
   const subscribe = () => () => undefined;
   Object.assign(context, {
     basePath: context.basePath ?? "",
+    router: context.router ?? { subscribe },
     config: context.config ?? { current: { assistantIdentity: { name: "OpenClaw" } }, subscribe },
     settingsAgentSelection: context.settingsAgentSelection ?? {
       state: { selectedId: "main" },
@@ -73,6 +75,7 @@ export function completeConfigContext(context: ApplicationContext): ApplicationC
     context.overlays,
     context.webPush,
     context.runtimeConfig,
+    context.router,
   ]) {
     observeFixture(source);
   }
@@ -85,9 +88,11 @@ export function completeConfigContext(context: ApplicationContext): ApplicationC
   Object.assign(context.theme, {
     branding: context.theme.branding ?? resolveThemeBranding(undefined),
     serverSelection: context.theme.serverSelection ?? null,
+    settings: context.theme.settings ?? loadSettings(),
   });
   Object.assign(context.gateway, {
     connection: context.gateway.connection ?? { gatewayUrl: "ws://config.test" },
+    subscribeEvents: context.gateway.subscribeEvents ?? subscribe,
   });
   const state = context.runtimeConfig.state;
   const defaults = {
@@ -125,15 +130,17 @@ export function mountConfigPage(
   const provider = createSolidApplicationContextProvider(completeConfigContext(initialContext));
   const [props, setProps] = createSignal(initial);
   const view = mountSolid(
-    () =>
-      createComponent(ConfigPage, {
+    () => {
+      const result = createComponent(ConfigPage, {
         get pageId() {
           return props().pageId ?? "advanced";
         },
         get routeData() {
           return props().routeData ?? null;
         },
-      }),
+      });
+      return result;
+    },
     { wrapper: provider.wrapper },
   );
   flush();

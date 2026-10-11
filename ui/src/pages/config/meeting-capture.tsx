@@ -52,7 +52,7 @@ export function MeetingCaptureSettingsContent(props: SettingsProps) {
   let disposed = false;
   let request: AbortController | undefined;
   const [requestStatus, setRequestStatus] = createSignal<"idle" | "pending" | "complete" | "error">(
-    "idle",
+    untrack(client) ? "pending" : "idle",
   );
   const [requestError, setRequestError] = createSignal<unknown>();
   const [result, setResult] = createSignal<
@@ -78,8 +78,8 @@ export function MeetingCaptureSettingsContent(props: SettingsProps) {
   let editedSource: unknown;
   let sourceDraft: Record<string, unknown> = {};
   let originalLocatorRequirements: SourceProvider["autoStart"];
-  let previousHello: unknown;
-  let previousAuth: unknown;
+  let previousHello = context.gateway.snapshot.hello;
+  let previousAuth = previousHello?.auth;
   function synchronizeConnection() {
     const snapshot = context.gateway.snapshot;
     const transition = gateway.transition(snapshot);
@@ -96,7 +96,6 @@ export function MeetingCaptureSettingsContent(props: SettingsProps) {
     }
   }
   const unsubscribeGateway = gatewayProjection.subscribe(synchronizeConnection);
-  synchronizeConnection();
   onCleanup(unsubscribeGateway);
   const requestKey = createMemo(
     () => {
@@ -112,10 +111,12 @@ export function MeetingCaptureSettingsContent(props: SettingsProps) {
     },
     { equals: (previous, next) => previous.every((value, index) => value === next[index]) },
   );
-  createEffect(requestKey, ([currentClient, , hello, auth, hash]) => {
+  createEffect(requestKey, ([currentClient, , hello, auth, hash], previous) => {
     request?.abort();
     if (!currentClient) {
-      setRequestStatus("idle");
+      if (previous) {
+        setRequestStatus("idle");
+      }
       return;
     }
     const controller = new AbortController();
@@ -132,7 +133,9 @@ export function MeetingCaptureSettingsContent(props: SettingsProps) {
       context.runtimeConfig.state.configSnapshot?.hash === hash;
     const isCurrent = () =>
       !controller.signal.aborted && request === controller && isConnectionCurrent();
-    setRequestStatus("pending");
+    if (previous) {
+      setRequestStatus("pending");
+    }
     void currentClient
       .request<TranscriptsStatusResult>("transcripts.status", {}, { signal: controller.signal })
       .then(
@@ -366,7 +369,7 @@ export function MeetingCaptureSettingsContent(props: SettingsProps) {
                   aria-label={t("meetingCapture.fields.providerId")}
                   required
                   disabled={disabled()}
-                  prop:value={editedProviderId()}
+                  value={editedProviderId()}
                   onChange={(event: Event) => {
                     // SAFETY: This native select emits the change event handled by its own binding.
                     selectProvider((event.target as HTMLSelectElement).value);
@@ -413,7 +416,7 @@ export function MeetingCaptureSettingsContent(props: SettingsProps) {
                         key !== "sessionId" &&
                         locatorRequirements()?.[key] === "required"
                       }
-                      prop:value={typeof source?.[key] === "string" ? source[key] : ""}
+                      value={typeof source?.[key] === "string" ? source[key] : ""}
                       onInput={(event: Event) => {
                         // Health refreshes can remove metadata; unsaved locators must survive.
                         // SAFETY: This native input emits the input event handled by its own binding.

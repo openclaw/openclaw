@@ -147,7 +147,7 @@ function MediaDeviceField(props: { config: ConfigProps; kind: "microphone" | "ca
             data-settings-microphone={props.kind === "microphone" ? "" : undefined}
             data-settings-camera={props.kind === "camera" ? "" : undefined}
             aria-label={title()}
-            prop:value={selectedDeviceId()}
+            value={selectedDeviceId()}
             onPointerDown={(event) => {
               if (event.button === 0) {
                 requestAccess();
@@ -257,7 +257,7 @@ export function ChatPreferencesSection(props: ConfigProps) {
                     type="text"
                     spellCheck="false"
                     placeholder="48rem"
-                    prop:value={props.chatMessageMaxWidth ?? ""}
+                    value={props.chatMessageMaxWidth ?? ""}
                     onChange={(event: Event) => {
                       // SAFETY: The listener is bound directly to this input.
                       const input = event.currentTarget as HTMLInputElement;
@@ -356,7 +356,7 @@ export function ChatPreferencesSection(props: ConfigProps) {
                     class="settings-select"
                     data-settings-follow-up-mode
                     aria-label={t("chat.followUpMode")}
-                    prop:value={followUpSelection()}
+                    value={followUpSelection()}
                     onChange={(event: Event) => {
                       const value = (event.currentTarget as HTMLSelectElement).value;
                       props.onAppearanceChange({
@@ -399,8 +399,7 @@ export function ChatPreferencesSection(props: ConfigProps) {
               setting={"catalog-open-target"}
               description={
                 <>
-                  {catalogTargetDefaultDescription}
-                  {t("quickSettings.personal.browserOnly")}
+                  {catalogTargetDefaultDescription} {t("quickSettings.personal.browserOnly")}
                 </>
               }
               options={[

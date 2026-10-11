@@ -74,8 +74,7 @@ export function LobsterPetSection(props: ConfigProps) {
                       : "quickSettings.appearance.lobsterVisitsOff",
                   )}
                   <br />
-                  {lobsterVisitsDefaultDescription}
-                  {t("quickSettings.personal.browserOnly")}
+                  {lobsterVisitsDefaultDescription} {t("quickSettings.personal.browserOnly")}
                   {themeHiddenDescription()}
                 </>
               }

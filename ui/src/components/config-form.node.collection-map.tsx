@@ -105,7 +105,7 @@ function ConfigMapRow(
             class="settings-input"
             placeholder={t("configForm.key")}
             aria-label={`${t("configForm.key")}: ${key()}`}
-            prop:value={key()}
+            value={key()}
             disabled={props.params.disabled}
             onChange={(event) => {
               const target = event.currentTarget;

@@ -1,7 +1,7 @@
 import type { SessionsStorageStatusResult } from "@openclaw/gateway-protocol";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import type { JSX } from "@solidjs/web";
-import { For, createEffect, createMemo, createSignal, onCleanup } from "solid-js";
+import { For, Show, createEffect, createMemo, createSignal, onCleanup, untrack } from "solid-js";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
 import {
@@ -53,7 +53,7 @@ export function SessionStorageSettingsContent(props: SettingsProps) {
   let disposed = false;
   let request: AbortController | undefined;
   const [requestStatus, setRequestStatus] = createSignal<"idle" | "pending" | "complete" | "error">(
-    "idle",
+    untrack(client) ? "pending" : "idle",
   );
   const [requestError, setRequestError] = createSignal<unknown>();
   const [result, setResult] = createSignal<
@@ -76,8 +76,8 @@ export function SessionStorageSettingsContent(props: SettingsProps) {
   const [runError, setRunError] = createSignal<string | null>(null);
   const [runOutcome, setRunOutcome] = createSignal<string | null>(null);
   const [runOperation, setRunOperation] = createSignal<object | null>(null);
-  let previousHello: unknown;
-  let previousAuth: unknown;
+  let previousHello = context.gateway.snapshot.hello;
+  let previousAuth = previousHello?.auth;
   let followingRun = false;
   let maintenanceTimer: ReturnType<typeof setInterval> | undefined;
   function stopPolling() {
@@ -121,7 +121,6 @@ export function SessionStorageSettingsContent(props: SettingsProps) {
     }
   }
   const unsubscribeGateway = gatewayProjection.subscribe(synchronizeConnection);
-  synchronizeConnection();
   onCleanup(unsubscribeGateway);
   const requestKey = createMemo(
     () => {
@@ -137,10 +136,12 @@ export function SessionStorageSettingsContent(props: SettingsProps) {
     },
     { equals: (previous, next) => previous.every((value, index) => value === next[index]) },
   );
-  createEffect(requestKey, ([currentClient, , hello, auth, hash]) => {
+  createEffect(requestKey, ([currentClient, , hello, auth, hash], previous) => {
     request?.abort();
     if (!currentClient) {
-      setRequestStatus("idle");
+      if (previous) {
+        setRequestStatus("idle");
+      }
       return;
     }
     const controller = new AbortController();
@@ -157,7 +158,9 @@ export function SessionStorageSettingsContent(props: SettingsProps) {
       context.runtimeConfig.state.configSnapshot?.appliedConfigHash === hash;
     const isCurrent = () =>
       !controller.signal.aborted && request === controller && isConnectionCurrent();
-    setRequestStatus("pending");
+    if (previous) {
+      setRequestStatus("pending");
+    }
     void currentClient
       .request<SessionsStorageStatusResult>(
         "sessions.storage.status",
@@ -451,28 +454,32 @@ export function SessionStorageSettingsContent(props: SettingsProps) {
               </button>
             }
           >
-            {status() ? (
-              renderInventory(status())
-            ) : (
-              <SettingsEmpty
-                message={
-                  requestStatus() === "error" ? (
-                    <span role="alert">
-                      {formatUiError(requestError())}
-                      {t("configView.sessionStorage.refreshAfterError")}
-                    </span>
-                  ) : (
-                    t(
-                      client()
-                        ? "common.loading"
-                        : context.gateway.snapshot.phase === "connected"
-                          ? "configView.sessionStorage.adminRequired"
-                          : "configView.sessionStorage.disconnected",
+            <Show
+              when={status()}
+              keyed
+              fallback={
+                <SettingsEmpty
+                  message={
+                    requestStatus() === "error" ? (
+                      <span role="alert">
+                        {formatUiError(requestError())}
+                        {t("configView.sessionStorage.refreshAfterError")}
+                      </span>
+                    ) : (
+                      t(
+                        client()
+                          ? "common.loading"
+                          : context.gateway.snapshot.phase === "connected"
+                            ? "configView.sessionStorage.adminRequired"
+                            : "configView.sessionStorage.disconnected",
+                      )
                     )
-                  )
-                }
-              />
-            )}
+                  }
+                />
+              }
+            >
+              {(currentStatus) => renderInventory(currentStatus)}
+            </Show>
           </SettingsSection>
           <SettingsSection title={t("configView.sessionStorage.automatic")}>
             <>

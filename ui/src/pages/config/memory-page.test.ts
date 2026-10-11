@@ -823,7 +823,12 @@ describe("MemorySettingsPage tab routing", () => {
 
       element.configObject = { plugins: { slots: { memory: "engine-b" } } };
       await waitForSolid(() => expect(memoryStatus).toHaveBeenCalledTimes(2));
-      expect(element.textContent).toContain("engine-b");
+      await waitForSolid(() => {
+        expect(element.querySelector(".memory-overview__hero h2")?.textContent).toBe(
+          "Memory is awake",
+        );
+        expect(element.textContent).toContain("engine-b");
+      });
     } finally {
       element.remove();
     }

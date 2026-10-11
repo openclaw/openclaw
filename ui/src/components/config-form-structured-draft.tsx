@@ -76,7 +76,7 @@ export function ConfigFormStructuredDraftContent(props: {
   };
   return (
     <Show when={props.props && draftValue()}>
-      {() => (
+      {(_draft) => (
         <>
           {props.props!.renderNode(() => ({
             ...props.props!.params,

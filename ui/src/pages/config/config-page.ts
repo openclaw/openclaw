@@ -7,6 +7,7 @@ import type {
 } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ModelCatalogEntry } from "../../api/types.ts";
+import { titleForRoute } from "../../app-navigation.ts";
 import { pathForRoute } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context-types.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
@@ -221,6 +222,11 @@ export class ConfigPageController {
     private readonly invalidate: () => void,
     private readonly observe: () => unknown = () => undefined,
   ) {}
+
+  get nowMs() {
+    this.observe();
+    return Date.now();
+  }
 
   get application() {
     return this.context;

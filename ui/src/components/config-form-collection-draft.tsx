@@ -246,7 +246,7 @@ export function ConfigFormCollectionDraftContent(props: {
                 aria-describedby={errorId()}
                 aria-invalid={invalidTarget() === "key" ? "true" : "false"}
                 placeholder={t("configForm.key")}
-                prop:value={draftKey()}
+                value={draftKey()}
                 onInput={(event) => {
                   setDraftKey(event.currentTarget.value);
                   clearError();
@@ -278,7 +278,7 @@ export function ConfigFormCollectionDraftContent(props: {
                   aria-invalid={invalidTarget() === "value" ? "true" : "false"}
                   placeholder={t("configForm.jsonValue")}
                   rows={2}
-                  prop:value={draftValue()}
+                  value={draftValue()}
                   disabled={draftIsNull()}
                   onInput={onValueInput}
                 />
@@ -291,7 +291,7 @@ export function ConfigFormCollectionDraftContent(props: {
                 aria-label={valueLabel()}
                 aria-describedby={errorId()}
                 aria-invalid={invalidTarget() === "value" ? "true" : "false"}
-                prop:value={draftValue()}
+                value={draftValue()}
                 disabled={draftIsNull()}
                 onInput={onValueInput}
               />

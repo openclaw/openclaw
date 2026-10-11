@@ -95,6 +95,7 @@ function renderConfigPageSubtitle(pageId: ConfigPageId) {
 function ConfigBody(props: {
   controller: ConfigPageController;
   pageId: ConfigPageId;
+  routeData: ConfigRouteData | null;
   config: ConfigProps;
   configObject: Record<string, unknown>;
 }) {
@@ -158,6 +159,7 @@ function ConfigBody(props: {
         <UpdatesPage
           context={context()}
           configObject={props.configObject}
+          nowMs={props.controller.nowMs}
           configBusy={props.controller.mutationDisabled}
           updateBusy={props.controller.updateBusy}
         />
@@ -168,7 +170,7 @@ function ConfigBody(props: {
           mutationDisabled={props.controller.mutationDisabled}
           pluginsHref={pathForRoute("plugins", context().basePath)}
           memoryImportHref={pathForRoute("memory-import", context().basePath)}
-          routeData={props.controller.routeData}
+          routeData={props.routeData}
           buildEditor={() =>
             editor("memory", t("tabs.memory"), memorySettingsSchema(config().schema))
           }
@@ -220,7 +222,8 @@ export type ConfigPageProps = { pageId: ConfigPageId; routeData: ConfigRouteData
 function ConfigPageContent(props: ConfigPageProps & { host: HTMLElement }) {
   const host = untrack(() => props.host);
   const context = useApplication();
-  const [revision, publish] = createSignal(0);
+  // Plain controllers can notify while a descendant or bridge owns the current scope.
+  const [revision, publish] = createSignal(0, { ownedWrite: true });
   const controller = new ConfigPageController(
     context,
     () => publish((value) => value + 1),
@@ -301,6 +304,7 @@ function ConfigPageContent(props: ConfigPageProps & { host: HTMLElement }) {
         <ConfigBody
           controller={controller}
           pageId={props.pageId ?? "advanced"}
+          routeData={props.routeData ?? null}
           config={configProps()}
           configObject={configObject()}
         />

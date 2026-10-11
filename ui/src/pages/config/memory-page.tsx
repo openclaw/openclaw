@@ -2,7 +2,7 @@ import type { JSX } from "@solidjs/web";
 // Controller for the Memory destination page. The URL owns the active tab;
 // this element projects Settings agent selection into Overview status and
 // consumes the global configuration controllers used by Settings.
-import { createEffect, createSignal, onCleanup, untrack } from "solid-js";
+import { createEffect, createSignal, onCleanup, onSettled, Show, untrack } from "solid-js";
 import type { DoctorMemoryStatusPayload } from "../../../../src/gateway/server-methods/doctor.ts";
 import { pathForMemoryTab } from "../../app-route-paths.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
@@ -609,18 +609,23 @@ export function MemorySettingsContent(props: MemorySettingsPageProps) {
   );
   // Owner notifications are synchronous: a disconnect/reconnect pair must retire
   // pending reads even when Solid batches both publications into one render.
-  onCleanup(
-    agentSelection.subscribe(() =>
-      untrack(() => selectAgent(agentSelection.read().state.selectedId)),
-    ),
-  );
-  onCleanup(gateway.subscribe(() => untrack(() => syncGateway(gateway.read().snapshot))));
-  onCleanup(runtime.subscribe(() => untrack(() => syncSupport(application.runtimeConfig))));
-  onCleanup(agents.subscribe(() => untrack(() => void loadOverviewStatus())));
-  untrack(() => {
+  onSettled(() => {
+    const unsubscribe = [
+      agentSelection.subscribe(() =>
+        untrack(() => selectAgent(agentSelection.read().state.selectedId)),
+      ),
+      gateway.subscribe(() => untrack(() => syncGateway(gateway.read().snapshot))),
+      runtime.subscribe(() => untrack(() => syncSupport(application.runtimeConfig))),
+      agents.subscribe(() => untrack(() => void loadOverviewStatus())),
+    ];
     syncRouteAgent();
     selectAgent(agentSelection.read().state.selectedId);
     syncGateway(gateway.read().snapshot);
+    return () => {
+      for (const stop of unsubscribe) {
+        stop();
+      }
+    };
   });
   let previousEngine: string | null | undefined;
   createEffect(
@@ -700,7 +705,11 @@ export function MemorySettingsContent(props: MemorySettingsPageProps) {
           agentId={agentId()}
         />
       }
-      dreams={agentId() ? <openclaw-agent-memory-panel prop:agentId={agentId()} /> : null}
+      dreams={
+        <Show when={agentId()} keyed>
+          {(id) => <openclaw-agent-memory-panel prop:agentId={id} />}
+        </Show>
+      }
       editor={activeTab() === "settings" ? props.buildEditor() : null}
       dreamingSettings={
         activeTab() === "settings" ? (

@@ -8,6 +8,7 @@ import {
   createIosNativeDeviceSettingsSnapshot,
   createNativeDeviceSettingsSnapshot,
 } from "../../test-helpers/native-device-settings.ts";
+import { flush } from "../../test-helpers/solid-settle.ts";
 import { createUpdateRunFixture } from "../../test-helpers/update-run.ts";
 import {
   createUpdatesViewDom,
@@ -265,9 +266,15 @@ describe("renderUpdates", () => {
   );
 
   it("keeps Mac updater controls native and available independently of Gateway admin access", () => {
+    const nativeListeners = new Set<Parameters<NativeDeviceSettingsCapability["subscribe"]>[0]>();
     const nativeDeviceSettings = {
       snapshot: createNativeDeviceSettingsSnapshot(),
-      subscribe: () => () => undefined,
+      subscribe: (listener) => {
+        nativeListeners.add(listener);
+        return () => {
+          nativeListeners.delete(listener);
+        };
+      },
       set: vi.fn(),
       requestPermission: vi.fn(),
       openSystemSettings: vi.fn(),
@@ -290,9 +297,20 @@ describe("renderUpdates", () => {
     expect(nativeDeviceSettings.set).toHaveBeenCalledWith("updates.automatic", false);
     row("Check for Updates…").querySelector("button")?.click();
     expect(nativeDeviceSettings.checkForUpdates).toHaveBeenCalledOnce();
-    nativeDeviceSettings.snapshot!.updates.available = false;
-    nativeDeviceSettings.snapshot!.updates.unavailableReason = "Updater is not bundled";
-    mountUpdates(props);
+    nativeDeviceSettings.snapshot = {
+      ...nativeDeviceSettings.snapshot,
+      device: { ...nativeDeviceSettings.snapshot.device, appVersion: "2026.9.4", appBuild: "43" },
+      updates: {
+        ...nativeDeviceSettings.snapshot.updates,
+        available: false,
+        unavailableReason: "Updater is not bundled",
+      },
+    };
+    for (const listener of nativeListeners) {
+      listener(nativeDeviceSettings.snapshot);
+    }
+    flush();
+    expect(row("App version").textContent).toContain("2026.9.4 (build 43)");
     expect(row("App updates unavailable").textContent).toContain("Updater is not bundled");
     expect(container.textContent).not.toContain("Check for updates automatically");
     mountUpdates(createProps());
@@ -516,36 +534,38 @@ describe("renderUpdates", () => {
 
   it("renders the authoritative waiting countdown as a quiet timer", () => {
     const onHoldUpdate = vi.fn(async () => true);
-    mountUpdates(
-      createProps({
-        update: {
-          updateSchedule: {
-            channel: "dev",
-            autoEnabled: true,
-            install: { kind: "git" },
-            target: {
-              kind: "git",
-              upstreamRef: "origin/main",
-              upstreamSha: "a".repeat(40),
-              commitsBehind: 3,
-            },
-            campaign: {
-              id: "campaign-1",
-              state: "waiting-for-idle",
-              announcedAtMs: 1_000,
-              forceAtMs: 762_000,
-              updatedAtMs: 1_000,
-            },
+    const props = createProps({
+      update: {
+        updateSchedule: {
+          channel: "dev",
+          autoEnabled: true,
+          install: { kind: "git" },
+          target: {
+            kind: "git",
+            upstreamRef: "origin/main",
+            upstreamSha: "a".repeat(40),
+            commitsBehind: 3,
           },
-          updateAvailable: null,
+          campaign: {
+            id: "campaign-1",
+            state: "waiting-for-idle",
+            announcedAtMs: 1_000,
+            forceAtMs: 762_000,
+            updatedAtMs: 1_000,
+          },
         },
-        onHoldUpdate,
-      }),
-    );
+        updateAvailable: null,
+      },
+      onHoldUpdate,
+    });
+    mountUpdates(props);
 
     const timer = row("Status").querySelector("[role='timer']");
     expect(timer?.getAttribute("aria-live")).toBe("off");
     expect(timer?.textContent).toContain("Waiting for active work · forced update in 12:41");
+    mountUpdates({ ...props, nowMs: 61_000 });
+    expect(row("Status").querySelector("[role='timer']")).toBe(timer);
+    expect(timer?.textContent).toContain("Waiting for active work · forced update in 11:41");
     const hold = row("Status").querySelector<HTMLButtonElement>("button");
     expect(hold?.textContent?.trim()).toBe("Hold 1 h");
     hold?.click();
@@ -553,35 +573,41 @@ describe("renderUpdates", () => {
   });
 
   it("shows held campaign timing and hides the one-shot hold action", () => {
-    mountUpdates(
-      createProps({
-        update: {
-          updateSchedule: {
-            channel: "dev",
-            autoEnabled: true,
-            install: { kind: "git" },
-            target: {
-              kind: "git",
-              upstreamRef: "origin/main",
-              upstreamSha: "a".repeat(40),
-              commitsBehind: 3,
-            },
-            campaign: {
-              id: "campaign-1",
-              state: "waiting-for-idle",
-              announcedAtMs: 1_000,
-              holdUntilMs: 61_000,
-              forceAtMs: 961_000,
-              updatedAtMs: 1_000,
-            },
+    const props = createProps({
+      update: {
+        updateSchedule: {
+          channel: "dev",
+          autoEnabled: true,
+          install: { kind: "git" },
+          target: {
+            kind: "git",
+            upstreamRef: "origin/main",
+            upstreamSha: "a".repeat(40),
+            commitsBehind: 3,
           },
-          updateAvailable: null,
+          campaign: {
+            id: "campaign-1",
+            state: "waiting-for-idle",
+            announcedAtMs: 1_000,
+            holdUntilMs: 61_000,
+            forceAtMs: 961_000,
+            updatedAtMs: 1_000,
+          },
         },
-      }),
-    );
+        updateAvailable: null,
+      },
+    });
+    mountUpdates(props);
 
     expect(row("Status").textContent).toContain("Update held · resumes in 1:00");
     expect(row("Status").querySelector("button")).toBeNull();
+
+    mountUpdates({ ...props, nowMs: 31_000 });
+    expect(row("Status").textContent).toContain("Update held · resumes in 0:30");
+    expect(row("Status").querySelector("button")).toBeNull();
+    mountUpdates({ ...props, nowMs: 61_000 });
+    expect(row("Status").textContent).toContain("Waiting for active work · forced update in 15:00");
+    expect(row("Status").querySelector("button")?.textContent?.trim()).toBe("Hold 1 h");
 
     mountUpdates(
       createProps({

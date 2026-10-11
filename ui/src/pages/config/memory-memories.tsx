@@ -80,7 +80,11 @@ export function MemoryMemoriesContent(props: MemoryMemoriesProps) {
 
   createEffect(
     () => [props.agentId, props.client, props.connected, props.methodAdvertised] as const,
-    resetSearch,
+    (_identity, previous) => {
+      if (previous) {
+        resetSearch();
+      }
+    },
   );
   onCleanup(() => {
     searchRequest = null;
@@ -233,7 +237,7 @@ export function MemoryMemoriesContent(props: MemoryMemoriesProps) {
           <button
             type="button"
             class="settings-row settings-row--nav"
-            aria-expanded={String(openResultKey() === key())}
+            aria-expanded={openResultKey() === key() ? "true" : "false"}
             aria-controls={panelId()}
             onClick={() => toggleResult(rowProps.result, rowProps.index)}
           >
@@ -347,7 +351,7 @@ export function MemoryMemoriesContent(props: MemoryMemoriesProps) {
                 id="memory-search-input"
                 type="search"
                 class="settings-input"
-                prop:value={query()}
+                value={query()}
                 placeholder={t("memoryPage.memories.searchPlaceholder")}
                 onInput={(event) => setQuery(event.currentTarget.value)}
               />

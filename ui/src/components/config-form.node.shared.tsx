@@ -46,7 +46,7 @@ export function SensitiveToggleButton(props: {
             type="button"
             class="settings-secret__toggle"
             aria-label={label()}
-            aria-pressed={props.state.isRevealed}
+            aria-pressed={props.state.isRevealed ? "true" : "false"}
             disabled={props.disabled || !props.state.canReveal}
             onClick={() => props.onToggleSensitivePath?.(props.path)}
           >

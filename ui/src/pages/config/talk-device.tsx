@@ -109,7 +109,7 @@ export function VoiceWakeEditor(props: {
                 class="settings-input"
                 aria-label={t("configPage.deviceTalk.triggerWords")}
                 rows={4}
-                prop:value={text()}
+                value={text()}
                 onInput={(event) => props.onInput(event.currentTarget.value)}
               />
             )}

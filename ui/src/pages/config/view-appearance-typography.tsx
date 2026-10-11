@@ -112,7 +112,7 @@ export function Typography(
                     placeholder={t("configView.appearance.fonts.terminalDefault")}
                     maxLength={100}
                     spellCheck="false"
-                    prop:value={props.terminalFontFamily ?? ""}
+                    value={props.terminalFontFamily ?? ""}
                     onInput={(
                       event: Event & {
                         currentTarget: HTMLInputElement;

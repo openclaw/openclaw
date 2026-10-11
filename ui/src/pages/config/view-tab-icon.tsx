@@ -167,7 +167,7 @@ export function TabIconSection(props: TabIconViewProps) {
                     <button
                       type="button"
                       class="settings-tab-icon__pick"
-                      aria-pressed={String(selectedShape() === choice)}
+                      aria-pressed={selectedShape() === choice ? "true" : "false"}
                       aria-label={t(`configView.appearance.tabIcon.${choice}`)}
                       title={t(`configView.appearance.tabIcon.${choice}`)}
                       onClick={() => props.setTabIconMode(preference)}
@@ -204,7 +204,7 @@ export function TabIconSection(props: TabIconViewProps) {
                     <button
                       type="button"
                       class="settings-tab-icon__pick"
-                      aria-pressed={String(selected()?.id === palette().id)}
+                      aria-pressed={selected()?.id === palette().id ? "true" : "false"}
                       aria-label={lobsterPaletteName(palette().id)}
                       title={lobsterPaletteName(palette().id)}
                       onClick={() => props.setTabIconMode(`lobster:${palette().id}`)}

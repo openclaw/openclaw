@@ -661,7 +661,11 @@ describe("ConfigPage Updates integration", () => {
       ...container.querySelectorAll<HTMLInputElement>(".settings-toggle__input"),
     ];
     const checks = policySwitches.find(
-      (control) => control.closest(".settings-toggle")?.textContent?.trim() === "Check for updates",
+      (control) =>
+        control
+          .closest(".settings-row")
+          ?.querySelector(".settings-row__title")
+          ?.textContent?.trim() === "Check for updates",
     );
     if (!checks) {
       throw new Error("Missing update checks control");
@@ -669,7 +673,11 @@ describe("ConfigPage Updates integration", () => {
     checks.checked = false;
     checks.dispatchEvent(new Event("change"));
     const automatic = policySwitches.find(
-      (control) => control.closest(".settings-toggle")?.textContent?.trim() === "Automatic updates",
+      (control) =>
+        control
+          .closest(".settings-row")
+          ?.querySelector(".settings-row__title")
+          ?.textContent?.trim() === "Automatic updates",
     );
     if (!automatic) {
       throw new Error("Missing automatic update control");

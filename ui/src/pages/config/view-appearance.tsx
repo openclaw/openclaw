@@ -252,13 +252,13 @@ export function AppearanceSection(props: ConfigProps) {
         <section id={APPEARANCE_SETTINGS_TARGET_IDS.theme} class="settings-section">
           {<SettingsSectionHeader title={t("configView.appearance.theme")} />}
           <p class="settings-section__desc">
-            {t("configView.appearance.chooseTheme")}
+            {t("configView.appearance.chooseTheme")}{" "}
             {
               <SettingsDefaultDescription
                 value={themeDefault()}
                 overridden={props.themeOverridden}
               />
-            }
+            }{" "}
             {themeProvenance()}
           </p>
           {themeUnavailable() ? (
@@ -273,7 +273,7 @@ export function AppearanceSection(props: ConfigProps) {
           {props.themeCatalog?.error ? (
             <>
               <p class="settings-status settings-status--error" role="alert">
-                {props.themeCatalog.error}
+                {props.themeCatalog.error}{" "}
                 <button
                   type="button"
                   class="btn btn--sm"
@@ -300,7 +300,9 @@ export function AppearanceSection(props: ConfigProps) {
                           aria-pressed={
                             opt().id === "custom" && !props.hasCustomTheme
                               ? undefined
-                              : String(opt().id === presentedTheme().id)
+                              : opt().id === presentedTheme().id
+                                ? "true"
+                                : "false"
                           }
                           title={opt().description}
                           data-theme-id={opt().id}
@@ -336,7 +338,7 @@ export function AppearanceSection(props: ConfigProps) {
                         value={themeModeDefault()}
                         overridden={props.themeModeOverridden}
                       />
-                    }
+                    }{" "}
                     {themeModeProvenance()}
                   </>
                 }
@@ -399,7 +401,7 @@ export function AppearanceSection(props: ConfigProps) {
                         type="text"
                         spellCheck="false"
                         placeholder="https://tweakcn.com/editor/theme?theme=... or amethyst-haze"
-                        prop:value={props.customThemeImportUrl}
+                        value={props.customThemeImportUrl}
                         onInput={(event: Event) =>
                           props.onCustomThemeImportUrlChange(
                             // SAFETY: The listener is bound directly to this input.
@@ -470,8 +472,8 @@ export function AppearanceSection(props: ConfigProps) {
               ) : (
                 <>
                   <p class="settings-theme-import__inline-hint">
-                    {t("configView.appearance.inlineHintBefore")}
-                    <strong>{t("configView.appearance.import")}</strong>
+                    {t("configView.appearance.inlineHintBefore")}{" "}
+                    <strong>{t("configView.appearance.import")}</strong>{" "}
                     {t("configView.appearance.inlineHintAfter")}
                   </p>
                 </>
@@ -515,7 +517,7 @@ export function AppearanceSection(props: ConfigProps) {
                             }}
                             data-accent-preset={preset.id}
                             aria-label={label()}
-                            aria-pressed={String(selected())}
+                            aria-pressed={selected() ? "true" : "false"}
                             title={label()}
                             onClick={() => props.setAccent(preset.hex)}
                           >
@@ -557,7 +559,7 @@ export function AppearanceSection(props: ConfigProps) {
                     aria-label={t("configView.appearance.customAccent")}
                     aria-describedby="settings-accent-status"
                     title={t("configView.appearance.customAccent")}
-                    prop:value={accentColor() ?? ACCENT_PRESETS[1].hex}
+                    value={accentColor() ?? ACCENT_PRESETS[1].hex}
                     onInput={(
                       event: Event & {
                         currentTarget: HTMLInputElement;
@@ -589,7 +591,7 @@ export function AppearanceSection(props: ConfigProps) {
                 value={`${UI_APPEARANCE_DEFAULTS.textScale}%`}
                 overridden={props.textScaleOverridden}
               />
-            }
+            }{" "}
             {t("quickSettings.personal.browserOnly")}
           </p>
           <div class="settings-group">
@@ -606,7 +608,7 @@ export function AppearanceSection(props: ConfigProps) {
                               "settings-text-scale__btn",
                               { active: stop === props.textScale },
                             ]}
-                            aria-pressed={String(stop === props.textScale)}
+                            aria-pressed={stop === props.textScale ? "true" : "false"}
                             onClick={() => props.setTextScale(stop)}
                           >
                             <span class="settings-text-scale__sample">
