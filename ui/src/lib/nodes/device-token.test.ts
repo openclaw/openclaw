@@ -91,6 +91,20 @@ describe("current browser device token", () => {
     },
   );
 
+  it("keeps credentials scoped to the requested Gateway route", () => {
+    storeIdentity();
+    const gatewayUrl = `${tokenParams.gatewayUrl}/first`;
+    storeDeviceAuthToken({
+      ...tokenParams,
+      gatewayUrl,
+      token: "first-token",
+      scopes: ["operator.read"],
+    });
+
+    expect(loadCurrentDeviceAuthToken(`${tokenParams.gatewayUrl}/second`)).toBeNull();
+    expect(loadCurrentDeviceAuthToken(gatewayUrl)).toBe("first-token");
+  });
+
   it.each([null, "another-device"])(
     "rejects an old device credential when the current identity is %s",
     (deviceId) => {

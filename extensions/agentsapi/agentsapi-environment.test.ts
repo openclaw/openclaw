@@ -619,6 +619,41 @@ describe("Agents API attempt environment selection", () => {
       }
     },
   );
+  it("explains the missing self-hosted attachment provider", async () => {
+    const { result } = await attempt("self_hosted", undefined, undefined, [
+      { path: "/fixture/input.txt" },
+    ]);
+
+    expect(result).toMatchObject({
+      terminal: {
+        kind: "failed",
+        error: expect.objectContaining({
+          message:
+            "Workspace attachments require a registered attachment provider; configure one for this execution environment before retrying",
+        }),
+      },
+    });
+  });
+
+  it("preserves the workspace provider's managed-source boundary", async () => {
+    const fixture = await workspaceAttachmentFixture();
+    const source = path.join(fixture.gatewayRoot, "private-project-file.txt");
+    await fs.writeFile(source, "private project bytes");
+    try {
+      const { result } = await attempt("self_hosted", undefined, fixture.gatewayRoot, [
+        { path: source, fileName: "import-job.log" },
+      ]);
+
+      expect(result).toMatchObject({
+        terminal: {
+          kind: "failed",
+          error: expect.objectContaining({ code: "path-not-allowed" }),
+        },
+      });
+    } finally {
+      fixture.release();
+    }
+  });
 });
 
 async function attempt(

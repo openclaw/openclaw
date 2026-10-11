@@ -89,6 +89,13 @@ it("keeps one captured broker connection despite ambient selector changes", asyn
   await binding?.close();
 });
 
+it("does not admit another route when the authored broker is unavailable", async () => {
+  vi.mocked(openSystemdBroker).mockRejectedValue(new Error("broker unavailable"));
+  expect(await admitSystemdServiceReadBinding(env, performance.now() + 1000)).toBeUndefined();
+  expect(openSystemdBroker).toHaveBeenCalledOnce();
+  expect(openSystemdPrivatePeer).not.toHaveBeenCalled();
+});
+
 it("authenticates through the runtime bus instead of a stale shell address", async () => {
   const runtime = dirs.make("openclaw-broker-route-,");
   await fs.writeFile(path.join(runtime, "bus"), "");
@@ -98,6 +105,21 @@ it("authenticates through the runtime bus instead of a stale shell address", asy
   );
   expect(openSystemdBroker).toHaveBeenCalledExactlyOnceWith(
     `unix:path=${path.posix.join(runtime, "bus").replaceAll(",", "%2C")}`,
+    expect.any(Number),
+  );
+  expect(binding).toBeDefined();
+  await binding?.close();
+});
+
+it("preserves a working custom broker when an unrelated runtime socket exists", async () => {
+  const runtime = dirs.make("openclaw-custom-broker-");
+  await fs.writeFile(path.join(runtime, "bus"), "");
+  const binding = await admitSystemdServiceReadBinding(
+    { ...env, XDG_RUNTIME_DIR: runtime },
+    performance.now() + 1000,
+  );
+  expect(openSystemdBroker).toHaveBeenCalledExactlyOnceWith(
+    env.DBUS_SESSION_BUS_ADDRESS,
     expect.any(Number),
   );
   expect(binding).toBeDefined();
@@ -156,15 +178,22 @@ it.each(["account", "process", "native peer"])(
   },
 );
 
-it.each([0xffffffff])("keeps malformed manager UID %j diagnostic", async (uid) => {
-  query.mockResolvedValueOnce([[":1.0"]]).mockResolvedValueOnce([[uid]]);
-  expect(await admitSystemdServiceReadBinding(env, performance.now() + 1000)).toBeUndefined();
-  expect(openSystemdPrivatePeer).not.toHaveBeenCalled();
-  expect(closeBroker).toHaveBeenCalledOnce();
-});
+it.each([null, -1, 0xffffffff, 1000.5, "1000"])(
+  "keeps malformed manager UID %j diagnostic",
+  async (uid) => {
+    query.mockResolvedValueOnce([[":1.0"]]).mockResolvedValueOnce([[uid]]);
+    expect(await admitSystemdServiceReadBinding(env, performance.now() + 1000)).toBeUndefined();
+    expect(openSystemdPrivatePeer).not.toHaveBeenCalled();
+    expect(closeBroker).toHaveBeenCalledOnce();
+  },
+);
 
 it.each([
+  "unixexec:path=/usr/bin/helper",
+  "tcp:host=example.invalid,port=1234",
+  "x-machine-unix:machine=container",
   "unix:path=/custom/bus;unixexec:path=/usr/bin/helper",
+  "unix:path=/custom/bus;tcp:host=example.invalid,port=1234",
   "unix:path=/custom/bus,abstract=other",
 ])(
   "leaves unsupported transport %s to the existing adapter without opening it",
@@ -188,5 +217,31 @@ it("preserves a custom abstract local Unix route", async () => {
   );
   expect(binding).toBeDefined();
   expect(openSystemdBroker).toHaveBeenCalledWith(address, expect.any(Number));
+  await binding?.close();
+});
+
+it("admits the selected runtime bus after a stale nonlocal address", async () => {
+  const runtime = dirs.make("openclaw-nonlocal-fallback-");
+  await fs.writeFile(path.join(runtime, "bus"), "");
+  vi.mocked(execFileUtf8).mockResolvedValueOnce({
+    code: 1,
+    termination: "exit",
+    stdout: "",
+    stderr: "Failed to connect to bus: Connection refused",
+  });
+  const binding = await admitSystemdServiceReadBinding(
+    {
+      ...env,
+      XDG_RUNTIME_DIR: runtime,
+      DBUS_SESSION_BUS_ADDRESS: "tcp:host=example.invalid,port=1234",
+    },
+    performance.now() + 1000,
+  );
+  expect(binding).toBeDefined();
+  expect(openSystemdBroker).toHaveBeenCalledExactlyOnceWith(
+    `unix:path=${runtime}/bus`,
+    expect.any(Number),
+  );
+  expect(execFileUtf8).toHaveBeenCalledTimes(2);
   await binding?.close();
 });

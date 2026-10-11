@@ -355,13 +355,23 @@ describe("ClawHub parent publication authorization", () => {
     expect(validateClawHubParentAuthorization(receipt, sealed)).toEqual(receipt);
   });
 
-  it.each(["childRunId", "candidateSha"])("rejects receipt substitution of %s", (key) => {
+  it("seals detached publication at the immutable release milestone", () => {
     const sealed = transactions();
-    const receipt = createClawHubParentAuthorization(sealed, "automated-detached");
-    expect(() =>
-      validateClawHubParentAuthorization({ ...receipt, [key]: "changed" }, sealed),
-    ).toThrow(/mismatch/u);
+    const receipt = createClawHubParentAuthorization(sealed, "automated-sealed");
+    expect(receipt.authorizationRoute).toBe("automated-sealed");
+    expect(validateClawHubParentAuthorization(receipt, sealed)).toEqual(receipt);
   });
+
+  it.each(["childRunId", "childRunAttempt", "candidateSha", "toolingSha", "childFullRef"])(
+    "rejects receipt substitution of %s",
+    (key) => {
+      const sealed = transactions();
+      const receipt = createClawHubParentAuthorization(sealed, "automated-detached");
+      expect(() =>
+        validateClawHubParentAuthorization({ ...receipt, [key]: "changed" }, sealed),
+      ).toThrow(/mismatch/u);
+    },
+  );
 
   it("rejects package selection and inventory substitutions", () => {
     const sealed = transactions();

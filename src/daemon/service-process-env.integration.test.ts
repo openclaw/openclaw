@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
 import { serviceProcessEnvEntrypoints } from "./service-process-env-runtime.test-support.js";
+import { resolveServiceManagerEnv } from "./service-process-env.js";
 import {
   buildSystemdManagerPropertyOutput,
   buildSystemdUnitPropertyOutput,
@@ -348,4 +349,46 @@ assert.equal(result.code, 0);
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
+});
+
+describe("service manager routing environment", () => {
+  it.each(["linux", "win32"] as const)(
+    "preserves %s native routing without arbitrary namespaces",
+    (platform) => {
+      vi.spyOn(process, "platform", "get").mockReturnValue(platform);
+      const source = Object.freeze({
+        PATH: "/native/bin",
+        HOME: "/native/home",
+        NO_COLOR: "",
+        DBUS_SESSION_BUS_ADDRESS: "unix:path=/bus",
+        XDG_RUNTIME_DIR: "/run/native",
+        SYSTEMD_UNIT_PATH: "/units",
+        SYSTEMD_BUS_TIMEOUT: "3s",
+        SUDO_USER: "caller",
+        SYSTEMD_PAGER: "untrusted",
+        DBUS_APPLICATION: "synthetic",
+        XDG_APPLICATION: "synthetic",
+        NODE_OPTIONS: "--inspect",
+        OPENCLAW_PROFILE: "private",
+        BOUNDARY_PARENT_ONLY: "synthetic",
+      });
+      expect(resolveServiceManagerEnv(source)).toEqual({
+        PATH: "/native/bin",
+        HOME: "/native/home",
+        NO_COLOR: "",
+        DBUS_SESSION_BUS_ADDRESS: "unix:path=/bus",
+        XDG_RUNTIME_DIR: "/run/native",
+        SYSTEMD_UNIT_PATH: "/units",
+        SYSTEMD_BUS_TIMEOUT: "3s",
+        SUDO_USER: "caller",
+      });
+    },
+  );
+
+  it("uses the parent only when the source is omitted", () => {
+    vi.stubEnv("HOME", "/parent/home");
+    expect(resolveServiceManagerEnv().HOME).toBe("/parent/home");
+    expect(resolveServiceManagerEnv({ HOME: undefined, PATH: "" })).toEqual({ PATH: "" });
+    expect(resolveServiceManagerEnv({})).toEqual({});
+  });
 });

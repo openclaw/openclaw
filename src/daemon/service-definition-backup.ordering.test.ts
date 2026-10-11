@@ -45,13 +45,24 @@ function taskReference(xml: string): string {
   return command;
 }
 
-it.each([
-  { fault: "before-create", mode: "unattended" },
-  { fault: "create-failed", mode: "unattended" },
-  { fault: "after-create", mode: "unattended" },
-  { fault: "unverified-create", mode: "unattended" },
-  { fault: "after-delete", mode: "desktop" },
-])("keeps the registered task runnable during $mode rollback: $fault", async ({ fault, mode }) => {
+it.each(
+  [
+    "before-create",
+    "create-failed",
+    "after-create",
+    "unverified-create",
+    "after-delete",
+    "normal",
+  ].flatMap((fault) =>
+    // Unattended Gateway installs replace the existing CMD; no new launcher is deleted.
+    fault === "after-delete"
+      ? [{ fault, mode: "desktop" }]
+      : [
+          { fault, mode: "desktop" },
+          { fault, mode: "unattended" },
+        ],
+  ),
+)("keeps the registered task runnable during $mode rollback: $fault", async ({ fault, mode }) => {
   const f = await fixture("win32");
   const desktop = mode === "desktop";
   if (desktop) {
@@ -141,7 +152,7 @@ it.each([
   }
 });
 
-it.each(["desktop"])(
+it.each(["desktop", "unattended"])(
   "warns with the retained %s launcher and recovery step when compensation cannot restore task XML",
   async (mode) => {
     const f = await fixture("win32");

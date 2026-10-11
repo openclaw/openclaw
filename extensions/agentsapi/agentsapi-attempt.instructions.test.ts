@@ -185,6 +185,45 @@ describe("Agents API agent workspace instructions", () => {
     expect(fixture.requests[2]?.agent.instructions).toContain("Plugin system guidance two.");
   });
 
+  it("continues without transcript access when no prompt hook needs history", async () => {
+    const fixture = await createFixture();
+    openModelContextAsyncMock.mockRejectedValue(new Error("History is unavailable"));
+    await fixture.run();
+    expect(promptFixture.turnInputs[0]).toContain("Fixture prompt");
+  });
+
+  it.each([
+    { resumed: false, toolsAllow: [] },
+    { resumed: true, toolsAllow: [] },
+    { resumed: false, toolsAllow: ["memory_search"] },
+    { resumed: true, toolsAllow: ["memory_search"] },
+  ])(
+    "continues with plugin context when tool restrictions cannot be enforced ($resumed, $toolsAllow)",
+    async ({ resumed, toolsAllow }) => {
+      const fixture = await createFixture({ toolAuthorityFingerprint: "fixture-prompt-authority" });
+      const binding = resumed ? await fixture.run() : undefined;
+      const requestCount = fixture.requests.length;
+      const inputCount = promptFixture.turnInputs.length;
+      const recall = vi.fn().mockReturnValue({ prependContext: "Authorized recall context." });
+      initializeGlobalHookRunner(
+        createMockPluginRegistry([
+          {
+            hookName: "before_prompt_build",
+            handler: () => ({ toolsAllow, prependContext: "Ordinary plugin context." }),
+          },
+          { hookName: "before_prompt_build", handler: recall, requiresToolAuthority: true },
+        ]),
+      );
+      await fixture.run(binding);
+      expect(fixture.requests).toHaveLength(requestCount + 1);
+      expect(promptFixture.turnInputs).toHaveLength(inputCount + 1);
+      expect(promptFixture.turnInputs[inputCount]).toContain(
+        "Ordinary plugin context.\n\nAuthorized recall context.\n\nFixture prompt",
+      );
+      expect(recall).toHaveBeenCalledOnce();
+    },
+  );
+
   it("sends the Gateway workspace snapshot once, preserves it on resume, and refreshes it for a new session", async () => {
     const fixture = await createFixture();
     const instructionsPath = path.join(fixture.workspace, "AGENTS.md");
@@ -227,6 +266,27 @@ describe("Agents API agent workspace instructions", () => {
     );
     expect(fixture.requests[2]?.agent.instructions).not.toContain(original.trim());
     expect(fixture.requests[2]?.agent.instructions).toContain("Use the updated fixture voice.");
+  });
+
+  it("forwards the selected personal profile and serializes its prepared persona", async () => {
+    const fixture = await createFixture({ bootstrapUserProfileId: "alice" });
+    // The shared owner tests authenticated selection and precedence. This seam
+    // protects the adapter's profile forwarding and native instruction carrier.
+    prepareAgentWorkspaceContextMock.mockResolvedValueOnce({
+      ...emptyWorkspaceContext(),
+      personaInstructions: "Prepared shared and personal fixture preferences.",
+    });
+    await fixture.run();
+    expect(prepareAgentWorkspaceContextMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        scope: "full",
+        workspaceDir: fixture.workspace,
+        bootstrapUserProfileId: "alice",
+      }),
+    );
+    expect(fixture.requests[0]?.agent.instructions).toContain(
+      "Prepared shared and personal fixture preferences.",
+    );
   });
 
   it("preserves channel memory privacy when preparing the full initial snapshot", async () => {
@@ -289,22 +349,71 @@ describe("Agents API agent workspace instructions", () => {
     expect(instructions).toContain("Extra fixture instructions");
   });
 
-  it.each([{ bootstrapMaxChars: 600, bootstrapTotalMaxChars: 300, budget: 300 }])(
-    "applies the configured bootstrap limits (%j)",
-    async ({ budget, ...limits }) => {
-      const fixture = await createFixture({ config: { agents: { defaults: limits } } });
-      await fs.writeFile(
-        path.join(fixture.workspace, "AGENTS.md"),
-        "Bounded fixture rules.\n".repeat(100),
-      );
-      await fixture.run();
-      const instructions = fixture.requests[0]?.agent.instructions;
-      expect(instructions).toContain("Bounded fixture rules.");
-      expect(instructions).toContain("truncated");
-      const retainedRules = instructions?.match(/Bounded fixture rules\./g) ?? [];
-      expect(retainedRules.length * "Bounded fixture rules.".length).toBeLessThanOrEqual(budget);
-    },
-  );
+  it("refreshes temporal, delivery, and watched-session context on resumed turns", async () => {
+    const now = vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-09-25T12:00:00-07:00"));
+    const fixture = await createFixture({
+      sessionKey: "agent:main:main",
+      config: { agents: { defaults: { userTimezone: "America/Los_Angeles" } } },
+    });
+    promptFixture.declarations = toolDeclarations("message", "sessions_history");
+    watchedSessionsContextMock.mockResolvedValueOnce("Watched fixture session: fixture-one");
+    const binding = await fixture.run();
+    expect(promptFixture.turnInputs[0]).toContain("Current date: 2026-09-25");
+    expect(promptFixture.turnInputs[0]).toContain("Time zone: America/Los_Angeles");
+    expect(promptFixture.turnInputs[0]).toContain(
+      "OpenClaw delivers your final response automatically.",
+    );
+    expect(promptFixture.turnInputs[0]).toContain("Watched fixture session: fixture-one");
+    expect(promptFixture.turnInputs[0]).toContain("Fixture prompt");
+
+    now.mockReturnValue(Date.parse("2026-09-26T12:00:00-07:00"));
+    watchedSessionsContextMock.mockResolvedValueOnce("Watched fixture session: fixture-two");
+    await fixture.run(binding, { sourceReplyDeliveryMode: "message_tool_only" });
+    expect(promptFixture.turnInputs[1]).toContain("Current date: 2026-09-26");
+    expect(promptFixture.turnInputs[1]).toContain("Use `message(action=send)`");
+    expect(promptFixture.turnInputs[1]).toContain("Watched fixture session: fixture-two");
+    expect(watchedSessionsContextMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        sessionKey: "agent:main:main",
+        toolNames: new Set(["message", "sessions_history"]),
+      }),
+    );
+    expect(fixture.requests[1]).toEqual({ agent: { reasoning: { effort: null } } });
+  });
+
+  it("keeps an empty snapshot when AGENTS.md is blank", async () => {
+    const fixture = await createFixture();
+    const instructionsPath = path.join(fixture.workspace, "AGENTS.md");
+    await fs.writeFile(instructionsPath, " \n\t");
+    const binding = await fixture.run();
+    const initialInstructions = fixture.requests[0]?.agent.instructions;
+    expect(initialInstructions).toContain("Extra fixture instructions");
+    expect(initialInstructions).not.toContain("OpenClaw Agent Workspace Instructions");
+    await fs.writeFile(instructionsPath, "Rules added after session creation.");
+    await fixture.run(binding);
+    expect(fixture.requests[1]).toEqual({ agent: { reasoning: { effort: null } } });
+    await fixture.run();
+    expect(fixture.requests[2]?.agent.instructions).toContain(
+      "Rules added after session creation.",
+    );
+  });
+
+  it.each([
+    { bootstrapMaxChars: 300, bootstrapTotalMaxChars: 600, budget: 300 },
+    { bootstrapMaxChars: 600, bootstrapTotalMaxChars: 300, budget: 300 },
+  ])("applies the configured bootstrap limits (%j)", async ({ budget, ...limits }) => {
+    const fixture = await createFixture({ config: { agents: { defaults: limits } } });
+    await fs.writeFile(
+      path.join(fixture.workspace, "AGENTS.md"),
+      "Bounded fixture rules.\n".repeat(100),
+    );
+    await fixture.run();
+    const instructions = fixture.requests[0]?.agent.instructions;
+    expect(instructions).toContain("Bounded fixture rules.");
+    expect(instructions).toContain("truncated");
+    const retainedRules = instructions?.match(/Bounded fixture rules\./g) ?? [];
+    expect(retainedRules.length * "Bounded fixture rules.".length).toBeLessThanOrEqual(budget);
+  });
 
   it("keeps lightweight cron bootstrap context empty", async () => {
     const fixture = await createFixture({

@@ -46,6 +46,12 @@ describe.skipIf(process.platform === "win32")("systemd definition mutation owner
   let environmentPath: string;
   let env: Record<string, string>;
 
+  const artifacts = [
+    { artifact: "unit", select: () => unitPath },
+    { artifact: "environment", select: () => environmentPath },
+    { artifact: "backup", select: () => `${unitPath}.bak` },
+  ];
+
   beforeEach(async () => {
     assertNoSystemOwnership.mockReset().mockResolvedValue(undefined);
     vi.mocked(execFileUtf8).mockReset().mockImplementation(systemdManagerVersionProbe);
@@ -768,6 +774,100 @@ describe.skipIf(process.platform === "win32")("systemd definition mutation owner
       expect(await fs.readdir(stateDir)).toEqual([]);
     },
   );
+
+  it.each([
+    { parent: "unit", select: () => path.dirname(unitPath) },
+    { parent: "environment", select: () => stateDir },
+  ])("seals a foreign-owned $parent parent before creating service files", async ({ select }) => {
+    const protectedParent = select();
+    const originalEntries = await fs.readdir(protectedParent);
+    const originalLstat = fs.lstat.bind(fs);
+    vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
+      const stat = await originalLstat(...args);
+      if (args[0] === protectedParent) {
+        Object.defineProperty(stat, "uid", { value: (process.geteuid?.() ?? 0) + 1 });
+      }
+      return stat;
+    });
+
+    await expect(readSystemdDefinitionMutationCapability(env)).resolves.toMatchObject({
+      kind: "sealed",
+    });
+    await expect(stage()).rejects.toThrow("SERVICE_DEFINITION_SEALED");
+    expect(await fs.readdir(protectedParent)).toEqual(originalEntries);
+  });
+
+  it.each(artifacts)("seals a foreign-owned $artifact before publication", async ({ select }) => {
+    await writeFixtureFile(unitPath, "[Service]\nExecStart=/usr/bin/node gateway\n");
+    const protectedPath = select();
+    if (protectedPath !== unitPath) {
+      await writeFixtureFile(protectedPath, "protected-secret-canary\n");
+    }
+    const original = await fs.readFile(protectedPath);
+    const originalLstat = fs.lstat.bind(fs);
+    vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
+      const stat = await originalLstat(...args);
+      if (args[0] === protectedPath) {
+        Object.defineProperty(stat, "uid", { value: (process.geteuid?.() ?? 0) + 1 });
+        Object.defineProperty(stat, "mode", { value: Number(stat.mode) | 0o022 });
+      }
+      return stat;
+    });
+
+    const capability = await readSystemdDefinitionMutationCapability(env);
+    expect(capability).toMatchObject({ kind: "sealed", path: protectedPath });
+    expect(JSON.stringify(capability)).not.toContain("secret-canary");
+    const staged = stage();
+    await expect(staged).rejects.toThrow("SERVICE_DEFINITION_SEALED");
+    await expect(staged).rejects.toThrow(JSON.stringify(protectedPath));
+    expect(await fs.readFile(protectedPath)).toEqual(original);
+  });
+
+  it.each([
+    ...artifacts.map(({ artifact, select }) => ({ artifact, select, fresh: false })),
+    { artifact: "fresh environment", select: () => environmentPath, fresh: true },
+  ])("rejects a symlinked $artifact without changing its target", async ({ select, fresh }) => {
+    const file = select();
+    if (file !== unitPath && !fresh) {
+      await writeFixtureFile(unitPath, "[Service]\n");
+    }
+    const target = path.join(root, "operator-target");
+    await writeFixtureFile(target, "operator-secret-canary\n");
+    await fs.symlink(target, file);
+
+    await expect(readSystemdDefinitionMutationCapability(env)).resolves.toEqual({
+      kind: "unknown",
+      reason: "symlink",
+      artifact: "service-file",
+      path: file,
+    });
+    await expect(stage()).rejects.toThrow("SERVICE_DEFINITION_UNKNOWN: [symlink]");
+    expect(await fs.readlink(file)).toBe(target);
+    expect(await fs.readFile(target, "utf8")).toBe("operator-secret-canary\n");
+    if (fresh) {
+      await expect(fs.stat(unitPath)).rejects.toMatchObject({ code: "ENOENT" });
+    }
+  });
+
+  it("publishes the unit, backup, and generated environment without chmod or secret disclosure", async () => {
+    const previous = "[Service]\nExecStart=/usr/bin/node /old/index.js gateway\n";
+    await writeFixtureFile(unitPath, previous);
+    await writeFixtureFile(environmentPath, "OPERATOR_SECRET=preserved-canary\n");
+    const chmod = vi.spyOn(fs, "chmod");
+
+    await stage();
+
+    expect(await fs.readFile(`${unitPath}.bak`, "utf8")).toBe(previous);
+    expect(await fs.readFile(unitPath, "utf8")).toContain("/srv/openclaw/dist/index.js");
+    expect(await fs.readFile(unitPath, "utf8")).not.toContain("replacement-secret-canary");
+    expect(await fs.readFile(environmentPath, "utf8")).toContain(
+      "OPERATOR_SECRET=preserved-canary",
+    );
+    expect(chmod).not.toHaveBeenCalled();
+    expect(
+      (await fs.readdir(path.dirname(unitPath))).filter((file) => file.includes(".tmp")),
+    ).toEqual([]);
+  });
 
   it("publishes only the environment selected by the effective service state dir", async () => {
     const effectiveStateDir = path.join(root, "effective-state");

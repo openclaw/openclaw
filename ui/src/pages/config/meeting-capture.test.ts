@@ -139,7 +139,14 @@ describe("curated meeting capture", () => {
     health: string;
     openDuringRefresh?: boolean;
     reselect?: boolean;
-  }>([{ field: "channelId", value: "", health: "pending", openDuringRefresh: true }])(
+  }>([
+    { field: "guildId", value: "", health: "pending" },
+    { field: "accountId", value: "", health: "missing provider" },
+    { field: "meetingUrl", value: "   ", health: "missing setup" },
+    { field: "guildId", value: "   ", health: "empty setup" },
+    { field: "channelId", value: "", health: "pending", openDuringRefresh: true },
+    { field: "accountId", value: "   ", health: "error", reselect: true },
+  ])(
     "retains $field validation through $health health (open during refresh: $openDuringRefresh, reselect: $reselect)",
     async ({ field, value, health, openDuringRefresh, reselect }) => {
       const { page, runtimeConfig, request, original } = await mount({
@@ -417,7 +424,7 @@ describe("curated meeting capture", () => {
     },
   );
 
-  it.each(["new"])(
+  it.each(["new", "existing"])(
     "rejects whitespace-only required locators in a %s source and allows correction",
     async (kind) => {
       const { page, runtimeConfig, original, request } = await mount();
@@ -540,6 +547,108 @@ describe("curated meeting capture", () => {
     expect(navigate).toHaveBeenCalledWith("meetings");
   });
 
+  it.each([
+    { name: "padded identity and browser-sanitized URL", providerId: "test-voice", refresh: false },
+    {
+      name: "padded provider after metadata disappears",
+      providerId: " test-voice ",
+      refresh: true,
+    },
+    { name: "unknown provider with omitted locators", providerId: " unknown ", refresh: false },
+  ])("preserves $name on re-entry and save", async ({ providerId, refresh }) => {
+    const source = {
+      providerId,
+      title: "Original title",
+      sessionId: " daily ",
+      ...(providerId.includes("unknown")
+        ? {}
+        : {
+            accountId: " team ",
+            guildId: " guild ",
+            channelId: " room ",
+            meetingUrl: " https://example.test/meeting?invitation=synthetic#fragment ",
+          }),
+      providerOptions: { untouched: true },
+    };
+    const { page, runtimeConfig, request } = await mount({ source });
+    click(page, "Edit source 1");
+    await page.updateComplete;
+    const url = page.querySelector<HTMLInputElement>('input[name="meetingUrl"]');
+    if (source.meetingUrl) {
+      expect(url?.value).toBe(source.meetingUrl.trim());
+      expect(new FormData(page.querySelector("form")!).get("meetingUrl")).not.toBe(
+        source.meetingUrl,
+      );
+    } else {
+      expect(url).toBeNull();
+      expect(page.querySelector('input[name="accountId"]')).toBeNull();
+    }
+    input(page, "title", " Future title ");
+    if (refresh) {
+      request.mockResolvedValueOnce({ ...meetingStatus, providers: [] });
+      click(page, "Refresh");
+      await vi.waitFor(() =>
+        expect(
+          page.querySelector<HTMLSelectElement>('select[name="providerId"]')?.options,
+        ).toHaveLength(2),
+      );
+    }
+    click(page, "Edit source 1");
+    if (refresh) {
+      await page.updateComplete;
+    }
+    expect(page.querySelector<HTMLInputElement>('input[name="title"]')?.value).toBe(
+      " Future title ",
+    );
+    click(page, "Save source");
+    const expected = {
+      transcripts: { enabled: true, autoStart: [{ ...source, title: "Future title" }] },
+      messages: { ackReaction: "ok" },
+    };
+    expect(runtimeConfig.state.configForm).toEqual(expected);
+    expect(source.title).toBe("Original title");
+    await runtimeConfig.save();
+    const write = request.mock.calls.find(([method]) => method === "config.set")?.[1];
+    expect(write?.baseHash).toBe("one");
+    expect(JSON.parse(write!.raw!)).toEqual(expected);
+  });
+
+  it("normalizes edited values and explicitly clears optional fields without rewriting untouched values", async () => {
+    const source = {
+      providerId: "test-voice",
+      title: "Original title",
+      sessionId: " daily ",
+      accountId: " team ",
+      guildId: " guild ",
+      channelId: " room ",
+      meetingUrl: " https://example.test/old?invitation=synthetic ",
+    };
+    const { page, runtimeConfig } = await mount({ source });
+    click(page, "Edit source 1");
+    await page.updateComplete;
+    input(page, "accountId", " new-account ");
+    input(page, "meetingUrl", " https://example.test/new?invitation=updated ");
+    input(page, "sessionId", "");
+    input(page, "title", " ");
+    click(page, "Edit source 1");
+    click(page, "Save source");
+    expect(runtimeConfig.state.configForm).toEqual({
+      transcripts: {
+        enabled: true,
+        autoStart: [
+          {
+            providerId: "test-voice",
+            accountId: "new-account",
+            guildId: " guild ",
+            channelId: " room ",
+            meetingUrl: "https://example.test/new?invitation=updated",
+          },
+        ],
+      },
+      messages: { ackReaction: "ok" },
+    });
+  });
+
   it("requires Cancel and reopen to edit a replaced source, including after re-entry", async () => {
     const { page, runtimeConfig, original, request } = await mount();
     click(page, "Edit source 1");
@@ -581,6 +690,43 @@ describe("curated meeting capture", () => {
       { ...replacement, title: "Current edit" },
     ]);
   });
+
+  it.each([false, true])(
+    "validates a genuine provider change against current metadata (unavailable=%s)",
+    async (unavailable) => {
+      const { page, runtimeConfig, original, request } = await mount({
+        providers: [
+          ...meetingStatus.providers,
+          { providerId: "other", name: "Other", availability: "enabled", autoStart: {} },
+        ],
+      });
+      click(page, "Edit source 1");
+      await page.updateComplete;
+      const provider = page.querySelector<HTMLSelectElement>('select[name="providerId"]')!;
+      provider.value = "other";
+      provider.dispatchEvent(new Event("change"));
+      await page.updateComplete;
+      if (unavailable) {
+        request.mockResolvedValueOnce({ ...meetingStatus, providers: [] });
+        click(page, "Refresh");
+        await vi.waitFor(() =>
+          expect([...provider.options].map((option) => option.value)).toEqual([
+            "",
+            "test-voice",
+            "other",
+          ]),
+        );
+        expect(provider.value).toBe("other");
+      }
+      page.querySelector("form")!.dispatchEvent(new Event("submit", { cancelable: true }));
+      expect(runtimeConfig.state.configForm).toMatchObject({
+        transcripts: {
+          autoStart: [{ ...original, providerId: unavailable ? original.providerId : "other" }],
+        },
+      });
+      expect(runtimeConfig.state.configFormDirty).toBe(!unavailable);
+    },
+  );
 
   it("rejects an open editor submission after admin access is revoked", async () => {
     const { page, runtimeConfig, original, publish } = await mount();
@@ -657,6 +803,75 @@ describe("curated meeting capture", () => {
     await page.updateComplete;
     expect(page.querySelector<HTMLInputElement>('input[name="title"]')?.value).toBe("");
     expect(page.querySelector('input[name="guildId"]')).toBeNull();
+  });
+
+  it("offers enabled manifest setup before runtime loads, but rejects observed start contradictions", async () => {
+    const { page } = await mount({
+      providers: [
+        ...meetingStatus.providers,
+        {
+          providerId: "attach-only",
+          name: "Attach only",
+          availability: "enabled",
+          canStart: true,
+          sourceKinds: ["live-audio"],
+        },
+        {
+          providerId: "metadata-only",
+          name: "Metadata only",
+          availability: "enabled",
+          autoStart: {},
+        },
+        {
+          providerId: "disabled",
+          name: "Disabled",
+          availability: "disabled",
+          canStart: true,
+          autoStart: {},
+        },
+        {
+          providerId: "unknown",
+          name: "Unknown",
+          availability: "unknown",
+          canStart: true,
+          autoStart: {},
+        },
+        {
+          providerId: "cannot-start",
+          name: "Cannot start",
+          availability: "enabled",
+          canStart: false,
+          autoStart: {},
+        },
+      ],
+    });
+    click(page, "Add source");
+    await page.updateComplete;
+    expect(
+      [...page.querySelectorAll<HTMLOptionElement>('select[name="providerId"] option')].map(
+        (option) => option.value,
+      ),
+    ).toEqual(["", "metadata-only", "test-voice"]);
+  });
+
+  it("keeps existing disabled sources editable with unavailable guidance", async () => {
+    const { page, runtimeConfig, original } = await mount({
+      providers: [{ providerId: "test-voice", name: "Test voice", availability: "disabled" }],
+    });
+    const add = [...page.querySelectorAll<HTMLButtonElement>("button")].find(
+      (button) => button.textContent?.trim() === "Add source",
+    )!;
+    expect(add.disabled).toBe(true);
+    click(page, "Edit source 1");
+    await page.updateComplete;
+    expect(page.textContent).toContain("Auto-start setup is unavailable");
+    input(page, "title", "Still editable");
+    page
+      .querySelector("form")!
+      .dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    expect(runtimeConfig.state.configForm).toMatchObject({
+      transcripts: { autoStart: [{ ...original, title: "Still editable" }] },
+    });
   });
 
   it("keeps health unknown after read failure and disables mutations under the parent's permission gate", async () => {
