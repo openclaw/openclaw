@@ -177,7 +177,7 @@ async function withObserver(
 it("moves observer admission, publication, terminal and companion reads off the caller and observes foreign resets", async () => {
   await withObserver(
     async ({ observer, broadcast, peer, resetLifecycle, advanceClock }) => {
-      // This case proves the cold-worker fallback; warm reads intentionally skip dispatch.
+      // Keep entry reads cold while target discovery retains its admitted inventory.
       vi.spyOn(entryFacts, "readRetainedSessionEntryFacts").mockReturnValue(undefined);
       const start = event({ stream: "lifecycle", data: { phase: "start" } });
       let inventories = 0;
@@ -202,6 +202,7 @@ it("moves observer admission, publication, terminal and companion reads off the 
         expect(sql.count()).toBeGreaterThan(0);
         sql.clear();
         await observer.handleEventAsync({ ...start, runId: "worker-run" });
+        expect(inventories).toBe(1);
         inventories = 0;
         entries = 0;
         await observer.handleEventAsync(
@@ -211,7 +212,7 @@ it("moves observer admission, publication, terminal and companion reads off the 
             data: { kind: "preamble", progressText: "Worker observation" },
           }),
         );
-        expect(inventories).toBe(1);
+        expect(inventories).toBe(0);
         expect(entries).toBeGreaterThanOrEqual(2);
         const snapshot = await observer.getCompanionSnapshotAsync(key, "main");
         expect(snapshot.digest?.headline).toBe("Worker observation");

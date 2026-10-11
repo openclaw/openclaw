@@ -103,7 +103,6 @@ describe("node workspace operation authority", () => {
       const request = {
         localPath: fixture.localPath,
         sessionId: fixture.request.sessionId,
-        generation: fixture.request.generation,
         environmentId: "environment-1",
         ownerEpoch: 2,
         isAuthorized: () => true,

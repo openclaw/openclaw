@@ -30,7 +30,7 @@ class SidebarSessionFilterPopover extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) anchor: HTMLElement | null = null;
   @property({ attribute: false }) label = "";
   @property({ attribute: false }) initialFocusSelector =
-    '#sidebar-sessions-owner, #sidebar-sessions-status input[type="radio"]:checked';
+    '#sidebar-sessions-status input[type="radio"]:checked';
   @property({ attribute: false }) content: unknown = nothing;
   @property({ attribute: false }) onClose: (restoreFocus: boolean) => void = () => {};
   private focused = false;

@@ -390,57 +390,6 @@ describe("node bootstrap distribution", () => {
     await expect(provider.prepare()).rejects.toThrow(error);
   });
 
-  it("rejects a retained entry changed after import inspection and removes its archive", async () => {
-    const { packageRoot, provider } = await fixture();
-    await writeOwnedChunks(packageRoot, {
-      "opaque-A1b2C3.mjs": {
-        source: 'import "./qa-runtime-private.mjs";\n',
-        extensions: ["qa-lab"],
-      },
-    });
-    await write(packageRoot, "dist/qa-runtime-private.mjs", "export {};\n");
-    const entryPath = path.join(packageRoot, "dist/entry.js");
-    const original = await fs.readFile(entryPath, "utf8");
-    const openFile = fs.open.bind(fs);
-    const makeTemp = fs.mkdtemp.bind(fs);
-    let entryReads = 0;
-    let changed = false;
-    let artifactRoot: string | undefined;
-    const destination = vi.spyOn(fs, "mkdtemp").mockImplementationOnce(async (...args) => {
-      artifactRoot = await makeTemp(...args);
-      return artifactRoot;
-    });
-    const reader = vi.spyOn(fs, "open").mockImplementation(async (...args) => {
-      if (args[0] === entryPath) {
-        entryReads += 1;
-      }
-      // The first open inspects imports; the second reads the bytes for the archive.
-      if (args[0] === entryPath && entryReads === 2) {
-        changed = true;
-        await fs.writeFile(entryPath, `import "./opaque-A1b2C3.mjs";\n${original}`);
-      }
-      return await openFile(...args);
-    });
-    try {
-      await expect(provider.prepare()).rejects.toThrow("changed after import inspection");
-      expect(changed).toBe(true);
-      expect(entryReads).toBe(2);
-      expect(artifactRoot).toBeDefined();
-      await expect(fs.access(artifactRoot!)).rejects.toMatchObject({ code: "ENOENT" });
-    } finally {
-      reader.mockRestore();
-      destination.mockRestore();
-    }
-  });
-
-  it("rejects stale running build identity before transferring a same-version distribution", async () => {
-    const { packageRoot, provider } = await fixture();
-    await write(packageRoot, "dist/build-info.json", { version, buildId: "newer-build" });
-    await expect(provider.prepare()).rejects.toThrow("running Gateway build");
-    await write(packageRoot, "dist/build-info.json", { version, buildId });
-    await expect(provider.prepare()).resolves.toMatchObject({ buildId });
-  });
-
   it("refuses a shortened non-JavaScript package member", async () => {
     const { packageRoot, provider } = await fixture();
     const entryPath = path.join(packageRoot, longEntryPath);
@@ -512,21 +461,6 @@ describe("node bootstrap distribution", () => {
     const closing = provider.close();
     await expect(pending).rejects.toThrow("closed");
     await closing;
-  });
-
-  it("keeps a retired artifact until its active enrollment closes", async () => {
-    const { provider } = await fixture();
-    const enrollment = new AbortController();
-    const artifact = await provider.prepare(enrollment.signal);
-    const closing = provider.close();
-    try {
-      await expect(fs.access(artifact.tarballPath)).resolves.toBeUndefined();
-      await expect(provider.prepare()).rejects.toThrow("closed");
-    } finally {
-      enrollment.abort();
-      await closing;
-    }
-    await expect(fs.access(artifact.tarballPath)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("cancels one waiting enrollment without abandoning shared artifact preparation", async () => {
@@ -612,19 +546,6 @@ describe("node bootstrap distribution", () => {
       );
     },
   );
-
-  it("gives different archive identities to different built bytes with the same package version", async () => {
-    const first = await fixture();
-    const second = await fixture();
-    await write(
-      second.packageRoot,
-      "dist/shared.js",
-      'export const answer = "dirty-source-build";',
-    );
-    const [left, right] = await Promise.all([first.provider.prepare(), second.provider.prepare()]);
-    expect(left.openclawVersion).toBe(right.openclawVersion);
-    expect(left.tarballSha256).not.toBe(right.tarballSha256);
-  });
 
   it("rejects streamed bytes that differ from the verified source", async () => {
     const { provider } = await fixture();

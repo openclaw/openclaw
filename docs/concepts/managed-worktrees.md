@@ -118,11 +118,15 @@ To opt out, set:
 
 Omitting the option or setting it to `true` enables automatic selection. Setting it to `false` uses normal Git checkout and file copying for new worktrees. Existing worktrees keep their contents and lifecycle. NTFS, ext4, HFS+, and other unsupported filesystems use the normal Git path. Unavailable native bindings or failed clones also fall back to Git; APFS and ReFS file-data cloning never silently substitute ordinary file copies inside the accelerated path.
 
-APFS and Btrfs operations use isolated native helpers without changing the Gateway process's filesystem configuration. The Gateway and these helpers retain fs-safe's `auto` native default. An explicit `FS_SAFE_NATIVE_MODE=off` or `OPENCLAW_FS_SAFE_NATIVE_MODE=off` also disables these helpers. Read-only metadata workers can stop on cancellation; recovery waits for a write helper to exit before touching its destination.
+APFS and Btrfs operations use isolated native helpers without changing the Gateway process's filesystem configuration. APFS acceleration also works under Rosetta with a matching x64 native helper. ACL inspection runs in the metadata worker; unknown ACL state or inheritable parent ACLs select normal Git checkout. The Gateway and these helpers retain fs-safe's `auto` native default. An explicit `FS_SAFE_NATIVE_MODE=off` or `OPENCLAW_FS_SAFE_NATIVE_MODE=off` also disables these helpers. Read-only metadata workers can stop on cancellation; recovery waits for a write helper to exit before touching its destination.
 
 On Windows, point `worktreeRoot` at a directory on a ReFS volume, such as `D:\worktrees`. ReFS provides file block cloning rather than a writable directory snapshot: OpenClaw creates the directory tree and clones each file's data. Full clusters can share storage; partial file tails and filesystem metadata still consume space. The Gateway needs ordinary file access, not administrator access, to clone worktrees on an existing volume.
 
 OpenClaw maintains one reusable source-only template per repository and destination root. Concurrent creates share one cold build and retain the ready template while cloning independently. A changed commit or checkout policy rebuilds an unused template; while readers still hold it, that request uses normal Git checkout. Cleanup retires templates unused for seven days once their readers have settled. Uncertain native operations retain template custody while their process owner is live or unknown. The next template acquisition or cleanup reclaims readers whose process owner is definitely dead, without requiring an OS reboot. Allocation and template mutation leases retain their existing expiry-based recovery. Git continues to own worktree registration, indexes, and branches; the filesystem backend supplies the shared file contents.
+
+Sandboxed source-only sessions also reuse templates. Template creation, validation, and index refresh use the same isolated Git configuration as ordinary source-only materialization, so repository filters never run on the host. Their cache identity includes that checkout policy, preventing reuse of a template prepared with host filters.
+
+Preparation logs include `templateDetails` with the backend, selection or failure reason, clone-byte estimate, and an error code when available. Reasons distinguish disabled acceleration, empty or profiled checkouts, native probing, ACL rejection, checkout policy, missing or stale templates, template creation, and disk admission.
 
 Private Git index copies for template checkouts and safety snapshots prefer native copy-on-write, including on APFS, and fall back to independent byte copies when cloning is unavailable. Snapshot indexes retain the source index's timestamp boundary so Git still detects edits made within the filesystem's timestamp resolution.
 
@@ -203,7 +207,7 @@ The repository fingerprint is the first 16 hexadecimal characters of a SHA-256 h
 
 OpenClaw creates branch `openclaw/<name>` at the requested base ref. Without a base ref, it discovers and fetches the remote default branch from `origin`. If the fetch fails, it uses the last-fetched remote default and logs a warning with the Git failure reason. It never silently substitutes local `HEAD`; if no remote default is available, repair `origin` or choose an explicit base ref. A local default branch is fast-forwarded when it is a strict ancestor of the selected remote commit and the clean primary checkout is on that branch. Dirty, diverged, sparse, locked, separately checked-out, and detached checkouts are preserved. An active Git rebase, am, or bisect in the primary checkout also defers local advancement. Linked-checkout operations defer advancement only when they reserve the default branch, including a rebase that names it in `--update-refs`; unrelated operations do not block it. Creation logs identify the worktree and session owner, chosen base SHA, commit age, and fetch outcome; commits older than seven days produce a warning. An explicitly requested base must resolve to a commit; OpenClaw never substitutes another base for it. Git first registers the branch without materializing files, preserving its normal upstream-tracking rules. OpenClaw then captures that branch's commit and uses it for the size estimate, source template, and checkout. Later changes to the source ref cannot switch the files being written or reuse a smaller commit's allowance.
 
-Concurrent creations from the same source checkout share remote-default preparation, including creations waiting for allocation. Requests arriving after that refresh settles start a fresh refresh; already waiting creations keep their prepared default branch. Branch registration uses the repository's shared Git mutation queue so upstream tracking cannot race another registration; file materialization remains concurrent. A fetch that loses a ref-lock race retries once within its original timeout. Creation reports unconfirmed Git cleanup without starting another fetch.
+Concurrent creations from the same source checkout share remote-default preparation and the local-default advancement decision, including creations waiting for allocation. The prepared result remains available until the last creation in that group finishes; the next group starts a fresh refresh. Preserving a busy local default does not fail a Git ref mutation. Branch registration uses the repository's shared Git mutation queue so upstream tracking cannot race another registration; file materialization remains concurrent. A fetch that loses a ref-lock race retries once within its original timeout. Creation reports unconfirmed Git cleanup without starting another fetch.
 
 Git worktree registration, ordinary checkout removal, and source materialization during creation or snapshot restore each have a five-minute timeout. Fetching missing objects for the size estimate uses the same five-minute budget. Remote-default discovery has a 30-second budget and its fetch has a 60-second budget. Other managed-worktree Git commands keep their two-minute timeout, except automatic Git maintenance, which gets 30 minutes. Explicit interrupted-removal recovery joins deletion without a deadline. The separate `.openclaw/worktree-setup.sh` step also keeps its own two-minute timeout.
 
@@ -644,6 +648,17 @@ openclaw worktrees gc --job <id>
 ```
 
 `--json` prints the receipt, including the job state and current cleanup summary. Polling observes the job without starting another pass. Enqueue requests made while a job is queued or running return that same job; only the latest job is retained, and restarting the Gateway discards its receipt. To force reinspection of unchanged deferred checkouts, start a new job with `--retry-deferred` after any current job finishes.
+
+For partial clones, `openclaw worktrees gc --retry-deferred` also checks the
+objects needed by all Git-registered worktree indexes and current HEAD trees
+before attempting cleanup.
+It fetches missing objects from the existing promisor remote in bounded batches,
+preserving staged and working files. Historical commits remain filtered, and
+ordinary background maintenance does not fetch. Repair has a five-minute budget
+and a 4,096-object limit per pass; completed fetches survive interruption. If
+repair cannot finish, maintenance logs a warning. Restore remote access and run
+the command again to resume from the remaining missing objects. Locally created
+objects unavailable from the remote still require recovery from another copy.
 
 UI preferences and other unrelated configuration writes do not interrupt cleanup.
 Changes to cleanup inputs, such as the worktree root or capacity, agent workspaces,

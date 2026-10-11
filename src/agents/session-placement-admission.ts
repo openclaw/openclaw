@@ -7,6 +7,7 @@ import {
   composeSessionSourceAssertion,
   type SessionSourceAssertion,
 } from "../config/sessions/session-source-authority.js";
+import { runWithoutOwnedSessionTranscriptWrites } from "../config/sessions/transcript-write-context.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createAbortError } from "../infra/abort-signal.js";
 import {
@@ -58,7 +59,7 @@ export type PreparedSessionPlacementSandbox = Disposable & {
 
 export type SessionPlacementAdmissionProvider = {
   withRequiredSession?: RequiredSessionPlacementAdmission;
-  usesWorkerInference?: (identity: Omit<LocalTurnPlacementClaim, "runId">) => boolean;
+  usesWorkerInference?: (identity: Omit<LocalTurnPlacementClaim, "runId">) => Promise<boolean>;
   resolveRuntimeOverride?: (
     identity: Omit<LocalTurnPlacementClaim, "runId">,
   ) => Promise<string | undefined>;
@@ -193,10 +194,10 @@ export async function withRequiredSessionPlacement<T>(
   );
 }
 
-export function sessionPlacementUsesWorkerInference(
+export async function sessionPlacementUsesWorkerInference(
   identity: Omit<LocalTurnPlacementClaim, "runId">,
-): boolean {
-  return state.provider?.usesWorkerInference?.(identity) === true;
+): Promise<boolean> {
+  return (await state.provider?.usesWorkerInference?.(identity)) === true;
 }
 
 /** Captures the exact placement owner, including standalone absence, before awaited work. */
@@ -222,7 +223,7 @@ function withPlacementTurnCallerScope<T>(
     params.preparedRunAdmission?.operationalRunInstance;
   return instance && getGatewayToolCallerIdentity()?.operationalRunInstance === instance
     ? task()
-    : withoutGatewayToolCallerIdentity(task);
+    : withoutGatewayToolCallerIdentity(() => runWithoutOwnedSessionTranscriptWrites(task));
 }
 
 export async function withSessionPlacementTurnAdmission(

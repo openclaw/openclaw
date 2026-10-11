@@ -22,16 +22,14 @@ function clearRetry(host: WorkboardHost): void {
   }
 }
 
-function scheduleRetry(host: WorkboardHost, generation: number): void {
+function scheduleRetry(host: WorkboardHost): void {
   const runtime = getWorkboardRuntime(host);
   if (runtime.liveRefreshRetryTimer) {
     return;
   }
   runtime.liveRefreshRetryTimer = setTimeout(() => {
     delete runtime.liveRefreshRetryTimer;
-    if ((runtime.liveRefreshGeneration ?? 0) === generation) {
-      void runPendingRefresh(host);
-    }
+    void runPendingRefresh(host);
   }, WORKBOARD_LIVE_REFRESH_RETRY_MS);
 }
 
@@ -40,9 +38,8 @@ async function runPendingRefresh(host: WorkboardHost): Promise<void> {
   if (runtime.liveRefreshPromise) {
     return await runtime.liveRefreshPromise;
   }
-  const generation = runtime.liveRefreshGeneration ?? 0;
   const promise = (async () => {
-    while (runtime.liveRefreshPending && (runtime.liveRefreshGeneration ?? 0) === generation) {
+    while (runtime.liveRefreshPending) {
       const entry = runtime.liveRefreshEntry;
       const state = getWorkboardState(host);
       if (
@@ -63,12 +60,12 @@ async function runPendingRefresh(host: WorkboardHost): Promise<void> {
           requestUpdate: entry.requestUpdate,
           source: "live",
         }));
-      if ((runtime.liveRefreshGeneration ?? 0) !== generation) {
+      if (!runtime.liveRefreshEntry) {
         return;
       }
       if (!refreshed) {
         runtime.liveRefreshPending = true;
-        scheduleRetry(host, generation);
+        scheduleRetry(host);
         return;
       }
       if (runtime.liveChangeEpoch === targetEpoch) {

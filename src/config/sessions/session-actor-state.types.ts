@@ -12,7 +12,10 @@ import type { TranscriptEntryAnchor } from "./transcript-entry-anchor.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
 export type SessionActorTarget = Readonly<{
-  database: AgentDatabaseExecutionFileIdentity | AgentDatabaseIncognitoIdentity;
+  database:
+    | AgentDatabaseExecutionFileIdentity
+    | AgentDatabaseIncognitoIdentity
+    | { kind: "memory"; handle: string; incarnation: string };
   sessionKey: string;
 }>;
 
@@ -20,6 +23,8 @@ export type SessionActorTarget = Readonly<{
 export type SessionActorVersion = Readonly<{ epoch: string; sequence: number }>;
 
 export type SessionActorLifetime = {
+  /** Refuse new work without revoking already accepted settlement. */
+  assertAdmission?(): void;
   assertCurrent(): void;
   /** Accepted work may still settle after new disclosure has been revoked. */
   assertReadable(): void;
@@ -35,9 +40,12 @@ export type SessionActorHotState = {
   dependencySessionIds: string[];
   /** Includes the canonical turn, lifecycle, recovery, and pendingFinalDelivery fields. */
   entry: SessionEntry | undefined;
+  hasBoard: boolean;
   participants: SessionParticipantRecord[];
   members: SessionMember[];
   pendingInputs: Array<Omit<SessionPendingInputRow, "message_json">>;
+  /** Complete retry-key membership; outcome bodies stay in the worker. */
+  completionKeys: string[];
   transcript: {
     watermark: SessionTranscriptWatermark;
     version: SessionTranscriptContextVersion;

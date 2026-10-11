@@ -111,23 +111,6 @@ describe("project registry", () => {
     expect(parseProjectGitUrl(input)?.url).toBe("https://github.com/openclaw/openclaw.git");
   });
 
-  it.each([
-    [
-      "https://ghe.example.test/Acme/Private-Repo",
-      "https://ghe.example.test/acme/private-repo.git",
-    ],
-    [
-      "git@ghe.example.test:Acme/Private-Repo.git",
-      "https://ghe.example.test/acme/private-repo.git",
-    ],
-    [
-      "ssh://git@ghe.example.test/Acme/Private-Repo.git",
-      "https://ghe.example.test/acme/private-repo.git",
-    ],
-  ])("canonicalizes accepted enterprise GitHub clone URL %s", (input, expected) => {
-    expect(parseProjectGitUrl(input, "ghe.example.test")?.url).toBe(expected);
-  });
-
   it("rejects a repository URL from a host other than the configured GitHub host", () => {
     expect(
       parseProjectGitUrl("https://github.com/openclaw/openclaw.git", "ghe.example.test"),

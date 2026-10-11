@@ -9,10 +9,12 @@ import type { SqliteWorkerOperationSettlement } from "../infra/sqlite-worker-ope
 import { createDeferredCore } from "../shared/deferred.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { createSqliteTrajectoryRuntimeSink } from "./runtime-store-writer.js";
 import {
   loadSqliteTrajectoryRuntimeEvents,
   loadSqliteTrajectoryRuntimeEventRowsSync,
 } from "./runtime-store.sqlite.js";
+import { createTrajectoryEvent } from "./runtime-store.test-support.js";
 import { createTrajectoryRuntimeRecorder } from "./runtime.js";
 
 // Real native writes and admission run unchanged; only delivery of their evidence changes.
@@ -134,6 +136,35 @@ afterEach(() => {
   delivery.settlement = undefined;
   delivery.hideCommit = false;
   vi.restoreAllMocks();
+});
+
+it("persists identical serialized events separately with accurate queued bytes", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const target = {
+      agentId: "main",
+      sessionId: "trajectory-duplicates",
+      sessionKey: "agent:main:trajectory-duplicates",
+      storePath: state.statePath("agents", "main", "agent.sqlite"),
+    };
+    await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: 1 });
+    const sink = await createSqliteTrajectoryRuntimeSink({
+      env: state.env,
+      sessionId: target.sessionId,
+      sessionTarget: target,
+      maxRuntimeFileBytes: 1024 * 1024,
+    });
+    assert(sink);
+    const event = createTrajectoryEvent({ type: "repeated", sessionId: target.sessionId });
+    const line = JSON.stringify(event);
+    sink.write(event, line);
+    sink.write({ ...event }, line);
+    expect(sink.describeFlushState()).toBe(
+      `pendingRows=2 queuedBytes=${2 * (Buffer.byteLength(line, "utf8") + 1)} activeOperation=sqlite-append`,
+    );
+    await sink.flush();
+    expect(sink.describeFlushState()).toBeUndefined();
+    expect(await loadSqliteTrajectoryRuntimeEvents(target)).toEqual([event, event]);
+  });
 });
 
 it.each([

@@ -1,14 +1,6 @@
 // Tests dispatch-from-config reply dispatch integration and final payload routing.
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
-import { clearAgentHarnesses } from "../../agents/harness/registry.js";
-import { PlatformMessageNotDispatchedError } from "../../infra/outbound/deliver-types.js";
-import type { PluginHookReplyDispatchResult } from "../../plugins/hooks.test-fixtures.js";
-import { createInternalHookEventPayload } from "../../test-utils/internal-hook-event-payload.js";
-import { withReplyDispatcher } from "../dispatch-dispatcher.js";
-import { setReplyPayloadMetadata } from "../reply-payload.js";
-import type { FinalizedMsgContext } from "../templating.js";
-import type { ReplyPayload } from "../types.js";
+// Register dispatch mocks before modules that consume them.
+// oxfmt-ignore
 import {
   acpManagerRuntimeMocks,
   acpMocks,
@@ -27,6 +19,16 @@ import {
   setDiscordTestRegistry,
   ttsMocks,
 } from "./dispatch-from-config.shared.test-harness.js";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
+import { clearAgentHarnesses } from "../../agents/harness/registry.js";
+import { PlatformMessageNotDispatchedError } from "../../infra/outbound/deliver-types.js";
+import type { PluginHookReplyDispatchResult } from "../../plugins/hooks.test-fixtures.js";
+import { createInternalHookEventPayload } from "../../test-utils/internal-hook-event-payload.js";
+import { withReplyDispatcher } from "../dispatch-dispatcher.js";
+import { setReplyPayloadMetadata } from "../reply-payload.js";
+import type { FinalizedMsgContext } from "../templating.js";
+import type { ReplyPayload } from "../types.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
 
 let dispatchReplyFromConfig: typeof import("./dispatch-from-config.js").dispatchReplyFromConfig;

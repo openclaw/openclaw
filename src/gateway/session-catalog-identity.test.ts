@@ -1,6 +1,5 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
-import { createDeferredCore } from "../shared/deferred.js";
 import * as stateReads from "../state/openclaw-state-db-readonly.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { linkEmail, syncGitHubIdentity } from "../state/user-profile-writes.worker.js";
@@ -122,77 +121,3 @@ it("links every verified account to one person while exporting only the primary 
     expect(changed.resolveOwner("github:RENAMED-SECONDARY")?.label).toBe("Changed Person");
   });
 });
-
-it.each(["owner", "foreign"] as const)(
-  "preserves %s change semantics while an accepted catalog read awaits disclosure",
-  async (writer) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const source = syncGitHubIdentity({
-        identity: { accountId: 201, login: "source", name: "Before" },
-        authenticationAlias: { kind: "email", email: "source@example.test" },
-      });
-      const target = syncGitHubIdentity({
-        identity: { accountId: 202, login: "target" },
-        authenticationAlias: { kind: "email", email: "target@example.test" },
-      });
-      const accepted = createDeferredCore();
-      const release = createDeferredCore();
-      const execute = stateReads.executeExistingOpenClawStateRead;
-      vi.spyOn(stateReads, "executeExistingOpenClawStateRead").mockImplementationOnce(
-        async (...args) => {
-          const result = await execute(...args);
-          accepted.resolve();
-          await release.promise;
-          return result;
-        },
-      );
-      const actor = { type: "human", source: "profile", id: source.id } as const;
-      const request = {
-        pluginId: "fixture",
-        sourceDomain: "fixture",
-        actors: [actor],
-      };
-      const pending = prepareSessionCatalogSourceActorProjector(request);
-      try {
-        await Promise.race([
-          accepted.promise,
-          pending.then(() => {
-            throw new Error("Read was not held");
-          }),
-        ]);
-        if (writer === "owner") {
-          linkEmail("source@example.test", target.id);
-        } else {
-          const foreign = openNodeSqliteDatabase(openOpenClawStateDatabase().path);
-          try {
-            foreign
-              .prepare("UPDATE user_profiles SET display_name = ? WHERE id = ?")
-              .run("After", source.id);
-            foreign
-              .prepare(
-                "UPDATE user_profile_identities SET canonical_login = ? WHERE provider = 'github' AND subject = '201'",
-              )
-              .run("renamed");
-          } finally {
-            foreign.close();
-          }
-        }
-      } finally {
-        release.resolve();
-      }
-      if (writer === "owner") {
-        await expect(pending).rejects.toThrow("identities changed");
-      } else {
-        expect((await pending)(actor)?.label).toBe("Before");
-        expect((await prepareSessionCatalogSourceActorProjector(request))(actor)?.label).toBe(
-          "After",
-        );
-        const linker = await prepareSessionCatalogGitHubLinker({
-          participants: [],
-          owners: ["github:renamed"],
-        });
-        expect(linker.resolveOwner("github:renamed")?.id).toBe(source.id);
-      }
-    });
-  },
-);

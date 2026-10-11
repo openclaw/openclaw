@@ -299,14 +299,9 @@ function hashToolOutcome(
   if (isError) {
     return { resultHash: digestToolOutcome(result) };
   }
-  if (toolName === "computer" && result.isError !== true) {
-    const outcome = getComputerToolOutcome(result);
-    if (outcome !== undefined) {
-      return { resultHash: digestToolOutcome(outcome) };
-    }
-  }
-  if (toolName === "progress_card" && result.isError !== true) {
-    const outcome = getProgressCardToolOutcome(result);
+  if ((toolName === "computer" || toolName === "progress_card") && result.isError !== true) {
+    const outcome =
+      toolName === "computer" ? getComputerToolOutcome(result) : getProgressCardToolOutcome(result);
     if (outcome !== undefined) {
       return { resultHash: digestToolOutcome(outcome) };
     }

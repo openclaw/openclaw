@@ -69,7 +69,7 @@ exact scope key with `recreate --session`, and review the preview before confirm
 If you do not know the exact scope, keep the registry intact; do not guess a key,
 broaden to `--all`, or rewrite its recorded target to bypass validation.
 
-For `ssh` and OpenShell `remote`, recreate matters more than with Docker: the remote workspace is canonical after the initial seed, `recreate` deletes that canonical remote workspace for the selected scope, and the next run reseeds it from the current local workspace.
+For `ssh` and OpenShell `remote`, recreate matters more than with Docker: the remote workspace becomes the source of truth after the initial seed, `recreate` deletes that remote workspace for the selected scope, and the next run reseeds it from the current local workspace.
 
 ### `openclaw sandbox explain`
 
