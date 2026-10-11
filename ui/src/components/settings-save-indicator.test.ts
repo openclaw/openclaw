@@ -78,6 +78,9 @@ describe("settings save indicator", () => {
     expect(indicator.querySelector(".settings-save-indicator__claw--saved")).not.toBeNull();
     expect(indicator.querySelector(".settings-save-indicator__check")).not.toBeNull();
 
+    // Shell refreshes replace the props object without changing the save status.
+    await update(props({ status: "saved", needsApply: true }));
+    expect(vi.getTimerCount()).toBe(1);
     await vi.advanceTimersByTimeAsync(1_999);
     expect(indicator.textContent).toContain("Saved");
     await vi.advanceTimersByTimeAsync(1);

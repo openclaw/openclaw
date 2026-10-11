@@ -670,11 +670,17 @@ describe("durable model prompt projection at provider dispatch", () => {
         await session.agent.continue();
 
         expect(requests).toHaveLength(2);
-        // The request-local prompt keeps the capture-time redaction policy.
-        expect(JSON.stringify(requests[0])).toContain(task);
-        expect(JSON.stringify(requests[0])).not.toContain("hidden");
-        // History keeps the stored safety envelope once the transient carrier is gone.
-        expect(JSON.stringify(requests[1])).toContain("sourceSession=agent:main:parent");
+        const firstUser = (request: (typeof requests)[number]) =>
+          JSON.stringify(
+            (request.input as { role?: string }[]).find((item) => item.role === "user"),
+          );
+        // The first send already carries the stored safety envelope, so replay keeps its bytes
+        // and the envelope stays visible once the transient carrier is gone.
+        expect(firstUser(requests[0]!)).toContain("sourceSession=agent:main:parent");
+        expect(firstUser(requests[0]!)).toContain(task);
+        expect(firstUser(requests[1]!)).toBe(firstUser(requests[0]!));
+        // Unredacted hook text never reaches the provider.
+        expect(JSON.stringify(requests)).not.toContain("hidden");
         expect(JSON.stringify(loadTranscriptEventsSync(target))).not.toContain(
           "modelPromptProjection",
         );

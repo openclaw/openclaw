@@ -51,8 +51,9 @@ function Claw(props: { saved?: boolean }) {
 
 function SaveIndicatorContent(input: { props?: SettingsSaveIndicatorProps }) {
   const [savedVisible, setSavedVisible] = createSignal(false, { ownedWrite: true });
+  // Unrelated shell props refreshes must not clean up the saved-state timer.
   createEffect(
-    () => input.props?.status,
+    createMemo(() => input.props?.status),
     (status, previous) => {
       if (previous === "saving" && status === "saved") {
         setSavedVisible(true);

@@ -59,13 +59,18 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "packages/gateway-protocol/src/capability-consent-error-details.ts":
     case "packages/gateway-protocol/src/install-policy-warning-error-details.ts":
     case "packages/gateway-protocol/src/schema/plugin-install-progress.ts":
+    case "packages/gateway-protocol/src/schema/plugin-declared-surface-groups.ts":
       // Shared protocol readers must not pull the lazy Plugins page into chat.
       return "plugin-contracts-runtime";
     case "ui/src/components/login-gate.ts":
+    case "ui/src/components/login-gate-solid.tsx":
     case "ui/src/components/login-gate-feedback.ts":
     case "ui/src/i18n/locales/en-login.ts":
     case "ui/src/lib/gateway-secret-shape.ts":
       return "login-runtime";
+    case "ui/src/components/solid/copy-button.tsx":
+      // Login recovery uses this control before the chat route can finish loading.
+      return "control-ui-core";
     case "ui/src/components/sidebar-update-card.ts":
     case "ui/src/styles/sidebar-update-card.css":
       return "sidebar-update-runtime";
@@ -144,15 +149,19 @@ export function createControlUiCodeSplitting(options: { includeBootGroups?: bool
         priority: 20,
       },
       {
-        name: (id: string) =>
-          normalizeModuleId(id).includes("/ui/src/") ? "control-ui-core" : "control-ui-foundation",
+        name: "control-ui-core",
+        test: (id: string) => normalizeModuleId(id).includes("/ui/src/"),
         tags: ["$initial"] as ["$initial"],
         priority: 10,
-        // Keep the boot graph in fewer partitions; the performance checker owns
-        // the compressed-size and request budgets for the emitted chunks.
-        // Shared renderer helpers should not split into tiny startup requests.
-        minSize: 32 * 1024,
         maxSize: 1024 * 1024,
+      },
+      {
+        name: "control-ui-foundation",
+        test: (id: string) => !normalizeModuleId(id).includes("/ui/src/"),
+        tags: ["$initial"] as ["$initial"],
+        priority: 10,
+        // Already-initial dependencies compress well; the UI source-size cap
+        // fragmented them into tiny requests. The asset gzip budget bounds them.
       },
       ...(options.includeBootGroups === false
         ? []

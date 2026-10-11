@@ -11,7 +11,6 @@ import {
   withSqliteDatabaseWriteScope,
 } from "../../infra/sqlite-database-admission.js";
 import { redactSecrets } from "../../logging/redact.js";
-import { canonicalizePersistedUserMessageMedia } from "../../media/media-facts.js";
 import {
   deferOpenClawAgentPostCommitPublication,
   openOpenClawAgentDatabase,
@@ -72,6 +71,7 @@ import {
   isSteerConfirmationRewrite,
   transcriptRewritePreservesProjection,
 } from "./session-transcript-rewrite-effects.js";
+import { canonicalizeTranscriptEventMedia } from "./transcript-event-media.js";
 import {
   createTranscriptEventInserter,
   createTranscriptPayloadUpdater,
@@ -715,18 +715,6 @@ export function readTranscriptMessageByEventId(
 ): { messageId: string; message: unknown } | undefined {
   const identity = readTranscriptIdentityByEventId(database, scope.sessionId, eventId);
   return identity ? readTranscriptMessageByIdentity(database, scope, identity) : undefined;
-}
-
-export function canonicalizeTranscriptEventMedia(event: TranscriptEvent): TranscriptEvent {
-  if (!isRecord(event)) {
-    return event;
-  }
-  const message = event.message;
-  if (event.type !== "message" || !isRecord(message)) {
-    return event;
-  }
-  const canonical = canonicalizePersistedUserMessageMedia(message);
-  return canonical.changed ? { ...event, message: canonical.message } : event;
 }
 
 export function redactTranscriptMessageForStorage<TMessage>(

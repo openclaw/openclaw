@@ -261,8 +261,7 @@
         "solid/components-return-once": "warn",
         "solid/no-destructure": "error",
         "solid/prefer-for": "error",
-        // Solid 2 dynamic() tracks its component selector through an internal memo.
-        "solid/reactivity": ["warn", { "customReactiveFunctions": ["dynamic"] }],
+        "solid/reactivity": "warn",
         "solid/event-handlers": "error",
         "solid/imports": "warn",
         "solid/style-prop": "warn",
