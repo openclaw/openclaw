@@ -146,8 +146,7 @@ const NodesToolSchema = Type.Object({
   ),
   invokeCommand: Type.Optional(
     Type.String({
-      description:
-        'Node command to relay. fs.listDir returns sub-directories only; use the exec tool with host="node" to list files.',
+      description: "Node command to relay. fs.listDir returns sub-directories only.",
     }),
   ),
   invokeParamsJson: Type.Optional(Type.String()),
@@ -171,7 +170,7 @@ export function createNodesTool(options?: {
     label: "Nodes",
     name: "nodes",
     description:
-      "Paired nodes: status/list with active-computer presence; pass node to describe/control. Pairing lifecycle (pending/approve/reject), notify, camera_snap/camera_list/camera_clip (with audio), camera_ptz for physical camera pan/tilt/zoom, photos_latest, screen_snapshot, screen_record video, location_get, notifications_list + notifications_action (open/dismiss/reply), device_status/device_info/device_permissions/device_health, executable lookup (which + bins), generic invoke (fs.listDir returns sub-directories only; use the exec tool with host=node for files). File transfer is a separate capability.",
+      "Paired nodes: status/list with active-computer presence; pass node to describe/control. Pairing lifecycle (pending/approve/reject), notify, camera_snap/camera_list/camera_clip (with audio), camera_ptz for physical camera pan/tilt/zoom, photos_latest, screen_snapshot, screen_record video, location_get, notifications_list + notifications_action (open/dismiss/reply), device_status/device_info/device_permissions/device_health, executable lookup (which + bins), generic invoke (fs.listDir returns sub-directories only). File transfer is a separate capability.",
     parameters: NodesToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;

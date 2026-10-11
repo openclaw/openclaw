@@ -14,6 +14,7 @@ import {
 } from "./tool-description-presets.js";
 import { createAgentsWaitTool } from "./tools/agents-wait-tool.js";
 import { createConversationsSendTool } from "./tools/conversation-tools.js";
+import { createNodesTool } from "./tools/nodes-tool.js";
 import { createSessionsSpawnTool } from "./tools/sessions-spawn-tool.js";
 import { createSessionsYieldTool } from "./tools/sessions-yield-tool.js";
 
@@ -243,5 +244,27 @@ describe("createOpenClawCodingTools availability guidance", () => {
     expect(tool?.description).toContain(
       "When diagnosing a missing result from an announcing child, use `subagents` to inspect execution and delivery status. Recover existing results or follow up within the still-authorized task; respect intentional cancellation and never loop-poll.",
     );
+  });
+
+  it("names exec for file listing only when exec survives tool filtering", () => {
+    const nodes = createNodesTool();
+    const [withoutExec] = applyToolAvailabilityDescriptions([nodes]);
+    const [withExec] = applyToolAvailabilityDescriptions([
+      nodes,
+      { name: "exec", description: "exec base" } as AnyAgentTool,
+    ]);
+
+    expect(withoutExec?.description).toContain("fs.listDir returns sub-directories only");
+    expect(withoutExec?.description).not.toContain("use the exec tool with host=node");
+    expect(withExec?.description).toContain(
+      "fs.listDir returns sub-directories only; use the exec tool with host=node to list files",
+    );
+    const invokeCommand = (
+      expectDefined(withoutExec, "nodes tool").parameters as {
+        properties?: Record<string, { description?: string }>;
+      }
+    ).properties?.invokeCommand;
+    expect(invokeCommand?.description).toContain("fs.listDir returns sub-directories only");
+    expect(invokeCommand?.description).not.toContain("use the exec tool");
   });
 });
