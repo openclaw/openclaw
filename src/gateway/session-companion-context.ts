@@ -16,7 +16,6 @@ import {
 } from "./session-companion-state.js";
 import { readSessionTranscriptBoundedMessageTailPageAsync } from "./session-transcript-readers.js";
 import { loadGatewaySessionEntryReadOnlyInWorker } from "./session-utils-store-worker.js";
-import { loadGatewaySessionEntryReadOnly } from "./session-utils.js";
 
 const CONTEXT_MAX_MESSAGES = 40;
 const CONTEXT_MAX_BYTES = 24 * 1024;
@@ -31,7 +30,10 @@ type SessionCompanionContextReadResult =
   | { kind: "unavailable" };
 
 export type SessionCompanionContextReader = {
-  currentSessionId: (params: { agentId: string; sessionKey: string }) => string | undefined;
+  currentSessionId: (params: {
+    agentId: string;
+    sessionKey: string;
+  }) => Promise<string | undefined>;
   read: typeof readSessionCompanionContext;
 };
 
@@ -190,16 +192,19 @@ async function readSessionCompanionContextFromEntry(
 }
 
 export const defaultSessionCompanionContextReader: SessionCompanionContextReader = {
-  currentSessionId: ({ agentId, sessionKey }) => {
+  currentSessionId: async ({ agentId, sessionKey }) => {
     const binding = captureIncognitoSessionSource({ agentId, sessionKey });
     if (binding) {
       return "kind" in binding
         ? undefined
         : binding.actor.sessions.readSharing(sessionKey)?.entry?.sessionId?.trim();
     }
-    return (
-      loadGatewaySessionEntryReadOnly(sessionKey, { agentId }).entry?.sessionId?.trim() || undefined
-    );
+    const loaded = await loadGatewaySessionEntryReadOnlyInWorker({
+      cfg: getRuntimeConfig(),
+      key: sessionKey,
+      agentId,
+    });
+    return loaded.entry?.sessionId?.trim() || undefined;
   },
   read: readSessionCompanionContext,
 };

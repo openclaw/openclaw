@@ -36,6 +36,22 @@ function createScope(prefix: string) {
 }
 
 describe("session companion context", () => {
+  it("reads replaced session identities without host SQL", async () => {
+    const scope = createScope("companion-context-identity");
+    for (const sessionId of [scope.sessionId, `${scope.sessionId}-replacement`]) {
+      await upsertSessionEntryCore(scope, { sessionId, updatedAt: 1 });
+      const hostSql = observeHostDataSql();
+      try {
+        await expect(defaultSessionCompanionContextReader.currentSessionId(scope)).resolves.toBe(
+          sessionId,
+        );
+        expect(hostSql.queries).toEqual([]);
+      } finally {
+        hostSql.restore();
+      }
+    }
+  });
+
   it.each(
     [false, true].flatMap((warm) =>
       (["reset", "dispose", "request-abort", "backing-reset"] as const).map((cancellation) => ({

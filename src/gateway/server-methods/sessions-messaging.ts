@@ -17,7 +17,7 @@ import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from 
 import { invalidSessionRequest } from "../session-request-error.js";
 import { reactivateCompletedSubagentSession } from "../session-subagent-reactivation.js";
 import { loadGatewaySessionEntryReadOnlyInWorker } from "../session-utils-store-worker.js";
-import { loadSessionEntry, prepareDeletedAgentSessionCheck } from "../session-utils.js";
+import { prepareDeletedAgentSessionCheck } from "../session-utils.js";
 import { gatewayClientUploadPolicyError } from "../upload-policy.js";
 import { handleDirectExternalChatSend } from "./chat-send-external-entry.js";
 import { emitSessionsChanged } from "./session-change-event.js";
@@ -125,10 +125,16 @@ async function handleSessionSend(
     return;
   }
   const requestedAgentId = requestedAgent.agentId;
-  const loaded = loadSessionEntry(key, { agentId: requestedAgentId });
+  const requestAuthority = readGatewayRequestMutationAuthority(options);
+  const loaded = await loadGatewaySessionEntryReadOnlyInWorker({
+    cfg,
+    key,
+    agentId: requestedAgentId,
+    excludeInternalEffects: true,
+    assertActive: requestAuthority.assertPreparationCurrent,
+  });
   const { legacyKey } = loaded;
   let { entry, canonicalKey } = loaded;
-  const requestAuthority = readGatewayRequestMutationAuthority(options);
   const sessionAuthorization = options.sessionMutationAuthorization;
   const deletedAgent = prepareDeletedAgentSessionCheck({
     cfg,
