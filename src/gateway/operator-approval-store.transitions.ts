@@ -223,7 +223,7 @@ export function expireDueOperatorApprovalsInDatabase(params: {
     return {
       affected: result.rows.length,
       records: result.rows
-        .sort(
+        .toSorted(
           (a, b) =>
             a.expires_at_ms - b.expires_at_ms ||
             (a.approval_id < b.approval_id ? -1 : a.approval_id > b.approval_id ? 1 : 0),

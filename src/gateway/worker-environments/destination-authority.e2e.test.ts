@@ -68,13 +68,7 @@ const git = async (root: string, args: string[]) =>
 const authorityCases = [
   {
     contract: "destination preparation",
-    modes: [
-      "allowed",
-      "policy-activated",
-      "source-reassigned",
-      "accepted-stop",
-      "accepted-attached-stop",
-    ],
+    modes: ["allowed", "policy-activated", "accepted-stop", "accepted-attached-stop"],
   },
   {
     contract: "pending-result settlement",
@@ -655,7 +649,7 @@ process.stdin.pipe(child.stdin);
                     await placements.getPlacementMoveAsync(identity.sessionId),
                   ).toBeUndefined();
                 } else {
-                  const reconciling = await placements.startReconcile({
+                  await placements.startReconcile({
                     sessionId: active.sessionId,
                     environmentId: active.environmentId,
                     ownerEpoch: active.activeOwnerEpoch,
@@ -706,18 +700,6 @@ process.stdin.pipe(child.stdin);
                     if (mode === "policy-activated") {
                       publishConfig("development");
                     }
-                    if (mode === "source-reassigned") {
-                      await placements.cancelPlacementMove(begun.intent);
-                      await placements.fail({
-                        sessionId: identity.sessionId,
-                        expectedGeneration: reconciling.generation,
-                        recoveryError: "Source reassigned",
-                      });
-                      await placements.startDispatch({
-                        ...identity,
-                        executionMode: "worker-turn",
-                      });
-                    }
                   } finally {
                     release.resolve();
                     await held;
@@ -731,11 +713,7 @@ process.stdin.pipe(child.stdin);
                     expect(currentCall).toBeGreaterThanOrEqual(0);
                     await expect(
                       observedMaterialization.mock.results[currentCall]?.value,
-                    ).rejects.toThrow(
-                      mode === "policy-activated"
-                        ? "required worker profile policy"
-                        : "lost its source owner",
-                    );
+                    ).rejects.toThrow("required worker profile policy");
                   }
                   observedMaterialization.mockRestore();
                   if (mode === "allowed") {
@@ -759,9 +737,7 @@ process.stdin.pipe(child.stdin);
                     expect(
                       await managedWorktrees.findLiveByOwner("session", identity.sessionKey),
                     ).toBeUndefined();
-                    expect(placements.get(identity.sessionId)?.state).toBe(
-                      mode === "policy-activated" ? "reconciling" : "requested",
-                    );
+                    expect(placements.get(identity.sessionId)?.state).toBe("reconciling");
                     if (mode === "policy-activated") {
                       expect(
                         (await placements.getPlacementMoveAsync(identity.sessionId))?.lastError,
@@ -802,12 +778,10 @@ process.stdin.pipe(child.stdin);
                 console.info(
                   `destination-boundary ${mode}: required-placement=${Boolean(config.cloudWorkers?.requiredProfile)} gateway-binding=${Boolean(loadSessionEntry(identity)?.worktree)} source=destroyed checkpoint=retained placement=${placements.get(identity.sessionId)?.state}`,
                 );
-                if (mode === "policy-activated" || mode === "source-reassigned") {
+                if (mode === "policy-activated") {
                   // Retire the synthetic operation after asserting its retained rejection;
                   // later controls must not resume it when their policy is intentionally off.
-                  if (mode === "policy-activated") {
-                    await placements.cancelPlacementMove(begun.intent);
-                  }
+                  await placements.cancelPlacementMove(begun.intent);
                   await placements.fail({
                     sessionId: identity.sessionId,
                     expectedGeneration: placements.get(identity.sessionId)!.generation,

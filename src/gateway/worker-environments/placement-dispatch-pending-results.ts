@@ -311,7 +311,11 @@ export async function recoverPendingWorkspaceResults(
             };
             const assertPreservedEnvironment = () => {
               recovery.assertCurrent();
-              if (preserveEnvironment && !placements.validateWorkspaceResultClaim(turnClaim)) {
+              if (
+                preserveEnvironment &&
+                (!canPreserveEnvironment(active, blockedMove ?? null) ||
+                  !placements.validateWorkspaceResultClaim(turnClaim))
+              ) {
                 throw new Error("Recovered workspace result lost its active environment owner");
               }
             };
