@@ -75,6 +75,8 @@ export function createSessionRowProjectionBackfill(params: {
         if (!disposed && live?.generation === row.generation && params.current(live)) {
           // A newer queued transcript update will replace these optional preview fields.
           params.publish(live, fields);
+        } else if (live?.generation === row.generation && revisions.get(id) === captured) {
+          revisions.delete(id);
         }
       } catch {
         // A later owner publication retries optional fields; do not spin on a cold/error row.

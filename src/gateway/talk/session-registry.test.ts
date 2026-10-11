@@ -74,7 +74,7 @@ describe("Talk connection cleanup registry", () => {
       },
     );
   });
-  it("keeps one cleanup per relay kind", async () => {
+  it("keeps one cleanup per relay kind", () => {
     const replacedRealtimeCleanup = vi.fn();
     const transcriptionCleanup = vi.fn();
     const log = { warn: vi.fn() };
@@ -86,8 +86,6 @@ describe("Talk connection cleanup registry", () => {
 
     cleanupTalkConnection("conn-dedupe", log);
     cleanupTalkConnection("conn-dedupe", log);
-    await drainGlobalSingletonLifecycleState("restart");
-
     expect(replacedRealtimeCleanup).not.toHaveBeenCalled();
     expect(realtimeCleanup).toHaveBeenCalledOnce();
     expect(realtimeCleanup.mock.contexts).toEqual([undefined]);
@@ -95,7 +93,7 @@ describe("Talk connection cleanup registry", () => {
     expect(log.warn).not.toHaveBeenCalled();
   });
 
-  it("continues cleanup after one relay owner throws", async () => {
+  it("continues cleanup after one relay owner throws", () => {
     const cleanupError = new Error("realtime cleanup failed");
     const transcriptionCleanup = vi.fn();
     const log = { warn: vi.fn() };
@@ -110,15 +108,11 @@ describe("Talk connection cleanup registry", () => {
     registerTalkConnectionCleanup("conn-error", "transcription-relay", transcriptionCleanup);
 
     cleanupTalkConnection("conn-error", log);
-    await expect(drainGlobalSingletonLifecycleState("restart")).rejects.toThrow(
-      "Failed to reset global singleton lifecycle state",
-    );
-
     expect(log.warn).toHaveBeenCalledWith(
       "failed to run realtime-relay Talk cleanup after connection disconnect: realtime cleanup failed",
     );
     expect(transcriptionCleanup).toHaveBeenCalledOnce();
-    await drainGlobalSingletonLifecycleState("restart");
+    cleanupTalkConnection("conn-error", log);
   });
 
   it("retains failed async cleanup for shutdown retry without replacing its owner", async () => {

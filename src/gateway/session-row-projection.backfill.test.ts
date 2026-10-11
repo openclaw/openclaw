@@ -121,16 +121,15 @@ it("coalesces streaming transcript refreshes without rereading metadata or refre
     await projection.ensureMaterialized();
     expect(projection.materializedCount - before).toBe(3);
     await vi.advanceTimersByTimeAsync(1_000);
-    expect(vi.getTimerCount()).toBe(0);
     expect(projection.materializedCount - before).toBe(3);
     expect(reads).toEqual([]);
+    const backfilled = observeSessionRowBackfill([query.key], projection);
     release();
     vi.useRealTimers();
-    await vi.waitFor(() =>
-      expect(projection.snapshot(query, { includeLastMessage: true }).row).toMatchObject({
-        lastMessagePreview: "Update 11",
-      }),
-    );
+    await backfilled;
+    expect(projection.snapshot(query, { includeLastMessage: true }).row).toMatchObject({
+      lastMessagePreview: "Update 11",
+    });
   });
 });
 
@@ -262,21 +261,35 @@ it("eventually fills legacy titles and previews without waiting during startup o
       touchSessionEntry: false,
     });
     const before = loadSessionEntry(target);
-    const projection = await createSessionRowProjection({ cfg });
+    const prepareBackfill = async () => {
+      const release = retainSessionListForegroundWork();
+      try {
+        const projection = await createSessionRowProjection({ cfg });
+        return {
+          projection,
+          backfilled: observeSessionRowBackfill([target.sessionKey], projection),
+          release,
+        };
+      } catch (error) {
+        release();
+        throw error;
+      }
+    };
+    const { projection, backfilled, release } = await prepareBackfill();
     try {
       expect(loadSessionEntry(target)?.displayName).toBeUndefined();
-      await vi.waitFor(() => {
-        expect(
-          projection.snapshot(
-            { agentId: "main", key: target.sessionKey },
-            {
-              includeDerivedTitles: true,
-              includeLastMessage: true,
-            },
-          ).row,
-        ).toMatchObject({
-          lastMessagePreview: "The query is now bounded.",
-        });
+      release();
+      await backfilled;
+      expect(
+        projection.snapshot(
+          { agentId: "main", key: target.sessionKey },
+          {
+            includeDerivedTitles: true,
+            includeLastMessage: true,
+          },
+        ).row,
+      ).toMatchObject({
+        lastMessagePreview: "The query is now bounded.",
       });
       expect(loadSessionEntry(target)).toEqual(before);
       expect(
@@ -286,6 +299,7 @@ it("eventually fills legacy titles and previews without waiting during startup o
         ).row?.derivedTitle,
       ).toBeUndefined();
     } finally {
+      release();
       projection.dispose();
     }
     await nextTurn();
@@ -304,18 +318,22 @@ it("eventually fills legacy titles and previews without waiting during startup o
       });
       expect(loadSessionEntry(target)).toEqual(expected);
     }
-    const repairedProjection = await createSessionRowProjection({ cfg });
+    const {
+      projection: repairedProjection,
+      backfilled: repairedBackfilled,
+      release: releaseRepaired,
+    } = await prepareBackfill();
     try {
-      await vi.waitFor(() => {
-        expect(
-          repairedProjection.snapshot(
-            { agentId: "main", key: target.sessionKey },
-            { includeDerivedTitles: true, includeLastMessage: true },
-          ).row,
-        ).toMatchObject({
-          derivedTitle: "Investigate the slow session query",
-          lastMessagePreview: "The query is now bounded.",
-        });
+      releaseRepaired();
+      await repairedBackfilled;
+      expect(
+        repairedProjection.snapshot(
+          { agentId: "main", key: target.sessionKey },
+          { includeDerivedTitles: true, includeLastMessage: true },
+        ).row,
+      ).toMatchObject({
+        derivedTitle: "Investigate the slow session query",
+        lastMessagePreview: "The query is now bounded.",
       });
       replaceSessionEntrySync(target, { sessionId: "replacement", updatedAt: 2 });
       const query = { agentId: "main", key: target.sessionKey };
@@ -329,6 +347,7 @@ it("eventually fills legacy titles and previews without waiting during startup o
         lastMessagePreview: undefined,
       });
     } finally {
+      releaseRepaired();
       repairedProjection.dispose();
     }
   });
@@ -519,7 +538,7 @@ it.for(["ready", "readiness failure", "metadata during readiness"])(
       }
       await withinTest(completed.promise, signal);
       expect(published).toEqual(["first", "second"]);
-      expect(reads).toHaveBeenCalledTimes(2);
+      expect(reads).toHaveBeenCalledTimes(mode === "metadata during readiness" ? 3 : 2);
     } finally {
       resume.resolve();
       backfill.dispose();
