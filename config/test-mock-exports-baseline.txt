@@ -1557,7 +1557,6 @@
 ["extensions/telegram/src/bot-message.test.ts","./bot-message-context.js","4c7790e94d65e86541dbcb088d8a788f4ddbbe3bbb0766d8dfa0f1ee65eae2d7",1]
 ["extensions/telegram/src/bot-message.test.ts","./bot-message-dispatch.js","89df72228516e853093ef29e363035757cbad196e2f8af140e2612e23f089a64",1]
 ["extensions/telegram/src/bot-message.test.ts","openclaw/plugin-sdk/runtime-env","1d418c420c8cc41ef54704a87234ad26c310da54853e4b2ef31e14e747fd8785",1]
-["extensions/telegram/src/bot-native-command-login.test.ts","./bot-native-commands.runtime.js","c554b3c83444215e9dbd5f3936a9c8bf728fc6c4ad7a5c4329a6f9eceac2a1b2",1]
 ["extensions/telegram/src/bot-native-commands.menu-test-support.ts","./bot/delivery.js","7c97fd8ca7752a9760a4125516cddee52dbfb97c63a1072c2e961d195e5c6205",1]
 ["extensions/telegram/src/bot-native-commands.menu-test-support.ts","./bot/delivery.replies.js","22389079adf30cc502de09d04c8ebdb7369665e7192baccbde59d8becd72a455",1]
 ["extensions/telegram/src/bot.create-telegram-bot.channel-post-media.test.ts","./sticker-cache.js","25203fc054fde2cb262ebbc65107422e7311f0b125afb9de63ed04acb4cbe03b",1]
