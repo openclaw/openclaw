@@ -10,12 +10,6 @@ function waitForTelegramMenu(assertion: () => void) {
   return vi.waitFor(assertion, { interval: 1 });
 }
 
-function waitForTelegramMenuTurn() {
-  return new Promise<void>((resolve) => {
-    setTimeout(resolve, 0);
-  });
-}
-
 const ledgerRows = new Map<string, unknown>();
 const ledgerRegisterCalls: Array<{ key: string; value: unknown }> = [];
 const ledgerDeleteCalls: string[] = [];

@@ -318,7 +318,7 @@ async function materialize(
           ssrfPolicy,
         });
         if (outcome.status === "unavailable" || outcome.status === "cancelled") {
-          throw new Error(`New dashboard tab cleanup ${outcome.status}`);
+          throw new Error(`New dashboard tab cleanup ${outcome.status}`, { cause: error });
         }
       } catch (cleanupError) {
         // A simultaneous creation and close failure leaves only this new tab,
@@ -326,7 +326,7 @@ async function materialize(
         throw new AggregateError(
           [error, cleanupError],
           "Dashboard creation failed; close its newly opened tab manually.",
-          { cause: error },
+          { cause: cleanupError },
         );
       }
     }

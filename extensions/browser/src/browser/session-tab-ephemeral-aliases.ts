@@ -67,9 +67,9 @@ function createTabAliasIndex<T>(
     ) => {
       const targetKey = keyOf(target);
       clear(targetKey);
-      const add = (kind: "alias" | "exact", identity: AliasIdentity) => {
+      const add = (kind: "alias" | "exact", aliasIdentity: AliasIdentity) => {
         const index = mappings(kind);
-        const key = interactionKey(identity);
+        const key = interactionKey(aliasIdentity);
         const targets = index.get(key) ?? new Map<string, T>();
         targets.set(targetKey, target);
         index.set(key, targets);
