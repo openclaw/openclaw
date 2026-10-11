@@ -33,18 +33,8 @@ export function listSlackMessageActions(
   const actions: ChannelMessageActionName[] = ["send"];
   for (const [gate, enabledActions] of [
     ["reactions", ["react", "reactions"]],
-    [
-      "messages",
-      [
-        "channel-create",
-        "conversation-open",
-        "read",
-        "edit",
-        "delete",
-        "download-file",
-        "upload-file",
-      ],
-    ],
+    ["channels", ["channel-create"]],
+    ["messages", ["conversation-open", "read", "edit", "delete", "download-file", "upload-file"]],
     ["pins", ["pin", "unpin", "list-pins"]],
     ["memberInfo", ["member-info"]],
     ["emojiList", ["emoji-list"]],

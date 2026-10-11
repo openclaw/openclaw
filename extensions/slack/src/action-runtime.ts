@@ -490,6 +490,10 @@ export async function handleSlackAction(
   const isActionEnabled = createActionGate(actionConfig);
   const botToken = account.botToken?.trim();
 
+  if (action === "createChannel" && !isActionEnabled("channels", false)) {
+    throw new Error("Slack channel creation is disabled.");
+  }
+
   const buildActionOpts = (operation: "read" | "write", teamId?: string) => {
     const token = resolveSlackOperationToken(account, operation);
     if (!token && account.identity === "user") {

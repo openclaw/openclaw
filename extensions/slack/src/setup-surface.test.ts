@@ -158,7 +158,7 @@ describe("slackSetupWizard.prepare", () => {
             "channels:history",
             "channels:manage",
             "channels:read",
-            "channels:write",
+            "channels:write.invites",
             "chat:write",
             "commands",
             "emoji:read",

@@ -41,15 +41,16 @@ Slack actions are controlled by `channels.slack.actions.*`.
 
 Available action groups in current Slack tooling:
 
-| Group      | Default |
-| ---------- | ------- |
-| messages   | enabled |
-| reactions  | enabled |
-| pins       | enabled |
-| memberInfo | enabled |
-| emojiList  | enabled |
+| Group      | Default  |
+| ---------- | -------- |
+| channels   | disabled |
+| messages   | enabled  |
+| reactions  | enabled  |
+| pins       | enabled  |
+| memberInfo | enabled  |
+| emojiList  | enabled  |
 
-Current Slack message actions include `send`, `channel-create`, `conversation-open`, `upload-file`, `download-file`, `read`, `edit`, `delete`, `pin`, `unpin`, `list-pins`, `member-info`, and `emoji-list`. `channel-create` creates a public workspace channel with Slack's `conversations.create` API. It requires the `channels:manage` OAuth scope; adding the requester to the created channel requires `channels:write`. Add these scopes to the Slack app and reinstall or reauthorize existing installations before using this action. `download-file` accepts Slack file IDs shown in inbound file placeholders and returns image previews for images or local file metadata for other file types.
+Current Slack message actions include `send`, `channel-create`, `conversation-open`, `upload-file`, `download-file`, `read`, `edit`, `delete`, `pin`, `unpin`, `list-pins`, `member-info`, and `emoji-list`. `channel-create` creates a public workspace channel with Slack's `conversations.create` API. It is disabled until `channels.slack.actions.channels: true` is set (or set on the selected account). It requires the `channels:manage` OAuth scope; adding the requester to the created channel requires `channels:write.invites`. Add these scopes to the Slack app and reinstall or reauthorize existing installations before using this action. `download-file` accepts Slack file IDs shown in inbound file placeholders and returns image previews for images or local file metadata for other file types.
 
 Interactive message actions retain their caller authority through target and permission lookups and recheck it before each Slack request. If that authority closes, remaining requests stop while an already accepted mutation keeps its result.
 

@@ -24,7 +24,9 @@ describe("Slack channel-create", () => {
     vi.spyOn(slackClient, "getSlackWriteClient").mockImplementation(
       (token, options) => new WebClient(token, { ...options, fetch, retryConfig: { retries: 0 } }),
     );
-    const cfg: OpenClawConfig = { channels: { slack: { botToken: "xoxb-test" } } };
+    const cfg: OpenClawConfig = {
+      channels: { slack: { botToken: "xoxb-test", actions: { channels: true } } },
+    };
     const adapter = createSlackActions("slack");
 
     const result = await adapter.handleAction!({
@@ -83,7 +85,7 @@ describe("Slack channel-create", () => {
     const result = await adapter.handleAction!({
       channel: "slack",
       action: "channel-create",
-      cfg: { channels: { slack: { botToken: "xoxb-test" } } },
+      cfg: { channels: { slack: { botToken: "xoxb-test", actions: { channels: true } } } },
       params: { name: "proj-launch-pixel-peak" },
       accountId: "default",
       requesterAccountId: "default",

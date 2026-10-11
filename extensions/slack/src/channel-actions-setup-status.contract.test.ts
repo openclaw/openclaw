@@ -46,6 +46,7 @@ describe("slack actions contract", () => {
             slack: {
               botToken: "xoxb-test",
               appToken: "xapp-test",
+              actions: { channels: true },
             },
           },
         } as OpenClawConfig,
