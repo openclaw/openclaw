@@ -14,6 +14,7 @@ import {
 import {
   buildNotifyMessageUpsert,
   getSock,
+  settleInboundWork,
   startInboxMonitor,
   waitForMessageCalls,
   type InboxMonitorOptions,
@@ -236,6 +237,67 @@ describe("web monitor inbox metadata cache", () => {
       });
       expect(sock.groupMetadata).toHaveBeenCalledTimes(1);
       expect(baileysCache.baileysGroupMetaCache.has("123@g.us")).toBe(false);
+    } finally {
+      await listener.close();
+    }
+  });
+
+  it.each(["lookup", "identity mapping"])(
+    "does not republish sender-key recipients invalidated during %s",
+    async (stage) => {
+      const sock = getSock();
+      const entered = Promise.withResolvers<void>();
+      const resume = Promise.withResolvers<void>();
+      const former = groupMetadata({
+        subject: "Former Group",
+        participants: ["277038292303944@lid"],
+      });
+      sock.groupMetadata.mockImplementationOnce(async () => {
+        if (stage === "lookup") {
+          entered.resolve();
+          await resume.promise;
+        }
+        return former;
+      });
+      sock.signalRepository.lidMapping.getPNForLID.mockImplementationOnce(async () => {
+        if (stage === "identity mapping") {
+          entered.resolve();
+          await resume.promise;
+        }
+        return "15551234567@s.whatsapp.net";
+      });
+      const { listener, baileysCache } = await startInboxMonitorWithBaileysCache();
+      try {
+        const sending = listener.sendMessage("123@g.us", "hello @15551234567");
+        await entered.promise;
+        sock.ev.emit("group-participants.update", { id: "123@g.us" });
+        resume.resolve();
+        await sending;
+        // Baileys must miss the invalidated cache and fetch current recipients itself.
+        await expect(
+          baileysCache.socketOptions.cachedGroupMetadata("123@g.us"),
+        ).resolves.toBeUndefined();
+      } finally {
+        resume.resolve();
+        await listener.close();
+      }
+    },
+  );
+
+  it("does not republish sender-key recipients from invalidated startup hydration", async () => {
+    const sock = getSock();
+    const hydration = Promise.withResolvers<Record<string, GroupMetadata>>();
+    sock.groupFetchAllParticipating.mockReturnValueOnce(hydration.promise);
+    const { listener, baileysCache } = await startInboxMonitorWithBaileysCache();
+    try {
+      sock.ev.emit("group-participants.update", { id: "123@g.us" });
+      hydration.resolve({
+        "123@g.us": groupMetadata({ subject: "Former Group" }),
+      });
+      await settleInboundWork();
+      await expect(
+        baileysCache.socketOptions.cachedGroupMetadata("123@g.us"),
+      ).resolves.toBeUndefined();
     } finally {
       await listener.close();
     }

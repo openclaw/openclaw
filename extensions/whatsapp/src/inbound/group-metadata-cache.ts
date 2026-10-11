@@ -72,6 +72,7 @@ export function createWhatsAppGroupMetadataCacheOwner(params: GroupMetadataCache
   const reconnectCache = params.reconnectCache ?? new Map();
   const localCache = new Map<string, LocalGroupMetadataCacheEntry>();
   const detachListeners: Array<() => void> = [];
+  let cacheRevision = 0;
   let closed = false;
   let started = false;
 
@@ -107,12 +108,14 @@ export function createWhatsAppGroupMetadataCacheOwner(params: GroupMetadataCache
     if (closed) {
       return;
     }
+    cacheRevision++;
     rememberWhatsAppBaileysCacheEntry(params.baileysCache, jid, meta, GROUP_META_TTL_MS);
     rememberGroupMetadataCacheEntry(reconnectCache, jid, summarizeForReconnect(meta));
     localCache.delete(jid);
   };
 
   const forgetFullMetadata = (jid: string) => {
+    cacheRevision++;
     params.baileysCache?.delete(jid);
     reconnectCache.delete(jid);
     localCache.delete(jid);
@@ -126,6 +129,7 @@ export function createWhatsAppGroupMetadataCacheOwner(params: GroupMetadataCache
     if (cached) {
       return cached;
     }
+    const revision = cacheRevision;
     try {
       const hydratedEntry = params.baileysCache?.get(jid);
       const providerMetadata = params.baileysCache
@@ -140,12 +144,15 @@ export function createWhatsAppGroupMetadataCacheOwner(params: GroupMetadataCache
       if (closed) {
         return { expires: Date.now() + GROUP_META_TTL_MS };
       }
+      // Baileys uses this cache for sender-key recipients, not just display metadata.
+      if (revision !== cacheRevision) {
+        return entry;
+      }
       if (hydratedMetadata && hydratedEntry) {
         entry.expires = hydratedEntry.expiresAt;
       } else {
         rememberWhatsAppBaileysCacheEntry(params.baileysCache, jid, meta, GROUP_META_TTL_MS);
       }
-      // Membership changes during a lookup converge on the next cache refresh.
       rememberGroupMetadataCacheEntry(reconnectCache, jid, {
         subject: entry.subject,
         expires: entry.expires,
@@ -233,9 +240,10 @@ export function createWhatsAppGroupMetadataCacheOwner(params: GroupMetadataCache
     });
 
     void (async () => {
+      const revision = cacheRevision;
       try {
         const groups = await params.sock.groupFetchAllParticipating();
-        if (closed) {
+        if (closed || revision !== cacheRevision) {
           return;
         }
         for (const [jid, meta] of Object.entries(groups ?? {})) {
