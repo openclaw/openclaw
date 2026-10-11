@@ -1,7 +1,6 @@
 /* @vitest-environment jsdom */
 
 import type { ProgressCard } from "@openclaw/gateway-protocol";
-import { render } from "lit";
 import { createComponent, createSignal } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ControlUiSessionPullRequestSnapshot } from "../../../src/gateway/control-ui-contract.js";
@@ -9,7 +8,6 @@ import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { flush } from "../test-helpers/solid-settle.ts";
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
 import { SessionHovercard, type SessionHovercardInput } from "./session-hovercard-solid.tsx";
-import { renderSessionHovercard } from "./session-hovercard.ts";
 
 function row(overrides: Partial<SidebarRecentSession> = {}): SidebarRecentSession {
   return {
@@ -107,16 +105,8 @@ function attributionSummary(container: ParentNode): string {
     .trim();
 }
 
-describe.each([
-  {
-    name: "Lit",
-    render: (input: SessionHovercardInput, container = document.createElement("div")) => {
-      render(renderSessionHovercard(input), container);
-      return container;
-    },
-  },
-  { name: "Solid", render: renderSolidCard },
-])("$name session hovercard", ({ render: renderCard }) => {
+describe("Solid session hovercard", () => {
+  const renderCard = renderSolidCard;
   it.each([undefined, "Validation worker"])(
     "shows the full failure above the notepad (child: %s)",
     (childLabel) => {

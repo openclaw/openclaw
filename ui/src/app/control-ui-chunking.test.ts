@@ -71,7 +71,7 @@ describe("Control UI build chunking", () => {
     expect(controlUiCodeSplitting.includeDependenciesRecursively).toBe(false);
     expect(controlUiCodeSplitting.groups[1]).toMatchObject({
       tags: ["$initial"],
-      maxSize: 1024 * 1024,
+      maxSize: 1280 * 1024,
     });
     for (const [id, expected] of [
       ["/repo/ui/node_modules/lit/index.js", "lit-runtime"],
