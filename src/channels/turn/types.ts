@@ -164,7 +164,14 @@ export type { ChannelDeliveryOutcome, ChannelDeliveryResult } from "./delivery-o
 
 export type ChannelTurnDurableDeliveryOptions = Pick<
   DeliverOutboundPayloadsParams,
-  "deps" | "formatting" | "identity" | "mediaAccess" | "replyToMode" | "silent" | "threadId"
+  | "deps"
+  | "formatting"
+  | "identity"
+  | "mediaAccess"
+  | "replyToMode"
+  | "retryAmbiguousFinalText"
+  | "silent"
+  | "threadId"
 > & {
   to?: string | null;
   replyToId?: string | null;

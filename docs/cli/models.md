@@ -183,6 +183,13 @@ model discovery only when `--refresh` is supplied. Local refresh uses the config
 managed proxy for provider discovery and releases it when discovery finishes.
 Cached lists and Gateway requests do not start the CLI's managed proxy.
 
+Local agent runs reuse saved provider inventory, including models discovered for
+an authenticated provider that has no configured default model. For a newly
+listed model, run `openclaw models list --refresh --provider <id>` before
+`openclaw agent --local --model <id>/<model> --message "Hello"`. Without saved
+inventory, existing provider discovery and static models still apply; an unknown
+model error tells you to refresh the provider's model list.
+
 Use `--refresh` to acquire provider inventory before listing. A failed refresh
 warns while showing available published rows. Successful empty acquisition stays
 empty; it does not restore the old discovered rows. If the published owner is not

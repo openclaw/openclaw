@@ -26,6 +26,7 @@ import {
   type InputProvenance,
   readInterSessionPromptEnvelope,
 } from "../sessions/input-provenance.js";
+import { stripCliPromptDecorations } from "./cli-session-history.prompt-text.js";
 import { attachOpenClawTranscriptMeta } from "./session-transcript-readers.js";
 
 const CLAUDE_CLI_PROVIDER = "claude-cli";
@@ -255,9 +256,8 @@ function isClaudeCliTaskNotification(
   );
 }
 
-// The native row keeps the routed prompt OpenClaw sent, envelope first. Its
-// provenance is the same fact the local transcript row stores structurally.
-// Preserve raw text so literal matches win before compare-only decoration removal.
+// Read provenance through generated context, but preserve the raw content for
+// display and literal matching against local transcript rows.
 function readClaudeCliInterSessionProvenance(
   content: string | unknown[],
 ): InputProvenance | undefined {
@@ -271,7 +271,7 @@ function readClaudeCliInterSessionProvenance(
   if (typeof text !== "string") {
     return undefined;
   }
-  return readInterSessionPromptEnvelope(text)?.provenance;
+  return readInterSessionPromptEnvelope(stripCliPromptDecorations(text))?.provenance;
 }
 
 export function resolveClaudeCliPromptTextCandidates(
