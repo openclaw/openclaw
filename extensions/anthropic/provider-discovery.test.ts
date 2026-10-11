@@ -120,9 +120,9 @@ it("publishes the native menu once per discovery generation, never static member
     config,
     env,
     signal,
-    resolveProviderAuth: (_provider?: string, options?: { oauthMarker?: string }) => ({
-      apiKey: options?.oauthMarker,
-      mode: "oauth" as const,
+    resolveProviderAuth: () => ({
+      apiKey: undefined,
+      mode: "none" as const,
       source: "none" as const,
     }),
     resolveProviderApiKey: () => ({ apiKey: undefined }),
@@ -136,6 +136,7 @@ it("publishes the native menu once per discovery generation, never static member
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     thinkingLevelMap: { low: "low", max: "max" },
   };
+  probeClaudeCliAuthStatus.mockResolvedValue({ status: "available" });
   discoverClaudeCliModels.mockResolvedValueOnce([row]).mockResolvedValueOnce([]);
   const first = await provider.catalog!.run(ctx);
   expect(first).toMatchObject({

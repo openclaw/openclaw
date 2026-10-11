@@ -500,7 +500,7 @@ describe("provider auth choice manifest helpers", () => {
     run();
   });
 
-  it.each([true, false])("preserves legacy sign-in choices with native realm=%s", (native) => {
+  it.each([true, false])("preserves legacy credential aliases with native realm=%s", (native) => {
     setManifestPlugins([
       {
         ...createManifestPlugin("anthropic", [
@@ -517,7 +517,7 @@ describe("provider auth choice manifest helpers", () => {
         ...(native ? { syntheticAuthRefs: ["claude-cli"] } : {}),
       },
     ]);
-    expect(resolveProviderIdForAuth("claude-cli")).toBe(native ? "claude-cli" : "anthropic");
+    expect(resolveProviderIdForAuth("claude-cli")).toBe("anthropic");
     expect(resolveManifestDeprecatedProviderAuthChoice("claude-cli")?.choiceId).toBe(
       "anthropic-cli",
     );

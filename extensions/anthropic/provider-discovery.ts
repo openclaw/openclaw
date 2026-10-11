@@ -17,6 +17,36 @@ const modelCaptures = new WeakMap<
 type NativeAvailability = ReturnType<typeof probeClaudeCliAuthStatus>;
 const availability = new WeakMap<object, WeakMap<object, WeakMap<object, NativeAvailability>>>();
 
+async function prepareClaudeCliAuth({
+  config,
+  provider,
+  env = process.env,
+  signal,
+}: Parameters<NonNullable<ProviderPlugin["prepareSyntheticAuth"]>>[0]) {
+  signal?.throwIfAborted();
+  if (!config || normalizeLowercaseStringOrEmpty(provider) !== CLAUDE_CLI_BACKEND_ID) {
+    return undefined;
+  }
+  const environments =
+    availability.get(config) ?? new WeakMap<object, WeakMap<object, NativeAvailability>>();
+  availability.set(config, environments);
+  const captures = environments.get(env) ?? new WeakMap<object, NativeAvailability>();
+  environments.set(env, captures);
+  // Native login is independent of workspace; fresh captures and cancellation own their probes.
+  const owner = signal ?? config;
+  const pending = captures.get(owner) ?? probeClaudeCliAuthStatus({ env, signal });
+  captures.set(owner, pending);
+  const result = await pending;
+  signal?.throwIfAborted();
+  return result.status === "available"
+    ? {
+        apiKey: CLAUDE_CLI_NATIVE_AUTH_MARKER,
+        source: "Claude CLI native auth",
+        mode: "oauth" as const,
+      }
+    : undefined;
+}
+
 const anthropicProviderDiscovery: ProviderPlugin = {
   id: CLAUDE_CLI_BACKEND_ID,
   label: "Claude CLI",
@@ -29,9 +59,14 @@ const anthropicProviderDiscovery: ProviderPlugin = {
         return null;
       }
       if (
-        !ctx.resolveProviderAuth(CLAUDE_CLI_BACKEND_ID, {
-          oauthMarker: CLAUDE_CLI_NATIVE_AUTH_MARKER,
-        }).apiKey
+        !(
+          await prepareClaudeCliAuth({
+            config: ctx.config,
+            provider: CLAUDE_CLI_BACKEND_ID,
+            env: ctx.env,
+            signal: ctx.signal,
+          })
+        )?.apiKey
       ) {
         return null;
       }
@@ -77,26 +112,7 @@ const anthropicProviderDiscovery: ProviderPlugin = {
       }
     },
   },
-  async prepareSyntheticAuth({ config, provider, env = process.env, signal }) {
-    signal?.throwIfAborted();
-    if (!config || normalizeLowercaseStringOrEmpty(provider) !== CLAUDE_CLI_BACKEND_ID) {
-      return undefined;
-    }
-    const environments =
-      availability.get(config) ?? new WeakMap<object, WeakMap<object, NativeAvailability>>();
-    availability.set(config, environments);
-    const captures = environments.get(env) ?? new WeakMap<object, NativeAvailability>();
-    environments.set(env, captures);
-    // Native login is independent of workspace; fresh captures and cancellation own their probes.
-    const owner = signal ?? config;
-    const pending = captures.get(owner) ?? probeClaudeCliAuthStatus({ env, signal });
-    captures.set(owner, pending);
-    const result = await pending;
-    signal?.throwIfAborted();
-    return result.status === "available"
-      ? { apiKey: CLAUDE_CLI_NATIVE_AUTH_MARKER, source: "Claude CLI native auth", mode: "oauth" }
-      : undefined;
-  },
+  prepareSyntheticAuth: prepareClaudeCliAuth,
 };
 
 export default anthropicProviderDiscovery;

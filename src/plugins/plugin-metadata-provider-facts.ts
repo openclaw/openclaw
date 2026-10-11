@@ -122,10 +122,7 @@ export function buildPluginMetadataProviderAuthAliases(plugins: readonly PluginM
         left.localeCompare(right),
       ),
       ...(plugin.providerAuthChoices ?? []).flatMap((choice) =>
-        (choice.deprecatedChoiceIds ?? [])
-          // A legacy sign-in choice can share a name with a distinct native auth realm.
-          .filter((alias) => !plugin.syntheticAuthRefs?.includes(normalizeProviderId(alias)))
-          .map((alias) => [alias, choice.provider] as const),
+        (choice.deprecatedChoiceIds ?? []).map((alias) => [alias, choice.provider] as const),
       ),
     ];
     for (const [rawAlias, rawTarget] of entries) {
