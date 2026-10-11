@@ -399,6 +399,7 @@
 ["extensions/discord/src/monitor/message-handler.process.test-harness.ts","./typing.js","3004e639ad770905bc723cd6828aa0e76cca8ef3f1b95a25cf52ffdf8880d3a7",1]
 ["extensions/discord/src/monitor/message-handler.process.test-harness.ts","openclaw/plugin-sdk/session-transcript-runtime","56f910fc36ce7ac814101a78fdf9ebf98868b396d4c4ac2c78048116a92a710f",1]
 ["extensions/discord/src/monitor/native-command.options.test.ts","openclaw/plugin-sdk/agent-runtime","2ed6770756cd5069af9eee5e95a8ec5b0dd1f11bc42a80218a6607162b9965b3",1]
+["extensions/discord/src/monitor/native-command.status-direct.test.ts","openclaw/plugin-sdk/web-media","cd7b3de40f1315309750f1eec7a419ffb981db76da207645ecc56e472f93c63a",1]
 ["extensions/discord/src/monitor/native-command.think-autocomplete.test.ts","openclaw/plugin-sdk/agent-runtime","ed49ff6c0ec82576c3f67be2bd6f5170cc361ceed641ff23901391a5f053fe3b",1]
 ["extensions/discord/src/monitor/native-command.think-autocomplete.test.ts","openclaw/plugin-sdk/conversation-binding-runtime","431d52e1139b6e606e6639d4be3cf7bcbfd8c41e7d0acf1745720f2dfce47d59",1]
 ["extensions/discord/src/monitor/presence-cooldown-store.test.ts","../runtime.js","15d929f1773f167ed484b3318ea9d399837f16371029f14871e4dfcabc6351d2",1]
