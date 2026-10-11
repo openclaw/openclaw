@@ -61,7 +61,7 @@ function isEscapedReference(value: string, dollar: number): boolean {
   return backslashes % 2 === 1;
 }
 
-function findSkillMentionTarget(value: string, caret: number): SkillMentionTarget | null {
+export function findSkillMentionTarget(value: string, caret: number): SkillMentionTarget | null {
   const safeCaret = Math.max(0, Math.min(caret, value.length));
   let start = safeCaret;
   while (start > 0 && SKILL_MENTION_CHAR.test(value[start - 1] ?? "")) {

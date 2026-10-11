@@ -32,11 +32,13 @@ import {
   renderAttachmentReadStatus,
 } from "../chat/components/chat-attachments.ts";
 import { adjustTextareaHeight, paneDomId } from "../chat/components/chat-composer-dom.ts";
+import { composerHighlights } from "../chat/components/chat-composer-highlights.ts";
 import type { HumanMentionMenuHost } from "../chat/components/chat-composer-mention-menu.ts";
 import "../../components/tooltip.ts";
 import { resolveComposerMenus } from "../chat/components/chat-composer-menus.ts";
 import type { ChatComposerCapabilityMenuProps } from "../chat/components/chat-composer-plus-menu.ts";
 import { renderSelectedHumanMentions } from "../chat/components/chat-composer-selected-mentions.ts";
+import { resolveComposerSkillHighlights } from "../chat/components/chat-composer-skill-highlights.ts";
 import {
   handleSkillMenuKeydown,
   renderSkillMenu,
@@ -541,6 +543,7 @@ export function renderNewSessionComposer(options: NewSessionComposerOptions) {
                   handleChatAttachmentPaste(event, attachmentProps);
                 }
               }}
+              ${composerHighlights(options.nativeTerminal ? () => [] : resolveComposerSkillHighlights)}
             ></textarea>
             <span class="agent-chat__composer-placeholder" aria-hidden="true"
               >${animatedPlaceholder}</span

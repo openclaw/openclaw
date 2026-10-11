@@ -1,0 +1,4 @@
+textarea::highlight(openclaw-composer-token) {
+  color: var(--link);
+  background-color: var(--accent-subtle);
+}
