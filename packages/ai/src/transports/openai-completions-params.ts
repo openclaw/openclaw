@@ -114,7 +114,7 @@ function estimateJsonChars(value: unknown, fallback: number): number {
 // replay turns are reflected in the output cap.
 function estimateOpenAICompletionsInputTokens(payload: {
   messages: unknown[];
-  tools?: CompletionsRequest["tools"];
+  tools?: unknown[];
   response_format?: unknown;
 }): number {
   let adjustedChars = 0;
@@ -248,12 +248,46 @@ type CompletionsRequest = Record<string, unknown> & {
   tools?: ReturnType<typeof convertTools>["tools"];
 };
 
+const contextOutputBudgets = new WeakMap<
+  CompletionsRequest,
+  {
+    model: string;
+    cap: number;
+    inputTokens: number;
+  }
+>();
+
+// Hooks may replace or mutate the payload. Only an unchanged automatic context
+// clamp can turn a provider's length finish into compaction recovery.
+export function resolveCompletionsContextOutputBudget(
+  request: CompletionsRequest,
+  payload: CompletionsRequest,
+): number | undefined {
+  const budget = contextOutputBudgets.get(request);
+  const limits = [payload.max_tokens, payload.max_completion_tokens].filter(
+    (value) => value !== undefined,
+  );
+  if (
+    !budget ||
+    payload.model !== budget.model ||
+    !Array.isArray(payload.messages) ||
+    (payload.tools !== undefined && !Array.isArray(payload.tools)) ||
+    limits.length === 0 ||
+    limits.some((value) => value !== budget.cap) ||
+    estimateOpenAICompletionsInputTokens(payload) !== budget.inputTokens
+  ) {
+    return undefined;
+  }
+  return budget.cap;
+}
+
 export function buildOpenAICompletionsRequest(
   model: OpenAIModeModel,
   context: Context,
   options: OpenAICompletionsOptions | undefined,
   policy: CompletionsRequestPolicy,
 ): CompletionsRequest {
+  let contextOutputCap: number | undefined;
   const resolvedPolicy =
     policy.mode === "direct" ? policy : { ...policy, compat: getCompat(model) };
   const compat = resolvedPolicy.compat;
@@ -477,6 +511,7 @@ export function buildOpenAICompletionsRequest(
           );
         }
         clampedMaxTokens = remainingBudget;
+        contextOutputCap = remainingBudget;
         emitModelTransportDebug(
           log,
           `[completions] clamp_max_tokens provider=${model.provider} api=${model.api} ` +
@@ -518,6 +553,13 @@ export function buildOpenAICompletionsRequest(
     } else if (isOpenAIGpt54MiniModel(model) || isOpenAIGpt55Model(model)) {
       delete params.reasoning_effort;
     }
+  }
+  if (contextOutputCap !== undefined) {
+    contextOutputBudgets.set(params, {
+      model: params.model,
+      cap: contextOutputCap,
+      inputTokens: estimateOpenAICompletionsInputTokens(params),
+    });
   }
   return params;
 }
