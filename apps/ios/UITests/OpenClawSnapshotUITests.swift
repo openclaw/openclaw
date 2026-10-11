@@ -2609,6 +2609,90 @@ extension OpenClawSnapshotUITests {
         XCTAssertEqual(returnResult, .completed, "Session reentry must show the restored latest page promptly")
     }
 
+    func testDisclosurePrependPreservesReaderWithMoreHistory() throws {
+        try self.assertDisclosurePrependPreservesReader(moreHistory: true)
+    }
+
+    func testDisclosurePrependPreservesReaderWhenHistoryExhausted() throws {
+        try self.assertDisclosurePrependPreservesReader(moreHistory: false)
+    }
+
+    private func assertDisclosurePrependPreservesReader(moreHistory: Bool) throws {
+        self.continueAfterFailure = false
+        self.launchApp(
+            for: Self.chatScreenshotTarget,
+            additionalArguments: ["--openclaw-disclosure-prepend-fixture"] +
+                (moreHistory ? ["--openclaw-disclosure-more-history-fixture"] : []))
+        let app = try XCTUnwrap(self.app)
+        let transcript = try self.chatTranscript(in: app)
+        let reading = app.staticTexts.matching(
+            NSPredicate(format: "label BEGINSWITH %@", "DISCLOSURE_READING_0:")).firstMatch
+        let earlier = app.buttons["chat-load-earlier-history"]
+        for _ in 0..<12 {
+            transcript.swipeDown(velocity: .slow)
+            if earlier.exists, !earlier.isEnabled { break }
+        }
+        XCTAssertTrue(earlier.exists && !earlier.isEnabled, "Pulling to the boundary must request its work page")
+        XCTAssertTrue(reading.exists && reading.frame.intersects(transcript.frame))
+        let before = reading.frame.minY
+        let suffix = moreHistory ? "more" : "exhausted"
+        self.attachScreenshot(named: "disclosure-before-\(suffix)")
+        let disclosure = app.descendants(matching: .any).matching(
+            NSPredicate(format: "identifier BEGINSWITH %@", "chat-completed-work-")).firstMatch
+        XCTAssertTrue(disclosure.waitForExistence(timeout: 5), "The page must add a completed-work disclosure")
+        XCTAssertTrue(reading.exists && reading.frame.intersects(transcript.frame))
+        XCTAssertEqual(
+            reading.frame.minY, before, accuracy: 12,
+            "An unchanged message anchor must still preserve the reading row after disclosure layout")
+        self.attachScreenshot(named: "disclosure-after-\(suffix)")
+        if moreHistory {
+            XCTAssertTrue(earlier.exists && !earlier.isEnabled, "The follow-on request must be awaited")
+            XCTAssertEqual(
+                reading.frame.minY, before, accuracy: 12, "The reader must stay fixed during the next request")
+            let older = app.staticTexts.matching(
+                NSPredicate(format: "label BEGINSWITH %@", "DISCLOSURE_OLDER:")).firstMatch
+            XCTAssertTrue(older.waitForExistence(timeout: 6), "Paging must continue after preserving the disclosure")
+        } else {
+            let exhausted = XCTNSPredicateExpectation(
+                predicate: NSPredicate { _, _ in !earlier.exists }, object: earlier)
+            XCTAssertEqual(XCTWaiter.wait(for: [exhausted], timeout: 3), .completed)
+        }
+        XCTAssertTrue(reading.exists && reading.frame.intersects(transcript.frame))
+        XCTAssertEqual(reading.frame.minY, before, accuracy: 12, "The final page must preserve the same reading row")
+        self.attachScreenshot(named: "disclosure-finished-\(suffix)")
+    }
+
+    func testEarlierHistoryContinuesPastEmptyProjectedPage() throws {
+        self.launchApp(
+            for: Self.chatScreenshotTarget,
+            additionalArguments: [
+                "--openclaw-audit-fixture", "--openclaw-audit-long-fixture",
+                "--openclaw-paged-history-short-fixture", "--openclaw-empty-history-page-fixture",
+            ])
+        let app = try XCTUnwrap(self.app)
+        let transcript = try self.chatTranscript(in: app)
+        let earlier = app.buttons["chat-load-earlier-history"]
+        XCTAssertTrue(earlier.waitForExistence(timeout: 3))
+        earlier.tap()
+        // No second tap or scroll: an empty projected page must not strand older visible history.
+        let replies = app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "AUDIT_PREVIOUS_FINAL_"))
+        XCTAssertTrue(
+            replies.firstMatch.waitForExistence(timeout: 5),
+            "One request must continue through the empty page to visible history")
+        // Preservation keeps those rows above the viewport; only after proving automatic paging may we scroll.
+        for _ in 0..<6 {
+            let isVisible = replies.allElementsBoundByIndex.contains {
+                $0.isHittable && $0.frame.intersects(transcript.frame)
+            }
+            if isVisible { break }
+            transcript.swipeDown(velocity: .fast)
+        }
+        XCTAssertTrue(replies.allElementsBoundByIndex.contains {
+            $0.isHittable && $0.frame.intersects(transcript.frame)
+        }, "The automatically loaded page must be readable")
+        self.attachScreenshot(named: "earlier-history-after-empty-projected-page")
+    }
+
     func testEarlierHistoryButtonWorksBeforeMetadataCompletes() throws {
         self.terminateCurrentApp()
         let app = self.configuredApp(

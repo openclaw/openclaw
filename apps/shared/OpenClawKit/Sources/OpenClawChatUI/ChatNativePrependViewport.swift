@@ -7,10 +7,12 @@ import UIKit
 final class ChatNativePrependViewport: NSObject {
     private weak var scrollView: UIScrollView?
     private var sizeObservation: NSKeyValueObservation?
-    private var baseline: (height: CGFloat, offset: CGFloat)?
+    private var baseline: (row: ChatScrollRowGeometry, offset: CGFloat)?
+    private var row: ChatScrollRowGeometry?
     private var ready = false
     private var completionFrame: CADisplayLink?
     private var waitsForFirstLayout = false
+    private var afterLayout: (() -> Void)?
 
     func attach(to scrollView: UIScrollView) {
         guard self.scrollView !== scrollView else { return }
@@ -21,17 +23,29 @@ final class ChatNativePrependViewport: NSObject {
         }
     }
 
-    func capture() {
-        guard let scrollView else { return }
-        self.cancel()
-        self.baseline = (scrollView.contentSize.height, scrollView.contentOffset.y)
+    var isPreserving: Bool {
+        self.baseline != nil
     }
 
-    func pageArrived() -> Bool {
+    func capture(row: ChatScrollRowGeometry?) {
+        self.cancel()
+        guard let scrollView, let row else { return }
+        self.baseline = (row, scrollView.contentOffset.y)
+        self.row = row
+    }
+
+    func update(row: ChatScrollRowGeometry) {
+        guard row.targetID == self.baseline?.row.targetID else { return }
+        self.row = row
+        self.applyIfReady()
+    }
+
+    func pageArrived(afterLayout: (() -> Void)? = nil) -> Bool {
         guard self.baseline != nil, self.scrollView?.window != nil else {
             self.cancel()
             return false
         }
+        self.afterLayout = afterLayout
         self.ready = true
         self.waitsForFirstLayout = true
         self.applyIfReady()
@@ -39,7 +53,9 @@ final class ChatNativePrependViewport: NSObject {
     }
 
     func cancel() {
+        self.afterLayout = nil
         self.baseline = nil
+        self.row = nil
         self.ready = false
         self.waitsForFirstLayout = false
         self.completionFrame?.invalidate()
@@ -53,9 +69,10 @@ final class ChatNativePrependViewport: NSObject {
     }
 
     private func applyIfReady() {
-        guard self.ready, let baseline, let scrollView else { return }
-        if scrollView.contentSize.height != baseline.height { self.waitsForFirstLayout = false }
-        let offset = baseline.offset + scrollView.contentSize.height - baseline.height
+        guard self.ready, let baseline, let row, let scrollView else { return }
+        if row.contentMinY != baseline.row.contentMinY { self.waitsForFirstLayout = false }
+        // Only this row's displacement belongs to the prepend; live output below it does not.
+        let offset = baseline.offset + row.contentMinY - baseline.row.contentMinY
         if abs(scrollView.contentOffset.y - offset) > 0.25 {
             UIView.performWithoutAnimation {
                 scrollView.setContentOffset(CGPoint(x: scrollView.contentOffset.x, y: offset), animated: false)
@@ -76,7 +93,9 @@ final class ChatNativePrependViewport: NSObject {
             self.waitsForFirstLayout = false
             return
         }
+        let afterLayout = self.afterLayout
         self.cancel()
+        afterLayout?()
     }
 }
 

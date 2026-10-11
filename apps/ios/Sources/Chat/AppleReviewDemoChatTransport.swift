@@ -514,6 +514,9 @@ private actor LocalFixtureChatStore {
     }
 
     func history(sessionKey: String, offset: Int = 0) async throws -> OpenClawChatHistoryPayload {
+        if ProcessInfo.processInfo.arguments.contains("--openclaw-disclosure-prepend-fixture") {
+            return try await self.disclosurePrependHistory(sessionKey: sessionKey, offset: offset)
+        }
         let owner = ScreenshotFixtureMode.progressBarEnabled ? self.fixture.defaultAgentID : nil
         let normalizedSessionKey = Self.normalizedSessionKey(sessionKey, fallback: self.fixture.sessionKey)
         let longAnchorFixture = ProcessInfo.processInfo.arguments.contains("--openclaw-long-history-anchor-fixture")
@@ -536,12 +539,14 @@ private actor LocalFixtureChatStore {
         let end = max(0, messages.count - offset)
         let pageSize = anchorFixture ? (longAnchorFixture ? 101 : 6) : (shortPage && offset == 0 ? 1 : 49)
         let start = isPaged ? max(0, end - pageSize) : 0
+        let emptyPage = shortPage && offset == 1 &&
+            ProcessInfo.processInfo.arguments.contains("--openclaw-empty-history-page-fixture")
         return try OpenClawChatHistoryPayload(
             sessionKey: normalizedSessionKey,
             sessionId: "\(self.fixture.sessionIDPrefix)-\(normalizedSessionKey)",
             messages: JSONDecoder().decode(
                 [AnyCodable].self,
-                from: JSONEncoder().encode(isPaged ? Array(messages[start..<end]) : messages)),
+                from: JSONEncoder().encode(emptyPage ? [] : (isPaged ? Array(messages[start..<end]) : messages))),
             thinkingLevel: self.thinkingLevel,
             sessionInfo: OpenClawChatSessionInfo(
                 hasActiveRun: self.activeRunID != nil,
@@ -569,9 +574,46 @@ private actor LocalFixtureChatStore {
                 ]}]
                 """.utf8)) : nil,
             offset: isPaged ? offset : nil,
-            nextOffset: isPaged && start > 0 ? offset + end - start : nil,
+            nextOffset: emptyPage ? 2 : (isPaged && start > 0 ? offset + end - start : nil),
             hasMore: isPaged ? start > 0 : nil,
             totalMessages: isPaged ? messages.count : nil)
+    }
+
+    private func disclosurePrependHistory(sessionKey: String, offset: Int) async throws -> OpenClawChatHistoryPayload {
+        let more = ProcessInfo.processInfo.arguments.contains("--openclaw-disclosure-more-history-fixture")
+        if offset > 0 { try await Task.sleep(for: .seconds(offset == 6 ? 2 : 4)) }
+        let page: [OpenClawChatMessage] = if offset == 0 {
+            (0..<6).map { index in
+                Self.message(
+                    role: index.isMultiple(of: 2) ? "assistant" : "user",
+                    text: "DISCLOSURE_READING_\(index): " + String(
+                        repeating: "A readable history paragraph.\n\n", count: 4),
+                    timestamp: Double(index + 3) * 1000,
+                    transcriptMessageID: "disclosure-reading-\(index)")
+            }
+        } else if offset == 6 {
+            [OpenClawChatMessage(
+                role: "assistant",
+                content: [.init(type: "text", text: "Checking the reading answer")],
+                timestamp: 1000,
+                transcriptMessageID: "disclosure-commentary",
+                phase: "commentary")]
+        } else {
+            [Self.message(
+                role: "user",
+                text: "DISCLOSURE_OLDER: Earlier question",
+                timestamp: 500,
+                transcriptMessageID: "disclosure-older")]
+        }
+        return try OpenClawChatHistoryPayload(
+            sessionKey: sessionKey,
+            sessionId: "\(self.fixture.sessionIDPrefix)-\(sessionKey)",
+            messages: JSONDecoder().decode([AnyCodable].self, from: JSONEncoder().encode(page)),
+            thinkingLevel: self.thinkingLevel,
+            offset: offset,
+            nextOffset: offset == 0 ? 6 : (offset == 6 && more ? 7 : nil),
+            hasMore: offset == 0 || (offset == 6 && more),
+            totalMessages: more ? 8 : 7)
     }
 
     func sendMessage(

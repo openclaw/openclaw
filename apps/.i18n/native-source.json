@@ -2499,6 +2499,7 @@
     {"path":"apps/ios/Sources/Chat/AppleReviewDemoChatTransport.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.016b906cad16ecc4","source":"The saved fixture message is unavailable."},
     {"path":"apps/ios/Sources/Chat/AppleReviewDemoChatTransport.swift","kind":"ui-named-argument","surface":"apple","id":"native.apple.6f39a4e22080c1ab","source":"And the one before?"},
     {"path":"apps/ios/Sources/Chat/AppleReviewDemoChatTransport.swift","kind":"ui-named-argument","surface":"apple","id":"native.apple.ccac75c899b90e8e","source":"Check local readiness."},
+    {"path":"apps/ios/Sources/Chat/AppleReviewDemoChatTransport.swift","kind":"ui-named-argument","surface":"apple","id":"native.apple.a14c5812cb6e9566","source":"DISCLOSURE_OLDER: Earlier question"},
     {"path":"apps/ios/Sources/Chat/AppleReviewDemoChatTransport.swift","kind":"ui-named-argument","surface":"apple","id":"native.apple.5074c2bd90f261b6","source":"Local readiness checked."},
     {"path":"apps/ios/Sources/Chat/AppleReviewDemoChatTransport.swift","kind":"ui-named-argument","surface":"apple","id":"native.apple.761afd64be5d2537","source":"Notice fixture ready."},
     {"path":"apps/ios/Sources/Chat/AppleReviewDemoChatTransport.swift","kind":"ui-named-argument","surface":"apple","id":"native.apple.7f15ddf66c36dada","source":"Prepare a detailed project review."},

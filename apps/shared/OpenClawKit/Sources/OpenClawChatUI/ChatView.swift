@@ -1154,6 +1154,9 @@ extension OpenClawChatView {
     }
 
     private func loadEarlierHistory(isExplicit: Bool = false) {
+        #if os(iOS)
+        guard self.historyScrollGeometry.nativeViewport?.isPreserving != true else { return }
+        #endif
         guard self.viewModel.hasEarlierHistory,
               !self.viewModel.isLoadingEarlierHistory
         else { return }
@@ -1165,18 +1168,29 @@ extension OpenClawChatView {
         }
         let target = self.viewModel.currentSessionTarget
         let interactionRevision = self.readerInteractionRevision
+        let historyRows = self.transcriptPresentation.rows
+        let historyAnchorID = self.transcriptPresentation.historyAnchorID
+        let readingRow = self.historyScrollGeometry.validatedRow(in: historyRows)
         #if os(iOS)
         let nativeViewport = self.historyScrollGeometry.nativeViewport
-        nativeViewport?.capture()
+        nativeViewport?.capture(row: readingRow)
         #endif
         let (firstRowID, offsetFromRow) = self.historyScrollGeometry
-            .preserve(self.transcriptPresentation.historyAnchorID)
+            .preserve(readingRow?.targetID ?? historyAnchorID)
         Task { @MainActor in
             let loaded = await self.viewModel.loadEarlierHistory()
             #if os(iOS)
             if loaded, self.viewModel.currentSessionTarget == target,
                self.readerInteractionRevision == interactionRevision,
-               let nativeViewport, nativeViewport.pageArrived()
+               let nativeViewport, nativeViewport.pageArrived(afterLayout: {
+                   // Finish this page's correction before capturing the next page's baseline.
+                   guard self.viewModel.currentSessionTarget == target,
+                         self.readerInteractionRevision == interactionRevision,
+                         !self.isUserScrolling, self.followTarget == nil, self.searchMessageID == nil,
+                         self.transcriptPresentation.historyAnchorID == historyAnchorID
+                   else { return }
+                   self.loadEarlierHistory()
+               })
             {
                 return
             }
@@ -1190,7 +1204,7 @@ extension OpenClawChatView {
                   let firstRowID
             else { return }
             // The new page precedes this boundary. Keep the reader on the content they were reading.
-            if self.transcriptPresentation.historyAnchorID == firstRowID {
+            if self.transcriptPresentation.rows == historyRows {
                 self.loadEarlierHistory()
             } else {
                 self.scrollCommand.enqueue(
