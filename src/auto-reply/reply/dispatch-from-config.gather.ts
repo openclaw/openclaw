@@ -403,7 +403,7 @@ export async function gatherDispatchRequest(
     replyOperationCoordinator.getDispatchAbortSignal()?.throwIfAborted();
     assertRequestCurrent();
   };
-  const verboseProgress = createShouldEmitVerboseProgress({
+  const verboseProgress = await createShouldEmitVerboseProgress({
     agentId: sessionAgentId,
     sessionKey: acpDispatchSessionKey,
     storePath: sessionStoreEntry.storePath,
