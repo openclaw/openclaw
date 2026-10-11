@@ -8,6 +8,7 @@ import {
   MAX_TIMER_TIMEOUT_MS,
 } from "@openclaw/normalization-core/number-coercion";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { GatewayClientRequestError } from "../../packages/gateway-client/src/request-error.js";
 import * as gatewayCallRuntime from "../gateway/call.js";
 import {
   markGatewayRestartDraining,
@@ -310,6 +311,39 @@ describe("waitForAgentRun", () => {
 
     expect(result.sourceReplyDelivered).toBe(entry.expected);
   });
+
+  it.each(["gateway-restarting", "gateway-suspending", undefined])(
+    "keeps a %s observation refusal retryable without reclassifying terminal run text",
+    async (reason) => {
+      const message = "agent.wait unavailable during gateway maintenance";
+      callGatewayMock.mockRejectedValueOnce(
+        new GatewayClientRequestError({
+          code: "UNAVAILABLE",
+          message,
+          retryable: true,
+          ...(reason ? { details: { reason } } : {}),
+        }),
+      );
+      expect(await waitForAgentRun({ runId: "running-child", timeoutMs: 500 })).toEqual({
+        status: "error",
+        error: message,
+        retryableTransportError: true,
+      });
+      callGatewayMock.mockResolvedValueOnce({
+        status: "error",
+        error: message,
+        startedAt: 100,
+        endedAt: 200,
+      });
+      const terminal = await waitForAgentRun({ runId: "failed-child", timeoutMs: 500 });
+      expect(terminal).toMatchObject({
+        status: "error",
+        error: message,
+        endedAt: 200,
+      });
+      expect(terminal.retryableTransportError).toBeUndefined();
+    },
+  );
 
   it("normalizes blocked ok waits to errors", async () => {
     callGatewayMock.mockResolvedValue({

@@ -1,7 +1,4 @@
-import type {
-  SubagentMaintenanceDurableBasis,
-  SubagentRunsDurableBasis,
-} from "../../agents/subagents/registry/subagent-registry-read.types.js";
+import type { SubagentRunsDurableBasis } from "../../agents/subagents/registry/subagent-registry-read.types.js";
 import type { SqliteWalReclamationResult } from "../../infra/sqlite-wal.js";
 import type {
   DatabaseFileIdentity,
@@ -31,7 +28,10 @@ import type {
   SqliteSessionArtifactPreparationDiagnostics,
 } from "./session-accessor.sqlite-contract.js";
 import type { SqliteLifecycleTargetSnapshot } from "./session-accessor.sqlite-entry-equality.js";
-import type { SessionEntryMaintenanceAgeChange } from "./session-accessor.sqlite-maintenance-age.js";
+import type {
+  SessionEntryMaintenanceAgeChange,
+  SessionEntryMaintenanceAgeFact,
+} from "./session-accessor.sqlite-maintenance-age.js";
 import type {
   SessionEntryCommitContext,
   SessionEntryCreateWithTranscriptOptions,
@@ -204,7 +204,6 @@ export type SessionMaintenanceLiveProtection = Pick<
 
 type SessionReclamationPlanBase = {
   descendantRunBasis?: SubagentRunsDurableBasis;
-  maintenanceRunBasis?: SubagentMaintenanceDurableBasis;
   databaseOptions: ReclamationDatabaseOptions;
   materializedPlans: MaterializedSessionStateDeletePlan[];
 };
@@ -225,13 +224,18 @@ export type SessionMaintenanceMetadataCommand =
 
 export type SessionMaintenanceMetadataResult =
   | { kind: "maintenance-statistics"; value: true }
-  | { kind: "maintenance-age"; nextAt: number | undefined }
+  | {
+      kind: "maintenance-age";
+      nextAt: number | undefined;
+      ageFact?: SessionEntryMaintenanceAgeFact;
+    }
   | { kind: "maintenance-preservation-required" }
   | { kind: "maintenance-plan-stale" }
   | {
       kind: "maintenance-plan";
       value: SessionEntryMaintenancePlan;
       nextAt: number | undefined;
+      ageFact?: SessionEntryMaintenanceAgeFact;
       readOnlyInput?: SessionEntryMaintenanceInput;
     };
 

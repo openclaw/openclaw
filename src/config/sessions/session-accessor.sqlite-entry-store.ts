@@ -28,6 +28,7 @@ import {
   trackSessionEntryCacheWrite,
 } from "./session-accessor.sqlite-entry-cache.js";
 import { sessionSharingEntriesEqual } from "./session-accessor.sqlite-entry-cache.types.js";
+import { clearSqliteSessionEntryPreservingWindows } from "./session-accessor.sqlite-entry-clear.js";
 import type { SqliteLifecycleTargetSnapshot } from "./session-accessor.sqlite-entry-equality.js";
 import {
   readExactSessionEntryRow,
@@ -43,15 +44,10 @@ import {
   deleteSessionDeliveryArtifacts,
   deleteSessionNodeArtifacts,
 } from "./session-accessor.sqlite-node-artifacts.js";
-import { hasSqliteSessionOwnerColumns } from "./session-accessor.sqlite-owner-projection.js";
 import { prepareSessionEntryWindowRow } from "./session-accessor.sqlite-provenance.js";
 import { collectSessionStateIdsForEntry } from "./session-accessor.sqlite-references.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
-import {
-  bindSessionNode,
-  bindSessionRoot,
-  normalizeSessionEntryTimestamp,
-} from "./session-accessor.sqlite-session-row.js";
+import { bindSessionNode, bindSessionRoot } from "./session-accessor.sqlite-session-row.js";
 import {
   hasValidSessionEntryIdentity,
   parseSessionEntryJson as parseSessionEntryRow,
@@ -64,6 +60,7 @@ import {
   markCanonicalSessionValidationPending,
 } from "./session-canonical-key.js";
 import { validateCanonicalSessionRow } from "./session-canonical-row.js";
+import { normalizeSessionEntryTimestamp } from "./session-entry-json.js";
 import { preserveCreationStamp } from "./session-entry-provenance.js";
 import {
   splitSessionEntrySnapshots,
@@ -235,58 +232,6 @@ export function deleteSessionEntryRows(
   );
   options.postimages?.delete(sessionKey);
   publishSessionEntryCacheInvalidation(database, { sessionKey, facts: { kind: "removed" } });
-}
-
-/** Remove the logical entry while retaining its node-owned transcript windows. */
-function clearSqliteSessionEntryPreservingWindows(
-  database: OpenClawAgentDatabase,
-  params: { sessionId: string; sessionKey: string; updatedAt: number },
-): void {
-  writeSessionEntrySnapshots(database, params.sessionKey, []);
-  retainLegacyAcpMigrationSourcesForEntry(database.db, params.sessionKey, undefined);
-  const db = getSessionKysely(database.db);
-  const cleared = {
-    current_session_id: params.sessionId,
-    entry_json: "{}",
-    entry_valid: -1,
-    updated_at: params.updatedAt,
-    status: null,
-    created_at: null,
-    created_via: null,
-    created_actor_type: null,
-    created_actor_id: null,
-    project_id: null,
-    parent_session_key: null,
-    spawned_by: null,
-    fork_source_session_key: null,
-    fork_source_session_id: null,
-    fork_source_entry_id: null,
-    label: null,
-    display_name: null,
-    category: null,
-    icon: null,
-    pinned_at: null,
-    archived_at: null,
-    last_read_at: null,
-    last_interaction_at: null,
-    last_activity_at: null,
-    ...(hasSqliteSessionOwnerColumns(database.db)
-      ? {
-          owner_actor_type: null,
-          owner_actor_id: null,
-          owner_assigned_by_type: null,
-          owner_assigned_by_id: null,
-          owner_assigned_at: null,
-        }
-      : {}),
-  } as const;
-  executeSqliteQuerySync(
-    database.db,
-    db
-      .insertInto("session_nodes")
-      .values({ session_key: params.sessionKey, ...cleared })
-      .onConflict((conflict) => conflict.column("session_key").doUpdateSet(cleared)),
-  );
 }
 
 export function deleteLifecycleTargetRows(

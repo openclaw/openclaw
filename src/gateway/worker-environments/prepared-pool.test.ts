@@ -399,7 +399,6 @@ describe("prepared worker reserve lifecycle", () => {
         tarballPath: path.join(fixture.root, "unused.tgz"),
       }),
       bootstrapWorker: async () => RECEIPT,
-      executeInference: async () => ({ type: "error", reason: "cancelled", message: "unused" }),
       maintainProviders,
       closeNodeBootstrapArtifacts: closeArtifacts,
       reconcileIntervalMs: 25,
@@ -479,7 +478,6 @@ describe("prepared worker reserve lifecycle", () => {
         tarballPath: path.join(fixture.root, "unused.tgz"),
       }),
       bootstrapWorker: async () => RECEIPT,
-      executeInference: async () => ({ type: "error", reason: "cancelled", message: "unused" }),
       now: () => fixture.nowMs,
     });
     const guard = vi.fn<

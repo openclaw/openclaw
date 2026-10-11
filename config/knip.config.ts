@@ -896,11 +896,7 @@ const config = {
         "src/lib/browser-redact.{ts,tsx}!",
         "vite.config.ts!",
         "vitest*.ts!",
-        // Dormant Solid 2 foundation (#168305 smoke fixture, #168405 state-owner projections):
-        // only their tests import them until Control UI views adopt Solid; drop these entries
-        // with the first production importer.
-        "src/lib/reactive/*.ts!",
-        "!src/lib/reactive/*.test.ts!",
+        // The standalone Solid compiler smoke is not a production import.
         "src/solid-smoke/solid-smoke.tsx!",
         // Solid presentation primitives (#168576) and the chat render lifecycle (#168657) land
         // before their page and chat consumers; drop each entry with its first production importer.

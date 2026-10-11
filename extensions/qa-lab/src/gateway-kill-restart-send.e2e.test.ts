@@ -133,6 +133,9 @@ describe.skipIf(process.platform === "win32")("gateway hard-kill recovery", () =
         25,
       );
       await gateway.restartAfterStateMutation(async () => {
+        expect(gateway.logs()).toContain(
+          "gateway child exited unexpectedly (exitCode=null, signal=SIGKILL)",
+        );
         const orphan = (await readRawQaSessionStore({ gateway }))[sessionKey];
         expect(orphan).toMatchObject({
           sessionId: pending.entry.sessionId,

@@ -60,7 +60,7 @@ export function normalizeToolParameters(
   if (!schema) {
     return tool;
   }
-  const parameters = normalizeToolParameterSchema(schema, options);
+  const parameters = normalizeToolParameterSchema(schema, { ...options, toolName: tool.name });
   const normalized = { ...tool, parameters };
   if (isObjectSchemaWithNoRequiredParams(parameters)) {
     normalized.prepareArguments = (args: unknown) => {

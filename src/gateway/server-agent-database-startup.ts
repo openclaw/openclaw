@@ -68,15 +68,8 @@ export function activateGatewayAgentDatabaseStartup(params: {
     preparationReady: params.preparationReady,
     openAgent: ({ agentId, paths, env, signal, assertCurrent }) =>
       runWithSpawnBroker(broker, async () => {
-        const [
-          { captureOpenClawAgentDatabaseExecution },
-          { runOpenClawAgentWorkerWrite },
-          { createSqliteWorkerOperationAdmission },
-        ] = await Promise.all([
-          import("../state/openclaw-agent-execution.js"),
-          import("../state/openclaw-agent-write-admission.js"),
-          import("../infra/sqlite-worker-operation-admission.js"),
-        ]);
+        const { prepareOpenClawAgentDatabaseExecution } =
+          await import("../state/openclaw-agent-execution.js");
         const assertOpenCurrent = createPreparationGuard(
           agentId,
           paths,
@@ -86,34 +79,11 @@ export function activateGatewayAgentDatabaseStartup(params: {
         );
         assertOpenCurrent();
         for (const pathname of paths) {
-          const options = { agentId, path: pathname, env };
-          const execution = captureOpenClawAgentDatabaseExecution(options);
-          try {
-            await runOpenClawAgentWorkerWrite(
-              options,
-              () =>
-                execution.prepare(
-                  {
-                    assertCurrent: assertOpenCurrent,
-                    createAdmission: (binding) => () => ({
-                      nativeLocations: binding.nativeLocations,
-                      admission: createSqliteWorkerOperationAdmission((request, grant) => {
-                        binding.authorize(request);
-                        assertOpenCurrent();
-                        if (!grant()) {
-                          throw new Error(`Agent ${agentId} startup admission expired`);
-                        }
-                      }, binding.attachment),
-                    }),
-                  },
-                  signal,
-                ),
-              undefined,
-              signal,
-            );
-          } finally {
-            await execution.release();
-          }
+          await prepareOpenClawAgentDatabaseExecution(
+            { agentId, path: pathname, env },
+            assertOpenCurrent,
+            signal,
+          );
         }
       }),
     migrateAgent: ({ agentId, paths, env, signal, assertCurrent }) =>

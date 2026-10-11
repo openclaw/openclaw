@@ -12,7 +12,7 @@ import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import type { GatewayStatusSample } from "../../components/gateway-vitals.ts";
 import { LearnMoreLink, SettingsPageHeader } from "../../components/solid/settings-ui.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
-import type { SparklineSample } from "../../components/sparkline-tile.ts";
+import type { SparklineSample } from "../../components/sparkline-tile.tsx";
 import { isMissingOperatorReadScopeError } from "../../lib/gateway-errors.ts";
 import { formatGatewayHost } from "../../lib/gateway-host.ts";
 import { useApplication } from "../../lib/reactive/context.ts";

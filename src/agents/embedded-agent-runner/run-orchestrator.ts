@@ -142,10 +142,10 @@ async function runEmbeddedAgentForSession(
   const {
     params: paramsBase,
     runSessionTarget,
-    sessionAdmission,
     contextEngineAgentId,
     queuedLifecycleGeneration,
   } = prepared;
+  let sessionAdmission = prepared.sessionAdmission;
   let lifecycleGeneration = paramsBase.lifecycleGeneration!;
   let params: RunEmbeddedAgentParamsWithSessionFile = withExecutionPhaseDiagnostics({
     ...paramsBase,
@@ -189,6 +189,12 @@ async function runEmbeddedAgentForSession(
     },
     setParams: (nextParams) => {
       params = nextParams;
+    },
+    onSessionWriterClaimed: (entry) => {
+      if (sessionAdmission) {
+        // Native preparation must consume the claim's postimage, not the pre-queue row.
+        sessionAdmission = { ...sessionAdmission, entry };
+      }
     },
   });
   const { enqueueGlobal, enqueueSession, noteLaneTaskProgress, throwIfAborted } = laneController;
@@ -440,7 +446,9 @@ async function runEmbeddedAgentForSession(
               });
               const normalizedSessionKey = params.sessionKey?.trim();
               const modelFallbackAvailability =
-                params.modelFallbackAvailability ??
+                (params.resolvedModelSelection?.fallbacksOverride === undefined
+                  ? params.modelFallbackAvailability
+                  : undefined) ??
                 resolveModelFallbackAvailability({
                   cfg: params.config ?? EMPTY_EMBEDDED_AGENT_CONFIG,
                   agentId: workspaceResolution.agentId,
@@ -501,7 +509,7 @@ async function runEmbeddedAgentForSession(
               }
 
               assistantErrorTranscript ??=
-                params.assistantErrorTranscript ?? createAssistantErrorTranscript(params);
+                params.assistantErrorTranscript ?? createAssistantErrorTranscript();
               terminal ??=
                 (params.deferTerminalLifecycle ?? params.deferTerminalLifecycleEnd)
                   ? undefined
@@ -669,7 +677,7 @@ async function runEmbeddedAgentForSession(
         } finally {
           // Error transcript and terminal publication belong to the logical run, not each generation.
           if (ownsAssistantErrorTranscript) {
-            await assistantErrorTranscript?.settle(failed && !params.abortSignal?.aborted);
+            assistantErrorTranscript?.settle(failed && !params.abortSignal?.aborted);
           }
         }
         refresh.mergeTerminalReceipt(result);

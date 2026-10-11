@@ -12,7 +12,10 @@ import {
   resolveProviderOperationTimeoutMs,
   sanitizeConfiguredModelProviderRequest,
 } from "../plugin-sdk/provider-http.js";
-import { isProviderApiKeyConfigured } from "../plugins/provider-auth-availability.js";
+import {
+  isProviderApiKeyConfigured,
+  isProviderApiKeyConfiguredAsync,
+} from "../plugins/provider-auth-availability.js";
 import {
   parseOpenAiCompatibleImageResponse,
   resolveInlineImageJsonResponseMaxBytes,
@@ -106,6 +109,7 @@ export function createOpenAiCompatibleImageGenerationProvider(
       : {}),
     models: [...options.models],
     isConfigured: (ctx) => isProviderApiKeyConfigured({ provider: options.id, ...ctx }),
+    isConfiguredAsync: (ctx) => isProviderApiKeyConfiguredAsync({ provider: options.id, ...ctx }),
     capabilities: options.capabilities,
     async generateImage(req): Promise<ImageGenerationResult> {
       const inputImages = req.inputImages ?? [];

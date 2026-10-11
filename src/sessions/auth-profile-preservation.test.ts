@@ -59,15 +59,16 @@ describe("shouldPreserveSessionAuthProfileOverride", () => {
           throw new Error("unprepared snapshot read");
         });
       try {
+        const cfg: OpenClawConfig = configured
+          ? {
+              auth: {
+                profiles: { "openai:missing": { provider: configured, mode: "api_key" } },
+              },
+            }
+          : {};
         expect(
           shouldPreserveSessionAuthProfileOverride({
-            cfg: configured
-              ? {
-                  auth: {
-                    profiles: { "openai:missing": { provider: configured, mode: "api_key" } },
-                  },
-                }
-              : {},
+            cfg,
             agentDir: "/fixture/agent",
             entry: { ...entry, authProfileOverride: "openai:missing" },
             currentProvider: "openai",
@@ -75,6 +76,16 @@ describe("shouldPreserveSessionAuthProfileOverride", () => {
             recordedProvider: { provider },
           }),
         ).toBe(expected);
+        const selectedEntry = { ...entry, authProfileOverride: "openai:missing" };
+        applyModelOverrideWithAuthProfileCompatibility({
+          cfg,
+          agentDir: "/fixture/agent",
+          entry: selectedEntry,
+          currentProvider: "openai",
+          selection: { provider: "openai", model: "selected-model" },
+          recordedProvider: { provider },
+        });
+        expect(selectedEntry.authProfileOverride).toBe(expected ? "openai:missing" : undefined);
         expect(persisted).not.toHaveBeenCalled();
         expect(snapshot).not.toHaveBeenCalled();
       } finally {

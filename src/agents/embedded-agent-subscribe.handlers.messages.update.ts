@@ -22,7 +22,6 @@ import {
   emitPersistentReasoning,
   emitReasoningEnd,
   hasMessageToolOnlySourceDelivery,
-  isAssistantTextPhasePending,
   isResponsesApiAssistantMessage,
   isSubscribeTranscriptOnlyOpenClawAssistantMessage,
   openReasoningStream,
@@ -192,10 +191,6 @@ export function handleMessageUpdate(
     !deliveryPhase &&
     Boolean(streamItemId) &&
     isResponsesApiAssistantMessage(partialAssistant);
-  // These transports resolve commentary only at the tool boundary. Withhold
-  // early unphased deltas from durable block replies until that decision exists.
-  const isPhasePendingText =
-    !deliveryPhase && isAssistantTextPhasePending(partialAssistant, evtType);
   const hasResponsesContentIndex =
     streamContentIndex !== undefined && isResponsesApiAssistantMessage(partialAssistant);
   let streamItemChanged = false;
@@ -505,34 +500,32 @@ export function handleMessageUpdate(
       (hasVisibleReply || replace) &&
       (replace ? cleanedText !== previousCleaned || hasAudio : Boolean(deltaText || hasAudio));
 
-    if (!isPhasePendingText) {
-      const plainAppend =
-        evtType === "text_delta" &&
-        unchangedBlockAppend &&
-        !snapshot &&
-        !reprojectBlockReply &&
-        !replace &&
-        !ctx.params.enforceFinalTag &&
-        (priorBlockIndex === streamContentIndex ||
-          (priorBlockIndex === undefined && !priorBlockText)) &&
-        previousText === previousCleaned &&
-        next === cleanedText &&
-        next === nextRawStreamText.trim();
-      if (plainAppend) {
-        ctx.blockChunker.append(chunk);
-      } else {
-        const previousBlock = extractAssistantStreamSnapshot(ctx, partialAssistant, {
-          throughIndex: streamItemChanged ? blockSourceIndex : priorSourceIndex,
-          observedText: streamItemChanged ? "" : priorBlockText,
-          final: streamItemChanged ? false : priorBlockFinal,
-        });
-        const nextBlock = extractAssistantStreamSnapshot(ctx, partialAssistant, {
-          throughIndex: blockSourceIndex,
-          ...(snapshot ? {} : { observedText: ctx.state.streamBlockText }),
-          final: finalText,
-        });
-        reconcileBlockReplySnapshot(ctx, previousBlock, nextBlock);
-      }
+    const plainAppend =
+      evtType === "text_delta" &&
+      unchangedBlockAppend &&
+      !snapshot &&
+      !reprojectBlockReply &&
+      !replace &&
+      !ctx.params.enforceFinalTag &&
+      (priorBlockIndex === streamContentIndex ||
+        (priorBlockIndex === undefined && !priorBlockText)) &&
+      previousText === previousCleaned &&
+      next === cleanedText &&
+      next === nextRawStreamText.trim();
+    if (plainAppend) {
+      ctx.blockChunker.append(chunk);
+    } else {
+      const previousBlock = extractAssistantStreamSnapshot(ctx, partialAssistant, {
+        throughIndex: streamItemChanged ? blockSourceIndex : priorSourceIndex,
+        observedText: streamItemChanged ? "" : priorBlockText,
+        final: streamItemChanged ? false : priorBlockFinal,
+      });
+      const nextBlock = extractAssistantStreamSnapshot(ctx, partialAssistant, {
+        throughIndex: blockSourceIndex,
+        ...(snapshot ? {} : { observedText: ctx.state.streamBlockText }),
+        final: finalText,
+      });
+      reconcileBlockReplySnapshot(ctx, previousBlock, nextBlock);
     }
     if (isTerminalSnapshot) {
       ctx.state.streamBlockText = content;

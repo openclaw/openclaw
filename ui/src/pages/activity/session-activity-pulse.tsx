@@ -66,7 +66,12 @@ export function renderSessionActivityPulse(props: SessionActivityPulseProps) {
                       ? `${props.pulse[key]}+`
                       : props.pulse[key]}
                   </b>{" "}
-                  {t(`activity.pulse.${key}`)}
+                  {t(
+                    props.pulse[key] === 1 &&
+                      (key === "sessions" || (key === "people" && !props.options.peopleIncomplete))
+                      ? `activity.pulse.${key}One`
+                      : `activity.pulse.${key}`,
+                  )}
                 </span>
               </Show>
             )}
@@ -76,11 +81,16 @@ export function renderSessionActivityPulse(props: SessionActivityPulseProps) {
       <div
         class="activity-pulse__bars"
         role="img"
-        aria-label={t("activity.pulse.description", {
-          window: chart().windowLabel,
-          count: String(props.pulse.sessions),
-          period: chart().label(props.pulse.buckets.indexOf(chart().peak)),
-        })}
+        aria-label={t(
+          props.pulse.sessions === 1
+            ? "activity.pulse.descriptionOne"
+            : "activity.pulse.description",
+          {
+            window: chart().windowLabel,
+            count: String(props.pulse.sessions),
+            period: chart().label(props.pulse.buckets.indexOf(chart().peak)),
+          },
+        )}
       >
         <For each={props.pulse.buckets} keyed={false}>
           {(count, index) => (
@@ -90,7 +100,7 @@ export function renderSessionActivityPulse(props: SessionActivityPulseProps) {
               style={{
                 height: `max(2px, ${chart().peak > 0 ? (count() / chart().peak) * 100 : 0}%)`,
               }}
-              title={t("activity.pulse.bucket", {
+              title={t(count() === 1 ? "activity.pulse.bucketOne" : "activity.pulse.bucket", {
                 period: chart().label(index),
                 count: String(count()),
               })}

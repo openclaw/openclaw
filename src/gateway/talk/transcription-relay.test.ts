@@ -536,6 +536,12 @@ describe("talk transcription gateway relay", () => {
 
     expect(findPayloadByType(events, "error").message).toBe("provider finalization failed");
     expect(findPayloadByType(events, "close").reason).toBe("error");
+    for (const type of ["error", "close"]) {
+      const payload = findPayloadByType(events, type);
+      expect(events.find((event) => event.payload === payload)?.opts).toEqual({
+        dropIfSlow: false,
+      });
+    }
     expect(
       events.some(
         (event) =>
@@ -543,22 +549,6 @@ describe("talk transcription gateway relay", () => {
       ),
     ).toBe(false);
     expect(sttSession.close).toHaveBeenCalledOnce();
-  });
-
-  it("keeps provider errors and terminal close events durable", async () => {
-    let sttRequest: RealtimeTranscriptionSessionCreateRequest | undefined;
-    const { events } = await createStartedRelaySession(createSttSessionMock(), {}, (request) => {
-      sttRequest = request;
-    });
-
-    sttRequest?.onError?.(new Error("transcription provider disconnected"));
-
-    for (const type of ["error", "close"]) {
-      const payload = findPayloadByType(events, type);
-      expect(events.find((event) => event.payload === payload)?.opts).toEqual({
-        dropIfSlow: false,
-      });
-    }
   });
 
   it("closes a backpressured owner for final transcripts while healthy owners still receive them", async () => {
