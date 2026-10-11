@@ -51,7 +51,6 @@ import { resolveMaintenanceConfig } from "./store-maintenance-runtime.js";
 import {
   normalizeResolvedMaintenanceConfigInput,
   shouldRunSessionEntryMaintenance,
-  type ResolvedSessionMaintenanceConfig,
   type ResolvedSessionMaintenanceConfigInput,
 } from "./store-maintenance.js";
 

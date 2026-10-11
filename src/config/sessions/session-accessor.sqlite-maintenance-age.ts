@@ -203,7 +203,7 @@ export function updateSessionEntryMaintenanceAgeFact(
   };
 }
 
-export function isMonotoneSessionEntryMaintenanceAgeChange({
+function isMonotoneSessionEntryMaintenanceAgeChange({
   entry,
   previousEntry,
 }: SessionEntryMaintenanceAgeChange): boolean {
