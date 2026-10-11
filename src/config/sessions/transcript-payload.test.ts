@@ -253,15 +253,26 @@ describe("transcript payload storage boundary", () => {
     const database = openNodeSqliteDatabase(":memory:");
     try {
       createTable(database);
-      for (const original of [
-        '{"type":"message","message":{"role":"user","content":"short"}}',
-        JSON.stringify({ type: "custom", id: "identifier".repeat(256), data: "small" }),
-      ]) {
+      for (const [original, type, role] of [
+        ['{"type":"message","message":{"role":"user","content":"short"}}', "message", "user"],
+        [
+          JSON.stringify({ type: "custom", id: "identifier".repeat(256), data: "small" }),
+          "custom",
+          null,
+        ],
+      ] as const) {
         expect(prepareTranscriptPayload(database, original)).toEqual({
           event_json: original,
           event_zstd: null,
           event_utf8_bytes: Buffer.byteLength(original),
           navigation_json: null,
+          navigation_type: type,
+          navigation_custom_type: null,
+          navigation_display: 0,
+          message_role: role,
+          navigation_last_type: type,
+          navigation_last_custom_type: null,
+          navigation_valid: 1,
         });
       }
     } finally {
@@ -334,24 +345,41 @@ describe("transcript payload storage boundary", () => {
     try {
       createTable(database);
       const originals = [
-        "",
-        '{"type":"custom", invalid',
-        `{"type":"custom","data":"${"x".repeat(2048)}`,
-        `{"type":"custom","data":${"[".repeat(1001)}0${"]".repeat(1001)}}`,
-        `{"type":"message","id":"nested","parentId":null,"appendMode":${"[".repeat(998)}0${"]".repeat(998)},"message":{"role":"user","content":"${"x".repeat(12 * 1024)}"}}`,
-        `{"type":"custom","data":"${"x".repeat(4 * 1024 * 1024)}"}`,
-        `{"type":"message","message":{"provenance":{"extra":"${"x".repeat(17 * 1024)}"}}}`,
-        '{"type":"custom","id":"\\ud800","data":"a\\u0000b"}',
-        '{"type":"custom","data":"literal\0nul"}',
-        "null",
-      ];
-      for (const [seq, original] of originals.entries()) {
+        ["", null, null, 0],
+        ['{"type":"custom", invalid', null, null, 0],
+        [`{"type":"custom","data":"${"x".repeat(2048)}`, null, null, 0],
+        [`{"type":"custom","data":${"[".repeat(1001)}0${"]".repeat(1001)}}`, null, null, 0],
+        [
+          `{"type":"message","id":"nested","parentId":null,"appendMode":${"[".repeat(998)}0${"]".repeat(998)},"message":{"role":"user","content":"${"x".repeat(12 * 1024)}"}}`,
+          "message",
+          "user",
+          1,
+        ],
+        [`{"type":"custom","data":"${"x".repeat(4 * 1024 * 1024)}"}`, "custom", null, 1],
+        [
+          `{"type":"message","message":{"provenance":{"extra":"${"x".repeat(17 * 1024)}"}}}`,
+          "message",
+          null,
+          1,
+        ],
+        ['{"type":"custom","id":"\\ud800","data":"a\\u0000b"}', "custom", null, 1],
+        ['{"type":"custom","data":"literal\0nul"}', null, null, 0],
+        ["null", null, null, 1],
+      ] as const;
+      for (const [seq, [original, type, role, valid]] of originals.entries()) {
         const prepared = prepareTranscriptPayload(database, original);
         expect(prepared).toEqual({
           event_json: original,
           event_zstd: null,
           event_utf8_bytes: Buffer.byteLength(original),
           navigation_json: null,
+          navigation_type: type,
+          navigation_custom_type: null,
+          navigation_display: 0,
+          message_role: role,
+          navigation_last_type: type,
+          navigation_last_custom_type: null,
+          navigation_valid: valid,
         });
         insert(database, seq, prepared);
         expect(readBody(database, seq)).toBe(original);
@@ -379,6 +407,13 @@ describe("transcript payload storage boundary", () => {
           event_zstd: null,
           event_utf8_bytes: Buffer.byteLength(original),
           navigation_json: null,
+          navigation_type: "session",
+          navigation_custom_type: null,
+          navigation_display: 0,
+          message_role: null,
+          navigation_last_type: "session",
+          navigation_last_custom_type: null,
+          navigation_valid: 1,
         });
       } finally {
         database.close();

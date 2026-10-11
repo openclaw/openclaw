@@ -389,6 +389,7 @@ describe("legacy main session history handoff", () => {
           type: "custom",
           id: `cache-${index}`,
           parentId: `message-${index}`,
+          timestamp: new Date(index + 1).toISOString(),
           customType: "openclaw.cache-ttl",
           display: true,
           message: { role: "toolResult" },

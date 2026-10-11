@@ -847,6 +847,8 @@ describe("context-engine turn outbox", () => {
       backend.execute({ type: "complete", input: { advancementKey: "snapshot-turn" } });
       expect(backend.execute(command)).toEqual({ warnings: [], pending: false, admitted: false });
       expect(statements.counts.outbox).toBe(2);
+      expect(backend.execute({ type: "hasPending", input: command.input })).toBe(false);
+      expect(statements.counts.outbox).toBe(3);
       expect(queries.some((query) => query.includes("payload_state"))).toBe(true);
       expect(queries.every((query) => !query.includes("json_extract"))).toBe(true);
     } finally {
