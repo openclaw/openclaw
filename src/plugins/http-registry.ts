@@ -42,7 +42,7 @@ const pluginHttpRouteRegistryScope = resolveGlobalSingleton(
   Symbol.for("openclaw.pluginHttpRouteRegistryScope"),
   () =>
     new AsyncLocalStorage<{
-      registry: PluginRegistry;
+      registry: WeakRef<PluginRegistry>;
       leases: readonly PluginHttpRouteRegistrationLease[];
     }>(),
 );
@@ -246,7 +246,8 @@ export function withPluginHttpRouteRegistry<T>(
 ): T {
   const inherited = pluginHttpRouteRegistryScope.getStore()?.leases ?? [];
   const leases = lease && !inherited.includes(lease) ? [...inherited, lease] : inherited;
-  return pluginHttpRouteRegistryScope.run({ registry, leases }, run);
+  // The service/account or hook runner owns custody. Native resources can outlive that owner.
+  return pluginHttpRouteRegistryScope.run({ registry: new WeakRef(registry), leases }, run);
 }
 
 export function registerPluginHttpRoute(params: {
@@ -272,16 +273,19 @@ export function registerPluginHttpRoute(params: {
   registry?: PluginRegistry;
 }): () => void {
   const scope = pluginHttpRouteRegistryScope.getStore();
-  let registry = params.registry ?? scope?.registry ?? requireActivePluginRegistry();
   const instance =
     pluginInstanceInvocation.getStore()?.instance ?? pluginInstanceState.values.get(params.handler);
   // A supplied registry cannot replace a retained callback's original lifetime.
-  const record = instance
-    ? getPluginInstanceOwner(instance)?.record
-    : registry.plugins.find((entry) => entry.id === params.pluginId);
-  const instanceOwner = record ? resolvePluginInstanceOwner(record, registry) : undefined;
-  if (instanceOwner) {
-    registry = instanceOwner.registry;
+  let instanceOwner = instance ? getPluginInstanceOwner(instance) : undefined;
+  let registry = instanceOwner
+    ? instanceOwner.registry
+    : (params.registry ?? (scope ? scope.registry.deref() : requireActivePluginRegistry()));
+  if (!instance && registry) {
+    const record = registry.plugins.find((entry) => entry.id === params.pluginId);
+    instanceOwner = record ? resolvePluginInstanceOwner(record, registry) : undefined;
+    if (instanceOwner && !instanceOwner.revoked) {
+      registry = instanceOwner.registry;
+    }
   }
   const suffix = params.accountId ? ` for account "${params.accountId}"` : "";
   const rejectRegistration = (message: string): (() => void) => {
@@ -300,7 +304,7 @@ export function registerPluginHttpRoute(params: {
     return rejectRegistration("plugin runtime HTTP route lease is no longer active");
   }
 
-  if (instanceOwner?.revoked || isPluginRegistryRetired(registry)) {
+  if (!registry || instanceOwner?.revoked || isPluginRegistryRetired(registry)) {
     return rejectRegistration("plugin HTTP route owner is no longer active");
   }
   const routes = [

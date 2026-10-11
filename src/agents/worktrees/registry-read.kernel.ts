@@ -12,7 +12,7 @@ import type {
 } from "./types.js";
 
 type WorktreeRow = Selectable<OpenClawStateKyselyDatabase["worktrees"]>;
-export const WORKTREE_RECORD_COLUMNS = [
+const WORKTREE_RECORD_COLUMNS = [
   "id",
   "repo_fingerprint",
   "repo_root",
@@ -83,6 +83,27 @@ export function rowToRecord(row: WorktreeRecordRow): ManagedWorktreeRecord {
     typeof protection.reason === "string"
   ) {
     record.gcProtection = protection.reason;
+    const retry = protection.retry;
+    if (
+      isRecord(retry) &&
+      typeof retry.stage === "string" &&
+      typeof retry.elapsedMs === "number" &&
+      Number.isSafeInteger(retry.elapsedMs) &&
+      retry.elapsedMs >= 0 &&
+      typeof retry.attempts === "number" &&
+      Number.isSafeInteger(retry.attempts) &&
+      retry.attempts > 0 &&
+      typeof retry.retryAt === "number" &&
+      Number.isSafeInteger(retry.retryAt) &&
+      retry.retryAt >= 0
+    ) {
+      record.gcRetry = {
+        stage: retry.stage,
+        elapsedMs: retry.elapsedMs,
+        attempts: retry.attempts,
+        retryAt: retry.retryAt,
+      };
+    }
   }
   return record;
 }
@@ -114,6 +135,40 @@ export function getRegistryWorktreeInDatabase(
     .select(WORKTREE_RECORD_COLUMNS)
     .where("id", "=", id);
   const row = executeSqliteQuerySync(db, query).rows[0];
+  return row ? rowToRecord(row) : undefined;
+}
+
+export function findLiveRegistryWorktreeByOwnerInDatabase(
+  db: DatabaseSync,
+  ownerKind: ManagedWorktreeOwnerKind,
+  ownerId: string,
+): ManagedWorktreeRecord | undefined {
+  const query = getNodeSqliteKysely<Pick<OpenClawStateKyselyDatabase, "worktrees">>(db)
+    .selectFrom("worktrees")
+    .select(WORKTREE_RECORD_COLUMNS)
+    .where("owner_kind", "=", ownerKind)
+    .where("owner_id", "=", ownerId)
+    .where("removed_at", "is", null)
+    .orderBy("created_at", "desc")
+    .limit(1);
+  const row = executeSqliteQuerySync(db, query).rows[0];
+  return row ? rowToRecord(row) : undefined;
+}
+
+export function findLiveRegistryWorktreeByPathInDatabase(
+  db: DatabaseSync,
+  worktreePath: string,
+): ManagedWorktreeRecord | undefined {
+  const row = executeSqliteQuerySync(
+    db,
+    getNodeSqliteKysely<Pick<OpenClawStateKyselyDatabase, "worktrees">>(db)
+      .selectFrom("worktrees")
+      .select(WORKTREE_RECORD_COLUMNS)
+      .where("path", "=", worktreePath)
+      .where("removed_at", "is", null)
+      .orderBy("created_at", "desc")
+      .limit(1),
+  ).rows[0];
   return row ? rowToRecord(row) : undefined;
 }
 

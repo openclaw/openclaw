@@ -2,6 +2,7 @@ import fs from "node:fs";
 import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
+import { loadCombinedSessionStoreForGatewayCoreAsync } from "../../config/sessions/combined-store-gateway-read.js";
 import type {
   GatewayStoredSessionTarget,
   GatewayStoredSessionTargets,
@@ -11,10 +12,12 @@ import {
   resolveSessionFilePathCore,
   resolveSessionFilePathOptions,
 } from "../../config/sessions/paths.js";
-import { loadExactSessionEntryCandidates } from "../../config/sessions/session-accessor.js";
+import { withSessionHistoryWorkerDatabases } from "../../config/sessions/session-transcript-worker-runtime.js";
+import { captureSessionTranscriptStorageEnvironment } from "../../config/sessions/transcript-target-binding.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveUsageSessionSource } from "../../infra/session-cost-usage.js";
+import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { resolvePreferredSessionKeyForSessionIdMatches } from "../../sessions/session-id-resolution.js";
 import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
@@ -22,7 +25,6 @@ import { resolveStoredSessionKeyForAgentStore } from "../session-store-key.js";
 import { resolveGatewaySessionDisplayName } from "../session-utils-display.js";
 import { findCanonicalStoreMatch } from "../session-utils-store-selection.js";
 import { resolveGatewaySessionStoreTargetInWorker } from "../session-utils-store-worker.js";
-import { loadCombinedSessionStoreForGatewayCore } from "../session-utils.js";
 import {
   discoverAllSessionsForUsage,
   type UsageSessionSummaryTarget,
@@ -160,46 +162,6 @@ function buildStoreBySessionIdentity(
   return { storeByIdentity, familyOwners };
 }
 
-function withUsageGrouping(
-  base: Omit<UsageSessionSelection, "instances">,
-  groupingMode: UsageGroupingMode,
-  familyOwners: ReadonlyMap<string, StoredUsageSession>,
-  discoveredByIdentity: ReadonlyMap<string, { sessionId: string; sessionFile: string }>,
-): UsageSessionSelection {
-  const currentInstance = { sessionId: base.sessionId, sessionFile: base.sessionFile };
-  if (groupingMode !== "family") {
-    return { ...base, instances: [currentInstance] };
-  }
-  // Historical ids belong to this agent; identical ids owned by other agents stay separate.
-  const includedSessionIds = [
-    ...new Set(
-      [base.sessionId, ...(base.storeEntry?.usageFamilySessionIds ?? [])]
-        .map(normalizeOptionalString)
-        .filter((id): id is string => Boolean(id)),
-    ),
-  ].filter(
-    (id) =>
-      id === base.sessionId ||
-      familyOwners.get(usageSessionIdentity(base.agentId, id))?.entry.sessionId === base.sessionId,
-  );
-  return {
-    ...base,
-    // Discovery owns SQLite/archive precedence; loading must not guess storage
-    // from the current instance, because one family can span both sources.
-    instances: includedSessionIds.flatMap((id) => {
-      const instance =
-        id === base.sessionId
-          ? currentInstance
-          : discoveredByIdentity.get(usageSessionIdentity(base.agentId, id));
-      return instance ? [instance] : [];
-    }),
-    scope: "family",
-    sessionFamilyKey: base.storeEntry?.usageFamilyKey ?? base.key,
-    currentSessionId: base.sessionId,
-    includedSessionIds,
-  };
-}
-
 export async function selectUsageSessions(params: {
   config: OpenClawConfig;
   agentId?: string;
@@ -220,7 +182,7 @@ export async function selectUsageSessions(params: {
   } = params;
   // Load session store for named sessions only on a result-cache miss.
   const sessionStoreOpts = effectiveAgentId ? { agentId: effectiveAgentId } : {};
-  const { store, targetsBySessionKey } = loadCombinedSessionStoreForGatewayCore(config, {
+  const { store, targetsBySessionKey } = await loadCombinedSessionStoreForGatewayCoreAsync(config, {
     ...sessionStoreOpts,
     projection: "list",
   });
@@ -252,6 +214,43 @@ export async function selectUsageSessions(params: {
       session,
     ]),
   );
+  function withUsageGrouping(
+    base: Omit<UsageSessionSelection, "instances">,
+  ): UsageSessionSelection {
+    const currentInstance = { sessionId: base.sessionId, sessionFile: base.sessionFile };
+    if (groupingMode !== "family") {
+      return { ...base, instances: [currentInstance] };
+    }
+    // Historical ids belong to this agent; identical ids owned by other agents stay separate.
+    const includedSessionIds = [
+      ...new Set(
+        [base.sessionId, ...(base.storeEntry?.usageFamilySessionIds ?? [])]
+          .map(normalizeOptionalString)
+          .filter((id): id is string => Boolean(id)),
+      ),
+    ].filter(
+      (id) =>
+        id === base.sessionId ||
+        familyOwners.get(usageSessionIdentity(base.agentId, id))?.entry.sessionId ===
+          base.sessionId,
+    );
+    return {
+      ...base,
+      // Discovery owns SQLite/archive precedence; loading must not guess storage
+      // from the current instance, because one family can span both sources.
+      instances: includedSessionIds.flatMap((id) => {
+        const instance =
+          id === base.sessionId
+            ? currentInstance
+            : discoveredByIdentity.get(usageSessionIdentity(base.agentId, id));
+        return instance ? [instance] : [];
+      }),
+      scope: "family",
+      sessionFamilyKey: base.storeEntry?.usageFamilyKey ?? base.key,
+      currentSessionId: base.sessionId,
+      includedSessionIds,
+    };
+  }
   const now = Date.now();
 
   const mergedEntries: UsageSessionSelection[] = [];
@@ -323,20 +322,15 @@ export async function selectUsageSessions(params: {
     }
     if (updatedAt !== undefined) {
       mergedEntries.push(
-        withUsageGrouping(
-          {
-            key: resolvedStoreKey,
-            agentId: agentIdFromKey,
-            sessionId,
-            sessionFile,
-            label: resolveGatewaySessionDisplayName(resolvedStoreKey, storeEntry),
-            updatedAt,
-            storeEntry,
-          },
-          groupingMode,
-          familyOwners,
-          discoveredByIdentity,
-        ),
+        withUsageGrouping({
+          key: resolvedStoreKey,
+          agentId: agentIdFromKey,
+          sessionId,
+          sessionFile,
+          label: resolveGatewaySessionDisplayName(resolvedStoreKey, storeEntry),
+          updatedAt,
+          storeEntry,
+        }),
       );
     }
   } else {
@@ -388,20 +382,15 @@ export async function selectUsageSessions(params: {
         entry = target.entry ?? entry;
       }
       mergedEntries.push(
-        withUsageGrouping(
-          {
-            key,
-            agentId: discovered.agentId,
-            sessionId: entry.sessionId,
-            sessionFile,
-            label: resolveGatewaySessionDisplayName(key, entry),
-            updatedAt: entry.updatedAt ?? discovered.mtime,
-            storeEntry: entry,
-          },
-          groupingMode,
-          familyOwners,
-          discoveredByIdentity,
-        ),
+        withUsageGrouping({
+          key,
+          agentId: discovered.agentId,
+          sessionId: entry.sessionId,
+          sessionFile,
+          label: resolveGatewaySessionDisplayName(key, entry),
+          updatedAt: entry.updatedAt ?? discovered.mtime,
+          storeEntry: entry,
+        }),
       );
       if (groupingMode === "family") {
         selectedFamilies.add(familyIdentity);
@@ -423,10 +412,10 @@ export async function selectUsageSessions(params: {
   return mergedEntries;
 }
 
-export function loadUsageSessionContext(
+export async function loadUsageSessionContext(
   selected: UsageSessionSelection[],
   visibilityFilter?: (key: string, entry: SessionEntry) => boolean,
-): void {
+): Promise<void> {
   const contextRows = new Map<
     GatewayStoredSessionTarget["storeTarget"],
     Array<{ row: UsageSessionSelection; storedKey: string }>
@@ -439,23 +428,42 @@ export function loadUsageSessionContext(
       contextRows.set(target.storeTarget, rows);
     }
   }
-  for (const [target, rows] of contextRows) {
-    const entries = new Map(
-      loadExactSessionEntryCandidates({
-        readOnly: true,
-        readSource: { agentId: target.agentId, path: target.storePath },
-        sessionKeys: rows.map(({ storedKey }) => storedKey),
-      }).map(({ sessionKey, entry }) => [sessionKey, entry]),
-    );
-    for (const { row, storedKey } of rows) {
-      const entry = entries.get(storedKey);
-      // Summary loading can yield across a reset or sharing change; never expose its successor's report.
-      if (
-        entry?.sessionId === row.sessionId &&
-        (!visibilityFilter || visibilityFilter(row.key, entry))
-      ) {
-        row.contextWeight = entry.systemPromptReport;
+  const groups = [...contextRows];
+  const env = captureSessionTranscriptStorageEnvironment(process.env);
+  const identities = groups.map(([target]) => readDatabasePathIdentitySync(target.storePath));
+  await withSessionHistoryWorkerDatabases(
+    groups.map(([target]) => ({ agentId: target.agentId, path: target.storePath, env })),
+    async (owners) => {
+      const reads = [];
+      for (const [index, [, rows]] of groups.entries()) {
+        reads.push(
+          await owners[index]!.readExactEntries({
+            env,
+            expectedIdentity: identities[index],
+            sessionKeys: [...new Set(rows.map(({ storedKey }) => storedKey))],
+            projection: "exact",
+            snapshotFields: ["systemPromptReport"],
+          }),
+        );
       }
-    }
-  }
+      for (const owner of owners) {
+        owner.assertCurrent();
+      }
+      for (const [index, [, rows]] of groups.entries()) {
+        const entries = new Map(
+          reads[index]!.entries.map(({ sessionKey, entry }) => [sessionKey, entry]),
+        );
+        for (const { row, storedKey } of rows) {
+          const entry = entries.get(storedKey);
+          // Summary loading can yield across a reset or sharing change; never expose its successor's report.
+          if (
+            entry?.sessionId === row.sessionId &&
+            (!visibilityFilter || visibilityFilter(row.key, entry))
+          ) {
+            row.contextWeight = entry.systemPromptReport;
+          }
+        }
+      }
+    },
+  );
 }

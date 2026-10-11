@@ -1,5 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { sessionChanges } from "../../sessions/session-row-changes.js";
+import { readGatewayAccessRevision } from "../gateway-access-revision.js";
 import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
@@ -69,6 +71,8 @@ function renameOptions(params: Record<string, unknown>, respond: ReturnType<type
   } as unknown as GatewayRequestHandlerOptions;
 }
 
+afterEach(() => vi.restoreAllMocks());
+
 describe("sessions.groups.put", () => {
   beforeEach(() => {
     groupMocks.put.mockReset();
@@ -93,6 +97,8 @@ describe("sessions.groups.put", () => {
   });
 
   it("replaces the catalog using the runtime config and authorization guards", async () => {
+    const changes = vi.spyOn(sessionChanges, "emit");
+    const accessRevision = readGatewayAccessRevision();
     const cfg = { agents: { entries: { main: {} } } };
     const names = ["Keep"];
     const sectionOrder = ["category:Keep", "ungrouped"];
@@ -119,6 +125,8 @@ describe("sessions.groups.put", () => {
     });
     expect(groupMocks.put.mock.calls[0]?.[0].cfg).toBe(cfg);
     expect(respond).toHaveBeenCalledWith(true, { ok: true, groups, sectionOrder: [] }, undefined);
+    expect(changes).not.toHaveBeenCalled();
+    expect(readGatewayAccessRevision()).toBe(accessRevision);
   });
 
   it("rethrows changed authorization instead of mapping it to an unavailable response", async () => {
@@ -204,6 +212,8 @@ describe("sessions.groups.update", () => {
   });
 
   it("persists the canonical workspace-contained cwd for a write caller", async () => {
+    const changes = vi.spyOn(sessionChanges, "emit");
+    const accessRevision = readGatewayAccessRevision();
     pathMocks.resolveContainment.mockResolvedValue({
       path: "/workspace/client",
       workspaceRoot: "/workspace",
@@ -231,6 +241,8 @@ describe("sessions.groups.update", () => {
     )(options);
 
     expect(assertCurrent).toHaveBeenCalledOnce();
+    expect(changes).not.toHaveBeenCalled();
+    expect(readGatewayAccessRevision()).toBe(accessRevision);
     expect(groupMocks.update).toHaveBeenCalledWith(
       "Client",
       {

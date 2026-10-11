@@ -2,7 +2,8 @@ import { sha256 } from "@noble/hashes/sha2.js";
 import { bytesToHex } from "@noble/hashes/utils.js";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { isIncognitoSessionKey } from "../../../../src/shared/incognito-session-key.js";
-import type { OfflineStorageClient } from "../../app/boot-record.ts";
+import { notifyListeners } from "../../../../src/shared/listeners.js";
+import { readOfflineStorageScope, type OfflineStorageClient } from "../../app/boot-record.ts";
 import {
   normalizeAgentId,
   parseAgentSessionKey,
@@ -10,7 +11,6 @@ import {
   resolveUiConversationIdentity,
 } from "../sessions/session-key.ts";
 import type { ChatQueueItem } from "./chat-types.ts";
-import { observeOutboxRecoveryOwner } from "./outbox-payload-store.runtime.ts";
 import {
   MAX_STORED_SESSIONS,
   normalizeStoredSession,
@@ -140,22 +140,14 @@ export function subscribeStoredChatOutboxChanges(listener: () => void): () => vo
 }
 
 export function notifyStoredChatOutboxChanges(): void {
-  for (const listener of storedChatOutboxChangeListeners) {
-    try {
-      listener();
-    } catch (error) {
-      console.error("[openclaw] stored chat outbox listener failed", error);
-    }
-  }
+  notifyListeners(storedChatOutboxChangeListeners, undefined, (error) =>
+    console.error("[openclaw] stored chat outbox listener failed", error),
+  );
 }
 
 function handleStoredChatOutboxStorageChange(event: StorageEvent): void {
-  if (event.key === null && event.storageArea) {
-    projectedStoreByStorage.get(event.storageArea)?.clear();
-    notifyStoredChatOutboxChanges();
-    return;
-  }
   if (
+    (event.key === null && event.storageArea) ||
     event.key?.startsWith(STORAGE_KEY_PREFIX) ||
     event.key?.startsWith(LEGACY_STORAGE_KEY_PREFIX) ||
     event.key?.startsWith(PREVIOUS_STORAGE_KEY_PREFIX) ||
@@ -189,7 +181,7 @@ export function storageTargetForGateway(
 }
 
 export function storageTargetForComposer(state: ChatComposerScope): ComposerStorageTarget {
-  const owner = observeOutboxRecoveryOwner(state);
+  const owner = readOfflineStorageScope(state);
   return {
     ...storageTargetForGateway(state.settings?.gatewayUrl, owner),
     unavailable: Boolean(state.client && !owner),
@@ -274,7 +266,7 @@ export function captureChatOutboxAdmission(
   agentId?: string,
 ) {
   return {
-    owner: observeOutboxRecoveryOwner(state),
+    owner: readOfflineStorageScope(state),
     gatewayOwner: storageTargetForGateway(state.settings?.gatewayUrl).gatewayOwner,
     scope: resolveUiConversationIdentity(state, sessionKey, agentId),
     awaitingDefaults: !hasUiSessionDefaults(state),
@@ -629,16 +621,14 @@ export function writeStoredOutboxStore(
   // A recovery move consumes its remaining source. Unlike an ordinary bounded
   // cache write, it must retain both that destination and every existing input.
   if (options.requiredSessionKey !== undefined) {
-    const required = new Set([
-      options.requiredSessionKey,
-      ...entries
-        .filter(([, session]) => session.queue?.length || hasStoredComposerDraftInput(session))
-        .map(([key]) => key),
-    ]);
-    for (const [key] of retained) {
-      required.delete(key);
-    }
-    if (required.size > 0) {
+    const retainedKeys = new Set(retained.map(([key]) => key));
+    if (
+      !retainedKeys.has(options.requiredSessionKey) ||
+      entries.some(
+        ([key, session]) =>
+          (session.queue?.length || hasStoredComposerDraftInput(session)) && !retainedKeys.has(key),
+      )
+    ) {
       throw new Error("Required chat outbox destination exceeds retention; source retained");
     }
   }

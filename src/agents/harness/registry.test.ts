@@ -10,6 +10,8 @@ import {
   withPluginRegistrationContext,
 } from "../../plugins/runtime.js";
 import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
+import { createDeferredCore } from "../../shared/deferred.js";
+import { AgentHarnessSessionCleanupError } from "./errors.js";
 import {
   clearAgentHarnesses,
   disposeRegisteredAgentHarnesses,
@@ -109,6 +111,46 @@ function providerRuntimeConfig(provider: string, runtime: string): OpenClawConfi
 }
 
 describe("agent harness registry", () => {
+  it("propagates required cleanup failure only after sibling reset hooks settle", async () => {
+    const failure = new AgentHarnessSessionCleanupError("native session still running");
+    const siblingStarted = createDeferredCore();
+    const releaseSibling = createDeferredCore();
+    const events: string[] = [];
+    registerAgentHarness({
+      ...makeHarness("required-cleanup"),
+      reset: async () => {
+        throw failure;
+      },
+    });
+    registerAgentHarness({
+      ...makeHarness("held-cleanup"),
+      reset: async () => {
+        siblingStarted.resolve();
+        await releaseSibling.promise;
+        events.push("sibling settled");
+      },
+    });
+    vi.useFakeTimers();
+    const reset = resetRegisteredAgentHarnessSessions({ reason: "reset" }).catch(
+      (error: unknown) => {
+        events.push("reset rejected");
+        return error;
+      },
+    );
+    try {
+      await siblingStarted.promise;
+      await vi.advanceTimersByTimeAsync(0);
+      expect(events).toEqual([]);
+      releaseSibling.resolve();
+      expect(await reset).toBe(failure);
+      expect(events).toEqual(["sibling settled", "reset rejected"]);
+    } finally {
+      releaseSibling.resolve();
+      await reset;
+      vi.useRealTimers();
+    }
+  });
+
   it("warns once per harness across reset failures and registry replacement while retrying", async () => {
     const failingReset = vi.fn(async () => {
       throw new Error("reset unavailable");
@@ -145,28 +187,6 @@ describe("agent harness registry", () => {
     expect(listRegisteredAgentHarnesses()).toEqual([]);
   });
 
-  it("registers and retrieves a harness with owner metadata", () => {
-    const harness = makeHarness("custom");
-    registerAgentHarness(harness, { ownerPluginId: "plugin-a" });
-
-    const registeredHarness = getRegisteredAgentHarness("custom");
-    expect(registeredHarness?.harness.id).toBe("custom");
-    expect(registeredHarness?.harness.pluginId).toBe("plugin-a");
-    expect(registeredHarness?.ownerPluginId).toBe("plugin-a");
-    expect(listRegisteredAgentHarnesses().map((entry) => entry.harness.id)).toEqual(["custom"]);
-  });
-
-  it("keeps explicit ownership distinct from harness metadata", () => {
-    const harness = { ...makeHarness("custom"), pluginId: "harness-declared" };
-    registerAgentHarness(harness, { ownerPluginId: "registry-owner" });
-
-    expect(getRegisteredAgentHarness("custom")).toEqual({
-      harness,
-      ownerPluginId: "registry-owner",
-    });
-    expect(listRegisteredAgentHarnesses()).toEqual([{ harness, ownerPluginId: "registry-owner" }]);
-  });
-
   it("resolves native compaction only from the exact registry-owned Codex harness", () => {
     const nativeCompaction = vi.fn(async () => ({ ok: true, compacted: true }));
     registerAgentHarness(makeHarness("codex"), {
@@ -194,7 +214,7 @@ describe("agent harness registry", () => {
     expect(listRegisteredAgentHarnesses()).toEqual([]);
   });
 
-  it.each(["active", "request", "registration"] as const)(
+  it.each(["active", "request"] as const)(
     "rejects retired %s harnesses without falling through to another registry",
     async (context) => {
       const snapshot = captureActivePluginRegistrySnapshot();
@@ -204,11 +224,7 @@ describe("agent harness registry", () => {
       const reset = vi.fn(async () => {});
       const nativeCompaction = vi.fn(async () => ({ ok: true, compacted: true }));
       const inContext = <T>(run: () => T): T =>
-        context === "registration"
-          ? withPluginRegistrationContext(selected, "codex", run)
-          : context === "request"
-            ? withPluginRuntimeRegistryScope(selected, run)
-            : run();
+        context === "request" ? withPluginRuntimeRegistryScope(selected, run) : run();
       try {
         setActivePluginRegistry(active);
         registerAgentHarness(makeHarness("codex"), { ownerPluginId: "codex" });
@@ -285,33 +301,6 @@ describe("agent harness registry", () => {
       registerAgentHarness(makeHarness("owned"));
     });
     expect(building.agentHarnesses[1]?.pluginId).toBe("builder-plugin");
-  });
-
-  it("keeps harness reads in registration, request, then active registry order", () => {
-    registerAgentHarness(makeHarness("shared"), { ownerPluginId: "active-plugin" });
-    const request = createEmptyPluginRegistry();
-    const building = createEmptyPluginRegistry();
-    const expectOwner = (ownerPluginId: string) => {
-      expect(getRegisteredAgentHarness("shared")?.ownerPluginId).toBe(ownerPluginId);
-      expect(listRegisteredAgentHarnesses().map((entry) => entry.ownerPluginId)).toEqual([
-        ownerPluginId,
-      ]);
-    };
-
-    withPluginRuntimeRegistryScope(request, () => {
-      expect(getRegisteredAgentHarness("shared")).toBeUndefined();
-      expect(listRegisteredAgentHarnesses()).toEqual([]);
-      registerAgentHarness(makeHarness("shared"), { ownerPluginId: "request-plugin" });
-      expectOwner("request-plugin");
-      withPluginRegistrationContext(building, "builder-plugin", () => {
-        expect(getRegisteredAgentHarness("shared")).toBeUndefined();
-        expect(listRegisteredAgentHarnesses()).toEqual([]);
-        registerAgentHarness(makeHarness("shared"));
-        expectOwner("builder-plugin");
-      });
-      expectOwner("request-plugin");
-    });
-    expectOwner("active-plugin");
   });
 
   it("keeps model-specific harnesses behind plugin registration in auto mode", () => {

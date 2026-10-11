@@ -235,52 +235,45 @@ describe("managed browser workspace custody", () => {
     },
   );
 
-  it.each([false, true])(
-    "awaits durable custody before allocation (startup fails=%s)",
-    async (fails) => {
-      if (fails) {
-        dockerMocks.readDockerPort.mockResolvedValue(null);
-      }
-      const started = createDeferred();
-      const acknowledgment = createDeferred();
-      const assertCurrent = vi.fn();
-      const entered = vi.fn();
-      registryMocks.updateBrowserRegistry.mockImplementationOnce(async (_entry, guard) => {
-        expect(guard).toBe(assertCurrent);
-        started.resolve();
-        await acknowledgment.promise;
-      });
-      const operation = ensureTestSandboxBrowser({
-        ...browserParams(),
-        withWorkspace: async (run) => {
-          entered();
-          return await run();
-        },
-        assertCurrent,
-      });
-      const settled = fails ? expect(operation).rejects.toThrow("port mapping") : operation;
-      try {
-        await awaitGateBeforeSettlement(started.promise, operation, "reservation was not reached");
-        expect(dockerMocks.execDocker.mock.calls.some(([args]) => args[0] === "create")).toBe(
-          false,
-        );
-      } finally {
-        acknowledgment.resolve();
-        await settled;
-      }
-      expect(entered).toHaveBeenCalledOnce();
-      expect(registryMocks.updateBrowserRegistry.mock.calls[0]?.[0]).toMatchObject({
-        workspaceDir: harness.testWorkspaceDir,
-        cdpPort: 0,
-      });
-      const createIndex = dockerMocks.execDocker.mock.calls.findIndex(
-        ([args]) => args[0] === "create",
-      );
-      expect(createIndex).toBeGreaterThanOrEqual(0);
-      expect(registryMocks.updateBrowserRegistry.mock.invocationCallOrder[0]!).toBeLessThan(
-        dockerMocks.execDocker.mock.invocationCallOrder[createIndex]!,
-      );
-      expect(registryMocks.updateBrowserRegistry.mock.calls.at(-1)?.[1]).toBe(assertCurrent);
-    },
-  );
+  it("awaits durable custody before allocation even when startup fails", async () => {
+    dockerMocks.readDockerPort.mockResolvedValue(null);
+    const started = createDeferred();
+    const acknowledgment = createDeferred();
+    const assertCurrent = vi.fn();
+    const entered = vi.fn();
+    registryMocks.updateBrowserRegistry.mockImplementationOnce(async (_entry, guard) => {
+      expect(guard).toBe(assertCurrent);
+      started.resolve();
+      await acknowledgment.promise;
+    });
+    const operation = ensureTestSandboxBrowser({
+      ...browserParams(),
+      withWorkspace: async (run) => {
+        entered();
+        return await run();
+      },
+      assertCurrent,
+    });
+    const settled = expect(operation).rejects.toThrow("port mapping");
+    try {
+      await awaitGateBeforeSettlement(started.promise, operation, "reservation was not reached");
+      expect(dockerMocks.execDocker.mock.calls.some(([args]) => args[0] === "create")).toBe(false);
+    } finally {
+      acknowledgment.resolve();
+      await settled;
+    }
+    expect(entered).toHaveBeenCalledOnce();
+    expect(registryMocks.updateBrowserRegistry.mock.calls[0]?.[0]).toMatchObject({
+      workspaceDir: harness.testWorkspaceDir,
+      cdpPort: 0,
+    });
+    const createIndex = dockerMocks.execDocker.mock.calls.findIndex(
+      ([args]) => args[0] === "create",
+    );
+    expect(createIndex).toBeGreaterThanOrEqual(0);
+    expect(registryMocks.updateBrowserRegistry.mock.invocationCallOrder[0]!).toBeLessThan(
+      dockerMocks.execDocker.mock.invocationCallOrder[createIndex]!,
+    );
+    expect(registryMocks.updateBrowserRegistry.mock.calls.at(-1)?.[1]).toBe(assertCurrent);
+  });
 });

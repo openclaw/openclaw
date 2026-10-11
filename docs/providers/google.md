@@ -73,6 +73,77 @@ the Gateway already runs inside a managed Google Cloud environment.
 
   </Tab>
 
+  <Tab title="Vertex AI (ADC)">
+    **Recommended for:** Gateway instances running inside Google Cloud (GCE,
+    GKE, Cloud Run) or workstations already authenticated through gcloud
+    Application Default Credentials.
+
+    <Steps>
+      <Step title="Authenticate with gcloud ADC">
+        On a workstation, run:
+
+        ```bash
+        gcloud auth application-default login
+        ```
+
+        On a Google Cloud VM with an attached service account, the metadata
+        server already provides credentials and no file is needed.
+      </Step>
+      <Step title="Set project and location">
+        Both are required in the gateway service environment:
+
+        ```bash
+        export GOOGLE_CLOUD_PROJECT="my-project"
+        export GOOGLE_CLOUD_LOCATION="us-central1"
+        ```
+
+        `GCLOUD_PROJECT` is also accepted for the project. Without a project,
+        runs fail with `Vertex AI requires a project ID. Set GOOGLE_CLOUD_PROJECT/GCLOUD_PROJECT or pass project in options.`
+        Without a location, the error is `Vertex AI requires a location. Set GOOGLE_CLOUD_LOCATION or pass location in options.`
+      </Step>
+      <Step title="Credential: automatic discovery or manual sentinel">
+        With a recognized ADC file (created by
+        `gcloud auth application-default login`) **and** the project and
+        location variables set, OpenClaw discovers `google-vertex`
+        automatically — nothing needs to be stored.
+
+        Manual storage is only needed for metadata-only credentials (for
+        example a GCE VM with an attached service account and no ADC file on
+        disk) or to select the ADC path explicitly. The ADC path is selected
+        by a sentinel value, not a real key — store exactly
+        `gcp-vertex-credentials`:
+
+        ```bash
+        openclaw models auth paste-api-key --provider google-vertex
+        # paste exactly: gcp-vertex-credentials
+        ```
+
+        <Warning>
+        Other stored values are sent in the `x-goog-api-key` header, not as
+        ADC credentials. Do not paste an OAuth access token from
+        `gcloud auth print-access-token`: it is not an API key and can cause
+        an authentication error such as `401 UNAUTHENTICATED`.
+        </Warning>
+      </Step>
+      <Step title="List the Vertex catalog">
+        ```bash
+        openclaw models list --refresh --all --provider google-vertex
+        ```
+
+        `--all` includes models you have not configured. `--refresh` populates
+        the local catalog when it has not been loaded yet; it does not query
+        a live Vertex model inventory or verify that ADC can obtain a token.
+      </Step>
+    </Steps>
+
+    <Tip>
+    Vertex uses a separate static model catalog; new Gemini variants appear
+    there per OpenClaw release rather than through the live refresh used by the
+    AI Studio key path.
+    </Tip>
+
+  </Tab>
+
   <Tab title="Gemini CLI runtime">
     **Advanced use only:** run a canonical `google/*` model through an installed
     Gemini CLI while keeping authentication on the supported AI Studio API-key
@@ -162,6 +233,11 @@ the Gateway already runs inside a managed Google Cloud environment.
 | Web search (Grounding) | Yes                           |
 | Thinking/reasoning     | Yes (Gemini 2.5+ / Gemini 3+) |
 | Gemma 4 models         | Yes                           |
+
+Responses marked `MAX_TOKENS` or `CONTINUATION` reached a generation limit.
+OpenClaw preserves their partial content and reports a length-limited result.
+Function calls in that partial response remain incomplete instead of becoming
+an executable tool-use turn.
 
 ## Web search
 

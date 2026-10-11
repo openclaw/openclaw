@@ -71,11 +71,7 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
     onOwnerStopped: dedicatedLeases.retire,
   });
 
-  const machineCatalog = createWorkerMachineCatalog({
-    getConfig: options.getConfig,
-    resolveProvider: options.resolveProvider,
-    warn: options.warn,
-  });
+  const machineCatalog = createWorkerMachineCatalog(options);
 
   const expirePrepared = async (record: WorkerEnvironmentRecord) =>
     record.preparation?.consumedAtMs === null && record.preparation.expiresAtMs <= now()
@@ -100,8 +96,7 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
   const nodeProvisioning = createWorkerNodeProvisioning({
     ...options,
     commitReady,
-    failBootstrap: async (record, leaseId, provider, error, patch) =>
-      await failBootstrap(record, leaseId, provider, error, "bootstrap_failure", patch),
+    failBootstrap,
   });
 
   const runtimeRefresher = createWorkerRuntimeRefresher({
@@ -404,8 +399,8 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
         lease.leaseId,
         provider,
         leaseModeError,
-        "invalid_profile",
         patch,
+        "invalid_profile",
       );
     }
     if (lease.node) {

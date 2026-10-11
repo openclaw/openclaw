@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { asOptionalRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
+import { containsAsciiControlCharacter } from "@openclaw/normalization-core/string-normalization";
 import {
   COMMAND_PALETTE_SHORTCUT,
   createKeyboardShortcutMatcher,
@@ -153,22 +154,15 @@ function normalizeDomains(
       ) {
         return false;
       }
-      for (let index = 0; index < entry.length; index += 1) {
-        const code = entry.charCodeAt(index);
-        if (code <= 31 || code === 127) {
-          return false;
-        }
+      if (containsAsciiControlCharacter(entry)) {
+        return false;
       }
       if (options?.allowMediaSchemes && (entry === "https:" || entry === "blob:")) {
         return true;
       }
-      let parsed: URL;
-      try {
-        parsed = new URL(entry);
-      } catch {
-        return false;
-      }
+      const parsed = URL.parse(entry);
       if (
+        !parsed ||
         !allowedProtocols.has(parsed.protocol) ||
         parsed.username !== "" ||
         parsed.password !== "" ||
@@ -319,6 +313,7 @@ function buildSandboxHostProxyHtml(csp?: SandboxHostCsp): string {
   }
   const createInner = (allowScripts = true) => {
     const frame = document.createElement("iframe");
+    frame.setAttribute("allow", "fullscreen *");
     // Block native popups here without reserving widget globals such as open.
     frame.setAttribute("sandbox", allowScripts ? "allow-scripts allow-forms" : "");
     return frame;

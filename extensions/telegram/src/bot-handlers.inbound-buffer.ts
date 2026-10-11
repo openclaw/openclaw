@@ -7,6 +7,7 @@ import {
 import type { ChannelReplayClaimHandle } from "openclaw/plugin-sdk/persistent-dedupe";
 import { createRuntimeConfigReader } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { buildTelegramInboundDebounceKey } from "./bot-handlers.debounce-key.js";
 import {
   buildSyntheticContext,
@@ -67,12 +68,6 @@ export type TelegramDebounceEntry = {
   channelIngressResolvers: readonly TelegramChannelIngressResolver[];
 };
 
-interface TelegramInboundBuffers {
-  cancelPending: (target: TelegramPendingInboundTarget) => void;
-  inboundDebouncer: ReturnType<typeof createInboundDebouncer<TelegramDebounceEntry>>;
-  resolveTelegramDebounceLane: (msg: Message) => TelegramDebounceLane;
-}
-
 const spooledReplayParticipants = (entries: readonly TelegramDebounceEntry[]) =>
   entries.flatMap((entry) =>
     entry.spooledReplayParticipant ? [entry.spooledReplayParticipant] : [],
@@ -84,13 +79,11 @@ export function createTelegramInboundBuffers({
 }: {
   params: Pick<RegisterTelegramHandlerParams, "cfg" | "accountId" | "bot" | "runtime" | "opts">;
   message: TelegramMessagePipeline;
-}): TelegramInboundBuffers {
+}) {
   const {
     mergeDispatchDedupeClaims,
     releaseDispatchDedupeClaims,
-    buildFailedProcessingResult,
     settleSpooledReplayParticipants,
-    spooledReplayOptions,
     processMessageWithReplyChain,
   } = message;
   const readConfig = createRuntimeConfigReader(cfg);
@@ -165,6 +158,27 @@ export function createTelegramInboundBuffers({
     resolveDebounceMs: resolveTelegramDebounceEntryMs,
     buildKey: (entry) => entry.debounceKey,
     shouldDebounce: shouldDebounceTelegramEntry,
+    shouldHoldFlush: async (entries) => {
+      const first = entries[0];
+      if (first?.debounceLane !== "forward") {
+        return false;
+      }
+      const participant = entries.findLast(
+        (entry) => entry.spooledReplayParticipant,
+      )?.spooledReplayParticipant;
+      const updates = (await participant?.readLaneBacklogUpdates()) ?? [];
+      return updates.some((update) => {
+        const msg = isRecord(update) ? (update.message ?? update.channel_post) : undefined;
+        return (
+          isRecord(msg) &&
+          msg.forward_origin != null &&
+          isRecord(msg.chat) &&
+          msg.chat.id === first.msg.chat.id &&
+          isRecord(msg.from) &&
+          msg.from.id === first.msg.from?.id
+        );
+      });
+    },
     canAppend: (entry, pending) =>
       entry.debounceLane === pending[0]?.debounceLane &&
       (entry.debounceLane === "forward" ||
@@ -236,21 +250,15 @@ export function createTelegramInboundBuffers({
                   batched && last.debounceLane !== "forward" ? "text-batch" : "inbound-debounce",
                 threadSpec: first.threadSpec,
                 ...promptContextBoundaryOptions(
-                  batched
-                    ? latestPromptContextMinTimestampMs(
-                        ...entries.map((entry) => entry.promptContextMinTimestampMs),
-                      )
-                    : first.promptContextMinTimestampMs,
-                  batched
-                    ? latestPromptContextAmbientWatermark(
-                        ...entries.map((entry) => entry.promptContextAmbientWatermark),
-                      )
-                    : first.promptContextAmbientWatermark,
+                  latestPromptContextMinTimestampMs(
+                    ...entries.map((entry) => entry.promptContextMinTimestampMs),
+                  ),
+                  latestPromptContextAmbientWatermark(
+                    ...entries.map((entry) => entry.promptContextAmbientWatermark),
+                  ),
                 ),
-                ...spooledReplayOptions(participants),
-                channelIngressResolvers: batched
-                  ? entries.flatMap((entry) => entry.channelIngressResolvers)
-                  : first.channelIngressResolvers,
+                ...(participants.length > 0 ? { spooledReplay: true } : {}),
+                channelIngressResolvers: entries.flatMap((entry) => entry.channelIngressResolvers),
               },
               dispatchDedupeClaims,
               spooledReplayParticipants: participants,
@@ -260,14 +268,14 @@ export function createTelegramInboundBuffers({
             });
             settleSpooledReplayParticipants(participants, result);
           } catch (error) {
-            settleSpooledReplayParticipants(participants, buildFailedProcessingResult(error));
+            settleSpooledReplayParticipants(participants, { kind: "failed-retryable", error });
             throw error;
           }
         },
       }),
     onError: (error, items) => {
       const participants = spooledReplayParticipants(items);
-      settleSpooledReplayParticipants(participants, buildFailedProcessingResult(error));
+      settleSpooledReplayParticipants(participants, { kind: "failed-retryable", error });
       runtime.error?.(danger(`telegram debounce flush failed: ${String(error)}`));
       if (participants.length > 0) {
         return;

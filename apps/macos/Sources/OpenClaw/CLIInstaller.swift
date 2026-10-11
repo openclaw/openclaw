@@ -177,22 +177,15 @@ enum CLIInstaller {
         searchPaths: [String],
         fileManager: FileManager) -> [String]
     {
-        var locations: [String] = []
-        for basePath in searchPaths {
+        searchPaths.compactMap { basePath in
             let candidate = URL(fileURLWithPath: basePath).appendingPathComponent("openclaw").path
             var isDirectory: ObjCBool = false
-
             guard fileManager.fileExists(atPath: candidate, isDirectory: &isDirectory),
-                  !isDirectory.boolValue
-            else {
-                continue
-            }
-
-            guard fileManager.isExecutableFile(atPath: candidate) else { continue }
-
-            locations.append(candidate)
+                  !isDirectory.boolValue,
+                  fileManager.isExecutableFile(atPath: candidate)
+            else { return nil }
+            return candidate
         }
-        return locations
     }
 
     static func managedExecutableLocation(
@@ -232,16 +225,14 @@ enum CLIInstaller {
     static func managedStatus(
         expectedVersion: String? = GatewayEnvironment.expectedGatewayVersionString(),
         installedCLI: GatewayLaunchAgentManager.InstalledServiceCLI? = nil,
+        serviceProfile: AppProfile = .current,
         usesBundledRuntime: Bool = true) async -> Status
     {
         let location = self.managedExecutableLocation()
         if let installedCLI {
             let environment = GatewayLaunchAgentManager.daemonEnvironment(
-                runtime: nil,
                 installedCLI: installedCLI,
-                environment: ProcessInfo.processInfo.environment,
-                profile: .current,
-                searchPaths: CommandResolver.preferredPaths())
+                profile: serviceProfile)
             let response = await ShellExecutor.runDetailed(
                 command: installedCLI.prefix + ["--version"], cwd: nil, env: environment, timeout: 15)
             return response.success
@@ -312,18 +303,11 @@ enum CLIInstaller {
             output: response.stdout,
             expectedVersion: expectedVersion)
         guard versionStatus.isReady else { return versionStatus }
-        guard await self.runtimeIsCompatible(environment: environment) else {
+        let paths = environment["PATH"]?.split(separator: ":").map(String.init) ?? []
+        guard case .success = await RuntimeLocator.resolve(searchPaths: paths) else {
             return .unusable(location: location)
         }
         return versionStatus
-    }
-
-    private static func runtimeIsCompatible(environment: [String: String]) async -> Bool {
-        let paths = environment["PATH"]?.split(separator: ":").map(String.init) ?? []
-        if case .success = await RuntimeLocator.resolve(searchPaths: paths) {
-            return true
-        }
-        return false
     }
 
     static func classifyVersion(
@@ -334,9 +318,6 @@ enum CLIInstaller {
         let normalized = GatewayEnvironment.normalizeGatewayVersionOutput(output)
         guard let normalized, Semver.parse(normalized) != nil else {
             return .unusable(location: location)
-        }
-        guard Semver.parse(expectedVersion) != nil else {
-            return .ready(location: location, version: normalized)
         }
         guard Semver.satisfiesExpectedGatewayVersion(installed: normalized, expected: expectedVersion) else {
             return .incompatible(
@@ -600,12 +581,7 @@ enum CLIInstaller {
             repair: repair)
         if let installedCLI { command = installedCLI.prefix + command.dropFirst() }
         let environment = installedCLI.map {
-            GatewayLaunchAgentManager.daemonEnvironment(
-                runtime: nil,
-                installedCLI: $0,
-                environment: ProcessInfo.processInfo.environment,
-                profile: .current,
-                searchPaths: CommandResolver.preferredPaths())
+            GatewayLaunchAgentManager.daemonEnvironment(installedCLI: $0)
         } ?? self.probeEnvironment(location: executable)
         let canonicalAuthority: CanonicalUpdateAuthority?
         do {
@@ -621,17 +597,11 @@ enum CLIInstaller {
             if let installedCLI { return GatewayLaunchAgentManager.serviceUpdateAuthorityError(for: installedCLI) }
             return canonicalAuthority?.currentError()
         }
-        do { try await checkCurrent?() } catch {
-            let message = String(localized: "Gateway update failed.")
-            await statusHandler(message)
-            return .failure(message: message, details: error.localizedDescription)
-        }
-        if let error = beforeSpawn() {
-            let message = String(localized: "Gateway update failed.")
-            await statusHandler(message)
-            return .failure(message: message, details: error)
-        }
-        do { try onDispatch?() } catch {
+        do {
+            try await checkCurrent?()
+            if let error = beforeSpawn() { throw GatewayHostingError(message: error) }
+            try onDispatch?()
+        } catch {
             let message = String(localized: "Gateway update failed.")
             await statusHandler(message)
             return .failure(message: message, details: error.localizedDescription)

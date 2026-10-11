@@ -3,16 +3,11 @@ import fs from "node:fs";
 import path from "node:path";
 import type { Root } from "@openclaw/fs-safe";
 import { readRegularFileSync } from "@openclaw/fs-safe/advanced";
-import { getFsSafeNativeConfig } from "@openclaw/fs-safe/config";
-import { FsSafeError } from "@openclaw/fs-safe/errors";
-import {
-  pinDirectory,
-  publishFileExclusive,
-  requireDirectorySync,
-  type PinnedDirectory,
-} from "./directory-durability.js";
-import { hasErrnoCode } from "./errno.js";
 import { pathMayExistSync } from "./path-existence.js";
+import {
+  moveLegacyMigrationFileNoReplace,
+  recoverLegacyMigrationLinkedMove,
+} from "./state-migrations.no-replace-move.js";
 
 /** The stable source identity every doctor-owned import verifies before cleanup. */
 export type LegacyMigrationSourceSnapshot = {
@@ -30,33 +25,6 @@ type LegacyMigrationSourceIdentity = Pick<
   LegacyMigrationSourceSnapshot,
   "dev" | "ino" | "mtimeMs" | "sha256" | "size" | "sourcePath"
 >;
-
-function isClaimLinkPair(source: fs.BigIntStats, claim: fs.BigIntStats): boolean {
-  return (
-    source.isFile() &&
-    claim.isFile() &&
-    source.nlink === 2n &&
-    claim.nlink === 2n &&
-    source.dev === claim.dev &&
-    source.ino === claim.ino
-  );
-}
-
-function assertClaimLinkPair(
-  sourcePath: string,
-  claimPath: string,
-  identity: fs.BigIntStats,
-): void {
-  const source = fs.lstatSync(sourcePath, { bigint: true });
-  const claim = fs.lstatSync(claimPath, { bigint: true });
-  if (
-    !isClaimLinkPair(source, claim) ||
-    source.dev !== identity.dev ||
-    source.ino !== identity.ino
-  ) {
-    throw new FsSafeError("path-mismatch", "legacy migration source/claim link pair changed");
-  }
-}
 
 /** Keep every claim operation bound to the same trusted owner root and source inode. */
 export class LegacyMigrationSourceClaim<
@@ -105,119 +73,13 @@ export class LegacyMigrationSourceClaim<
     return await this.params.readSnapshot(claimed ? this.claimPath : this.sourcePath);
   }
 
-  private async pinParent(): Promise<PinnedDirectory> {
-    const relativePath = path.dirname(this.sourceRelativePath);
-    const parent = await pinDirectory(await this.params.stateRoot.resolve(relativePath));
-    try {
-      const admitted = await this.params.stateRoot.stat(relativePath);
-      if (
-        !admitted.isDirectory ||
-        admitted.dev !== parent.receipt.identity.dev ||
-        admitted.ino !== parent.receipt.identity.ino
-      ) {
-        throw new FsSafeError("path-mismatch", "legacy migration source parent changed");
-      }
-      return parent;
-    } catch (error) {
-      await parent.close();
-      throw error;
-    }
-  }
-
-  private async move(from: string, to: string): Promise<void> {
-    const root = this.params.stateRoot;
-    try {
-      await root.move(from, to);
-      return;
-    } catch (error) {
-      // The portable publisher cannot revalidate mutation-specific Root policies.
-      if (
-        !(error instanceof FsSafeError) ||
-        error.code !== "helper-unavailable" ||
-        getFsSafeNativeConfig().mode === "require" ||
-        path.dirname(from) !== path.dirname(to) ||
-        root.defaults.assertBeforeMutation ||
-        root.defaults.denyMutations ||
-        root.defaults.mutationSymlinks ||
-        (error.cause !== undefined &&
-          // fs-safe reports loader failures before native admission or dispatch.
-          error.message !== "native fs-safe helper is unavailable" &&
-          !["EINVAL", "ENOSYS", "ENOTSUP", "EOPNOTSUPP"].some((code) =>
-            hasErrnoCode(error.cause, code),
-          ))
-      ) {
-        throw error;
-      }
-    }
-    const parent = await this.pinParent();
-    try {
-      const sourcePath = path.join(parent.receipt.realPath, path.basename(from));
-      const targetPath = path.join(parent.receipt.realPath, path.basename(to));
-      let identity: fs.BigIntStats;
-      {
-        // Close before unlink: FUSE can retain an open source as a .fuse_hidden hardlink.
-        await using opened = await root.open(from, { hardlinks: "reject", symlinks: "reject" });
-        identity = fs.fstatSync(opened.handle.fd, { bigint: true });
-        await opened.handle.sync();
-        const published = await publishFileExclusive({
-          sourcePath,
-          targetPath,
-          expectedSourceIdentity: identity,
-          parentReceipt: parent.receipt,
-          strategy: "link-required",
-        });
-        requireDirectorySync(published.directorySync, "Legacy migration claim directory");
-      }
-      await root.remove(from, {
-        assertBeforeMutation: () => assertClaimLinkPair(sourcePath, targetPath, identity),
-      });
-      requireDirectorySync(await parent.sync(), "Legacy migration source directory");
-    } finally {
-      await parent.close();
-    }
-  }
-
   /** Roll back a link publication interrupted before its source name was removed. */
   async recoverLinkedMove(): Promise<void> {
-    if (!(await this.exists()) || !(await this.exists(true))) {
-      return;
-    }
-    const root = this.params.stateRoot;
-    const parent = await this.pinParent();
-    try {
-      let identity: fs.BigIntStats | undefined;
-      {
-        await using source = await root.open(this.sourceRelativePath, {
-          hardlinks: "allow",
-          symlinks: "reject",
-        });
-        await using claim = await root.open(this.claimRelativePath, {
-          hardlinks: "allow",
-          symlinks: "reject",
-        });
-        const sourceStat = fs.fstatSync(source.handle.fd, { bigint: true });
-        if (isClaimLinkPair(sourceStat, fs.fstatSync(claim.handle.fd, { bigint: true }))) {
-          await source.handle.sync();
-          identity = sourceStat;
-        }
-      }
-      if (!identity) {
-        return;
-      }
-      requireDirectorySync(await parent.sync(), "Legacy migration recovery directory");
-      const retainedIdentity = identity;
-      await root.remove(this.claimRelativePath, {
-        assertBeforeMutation: () =>
-          assertClaimLinkPair(
-            path.join(parent.receipt.realPath, path.basename(this.sourceRelativePath)),
-            path.join(parent.receipt.realPath, path.basename(this.claimRelativePath)),
-            retainedIdentity,
-          ),
-      });
-      requireDirectorySync(await parent.sync(), "Legacy migration recovery directory");
-    } finally {
-      await parent.close();
-    }
+    await recoverLegacyMigrationLinkedMove(
+      this.params.stateRoot,
+      this.sourceRelativePath,
+      this.claimRelativePath,
+    );
   }
 
   async recover(conflictMessage: string): Promise<void> {
@@ -227,7 +89,11 @@ export class LegacyMigrationSourceClaim<
     }
     const claimed = await this.read(true);
     if (!(await this.exists())) {
-      await this.move(this.claimRelativePath, this.sourceRelativePath);
+      await moveLegacyMigrationFileNoReplace(
+        this.params.stateRoot,
+        this.claimRelativePath,
+        this.sourceRelativePath,
+      );
       return;
     }
     if (!legacyMigrationSourceContentMatches(claimed, await this.read())) {
@@ -245,7 +111,11 @@ export class LegacyMigrationSourceClaim<
       if (await this.exists()) {
         return `source path already exists: ${this.sourcePath}`;
       }
-      await this.move(this.claimRelativePath, this.sourceRelativePath);
+      await moveLegacyMigrationFileNoReplace(
+        this.params.stateRoot,
+        this.claimRelativePath,
+        this.sourceRelativePath,
+      );
       return null;
     } catch (error) {
       return this.params.formatError?.(error) ?? String(error);
@@ -258,7 +128,11 @@ export class LegacyMigrationSourceClaim<
     beforeClaim?: () => void;
   }): Promise<TSnapshot> {
     params.beforeClaim?.();
-    await this.move(this.sourceRelativePath, this.claimRelativePath);
+    await moveLegacyMigrationFileNoReplace(
+      this.params.stateRoot,
+      this.sourceRelativePath,
+      this.claimRelativePath,
+    );
     const claimed = await this.read(true);
     if (!legacyMigrationSourceSnapshotsMatch(claimed, params.snapshot)) {
       throw new Error(params.mismatchMessage);

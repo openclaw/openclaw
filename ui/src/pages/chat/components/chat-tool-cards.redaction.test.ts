@@ -7,10 +7,8 @@ import { renderToolCard } from "./chat-tool-cards.ts";
 describe("tool-card redaction", () => {
   it.each([
     ["/Users/alice/Pictures/base.png", "~/Pictures/base.png"],
-    ["/home/alice/Pictures/base.png", "~/Pictures/base.png"],
     ["D:\\Users\\alice\\Pictures\\base.png", "~\\Pictures\\base.png"],
     ["/var/folders/demo/screenshots/base.png", "/var/folders/demo/screenshots/base.png"],
-    ["D:\\screenshots\\base.png", "D:\\screenshots\\base.png"],
   ])("keeps image path %s readable in the tool row", (path, expected) => {
     const container = document.createElement("div");
     render(

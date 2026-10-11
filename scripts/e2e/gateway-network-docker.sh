@@ -7,6 +7,11 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 source "$ROOT_DIR/scripts/lib/docker-e2e-image.sh"
+# Bind release proof to the selected checkout even when no compatibility paths apply.
+if [[ -n "${OPENCLAW_SELECTED_SHA:-}" ]]; then
+  node "$ROOT_DIR/scripts/lib/frozen-target-source.mjs" validate \
+    "${OPENCLAW_DOCKER_E2E_REPO_ROOT:-$ROOT_DIR}" "$OPENCLAW_SELECTED_SHA"
+fi
 IMAGE_NAME="$(docker_e2e_resolve_image "openclaw-gateway-network-e2e" OPENCLAW_GATEWAY_NETWORK_E2E_IMAGE)"
 SKIP_BUILD="${OPENCLAW_GATEWAY_NETWORK_E2E_SKIP_BUILD:-0}"
 

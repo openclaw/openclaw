@@ -55,7 +55,12 @@ export async function refreshPluginRegistryAfterConfigMutation(
   const callerLease: PluginLifecycleLeaseContext | undefined = owner
     ? {
         ...owner,
-        assertOwned: () => assertAuthority(() => owner.assertOwned()),
+        assertCurrent: () => assertAuthority(() => owner.assertCurrent()),
+        assertOwned: () =>
+          assertAuthority(() => {
+            owner.assertCurrent();
+            owner.assertOwned();
+          }),
         assertOwnedInTransaction: (database) =>
           assertAuthority(() => owner.assertOwnedInTransaction(database)),
       }
@@ -68,12 +73,17 @@ export async function refreshPluginRegistryAfterConfigMutation(
       {
         ...(params.env ? { env: params.env } : {}),
         ...(callerLease
-          ? { path: callerLease.databasePath, assertCurrent: () => callerLease.assertOwned() }
+          ? { path: callerLease.databasePath, assertCurrent: () => callerLease.assertCurrent() }
           : {}),
       },
       async (acquiredLease) => {
         const lease: PluginLifecycleLeaseContext = {
           ...acquiredLease,
+          assertCurrent: () =>
+            assertAuthority(() => {
+              acquiredLease.assertCurrent();
+              callerLease?.assertCurrent();
+            }),
           assertOwned: () =>
             assertAuthority(() => {
               acquiredLease.assertOwned();

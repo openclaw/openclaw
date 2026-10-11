@@ -88,4 +88,18 @@ describe("stale subagent allowlist doctor repair", () => {
       '- Run "openclaw doctor --fix" to remove stale subagent target ids, or add a configured agent or ACP target for each intended target.',
     ]);
   });
+
+  it("preserves malformed values for validation while removing stale targets", () => {
+    const subagents = { allowAgents: ["main", "stale"] };
+    const cfg = { agents: { defaults: { subagents }, entries: { main: {} } } };
+    Object.assign(subagents, { allowAgents: ["main", "stale", 42, null] });
+
+    const result = maybeRepairStaleSubagentAllowlists(cfg);
+
+    expect(result.config.agents?.defaults?.subagents?.allowAgents).toEqual(["main", 42, null]);
+    expect(subagents.allowAgents).toEqual(["main", "stale", 42, null]);
+    expect(result.changes).toEqual([
+      "- agents.defaults.subagents.allowAgents: removed 1 stale subagent target id (stale)",
+    ]);
+  });
 });

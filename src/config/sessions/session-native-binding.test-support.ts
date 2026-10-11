@@ -4,6 +4,7 @@ import type { SubagentRunsDurableBasis } from "../../agents/subagents/registry/s
 import { createPluginRuntimeMock } from "../../plugin-sdk/test-helpers/plugin-runtime-mock.js";
 import {
   createPluginStateKeyedStore,
+  createPluginStateKeyedStoreV2,
   createPluginStateSyncKeyedStore,
 } from "../../plugin-state/plugin-state-store.js";
 import type { PluginStateSyncKeyedStore } from "../../plugin-state/plugin-state-store.types.js";
@@ -19,10 +20,17 @@ import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { loadBundledPluginFacade } from "../../test-utils/bundled-plugin-public-surface.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { cleanupSessionLifecycleArtifactsCore } from "./session-accessor.sqlite-artifact-cleanup.js";
 import { readExactSessionEntryRow } from "./session-accessor.sqlite-entry-store.js";
 import { replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
 import { deleteSessionEntryLifecycle } from "./session-accessor.sqlite-lifecycle.js";
-import { replaceTranscriptEventsSync } from "./session-accessor.sqlite-transcript-write.js";
+import { emptySessionEntryMaintenancePlan } from "./session-accessor.sqlite-maintenance-store.js";
+import { finalizeSessionEntryMaintenancePlansAfterWriterReleaseBestEffort } from "./session-accessor.sqlite-maintenance.js";
+import {
+  rewindSessionToMessage,
+  switchSessionBranch,
+} from "./session-accessor.sqlite-message-cut.js";
+import { replaceTranscriptEventsSync } from "./session-accessor.sqlite-transcript-write.test-support.js";
 
 type NativeBindingTestApi = {
   createNativeBindingDeletionFixture(
@@ -106,17 +114,12 @@ async function createFixture(
       openSyncKeyedStore: <Value>(options: Parameters<typeof createPluginStateSyncKeyedStore>[1]) =>
         createPluginStateSyncKeyedStore<Value>(kind, { ...options, env }),
       openKeyedStore: <Value>(options: Parameters<typeof createPluginStateKeyedStore>[1]) => {
-        const store = createPluginStateKeyedStore<Value>(kind, { ...options, env });
-        // A released SDK adapter forwards the public contract without the host's private branding.
-        return mode === "worker"
-          ? store
-          : {
-              ...store,
-              withCurrent: (authority: Parameters<NonNullable<typeof store.withCurrent>>[0]) => ({
-                ...store.withCurrent(authority),
-              }),
-            };
+        return createPluginStateKeyedStore<Value>(kind, { ...options, env });
       },
+      openKeyedStoreV2: <Value>(
+        options: Parameters<typeof createPluginStateKeyedStoreV2>[1],
+        authority: Parameters<typeof createPluginStateKeyedStoreV2>[2] = { assertCurrent() {} },
+      ) => createPluginStateKeyedStoreV2<Value>(kind, { ...options, env }, authority),
     },
   });
   const { createNativeBindingDeletionFixture } =
@@ -128,6 +131,20 @@ async function createFixture(
   const registry = createEmptyPluginRegistry();
   registry.plugins.push(createPluginRecord({ id: kind }));
   registry.agentHarnesses.push({ pluginId: kind, source: "runtime", harness: native.harness });
+  if (mode === "native") {
+    // A released opaque sibling requires native atomicity before either participant
+    // executes. The official harness keeps its V2 store and typed native participant.
+    registry.agentHarnesses.push({
+      pluginId: "core",
+      source: "runtime",
+      harness: {
+        ...native.harness,
+        async withSessionDeletion(_params, run) {
+          return run({ commit() {}, rollback() {} });
+        },
+      },
+    });
+  }
   markPluginRegistryActive(registry);
   const target = { canonicalKey: scope.sessionKey, storeKeys: [scope.sessionKey] };
   return {
@@ -142,6 +159,36 @@ async function createFixture(
     bindingStore: native.store,
     readEntry: () => readExactSessionEntryRow(database, scope.sessionKey)?.entry,
     readBinding: () => native.store.lookup(native.key),
+    cleanup: () =>
+      withPluginRuntimeRegistryScope(registry, () =>
+        cleanupSessionLifecycleArtifactsCore({
+          ...scope,
+          sessionKeySegmentPrefix: "native-binding",
+          transcriptContentMarker: "Retain this transcript",
+          orphanTranscriptMinAgeMs: 0,
+          archiveRemovedEntryTranscripts: false,
+        }),
+      ),
+    maintain: (expectedEntry: NonNullable<ReturnType<typeof readExactSessionEntryRow>>["entry"]) =>
+      withPluginRuntimeRegistryScope(registry, () =>
+        finalizeSessionEntryMaintenancePlansAfterWriterReleaseBestEffort(
+          { ...scope, path: database.path },
+          [
+            {
+              ...emptySessionEntryMaintenancePlan(),
+              entryRemovals: [
+                { sessionKey: scope.sessionKey, expectedEntry, maintenanceReason: "pruned" },
+              ],
+            },
+          ],
+        ),
+      ),
+    cut: (cutMode: "rewind" | "switch", entryId: string) =>
+      withPluginRuntimeRegistryScope(registry, () =>
+        cutMode === "rewind"
+          ? rewindSessionToMessage({ ...scope, entryId })
+          : switchSessionBranch({ ...scope, leafEntryId: entryId }),
+      ),
     remove: (
       options: { archiveTranscript?: boolean; descendantRunBasis?: SubagentRunsDurableBasis } = {},
     ) =>

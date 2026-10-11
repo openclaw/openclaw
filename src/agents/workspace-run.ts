@@ -88,40 +88,27 @@ export function resolveRunWorkspaceDir(params: {
   if (!resolveAgentConfig(config, agentId)) {
     throw new RunWorkspaceAgentNotConfiguredError(agentId);
   }
-  if (typeof requested === "string") {
-    const trimmed = requested.trim();
-    if (trimmed) {
-      const sanitized = sanitizeForPromptLiteral(trimmed);
-      if (sanitized !== trimmed) {
-        logWarn("Control/format characters stripped from workspaceDir (OC-19 hardening).");
-      }
-      const workspaceDir = resolveUserPath(sanitized, env);
-      const canonicalWorkspaceDir = resolveUserPath(
-        resolveAgentWorkspaceDir(config, agentId, env),
-        env,
-      );
-      return {
-        workspaceDir,
-        isCanonicalWorkspace: workspaceDir === canonicalWorkspaceDir,
-        usedFallback: false,
-        agentId,
-        agentIdSource,
-      };
-    }
+  const trimmed = typeof requested === "string" ? requested.trim() : "";
+  const usedFallback = !trimmed;
+  const candidate = trimmed || resolveAgentWorkspaceDir(config, agentId, env);
+  const sanitized = sanitizeForPromptLiteral(candidate);
+  if (sanitized !== candidate) {
+    logWarn(
+      usedFallback
+        ? "Control/format characters stripped from fallback workspaceDir (OC-19 hardening)."
+        : "Control/format characters stripped from workspaceDir (OC-19 hardening).",
+    );
   }
-
+  const workspaceDir = resolveUserPath(sanitized, env);
   const fallbackReason: WorkspaceFallbackReason =
     requested == null ? "missing" : typeof requested === "string" ? "blank" : "invalid_type";
-  const fallbackWorkspace = resolveAgentWorkspaceDir(config, agentId, env);
-  const sanitizedFallback = sanitizeForPromptLiteral(fallbackWorkspace);
-  if (sanitizedFallback !== fallbackWorkspace) {
-    logWarn("Control/format characters stripped from fallback workspaceDir (OC-19 hardening).");
-  }
   return {
-    workspaceDir: resolveUserPath(sanitizedFallback, env),
-    isCanonicalWorkspace: true,
-    usedFallback: true,
-    fallbackReason,
+    workspaceDir,
+    isCanonicalWorkspace:
+      usedFallback ||
+      workspaceDir === resolveUserPath(resolveAgentWorkspaceDir(config, agentId, env), env),
+    usedFallback,
+    ...(usedFallback ? { fallbackReason } : {}),
     agentId,
     agentIdSource,
   };
@@ -158,4 +145,24 @@ export function resolveRootedRunRuntimeWorkspace(params: {
     (params.requireWorkspaceOnly === true && params.sessionRoot !== undefined)
     ? bootstrap
     : undefined;
+}
+
+/** Resolves the agent's canonical workspace for a run that executes somewhere else. */
+export function resolveCanonicalRunRuntimeWorkspace(params: {
+  workspaceDir: string;
+  sessionKey?: string;
+  agentId?: string;
+  config?: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
+}): ResolveRunWorkspaceResult | undefined {
+  if (!params.config || !hasAgentRosterProperty(params.config)) {
+    return undefined;
+  }
+  const { fallbackReason: _fallbackReason, ...canonical } = resolveRunWorkspaceDir({
+    ...params,
+    workspaceDir: undefined,
+  });
+  return canonical.workspaceDir === resolveUserPath(params.workspaceDir, params.env ?? process.env)
+    ? undefined
+    : { ...canonical, usedFallback: false };
 }

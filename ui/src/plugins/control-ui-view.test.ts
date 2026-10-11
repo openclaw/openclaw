@@ -80,7 +80,13 @@ function mountSurface(initial?: ControlUiReplacement<"workspace" | "composer">) 
     sessions: {},
     agents: {},
     navigation: {},
-    ui: {},
+    ui: {
+      invalidate: () => {
+        for (const listener of listeners) {
+          listener();
+        }
+      },
+    },
     components: {},
   } as unknown as ControlUiHost;
   const reportError = vi.fn();
@@ -149,26 +155,19 @@ describe("native UI built-in delegation", () => {
     await vi.waitFor(() => expect(host.querySelector(".companion-action")).not.toBeNull());
   });
 
-  it.each(["delegated", "failing"] as const)(
-    "uses only built-in controls for a %s replacement composer",
-    async (mode) => {
-      const replacement: ControlUiReplacement<"composer"> = {
-        id: "composer",
-        label: "Custom composer",
-        surface: "composer",
-        mount(container, context) {
-          if (mode === "failing") {
-            throw new Error("Composer failed");
-          }
-          return { dispose: context.mountDefault(container) };
-        },
-      };
-      const { host } = mountSurface(replacement);
-      await vi.waitFor(() => expect(host.querySelector(".builtin-action")).not.toBeNull());
-      expect(host.querySelectorAll(".builtin-action")).toHaveLength(1);
-      expect(host.querySelector(".companion-action")).toBeNull();
-    },
-  );
+  it("uses only built-in controls when a replacement composer fails", async () => {
+    const { host } = mountSurface({
+      id: "composer",
+      label: "Custom composer",
+      surface: "composer",
+      mount() {
+        throw new Error("Composer failed");
+      },
+    });
+    await vi.waitFor(() => expect(host.querySelector(".builtin-action")).not.toBeNull());
+    expect(host.querySelectorAll(".builtin-action")).toHaveLength(1);
+    expect(host.querySelector(".companion-action")).toBeNull();
+  });
 
   it("restores host controls when a replacement stops delegating to the built-in", async () => {
     let stopDefault: (() => void) | undefined;
@@ -182,6 +181,7 @@ describe("native UI built-in delegation", () => {
       },
     });
     await vi.waitFor(() => expect(host.querySelector(".builtin-action")).not.toBeNull());
+    expect(host.querySelectorAll(".builtin-action")).toHaveLength(1);
     expect(host.querySelector(".companion-action")).toBeNull();
     stopDefault?.();
     await vi.waitFor(() => expect(host.querySelector(".companion-action")).not.toBeNull());
@@ -428,6 +428,52 @@ describe("native UI built-in delegation", () => {
     expect(reportError).toHaveBeenCalledWith("review", failure);
     host.remove();
     expect(listeners.size).toBe(0);
+  });
+
+  it("aborts an invalidated view that fails during update and remounts it on retry", async () => {
+    const roots: HTMLElement[] = [];
+    const signals: AbortSignal[] = [];
+    const dispose = vi.fn();
+    const failure = new Error("Deferred page unavailable");
+    let failUpdate = false;
+    let invalidate = () => {};
+    const { host, reportError } = mountSurface({
+      id: "deferred",
+      label: "Deferred workspace",
+      surface: "workspace",
+      mount(container, context) {
+        roots.push(container);
+        signals.push(context.signal);
+        invalidate = context.host.ui.invalidate;
+        container.textContent = "Page content";
+        return {
+          update() {
+            if (failUpdate) {
+              throw failure;
+            }
+          },
+          dispose,
+        };
+      },
+    });
+    await host.updateComplete;
+    const view = host.querySelector<LitElement>("openclaw-plugin-view")!;
+    await view.updateComplete;
+    failUpdate = true;
+    invalidate();
+    await view.updateComplete;
+    await view.updateComplete;
+    expect(signals[0]?.aborted).toBe(true);
+    expect(dispose).toHaveBeenCalledOnce();
+    expect(reportError).toHaveBeenCalledExactlyOnceWith("review", failure);
+    expect(view.querySelector("[role=alert]")?.textContent).toContain(failure.message);
+    failUpdate = false;
+    view.querySelector<HTMLButtonElement>("[role=alert] button")!.click();
+    await view.updateComplete;
+    expect(roots).toHaveLength(2);
+    expect(roots[1]).not.toBe(roots[0]);
+    expect(signals[1]?.aborted).toBe(false);
+    expect(view.textContent).toBe("Page content");
   });
 
   it("gives append-only views fresh roots across replacement, session changes, and reconnection", async () => {

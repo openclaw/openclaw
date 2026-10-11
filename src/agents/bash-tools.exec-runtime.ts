@@ -3,23 +3,23 @@ import path from "node:path";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { recordDiagnosticToolExecutionDeadline } from "../infra/diagnostic-tool-execution-liveness.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import {
-  type EventSessionRoutingPolicy,
-  resolveEventSessionKeyForPolicy,
-  scopedHeartbeatWakeOptionsForPolicy,
-} from "../infra/event-session-routing.js";
+import type { EventSessionRoutingPolicy } from "../infra/event-session-routing.js";
 import {
   DEFAULT_EXEC_APPROVAL_TIMEOUT_MS,
   resolveExecApprovalAllowedDecisions,
   type ExecApprovalDecision,
   type ExecTarget,
 } from "../infra/exec-approvals.js";
-import { requestHeartbeat } from "../infra/heartbeat-wake.js";
+import {
+  execRequestAbortSignal,
+  retainExecRequestProcess,
+  withExecRequestOwners,
+  type ExecRequestOwner,
+} from "../infra/exec-request-context.js";
 import { findPathKey, mergePathPrepend } from "../infra/path-prepend.js";
-import { withSystemEventOwner } from "../infra/system-event-ownership.js";
-import { enqueueSystemEventWithReceipt } from "../infra/system-events.js";
 import { logWarn } from "../logger.js";
 import { redactToolPayloadText } from "../logging/redact.js";
+import type { SpawnInitiation } from "../process/spawn-initiation.js";
 import type { ManagedRun } from "../process/supervisor/index.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
 import type { RunExit, SpawnInput, TerminationReason } from "../process/supervisor/types.js";
@@ -28,7 +28,6 @@ import type {
   SecretEgressSentinelBinding,
 } from "../secrets/egress-proxy/proxy-server.js";
 import { registerSecretEgressProxyProcess } from "../secrets/egress-proxy/registry.js";
-import { isSubagentSessionKey } from "../sessions/session-key-utils.js";
 /**
  * Bash exec runtime.
  * Spawns host/sandbox processes, manages session updates/backgrounding,
@@ -46,20 +45,20 @@ import {
   addSession,
   appendOutput,
   isProcessSessionIdTaken,
-  recordNotifyOnExitRemoval,
   resolveProcessCleanupMs,
-  tail,
+  waitForExecSession,
 } from "./bash-process-registry.js";
 import { emitExecProcessCompleted } from "./bash-tools.exec-diagnostics.js";
 import { prepareHostExecSpawn } from "./bash-tools.exec-host-spawn.js";
+import { createExecLaunchLifecycle } from "./bash-tools.exec-launch.js";
+import { maybeNotifyOnExit, prepareExecExitNotification } from "./bash-tools.exec-notify.js";
 import {
   appendExecTimeoutRetryGuidance,
-  compactNotifyOutput,
-  renderExecExitLabel,
   renderExecOutputText,
   renderExecUpdateText,
 } from "./bash-tools.exec-output.js";
 import { settleExecProcessExit } from "./bash-tools.exec-settlement.js";
+import { isRequestedExecTargetAllowed } from "./bash-tools.exec-target.js";
 import type {
   ExecExitFailureKind,
   ExecProcessOutcome,
@@ -77,21 +76,6 @@ import {
   withoutGatewayToolCallerIdentity,
 } from "./tools/gateway-caller-context.js";
 export { applyPathPrepend, normalizePathPrepend } from "../infra/path-prepend.js";
-
-export { execSchema } from "./bash-tools.schemas.js";
-
-export class ExecProcessPreflightError extends Error {
-  constructor(readonly result: AgentToolResult<ExecToolDetails>) {
-    super("exec denied by final preflight");
-  }
-
-  static unwrap(error: unknown): AgentToolResult<ExecToolDetails> {
-    if (error instanceof ExecProcessPreflightError) {
-      return error.result;
-    }
-    throw error;
-  }
-}
 
 function resolveExecTimeoutMs(timeoutSec: number | null | undefined): number | undefined {
   if (typeof timeoutSec !== "number" || !Number.isFinite(timeoutSec) || timeoutSec <= 0) {
@@ -117,8 +101,6 @@ export const DEFAULT_PENDING_MAX_OUTPUT = clampWithDefault(
 /** Fallback PATH used when the process environment has no PATH. */
 export const DEFAULT_PATH =
   process.env.PATH ?? "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
-/** Tail length used in background completion notifications. */
-const DEFAULT_NOTIFY_TAIL_CHARS = 400;
 /** Default time an approval can remain pending. */
 export const DEFAULT_APPROVAL_TIMEOUT_MS = DEFAULT_EXEC_APPROVAL_TIMEOUT_MS;
 /** Gateway request timeout for approval registration/wait calls. */
@@ -140,27 +122,6 @@ export type ExecProcessHandle = {
 /** Renders an exec target label, preserving `auto`. */
 export function renderExecTargetLabel(target: ExecTarget) {
   return target;
-}
-
-/** Returns true when a per-call target override is allowed by configured policy. */
-export function isRequestedExecTargetAllowed(params: {
-  configuredTarget: ExecTarget;
-  requestedTarget: ExecTarget;
-  sandboxAvailable?: boolean;
-}) {
-  if (params.requestedTarget === params.configuredTarget) {
-    return true;
-  }
-  if (params.configuredTarget === "auto") {
-    if (
-      params.sandboxAvailable &&
-      (params.requestedTarget === "gateway" || params.requestedTarget === "node")
-    ) {
-      return false;
-    }
-    return true;
-  }
-  return false;
 }
 
 /** Resolves configured/requested/elevated exec target into an effective host. */
@@ -249,80 +210,6 @@ export function applyShellPath(env: Record<string, string>, shellPath?: string |
   const merged = mergePathPrepend(env[pathKey], entries);
   if (merged) {
     env[pathKey] = merged;
-  }
-}
-
-function maybeNotifyOnExit(
-  session: ProcessSession,
-  status: "completed" | "failed",
-  subagentSession: boolean,
-) {
-  if (
-    !session.backgrounded ||
-    !session.notifyOnExit ||
-    session.exitNotified ||
-    session.terminalPollObserved
-  ) {
-    return;
-  }
-  const sessionKey = session.sessionKey?.trim();
-  if (!sessionKey) {
-    return;
-  }
-  session.exitNotified = true;
-  // Requested stops must not wake another turn to relay leftover output.
-  if (session.exitReason === "manual-cancel" && session.finalizationFailed !== true) {
-    return;
-  }
-  const exitLabel = renderExecExitLabel(session);
-  const output = compactNotifyOutput(
-    tail(session.tail || session.aggregated || "", DEFAULT_NOTIFY_TAIL_CHARS),
-  );
-  if (
-    status === "completed" &&
-    session.exitCode === 0 &&
-    !output &&
-    session.notifyOnExitEmptySuccess !== true
-  ) {
-    return;
-  }
-  const summary = output
-    ? `Exec ${status} (${session.id.slice(0, 8)}, ${exitLabel}) :: ${output}`
-    : `Exec ${status} (${session.id.slice(0, 8)}, ${exitLabel})`;
-  const eventText = appendExecTimeoutRetryGuidance(summary, session.exitReason);
-  const eventRouting = session.eventRouting ?? {};
-  const eventSessionKey = resolveEventSessionKeyForPolicy(sessionKey, eventRouting);
-  const eventOptions = {
-    sessionKey: eventSessionKey,
-    contextKey: `exec:${session.id}`,
-    deliveryContext: session.notifyDeliveryContext,
-  };
-  const remove = enqueueSystemEventWithReceipt(
-    eventText,
-    session.agentId ? withSystemEventOwner(eventOptions, session.agentId) : eventOptions,
-    { allowDuplicate: true },
-  );
-  if (remove) {
-    recordNotifyOnExitRemoval(session, remove);
-  }
-  // Subagent sessions receive exec results via process poll and announce flow;
-  // the heartbeat would fall back to the main session and cause spurious wakes.
-  if (!subagentSession && !isSubagentSessionKey(sessionKey)) {
-    const wakeOptions = scopedHeartbeatWakeOptionsForPolicy(
-      sessionKey,
-      {
-        source: "exec-event" as const,
-        intent: "event" as const,
-        reason: "exec-event",
-        coalesceMs: 0,
-      },
-      eventRouting,
-    );
-    requestHeartbeat(
-      sessionKey === "global" && session.agentId
-        ? { ...wakeOptions, agentId: session.agentId }
-        : wakeOptions,
-    );
   }
 }
 
@@ -523,6 +410,8 @@ export async function runExecProcess({
   onUpdate: initialOnUpdate,
   beforeSpawn: initialBeforeSpawn,
   assertCurrent: initialAssertCurrent,
+  initiateSpawn: initialInitiateSpawn,
+  releaseSpawn: initialReleaseSpawn,
   onSettledBeforeNotify: initialOnSettledBeforeNotify,
   ...opts
 }: {
@@ -547,12 +436,15 @@ export async function runExecProcess({
   /** Start-time subagent identity resolved from the persisted spawn envelope. */
   subagentSession?: boolean;
   notifyOnExitEmptySuccess?: boolean;
+  requestOwners?: readonly ExecRequestOwner[];
   scopeKey?: string;
   sessionKey?: string;
   agentId?: string;
   /** Start-time routing policy for detached exec system events. */
   eventRouting?: EventSessionRoutingPolicy;
   notifyDeliveryContext?: DeliveryContext;
+  /** The command was started by a conversation turn, not heartbeat or automation work. */
+  notifyFromConversationTurn?: boolean;
   timeoutSec: number | null;
   /** Whether exec may return a supervised session for later continuation. */
   processContinuationAvailable?: boolean;
@@ -565,9 +457,16 @@ export async function runExecProcess({
   beforeSpawn?: () => Promise<AgentToolResult<ExecToolDetails> | undefined>;
   /** Rechecks host policy at the supervisor's final synchronous spawn boundary. */
   assertCurrent?: () => void;
+  initiateSpawn?: SpawnInitiation;
+  releaseSpawn?: (reason?: "retry") => void;
 }): Promise<ExecProcessHandle> {
+  const requestSignal = execRequestAbortSignal(opts.requestOwners);
+  const startupSignal =
+    requestSignal && initialStartupSignal
+      ? AbortSignal.any([requestSignal, initialStartupSignal])
+      : (requestSignal ?? initialStartupSignal);
   let assertSourceActive: (() => void) | undefined =
-    captureAgentToolSourceExecutionGuard(initialStartupSignal);
+    captureAgentToolSourceExecutionGuard(startupSignal);
   let operatorAuthority = getGatewayToolCallerIdentity()?.operatorAuthority;
   const operatorSignal = operatorAuthority?.signal;
   let releaseOperatorAuthority: (() => void) | undefined;
@@ -581,35 +480,47 @@ export async function runExecProcess({
     OPENCLAW_SHELL: "exec",
   };
 
-  const session: ProcessSession = {
-    id: sessionId,
-    command: opts.command,
-    scopeKey: opts.scopeKey,
-    sessionKey: opts.sessionKey,
-    cleanupMs: resolveProcessCleanupMs(opts.cleanupMs),
-    agentId: opts.agentId,
-    eventRouting: opts.eventRouting,
-    notifyDeliveryContext: normalizeDeliveryContext(opts.notifyDeliveryContext),
-    notifyOnExit: opts.notifyOnExit,
-    notifyOnExitEmptySuccess: opts.notifyOnExitEmptySuccess === true,
-    exitNotified: false,
-    startedAt,
-    cwd: opts.workdir,
-    maxOutputChars: opts.maxOutput,
-    pendingMaxOutputChars: opts.pendingMaxOutput,
-    totalOutputChars: 0,
-    pendingOutput: [],
-    pendingStdoutChars: 0,
-    pendingStderrChars: 0,
-    pendingOutputDropped: false,
-    aggregated: "",
-    tail: "",
-    exited: false,
-    truncated: false,
-    backgrounded: false,
-    cursorKeyMode: opts.usePty ? "unknown" : "normal",
-  };
+  const session: ProcessSession = withExecRequestOwners(
+    {
+      id: sessionId,
+      command: opts.command,
+      scopeKey: opts.scopeKey,
+      sessionKey: opts.sessionKey,
+      cleanupMs: resolveProcessCleanupMs(opts.cleanupMs),
+      agentId: opts.agentId,
+      eventRouting: opts.eventRouting,
+      notifyDeliveryContext: normalizeDeliveryContext(opts.notifyDeliveryContext),
+      notifyFromConversationTurn: opts.notifyFromConversationTurn === true,
+      notifyOnExit: opts.notifyOnExit,
+      notifyOnExitEmptySuccess: opts.notifyOnExitEmptySuccess === true,
+      exitNotified: false,
+      startedAt,
+      cwd: opts.workdir,
+      maxOutputChars: opts.maxOutput,
+      pendingMaxOutputChars: opts.pendingMaxOutput,
+      totalOutputChars: 0,
+      pendingOutput: [],
+      pendingStdoutChars: 0,
+      pendingStderrChars: 0,
+      pendingOutputDropped: false,
+      aggregated: "",
+      tail: "",
+      exited: false,
+      truncated: false,
+      backgrounded: false,
+      cursorKeyMode: opts.usePty ? "unknown" : "normal",
+    },
+    opts.requestOwners,
+  );
   withoutGatewayToolCallerIdentity(() => addSession(session));
+  if (opts.requestOwners?.length) {
+    retainExecRequestProcess(opts.requestOwners, waitForExecSession(session));
+  }
+
+  const notificationTarget = prepareExecExitNotification(session, opts.subagentSession === true);
+  if (notificationTarget) {
+    await notificationTarget;
+  }
 
   // Foreground delivery keeps its caller context only until yield, abort, or exit.
   // Clearing the callback also releases the completed turn's captured authority.
@@ -692,6 +603,12 @@ export async function runExecProcess({
       token: sandboxFinalizeToken,
     });
   };
+  const runtimeErrorOutcome = (error: unknown) =>
+    buildExecRuntimeErrorOutcome({
+      error,
+      aggregated: session.aggregated.trim(),
+      durationMs: Date.now() - startedAt,
+    });
   const finalizeAndSettleSession = async (
     outcome: ExecProcessOutcome,
   ): Promise<ExecProcessOutcome> => {
@@ -702,7 +619,11 @@ export async function runExecProcess({
       if (!opts.sandbox && managedRun?.waitForExtinction) {
         // Root completion does not release descendants that retained the group's lineage fd.
         managedRun.cancel();
-        await managedRun.waitForExtinction();
+        const extinction = await managedRun.waitForExtinction();
+        session.cleanupUncertain = extinction?.status === "uncertain";
+        if (session.requestCancelled && session.cleanupUncertain) {
+          throw new Error("Command descendant cleanup could not be confirmed");
+        }
       }
       if (outcome.exitReason !== "exit") {
         beginSandboxTermination();
@@ -729,11 +650,7 @@ export async function runExecProcess({
       recordAgentCleanupFailure();
       const detail = redactToolPayloadText(formatErrorMessage(error));
       if (outcome.status === "completed") {
-        finalOutcome = buildExecRuntimeErrorOutcome({
-          error: detail,
-          aggregated: session.aggregated.trim(),
-          durationMs: Date.now() - startedAt,
-        });
+        finalOutcome = runtimeErrorOutcome(detail);
       } else {
         finalOutcome = { ...outcome, reason: joinExecFailureOutput(outcome.reason, detail) };
         logWarn(`exec: finalization after process failure failed (${detail}).`);
@@ -748,12 +665,7 @@ export async function runExecProcess({
         onSettledBeforeNotify,
         notifyOnExit: (settledSession, status) =>
           maybeNotifyOnExit(settledSession, status, opts.subagentSession === true),
-        failureOutcome: (error) =>
-          buildExecRuntimeErrorOutcome({
-            error,
-            aggregated: session.aggregated.trim(),
-            durationMs: Date.now() - startedAt,
-          }),
+        failureOutcome: runtimeErrorOutcome,
       });
     }
     return finalOutcome;
@@ -789,16 +701,33 @@ export async function runExecProcess({
   };
 
   let managedRun: ManagedRun | null = null;
-  const onOperatorRevoked = () => managedRun?.cancel("manual-cancel");
-  let usingPty = opts.usePty && !opts.sandbox;
-  const assertPreSpawnAuthorized = async () => {
-    assertSourceActive?.();
-    const denied = await beforeSpawn?.();
-    assertSourceActive?.();
-    if (denied) {
-      throw new ExecProcessPreflightError(denied);
+  const onRequestCancelled = () => {
+    session.requestCancelled = true;
+    session.cancellationRequested = true;
+    onUpdate = undefined;
+    if (managedRun) {
+      managedRun.cancel("manual-cancel");
+    } else {
+      // The supervisor reserves the process identity before asynchronous launch completes.
+      supervisor.cancel(sessionId, "manual-cancel");
     }
+    beginSandboxTermination();
   };
+  requestSignal?.addEventListener("abort", onRequestCancelled, { once: true });
+  if (requestSignal?.aborted) {
+    onRequestCancelled();
+  }
+  const launchLifecycle = createExecLaunchLifecycle(initialInitiateSpawn, initialReleaseSpawn);
+  const onOperatorRevoked = () => managedRun?.cancel("manual-cancel");
+  const releaseExecutionContext = () => {
+    onSettledBeforeNotify = undefined;
+    operatorSignal?.removeEventListener("abort", onOperatorRevoked);
+    releaseOperatorAuthority?.();
+    releaseOperatorAuthority = undefined;
+    requestSignal?.removeEventListener("abort", onRequestCancelled);
+  };
+  let usingPty = opts.usePty && !opts.sandbox;
+  const assertPreSpawnAuthorized = () => launchLifecycle.prepare(assertSourceActive, beforeSpawn);
   const spawn = async (input: SpawnInput) => {
     const assertSourceCurrent = assertSourceActive;
     const assertOperatorCurrent = operatorAuthority?.assertCurrent;
@@ -827,6 +756,7 @@ export async function runExecProcess({
           },
           assertCurrent,
           beforeSpawn: assertHostPolicyCurrent,
+          initiateSpawn: launchLifecycle.wrap(assertCurrent, assertHostPolicyCurrent),
         }),
       );
     } catch (error) {
@@ -861,6 +791,11 @@ export async function runExecProcess({
           argv: spawnSpec.argv,
         });
       } catch (err) {
+        if (launchLifecycle.initiated) {
+          launchLifecycle.release();
+          throw err;
+        }
+        launchLifecycle.release("retry");
         assertSourceActive?.();
         const warning = `Warning: PTY spawn failed (${String(err)}); retrying without PTY for \`${opts.command}\`.`;
         logWarn(
@@ -885,19 +820,11 @@ export async function runExecProcess({
       onOperatorRevoked();
     }
   } catch (error) {
+    launchLifecycle.release();
     onUpdate = undefined;
-    const outcome = await finalizeAndSettleSession(
-      buildExecRuntimeErrorOutcome({
-        error,
-        aggregated: session.aggregated.trim(),
-        durationMs: Date.now() - startedAt,
-      }),
-    ).finally(() => {
-      onSettledBeforeNotify = undefined;
-      operatorSignal?.removeEventListener("abort", onOperatorRevoked);
-      releaseOperatorAuthority?.();
-      releaseOperatorAuthority = undefined;
-    });
+    const outcome = await finalizeAndSettleSession(runtimeErrorOutcome(error)).finally(
+      releaseExecutionContext,
+    );
     emitExecProcessCompleted({
       command: opts.command,
       mode: usingPty ? "pty" : "child",
@@ -907,6 +834,7 @@ export async function runExecProcess({
     });
     throw error;
   } finally {
+    launchLifecycle.dispose();
     beforeSpawn = undefined;
     assertPolicyCurrent = undefined;
     assertSourceActive = undefined;
@@ -932,11 +860,7 @@ export async function runExecProcess({
           processContinuationAvailable: opts.processContinuationAvailable !== false,
         });
       } catch (error) {
-        outcome = buildExecRuntimeErrorOutcome({
-          error,
-          aggregated: session.aggregated.trim(),
-          durationMs: Date.now() - startedAt,
-        });
+        outcome = runtimeErrorOutcome(error);
       } finally {
         // Release foreground delivery before finalization marks the record exited.
         onUpdate = undefined;
@@ -951,10 +875,7 @@ export async function runExecProcess({
       });
       return finalOutcome;
     } finally {
-      onSettledBeforeNotify = undefined;
-      operatorSignal?.removeEventListener("abort", onOperatorRevoked);
-      releaseOperatorAuthority?.();
-      releaseOperatorAuthority = undefined;
+      releaseExecutionContext();
     }
   });
 

@@ -97,8 +97,12 @@ jobs:
           cache-mode: restore
           install-bun: "false"
 
-      - name: Test native dashboard authentication bridge
-        run: node --test apps/linux/scripts/test-native-control-auth.mjs apps/linux/scripts/stage-runtime.test.mjs
+      - name: Test native dashboard authentication and runtime boundaries
+        run: |
+          node --test \
+            apps/linux/scripts/test-native-control-auth.mjs \
+            apps/linux/scripts/test-runtime-boundary.mjs \
+            apps/linux/scripts/test-stage-runtime.mjs
 
       - name: Test packaged runtime ABI scanner
         run: |
@@ -130,7 +134,9 @@ jobs:
 
       - name: Build native inline browser candidate
         working-directory: apps/linux/src-tauri
-        run: cargo +stable build --locked
+        run: |
+          node ../scripts/stage-runtime.mjs
+          cargo +stable build --locked
 
       - name: Test native inline browser
         id: inline-browser

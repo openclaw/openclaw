@@ -146,6 +146,22 @@ Its id must match the plugin manifest. Register contributions through
 | `registerWidget`                        | Native dashboard widget views.                                                                                                          |
 | `registerReplacement`                   | `workspace`, `session-list`, `composer`, `transcript`, or `tool-result`.                                                                |
 
+Set a navigation item's `parent` to another navigation ID in the same plugin to
+show it nested while the parent or a child destination is active; children only
+appear as top-level entries when pinned. Set `defaultVisible: false` to offer an
+item in **Customize**, and call `host.ui.pinNavigation(id)` after registering it
+to append an ordinary saved sidebar pin. Pinning is a no-op for an unknown or
+already pinned ID; call it for a user action such as creation, not on every
+catalog refresh, so a later manual removal stays removed.
+
+Navigation items can supply `actions` with an `id`, `label`, optional `icon` and
+`destructive` flag, and a `run` callback. The sidebar opens these actions on
+right-click, **Shift+F10**, or the context-menu key on the focused link, including
+nested and pinned entries. Selecting an action closes the menu; **Escape** or an
+outside click dismisses it. Use `host.ui.isNavigationPinned(id)` to read a saved
+pin and `host.ui.unpinNavigation(id)` to remove it idempotently. Plugins choose
+which actions to offer and own confirmation for destructive actions.
+
 For a dashboard widget, also register a backend
 `api.session.controls.registerControlUiDescriptor` with `surface: "widget"`,
 the same widget `id`, and its `requiredScopes`. The Gateway advertises widget
@@ -199,38 +215,6 @@ operations retire when the view stops being presented, even while its DOM and
 host lifetime survive. Use the fresh operations supplied by `update` when the
 view is presented again; previously captured operations remain retired.
 
-Session-header accessories also receive `props.session`, the pane's current
-session snapshot. It can be absent while loading and does not depend on the
-filtered sidebar roster. Changes arrive through the accessory's `update`.
-
-For a standard direct link, register an accessory using the shared browser
-helper. The plugin decides when and where the link appears:
-
-```typescript
-import { createSessionHeaderLink, defineControlUiPlugin } from "openclaw/plugin-sdk/control-ui";
-
-export default defineControlUiPlugin({
-  id: "example-chat",
-  activate(host) {
-    return host.ui.registerAccessory({
-      id: "conversation-origin",
-      placement: "session-header",
-      mount: createSessionHeaderLink(({ conversationLink }) =>
-        conversationLink && URL.parse(conversationLink.url)?.hostname === "chat.example.com"
-          ? conversationLink
-          : undefined,
-      ),
-    });
-  },
-});
-```
-
-The helper is bundled into the plugin's browser code. It creates an HTTP(S)
-anchor with the shared header style, opens directly in a new tab, and removes
-the link when the resolver returns `undefined` or the view is hidden/disposed.
-Without a registered accessory, saved conversation-link metadata creates no
-button. Custom accessory mounts can still render arbitrary HTML, CSS, and JavaScript.
-
 ### Host capabilities
 
 Use the host for shared application behavior:
@@ -253,11 +237,22 @@ filtered, paginated session list. `host.sessions.refresh()` preserves that
 list's filters. Use `host.sessions.observe(query, onChange)` to maintain an
 independent session query without replacing it. The query accepts `agentId`,
 `search`, `archived` (`true`, `false`, or `"all"`), `limit`, `configuredAgentsOnly`,
-`includeGlobal`, `includeUnknown`, `includeDerivedTitles`, and
+`includeGlobal`, `includeUnknown`, `excludeDock`, `includeDerivedTitles`, and
 `includeLastMessage`. The callback receives `{ result, loading, error }`,
 starting with the current snapshot; `result` is null until data is available.
 Results contain `sessions` and the Gateway's `hasMore`, `nextOffset`, and
 `totalCount` pagination metadata.
+
+Create a conversation with `host.sessions.create({ agentId, displayName?, label?,
+surface? })`. `displayName` is a reusable display title; `label` is a unique
+session label. For a conversation owned by a plugin page's dock, pass
+`surface: "plugin-dock"`. This immutable creation-surface marker hides the
+conversation from ordinary session lists without changing its human creator,
+access, sharing, or sandbox rules. Rows expose `isDock` and `createdSurface`;
+`createdVia` retains its ordinary operator provenance.
+Independent host list queries exclude dock conversations by default; pass
+`excludeDock: false` when deliberately including them.
+The session key remains usable with `host.dock.openSession` and direct reads.
 
 The host fetches the query and keeps it current through session events,
 observer recovery, and its normal deletion handling. `observe` returns
@@ -320,12 +315,57 @@ under `dist/control-ui/<content-hash>/`, then publishes their paths in
 and assets usable. `plugins validate` and `plugins build --check` detect stale
 source, assets, or generated metadata.
 
-The build emits one self-contained JavaScript entry and optional CSS. Embed
-other static assets in the bundle; arbitrary files and split lazy chunks are
+### Solid views
+
+Solid 2 is supported for native plugin views. Use a `.tsx` browser entry and
+declare `solid-js` and `@solidjs/web` as your plugin's runtime dependencies,
+with matching versions. Add `@solidjs/compiler` and `esbuild` to its development
+dependencies. Put `/** @jsxImportSource @solidjs/web */` before the imports in
+each Solid `.tsx` file. This standard JSX pragma selects the plugin's own Solid
+compiler; other JSX files retain esbuild's existing renderer semantics. The
+builder bundles the renderer, and the host does not supply a shared runtime.
+For typechecking, set `jsx: "preserve"` and `jsxImportSource: "@solidjs/web"`.
+
+The framework-neutral view contract stays the same:
+
+```tsx
+/** @jsxImportSource @solidjs/web */
+import { createSignal } from "solid-js";
+import { render } from "@solidjs/web";
+import type { ControlUiView } from "openclaw/plugin-sdk/control-ui";
+
+const mount: ControlUiView = (container, context) => {
+  const [label, setLabel] = createSignal(context.props.label ?? "Ready");
+  const dispose = render(() => <p>{label()}</p>, container);
+  return {
+    update(next) {
+      setLabel(next.props.label ?? "Ready");
+    },
+    dispose,
+  };
+};
+```
+
+Keep one renderer responsible for each container's children and dispose its root
+when the view ends. Solid 2 batches reactive writes; keep synchronous request
+authority and mutation guards with their existing owners.
+
+### Bundle boundaries
+
+The build emits a JavaScript entry, optional CSS, and JavaScript chunks for lazy
+imports. The content hash covers the complete generation, including its chunks.
+CSS remains attached to the entry; loading a JavaScript chunk does not attach
+stylesheets. Authenticated bootstrap advertises the entry, stylesheets, and static
+JavaScript dependencies so the browser can preload them together before the
+Gateway connection completes. Activation still waits for the current catalog,
+asset grants, and all stylesheets; dynamic imports remain lazy.
+Embed other static assets in the bundle; arbitrary files are
 outside this build contract. Imports must be analyzable by esbuild: literal
 paths and supported glob imports work; unresolved dynamic imports, indirect
-`require` calls, and `require.resolve` are rejected. Each asset is limited to
-4 MiB, with an 8 MiB limit for the whole plugin browser build.
+`require` calls, and `require.resolve` are rejected. Import validation checks the
+emitted chunks after tree-shaking: unused dependency loaders may be removed, but
+every retained browser import must resolve to a bundled chunk. Each asset is limited to
+4 MiB, with an 8 MiB and 128-asset limit for the whole plugin browser build.
 
 Plugins with prebuilt browser bundles can omit `package.json.openclaw.controlUi`
 and declare the built entry and styles in `openclaw.plugin.json.controlUi`.

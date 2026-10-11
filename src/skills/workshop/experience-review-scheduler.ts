@@ -1,29 +1,25 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { EmbeddedForegroundPromptContext } from "../../agents/embedded-agent-runner/run/params.js";
 import { getCanonicalSkillWorkspace } from "../../agents/skill-workshop-workspace-context.js";
+import { isInternalSessionEffectsKey } from "../../config/sessions/internal-session-key.js";
 import type { TranscriptEntryAnchor } from "../../config/sessions/transcript-entry-anchor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
-import { runInDetachedAsyncContext } from "../../shared/async-work-scope.js";
+import { runInDetachedAsyncContext } from "../../shared/detached-async-context.js";
 import type { RunSkillUsage } from "../runtime/run-usage.js";
 import { resolveSkillWorkshopConfig } from "./config.js";
-import {
-  countSkillModelIterations,
-  selectCurrentSkillTurnMessages,
-} from "./experience-review-prompt.js";
 
-const EXPERIENCE_REVIEW_MIN_MODEL_ITERATIONS = 10;
+/** Model iterations a session accumulates across turns before a review is due. */
+const EXPERIENCE_REVIEW_ITERATION_THRESHOLD = 10;
 const EXPERIENCE_REVIEW_IDLE_MS = 30_000;
 const EXPERIENCE_REVIEW_RETRY_IDLE_MS = 30_000;
 const EXPERIENCE_REVIEW_MAX_PENDING = 32;
+const EXPERIENCE_REVIEW_MAX_COUNTERS = 1024;
 const EXPERIENCE_REVIEW_BLOCKED_TRIGGERS = new Set(["cron", "heartbeat", "memory", "overflow"]);
-const EXPERIENCE_REVIEW_BLOCKED_SESSION_SEGMENTS = new Set([
-  "cron",
-  "hook",
-  "subagent",
-  "skill-workshop-review",
-]);
+const EXPERIENCE_REVIEW_BLOCKED_SESSION_SEGMENTS = new Set(["acp", "cron", "hook", "subagent"]);
 
 const log = createSubsystemLogger("skills/workshop");
 
@@ -55,6 +51,8 @@ export type SkillExperienceReviewParams = {
   usedSkills?: readonly RunSkillUsage[];
   config: OpenClawConfig;
   source?: TranscriptEntryAnchor;
+  /** The foreground turn itself changed a Workshop skill, so its learning is already saved. */
+  workshopMutated?: boolean;
 };
 
 export type ExperienceReviewCandidate = {
@@ -87,12 +85,7 @@ type PendingExperienceReview = {
 function isEligibleContext(ctx: ExperienceReviewAgentContext): boolean {
   // Only harnesses that report both the resolved model and actual host-side
   // Workshop availability may schedule. Other runtimes fail closed here.
-  if (
-    ctx.compacted === true ||
-    ctx.skillWorkshopAvailable !== true ||
-    !ctx.modelProviderId?.trim() ||
-    !ctx.modelId?.trim()
-  ) {
+  if (ctx.skillWorkshopAvailable !== true || !ctx.modelProviderId?.trim() || !ctx.modelId?.trim()) {
     return false;
   }
   const trigger = ctx.foregroundPromptContext.trigger?.trim().toLowerCase();
@@ -100,7 +93,12 @@ function isEligibleContext(ctx: ExperienceReviewAgentContext): boolean {
     return false;
   }
   const sessionKey = ctx.sessionKey?.trim().toLowerCase();
-  if (!sessionKey || sessionKey.includes("active-memory")) {
+  // Background Workshop runs use internal session-effects keys and must never review themselves.
+  if (
+    !sessionKey ||
+    sessionKey.includes("active-memory") ||
+    isInternalSessionEffectsKey(sessionKey)
+  ) {
     return false;
   }
   return !sessionKey
@@ -108,7 +106,37 @@ function isEligibleContext(ctx: ExperienceReviewAgentContext): boolean {
     .some((segment) => EXPERIENCE_REVIEW_BLOCKED_SESSION_SEGMENTS.has(segment));
 }
 
+/**
+ * Provider-reported iterations win; otherwise count assistant messages after the last user
+ * message. A zero report is no report: Codex counts only raw response events, which resumed
+ * threads do not emit.
+ */
+function resolveTurnModelIterations(params: SkillExperienceReviewParams): number {
+  const reported = params.ctx.modelIterations;
+  if (reported !== undefined && Number.isSafeInteger(reported) && reported > 0) {
+    return reported;
+  }
+  const { messages } = params.event;
+  let count = 0;
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (isRecord(message) && message.role === "user") {
+      break;
+    }
+    if (isRecord(message) && message.role === "assistant") {
+      count += 1;
+    }
+  }
+  return count;
+}
+
+/**
+ * Counts model iterations per (agent, session) across turns and queues one background review
+ * after 10 iterations since its last queued review or its last own Workshop edit.
+ * Reviews wait for a quiet period and run one at a time.
+ */
 export function createSkillExperienceReviewScheduler(deps: ExperienceReviewSchedulerDeps) {
+  const iterationsBySession = new Map<string, number>();
   const pendingBySession = new Map<string, PendingExperienceReview>();
   let reviewInFlight = false;
   const setTimer = deps.setTimer ?? ((callback, delayMs) => setTimeout(callback, delayMs));
@@ -154,6 +182,15 @@ export function createSkillExperienceReviewScheduler(deps: ExperienceReviewSched
     timer.unref?.();
   };
 
+  const cancel = (key: string) => {
+    const pending = pendingBySession.get(key);
+    if (pending?.timer) {
+      clearTimer(pending.timer);
+    }
+    pendingBySession.delete(key);
+    iterationsBySession.delete(key);
+  };
+
   return {
     schedule(params: SkillExperienceReviewParams): void {
       const sessionKey = params.ctx.sessionKey?.trim();
@@ -167,65 +204,43 @@ export function createSkillExperienceReviewScheduler(deps: ExperienceReviewSched
       // Unqualified keys such as global still belong to one foreground agent.
       const key = JSON.stringify([params.ctx.foregroundPromptContext.agentId, sessionKey]);
       const existing = pendingBySession.get(key);
-      // Errored completions (provider/prompt failures) are transient environment
-      // noise, not learnable evidence, and a same-model review would likely hit
-      // the same failure. User aborts carry no error and stay eligible: deep
-      // interrupted turns are exactly where corrective evidence lives.
-      const errored = typeof params.event.error === "string" && params.event.error.trim() !== "";
-      if (
-        existing &&
-        errored &&
-        params.ctx.runId?.trim() &&
-        params.ctx.runId === existing.candidate.ctx.runId
-      ) {
-        if (existing.timer) {
-          clearTimer(existing.timer);
-        }
-        pendingBySession.delete(key);
-        return;
-      }
-      // Quiet time follows all later foreground work in the session. Candidate
-      // eligibility only decides whether that completion can replace the evidence.
+      // Quiet time follows all later foreground work in the session.
       if (existing) {
         arm(key, existing, EXPERIENCE_REVIEW_IDLE_MS);
       }
-      if (errored) {
+      // Errored completions (provider/prompt failures) are environment noise, not
+      // learnable evidence. User aborts carry no error and stay eligible.
+      if (typeof params.event.error === "string" && params.event.error.trim() !== "") {
         log.debug(`experience review skipped: reason=errored-completion session=${sessionKey}`);
         return;
       }
-      if (resolveSkillWorkshopConfig(params.config).autonomous.mode === "off") {
+      if (resolveSkillWorkshopConfig(params.config).autonomous.mode !== "auto") {
+        cancel(key);
         return;
       }
       if (!isEligibleContext(params.ctx)) {
         log.debug(`experience review skipped: reason=ineligible-context session=${sessionKey}`);
         return;
       }
+      // The foreground turn already saved its learning; an older queued review is stale.
+      if (params.workshopMutated) {
+        cancel(key);
+        return;
+      }
+      const iterations = (iterationsBySession.get(key) ?? 0) + resolveTurnModelIterations(params);
+      iterationsBySession.delete(key);
+      if (iterations < EXPERIENCE_REVIEW_ITERATION_THRESHOLD) {
+        // Re-insert so the least recently active session is the one pruned.
+        iterationsBySession.set(key, iterations);
+        pruneMapToMaxSize(iterationsBySession, EXPERIENCE_REVIEW_MAX_COUNTERS);
+        return;
+      }
       const workspaceDir = getCanonicalSkillWorkspace() ?? params.ctx.workspaceDir?.trim();
-      if (!workspaceDir) {
-        log.debug(`experience review skipped: reason=missing-workspace session=${sessionKey}`);
-        return;
-      }
-
-      const turnMessages = selectCurrentSkillTurnMessages(params.event.messages);
-      // Native harnesses can report exact provider iterations even when their
-      // transcript projection has a different assistant-message cardinality.
-      const reportedModelIterations = params.ctx.modelIterations;
-      const modelIterations =
-        reportedModelIterations === undefined
-          ? countSkillModelIterations(turnMessages)
-          : Number.isSafeInteger(reportedModelIterations) && reportedModelIterations >= 0
-            ? reportedModelIterations
-            : 0;
-      if (modelIterations < EXPERIENCE_REVIEW_MIN_MODEL_ITERATIONS) {
-        log.debug(
-          `experience review skipped: reason=below-depth-bar iterations=${modelIterations} session=${sessionKey}`,
-        );
-        return;
-      }
-      const { source } = params;
       const modelProviderId = params.ctx.modelProviderId?.trim();
       const modelId = params.ctx.modelId?.trim();
-      if (!source || !modelProviderId || !modelId) {
+      const { source } = params;
+      if (!workspaceDir || !source || !modelProviderId || !modelId) {
+        log.debug(`experience review skipped: reason=missing-context session=${sessionKey}`);
         return;
       }
       if (!existing && pendingBySession.size >= EXPERIENCE_REVIEW_MAX_PENDING) {
@@ -255,9 +270,7 @@ export function createSkillExperienceReviewScheduler(deps: ExperienceReviewSched
       pending.candidate = candidate;
       pendingBySession.set(key, pending);
       arm(key, pending, EXPERIENCE_REVIEW_IDLE_MS);
-      log.debug(
-        `experience review scheduled: session=${sessionKey} iterations=${modelIterations} aborted=${!params.event.success}`,
-      );
+      log.debug(`experience review scheduled: session=${sessionKey} iterations=${iterations}`);
     },
     clear(): void {
       for (const pending of pendingBySession.values()) {
@@ -266,6 +279,7 @@ export function createSkillExperienceReviewScheduler(deps: ExperienceReviewSched
         }
       }
       pendingBySession.clear();
+      iterationsBySession.clear();
     },
   };
 }

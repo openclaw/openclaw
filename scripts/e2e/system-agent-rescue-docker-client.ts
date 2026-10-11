@@ -170,69 +170,40 @@ async function main() {
 
   const gatewayRestarts: string[] = [];
   const gatewayCommand = makeParams("/openclaw restart gateway", cfg).command;
-  const gatewayPlan = await runSystemAgentRescueMessage({
-    cfg,
-    command: gatewayCommand,
-    commandBody: "/openclaw restart gateway",
-    agentId: "default",
-    isGroup: false,
-    deps: {
-      runGatewayRestart: async () => {
-        gatewayRestarts.push("restart");
-      },
+  const restartDeps = {
+    runGatewayRestart: async () => {
+      gatewayRestarts.push("restart");
     },
-  });
+  };
+  const runGatewayCommand = (
+    commandBody: string,
+    deps?: Parameters<typeof runSystemAgentRescueMessage>[0]["deps"],
+  ) =>
+    runSystemAgentRescueMessage({
+      cfg,
+      command: gatewayCommand,
+      commandBody,
+      agentId: "default",
+      isGroup: false,
+      deps,
+    });
+  const gatewayPlan = await runGatewayCommand("/openclaw restart gateway", restartDeps);
   assert(
     gatewayPlan?.includes("Reply /openclaw yes to apply"),
     "gateway restart did not require approval",
   );
-  const pluginList = await runSystemAgentRescueMessage({
-    cfg,
-    command: gatewayCommand,
-    commandBody: "/openclaw plugins list",
-    agentId: "default",
-    isGroup: false,
-    deps: {
-      runPluginsList: async (runtime) => runtime.log("plugin rows"),
-    },
+  const pluginList = await runGatewayCommand("/openclaw plugins list", {
+    runPluginsList: async (runtime) => runtime.log("plugin rows"),
   });
   assert(pluginList === "plugin rows", "read-only rescue command did not run");
-  const revokedApproval = await runSystemAgentRescueMessage({
-    cfg,
-    command: gatewayCommand,
-    commandBody: "/openclaw yes",
-    agentId: "default",
-    isGroup: false,
-    deps: {
-      runGatewayRestart: async () => {
-        gatewayRestarts.push("restart");
-      },
-    },
-  });
+  const revokedApproval = await runGatewayCommand("/openclaw yes", restartDeps);
   assert(
     revokedApproval === "No pending OpenClaw rescue change is waiting for approval.",
     "fresh rescue command did not revoke the older pending change",
   );
   assert(gatewayRestarts.length === 0, "revoked gateway restart was invoked");
-  await runSystemAgentRescueMessage({
-    cfg,
-    command: gatewayCommand,
-    commandBody: "/openclaw restart gateway",
-    agentId: "default",
-    isGroup: false,
-  });
-  const gatewayApplied = await runSystemAgentRescueMessage({
-    cfg,
-    command: gatewayCommand,
-    commandBody: "/openclaw yes",
-    agentId: "default",
-    isGroup: false,
-    deps: {
-      runGatewayRestart: async () => {
-        gatewayRestarts.push("restart");
-      },
-    },
-  });
+  await runGatewayCommand("/openclaw restart gateway");
+  const gatewayApplied = await runGatewayCommand("/openclaw yes", restartDeps);
   assert(
     gatewayApplied?.includes("[openclaw] done: gateway.restart"),
     "gateway restart did not apply",

@@ -30,7 +30,7 @@ In Control UI sessions, a Canvas widget can also be pinned to the session dashbo
 
 For browser embedding, the wrapper document injects six small host bridges around the widget code:
 
-- A size reporter posts the rendered content height to the embedding chat. The chat clamps that height and fits the iframe (48 to 8000 pixels).
+- A size reporter posts the rendered content height, including child margins and floats, to the embedding chat. The chat clamps that height and fits the iframe (48 to 8000 pixels).
 - A host bridge defines a global `sendPrompt(text)` helper plus the structured `openclaw.prompt`, `openclaw.state`, `openclaw.data`, and `openclaw.cron` APIs. `sendPrompt(text)` is the fire-and-forget form of `openclaw.prompt.send`. Inline chat prompts retain their private message channel. Dashboard APIs use a view-ticket-bound request channel. See [Interactive widgets](#interactive-widgets) and [Dashboard capabilities](#dashboard-capabilities).
 - An error reporter captures uncaught script and event-handler exceptions and unhandled promise rejections. It sends at most three distinct messages per document load, with messages capped at 500 UTF-16 units, source basenames at 200, and optional integer line and column numbers. The Control UI shows a notice and forwards one report per document and chat session per page load to the Gateway as a session wake event, with an additional shared limit of 10 reports per key per 60 seconds (up to 100 tracked keys). Reports are forwarded to the agent only for widgets rendered within ten minutes of their message. Older restored history shows the notice without waking the agent. If the session already has an active run, the event stays queued and the immediate wake retries until the session lane is free, so the model sees it on its next available turn. The wake turn runs without the originating client capabilities, so `show_widget` can be unavailable there. The report asks the model to reply with the corrected code and show it on the next turn. Native apps do not report runtime errors yet.
 - A theme bridge listens for the Control UI's current design tokens and applies them as CSS variables. It does this on load and again on every theme change.
@@ -243,6 +243,7 @@ elements. This works in inline previews, pinned dashboards, and native panels.
 Small embedded `data:` clips and generated `blob:` media are also supported.
 Include playback controls so the user can start playback when the browser blocks
 autoplay. The format must be supported by the browser or native web view.
+In Control UI chat and pinned dashboards, the native video controls support fullscreen.
 
 ```html
 <video controls playsinline preload="auto" src="https://example.com/video.mp4"></video>
@@ -262,7 +263,15 @@ For a chosen cover image, supply a `poster` containing an embedded `data:` image
 Widgets do not generate thumbnails automatically, and HTTPS poster images are
 blocked by the image policy. With `preload="none"` and no poster, browsers may
 show a black player until playback starts. YouTube page URLs are not direct video
-files; YouTube iframe embeds are not supported.
+files, and YouTube iframes remain blocked inside widgets. In the Control UI, use a
+dedicated [YouTube card](/web/control-ui/chat#youtube-videos) instead:
+
+```text
+[embed url="https://www.youtube.com/watch?v=VIDEO_ID" title="Trailer" /]
+```
+
+Put this shortcode in the assistant reply, not in `widget_code`. It needs no
+`show_widget` call. On other surfaces, use a regular YouTube link.
 
 Media playback has its own content policy. It does not grant `fetch`, WebSocket,
 remote images, external scripts, or nested frames. API connections, including
@@ -378,16 +387,22 @@ read. Ordinary widgets and MCP App tool names do not trigger this identity check
 | `excludePullRequests` | Boolean; default `true`. GitHub omits embedded pull-request objects, not pull-request-triggered runs.                                                                                  |
 
 Other fields, including identity overrides, URLs, headers, and methods, are
-rejected. The result keeps GitHub's `{ total_count, workflow_runs }` shape.
+rejected. The result keeps GitHub's `{ total_count, workflow_runs }` fields.
 Each run contains only `id`, `name`, `display_title`, `head_branch`, `status`,
 `conclusion`, `html_url`, `run_started_at`, `created_at`, `updated_at`, `event`,
 `workflow_id`, and `run_attempt`. No credentials or raw repository objects are
 returned. The upstream response is capped at 1 MiB and the projected run list
 at 30 entries. Successful reads are cached for about 30 seconds within the
 current Gateway, board identity, credential, repository, and filter scope.
+After that, a read returns the last successful result with `stale: true` while
+one background request refreshes it. Display a refreshing indicator when this
+flag is present. The next read uses the replacement result once it is ready.
+First reads and changes to the credential or filters still wait for GitHub.
 
 Rate limits, access denial, unavailable identity, and upstream failure return
-sanitized guidance. Redirects are refused. For a renamed repository, verify its
+sanitized guidance. A failed background refresh logs that guidance and removes
+the cached result, so the next read retries GitHub instead of reusing it.
+Redirects are refused. For a renamed repository, verify its
 new name and update both the read and grant. Each caller revalidates its widget,
 Gateway, and identity before receiving data, including shared reads and cache
 hits. Removing one widget does not fail another authorized widget's shared read.

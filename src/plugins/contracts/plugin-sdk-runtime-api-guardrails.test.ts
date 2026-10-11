@@ -62,14 +62,12 @@ const RUNTIME_API_EXPORT_GUARDS: Record<string, readonly string[]> = {
       'export { resolveDiscordChannelAllowlist, type DiscordChannelResolution } from "./src/resolve-channels.js";',
       'export { resolveDiscordUserAllowlist, type DiscordUserResolution } from "./src/resolve-users.js";',
       'export { setDiscordRuntime } from "./src/runtime.js";',
-      'export type { DiscordAllowList, DiscordChannelConfigResolved, DiscordGuildEntryResolved } from "./src/monitor/allow-list.js";',
-      'export { allowListMatches, isDiscordGroupAllowedByPolicy, normalizeDiscordAllowList, normalizeDiscordSlug, resolveDiscordChannelConfig, resolveDiscordChannelConfigWithFallback, resolveDiscordCommandAuthorized, resolveDiscordGuildEntry, resolveDiscordShouldRequireMention, resolveGroupDmAllow, shouldEmitDiscordReactionNotification } from "./src/monitor/allow-list.js";',
+      'export { allowListMatches, isDiscordGroupAllowedByPolicy, normalizeDiscordAllowList, normalizeDiscordSlug, resolveDiscordChannelConfig, resolveDiscordChannelConfigWithFallback, resolveDiscordCommandAuthorized, resolveDiscordGuildEntry, resolveDiscordShouldRequireMention, resolveGroupDmAllow, shouldEmitDiscordReactionNotification, type DiscordAllowList, type DiscordChannelConfigResolved, type DiscordGuildEntryResolved } from "./src/monitor/allow-list.js";',
       'export type { DiscordMessageEvent, DiscordMessageHandler } from "./src/monitor/listeners.js";',
       'export { registerDiscordListener } from "./src/monitor/listeners.js";',
       'export { createDiscordMessageHandler } from "./src/monitor/message-handler.js";',
       'export { createDiscordNativeCommand } from "./src/monitor/native-command.js";',
-      'export type { MonitorDiscordOpts } from "./src/monitor/provider.js";',
-      'export { monitorDiscordProvider } from "./src/monitor/provider.js";',
+      'export { monitorDiscordProvider, type MonitorDiscordOpts } from "./src/monitor/provider.js";',
       'export { resolveDiscordReplyTarget, sanitizeDiscordThreadName } from "./src/monitor/threading.js";',
       'export { createDiscordGatewayPlugin, resolveDiscordGatewayIntents, waitForDiscordGatewayPluginRegistration } from "./src/monitor/gateway-plugin.js";',
       'export { clearGateways, getGateway, registerGateway, unregisterGateway } from "./src/monitor/gateway-registry.js";',
@@ -78,7 +76,7 @@ const RUNTIME_API_EXPORT_GUARDS: Record<string, readonly string[]> = {
       'export { resolveDiscordOutboundSessionRoute, type ResolveDiscordOutboundSessionRouteParams } from "./src/outbound-session-route.js";',
       'export { addRoleDiscord, banMemberDiscord, createChannelDiscord, createScheduledEventDiscord, createThreadDiscord, deleteChannelDiscord, deleteMessageDiscord, DiscordSendError, editChannelDiscord, editMessageDiscord, fetchChannelInfoDiscord, fetchChannelPermissionsDiscord, fetchMemberGuildPermissionsDiscord, fetchMemberInfoDiscord, fetchMessageDiscord, fetchReactionsDiscord, fetchRoleInfoDiscord, fetchVoiceStatusDiscord, hasAllGuildPermissionsDiscord, hasAnyGuildPermissionDiscord, kickMemberDiscord, listGuildChannelsDiscord, listGuildEmojisDiscord, listPinsDiscord, listScheduledEventsDiscord, listThreadsDiscord, moveChannelDiscord, pinMessageDiscord, reactMessageDiscord, readMessagesDiscord, removeChannelPermissionDiscord, removeOwnReactionsDiscord, removeReactionDiscord, removeRoleDiscord, resolveEventCoverImage, searchMessagesDiscord, sendMessageDiscord, sendPollDiscord, sendStickerDiscord, sendTypingDiscord, sendVoiceMessageDiscord, sendWebhookMessageDiscord, setChannelPermissionDiscord, timeoutMemberDiscord, unpinMessageDiscord, uploadEmojiDiscord, uploadStickerDiscord, type DiscordChannelCreate, type DiscordChannelEdit, type DiscordChannelMove, type DiscordChannelPermissionSet, type DiscordEmojiUpload, type DiscordMessageEdit, type DiscordMessageQuery, type DiscordModerationTarget, type DiscordPermissionsSummary, type DiscordReactionRuntimeContext, type DiscordReactionSummary, type DiscordReactionUser, type DiscordReactOpts, type DiscordRoleChange, type DiscordRuntimeAccountContext, type DiscordSearchQuery, type DiscordSendResult, type DiscordStickerUpload, type DiscordThreadCreate, type DiscordThreadList, type DiscordTimeoutTarget } from "./src/send.js";',
       'export { editDiscordComponentMessage, registerBuiltDiscordComponentMessage, sendDiscordComponentMessage } from "./src/send.components.js";',
-      'export { autoBindSpawnedDiscordSubagent, createNoopThreadBindingManager, createThreadBindingManager, formatThreadBindingDurationLabel, getThreadBindingManager, listThreadBindingsBySessionKey, listThreadBindingsForAccount, reconcileAcpThreadBindingsOnStartup, resolveDiscordThreadBindingIdleTimeoutMs, resolveDiscordThreadBindingMaxAgeMs, resolveThreadBindingIdleTimeoutMs, resolveThreadBindingInactivityExpiresAt, resolveThreadBindingIntroText, resolveThreadBindingMaxAgeExpiresAt, resolveThreadBindingMaxAgeMs, resolveThreadBindingPersona, resolveThreadBindingPersonaFromRecord, resolveThreadBindingsEnabled, resolveThreadBindingThreadName, setThreadBindingIdleTimeoutBySessionKey, setThreadBindingMaxAgeBySessionKey, unbindThreadBindingsBySessionKey, type AcpThreadBindingReconciliationResult, type ThreadBindingManager, type ThreadBindingRecord, type ThreadBindingTargetKind } from "./src/monitor/thread-bindings.js";',
+      'export { autoBindSpawnedDiscordSubagent, createNoopThreadBindingManager, createThreadBindingManager, formatThreadBindingDurationLabel, getThreadBindingManager, listThreadBindingsBySessionKey, listThreadBindingsBySessionKeyAsync, listThreadBindingsForAccount, reconcileAcpThreadBindingsOnStartup, resolveDiscordThreadBindingIdleTimeoutMs, resolveDiscordThreadBindingMaxAgeMs, resolveThreadBindingIdleTimeoutMs, resolveThreadBindingInactivityExpiresAt, resolveThreadBindingIntroText, resolveThreadBindingMaxAgeExpiresAt, resolveThreadBindingMaxAgeMs, resolveThreadBindingPersona, resolveThreadBindingPersonaFromRecord, resolveThreadBindingsEnabled, resolveThreadBindingThreadName, setThreadBindingIdleTimeoutBySessionKey, setThreadBindingMaxAgeBySessionKey, unbindThreadBindingsBySessionKey, type AcpThreadBindingReconciliationResult, type ThreadBindingManager, type ThreadBindingRecord, type ThreadBindingTargetKind } from "./src/monitor/thread-bindings.js";',
     ],
   [contractPluginPath({ rootDir: ROOT_DIR, pluginId: "imessage", relativePath: "runtime-api.ts" })]:
     [
@@ -129,7 +127,7 @@ const RUNTIME_API_EXPORT_GUARDS: Record<string, readonly string[]> = {
     'export { hashMatrixAccessToken, resolveMatrixAccountStorageRoot, resolveMatrixCredentialsDir, resolveMatrixCredentialsFilename, resolveMatrixCredentialsPath, resolveMatrixHomeserverKey, sanitizeMatrixPathSegment } from "./src/storage-paths.js";',
     'export { ensureMatrixSdkInstalled, isMatrixSdkAvailable } from "./src/matrix/deps.js";',
     'export { assertHttpUrlTargetsPrivateNetwork, closeDispatcher, createPinnedDispatcher, resolvePinnedHostnameWithPolicy, ssrfPolicyFromDangerouslyAllowPrivateNetwork, type LookupFn, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";',
-    'export { setMatrixThreadBindingIdleTimeoutBySessionKey, setMatrixThreadBindingMaxAgeBySessionKey } from "./src/matrix/thread-bindings-shared.js";',
+    'export { setMatrixThreadBindingIdleTimeoutBySessionKey, setMatrixThreadBindingIdleTimeoutBySessionKeyAsync, setMatrixThreadBindingMaxAgeBySessionKey, setMatrixThreadBindingMaxAgeBySessionKeyAsync } from "./src/matrix/thread-bindings-shared.js";',
     'export { setMatrixRuntime } from "./src/runtime.js";',
     'export { writeJsonFileAtomically } from "openclaw/plugin-sdk/json-store";',
     'export type { ChannelDirectoryEntry, ChannelMessageActionContext } from "openclaw/plugin-sdk/channel-contract";',
@@ -240,6 +238,9 @@ const RUNTIME_API_EXPORT_GUARDS: Record<string, readonly string[]> = {
       'export { setWhatsAppRuntime } from "./src/runtime.js";',
       'export { startWebLoginWithQr, waitForWebLogin } from "./login-qr-runtime.js";',
     ],
+  [contractPluginPath({ rootDir: ROOT_DIR, pluginId: "x", relativePath: "runtime-api.ts" })]: [
+    'export { setXRuntime } from "./src/runtime.js";',
+  ],
 } as const;
 
 function collectRuntimeApiFiles(): string[] {

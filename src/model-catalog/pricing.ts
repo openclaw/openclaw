@@ -27,8 +27,6 @@ import type { RemoteModelCatalogPrice, RemoteModelCatalogUpstreamPrice } from ".
 import { isRemoteModelCatalogRefreshEnabled } from "./remote-config.js";
 import {
   getActiveRemoteModelCatalog,
-  getRemoteModelCatalogPricing,
-  getRemoteModelCatalogUpstreamPricing,
   prepareRemoteModelCatalogStartupSnapshot,
   type ActiveRemoteModelCatalog,
 } from "./remote-overlay.js";
@@ -149,8 +147,9 @@ function buildPricingContext(
   }
   // Hosted aliases are policy-resolved against installed manifests. If that metadata is
   // unavailable, fail closed instead of treating every provider as policy-free.
-  const hosted = snapshot ? (getRemoteModelCatalogPricing(config) ?? {}) : {};
-  const upstream = snapshot ? (getRemoteModelCatalogUpstreamPricing(config) ?? {}) : {};
+  const remoteCatalog = snapshot ? getActiveRemoteModelCatalog(config) : undefined;
+  const hosted = remoteCatalog?.pricing ?? {};
+  const upstream = remoteCatalog?.upstreamPricing ?? {};
   // Policy-free providers read both tables like v1's merged map; stable sort keeps hosted first.
   const policyFree: Array<[string, RemoteModelCatalogPrice]> = [
     ...Object.entries(hosted),

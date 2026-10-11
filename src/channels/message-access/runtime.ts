@@ -35,22 +35,9 @@ import type {
 } from "./runtime-types.js";
 import { resolveChannelIngressState } from "./state.js";
 import { readChannelIngressStoreAllowFrom } from "./store-allow-from.js";
-import type {
-  ChannelIngressChannelId,
-  ChannelIngressEventInput,
-  ChannelIngressPolicyInput,
-  ResolvedIngressAllowlist,
-} from "./types.js";
+import type { ChannelIngressPolicyInput, ResolvedIngressAllowlist } from "./types.js";
 
 export { channelIngressRoutes } from "./runtime-routes.js";
-
-function normalizeChannelId(id: string): ChannelIngressChannelId {
-  const trimmed = id.trim();
-  if (!trimmed) {
-    throw new Error("Channel ingress channel id must be non-empty.");
-  }
-  return trimmed;
-}
 
 function resolveCommandInput(
   input: ChannelIngressResolverMessageParams["command"],
@@ -68,36 +55,6 @@ function resolveCommandInput(
   };
 }
 
-function channelIngressEvent(
-  params: ChannelIngressEventPresetInput = {},
-): ChannelIngressEventInput {
-  const isGroup = params.isGroup ?? false;
-  return {
-    kind: params.kind ?? "message",
-    authMode: params.authMode ?? "inbound",
-    mayPair: params.mayPair ?? !isGroup,
-    ...(params.originSubject ? { originSubject: params.originSubject } : {}),
-  };
-}
-
-function resolveResolverPolicy(params: {
-  base: CreateChannelIngressResolverParams;
-  input: ChannelIngressResolverMessageParams;
-}): ChannelIngressPolicyInput {
-  return {
-    dmPolicy: params.input.dmPolicy ?? params.base.defaultDmPolicy ?? "pairing",
-    groupPolicy: params.input.groupPolicy ?? params.base.defaultGroupPolicy ?? "disabled",
-    groupAllowFromFallbackToAllowFrom:
-      params.input.policy?.groupAllowFromFallbackToAllowFrom ??
-      params.base.groupAllowFromFallbackToAllowFrom,
-    minIdentifierAuthentication:
-      params.input.policy?.minIdentifierAuthentication ?? params.base.minIdentifierAuthentication,
-    mutableIdentifierMatching:
-      params.input.policy?.mutableIdentifierMatching ?? params.base.mutableIdentifierMatching,
-    ...(params.input.policy?.activation ? { activation: params.input.policy.activation } : {}),
-  };
-}
-
 function createChannelIngressResolverForOwner(
   base: CreateChannelIngressResolverParams,
   owner?: ChannelIngressHostOwner,
@@ -106,7 +63,11 @@ function createChannelIngressResolverForOwner(
     input: ChannelIngressResolverMessageParams,
     eventDefaults?: ChannelIngressEventPresetInput,
   ) => {
-    const isGroup = input.conversation.kind !== "direct";
+    const event = {
+      isGroup: input.conversation.kind !== "direct",
+      ...eventDefaults,
+      ...input.event,
+    };
     return await resolveChannelMessageIngressForOwner(
       {
         channelId: base.channelId,
@@ -115,12 +76,25 @@ function createChannelIngressResolverForOwner(
         subject: input.subject,
         conversation: input.conversation,
         contextBinding: input.contextBinding,
-        event: channelIngressEvent({
-          isGroup,
-          ...eventDefaults,
-          ...input.event,
-        }),
-        policy: resolveResolverPolicy({ base, input }),
+        childSessionPublication: input.childSessionPublication,
+        event: {
+          kind: event.kind ?? "message",
+          authMode: event.authMode ?? "inbound",
+          mayPair: event.mayPair ?? !(event.isGroup ?? false),
+          ...(event.originSubject ? { originSubject: event.originSubject } : {}),
+        },
+        policy: {
+          dmPolicy: input.dmPolicy ?? base.defaultDmPolicy ?? "pairing",
+          groupPolicy: input.groupPolicy ?? base.defaultGroupPolicy ?? "disabled",
+          groupAllowFromFallbackToAllowFrom:
+            input.policy?.groupAllowFromFallbackToAllowFrom ??
+            base.groupAllowFromFallbackToAllowFrom,
+          minIdentifierAuthentication:
+            input.policy?.minIdentifierAuthentication ?? base.minIdentifierAuthentication,
+          mutableIdentifierMatching:
+            input.policy?.mutableIdentifierMatching ?? base.mutableIdentifierMatching,
+          ...(input.policy?.activation ? { activation: input.policy.activation } : {}),
+        },
         allowFrom: input.allowFrom,
         groupAllowFrom: input.groupAllowFrom,
         route: input.route,
@@ -270,11 +244,6 @@ function commandOwnerAllowFrom(params: {
   return params.command?.groupOwnerAllowFrom === "none" ? [] : params.configuredAllowFrom;
 }
 
-function accessGroupMatchedEntry(params: ResolveChannelMessageIngressParams): string | null {
-  const entry = params.accessGroupMatchedAllowFromEntry ?? params.subject.stableId;
-  return entry == null ? null : String(entry);
-}
-
 function appendAccessGroupMatchedEntry(params: {
   entries: string[];
   allowlist: ResolvedIngressAllowlist;
@@ -295,7 +264,10 @@ async function resolveChannelMessageIngressForOwner(
   params: ResolveChannelMessageIngressParams,
   owner?: ChannelIngressHostOwner,
 ): Promise<ResolvedChannelMessageIngress> {
-  const channelId = normalizeChannelId(params.channelId);
+  const channelId = params.channelId.trim();
+  if (!channelId) {
+    throw new Error("Channel ingress channel id must be non-empty.");
+  }
   const promptedAt = Date.now();
   const participantOwner = owner?.channelId === channelId && owner.isLive() ? owner : undefined;
   const participantGatewayContext = participantOwner?.resolveGatewayContext?.();
@@ -391,7 +363,8 @@ async function resolveChannelMessageIngressForOwner(
     },
   });
   const ingress = decideChannelIngress(state, policy);
-  const matchedAccessGroupEntry = accessGroupMatchedEntry(params);
+  const matchedEntry = params.accessGroupMatchedAllowFromEntry ?? params.subject.stableId;
+  const matchedAccessGroupEntry = matchedEntry == null ? null : String(matchedEntry);
   const effectiveAllowFrom = appendAccessGroupMatchedEntry({
     entries: baseEffective.effectiveAllowFrom,
     allowlist: state.allowlists.dm,
@@ -466,6 +439,7 @@ async function resolveChannelMessageIngressForOwner(
             id: senderId!,
           },
       binding: participantBinding,
+      childSessionPublication: params.childSessionPublication,
       verifiedPrincipal,
       requesterProfile:
         requester && ownerIsCurrent()

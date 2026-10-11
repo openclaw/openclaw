@@ -15,7 +15,7 @@ import {
   type LegacyPluginSdkResourceHost,
 } from "../plugins/legacy-sdk-resource-host.js";
 import { PluginRuntimeCloseRetainedError } from "../plugins/runtime-close-error.js";
-import { runInDetachedAsyncContext } from "../shared/async-work-scope.js";
+import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import {
   codeModeFailureCode,
   CodeModeHeadlessAbortError,
@@ -159,7 +159,7 @@ async function takePool(memoryLimitBytes: number, signal: AbortSignal): Promise<
     memoryLimitBytes,
     tasks: new WorkerTaskPool({
       workerUrl,
-      maxWorkers: 1,
+      workerClass: "singleton",
       idleTimeoutMs: 0,
       restartOnError: false,
       sharedCompute: true,
@@ -289,6 +289,7 @@ async function run(
       },
       {
         timeoutMs: Math.min(options.timeoutMs, input.config.timeoutMs) - preparationMs,
+        hostTimeout: "owner",
         signal,
         inputBytes: input.kind === "exec" ? input.source.length * 2 : 0,
         onInputConsumed: () => {

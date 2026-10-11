@@ -17,8 +17,8 @@ export const discordChannelConfigUiHints = {
     },
     nativeCommands: true,
     streaming: {
-      "": 'Discord preview streaming is off by default. Set mode to "partial", "block", or "progress" to opt in. Run openclaw doctor --fix to migrate legacy keys.',
-      mode: 'Discord preview mode: "off" | "partial" | "block" | "progress". Default: "off".',
+      "": 'Discord shows useful work status by default without streaming answer text. Set mode to "off" for quiet final-only delivery, or "partial"/"block" for answer previews. Run openclaw doctor --fix to migrate legacy keys.',
+      mode: 'Discord preview mode: "off" | "partial" | "block" | "progress". Default: "progress"; "off" explicitly disables progress drafts.',
       chunkMode:
         'Chunking mode for outbound Discord text delivery: "length" (default) or "newline".',
       "block.enabled":
@@ -37,6 +37,10 @@ export const discordChannelConfigUiHints = {
     },
     progress: { includeCommentary: true },
   }),
+  "streaming.progress.toolProgress": {
+    label: "Discord Progress Tool Lines",
+    help: "Show the detailed rolling tool log (default: false). Work status, delegated-task states, plans, and authored progress remain visible without it. Set streaming.mode to off for quiet final-only delivery.",
+  },
   joinIntro: {
     label: "Discord Guild Join Introduction",
     help: "Post one brief, room-specific introduction when the bot joins an allowed Discord guild (default: true). Account settings override the channel-wide setting.",

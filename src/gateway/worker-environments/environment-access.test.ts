@@ -1,4 +1,6 @@
 import { createServer } from "node:http";
+import { setImmediate as nextTurn } from "node:timers/promises";
+import { queryObjects } from "node:v8";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocket } from "../../../packages/gateway-client/src/websocket.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
@@ -9,6 +11,7 @@ import {
 } from "../../state/openclaw-state-db.js";
 import * as observeBridge from "../desktop/observe-bridge.js";
 import { STALE_WORKER_BUILD_REASON } from "./admission.js";
+import { registerRecordedInferenceAccessTests } from "./environment-access.inference.suite.js";
 import { createStoppedTunnelManager } from "./environment-access.test-support.js";
 import { createWorkerInferenceStore } from "./inference-store.js";
 import type { WorkerNodeDesktopCarrier } from "./node-desktop-carrier.js";
@@ -23,6 +26,23 @@ type WorkerEnvironmentServiceError = support.WorkerEnvironmentServiceError;
 describe("worker environment service", () => {
   support.setupWorkerEnvironmentServiceSuite();
   afterEach(() => vi.restoreAllMocks());
+
+  registerRecordedInferenceAccessTests();
+
+  it("releases the publisher after desktop policy cancellation settles", async () => {
+    support.testState.config.cloudWorkers!.desktop = true;
+    const workerService = support.createService(support.createProvider());
+    class RetiredPublisher {
+      publish() {
+        support.testState.config.cloudWorkers!.desktop = false;
+        return workerService.reconcileDesktopPolicy();
+      }
+    }
+    await new RetiredPublisher().publish();
+    await nextTurn();
+    expect(queryObjects(RetiredPublisher)).toBe(0);
+    expect(workerService.list()).toEqual([]);
+  });
 
   it("drains all tunnel owners before reporting an independent shutdown failure", async () => {
     const shutdownError = new Error("SSH tunnel shutdown failed");
@@ -39,6 +59,9 @@ describe("worker environment service", () => {
     } as unknown as WorkerTunnelManager;
     const nodeTunnelManager = {
       status: () => "stopped" as const,
+      observeProcesses: vi.fn(async () => {
+        throw new Error("Process observation is not configured in this fixture");
+      }),
       start: vi.fn(),
       stop: vi.fn(async () => {}),
       stopAll: vi.fn(async () => await nodeShutdown.promise),
@@ -348,6 +371,9 @@ describe("worker environment service", () => {
       } as unknown as WorkerTunnelManager;
       const nodeTunnelManager = {
         status: () => "connecting" as const,
+        observeProcesses: vi.fn(async () => {
+          throw new Error("Process observation is not configured in this fixture");
+        }),
         start,
         stop: vi.fn(async () => {}),
         stopAll: vi.fn(async () => {}),
@@ -436,6 +462,9 @@ describe("worker environment service", () => {
     });
     const tunnelManager = {
       status: () => "stopped" as const,
+      observeProcesses: vi.fn(async () => {
+        throw new Error("Process observation is not configured in this fixture");
+      }),
       start: vi.fn(async (request: Parameters<WorkerTunnelManager["start"]>[0]) => ({
         environmentId: request.environmentId,
         ownerEpoch: request.ownerEpoch,
@@ -828,6 +857,9 @@ describe("worker environment service", () => {
     const order: string[] = [];
     const tunnelManager = {
       status: () => "connecting" as const,
+      observeProcesses: vi.fn(async () => {
+        throw new Error("Process observation is not configured in this fixture");
+      }),
       start: vi.fn(() => pendingStart),
       stop: vi.fn(async () => {
         order.push("tunnel-stop");

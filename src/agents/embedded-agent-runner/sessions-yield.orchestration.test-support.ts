@@ -50,7 +50,7 @@ describe("sessions_yield orchestration", () => {
       const { subscribeSubagentRunChanges } =
         await import("../subagents/registry/subagent-registry-publication.js");
       const { loadSubagentRegistryFromSqlite } =
-        await import("../subagents/registry/subagent-registry.store.sqlite.js");
+        await import("../subagents/registry/subagent-registry-state.fixture.test-support.js");
       const {
         gateSubagentRequesterSettlement,
         writeSubagentSessionEntry,

@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import { MessageChannel, receiveMessageOnPort } from "node:worker_threads";
 import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
-import { runInDetachedAsyncContext } from "../shared/async-work-scope.js";
+import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { GATEWAY_OWNER_HEARTBEAT_MS } from "./gateway-lock-payload.js";
 import type { GatewayStateOwnerHeartbeatData } from "./gateway-state-owner-heartbeat.runtime.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
@@ -11,7 +11,7 @@ import {
 } from "./runtime-worker-url.js";
 import { createCpuTrackedWorker } from "./worker-cpu.js";
 
-const monotonic = process.hrtime.bigint.bind(process.hrtime);
+const now = Date.now.bind(Date);
 
 /** Process and schema owners share one renewal worker and one failure deadline. */
 export function startGatewayStateOwnerHeartbeat(
@@ -27,7 +27,8 @@ export function startGatewayStateOwnerHeartbeat(
   }
   return runInDetachedAsyncContext(() => {
     const lastBeat = new BigInt64Array(new SharedArrayBuffer(BigInt64Array.BYTES_PER_ELEMENT));
-    Atomics.store(lastBeat, 0, monotonic() / 1_000_000n);
+    // Match the lock's mtime clock; Bun workers have independent hrtime origins.
+    Atomics.store(lastBeat, 0, BigInt(now()));
     const { port1, port2 } = new MessageChannel();
     const url = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.gatewayStateOwnerHeartbeat);
     const worker = createCpuTrackedWorker(url, {
@@ -53,11 +54,14 @@ export function startGatewayStateOwnerHeartbeat(
       while ((message = receiveMessageOnPort(port1))) {
         failure = message.message;
       }
-      const remaining = 60_000 - Number(monotonic() / 1_000_000n - Atomics.load(lastBeat, 0));
+      // Sample after loading the beat so concurrent renewal cannot appear to be in the future.
+      const renewedAt = Atomics.load(lastBeat, 0);
+      const age = now() - Number(renewedAt);
+      const remaining = age < 0 ? 0 : 60_000 - age;
       if (remaining <= 0) {
         onLost(
           new Error(
-            `Gateway state ownership is no longer current at ${Object.keys(locks)[0]}: ${failure ?? "utimes heartbeat renewal did not complete within 60 seconds"}; restart the Gateway.`,
+            `Gateway state ownership is no longer current at ${Object.keys(locks)[0]}: ${failure ?? (age < 0 ? "heartbeat clock moved backwards" : "utimes heartbeat renewal did not complete within 60 seconds")}; restart the Gateway.`,
           ),
         );
       }

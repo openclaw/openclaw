@@ -42,14 +42,12 @@ describe("clearSessionResetRuntimeState", () => {
     enqueueSystemEvent("stale beta", withSystemEventOwner({ sessionKey: "beta" }, "main"));
     enqueueSystemEvent("fresh gamma", withSystemEventOwner({ sessionKey: "gamma" }, "main"));
 
-    const result = clearSessionResetRuntimeState([" alpha ", undefined, " ", "alpha", "beta"], {
+    clearSessionResetRuntimeState([" alpha ", undefined, " ", "alpha", "beta"], {
       agentId: "main",
       sessionKey: "alpha",
       assertCurrent: () => {},
     });
 
-    expect(result.keys).toEqual(["alpha", "beta"]);
-    expect(result.systemEventsCleared).toBe(2);
     expect(peekSystemEvents("agent:main:alpha")).toStrictEqual([]);
     expect(peekSystemEvents("agent:main:beta")).toStrictEqual([]);
     expect(peekSystemEvents("agent:main:gamma")).toEqual(["fresh gamma"]);
@@ -60,13 +58,12 @@ describe("clearSessionResetRuntimeState", () => {
     enqueueSystemEvent("alpha", withSystemEventOwner({ sessionKey: "global" }, "alpha"));
     enqueueSystemEvent("beta", withSystemEventOwner({ sessionKey: "global" }, "beta"));
 
-    const result = clearSessionResetRuntimeState(["global", "agent:beta:global"], {
+    clearSessionResetRuntimeState(["global", "agent:beta:global"], {
       agentId: " Alpha ",
       sessionKey: "global",
       assertCurrent: () => {},
     });
 
-    expect(result.systemEventsCleared).toBe(1);
     expect(peekSystemEvents("agent:alpha:global")).toEqual([]);
     expect(peekSystemEvents("agent:main:global")).toEqual(["main"]);
     expect(peekSystemEvents("agent:beta:global")).toEqual(["beta"]);

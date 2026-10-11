@@ -12,28 +12,94 @@ How OpenClaw starts and reaches the Codex app-server, and every `appServer` fiel
 
 ## App-server transport
 
-For ordinary harness turns, OpenClaw starts the managed Codex binary shipped
-with the official plugin (currently `@openai/codex` `0.160.0`):
+For ordinary harness turns, OpenClaw starts a managed Codex binary: a newer
+Codex you installed yourself, or the one shipped with the official plugin
+(currently `@openai/codex` `0.160.0`):
 
 ```bash
 codex app-server --listen stdio://
 ```
 
-This keeps the app-server version tied to the official `codex` plugin instead of
-whichever separate Codex CLI happens to be installed locally. OpenClaw resolves
-`@openai/codex/bin/codex.js` from the loader-selected plugin root using Node
-package resolution, including npm-hoisted and pnpm-linked dependencies. It does
-not search `.bin` shims or global `PATH` for managed startup. On Windows, Node
-runs the same package entrypoint without requiring a `codex.cmd` shim.
-Set `appServer.command` only when you intentionally want a different executable.
-Ordinary managed turns with the default isolated agent home prefer this pinned
-package even when a macOS desktop bundle is installed. When
+OpenClaw resolves the shipped `@openai/codex/bin/codex.js` from the
+loader-selected plugin root using Node package resolution, including
+npm-hoisted and pnpm-linked dependencies. On Windows, Node runs the same package
+entrypoint without requiring a `codex.cmd` shim. Set `appServer.command` only
+when you intentionally want a different executable.
+
+### Newer installed Codex
+
+ChatGPT gates new models on the Codex version that runs the turn, so OpenClaw
+uses a newer Codex from `PATH` (for example `npm i -g @openai/codex`, a Bun
+global install, Homebrew, or the standalone installer) when it is safe, and the
+shipped binary otherwise. Once per Gateway process it checks the first `codex`
+on `PATH` and uses it only when all of these hold:
+
+- It is a native executable or the official `@openai/codex` npm launcher.
+  Other wrapper scripts, such as pnpm global shims, are skipped. A `PATH`
+  symlink to a macOS desktop-owned binary is also skipped; desktop startup
+  keeps its separate permission and auth rules.
+- `codex --version` answers with a stable version newer than the shipped one.
+  The version check and selection handshake share a four-second budget. A
+  managed request with a shorter remaining deadline spends at most half of it
+  on selection, reserving the rest for bundled startup. When that budget runs
+  out, this process keeps the bundled pin and ignores any late probe success.
+  Equal, older, unparseable, and prerelease versions are skipped.
+- It has the same major version as the shipped binary. The app-server protocol
+  has no negotiated version, so a new major is treated as incompatible. A newer
+  release with the same major can still change a request that OpenClaw uses
+  after `initialize`; these checks do not detect that. If a newer Codex
+  misbehaves, set `appServer.command` to a specific binary or remove the newer
+  `codex` from the Gateway's `PATH`.
+- A real app-server `initialize` handshake against a throwaway `CODEX_HOME`
+  succeeds within the remaining selection budget and reports the same version.
+  Its SQLite location is forced into that temporary home through both environment
+  and CLI configuration. The presence of system requirements files, managed
+  preferences, or legacy managed configuration disables installed selection
+  because those sources can override this location. An absent macOS preferences
+  domain is not a restriction. No auth or turn is involved.
+
+Otherwise OpenClaw uses the shipped binary. The Gateway logs one line with the
+chosen binary, its version, and the reason, for example
+`Codex app-server: using installed /usr/local/bin/codex 0.162.1 (newer than bundled 0.160.0)`
+or `Codex app-server: using bundled 0.160.0 (installed /usr/local/bin/codex 0.159.0 is not newer)`.
+
+If the selected Codex later fails to start, fails `initialize`, or reports
+another version (for example after an in-place upgrade), OpenClaw starts the
+shipped binary for that request before any thread or turn exists, logs one
+warning, and keeps using the shipped binary until the Gateway restarts. ChatGPT
+model discovery reports the selected binary's version as `client_version`, so
+the model list matches the binary that runs turns. A Gateway restart repeats the
+selection, which picks up Codex installs, upgrades, and removals.
+
+The model list can briefly disagree with the binary after such a fallback. A
+fallback only happens after the installed binary already passed the selection
+handshake, so these windows are rare:
+
+- A model-list refresh that started before the fallback, including one still
+  queued for a catalog worker, finishes with the installed version's list.
+- A list fetched before the fallback stays cached until the ChatGPT model rows
+  expire (about a minute) and the next refresh runs. A model only the installed
+  version offers can be picked in that window, and its turn then runs on the
+  shipped binary.
+- `openclaw models list --refresh` without a running Gateway selects a binary
+  in its own process, so its list can differ from a Gateway started later, for
+  example after installing or upgrading Codex in between.
+
+`appServer.command`, `OPENCLAW_CODEX_APP_SERVER_BIN`, and remote app-servers
+always win; discovery then keeps reporting the shipped version. Login-status
+checks, node exec-servers, and the Doctor package check always use the shipped
+binary.
+
+Ordinary managed turns with the default isolated agent home prefer this package
+selection even when a macOS desktop bundle is installed. When
 [Computer Use](/plugins/codex-computer-use) is enabled, or when `homeScope` is
 `"user"` and can load native Computer Use state, managed startup instead prefers
 the desktop app binary that owns the required macOS permissions. The same
 desktop-first rule applies when an isolated agent home's effective Codex config
 enables native Computer Use. If no desktop app bundle is installed, OpenClaw
-falls back to the pinned package binary.
+falls back to the package selection. A desktop-first start that finds the
+desktop app does not check `PATH`: the shipped binary is its fallback, and
+ChatGPT model discovery for that agent keeps reporting the shipped version.
 
 Before cutting over a staged OpenClaw package, run the opt-in managed-binary
 check against the candidate installation:
@@ -43,12 +109,13 @@ openclaw doctor --lint --only codex/managed-app-server --json
 ```
 
 The check is read-only. For every configured Codex agent it applies the same
-final command selection as a live harness turn, then verifies that a selected
-package-owned native binary exists and reports the plugin's exact pinned
-version. A selected Codex Desktop binary, an explicit custom command, and a
-remote app-server are outside this package check. The command exits nonzero on
-an error-level finding, so a deployer can reject the candidate before cutover
-without changing Codex state or app-server settings.
+final command selection as a live harness turn, without a newer installed
+Codex, then verifies that a selected package-owned native binary exists and
+reports the plugin's exact pinned version. A selected Codex Desktop binary, an
+explicit custom command, and a remote app-server are outside this package check.
+The command exits nonzero on an error-level finding, so a deployer can reject
+the candidate before cutover without changing Codex state or app-server
+settings.
 
 Executable handoff and native-config fencing coordinate clients inside one
 running Gateway process. Restart the Gateway after another process changes the
@@ -91,28 +158,28 @@ managed stdio or the local Unix control socket for production workloads.
 
 `appServer` fields:
 
-| Field                            | Default                                                | Meaning                                                                                                                                                                                                                                                                                                                                                                                                                            |
-| -------------------------------- | ------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `transport`                      | `"stdio"`                                              | `"stdio"` spawns Codex; explicit `"unix"` connects to the local control socket; `"websocket"` connects to `url`.                                                                                                                                                                                                                                                                                                                   |
-| `homeScope`                      | `"agent"`                                              | `"agent"` isolates ordinary harness state per OpenClaw agent. `"user"` is an explicit opt-in that shares the native `$CODEX_HOME` or `~/.codex`, uses native auth, and enables owner-only thread management. User scope supports local stdio or Unix transport. For the separate supervision connection, an unset value resolves to `"user"` for stdio or Unix and `"agent"` for WebSocket.                                        |
-| `command`                        | managed Codex binary                                   | Executable for stdio transport. Leave unset to use the managed binary.                                                                                                                                                                                                                                                                                                                                                             |
-| `args`                           | `["app-server", "--listen", "stdio://"]`               | Arguments for stdio transport.                                                                                                                                                                                                                                                                                                                                                                                                     |
-| `url`                            | unset                                                  | WebSocket App Server URL or `unix://` URL. An empty explicit Unix path selects the canonical user-home control socket.                                                                                                                                                                                                                                                                                                             |
-| `authToken`                      | unset                                                  | Bearer token for WebSocket transport. Accepts a literal string or SecretInput such as `${CODEX_APP_SERVER_TOKEN}`.                                                                                                                                                                                                                                                                                                                 |
-| `headers`                        | `{}`                                                   | Extra WebSocket headers. Header values accept literal strings or SecretInput values, for example `x-codex-client-session-token: "${CODEX_CLIENT_SESSION_TOKEN}"`.                                                                                                                                                                                                                                                                  |
-| `clearEnv`                       | `[]`                                                   | Extra environment variable names removed from the spawned stdio app-server process after OpenClaw builds its inherited environment.                                                                                                                                                                                                                                                                                                |
-| `remoteWorkspaceRoot`            | unset                                                  | Remote Codex app-server workspace root. OpenClaw maps the local cwd into this root and transfers authoritative remote attachments over an output-capped, no-shell `command/exec` reader. Paths escaping either workspace, symbolic links, oversized files, and unbounded attachment batches fail closed; uploads retain the configured channel identity and app-server request timeout.                                            |
-| `loopDetectionPreToolUseRelay`   | `true`                                                 | Enables the Codex `PreToolUse` relay for loop detection when OpenClaw loop detection is enabled. OpenClaw installs no `PreToolUse` relay when no before-tool plugin hook, trusted-tool policy, or enabled loop detector has local work. Set `false` to disable the loop-detection relay even when detection is enabled; before-tool plugin hooks and trusted-tool policy still install their required fail-closed relay.           |
-| `requestTimeoutMs`               | `60000`                                                | Timeout for app-server control-plane calls.                                                                                                                                                                                                                                                                                                                                                                                        |
-| `mode`                           | `"yolo"` unless local Codex requirements disallow YOLO | Preset for YOLO or guardian-reviewed execution.                                                                                                                                                                                                                                                                                                                                                                                    |
-| `approvalPolicy`                 | `"never"` or an allowed guardian approval policy       | Native Codex approval policy sent to thread start, resume, and turn.                                                                                                                                                                                                                                                                                                                                                               |
-| `sandbox`                        | `"danger-full-access"` or an allowed guardian sandbox  | Native Codex sandbox mode sent to thread start and resume. Active OpenClaw sandboxes narrow `danger-full-access` turns to Codex `workspace-write`; the turn network flag follows OpenClaw sandbox egress.                                                                                                                                                                                                                          |
-| `approvalsReviewer`              | `"user"` or an allowed guardian reviewer               | Use `"auto_review"` to let Codex review native approval prompts when allowed.                                                                                                                                                                                                                                                                                                                                                      |
-| `defaultWorkspaceDir`            | current process directory                              | Workspace used by `/codex bind` when `--cwd` is omitted.                                                                                                                                                                                                                                                                                                                                                                           |
-| `serviceTier`                    | unset                                                  | Native Codex app-server preference only. Any non-empty string passes through for forward compatibility; documented values are `"priority"` and `"flex"`. `null` clears the override, and legacy `"fast"` normalizes to `"priority"`. This is neither the shared Fast-mode setting nor a direct embedded OpenAI setting. A shared Fast run control supersedes it with `priority` or `null`, or decides per model call in auto mode. |
-| `enableUltrafast`                | `true`                                                 | Automatically prefer `ultrafast` when the shared Fast-mode control is on, active Auto, or unspecified, and the authenticated app-server catalog advertises it for the selected native model. Set `false` to opt out of automatic upgrades. Standard and inactive Auto remain off. Unsupported models and unavailable catalogs keep the baseline tier.                                                                              |
-| `networkProxy`                   | disabled                                               | Opt into Codex permissions-profile networking for app-server commands. OpenClaw defines the selected `permissions.<profile>.network` config and selects it with `default_permissions` instead of sending `sandbox`.                                                                                                                                                                                                                |
-| `experimental.sandboxExecServer` | `false`                                                | Preview opt-in that registers an OpenClaw sandbox-backed Codex environment with the supported Codex app-server so native Codex execution can run inside the active OpenClaw sandbox.                                                                                                                                                                                                                                               |
+| Field                            | Default                                                | Meaning                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| -------------------------------- | ------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `transport`                      | `"stdio"`                                              | `"stdio"` spawns Codex; explicit `"unix"` connects to the local control socket; `"websocket"` connects to `url`.                                                                                                                                                                                                                                                                                                                                                             |
+| `homeScope`                      | `"agent"`                                              | `"agent"` isolates ordinary harness state per OpenClaw agent. `"user"` is an explicit opt-in that shares the native `$CODEX_HOME` or `~/.codex`, uses native auth, and enables owner-only thread management. User scope supports local stdio or Unix transport. For the separate supervision connection, an unset value resolves to `"user"` for stdio or Unix and `"agent"` for WebSocket.                                                                                  |
+| `command`                        | managed Codex binary                                   | Executable for stdio transport. Leave unset to use the managed binary.                                                                                                                                                                                                                                                                                                                                                                                                       |
+| `args`                           | `["app-server", "--listen", "stdio://"]`               | Arguments for stdio transport.                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| `url`                            | unset                                                  | WebSocket App Server URL or `unix://` URL. An empty explicit Unix path selects the canonical user-home control socket.                                                                                                                                                                                                                                                                                                                                                       |
+| `authToken`                      | unset                                                  | Bearer token for WebSocket transport. Accepts a literal string or SecretInput such as `${CODEX_APP_SERVER_TOKEN}`.                                                                                                                                                                                                                                                                                                                                                           |
+| `headers`                        | `{}`                                                   | Extra WebSocket headers. Header values accept literal strings or SecretInput values, for example `x-codex-client-session-token: "${CODEX_CLIENT_SESSION_TOKEN}"`.                                                                                                                                                                                                                                                                                                            |
+| `clearEnv`                       | `[]`                                                   | Extra environment variable names removed from the spawned stdio app-server process after OpenClaw builds its inherited environment.                                                                                                                                                                                                                                                                                                                                          |
+| `remoteWorkspaceRoot`            | unset                                                  | Remote Codex app-server workspace root. OpenClaw maps the local cwd into this root and transfers authoritative remote attachments over an output-capped, no-shell `command/exec` reader. Paths escaping either workspace, symbolic links, oversized files, and unbounded attachment batches fail closed; uploads retain the configured channel identity and app-server request timeout.                                                                                      |
+| `loopDetectionPreToolUseRelay`   | `true`                                                 | Enables the Codex `PreToolUse` relay for loop detection when OpenClaw loop detection is enabled. OpenClaw installs no `PreToolUse` relay when no before-tool plugin hook, trusted-tool policy, or enabled loop detector has local work. Set `false` to disable the loop-detection relay even when detection is enabled; before-tool plugin hooks and trusted-tool policy still install their required fail-closed relay.                                                     |
+| `requestTimeoutMs`               | `60000`                                                | Timeout for app-server control-plane calls.                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| `mode`                           | `"yolo"` unless local Codex requirements disallow YOLO | Preset for YOLO or guardian-reviewed execution.                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| `approvalPolicy`                 | `"never"` or an allowed guardian approval policy       | Native Codex approval policy sent to thread start, resume, and turn.                                                                                                                                                                                                                                                                                                                                                                                                         |
+| `sandbox`                        | `"danger-full-access"` or an allowed guardian sandbox  | Native Codex sandbox mode sent to thread start and resume. Active OpenClaw sandboxes narrow `danger-full-access` turns to Codex `workspace-write`; the turn network flag follows OpenClaw sandbox egress.                                                                                                                                                                                                                                                                    |
+| `approvalsReviewer`              | `"user"` or an allowed guardian reviewer               | Use `"auto_review"` to let Codex review native approval prompts when allowed.                                                                                                                                                                                                                                                                                                                                                                                                |
+| `defaultWorkspaceDir`            | current process directory                              | Workspace used by `/codex bind` when `--cwd` is omitted.                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| `serviceTier`                    | unset                                                  | Native app-server preference when no shared Fast-mode control is supplied. Non-empty strings pass through; documented values are `"priority"` and `"flex"`. Legacy `"fast"` normalizes to `"priority"`, and `null` clears the override. Native `"ultrafast"` starts from `priority` and requires an explicit shared Ultrafast selection. Shared Fast sends `priority`, off sends `null`, and Auto decides per call. This does not configure direct embedded OpenAI requests. |
+| `enableUltrafast`                | `true`                                                 | Allow `ultrafast` only for an explicit shared `"ultrafast"` selection and an advertised native model. Unset or `true` permits that selection; `false` hides Ultrafast in the Codex picker, sends ordinary Fast (`priority`) for an explicit selection, and skips the Ultrafast catalog check. Fast, Auto, and unspecified selections never automatically upgrade. Unsupported models and unavailable catalogs keep the baseline tier.                                        |
+| `networkProxy`                   | disabled                                               | Opt into Codex permissions-profile networking for app-server commands. OpenClaw defines the selected `permissions.<profile>.network` config and selects it with `default_permissions` instead of sending `sandbox`.                                                                                                                                                                                                                                                          |
+| `experimental.sandboxExecServer` | `false`                                                | Preview opt-in that registers an OpenClaw sandbox-backed Codex environment with the supported Codex app-server so native Codex execution can run inside the active OpenClaw sandbox.                                                                                                                                                                                                                                                                                         |
 
 `appServer.args` accepts an array (recommended) or a quoted argument string.
 `OPENCLAW_CODEX_APP_SERVER_ARGS` uses the same string parsing on every platform:
@@ -145,24 +212,28 @@ conversation preference for later conversation-bound turns and does not change
 the shared OpenClaw session policy. These values describe native configuration
 and preference state, not observed provider routing.
 
-Select Ultrafast in the Control UI, or set the shared `fastMode` preference to
-`"ultrafast"`, to request Ultrafast independently of `appServer.enableUltrafast`.
-Before every turn, OpenClaw checks the selected native model's `serviceTiers`
-through that turn's authenticated Codex app-server connection. Models whose
-catalog does not advertise the tier, custom model providers, and unavailable
-catalogs fall back to Fast (`priority`). The native catalog can contain offline
-fallback metadata, so this turn-time check does not establish account entitlement.
-The Control UI requires separate authenticated account-discovery evidence before
-showing Ultrafast. The saved preference is not a guarantee of the upstream tier
-honored for the request.
+Ultrafast requires an effective shared Fast-mode selection of `"ultrafast"`.
+Select it in the Control UI, use `/fast ultrafast`, supply `fastMode: "ultrafast"`
+in a session or run control, or author `fastModeDefault: "ultrafast"` in config.
+An unset `appServer.enableUltrafast` or `true` allows this explicit selection.
+Set `appServer.enableUltrafast: false` to hide Ultrafast for the Codex runtime in
+the picker. Even a saved or explicit Ultrafast selection then sends ordinary Fast
+(`priority`) and skips the Ultrafast catalog check.
 
-By default, OpenClaw automatically upgrades to supported Ultrafast when shared
-Fast (`true`) or Fast Auto is active, or no shared run control is supplied.
-An unset `appServer.enableUltrafast` means automatic selection, just like `true`.
-Set `appServer.enableUltrafast: false` to opt out of automatic upgrades and keep
-the baseline tier (`priority` for Fast or active Auto). Standard (`false`) and
-inactive Auto remain off. A shared `"ultrafast"` preference still requests the
-validated tier even when automatic upgrades are disabled.
+Only an explicit Ultrafast selection with the switch enabled checks the selected
+native model's `serviceTiers` through that turn's authenticated Codex app-server
+connection. Models whose catalog does not advertise the tier, custom model
+providers, and unavailable catalogs fall back to Fast (`priority`). The native
+catalog can contain offline fallback metadata, so this turn-time check does not
+establish account entitlement. The Control UI requires separate authenticated
+account-discovery evidence before showing Ultrafast. The saved preference is not
+a guarantee of the upstream tier honored for the request.
+
+Fast (`true`), active Auto, and unspecified shared run controls never automatically
+upgrade or perform an Ultrafast catalog lookup. They keep their baseline tier
+(`priority` for Fast or active Auto); a native `serviceTier: "ultrafast"` also
+starts from `priority` until the shared selection explicitly requests Ultrafast.
+Standard (`false`) and inactive Auto remain off.
 
 `appServer.networkProxy` is explicit because it changes the Codex sandbox
 contract. When enabled, OpenClaw also sets `features.network_proxy.enabled` and
@@ -207,7 +278,9 @@ If the normal app-server runtime would be `danger-full-access`, enabling
 permission profile instead. Codex-managed network enforcement is sandboxed
 networking, so a full-access profile would not protect outbound traffic.
 
-The plugin manages stable Codex app-server `0.160.0`. Explicit custom
+The plugin ships stable Codex app-server `0.160.0` and prefers a newer
+installed Codex only under the rules in
+[Newer installed Codex](#newer-installed-codex). Explicit custom
 executables, remote app-servers, and macOS desktop binaries must report a
 parseable semantic version of `0.149.0` or newer. Older, malformed, and
 unversioned handshakes are rejected. Newer versions log a compatibility warning
@@ -252,7 +325,7 @@ persists the native thread binding. If the snapshot request fails, OpenClaw dele
 provisional thread with `thread/delete` or unsubscribes an ephemeral thread
 with `thread/unsubscribe`. If safe cleanup cannot be confirmed, it retires the
 owning app-server connection. Supervised branches also clean up their temporary
-probe and retain recovery state when cleanup fails.
+check and retain recovery state when cleanup fails.
 
 With `allow_all_plugins`, an explicitly disabled configured workspace plugin
 still denies its owned apps. When `app/read` does not expose that ownership,

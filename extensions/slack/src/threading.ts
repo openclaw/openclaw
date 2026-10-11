@@ -1,19 +1,11 @@
 import type { ReplyToMode } from "openclaw/plugin-sdk/config-contracts";
 import type { SlackAppMentionEvent, SlackMessageEvent } from "./types.js";
 
-type SlackThreadContext = {
-  incomingThreadTs?: string;
-  messageTs?: string;
-  isThreadReply: boolean;
-  replyToId?: string;
-  messageThreadId?: string;
-};
-
 export function resolveSlackThreadContext(params: {
   message: SlackMessageEvent | SlackAppMentionEvent;
   replyToMode: ReplyToMode;
   isDirectMessage?: boolean;
-}): SlackThreadContext {
+}) {
   const incomingThreadTs = params.message.thread_ts;
   const eventTs = params.message.event_ts;
   const messageTs = params.message.ts ?? eventTs;

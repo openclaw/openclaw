@@ -163,7 +163,6 @@ class LocationPrivacyTest : NodeHandlerRobolectricTest() {
     LocationHandler(
       appContext = context,
       location = LocationCaptureManager(context),
-      json = Json,
       isForeground = { true },
       locationMode = { LocationMode.WhileUsing },
       backgroundLocationEnabled = { false },

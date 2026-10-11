@@ -170,31 +170,6 @@ extension ChatSessionSidebar {
         }
         return activity.text
     }
-
-    var connectionFooter: some View {
-        HStack(spacing: 6) {
-            Circle()
-                .fill(self.viewModel.healthOK ? .green : .orange)
-                .frame(width: 7, height: 7)
-            Text(self.viewModel.healthOK
-                ? String(localized: "Gateway connected")
-                : String(localized: "Connecting…"))
-                .font(OpenClawChatTypography.caption)
-                .foregroundStyle(.secondary)
-            Spacer(minLength: 0)
-            if self.groupLoadFailed {
-                Button {
-                    self.groupRefreshNonce += 1
-                } label: {
-                    Image(systemName: "arrow.clockwise")
-                }
-                .buttonStyle(.borderless)
-                .help(String(localized: "Retry thread groups"))
-            }
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 12)
-    }
 }
 
 struct ChatSidebarAgentAvatar: View {

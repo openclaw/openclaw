@@ -9,7 +9,10 @@ import { createDeferredCore } from "../../shared/deferred.js";
 import { spawnWithInheritedOomScore } from "../linux-oom-score.js";
 import type { SpawnStdioEntry } from "../spawn-secret-input.js";
 import { GRACEFUL_CANCEL_TIMEOUT_MS } from "./cancellation-policy.js";
-import { hasLiveOwnedProcessGroupMembers } from "./service-child-group-ownership.js";
+import {
+  hasLiveOwnedProcessGroupMembers,
+  killOwnedProcessGroupMembers,
+} from "./service-child-group-ownership.js";
 import {
   encodeServiceChildMessage,
   type ServiceChildAnchorMessage,
@@ -52,6 +55,7 @@ function delay(ms: number, retainOwner = false): Promise<void> {
 }
 
 export function runServiceChildGroupAnchor(): void {
+  const launchGrant = createDeferredCore();
   let start: ServiceChildStart | undefined;
   let subreaper:
     | ReturnType<typeof import("./linux-child-subreaper.js").acquireLinuxChildSubreaper>
@@ -263,6 +267,9 @@ export function runServiceChildGroupAnchor(): void {
       if (!rootExit) {
         command?.kill("SIGKILL");
       }
+      if (!lineageClosed) {
+        killOwnedProcessGroupMembers();
+      }
       // Nested command relays can outlive the application. Keep their reader alive
       // until they close lineage; killing this observer would discard that custody.
       await settled;
@@ -363,6 +370,10 @@ export function runServiceChildGroupAnchor(): void {
       return;
     }
     lastHostSequence = message.sequence;
+    if (message.type === "launch") {
+      launchGrant.resolve();
+      return;
+    }
     if (message.type === "startup-error-ack") {
       startupErrorAcknowledged.resolve();
       return;
@@ -470,6 +481,10 @@ export function runServiceChildGroupAnchor(): void {
         await reportStartupFailure(error instanceof Error ? error.message : String(error));
         return;
       }
+    }
+    if (next.type === "prepare") {
+      await send({ type: "prepared" });
+      await Promise.race([launchGrant.promise, retirementReady.promise]);
     }
     if (
       start !== next ||
@@ -672,7 +687,11 @@ export function runServiceChildGroupAnchor(): void {
   process.on("message", (raw: unknown) => {
     // SAFETY: the spawned relay is the sole sender on this private IPC channel.
     const message = raw as ServiceChildStart | { type: "parent-loss"; generation?: string };
-    if (message.type === "start" && !start && state === "starting") {
+    if (
+      (message.type === "start" || message.type === "prepare") &&
+      !start &&
+      state === "starting"
+    ) {
       if (
         isRecord(raw) &&
         raw.acknowledgeClosing !== undefined &&

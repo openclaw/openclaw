@@ -72,51 +72,57 @@ function shadowButton(picker: LitElement, label: string) {
   );
 }
 
+async function customEntry() {
+  const { pickers, onReact } = show();
+  const picker = pickers[0]!;
+  await picker.updateComplete;
+  const root = picker.shadowRoot!;
+  root.querySelector<HTMLButtonElement>(".more")!.click();
+  await picker.updateComplete;
+  return {
+    picker,
+    root,
+    onReact,
+    input: root.querySelector<HTMLInputElement>('[aria-label="Emoji"]')!,
+  };
+}
+
 describe("transcript message reactions", () => {
-  it.each(["user", "assistant"])(
-    "renders %s chips with attribution and toggles the current user's reaction",
-    (role) => {
-      const { onReact, pickers } = show({ role });
-      // One picker in the hover row and one trailing the chip row.
-      expect(pickers).toHaveLength(2);
-      const chips = host.querySelectorAll<HTMLButtonElement>("button.chat-reaction-chip");
-      expect(chips).toHaveLength(2);
-      const [own, crowd] = [...chips] as [HTMLButtonElement, HTMLButtonElement];
-      expect(own.getAttribute("aria-pressed")).toBe("true");
-      expect(own.getAttribute("aria-label")).toBe("👍 2");
-      expect((own.parentElement as HTMLElement & { content: string }).content).toBe(
-        "You, Riley reacted with 👍",
-      );
-      expect((crowd.parentElement as HTMLElement & { content: string }).content).toBe(
-        "Ana, Ben, Cy and 2 others reacted with 🎉",
-      );
-      own.click();
-      expect(onReact).toHaveBeenCalledWith("message-1", "👍", true);
-      crowd.click();
-      expect(onReact).toHaveBeenCalledWith("message-1", "🎉", false);
-    },
-  );
-
-  it("keeps chips visible for readers while hiding mutation controls", () => {
-    const { pickers, onReact } = show({ writable: false });
-    expect(pickers).toHaveLength(0);
-    const chip = host.querySelector<HTMLButtonElement>(".chat-reaction-chip")!;
-    expect(chip.disabled).toBe(true);
-    chip.click();
-    expect(onReact).not.toHaveBeenCalled();
-  });
-
-  it.each([{ persisted: false }, { streaming: true }, { role: "system" }])(
-    "omits controls for ineligible messages: %j",
-    (options) => {
-      const { pickers } = show(options);
-      expect(pickers).toHaveLength(0);
+  it.each([
+    [{ role: "user" }, "writable"],
+    [{ role: "assistant" }, "writable"],
+    [{ writable: false }, "readonly"],
+    [{ persisted: false }, "ineligible"],
+    [{ streaming: true }, "ineligible"],
+    [{ role: "system" }, "ineligible"],
+  ] as const)("renders %j reactions as %s", async (options, access) => {
+    const { onReact, pickers } = show(options);
+    expect(pickers).toHaveLength(access === "writable" ? 2 : 0);
+    if (access === "ineligible") {
       expect(host.querySelector(".chat-message-reactions")).toBeNull();
-    },
-  );
-
-  it("marks the user's own emoji in the palette and toggles it off", async () => {
-    const { pickers, onReact } = show();
+      return;
+    }
+    const chips = host.querySelectorAll<HTMLButtonElement>("button.chat-reaction-chip");
+    if (access === "readonly") {
+      expect(chips[0]!.disabled).toBe(true);
+      chips[0]!.click();
+      expect(onReact).not.toHaveBeenCalled();
+      return;
+    }
+    expect(chips).toHaveLength(2);
+    const [own, crowd] = [...chips] as [HTMLButtonElement, HTMLButtonElement];
+    expect(own.getAttribute("aria-pressed")).toBe("true");
+    expect(own.getAttribute("aria-label")).toBe("👍 2");
+    expect((own.parentElement as HTMLElement & { content: string }).content).toBe(
+      "You, Riley reacted with 👍",
+    );
+    expect((crowd.parentElement as HTMLElement & { content: string }).content).toBe(
+      "Ana, Ben, Cy and 2 others reacted with 🎉",
+    );
+    own.click();
+    expect(onReact).toHaveBeenCalledWith("message-1", "👍", true);
+    crowd.click();
+    expect(onReact).toHaveBeenCalledWith("message-1", "🎉", false);
     const picker = pickers[0]!;
     await picker.updateComplete;
     const pressed = shadowButton(picker, "👍")!;
@@ -128,13 +134,7 @@ describe("transcript message reactions", () => {
   });
 
   it.each(["abc", "👍👀"])("rejects custom input %s and accepts a single emoji", async (value) => {
-    const { pickers, onReact } = show();
-    const picker = pickers[0]!;
-    await picker.updateComplete;
-    const root = picker.shadowRoot!;
-    root.querySelector<HTMLButtonElement>(".more")!.click();
-    await picker.updateComplete;
-    const input = root.querySelector<HTMLInputElement>('[aria-label="Emoji"]')!;
+    const { picker, root, onReact, input } = await customEntry();
     input.value = value;
     input.dispatchEvent(new InputEvent("input", { bubbles: true }));
     input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
@@ -149,13 +149,7 @@ describe("transcript message reactions", () => {
   });
 
   it("waits for IME composition to commit before applying an emoji", async () => {
-    const { pickers, onReact } = show();
-    const picker = pickers[0]!;
-    await picker.updateComplete;
-    const root = picker.shadowRoot!;
-    root.querySelector<HTMLButtonElement>(".more")!.click();
-    await picker.updateComplete;
-    const input = root.querySelector<HTMLInputElement>('[aria-label="Emoji"]')!;
+    const { onReact, input } = await customEntry();
     input.value = "👍";
     input.dispatchEvent(new InputEvent("input", { bubbles: true, isComposing: true }));
     expect(onReact).not.toHaveBeenCalled();
@@ -165,13 +159,7 @@ describe("transcript message reactions", () => {
   });
 
   it("returns from the custom entry to the palette on backspace", async () => {
-    const { pickers } = show();
-    const picker = pickers[0]!;
-    await picker.updateComplete;
-    const root = picker.shadowRoot!;
-    root.querySelector<HTMLButtonElement>(".more")!.click();
-    await picker.updateComplete;
-    const input = root.querySelector<HTMLInputElement>('[aria-label="Emoji"]')!;
+    const { picker, root, input } = await customEntry();
     input.dispatchEvent(new KeyboardEvent("keydown", { key: "Backspace", bubbles: true }));
     await picker.updateComplete;
     expect(root.querySelector("input")).toBeNull();

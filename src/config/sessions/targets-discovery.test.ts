@@ -264,6 +264,13 @@ describe("resolveAllAgentSessionStoreTargetsSync", () => {
         expect.objectContaining({ agentId: "ops", storePath: storePaths.ops }),
       );
       expect(countMatching(targets, (target) => target.storePath === storePaths.ops)).toBe(1);
+      const scoped = resolveAllAgentSessionStoreTargetsSync(
+        createCustomRootCfg(path.join(home, "custom-state")),
+        { env: process.env, agentIds: new Set(["retired-agent"]) },
+      );
+      expect(scoped).toEqual([
+        { agentId: "retired-agent", storePath: storePaths["Retired Agent"] },
+      ]);
     });
   });
 

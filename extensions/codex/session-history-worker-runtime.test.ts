@@ -5,12 +5,20 @@ import {
   type CodexSessionContextReader,
   type CodexSessionContextSnapshot,
 } from "openclaw/plugin-sdk/codex-session-transcript-runtime";
-import * as sessionStore from "openclaw/plugin-sdk/session-store-runtime";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import * as transcriptRuntime from "openclaw/plugin-sdk/codex-session-transcript-runtime";
+import { appendSessionTranscriptMessagesByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
+import {
+  observeHostDataSql,
+  openIncognitoTestActor,
+  withIncognitoSessionActor,
+} from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { projectCodexSettledHistoryInWorker } from "./session-history-worker-runtime.js";
 import { settledFixture } from "./src/app-server/session-history.test-support.js";
 
 afterEach(() => vi.restoreAllMocks());
+const tempDirs = useAutoCleanupTempDirTracker(afterAll);
 
 function actorHistoryFixture() {
   const sessionTarget = {
@@ -58,10 +66,11 @@ function actorHistoryFixture() {
 }
 
 describe("Codex actor history adapter", () => {
-  it("projects full-fidelity settled evidence into ordered native history", async () => {
+  it("captures its actor reader and projects full-fidelity evidence into native history", async () => {
     const { target, reader, upstreamPrompt } = actorHistoryFixture();
+    vi.spyOn(transcriptRuntime, "captureCodexSessionContextReader").mockReturnValue(reader);
 
-    await expect(projectCodexSettledHistoryInWorker(target, undefined, reader)).resolves.toEqual({
+    await expect(projectCodexSettledHistoryInWorker(target)).resolves.toEqual({
       status: "ok",
       value: [
         {
@@ -123,23 +132,51 @@ describe("Codex actor history adapter", () => {
     await expect(projectCodexSettledHistoryInWorker(target, undefined, reader)).rejects.toBe(ended);
   });
 
-  it("refuses marker-only actor targets before consulting caller-thread storage", async () => {
-    const { target, reader, owner } = actorHistoryFixture();
-    const exactEntry = vi.spyOn(sessionStore, "getSessionEntry").mockImplementation(() => {
-      throw new Error("Unexpected caller-thread SQL");
-    });
-    const sessionKey = vi
-      .spyOn(sessionStore, "resolveTranscriptSessionKeyBySessionId")
-      .mockImplementation(() => {
-        throw new Error("Unexpected caller-thread SQL");
+  it("resolves marker-only history through the captured actor without host SQL", async () => {
+    const env = { OPENCLAW_STATE_DIR: tempDirs.make("codex-marker-actor-") };
+    const authority = { assertCurrent() {} };
+    const actor = await openIncognitoTestActor(env, authority);
+    const { target, upstreamPrompt } = actorHistoryFixture();
+    const sessionTarget = { ...target.sessionTarget, storePath: actor.path };
+    try {
+      await actor.sessions.create(authority, {
+        sessionKey: sessionTarget.sessionKey,
+        entry: { sessionId: target.sessionId, updatedAt: 1, incognito: true },
       });
-    const { sessionTarget: _capturedTarget, ...markerOnly } = target;
-
-    await expect(projectCodexSettledHistoryInWorker(markerOnly, undefined, reader)).rejects.toThrow(
-      "Actor history requires a captured sessionTarget",
-    );
-    expect(exactEntry).not.toHaveBeenCalled();
-    expect(sessionKey).not.toHaveBeenCalled();
-    expect(owner.read).not.toHaveBeenCalled();
+      await withIncognitoSessionActor(actor, async () => {
+        await appendSessionTranscriptMessagesByIdentity({
+          ...sessionTarget,
+          messages: [
+            { role: "user" as const, content: "Earlier synthetic context.", timestamp: 1 },
+            ...target.settledMessages,
+          ].map((message) => ({ message })),
+        });
+        const sql = observeHostDataSql();
+        try {
+          const result = await projectCodexSettledHistoryInWorker({
+            agentId: "main",
+            sessionId: target.sessionId,
+            sessionFile: `sqlite:main:${target.sessionId}:${actor.path}`,
+            mirroredMessages: target.mirroredMessages,
+            settledMessages: target.settledMessages,
+            turnId: target.turnId,
+          });
+          expect(result).toMatchObject({
+            status: "ok",
+            value: [
+              { role: "user", content: [{ text: "Earlier synthetic context." }] },
+              { role: "user", content: [{ text: upstreamPrompt }] },
+              { type: "function_call", call_id: "sent" },
+              { type: "function_call_output", call_id: "sent" },
+            ],
+          });
+          expect(sql.queries).toEqual([]);
+        } finally {
+          sql.restore();
+        }
+      });
+    } finally {
+      await actor.close();
+    }
   });
 });

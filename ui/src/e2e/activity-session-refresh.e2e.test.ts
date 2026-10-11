@@ -17,6 +17,52 @@ import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts"
 const suite = createControlUiE2eSuite({ name: "Activity session refresh lifecycle" });
 
 suite.define(() => {
+  it.each(["current", "history"])(
+    "updates %s from certified row events without refetching the list",
+    async (view) => {
+      await suite.withPage({ locale: "en-US", serviceWorkers: "block" }, async ({ page }) => {
+        const key = "agent:main:activity-row-delta";
+        const session = {
+          key,
+          agentId: "main",
+          sessionId: "activity-row-delta",
+          kind: "direct" as const,
+          label: "Initial current work",
+          updatedAt: 100,
+          snapshotAt: 100,
+          hasActiveRun: true,
+          activeRunIds: ["active-run"],
+          status: "running",
+        };
+        const gateway = await installMockGateway(page, {
+          sessionKey: key,
+          methodResponses: { "sessions.list": chatSessionListResponse([session]) },
+        });
+        await page.goto(`${suite.server.baseUrl}activity${view === "current" ? "?view=live" : ""}`);
+        const row =
+          view === "current"
+            ? page
+                .getByRole("region", { name: "Active sessions", exact: true })
+                .locator(`[data-session-key="${key}"]`)
+            : page.locator(`[data-activity-session="${key}"]`);
+        await expect.poll(() => row.textContent()).toContain("Initial current work");
+        await page.clock.install();
+        await pauseVirtualClock(page);
+        const match = view === "current" ? { activeOnly: true } : { includePeople: true };
+        const initial = (await gateway.getRequests("sessions.list", match)).length;
+        await gateway.emitGatewayEvent("sessions.changed", {
+          agentId: "main",
+          reason: "patch",
+          ancestorSessions: [],
+          session: { ...session, label: "Updated by row event", updatedAt: 200, snapshotAt: 200 },
+        });
+        await expect.poll(() => row.textContent()).toContain("Updated by row event");
+        await page.clock.runFor(59_999);
+        expect((await gateway.getRequests("sessions.list", match)).length).toBe(initial);
+      });
+    },
+  );
+
   it.each([
     { name: "unfiltered", path: "activity", search: undefined, person: undefined },
     { name: "filtered", path: "activity?q=alpha", search: "alpha", person: undefined },
@@ -271,7 +317,7 @@ suite.define(() => {
             stream.evaluate((element) => element.scrollHeight > element.clientHeight + 120),
           )
           .toBe(true);
-        const autoFollow = page.locator(".activity-live-autofollow wa-switch");
+        const autoFollow = page.locator(".activity-live-autofollow").getByRole("switch");
         await autoFollow.click();
         await stream.evaluate((element) => {
           element.scrollTop = 0;

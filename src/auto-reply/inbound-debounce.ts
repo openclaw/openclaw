@@ -32,6 +32,7 @@ type DebounceBuffer<T> = {
   timeout: ReturnType<typeof setTimeout> | null;
   debounceMs: number;
   flushDeadlineMs: number;
+  flushCheckToken: number;
   releaseReady: () => void;
   task: Promise<void>;
 };
@@ -140,6 +141,8 @@ export type InboundDebounceCreateParams<T> = {
   maxWaitMs?: number | ((item: T) => number | undefined);
   buildKey: (item: T) => string | null | undefined;
   shouldDebounce?: (item: T) => boolean;
+  /** Hold a quiet-period flush before its deadline; explicit flushes bypass this check. */
+  shouldHoldFlush?: (items: readonly T[]) => boolean | Promise<boolean>;
   resolveDebounceMs?: (item: T, pending?: readonly T[]) => number | undefined;
   canAppend?: (item: T, pending: readonly T[]) => boolean;
   serializeImmediate?: boolean;
@@ -175,22 +178,17 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
       (params.shouldDebounce?.(item) ?? true),
     );
   };
-  const untrackBuffer = (key: string, buffer: DebounceBuffer<T>) => {
-    const pending = pendingBuffers.get(key);
-    pending?.delete(buffer);
-    if (pending?.size === 0) {
-      pendingBuffers.delete(key);
-    }
-  };
 
-  const reportFlushError = (err: unknown, items: T[]) => {
+  const notifyObserver = (notify: () => void) => {
     try {
-      params.onError?.(err, items);
+      notify();
     } catch {
-      // Flush failures are reported via onError, but this helper stays
-      // non-throwing so keyed chains can continue processing later items.
+      // Observer failures must not strand cancellation resources or keyed flushes.
     }
   };
+  const reportFlushError = (error: unknown, items: T[]) =>
+    notifyObserver(() => params.onError?.(error, items));
+  const cancelItems = (items: T[]) => notifyObserver(() => params.onCancel?.(items));
 
   const runFlush = async (items: T[]) => {
     let flush: InboundDebounceFlush;
@@ -211,18 +209,8 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
     const admission = flush.admission.catch(reportOnce);
     const completion = flush.completion.catch(reportOnce);
     activeCompletions.add(completion);
-    const cleanup = () => activeCompletions.delete(completion);
-    void completion.then(cleanup, cleanup);
+    void completion.then(() => activeCompletions.delete(completion));
     await Promise.race([admission, completion]);
-  };
-
-  const cancelItems = (items: T[]) => {
-    try {
-      params.onCancel?.(items);
-    } catch {
-      // Cancellation observers release caller-owned resources; debounce state
-      // must still drain even if an observer fails.
-    }
   };
 
   const resolveKeyGeneration = (key: string) => keyGenerations.get(key) ?? 0;
@@ -246,11 +234,10 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
 
   const enqueueKeyTask = (key: string, task: () => Promise<void>) => {
     const previous = keyChains.get(key) ?? Promise.resolve();
-    const next = previous.catch(() => undefined).then(task);
+    const next = previous.then(task);
     const settled = next.catch(() => undefined);
     keyChains.set(key, settled);
-    const cleanup = () => untrackKeyTask(key, settled);
-    settled.then(cleanup, cleanup);
+    void settled.then(() => untrackKeyTask(key, settled));
     return next;
   };
 
@@ -265,7 +252,7 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
     };
   };
 
-  const flushBuffer = async (key: string, buffer: DebounceBuffer<T>) => {
+  const detachBuffer = (key: string, buffer: DebounceBuffer<T>) => {
     if (buffers.get(key) === buffer) {
       buffers.delete(key);
     }
@@ -273,6 +260,10 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
       clearTimeout(buffer.timeout);
       buffer.timeout = null;
     }
+  };
+
+  const flushBuffer = async (key: string, buffer: DebounceBuffer<T>) => {
+    detachBuffer(key, buffer);
     // Reserve each key's execution slot as soon as the first buffered item
     // arrives, so later same-key work cannot overtake a timer-backed flush.
     buffer.releaseReady();
@@ -296,13 +287,7 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
     // The active task has already crossed this check and remains caller-owned.
     keyGenerations.set(key, resolveKeyGeneration(key) + 1);
     for (const buffer of pending ?? []) {
-      if (buffers.get(key) === buffer) {
-        buffers.delete(key);
-      }
-      if (buffer.timeout) {
-        clearTimeout(buffer.timeout);
-        buffer.timeout = null;
-      }
+      detachBuffer(key, buffer);
       const canceledItems = buffer.items;
       buffer.items = [];
       cancelItems(canceledItems);
@@ -312,7 +297,44 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
     return true;
   };
 
+  const settleQuietFlush = async (
+    key: string,
+    buffer: DebounceBuffer<T>,
+    checkToken: number,
+  ): Promise<void> => {
+    if (buffers.get(key) !== buffer || buffer.flushCheckToken !== checkToken) {
+      return;
+    }
+    if (!params.shouldHoldFlush || performance.now() >= buffer.flushDeadlineMs) {
+      await flushBuffer(key, buffer);
+      return;
+    }
+    // A slow hold check cannot extend the batch's fixed deadline.
+    buffer.timeout = setTimeout(
+      () => {
+        void flushBuffer(key, buffer);
+      },
+      Math.max(0, buffer.flushDeadlineMs - performance.now()),
+    );
+    buffer.timeout.unref?.();
+    let shouldHold: boolean;
+    try {
+      shouldHold = await params.shouldHoldFlush(buffer.items);
+    } catch {
+      shouldHold = false;
+    }
+    if (buffers.get(key) !== buffer || buffer.flushCheckToken !== checkToken) {
+      return;
+    }
+    if (shouldHold) {
+      scheduleFlush(key, buffer);
+    } else {
+      await flushBuffer(key, buffer);
+    }
+  };
+
   const scheduleFlush = (key: string, buffer: DebounceBuffer<T>) => {
+    const checkToken = ++buffer.flushCheckToken;
     if (buffer.timeout) {
       clearTimeout(buffer.timeout);
     }
@@ -323,7 +345,11 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
       Math.max(0, buffer.flushDeadlineMs - performance.now()),
     );
     buffer.timeout = setTimeout(() => {
-      void flushBuffer(key, buffer);
+      if (params.shouldHoldFlush) {
+        void settleQuietFlush(key, buffer, checkToken);
+      } else {
+        void flushBuffer(key, buffer);
+      }
     }, delayMs);
     buffer.timeout.unref?.();
   };
@@ -394,7 +420,11 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
     }
     const generation = resolveKeyGeneration(key);
     const reservedTask = enqueueReservedKeyTask(key, async () => {
-      untrackBuffer(key, buffer);
+      const pending = pendingBuffers.get(key);
+      pending?.delete(buffer);
+      if (pending?.size === 0) {
+        pendingBuffers.delete(key);
+      }
       if (buffer.items.length === 0) {
         return;
       }
@@ -408,6 +438,7 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
       items: [item],
       timeout: null,
       debounceMs,
+      flushCheckToken: 0,
       flushDeadlineMs:
         performance.now() +
         Math.max(

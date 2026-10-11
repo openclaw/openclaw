@@ -38,13 +38,7 @@ function harness() {
   const gateway = new GatewayPageController(host, { getGateway: () => connection.gateway });
   const base = createApplicationConfigCapability({ resourceBasePath: "" });
   const config = { ...base, current: { ...base.current, uploadsEnabled: true } };
-  const library = new SkillLibraryController(
-    host,
-    gateway,
-    () => "main",
-    async () => {},
-    () => config,
-  );
+  const library = new SkillLibraryController(host, gateway, () => config);
   document.body.append(host);
   library.list = {
     entries: [],
@@ -55,7 +49,7 @@ function harness() {
     defaultSelectionLimit: 64,
   };
   library.view = "mine";
-  return { library, config, request };
+  return { library, config, request, connection };
 }
 function fileWithReader(name: string, read: () => Promise<ArrayBuffer>) {
   const file = new File(["skill"], name);
@@ -99,29 +93,39 @@ function savedReceipt(read: SkillsLibraryReadResult): SkillsLibraryReceipt {
 afterEach(() => document.body.replaceChildren());
 
 describe("skill library upload policy", () => {
-  it("saves SKILL.md edits with uploads disabled using only retained support-file paths", async () => {
-    const { library, config, request } = harness();
+  it("keeps a replacement save locked when a previous connection's save fails", async () => {
+    const { library, request, connection } = harness();
+    const oldSave = createDeferred<SkillsLibraryReceipt>();
+    const newSave = createDeferred<SkillsLibraryReceipt>();
     const read = existingSkill();
-    request.mockResolvedValueOnce(read);
+    const initialList = library.list;
+    request
+      .mockResolvedValueOnce(read)
+      .mockReturnValueOnce(oldSave.promise)
+      .mockResolvedValueOnce(read)
+      .mockReturnValueOnce(newSave.promise)
+      .mockResolvedValueOnce(initialList);
     await library.open(read.entry.skillId);
-    const draft = library.draft!;
-    expect(draft.baseFiles[0]).not.toBe(draft.files[0]);
-    config.current.uploadsEnabled = false;
-    draft.content = "# Edited skill";
-    request.mockResolvedValueOnce(savedReceipt(read)).mockResolvedValueOnce(library.list);
-    await library.save();
+    library.draft!.content = "First connection edit";
+    const savingOld = library.save();
+    connection.publish({ ...connection.gateway.snapshot, phase: "reconnecting" });
+    library.reset();
+    connection.publish({ ...connection.gateway.snapshot, phase: "connected" });
+    await library.open(read.entry.skillId);
+    library.draft!.content = "Current connection edit";
+    const savingNew = library.save();
+    expect(library.busy).toBe(true);
+
+    oldSave.reject(new Error("Previous connection failed"));
+    await savingOld;
+    expect(library.busy).toBe(true);
     expect(library.error).toBeNull();
-    expect(request).toHaveBeenNthCalledWith(2, "skills.library.save", {
-      skillId: read.entry.skillId,
-      expectedRevision: read.entry.revision,
-      slug: read.entry.slug,
-      content: "# Edited skill",
-      files: [],
-      retainFiles: ["assets/image.png"],
-    });
-    expect(draft.files).toEqual(read.files);
-    expect(draft.baseFiles[0]).not.toBe(draft.files[0]);
-    expect(draft.entry?.revision).toBe("b".repeat(64));
+
+    newSave.resolve(savedReceipt(read));
+    await savingNew;
+    expect(library.busy).toBe(false);
+    expect(library.draft?.content).toBe("Current connection edit");
+    expect(library.draft?.entry?.revision).toBe("b".repeat(64));
   });
 
   it.each([
@@ -155,6 +159,7 @@ describe("skill library upload policy", () => {
     request.mockResolvedValueOnce(read);
     await library.open(read.entry.skillId);
     const draft = library.draft!;
+    expect(draft.baseFiles[0]).not.toBe(draft.files[0]);
     draft.files[1]!.content = "Updated notes";
     const newFile = { path: "new.txt", content: "New notes", encoding: "utf8" as const };
     draft.files.push(newFile);
@@ -183,16 +188,14 @@ describe("skill library upload policy", () => {
     request.mockResolvedValueOnce(savedReceipt(read)).mockResolvedValueOnce(library.list);
     await library.save();
     expect(library.error).toBeNull();
-    expect(request).toHaveBeenNthCalledWith(
-      4,
-      "skills.library.save",
-      expect.objectContaining({
-        expectedRevision: "b".repeat(64),
-        content: "# Next edit",
-        retainFiles: ["assets/image.png", "notes.txt", "new.txt"],
-        files: [],
-      }),
-    );
+    expect(request).toHaveBeenNthCalledWith(4, "skills.library.save", {
+      skillId: read.entry.skillId,
+      slug: read.entry.slug,
+      expectedRevision: "b".repeat(64),
+      content: "# Next edit",
+      retainFiles: ["assets/image.png", "notes.txt", "new.txt"],
+      files: [],
+    });
   });
 
   it("hides pickers and prevents file reads while leaving manual editing available", async () => {
@@ -218,29 +221,26 @@ describe("skill library upload policy", () => {
     );
   });
 
-  it.each(["SKILL.md", "skill.zip"])(
-    "rejects %s read completion after policy changes",
-    async (name) => {
-      const { library, config, request } = harness();
-      const read = createDeferred<ArrayBuffer>();
-      const reading = library.importFiles([fileWithReader(name, () => read.promise)]);
-      config.current.uploadsEnabled = false;
-      read.resolve(new TextEncoder().encode("# Skill").buffer);
-      await reading;
-      expect(request).not.toHaveBeenCalled();
-      expect(library.draft).toBeNull();
-      expect(library.error).toBe(uploadsDisabledMessage());
-    },
-  );
-
-  it("does not save a file draft staged before uploads were disabled", async () => {
+  it.each([
+    { name: "SKILL.md", phase: "read" },
+    { name: "skill.zip", phase: "read" },
+    { name: "SKILL.md", phase: "save" },
+  ])("rejects $name after uploads are disabled during $phase", async ({ name, phase }) => {
     const { library, config, request } = harness();
-    await library.importFiles([
-      fileWithReader("SKILL.md", async () => new TextEncoder().encode("# Skill").buffer),
-    ]);
-    expect(library.draft?.content).toBe("# Skill");
-    config.current.uploadsEnabled = false;
-    await library.save();
+    const read = createDeferred<ArrayBuffer>();
+    const reading = library.importFiles([fileWithReader(name, () => read.promise)]);
+    if (phase === "read") {
+      config.current.uploadsEnabled = false;
+    }
+    read.resolve(new TextEncoder().encode("# Skill").buffer);
+    await reading;
+    if (phase === "save") {
+      expect(library.draft?.content).toBe("# Skill");
+      config.current.uploadsEnabled = false;
+      await library.save();
+    } else {
+      expect(library.draft).toBeNull();
+    }
     expect(request).not.toHaveBeenCalled();
     expect(library.error).toBe(uploadsDisabledMessage());
   });

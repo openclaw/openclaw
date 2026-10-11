@@ -614,6 +614,12 @@
       "@openclaw/llm-core/*": [
         "../../packages/plugin-sdk/dist/packages/llm-core/src/*.d.ts"
       ],
+      "@openclaw/gateway-protocol": [
+        "../../packages/plugin-sdk/dist/packages/gateway-protocol/src/index.d.ts"
+      ],
+      "@openclaw/gateway-protocol/*": [
+        "../../packages/plugin-sdk/dist/packages/gateway-protocol/src/*.d.ts"
+      ],
       "@openclaw/model-catalog-core": [
         "../../packages/plugin-sdk/dist/packages/model-catalog-core/src/index.d.ts"
       ],
@@ -736,6 +742,15 @@
       ],
       "@openclaw/retry": [
         "../../packages/plugin-sdk/dist/packages/retry/src/index.d.ts"
+      ],
+      "@openclaw/worker-runtime": [
+        "../../packages/plugin-sdk/dist/packages/worker-runtime/src/index.d.ts"
+      ],
+      "@openclaw/worker-runtime/worker": [
+        "../../packages/plugin-sdk/dist/packages/worker-runtime/src/worker.d.ts"
+      ],
+      "@openclaw/worker-runtime/lifecycle": [
+        "../../packages/plugin-sdk/dist/packages/worker-runtime/src/lifecycle.d.ts"
       ],
       "@openclaw/workboard-contract": [
         "../../packages/workboard-contract/src/index.ts"
@@ -944,6 +959,9 @@
       ],
       "openclaw/plugin-sdk/memory-host-search": [
         "../../packages/plugin-sdk/dist/src/plugin-sdk/memory-host-search.d.ts"
+      ],
+      "openclaw/plugin-sdk/codex-client-version-runtime": [
+        "../../packages/plugin-sdk/dist/src/plugin-sdk/codex-client-version-runtime.d.ts"
       ]
     }
   }

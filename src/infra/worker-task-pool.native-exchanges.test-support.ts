@@ -6,11 +6,11 @@ import { mock } from "node:test";
 import { setImmediate } from "node:timers/promises";
 import { isMainThread, threadId, Worker } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { createDeferredCore } from "../shared/deferred.js";
 import {
   cancelWorkerNativeSections,
   createWorkerNativeSectionState,
-} from "./worker-task-native-sections.js";
+} from "@openclaw/worker-runtime/worker";
+import { createDeferredCore } from "../shared/deferred.js";
 import { WorkerTaskPool } from "./worker-task-pool.js";
 import { serveWorkerTasks } from "./worker-task-server.js";
 
@@ -216,7 +216,7 @@ if (!isMainThread) {
               input: { kind: "echo", value: taskId },
               interactive: true,
               nativeSections: native.buffer,
-              deletedAgentDatabaseFences: [],
+              taskContext: { deletedAgentDatabaseFences: [], databaseAdmissions: [] },
             },
             [],
           );
@@ -253,7 +253,7 @@ if (!isMainThread) {
             },
             interactive: true,
             nativeSections: native.buffer,
-            deletedAgentDatabaseFences: [],
+            taskContext: { deletedAgentDatabaseFences: [], databaseAdmissions: [] },
           },
           [],
         );
@@ -284,7 +284,7 @@ if (!isMainThread) {
               taskId: 2,
               input: { kind: "echo", value: 42 },
               nativeSections: createWorkerNativeSectionState().buffer,
-              deletedAgentDatabaseFences: [],
+              taskContext: { deletedAgentDatabaseFences: [], databaseAdmissions: [] },
             },
             [],
           );

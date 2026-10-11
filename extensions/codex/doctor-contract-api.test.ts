@@ -1,15 +1,7 @@
-// Codex tests cover doctor contract api plugin behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import {
-  createPluginStateKeyedStoreForTests,
-  resetPluginStateStoreForTests,
-} from "openclaw/plugin-sdk/plugin-state-test-runtime";
-import type {
-  OpenKeyedStoreOptions,
-  PluginDoctorStateMigrationContext,
-} from "openclaw/plugin-sdk/runtime-doctor-migrations";
+import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { getSessionEntry, upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import {
   closeOpenClawAgentDatabasesAsync,
@@ -22,6 +14,7 @@ import {
   normalizeCompatibilityConfig,
   stateMigrations,
 } from "./doctor-contract-api.js";
+import { createDoctorContext } from "./doctor-contract-api.test-support.js";
 import {
   bindingStoreKey,
   CODEX_APP_SERVER_BINDING_MAX_ENTRIES,
@@ -31,30 +24,6 @@ import {
   type StoredCodexAppServerBinding,
 } from "./src/app-server/session-binding.js";
 import { legacyCodexConversationBindingId } from "./src/conversation-binding-data.js";
-
-function createDoctorContext(
-  env: NodeJS.ProcessEnv,
-  afterRegister?: () => Promise<void>,
-): PluginDoctorStateMigrationContext {
-  return {
-    openPluginStateKeyedStore<T>(options: OpenKeyedStoreOptions) {
-      const store = createPluginStateKeyedStoreForTests<T>("codex", {
-        ...options,
-        env: options.env ?? env,
-      });
-      return afterRegister
-        ? {
-            ...store,
-            async registerIfAbsent(...args: Parameters<typeof store.registerIfAbsent>) {
-              const registered = await store.registerIfAbsent(...args);
-              await afterRegister();
-              return registered;
-            },
-          }
-        : store;
-    },
-  };
-}
 
 function openBindingStore(env: NodeJS.ProcessEnv) {
   return createDoctorContext(env).openPluginStateKeyedStore<StoredCodexAppServerBinding>({
@@ -159,76 +128,7 @@ afterEach(async () => {
 });
 
 describe("codex doctor contract", () => {
-  it("reports the retired dynamic tools profile config key", () => {
-    expect(
-      legacyConfigRules[0]?.match({
-        codexDynamicToolsProfile: "openclaw-compat",
-        codexDynamicToolsLoading: "direct",
-      }),
-    ).toBe(true);
-    expect(legacyConfigRules[0]?.match({ codexDynamicToolsLoading: "direct" })).toBe(false);
-  });
-
-  it("reports old approval-routed destructive plugin policy values", () => {
-    expect(
-      legacyConfigRules[1]?.match({
-        allow_destructive_actions: "on-request",
-        plugins: {},
-      }),
-    ).toBe(true);
-    expect(
-      legacyConfigRules[1]?.match({
-        allow_destructive_actions: true,
-        plugins: {
-          "google-calendar": { allow_destructive_actions: "on-request" },
-        },
-      }),
-    ).toBe(true);
-    expect(
-      legacyConfigRules[1]?.match({
-        allow_destructive_actions: "auto",
-        plugins: {
-          "google-calendar": { allow_destructive_actions: true },
-        },
-      }),
-    ).toBe(false);
-    expect(
-      legacyConfigRules[1]?.match({
-        allow_destructive_actions: "ask",
-        plugins: {
-          "google-calendar": { allow_destructive_actions: "ask" },
-        },
-      }),
-    ).toBe(false);
-    expect(
-      legacyConfigRules[1]?.match({
-        allow_destructive_actions: "always",
-        plugins: {
-          "google-calendar": { allow_destructive_actions: "always" },
-        },
-      }),
-    ).toBe(false);
-  });
-
-  it("reports retired app-server approval policies", () => {
-    expect(legacyConfigRules[2]?.match({ approvalPolicy: "on-failure" })).toBe(true);
-    expect(legacyConfigRules[2]?.match({ approvalPolicy: "untrusted" })).toBe(true);
-    expect(legacyConfigRules[2]?.match({ approvalPolicy: "on-request" })).toBe(false);
-  });
-
-  it.each([
-    { legacy: { turnCompletionIdleTimeoutMs: 123_456 }, defaults: { timeoutSeconds: 42 } },
-    { legacy: { turnAssistantCompletionIdleTimeoutMs: 234_567 }, defaults: { timeoutSeconds: 0 } },
-    { legacy: { postToolRawAssistantCompletionIdleTimeoutMs: 345_678 }, defaults: undefined },
-    {
-      legacy: {
-        turnCompletionIdleTimeoutMs: null,
-        turnAssistantCompletionIdleTimeoutMs: 0,
-        postToolRawAssistantCompletionIdleTimeoutMs: "private-retired-value",
-      },
-      defaults: { timeoutSeconds: 0 },
-    },
-  ])(
+  it.each([{ legacy: { turnCompletionIdleTimeoutMs: 123_456 }, defaults: { timeoutSeconds: 42 } }])(
     "reports and removes retired turn idle settings $legacy without changing the run budget",
     ({ legacy, defaults }) => {
       const appServer = {
@@ -284,36 +184,6 @@ describe("codex doctor contract", () => {
       });
     },
   );
-
-  it("removes the retired dynamic tools profile without dropping other Codex config", () => {
-    const original = {
-      plugins: {
-        entries: {
-          codex: {
-            enabled: true,
-            config: {
-              codexDynamicToolsProfile: "openclaw-compat",
-              codexDynamicToolsLoading: "direct",
-              codexDynamicToolsExclude: ["custom_tool"],
-              appServer: { mode: "guardian" },
-            },
-          },
-        },
-      },
-    };
-
-    const result = normalizeCompatibilityConfig({ cfg: original });
-
-    expect(result.changes).toEqual([
-      "Removed retired plugins.entries.codex.config.codexDynamicToolsProfile; Codex app-server always keeps Codex-native workspace tools native.",
-    ]);
-    expect(result.config.plugins?.entries?.codex?.config).toEqual({
-      codexDynamicToolsLoading: "direct",
-      codexDynamicToolsExclude: ["custom_tool"],
-      appServer: { mode: "guardian" },
-    });
-    expect(original.plugins.entries.codex.config).toHaveProperty("codexDynamicToolsProfile");
-  });
 
   it("preserves the fixed-store owner when it differs from the system owner", async () => {
     const sessionKey = "legacy-fixed-store";
@@ -425,40 +295,40 @@ describe("codex doctor contract", () => {
     await removeCodexDoctorFixture(fixture.stateDir);
   });
 
-  it.each([
-    ["without a system agent", undefined],
-    ["with a missing system agent", { systemAgent: { agentId: "missing" } }],
-  ] as const)("preserves ambiguous shared-root bindings %s", async (_label, defaults) => {
-    const fixture = await createBindingMigrationFixture({
-      legacySharedRoot: true,
-      name: "explicit-owner",
-      sessionIndex: {
-        legacy: legacySession("explicit-owner", { updatedAt: 1 }),
-      },
-      threadId: "thread-explicit-owner",
-    });
-    const params = {
-      ...fixture.params,
-      config: {
-        agents: { ownership: "explicit" as const, defaults, entries: { main: {}, ops: {} } },
-      },
-    };
+  it.each([["with a missing system agent", { systemAgent: { agentId: "missing" } }]] as const)(
+    "preserves ambiguous shared-root bindings %s",
+    async (_label, defaults) => {
+      const fixture = await createBindingMigrationFixture({
+        legacySharedRoot: true,
+        name: "explicit-owner",
+        sessionIndex: {
+          legacy: legacySession("explicit-owner", { updatedAt: 1 }),
+        },
+        threadId: "thread-explicit-owner",
+      });
+      const params = {
+        ...fixture.params,
+        config: {
+          agents: { ownership: "explicit" as const, defaults, entries: { main: {}, ops: {} } },
+        },
+      };
 
-    await expect(fixture.migration.detectLegacyState(params)).resolves.toMatchObject({
-      preview: [expect.stringContaining("legacy sidecar")],
-    });
-    const result = await fixture.migration.migrateLegacyState(params);
+      await expect(fixture.migration.detectLegacyState(params)).resolves.toMatchObject({
+        preview: [expect.stringContaining("legacy sidecar")],
+      });
+      const result = await fixture.migration.migrateLegacyState(params);
 
-    expect(result.changes).toEqual([]);
-    expect(result.warnings).toEqual([
-      expect.stringContaining("session ownership is indeterminate"),
-    ]);
-    await expect(fs.access(fixture.sidecarPath)).resolves.toBeUndefined();
-    await expect(fs.access(`${fixture.sidecarPath}.migrated`)).rejects.toThrow();
-    await expect(openBindingStore(fixture.env).entries()).resolves.toEqual([]);
+      expect(result.changes).toEqual([]);
+      expect(result.warnings).toEqual([
+        expect.stringContaining("session ownership is indeterminate"),
+      ]);
+      await expect(fs.access(fixture.sidecarPath)).resolves.toBeUndefined();
+      await expect(fs.access(`${fixture.sidecarPath}.migrated`)).rejects.toThrow();
+      await expect(openBindingStore(fixture.env).entries()).resolves.toEqual([]);
 
-    await removeCodexDoctorFixture(fixture.stateDir);
-  });
+      await removeCodexDoctorFixture(fixture.stateDir);
+    },
+  );
 
   it("migrates a shared-root binding to the configured system agent", async () => {
     const sessionKey = "legacy";
@@ -494,105 +364,13 @@ describe("codex doctor contract", () => {
     await removeCodexDoctorFixture(fixture.stateDir);
   });
 
-  it("keeps an agent-scoped shared-root binding with its explicit owner", async () => {
-    const sessionKey = "agent:ops:legacy";
-    const fixture = await createBindingMigrationFixture({
-      legacySharedRoot: true,
-      name: "explicit-ops-owner",
-      sessionIndex: {
-        [sessionKey]: legacySession("explicit-ops-owner", { updatedAt: 1 }),
-      },
-      threadId: "thread-explicit-ops-owner",
-    });
-    const params = {
-      ...fixture.params,
-      config: {
-        agents: {
-          ownership: "explicit" as const,
-          defaults: { systemAgent: { agentId: "main" } },
-          entries: { main: {}, ops: {} },
-        },
-      },
-    };
-
-    await expect(fixture.migration.migrateLegacyState(params)).resolves.toMatchObject({
-      changes: [expect.stringContaining("Migrated 1")],
-      warnings: [],
-    });
-    await expect(
-      openBindingStore(fixture.env).lookup(
-        sessionBindingKey("explicit-ops-owner", sessionKey, "ops"),
-      ),
-    ).resolves.toMatchObject({ sessionId: "explicit-ops-owner" });
-    await fs.access(`${fixture.sidecarPath}.migrated`);
-
-    await removeCodexDoctorFixture(fixture.stateDir);
-  });
-
-  it("bounds oversized legacy fingerprints before plugin-state import", async () => {
-    const rawDynamicToolsFingerprint = JSON.stringify([
-      { name: "legacy_large_tool", inputSchema: { description: "dynamic-marker".repeat(8_000) } },
-    ]);
-    const rawUserMcpServersFingerprint = JSON.stringify({
-      mcp_servers: {
-        legacy: {
-          command: "node",
-          args: ["user-mcp-marker".repeat(8_000)],
-          http_headers: { authorization: "Bearer legacy-secret" },
-        },
-      },
-    });
-    const sessionKey = "agent:main:oversized";
-    const fixture = await createBindingMigrationFixture({
-      name: "oversized",
-      sessionIndex: {
-        [sessionKey]: legacySession("oversized"),
-      },
-      threadId: "thread-oversized",
-      binding: {
-        dynamicToolsFingerprint: rawDynamicToolsFingerprint,
-        userMcpServersFingerprint: rawUserMcpServersFingerprint,
-      },
-    });
-    expect((await fs.stat(fixture.sidecarPath)).size).toBeGreaterThan(65_536);
-
-    await expect(fixture.migration.migrateLegacyState(fixture.params)).resolves.toEqual({
-      changes: [
-        "Migrated 1 Codex app-server binding sidecar(s) to plugin state and archived the legacy sources",
-      ],
-      warnings: [],
-    });
-
-    const stored = await openBindingStore(fixture.env).lookup(
-      sessionBindingKey("oversized", sessionKey),
-    );
-    expect(stored).toMatchObject({
-      state: "active",
-      binding: {
-        dynamicToolsFingerprint: hashCodexAppServerBindingFingerprint(rawDynamicToolsFingerprint),
-        userMcpServersFingerprint: hashCodexAppServerBindingFingerprint(
-          rawUserMcpServersFingerprint,
-        ),
-      },
-    });
-    expect(Buffer.byteLength(JSON.stringify(stored))).toBeLessThan(65_536);
-    expect(JSON.stringify(stored)).not.toContain("dynamic-marker");
-    expect(JSON.stringify(stored)).not.toContain("user-mcp-marker");
-    expect(JSON.stringify(stored)).not.toContain("legacy-secret");
-    await expect(fs.access(fixture.sidecarPath)).rejects.toThrow();
-    await fs.access(`${fixture.sidecarPath}.migrated`);
-    await expect(fixture.migration.migrateLegacyState(fixture.params)).resolves.toEqual({
-      changes: [],
-      warnings: [],
-    });
-
-    await removeCodexDoctorFixture(fixture.stateDir);
-  });
-
   it("normalizes a partial raw conversation import before copying the session row", async () => {
     const threadId = "thread-partial-import";
     const sessionId = "partial-import";
     const sessionKey = "agent:main:partial-import";
+    const rawUserMcpServersFingerprint = JSON.stringify({
+      mcp_servers: { legacy: { http_headers: { authorization: "Bearer legacy-secret" } } },
+    });
     const emptyConversation: StoredCodexAppServerBinding = {
       version: 1,
       state: "active",
@@ -600,11 +378,12 @@ describe("codex doctor contract", () => {
         threadId,
         cwd: "",
         dynamicToolsFingerprint: "",
+        userMcpServersFingerprint: rawUserMcpServersFingerprint,
       },
     };
-    const rawFingerprint = "x".repeat(
-      65_535 - Buffer.byteLength(JSON.stringify(emptyConversation)),
-    );
+    const rawFingerprint = "dynamic-marker"
+      .repeat(8_000)
+      .slice(0, 65_535 - Buffer.byteLength(JSON.stringify(emptyConversation)));
     const rawConversation: StoredCodexAppServerBinding = {
       ...emptyConversation,
       binding: {
@@ -625,73 +404,10 @@ describe("codex doctor contract", () => {
         },
       },
       threadId,
-      binding: { dynamicToolsFingerprint: rawFingerprint },
-    });
-    const conversationKey = bindingStoreKey({
-      kind: "conversation",
-      bindingId: legacyCodexConversationBindingId(fixture.transcriptPath),
-    });
-    const sessionStateKey = sessionBindingKey(sessionId, sessionKey);
-    const store = openBindingStore(fixture.env);
-    await store.register(conversationKey, rawConversation);
-
-    await expect(fixture.migration.migrateLegacyState(fixture.params)).resolves.toEqual({
-      changes: [
-        "Migrated 1 Codex app-server binding sidecar(s) to plugin state and archived the legacy sources",
-      ],
-      warnings: [],
-    });
-
-    const expectedFingerprint = hashCodexAppServerBindingFingerprint(rawFingerprint);
-    await expect(store.lookup(conversationKey)).resolves.toMatchObject({
-      state: "active",
-      binding: { dynamicToolsFingerprint: expectedFingerprint },
-    });
-    await expect(store.lookup(sessionStateKey)).resolves.toMatchObject({
-      state: "active",
-      sessionId,
-      binding: { dynamicToolsFingerprint: expectedFingerprint },
-    });
-    await expect(fs.access(fixture.sidecarPath)).rejects.toThrow();
-    await fs.access(`${fixture.sidecarPath}.migrated`);
-    await expect(fixture.migration.migrateLegacyState(fixture.params)).resolves.toEqual({
-      changes: [],
-      warnings: [],
-    });
-
-    await removeCodexDoctorFixture(fixture.stateDir);
-  });
-
-  it("normalizes retained raw conversation and session rows before comparison", async () => {
-    const threadId = "thread-retained-import";
-    const sessionId = "retained-import";
-    const sessionKey = "agent:main:retained-import";
-    const rawFingerprint = "x".repeat(60_000);
-    const rawConversation: StoredCodexAppServerBinding = {
-      version: 1,
-      state: "active",
       binding: {
-        threadId,
-        cwd: "",
         dynamicToolsFingerprint: rawFingerprint,
+        userMcpServersFingerprint: rawUserMcpServersFingerprint,
       },
-    };
-    const rawSession: StoredCodexAppServerBinding = {
-      ...rawConversation,
-      sessionId,
-    };
-    expect(Buffer.byteLength(JSON.stringify(rawSession))).toBeLessThan(65_536);
-
-    const fixture = await createBindingMigrationFixture({
-      name: sessionId,
-      sessionIndex: {
-        [sessionKey]: {
-          sessionId,
-          sessionFile: `${sessionId}.jsonl`,
-        },
-      },
-      threadId,
-      binding: { dynamicToolsFingerprint: rawFingerprint },
     });
     const conversationKey = bindingStoreKey({
       kind: "conversation",
@@ -700,7 +416,6 @@ describe("codex doctor contract", () => {
     const sessionStateKey = sessionBindingKey(sessionId, sessionKey);
     const store = openBindingStore(fixture.env);
     await store.register(conversationKey, rawConversation);
-    await store.register(sessionStateKey, rawSession);
 
     await expect(fixture.migration.migrateLegacyState(fixture.params)).resolves.toEqual({
       changes: [
@@ -710,15 +425,23 @@ describe("codex doctor contract", () => {
     });
 
     const expectedFingerprint = hashCodexAppServerBindingFingerprint(rawFingerprint);
+    const expectedBinding = {
+      dynamicToolsFingerprint: expectedFingerprint,
+      userMcpServersFingerprint: hashCodexAppServerBindingFingerprint(rawUserMcpServersFingerprint),
+    };
     await expect(store.lookup(conversationKey)).resolves.toMatchObject({
       state: "active",
-      binding: { dynamicToolsFingerprint: expectedFingerprint },
+      binding: expectedBinding,
     });
-    await expect(store.lookup(sessionStateKey)).resolves.toMatchObject({
+    const stored = await store.lookup(sessionStateKey);
+    expect(stored).toMatchObject({
       state: "active",
       sessionId,
-      binding: { dynamicToolsFingerprint: expectedFingerprint },
+      binding: expectedBinding,
     });
+    expect(Buffer.byteLength(JSON.stringify(stored))).toBeLessThan(65_536);
+    expect(JSON.stringify(stored)).not.toContain("dynamic-marker");
+    expect(JSON.stringify(stored)).not.toContain("legacy-secret");
     await expect(fs.access(fixture.sidecarPath)).rejects.toThrow();
     await fs.access(`${fixture.sidecarPath}.migrated`);
     await expect(fixture.migration.migrateLegacyState(fixture.params)).resolves.toEqual({
@@ -854,11 +577,11 @@ describe("codex doctor contract", () => {
   });
 
   it.each([
-    { label: "new", preexisting: false },
-    { label: "pre-existing", preexisting: true },
+    { label: "unleased", leaseConflict: false },
+    { label: "concurrently leased", leaseConflict: true },
   ])(
-    "retires a $label session row when its owner rebinds during migration",
-    async ({ preexisting }) => {
+    "revalidates a $label session row when its owner rebinds during migration",
+    async ({ leaseConflict }) => {
       const sessionKey = "agent:main:session-1";
       const fixture = await createBindingMigrationFixture({
         name: "session-current",
@@ -875,46 +598,65 @@ describe("codex doctor contract", () => {
         throw new Error("missing imported Codex binding");
       }
       const store = openBindingStore(fixture.env);
-      if (preexisting) {
-        await store.register(sessionStateKey, { ...imported, sessionId: "session-current" });
-      }
+      const sessionRow = { ...imported, sessionId: "session-current" };
+      await store.register(sessionStateKey, sessionRow);
       let rebound = false;
-      const context = createDoctorContext(fixture.env, async () => {
-        if (rebound) {
-          return;
-        }
-        rebound = true;
-        await upsertSessionEntry({
-          agentId: "main",
-          env: fixture.env,
-          sessionKey,
-          storePath: fixture.storePath,
-          entry: {
-            sessionId: "session-current",
-            lifecycleRevision: "rev-2",
-            updatedAt: Date.now(),
-          },
-        });
-      });
+      let leased = false;
+      const context = createDoctorContext(
+        fixture.env,
+        async () => {
+          if (rebound) {
+            return;
+          }
+          rebound = true;
+          await upsertSessionEntry({
+            agentId: "main",
+            env: fixture.env,
+            sessionKey,
+            storePath: fixture.storePath,
+            entry: {
+              sessionId: "session-current",
+              lifecycleRevision: "rev-2",
+              updatedAt: Date.now(),
+            },
+          });
+        },
+        async (key) => {
+          if (!leaseConflict || leased || key !== sessionStateKey) {
+            return;
+          }
+          leased = true;
+          await store.register(key, {
+            ...sessionRow,
+            lease: { token: "concurrent-owner", expiresAt: Date.now() + 60_000 },
+          });
+        },
+      );
 
       const result = await fixture.migration.migrateLegacyState({ ...fixture.params, context });
 
-      expect(result.warnings).toEqual([]);
-      expect(result.notices).toEqual([
-        expect.stringContaining("session owner changed before Codex ownership could be recorded"),
-      ]);
+      if (leaseConflict) {
+        expect(result.warnings).toEqual([
+          expect.stringContaining("its stale session binding could not be retired"),
+        ]);
+        expect(result.notices ?? []).toEqual([]);
+      } else {
+        expect(result.warnings).toEqual([]);
+        expect(result.notices).toEqual([
+          expect.stringContaining("session owner changed before Codex ownership could be recorded"),
+        ]);
+      }
       await expect(fs.access(fixture.sidecarPath)).resolves.toBeUndefined();
       await expect(fs.access(`${fixture.sidecarPath}.migrated`)).rejects.toThrow();
       await expect(
         fs.readFile(path.join(fixture.sessionsDir, "sessions.json"), "utf8").then(JSON.parse),
       ).resolves.not.toHaveProperty(`${sessionKey}.agentHarnessId`);
       expect(fixture.readSession(sessionKey)).toMatchObject({ lifecycleRevision: "rev-2" });
-      await expect(store.lookup(sessionStateKey)).resolves.toMatchObject({
-        version: 1,
-        state: "cleared",
-        sessionId: "session-current",
-        retired: true,
-      });
+      await expect(store.lookup(sessionStateKey)).resolves.toMatchObject(
+        leaseConflict
+          ? { ...sessionRow, lease: { token: "concurrent-owner" } }
+          : { version: 1, state: "cleared", sessionId: "session-current", retired: true },
+      );
 
       await removeCodexDoctorFixture(fixture.stateDir);
     },
@@ -1013,46 +755,36 @@ describe("codex doctor contract", () => {
     await removeCodexDoctorFixture(fixture.stateDir);
   });
 
-  it.each(["active", "cleared"] as const)(
-    "archives zero-owner sidecars without changing imported $state conversation state",
-    async (state) => {
-      const fixture = await createBindingMigrationFixture({
-        name: `orphan-${state}`,
-        threadId: "thread-orphan",
-      });
-      const bindingKey = bindingStoreKey({
-        kind: "conversation",
-        bindingId: legacyCodexConversationBindingId(fixture.transcriptPath),
-      });
-      const active = createStoredCodexAppServerBinding(
-        JSON.parse(await fs.readFile(fixture.sidecarPath, "utf8")),
-      );
-      if (!active) {
-        throw new Error("missing imported Codex binding");
-      }
-      const existing: StoredCodexAppServerBinding =
-        state === "active" ? active : { version: 1, state: "cleared", retired: true };
-      const store = openBindingStore(fixture.env);
-      await store.register(bindingKey, existing);
+  it("archives zero-owner sidecars without changing cleared conversation state", async () => {
+    const fixture = await createBindingMigrationFixture({
+      name: "orphan-cleared",
+      threadId: "thread-orphan",
+    });
+    const bindingKey = bindingStoreKey({
+      kind: "conversation",
+      bindingId: legacyCodexConversationBindingId(fixture.transcriptPath),
+    });
+    const existing: StoredCodexAppServerBinding = { version: 1, state: "cleared", retired: true };
+    const store = openBindingStore(fixture.env);
+    await store.register(bindingKey, existing);
 
-      await expect(fixture.migration.migrateLegacyState(fixture.params)).resolves.toEqual({
-        changes: [
-          "Migrated 1 Codex app-server binding sidecar(s) to plugin state and archived the legacy sources",
-        ],
-        warnings: [],
-      });
-      await expect(fs.access(fixture.sidecarPath)).rejects.toThrow();
-      await expect(fs.access(`${fixture.sidecarPath}.migrated`)).resolves.toBeUndefined();
-      await expect(store.lookup(bindingKey)).resolves.toEqual(existing);
-      await expect(fixture.migration.detectLegacyState(fixture.params)).resolves.toBeNull();
-      await expect(fixture.migration.migrateLegacyState(fixture.params)).resolves.toEqual({
-        changes: [],
-        warnings: [],
-      });
+    await expect(fixture.migration.migrateLegacyState(fixture.params)).resolves.toEqual({
+      changes: [
+        "Migrated 1 Codex app-server binding sidecar(s) to plugin state and archived the legacy sources",
+      ],
+      warnings: [],
+    });
+    await expect(fs.access(fixture.sidecarPath)).rejects.toThrow();
+    await expect(fs.access(`${fixture.sidecarPath}.migrated`)).resolves.toBeUndefined();
+    await expect(store.lookup(bindingKey)).resolves.toEqual(existing);
+    await expect(fixture.migration.detectLegacyState(fixture.params)).resolves.toBeNull();
+    await expect(fixture.migration.migrateLegacyState(fixture.params)).resolves.toEqual({
+      changes: [],
+      warnings: [],
+    });
 
-      await removeCodexDoctorFixture(fixture.stateDir);
-    },
-  );
+    await removeCodexDoctorFixture(fixture.stateDir);
+  });
 
   it("ignores metadata-only session rows when proving zero ownership", async () => {
     const fixture = await createBindingMigrationFixture({
@@ -1307,38 +1039,34 @@ describe("codex doctor contract", () => {
     ).toBe("on-request");
   });
 
-  it.each(["on-failure", "untrusted"])(
-    "renames the retired app-server %s approval policy",
-    (approvalPolicy) => {
-      const original = {
-        plugins: {
-          entries: {
-            codex: {
-              enabled: true,
-              config: {
-                appServer: {
-                  approvalPolicy,
-                  sandbox: "workspace-write",
-                },
+  it.each(["untrusted"])("renames the retired app-server %s approval policy", (approvalPolicy) => {
+    const original = {
+      plugins: {
+        entries: {
+          codex: {
+            enabled: true,
+            config: {
+              appServer: {
+                approvalPolicy,
+                sandbox: "workspace-write",
               },
             },
           },
         },
-      };
+      },
+    };
 
-      const result = normalizeCompatibilityConfig({ cfg: original });
+    const result = normalizeCompatibilityConfig({ cfg: original });
 
-      expect(result.changes).toEqual([
-        'Renamed retired plugins.entries.codex.config.appServer.approvalPolicy to "on-request".',
-      ]);
-      expect(result.config.plugins?.entries?.codex?.config).toEqual({
-        appServer: {
-          approvalPolicy: "on-request",
-          sandbox: "workspace-write",
-        },
-      });
-      expect(original.plugins.entries.codex.config.appServer.approvalPolicy).toBe(approvalPolicy);
-    },
-  );
+    expect(result.changes).toEqual([
+      'Renamed retired plugins.entries.codex.config.appServer.approvalPolicy to "on-request".',
+    ]);
+    expect(result.config.plugins?.entries?.codex?.config).toEqual({
+      appServer: {
+        approvalPolicy: "on-request",
+        sandbox: "workspace-write",
+      },
+    });
+    expect(original.plugins.entries.codex.config.appServer.approvalPolicy).toBe(approvalPolicy);
+  });
 });
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

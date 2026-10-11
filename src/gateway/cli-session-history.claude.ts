@@ -22,6 +22,11 @@ import {
   getCliSessionBinding,
   normalizeCliSessionReseedReceipt,
 } from "../config/sessions/cli-session-binding.js";
+import {
+  type InputProvenance,
+  readInterSessionPromptEnvelope,
+} from "../sessions/input-provenance.js";
+import { stripCliPromptDecorations } from "./cli-session-history.prompt-text.js";
 import { attachOpenClawTranscriptMeta } from "./session-transcript-readers.js";
 
 const CLAUDE_CLI_PROVIDER = "claude-cli";
@@ -193,14 +198,6 @@ function normalizeClaudeCliContent(
   });
 }
 
-function coalesceClaudeCliToolMessages(messages: TranscriptLikeMessage[]): TranscriptLikeMessage[] {
-  const coalesced: TranscriptLikeMessage[] = [];
-  for (const message of messages) {
-    appendCoalescedClaudeCliToolMessage(coalesced, message);
-  }
-  return coalesced;
-}
-
 export function appendCoalescedClaudeCliToolMessage(
   messages: TranscriptLikeMessage[],
   message: TranscriptLikeMessage,
@@ -257,6 +254,24 @@ function isClaudeCliTaskNotification(
     content.startsWith("<task-notification>") &&
     content.endsWith("</task-notification>")
   );
+}
+
+// Read provenance through generated context, but preserve the raw content for
+// display and literal matching against local transcript rows.
+function readClaudeCliInterSessionProvenance(
+  content: string | unknown[],
+): InputProvenance | undefined {
+  const blockIndex =
+    typeof content === "string"
+      ? -1
+      : content.findIndex((item) => isRecord(item) && item.type === "text");
+  const candidate = blockIndex === -1 ? undefined : content[blockIndex];
+  const block = isRecord(candidate) ? candidate : undefined;
+  const text = typeof content === "string" ? content : block?.text;
+  if (typeof text !== "string") {
+    return undefined;
+  }
+  return readInterSessionPromptEnvelope(stripCliPromptDecorations(text))?.provenance;
 }
 
 export function resolveClaudeCliPromptTextCandidates(
@@ -396,11 +411,14 @@ export function parseClaudeCliHistoryEntry(
       : isClaudeCliVisibleHarnessContext(entry)
         ? "cli_harness_context"
         : undefined;
+    const provenance = sourceTool
+      ? { kind: "internal_system", sourceTool }
+      : readClaudeCliInterSessionProvenance(content);
     return attachOpenClawTranscriptMeta(
       {
         role: "user",
         content,
-        ...(sourceTool ? { provenance: { kind: "internal_system", sourceTool } } : {}),
+        ...(provenance ? { provenance } : {}),
         ...(timestamp !== undefined ? { timestamp } : {}),
       },
       { ...baseMeta, ...(cliImageTurnKey ? { cliImageTurnKey } : {}) },
@@ -569,17 +587,16 @@ export function readClaudeCliFallbackSeed(params: {
       },
     );
     if (message) {
-      windowedTurns.push(message);
+      appendCoalescedClaudeCliToolMessage(windowedTurns, message);
     }
   }
 
-  const recentTurns = coalesceClaudeCliToolMessages(windowedTurns);
   const resolvedSummaryText = lastSummary ?? pendingSummary ?? lastBoundaryFallback;
-  if (!resolvedSummaryText && recentTurns.length === 0) {
+  if (!resolvedSummaryText && windowedTurns.length === 0) {
     return undefined;
   }
   return {
     ...(resolvedSummaryText ? { summaryText: resolvedSummaryText } : {}),
-    recentTurns,
+    recentTurns: windowedTurns,
   };
 }

@@ -15,7 +15,9 @@ import {
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e.ts";
+import { enterControlUiSession } from "../test-helpers/control-ui-session-entry.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { selectAllSidebarSessions } from "./sidebar-navigation.test-support.ts";
 
 const captureEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 let instance: OpenClawTestInstance | undefined;
@@ -193,7 +195,8 @@ suite.define(() => {
           });
         });
         const response = await page.goto(url.toString());
-        expect(response?.status()).toBe(200);
+        expect(response?.status()).toBe(404);
+        await enterControlUiSession(page);
         await waitForControlUiGatewayReady(page);
         const outer = page
           .locator("openclaw-canvas-widget-view .chat-tool-card__preview-frame")
@@ -319,6 +322,8 @@ suite.define(() => {
         const response = await page.goto(url.toString());
         expect(response?.status()).toBe(200);
         await waitForControlUiGatewayReady(page);
+        // The CLI-created dashboard and chat are not owned by the browser viewer.
+        await selectAllSidebarSessions(page);
         const board = page.locator("openclaw-board-view").first();
         const outer = board.locator(
           `.board-widget[data-widget-name="${widgetName}"] .board-widget__frame`,

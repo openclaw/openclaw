@@ -21,6 +21,7 @@ export function mutateAcpSessionEntryInWorker(
   options: OpenClawAgentDatabaseOptions,
   input: AcpSessionEntryMutationInput,
   admit: (stage: "transaction" | "commit", publication?: unknown) => void,
+  ownReceipt = true,
 ): AcpSessionEntryMutationResult {
   assertCanonicalSessionKeyWrite(input.sessionKey, input.agentId);
   return runOpenClawAgentWriteTransaction(
@@ -41,7 +42,9 @@ export function mutateAcpSessionEntryInWorker(
       const base = existing ?? (mutation.kind === "touch" ? mutation.fallbackEntry : undefined);
       if (!base) {
         const result = { entry: null };
-        deferSqliteWorkerCommitReceipt(database.db, { kind: "acp-entry-mutation", result });
+        if (ownReceipt) {
+          deferSqliteWorkerCommitReceipt(database.db, { kind: "acp-entry-mutation", result });
+        }
         admit("commit");
         return result;
       }
@@ -58,7 +61,7 @@ export function mutateAcpSessionEntryInWorker(
         prepared,
         sessionKey: input.sessionKey,
         writeBase: base,
-        next: mutation.kind === "clear-legacy" && !base.acp ? undefined : next,
+        next,
         options: {},
       });
       const publication = changed.identity
@@ -74,7 +77,9 @@ export function mutateAcpSessionEntryInWorker(
           )
         : undefined;
       const result = { entry: changed.entry, ...(publication ? { publication } : {}) };
-      deferSqliteWorkerCommitReceipt(database.db, { kind: "acp-entry-mutation", result });
+      if (ownReceipt) {
+        deferSqliteWorkerCommitReceipt(database.db, { kind: "acp-entry-mutation", result });
+      }
       admit("commit", publication);
       return result;
     },

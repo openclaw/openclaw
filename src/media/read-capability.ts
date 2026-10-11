@@ -83,16 +83,13 @@ function getManagedMediaLocalRoots(mediaSources?: readonly string[]): readonly s
 }
 
 function appendWorkspaceDirToLocalRoots(
-  roots: readonly string[] | undefined,
+  roots: readonly string[],
   workspaceDir?: string,
-): readonly string[] | undefined {
+): readonly string[] {
   if (!workspaceDir) {
     return roots;
   }
   const resolvedWorkspaceDir = path.resolve(workspaceDir);
-  if (!roots?.length) {
-    return [resolvedWorkspaceDir];
-  }
   if (roots.some((root) => path.resolve(root) === resolvedWorkspaceDir)) {
     return roots;
   }
@@ -220,7 +217,7 @@ function resolveAgentScopedMediaAccess(
     const workspaceRoot = resolveWorkspaceRoot(resolvedWorkspaceDir);
     hostReadFile = createBoundedOutboundMediaReadFile(async (filePath, options) => {
       const resolvedPath = resolvePathFromInput(filePath, workspaceRoot);
-      return await readLocalMediaFile(resolvedPath, localRoots ?? [], {
+      return await readLocalMediaFile(resolvedPath, localRoots, {
         maxBytes: options?.maxBytes ?? Number.MAX_SAFE_INTEGER,
         excludedRoots: registeredRoots,
       });
@@ -236,7 +233,7 @@ function resolveAgentScopedMediaAccess(
             ),
           },
           hostReadFile,
-          localRoots: localRoots ?? [],
+          localRoots,
           excludedLocalRoots: registeredRoots,
         })
       : hostReadFile;
@@ -246,12 +243,12 @@ function resolveAgentScopedMediaAccess(
     ? createWorkspaceAwareMediaReadFile({
         workspaceMediaAccess: params.workspaceMediaAccess,
         hostReadFile: registeredReadFile,
-        localRoots: localRoots ?? [],
+        localRoots,
         excludedLocalRoots: registeredRoots,
       })
     : undefined;
   const mediaAccess: OutboundMediaAccess = {
-    ...(localRoots?.length ? { localRoots } : {}),
+    ...(localRoots.length ? { localRoots } : {}),
     ...(readFile ? { readFile } : {}),
     ...(resolvedWorkspaceDir ? { workspaceDir: resolvedWorkspaceDir } : {}),
   };
@@ -271,7 +268,7 @@ function resolveAgentScopedMediaAccess(
     ) {
       return undefined;
     }
-    return await openLocalMediaFile(filePath, localRoots ?? [], {
+    return await openLocalMediaFile(filePath, localRoots, {
       ...options,
       excludedRoots: registeredRoots,
     });

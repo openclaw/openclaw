@@ -523,21 +523,26 @@ export function createControlUiE2eSuite(options: ControlUiE2eSuiteOptions): Cont
               const { startControlUiE2eServer } = await import("../test-helpers/control-ui-e2e.ts");
               return startControlUiE2eServer();
             });
+          const launchBrowser = () =>
+            chromium.launch({
+              ...options.browserLaunchOptions,
+              // Full-tile CPU rasterization: GPU raster left paint-history-dependent edge pixels.
+              args: [
+                "--disable-partial-raster",
+                "--disable-gpu-rasterization",
+                ...(options.browserLaunchOptions?.args ?? []),
+              ],
+              executablePath: chromiumExecutablePath,
+            });
           setupPromise = Promise.resolve().then(async () => {
             if (options.startServerBeforeBrowser) {
               server = await startServer();
               if (stopping) {
                 return;
               }
-              browser = await chromium.launch({
-                ...options.browserLaunchOptions,
-                executablePath: chromiumExecutablePath,
-              });
+              browser = await launchBrowser();
             } else {
-              browser = await chromium.launch({
-                ...options.browserLaunchOptions,
-                executablePath: chromiumExecutablePath,
-              });
+              browser = await launchBrowser();
               if (stopping) {
                 return;
               }

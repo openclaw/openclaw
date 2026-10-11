@@ -1,6 +1,6 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { formatErrorMessage } from "../infra/errors.js";
-import { markGatewayRestartTrace, measureGatewayRestartTrace } from "./restart-trace.js";
+import { measureGatewayCloseStep } from "./restart-trace.js";
 import type { GatewayCloseOptions } from "./server-public.js";
 
 /** Record a shutdown warning once. */
@@ -37,8 +37,7 @@ async function runGatewayShutdownSteps(params: {
     try {
       // Trace consumers parse one phase token; keep the human label for errors.
       const phase = `shutdown.${step.name.replace(/\s+/gu, "-")}`;
-      markGatewayRestartTrace(`${phase}.begin`);
-      await measureGatewayRestartTrace(phase, () => step.run());
+      await measureGatewayCloseStep(phase, () => step.run());
     } catch (error) {
       const message = `shutdown step failed (${step.name}): ${formatErrorMessage(error)}`;
       params.onError(message);
@@ -100,9 +99,7 @@ export function runGatewayCloseSteps(params: {
 /** Failed acquisition retains its owner when native cleanup cannot finish. */
 export class GatewayStartupCleanupError extends AggregateError {
   constructor(startupError: unknown, cleanupError: unknown) {
-    super([startupError, cleanupError], "Gateway startup failed and cleanup did not complete", {
-      cause: startupError,
-    });
+    super([startupError, cleanupError], formatErrorMessage(startupError), { cause: startupError });
     this.name = "GatewayStartupCleanupError";
   }
 }

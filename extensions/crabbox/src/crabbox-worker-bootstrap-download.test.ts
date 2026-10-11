@@ -462,18 +462,25 @@ describe("bootstrap artifact download retries", () => {
     expect(result.published).toEqual([archive]);
   });
 
-  it.each([false, true])(
-    "stops after three consecutive resets without retained progress (ignore Range: %s)",
-    async (ignoreRange) => {
+  it.each(["resume", "ignore Range", "discard partial"])(
+    "stops after three consecutive failures without retained progress (%s)",
+    async (mode) => {
+      const ignoreRange = mode === "ignore Range";
       const result = await download([
         { durationMs: 0, resetAfterBytes: 1 },
+        ...(mode === "discard partial" ? [416] : []),
         { durationMs: 0, resetAfterBytes: ignoreRange ? 1 : 0, ignoreRange },
       ]);
       expect(result.code).toBe(1);
       expect(result.requests).toHaveLength(4);
-      expect(result.ranges).toEqual([undefined, "bytes=1-", "bytes=1-", "bytes=1-"]);
+      expect(result.ranges).toEqual(
+        mode === "discard partial"
+          ? [undefined, "bytes=1-", undefined, undefined]
+          : [undefined, "bytes=1-", "bytes=1-", "bytes=1-"],
+      );
       expect(result.published).toEqual([]);
       expect(result.output).toContain("download attempt 4; 3 consecutive no-progress failures");
+      expect(result.output).not.toContain("The worker could not reach");
     },
   );
 
@@ -522,7 +529,9 @@ describe("bootstrap artifact download retries", () => {
         stall === "body" ? `bytes=${Math.floor(archive.length * 0.4)}-` : undefined,
       ]);
       expect(result.aborted).toEqual(["Bearer synthetic-worker-archive-token"]);
-      expect(result.output).toContain("failed (ETIMEDOUT); retrying download attempt 2");
+      expect(result.output).toContain(
+        "failed (ETIMEDOUT) from https://gateway.example.test; retrying download attempt 2",
+      );
       expect(result.removed.filter(({ bytes }) => bytes > 0)).toEqual([]);
       expect(result.published).toEqual([archive]);
     },
@@ -543,7 +552,7 @@ describe("bootstrap artifact download retries", () => {
           : "Bearer synthetic-worker-archive-token",
       );
       expect(result.output).toContain(
-        `Cloud worker ${failed === "worker" ? "archive" : "node bootstrap"} download body failed: synthetic archive failure (download attempt 1)`,
+        `Cloud worker ${failed === "worker" ? "archive" : "node bootstrap"} download body failed from https://gateway.example.test: synthetic archive failure (download attempt 1)`,
       );
       expect(result.installations).toEqual([]);
       expect(result.published).toEqual([]);
@@ -560,7 +569,9 @@ describe("bootstrap artifact download retries", () => {
     expect(result.installations).toEqual([0]);
     expect(result.terminations).toEqual([{ pid: -1234, signal: "SIGKILL", atMs: 1_000 }]);
     expect(result.elapsedMs).toBe(2_000);
-    expect(result.output).toContain("archive download body failed: synthetic worker failure");
+    expect(result.output).toContain(
+      "archive download body failed from https://gateway.example.test: synthetic worker failure",
+    );
     expect(result.output).not.toContain("package installation failed");
     expect(result.published).toEqual([]);
   });
@@ -657,6 +668,7 @@ describe("bootstrap artifact download retries", () => {
         (failure === 503 ? "HTTP 503" : "transport interrupted") +
           " (download attempt 3; 3 consecutive no-progress failures)",
       );
+      expect(result.output.includes("The worker could not reach")).toBe(failure !== 503);
     },
   );
 });

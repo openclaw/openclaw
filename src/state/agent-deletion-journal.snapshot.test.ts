@@ -2,15 +2,19 @@ import fs from "node:fs";
 import path from "node:path";
 import { expect, it } from "vitest";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import {
+  beginAgentDeletionJournal,
+  removeAgentDeletionJournal,
+} from "../test-utils/agent-deletion-journal.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createRetainedAgentDatabaseMatcherFromSnapshot } from "./agent-deletion-discovery.js";
 import { reconstructAgentDeletionJournal } from "./agent-deletion-journal-recovery.js";
-import {
-  beginAgentDeletionJournal,
-  completeAgentDeletionJournalInDatabase,
-  removeAgentDeletionJournal,
-} from "./agent-deletion-journal.js";
+import { completeAgentDeletionJournalInDatabase } from "./agent-deletion-journal.js";
 import { prepareAgentDatabaseDeletionSnapshotRead } from "./agent-deletion-journal.read.js";
+import {
+  registerOpenClawAgentDatabase,
+  unregisterOpenClawAgentDatabase,
+} from "./openclaw-agent-db-registry.js";
 import { openOpenClawAgentDatabase } from "./openclaw-agent-db.js";
 import { createOpenClawDatabaseMaintenanceScope } from "./openclaw-state-db-async-lifecycle.js";
 import { withExistingOpenClawStateSchema } from "./openclaw-state-db-schema-policy.js";
@@ -92,7 +96,54 @@ it("reads fresh deletion and surviving-owner facts from its captured source with
   });
 });
 
-it.each(["source", "maintenance"] as const)(
+it.each(["deletion", "registration removal"])(
+  "allows renewed registrations but invalidates an asynchronous snapshot consumer after %s",
+  async (change) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const options = { env: state.env };
+      const survivor = openOpenClawAgentDatabase({ agentId: "survivor", ...options });
+      const prepared = prepareAgentDatabaseDeletionSnapshotRead(options);
+      let consumed = 0;
+      await expect(
+        prepared.withCurrentSnapshot(async (snapshot, assertCurrent) => {
+          consumed += 1;
+          expect(snapshot?.retainedDeletions).toEqual({ status: "empty" });
+          assertCurrent();
+          await Promise.resolve();
+          registerOpenClawAgentDatabase({ agentId: "survivor", path: survivor.path, ...options });
+          assertCurrent();
+          if (change === "registration removal") {
+            unregisterOpenClawAgentDatabase({
+              agentId: "survivor",
+              path: survivor.path,
+              ...options,
+            });
+          } else {
+            beginAgentDeletionJournal(
+              {
+                agentId: "retired",
+                operationId: "during-consumption",
+                agentDir: state.agentDir("retired"),
+                workspaceDir: state.workspaceDir,
+                sessionsDir: state.sessionsDir("retired"),
+                deleteFiles: false,
+              },
+              options,
+            );
+          }
+          assertCurrent();
+        }),
+      ).rejects.toThrow(
+        change === "deletion"
+          ? "Agent database deletion snapshot changed during consumption"
+          : "Agent database registry changed during discovery",
+      );
+      expect(consumed).toBe(1);
+    });
+  },
+);
+
+it.each(["source", "maintenance", "existing-schema"] as const)(
   "does not reacquire a captured deletion snapshot after its %s lifetime ends",
   async (lifetime) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
@@ -100,7 +151,15 @@ it.each(["source", "maintenance"] as const)(
       const database = openOpenClawStateDatabase(options);
       const maintenance = createOpenClawDatabaseMaintenanceScope();
       try {
-        const prepared = maintenance.run(() => prepareAgentDatabaseDeletionSnapshotRead(options));
+        const prepare = () => prepareAgentDatabaseDeletionSnapshotRead(options);
+        if (lifetime === "existing-schema") {
+          const prepared = withExistingOpenClawStateSchema({ path: database.path }, prepare);
+          await expect(prepared.readWithCurrentAdmission()).rejects.toThrow(
+            "Existing shared-state schema admission has ended",
+          );
+          return;
+        }
+        const prepared = maintenance.run(prepare);
         const { assertCurrent } = await prepared.read();
         expect(assertCurrent).not.toThrow();
         if (lifetime === "source") {
@@ -144,18 +203,6 @@ it("keeps absent discovery conservative until its first canonical creation", asy
     expect(files.map((file) => fs.existsSync(file))).toEqual([false, false, false, false]);
     openOpenClawStateDatabase({ env: state.env });
     expect((await prepared.readWithCurrentAdmission()).snapshot).toBeDefined();
-  });
-});
-
-it("does not renew an expired existing-schema scope for a successor read", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const database = openOpenClawStateDatabase({ env: state.env });
-    const prepared = withExistingOpenClawStateSchema({ path: database.path }, () =>
-      prepareAgentDatabaseDeletionSnapshotRead({ env: state.env }),
-    );
-    await expect(prepared.readWithCurrentAdmission()).rejects.toThrow(
-      "Existing shared-state schema admission has ended",
-    );
   });
 });
 

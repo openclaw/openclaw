@@ -12,7 +12,8 @@ import { publishSessionSharingMemberChange } from "./session-accessor.sqlite-ent
 import { readSessionEntryInstanceId } from "./session-accessor.sqlite-entry-identity.js";
 import { readExactSessionEntryRow } from "./session-accessor.sqlite-entry-read.js";
 import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
-import { getSessionMemberKysely, type SessionMember } from "./session-sharing-store.kernel.js";
+import type { SessionMember } from "./session-membership-facts.types.js";
+import { getSessionMemberKysely } from "./session-sharing-store.kernel.js";
 import type {
   SessionMemberAdd,
   SessionSharingExpectedEntry,
@@ -81,8 +82,8 @@ export function addSessionMember(
   if (!identityId || !addedBy) {
     throw new Error("session member identity and actor are required");
   }
-  const options = toDatabaseOptions(resolveSqliteScope(scope));
-  const { agentId, sessionKey } = resolveSqliteScope(scope);
+  const resolved = resolveSqliteScope(scope);
+  const { agentId, sessionKey } = resolved;
   const addedAt = params.addedAt ?? Date.now();
   const inserted = runOpenClawAgentWriteTransaction(
     (database) => {
@@ -118,7 +119,7 @@ export function addSessionMember(
       }
       return changed;
     },
-    options,
+    toDatabaseOptions(resolved),
     { operationLabel: "session.sharing.add-member" },
   );
   return { member: { identityId, addedBy, addedAt }, inserted };
@@ -135,8 +136,8 @@ export function removeSessionMember(
   if (!normalizedIdentityId) {
     return null;
   }
-  const options = toDatabaseOptions(resolveSqliteScope(scope));
-  const { agentId, sessionKey } = resolveSqliteScope(scope);
+  const resolved = resolveSqliteScope(scope);
+  const { agentId, sessionKey } = resolved;
   return runOpenClawAgentWriteTransaction(
     (database) => {
       const sessionId = assertAuthorizedSessionInstance(
@@ -177,7 +178,7 @@ export function removeSessionMember(
       );
       return { identityId: row.identity_id, addedBy: row.added_by, addedAt: row.added_at };
     },
-    options,
+    toDatabaseOptions(resolved),
     { operationLabel: "session.sharing.remove-member" },
   );
 }

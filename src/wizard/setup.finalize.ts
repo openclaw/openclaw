@@ -41,9 +41,7 @@ import {
 } from "../infra/gateway-supervision.js";
 import { formatWindowsGatewayFirewallGuidance } from "../infra/windows-gateway-firewall-diagnostics.js";
 import { ExitError, type RuntimeEnv } from "../runtime.js";
-import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import {
-  cancelProcessExitAfterTuiReturn,
   resolveTuiShutdownHardExitMs,
   runTui,
   scheduleProcessExitAfterTuiReturn,
@@ -123,8 +121,6 @@ async function closeSessionGatewayForOnboarding(params: {
     params.runtime.error(formatErrorMessage(error));
   });
 }
-
-const loadSearchSetupModule = createLazyRuntimeModule(() => import("../flows/search-setup.js"));
 
 export type GatewayServiceSetupOutcome =
   | {
@@ -502,6 +498,15 @@ export async function finalizeSetupWizard(
 
   try {
     if (!opts.skipHealth) {
+      const showHealthCheckHelp = () =>
+        prompter.note(
+          [
+            t("common.docs"),
+            "https://docs.openclaw.ai/gateway/health",
+            "https://docs.openclaw.ai/gateway/troubleshooting",
+          ].join("\n"),
+          t("wizard.finalize.healthCheckHelp"),
+        );
       const probeLinks = resolveLocalControlUiProbeLinks({
         bind: nextConfig.gateway?.bind ?? "loopback",
         port: settings.port,
@@ -561,14 +566,7 @@ export async function finalizeSetupWizard(
           if (!(err instanceof ExitError)) {
             runtime.error(formatHealthCheckFailure(err));
           }
-          await prompter.note(
-            [
-              t("common.docs"),
-              "https://docs.openclaw.ai/gateway/health",
-              "https://docs.openclaw.ai/gateway/troubleshooting",
-            ].join("\n"),
-            t("wizard.finalize.healthCheckHelp"),
-          );
+          await showHealthCheckHelp();
         }
       } else if (gateway.status !== "skipped") {
         runtime.error(
@@ -578,14 +576,7 @@ export async function finalizeSetupWizard(
             ),
           ),
         );
-        await prompter.note(
-          [
-            t("common.docs"),
-            "https://docs.openclaw.ai/gateway/health",
-            "https://docs.openclaw.ai/gateway/troubleshooting",
-          ].join("\n"),
-          t("wizard.finalize.healthCheckHelp"),
-        );
+        await showHealthCheckHelp();
         await prompter.note(
           buildGatewayRecoveryProjection({
             gateway,
@@ -614,20 +605,15 @@ export async function finalizeSetupWizard(
 
     const controlUiBasePath =
       nextConfig.gateway?.controlUi?.basePath ?? baseConfig.gateway?.controlUi?.basePath;
-    const displayLinks = await resolveAdvertisedControlUiLinks({
+    const controlUiLinkOptions = {
       bind: settings.bind,
       port: settings.port,
       customBindHost: settings.customBindHost,
       basePath: controlUiBasePath,
       tlsEnabled: nextConfig.gateway?.tls?.enabled === true,
-    });
-    const probeLinks = resolveLocalControlUiProbeLinks({
-      bind: settings.bind,
-      port: settings.port,
-      customBindHost: settings.customBindHost,
-      basePath: controlUiBasePath,
-      tlsEnabled: nextConfig.gateway?.tls?.enabled === true,
-    });
+    };
+    const displayLinks = await resolveAdvertisedControlUiLinks(controlUiLinkOptions);
+    const probeLinks = resolveLocalControlUiProbeLinks(controlUiLinkOptions);
     if (opts.skipHealth || (!gatewayProbe.ok && gateway.status !== "failed")) {
       gatewayProbe = await probeGatewayReachable({
         url: probeLinks.wsUrl,
@@ -812,7 +798,8 @@ export async function finalizeSetupWizard(
     const configuredSearchProviders = listConfiguredWebSearchProviders({ config: nextConfig });
     let webSearchLines: string[];
     if (webSearchProvider) {
-      const { resolveExistingKey, hasExistingKey, hasKeyInEnv } = await loadSearchSetupModule();
+      const { resolveExistingKey, hasExistingKey, hasKeyInEnv } =
+        await import("../flows/search-setup.js");
       const entry = configuredSearchProviders.find((e) => e.id === webSearchProvider);
       const label = entry?.label ?? webSearchProvider;
       const storedKey = entry ? resolveExistingKey(nextConfig, webSearchProvider) : undefined;
@@ -891,7 +878,7 @@ export async function finalizeSetupWizard(
     } else {
       // Legacy configs may have a working key (e.g. apiKey or BRAVE_API_KEY) without
       // an explicit provider. Runtime auto-detects these, so avoid saying "skipped".
-      const { hasExistingKey, hasKeyInEnv } = await loadSearchSetupModule();
+      const { hasExistingKey, hasKeyInEnv } = await import("../flows/search-setup.js");
       const legacyDetected = configuredSearchProviders.find(
         (e) => hasExistingKey(nextConfig, e.id) || hasKeyInEnv(e),
       );
@@ -1001,7 +988,7 @@ export async function finalizeSetupWizard(
             });
             sessionGateway = undefined;
           } finally {
-            cancelProcessExitAfterTuiReturn(cleanupExitTimer);
+            clearTimeout(cleanupExitTimer);
           }
         }
       }

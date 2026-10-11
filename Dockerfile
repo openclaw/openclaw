@@ -30,7 +30,8 @@ ARG OPENCLAW_BUN_IMAGE="docker.io/oven/bun:1.4.2@sha256:9114c058aeae42162ee16dd5
 FROM ${OPENCLAW_NODE_BOOKWORM_IMAGE} AS workspace-deps
 ARG OPENCLAW_EXTENSIONS
 ARG OPENCLAW_BUNDLED_PLUGIN_DIR
-# Copy package.json files for workspace packages used by the install layer.
+# Frozen installs validate every lockfile importer's manifest, including unselected plugins.
+# Stage all workspace manifests, then filter dependency installation separately.
 # Manifest-only bundled plugins remain valid selections but need no workspace metadata.
 # Use COPY because build-context bind mounts are unreliable across supported
 # Podman/Buildah hosts. Full trees stay in this disposable stage; later stages
@@ -39,28 +40,21 @@ COPY scripts/lib/docker-plugin-selection.mjs /tmp/docker-plugin-selection.mjs
 COPY scripts/lib/root-package-bundled-plugin-excludes.mjs /tmp/root-package-bundled-plugin-excludes.mjs
 COPY package.json /tmp/package.json
 COPY packages /tmp/packages
+COPY examples /tmp/examples
 COPY ${OPENCLAW_BUNDLED_PLUGIN_DIR} /tmp/${OPENCLAW_BUNDLED_PLUGIN_DIR}
-RUN mkdir -p /out/packages "/out/${OPENCLAW_BUNDLED_PLUGIN_DIR}" && \
-    for manifest in /tmp/packages/*/package.json; do \
+RUN mkdir -p /out/packages /out/examples "/out/${OPENCLAW_BUNDLED_PLUGIN_DIR}" && \
+    for manifest in /tmp/packages/*/package.json /tmp/examples/*/package.json "/tmp/${OPENCLAW_BUNDLED_PLUGIN_DIR}"/*/package.json; do \
       [ -f "$manifest" ] || continue; \
-      pkg_dir="${manifest%/package.json}"; \
-      pkg_name="${pkg_dir##*/}"; \
-      mkdir -p "/out/packages/$pkg_name" && \
-      cp "$manifest" "/out/packages/$pkg_name/package.json"; \
+      manifest_path="${manifest#/tmp/}"; \
+      mkdir -p "/out/${manifest_path%/package.json}" && \
+      cp "$manifest" "/out/$manifest_path"; \
     done && \
     node /tmp/docker-plugin-selection.mjs "/tmp/${OPENCLAW_BUNDLED_PLUGIN_DIR}" "$OPENCLAW_EXTENSIONS" \
       > /out/openclaw-selected-plugin-dirs && \
     node /tmp/docker-plugin-selection.mjs "/tmp/${OPENCLAW_BUNDLED_PLUGIN_DIR}" "$OPENCLAW_EXTENSIONS" \
       --required-platform-packages > /out/openclaw-required-platform-packages && \
     node /tmp/docker-plugin-selection.mjs "/tmp/${OPENCLAW_BUNDLED_PLUGIN_DIR}" "$OPENCLAW_EXTENSIONS" \
-      --required-bundled /tmp/package.json > /tmp/openclaw-workspace-plugin-dirs && \
-    while IFS= read -r ext; do \
-      ext_dir="/tmp/${OPENCLAW_BUNDLED_PLUGIN_DIR}/$ext"; \
-      if [ -f "$ext_dir/package.json" ]; then \
-        mkdir -p "/out/${OPENCLAW_BUNDLED_PLUGIN_DIR}/$ext" && \
-        cp "$ext_dir/package.json" "/out/${OPENCLAW_BUNDLED_PLUGIN_DIR}/$ext/package.json"; \
-      fi; \
-    done < /tmp/openclaw-workspace-plugin-dirs
+      --required-bundled /tmp/package.json > /out/openclaw-workspace-plugin-dirs
 
 # Shared manifest-only inputs. Both installs start without node_modules so pnpm
 # never has to rename a dependency directory inherited from an OverlayFS layer.
@@ -76,12 +70,14 @@ COPY node-version.mjs ./
 COPY node-sqlite.mjs ./
 COPY node-runtime-update.mjs ./
 COPY node-runtime-recovery.mjs ./
+COPY node-runtime-env.mjs ./
 COPY cli-root-options.mjs gateway-run-argv.mjs gateway-shutdown-budget.mjs ./
 COPY node-host-launcher.mjs ./
 COPY node-compile-cache.mjs ./
 COPY docker-entrypoint.mjs ./
 COPY openclaw.mjs ./
 COPY ui/package.json ./ui/package.json
+COPY tools/solid-lint/package.json ./tools/solid-lint/package.json
 COPY patches ./patches
 COPY scripts/postinstall-bundled-plugins.mjs scripts/preinstall-package-manager-warning.mjs scripts/windows-cmd-helpers.mjs scripts/prepare-git-hooks.mjs scripts/check-install-dependency-ownership.mjs ./scripts/
 COPY scripts/lib/package-dist-imports.mjs ./scripts/lib/package-dist-imports.mjs
@@ -92,14 +88,20 @@ COPY scripts/docker/verify-fs-safe-native.mjs ./scripts/docker/verify-fs-safe-na
 COPY scripts/docker/verify-native-addons.sh ./scripts/docker/verify-native-addons.sh
 
 COPY --from=workspace-deps /out/packages/ ./packages/
+COPY --from=workspace-deps /out/examples/ ./examples/
 COPY --from=workspace-deps /out/${OPENCLAW_BUNDLED_PLUGIN_DIR}/ ./${OPENCLAW_BUNDLED_PLUGIN_DIR}/
+COPY --from=workspace-deps /out/openclaw-workspace-plugin-dirs /tmp/openclaw-workspace-plugin-dirs
 COPY --from=workspace-deps /out/openclaw-selected-plugin-dirs /tmp/openclaw-selected-plugin-dirs
 COPY --from=workspace-deps /out/openclaw-required-platform-packages /tmp/openclaw-required-platform-packages
 
 # ── Production dependencies ────────────────────────────────────
 FROM dependency-inputs AS production-deps
 RUN --mount=type=cache,id=openclaw-pnpm-store,target=/root/.local/share/pnpm/store,sharing=locked \
-    NODE_OPTIONS=--max-old-space-size=2048 pnpm install --frozen-lockfile --prod \
+    set -eu; set -- --filter . --filter ./ui --filter './packages/*'; \
+    while IFS= read -r ext; do \
+      set -- "$@" --filter "./${OPENCLAW_BUNDLED_PLUGIN_DIR}/$ext"; \
+    done < /tmp/openclaw-workspace-plugin-dirs; \
+    NODE_OPTIONS=--max-old-space-size=2048 pnpm install --frozen-lockfile --prod "$@" \
       --config.supportedArchitectures.os=linux \
       --config.supportedArchitectures.cpu="$(node -p 'process.arch')" \
       --config.supportedArchitectures.libc=glibc
@@ -119,6 +121,8 @@ COPY --from=bun-binary /usr/local/bin/bun /usr/local/bin/bun
 
 # Reduce OOM risk on low-memory hosts during dependency installation.
 # Docker builds on small VMs may otherwise fail with "Killed" (exit 137).
+# Source asset preparation builds external plugins before runtime pruning.
+# Its build dependencies stay in this disposable stage; production remains filtered.
 RUN --mount=type=cache,id=openclaw-pnpm-store,target=/root/.local/share/pnpm/store,sharing=locked \
     NODE_OPTIONS=--max-old-space-size=2048 pnpm install --frozen-lockfile \
       --config.supportedArchitectures.os=linux \
@@ -287,6 +291,7 @@ COPY --from=runtime-assets --chown=node:node /app/node-version.mjs .
 COPY --from=runtime-assets --chown=node:node /app/node-sqlite.mjs .
 COPY --from=runtime-assets --chown=node:node /app/node-runtime-update.mjs .
 COPY --from=runtime-assets --chown=node:node /app/node-runtime-recovery.mjs .
+COPY --from=runtime-assets --chown=node:node /app/node-runtime-env.mjs .
 COPY --from=runtime-assets --chown=node:node /app/cli-root-options.mjs /app/gateway-run-argv.mjs /app/gateway-shutdown-budget.mjs ./
 COPY --from=runtime-assets --chown=node:node /app/node-host-launcher.mjs .
 COPY --from=runtime-assets --chown=node:node /app/node-compile-cache.mjs .

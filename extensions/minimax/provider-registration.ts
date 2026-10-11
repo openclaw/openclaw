@@ -21,7 +21,6 @@ import {
   buildProviderReplayFamilyHooks,
   normalizeModelCompat,
 } from "openclaw/plugin-sdk/provider-model-shared";
-import { buildProviderStreamFamilyHooks } from "openclaw/plugin-sdk/provider-stream-family";
 import { fetchMinimaxUsage } from "openclaw/plugin-sdk/provider-usage";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
@@ -47,7 +46,7 @@ import {
   createMinimaxProvider,
   minimaxAuthMethodMetadata,
 } from "./provider-contract-api.js";
-import { resolveMinimaxThinkingProfile } from "./thinking.js";
+import { wrapMinimaxProviderStream } from "./stream.js";
 
 const API_PROVIDER_ID = "minimax";
 const PORTAL_PROVIDER_ID = "minimax-portal";
@@ -62,10 +61,10 @@ const MINIMAX_PROVIDER_HOOKS = {
     family: "hybrid-anthropic-openai",
     anthropicModelDropThinkingBlocks: true,
   }),
-  ...buildProviderStreamFamilyHooks("minimax-fast-mode"),
+  wrapStreamFn: wrapMinimaxProviderStream,
+  wrapSimpleCompletionStreamFn: wrapMinimaxProviderStream,
   resolveReasoningOutputMode: () => "native" as const,
-  resolveThinkingProfile: ({ modelId }: { modelId: string }) =>
-    resolveMinimaxThinkingProfile(modelId),
+  isModernModelRef: ({ modelId }: { modelId: string }) => isMiniMaxModernModelId(modelId),
 };
 
 function getProviderBaseUrl(cfg: OpenClawConfig, providerId: string): string | undefined {
@@ -312,7 +311,6 @@ function buildMinimaxApiProviderPlugin(): ProviderPlugin {
     },
     ...MINIMAX_PROVIDER_HOOKS,
     resolveDynamicModel: (ctx) => resolveMinimaxDynamicModel({ providerId: API_PROVIDER_ID, ctx }),
-    isModernModelRef: ({ modelId }) => isMiniMaxModernModelId(modelId),
     fetchUsageSnapshot: async (ctx) =>
       await fetchMinimaxUsage(ctx.token, ctx.timeoutMs, ctx.fetchFn, {
         baseUrl: resolveMinimaxUsageBaseUrl(ctx.config),
@@ -335,7 +333,6 @@ function buildMinimaxPortalProviderPlugin(): ProviderPlugin {
     ...MINIMAX_PROVIDER_HOOKS,
     resolveDynamicModel: (ctx) =>
       resolveMinimaxDynamicModel({ providerId: PORTAL_PROVIDER_ID, ctx }),
-    isModernModelRef: ({ modelId }) => isMiniMaxModernModelId(modelId),
   };
 }
 

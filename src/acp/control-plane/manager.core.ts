@@ -17,8 +17,7 @@ import { ManagerRuntimeHandleCache } from "./manager.runtime-handle-cache.js";
 import { ensureManagerRuntimeHandle } from "./manager.runtime-handle-ensure.js";
 import {
   runResetManagerSessionRuntimeOptions,
-  runSetManagerSessionConfigOption,
-  runSetManagerSessionRuntimeMode,
+  runSetManagerSessionRuntimeOption,
   runUpdateManagerSessionRuntimeOptions,
   type RuntimeOptionCommandServices,
 } from "./manager.runtime-options-commands.js";
@@ -253,11 +252,11 @@ export class AcpSessionManager {
     const runtimeMode = validateRuntimeModeInput(params.runtimeMode);
 
     return await this.withSessionActor(target, async (isCurrentActor) => {
-      return await runSetManagerSessionRuntimeMode({
+      return await runSetManagerSessionRuntimeOption({
         assertActive: params.assertActive,
         cfg: params.cfg,
         ...target,
-        runtimeMode,
+        update: { runtimeMode },
         ...this.runtimeOptionCommandServices(isCurrentActor),
       });
     });
@@ -275,12 +274,11 @@ export class AcpSessionManager {
     const { key, value } = validateRuntimeConfigOptionInput(params.key, params.value);
 
     return await this.withSessionActor(target, async (isCurrentActor) => {
-      return await runSetManagerSessionConfigOption({
+      return await runSetManagerSessionRuntimeOption({
         assertActive: params.assertActive,
         cfg: params.cfg,
         ...target,
-        key,
-        value,
+        update: { key, value },
         ...this.runtimeOptionCommandServices(isCurrentActor),
       });
     });
@@ -379,7 +377,6 @@ export class AcpSessionManager {
           input: acceptedInput,
           acceptedTurn,
           ...target,
-          deps: this.deps,
           runtimeHandles: this.runtimeHandles,
           activeTurnBySession: this.activeTurnBySession,
           resolveSession: this.resolveSessionAsync.bind(this),

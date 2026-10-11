@@ -80,9 +80,9 @@ vi.mock("../../daemon/hosted-stop.js", () => ({
   prepareHostedGatewayStop: (...args: Parameters<typeof hostedStopPrepare>) =>
     hostedStopPrepare(...args),
 }));
-const consumeGatewayRestartIntentPayloadSync = vi.fn<
-  () => { reason?: string; force?: boolean; waitMs?: number } | null
->(() => null);
+const consumeGatewayRestartIntentPayload = vi.fn<
+  ReturnType<typeof import("../../infra/restart-intent.js").prepareGatewayRestartIntentConsumption>
+>(async () => null);
 const consumeGatewayRestartIntent = vi.fn<() => GatewayRestartIntent | null>(() => null);
 
 type ManagedUpdateOwner = NonNullable<GatewayRestartIntent["successorOwner"]>;
@@ -105,7 +105,6 @@ const commitManagedServiceUpdateHandoff = vi.fn(
   async (_identity: ManagedUpdateOwner, _outcome?: "update" | "restore") => true,
 );
 const consumeGatewayRestartAuthorization = vi.fn(() => true);
-const consumeGatewayRestartIntentSync = vi.fn(() => false);
 const isGatewayRestartExternallyAllowed = vi.fn(() => false);
 const markGatewayRestartHandled = vi.fn();
 const peekGatewayRestartReason = vi.fn<() => string | undefined>(() => undefined);
@@ -116,31 +115,21 @@ const consumeGatewaySuspendHandoff =
 const disarmGatewaySuspendHandoff = vi.fn();
 const rollbackGatewayRestartSignalAdmission = vi.fn();
 const requestGatewayRestartWithSignalAdmission = vi.fn(() => ({ status: "emitted" as const }));
-const writeGatewayRestartHandoffSync = vi.fn(
-  (
-    _opts: unknown,
-  ): {
-    kind: "gateway-supervisor-restart-handoff";
-    version: 1;
-    intentId: string;
-    pid: number;
-    createdAt: number;
-    expiresAt: number;
-    source: "unknown";
-    restartKind: "full-process";
-    supervisorMode: "external";
-  } | null => ({
-    kind: "gateway-supervisor-restart-handoff",
-    version: 1,
-    intentId: "test-intent",
-    pid: process.pid,
-    createdAt: Date.now(),
-    expiresAt: Date.now() + 60_000,
-    source: "unknown",
-    restartKind: "full-process",
-    supervisorMode: "external",
-  }),
-);
+const writeGatewayRestartHandoff = vi.fn<
+  typeof import("../../infra/restart-handoff.js").writeGatewayRestartHandoff
+>(async () => ({
+  kind: "gateway-supervisor-restart-handoff",
+  version: 1,
+  intentId: "test-intent",
+  pid: process.pid,
+  createdAt: Date.now(),
+  expiresAt: Date.now() + 60_000,
+  source: "unknown",
+  restartKind: "full-process",
+  supervisorMode: "external",
+}));
+const prepareGatewayRestartHandoffRuntime =
+  vi.fn<typeof import("../../infra/restart-handoff.js").prepareGatewayRestartHandoffRuntime>();
 const scheduleGatewayRestart = vi.fn((_opts?: { delayMs?: number; reason?: string }) => ({
   ok: true,
   pid: process.pid,
@@ -260,9 +249,9 @@ vi.mock("../../infra/restart.js", async (importOriginal) => {
   };
 });
 
-vi.mock("../../infra/restart-intent.js", () => ({
-  consumeGatewayRestartIntentPayloadSync: () => consumeGatewayRestartIntentPayloadSync(),
-  consumeGatewayRestartIntentSync: () => consumeGatewayRestartIntentSync(),
+vi.mock("../../infra/restart-intent.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/restart-intent.js")>()),
+  prepareGatewayRestartIntentConsumption: () => consumeGatewayRestartIntentPayload,
 }));
 
 vi.mock("../../infra/update-managed-service-handoff.js", () => ({
@@ -308,8 +297,11 @@ vi.mock("../../infra/restart-sentinel.js", () => ({
     writeRestartSentinelIfUnchanged(...args),
 }));
 
-vi.mock("../../infra/restart-handoff.js", () => ({
-  writeGatewayRestartHandoffSync: (opts: unknown) => writeGatewayRestartHandoffSync(opts),
+vi.mock("../../infra/restart-handoff.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/restart-handoff.js")>()),
+  writeGatewayRestartHandoff: (...args: Parameters<typeof writeGatewayRestartHandoff>) =>
+    writeGatewayRestartHandoff(...args),
+  prepareGatewayRestartHandoffRuntime: () => prepareGatewayRestartHandoffRuntime(),
 }));
 
 vi.mock("../../infra/gateway-active-work.js", () => ({
@@ -408,8 +400,8 @@ function expectRestartHandoffCall(expected: {
   reason: string | undefined;
   supervisorMode: "external" | "launchd";
 }) {
-  expect(writeGatewayRestartHandoffSync).toHaveBeenCalledTimes(1);
-  const [handoff] = writeGatewayRestartHandoffSync.mock.calls[0] ?? [];
+  expect(writeGatewayRestartHandoff).toHaveBeenCalledTimes(1);
+  const [handoff] = writeGatewayRestartHandoff.mock.calls[0] ?? [];
   if (!handoff || typeof handoff !== "object" || Array.isArray(handoff)) {
     throw new Error("expected restart handoff options object");
   }
@@ -464,12 +456,14 @@ beforeEach(async () => {
   // clearAllMocks preserves queued one-shot results. A skipped lifecycle branch
   // must not shift a stale supervisor or respawn decision into the next case.
   consumeGatewayRestartIntent.mockReset();
-  consumeGatewayRestartIntentPayloadSync.mockReset().mockReturnValue(null);
+  consumeGatewayRestartIntentPayload.mockReset().mockResolvedValue(null);
   consumeGatewaySuspendHandoff.mockReset().mockReturnValue({ ok: true, value: false });
   disarmGatewaySuspendHandoff.mockClear();
   consumeGatewayRestartIntent.mockReturnValue(null);
   peekGatewayRestartReason.mockReset();
   peekGatewayRestartReason.mockReturnValue(undefined);
+  prepareGatewayRestartHandoffRuntime.mockReset();
+  prepareGatewayRestartHandoffRuntime.mockReturnValue(undefined);
   restartGatewayProcessWithFreshPid.mockReset();
   restartGatewayProcessWithFreshPid.mockReturnValue({ mode: "disabled" });
   respawnGatewayProcessForUpdate.mockReset();
@@ -536,7 +530,7 @@ export const runLoopFixture = {
   completeForegroundUpdateHandoffAfterClose,
   consumeGatewayRestartAuthorization,
   consumeGatewayRestartIntent,
-  consumeGatewayRestartIntentPayloadSync,
+  consumeGatewayRestartIntentPayload,
   consumeGatewaySuspendHandoff,
   createGatewayActiveWorkSnapshot,
   createSignaledLoopHarness,
@@ -554,6 +548,7 @@ export const runLoopFixture = {
   markGatewayRestartHandled,
   markUpdateRestartSentinelFailure,
   peekGatewayRestartReason,
+  prepareGatewayRestartHandoffRuntime,
   readCgroup,
   readLaunchdStopTimeout,
   readRestartSentinelReadOnly,
@@ -578,6 +573,6 @@ export const runLoopFixture = {
   waitForGatewayHealthyRestart,
   waitForSystemServiceUpdateHandoffs,
   writeDiagnosticStabilityBundleForFailureSync,
-  writeGatewayRestartHandoffSync,
+  writeGatewayRestartHandoff,
   writeRestartSentinelIfUnchanged,
 };

@@ -5,7 +5,6 @@ import type { OpenClawConfig } from "../../runtime-api.js";
 import { formatUnknownError } from "../errors.js";
 import {
   buildThreadContext,
-  fetchChannelMessage,
   fetchChatMessageText,
   fetchThreadReplies,
   type GraphThreadMessage,
@@ -27,6 +26,7 @@ import { resolveMSTeamsRouteSessionKey } from "./thread-session.js";
 
 export function prepareMSTeamsThreadRouting(params: {
   cfg: OpenClawConfig;
+  accountId: string;
   context: MSTeamsTurnContext;
   isDirectMessage: boolean;
   isChannel: boolean;
@@ -40,6 +40,7 @@ export function prepareMSTeamsThreadRouting(params: {
   const route = core.channel.routing.resolveAgentRoute({
     cfg: params.cfg,
     channel: "msteams",
+    accountId: params.accountId,
     teamId: params.teamId,
     peer: {
       kind: params.isDirectMessage ? "direct" : params.isChannel ? "channel" : "group",
@@ -149,15 +150,13 @@ export async function resolveMSTeamsThreadContext(params: {
               teamAadGroupId,
               params.conversationId,
               threadParentId,
-              (token, groupId, requestedChannelId, messageId) =>
-                fetchChannelMessage(token, groupId, requestedChannelId, messageId, deadline),
+              deadline,
             ),
             fetchThreadReplies(
               graphToken,
               teamAadGroupId,
               params.conversationId,
               threadParentId,
-              50,
               deadline,
             ),
           ]),

@@ -19,6 +19,7 @@ import {
   findSidebarSessionInTree,
   type SidebarSessionNavigationState,
 } from "./app-sidebar-session-navigation-logic.ts";
+import { applySidebarSessionOwnerFilter } from "./app-sidebar-session-ownership.ts";
 import {
   collectPromotedMainChildRows,
   collectSidebarSessionChildKeys,
@@ -135,12 +136,13 @@ export function projectSidebarAgentSessionRows({
   const lineageAgentId = normalizeAgentId(
     parseAgentSessionKey(lineageRoot?.key ?? "")?.agentId ?? "",
   );
-  // Adopted catalog keys render as live rows inside the Coding catalog;
-  // re-inserting one here would show the selected session twice.
+  // Selection can supplement pagination, not Gateway-owned involvement membership.
+  // Adopted catalog keys already render in Coding, so do not duplicate them here.
   const selectedFallback = navigationState.visibleSessionRows.find(
     (session) =>
       (grouped ? inScope(session) : selected === routeAgentId || lineageAgentId === selected) &&
       session.key === navigationState.activeRowKey &&
+      (!host.sessionInvolvingMeFilterActive || rowsByKey.has(session.key)) &&
       !isSessionHidden(session) &&
       !adopted.has(session.key) &&
       !isMainSession(session.key),
@@ -152,6 +154,7 @@ export function projectSidebarAgentSessionRows({
   );
   if (
     lineageRoot &&
+    (!host.sessionInvolvingMeFilterActive || rowsByKey.has(lineageRoot.key)) &&
     !isSessionHidden(lineageRoot) &&
     (areUiSessionKeysEquivalent(lineageRoot.key, navigationState.routeSessionKey) ||
       sessionMatchesArchivedFilter(lineageRoot, host.sessionsStatusFilter)) &&
@@ -277,6 +280,11 @@ export function projectSidebarAgentSessionRows({
   return projected;
 }
 
+export type SidebarHomeSession = SidebarRecentSession & {
+  /** Filtered metadata is distinct from the always-available Home navigation and child discovery. */
+  metadataVisible: boolean;
+};
+
 /** Home navigation owns its own state; persistent child conversations own separate rows. */
 export function projectSidebarHomeSession({
   host,
@@ -286,13 +294,13 @@ export function projectSidebarHomeSession({
   navigationState,
   resolveAttention,
 }: {
-  host: AgentSessionRowsHost;
+  host: AgentSessionRowsHost & { readonly sessionOwnerFilterId: string | null };
   row: GatewaySessionRow;
   agentId: string;
   result?: SessionsListResult | null;
   navigationState: SidebarSessionNavigationState;
   resolveAttention: Parameters<typeof projectSessionTree>[0]["resolveAttention"];
-}): SidebarRecentSession {
+}): SidebarHomeSession {
   const visibility = projectSidebarArchiveVisibility({
     sessionData:
       result !== undefined
@@ -329,12 +337,32 @@ export function projectSidebarHomeSession({
       isChild ? navigationState.toSidebarSession(session, true) : own,
   })[0]!;
   if (result === undefined) {
-    return home;
+    return { ...home, metadataVisible: true };
   }
+  const metadataVisible =
+    row.kind !== "unknown" &&
+    sessionMatchesArchivedFilter(row, host.sessionsStatusFilter) &&
+    !visibility.isSessionHidden(row) &&
+    (!host.sessionInvolvingMeFilterActive ||
+      result?.sessions.some((candidate) => areUiSessionKeysEquivalent(candidate.key, row.key)) ===
+        true) &&
+    applySidebarSessionOwnerFilter({
+      projected: [own],
+      ownerFacet: result?.owners,
+      selectedOwnerId: host.sessionOwnerFilterId,
+      self: host.sessionDataContext?.gateway.snapshot.selfUser,
+    }).rows.length > 0;
   // Team mode promotes persistent Home children, so the header must not count them twice.
   return {
     ...home,
     ...home.subagentSummary,
+    metadataVisible,
+    // The agent avatar is the header identity: no session icon, channel avatar,
+    // or creator/archiver chip beside it. Ownership still drives the owner filter above.
+    icon: undefined,
+    channelAvatarUrl: undefined,
+    owner: undefined,
+    archivedBy: undefined,
     attention: summarizeSidebarSessionAttention([
       own.attention,
       home.subagentSummary?.attention ?? SIDEBAR_SESSION_NO_ATTENTION,

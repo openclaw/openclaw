@@ -33,7 +33,6 @@ describe("memory embedding cache", () => {
     try {
       upsertMemoryEmbeddingCache({
         db,
-        enabled: true,
         provider: { id: "openai", model: "text-embedding-3-small" },
         providerKey: "provider-key",
         entries: () => [
@@ -58,7 +57,6 @@ describe("memory embedding cache", () => {
 
       const cached = loadMemoryEmbeddingCache({
         db,
-        enabled: true,
         providerIdentities: [
           {
             provider: "openai",
@@ -193,35 +191,32 @@ describe("memory embedding cache", () => {
 
         const cached = loadMemoryEmbeddingCache({
           db,
-          enabled: true,
           providerIdentities: [identity, alias],
           hashes: cases.map((row) => row.hash),
         });
         expect(cached).toEqual(new Map(cases.map((row) => [row.hash, row.hit ? embedding : []])));
-        const { missing } = collectMemoryCachedEmbeddings({ chunks: cases, cached });
-        expect(missing.map(({ chunk }) => chunk.hash)).toEqual([
-          "mismatch",
-          "zero",
-          "negative",
-          "unsafe-integer",
-        ]);
+        const { missing } = collectMemoryCachedEmbeddings({
+          hashes: cases.map((row) => row.hash),
+          cached,
+        });
+        const missingHashes = missing.map((index) => cases[index]!.hash);
+        expect(missingHashes).toEqual(["mismatch", "zero", "negative", "unsafe-integer"]);
         expect(readMigratedRows.all()).toEqual(migratedRows);
 
         const regenerated = [Math.PI, -0];
         const regeneratedBytes = encodeMemoryEmbedding(regenerated);
-        const regeneratedHashes = new Set(missing.map(({ chunk }) => chunk.hash));
+        const regeneratedHashes = new Set(missingHashes);
         const largestRowid = migratedRows.at(-1)?.rowid;
         if (typeof largestRowid !== "bigint") {
           throw new Error("Expected a native 64-bit cache rowid");
         }
         upsertMemoryEmbeddingCache({
           db,
-          enabled: true,
           provider: { id: identity.provider, model: identity.model },
           providerKey: identity.providerKey,
           entries: () => [
             { hash: "new", embedding: regenerated },
-            ...missing.map(({ chunk }) => ({ hash: chunk.hash, embedding: regenerated })),
+            ...missingHashes.map((hash) => ({ hash, embedding: regenerated })),
           ],
           now: 222,
         });
@@ -247,7 +242,6 @@ describe("memory embedding cache", () => {
         });
         const refreshed = loadMemoryEmbeddingCache({
           db,
-          enabled: true,
           providerIdentities: [identity, alias],
           hashes: [...cases.map((row) => row.hash), "new"],
         });
@@ -262,7 +256,7 @@ describe("memory embedding cache", () => {
         );
         expect(
           collectMemoryCachedEmbeddings({
-            chunks: [...cases, { hash: "new" }],
+            hashes: [...cases.map((row) => row.hash), "new"],
             cached: refreshed,
           }).missing,
         ).toEqual([]);
@@ -278,7 +272,6 @@ describe("memory embedding cache", () => {
     try {
       upsertMemoryEmbeddingCache({
         db,
-        enabled: true,
         provider,
         providerKey: "fixture",
         entries: () => [
@@ -293,7 +286,6 @@ describe("memory embedding cache", () => {
       db.exec("BEGIN IMMEDIATE");
       upsertMemoryEmbeddingCache({
         db,
-        enabled: true,
         provider,
         providerKey: "fixture",
         maxEntries: 2,
@@ -337,7 +329,6 @@ describe("memory embedding cache", () => {
       ]) {
         upsertMemoryEmbeddingCache({
           db,
-          enabled: true,
           provider: identity,
           providerKey: identity.key,
           entries: () => identity.hashes.map((hash) => ({ hash, embedding: [1] })),
@@ -356,7 +347,6 @@ describe("memory embedding cache", () => {
       try {
         upsertMemoryEmbeddingCache({
           db,
-          enabled: true,
           provider,
           providerKey: "fixture",
           maxEntries,
@@ -433,7 +423,6 @@ describe("memory embedding cache", () => {
     try {
       upsertMemoryEmbeddingCache({
         db,
-        enabled: true,
         provider: { id: "local", model: "fixture" },
         providerKey: "fixture",
         entries: () =>
@@ -467,7 +456,6 @@ describe("memory embedding cache", () => {
     try {
       upsertMemoryEmbeddingCache({
         db,
-        enabled: true,
         provider: { id: "local", model: "hf:owner/default.gguf" },
         providerKey: "provider-key-current",
         entries: () => [
@@ -482,7 +470,6 @@ describe("memory embedding cache", () => {
       );
       upsertMemoryEmbeddingCache({
         db,
-        enabled: true,
         provider: { id: "local", model: "/cache/default.gguf" },
         providerKey: "provider-key-alias",
         entries: () =>
@@ -493,7 +480,6 @@ describe("memory embedding cache", () => {
       });
       upsertMemoryEmbeddingCache({
         db,
-        enabled: true,
         provider: { id: "local", model: "/other/default.gguf" },
         providerKey: "provider-key-arbitrary",
         entries: () => [{ hash: "arbitrary", embedding: [0.3, 0.4] }],
@@ -501,7 +487,6 @@ describe("memory embedding cache", () => {
 
       const cached = loadMemoryEmbeddingCache({
         db,
-        enabled: true,
         providerIdentities: [
           {
             provider: "local",
@@ -525,11 +510,9 @@ describe("memory embedding cache", () => {
           ["alias", [0.1, 0.2]],
         ]),
       );
-      const { missing } = collectMemoryCachedEmbeddings({
-        chunks: ["overlap", "empty", "invalid", "alias", "arbitrary"].map((hash) => ({ hash })),
-        cached,
-      });
-      expect(missing.map(({ chunk }) => chunk.hash)).toEqual(["empty", "invalid", "arbitrary"]);
+      const hashes = ["overlap", "empty", "invalid", "alias", "arbitrary"];
+      const { missing } = collectMemoryCachedEmbeddings({ hashes, cached });
+      expect(missing.map((index) => hashes[index])).toEqual(["empty", "invalid", "arbitrary"]);
     } finally {
       db.close();
     }
@@ -549,7 +532,6 @@ describe("memory embedding cache", () => {
         for (const [index, identity] of providerIdentities.entries()) {
           upsertMemoryEmbeddingCache({
             db,
-            enabled: true,
             provider: { id: identity.provider, model: identity.model },
             providerKey: identity.providerKey,
             entries: () =>
@@ -578,7 +560,6 @@ describe("memory embedding cache", () => {
 
         const cached = loadMemoryEmbeddingCache({
           db,
-          enabled: true,
           providerIdentities,
           hashes: [...hashes, ...hashes.slice(0, 1), ""],
         });
@@ -601,7 +582,6 @@ describe("memory embedding cache", () => {
       const identity = { provider: "local", model: "fixture", providerKey: "fixture" };
       upsertMemoryEmbeddingCache({
         db,
-        enabled: true,
         provider: { id: identity.provider, model: identity.model },
         providerKey: identity.providerKey,
         entries: () => [
@@ -625,7 +605,6 @@ describe("memory embedding cache", () => {
       const load = () =>
         loadMemoryEmbeddingCache({
           db,
-          enabled: true,
           providerIdentities: [identity],
           hashes: ["first", "second"],
         });

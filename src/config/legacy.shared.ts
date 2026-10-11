@@ -1,4 +1,3 @@
-// Defines shared legacy config rule contracts for detection and migration.
 import {
   asNullableRecord as getRecord,
   isRecord,
@@ -15,6 +14,16 @@ export type LegacyConfigRule = {
   requireSourceLiteral?: boolean;
 };
 
+export const createLegacyConfigRule = (
+  path: string[],
+  message: string,
+  match?: LegacyConfigRule["match"],
+): LegacyConfigRule => ({
+  path,
+  message: `${message} Run "openclaw doctor --fix".`,
+  ...(match ? { match } : {}),
+});
+
 export type LegacyConfigMigrationContext = {
   /** Parsed configuration exactly as authored in the root config file. */
   authoredRaw: unknown;
@@ -24,18 +33,14 @@ export type LegacyConfigMigrationContext = {
   homedir?: () => string;
 };
 
-type LegacyConfigMigration = {
+export type LegacyConfigMigrationSpec = {
   id: string;
-  describe: string;
+  legacyRules?: LegacyConfigRule[];
   apply: (
     raw: Record<string, unknown>,
     changes: string[],
     context?: LegacyConfigMigrationContext,
   ) => void;
-};
-
-export type LegacyConfigMigrationSpec = LegacyConfigMigration & {
-  legacyRules?: LegacyConfigRule[];
 };
 
 export const ensureRecord = (
@@ -81,7 +86,3 @@ export const mapLegacyAudioTranscription = (value: unknown): Record<string, unkn
   }
   return result;
 };
-
-export const defineLegacyConfigMigration = (
-  migration: LegacyConfigMigrationSpec,
-): LegacyConfigMigrationSpec => migration;

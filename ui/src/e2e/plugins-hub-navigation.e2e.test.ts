@@ -67,18 +67,14 @@ const methodResponses = {
   },
   "plugins.catalog.browse": discoveryResult,
   "plugins.catalog.categories": discoveryCategories,
-  "skills.proposals.historyStatus": {
-    hasScanned: false,
-    hasMore: false,
-    ideasFound: 0,
-    reviewedSessions: 0,
-    lastScanReviewed: 0,
+  "skills.workshop.list": {
+    agentId: "main",
+    mode: "auto",
+    root: "/tmp/openclaw-e2e/agents/main/workshop-skills",
+    skills: [],
+    archived: [],
   },
-  "skills.proposals.list": {
-    proposals: [],
-    schema: "openclaw.skill-workshop.proposals-manifest.v1",
-    updatedAt: "2026-08-17T12:00:00.000Z",
-  },
+  "skills.workshop.changes": { changes: [] },
   "skills.status": {
     workspaceDir: "/tmp/openclaw-e2e/workspace",
     managedSkillsDir: "/tmp/openclaw-e2e/skills",
@@ -157,8 +153,7 @@ async function expectHeaderCopy(page: Page, active: "plugins" | "skills" | "skil
     },
     "skill-workshop": {
       title: "Skill workshop",
-      subtitle:
-        "The skills your agent uses now, suggestions waiting for review, and past decisions.",
+      subtitle: "Skills your agent learned, recent changes, and undo.",
       docs: "https://docs.openclaw.ai/tools/skill-workshop",
     },
   }[active];
@@ -484,8 +479,8 @@ suite.define(() => {
           "plugins.list",
           "plugins.catalog.browse",
           "plugins.catalog.categories",
-          "skills.proposals.historyStatus",
-          "skills.proposals.list",
+          "skills.workshop.changes",
+          "skills.workshop.list",
           "skills.status",
           "skills.search",
           "skills.library.list",

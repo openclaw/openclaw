@@ -155,8 +155,7 @@ export function updateQueuedMessageEdit(
 }
 
 export function cancelQueuedMessageEdit(host: QueuedMessageEditHost): boolean {
-  const edit = activeQueuedMessageEdit(host);
-  if (!edit) {
+  if (!activeQueuedMessageEdit(host)) {
     return false;
   }
   // The durable row still owns its payloads; cancellation releases no attachments.
@@ -172,10 +171,7 @@ export function retireEditedQueuedMessageSource(
   editOverride?: QueuedMessageEdit,
 ): void {
   const edit = editOverride ?? activeQueuedMessageEdit(host);
-  if (editOverride && host.chatQueuedEdit !== edit) {
-    return;
-  }
-  if (!edit) {
+  if (!edit || (editOverride && host.chatQueuedEdit !== edit)) {
     return;
   }
   if (!admittedDurably) {

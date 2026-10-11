@@ -9,8 +9,11 @@ export type CliCompactionContext = {
   workspaceDir: string;
   cwd?: string;
   agentDir: string;
+  /** Selected model provider (for example "anthropic"). */
   provider: string;
   model: string;
+  /** CLI backend that ran the turn (for example "claude-cli"); owns native compaction policy. */
+  cliBackendId?: string;
   skillsSnapshot?: SkillSnapshot;
   messageChannel?: string;
   agentAccountId?: string;
@@ -28,26 +31,34 @@ type CliCompactionRuntimeContextParams = CliCompactionContext & {
   trigger: string;
 };
 
+export function buildCliCompactionParams(params: CliCompactionContext) {
+  return {
+    agentId: params.sessionAgentId,
+    config: params.cfg,
+    sessionKey: params.sessionKey,
+    workspaceDir: params.workspaceDir,
+    cwd: params.cwd,
+    agentDir: params.agentDir,
+    provider: params.provider,
+    model: params.model,
+    skillsSnapshot: params.skillsSnapshot,
+    messageChannel: params.messageChannel,
+    agentAccountId: params.agentAccountId,
+    senderIsOwner: params.senderIsOwner,
+    thinkLevel: params.thinkLevel,
+    extraSystemPrompt: params.extraSystemPrompt,
+  };
+}
+
 export function buildCliCompactionRuntimeContext(params: CliCompactionRuntimeContextParams) {
   return {
     ...buildEmbeddedCompactionRuntimeContext({
-      sessionKey: params.sessionKey,
-      messageChannel: params.messageChannel,
+      ...buildCliCompactionParams(params),
       messageProvider: params.messageChannel,
-      agentAccountId: params.agentAccountId,
       authProfileId: params.authProfileId,
-      workspaceDir: params.workspaceDir,
-      cwd: params.cwd,
-      agentDir: params.agentDir,
-      config: params.cfg,
-      skillsSnapshot: params.skillsSnapshot,
-      senderIsOwner: params.senderIsOwner,
-      provider: params.provider,
       modelId: params.model,
       harnessRuntime: params.harnessRuntime,
       modelSelectionLocked: params.modelSelectionLocked,
-      thinkLevel: params.thinkLevel,
-      extraSystemPrompt: params.extraSystemPrompt,
     }),
     currentTokenCount: params.currentTokenCount,
     tokenBudget: params.contextTokenBudget,

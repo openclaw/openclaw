@@ -4,7 +4,7 @@ import {
   canonicalBytes,
   generateIdentity,
   guardInstructions,
-  open,
+  openClaimed,
   sha256Hex,
   verifyReceipt,
   type ReplayStore,
@@ -68,7 +68,10 @@ function createFlow({
     audit,
     replay: new MemoryReplayStore(),
     ...stores,
-    onIngress,
+    onIngress: async (message, assertCurrent) => {
+      assertCurrent();
+      await onIngress(message, assertCurrent);
+    },
     onOwnerNotice: async () => {},
   });
   return { keys, peerKeys, trusted, relay, stores, classifier, audit, onIngress, flow };
@@ -471,6 +474,43 @@ describe("ReefMessageFlow inbound", () => {
     expect(classifier.classify).not.toHaveBeenCalled();
     expect(relay.acknowledge).not.toHaveBeenCalled();
   });
+
+  it.each(["revoked", "policy changed"])(
+    "rejects inbound dispatch when trust is %s during delivered lookup",
+    async (change) => {
+      const { peerKeys, keys, trusted, stores, onIngress, relay, flow } = createFlow();
+      const message = await envelope(
+        peerKeys,
+        keys,
+        "01JZ0000000000000000000104",
+        "private coordination",
+      );
+      vi.spyOn(stores.delivered, "status").mockImplementationOnce(async () => {
+        if (change === "revoked") {
+          trusted.values.delete("alice");
+        } else {
+          trusted.values.set("alice", peerTrust(peerKeys, { autonomy: "notify-only" }));
+        }
+        return undefined;
+      });
+
+      await expect(
+        flow.processEntries([
+          {
+            seq: 1,
+            peer: "alice",
+            id: message.id,
+            kind: "message",
+            envelope: message,
+            ts: Math.floor(Date.now() / 1_000),
+          },
+        ]),
+      ).rejects.toThrow("changed trust before dispatch");
+
+      expect(onIngress).not.toHaveBeenCalled();
+      expect(relay.acknowledge).not.toHaveBeenCalled();
+    },
+  );
 });
 
 describe("ReefMessageFlow outbound", () => {
@@ -484,17 +524,18 @@ describe("ReefMessageFlow outbound", () => {
 
     const id = await flow.send("bob", "hello", { thread: "01JZ0000000000000000000199" });
     expect(relay.sendEnvelope).toHaveBeenCalledOnce();
-    const sent = relay.sendEnvelope.mock.calls[0]![1] as Parameters<typeof open>[0]["envelope"];
+    const sent = relay.sendEnvelope.mock.calls[0]![1] as Parameters<
+      typeof openClaimed
+    >[0]["envelope"];
     expect(sent.id).toBe(id);
-    await expect(
-      open({
-        envelope: sent,
-        self: "bob#1",
-        recipientEncryptionSecretKey: bob.encryption.secretKey,
-        senderSigningPublicKey: alice.signing.publicKey,
-        replayStore: new MemoryReplayStore(),
-      }),
-    ).resolves.toEqual({ text: "hello", thread: "01JZ0000000000000000000199" });
+    const opened = await openClaimed({
+      envelope: sent,
+      self: "bob#1",
+      recipientEncryptionSecretKey: bob.encryption.secretKey,
+      senderSigningPublicKey: alice.signing.publicKey,
+      replayStore: new MemoryReplayStore(),
+    });
+    expect(opened.body).toEqual({ text: "hello", thread: "01JZ0000000000000000000199" });
   });
 
   it("uses a message id reserved before delivery", async () => {
@@ -515,7 +556,9 @@ describe("ReefMessageFlow outbound", () => {
       }),
     ).resolves.toBe(reservedId);
     expect(order).toEqual(["dispatch", "relay"]);
-    const sent = relay.sendEnvelope.mock.calls[0]![1] as Parameters<typeof open>[0]["envelope"];
+    const sent = relay.sendEnvelope.mock.calls[0]![1] as Parameters<
+      typeof openClaimed
+    >[0]["envelope"];
     expect(sent.id).toBe(reservedId);
   });
 

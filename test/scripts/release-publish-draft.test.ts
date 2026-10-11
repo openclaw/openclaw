@@ -59,6 +59,10 @@ function publicationFixture({
   );
   for (const source of [
     "scripts/render-github-release-notes.mts",
+    "scripts/tsx.mjs",
+    "scripts/lib/tsx-cli-shim.mjs",
+    "scripts/lib/local-check-runtime.mts",
+    "scripts/lib/managed-cleanup-handoff.mts",
     "scripts/openclaw-npm-extended-stable-release.mjs",
     "scripts/lib/release-changelog.mjs",
     "scripts/lib/release-notes-compaction.mjs",
@@ -71,7 +75,9 @@ function publicationFixture({
     join(repository, "scripts/full-release-validation-policy.mjs"),
     join(root, ".release-harness/scripts/full-release-validation-policy.mjs"),
   );
-  symlinkSync(join(repository, "node_modules"), join(root, "node_modules"), "dir");
+  // Publication installs tooling in the harness, then links the frozen target cwd to it.
+  symlinkSync(join(repository, "node_modules"), join(root, ".release-harness/node_modules"), "dir");
+  symlinkSync(".release-harness/node_modules", join(root, "node_modules"), "dir");
   return { root, repository, targetSha };
 }
 
@@ -150,7 +156,7 @@ canonical_release_body_matches "$NOTES_FILE"
 );
 
 it("renders the extended-stable context through the real publication entry point", () => {
-  const releaseVersion = "2026.7.35";
+  const releaseVersion = "2026.8.35";
   const toolingVersion = "2026.9.5";
   const { root, repository, targetSha } = publicationFixture({ releaseVersion, toolingVersion });
   const workflow = parse(
@@ -183,7 +189,7 @@ it("renders the extended-stable context through the real publication entry point
   expect(
     readFileSync(join(root, "release-notes.md"), "utf8").startsWith(
       "This is a gateway-only `extended-stable` release, which is our current equivalent to LTS. " +
-        "This release is OpenClaw from the end of July 2026, plus critical security updates, " +
+        "This release is OpenClaw from the end of August 2026, plus critical security updates, " +
         "reliability and performance fixes, and features like new model support. " +
         "The latest version of OpenClaw at the time of this release is " +
         "[2026.9.5](https://github.com/openclaw/openclaw/releases#release-v2026.9.5)\n\n",

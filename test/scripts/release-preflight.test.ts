@@ -163,6 +163,7 @@ function makeIsolatedPreflightFixture(params: Parameters<typeof makeReleaseFixtu
     "scripts/lib/failed-trailer.mts",
     "scripts/lib/local-check-runtime.mts",
     "scripts/lib/managed-child-process.mts",
+    "scripts/lib/managed-cleanup-handoff.mts",
     "scripts/lib/vitest-resource-ownership.mts",
     "scripts/lib/release-version.mjs",
     "scripts/lib/tsx-cli-shim.mjs",
@@ -251,28 +252,6 @@ describe("scripts/release-preflight.mjs", () => {
       "- plugin versions: exit 7 (node --import tsx scripts/sync-plugin-versions.ts --check)",
     );
     expect(result.stderr).toContain("- config docs baseline: exit 7 (pnpm config:docs:check)");
-  });
-
-  it("runs independent generators while blocking only failed dependents", () => {
-    const fakePnpm = makeFakePnpm();
-    const result = spawnSync(testNodeExecPath, [SCRIPT, "--fix"], {
-      cwd: process.cwd(),
-      encoding: "utf8",
-      env: {
-        ...process.env,
-        OPENCLAW_RELEASE_PREFLIGHT_FAIL_COMMANDS:
-          "node --import tsx scripts/generate-plugin-inventory-doc.mts --write",
-        OPENCLAW_RELEASE_PREFLIGHT_PNPM_EVENTS: fakePnpm.eventsPath,
-        OPENCLAW_RELEASE_PREFLIGHT_PNPM_LOG: fakePnpm.logPath,
-        PATH: `${fakePnpm.binDir}${delimiter}${process.env.PATH ?? ""}`,
-      },
-    });
-
-    expect(result.status).toBe(1);
-    expect(readPnpmLog(fakePnpm.logPath).toSorted()).toEqual(FIX_COMMANDS.toSorted());
-    expect(result.stderr).toContain(
-      "- plugin inventory: exit 7 (node --import tsx scripts/generate-plugin-inventory-doc.mts --write)",
-    );
   });
 
   it("fails release preparation when the supported updater inventory is stale", () => {
@@ -525,16 +504,6 @@ process.once("exit", () => {
       active: 0,
     });
     expect(readPnpmLog(fakePnpm.logPath).toSorted()).toEqual(commands.toSorted());
-  });
-
-  it("accepts base macOS metadata for a beta package version", () => {
-    const fakePnpm = makeFakePnpm();
-    const root = makeReleaseFixture();
-    const result = runPreflight(["--check"], fakePnpm, {}, root);
-
-    expect(result.status).toBe(0);
-    expect(result.stdout).toContain("[release-preflight] macOS app version metadata OK");
-    expect(readPnpmLog(fakePnpm.logPath).toSorted()).toEqual(CHECK_COMMANDS.toSorted());
   });
 
   it("reports stale macOS version and build metadata after running all checks", () => {

@@ -13,6 +13,7 @@ import type { WorkerInstallationArtifact } from "./bundle.js";
 import { createWorkerCredentialBroker } from "./credential-broker.js";
 import {
   createWorkerEnvironmentAccess,
+  createWorkerEnvironmentProcessObservation,
   createWorkerEnvironmentTransportLifecycle,
 } from "./environment-access.js";
 import {
@@ -542,18 +543,13 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     idempotencyKey,
     inheritedProfile,
     admittedIntent,
-    machineClass,
-    executionMode,
-    projectPath,
-    signal,
-    os,
-    runSetupScript,
+    ...selection
   }: WorkerEnvironmentCreateRequest) => {
     providerLifecycle.warmMachineShape(profileId);
-    if (executionMode) {
+    if (selection.executionMode) {
       requireProviderExecutionMode(
         inheritedProfile ? inheritedProfile.providerId : configuredProfileProviderId(profileId),
-        executionMode,
+        selection.executionMode,
       );
     }
     return environmentAccess.project(
@@ -561,20 +557,8 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
         profileId,
         idempotencyKey,
         {
-          ...(inheritedProfile
-            ? {
-                inherited: {
-                  providerId: inheritedProfile.providerId,
-                  profileSnapshot: inheritedProfile.profileSnapshot,
-                },
-              }
-            : {}),
-          machineClass,
-          os,
-          executionMode,
-          projectPath,
-          runSetupScript,
-          signal,
+          ...selection,
+          ...(inheritedProfile ? { inherited: { ...inheritedProfile } } : {}),
         },
         admittedIntent,
       ),
@@ -680,6 +664,13 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     takeMintedCredential: credentialBroker.takeMintedCredential,
     acquireTurnCredential: credentialBroker.acquireTurnCredential,
     acknowledgeCredentialDelivery: credentialBroker.acknowledgeCredentialDelivery,
+    observeProcesses: createWorkerEnvironmentProcessObservation({
+      store,
+      prepareCurrentBundle: () => prepareInstallation("bundle"),
+      isStopping: () => stopping,
+      getNodeTunnel: () => options.nodeTunnelManager,
+      trackOperation,
+    }),
     startTunnel: environmentAccess.startTunnel,
     stopTunnel: async (environmentId: string, ownerEpoch?: number) => {
       await Promise.all([

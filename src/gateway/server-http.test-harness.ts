@@ -170,6 +170,7 @@ export function createTestGatewayServer(options: {
     openResponsesEnabled: false,
     handleHooksRequest: async () => false,
     getGatewayRequestContext: context.resolveGatewayContext,
+    httpRequestLifetime: context,
     ...options.overrides,
     resolvedAuth: options.resolvedAuth,
   });

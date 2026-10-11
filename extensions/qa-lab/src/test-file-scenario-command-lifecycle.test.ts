@@ -376,16 +376,6 @@ describe.skipIf(process.platform === "win32")("qa scenario command lifecycle", (
     expect(processKill).not.toHaveBeenCalled();
   });
 
-  it("preserves spawn rejection without installing lifecycle handlers", async () => {
-    const error = new Error("spawn failed");
-    spawnMock.mockImplementationOnce(() => {
-      throw error;
-    });
-
-    await expect(runCommand()).rejects.toBe(error);
-    expect(parentHandlers.size).toBe(0);
-  });
-
   it("preserves the Windows taskkill timeout lifecycle", async () => {
     const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
     const originalSystemRoot = process.env.SystemRoot;

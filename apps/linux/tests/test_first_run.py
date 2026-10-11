@@ -1,6 +1,55 @@
+import os
+from pathlib import Path
+import subprocess
+import tempfile
 import unittest
+from unittest.mock import patch
 
 from first_run import role_matches
+from gateway_switch import GatewayOnboardingFixture
+
+
+class OnboardingResourcesTests(unittest.TestCase):
+    def test_stages_runtime_and_installs_a_canonical_launcher(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            binary = root / "source/openclaw-desktop"
+            runtime = binary.parent / "desktop-runtime"
+            (runtime / "bin").mkdir(parents=True)
+            binary.write_bytes(b"synthetic native binary")
+            (runtime / "manifest.json").write_bytes(b'{"fixture":true}\n')
+            (runtime / "bin/bun").write_bytes(b"synthetic enveloped runtime")
+            home = root / "home"
+            prefix = home / ".openclaw"
+            (prefix / "bin").mkdir(parents=True)
+            with patch.dict(os.environ, {"HOME": str(home)}):
+                fixture = GatewayOnboardingFixture.__new__(GatewayOnboardingFixture)
+                staged = fixture.stage_binary(binary)
+                self.assertEqual(staged.read_bytes(), binary.read_bytes())
+                for relative in ("manifest.json", "bin/bun"):
+                    self.assertEqual((staged.parent / "desktop-runtime" / relative).read_bytes(),
+                                     (runtime / relative).read_bytes())
+                subprocess.run([
+                    "bash", str(staged.parent / "install-cli.sh"), "--json", "--no-onboard",
+                    "--prefix", str(prefix), "--version", "main", "--runtime-only",
+                    "--install-method", "git", "--git-dir", str(prefix / "dev/openclaw"),
+                ], cwd=home, check=True, capture_output=True)
+                cli = prefix / "bin/openclaw"
+                self.assertEqual(cli.read_text(), '#!/usr/bin/env bash\nset -euo pipefail\n'
+                                 f'exec "{prefix}/tools/node/bin/node" "{prefix}/dev/openclaw/dist/entry.js" "$@"\n')
+                self.assertIn("OpenClaw fixture", subprocess.check_output([str(cli), "--version"], text=True))
+                self.assertTrue((home / "fixture-installer-called").is_file())
+                self.assertFalse((home / "fixture-runtime-installed.json").exists())
+
+    def test_missing_runtime_resources_fail_before_launch(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            binary = root / "openclaw-desktop"
+            binary.write_bytes(b"synthetic native binary")
+            with patch.dict(os.environ, {"HOME": str(root / "home")}):
+                fixture = GatewayOnboardingFixture.__new__(GatewayOnboardingFixture)
+                with self.assertRaises(FileNotFoundError):
+                    fixture.stage_binary(binary)
 
 
 class RoleMatchingTests(unittest.TestCase):

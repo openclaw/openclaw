@@ -186,7 +186,6 @@ async function stopBrowserBridgeServerOnce(server: Server): Promise<void> {
   }
   const runtimeClose = stopBrowserBridgeRuntime({
     current: state,
-    getState: () => bridgeStates.get(server) ?? null,
     // Retain the exact state until ingress and resource cleanup both succeed.
     clearState: () => {},
     onWarn: () => {},
@@ -211,9 +210,7 @@ export function stopBrowserBridgeServer(server: Server): Promise<void> {
   void stopBrowserBridgeServerOnce(server).then(resolve, reject);
   void stopping
     .finally(() => {
-      if (bridgeStopPromises.get(server) === stopping) {
-        bridgeStopPromises.delete(server);
-      }
+      bridgeStopPromises.delete(server);
     })
     .catch(() => {});
   return stopping;

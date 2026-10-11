@@ -4,6 +4,7 @@ import type { WorkerInferenceContext } from "../../packages/gateway-protocol/src
 import { WORKER_INFERENCE_MAX_CONTEXT_MESSAGES } from "../../packages/gateway-protocol/src/schema/worker-inference.js";
 import type { AgentMessage } from "../agents/runtime/index.js";
 import type { AgentSessionWriteSettlementRunner } from "../agents/sessions/agent-session.js";
+import { readAgentAssistantSource } from "../infra/agent-events.js";
 import {
   hasRuntimeContextMarker,
   isRuntimeContextMessage,
@@ -52,6 +53,7 @@ function toWorkerInferenceMessage(
             ? message.content
             : message.content.map(projectWorkerTextOrImageContent),
         timestamp: message.timestamp,
+        ...(message.operatorMessage ? { operatorMessage: message.operatorMessage } : {}),
       },
     };
   }
@@ -107,15 +109,10 @@ export type WorkerTranscriptClient = {
   commit: (messages: WorkerTranscriptMessage[]) => Promise<void>;
 };
 
-type WorkerTranscriptRuntime = {
-  onMessagePersisted: (message: AgentMessage) => void;
-  withSessionWriteSettlement: AgentSessionWriteSettlementRunner;
-};
-
 export function createWorkerTranscriptRuntime(
   client: WorkerTranscriptClient,
   signal?: AbortSignal,
-): WorkerTranscriptRuntime {
+) {
   const pendingTranscriptMessages: WorkerTranscriptMessage[] = [];
   let failedCommit: { error: unknown } | undefined;
   const onMessagePersisted = (message: AgentMessage) => {
@@ -127,6 +124,10 @@ export function createWorkerTranscriptRuntime(
       throw new Error(
         `Worker transcript cannot persist authoritative provider replay: ${projected.details.reason}.`,
       );
+    }
+    const itemId = readAgentAssistantSource(message)?.itemId;
+    if (projected.message.role === "assistant" && itemId) {
+      projected.message.itemId = itemId;
     }
     if (!isWorkerTranscriptMessageFrameSafe(projected.message)) {
       throw new Error("Worker transcript message exceeds the protocol payload limit.");

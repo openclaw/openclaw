@@ -100,7 +100,7 @@ describe("skill library mock-provider E2E through real Gateway and node worker",
           await instance.state.writeConfig({
             ...config,
             gateway: authConfig.gateway,
-            tools: { ...config.tools, codeMode: false, toolSearch: false, exec: { mode: "full" } },
+            tools: { ...config.tools, codeMode: false, exec: { mode: "full" } },
             nodeHost: { workerRuns: { enabled: true } },
           });
           console.info("[skill-library-wire] starting isolated Gateway");
@@ -363,6 +363,7 @@ describe("skill library mock-provider E2E through real Gateway and node worker",
             ),
           ).resolves.toMatchObject({ status: "ok" });
           const authorOutput = provider.authorOutputs.get("bob-worker");
+          expect(authorOutput?.describedId).toEqual(expect.stringContaining("skill_workshop"));
           if (!authorOutput?.created || !authorOutput.read || !authorOutput.updated) {
             throw new Error("Worker did not return real Workshop create, read and update results");
           }

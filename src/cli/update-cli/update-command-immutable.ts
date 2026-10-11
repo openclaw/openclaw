@@ -55,16 +55,22 @@ function reportImmutableFailure(
   return exitCliAfterOutput(defaultRuntime, 1);
 }
 
+function collectReceipt(receipts: string[], opts: { json?: boolean }) {
+  return (line: string) => {
+    receipts.push(line);
+    if (!opts.json) {
+      defaultRuntime.log(line);
+    }
+  };
+}
+
 export async function refuseImmutableUpdateActivation(
   root: string,
   opts: { json?: boolean },
 ): Promise<void> {
-  let installation: Awaited<ReturnType<typeof inspectImmutableInstall>>;
-  try {
-    installation = await inspectImmutableInstall(root);
-  } catch (error) {
-    return reportImmutableFailure(error, opts.json);
-  }
+  const installation = await inspectImmutableInstall(root).catch((error: unknown) =>
+    reportImmutableFailure(error, opts.json),
+  );
   if (installation) {
     reportImmutableFailure(
       "Immutable installations use openclaw update for preparation and enabled activation, or openclaw update recover --root <installation-root> for retained recovery. update repair does not own this installation.",
@@ -77,12 +83,9 @@ export async function refuseImmutableUpdateActivation(
 /** Dispatch before the mutable updater admits state, retains runtime, or inspects services. */
 export async function tryRunImmutableUpdateCommand(opts: UpdateCommandOptions): Promise<boolean> {
   const root = opts.sourceUpdate?.root ?? (await resolveUpdateRoot());
-  let installation: Awaited<ReturnType<typeof inspectImmutableInstall>>;
-  try {
-    installation = await inspectImmutableInstall(root);
-  } catch (error) {
-    return reportImmutableFailure(error, opts.json);
-  }
+  const installation = await inspectImmutableInstall(root).catch((error: unknown) =>
+    reportImmutableFailure(error, opts.json),
+  );
   if (!installation) {
     if (opts.drainTimeout !== undefined) {
       throw new Error("--drain-timeout requires an adopted immutable installation.");
@@ -138,12 +141,7 @@ export async function tryRunImmutableUpdateCommand(opts: UpdateCommandOptions): 
         expectedPrepared,
         timeoutMs: parseUpdateTimeoutMs(opts.timeout),
         drainTimeoutMs,
-        onReceipt: (line) => {
-          receipts.push(line);
-          if (!opts.json) {
-            defaultRuntime.log(line);
-          }
-        },
+        onReceipt: collectReceipt(receipts, opts),
       });
     } catch (error) {
       return reportImmutableFailure(error, opts.json, "immutable-activation-failed");
@@ -152,14 +150,14 @@ export async function tryRunImmutableUpdateCommand(opts: UpdateCommandOptions): 
   const message =
     result.status === "error"
       ? "Immutable preparation failed; the selected generation was preserved."
-      : typeof activation !== "string"
-        ? activationMessage(activation)
-        : activation === "disabled"
-          ? PREPARATION_ONLY
-          : activation === "skipped"
-            ? "Sealed generation preparation completed; activation was skipped by --no-restart."
-            : activation === "planned"
-              ? "Would activate the prepared generation under the enabled adoption record."
+      : result.status === "dry-run"
+        ? "Inspection only; no generation was prepared or activated."
+        : typeof activation !== "string"
+          ? activationMessage(activation)
+          : activation === "disabled"
+            ? PREPARATION_ONLY
+            : activation === "skipped"
+              ? "Sealed generation preparation completed; activation was skipped by --no-restart."
               : "No immutable activation was needed.";
   if (opts.json) {
     defaultRuntime.writeJson({
@@ -186,6 +184,15 @@ export async function tryRunImmutableUpdateCommand(opts: UpdateCommandOptions): 
     for (const warning of result.warnings) {
       defaultRuntime.error(`Warning: ${warning}`);
     }
+    if (result.coverage) {
+      const { formatImmutableUpdateCoverage } =
+        await import("../../infra/update-immutable-inspection.js");
+      const { sanitizeTerminalText } =
+        await import("../../../packages/terminal-core/src/safe-text.js");
+      for (const line of formatImmutableUpdateCoverage(result.coverage)) {
+        defaultRuntime.log(sanitizeTerminalText(line));
+      }
+    }
     defaultRuntime.log(message);
     if (typeof activation !== "string" && activation.recoveryCommand) {
       defaultRuntime.log(`Recovery: ${activation.recoveryCommand}`);
@@ -203,12 +210,9 @@ export async function tryRunImmutableUpdateCommand(opts: UpdateCommandOptions): 
 export async function updateAdoptImmutableCommand(
   opts: Parameters<typeof adoptImmutableInstall>[0] & { json?: boolean },
 ): Promise<void> {
-  let installation: Awaited<ReturnType<typeof adoptImmutableInstall>>;
-  try {
-    installation = await adoptImmutableInstall(opts);
-  } catch (error) {
-    return reportImmutableFailure(error, opts.json);
-  }
+  const installation = await adoptImmutableInstall(opts).catch((error: unknown) =>
+    reportImmutableFailure(error, opts.json),
+  );
   if (opts.json) {
     defaultRuntime.writeJson({
       status: "adopted",
@@ -242,12 +246,7 @@ export async function updateRecoverImmutableCommand(opts: {
       root: opts.root,
       timeoutMs: parseUpdateTimeoutMs(opts.timeout),
       drainTimeoutMs: parseUpdateTimeoutMs(opts.drainTimeout, "--drain-timeout"),
-      onReceipt: (line) => {
-        receipts.push(line);
-        if (!opts.json) {
-          defaultRuntime.log(line);
-        }
-      },
+      onReceipt: collectReceipt(receipts, opts),
     });
   } catch (error) {
     return reportImmutableFailure(error, opts.json, "immutable-recovery-failed");

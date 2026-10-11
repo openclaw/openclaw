@@ -21,7 +21,7 @@ const LABEL = "io.openclaw.vitest-isolated";
 const CONTAINER_ENV = {
   PATH: "/opt/openclaw-vitest:/usr/local/bin:/usr/bin:/bin",
   HOME: "/tmp/home",
-  TMPDIR: "/tmp",
+  TMPDIR: "/workspace/.openclaw/tmp",
   LANG: "C.UTF-8",
   LC_ALL: "C.UTF-8",
   CI: "1",

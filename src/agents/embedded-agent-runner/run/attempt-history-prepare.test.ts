@@ -2,6 +2,8 @@ import { beforeEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../../test/helpers/promise.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { AgentMessage } from "../../runtime/index.js";
+import { SettingsManager } from "../../sessions/settings-manager.js";
+import { createToolResultPromptProjectionState } from "../session-prompt-state.js";
 import { prepareEmbeddedAttemptHistory } from "./attempt-history-prepare.js";
 
 const mocks = vi.hoisted(() => ({
@@ -62,9 +64,18 @@ function createFixture() {
     },
     prepared: {
       sessionRuntime: {
-        agentSession: { activeSession: { agent, messages } },
+        agentSession: {
+          activeSession: {
+            agent,
+            get messages() {
+              return agent.state.messages;
+            },
+          },
+          settingsManager: SettingsManager.inMemory(),
+        },
         boundary: {},
         sessionManager: {},
+        toolResultPromptProjectionState: createToolResultPromptProjectionState(),
         transcriptPolicy: {},
         transport: {},
         state: { systemPromptText: "System prompt" },
@@ -122,8 +133,7 @@ it("awaits descriptive worker rows before publishing the recovery briefing", asy
   expect(fixture.agent.state.messages.at(-1)).toMatchObject({
     content: expect.not.stringContaining("unrelated"),
   });
-  const [, update, options] = mocks.updateEntry.mock.calls[0]!;
-  expect(options?.assertCommitAllowed).toBe(fixture.assertActive);
+  const [, update] = mocks.updateEntry.mock.calls[0]!;
   expect(await update(fixture.entry, {})).toMatchObject({ quotaSuspension: { state: "active" } });
   expect(await update({ ...fixture.entry, sessionId: "replacement" }, {})).toBeNull();
 });

@@ -756,6 +756,8 @@ describe("native background process source authority", () => {
 
 describe("managed-only Codex sandbox compatibility", () => {
   it("executes the advertised sandbox alias after a managed-only native catalog upgrade", async () => {
+    // Keep worker preparation outside the policy fixture's logical attempt budget.
+    vi.useFakeTimers({ toFake: ["Date"] });
     const f = createSandboxPolicyRun();
     const options = {
       pluginConfig: { appServer: { experimental: { sandboxExecServer: true } } },

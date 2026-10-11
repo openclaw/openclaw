@@ -62,6 +62,7 @@ import {
   loadRequesterSessionEntry,
   resolveExternalBestEffortDeliveryTarget,
   resolveQueueSettings,
+  withSubagentRequesterSource,
 } from "./subagent-announce-delivery.runtime.js";
 import { createDirectAnnounceResponseClassifier } from "./subagent-announce-direct-response.js";
 import {
@@ -103,6 +104,7 @@ export type SubagentAnnounceDirectParams = {
   createUserTurnTranscriptRecorder?: (sessionId: string) => UserTurnTranscriptRecorder;
   onDeliveryResult?: (delivery: SubagentAnnounceDeliveryResult) => void | Promise<void>;
   signal?: AbortSignal;
+  onExecutionStarted?: () => void;
   resolveGatewayContext?: import("../../../gateway/server-methods/types.js").GatewayContextResolver;
 };
 
@@ -120,6 +122,29 @@ function completionHandoffPendingResult(): SubagentAnnounceDeliveryResult {
 export async function sendSubagentAnnounceDirectly(
   params: SubagentAnnounceDirectParams,
 ): Promise<SubagentAnnounceDeliveryResult> {
+  return withSubagentRequesterSource(
+    params.targetRequesterSessionKey,
+    params.requesterAgentId,
+    async (
+      isRequesterCurrent,
+    ): Promise<Awaited<ReturnType<typeof sendSubagentAnnounceDirectly>>> => {
+      const guardedParams = isRequesterCurrent
+        ? {
+            ...params,
+            isSourceSessionEffectsAllowed: () =>
+              isRequesterCurrent() && params.isSourceSessionEffectsAllowed?.() !== false,
+            isSourceSessionAdmissionAllowed: () =>
+              isRequesterCurrent() && params.isSourceSessionAdmissionAllowed?.() !== false,
+          }
+        : params;
+      return sendSubagentAnnounceDirectlyBound(guardedParams);
+    },
+  );
+}
+
+async function sendSubagentAnnounceDirectlyBound(
+  params: Parameters<typeof sendSubagentAnnounceDirectly>[0],
+): ReturnType<typeof sendSubagentAnnounceDirectly> {
   if (params.signal?.aborted) {
     return { delivered: false, path: "none" };
   }
@@ -143,7 +168,7 @@ export async function sendSubagentAnnounceDirectly(
     const sessionOnlyOrigin = effectiveDirectOrigin?.channel
       ? effectiveDirectOrigin
       : requesterSessionOrigin;
-    const requester = loadRequesterSessionEntry(
+    const requester = await loadRequesterSessionEntry(
       params.targetRequesterSessionKey,
       params.requesterAgentId,
     );
@@ -271,7 +296,7 @@ export async function sendSubagentAnnounceDirectly(
     // A recovered requester already owns this admitted input. Reuse its final
     // receipt through the normal delivery checks; never execute the old wake again.
     const recovery =
-      !parentOnly && sourceToolId === "subagent_settle"
+      !parentOnly && (sourceToolId === "subagent_settle" || isSubagentCompletion)
         ? resolveRequesterRecoveryDelivery(requesterEntry, params.directIdempotencyKey)
         : undefined;
     if (recovery?.kind === "delivery") {
@@ -313,6 +338,7 @@ export async function sendSubagentAnnounceDirectly(
       sessionEntry: requesterEntry,
     });
     if (
+      !recoveredResult &&
       !parentOnly &&
       params.expectsCompletionMessage &&
       requesterActivity.sessionId &&
@@ -375,7 +401,7 @@ export async function sendSubagentAnnounceDirectly(
       isCronRunSessionKey(canonicalRequesterSessionKey) &&
       !resolveRequesterSessionActivity(
         params.targetRequesterSessionKey,
-        loadRequesterSessionEntry(params.targetRequesterSessionKey, params.requesterAgentId),
+        await loadRequesterSessionEntry(params.targetRequesterSessionKey, params.requesterAgentId),
       ).isActive &&
       !agentMediatedCompletion
     ) {
@@ -506,8 +532,9 @@ export async function sendSubagentAnnounceDirectly(
                     : undefined,
                 expectFinal: true,
                 signal: params.signal,
-                // Individual private delivery retains its cleanup owner until the
-                // lifecycle deadline; settle batches can observe and replay admission.
+                onExecutionStarted: params.onExecutionStarted,
+                // Individual private delivery uses the lifecycle window for admission;
+                // settle batches can observe and replay admission.
                 timeoutMs: parentOnly && isSubagentCompletion ? undefined : announceTimeoutMs,
                 isExecutionAllowed: isCompletionDeliveryAllowed,
                 isSourceSessionAdmissionAllowed:
@@ -560,7 +587,7 @@ export async function sendSubagentAnnounceDirectly(
     );
     if (
       parentOnly ||
-      sourceToolId !== "subagent_settle" ||
+      (sourceToolId !== "subagent_settle" && !isSubagentCompletion) ||
       recoveredResult !== undefined ||
       requesterCanonicalKey !== canonicalRequesterSessionKey ||
       !requesterAgentId ||
@@ -593,6 +620,7 @@ export async function sendSubagentAnnounceDirectly(
         agentId: requesterAgentId,
         storePath: requesterStorePath,
         sessionKeys: [canonicalRequesterSessionKey],
+        snapshotFields: [],
       });
     } catch (error) {
       if (params.signal?.aborted) {

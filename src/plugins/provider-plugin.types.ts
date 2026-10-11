@@ -238,7 +238,7 @@ export type ProviderPlugin = {
    */
   buildReplayPolicy?: (ctx: ProviderReplayPolicyContext) => ProviderReplayPolicy | null | undefined;
   /**
-   * @deprecated Use sanitizeReplayHistoryAsync; removed at the next Plugin SDK major.
+   * @deprecated Use sanitizeReplayHistoryAsync; removed in the next Plugin SDK major.
    * Provider-owned replay-history sanitization.
    *
    * Runs after OpenClaw performs generic transcript cleanup. Use this for
@@ -492,6 +492,8 @@ export type ProviderPlugin = {
   ) => ProviderThinkingProfile | null | undefined;
   /** Whether Fast can affect this selected request; undefined retains existing unknown behavior. */
   resolveFastModeSupport?: (ctx: ProviderFastModePolicyContext) => boolean | undefined;
+  /** Known model/route service tiers; undefined retains account discovery and route defaults. */
+  resolveServiceTiers?: (ctx: ProviderFastModePolicyContext) => readonly string[] | undefined;
   /**
    * Provider-owned system-prompt contribution.
    *

@@ -11,19 +11,14 @@ import {
 import type { MemoryExtraPath } from "./types.js";
 export { normalizeAgentId };
 
-// Shared OpenClaw config helpers used by memory host and agent context code.
-
 type DmScope = "main" | "per-peer" | "per-channel-peer" | "per-account-channel-peer";
-/** Citation injection behavior for memory search results. */
 export type MemoryCitationsMode = "auto" | "on" | "off";
 
-/** Top-level memory config shared by host and runtime callers. */
 type MemoryConfig = {
   citations?: MemoryCitationsMode;
   search?: MemorySearchConfig;
 };
 
-/** Per-agent memory search enablement and extra collection paths. */
 type MemorySearchConfig = {
   enabled?: boolean;
   rememberAcrossConversations?: boolean;
@@ -48,7 +43,6 @@ export function normalizeConfiguredMemoryExtraPaths(
   return Array.from(normalized.values());
 }
 
-/** Agent context limits that bound memory file reads. */
 type AgentContextLimitsConfig = {
   memoryGetMaxChars?: number;
 };
@@ -62,7 +56,6 @@ type SecretInput =
       id: string;
     };
 
-/** Agent-level config fields consumed by memory host helpers. */
 type AgentConfig = {
   workspace?: string;
   memory?: {
@@ -123,7 +116,6 @@ export function resolveRememberAcrossConversations(cfg: OpenClawConfig, agentId:
   );
 }
 
-/** Root memory filename used in agent workspaces. */
 export const MEMORY_HOST_ROOT_FILENAME = "MEMORY.md";
 
 const DEFAULT_AGENT_ID = "main";
@@ -135,7 +127,6 @@ function resolveDefaultAgentId(cfg: OpenClawConfig): string {
   );
 }
 
-/** Find one agent config by canonical id. */
 function resolveAgentConfig(cfg: OpenClawConfig, agentId: string): AgentConfig | undefined {
   const id = normalizeAgentId(agentId);
   return listAgentEntries(cfg).find((entry) => normalizeAgentId(entry.id) === id);
@@ -146,7 +137,6 @@ function stripNullBytes(value: string): string {
   return value.replaceAll("\0", "");
 }
 
-/** Resolve the workspace directory for an agent id and config defaults. */
 export function resolveMemoryHostAgentWorkspaceDir(
   cfg: OpenClawConfig,
   agentId: string,
@@ -184,7 +174,8 @@ export function resolveMemoryHostAgentContextLimits(
   if (!cfg || !agentId) {
     return defaults;
   }
-  return resolveAgentConfig(cfg, agentId)?.contextLimits ?? defaults;
+  const overrides = resolveAgentConfig(cfg, agentId)?.contextLimits;
+  return overrides ? { ...defaults, ...overrides } : defaults;
 }
 
 /** Resolve enabled memory search config plus deduplicated extra paths for an agent. */

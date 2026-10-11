@@ -14,6 +14,7 @@ const SESSION_READ_METHODS: ReadonlySet<string> = new Set([
   "session.suggestions.list",
   "session.reactions.list",
   "sessions.groups.list",
+  "sessions.processes.list",
   "sessions.list",
   "sessions.subscribe",
   "sessions.messages.subscribe",
@@ -58,6 +59,7 @@ const SESSION_WRITE_METHODS: ReadonlySet<string> = new Set([
   "sessions.recover",
   "sessions.send",
   "sessions.steer",
+  "sessions.processes.stop",
   "sessions.abort",
   "sessions.goal.update",
   "sessions.goal.clear",
@@ -89,6 +91,7 @@ const SESSIONS_PATCH_WRITE_SCOPE_MUTATIONS: ReadonlySet<string> = new Set([
   "boardFace",
   "boardPresentation",
   "pinned",
+  "sidebarRoot",
   "archived",
   "snoozedUntil",
   "unread",
@@ -97,6 +100,7 @@ const SESSIONS_PATCH_WRITE_SCOPE_MUTATIONS: ReadonlySet<string> = new Set([
   "thinkingLevel",
   "fastMode",
   "permissionMode",
+  "communication",
 ]);
 
 const SESSIONS_PATCH_WRITE_SCOPE_ENVELOPE_FIELDS: ReadonlySet<string> = new Set([
@@ -106,6 +110,10 @@ const SESSIONS_PATCH_WRITE_SCOPE_ENVELOPE_FIELDS: ReadonlySet<string> = new Set(
   "expectedLifecycleRevision",
   "expectedPermissionMode",
   "expectedMarkedUnreadAt",
+  "expectedSidebarRoot",
+  "expectedCategory",
+  "expectedArchived",
+  "expectedSidebarAncestors",
 ]);
 
 const SESSIONS_DELETE_WRITE_SCOPE_FIELDS: ReadonlySet<string> = new Set([

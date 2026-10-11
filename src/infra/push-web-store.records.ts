@@ -1,3 +1,4 @@
+import { isHttpsUrl } from "@openclaw/net-policy/url-protocol";
 import { safeParseJson } from "@openclaw/normalization-core/json-coercion";
 import type { Insertable, Selectable } from "kysely";
 import type { WebPushDevicePreferences } from "../../packages/gateway-protocol/src/schema/push.js";
@@ -67,11 +68,7 @@ export function isValidWebPushEndpoint(endpoint: string): boolean {
   if (!endpoint || endpoint.length > WEB_PUSH_MAX_ENDPOINT_LENGTH) {
     return false;
   }
-  try {
-    return new URL(endpoint).protocol === "https:";
-  } catch {
-    return false;
-  }
+  return isHttpsUrl(endpoint);
 }
 
 export function isValidWebPushKey(key: unknown): key is string {

@@ -47,37 +47,26 @@ function resolveContract(
 const legacyDefaults = 'import { configureFsSafePython } from "@openclaw/fs-safe/config";\n';
 
 describe("resolve-fs-safe-native-contract", () => {
-  it("keeps the current native consumer contract strict", () => {
-    const { root, ref } = commitSource(
-      "0.8.1",
-      'import { configureFsSafeNative } from "@openclaw/fs-safe/config";\n',
-    );
-    expect(resolveContract(root, ref)).toBe("required");
-  });
-
-  it("recognizes the frozen 0.5 bundled-native package contract", () => {
-    const { root, ref } = commitSource(
-      "0.5.6",
-      'import { configureFsSafeNative } from "@openclaw/fs-safe/config";\n',
-      "extended-stable/2026.8.33",
-    );
-    expect(resolveContract(root, ref)).toBe("bundled");
-    expect(resolveContract(root, ref, false)).toBe("required");
-    expect(resolveContract(root, ref, true, ref)).toBe("required");
-  });
-
-  it("keeps current, unauthorized, or non-bundled source contracts strict", () => {
-    const unapproved = commitSource("0.3.0", legacyDefaults);
-    expect(resolveContract(unapproved.root, unapproved.ref)).toBe("required");
-    const currentRelease = commitSource("0.3.0", legacyDefaults, "release/2026.9.1");
-    expect(resolveContract(currentRelease.root, currentRelease.ref)).toBe("required");
-    const unauthorized = commitSource("0.3.0", legacyDefaults);
-    expect(resolveContract(unauthorized.root, unauthorized.ref, false)).toBe("required");
-    expect(resolveContract(unauthorized.root, unauthorized.ref, true, unauthorized.ref)).toBe(
-      "required",
-    );
-    const unknownDependency = commitSource("0.4.1", legacyDefaults, "extended-stable/2026.8.33");
-    expect(resolveContract(unknownDependency.root, unknownDependency.ref)).toBe("required");
+  it("relaxes only authorized bundled-native frozen source contracts", () => {
+    const cases: [string, string, string | undefined, "bundled" | "required"][] = [
+      [
+        "0.5.6",
+        'import { configureFsSafeNative } from "@openclaw/fs-safe/config";\n',
+        "extended-stable/2026.8.33",
+        "bundled",
+      ],
+      ["0.3.0", legacyDefaults, undefined, "required"],
+      ["0.3.0", legacyDefaults, "release/2026.9.1", "required"],
+      ["0.4.1", legacyDefaults, "extended-stable/2026.8.33", "required"],
+    ];
+    for (const [version, defaults, branch, expected] of cases) {
+      const { root, ref } = commitSource(version, defaults, branch);
+      expect(resolveContract(root, ref)).toBe(expected);
+      if (expected === "bundled") {
+        expect(resolveContract(root, ref, false)).toBe("required");
+        expect(resolveContract(root, ref, true, ref)).toBe("required");
+      }
+    }
   });
 
   it("uses only sparse-materialized fs-safe ownership sources for the supported frozen target", () => {

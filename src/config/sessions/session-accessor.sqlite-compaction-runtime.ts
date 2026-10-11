@@ -1,8 +1,14 @@
 import type { CommittedCompactionAppend } from "../../agents/sessions/session-compaction-persistence.js";
+import { captureSessionManagerIncognitoBinding } from "../../agents/sessions/session-manager-incognito-scope.js";
+import {
+  receiveSessionManagerCommit,
+  SessionEntryCommittedError,
+} from "../../agents/sessions/session-manager-persistence-error.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
-import { runInDetachedAsyncContext, trackAsyncWork } from "../../shared/async-work-scope.js";
-import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
-import { withOpenClawAgentDatabaseAsync } from "../../state/openclaw-agent-db.js";
+import { trackAsyncWork } from "../../shared/async-work-scope.js";
+import { runInDetachedAsyncContext } from "../../shared/detached-async-context.js";
+import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
+import { withOpenClawAgentDatabaseRuntime } from "../../state/openclaw-agent-db.js";
 import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
 import { persistCompactionBoundaryWithSessionEntrySync } from "./session-accessor.sqlite-compaction.js";
 import { publishCommittedSessionIdentity } from "./session-accessor.sqlite-identity.js";
@@ -10,6 +16,7 @@ import {
   resolveSqliteTranscriptScope,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
+import type { IncognitoSessionActor } from "./session-incognito-actor.js";
 import { startSessionTranscriptIndexReconcile } from "./session-transcript-reconcile.js";
 import {
   captureSessionTranscriptTargetBinding,
@@ -58,13 +65,14 @@ export async function persistCompactionBoundaryWithSessionEntryAsync(
     initialWriter?.assertActive();
   };
   const options = toDatabaseOptions(resolveSqliteTranscriptScope(captured));
+  const actor = captureSessionManagerIncognitoBinding(captured)?.actor;
   const transcriptByteCompactionLatch = { ...params.transcriptByteCompactionLatch };
   return await trackAsyncWork(() =>
     runOpenClawAgentWriteAdmission(
       options,
       async () => {
         assertCurrent();
-        if (isIncognitoSessionKey(captured.sessionKey)) {
+        if (isIncognitoSessionKey(captured.sessionKey) && !actor) {
           // Incognito retains its host-owned transaction until the worker activation cutover.
           return persistCompactionBoundaryWithSessionEntrySync(captured, {
             prepared,
@@ -75,36 +83,56 @@ export async function persistCompactionBoundaryWithSessionEntryAsync(
           () => import("../../agents/sessions/session-manager-metadata-runtime.js"),
         );
         assertCurrent();
-        return await withOpenClawAgentDatabaseAsync(
-          options,
-          (database) =>
-            withSessionMetadataWorker(options, database, assertCurrent, async (worker) => {
+        const persist = (database: OpenClawAgentDatabase | IncognitoSessionActor) =>
+          withSessionMetadataWorker(
+            options,
+            database,
+            assertCurrent,
+            async (worker) => {
               const { env: _env, ...target } = captured;
               const { env: _preparedEnv, ...preparedTarget } = prepared.scope;
-              const receipt = await worker.execute({
-                type: "session.transcript.compactionBoundary",
-                input: {
-                  scope: target,
-                  prepared: { ...prepared, scope: preparedTarget },
-                  transcriptByteCompactionLatch,
-                  ...(initialWriter && !initialWriter.committedFence
-                    ? { initialWriterRunId: initialWriter.writerRunId }
-                    : {}),
-                },
-              });
+              const acknowledged = await receiveSessionManagerCommit(
+                "session.transcript.compactionBoundary",
+                () =>
+                  worker.execute({
+                    type: "session.transcript.compactionBoundary",
+                    input: {
+                      scope: actor ? { ...target, storePath: actor.path } : target,
+                      prepared: {
+                        ...prepared,
+                        scope: actor
+                          ? { ...preparedTarget, storePath: actor.path }
+                          : preparedTarget,
+                      },
+                      transcriptByteCompactionLatch,
+                      ...(initialWriter && !initialWriter.committedFence
+                        ? { initialWriterRunId: initialWriter.writerRunId }
+                        : {}),
+                    },
+                  }),
+              );
+              const receipt = acknowledged.value;
               try {
-                if (receipt.initialEntry?.fence) {
+                if (receipt.initialEntry?.fence && !("db" in database)) {
                   initialWriter?.recordCommitted(receipt.initialEntry.fence);
                 }
               } finally {
-                if (receipt.initialEntry?.identity) {
+                if (receipt.initialEntry?.identity && !("db" in database)) {
                   publishCommittedSessionIdentity(
                     captured.agentId,
-                    readOpenClawAgentDatabaseIdentity(database).identity,
+                    database.identity.incarnation,
                     receipt.initialEntry.identity.previous,
                     receipt.initialEntry.identity.current,
                   );
                 }
+              }
+              if (acknowledged.failure) {
+                throw new SessionEntryCommittedError(
+                  receipt.committed.result.id,
+                  captured,
+                  receipt.committed.after,
+                  acknowledged.failure,
+                );
               }
               if (receipt.projectionNeedsReconcile) {
                 startSessionTranscriptIndexReconcile({
@@ -113,9 +141,12 @@ export async function persistCompactionBoundaryWithSessionEntryAsync(
                 });
               }
               return receipt.committed;
-            }),
-          assertCurrent,
-        );
+            },
+            { initialWriter },
+          );
+        return actor
+          ? await persist(actor)
+          : await withOpenClawAgentDatabaseRuntime(options, persist, assertCurrent);
       },
       true,
     ),

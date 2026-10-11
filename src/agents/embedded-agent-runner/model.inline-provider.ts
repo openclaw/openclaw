@@ -53,19 +53,13 @@ export function normalizeResolvedTransportApi(
 }
 
 /** Sanitizes configured provider/model headers before they enter runtime model metadata. */
-export function sanitizeModelHeaders(
-  headers: unknown,
-  opts?: { stripSecretRefMarkers?: boolean },
-): Record<string, string> | undefined {
+export function sanitizeModelHeaders(headers: unknown): Record<string, string> | undefined {
   if (!headers || typeof headers !== "object" || Array.isArray(headers)) {
     return undefined;
   }
   const next: Record<string, string> = {};
   for (const [headerName, headerValue] of Object.entries(headers)) {
-    if (typeof headerValue !== "string") {
-      continue;
-    }
-    if (opts?.stripSecretRefMarkers && isSecretRefHeaderValueMarker(headerValue)) {
+    if (typeof headerValue !== "string" || isSecretRefHeaderValueMarker(headerValue)) {
       // Catalog/runtime model records are inspectable. Secret-ref markers are resolved later during
       // auth setup, so inline provider discovery must not expose them as literal headers.
       continue;
@@ -84,15 +78,11 @@ function isLegacyFoundryVisionModelCandidate(params: {
     return false;
   }
   const normalizedCandidates = [params.modelId, params.modelName]
-    .filter((value): value is string => typeof value === "string")
     .map((value) => normalizeOptionalLowercaseString(value))
     .filter((value): value is string => Boolean(value));
   return normalizedCandidates.some(
     (candidate) =>
-      candidate.startsWith("gpt-") ||
-      candidate.startsWith("o1") ||
-      candidate.startsWith("o3") ||
-      candidate.startsWith("o4") ||
+      ["gpt-", "o1", "o3", "o4"].some((prefix) => candidate.startsWith(prefix)) ||
       candidate === "computer-use-preview",
   );
 }
@@ -128,9 +118,7 @@ export function buildInlineProviderModels(
     if (!trimmed) {
       return [];
     }
-    const providerHeaders = sanitizeModelHeaders(entry?.headers, {
-      stripSecretRefMarkers: true,
-    });
+    const providerHeaders = sanitizeModelHeaders(entry?.headers);
     const providerRequest = sanitizeConfiguredModelProviderRequest(entry?.request);
     // Provider defaults must not mask omissions before exact duplicate rows merge.
     const models = resolveMergedModelProviderModels({
@@ -144,9 +132,7 @@ export function buildInlineProviderModels(
         api === "google-generative-ai"
           ? normalizeGoogleApiBaseUrl(configuredBaseUrl)
           : configuredBaseUrl;
-      const modelHeaders = sanitizeModelHeaders(model.headers, {
-        stripSecretRefMarkers: true,
-      });
+      const modelHeaders = sanitizeModelHeaders(model.headers);
       const requestConfig = resolveProviderRequestConfig({
         provider: trimmed,
         api: api ?? model.api,

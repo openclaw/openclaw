@@ -199,9 +199,61 @@ function stripOneSuffix(token: string): string {
   return token;
 }
 
-// Keep acronyms and their plural s together: "URLs" must not split into "UR"/"Ls".
-const WORD_SEPARATORS = /[^\p{L}\p{N}_]+/u;
-const WORD_PARTS = /\p{Lu}+s?(?![\p{Ll}])|\p{Lu}?\p{Ll}+|\p{N}+/gu;
+// Bound Unicode separator matches; unbounded runs can exhaust the RegExp stack.
+const WORD_SEPARATORS = /[^\p{L}\p{N}_]{1,1024}/u;
+const UPPERCASE_CHARACTER = /\p{Lu}/u;
+const LOWERCASE_CHARACTER = /\p{Ll}/u;
+const NUMBER_CHARACTER = /\p{N}/u;
+
+function characterAt(input: string, index: number): string {
+  const point = input.codePointAt(index);
+  return point === undefined ? "" : String.fromCodePoint(point);
+}
+
+function readCharacterRun(input: string, start: number, category: RegExp) {
+  let end = start;
+  let lastStart = start;
+  while (end < input.length) {
+    const character = characterAt(input, end);
+    if (!category.test(character)) {
+      break;
+    }
+    lastStart = end;
+    end += character.length;
+  }
+  return { end, lastStart };
+}
+
+function readWordParts(input: string): string[] {
+  const parts: string[] = [];
+  let index = 0;
+  while (index < input.length) {
+    const start = index;
+    const character = characterAt(input, index);
+    if (UPPERCASE_CHARACTER.test(character)) {
+      const uppercase = readCharacterRun(input, index, UPPERCASE_CHARACTER);
+      index = uppercase.end;
+      // Keep plural acronyms intact, but leave the last capital for a following word.
+      if (input[index] === "s" && !LOWERCASE_CHARACTER.test(characterAt(input, index + 1))) {
+        index += 1;
+      } else if (LOWERCASE_CHARACTER.test(characterAt(input, index))) {
+        index =
+          uppercase.lastStart > start
+            ? uppercase.lastStart
+            : readCharacterRun(input, index, LOWERCASE_CHARACTER).end;
+      }
+    } else if (LOWERCASE_CHARACTER.test(character)) {
+      index = readCharacterRun(input, index, LOWERCASE_CHARACTER).end;
+    } else if (NUMBER_CHARACTER.test(character)) {
+      index = readCharacterRun(input, index, NUMBER_CHARACTER).end;
+    } else {
+      index += character.length;
+      continue;
+    }
+    parts.push(input.slice(start, index));
+  }
+  return parts;
+}
 
 // Index whole identifiers plus underscore/camelCase parts; retain non-Latin words.
 function splitWords(input: string): string[] {
@@ -211,7 +263,7 @@ function splitWords(input: string): string[] {
       continue;
     }
     words.push(raw.toLowerCase());
-    const parts = raw.match(WORD_PARTS) ?? [];
+    const parts = readWordParts(raw);
     if (parts.length >= 2) {
       for (const part of parts) {
         words.push(part.toLowerCase());

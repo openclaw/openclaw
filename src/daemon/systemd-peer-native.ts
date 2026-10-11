@@ -2,6 +2,10 @@
 import { createRequire } from "node:module";
 import { getProcessStartTime, isPidAlive } from "../shared/pid-alive.js";
 import {
+  getServiceInspectionClock,
+  runServiceInspectionGuard,
+} from "./service-inspection-budget.js";
+import {
   ServiceInspectionError,
   ServiceOwnershipRefusalError,
 } from "./service-inspection-error.js";
@@ -119,6 +123,7 @@ async function openSystemdConnection(
   expected?: SystemdPeerIdentity,
   managerUid?: number,
 ) {
+  const admissionNow = getServiceInspectionClock();
   assertGatewayServiceUpdateCurrent();
   const privatePeer = expected !== undefined || managerUid !== undefined;
   let identity = expected;
@@ -133,9 +138,9 @@ async function openSystemdConnection(
   let closed = false;
   const queue = createSystemdPeerQueue();
   let closing: Promise<void> | undefined;
-  const remaining = (until: number) => {
+  const remaining = (until: number, now = admissionNow) => {
     assertGatewayServiceUpdateCurrent();
-    const value = until - performance.now();
+    const value = until - now();
     if (closed) {
       throw unavailable();
     }
@@ -298,13 +303,19 @@ async function openSystemdConnection(
     args: string[],
     signatures: string[],
     until: number,
-    assertCurrent?: () => void,
-    beforeDispatch?: () => void,
+    assertCurrent: (() => void) | undefined,
+    beforeDispatch: (() => void) | undefined,
+    now: () => number,
+    mutationTimeoutMs?: number,
   ) => {
+    let mutationDeadline: number | undefined;
     const check = () => {
-      remaining(until);
-      assertCurrent?.();
+      remaining(until, now);
+      runServiceInspectionGuard(assertCurrent);
       verifyConnection();
+      if (mutationDeadline !== undefined && performance.now() >= mutationDeadline) {
+        throw new ServiceInspectionError("systemd-inspection-deadline-exceeded");
+      }
     };
     check();
     const member = args[4];
@@ -320,7 +331,7 @@ async function openSystemdConnection(
       for (let index = 0; index < signatures.length; index++) {
         check();
         const reply: Pointer[] = [null];
-        checked(native.timeout(bus, remaining(until)));
+        checked(native.timeout(bus, remaining(until, now)));
         try {
           await invoke(
             native.property,
@@ -364,7 +375,17 @@ async function openSystemdConnection(
         check();
         try {
           beforeDispatch?.();
-          await invoke(native.call, bus, message[0], remaining(until), error, reply);
+          const remainingUsec = remaining(until, now);
+          // Admission/identity checks do not spend a service effect's wall budget.
+          // Once dispatched, neither custody checks nor accounting can extend it.
+          const timeoutUsec =
+            mutationTimeoutMs === undefined
+              ? remainingUsec
+              : Math.min(remainingUsec, mutationTimeoutMs * 1000);
+          if (mutationTimeoutMs !== undefined) {
+            mutationDeadline = performance.now() + timeoutUsec / 1000;
+          }
+          await invoke(native.call, bus, message[0], timeoutUsec, error, reply);
         } catch (failure) {
           check();
           if (
@@ -412,11 +433,16 @@ async function openSystemdConnection(
       until: number,
       assertCurrent?: () => void,
       beforeDispatch?: () => void,
+      mutationTimeoutMs?: number,
     ) {
+      const now = getServiceInspectionClock();
       // One sd-bus connection is not thread-safe. Queue within the caller's
       // deadline; a queue wait never earns a new budget or custody interval.
-      return queue.run(until, () =>
-        execute(args, signatures, until, assertCurrent, beforeDispatch),
+      return queue.run(
+        until,
+        () =>
+          execute(args, signatures, until, assertCurrent, beforeDispatch, now, mutationTimeoutMs),
+        now,
       );
     },
   };

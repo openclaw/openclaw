@@ -1,4 +1,5 @@
 import OpenClawKit
+import OpenClawProtocol
 import SwiftUI
 
 private struct ExecApprovalPromptDialogModifier: ViewModifier {
@@ -26,19 +27,9 @@ private struct ExecApprovalPromptDialogModifier: ViewModifier {
                         errorText: self.appModel.pendingExecApprovalPromptErrorText,
                         resolvedText: self.appModel.pendingExecApprovalPromptResolvedText,
                         resolvedTone: self.appModel.pendingExecApprovalPromptOutcome?.tone,
-                        onAllowOnce: {
+                        onDecision: { decision in
                             Task {
-                                await self.appModel.resolvePendingExecApprovalPrompt(decision: "allow-once")
-                            }
-                        },
-                        onAllowAlways: {
-                            Task {
-                                await self.appModel.resolvePendingExecApprovalPrompt(decision: "allow-always")
-                            }
-                        },
-                        onDeny: {
-                            Task {
-                                await self.appModel.resolvePendingExecApprovalPrompt(decision: "deny")
+                                await self.appModel.resolvePendingExecApprovalPrompt(decision: decision.rawValue)
                             }
                         },
                         onCancel: {
@@ -82,9 +73,7 @@ private struct ExecApprovalPromptCard: View {
     let errorText: String?
     let resolvedText: String?
     let resolvedTone: NodeAppModel.ExecApprovalOutcomeTone?
-    let onAllowOnce: () -> Void
-    let onAllowAlways: () -> Void
-    let onDeny: () -> Void
+    let onDecision: (ApprovalDecision) -> Void
     let onCancel: () -> Void
 
     var body: some View {
@@ -208,24 +197,16 @@ private struct ExecApprovalPromptCard: View {
                     ApprovalDashboardReviewButton(prompt: self.prompt)
                 }
                 if self.prompt.allowsAllowOnce {
-                    Button {
-                        self.onAllowOnce()
-                    } label: {
-                        Text("Allow Once")
-                            .font(OpenClawType.subheadSemiBold)
-                            .frame(maxWidth: .infinity)
+                    approvalDialogButton(Text("Allow Once")) {
+                        self.onDecision(.allowOnce)
                     }
-                    .buttonStyle(.borderedProminent)
+                    .openClawProminentButton()
                     .disabled(self.isResolving)
                 }
 
                 if self.prompt.allowsAllowAlways {
-                    Button {
-                        self.onAllowAlways()
-                    } label: {
-                        Text("Allow Always")
-                            .font(OpenClawType.subheadSemiBold)
-                            .frame(maxWidth: .infinity)
+                    approvalDialogButton(Text("Allow Always")) {
+                        self.onDecision(.allowAlways)
                     }
                     .buttonStyle(.bordered)
                     .disabled(self.isResolving)
@@ -247,14 +228,8 @@ private struct ExecApprovalPromptCard: View {
                     }
                 }
             } else {
-                Button(role: .cancel) {
-                    self.onCancel()
-                } label: {
-                    Text("Dismiss")
-                        .font(OpenClawType.subheadSemiBold)
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.bordered)
+                approvalDialogButton(Text("Dismiss"), role: .cancel, action: self.onCancel)
+                    .buttonStyle(.bordered)
             }
         }
         .controlSize(.large)
@@ -262,27 +237,17 @@ private struct ExecApprovalPromptCard: View {
     }
 
     private var denyButton: some View {
-        Button(role: .destructive) {
-            self.onDeny()
-        } label: {
-            Text("Deny")
-                .font(OpenClawType.subheadSemiBold)
-                .frame(maxWidth: .infinity)
+        approvalDialogButton(Text("Deny"), role: .destructive) {
+            self.onDecision(.deny)
         }
         .buttonStyle(.bordered)
         .disabled(self.isResolving)
     }
 
     private var cancelButton: some View {
-        Button(role: .cancel) {
-            self.onCancel()
-        } label: {
-            Text("Cancel")
-                .font(OpenClawType.subheadSemiBold)
-                .frame(maxWidth: .infinity)
-        }
-        .buttonStyle(.bordered)
-        .disabled(!self.canDismiss)
+        approvalDialogButton(Text("Cancel"), role: .cancel, action: self.onCancel)
+            .buttonStyle(.bordered)
+            .disabled(!self.canDismiss)
     }
 
     private var resolvedColor: Color {
@@ -365,6 +330,19 @@ struct ApprovalDashboardReviewButton: View {
         self.appModel.hasOperatorAdminScope &&
             self.prompt.attentionSource?.authorityGeneration == self.appModel.operatorAuthorityGeneration &&
             self.appModel.pendingExecApprovalInboxItems.contains { $0.prompt == self.prompt }
+    }
+}
+
+@MainActor
+func approvalDialogButton(
+    _ title: Text,
+    role: ButtonRole? = nil,
+    action: @escaping () -> Void) -> some View
+{
+    Button(role: role, action: action) {
+        title
+            .font(OpenClawType.subheadSemiBold)
+            .frame(maxWidth: .infinity)
     }
 }
 

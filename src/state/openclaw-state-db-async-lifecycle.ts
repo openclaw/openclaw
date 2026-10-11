@@ -1,4 +1,3 @@
-import path from "node:path";
 import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
 import { throwSqliteLifecycleErrors } from "../infra/sqlite-lifecycle-errors.js";
 import {
@@ -8,6 +7,7 @@ import {
   type DatabasePathIdentity,
 } from "../infra/sqlite-worker-identity.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { resolveDatabasePath } from "./openclaw-state-db.paths.js";
 import {
   getOpenClawDatabaseMaintenanceScope,
   maintenanceResources,
@@ -42,7 +42,14 @@ export type OpenClawStateDatabaseReadAdmission = {
   /** Stable across first creation and aliases; coordinates work but grants no authority. */
   readonly coordinationKey: string;
   readonly identity: DatabasePathIdentity;
+  captureIntegrity?: () => OpenClawStateIntegrityAdmission;
   assertCurrent: () => void;
+};
+export type OpenClawStateIntegrityAdmission = {
+  identity: DatabasePathIdentity;
+  readonly revision: SharedArrayBuffer;
+  readonly epoch: bigint;
+  readonly proof: SharedArrayBuffer;
 };
 export type OpenClawStateDatabaseAsyncResource = {
   /** Shared execution resources close only after accepted owners settle their remaining work. */
@@ -54,7 +61,7 @@ type IdentityRecord = {
   readonly coordinationKey: string;
   identity: DatabasePathIdentity;
   paths: Set<string>;
-  generation: object;
+  generation: { integrity: OpenClawStateIntegrityAdmission };
   admissions: Map<string, OpenClawStateDatabaseReadAdmission>;
 };
 type ReadSeal = { record?: IdentityRecord };
@@ -177,7 +184,7 @@ export function createOpenClawDatabaseMaintenanceScope(
         release: () => resources.delete(resource),
       });
     },
-    close() {
+    close(beforeResources) {
       if (closing) {
         return closing;
       }
@@ -186,7 +193,8 @@ export function createOpenClawDatabaseMaintenanceScope(
       closing = completion.promise;
       void maintenanceResources.current
         .run({ scope, active: true }, async () => {
-          while (pending.size || resources.size) {
+          let beforeSharedResources = beforeResources;
+          while (pending.size || resources.size || beforeSharedResources) {
             while (pending.size) {
               await Promise.allSettled(pending);
             }
@@ -199,6 +207,12 @@ export function createOpenClawDatabaseMaintenanceScope(
               "shared-references",
               "shared-handles",
             ] as const) {
+              if (phase === "shared-leases" && beforeSharedResources) {
+                // Retire scope-owned agent resources first, then drain any remaining
+                // cached handles while their shared-state lease authority is still live.
+                await beforeSharedResources();
+                beforeSharedResources = undefined;
+              }
               while ([...resources.values()].some((resource) => resource.phase === phase)) {
                 // Earlier cleanup can start tracked work using resources in this batch.
                 while (pending.size) {
@@ -253,9 +267,18 @@ export function createOpenClawStateDatabaseAsyncLifecycle() {
   const seals = new Set<ReadSeal>();
   const attempts = new Map<IdentityRecord | undefined, CloseAttempt>();
   let tail = Promise.resolve();
+  const proofFor = () => {
+    const proof = new SharedArrayBuffer(BigInt64Array.BYTES_PER_ELEMENT);
+    new BigInt64Array(proof)[0] = -1n;
+    return proof;
+  };
+  const generationFor = (identity: DatabasePathIdentity) => {
+    const revision = new SharedArrayBuffer(BigInt64Array.BYTES_PER_ELEMENT);
+    return { integrity: { identity, revision, epoch: 0n, proof: proofFor() } };
+  };
 
   const known = (pathname: string) =>
-    recordsByPath.get(pathname) ?? recordsByPath.get(path.resolve(pathname));
+    recordsByPath.get(pathname) ?? recordsByPath.get(resolveDatabasePath({ path: pathname }));
   const bindPath = (record: IdentityRecord, pathname: string) => {
     record.paths.add(pathname);
     if (!recordsByPath.has(pathname)) {
@@ -308,6 +331,7 @@ export function createOpenClawStateDatabaseAsyncLifecycle() {
     if (record.paths.size > 0) {
       if (!record.paths.has(record.identity.canonicalPath)) {
         record.identity = identity;
+        record.generation.integrity.identity = identity;
       }
       return record;
     }
@@ -348,6 +372,7 @@ export function createOpenClawStateDatabaseAsyncLifecycle() {
       if (record) {
         records.delete(record.identity.key);
         record.identity = identity;
+        record.generation.integrity.identity = identity;
         records.set(identity.key, record);
       }
     }
@@ -356,7 +381,7 @@ export function createOpenClawStateDatabaseAsyncLifecycle() {
         coordinationKey: identity.key,
         identity,
         paths: new Set(),
-        generation: {},
+        generation: generationFor(identity),
         admissions: new Map(),
       };
       records.set(identity.key, record);
@@ -366,7 +391,7 @@ export function createOpenClawStateDatabaseAsyncLifecycle() {
     return record;
   };
   const resolveForNative = (pathname: string): IdentityRecord | undefined => {
-    const resolvedPath = path.resolve(pathname);
+    const resolvedPath = resolveDatabasePath({ path: pathname });
     const cached = recordsByPath.get(resolvedPath);
     if (cached) {
       return cached;
@@ -376,7 +401,8 @@ export function createOpenClawStateDatabaseAsyncLifecycle() {
   };
   const invalidate = (record?: IdentityRecord) => {
     for (const current of record ? [record] : records.values()) {
-      current.generation = {};
+      Atomics.store(new BigInt64Array(current.generation.integrity.revision), 0, -1n);
+      current.generation = generationFor(current.identity);
       current.admissions.clear();
     }
   };
@@ -421,6 +447,20 @@ export function createOpenClawStateDatabaseAsyncLifecycle() {
       get identity() {
         return record.identity;
       },
+      captureIntegrity() {
+        admission.assertCurrent();
+        const current = generation.integrity;
+        const epoch = Atomics.load(new BigInt64Array(current.revision), 0);
+        if (epoch !== current.epoch) {
+          generation.integrity = {
+            ...current,
+            identity: record.identity,
+            epoch,
+            proof: proofFor(),
+          };
+        }
+        return generation.integrity;
+      },
       assertCurrent() {
         assertOpen(record);
         if (
@@ -437,12 +477,6 @@ export function createOpenClawStateDatabaseAsyncLifecycle() {
     record.admissions.set(databasePath, admission);
     return admission;
   };
-  const captureResolved = (databasePath: string): OpenClawStateDatabaseReadAdmission => {
-    const record = resolve(databasePath);
-    assertOpen(record);
-    return captureRecord(record, databasePath);
-  };
-
   return {
     identity(pathname: string): DatabasePathIdentity | undefined {
       return known(pathname)?.identity ?? inspectDatabasePathIdentitySync(pathname);
@@ -450,11 +484,17 @@ export function createOpenClawStateDatabaseAsyncLifecycle() {
     knownIdentity(this: void, pathname: string): DatabasePathIdentity | undefined {
       return known(pathname)?.identity;
     },
+    integrity(this: void, pathname: string): OpenClawStateIntegrityAdmission | undefined {
+      const record = resolveForNative(pathname);
+      return record && !isSealed(record)
+        ? captureRecord(record, resolveDatabasePath({ path: pathname })).captureIntegrity?.()
+        : undefined;
+    },
     publish(pathname: string): {
       identity: DatabasePathIdentity;
       admission: OpenClawStateDatabaseReadAdmission;
     } {
-      const resolvedPath = path.resolve(pathname);
+      const resolvedPath = resolveDatabasePath({ path: pathname });
       const identity = readDatabasePathIdentitySync(resolvedPath);
       const previous = recordsByPath.get(resolvedPath);
       let record = findPhysicalRecord(identity);
@@ -463,6 +503,7 @@ export function createOpenClawStateDatabaseAsyncLifecycle() {
           // First canonical creation binds the same captured admission to its file.
           records.delete(previous.identity.key);
           previous.identity = identity;
+          previous.generation.integrity.identity = identity;
           records.set(identity.key, previous);
           record = previous;
         } else {
@@ -489,7 +530,7 @@ export function createOpenClawStateDatabaseAsyncLifecycle() {
         }
       }
     },
-    register(resource: OpenClawStateDatabaseAsyncResource): () => void {
+    register(this: void, resource: OpenClawStateDatabaseAsyncResource): () => void {
       resources.add(resource);
       for (const attempt of attempts.values()) {
         attempt.queue?.add(resource);
@@ -505,10 +546,13 @@ export function createOpenClawStateDatabaseAsyncLifecycle() {
         retained.assertCurrent();
         return retained;
       }
-      return captureResolved(path.resolve(pathname));
+      const databasePath = resolveDatabasePath({ path: pathname });
+      const record = resolve(databasePath);
+      assertOpen(record);
+      return captureRecord(record, databasePath);
     },
     holdExclusion(pathname: string): () => void {
-      const record = resolve(path.resolve(pathname));
+      const record = resolve(resolveDatabasePath({ path: pathname }));
       const held = seal(record);
       return () => {
         seals.delete(held);

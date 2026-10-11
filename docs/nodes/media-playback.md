@@ -86,6 +86,11 @@ artifact through `artifacts.download`, which returns inline base64 bytes when
 the artifact is byte-backed or a short-lived, ticketed URL when it is
 Gateway-managed.
 
+Managed download tickets check current session access and the selected message's
+attachment reference in visible history. For indexed messages, issuing a ticket
+does not read the original file or validate unrelated transcript payloads. The
+HTTP request transfers the file separately.
+
 Download filenames preserve Unicode characters and literal percent sequences
 such as `%20`.
 
@@ -116,17 +121,17 @@ ticket from the authenticated Gateway when needed.
 Chat attachments may include `sizeBytes`, `durationMs`, `width`, and `height`.
 OpenClaw also uses `ffprobe`, when available, to fill audio duration and video
 duration/dimensions for media facts and the Control UI `?meta=1` availability
-probe. Video dimensions account for non-square pixels and quarter-turn display
-rotation; image dimensions account for EXIF orientation. Probing is best-effort:
-a missing or failed probe leaves fields absent instead of rejecting the attachment.
+check. Video dimensions account for non-square pixels and quarter-turn display
+rotation; image dimensions account for EXIF orientation. Checking is best-effort:
+a missing or failed check leaves fields absent instead of rejecting the attachment.
 The Gateway shares concurrent metadata inspections for the same local file and
 reuses successful results while that file is unchanged. Replacing or editing the
-file triggers a fresh inspection; failed probes remain retryable.
+file triggers a fresh inspection; failed checks remain retryable.
 Distinct files wait in a bounded inspection queue. If the queue is full, metadata
 reports temporary unavailability that you can retry, and playback remains
-preparing. Disconnected requests stop waiting, and queued probes with no remaining
+preparing. Disconnected requests stop waiting, and queued checks with no remaining
 viewers release their queue slots immediately. Queued reads recheck current access
-before opening and probing the file. A busy inspector does not discard outgoing
+before opening and checking the file. A busy inspector does not discard outgoing
 attachments; their optional playback metadata can remain absent. Outgoing reply
 creation uses immediate inspection admission and does not wait behind queued
 viewer requests.

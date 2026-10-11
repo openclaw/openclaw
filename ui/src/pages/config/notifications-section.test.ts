@@ -2,7 +2,7 @@
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { render } from "lit";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { renderNotificationsSection } from "./notifications-section.ts";
 
 const userPreferences = {
@@ -76,6 +76,8 @@ describe("native notification test outcome", () => {
 describe("Web Push preference saves", () => {
   it("lets recipients opt in to mentions and override them for one browser", () => {
     const container = document.createElement("div");
+    document.body.append(container);
+    onTestFinished(() => container.remove());
     const onUserPreferences = vi.fn();
     const onDevicePreferences = vi.fn();
     render(
@@ -100,14 +102,14 @@ describe("Web Push preference saves", () => {
     );
 
     const accountToggle = expectDefined(
-      [...container.querySelectorAll<HTMLElement & { checked: boolean }>("wa-switch")].find(
-        (toggle) => toggle.textContent?.trim() === "Someone mentions me",
+      [...container.querySelectorAll<HTMLInputElement>(".settings-toggle__input")].find(
+        (toggle) =>
+          toggle.closest(".settings-toggle")?.textContent?.trim() === "Someone mentions me",
       ),
       "mention account preference",
     );
     expect(accountToggle.checked).toBe(false);
-    accountToggle.checked = true;
-    accountToggle.dispatchEvent(new Event("change"));
+    accountToggle.click();
     expect(onUserPreferences).toHaveBeenCalledWith({
       ...userPreferences,
       categories: { ...userPreferences.categories, humanMentioned: true },
@@ -164,17 +166,29 @@ type DevicePreferencesListener = NonNullable<
 >;
 
 describe("Web Push preference controls", () => {
-  function renderPreferences(options: { onDevice?: DevicePreferencesListener } = {}) {
-    const container = document.createElement("div");
+  function renderPreferences(
+    options: {
+      onDevice?: DevicePreferencesListener;
+      onUser?: Parameters<typeof renderNotificationsSection>[0]["onWebPushSetUserPreferences"];
+      timeZone?: string;
+      container?: HTMLElement;
+    } = {},
+  ) {
+    const container = options.container ?? document.createElement("div");
     const user = {
       ...userPreferences,
-      quietHours: { ...userPreferences.quietHours, enabled: true },
+      quietHours: {
+        ...userPreferences.quietHours,
+        enabled: true,
+        timeZone: options.timeZone ?? "UTC",
+      },
     };
     const device = { enabled: true, label: "phone", agentIds: ["main"] };
     render(
       renderNotificationsSection({
         connected: true,
         onWebPushSetDevicePreferences: options.onDevice,
+        onWebPushSetUserPreferences: options.onUser,
         webPush: {
           supported: true,
           permission: "granted",
@@ -196,36 +210,82 @@ describe("Web Push preference controls", () => {
   it("renders every preference control through the shared settings control set", () => {
     const container = renderPreferences();
 
-    // Native checkboxes bypass the settings toggle; booleans are wa-switch rows.
-    expect(container.querySelectorAll('input[type="checkbox"]')).toHaveLength(0);
-    expect(container.querySelectorAll("wa-switch.settings-toggle")).toHaveLength(7);
+    expect(
+      container.querySelectorAll('input[type="checkbox"]:not(.settings-toggle__input)'),
+    ).toHaveLength(0);
+    expect(container.querySelectorAll('.settings-toggle__input[role="switch"]')).toHaveLength(7);
     expect(container.textContent).not.toContain("Background task failed");
 
     const unstyled = Array.from(container.querySelectorAll<HTMLElement>("select, input"))
       .filter((control) => {
+        if (control.classList.contains("settings-toggle__input")) {
+          return (
+            control.getAttribute("role") !== "switch" || !control.getAttribute("aria-labelledby")
+          );
+        }
         const expectedClass = control.tagName === "SELECT" ? "settings-select" : "settings-input";
         return !control.classList.contains(expectedClass) || !control.getAttribute("aria-label");
       })
       .map((control) => control.outerHTML.slice(0, 60));
-    expect(container.querySelectorAll("select")).toHaveLength(9);
+    expect(container.querySelectorAll("select")).toHaveLength(10);
     expect(container.querySelectorAll('input[type="time"]')).toHaveLength(2);
     expect(unstyled).toEqual([]);
+  });
+
+  it("preserves a saved timezone alias and saves a native selection", () => {
+    const onUser = vi.fn();
+    const container = renderPreferences({ onUser, timeZone: "US/Pacific" });
+    const select = expectDefined(
+      container.querySelector<HTMLSelectElement>('select[aria-label="Time zone"]'),
+      "timezone select",
+    );
+    expect(select.value).toBe("US/Pacific");
+    select.value = "Europe/London";
+    select.dispatchEvent(new Event("change"));
+    renderPreferences({ container, onUser, timeZone: "Europe/London" });
+    expect(select.value).toBe("Europe/London");
+    expect(container.querySelector('select[aria-label="Time zone"]')).toBe(select);
+    expect(onUser).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        quietHours: expect.objectContaining({ timeZone: "Europe/London" }),
+      }),
+    );
+  });
+
+  it("retains UTC and the saved timezone when the browser catalog is unavailable", () => {
+    const catalog = vi.spyOn(Intl, "supportedValuesOf").mockImplementation(() => {
+      throw new RangeError("unavailable");
+    });
+    try {
+      const container = renderPreferences({ timeZone: "US/Pacific" });
+      const select = expectDefined(
+        container.querySelector<HTMLSelectElement>('select[aria-label="Time zone"]'),
+        "timezone select",
+      );
+      expect(select.value).toBe("US/Pacific");
+      expect([...select.options].map((option) => option.value)).toEqual(
+        expect.arrayContaining(["UTC", "US/Pacific"]),
+      );
+    } finally {
+      catalog.mockRestore();
+    }
   });
 
   it("patches device preferences from the toggle row and select row", () => {
     const onDevice = vi.fn<DevicePreferencesListener>();
     const container = renderPreferences({ onDevice });
+    document.body.append(container);
+    onTestFinished(() => container.remove());
     const deviceGroup = expectDefined(
       container.querySelectorAll(".settings-page .settings-stack .settings-group")[1],
       "device preference group",
     );
 
     const toggle = expectDefined(
-      deviceGroup.querySelector<HTMLElement & { checked: boolean }>("wa-switch"),
+      deviceGroup.querySelector<HTMLInputElement>(".settings-toggle__input"),
       "deliver toggle",
     );
-    toggle.checked = false;
-    toggle.dispatchEvent(new Event("change"));
+    toggle.click();
     expect(onDevice).toHaveBeenLastCalledWith(
       expect.objectContaining({ enabled: false, label: "phone", agentIds: ["main"] }),
     );

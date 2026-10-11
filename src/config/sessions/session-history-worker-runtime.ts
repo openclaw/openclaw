@@ -30,6 +30,10 @@ import type {
   SessionHistoryWorkerResult,
 } from "./session-history-types.js";
 import { SessionHistoryDeltaPreparationError } from "./session-history-worker-errors.js";
+import type {
+  SessionColdMetadataWorkerInput,
+  SessionColdMetadataWorkerResult,
+} from "./session-transcript-inventory.types.js";
 import { isSessionTranscriptProjectionUnavailableError } from "./session-transcript-projection-error.js";
 import { resolveSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
 import {
@@ -40,11 +44,7 @@ import {
   withSessionHistoryWorkerDatabase,
   type SessionHistoryWorkerDatabase,
 } from "./session-transcript-worker-runtime.js";
-import type {
-  SessionColdMetadataWorkerInput,
-  SessionColdMetadataWorkerResult,
-  SessionTranscriptHistoryWorkerInput,
-} from "./session-transcript-worker.types.js";
+import type { SessionTranscriptHistoryWorkerInput } from "./session-transcript-worker.types.js";
 import { captureSessionTranscriptStorageEnvironment } from "./transcript-target-binding.js";
 
 type ForegroundHistoryResult = SessionHistoryWorkerResult | SessionColdMetadataWorkerResult;
@@ -127,7 +127,8 @@ function readQueuedHistory(
             return input;
           },
           key.length * 2 +
-            (input.kind === "history-page" && input.request.kind === "rpc"
+            (input.kind === "history-page" &&
+            (input.request.kind === "rpc" || input.request.kind === "rpc-message")
               ? (input.request.params.cliHistoryRedaction?.retainedBytes ?? 0)
               : 0),
         );
@@ -146,7 +147,7 @@ function readQueuedHistory(
 }
 
 function captureHistoryRequest(request: SessionHistoryWorkerRequest): SessionHistoryWorkerRequest {
-  if (request.kind !== "rpc" && request.kind !== "http") {
+  if (request.kind !== "rpc" && request.kind !== "rpc-message" && request.kind !== "http") {
     const target = request.params.target;
     const capturedTarget = {
       ...target,
@@ -221,7 +222,7 @@ function captureHistoryRequest(request: SessionHistoryWorkerRequest): SessionHis
         params: {
           target: capturedTarget,
           messageId: request.params.messageId,
-          options: request.params.options ? { ...request.params.options } : undefined,
+          options: request.params.options ? structuredClone(request.params.options) : undefined,
         },
       };
     }
@@ -243,7 +244,7 @@ function captureHistoryRequest(request: SessionHistoryWorkerRequest): SessionHis
           params: { target: capturedTarget, messageId: request.params.messageId },
         };
   }
-  const entry = request.kind === "rpc" ? request.params.entry : request.params.target.sessionEntry;
+  const entry = request.kind === "http" ? request.params.target.sessionEntry : request.params.entry;
   const cliBinding = getCliSessionBinding(entry, "claude-cli");
   const capturedEntry = entry
     ? {
@@ -255,31 +256,34 @@ function captureHistoryRequest(request: SessionHistoryWorkerRequest): SessionHis
           : {}),
       }
     : undefined;
-  if (request.kind === "rpc") {
+  if (request.kind === "rpc" || request.kind === "rpc-message") {
     const params = request.params;
-    return {
-      kind: "rpc",
-      params: {
-        encodeResponse: params.encodeResponse,
-        compactionMetrics: params.compactionMetrics?.map((metric) => ({ ...metric })),
-        entry: capturedEntry,
-        provider: params.provider,
-        sessionId: params.sessionId,
-        storePath: params.storePath,
-        sessionAgentId: params.sessionAgentId,
-        canonicalKey: params.canonicalKey,
-        max: params.max,
-        maxHistoryBytes: params.maxHistoryBytes,
-        effectiveMaxChars: params.effectiveMaxChars,
-        offset: params.offset,
-        messageId: params.messageId,
-        ignoreCliSessionImports: params.ignoreCliSessionImports,
-        cliHistoryHomeDir: params.cliHistoryHomeDir,
-        ...(params.cliHistoryRedaction
-          ? { cliHistoryRedaction: structuredClone(params.cliHistoryRedaction) }
-          : {}),
-      },
+    const captured = {
+      encodeResponse: params.encodeResponse,
+      compactionMetrics: params.compactionMetrics?.map((metric) => ({ ...metric })),
+      entry: capturedEntry,
+      provider: params.provider,
+      sessionId: params.sessionId,
+      storePath: params.storePath,
+      sessionAgentId: params.sessionAgentId,
+      canonicalKey: params.canonicalKey,
+      max: params.max,
+      maxHistoryBytes: params.maxHistoryBytes,
+      responseHistoryBytes: params.responseHistoryBytes,
+      effectiveMaxChars: params.effectiveMaxChars,
+      toolResultMaxChars: params.toolResultMaxChars,
+      offset: params.offset,
+      messageId: params.messageId,
+      ...(params.pageCursor ? { pageCursor: { ...params.pageCursor } } : {}),
+      ignoreCliSessionImports: params.ignoreCliSessionImports,
+      cliHistoryHomeDir: params.cliHistoryHomeDir,
+      ...(params.cliHistoryRedaction
+        ? { cliHistoryRedaction: structuredClone(params.cliHistoryRedaction) }
+        : {}),
     };
+    return request.kind === "rpc-message"
+      ? { kind: "rpc-message", params: { ...captured, messageId: request.params.messageId } }
+      : { kind: "rpc", params: captured };
   }
   const params = request.params;
   return {
@@ -335,7 +339,7 @@ export async function readSessionHistoryPageInWorker(
   signal?.throwIfAborted();
   const capturedRequest = captureHistoryRequest(request);
   const scope: SessionTranscriptReadScope =
-    capturedRequest.kind === "rpc"
+    capturedRequest.kind === "rpc" || capturedRequest.kind === "rpc-message"
       ? {
           agentId: capturedRequest.params.sessionAgentId,
           sessionId: capturedRequest.params.sessionId,
@@ -360,9 +364,11 @@ export async function readSessionHistoryPageInWorker(
   });
   const admission = receipt ? { ...receipt } : undefined;
   const redaction =
-    capturedRequest.kind === "rpc" ? capturedRequest.params.cliHistoryRedaction : undefined;
+    capturedRequest.kind === "rpc" || capturedRequest.kind === "rpc-message"
+      ? capturedRequest.params.cliHistoryRedaction
+      : undefined;
   const keyedRequest =
-    capturedRequest.kind === "rpc" && redaction
+    (capturedRequest.kind === "rpc" || capturedRequest.kind === "rpc-message") && redaction
       ? {
           ...capturedRequest,
           params: {
@@ -406,6 +412,7 @@ export async function readSessionHistoryPageInWorker(
       // Only display-history projections resolve subagent lineage across stores.
       const sourceReads =
         capturedRequest.kind === "rpc" ||
+        capturedRequest.kind === "rpc-message" ||
         capturedRequest.kind === "http" ||
         capturedRequest.kind === "delta" ||
         capturedRequest.kind === "inline-visibility"

@@ -24,6 +24,7 @@ import {
   testModel,
 } from "../../sessions/agent-session-loop-correctness.test-support.js";
 import { SessionManager } from "../../sessions/index.js";
+import { serializeCacheTtlToolResultProjections } from "../cache-ttl-checkpoint.js";
 import { readLastCacheTtlTimestamp } from "../cache-ttl.js";
 import { log } from "../logger.js";
 import {
@@ -31,7 +32,6 @@ import {
   createToolResultPromptProjectionState,
   getEmbeddedSessionPromptState,
   persistToolResultProjections,
-  serializeCacheTtlToolResultProjections,
 } from "../session-prompt-state.js";
 import { restoreCacheTtlToolResultProjections } from "../tool-result-truncation.js";
 import { RUN_LIVENESS_JOIN_TIMEOUT_MS } from "./abortable.js";
@@ -78,7 +78,6 @@ function createSettleFixture(overrides?: Partial<SettleInput>): SettleInput {
       promptError: null,
       promptErrorSource: null,
       yieldAborted: false,
-      sessionIdUsed: "sess-settle-1",
     },
     readLifecycleState: () => ({
       aborted: false,
@@ -182,6 +181,7 @@ describe("settleEmbeddedAttemptStream liveness", () => {
       ...input.cache,
       getObservation: () => ({
         requestIndex: 3,
+        messageCount: 5,
         broke: false,
         input: 100,
         cacheRead: 10_000,
@@ -260,7 +260,6 @@ describe("settleEmbeddedAttemptStream liveness", () => {
         ...input.state,
         promptError,
         promptErrorSource: "prompt",
-        sessionIdUsed: target.sessionId,
       };
       const prepared = await prepareEmbeddedAttemptTranscriptLifecycle({
         attempt: input.attempt,

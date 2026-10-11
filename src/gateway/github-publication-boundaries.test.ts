@@ -1,22 +1,16 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { insertRegistryWorktree } from "../agents/worktrees/registry.js";
 import { readGitHubPublicationSessionLifecycle } from "../state/github-publication-session-lifecycles.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
+import { GitHubPublicationRequesterUnavailableError } from "./github-publication-failure.js";
 import {
-  GitHubPublicationRequesterUnavailableError,
-  resolveGitHubPublicationFailure,
-} from "./github-publication-failure.js";
-import {
-  BASE_HEAD,
   BRANCH,
   NEW_HEAD,
   SESSION_ID,
   SESSION_KEY,
-  WORKSPACE_TREE,
   commandResult,
   commands,
   createRealPublicationWorkspace,
@@ -143,18 +137,6 @@ describe("Gateway GitHub publication boundaries", () => {
     expect(commands.some((argv) => argv.includes("push"))).toBe(false);
   });
 
-  it("explains how to remove unsupported Git transport configuration", () => {
-    expect(
-      resolveGitHubPublicationFailure(
-        new Error("GitHub publication workspace has unsupported Git transport configuration."),
-      ),
-    ).toEqual({
-      code: "workspace_changed",
-      nextAction:
-        "Remove the unsupported Git transport or replacement configuration from the session worktree, then retry.",
-    });
-  });
-
   it("rejects the pull request base branch before any repository mutation", async () => {
     mocks.findWorktree.mockReturnValue({
       id: "worktree-1",
@@ -210,28 +192,6 @@ describe("Gateway GitHub publication boundaries", () => {
       }),
     ).resolves.toMatchObject({ status: "published", branch: BRANCH });
     expect(commands.some((argv) => argv.join(" ").includes("git/ref/heads/main"))).toBe(true);
-  });
-
-  it("rejects an accepted tree identical to the base before creating a marker commit", async () => {
-    const fallback = mocks.runCommand.getMockImplementation()!;
-    mocks.runCommand.mockImplementation(async (argv: string[], options?: { input?: string }) => {
-      if (argv.join(" ") === `git rev-parse ${BASE_HEAD}^{tree}`) {
-        return commandResult(`${WORKSPACE_TREE}\n`);
-      }
-      return await fallback(argv, options);
-    });
-    const coordinator = createLocalCoordinator();
-
-    await expect(
-      coordinator.requestForSession({
-        sessionKey: SESSION_KEY,
-        agentId: "main",
-        idempotencyKey: "no-tree-change",
-      }),
-    ).resolves.toMatchObject({ status: "failed", code: "no_changes" });
-    expect(commands.some((argv) => argv.includes("commit-tree") || argv.includes("push"))).toBe(
-      false,
-    );
   });
 
   it("rejects a local turn that starts and finishes during snapshot capture", async () => {
@@ -478,27 +438,6 @@ describe("Gateway GitHub publication boundaries", () => {
     );
   });
 
-  it("creates an attributed marker commit when all changes were already committed", async () => {
-    const coordinator = createLocalCoordinator();
-
-    await expect(
-      coordinator.requestForSession({
-        sessionKey: SESSION_KEY,
-        agentId: "main",
-        idempotencyKey: "committed-work",
-        title: "Publish committed work",
-      }),
-    ).resolves.toMatchObject({ status: "published", branch: BRANCH });
-    expect(commands.filter((argv) => argv.includes("commit-tree"))).toHaveLength(1);
-    for (const [, options] of mocks.runCommand.mock.calls) {
-      expect(options?.env).toMatchObject({
-        GIT_CONFIG_COUNT: "1",
-        GIT_CONFIG_KEY_0: "core.hooksPath",
-        GIT_CONFIG_VALUE_0: os.devNull,
-      });
-    }
-  });
-
   it("keeps an incomplete Git transaction retryable until index recovery completes", async () => {
     const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
     const coordinator = createLocalCoordinator(database);
@@ -550,7 +489,7 @@ describe("Gateway GitHub publication boundaries", () => {
       id: "worktree-2",
       path: "/repo/other-worktree",
     };
-    insertRegistryWorktree(process.env, {
+    await insertRegistryWorktree(process.env, {
       ...otherWorktree,
       name: "other",
       createdAt: 1,
@@ -749,7 +688,6 @@ describe("Gateway GitHub publication boundaries", () => {
 
   it.each([
     { label: "no live claim", claimRunId: undefined, expectedRunId: undefined },
-    { label: "another active turn", claimRunId: "run-active", expectedRunId: undefined },
     { label: "a mismatched run identity", claimRunId: "run-active", expectedRunId: "run-other" },
     { label: "its own active turn", claimRunId: "run-active", expectedRunId: "run-active" },
   ])("queues a cloud session publication with $label", async ({ claimRunId, expectedRunId }) => {

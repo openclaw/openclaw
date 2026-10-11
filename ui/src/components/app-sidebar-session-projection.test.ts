@@ -404,6 +404,7 @@ describe("SidebarSessionProjection running subtitle hold", () => {
                 attention: {
                   kind: "error" as const,
                   reason: "Child validation failed",
+                  sourceSessionKey: "agent:main:validation",
                   childLabel: "Validation",
                 },
               }

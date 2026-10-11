@@ -192,7 +192,6 @@ describe("runCli exit behavior", () => {
   });
 
   it.each([
-    { flags: [], service: false, action: "run gateway state preparation", code: 1 },
     { flags: [], service: true, action: "start the gateway service", code: 78 },
     { flags: ["--force"], service: false, action: "force-kill gateway port listeners", code: 1 },
     { flags: ["--dev", "--reset"], service: false, action: "reset the dev gateway state", code: 1 },

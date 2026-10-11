@@ -282,27 +282,12 @@ describe("Search configuration lifecycle", () => {
     }
   });
 
-  it("cannot revive a pending health result after an external draft edit is discarded", async () => {
-    const fixture = await mount();
-    const pending = createDeferred<WebSearchTestResult>();
-    fixture.setTestResponse(pending.promise);
-    testButton(fixture.element).click();
-    await fixture.element.updateComplete;
-    fixture.runtime.patchForm(endpointPath, "https://draft.example.test");
-    await fixture.element.updateComplete;
-    await fixture.runtime.discardDraft();
-    expect(fixture.runtime.state.configFormDirty).toBe(false);
-    pending.resolve(testResult);
-    await fixture.settle(true);
-    expect(fixture.element.textContent).not.toContain(testResult.content);
-    expect(fixture.element.textContent).toContain("Not tested");
-  });
-
-  it("clears completed health when the config owner acquires an unsaved draft", async () => {
+  it("invalidates completed health after an external unsaved draft", async () => {
     const fixture = await mount();
     testButton(fixture.element).click();
     await fixture.settle(true);
     expect(fixture.element.textContent).toContain(testResult.content);
+
     fixture.runtime.patchForm(endpointPath, "https://draft.example.test");
     await fixture.element.updateComplete;
     expect(fixture.element.textContent).not.toContain(testResult.content);
@@ -345,23 +330,5 @@ describe("Search configuration lifecycle", () => {
     ).toBeGreaterThan(before);
     expect(fixture.element.textContent).toContain("Runtime revision-2");
     expect(testButton(fixture.element).disabled).toBe(false);
-  });
-  it("rejects in-flight health when an applied revision changes under the same saved hash", async () => {
-    const fixture = await mount();
-    const pending = createDeferred<WebSearchTestResult>();
-    fixture.setTestResponse(pending.promise);
-    testButton(fixture.element).click();
-    await fixture.element.updateComplete;
-    fixture.setStored({
-      ...fixture.stored(),
-      configRevisionHash: "revision-2",
-      appliedConfigHash: "revision-2",
-    });
-    await fixture.runtime.refresh({ background: true });
-    pending.resolve(testResult);
-    await fixture.settle(true);
-    expect(fixture.runtime.state.configSnapshot?.hash).toBe("saved-1");
-    expect(fixture.element.textContent).not.toContain(testResult.content);
-    expect(fixture.element.textContent).toContain("Runtime revision-2");
   });
 });

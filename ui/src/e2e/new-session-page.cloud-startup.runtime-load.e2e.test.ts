@@ -197,7 +197,8 @@ suite.define(() => {
           await state.handleSendChat();
           return { draft: state.chatMessage, queued: state.chatQueue.map((item) => item.text) };
         });
-        expect(held).toEqual({ draft: "later ordinary turn", queued: [] });
+        expect(held).toEqual({ draft: "", queued: ["later ordinary turn"] });
+        await composer.fill("unfinished later draft");
         expect(await gateway.getRequests("chat.send")).toHaveLength(0);
         expect(await gateway.getRequests("sessions.send")).toHaveLength(0);
         if (incognito) {
@@ -304,7 +305,7 @@ suite.define(() => {
             await page.locator(".sidebar-brand__new-thread").click();
             const privacy = page.getByRole("switch", { name: "Incognito" });
             await privacy.waitFor();
-            if ((await privacy.getAttribute("aria-checked")) !== "true") {
+            if (!(await privacy.isChecked())) {
               await privacy.click();
             }
             await page.locator(".new-session-page__message").fill(separateDraft);
@@ -387,10 +388,18 @@ suite.define(() => {
           .poll(() => page.evaluate((key) => sessionStorage.getItem(key), storageKey))
           .toBeNull();
         await page.locator(".chat-group.user", { hasText: message }).waitFor();
-        expect(await composer.inputValue()).toBe("later ordinary turn");
+        expect(await composer.inputValue()).toBe("unfinished later draft");
+        await gateway.emitChatFinal({
+          sessionKey,
+          runId: messageId,
+          text: "Initial turn finished.",
+        });
+        expect(await gateway.waitForRequest("chat.send")).toMatchObject({
+          params: { sessionKey, message: "later ordinary turn" },
+        });
         expect(await gateway.getRequests("sessions.dispatch")).toHaveLength(0);
         expect(await gateway.getRequests("sessions.send")).toHaveLength(1);
-        expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+        expect(await gateway.getRequests("chat.send")).toHaveLength(1);
         expect(moduleRequests).toBe(2);
         if (incognito) {
           expect(
