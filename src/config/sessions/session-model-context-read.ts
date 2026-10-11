@@ -25,8 +25,10 @@ export function projectSessionModelContext(
     header: TranscriptEvent;
     entries: ContextEntry[];
     version: SessionTranscriptContextVersion;
-    readModelEntries(requests: readonly ModelContextRequest[]): Map<ContextEntry, SessionTreeEntry>;
-    readModelEntrySizes(requests: readonly ModelContextRequest[]): Map<ContextEntry, number>;
+    readModelEntries: (
+      requests: readonly ModelContextRequest[],
+    ) => Map<ContextEntry, SessionTreeEntry>;
+    readModelEntrySizes: (requests: readonly ModelContextRequest[]) => Map<ContextEntry, number>;
   },
   limits?: SessionModelContextLimits,
 ): SessionTranscriptModelContext {

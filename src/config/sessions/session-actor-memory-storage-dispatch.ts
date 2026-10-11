@@ -114,13 +114,13 @@ export function mutateSessionActorMemoryStorage(
       return createSessionActorMemoryPending(window, context).mutate(command.input);
     }
     case "session.pendingInput.interruptHistory": {
-      const isProtected = authority.isPendingInputProtected;
-      if (!isProtected) {
+      if (!authority.isPendingInputProtected) {
         throw new Error("Pending input reconciliation requires its live custody owner");
       }
       const window = editPendingWindow(context, command.input.sessionId);
       return createSessionActorMemoryPending(window, context).interruptHistory(command.input, {
-        isProtected: (candidate) => isProtected(candidate, context.state.hot.entry?.sessionId),
+        isProtected: (candidate) =>
+          authority.isPendingInputProtected!(candidate, context.state.hot.entry?.sessionId),
         admit: (stage, grant) =>
           context.admit(stage, { ...grant, currentSessionId: context.state.hot.entry?.sessionId }),
       });

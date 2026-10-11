@@ -4,11 +4,9 @@ import { installSessionActorMemoryEntry } from "./session-actor-memory-entry-ins
 import { createSessionActorMemoryEvents } from "./session-actor-memory-events.js";
 import { initializeSessionActorMemoryEntry } from "./session-actor-memory-initialize.js";
 import { createSessionActorMemoryMessages } from "./session-actor-memory-messages.js";
-import type {
-  SessionActorMemoryMetadataCommand,
-  SessionActorMemoryMetadataContext,
-} from "./session-actor-memory-metadata-contract.js";
+import type { SessionActorMemoryMetadataCommand } from "./session-actor-memory-metadata-contract.js";
 import { resolveSessionActorMemoryWindow } from "./session-actor-memory-state.js";
+import type { SessionActorMemoryStorageContext } from "./session-actor-memory-storage-context.js";
 import { createSessionActorMemoryTranscript } from "./session-actor-memory-transcript.js";
 import { isReadableSessionMessage } from "./session-entry-codec.js";
 import { projectCompactionAccountingPatch } from "./session-entry-projection.js";
@@ -20,7 +18,7 @@ import { canonicalizeTranscriptEventMedia } from "./transcript-event-media.js";
 type Scope = SessionMetadataOperations["session.metadata.append"]["input"]["scope"];
 
 /** Metadata participates in the actor's working copy and commits with its other domains. */
-export function createSessionActorMemoryMetadata(context: SessionActorMemoryMetadataContext) {
+export function createSessionActorMemoryMetadata(context: SessionActorMemoryStorageContext) {
   const { state, agentId, path } = context;
   const events = createSessionActorMemoryEvents(context);
   const transcript = createSessionActorMemoryTranscript(context);

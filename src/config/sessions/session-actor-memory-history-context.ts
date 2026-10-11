@@ -79,14 +79,22 @@ function pickNavigation(record: Record<string, unknown>, keys: readonly string[]
   );
 }
 function navigationEntry(entry: SessionTreeEntry): SessionTreeEntry {
-  const projected = pickNavigation({ ...entry }, MODEL_CONTEXT_NAVIGATION_KEYS);
+  const projected: Pick<SessionTreeEntry, "type" | "id" | "parentId" | "timestamp"> &
+    Record<string, unknown> = {
+    ...pickNavigation({ ...entry }, MODEL_CONTEXT_NAVIGATION_KEYS),
+    type: entry.type,
+    id: entry.id,
+    parentId: entry.parentId,
+    timestamp: entry.timestamp,
+  };
   if (entry.type === "message") {
     const message = entry.message;
     const original: Record<string, unknown> = { ...message };
     const calls =
       "content" in message && Array.isArray(message.content)
         ? message.content.flatMap((item) =>
-            isRecord(item) && ["toolCall", "toolUse", "functionCall"].includes(String(item.type))
+            isRecord(item) &&
+            (item.type === "toolCall" || item.type === "toolUse" || item.type === "functionCall")
               ? [pickNavigation(item, ["type", "id", "name"])]
               : [],
           )
@@ -106,7 +114,11 @@ function navigationEntry(entry: SessionTreeEntry): SessionTreeEntry {
         type: isRecord(original.providerReplay) ? original.providerReplay.type : null,
       },
       details: {
-        [SYNTHETIC_MISSING_TOOL_RESULT_DETAIL_KEY]: isSyntheticMissingToolResult(message),
+        [SYNTHETIC_MISSING_TOOL_RESULT_DETAIL_KEY]: isSyntheticMissingToolResult({
+          isError: original.isError,
+          details: original.details,
+          content: original.content,
+        }),
         ...(operatorKind ? { kind: operatorKind } : {}),
       },
     };
@@ -124,8 +136,8 @@ function navigationEntry(entry: SessionTreeEntry): SessionTreeEntry {
   } else if (entry.type === "custom" && entry.customType === "openclaw.system-prompt") {
     projected.data = { restart: isRecord(entry.data) && entry.data.restart === true };
   }
-  // The same typed navigation contract as projectModelContextNavigationSql: control fields
-  // remain intact while payload fields are replaced by readable empty placeholders.
+  // SAFETY: The SQL navigation contract keeps every entry discriminant and control field;
+  // payload fields become readable empty placeholders until selected for hydration.
   return projected as SessionTreeEntry;
 }
 

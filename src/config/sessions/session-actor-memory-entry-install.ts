@@ -15,7 +15,7 @@ export function installSessionActorMemoryEntry(
   entry: SessionEntry,
 ): SessionEntry {
   const previous = state.hot.entry;
-  let next = normalizeSessionEntryTimestamp({ ...entry, incognito: true });
+  let next: SessionEntry = normalizeSessionEntryTimestamp({ ...entry, incognito: true });
   if (!hasValidSessionEntryIdentity(next)) {
     throw new Error("Refusing invalid memory session entry identity");
   }

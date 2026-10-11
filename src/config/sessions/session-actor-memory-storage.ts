@@ -130,11 +130,11 @@ export function createSessionActorMemoryStorage(options: {
       return options.enqueue(() => {
         options.guards.assertReadable();
         const { context } = transaction(authority, false);
-        // SAFETY: The public generic correlates this query's key, input, and output.
-        const value = readSessionActorMemoryStorage(
-          context,
-          query as SessionActorStorageQuery,
-        ) as SessionActorStorageReads[typeof query.type]["output"];
+        // SAFETY: read() receives the matching input for its query discriminator.
+        const selected = query as SessionActorStorageQuery;
+        const result = readSessionActorMemoryStorage(context, selected);
+        // SAFETY: The dispatcher returns this discriminator's declared output.
+        const value = result as SessionActorStorageReads[typeof query.type]["output"];
         authority.assertCurrent();
         return structuredClone(value);
       });
@@ -145,12 +145,11 @@ export function createSessionActorMemoryStorage(options: {
         try {
           options.guards.assertAccepted();
           const { context, changed } = transaction(authority, true);
-          // SAFETY: The public generic correlates this command's key, input, and output.
-          const value = mutateSessionActorMemoryStorage(
-            context,
-            command as SessionActorStorageCommand,
-            authority,
-          ) as Value;
+          // SAFETY: mutate() receives the matching input for its command discriminator.
+          const selected = command as SessionActorStorageCommand;
+          const result = mutateSessionActorMemoryStorage(context, selected, authority);
+          // SAFETY: The dispatcher returns this discriminator's declared output.
+          const value = result as Value;
           const changes: SessionActorStorageChange[] = [];
           for (const [sessionKey, state] of changed) {
             const previous = sessions.get(sessionKey)?.state;

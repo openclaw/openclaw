@@ -691,4 +691,5 @@ export function readSessionActorMemoryProjection(
       };
     }
   }
+  throw new Error("Unknown memory history projection");
 }

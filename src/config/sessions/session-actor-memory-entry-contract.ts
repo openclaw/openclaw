@@ -24,7 +24,7 @@ export type SessionActorMemoryEntryReads = {
 };
 
 /** Prepared overwrites compare the actual entry; typed patches need no read round trip. */
-export type SessionActorMemoryEntryReplacement = {
+type SessionActorMemoryEntryReplacement = {
   sessionKey: string;
   expected: SessionEntry | undefined;
   entry: SessionEntry | undefined;

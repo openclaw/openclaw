@@ -22,7 +22,7 @@ function message(
   extra: Record<string, unknown> = {},
 ) {
   return {
-    type: "message",
+    type: "message" as const,
     id,
     parentId,
     timestamp: "2026-10-11T00:00:00.000Z",
@@ -33,10 +33,12 @@ function message(
 async function fixture(events: unknown[], entry: Partial<InternalSessionEntry> = {}) {
   const owner = createMemorySessionActorOwner({ agentId: "main", path: storePath });
   owners.push(owner);
-  const actor = await owner.acquire(
-    { database: owner.identity, sessionKey },
-    { assertCurrent() {}, assertReadable() {} },
-  );
+  const acquire = () =>
+    owner.acquire(
+      { database: owner.identity, sessionKey },
+      { assertCurrent() {}, assertReadable() {} },
+    );
+  const actor = await acquire();
   const storage = actor.storage;
   if (!storage) {
     throw new Error("Expected memory storage capability");
@@ -55,15 +57,22 @@ async function fixture(events: unknown[], entry: Partial<InternalSessionEntry> =
   expect(result.kind).toBe("committed");
   return {
     actor,
+    acquire,
     storage,
     transcriptEvents,
-    append: async (event: unknown) => {
+    append: async (event: ReturnType<typeof message>) => {
+      const { message: payload, ...envelope } = event;
       const outcome = await storage.mutate(
         {
           type: "session.metadata.append",
           input: {
             scope: { agentId: "main", storePath, sessionKey, sessionId },
-            event: JSON.stringify(event),
+            event: envelope,
+            message: {
+              messageJson: JSON.stringify(payload),
+              cwd: "/synthetic",
+              validateTurn: false,
+            },
             options: {},
           },
         },
@@ -401,7 +410,7 @@ describe("memory actor history facts", () => {
     ).toEqual({ kind: "transcript-maintenance", seq: 2 });
   });
   it("checks current permission and writer authority before returning replay anchors", async () => {
-    const { storage } = await fixture([message("user", null, "user", "Question")], {
+    const { storage, acquire } = await fixture([message("user", null, "user", "Question")], {
       permissionMode: "full",
       lifecycleRevision: "life-1",
       activeWriterRunId: "writer-1",
@@ -518,19 +527,16 @@ describe("memory actor history facts", () => {
         )
       ).kind,
     ).toBe("committed");
-    expect(
-      await storage.read(
-        {
-          type: "session.history.anchors",
-          input: {
-            sessionId,
-            entryIds: ["user"],
-            contextAuthority: true,
-          },
-        },
-        authority,
-      ),
-    ).toMatchObject({ anchors: [], contextAuthority: { entry: { sessionId: "next-window" } } });
+    const retiredWindow = {
+      type: "session.history.anchors" as const,
+      input: { sessionId, entryIds: ["user"], contextAuthority: true as const },
+    };
+    await expect(storage.read(retiredWindow, authority)).rejects.toThrow("closed");
+    const current = await acquire();
+    expect(await current.storage!.read(retiredWindow, authority)).toMatchObject({
+      anchors: [],
+      contextAuthority: { entry: { sessionId: "next-window" } },
+    });
   });
 
   it("returns raw tail identities while attaching only selected-run active messages", async () => {
