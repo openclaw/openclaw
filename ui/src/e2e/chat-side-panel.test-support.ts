@@ -1,5 +1,9 @@
 import type { Locator, Page } from "playwright";
-import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
+import {
+  closeChatLayoutMenu,
+  openChatLayoutMenu,
+  selectChatLayoutAction,
+} from "../test-helpers/chat-layout-menu.ts";
 
 export async function failNextDeviceIdentityMint(page: Page): Promise<void> {
   await page.addInitScript(() => {
@@ -38,11 +42,13 @@ export async function openChatSidePanelType(page: Page | Locator, label: string)
   if (await content?.isVisible()) {
     return;
   }
-  await selectChatLayoutAction(page, panel?.action ?? label);
-  // Automatic reveal can precede the toggle; finish with the requested open state.
-  if (panel?.slot === "subagents" && content && !(await content.isVisible())) {
-    await selectChatLayoutAction(page, panel.action);
+  if (panel?.slot === "subagents") {
+    const menu = await openChatLayoutMenu(page);
+    await menu.getByRole("menuitemcheckbox", { name: panel.action, exact: true }).setChecked(true);
+    await closeChatLayoutMenu(page);
+    return;
   }
+  await selectChatLayoutAction(page, panel?.action ?? label);
 }
 
 export async function focusChatSidePanel(page: Page): Promise<void> {
