@@ -17,7 +17,7 @@ vi.mock("../../agents/tools/gateway-caller-context.js", () => ({
   getGatewayToolCallerIdentity: () => undefined,
 }));
 vi.mock("../../state/user-channel-identity-operations.js", () => ({
-  prepareUserProfileRoleAuthority: async (profileId: string) => ({
+  prepareUserProfileRolePolicyAuthority: async (profileId: string) => ({
     profileId,
     isCurrent: () => true,
   }),
