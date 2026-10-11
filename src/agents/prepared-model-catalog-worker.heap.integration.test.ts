@@ -299,7 +299,9 @@ export function register(api) {
       },
       {
         timeoutMs: 30_000,
-        ...(rejectDiscovery ? { onRequest: async () => ({ input: false }) } : {}),
+        ...(rejectDiscovery
+          ? { onRequest: async () => ({ input: false, timeoutMs: 30_000 }) }
+          : {}),
       },
     );
   return {
