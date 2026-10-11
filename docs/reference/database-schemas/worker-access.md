@@ -154,6 +154,29 @@ read enters its snapshot before policy reads, avoiding discarded probes.
 
 ## Config CLI ownership
 
+### Non-session bookkeeping
+
+Progress-card replacement and reset increment the stored revision in their write
+statement; conditional dismissal retains its revision predicate. Accepted writes
+keep the original store target across a config change and still check caller
+authority. Membership removal and suggestion finalization likewise return their
+committed result from the conditional mutation. Reaction removal derives its
+result from the rows already read in the same transaction.
+
+Category changes prepare only the affected keys. Their writer reads current
+entries once, preserves unrelated fields, and skips entries that left the source
+category. Goal mutations and upstream-link initialization check their source once
+inside the transaction; live host admission remains separate. Workshop append
+reuses the database owner's admitted table and index facts.
+
+These changes do not retire released synchronous SDK or unbound native incognito
+owners. Config health and plugin metadata cold reads, pairing allowlist reads,
+skill-library selection, ambient watches, upstream links, and session
+collaboration kernels retain their existing synchronous adapters. Their remaining
+main-thread inventory is explicit until the owning SDK or incognito cutover;
+renaming a shared kernel would not move those calls. Schema, stored formats,
+retention, and update behavior are unchanged.
+
 Config set, patch, and unset commands require exclusive offline ownership. Stop
 the Gateway through its service owner before editing config with these commands.
 Basic agent creation uses the existing `agents.create` Gateway method; advanced

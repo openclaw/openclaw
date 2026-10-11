@@ -1809,6 +1809,17 @@ const reviewedOperations = new Map([
     ],
   ],
   [
+    "src/hooks/install-record-transaction.ts",
+    [
+      {
+        tier: "T3",
+        operations: ["stageHookInstall", "stageHookInstall.rollback"],
+        evidence:
+          "CLI install/update only: cli/hook-install-persistence.ts calls stageHookInstall; hooks/update.ts reaches it only through cli/plugins-update-command.ts. Rollback belongs to that same offline install transaction.",
+      },
+    ],
+  ],
+  [
     "src/secrets/store/secret-store-hidden-github.ts",
     [
       {
@@ -2084,6 +2095,8 @@ const workerModules = new Set([
   "src/gateway/worker-environments/local-workspace-store.kernel.ts", // Projection read/write workers and worktree retirement worker only.
   "src/skills/library/import.kernel.ts", // Upload commands execute only in the shared-state writer.
   "src/skills/library/service.kernel.ts", // Library catalog and revision reads use the shared-state read registry.
+  "src/skills/workshop/changes.kernel.ts", // changes.worker.ts owns append/list SQL through the shared-state registry.
+  "src/skills/workshop/skill-usage.kernel.ts", // changes.worker.ts owns recordSkillUsageInDatabase; host imports are type-only.
   "src/config/sessions/conversation-delivery-store.kernel.ts", // Agent execution registry writes and session transcript worker reads only.
   "extensions/memory-core/src/memory-entry-origin-reads.ts", // Memory search worker origin-read commands only.
   "extensions/memory-core/src/memory-entry-origins-delete.ts", // Memory origin worker delete command only.
