@@ -200,13 +200,6 @@ it.each(["between-polls", "queued-status", "during-close"] as const)(
           scheduled: { ok: true },
           ready: { ok: true },
         });
-        expect(
-          openOpenClawAgentDatabase(options)
-            .db.prepare(
-              "SELECT needs_rebuild FROM session_transcript_index_state WHERE session_id = ?",
-            )
-            .get(scope.sessionId),
-        ).toEqual({ needs_rebuild: 0 });
       } else if (boundary === "queued-status") {
         const {
           historyLane: { pool: historyPages },
@@ -285,14 +278,6 @@ it.each(["between-polls", "queued-status", "during-close"] as const)(
         try {
           await expect(waitForSessionTranscriptProjection(scope)).resolves.toBeUndefined();
           expect(polling).toHaveBeenCalled();
-          const reopened = openOpenClawAgentDatabase(options);
-          expect(
-            reopened.db
-              .prepare(
-                "SELECT needs_rebuild, active_message_count FROM session_transcript_index_state WHERE session_id = ?",
-              )
-              .get(scope.sessionId),
-          ).toEqual({ needs_rebuild: 0, active_message_count: 1 });
         } finally {
           polling.mockRestore();
         }

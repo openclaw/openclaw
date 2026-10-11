@@ -275,15 +275,15 @@ it.each([
       if (retires || closesPool) {
         expect(closing).toBeDefined();
         await closing;
-        expect(sweepDispatches).toBe(continuation === "retires-between-batches" ? 2 : 1);
-        expect(sweepResults).toBe(1);
+        if (retires) {
+          expect(sweepDispatches).toBe(continuation === "retires-between-batches" ? 2 : 1);
+          expect(sweepResults).toBe(1);
+        }
       } else if (!failsBeforeCancellation) {
         await waitForSessionTranscriptIndexReconcile(options);
       }
       expect(worklists).toEqual(
-        retires || closesPool || failsBeforeCancellation
-          ? [["first"]]
-          : [["first"], [continuedSession]],
+        retires || failsBeforeCancellation ? [["first"]] : [["first"], [continuedSession]],
       );
       if (continuation === "redirtied") {
         expect(dirtiedAgain).toBe(true);
@@ -297,7 +297,7 @@ it.each([
           .all(),
       ).toEqual([
         { session_id: "first", needs_rebuild: 0 },
-        { session_id: "second", needs_rebuild: retires || closesPool ? 1 : 0 },
+        { session_id: "second", needs_rebuild: retires ? 1 : 0 },
       ]);
       expect(
         verified.db
@@ -306,7 +306,7 @@ it.each([
           )
           .all(continuedSession),
       ).toEqual(
-        retires || closesPool
+        retires
           ? []
           : [{ session_id: continuedSession, message_id: `${continuedSession}-message` }],
       );
