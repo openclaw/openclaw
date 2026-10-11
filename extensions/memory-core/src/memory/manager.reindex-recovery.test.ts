@@ -44,7 +44,7 @@ type ReindexHarness = {
   syncArchiveFiles: (params: SyncArchiveParams) => Promise<unknown>;
   db: DatabaseSync;
   cache: { enabled: boolean; maxEntries?: number };
-  writeMeta: (meta: MemoryIndexMeta) => void;
+  writeMeta: (meta: MemoryIndexMeta) => Promise<void>;
   providerKey: string | null;
   provider: EmbeddingProvider | null;
   dirty: boolean;
@@ -995,7 +995,7 @@ describe("memory manager reindex recovery", () => {
           Date.now(),
         );
     }
-    harness.writeMeta({
+    await harness.writeMeta({
       model: "fts-only",
       provider: "none",
       providerKey: harness.providerKey ?? undefined,
