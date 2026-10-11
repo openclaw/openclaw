@@ -121,6 +121,7 @@ export function normalizeCronRunDiagnosticsCore(
       ...(typeof entry.toolName === "string" && entry.toolName.trim()
         ? { toolName: entry.toolName.trim() }
         : {}),
+      ...(typeof entry.code === "string" && entry.code.trim() ? { code: entry.code.trim() } : {}),
       ...(typeof entry.exitCode === "number" && Number.isFinite(entry.exitCode)
         ? { exitCode: entry.exitCode }
         : entry.exitCode === null

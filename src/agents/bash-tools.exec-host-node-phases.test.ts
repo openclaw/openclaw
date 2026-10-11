@@ -46,6 +46,22 @@ async function invokeFailure(error: unknown) {
 }
 
 describe("invokeNodeSystemRun failure classification", () => {
+  it("preserves a policy denial wrapped as Gateway unavailable", async () => {
+    await expect(
+      invokeFailure(
+        gatewayNodeInvokeError({
+          code: "UNAVAILABLE",
+          message: "SYSTEM_RUN_DENIED: node policy denied proof command",
+        }),
+      ),
+    ).resolves.toEqual({
+      reason: "policy-denied",
+      retrySafe: false,
+      code: "SYSTEM_RUN_DENIED",
+      message: "SYSTEM_RUN_DENIED: node policy denied proof command",
+    });
+  });
+
   it("classifies only proven pre-dispatch NOT_CONNECTED as retry-safe", async () => {
     await expect(
       invokeFailure(

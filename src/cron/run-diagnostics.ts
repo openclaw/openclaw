@@ -109,6 +109,7 @@ export function createCronRunDiagnosticsFromError(
     severity?: CronRunDiagnosticSeverity;
     nowMs?: () => number;
     toolName?: string;
+    code?: string;
     exitCode?: number | null;
   },
 ): CronRunDiagnostics | undefined {
@@ -123,6 +124,7 @@ export function createCronRunDiagnosticsFromError(
           severity: opts?.severity ?? "error",
           message,
           toolName: opts?.toolName,
+          code: opts?.code,
           exitCode: opts?.exitCode,
         },
       ],
@@ -246,10 +248,16 @@ export function createCronRunDiagnosticsFromAgentResult(
   }
   const failureSignal =
     meta.failureSignal && typeof meta.failureSignal === "object"
-      ? (meta.failureSignal as { message?: unknown; toolName?: unknown })
+      ? (meta.failureSignal as { message?: unknown; toolName?: unknown; code?: unknown })
       : undefined;
   if (typeof failureSignal?.message === "string") {
-    diagnostics.push(createCronRunDiagnosticsFromError("tool", failureSignal.message, opts));
+    diagnostics.push(
+      createCronRunDiagnosticsFromError("tool", failureSignal.message, {
+        ...opts,
+        toolName: normalizeOptionalString(failureSignal.toolName),
+        code: normalizeOptionalString(failureSignal.code),
+      }),
+    );
   }
   const unresolvedError = asOptionalObjectRecord(
     asOptionalObjectRecord(meta.toolSummary)?.unresolvedError,

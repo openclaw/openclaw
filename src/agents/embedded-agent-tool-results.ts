@@ -139,7 +139,9 @@ function extractErrorField(value: unknown): string | undefined {
 
 function extractDirectErrorField(value: unknown): string | undefined {
   const record = asOptionalObjectRecord(value);
+  const nodeInvokeFailure = asOptionalObjectRecord(record?.nodeInvokeFailure);
   return (
+    readErrorCandidate(nodeInvokeFailure?.message) ??
     readErrorCandidate(record?.error) ??
     readErrorCandidate(record?.message) ??
     readErrorCandidate(record?.reason)
@@ -166,9 +168,12 @@ function readNestedErrorCodeField(value: unknown): string | undefined {
 
 function extractDirectErrorCodeField(value: unknown): string | undefined {
   const record = asOptionalObjectRecord(value);
+  const nodeInvokeFailure = asOptionalObjectRecord(record?.nodeInvokeFailure);
   return (
     readNestedErrorCodeField(record?.error) ??
     readNestedErrorCodeField(record?.nodeError) ??
+    readDenialErrorCodeFromMessage(nodeInvokeFailure?.message) ??
+    normalizeOptionalString(nodeInvokeFailure?.failureCode) ??
     normalizeOptionalString(record?.code) ??
     normalizeOptionalString(record?.gatewayCode)
   );

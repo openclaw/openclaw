@@ -80,6 +80,38 @@ describe("tool errors", () => {
     ).toBe("INVALID_REQUEST");
   });
 
+  it("extracts structured node invoke failure codes after sanitization", () => {
+    const result = sanitizeToolResult({
+      details: {
+        status: "failed",
+        nodeInvokeFailure: {
+          failureCode: "SYSTEM_RUN_DENIED",
+          message: "execution denied by node policy",
+        },
+      },
+    });
+
+    expect(extractToolErrorCode(result)).toBe("SYSTEM_RUN_DENIED");
+  });
+
+  it("prefers a structured node denial over its Gateway unavailable wrapper", () => {
+    const result = sanitizeToolResult({
+      details: {
+        status: "failed",
+        reason: "outcome-unknown",
+        nodeInvokeFailure: {
+          failureCode: "UNAVAILABLE",
+          message: "SYSTEM_RUN_DENIED: node policy denied proof command",
+        },
+      },
+    });
+
+    expect(extractToolErrorCode(result)).toBe("SYSTEM_RUN_DENIED");
+    expect(extractToolErrorMessage(result)).toBe(
+      "SYSTEM_RUN_DENIED: node policy denied proof command",
+    );
+  });
+
   it("does not extract error codes from prose-only tool output", () => {
     expect(
       extractToolErrorCode({

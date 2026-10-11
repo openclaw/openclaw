@@ -36,6 +36,18 @@ type NodeSystemRunInvokeResult =
   | { ok: true; raw: unknown }
   | { ok: false; failure: NodeInvokeFailure };
 
+function readNodePolicyDenialCode(
+  code: string | undefined,
+  message: string,
+): "SYSTEM_RUN_DENIED" | undefined {
+  if (code === "SYSTEM_RUN_DENIED") {
+    return code;
+  }
+  return message === "SYSTEM_RUN_DENIED" || message.startsWith("SYSTEM_RUN_DENIED:")
+    ? "SYSTEM_RUN_DENIED"
+    : undefined;
+}
+
 /** Only NOT_CONNECTED plus explicit pre-dispatch provenance proves a retry cannot duplicate work. */
 function classifyNodeInvokeFailure(error: unknown): NodeInvokeFailure {
   const errorRecord = asNullableRecord(error);
@@ -50,9 +62,10 @@ function classifyNodeInvokeFailure(error: unknown): NodeInvokeFailure {
     typeof details?.nodeCommandDispatched === "boolean" ? details.nodeCommandDispatched : undefined;
   const requestSent =
     typeof errorRecord?.requestSent === "boolean" ? errorRecord.requestSent : undefined;
+  const policyDenialCode = readNodePolicyDenialCode(code, message);
 
-  if (code === "SYSTEM_RUN_DENIED") {
-    return { reason: "policy-denied", retrySafe: false, code, message };
+  if (policyDenialCode) {
+    return { reason: "policy-denied", retrySafe: false, code: policyDenialCode, message };
   }
   if (code === "NOT_CONNECTED" && nodeCommandDispatched === false) {
     return {
