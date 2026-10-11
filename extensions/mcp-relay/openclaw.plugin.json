@@ -1,0 +1,49 @@
+{
+  "id": "mcp-relay",
+  "name": "MCP Relay",
+  "description": "Connect remote MCP clients to your OpenClaw Gateway",
+  "categories": ["infrastructure"],
+  "enabledByDefault": false,
+  "activation": {
+    "onStartup": true,
+    "onCommands": ["mcp-relay"]
+  },
+  "cliCommands": [
+    {
+      "name": "mcp-relay",
+      "description": "Inspect the MCP relay connection and manage client grants",
+      "hasSubcommands": true
+    }
+  ],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "relayUrl": {
+        "type": "string",
+        "default": "https://mcp.openclaw.ai",
+        "pattern": "^(?:https://[^\\s/?#@\\\\]+|http://(?:localhost|127\\.0\\.0\\.1)(?::[0-9]+)?)/?$"
+      },
+      "controlUiUrl": {
+        "type": "string",
+        "format": "uri",
+        "pattern": "^https://[^\\s\\u0000-\\u001f\\u007f/?#@\\\\]+(?:/[^\\s\\u0000-\\u001f\\u007f?#\\\\]*)?(?![\\s\\S])"
+      },
+      "agentId": { "type": "string", "minLength": 1 }
+    }
+  },
+  "uiHints": {
+    "relayUrl": {
+      "label": "Relay URL",
+      "help": "HTTPS relay origin. HTTP is supported only for localhost and 127.0.0.1 development."
+    },
+    "controlUiUrl": {
+      "label": "Control UI URL",
+      "help": "Optional HTTPS Control UI URL for direct embedding in ChatGPT. Paths are allowed; credentials, queries, and fragments are not. Configure gateway.controlUi.frameAncestors to allow the embed."
+    },
+    "agentId": {
+      "label": "Default Agent",
+      "help": "Optional agent for new conversations; otherwise use the Gateway default."
+    }
+  }
+}

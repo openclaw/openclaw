@@ -39,6 +39,7 @@ describe("Gateway operation policy reload", () => {
     "gateway.controlUi.allowExternalEmbedUrls",
     "gateway.controlUi.automaticallyFetchFavicons",
     "gateway.controlUi.allowedOrigins",
+    "gateway.controlUi.frameAncestors",
     "gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback",
     "gateway.nodes.commands.allow",
     "gateway.nodes.pluginTools.enabled",

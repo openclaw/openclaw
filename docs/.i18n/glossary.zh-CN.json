@@ -5038,5 +5038,17 @@
   {
     "source": "Recommended models",
     "target": "推荐模型"
+  },
+  {
+    "source": "MCP Relay",
+    "target": "MCP Relay"
+  },
+  {
+    "source": "Mcp Relay plugin reference",
+    "target": "MCP Relay 插件参考"
+  },
+  {
+    "source": "mcp-relay",
+    "target": "mcp-relay"
   }
 ]

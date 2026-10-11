@@ -1579,6 +1579,12 @@ importers:
         specifier: workspace:*
         version: link:../..
 
+  extensions/mcp-relay:
+    devDependencies:
+      '@openclaw/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
+
   extensions/memory-core:
     dependencies:
       '@openclaw/fs-safe':
