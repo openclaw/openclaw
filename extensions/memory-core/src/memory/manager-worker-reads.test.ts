@@ -59,6 +59,7 @@ describe("memory manager retained worker reads", () => {
     );
     const observed = observeHostDataSql();
     try {
+      expect(await manager.probeVectorStoreAvailability()).toBe(true);
       await manager.sync({ reason: "cold-vectors", force: true });
       expect(observed.queries).toEqual([]);
     } finally {

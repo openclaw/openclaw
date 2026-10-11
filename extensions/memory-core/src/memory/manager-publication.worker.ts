@@ -301,6 +301,23 @@ function createPublicationBackend(
     );
   };
   return {
+    async prepare(command) {
+      if (command.type !== "vector.prepare") {
+        return;
+      }
+      const extensionPath = command.input.state.extensionPath;
+      const loadedPath = loadedExtensions.get(db);
+      if (loadedPath && (!extensionPath || extensionPath === loadedPath)) {
+        return;
+      }
+      // Module resolution can yield; the executor awaits preparation before
+      // entering its synchronous operation and transaction admission.
+      const loaded = await loadSqliteVecExtension({ db, extensionPath });
+      if (!loaded.ok || !loaded.extensionPath) {
+        throw new Error(loaded.error ?? "unknown sqlite-vec load error");
+      }
+      loadedExtensions.set(db, loaded.extensionPath);
+    },
     assertSettled() {
       assertTransactionUsable(db);
       if (!db.isOpen || db.isTransaction) {
@@ -464,30 +481,22 @@ function createPublicationBackend(
         return command.type === "cache.write" ? finish(outcome) : outcome;
       }
       if (command.type === "vector.prepare") {
-        const extensionPath = command.input.state.extensionPath;
-        return (async () => {
-          let loadedPath = loadedExtensions.get(db);
-          if (!loadedPath || (extensionPath && extensionPath !== loadedPath)) {
-            const loaded = await loadSqliteVecExtension({ db, extensionPath });
-            if (!loaded.ok || !loaded.extensionPath) {
-              throw new Error(loaded.error ?? "unknown sqlite-vec load error");
-            }
-            loadedPath = loaded.extensionPath;
-            loadedExtensions.set(db, loadedPath);
-          }
-          if (!tableExists(db, "chunks_vec")) {
-            return {
-              ok: true as const,
-              value: { extensionPath: loadedPath, retiredLegacy: false },
-            };
-          }
-          return withFacts(
-            write(() => {
-              db.exec("DROP TABLE IF EXISTS chunks_vec");
-              return { extensionPath: loadedPath, retiredLegacy: true };
-            }),
-          );
-        })();
+        const loadedPath = loadedExtensions.get(db);
+        if (!loadedPath) {
+          throw new Error("Memory vector extension was not prepared");
+        }
+        if (!tableExists(db, "chunks_vec")) {
+          return {
+            ok: true,
+            value: { extensionPath: loadedPath, retiredLegacy: false },
+          };
+        }
+        return withFacts(
+          write(() => {
+            db.exec("DROP TABLE IF EXISTS chunks_vec");
+            return { extensionPath: loadedPath, retiredLegacy: true };
+          }),
+        );
       }
       if (command.type === "vector.ensure") {
         const { dimensions } = command.input;

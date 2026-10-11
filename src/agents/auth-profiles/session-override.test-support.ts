@@ -70,6 +70,7 @@ vi.mock("./source-check.js", async (importOriginal) => ({
 }));
 vi.mock("./store-runtime.js", () => ({
   ensureAuthProfileStore: authStoreMocks.ensureAuthProfileStore,
+  loadAuthProfileStoreForRuntimeAsync: async () => authStoreMocks.state.store,
 }));
 
 vi.mock("./usage.js", () => ({
