@@ -388,6 +388,7 @@ async function readVerifiedGatewayLockIdentity(
 async function assertHistoricalGatewayOwnerStopped(
   paths: ReturnType<typeof resolveGatewayLockPaths>,
   opts: GatewayLockOptions,
+  onContention?: (lockPath: string) => void,
 ): Promise<void> {
   for (const lockPath of [paths.stateLockPath, paths.configLockPath]) {
     const payload = await readLockPayload(lockPath, true);
@@ -404,6 +405,7 @@ async function assertHistoricalGatewayOwnerStopped(
       { trustUnknownCmdlineOwner: false, lockPath },
     );
     if (owner !== "dead") {
+      onContention?.(lockPath);
       throw new GatewayStateOwnerContentionError(
         path.join(paths.stateDir, "state", "openclaw.sqlite"),
         undefined,
@@ -471,6 +473,8 @@ export async function acquireGatewayLock(
   }
   let databaseFailure: { error: unknown } | undefined;
   let waited = false;
+  // Lock file that blocked the failing attempt, named in the timeout error.
+  let contendedLockPath: string | undefined;
   let projection: GatewayStateProjection | undefined;
   let stateOwner: ReturnType<typeof acquireGatewayStateOwner>;
   try {
@@ -484,6 +488,8 @@ export async function acquireGatewayLock(
         acquire: async () => {
           databaseFailure = undefined;
           opts.assertCurrent?.();
+          // Each attempt reports its own contention; never reuse a stale path.
+          contendedLockPath = undefined;
           payload.createdAt = resolveTimestampMsToIsoString(Date.now());
           const owner = acquireGatewayStateOwner({
             databasePath,
@@ -500,7 +506,9 @@ export async function acquireGatewayLock(
             } else {
               assertDatabasePortStartupAllowed(paths.stateDir);
             }
-            await assertHistoricalGatewayOwnerStopped(paths, opts);
+            await assertHistoricalGatewayOwnerStopped(paths, opts, (contended) => {
+              contendedLockPath = contended;
+            });
             if (!opts.databasePortRecovery && opts.databaseAccess !== "none") {
               try {
                 await owner.run(() => {
@@ -517,6 +525,10 @@ export async function acquireGatewayLock(
             }
             return owner;
           } catch (error) {
+            // Unattributed contention is the owner sidecar; keep a more specific path.
+            if (error instanceof GatewayStateOwnerContentionError) {
+              contendedLockPath ??= paths.ownerLockPath;
+            }
             owner.release();
             throw error;
           }
@@ -555,7 +567,9 @@ export async function acquireGatewayLock(
       }));
   } catch (error) {
     opts.assertCurrent?.();
-    const message = `failed to acquire gateway state ownership${waited ? `; waited ${Math.round(now() - startedAt)}ms for Gateway state ownership` : ""}`;
+    // Fall back to the owner sidecar, where ownership lives, when nothing narrowed it.
+    const lockPath = contendedLockPath ?? paths.ownerLockPath;
+    const message = `failed to acquire gateway state ownership${waited ? `; waited ${Math.round(now() - startedAt)}ms for Gateway state ownership` : ""} at ${lockPath}`;
     const detail =
       error instanceof GatewayStateOwnerContentionError
         ? `${message}: ${error.message}. ${captureStalledGatewayStartup(env)?.description ?? "Stop the Gateway or wait for the current OpenClaw operation to finish"}. Run \`openclaw gateway stop\`, then retry.`
