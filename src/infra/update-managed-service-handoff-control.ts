@@ -326,7 +326,7 @@ async function runOwnedUpdateCommand(phase, commandArgv, timeoutMs, cwd = params
       appendLog(
         "The installed update does not support automatic diagnostics. Run openclaw triage manually.",
       );
-      process.exitCode = 1;
+      finalExitCode = 1;
     }
     return { ...exit, continuation, updaterOutput: Buffer.concat(updaterChunks).toString(), outputOverflow };
   } finally {

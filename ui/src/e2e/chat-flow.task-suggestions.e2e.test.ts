@@ -467,7 +467,7 @@ suite.define(() => {
                 .getBoundingClientRect();
               const details = element
                 .closest("openclaw-chat-pane")!
-                .querySelector(".chat-pane__header-trailing .chat-details-toggle")!
+                .querySelector(".chat-details-toggle")!
                 .getBoundingClientRect();
               const clearOfDetails =
                 box.left >= details.right ||
