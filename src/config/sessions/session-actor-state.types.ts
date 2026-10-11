@@ -30,12 +30,18 @@ export type SessionActorLifetime = {
   assertReadable(): void;
 };
 
+/** Entry policy and physical/version identity; transcript indexes are not authority. */
+export type SessionActorAuthorityFacts = Pick<
+  SessionActorHotState,
+  "target" | "version" | "writeToken" | "dependencySessionIds" | "entry"
+>;
+
 /** Host-owned live authority, rechecked at both synchronous admission boundaries. */
 export type SessionActorAuthority = {
   assertCurrent(): void;
   authorize(
     stage: "transaction" | "commit",
-    facts: SessionActorHotState,
+    facts: SessionActorAuthorityFacts,
     /** Existing kernel source/custody evidence remains subject to its owner's checks. */
     publication?: unknown,
   ): void;

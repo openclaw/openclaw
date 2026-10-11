@@ -113,11 +113,6 @@ suite.define(() => {
         const ownRow = page.locator(`.sidebar-recent-session[data-session-key="${own.key}"]`);
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, own.key));
         await historyText.waitFor();
-        // Both authorized rows are needed to compare own-session writes with shared read-only access.
-        await page
-          .locator(".sidebar-navigation-scope")
-          .getByRole("button", { name: "All", exact: true })
-          .click();
         await ownRow.click({ button: "right" });
         await rename.waitFor();
         await captureUiProof(suite, page, `${name}-owned-menu.png`, menu.locator('[part="menu"]'), [
@@ -169,7 +164,7 @@ suite.define(() => {
         expect(await send.isDisabled()).toBe(true);
         expect(await model.getAttribute("aria-disabled")).toBe("true");
         expect(await permission.isDisabled()).toBe(true);
-        const create = page.locator(".sidebar-brand__new-thread");
+        const create = page.locator(".sidebar-session-toolbar .sidebar-new-session");
         expect(await create.isDisabled()).toBe(!canOrganize);
         if (!canOrganize) {
           await create.click({ force: true });

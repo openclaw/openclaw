@@ -344,6 +344,7 @@ src/agents/worktrees/repository-paths.ts
 src/agents/worktrees/run-end-lifecycle.ts
 src/agents/sandbox/registry-lifecycle.ts
 src/agents/sandbox/registry-publication.ts
+src/config/sessions/session-actor-command.ts
 src/config/sessions/session-actor-executor.ts
 src/config/sessions/session-actor-sqlite.ts
 src/config/sessions/session-actor-transaction.ts
@@ -1137,7 +1138,6 @@ src/infra/state-migrations.media-persistence-targets.ts
 src/infra/state-migrations.receipts.ts
 src/infra/tcp-port.ts
 src/infra/temp-artifact-cleanup.ts
-src/infra/temp-directory-usage.ts
 src/infra/test-runtime-env.ts
 src/infra/tmp-openclaw-dir.ts
 src/infra/update-channels.ts
@@ -1298,6 +1298,7 @@ src/plugins/compat/registry-records.ts
 src/plugins/compat/registry.ts
 src/plugins/compat/reply-tool-authority-record.ts
 src/plugins/compat/session-persistence-records.ts
+src/plugins/compat/skill-command-discovery-record.ts
 src/plugins/compat/skill-proposal-hooks-record.ts
 src/plugins/compat/tts-preferences-record.ts
 src/plugins/compat/watched-sessions.ts
@@ -1473,7 +1474,6 @@ src/plugins/plugin-source-admission-store.ts
 src/plugins/plugin-source-admission.types.ts
 src/plugins/plugin-source-build.ts
 src/plugins/plugin-source-capture-context.ts
-src/plugins/plugin-source-capture-cleanup.ts
 src/plugins/plugin-source-capture-directory.ts
 src/plugins/plugin-source-capture-native-loads.ts
 src/plugins/plugin-source-capture-path.ts
@@ -1980,6 +1980,7 @@ src/config/sessions/session-accessor.sqlite-entry-facts.worker.ts
 src/config/sessions/session-accessor.sqlite-entry-receipt.ts
 src/config/sessions/session-accessor.sqlite-entry-worker-publication.ts
 src/config/sessions/session-transcript-authority.ts
+src/config/sessions/session-transcript-context-facts.ts
 src/config/sessions/session-accessor.sqlite-incognito-sharing.ts
 src/config/sessions/session-accessor.sqlite-maintenance-age-queries.ts
 src/config/sessions/session-accessor.sqlite-maintenance-age.ts

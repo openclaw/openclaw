@@ -1,6 +1,7 @@
 import { nothing } from "lit";
 import { AsyncDirective } from "lit/async-directive.js";
 import { directive, type ElementPart } from "lit/directive.js";
+import { createRenderEffect, onCleanup } from "solid-js";
 
 /** Reveal an option without scrollIntoView also moving its popup's ancestors. */
 export function revealInScrollRegion(region: HTMLElement, option: HTMLElement): void {
@@ -87,3 +88,26 @@ class ScrollStateDirective extends AsyncDirective {
 }
 
 export const scrollState = directive(ScrollStateDirective);
+
+export function createScrollState(content: () => unknown) {
+  let element: HTMLElement | undefined;
+  let disposed = false;
+  const sync = () => {
+    if (!disposed && element?.isConnected) {
+      syncScrollState(element);
+    }
+  };
+  const observer = typeof ResizeObserver === "undefined" ? undefined : new ResizeObserver(sync);
+  createRenderEffect(content, () => queueMicrotask(sync));
+  onCleanup(() => {
+    disposed = true;
+    observer?.disconnect();
+    element?.removeEventListener("scroll", sync);
+  });
+  return (target: HTMLElement) => {
+    element = target;
+    observer?.observe(target);
+    target.addEventListener("scroll", sync);
+    queueMicrotask(sync);
+  };
+}

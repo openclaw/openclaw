@@ -209,13 +209,11 @@ export async function reconcileWorkspaceAfterTurn(params: {
             journal: journal.adapter,
             stagedResult: {
               ref: stagedResultRef,
-              record: (ref) =>
+              record: (ref, workspaceId) =>
                 params.placements.recordStagedWorkspaceResult(
                   params.turnClaim,
                   ref,
-                  params.workspace.kind === "repository"
-                    ? params.workspace.repository.workspaceId
-                    : undefined,
+                  workspaceId,
                   assertWorkspaceResultCurrent,
                 ),
             },
