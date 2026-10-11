@@ -44,6 +44,7 @@ type RailPinTouchPress = {
 const railPinTouchPresses = new WeakMap<HTMLElement, RailPinTouchPress>();
 
 function cancelRailPinTouchPress(event: Event) {
+  // SAFETY: Every binding below attaches this handler to the rail pin div.
   const pin = event.currentTarget as HTMLElement;
   const press = railPinTouchPresses.get(pin);
   if (!press || (event instanceof PointerEvent && event.pointerId !== press.pointerId)) {
@@ -59,6 +60,7 @@ function cancelRailPinTouchPress(event: Event) {
 const railPinClickCapture = {
   capture: true,
   handleEvent(event: MouseEvent) {
+    // SAFETY: Lit installs this capture listener on the rail pin div below.
     const pin = event.currentTarget as HTMLElement;
     const press = railPinTouchPresses.get(pin);
     if (!press?.opened) {
@@ -258,6 +260,7 @@ function renderRailPin(
     !host.sidebarSnapshot &&
     handleContextMenuEvent(
       event,
+      // SAFETY: Both context-menu bindings below belong to the rail pin div.
       (event.currentTarget as HTMLElement).querySelector("a, button"),
       (trigger, x, y) => host.sidebarMenus.openRailPinMenu(serialized, label, x, y, trigger),
     );
@@ -269,6 +272,7 @@ function renderRailPin(
     @contextmenu=${openMenu}
     @keydown=${openMenu}
     @pointerdown=${(event: PointerEvent) => {
+      // SAFETY: This listener is bound directly to the enclosing rail pin div.
       const pin = event.currentTarget as HTMLElement;
       clearTimeout(railPinTouchPresses.get(pin)?.timer);
       railPinTouchPresses.delete(pin);
@@ -294,6 +298,7 @@ function renderRailPin(
       }, 500);
     }}
     @pointermove=${(event: PointerEvent) => {
+      // SAFETY: This listener is bound directly to the enclosing rail pin div.
       const press = railPinTouchPresses.get(event.currentTarget as HTMLElement);
       if (press && Math.hypot(event.clientX - press.x, event.clientY - press.y) > 8) {
         cancelRailPinTouchPress(event);
