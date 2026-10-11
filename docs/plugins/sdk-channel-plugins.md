@@ -409,7 +409,10 @@ a canonical URL alone is not proof of anonymous access.
       means a replacement snapshot. Never infer this from matching prefixes.
       Finals always replace, and durable sends/transcripts use the payload's own
       `text`, not an accumulated preview. A text-rewriting delivery modifier clears
-      delta mode so its replacement remains authoritative.
+      delta mode so its replacement remains authoritative. When appending a chunk
+      to an existing preview, use `stripReplyPayloadResponsePrefix(payload, text)`
+      to remove only the response prefix recorded by normalization; retain the
+      decorated text for the first chunk and for independent durable sends.
 
       Streaming delivery can carry one `OutboundPayloadPlan` through the optional
       `onPreparedBlockReply(plan, context)`, dispatcher `sendPreparedReply(kind, plan)`,

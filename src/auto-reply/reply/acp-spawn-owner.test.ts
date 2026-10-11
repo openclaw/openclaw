@@ -40,7 +40,7 @@ import { buildCommandTestParams } from "./commands.test-harness.js";
 import { withFullRuntimeReplyConfig } from "./get-reply-fast-path.js";
 import { resetInboundDedupe } from "./inbound-dedupe.js";
 
-it.each(["spawned", "legacy", "configured"] as const)(
+it.each(["spawned", "legacy", "configured", "removed", "reassigned", "reopened"] as const)(
   "dispatches %s ACP sessions without confusing the configured owner and harness storage",
   async (kind) => {
     await withOpenClawTestState(
@@ -81,12 +81,14 @@ it.each(["spawned", "legacy", "configured"] as const)(
         const pluginRegistry = vi
           .spyOn(runtimePlugins, "loadAgentRuntimePluginRegistryHandle")
           .mockReturnValue(registry.registry);
+        let afterRuntimePrepared: (() => void) | undefined;
         const publishedRuntime = vi
           .spyOn(preparedRuntime, "loadPublishedGatewayReplyDispatchRuntime")
           .mockImplementation(async ({ agentId }) => {
             if (agentId !== (kind === "configured" ? "work" : "main")) {
               throw new Error(`No published runtime for ${agentId}`);
             }
+            afterRuntimePrepared?.();
             return undefined;
           });
         const turns: Array<{ agentId: string | undefined; sessionKey: string }> = [];
@@ -111,7 +113,7 @@ it.each(["spawned", "legacy", "configured"] as const)(
           },
         });
         testing.resetAcpSessionManagerForTests();
-        const manager = getAcpSessionManager();
+        let manager = getAcpSessionManager();
         let binding: SessionBindingRecord | null = null;
         const adapter = {
           channel: "discord",
@@ -131,7 +133,7 @@ it.each(["spawned", "legacy", "configured"] as const)(
         try {
           let sessionKey: string;
           const storeAgentId =
-            kind === "legacy" ? "free-harness" : kind === "configured" ? "work" : "main";
+            kind === "spawned" ? "main" : kind === "configured" ? "work" : "free-harness";
           if (kind === "spawned") {
             const params = buildCommandTestParams(
               "/acp spawn free-harness --thread off --label owner-proof",
@@ -160,6 +162,11 @@ it.each(["spawned", "legacy", "configured"] as const)(
               agent: "free-harness",
               mode: "persistent",
             });
+          }
+          if (kind === "reopened") {
+            await disposeAcpSessionManagerInstance(manager, "simulate-restart");
+            testing.resetAcpSessionManagerForTests();
+            manager = getAcpSessionManager();
           }
           binding = {
             bindingId: "owner-proof",
@@ -196,9 +203,25 @@ it.each(["spawned", "legacy", "configured"] as const)(
             reply: { to: "owner-room" },
             message: { rawBody: "hello owner" },
           });
-          await withPluginRuntimeRegistryScope(registry.registry, () =>
+          const rejectBinding = kind === "removed" || kind === "reassigned";
+          if (rejectBinding) {
+            const preparedBinding = binding;
+            afterRuntimePrepared = () => {
+              binding =
+                kind === "removed"
+                  ? null
+                  : { ...preparedBinding, targetSessionKey: "agent:main:acp:replacement" };
+            };
+          }
+          const dispatch = withPluginRuntimeRegistryScope(registry.registry, () =>
             dispatchInboundMessage({ ctx, cfg, dispatcher }),
           );
+          if (rejectBinding) {
+            await expect(dispatch).rejects.toMatchObject({ code: "SESSION_WORK_START_CHANGED" });
+            expect(turns).toEqual([]);
+            return;
+          }
+          await dispatch;
           dispatcher.markComplete();
           await dispatcher.waitForIdle();
           expect(delivered.join("")).toContain("owner reply");

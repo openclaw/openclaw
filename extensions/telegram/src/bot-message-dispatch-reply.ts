@@ -15,6 +15,7 @@ import {
   isReplyPayloadTerminalContent,
   resolveAskUserQuestionOptionIndices,
   resolveSendableOutboundReplyParts,
+  stripReplyPayloadResponsePrefix,
   type ReplyPayload,
 } from "openclaw/plugin-sdk/reply-payload";
 import { danger } from "openclaw/plugin-sdk/runtime-env";
@@ -358,6 +359,18 @@ async function deliverReplyWithNormalization(
     // Final delivery drains queued draft work so an earlier block cannot overtake it.
     await enqueueDraftEvent(turn, async () => {});
   }
+  if (info.kind === "final" && effectivePayload.isStatusNotice === true) {
+    // ACP identity notices finish dispatch but must not replace the answer preview.
+    await turn.materializeAnswerLaneBeforeRotation();
+    const result = await sendPayload(turn, effectivePayload, {
+      durable: true,
+      onPlatformSendDispatch: info.onPlatformSendDispatch,
+      assertPlatformSendAuthorized: info.assertPlatformSendAuthorized,
+      bindPendingFinalDelivery: info.bindPendingFinalDelivery,
+    });
+    await observeFinalDelivery(turn, result, effectivePayload.isError === true);
+    return toTelegramReplyDeliveryResult(turn, result.visibleReplySent, undefined, result);
+  }
   const isToolPayloadAfterFinal = info.kind === "tool" && turn.previewLifecycle.finalStarted;
   const isNonTerminalWarningAfterDeliveredFinal =
     isReplyPayloadNonTerminalToolErrorWarning(payload) && turn.previewLifecycle.finalDelivered;
@@ -460,7 +473,10 @@ async function deliverReplyWithNormalization(
         payload: effectivePayload,
         text:
           payload.textMode === "delta"
-            ? (turn.activeAnswerBlockDelivery?.text ?? "") + segment.text
+            ? (turn.activeAnswerBlockDelivery?.text ?? "") +
+              (turn.activeAnswerBlockDelivery?.text
+                ? stripReplyPayloadResponsePrefix(effectivePayload, segment.text)
+                : segment.text)
             : segment.text,
         buttons: telegramButtons,
       };
@@ -500,7 +516,10 @@ async function deliverReplyWithNormalization(
       isReplyPayloadTerminalContent(effectivePayload);
     const segmentText =
       canStreamBlock && effectivePayload.textMode === "delta"
-        ? turn.lastAnswerPartialText + segment.text
+        ? turn.lastAnswerPartialText +
+          (turn.lastAnswerPartialText
+            ? stripReplyPayloadResponsePrefix(effectivePayload, segment.text)
+            : segment.text)
         : segment.text;
     if (canStreamBlock) {
       turn.lastAnswerPartialText = segmentText;

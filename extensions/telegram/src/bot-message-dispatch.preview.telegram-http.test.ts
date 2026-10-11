@@ -23,15 +23,21 @@ describe("Telegram preview, presentation, and progress delivery through HTTP", (
     waitForBotApiCall,
   } = http;
 
-  it.each(["partial", "block"] as const)(
-    "appends explicit chunks and replaces each final in %s mode",
-    async (mode) => {
+  it.each([
+    ["partial", ""],
+    ["block", ""],
+    ["partial", "[bot] "],
+    ["block", "[bot] "],
+  ] as const)(
+    "appends explicit chunks and replaces each final in %s mode with prefix %s",
+    async (mode, prefix) => {
       const first = "This answer starts here and has enough text to preview. ";
       const chunk = "The next sentence belongs to the same answer. ";
       const finalText = "The authoritative final replaces the streamed draft.";
       await dispatchProgressTurn(async () => undefined, {
         mode,
         toolProgress: false,
+        cfg: { messages: { responsePrefix: prefix.trimEnd() } },
         producer: async ({ dispatcher }) => {
           dispatcher.sendBlockReply({ text: first, textMode: "delta" });
           await dispatcher.waitForIdle();
@@ -39,15 +45,37 @@ describe("Telegram preview, presentation, and progress delivery through HTTP", (
           await dispatcher.waitForIdle();
           dispatcher.sendBlockReply({ text: first, textMode: "delta" });
           await dispatcher.waitForIdle();
-          expect([...visibleMessages.values()]).toEqual([(first + chunk + first).trimEnd()]);
+          expect([...visibleMessages.values()]).toEqual([
+            (prefix + first + chunk + first).trimEnd(),
+          ]);
           dispatcher.sendFinalReply({ text: finalText });
           dispatcher.sendFinalReply({ text: "Separate status." });
           return { queuedFinal: true, counts: dispatcher.getQueuedCounts() };
         },
       });
-      expect([...visibleMessages.values()]).toEqual([finalText, "Separate status."]);
+      expect([...visibleMessages.values()]).toEqual([
+        prefix + finalText,
+        prefix + "Separate status.",
+      ]);
     },
   );
+
+  it("preserves accumulated ACP answer chunks when a final status notice follows", async () => {
+    const first = "First ACP answer chunk with enough text for a preview. ";
+    const second = "Second ACP answer chunk completes the answer.";
+    await dispatchProgressTurn(async () => undefined, {
+      mode: "partial",
+      toolProgress: false,
+      producer: async ({ dispatcher }) => {
+        dispatcher.sendBlockReply({ text: first, textMode: "delta" });
+        dispatcher.sendBlockReply({ text: second, textMode: "delta" });
+        await dispatcher.waitForIdle();
+        dispatcher.sendFinalReply({ text: "Session ids resolved.", isStatusNotice: true });
+        return { queuedFinal: true, counts: dispatcher.getQueuedCounts() };
+      },
+    });
+    expect([...visibleMessages.values()]).toEqual([first + second, "Session ids resolved."]);
+  });
 
   it("keeps the same preview after one HTTP 502 edit failure", async () => {
     const initial = "The initial answer is visible while the remaining work completes.";
