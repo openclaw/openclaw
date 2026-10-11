@@ -285,3 +285,9 @@ export const SessionMenu = defineSolidBridge<SessionMenuProps>(
     },
   },
 );
+
+declare global {
+  interface HTMLElementTagNameMap {
+    "openclaw-session-menu": SolidBridgeElement<SessionMenuProps>;
+  }
+}

@@ -23,6 +23,7 @@ import {
   maintainSessionTranscriptIndexStatus,
 } from "./session-transcript-index-status.worker.js";
 import { sessionTranscriptIndexNeedsReconcile } from "./session-transcript-index.js";
+import { bindSqliteWorkerBackend } from "./session-transcript-projection-publication.worker.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const databases: DatabaseSync[] = [];
@@ -84,6 +85,73 @@ function settle(db: DatabaseSync) {
   }
   throw new Error("Bounded projection maintenance did not finish");
 }
+
+it.each(["preflight", "sweep"] as const)(
+  "%s leaves the writer lock free during both host grants and reads subsequent writes",
+  (type) => {
+    const filename = path.join(tempDirs.make("index-admission-"), "agent.sqlite");
+    const db = createDatabase(filename);
+    const other = openNodeSqliteDatabase(filename);
+    databases.push(other);
+    other.exec("PRAGMA busy_timeout = 0");
+    const writable: boolean[] = [];
+    const backend = bindSqliteWorkerBackend(undefined, {
+      database: db,
+      databasePath: filename,
+      admit(stage) {
+        try {
+          other.exec("BEGIN IMMEDIATE");
+          writable.push(true);
+          if (stage === "commit") {
+            seedCleanSession(other, "arrived-during-admission");
+            other.exec("UPDATE session_transcript_index_state SET needs_rebuild = 1");
+          }
+          other.exec("COMMIT");
+        } catch {
+          writable.push(false);
+          if (other.isTransaction) {
+            other.exec("ROLLBACK");
+          }
+        }
+      },
+    });
+    const result = backend.execute({ type, input: undefined });
+    expect(writable).toEqual([true, true]);
+    expect(result).toMatchObject({ sessionIds: ["arrived-during-admission"] });
+    backend.assertSettled();
+  },
+);
+
+it("yields contended maintenance without a transaction and reacquires admission on retry", () => {
+  const filename = path.join(tempDirs.make("index-contention-"), "agent.sqlite");
+  const db = createDatabase(filename);
+  const other = openNodeSqliteDatabase(filename);
+  databases.push(other);
+  const admit = vi.fn();
+  const backend = bindSqliteWorkerBackend(undefined, {
+    database: db,
+    databasePath: filename,
+    admit,
+  });
+  other.exec("BEGIN IMMEDIATE");
+  try {
+    expect(backend.execute({ type: "preflight", input: undefined })).toEqual({
+      sessionIds: [],
+      hasMore: true,
+      traversalComplete: false,
+    });
+    backend.assertSettled();
+  } finally {
+    other.exec("ROLLBACK");
+  }
+  expect(admit.mock.calls).toEqual([["transaction"], ["commit"]]);
+  expect(backend.execute({ type: "preflight", input: undefined })).toMatchObject({
+    sessionIds: [],
+    hasMore: false,
+    traversalComplete: true,
+  });
+  expect(admit.mock.calls).toEqual([["transaction"], ["commit"], ["transaction"], ["commit"]]);
+});
 
 it("does not reconcile an empty transcript because of orphaned or another session's projection", () => {
   const db = createDatabase();
