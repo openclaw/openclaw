@@ -265,19 +265,14 @@ function authProfileConfigForCredential(
   credential: CodexAuthCredential,
   profileId: string,
 ): CodexAuthProfileConfig {
-  if (credential.kind === "api_key") {
-    return {
-      profileId,
-      provider: credential.provider,
-      mode: "api_key",
-      displayName: CODEX_IMPORT_DISPLAY_NAME,
-    };
-  }
-  const profile = credential.credential;
+  const profile: Pick<CodexAuthProfileConfig, "provider" | "email" | "displayName"> =
+    credential.kind === "oauth"
+      ? credential.credential
+      : { provider: credential.provider, displayName: CODEX_IMPORT_DISPLAY_NAME };
   return {
     profileId,
     provider: profile.provider,
-    mode: "oauth",
+    mode: credential.kind,
     ...(profile.email ? { email: profile.email } : {}),
     ...(profile.displayName ? { displayName: profile.displayName } : {}),
   };

@@ -5,7 +5,7 @@ import { persistCallRecord } from "./store.js";
 
 type CallMutationContext = Pick<
   CallManagerContext,
-  "activeCalls" | "storePath" | "stateRuntime" | "mutationQueue"
+  "activeCalls" | "storePath" | "stateRuntime" | "mutationQueue" | "onCallUpdated" | "isStopping"
 >;
 
 /** Commit one live call update while preserving the call identity held by its callbacks. */
@@ -27,6 +27,9 @@ export function updateCall(
     update(next);
     await persistCallRecord(ctx.storePath, next, ctx.stateRuntime);
     Object.assign(call, next);
+    if (!ctx.isStopping()) {
+      void ctx.onCallUpdated?.(call);
+    }
     return true;
   });
 }

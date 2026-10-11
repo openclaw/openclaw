@@ -1,10 +1,11 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { raceWithTimeout } from "../../packages/retry/src/index.js";
 import { registerSignalExitFinalizer } from "../cli/signal-exit-barrier.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 
 export type RuntimeWorkerGeneration = {
   resolve(url: URL): URL;
-  /** Only the returned native termination may be bounded; settlement must finish. */
+  /** Join accepted work before native termination; a slow close warning never releases custody. */
   retain(owner: object, settle: () => Promise<void | (() => Promise<void>)>): void;
 };
 
@@ -45,6 +46,21 @@ export async function withRuntimeWorkerGeneration<T>(
         const failures = settled.flatMap((result) =>
           result.status === "rejected" ? [result.reason] : [],
         );
+        const terminate = settled.flatMap((result) =>
+          result.status === "fulfilled" && result.value ? [result.value] : [],
+        );
+        const termination = Promise.allSettled(
+          terminate.map((close) => Promise.resolve().then(close)),
+        );
+        const observed = await raceWithTimeout(termination, 10_000, () => undefined);
+        if (!observed) {
+          retainedDirectory?.(
+            "retained updater worker termination is still pending after settlement; waiting for native retirement before releasing the runtime",
+          );
+        }
+        // The grace period bounds diagnostics, not ownership. Even a sibling
+        // settlement failure must join the native retirement already accepted.
+        const terminated = observed ?? (await termination);
         if (failures.length) {
           const reason = "retained updater workers did not settle; keep it until the workers stop";
           const directory = retainedDirectory?.(reason);
@@ -54,27 +70,13 @@ export async function withRuntimeWorkerGeneration<T>(
               (directory ? `. Runtime retained at ${directory}: ${reason}.` : ""),
           );
         }
-        const terminate = settled.flatMap((result) =>
-          result.status === "fulfilled" && result.value ? [result.value] : [],
-        );
-        let timer: ReturnType<typeof setTimeout> | undefined;
-        try {
-          const terminated = await Promise.race([
-            Promise.allSettled(terminate.map((close) => Promise.resolve().then(close))),
-            new Promise<undefined>((resolve) => {
-              timer = setTimeout(() => resolve(undefined), 10_000);
-            }),
-          ]);
-          if (!terminated || terminated.some((result) => result.status === "rejected")) {
-            retainedDirectory?.(
-              `retained updater worker termination ${terminated ? "failed" : "timed out"} after settlement; retry openclaw update cleanup after this process exits`,
-            );
-            return;
-          }
-          await release();
-        } finally {
-          clearTimeout(timer);
+        if (terminated.some((result) => result.status === "rejected")) {
+          retainedDirectory?.(
+            "retained updater worker termination failed after settlement; retry openclaw update cleanup after this process exits",
+          );
+          return;
         }
+        await release();
       })());
     };
     // Signal owners drain mutation/recovery barriers before retiring worker code.

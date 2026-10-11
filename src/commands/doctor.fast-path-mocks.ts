@@ -41,10 +41,6 @@ vi.mock("./doctor-auth-legacy-oauth.js", () => ({
   })),
 }));
 
-vi.mock("./doctor-auth-oauth-sidecar.js", () => ({
-  maybeRepairLegacyOAuthSidecarProfiles: vi.fn().mockResolvedValue(undefined),
-}));
-
 vi.mock("./doctor-browser.js", () => ({
   maybeRepairOwnedChromeExtensionNativeHosts: vi.fn().mockResolvedValue({
     changes: [],
@@ -119,11 +115,10 @@ vi.mock("./doctor-plugin-registry.js", () => ({
   maybeRepairStaleManagedNpmBundledPlugins: vi.fn(() => null),
 }));
 
-vi.mock("./doctor-platform-notes.js", () => ({
+vi.mock("./doctor-platform-notes.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./doctor-platform-notes.js")>()),
   noteStartupOptimizationHints: vi.fn(),
-  noteMacLaunchAgentOverrides: vi.fn().mockResolvedValue(undefined),
-  noteMacStaleOpenClawUpdateLaunchdJobs: vi.fn().mockResolvedValue(undefined),
-  noteMacLaunchctlGatewayEnvOverrides: vi.fn().mockResolvedValue(undefined),
+  noteMacGatewayPlatformWarnings: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock("./doctor-sandbox.js", () => ({

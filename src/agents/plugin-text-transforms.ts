@@ -10,7 +10,6 @@ import type { StreamFn } from "./runtime/index.js";
 import type { MutableAssistantMessageEventStream } from "./stream-compat.js";
 import { createStreamIteratorWrapper } from "./stream-iterator-wrapper.js";
 
-/** Merge multiple plugin text-transform sets. */
 export function mergePluginTextTransforms(
   ...transforms: Array<PluginTextTransforms | undefined>
 ): PluginTextTransforms | undefined {
@@ -25,7 +24,6 @@ export function mergePluginTextTransforms(
   };
 }
 
-/** Apply sequential plugin text replacements to one string. */
 export function applyPluginTextReplacements(
   text: string,
   replacements?: PluginTextReplacement[],
@@ -40,83 +38,45 @@ export function applyPluginTextReplacements(
   return next;
 }
 
-function transformContentText(content: unknown, replacements?: PluginTextReplacement[]): unknown {
+function transformContentText(
+  content: unknown,
+  replacements?: PluginTextReplacement[],
+  mode: "content" | "arguments" | "message" = "content",
+): unknown {
+  if (mode === "message" && !isRecord(content)) {
+    return content;
+  }
   if (typeof content === "string") {
     return applyPluginTextReplacements(content, replacements);
   }
   if (Array.isArray(content)) {
-    return content.map((entry) => transformContentText(entry, replacements));
+    return content.map((entry) => transformContentText(entry, replacements, mode));
   }
   if (!isRecord(content)) {
     return content;
   }
+  if (mode === "arguments") {
+    return Object.fromEntries(
+      Object.entries(content).map(([key, entry]) => [
+        key,
+        transformContentText(entry, replacements, mode),
+      ]),
+    );
+  }
   const next = { ...content };
-  if (typeof next.text === "string") {
+  if (mode === "content" && typeof next.text === "string") {
     next.text = applyPluginTextReplacements(next.text, replacements);
   }
   if (Object.hasOwn(next, "content")) {
     next.content = transformContentText(next.content, replacements);
   }
-  if (next.type === "toolCall" && Object.hasOwn(next, "arguments")) {
-    next.arguments = transformToolCallArgumentText(next.arguments, replacements);
+  if (mode === "content" && next.type === "toolCall" && Object.hasOwn(next, "arguments")) {
+    next.arguments = transformContentText(next.arguments, replacements, "arguments");
   }
-  return next;
-}
-
-function transformMessageText(message: unknown, replacements?: PluginTextReplacement[]): unknown {
-  if (!isRecord(message)) {
-    return message;
-  }
-  const next = { ...message };
-  if (Object.hasOwn(next, "content")) {
-    next.content = transformContentText(next.content, replacements);
-  }
-  if (typeof next.errorMessage === "string") {
+  if (mode === "message" && typeof next.errorMessage === "string") {
     next.errorMessage = applyPluginTextReplacements(next.errorMessage, replacements);
   }
   return next;
-}
-
-function transformToolCallArgumentText(
-  value: unknown,
-  replacements?: PluginTextReplacement[],
-): unknown {
-  if (typeof value === "string") {
-    return applyPluginTextReplacements(value, replacements);
-  }
-  if (Array.isArray(value)) {
-    return value.map((entry) => transformToolCallArgumentText(entry, replacements));
-  }
-  if (!isRecord(value)) {
-    return value;
-  }
-  return Object.fromEntries(
-    Object.entries(value).map(([key, entry]) => [
-      key,
-      transformToolCallArgumentText(entry, replacements),
-    ]),
-  );
-}
-
-/** Apply input text replacements to a stream context. */
-function transformStreamContextText(
-  context: Parameters<StreamFn>[1],
-  replacements?: PluginTextReplacement[],
-  options?: { systemPrompt?: boolean },
-): Parameters<StreamFn>[1] {
-  if (!replacements || replacements.length === 0) {
-    return context;
-  }
-  return {
-    ...context,
-    systemPrompt:
-      options?.systemPrompt !== false && typeof context.systemPrompt === "string"
-        ? applyPluginTextReplacements(context.systemPrompt, replacements)
-        : context.systemPrompt,
-    messages: Array.isArray(context.messages)
-      ? context.messages.map((message) => transformMessageText(message, replacements))
-      : context.messages,
-  } as Parameters<StreamFn>[1];
 }
 
 function transformAssistantEventText(
@@ -141,12 +101,12 @@ function transformAssistantEventText(
     // Tool names are routing identifiers; only argument values are text.
     next.toolCall = {
       ...next.toolCall,
-      arguments: transformToolCallArgumentText(next.toolCall.arguments, replacements),
+      arguments: transformContentText(next.toolCall.arguments, replacements, "arguments"),
     };
   }
   for (const field of ["partial", "message", "error"]) {
     if (Object.hasOwn(next, field)) {
-      next[field] = transformMessageText(next[field], replacements);
+      next[field] = transformContentText(next[field], replacements, "message");
     }
   }
   return next as AssistantMessageEvent;
@@ -161,7 +121,7 @@ function wrapStreamTextTransforms(
   }
   const originalResult = stream.result.bind(stream);
   stream.result = async () =>
-    transformMessageText(await originalResult(), replacements) as AssistantMessage;
+    transformContentText(await originalResult(), replacements, "message") as AssistantMessage;
 
   // Wrap async iteration so streamed deltas and the final result receive the
   // same output replacement policy.
@@ -183,7 +143,6 @@ function wrapStreamTextTransforms(
   return stream;
 }
 
-/** Wrap a stream function with plugin input/output text transforms. */
 export function wrapStreamFnTextTransforms(params: {
   streamFn: StreamFn;
   input?: PluginTextReplacement[];
@@ -191,9 +150,20 @@ export function wrapStreamFnTextTransforms(params: {
   transformSystemPrompt?: boolean;
 }): StreamFn {
   return (model, context, options) => {
-    const nextContext = transformStreamContextText(context, params.input, {
-      systemPrompt: params.transformSystemPrompt,
-    });
+    const nextContext = params.input?.length
+      ? ({
+          ...context,
+          systemPrompt:
+            params.transformSystemPrompt !== false && typeof context.systemPrompt === "string"
+              ? applyPluginTextReplacements(context.systemPrompt, params.input)
+              : context.systemPrompt,
+          messages: Array.isArray(context.messages)
+            ? context.messages.map((message) =>
+                transformContentText(message, params.input, "message"),
+              )
+            : context.messages,
+        } as Parameters<StreamFn>[1])
+      : context;
     const maybeStream = params.streamFn(model, nextContext, options);
     if (maybeStream && typeof maybeStream === "object" && "then" in maybeStream) {
       return Promise.resolve(maybeStream).then((stream) =>

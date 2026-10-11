@@ -94,7 +94,7 @@ it("keeps cold archived ancestor placement and moves through child-event recipie
       },
       { to: "active", patch: { activeOwnerEpoch: 7 } },
     ] as const) {
-      parentPlacement = placements.transition({
+      parentPlacement = await placements.transition({
         sessionId: "parent",
         from: parentPlacement.state,
         expectedGeneration: parentPlacement.generation,
@@ -104,7 +104,7 @@ it("keeps cold archived ancestor placement and moves through child-event recipie
     if (parentPlacement.state !== "active") {
       throw new Error("Expected active ancestor fixture");
     }
-    const move = placements.beginPlacementMove({
+    const move = await placements.beginPlacementMove({
       sessionId: "parent",
       source: {
         generation: parentPlacement.generation,

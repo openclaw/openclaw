@@ -32,13 +32,13 @@ export type BrowserGraphicsDevice = {
   driverVersion: string;
 };
 
-export type BrowserVideoDecodeCapability = {
+type BrowserVideoDecodeCapability = {
   profile: string;
   minResolution: { width: number; height: number };
   maxResolution: { width: number; height: number };
 };
 
-export type BrowserVideoEncodeCapability = {
+type BrowserVideoEncodeCapability = {
   profile: string;
   maxResolution: { width: number; height: number };
   maxFramerateNumerator: number;

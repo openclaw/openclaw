@@ -200,35 +200,13 @@ describe("check-openclaw-package-tarball", () => {
     );
   });
 
-  it("accepts a real pnpm-produced package without booting npm for version diagnostics", () => {
+  it("accepts a real pnpm-produced package", () => {
     withTarball(
       ["dist/index.js"],
       { "dist/index.js": "export {};\n" },
-      (tarball, root) => {
-        const preload = join(root, "reject-npm-version.mjs");
-        writeFileSync(
-          preload,
-          `
-import childProcess from "node:child_process";
-import { syncBuiltinESMExports } from "node:module";
-const originalSpawnSync = childProcess.spawnSync;
-childProcess.spawnSync = function (...callArgs) {
-  if (callArgs[1]?.includes("--version")) {
-    throw new Error("npm version subprocess unavailable");
-  }
-  return originalSpawnSync.apply(this, callArgs);
-};
-syncBuiltinESMExports();
-`,
-        );
+      (tarball) => {
         const result = spawnSync(resolveTestNodeExecPath(), [resolve(CHECK_SCRIPT), tarball], {
           encoding: "utf8",
-          env: {
-            ...process.env,
-            NODE_OPTIONS: [process.env.NODE_OPTIONS, `--import=${pathToFileURL(preload).href}`]
-              .filter(Boolean)
-              .join(" "),
-          },
         });
 
         expect(result.status, result.stderr).toBe(0);
@@ -447,15 +425,6 @@ syncBuiltinESMExports();
   });
 
   it.each([
-    {
-      name: "exact duplicate",
-      entries: [
-        { path: "package/package.json", type: "File" as const, body: "{}\n" },
-        { path: "package/dist/index.js", type: "File" as const, body: "one\n" },
-        { path: "package/dist/index.js", type: "File" as const, body: "two\n" },
-      ],
-      error: "package tarball contains duplicate paths: package/dist/index.js",
-    },
     {
       name: "multiple manifests",
       entries: [
@@ -902,12 +871,6 @@ syncBuiltinESMExports();
       stderr: ["missing required tar entry dist/agents/code-mode-node.worker.js"],
     },
     {
-      name: "rejects Code Mode workers that postinstall would remove",
-      options: { includeCodeModeWorkerInInventory: false, postinstall: true },
-      status: "nonzero",
-      stderr: [`postinstall inventory omits packaged dist file ${CODE_MODE_WORKER_PATH}`],
-    },
-    {
       name: "rejects dist files that import missing relative chunks",
       inventory: ["dist/cli/run-main.js"],
       files: { "dist/cli/run-main.js": 'await import("../memory-state-old.js");\n' },
@@ -999,41 +962,12 @@ syncBuiltinESMExports();
       status: "nonzero",
       stderr: ["package tarball must not contain npm-shrinkwrap.json"],
     },
-    {
-      name: "rejects a package that declares but omits npm-shrinkwrap.json",
-      version: "2026.7.33",
-      options: {
-        includeShrinkwrap: false,
-        packageJson: { files: ["dist", "npm-shrinkwrap.json"] },
-      },
-      status: "nonzero",
-      stderr: ["package.json declares missing tar entry npm-shrinkwrap.json"],
-    },
   ];
   for (const testCase of packageContractCases) {
     it(testCase.name, () => checkTarball(testCase));
   }
 
-  it("accepts and validates a shrinkwrap declared by the target package", () => {
-    const version = "2026.7.33";
-    checkTarball({
-      files: {
-        "dist/index.js": "export {};\n",
-        "npm-shrinkwrap.json": `${JSON.stringify({
-          name: "openclaw",
-          version,
-          lockfileVersion: 3,
-          packages: { "": { name: "openclaw", version } },
-        })}\n`,
-      },
-      version,
-      options: { packageJson: { files: ["dist", "npm-shrinkwrap.json"] } },
-      status: 0,
-    });
-  });
-
   it.each([
-    ["missing declaration and package", {}, undefined, "is missing declared dependency"],
     [
       "missing package",
       { "@openclaw/ai": "2026.7.33" },

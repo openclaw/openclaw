@@ -1,8 +1,8 @@
 import type { ExecApprovalsFile } from "./exec-approvals-core.js";
-import { updateExecApprovalsSync } from "./exec-approvals-store.js";
+import { updateExecApprovalsForMaintenance } from "./exec-approvals-store.js";
 
 export function saveExecApprovals(file: ExecApprovalsFile): void {
-  updateExecApprovalsSync({ update: () => file });
+  updateExecApprovalsForMaintenance({ update: () => file });
 }
 
 type ExecApprovalsStoreTestApi = {

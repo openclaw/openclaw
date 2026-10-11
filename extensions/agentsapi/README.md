@@ -13,8 +13,37 @@ original API key to submit input to an existing hosted session, even when anothe
 key can read it. If the service rejects input for this reason, restore the
 creating key to continue the same session.
 
-Model, environment, and effective HTTP MCP configuration changes still require a
-session reset. Bindings created before this change are not migrated or supported.
+Model, environment, effective HTTP MCP configuration, and native web-search policy
+changes still require a session reset.
+
+### Upgrading saved sessions
+
+The plugin admits supported `authFingerprint` bindings (including `v2026.9.9`)
+on their first continuation. It verifies the historical fingerprint using the
+original model, API key, and environment/MCP settings, then checks current API
+access to that same native session. Only then does its leased binding owner
+atomically replace the credential-dependent digest with `configFingerprint`.
+It keeps the remote session ID and does not create a replacement conversation.
+Subsequent starts use the current format and key-rotation behavior above.
+
+If the key was already rotated, the old digest cannot distinguish rotation from
+a configuration change. Remote session reads omit MCP secrets and report
+effective environment defaults, so readable metadata alone is not sufficient
+to verify the original configuration. Restore the original key and settings
+and retry the continuation. If those are unavailable, `/reset` or session
+deletion uses the owning agent's current API-key authentication to settle the
+original native work before removing the local binding. Remote conversation
+history is not deleted. Inaccessible sessions, failed settlement, malformed
+rows, and refused migrations retain their saved identity for recovery; no
+replacement session is silently allocated. Changing native search restrictions
+or adopting an executor controller requires a reset, not migration.
+
+Normal updates retain their existing pre-upgrade backup and rollback workflow.
+Before a manual package replacement, back up OpenClaw state. Successful
+conversion is forward-only: to return to a release that requires
+`authFingerprint`, restore its matching pre-upgrade state backup, not just the
+older binary. Executor records predating plugin ownership remain a separate
+unsupported format; retire those sessions with the previous version first.
 
 Start with the [setup and supported features guide](https://docs.openclaw.ai/plugins/agentsapi).
 Enable the `agentsapi` plugin and select it for the model through
@@ -25,6 +54,18 @@ overrides are covered in the
 [harness configuration reference](https://docs.openclaw.ai/plugins/sdk-agent-harness/runtime-config).
 
 Multi-user Gateways are not supported by the Agents API MVP.
+
+The opt-in live regression uses an isolated Gateway and synthetic files. Supply
+`OPENAI_API_KEY` and set `OPENCLAW_LIVE_AGENTS_API_MODEL` to a model available to
+your Agents API project, then run:
+
+```bash
+OPENCLAW_LIVE_AGENTS_API=1 pnpm test:live test/gateway-agentsapi.live.test.ts
+```
+
+It verifies native execution, Gateway functions, disabled web search, follow-up
+replies, file transfer, restart, Stop, reset, and deletion. Provider usage is billed;
+the test deletes only the cloud sessions it creates.
 
 Configure native Agents API tools with
 `plugins.entries.agentsapi.config.nativeTools`. Omitting the setting uses live
@@ -49,7 +90,10 @@ is equivalent to:
 ```
 
 A supplied list replaces the defaults. List every native tool declaration you
-want to send. Each entry requires a `type` string; other tool options are passed
+want to send. The global `tools.web.search.enabled: false` setting and the
+session’s Web search disable override remove native `web_search` declarations
+from new sessions. A change to the effective search setting requires a new or
+reset session before inference can continue. Each entry requires a `type` string; other tool options are passed
 unchanged to the session's `agent.tools`. OpenClaw does not maintain an enum of
 tool types or options; the API validates them and reports unsupported values.
 
@@ -201,22 +245,83 @@ bindings. Adding, changing, or removing a configured network policy requires an
 explicit session reset before further native session writes. These settings are
 unused for self-hosted sessions.
 
-Self-hosted session creation sends
-the absolute host-prepared OpenClaw workspace as `workspace_directory`. That
-directory must already exist at the same path inside the executor. See the
-[official self-hosted guide](https://developers.openai.com/api/docs/guides/agents-api/environments/self-hosted).
-Before enabling `self_hosted`, configure an operator-owned controller using the
-[official webhook-managed lifecycle](https://developers.openai.com/api/docs/guides/agents-api/environments/lifecycle#start-compute-from-webhooks).
-It receives `agent.session.action_required` with an `environment_connection`
-action, retrieves that session through the authenticated Agents API, and connects
-the executor using `session.environment.id` and the unchanged
-`session.environment.remote_url`. Route only this Gateway's sessions to the
-controller and match its workspace path. The controller owns startup,
-reconnection, and cleanup; this plugin does not launch, provision, or authenticate
-an executor. Input submission has a 60-second HTTP deadline, including any wait
-for the executor to connect. Configure the controller to connect promptly;
-the API's longer connection window does not extend this deadline. Session
-connection events remain visible while it connects.
+For setup, deployment choices, and a shared-host example, see the
+[self-hosted execution guide](https://docs.openclaw.ai/plugins/agentsapi#self-hosted-execution).
+Each native session needs its own executor process. All executors can share one
+persistent VM, remote host, container, and workspace, or use separate environments.
+Shared files and credentials are subject to host permissions, not session isolation.
+
+Self-hosted execution has two lifecycle options:
+
+- Enable a separate executor controller plugin and select its ID with
+  `plugins.entries.agentsapi.config.executorController: "my-executor"`.
+  That plugin registers
+  `api.registerAgentExecutorController({ workspaceDirectory, ensure, retire })`
+  and declares `activation.onAgentHarnesses: ["agentsapi"]` in its manifest.
+  Its existing absolute `workspaceDirectory` is sent as `workspace_directory`;
+  Gateway tool paths stay unchanged. The stock Agents API plugin owns the harness,
+  so the executor plugin must not register another harness. OpenClaw provides the
+  contract; install or implement a controller appropriate for your infrastructure.
+- Omit `executorController` for an external controller, such as the
+  [official webhook-managed lifecycle](https://developers.openai.com/api/docs/guides/agents-api/environments/lifecycle#start-compute-from-webhooks).
+  It receives `agent.session.action_required` with an `environment_connection`
+  action, retrieves the session through the authenticated API, and uses
+  `session.environment.id` and the unchanged `session.environment.remote_url`.
+  The host-prepared OpenClaw workspace path must already exist at the same
+  absolute path on the executor. The external controller owns startup,
+  reconnection, and cleanup. Route only its intended sessions to it.
+
+Use one lifecycle owner per session. Both options require an operator-provisioned
+host and executor credentials. Input submission has a 60-second HTTP deadline,
+including connection wait; the API's longer connection window does not extend it.
+
+The controller uses the public `AgentExecutorController`, `AgentExecutorBinding`
+and `AgentExecutorContext` types from `openclaw/plugin-sdk/agent-harness-runtime`:
+
+- `workspaceDirectory` is an existing absolute path on the executor host,
+  configured by the executor plugin. Gateway tool paths stay unchanged.
+- `ensure(binding, context)` idempotently starts or reconnects the executor using
+  the exact environment ID, remote URL and workspace in the canonical binding.
+  The harness persists that binding and its controller owner before invocation,
+  then waits for the API to report the environment connected. Startup is triggered
+  only by an outstanding `environment_connection` action. The original input
+  request can remain pending while its executor starts; the harness reads
+  connection actions during that wait without resubmitting the input. Healthy
+  turns do not call the executor controller.
+- `retire(binding, context)` idempotently releases only that binding's executor
+  after native work settles, before reset or session deletion discards the binding.
+  Native settlement is required: a failed status read or cancellation preserves
+  the binding and blocks reset or deletion until the operator can retry.
+  Retirement of an already-settled executor is best effort.
+  Terminal native session failure also attempts to retire the executor after
+  current API state confirms the failure.
+
+Callbacks receive `signal` and `assertCurrent`. Honor cancellation and recheck
+`assertCurrent()` immediately before side effects and after asynchronous work.
+Do not retain operation-scoped handles. Controller registration and resolution
+belong to the active plugin registry, including reload and disposal; imported
+copies of the Agents API package do not maintain independent controller lists.
+The executor plugin owns process launch, authentication and filesystem provisioning.
+The harness owns native session identity, readiness and cleanup ordering.
+Connection-state notifications alone do not start an executor. A living direct
+executor reconnects through the native protocol; stopping or replacing it does
+not replay interrupted commands. Keep one executor per native session, and stop
+only that session's executor during retirement. Different sessions may share
+an existing persistent workspace.
+
+Changing controllers requires a session reset. Cleanup uses the original stored
+controller owner, even after configuration changes. A missing or disabled owner
+is reported as a cleanup warning. Gateway disposal retains the executor and its
+binding. Cleanup uses the session's prepared authenticated handle when available;
+credentials are never stored in the binding. After restart, cleanup resolves the
+owning agent's current OpenAI API-key authentication and settles the saved native
+session before discarding its binding. Unavailable authentication or failed native
+settlement preserves the binding; restore access and retry reset or deletion.
+An unavailable executor host does not block retirement after native settlement.
+Bindings from the earlier factory-injected controller have no plugin owner.
+Retire those sessions using the previous version before adopting plugin selection;
+ownerless controlled bindings are rejected and retained rather than reassigned.
+
 Hosted environments support input attachments and output file transfers. Each
 turn transfers its admitted original files, including images, to unique hosted
 paths, so later uploads with the same filename keep their own bytes and mapping.

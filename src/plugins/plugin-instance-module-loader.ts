@@ -29,6 +29,8 @@ import {
   type PluginSourceLoadMode,
 } from "./plugin-source-build.js";
 import { inspectPluginTypeScriptExecutionFacts } from "./plugin-source-references.js";
+import { captureBundledPluginStateOperationModules } from "./plugin-state-operation-module-loader.js";
+import { bindPluginStateOperationModuleSource } from "./plugin-state-operation-source.js";
 import { preparePluginLoaderAliases, isPluginSdkAliasSpecifier } from "./sdk-alias.js";
 
 /** Runtime and setup share code identity policy while keeping separate instance authority. */
@@ -61,6 +63,12 @@ export function bindPluginInstanceModuleLoader(params: PluginInstanceModuleLoade
       rootDir: params.rootDir,
       cache,
       loader,
+      source: captureBundledPluginStateOperationModules({
+        rootDir: params.rootDir,
+        source: params.source,
+        devSourceRoot: params.devSourceRoot,
+        pluginSdkResolution: params.pluginSdkResolution,
+      }),
     });
     return;
   }
@@ -111,6 +119,7 @@ export function bindPluginInstanceModuleLoader(params: PluginInstanceModuleLoade
   if (aliases.packageRoot) {
     artifact.linkHost(aliases.packageRoot);
   }
+  bindPluginStateOperationModuleSource({ ...params, artifact });
   installOpenClawPluginSdkNativeResolver({
     moduleUrl: import.meta.url,
     pluginModulePath: params.source,
@@ -144,7 +153,7 @@ export function bindPluginInstanceModuleLoader(params: PluginInstanceModuleLoade
     const tryNative =
       process.env.JITI_JSX === "1" || process.env.JITI_JSX === "true"
         ? false
-        : (process.versions.bun && artifact.boundaryRoot.includes("\\")) || bunNeedsNativeSource
+        : bunNeedsNativeSource
           ? true
           : undefined;
     const effectiveTryNative = tryNative ?? resolvePluginLoaderTryNative(params.source);

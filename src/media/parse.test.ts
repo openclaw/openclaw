@@ -45,8 +45,13 @@ describe("splitMediaFromOutput", () => {
     expectParsedMediaOutputCase(input, { mediaUrls: undefined });
   }
 
-  function expectRejectedRemoteMediaUrlCase(input: string) {
+  function expectUnrecognizedMediaTextCase(input: string) {
     expectParsedMediaOutputCase(input, { mediaUrls: undefined, text: input });
+  }
+
+  function expectPolicyRejectedMediaUrlCase(input: string) {
+    expectParsedMediaOutputCase(input, { mediaUrls: undefined, text: "" });
+    expect(splitMediaFromOutput(input).rejectedMediaCount).toBe(1);
   }
 
   it.each([
@@ -96,7 +101,7 @@ describe("splitMediaFromOutput", () => {
     "media://inbound/image.png?token=value",
     "media://inbound/",
   ])("does not extract an invalid inbound URI: %s", (source) => {
-    expectRejectedRemoteMediaUrlCase(`MEDIA:${source}`);
+    expectPolicyRejectedMediaUrlCase(`MEDIA:${source}`);
   });
 
   it.each([",", '"', "'", "\\", ")", "}", "]", "`"])(
@@ -114,7 +119,7 @@ describe("splitMediaFromOutput", () => {
   it("does not shorten a rejected quoted URL into an accepted media reference", () => {
     const prefix = "https://example.com/video.mp4?token=";
     const mediaUrl = `${prefix}${"a".repeat(4096 - prefix.length)},`;
-    expectRejectedRemoteMediaUrlCase(`MEDIA:"${mediaUrl}"`);
+    expectPolicyRejectedMediaUrlCase(`MEDIA:"${mediaUrl}"`);
   });
 
   const nativeFilePath = path.resolve("media", "café 100% image.png");
@@ -331,7 +336,7 @@ describe("splitMediaFromOutput", () => {
     // `MEDIA:"first.png," "second.png,"` attached `first.png," "second.png`, while the recorded base
     // rejects the payload and keeps the line as visible text. The weld needed an extension on the last
     // member, which is what these three shapes carry.
-    expectRejectedRemoteMediaUrlCase(input);
+    expectUnrecognizedMediaTextCase(input);
   });
 
   it("keeps a quoted list whose every member is rejected as text", () => {
@@ -342,7 +347,7 @@ describe("splitMediaFromOutput", () => {
       'MEDIA:"first" "second"',
       "MEDIA:'first.png,' 'second'",
     ] as const) {
-      expectRejectedRemoteMediaUrlCase(input);
+      expectUnrecognizedMediaTextCase(input);
     }
     // An accepted member beside a rejected one is untouched: it is the only member that ever reaches
     // the accepted path, and the reject stays text.
@@ -354,12 +359,10 @@ describe("splitMediaFromOutput", () => {
       mediaUrls: ["first.png"],
       text: '"second.png,"',
     });
-    // A list that yields no reference makes the same strip-or-keep decision `main` makes, on the same
-    // string: the outer quote pair comes off first, so a payload whose remaining text reads as a path is
-    // stripped and one that reads as a rejected remote URL stays visible.
+    // Policy-rejected paths and URLs are removed without promoting the remaining words to media.
     expectRejectedMediaPathCase('MEDIA:"../../a" "../../b"');
-    expectRejectedRemoteMediaUrlCase('MEDIA:"http://evil.example/x.png" "y.png,"');
-    expectRejectedRemoteMediaUrlCase('MEDIA:"http://evil.example/x.png" "y"');
+    expectPolicyRejectedMediaUrlCase('MEDIA:"http://evil.example/x.png" "y.png,"');
+    expectPolicyRejectedMediaUrlCase('MEDIA:"http://evil.example/x.png" "y"');
   });
 
   it("keeps a quoted reference whole when its own value contains that quote", () => {
@@ -577,7 +580,7 @@ describe("splitMediaFromOutput", () => {
       "MEDIA:C:\\Users\\First Last\\workspace\\shot.png https://127.0.0.1/secret.png",
       {
         mediaUrls: ["C:\\Users\\First Last\\workspace\\shot.png"],
-        text: "https://127.0.0.1/secret.png",
+        text: "",
       },
     );
   });
@@ -595,13 +598,26 @@ describe("splitMediaFromOutput", () => {
     "MEDIA:https://169.254.169.254/latest/meta-data",
     'MEDIA:"https://169.254.169.254/a.png)"',
     "MEDIA:https://[::1]/a.png",
+    "MEDIA:https://[fe80::1]/a.png",
+    "MEDIA:https://[fd00::1]/a.png",
+    "MEDIA:https://[fd00:ec2::254]/a.png",
+    "MEDIA:https://[::ffff:127.0.0.1]/a.png",
+    "MEDIA:https://[64:ff9b::169.254.169.254]/a.png",
     "MEDIA:https://metadata.google.internal/a.png",
     "MEDIA:https://metadata.google.internal../a.png",
     "MEDIA:https://example..com/a.png",
     "MEDIA:https://media.local/a.png",
+    "MEDIA:https://user:synthetic-password@example.com/a.png",
   ] as const)("rejects unsafe remote media URL: %s", (input) => {
-    expectRejectedRemoteMediaUrlCase(input);
+    expectPolicyRejectedMediaUrlCase(input);
   });
+
+  it.each(["https://[2606:4700::1111]/a.png", "https://[2001:4860:4860::8888]/a.png"] as const)(
+    "accepts public IPv6 remote media URL: %s",
+    (url) => {
+      expectParsedMediaOutputCase(`MEDIA:${url}`, { mediaUrls: [url], text: "" });
+    },
+  );
 
   it.each([
     {
@@ -905,6 +921,53 @@ describe("splitMediaFromOutput", () => {
       },
       extractMarkdownImages,
     );
+  });
+
+  it.each(["\n", "\r\n", "\r"])(
+    "extracts multiline Markdown images across %j line endings",
+    (newline) => {
+      const url = "https://example.com/chart.png";
+      for (const image of [
+        `![chart](${newline}${url}${newline})`,
+        `![quarterly${newline}chart](${url})`,
+        `![chart](${url}${newline}"Quarterly chart")`,
+      ]) {
+        const input = `Before${newline}${image}${newline}After`;
+        expect(splitMediaFromOutput(input, extractMarkdownImages)).toEqual(
+          splitMediaFromOutput(
+            `Before${newline}![chart](${url})${newline}After`,
+            extractMarkdownImages,
+          ),
+        );
+      }
+    },
+  );
+
+  it.each([false, true])(
+    "preserves multiline image captions and media order (whitespace=%s)",
+    (preserveTrailingWhitespace) => {
+      const url = "https://example.com/chart.png";
+      const options = { ...extractMarkdownImages, preserveTrailingWhitespace };
+      expect(
+        splitMediaFromOutput(
+          `Before ![chart](\n${url}\n) after\nMEDIA:/tmp/next.png\nTail`,
+          options,
+        ),
+      ).toEqual(
+        splitMediaFromOutput(`Before ![chart](${url}) after\nMEDIA:/tmp/next.png\nTail`, options),
+      );
+    },
+  );
+
+  it("applies the image allowlist to complete multiline spans", () => {
+    const selected = "file:///tmp/selected.png";
+    const unselected = "![other](\nhttps://example.com/other.png\n)";
+    expect(
+      splitMediaFromOutput(`![selected](\n${selected}\n)\n${unselected}`, {
+        markdownImageAllowlist: [selected],
+        preserveTrailingWhitespace: true,
+      }),
+    ).toMatchObject({ text: unselected, mediaUrls: [selected] });
   });
 
   it("strips markdown image title suffixes from extracted urls", () => {

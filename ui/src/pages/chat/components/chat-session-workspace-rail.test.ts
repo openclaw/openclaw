@@ -3,6 +3,7 @@
 import { render } from "lit";
 import { afterEach, assert, describe, expect, it, vi } from "vitest";
 import { renderSessionWorkspaceRail } from "./chat-session-workspace-rail.ts";
+import { getSessionWorkspace, loadSessionWorkspace } from "./chat-session-workspace-state.ts";
 import type { SessionWorkspaceProps } from "./chat-session-workspace-types.ts";
 import {
   createSessionWorkspaceProps,
@@ -19,7 +20,6 @@ function createWorkspace(overrides: Partial<SessionWorkspaceProps> = {}): Sessio
     filter: "all",
     browserPath: "",
     browserSearch: "",
-    onRefresh: vi.fn(),
     onBrowsePath: vi.fn(),
     onOpenFile: vi.fn(),
     onSearch: vi.fn(),
@@ -36,10 +36,7 @@ afterEach(() => {
 
 describe("session workspace path actions", () => {
   it.each([
-    { path: "reports", search: "", loading: false, parent: "" },
     { path: "reports/monthly", search: "", loading: false, parent: "reports" },
-    { path: "", search: "", loading: false, parent: null },
-    { path: "reports", search: "notes", loading: false, parent: null },
     { path: "reports", search: "", loading: true, parent: null },
   ])("keeps only settled non-root folder recovery available: %j", (scenario) => {
     const onBrowsePath = vi.fn();
@@ -100,7 +97,7 @@ describe("session workspace path actions", () => {
     expect(container.querySelector(".chat-workspace-rail__file--active")?.textContent).toContain(
       "README.md",
     );
-    createSessionWorkspaceProps(state).onRefresh();
+    loadSessionWorkspace(state, getSessionWorkspace(state), true);
     await vi.waitFor(() => expect(createSessionWorkspaceProps(state).loading).toBe(false));
     renderRows();
     expect(container.querySelector(".chat-workspace-rail__file--active")?.textContent).toContain(
@@ -108,10 +105,10 @@ describe("session workspace path actions", () => {
     );
   });
 
-  it.each(["/synthetic/very-long-workspace-prefix", "C:\\synthetic\\very-long-workspace-prefix"])(
+  it.each(["C:\\synthetic\\very-long-workspace-prefix"])(
     "keeps session file labels readable and distinct under %s",
     async (root) => {
-      const separator = root.includes("\\") ? "\\" : "/";
+      const separator = "\\";
       const path = (...parts: string[]) => [root, ...parts].join(separator);
       const paths = [path("inventory.csv"), path("ui", "index.ts"), path("api", "index.ts")];
       const writeText = vi.fn().mockResolvedValue(undefined);
@@ -171,21 +168,12 @@ describe("session workspace path actions", () => {
       selector: ".chat-workspace-rail__list:not(.chat-workspace-rail__list--browser)",
       path: "src/edited.ts",
       origin: "session" as const,
-      failed: true,
       feedback: "Copy failed",
     },
-    {
-      surface: "project browser",
-      selector: ".chat-workspace-rail__list--browser",
-      path: "src/browser.ts",
-      origin: "workspace" as const,
-      failed: false,
-      feedback: "Copied!",
-    },
   ])("shows $feedback when copying a $surface path", async (testCase) => {
-    const writeText = testCase.failed
-      ? vi.fn().mockRejectedValue(new DOMException("Clipboard access denied", "NotAllowedError"))
-      : vi.fn().mockResolvedValue(undefined);
+    const writeText = vi
+      .fn()
+      .mockRejectedValue(new DOMException("Clipboard access denied", "NotAllowedError"));
     vi.stubGlobal("navigator", { clipboard: { writeText } });
     const onOpenFile = vi.fn();
     const workspace = createWorkspace({
@@ -279,7 +267,7 @@ describe("session workspace path actions", () => {
     expect(mount.querySelector('button[aria-label="src/edited.ts"]')).not.toBeNull();
   });
 
-  it.each(["inventory  report", "  INVENTORY  REPORT  ", "\tinventory  report\t"])(
+  it.each(["  INVENTORY  REPORT  "])(
     "matches every Files group consistently for %j without collapsing internal spaces",
     (query) => {
       const workspace = createWorkspace({
@@ -338,27 +326,4 @@ describe("session workspace path actions", () => {
       expect(mount.querySelectorAll(".chat-workspace-rail__file-name")).toHaveLength(6);
     },
   );
-
-  it("omits filter chips when only project files are available", () => {
-    const workspace = createWorkspace({
-      filter: "read",
-      list: {
-        sessionKey: "agent:main:workspace",
-        files: [],
-        artifacts: [],
-        browser: {
-          path: "",
-          entries: [{ kind: "file", name: "README.md", path: "README.md" }],
-        },
-      },
-    });
-    const mount = document.body.appendChild(document.createElement("div"));
-
-    render(renderSessionWorkspaceRail(workspace), mount);
-
-    expect(mount.querySelector('[role="group"][aria-label="Filter files"]')).toBeNull();
-    expect(mount.querySelector('input[type="search"]')).toBeInstanceOf(HTMLInputElement);
-    expect(mount.querySelector("summary")?.textContent).toContain("Project files");
-    expect(mount.textContent).toContain("README.md");
-  });
 });

@@ -24,9 +24,10 @@ import { resolveIdentityHue } from "../../../lib/identity-avatar.ts";
 import { DEFAULT_AGENT_ID } from "../../../lib/sessions/session-key.ts";
 import { resolveAssistantReplyPhase } from "../chat-assistant-reply.ts";
 import { renderChatAvatar, renderForwardedAvatar } from "../chat-avatar.ts";
+import { ownSessionLaunchCalls } from "../chat-spawned-subagent.ts";
 import { transcriptRunId } from "../chat-thread-run-identity.ts";
 import { persistedMessageEntryId, readPendingSendStatus } from "../chat-thread.ts";
-import { hasForwardedSource, isInterSessionGroup } from "../chat-turn-boundary.ts";
+import { hasForwardedSource, isSessionActivityGroup } from "../chat-turn-boundary.ts";
 import { workspaceResultConflictFromTranscript } from "../workspace-conflict.ts";
 import { activityHeadline, selectActivityHeadline } from "./chat-activity-headline.ts";
 import { renderChatAuthorAvatar } from "./chat-author-avatar.ts";
@@ -60,16 +61,26 @@ import {
   resolveMessageReplyLine,
 } from "./chat-reply-attribution.ts";
 import { chatResponsiveLayout } from "./chat-responsive-layout.ts";
-import { renderInterSessionActivity } from "./chat-session-activity.ts";
+import { renderSessionActivity } from "./chat-session-activity.ts";
 import {
   renderBrowserTabPreviews,
   renderToolCard,
   syncToolDisclosureOverflow,
 } from "./chat-tool-cards.ts";
-import { renderToolOutcomeSummary } from "./chat-tool-outcome-summary.ts";
-import { renderTurnRecapRow } from "./chat-working-indicator.ts";
+import { renderToolOutcomeSummary, renderToolReviewOutcome } from "./chat-tool-outcome-summary.ts";
+import { renderChatBubbleDots, renderTurnRecapRow } from "./chat-working-indicator.ts";
 
 type GroupedMessageRenderOptions = Parameters<typeof renderGroupedMessage>[2];
+
+function renderMessageActionsRow(
+  messageKey: string | undefined,
+  content: ReturnType<typeof html> | typeof nothing,
+  className = "chat-group-footer-actions",
+) {
+  return html`<div class=${className} data-message-actions-for=${messageKey ?? nothing}>
+    ${content}
+  </div>`;
+}
 
 function prepareGroupMessage(
   group: MessageGroup,
@@ -132,7 +143,6 @@ function renderPreparedGroupMessage(
       entryRef: opts.entryRefFor?.(item.key),
       duplicateCount: item.duplicateCount ?? 1,
       showToolCalls: opts.showToolCalls ?? true,
-      autoExpandToolCalls: opts.autoExpandToolCalls ?? false,
       assistantMessageDisclosure,
       messageActions: actionDetails,
     },
@@ -196,6 +206,7 @@ export function renderActivityGroup(
   const activityExpanded = opts.isToolMessageExpanded?.(activityDisclosureId) ?? false;
   const groupSummaryLabel = summarizeToolGroup(visibleActivity, {
     includeInlineOutcomes: activityExpanded,
+    ownSessionLaunches: ownSessionLaunchCalls(cards),
   });
   const toolCardOverrides = new Map<ToolCard, unknown>();
   function renderOperation(group: ToolCallGroup<ToolCard>): unknown {
@@ -220,26 +231,72 @@ export function renderActivityGroup(
         : undefined,
     });
   }
-  if (activityExpanded) {
-    for (const group of cardGroups) {
-      if (group.children.length > 0) {
-        toolCardOverrides.set(group.card, renderOperation(group));
-      }
-    }
-  }
   const approvalReviews = cards.flatMap((card) => readToolApprovalReviews(card.details));
   const recordedReviewOutcomes = cards.flatMap((card) => {
     const outcome = readToolApprovalReviewOutcome(card.details);
     return outcome ? [outcome] : [];
   });
   const reviewOutcome = resolveToolApprovalReviewOutcome(approvalReviews, recordedReviewOutcomes);
-  const reviewer = approvalReviews[0]?.label ?? "Review";
-  const reviewAriaLabel = reviewOutcome
-    ? t(`chat.toolCards.review.${reviewOutcome}`, { reviewer })
-    : "";
+  // A settled step that completed with only routine nested calls is one operation:
+  // its own row names it and keeps those calls underneath, where a count hides both.
+  // Other outcomes and reviewed steps keep the counted row that carries their status.
+  const [step] = cardGroups;
+  const stepActivity = step ? preparedByCard.get(step.card) : undefined;
+  const soleStep =
+    !headline &&
+    !reviewOutcome &&
+    approvalReviews.length === 0 &&
+    step !== undefined &&
+    cardGroups.length === 1 &&
+    step.children.length > 0 &&
+    visibleCalls.size === 1 &&
+    stepActivity?.status === "completed" &&
+    visibleCalls.has(stepActivity.toolCallId ?? stepActivity.itemId);
+  if (activityExpanded || soleStep) {
+    for (const group of cardGroups) {
+      if (group.children.length > 0) {
+        toolCardOverrides.set(group.card, renderOperation(group));
+      }
+    }
+  }
+  const renderMessages = () =>
+    groups.map((group) =>
+      group.messages.map((item, index) =>
+        renderPreparedGroupMessage(
+          group,
+          index,
+          { ...opts, toolCardOverrides },
+          prepareGroupMessage(group, item, opts),
+        ),
+      ),
+    );
+  const frame = (content: unknown) =>
+    presentation === "continuation"
+      ? content
+      : html`
+          <div
+            class="chat-group tool chat-group--turn-block chat-group--activity chat-group--with-footer"
+            data-chat-row-key=${firstGroup.key}
+          >
+            <div class="chat-group-messages">${content}</div>
+          </div>
+        `;
+  if (soleStep && !opts.bubbleMode) {
+    // The step is the disclosure: keep the body's bounded scroll and file owner.
+    return frame(html`
+      <div
+        class="chat-activity-group chat-activity-group--step"
+        data-file-session-key=${firstGroup.senderSession?.sessionKey ?? nothing}
+      >
+        <div class="chat-activity-group__body">${renderMessages()}</div>
+        ${renderBrowserTabPreviews(groups, opts)}
+      </div>
+    `);
+  }
+  const compact = opts.bubbleMode && !activityExpanded;
   const content = html`
     <div
-      class="chat-activity-group ${activityExpanded ? "is-open" : ""}"
+      class="chat-activity-group ${activityExpanded ? "is-open" : ""} ${compact ? "chat-activity-group--bubble" : ""}"
       data-file-session-key=${firstGroup.senderSession?.sessionKey ?? nothing}
     >
       <button
@@ -247,89 +304,55 @@ export function renderActivityGroup(
         type="button"
         aria-expanded=${String(activityExpanded)}
         aria-controls=${activityBodyId}
+        aria-label=${compact ? t("chat.view.activityDetails") : nothing}
         @pointerenter=${syncToolDisclosureOverflow}
         @focus=${syncToolDisclosureOverflow}
         @click=${() => opts.onToggleToolMessageExpanded?.(activityDisclosureId, activityExpanded)}
       >
-        ${activityHeadline(
-          JSON.stringify([opts.sessionKey, opts.connectionEpoch, opts.activityRunId]),
-          headline,
-          groupSummaryLabel,
-          currentActivity,
-          opts.pluginToolIcons,
-        )}
         ${
-          headline
-            ? describeToolGroup(visibleActivity)
-                .outcomes.filter(({ kind }) => kind !== "failed" && kind !== "skipped")
-                .map(({ label }) => html`<span class="muted">${label}</span>`)
-            : nothing
+          compact
+            ? renderChatBubbleDots(currentActivity.length > 0)
+            : html`${activityHeadline(
+                  JSON.stringify([opts.sessionKey, opts.connectionEpoch, opts.activityRunId]),
+                  headline,
+                  groupSummaryLabel,
+                  currentActivity,
+                  opts.pluginToolIcons,
+                  describeToolGroup(visibleActivity)
+                    .outcomes.filter(({ kind }) => kind !== "failed" && kind !== "skipped")
+                    .map(({ label }) => label),
+                )}
+                ${renderToolReviewOutcome(reviewOutcome, approvalReviews[0]?.label)}
+                ${
+                  activityExpanded
+                    ? nothing
+                    : renderToolOutcomeSummary(
+                        cards.filter((card) => card.callId && visibleCalls.has(card.callId)),
+                        true,
+                        visibleActivity,
+                      )
+                }
+                <span class="chat-tool-row__chevron" aria-hidden="true"
+                  >${icons.chevronRight}</span
+                >`
         }
-        ${
-          reviewOutcome
-            ? html`<span
-                class="chat-activity-group__review-status"
-                data-outcome=${reviewOutcome}
-                role="img"
-                aria-label=${reviewAriaLabel}
-                >${
-                  reviewOutcome === "denied"
-                    ? icons.shieldX
-                    : reviewOutcome === "reviewing"
-                      ? icons.shieldQuestion
-                      : icons.shieldCheck
-                }</span
-              >`
-            : nothing
-        }
-        ${
-          activityExpanded
-            ? nothing
-            : renderToolOutcomeSummary(
-                cards.filter((card) => card.callId && visibleCalls.has(card.callId)),
-                true,
-                visibleActivity,
-              )
-        }
-        <span class="chat-tool-row__chevron" aria-hidden="true">${icons.chevronRight}</span>
       </button>
       <div class="chat-activity-group__body" id=${activityBodyId} ?hidden=${!activityExpanded}>
-        ${
-          activityExpanded
-            ? groups.map((group) =>
-                group.messages.map((item, index) =>
-                  renderPreparedGroupMessage(
-                    group,
-                    index,
-                    { ...opts, toolCardOverrides },
-                    prepareGroupMessage(group, item, opts),
-                  ),
-                ),
-              )
-            : nothing
-        }
+        ${activityExpanded ? renderMessages() : nothing}
       </div>
-      ${renderBrowserTabPreviews(groups, opts)}
+      ${opts.bubbleMode && !activityExpanded ? nothing : renderBrowserTabPreviews(groups, opts)}
     </div>
   `;
-  return presentation === "continuation"
-    ? content
-    : html`
-        <div
-          class="chat-group tool chat-group--turn-block chat-group--activity chat-group--with-footer"
-          data-chat-row-key=${firstGroup.key}
-        >
-          <div class="chat-group-messages">${content}</div>
-        </div>
-      `;
+  return frame(content);
 }
 
-function isActivityMessageGroup(group: MessageGroup): boolean {
+function isActivityMessageGroup(group: MessageGroup, bubbleMode = false): boolean {
   if (normalizeRoleForGrouping(group.role) !== "tool") {
     return false;
   }
   const cards = group.messages.flatMap((item) => extractToolCardsCached(item.message));
   return (
+    bubbleMode ||
     group.messages.length > 1 ||
     cards.length > 1 ||
     cards.some((card) => readToolApprovalReviews(card.details).length > 0)
@@ -363,7 +386,7 @@ function resolveFileLinkOwnerOptions(group: MessageGroup, options: RenderMessage
 
 export function renderMessageGroupContent(group: MessageGroup, options: RenderMessageGroupOptions) {
   const opts = resolveFileLinkOwnerOptions(group, options);
-  if (isActivityMessageGroup(group)) {
+  if (isActivityMessageGroup(group, opts.bubbleMode)) {
     return renderActivityGroup([group], opts, "continuation");
   }
   const messageOptions = { ...opts, isForwarded: hasForwardedSource(group) };
@@ -386,8 +409,8 @@ export function renderMessageGroupContent(group: MessageGroup, options: RenderMe
 export function renderMessageGroup(group: MessageGroup, options: RenderMessageGroupOptions) {
   const sourceSessionKey = group.senderSession?.sessionKey;
   const opts = resolveFileLinkOwnerOptions(group, options);
-  if (isInterSessionGroup(group)) {
-    return renderInterSessionActivity(group, opts, (item, index) => {
+  if (isSessionActivityGroup(group)) {
+    return renderSessionActivity(group, opts, (item, index) => {
       const prepared = prepareGroupMessage(group, item, opts);
       return {
         content: renderPreparedGroupMessage(
@@ -477,7 +500,7 @@ export function renderMessageGroup(group: MessageGroup, options: RenderMessageGr
     return nothing;
   }
 
-  if (isActivityMessageGroup(group)) {
+  if (isActivityMessageGroup(group, opts.bubbleMode)) {
     return renderActivityGroup([group], opts);
   }
 
@@ -504,11 +527,9 @@ export function renderMessageGroup(group: MessageGroup, options: RenderMessageGr
     normalizedRole === "user" &&
     ((opts.onRewind && !opts.rewindDisabled) || hasMessageActionButtons(footerActionDetails, opts));
   const userFooterActions = hasUserFooterActions
-    ? html`
-        <div
-          class="chat-group-footer-actions"
-          data-message-actions-for=${footerActionMessageKey ?? nothing}
-        >
+    ? renderMessageActionsRow(
+        footerActionMessageKey,
+        html`
           ${
             footerActionDetails?.replyTarget && opts.onReply
               ? renderReplyButton(footerActionDetails.replyTarget, opts.onReply)
@@ -516,8 +537,8 @@ export function renderMessageGroup(group: MessageGroup, options: RenderMessageGr
           }
           ${opts.onRewind && !opts.rewindDisabled ? renderRewindButton(opts.onRewind) : nothing}
           ${renderMessageActionButtons(footerActionDetails, messageReactionOptions(group, opts))}
-        </div>
-      `
+        `,
+      )
     : nothing;
 
   // Source sessions share the stable sender hue machinery; CSS owns contrast
@@ -594,19 +615,13 @@ export function renderMessageGroup(group: MessageGroup, options: RenderMessageGr
                             ${renderSenderIdentity()}
                             ${renderMessageMeta(prepared.source.normalizedMessage.timestamp, null)}
                           </div>
-                          <div
-                            class="chat-group-footer-actions"
-                            data-message-actions-for=${item.key}
-                          >
-                            ${renderMessageActionButtons(actionDetails, opts)}
-                          </div>
+                          ${renderMessageActionsRow(item.key, renderMessageActionButtons(actionDetails, opts))}
                         </div>`
-                      : html`<div
-                          class="chat-message-actions-row"
-                          data-message-actions-for=${item.key}
-                        >
-                          ${renderMessageActionButtons(actionDetails, opts)}
-                        </div>`
+                      : renderMessageActionsRow(
+                          item.key,
+                          renderMessageActionButtons(actionDetails, opts),
+                          "chat-message-actions-row",
+                        )
                     : nothing;
                 // Assistant groups carry one line; your own replies keep theirs in the
                 // bubble, and a participant's sits above the message beside its avatar.
@@ -697,14 +712,10 @@ export function renderMessageGroup(group: MessageGroup, options: RenderMessageGr
                   isPeerGroup
                     ? userFooterActions
                     : normalizedRole !== "user" && footerActionDetails
-                      ? html`
-                          <div
-                            class="chat-group-footer-actions"
-                            data-message-actions-for=${footerActionMessageKey ?? nothing}
-                          >
-                            ${renderMessageActionButtons(footerActionDetails, opts)}
-                          </div>
-                        `
+                      ? renderMessageActionsRow(
+                          footerActionMessageKey,
+                          renderMessageActionButtons(footerActionDetails, opts),
+                        )
                       : nothing
                 }
               </div>`

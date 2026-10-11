@@ -112,6 +112,7 @@ it("aborts and joins early update requests before the post-ready scheduler loads
     scheduler,
     createUpdateCheck: factory,
     getConfig: () => ({}),
+    getPluginRegistry: () => undefined,
     log: { info: vi.fn(), warn: vi.fn() },
     isNixMode: false,
     broadcastToConnIds: vi.fn(),

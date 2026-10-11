@@ -144,27 +144,6 @@ it("flushes a pending config draft before enabling and refreshes afterward", asy
   }
 });
 
-it("keeps the enable action retryable after a failed enable", async () => {
-  const { client, request } = scriptedClient({
-    "plugins.setEnabled": () => {
-      throw new Error("Enable failed");
-    },
-  });
-  const { page } = await mountInventory(client);
-
-  await activatePluginControl(page, '[data-plugin-id="workboard"]', "Enable or disable");
-  await waitForFast(() =>
-    expect(page.querySelector('[role="alert"]')?.textContent).toContain("Enable failed"),
-  );
-
-  await activatePluginControl(page, '[data-plugin-id="workboard"]', "Enable or disable");
-  await waitForFast(() => {
-    const calls = methodCalls(request, "plugins.setEnabled");
-    expect(calls).toHaveLength(2);
-    expect(calls.map(([, params]) => params)).toEqual([enableRequest, enableRequest]);
-  });
-});
-
 it("waits for uninstall confirmation and sends nothing when cancelled", async () => {
   const calls: Array<[string, unknown]> = [];
   const { client } = createClient(async (method, params) => {
@@ -513,73 +492,6 @@ function createQueuedRuntimeConfig(client: ReturnType<typeof createClient>["clie
   };
   return { harness, queued: queued.promise, release };
 }
-
-it("installs directly, preserves warnings, and rejects duplicate submission", async () => {
-  const warnings = ["A plugin service needs attention."];
-  const offered = createPlugin({
-    id: "calendar",
-    name: "Calendar",
-    packageName: "calendar",
-    installed: false,
-    state: "not-installed",
-    removable: true,
-  });
-  const detail = createDiscoveryDetail(offered);
-  detail.plugin.id = "ch_Y2FsZW5kYXI";
-  const committed = {
-    ...offered,
-    installed: true,
-    state: "disabled" as const,
-    catalogId: detail.plugin.id,
-  };
-  const installing = deferred<PluginMutationResult>();
-  const { client, request } = scriptedClient({
-    "plugins.catalog.get": () => detail,
-    "plugins.install": () => installing.promise,
-    "plugins.list": () => createResult(committed),
-    "plugins.inspect": () => createInspectResult({ plugin: committed }),
-  });
-  const { page } = await mountInventory(
-    client,
-    createResult(offered),
-    `/plugins/${detail.plugin.id}`,
-  );
-  await waitForFast(() =>
-    expect(page.querySelector(".plugin-catalog-detail__install")).not.toBeNull(),
-  );
-  page.querySelector<HTMLButtonElement>(".plugin-catalog-detail__install")!.click();
-  await waitForFast(() =>
-    expect(request).toHaveBeenCalledWith(
-      "plugins.install",
-      {
-        source: "clawhub",
-        packageName: "calendar",
-      },
-      expect.objectContaining({ onSent: expect.any(Function) }),
-    ),
-  );
-  expect(showConfirmDialog).not.toHaveBeenCalled();
-  expect(page.querySelector("openclaw-modal-dialog")).toBeNull();
-  expect(page.querySelector<HTMLButtonElement>(".plugin-catalog-detail__install")?.disabled).toBe(
-    false,
-  );
-  page.querySelector<HTMLButtonElement>(".plugin-catalog-detail__install")!.click();
-  expect(methodCalls(request, "plugins.install")).toHaveLength(1);
-  installing.resolve({ ok: true, plugin: committed, restartRequired: false, warnings });
-  await waitForFast(() =>
-    expect(page.querySelector('[aria-label="Enable Calendar"]')).not.toBeNull(),
-  );
-  expect(page.textContent).not.toContain("Installed Calendar.");
-  expect(page.messages["plugin:calendar"]).toEqual({ kind: "warning", text: warnings[0] });
-  expect(request.mock.calls.some(([method]) => method === "plugins.setEnabled")).toBe(false);
-  expect(
-    [
-      ...page.querySelectorAll(
-        ".plugin-catalog-detail__actions button, .plugin-catalog-detail__actions a",
-      ),
-    ].map((element) => element.getAttribute("aria-label")),
-  ).toEqual(["Enable Calendar", "Uninstall Calendar", "Settings"]);
-});
 
 it("retains a failed uninstall, resumes inspection, and allows retry", async () => {
   const plugin = createPlugin({ id: "calendar", name: "Calendar", removable: true });

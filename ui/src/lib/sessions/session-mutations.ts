@@ -11,7 +11,7 @@ import {
   type SessionCreateParams,
 } from "./create.ts";
 import type { SessionPatch, SessionPatchOptions, SessionPatchResult } from "./patch.ts";
-import { projectSessionResultRows } from "./reconcile.ts";
+import { mapSessionResultRows } from "./reconcile.ts";
 import { createSessionArchiveState, projectSessionArchiveFields } from "./session-archive-state.ts";
 import type {
   SessionCapability,
@@ -118,9 +118,7 @@ export function createSessionMutations(host: SessionMutationsHost) {
       }
       const reconciliation = host.reconcileMutation(params.agentId);
       if (options.reconciliation === "background") {
-        void reconciliation.catch((error: unknown) => {
-          reportError(scope, error);
-        });
+        void reconciliation.catch((error: unknown) => reportError(scope, error));
       } else {
         await reconciliation;
         if (!host.connection.isCurrent(scope)) {
@@ -189,7 +187,6 @@ export function createSessionMutations(host: SessionMutationsHost) {
     let rowPatchConfirmed = false;
     let writeConfirmed = false;
     let permissionProjection: SessionPermissionClaim | undefined;
-    const ownsModelOverride = () => options.ownsModelOverride?.() !== false;
     const modelPatch = modelOverrides.preparePatch(key, patchParams, options, scope);
     const nextPinned = patchParams.pinned === true;
     let pinPatchToken: symbol | null = null;
@@ -439,7 +436,7 @@ export function createSessionMutations(host: SessionMutationsHost) {
       if (uncertainCategory) {
         throw reportUncertainCategory(error, options.agentId);
       }
-      if (ownsModelOverride() && !settingsTargetWasReplaced()) {
+      if (options.ownsModelOverride?.() !== false && !settingsTargetWasReplaced()) {
         host.publish({ ...host.readState(), error: formatUiError(error) }, "operation");
       }
       throw error;
@@ -585,11 +582,9 @@ export function createSessionMutations(host: SessionMutationsHost) {
     patchMany,
     assignOwner,
     patchRowLocal,
-    /**
-     * Re-asserts in-flight row intents over Gateway events and list refreshes,
-     * which carry the pre-mutation value until the patch lands.
-     */
-    applyPendingRow,
+    /** Confirmed archive facts precede in-flight row intents on every presentation. */
+    applyRow: (row: GatewaySessionRow, sourceAgentId?: string | null) =>
+      applyPendingRow(archiveState.applyRow(row), sourceAgentId),
     observePendingFields(
       row: GatewaySessionRow,
       names: readonly string[],
@@ -603,20 +598,16 @@ export function createSessionMutations(host: SessionMutationsHost) {
         owner.observe(row, names, identity);
       }
     },
-    applyPendingRows(
+    applyRows(
       result: SessionsListResult | null,
       sourceAgentId?: string | null,
     ): SessionsListResult | null {
-      if (!result || !hasPendingRowPatches()) {
-        return result;
+      const archived = archiveState.apply(result);
+      if (!archived || !hasPendingRowPatches()) {
+        return archived;
       }
-      return projectSessionResultRows(
-        result,
-        result.sessions.map((row) => applyPendingRow(row, sourceAgentId)),
-      );
+      return mapSessionResultRows(archived, (row) => applyPendingRow(row, sourceAgentId));
     },
-    applyConfirmedArchives: archiveState.apply,
-    applyConfirmedArchiveRow: archiveState.applyRow,
     observeArchiveState: archiveState.observe,
     confirmArchiveState: archiveState.confirm,
     reset,

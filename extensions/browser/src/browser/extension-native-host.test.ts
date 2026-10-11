@@ -1,9 +1,11 @@
+import { ChildProcess, spawn } from "node:child_process";
 import fs from "node:fs/promises";
+import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { useAutoCleanupTempDirTracker, withEnvAsync } from "openclaw/plugin-sdk/test-env";
 import { withTimeout } from "openclaw/plugin-sdk/text-utility-runtime";
-import { afterAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { relayTestKey } from "../../chrome-extension/relay-key.test-support.js";
 import { parseBrowserNativeHostOrigins, runBrowserNativeHost } from "./extension-native-host.js";
 import {
@@ -14,6 +16,16 @@ import {
 import { ensureExtensionRelayDaemonProcess } from "./extension-relay-daemon-spawn.js";
 import { runExtensionRelayDaemon } from "./relay-daemon.js";
 import { getFreePort } from "./test-port.js";
+
+vi.mock("node:child_process", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:child_process")>()),
+  spawn: vi.fn(),
+}));
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.mocked(spawn).mockReset();
+});
 
 const EXTENSION_ID = "abcdefghijklmnopabcdefghijklmnop";
 const ORIGIN = `chrome-extension://${EXTENSION_ID}/`;
@@ -388,8 +400,7 @@ describe("native host ensure_relay", () => {
     ["managed browser", 18800],
     ["remote browser", 29443],
   ])("rejects the %s port before probing or spawning", async (_label, relayPort) => {
-    const probe = vi.fn(async () => false);
-    const spawnProcess = vi.fn();
+    const probe = vi.spyOn(net, "connect");
     const result = await invokeHost({
       input: chunks(frame(requestJson({ op: "ensure_relay", relayPort }))),
       ensureRelay: async (port) =>
@@ -397,13 +408,11 @@ describe("native host ensure_relay", () => {
           port,
           cfg: { browser: { profiles: { remote: { cdpUrl: "https://browser.example:29443" } } } },
           entryPath: "/opt/openclaw/dist/extensions/browser/relay-daemon-entry.js",
-          probe,
-          spawnProcess,
         }),
     });
     expect(result.response).toEqual({ v: 1, ok: false, code: "relay_unavailable" });
     expect(probe).not.toHaveBeenCalled();
-    expect(spawnProcess).not.toHaveBeenCalled();
+    expect(spawn).not.toHaveBeenCalled();
   });
 
   it.each(["non-first automatic", "explicitly pinned"])(
@@ -421,6 +430,14 @@ describe("native host ensure_relay", () => {
         { OPENCLAW_STATE_DIR: fixture.stateDir, OPENCLAW_GATEWAY_PORT: undefined },
         async () => {
           let daemon: ReturnType<typeof runExtensionRelayDaemon> | undefined;
+          // Keep config, port probing, credential reads and the relay server real;
+          // replace only OS process creation so the test owns daemon cleanup.
+          vi.mocked(spawn).mockImplementation((_command, args) => {
+            daemon = runExtensionRelayDaemon({
+              port: Number(Array.isArray(args) ? args[2] : undefined),
+            });
+            return new ChildProcess();
+          });
           try {
             const result = await invokeHost({
               ...fixture,
@@ -441,11 +458,6 @@ describe("native host ensure_relay", () => {
                     },
                   },
                   entryPath: "/opt/openclaw/dist/extensions/browser/relay-daemon-entry.js",
-                  // Keep the real config, port probe, credential read and relay server;
-                  // only replace process creation so the test owns daemon cleanup.
-                  spawnProcess: (_command, args) => {
-                    daemon = runExtensionRelayDaemon({ port: Number(args[2]) });
-                  },
                 }),
             });
             expect(result.response).toEqual({ v: 1, ok: true, nonce: NONCE, relay: "spawned" });

@@ -7,7 +7,7 @@ import {
 import { OPENAI_CODEX_RESPONSES_BASE_URL } from "./base-url.js";
 
 /** Only authenticated remote rows may supply this private observation, never fallback seeds. */
-export function readOpenAICodexServiceTiers(
+function readOpenAICodexServiceTiers(
   rows: readonly unknown[],
 ): NonNullable<ProviderCatalogOutcome["modelServiceTiers"]> {
   return rows.flatMap((row) => {
@@ -35,6 +35,23 @@ export function readOpenAICodexServiceTiers(
       },
     ];
   });
+}
+
+/**
+ * A successful account-scoped listing is authoritative even when every row is hidden; static
+ * hints must not invent subscription access. Hidden rows stay listed: the account is entitled.
+ */
+export function buildOpenAICodexReadyOutcome(rows: readonly unknown[]): ProviderCatalogOutcome {
+  const modelServiceTiers = readOpenAICodexServiceTiers(rows);
+  return {
+    provider: "openai",
+    status: "ready",
+    ...(modelServiceTiers.length ? { modelServiceTiers } : {}),
+    listedModelIds: rows.flatMap((row) => {
+      const record = asOptionalRecord(row);
+      return normalizeOptionalString(record?.slug) ?? normalizeOptionalString(record?.id) ?? [];
+    }),
+  };
 }
 
 export type OpenAILiveProviderCatalog = {

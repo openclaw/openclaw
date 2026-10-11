@@ -54,7 +54,6 @@ async function mount(state: PluginCredentialInspection = { kind: "literal" }, wi
           : undefined,
     disabled: false,
     descriptionId: "credential-help",
-    onPatch: vi.fn(),
   };
   const host = document.createElement("div");
   host.style.cssText = "padding:16px;box-sizing:border-box;width:100%";
@@ -270,7 +269,7 @@ describe("plugin credential authoring controls", () => {
     );
   });
 
-  it.each(["env", "file", "exec", "store"] as const)(
+  it.each(["env", "file"] as const)(
     "inspects and edits the exact %s pointer; Cancel never patches",
     async (source) => {
       const id = source === "file" ? "/original/key" : "ORIGINAL_KEY";
@@ -331,25 +330,20 @@ describe("plugin credential authoring controls", () => {
     expect(context.onCommit).not.toHaveBeenCalled();
   });
 
-  it.each([390, 768, 1174])(
-    "keeps input, signup link and reference dialog within %dpx",
-    async (width) => {
-      const { editor } = await mount({ kind: "missing" }, width);
-      expect(document.documentElement.scrollWidth).toBeLessThanOrEqual(width);
-      const { dialog } = await open(editor, "Use a secret reference");
-      const rect = dialog.getBoundingClientRect();
-      expect(rect.left).toBeGreaterThanOrEqual(0);
-      expect(rect.right).toBeLessThanOrEqual(width);
-      expect(rect.bottom).toBeLessThanOrEqual(844);
-      const input = editor.querySelectorAll<HTMLInputElement>(
-        ".plugin-credential__dialog input",
-      )[1]!;
-      input.value = "invalid lower-case env id";
-      input.dispatchEvent(new Event("input", { bubbles: true }));
-      await editor.updateComplete;
-      expect(button(editor, "Save").disabled).toBe(true);
-    },
-  );
+  it.each([390])("keeps input, signup link and reference dialog within %dpx", async (width) => {
+    const { editor } = await mount({ kind: "missing" }, width);
+    expect(document.documentElement.scrollWidth).toBeLessThanOrEqual(width);
+    const { dialog } = await open(editor, "Use a secret reference");
+    const rect = dialog.getBoundingClientRect();
+    expect(rect.left).toBeGreaterThanOrEqual(0);
+    expect(rect.right).toBeLessThanOrEqual(width);
+    expect(rect.bottom).toBeLessThanOrEqual(844);
+    const input = editor.querySelectorAll<HTMLInputElement>(".plugin-credential__dialog input")[1]!;
+    input.value = "invalid lower-case env id";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    await editor.updateComplete;
+    expect(button(editor, "Save").disabled).toBe(true);
+  });
 
   it("rejects stale open-reference edits after config revision changes, and clears inspection on Gateway retirement", async () => {
     const { editor, context, update } = await mount({

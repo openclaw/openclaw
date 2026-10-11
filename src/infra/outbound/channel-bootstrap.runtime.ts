@@ -150,7 +150,7 @@ function resolveBootstrapPlan(
 }
 
 function loadBootstrapPlan(
-  params: OutboundChannelBootstrapParams,
+  channel: string,
   plan: Extract<OutboundChannelBootstrapPlan, { kind: "cold" }>,
   discovery?: { env: NodeJS.ProcessEnv; workspaceDir: string | undefined },
 ): PluginRegistry | undefined {
@@ -165,7 +165,7 @@ function loadBootstrapPlan(
   const pluginIds = resolveDiscoverableScopedChannelPluginIds({
     config: autoEnabled.config,
     activationSourceConfig: cfg,
-    channelIds: [params.channel],
+    channelIds: [channel],
     workspaceDir,
     env: env ?? process.env,
   });
@@ -185,7 +185,7 @@ function loadBootstrapPlan(
         allowGatewaySubagentBinding: true,
       },
     });
-    sendRegistry = resolveSendCapableRegistry(registry, params.channel);
+    sendRegistry = resolveSendCapableRegistry(registry, channel);
   } catch {
     // Best-effort bootstrap; the caller reports the unavailable channel.
   }
@@ -198,7 +198,7 @@ export function bootstrapOutboundChannelPlugin(
   params: OutboundChannelBootstrapParams,
 ): PluginRegistry | undefined {
   const plan = resolveBootstrapPlan(params);
-  return plan.kind === "resolved" ? plan.registry : loadBootstrapPlan(params, plan);
+  return plan.kind === "resolved" ? plan.registry : loadBootstrapPlan(params.channel, plan);
 }
 
 /** Prepares cold SQLite metadata before the shared bootstrap decision and loader. */
@@ -241,7 +241,7 @@ export async function bootstrapOutboundChannelPluginAsync(
           "Outbound plugin owner changed during metadata preparation; retry the operation.",
         );
       }
-      return loadBootstrapPlan(params, plan, discovery);
+      return loadBootstrapPlan(params.channel, plan, discovery);
     });
   } finally {
     release();

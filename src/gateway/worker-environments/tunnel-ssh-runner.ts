@@ -8,6 +8,7 @@ import {
   type SpawnResult,
 } from "../../process/exec.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { settlesWithin } from "../../shared/settle-within.js";
 
 export const WORKER_TUNNEL_READY_MARKER = "OPENCLAW_WORKER_TUNNEL_READY";
 
@@ -58,7 +59,6 @@ export function createWorkerSshRunner(): WorkerSshRunner {
         windowsHide: true,
       });
       const releaseOutput = releaseChildProcessOutputAfterExit(child);
-      let closed = false;
       let exitedSettled = false;
       let readySettled = false;
       let childExited = false;
@@ -108,9 +108,8 @@ export function createWorkerSshRunner(): WorkerSshRunner {
         settleReadyError();
         // "error" also fires for abort/kill-delivery failures on a live child; only a child
         // that never spawned (no pid) gets a synthesized exit, otherwise close/stop() settle it.
-        // The no-pid case is terminal: mark it closed so stop() never signals an unspawned child.
+        // The no-pid case is terminal: settle exit so stop() never signals an unspawned child.
         if (child.pid === undefined) {
-          closed = true;
           settleExited({ code: null, signal: null });
         }
       });
@@ -121,7 +120,6 @@ export function createWorkerSshRunner(): WorkerSshRunner {
         child.stdin.destroy();
       });
       child.once("close", (code, signal) => {
-        closed = true;
         settleReadyError();
         settleExited({ code, signal });
       });
@@ -134,37 +132,16 @@ export function createWorkerSshRunner(): WorkerSshRunner {
         exited,
         stop() {
           return (stopPromise ??= (async () => {
-            if (closed) {
+            if (exitedSettled) {
               return;
             }
             child.kill("SIGTERM");
-            let timer: ReturnType<typeof setTimeout> | undefined;
-            await Promise.race([
-              exited,
-              new Promise<void>((resolve) => {
-                timer = setTimeout(resolve, STOP_GRACE_MS);
-                timer.unref?.();
-              }),
-            ]);
-            clearTimeout(timer);
-            if (!closed && !exitedSettled) {
+            await settlesWithin(exited, STOP_GRACE_MS);
+            if (!exitedSettled) {
               // A false return can also mean the child died a moment ago with its "exit"
               // event still queued; always take the bounded wait before judging.
               const killDelivered = child.kill("SIGKILL");
-              let killTimer: ReturnType<typeof setTimeout> | undefined;
-              let killWaitExpired = false;
-              await Promise.race([
-                exited,
-                new Promise<void>((resolve) => {
-                  killTimer = setTimeout(() => {
-                    killWaitExpired = true;
-                    resolve();
-                  }, STOP_KILL_WAIT_MS);
-                  killTimer.unref?.();
-                }),
-              ]);
-              clearTimeout(killTimer);
-              if (killWaitExpired) {
+              if (!(await settlesWithin(exited, STOP_KILL_WAIT_MS))) {
                 // Neither delivered SIGKILL nor failed delivery proves termination without
                 // an exit event; fail the stop so the owner keeps tracking the live child.
                 throw workerSshProcessError(

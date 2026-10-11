@@ -58,12 +58,8 @@ export function resolveAgentHarnessRunAdmissionError(params: {
   if (entry.modelSelectionLocked !== true) {
     return undefined;
   }
-  const durableEntryError = resolveAgentHarnessSessionStoreEntryError(sessionKey, entry);
-  if (durableEntryError) {
-    return durableEntryError;
-  }
   if (!isValidAgentHarnessSessionStoreEntry(sessionKey, entry)) {
-    return undefined;
+    return resolveAgentHarnessSessionStoreEntryError(sessionKey, entry);
   }
   const requestedHarnessId = normalizeOptionalAgentRuntimeId(params.agentHarnessId);
   const durableHarnessId = resolveSessionPinnedHarnessId(entry);
@@ -90,10 +86,9 @@ export async function resolveHookModelSelection(params: {
   hookRunner?: HookRunnerLike | null;
   hookContext: HookContext;
 }) {
-  let provider = params.provider;
-  let modelId = params.modelId;
+  const selection = { provider: params.provider, modelId: params.modelId };
   if (params.modelSelectionLocked === true) {
-    return { provider, modelId };
+    return selection;
   }
   let modelResolveOverride: Awaited<ReturnType<HookRunnerLike["runBeforeModelResolve"]>>;
   const hookRunner = params.hookRunner;
@@ -118,18 +113,15 @@ export async function resolveHookModelSelection(params: {
   }
 
   if (modelResolveOverride?.providerOverride) {
-    provider = modelResolveOverride.providerOverride;
-    log.info(`[hooks] provider overridden to ${provider}`);
+    selection.provider = modelResolveOverride.providerOverride;
+    log.info(`[hooks] provider overridden to ${selection.provider}`);
   }
   if (modelResolveOverride?.modelOverride) {
-    modelId = modelResolveOverride.modelOverride;
-    log.info(`[hooks] model overridden to ${modelId}`);
+    selection.modelId = modelResolveOverride.modelOverride;
+    log.info(`[hooks] model overridden to ${selection.modelId}`);
   }
 
-  return {
-    provider,
-    modelId,
-  };
+  return selection;
 }
 
 /**
@@ -162,6 +154,7 @@ export function resolveEmbeddedRuntimeModelPolicy(params: {
 }): {
   contextWindowInfo?: ContextWindowInfo;
   contextTokenBudget?: number;
+  contextTokensSource?: "resolved-v1";
   effectiveModel: ProviderRuntimeModel;
 } {
   if (params.nativeModelOwned) {
@@ -193,12 +186,6 @@ export function resolveEmbeddedRuntimeModelPolicy(params: {
       ? { ...resolvedCtxInfo, tokens: contextWindowProfile.contextTokens, source: "model" as const }
       : resolvedCtxInfo;
 
-  // Apply contextTokens cap to model so session runtime's auto-compaction
-  // threshold uses the effective limit, not the native context window.
-  const windowedModel =
-    ctxInfo.tokens < (params.runtimeModel.contextWindow ?? Infinity)
-      ? { ...params.runtimeModel, contextWindow: ctxInfo.tokens }
-      : params.runtimeModel;
   const ctxGuard = evaluateContextWindowGuard({ info: ctxInfo });
   const runtimeBaseUrl = params.runtimeModel.baseUrl;
   if (ctxGuard.shouldWarn) {
@@ -236,12 +223,20 @@ export function resolveEmbeddedRuntimeModelPolicy(params: {
         }
       : ctxInfo;
   const effectiveModel =
-    contextTokenBudget < (windowedModel.contextWindow ?? Infinity)
-      ? { ...windowedModel, contextWindow: contextTokenBudget }
-      : windowedModel;
+    contextTokenBudget < (params.runtimeModel.contextWindow ?? Infinity)
+      ? { ...params.runtimeModel, contextWindow: contextTokenBudget }
+      : params.runtimeModel;
   return {
     contextWindowInfo,
     contextTokenBudget,
+    // Cold readers match only provider/model/harness, so removable caps and
+    // session-selectable windows cannot become persisted model facts.
+    contextTokensSource:
+      contextWindowInfo.source === "model" &&
+      contextWindowInfo.referenceTokens === undefined &&
+      !params.runtimeModel.contextWindows?.length
+        ? "resolved-v1"
+        : undefined,
     effectiveModel,
   };
 }

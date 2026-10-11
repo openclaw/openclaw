@@ -1,5 +1,6 @@
 // Explicit schema exports keep public protocol changes reviewable.
 export * from "./schema/sessions-goal.js";
+export * from "./schema/session-processes.js";
 export * from "./schema/sessions-provider-review.js";
 export * from "./schema/human-mentions.js";
 export * from "./schema/presence.js";
@@ -420,6 +421,8 @@ export {
   ChannelsStatusResultSchema,
   ChannelsPairingListParamsSchema,
   ChannelsPairingListResultSchema,
+  ChannelsPairingCliListResultSchema,
+  ChannelsPairingCodeApproveResultSchema,
   ChannelsPairingApproveParamsSchema,
   ChannelsPairingApproveResultSchema,
   ChannelsPairingDismissParamsSchema,
@@ -499,35 +502,24 @@ export {
   ToolsEffectiveParamsSchema,
   ToolsInvokeParamsSchema,
   SkillsInstallParamsSchema,
-  SkillsCuratorActionParamsSchema,
-  SkillsCuratorActionResultSchema,
-  SkillsCuratorStatusParamsSchema,
-  SkillsCuratorStatusResultSchema,
   SkillsSearchParamsSchema,
   SkillsSearchResultSchema,
   SkillsDetailParamsSchema,
   SkillsDetailResultSchema,
-  SkillsProposalsListParamsSchema,
-  SkillsProposalsListResultSchema,
+  SkillWorkshopChangeSchema,
+  SkillWorkshopSkillSummarySchema,
+  SkillWorkshopArchivedSkillSchema,
+  SkillsWorkshopListParamsSchema,
+  SkillsWorkshopListResultSchema,
+  SkillsWorkshopChangesParamsSchema,
+  SkillsWorkshopChangesResultSchema,
   SkillsWorkshopReadParamsSchema,
   SkillsWorkshopReadResultSchema,
-  SkillsProposalInspectParamsSchema,
-  SkillsProposalInspectResultSchema,
-  SkillsProposalCreateParamsSchema,
-  SkillsProposalUpdateParamsSchema,
-  SkillsProposalReviseParamsSchema,
-  SkillsProposalRequestRevisionParamsSchema,
-  SkillsProposalRequestRevisionResultSchema,
-  SkillsProposalDecisionParamsSchema,
-  SkillsProposalActionParamsSchema,
-  SkillProposalEvaluationSchema,
-  SkillsProposalEvaluateParamsSchema,
-  SkillsProposalEvaluateResultSchema,
-  SkillProposalLifecycleEventSchema,
-  SkillsProposalEventsListParamsSchema,
-  SkillsProposalEventsListResultSchema,
-  SkillsProposalApplyResultSchema,
-  SkillsProposalRecordResultSchema,
+  SkillsWorkshopArchiveParamsSchema,
+  SkillsWorkshopRestoreParamsSchema,
+  SkillsWorkshopChangeResultSchema,
+  SkillsWorkshopUndoParamsSchema,
+  SkillsWorkshopUndoResultSchema,
   SkillsSecurityVerdictsParamsSchema,
   SkillsSecurityVerdictsResultSchema,
   SkillsSkillCardParamsSchema,
@@ -658,6 +650,10 @@ export {
   WorktreesRestoreParamsSchema,
   WorktreesGcParamsSchema,
   WorktreesGcResultSchema,
+  WorktreesRecoverRemovalParamsSchema,
+  WorktreesRecoverRemovalResultSchema,
+  WorktreesRetireSnapshotParamsSchema,
+  WorktreesRetireSnapshotResultSchema,
   WorktreesBranchesParamsSchema,
   WorktreeBranchSchema,
   WorktreeRepositoryStatusSchema,
@@ -674,3 +670,5 @@ export {
 } from "./schema/sessions-activity-summary.js";
 
 export * from "./schema/sessions-involvement.js";
+
+export * from "./schema/catalog.js";

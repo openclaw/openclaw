@@ -55,16 +55,3 @@ export async function resolveAcpSessionKey(params: {
 
   return requestedKey || params.fallbackKey;
 }
-
-export async function resetSessionIfNeeded(params: {
-  meta: AcpSessionMeta;
-  sessionKey: string;
-  gateway: GatewayClient;
-  opts: AcpServerOptions;
-}): Promise<void> {
-  const resetSession = params.meta.resetSession ?? params.opts.resetSession ?? false;
-  if (!resetSession) {
-    return;
-  }
-  await params.gateway.request("sessions.reset", { key: params.sessionKey });
-}

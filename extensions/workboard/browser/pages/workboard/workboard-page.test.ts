@@ -3,7 +3,6 @@ import { expectDefined } from "@openclaw/normalization-core";
 import type {
   ControlUiAgentPickerProps,
   ControlUiComponents,
-  ControlUiSessionListResult,
 } from "openclaw/plugin-sdk/control-ui";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { describe, expect, it, vi } from "vitest";
@@ -11,74 +10,59 @@ import {
   createGatewaySession,
   createWorkboardCard,
 } from "../../lib/workboard/test/index-helpers.ts";
-import { mountPage } from "./workboard-page.test-support.ts";
+import {
+  mountPage,
+  observeSessions,
+  openBoardEditor,
+  openSessionTab,
+  openSessionButton,
+  visibleToast,
+  sessionPicker,
+} from "./workboard-page.test-support.ts";
 
 type ControlUiSelectPickerProps = Parameters<ControlUiComponents["mountSelectPicker"]>[1];
 
-function openSessionButton(container: Element) {
-  return [...container.querySelectorAll<HTMLButtonElement>("button")].find(
-    (button) =>
-      (button.getAttribute("aria-label") ?? button.textContent?.trim()) === "Open session",
-  );
-}
-
-function visibleToast(container: Element) {
-  return container.querySelector<HTMLElement>("openclaw-workboard-toast:not([hidden])");
-}
-
-function sessionPicker(container: Element) {
-  type SelectProps = Parameters<ControlUiComponents["mountSelectPicker"]>[1];
-  return [
-    ...container.querySelectorAll<HTMLElement & SelectProps>(
-      ".workboard-draft [data-test-select-picker]",
-    ),
-  ].find((picker) => picker.accessibleLabel === "Session");
-}
-
-async function openBoardEditor(page: ReturnType<typeof mountPage>) {
-  await vi.waitFor(() => expect(page.workboard.state.loaded).toBe(true));
-  expectDefined(
-    page.container.querySelector<HTMLButtonElement>('button[aria-label="Edit board"]'),
-    "edit board",
-  ).click();
-  return vi.waitFor(() =>
-    expectDefined(
-      page.container.querySelector<HTMLFormElement>(".workboard-board-draft"),
-      "board editor",
-    ),
-  );
-}
-
-async function openSessionTab(page: ReturnType<typeof mountPage>) {
-  await vi.waitFor(() =>
-    expect(
-      [...page.container.querySelectorAll<HTMLButtonElement>('[role="tab"]')].some(
-        (tab) => tab.textContent?.trim() === "Session",
-      ),
-    ).toBe(true),
-  );
-  expectDefined(
-    [...page.container.querySelectorAll<HTMLButtonElement>('[role="tab"]')].find(
-      (tab) => tab.textContent?.trim() === "Session",
-    ),
-    "session tab",
-  ).click();
-}
-
-function observeSessions(page: ReturnType<typeof mountPage>, result: ControlUiSessionListResult) {
-  return vi.mocked(page.fixture.host.sessions.observe).mockImplementation((_query, listener) => {
-    listener({ result, loading: false, error: null });
-    return { refresh: vi.fn(async () => undefined), dispose: vi.fn() };
-  });
-}
-
-it("loads and refreshes cards through the plugin's authenticated host", async () => {
+it("loads, refreshes, and searches cards through the plugin's authenticated host", async () => {
   const page = mountPage({ connected: true });
   await vi.waitFor(() => expect(page.container.textContent).toContain("Initial card"));
   page.cards([createWorkboardCard({ title: "Updated card" })]);
   page.fixture.emit("plugin.workboard.changed", { epoch: "current", revision: 1 });
   await vi.waitFor(() => expect(page.container.textContent).toContain("Updated card"));
   expect(page.container.textContent).not.toContain("Initial card");
+  expectDefined(
+    page.container.querySelector<HTMLButtonElement>(".workboard-search-trigger"),
+    "search trigger",
+  ).click();
+  const input = await vi.waitFor(() => {
+    const current = expectDefined(
+      page.container.querySelector<HTMLInputElement>("#workboard-search-input"),
+      "search input",
+    );
+    expect(document.activeElement).toBe(current);
+    return current;
+  });
+  input.value = "Updated";
+  input.dispatchEvent(new InputEvent("input", { bubbles: true }));
+  await vi.waitFor(() => {
+    expect(page.workboard.state.query).toBe("Updated");
+    expect(page.container.querySelector(".workboard-filter-chip")?.textContent).toContain(
+      "Updated",
+    );
+  });
+  expect(page.container.querySelector("#workboard-search-input")).toBe(input);
+  expect(document.activeElement).toBe(input);
+  input.dispatchEvent(
+    new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),
+  );
+  await vi.waitFor(() =>
+    expect(document.activeElement).toBe(
+      expectDefined(
+        page.container.querySelector<HTMLButtonElement>(".workboard-search-trigger"),
+        "restored search trigger",
+      ),
+    ),
+  );
+  expect(page.workboard.state.query).toBe("");
 });
 
 it.each(["main", "writer"])(
@@ -533,7 +517,7 @@ it("keeps failed metadata visible through card refreshes and recovers it with pa
   await vi.waitFor(() => expect(page.container.textContent).toContain("Initial card"));
   metadata.reject(new Error("Agent metadata temporarily unavailable"));
   await vi.waitFor(() =>
-    expect(visibleToast(page.container)?.shadowRoot?.textContent).toContain(
+    expect(visibleToast(page.container)?.textContent).toContain(
       "Agent metadata temporarily unavailable",
     ),
   );
@@ -541,7 +525,7 @@ it("keeps failed metadata visible through card refreshes and recovers it with pa
   page.cards([createWorkboardCard({ title: "Updated card", agentId: "main" })]);
   page.fixture.emit("plugin.workboard.changed", { epoch: "current", revision: 1 });
   await vi.waitFor(() => expect(page.container.textContent).toContain("Updated card"));
-  expect(visibleToast(page.container)?.shadowRoot?.textContent).toContain(
+  expect(visibleToast(page.container)?.textContent).toContain(
     "Agent metadata temporarily unavailable",
   );
   expect(
@@ -558,7 +542,7 @@ it("keeps failed metadata visible through card refreshes and recovers it with pa
       ),
     ).not.toBeNull(),
   );
-  expect(visibleToast(page.container)?.shadowRoot?.textContent ?? "").not.toContain(
+  expect(visibleToast(page.container)?.textContent ?? "").not.toContain(
     "Agent metadata temporarily unavailable",
   );
   expect(page.container.textContent).toContain("Updated card");
@@ -584,9 +568,7 @@ it("shows independent metadata and linked-session failures together", async () =
   page.fixture.notify();
 
   await vi.waitFor(() => {
-    const message = visibleToast(page.container)?.shadowRoot?.querySelector(
-      '[role="alert"]',
-    )?.textContent;
+    const message = visibleToast(page.container)?.querySelector('[role="alert"]')?.textContent;
     expect(message).toContain("Agent metadata temporarily unavailable");
     expect(message).toContain("Linked session temporarily unavailable");
   });
@@ -614,15 +596,15 @@ it("keeps page failures visible in the board editor and prioritizes its save fai
   page.fixture.notify();
   const form = await openBoardEditor(page);
   await vi.waitFor(() => {
-    expect(
-      visibleToast(page.container)?.shadowRoot?.querySelector('[role="alert"]')?.textContent,
-    ).toBe("Agent metadata temporarily unavailable");
+    expect(visibleToast(page.container)?.querySelector('[role="alert"]')?.textContent).toBe(
+      "Agent metadata temporarily unavailable",
+    );
   });
   form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
   await vi.waitFor(() => {
-    expect(
-      visibleToast(page.container)?.shadowRoot?.querySelector('[role="alert"]')?.textContent,
-    ).toBe("Board update denied");
+    expect(visibleToast(page.container)?.querySelector('[role="alert"]')?.textContent).toBe(
+      "Board update denied",
+    );
   });
 });
 
@@ -697,7 +679,7 @@ it("releases listeners and stops refreshes when its mount is disposed", async ()
   page.fixture.notify();
   await Promise.resolve();
   expect(page.request).toHaveBeenCalledTimes(count);
-  expect(page.fixture.listeners.size).toBe(0);
+  expect(page.fixture.listeners.size).toBe(page.hostListeners);
   expect(page.fixture.events.get("plugin.workboard.changed")?.size).toBe(0);
   expect(page.container.childElementCount).toBe(0);
 });
@@ -789,9 +771,9 @@ describe("selection reconciliation", () => {
       expect(pendingBusy).toBe("true");
       expect(enabledControls).toHaveLength(0);
       await vi.waitFor(() =>
-        expect(
-          visibleToast(page.container)?.shadowRoot?.querySelector('[role="alert"]')?.textContent,
-        ).toBe("Save unavailable; retry this edit."),
+        expect(visibleToast(page.container)?.querySelector('[role="alert"]')?.textContent).toBe(
+          "Save unavailable; retry this edit.",
+        ),
       );
       const toast = expectDefined(visibleToast(page.container), "retry guidance");
       expect(toast.closest('[inert], [aria-hidden="true"]')).toBeNull();

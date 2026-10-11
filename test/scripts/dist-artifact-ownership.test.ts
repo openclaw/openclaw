@@ -11,7 +11,7 @@ import {
 } from "../../scripts/lib/dist-artifact-ownership.mts";
 import { BOUNDARY_PLUGIN_UNITS } from "../../scripts/lib/extension-boundary-inputs.mts";
 import {
-  TSDOWN_NON_SDK_DTS_CONFIG_GROUPS,
+  TSDOWN_UNIFIED_DTS_CONFIG_GROUPS,
   TSDOWN_PLUGIN_SDK_DTS_CONFIG_GROUPS,
 } from "../../scripts/lib/tsdown-config-groups.mts";
 import { TSGO_CORE_TEST_SHARDS } from "../../scripts/lib/tsgo-core-test-shards.mts";
@@ -512,6 +512,20 @@ describe.skipIf(process.platform === "win32")("dist artifact ownership", () => {
       write(root, "dist/entry.js", "export {};\n");
       write(root, "dist/.buildstamp", JSON.stringify({ head: "fixture-head", inputsClean: true }));
       const marker = path.join(root, "dist/postbuild-finished");
+      const postbuildFixture = write(
+        root,
+        "fixture-postbuild.mjs",
+        `import fs from 'node:fs';
+        import { createRequire } from 'node:module';
+        const require = createRequire(import.meta.url);
+        export function runRuntimePostBuild() {
+          return new Promise(resolve => {
+            fs.writeFileSync(${JSON.stringify(marker)}, 'complete');
+            ${checkpoint("source-postbuild-ready")}
+            socket.on('close', resolve);
+          });
+        }`,
+      );
       const writerScript = write(
         root,
         "writer.mjs",
@@ -532,27 +546,32 @@ describe.skipIf(process.platform === "win32")("dist artifact ownership", () => {
         "source-runner.mjs",
         `
         import ${JSON.stringify(path.join(sourceRoot, "scripts/tsx.mjs"))};
-        import fs from 'node:fs';
-        import { createRequire } from 'node:module';
-        const require = createRequire(import.meta.url);
+        import childProcess from 'node:child_process';
+        import { registerHooks, syncBuiltinESMExports } from 'node:module';
         const { registerSourceRunnerServiceFixture } = await import(${JSON.stringify(path.join(sourceRoot, "test/scripts/fixtures/source-runner-service.mjs"))});
         registerSourceRunnerServiceFixture(${JSON.stringify(sourceRoot)});
+        const postbuildUrl = ${JSON.stringify(pathToFileURL(path.join(sourceRoot, "scripts/runtime-postbuild.mts")).href)};
+        registerHooks({
+          load(url, context, nextLoad) {
+            return url === postbuildUrl
+              ? { format: 'module', shortCircuit: true, source:
+                  'export { listCoreRuntimePostBuildOutputs } from ' + JSON.stringify(postbuildUrl + '?fixture-owner') + ';' +
+                  'export { runRuntimePostBuild } from ' + ${JSON.stringify(JSON.stringify(pathToFileURL(postbuildFixture).href))} + ';' }
+              : nextLoad(url, context);
+          },
+        });
+        childProcess.spawnSync = (_command, args) => ({ status: 0, stdout: args.includes('rev-parse') ? 'fixture-head' : '' });
+        childProcess.spawn = (_command, args) => {
+          if (args.includes('scripts/build-all.mts')) throw new Error('Expected postbuild-only path');
+          return { on: (event, listener) => {
+            if (event === 'exit') queueMicrotask(() => listener(0, null));
+          }};
+        };
+        syncBuiltinESMExports();
         const { runNodeMain } = await import(${JSON.stringify(path.join(sourceRoot, "scripts/run-node.mts"))});
         process.exitCode = await runNodeMain({
           cwd: process.cwd(), args: ['artifact-fixture'],
           env: { ...process.env, OPENCLAW_FORCE_BUILD: '0', OPENCLAW_BUILD_PRIVATE_QA: '0' },
-          spawnSync: (_command, args) => ({ status: 0, stdout: args.includes('rev-parse') ? 'fixture-head' : '' }),
-          spawn: (_command, args) => {
-            if (args.includes('scripts/build-all.mts')) throw new Error('Expected postbuild-only path');
-            return { on: (event, listener) => {
-              if (event === 'exit') queueMicrotask(() => listener(0, null));
-            }};
-          },
-          runRuntimePostBuild: () => new Promise(resolve => {
-            fs.writeFileSync(${JSON.stringify(marker)}, 'complete');
-            ${checkpoint("source-postbuild-ready")}
-            socket.on('close', resolve);
-          }),
         });
       `,
       );
@@ -708,7 +727,7 @@ describe.skipIf(process.platform === "win32")("dist artifact ownership", () => {
           script === "write-plugin-sdk-entry-dts.ts"
             ? TSDOWN_PLUGIN_SDK_DTS_CONFIG_GROUPS
             : script === "write-unified-entry-dts.ts"
-              ? TSDOWN_NON_SDK_DTS_CONFIG_GROUPS
+              ? TSDOWN_UNIFIED_DTS_CONFIG_GROUPS
               : undefined;
         // Declaration writers need their real generator graph; this lifetime still
         // owns the root so timed-out children are joined before inputs are removed.

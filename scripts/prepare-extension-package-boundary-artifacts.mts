@@ -346,12 +346,11 @@ async function prepareExtensionPackageBoundaryArtifacts(argv: string[] = process
         // Output directories stay intact until a successful complete inventory exists.
         fs.rmSync(resolve(repoRoot, inputReceipt), { force: true });
         const outputs = new Set<string>();
-        return Object.assign(unit, { recordPath, inputReceipt, args, outputs, startedAt: 0 });
+        return Object.assign(unit, { recordPath, inputReceipt, args, outputs });
       })
       .filter((unit) => unit !== null);
     await runNodeSteps(
       pending.map((unit) => {
-        unit.startedAt = Date.now();
         return {
           label: `${unit.id} boundary dts`,
           args: unit.args,
@@ -388,8 +387,6 @@ async function prepareExtensionPackageBoundaryArtifacts(argv: string[] = process
         unit.args,
         unit.inputReceipt,
         outputs,
-        before,
-        unit.startedAt,
         unit.outputRoot,
       );
       return Object.assign(unit, { record });

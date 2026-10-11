@@ -146,7 +146,7 @@ describe.each(["node", "bun"] as const)("%s probe failures", (runtime) => {
     const resolve = runtime === "node" ? resolvePreferredNodePath : resolvePreferredBunPath;
     await expect(
       resolve({ env: {}, runtime, platform: "linux", execPath: "/fixture/other", execFile }),
-    ).rejects.toThrow(/probe failed.*EACCES/s);
+    ).rejects.toThrow(/check failed.*EACCES/s);
   });
 });
 
@@ -244,7 +244,7 @@ describe("resolvePreferredNodePath", () => {
       });
     };
     await expect(install()).rejects.toThrow(
-      /Node runtime probe failed.*\/usr\/bin\/node.*cwd.*EACCES/s,
+      /Node runtime check failed.*\/usr\/bin\/node.*cwd.*EACCES/s,
     );
   });
 
@@ -449,7 +449,7 @@ describe("resolvePreferredBunPath", () => {
         await expect(result).resolves.toBeUndefined();
         expect(execFile).not.toHaveBeenCalled();
       } else {
-        await expect(result).rejects.toThrow(/Bun runtime probe failed.*EACCES/s);
+        await expect(result).rejects.toThrow(/Bun runtime check failed.*EACCES/s);
       }
     },
   );
@@ -717,7 +717,7 @@ describe("resolveSystemNodeInfo", () => {
       execFile: vi.fn().mockRejectedValue(cause),
     });
     const warning = renderSystemNodeWarning(info, "/selected/node");
-    expect(warning).toContain("probe failed");
+    expect(warning).toContain("check failed");
     expect(warning).toContain("EACCES");
     expect(warning).toContain(darwinNode);
     expect(warning).not.toContain("Install Node");
@@ -841,6 +841,20 @@ describe("resolveSystemNodeInfo", () => {
 
     expect(result).toBeNull();
     expect(execFile).not.toHaveBeenCalled();
+  });
+
+  it("names the system executable when its SQLite TEXT capability fails", () => {
+    const warning = renderSystemNodeWarning({
+      path: "/usr/bin/node",
+      version: "22.23.3",
+      sqliteVersion: "3.51.3",
+      sqliteProbe: { available: true, version: "3.51.3", text: false, blob: true, json: true },
+      nodeSharedSqlite: false,
+      status: "unsupported",
+      capabilityError: "node:sqlite truncates TEXT at embedded NUL",
+    });
+    expect(warning).toContain("System Node 22.23.3 at /usr/bin/node");
+    expect(warning).toContain("node:sqlite truncates TEXT at embedded NUL");
   });
 
   it("reports a known unsupported system Node version", () => {

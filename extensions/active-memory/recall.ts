@@ -1,6 +1,10 @@
 import { resolveAgentConfig } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
+import {
+  rethrowIncognitoSessionError,
+  type SessionEntry,
+} from "openclaw/plugin-sdk/session-store-runtime";
 import { normalizeActiveMemoryFastMode } from "./config.js";
 import { getModelRef } from "./query.js";
 import { runRecallSubagent } from "./recall-run.js";
@@ -22,7 +26,6 @@ import {
   buildPersistedDebugSummary,
   buildPluginStatusLine,
   persistPluginStatusLines,
-  resolveCanonicalSessionKeyFromSessionId,
 } from "./session.js";
 import {
   buildSubagentRecallResult,
@@ -67,48 +70,6 @@ function formatActiveMemoryFastMode(fastMode: ActiveMemoryFastMode | undefined):
         : "auto";
 }
 
-function prepareRecallRunContext(params: {
-  api: OpenClawPluginApi;
-  runtimeConfig: OpenClawConfig;
-  config: ResolvedActiveRecallPluginConfig;
-  agentId: string;
-  sessionKey?: string;
-  sessionId?: string;
-}): {
-  parentSessionKey?: string;
-  storePath: string;
-  fastMode?: ActiveMemoryFastMode;
-} {
-  const parentSessionKey =
-    params.sessionKey ??
-    resolveCanonicalSessionKeyFromSessionId({
-      api: params.api,
-      agentId: params.agentId,
-      sessionId: params.sessionId,
-    });
-  const storePath = params.api.runtime.agent.session.resolveStorePath(
-    params.runtimeConfig.session?.store,
-    { agentId: params.agentId },
-  );
-  if (params.config.fastMode !== undefined) {
-    return { parentSessionKey, storePath, fastMode: params.config.fastMode };
-  }
-  const sessionFastMode = parentSessionKey
-    ? params.api.runtime.agent.session.getSessionEntry({
-        agentId: params.agentId,
-        sessionKey: parentSessionKey,
-        storePath,
-        readConsistency: "latest",
-      })?.fastMode
-    : undefined;
-  const fastMode =
-    normalizeActiveMemoryFastMode(sessionFastMode) ??
-    normalizeActiveMemoryFastMode(
-      resolveAgentConfig(params.runtimeConfig, params.agentId)?.fastModeDefault,
-    );
-  return { parentSessionKey, storePath, fastMode };
-}
-
 type ActiveRecallParams = {
   api: OpenClawPluginApi;
   runtimeConfig: OpenClawConfig;
@@ -116,6 +77,8 @@ type ActiveRecallParams = {
   agentId: string;
   sessionKey?: string;
   sessionId?: string;
+  sessionEntry: SessionEntry | undefined;
+  storePath: string;
   messageProvider?: string;
   channelId?: string;
   query: string;
@@ -277,8 +240,15 @@ async function resolveActiveRecall(
     return result;
   }
 
-  const runContext = prepareRecallRunContext(params);
-  logPrefix = buildLogPrefix(runContext.fastMode);
+  const fastMode =
+    params.config.fastMode ??
+    normalizeActiveMemoryFastMode(params.sessionEntry?.fastMode) ??
+    normalizeActiveMemoryFastMode(
+      resolveAgentConfig(params.runtimeConfig, params.agentId)?.fastModeDefault,
+    );
+  params.abortSignal?.throwIfAborted();
+  params.assertMemoryAudienceCurrent?.();
+  logPrefix = buildLogPrefix(fastMode);
 
   if (params.config.logging) {
     params.api.logger.info?.(
@@ -324,9 +294,9 @@ async function resolveActiveRecall(
     const subagentPromise = runRecallSubagent({
       ...params,
       modelRef: resolvedModelRef,
-      parentSessionKey: runContext.parentSessionKey,
-      storePath: runContext.storePath,
-      fastMode: runContext.fastMode,
+      parentSessionKey: params.sessionKey,
+      parentSessionEntry: params.sessionEntry,
+      fastMode,
       abortSignal: controller.signal,
       onTranscriptSources: (sources) => {
         transcriptSources = sources;
@@ -419,6 +389,7 @@ async function resolveActiveRecall(
     }
     return result;
   } catch (error) {
+    rethrowIncognitoSessionError(error);
     if (params.abortSignal?.aborted) {
       if (recallTimedOut) {
         recordRecallTimeout();

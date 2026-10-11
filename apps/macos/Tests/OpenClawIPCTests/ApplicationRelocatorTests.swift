@@ -248,7 +248,7 @@ struct ApplicationRelocatorTests {
 
     @Test
     func `replacement handoff retries back off and stop after three attempts`() {
-        let policy = ApplicationRelocator.replacementHandoffPolicy
+        let policy = ApplicationRelocator.ReplacementHandoffPolicy.self
 
         #expect(policy.maximumAttempts == 3)
         #expect(policy.failureAction(
@@ -271,7 +271,7 @@ struct ApplicationRelocatorTests {
 
     @Test
     func `replacement handoff timeout scales with system load`() {
-        let policy = ApplicationRelocator.replacementHandoffPolicy
+        let policy = ApplicationRelocator.ReplacementHandoffPolicy.self
 
         #expect(policy.timeoutMilliseconds(loadAverage: nil, activeProcessorCount: 12) == 15000)
         #expect(policy.timeoutMilliseconds(loadAverage: 12, activeProcessorCount: 12) == 15000)
@@ -283,26 +283,24 @@ struct ApplicationRelocatorTests {
     @Test
     func `replacement arriving during final handoff gets a fresh recovery pass`() {
         let failedTarget = Data([10])
+        let reference = ApplicationRelocator.BundleFileReference(
+            deviceIdentifier: 1, fileIdentifier: 2, executableRelativePath: "Contents/MacOS/OpenClaw")
 
         #expect(!ApplicationRelocator.shouldContinueReplacementRecovery(
             afterFailedTarget: failedTarget,
-            latestAction: .relaunch,
-            latestTargetHash: failedTarget
+            latestEvaluation: .relaunch(reference, failedTarget)
         ))
         #expect(ApplicationRelocator.shouldContinueReplacementRecovery(
             afterFailedTarget: failedTarget,
-            latestAction: .relaunch,
-            latestTargetHash: Data([11])
+            latestEvaluation: .relaunch(reference, Data([11]))
         ))
         #expect(ApplicationRelocator.shouldContinueReplacementRecovery(
             afterFailedTarget: failedTarget,
-            latestAction: .waitForTrustedReplacement,
-            latestTargetHash: nil
+            latestEvaluation: .waitForTrustedReplacement
         ))
         #expect(ApplicationRelocator.shouldContinueReplacementRecovery(
             afterFailedTarget: failedTarget,
-            latestAction: .unchanged,
-            latestTargetHash: nil
+            latestEvaluation: .unchanged
         ))
     }
 

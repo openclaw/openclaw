@@ -118,6 +118,45 @@ describe("migrateScheduledToolPolicy", () => {
     ]);
   });
 
+  it("does not require tool authority for command payloads without a trigger", () => {
+    const policy = {
+      version: 1,
+      mode: "account",
+      ownerSessionKey: "agent:main:discord:group:ops",
+      ownerAccountId: "work",
+    };
+    const payload = { kind: "command", argv: ["sh", "-lc", "true"] };
+    const command = job({
+      name: "Command",
+      payload,
+      scheduledToolPolicy: structuredClone(policy),
+    });
+    const agent = job({ name: "Agent without authority", owner: undefined });
+    const triggered = job({
+      name: "Trigger without authority",
+      owner: undefined,
+      payload: { ...payload, toolsAllow: ["read"] },
+      trigger: { script: "json({ fire: true })" },
+    });
+
+    const result = normalizeStoredCronJobs([command, agent, triggered]);
+
+    expect(result.invalidScheduledToolPolicyJobs).toEqual([]);
+    expect(result.legacyScheduledToolPolicyJobs).toEqual([
+      "Agent without authority",
+      "Trigger without authority",
+    ]);
+    expect(command.scheduledToolPolicy).toEqual(policy);
+    expect(command.payload).toEqual({ kind: "command", argv: ["sh", "-lc", "true"] });
+    expect(command.toolsAllowProvenance).toBeUndefined();
+    expect(
+      formatScheduledToolPolicyAdvisory({
+        legacyJobs: result.legacyScheduledToolPolicyJobs,
+        invalidJobs: result.invalidScheduledToolPolicyJobs,
+      }),
+    ).not.toContain("Command");
+  });
+
   it("preserves valid trusted provenance", () => {
     const raw = job({ scheduledToolPolicy: { version: 1, mode: "trusted" } });
     const result = normalizeStoredCronJobs([raw]);
@@ -142,7 +181,7 @@ describe("migrateScheduledToolPolicy", () => {
         legacyJobs: result.legacyScheduledToolPolicyJobs,
         invalidJobs: result.invalidScheduledToolPolicyJobs,
       }),
-    ).toContain("openclaw cron edit <id> --tools");
+    ).toContain("openclaw automations edit <id> --tools");
   });
 
   it("reports alias-only Gateway exec jobs without converting their authority", () => {

@@ -2,14 +2,14 @@ import { isLoopbackIpAddress } from "@openclaw/net-policy/ip";
 import { isHttpUrl, isWebSocketUrl } from "@openclaw/net-policy/url-protocol";
 // Managed proxy lifecycle installs Proxyline, injects process proxy env, and
 // restores inherited/direct routing when owner handles stop.
-import {
-  installGlobalProxy,
-  type ProxylineBypassPolicy,
-  type ProxylineHandle,
-  type ProxylineUndiciOptions,
+import type {
+  ProxylineBypassPolicy,
+  ProxylineHandle,
+  ProxylineUndiciOptions,
 } from "@openclaw/proxyline";
 import type { ProxyConfig } from "../../../config/zod-schema.proxy.js";
 import { logInfo, logWarn } from "../../../logger.js";
+import { loadProxyline } from "../proxyline-runtime.js";
 import { forceResetGlobalDispatcher } from "../undici-global-dispatcher.js";
 import {
   getActiveManagedProxyLoopbackMode,
@@ -158,12 +158,7 @@ function resolveProxyUrl(config: ProxyConfig | undefined): string {
 }
 
 function redactProxyUrlForLog(value: string): string {
-  try {
-    const url = new URL(value);
-    return url.origin;
-  } catch {
-    return "<invalid proxy URL>";
-  }
+  return URL.parse(value)?.origin ?? "<invalid proxy URL>";
 }
 
 /** Reinstalls Proxyline routing in child processes that inherited active proxy env. */
@@ -181,7 +176,7 @@ export function ensureInheritedManagedProxyRoutingActive(): void {
   });
   const proxyTls = loadManagedProxyTlsOptionsSync(proxyCaFile);
   applyProxyEnv(proxyUrl, getActiveManagedProxyLoopbackMode() ?? "gateway-only", proxyCaFile);
-  proxylineHandle = installGlobalProxy({
+  proxylineHandle = loadProxyline().installGlobalProxy({
     mode: "managed",
     proxyUrl,
     ...(proxyTls ? { proxyTls } : {}),
@@ -217,11 +212,11 @@ export async function startProxy(config: ProxyConfig | undefined): Promise<Proxy
   }
   baseProxyEnvSnapshot ??= captureProxyEnv();
   const lifecycleBaseEnvSnapshot = baseProxyEnvSnapshot;
-  let registration: ActiveManagedProxyRegistration | null = null;
+  let registration: ActiveManagedProxyRegistration;
 
   try {
     applyProxyEnv(proxyUrl, loopbackMode, proxyCaFile);
-    proxylineHandle = installGlobalProxy({
+    proxylineHandle = loadProxyline().installGlobalProxy({
       mode: "managed",
       proxyUrl,
       ...(proxyTls ? { proxyTls } : {}),
@@ -235,9 +230,6 @@ export async function startProxy(config: ProxyConfig | undefined): Promise<Proxy
       proxyTls,
     });
   } catch (err) {
-    if (registration) {
-      stopActiveManagedProxyRegistration(registration);
-    }
     restoreInactiveProxyRuntime(lifecycleBaseEnvSnapshot);
     baseProxyEnvSnapshot = null;
     throw new Error(`proxy: failed to activate external proxy routing: ${String(err)}`, {
@@ -261,16 +253,15 @@ export async function stopProxy(handle: ProxyHandle | null): Promise<void> {
 }
 
 function isLoopbackProxyUrl(value: string): boolean {
-  try {
-    const url = new URL(value);
-    const hostname = url.hostname.toLowerCase().replace(/\.+$/, "");
-    return (
-      (isHttpUrl(url) || isWebSocketUrl(url)) &&
-      (hostname === "localhost" || isLoopbackIpAddress(hostname))
-    );
-  } catch {
+  const url = URL.parse(value);
+  if (!url) {
     return false;
   }
+  const hostname = url.hostname.toLowerCase().replace(/\.+$/, "");
+  return (
+    (isHttpUrl(url) || isWebSocketUrl(url)) &&
+    (hostname === "localhost" || isLoopbackIpAddress(hostname))
+  );
 }
 
 function assertManagedProxyAllowsLoopback(url: string, surface: string): void {

@@ -78,7 +78,7 @@ async function runDoctor(params: {
     await runPluginSessionStateDoctorRepairs({
       scan: scanner.result(),
       store: { kind: "legacy", path: storePath },
-      prompter: { confirmRuntimeRepair, note: vi.fn() },
+      prompter: { confirmRuntimeRepair },
       warnings,
       changes,
     });
@@ -420,7 +420,7 @@ describe("doctor session state provider routes", () => {
     await runPluginSessionStateDoctorRepairs({
       scan: scanner.result(),
       store: { kind: "sqlite", agentId: "ops", path: sqliteStorePath },
-      prompter: { confirmRuntimeRepair: vi.fn(async () => true), note: vi.fn() },
+      prompter: { confirmRuntimeRepair: vi.fn(async () => true) },
       warnings: [],
       changes: [],
     });

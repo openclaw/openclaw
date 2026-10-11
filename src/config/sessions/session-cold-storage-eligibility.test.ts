@@ -44,8 +44,8 @@ function addWindow(key: string, id: string, updatedAt = 1, transcriptAt: number 
     .run(id, key, updatedAt, transcriptAt);
 }
 
-function protect(beforeMs = cutoff) {
-  return readSessionColdStorageProtection({ db: database }, beforeMs);
+function protect(beforeMs = cutoff, liveSessionKeys: ReadonlySet<string> = new Set()) {
+  return readSessionColdStorageProtection({ db: database }, beforeMs, liveSessionKeys);
 }
 
 describe("cold-storage protection selection", () => {
@@ -56,15 +56,14 @@ describe("cold-storage protection selection", () => {
     }
     addWindow(idle.key, "recent-history", cutoff, null);
     addWindow(idle.key, "recent-transcript", cutoff - 1, cutoff);
-    addWindow(idle.key, "running-history", cutoff - 1, null);
-    database
-      .prepare("UPDATE session_windows SET status = 'running' WHERE session_id = ?")
-      .run("running-history");
+    const live = addNode("live-history");
+    addWindow(live.key, "running-history", cutoff - 1, null);
     const protectedNode = addNode("busy", { restartRecoveryBeforeAgentReplyState: "pending" });
     addWindow(protectedNode.key, "old-busy-history", cutoff - 1, null);
     const expected = new Set([
       "recent-history",
       "recent-transcript",
+      "live-history",
       "running-history",
       "busy",
       "old-busy-history",
@@ -92,14 +91,14 @@ describe("cold-storage protection selection", () => {
       return statement;
     });
     const parsed = vi.spyOn(JSON, "parse");
-    expect(protect()).toEqual(expected);
+    expect(protect(cutoff, new Set([live.key]))).toEqual(expected);
     expect(hydratedWindows).toBe(expected.size);
-    for (const { entryJson } of [idle, protectedNode]) {
+    for (const { entryJson } of [idle, live, protectedNode]) {
       expect(parsed.mock.calls.filter(([text]) => text === entryJson)).toHaveLength(1);
     }
   });
 
-  it("preserves each running and recent node/window protection source at the cutoff", () => {
+  it("preserves live keys and recent node/window protection sources at the cutoff", () => {
     for (const column of ["updated_at", "last_activity_at", "last_interaction_at"]) {
       addNode(column);
       database
@@ -111,19 +110,13 @@ describe("cold-storage protection selection", () => {
           .run(JSON.stringify({ sessionId: column, updatedAt: cutoff }), column);
       }
     }
-    addNode("running-node");
-    database
-      .prepare("UPDATE session_nodes SET status = 'running' WHERE current_session_id = ?")
-      .run("running-node");
+    const live = addNode("running-node");
     const { key } = addNode("old-node");
     addWindow(key, "recent-window", cutoff, null);
     addWindow(key, "recent-transcript", 1, cutoff);
-    addWindow(key, "running-window");
+    addWindow(live.key, "running-window");
     addWindow(key, "old-null-transcript", 1, null);
-    database
-      .prepare("UPDATE session_windows SET status = 'running' WHERE session_id = ?")
-      .run("running-window");
-    expect(protect()).toEqual(
+    expect(protect(cutoff, new Set([live.key]))).toEqual(
       new Set([
         "updated_at",
         "last_activity_at",

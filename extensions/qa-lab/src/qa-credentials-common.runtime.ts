@@ -34,10 +34,8 @@ export function normalizeQaCredentialConvexSiteUrl(params: {
   createError?: ErrorFactory;
 }): string {
   const createError = params.createError ?? Error;
-  let url: URL;
-  try {
-    url = new URL(params.raw);
-  } catch {
+  const url = URL.parse(params.raw);
+  if (!url) {
     throw createError(
       `OPENCLAW_QA_CONVEX_SITE_URL must be a valid URL, got "${params.raw || "<empty>"}".`,
     );
@@ -88,4 +86,15 @@ export function joinQaCredentialEndpoint(baseUrl: string, prefix: string, suffix
   url.search = "";
   url.hash = "";
   return url.toString();
+}
+
+export function parseQaCredentialResponsePayload(text: string) {
+  if (!text.trim()) {
+    return undefined;
+  }
+  try {
+    return JSON.parse(text) as unknown;
+  } catch {
+    return text;
+  }
 }

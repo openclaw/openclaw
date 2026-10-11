@@ -4,13 +4,13 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { detectWorktreeFilesystemBackend } from "./filesystem-backend.js";
 import { createCopyWorktreeBackend } from "./filesystem-backend.test-support.js";
 import type { WorktreeFilesystemBackend } from "./filesystem-backend.types.js";
 import { ManagedWorktreeService } from "./service.js";
 import { useManagedWorktreeTestRepository } from "./service.test-support.js";
-import { listTemplates } from "./template-registry.js";
+import { listTemplatesAsync } from "./template-registry-async.js";
 
 vi.mock("./filesystem-backend.js", () => ({ detectWorktreeFilesystemBackend: vi.fn() }));
 const execFileAsync = promisify(execFile);
@@ -42,10 +42,10 @@ async function gitMetadata(target: string) {
 describe("ManagedWorktreeService sparse isolation", () => {
   const initializeRepository = useManagedWorktreeTestRepository();
   const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
-    afterEach(() => {
+    afterEach(async () => {
       vi.restoreAllMocks();
       vi.unstubAllEnvs();
-      closeOpenClawStateDatabaseForTest();
+      await closeStateDatabaseForTest();
       cleanup();
     }),
   );
@@ -79,7 +79,10 @@ describe("ManagedWorktreeService sparse isolation", () => {
     const targets = new Map<string, string>([["repository", repo]]);
     const observe = async () => {
       const samples = [];
-      for (const target of [...targets.values(), ...listTemplates(env).map((t) => t.path)]) {
+      for (const target of [
+        ...targets.values(),
+        ...(await listTemplatesAsync(env)).map((t) => t.path),
+      ]) {
         samples.push(await gitMetadata(target));
       }
       expect(new Set(samples.map((s) => s.indexPath)).size).toBe(samples.length);
@@ -147,7 +150,7 @@ describe("ManagedWorktreeService sparse isolation", () => {
       fullB.path,
       fullD.path,
       companion.path,
-      ...listTemplates(env).map((t) => t.path),
+      ...(await listTemplatesAsync(env)).map((t) => t.path),
     ]) {
       expect(await read(target, "selected/source.txt")).toBe("selected\n");
       expect(await read(target, "excluded/source.txt")).toBe("excluded\n");

@@ -1,5 +1,4 @@
 import { ContextProvider, createContext } from "@lit/context";
-import { expectDefined } from "@openclaw/normalization-core";
 import { render } from "lit";
 /* @vitest-environment jsdom */
 import { afterEach, expect, it, vi } from "vitest";
@@ -60,13 +59,13 @@ it("uses the same user initials and identity hue in the roster and attributed ch
   });
   await vi.waitFor(async () => {
     await viewerAvatar.updateComplete;
-    const rosterInitials = viewerAvatar.querySelector(".viewer-avatar > span");
+    const rosterInitials = viewerAvatar.querySelector<HTMLElement>(".viewer-avatar > span");
     const chatInitials = chat.querySelector(".chat-author-avatar__initials");
     expect(rosterInitials?.textContent?.trim()).toBe(expected.initials);
     expect(chatInitials?.textContent?.trim()).toBe(expected.initials);
-    expect(rosterInitials?.getAttribute("style")).toContain(
-      `hsl(${expected.colorSeed % 360} 48% 42%)`,
-    );
+    const expectedStyle = document.createElement("span").style;
+    expectedStyle.background = `hsl(${expected.colorSeed % 360} 48% 42%)`;
+    expect(rosterInitials?.style.background).toBe(expectedStyle.background);
     expect(chatInitials?.getAttribute("style")).toContain(
       `--chat-author-avatar-hue: ${expected.colorSeed % 360}`,
     );
@@ -216,7 +215,6 @@ it("shares the current self avatar with typed owner faces missing a revision", a
     expect.objectContaining({ headers: { Authorization: "Bearer viewer-token" } }),
   );
   await resolveAvatarImageUrl(user.avatarUrl);
-  avatars.forEach((avatar) => avatar.requestUpdate());
   await Promise.all(avatars.map((avatar) => avatar.updateComplete));
   expect(avatars.map((avatar) => avatar.querySelector("img")?.getAttribute("src"))).toEqual([
     "blob:shared-viewer-avatar",
@@ -231,14 +229,12 @@ it("shares the current self avatar with typed owner faces missing a revision", a
     ...gateway.snapshot,
     selfUser: { ...user, avatarUrl: "/api/users/profile-ada/avatar?v=8" },
   });
-  expectDefined(avatars[0], "explicit revision avatar").requestUpdate();
   await Promise.all(avatars.map((avatar) => avatar.updateComplete));
   expect(fetchAvatar.mock.calls.map(([url]) => url)).toEqual([
     "https://gateway.example.test/api/users/profile-ada/avatar?v=7",
     "https://gateway.example.test/api/users/profile-ada/avatar?v=8",
   ]);
   await resolveAvatarImageUrl("/api/users/profile-ada/avatar?v=8");
-  avatars.forEach((avatar) => avatar.requestUpdate());
   await Promise.all(avatars.map((avatar) => avatar.updateComplete));
   expect(avatars.map((avatar) => avatar.querySelector("img")?.getAttribute("src"))).toEqual([
     "blob:shared-viewer-avatar",

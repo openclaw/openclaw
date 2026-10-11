@@ -1,6 +1,26 @@
+import fs from "node:fs/promises";
+import path from "node:path";
+import { configureAiTransportHost, getAiTransportHost } from "@openclaw/ai";
+import { cleanupSessionResources } from "@openclaw/ai/internal/runtime";
+import { supportsClaudeInHistorySystemMessages } from "@openclaw/llm-core/model-contracts/anthropic";
+import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
+import { expect } from "vitest";
+import {
+  assertStableProviderPrefix,
+  snapshotProviderPrefix,
+  type ProviderPrefixSnapshot,
+} from "../../scripts/e2e/lib/anthropic-cache/prefix-stability.mjs";
 import type { OpenClawConfig } from "../config/config.js";
-import type { LiveResolvedModel } from "./live-cache-test-support.js";
+import { loadAndActivateRootPluginRegistry } from "../plugins/loader.js";
+import { createPluginCache, retirePluginCache, withPluginCache } from "../plugins/plugin-cache.js";
+import { clearActivePluginRegistry } from "../plugins/runtime.js";
+import { clearEmbeddedSessionPromptStates } from "./embedded-agent-runner/session-prompt-state.js";
+import {
+  buildStableCachePrefix,
+  logLiveCache,
+  type LiveResolvedModel,
+} from "./live-cache-test-support.js";
 import { buildUsageWithNoCost } from "./stream-message-shared.js";
 
 function resolveProviderBaseUrl(model: LiveResolvedModel["model"]): string | undefined {
@@ -136,4 +156,199 @@ export function buildEmbeddedRunnerConfig(
       },
     },
   };
+}
+
+export async function runEmbeddedReleasePrefixScenario(
+  params: LiveResolvedModel & {
+    provider: "openai" | "anthropic";
+    sessionId: string;
+    agentDir: string;
+    workspaceDir: string;
+    probe: (config: OpenClawConfig, suffix: string) => Promise<AssistantMessage["usage"]>;
+    readTraceEvents: () => Promise<
+      Array<{
+        runId?: string;
+        stage?: string;
+        options?: {
+          requestGapMs?: number;
+          providerPrefix?: string;
+          changes?: Array<{ code?: string; detail?: string }>;
+        };
+      }>
+    >;
+  },
+): Promise<void> {
+  const { provider, sessionId, agentDir, workspaceDir } = params;
+  const fixture = { apiKey: params.apiKey, model: params.model };
+  const api = provider === "openai" ? "openai-responses" : "anthropic-messages";
+  if (provider === "anthropic") {
+    expect(supportsClaudeInHistorySystemMessages(fixture.model), "in-history Claude model").toBe(
+      true,
+    );
+  }
+  await fs.mkdir(workspaceDir, { recursive: true });
+  const pluginDir = path.join(workspaceDir, "cache-proof-plugin");
+  await fs.mkdir(pluginDir, { recursive: true });
+  await fs.writeFile(
+    path.join(pluginDir, "openclaw.plugin.json"),
+    JSON.stringify({
+      id: "cache-proof",
+      activation: { onStartup: true },
+      configSchema: { type: "object", properties: {}, additionalProperties: false },
+    }),
+  );
+  await fs.writeFile(
+    path.join(pluginDir, "index.cjs"),
+    `module.exports = { id: "cache-proof", register(api) {
+      api.on("before_prompt_build", (event) => ({
+        prependContext: "Synthetic prefix hook before: " + event.prompt,
+        appendContext: "Synthetic prefix hook after: " + event.prompt
+      }));
+    }};`,
+  );
+  const instructions = buildStableCachePrefix(`${provider}-release-prefix`, 96);
+  const config = buildEmbeddedRunnerConfig({
+    ...fixture,
+    agentDir,
+    cacheRetention: "short",
+    transport: "sse",
+  });
+  config.plugins = {
+    allow: [provider, "cache-proof"],
+    load: { paths: [pluginDir] },
+    entries: { "cache-proof": { enabled: true, hooks: { allowConversationAccess: true } } },
+    slots: { memory: "none" },
+  };
+  const host = getAiTransportHost();
+  const cache = createPluginCache();
+  const requests: Array<{ prefix: ProviderPrefixSnapshot; atMs: number }> = [];
+  const runs: Array<AssistantMessage["usage"]> = [];
+  let turn = 0;
+  let wireFailure: Error | undefined;
+  configureAiTransportHost({
+    ...host,
+    buildModelFetch: (...args) => {
+      const fetchModel = host.buildModelFetch(...args) ?? globalThis.fetch;
+      return async (input, init) => {
+        try {
+          expect(requests.length, "exactly one provider request per turn; no retries").toBe(turn);
+          const payload: unknown = await new Request(input, init).json();
+          const prefix = snapshotProviderPrefix(api, payload);
+          const atMs = Date.now();
+          const previous = requests.at(-1);
+          if (previous) {
+            assertStableProviderPrefix(previous.prefix, prefix, {
+              label: `${provider} release turn ${turn + 1}`,
+            });
+            expect(
+              atMs - previous.atMs,
+              "provider request gap below cache-expiry noise",
+            ).toBeLessThan(30_000);
+          }
+          const history = prefix.history.join("\n");
+          const marker = `Reply with exactly CACHE-OK release-turn-${turn + 1}.`;
+          expect(
+            history.includes(`Synthetic prefix hook before: ${marker}`),
+            "prepend hook reached wire",
+          ).toBe(true);
+          expect(
+            history.includes(`Synthetic prefix hook after: ${marker}`),
+            "append hook reached wire",
+          ).toBe(true);
+          if (turn >= 2) {
+            expect(
+              history.includes("Synthetic skill updated."),
+              "refreshed instructions reached history",
+            ).toBe(true);
+          }
+          requests.push({ prefix, atMs });
+        } catch (error) {
+          wireFailure ??= toErrorObject(error, "Provider prefix capture failed");
+          throw error;
+        }
+        return fetchModel(input, init);
+      };
+    },
+  });
+  try {
+    await withPluginCache(cache, async () => {
+      // Direct runner callers need the same hook activation owned by Gateway startup.
+      await loadAndActivateRootPluginRegistry({ config, workspaceDir, throwOnLoadError: true });
+      for (turn = 0; turn < 4; turn += 1) {
+        const revision = turn < 2 ? "initial" : "updated";
+        await fs.writeFile(
+          path.join(workspaceDir, "AGENTS.md"),
+          `${instructions}\n\n## Skills\nSynthetic skill ${revision}.\n## Temporal Context\nSynthetic day ${revision}.\n## Runtime\nSynthetic runtime ${revision}.\n`,
+        );
+        if (turn === 3) {
+          // Rehydrate the persisted prompt projection instead of retaining its warm cache.
+          clearEmbeddedSessionPromptStates([sessionId]);
+        }
+        // A cold transport sends the complete history instead of an HTTP response-id delta.
+        cleanupSessionResources(sessionId);
+        const run = await params.probe(config, `release-turn-${turn + 1}`);
+        if (wireFailure) {
+          throw wireFailure;
+        }
+        expect(requests.length, "captured provider request count").toBe(turn + 1);
+        const previous = runs.at(-1);
+        const previousPromptTokens = previous
+          ? previous.input + previous.cacheRead + previous.cacheWrite
+          : undefined;
+        logLiveCache(
+          JSON.stringify({
+            scenario: "release-prefix",
+            provider,
+            turn: turn + 1,
+            input: run.input,
+            cacheRead: run.cacheRead,
+            cacheWrite: run.cacheWrite,
+            output: run.output,
+            previousPromptTokens,
+            requestGapMs: turn ? requests[turn]!.atMs - requests[turn - 1]!.atMs : undefined,
+          }),
+        );
+        if (previousPromptTokens !== undefined) {
+          expect(previousPromptTokens, "provider minimum cacheable prefix").toBeGreaterThan(4_096);
+          expect(run.cacheRead, "reuse at least 80% of the previous prompt").toBeGreaterThanOrEqual(
+            Math.floor(previousPromptTokens * 0.8),
+          );
+        }
+        runs.push(run);
+      }
+    });
+    const events = await params.readTraceEvents();
+    const results = events.filter((event) => event.stage === "cache:result");
+    expect(results, "one cache diagnostic per provider request").toHaveLength(4);
+    for (const result of results) {
+      logLiveCache(
+        JSON.stringify({
+          scenario: "release-prefix-diagnostic",
+          provider,
+          runId: result.runId,
+          requestGapMs: result.options?.requestGapMs,
+          providerPrefix: result.options?.providerPrefix ?? "no-cache-drop",
+          changes: result.options?.changes?.map((change) => change.code) ?? [],
+        }),
+      );
+      expect(
+        result.options?.changes?.map((change) => change.code) ?? [],
+        "tracked cache input changes",
+      ).toEqual([]);
+    }
+  } catch (error) {
+    throw wireFailure ?? toErrorObject(error, "Live prefix scenario failed");
+  } finally {
+    configureAiTransportHost(host);
+    try {
+      cleanupSessionResources(sessionId);
+    } finally {
+      clearEmbeddedSessionPromptStates([sessionId]);
+      try {
+        await clearActivePluginRegistry();
+      } finally {
+        await retirePluginCache(cache);
+      }
+    }
+  }
 }

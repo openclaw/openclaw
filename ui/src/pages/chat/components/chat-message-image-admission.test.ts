@@ -69,7 +69,7 @@ const ticketResponse = () =>
   });
 
 function draw(images: ImageBlock[], options: ImageRenderOptions = {}) {
-  render(renderMessageImages(images, { onRequestUpdate, ...options }), container);
+  return render(renderMessageImages(images, { onRequestUpdate, ...options }), container);
 }
 
 async function loadAdmittedImage() {
@@ -186,46 +186,35 @@ it("loads an artifact thumbnail for the tile and distinct full bytes for the lig
   opened.release?.();
 });
 
-it.each(["assistant", "managed"] as const)(
-  "remounts a loaded %s image immediately without repeating viewport admission",
-  async (kind) => {
-    const source =
-      kind === "assistant"
-        ? `/tmp/${crypto.randomUUID()}.png`
-        : `/api/chat/media/outgoing/agent%3Amain%3Amain/${crypto.randomUUID()}/full`;
-    const fetch = vi.fn(async () => (kind === "assistant" ? ticketResponse() : imageResponse()));
+it.each(["assistant remount", "managed remount", "assistant reconnect"] as const)(
+  "restores a loaded image without another viewport admission: %s",
+  async (mode) => {
+    const managed = mode === "managed remount";
+    const source = managed
+      ? `/api/chat/media/outgoing/agent%3Amain%3Amain/${crypto.randomUUID()}/full`
+      : `/tmp/${crypto.randomUUID()}.png`;
+    const fetch = vi.fn(async () => (managed ? imageResponse() : ticketResponse()));
     vi.stubGlobal("fetch", fetch);
-    const images = [{ url: source, alt: "Loaded screenshot" }];
-    draw(images);
+    const images = [{ url: source, fileName: "Screenshot.png" }];
+    const root = draw(images);
     const loaded = await loadAdmittedImage();
     const src = loaded.getAttribute("src");
-    render(nothing, container);
-    draw(images);
+    if (mode === "assistant reconnect") {
+      root.setConnected(false);
+      expect(loaded.parentNode).toBeNull();
+      root.setConnected(true);
+    } else {
+      render(nothing, container);
+      draw(images);
+    }
     expect(container.querySelector(".chat-image-skeleton")).toBeNull();
     expect(container.querySelector("img")?.getAttribute("src")).toBe(src);
-    if (kind === "assistant") {
+    if (!managed) {
       expect(container.querySelector("img")).toBe(loaded);
     }
     expect(fetch).toHaveBeenCalledOnce();
   },
 );
-
-it("restores a native image when its retained Lit root reconnects without another render", async () => {
-  const source = `/tmp/${crypto.randomUUID()}.png`;
-  const fetch = vi.fn(async () => ticketResponse());
-  vi.stubGlobal("fetch", fetch);
-  const root = render(
-    renderMessageImages([{ url: source, fileName: "Screenshot.png" }], { onRequestUpdate }),
-    container,
-  );
-  const loaded = await loadAdmittedImage();
-  root.setConnected(false);
-  expect(loaded.parentNode).toBeNull();
-  root.setConnected(true);
-  expect(container.querySelector("img")).toBe(loaded);
-  expect(container.querySelector(".chat-image-skeleton")).toBeNull();
-  expect(fetch).toHaveBeenCalledOnce();
-});
 
 it.each([
   "authToken",

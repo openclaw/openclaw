@@ -19,8 +19,9 @@ import { renderCatalogGridSkeleton } from "./catalog-skeleton.ts";
 import { renderArtTile } from "./consent-dialog.ts";
 import type { PluginInstallProgress } from "./install-progress.ts";
 import {
-  renderPluginCardIdentity,
+  renderPluginAuthor,
   renderPluginCardSummary,
+  renderPluginOfficialBadge,
   renderPluginStateStatus,
 } from "./plugin-card.ts";
 import { renderPluginRowMessage, type PluginRowMessage } from "./plugin-row-message.ts";
@@ -40,9 +41,7 @@ export type PluginCatalogResultsProps = {
   categoriesError: string | null;
   onRetryCategories: () => void;
   featured: readonly PluginDiscoveryEntry[];
-  featuredLoading: boolean;
   trending: readonly PluginDiscoveryEntry[];
-  trendingLoading: boolean;
   loadingMore: boolean;
   loadMoreError: string | null;
   intent: PluginDiscoveryIntent;
@@ -140,7 +139,7 @@ const CATEGORY_ICONS: Readonly<Record<string, TemplateResult>> = {
 };
 
 function categoryIcon(icon: string | undefined): TemplateResult {
-  return (icon && CATEGORY_ICONS[icon]) || icons.box;
+  return (icon && Object.hasOwn(CATEGORY_ICONS, icon) && CATEGORY_ICONS[icon]) || icons.box;
 }
 
 function renderCatalogIcon(
@@ -168,12 +167,9 @@ export function formatCompactCount(value: number): string {
   if (value < 1_000) {
     return new Intl.NumberFormat().format(value);
   }
-  if (value < 1_000_000) {
-    const thousands = value / 1_000;
-    return `${thousands >= 100 ? Math.round(thousands) : Number(thousands.toFixed(1))}k`;
-  }
-  const millions = value / 1_000_000;
-  return `${millions >= 100 ? Math.round(millions) : Number(millions.toFixed(1))}m`;
+  const scale = value < 1_000_000 ? 1_000 : 1_000_000;
+  const count = value / scale;
+  return `${count >= 100 ? Math.round(count) : Number(count.toFixed(1))}${scale === 1_000 ? "k" : "m"}`;
 }
 
 function renderCatalogCard(
@@ -215,14 +211,13 @@ function renderCatalogCard(
         >
           ${renderCatalogIcon(plugin, props)}
         </span>
-        ${renderPluginCardIdentity({
-          name: plugin.catalog.name,
-          attribution: {
-            ...(plugin.catalog.author ? { author: plugin.catalog.author } : {}),
-            official: plugin.catalog.official,
-          },
-          linkedAuthor: true,
-        })}
+        <div class="installed-plugins-card__identity">
+          <div class="plugin-card-title-row">
+            <h3>${plugin.catalog.name}</h3>
+            ${plugin.catalog.official ? renderPluginOfficialBadge() : nothing}
+          </div>
+          ${renderPluginAuthor(plugin.catalog.author, { linked: true })}
+        </div>
       </div>
       <div class="plugin-catalog-card__action">
         ${
@@ -250,8 +245,11 @@ function renderCatalogCard(
   </article>`;
 }
 
-function renderError(error: string, onRetry: () => void): TemplateResult {
-  return html`<div class="callout danger oc-banner oc-banner-error" role="alert">
+function renderError(error: string, onRetry: () => void, warning = false): TemplateResult {
+  return html`<div
+    class=${warning ? "callout warning oc-banner" : "callout danger oc-banner oc-banner-error"}
+    role=${warning ? "status" : "alert"}
+  >
     <span>${formatUiExternalText(error)}</span>
     <button
       type="button"
@@ -354,6 +352,14 @@ function renderCategoryChips(props: PluginCatalogResultsProps): TemplateResult {
   </div>`;
 }
 
+function renderCatalogEmptyState(): TemplateResult {
+  return renderPanelEmptyState({
+    icon: icons.search,
+    heading: t("pluginsPage.noDiscoveryResults"),
+    description: t("pluginsPage.noDiscoveryResultsHint"),
+  });
+}
+
 function renderRawResults(props: PluginCatalogResultsProps): TemplateResult {
   const items = props.result?.items ?? [];
   if (props.loading) {
@@ -368,11 +374,7 @@ function renderRawResults(props: PluginCatalogResultsProps): TemplateResult {
     return html`<p class="plugin-catalog-results__empty">${t("pluginsPage.discoveryOffline")}</p>`;
   }
   if (items.length === 0) {
-    return renderPanelEmptyState({
-      icon: icons.search,
-      heading: t("pluginsPage.noDiscoveryResults"),
-      description: t("pluginsPage.noDiscoveryResultsHint"),
-    });
+    return renderCatalogEmptyState();
   }
   const official = items.filter((plugin) => plugin.catalog.official);
   const community = items.filter((plugin) => !plugin.catalog.official);
@@ -380,18 +382,14 @@ function renderRawResults(props: PluginCatalogResultsProps): TemplateResult {
     ${
       props.query.trim() && official.length > 0 && community.length > 0
         ? html`
-            ${renderSection({
-              id: "official",
-              title: t("pluginsPage.official"),
-              items: official,
-              props,
-            })}
-            ${renderSection({
-              id: "community",
-              title: t("pluginsPage.community"),
-              items: community,
-              props,
-            })}
+            ${(
+              [
+                ["official", official],
+                ["community", community],
+              ] as const
+            ).map(([id, entries]) =>
+              renderSection({ id, title: t(`pluginsPage.${id}`), items: entries, props }),
+            )}
           `
         : html`<div class="plugin-catalog-grid plugin-catalog-grid--results">
             ${repeat(
@@ -411,7 +409,7 @@ function renderRawResults(props: PluginCatalogResultsProps): TemplateResult {
               ?disabled=${props.loadingMore}
               @click=${props.onLoadMore}
             >
-              ${props.loadingMore ? t("pluginsPage.loadingMore") : t("pluginsPage.loadMore")}
+              ${t(props.loadingMore ? "pluginsPage.loadingMore" : "pluginsPage.loadMore")}
             </button>
           </div>`
         : nothing
@@ -430,19 +428,8 @@ function renderGroupedCatalog(props: PluginCatalogResultsProps): TemplateResult 
     items.some((plugin) =>
       categories.some((category) => plugin.catalog.categories.includes(category.slug)),
     );
-  if (
-    !hasAnySection &&
-    !props.loading &&
-    !props.featuredLoading &&
-    !props.trendingLoading &&
-    !props.error &&
-    !props.remoteError
-  ) {
-    return renderPanelEmptyState({
-      icon: icons.search,
-      heading: t("pluginsPage.noDiscoveryResults"),
-      description: t("pluginsPage.noDiscoveryResultsHint"),
-    });
+  if (!hasAnySection && !props.loading && !props.error && !props.remoteError) {
+    return renderCatalogEmptyState();
   }
   return html`
     ${props.error ? renderError(props.error, props.onRetry) : nothing}
@@ -451,7 +438,7 @@ function renderGroupedCatalog(props: PluginCatalogResultsProps): TemplateResult 
         id: intent,
         title: t(label),
         items: props[intent],
-        loading: props[`${intent}Loading`],
+        loading: props.loading,
         onViewAll: () => props.onIntentChange(intent),
         props,
       }),
@@ -474,8 +461,7 @@ function renderGroupedCatalog(props: PluginCatalogResultsProps): TemplateResult 
 }
 
 export function renderPluginCatalogResults(props: PluginCatalogResultsProps): TemplateResult {
-  const hasQuery = Boolean(props.query.trim());
-  const grouped = !hasQuery && props.intent === "all" && props.category === null;
+  const grouped = !props.query.trim() && props.intent === "all" && props.category === null;
   return html`<section class="plugin-catalog-results" aria-label=${t("pluginsPage.exploreTitle")}>
     <label class="plugin-catalog-search">
       <span aria-hidden="true">${icons.search}</span>
@@ -508,20 +494,7 @@ export function renderPluginCatalogResults(props: PluginCatalogResultsProps): Te
     </label>
     ${renderCategoryChips(props)}
     ${props.categoriesError ? renderError(props.categoriesError, props.onRetryCategories) : nothing}
-    ${
-      props.remoteError
-        ? html`<div class="callout warning oc-banner" role="status">
-            <span>${formatUiExternalText(props.remoteError)}</span>
-            <button
-              type="button"
-              class="btn btn--sm oc-action oc-action-secondary oc-banner-action"
-              @click=${props.onRetry}
-            >
-              ${t("pluginsPage.tryAgain")}
-            </button>
-          </div>`
-        : nothing
-    }
+    ${props.remoteError ? renderError(props.remoteError, props.onRetry, true) : nothing}
     <div class="plugin-catalog-results__body">
       ${grouped ? renderGroupedCatalog(props) : renderRawResults(props)}
     </div>

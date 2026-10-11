@@ -521,51 +521,41 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
 
     fileprivate func receiveMessage(_ message: WKScriptMessage) {
         switch message.name {
-        case Self.linkMessageHandlerName: self.receiveLinkMessage(message)
-        case Self.updateMessageHandlerName: self.receiveUpdateMessage(message)
-        case Self.commandsMessageHandlerName: self.receiveCommandsMessage(message)
-        case Self.notificationsMessageHandlerName: self.receiveNotificationsMessage(message)
-        case Self.gatewaysMessageHandlerName: self.receiveGatewaysMessage(message)
+        case Self.notificationsMessageHandlerName:
+            self.receiveNotificationsMessage(message)
+            return
+        case Self.gatewaysMessageHandlerName:
+            self.receiveGatewaysMessage(message)
+            return
         default: break
         }
-    }
-
-    private func receiveLinkMessage(_ message: WKScriptMessage) {
         // The page-world handler is privileged. Accept only the main frame of
         // the current Control UI path; reading tabs never receive it.
         guard message.webView === self.webView,
               message.frameInfo.isMainFrame,
-              ControlUIDocumentHost.isTrustedLinkSource(message.frameInfo.request.url, dashboardURL: self.currentURL),
-              let url = Self.linkRequest(from: message.body)
-        else {
-            return
+              ControlUIDocumentHost.isTrustedLinkSource(message.frameInfo.request.url, dashboardURL: self.currentURL)
+        else { return }
+        switch message.name {
+        case Self.linkMessageHandlerName:
+            guard let url = Self.linkRequest(from: message.body) else { return }
+            // Older Control UI bundles still post inline; Mac tabs now use openclawBrowser.
+            ControlUIDocumentHost.openExternal(url)
+        case Self.updateMessageHandlerName:
+            guard Self.isStartUpdateRequest(message.body), let updater else { return }
+            // Eligibility is cached at setup; update.channel or launchd ownership may have changed.
+            guard DashboardManager.updateBridgeEnabled(mode: AppStateStore.shared.connectionMode) else {
+                self.setUpdateBridgeEnabled(false)
+                // Return this click to the Gateway updater after withdrawing the native bridge.
+                self.webView.evaluateJavaScript(ControlUIDocumentHost.scopedDashboardScript(
+                    "window.dispatchEvent(new CustomEvent('openclaw:native-update-declined'))",
+                    url: self.currentURL))
+                return
+            }
+            updater.checkForUpdates(nil)
+        case Self.commandsMessageHandlerName:
+            self.refreshNativeCommandReadiness()
+        default: break
         }
-
-        // Older Control UI bundles still post inline; Mac tabs now use openclawBrowser.
-        ControlUIDocumentHost.openExternal(url)
-    }
-
-    private func receiveUpdateMessage(_ message: WKScriptMessage) {
-        guard message.webView === self.webView,
-              message.frameInfo.isMainFrame,
-              ControlUIDocumentHost.isTrustedLinkSource(message.frameInfo.request.url, dashboardURL: self.currentURL),
-              Self.isStartUpdateRequest(message.body),
-              let updater
-        else {
-            return
-        }
-        // Eligibility is cached at window setup, but update.channel or launchd
-        // ownership can change while the dashboard stays open. Revalidate here.
-        guard DashboardManager.updateBridgeEnabled(mode: AppStateStore.shared.connectionMode) else {
-            self.setUpdateBridgeEnabled(false)
-            // JS treated its posted message as handled; return this click to
-            // the gateway updater after withdrawing the native bridge.
-            self.webView.evaluateJavaScript(ControlUIDocumentHost.scopedDashboardScript(
-                "window.dispatchEvent(new CustomEvent('openclaw:native-update-declined'))",
-                url: self.currentURL))
-            return
-        }
-        updater.checkForUpdates(nil)
     }
 
     static func isStartUpdateRequest(_ body: Any) -> Bool {
@@ -883,7 +873,7 @@ extension DashboardWindowController {
         self.prepareForFailure(preservingPendingCommands: preservingPendingCommands || self.signedOut != nil)
         self.pendingNativeNavigation = pendingNavigation
         if self.signedOut == nil { self.currentURL = URL(string: "about:blank")! }
-        self.auth = DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil)
+        self.auth = .unauthenticated
         self.setUpdateBridgeEnabled(false)
         self.refreshNativeScripts()
         self.webView.stopLoading()
@@ -975,13 +965,6 @@ extension DashboardWindowController {
         // Personal browser sign-in requires the current Control UI's listener-owned fact.
         self.documentHost.hasLiveContent && self.pendingGatewaySwitch == nil && self.isTrustedDashboardDocument &&
             (!self.auth.usesBrowserIdentity || self.nativeCommandsReady)
-    }
-
-    private func receiveCommandsMessage(_ message: WKScriptMessage) {
-        guard message.webView === self.webView, message.frameInfo.isMainFrame,
-              ControlUIDocumentHost.isTrustedLinkSource(message.frameInfo.request.url, dashboardURL: self.currentURL)
-        else { return }
-        self.refreshNativeCommandReadiness()
     }
 
     private func refreshNativeCommandReadiness() {

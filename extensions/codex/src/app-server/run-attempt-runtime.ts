@@ -18,13 +18,13 @@ import {
   resolveCodexAppServerHookChannelId,
   shouldEnableCodexAppServerNativeToolSurface,
 } from "./dynamic-tool-build.js";
+import { prepareCodexNativeExecutionPolicyForRun } from "./native-execution-policy.js";
 import {
   assertCodexNativeHookRelayAllowed,
   CodexManagedHooksOnlyError,
 } from "./native-hook-relay.js";
 import { resolveCodexProviderWebSearchSupport } from "./provider-capabilities.js";
 import { isCodexResponsesOAuth } from "./responses-oauth.js";
-import { prewarmCodexAttemptClient } from "./run-attempt-client-prewarm.js";
 import type { CodexAttemptConnection } from "./run-attempt-connection.js";
 import {
   assertScheduledCodexAppAuthorityRuntime,
@@ -33,10 +33,13 @@ import {
 import { canResolveScheduledConfiguredMcpCreatorAuthority } from "./scheduled-configured-mcp-authority.js";
 import {
   createIsolatedCodexAppServerClient,
+  getLeasedSharedCodexAppServerClient,
+  getSharedCodexAppServerClient,
   releaseLeasedSharedCodexAppServerClient,
+  type CodexAppServerClientOptions,
 } from "./shared-client.js";
 import { fingerprintJsonObject } from "./thread-fingerprints.js";
-import { resolveCodexAppServerThreadModelSelection } from "./thread-lifecycle.js";
+import { resolveCodexAppServerThreadModelSelection } from "./thread-model-selection.js";
 import { resolveCodexWebSearchPlan, type CodexNativeWebSearchSupport } from "./web-search.js";
 
 export async function prepareCodexAttemptRuntime(connection: CodexAttemptConnection) {
@@ -72,11 +75,44 @@ export async function prepareCodexAttemptRuntime(connection: CodexAttemptConnect
       : undefined;
   assertScheduledCodexAppAuthorityRuntime(connection, params);
   const attemptAuthProfileStore = preparedAuthBinding?.authProfileStore ?? params.authProfileStore;
-  prewarmCodexAttemptClient({
-    connection,
+  const clientOptions: CodexAppServerClientOptions = {
+    startOptions: appServer.start,
+    pluginConfig,
+    ...(startupPreparedAuth
+      ? { preparedAuth: startupPreparedAuth }
+      : { authProfileId: startupClientAuthProfileId }),
+    authRequirement: connection.startupAuthRequirement,
     authProfileStore: attemptAuthProfileStore,
     authBindingFingerprint: preparedAuthBinding?.fingerprint,
-  });
+    ...(connection.runtimeArtifactRequest
+      ? {
+          runtimeArtifactMode: "capture" as const,
+          ...(connection.runtimeArtifactRequest.expected
+            ? { expectedRuntimeArtifact: connection.runtimeArtifactRequest.expected }
+            : {}),
+        }
+      : {}),
+    agentDir,
+    config: params.config,
+    abandonSignal: runAbortController.signal,
+    timeoutMs: appServer.requestTimeoutMs,
+  };
+  if (
+    !connection.options.clientFactory &&
+    attemptClientFactory === getLeasedSharedCodexAppServerClient &&
+    !connection.runtimeArtifactRequest
+  ) {
+    // Startup later leases this same keyed client. Start process/auth initialization
+    // while tools and prompt context are still being prepared.
+    void getSharedCodexAppServerClient({
+      ...clientOptions,
+      // Process startup retains the existing synchronous boot-admission guard.
+      assertCurrent: connection.assertLegacyCurrent,
+    }).catch((error: unknown) => {
+      // Startup owns retry/error handling; prewarm failure cannot fail the turn early.
+      embeddedAgentLog.debug("codex app-server client prewarm failed", { error });
+    });
+  }
   const effectiveContextWindowInfo = usesSupervisionConnection
     ? undefined
     : params.contextWindowInfo;
@@ -152,9 +188,8 @@ export async function prepareCodexAttemptRuntime(connection: CodexAttemptConnect
             agentDir,
             config: params.config,
           });
-  const startupEnvApiKeyCacheKey = usesSupervisionConnection
-    ? undefined
-    : startupPreparedAuth || startupAuthProfileId
+  const startupEnvApiKeyCacheKey =
+    usesSupervisionConnection || startupPreparedAuth || startupAuthProfileId
       ? undefined
       : resolveCodexAppServerFallbackApiKeyCacheKey({ startOptions: appServer.start });
   preDynamicStartupStages.mark("auth-cache");
@@ -219,10 +254,21 @@ export async function prepareCodexAttemptRuntime(connection: CodexAttemptConnect
     });
   preDynamicStartupStages.mark("bundle-mcp");
   const sandboxExecServerEnabled = isCodexSandboxExecServerEnabled(pluginConfig, sandbox);
+  const nativeExecutionPolicy = await prepareCodexNativeExecutionPolicyForRun(runtimeParams, {
+    agentId: policyAgentId,
+    runtimeSessionKey: sandboxSessionKey,
+    sandbox,
+  });
+  connection.assertCurrent();
   let nativeToolSurfaceEnabled = shouldEnableCodexAppServerNativeToolSurface(
     runtimeParams,
     sandbox,
-    { agentId: policyAgentId, runtimeSessionKey: sandboxSessionKey, sandboxExecServerEnabled },
+    {
+      agentId: policyAgentId,
+      runtimeSessionKey: sandboxSessionKey,
+      sandboxExecServerEnabled,
+      nativeExecutionPolicy,
+    },
   );
   if (
     nativeToolSurfaceEnabled &&
@@ -231,28 +277,9 @@ export async function prepareCodexAttemptRuntime(connection: CodexAttemptConnect
     params.hostCapabilities.retainSourceAuthority
   ) {
     const client = await attemptClientFactory({
+      ...clientOptions,
       assertCurrent: connection.assertCurrent,
-      startOptions: appServer.start,
-      pluginConfig,
-      ...(startupPreparedAuth
-        ? { preparedAuth: startupPreparedAuth }
-        : { authProfileId: startupClientAuthProfileId }),
-      authRequirement: connection.startupAuthRequirement,
-      authProfileStore: attemptAuthProfileStore,
-      authBindingFingerprint: preparedAuthBinding?.fingerprint,
-      ...(connection.runtimeArtifactRequest
-        ? {
-            runtimeArtifactMode: "capture" as const,
-            ...(connection.runtimeArtifactRequest.expected
-              ? { expectedRuntimeArtifact: connection.runtimeArtifactRequest.expected }
-              : {}),
-          }
-        : {}),
       agentId: sessionAgentId,
-      agentDir,
-      config: params.config,
-      abandonSignal: runAbortController.signal,
-      timeoutMs: appServer.requestTimeoutMs,
     });
     try {
       connection.assertCurrent();
@@ -348,8 +375,10 @@ export async function prepareCodexAttemptRuntime(connection: CodexAttemptConnect
   }
   const hookChannelId = resolveCodexAppServerHookChannelId(params, sandboxSessionKey);
   preDynamicStartupStages.mark("context-engine-support");
+  nativeExecutionPolicy.assertCurrent();
   return {
     connection,
+    clientOptions,
     preparedAuthBinding,
     runtimeParams,
     effectiveContextWindowInfo,
@@ -367,6 +396,7 @@ export async function prepareCodexAttemptRuntime(connection: CodexAttemptConnect
     codexMcpToolOverrides,
     sandboxExecServerEnabled,
     nativeToolSurfaceEnabled,
+    nativeExecutionPolicy,
     nativeProviderWebSearchSupport,
     hookChannelId,
   };

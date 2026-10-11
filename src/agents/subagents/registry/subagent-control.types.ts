@@ -1,12 +1,20 @@
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 
+export type ResolvedSubagentController = {
+  controllerSessionKey: string;
+  controllerAgentId?: string;
+  callerSessionKey: string;
+  callerIsSubagent: boolean;
+  controlScope: "children" | "none";
+};
+
 export type SubagentCancellationControl = {
   assertCurrent: () => void;
   prepareRead?: () => Promise<void> | undefined;
 };
 
 export const SUBAGENT_KILL_TASK_ERROR = "Subagent run killed.";
-export type SubagentTerminalState = {
+type SubagentTerminalState = {
   status: "succeeded" | "failed" | "timed_out" | "cancelled";
   endedAt: number;
   error?: string;

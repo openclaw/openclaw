@@ -1,5 +1,6 @@
 import CryptoKit
 import Foundation
+import Synchronization
 #if canImport(Security)
 import Security
 #endif
@@ -21,14 +22,7 @@ public enum GatewayDeviceIdentityProfile: String, Sendable {
     }
 
     var authFileName: String {
-        switch self {
-        case .primary:
-            "device-auth.json"
-        case .node:
-            "node-device-auth.json"
-        case .shareExtension:
-            "share-device-auth.json"
-        }
+        self.identityFileName.replacingOccurrences(of: ".json", with: "-auth.json")
     }
 }
 
@@ -66,8 +60,7 @@ struct DeviceIdentityStateRootState {
 
 enum DeviceIdentityPaths {
     @TaskLocal static var scopedStateDirURL: URL?
-    private static let configuredStateLock = NSLock()
-    private nonisolated(unsafe) static var configuredState = DeviceIdentityStateRootState()
+    private static let configuredState = Mutex(DeviceIdentityStateRootState())
 
     /// Entitlements are fixed by the code signature for the lifetime of the process.
     private static let appGroupStateDirAvailable =
@@ -83,7 +76,7 @@ enum DeviceIdentityPaths {
     }
 
     static func configureStateDirURL(_ url: URL) -> Bool {
-        self.configuredStateLock.withLock { self.configuredState.configure(url) }
+        self.configuredState.withLock { $0.configure(url) }
     }
 
     static func stateDirURL(
@@ -111,7 +104,7 @@ enum DeviceIdentityPaths {
         if let scopedStateDirURL {
             return scopedStateDirURL
         }
-        if let configured = self.configuredStateLock.withLock({ self.configuredState.resolve() }) {
+        if let configured = self.configuredState.withLock({ $0.resolve() }) {
             return configured
         }
         if let raw = getenv("OPENCLAW_STATE_DIR") {
@@ -222,10 +215,6 @@ public enum DeviceIdentityStore {
             userInfo: [NSLocalizedDescriptionKey: message])
     }
 
-    public static func loadOrCreate() -> DeviceIdentity {
-        self.loadOrCreate(profile: .primary)
-    }
-
     @discardableResult
     public static func configureStateDirectory(_ url: URL) -> Bool {
         DeviceIdentityPaths.configureStateDirURL(url)
@@ -253,7 +242,7 @@ public enum DeviceIdentityStore {
     }
     #endif
 
-    public static func loadOrCreate(profile: GatewayDeviceIdentityProfile) -> DeviceIdentity {
+    public static func loadOrCreate(profile: GatewayDeviceIdentityProfile = .primary) -> DeviceIdentity {
         do {
             return try self.loadOrCreatePersistedOrThrow(profile: profile)
         } catch {

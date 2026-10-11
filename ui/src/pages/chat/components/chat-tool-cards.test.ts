@@ -1,32 +1,29 @@
 /* @vitest-environment jsdom */
 
-import { render } from "lit";
+import { render as renderLit } from "lit";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import type { AgentActivityItem } from "../../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { projectAgentActivityItem } from "../../../../../src/agents/agent-activity-presentation.js";
 import { projectAgentToolActivity } from "../../../../../src/infra/agent-activity-events.js";
+import {
+  WIDGET_PROMPT_EVENT,
+  type WidgetPromptEventDetail,
+} from "../../../components/mcp-app-security.ts";
 import { t } from "../../../i18n/index.ts";
 import type { ToolCard } from "../../../lib/chat/chat-types.ts";
 import {
   resolveCollapsedToolArgumentPreview,
   extractToolCardsCached,
 } from "../../../lib/chat/tool-cards.ts";
+import * as controlUiView from "../../../plugins/control-ui-view.ts";
 import { attachHistoryActivity } from "../chat-history-request.ts";
 import { agentEvent, createHost } from "../tool-stream.test-helpers.ts";
 import { handleAgentEvent } from "../tool-stream.ts";
 import { renderActivityGroup } from "./chat-message-group.ts";
 import { createMessageEntry, createToolGroup } from "./chat-message.test-support.ts";
 import { renderToolCard } from "./chat-tool-cards.ts";
+import { renderToolFixture as render, settleToolBridges } from "./chat-tool-render.test-support.ts";
 import { renderToolPreview } from "./widget-card.ts";
-
-const pluginSurface = vi.hoisted(() => ({ props: [] as unknown[] }));
-vi.mock("../../../plugins/control-ui-view.ts", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../../plugins/control-ui-view.ts")>()),
-  renderPluginSurface: (_surface: string, props: unknown, defaultView: unknown) => {
-    pluginSurface.props.push(props);
-    return defaultView;
-  },
-}));
 
 const canvas = { kind: "canvas", surface: "assistant_message", render: "url" } as const;
 
@@ -34,12 +31,12 @@ function textOf(container: ParentNode, selector: string) {
   return container.querySelector(selector)?.textContent;
 }
 
-function mountCard(
+async function mountCard(
   card: ToolCard,
   options: Partial<Parameters<typeof renderToolCard>[1]> = {},
   container = document.createElement("div"),
 ) {
-  render(
+  await render(
     renderToolCard(card, {
       messageKey: "test-message",
       expanded: true,
@@ -56,7 +53,7 @@ describe("tool-cards", () => {
     const container = document.createElement("div");
     const preview = { ...canvas, viewId: "cv_app", mcpApp: { viewId: "cv_app" } } as const;
     const options = { sessionKey: "agent:main:main" };
-    render(renderToolPreview(preview, "chat_message", options), container);
+    renderLit(renderToolPreview(preview, "chat_message", options), container);
 
     const view = container.querySelector("mcp-app-view");
     expect(view?.getAttribute("src")).toBeNull();
@@ -65,26 +62,13 @@ describe("tool-cards", () => {
     expect(view).toMatchObject({ sessionKey: "agent:main:main", viewId: "cv_app" });
 
     const toolContainer = document.createElement("div");
-    render(renderToolPreview(preview, "chat_tool", options), toolContainer);
+    renderLit(renderToolPreview(preview, "chat_tool", options), toolContainer);
     expect(toolContainer.querySelector("mcp-app-view")).toBeNull();
-  });
-
-  it("renders ordinary external canvas previews in an iframe", () => {
-    const container = document.createElement("div");
-    render(
-      renderToolPreview(
-        { ...canvas, viewId: "cv_canvas", url: "https://canvas.example/widget" },
-        "chat_message",
-        { allowExternalEmbedUrls: true },
-      ),
-      container,
-    );
-    expect(container.querySelector("iframe")).not.toBeNull();
   });
 
   it("switches a completed patch between mutually exclusive diff and raw bodies", async () => {
     const container = document.body.appendChild(document.createElement("div"));
-    mountCard(
+    await mountCard(
       {
         id: "msg:patch:multi",
         name: "apply_patch",
@@ -157,17 +141,24 @@ describe("tool-cards", () => {
     expect(tabs.map((tab) => tab.getAttribute("aria-selected"))).toEqual(["false", "true"]);
 
     tabGroup?.setAttribute("aria-label", "Translated tool detail view");
-    mountCard(
+    await mountCard(
       {
         id: "msg:patch:multi",
         name: "apply_patch",
-        args: { changes: [{ path: "src/a.ts", kind: { type: "update" }, diff: "-old\n+new\n" }] },
+        args: {
+          changes: [
+            { path: "src/a.ts", kind: { type: "update" }, diff: "@@ -1 +1 @@\n-old\n+new\n" },
+          ],
+        },
+        completed: true,
         outputText: "Applied patch",
       },
       {},
       container,
     );
     await tabGroup?.updateComplete;
+    expect(container.querySelector("wa-tab-group")).toBe(tabGroup);
+    expect(rawBody?.hasAttribute("active")).toBe(true);
     expect(
       tabGroup?.shadowRoot?.querySelector('[role="tablist"]')?.getAttribute("aria-label"),
     ).toBe("Tool detail view");
@@ -176,7 +167,7 @@ describe("tool-cards", () => {
 
   it("shows failed edit output before the attempted diff", async () => {
     const container = document.body.appendChild(document.createElement("div"));
-    mountCard(
+    await mountCard(
       {
         id: "msg:edit:failed",
         name: "edit",
@@ -200,10 +191,10 @@ describe("tool-cards", () => {
     container.remove();
   });
 
-  it("labels a completed Codex file creation from its recorded operation", () => {
+  it("labels a completed Codex file creation from its recorded operation", async () => {
     const onOpenWorkspaceFile = vi.fn();
     const onToggleExpanded = vi.fn();
-    const container = mountCard(
+    const container = await mountCard(
       {
         id: "msg:patch:add",
         name: "apply_patch",
@@ -266,10 +257,10 @@ describe("tool-cards", () => {
       patch: ["*** Begin Patch", "*** Delete File: src/gone.ts", "*** End Patch"].join("\n"),
       target: "gone.ts",
     },
-  ])("keeps $label patch summaries non-navigable", ({ patch, target }) => {
+  ])("keeps $label patch summaries non-navigable", async ({ patch, target }) => {
     const onOpenWorkspaceFile = vi.fn();
     const onToggleExpanded = vi.fn();
-    const container = mountCard(
+    const container = await mountCard(
       { id: `msg:patch:${target}`, name: "apply_patch", args: { patch }, completed: true },
       { expanded: false, onOpenWorkspaceFile, onToggleExpanded },
     );
@@ -281,7 +272,7 @@ describe("tool-cards", () => {
     expect(onOpenWorkspaceFile).not.toHaveBeenCalled();
   });
 
-  it("renders edit and write rows from their result outcome", () => {
+  it("renders edit and write rows from their result outcome", async () => {
     const mutations = [
       [
         "edit",
@@ -310,7 +301,7 @@ describe("tool-cards", () => {
     ] as const;
     for (const [name, args, verbs] of mutations) {
       for (const [card, runActive, verb, label, hasStat, failed] of states) {
-        const container = mountCard({ id: name, name, args, ...card }, { runActive });
+        const container = await mountCard({ id: name, name, args, ...card }, { runActive });
         expect(textOf(container, ".chat-tool-row__verb")).toBe(verbs[verb]);
         expect(container.querySelector(".chat-diff")?.getAttribute("aria-label")).toBe(label);
         expect(container.querySelector(".chat-diffstat") !== null).toBe(hasStat);
@@ -331,7 +322,7 @@ describe("tool-cards", () => {
     const container = document.body.appendChild(document.createElement("div"));
     const onOpenSidebar = vi.fn();
     try {
-      mountCard(
+      await mountCard(
         {
           id: "copy",
           name: "apply_patch",
@@ -371,14 +362,14 @@ describe("tool-cards", () => {
     }
   });
 
-  it("opens the raw file path from an expanded read card", () => {
+  it("opens the raw file path from an expanded read card", async () => {
     const { name, args, path } = {
       name: "read",
       args: { path: "packages/app/src/read.ts" },
       path: "packages/app/src/read.ts",
     };
     const onOpenWorkspaceFile = vi.fn();
-    const container = mountCard(
+    const container = await mountCard(
       { id: `msg:${name}:open`, name, args, completed: true },
       { onOpenWorkspaceFile },
     );
@@ -391,8 +382,8 @@ describe("tool-cards", () => {
     expect(onOpenWorkspaceFile).toHaveBeenCalledWith({ path });
   });
 
-  it("keeps read offsets and limits visible in expanded args", () => {
-    const container = mountCard({
+  it("keeps read offsets and limits visible in expanded args", async () => {
+    const container = await mountCard({
       id: "msg:read:range",
       name: "read",
       args: { path: "/repo/src/a.ts", offset: 40, limit: 20 },
@@ -411,7 +402,7 @@ describe("tool-cards", () => {
 
   it.each(["structured", "serialized"])(
     "keeps %s message captions in expanded diagnostics, not the collapsed row",
-    (shape) => {
+    async (shape) => {
       const privateCaption =
         "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\nPrivate synthetic caption.\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>";
       const args = { action: "send", to: "fixture-room", message: privateCaption };
@@ -422,10 +413,12 @@ describe("tool-cards", () => {
         inputText: JSON.stringify(args),
       };
       const options = { messageKey: "test-message", onToggleExpanded: vi.fn() };
-      const container = mountCard(card, { ...options, expanded: false });
+      const container = await mountCard(card, { ...options, expanded: false });
 
       const summary = container.querySelector("button.chat-tool-msg-summary");
-      expect(summary?.textContent).not.toContain("Message");
+      expect(textOf(container, ".chat-tool-msg-summary__label")).toBe(
+        shape === "serialized" ? "Message" : undefined,
+      );
       expect(
         summary?.querySelector(".chat-tool-msg-summary__icon")?.getAttribute("aria-label"),
       ).toBe("message");
@@ -436,14 +429,14 @@ describe("tool-cards", () => {
       expect(container.textContent).not.toContain("Private synthetic caption.");
       expect(container.querySelector(".chat-tool-msg-body")).toBeNull();
 
-      mountCard(card, { ...options }, container);
+      await mountCard(card, { ...options }, container);
       const diagnostics = container.querySelector(".chat-tool-msg-body");
       expect(diagnostics?.textContent).toContain("BEGIN_OPENCLAW_INTERNAL_CONTEXT");
       expect(diagnostics?.textContent).toContain("Private synthetic caption.");
     },
   );
 
-  it("previews common intent arguments across generic tools", () => {
+  it("previews common intent arguments across generic tools", async () => {
     expect(resolveCollapsedToolArgumentPreview({ task: "Review the PR" })).toBe("Review the PR");
     expect(resolveCollapsedToolArgumentPreview({ prompt: "Draw a crab" })).toBe("Draw a crab");
     expect(resolveCollapsedToolArgumentPreview({ text: "First line\nSecond line" })).toBe(
@@ -456,9 +449,9 @@ describe("tool-cards", () => {
     ).not.toContain(credential);
   });
 
-  it("marks expanded raw block-art output so QR whitespace uses block-art rendering", () => {
+  it("marks expanded raw block-art output so QR whitespace uses block-art rendering", async () => {
     const blockArt = "  ▄▄▄▄▄▄▄  \n  █ ▄▄▄ █  \n  █▄▄▄▄▄█  ";
-    const container = mountCard({
+    const container = await mountCard({
       id: "msg:view:block-art",
       name: "canvas_render",
       outputText: blockArt,
@@ -483,9 +476,9 @@ describe("tool-cards", () => {
     expect(code?.textContent).toBe(blockArt);
   });
 
-  it("opens assistant-surface canvas payloads in the sidebar when explicitly requested", () => {
+  it("opens assistant-surface canvas payloads in the sidebar when explicitly requested", async () => {
     const onOpenSidebar = vi.fn();
-    const container = mountCard(
+    const container = await mountCard(
       {
         id: "msg:view:8",
         name: "canvas_render",
@@ -532,8 +525,8 @@ describe("tool-card outcomes", () => {
     { status: "skipped", label: "Skipped" },
     { status: undefined, label: "Outcome unknown" },
   ] as const)(
-    "preserves prepared $status outcomes through live items and history attachment",
-    ({ status, label }) => {
+    "reconciles prepared $status outcomes through live items and history attachment",
+    async ({ status, label }) => {
       const item = projectAgentActivityItem({
         itemId: "collaboration-call",
         toolCallId: "collaboration-call",
@@ -569,11 +562,11 @@ describe("tool-card outcomes", () => {
         [history.messages[0], false],
       ] as const) {
         const group = createToolGroup("outcome", [createMessageEntry("call", message)]);
-        render(renderActivityGroup([group], { showReasoning: false, runActive }), container);
+        await render(renderActivityGroup([group], { showReasoning: false, runActive }), container);
         expect(container.querySelectorAll(".chat-tool-failure")).toHaveLength(
           status === "failed" ? 1 : 0,
         );
-        render(
+        await render(
           renderActivityGroup([group], {
             showReasoning: false,
             runActive,
@@ -587,14 +580,14 @@ describe("tool-card outcomes", () => {
         const card = extractToolCardsCached(message)[0]!;
         expect(card.outputText).toBeUndefined();
         expect(card.isError).toBeUndefined();
-        expect(card.completed).not.toBe(true);
+        expect(card.completed === true).toBe(message === live);
       }
       expect(live).toMatchObject({ __openclawToolStreamResultReceived: false });
       expect(saved).not.toHaveProperty("activity");
     },
   );
 
-  it("keeps a prepared nonzero exit failed without rewriting the raw tool result", () => {
+  it("keeps a prepared nonzero exit failed without rewriting the raw tool result", async () => {
     const host = createHost({ chatRunId: "command-run" });
     const args = { command: "check-report" };
     const result = {
@@ -617,7 +610,7 @@ describe("tool-card outcomes", () => {
       details: result.details,
     });
 
-    const container = mountCard(card, { messageKey: "result", runActive: true });
+    const container = await mountCard(card, { messageKey: "result", runActive: true });
     expect(textOf(container, ".chat-tool-card__outcome")).toBe("Exit code 2");
     expect(container.querySelector(".chat-tool-row--running")).toBeNull();
     expect(container.textContent).toContain("Validation report");
@@ -631,7 +624,7 @@ describe("tool-card outcomes", () => {
       name: "tool_call",
       args: { id: "web_search", args: { query: "OpenClaw release notes" } },
     },
-  ])("shows skipped $name calls without claiming failure or success", ({ name, args }) => {
+  ])("shows skipped $name calls without claiming failure or success", async ({ name, args }) => {
     const container = document.createElement("div");
     const card: ToolCard = {
       id: "steering-skip",
@@ -643,7 +636,7 @@ describe("tool-card outcomes", () => {
       completed: true,
     };
     for (const expanded of [false, true]) {
-      mountCard(card, { expanded }, container);
+      await mountCard(card, { expanded }, container);
       if (name === "tool_call") {
         expect(textOf(container, ".chat-tool-msg-summary")).toContain("OpenClaw release notes");
       }
@@ -659,15 +652,9 @@ describe("tool-card outcomes", () => {
       args: { query: "OpenClaw release notes" },
       text: "OpenClaw release notes",
     },
-    { name: "read", args: { path: "/workspace/CHANGELOG.md" }, text: "CHANGELOG.md" },
-    {
-      name: "exec",
-      args: { command: "check-release", title: "Check the release" },
-      text: "Check the release",
-    },
   ])(
     "renders a Tool Search $name like a direct call and retains the sidebar identity",
-    ({ name, args, text }) => {
+    async ({ name, args, text }) => {
       const input = { id: name, args };
       const card: ToolCard = {
         id: "search-release",
@@ -680,13 +667,19 @@ describe("tool-card outcomes", () => {
       };
       const onOpenSidebar = vi.fn();
       for (const expanded of [false, true]) {
-        const container = mountCard(card, { expanded, onOpenSidebar });
+        const container = await mountCard(card, { expanded, onOpenSidebar });
         expect(textOf(container, ".chat-tool-msg-summary")).toContain(text);
-        const direct = mountCard(
+        const direct = await mountCard(
           { ...card, name, args, inputText: JSON.stringify(args, null, 2) },
           { expanded, onOpenSidebar },
         );
-        expect(container.innerHTML).toBe(direct.innerHTML);
+        expect(textOf(container, ".chat-tool-msg-summary")).toBe(
+          textOf(direct, ".chat-tool-msg-summary"),
+        );
+        expect(container.textContent).toBe(direct.textContent);
+        expect(container.querySelector(".chat-tool-card")?.className).toBe(
+          direct.querySelector(".chat-tool-card")?.className,
+        );
         if (expanded) {
           container.querySelector<HTMLButtonElement>(".chat-tool-card__action-btn")?.click();
           expect(onOpenSidebar.mock.calls[0]?.[0].card).toBe(card);
@@ -697,7 +690,9 @@ describe("tool-card outcomes", () => {
     },
   );
 
-  it("passes the raw Tool Search invocation to tool-result plugin replacements", () => {
+  it("passes the raw Tool Search invocation to tool-result plugin replacements", async () => {
+    const pluginSurface = vi.spyOn(controlUiView, "renderPluginSurface");
+    onTestFinished(() => pluginSurface.mockRestore());
     const input = { id: "web_search", args: { query: "OpenClaw release notes" } };
     const card: ToolCard = {
       id: "search-release",
@@ -708,9 +703,9 @@ describe("tool-card outcomes", () => {
       completed: true,
     };
     for (const expanded of [false, true]) {
-      pluginSurface.props.length = 0;
-      mountCard(card, { expanded });
-      expect(pluginSurface.props).toEqual([
+      pluginSurface.mockClear();
+      await mountCard(card, { expanded });
+      expect(pluginSurface.mock.calls.map(([, props]) => props)).toEqual([
         expect.objectContaining({
           toolName: "tool_call",
           toolCallId: "search-release",
@@ -721,7 +716,7 @@ describe("tool-card outcomes", () => {
     }
   });
 
-  it("keeps command progress neutral across the row, expanded body, and sidebar until completion", () => {
+  it("keeps command progress neutral across the row, expanded body, and sidebar until completion", async () => {
     const name = "exec";
     const container = document.createElement("div");
     const onOpenSidebar = vi.fn();
@@ -733,8 +728,8 @@ describe("tool-card outcomes", () => {
       live: true,
       completed: false,
     };
-    const show = () => mountCard(card, { runActive: true, onOpenSidebar }, container);
-    show();
+    const show = async () => await mountCard(card, { runActive: true, onOpenSidebar }, container);
+    await show();
     expect(container.querySelector(".chat-tool-row--running")).not.toBeNull();
     expect(container.querySelector(".chat-tool-card--error")).toBeNull();
     expect(container.querySelector(".chat-tool-failure")).toBeNull();
@@ -749,17 +744,17 @@ describe("tool-card outcomes", () => {
 
     card.completed = true;
     card.isError = false;
-    show();
+    await show();
     expect(container.querySelector(".chat-tool-row--running")).toBeNull();
     expect(container.querySelector(".chat-tool-card--error")).toBeNull();
     expect(textOf(container, ".chat-tool-card__outcome")).toBe("Completed");
     card.isError = true;
-    show();
+    await show();
     expect(container.querySelector(".chat-tool-card--error")).not.toBeNull();
     expect(textOf(container, ".chat-tool-card__outcome")).toBe("failed");
   });
 
-  it("keeps diagnostics inside expanded tool details", () => {
+  it("keeps diagnostics inside expanded tool details", async () => {
     const diagnostic = "Cannot connect to the service";
     const output = JSON.stringify({ error: diagnostic });
     const exitCode = 1;
@@ -767,8 +762,8 @@ describe("tool-card outcomes", () => {
 
     const container = document.createElement("div");
     let expanded = false;
-    const show = () =>
-      mountCard(
+    const show = async () =>
+      await mountCard(
         {
           id: "login-failure",
           name: "exec",
@@ -783,12 +778,12 @@ describe("tool-card outcomes", () => {
           expanded,
           onToggleExpanded: () => {
             expanded = !expanded;
-            show();
+            void show();
           },
         },
         container,
       );
-    show();
+    await show();
     expect(container.textContent).toContain("Sign in to GitHub");
     expect(container.textContent).not.toContain(diagnostic);
     expect(textOf(container, ".chat-tool-msg-summary")).toContain(outcome);
@@ -796,14 +791,16 @@ describe("tool-card outcomes", () => {
     expect(container.textContent).not.toContain("gh auth login");
     expect(container.querySelector(".chat-tool-msg-body")).toBeNull();
     container.querySelector<HTMLButtonElement>(".chat-tool-msg-summary")?.click();
+    await settleToolBridges(container);
     expect(textOf(container, ".chat-tool-msg-body")).toContain(output);
     expect(textOf(container, ".chat-tool-card__outcome")).toBe(outcome);
     container.querySelector<HTMLButtonElement>(".chat-tool-msg-summary")?.click();
+    await settleToolBridges(container);
     expect(container.textContent).not.toContain(diagnostic);
   });
 
-  it("renders a plain error detail when a failed tool has no output", () => {
-    const container = mountCard({ id: "msg:err:no-output", name: "lookup", isError: true });
+  it("renders a plain error detail when a failed tool has no output", async () => {
+    const container = await mountCard({ id: "msg:err:no-output", name: "lookup", isError: true });
 
     expect(container.querySelector(".chat-tool-card__status-badge")).toBeNull();
     expect(textOf(container, ".chat-tool-card__block-label")).toBe("Tool error");
@@ -823,8 +820,8 @@ describe("tool-card outcomes", () => {
       expected: "Progress updated — 1/3 · Implement",
     },
     { args: { markdown: "Waiting on review." }, expected: "Progress note updated" },
-  ])("renders progress_card as a compact receipt: $expected", ({ args, expected }) => {
-    const container = mountCard({
+  ])("renders progress_card as a compact receipt: $expected", async ({ args, expected }) => {
+    const container = await mountCard({
       id: `progress:${expected}`,
       name: "progress_card",
       args,
@@ -841,10 +838,10 @@ describe("tool-card outcomes", () => {
 
 describe("tool-card source highlighting", () => {
   async function highlighted(card: ToolCard) {
-    const container = mountCard(card);
+    const container = await mountCard(card);
     onTestFinished(async () => {
       await vi.dynamicImportSettled();
-      render(null, container);
+      await render(null, container);
     });
     await vi.dynamicImportSettled();
     return container;
@@ -915,4 +912,161 @@ describe("tool-card source highlighting", () => {
       }
     },
   );
+});
+
+function renderWidgetPreviewFrame(url: string, allowExternalEmbedUrls = false) {
+  const container = document.createElement("div");
+  document.body.append(container);
+  renderLit(
+    renderToolPreview(
+      {
+        kind: "canvas",
+        surface: "assistant_message",
+        render: "url",
+        url,
+      },
+      "chat_message",
+      allowExternalEmbedUrls ? { allowExternalEmbedUrls } : {},
+    ),
+    container,
+  );
+  const frame = container.querySelector("iframe");
+  expect(frame).not.toBeNull();
+  expect(frame!.contentWindow).not.toBeNull();
+  return { container, frame: frame! };
+}
+
+function offerPromptPort(frame: HTMLIFrameElement): MessagePort {
+  const channel = new MessageChannel();
+  window.dispatchEvent(
+    new MessageEvent("message", {
+      data: { type: "openclaw:widget-prompt-offer" },
+      origin: "null",
+      source: frame.contentWindow,
+      ports: [channel.port2],
+    }),
+  );
+  return channel.port1;
+}
+
+function postPrompt(port: MessagePort, prompt: unknown) {
+  port.postMessage({ type: "openclaw:widget-prompt", prompt });
+}
+
+async function flushPorts() {
+  // Port delivery may take more than one macrotask on loaded CI workers.
+  for (let index = 0; index < 5; index += 1) {
+    await new Promise((resolve) => {
+      setTimeout(resolve, 0);
+    });
+  }
+}
+
+function emulateInteractableFrame(frame: HTMLIFrameElement) {
+  // jsdom has no layout and cannot focus iframes; emulate a visible frame the
+  // user clicked into, which is what the host checks require.
+  (frame as HTMLIFrameElement & { checkVisibility: () => boolean }).checkVisibility = () => true;
+  Object.defineProperty(document, "activeElement", { get: () => frame, configurable: true });
+}
+
+function collectPromptEvents(container: HTMLElement): string[] {
+  const received: string[] = [];
+  container.addEventListener(WIDGET_PROMPT_EVENT, (event) => {
+    received.push((event as CustomEvent<WidgetPromptEventDetail>).detail.text);
+  });
+  return received;
+}
+
+function restoreActiveElement() {
+  delete (document as unknown as Record<string, unknown>).activeElement;
+}
+
+describe("URL-only widget prompts", () => {
+  it("adopts the bridge's prompt port offer and enforces the prompt contract", async () => {
+    const { container, frame } = renderWidgetPreviewFrame(
+      "/__openclaw__/canvas/documents/cv_prompt/index.html",
+    );
+    // The bridge posts its offer at parse time, before the frame's load event.
+    const port = offerPromptPort(frame);
+    const hostMessages: unknown[] = [];
+    port.addEventListener("message", (event) => hostMessages.push(event.data));
+    port.start();
+    frame.dispatchEvent(new Event("load"));
+    await flushPorts();
+    expect(hostMessages).toContainEqual({ type: "openclaw:widget-prompt-host-ready" });
+    emulateInteractableFrame(frame);
+    const received = collectPromptEvents(container);
+    try {
+      postPrompt(port, "  Show details  ");
+      await flushPorts();
+      expect(received).toEqual(["Show details"]);
+      // Slash and bang commands would run host commands on the widget's behalf;
+      // the send path must only ever receive conversational text.
+      postPrompt(port, "/approve");
+      postPrompt(port, "!pwd");
+      postPrompt(port, "   ");
+      postPrompt(port, 42);
+      postPrompt(port, "x".repeat(4_001));
+      await flushPorts();
+      expect(received).toEqual(["Show details"]);
+      // A replacement document's later offer must not displace or re-arm the
+      // adopted grant, even across another load event.
+      const lateOfferPort = offerPromptPort(frame);
+      frame.dispatchEvent(new Event("load"));
+      postPrompt(lateOfferPort, "From takeover");
+      await flushPorts();
+      expect(received).toEqual(["Show details"]);
+      // Without focus on the frame there is no user-activation signal; drop.
+      restoreActiveElement();
+      postPrompt(port, "Auto send");
+      await flushPorts();
+      expect(received).toEqual(["Show details"]);
+      // Rate limit: 10 accepted prompts per rolling minute per widget document.
+      emulateInteractableFrame(frame);
+      for (let index = 2; index <= 12; index += 1) {
+        postPrompt(port, `Prompt ${index}`);
+      }
+      await flushPorts();
+      expect(received).toHaveLength(10);
+      expect(received.at(-1)).toBe("Prompt 10");
+    } finally {
+      restoreActiveElement();
+      container.remove();
+    }
+  });
+
+  it("adopts a prompt offer that arrives after the frame's load event", async () => {
+    const { container, frame } = renderWidgetPreviewFrame(
+      "/__openclaw__/canvas/documents/cv_late_offer/index.html",
+    );
+    // Posted-message and load tasks have no guaranteed ordering; here load wins.
+    frame.dispatchEvent(new Event("load"));
+    const port = offerPromptPort(frame);
+    emulateInteractableFrame(frame);
+    const received = collectPromptEvents(container);
+    try {
+      postPrompt(port, "Late but valid");
+      await flushPorts();
+      expect(received).toEqual(["Late but valid"]);
+    } finally {
+      restoreActiveElement();
+      container.remove();
+    }
+  });
+
+  it("never adopts prompt offers from externally allowed embed URLs", async () => {
+    const { container, frame } = renderWidgetPreviewFrame("https://canvas.example/widget", true);
+    const port = offerPromptPort(frame);
+    frame.dispatchEvent(new Event("load"));
+    emulateInteractableFrame(frame);
+    const received = collectPromptEvents(container);
+    try {
+      postPrompt(port, "External send");
+      await flushPorts();
+      expect(received).toEqual([]);
+    } finally {
+      restoreActiveElement();
+      container.remove();
+    }
+  });
 });

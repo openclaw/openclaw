@@ -12,14 +12,15 @@ import {
   directSessionReq,
   setupGatewaySessionsHandlerTestHarness,
 } from "./test/server-sessions.test-helpers.js";
+import { loseSessionSignalAcknowledgement } from "./test/session-signal-failure.test-support.js";
 
 const { createSessionStoreDir } = setupGatewaySessionsHandlerTestHarness();
 
-test("sessions.create stamps trusted operator provenance and records created", async () => {
+test("sessions.create preserves creation and notices after an unknown signal outcome", async () => {
   const { storePath } = await createSessionStoreDir();
   const profileId = ensureProfileForEmail("session-creator@example.test").id;
   const client = {
-    connect: { scopes: ["operator.write"] },
+    connect: { scopes: ["operator.read", "operator.write"] },
     authenticatedUserProfile: {
       profileId,
       displayName: "Test Operator",
@@ -35,6 +36,7 @@ test("sessions.create stamps trusted operator provenance and records created", a
       isLocalClient: false,
     }),
   );
+  const signal = loseSessionSignalAcknowledgement();
   const created = await directSessionReq<{
     key?: string;
     entry?: {
@@ -44,11 +46,16 @@ test("sessions.create stamps trusted operator provenance and records created", a
     };
   }>(
     "sessions.create",
-    { agentId: "main", label: "Investigate build failure" },
+    {
+      agentId: "main",
+      key: "agent:main:dashboard:created-signal",
+      label: "Investigate build failure",
+    },
     { client: client as never },
-  );
+  ).finally(signal.restore);
 
   expect(created.ok).toBe(true);
+  expect(signal.attempts()).toBe(1);
   expect(created.payload?.entry).toMatchObject({
     createdVia: "operator",
     createdActor: { type: "human", source: "profile", id: profileId },
@@ -77,6 +84,14 @@ test("sessions.create stamps trusted operator provenance and records created", a
   const existing = await directSessionReq("sessions.create", { key }, { client: client as never });
   expect(existing.ok).toBe(true);
   expect(peekSystemEvents("agent:main:main")).toEqual([]);
+  expect((await listSessionStateEventsSince(key, "main", 0, 20)).events).toHaveLength(1);
+  const described = await directSessionReq<{ session: { key: string } }>(
+    "sessions.describe",
+    { key },
+    { client: client as never },
+  );
+  expect(described.ok).toBe(true);
+  expect(described.payload?.session).toMatchObject({ key });
 
   const synthetic = await directSessionReq<{
     entry?: { createdVia?: string; createdActor?: unknown; createdAt?: number };

@@ -46,7 +46,9 @@ async function scheduledScope(
       workflow_runs: options.skipFirst ? [{ ...proof, id: 99 }, proof] : [proof],
     },
   });
-  if (options.unavailable) list.mockRejectedValue(new Error("unavailable"));
+  if (options.unavailable) {
+    list.mockRejectedValue(new Error("unavailable"));
+  }
   const paginate = vi
     .fn()
     .mockImplementation((_method, args) =>
@@ -106,16 +108,14 @@ describe("bounded scheduled proof reuse", () => {
     { label: "diverged history", status: "diverged", expected: true },
     { label: "daily external drift", ageHours: 25, expected: true },
     { label: "unavailable proof", unavailable: true, expected: true },
+    { label: "skip-only success never advances the baseline", skipFirst: true, expected: false },
   ])("$label", async ({ expected, ...options }) => {
-    const { output, notice } = await scheduledScope(options);
+    const { output, notice, paginate } = await scheduledScope(options);
     expect(output).toHaveBeenCalledExactlyOnceWith("changed", expected);
     expect(notice).toHaveBeenCalledOnce();
-  });
-
-  it("never advances the baseline through a skip-only success", async () => {
-    const { output, paginate } = await scheduledScope({ skipFirst: true });
-    expect(paginate.mock.calls.map(([, args]) => args.run_id)).toEqual([99, 90]);
-    expect(output).toHaveBeenCalledExactlyOnceWith("changed", false);
+    if (options.skipFirst) {
+      expect(paginate.mock.calls.map(([, args]) => args.run_id)).toEqual([99, 90]);
+    }
   });
 
   it.each(["node-runtime-conformance", "plugin-init-scaffold-validation"])(
@@ -133,7 +133,7 @@ describe("bounded scheduled proof reuse", () => {
       }
       for (const filename of [
         "src/cli/plugins-scaffold-config.ts",
-        "src/gateway/node-command-policy-mobile.ts",
+        "src/gateway/node-command-policy.ts",
         "src/infra/node-commands.ts",
         "packages/normalization-core/src/record-coerce.ts",
         "scripts/test-projects.mts",
@@ -144,7 +144,9 @@ describe("bounded scheduled proof reuse", () => {
         expect(output, filename).toHaveBeenCalledExactlyOnceWith("changed", true);
       }
       for (const [id, job] of Object.entries(workflow.jobs) as [string, { if: string }][]) {
-        if (id === "scope") continue;
+        if (id === "scope") {
+          continue;
+        }
         const evaluate = (event: string, changed: string) =>
           runInNewContext(job.if.slice(3, -2), {
             github: {
@@ -185,13 +187,14 @@ describe("workflow cost admission", () => {
         "scripts/ci-hydrate-testbox-env.sh",
         ".npmrc",
         "packages/fs-safe/package.json",
-      ])
+      ]) {
         expect(accepts(path), path).toBe(true);
+      }
       expect(workflow.on.workflow_dispatch).toBeDefined();
     },
   );
 
-  it("keeps conflict markers global while expensive workflow tooling is scoped", async () => {
+  it("keeps conflict markers global and scopes workflow audits only after successful lookup", async () => {
     const workflow = readWorkflow(".github/workflows/workflow-sanity.yml");
     expect(workflow.jobs["no-tabs"]).toBeUndefined();
     const steps = workflow.jobs.actionlint.steps;
@@ -201,24 +204,36 @@ describe("workflow cost admission", () => {
       ).if,
     ).toBeUndefined();
     const scope = steps.find((step: { id?: string }) => step.id === "scope");
-    for (const files of [
-      [{ filename: "docs/intro.md" }],
-      [{ filename: ".github/actions/example/action.yml" }],
+    for (const { eventName, filename, changed } of [
+      { eventName: "pull_request", filename: "docs/intro.md", changed: false },
+      { eventName: "pull_request", filename: ".github/actions/example/action.yml", changed: true },
+      { eventName: "pull_request", filename: null, changed: true },
+      { eventName: "push", filename: null, changed: true },
     ]) {
       const output = vi.fn();
+      const warning = vi.fn();
+      const lookup = filename
+        ? vi.fn().mockResolvedValue([{ filename }])
+        : vi.fn().mockRejectedValue(new Error("unavailable"));
       await runInNewContext(`(async () => { ${scope.with.script} })()`, {
         require: () => ({ matchesGlob }),
-        context: { ...context, eventName: "pull_request", issue: { number: 1 } },
-        core: { setOutput: output },
+        context: { ...context, eventName, issue: { number: 1 }, payload: { before } },
+        core: { setOutput: output, warning },
         github: {
-          paginate: vi.fn().mockResolvedValue(files),
-          rest: { pulls: { listFiles: vi.fn() } },
+          paginate: lookup,
+          rest: {
+            pulls: { listFiles: vi.fn() },
+            repos: { compareCommitsWithBasehead: lookup },
+          },
         },
       });
-      expect(output).toHaveBeenCalledExactlyOnceWith(
-        "changed",
-        files[0]!.filename.startsWith(".github/"),
-      );
+      expect(output).toHaveBeenCalledExactlyOnceWith("changed", changed);
+      if (filename === null) {
+        expect(lookup).toHaveBeenCalledOnce();
+        expect(warning).toHaveBeenCalledExactlyOnceWith(
+          "Workflow scope lookup failed; running full workflow audits.",
+        );
+      }
     }
     for (const name of [
       "Fail on tabs in workflow files",
@@ -233,35 +248,6 @@ describe("workflow cost admission", () => {
       );
     }
   });
-
-  it.each(["pull_request", "push"])(
-    "runs full workflow audits when %s scope lookup fails",
-    async (eventName) => {
-      const scope = readWorkflow(
-        ".github/workflows/workflow-sanity.yml",
-      ).jobs.actionlint.steps.find((step: { id?: string }) => step.id === "scope");
-      const output = vi.fn();
-      const warning = vi.fn();
-      const unavailable = vi.fn().mockRejectedValue(new Error("unavailable"));
-      await runInNewContext(`(async () => { ${scope.with.script} })()`, {
-        require: () => ({ matchesGlob }),
-        context: { ...context, eventName, issue: { number: 1 }, payload: { before } },
-        core: { setOutput: output, warning },
-        github: {
-          paginate: unavailable,
-          rest: {
-            pulls: { listFiles: vi.fn() },
-            repos: { compareCommitsWithBasehead: unavailable },
-          },
-        },
-      });
-      expect(unavailable).toHaveBeenCalledOnce();
-      expect(output).toHaveBeenCalledExactlyOnceWith("changed", true);
-      expect(warning).toHaveBeenCalledExactlyOnceWith(
-        "Workflow scope lookup failed; running full workflow audits.",
-      );
-    },
-  );
 
   it("keeps closeout on release-input pushes and the existing manual completion route", () => {
     const workflow = readWorkflow(".github/workflows/openclaw-stable-main-closeout.yml");

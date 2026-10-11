@@ -8,10 +8,7 @@ import { scrollbarShadowStyles } from "../../lit/scrollbar-styles.ts";
 import { DockLayoutController } from "../dock-layout-controller.ts";
 import { browserPanelLayout } from "../dock-panel-layout.ts";
 import { dockPanelStyles } from "../dock-panel-styles.ts";
-import {
-  PANEL_HOSTED_TABS_CHANGE_EVENT,
-  type PanelHostedTabsElement,
-} from "../panel-hosted-tabs.ts";
+import { notifyPanelHostedTabsChanged, type PanelHostedTabsElement } from "../panel-hosted-tabs.ts";
 import { panelTabStripStyles } from "../panel-tab-strip.ts";
 import {
   BROWSER_PANEL_TOGGLE_EVENT,
@@ -33,7 +30,6 @@ import {
 } from "./browser-target.ts";
 import { normalizeBrowserUrlDraft } from "./browser-url.ts";
 
-/** `<openclaw-browser-panel>` — the dockable gateway browser surface. */
 class OpenClawBrowserPanel
   extends OpenClawLitElement
   implements BrowserPanelControllerHost, PanelHostedTabsElement
@@ -70,7 +66,6 @@ class OpenClawBrowserPanel
   private activeDashboardKey: string | undefined;
   private activeSessionTabsKey: string | undefined;
   private consumedPreferredRevision?: string;
-  private lastHostedTabsChangeKey?: string;
   private readonly browserPanelController = new BrowserPanelController(this);
   private readonly dockLayout = new DockLayoutController(this, {
     layout: browserPanelLayout,
@@ -187,16 +182,10 @@ class OpenClawBrowserPanel
       }
     }
     const controller = this.browserPanelController;
-    const hostedTabsChangeKey = JSON.stringify([
+    notifyPanelHostedTabsChanged(this, [
       controller.activeTargetId,
       controller.tabs.map((tab) => [tab.id, tab.kind, tab.title, tab.url, tab.favicon]),
     ]);
-    if (hostedTabsChangeKey !== this.lastHostedTabsChangeKey) {
-      this.lastHostedTabsChangeKey = hostedTabsChangeKey;
-      this.dispatchEvent(
-        new CustomEvent(PANEL_HOSTED_TABS_CHANGE_EVENT, { bubbles: true, composed: true }),
-      );
-    }
   }
 
   get hostedTabs() {

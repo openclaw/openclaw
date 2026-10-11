@@ -1,4 +1,3 @@
-// Approval native helpers translate plugin approval requests into host-native approval records.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -507,18 +506,9 @@ export function createNativeApprovalChannelRouteGates<TTarget extends NativeAppr
     accountId?: string | null;
     nativeSessionOnly?: boolean;
   }): boolean =>
-    canApprovalPotentiallyRouteToChannel({
-      ...input,
-      approvalKind: "exec",
-    }) ||
-    canApprovalPotentiallyRouteToChannel({
-      ...input,
-      approvalKind: "plugin",
-    }) ||
-    canApprovalPotentiallyRouteToChannel({
-      ...input,
-      approvalKind: "system-agent",
-    });
+    (["exec", "plugin", "system-agent"] as const).some((approvalKind) =>
+      canApprovalPotentiallyRouteToChannel({ ...input, approvalKind }),
+    );
 
   const isSessionApprovalEligible = (
     input: ChannelApprovalForwardingEligibilityParams,
@@ -624,21 +614,14 @@ export function createNativeApprovalForwardingFallbackSuppressor<
         approvalKind: input.approvalKind,
         request: input.request,
       }) ?? resolveApprovalKind(input.request, input.approvalKind);
+    const requestParams = { cfg: input.cfg, accountId, approvalKind, request: input.request };
     const explicitTarget = input.target.source === "target";
     const eligible = explicitTarget
       ? (params.isExplicitTargetEligible?.({
-          cfg: input.cfg,
-          accountId,
-          approvalKind,
-          request: input.request,
+          ...requestParams,
           target: input.target,
         }) ?? false)
-      : params.isSessionRouteEligible({
-          cfg: input.cfg,
-          accountId,
-          approvalKind,
-          request: input.request,
-        });
+      : params.isSessionRouteEligible({ ...requestParams });
     if (!eligible) {
       return false;
     }
@@ -651,22 +634,12 @@ export function createNativeApprovalForwardingFallbackSuppressor<
         approvalKind,
         request: input.request,
       }) ?? forwardingTarget;
-    const originTarget = params.resolveOriginTarget({
-      cfg: input.cfg,
-      accountId,
-      approvalKind,
-      request: input.request,
-    });
+    const originTarget = params.resolveOriginTarget({ ...requestParams });
     if (originTarget && targetsMatch(forwardingTargetForMatch, originTarget)) {
       return true;
     }
     return params
-      .resolveApproverDmTargets({
-        cfg: input.cfg,
-        accountId,
-        approvalKind,
-        request: input.request,
-      })
+      .resolveApproverDmTargets({ ...requestParams })
       .some((approverTarget) => targetsMatch(forwardingTargetForMatch, approverTarget));
   };
 }

@@ -21,6 +21,7 @@ const mocks = vi.hoisted(() => ({
   ),
   taskState: 3 as number | string,
   taskScriptPath: "C:\\Fixture\\gateway.cmd",
+  processes: [] as Array<{ ProcessId: number; CommandLine: string }>,
 }));
 
 export { mocks };
@@ -124,23 +125,24 @@ vi.mock("../../daemon/service.js", async (importOriginal) => ({
 
 vi.mock("node:child_process", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:child_process")>()),
-  spawnSync: vi.fn(() => ({
-    pid: 0,
-    output: [null, JSON.stringify({ state: mocks.taskState, lastRunResult: 0 }), ""],
-    stdout: JSON.stringify({
-      taskPath: "\\OpenClaw Gateway",
-      state: mocks.taskState,
-      lastRunResult: 0,
-      actions: [{ type: 0, path: mocks.taskScriptPath, arguments: "", workingDirectory: "" }],
-    }),
-    stderr: "",
-    status: 0,
-    signal: null,
-  })),
+  spawnSync: vi.fn((_command: string, args?: readonly string[]) => {
+    const stdout = JSON.stringify(
+      args?.some((arg) => arg.includes("Get-CimInstance Win32_Process"))
+        ? mocks.processes
+        : {
+            taskPath: "\\OpenClaw Gateway",
+            state: mocks.taskState,
+            lastRunResult: 0,
+            actions: [{ type: 0, path: mocks.taskScriptPath, arguments: "", workingDirectory: "" }],
+          },
+    );
+    return { pid: 0, output: [null, stdout, ""], stdout, stderr: "", status: 0, signal: null };
+  }),
 }));
 
 beforeEach(() => {
   mockSystemAccountHome();
+  mocks.processes = [];
   // Simulated service platforms must not read the host's native ancestry.
   vi.spyOn(processAncestry, "inspectSelfAndAncestorPidsSync").mockReturnValue({
     pids: new Set([process.pid, process.ppid, 1]),
@@ -151,12 +153,32 @@ beforeEach(() => {
 });
 afterEach(() => vi.restoreAllMocks());
 
-export function mockRegisteredWindowsLauncher(home: string): GatewayServiceCommandConfig {
+export function mockRegisteredWindowsLauncher(
+  home: string,
+  running = false,
+): GatewayServiceCommandConfig {
   const command = {
-    programArguments: [process.execPath, path.join(process.cwd(), "openclaw.mjs"), "gateway"],
+    programArguments: [
+      process.execPath,
+      path.join(process.cwd(), "openclaw.mjs"),
+      "gateway",
+      "--port",
+      "18789",
+    ],
     environment: { HOME: home },
     sourcePath: mocks.taskScriptPath,
   };
+  mocks.processes = [
+    { ProcessId: 111, CommandLine: "powershell.exe Get-CimInstance Win32_Process" },
+    ...(running
+      ? [
+          {
+            ProcessId: fixtureGatewayPid,
+            CommandLine: command.programArguments.map((arg) => `"${arg}"`).join(" "),
+          },
+        ]
+      : []),
+  ];
   const script = Buffer.from(buildTaskScript(command));
   const readFile = fs.readFile;
   vi.spyOn(fs, "readFile").mockImplementation(async (pathname, options) =>

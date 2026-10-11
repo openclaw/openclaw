@@ -1,11 +1,11 @@
 import { expectDefined } from "@openclaw/normalization-core";
+import type { WorkerTaskControl } from "@openclaw/worker-runtime/worker";
 import { sql } from "kysely";
 import {
   iterateSqliteQuerySync,
   prepareSqliteQueryTakeFirstSync,
 } from "../../infra/kysely-sync.js";
 import { sqlitePrimaryResultCode } from "../../infra/sqlite-error-diagnostics.js";
-import type { WorkerTaskControl } from "../../infra/worker-task-native-sections.js";
 import type { WorkerTaskChannel } from "../../infra/worker-task-server.js";
 import { assertOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import { classifyOpenClawAgentDatabaseReadError } from "../../state/openclaw-agent-db-read-error.js";
@@ -59,7 +59,7 @@ export async function streamSessionTranscriptHydration(
       const source = prepareTranscriptEventReadQuery(database, request.resolvedScope.sessionId, {
         ...request.target,
         beforeEventSeq: fence?.beforeRawSeq,
-      });
+      }).$if(request.afterSeq !== undefined, (query) => query.where("seq", ">", request.afterSeq!));
       const readPart = prepareSqliteQueryTakeFirstSync<
         { seq: number; offset: number },
         { data: Uint8Array }
@@ -108,7 +108,11 @@ export async function streamSessionTranscriptHydration(
             await flush();
           }
           const endOfEvent = data.byteLength < SLICE_BYTES;
-          frames.push({ data, endOfEvent });
+          frames.push({
+            data,
+            endOfEvent,
+            ...(request.includeEventJson && endOfEvent ? { seq: row.seq } : {}),
+          });
           bytes += data.byteLength;
           if (bytes >= CHUNK_BYTES || frames.length >= CHUNK_FRAMES) {
             await flush();

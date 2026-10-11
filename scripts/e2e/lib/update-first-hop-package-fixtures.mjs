@@ -12,7 +12,10 @@ import {
   PACKAGE_DIST_CONTENT_INVENTORY_RELATIVE_PATH,
   parsePackageDistContentInventory,
 } from "../../lib/package-dist-inventory-contract.mts";
-import { isUpdateCompatibilityChunk } from "../../lib/update-compat-contract.mjs";
+import {
+  isUpdateCompatibilityChunk,
+  supportsUpdateSchemas,
+} from "../../lib/update-compat-contract.mjs";
 import { readJson } from "./fixtures/common.mjs";
 
 // Frozen candidates predating the recorded inventory retain their original fixture contract.
@@ -35,9 +38,13 @@ function readFirstHopReleases(packageRoot) {
 }
 
 export function listFirstHopSourceVersions(packageRoot, filter = "") {
-  const versions = readFirstHopReleases(packageRoot).map((release) => release.version);
+  const releases = readFirstHopReleases(packageRoot);
+  const target = readJson(path.join(packageRoot, "package.json")).openclaw?.schemaVersions;
+  const versions = releases
+    .filter((release) => supportsUpdateSchemas(release.schemaVersions, target))
+    .map((release) => release.version);
   if (
-    versions.length === 0 ||
+    releases.length === 0 ||
     new Set(versions).size !== versions.length ||
     versions.some(
       (version) =>
@@ -49,8 +56,9 @@ export function listFirstHopSourceVersions(packageRoot, filter = "") {
   const selected = filter.split(/[\s,]+/u).filter(Boolean);
   const unrecorded = selected.filter((version) => !versions.includes(version));
   if (unrecorded.length > 0) {
+    const recorded = releases.some((release) => unrecorded.includes(release.version));
     throw new Error(
-      `first-hop sources are not recorded in the candidate: ${unrecorded.join(", ")}`,
+      `first-hop sources are ${recorded ? "unsupported by" : "not recorded in"} the candidate: ${unrecorded.join(", ")}`,
     );
   }
   return selected.length > 0 ? versions.filter((version) => selected.includes(version)) : versions;
@@ -229,7 +237,7 @@ function futureFixtureVersion(sourceVersion, sequence) {
   return `${release[1]}.${release[2]}.${Number(release[3]) + 1}-first-hop.${sequence}`;
 }
 
-function stampFixtureVersion(packageRoot, version) {
+export function stampFixtureVersion(packageRoot, version) {
   const paths = resolveFixturePaths(packageRoot);
   const packageJson = readJson(paths.packageJson);
   const buildInfo = readJson(paths.buildInfo);
@@ -355,9 +363,9 @@ function packNegativeUpdateFixture(candidateTarball, outputTarball, expectedMiss
 export function packFutureUpdateFixture(candidateTarball, outputTarball, sequence = 0) {
   return {
     method: "candidate-same-schema-self-update-fixture",
-    ...packTransformedFixture(candidateTarball, outputTarball, (root) => {
-      return markFutureUpdateFixture(root, sequence);
-    }),
+    ...packTransformedFixture(candidateTarball, outputTarball, (root) =>
+      markFutureUpdateFixture(root, sequence),
+    ),
   };
 }
 
@@ -443,22 +451,14 @@ function main() {
     );
     return;
   }
-  if (
-    (mode === "first-hop-tarball" ||
-      mode === "negative-tarball" ||
-      mode === "future-tarball" ||
-      mode === "unsupported-admission-tarball" ||
-      mode === "future-runtime-tarball") &&
-    packageRoot &&
-    outputTarball
-  ) {
-    const pack = {
-      "first-hop-tarball": packFirstHopUpdateFixture,
-      "negative-tarball": packNegativeUpdateFixture,
-      "future-tarball": packFutureUpdateFixture,
-      "unsupported-admission-tarball": packUnsupportedAdmissionFixture,
-      "future-runtime-tarball": packFutureRuntimeFixture,
-    }[mode];
+  const packers = {
+    "first-hop-tarball": packFirstHopUpdateFixture,
+    "negative-tarball": packNegativeUpdateFixture,
+    "future-tarball": packFutureUpdateFixture,
+    "unsupported-admission-tarball": packUnsupportedAdmissionFixture,
+    "future-runtime-tarball": packFutureRuntimeFixture,
+  };
+  if (Object.hasOwn(packers, mode) && packageRoot && outputTarball) {
     const fixtureArg =
       mode === "negative-tarball"
         ? (sequence ?? "")
@@ -466,7 +466,7 @@ function main() {
           ? 0
           : Number(sequence);
     process.stdout.write(
-      `${JSON.stringify(pack(packageRoot, outputTarball, fixtureArg), null, 2)}\n`,
+      `${JSON.stringify(packers[mode](packageRoot, outputTarball, fixtureArg), null, 2)}\n`,
     );
     return;
   }

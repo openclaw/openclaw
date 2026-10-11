@@ -8,7 +8,7 @@ import { runExclusiveSessionLifecycleMutation } from "../../sessions/session-lif
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { getDeliveryQueueEntryStatus } from "../delivery-queue-sqlite.js";
+import { getDeliveryQueueEntryStatus } from "../delivery-queue-sqlite.test-support.js";
 import {
   drainMatrixReconnect,
   matrixOutboundForQueueTest,
@@ -125,7 +125,7 @@ describe("generation-bound result delivery", () => {
       const { generation, update } = fixture();
       const entered = createDeferred();
       const released = createDeferred();
-      const mutation = runExclusiveSessionLifecycleMutation({
+      const mutation = runExclusiveSessionLifecycleMutation("reset", {
         scope: generation.storePath,
         identities: [generation.sessionKey, generation.sessionId],
         prepare: async () => {

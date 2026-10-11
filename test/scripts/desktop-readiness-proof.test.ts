@@ -119,7 +119,8 @@ describe("desktop readiness evidence", () => {
     const diagnostics: GatewayReadinessDiagnostic[] = [];
     const fetchImpl = vi
       .fn<typeof fetch>()
-      .mockResolvedValue(new Response('{"ready":true,"failing":[]}', { status: 200 }));
+      .mockResolvedValueOnce(new Response('{"ready":true,"failing":[]}', { status: 200 }))
+      .mockResolvedValueOnce(new Response('{"ok":true,"status":"started"}', { status: 200 }));
     let now = 1_000;
     const clock = vi.spyOn(Date, "now").mockImplementation(() => now++);
     try {
@@ -189,7 +190,8 @@ describe("desktop readiness evidence", () => {
       .mockResolvedValueOnce(
         new Response('{"ready":false,"failing":["startup-sidecars"]}', { status: 503 }),
       )
-      .mockResolvedValueOnce(new Response('{"ready":true,"failing":[]}', { status: 200 }));
+      .mockResolvedValueOnce(new Response('{"ready":true,"failing":[]}', { status: 200 }))
+      .mockResolvedValueOnce(new Response('{"ok":true,"status":"started"}', { status: 200 }));
     await testing.waitForGatewayReady(
       processState(),
       [],

@@ -14,6 +14,7 @@ import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import type { ProviderFailoverErrorContext } from "../plugins/types.js";
 import { createTestAdmittedRunContext } from "./admitted-run-context.test-support.js";
+import { createAttemptNestedToolActivityState } from "./embedded-agent-runner/run/attempt-nested-tool-activity.js";
 import { prepareEmbeddedAttemptStream } from "./embedded-agent-runner/run/attempt-stream-prepare.js";
 import { clearActiveEmbeddedRun } from "./embedded-agent-runner/runs.js";
 import {
@@ -179,12 +180,13 @@ describe("subscribeEmbeddedAgentSession lifecycle billing errors", () => {
             coreBuiltinToolNames: new Set(),
             replaySafeToolNames: new Set(),
             codeModeExecToolNames: new Set(),
+            sourceReplyCapableToolNames: new Set(),
             sideEffectToolOwners: new Map(),
           },
           hookAgentId: "main",
           diagnosticTrace: { traceId: "11111111111111111111111111111111" },
           diagnosticOwner,
-          nestedToolActivities: [],
+          nestedToolActivityState: createAttemptNestedToolActivityState(),
           isReplaySafeTool: () => false,
           runAbortController: new AbortController(),
           abortRun: () => {

@@ -12,7 +12,6 @@ import {
 } from "./lib/ts-guard-utils.mts";
 
 const repoRoot = resolveRepoRoot(import.meta.url);
-const defaultSourceRoots = [path.join(repoRoot, "src"), path.join(repoRoot, "extensions")];
 const localRuntimeSpecifierPattern = /^\.{1,2}\/.*\.runtime\.(?:js|ts)$/;
 
 export type RuntimeSidecarLoaderViolation = {
@@ -21,7 +20,6 @@ export type RuntimeSidecarLoaderViolation = {
   sourcePath: string;
   reason: string;
 };
-type LocatedRuntimeSidecarLoaderViolation = RuntimeSidecarLoaderViolation & { path: string };
 
 function toPosixPath(value: string): string {
   return value.split(path.sep).join("/");
@@ -227,37 +225,25 @@ export function findRuntimeSidecarLoaderViolations(
   return violations;
 }
 
-async function collectRuntimeSidecarLoaderViolations(params: {
-  repoRoot: string;
-  sourceRoots: string[];
-  explicitEntrySources: Set<string>;
-}): Promise<LocatedRuntimeSidecarLoaderViolation[]> {
+async function main() {
+  const { default: tsdownConfig } = await import("../tsdown.config.ts");
+  const explicitEntrySources = collectTsdownEntrySources(tsdownConfig);
   const violations = await collectFileViolations({
-    repoRoot: params.repoRoot,
-    sourceRoots: params.sourceRoots,
+    repoRoot,
+    sourceRoots: [path.join(repoRoot, "src"), path.join(repoRoot, "extensions")],
     extraTestSuffixes: [".test-support.ts", ".test-helpers.ts"],
     skipFile: (filePath) => filePath.endsWith(".d.ts"),
     findViolations: (content, filePath, sourceFile) =>
       findRuntimeSidecarLoaderViolations(
         content,
-        normalizeRelativePath(path.relative(params.repoRoot, filePath)),
-        params.explicitEntrySources,
+        normalizeRelativePath(path.relative(repoRoot, filePath)),
+        explicitEntrySources,
         sourceFile,
       ),
   });
   for (const violation of violations) {
     violation.path = normalizeRelativePath(violation.path);
   }
-  return violations;
-}
-
-async function main() {
-  const { default: tsdownConfig } = await import("../tsdown.config.ts");
-  const violations = await collectRuntimeSidecarLoaderViolations({
-    repoRoot,
-    sourceRoots: defaultSourceRoots,
-    explicitEntrySources: collectTsdownEntrySources(tsdownConfig),
-  });
   if (violations.length === 0) {
     console.log("runtime-sidecar-loaders: local runtime sidecar loaders look OK.");
     return;

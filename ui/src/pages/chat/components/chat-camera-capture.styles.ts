@@ -166,9 +166,7 @@ export const cameraCaptureStyles = css`
     footer {
       padding: 16px;
     }
-    .preview {
-      margin-inline: 16px;
-    }
+    .preview,
     .camera-selector {
       margin-inline: 16px;
     }

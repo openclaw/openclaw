@@ -1,20 +1,29 @@
+import fs from "node:fs";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
+import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
+import { SQLITE_WORKER_MAX_MESSAGE_BYTES } from "../../infra/sqlite-worker-contract.js";
+import * as admission from "../../infra/sqlite-worker-operation-admission.js";
 import { normalizeLegacySessionEntryDelivery } from "../../infra/state-migrations.legacy-session-store.js";
+import { withAgentDatabaseCloseFence } from "../../state/openclaw-agent-db-resources.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
+  runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
+import { runOpenClawAgentWorkerWrite } from "../../state/openclaw-agent-write-admission.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import { buildConversationIdentity } from "./conversation-identity.js";
 import {
   listConversations,
   registerConversationAddresses,
-  resolveConversation,
+  readConversation,
   resolveCurrentSessionPrimaryConversation,
+  withConversationAuthority,
 } from "./conversation-registry.js";
 import {
   commitReplySessionInitialization,
@@ -22,6 +31,15 @@ import {
   loadReplySessionInitializationSnapshot,
   upsertSessionEntryCore as upsertCanonicalSessionEntry,
 } from "./session-accessor.js";
+import {
+  conversationPublication,
+  type ConversationPublication,
+} from "./session-accessor.sqlite-conversation-publication.js";
+import {
+  linkSessionConversation,
+  prepareConversationIdentities,
+  upsertConversationIdentities,
+} from "./session-accessor.sqlite-conversation.js";
 import {
   getSessionKysely,
   resolveSqliteReadScope,
@@ -45,6 +63,7 @@ describe("conversation registry", () => {
 
   const tempDirs = createTempDirTracker();
   afterEach(async () => {
+    vi.restoreAllMocks();
     for (const dir of tempDirs.dirs) {
       await closeOpenClawAgentDatabasesAsync(dir);
       closeOpenClawAgentDatabasesForTest(dir);
@@ -94,7 +113,7 @@ describe("conversation registry", () => {
 
     const peerA = conversations.find((entry) => entry.target === "reef:peer-a");
     expect(peerA).toBeDefined();
-    expect(resolveConversation({ agentId: "main", storePath }, peerA!.conversationRef)).toEqual(
+    expect(await readConversation({ agentId: "main", storePath }, peerA!.conversationRef)).toEqual(
       peerA,
     );
   });
@@ -110,7 +129,28 @@ describe("conversation registry", () => {
       label: "@peer-a's agent",
     });
     expect(identity).toBeDefined();
-    registerConversationAddresses({ agentId: "main", storePath }, [identity!], 100);
+    const receipts: ConversationPublication[] = [];
+    const unsubscribe = conversationPublication.subscribe((receipt) => receipts.push(receipt));
+    try {
+      await registerConversationAddresses({ agentId: "main", storePath }, [identity!], 100);
+    } finally {
+      unsubscribe();
+    }
+    expect(receipts).toHaveLength(1);
+    expect(
+      receipts[0]?.facts.get(JSON.stringify(["catalogue", identity!.conversationRef])),
+    ).toMatchObject({
+      kind: "postimage",
+      value: {
+        kind: "catalogue",
+        row: {
+          conversation_id: identity!.conversationRef,
+          label: identity!.label,
+          created_at: 100,
+          updated_at: 100,
+        },
+      },
+    });
 
     const [conversation] = await listConversations(
       { agentId: "main", storePath },
@@ -126,12 +166,133 @@ describe("conversation registry", () => {
     expect(conversation?.sessionId).toBeUndefined();
     expect(conversation?.sessionKey).toBeUndefined();
     expect(conversation?.role).toBeUndefined();
-    expect(resolveConversation({ agentId: "main", storePath }, identity!.conversationRef)).toEqual(
-      conversation,
+    expect(
+      await readConversation({ agentId: "main", storePath }, identity!.conversationRef),
+    ).toEqual(conversation);
+
+    const second = buildConversationIdentity({
+      channel: "reef",
+      accountId: "default",
+      kind: "direct",
+      peerId: "peer-b",
+      deliveryTarget: "reef:peer-b",
+    });
+    const label = "last\u0000literal\\u0000";
+    await registerConversationAddresses(
+      { agentId: "main", storePath },
+      [identity!, second!, { ...identity!, label, nativeDirectUserId: undefined }],
+      200,
     );
+    const updated = await readConversation(
+      { agentId: "main", storePath },
+      identity!.conversationRef,
+    );
+    expect(updated).toMatchObject({ label, firstSeenAt: 100, lastSeenAt: 200 });
+    expect(updated?.nativeDirectUserId).toBeUndefined();
+    expect(
+      await readConversation({ agentId: "main", storePath }, second!.conversationRef),
+    ).toMatchObject({
+      target: "reef:peer-b",
+      firstSeenAt: 200,
+      lastSeenAt: 200,
+    });
   });
 
-  it("rejects an empty conversation reference instead of widening the lookup", () => {
+  it.each(["registration", "authority"] as const)(
+    "releases %s resources when a queued database target is replaced",
+    async (operation) => {
+      const databasePath = path.join(tempDir, "registry.sqlite");
+      fs.writeFileSync(databasePath, "");
+      const scope = {
+        agentId: "main",
+        databaseAgentId: "main",
+        storePath: databasePath,
+        env: { OPENCLAW_STATE_DIR: tempDir },
+      };
+      const entered = createDeferred();
+      const release = createDeferred();
+      const held = runOpenClawAgentWorkerWrite(
+        { agentId: "main", path: databasePath, env: scope.env },
+        async () => {
+          entered.resolve();
+          await release.promise;
+        },
+      );
+      let pending: Promise<unknown> | undefined;
+      try {
+        await awaitGateBeforeSettlement(entered.promise, held, "Writer did not acquire its lane");
+        const identity = buildConversationIdentity({
+          channel: "reef",
+          kind: "direct",
+          peerId: "peer-a",
+          deliveryTarget: "reef:peer-a",
+        });
+        expect(identity).not.toBeNull();
+        pending =
+          operation === "registration"
+            ? registerConversationAddresses(scope, [identity!])
+            : withConversationAuthority(
+                scope,
+                { conversationRef: identity!.conversationRef },
+                () => {
+                  throw new Error("A replaced target must not grant conversation authority");
+                },
+              );
+        const rejected = expect(pending).rejects.toThrow(
+          "Agent database target changed before write admission",
+        );
+        fs.renameSync(databasePath, `${databasePath}.previous`);
+        fs.writeFileSync(databasePath, "");
+        release.resolve();
+        await rejected;
+        await held;
+        await withAgentDatabaseCloseFence({ path: databasePath }, async (resources) => {
+          expect(resources).toEqual([]);
+        });
+      } finally {
+        release.resolve();
+        await Promise.allSettled([held, pending]);
+      }
+    },
+  );
+
+  it.each(["registration", "authority"] as const)(
+    "does not retain %s resources when input capture fails",
+    async (operation) => {
+      const databasePath = path.join(tempDir, "registry.sqlite");
+      const scope = {
+        agentId: "main",
+        databaseAgentId: "main",
+        storePath: databasePath,
+        env: { OPENCLAW_STATE_DIR: tempDir },
+      };
+      const failure = new Error("Synthetic conversation input capture failure");
+      const identity = {
+        get conversationRef(): string {
+          throw failure;
+        },
+        channel: "reef",
+        accountId: "default",
+        kind: "direct" as const,
+        peerId: "peer-a",
+        deliveryTarget: "reef:peer-a",
+      };
+      await expect(
+        Promise.resolve().then(() =>
+          operation === "registration"
+            ? registerConversationAddresses(scope, [identity])
+            : withConversationAuthority(scope, identity, () => {
+                throw new Error("Uncaptured input must not grant conversation authority");
+              }),
+        ),
+      ).rejects.toBe(failure);
+      await withAgentDatabaseCloseFence({ path: databasePath }, async (resources) => {
+        expect(resources).toEqual([]);
+      });
+    },
+  );
+
+  it("rejects an empty conversation reference instead of widening the lookup", async () => {
     const identity = buildConversationIdentity({
       channel: "reef",
       accountId: "default",
@@ -141,12 +302,12 @@ describe("conversation registry", () => {
       nativeDirectUserId: "peer-b",
       label: "@peer-b's agent",
     });
-    registerConversationAddresses({ agentId: "main", storePath }, [identity!], 100);
+    await registerConversationAddresses({ agentId: "main", storePath }, [identity!], 100);
 
     for (const conversationRef of ["", "   "]) {
-      expect(() => resolveConversation({ agentId: "main", storePath }, conversationRef)).toThrow(
-        /Invalid conversationRef/,
-      );
+      await expect(
+        readConversation({ agentId: "main", storePath }, conversationRef),
+      ).rejects.toThrow(/Invalid conversationRef/);
     }
   });
 
@@ -159,7 +320,7 @@ describe("conversation registry", () => {
       chatType: "channel",
       deliveryContext: { channel: "discord", accountId: "default", to: "channel:ops" },
     });
-    const snapshot = loadReplySessionInitializationSnapshot(scope);
+    const snapshot = await loadReplySessionInitializationSnapshot(scope);
 
     const committed = await commitReplySessionInitialization({
       activeSessionKey: sessionKey,
@@ -196,7 +357,7 @@ describe("conversation registry", () => {
         sessionKey: "agent:main:discord:channel:another",
       }),
     ).toBeUndefined();
-    expect(resolveConversation({ agentId: "main", storePath }, conversationRef)).toMatchObject({
+    expect(await readConversation({ agentId: "main", storePath }, conversationRef)).toMatchObject({
       peerId: "canonical-ops",
       observedFromSession: true,
       routeContextObserved: true,
@@ -212,7 +373,10 @@ describe("conversation registry", () => {
     expect(
       (await listConversations(scope)).filter((conversation) => conversation.role === "primary"),
     ).toEqual([expect.objectContaining({ conversationRef, peerId: "canonical-ops" })]);
-    const afterCurrentWrite = resolveConversation({ agentId: "main", storePath }, conversationRef);
+    const afterCurrentWrite = await readConversation(
+      { agentId: "main", storePath },
+      conversationRef,
+    );
     expect(afterCurrentWrite).toMatchObject({
       routeContextObserved: true,
       routeContext: { guildId: "guild-a" },
@@ -239,7 +403,9 @@ describe("conversation registry", () => {
     await closeOpenClawAgentDatabasesAsync(tempDir);
     closeOpenClawAgentDatabasesForTest();
 
-    expect(resolveConversation({ agentId: "main", storePath }, conversationRef)).not.toMatchObject({
+    expect(
+      await readConversation({ agentId: "main", storePath }, conversationRef),
+    ).not.toMatchObject({
       routeContextObserved: true,
     });
     expect(
@@ -250,7 +416,9 @@ describe("conversation registry", () => {
       label: "after older writer",
       updatedAt: afterCurrentWrite!.lastSeenAt + 1,
     });
-    expect(resolveConversation({ agentId: "main", storePath }, conversationRef)).not.toMatchObject({
+    expect(
+      await readConversation({ agentId: "main", storePath }, conversationRef),
+    ).not.toMatchObject({
       routeContextObserved: true,
     });
   });
@@ -265,7 +433,7 @@ describe("conversation registry", () => {
         chatType: "channel",
         deliveryContext: { channel: "discord", accountId: "default", to: target },
       });
-      const snapshot = loadReplySessionInitializationSnapshot(scope);
+      const snapshot = await loadReplySessionInitializationSnapshot(scope);
       const committed = await commitReplySessionInitialization({
         activeSessionKey: sessionKey,
         agentId: "main",
@@ -315,7 +483,7 @@ describe("conversation registry", () => {
       chatType: "channel",
       deliveryContext: { channel: "discord", accountId: "default", to: "channel:rollover" },
     });
-    let snapshot = loadReplySessionInitializationSnapshot(scope);
+    let snapshot = await loadReplySessionInitializationSnapshot(scope);
     await commitReplySessionInitialization({
       activeSessionKey: sessionKey,
       agentId: "main",
@@ -327,7 +495,7 @@ describe("conversation registry", () => {
       storePath,
     });
 
-    snapshot = loadReplySessionInitializationSnapshot(scope);
+    snapshot = await loadReplySessionInitializationSnapshot(scope);
     const rollover = await commitReplySessionInitialization({
       activeSessionKey: sessionKey,
       agentId: "main",
@@ -350,7 +518,7 @@ describe("conversation registry", () => {
       await resolveCurrentSessionPrimaryConversation({ ...scope, sessionId: "after-rollover" }),
     ).toMatchObject({ routeContext: { guildId: "guild-a" } });
 
-    snapshot = loadReplySessionInitializationSnapshot(scope);
+    snapshot = await loadReplySessionInitializationSnapshot(scope);
     await commitReplySessionInitialization({
       activeSessionKey: sessionKey,
       agentId: "main",
@@ -427,7 +595,7 @@ describe("conversation registry", () => {
     });
     expect(freshIdentity).toBeDefined();
     const freshAt = Date.now() + 1_000;
-    registerConversationAddresses({ agentId: "main", storePath }, [freshIdentity!], freshAt);
+    await registerConversationAddresses({ agentId: "main", storePath }, [freshIdentity!], freshAt);
 
     expect(
       await listConversations({ agentId: "main", storePath }, { channel: "reef", limit: 1 }),
@@ -513,7 +681,10 @@ describe("conversation registry", () => {
     });
 
     expect(
-      resolveConversation({ agentId: "main", storePath }, historical?.conversationRef ?? "missing"),
+      await readConversation(
+        { agentId: "main", storePath },
+        historical?.conversationRef ?? "missing",
+      ),
     ).toMatchObject({
       conversationRef: historical?.conversationRef,
       sessionId: "current-session",
@@ -545,13 +716,215 @@ describe("conversation registry", () => {
     ).toBeUndefined();
 
     expect(
-      resolveConversation({ agentId: "main", storePath }, linked?.conversationRef ?? "missing"),
+      await readConversation({ agentId: "main", storePath }, linked?.conversationRef ?? "missing"),
     ).toMatchObject({
       conversationRef: linked?.conversationRef,
       target: "reef:peer-a",
     });
     expect(
-      resolveConversation({ agentId: "main", storePath }, linked?.conversationRef ?? "missing"),
+      await readConversation({ agentId: "main", storePath }, linked?.conversationRef ?? "missing"),
     ).not.toMatchObject({ sessionId: expect.any(String), sessionKey: expect.any(String) });
+  });
+
+  it("publishes native association role removals atomically and drops rolled-back catalogue changes", async () => {
+    const scope = { agentId: "main", sessionKey: "agent:main:receipt", storePath };
+    const sessionId = "receipt-session";
+    await upsertSessionEntry(scope, { sessionId, updatedAt: 1 });
+    const options = toDatabaseOptions(resolveSqliteReadScope(scope));
+    const identities = ["first", "second"].map((peerId) =>
+      buildConversationIdentity({
+        channel: "fixture",
+        accountId: "default",
+        kind: "channel",
+        peerId,
+        deliveryTarget: peerId,
+      })!,
+    );
+    const write = (index: number, updatedAt: number, routeContext?: { guildId: string }) =>
+      runOpenClawAgentWriteTransaction((database) => {
+        const identity = identities[index]!;
+        upsertConversationIdentities(
+          database,
+          prepareConversationIdentities([identity]),
+          updatedAt,
+        );
+        linkSessionConversation({
+          database,
+          sessionId,
+          conversation: { identity, role: "primary", routeContext },
+          updatedAt,
+        });
+      }, options);
+    write(0, 10);
+    const installed = new Map<string, unknown>();
+    const snapshots: string[][] = [];
+    const receipts: ConversationPublication[] = [];
+    const unsubscribeFacts = conversationPublication.subscribeFacts((receipt) => {
+      if (!("facts" in receipt)) {
+        return;
+      }
+      for (const [key, fact] of receipt.facts) {
+        installed.set(key, fact);
+      }
+    });
+    const unsubscribe = conversationPublication.subscribe((receipt) => {
+      receipts.push(receipt);
+      snapshots.push([...installed.keys()].toSorted());
+    });
+    try {
+      const database = openOpenClawAgentDatabase(options);
+      const associationReads = trackSqliteStatementExecutions(database.db, ["route"], (sql) =>
+        sql.startsWith('select "last_seen_at", "route_context_json" from "session_conversations"')
+          ? "route"
+          : null,
+      );
+      try {
+        write(1, 20, { guildId: "receipt-guild" });
+        expect(associationReads.counts.route).toBe(0);
+      } finally {
+        associationReads.restore();
+      }
+      expect(await readConversation(scope, identities[1]!.conversationRef)).toMatchObject({
+        routeContext: { guildId: "receipt-guild" },
+      });
+      const oldPrimary = JSON.stringify([
+        "association",
+        sessionId,
+        identities[0]!.conversationRef,
+        "primary",
+      ]);
+      const oldRelated = JSON.stringify([
+        "association",
+        sessionId,
+        identities[0]!.conversationRef,
+        "related",
+      ]);
+      const newPrimary = JSON.stringify([
+        "association",
+        sessionId,
+        identities[1]!.conversationRef,
+        "primary",
+      ]);
+      expect(installed.get(oldPrimary)).toEqual({ kind: "absent" });
+      expect(installed.get(oldRelated)).toMatchObject({
+        kind: "postimage",
+        value: { row: { role: "related", first_seen_at: 10, last_seen_at: 20 } },
+      });
+      expect(installed.get(newPrimary)).toMatchObject({
+        kind: "postimage",
+        value: { row: { role: "primary", first_seen_at: 20, last_seen_at: 20 } },
+      });
+      expect(snapshots).toHaveLength(2);
+      expect(
+        snapshots.every(
+          (keys) =>
+            keys.includes(oldPrimary) && keys.includes(oldRelated) && keys.includes(newPrimary),
+        ),
+      ).toBe(true);
+      expect(() =>
+        runOpenClawAgentWriteTransaction(() => {
+          write(0, 30);
+          throw new Error("rollback conversation");
+        }, options),
+      ).toThrow("rollback conversation");
+      expect(receipts).toHaveLength(2);
+      expect(
+        openOpenClawAgentDatabase(options)
+          .db.prepare(
+            "SELECT role FROM session_conversations WHERE session_id = ? AND conversation_id = ?",
+          )
+          .get(sessionId, identities[1]!.conversationRef),
+      ).toEqual({ role: "primary" });
+    } finally {
+      unsubscribeFacts();
+      unsubscribe();
+    }
+  });
+
+  it("retires catalogue coverage after unknown native settlement", async () => {
+    const identity = buildConversationIdentity({
+      channel: "reef",
+      accountId: "default",
+      kind: "direct",
+      peerId: "unknown-settlement",
+      deliveryTarget: "reef:unknown-settlement",
+    })!;
+    const nativeOutcomes: string[] = [];
+    const outcomes: string[] = [];
+    const createAdmission = admission.createSqliteWorkerOperationAdmission;
+    vi.spyOn(admission, "createSqliteWorkerOperationAdmission").mockImplementation((...args) => {
+      const owner = createAdmission(...args);
+      const finish = owner.finish.bind(owner);
+      owner.finish = () => {
+        finish();
+        const settled = owner.settlement;
+        if (settled?.committed && settled.kind === "completed") {
+          nativeOutcomes.push(settled.kind);
+          // Preserve the real commit receipt while simulating an uncertain terminal observation.
+          vi.spyOn(owner, "settlement", "get").mockReturnValue({ ...settled, kind: "unknown" });
+        }
+      };
+      return owner;
+    });
+    const unsubscribe = conversationPublication.subscribeFacts((change) => {
+      if ("kind" in change && change.kind === "settled") {
+        outcomes.push(change.outcome ?? "missing");
+      }
+    });
+    try {
+      await registerConversationAddresses({ agentId: "main", storePath }, [identity], 100);
+      expect(
+        await readConversation({ agentId: "main", storePath }, identity.conversationRef),
+      ).toMatchObject({ conversationRef: identity.conversationRef, lastSeenAt: 100 });
+      expect(nativeOutcomes).toEqual(["completed"]);
+      expect(outcomes.at(-1)).toBe("unknown");
+    } finally {
+      unsubscribe();
+    }
+  });
+
+  it("commits catalogue metadata whose encoded receipt exceeds the transport limit", async () => {
+    const scope = { agentId: "main", storePath };
+    const identity = buildConversationIdentity({
+      channel: "fixture",
+      accountId: "default",
+      kind: "direct",
+      peerId: "large-catalogue",
+      deliveryTarget: "large-catalogue",
+    })!;
+    // The request fits IPC; JSON's six-byte escape expands the stored postimage beyond it.
+    identity.metadata = {
+      payload: "\0".repeat(Math.floor(SQLITE_WORKER_MAX_MESSAGE_BYTES / 6) + 1),
+    };
+    const events: string[] = [];
+    const unsubscribe = conversationPublication.subscribeFacts((change) => {
+      if ("kind" in change) {
+        events.push(change.kind);
+      }
+    });
+    try {
+      const outcome = await registerConversationAddresses(scope, [identity], 100).then(
+        (value) => ({ value, error: undefined }),
+        (error: unknown) => ({ value: undefined, error }),
+      );
+      events.push("reply");
+      const database = openOpenClawAgentDatabase(toDatabaseOptions(resolveSqliteReadScope(scope)));
+      expect(
+        database.db
+          .prepare(
+            "SELECT length(metadata_json) AS bytes, updated_at FROM conversations WHERE conversation_id = ?",
+          )
+          .get(identity.conversationRef),
+      ).toEqual({
+        bytes: JSON.stringify(identity.metadata).length,
+        updated_at: 100,
+      });
+      expect(outcome.error).toBeUndefined();
+      expect(outcome.value).toBeUndefined();
+      expect(events).toContain("unknown");
+      expect(events.indexOf("unknown")).toBeLessThan(events.indexOf("reply"));
+    } finally {
+      unsubscribe();
+    }
   });
 });

@@ -119,6 +119,8 @@ type ReadinessProbe = {
   elapsedMs: number;
   status?: number;
   ready?: boolean;
+  endpoint?: "/startupz";
+  startupStatus?: "starting" | "started" | "draining";
   failing?: string[];
   omittedFailing?: number;
   /** Responder's reported server uptime; binds the answer to a process started after spawn. */
@@ -128,6 +130,7 @@ type ReadinessProbe = {
 
 export type GatewayReadinessDiagnostic = {
   probe: "GET /readyz";
+  settlementProbe?: "GET /startupz";
   startedAtMs: number;
   deadlineMs: number;
   elapsedMs: number;
@@ -138,7 +141,7 @@ export type GatewayReadinessDiagnostic = {
   lastProbe: ReadinessProbe | null;
   lastFailedResponse: Pick<
     ReadinessProbe,
-    "attempt" | "phase" | "elapsedMs" | "status" | "ready" | "error"
+    "attempt" | "phase" | "elapsedMs" | "status" | "ready" | "endpoint" | "startupStatus" | "error"
   > | null;
   child: { pid: number | null; exitCode: number | null; signalCode: NodeJS.Signals | null };
   logs: { stdout: string; stderr: string } | null;
@@ -448,7 +451,35 @@ async function waitForGatewayReady(
                 probe.omittedFailing = Math.max(0, readiness.failing.length - 8);
               }
             }
-            return response.ok && isRecord(readiness) && readiness.ready === true;
+            if (!response.ok || !isRecord(readiness) || readiness.ready !== true) {
+              return false;
+            }
+            // Readiness serves healthy agents while startup still owns deferred admission.
+            probeAbort.signal.throwIfAborted();
+            probe.endpoint = "/startupz";
+            probe.phase = "headers";
+            delete probe.status;
+            const startupResponse = await fetchImpl(`http://127.0.0.1:${port}/startupz`, {
+              signal: probeAbort.signal,
+            });
+            probe.status = startupResponse.status;
+            probe.phase = "body";
+            const startup: unknown = await startupResponse.json();
+            probe.phase = "complete";
+            if (
+              isRecord(startup) &&
+              (startup.status === "starting" ||
+                startup.status === "started" ||
+                startup.status === "draining")
+            ) {
+              probe.startupStatus = startup.status;
+            }
+            return (
+              startupResponse.ok &&
+              isRecord(startup) &&
+              startup.ok === true &&
+              startup.status === "started"
+            );
           })(),
           exitPromise,
           timeoutPromise,
@@ -487,8 +518,18 @@ async function waitForGatewayReady(
             lastProbe.error === "invalid-json" ||
             lastProbe.error === "body-failed")
         ) {
-          const { attempt, phase, elapsedMs, status, ready, error } = lastProbe;
-          lastFailedResponse = { attempt, phase, elapsedMs, status, ready, error };
+          const { attempt, phase, elapsedMs, status, ready, endpoint, startupStatus, error } =
+            lastProbe;
+          lastFailedResponse = {
+            attempt,
+            phase,
+            elapsedMs,
+            status,
+            ready,
+            endpoint,
+            startupStatus,
+            error,
+          };
         }
         // The 60-second desktop wait cannot exceed this bound at its existing 10ms cadence.
         if (probes.length < 8192) {
@@ -515,6 +556,7 @@ async function waitForGatewayReady(
   } finally {
     record?.({
       probe: "GET /readyz",
+      settlementProbe: "GET /startupz",
       startedAtMs: startedAt,
       deadlineMs: startedAt + timeoutMs,
       elapsedMs: Date.now() - startedAt,

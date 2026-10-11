@@ -237,7 +237,7 @@ describe("renderSidebarUpdateSurface", () => {
         if (state === "acknowledged") {
           overlays.acknowledgeUpdateRun();
         }
-        const dismissal = resolveSidebarUpdateAttention(context).dismissal;
+        const dismissal = resolveSidebarUpdateAttention(context)?.dismissal;
         const expected = {
           kind: "updateAvailable",
           signature: JSON.stringify(

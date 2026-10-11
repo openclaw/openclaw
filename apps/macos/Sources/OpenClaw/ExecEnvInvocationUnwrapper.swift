@@ -22,10 +22,6 @@ enum ExecEnvInvocationUnwrapper {
         return token.range(of: pattern, options: .regularExpression) != nil
     }
 
-    static func unwrap(_ command: [String]) -> [String]? {
-        self.unwrapWithMetadata(command)?.command
-    }
-
     static func unwrapWithMetadata(
         _ command: [String],
         skippingEmptyArguments: Bool = false) -> UnwrapResult?
@@ -63,25 +59,16 @@ enum ExecEnvInvocationUnwrapper {
             if token.hasPrefix("-") {
                 let lower = token.lowercased()
                 let flag = lower.split(separator: "=", maxSplits: 1).first.map(String.init) ?? lower
-                if ExecEnvOptions.flagOnly.contains(flag) {
-                    usesModifiers = true
-                    idx += 1
-                    continue
+                if ExecEnvOptions.withValue.contains(flag), !ExecEnvOptions.flagOnly.contains(flag) {
+                    expectsOptionValue = !lower.contains("=")
+                } else if !ExecEnvOptions.flagOnly.contains(flag),
+                          !ExecEnvOptions.inlineValuePrefixes.contains(where: { lower.hasPrefix($0) })
+                {
+                    return nil
                 }
-                if ExecEnvOptions.withValue.contains(flag) {
-                    usesModifiers = true
-                    if !lower.contains("=") {
-                        expectsOptionValue = true
-                    }
-                    idx += 1
-                    continue
-                }
-                if ExecEnvOptions.inlineValuePrefixes.contains(where: { lower.hasPrefix($0) }) {
-                    usesModifiers = true
-                    idx += 1
-                    continue
-                }
-                return nil
+                usesModifiers = true
+                idx += 1
+                continue
             }
             break
         }
@@ -94,8 +81,7 @@ enum ExecEnvInvocationUnwrapper {
 
     static func unwrapDispatchWrappersForResolution(_ command: [String]) -> [String] {
         var current = command
-        var depth = 0
-        while depth < self.maxWrapperDepth {
+        for _ in 0..<self.maxWrapperDepth {
             guard let token = current.first?.trimmingCharacters(in: .whitespacesAndNewlines), !token.isEmpty else {
                 break
             }
@@ -109,7 +95,6 @@ enum ExecEnvInvocationUnwrapper {
                 break
             }
             current = unwrapped.command
-            depth += 1
         }
         return current
     }

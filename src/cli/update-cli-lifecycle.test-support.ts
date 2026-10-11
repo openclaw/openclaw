@@ -4,19 +4,24 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeEach, expect, vi } from "vitest";
+import * as sourceArtifactPreflight from "../../scripts/lib/source-update-artifact-preflight.mts";
 import type { ConfigFileSnapshot } from "../config/types.openclaw.js";
 import {
   GATEWAY_SERVICE_RUNTIME_PID_ENV,
   GATEWAY_SERVICE_SELECTOR_ENV_KEYS,
 } from "../daemon/constants.js";
+import * as taskProbe from "../daemon/schtasks-state-probe.js";
 import { mockSystemAccountHome } from "../daemon/service.test-helpers.js";
 import * as nodeSqlite from "../infra/node-sqlite.js";
 import { SUPERVISOR_HINT_ENV_VARS } from "../infra/supervisor-markers.js";
 import * as updateTempRoot from "../infra/tmp-openclaw-dir.js";
+import * as updateDatabaseRestore from "../infra/update-database-restore.js";
+import * as updateRecoveryBaseline from "../infra/update-recovery-baseline-capture.js";
 import type { UpdateRunResult } from "../infra/update-runner-types.js";
 import * as windowsPrivateDirectory from "../infra/windows-private-directory.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { createCommandResult as commandResult } from "../test-utils/npm-spec-install-test-helpers.js";
 import { getFreePort } from "../test-utils/ports.js";
@@ -109,6 +114,28 @@ import { getNodeRuntimeFixture } from "./update-cli/update-command-runtime-recov
 
 await vi.hoisted(() => import("./update-cli-mocks.test-support.js"));
 
+function selectHostPlatform(): () => void {
+  const descriptor = expectDefined(
+    Object.getOwnPropertyDescriptor(process, "platform"),
+    "host platform descriptor",
+  );
+  Object.defineProperty(process, "platform", {
+    configurable: true,
+    enumerable: descriptor.enumerable,
+    value: sqliteHostPlatform,
+  });
+  return () => Object.defineProperty(process, "platform", descriptor);
+}
+
+async function onHostPlatform<T>(operation: () => Promise<T>): Promise<T> {
+  const restore = selectHostPlatform();
+  try {
+    return await operation();
+  } finally {
+    restore();
+  }
+}
+
 type UpdateCliLifecycleFixture = {
   baseConfig: ConfigFileSnapshot["config"];
   baseSnapshot: ConfigFileSnapshot;
@@ -146,6 +173,7 @@ export function registerUpdateCliLifecycle(fixture: UpdateCliLifecycleFixture): 
 
   const invocationCwd = process.cwd();
   beforeEach(async () => {
+    vi.spyOn(taskProbe, "probeScheduledTaskUpdateAccess").mockReturnValue({ status: "allowed" });
     // Default install roots use cwd; artifact admission must own the fixture, not the checkout.
     process.chdir(path.join(fixtureRoot, "checkout"));
     process.exitCode = undefined;
@@ -172,6 +200,35 @@ export function registerUpdateCliLifecycle(fixture: UpdateCliLifecycleFixture): 
     }
     restartHealthTestControl.snapshot = undefined;
     vi.resetAllMocks();
+    // Service control is simulated; native artifact and database owners still run on the host OS.
+    const inspectArtifacts = sourceArtifactPreflight.inspectSourceUpdateArtifacts;
+    vi.spyOn(sourceArtifactPreflight, "inspectSourceUpdateArtifacts").mockImplementation(
+      async (...args) => {
+        const inspected = await onHostPlatform(() => inspectArtifacts(...args));
+        const { lock } = inspected;
+        if (!lock) {
+          return inspected;
+        }
+        const release = () => onHostPlatform(() => lock.release());
+        return {
+          ...inspected,
+          lock: {
+            ...lock,
+            release,
+            verifyStillHeld: () => onHostPlatform(() => lock.verifyStillHeld()),
+            [Symbol.asyncDispose]: release,
+          },
+        };
+      },
+    );
+    const captureBaseline = updateRecoveryBaseline.captureUpdateRecoveryBaseline;
+    vi.spyOn(updateRecoveryBaseline, "captureUpdateRecoveryBaseline").mockImplementation(
+      (...args) => onHostPlatform(() => captureBaseline(...args)),
+    );
+    const restoreDatabaseBackup = updateDatabaseRestore.restoreUpdateDatabaseBackup;
+    vi.spyOn(updateDatabaseRestore, "restoreUpdateDatabaseBackup").mockImplementation((...args) =>
+      onHostPlatform(() => restoreDatabaseBackup(...args)),
+    );
     retainUpdateRuntime.mockImplementation(async ({ assertCurrent }) => assertCurrent());
     systemdPolicy.mockResolvedValue(false);
     // Service simulations do not provide foreign-platform ACL libraries. Keep
@@ -209,19 +266,11 @@ export function registerUpdateCliLifecycle(fixture: UpdateCliLifecycleFixture): 
       if (process.platform === sqliteHostPlatform) {
         return readHostProcessStartTime(...args);
       }
-      const descriptor = expectDefined(
-        Object.getOwnPropertyDescriptor(process, "platform"),
-        "host platform descriptor",
-      );
-      Object.defineProperty(process, "platform", {
-        configurable: true,
-        enumerable: descriptor.enumerable,
-        value: sqliteHostPlatform,
-      });
+      const restore = selectHostPlatform();
       try {
         return readHostProcessStartTime(...args);
       } finally {
-        Object.defineProperty(process, "platform", descriptor);
+        restore();
       }
     });
     // Cache the real host process identity before cases spoof the native service
@@ -434,6 +483,8 @@ export function registerUpdateCliLifecycle(fixture: UpdateCliLifecycleFixture): 
     setTty(false);
     setStdoutTty(false);
     initializeExistingUpdateProfile();
+    // Keep guard reads on the fixture connection instead of booting snapshots per read.
+    openOpenClawStateDatabase();
   });
 
   afterAll(async () => {

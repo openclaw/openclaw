@@ -10,6 +10,7 @@ import { cleanupStartupPluginSourceCaptures } from "../commands/startup-plugin-s
 import * as nodeSqlite from "../infra/node-sqlite.js";
 import * as census from "../infra/openclaw-process-census.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+import { acquireSqliteStagingToken } from "../infra/sqlite-staging-token.js";
 import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
@@ -19,6 +20,7 @@ import { retainGatewayPluginMetadata } from "./plugin-metadata-lifecycle.js";
 import { withPluginSourceCaptureDirectory } from "./plugin-package-metadata-capture.js";
 import {
   createPluginSourceCaptureRoot,
+  prunePluginNativeCaptureDirectories,
   retainPluginSourceCaptureInstance,
 } from "./plugin-source-capture-directory.js";
 import { sweepPluginSourceCapturesForTest } from "./plugin-source-capture-directory.test-support.js";
@@ -469,6 +471,31 @@ it.each(["payload", "instance"])(
     const orphan = await abandonCapture(stateDir, createSource());
     age(orphan.instanceRoot);
     const captures = path.dirname(orphan.boundaryRoot);
+    if (stage === "payload") {
+      let admitted = true;
+      const lstat = fsPromises.lstat.bind(fsPromises);
+      const inspected = vi
+        .spyOn(fsPromises, "lstat")
+        .mockImplementation(async (target, options) => {
+          const result = await lstat(target, options);
+          if (String(target) === orphan.instanceRoot) {
+            admitted = false;
+          }
+          return result;
+        });
+      try {
+        const refused = await prunePluginNativeCaptureDirectories(stateDir, new Set(), async () => {
+          await Promise.resolve();
+          if (!admitted) {
+            throw new Error("Fixture cleanup authority expired");
+          }
+        });
+        expect(refused.warnings).toContain("Fixture cleanup authority expired");
+        expect(fs.readFileSync(orphan.capturedFile, "utf8")).toBe(capturedSource);
+      } finally {
+        inspected.mockRestore();
+      }
+    }
     const remove = fsPromises.rm.bind(fsPromises);
     const failure = Object.assign(new Error("Fixture cleanup cannot finish"), { code: "EACCES" });
     const fault = vi.spyOn(fsPromises, "rm").mockImplementation(async (target, options) => {
@@ -536,6 +563,7 @@ it("joins hourly reclamation during metadata retirement without stopping sibling
   const orphan = path.join(root, "abandoned");
   fs.mkdirSync(orphan, { recursive: true });
   fs.writeFileSync(path.join(orphan, "payload"), "reconstructible capture");
+  acquireSqliteStagingToken(orphan, "create")();
   age(orphan);
   const entered = createDeferred();
   const release = createDeferred();
@@ -860,51 +888,6 @@ it("keeps metadata boot and source capture usable when the state directory canno
   expect(instanceRoot).toBeDefined();
   expect(fs.existsSync(instanceRoot!)).toBe(false);
 });
-
-// Failure injection sits at the filesystem boundary; captures still exercise the real allocator.
-it.each(["captures", "first capture"])(
-  "falls back when ENOSPC interrupts allocation of the %s directory",
-  async (stage) => {
-    const stateDir = temp.make("plugin-capture-full-state-");
-    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-    vi.spyOn(process, "emitWarning").mockImplementation(() => {});
-    const mkdir = fs.mkdirSync.bind(fs);
-    const mkdtemp = fs.mkdtempSync.bind(fs);
-    const failure = Object.assign(new Error("Fixture state filesystem is full"), {
-      code: "ENOSPC",
-    });
-    if (stage === "captures") {
-      vi.spyOn(fs, "mkdirSync").mockImplementation((target, options) => {
-        if (
-          String(target).startsWith(stateDir + path.sep) &&
-          path.basename(String(target)) === "captures"
-        ) {
-          throw failure;
-        }
-        return mkdir(target, options);
-      });
-    } else {
-      vi.spyOn(fs, "mkdtempSync").mockImplementation((prefix, options) => {
-        if (prefix.startsWith(stateDir + path.sep)) {
-          throw failure;
-        }
-        return mkdtemp(prefix, options);
-      });
-    }
-    const source = createSource();
-    const artifact = capturePluginGenerationArtifact(source);
-    try {
-      expect(fs.readFileSync(artifact.resolve(path.join(source, "index.cjs")), "utf8")).toBe(
-        capturedSource,
-      );
-      expect(artifact.boundaryRoot.startsWith(stateDir + path.sep)).toBe(false);
-      expect(fs.readdirSync(path.join(stateDir, "tmp", "plugin-captures"))).toEqual([]);
-    } finally {
-      await artifact.disposeAsync();
-    }
-    expect(fs.existsSync(artifact.boundaryRoot)).toBe(false);
-  },
-);
 
 it.each(["malformed", "symlink", "hardlink", "sidecar-symlink", "captures-symlink"])(
   "preserves an old capture with an unsafe %s marker or payload",

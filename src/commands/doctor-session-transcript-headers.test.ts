@@ -3,10 +3,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SessionManager } from "../agents/sessions/session-manager.js";
 import {
   loadTranscriptEventsSync,
-  replaceTranscriptEventsSync,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import { readTranscriptStorageRows } from "../config/sessions/session-accessor.sqlite-read.js";
+import { replaceTranscriptEventsSync } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { waitForSessionTranscriptIndexReconcile } from "../config/sessions/session-transcript-reconcile.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import * as agentDatabase from "../state/openclaw-agent-db.js";
@@ -52,7 +52,7 @@ describe("doctor SQLite session transcript header repair", () => {
       prefix: "openclaw-doctor-transcript-headers-",
     });
     cfg = {
-      agents: { list: [{ id: AGENT_ID, workspace: state.workspaceDir }] },
+      agents: { entries: { [AGENT_ID]: { workspace: state.workspaceDir } } },
     };
     transcriptDatabaseOptions = { agentId: AGENT_ID, env: state.env };
     scope = {
@@ -141,7 +141,7 @@ describe("doctor SQLite session transcript header repair", () => {
     ).resolves.toEqual({ found: 1, repaired: 0 });
     expect(readTranscriptStorageRows(database, SESSION_ID)).toEqual(beforeRows);
     expect(note).toHaveBeenCalledWith(
-      '- Found 1 canonical session transcript without a header.\n- Run "openclaw doctor --fix" to repair it before resuming the session.',
+      '- Found 1 stored session transcript without a header.\n- Run "openclaw doctor --fix" to repair it before resuming the session.',
       "Session transcript headers",
     );
 

@@ -601,7 +601,6 @@ describe("marketplace plugins", () => {
       expect(shortcut).toEqual({
         ok: true,
         plugin: "superpowers",
-        marketplaceName: "claude-plugins-official",
         marketplaceSource: "claude-plugins-official",
       });
     });

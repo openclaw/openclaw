@@ -66,11 +66,6 @@
   color: var(--muted);
 }
 
-.sidebar-issues-panel__heading-icon svg {
-  width: 16px;
-  height: 16px;
-}
-
 .sidebar-issues-panel__header-actions {
   display: flex;
   align-items: center;
@@ -307,15 +302,16 @@ footer.sidebar-issues-panel__mentions-note {
 }
 
 .sidebar-issues-panel__summary:hover,
-.sidebar-issues-panel__details[open] > .sidebar-issues-panel__summary {
-  background: var(--bg-hover);
-}
-
+.sidebar-issues-panel__details[open] > .sidebar-issues-panel__summary,
 .sidebar-issues-panel__details[open] {
   background: var(--bg-hover);
 }
 
-.sidebar-issues-panel__summary:focus-visible {
+.sidebar-issues-panel__summary:focus-visible,
+.sidebar-issues-panel__action:focus-visible,
+.sidebar-issues-panel__navigation-link:focus-visible,
+.sidebar-issues-panel__dismiss:focus-visible,
+.sidebar-approval-row__open-session:focus-visible {
   outline: none;
   box-shadow: var(--focus-ring);
 }
@@ -367,11 +363,6 @@ footer.sidebar-issues-panel__mentions-note {
   color: var(--text);
 }
 
-.sidebar-issues-panel__action:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
-}
-
 .sidebar-issues-panel__icon {
   display: inline-grid;
   width: 28px;
@@ -382,6 +373,7 @@ footer.sidebar-issues-panel__mentions-note {
   color: color-mix(in srgb, var(--muted) 72%, transparent);
 }
 
+.sidebar-issues-panel__heading-icon svg,
 .sidebar-issues-panel__icon svg,
 .sidebar-issues-panel__chevron svg {
   width: 16px;
@@ -449,8 +441,6 @@ footer.sidebar-issues-panel__mentions-note {
 
 .sidebar-issues-panel__navigation-link:focus-visible {
   border-radius: var(--radius-sm);
-  outline: none;
-  box-shadow: var(--focus-ring);
 }
 
 .sidebar-issues-panel__entity {
@@ -503,11 +493,6 @@ footer.sidebar-issues-panel__mentions-note {
     background: var(--bg-hover);
     color: var(--text-strong);
   }
-}
-
-.sidebar-issues-panel__dismiss:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
 }
 
 .sidebar-issues-panel__chevron {
@@ -740,11 +725,6 @@ footer.sidebar-issues-panel__mentions-note {
 .sidebar-approval-row__open-session:hover {
   background: var(--bg-hover);
   color: var(--text);
-}
-
-.sidebar-approval-row__open-session:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
 }
 
 .sidebar-approval-row__open-session svg {

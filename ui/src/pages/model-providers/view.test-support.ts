@@ -34,7 +34,6 @@ export function props(overrides: Partial<ModelProvidersViewProps> = {}): ModelPr
     providerUsageFailed: false,
     supplementalLoading: false,
     updatedAt: 1,
-    costDays: 30,
     credentialAgentLabel: "Writer",
     cards: [card()],
     configuredModels: [{ id: "openai/gpt-5", provider: "openai", name: "GPT-5", available: true }],

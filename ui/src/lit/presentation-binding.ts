@@ -14,18 +14,51 @@ export type PresentationBinding = {
 
 export type PresentationValue = boolean | PresentationBinding;
 
+/** Owns subscriptions while a directive follows a retained surface's presentation. */
+export abstract class PresentationAsyncDirective extends AsyncDirective {
+  private binding?: PresentationBinding;
+  private readonly handlePresentationChange = () => this.presentationChanged(this.binding);
+
+  protected updatePresentation(value: PresentationValue): void {
+    const previousOwner = this.binding?.owner;
+    this.binding = typeof value === "boolean" ? undefined : value;
+    if (previousOwner !== this.binding?.owner) {
+      previousOwner?.removeEventListener(PRESENTATION_CHANGED_EVENT, this.handlePresentationChange);
+      if (this.isConnected) {
+        this.binding?.owner.addEventListener(
+          PRESENTATION_CHANGED_EVENT,
+          this.handlePresentationChange,
+        );
+      }
+    }
+  }
+
+  protected abstract presentationChanged(binding?: PresentationBinding): void;
+
+  protected override disconnected(): void {
+    this.binding?.owner.removeEventListener(
+      PRESENTATION_CHANGED_EVENT,
+      this.handlePresentationChange,
+    );
+  }
+
+  protected override reconnected(): void {
+    this.binding?.owner.addEventListener(PRESENTATION_CHANGED_EVENT, this.handlePresentationChange);
+    this.handlePresentationChange();
+  }
+}
+
 /** Child lifecycles follow presentation even when their retained parent parks renders. */
-class PresentationDirective extends AsyncDirective {
+class PresentationDirective extends PresentationAsyncDirective {
   private value: PresentationValue = false;
   private project: (presented: boolean) => unknown = () => nothing;
-  private owner?: EventTarget;
-  private readonly refresh = () => {
+  protected override presentationChanged() {
     // Restore with the parent's next commit so connection and layout props arrive together.
     // Only explicit navigation previews may reuse the warmed child's previous props.
     if (typeof this.value !== "boolean" && (!this.value.isPresented() || this.value.preview?.())) {
       this.setValue(this.render(this.value, this.project));
     }
-  };
+  }
 
   override update(
     _part: Part,
@@ -33,33 +66,13 @@ class PresentationDirective extends AsyncDirective {
   ) {
     this.value = value;
     this.project = project;
-    const owner = typeof value === "boolean" ? undefined : value.owner;
-    if (this.owner !== owner) {
-      this.unsubscribe();
-      this.owner = owner;
-      if (this.isConnected) {
-        this.owner?.addEventListener(PRESENTATION_CHANGED_EVENT, this.refresh);
-      }
-    }
+    this.updatePresentation(value);
     return this.render(value, project);
   }
 
   override render(value: PresentationValue, project: (presented: boolean) => unknown) {
     const presented = typeof value === "boolean" ? value : value.isPresented();
     return project(presented);
-  }
-
-  private unsubscribe(): void {
-    this.owner?.removeEventListener(PRESENTATION_CHANGED_EVENT, this.refresh);
-  }
-
-  override disconnected(): void {
-    this.unsubscribe();
-  }
-
-  override reconnected(): void {
-    this.owner?.addEventListener(PRESENTATION_CHANGED_EVENT, this.refresh);
-    this.refresh();
   }
 }
 

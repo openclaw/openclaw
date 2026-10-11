@@ -7,6 +7,21 @@ describe("delivery producer lease", () => {
     vi.useRealTimers();
   });
 
+  it("keeps a producer lease with an expiry 30 days ahead alive", async () => {
+    vi.useFakeTimers();
+    const lease = await startDeliveryProducerLease({
+      id: "clock-skew",
+      renew: async () => Date.now() + 30 * 24 * 60 * 60_000,
+    });
+    try {
+      await vi.advanceTimersByTimeAsync(100);
+      expect(lease.signal.aborted).toBe(false);
+    } finally {
+      await lease.stop();
+    }
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it("renews immediately and keeps the exact owner alive until stopped", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(1_000);

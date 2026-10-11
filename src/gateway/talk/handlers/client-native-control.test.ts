@@ -1,5 +1,6 @@
 import { setImmediate as nextEventLoopTurn, setTimeout as delay } from "node:timers/promises";
 import { describe, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement, withinTest } from "../../../../test/helpers/promise.js";
 import { ACTIVE_EMBEDDED_RUNS } from "../../../agents/embedded-agent-runner/run-state.js";
 import type { RunEmbeddedAgentParams } from "../../../agents/embedded-agent-runner/run/params.js";
 import {
@@ -10,10 +11,22 @@ import { createEmbeddedRunHandle } from "../../../agents/embedded-agent-runner/r
 import * as workspace from "../../../agents/workspace.js";
 import { readSessionTranscriptMessageEvents } from "../../../config/sessions/session-accessor.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
+import { resolveOpenClawAgentSqlitePath } from "../../../state/openclaw-agent-db.paths.js";
+import { prepareClientVoiceSessionClose } from "../../../talk/client-voice-session-lifecycle.js";
 import {
-  flushClientVoiceSessionWrites,
-  isClientVoiceSessionConfirmable,
-} from "../../../talk/client-voice-session.js";
+  assertClientVoiceSessionOpen,
+  resolveOpenClientVoiceSessionId,
+} from "../../../talk/client-voice-session-read.js";
+import * as voiceSessionReads from "../../../talk/client-voice-session-read.js";
+import { flushClientVoiceSessionWrites } from "../../../talk/client-voice-session.js";
+import { VoiceTranscriptOperationRegistry } from "../../../talk/voice-transcript.js";
+import { captureEnv, setTestEnvValue } from "../../../test-utils/env.js";
+import * as talkAgentConsult from "../agent-consult.js";
+import { closeTalkClientGatewayControlSession } from "../client-gateway-control.js";
+import {
+  forgetLegacyVoiceBinding,
+  readLegacyVoiceBinding,
+} from "./client-legacy-voice-bindings.js";
 import {
   AGENT_ID,
   CONNECTION_ID,
@@ -27,11 +40,122 @@ import {
   upstream,
   withNativePlugin,
   withParkedNativeTask,
-  withRegisteredNativeEmbeddedRun,
 } from "./client-native-control.test-support.js";
+import { withRegisteredNativeEmbeddedRun } from "./client-native-run.test-support.js";
+import { flushNativeTranscript } from "./client-native-transcript.test-support.js";
 
 describe("native Talk through the public OpenAI plugin registration", () => {
   installNativePluginTestHooks();
+
+  it.for(["source environment drift", "settlement refusal"] as const)(
+    "closes the provider and joins accepted transcripts across %s",
+    async (transition, { signal }) => {
+      await withNativePlugin(async (fixture) => {
+        const { result, socket } = await connectNativeSession(fixture);
+        const voiceSessionId = requireString(result, "voiceSessionId");
+        const target = { voiceSessionId, sessionKey: SESSION_KEY, connId: CONNECTION_ID };
+        const originalStorePath = resolveOpenClawAgentSqlitePath({ agentId: AGENT_ID });
+        const entered = createDeferredCore();
+        const release = createDeferredCore();
+        const providerClosed = createDeferredCore();
+        socket.once("close", providerClosed.resolve);
+        // oxlint-disable-next-line typescript/unbound-method -- Invoked with the original registry receiver.
+        const run = VoiceTranscriptOperationRegistry.prototype.run;
+        const paused = vi
+          .spyOn(VoiceTranscriptOperationRegistry.prototype, "run")
+          .mockImplementationOnce(function (
+            this: VoiceTranscriptOperationRegistry,
+            key,
+            operation,
+            options,
+          ) {
+            return run.call(
+              this,
+              key,
+              async () => {
+                entered.resolve();
+                await release.promise;
+                return operation();
+              },
+              options,
+            );
+          });
+        const env = captureEnv(["OPENCLAW_STATE_DIR"]);
+        let persistence: ReturnType<typeof prepareClientVoiceSessionClose> | undefined;
+        let closing: Promise<boolean> | undefined;
+        try {
+          socket.serverEvent({
+            type: "turn.done",
+            turn: { role: "user", transcript: "accepted before close" },
+          });
+          await withinTest(entered.promise, signal);
+          if (transition === "source environment drift") {
+            const invalidState = path.join(process.env.OPENCLAW_STATE_DIR!, "invalid-close-source");
+            await fs.mkdir(
+              resolveOpenClawAgentSqlitePath({
+                agentId: AGENT_ID,
+                env: { ...process.env, OPENCLAW_STATE_DIR: invalidState },
+              }),
+              { recursive: true },
+            );
+            setTestEnvValue("OPENCLAW_STATE_DIR", invalidState);
+          } else {
+            persistence = prepareClientVoiceSessionClose();
+            persistence.beginClose();
+          }
+          closing = closeTalkClientGatewayControlSession(target);
+          void closing.catch(() => {});
+          await withinTest(
+            awaitGateBeforeSettlement(
+              providerClosed.promise,
+              closing,
+              "provider close was skipped",
+            ),
+            signal,
+          );
+          let settled = false;
+          void closing.then(
+            () => {
+              settled = true;
+            },
+            () => {
+              settled = true;
+            },
+          );
+          await Promise.resolve();
+          expect(settled).toBe(false);
+          release.resolve();
+          if (transition === "source environment drift") {
+            await expect(closing).resolves.toBe(true);
+          } else {
+            await expect(closing).rejects.toThrow("admission is closed");
+          }
+          expect(await closeTalkClientGatewayControlSession(target)).toBe(false);
+          env.restore();
+          const messages = readSessionTranscriptMessageEvents({
+            agentId: AGENT_ID,
+            sessionId: SESSION_ID,
+            storePath: originalStorePath,
+          });
+          expect(messages.map(({ event }) => event)).toEqual([
+            expect.objectContaining({
+              message: expect.objectContaining({
+                role: "user",
+                content: [{ type: "text", text: "accepted before close" }],
+              }),
+            }),
+          ]);
+        } finally {
+          env.restore();
+          release.resolve();
+          await flushClientVoiceSessionWrites({ agentId: AGENT_ID, voiceSessionId });
+          await closing?.catch(() => {});
+          await persistence?.drain();
+          paused.mockRestore();
+        }
+      });
+    },
+  );
 
   it("reports setup rejection before a backend registration exists", async () => {
     const preparation = vi
@@ -93,21 +217,26 @@ describe("native Talk through the public OpenAI plugin registration", () => {
       const { result, socket } = await connectNativeSession({ create, offer });
       expect(talkEventTypes(broadcast).filter((type) => type === "session.ready")).toHaveLength(1);
       expect(
-        isClientVoiceSessionConfirmable({
+        assertClientVoiceSessionOpen({
           agentId: AGENT_ID,
           sessionKey: SESSION_KEY,
           voiceSessionId: requireString(result, "voiceSessionId"),
         }),
-      ).toBe(true);
-      socket.serverEvent({ type: "turn.done", turn: { role: "user", transcript: "Hello voice" } });
-      socket.serverEvent({
-        type: "turn.done",
-        turn: { role: "assistant", transcript: "Hello human" },
-      });
-      await flushClientVoiceSessionWrites({
-        agentId: AGENT_ID,
-        voiceSessionId: requireString(result, "voiceSessionId"),
-      });
+      ).toBe("client");
+      await flushNativeTranscript(
+        result,
+        () => {
+          socket.serverEvent({
+            type: "turn.done",
+            turn: { role: "user", transcript: "Hello voice" },
+          });
+          socket.serverEvent({
+            type: "turn.done",
+            turn: { role: "assistant", transcript: "Hello human" },
+          });
+        },
+        2,
+      );
       const messages = readSessionTranscriptMessageEvents({
         agentId: AGENT_ID,
         sessionId: SESSION_ID,
@@ -147,8 +276,10 @@ describe("native Talk through the public OpenAI plugin registration", () => {
           const delegation = nativeDelegation("control-request", text);
           const idle = await connectNativeSession({ create, offer });
           expect(idle.result.voiceSessionId).not.toBe(result.voiceSessionId);
-          idle.socket.serverEvent(delegation);
-          idle.socket.serverEvent(transcript);
+          await flushNativeTranscript(idle.result, () => {
+            idle.socket.serverEvent(delegation);
+            idle.socket.serverEvent(transcript);
+          });
           const idleReply =
             text === "cancel"
               ? "There is no active OpenClaw run to cancel."
@@ -168,20 +299,17 @@ describe("native Talk through the public OpenAI plugin registration", () => {
               expect(abortSignal.aborted).toBe(text === "cancel");
             });
           if (eventOrder === "transcript-first") {
-            socket.serverEvent(transcript);
-            socket.serverEvent(delegation);
+            await flushNativeTranscript(result, () => {
+              socket.serverEvent(transcript);
+              socket.serverEvent(delegation);
+            });
           } else {
             socket.serverEvent(delegation);
             // Native control must finish while final ASR is withheld, not merely after both events.
             await waitForControlReply();
-            socket.serverEvent(transcript);
+            await flushNativeTranscript(result, () => socket.serverEvent(transcript));
           }
           await waitForControlReply();
-          await flushClientVoiceSessionWrites({
-            agentId: AGENT_ID,
-            voiceSessionId: requireString(result, "voiceSessionId"),
-          });
-          await nextEventLoopTurn();
           expect({
             originalRunAborted: abortSignal.aborted,
             agentStarts: upstream.runEmbeddedAgent.mock.calls.length,
@@ -219,12 +347,9 @@ describe("native Talk through the public OpenAI plugin registration", () => {
     await withNativePlugin(async ({ create, offer }) => {
       const { socket, result } = await connectNativeSession({ create, offer });
       const beforeTranscript = socket.sent.slice();
-      socket.serverEvent({ type: "turn.done", turn: { role: "user", transcript: text } });
-      await flushClientVoiceSessionWrites({
-        agentId: AGENT_ID,
-        voiceSessionId: requireString(result, "voiceSessionId"),
-      });
-      await nextEventLoopTurn();
+      await flushNativeTranscript(result, () =>
+        socket.serverEvent({ type: "turn.done", turn: { role: "user", transcript: text } }),
+      );
       expect(socket.sent).toEqual(beforeTranscript);
       expect(upstream.runEmbeddedAgent).not.toHaveBeenCalled();
       socket.serverEvent(nativeDelegation("idle-control", text));
@@ -355,6 +480,65 @@ describe("native Talk through the public OpenAI plugin registration", () => {
     },
   );
 
+  it("reuses one implicit call when legacy tool lookups overlap on the same connection", async () => {
+    await withNativePlugin(async ({ invoke }) => {
+      const ready = createDeferredCore();
+      const release = createDeferredCore();
+      const lookup = voiceSessionReads.resolveOpenClientVoiceSessionId;
+      const reader = vi
+        .spyOn(voiceSessionReads, "resolveOpenClientVoiceSessionId")
+        .mockImplementation(async (request) => {
+          const selected = await lookup(request);
+          ready.resolve();
+          await release.promise;
+          return selected;
+        });
+      // Agent execution is downstream of the persisted binding this case protects.
+      const consult = vi
+        .spyOn(talkAgentConsult, "startTalkRealtimeAgentConsult")
+        .mockResolvedValue({
+          ok: true,
+          runId: "synthetic-legacy-run",
+          idempotencyKey: "synthetic-legacy-call",
+        });
+      const calls = Promise.all(
+        ["first", "second"].map((callId) =>
+          invoke("talk.client.toolCall", {
+            voiceSessionId: undefined,
+            callId,
+            name: "openclaw_agent_consult",
+            args: { question: "Report status" },
+          }),
+        ),
+      );
+      try {
+        await awaitGateBeforeSettlement(
+          ready.promise,
+          calls,
+          "The first legacy lookup must reach the worker while both requests are pending",
+        );
+        release.resolve();
+        await calls;
+        expect(consult).toHaveBeenCalledTimes(2);
+        const binding = readLegacyVoiceBinding(CONNECTION_ID, SESSION_KEY);
+        expect(binding).toBeTypeOf("string");
+        expect(
+          await resolveOpenClientVoiceSessionId({ agentId: AGENT_ID, sessionKey: SESSION_KEY }),
+        ).toBe(binding);
+      } finally {
+        release.resolve();
+        await Promise.allSettled([calls]);
+        reader.mockRestore();
+        consult.mockRestore();
+        forgetLegacyVoiceBinding(
+          CONNECTION_ID,
+          SESSION_KEY,
+          readLegacyVoiceBinding(CONNECTION_ID, SESSION_KEY),
+        );
+      }
+    });
+  });
+
   it("keeps legacy native data-channel and client transcript ownership unchanged", async () => {
     await withNativePlugin(async ({ create, offer, invoke, broadcast }) => {
       const { result, socket } = await connectNativeSession({ create, offer }, false);
@@ -393,3 +577,5 @@ describe("native Talk through the public OpenAI plugin registration", () => {
     });
   });
 });
+import fs from "node:fs/promises";
+import path from "node:path";

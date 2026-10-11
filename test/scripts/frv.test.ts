@@ -1447,27 +1447,6 @@ describe("FRV same-parent recovery", () => {
     );
   });
 
-  it.each([
-    ["child", "HTTP 403: workflow rerun forbidden"],
-    ["parent", "HTTP 422: workflow rerun rejected"],
-  ])("does not poll after a hard %s mutation failure", async (target, error) => {
-    const scenario = rerunScenario(
-      target === "child"
-        ? { childError: new Error(error) }
-        : {
-            childSource: [1, "success"],
-            parentError: new Error(error),
-            parentSource: [1, "failure"],
-          },
-    );
-    await expect(continueFailed(plan([scenario.selected]), "77", scenario.client)).rejects.toThrow(
-      error,
-    );
-    expect(
-      target === "child" ? scenario.counters.reads.child : scenario.counters.reads.parent,
-    ).toBe(0);
-  });
-
   it("reconciles an ambiguous peer before surfacing a hard child mutation failure", async () => {
     const first = child("normalCi", "101");
     const second = child("pluginPrerelease", "202");
@@ -1585,30 +1564,6 @@ describe("FRV same-parent recovery", () => {
     );
     expect(scenario.counters.posts.child).toBe(1);
   });
-
-  it("keeps dry-run recovery mutation-free", async () => {
-    const selected = child("normalCi", "101");
-    let mutations = 0;
-    const client = {
-      ...controllerClient([selected], new Map([["101", { attempt: 1, conclusion: "failure" }]]), {
-        attempt: 1,
-        conclusion: "failure",
-      }),
-      rerunFailed: async () => {
-        mutations += 1;
-      },
-      rerunParent: async () => {
-        mutations += 1;
-      },
-      verify: async () => {
-        mutations += 1;
-      },
-    };
-    await expect(
-      continueFailed(plan([selected]), "77", client, { dryRun: true }),
-    ).resolves.toMatchObject({ action: "would-rerun" });
-    expect(mutations).toBe(0);
-  });
 });
 
 describe("FRV manual retry admission", () => {
@@ -1671,6 +1626,59 @@ describe("FRV child rerun", () => {
         sourceRunAttempt: 1,
       }),
     );
+  });
+
+  it("recovers only a failed receipt after passing workloads, then requires resealed acceptance", async () => {
+    const publisher = "Seal full release child evidence / Seal child receipt";
+    const selected = child("normalCi", "101");
+    const childRuns = new Map([["101", { attempt: 1, conclusion: "success" }]]);
+    const parent = { attempt: 1, conclusion: "failure" };
+    const client = {
+      ...controllerClient([selected], childRuns, parent),
+      getAttemptJobs: async (_id: string, attempt: number) => [
+        ...(attempt === 1 ? [{ ...job("workload"), id: 11, run_id: 101, run_attempt: 1 }] : []),
+        {
+          ...job(publisher, attempt === 1 ? "failure" : "success"),
+          id: 12 + attempt,
+          run_id: 101,
+          run_attempt: attempt,
+        },
+      ],
+      rerunJob: vi.fn(async () => {
+        childRuns.set("101", { attempt: 2, conclusion: "success" });
+      }),
+      rerunFailed: vi.fn(),
+      rerunParent: vi.fn(async () => {
+        parent.attempt = 2;
+        parent.conclusion = "success";
+      }),
+      verify: vi.fn(async () => "sealed accepted evidence"),
+    };
+    await expect(
+      continueFailed(plan([selected]), "77", client, {
+        child: "normalCi",
+        dryRun: true,
+      }),
+    ).resolves.toMatchObject({ action: "would-rerun", childRerun: { mode: "receipt" } });
+    await expect(
+      continueFailed(plan([selected]), "77", client, {
+        child: "normalCi",
+        log: vi.fn(),
+      }),
+    ).resolves.toMatchObject({
+      action: "reran-child",
+      reruns: [{ mode: "receipt", jobId: 13, sourceRunAttempt: 1, runAttempt: 2 }],
+    });
+    expect(client.rerunJob).toHaveBeenCalledExactlyOnceWith(13);
+    expect(client.rerunFailed).not.toHaveBeenCalled();
+    expect(client.verify).not.toHaveBeenCalled();
+    await expect(continueFailed(plan([selected]), "77", client)).resolves.toMatchObject({
+      action: "reran-parent",
+      finalRunId: "77",
+    });
+    expect(client.rerunJob).toHaveBeenCalledOnce();
+    expect(client.rerunFailed).not.toHaveBeenCalled();
+    expect(client.verify).toHaveBeenCalledOnce();
   });
 
   it("refuses a rerun beyond the attempt budget before any POST", async () => {
@@ -1750,6 +1758,85 @@ describe("FRV child rerun", () => {
 });
 
 describe("FRV watch", () => {
+  it.each([
+    ["retry-after", "Retry-After: 120", 120_000],
+    ["primary reset", "X-RateLimit-Remaining: 0\r\nX-RateLimit-Reset: 1791500120", 120_000],
+    ["secondary throttle", "", 60_000],
+  ])(
+    "waits through %s across watcher restarts without duplicate notifications",
+    async (_name, headers, waitMs) => {
+      const statePath = path.join(tempDirs.make("frv-rate-limit-"), "state.json");
+      const start = 1791500000_000;
+      const clock = vi.spyOn(Date, "now").mockReturnValue(start);
+      const getRun = vi
+        .fn()
+        .mockRejectedValueOnce(
+          Object.assign(new Error("gh: API rate limit exceeded (HTTP 403)"), {
+            stdout: `HTTP/2.0 403 Forbidden\r\n${headers}\r\n\r\n{"message":"API rate limit exceeded"}`,
+          }),
+        )
+        .mockResolvedValue(rootRun(1, "success"));
+      const client = {
+        repository: REPOSITORY,
+        getRun,
+        getParentJobs: async () => [{ ...job("Resolve target ref"), run_attempt: 1 }],
+        getAttemptJobs: async () => {
+          throw new Error("no child was dispatched");
+        },
+        getJobLog: async () => {
+          throw new Error("no dispatch log is needed");
+        },
+      };
+      const messages: string[] = [];
+      const poll = () =>
+        watchRelease("77", client, {
+          emit: (event: { message: string }) => messages.push(event.message),
+          once: true,
+          statePath,
+        });
+      try {
+        await expect(poll()).resolves.toMatchObject({ complete: false });
+        expect(messages).toEqual([expect.stringContaining("rate limited")]);
+        const firstNotification = [...messages];
+        clock.mockReturnValue(start + waitMs - 1);
+        await poll();
+        expect(getRun).toHaveBeenCalledTimes(1);
+        expect(messages).toEqual(firstNotification);
+        clock.mockReturnValue(start + waitMs);
+        await expect(poll()).resolves.toMatchObject({ complete: true });
+        expect(getRun).toHaveBeenCalledTimes(2);
+      } finally {
+        clock.mockRestore();
+      }
+    },
+  );
+
+  it("refuses a permission-denied 403 instead of scheduling another poll", async () => {
+    const statePath = path.join(tempDirs.make("frv-forbidden-"), "state.json");
+    const emit = vi.fn();
+    await expect(
+      watchRelease(
+        "77",
+        {
+          getRun: async () => {
+            throw new Error("gh: Resource not accessible by integration (HTTP 403)");
+          },
+          getParentJobs: async () => {
+            throw new Error("permission denial must stop reads");
+          },
+          getAttemptJobs: async () => {
+            throw new Error("permission denial must stop reads");
+          },
+          getJobLog: async () => {
+            throw new Error("permission denial must stop reads");
+          },
+        },
+        { once: true, statePath, emit },
+      ),
+    ).rejects.toThrow("Resource not accessible");
+    expect(emit).not.toHaveBeenCalled();
+  });
+
   it("resolves children from dispatch logs and reports each transition once across restarts", async () => {
     const statePath = path.join(tempDirs.make("frv-watch-"), "state.json");
     const ci = child("normalCi", "101");

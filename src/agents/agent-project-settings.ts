@@ -1,4 +1,3 @@
-/** Prepares embedded-agent SettingsManager instances from project and plugin settings. */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import {
@@ -9,7 +8,6 @@ import {
 import { applyAgentCompactionSettingsFromConfig } from "./agent-settings.js";
 import { SettingsManager } from "./sessions/index.js";
 
-/** Creates the runtime SettingsManager with project/plugin settings and compaction overrides. */
 export function createPreparedEmbeddedAgentSettingsManager(params: {
   cwd: string;
   agentDir: string;

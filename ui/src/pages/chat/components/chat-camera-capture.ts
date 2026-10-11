@@ -5,6 +5,7 @@ import "../../../components/modal-dialog.ts";
 import { t } from "../../../i18n/index.ts";
 import { registerChatCameraEnglish } from "../../../i18n/locales/en-chat-camera.ts";
 import { OpenClawLitElement } from "../../../lit/openclaw-element.ts";
+import { useNativeAttachmentCapture } from "./chat-attachment-picker-policy.ts";
 import { cameraCaptureStyles } from "./chat-camera-capture.styles.ts";
 
 registerChatCameraEnglish();
@@ -61,6 +62,12 @@ export class OpenClawChatCameraCapture extends OpenClawLitElement {
 
   show(): void {
     if (!this.isConnected || this.disabled || this.readSignal?.aborted || this.stage !== "closed") {
+      return;
+    }
+    if (this.onNativeCapture && useNativeAttachmentCapture()) {
+      // Keep the native input click in the original gesture, without requesting
+      // a web camera stream or mounting a second capture UI first.
+      this.onNativeCapture(this);
       return;
     }
     this.activeSignal = this.readSignal;
@@ -269,23 +276,14 @@ export class OpenClawChatCameraCapture extends OpenClawLitElement {
     destination?.(photo);
   };
 
-  private upload = () => {
-    if (!this.isCurrent(this.generation)) {
+  private openFileInput(kind: "photo" | "camera") {
+    if (!this.isCurrent(this.generation) || (kind === "camera" && this.stage !== "error")) {
       return;
     }
-    const destination = this.uploadDestination;
+    const destination = kind === "camera" ? this.nativeCaptureDestination : this.uploadDestination;
     this.close();
     destination?.(this);
-  };
-
-  private useNativeCamera = () => {
-    if (!this.isCurrent(this.generation) || this.stage !== "error") {
-      return;
-    }
-    const destination = this.nativeCaptureDestination;
-    this.close();
-    destination?.(this);
-  };
+  }
 
   override render() {
     if (this.stage === "closed") {
@@ -378,12 +376,16 @@ export class OpenClawChatCameraCapture extends OpenClawLitElement {
               : nothing
           }
           <footer>
-            <button type="button" class="upload" @click=${this.upload}>
+            <button type="button" class="upload" @click=${() => this.openFileInput("photo")}>
               ${icons.image}${t("chat.camera.upload")}
             </button>
             ${
               failed && !nativeFallback && Boolean(this.nativeCaptureDestination)
-                ? html`<button type="button" class="upload" @click=${this.useNativeCamera}>
+                ? html`<button
+                    type="button"
+                    class="upload"
+                    @click=${() => this.openFileInput("camera")}
+                  >
                     ${icons.camera}${t("chat.camera.useNativeCamera")}
                   </button>`
                 : nothing
@@ -400,7 +402,7 @@ export class OpenClawChatCameraCapture extends OpenClawLitElement {
                 type="button"
                 class="primary"
                 ?disabled=${!reviewing && !failed && (this.stage !== "live" || !this.videoReady)}
-                @click=${reviewing ? this.usePhoto : nativeFallback ? this.useNativeCamera : failed ? () => void this.startCamera() : this.capture}
+                @click=${reviewing ? this.usePhoto : nativeFallback ? () => this.openFileInput("camera") : failed ? () => void this.startCamera() : this.capture}
               >
                 ${reviewing ? t("chat.camera.usePhoto") : nativeFallback ? t("chat.camera.useNativeCamera") : failed ? t("chat.camera.retry") : t("chat.camera.capture")}
               </button>

@@ -44,6 +44,8 @@ const directory: UsersListResult = {
 suite.define(() => {
   it.each([
     { width: 1280, colorScheme: "light" as const, scale: 1, font: "var(--font-body)" },
+    { width: 1280, colorScheme: "dark" as const, scale: 1, font: "var(--font-body)" },
+    { width: 390, colorScheme: "light" as const, scale: 1.5, font: "Georgia, serif" },
     { width: 390, colorScheme: "dark" as const, scale: 1.5, font: "Georgia, serif" },
   ])("keeps mention avatars aligned across image outcomes at $width px", async (viewport) => {
     await suite.withPage(
@@ -107,6 +109,12 @@ suite.define(() => {
             .poll(() => references.locator('[data-avatar-state="pending"]').count())
             .toBe(2);
           const pending = await geometry();
+          await captureUiProof(
+            suite,
+            page,
+            "person-references",
+            `${viewport.width}-${viewport.colorScheme}-pending.png`,
+          );
           response.resolve();
           await references.locator('[data-avatar-state="loaded"]').waitFor();
           await references.locator('[data-avatar-state="failed"]').waitFor();
@@ -117,6 +125,12 @@ suite.define(() => {
             expect(Math.abs(offset)).toBeLessThanOrEqual(1);
           }
           expect(await references.allTextContents()).toEqual([label, label]);
+          await captureUiProof(
+            suite,
+            page,
+            "person-references",
+            `${viewport.width}-${viewport.colorScheme}-settled.png`,
+          );
         } finally {
           response.resolve();
         }
@@ -175,6 +189,7 @@ suite.define(() => {
           },
         });
         await page.goto(suite.server.baseUrl + "chat");
+        await page.locator('[data-navigation-view="online"]').click();
         const sidebarPerson = page.locator('[data-online-user-id="profile-ada"]');
         await sidebarPerson.hover();
         const card = page.locator(".person-activity-hovercard[role=dialog]");
@@ -358,55 +373,6 @@ suite.define(() => {
       );
     },
   );
-
-  it("preserves table copying and transcript actions on a mention avatar", async () => {
-    await suite.withPage({}, async ({ page }) => {
-      await page.context().grantPermissions(["clipboard-read", "clipboard-write"], {
-        origin: new URL(suite.server.baseUrl).origin,
-      });
-      await page.route("**/api/users/**/avatar*", (route) =>
-        route.fulfill({
-          contentType: "image/png",
-          body: readFileSync("ui/public/apple-touch-icon.png"),
-        }),
-      );
-      const table = `| Request | Status |\n| --- | --- |\n| Ask ${label} today | Open |`;
-      const start = table.indexOf(label);
-      await installMockGateway(page, {
-        historyMessages: [
-          {
-            role: "user",
-            content: table,
-            timestamp: 1,
-            __openclaw: {
-              id: "mention-table",
-              humanMentions: [{ profileId: "profile-old", start, end: start + label.length }],
-            },
-          },
-        ],
-        methodResponses: { "users.list": directory },
-      });
-      await page.goto(suite.server.baseUrl + "chat");
-      const reference = page.locator(".markdown-person-reference");
-      const image = reference.locator("img");
-      await expect
-        .poll(() =>
-          image.evaluate((node: HTMLImageElement) => node.complete && node.naturalWidth > 0),
-        )
-        .toBe(true);
-      const copied = `Request\tStatus\nAsk ${label} today\tOpen`;
-      await page.getByRole("button", { name: "Copy table", exact: true }).click();
-      await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(copied);
-      await page.evaluate(() => navigator.clipboard.writeText("awaiting context-menu copy"));
-      const avatar = await image.boundingBox();
-      expect(avatar).not.toBeNull();
-      await page.mouse.click(avatar!.x + avatar!.width / 2, avatar!.y + avatar!.height / 2, {
-        button: "right",
-      });
-      await page.getByRole("menuitem", { name: "Copy table", exact: true }).click();
-      await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(copied);
-    });
-  });
 
   it("does not revive a dismissed or disconnected card when an old directory reply arrives", async () => {
     await suite.withPage({}, async ({ page }) => {

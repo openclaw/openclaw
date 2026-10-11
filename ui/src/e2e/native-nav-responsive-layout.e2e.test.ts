@@ -244,14 +244,14 @@ suite.define(() => {
       });
 
     await expect.poll(() => actionInset("ltr")).toBe(2);
-    await expect.poll(nameFade).toEqual(["0px", "8px", "none"]);
+    await expect.poll(nameFade).toEqual(["0px", "4px", "none"]);
     await page.evaluate(() => {
       document.documentElement.dir = "rtl";
     });
     await expect.poll(() => actionInset("rtl")).toBe(0);
     await expect.poll(controlGaps).toEqual([0, 0]);
     // The fitting Latin name keeps its own direction in RTL page chrome.
-    await expect.poll(nameFade).toEqual(["0px", "8px", "none"]);
+    await expect.poll(nameFade).toEqual(["0px", "4px", "none"]);
   });
 
   it("keeps the native sidebar avatar larger", async () => {

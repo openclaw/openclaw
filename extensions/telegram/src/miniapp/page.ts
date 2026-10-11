@@ -9,8 +9,6 @@ export function renderTelegramMiniAppPage(params: {
   accountId: string;
   scriptNonce: string;
 }): string {
-  const accountId = JSON.stringify(params.accountId);
-  const nonce = escapeHtml(params.scriptNonce);
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -32,8 +30,8 @@ export function renderTelegramMiniAppPage(params: {
     <h1>OpenClaw</h1>
     <p id="status">Opening Control UI...</p>
   </main>
-  <script nonce="${nonce}">
-    const accountId = ${accountId};
+  <script nonce="${escapeHtml(params.scriptNonce)}">
+    const accountId = ${JSON.stringify(params.accountId)};
     const launchTicket = new URLSearchParams(location.hash.slice(1)).get("launchTicket") || "";
     const status = document.getElementById("status");
     const showExpired = () => {

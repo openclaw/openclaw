@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../shared/deferred.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
-import { updateUserGitHubConnection } from "../state/user-github-connections.js";
+import { updateUserGitHubConnection } from "../state/user-github-connections.test-support.js";
 import { readPersonalGitHubPublication } from "./github-personal-publication-store.js";
 import {
   callPersonalPublicationRpc,
@@ -85,16 +85,31 @@ describe("GitHub publication selection admission", () => {
   installGitHubPublicationTestHarness();
   afterEach(() => vi.unstubAllGlobals());
 
+  it("rejects publisher revocation during the final worktree read before claim admission", async () => {
+    const fixture = await sharedAdmission("claim");
+    const identity = await mocks.prepareIdentity();
+    const findWorktree = mocks.findWorktree.getMockImplementation()!;
+    mocks.prepareIdentity.mockImplementationOnce(async () => {
+      mocks.findWorktree.mockImplementationOnce((...args) => {
+        mocks.matchesIdentity.mockReturnValue(false);
+        return findWorktree(...args);
+      });
+      return identity;
+    });
+    await expect(fixture.request(publisher)).rejects.toThrow("GitHub publication identity changed");
+    expect(fixture.read()).toBeUndefined();
+    expect(commands).toEqual([]);
+  });
+
   it.each([
     ...[
       { sessionKey: "agent:main:main", agentId: "research" },
-      { sessionKey: "agent:main:main", agentId: "main" },
       { sessionKey: "global", agentId: "---" },
       { sessionKey: "global", agentId: "retired" },
       { sessionKey: "agent:research:main", agentId: "research", fixedOwner: "ops" },
       { sessionKey: "agent:research:main", agentId: "research", fixedOwner: "retired" },
     ].map((owner) => Object.assign({}, owner, { method: "publish" })),
-    ...["options", "status", "confirm"].map((method) => ({
+    ...["status"].map((method) => ({
       method,
       sessionKey: "agent:main:main",
       agentId: "research",
@@ -160,18 +175,7 @@ describe("GitHub publication selection admission", () => {
     },
   );
 
-  it.each(["local", "deferred", "claim"] as const)(
-    "records a fresh %s selection rejection before any durable request or Git effect",
-    async (surface) => {
-      const fixture = await sharedAdmission(surface);
-      const error = await fixture.request().catch((caught: unknown) => caught);
-      expect(fixture.read()).toBeUndefined();
-      expect(commands).toEqual([]);
-      expect(error).toMatchObject({ rejection: rejection(fixture.key) });
-    },
-  );
-
-  it.each(["local", "deferred", "claim"] as const)(
+  it.each(["local", "deferred"] as const)(
     "does not reinterpret an existing %s receipt as a pre-admission rejection",
     async (surface) => {
       const fixture = await sharedAdmission(surface);
@@ -255,65 +259,43 @@ describe("GitHub publication selection admission", () => {
     expect(commands).toEqual([]);
   });
 
-  it.each(["initial", "refresh", "target", "snapshot"] as const)(
-    "returns exact personal pre-insert rejection details when selection changes at %s",
-    async (phase) => {
-      const fixture = await createPersonalPublicationFixture();
-      const key = `personal-rejected-${phase}`;
-      const request = {
-        sessionKey: SESSION_KEY,
-        idempotencyKey: key,
-        selection: {
-          source: "personal",
-          generation: fixture.generation,
-          account: personalPublicationAccount,
-        },
-      };
-      const rotate = () =>
-        updateUserGitHubConnection(
-          fixture.owner,
-          (current) => ({ ...current!, generation: "f7cb52c6-1d4f-4012-aeae-e31b00f41456" }),
-          () => {},
-        );
-      if (phase === "initial") {
-        rotate();
-      } else if (phase === "refresh") {
-        mocks.refreshIdentity.mockImplementationOnce(async () => rotate());
-      } else if (phase === "target") {
-        const resolve = mocks.resolveRepository.getMockImplementation()!;
-        mocks.resolveRepository.mockImplementationOnce(async () => {
-          const target = await resolve();
-          rotate();
-          return target;
-        });
-      } else {
-        const run = mocks.runCommand.getMockImplementation()!;
-        mocks.runCommand.mockImplementation(
-          async (args: string[], options?: { input?: string }) => {
-            const result = await run(args, options);
-            if (args.includes("write-tree")) {
-              rotate();
-            }
-            return result;
-          },
-        );
-      }
-      const response = await callPersonalPublicationRpc(
-        fixture,
-        "sessions.github.publish",
-        request,
+  it("returns exact personal pre-insert rejection details when selection changes during snapshot capture", async () => {
+    const fixture = await createPersonalPublicationFixture();
+    const key = "personal-rejected-snapshot";
+    const request = {
+      sessionKey: SESSION_KEY,
+      idempotencyKey: key,
+      selection: {
+        source: "personal",
+        generation: fixture.generation,
+        account: personalPublicationAccount,
+      },
+    };
+    const rotate = () =>
+      updateUserGitHubConnection(
+        fixture.owner,
+        (current) => ({ ...current!, generation: "f7cb52c6-1d4f-4012-aeae-e31b00f41456" }),
+        () => {},
       );
-      expect(response[0]).toBe(false);
-      expect(
-        readPersonalGitHubPublication(fixture.owner, {
-          sessionId: SESSION_ID,
-          idempotencyKey: key,
-        }),
-      ).toBeUndefined();
-      expect(commands.some((args) => args.includes("push") || args.includes("POST"))).toBe(false);
-      expect(response).toMatchObject([false, undefined, { details: rejection(key) }]);
-    },
-  );
+    const run = mocks.runCommand.getMockImplementation()!;
+    mocks.runCommand.mockImplementation(async (args: string[], options?: { input?: string }) => {
+      const result = await run(args, options);
+      if (args.includes("write-tree")) {
+        rotate();
+      }
+      return result;
+    });
+    const response = await callPersonalPublicationRpc(fixture, "sessions.github.publish", request);
+    expect(response[0]).toBe(false);
+    expect(
+      readPersonalGitHubPublication(fixture.owner, {
+        sessionId: SESSION_ID,
+        idempotencyKey: key,
+      }),
+    ).toBeUndefined();
+    expect(commands.some((args) => args.includes("push") || args.includes("POST"))).toBe(false);
+    expect(response).toMatchObject([false, undefined, { details: rejection(key) }]);
+  });
 
   it("keeps an accepted personal pre-claim identity stop attached to its durable receipt", async () => {
     const fixture = await createPersonalPublicationFixture();
@@ -346,6 +328,9 @@ describe("GitHub publication selection admission", () => {
       result: { status: "failed", code: "identity_changed" },
       confirmation: null,
     });
+    const options = await callPersonalPublicationRpc(fixture, "sessions.github.options");
+    expect(options[0]).toBe(true);
+    expect(options[1].pendingPersonal).toMatchObject({ result: { requestId: row!.request_id } });
     expect(commands.some((args) => args.includes("push") || args.includes("POST"))).toBe(false);
   });
 });

@@ -39,7 +39,6 @@ type SessionNavigationTargetOptions = {
   exactKey?: boolean;
   preferenceDerivedFace?: boolean;
   focusComposer?: boolean;
-  dashboardExpanded?: boolean;
   navigationKey?: string;
 };
 
@@ -199,9 +198,6 @@ export function sessionNavigationTarget<TRouteId extends string>(
   if (params.focusComposer) {
     navigationParams.set(SESSION_COMPOSER_FOCUS_PARAM, "1");
   }
-  if (params.dashboardExpanded) {
-    navigationParams.set(SESSION_DASHBOARD_EXPANDED_PARAM, "expanded");
-  }
   const navigationKey = params.navigationKey?.trim() || row?.key;
   if (navigationKey && SESSION_KEY_UUID_SUFFIX_RE.test(navigationKey)) {
     // Sidebar navigation already owns the full row. Carry its key only through the
@@ -212,10 +208,5 @@ export function sessionNavigationTarget<TRouteId extends string>(
   const options = serializedNavigation
     ? { pathname, search: `?${serializedNavigation}` }
     : { pathname };
-  const hrefParams = new URLSearchParams(search ?? "");
-  if (params.dashboardExpanded) {
-    hrefParams.set(SESSION_DASHBOARD_EXPANDED_PARAM, "expanded");
-  }
-  const hrefSearch = hrefParams.toString();
-  return { href: `${pathname}${hrefSearch ? `?${hrefSearch}` : ""}`, options };
+  return { href: `${pathname}${search ?? ""}`, options };
 }

@@ -7,19 +7,29 @@ import {
 import type { PublishedModelCatalogOwnerCandidate } from "../agents/prepared-model-catalog.types.js";
 import { bindPreparedModelRuntimeAuth } from "../agents/prepared-model-runtime-auth.js";
 import { PreparedModelRuntimePublicationSupersededError } from "../agents/prepared-model-runtime.errors.js";
-import { markPreparedModelCatalogFull } from "../agents/prepared-model-runtime.full-catalog.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { createEmptyPluginRegistry } from "../plugins/registry.js";
+import * as currentPluginMetadata from "../plugins/current-plugin-metadata-state.js";
+import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
+import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
+import type { GatewayClient } from "./server-methods/types.js";
 import {
   loadDeferredCatalog,
   registerGatewayModelCatalogPrivateAccess,
 } from "./server-model-catalog-auth.js";
+import {
+  createPreparedGatewayModelCatalog,
+  readPreparedGatewayModelMetadata,
+} from "./server-model-catalog-view.js";
 import {
   loadGatewayModelCatalog,
   loadGatewayModelCatalogSnapshot,
   loadPreparedGatewayModelCatalogSnapshot,
   type GatewayModelCatalogSnapshot,
 } from "./server-model-catalog.js";
+import { readSessionRowModelFacts } from "./session-row-model-facts.js";
+import { createSessionRowProjectionFixture } from "./session-row-projection.test-support.js";
+import { listProjectedSessions } from "./session-utils-list.js";
+import { buildSessionListRowMetadataContext } from "./session-utils-projection.js";
 
 const snapshot: ModelCatalogSnapshot = {
   entries: [{ provider: "openai", id: "gpt-5.5", name: "GPT-5.5" }],
@@ -31,14 +41,12 @@ function ownerConfig(agentId = "main", extra: OpenClawConfig = {}): OpenClawConf
     ...extra,
     agents: {
       ...extra.agents,
-      list: [
-        {
-          id: agentId,
-          default: true,
+      entries: {
+        [agentId]: {
           agentDir: "/tmp/gateway-agent",
           workspace: "/tmp/gateway-workspace",
         },
-      ],
+      },
     },
   };
 }
@@ -67,16 +75,128 @@ function ownerSnapshot(
 }
 
 describe("gateway prepared model catalog", () => {
-  it("keeps raw pre-roster input distinct from an explicitly empty roster", () => {
-    const input = {
-      config: {},
-      agentDir: "/tmp/raw-catalog-state/agents/main/agent",
-      env: { OPENCLAW_STATE_DIR: "/tmp/raw-catalog-state", OPENCLAW_HOME: "/tmp/raw-catalog-home" },
+  it("keeps a prepared metadata miss separate from the current runtime generation", async () => {
+    const capturedMetadata = createPluginMetadataSnapshotFixture();
+    const currentMetadata = createPluginMetadataSnapshotFixture({
+      plugins: [
+        {
+          id: "ambient-provider",
+          providers: ["custom"],
+          cliBackends: ["catalog-generation-cli"],
+          modelIdNormalization: { providers: { custom: { aliases: { latest: "foreign" } } } },
+        },
+      ],
+    });
+    const absent = createPreparedGatewayModelCatalog({ entries: [] });
+    const present = createPreparedGatewayModelCatalog({
+      entries: [],
+      metadataSnapshot: capturedMetadata,
+    });
+    const current = createPreparedGatewayModelCatalog({
+      entries: [],
+      metadataSnapshot: currentMetadata,
+    });
+    withPluginRuntimeGenerationScope({ metadataSnapshot: currentMetadata }, () => {
+      expect(readPreparedGatewayModelMetadata({})).toBe(currentMetadata);
+      expect(readPreparedGatewayModelMetadata({}, absent)).toBeNull();
+      expect(readPreparedGatewayModelMetadata({}, present)).toBe(capturedMetadata);
+      const entry = {
+        sessionId: "prepared-catalog",
+        updatedAt: 1,
+        providerOverride: "custom",
+        modelOverride: "latest",
+      };
+      const facts = readSessionRowModelFacts({
+        cfg: ownerConfig(),
+        key: "agent:main:prepared-catalog",
+        agentId: "main",
+        entry,
+        source: { entry, readSourceEntry: () => undefined },
+        rowContext: buildSessionListRowMetadataContext({ now: 1 }),
+        preparedModelMetadata: currentMetadata,
+        modelCatalog: new Map([["main", absent]]),
+        lightweightListRow: true,
+      });
+      expect(facts.selectedModel).toMatchObject({ provider: "custom", model: "latest" });
+      const cliEntry = {
+        ...entry,
+        providerOverride: "catalog-generation-cli",
+        modelOverride: "custom/shared-model",
+        modelOverrideRouteResolution: "resolved" as const,
+      };
+      const rowContext = buildSessionListRowMetadataContext({ now: 1 });
+      for (const catalog of [absent, current, absent]) {
+        const cliFacts = readSessionRowModelFacts({
+          cfg: ownerConfig(),
+          key: "agent:main:prepared-cli",
+          agentId: "main",
+          entry: cliEntry,
+          source: { entry: cliEntry, readSourceEntry: () => undefined },
+          rowContext,
+          modelCatalog: new Map([["main", catalog]]),
+          lightweightListRow: true,
+        });
+        expect(cliFacts.rowModelIdentity).toEqual(
+          catalog === absent
+            ? { provider: "catalog-generation-cli", model: "custom/shared-model" }
+            : { provider: "custom", model: "shared-model" },
+        );
+      }
+    });
+    const cfg = ownerConfig("main", {
+      agents: { defaults: { model: "custom/latest" } },
+      gateway: {
+        roles: {
+          default: "reader",
+          definitions: {
+            reader: {
+              agents: ["main"],
+              scopes: ["operator.read"],
+              sessions: { others: "view" },
+              modelPolicy: { sourceAgent: "main", allow: ["custom/*"] },
+            },
+          },
+        },
+      },
+    });
+    const client: GatewayClient = {
+      connect: {
+        minProtocol: 1,
+        maxProtocol: 1,
+        client: { id: "openclaw-control-ui", version: "test", platform: "test", mode: "webchat" },
+        role: "operator",
+        scopes: ["operator.read"],
+      },
+      internal: { operatorRoleActor: { kind: "operator", profileId: "reader" } },
+      preparedSessionProfile: { profileId: "reader", aliases: new Set(["reader"]), role: null },
     };
-    expect(preparePublishedModelCatalogOwnerIdentity(input)).toMatchObject({ agentId: "main" });
-    expect(
-      preparePublishedModelCatalogOwnerIdentity({ ...input, config: { agents: { entries: {} } } }),
-    ).toBeUndefined();
+    const ambient = vi
+      .spyOn(currentPluginMetadata, "getGatewayPluginMetadataSnapshot")
+      .mockReturnValue(currentMetadata);
+    try {
+      for (const [catalog, model] of [
+        [absent, "latest"],
+        [current, "foreign"],
+      ] as const) {
+        const projection = createSessionRowProjectionFixture({
+          cfg,
+          store: {},
+          modelCatalog: new Map([["main", catalog]]),
+        });
+        try {
+          const result = await listProjectedSessions({
+            projection,
+            client,
+            opts: { agentId: "main" },
+          });
+          expect(result.defaults).toMatchObject({ modelProvider: "custom", model });
+        } finally {
+          projection.dispose();
+        }
+      }
+    } finally {
+      ambient.mockRestore();
+    }
   });
 
   it.each([
@@ -115,7 +235,7 @@ describe("gateway prepared model catalog", () => {
       if (empty) {
         config.agents = { entries: {} };
       } else if (shared) {
-        config.agents!.list!.push({ id: "worker", agentDir, workspace: "/tmp/worker-workspace" });
+        config.agents!.entries!.worker = { agentDir, workspace: "/tmp/worker-workspace" };
       }
       const input = { config, agentId, agentDir };
       const candidate = {
@@ -191,43 +311,6 @@ describe("gateway prepared model catalog", () => {
       readOnly: true,
       workspaceDir: "/tmp/gateway-workspace",
     });
-  });
-
-  it("keeps the prepared generation registry behind the private snapshot", async () => {
-    const config = ownerConfig();
-    const pluginRegistry = createEmptyPluginRegistry();
-    const isCurrent = () => true;
-    const candidate = { ...ownerSnapshot(config), pluginRegistry, isCurrent };
-    const loadPublishedPreparedModelCatalogOwnerSnapshot = async () => candidate;
-
-    await expect(
-      loadPreparedGatewayModelCatalogSnapshot({
-        getConfig: () => config,
-        loadPublishedPreparedModelCatalogOwnerSnapshot,
-      }),
-    ).resolves.toMatchObject({ pluginRegistry, isCurrent });
-    const publicSnapshot = await loadGatewayModelCatalogSnapshot({
-      getConfig: () => config,
-      loadPublishedPreparedModelCatalogOwnerSnapshot,
-    });
-    expect(publicSnapshot).not.toHaveProperty("pluginRegistry");
-    expect(publicSnapshot).not.toHaveProperty("isCurrent");
-  });
-
-  it("projects whether the published owner already contains a full catalog", async () => {
-    const config = ownerConfig();
-    const fullCatalog = markPreparedModelCatalogFull({
-      entries: [{ provider: "openai", id: "text-only", name: "Text only", input: ["text"] }],
-      routeVariants: [],
-    });
-
-    await expect(
-      loadGatewayModelCatalogSnapshot({
-        getConfig: () => config,
-        loadPublishedPreparedModelCatalogOwnerSnapshot: async () =>
-          ownerSnapshot(config, fullCatalog),
-      }),
-    ).resolves.toMatchObject({ catalogComplete: true });
   });
 
   it("refreshes auth only for the explicit deferred projection", async () => {
@@ -436,55 +519,6 @@ describe("gateway prepared model catalog", () => {
     expect(loadPublishedPreparedModelCatalogOwnerSnapshot).toHaveBeenCalledTimes(2);
   });
 
-  it("rejects an ambiguous owner without an authoritative agent identity", async () => {
-    const config = {
-      agents: {
-        list: [
-          {
-            id: "main",
-            default: true,
-            agentDir: "/tmp/gateway-agent",
-            workspace: "/tmp/main-workspace",
-          },
-          {
-            id: "worker",
-            agentDir: "/tmp/gateway-agent",
-            workspace: "/tmp/worker-workspace",
-          },
-        ],
-      },
-    } as OpenClawConfig;
-    const loadPublishedPreparedModelCatalogOwnerSnapshot = vi.fn(async () => ownerSnapshot(config));
-
-    await expect(
-      loadGatewayModelCatalogSnapshot({
-        agentId: "worker",
-        getConfig: () => config,
-        loadPublishedPreparedModelCatalogOwnerSnapshot,
-      }),
-    ).rejects.toThrow("did not identify one configured agent");
-  });
-
-  it("returns an equivalent replacement owner without repeating discovery", async () => {
-    const initialConfig = ownerConfig("main", { logging: { level: "info" as const } });
-    const latestConfig = ownerConfig("main", { logging: { level: "info" as const } });
-    const latestSnapshot: ModelCatalogSnapshot = {
-      entries: [{ provider: "openai", id: "latest", name: "Latest" }],
-      routeVariants: [],
-    };
-    const loadPublishedPreparedModelCatalogOwnerSnapshot = vi.fn(async () =>
-      ownerSnapshot(latestConfig, latestSnapshot),
-    );
-
-    await expect(
-      loadGatewayModelCatalogSnapshot({
-        getConfig: () => initialConfig,
-        loadPublishedPreparedModelCatalogOwnerSnapshot,
-      }),
-    ).resolves.toMatchObject({ config: latestConfig, entries: latestSnapshot.entries });
-    expect(loadPublishedPreparedModelCatalogOwnerSnapshot).toHaveBeenCalledOnce();
-  });
-
   it("selects the full prepared owner when requested", async () => {
     const config = ownerConfig();
     const loadPublishedPreparedModelCatalogOwnerSnapshot = vi.fn(async () => ownerSnapshot(config));
@@ -502,26 +536,6 @@ describe("gateway prepared model catalog", () => {
       readOnly: false,
       refreshFullCatalog: true,
     });
-  });
-
-  it("carries provider outcomes through the gateway owner projection", async () => {
-    const config = ownerConfig();
-    const modelCatalog: ModelCatalogSnapshot = {
-      entries: [],
-      routeVariants: [],
-      providerOutcomes: [{ provider: "openai", status: "auth-rejected" }],
-    };
-    const loadPublishedPreparedModelCatalogOwnerSnapshot = vi.fn(async () =>
-      ownerSnapshot(config, modelCatalog),
-    );
-
-    await expect(
-      loadGatewayModelCatalogSnapshot({
-        getConfig: () => config,
-        loadPublishedPreparedModelCatalogOwnerSnapshot,
-        readOnly: false,
-      }),
-    ).resolves.toMatchObject({ providerOutcomes: modelCatalog.providerOutcomes });
   });
 
   it("does not hide lifecycle publication failures behind stale data", async () => {

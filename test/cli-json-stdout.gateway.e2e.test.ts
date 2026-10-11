@@ -162,7 +162,7 @@ describe("cli json stdout contract", () => {
               type: "cli_error",
               message:
                 "configReadFailure" in testCase
-                  ? `Config could not be read at ${configPath}:\n- <root>: read failed: Error: ${testCase.message}`
+                  ? `Config could not be read at ${configPath}:\n- <root>: read failed at ${configPath}: Error: ${testCase.message}`
                   : testCase.message,
             },
           });

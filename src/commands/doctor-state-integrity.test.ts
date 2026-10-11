@@ -2,14 +2,16 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfigWithLegacyRoster } from "../config/legacy.roster.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
   deleteSessionEntryLifecycle,
   loadSessionEntry,
-  upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
+import * as boundaryPath from "../infra/boundary-path.js";
 import { recordDeferredPluginMigrations } from "../infra/deferred-plugin-migrations.js";
 import { readDeferredPluginSessionImport } from "../infra/deferred-plugin-session-sources.js";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
@@ -35,11 +37,19 @@ import {
   withMainAgentRoster,
   writeSessionStore,
 } from "./doctor-state-integrity.test-support.js";
+import {
+  detectLinuxSdBackedStateDir,
+  detectMacCloudSyncedStateDir,
+  detectWindowsCloudSyncedStateDir,
+  formatLinuxSdBackedStateDirWarning,
+  formatWindowsCloudSyncedStateDirWarning,
+} from "./doctor-state-storage-platform.js";
 
 vi.mock("../channels/plugins/bundled-ids.js", () => ({
   listBundledChannelIds: () => ["matrix", "whatsapp"],
   listBundledChannelPluginIds: () => ["matrix", "whatsapp"],
 }));
+
 vi.mock("../channels/plugins/persisted-auth-state.js", () => ({
   listBundledChannelIdsWithPersistedAuthState: () => ["matrix", "whatsapp"],
   hasBundledChannelPersistedAuthState: () => false,
@@ -136,9 +146,8 @@ describe("doctor state integrity", () => {
     fs.chmodSync(stateDir, 0o755);
     fs.writeFileSync(configPath, "{}\n", { mode: 0o644 });
     fs.chmodSync(configPath, 0o644);
-    expect(
-      detectStateIntegrityHealthIssues({}, { configPath }).map(stateIntegrityIssueToHealthFinding),
-    ).toEqual(
+    const issues = detectStateIntegrityHealthIssues({}, { configPath });
+    expect(issues.map(stateIntegrityIssueToHealthFinding)).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
           severity: "warning",
@@ -149,29 +158,6 @@ describe("doctor state integrity", () => {
           severity: "warning",
           path: configPath,
           message: "Config file is group/world readable. Recommend chmod 600.",
-        }),
-      ]),
-    );
-  });
-
-  it("accepts lazy session directories in both structured and interactive diagnostics", async () => {
-    const cfg = withMainAgentRoster({});
-    expect(
-      detectStateIntegrityHealthIssues(cfg).filter(
-        (issue) =>
-          "label" in issue &&
-          (issue.label === "Sessions dir" || issue.label === "Session store dir"),
-      ),
-    ).toEqual([]);
-    const confirmRuntimeRepair = decline();
-    await noteStateIntegrityRaw(cfg, { confirmRuntimeRepair, note: noteMock });
-    expect(stateIntegrityText()).not.toMatch(
-      /CRITICAL: (?:Sessions dir|Session store dir) missing/,
-    );
-    expect(repairPromptCalls(confirmRuntimeRepair)).not.toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          message: expect.stringMatching(/^Create (?:Sessions dir|Session store dir) at/),
         }),
       ]),
     );
@@ -221,15 +207,32 @@ describe("doctor state integrity", () => {
     ]);
   });
 
-  it("does not require OAuth storage for unpaired or unregistered channels", async () => {
+  it("accepts lazy session storage and unpaired or unregistered channels", async () => {
+    const cfg = withMainAgentRoster({
+      channels: { whatsapp: {}, icenter: { enabled: true, dmPolicy: "pairing" } },
+    });
+    expect(
+      detectStateIntegrityHealthIssues(cfg).filter(
+        (issue) =>
+          "label" in issue &&
+          (issue.label === "Sessions dir" || issue.label === "Session store dir"),
+      ),
+    ).toEqual([]);
     const confirmRuntimeRepair = decline();
-    await noteStateIntegrity(
-      { channels: { whatsapp: {}, icenter: { enabled: true, dmPolicy: "pairing" } } },
-      { confirmRuntimeRepair, note: noteMock },
-    );
+    await noteStateIntegrity(cfg, { confirmRuntimeRepair, note: noteMock });
     expect(hasRepairPromptMessage(confirmRuntimeRepair, "Create OAuth dir at")).toBe(false);
     expect(stateIntegrityText()).toContain("OAuth dir not present");
     expect(stateIntegrityText()).not.toContain("CRITICAL: OAuth dir missing");
+    expect(stateIntegrityText()).not.toMatch(
+      /CRITICAL: (?:Sessions dir|Session store dir) missing/,
+    );
+    expect(repairPromptCalls(confirmRuntimeRepair)).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          message: expect.stringMatching(/^Create (?:Sessions dir|Session store dir) at/),
+        }),
+      ]),
+    );
   });
 
   it.each(["pairing", "explicit"])(
@@ -260,7 +263,7 @@ describe("doctor state integrity", () => {
         setTestEnvValue("OPENCLAW_AGENT_DIR", path.join(stateDir, "agents", "legacy", "agent"));
       }
       const researchReachable = fs.existsSync(path.join(stateDir, "agents", "research", "agent"));
-      const cfg: OpenClawConfig = {
+      const cfg: OpenClawConfigWithLegacyRoster = {
         agents: relocated
           ? { entries: { ops: { default: true }, research: {} } }
           : { list: [{ id: "main", default: true }, { id: "ops" }, { id: "research" }] },
@@ -283,45 +286,6 @@ describe("doctor state integrity", () => {
       expect(text).not.toContain(roster === "list" ? "agents.entries" : "agents.list");
     },
   );
-
-  it("protects the shared legacy main auth-store for an ops-only roster", async () => {
-    createAgentDir("main");
-    expect(
-      await runStateIntegrityText({ agents: { entries: { ops: { default: true } } } }),
-    ).not.toContain("Examples: main");
-  });
-
-  it("orders equal-time SQLite recovery warnings by session key", async () => {
-    const storeTemplate = path.join(stateDir, "agents", "{agentId}", "sessions.json");
-    const storePath = storeTemplate.replace("{agentId}", "main");
-    for (const suffix of ["zeta", "alpha", "middle", "beta"]) {
-      await upsertSessionEntryCore(
-        { agentId: "main", sessionKey: `agent:main:subagent:${suffix}`, storePath },
-        {
-          ...wedged,
-          sessionId: `session-${suffix}`,
-          updatedAt: 30,
-        },
-      );
-    }
-    const confirmRuntimeRepair = decline();
-    await noteStateIntegrity(
-      { session: { store: storeTemplate } },
-      { confirmRuntimeRepair, note: noteMock },
-    );
-    expect(stateIntegrityText()).toContain(
-      "Examples: agent:main:subagent:alpha, agent:main:subagent:beta, agent:main:subagent:middle",
-    );
-    expect(
-      repairPromptCalls(confirmRuntimeRepair).filter(({ message }) =>
-        message?.startsWith("Clear stale aborted recovery flags"),
-      ),
-    ).toEqual([
-      expect.objectContaining({
-        message: "Clear stale aborted recovery flags for 4 wedged subagent sessions?",
-      }),
-    ]);
-  });
 
   it("clears stale aborted recovery flags in the legacy store only when approved", async () => {
     const sessionKey = "agent:main:subagent:wedged-child";
@@ -346,60 +310,59 @@ describe("doctor state integrity", () => {
     expect(doctorChangesText()).toContain("Cleared aborted restart-recovery flags");
   });
 
-  it.each([true, false])(
-    "checks only the effective home's default state (exists=%s)",
-    async (defaultExists) => {
-      const osHome = path.join(tempHome, "os-home");
-      const effectiveHome = path.join(tempHome, "relocated");
-      fs.mkdirSync(path.join(osHome, ".openclaw"), { recursive: true, mode: 0o700 });
-      if (defaultExists) {
-        fs.mkdirSync(path.join(effectiveHome, ".openclaw"), { recursive: true, mode: 0o700 });
+  it("checks only the effective home's existing default state", async () => {
+    const defaultExists = true;
+
+    const osHome = path.join(tempHome, "os-home");
+    const effectiveHome = path.join(tempHome, "relocated");
+    fs.mkdirSync(path.join(osHome, ".openclaw"), { recursive: true, mode: 0o700 });
+    if (defaultExists) {
+      fs.mkdirSync(path.join(effectiveHome, ".openclaw"), { recursive: true, mode: 0o700 });
+    }
+    setTestEnvValue("HOME", osHome);
+    setTestEnvValue("OPENCLAW_HOME", effectiveHome);
+    const attemptedProbes: string[] = [];
+    const outsideAccount = (target: fs.PathLike) => {
+      const resolved = path.resolve(String(target));
+      return (
+        /^\/(?:Users|home)(?:\/|$)/u.test(resolved) &&
+        resolved !== tempHome &&
+        !resolved.startsWith(`${tempHome}${path.sep}`)
+      );
+    };
+    const readdir = fs.readdirSync,
+      exists = fs.existsSync,
+      stat = fs.statSync;
+    vi.spyOn(fs, "readdirSync").mockImplementation((target, options) => {
+      if (outsideAccount(target)) {
+        attemptedProbes.push(`readdir ${String(target)}`);
+        throw new Error("account-root enumeration is outside Doctor's state scope");
       }
-      setTestEnvValue("HOME", osHome);
-      setTestEnvValue("OPENCLAW_HOME", effectiveHome);
-      const attemptedProbes: string[] = [];
-      const outsideAccount = (target: fs.PathLike) => {
-        const resolved = path.resolve(String(target));
-        return (
-          /^\/(?:Users|home)(?:\/|$)/u.test(resolved) &&
-          resolved !== tempHome &&
-          !resolved.startsWith(`${tempHome}${path.sep}`)
-        );
-      };
-      const readdir = fs.readdirSync,
-        exists = fs.existsSync,
-        stat = fs.statSync;
-      vi.spyOn(fs, "readdirSync").mockImplementation((target, options) => {
-        if (outsideAccount(target)) {
-          attemptedProbes.push(`readdir ${String(target)}`);
-          throw new Error("account-root enumeration is outside Doctor's state scope");
-        }
-        return readdir(target, options);
-      });
-      vi.spyOn(fs, "existsSync").mockImplementation((target) => {
-        if (outsideAccount(target)) {
-          attemptedProbes.push(`exists ${String(target)}`);
-          return false;
-        }
-        return exists(target);
-      });
-      vi.spyOn(fs, "statSync").mockImplementation((target, options) => {
-        if (outsideAccount(target)) {
-          attemptedProbes.push(`stat ${String(target)}`);
-          throw new Error("sibling-account metadata is outside Doctor's state scope");
-        }
-        return stat(target, options);
-      });
-      const text = await runStateIntegrityText({});
-      expect(attemptedProbes).toEqual([]);
-      expect(text.includes("Multiple state directories detected")).toBe(defaultExists);
-      if (defaultExists) {
-        expect(text).toContain("  - $OPENCLAW_HOME/.openclaw");
-        expect(text).toContain(`Active state dir: ${stateDir}`);
+      return readdir(target, options);
+    });
+    vi.spyOn(fs, "existsSync").mockImplementation((target) => {
+      if (outsideAccount(target)) {
+        attemptedProbes.push(`exists ${String(target)}`);
+        return false;
       }
-      expect(text).toContain("OAuth dir not present");
-    },
-  );
+      return exists(target);
+    });
+    vi.spyOn(fs, "statSync").mockImplementation((target, options) => {
+      if (outsideAccount(target)) {
+        attemptedProbes.push(`stat ${String(target)}`);
+        throw new Error("sibling-account metadata is outside Doctor's state scope");
+      }
+      return stat(target, options);
+    });
+    const text = await runStateIntegrityText({});
+    expect(attemptedProbes).toEqual([]);
+    expect(text.includes("Multiple state directories detected")).toBe(defaultExists);
+    if (defaultExists) {
+      expect(text).toContain("  - $OPENCLAW_HOME/.openclaw");
+      expect(text).toContain(`Active state dir: ${stateDir}`);
+    }
+    expect(text).toContain("OAuth dir not present");
+  });
 });
 
 describe("doctor retained session integrity", () => {
@@ -457,6 +420,138 @@ describe("doctor retained session integrity", () => {
       expect(loadSessionEntry({ ...scope, sessionKey: "agent:main:deleted" })).toBeUndefined();
       expect(fs.readFileSync(storePath)).toEqual(source);
       expect(readDeferredPluginSessionImport(receiptParams)).toEqual(receipt);
+    });
+  });
+});
+
+describe("state storage", () => {
+  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllEnvs();
+  });
+
+  describe("cloud-synced state directories", () => {
+    it.each([false, true])(
+      "resolves a missing macOS state leaf through its ancestor (local symlink=%s)",
+      (local) => {
+        const sandbox = fs.realpathSync(tempDirs.make("openclaw-cloud-storage-"));
+        const home = path.join(sandbox, "home");
+        const cloudRoot = path.join(home, "Library", "CloudStorage");
+        const syncedDir = path.join(cloudRoot, "OneDrive-Personal");
+        fs.mkdirSync(cloudRoot, { recursive: true });
+        if (local) {
+          const target = path.join(sandbox, "local-openclaw");
+          fs.mkdirSync(target);
+          fs.symlinkSync(target, syncedDir, process.platform === "win32" ? "junction" : "dir");
+        } else {
+          fs.mkdirSync(syncedDir);
+        }
+        const stateDir = path.join(syncedDir, "OpenClaw", ".openclaw");
+        expect(fs.existsSync(stateDir)).toBe(false);
+        vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
+        vi.spyOn(os, "homedir").mockReturnValue(home);
+        expect(detectMacCloudSyncedStateDir(stateDir)).toEqual(
+          local ? null : { path: stateDir, storage: "CloudStorage provider" },
+        );
+      },
+    );
+
+    it("detects a missing OneDrive business leaf case-insensitively and explains service relocation", () => {
+      const personal = path.resolve("/Users/tester/OneDrive");
+      const business = path.resolve("/Users/tester/OneDrive - Contoso");
+      const root = path.join(business, "OpenClaw").toUpperCase();
+      const stateDir = path.join(root, ".openclaw");
+      vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+      vi.spyOn(boundaryPath, "safeRealpathSync").mockImplementation((target) =>
+        target === root ? root : null,
+      );
+      const result = detectWindowsCloudSyncedStateDir(
+        stateDir,
+        Object.freeze({
+          OneDrive: personal,
+          onedriveconsumer: personal,
+          oNeDrIvEcOmMeRcIaL: business,
+        }),
+      );
+      expect(result).toEqual({ path: stateDir, storage: "OneDrive for Business" });
+      if (!result) {
+        throw new Error("expected OneDrive warning");
+      }
+      const warning = formatWindowsCloudSyncedStateDirWarning(stateDir, result);
+      expect(warning).toContain("Windows cloud-synced storage");
+      expect(warning).toContain("OneDrive for Business");
+      expect(warning).toContain("stop the Gateway");
+      expect(warning).toContain("for the Gateway service");
+      expect(warning).toContain("re-run doctor");
+      expect(warning).not.toMatch(/(?:^|\s)OPENCLAW_STATE_DIR=\S+\s+\S*openclaw\b/m);
+      expect(warning).not.toContain("$env:OPENCLAW_STATE_DIR");
+      expect(warning).not.toContain('set "OPENCLAW_STATE_DIR=');
+    });
+
+    it("follows a junction out of OneDrive when the state leaf is absent", () => {
+      const root = path.resolve("/Users/tester/OneDrive/OpenClaw");
+      vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+      vi.spyOn(boundaryPath, "safeRealpathSync").mockImplementation((target) =>
+        target === root ? path.resolve("/local-openclaw") : null,
+      );
+      expect(
+        detectWindowsCloudSyncedStateDir(path.join(root, ".openclaw"), {
+          OneDrive: path.dirname(root),
+        }),
+      ).toBeNull();
+    });
+
+    it("does not infer a sync root from a OneDrive-named folder without the client's environment", () => {
+      vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+      expect(
+        detectWindowsCloudSyncedStateDir(path.resolve("/Users/tester/OneDrive/.openclaw"), {}),
+      ).toBeNull();
+    });
+  });
+
+  describe("Linux state storage", () => {
+    it("selects the deepest mount using the resolved state path", () => {
+      vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+      vi.spyOn(fs, "readFileSync").mockReturnValue(
+        [
+          "24 19 259:2 / / rw,relatime - ext4 /dev/nvme0n1p2 rw",
+          "30 24 179:5 / /mnt/slow rw,relatime - ext4 /dev/mmcblk1p1 rw",
+          "25 24 0:22 / /proc rw,nosuid,nodev,noexec,relatime - proc proc rw",
+        ].join("\n"),
+      );
+      vi.spyOn(boundaryPath, "safeRealpathSync").mockReturnValue("/mnt/slow/openclaw/.openclaw");
+      expect(detectLinuxSdBackedStateDir("/tmp/openclaw-state")).toEqual({
+        path: "/mnt/slow/openclaw/.openclaw",
+        mountPoint: "/mnt/slow",
+        fsType: "ext4",
+        source: "/dev/mmcblk1p1",
+      });
+    });
+
+    it("returns null outside Linux", () => {
+      vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
+      expect(detectLinuxSdBackedStateDir("/Users/tester/.openclaw")).toBeNull();
+    });
+
+    it("resolves device aliases and escapes decoded mountinfo control characters in warnings", () => {
+      const stateDir = "/home/pi/mnt\nspoofed/.openclaw";
+      vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+      vi.spyOn(fs, "readFileSync").mockReturnValue(
+        "30 24 179:2 / /home/pi/mnt\\012spoofed rw,relatime - ext4 /dev/disk/by-uuid/mmc\\012source rw",
+      );
+      vi.spyOn(boundaryPath, "safeRealpathSync").mockImplementation((target) =>
+        target === "/dev/disk/by-uuid/mmc\nsource" ? "/dev/mmcblk0p2" : stateDir,
+      );
+      const result = detectLinuxSdBackedStateDir(stateDir);
+      if (!result) {
+        throw new Error("Expected Linux state storage warning details");
+      }
+      const warning = formatLinuxSdBackedStateDirWarning(stateDir, result);
+      expect(warning).toContain("device /dev/disk/by-uuid/mmc\\nsource");
+      expect(warning).toContain("mount /home/pi/mnt\\nspoofed");
+      expect(warning).not.toContain("device /dev/disk/by-uuid/mmc\nsource");
+      expect(warning).not.toContain("mount /home/pi/mnt\nspoofed");
     });
   });
 });

@@ -3,6 +3,7 @@ import { sleepWithAbort } from "@openclaw/retry";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { hasOperatorApprovalsAccess } from "../../app/operator-access.ts";
 import { formatUiError } from "../../lib/format-error.ts";
+import { resolveGatewayReadRetryDelayMs } from "../../lib/gateway-availability.ts";
 import type { SessionCapability, SessionMessageSubscription } from "../../lib/sessions/index.ts";
 import {
   areUiSessionKeysEquivalent,
@@ -16,7 +17,6 @@ import {
   CHAT_HISTORY_RETRY_WINDOW_MS,
   formatChatHistoryLoadError,
   isRetryableChatReadError,
-  resolveChatReadRetryDelayMs,
 } from "./chat-history-retry.ts";
 import {
   chatHistoryRequests,
@@ -90,7 +90,6 @@ async function releaseDetachedSessionMessageSubscription(
   subscription: SessionMessageSubscription,
   isCurrent?: () => boolean,
 ): Promise<void> {
-  let retryDelayMs = SESSION_MESSAGE_RELEASE_RETRY_MS;
   for (let attempt = 0; attempt < MAX_SESSION_MESSAGE_RELEASE_ATTEMPTS; attempt += 1) {
     try {
       await unsubscribeMessages(subscription);
@@ -99,10 +98,7 @@ async function releaseDetachedSessionMessageSubscription(
       if (isCurrent?.() || attempt + 1 === MAX_SESSION_MESSAGE_RELEASE_ATTEMPTS) {
         throw error;
       }
-      await new Promise<void>((resolve) => {
-        globalThis.setTimeout(resolve, retryDelayMs);
-      });
-      retryDelayMs = Math.min(retryDelayMs * 2, 30_000);
+      await sleepWithAbort(SESSION_MESSAGE_RELEASE_RETRY_MS * 2 ** attempt);
     }
   }
 }
@@ -208,15 +204,10 @@ async function synchronizeSelectedSessionMessageSubscription(
   const generation = ++paneRequests.subscriptionGeneration;
   await retryPendingSessionMessageSubscriptionReleases(state);
   const selectedKeyChanged = previousSelectedKey !== null && previousSelectedKey !== nextKey;
-  const shouldUnsubscribePrevious =
-    previousSubscription !== null &&
-    (opts?.force === true || selectedKeyChanged || selectedAgentChanged);
+  const replaceSubscription = opts?.force === true || selectedKeyChanged || selectedAgentChanged;
+  const shouldUnsubscribePrevious = previousSubscription !== null && replaceSubscription;
   const shouldSubscribe =
-    opts?.force === true ||
-    selectedKeyChanged ||
-    selectedAgentChanged ||
-    previousCanonicalKey === null ||
-    previousRequestedKey === null;
+    replaceSubscription || previousCanonicalKey === null || previousRequestedKey === null;
   const isCurrent = () =>
     !signal.aborted &&
     state.sessions === sessions &&
@@ -282,7 +273,7 @@ async function synchronizeSelectedSessionMessageSubscription(
         }
         setChatHistoryRetrying(state, "subscription", true);
         await sleepWithAbort(
-          Math.min(resolveChatReadRetryDelayMs(error, attempt++), remaining),
+          Math.min(resolveGatewayReadRetryDelayMs(error, attempt++), remaining),
           signal,
         );
         if (!isCurrent()) {
@@ -307,10 +298,10 @@ async function synchronizeSelectedSessionMessageSubscription(
     return isCurrent() && previousSubscription !== null;
   }
   try {
-    let unsubscribePromise: Promise<void> = Promise.resolve();
-    if (shouldUnsubscribePrevious && previousSubscription) {
-      unsubscribePromise = sessions.unsubscribeMessages(previousSubscription);
-    }
+    const unsubscribePromise =
+      shouldUnsubscribePrevious && previousSubscription
+        ? sessions.unsubscribeMessages(previousSubscription)
+        : Promise.resolve();
     const subscribePromise = shouldSubscribe && isCurrent() ? subscribe() : Promise.resolve(null);
     // Gateway subscriptions are independent canonical-key entries. Overlap the old
     // release with the new acquire so a session switch pays one RTT, not two.
@@ -376,15 +367,13 @@ async function synchronizeSelectedSessionMessageSubscription(
     }
     state.chatSessionMessageSubscriptionRequestedKey = nextKey;
     state.chatSessionMessageSubscription = subscribed;
-    if (subscribed.includeApprovals) {
-      state.chatSessionApprovalQueue = projectSessionApprovalReplay(
-        subscribed.approvalReplay,
-        subscribed.key,
-        subscribed.agentId ?? undefined,
-      );
-    } else {
-      state.chatSessionApprovalQueue = [];
-    }
+    state.chatSessionApprovalQueue = subscribed.includeApprovals
+      ? projectSessionApprovalReplay(
+          subscribed.approvalReplay,
+          subscribed.key,
+          subscribed.agentId ?? undefined,
+        )
+      : [];
     clearRecoveredError();
     return true;
   } catch (err) {

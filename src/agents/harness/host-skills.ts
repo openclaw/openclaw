@@ -1,14 +1,49 @@
 import path from "node:path";
+import type { SkillLibrarySelection } from "../../../packages/gateway-protocol/src/schema/skill-library.js";
 import {
   isPathInside,
   readLocalFileFromRoots,
   resolveLocalPathFromRootsSync,
 } from "../../infra/fs-safe.js";
+import { assertDatabasePathIdentity } from "../../infra/sqlite-worker-identity.js";
+import { prepareSkillLibrarySelection } from "../../skills/library/selection.js";
 import type { SkillSnapshot } from "../../skills/types.js";
+import { captureOpenClawStateReadWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { resolveSandboxSkillRuntimeInputs } from "../embedded-agent-runner/sandbox-skills.js";
 import { MAX_SKILL_INSTRUCTION_BYTES, type InstalledSkill } from "../installed-skill-catalog.js";
 import { prepareInstalledSkillCatalog } from "../installed-skill-runtime.js";
 import type { SandboxContext } from "../sandbox/types.js";
+import { cloneHostSnapshot } from "./host-snapshot.js";
+
+/** Keep pinned resources and their physical source through awaited tool construction. */
+export async function prepareHostSkillLibraryResources(
+  selections: readonly SkillLibrarySelection[],
+  assertActive: () => void,
+) {
+  const context = captureOpenClawStateReadWorkerContext();
+  const identity = context.admission.identity;
+  const assertSourceCurrent = () => {
+    context.maintenanceScope?.assertAdmission();
+    context.admission.assertCurrent();
+  };
+  const assertCurrent = () => {
+    assertActive();
+    assertSourceCurrent();
+  };
+  // Retain exact entries so cache eviction cannot select the synchronous SDK fallback.
+  const entries = cloneHostSnapshot(
+    await prepareSkillLibrarySelection(selections, { env: context.environment }, assertCurrent),
+  );
+  return {
+    entries,
+    assertCurrent,
+    assertPublicationCurrent: () => {
+      // Core tool preparation can yield after the reader's physical-source check.
+      assertSourceCurrent();
+      assertDatabasePathIdentity(context.admission.databasePath, identity);
+    },
+  };
+}
 
 /** Catalog identity is host-owned; readable paths follow the effective tool placement. */
 export function bindHostSkillCatalog(params: {

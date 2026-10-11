@@ -6,9 +6,10 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import * as fsSafe from "../infra/fs-safe.js";
 import * as snapshots from "../infra/sqlite-readonly-worker.js";
 import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
 import { reconstructAgentDeletionJournal } from "../state/agent-deletion-journal-recovery.js";
-import { readAgentProvenance } from "../state/agent-provenance.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
+import { readAgentProvenance } from "../test-utils/agent-provenance.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createAgent } from "./agent-create.js";
@@ -106,7 +107,6 @@ it("records operator and agent creation provenance after roster commits", async 
     scenario: "empty",
     label: "agent-creation-provenance",
   });
-  const admission = workerAdmission.createSqliteWorkerOperationAdmission;
   const ensureWorkspace = ensureAgentWorkspace;
   const preparation = vi
     .spyOn(workspaceModule, "ensureAgentWorkspace")
@@ -123,20 +123,16 @@ it("records operator and agent creation provenance after roster commits", async 
       }
     });
   let grants = 0;
-  const spy = vi
-    .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
-    .mockImplementation((admit, attachment) =>
-      admission((request, grant) => {
-        const sql = observeMainThreadSql();
-        try {
-          admit(request, grant);
-          sql.expectIdle();
-          grants++;
-        } finally {
-          sql.restore();
-        }
-      }, attachment),
-    );
+  const spy = probe.admission(workerAdmission, (request, grant, admit) => {
+    const sql = observeMainThreadSql();
+    try {
+      admit(request, grant);
+      sql.expectIdle();
+      grants++;
+    } finally {
+      sql.restore();
+    }
+  });
   try {
     await createAgent({ name: "Operator Child", workspace: state.path("operator-child") });
     await createAgent({

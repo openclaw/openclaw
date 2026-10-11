@@ -56,18 +56,10 @@ function readReasoningProgressTextOutsideCode(text: string): string | undefined 
       continue;
     }
     hasTags = true;
-    if (match[1]) {
-      if (inReasoning) {
-        chunks.push(text.slice(cursor, offset));
-      }
-      inReasoning = false;
-      cursor = offset + match[0].length;
-      continue;
-    }
     if (inReasoning) {
       chunks.push(text.slice(cursor, offset));
     }
-    inReasoning = true;
+    inReasoning = !match[1];
     cursor = offset + match[0].length;
   }
   if (!hasTags) {

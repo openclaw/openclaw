@@ -23,7 +23,7 @@ import {
   FirstRunSetup,
   type ModelSetupRouteData,
 } from "./first-run-setup.ts";
-import { ModelSetupIconLoader } from "./model-setup-icon-loader.ts";
+import { createModelSetupIconLoader } from "./model-setup-icon-loader.ts";
 import { formatModelSetupError } from "./model-setup-task-result.ts";
 import { NativeModelSetup } from "./native-model-setup.ts";
 import {
@@ -47,8 +47,6 @@ import {
 } from "./state.ts";
 import { renderModelSetup, revealModelSetupFeedback } from "./view.ts";
 import { ModelSetupWizardRunner, type ModelSetupWizardCompletion } from "./wizard-runner.ts";
-
-export type { ModelSetupRouteData } from "./first-run-setup.ts";
 
 export class ModelSetupPage extends OpenClawLightDomElement {
   private readonly actionsDisabled = (): boolean =>
@@ -119,11 +117,10 @@ export class ModelSetupPage extends OpenClawLightDomElement {
     getContext: () => this.context,
     getConnection: () => this.observedConnection,
     canUseSetup: (client) => this.canUseSetup(client),
-    blocked: () =>
-      this.actionsDisabled() || this.detectionRequest !== null || this.firstRun.unresolved,
+    blocked: () => this.activationBlocked,
     onSelected: () => (this.embedded ? this.onClose?.() : this.context.navigate("chat")),
   });
-  private readonly iconLoader = new ModelSetupIconLoader(
+  private readonly iconLoader = createModelSetupIconLoader(
     () => this.context,
     () => this.pageState,
     (urls) => (this.iconUrls = urls),
@@ -176,6 +173,10 @@ export class ModelSetupPage extends OpenClawLightDomElement {
           ),
     onBackgroundCompletion: (completion) =>
       this.runWizardMutation(() => Promise.resolve(completion), true),
+    onSessionMissing: () => {
+      this.firstRun.wizardMissing();
+      void this.detect();
+    },
     requestFailedMessage: () => t("modelSetup.errors.requestFailed"),
     cancelledMessage: () => t("modelSetup.wizard.cancelled"),
     sessionExpiredMessage: () => t("modelSetup.wizard.sessionExpired"),
@@ -211,6 +212,7 @@ export class ModelSetupPage extends OpenClawLightDomElement {
         agentId: outcome.agentId,
       });
       this.pageState = { phase: "ready", result: outcome.value };
+      this.firstRun.reconcileMissingWizard(outcome.value);
       if (
         !outcome.value.manualProviders.some((provider) => provider.id === this.manualProviderId)
       ) {
@@ -293,8 +295,7 @@ export class ModelSetupPage extends OpenClawLightDomElement {
     }
     const sameWizardOwner = previous && Boolean(connection.recoveryScope) && !ownerChanged;
     if (sameWizardOwner && this.wizard.hasAdmittedSession) {
-      this.wizardMutationGeneration += 1;
-      this.wizardMutationActive = false;
+      this.retireWizardMutation();
       this.wizard.suspend(suspendedNotice);
       if (this.canUseSetup(connection.client)) {
         this.firstRun.reconnectActivation(connection);
@@ -320,8 +321,7 @@ export class ModelSetupPage extends OpenClawLightDomElement {
     this.login.reset();
     this.detectionRequest = null;
     this.detectionError = null;
-    this.wizardMutationGeneration += 1;
-    this.wizardMutationActive = false;
+    this.retireWizardMutation();
     void this.detectTask.run([null, null, null]);
     this.activationState = { phase: "idle" };
     this.resetVerify();
@@ -381,14 +381,13 @@ export class ModelSetupPage extends OpenClawLightDomElement {
     await this.verifyTask.run([client, this.agentSelection.state.selectedId, modelTarget]);
   }
 
+  private get activationBlocked(): boolean {
+    return this.actionsDisabled() || this.detectionRequest !== null || this.firstRun.unresolved;
+  }
+
   private async activate(params: SystemAgentSetupActivateParams, targetId: string): Promise<void> {
     const client = this.context.gateway.snapshot.client;
-    if (
-      !this.canUseSetup(client) ||
-      this.actionsDisabled() ||
-      this.detectionRequest ||
-      this.firstRun.unresolved
-    ) {
+    if (!this.canUseSetup(client) || this.activationBlocked) {
       return;
     }
     this.manualError = null;
@@ -439,15 +438,6 @@ export class ModelSetupPage extends OpenClawLightDomElement {
       startMethod === "openclaw.setup.prepare.start" ? this.pendingPrepareOption : null;
     const nativeSessionCatalogPreference = this.nativeSessionCatalogPreference();
     this.pendingPrepareOption = null;
-    if (prepareOption && preparedModelRef) {
-      const candidate = preparedModelActivation(prepareOption, preparedModelRef);
-      this.wizard.close();
-      void this.activate(
-        { ...candidate, ...nativeSessionCatalogPreference },
-        activationTargetId(candidate.kind, preparedModelRef),
-      );
-      return;
-    }
     if (startMethod !== "openclaw.setup.prepare.start") {
       if (isCurrent?.() === false) {
         this.wizard.close();
@@ -479,33 +469,43 @@ export class ModelSetupPage extends OpenClawLightDomElement {
       this.firstRun.finishActivation(result, activationTarget, this.setupRefreshWarning);
       return;
     }
-    const result = await this.detect();
-    if (!result) {
-      this.wizard.fail(t("modelSetup.errors.requestFailed"));
-      return;
-    }
-    if (prepareOption) {
-      this.pageState = preparedModelPageState(result, prepareOption.modelTarget);
-      const candidate = findPreparedModelCandidate(result, prepareOption.id);
-      if (!candidate) {
-        this.wizard.fail(
-          t("modelSetup.prepare.providerNotReady", { provider: prepareOption.label }),
-        );
+    let activation: ReturnType<typeof candidateActivation> | undefined;
+    if (prepareOption && preparedModelRef) {
+      activation = preparedModelActivation(prepareOption, preparedModelRef);
+    } else {
+      const result = await this.detect();
+      if (!result) {
+        this.wizard.fail(t("modelSetup.errors.requestFailed"));
         return;
       }
-      this.wizard.close();
-      void this.activate(
-        { ...candidateActivation(candidate), ...nativeSessionCatalogPreference },
-        activationTargetId(candidate.kind, candidate.modelRef),
-      );
-      return;
+      if (prepareOption) {
+        this.pageState = preparedModelPageState(result, prepareOption.modelTarget);
+        const candidate = findPreparedModelCandidate(result, prepareOption.id);
+        if (!candidate) {
+          this.wizard.fail(
+            t("modelSetup.prepare.providerNotReady", { provider: prepareOption.label }),
+          );
+          return;
+        }
+        activation = candidateActivation(candidate);
+      }
     }
     this.wizard.close();
+    if (activation) {
+      void this.activate(
+        { ...activation, ...nativeSessionCatalogPreference },
+        activationTargetId(activation.kind, activation.modelRef),
+      );
+    }
+  }
+
+  private retireWizardMutation(): void {
+    this.wizardMutationGeneration += 1;
+    this.wizardMutationActive = false;
   }
 
   private closeWizard(): void {
-    this.wizardMutationGeneration += 1;
-    this.wizardMutationActive = false;
+    this.retireWizardMutation();
     this.pendingPrepareOption = null;
     this.wizard.close();
   }
@@ -597,8 +597,7 @@ export class ModelSetupPage extends OpenClawLightDomElement {
       if (outcome !== "cancelled") {
         return;
       }
-      this.wizardMutationGeneration += 1;
-      this.wizardMutationActive = false;
+      this.retireWizardMutation();
       this.pendingPrepareOption = null;
       this.activationState = { phase: "idle" };
     } catch (error) {

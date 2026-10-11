@@ -61,15 +61,12 @@ export async function convertOpenClawToolToSdkToolForTest(
   const bridge = await createCopilotToolBridge({
     abortSignal: options.abortSignal,
     allowModelTools: true,
-    attemptParams:
-      options.onAgentToolResult || options.observeToolTerminal
-        ? {
-            ...(options.onAgentToolResult ? { onAgentToolResult: options.onAgentToolResult } : {}),
-            ...(options.observeToolTerminal
-              ? { observeToolTerminal: options.observeToolTerminal }
-              : {}),
-          }
-        : undefined,
+    attemptParams: {
+      // Conversion targets the direct SDK handler; default Tool Search would catalog the tool.
+      config: { tools: { toolSearch: false } },
+      ...(options.onAgentToolResult ? { onAgentToolResult: options.onAgentToolResult } : {}),
+      ...(options.observeToolTerminal ? { observeToolTerminal: options.observeToolTerminal } : {}),
+    },
     createOpenClawCodingTools: () => [sourceTool],
     modelId: "gpt-test",
     onToolCompleted: options.onToolCompleted,

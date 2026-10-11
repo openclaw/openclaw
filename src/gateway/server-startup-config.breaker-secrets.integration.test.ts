@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "../secrets/runtime-telegram.test-support.ts";
 import { createInfoWarnErrorLogger } from "../../test/helpers/mock-logger.js";
+import { resolveOpenAIModelRoutes } from "../agents/openai-model-routes.js";
+import { getRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import {
   asConfig,
   beginSecretsRuntimeIsolationForTest,
@@ -32,6 +34,95 @@ describe("gateway breaker SecretRef integration", () => {
   afterEach(() => {
     endSecretsRuntimeIsolationForTest(envSnapshot);
   });
+
+  it.each(["literal", "provider-ref", "gateway-ref"] as const)(
+    "keeps catalog defaults out of authored route policy after %s startup",
+    async (credentials) => {
+      await withEnvAsync(
+        {
+          [GATEWAY_TOKEN_ENV]: "resolved-gateway-token",
+          OPENAI_BASE_URL: undefined,
+          STARTUP_ROUTE_API_KEY: "synthetic-startup-api-key",
+        },
+        async () => {
+          const source = asConfig({
+            gateway: {
+              auth: {
+                mode: "token",
+                token:
+                  credentials === "gateway-ref"
+                    ? envRef(GATEWAY_TOKEN_ENV)
+                    : "synthetic-startup-gateway-token",
+              },
+            },
+            secrets: { providers: { default: { source: "env" } } },
+            models: {
+              providers: {
+                openai: {
+                  apiKey:
+                    credentials === "provider-ref"
+                      ? envRef("STARTUP_ROUTE_API_KEY")
+                      : "synthetic-startup-api-key",
+                  models: [
+                    {
+                      id: "gpt-5.6-sol",
+                      name: "GPT-5.6",
+                      api: "openai-responses",
+                      baseUrl: "https://api.openai.com/v1",
+                    },
+                  ],
+                },
+              },
+            },
+          });
+          const runtime = structuredClone(source);
+          runtime.models!.providers!.openai!.models[0]!.compat = {
+            supportsTemperature: false,
+            codeMode: "preferred",
+          };
+          const snapshot = buildTestConfigSnapshot({
+            path: "/tmp/openclaw-startup-model-routes.json",
+            exists: true,
+            raw: JSON.stringify(source),
+            parsed: source,
+            valid: true,
+            config: runtime,
+            issues: [],
+            legacyIssues: [],
+          });
+          snapshot.sourceConfig = source;
+          await prepareGatewayStartupConfig({
+            configSnapshot: snapshot,
+            activateRuntimeSecrets: createRuntimeSecretsActivator({
+              logSecrets: createInfoWarnErrorLogger(),
+              emitStateEvent: vi.fn(),
+              manifestRegistry: { plugins: [] },
+            }),
+          });
+          const published = getRuntimeConfigSnapshot()!;
+          expect(published.models?.providers?.openai?.models[0]?.compat).toEqual(
+            runtime.models!.providers!.openai!.models[0]!.compat,
+          );
+          expect(
+            resolveOpenAIModelRoutes({
+              provider: "openai",
+              modelId: "gpt-5.6-sol",
+              config: published,
+              env: {},
+            }),
+          ).toMatchObject({
+            kind: "routes",
+            routes: [
+              {
+                requestTransportOverrides: "none",
+                runtimePolicy: { compatibleIds: ["openclaw", "codex", "agentsapi"] },
+              },
+            ],
+          });
+        },
+      );
+    },
+  );
 
   it(
     "keeps unavailable channel owners isolated in the active startup config",

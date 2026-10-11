@@ -13,6 +13,7 @@ import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import "../../styles/custodian.css";
 import { renderCustodianChangeHistory } from "./custodian-history.ts";
 import { custodianSessionStore, type CustodianSessionStore } from "./custodian-session-store.ts";
+import type { CustodianRouteData } from "./route.ts";
 import "./custodian-surface.ts";
 
 const SYSTEM_CHANGE_PAGE_SIZE = 50;
@@ -29,8 +30,7 @@ export class CustodianPage extends OpenClawLightDomElement {
   @state() private historyOpen = false;
   @state() private historyEntries: SystemChangeEntry[] = [];
   @state() private historyNextCursor: string | null = null;
-  @state() private historyLoading = false;
-  @state() private historyLoadingMore = false;
+  @state() private historyLoad: "idle" | "initial" | "more" = "idle";
   @state() private historyError: string | null = null;
 
   private historyLoaded = false;
@@ -116,15 +116,14 @@ export class CustodianPage extends OpenClawLightDomElement {
     this.historyRequestEpoch += 1;
     this.historyEntries = [];
     this.historyNextCursor = null;
-    this.historyLoading = false;
-    this.historyLoadingMore = false;
+    this.historyLoad = "idle";
     this.historyError = null;
     this.historyLoaded = false;
   }
 
   private toggleHistory(): void {
     this.historyOpen = !this.historyOpen;
-    if (this.historyOpen && !this.historyLoading && !this.historyLoadingMore) {
+    if (this.historyOpen && this.historyLoad === "idle") {
       void this.loadHistory(true);
     }
   }
@@ -132,21 +131,11 @@ export class CustodianPage extends OpenClawLightDomElement {
   private async loadHistory(reset: boolean): Promise<void> {
     const client = this.historyClient;
     const cursor = reset ? undefined : (this.historyNextCursor ?? undefined);
-    if (
-      !client ||
-      !this.historyAvailable ||
-      this.historyLoading ||
-      this.historyLoadingMore ||
-      (!reset && !cursor)
-    ) {
+    if (!client || !this.historyAvailable || this.historyLoad !== "idle" || (!reset && !cursor)) {
       return;
     }
     const epoch = ++this.historyRequestEpoch;
-    if (reset) {
-      this.historyLoading = true;
-    } else {
-      this.historyLoadingMore = true;
-    }
+    this.historyLoad = reset ? "initial" : "more";
     this.historyError = null;
     const isCurrent = () =>
       this.isConnected &&
@@ -163,16 +152,14 @@ export class CustodianPage extends OpenClawLightDomElement {
       }
       this.historyEntries = reset ? result.entries : [...this.historyEntries, ...result.entries];
       this.historyNextCursor = result.nextCursor ?? null;
-      this.historyLoaded = true;
     } catch {
       if (isCurrent()) {
         this.historyError = t("custodian.history.requestFailed");
-        this.historyLoaded = true;
       }
     } finally {
       if (isCurrent()) {
-        this.historyLoading = false;
-        this.historyLoadingMore = false;
+        this.historyLoad = "idle";
+        this.historyLoaded = true;
       }
     }
   }
@@ -199,8 +186,8 @@ export class CustodianPage extends OpenClawLightDomElement {
             entries: this.historyEntries,
             error: this.historyError,
             loaded: this.historyLoaded,
-            loading: this.historyLoading,
-            loadingMore: this.historyLoadingMore,
+            loading: this.historyLoad === "initial",
+            loadingMore: this.historyLoad === "more",
             nextCursor: this.historyNextCursor,
             onLoad: (reset) => void this.loadHistory(reset),
           })
@@ -282,6 +269,15 @@ export class CustodianPage extends OpenClawLightDomElement {
 
 if (!customElements.get("openclaw-custodian-page")) {
   customElements.define("openclaw-custodian-page", CustodianPage);
+}
+
+export function renderCustodianRoute(data: CustodianRouteData | undefined) {
+  return html`
+    <openclaw-custodian-page
+      .onboarding=${data?.onboarding === true}
+      .newAgentIntent=${data?.intent === "new-agent"}
+    ></openclaw-custodian-page>
+  `;
 }
 
 declare global {

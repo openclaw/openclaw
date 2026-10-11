@@ -12,9 +12,7 @@ export const desktopDocumentStyles = css`
     box-sizing: border-box;
     background: var(--bg);
   }
-  .desktop-document .desktop-content {
-    width: 100%;
-  }
+  .desktop-document .desktop-content,
   .desktop-document .desktop-stage {
     width: 100%;
   }

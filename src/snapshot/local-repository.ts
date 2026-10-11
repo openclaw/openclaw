@@ -66,7 +66,6 @@ import {
   type SnapshotResult,
   type SnapshotSummary,
   type SnapshotVerificationResult,
-  type SqliteSnapshotProvider,
 } from "./snapshot-provider.js";
 
 const SNAPSHOT_DIRECTORY_MODE = 0o700;
@@ -89,13 +88,11 @@ type LocalSqliteSnapshotProviderOptions = {
   readonly now?: () => Date;
 };
 
-export function createLocalSqliteSnapshotProvider(
-  options: LocalSqliteSnapshotProviderOptions,
-): SqliteSnapshotProvider {
+export function createLocalSqliteSnapshotProvider(options: LocalSqliteSnapshotProviderOptions) {
   return new LocalSqliteSnapshotProvider(options);
 }
 
-class LocalSqliteSnapshotProvider implements SqliteSnapshotProvider {
+class LocalSqliteSnapshotProvider {
   readonly #allowedDatabaseRoles: readonly SnapshotDatabaseIdentity["role"][] | undefined;
   readonly #repositoryPath: string;
   readonly #validationRootPath: string;
@@ -126,7 +123,8 @@ class LocalSqliteSnapshotProvider implements SqliteSnapshotProvider {
     if (!Number.isFinite(now.getTime())) {
       throw new Error("SQLite snapshot timestamp is invalid.");
     }
-    const snapshotId = buildSnapshotId(now);
+    const timestamp = now.toISOString().replaceAll(/[:.]/g, "-");
+    const snapshotId = `${timestamp}-${randomUUID()}`;
     const snapshotRefPath = path.join(this.#repositoryPath, snapshotId);
     const snapshotDir = path.join(trustedRepositoryPath, snapshotId);
     const stagingDir = path.join(trustedRepositoryPath, `.tmp-${randomUUID()}`);
@@ -543,7 +541,13 @@ async function verifySnapshotDatabaseFile(
         database.exec("PRAGMA busy_timeout = 30000; PRAGMA trusted_schema = OFF;");
         await loadSqliteVecExtension({ db: database });
         assertSqliteIntegrity(database, artifactPath);
-        buildManifestDatabaseValidator(manifest.database)(database, artifactPath);
+        buildSnapshotValidator(manifest.database)(database, artifactPath);
+        const userVersion = readSqliteUserVersion(database);
+        if (userVersion !== manifest.database.userVersion) {
+          throw new Error(
+            `Snapshot database user_version mismatch for ${artifactPath}: expected ${manifest.database.userVersion}, got ${userVersion}`,
+          );
+        }
       } finally {
         database.close();
       }
@@ -583,26 +587,6 @@ function buildDatabaseManifest(
     return { role: "agent", agentId: identity.agentId, basename, userVersion };
   }
   return { role: "generic", id: identity.id, basename, userVersion };
-}
-
-function buildManifestDatabaseValidator(
-  manifest: SnapshotDatabaseManifest,
-): import("../infra/sqlite-snapshot.js").SqliteSnapshotValidator {
-  const validateOwner = buildSnapshotValidator(manifest);
-  return (database, pathname) => {
-    validateOwner(database, pathname);
-    const userVersion = readSqliteUserVersion(database);
-    if (userVersion !== manifest.userVersion) {
-      throw new Error(
-        `Snapshot database user_version mismatch for ${pathname}: expected ${manifest.userVersion}, got ${userVersion}`,
-      );
-    }
-  };
-}
-
-function buildSnapshotId(now: Date): string {
-  const timestamp = now.toISOString().replaceAll(/[:.]/g, "-");
-  return `${timestamp}-${randomUUID()}`;
 }
 
 async function ensurePrivateDirectory(

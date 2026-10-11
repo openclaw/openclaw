@@ -4,7 +4,10 @@ import type { AgentBinding } from "../../config/types.agents.js";
 import type { DmScope } from "../../config/types.base.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { GroupToolPolicyConfig } from "../../config/types.tools.js";
-import type { ChannelApprovalNativeRuntimeAdapter } from "../../infra/approval-handler-runtime-types.js";
+import type {
+  ChannelApprovalNativeRuntimeAdapter,
+  ChannelApprovalNativeRuntimeAdapterAsync,
+} from "../../infra/approval-handler-runtime-types.js";
 import type { ChannelApprovalKind } from "../../infra/approval-types.js";
 import type { ExecApprovalRequest, ExecApprovalResolved } from "../../infra/exec-approvals-core.js";
 import type {
@@ -18,7 +21,10 @@ import type { RuntimeEnv } from "../../runtime.js";
 import type { ResolverContext, SecretDefaults } from "../../secrets/runtime-shared.js";
 import type { SecretTargetRegistryEntry } from "../../secrets/target-registry-types.js";
 import type { SecurityAuditFinding } from "../../security/audit.types.js";
-import type { ChannelApprovalNativeAdapter } from "./approval-native.types.js";
+import type {
+  ChannelApprovalNativeAdapter,
+  ChannelApprovalNativeAdapterAsync,
+} from "./approval-native.types.js";
 import type { ChannelRuntimeSurface } from "./channel-runtime-surface.types.js";
 import type { ConfigWriteTarget } from "./config-writes.js";
 import type {
@@ -57,11 +63,9 @@ type ChannelApprovalForwardTarget = {
   source?: "session" | "target";
 };
 
-type ChannelCapabilitiesDisplayTone = "default" | "muted" | "success" | "warn" | "error";
-
 export type ChannelCapabilitiesDisplayLine = {
   text: string;
-  tone?: ChannelCapabilitiesDisplayTone;
+  tone?: "default" | "muted" | "success" | "warn" | "error";
 };
 
 export type ChannelCapabilitiesDiagnostics = {
@@ -97,10 +101,18 @@ export type ChannelConfigAdapter<ResolvedAccount> = {
   unconfiguredReason?: (account: ResolvedAccount, cfg: OpenClawConfig) => string;
   unlinkedReason?: (account: ResolvedAccount, cfg: OpenClawConfig) => string;
   describeAccount?: (account: ResolvedAccount, cfg: OpenClawConfig) => ChannelAccountSnapshot;
+  describeAccountAsync?: (
+    account: ResolvedAccount,
+    cfg: OpenClawConfig,
+  ) => Promise<ChannelAccountSnapshot>;
   resolveAllowFrom?: (params: {
     cfg: OpenClawConfig;
     accountId?: string | null;
   }) => Array<string | number> | undefined;
+  resolveAllowFromAsync?: (params: {
+    cfg: OpenClawConfig;
+    accountId?: string | null;
+  }) => Promise<Array<string | number> | undefined>;
   formatAllowFrom?: (params: {
     cfg: OpenClawConfig;
     accountId?: string | null;
@@ -211,33 +223,6 @@ export type ChannelGatewayContext<ResolvedAccount = unknown> = {
 export type ChannelGatewayContextV2<ResolvedAccount = unknown> =
   ChannelGatewayContext<ResolvedAccount> & { scheduler: PluginServiceSchedulerV1 };
 
-type ChannelLogoutResult = {
-  cleared: boolean;
-  loggedOut?: boolean;
-  [key: string]: unknown;
-};
-
-type ChannelLoginWithQrStartResult = {
-  qrDataUrl?: string;
-  message: string;
-  connected?: boolean;
-  sessionKey?: string;
-};
-
-type ChannelLoginWithQrWaitResult = {
-  connected: boolean;
-  message: string;
-  qrDataUrl?: string;
-};
-
-type ChannelLogoutContext<ResolvedAccount = unknown> = {
-  cfg: OpenClawConfig;
-  accountId: string;
-  account: ResolvedAccount;
-  runtime: RuntimeEnv;
-  log?: ChannelLogSink;
-};
-
 export type ChannelGatewayAdapter<ResolvedAccount = unknown> = {
   apiVersion?: 1;
   startAccount?: (ctx: ChannelGatewayContext<ResolvedAccount>) => Promise<unknown>;
@@ -249,14 +234,33 @@ export type ChannelGatewayAdapter<ResolvedAccount = unknown> = {
     force?: boolean;
     timeoutMs?: number;
     verbose?: boolean;
-  }) => Promise<ChannelLoginWithQrStartResult>;
+  }) => Promise<{
+    qrDataUrl?: string;
+    message: string;
+    connected?: boolean;
+    sessionKey?: string;
+  }>;
   loginWithQrWait?: (params: {
     accountId?: string;
     sessionKey?: string;
     timeoutMs?: number;
     currentQrDataUrl?: string;
-  }) => Promise<ChannelLoginWithQrWaitResult>;
-  logoutAccount?: (ctx: ChannelLogoutContext<ResolvedAccount>) => Promise<ChannelLogoutResult>;
+  }) => Promise<{
+    connected: boolean;
+    message: string;
+    qrDataUrl?: string;
+  }>;
+  logoutAccount?: (ctx: {
+    cfg: OpenClawConfig;
+    accountId: string;
+    account: ResolvedAccount;
+    runtime: RuntimeEnv;
+    log?: ChannelLogSink;
+  }) => Promise<{
+    cleared: boolean;
+    loggedOut?: boolean;
+    [key: string]: unknown;
+  }>;
 };
 
 export type ChannelGatewayAdapterV2<ResolvedAccount = unknown> = Omit<
@@ -303,12 +307,6 @@ export type ChannelHeartbeatAdapter = {
   clearTyping?: NonNullable<ChannelHeartbeatAdapter["sendTyping"]>;
 };
 
-type ChannelDirectorySelfParams = {
-  cfg: OpenClawConfig;
-  accountId?: string | null;
-  runtime: RuntimeEnv;
-};
-
 type ChannelDirectoryListParams = {
   cfg: OpenClawConfig;
   accountId?: string | null;
@@ -317,23 +315,23 @@ type ChannelDirectoryListParams = {
   runtime: RuntimeEnv;
 };
 
-type ChannelDirectoryListGroupMembersParams = {
-  cfg: OpenClawConfig;
-  accountId?: string | null;
-  groupId: string;
-  limit?: number | null;
-  runtime: RuntimeEnv;
-};
-
 export type ChannelDirectoryAdapter = {
-  self?: (params: ChannelDirectorySelfParams) => Promise<ChannelDirectoryEntry | null>;
+  self?: (params: {
+    cfg: OpenClawConfig;
+    accountId?: string | null;
+    runtime: RuntimeEnv;
+  }) => Promise<ChannelDirectoryEntry | null>;
   listPeers?: (params: ChannelDirectoryListParams) => Promise<ChannelDirectoryEntry[]>;
   listPeersLive?: (params: ChannelDirectoryListParams) => Promise<ChannelDirectoryEntry[]>;
   listGroups?: (params: ChannelDirectoryListParams) => Promise<ChannelDirectoryEntry[]>;
   listGroupsLive?: (params: ChannelDirectoryListParams) => Promise<ChannelDirectoryEntry[]>;
-  listGroupMembers?: (
-    params: ChannelDirectoryListGroupMembersParams,
-  ) => Promise<ChannelDirectoryEntry[]>;
+  listGroupMembers?: (params: {
+    cfg: OpenClawConfig;
+    accountId?: string | null;
+    groupId: string;
+    limit?: number | null;
+    runtime: RuntimeEnv;
+  }) => Promise<ChannelDirectoryEntry[]>;
 };
 
 export type ChannelResolveKind = "user" | "group";
@@ -401,6 +399,8 @@ export type ChannelDoctorConfigMutation = {
   config: OpenClawConfig;
   changes: string[];
   warnings?: string[];
+  /** null defers environment-dependent eligibility; an undefined account ID selects the root. */
+  historicalWebhookAccountIds?: readonly (string | undefined)[] | null;
 };
 
 export type ChannelDoctorLegacyConfigRule = LegacyConfigRule;
@@ -497,18 +497,10 @@ type ChannelApprovalForwardingFallbackParams = {
   request: ExecApprovalRequest | PluginApprovalRequest | SystemAgentApprovalRequest;
 };
 
-type ChannelApprovalDeliveryAdapter = {
-  hasConfiguredDmRoute?: (params: { cfg: OpenClawConfig }) => boolean;
-  /** Deny a fallback that cannot satisfy this request's reviewer policy, even without a native handler. */
-  shouldBlockForwardingFallback?: (params: ChannelApprovalForwardingFallbackParams) => boolean;
-  shouldSuppressForwardingFallback?: (params: ChannelApprovalForwardingFallbackParams) => boolean;
-};
-type ChannelApproveCommandBehavior =
-  | { kind: "allow" }
-  | { kind: "ignore" }
-  | { kind: "reply"; text: string };
-
-export type { ChannelApprovalNativeAdapter } from "./approval-native.types.js";
+export type {
+  ChannelApprovalNativeAdapter,
+  ChannelApprovalNativeAdapterAsync,
+} from "./approval-native.types.js";
 
 type ChannelApprovalRenderHandlers<Request, Resolved> = {
   buildPendingPayload?: (params: {
@@ -524,26 +516,31 @@ type ChannelApprovalRenderHandlers<Request, Resolved> = {
   }) => ReplyPayload | null;
 };
 
-type ChannelApprovalRenderAdapter = {
-  exec?: ChannelApprovalRenderHandlers<ExecApprovalRequest, ExecApprovalResolved>;
-  plugin?: ChannelApprovalRenderHandlers<PluginApprovalRequest, PluginApprovalResolved>;
-};
-
 export type ChannelApprovalAdapter = {
-  delivery?: ChannelApprovalDeliveryAdapter;
+  delivery?: {
+    hasConfiguredDmRoute?: (params: { cfg: OpenClawConfig }) => boolean;
+    hasConfiguredDmRouteAsync?: (params: { cfg: OpenClawConfig }) => Promise<boolean>;
+    /** Deny a fallback that cannot satisfy this request's reviewer policy, even without a native handler. */
+    shouldBlockForwardingFallback?: (params: ChannelApprovalForwardingFallbackParams) => boolean;
+    shouldSuppressForwardingFallback?: (params: ChannelApprovalForwardingFallbackParams) => boolean;
+    shouldSuppressForwardingFallbackAsync?: (
+      params: ChannelApprovalForwardingFallbackParams,
+    ) => Promise<boolean>;
+  };
   nativeRuntime?: ChannelApprovalNativeRuntimeAdapter;
-  render?: ChannelApprovalRenderAdapter;
+  nativeRuntimeAsync?: ChannelApprovalNativeRuntimeAdapterAsync;
+  render?: {
+    exec?: ChannelApprovalRenderHandlers<ExecApprovalRequest, ExecApprovalResolved>;
+    plugin?: ChannelApprovalRenderHandlers<PluginApprovalRequest, PluginApprovalResolved>;
+  };
   native?: ChannelApprovalNativeAdapter;
+  nativeAsync?: ChannelApprovalNativeAdapterAsync;
   describeExecApprovalSetup?: (params: {
     channel: string;
     channelLabel: string;
     accountId?: string;
   }) => string | null | undefined;
-  describePluginApprovalSetup?: (params: {
-    channel: string;
-    channelLabel: string;
-    accountId?: string;
-  }) => string | null | undefined;
+  describePluginApprovalSetup?: NonNullable<ChannelApprovalAdapter["describeExecApprovalSetup"]>;
 };
 
 export type ChannelApprovalCapability = ChannelApprovalAdapter & {
@@ -580,12 +577,18 @@ export type ChannelApprovalCapability = ChannelApprovalAdapter & {
     accountId?: string | null;
     action: "approve";
   }) => ChannelActionAvailabilityState;
+  /** Await worker-owned state before deciding initiating-surface availability. */
+  getExecInitiatingSurfaceStateAsync?: (params: {
+    cfg: OpenClawConfig;
+    accountId?: string | null;
+    action: "approve";
+  }) => Promise<ChannelActionAvailabilityState>;
   resolveApproveCommandBehavior?: (params: {
     cfg: OpenClawConfig;
     accountId?: string | null;
     senderId?: string | null;
     approvalKind: ChannelApprovalKind;
-  }) => ChannelApproveCommandBehavior | undefined;
+  }) => { kind: "allow" } | { kind: "ignore" } | { kind: "reply"; text: string } | undefined;
 };
 
 type ChannelAllowlistConfigEditResult =
@@ -679,6 +682,9 @@ export type ChannelSecurityAdapter<ResolvedAccount = unknown> = {
   resolveDmPolicy?: (
     ctx: ChannelSecurityContext<ResolvedAccount>,
   ) => ChannelSecurityDmPolicy | null;
+  resolveDmPolicyAsync?: (
+    ctx: ChannelSecurityContext<ResolvedAccount>,
+  ) => Promise<ChannelSecurityDmPolicy | null>;
   dmRouting?: {
     resolveDmScope?: (ctx: ChannelSecurityDmRouteContext<ResolvedAccount>) => DmScope | undefined;
     resolveDmRoute?: (

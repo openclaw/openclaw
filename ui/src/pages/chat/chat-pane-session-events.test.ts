@@ -474,7 +474,7 @@ describe("mounted pane session event ownership", () => {
   });
 
   it.each([false, true])(
-    "shows the admitted run's model before provisional descriptor reads settle (reentrant publication: %s)",
+    "keeps the saved model while execution metadata changes before descriptor reads settle (reentrant publication: %s)",
     async (reentrant) => {
       const row: GatewaySessionRow = {
         key: "agent:main:provisional-model",
@@ -529,7 +529,8 @@ describe("mounted pane session event ownership", () => {
         };
         const initialModel = draw();
         expect(initialModel?.textContent).toContain("Primary");
-        expect(initialModel?.getAttribute("aria-busy")).toBe("true");
+        expect(initialModel?.getAttribute("aria-busy")).toBe("false");
+        expect(initialModel?.querySelector(".btn__spinner")).toBeNull();
 
         reenter = reentrant;
         emitGatewayEvent("sessions.changed", {
@@ -547,7 +548,7 @@ describe("mounted pane session event ownership", () => {
         expect(descriptor.hasObserved).toBe(false);
         expect(state.chatLoading).toBe(true);
         const model = draw();
-        expect(model?.textContent).toContain(reentrant ? "Primary" : "Fallback");
+        expect(model?.textContent).toContain("Primary");
         expect(model?.getAttribute("aria-busy")).toBe("false");
       } finally {
         reads.resolve();

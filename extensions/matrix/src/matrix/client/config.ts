@@ -12,10 +12,7 @@ import {
   normalizeResolvedSecretInputString,
 } from "openclaw/plugin-sdk/secret-input";
 import type { PinnedDispatcherPolicy } from "openclaw/plugin-sdk/ssrf-dispatcher";
-import {
-  isPrivateNetworkOptInEnabled,
-  ssrfPolicyFromDangerouslyAllowPrivateNetwork,
-} from "openclaw/plugin-sdk/ssrf-runtime";
+import { ssrfPolicyFromDangerouslyAllowPrivateNetwork } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   requiresExplicitMatrixDefaultAccount,
   resolveMatrixDefaultOrOnlyAccountId,
@@ -314,7 +311,8 @@ function resolveMatrixAccountConfigSnapshot(
     min: 0,
   });
   const allowPrivateNetwork =
-    isPrivateNetworkOptInEnabled(account) || isPrivateNetworkOptInEnabled(matrix)
+    account.network?.dangerouslyAllowPrivateNetwork === true ||
+    matrix.network?.dangerouslyAllowPrivateNetwork === true
       ? true
       : undefined;
   return {
@@ -551,17 +549,22 @@ export async function resolveMatrixAuth(params?: {
     ssrfPolicy: resolved.ssrfPolicy,
     dispatcherPolicy: resolved.dispatcherPolicy,
   });
-  const login = await retryMatrixAuthRequest(
-    "matrix auth login",
-    async () =>
-      (await loginClient.doRequest("POST", "/_matrix/client/v3/login", undefined, {
-        type: "m.login.password",
-        identifier: { type: "m.id.user", user: resolved.userId },
-        password,
-        device_id: resolved.deviceId,
-        initial_device_display_name: resolved.deviceName ?? "OpenClaw Gateway",
-      })) as MatrixLoginResponse,
-  );
+  let login: MatrixLoginResponse;
+  try {
+    login = await retryMatrixAuthRequest(
+      "matrix auth login",
+      async () =>
+        (await loginClient.doRequest("POST", "/_matrix/client/v3/login", undefined, {
+          type: "m.login.password",
+          identifier: { type: "m.id.user", user: resolved.userId },
+          password,
+          device_id: resolved.deviceId,
+          initial_device_display_name: resolved.deviceName ?? "OpenClaw Gateway",
+        })) as MatrixLoginResponse,
+    );
+  } finally {
+    await loginClient.stopWithoutPersist();
+  }
 
   const loginAccessToken = login.access_token?.trim();
   if (!loginAccessToken) {

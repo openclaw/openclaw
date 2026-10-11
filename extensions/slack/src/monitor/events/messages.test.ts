@@ -823,19 +823,23 @@ describe("registerSlackMessageEvents", () => {
       });
 
       const eventScope = enterprise ? { teamId: "T_GRID", client: listenerClient } : undefined;
-      const parentSessionKey = harness.ctx.resolveSlackSystemEventRoute({
-        channelId,
-        channelType,
-        senderId,
-        eventScope,
-      }).sessionKey;
-      const threadSessionKey = harness.ctx.resolveSlackSystemEventRoute({
-        channelId,
-        channelType,
-        senderId,
-        threadTs,
-        eventScope,
-      }).sessionKey;
+      const parentSessionKey = (
+        await harness.ctx.resolveSlackSystemEventRoute({
+          channelId,
+          channelType,
+          senderId,
+          eventScope,
+        })
+      ).sessionKey;
+      const threadSessionKey = (
+        await harness.ctx.resolveSlackSystemEventRoute({
+          channelId,
+          channelType,
+          senderId,
+          threadTs,
+          eventScope,
+        })
+      ).sessionKey;
 
       expect(actualSystemEvents.peekSystemEventEntries(parentSessionKey)).toHaveLength(
         denied || threadSession ? 0 : 1,
@@ -986,13 +990,9 @@ describe("registerSlackMessageEvents", () => {
     );
   });
 
-  it("drops typeless app_mention when metadata lookup fails", async () => {
-    const { ctx, handler, handleSlackMessage } = createHandlers("app_mention", {
-      dmPolicy: "open",
-    });
-    ctx.resolveChannelName = vi.fn(async () => {
-      throw new Error("missing_scope");
-    });
+  it("logs a bounded diagnostic when typeless app_mention metadata lookup fails", async () => {
+    const { ctx, handler, handleSlackMessage } = createHandlers("app_mention");
+    ctx.resolveChannelName = () => Promise.reject(new Error("private lookup payload"));
 
     await requireMessageHandler(handler)({
       event: { ...makeAppMentionEvent({ channel: "C123" }), channel_type: undefined },
@@ -1000,7 +1000,11 @@ describe("registerSlackMessageEvents", () => {
     });
 
     expect(handleSlackMessage).not.toHaveBeenCalled();
-    expect(inboundLogLines()).toEqual([]);
+    expect(inboundInfoSpy).toHaveBeenCalledWith(
+      "Slack app_mention skipped: conversation type unresolved; channelId=C123 lookupFailureCategory=other; waiting for message event",
+      { channelId: "C123", lookupFailureCategory: "other" },
+    );
+    expect(JSON.stringify(inboundInfoSpy.mock.calls)).not.toMatch(/private|hello/);
   });
 
   it("routes app_mention events from channels to the message handler", async () => {

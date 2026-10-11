@@ -182,7 +182,7 @@ defineDiscordVoiceTests(
       vi.useFakeTimers();
       try {
         const first = handleSpeakingStart(manager, entry, "u-speaker");
-        getVoiceReceive(manager).scheduleCaptureFinalize(entry, "u-speaker", "speaker end");
+        getVoiceReceive(manager).scheduleCaptureFinalize(entry, "u-speaker");
         const resumed = handleSpeakingStart(manager, entry, "u-speaker");
         expect(resolveVoiceIngressWithParticipantsMock).toHaveBeenCalledOnce();
         expect(connection.receiver.subscribe).not.toHaveBeenCalled();
@@ -219,7 +219,7 @@ defineDiscordVoiceTests(
             reason === "failed"
               ? expect(completion).rejects.toThrow("admission failed")
               : expect(completion).resolves.toBeUndefined();
-          getVoiceReceive(manager).scheduleCaptureFinalize(entry, "u-speaker", "speaker end");
+          getVoiceReceive(manager).scheduleCaptureFinalize(entry, "u-speaker");
           expect(connection.receiver.subscribe).not.toHaveBeenCalled();
           if (reason === "stopped") {
             await manager.destroy();

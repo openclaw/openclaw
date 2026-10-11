@@ -22,10 +22,49 @@ export function findRetiredConfigUpgradeRequirement(
       }
     }
   };
+  const checkEntryKeys = (entries: unknown, configPath: string, keys: string[]) => {
+    if (isRecord(entries)) {
+      for (const [id, entry] of Object.entries(entries)) {
+        checkKeys(entry, `${configPath}.${id}`, keys);
+      }
+    }
+  };
   checkKeys(config, "", ["heartbeat"]);
   checkKeys(config.routing, "routing", ["allowFrom", "groupChat"]);
   checkKeys(config.plugins, "plugins", ["installs"]);
+  const providers = isRecord(config.models) ? config.models.providers : undefined;
+  if (isRecord(providers)) {
+    for (const [id, provider] of Object.entries(providers)) {
+      if (!isRecord(provider)) {
+        continue;
+      }
+      if (provider.api === "openai-codex-responses") {
+        retired.push(`models.providers.${id}.api`);
+      }
+      if (Array.isArray(provider.models)) {
+        provider.models.forEach((model, index) => {
+          if (isRecord(model) && model.api === "openai-codex-responses") {
+            retired.push(`models.providers.${id}.models.${index}.api`);
+          }
+        });
+      }
+    }
+  }
   checkKeys(config.browser, "browser", ["relayBindHost"]);
+  const browser = isRecord(config.browser) ? config.browser : undefined;
+  if (isRecord(browser?.profiles)) {
+    for (const [id, profile] of Object.entries(browser.profiles)) {
+      if (
+        isRecord(profile) &&
+        typeof profile.driver === "string" &&
+        profile.driver.trim() === "extension" &&
+        typeof profile.cdpUrl === "string" &&
+        profile.cdpUrl.trim()
+      ) {
+        retired.push(`browser.profiles.${id}.cdpUrl`);
+      }
+    }
+  }
   checkKeys(
     isRecord(config.browser) ? config.browser.ssrfPolicy : undefined,
     "browser.ssrfPolicy",
@@ -84,22 +123,24 @@ export function findRetiredConfigUpgradeRequirement(
       checkQueueMode(mode, `messages.queue.byChannel.${channel}`);
     }
   }
+  checkKeys(config.talk, "talk", ["mode", "transport", "brain", "model", "voice"]);
   const channels = isRecord(config.channels) ? config.channels : {};
   checkKeys(config.gateway, "gateway", ["webchat"]);
   checkKeys(channels, "channels", ["webchat"]);
-  checkKeys(channels.telegram, "channels.telegram", ["requireMention"]);
+  checkKeys(channels.telegram, "channels.telegram", ["requireMention", "groupMentionsOnly"]);
+  visitChannelEntries(config, "whatsapp", (scope, configPath) => {
+    checkKeys(scope, configPath, ["exposeErrorText"]);
+  });
   const beforeDiscord = retired.length;
   visitChannelEntries(config, "discord", (scope, configPath) => {
     const voice = isRecord(scope.voice) ? scope.voice : {};
     checkKeys(voice.tts, `${configPath}.voice.tts`, ["openai", "elevenlabs", "microsoft", "edge"]);
     for (const [guildId, guild] of Object.entries(isRecord(scope.guilds) ? scope.guilds : {})) {
       const guildChannels = isRecord(guild) && isRecord(guild.channels) ? guild.channels : {};
-      for (const [channelId, channel] of Object.entries(guildChannels)) {
-        checkKeys(channel, `${configPath}.guilds.${guildId}.channels.${channelId}`, [
-          "allow",
-          "agentId",
-        ]);
-      }
+      checkEntryKeys(guildChannels, `${configPath}.guilds.${guildId}.channels`, [
+        "allow",
+        "agentId",
+      ]);
     }
   });
   const bridgeVersion = retired.length > beforeDiscord ? "2026.9.7" : "2026.9.5";
@@ -122,11 +163,10 @@ export function findRetiredConfigUpgradeRequirement(
       "nativeToolProgress",
       "nativeToolProgressAllowFrom",
     ]);
-    if (isRecord(scope.direct)) {
-      for (const [chatId, direct] of Object.entries(scope.direct)) {
-        checkKeys(direct, `${configPath}.direct.${chatId}`, ["threadReplies"]);
-      }
-    }
+    checkEntryKeys(scope.direct, `${configPath}.direct`, ["threadReplies"]);
+  });
+  visitChannelEntries(config, "nextcloud-talk", (scope, configPath) => {
+    checkKeys(scope, configPath, ["allowPrivateNetwork"]);
   });
   visitChannelEntries(config, "matrix", (scope, configPath) => {
     checkKeys(scope, configPath, ["allowPrivateNetwork"]);
@@ -134,20 +174,11 @@ export function findRetiredConfigUpgradeRequirement(
       retired.push(`${configPath}.dm.policy`);
     }
     for (const section of ["groups", "rooms"]) {
-      const rooms = scope[section];
-      if (isRecord(rooms)) {
-        for (const [roomId, room] of Object.entries(rooms)) {
-          checkKeys(room, `${configPath}.${section}.${roomId}`, ["allow"]);
-        }
-      }
+      checkEntryKeys(scope[section], `${configPath}.${section}`, ["allow"]);
     }
   });
   visitChannelEntries(config, "slack", (scope, configPath) => {
-    if (isRecord(scope.channels)) {
-      for (const [channelId, channel] of Object.entries(scope.channels)) {
-        checkKeys(channel, `${configPath}.channels.${channelId}`, ["allow"]);
-      }
-    }
+    checkEntryKeys(scope.channels, `${configPath}.channels`, ["allow"]);
   });
   for (const channelId of ["discord", "line", "matrix", "telegram"]) {
     visitChannelEntries(config, channelId, (scope, configPath) => {

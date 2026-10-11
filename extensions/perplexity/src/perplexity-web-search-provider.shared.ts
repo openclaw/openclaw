@@ -77,13 +77,9 @@ export function resolvePerplexityWebSearchRuntimeMetadata(
 }
 
 export function isDirectPerplexityBaseUrl(baseUrl: string): boolean {
-  try {
-    return (
-      normalizeLowercaseStringOrEmpty(new URL(baseUrl.trim()).hostname) === "api.perplexity.ai"
-    );
-  } catch {
-    return false;
-  }
+  return (
+    normalizeLowercaseStringOrEmpty(URL.parse(baseUrl.trim())?.hostname) === "api.perplexity.ai"
+  );
 }
 
 export function resolvePerplexityConfig(searchConfig?: Record<string, unknown>): PerplexityConfig {

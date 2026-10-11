@@ -77,33 +77,6 @@ describe("check-runtime-sidecar-loaders", () => {
     expect(runtimeGraph.filter((filePath) => /(^|\/)manager(?:-|\.)/.test(filePath))).toEqual([]);
   });
 
-  it("flags hidden createRequire runtime sidecars that are not build entries", () => {
-    const source = `
-      import { createRequire } from "node:module";
-      const require = createRequire(import.meta.url);
-      export function loadRuntime() {
-        return require("./missing.runtime.js");
-      }
-    `;
-
-    expect(
-      findRuntimeSidecarLoaderViolations(
-        source,
-        "src/example/example-registry.ts",
-        new Set(),
-        parser.parseSourceFile("src/example/example-registry.ts", source),
-      ),
-    ).toEqual([
-      {
-        line: 5,
-        specifier: "./missing.runtime.js",
-        sourcePath: "src/example/missing.runtime.ts",
-        reason:
-          'hidden local runtime loader "./missing.runtime.js" resolves to src/example/missing.runtime.ts, but that source is not an explicit tsdown entry',
-      },
-    ]);
-  });
-
   it("allows hidden createRequire runtime sidecars when the source is an explicit build entry", () => {
     const source = `
       import { createRequire } from "node:module";

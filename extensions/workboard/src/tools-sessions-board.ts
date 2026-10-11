@@ -12,34 +12,22 @@ const boardIdField = Type.Optional(
   }),
 );
 
+function optionalChoices<const T extends string>(choices: readonly T[]) {
+  return Type.Optional(Type.Array(Type.Union(choices.map((choice) => Type.Literal(choice)))));
+}
+
 const matchRuleSchema = strictObject({
-  health: Type.Optional(
-    Type.Array(
-      Type.Union([
-        Type.Literal("on-track"),
-        Type.Literal("grinding"),
-        Type.Literal("stuck"),
-        Type.Literal("waiting-on-user"),
-        Type.Literal("wrapping-up"),
-        Type.Literal("done"),
-        Type.Literal("failed"),
-      ]),
-    ),
-  ),
-  run: Type.Optional(
-    Type.Array(Type.Union([Type.Literal("active"), Type.Literal("idle"), Type.Literal("failed")])),
-  ),
-  pullRequest: Type.Optional(
-    Type.Array(
-      Type.Union([
-        Type.Literal("none"),
-        Type.Literal("open"),
-        Type.Literal("draft"),
-        Type.Literal("merged"),
-        Type.Literal("closed"),
-      ]),
-    ),
-  ),
+  health: optionalChoices([
+    "on-track",
+    "grinding",
+    "stuck",
+    "waiting-on-user",
+    "wrapping-up",
+    "done",
+    "failed",
+  ]),
+  run: optionalChoices(["active", "idle", "failed"]),
+  pullRequest: optionalChoices(["none", "open", "draft", "merged", "closed"]),
   archived: Type.Optional(Type.Boolean()),
 });
 
@@ -102,7 +90,9 @@ export function createWorkboardSessionsBoardTools(params: {
       parameters: strictObject({ boardId: boardIdField }),
       execute: async (_toolCallId, rawParams) => {
         const record = asNonArrayRecord(rawParams);
-        return jsonResult(await service().read(await resolveBoardId(record)));
+        return jsonResult(
+          await service().read(await resolveBoardId(record), undefined, params.caller),
+        );
       },
     },
     {
@@ -117,6 +107,16 @@ export function createWorkboardSessionsBoardTools(params: {
           strictObject({
             agentIds: Type.Optional(Type.Array(Type.String({ minLength: 1 }))),
             includeArchived: Type.Optional(Type.Boolean()),
+            includeAutomation: Type.Optional(
+              Type.Boolean({
+                description: "Include automation (cron) and system sessions. Defaults to false.",
+              }),
+            ),
+            includeHome: Type.Optional(
+              Type.Boolean({
+                description: "Include each agent's Home session. Defaults to false.",
+              }),
+            ),
             maxAgeHours: Type.Optional(Type.Number({ exclusiveMinimum: 0 })),
           }),
         ),

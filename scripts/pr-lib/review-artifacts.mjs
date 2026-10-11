@@ -46,6 +46,20 @@ export function renderReviewMarkdown(review) {
       `Pre-existing CI attribution: head=${ci.head}, run=${ci.runId}, attempt=${ci.runAttempt}. ${ci.reason}`,
     );
   }
+  if (review.tests.investigatedLocalFailures) {
+    const local = review.tests.investigatedLocalFailures;
+    lines.push(`Unresolved local test failures: head=${local.head}`);
+    for (const failure of local.failures) {
+      lines.push(`- Failure: ${failure.failure}`);
+      for (const attempt of failure.reproductionAttempts) {
+        lines.push(`  Reproduction: ${attempt}`);
+      }
+      for (const evidence of failure.evidence) {
+        lines.push(`  Evidence: ${evidence}`);
+      }
+      lines.push(`  Remaining uncertainty: ${failure.remainingUncertainty}`);
+    }
+  }
   for (const test of review.tests.ran) {
     lines.push(`- ${test}`);
   }
@@ -498,10 +512,37 @@ export function validateReviewArtifacts({ review, prMeta }) {
       "Invalid pre-existing CI attribution: keep tests.result=fail and bind this review head, run, attempt, and reason",
     );
   }
+  const local = tests.investigatedLocalFailures;
+  const investigatedLocalFailure =
+    tests.result === "fail" &&
+    isObject(local) &&
+    typeof local.head === "string" &&
+    /^[0-9a-f]{40}$/u.test(local.head) &&
+    local.head === value.pr?.headSha &&
+    Array.isArray(local.failures) &&
+    local.failures.length > 0 &&
+    local.failures.every(
+      (failure) =>
+        isObject(failure) &&
+        isNonEmptyString(failure.failure) &&
+        Array.isArray(failure.reproductionAttempts) &&
+        failure.reproductionAttempts.length > 0 &&
+        failure.reproductionAttempts.every(isNonEmptyString) &&
+        Array.isArray(failure.evidence) &&
+        failure.evidence.length > 0 &&
+        failure.evidence.every(isNonEmptyString) &&
+        isNonEmptyString(failure.remainingUncertainty),
+    );
+  if (local !== undefined && !investigatedLocalFailure) {
+    add(
+      "Invalid investigated local failures: keep tests.result=fail, bind this review head, and record each original failure, reproduction attempts, evidence, and remaining uncertainty",
+    );
+  }
   if (
     value.recommendation === "READY FOR /prepare-pr" &&
     tests.result === "fail" &&
-    !attributedCiFailure
+    !attributedCiFailure &&
+    !investigatedLocalFailure
   ) {
     add(
       "Invalid recommendation in .local/review.json: READY FOR /prepare-pr cannot include failing tests",
@@ -511,7 +552,8 @@ export function validateReviewArtifacts({ review, prMeta }) {
     value.recommendation === "READY FOR /prepare-pr" &&
     runtimeReviewRequired &&
     tests.result !== "pass" &&
-    !attributedCiFailure
+    !attributedCiFailure &&
+    !investigatedLocalFailure
   ) {
     add(
       "Invalid recommendation in .local/review.json: READY FOR /prepare-pr on runtime changes requires passing tests",

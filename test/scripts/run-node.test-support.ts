@@ -24,8 +24,8 @@ import {
   UPDATE_COMPATIBILITY_INVENTORY_FILE,
   writeUpdateCompatibilityChunks,
 } from "../../scripts/lib/update-compat-chunks.mts";
-import { runNodeMain } from "../../scripts/run-node.mts";
 import { withTestDir } from "../../src/test-helpers/temp-dir.js";
+import { runNodeMain } from "./run-node-boundary.test-support.js";
 // These launcher fixtures have no service. Publication custody is covered at its owner.
 vi.mock("../../src/cli/update-cli/update-command-service-publication.js", () => ({
   withGatewayRuntimeArtifactPublication: async (
@@ -440,7 +440,13 @@ export async function runNodeCommand(
     cwd: tmp,
     args: ["status"],
     ...overrides,
-    env: { ...process.env, OPENCLAW_RUNNER_LOG: "0", ...env },
+    // Each fixture selects its CLI runtime independently of the Vitest worker.
+    env: {
+      ...process.env,
+      OPENCLAW_RUNNER_LOG: "0",
+      OPENCLAW_VITEST_RUNTIME: undefined,
+      ...env,
+    },
     execPath: process.execPath,
     platform: options.platform ?? process.platform,
   } as RunNodeTestOptions);

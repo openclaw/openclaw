@@ -10,18 +10,20 @@ read_when:
 
 ## Extended-stable validation
 
-Extended-stable validation uses the same checked helper with an immutable
-trusted-main Tooling SHA. Keep the exact candidate, Tooling SHA, canonical
-context, and workflow transport separate:
+Extended-stable validation uses the same candidate-owned helper: the exact
+source candidate C also owns qualification Q=C. Independently trusted P admits
+and verifies that request. Keep those roles and the canonical release context
+separate; deliberately backport missing qualification contracts before freezing C.
 
 ```bash
 VALIDATION_SHA="<exact-candidate-sha>"
-TOOLING_SHA="<recorded-full-main-ancestor-sha>"
+PUBLISHER_SHA="<recorded-full-trusted-main-ancestor-sha>"
 CONTEXT_REF="extended-stable/YYYY.M.33"
 pnpm ci:full-release \
   --sha "$VALIDATION_SHA" \
   --target-ref "$CONTEXT_REF" \
-  --workflow-sha "$TOOLING_SHA" \
+  --admission-workflow-sha "$PUBLISHER_SHA" \
+  --admission-workflow-ref main \
   -f validation_purpose=publish \
   -f publication_selection_json='{"route":"extended-stable","npmDistTag":"extended-stable","publishOpenclawNpm":true,"pluginPublishScope":"all-publishable","plugins":[]}' \
   -f release_profile=stable \
@@ -32,28 +34,24 @@ pnpm ci:full-release \
   -f dispatch_release_evidence=false
 ```
 
-The helper creates `release-ci/<tooling-prefix>-<unique-id>` at the Tooling SHA,
-dispatches from that named branch, supplies the trusted-main identity, and uses
-the exact Validation SHA for both `ref` and `expected_sha` with the canonical
-branch in `target_context_ref`. GitHub workflow dispatch `--ref` accepts a branch
-or tag, not a raw SHA. Outside extended-stable validation, a direct
-canonical-branch dispatch is valid only when its head is also the trusted
-workflow implementation. Current extended-stable validation uses distinct
-trusted-main tooling and therefore requires the immutable helper.
+After independent admission, the helper creates `release-ci/<Q-prefix>-<unique-id>`
+at Q=C and dispatches from that immutable named branch. It passes the exact
+candidate as `ref` and `expected_sha`, with the canonical branch in
+`target_context_ref`. GitHub workflow dispatch `--ref` accepts a branch or tag,
+not a raw SHA. The release branch supplies context, not qualification authority.
+Never create the transport ref manually or substitute a moving-main harness.
 
-The shared publisher requires this canonical `release-ci/*` producer and binds
-its trusted workflow SHA separately from the exact candidate SHA. Its protected
-`release-publish/*` ref does not replace the canonical candidate branch. Retain
-the complete `rerun_group=all` manifest, exact run ID and successful attempt;
-reject direct canonical-branch/main producers, narrow runs, stale attempts, and
-mismatched targets. If a reviewed tooling repair changes the publication SHA,
-the validation tooling must remain reachable from current `main` and all
-candidate and evidence identities must still match.
+The shared publisher requires admitted candidate-owned evidence, complete
+`rerun_group=all` coverage, and the exact successful attempt. Its protected
+`release-publish/*` ref selects P, not Q. Publication-tooling updates do not
+change the frozen candidate or qualification identities. Retained historical
+cross-revision requests keep their original recovery contract; new explicit
+main/protected diagnostic runs cannot replace Q=C publication proof.
 
-Backport product failures; make the smallest behavior-preserving repair for
-frozen-target tooling; retry provider, approval, or runner failures without a
-source change. Any branch change needs a complete new run. Do not omit required
-package, installer, update, channel, or live behavior because the target is old.
+Product or qualification-harness repairs change C/Q and require new qualification.
+Provider, approval, or runner recovery retains the original identities and inputs.
+Do not omit required package, installer, update, channel, or live behavior because
+the target is old.
 
 For a regular release whose qualified Code SHA already contains final notes,
 use that same commit as the **Release SHA**. Retain its successful full
@@ -166,8 +164,9 @@ deferral; it is rejected for `stable` and `full` and does not disable the focuse
 Selected-test requirements are separate from explicit omissions. The reviewed
 Telegram-only exceptions are `2026.8.1-owner-approved` and
 `2026.9.1-owner-approved`. The reviewed Telegram and Matrix QA-live exceptions
-are `2026.9.5-owner-approved`, `2026.9.7-owner-approved`, and
-`2026.9.8-owner-approved`. Pass the selected value with `-f telegram_waiver=<value>`.
+are `2026.9.5-owner-approved`, `2026.9.7-owner-approved`,
+`2026.9.8-owner-approved`, and `2026.9.9-owner-approved`. Pass the selected value
+with `-f telegram_waiver=<value>`.
 Any future exception requires a reviewed code change; a matching
 `<target-version>-owner-approved` string alone is not authorization. The value
 must name the validated target's actual

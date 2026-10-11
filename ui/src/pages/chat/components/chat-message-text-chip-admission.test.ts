@@ -107,48 +107,24 @@ function mount(item: AttachmentItem | AttachmentItem[], options: ImageRenderOpti
 }
 
 describe("history text chip source admission", () => {
-  it("admits all metadata for a comment group at its single chip without reading bodies", async () => {
-    const local = attachment("comment");
-    const managed = attachment("comment", true);
-    const resolveArtifactDownload = vi.fn(async () => ({
-      url: `${managed.attachment.url}?mediaTicket=group`,
-    }));
-    const fetchMock = vi.fn<typeof fetch>(async (input) =>
-      (typeof input === "string" ? input : input instanceof URL ? input.href : input.url).includes(
-        "meta=1",
-      )
-        ? Response.json({
-            available: true,
-            mediaTicket: "group",
-            mediaTicketExpiresAt: new Date(Date.now() + 300_000).toISOString(),
-          })
-        : new Response(commentText),
-    );
-    vi.stubGlobal("fetch", fetchMock);
-    const view = mount([local, managed], { resolveArtifactDownload });
-    await settle(view.container);
-    expect(fetchMock).not.toHaveBeenCalled();
-    expect(resolveArtifactDownload).not.toHaveBeenCalled();
-    const chip = view.container.querySelector<HTMLElement>(".chat-selection-annotations__chip");
-    expect(observations).toHaveLength(1);
-    expect(observations[0]?.element).toBe(chip);
-    observations[0]?.show();
-    await settle(view.container);
-    expect(fetchMock).toHaveBeenCalledOnce();
-    expect(resolveArtifactDownload).toHaveBeenCalledOnce();
-    chip?.focus();
-    await settle(view.container);
-    expect(fetchMock).toHaveBeenCalledTimes(3);
-    expect(view.container.querySelectorAll(".chat-comment-preview__text--selection")).toHaveLength(
-      2,
-    );
-    expect(view.container.querySelector(".chat-selection-annotations__chip")).toBe(chip);
-  });
-
-  it.each(["comment", "paste"] as const)(
-    "defers offscreen %s metadata at its actual chip and keeps body reads with the preview owner",
-    async (kind) => {
+  it.each([
+    ["comment", "viewport", true],
+    ["comment", "viewport", false],
+    ["paste", "viewport", false],
+    ["comment", "focus", false],
+    ["paste", "focus", false],
+  ] as const)(
+    "admits %s through %s (grouped=%s) while retaining the chip",
+    async (kind, trigger, grouped) => {
+      const managed = trigger === "focus";
+      const item = attachment(kind, managed);
+      const managedItem = grouped ? attachment("comment", true) : item;
+      const resolveArtifactDownload = vi.fn(async () => ({
+        url: `${managedItem.attachment.url}?mediaTicket=managed-text`,
+        ...(managed ? { expiresAt: new Date(Date.now() + 300_000).toISOString() } : {}),
+      }));
       const fetchMock = vi.fn<typeof fetch>(async (input) =>
+        !managed &&
         (typeof input === "string"
           ? input
           : input instanceof URL
@@ -160,49 +136,52 @@ describe("history text chip source admission", () => {
               mediaTicket: "text-chip",
               mediaTicketExpiresAt: new Date(Date.now() + 300_000).toISOString(),
             })
-          : new Response(kind === "comment" ? commentText : "Visible pasted excerpt"),
+          : new Response(managed || kind === "comment" ? commentText : "Visible pasted excerpt"),
       );
       vi.stubGlobal("fetch", fetchMock);
-      const view = mount(attachment(kind));
+      const view = mount(
+        grouped ? [item, managedItem] : item,
+        managed || grouped ? { resolveArtifactDownload } : {},
+      );
       await settle(view.container);
       expect(fetchMock).not.toHaveBeenCalled();
-      const chip = view.container.querySelector<HTMLElement>(".chat-selection-annotations__chip");
-      expect(chip).not.toBeNull();
-      const observation = observations.find(({ element }) => element === chip);
-      expect(observation).toBeDefined();
-      observation?.show();
-      await settle(view.container);
-      expect(fetchMock).toHaveBeenCalledTimes(kind === "comment" ? 1 : 2);
-      expect(view.container.querySelector(".chat-selection-annotations__chip")).toBe(chip);
-      chip?.dispatchEvent(new FocusEvent("focusin", { bubbles: true }));
-      await settle(view.container);
-      expect(fetchMock).toHaveBeenCalledTimes(2);
-      expect(view.container.textContent).toContain(
-        kind === "comment" ? "hello" : "Visible pasted excerpt",
-      );
-    },
-  );
-
-  it.each(["comment", "paste"] as const)(
-    "admits an explicitly focused managed %s without waiting for intersection",
-    async (kind) => {
-      const item = attachment(kind, true);
-      const resolveArtifactDownload = vi.fn(async () => ({
-        url: `${item.attachment.url}?mediaTicket=managed-text`,
-        expiresAt: new Date(Date.now() + 300_000).toISOString(),
-      }));
-      vi.stubGlobal(
-        "fetch",
-        vi.fn<typeof fetch>(async () => new Response(commentText)),
-      );
-      const view = mount(item, { resolveArtifactDownload });
-      await settle(view.container);
       expect(resolveArtifactDownload).not.toHaveBeenCalled();
       const chip = view.container.querySelector<HTMLElement>(".chat-selection-annotations__chip");
-      chip?.focus();
-      await settle(view.container);
-      expect(resolveArtifactDownload).toHaveBeenCalledOnce();
-      expect(document.activeElement).toBe(chip);
+      expect(chip).not.toBeNull();
+      if (managed) {
+        chip?.focus();
+        await settle(view.container);
+        expect(resolveArtifactDownload).toHaveBeenCalledOnce();
+        expect(document.activeElement).toBe(chip);
+      } else {
+        const observation = observations.find(({ element }) => element === chip);
+        expect(observation).toBeDefined();
+        if (grouped) {
+          expect(observations).toHaveLength(1);
+          expect(observations[0]?.element).toBe(chip);
+        }
+        observation?.show();
+        await settle(view.container);
+        expect(fetchMock).toHaveBeenCalledTimes(kind === "comment" ? 1 : 2);
+        expect(view.container.querySelector(".chat-selection-annotations__chip")).toBe(chip);
+        if (grouped) {
+          expect(resolveArtifactDownload).toHaveBeenCalledOnce();
+          chip?.focus();
+        } else {
+          chip?.dispatchEvent(new FocusEvent("focusin", { bubbles: true }));
+        }
+        await settle(view.container);
+        expect(fetchMock).toHaveBeenCalledTimes(grouped ? 3 : 2);
+        if (grouped) {
+          expect(
+            view.container.querySelectorAll(".chat-comment-preview__text--selection"),
+          ).toHaveLength(2);
+        } else {
+          expect(view.container.textContent).toContain(
+            kind === "comment" ? "hello" : "Visible pasted excerpt",
+          );
+        }
+      }
       expect(view.container.querySelector(".chat-selection-annotations__chip")).toBe(chip);
     },
   );

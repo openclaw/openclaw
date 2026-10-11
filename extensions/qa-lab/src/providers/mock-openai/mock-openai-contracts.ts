@@ -173,21 +173,6 @@ export type MockOpenAiRequestSnapshot = QaMockRequestSnapshot & {
 
 export type MockOpenAiRequestSnapshotInput = Omit<MockOpenAiRequestSnapshot, "cursor">;
 
-/** Snapshot fields known before the mock decides an outcome or plans a tool. */
-export type MockOpenAiRequestSnapshotBase = Omit<
-  MockOpenAiRequestSnapshotInput,
-  | "outcome"
-  | "errorCode"
-  | "plannedToolCallId"
-  | "plannedToolItemId"
-  | "plannedToolName"
-  | "plannedWireToolName"
-  | "plannedToolArgs"
-  | "toolOutputCallId"
-  | "toolOutputStructuredError"
->;
-
-// Anthropic wire fields used by the shared Responses scenario dispatcher.
 export type AnthropicMessageContentBlock =
   | { type: "text"; text: string }
   | {
@@ -507,11 +492,7 @@ export type AnthropicStreamEvent = Record<string, unknown> & {
 };
 
 export function countApproxTokens(text: string) {
-  const trimmed = text.trim();
-  if (!trimmed) {
-    return 0;
-  }
-  return Math.max(1, Math.ceil(trimmed.length / 4));
+  return Math.ceil(text.trim().length / 4);
 }
 
 export function extractEmbeddingInputTexts(input: unknown): string[] {
@@ -531,7 +512,8 @@ export function extractEmbeddingInputTexts(input: unknown): string[] {
   return [];
 }
 
-export function buildDeterministicEmbedding(text: string, dimensions = 16) {
+export function buildDeterministicEmbedding(text: string) {
+  const dimensions = 16;
   const values = Array.from({ length: dimensions }, () => 0);
   for (let index = 0; index < text.length; index += 1) {
     const embeddingIndex = index % dimensions;

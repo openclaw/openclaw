@@ -37,11 +37,6 @@ function collectReferencedAgentIds(cfg: OpenClawConfig): string[] {
   const ids = new Set<string>();
 
   const agents = listAgentEntries(cfg);
-  const defaultAgentId = agents.find((agent) => agent?.default)?.id;
-  if (defaultAgentId) {
-    ids.add(normalizeAgentId(defaultAgentId));
-  }
-
   for (const entry of agents) {
     if (entry?.id) {
       ids.add(normalizeAgentId(entry.id));

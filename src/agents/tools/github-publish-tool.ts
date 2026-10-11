@@ -1,4 +1,5 @@
 import { Type } from "typebox";
+import { getAgentToolAssistantTurnId } from "../../../packages/agent-core/src/tool-execution-context.js";
 import {
   GitHubPublicationBodySchema,
   GitHubPublicationTitleSchema,
@@ -35,9 +36,11 @@ export function createGitHubPublishTool(
       if (!caller?.sessionKey) {
         throw new Error("GitHub publication requires the current Gateway session.");
       }
+      // The persisted assistant turn keeps replays stable, even when recovery runs them again.
+      const assistantTurnId = getAgentToolAssistantTurnId();
       const result = await callGateway<SessionGitHubPublicationResult>("sessions.github.publish", {
         sessionKey: caller.sessionKey,
-        idempotencyKey: toolCallId,
+        idempotencyKey: assistantTurnId ? `${assistantTurnId}:${toolCallId}` : toolCallId,
         ...(input.title ? { title: input.title } : {}),
         ...(input.body ? { body: input.body } : {}),
       });

@@ -28,7 +28,7 @@ export function registerDiscordActivities(api: OpenClawPluginApi): void {
     path: DISCORD_ACTIVITY_ROUTE_PREFIX,
     auth: "plugin",
     match: "prefix",
-    handler: async (req, res) => await http.handleHttpRequest(req, res),
+    handler: http.handleHttpRequest,
   });
   api.registerWidgetPresenter(createDiscordWidgetPresenter(runtime));
 }

@@ -1,5 +1,6 @@
 import Cocoa
 import Foundation
+import OpenClawKit
 import OSLog
 
 @MainActor
@@ -33,7 +34,7 @@ final class PresenceReporter {
     private func push(reason: String) async {
         let mode = await MainActor.run { AppStateStore.shared.connectionMode.rawValue }
         let host = InstanceIdentity.displayName
-        let ip = SystemPresenceInfo.primaryIPv4Address() ?? "ip-unknown"
+        let ip = NetworkInterfaces.primaryIPv4Address() ?? "ip-unknown"
         let version = Self.appVersionString()
         let platform = Self.platformString()
         let text = Self.composePresenceSummary(mode: mode, reason: reason)
@@ -66,7 +67,7 @@ final class PresenceReporter {
 
     private static func composePresenceSummary(mode: String, reason: String) -> String {
         let host = InstanceIdentity.displayName
-        let ip = SystemPresenceInfo.primaryIPv4Address() ?? "ip-unknown"
+        let ip = NetworkInterfaces.primaryIPv4Address() ?? "ip-unknown"
         let version = Self.appVersionString()
         return "Node: \(host) (\(ip)) · app \(version) · mode \(mode) · reason \(reason)"
     }
@@ -86,8 +87,6 @@ final class PresenceReporter {
         let v = ProcessInfo.processInfo.operatingSystemVersion
         return "macos \(v.majorVersion).\(v.minorVersion).\(v.patchVersion)"
     }
-
-    // SystemPresenceInfo supplies the best-effort primary IPv4 address.
 }
 
 #if DEBUG

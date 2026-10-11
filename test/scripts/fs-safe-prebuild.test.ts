@@ -214,25 +214,24 @@ describe("packaged fs-safe prebuild restoration", () => {
       env: { OPENCLAW_DISABLE_BUNDLED_PLUGIN_POSTINSTALL: "1" },
       warning: false,
     },
-  ])("makes no npm request for $name", async ({ env, warning }) => {
+    { name: "source checkout", warning: false, source: true },
+  ])("makes no npm request for $name", async ({ env, warning, source }) => {
     const fixture = await createFixture();
+    if (source) {
+      for (const directory of [".git", "src", "extensions"]) {
+        await fs.mkdir(path.join(fixture.packageRoot, directory));
+      }
+    }
     const result = fixture.run(env);
     expect(result.status, result.stderr).toBe(0);
     expect(Boolean(result.stderr)).toBe(warning);
     await expect(fs.access(fixture.callsPath)).rejects.toHaveProperty("code", "ENOENT");
-    await expectCompleted(fixture);
-  });
-
-  it("leaves source checkout dependency ownership to its package manager", async () => {
-    const fixture = await createFixture();
-    for (const directory of [".git", "src", "extensions"]) {
-      await fs.mkdir(path.join(fixture.packageRoot, directory));
+    if (source) {
+      expect(result.stderr).toBe("");
+      await expect(fs.access(fixture.nativeRoot)).rejects.toHaveProperty("code", "ENOENT");
+    } else {
+      await expectCompleted(fixture);
     }
-    const result = fixture.run();
-    expect(result.status, result.stderr).toBe(0);
-    expect(result.stderr).toBe("");
-    await expect(fs.access(fixture.callsPath)).rejects.toHaveProperty("code", "ENOENT");
-    await expect(fs.access(fixture.nativeRoot)).rejects.toHaveProperty("code", "ENOENT");
   });
 
   it("runs the PATH-selected npm CLI directly when deferred lifecycle has no npm_execpath", async () => {

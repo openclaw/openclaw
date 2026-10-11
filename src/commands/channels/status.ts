@@ -14,10 +14,7 @@ import { callGateway } from "../../gateway/call.js";
 import { isGatewaySecretRefUnavailableError } from "../../gateway/credentials.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { defaultRuntime, type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
-import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import { waitForGatewayDiagnostic } from "../gateway-diagnostic-readiness.js";
-
-const loadChannelsStatusRuntime = createLazyRuntimeModule(() => import("./status.runtime.js"));
 
 export type ChannelsStatusOptions = {
   channel?: string;
@@ -44,7 +41,7 @@ export async function channelsStatusCommand(
   const timeoutMs = parseTimeoutMsWithFallback(opts.timeout, DEFAULT_RESTART_HEALTH_TIMEOUT_MS, {
     invalidType: "error",
   });
-  const statusLabel = opts.probe ? "Checking channel status (probe)…" : "Checking channel status…";
+  const statusLabel = opts.probe ? "Checking channel connections…" : "Checking channel status…";
   const shouldLogStatus = opts.json !== true && !process.stderr.isTTY;
   if (shouldLogStatus) {
     runtime.log(statusLabel);
@@ -80,7 +77,7 @@ export async function channelsStatusCommand(
       writeRuntimeJson(runtime, payload);
       return;
     }
-    const { formatGatewayChannelsStatusLines } = await loadChannelsStatusRuntime();
+    const { formatGatewayChannelsStatusLines } = await import("./status.runtime.js");
     runtime.log(formatGatewayChannelsStatusLines(payload).join("\n"));
   } catch (err) {
     if (isGatewayProtocolResponseError(err)) {
@@ -93,7 +90,7 @@ export async function channelsStatusCommand(
     const expectedErrorOutput = expectedError
       ? formatCliFailureLines({ title: "", error: err }).join("\n")
       : undefined;
-    const { renderChannelsStatusFallback } = await loadChannelsStatusRuntime();
+    const { renderChannelsStatusFallback } = await import("./status.runtime.js");
     await renderChannelsStatusFallback({
       opts: args,
       runtime,

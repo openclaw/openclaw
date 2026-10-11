@@ -11,7 +11,7 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   buildCodexOpenClawPromptContext,
-  buildCodexWatchedSessionsContext,
+  prepareCodexWatchedSessionsContext,
   readMirroredSessionHistoryMessages,
   renderCodexSkillsInstructions,
 } from "./attempt-context.js";
@@ -25,10 +25,8 @@ import { joinPresentSections } from "./developer-instruction-sections.js";
 import { isSystemAgentOnlyCodexDynamicToolAllowlist } from "./dynamic-tool-profile.js";
 import type { CodexAttemptRuntime } from "./run-attempt-runtime.js";
 import type { CodexAttemptTools } from "./run-attempt-tool-setup.js";
-import {
-  buildDeveloperInstructions,
-  type CodexContextEngineThreadBootstrapProjection,
-} from "./thread-lifecycle.js";
+import type { CodexContextEngineThreadBootstrapProjection } from "./thread-context-engine.js";
+import { buildDeveloperInstructions } from "./thread-prompt.js";
 
 export async function prepareCodexAttemptContext(
   runtime: CodexAttemptRuntime,
@@ -54,7 +52,6 @@ export async function prepareCodexAttemptContext(
     agentDir,
     usesSupervisionConnection,
     resolvedWorkspace,
-    initialInactiveThreadBootstrapBindingForcedFreshStart,
     sandbox,
   } = connection;
   const { toolBridge } = attemptTools;
@@ -74,8 +71,10 @@ export async function prepareCodexAttemptContext(
       ...(transcriptReadFence ? { admission: transcriptReadFence } : {}),
     });
     connection.runAbortController.signal.throwIfAborted();
-    connection.assertCurrent();
-    return messages;
+    return await connection.withCurrent(() => {
+      connection.assertCurrent();
+      return messages;
+    });
   };
   const historyState = {
     messages:
@@ -194,14 +193,20 @@ export async function prepareCodexAttemptContext(
   const baseDeveloperInstructions = joinPresentSections(
     buildDeveloperInstructions(runtimeParams, {
       dynamicTools: toolBridge.availableSpecs,
+      nativeCodeModeOnlyEnabled:
+        runtime.nativeToolSurfaceEnabled && connection.appServer.codeModeOnly,
     }),
     agentWorkspaceDeveloperInstructions,
   );
-  const watchedSessionsContext = buildCodexWatchedSessionsContext({
+  const watchedSessionsContext = await prepareCodexWatchedSessionsContext({
     attempt: runtimeParams,
     dynamicTools: toolBridge.availableSpecs,
     sessionKey: contextSessionKey,
     sandboxed: sandbox?.enabled === true,
+    assertCurrent: () => {
+      connection.runAbortController.signal.throwIfAborted();
+      connection.assertCurrent();
+    },
   });
   const buildOpenClawPromptContext = (includeWorkspaceReferences: boolean) =>
     buildCodexOpenClawPromptContext({
@@ -216,14 +221,10 @@ export async function prepareCodexAttemptContext(
     promptContextRange: undefined as CodexProjectedContextRange | undefined,
     developerInstructions: baseDeveloperInstructions,
     contextEngineProjection: undefined as CodexContextEngineThreadBootstrapProjection | undefined,
-    precomputedStaleBindingContinuityProjectionApplied: false,
-    staleBindingContinuityForcedFreshStart: false,
     // Set by the no-engine continuity appliers; gates calibration recording so a
     // dense direct or active-engine prompt can never persist a density sample
     // that later shrinks continuity history it did not measure.
     noEngineContinuityProjectionApplied: false,
-    inactiveThreadBootstrapBindingForcedFreshStart:
-      initialInactiveThreadBootstrapBindingForcedFreshStart,
   };
   const codexContextProjectionMaxChars = resolveCodexContextEngineProjectionMaxChars({
     contextTokenBudget: effectiveContextTokenBudget,

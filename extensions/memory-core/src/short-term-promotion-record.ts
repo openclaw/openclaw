@@ -9,7 +9,7 @@ import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import pLimit from "p-limit";
 import { deriveConceptTags } from "./concept-vocabulary.js";
 import {
-  listMemorySessionTombstones,
+  findForgottenMemorySessionIds,
   recordMemoryEntryOrigins,
   type MemoryEntryOrigin,
 } from "./memory-entry-origins.js";
@@ -98,17 +98,15 @@ export async function filterLiveShortTermRecallEntries(params: {
   };
   const results = await Promise.all(
     params.entries.map(async (entry) => {
-      let exists = false;
       for (const sourcePath of resolveShortTermSourcePathCandidates(workspaceDir, entry.path)) {
         if (await checkSourceFile(sourcePath)) {
-          exists = true;
-          break;
+          return entry;
         }
       }
-      return { entry, exists };
+      return undefined;
     }),
   );
-  return results.filter((result) => result.exists).map((result) => result.entry);
+  return results.filter((entry) => entry !== undefined);
 }
 
 function recallEventResult(result: MemorySearchResult) {
@@ -188,11 +186,7 @@ export async function recordShortTermRecalls(params: {
     for (const [agentId, sessionIds] of sourceSessions) {
       forgottenByAgent.set(
         agentId,
-        new Set(
-          (await listMemorySessionTombstones({ agentId, sessionIds: [...sessionIds] })).map(
-            (entry) => entry.sessionId,
-          ),
-        ),
+        await findForgottenMemorySessionIds({ agentId, sessionIds: [...sessionIds] }),
       );
     }
     // Revalidate after acquiring the shared mutation lock: a purge can finish
@@ -207,7 +201,7 @@ export async function recordShortTermRecalls(params: {
     }
     const origins: MemoryEntryOrigin[] = [];
     for (const result of admitted) {
-      const normalizedPath = normalizeMemoryPath(result.path);
+      const { path: normalizedPath, startLine, endLine, score } = recallEventResult(result);
       const rawSnippet = normalizeSnippet(result.snippet);
       const snippet = truncateShortTermSnippet(rawSnippet);
       if (
@@ -231,9 +225,7 @@ export async function recordShortTermRecalls(params: {
           ? Object.values(store.entries).find(
               (entry) =>
                 !entry.key.startsWith("memory:claim:") &&
-                Math.max(0, Math.floor(entry.recallCount ?? 0)) +
-                  Math.max(0, Math.floor(entry.groundedCount ?? 0)) >
-                  0 &&
+                entry.recallCount + entry.groundedCount > 0 &&
                 entry.claimHash === claimHash,
             )
           : undefined;
@@ -244,8 +236,8 @@ export async function recordShortTermRecalls(params: {
           ? buildDailyClaimEntryKey(claimHash)
           : buildEntryKey({
               path: normalizedPath,
-              startLine: Math.max(1, Math.floor(result.startLine)),
-              endLine: Math.max(1, Math.floor(result.endLine)),
+              startLine,
+              endLine,
               source: "memory",
               claimHash,
             });
@@ -256,7 +248,6 @@ export async function recordShortTermRecalls(params: {
         dailyClaimEntry?.key ??
         (signalType !== "recall" || store.entries[claimKey] ? claimKey : buildEntryKey(result));
       const existing = store.entries[key];
-      const score = clampScore(result.score);
       const effectiveQuery =
         signalType === "grounded" ? normalizeSnippet(result.query ?? query) || query : query;
       const queryHash = hashQuery(effectiveQuery);
@@ -273,18 +264,11 @@ export async function recordShortTermRecalls(params: {
         queryHashesBase.includes(queryHash) &&
         recallDaysBase.includes(dayBucket);
       const addedSignals = dedupeSignal ? 0 : signalCount;
-      const recallCount = Math.max(
-        0,
-        Math.floor(existing?.recallCount ?? 0) + (signalType === "recall" ? addedSignals : 0),
-      );
-      const dailyCount = Math.max(
-        0,
-        Math.floor(existing?.dailyCount ?? 0) + (signalType === "daily" ? addedSignals : 0),
-      );
-      const groundedCount = Math.max(
-        0,
-        Math.floor(existing?.groundedCount ?? 0) + (signalType === "grounded" ? addedSignals : 0),
-      );
+      const recallCount =
+        (existing?.recallCount ?? 0) + (signalType === "recall" ? addedSignals : 0);
+      const dailyCount = (existing?.dailyCount ?? 0) + (signalType === "daily" ? addedSignals : 0);
+      const groundedCount =
+        (existing?.groundedCount ?? 0) + (signalType === "grounded" ? addedSignals : 0);
       const totalScore = Math.max(0, (existing?.totalScore ?? 0) + score * addedSignals);
       const maxScore = Math.max(existing?.maxScore ?? 0, dedupeSignal ? 0 : score);
       const queryHashes = mergeRecentDistinct(queryHashesBase, queryHash, MAX_QUERY_HASHES);
@@ -321,12 +305,8 @@ export async function recordShortTermRecalls(params: {
       store.entries[key] = {
         key,
         path: preserveFirstDailySource ? existing.path : normalizedPath,
-        startLine: preserveFirstDailySource
-          ? existing.startLine
-          : Math.max(1, Math.floor(result.startLine)),
-        endLine: preserveFirstDailySource
-          ? existing.endLine
-          : Math.max(1, Math.floor(result.endLine)),
+        startLine: preserveFirstDailySource ? existing.startLine : startLine,
+        endLine: preserveFirstDailySource ? existing.endLine : endLine,
         source: "memory",
         snippet: snippet || existing?.snippet || "",
         recallCount,
@@ -379,35 +359,6 @@ export async function recordShortTermRecalls(params: {
     if (skipped.length > 0) {
       await appendSkippedEvent(admitted.length);
     }
-  });
-}
-
-export async function recordGroundedShortTermCandidates(params: {
-  workspaceDir?: string;
-  query: string;
-  items: Array<{
-    path: string;
-    startLine: number;
-    endLine: number;
-    snippet: string;
-    score: number;
-    query?: string;
-    signalCount?: number;
-    dayBucket?: string;
-    projectKey?: string;
-    provenance?: MemoryEntryProvenance;
-    sessionOrigin?: SessionEntryOrigin;
-  }>;
-  dedupeByQueryPerDay?: boolean;
-  dayBucket?: string;
-  nowMs?: number;
-  timezone?: string;
-}): Promise<void> {
-  const { items, ...options } = params;
-  await recordShortTermRecalls({
-    ...options,
-    signalType: "grounded",
-    results: items.map((item) => Object.assign({}, item, { source: "memory" as const })),
   });
 }
 

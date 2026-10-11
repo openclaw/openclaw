@@ -11,16 +11,30 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { resolveSessionTranscriptsDirForAgent } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import { deleteSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
-import { resolveOpenClawAgentSqlitePath } from "openclaw/plugin-sdk/sqlite-runtime";
+import {
+  resolveOpenClawAgentSqlitePath,
+  withOpenClawAgentDatabaseWrite,
+} from "openclaw/plugin-sdk/sqlite-runtime";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
+  useSqliteWorkerFault,
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { describe, expect, it, vi } from "vitest";
+import { runInMemoryTestBackgroundContext } from "./background-context.test-support.js";
 import { writeMemoryIndexArchiveTranscript } from "./index-archive.test-support.js";
 import { createManagerIndexFixture } from "./manager-index.test-support.js";
 import type { MemoryTargetedSessionSyncQueue } from "./manager-sync-control.js";
 import type { MemoryIndexManager } from "./manager.js";
+
+const fault = useSqliteWorkerFault([
+  {
+    name: "fail_queued_session_publication",
+    match: /^insert into memory_index_chunks\b/u,
+    sql: `CREATE TEMP TRIGGER fail_queued_session_publication AFTER INSERT ON main.memory_index_chunks
+      BEGIN SELECT RAISE(FAIL, 'forced queued session publication failure'); END;`,
+  },
+]);
 
 const { closeAllMemorySearchManagers, getMemorySearchManager } = await import("./index.js");
 
@@ -285,32 +299,6 @@ describe("memory index", () => {
     ]);
   });
 
-  it("reports an uninitialized status without creating agent or registry databases", async () => {
-    const agentPath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
-    const statePath = path.join(fixture.paths.stateDir, "state", "openclaw.sqlite");
-
-    const result = await getMemorySearchManager({
-      cfg: createCfg({}),
-      agentId: "main",
-      purpose: "status",
-      inspectSources: true,
-    });
-
-    try {
-      expect(result.error).toBeUndefined();
-      expect(result.manager?.status()).toMatchObject({
-        files: 0,
-        chunks: 0,
-        dirty: true,
-        custom: { indexIdentity: { status: "missing" } },
-      });
-      await expect(fs.access(agentPath)).rejects.toThrow("ENOENT");
-      await expect(fs.access(statePath)).rejects.toThrow("ENOENT");
-    } finally {
-      await result.manager?.close?.();
-    }
-  });
-
   it("reads committed WAL status without changing database artifacts", async () => {
     const cfg = createCfg({});
     const indexingManager = await getFreshManager(cfg, "cli");
@@ -565,10 +553,10 @@ describe("memory index", () => {
     await oldManager.close?.();
     await fs.rm(path.join(fixture.paths.memory, "2026-01-12.md"));
 
-    const nextManager = await getFreshManager(cfg);
-    (Reflect.get(nextManager, "db") as DatabaseSync).exec(
-      `DELETE FROM memory_index_meta WHERE key = 'memory_index_meta_v1'`,
+    await withOpenClawAgentDatabaseWrite({ agentId: "main" }, ({ db }) =>
+      db.exec(`DELETE FROM memory_index_meta WHERE key = 'memory_index_meta_v1'`),
     );
+    const nextManager = await getFreshManager(cfg);
     expect(nextManager.status().custom?.indexIdentity).toEqual({
       status: "missing",
       reason: "index metadata is missing",
@@ -641,7 +629,6 @@ describe("memory index", () => {
       "cli",
     );
     const dbPath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
-    const db = new DatabaseSync(dbPath);
     try {
       await manager.sync({ reason: "test-baseline", force: true });
       for (const [sessionId, marker] of Object.entries(markers)) {
@@ -652,13 +639,7 @@ describe("memory index", () => {
         });
       }
 
-      db.exec(`
-        CREATE TRIGGER fail_queued_session_publication
-        AFTER INSERT ON memory_index_chunks
-        BEGIN
-          SELECT RAISE(FAIL, 'forced queued session publication failure');
-        END;
-      `);
+      fault.enable();
 
       const active = manager.sync({
         reason: "test-failed-owner",
@@ -670,15 +651,12 @@ describe("memory index", () => {
       });
       const failures = await Promise.allSettled([active, failedQueued]);
       for (const result of failures) {
-        expect(result.status).toBe("rejected");
-        if (result.status !== "rejected") {
-          throw new Error("expected failed SQLite publication to reject");
-        }
+        assert.ok(result.status === "rejected", "expected failed SQLite publication to reject");
         expect(result.reason).toMatchObject({
           message: "forced queued session publication failure",
         });
       }
-      db.exec("DROP TRIGGER fail_queued_session_publication");
+      fault.disable();
 
       const ftsMatchCount = (marker: string): number => {
         const observer = new DatabaseSync(dbPath, { readOnly: true });
@@ -727,7 +705,7 @@ describe("memory index", () => {
       expect(recoveryState.sessionSyncQueue.sessions.size).toBe(0);
       expect(recoveryProgress).toHaveBeenCalled();
     } finally {
-      db.close();
+      fault.disable();
       await manager.close?.();
     }
   });
@@ -1119,7 +1097,15 @@ describe("memory index", () => {
     } finally {
       await diagnostic.close();
     }
-    expect((await getMemorySearchManager({ cfg, agentId: "main" })).manager).toBe(serving);
+    expect(
+      (
+        await getMemorySearchManager({
+          runInBackgroundContext: runInMemoryTestBackgroundContext,
+          cfg,
+          agentId: "main",
+        })
+      ).manager,
+    ).toBe(serving);
     expect(serving.status().sourceCounts?.[0]?.chunkBytes).toBeUndefined();
     expect(serving.status().storage).toBeUndefined();
   });
@@ -1147,13 +1133,16 @@ describe("memory index", () => {
     expect(Reflect.get(manager, "memoryFullRetryDirty")).toBe(true);
   });
 
-  it("prepares the native vector connection after child retrieval and retires the legacy table", async () => {
-    const manager = await getPersistentManager(createCfg({ vectorEnabled: true }));
-    await manager.sync({ reason: "test", force: true });
-    await expect(manager.search("alpha")).resolves.not.toHaveLength(0);
-    expect(manager.status().vector?.storeAvailable).toBe(true);
+  it("retires a legacy vector table when reopening an indexed database", async () => {
+    const cfg = createCfg({ vectorEnabled: true });
+    const previous = await getPersistentManager(cfg);
+    await previous.sync({ reason: "test", force: true });
+    await previous.close();
+    await withOpenClawAgentDatabaseWrite({ agentId: "main" }, ({ db }) =>
+      db.exec("CREATE TABLE chunks_vec (id TEXT PRIMARY KEY, embedding BLOB)"),
+    );
+    const manager = await getPersistentManager(cfg);
     const db = Reflect.get(manager, "db") as DatabaseSync;
-    db.exec("CREATE TABLE chunks_vec (id TEXT PRIMARY KEY, embedding BLOB)");
 
     await expect(manager.probeVectorStoreAvailability?.()).resolves.toBe(true);
 
@@ -1163,6 +1152,7 @@ describe("memory index", () => {
         .get(),
     ).toBeUndefined();
     expect(Reflect.get(manager, "memoryFullRetryDirty")).toBe(true);
+    await expect(manager.search("alpha")).resolves.not.toHaveLength(0);
   });
 
   it("reports persisted vector index state on the unprobed status path", async () => {

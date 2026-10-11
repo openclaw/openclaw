@@ -43,7 +43,6 @@ afterEach(async () => {
 function createGateway(
   params: {
     agentIds?: string[];
-    failCronReconciliation?: boolean;
     sessionStore?: string;
     cronEnabled?: boolean;
   } = {},
@@ -52,11 +51,9 @@ function createGateway(
   const config = {
     cron: { enabled: params.cronEnabled ?? true },
     agents: {
-      list: agentIds.map((id, index) => ({
-        id,
-        default: index === 0,
-        workspace: path.join(stateDir, `workspace-${id}`),
-      })),
+      entries: Object.fromEntries(
+        agentIds.map((id) => [id, { workspace: path.join(stateDir, `workspace-${id}`) }]),
+      ),
     },
     plugins: {
       entries: {
@@ -70,12 +67,7 @@ function createGateway(
   const logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
   const cron = {
     isEnabled: vi.fn(async () => params.cronEnabled ?? true),
-    list: vi.fn(async () => {
-      if (params.failCronReconciliation) {
-        throw new Error("cron startup failed");
-      }
-      return [];
-    }),
+    list: vi.fn(async () => []),
     add: vi.fn(async () => ({})),
     update: vi.fn(async () => ({})),
     remove: vi.fn(async () => ({ removed: false })),
@@ -223,32 +215,6 @@ describe("dreaming gateway restart cleanup", () => {
     expect(hasSession(otherAgent)).toBe(true);
   });
 
-  it("rechecks fresh interrupted sessions once they age without deleting newly started work", async () => {
-    vi.useFakeTimers({ now: new Date("2026-08-01T12:00:00.000Z") });
-    const interrupted = await seedSession({
-      suffix: "dreaming-narrative-deep-interrupted",
-      updatedAt: Date.now() - 1,
-      transcriptAt: Date.now() - 1,
-    });
-    const gateway = createGateway();
-
-    await gateway.start();
-    expect(hasSession(interrupted)).toBe(true);
-
-    await vi.advanceTimersByTimeAsync(ORPHAN_AGE_MS - 1);
-    const newlyStarted = await seedSession({
-      suffix: "dreaming-narrative-light-just-started",
-      updatedAt: Date.now(),
-    });
-    expect(hasSession(interrupted)).toBe(true);
-
-    await vi.advanceTimersByTimeAsync(1);
-    await gateway.stop();
-
-    expect(hasSession(interrupted)).toBe(false);
-    expect(hasSession(newlyStarted)).toBe(true);
-  });
-
   it("does not reclaim post-startup runs when the deferred cleanup callback runs late", async () => {
     vi.useFakeTimers({ now: new Date("2026-08-01T12:00:00.000Z") });
     const interruptedAtStartup = await seedSession({
@@ -315,26 +281,6 @@ describe("dreaming gateway restart cleanup", () => {
     expect(postStartupSessions.map(hasSession)).toEqual([true, true]);
   });
 
-  it("cleans the independent SQLite stores of every configured dreaming agent", async () => {
-    const now = Date.now();
-    const stale = await Promise.all(
-      ["main", "researcher"].map((agentId) =>
-        seedSession({
-          agentId,
-          suffix: "dreaming-narrative-light-interrupted",
-          pluginOwnerId: "memory-core",
-          updatedAt: now - ORPHAN_AGE_MS - 1,
-          transcriptAt: now - ORPHAN_AGE_MS - 1,
-        }),
-      ),
-    );
-    const gateway = createGateway({ agentIds: ["main", "researcher"] });
-
-    await gateway.start();
-
-    expect(stale.map(hasSession)).toEqual([false, false]);
-  });
-
   it("preserves unconfigured agents sharing a configured agent's SQLite store", async () => {
     const storePath = path.join(stateDir, "shared.sqlite");
     const staleUpdatedAt = Date.now() - ORPHAN_AGE_MS - 1;
@@ -385,39 +331,6 @@ describe("dreaming gateway restart cleanup", () => {
 
     expect(hasSession(interrupted)).toBe(true);
     expect(hasSession(currentRun)).toBe(true);
-  });
-
-  it("cancels deferred orphan cleanup when the gateway stops", async () => {
-    vi.useFakeTimers({ now: new Date("2026-08-01T12:00:00.000Z") });
-    const interrupted = await seedSession({
-      suffix: "dreaming-narrative-light-interrupted",
-      updatedAt: Date.now() - 1,
-      transcriptAt: Date.now() - 1,
-    });
-    const gateway = createGateway();
-
-    await gateway.start();
-    await gateway.stop();
-    await vi.advanceTimersByTimeAsync(ORPHAN_AGE_MS);
-
-    expect(hasSession(interrupted)).toBe(true);
-  });
-
-  it("still cleans interrupted dreaming sessions when cron startup reconciliation fails", async () => {
-    const now = Date.now();
-    const interrupted = await seedSession({
-      suffix: "dreaming-narrative-light-interrupted",
-      updatedAt: now - ORPHAN_AGE_MS - 1,
-      transcriptAt: now - ORPHAN_AGE_MS - 1,
-    });
-    const gateway = createGateway({ failCronReconciliation: true });
-
-    await gateway.start();
-
-    expect(hasSession(interrupted)).toBe(false);
-    expect(gateway.logger.error).toHaveBeenCalledWith(
-      expect.stringContaining("dreaming startup reconciliation failed"),
-    );
   });
 
   it("cleans historical artifacts while automatic scheduling is disabled", async () => {

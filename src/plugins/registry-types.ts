@@ -4,6 +4,7 @@ import type { GatewayRequestHandlers } from "../gateway/server-methods/types.js"
 import type { InternalHookHandler } from "../hooks/internal-hook-types.js";
 import type { HookEntry } from "../hooks/types.js";
 import type { JsonSchemaObject } from "../shared/json-schema.types.js";
+import type { AgentExecutorController } from "./agent-executor-controller.types.js";
 import type {
   AgentToolResultMiddleware,
   AgentToolResultMiddlewareRuntime,
@@ -156,10 +157,6 @@ export type PluginHttpRouteRegistration = {
   source?: string;
 };
 
-type PluginHostedMediaResolverRegistration = PluginRegistrationOwner & {
-  resolver: OpenClawPluginHostedMediaResolver;
-};
-
 export type PluginChannelRegistration = PluginRegistrationOwner & {
   plugin: AnyChannelPlugin;
   /** Prepared views retain the exact transport donor in addition to their local admission. */
@@ -251,10 +248,6 @@ export type PluginGatewayDiscoveryServiceRegistration = PluginRegistrationOwner 
   instance?: PluginInstanceExecution;
 };
 
-type PluginReloadRegistration = PluginRegistrationOwner & {
-  registration: OpenClawPluginReloadRegistration;
-};
-
 export type PluginNodeHostCommandRegistration = PluginRegistrationOwner & {
   command: import("./types.js").OpenClawPluginNodeHostCommand;
 };
@@ -264,16 +257,8 @@ type PluginNodeInvokePolicyRegistration = PluginRegistrationOwner & {
   pluginConfig?: Record<string, unknown>;
 };
 
-type PluginGatewayAccessPolicyRegistration = PluginRegistrationOwner & {
-  policy: PluginGatewayAccessPolicy;
-};
-
 export type PluginWidgetPresenterRegistration = PluginRegistrationOwner & {
   presenter: import("./plugin-registration.types.js").WidgetPresenter;
-};
-
-type PluginSecurityAuditCollectorRegistration = PluginRegistrationOwner & {
-  collector: OpenClawPluginSecurityAuditCollector;
 };
 
 export type PluginCommandRegistration = PluginRegistrationOwner & {
@@ -299,29 +284,9 @@ type PluginInteractiveHandlerRegistryRegistration = PluginInteractiveHandlerRegi
   pluginRoot?: string;
 };
 
-type PluginSessionExtensionRegistryRegistration = PluginRegistrationOwner & {
-  extension: PluginSessionExtensionRegistration;
-};
-
 export type PluginTrustedToolPolicyRegistryRegistration = PluginRegistrationOwner & {
   policy: PluginTrustedToolPolicyRegistration;
   origin?: PluginRecord["origin"];
-};
-
-type PluginToolMetadataRegistryRegistration = PluginRegistrationOwner & {
-  metadata: PluginToolMetadataRegistration;
-};
-
-type PluginControlUiDescriptorRegistryRegistration = PluginRegistrationOwner & {
-  descriptor: PluginControlUiDescriptor;
-};
-
-type PluginRuntimeLifecycleRegistryRegistration = PluginRegistrationOwner & {
-  lifecycle: PluginRuntimeLifecycleRegistration;
-};
-
-type PluginAgentEventSubscriptionRegistryRegistration = PluginRegistrationOwner & {
-  subscription: PluginAgentEventSubscriptionRegistration;
 };
 
 type PluginSessionSchedulerJobRegistryRegistration = PluginRegistrationOwner & {
@@ -409,6 +374,12 @@ export type PluginRecord = {
   dependencyStatus?: PluginDependencyStatus;
 };
 
+/** The Gateway registry owner that admitted work in a registry generation. */
+export type PluginRegistryGatewayOwner = {
+  /** The owner's published registry while it stays open; closing owners return undefined. */
+  readonly current: () => PluginRegistry | undefined;
+};
+
 export type PluginRegistry = {
   plugins: PluginRecord[];
   tools: PluginToolRegistration[];
@@ -439,6 +410,10 @@ export type PluginRegistry = {
   agentToolResultMiddlewareOwners: PluginAgentToolResultMiddlewareOwner[];
   agentToolResultMiddlewares: PluginAgentToolResultMiddlewareRegistration[];
   agentHarnesses: PluginAgentHarnessRegistration[];
+  agentExecutorControllers: Map<
+    string,
+    PluginRegistrationOwner & { controller: AgentExecutorController }
+  >;
   pluginRuntimeArtifacts: Map<string, ResolvedPluginRuntimeArtifact>;
   compactionProviders: RegisteredCompactionProvider[];
   decisionProviders: Array<{
@@ -459,25 +434,35 @@ export type PluginRegistry = {
   boardWidgetContentKinds: Map<string, PluginBoardWidgetContentKindRegistration>;
   coreGatewayMethodNames: string[];
   httpRoutes: PluginHttpRouteRegistration[];
-  hostedMediaResolvers: PluginHostedMediaResolverRegistration[];
+  hostedMediaResolvers: Array<
+    PluginRegistrationOwner & { resolver: OpenClawPluginHostedMediaResolver }
+  >;
   widgetPresenters: PluginWidgetPresenterRegistration[];
   mcpServerConnectionResolvers: PluginMcpServerConnectionResolverRegistration[];
   cliRegistrars: PluginCliRegistration[];
-  reloads: PluginReloadRegistration[];
+  reloads: Array<PluginRegistrationOwner & { registration: OpenClawPluginReloadRegistration }>;
   nodeHostCommands: PluginNodeHostCommandRegistration[];
   nodeInvokePolicies: PluginNodeInvokePolicyRegistration[];
-  gatewayAccessPolicies: PluginGatewayAccessPolicyRegistration[];
-  securityAuditCollectors: PluginSecurityAuditCollectorRegistration[];
+  gatewayAccessPolicies: Array<PluginRegistrationOwner & { policy: PluginGatewayAccessPolicy }>;
+  securityAuditCollectors: Array<
+    PluginRegistrationOwner & { collector: OpenClawPluginSecurityAuditCollector }
+  >;
   services: PluginServiceRegistration[];
   gatewayDiscoveryServices: PluginGatewayDiscoveryServiceRegistration[];
   commands: PluginCommandRegistration[];
   interactiveHandlers: PluginInteractiveHandlerRegistryRegistration[];
-  sessionExtensions: PluginSessionExtensionRegistryRegistration[];
+  sessionExtensions: Array<
+    PluginRegistrationOwner & { extension: PluginSessionExtensionRegistration }
+  >;
   trustedToolPolicies: PluginTrustedToolPolicyRegistryRegistration[];
-  toolMetadata: PluginToolMetadataRegistryRegistration[];
-  controlUiDescriptors: PluginControlUiDescriptorRegistryRegistration[];
-  runtimeLifecycles: PluginRuntimeLifecycleRegistryRegistration[];
-  agentEventSubscriptions: PluginAgentEventSubscriptionRegistryRegistration[];
+  toolMetadata: Array<PluginRegistrationOwner & { metadata: PluginToolMetadataRegistration }>;
+  controlUiDescriptors: Array<PluginRegistrationOwner & { descriptor: PluginControlUiDescriptor }>;
+  runtimeLifecycles: Array<
+    PluginRegistrationOwner & { lifecycle: PluginRuntimeLifecycleRegistration }
+  >;
+  agentEventSubscriptions: Array<
+    PluginRegistrationOwner & { subscription: PluginAgentEventSubscriptionRegistration }
+  >;
   sessionSchedulerJobs: PluginSessionSchedulerJobRegistryRegistration[];
   sessionActions: PluginSessionActionRegistryRegistration[];
   conversationBindingResolvedHandlers: PluginConversationBindingResolvedHandlerRegistration[];

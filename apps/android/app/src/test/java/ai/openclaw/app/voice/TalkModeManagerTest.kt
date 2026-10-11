@@ -610,13 +610,15 @@ class TalkModeManagerTest {
         createManager(
           scope = backgroundScope,
           realtimePlaybackDispatcher = StandardTestDispatcher(testScheduler),
-          realtimeMarkAcknowledger = { sessionId, markName ->
-            acknowledgements += sessionId to markName
-          },
         )
-      installRealtimeSession(manager, "relay-1")
+      installRealtimeSession(manager, "relay-1") { method, paramsJson ->
+        assertEquals("talk.session.acknowledgeMark", method)
+        val params = Json.parseToJsonElement(checkNotNull(paramsJson)).jsonObject
+        acknowledgements += params.getValue("sessionId").jsonPrimitive.content to params.getValue("markName").jsonPrimitive.content
+      }
 
       manager.realtimeEvent("""{"relaySessionId":"relay-1","type":"mark","markName":"audio-1"}""")
+      assertTrue(acknowledgements.isEmpty())
       runCurrent()
 
       assertEquals(listOf("relay-1" to "audio-1"), acknowledgements)
@@ -3640,7 +3642,7 @@ class TalkModeManagerTest {
     }
 
   private fun createManager(
-    talkSpeakClient: TalkSpeechSynthesizing = TalkSpeakClient(),
+    talkSpeakClient: TalkSpeechSynthesizing = TalkSpeakClient(requestDetailed = { _, _, _ -> error("session missing") }),
     talkAudioPlayer: TalkAudioPlaying? = null,
     scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
     isConnected: () -> Boolean = { true },
@@ -3649,7 +3651,6 @@ class TalkModeManagerTest {
     onStoppedByRelay: (isCurrent: () -> Boolean) -> Unit = {},
     realtimeCaptureDispatcher: CoroutineDispatcher = Dispatchers.IO,
     realtimePlaybackDispatcher: CoroutineDispatcher = Dispatchers.IO,
-    realtimeMarkAcknowledger: (suspend (String, String) -> Unit)? = null,
   ): TalkModeManager {
     val app = RuntimeEnvironment.getApplication()
     val session =
@@ -3673,7 +3674,6 @@ class TalkModeManagerTest {
       talkAudioPlayer = talkAudioPlayer ?: TalkAudioPlayer(app),
       realtimeCaptureDispatcher = realtimeCaptureDispatcher,
       realtimePlaybackDispatcher = realtimePlaybackDispatcher,
-      realtimeMarkAcknowledger = realtimeMarkAcknowledger,
     ).also { setPrivateField(it, "relayStopNotification", onStoppedByRelay) }
   }
 
@@ -3717,6 +3717,7 @@ class TalkModeManagerTest {
   private fun installRealtimeSession(
     manager: TalkModeManager,
     id: String?,
+    onRequest: (String, String?) -> Unit = { _, _ -> },
   ) {
     setPrivateField(manager, "realtimeSessionId", id)
     val owner =
@@ -3724,8 +3725,8 @@ class TalkModeManagerTest {
         null
       } else {
         val lease =
-          GatewaySession.RequestLease("synthetic-gateway") { _, _, _, enqueue ->
-            enqueue {}
+          GatewaySession.RequestLease("synthetic-gateway") { method, paramsJson, _, enqueue ->
+            enqueue { onRequest(method, paramsJson) }
             "{}"
           }
         val method = TalkModeManager::class.java.getDeclaredMethod("createRealtimePlayoutSession", String::class.java, GatewaySession.RequestLease::class.java)

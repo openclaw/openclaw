@@ -11,10 +11,8 @@ import {
   getSubagentRunsForRequesterSession,
   getSubagentRunsForChildSession,
 } from "./subagent-registry-memory.js";
-import { SubagentRegistryMutationRejectedError } from "./subagent-registry-persistence.js";
 import { getLatestSubagentRunForChild } from "./subagent-registry-queries.js";
 import {
-  getRestartRecoveryReplayError,
   isRestartRecoveryLifecycleCurrent,
   ownsSubagentSessionExecution,
 } from "./subagent-registry-restart-recovery-helpers.js";
@@ -25,10 +23,7 @@ import type {
 } from "./subagent-registry-restart-recovery-types.js";
 import type { SubagentSessionEffects } from "./subagent-registry.types.js";
 import { isRequesterSettleWakeForRun } from "./subagent-requester-settle-identity.js";
-import { isSameSubagentRunOwner } from "./subagent-run-generation.js";
 import { resolveCompletionFromSessionEntry } from "./subagent-session-reconciliation.js";
-
-export type { RestartRecoveryParams, RestartRecoveryResult };
 
 export async function recoverInterruptedSubagentRow(
   params: RestartRecoveryParams,
@@ -51,7 +46,15 @@ export async function recoverInterruptedSubagentRow(
   if (!childSessionKey || !isCurrent()) {
     return { status: "ignored" };
   }
-  const terminalError = getRestartRecoveryReplayError(entry);
+  const terminalError =
+    entry.terminalOwner === "interrupted-recovery" &&
+    entry.pauseReason !== "sessions_yield" &&
+    entry.execution.status === "terminal" &&
+    typeof entry.execution.endedAt === "number" &&
+    entry.execution.outcome?.status === "error" &&
+    entry.endedReason === "subagent-error"
+      ? (entry.execution.outcome.error ?? "subagent run interrupted by gateway restart")
+      : undefined;
   const replayTerminal = terminalError !== undefined;
   if (!replayTerminal && typeof entry.execution.endedAt === "number") {
     return { status: "ignored" };
@@ -271,14 +274,6 @@ export async function recoverInterruptedSubagentRow(
           (replayTerminal || (await sessionEffects.isCurrent())) &&
           isRecoveryHostCurrent(),
         onPublished: (published) => {
-          if (
-            !isSameSubagentRunOwner(published, entry) ||
-            published.execution.status !== "terminal"
-          ) {
-            throw new SubagentRegistryMutationRejectedError(
-              "Subagent recovery publication changed its execution owner",
-            );
-          }
           expectedObservation = published;
         },
       },

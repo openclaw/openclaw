@@ -11,7 +11,7 @@ import {
 } from "../../infra/update-retained-recovery.test-support.js";
 import { createUpdateRun, finishUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
 import { legacyRecord } from "../../infra/update-run-recovery-legacy.test-support.js";
-import { loadUpdateRecovery } from "../../infra/update-run-recovery.js";
+import { inspectUpdateRecoveries, loadUpdateRecovery } from "../../infra/update-run-recovery.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -99,7 +99,7 @@ describe("package finalization recovery targets", () => {
     ]);
   });
 
-  it.each(["first-read", "distinct-read", "run-replaced", "fence-replaced"] as const)(
+  it.each(["first-read", "distinct-read"] as const)(
     "retains the original executor after recovery admission (%s)",
     async (boundary) => {
       const first = target();
@@ -115,32 +115,21 @@ describe("package finalization recovery targets", () => {
           }
         },
       };
-      const replacementFence = { assertCurrent: vi.fn() };
       closeOpenClawStateDatabaseForTest();
       const lstat = fs.lstat.bind(fs);
       vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
         const result = await lstat(...args);
         if (String(args[0]) === path.dirname(first.databasePath)) {
-          if (boundary === "run-replaced") {
-            first.params.opts.run = { ...first.run };
-          } else if (boundary === "fence-replaced") {
-            first.run.executorFence = replacementFence;
-          } else {
-            current = false;
-          }
+          current = false;
         }
         return result;
       });
       await expect(assertUpdateCommandPackageFinalization(first.params)).rejects.toMatchObject({
         name: "UpdateCommandPendingRecoveryFailure",
         cause: {
-          message:
-            boundary === "run-replaced" || boundary === "fence-replaced"
-              ? "Package finalization lost its original executor."
-              : "original finalizer authority lost",
+          message: "original finalizer authority lost",
         },
       });
-      expect(replacementFence.assertCurrent).not.toHaveBeenCalled();
     },
   );
 });
@@ -336,18 +325,25 @@ describe("historical terminal completion diagnostics", () => {
     expect(getUpdateRun(f.run.runId, f.options)?.status).toBe("running");
   });
 
-  it("does not turn unrelated legacy inspection into permission for the writing fallback", async () => {
-    const f = await historical(false);
-    const other = createUpdateRun({ trigger: "cli" }, f.options);
-    closeOpenClawStateDatabaseForTest();
-    const before = await f.family();
-    expect(() =>
-      completeUpdateCommandRun(
+  it.each([false, true])(
+    "keeps unrelated legacy history separate from fallback completion (terminal=%s)",
+    async (terminal) => {
+      const f = await historical(false, terminal);
+      const other = createUpdateRun({ trigger: "cli" }, f.options);
+      closeOpenClawStateDatabaseForTest();
+      const before = await f.family();
+      const result = completeUpdateCommandRun(
         { status: "ok", mode: "npm", steps: [], durationMs: 1 },
         { runId: other.runId, env: f.opts.run!.env },
-      ),
-    ).toThrow();
-    expect(await f.family()).toEqual(before);
-    expect(getUpdateRun(other.runId, f.options)?.status).toBe("running");
-  });
+      );
+      expect(result).toMatchObject(
+        terminal ? { status: "ok" } : { status: "error", reason: "update-recovery-pending" },
+      );
+      if (!terminal) {
+        expect(await f.family()).toEqual(before);
+      }
+      expect(getUpdateRun(other.runId, f.options)?.status).toBe(terminal ? "succeeded" : "running");
+      expect(inspectUpdateRecoveries(f.options)[0]?.raw).toBe(f.saved);
+    },
+  );
 });

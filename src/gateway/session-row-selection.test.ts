@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { buildSubagentRunReadIndexFromRuns } from "../agents/subagents/registry/subagent-registry-queries.js";
 import {
   persistRegistryFixture,
   saveSubagentRegistryToSqlite,
@@ -22,6 +23,8 @@ import {
 } from "../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createSessionConversationTestRegistry } from "../test-utils/session-conversation-registry.js";
+import { registerChatAbortController } from "./chat-abort.js";
+import { requestContext } from "./server-methods/sessions-read-cache.test-support.js";
 import { listSessionFixture } from "./session-list.test-support.js";
 import { retainSessionListForegroundWork } from "./session-projection-work.js";
 import { create as createSessionRow } from "./session-row-projection-record.js";
@@ -31,6 +34,7 @@ import * as childOwners from "./session-utils-core.js";
 import {
   filterAndSortSessionEntries,
   listProjectedSessions,
+  prepareProjectedSessionList,
   prepareSessionRowSelection,
 } from "./session-utils-list.js";
 
@@ -102,14 +106,14 @@ it("maintains list order across metadata changes and archived-row rematerializat
       const archivedQuery = { agentId: "main", key: third };
       sessionChanges.emit({ all: true, scope: "catalog" });
       await projection.ensureMaterialized();
-      expect(projection.isMaterialized(archivedQuery)).toBe(false);
+      expect(projection.capture(archivedQuery)?.materialized).toBeUndefined();
       const rematerialized = await listProjectedSessions({
         projection,
         opts: { archived: true },
       });
       expect(rematerialized.sessions.map((row) => row.key)).toEqual([third]);
       expect(rematerialized.totalCount).toBe(1);
-      expect(projection.isMaterialized(archivedQuery)).toBe(true);
+      expect(projection.capture(archivedQuery)?.materialized).toBeDefined();
       expect((await list())[0]?.key).toBe(second);
       expect(scan.mock.calls.filter(([query]) => !query?.key)).toHaveLength(0);
       await deleteSessionEntryLifecycle({
@@ -293,6 +297,25 @@ it.each([false, true])(
       const cfg = { agents: { entries: { main: {}, ops: {} } } };
       const projection = createSessionRowProjectionFixture({ cfg, store: {} });
       const parent = "agent:main:parent";
+      const now = Date.now();
+      projection.state.rowContext.subagentRuns = buildSubagentRunReadIndexFromRuns({
+        now,
+        runs: new Map<string, SubagentRunRecord>([
+          [
+            "ordinary-run",
+            {
+              runId: "ordinary-run",
+              childSessionKey: "agent:main:ordinary",
+              requesterSessionKey: parent,
+              requesterDisplayKey: parent,
+              task: "Synthetic child selection",
+              cleanup: "keep",
+              createdAt: now,
+              execution: { status: "running", startedAt: now },
+            },
+          ],
+        ]),
+      });
       const samples = [
         ["shadow-global", "global", "main", "fallback"],
         ["ordinary", "agent:main:ordinary", "main", "primary"],
@@ -309,7 +332,7 @@ it.each([false, true])(
           sessionId,
           updatedAt: 1,
           ...(["ordinary", "shadow-global", "unknown-shadow"].includes(sessionId)
-            ? { spawnedBy: parent, status: "running" as const }
+            ? { spawnedBy: parent }
             : {}),
         };
         return {
@@ -324,10 +347,22 @@ it.each([false, true])(
           entry,
         };
       });
-      projection.selectEntries = (query) =>
-        query?.parentSessionKey
+      projection.selectEntries = (query) => {
+        if (query?.sessionIdOrKey) {
+          const keys = new Set(
+            rows
+              .filter(
+                (row) =>
+                  row.key === query.sessionIdOrKey || row.entry.sessionId === query.sessionIdOrKey,
+              )
+              .map((row) => row.key),
+          );
+          return rows.filter((row) => keys.has(row.key));
+        }
+        return query?.parentSessionKey
           ? rows.filter((row) => row.entry.spawnedBy === query.parentSessionKey)
           : rows;
+      };
       projection.state.scope = () => ({
         paths: new Map([
           ["primary", 0],
@@ -375,6 +410,41 @@ it.each([false, true])(
           prepareSessionRowSelection(projection, { ...prepared.opts, spawnedBy: parent }),
         );
         expect(children.map(([, entry]) => entry.sessionId)).toEqual(["ordinary"]);
+        if (activeOnly) {
+          const context = requestContext(cfg);
+          const registrations = [
+            ["main", "shadow-global"],
+            ["ops", "ops-global"],
+            ["main", "unknown-shadow"],
+          ].map(([agentId, sessionId]) =>
+            registerChatAbortController({
+              chatAbortControllers: context.chatAbortControllers,
+              runId: sessionId!,
+              agentId,
+              sessionId: sessionId!,
+              sessionKey: `agent:${agentId}:run-alias`,
+              timeoutMs: 60_000,
+            }),
+          );
+          try {
+            const { filters } = prepareProjectedSessionList({
+              projection,
+              context,
+              opts: prepared.opts,
+              now,
+              metadataPrepared: true,
+            });
+            // The live fallback ID cannot displace its inactive physical winner.
+            // Other agents' sentinel rows and same-ID aliases remain independently visible.
+            expect(
+              filterAndSortSessionEntries(filters).map(([, entry]) => entry.sessionId),
+            ).toEqual(["ops-global", "unknown-shadow"]);
+          } finally {
+            for (const registration of registrations) {
+              registration.cleanup();
+            }
+          }
+        }
       } finally {
         projection.dispose();
       }
@@ -384,7 +454,7 @@ it.each([false, true])(
 
 it("rejects duplicate ordinary keys introduced after store admission before filtering or pagination", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const cfg = { agents: { list: [{ id: "main", default: true }] } };
+    const cfg = { agents: { entries: { main: {} } } };
     const primary = resolveOpenClawAgentSqlitePath({ agentId: "main" });
     const secondary = state.statePath("secondary.sqlite");
     const key = "agent:main:original";

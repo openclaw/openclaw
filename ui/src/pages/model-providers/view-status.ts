@@ -37,13 +37,14 @@ export function hasProviderCredentials(card: ModelProviderCard): boolean {
   return card.hasConfigApiKey || Boolean(card.apiKey) || card.profiles.length > 0;
 }
 
-export function hasVerifiedProvider(card: ModelProviderCard): boolean {
+function needsAuthAttention(card: ModelProviderCard): boolean {
   return (
-    card.catalogStatus === "ready" &&
-    card.auth?.kind !== "expired" &&
-    card.auth?.kind !== "missing" &&
-    card.auth?.kind !== "expiring"
+    card.auth?.kind === "expired" || card.auth?.kind === "missing" || card.auth?.kind === "expiring"
   );
+}
+
+export function hasVerifiedProvider(card: ModelProviderCard): boolean {
+  return card.catalogStatus === "ready" && !needsAuthAttention(card);
 }
 
 export function renderProviderStatus(card: ModelProviderCard) {
@@ -53,11 +54,7 @@ export function renderProviderStatus(card: ModelProviderCard) {
       label: t("chat.modelControls.checkingProviderModels", { providers: card.displayName }),
     });
   }
-  if (
-    card.auth?.kind === "expired" ||
-    card.auth?.kind === "missing" ||
-    card.auth?.kind === "expiring"
-  ) {
+  if (needsAuthAttention(card)) {
     return renderAuthStatus(card);
   }
   if (card.catalogStatus === "auth-rejected") {

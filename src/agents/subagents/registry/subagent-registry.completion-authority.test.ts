@@ -19,6 +19,7 @@ import {
 } from "../../../gateway/server-plugin-in-process-dispatch.test-support.js";
 import { bindGatewayLifecycleRequest } from "../../../gateway/server-recovery-runtime-context.js";
 import { onAgentEvent, rotateAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../../infra/sqlite-worker-owner-probe.test-support.js";
 import { getActivePluginRegistry, setActivePluginRegistry } from "../../../plugins/runtime.js";
 import {
   getGatewayContextLifetime,
@@ -38,6 +39,7 @@ import * as announce from "../announce/subagent-announce.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
 import { subscribeSubagentRunChanges } from "./subagent-registry-publication.js";
+import { loadSubagentRegistryFromSqlite } from "./subagent-registry-state.fixture.test-support.js";
 import { observeRootWork } from "./subagent-registry.browser-cleanup.test-support.js";
 import {
   adoptSubagentRunForRequesterTurn,
@@ -45,7 +47,7 @@ import {
   replaceSubagentRunAfterSteerCore,
 } from "./subagent-registry.js";
 import { settleSubagentRegistryPersistenceWork } from "./subagent-registry.persistence.test-support.js";
-import { loadSubagentRegistryFromSqlite } from "./subagent-registry.store.sqlite.js";
+import { registerRequesterCompletionCustodyTests } from "./subagent-registry.requester-completion.test-support.js";
 import {
   releaseSubagentRun,
   resetSubagentRegistryForTests,
@@ -298,26 +300,14 @@ describe("registered completion source custody", () => {
       );
       const entered = createDeferredCore();
       const release = createDeferredCore();
-      const execute = stateWorker.runOpenClawStateWorkerOperation;
-      const held = vi
-        .spyOn(stateWorker, "runOpenClawStateWorkerOperation")
-        .mockImplementation((owner, run, options) =>
-          execute(
-            owner,
-            (scope) =>
-              run({
-                execute: async (command, executeOptions) => {
-                  const receipt = await scope.execute(command, executeOptions);
-                  if (command.type === "subagents.persistChanges") {
-                    entered.resolve();
-                    await release.promise;
-                  }
-                  return receipt;
-                },
-              }),
-            options,
-          ),
-        );
+      const held = probe.command(stateWorker, async (command, executeOptions, scope) => {
+        const receipt = await scope.execute(command, executeOptions);
+        if (command.type === "subagents.persistChanges") {
+          entered.resolve();
+          await release.promise;
+        }
+        return receipt;
+      });
       const pending = withPluginRuntimeGatewayRequestScope(
         { client, context, resolveGatewayContext, isWebchatConnect: () => false },
         () => registerSubagentRun(params),
@@ -566,6 +556,8 @@ describe("registered completion source custody", () => {
     },
   );
 
+  registerRequesterCompletionCustodyTests({ registration, updateRun });
+
   it("retains raw child ownership, including unknown legacy ownership, on registration replay", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const originalConfig = { session: { store: state.path("original.sqlite") } };
@@ -737,8 +729,6 @@ describe("registered completion source custody", () => {
     "revoke",
     "gateway-close",
     "replace",
-    "completed-followup-original-revoked",
-    "completed-followup-successor-revoked",
     "release-rejected",
     "registration-rejected",
     "cancelled-by-another-operator",
@@ -899,87 +889,6 @@ describe("registered completion source custody", () => {
             /authority/,
           );
           await releaseSubagentRun("successor");
-        } else if (
-          ending === "completed-followup-original-revoked" ||
-          ending === "completed-followup-successor-revoked"
-        ) {
-          await updateRun(entry.runId, (draft) => {
-            draft.execution = { status: "terminal", endedAt: 1, outcome: { status: "ok" } };
-            draft.delivery = { status: "pending" };
-          });
-          const successorClient = createOperatorClient({
-            profileName: "followup-owner",
-            scopes: ["operator.write"],
-          });
-          const successorRevoked = new AbortController();
-          const successorSource = (await operatorCapture.captureGatewayOperatorRunAuthority({
-            client: successorClient,
-            context,
-            sourceAuthority: {
-              signal: successorRevoked.signal,
-              assertCurrent: () => successorRevoked.signal.throwIfAborted(),
-            },
-          }))!;
-          successorClient.internal = { operatorRunAuthority: successorSource.authority };
-          try {
-            expect(
-              await withPluginRuntimeGatewayRequestScope(
-                {
-                  client: successorClient,
-                  context,
-                  resolveGatewayContext,
-                  isWebchatConnect: () => false,
-                },
-                () =>
-                  replaceSubagentRunAfterSteerCore({
-                    previousRunId: entry.runId,
-                    nextRunId: "successor",
-                    expected: subagentRuns.get(entry.runId),
-                    allowEndedSource: true,
-                    preserveCompletedRun: true,
-                    task: "second turn",
-                  }),
-              ),
-            ).toBe(true);
-            successorSource.release();
-            const retained = subagentRuns.get(entry.runId)!;
-            const successor = subagentRuns.get("successor")!;
-            const stored = loadSubagentRegistryFromSqlite();
-            expect(stored.get(entry.runId)).toMatchObject({
-              execution: { status: "terminal", suppressSessionEffects: true },
-              delivery: { status: "pending" },
-              requesterTurnRunId: "parent",
-            });
-            expect(stored.get(successor.runId)).toMatchObject({
-              taskRunId: successor.runId,
-              task: "second turn",
-              execution: { status: "running" },
-            });
-            expect(successor.requesterTurnRunId).toBeUndefined();
-            expect(successor.requesterTurnYielded).toBeUndefined();
-            const completionSource = (run: SubagentRunRecord) =>
-              subagentRuns.runWithCompletionAuthority(
-                run,
-                () =>
-                  getPluginRuntimeGatewayRequestScope()?.client?.internal?.operatorRunAuthority
-                    ?.source,
-              );
-            // Suppressing old session effects must not retire its pending result's custody.
-            expect(completionSource(retained)).toBe(source.authority.source);
-            expect(completionSource(successor)).toBe(successorSource.authority.source);
-            const revokeOriginal = ending === "completed-followup-original-revoked";
-            (revokeOriginal ? revoked : successorRevoked).abort(new Error("operator revoked"));
-            expect(() => completionSource(revokeOriginal ? retained : successor)).toThrow(
-              /authority/,
-            );
-            expect(completionSource(revokeOriginal ? successor : retained)).toBe(
-              revokeOriginal ? successorSource.authority.source : source.authority.source,
-            );
-            await releaseSubagentRun(entry.runId);
-            await releaseSubagentRun(successor.runId);
-          } finally {
-            successorSource.release();
-          }
         } else if (ending === "release-rejected") {
           rejectNextRegistryWrite("write refused");
           await expect(releaseSubagentRun(entry.runId)).rejects.toThrow("write refused");

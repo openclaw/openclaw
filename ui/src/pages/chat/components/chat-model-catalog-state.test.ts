@@ -11,59 +11,56 @@ import { renderChatModelPicker } from "./chat-model-picker.ts";
 
 describe("model catalog refresh presentation", () => {
   it.each([
-    { status: "loading", label: "Refreshing models…" },
-    {
-      status: "ready",
-      pendingProviders: ["openai", "clawrouter"],
-      label: "Refreshing models for OpenAI, Clawrouter…",
-    },
-  ] as const)("keeps a $status background refresh out of the model list", ({ label, ...state }) => {
-    const catalog = { hasSnapshot: true, ...state };
-    const container = document.createElement("div");
-    render(renderChatModelCatalogState(catalog, true, true), container);
-    expect(container.querySelector("[role=status]")).toBeNull();
-
-    render(renderChatModelCatalogRefresh(catalog), container);
-    expect(container.querySelector("[role=status]")?.textContent).toContain(label);
-    expect(container.querySelector(".btn__spinner")?.getAttribute("aria-hidden")).toBe("true");
-    expect(container.querySelector(".sr-only")?.textContent).toBe(label);
-  });
-
-  it.each(["loading", "ready"] as const)(
-    "shows initial loading instead of an empty %s catalog",
-    (status) => {
+    ["loading", true, undefined, "refresh", "Refreshing models…"],
+    [
+      "ready",
+      true,
+      ["openai", "clawrouter"],
+      "refresh",
+      "Refreshing models for OpenAI, Clawrouter…",
+    ],
+    ["loading", false, ["clawrouter"], "loading", "Loading models…"],
+    ["ready", false, ["clawrouter"], "loading", "Loading models…"],
+    ["error", true, ["clawrouter"], "settled", "Some models could not be refreshed."],
+    ["offline", true, ["clawrouter"], "settled", "Offline"],
+    ["ready", false, undefined, "setup", "No models available"],
+  ] as const)(
+    "presents %s with options=%s and pending=%j",
+    (status, hasOptions, pendingProviders, presentation, label) => {
+      const state: ChatModelCatalogState = {
+        hasSnapshot: presentation !== "loading",
+        status,
+        pendingProviders: pendingProviders ? [...pendingProviders] : undefined,
+      };
       const container = document.createElement("div");
+      const setup = vi.fn();
       render(
         renderChatModelCatalogState(
-          { hasSnapshot: false, status, pendingProviders: ["clawrouter"] },
-          false,
-          false,
+          state,
+          hasOptions,
+          hasOptions,
+          presentation === "setup" ? setup : undefined,
         ),
         container,
       );
-      expect(container.textContent).toContain("Loading models…");
-      expect(container.querySelector(".btn__spinner")).not.toBeNull();
-      expect(container.textContent).not.toContain("No models available");
-    },
-  );
-
-  it.each([
-    { status: "error", label: "Some models could not be refreshed." },
-    { status: "offline", label: "Offline" },
-  ] as const)(
-    "keeps $status visible even with retained models and pending providers",
-    ({ status, label }) => {
-      const container = document.createElement("div");
-      const state: ChatModelCatalogState = {
-        hasSnapshot: true,
-        status,
-        pendingProviders: ["clawrouter"],
-      };
-      render(renderChatModelCatalogRefresh(state), container);
-      expect(container.querySelector("[data-chat-model-refresh]")).toBeNull();
-      render(renderChatModelCatalogState(state, true, true), container);
+      if (presentation === "refresh") {
+        expect(container.querySelector("[role=status]")).toBeNull();
+        render(renderChatModelCatalogRefresh(state), container);
+        expect(container.querySelector(".btn__spinner")?.getAttribute("aria-hidden")).toBe("true");
+        expect(container.querySelector(".sr-only")?.textContent).toBe(label);
+      } else {
+        expect(container.querySelector(".btn__spinner") !== null).toBe(presentation === "loading");
+      }
       expect(container.querySelector("[role=status]")?.textContent).toContain(label);
-      expect(container.querySelector(".btn__spinner")).toBeNull();
+      if (presentation === "loading") {
+        expect(container.textContent).not.toContain("No models available");
+      } else if (presentation === "setup") {
+        container.querySelector<HTMLButtonElement>("[data-chat-model-setup]")?.click();
+        expect(setup).toHaveBeenCalledOnce();
+      } else if (presentation === "settled") {
+        render(renderChatModelCatalogRefresh(state), container);
+        expect(container.querySelector("[data-chat-model-refresh]")).toBeNull();
+      }
     },
   );
 
@@ -156,15 +153,46 @@ describe("model catalog refresh presentation", () => {
     }
   });
 
-  it("preserves the empty-catalog setup action", () => {
-    const container = document.createElement("div");
-    const setup = vi.fn();
-    render(
-      renderChatModelCatalogState({ hasSnapshot: true, status: "ready" }, false, false, setup),
-      container,
-    );
-    expect(container.textContent).toContain("No models available");
-    container.querySelector<HTMLButtonElement>("[data-chat-model-setup]")?.click();
-    expect(setup).toHaveBeenCalledOnce();
-  });
+  // missing-auth on a Claude CLI row also means a disabled anthropic plugin or a missing
+  // account pin, so the hint must stay true for a user who is already signed in.
+  it.each([
+    ["anthropic", "claude-cli", "Claude Code isn't ready. If signed out, run claude auth login."],
+    ["openai", undefined, "No models available"],
+  ] as const)(
+    "explains an empty picker of missing-auth %s rows (runtime %s)",
+    (provider, agentRuntimeId, label) => {
+      const container = document.createElement("div");
+      render(
+        renderChatModelPicker({
+          disabled: false,
+          modelSelectionLocked: false,
+          modelCatalogState: { hasSnapshot: true, status: "ready" },
+          modelOptions: [
+            {
+              agentRuntimeId,
+              commitValue: `${provider}/model`,
+              disabled: true,
+              unavailableReason: "missing-auth",
+              isDefault: true,
+              label: "Model",
+              provider,
+              value: `${provider}/model`,
+            },
+          ],
+          open: true,
+          selectedModelValue: `${provider}/model`,
+          sessionModelPinned: false,
+          sessionKey: "main",
+          triggerModelLabel: "Model",
+          onModelSelect: async () => {},
+          onModelSetup: () => {},
+        }),
+        container,
+      );
+      expect(
+        container.querySelector(".chat-controls__model-catalog-state-label")?.textContent?.trim(),
+      ).toBe(label);
+      expect(container.querySelector("[data-chat-model-setup]")).not.toBeNull();
+    },
+  );
 });

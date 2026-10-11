@@ -29,8 +29,12 @@ import {
 } from "../../auto-reply/reply/source-turn-id.js";
 import { isAbortError } from "../../infra/abort-signal.js";
 import { assertAgentRunLifecycleGenerationCurrent } from "../../infra/agent-events.js";
+import { adoptExecRequestSession } from "../../infra/exec-request-context.js";
 import { bindGatewayContextResolver } from "../../plugins/runtime/gateway-request-scope.js";
 import { retainGatewayRootWorkAdmissionContinuation } from "../../process/gateway-work-admission.js";
+import { readWithdrawnUserTurnInputId } from "../../sessions/user-turn-transcript-admission.js";
+import { completeUserTurnProcessing } from "../../sessions/user-turn-transcript-processing.js";
+import { withCurrentUserTurnInput } from "../../sessions/user-turn-transcript-runtime-context.js";
 import { isOperatorUiClient } from "../../utils/message-channel.js";
 import { runWithChatAbortExecution } from "../chat-abort-lifecycle-internal.js";
 import { discardPreparedInboundMedia } from "../chat-attachments.js";
@@ -45,11 +49,7 @@ import { prepareSessionWorkspaceForRun } from "../server-methods/session-create-
 import { reactivateCompletedSubagentSession } from "../session-subagent-reactivation.js";
 import { prepareGatewaySkillAuthoring } from "../skill-library-authoring.js";
 import { captureGatewayUiCommandTarget } from "../ui-command-target.js";
-import {
-  buildAbortedAgentPayload,
-  setAbortedAgentDedupeEntries,
-  setGatewayDedupeEntries,
-} from "./agent-dedupe.js";
+import { buildAbortedAgentPayload, setGatewayDedupeEntries } from "./agent-dedupe.js";
 import { yieldAfterAgentAcceptedAck } from "./agent-handler-helpers.js";
 import { captureAgentJobSession } from "./agent-job.js";
 import {
@@ -58,14 +58,15 @@ import {
 } from "./agent-restart-recovery-context.js";
 import { createAgentRunDiagnostics } from "./agent-run-diagnostics.js";
 import { withAgentRunDispatchExecutionIdentity } from "./agent-run-dispatch-execution-identity.js";
-import { dispatchAgentRunFromGateway } from "./agent-run-dispatch.js";
+import { projectWithdrawnAgentInput } from "./agent-run-dispatch-outcome.js";
 import { resolveExecutionIdentitySpawnFacts } from "./agent-run-execution-lineage.js";
 import type { StartAgentRunExecutionParams } from "./agent-run-execution-types.js";
+import { dispatchAgentRunWithMedia } from "./agent-run-media.js";
 import { settleUnstartedGatewayFollowup } from "./agent-run-subagent.js";
 import {
   annotateAgentRunUserTurnPrompt,
   finalizePreparedAgentRunUserTurn,
-  releasePreparedAgentRunUserTurn,
+  releaseStoppedAgentRunUserTurn,
 } from "./agent-run-user-turn.js";
 
 export async function startAgentRunExecution(params: StartAgentRunExecutionParams): Promise<void> {
@@ -94,9 +95,7 @@ async function executeAgentRun(params: StartAgentRunExecutionParams): Promise<vo
   let finishUndispatchedFollowup = false;
   try {
     await using runtimeResources = new AsyncDisposableStack();
-    let preparedModelRuntimeLease = prepared.preparedModelRuntimeLease
-      ? runtimeResources.use(prepared.preparedModelRuntimeLease)
-      : undefined;
+    let preparedModelRuntimeLease = runtimeResources.use(prepared.preparedModelRuntimeLease);
     let replyDispatchRuntime = prepared.replyDispatchRuntime;
     let workspaceOverride = prepared.workspaceOverride;
     let leaseActive = true;
@@ -145,17 +144,11 @@ async function executeAgentRun(params: StartAgentRunExecutionParams): Promise<vo
       }
     };
     let mediaCleanup: Promise<void> | undefined;
-    const cleanupAdmittedRun: typeof prepared.activeRunAbort.cleanup = () => {
+    const cleanupAdmittedRun = async () => {
       const refsToDiscard = unpersistedOffloadedRefs;
       unpersistedOffloadedRefs = [];
       try {
-        const stopReason = prepared.activeRunAbort.entry?.abortStopReason;
-        const outcome = buildAgentRunTerminalOutcome({ status: "error", stopReason });
-        const cancelled =
-          prepared.activeRunAbort.controller.signal.aborted &&
-          stopReason !== "restart" &&
-          (!prepared.userTurn.privateCompletion || outcome.reason === "cancelled");
-        releasePreparedAgentRunUserTurn(prepared.userTurn, cancelled ? "cancelled" : "interrupted");
+        await releaseStoppedAgentRunUserTurn(prepared.userTurn, prepared.activeRunAbort);
       } catch (error) {
         diagnostics.warning("failed to settle pending agent input")(error);
       }
@@ -171,25 +164,28 @@ async function executeAgentRun(params: StartAgentRunExecutionParams): Promise<vo
             agentId: params.activeSessionAgentId,
             reason: "agent.input.settled",
           },
-          { accessChanged: false },
+          { accessChanged: false, rowScope: "runtime" },
         );
       }
     };
+    let dispatched = false;
     const dispatchAdmittedAgentRun = (
-      dispatch: Parameters<typeof dispatchAgentRunFromGateway>[0],
+      dispatch: Parameters<typeof dispatchAgentRunWithMedia>[0],
     ) => {
-      const run = () =>
-        withPreparedModelRuntimePluginGenerationScope(
+      const run = () => {
+        const execution = withPreparedModelRuntimePluginGenerationScope(
           replyDispatchRuntime.pluginGeneration,
-          () => dispatchAgentRunFromGateway(dispatch),
-          () => (leaseActive ? preparedModelRuntimeLease?.snapshot : undefined),
+          () => dispatchAgentRunWithMedia(dispatch, params),
+          () => (leaseActive ? preparedModelRuntimeLease.snapshot : undefined),
         );
-      const recorder = prepared.userTurn.recorder;
-      return recorder?.withPendingInput ? recorder.withPendingInput(run) : run();
+        dispatched = true;
+        return execution;
+      };
+      return withCurrentUserTurnInput(prepared.userTurn.recorder, run);
     };
     return await prepared.activeGatewayWorkAdmission.run(async () => {
       await yieldAfterAgentAcceptedAck();
-      let dispatched = false;
+      let publishFinalAfterCleanup: (() => void) | undefined;
       let pendingRecovery: MainSessionRecoveryPendingTarget | undefined;
       const settleUnstartedFollowup = (outcome: AgentRunTerminalOutcome) =>
         !dispatched
@@ -209,23 +205,25 @@ async function executeAgentRun(params: StartAgentRunExecutionParams): Promise<vo
         const outcome = buildAgentRunTerminalOutcome({ status: "error", error: renderedErr });
         if (recordCompletion) {
           try {
-            prepared.userTurn.recorder?.completeProcessing?.(outcome);
+            await completeUserTurnProcessing(prepared.userTurn.recorder, outcome);
           } catch (completionError) {
             diagnostics.warning("input completion persistence failed")(completionError);
           }
         }
         await settleUnstartedFollowup(outcome);
         const payload = { runId: params.runId, status: "error" as const, summary: renderedErr };
-        setGatewayDedupeEntries({
-          dedupe: params.context.dedupe,
-          keys: params.agentDedupeKeys,
-          session: captureAgentJobSession(jobSessionBinding),
-          entry: diagnostics.forReplay({ ts: Date.now(), ok: false, payload, error }),
-        });
-        params.io.emitFinal([false, payload, error], {
-          runId: params.runId,
-          ...diagnostics.errorMeta(renderedErr),
-        });
+        publishFinalAfterCleanup = () => {
+          setGatewayDedupeEntries({
+            dedupe: params.context.dedupe,
+            keys: params.agentDedupeKeys,
+            session: captureAgentJobSession(jobSessionBinding),
+            entry: diagnostics.forReplay({ ts: Date.now(), ok: false, payload, error }),
+          });
+          params.io.emitFinal([false, payload, error], {
+            runId: params.runId,
+            ...diagnostics.errorMeta(renderedErr),
+          });
+        };
       };
       const finishUndispatchedAbort = async () => {
         const stopReason = prepared.activeRunAbort.entry?.abortStopReason?.trim() || "rpc";
@@ -237,7 +235,7 @@ async function executeAgentRun(params: StartAgentRunExecutionParams): Promise<vo
         });
         try {
           pendingRecovery = await prepared.restoreAdmittedRestartRecoveryInterrupted?.();
-          prepared.userTurn.recorder?.completeProcessing?.(outcome);
+          await completeUserTurnProcessing(prepared.userTurn.recorder, outcome);
         } catch (error) {
           // This helper also runs from the outer abort catch. A failed required
           // write must still publish a final error and release the admitted turn.
@@ -245,17 +243,21 @@ async function executeAgentRun(params: StartAgentRunExecutionParams): Promise<vo
           return;
         }
         await settleUnstartedFollowup(outcome);
-        setAbortedAgentDedupeEntries({
-          dedupe: params.context.dedupe,
-          keys: params.agentDedupeKeys,
-          session: captureAgentJobSession(jobSessionBinding),
-          agentId: params.activeSessionAgentId,
-          runId: params.runId,
-          stopReason,
-        });
-        params.io.emitFinal([true, buildAbortedAgentPayload(params.runId, stopReason), undefined], {
-          runId: params.runId,
-        });
+        publishFinalAfterCleanup = () => {
+          const payload = projectWithdrawnAgentInput(
+            buildAbortedAgentPayload(params.runId, stopReason, {
+              agentId: params.activeSessionAgentId,
+            }),
+            readWithdrawnUserTurnInputId(prepared.userTurn.recorder),
+          );
+          setGatewayDedupeEntries({
+            dedupe: params.context.dedupe,
+            keys: params.agentDedupeKeys,
+            session: captureAgentJobSession(jobSessionBinding),
+            entry: diagnostics.forReplay({ ts: Date.now(), ok: true, payload }),
+          });
+          params.io.emitFinal([true, payload, undefined], { runId: params.runId });
+        };
       };
       try {
         if (prepared.activeRunAbort.controller.signal.aborted) {
@@ -299,8 +301,7 @@ async function executeAgentRun(params: StartAgentRunExecutionParams): Promise<vo
         let message = prepared.userTurn.message;
         let execApprovalContinuationPromptRange =
           prepared.userTurn.execApprovalContinuationPromptRange;
-        const execApprovalContinuationTranscriptPromptRange =
-          prepared.userTurn.execApprovalContinuationTranscriptPromptRange;
+        const execApprovalContinuationTranscriptPromptRange = execApprovalContinuationPromptRange;
 
         // Admission owns plugin/settlement adoption; other inter-session work
         // must leave the paused task's completion lifecycle with its owner.
@@ -344,9 +345,6 @@ async function executeAgentRun(params: StartAgentRunExecutionParams): Promise<vo
             execApprovalContinuationPromptRange,
           }));
         }
-        const senderIsOwner = prepared.userTurn.senderIsOwner;
-        const userTurnTranscriptRecorder = prepared.userTurn.recorder;
-
         const ingressAgentId = params.resolvedSessionKey
           ? params.activeSessionAgentId
           : params.agentId;
@@ -431,7 +429,7 @@ async function executeAgentRun(params: StartAgentRunExecutionParams): Promise<vo
         const gatewayContext = params.context.resolveGatewayContext?.();
         const skillLibraryAuthoring =
           gatewayContext && params.resolvedSessionKey
-            ? prepareGatewaySkillAuthoring(
+            ? await prepareGatewaySkillAuthoring(
                 {
                   client: params.client,
                   context: gatewayContext,
@@ -453,7 +451,7 @@ async function executeAgentRun(params: StartAgentRunExecutionParams): Promise<vo
               )
             : undefined;
         finalizePreparedAgentRunUserTurn(prepared.userTurn);
-        const execution = dispatchAdmittedAgentRun(
+        await dispatchAdmittedAgentRun(
           withAgentRunDispatchExecutionIdentity(
             {
               assertCurrent: assertDispatchCurrent,
@@ -536,7 +534,7 @@ async function executeAgentRun(params: StartAgentRunExecutionParams): Promise<vo
                 runtimeContextFragments: params.client?.internal?.runtimeContextFragments,
                 inputProvenance: params.inputProvenance,
                 privateCompletion: prepared.userTurn.privateCompletion,
-                senderIsOwner,
+                senderIsOwner: prepared.userTurn.senderIsOwner,
                 sessionEffects: params.sessionEffects,
                 skipInitialSessionTouch: params.skipAgentInitialSessionTouch,
                 preserveUserFacingSessionModelState:
@@ -573,7 +571,7 @@ async function executeAgentRun(params: StartAgentRunExecutionParams): Promise<vo
                 internalDeliverySuppressErrors:
                   params.client?.internal?.internalDeliverySuppressErrors,
                 suppressPromptPersistence: prepared.userTurn.suppressPromptPersistence,
-                userTurnTranscriptRecorder,
+                userTurnTranscriptRecorder: prepared.userTurn.recorder,
                 cleanupBundleMcpOnRunEnd: params.request.cleanupBundleMcpOnRunEnd,
                 abortSignal: prepared.activeRunAbort.controller.signal,
                 lifecycleGeneration: params.lifecycleGeneration,
@@ -608,10 +606,15 @@ async function executeAgentRun(params: StartAgentRunExecutionParams): Promise<vo
                 }),
                 onSessionIdChanged: (sessionId) => {
                   if (prepared.activeRunAbort.entry) {
+                    adoptExecRequestSession({
+                      runId: params.runId,
+                      previousSessionId: prepared.activeRunAbort.entry.sessionId,
+                      sessionId,
+                    });
                     prepared.activeRunAbort.entry.sessionId = sessionId;
                   }
                 },
-                workspaceDir: workspaceOverride,
+                workspaceDir: workspaceOverride ?? replyDispatchRuntime.workspaceDir,
                 cwd: resolveSessionRuntimeCwd({
                   requestedCwd: params.request.cwd,
                   sessionEntry: params.sessionEntry,
@@ -650,8 +653,6 @@ async function executeAgentRun(params: StartAgentRunExecutionParams): Promise<vo
             executionIdentitySpawnFacts,
           ),
         );
-        dispatched = true;
-        await execution;
       } catch (err) {
         if (prepared.activeRunAbort.controller.signal.aborted && isAbortError(err)) {
           await finishUndispatchedAbort();
@@ -684,7 +685,7 @@ async function executeAgentRun(params: StartAgentRunExecutionParams): Promise<vo
                   );
                 } finally {
                   try {
-                    cleanupAdmittedRun();
+                    await cleanupAdmittedRun();
                   } finally {
                     scheduleMainSessionRecoveryPendingTarget(pendingRecovery);
                   }
@@ -697,6 +698,7 @@ async function executeAgentRun(params: StartAgentRunExecutionParams): Promise<vo
             await mediaCleanup;
           } finally {
             finishUndispatchedFollowup = !dispatched;
+            publishFinalAfterCleanup?.();
           }
         }
       }

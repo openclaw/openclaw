@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { createRetainedOperation } from "@openclaw/worker-runtime/lifecycle";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
@@ -7,7 +8,6 @@ import {
   waitForSignalExitBarriers,
 } from "../cli/signal-exit-barrier.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { createRetainedOperation } from "./retained-operation.js";
 import {
   adoptPreparedLocation,
   adoptRetainedPreparedLocation,
@@ -262,7 +262,8 @@ describe("prepared SQLite snapshot cleanup", () => {
   ] as const)(
     "keeps failed async removal retryable with $retry cleanup (strict: $strict)",
     async ({ strict, retry }) => {
-      const { ownedRoot, prepared } = fixture(strict);
+      const report = vi.fn();
+      const { ownedRoot, prepared } = fixture(strict, report);
       const failure = Object.assign(new Error("snapshot busy"), { code: "EBUSY" });
       const remove = vi.spyOn(fs.promises, "rm").mockRejectedValueOnce(failure);
       const first = prepared.cleanupAsync();
@@ -276,6 +277,7 @@ describe("prepared SQLite snapshot cleanup", () => {
       expect(fs.existsSync(ownedRoot)).toBe(false);
       expect(remove).toHaveBeenCalledTimes(retry === "async" ? 2 : 1);
       expect(await prepared.cleanupAsync()).toBe(true);
+      expect(report).toHaveBeenCalledTimes(strict ? 0 : 1);
     },
   );
 });

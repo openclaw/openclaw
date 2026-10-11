@@ -122,7 +122,10 @@ describe("Doctor auth migration source ownership", () => {
       );
     } else if (kind === "configured-agent-directory") {
       const external = path.join(selected.root, "external-agent");
-      cfg.agents = { entries: { main: { default: true }, other: { agentDir: external } } };
+      cfg.agents = {
+        defaults: { authInheritance: { agentId: "main" } },
+        entries: { main: {}, other: { agentDir: external } },
+      };
       artifact = path.join(external, "openclaw-agent.sqlite");
     } else if (kind.startsWith("configured-")) {
       const external = path.join(selected.root, "external");

@@ -88,14 +88,13 @@ export async function maybeRepairStaleManagedNpmInstallGenerations(
   if (stale.length === 0) {
     return false;
   }
+  const formatGeneration = (generation: StaleManagedNpmInstallGenerationIssue) =>
+    `- ${generation.pluginId}: ${shortenHomePath(generation.packageDir)}${generation.version ? ` (${generation.version})` : ""}`;
   if (!params.prompter.shouldRepair) {
     note(
       [
         "Managed npm plugin installs have stale non-authoritative generations:",
-        ...stale.map(
-          (generation) =>
-            `- ${generation.pluginId}: ${shortenHomePath(generation.packageDir)}${generation.version ? ` (${generation.version})` : ""}`,
-        ),
+        ...stale.map(formatGeneration),
         `Repair with ${formatCliCommand("openclaw doctor --fix")} to retire stale generations after the gateway restarts.`,
       ].join("\n"),
       "Plugin registry",
@@ -122,10 +121,7 @@ export async function maybeRepairStaleManagedNpmInstallGenerations(
   note(
     [
       "Retired stale managed npm plugin generation(s); they will be pruned after the gateway restarts:",
-      ...retired.map(
-        (generation) =>
-          `- ${generation.pluginId}: ${shortenHomePath(generation.packageDir)}${generation.version ? ` (${generation.version})` : ""}`,
-      ),
+      ...retired.map(formatGeneration),
     ].join("\n"),
     "Plugin registry",
   );

@@ -87,7 +87,7 @@ openclaw logs --follow
   <Accordion title="Permissions audit mismatches">
     `channels status --probe` permission checks only work for numeric channel IDs.
 
-    If you use slug keys, runtime matching can still work, but probe cannot fully verify permissions.
+    If you use slug keys, runtime matching can still work, but check cannot fully verify permissions.
 
   </Accordion>
 

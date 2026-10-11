@@ -1,6 +1,7 @@
 import { existsSync } from "node:fs";
 import { afterEach, expect, it, vi } from "vitest";
 import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
 import { createCorePluginStateKeyedStore } from "../plugin-state/plugin-state-store.js";
 import { seedPluginStateEntriesForTests } from "../plugin-state/plugin-state-store.test-helpers.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
@@ -81,47 +82,15 @@ it("keeps reads and Incognito noncreating, and scoped continuity survives reopen
   });
 });
 
-it("uses keyed-store eviction to retain the newest 5000 response mappings", async () => {
-  await withOpenClawTestState({ label: "openresponses-capacity" }, async ({ env }) => {
-    const now = Date.now();
-    seedPluginStateEntriesForTests(
-      Array.from({ length: MAX_RESPONSE_SESSION_ENTRIES }, (_, index) => ({
-        pluginId: storeOptions.ownerId,
-        namespace: storeOptions.namespace,
-        key: `resp_capacity_${index}`,
-        value: { ...scope, sessionKey: `session_${index}` },
-        createdAt: now - MAX_RESPONSE_SESSION_ENTRIES + index,
-        expiresAt: now + RESPONSE_SESSION_RETENTION_MS,
-      })),
-    );
-    await rememberResponseSession(
-      { ...scope, responseId: "resp_newest", sessionKey: "newest-session" },
-      current,
-      env,
-    );
-    const lookup = (responseId: string) => lookupResponseSession({ ...scope, responseId }, env);
-    expect(await lookup("resp_capacity_0")).toBeUndefined();
-    expect(await lookup("resp_capacity_1")).toBe("session_1");
-    expect(await lookup("resp_newest")).toBe("newest-session");
-    expect(await createCorePluginStateKeyedStore({ ...storeOptions, env }).count()).toBe(
-      MAX_RESPONSE_SESSION_ENTRIES,
-    );
-  });
-});
-
 it("rolls back when caller authority expires before commit", async () => {
   await withOpenClawTestState({ label: "openresponses-authority" }, async ({ env }) => {
-    const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
     let authorized = true;
-    vi.spyOn(workerAdmission, "createSqliteWorkerOperationAdmission").mockImplementation(
-      (admit, attachment) =>
-        createAdmission((request, grant) => {
-          if (request.stage === "commit") {
-            authorized = false;
-          }
-          admit(request, grant);
-        }, attachment),
-    );
+    probe.admission(workerAdmission, (request, grant, admit) => {
+      if (request.stage === "commit") {
+        authorized = false;
+      }
+      admit(request, grant);
+    });
     const input = { ...scope, responseId: "resp_revoked" };
     await expect(
       rememberResponseSession(

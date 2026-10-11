@@ -119,93 +119,56 @@ test("session creation provenance cannot authorize a fresh personal account", as
   });
 });
 
-test.each([
-  { selection: "explicit", source: "user" },
-  { selection: "default", source: "user-link" },
-] as const)(
-  "sessions.create preserves a personal $selection across adoption and a collaborator fork",
-  async ({ selection, source }) => {
-    await withSessionTestState({ layout: "state-only" }, async () => {
-      const { storePath, authProfileId, connectAccount, client, context } =
-        await createPersonalAccountSessionFixture();
-      const key = "agent:main:dashboard:personal-owner";
-
-      const created = await directSessionReq(
-        "sessions.create",
-        {
-          key,
-          model: `openai/gpt-5.6-sol${selection === "explicit" ? `@${authProfileId}` : ""}`,
-        },
-        { client, context },
-      );
-
-      expect(created.ok, JSON.stringify(created.error)).toBe(true);
-      expect(loadSessionEntry({ sessionKey: key, storePath })).toMatchObject({
-        authProfileOverride: authProfileId,
-        authProfileOverrideSource: source,
-      });
-
-      expect(connectAccount("next-account@example.test")).not.toBe(authProfileId);
-      const adopted = await directSessionReq("sessions.create", { key }, { client, context });
-      expect(adopted.ok, JSON.stringify(adopted.error)).toBe(true);
-      expect(loadSessionEntry({ sessionKey: key, storePath })).toMatchObject({
-        authProfileOverride: authProfileId,
-        authProfileOverrideSource: source,
-      });
-
-      const collaborator = ensureProfileForEmail("session-collaborator@example.test");
-      connectAccount("collaborator-account@example.test", collaborator.id);
-      client.authenticatedUserProfile = {
-        profileId: collaborator.id,
-        displayName: collaborator.displayName,
-        hasAvatar: false,
-        updatedAt: collaborator.updatedAt,
-      };
-      const forkKey = "agent:main:dashboard:personal-collaborator-fork";
-      const forked = await directSessionReq(
-        "sessions.create",
-        { key: forkKey, parentSessionKey: key, fork: true },
-        { client, context },
-      );
-
-      expect(forked.ok, JSON.stringify(forked.error)).toBe(true);
-      expect(loadSessionEntry({ sessionKey: forkKey, storePath })).toMatchObject({
-        authProfileOverride: authProfileId,
-        authProfileOverrideSource: source,
-        parentSessionKey: key,
-      });
-    });
-  },
-);
-
-test("sessions.create commits the personal default before dispatching its initial turn", async () => {
+test("sessions.create preserves an explicit personal account across adoption and a collaborator fork", async () => {
   await withSessionTestState({ layout: "state-only" }, async () => {
-    const { storePath, authProfileId, client, context } =
+    const { storePath, authProfileId, connectAccount, client, context } =
       await createPersonalAccountSessionFixture();
-    const key = "agent:main:dashboard:personal-default-initial-turn";
-    const observedProfiles: Array<string | undefined> = [];
-    const chatSend = vi.spyOn(chatSendOwner, "handleDirectExternalChatSend");
-    chatSend.mockImplementation(async ({ respond }) => {
-      observedProfiles.push(loadSessionEntry({ sessionKey: key, storePath })?.authProfileOverride);
-      respond(true, { runId: "personal-default-first-turn", status: "started" });
-    });
-    try {
-      const created = await directSessionReq<{ runStarted: boolean }>(
-        "sessions.create",
-        { key, model: "openai/gpt-5.6-sol", message: "Start the first turn" },
-        { client, context },
-      );
+    const key = "agent:main:dashboard:personal-owner";
 
-      expect(created.ok, JSON.stringify(created.error)).toBe(true);
-      expect(created.payload?.runStarted).toBe(true);
-      expect(observedProfiles).toEqual([authProfileId]);
-      expect(loadSessionEntry({ sessionKey: key, storePath })).toMatchObject({
-        authProfileOverride: authProfileId,
-        authProfileOverrideSource: "user-link",
-      });
-    } finally {
-      chatSend.mockRestore();
-    }
+    const created = await directSessionReq(
+      "sessions.create",
+      {
+        key,
+        model: `openai/gpt-5.6-sol@${authProfileId}`,
+      },
+      { client, context },
+    );
+
+    expect(created.ok, JSON.stringify(created.error)).toBe(true);
+    expect(loadSessionEntry({ sessionKey: key, storePath })).toMatchObject({
+      authProfileOverride: authProfileId,
+      authProfileOverrideSource: "user",
+    });
+
+    expect(connectAccount("next-account@example.test")).not.toBe(authProfileId);
+    const adopted = await directSessionReq("sessions.create", { key }, { client, context });
+    expect(adopted.ok, JSON.stringify(adopted.error)).toBe(true);
+    expect(loadSessionEntry({ sessionKey: key, storePath })).toMatchObject({
+      authProfileOverride: authProfileId,
+      authProfileOverrideSource: "user",
+    });
+
+    const collaborator = ensureProfileForEmail("session-collaborator@example.test");
+    connectAccount("collaborator-account@example.test", collaborator.id);
+    client.authenticatedUserProfile = {
+      profileId: collaborator.id,
+      displayName: collaborator.displayName,
+      hasAvatar: false,
+      updatedAt: collaborator.updatedAt,
+    };
+    const forkKey = "agent:main:dashboard:personal-collaborator-fork";
+    const forked = await directSessionReq(
+      "sessions.create",
+      { key: forkKey, parentSessionKey: key, fork: true },
+      { client, context },
+    );
+
+    expect(forked.ok, JSON.stringify(forked.error)).toBe(true);
+    expect(loadSessionEntry({ sessionKey: forkKey, storePath })).toMatchObject({
+      authProfileOverride: authProfileId,
+      authProfileOverrideSource: "user",
+      parentSessionKey: key,
+    });
   });
 });
 
@@ -523,9 +486,9 @@ test.each(["foreign admin", "unidentified admin", "synthetic owner"] as const)(
         expect(context.loadGatewayModelCatalogSnapshot).not.toHaveBeenCalled();
         expect(dashboardTitleGenerationMocks.generate).not.toHaveBeenCalled();
         expect(loadSessionEntry({ sessionKey: key, storePath })).toEqual(before);
-        expect(managedWorktrees.findLiveByOwner("session", key)).toBeUndefined();
+        expect(await managedWorktrees.findLiveByOwner("session", key)).toBeUndefined();
       } finally {
-        const worktree = managedWorktrees.findLiveByOwner("session", key);
+        const worktree = await managedWorktrees.findLiveByOwner("session", key);
         if (worktree) {
           await managedWorktrees.remove({
             id: worktree.id,

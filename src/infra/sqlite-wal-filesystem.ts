@@ -7,11 +7,13 @@ import type { Result } from "@openclaw/normalization-core/result";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { hasErrnoCode } from "./errno.js";
 
-const LINUX_NFS_SUPER_MAGIC = 0x6969;
-const LINUX_SMB_SUPER_MAGIC = 0x517b;
-const LINUX_CIFS_SUPER_MAGIC = 0xff534d42;
-const LINUX_SMB2_SUPER_MAGIC = 0xfe534d42;
-const LINUX_V9FS_SUPER_MAGIC = 0x01021997; // Linux 9p (V9FS)
+const ROLLBACK_FILESYSTEM_MAGIC = new Set([
+  0x6969, // NFS
+  0x517b, // SMB
+  0xff534d42, // CIFS
+  0xfe534d42, // SMB2
+  0x01021997, // 9p (V9FS)
+]);
 const LINUX_BTRFS_SUPER_MAGIC = 0x9123683e;
 const PROC_MOUNTINFO_PATH = "/proc/self/mountinfo";
 // Filesystem classification runs during database open, so never let the fallback probe stall it.
@@ -142,10 +144,12 @@ function isSshfsMountSource(source: string | undefined): boolean {
 
 function resolveMountTypeJournalPolicy(entry: MountEntry): SqliteFilesystemJournalPolicy {
   const normalized = entry.fsType.toLowerCase();
-  if (normalized.startsWith("nfs") || NETWORK_FILESYSTEM_TYPES.has(normalized)) {
-    return "rollback";
-  }
-  if (CROSS_VM_FILESYSTEM_TYPES.has(normalized) || normalized.startsWith("9p")) {
+  if (
+    normalized.startsWith("nfs") ||
+    NETWORK_FILESYSTEM_TYPES.has(normalized) ||
+    CROSS_VM_FILESYSTEM_TYPES.has(normalized) ||
+    normalized.startsWith("9p")
+  ) {
     return "rollback";
   }
   if (normalized === "fuse.sshfs") {
@@ -298,18 +302,11 @@ export function resolvePathJournalPolicy(targetPath: string): SqliteFilesystemJo
     return combineMountEntryJournalPolicies(mountLookupPaths);
   }
   try {
-    const filesystemType = fs.statfsSync(checkedPaths.canonicalPath).type;
-    if (
-      filesystemType === LINUX_NFS_SUPER_MAGIC ||
-      filesystemType === LINUX_SMB_SUPER_MAGIC ||
-      filesystemType === LINUX_CIFS_SUPER_MAGIC ||
-      filesystemType === LINUX_SMB2_SUPER_MAGIC ||
-      filesystemType === LINUX_V9FS_SUPER_MAGIC
-    ) {
+    if (ROLLBACK_FILESYSTEM_MAGIC.has(fs.statfsSync(checkedPaths.canonicalPath).type)) {
       return "rollback";
     }
   } catch {
-    return combineMountEntryJournalPolicies(mountLookupPaths);
+    // Missing native metadata falls through to the same mount policy lookup.
   }
   return combineMountEntryJournalPolicies(mountLookupPaths);
 }

@@ -107,7 +107,7 @@ test.each([
       session: { scope: "global" },
       agents: {
         entries: {
-          main: { default: true, model: { primary: "openai/gpt-5.4" } },
+          main: { model: { primary: "openai/gpt-5.4" } },
           research: { model: { primary: "openai/gpt-5.5" } },
         },
       },

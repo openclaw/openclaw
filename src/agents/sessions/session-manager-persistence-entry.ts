@@ -2,7 +2,9 @@ import type { TranscriptEntryAnchor } from "../../config/sessions/session-access
 import type {
   SessionTranscriptContextVersion,
   TranscriptMessageAppendResult,
+  TranscriptWriteSnapshot,
 } from "../../config/sessions/session-accessor.sqlite-contract.js";
+import { normalizeTranscriptJsonValue } from "../../config/sessions/transcript-json.js";
 import { copyPreparedModelVisibleToolText } from "../../logging/redact-internal.js";
 import {
   copyCodeModeSourceAppend,
@@ -53,7 +55,7 @@ export function adoptCommittedMessagePayload(
   entry: SessionMessageEntry,
   receipt: TranscriptMessageAppendResult<SessionMessageEntry["message"]>,
   idempotencyLookup: AppendPersistenceOptions["idempotencyLookup"],
-): void {
+): string | null {
   if (receipt.effectiveParentId === undefined) {
     throw new Error(`Session transcript parent entry was not persisted: ${entry.id}`);
   }
@@ -73,18 +75,19 @@ export function adoptCommittedMessagePayload(
   if (idempotencyLookup === "caller-checked" && !receipt.appended) {
     throw new Error(`Session transcript append was not persisted: ${entry.id}`);
   }
+  return receipt.effectiveParentId;
 }
 
 export function canonicalizeSessionEntry<T extends SessionEntry>(
   entry: T,
   options?: AppendPersistenceOptions,
 ): T {
-  // oxlint-disable-next-line unicorn/prefer-structured-clone -- Match the persisted JSON/toJSON shape exactly.
-  const canonicalEntry: unknown = JSON.parse(JSON.stringify(entry));
+  const sourceAppend = getCodeModeSourceAppend(options);
+  const canonicalEntry = normalizeTranscriptJsonValue(entry, "", Boolean(sourceAppend));
   if (!isIndexedSessionEntry(canonicalEntry) || canonicalEntry.type !== entry.type) {
     throw new Error(`Invalid session transcript entry: ${entry.type}`);
   }
-  if (entry.type === "message" && canonicalEntry.type === "message") {
+  if (entry !== canonicalEntry && entry.type === "message" && canonicalEntry.type === "message") {
     if (
       entry.message.role === "toolResult" &&
       canonicalEntry.message.role === "toolResult" &&
@@ -102,10 +105,46 @@ export function canonicalizeSessionEntry<T extends SessionEntry>(
     copyCodeModeSourceAppend(
       entry.message,
       canonicalEntry.message,
-      getCodeModeSourceAppend(options),
+      sourceAppend,
       (source) => source,
     );
   }
   // SAFETY: Manager-built envelopes retain T's checked discriminant; the codec validates their JSON storage shape.
   return canonicalEntry as T;
+}
+
+export function adoptPersistedMessage(
+  entry: SessionMessageEntry,
+  snapshot: TranscriptWriteSnapshot<
+    TranscriptMessageAppendResult<SessionMessageEntry["message"]> | undefined
+  >,
+  idempotencyLookup: AppendPersistenceOptions["idempotencyLookup"],
+  loadedVersion: SessionTranscriptContextVersion | undefined,
+): Exclude<PersistRecordResult, undefined> {
+  const { result } = snapshot;
+  if (!result) {
+    throw new Error(`Session transcript message was not persisted: ${entry.id}`);
+  }
+  const effectiveParentId = adoptCommittedMessagePayload(entry, result, idempotencyLookup);
+  if (result.messageId !== entry.id) {
+    // A concurrent keyed user is adopted only after reloading its current path.
+    if (!result.anchor) {
+      throw new Error(`Session transcript anchor was not returned: ${result.messageId}`);
+    }
+    return {
+      adoptedMessageId: result.messageId,
+      anchor: result.anchor,
+      appended: result.appended,
+      effectiveParentId,
+    };
+  }
+  const reloadAfterAppend =
+    result.appended && transcriptAppendNeedsReload(snapshot.before, loadedVersion);
+  return {
+    ...(result.anchor ? { anchor: result.anchor } : {}),
+    lifecycleRevision: snapshot.lifecycleRevision,
+    appended: result.appended,
+    effectiveParentId,
+    ...(reloadAfterAppend ? { reloadAfterAppend: true } : {}),
+  };
 }

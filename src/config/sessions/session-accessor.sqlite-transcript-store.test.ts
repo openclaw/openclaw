@@ -1,8 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { cleanupTempDirs, makeTempDir } from "../../../test/helpers/temp-dir.js";
-import { clearNodeSqliteKyselyCacheForDatabase } from "../../infra/kysely-sync.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
@@ -27,10 +26,7 @@ import {
   rewriteSqliteTranscriptEventRowsInTransaction,
   updateSqliteTranscriptEventJsonInTransaction,
 } from "./session-accessor.sqlite-transcript-store.js";
-import {
-  prepareSqliteTranscriptSuffixMutation,
-  replaceSqliteTranscriptSuffixInTransaction,
-} from "./session-accessor.sqlite-transcript-suffix.js";
+import { replaceSqliteTranscriptSuffixInTransaction } from "./session-accessor.sqlite-transcript-suffix.js";
 import {
   SYNC_REBUILD_MAX_BYTES,
   SYNC_REBUILD_MAX_ROWS,
@@ -136,9 +132,9 @@ describe("SQLite transcript append", () => {
       { seq: 1, event_json: nextJson },
     ]);
     expect(readTranscriptGenerationInTransaction(database, "append-session")).toBe(generation);
-    expect(policy.counts).toEqual({ policy: 1 });
-    expect(policy.rowCounts).toEqual({ policy: 1 });
-    expect(policy.textBytes).toEqual({ policy: 4 });
+    expect(policy.counts).toEqual({ policy: 0 });
+    expect(policy.rowCounts).toEqual({ policy: 0 });
+    expect(policy.textBytes).toEqual({ policy: 0 });
   });
 });
 
@@ -225,6 +221,34 @@ async function withRewriteFixture(
 }
 
 describe("SQLite exact transcript rewrite", () => {
+  it.each([
+    { name: "content", message: { content: "changed" } },
+    { name: "provenance", message: { provenance: { kind: "internal_system" } } },
+    { name: "sender authority", metadata: { senderIsOwner: true } },
+    {
+      name: "model projection",
+      metadata: { modelPromptProjection: { version: 1, text: "changed" } },
+    },
+    { name: "branch parent", envelope: { parentId: null } },
+  ])(
+    "invalidates admissions when steering metadata accompanies $name changes",
+    async ({ message, metadata, envelope }) => {
+      await withRewriteFixture(({ snapshot, rewrite }) => {
+        const before = snapshot();
+        rewrite({
+          ...rewriteEvents[1],
+          ...envelope,
+          message: {
+            ...rewriteEvents[1].message,
+            ...message,
+            __openclaw: { steerTargetRunId: "running-turn", ...metadata },
+          },
+        });
+        expect(snapshot().generation).not.toBe(before.generation);
+      });
+    },
+  );
+
   it("applies exact bindings across both storage arms", async () => {
     const details = { opaque: "preserved metadata ".repeat(2048) };
     const events = [
@@ -524,57 +548,31 @@ function replaceTranscriptSuffixForTest(
   persistedPrefixLength = 0,
   retainedCustomDataIds: readonly string[] = [],
 ): void {
-  const owner = openOpenClawAgentDatabase(scope);
-  const plan = prepareSqliteTranscriptSuffixMutation(
-    owner,
-    scope,
-    expectedEvents,
-    nextEvents,
-    persistedPrefixLength,
-    undefined,
-    false,
-    retainedCustomDataIds,
-  );
   runOpenClawAgentWriteTransaction((database) => {
-    replaceSqliteTranscriptSuffixInTransaction(database, scope, plan);
+    replaceSqliteTranscriptSuffixInTransaction(database, scope, {
+      expectedEvents,
+      nextEvents,
+      persistedPrefixLength,
+      retainedCustomDataIds,
+    });
   }, scope);
 }
 
 describe("SQLite exact transcript suffix replacement", () => {
-  it("rejects a changed mutation fence while planning an incremental suffix", async () => {
-    await withRewriteFixture(({ db, scope }) => {
-      clearNodeSqliteKyselyCacheForDatabase(db);
-      const originalPrepare = db.prepare.bind(db);
-      let changedFence = false;
-      const prepareSpy = vi.spyOn(db, "prepare").mockImplementation((sqlText: string) => {
-        if (
-          !changedFence &&
-          sqlText.toLowerCase().includes("session_transcript_active_events") &&
-          sqlText.toLowerCase().includes("event_seq")
-        ) {
-          originalPrepare(
-            `UPDATE session_windows
-             SET transcript_updated_at = transcript_updated_at + 1
-             WHERE session_id = ?`,
-          ).run(scope.sessionId);
-          changedFence = true;
-        }
-        return originalPrepare(sqlText);
-      });
-      try {
-        expect(() =>
-          prepareSqliteTranscriptSuffixMutation(
-            openOpenClawAgentDatabase(scope),
-            scope,
-            rewriteEvents,
-            rewriteEvents.slice(0, -1),
-            rewriteEvents.length - 1,
-          ),
-        ).toThrow(`SQLite transcript changed while planning suffix removal for ${scope.sessionId}`);
-      } finally {
-        prepareSpy.mockRestore();
-      }
-      expect(changedFence).toBe(true);
+  it.each([0, 1])("preserves an intervening append before replacing prefix %i", async (prefix) => {
+    await withRewriteFixture(({ snapshot, scope }) => {
+      runOpenClawAgentWriteTransaction((database) => {
+        appendTranscriptEventInTransaction(database, scope, {
+          type: "custom",
+          id: "intervening",
+          parentId: "answer",
+        });
+      }, scope);
+      const before = snapshot();
+      expect(() =>
+        replaceTranscriptSuffixForTest(scope, rewriteEvents, rewriteEvents.slice(0, -1), prefix),
+      ).toThrow(`SQLite transcript changed while preparing suffix removal for ${scope.sessionId}`);
+      expect(snapshot()).toEqual(before);
     });
   });
 
@@ -595,6 +593,11 @@ describe("SQLite exact transcript suffix replacement", () => {
   const redirectedRoot = assistant("redirected-root", null, "redirected root");
   const belowParent = { ...activeChild, message: { role: "user", content: "active child" } };
   const siblingChild = assistant("active-child", "user", "active child");
+  const updatedEvents = [
+    rewriteEvents[0],
+    { ...rewriteEvents[1], message: { role: "user", content: "updated question" } },
+    { ...rewriteEvents[2], message: { role: "assistant", content: "updated answer" } },
+  ];
   it.each([
     {
       name: "a suffix anchored on an inactive branch",
@@ -661,11 +664,27 @@ describe("SQLite exact transcript suffix replacement", () => {
         searchRows(["user", "question"], ["active-child", "active child"]),
       ),
     },
+    {
+      name: "a same-length replacement after an unchanged prefix",
+      events: rewriteEvents,
+      next: updatedEvents,
+      prefix: 0,
+      dirty: false,
+      active: activeRows(0, 1, 2),
+      search: expect.arrayContaining(
+        searchRows(["user", "updated question"], ["answer", "updated answer"]),
+      ),
+    },
   ])("reconciles $name", async ({ events, next, prefix, dirty, active, search }) => {
     await withRewriteFixture(async ({ db, snapshot, scope }) => {
       await waitForSessionTranscriptIndexReconcile(scope);
       replaceTranscriptSuffixForTest(scope, events, next, prefix);
       expect(snapshot().raw).toHaveLength(next.length);
+      if (prefix === 0) {
+        expect(snapshot().raw).toEqual([0, 1, 2].map((seq) => expect.objectContaining({ seq })));
+        expect(snapshot()).toMatchObject({ active, search });
+        expect(sessionTranscriptIndexNeedsReconcile(db, scope.sessionId)).toBe(false);
+      }
       if (dirty) {
         expect(sessionTranscriptIndexNeedsReconcile(db, scope.sessionId)).toBe(true);
       }
@@ -692,19 +711,14 @@ describe("SQLite exact transcript suffix replacement", () => {
       const beforeStats = readTranscriptStatsSync(scope);
       expect(before.storage[2]?.event_json).toBeNull();
       expect(before.storage[2]?.event_zstd).toBeInstanceOf(Uint8Array);
-      const plan = prepareSqliteTranscriptSuffixMutation(
-        openOpenClawAgentDatabase(scope),
-        scope,
-        expected,
-        next,
-        1,
-        undefined,
-        false,
-        retainedIds,
-      );
       expect(() =>
         runOpenClawAgentWriteTransaction((database) => {
-          replaceSqliteTranscriptSuffixInTransaction(database, scope, plan);
+          replaceSqliteTranscriptSuffixInTransaction(database, scope, {
+            expectedEvents: expected,
+            nextEvents: next,
+            persistedPrefixLength: 1,
+            retainedCustomDataIds: retainedIds,
+          });
           throw new Error("rollback retained suffix");
         }, scope),
       ).toThrow("rollback retained suffix");
@@ -737,90 +751,76 @@ describe("SQLite exact transcript suffix replacement", () => {
     }, events);
   });
 
-  it("validates only the unchanged projection prefix for same-length suffix replacement", async () => {
-    await withRewriteFixture(({ db, snapshot, scope }) => {
-      const replacementEvents = [
+  it.each([
+    {
+      name: "promotes a prefix duplicate when the retained owner changes its key",
+      events: [
         rewriteEvents[0],
-        { ...rewriteEvents[1], message: { role: "user", content: "updated question" } },
-        { ...rewriteEvents[2], message: { role: "assistant", content: "updated answer" } },
-      ] as const;
-
-      replaceTranscriptSuffixForTest(scope, rewriteEvents, replacementEvents);
-
-      const result = snapshot();
-      expect(result).toMatchObject({
-        raw: [
-          expect.objectContaining({ seq: 0 }),
-          expect.objectContaining({ seq: 1 }),
-          expect.objectContaining({ seq: 2 }),
-        ],
-        active: [
-          expect.objectContaining({ event_seq: 0 }),
-          expect.objectContaining({ event_seq: 1 }),
-          expect.objectContaining({ event_seq: 2 }),
-        ],
-      });
-      expect(result.search).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({ message_id: "user", text: "updated question" }),
-          expect.objectContaining({ message_id: "answer", text: "updated answer" }),
-        ]),
-      );
-      expect(sessionTranscriptIndexNeedsReconcile(db, scope.sessionId)).toBe(false);
-    });
-  });
-
-  it("promotes an unchanged-prefix duplicate when a retained event changes its key", async () => {
-    const originalEvents = [
-      rewriteEvents[0],
-      keyedAssistant("duplicate", "root", "old-key"),
-      keyedAssistant("owner", "duplicate", "old-key"),
-    ] as const;
-    await withRewriteFixture(({ db, scope }) => {
-      db.prepare(
-        "UPDATE transcript_event_identities SET message_idempotency_key = NULL WHERE session_id = ? AND event_id = ?",
-      ).run(scope.sessionId, "duplicate");
-      db.prepare(
-        "UPDATE transcript_event_identities SET message_idempotency_key = ? WHERE session_id = ? AND event_id = ?",
-      ).run("old-key", scope.sessionId, "owner");
-      const replacementEvents = [
-        originalEvents[0],
-        originalEvents[1],
-        {
-          ...originalEvents[2],
-          message: { role: "assistant", content: "updated", idempotencyKey: "new-key" },
-        },
-      ] as const;
-
-      replaceTranscriptSuffixForTest(scope, originalEvents, replacementEvents);
-
-      expect(readIdempotencyOwners(db, scope.sessionId, "duplicate", "owner")).toEqual([
+        keyedAssistant("duplicate", "root", "old-key"),
+        keyedAssistant("owner", "duplicate", "old-key"),
+      ],
+      next: [
+        rewriteEvents[0],
+        keyedAssistant("duplicate", "root", "old-key"),
+        keyedAssistant("owner", "duplicate", "new-key", "updated"),
+      ],
+      reassign: true,
+      owners: [
         { event_id: "duplicate", message_idempotency_key: "old-key" },
         { event_id: "owner", message_idempotency_key: "new-key" },
-      ]);
-    }, originalEvents);
-  });
-
-  it("removes the idempotency owner when a retained event removes its key", async () => {
-    const originalEvents = [
-      rewriteEvents[0],
-      keyedAssistant("owner", "root", "old-key", "original"),
-    ] as const;
+      ],
+    },
+    {
+      name: "removes a retained event's key",
+      events: [rewriteEvents[0], keyedAssistant("owner", "root", "old-key", "original")],
+      next: [rewriteEvents[0], assistant("owner", "root", "updated")],
+      reassign: false,
+      owners: [{ event_id: "owner", message_idempotency_key: null }],
+    },
+    {
+      name: "reserves the retained owner ahead of a new duplicate",
+      events: [
+        rewriteEvents[0],
+        { type: "custom", id: "removed", parentId: "root" },
+        keyedAssistant("owner", "removed", "retry"),
+      ],
+      next: [
+        rewriteEvents[0],
+        keyedAssistant("new", "root", "retry"),
+        keyedAssistant("owner", "new", "retry"),
+      ],
+      reassign: false,
+      owners: [
+        { event_id: "new", message_idempotency_key: null },
+        { event_id: "owner", message_idempotency_key: "retry" },
+      ],
+    },
+    {
+      name: "promotes a retained duplicate when its owner is removed",
+      events: [
+        rewriteEvents[0],
+        keyedAssistant("owner", "root", "retry"),
+        keyedAssistant("duplicate", "owner", "retry"),
+      ],
+      next: [rewriteEvents[0], keyedAssistant("duplicate", "root", "retry")],
+      reassign: false,
+      owners: [{ event_id: "duplicate", message_idempotency_key: "retry" }],
+    },
+  ])("$name", async ({ events, next, reassign, owners }) => {
     await withRewriteFixture(({ db, scope }) => {
-      const replacementEvents = [
-        originalEvents[0],
-        {
-          ...originalEvents[1],
-          message: { role: "assistant", content: "updated" },
-        },
-      ] as const;
-
-      replaceTranscriptSuffixForTest(scope, originalEvents, replacementEvents);
-
-      expect(readIdempotencyOwners(db, scope.sessionId, "owner")).toEqual([
-        { event_id: "owner", message_idempotency_key: null },
-      ]);
-    }, originalEvents);
+      if (reassign) {
+        db.prepare(
+          "UPDATE transcript_event_identities SET message_idempotency_key = NULL WHERE session_id = ? AND event_id = ?",
+        ).run(scope.sessionId, "duplicate");
+        db.prepare(
+          "UPDATE transcript_event_identities SET message_idempotency_key = ? WHERE session_id = ? AND event_id = ?",
+        ).run("old-key", scope.sessionId, "owner");
+      }
+      replaceTranscriptSuffixForTest(scope, events, next);
+      expect(
+        readIdempotencyOwners(db, scope.sessionId, ...owners.map((row) => row.event_id)),
+      ).toEqual(owners);
+    }, events);
   });
 
   it("preserves the established idempotency owner across retained suffix rows", async () => {
@@ -870,139 +870,63 @@ describe("SQLite exact transcript suffix replacement", () => {
     }, duplicateKeyEvents);
   });
 
-  it("reserves a retained idempotency owner when a new duplicate precedes it", async () => {
-    const duplicateKeyEvents = [
-      rewriteEvents[0],
-      { type: "custom", id: "removed", parentId: "root" },
-      keyedAssistant("owner", "removed", "retry"),
-    ] as const;
-    await withRewriteFixture(({ db, scope }) => {
-      replaceTranscriptSuffixForTest(scope, duplicateKeyEvents, [
-        duplicateKeyEvents[0],
-        keyedAssistant("new", "root", "retry"),
-        { ...duplicateKeyEvents[2], parentId: "new" },
-      ]);
-
-      expect(readIdempotencyOwners(db, scope.sessionId, "new", "owner")).toEqual([
-        { event_id: "new", message_idempotency_key: null },
-        { event_id: "owner", message_idempotency_key: "retry" },
-      ]);
-    }, duplicateKeyEvents);
-  });
-
-  it("promotes a retained duplicate when its prior idempotency owner is removed", async () => {
-    const duplicateKeyEvents = [
-      rewriteEvents[0],
-      keyedAssistant("owner", "root", "retry"),
-      keyedAssistant("duplicate", "owner", "retry"),
-    ] as const;
-    await withRewriteFixture(({ db, scope }) => {
-      replaceTranscriptSuffixForTest(scope, duplicateKeyEvents, [
-        duplicateKeyEvents[0],
-        { ...duplicateKeyEvents[2], parentId: "root" },
-      ]);
-
-      expect(readIdempotencyOwners(db, scope.sessionId, "duplicate")).toEqual([
-        { event_id: "duplicate", message_idempotency_key: "retry" },
-      ]);
-    }, duplicateKeyEvents);
-  });
-
-  it("skips malformed unchanged-prefix rows while promoting an idempotency owner", async () => {
-    const duplicateKeyEvents = [
-      rewriteEvents[0],
-      assistant("corrupt-prefix", "root", "corrupt"),
-      keyedAssistant("duplicate", "corrupt-prefix", "retry"),
-      keyedAssistant("owner", "duplicate", "retry"),
-    ] as const;
-    await withRewriteFixture(({ db, scope }) => {
-      db.prepare(
-        "UPDATE transcript_event_identities SET message_idempotency_key = NULL WHERE session_id = ? AND event_id = ?",
-      ).run(scope.sessionId, "duplicate");
-      db.prepare(
-        "UPDATE transcript_event_identities SET message_idempotency_key = ? WHERE session_id = ? AND event_id = ?",
-      ).run("retry", scope.sessionId, "owner");
-      db.prepare(
-        `UPDATE transcript_events
-         SET event_json = ?
-         WHERE session_id = ?
-           AND seq = (
-             SELECT seq
-             FROM transcript_event_identities
-             WHERE session_id = ? AND event_id = ?
-           )`,
-      ).run("{", scope.sessionId, scope.sessionId, "corrupt-prefix");
-
-      replaceTranscriptSuffixForTest(scope, duplicateKeyEvents, duplicateKeyEvents.slice(0, -1), 3);
-
-      expect(readIdempotencyOwners(db, scope.sessionId, "duplicate")).toEqual([
-        { event_id: "duplicate", message_idempotency_key: "retry" },
-      ]);
-    }, duplicateKeyEvents);
-  });
-
-  it("promotes an idempotency owner beyond the projection rebuild row bound", async () => {
-    const prefix = Array.from({ length: SYNC_REBUILD_MAX_ROWS + 1 }, (_value, index) => ({
+  it.each([
+    { name: "malformed prefix", count: 2, corrupt: true, prefixKey: "retry" },
+    {
+      name: "duplicate beyond the rebuild bound",
+      count: SYNC_REBUILD_MAX_ROWS + 1,
+      corrupt: false,
+      prefixKey: "\tretry\n",
+    },
+    {
+      name: "unique key beyond the rebuild bound",
+      count: SYNC_REBUILD_MAX_ROWS + 1,
+      corrupt: false,
+      prefixKey: undefined,
+    },
+  ])("removes the keyed suffix with a $name", async ({ count, corrupt, prefixKey }) => {
+    const duplicateIndex = corrupt ? 1 : 0;
+    const prefix = Array.from({ length: count }, (_, index) => ({
       type: "message" as const,
-      id: `keyed-prefix-${index}`,
-      parentId: index === 0 ? "root" : `keyed-prefix-${index - 1}`,
+      id: `prefix-${index}`,
+      parentId: index === 0 ? "root" : `prefix-${index - 1}`,
       message: {
         role: "assistant" as const,
         content: `prefix ${index}`,
-        ...(index === 0 ? { idempotencyKey: "\tretry\n" } : {}),
+        ...(index === duplicateIndex && prefixKey ? { idempotencyKey: prefixKey } : {}),
       },
     }));
-    const owner = {
-      type: "message" as const,
-      id: "keyed-suffix-owner",
-      parentId: prefix.at(-1)?.id ?? "root",
-      message: { role: "assistant" as const, content: "owner", idempotencyKey: "retry" },
-    };
-    const duplicateKeyEvents = [rewriteEvents[0], ...prefix, owner];
-    const duplicateId = prefix[0]!.id;
-    await withRewriteFixture(({ db, scope }) => {
-      db.prepare(
-        "UPDATE transcript_event_identities SET message_idempotency_key = NULL WHERE session_id = ? AND event_id = ?",
-      ).run(scope.sessionId, duplicateId);
-      db.prepare(
-        "UPDATE transcript_event_identities SET message_idempotency_key = ? WHERE session_id = ? AND event_id = ?",
-      ).run("retry", scope.sessionId, owner.id);
-      replaceTranscriptSuffixForTest(
-        scope,
-        duplicateKeyEvents,
-        duplicateKeyEvents.slice(0, -1),
-        duplicateKeyEvents.length - 1,
-      );
-      expect(readIdempotencyOwners(db, scope.sessionId, duplicateId)).toEqual([
-        { event_id: duplicateId, message_idempotency_key: "retry" },
-      ]);
-    }, duplicateKeyEvents);
-  });
-
-  it("removes a unique keyed suffix beyond the projection rebuild row bound", async () => {
-    const prefix = Array.from({ length: SYNC_REBUILD_MAX_ROWS + 1 }, (_value, index) => ({
-      type: "message" as const,
-      id: `unique-prefix-${index}`,
-      parentId: index === 0 ? "root" : `unique-prefix-${index - 1}`,
-      message: { role: "assistant" as const, content: `prefix ${index}` },
-    }));
-    const owner = {
-      type: "message" as const,
-      id: "unique-suffix-owner",
-      parentId: prefix.at(-1)?.id ?? "root",
-      message: { role: "assistant" as const, content: "owner", idempotencyKey: "unique" },
-    };
+    const owner = keyedAssistant("owner", prefix.at(-1)!.id, prefixKey ? "retry" : "unique");
     const events = [rewriteEvents[0], ...prefix, owner];
+    const duplicateId = prefix[duplicateIndex]!.id;
     await withRewriteFixture(({ db, scope }) => {
+      if (prefixKey) {
+        db.prepare(
+          "UPDATE transcript_event_identities SET message_idempotency_key = NULL WHERE session_id = ? AND event_id = ?",
+        ).run(scope.sessionId, duplicateId);
+        db.prepare(
+          "UPDATE transcript_event_identities SET message_idempotency_key = ? WHERE session_id = ? AND event_id = ?",
+        ).run("retry", scope.sessionId, owner.id);
+      }
+      if (corrupt) {
+        db.prepare(
+          "UPDATE transcript_events SET event_json = ? WHERE session_id = ? AND seq = 1",
+        ).run("{", scope.sessionId);
+      }
       replaceTranscriptSuffixForTest(scope, events, events.slice(0, -1), events.length - 1);
-
-      expect(
-        db
-          .prepare(
-            "SELECT event_id FROM transcript_event_identities WHERE session_id = ? AND event_id = ?",
-          )
-          .get(scope.sessionId, owner.id),
-      ).toBeUndefined();
+      if (prefixKey) {
+        expect(readIdempotencyOwners(db, scope.sessionId, duplicateId)).toEqual([
+          { event_id: duplicateId, message_idempotency_key: "retry" },
+        ]);
+      } else {
+        expect(
+          db
+            .prepare(
+              "SELECT event_id FROM transcript_event_identities WHERE session_id = ? AND event_id = ?",
+            )
+            .get(scope.sessionId, owner.id),
+        ).toBeUndefined();
+      }
     }, events);
   });
 

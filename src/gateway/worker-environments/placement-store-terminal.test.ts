@@ -15,7 +15,7 @@ import {
   createWorkerSessionPlacementStore,
   type WorkerSessionPlacementStore,
 } from "./placement-store.js";
-import { completeReclaimedWorkspaceTeardown } from "./placement-teardown.js";
+import { completeWorkerWorkspaceTeardown } from "./placement-teardown.js";
 import { advancePlacementFixtureToActive } from "./placement-test-fixtures.js";
 
 const SESSION: WorkerSessionPlacementIdentity = {
@@ -83,7 +83,7 @@ describe("worker placement terminal persistence", () => {
     await store.acceptWorkspaceResult(claim);
 
     expect(
-      await completeReclaimedWorkspaceTeardown({
+      await completeWorkerWorkspaceTeardown({
         placements: store,
         turnClaim: claim,
         environmentId: active.environmentId,
@@ -100,13 +100,13 @@ describe("worker placement terminal persistence", () => {
 
   it("records a clean terminal timestamp for an idle destroyed-worker reclaim", async () => {
     const active = await advanceToActive();
-    const draining = store.startDrain({
+    const draining = await store.startDrain({
       sessionId: active.sessionId,
       environmentId: active.environmentId,
       ownerEpoch: active.activeOwnerEpoch,
       expectedGeneration: active.generation,
     });
-    const reconciling = store.startReconcile({
+    const reconciling = await store.startReconcile({
       sessionId: active.sessionId,
       environmentId: active.environmentId,
       ownerEpoch: active.activeOwnerEpoch,
@@ -114,7 +114,7 @@ describe("worker placement terminal persistence", () => {
     });
 
     expect(
-      store.transition({
+      await store.transition({
         sessionId: active.sessionId,
         from: "reconciling",
         to: "reclaimed",
@@ -129,37 +129,46 @@ describe("worker placement terminal persistence", () => {
     });
   });
 
-  it("atomically fails a pending result and preserves its bounded reason across restart", async () => {
-    await advanceToActive();
-    const { claim, pending } = await pendingResult();
-    const closedClaims: WorkerSessionTurnClaim[] = [];
-    const unregister = store.registerTurnClaimClosedHandler((closedClaim) => {
-      closedClaims.push(closedClaim);
-    });
-    nowMs = 2_000;
-    const disappearance = `cloud worker disappeared: ${"provider-detail ".repeat(100)}`;
+  it.each(["active", "draining"] as const)(
+    "atomically fails a %s pending result and preserves its bounded reason across restart",
+    async (state) => {
+      await advanceToActive();
+      const { claim, pending } = await pendingResult();
+      if (state === "draining") {
+        await store.startWorkspaceResultDrain(claim);
+      }
+      const closedClaims: WorkerSessionTurnClaim[] = [];
+      const unregister = store.registerTurnClaimClosedHandler((closedClaim) => {
+        closedClaims.push(closedClaim);
+      });
+      nowMs = 2_000;
+      const disappearance = `cloud worker disappeared: ${"provider-detail ".repeat(100)}`;
 
-    const failed = store.failWorkspaceResultAndReleaseTurn(pending, new Error(disappearance));
-    expect(failed).toMatchObject({
-      state: "failed",
-      generation: claim.placementGeneration + 3,
-      turnClaim: null,
-      terminalAtMs: 2_000,
-    });
-    expect(failed.terminalReason).toHaveLength(1_024);
-    expect(failed.terminalReason).toMatch(/^cloud worker disappeared: provider-detail/u);
-    expect(failed.recoveryError).toBe(failed.terminalReason);
-    expect(await store.listPendingWorkspaceResultsAsync()).toEqual([]);
-    expect(closedClaims).toEqual([claim]);
-    unregister();
+      const failed = await store.failWorkspaceResultAndReleaseTurn(
+        pending,
+        new Error(disappearance),
+      );
+      expect(failed).toMatchObject({
+        state: "failed",
+        generation: claim.placementGeneration + 3,
+        turnClaim: null,
+        terminalAtMs: 2_000,
+      });
+      expect(failed.terminalReason).toHaveLength(1_024);
+      expect(failed.terminalReason).toMatch(/^cloud worker disappeared: provider-detail/u);
+      expect(failed.recoveryError).toBe(failed.terminalReason);
+      expect(await store.listPendingWorkspaceResultsAsync()).toEqual([]);
+      expect(closedClaims).toEqual([claim]);
+      unregister();
 
-    await closeStateDatabaseForTest();
-    database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
-    store = createWorkerSessionPlacementStore({ database, now: () => nowMs });
-    const reopened = store.get(SESSION.sessionId);
-    expect(reopened).toMatchObject({ state: "failed", terminalAtMs: 2_000 });
-    expect(reopened?.terminalReason).toBe(failed.terminalReason);
-  });
+      await closeStateDatabaseForTest();
+      database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
+      store = createWorkerSessionPlacementStore({ database, now: () => nowMs });
+      const reopened = store.get(SESSION.sessionId);
+      expect(reopened).toMatchObject({ state: "failed", terminalAtMs: 2_000 });
+      expect(reopened?.terminalReason).toBe(failed.terminalReason);
+    },
+  );
 
   it("atomically abandons an offline remote-exec result while preserving its exact active owner", async () => {
     await advanceToActive(SESSION, "paired-device-environment", "remote-exec");
@@ -279,9 +288,9 @@ describe("worker placement terminal persistence", () => {
       }),
     ).toMatchObject({ kind: "execute" });
 
-    expect(() =>
+    await expect(
       store.failWorkspaceResultAndReleaseTurn(pending, new Error("worker disappeared")),
-    ).toThrow("running worker session operation");
+    ).rejects.toThrow("running worker session operation");
     expect(store.get(claim.sessionId)).toMatchObject({
       state: "active",
       turnClaim: { claimId: claim.claimId },
@@ -300,7 +309,7 @@ describe("worker placement terminal persistence", () => {
       }),
     ).toBe(true);
     expect(
-      store.failWorkspaceResultAndReleaseTurn(pending, new Error("worker disappeared")),
+      await store.failWorkspaceResultAndReleaseTurn(pending, new Error("worker disappeared")),
     ).toMatchObject({ state: "failed", turnClaim: null });
     expect(await store.listPendingWorkspaceResultsAsync()).toEqual([]);
   });
@@ -316,7 +325,7 @@ describe("worker placement terminal persistence", () => {
     const second = await advanceToActive(otherIdentity, sharedEnvironmentId);
     const { pending } = await pendingResult();
 
-    const failed = store.failWorkspaceResultAndReleaseTurn(
+    const failed = await store.failWorkspaceResultAndReleaseTurn(
       pending,
       new Error("cloud worker disappeared: shared lease destroyed"),
     );
@@ -344,9 +353,9 @@ describe("worker placement terminal persistence", () => {
       END;
     `);
 
-    expect(() =>
+    await expect(
       store.failWorkspaceResultAndReleaseTurn(pending, new Error("worker disappeared")),
-    ).toThrow("injected pending delete failure");
+    ).rejects.toThrow("injected pending delete failure");
     expect(store.get(active.sessionId)).toMatchObject({
       state: "active",
       generation: active.generation,

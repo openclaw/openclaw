@@ -19,7 +19,6 @@ import {
 import {
   captureOwnedManagedUpdatePreflightContext,
   resolveOwnedManagedUpdatePreflightEnv,
-  revalidateUpdateDatabaseContext,
 } from "./update-command-managed-context.js";
 import { collectServiceInspectionFailureFacts } from "./update-command-result.js";
 import type { ManagedServiceRootRedirect } from "./update-command-service-context-types.js";
@@ -40,10 +39,16 @@ type UpdateManagedServiceInspectionParams = {
   managedServiceRoot?: string;
   expectedServices?: ReadonlyMap<string, PreManagedServiceStop>;
   expectedForeground?: true;
+  assertCurrent?: () => void;
   handoffFromGateway?: Parameters<
     typeof maybeStopManagedServiceBeforeMutableUpdate
   >[0]["handoffFromGateway"];
 };
+
+function managedServicePreflightError(code: Parameters<typeof createUpdatePreflightFailure>[0]) {
+  const failure = createUpdatePreflightFailure(code, undefined, "managed-service-preflight");
+  return new UpdatePreMutationError("managed-service-preflight", failure.message, failure);
+}
 
 /** The installed process owns ancestry and coordination inspection before candidate code runs. */
 export async function inspectUpdateManagedServices(params: UpdateManagedServiceInspectionParams) {
@@ -68,6 +73,7 @@ async function inspectUpdateManagedServicesInScope(params: UpdateManagedServiceI
       timeoutMs: params.timeoutMs,
       phase: "inspect",
       expectedService: params.expectedServices?.get(root),
+      assertCurrent: params.assertCurrent,
       handoffFromGateway: params.handoffFromGateway,
     }).catch((error: unknown) => {
       if (hasCommandProcessCleanupError(error)) {
@@ -97,24 +103,14 @@ async function inspectUpdateManagedServicesInScope(params: UpdateManagedServiceI
         inspected.serviceUpdateVerdict?.kind === "unresolved") &&
       inspected.offline !== true
     ) {
-      const failure = createUpdatePreflightFailure(
-        "service-not-offline",
-        undefined,
-        "managed-service-preflight",
-      );
-      throw new UpdatePreMutationError("managed-service-preflight", failure.message, failure);
+      throw managedServicePreflightError("service-not-offline");
     }
     if (
       params.managedServiceRoot &&
       (inspected.serviceUpdateVerdict?.kind !== "owned" ||
         !inspected.serviceUpdateVerdict.refreshDefinition)
     ) {
-      const failure = createUpdatePreflightFailure(
-        "service-definition-not-writable",
-        undefined,
-        "managed-service-preflight",
-      );
-      throw new UpdatePreMutationError("managed-service-preflight", failure.message, failure);
+      throw managedServicePreflightError("service-definition-not-writable");
     }
     services.set(root, inspected);
     if (inspected.serviceUpdateVerdict?.kind === "owned") {
@@ -128,12 +124,7 @@ async function inspectUpdateManagedServicesInScope(params: UpdateManagedServiceI
     invocationCwd: params.invocationCwd,
   });
   if ((params.managedServiceRootRedirect || params.managedServiceRoot) && !managedEnv) {
-    const failure = createUpdatePreflightFailure(
-      "service-context-changed",
-      undefined,
-      "managed-service-preflight",
-    );
-    throw new UpdatePreMutationError("managed-service-preflight", failure.message, failure);
+    throw managedServicePreflightError("service-context-changed");
   }
   return {
     service,
@@ -185,7 +176,7 @@ export async function inspectUpdateDatabaseContexts(
   });
 }
 
-/** Recheck the admitted service and stores together before mutable update work. */
+/** Check target schema support; native service effects validate their own authority. */
 export async function revalidateUpdateDatabaseContexts(
   params: Omit<Parameters<typeof inspectUpdateDatabaseContexts>[0], "roots" | "expectedServices">,
   admission: Awaited<ReturnType<typeof inspectUpdateDatabaseContexts>> | undefined,
@@ -197,13 +188,6 @@ export async function revalidateUpdateDatabaseContexts(
       "Database admission was not inspected.",
     );
   }
-  await inspectUpdateDatabaseContexts({
-    ...params,
-    roots: [...admission.services.keys()],
-    expectedServices: admission.services,
-    expectedForeground: admission.foreground,
-  });
-  admission.contexts = await Promise.all(admission.contexts.map(revalidateUpdateDatabaseContext));
   const installedContexts = params.candidateAdmissionChecks?.includes("database-schema")
     ? admission.contexts.filter((context) => !isCandidateAdmissionContextCovered(context.env))
     : admission.contexts;

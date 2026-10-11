@@ -583,6 +583,14 @@ extension OpenClawChatView {
             hasLiveContent: self.showsWorkingIndicator || self.hasVisibleStreamingAssistantText,
             searchActive: self.isSearchPresented)
         ForEach(groups) { group in
+            let parts = ForEach(group.parts) { part in
+                self.runPart(
+                    part,
+                    metadata: transcript.metadata,
+                    contextWindowTokens: contextWindowTokens,
+                    isGrouped: group.runID != nil,
+                    answerID: group.runID == nil ? nil : group.answerID)
+            }
             if group.runID != nil {
                 ChatAssistantRunFrame(
                     assistantName: self.assistantName,
@@ -591,25 +599,11 @@ extension OpenClawChatView {
                     showsAssistantAvatar: self.showsAssistantAvatars,
                     isClean: self.composerChrome == .clean)
                 {
-                    ForEach(group.parts) { part in
-                        self.runPart(
-                            part,
-                            metadata: transcript.metadata,
-                            contextWindowTokens: contextWindowTokens,
-                            isGrouped: true,
-                            answerID: group.answerID)
-                    }
+                    parts
                     if group.includesLive { self.liveAssistantContent }
                 }
             } else {
-                ForEach(group.parts) { part in
-                    self.runPart(
-                        part,
-                        metadata: transcript.metadata,
-                        contextWindowTokens: contextWindowTokens,
-                        isGrouped: false,
-                        answerID: nil)
-                }
+                parts
                 if group.includesLive { self.liveAssistantContent }
             }
         }
@@ -694,7 +688,7 @@ extension OpenClawChatView {
                 .equatable()
         }
 
-        if let text = viewModel.streamingAssistantText {
+        if let text = viewModel.liveAssistantText {
             let preparedText = ChatStreamingAssistantText(
                 sourceText: text,
                 includesThinking: self.displayOptions.contains(.reasoning))
@@ -753,7 +747,7 @@ extension OpenClawChatView {
             },
             inlineWidgetResolverReady: self.viewModel.healthOK,
             inlineWidgetResourceResolver: { [weak viewModel] path, failedResource in
-                await viewModel?.resolveInlineWidgetResource(path: path, replacing: failedResource)
+                await viewModel?.transport.resolveInlineWidgetResource(path: path, replacing: failedResource)
             },
             mediaArtifactResolverReady: self.viewModel.healthOK,
             mediaPlaybackAllowed: self.mediaPlaybackAllowed,
@@ -829,12 +823,12 @@ extension OpenClawChatView {
                 self.hoveredMessageID = nil
             }
         }
-        row.contextMenu { self.messageMenuActions(for: msg) }
+        row.contextMenu { ChatDeferredContent { self.messageMenuActions(for: msg) } }
     }
 
     private func messageActionsMenu(for message: OpenClawChatMessage) -> some View {
         Menu {
-            self.messageMenuActions(for: message)
+            ChatDeferredContent { self.messageMenuActions(for: message) }
         } label: {
             Label("Message Actions", systemImage: "ellipsis")
         }
@@ -998,33 +992,29 @@ extension OpenClawChatView {
 
     @ViewBuilder
     private func messageListOverlay(hasVisibleContent: Bool) -> some View {
-        if self.viewModel.isLoading {
-            EmptyView()
-        } else if self.composerChrome == .clean, self.visibleEmptyAssistantIntro != nil {
-            EmptyView()
-        } else if let error = activeErrorText {
-            if hasVisibleContent {
-                EmptyView()
-            } else {
-                let presentation = self.errorPresentation(for: error)
+        if !self.viewModel.isLoading, self.visibleEmptyAssistantIntro == nil {
+            if let error = activeErrorText {
+                if !hasVisibleContent {
+                    let presentation = self.errorPresentation(for: error)
+                    ChatNoticeCard(
+                        systemImage: presentation.systemImage,
+                        title: presentation.title,
+                        message: presentation.message,
+                        actionTitle: "Refresh",
+                        action: { self.viewModel.refresh() })
+                        .padding(.horizontal, 24)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
+            } else if self.showsEmptyState {
                 ChatNoticeCard(
-                    systemImage: presentation.systemImage,
-                    title: presentation.title,
-                    message: presentation.message,
-                    actionTitle: "Refresh",
-                    action: { self.viewModel.refresh() })
+                    systemImage: "bubble.left.and.bubble.right.fill",
+                    title: self.emptyStateTitle,
+                    message: self.emptyStateMessage,
+                    actionTitle: nil,
+                    action: nil)
                     .padding(.horizontal, 24)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-        } else if self.showsEmptyState {
-            ChatNoticeCard(
-                systemImage: "bubble.left.and.bubble.right.fill",
-                title: self.emptyStateTitle,
-                message: self.emptyStateMessage,
-                actionTitle: nil,
-                action: nil)
-                .padding(.horizontal, 24)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }
 
@@ -1037,7 +1027,7 @@ extension OpenClawChatView {
     }
 
     private var hasVisibleStreamingAssistantText: Bool {
-        guard let text = self.viewModel.streamingAssistantText else { return false }
+        guard let text = self.viewModel.liveAssistantText else { return false }
         return AssistantTextParser.hasVisibleContent(
             in: text,
             includeThinking: self.displayOptions.contains(.reasoning))
@@ -1155,24 +1145,19 @@ extension OpenClawChatView {
     }
 
     private func restoreInitialScrollPosition() {
-        switch chatReaderInitialRestorePolicy() {
-        case .liveEdge:
+        if chatReaderInitialRestorePolicy() == .latestTurn,
+           let latestTurnStartID = self.latestVisibleTurnStartID
+        {
+            self.followTarget = nil
+            self.hasNewerContentBelow = chatReaderHasNewerContent(
+                after: latestTurnStartID,
+                visibleIDs: self.transcriptPresentation.rows.map(\.id),
+                hasTransientContent: self.hasVisibleTransientContent)
+            self.moveScrollPosition(to: latestTurnStartID, anchor: Layout.newTurnAnchor)
+        } else {
             self.followTarget = .latest
             self.hasNewerContentBelow = false
             self.moveScrollPosition(to: self.scrollerBottomID)
-        case .latestTurn:
-            if let latestTurnStartID = latestVisibleTurnStartID {
-                self.followTarget = nil
-                self.hasNewerContentBelow = chatReaderHasNewerContent(
-                    after: latestTurnStartID,
-                    visibleIDs: self.transcriptPresentation.rows.map(\.id),
-                    hasTransientContent: self.hasVisibleTransientContent)
-                self.moveScrollPosition(to: latestTurnStartID, anchor: Layout.newTurnAnchor)
-            } else {
-                self.followTarget = .latest
-                self.hasNewerContentBelow = false
-                self.moveScrollPosition(to: self.scrollerBottomID)
-            }
         }
     }
 
@@ -1470,6 +1455,7 @@ private struct ChatNoticeCard: View {
                         .font(OpenClawChatTypography.body(size: 15, weight: .semibold, relativeTo: .subheadline))
                 }
                 .buttonStyle(.borderedProminent)
+                .tint(OpenClawChatTheme.accent)
                 .controlSize(.large)
             }
         }

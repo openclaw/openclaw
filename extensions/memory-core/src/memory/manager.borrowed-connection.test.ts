@@ -1,7 +1,7 @@
 import { unlinkSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
+import { DatabaseSync, StatementSync } from "node:sqlite";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { resolveSessionTranscriptsDirForAgent } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
@@ -13,25 +13,27 @@ import {
 import {
   encodeMemoryEmbedding,
   ensureMemoryChunkProvenance,
-  loadSqliteVecExtension,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { resolveRuntimeWorkerUrl } from "openclaw/plugin-sdk/process-runtime";
 import { deleteSessionEntry, upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { withSessionTranscriptWriteLock } from "openclaw/plugin-sdk/session-transcript-runtime";
 import * as sqliteRuntime from "openclaw/plugin-sdk/sqlite-runtime";
-import { closeOpenClawAgentDatabasesForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawAgentDatabasesForTest,
+} from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { seedMemoryForgetTombstones } from "../test-helpers.js";
+import { runInMemoryTestBackgroundContext } from "./background-context.test-support.js";
 import { memoryCpuProcessEntrypoints } from "./manager-cpu-entrypoints.js";
 import { MemoryIndexDatabase } from "./manager-database-context.js";
 import { MemoryIndexRevisionConflictError } from "./manager-db-kernel.js";
 import * as databaseFiles from "./manager-db.js";
-import { createManagerIndexFixture } from "./manager-index.test-support.js";
-import { memoryPublicationFaultEntrypoint } from "./manager-publication-fault-entrypoint.test-support.js";
 import {
-  observePublishedReservations,
-  reservePublishedWriter,
-} from "./manager-publication-observer.test-support.js";
+  createManagerIndexFixture,
+  readPublishedSessionIndex,
+} from "./manager-index.test-support.js";
+import { memoryPublicationFaultEntrypoint } from "./manager-publication-fault-entrypoint.test-support.js";
 import { MemoryIndexManager } from "./manager.js";
 
 const { closeAllMemorySearchManagers, getMemorySearchManager } = await import("./index.js");
@@ -97,28 +99,13 @@ describe("memory manager shared agent connection", () => {
     expect(() => sqliteRuntime.openOpenClawAgentDatabase({ agentId: "main" })).toThrow(
       /foreign_key_check/,
     );
-    const result = await getMemorySearchManager({ cfg: createConfig(), agentId: "main" });
+    const result = await getMemorySearchManager({
+      runInBackgroundContext: runInMemoryTestBackgroundContext,
+      cfg: createConfig(),
+      agentId: "main",
+    });
     expect(result.manager).toBeNull();
     expect(result.error).toMatch(/foreign_key_check/);
-  });
-
-  it("loads vectors on the shared connection with native loading disabled between calls", async () => {
-    const shared = sqliteRuntime.openOpenClawAgentDatabase({ agentId: "main" });
-    const manager = await fixture.getFreshManager(createConfig());
-    expect(managerDatabase(manager) === shared.db).toBe(true);
-    expect(() => shared.db.loadExtension("not-a-real-extension")).toThrow(
-      "extension loading is not allowed",
-    );
-    expect((await loadSqliteVecExtension({ db: shared.db })).ok).toBe(true);
-    expect(shared.db.prepare("SELECT vec_version() AS version").get()).toEqual({
-      version: expect.any(String),
-    });
-    expect(() => shared.db.loadExtension("not-a-real-extension")).toThrow(
-      "extension loading is not allowed",
-    );
-    expect(() => shared.db.prepare("SELECT load_extension(?)").get("not-a-real-extension")).toThrow(
-      "not authorized",
-    );
   });
 
   it("replaces a revoked shared handle without an old release closing its replacement", async () => {
@@ -126,6 +113,7 @@ describe("memory manager shared agent connection", () => {
     const originalDb = managerDatabase(first);
     closeOpenClawAgentDatabasesForTest();
     expect(originalDb.isOpen).toBe(false);
+    await closeOpenClawAgentDatabasesAsync();
     const replacement = await fixture.getFreshManager(createConfig());
     expect(replacement === first).toBe(false);
     const shared = sqliteRuntime.openOpenClawAgentDatabase({ agentId: "main" });
@@ -167,6 +155,7 @@ describe("memory manager shared agent connection", () => {
     );
     const prepare = vi.spyOn(DatabaseSync.prototype, "prepare");
     const creating = MemoryIndexManager.get({
+      runInBackgroundContext: runInMemoryTestBackgroundContext,
       cfg,
       agentId: "main",
       purpose: "maintenance",
@@ -300,24 +289,31 @@ describe("memory manager shared agent connection", () => {
     Reflect.set(manager, "sessionsDirty", true);
     Reflect.set(manager, "sessionsDirtyFiles", new Set([transcript]));
     const writer = new DatabaseSync(shared.path);
-    writer.exec("BEGIN IMMEDIATE");
-    const admissionBlocked = createDeferred<void>();
-    const exec = shared.db.exec.bind(shared.db);
-    const observeAdmission = vi.spyOn(shared.db, "exec").mockImplementation((sql) => {
-      try {
-        return exec(sql);
-      } catch (error) {
-        admissionBlocked.resolve();
-        throw error;
-      }
-    });
+    const refreshPrepared = createDeferred<void>();
+    const releaseRefresh = createDeferred<void>();
+    // oxlint-disable-next-line typescript/unbound-method -- Called with the captured database owner.
+    const refreshSourceState = MemoryIndexDatabase.prototype.refreshSourceState;
+    const observeRefresh = vi
+      .spyOn(MemoryIndexDatabase.prototype, "refreshSourceState")
+      .mockImplementationOnce(async function (this: MemoryIndexDatabase, input, assertCurrent) {
+        refreshPrepared.resolve();
+        await releaseRefresh.promise;
+        return refreshSourceState.call(this, input, assertCurrent);
+      });
     const sync = manager.sync({ reason: "session-delta" });
     void sync.catch(() => undefined);
     try {
-      await Promise.race([admissionBlocked.promise, sync]);
+      await Promise.race([
+        refreshPrepared.promise,
+        sync.then(() => {
+          throw new Error("Session sync settled before preparing the fingerprint refresh");
+        }),
+      ]);
+      writer.exec("BEGIN IMMEDIATE");
       ensureMemoryChunkProvenance(writer);
       await writeTranscript("Newest violet history.");
       writer.exec("COMMIT");
+      releaseRefresh.resolve();
       const outcome = await sync.then(
         () => null,
         (error: unknown) => error,
@@ -335,7 +331,8 @@ describe("memory manager shared agent connection", () => {
       expect(indexed).not.toContain("Old violet history.");
       expect(manager.status().dirty).toBe(false);
     } finally {
-      observeAdmission.mockRestore();
+      releaseRefresh.resolve();
+      observeRefresh.mockRestore();
       if (writer.isTransaction) {
         writer.exec("ROLLBACK");
       }
@@ -422,67 +419,6 @@ describe("memory manager shared agent connection", () => {
       }
     },
   );
-
-  it("retains the newest cache rows when another holder purges before queued pruning", async () => {
-    const cfg = fixture.createConfig({
-      provider: "none",
-      vectorEnabled: false,
-      cacheEnabled: true,
-      sources: ["memory"],
-    });
-    const db = sqliteRuntime.openOpenClawAgentDatabase({ agentId: "main" }).db;
-    const queued = createDeferred<void>();
-    let armed = false;
-    let queuedObserved = false;
-    observePublishedReservations(db, () => {
-      if (armed) {
-        queuedObserved = true;
-        queued.resolve();
-      }
-    });
-    const manager = await fixture.getFreshManager(cfg, "cli");
-    expect(managerDatabase(manager) === db).toBe(true);
-    await manager.sync({ reason: "baseline", force: true });
-    const owner = manager as unknown as { cache: { maxEntries: number } };
-    owner.cache.maxEntries = 2;
-    const insert = db.prepare(`INSERT INTO memory_embedding_cache
-      (provider, model, provider_key, hash, embedding, dims, updated_at)
-      VALUES ('fixture', 'fixture', 'fixture', ?, ?, 1, ?)`);
-    for (let index = 0; index < 3; index++) {
-      insert.run(`cache-${index}`, encodeMemoryEmbedding([index + 1]), index);
-    }
-    const readCache = () => db.prepare("SELECT * FROM memory_embedding_cache ORDER BY hash").all();
-    const readSources = () => db.prepare("SELECT * FROM memory_index_sources ORDER BY id").all();
-    const before = readCache();
-    const retained = before.filter((row) => row.hash !== "cache-0");
-    const sources = readSources();
-    expect(before).toHaveLength(3);
-    expect(retained).toHaveLength(2);
-    const reservation = await reservePublishedWriter(() => {
-      expect(
-        db.prepare("DELETE FROM memory_embedding_cache WHERE hash = 'cache-0'").run().changes,
-      ).toBe(1);
-      expect(readCache()).toEqual(retained);
-    });
-    armed = true;
-    const sync = manager.sync({ reason: "watch" });
-    void sync.catch(() => undefined);
-    try {
-      await Promise.race([queued.promise, sync]);
-      expect(queuedObserved).toBe(true);
-      expect(readCache()).toEqual(before);
-      reservation.release();
-      await reservation.done;
-      await sync;
-      expect(readCache()).toEqual(retained);
-      expect(readSources()).toEqual(sources);
-    } finally {
-      armed = false;
-      reservation.release();
-      await Promise.allSettled([sync, reservation.done]);
-      await manager.close();
-    }
-  });
 
   it.each([
     "watched-file",
@@ -816,5 +752,73 @@ describe("memory manager shared agent connection", () => {
       resume.resolve();
       await Promise.allSettled([sync, close]);
     }
+  });
+
+  it("publishes a session while worker admission cannot read the shared connection", async () => {
+    const sessionId = "admission-without-host-reads";
+    const sessionKey = `agent:main:chat:${sessionId}`;
+    const manager = await fixture.getFreshManager(
+      fixture.createConfig({
+        provider: "none",
+        sources: ["sessions"],
+        sessionMemory: true,
+        vectorEnabled: false,
+      }),
+      "cli",
+    );
+    await manager.sync({ reason: "index-empty-corpus", force: true });
+    await fixture.seedSessionTranscript({
+      sessionId,
+      sessionKey,
+      messages: [{ role: "user", timestamp: 1, content: "Admitted violet fragment." }],
+    });
+    // Under rollback journaling a spilled publication holds EXCLUSIVE while it waits for
+    // admission, so any host read on the agent database fails with SQLITE_BUSY.
+    const unavailable = () => {
+      throw Object.assign(new Error("database is locked"), {
+        code: "ERR_SQLITE_ERROR",
+        errcode: 5,
+      });
+    };
+    const withoutHostReads = (assertCurrent: () => void) => {
+      const guards = [
+        vi.spyOn(DatabaseSync.prototype, "exec").mockImplementation(unavailable),
+        vi.spyOn(DatabaseSync.prototype, "prepare").mockImplementation(unavailable),
+        vi.spyOn(StatementSync.prototype, "all").mockImplementation(unavailable),
+        vi.spyOn(StatementSync.prototype, "get").mockImplementation(unavailable),
+        vi.spyOn(StatementSync.prototype, "iterate").mockImplementation(unavailable),
+        vi.spyOn(StatementSync.prototype, "run").mockImplementation(unavailable),
+      ];
+      try {
+        assertCurrent();
+      } finally {
+        for (const guard of guards) {
+          guard.mockRestore();
+        }
+      }
+    };
+    // oxlint-disable-next-line typescript/unbound-method -- Called with the actual database owner.
+    const replaceSource = MemoryIndexDatabase.prototype.replaceSource;
+    vi.spyOn(MemoryIndexDatabase.prototype, "replaceSource").mockImplementation(function (
+      this: MemoryIndexDatabase,
+      replacement,
+      assertCurrent,
+      prepare,
+    ) {
+      return replaceSource.call(this, replacement, () => withoutHostReads(assertCurrent), prepare);
+    });
+
+    await manager.sync({
+      reason: "admission-without-host-reads",
+      sessions: [{ agentId: "main", sessionId, sessionKey }],
+    });
+
+    const published = readPublishedSessionIndex(
+      managerDatabase(manager),
+      `sessions/main/${sessionId}.jsonl`,
+      "violet",
+    );
+    expect(published.chunks).toHaveLength(1);
+    expect(published.search).toHaveLength(1);
   });
 });

@@ -2,7 +2,6 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { repairToolUseResultPairing } from "../../agents/session-transcript-repair.js";
 import { normalizeLegacySessionEntryDelivery } from "../../infra/state-migrations.legacy-session-store.js";
@@ -24,10 +23,11 @@ import {
   persistSessionTranscriptTurn,
   readLatestTranscriptAssistantText,
   replaceSessionEntry,
-  replaceTranscriptEvents,
   updateSessionEntry,
 } from "./session-accessor.js";
 import * as activeTranscriptEvents from "./session-accessor.sqlite-active-events.js";
+import { replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
+import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 import { waitForSessionTranscriptIndexReconcile } from "./session-transcript-reconcile.js";
 import { useTempSessionsFixture } from "./test-helpers.js";
@@ -1841,9 +1841,11 @@ describe("appendAssistantMessageToSessionTranscript", () => {
 
   it("rejects revision materialization between the initial check and SQLite append", async () => {
     await writeTranscriptStore({ lifecycleRevision: undefined });
-    const databasePath = resolveSqliteTargetFromSessionStorePath(fixture.storePath(), {
-      agentId: "main",
-    }).path;
+    const scope = createFixtureTranscriptScope();
+    const entry = loadSessionEntry(scope);
+    if (!entry) {
+      throw new Error("expected session entry");
+    }
     let revisionMaterialized = false;
 
     const result = await appendExactAssistantMessageToSessionTranscript({
@@ -1852,25 +1854,12 @@ describe("appendAssistantMessageToSessionTranscript", () => {
       expectedSessionId: sessionId,
       storePath: fixture.storePath(),
       beforeMessageWrite: ({ message }) => {
-        const external = new DatabaseSync(databasePath);
-        try {
-          const row = external
-            .prepare("SELECT entry_json FROM session_nodes WHERE session_key = ?")
-            .get(sessionKey) as { entry_json: string };
-          const replacement = {
-            ...(JSON.parse(row.entry_json) as SessionEntry),
-            lifecycleRevision: "replacement-revision",
-            updatedAt: 2,
-          };
-          external
-            .prepare(
-              "UPDATE session_nodes SET entry_json = ?, updated_at = ? WHERE session_key = ?",
-            )
-            .run(JSON.stringify(replacement), replacement.updatedAt, sessionKey);
-          revisionMaterialized = true;
-        } finally {
-          external.close();
-        }
+        replaceSessionEntrySync(scope, {
+          ...entry,
+          lifecycleRevision: "replacement-revision",
+          updatedAt: 2,
+        });
+        revisionMaterialized = true;
         return message;
       },
       message: createExactAssistantMessage({ text: "late output" }),

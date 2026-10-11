@@ -12,20 +12,15 @@ private final class PendingRunOwnerReference {
 }
 
 extension OpenClawChatViewModel {
-    func resolveInlineWidgetResource(
-        path: String,
-        replacing failedResource: OpenClawChatWidgetResource?) async -> OpenClawChatWidgetResource?
-    {
-        await self.transport.resolveInlineWidgetResource(path: path, replacing: failedResource)
-    }
-
-    func handleTransportEvent(_ evt: OpenClawChatTransportEvent) {
-        guard !self.isTransportDetached else { return }
+    /// Returns the task that settles the reconciliation this event starts, when it starts one.
+    @discardableResult
+    func handleTransportEvent(_ evt: OpenClawChatTransportEvent) -> Task<Void, Never>? {
+        guard !self.isTransportDetached else { return nil }
         self.handleSidebarEvent(evt)
-        if case .sessionObserver = evt, self.sidebarData != nil { return }
+        if case .sessionObserver = evt, self.sidebarData != nil { return nil }
         if self.usesWebConversation {
             self.handleWebConversationEvent(evt)
-            return
+            return nil
         }
         switch evt {
         case let .health(ok):
@@ -56,27 +51,28 @@ extension OpenClawChatViewModel {
             self.refreshSourceContext()
             self.refreshAgentsIfRequested()
             let session = self.currentSessionSnapshot()
-            Task { [weak self] in await self?.fetchModels(sessionSnapshot: session) }
-            Task { [weak self] in await self?.refreshSwarmCapability(sessionSnapshot: session) }
+            let models = Task { [weak self] in await self?.fetchModels(sessionSnapshot: session) }
+            let swarm = Task { [weak self] in await self?.refreshSwarmCapability(sessionSnapshot: session) }
+            return Task { _ = await (models.value, swarm.value) }
         case let .sessionsChanged(change):
-            self.handleSessionsChangedEvent(change)
+            return self.handleSessionsChangedEvent(change)
         case let .sessionObserver(digest):
             self.sessions = ChatSessionSidebarModel.applying(
                 observerDigest: digest,
                 to: self.sessions,
                 activeAgentId: self.currentSessionSnapshot().deliveryAgentID)
         case let .chat(chat):
-            self.handleChatEvent(chat)
+            return self.handleChatEvent(chat)
         case let .sessionMessage(message):
             self.handleSessionMessageEvent(message)
         case let .agent(agent):
-            self.handleAgentEvent(agent)
+            return self.handleAgentEvent(agent)
         case let .sessionReaction(event):
             self.handleSessionReactionEvent(event)
         case let .progressCardChanged(event):
-            self.handleProgressCardChanged(event)
+            return self.handleProgressCardChanged(event)
         case .questionRequested, .questionResolved:
-            self.handleQuestionEvent(evt)
+            return self.handleQuestionEvent(evt)
         case .routeChanged, .reconnected, .seqGap:
             self.resetSessionReactions()
             self.invalidateSessionMetadataReadiness()
@@ -107,18 +103,19 @@ extension OpenClawChatViewModel {
             Task { [weak self] in await self?.refreshSwarmCapability() }
             self.invalidateHistorySnapshots()
             self.invalidateRunSnapshots()
-            self.clearPendingRuns(reason: nil)
+            self.clearPendingRuns()
             self.invalidateIncompleteLiveRunUsage()
             self.clearStreamingActivity()
             let context = self.beginHistoryRequest()
             // Question refresh is best-effort and must not delay transcript
             // recovery behind a slow gateway round trip.
             Task { await self.refreshQuestions() }
-            Task {
+            return Task {
                 await self.refreshHistoryAfterRun(historyRequest: context)
                 await self.pollHealthIfNeeded(force: true, sessionSnapshot: context.session)
             }
         }
+        return nil
     }
 
     func applySessionChangeProjection(
@@ -137,7 +134,7 @@ extension OpenClawChatViewModel {
         }
     }
 
-    private func handleSessionsChangedEvent(_ change: OpenClawChatSessionsChangedEvent) {
+    private func handleSessionsChangedEvent(_ change: OpenClawChatSessionsChangedEvent) -> Task<Void, Never>? {
         // Broad subscribers see every agent's canonical global row. Gate
         // ownership before the shared-key projection can replace local state.
         let eventSessionKey = change.sessionKey ?? change.session?.key
@@ -145,7 +142,11 @@ extension OpenClawChatViewModel {
             sessionKey: eventSessionKey,
             agentId: change.agentId,
             activeAgentId: self.currentSessionSnapshot().deliveryAgentID)
-        else { return }
+        else { return nil }
+        let matchesCurrentSession = { (key: String?) in
+            key.map { self.matchesCurrentSessionKey(incoming: $0, agentId: change.agentId, current: self.sessionKey) }
+                ?? false
+        }
         let swarmEvent = self.observeSwarmEvent(change)
         let ownedSwarmActivityNote = swarmEvent && SelfContainedSwarmHelpers.isActivityNote(change)
 
@@ -154,7 +155,7 @@ extension OpenClawChatViewModel {
            phase == "start" || phase == "end" || phase == "error"
         {
             self.handleLifecycleSessionChange(change, phase: phase)
-            return
+            return nil
         }
 
         self.applySessionChangeProjection(change, ownedSwarmActivityNote: ownedSwarmActivityNote)
@@ -164,15 +165,10 @@ extension OpenClawChatViewModel {
         if change.reason == "groups" {
             self.sessionGroupsRevision += 1
             self.refreshSessions(limit: 50)
-            return
+            return nil
         }
         if change.reason == "rewind" || change.reason == "branch-switch" {
-            guard let sessionKey = change.sessionKey,
-                  self.matchesCurrentSessionKey(
-                      incoming: sessionKey,
-                      agentId: change.agentId,
-                      current: self.sessionKey)
-            else { return }
+            guard matchesCurrentSession(change.sessionKey) else { return nil }
             self.replyTarget = nil
             self.narration = ChatNarration()
             self.runMessageScopesByRunID.removeAll()
@@ -180,27 +176,20 @@ extension OpenClawChatViewModel {
             let context = self.beginHistoryRequest()
             if change.reason == "branch-switch" {
                 let switchActivity = self.beginSessionBranchSwitchActivity(for: context.session)
-                Task {
+                return Task {
                     defer { self.endSessionBranchSwitchActivity(switchActivity) }
                     await self.reconcileSessionBranchChange(
                         switchActivity,
                         confirmFromBranchRefresh: true)
                 }
-                return
             }
-            Task {
+            return Task {
                 await self.refreshHistoryAfterRun(historyRequest: context)
                 guard self.isCurrentSession(context.session) else { return }
                 await self.refreshSessionBranches(confirmingBranchChange: true)
             }
-            return
         }
-        if phase == "message", let eventSessionKey,
-           self.matchesCurrentSessionKey(
-               incoming: eventSessionKey,
-               agentId: change.agentId,
-               current: self.sessionKey)
-        {
+        if phase == "message", matchesCurrentSession(eventSessionKey) {
             self.cancelHistoryInvalidationRefresh()
             self.invalidateHistorySnapshots()
             let context = self.beginHistoryRequest()
@@ -209,16 +198,11 @@ extension OpenClawChatViewModel {
                 await Self.refreshInvalidatedHistory(owner: owner, request: context)
             })
         }
-        guard change.reason == "patch" || change.reason == "command-metadata" else { return }
+        guard change.reason == "patch" || change.reason == "command-metadata" else { return nil }
         self.refreshSessions(limit: 50)
-        guard let eventSessionKey,
-              self.matchesCurrentSessionKey(
-                  incoming: eventSessionKey,
-                  agentId: change.agentId,
-                  current: self.sessionKey)
-        else { return }
+        guard matchesCurrentSession(eventSessionKey) else { return nil }
         let session = self.currentSessionSnapshot()
-        Task { [weak self] in await self?.fetchModels(sessionSnapshot: session) }
+        return Task { [weak self] in await self?.fetchModels(sessionSnapshot: session) }
     }
 
     private func handleLifecycleSessionChange(
@@ -489,7 +473,7 @@ extension OpenClawChatViewModel {
         self.applyDeferredExternalStateIfReady()
     }
 
-    private func handleChatEvent(_ chat: OpenClawChatEventPayload) {
+    private func handleChatEvent(_ chat: OpenClawChatEventPayload) -> Task<Void, Never>? {
         let explicitRunID = ChatPayloadDecoding.trimmedNonEmptyString(chat.runId)
         let isOurRun = explicitRunID.map { self.pendingRuns.contains($0) } ?? false
         if let runID = explicitRunID {
@@ -508,16 +492,14 @@ extension OpenClawChatViewModel {
                 agentId: chat.agentId,
                 current: self.sessionKey)
         } ?? true
-        if !matchesCurrentSession, !isOurRun {
-            return
-        }
+        guard matchesCurrentSession || isOurRun else { return nil }
         if chat.state == "delta", let runID = explicitRunID {
-            guard self.pendingRuns.isEmpty || self.pendingRuns.contains(runID) else { return }
+            guard self.pendingRuns.isEmpty || self.pendingRuns.contains(runID) else { return nil }
             self.invalidateRunSnapshots()
             self.adoptRun(
                 runId: runID,
                 bufferedText: OpenClawChatEventText.assistantText(from: chat) ?? "")
-            return
+            return nil
         }
 
         let isTerminal = chat.state == "final" || chat.state == "aborted" || chat.state == "error"
@@ -556,12 +538,12 @@ extension OpenClawChatViewModel {
                 }
                 self.appendFinalChatMessageIfPresent(chat)
                 let context = self.beginHistoryRequest()
-                Task { await self.refreshHistoryAfterRun(historyRequest: context) }
+                return Task { _ = await self.refreshHistoryAfterRun(historyRequest: context) }
             }
-            return
+            return nil
         }
 
-        guard isTerminal, let terminalRunID else { return }
+        guard isTerminal, let terminalRunID else { return nil }
         if chat.state == "error" {
             self.errorText = chat.errorMessage ?? "Chat failed"
         }
@@ -575,12 +557,11 @@ extension OpenClawChatViewModel {
         self.appendFinalChatMessageIfPresent(chat)
         let context = self.beginHistoryRequest()
         self.applyDeferredExternalStateIfReady()
-        Task { await self.refreshHistoryAfterRun(historyRequest: context) }
+        return Task { _ = await self.refreshHistoryAfterRun(historyRequest: context) }
     }
 
     private func appendFinalChatMessageIfPresent(_ chat: OpenClawChatEventPayload) {
-        guard chat.state == "final" else { return }
-        guard let text = OpenClawChatEventText.assistantText(from: chat) else { return }
+        guard chat.state == "final", let text = OpenClawChatEventText.assistantText(from: chat) else { return }
 
         let decoded = chat.message.flatMap {
             try? GatewayPayloadDecoding.decode($0, as: OpenClawChatMessage.self)
@@ -639,32 +620,31 @@ extension OpenClawChatViewModel {
         return timestamped
     }
 
-    private func handleAgentEvent(_ evt: OpenClawAgentEventPayload) {
+    private func handleAgentEvent(_ evt: OpenClawAgentEventPayload) -> Task<Void, Never>? {
         if evt.stream == "usage" {
             self.handleAgentUsageEvent(evt)
-            return
+            return nil
         }
 
         let isPendingRun = self.pendingRuns.contains(evt.runId)
         let isAdvertisedRun = self.activeSessionRunIDs.contains(evt.runId)
         let isLegacySessionStream = self.pendingRuns.isEmpty && self.sessionId == evt.runId
         if evt.stream == "lifecycle" {
-            guard isPendingRun || isAdvertisedRun || isLegacySessionStream else { return }
-            self.handleAgentLifecycleEvent(
+            guard isPendingRun || isAdvertisedRun || isLegacySessionStream else { return nil }
+            return self.handleAgentLifecycleEvent(
                 evt,
                 isPendingRun: isPendingRun,
                 isAdvertisedRun: isAdvertisedRun,
                 isSelectedRun: self.liveUsageRunID == evt.runId,
                 isLegacySessionStream: isLegacySessionStream)
-            return
         }
 
         let isSelectedPendingRun = isPendingRun && self.liveUsageRunID == evt.runId
         if evt.stream == "item", evt.data["kind"]?.value as? String == "preamble" {
             self.handleAgentNarration(evt)
-            return
+            return nil
         }
-        guard isSelectedPendingRun || isLegacySessionStream else { return }
+        guard isSelectedPendingRun || isLegacySessionStream else { return nil }
         self.invalidateRunSnapshots()
         self.logDiagnostic(
             "chat.ui event agent stream=\(evt.stream) "
@@ -683,12 +663,12 @@ extension OpenClawChatViewModel {
             // fighting the durable card. SUNSET 2026-10-18: this fallback is a fixed cutover window,
             // not a permanent contract. On that date delete it together with the Gateway's legacy
             // stream:"plan" dual-emit and the Android twin in ChatController.kt. Tracked: #125639.
-            guard self.progressCardStoreAvailable == false else { return }
-            guard evt.data["phase"]?.value as? String == "update" else { return }
+            guard self.progressCardStoreAvailable == false else { return nil }
+            guard evt.data["phase"]?.value as? String == "update" else { return nil }
             let steps = Self.parseLegacyProgressCardSteps(evt.data["steps"])
             guard !steps.isEmpty else {
                 self.clearProgressCard()
-                return
+                return nil
             }
             self.legacyProgressCardRevision &+= 1
             let explanation = (evt.data["explanation"]?.value as? String)?
@@ -706,6 +686,7 @@ extension OpenClawChatViewModel {
         default:
             break
         }
+        return nil
     }
 
     private func handleAgentToolEvent(_ evt: OpenClawAgentEventPayload) {
@@ -750,7 +731,7 @@ extension OpenClawChatViewModel {
         else {
             return
         }
-        self.applyLiveRunUsage(
+        self.acceptLiveRunSequence(
             runID: evt.runId,
             sequence: sequence,
             outputTokens: outputTokens)
@@ -761,7 +742,7 @@ extension OpenClawChatViewModel {
         isPendingRun: Bool,
         isAdvertisedRun: Bool,
         isSelectedRun: Bool,
-        isLegacySessionStream: Bool)
+        isLegacySessionStream: Bool) -> Task<Void, Never>?
     {
         let phase = Self.lowercasedAgentEventString(evt.data["phase"])
         let status = Self.lowercasedAgentEventString(evt.data["status"])
@@ -775,11 +756,11 @@ extension OpenClawChatViewModel {
         let isTerminalPhase = phase == "end" || phase == "complete" || phase == "completed"
 
         if phase == "start" {
-            guard let sequence = evt.seq else { return }
+            guard let sequence = evt.seq else { return nil }
             _ = self.acceptLiveRunSequence(runID: evt.runId, sequence: sequence)
-            return
+            return nil
         }
-        guard isTerminalPhase || isFailure || aborted || isSuccessfulStatus else { return }
+        guard isTerminalPhase || isFailure || aborted || isSuccessfulStatus else { return nil }
         let acceptedLifecycle = if isLegacySessionStream {
             true
         } else if let sequence = evt.seq {
@@ -787,7 +768,7 @@ extension OpenClawChatViewModel {
         } else {
             isPendingRun || isAdvertisedRun || isSelectedRun
         }
-        guard acceptedLifecycle else { return }
+        guard acceptedLifecycle else { return nil }
 
         self.invalidateHistorySnapshots()
         if isPendingRun {
@@ -800,7 +781,7 @@ extension OpenClawChatViewModel {
         }
         guard isSelectedRun || isLegacySessionStream else {
             self.refreshSessions(limit: 50)
-            return
+            return nil
         }
 
         self.updateActiveSessionRunWithoutChatSnapshot(false)
@@ -810,7 +791,7 @@ extension OpenClawChatViewModel {
         self.clearStreamingActivity()
         let context = self.beginHistoryRequest()
         self.applyDeferredExternalStateIfReady()
-        Task { await self.refreshHistoryAfterRun(historyRequest: context) }
+        return Task { _ = await self.refreshHistoryAfterRun(historyRequest: context) }
     }
 
     private static func lowercasedAgentEventString(_ value: AnyCodable?) -> String? {
@@ -870,7 +851,7 @@ extension OpenClawChatViewModel {
     private func refreshIfPending(
         runId: String,
         sessionSnapshot: SessionSnapshot,
-        armID: UInt64? = nil,
+        armID: UInt64,
         after timestamp: Double?,
         terminalState: OpenClawChatRunTerminalState? = nil,
         allowNoOutputCompletion: Bool = false,
@@ -919,40 +900,29 @@ extension OpenClawChatViewModel {
                 self.clearStreamingActivity()
                 return true
             }
-            if let timestamp,
-               self.clearPendingRunIfAssistantMessagePresent(runId: runId, after: timestamp)
-            {
-                return false
-            }
-            if terminalState == .completed, allowNoOutputCompletion {
-                self.retirePendingRun(runId, hapticEvent: .runCompleted)
-                self.clearStreamingActivity()
-                return false
-            }
-            return true
+        }
+        guard !refresh.hasInFlightRun else { return true }
+        if let timestamp,
+           self.clearPendingRunIfAssistantMessagePresent(runId: runId, after: timestamp)
+        {
+            return false
         }
         if refresh.applied, terminalState == .completed, allowNoOutputCompletion {
-            if let timestamp,
-               self.clearPendingRunIfAssistantMessagePresent(runId: runId, after: timestamp)
-            {
-                return false
-            }
             self.retirePendingRun(runId, hapticEvent: .runCompleted)
             self.clearStreamingActivity()
             return false
         }
-        guard !refresh.hasInFlightRun, let timestamp else { return true }
-        return !self.clearPendingRunIfAssistantMessagePresent(runId: runId, after: timestamp)
+        return true
     }
 
     private func isCurrentPendingRunOwner(
         runId: String,
         sessionSnapshot: SessionSnapshot,
-        armID: UInt64?) -> Bool
+        armID: UInt64) -> Bool
     {
         self.isCurrentSession(sessionSnapshot) &&
             self.pendingRuns.contains(runId) &&
-            (armID == nil || self.pendingRunOwnerArmIDs[runId] == armID)
+            self.pendingRunOwnerArmIDs[runId] == armID
     }
 
     @discardableResult
@@ -1040,7 +1010,6 @@ extension OpenClawChatViewModel {
         in messages: [OpenClawChatMessage]) -> Bool
     {
         let nextIndex = messages.index(after: userIndex)
-        guard nextIndex < messages.endIndex else { return false }
         return messages[nextIndex...].contains { message in
             guard message.role.lowercased() == "assistant", message.streamSegmentID == nil else { return false }
             let text = message.content.compactMap(\.text).joined(separator: "\n")
@@ -1067,7 +1036,6 @@ extension OpenClawChatViewModel {
     func assistantHapticEventAfterLatestUser() -> OpenClawChatHaptics.Event? {
         guard let userIndex = messages.lastIndex(where: { $0.role.lowercased() == "user" }) else { return nil }
         let nextIndex = self.messages.index(after: userIndex)
-        guard nextIndex < self.messages.endIndex else { return nil }
         return self.messages[nextIndex...].reversed().lazy.compactMap(Self.assistantHapticEvent).first
     }
 
@@ -1462,11 +1430,8 @@ extension OpenClawChatViewModel {
         }
     }
 
-    func clearPendingRuns(
-        reason: String?,
-        hapticEvent: OpenClawChatHaptics.Event? = nil)
-    {
-        let runIds = Array(pendingRuns)
+    func clearPendingRuns(hapticEvent: OpenClawChatHaptics.Event? = nil) {
+        let hadPendingRuns = !self.pendingRuns.isEmpty
         for runId in self.pendingRuns {
             self.pendingRunOwnerTasks[runId]?.cancel()
             self.clearLiveRunState(for: runId)
@@ -1475,16 +1440,8 @@ extension OpenClawChatViewModel {
         self.pendingRunOwnerArmIDs.removeAll()
         self.pendingRuns.removeAll()
         self.pendingLocalUserEchoMessageIDsByRunID.removeAll()
-        if !runIds.isEmpty, let hapticEvent {
+        if hadPendingRuns, let hapticEvent {
             self.haptics.perform(hapticEvent)
-        }
-        if let reason, !reason.isEmpty {
-            self.errorText = reason
-            for runId in runIds {
-                self.logDiagnostic(
-                    "chat.ui pending cleared sessionKey=\(self.sessionKey) "
-                        + "runId=\(runId) reason=\(reason)")
-            }
         }
     }
 }

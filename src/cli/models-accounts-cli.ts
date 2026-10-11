@@ -81,25 +81,28 @@ export function registerModelsAccountsCli(models: Command): void {
       );
     });
 
-  addAccountOptions(
-    accounts
-      .command("use <account-id>")
-      .description("Select one of your accounts for new sessions"),
-  ).action(async (authProfileId: string, _opts: unknown, command: Command) => {
-    await run(command, (commands, runtime, options) =>
-      commands.modelsAccountsUseCommand({ ...options, authProfileId }, runtime.defaultRuntime),
+  for (const [action, argument, description] of [
+    ["use", "account-id", "Select one of your accounts for new sessions"],
+    [
+      "clear-default",
+      "provider",
+      "Clear a personal default without deleting credentials or changing existing sessions",
+    ],
+  ] as const) {
+    addAccountOptions(accounts.command(`${action} <${argument}>`).description(description)).action(
+      async (value: string, _opts: unknown, command: Command) => {
+        await run(command, (commands, runtime, options) =>
+          commands.modelsAccountsUpdateDefaultCommand(
+            {
+              ...options,
+              ...(action === "use"
+                ? { action, authProfileId: value }
+                : { action, provider: value }),
+            },
+            runtime.defaultRuntime,
+          ),
+        );
+      },
     );
-  });
-
-  addAccountOptions(
-    accounts
-      .command("clear-default <provider>")
-      .description(
-        "Clear a personal default without deleting credentials or changing existing sessions",
-      ),
-  ).action(async (provider: string, _opts: unknown, command: Command) => {
-    await run(command, (commands, runtime, options) =>
-      commands.modelsAccountsClearDefaultCommand({ ...options, provider }, runtime.defaultRuntime),
-    );
-  });
+  }
 }

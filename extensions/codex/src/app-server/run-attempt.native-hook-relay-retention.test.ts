@@ -92,7 +92,10 @@ function createRelay(
   runId: string,
   hostCapabilities: Parameters<typeof createCodexNativeHookRelay>[0]["hostCapabilities"],
   signal: AbortSignal,
-  admission: Pick<Parameters<typeof createCodexNativeHookRelay>[0], "nativeModelAdmission"> = {},
+  admission: Pick<
+    Parameters<typeof createCodexNativeHookRelay>[0],
+    "nativeModelAdmission" | "remoteCallback"
+  > = {},
 ) {
   const relay = createCodexNativeHookRelay({
     options: { enabled: true },
@@ -149,6 +152,46 @@ describe("runCodexAppServerAttempt native hook relay retention", () => {
   beforeEach(() => {
     // Retention owns this clock; cold preparation must not consume the execution budget.
     vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+  });
+
+  it("reports remote cleanup failure once without rejecting relay drain", async () => {
+    const host = await createAdmittedHostCapabilityTestFixture({ runId: "remote-cleanup" });
+    const client = createClient();
+    const request = vi.spyOn(client.client, "request").mockResolvedValue({});
+    const onCleanupFailure = vi.fn();
+    const relay = createRelay(
+      "remote-cleanup",
+      host.hostCapabilities,
+      new AbortController().signal,
+      {
+        remoteCallback: {
+          config: {
+            url: "https://gateway.example/node/__openclaw__/native-hook",
+            credentialDirectory: "/private/hooks",
+          },
+          client: client.client,
+          timeoutMs: 1_000,
+          onCleanupFailure,
+        },
+      },
+    );
+    try {
+      await relay.prepareInvocation();
+      request.mockRejectedValueOnce(new Error("filesystem unavailable"));
+      relay.unregister();
+      await expect(relay.drain()).resolves.toBeUndefined();
+      await nativeHookRelayUnregisterQueue.flush();
+      expect(onCleanupFailure).toHaveBeenCalledOnce();
+      expect(onCleanupFailure.mock.calls[0]?.[0].message).toBe(
+        "Could not remove the retired native hook relay credential from Codex",
+      );
+    } finally {
+      relay.unregister();
+      await relay.drain();
+      client.close();
+      host.closeHost();
+      host.closeAdmission();
+    }
   });
 
   it("refuses foreign V1 steering before write and fences an accepted same-turn source mismatch", async () => {
@@ -276,7 +319,7 @@ describe("runCodexAppServerAttempt native hook relay retention", () => {
         "unambiguous receiver turn",
       );
       await expect(invoke("parent-b", "unbound-root", "reserved-root")).rejects.toThrow(
-        "receiver turn to be bound",
+        "outside the sender's admitted tree",
       );
       expect(() => capture.assertCurrent()).not.toThrow();
       await expect(
@@ -596,12 +639,32 @@ describe("runCodexAppServerAttempt native hook relay retention", () => {
         createMockPluginRegistry([{ hookName: "before_tool_call", handler: beforeToolCall }]),
       );
 
+      const remote = version === "v1";
       const run = runCodexAppServerAttempt(params, {
         nativeHookRelay: { enabled: true, events: ["pre_tool_use"] },
+        ...(remote
+          ? {
+              pluginConfig: {
+                appServer: {
+                  nativeHookRelay: {
+                    url: "https://gateway.example/node/__openclaw__/native-hook",
+                    credentialDirectory: "/home/node/.native-hooks",
+                  },
+                },
+              },
+            }
+          : {}),
       });
       let relayId: string | undefined;
       try {
-        await turnStarted.promise;
+        await Promise.race([
+          turnStarted.promise,
+          run.then((result) => {
+            throw new Error(
+              `Attempt ended before turn/start: ${String(readAttemptTerminal(result).promptError)}`,
+            );
+          }),
+        ]);
         if (bindBeforeClaim) {
           deferredTurnStart.resolve(undefined);
           await new Promise<void>((resolve) => {
@@ -610,6 +673,12 @@ describe("runCodexAppServerAttempt native hook relay retention", () => {
         }
         const startRequest = harness.requests.find((request) => request.method === "thread/start");
         relayId = extractRelayIdFromThreadRequest(startRequest?.params);
+        if (remote) {
+          expect(JSON.stringify(startRequest?.params)).toContain("--remote-credential");
+          expect(JSON.stringify(startRequest?.params)).not.toContain("--state-db");
+          const methods = harness.requests.map(({ method }) => method);
+          expect(methods.indexOf("fs/writeFile")).toBeLessThan(methods.indexOf("thread/start"));
+        }
         const preDiscoveryPayload = {
           hook_event_name: "PreToolUse",
           agent_id: childThreadId,
@@ -704,6 +773,9 @@ describe("runCodexAppServerAttempt native hook relay retention", () => {
         expect(
           nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId),
         ).toBeDefined();
+        if (remote) {
+          expect(harness.requests.some(({ method }) => method === "fs/remove")).toBe(false);
+        }
         fixture.closeHost();
         fixture.closeAdmission();
         await expect(
@@ -733,6 +805,9 @@ describe("runCodexAppServerAttempt native hook relay retention", () => {
         });
         await harness.notify(childTerminal);
         await nativeHookRelayUnregisterQueue.flush();
+        if (remote) {
+          expect(harness.requests.filter(({ method }) => method === "fs/remove")).toHaveLength(1);
+        }
         expect(
           nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId),
         ).toBeUndefined();

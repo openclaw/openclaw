@@ -257,24 +257,6 @@ describe("invocation-scoped update ownership reader", () => {
     },
   );
 
-  it.each(["owner", "payload", "generation", "deleted"] as const)(
-    "observes committed %s revocation on the next fence",
-    async (change) => {
-      await expectRevocationWithoutWrites(() => {
-        write((database) => {
-          const sql = {
-            owner: "UPDATE managed_update_handoffs SET owner='replacement' WHERE install_root=?",
-            payload: "UPDATE managed_update_handoffs SET payload_json='{}' WHERE install_root=?",
-            generation:
-              "UPDATE managed_update_handoffs SET updated_at=updated_at+1 WHERE install_root=?",
-            deleted: "DELETE FROM managed_update_handoffs WHERE install_root=?",
-          }[change];
-          expect(database.prepare(sql).run(root).changes).toBe(1);
-        });
-      });
-    },
-  );
-
   it.each(["callback failure", "preflight handoff"] as const)(
     "disposes its reader on %s and releases the original lease",
     async (ending) => {
@@ -332,21 +314,19 @@ describe("invocation-scoped update ownership reader", () => {
 
   it("does not reuse a live row as proof of a changed process identity", async () => {
     let refusal: unknown;
-    await expect(
-      withUpdateCommandExecutor(randomUUID(), async (executor) => {
-        const fence = await executor.enter(root);
-        const start = pidAlive.getFileLockProcessStartTime(process.pid);
-        expect(start).not.toBeNull();
-        const original = pidAlive.getFileLockProcessStartTime;
-        vi.spyOn(pidAlive, "getFileLockProcessStartTime").mockImplementation((pid, ...args) =>
-          pid === process.pid ? start! + 1 : original(pid, ...args),
-        );
-        const before = snapshot();
-        const observed = captureFailure(fence.assertCurrent);
-        expect(snapshot()).toEqual(before);
-        refusal = observed;
-      }),
-    ).rejects.toThrow();
+    await withUpdateCommandExecutor(randomUUID(), async (executor) => {
+      const fence = await executor.enter(root);
+      const start = pidAlive.getFileLockProcessStartTime(process.pid);
+      expect(start).not.toBeNull();
+      const original = pidAlive.getFileLockProcessStartTime;
+      vi.spyOn(pidAlive, "getFileLockProcessStartTime").mockImplementation((pid, ...args) =>
+        pid === process.pid ? start! + 1 : original(pid, ...args),
+      );
+      const before = snapshot();
+      const observed = captureFailure(fence.assertCurrent);
+      expect(snapshot()).toEqual(before);
+      refusal = observed;
+    });
     expect(refusal).toBeInstanceOf(UpdateCommandRecoveryPendingError);
     // A mismatched start identity proves the old generation dead to the existing
     // release owner. Refusing its fence must not disable that normal reclamation.
@@ -357,7 +337,16 @@ describe("invocation-scoped update ownership reader", () => {
     });
   });
 
-  const damage = [
+  const damage: { name: string; apply: () => void; windowsSharingError?: string }[] = [
+    ...Object.entries({
+      owner: "UPDATE managed_update_handoffs SET owner='replacement' WHERE install_root=?",
+      payload: "UPDATE managed_update_handoffs SET payload_json='{}' WHERE install_root=?",
+      generation: "UPDATE managed_update_handoffs SET updated_at=updated_at+1 WHERE install_root=?",
+      deleted: "DELETE FROM managed_update_handoffs WHERE install_root=?",
+    }).map(([name, sql]) => ({
+      name: `committed ${name} revocation`,
+      apply: () => write((database) => expect(database.prepare(sql).run(root).changes).toBe(1)),
+    })),
     {
       name: "missing database",
       windowsSharingError: "EBUSY",
@@ -486,32 +475,26 @@ describe("invocation-scoped update ownership reader", () => {
     },
   );
 
-  it.skipIf(process.platform === "win32").each(["database", "parent"] as const)(
-    "refuses unsafe %s permissions without repairing them",
-    async (target) => {
-      await expectRevocationWithoutWrites(() => {
-        fs.chmodSync(
-          target === "database" ? databasePath : directory,
-          target === "database" ? 0o640 : 0o750,
-        );
-      });
-    },
-  );
-
-  it.skipIf(process.platform === "win32").each(["database", "parent"] as const)(
-    "refuses a symlinked %s even when it reaches the original inode",
-    async (target) => {
-      await expectRevocationWithoutWrites(() => {
-        const source = target === "database" ? databasePath : directory;
-        const retained = path.join(
-          root,
-          target === "database" ? "retained.sqlite" : "retained-parent",
-        );
-        fs.renameSync(source, retained);
-        fs.symlinkSync(retained, source, target === "database" ? "file" : "dir");
-      });
-    },
-  );
+  it.skipIf(process.platform === "win32").each([
+    { kind: "permissions", target: "database" },
+    { kind: "permissions", target: "parent" },
+    { kind: "symlink", target: "database" },
+    { kind: "symlink", target: "parent" },
+  ] as const)("refuses unsafe $target $kind without repairing them", async ({ kind, target }) => {
+    await expectRevocationWithoutWrites(() => {
+      const source = target === "database" ? databasePath : directory;
+      if (kind === "permissions") {
+        fs.chmodSync(source, target === "database" ? 0o640 : 0o750);
+        return;
+      }
+      const retained = path.join(
+        root,
+        target === "database" ? "retained.sqlite" : "retained-parent",
+      );
+      fs.renameSync(source, retained);
+      fs.symlinkSync(retained, source, target === "database" ? "file" : "dir");
+    });
+  });
 
   it("refuses a hot journal after warming the reader and preserves its recovery bytes", async () => {
     await expectRevocationWithoutWrites((fence) => {

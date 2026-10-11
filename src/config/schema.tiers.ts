@@ -6,7 +6,7 @@ const ROOT_TIER_PATHS = `
 accessGroups acp agents approvals attachments auth bindings broadcast browser channels
 cloudWorkers commands cron desktop diagnostics discovery env gateway hooks logging mcp memory messages
 meta models nodeHost plugins proxy secrets security session skills storage surfaces talk telemetry tools transcripts
-tts ui update wizard worktreeAcceleration worktreeRoot
+tts ui update wizard worktreeAcceleration worktreeMaxCount worktreeRoot
 `
   .trim()
   .split(/\s+/);
@@ -150,7 +150,7 @@ plugins.slots.contextEngine plugins.slots.memory secrets.providers.*.command
 secrets.providers.*.path secrets.providers.*.source skills.allowBundled
 skills.entries.*.apiKey skills.entries.*.config skills.entries.*.enabled
 skills.entries.*.env skills.install.allowUploadedArchives skills.install.nodeManager
-skills.load.allowSymlinkTargets skills.load.extraDirs skills.workshop.approvalPolicy
+skills.load.allowSymlinkTargets skills.load.extraDirs
 skills.workshop.autonomous.mode talk.provider talk.providers.*.apiKey
 talk.realtime.brain talk.realtime.mode talk.realtime.provider
 talk.realtime.model talk.realtime.providers.*.apiKey talk.realtime.speakerVoice talk.speechLocale

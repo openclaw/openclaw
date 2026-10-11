@@ -20,19 +20,15 @@ export type GatewayConnectAuthSelection = {
   usingStoredDeviceToken?: boolean;
 };
 
-export function selectGatewayConnectAuth(params: {
-  token?: string;
-  bootstrapToken?: string;
-  deviceToken?: string;
-  password?: string;
-  approvalRuntimeToken?: string;
-  agentRuntimeIdentityToken?: string;
-  storedToken?: string;
-  storedScopes?: string[];
-  pendingDeviceTokenRetry?: boolean;
-  trustedDeviceTokenRetry?: boolean;
-  preferBootstrapToken?: boolean;
-}): GatewayConnectAuthSelection {
+export function selectGatewayConnectAuth(
+  params: NonNullable<ConnectParams["auth"]> & {
+    storedToken?: string;
+    storedScopes?: string[];
+    pendingDeviceTokenRetry?: boolean;
+    trustedDeviceTokenRetry?: boolean;
+    preferBootstrapToken?: boolean;
+  },
+): GatewayConnectAuthSelection {
   const authToken = normalized(params.token);
   const bootstrapToken = normalized(params.bootstrapToken);
   const explicitDeviceToken = normalized(params.deviceToken);

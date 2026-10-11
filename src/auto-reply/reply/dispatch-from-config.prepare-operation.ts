@@ -13,7 +13,7 @@ import {
 } from "../../plugins/conversation-binding.js";
 import { withClaimingHookAdmission } from "../../plugins/hook-claim-admission.js";
 import { getGlobalPluginRegistry } from "../../plugins/hook-runner-global.js";
-import { resolveCommandAuthorization } from "../command-auth.js";
+import { resolveCommandAuthorizationAsync } from "../command-auth.js";
 import type { ReplyPayload } from "../reply-payload.js";
 import {
   DispatchReplyOperationAbortedError,
@@ -268,7 +268,7 @@ export async function prepareDispatchOperation(state: PrepareDispatchOperationCo
       );
       // Bound native runtimes need the current owner decision, not stale bind-time identity.
       // The resolver folds internal operator.admin authority into this owner decision.
-      const bindingAuthorization = resolveCommandAuthorization({
+      const bindingAuthorization = await resolveCommandAuthorizationAsync({
         ctx,
         cfg,
         commandAuthorized: ctx.CommandAuthorized,
@@ -287,7 +287,7 @@ export async function prepareDispatchOperation(state: PrepareDispatchOperationCo
               ...state.hookState.inboundClaimEvent,
               senderIsOwner: bindingAuthorization.senderIsOwner,
             };
-            return await state.runWithDispatchLifecycleAdmission(
+            const claim = state.runWithDispatchLifecycleAdmission(
               async () =>
                 await hookRunner.runInboundClaimForPluginOutcome(
                   pluginOwnedBinding.pluginId,
@@ -298,16 +298,14 @@ export async function prepareDispatchOperation(state: PrepareDispatchOperationCo
                   ),
                 ),
             );
+            state.trackDispatchLifecycleWork(claim);
+            return await claim;
           })()
-        : (() => {
-            const pluginLoaded =
-              getGlobalPluginRegistry()?.plugins.some(
-                (plugin) => plugin.id === pluginOwnedBinding.pluginId && plugin.status === "loaded",
-              ) ?? false;
-            return pluginLoaded
-              ? ({ status: "no_handler" } as const)
-              : ({ status: "missing_plugin" } as const);
-          })();
+        : getGlobalPluginRegistry()?.plugins.some(
+              (plugin) => plugin.id === pluginOwnedBinding.pluginId && plugin.status === "loaded",
+            )
+          ? ({ status: "no_handler" } as const)
+          : ({ status: "missing_plugin" } as const);
       if (isPreDispatchOperationAborted()) {
         return { status: "complete" as const, result: finishReplyOperationAbortedDispatch() };
       }
@@ -334,12 +332,11 @@ export async function prepareDispatchOperation(state: PrepareDispatchOperationCo
             targetedClaimOutcome.status === "missing_plugin"
               ? "plugin-bound-fallback-missing-plugin"
               : "plugin-bound-fallback-no-handler";
-          const isUnmentionedGroupFallback =
+          const shouldSuppressUnmentionedFallback =
             (chatType === "group" || chatType === "channel") &&
             ctx.WasMentioned === false &&
-            !state.explicitCommandTurnCtx;
-          const shouldSuppressUnmentionedFallback =
-            isUnmentionedGroupFallback && ctx.GroupRequireMention !== false;
+            !state.explicitCommandTurnCtx &&
+            ctx.GroupRequireMention !== false;
           if (shouldSuppressUnmentionedFallback) {
             markIdle("plugin_binding_fallback_unmentioned");
             recordProcessed("completed", { reason: state.bindingState.pluginFallbackReason });

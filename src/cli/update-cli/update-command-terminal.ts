@@ -16,13 +16,17 @@ import { readCurrentGitUpdateRecovery } from "../../infra/update-runner-git-reco
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import type { UpdateStepResult } from "../../infra/update-step-result.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
-import { defaultRuntime } from "../../runtime.js";
+import { defaultRuntime, ExitError } from "../../runtime.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { exitCliAfterOutput } from "../one-shot-exit.js";
 import { printResult } from "./progress.js";
 import { parseUpdateTimeoutMs, type UpdateCommandOptions } from "./shared.js";
 import { UpdateActivationTimeoutError } from "./update-command-activation.js";
 import type { FinishUpdateParams } from "./update-command-finish-types.js";
+import {
+  recordMutableUpdateInterruption,
+  withMutableUpdateTerminalSettlement,
+} from "./update-command-mutable-signals.js";
 import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
 import {
   recordUpdateResultNextAction,
@@ -48,6 +52,14 @@ type Publisher = (
   onTerminalRecord?: PublishedRecord,
 ) => Promise<UpdateRunResult>;
 const terminalOwners = new WeakMap<Run, { publish?: Publisher }>();
+type TerminalOptions = Pick<UpdateCommandOptions, "json" | "onResult"> & {
+  /** Internal candidate-worker output, never a serialized continuation grant. */
+  onTerminalRecord?: PublishedRecord;
+};
+
+function unexpectedUpdateFailure(cause: unknown) {
+  return { mode: "unknown" as const, durationMs: 0, failure: { cause } };
+}
 
 /** Finalization prepares a report; the outer invocation owns its publication. */
 export function deferUpdateCommandTerminalResult(
@@ -72,11 +84,7 @@ export async function prepareUnexpectedUpdateCommandFailure(
   opts: UpdateCommandOptions & { run: Run },
   onPublishedRecord?: PublishedRecord,
 ): Promise<UpdateCommandFailure> {
-  const failure = {
-    mode: "unknown" as const,
-    durationMs: 0,
-    failure: { cause: error },
-  };
+  const failure = unexpectedUpdateFailure(error);
   let fact: UpdateFailureFact;
   try {
     const recorded = failUpdateCommandRun(error, opts.run);
@@ -112,10 +120,50 @@ export async function prepareUnexpectedUpdateCommandFailure(
 /** Enclose the real executor so its final checks and release precede terminal output. */
 export async function withUpdateCommandTerminalResult<T>(
   operation: (registerRun: (run: Run) => void) => Promise<T>,
-  opts: Pick<UpdateCommandOptions, "json" | "onResult"> & {
-    /** Internal candidate-worker output, never a serialized continuation grant. */
-    onTerminalRecord?: PublishedRecord;
-  } = {},
+  opts: TerminalOptions = {},
+): Promise<T> {
+  let run: Run | undefined;
+  return await withMutableUpdateTerminalSettlement(async (retain) => {
+    try {
+      return await settleUpdateCommandTerminalResult(operation, opts, (admitted) => {
+        run = admitted;
+        retain(admitted);
+      });
+    } catch (error) {
+      if (
+        run &&
+        !(error instanceof UpdateCommandFinalizedRecoveryFailure) &&
+        (error instanceof UpdateCommandPendingRecoveryFailure ||
+          hasCommandProcessCleanupError(error))
+      ) {
+        const input =
+          error instanceof UpdateCommandFailure
+            ? error.result
+            : createUpdateCommandFailureResult(unexpectedUpdateFailure(error));
+        const result = recordMutableUpdateInterruption({ run }, input);
+        if (result !== input || result.reason === "interrupted") {
+          // Uncertain writers prohibit state reads and recovery, not a detached failure report.
+          await printResult(
+            result,
+            { ...opts, run },
+            {
+              readHistory: false,
+              nextAction:
+                "Run openclaw update status, then openclaw update repair to inspect retained recovery.",
+            },
+          );
+          throw new UpdateCommandFinalizedRecoveryFailure(result, 1, undefined, { cause: error });
+        }
+      }
+      throw error;
+    }
+  });
+}
+
+async function settleUpdateCommandTerminalResult<T>(
+  operation: (registerRun: (run: Run) => void) => Promise<T>,
+  opts: TerminalOptions,
+  retain: (run: Run) => void,
 ): Promise<T> {
   const owner: { publish?: Publisher } = {};
   let run: Run | undefined;
@@ -136,6 +184,7 @@ export async function withUpdateCommandTerminalResult<T>(
     }
     run = admitted;
     terminalOwners.set(admitted, owner);
+    retain(admitted);
   };
   let outcome: { value: T } | { error: unknown };
   try {
@@ -157,8 +206,7 @@ export async function withUpdateCommandTerminalResult<T>(
   const activationTimeout =
     "error" in outcome
       ? collectNestedErrorCandidates(outcome.error).find(
-          (error): error is UpdateActivationTimeoutError =>
-            error instanceof UpdateActivationTimeoutError,
+          (error) => error instanceof UpdateActivationTimeoutError,
         )
       : undefined;
   if (run && activationTimeout && !owner.publish) {
@@ -206,6 +254,12 @@ export async function withUpdateCommandTerminalResult<T>(
       ) {
         throw error;
       }
+      if (run && getUpdateRun(run.runId, { env: run.env })?.status === "succeeded") {
+        defaultRuntime.error(
+          `Warning: Update succeeded, but result publication failed: ${createUpdateErrorFact("update", error, run.env).message}`,
+        );
+        return exitCliAfterOutput(defaultRuntime, 0);
+      }
       outcome = {
         error:
           "error" in outcome && outcome.error !== error
@@ -214,7 +268,6 @@ export async function withUpdateCommandTerminalResult<T>(
               })
             : error,
       };
-      published = undefined;
     }
     if (published) {
       notifyResult(published);
@@ -247,19 +300,18 @@ export async function withUpdateCommandTerminalResult<T>(
       );
     }
   }
+  // Executor and artifact cleanup have settled; a reported exit is not a new failure report.
+  if ("error" in outcome && outcome.error instanceof ExitError) {
+    throw outcome.error;
+  }
   if (run && "error" in outcome && !(outcome.error instanceof UpdateCommandFailure)) {
     const error = outcome.error;
     if (hasCommandProcessCleanupError(error)) {
       throw error;
     }
     const causes = collectNestedErrorCandidates(error);
-    const primaryFailure = causes.find(
-      (cause): cause is UpdateCommandFailure => cause instanceof UpdateCommandFailure,
-    );
-    const admission = causes.find(
-      (cause): cause is UnreportedUpdateAdmissionOutcome =>
-        cause instanceof UnreportedUpdateAdmissionOutcome,
-    );
+    const primaryFailure = causes.find((cause) => cause instanceof UpdateCommandFailure);
+    const admission = causes.find((cause) => cause instanceof UnreportedUpdateAdmissionOutcome);
     let failure: UpdateCommandFailure;
     try {
       if (
@@ -299,11 +351,7 @@ export async function withUpdateCommandTerminalResult<T>(
       throw new UpdateCommandPendingRecoveryFailure(
         primaryFailure?.result ??
           admissionResult ??
-          createUpdateCommandFailureResult({
-            mode: "unknown",
-            durationMs: 0,
-            failure: { cause: error },
-          }),
+          createUpdateCommandFailureResult(unexpectedUpdateFailure(error)),
         admissionReport?.nextAction ?? admissionReport?.message ?? formatErrorMessage(cause),
         { cause: error },
       );
@@ -335,7 +383,7 @@ export async function resolveSettledUpdateCommandResult(
     (!(failure instanceof UpdateCommandFailure) ||
       failure instanceof UpdateCommandPendingRecoveryFailure);
   const activationTimeout = collectNestedErrorCandidates(failure).find(
-    (error): error is UpdateActivationTimeoutError => error instanceof UpdateActivationTimeoutError,
+    (error) => error instanceof UpdateActivationTimeoutError,
   );
   const failedStep: UpdateStepResult | undefined = settlementFailed
     ? {
@@ -414,7 +462,11 @@ export async function recordUpdatePackageCompletion(
     return;
   }
   let cleanupFailure: unknown;
-  defaultRuntime.error("Finishing update: checking package backup retention and cleanup.");
+  // Progress goes to the human channel only; --json owns stdout and records the
+  // retention outcome as a step, so this line must not leak into machine output.
+  if (!params.opts.json) {
+    defaultRuntime.log("Finishing update: checking package backup retention and cleanup.");
+  }
   const retained: UpdateStepResult | void = await transaction
     .complete({ activationVerified: result.status === "ok" }, assertCurrent)
     .catch((error: unknown) => {
@@ -461,7 +513,6 @@ export async function recordUpdatePackageCompletion(
       { cause: cleanupFailure },
     );
   }
-  return undefined;
 }
 
 function resolveUnreportedUpdateAdmissionReport(
@@ -483,7 +534,7 @@ function resolveUnreportedUpdateAdmissionReport(
     ],
     stepResult: outcome.report.stepResult ? { steps: outcome.report.stepResult.steps } : undefined,
     message: collectNestedErrorCandidates(error)
-      .filter((candidate): candidate is Error => candidate instanceof Error)
+      .filter((candidate) => candidate instanceof Error)
       .slice(0, 8)
       .map((candidate) => formatErrorMessage(candidate).slice(0, 2_000))
       .join("\n"),
@@ -495,8 +546,7 @@ async function publishUnreportedUpdateAdmissionOutcome(
   run?: Run,
 ): Promise<{ result: UpdateRunResult; exitCode: number }> {
   const outcome = collectNestedErrorCandidates(error).find(
-    (candidate): candidate is UnreportedUpdateAdmissionOutcome =>
-      candidate instanceof UnreportedUpdateAdmissionOutcome,
+    (candidate) => candidate instanceof UnreportedUpdateAdmissionOutcome,
   );
   if (!outcome) {
     throw error;

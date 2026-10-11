@@ -242,7 +242,7 @@ it.for(cases)(
       }
       const { sessionId, sessionKey, agentId } = REQUEST;
       const worktreeId = "abandonment-worktree";
-      insertRegistryWorktree(process.env, {
+      await insertRegistryWorktree(process.env, {
         id: worktreeId,
         name: "abandonment",
         repoFingerprint: "fixture",
@@ -291,14 +291,14 @@ it.for(cases)(
       await placements.markWorkspaceResultPending(claim);
       expect(await placements.listPendingWorkspaceResultsAsync()).toHaveLength(1);
       if (persisted) {
-        placements.beginPlacementMove({
+        await placements.beginPlacementMove({
           sessionId,
           source,
           target: { kind: "gateway" },
           abandonSource: true,
         });
         if (failed) {
-          placements.failWorkspaceResultAndReleaseTurn(
+          await placements.failWorkspaceResultAndReleaseTurn(
             (await placements.listPendingWorkspaceResultsAsync())[0]!,
             "Earlier workspace recovery failed",
           );
@@ -331,7 +331,7 @@ it.for(cases)(
       expect(placements.get(sessionId)).toMatchObject({ state: "local", turnClaim: null });
       expect(await placements.listPendingWorkspaceResultsAsync()).toEqual([]);
       expect(placements.validateTurnClaim(claim)).toBe(false);
-      expect(placements.getPlacementMove(sessionId)).toBeUndefined();
+      expect(await placements.getPlacementMoveAsync(sessionId)).toBeUndefined();
       const environments = await createWorkerEnvironmentStore({ database });
       const retainedCleanup = environments.get(environmentId);
       expect(retainedCleanup).toMatchObject({
@@ -391,7 +391,7 @@ it.for(cases)(
       expect(readSessionArchiveContentSync(deleted.archived[0]!)).toContain(reply);
       expect(loadGatewaySessionEntryReadOnly(sessionKey).entry).toBeUndefined();
       expect(placements.get(sessionId)).toBeUndefined();
-      expect(placements.getPlacementMove(sessionId)).toBeUndefined();
+      expect(await placements.getPlacementMoveAsync(sessionId)).toBeUndefined();
       expect(await placements.listPendingWorkspaceResultsAsync()).toEqual([]);
       expect(environments.get(environmentId)).toEqual(retainedCleanup);
       expect(offlineNodeLookup).toHaveBeenCalledWith("offline-device");

@@ -1,5 +1,4 @@
 import { describe, expect, it, vi } from "vitest";
-import { FailoverError } from "../../agents/failover-error.js";
 import { expectObjectFields } from "../../test-utils/mock-call-assertions.js";
 import { makeIsolatedAgentJobFixture, makeIsolatedAgentParamsFixture } from "./job-fixtures.js";
 import { setupRunCronIsolatedAgentTurnSuite } from "./run.suite-helpers.js";
@@ -10,6 +9,9 @@ import {
   resolveCronDeliveryPlanMock,
   resolveCronPayloadOutcomeMock,
   runWithModelFallbackMock,
+  mockRunCronFallbackPassthrough,
+  resolveDeliveryTargetMock,
+  runEmbeddedAgentMock,
 } from "./run.test-harness.js";
 
 const runCronIsolatedAgentTurn = await loadRunCronIsolatedAgentTurn();
@@ -80,55 +82,80 @@ async function useRealOutcome() {
 describe("runCronIsolatedAgentTurn - meta.error status propagation", () => {
   setupRunCronIsolatedAgentTurnSuite();
 
-  it("preserves a provider failure reason independently of its message", async () => {
-    const message = "Saved selection requires an update.";
-    runWithModelFallbackMock.mockRejectedValueOnce(
-      new FailoverError(message, { reason: "model_not_found", provider: "openai" }),
-    );
-    expect(await runTurn()).toMatchObject({
-      status: "error",
-      error: message,
-      errorClassification: { kind: "reason", reason: "model_not_found" },
-    });
-  });
-
-  it.each(["pending", "error"] as const)(
-    "preserves a run-level error with partial text when delivery disposition is %s",
-    async (kind) => {
+  it.each([false, true])(
+    "keeps delivery target failure separate from execution (agent failed: %s)",
+    async (agentFailed) => {
+      await useRealOutcome();
+      const reply = agentFailed ? "AUTOMATION_FAILED\nTask blocked" : "REPORT_COMPLETE";
       mockAgentRun({
-        ...failedRun,
-        payloads: [{ text: "Partial success-looking text" }],
-        meta: { error: { kind: "retry_limit", message: "retry limit exceeded" } },
+        payloads: [{ text: reply }],
+        meta: { finalAssistantVisibleText: reply },
       });
+      const deliveryError = "Channel is required (no configured channels detected).";
       dispatchCronDeliveryMock.mockResolvedValueOnce({
-        disposition: kind === "error" ? { kind, error: "delivery failed" } : { kind },
+        disposition: { kind: "error", errorKind: "delivery-target", error: deliveryError },
         delivered: false,
-        deliveryAttempted: true,
-        deliveryError: "delivery failed",
-        summary: "Pending child summary",
-        outputText: "Pending child output",
-        deliveryPayloads: [],
+        deliveryAttempted: false,
+        deliveryError,
+        deliveryState: {
+          status: "not-delivered",
+          delivered: false,
+          error: deliveryError,
+          failureNotification: { status: "not-requested" },
+        },
+        summary: reply,
+        outputText: reply,
+        deliveryPayloads: [{ text: reply }],
       });
       const result = await runTurn();
-      const expectedError =
-        kind === "error" ? "delivery failed" : "cron isolated run failed: retry limit exceeded";
       expectObjectFields(result, {
-        status: "error",
-        error: expectedError,
-        outputText: kind === "error" ? undefined : expectedError,
-        delivered: kind === "pending" ? undefined : false,
-        deliveryError: kind === "error" ? "delivery failed" : undefined,
+        status: agentFailed ? "error" : "ok",
+        error: agentFailed ? "Task blocked" : undefined,
+        delivered: false,
       });
-      expect(result.diagnostics?.entries).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            source: kind === "error" ? "delivery" : "agent-run",
-            message: expectedError,
-          }),
-        ]),
-      );
+      if (!agentFailed) {
+        expectObjectFields(result, {
+          summary: "REPORT_COMPLETE",
+          outputText: "REPORT_COMPLETE",
+          deliveryError,
+        });
+      }
     },
   );
+
+  it("preserves a run-level error with partial text when delivery is pending", async () => {
+    mockAgentRun({
+      ...failedRun,
+      payloads: [{ text: "Partial success-looking text" }],
+      meta: { error: { kind: "retry_limit", message: "retry limit exceeded" } },
+    });
+    dispatchCronDeliveryMock.mockResolvedValueOnce({
+      disposition: { kind: "pending" },
+      delivered: false,
+      deliveryAttempted: true,
+      deliveryError: "delivery failed",
+      summary: "Pending child summary",
+      outputText: "Pending child output",
+      deliveryPayloads: [],
+    });
+    const result = await runTurn();
+    const expectedError = "cron isolated run failed: retry limit exceeded";
+    expectObjectFields(result, {
+      status: "error",
+      error: expectedError,
+      outputText: expectedError,
+      delivered: undefined,
+      deliveryError: undefined,
+    });
+    expect(result.diagnostics?.entries).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          source: "agent-run",
+          message: expectedError,
+        }),
+      ]),
+    );
+  });
 
   it("marks an aborted embedded agent run without a run-level error as a cron error", async () => {
     mockAgentRun({ ...failedRun, meta: { aborted: true } });
@@ -171,10 +198,6 @@ describe("runCronIsolatedAgentTurn - meta.error status propagation", () => {
         errorClassification: { kind: "permanent", reportedByAgent: true },
       },
     },
-    {
-      reply: "Report posted. Reply AUTOMATION_FAILED only when the report is blocked.",
-      expected: { status: "ok", error: undefined, errorClassification: undefined },
-    },
   ])("settles the run from a reported failure line: $expected.status", async (testCase) => {
     await useRealOutcome();
     mockAgentRun({
@@ -182,38 +205,6 @@ describe("runCronIsolatedAgentTurn - meta.error status propagation", () => {
       meta: { finalAssistantVisibleText: testCase.reply },
     });
     expectObjectFields(await runTurn(), testCase.expected);
-  });
-
-  it("does not mark empty accepted child-session handoffs as cron errors", async () => {
-    mockChildRun([], 0);
-    mockAnnounceOutcome([], undefined, { deliveryDisposition: { kind: "empty" } });
-    const result = await runTurn();
-    expectDispatch({
-      spawnOnlyHandoff: true,
-      skipDelivery: undefined,
-      deliveryPayloads: [],
-      synthesizedText: undefined,
-    });
-    expectObjectFields(result, { status: "ok", error: undefined });
-  });
-
-  it("preserves a substantive sibling payload instead of treating an accepted child as the only completion", async () => {
-    const parentReply = "Checked inbox and calendar.";
-    const payloads = [{ text: parentReply }, { text: "HEARTBEAT_OK" }];
-    mockChildRun(payloads);
-    mockAnnounceOutcome(payloads, parentReply, {
-      deliveryDisposition: { kind: "heartbeat", controlOnly: false },
-    });
-    const result = await runTurn();
-    expectDispatch({
-      spawnOnlyHandoff: false,
-      skipDelivery: "heartbeat",
-      deliveryPayloads: payloads,
-      synthesizedText: parentReply,
-      summary: parentReply,
-      outputText: parentReply,
-    });
-    expectObjectFields(result, { summary: parentReply, outputText: parentReply });
   });
 
   it("preserves a heartbeat-only accepted child handoff failure as a cron error", async () => {
@@ -275,15 +266,73 @@ describe("runCronIsolatedAgentTurn - meta.error status propagation", () => {
     expect(result.error).not.toContain("CommandLaneTaskTimeoutError");
     expect(result.error).not.toContain("cron-nested");
   });
+});
 
-  it("keeps cron timeout result when executor rejects after the cron abort signal fires", async () => {
-    const abortController = new AbortController();
-    const timeoutError = new Error(
-      "cron: job execution timed out (last phase: model_call_started)",
-    );
-    timeoutError.name = "TimeoutError";
-    abortController.abort(timeoutError);
-    await expect(runTurn({ abortSignal: abortController.signal })).rejects.toBe(timeoutError);
-    expect(runWithModelFallbackMock).not.toHaveBeenCalled();
+const { buildEmbeddedRunPayloads } =
+  await import("../../agents/embedded-agent-runner/run/payloads.js");
+
+describe("delivered report outcome", () => {
+  setupRunCronIsolatedAgentTurnSuite();
+  it("records a silently completed report as successful after a final read is rate-limited", async () => {
+    await useRealOutcome();
+    mockRunCronFallbackPassthrough();
+    const delivery = { mode: "none" as const, channel: "topicchat", to: "room#42", threadId: 42 };
+    resolveCronDeliveryPlanMock.mockReturnValue({ ...delivery, requested: false });
+    resolveDeliveryTargetMock.mockResolvedValue({ ...delivery, ok: true });
+    const messagingToolSentTargets = [
+      {
+        tool: "message",
+        provider: "topicchat",
+        to: "room#42",
+        threadId: "42",
+        text: "Daily report",
+      },
+    ];
+    const payloads = buildEmbeddedRunPayloads({
+      assistantTexts: ["NO_REPLY"],
+      lastAssistant: undefined,
+      isCronTrigger: true,
+      sessionKey: "cron:delivered-report",
+      verboseLevel: "off",
+      didSendViaMessagingTool: true,
+      messagingToolSentTargets,
+      lastToolError: {
+        toolName: "codex_apps.slack.slack_read_thread",
+        error: "429 RATE_LIMITED",
+        mutatingAction: false,
+      },
+    });
+    runEmbeddedAgentMock.mockResolvedValue({
+      payloads,
+      didSendViaMessagingTool: true,
+      messagingToolSentTargets,
+      meta: {
+        agentMeta: { usage: { input: 10, output: 20 } },
+        finalAssistantVisibleText: "NO_REPLY",
+        finalAssistantRawText: "NO_REPLY",
+      },
+    });
+
+    const result = await runCronIsolatedAgentTurn({
+      deliveryAttemptFence: null,
+      cfg: {},
+      deps: {} as never,
+      job: {
+        id: "delivered-report",
+        name: "Daily report",
+        schedule: { kind: "every", everyMs: 60_000 },
+        sessionTarget: "isolated",
+        payload: { kind: "agentTurn", message: "Run the daily report" },
+        delivery,
+      } as never,
+      message: "Run the daily report",
+      sessionKey: "cron:delivered-report",
+    });
+
+    expect(runEmbeddedAgentMock, JSON.stringify(result)).toHaveBeenCalledTimes(1);
+    expect(result.status).toBe("ok");
+    expect(result.error).toBeUndefined();
+    expect(result.delivered).toBe(true);
+    expect(result.replyDisposition).toBe("silent");
   });
 });

@@ -141,16 +141,6 @@ describe("ui package vitest config", () => {
         rows: Array<{
           original: string[];
           selected: Record<string, Array<{ runtime: string; files: string[] }>>;
-          receipts: Array<{
-            requestId: string;
-            value: {
-              version: number;
-              requestId: string;
-              config: string;
-              root: string;
-              files: string[];
-            };
-          }>;
         }>;
         empty: { modules: number; errors: number };
         emptyDiscoveryAllowed: boolean;
@@ -170,14 +160,8 @@ describe("ui package vitest config", () => {
           projectOrder: { native: string[]; actual: string[] };
         };
       };
-      const nodeFiles = new Set([
-        "ui/src/components/desktop/desktop-mobile-keyboard.test.ts",
-        "ui/src/pages/chat/chat-pane-retention.test.ts",
-        "ui/src/pages/chat/chat-thread-retention.test.ts",
-        "ui/src/pages/chat/session-snapshot-store.test.ts",
-        "ui/src/pages/usage/usage-page-retention.test.ts",
-      ]);
       expect(report.discovered.length).toBeGreaterThan(1000);
+      expect(report.discovered).toContain("ui/src/solid-smoke/solid-smoke.test.tsx");
       // Package isolated/timing/Chromium projects retain their separate owners.
       expect(report.rootNodeFiles).toEqual(report.packageNodeFiles);
       expect(report.rootNodeFiles).toContain(
@@ -246,26 +230,11 @@ describe("ui package vitest config", () => {
           .toSorted(),
       ).toEqual(report.discovered);
       for (const row of report.rows) {
-        expect(row.receipts).toHaveLength(4);
-        for (const { requestId, value } of row.receipts) {
-          expect(value).toEqual({
-            version: 1,
-            requestId,
-            config: path.join(process.cwd(), "ui/vitest.config.ts").replaceAll("\\", "/"),
-            root: path.join(process.cwd(), "ui").replaceAll("\\", "/"),
-            files: expect.any(Array),
-          });
-          // Every runtime invocation must retain the complete native shard receipt.
-          expect(value.files.toSorted()).toEqual(row.original);
-        }
         const compatible = row.selected["bun-compatible"]!;
-        expect(compatible.map((selection) => selection.runtime)).toEqual(["node", "bun"]);
-        expect(compatible[0]!.files).toEqual(row.original.filter((file) => nodeFiles.has(file)));
-        expect(compatible[1]!.files).toEqual(row.original.filter((file) => !nodeFiles.has(file)));
-        expect(compatible.flatMap((selection) => selection.files).toSorted()).toEqual(row.original);
+        expect(compatible).toEqual([{ runtime: "bun", files: row.original }]);
         expect(row.selected.dual).toEqual([
           { runtime: "node", files: row.original },
-          compatible[1],
+          { runtime: "bun", files: row.original },
         ]);
       }
     }));
@@ -404,9 +373,12 @@ describe("ui package vitest config", () => {
     }
   });
 
-  it("keeps native Chromium files out of root jsdom without dropping Node-driven Playwright files", async () => {
+  it.each([
+    { patterns: ["ui/src/**/*.test.ts"] },
+    { patterns: ["ui/src/**/*.test.ts", "ui/src/**/*.test.tsx"] },
+  ])("keeps native Chromium files out of root jsdom for $patterns", async ({ patterns }) => {
     const includeFile = path.join(tempDirs.make("ui-node-selection-"), "include.json");
-    writeFileSync(includeFile, JSON.stringify(["ui/src/**/*.test.ts"]));
+    writeFileSync(includeFile, JSON.stringify(patterns));
     const runtimeIncludeFile = path.join(path.dirname(includeFile), "runtime-include.json");
     writeFileSync(
       runtimeIncludeFile,
@@ -415,11 +387,15 @@ describe("ui package vitest config", () => {
     vi.stubEnv("OPENCLAW_VITEST_INCLUDE_FILE", includeFile);
     vi.stubEnv("OPENCLAW_VITEST_POST_SHARD_INCLUDE_FILE", runtimeIncludeFile);
     vi.stubEnv("PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH", includeFile);
-    const probe = vi.fn(() => ({ status: 0 }));
-    vi.doMock("node:child_process", async (importOriginal) => ({
-      ...(await importOriginal<typeof import("node:child_process")>()),
-      spawnSync: probe,
-    }));
+    const probe = vi.fn((..._args: unknown[]) => ({ status: 0 }));
+    vi.doMock("node:child_process", async (importOriginal) => {
+      const childProcess = await importOriginal<typeof import("node:child_process")>();
+      return {
+        ...childProcess,
+        spawnSync: (...args: Parameters<typeof childProcess.spawnSync>) =>
+          args[0] === includeFile ? probe(...args) : childProcess.spawnSync(...args),
+      };
+    });
     vi.resetModules();
     const { default: config, createUiBrowserVitestConfig } = await import("../ui/vitest.config.ts");
     expect(probe).not.toHaveBeenCalled();
@@ -439,6 +415,9 @@ describe("ui package vitest config", () => {
       .filter((file) => file.endsWith(".browser.test.ts"))
       .map((file) => `ui/${file}`);
     const rootFiles = globTestFiles(root.include ?? [], { exclude: root.exclude });
+    expect(rootFiles.includes("ui/src/solid-smoke/solid-smoke.test.tsx")).toBe(
+      patterns.includes("ui/src/**/*.test.tsx"),
+    );
     expect(nativeFiles).toContain("ui/src/components/markdown-mermaid.runtime.browser.test.ts");
     expect(nodeFiles).toContain("ui/src/components/form-controls.browser.test.ts");
     expect(rootFiles.filter((file) => nativeFiles.includes(file))).toEqual([]);
@@ -514,6 +493,7 @@ describe("ui package vitest config", () => {
       ["extensions/workboard/browser/catalog.test.ts"],
     ],
     [[], []],
+    [["ui/src/solid-smoke/solid-smoke.test.tsx"], ["ui/src/solid-smoke/solid-smoke.test.tsx"]],
     [
       ["ui/src/components/markdown.progress.node.test.ts"],
       ["ui/src/components/markdown.progress.node.test.ts"],

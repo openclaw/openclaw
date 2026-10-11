@@ -1,7 +1,6 @@
 import {
   createAccountListHelpers,
   DEFAULT_ACCOUNT_ID,
-  hasConfiguredAccountValue,
   normalizeAccountId,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/account-resolution";
@@ -13,8 +12,11 @@ import {
 import type { SlackAccountConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveAccountEntry } from "openclaw/plugin-sdk/routing";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { hasSlackAccountCredentials } from "./account-configured.js";
-import type { SlackAccountSurfaceFields } from "./account-surface-fields.js";
+import { hasSlackAccountCredentialsFromConfig } from "./account-configured.js";
+import {
+  buildSlackAccountSurfaceFields,
+  type SlackAccountSurfaceFields,
+} from "./account-surface-fields.js";
 import { resolveSlackAppToken, resolveSlackBotToken, resolveSlackUserToken } from "./token.js";
 
 export { resolveSlackReplyToMode } from "./account-reply-mode.js";
@@ -58,19 +60,7 @@ export function resolveSlackOperationToken(
 }
 
 export function hasImplicitDefaultSlackAccount(cfg: OpenClawConfig): boolean {
-  const slack = cfg.channels?.slack;
-  const userIdentity = slack?.postAs === "user";
-  return hasSlackAccountCredentials({
-    config: slack ?? {},
-    identityTokenConfigured:
-      hasConfiguredAccountValue(userIdentity ? slack?.userToken : slack?.botToken) ||
-      hasConfiguredAccountValue(
-        userIdentity ? process.env.SLACK_USER_TOKEN : process.env.SLACK_BOT_TOKEN,
-      ),
-    appTokenConfigured:
-      hasConfiguredAccountValue(slack?.appToken) ||
-      hasConfiguredAccountValue(process.env.SLACK_APP_TOKEN),
-  });
+  return hasSlackAccountCredentialsFromConfig(cfg.channels?.slack, process.env);
 }
 
 const {
@@ -100,32 +90,18 @@ function mergeSlackStreamingConfig(
   if (!baseConfig || !accountConfig) {
     return accountConfig ?? baseConfig;
   }
-  return {
-    ...baseConfig,
-    ...accountConfig,
-    ...(baseConfig.preview || accountConfig.preview
-      ? { preview: { ...baseConfig.preview, ...accountConfig.preview } }
-      : {}),
-    ...(baseConfig.progress || accountConfig.progress
-      ? { progress: { ...baseConfig.progress, ...accountConfig.progress } }
-      : {}),
-    ...(baseConfig.block || accountConfig.block
-      ? {
-          block: {
-            ...baseConfig.block,
-            ...accountConfig.block,
-            ...(baseConfig.block?.coalesce || accountConfig.block?.coalesce
-              ? {
-                  coalesce: {
-                    ...baseConfig.block?.coalesce,
-                    ...accountConfig.block?.coalesce,
-                  },
-                }
-              : {}),
-          },
-        }
-      : {}),
-  };
+  const merged = { ...baseConfig, ...accountConfig };
+  for (const key of ["preview", "progress", "block"] as const) {
+    if (baseConfig[key] || accountConfig[key]) {
+      merged[key] = { ...baseConfig[key], ...accountConfig[key] };
+    }
+  }
+  const baseCoalesce = baseConfig.block?.coalesce;
+  const accountCoalesce = accountConfig.block?.coalesce;
+  if (merged.block && (baseCoalesce || accountCoalesce)) {
+    merged.block.coalesce = { ...baseCoalesce, ...accountCoalesce };
+  }
+  return merged;
 }
 
 export function mergeSlackAccountConfig(
@@ -231,17 +207,7 @@ export function resolveSlackAccount(params: {
     appTokenSource,
     userTokenSource,
     config: merged,
-    groupPolicy: merged.groupPolicy,
-    textChunkLimit: merged.textChunkLimit,
-    mediaMaxMb: merged.mediaMaxMb,
-    reactionNotifications: merged.reactionNotifications,
-    reactionAllowlist: merged.reactionAllowlist,
-    replyToMode: merged.replyToMode,
-    replyToModeByChatType: merged.replyToModeByChatType,
-    actions: merged.actions,
-    slashCommand: merged.slashCommand,
-    dm: merged.dm,
-    channels: merged.channels,
+    ...buildSlackAccountSurfaceFields(merged),
   };
 }
 

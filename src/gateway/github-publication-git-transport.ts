@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { githubRepositoryUrl } from "../agents/github-host.js";
 import type { WorktreeGitPolicy } from "../agents/worktrees/checkout-git-config.js";
 import { splitNullBuffer } from "../agents/worktrees/git-path-inventory.js";
 import { hasErrnoCode } from "../infra/errno.js";
@@ -9,7 +10,11 @@ import { retryableGitNetworkOperation, withGitNetworkRetry } from "../infra/git-
 import { runCommandBuffered } from "../process/exec.js";
 import { withGitProcessOperation, type GitProcessOperation } from "../process/spawn-diagnostics.js";
 import { getOrCreatePromise } from "../shared/lazy-promise.js";
-import { githubPublicationUnsafeConfigArgs } from "./github-publication-base.js";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
+import {
+  githubPublicationUnsafeConfigArgs,
+  parseGitHubPublicationBaseRef,
+} from "./github-publication-base.js";
 import {
   hasUnapprovedGitHubPublicationWorkflowChanges,
   isGitHubPublicationWorkflowPath,
@@ -25,12 +30,16 @@ type GitCommandOptions = {
 };
 type GitCommandResult = { code: number | null; stdout: Buffer };
 
-export function githubPublicationApiArgs(endpoint: string, method = "GET"): string[] {
+export function githubPublicationApiArgs(
+  endpoint: string,
+  method = "GET",
+  host = "github.com",
+): string[] {
   return [
     "gh",
     "api",
     "--hostname",
-    "github.com",
+    host,
     "--method",
     method,
     endpoint,
@@ -107,6 +116,67 @@ export function createGitHubPublicationCommandRunner(
       return result;
     },
   };
+}
+
+export async function readGitHubPublicationBaseSha(
+  run: ReturnType<typeof createGitHubPublicationCommandRunner>["run"],
+  repository: string,
+  branch: string,
+  host: string,
+  env: NodeJS.ProcessEnv,
+) {
+  const result = await run(
+    [
+      "gh",
+      "api",
+      "--hostname",
+      host,
+      `repos/${repository}/git/ref/heads/${branch}`,
+      "--jq",
+      "{ref: .ref, sha: .object.sha}",
+    ],
+    { env },
+  );
+  if (result.code !== 0) {
+    throw new Error("GitHub publication workspace base branch could not be verified.");
+  }
+  return parseGitHubPublicationBaseRef(result.stdout.toString("utf8"), branch);
+}
+
+export async function requireGitHubPublicationCommit(
+  run: ReturnType<typeof createGitHubPublicationCommandRunner>["run"],
+  repository: string,
+  sha: string,
+  host: string,
+  cwd: string,
+  env: NodeJS.ProcessEnv,
+  failure: string,
+) {
+  const result = await run(
+    [
+      ...GITHUB_CREDENTIAL_ARGS,
+      "-c",
+      `core.hooksPath=${os.devNull}`,
+      "-c",
+      "core.fsmonitor=false",
+      "-c",
+      "maintenance.auto=false",
+      "-c",
+      "gc.auto=0",
+      "fetch",
+      "--no-auto-maintenance",
+      "--no-tags",
+      "--no-write-fetch-head",
+      "--recurse-submodules=no",
+      "--",
+      githubRepositoryUrl(repository, host),
+      sha,
+    ],
+    { cwd, env },
+  );
+  if (result.code !== 0) {
+    throw new Error(failure);
+  }
 }
 
 // A recursive tree listing scales with repository size (openclaw itself is
@@ -325,24 +395,27 @@ export async function captureGitHubPublicationWorkspaceSnapshot(params: {
   cwd: string;
   assertCurrent?: () => void;
 }): Promise<{ sourceHeadCommit: string; sourceIndexTree: string; workspaceTree: string }> {
+  const context = captureOpenClawStateWorkerContext();
   const { withSettledLocalWorkspacePath } =
     await import("./worker-environments/local-workspace-projection.js");
   return await withSettledLocalWorkspacePath(params, async (custody) => {
-    const admittedPaths = await custody?.canonicalPaths();
+    const admittedPaths = await custody?.canonicalPaths?.();
     const bound = {
       ...params,
       assertCurrent: () => {
+        context.admission.assertCurrent();
         params.assertCurrent?.();
         custody?.assertCurrent();
       },
     };
-    const [{ findLiveRegistryWorktreeByPath }, { withManagedWorktreeGit }, { getRuntimeConfig }] =
+    const [{ readLiveRegistryWorktreeByPath }, { withManagedWorktreeGit }, { getRuntimeConfig }] =
       await Promise.all([
-        import("../agents/worktrees/registry.js"),
+        import("../agents/worktrees/registry-read.js"),
         import("../agents/worktrees/checkout-policy.js"),
         import("../config/config.js"),
       ]);
-    const record = findLiveRegistryWorktreeByPath(process.env, params.cwd);
+    const record = await readLiveRegistryWorktreeByPath(context, params.cwd);
+    bound.assertCurrent();
     return record
       ? await withManagedWorktreeGit(
           {

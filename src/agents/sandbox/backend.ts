@@ -2,6 +2,7 @@ import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/s
 import { resolveGlobalMap } from "../../shared/global-singleton.js";
 import type { AdmittedRunOperatorAuthority } from "../admitted-run-context.js";
 import type { PreparedGitHubToolEnvironment } from "../github-tool-identity.types.js";
+import type { WorkspaceStateGuard } from "../workspace-state-store.worker-contract.js";
 import type { SandboxBackendHandle } from "./backend-handle.types.js";
 import type {
   CreateSandboxBackendParams,
@@ -171,7 +172,9 @@ export async function createSandboxBackend(
   params: CreateSandboxBackendParams,
   operatorAuthority?: AdmittedRunOperatorAuthority,
   githubIdentity?: PreparedGitHubToolEnvironment,
+  guard?: WorkspaceStateGuard,
 ): Promise<SandboxBackendHandle> {
+  params.assertRuntimeCurrent?.();
   const factory = requireSandboxBackendFactory(params.cfg.backend);
   if (
     githubIdentity &&
@@ -200,28 +203,38 @@ export async function createSandboxBackend(
         : factory === createPodmanSandboxBackend
           ? await createPodmanSandboxBackend(params, operatorAuthority, githubIdentity)
           : await factory(params);
-    await updateRegistry(toEntry(backend));
+    await updateRegistry(toEntry(backend), {
+      ...guard,
+      beforeLegacyApply: params.assertRuntimeCurrent,
+    });
     return backend;
   }
   for (let attempt = 0; ; attempt++) {
-    const reservation = reserveSandboxRegistryEntry({
-      containerName: reserveRuntimeId(params),
-      backendId: params.cfg.backend,
-      sessionKey: params.scopeKey,
-      createdAtMs: Date.now(),
-      lastUsedAtMs: Date.now(),
-      image: params.cfg.docker.image,
-      workspaceDir: params.workspaceDir,
-    });
+    params.assertRuntimeCurrent?.();
+    const reservation = await reserveSandboxRegistryEntry(
+      {
+        containerName: reserveRuntimeId(params),
+        backendId: params.cfg.backend,
+        sessionKey: params.scopeKey,
+        createdAtMs: Date.now(),
+        lastUsedAtMs: Date.now(),
+        image: params.cfg.docker.image,
+        workspaceDir: params.workspaceDir,
+      },
+      { ...guard, beforeLegacyApply: params.assertRuntimeCurrent },
+    );
     try {
       return await withSandboxRegistryEntryLock(reservation, async () => {
-        assertSandboxRegistryEntryCurrent(reservation);
+        const assertCurrent = () => {
+          params.assertRuntimeCurrent?.();
+          assertSandboxRegistryEntryCurrent(reservation);
+        };
         try {
           const backend = await factory({
             ...params,
             workspaceDir: reservation.workspaceDir ?? params.workspaceDir,
             runtimeId: reservation.containerName,
-            assertRuntimeCurrent: () => assertSandboxRegistryEntryCurrent(reservation),
+            assertRuntimeCurrent: assertCurrent,
           });
           if (
             backend.runtimeId !== reservation.containerName ||
@@ -229,14 +242,21 @@ export async function createSandboxBackend(
           ) {
             throw new Error("Sandbox backend returned a runtime outside its reserved generation.");
           }
-          await completeSandboxRegistryReservation(toEntry(backend));
+          await completeSandboxRegistryReservation(
+            { ...reservation, ...toEntry(backend), createdAtMs: reservation.createdAtMs },
+            false,
+            { ...guard, beforeLegacyApply: params.assertRuntimeCurrent },
+          );
           return backend;
         } catch (error) {
           if (
             error instanceof SandboxRuntimeRetiredError &&
             error.runtimeId === reservation.containerName
           ) {
-            await completeSandboxRegistryReservation(reservation, true);
+            await completeSandboxRegistryReservation(reservation, true, {
+              ...guard,
+              beforeLegacyApply: params.assertRuntimeCurrent,
+            });
           }
           throw error;
         }

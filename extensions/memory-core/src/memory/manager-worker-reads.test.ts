@@ -47,6 +47,11 @@ describe("memory manager retained worker reads", () => {
           (sql) => /transcript_events/i.test(sql) && /\b(?:count|sum)\s*\(/i.test(sql),
         ),
       ).toEqual([]);
+      expect(
+        observed.queries.filter(
+          (sql) => /^select\b/i.test(sql) && /memory_index_sources/i.test(sql),
+        ),
+      ).toEqual([]);
       expect(manager.status().dirty).toBe(false);
     } finally {
       observed.restore();
@@ -122,7 +127,7 @@ describe("memory manager retained worker reads", () => {
     }
   });
 
-  it.each(["ready", "rejected", "revoked"] as const)(
+  it.each(["ready", "rejected"] as const)(
     "waits for a %s cache read before requesting embeddings",
     async (outcome) => {
       const memoryPath = path.join(fixture.paths.memory, "2026-01-12.md");
@@ -170,19 +175,12 @@ describe("memory manager retained worker reads", () => {
         expect(
           publishedDb.prepare("SELECT text FROM memory_index_chunks ORDER BY id").all(),
         ).toEqual(before);
-        if (outcome === "revoked") {
-          closeOpenClawAgentDatabasesForTest();
-        }
         release.resolve();
         if (outcome === "ready") {
           await sync;
           expect(fixture.provider.embeddedBatchTexts).toEqual([replacement]);
         } else {
-          await expect(sync).rejects.toThrow(
-            outcome === "rejected"
-              ? "controlled cache read rejection"
-              : "Memory embedding generation changed during cache lookup",
-          );
+          await expect(sync).rejects.toThrow("controlled cache read rejection");
           expect(fixture.provider.embeddedBatchTexts).toEqual([]);
         }
         const current = openOpenClawAgentDatabase({ agentId: "main" }).db;

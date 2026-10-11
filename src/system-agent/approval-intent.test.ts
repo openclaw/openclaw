@@ -1,10 +1,8 @@
 // Approval-intent tests: closed-list fast path plus model-judged classification.
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import * as simpleCompletion from "../agents/simple-completion-runtime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  classifySystemAgentApprovalIntent as classifySystemAgentApprovalIntentImpl,
-  type SystemAgentApprovalIntentDeps,
-} from "./approval-intent.js";
+import { classifySystemAgentApprovalIntent as classifySystemAgentApprovalIntentImpl } from "./approval-intent.js";
 import { classifySystemAgentApprovalText } from "./operator-approval.js";
 import {
   createSystemAgentVerifiedInferenceTestFixture,
@@ -13,6 +11,7 @@ import {
   type SystemAgentPluginMetadataTestSnapshot,
 } from "./system-agent.test-helpers.js";
 import type { SystemAgentVerifiedInferenceBinding } from "./verified-inference.js";
+import * as verifiedInference from "./verified-inference.js";
 
 const DEFAULT_MODEL = "openai/gpt-5.5@openai:p2";
 const CLI_MODEL = "claude-cli/claude-opus-4-8";
@@ -70,6 +69,8 @@ afterAll(() => {
   restoreCliBackendFixture?.();
 });
 
+afterEach(() => vi.restoreAllMocks());
+
 function requireSharedVerifiedInference(): SystemAgentVerifiedInferenceBinding {
   if (!sharedVerifiedInference) {
     throw new Error("shared verified inference fixture was not initialized");
@@ -80,34 +81,34 @@ function requireSharedVerifiedInference(): SystemAgentVerifiedInferenceBinding {
 function completionDeps(replyText: string, binding: SystemAgentVerifiedInferenceBinding) {
   const route = binding.execution;
   return {
-    resolveVerifiedInferenceRoute: vi.fn<
-      NonNullable<SystemAgentApprovalIntentDeps["resolveVerifiedInferenceRoute"]>
-    >(async () => route),
-    acquireSimpleCompletionModelForAgent: vi.fn<
-      NonNullable<SystemAgentApprovalIntentDeps["acquireSimpleCompletionModelForAgent"]>
-    >(
-      async () =>
-        ({
-          [Symbol.asyncDispose]: async () => {},
-          model: {},
-          auth: { profileId: route.authProfileId },
-          sourceAuthFingerprint: binding.auth.authFingerprint,
-          selection: {
-            provider: route.provider,
-            modelId: route.model,
-            profileId: route.authProfileId,
-            agentDir: route.agentDir,
-          },
-        }) as never,
-    ),
-    completeWithPreparedSimpleCompletionModel: vi.fn<
-      NonNullable<SystemAgentApprovalIntentDeps["completeWithPreparedSimpleCompletionModel"]>
-    >(
-      async () =>
-        ({
-          content: [{ type: "text", text: replyText }],
-        }) as never,
-    ),
+    resolveVerifiedInferenceRoute: vi
+      .spyOn(verifiedInference, "resolveSystemAgentVerifiedInferenceRoute")
+      .mockResolvedValue(route),
+    acquireSimpleCompletionModelForAgent: vi
+      .spyOn(simpleCompletion, "acquireSimpleCompletionModelForAgent")
+      .mockImplementation(
+        async () =>
+          ({
+            [Symbol.asyncDispose]: async () => {},
+            model: {},
+            auth: { profileId: route.authProfileId },
+            sourceAuthFingerprint: binding.auth.authFingerprint,
+            selection: {
+              provider: route.provider,
+              modelId: route.model,
+              profileId: route.authProfileId,
+              agentDir: route.agentDir,
+            },
+          }) as never,
+      ),
+    completeWithPreparedSimpleCompletionModel: vi
+      .spyOn(simpleCompletion, "completeWithPreparedSimpleCompletionModel")
+      .mockImplementation(
+        async () =>
+          ({
+            content: [{ type: "text", text: replyText }],
+          }) as never,
+      ),
   };
 }
 
@@ -136,7 +137,7 @@ describe("classifySystemAgentApprovalIntent", () => {
     const binding = requireSharedVerifiedInference();
     const deps = completionDeps("approve", binding);
     await expect(
-      classifySystemAgentApprovalIntent({ message: "yes", verifiedInference: binding }, deps),
+      classifySystemAgentApprovalIntent({ message: "yes", verifiedInference: binding }),
     ).resolves.toBe("approve");
     expect(deps.resolveVerifiedInferenceRoute).not.toHaveBeenCalled();
     expect(deps.completeWithPreparedSimpleCompletionModel).not.toHaveBeenCalled();
@@ -146,14 +147,11 @@ describe("classifySystemAgentApprovalIntent", () => {
     const binding = requireSharedVerifiedInference();
     const deps = completionDeps("approve", binding);
     await expect(
-      classifySystemAgentApprovalIntent(
-        {
-          message: "alright, ship that change",
-          proposal: "set config gateway.port to 19001",
-          verifiedInference: binding,
-        },
-        deps,
-      ),
+      classifySystemAgentApprovalIntent({
+        message: "alright, ship that change",
+        proposal: "set config gateway.port to 19001",
+        verifiedInference: binding,
+      }),
     ).resolves.toBe("approve");
     expect(deps.acquireSimpleCompletionModelForAgent).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -167,26 +165,21 @@ describe("classifySystemAgentApprovalIntent", () => {
 
   it("fails closed to other on unexpected model output", async () => {
     const binding = requireSharedVerifiedInference();
-    const deps = completionDeps("I think the user probably agrees", binding);
+    completionDeps("I think the user probably agrees", binding);
     await expect(
-      classifySystemAgentApprovalIntent(
-        { message: "hmm alright I guess?", verifiedInference: binding },
-        deps,
-      ),
+      classifySystemAgentApprovalIntent({
+        message: "hmm alright I guess?",
+        verifiedInference: binding,
+      }),
     ).resolves.toBe("other");
   });
 
   it("fails closed to other when no model is usable", async () => {
     const binding = requireSharedVerifiedInference();
-    const deps = {
-      ...completionDeps("approve", binding),
-      acquireSimpleCompletionModelForAgent: vi.fn(async () => ({ error: "no model" })) as never,
-    };
+    const deps = completionDeps("approve", binding);
+    deps.acquireSimpleCompletionModelForAgent.mockResolvedValueOnce({ error: "no model" });
     await expect(
-      classifySystemAgentApprovalIntent(
-        { message: "alright then", verifiedInference: binding },
-        deps,
-      ),
+      classifySystemAgentApprovalIntent({ message: "alright then", verifiedInference: binding }),
     ).resolves.toBe("other");
   });
 
@@ -206,10 +199,7 @@ describe("classifySystemAgentApprovalIntent", () => {
     } as never);
 
     await expect(
-      classifySystemAgentApprovalIntent(
-        { message: "alright then", verifiedInference: binding },
-        deps,
-      ),
+      classifySystemAgentApprovalIntent({ message: "alright then", verifiedInference: binding }),
     ).resolves.toBe("other");
     expect(deps.completeWithPreparedSimpleCompletionModel).not.toHaveBeenCalled();
   });
@@ -231,10 +221,7 @@ describe("classifySystemAgentApprovalIntent", () => {
     } as never);
 
     await expect(
-      classifySystemAgentApprovalIntent(
-        { message: "alright then", verifiedInference: binding },
-        deps,
-      ),
+      classifySystemAgentApprovalIntent({ message: "alright then", verifiedInference: binding }),
     ).resolves.toBe("other");
     expect(deps.completeWithPreparedSimpleCompletionModel).not.toHaveBeenCalled();
   });
@@ -244,10 +231,7 @@ describe("classifySystemAgentApprovalIntent", () => {
     const deps = completionDeps("approve", binding);
 
     await expect(
-      classifySystemAgentApprovalIntent(
-        { message: "alright then", verifiedInference: binding },
-        deps,
-      ),
+      classifySystemAgentApprovalIntent({ message: "alright then", verifiedInference: binding }),
     ).resolves.toBe("other");
     expect(deps.acquireSimpleCompletionModelForAgent).not.toHaveBeenCalled();
   });
@@ -260,10 +244,7 @@ describe("classifySystemAgentApprovalIntent", () => {
       .mockResolvedValueOnce(null);
 
     await expect(
-      classifySystemAgentApprovalIntent(
-        { message: "alright then", verifiedInference: binding },
-        deps,
-      ),
+      classifySystemAgentApprovalIntent({ message: "alright then", verifiedInference: binding }),
     ).resolves.toBe("other");
   });
 });

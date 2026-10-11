@@ -1,4 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { classifyGatewayProbePath } from "../gateway/gateway-http-route-contracts.js";
 import { isOperatorScope } from "../gateway/operator-scopes.js";
 import type { ControlUiLinkReaderMetadata } from "../shared/control-ui-link-reader.js";
 import {
@@ -8,10 +9,6 @@ import {
   normalizeHostHookStringList,
   type PluginControlUiDescriptor,
 } from "./host-hooks.js";
-import {
-  isReservedControlUiTabSlug,
-  validateControlUiNativeRoutePlacement,
-} from "./registry-control-ui-policy.js";
 import type { PluginRegistryState } from "./registry-state.js";
 import type { PluginRecord } from "./registry-types.js";
 
@@ -81,8 +78,27 @@ const controlUiSurfaces = new Set<PluginControlUiDescriptor["surface"]>([
   "widget",
   "link-reader",
 ]);
+const reservedTabSlugs = new Set([
+  "api",
+  "plugins",
+  "plugin",
+  "focus",
+  "approve",
+  "ask",
+  "share",
+  "j",
+  "v1",
+  "ui",
+  "mcp-app-sandbox",
+  "__openclaw__",
+  "__openclaw",
+  "sessions",
+  "agent",
+  "agents",
+]);
+
 export function createControlUiRegistrar(state: PluginRegistryState) {
-  const { registry, createRegistration, pushDiagnostic, reportRegistrationError } = state;
+  const { registry, createIdentityRegistration, reportRegistrationError } = state;
   return (record: PluginRecord, descriptor: PluginControlUiDescriptor) => {
     // SAFETY: Shipped flat JS descriptors may supply name; it is read as unknown and normalized below.
     const legacyDescriptor = descriptor as PluginControlUiDescriptor & { name?: unknown };
@@ -118,7 +134,14 @@ export function createControlUiRegistrar(state: PluginRegistryState) {
         return;
       }
     }
-    if (!validateControlUiNativeRoutePlacement({ record, placement, pushDiagnostic })) {
+    if (
+      placement?.startsWith("route:") &&
+      !(record.origin === "bundled" && placement === `route:${record.id}`)
+    ) {
+      reportRegistrationError(
+        record,
+        `native Control UI route placement must be owned by its bundled plugin: ${placement}`,
+      );
       return;
     }
     if (slug !== undefined) {
@@ -129,7 +152,8 @@ export function createControlUiRegistrar(state: PluginRegistryState) {
         !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug) ||
         surface !== "tab" ||
         placement?.startsWith("route:") ||
-        isReservedControlUiTabSlug(slug)
+        reservedTabSlugs.has(slug) ||
+        classifyGatewayProbePath(`/${slug}`) !== "outside"
       ) {
         reportRegistrationError(
           record,
@@ -207,7 +231,8 @@ export function createControlUiRegistrar(state: PluginRegistryState) {
       );
     }
     registry.controlUiDescriptors.push(
-      createRegistration(record, {
+      // Descriptors are admitted metadata, so retained snapshots need no executable lease.
+      createIdentityRegistration(record, {
         descriptor: {
           ...descriptor,
           id,

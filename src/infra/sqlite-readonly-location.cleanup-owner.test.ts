@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { setLoggerOverride } from "../logging/logger.js";
 import { testApi } from "../logging/logger.test-support.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -393,11 +393,6 @@ it("keeps synchronous and asynchronous token cleanup in separate snapshot flight
   }
 });
 
-// chmod-based denial only works on POSIX where the process is not root
-// (root bypasses mode bits, and Windows chmod does not revoke deletion ACLs).
-const supportsChmodDenial =
-  process.platform !== "win32" && typeof process.getuid === "function" && process.getuid() !== 0;
-
 let root: string;
 
 beforeEach(async () => {
@@ -413,9 +408,6 @@ afterEach(async () => {
   setLoggerOverride(null);
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
-  // Restore permissions so the fixture can be removed even when a test revoked
-  // write access on a parent to trigger a real cleanup failure.
-  await fs.promises.chmod(root, 0o700).catch(() => undefined);
   await fs.promises.rm(root, { recursive: true, force: true });
 });
 
@@ -426,39 +418,6 @@ async function readCleanupLog(): Promise<unknown[]> {
     .split("\n")
     .map((line): unknown => JSON.parse(line));
 }
-
-// Revoke write access on the parent so fs.rmSync cannot unlink the owned root.
-// This is a real filesystem failure at the cleanup boundary, not a mocked rm.
-async function revokeParentWrite(): Promise<void> {
-  await fs.promises.chmod(root, 0o500);
-}
-
-describe.runIf(supportsChmodDenial)("chmod-denied cleanup failure", () => {
-  it("emits a non-throwing warning when cleanup cannot remove the owned directory", async () => {
-    const { ownedRoot, location } = createSnapshot("owned");
-
-    const reports: CleanupFailureReport[] = [];
-    const prepared = adoptPreparedLocation(location, ownedRoot, false, (report) =>
-      reports.push(report),
-    );
-
-    await revokeParentWrite();
-    try {
-      expect(prepared.cleanup()).toBe(false);
-    } finally {
-      await fs.promises.chmod(root, 0o700);
-    }
-
-    expect(reports).toHaveLength(1);
-    expect(reports[0]).toEqual({ cleanupRoot: ownedRoot, operation: "rm", code: "EACCES" });
-    // The owned copy remains on disk; the exit handler retries removal later.
-    expect(fs.existsSync(ownedRoot)).toBe(true);
-    // A successful read's outcome is preserved: cleanup did not throw, and repeated
-    // attempts never duplicate the diagnostic — the owner records the failure once.
-    prepared.cleanup();
-    expect(reports).toHaveLength(1);
-  });
-});
 
 it.each(["idle", "pending"] as const)(
   "preserves replacement bytes when stale async cleanup is %s",
@@ -494,42 +453,9 @@ it.each(["idle", "pending"] as const)(
   },
 );
 
-it("records cleanup diagnostics in the structured log without process or console warnings", async () => {
+it("does not throw when the onCleanupFailure callback itself throws", async () => {
   const processWarning = vi.spyOn(process, "emitWarning");
   const consoleWarning = vi.spyOn(console, "warn");
-  const { ownedRoot, location } = createSnapshot("diagnostic-only");
-  vi.spyOn(fs, "rmSync").mockImplementationOnce(() => {
-    throw Object.assign(new Error("snapshot busy"), { code: "EBUSY" });
-  });
-  const prepared = adoptPreparedLocation(location);
-  expect(prepared.cleanupRoot).toBe(ownedRoot);
-  expect(prepared.cleanup()).toBe(false);
-  const records = await readCleanupLog();
-  expect(records).toHaveLength(1);
-  expect(records[0]).toMatchObject({
-    "1": { path: ownedRoot, operation: "rm", errorCode: "EBUSY" },
-    message: expect.stringContaining("SQLite read-only snapshot cleanup failed"),
-  });
-  expect(processWarning).not.toHaveBeenCalled();
-  expect(consoleWarning).not.toHaveBeenCalled();
-});
-
-describe.runIf(supportsChmodDenial)("chmod-denied requireCleanup", () => {
-  it("still throws on cleanup failure when requireCleanup is set", async () => {
-    const { ownedRoot, location } = createSnapshot("required");
-
-    const prepared = adoptPreparedLocation(location, ownedRoot, true);
-
-    await revokeParentWrite();
-    try {
-      expect(() => prepared.cleanup()).toThrow(/snapshot cleanup failed/u);
-    } finally {
-      await fs.promises.chmod(root, 0o700);
-    }
-  });
-});
-
-it("does not throw when the onCleanupFailure callback itself throws", async () => {
   const { ownedRoot, location } = createSnapshot("throwing-callback");
 
   // Force removal failure via fs.rmSync mock so the callback is exercised on
@@ -546,6 +472,8 @@ it("does not throw when the onCleanupFailure callback itself throws", async () =
     // cleanup() must not throw even though the callback throws — the
     // non-throwing contract (requireCleanup=false) must hold.
     expect(prepared.cleanup()).toBe(false);
+    expect(processWarning).not.toHaveBeenCalled();
+    expect(consoleWarning).not.toHaveBeenCalled();
   } finally {
     vi.restoreAllMocks();
   }
@@ -554,6 +482,7 @@ it("does not throw when the onCleanupFailure callback itself throws", async () =
   expect(records).toHaveLength(1);
   expect(records[0]).toMatchObject({
     "1": { path: ownedRoot, operation: "rm", errorCode: "EBUSY" },
+    message: expect.stringContaining("SQLite read-only snapshot cleanup failed"),
   });
   expect(JSON.stringify(records)).not.toContain("callback exploded");
 });

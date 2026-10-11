@@ -97,31 +97,31 @@ export async function runFreshLane(params: LaneBaseParams & { build: CandidateBu
   const cleanup: Cleanup[] = [];
   try {
     const env = buildLaneEnv(lane, params.providerConfig, params.providerSecretValue);
-    await runTimedLanePhase(lane, "install-candidate", async () => {
-      await installTarballPackage({
+    await runTimedLanePhase(lane, "install-candidate", () =>
+      installTarballPackage({
         lane,
         env,
         tgzPath: params.build.candidateTgz,
         logPath: join(params.logsDir, "fresh-install.log"),
         restoreBundledPluginPostinstall: false,
-      });
-    });
+      }),
+    );
     const installed = readInstalledMetadata(lane.prefixDir);
     verifyInstalledCandidate(installed, params.build);
-    await runTimedLanePhase(lane, "run-bundled-plugin-postinstall", async () => {
-      await runBundledPluginPostinstall({
+    await runTimedLanePhase(lane, "run-bundled-plugin-postinstall", () =>
+      runBundledPluginPostinstall({
         lane,
         env,
         logPath: join(params.logsDir, "fresh-install.log"),
-      });
-    });
+      }),
+    );
 
     let browserOverrideImportStatus = "skipped";
     if (shouldRunWindowsInstalledBrowserOverrideImportSmoke()) {
       browserOverrideImportStatus = await runTimedLanePhase(
         lane,
         "windows-browser-override-import",
-        async () =>
+        () =>
           runInstalledBrowserOverrideImportSmoke({
             lane,
             env,
@@ -219,13 +219,13 @@ export async function runUpgradeLane(
         });
       }
     });
-    await runTimedLanePhase(lane, "run-baseline-bundled-plugin-postinstall", async () => {
-      await runBundledPluginPostinstall({
+    await runTimedLanePhase(lane, "run-baseline-bundled-plugin-postinstall", () =>
+      runBundledPluginPostinstall({
         lane,
         env,
         logPath: join(params.logsDir, "upgrade-install-baseline.log"),
-      });
-    });
+      }),
+    );
 
     const baseline = {
       version: readInstalledVersion(lane.prefixDir),
@@ -365,23 +365,23 @@ export async function runUpgradeLane(
         usedWindowsPackagedUpgradeFallback,
       })
     ) {
-      await runTimedLanePhase(lane, "update-status", async () => {
-        await runOpenClaw({
+      await runTimedLanePhase(lane, "update-status", () =>
+        runOpenClaw({
           lane,
           env: updateEnv,
           args: ["update", "status", "--json"],
           logPath: join(params.logsDir, "upgrade-update-status.log"),
           timeoutMs: 2 * 60 * 1000,
-        });
-      });
+        }),
+      );
     }
-    await runTimedLanePhase(lane, "run-bundled-plugin-postinstall", async () => {
-      await runBundledPluginPostinstall({
+    await runTimedLanePhase(lane, "run-bundled-plugin-postinstall", () =>
+      runBundledPluginPostinstall({
         lane,
         env,
         logPath: join(params.logsDir, "upgrade-bundled-plugin-postinstall.log"),
-      });
-    });
+      }),
+    );
 
     const installed = readInstalledMetadata(lane.prefixDir);
     verifyInstalledCandidate(installed, params.build);
@@ -425,22 +425,22 @@ async function runPackagedGatewaySmoke(
   // Own the configured port through setup; release only when the gateway can claim it.
   const gatewayPortReservation = await reserveGatewayPortForLane(lane);
   cleanup.push(() => gatewayPortReservation.release());
-  await runTimedLanePhase(lane, "onboard", async () => {
-    await runOnboard({
+  await runTimedLanePhase(lane, "onboard", () =>
+    runOnboard({
       lane,
       env,
       providerConfig: params.providerConfig,
       logPath: logPath("onboard"),
-    });
-  });
-  await runTimedLanePhase(lane, "models-set", async () => {
-    await runModelsSet({
+    }),
+  );
+  await runTimedLanePhase(lane, "models-set", () =>
+    runModelsSet({
       lane,
       env,
       providerConfig: params.providerConfig,
       logPath: logPath("models-set"),
-    });
-  });
+    }),
+  );
   if (params.beforeGatewayStart) {
     await params.beforeGatewayStart();
   }
@@ -449,22 +449,22 @@ async function runPackagedGatewaySmoke(
     return startGateway({ lane, env, logPath: logPath("gateway") });
   });
   cleanup.push(() => stopGateway(gatewayHolder.current));
-  await runTimedLanePhase(lane, "wait-gateway", async () => {
-    await waitForGateway({
+  await runTimedLanePhase(lane, "wait-gateway", () =>
+    waitForGateway({
       lane,
       env,
       gatewayHolder,
       gatewayLogPath: logPath("gateway"),
       logPath: logPath("gateway-status"),
-    });
-  });
+    }),
+  );
   if (params.afterGatewayReady) {
     await params.afterGatewayReady();
   }
-  await runTimedLanePhase(lane, "dashboard", async () => {
-    await runDashboardSmoke({ lane, logPath: logPath("dashboard") });
-  });
-  return runTimedLanePhase(lane, "agent-turn", async () =>
+  await runTimedLanePhase(lane, "dashboard", () =>
+    runDashboardSmoke({ lane, logPath: logPath("dashboard") }),
+  );
+  return runTimedLanePhase(lane, "agent-turn", () =>
     runAgentTurn({ lane, env, label: lane.name, logPath: logPath("agent") }),
   );
 }
@@ -624,53 +624,14 @@ export async function runInstallerFreshSuite(
       });
     }
     await gatewayPortReservation?.release();
-    logLanePhase(lane, "gateway-start");
-    const gateway = await startManualGatewayFromInstalledCli({
+    const { agent, discordStatus } = await runInstalledGatewaySmoke({
+      ...params,
       lane,
-      cliPath: freshShell.cliPath,
       env,
-      logPath: join(params.logsDir, "installer-fresh-gateway.log"),
-    });
-    manualGateway.current = gateway;
-    if (!usesManagedGateway) {
-      cleanup.push(() => stopGateway(manualGateway.current));
-    }
-    logLanePhase(lane, "gateway-status");
-    await waitForInstalledGateway({
-      lane,
       cliPath: freshShell.cliPath,
-      env,
       gatewayHolder: manualGateway,
-      gatewayLogPath: join(params.logsDir, "installer-fresh-gateway.log"),
-      logPath: join(params.logsDir, "installer-fresh-gateway-status.log"),
+      cleanup: usesManagedGateway ? undefined : cleanup,
     });
-
-    logLanePhase(lane, "dashboard");
-    await runDashboardSmoke({
-      lane,
-      logPath: join(params.logsDir, "installer-fresh-dashboard.log"),
-    });
-
-    logLanePhase(lane, "agent-turn");
-    const agent = await runInstalledAgentTurn({
-      cliPath: freshShell.cliPath,
-      env,
-      cwd: lane.homeDir,
-      label: "installer-fresh",
-      logPath: join(params.logsDir, "installer-fresh-agent.log"),
-    });
-
-    let discordStatus = "skipped";
-    if (params.runDiscordRoundtrip && process.platform === "darwin") {
-      logLanePhase(lane, "discord-roundtrip");
-      discordStatus = await maybeRunDiscordRoundtrip({
-        lane,
-        cliPath: freshShell.cliPath,
-        env,
-        gatewayHolder: manualGateway,
-        logPath: join(params.logsDir, "installer-fresh-discord.log"),
-      });
-    }
 
     return {
       status: "pass",
@@ -860,51 +821,14 @@ export async function runDevUpdateSuite(
     });
 
     await gatewayPortReservation.release();
-    logLanePhase(lane, "gateway-start");
-    const gateway = await startManualGatewayFromInstalledCli({
+    const { agent, discordStatus } = await runInstalledGatewaySmoke({
+      ...params,
       lane,
-      cliPath: verifiedShell.cliPath,
       env,
-      logPath: join(params.logsDir, "dev-update-gateway.log"),
-    });
-    manualGateway.current = gateway;
-    cleanup.push(() => stopGateway(manualGateway.current));
-    logLanePhase(lane, "gateway-status");
-    await waitForInstalledGateway({
-      lane,
       cliPath: verifiedShell.cliPath,
-      env,
       gatewayHolder: manualGateway,
-      gatewayLogPath: join(params.logsDir, "dev-update-gateway.log"),
-      logPath: join(params.logsDir, "dev-update-gateway-status.log"),
+      cleanup,
     });
-
-    logLanePhase(lane, "dashboard");
-    await runDashboardSmoke({
-      lane,
-      logPath: join(params.logsDir, "dev-update-dashboard.log"),
-    });
-
-    logLanePhase(lane, "agent-turn");
-    const agent = await runInstalledAgentTurn({
-      cliPath: verifiedShell.cliPath,
-      env,
-      cwd: lane.homeDir,
-      label: "dev-update",
-      logPath: join(params.logsDir, "dev-update-agent.log"),
-    });
-
-    let discordStatus = "skipped";
-    if (params.runDiscordRoundtrip && process.platform === "darwin") {
-      logLanePhase(lane, "discord-roundtrip");
-      discordStatus = await maybeRunDiscordRoundtrip({
-        lane,
-        cliPath: verifiedShell.cliPath,
-        env,
-        gatewayHolder: manualGateway,
-        logPath: join(params.logsDir, "dev-update-discord.log"),
-      });
-    }
 
     return {
       status: "pass",
@@ -918,6 +842,63 @@ export async function runDevUpdateSuite(
   } finally {
     await runCleanup(cleanup);
   }
+}
+
+async function runInstalledGatewaySmoke(
+  params: Pick<LaneBaseParams, "logsDir"> & {
+    lane: LaneState;
+    env: NodeJS.ProcessEnv;
+    cliPath: string;
+    gatewayHolder: { current: GatewayHandle | null };
+    cleanup?: Cleanup[];
+    runDiscordRoundtrip: boolean;
+  },
+) {
+  const { lane, env, cliPath, gatewayHolder } = params;
+  const logPath = (phase: string) => join(params.logsDir, `${lane.name}-${phase}.log`);
+  logLanePhase(lane, "gateway-start");
+  gatewayHolder.current = await startManualGatewayFromInstalledCli({
+    lane,
+    cliPath,
+    env,
+    logPath: logPath("gateway"),
+  });
+  // Managed installer checks retain their host-level cleanup owner.
+  params.cleanup?.push(() => stopGateway(gatewayHolder.current));
+  logLanePhase(lane, "gateway-status");
+  await waitForInstalledGateway({
+    lane,
+    cliPath,
+    env,
+    gatewayHolder,
+    gatewayLogPath: logPath("gateway"),
+    logPath: logPath("gateway-status"),
+  });
+
+  logLanePhase(lane, "dashboard");
+  await runDashboardSmoke({ lane, logPath: logPath("dashboard") });
+
+  logLanePhase(lane, "agent-turn");
+  const agent = await runInstalledAgentTurn({
+    cliPath,
+    env,
+    cwd: lane.homeDir,
+    label: lane.name,
+    logPath: logPath("agent"),
+  });
+
+  let discordStatus = "skipped";
+  if (params.runDiscordRoundtrip && process.platform === "darwin") {
+    logLanePhase(lane, "discord-roundtrip");
+    discordStatus = await maybeRunDiscordRoundtrip({
+      lane,
+      cliPath,
+      env,
+      gatewayHolder,
+      logPath: logPath("discord"),
+    });
+  }
+  return { agent, discordStatus };
 }
 
 function createLaneState(name: string): LaneState {
@@ -1029,18 +1010,16 @@ export function resolveManagedGatewayInstallerEnv(params: {
     APPDATA: hostEnv.APPDATA,
     LOCALAPPDATA: hostEnv.LOCALAPPDATA,
   };
-  const isolatedIdentityKeys = new Set(
-    [
-      "OPENCLAW_HOME",
-      "OPENCLAW_PROFILE",
-      "OPENCLAW_STATE_DIR",
-      "OPENCLAW_CONFIG_PATH",
-      "OPENCLAW_WINDOWS_TASK_NAME",
-      "OPENCLAW_TASK_SCRIPT_NAME",
-      "OPENCLAW_TASK_SCRIPT",
-      "OPENCLAW_SERVICE_KIND",
-    ].map((key) => key.toUpperCase()),
-  );
+  const isolatedIdentityKeys = new Set([
+    "OPENCLAW_HOME",
+    "OPENCLAW_PROFILE",
+    "OPENCLAW_STATE_DIR",
+    "OPENCLAW_CONFIG_PATH",
+    "OPENCLAW_WINDOWS_TASK_NAME",
+    "OPENCLAW_TASK_SCRIPT_NAME",
+    "OPENCLAW_TASK_SCRIPT",
+    "OPENCLAW_SERVICE_KIND",
+  ]);
   // Windows environment keys are case-insensitive. Remove every casing variant
   // so the installed CLI cannot inherit the isolated lane identity.
   for (const key of Object.keys(env)) {

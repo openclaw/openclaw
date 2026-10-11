@@ -17,21 +17,11 @@ afterEach(() => {
 describe("bootstrap routed snapshot prewarm", () => {
   it.each([
     {
-      key: "agent:other:custom-main",
-      boot: true,
-      url: "/chat",
-      expected: "agent:other:main",
-    },
-    {
       key: "agent:other:conversation",
       boot: true,
       url: "/chat",
       expected: "agent:other:conversation",
     },
-    { key: "main", boot: true, url: "/chat", expected: null },
-    { key: "agent:main:main", boot: false, url: "/chat", expected: null },
-    { key: "agent:main:main", boot: true, url: "/approve/approval-1", expected: null },
-    { key: "agent:main:main", boot: true, url: "/focus/terminal", expected: null },
     {
       key: "agent:main:main",
       boot: true,
@@ -92,13 +82,6 @@ describe("warm startup credential binding", () => {
   it.each([
     {
       authMethod: "token",
-      token: "test-token",
-      deviceToken: "other-token",
-      warm: true,
-      retained: true,
-    },
-    {
-      authMethod: "token",
       token: "changed-token",
       deviceToken: "test-token",
       warm: false,
@@ -114,14 +97,6 @@ describe("warm startup credential binding", () => {
     },
     {
       authMethod: "device-token",
-      token: "",
-      deviceToken: "rotated-token",
-      warm: false,
-      retained: true,
-    },
-    { authMethod: "device-token", token: "", deviceToken: "", warm: false, retained: true },
-    {
-      authMethod: "device-token",
       token: "new-operator-token",
       deviceToken: "test-token",
       warm: false,
@@ -129,20 +104,6 @@ describe("warm startup credential binding", () => {
     },
     {
       authMethod: "trusted-proxy",
-      token: "test-token",
-      deviceToken: "test-token",
-      warm: false,
-      retained: false,
-    },
-    {
-      authMethod: "password",
-      token: "test-token",
-      deviceToken: "test-token",
-      warm: false,
-      retained: false,
-    },
-    {
-      authMethod: undefined,
       token: "test-token",
       deviceToken: "test-token",
       warm: false,

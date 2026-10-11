@@ -27,10 +27,10 @@ import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-wo
 import * as stateWorker from "../../state/openclaw-state-worker-store.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { prepareAcpSessionControlRead } from "./session-meta-control.js";
+import { seedCanonicalAcpSessionMeta } from "./session-meta-fixture.test-support.js";
 import { buildAcpDatabaseSessionKey, selectAcpSessionRow } from "./session-meta-keys.js";
 import { readAcpSessionControlInWorker } from "./session-meta-source.worker.js";
 import { upsertAcpSessionMeta, upsertAcpSessionMetaForControl } from "./session-meta-write.js";
-import { writeAcpSessionMetaForMigration } from "./session-meta.js";
 
 const meta: SessionAcpMeta = {
   backend: "fixture",
@@ -109,7 +109,7 @@ it.each(["owner", "lifecycle", "shared-source"] as const)(
           const databasePath = resolveOpenClawStateSqlitePath(state.env);
           await closeOpenClawStateDatabaseAsync();
           renameSync(databasePath, `${databasePath}.retired`);
-          writeAcpSessionMetaForMigration({
+          seedCanonicalAcpSessionMeta({
             sessionKey: buildAcpDatabaseSessionKey(scope.sessionKey, scope.agentId),
             lifecycleRevision: entry.lifecycleRevision,
             meta,
@@ -146,7 +146,7 @@ it("keeps the physical shared-store owner and validates canonical ACP aliases in
       updatedAt: 100,
       spawnedBy: "agent:main:parent",
     });
-    writeAcpSessionMetaForMigration({
+    seedCanonicalAcpSessionMeta({
       sessionKey: "agent:WORKER:acp:CONTROL",
       lifecycleRevision: "original",
       meta,
@@ -169,7 +169,7 @@ it("keeps the physical shared-store owner and validates canonical ACP aliases in
       expect(read().row).toMatchObject({ session_id: "original" });
       const missingKey = "agent:worker:acp:missing";
       const missingMetadataKey = buildAcpDatabaseSessionKey(missingKey, "worker");
-      writeAcpSessionMetaForMigration({
+      seedCanonicalAcpSessionMeta({
         sessionKey: missingMetadataKey,
         lifecycleRevision: "deleted-lifecycle",
         meta,
@@ -189,7 +189,7 @@ it("keeps the physical shared-store owner and validates canonical ACP aliases in
           ),
         ).row,
       ).toBeUndefined();
-      writeAcpSessionMetaForMigration({
+      seedCanonicalAcpSessionMeta({
         sessionKey: "agent:WORKER:acp:CONTROL",
         lifecycleRevision: "successor",
         meta,
@@ -208,7 +208,7 @@ it("keeps the physical shared-store owner and validates canonical ACP aliases in
   });
 });
 
-it.each(["clear", "rebind", "destination-rebind", "same-binding", "runtime-rebind"] as const)(
+it.each(["clear", "rebind", "same-binding", "runtime-rebind"] as const)(
   "rechecks global metadata at controlled commit after an independent %s write",
   async (change) => {
     await withOpenClawTestState({ label: `acp-control-commit-${change}` }, async (state) => {
@@ -232,8 +232,8 @@ it.each(["clear", "rebind", "destination-rebind", "same-binding", "runtime-rebin
           spawnedBy: "agent:main:parent",
         },
       );
-      const aliasKey = "@agent:main:global";
-      writeAcpSessionMetaForMigration({
+      const aliasKey = buildAcpDatabaseSessionKey("global", "main");
+      seedCanonicalAcpSessionMeta({
         sessionKey: aliasKey,
         lifecycleRevision: "original-lifecycle",
         meta,
@@ -297,10 +297,7 @@ it.each(["clear", "rebind", "destination-rebind", "same-binding", "runtime-rebin
                   kind: "migration",
                   rows: [
                     {
-                      sessionKey:
-                        change === "destination-rebind"
-                          ? buildAcpDatabaseSessionKey("global", "main")
-                          : aliasKey,
+                      sessionKey: aliasKey,
                       lifecycleRevision:
                         change === "same-binding" || change === "runtime-rebind"
                           ? "original-lifecycle"
@@ -364,7 +361,6 @@ it.each(["clear", "rebind", "destination-rebind", "same-binding", "runtime-rebin
       }
       const { db } = openOpenClawStateDatabase();
       const canonical = selectAcpSessionRow(db, buildAcpDatabaseSessionKey("global", "main"));
-      const alias = selectAcpSessionRow(db, aliasKey);
       if (change === "same-binding") {
         expect(canonical).toMatchObject({
           session_id: "original-lifecycle",
@@ -372,23 +368,16 @@ it.each(["clear", "rebind", "destination-rebind", "same-binding", "runtime-rebin
           last_activity_at: 300,
         });
       } else if (change === "runtime-rebind") {
-        expect(canonical).toBeUndefined();
-        expect(alias).toMatchObject({
+        expect(canonical).toMatchObject({
           session_id: "original-lifecycle",
           runtime_session_name: "replacement-runtime",
           state: "running",
           last_activity_at: 200,
         });
-      } else if (change === "destination-rebind") {
+      } else if (change === "rebind") {
         expect(canonical).toMatchObject({ session_id: "replacement-lifecycle", state: "running" });
-        expect(alias).toMatchObject({ session_id: "original-lifecycle", state: "idle" });
       } else {
         expect(canonical).toBeUndefined();
-        if (change === "rebind") {
-          expect(alias).toMatchObject({ session_id: "replacement-lifecycle", state: "running" });
-        } else {
-          expect(alias).toBeUndefined();
-        }
       }
     });
   },

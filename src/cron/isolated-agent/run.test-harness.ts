@@ -59,8 +59,8 @@ function usesRealAccessorStore(storePath?: string): boolean {
 export const buildWorkspaceSkillSnapshotMock = vi.fn();
 export const resolveAgentConfigMock = vi.fn();
 const resolveAgentWorkspaceDirMock = vi.fn(
-  (cfg: { agents?: { list?: Array<{ id?: string; workspace?: string }> } }, agentId: string) =>
-    cfg.agents?.list?.find((entry) => entry.id === agentId)?.workspace ?? "/tmp/workspace",
+  (cfg: { agents?: { entries?: Record<string, { workspace?: string }> } }, agentId: string) =>
+    cfg.agents?.entries?.[agentId]?.workspace ?? "/tmp/workspace",
 );
 const resolveEffectiveModelFallbacksMock = vi.fn();
 const resolveSubagentModelFallbacksOverrideMock = vi.fn();
@@ -116,7 +116,7 @@ export const resolveSupportedThinkingLevelMock = vi.fn();
 const supportsXHighThinkingMock = vi.fn();
 const resolveSessionTranscriptPathMock = vi.fn();
 const setSessionRuntimeModelMock = vi.fn();
-const registerAgentRunContextMock = vi.fn();
+export const registerAgentRunContextMock = vi.fn();
 export const buildSafeExternalPromptMock = vi.fn();
 const detectSuspiciousPatternsMock = vi.fn();
 const mapHookExternalContentSourceMock = vi.fn();

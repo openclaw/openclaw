@@ -6,6 +6,7 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import {
   resolveModelCostConfig,
   resolveModelCostConfigFingerprint,
@@ -21,6 +22,7 @@ import {
   encodePluginModelCatalogRelativePath,
   loadPersistedPluginModelCatalogsReadOnly,
   PLUGIN_MODEL_CATALOG_GENERATED_BY,
+  pruneRemovedProviderPluginModelCatalogs,
   replacePersistedPluginModelCatalogs,
 } from "./plugin-model-catalog.js";
 
@@ -120,6 +122,117 @@ beforeEach(() => {
 });
 
 describe("models-config write serialization", () => {
+  it.each([
+    {
+      name: "normalized authored endpoint",
+      persistedBaseUrl: "https://ollama.example/v1",
+      removedBaseUrl: " HTTPS://OLLAMA.EXAMPLE:443/v1///?ignored=true#fragment ",
+      removed: true,
+    },
+    {
+      name: "nonmatching local discovery endpoint",
+      persistedBaseUrl: "http://127.0.0.1:11434",
+      removedBaseUrl: "https://ollama.example/v1",
+      removed: false,
+    },
+  ])(
+    "prunes only the removed provider's $name",
+    async ({ persistedBaseUrl, removedBaseUrl, removed }) => {
+      await withModelsTempHome(async (home) => {
+        const agentDir = path.join(home, "agent");
+        const provider = {
+          baseUrl: persistedBaseUrl,
+          api: "ollama",
+          models: [{ id: "cached-model", name: "Cached model" }],
+        };
+        const contents = JSON.stringify({
+          generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY,
+          providers: { ollama: provider, sibling: provider },
+        });
+        const otherCatalog = JSON.stringify({
+          generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY,
+          providers: { other: provider },
+        });
+        await replacePersistedPluginModelCatalogs({
+          agentDir,
+          pluginCatalogWrites: {
+            [encodePluginModelCatalogRelativePath("ollama")]: contents,
+            [encodePluginModelCatalogRelativePath("other")]: otherCatalog,
+          },
+        });
+        const before = loadPersistedPluginModelCatalogsReadOnly(agentDir);
+        expect(
+          await pruneRemovedProviderPluginModelCatalogs({
+            agentDir,
+            removedProviderBaseUrls: { ollama: removedBaseUrl },
+          }),
+        ).toBe(removed);
+        expect(loadPersistedPluginModelCatalogsReadOnly(agentDir)).toEqual(
+          removed
+            ? [
+                {
+                  pluginId: "ollama",
+                  contents: JSON.stringify({
+                    generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY,
+                    providers: { sibling: provider },
+                  }),
+                },
+                { pluginId: "other", contents: otherCatalog },
+              ]
+            : before,
+        );
+        expect(
+          await pruneRemovedProviderPluginModelCatalogs({
+            agentDir,
+            removedProviderBaseUrls: { ollama: removedBaseUrl },
+          }),
+        ).toBe(false);
+      });
+    },
+  );
+
+  it("prunes after an older discovery plan finishes publishing", async () => {
+    await withModelsTempHome(async (home) => {
+      const agentDir = path.join(home, "agent");
+      const contents = JSON.stringify({
+        generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY,
+        providers: {
+          ollama: {
+            baseUrl: "https://ollama.com",
+            api: "ollama",
+            models: [{ id: "cached-model", name: "Cached model" }],
+          },
+        },
+      });
+      const pluginCatalogWrites = { [encodePluginModelCatalogRelativePath("ollama")]: contents };
+      await replacePersistedPluginModelCatalogs({ agentDir, pluginCatalogWrites });
+      const entered = createDeferredCore();
+      const release = createDeferredCore();
+      planOpenClawModelsJsonMock.mockImplementationOnce(async () => {
+        entered.resolve();
+        await release.promise;
+        return { action: "noop", pluginCatalogWrites };
+      });
+      const discovery = ensureOpenClawModelsJson({}, agentDir);
+      await entered.promise;
+      const removal = pruneRemovedProviderPluginModelCatalogs({
+        agentDir,
+        removedProviderBaseUrls: { ollama: "https://ollama.com" },
+      });
+      release.resolve();
+      await Promise.all([discovery, removal]);
+      expect(loadPersistedPluginModelCatalogsReadOnly(agentDir)).toEqual([
+        {
+          pluginId: "ollama",
+          contents: JSON.stringify({
+            generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY,
+            providers: {},
+          }),
+        },
+      ]);
+    });
+  });
+
   it("retains configless caller options across asynchronous config capture", async () => {
     await withModelsTempHome(async (home) => {
       setRuntimeConfigSnapshot(CUSTOM_PROXY_MODELS_CONFIG);
@@ -216,7 +329,8 @@ describe("models-config write serialization", () => {
       );
       const cfg = {
         agents: {
-          list: [{ id: "main" }, { id: "ops", default: true }],
+          defaults: { systemAgent: { agentId: "ops" } },
+          entries: { main: {}, ops: {} },
         },
       };
 

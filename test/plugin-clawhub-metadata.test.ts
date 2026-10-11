@@ -2,10 +2,9 @@ import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import {
-  resolvePluginNpmCommand,
-  withAugmentedPluginNpmManifestForPackage,
-} from "../scripts/lib/plugin-npm-package-manifest.mts";
+import { resolveNpmJsonEntries } from "../scripts/lib/npm-json-output.mts";
+import { withAugmentedPluginNpmManifestForPackage } from "../scripts/lib/plugin-npm-package-manifest.mts";
+import { resolveNpmRunner } from "../scripts/npm-runner.mts";
 import { inspectPackageTarballBytes } from "../scripts/plugin-publication-artifact.mjs";
 import { cleanupTempDirs, makeTempDir } from "./helpers/temp-dir.js";
 import { writeJsonFile } from "./helpers/temp-repo.js";
@@ -48,13 +47,9 @@ function fixture({
 }
 
 function pack(packageDir: string, destination: string) {
-  const invocation = resolvePluginNpmCommand([
-    "pack",
-    "--json",
-    "--ignore-scripts",
-    "--pack-destination",
-    destination,
-  ]);
+  const invocation = resolveNpmRunner({
+    npmArgs: ["pack", "--json", "--ignore-scripts", "--pack-destination", destination],
+  });
   const result = spawnSync(invocation.command, invocation.args, {
     cwd: packageDir,
     encoding: "utf8",
@@ -63,8 +58,13 @@ function pack(packageDir: string, destination: string) {
     windowsVerbatimArguments: invocation.windowsVerbatimArguments,
   });
   expect(result.status, result.stderr).toBe(0);
-  const [packed] = JSON.parse(result.stdout) as Array<{ filename: string }>;
-  if (!packed) {
+  const [packed] = resolveNpmJsonEntries(JSON.parse(result.stdout));
+  if (
+    !packed ||
+    typeof packed !== "object" ||
+    !("filename" in packed) ||
+    typeof packed.filename !== "string"
+  ) {
     throw new Error("npm pack returned no artifact");
   }
   return inspectPackageTarballBytes(readFileSync(join(destination, packed.filename)));

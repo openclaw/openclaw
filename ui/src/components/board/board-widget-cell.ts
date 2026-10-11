@@ -42,7 +42,6 @@ import {
   BOARD_SIZE_PRESETS,
   closeBoardWidgetMenu,
   renderBoardDisabledPlugin,
-  renderBoardWidgetActionError,
   renderBoardWidgetError,
   renderBoardWidgetMenu,
   renderBoardWidgetRejected,
@@ -94,9 +93,11 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
   @property({ type: Boolean }) busy = false;
   @property({ type: Boolean }) canMutate = true;
   @property({ type: Boolean }) canGrant = true;
+  @property({ type: Boolean }) loadingCovered = false;
 
   @state() private actionError = "";
   @state() private actionPending = false;
+  private bodyErrored = false;
   private readonly coreWidgetLoader = new LazyCustomElementRequestController(this);
   private readonly pluginSubscriptions = new SubscriptionsController(this).watchStore(
     () => this.context?.plugins,
@@ -110,6 +111,7 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
   });
   private readonly frame = new BoardWidgetFrameLifecycle({
     active: () => this.active,
+    loadingCovered: () => this.loadingCovered,
     bridgeEnabled: () => this.bridgeEnabled,
     connected: () => this.isConnected,
     context: () => this.context,
@@ -165,6 +167,21 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
       }
     });
     this.frame.update();
+    if (this.loadingCovered && this.presentationReady) {
+      this.dispatchEvent(new Event("openclaw-board-widget-presentation", { bubbles: true }));
+    }
+  }
+
+  get presentationReady(): boolean {
+    const widget = this.widget;
+    // Native views and access notices own their loading and recovery presentation.
+    return (
+      !widget?.viewTicket ||
+      widget.grantState === "pending" ||
+      widget.grantState === "rejected" ||
+      this.bodyErrored ||
+      this.frame.presentationReady
+    );
   }
 
   override disconnectedCallback(): void {
@@ -246,7 +263,7 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
             disabled: this.busy || this.actionPending || !this.canGrant,
             onGrant: (decision) => this.runGrantDecision(widget, callbacks, decision),
             ...(this.actionError
-              ? { error: renderBoardWidgetActionError(this.actionError, true) }
+              ? { error: renderBoardWidgetError(this.actionError, { action: true, inline: true }) }
               : {}),
           })
         : widget.grantState === "rejected"
@@ -318,7 +335,6 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
             canMutate: this.canMutate,
             canGrant: this.canGrant,
           },
-          nothing,
           this.active,
         );
       }
@@ -334,7 +350,7 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
           (entry) => entry.pluginId === pluginId || entry.pluginId === "host",
         );
         if (error) {
-          return renderBoardWidgetError(error.message, () => void runtime.refresh());
+          return renderBoardWidgetError(error.message, { onRetry: () => void runtime.refresh() });
         }
       }
       return renderBoardDisabledPlugin({
@@ -409,6 +425,7 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
       body = renderBoardWidgetError(error);
       bodyErrored = true;
     }
+    this.bodyErrored = bodyErrored;
     const label = widget.title || widget.name;
     const readOnly = !this.canMutate;
     const bodyScrollable =
@@ -507,7 +524,7 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
           ${
             this.actionError && widget.grantState !== "pending"
               ? html`<div class="board-widget__error-overlay">
-                  ${renderBoardWidgetActionError(this.actionError)}
+                  ${renderBoardWidgetError(this.actionError, { action: true })}
                 </div>`
               : nothing
           }

@@ -33,7 +33,6 @@ import { readChatSessionActionAccess } from "./chat-session-action-access.ts";
 import { formatConnectError } from "./connect-error.ts";
 import {
   getChatSessionProjection,
-  observeChatRunModel,
   reduceChatSessionProjection,
   setChatRunOwner,
 } from "./history-merge.ts";
@@ -41,7 +40,7 @@ import { resetChatInputHistoryNavigation, type ChatInputHistoryState } from "./i
 import type { ToolStreamHost } from "./tool-stream-contract.ts";
 import { canResetToolStream, resetToolStream, resetToolStreamRun } from "./tool-stream-state.ts";
 
-export const CHAT_RUN_STATUS_TOAST_DURATION_MS = 5_000;
+const CHAT_RUN_STATUS_TOAST_DURATION_MS = 5_000;
 
 export type ChatHistoryRunObservation = {
   runId: string;
@@ -224,10 +223,10 @@ export function hasAbortableSessionRun(host: SessionRunHost): boolean {
 }
 
 export function isChatStopCommand(text: string) {
-  return CHAT_STOP_COMMANDS.has(normalizeLowercaseStringOrEmpty(text.trim()));
+  return CHAT_STOP_COMMANDS.has(normalizeLowercaseStringOrEmpty(text));
 }
 
-type ChatAbortOptions = { preserveDraft?: boolean };
+type ChatAbortOptions = { preserveDraft?: boolean; scope?: "session" };
 
 function ownsChatAbortIntent(state: ChatAbortRunState, intent: ChatAbortIntent): boolean {
   const conversation = resolveUiConversationIdentity(state, state.sessionKey);
@@ -283,13 +282,15 @@ async function settleChatAbortResponse(
   return result.ok;
 }
 
-async function abortChatRun(state: ChatAbortRunState, intent?: ChatAbortIntent) {
+async function abortChatRun(state: ChatAbortRunState, intent?: ChatAbortIntent, scope?: "session") {
   const client = state.client;
   if (!client || !state.connected) {
     return false;
   }
   const captured = intent ?? currentChatAbortIntent(state, client);
-  const result = await requestChatAbort(client, captured);
+  // Session cancellation still answers to the run that owned the Stop action.
+  const target = scope ? currentChatAbortIntent(state, client, scope) : captured;
+  const result = await requestChatAbort(client, target);
   return settleChatAbortResponse(state, captured, result);
 }
 
@@ -369,7 +370,7 @@ export async function handleAbortChat(host: ChatAbortHost, opts?: ChatAbortOptio
     host.pendingAbort = pendingAbort;
     return;
   }
-  await abortChatRun(host);
+  await abortChatRun(host, undefined, opts?.scope);
 }
 
 function clearTimer(timer: TimerHandle | number | null | undefined) {
@@ -499,7 +500,9 @@ export function reconcileChatRunLifecycle(host: RunLifecycleHost, options: Recon
     host.chatStreamStartedAt = null;
   }
   if (options.clearLocalRun) {
-    observeChatRunModel(host, undefined);
+    if (!runId || host.chatReasoning?.runId === runId) {
+      host.chatReasoning = null;
+    }
     if (host.chatRunId) {
       host.chatRunLifecycleGeneration = (host.chatRunLifecycleGeneration ?? 0) + 1;
     }
@@ -644,26 +647,13 @@ export function reconcileChatRunFromSessionRow(
     historyRun?: ChatHistoryRunObservation | null;
   } = {},
 ): boolean {
-  if (!uiSessionRowMatchesSelectedChat(host, row.key, host.sessionKey, row.agentId)) {
-    return false;
-  }
-  if (!host.chatRunId && host.chatStream == null) {
-    return false;
-  }
-  if (row.hasActiveRun === true) {
-    return false;
-  }
-  if (isSessionRunActive(row)) {
-    return false;
-  }
-  // Transcript snapshots can briefly lose the active-run projection while the
-  // persisted lifecycle is still running. Wait for a real terminal status so
-  // tool updates cannot flash an interrupted composer state mid-turn.
-  if (row.hasActiveRun !== false && row.status === "running") {
-    return false;
-  }
-  const terminalStatus = row.status !== undefined;
-  if (row.hasActiveRun !== false && !terminalStatus) {
+  if (
+    !uiSessionRowMatchesSelectedChat(host, row.key, host.sessionKey, row.agentId) ||
+    (!host.chatRunId && host.chatStream == null) ||
+    row.hasActiveRun === true ||
+    isSessionRunActive(row) ||
+    (row.hasActiveRun !== false && row.status === undefined)
+  ) {
     return false;
   }
   const runId = host.chatRunId;

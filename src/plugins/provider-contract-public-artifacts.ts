@@ -9,15 +9,6 @@ type ProviderContractEntry = {
   provider: ProviderPlugin;
 };
 
-function isProviderPlugin(value: unknown): value is ProviderPlugin {
-  return (
-    isRecord(value) &&
-    typeof value.id === "string" &&
-    typeof value.label === "string" &&
-    Array.isArray(value.auth)
-  );
-}
-
 export function resolveBundledExplicitProviderContractsFromPublicArtifacts(params: {
   onlyPluginIds: readonly string[];
 }): ProviderContractEntry[] | null {
@@ -33,7 +24,11 @@ export function resolveBundledExplicitProviderContractsFromPublicArtifacts(param
     const entries = collectPublicArtifactFactories({
       mod,
       suffix: "Provider",
-      isArtifact: isProviderPlugin,
+      isArtifact: (value): value is ProviderPlugin =>
+        isRecord(value) &&
+        typeof value.id === "string" &&
+        typeof value.label === "string" &&
+        Array.isArray(value.auth),
     });
     if (entries.length === 0) {
       return null;

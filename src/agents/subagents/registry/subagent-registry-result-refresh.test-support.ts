@@ -13,6 +13,7 @@ import {
 } from "../../subagent-test-fixtures.test-helpers.js";
 import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
 import type { createSubagentRegistryMockState } from "./subagent-registry.mock-state.test-support.js";
+import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 export function registerSubagentResultRefreshCases(params: {
   getRegistry: () => SubagentRegistryHarness;
@@ -44,7 +45,7 @@ export function registerSubagentResultRefreshCases(params: {
       await waitStarted.promise;
       expect(mocks.callGateway).toHaveBeenCalled();
       const entry = expectDefined(
-        mod.getSubagentRunByChildSessionKey(childSessionKey),
+        await mod.getSubagentRunByChildSessionKey(childSessionKey),
         "registered result owner",
       );
       await mutateSubagentRuns([entry.runId], (rows) => {
@@ -122,4 +123,16 @@ export function registerSubagentResultRefreshCases(params: {
       }
     },
   );
+}
+
+export async function updateSubagentRunFixture(
+  runId: string,
+  update: (entry: SubagentRunRecord) => void,
+) {
+  await mutateSubagentRuns([runId], (rows) => {
+    const current = expectDefined(rows.get(runId), "registered fixture run");
+    const next = structuredClone(current);
+    update(next);
+    return { value: undefined, postimages: new Map([[runId, next]]) };
+  });
 }

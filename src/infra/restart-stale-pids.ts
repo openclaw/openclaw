@@ -231,13 +231,6 @@ function readUnixProcessArgsSync(pid: number, spawnTimeoutMs: number): string[] 
   return parsePsCommandLine(res.stdout.trim());
 }
 
-function verifyGatewayPidByArgvSync(pid: number, spawnTimeoutMs: number): boolean {
-  const args = readUnixProcessArgsSync(pid, spawnTimeoutMs);
-  return (
-    args != null && classifyOpenClawArgv(args, { command: "gateway", pid }).kind === "openclaw"
-  );
-}
-
 function parsePidsFromLsofOutput(
   stdout: string,
   spawnTimeoutMs: number,
@@ -254,7 +247,11 @@ function parsePidsFromLsofOutput(
     if (!pid || excluded.has(pid)) {
       continue;
     }
-    if (verifyGatewayPidByArgvSync(pid, spawnTimeoutMs)) {
+    const args = readUnixProcessArgsSync(pid, spawnTimeoutMs);
+    if (
+      args != null &&
+      classifyOpenClawArgv(args, { command: "gateway", pid }).kind === "openclaw"
+    ) {
       pids.push(pid);
     }
   }
@@ -318,14 +315,6 @@ function resolveProtectedPidAfterEnumeration(
   return options?.resolveProtectedPid ? options.resolveProtectedPid() : options?.protectedPid;
 }
 
-function findVerifiedWindowsGatewayPidsOnPortSync(
-  port: number,
-  options?: CleanStaleGatewayProcessesOptions,
-): number[] {
-  const rawPids = readWindowsListeningPidsOnPortSync(port);
-  return filterVerifiedWindowsGatewayPids(rawPids, resolveProtectedPidAfterEnumeration(options));
-}
-
 function findVerifiedWindowsGatewayPidsOnPortResultSync(
   port: number,
   options?: CleanStaleGatewayProcessesOptions,
@@ -341,6 +330,15 @@ function findVerifiedWindowsGatewayPidsOnPortResultSync(
   );
 }
 
+function scanListeningPort(port: number, timeout: number) {
+  const lsof = resolveLsofCommandSync();
+  return spawnSync(lsof, ["-nP", `-iTCP:${port}`, "-sTCP:LISTEN", "-Fpc"], {
+    env: resolveDiagnosticProcessEnv(),
+    encoding: "utf8",
+    timeout,
+  });
+}
+
 function findGatewayPidsOnPortWithProtectedPidSync(
   port: number,
   lsofTimeoutMs: number,
@@ -350,14 +348,10 @@ function findGatewayPidsOnPortWithProtectedPidSync(
   if (process.platform === "win32") {
     // Use the shared Windows port inspection (PowerShell / netstat) with
     // command-line verification to find only openclaw gateway processes.
-    return findVerifiedWindowsGatewayPidsOnPortSync(port, options);
+    const rawPids = readWindowsListeningPidsOnPortSync(port);
+    return filterVerifiedWindowsGatewayPids(rawPids, resolveProtectedPidAfterEnumeration(options));
   }
-  const lsof = resolveLsofCommandSync();
-  const res = spawnSync(lsof, ["-nP", `-iTCP:${port}`, "-sTCP:LISTEN", "-Fpc"], {
-    env: resolveDiagnosticProcessEnv(),
-    encoding: "utf8",
-    timeout: lsofTimeoutMs,
-  });
+  const res = scanListeningPort(port, lsofTimeoutMs);
   if (res.error) {
     const code = (res.error as NodeJS.ErrnoException).code;
     // Missing lsof is an expected state on minimal hosts. Permission and timeout
@@ -365,12 +359,7 @@ function findGatewayPidsOnPortWithProtectedPidSync(
     if (code === "ENOENT") {
       return [];
     }
-    const detail =
-      code && code.trim().length > 0
-        ? code
-        : res.error instanceof Error
-          ? res.error.message
-          : "unknown error";
+    const detail = code && code.trim().length > 0 ? code : res.error.message;
     restartLog.warn(`lsof failed during initial stale-pid scan for port ${port}: ${detail}`);
     return [];
   }
@@ -405,19 +394,18 @@ export function findGatewayPidsOnPortSync(port: number, spawnTimeoutMs?: number)
 }
 
 // Unknown probes distinguish permanent tool failures from retryable inspection errors.
-type PollResult = { free: true } | { free: false } | { free: null; permanent: boolean };
+type PollResult = { free: boolean } | { free: null; permanent: boolean };
 
 function pollPortOnce(port: number): PollResult {
-  if (process.platform === "win32") {
-    return pollPortOnceWindows(port);
-  }
   try {
-    const lsof = resolveLsofCommandSync();
-    const res = spawnSync(lsof, ["-nP", `-iTCP:${port}`, "-sTCP:LISTEN", "-Fpc"], {
-      env: resolveDiagnosticProcessEnv(),
-      encoding: "utf8",
-      timeout: POLL_SPAWN_TIMEOUT_MS,
-    });
+    if (process.platform === "win32") {
+      // Occupancy alone matters after cleanup; keep PowerShell within the per-probe budget.
+      const result = readWindowsListeningPidsResultSync(port, POLL_SPAWN_TIMEOUT_MS);
+      return result.ok
+        ? { free: result.pids.length === 0 }
+        : { free: null, permanent: result.permanent };
+    }
+    const res = scanListeningPort(port, POLL_SPAWN_TIMEOUT_MS);
     if (res.error) {
       // Spawn-level failure. ENOENT / EACCES means lsof is permanently
       // unavailable on this system; other errors (e.g. timeout) are transient.
@@ -441,19 +429,6 @@ function pollPortOnce(port: number): PollResult {
     // status === 0: lsof found a listener. Occupancy does not depend on whether
     // its PID field is present, valid, or attributable to an OpenClaw process.
     return { free: false };
-  } catch {
-    return { free: null, permanent: false };
-  }
-}
-
-// Occupancy alone matters after cleanup; keep PowerShell within the per-probe budget.
-function pollPortOnceWindows(port: number): PollResult {
-  try {
-    const result = readWindowsListeningPidsResultSync(port, POLL_SPAWN_TIMEOUT_MS);
-    if (!result.ok) {
-      return { free: null, permanent: result.permanent };
-    }
-    return result.pids.length === 0 ? { free: true } : { free: false };
   } catch {
     return { free: null, permanent: false };
   }
@@ -519,16 +494,14 @@ function terminateStaleProcessesWindows(pids: number[], canSignal: () => boolean
     "System32",
     "taskkill.exe",
   );
+  const taskkill = (args: string[]) =>
+    spawnSync(taskkillPath, args, { stdio: "ignore", timeout: 5000, windowsHide: true });
   const killed: number[] = [];
   for (const pid of pids) {
     if (!canSignal()) {
       break;
     }
-    const graceful = spawnSync(taskkillPath, ["/T", "/PID", String(pid)], {
-      stdio: "ignore",
-      timeout: 5000,
-      windowsHide: true,
-    });
+    const graceful = taskkill(["/T", "/PID", String(pid)]);
     const gracefulFailed = graceful.error != null || (graceful.status ?? 0) !== 0;
     if (!gracefulFailed && !isPidAlive(pid)) {
       killed.push(pid);
@@ -542,11 +515,7 @@ function terminateStaleProcessesWindows(pids: number[], canSignal: () => boolean
     if (!canSignal()) {
       break;
     }
-    const forced = spawnSync(taskkillPath, ["/F", "/T", "/PID", String(pid)], {
-      stdio: "ignore",
-      timeout: 5000,
-      windowsHide: true,
-    });
+    const forced = taskkill(["/F", "/T", "/PID", String(pid)]);
     if (forced.error != null || (forced.status ?? 0) !== 0) {
       continue;
     }

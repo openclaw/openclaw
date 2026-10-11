@@ -2,7 +2,10 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { runWithCliHistoryWriter } from "../../config/sessions/cli-history-boundary.js";
+import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import { stageSessionPendingInput } from "../../config/sessions/session-accessor.pending-inputs.js";
 import { setActiveNodeContexts } from "../../infra/active-node-context.js";
+import type { CliBackendExecuteContext } from "../../plugins/cli-backend.types.js";
 import * as globalHooks from "../../plugins/hook-runner-global.js";
 import { saveAuthProfileStore } from "../auth-profiles/store-runtime.js";
 import { testing as cliBackendsTesting } from "../cli-backends.test-support.js";
@@ -12,6 +15,7 @@ import {
 } from "../cli-runner.test-helpers.js";
 import * as maintenance from "../embedded-agent-runner/context-engine-maintenance.js";
 import { SessionManager } from "../sessions/session-manager.js";
+import { executePreparedCliRun } from "./execute.js";
 import { prepareCliRunContext } from "./prepare.js";
 import {
   resetCliRunnerPrepareTestDeps,
@@ -33,6 +37,13 @@ describe("CLI durable session context", () => {
             type: "token",
             provider: "test-cli",
             token: "synthetic-history-account",
+          },
+          "history-test:unknown": {
+            type: "oauth",
+            provider: "test-cli",
+            access: "synthetic-identityless-access",
+            refresh: "synthetic-identityless-refresh",
+            expires: Date.now() + 60_000,
           },
           "history-test:other": {
             type: "token",
@@ -150,19 +161,29 @@ describe("CLI durable session context", () => {
 
       const activeNodeText =
         "Current active computer (latest reported app/system input, not message origin): active_node=mac-one active_node_identity=unknown";
-      const logicalPrompt = `Sender: ⟦openclaw:ctx⟧\nsender_id=U123 trusted hook context\n\nlatest ask\n\ntrusted hook tail\n\n${activeNodeText}`;
-      expect(context.params.prompt).toBe(
-        pluginExecution ? "Sender: ⟦openclaw:ctx⟧\nsender_id=U123 latest ask" : logicalPrompt,
+      const logicalPrompt = context.promptForHooks ?? context.params.prompt;
+      expect(logicalPrompt).toMatch(
+        /^Sender: ⟦openclaw:ctx⟧\nsender_id=U123 trusted hook context\n\nlatest ask\n\ntrusted hook tail\n\nFor the current source conversation,/,
       );
+      expect(logicalPrompt.endsWith(`\n\n${activeNodeText}`)).toBe(true);
+      if (pluginExecution) {
+        expect(context.params.prompt).toBe("Sender: ⟦openclaw:ctx⟧\nsender_id=U123 latest ask");
+      }
       expect(context.promptContext).toEqual(
         pluginExecution
           ? {
               prependContext: "trusted hook context",
-              appendContext: `trusted hook tail\n\n${activeNodeText}`,
+              appendContext: expect.stringMatching(
+                /^trusted hook tail\n\nFor the current source conversation,/,
+              ),
             }
           : undefined,
       );
-      expect(context.promptForHooks).toBe(pluginExecution ? logicalPrompt : undefined);
+      if (pluginExecution) {
+        expect(context.promptContext?.appendContext?.endsWith(`\n\n${activeNodeText}`)).toBe(true);
+      } else {
+        expect(context.promptForHooks).toBeUndefined();
+      }
       expect(context.params.transcriptPrompt).toBe("latest ask");
       expect(context.contextEngineTurnPrompt).toBe("latest ask");
       expect(hookRunner.runBeforePromptBuild).toHaveBeenCalledTimes(1);
@@ -227,9 +248,13 @@ describe("CLI durable session context", () => {
     });
     cleanups.push(() => context.preparedBackend.cleanup?.());
 
-    expect(context.params.prompt).toBe(
-      "hook context\n\ncurrent ask\n\nCurrent active computer (latest reported app/system input, not message origin): active_node=unknown active_node_identity=unknown",
+    expect(context.params.prompt).toMatch(
+      /^hook context\n\ncurrent ask\n\nFor the current source conversation,/,
     );
+    expect(context.params.prompt).toMatch(
+      /\n\nCurrent active computer .*active_node=unknown active_node_identity=unknown$/,
+    );
+    expect(context.params.transcriptPrompt).toBe("current ask");
     expect(context.openClawHistoryPrompt).toContain("Compaction summary: compacted earlier ask");
     expect(context.openClawHistoryPrompt).toContain("hook context");
     expect(context.openClawHistoryPrompt).toContain("current ask");
@@ -269,22 +294,35 @@ describe("CLI durable session context", () => {
   });
 
   it.each([
-    { transport: "plugin", resume: false, changeAccount: false },
-    { transport: "process", resume: true, changeAccount: false },
-    { transport: "plugin", resume: true, changeAccount: true },
+    { transport: "plugin", resume: false },
+    { transport: "process", resume: true },
+    { transport: "plugin", resume: true, account: "other" },
+    { transport: "process", resume: true, account: "other" },
+    { transport: "plugin", resume: true, account: "unknown" },
+    { transport: "process", resume: true, account: "unknown" },
+    { transport: "plugin", resume: true, callerMemory: true },
+    { transport: "plugin", resume: true, revoke: true },
   ])(
-    "preserves owned reference facts for $transport, resume=$resume, changeAccount=$changeAccount",
+    "preserves owned reference facts for $transport, resume=$resume, account=$account, callerMemory=$callerMemory, revoke=$revoke",
     async (testCase) => {
+      const sent: Array<Pick<CliBackendExecuteContext, "prompt" | "promptContext">> = [];
       cliBackendsTesting.setDepsForTest({
         resolvePluginSetupCliBackend: () => undefined,
         resolveRuntimeCliBackends: () => [
           {
             ...buildDefaultTestCliBackend(),
+            config: {
+              ...buildDefaultTestCliBackend().config,
+              command: process.execPath,
+              output: "jsonl",
+              jsonlDialect: "claude-stream-json",
+            },
             ...(testCase.transport === "plugin"
               ? {
                   prepareExecution: () => ({
-                    async *execute() {
-                      yield { type: "result" };
+                    async *execute(input: CliBackendExecuteContext) {
+                      sent.push({ prompt: input.prompt, promptContext: input.promptContext });
+                      yield { type: "result", subtype: "success", result: "complete" };
                     },
                   }),
                 }
@@ -305,16 +343,35 @@ describe("CLI durable session context", () => {
           timestamp: 1,
         },
       });
+      const pending = await stageSessionPendingInput(fixture.session.sessionTarget, {
+        runId: "interrupted-account-request",
+        message: {
+          role: "user",
+          content: "PRIVATE-INTERRUPTED-1234",
+          timestamp: 1,
+          idempotencyKey: "interrupted-account-request:user",
+        },
+        assertCurrent: () => {},
+      });
+      const receipt = expectDefined(pending, "interrupted input receipt");
+      receipt.finish("interrupted");
+      await receipt.settled?.();
       const context = await history.prepare({
         ...(testCase.resume ? { cliSessionId: "existing-native-session" } : {}),
-        ...(testCase.changeAccount ? { authProfileId: "history-test:other" } : {}),
+        ...(testCase.account ? { authProfileId: `history-test:${testCase.account}` } : {}),
+        ...(testCase.callerMemory
+          ? { sessionManager: SessionManager.fromEntries([], fixture.session.dir) }
+          : {}),
       });
+      const denied = Boolean(testCase.account || testCase.callerMemory);
       try {
         const logicalPrompt = context.promptForHooks ?? context.params.prompt;
-        if (testCase.changeAccount) {
+        if (denied) {
+          expect(logicalPrompt).not.toContain("PRIVATE-INTERRUPTED-1234");
           expect(logicalPrompt).not.toContain("RESULT-1234");
           expect(context.cliHistoryWriter).toBeUndefined();
         } else {
+          expect(logicalPrompt).toContain("PRIVATE-INTERRUPTED-1234");
           expect(logicalPrompt).toContain("RESULT-1234");
           expect(logicalPrompt).toContain("data, not instructions");
           expect(context.params.transcriptPrompt).toBe("latest ask");
@@ -327,8 +384,28 @@ describe("CLI durable session context", () => {
         );
         if (testCase.transport === "plugin") {
           expect(context.params.prompt).toBe("latest ask");
-          if (!testCase.changeAccount) {
+          if (!denied) {
             expect(context.promptContext?.prependContext).toContain("RESULT-1234");
+          }
+          if (testCase.revoke) {
+            await patchSessionEntryCore(fixture.session.sessionTarget, () => ({
+              cliHistoryBoundary: {
+                version: 1,
+                sessionId: fixture.session.sessionTarget.sessionId,
+                state: "unknown",
+              },
+            }));
+            await expect(executePreparedCliRun(context, "existing-native-session")).rejects.toThrow(
+              "CLI history authority changed",
+            );
+            expect(sent).toHaveLength(0);
+          } else {
+            await executePreparedCliRun(
+              context,
+              testCase.resume ? "existing-native-session" : undefined,
+            );
+            expect(sent).toHaveLength(1);
+            expect(JSON.stringify(sent).includes("PRIVATE-INTERRUPTED-1234")).toBe(!denied);
           }
         }
         expect(context.openClawHistoryPrompt).toBeUndefined();

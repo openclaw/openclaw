@@ -40,6 +40,9 @@ export function createSessionRowProjectionCatalog(params: {
   let replacement: Promise<void> | undefined;
   let disposed = false;
   const unsubscribe = registerPreparedModelRuntimePublicationListener((event) => {
+    if (event.phase === "catalog-status") {
+      return;
+    }
     if (event.phase === "invalidated" && event.replacement) {
       const replacing = (replacement = event.replacement);
       const settled = () => {

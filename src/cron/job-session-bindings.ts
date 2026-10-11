@@ -4,9 +4,12 @@ import { tryResolveCronJobEffectiveAgentId } from "./agent-id.js";
 import { resolveCronAgentSessionKey } from "./isolated-agent/session-key.js";
 import type { CronServiceContract } from "./service-contract.js";
 import { resolveCronSessionTargetSessionKey } from "./session-target.js";
-import type { CronJob } from "./types.js";
+import type { CronJob, CronStoredJob } from "./types.js";
 
-type CronJobSessionBinding = Pick<CronJob, "id" | "agentId" | "sessionKey" | "sessionTarget">;
+type CronJobSessionBinding = Pick<
+  CronStoredJob,
+  "id" | "agentId" | "sessionKey" | "sessionTarget" | "sourceConversation"
+>;
 
 /**
  * Resolves every canonical session key a job is bound to: the session the run
@@ -50,6 +53,7 @@ export function resolveCronJobBoundSessionKeys(
       add(resolveCronSessionTargetSessionKey(job.sessionTarget));
     }
     add(job.sessionKey);
+    add(job.sourceConversation?.sessionKey);
   } catch {
     // Malformed persisted targets are quarantined by the store loader; a job
     // that slips through must not break session listing, so bind nothing.

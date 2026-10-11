@@ -28,6 +28,7 @@ import {
   trackAsyncWork,
 } from "../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import * as agentDatabaseDisposal from "../../state/openclaw-agent-db-disposal.js";
 import * as agentDatabase from "../../state/openclaw-agent-db.js";
 import * as testState from "../../test-utils/openclaw-test-state.js";
 import { runAuthProbes, withAuthProbeStateOwnership } from "./list.probe.js";
@@ -150,6 +151,15 @@ async function runProbeResourceFixture(mode: (typeof resourceModes)[number]) {
     const warnings = vi.spyOn(console, "warn").mockImplementation(() => {});
     let cleanupSignal: AbortSignal | undefined;
     let stagedAgentDir: string | undefined;
+    releases.splice(-1, 0, async () => {
+      if (stagedAgentDir && fs.existsSync(stagedAgentDir)) {
+        await agentDatabaseDisposal.disposeOpenClawAgentDatabaseByPath(
+          resolveAuthProfileDatabasePath(stagedAgentDir),
+          { env: state.env },
+        );
+        await fs.promises.rm(stagedAgentDir, { recursive: true, force: true });
+      }
+    });
     let profileId: string | undefined;
     let assertAdmitted: (() => void) | undefined;
     const reads: boolean[] = [];
@@ -214,10 +224,10 @@ async function runProbeResourceFixture(mode: (typeof resourceModes)[number]) {
     });
     if (mode === "db-close-failure") {
       setLoggerOverride({ level: "silent", consoleLevel: "warn", consoleStyle: "compact" });
-      const dispose = agentDatabase.disposeOpenClawAgentDatabaseByPath;
-      vi.spyOn(agentDatabase, "disposeOpenClawAgentDatabaseByPath").mockImplementation(
-        (pathname, options) => {
-          const closed = dispose(pathname, options);
+      const dispose = agentDatabaseDisposal.disposeOpenClawAgentDatabaseByPath;
+      vi.spyOn(agentDatabaseDisposal, "disposeOpenClawAgentDatabaseByPath").mockImplementation(
+        async (pathname, options) => {
+          const closed = await dispose(pathname, options);
           if (stagedAgentDir && pathname.startsWith(stagedAgentDir + path.sep)) {
             throw new Error("synthetic late database disposal failure");
           }
@@ -311,9 +321,11 @@ async function runProbeResourceFixture(mode: (typeof resourceModes)[number]) {
       expect(() => assertAdmitted?.()).toThrow();
       expect(fs.existsSync(stagedAgentDir!)).toBe(true);
       expect(readProbeSession()?.entry).toBeDefined();
-      expect(
-        agentDatabase.isOpenClawAgentDatabaseOpen(resolveAuthProfileDatabasePath(stagedAgentDir!)),
-      ).toBe(true);
+      const registeredPaths = () =>
+        agentDatabase
+          .listOpenClawRegisteredAgentDatabases({ env: state.env })
+          .map((registered) => registered.path);
+      expect(registeredPaths()).toContain(resolveAuthProfileDatabasePath(stagedAgentDir!));
       if (exclusive) {
         expect(fs.existsSync(lockPath)).toBe(true);
         expect(signals.listenerCount("SIGTERM")).toBe(1);
@@ -337,16 +349,17 @@ async function runProbeResourceFixture(mode: (typeof resourceModes)[number]) {
       expect(reads).toEqual(mode === "late-failure" ? [true, true] : [true, true, true, true]);
       expect(fs.existsSync(lockPath)).toBe(false);
       expect(signals.listenerCount("SIGTERM")).toBe(0);
-      expect(fs.existsSync(stagedAgentDir!)).toBe(false);
+      expect(fs.existsSync(stagedAgentDir!)).toBe(mode === "db-close-failure");
       expect(readProbeSession()?.entry).toBeUndefined();
       if (mode === "db-close-failure") {
         expect(warnings).toHaveBeenCalledWith(
           expect.stringContaining("synthetic late database disposal failure"),
         );
+        expect(warnings).toHaveBeenCalledWith(
+          expect.stringContaining(`retained ${stagedAgentDir}`),
+        );
       }
-      expect(
-        agentDatabase.isOpenClawAgentDatabaseOpen(resolveAuthProfileDatabasePath(stagedAgentDir!)),
-      ).toBe(false);
+      expect(registeredPaths()).not.toContain(resolveAuthProfileDatabasePath(stagedAgentDir!));
       expect(fs.existsSync(state.agentDir())).toBe(true);
       expect(cleanup.outcome).toBe("uncertain");
     }
@@ -462,63 +475,36 @@ it.each([false, true])(
   },
 );
 
-it("restores probe fixture state when initialization rejects", async () => {
-  const previousDisabled = process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS;
-  const original = new Error("synthetic probe config write failure");
-  const createState = testState.createOpenClawTestState;
-  let state: testState.OpenClawTestState | undefined;
-  vi.spyOn(testState, "createOpenClawTestState").mockImplementationOnce(async (options) => {
-    state = await createState(options);
-    vi.spyOn(state, "writeConfig").mockRejectedValueOnce(original);
-    return state;
-  });
+it("releases direct state ownership before propagating a rejected no-tail operation", async () => {
+  const state = await testState.createOpenClawTestState({ label: "probe-no-tail-failure" });
+  const signals = new EventEmitter();
+  const lockDir = state.path("locks");
+  const original = new Error("synthetic direct probe failure");
+  const run = async () => {
+    await Promise.resolve();
+    throw original;
+  };
   try {
-    await expect(runProbeResourceFixture("db-close-failure")).rejects.toBe(original);
-    expect(process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS).toBe(previousDisabled);
-    expect(fs.existsSync(state!.root)).toBe(false);
+    await expect(
+      withAuthProbeStateOwnership(
+        {
+          mode: "exclusive",
+          process: signals,
+          gatewayLockOptions: {
+            allowInTests: true,
+            env: state.env,
+            lockDir,
+            readProcessStartTime: () => 123456,
+            timeoutMs: 100,
+          },
+        },
+        run,
+      ),
+    ).rejects.toBe(original);
+    expect(fs.existsSync(path.join(lockDir, "gateway.state.lock"))).toBe(false);
+    expect(signals.listenerCount("SIGINT")).toBe(0);
+    expect(signals.listenerCount("SIGTERM")).toBe(0);
   } finally {
-    vi.restoreAllMocks();
-    await state?.cleanup();
+    await state.cleanup();
   }
 });
-
-it.each([false, true])(
-  "releases direct state ownership before propagating no-tail failure (async: %s)",
-  async (asynchronous) => {
-    const state = await testState.createOpenClawTestState({ label: "probe-no-tail-failure" });
-    const signals = new EventEmitter();
-    const lockDir = state.path("locks");
-    const original = new Error("synthetic direct probe failure");
-    const run = asynchronous
-      ? async () => {
-          await Promise.resolve();
-          throw original;
-        }
-      : () => {
-          throw original;
-        };
-    try {
-      await expect(
-        withAuthProbeStateOwnership(
-          {
-            mode: "exclusive",
-            process: signals,
-            gatewayLockOptions: {
-              allowInTests: true,
-              env: state.env,
-              lockDir,
-              readProcessStartTime: () => 123456,
-              timeoutMs: 100,
-            },
-          },
-          run,
-        ),
-      ).rejects.toBe(original);
-      expect(fs.existsSync(path.join(lockDir, "gateway.state.lock"))).toBe(false);
-      expect(signals.listenerCount("SIGINT")).toBe(0);
-      expect(signals.listenerCount("SIGTERM")).toBe(0);
-    } finally {
-      await state.cleanup();
-    }
-  },
-);

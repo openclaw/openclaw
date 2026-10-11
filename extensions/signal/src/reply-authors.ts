@@ -27,7 +27,7 @@ function openSignalReplyAuthorStore() {
   }
   const runtime = getOptionalSignalRuntime();
   try {
-    return runtime?.state.openKeyedStore<SignalReplyContextRecord>({
+    return runtime?.state.openKeyedStoreV2<SignalReplyContextRecord>({
       namespace: PERSISTENT_NAMESPACE,
       maxEntries: PERSISTENT_MAX_ENTRIES,
       defaultTtlMs: DEFAULT_REPLY_AUTHOR_TTL_MS,
@@ -41,11 +41,11 @@ function openSignalReplyAuthorStore() {
   }
 }
 
-function buildSignalReplyAuthorStoreKey(params: {
+function resolveSignalReplyIdentity(params: {
   accountId?: string | null;
   to: string;
   replyToId?: string | null;
-}): string | undefined {
+}) {
   const conversationKey = normalizeSignalMessagingTarget(params.to);
   const replyToId = normalizeOptionalString(params.replyToId);
   if (!conversationKey || !replyToId) {
@@ -54,7 +54,12 @@ function buildSignalReplyAuthorStoreKey(params: {
   const accountKey = normalizeLowercaseStringOrEmpty(
     normalizeOptionalString(params.accountId) ?? DEFAULT_ACCOUNT_ID,
   );
-  return `account=${accountKey}|to=${conversationKey}|id=${replyToId}`;
+  return {
+    key: `account=${accountKey}|to=${conversationKey}|id=${replyToId}`,
+    accountId: accountKey,
+    conversationKey,
+    replyToId,
+  };
 }
 
 function pruneMemoryReplyContexts(now = Date.now()): void {
@@ -118,52 +123,39 @@ export async function registerSignalReplyContext(params: {
   sourceTimestamp?: number | null;
 }): Promise<void> {
   const store = openSignalReplyAuthorStore();
-  const key = buildSignalReplyAuthorStoreKey(params);
+  const identity = resolveSignalReplyIdentity(params);
   const author = normalizeOptionalString(params.author);
   const body = normalizeOptionalString(params.body);
   const media = params.media?.map((entry) => ({
     contentType: normalizeOptionalString(entry.contentType),
     kind: entry.kind ?? undefined,
   }));
-  const conversationKey = normalizeSignalMessagingTarget(params.to);
-  const replyToId = normalizeOptionalString(params.replyToId);
-  const accountKey = normalizeLowercaseStringOrEmpty(
-    normalizeOptionalString(params.accountId) ?? DEFAULT_ACCOUNT_ID,
-  );
   const sourceTimestamp = asPositiveSafeInteger(params.sourceTimestamp) ?? Date.now();
-  if (!key || !author || !conversationKey || !replyToId) {
+  if (!identity || !author) {
     return;
   }
+  const { key, ...replyIdentity } = identity;
   const registeredAt = Date.now();
   const record = {
     kind: "resolved" as const,
     author,
     ...(body ? { body } : {}),
     ...(media?.length ? { media } : {}),
-    accountId: accountKey,
-    conversationKey,
-    replyToId,
+    ...replyIdentity,
     sourceTimestamp,
     registeredAt,
   };
   const expiresAt = registeredAt + DEFAULT_REPLY_AUTHOR_TTL_MS;
-  const usesComparisons = Boolean(store?.observe && store.compareAndApply);
-  if (!store || (!store.update && !usesComparisons)) {
+  if (!store) {
     const next = mergeReplyContext(memoryReplyContexts.get(key), record);
     memoryReplyContexts.set(key, { ...next, expiresAt });
     pruneMemoryReplyContexts(registeredAt);
-    if (store) {
-      signalReplyAuthorState.persistentStoreDisabled = true;
-      getOptionalSignalRuntime()
-        ?.logging.getChildLogger({ plugin: "signal", feature: "reply-author-state" })
-        .warn("Signal persistent reply author state lacks atomic updates");
-    }
     return;
   }
   const cachedBeforeUpdate = memoryReplyContexts.get(key);
   const cacheReplyContext = (next: SignalReplyContextRecord | undefined) => {
     const current = memoryReplyContexts.get(key);
-    const changedDuringUpdate = usesComparisons && current !== cachedBeforeUpdate;
+    const changedDuringUpdate = current !== cachedBeforeUpdate;
     if (!next) {
       if (!changedDuringUpdate) {
         memoryReplyContexts.delete(key);
@@ -183,30 +175,21 @@ export async function registerSignalReplyContext(params: {
   let nextRecord: SignalReplyContextRecord | undefined;
   try {
     let updated = false;
-    if (store.observe && store.compareAndApply) {
-      let observation = await store.observe(key);
-      for (;;) {
-        updateEvaluated = true;
-        nextRecord = mergeReplyContext(observation.value, record);
-        const result = await store.compareAndApply(key, observation.comparison, {
-          operation: "update",
-          // Retained values still refresh the row's age and TTL, as update did.
-          action: "set",
-          value: nextRecord,
-        });
-        if (result.status !== "conflict") {
-          updated = result.status === "applied";
-          break;
-        }
-        observation = result.current;
-      }
-    } else if (store.update) {
-      // Published 2026.9.4 hosts lack comparisons; remove at a supporting host floor.
-      updated = await store.update(key, (current) => {
-        updateEvaluated = true;
-        nextRecord = mergeReplyContext(current, record);
-        return nextRecord;
+    let observation = await store.observe(key);
+    for (;;) {
+      updateEvaluated = true;
+      nextRecord = mergeReplyContext(observation.value, record);
+      const result = await store.compareAndApply(key, observation.comparison, {
+        operation: "update",
+        // Retained values still refresh the row's age and TTL.
+        action: "set",
+        value: nextRecord,
       });
+      if (result.status !== "conflict") {
+        updated = result.status === "applied";
+        break;
+      }
+      observation = result.current;
     }
     cacheReplyContext(updated ? nextRecord : undefined);
     pruneMemoryReplyContexts(registeredAt);
@@ -234,7 +217,7 @@ export async function resolveSignalReplyContextWithPersistence(params: {
   replyToId?: string | null;
 }): Promise<SignalPersistedReplyContext | undefined> {
   const store = openSignalReplyAuthorStore();
-  const key = buildSignalReplyAuthorStoreKey(params);
+  const key = resolveSignalReplyIdentity(params)?.key;
   if (!key) {
     return undefined;
   }

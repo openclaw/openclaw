@@ -6,11 +6,11 @@ import {
   appendTranscriptMessage,
   loadSessionEntryReadOnly,
   replaceSessionEntry,
-  replaceTranscriptEvents,
   waitForSessionTranscriptProjection,
 } from "../config/sessions/session-accessor.js";
 import { readTranscriptDisplayDelta } from "../config/sessions/session-accessor.sqlite-history-events.js";
 import * as inputVisibility from "../config/sessions/session-accessor.sqlite-history-input-visibility.js";
+import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db-cache.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
@@ -31,6 +31,7 @@ import {
 import { createSessionHistorySubagentProjection } from "./session-history-subagent-projection.js";
 import * as subagentSources from "./session-history-subagent-sources.js";
 import { readChatHistoryMessageId } from "./session-history-tail.js";
+import { collectSessionTranscriptMessages } from "./session-transcript-source-pages.js";
 
 const childKey = "agent:main:dashboard:spawned-worker";
 const peerKey = "agent:main:dashboard:independent-peer";
@@ -236,10 +237,14 @@ describe("subagent coordination history", () => {
         cursor: initial.cursor,
       });
       expect.soft(delta).toMatchObject({ kind: "delta", messages: [] });
-      const raw = await readers.readSessionMessagesAsync(scope, {
-        mode: "full",
-        reason: "raw cross-agent transcript proof",
-      });
+      const raw = await collectSessionTranscriptMessages(
+        readers.readSessionMessagesWithSourceAsync,
+        scope,
+        {
+          mode: "full",
+          reason: "raw cross-agent transcript proof",
+        },
+      );
       expect(raw.map(readChatHistoryMessageId)).toEqual([
         ...messages.map(([id]) => id),
         "cross-late",
@@ -269,26 +274,38 @@ describe("subagent coordination history", () => {
     });
   });
 
-  it.each(["uncached-source", "cached-source", "cached-run", "projected-fast-path"])(
-    "rejects local history after shared-state retirement (%s)",
-    async (readKind) => {
-      await withHistory(
-        [
-          ["worker-input", childInput("worker-run")],
-          ["worker-answer", response("worker-run", "Internal acknowledgement")],
-        ],
-        async ({ scope }) => {
-          const database = openOpenClawStateDatabase();
-          const subagentCoordination = createSessionHistorySubagentProjection(scope);
-          if (readKind === "cached-source") {
-            expect(subagentCoordination.isSubagentSession(childKey)).toBe(true);
-          } else if (readKind === "cached-run") {
-            expect(subagentCoordination.isSubagentRunMessage("worker-run", 2)).toBe(true);
-          }
+  it.each([
+    "uncached-source",
+    "cached-source",
+    "cached-run",
+    "projected-fast-path",
+    "registered-agent",
+  ])("rejects local history after source authority changes (%s)", async (readKind) => {
+    await withHistory(
+      [
+        ["worker-input", childInput("worker-run")],
+        ["worker-answer", response("worker-run", "Internal acknowledgement")],
+      ],
+      async ({ scope }) => {
+        const database = openOpenClawStateDatabase();
+        const subagentCoordination = createSessionHistorySubagentProjection(scope);
+        if (readKind === "cached-source") {
+          expect(subagentCoordination.isSubagentSession(childKey)).toBe(true);
+        } else if (readKind === "cached-run") {
+          expect(subagentCoordination.isSubagentRunMessage("worker-run", 2)).toBe(true);
+        }
+        if (readKind === "registered-agent") {
+          openOpenClawAgentDatabase({ agentId: "registered-later" });
+        } else {
           await closeOpenClawStateDatabaseByPathAsync(database.path);
           openOpenClawStateDatabase({ path: database.path });
-          const read = () =>
-            readKind === "cached-run"
+        }
+        const read = () =>
+          readKind === "registered-agent"
+            ? projectChatDisplayMessages([{ role: "user", content: "Visible message" }], {
+                subagentCoordination,
+              })
+            : readKind === "cached-run"
               ? subagentCoordination.isSubagentRunMessage("worker-run", 2)
               : readKind === "projected-fast-path"
                 ? projectChatDisplayMessages(
@@ -305,22 +322,13 @@ describe("subagent coordination history", () => {
                     { subagentCoordination },
                   )
                 : subagentCoordination.isSubagentSession(childKey);
-          expect(read).toThrow(/state database read admission changed/u);
-        },
-      );
-    },
-  );
-
-  it("rejects plain projections after agent registration", async () => {
-    await withHistory([], async ({ scope }) => {
-      const subagentCoordination = createSessionHistorySubagentProjection(scope);
-      openOpenClawAgentDatabase({ agentId: "registered-later" });
-      expect(() =>
-        projectChatDisplayMessages([{ role: "user", content: "Visible message" }], {
-          subagentCoordination,
-        }),
-      ).toThrow("Session store changed");
-    });
+        expect(read).toThrow(
+          readKind === "registered-agent"
+            ? "Session store changed"
+            : /state database read admission changed/u,
+        );
+      },
+    );
   });
 
   it.each(["parentSessionKey", "spawnedBy"] as const)(
@@ -521,10 +529,14 @@ describe("subagent coordination history", () => {
         options,
       );
       expect(page.messages.map(readChatHistoryMessageId)).toEqual(expected);
-      const raw = await readers.readSessionMessagesAsync(scope, {
-        mode: "full",
-        reason: "raw model transcript proof",
-      });
+      const raw = await collectSessionTranscriptMessages(
+        readers.readSessionMessagesWithSourceAsync,
+        scope,
+        {
+          mode: "full",
+          reason: "raw model transcript proof",
+        },
+      );
       expect(raw.map(readChatHistoryMessageId)).toEqual(messages.map(([id]) => id));
     });
   });

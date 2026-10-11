@@ -59,7 +59,7 @@ async function read(
   }
   const pool = (runtime.pool ??= new WorkerTaskPool<FsSafeCopyRead, FsSafeCopyReply>({
     workerUrl: workerUrl(),
-    maxWorkers: 1,
+    workerClass: "reader",
     idleTimeoutMs: 30_000,
   }));
   const reply = await pool.run(command, {
@@ -108,7 +108,7 @@ export const nativeWorktreeFilesystem = {
   async probe(this: void, parent: string, options: WorktreeFilesystemOptions) {
     const reply = await read({ type: "probe", parent }, options);
     if (reply.type !== "probe") {
-      throw new Error("Native worktree probe returned an invalid reply");
+      throw new Error("Native worktree check returned an invalid reply");
     }
     return reply.backend;
   },

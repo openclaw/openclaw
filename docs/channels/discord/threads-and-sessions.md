@@ -122,7 +122,7 @@ failed chunk may have been delivered, so inspect the thread before retrying.
 
     Notes:
 
-    - `session.threadBindings.*` is the canonical policy for Discord and Telegram.
+    - `session.threadBindings.*` is the shared policy for Discord and Telegram.
     - `spawnSessions` controls auto-create/bind threads for `sessions_spawn({ thread: true })` and ACP thread spawns. Default: `true`.
     - `defaultSpawnContext` controls native subagent context for thread-bound spawns. Default: `"fork"`.
     - Deprecated `spawnSubagentSessions`/`spawnAcpSessions` keys are migrated by `openclaw doctor --fix`.

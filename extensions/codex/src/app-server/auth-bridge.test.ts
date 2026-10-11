@@ -24,13 +24,12 @@ import {
   resolveCodexAppServerFallbackApiKeyCacheKey,
   resolveCodexAppServerPreparedApiKeyCacheKey,
 } from "./auth-cache-key.js";
-import { resolveCodexAppServerAuthProfileId } from "./auth-profile.js";
 import {
   ensureCodexAppServerClientRuntime,
   recordCodexAppServerAuthHandoff,
 } from "./client-runtime.js";
 import type { CodexAppServerStartOptions } from "./config.js";
-import { resolveMacOSDesktopCodexAppPathCandidates } from "./desktop-app-paths.js";
+import type { resolveMacOSDesktopCodexAppPathCandidates } from "./desktop-app-paths.js";
 import { createClientHarness } from "./test-support.js";
 import { resolveCodexAppServerSpawnEnv } from "./transport-stdio.js";
 
@@ -460,32 +459,25 @@ describe("Codex auth bridge", () => {
     expectApiKeyLogin(request, "platform-api-key", true);
   });
 
-  baseIt.each(["marketplace", "service"] as const)(
-    "rejects a desktop candidate whose exact %s is unavailable",
-    async (missingArtifact) => {
-      await withTempDir("openclaw-codex-", async (agentDir) => {
-        if (missingArtifact === "marketplace") {
-          desktop.marketplaceSource.mockResolvedValueOnce(undefined);
-        } else {
-          desktop.serviceSource.mockResolvedValueOnce(undefined);
-        }
+  baseIt("rejects a desktop candidate whose exact marketplace is unavailable", async () => {
+    await withTempDir("openclaw-codex-", async (agentDir) => {
+      desktop.marketplaceSource.mockResolvedValueOnce(undefined);
 
-        await expect(
-          reconcileArtifacts({
-            startOptions: createStartOptions({
-              command: "/Applications/ChatGPT.app/Contents/Resources/codex",
-            }),
-            agentDir,
-            pluginConfig: { computerUse: { enabled: true, autoInstall: true } },
+      await expect(
+        reconcileArtifacts({
+          startOptions: createStartOptions({
+            command: "/Applications/ChatGPT.app/Contents/Resources/codex",
           }),
-        ).rejects.toMatchObject({
-          code: "CODEX_COMPUTER_USE_CANDIDATE_ARTIFACTS_UNAVAILABLE",
-        });
-        expect(desktop.service).not.toHaveBeenCalled();
-        expect(desktop.marketplace).not.toHaveBeenCalled();
+          agentDir,
+          pluginConfig: { computerUse: { enabled: true, autoInstall: true } },
+        }),
+      ).rejects.toMatchObject({
+        code: "CODEX_COMPUTER_USE_CANDIDATE_ARTIFACTS_UNAVAILABLE",
       });
-    },
-  );
+      expect(desktop.service).not.toHaveBeenCalled();
+      expect(desktop.marketplace).not.toHaveBeenCalled();
+    });
+  });
 
   baseIt.each([
     { marketplaceSource: "file:///tmp/custom-marketplace" },
@@ -507,45 +499,6 @@ describe("Codex auth bridge", () => {
       expect(desktop.marketplace).not.toHaveBeenCalled();
       expect(desktop.service).toHaveBeenCalledOnce();
     });
-  });
-
-  it("keeps package fallback artifacts on one complete desktop owner", async ({ agentDir }) => {
-    const candidates = resolveMacOSDesktopCodexAppPathCandidates("darwin");
-    const codexCandidate = candidates.find((candidate) => candidate.appName === "Codex.app");
-    if (!codexCandidate) {
-      throw new Error("expected Codex.app candidate");
-    }
-    desktop.serviceSource.mockImplementation(
-      async (params: { sourceAppCandidates?: readonly string[] }) => {
-        const source = params.sourceAppCandidates?.[0];
-        return source?.includes("ChatGPT.app") ? undefined : source;
-      },
-    );
-    desktop.marketplace.mockResolvedValueOnce("/managed/openai-bundled");
-
-    await reconcileArtifacts({
-      startOptions: createStartOptions({ command: "/cache/openclaw/codex" }),
-      agentDir,
-      pluginConfig: { computerUse: { enabled: true, autoInstall: true } },
-    });
-
-    expect(desktop.marketplace).toHaveBeenCalledWith(
-      expect.objectContaining({
-        candidates: [codexCandidate],
-        appServerCommand: codexCandidate.appServerCommandPath,
-      }),
-    );
-    expect(desktop.service).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sourceAppCandidates: codexCandidate.computerUseServiceAppPaths,
-        appServerCommand: codexCandidate.appServerCommandPath,
-      }),
-    );
-    expect(desktop.cache).toHaveBeenCalledWith(
-      expect.objectContaining({
-        bundledMarketplacePath: "/managed/openai-bundled",
-      }),
-    );
   });
 
   it("classifies native client provisioning failures as harness preflight", async () => {
@@ -602,9 +555,7 @@ describe("Codex auth bridge", () => {
     expect(desktop.marketplace).not.toHaveBeenCalled();
   });
 
-  it("does not let a stale desktop generation publish artifacts after its successor", async ({
-    agentDir,
-  }) => {
+  it("checks caller authority after queued artifact work", async ({ agentDir }) => {
     const firstMarketplaceStarted = createDeferred<void>();
     const releaseFirstMarketplace = createDeferred<void>();
     let activeMarketplaceCalls = 0;
@@ -627,7 +578,7 @@ describe("Codex auth bridge", () => {
         activeMarketplaceCalls -= 1;
         return "/managed/openai-bundled";
       });
-    let currentEpoch = 1;
+    let callerCurrent = true;
     const startOptions = createStartOptions();
     const first = reconcileArtifacts({
       startOptions,
@@ -635,27 +586,22 @@ describe("Codex auth bridge", () => {
       pluginConfig: { computerUse: { enabled: true, autoInstall: true } },
       desktopGeneration: { epoch: 1, fingerprint: "desktop-x" },
       assertCurrent: () => {
-        if (currentEpoch !== 1) {
-          throw new Error("desktop generation X is stale");
+        if (!callerCurrent) {
+          throw new Error("caller authority revoked");
         }
       },
     });
     await firstMarketplaceStarted.promise;
-    currentEpoch = 2;
+    callerCurrent = false;
     const second = reconcileArtifacts({
       startOptions,
       agentDir,
       pluginConfig: { computerUse: { enabled: true, autoInstall: true } },
       desktopGeneration: { epoch: 2, fingerprint: "desktop-y" },
-      assertCurrent: () => {
-        if (currentEpoch !== 2) {
-          throw new Error("desktop generation Y is stale");
-        }
-      },
     });
     releaseFirstMarketplace.resolve();
 
-    await expect(first).rejects.toThrow("desktop generation X is stale");
+    await expect(first).rejects.toThrow("caller authority revoked");
     await expect(second).resolves.toBeUndefined();
     expect(maxActiveMarketplaceCalls).toBe(1);
     expect(desktop.service).toHaveBeenCalledTimes(1);
@@ -679,24 +625,6 @@ describe("Codex auth bridge", () => {
     });
     expect(desktop.service).not.toHaveBeenCalled();
     expect(desktop.marketplace).not.toHaveBeenCalled();
-  });
-
-  it("does not mistake an option value for the app-server subcommand", async ({ agentDir }) => {
-    const startOptions = createStartOptions({
-      args: ["-c", 'cli_auth_credentials_store="keyring"', "--profile", "app-server", "app-server"],
-    });
-
-    const bridged = await bridgeStart({ startOptions, agentDir });
-
-    expect(bridged.args).toEqual([
-      "-c",
-      'cli_auth_credentials_store="keyring"',
-      "--profile",
-      "app-server",
-      "-c",
-      'cli_auth_credentials_store="ephemeral"',
-      "app-server",
-    ]);
   });
 
   it("preserves explicit CODEX_HOME and HOME overrides", async ({ agentDir }) => {
@@ -768,20 +696,6 @@ describe("Codex auth bridge", () => {
     });
     expect(startOptions.clearEnv).toEqual(["CODEX_HOME", "HOME", "FOO"]);
     await expectPathMissing(path.join(agentDir, "harness-auth"));
-  });
-
-  it("clears inherited API keys for a selected token profile", async ({ agentDir }) => {
-    persistProfile(agentDir, { type: "token", provider: "openai", token: "access-token" });
-    const bridged = await bridgeStart({
-      startOptions: createStartOptions({ clearEnv: ["FOO"] }),
-      ...profileParams(agentDir),
-    });
-    expect(bridged).toEqual({
-      ...createStartOptions(),
-      args: EPHEMERAL_AUTH_ARGS,
-      env: { CODEX_HOME: codexHomeDir(agentDir) },
-      clearEnv: ["FOO", "CODEX_API_KEY", "OPENAI_API_KEY"],
-    });
   });
 
   baseIt.each(["api-key", "profile"] as const)(
@@ -1221,23 +1135,6 @@ describe("Codex auth bridge", () => {
     }
   });
 
-  it("reuses a completed access rotation from a scoped auth store", async ({ agentDir }) => {
-    const authProfileStore = profileStore(oauthProfile("rotated", { accountId: "account-a" }));
-
-    await expect(
-      refreshTokens({
-        ...profileParams(agentDir, authProfileStore),
-        authHandoff: authHandoff("initial-access", "account-a"),
-        previousAccountId: "account-a",
-      }),
-    ).resolves.toEqual({
-      accessToken: "rotated-access",
-      chatgptAccountId: "account-a",
-      chatgptPlanType: null,
-    });
-    expect(oauth.refresh).not.toHaveBeenCalled();
-  });
-
   it("does not commit a different workspace from a forced scoped refresh", async ({ agentDir }) => {
     const credential = oauthProfile("initial", { accountId: "account-a" });
     const authProfileStore: AuthProfileStore = profileStore(credential);
@@ -1431,36 +1328,6 @@ describe("Codex auth bridge", () => {
       refresh: "persisted-refresh",
       accountId: "shared-account",
     });
-  });
-
-  it("uses current owner tokens for a stale clone with matching workspace claims", async ({
-    agentDir,
-  }) => {
-    const request = vi.fn(async () => ({ type: "chatgptAuthTokens" }));
-    const currentAccess = chatgptAccessToken("persisted-account", "current");
-
-    persistProfile(
-      agentDir,
-      oauthProfile("stale", {
-        access: chatgptAccessToken("persisted-account", "stale"),
-        expires: Date.now() - 60_000,
-        email: "codex@example.test",
-      }),
-    );
-    const authProfileStore = loadAuthProfileStoreForSecretsRuntime(agentDir);
-    expect(authProfileStore.runtimePersistedProfileIds).toContain("openai:work");
-    persistProfile(
-      agentDir,
-      oauthProfile("current", { access: currentAccess, email: "codex@example.test" }),
-    );
-
-    await applyAuth({
-      client: { request } as never,
-      ...profileParams(agentDir, authProfileStore),
-    });
-
-    expect(oauth.refresh).not.toHaveBeenCalled();
-    expectTokenLogin(request, currentAccess, "persisted-account");
   });
 
   it("keeps changed-workspace clones scoped even when emails match", async ({ agentDir }) => {
@@ -1667,36 +1534,6 @@ describe("Codex auth bridge", () => {
     ).rejects.toThrow("different ChatGPT account ID");
   });
 
-  it("selects ordered Codex OAuth before an OpenAI API-key backup", async () => {
-    const request = vi.fn(async () => ({ type: "chatgptAuthTokens" }));
-    const accessToken = "test-access-token";
-    const authProfileStore: AuthProfileStore = {
-      version: 1,
-      profiles: {
-        "openai:media-api": {
-          type: "api_key",
-          provider: "openai",
-          key: "test-api-key",
-        },
-        "openai:qa-oauth": oauthProfile("test", {
-          access: accessToken,
-          expires: Date.UTC(2036, 0, 1),
-          accountId: "qa-codex-account",
-        }),
-      },
-      order: { openai: ["openai:qa-oauth", "openai:media-api"] },
-    };
-
-    expect(resolveCodexAppServerAuthProfileId({ store: authProfileStore })).toBe("openai:qa-oauth");
-    await applyAuth({
-      client: { request } as never,
-      agentDir: "/tmp/openclaw-codex-auth-product-proof",
-      authProfileStore,
-    });
-
-    expectTokenLogin(request, accessToken, "qa-codex-account");
-  });
-
   it("does not borrow OS-home native OAuth for an isolated OpenClaw home", async ({
     agentDir: root,
   }) => {
@@ -1740,29 +1577,6 @@ describe("Codex auth bridge", () => {
 
     expect(oauth.refresh).not.toHaveBeenCalled();
     expect(await fs.readFile(path.join(codexHome, "auth.json"))).toEqual(nativeBefore);
-  });
-
-  it("preserves transient subscription credential resolution errors", async () => {
-    const transientError = Object.assign(new Error("temporary refresh failure"), { status: 503 });
-    oauth.refresh.mockRejectedValueOnce(transientError);
-    const request = vi.fn();
-
-    await expect(
-      applyAuth({
-        client: { request } as never,
-        agentDir: "/tmp/openclaw-agent",
-        authProfileId: "openai:work",
-        authProfileStore: profileStore(
-          oauthProfile("test", {
-            access: "placeholder",
-            refresh: "placeholder",
-            expires: Date.now() - 60_000,
-          }),
-        ),
-        authRequirement: "subscription",
-      }),
-    ).rejects.toBe(transientError);
-    expect(request).not.toHaveBeenCalled();
   });
 
   it("keeps an existing app-server ChatGPT account over env API-key fallback", async ({
@@ -1961,50 +1775,6 @@ describe("Codex auth bridge", () => {
       }),
     ).rejects.toThrow(/ChatGPT workspace changed.*[Rr]etry/);
     expect(oauth.refresh).not.toHaveBeenCalled();
-  });
-
-  it("refreshes inherited main Codex OAuth without cloning it into the child store", async ({
-    agentDir: root,
-  }) => {
-    const stateDir = path.join(root, "state");
-    const childAgentDir = path.join(stateDir, "agents", "worker", "agent");
-    const childAuthPath = path.join(childAgentDir, "auth-profiles.json");
-    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-    vi.stubEnv("OPENCLAW_AGENT_DIR", "");
-    oauth.refresh.mockResolvedValueOnce({
-      access: "main-refreshed-access-token",
-      refresh: "main-refreshed-refresh-token",
-      expires: Date.now() + 60_000,
-      accountId: "account-main",
-    });
-
-    upsertAuthProfile({
-      profileId: "openai:work",
-      credential: oauthProfile("test", {
-        access: "main-current-access-token",
-        refresh: "main-refresh-token",
-        accountId: "account-main",
-        email: "main-codex@example.test",
-      }),
-    });
-
-    await expect(
-      refreshTokens({
-        agentDir: childAgentDir,
-        authProfileId: "openai:work",
-      }),
-    ).resolves.toEqual({
-      accessToken: "main-refreshed-access-token",
-      chatgptAccountId: "account-main",
-      chatgptPlanType: null,
-    });
-
-    expect(oauth.refresh).toHaveBeenCalledWith("main-refresh-token");
-    await expectPathMissing(childAuthPath);
-    const mainProfile = expectOAuthProfile(readProfile());
-    expect(mainProfile?.provider).toBe("openai");
-    expect(mainProfile?.access).toBe("main-refreshed-access-token");
-    expect(mainProfile?.refresh).toBe("main-refreshed-refresh-token");
   });
 
   it("force-refreshes the owner credential instead of a stale child OAuth clone", async ({

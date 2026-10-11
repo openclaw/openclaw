@@ -1,4 +1,5 @@
 import { finalizeEvent, verifyEvent, type Event } from "nostr-tools";
+import { captureEffectAuthority } from "openclaw/plugin-sdk/fetch-runtime";
 import { createChannelReplayGuard } from "openclaw/plugin-sdk/persistent-dedupe";
 import type { PluginServiceSchedulerV1 } from "openclaw/plugin-sdk/plugin-entry";
 import {
@@ -80,35 +81,6 @@ function buildBuzzTextEvent(params: {
   );
 }
 
-function buildBuzzTypingEvent(params: {
-  secretKey: Uint8Array;
-  channelId: string;
-  threadId?: string;
-  replyToId?: string;
-}): Event {
-  return finalizeEvent(
-    {
-      kind: BUZZ_TYPING_INDICATOR_KIND,
-      content: "",
-      created_at: Math.floor(Date.now() / 1000),
-      tags: buildBuzzMessageTags(params),
-    },
-    params.secretKey,
-  );
-}
-
-function buildBuzzPresenceEvent(secretKey: Uint8Array): Event {
-  return finalizeEvent(
-    {
-      kind: PRESENCE_KIND,
-      content: "online",
-      created_at: Math.floor(Date.now() / 1000),
-      tags: [],
-    },
-    secretKey,
-  );
-}
-
 export async function sendBuzzTextOneShot(params: {
   relayUrl: string;
   privateKey: string;
@@ -118,18 +90,24 @@ export async function sendBuzzTextOneShot(params: {
   threadId?: string;
   replyToId?: string;
 }): Promise<string> {
+  const effect = captureEffectAuthority();
   const secretKey = decodeBuzzPrivateKey(params.privateKey);
   const mentionSyntax = inspectBuzzMentionSyntax(params.text);
-  if (mentionSyntax.hasAtMention || mentionSyntax.hasExplicitIdentity) {
-    const signal = AbortSignal.timeout(30_000);
-    const publicKey = resolveBuzzPublicKey(params.privateKey);
-    const { relay, relayPublicKey } = await connectAuthenticatedBuzzRelaySession({
-      relayUrl: params.relayUrl,
-      secretKey,
-      authTag: parseBuzzAuthTag(params.authTag ?? ""),
-      signal,
-    });
-    try {
+  const needsDirectory = mentionSyntax.hasAtMention || mentionSyntax.hasExplicitIdentity;
+  const signal = needsDirectory ? AbortSignal.timeout(30_000) : undefined;
+  const publicKey = needsDirectory ? resolveBuzzPublicKey(params.privateKey) : "";
+  const connection = {
+    relayUrl: params.relayUrl,
+    secretKey,
+    authTag: parseBuzzAuthTag(params.authTag ?? ""),
+  };
+  const session = needsDirectory
+    ? await connectAuthenticatedBuzzRelaySession({ ...connection, signal })
+    : undefined;
+  const relay = session?.relay ?? (await connectAuthenticatedBuzzRelay(connection));
+  try {
+    let mentionedPubkeys: string[] | undefined;
+    if (session) {
       const directory = new BuzzDirectoryState({
         publicKey,
         fallbackProfileName: "OpenClaw",
@@ -138,7 +116,7 @@ export async function sendBuzzTextOneShot(params: {
       directory.replaceMemberships(
         await queryBuzzRoomMemberships({
           relay,
-          relayPublicKey,
+          relayPublicKey: session.relayPublicKey,
           channelIds: [params.channelId],
           signal,
         }),
@@ -151,26 +129,17 @@ export async function sendBuzzTextOneShot(params: {
           signal,
         });
       }
-      const mentionedPubkeys = resolveBuzzMessageMentions({
+      mentionedPubkeys = resolveBuzzMessageMentions({
         text: params.text,
         members: directory.mentionMembers(params.channelId),
         senderPublicKey: publicKey,
       });
-      const event = buildBuzzTextEvent({ ...params, secretKey, mentionedPubkeys });
-      await relay.publish(event);
-      return event.id;
-    } finally {
-      relay.close();
     }
-  }
-  const relay = await connectAuthenticatedBuzzRelay({
-    relayUrl: params.relayUrl,
-    secretKey,
-    authTag: parseBuzzAuthTag(params.authTag ?? ""),
-  });
-  try {
-    const event = buildBuzzTextEvent({ ...params, secretKey });
-    await relay.publish(event);
+    const event = buildBuzzTextEvent({ ...params, secretKey, mentionedPubkeys });
+    await effect.initiate(() => {
+      signal?.throwIfAborted();
+      return relay.publish(event);
+    });
     return event.id;
   } finally {
     relay.close();
@@ -315,6 +284,7 @@ export async function startBuzzBus(options: {
       return root?.channelId === channelId && root.isBotOwned;
     },
     sendText: async ({ channelId, text, threadId, replyToId }) => {
+      const effect = captureEffectAuthority();
       signal.throwIfAborted();
       const mentionSyntax = inspectBuzzMentionSyntax(text);
       const mentionedPubkeys =
@@ -333,7 +303,10 @@ export async function startBuzzBus(options: {
         replyToId,
         mentionedPubkeys,
       });
-      await relay.publish(event);
+      await effect.initiate(() => {
+        signal.throwIfAborted();
+        return relay.publish(event);
+      });
       rememberThreadRoot(event);
       return event.id;
     },
@@ -341,13 +314,19 @@ export async function startBuzzBus(options: {
       if (signal.aborted || !relay.connected) {
         return;
       }
-      const event = buildBuzzTypingEvent({
+      const event = finalizeEvent(
+        {
+          kind: BUZZ_TYPING_INDICATOR_KIND,
+          content: "",
+          created_at: Math.floor(Date.now() / 1000),
+          tags: buildBuzzMessageTags({ channelId, threadId, replyToId }),
+        },
         secretKey,
-        channelId,
-        threadId,
-        replyToId,
+      );
+      await captureEffectAuthority().initiate(() => {
+        signal.throwIfAborted();
+        return relay.send(JSON.stringify(["EVENT", event]));
       });
-      await relay.send(JSON.stringify(["EVENT", event]));
     },
     close: async () => {
       lifecycleAbort.abort(new Error("Buzz bus closed"));
@@ -483,7 +462,17 @@ export async function startBuzzBus(options: {
       everyMs: PRESENCE_HEARTBEAT_INTERVAL_MS,
       run: async () => {
         try {
-          await relay.publish(buildBuzzPresenceEvent(secretKey));
+          await relay.publish(
+            finalizeEvent(
+              {
+                kind: PRESENCE_KIND,
+                content: "online",
+                created_at: Math.floor(Date.now() / 1000),
+                tags: [],
+              },
+              secretKey,
+            ),
+          );
           presenceErrorReported = false;
         } catch (error) {
           if (signal.aborted) {
@@ -513,9 +502,9 @@ export async function startBuzzBus(options: {
         onFatalError: reportFatalError,
         signal,
       })
-        .then((result) => {
-          if (!signal.aborted && result.status === "published") {
-            options.onProfilePublished?.(result.eventId);
+        .then((eventId) => {
+          if (!signal.aborted && eventId !== undefined) {
+            options.onProfilePublished?.(eventId);
           }
         })
         .catch((error: unknown) => {

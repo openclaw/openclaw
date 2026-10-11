@@ -9,7 +9,7 @@ type IncognitoForkActor = {
   readonly identity: Readonly<SqliteWorkerEphemeralTarget>;
   readonly sessions: Pick<
     ReturnType<ReturnType<typeof createIncognitoSessionFacts>["bind"]>,
-    "captureCurrent" | "read" | "lifecycle"
+    "captureCurrent" | "read" | "lifecycle" | "withSharedState"
   >;
   assertCurrent(): void;
 };
@@ -27,7 +27,16 @@ export async function forkIncognitoSessionFromParent(params: {
   buildEntry: (parent: SessionEntry, current: SessionEntry | undefined) => Promise<SessionEntry>;
   signal?: AbortSignal;
 }): Promise<SessionEntry | undefined> {
-  const { source, destination, sourceAuthority, destinationAuthority, signal } = params;
+  const {
+    source,
+    destination,
+    sourceAuthority,
+    destinationAuthority,
+    signal,
+    forkFrom,
+    buildEntry,
+    supportsCliSessionFork,
+  } = params;
   source.assertCurrent();
   destination.assertCurrent();
   sourceAuthority.assertCurrent();
@@ -38,64 +47,65 @@ export async function forkIncognitoSessionFromParent(params: {
   const sameActor =
     source.identity.handle === destination.identity.handle &&
     source.identity.incarnation === destination.identity.incarnation;
-  const prepared = await source.sessions.lifecycle(
-    sourceAuthority,
-    {
-      type: "session.lifecycle.fork.prepare",
-      input: { parent, forkFrom: params.forkFrom },
-    },
-    signal,
-  );
-  sourceClaim.assertCurrent();
-  destination.assertCurrent();
-  if (!prepared) {
-    return undefined;
-  }
-  const child = await destination.sessions.read(
-    destinationAuthority,
-    { sessionKey: childSessionKey },
-    signal,
-  );
-  sourceClaim.assertCurrent();
-  const entry = await params.buildEntry(
-    structuredClone(parent.entry),
-    structuredClone(child.entry),
-  );
-  const cliSessionBindings = forkCliSessionBindings(parent.entry, params.supportsCliSessionFork);
-  sourceClaim.assertCurrent();
-  child.claim.assertCurrent();
-  // Same-actor row/version checks execute in its transaction. Asking the host's
-  // pending projection to authorize that transaction would deadlock/refuse itself.
-  const authority: IncognitoSessionAuthority = {
-    assertCurrent() {
-      source.assertCurrent();
+  return source.sessions.withSharedState(() =>
+    destination.sessions.withSharedState(async () => {
+      const prepared = await source.sessions.lifecycle(
+        sourceAuthority,
+        {
+          type: "session.lifecycle.fork.prepare",
+          input: { parent, forkFrom },
+        },
+        signal,
+      );
+      sourceClaim.assertCurrent();
       destination.assertCurrent();
-      sourceAuthority.assertCurrent();
-      destinationAuthority.assertCurrent();
-      if (!sameActor) {
-        sourceClaim.assertCurrent();
+      if (!prepared) {
+        return undefined;
       }
-    },
-    authorize(stage, facts) {
-      if (!sameActor) {
-        sourceClaim.authorize(sourceAuthority, stage);
-      }
-      if (sameActor && facts.sessionKey === parent.sessionKey) {
-        return sourceAuthority.authorize?.(stage, facts);
-      }
-      return destinationAuthority.authorize?.(stage, facts);
-    },
-  };
-  return destination.sessions.lifecycle(
-    authority,
-    {
-      type: "session.lifecycle.fork",
-      input: {
-        parent: prepared,
-        child: { sessionKey: childSessionKey, entry, expectedEntry: child.entry },
-        cliSessionBindings,
-      },
-    },
-    signal,
+      const child = await destination.sessions.read(
+        destinationAuthority,
+        { sessionKey: childSessionKey },
+        signal,
+      );
+      sourceClaim.assertCurrent();
+      const entry = await buildEntry(structuredClone(parent.entry), structuredClone(child.entry));
+      const cliSessionBindings = forkCliSessionBindings(parent.entry, supportsCliSessionFork);
+      sourceClaim.assertCurrent();
+      child.claim.assertCurrent();
+      // Same-actor row/version checks execute in its transaction. Asking the host's
+      // pending projection to authorize that transaction would deadlock/refuse itself.
+      const authority: IncognitoSessionAuthority = {
+        assertCurrent() {
+          source.assertCurrent();
+          destination.assertCurrent();
+          sourceAuthority.assertCurrent();
+          destinationAuthority.assertCurrent();
+          if (!sameActor) {
+            sourceClaim.assertCurrent();
+          }
+        },
+        authorize(stage, facts) {
+          if (!sameActor) {
+            sourceClaim.authorize(sourceAuthority, stage);
+          }
+          if (sameActor && facts.sessionKey === parent.sessionKey) {
+            return sourceAuthority.authorize?.(stage, facts);
+          }
+          return destinationAuthority.authorize?.(stage, facts);
+        },
+      };
+      return destination.sessions.lifecycle(
+        authority,
+        {
+          type: "session.lifecycle.fork",
+          input: {
+            parent: prepared,
+            child: { sessionKey: childSessionKey, entry, expectedEntry: child.entry },
+            cliSessionBindings,
+          },
+        },
+        signal,
+      );
+    }),
   );
 }

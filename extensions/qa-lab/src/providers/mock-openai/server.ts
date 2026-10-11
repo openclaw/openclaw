@@ -31,7 +31,6 @@ import {
 import {
   type ResponsesInputItem,
   type StreamEvent,
-  type MockOpenAiRequestSnapshotBase,
   type MockOpenAiRequestKind,
   type MockCompactionSummaryFaultMode,
   type AnthropicMessagesRequest,
@@ -140,7 +139,6 @@ import {
   buildRemoteCompactionV2Events,
   buildReleaseAuditJson,
   buildReleaseHandoffMarkdown,
-  extractPlannedToolIdentity,
   splitMockStreamingText,
   buildChannelStreamingFixtureEvents,
   resolveTelegramChannelStreamingPause,
@@ -213,7 +211,6 @@ import {
   isSnackRecallPrompt,
   extractSnackPreference,
 } from "./mock-openai-tooling.js";
-import { createQaMockScenarioStateStore } from "./scenario-state.js";
 import type { QaMockOpenAiServerOptions } from "./server-options.js";
 import {
   createQaSessionIdentityResolver,
@@ -349,25 +346,14 @@ function resolveCompactionSummaryFaultMode(params: {
     return "none";
   }
   const emptyMarker = QA_COMPACTION_EMPTY_OUTPUT_ONCE_MARKER_RE.exec(params.allInputText)?.[0];
-  const reasoningMarker = QA_COMPACTION_REASONING_ONLY_OUTPUT_ONCE_MARKER_RE.exec(
-    params.allInputText,
-  )?.[0];
-  const selected = emptyMarker
-    ? {
-        key: emptyMarker,
-        mode: "empty-output-once" as const,
-      }
-    : reasoningMarker
-      ? {
-          key: reasoningMarker,
-          mode: "reasoning-only-output-once" as const,
-        }
-      : undefined;
-  if (!selected?.key || params.servedFaultMarkers.has(selected.key)) {
+  const marker =
+    emptyMarker ??
+    QA_COMPACTION_REASONING_ONLY_OUTPUT_ONCE_MARKER_RE.exec(params.allInputText)?.[0];
+  if (!marker || params.servedFaultMarkers.has(marker)) {
     return "none";
   }
-  params.servedFaultMarkers.add(selected.key);
-  return selected.mode;
+  params.servedFaultMarkers.add(marker);
+  return emptyMarker ? "empty-output-once" : "reasoning-only-output-once";
 }
 
 function buildMemoryGetArgs(result: Record<string, unknown>) {
@@ -378,6 +364,21 @@ function buildMemoryGetArgs(result: Record<string, unknown>) {
         ? Math.max(1, result.endLine)
         : 1;
   return { path: result.path, from, lines: 4 };
+}
+
+function isSessionMemoryResult(result: Record<string, unknown>) {
+  return (
+    result.source === "sessions" ||
+    (typeof result.path === "string" && result.path.startsWith("sessions/"))
+  );
+}
+
+function memoryResultText(result: Record<string, unknown> | undefined) {
+  return typeof result?.snippet === "string"
+    ? result.snippet
+    : typeof result?.text === "string"
+      ? result.text
+      : "";
 }
 
 const PERSONAL_FOLLOWTHROUGH_FIXTURES = [
@@ -452,9 +453,9 @@ async function buildResponsesPayload(
   scenarioState: MockScenarioState,
   options: {
     subagentTurn: ReturnType<typeof resolveMockSubagentTurn>;
-    waitForTerminalRequesterSettled?: (caseName: string, childSessionKey: string) => Promise<void>;
-    requestKind?: MockOpenAiRequestKind;
-    compactionSummaryFaultMode?: MockCompactionSummaryFaultMode;
+    waitForTerminalRequesterSettled: (caseName: string, childSessionKey: string) => Promise<void>;
+    requestKind: MockOpenAiRequestKind;
+    compactionSummaryFaultMode: MockCompactionSummaryFaultMode;
   },
 ) {
   const model = typeof body.model === "string" ? body.model : "";
@@ -506,8 +507,7 @@ async function buildResponsesPayload(
     QA_COMPACTION_RETRY_PROMPT_RE.test(allInputText) ||
     hasCompactionRetryDurableContext ||
     allInputText.includes(QA_COMPACTION_RETRY_BULKY_MARKER);
-  const requestKind = options.requestKind ?? classifyMockOpenAiRequest(input, body);
-  if (requestKind === "compaction-summary") {
+  if (options.requestKind === "compaction-summary") {
     if (options.compactionSummaryFaultMode === "empty-output-once") {
       return buildAssistantEvents("");
     }
@@ -664,6 +664,9 @@ async function buildResponsesPayload(
     toolJson?.unavailable === true ||
     toolJson?.disabled === true ||
     (typeof toolJson?.error === "string" && toolJson.error.trim().length > 0);
+  const memoryResults = Array.isArray(toolJson?.results)
+    ? (toolJson.results as Array<Record<string, unknown>>)
+    : [];
   const promptExactReplyDirective = extractExactReplyDirective(prompt);
   const promptExactMarkerDirective = extractExactMarkerDirective(prompt);
   const allUserTexts = extractUserTurnTexts(input);
@@ -858,7 +861,7 @@ async function buildResponsesPayload(
   if (privateWorker) {
     const childSessionKey = resolveQaChildSessionKey(input, body);
     if (privateWorker === "first" && childSessionKey) {
-      await options.waitForTerminalRequesterSettled?.("private", childSessionKey);
+      await options.waitForTerminalRequesterSettled("private", childSessionKey);
     }
     return buildAssistantEvents(
       privateWorker === "first"
@@ -946,7 +949,7 @@ async function buildResponsesPayload(
   const terminalWorkerCase = terminalTurn?.kind === "worker" ? terminalTurn.caseName : undefined;
   if (terminalWorkerCase) {
     const childSessionKey = resolveQaChildSessionKey(input, body);
-    if (options.waitForTerminalRequesterSettled && childSessionKey) {
+    if (childSessionKey) {
       await options.waitForTerminalRequesterSettled(terminalWorkerCase, childSessionKey);
     }
   }
@@ -1569,10 +1572,7 @@ async function buildResponsesPayload(
         maxResults: 3,
       });
     }
-    const results = Array.isArray(toolJson?.results)
-      ? (toolJson.results as Array<Record<string, unknown>>)
-      : [];
-    const first = results[0];
+    const first = memoryResults[0];
     if (typeof first?.path === "string") {
       return buildToolCallEventsWithArgs("memory_get", buildMemoryGetArgs(first));
     }
@@ -1610,10 +1610,7 @@ async function buildResponsesPayload(
       }
       return buildAssistantEvents("NONE");
     }
-    const results = Array.isArray(toolJson?.results)
-      ? (toolJson.results as Array<Record<string, unknown>>)
-      : [];
-    const first = results[0];
+    const first = memoryResults[0];
     if (typeof first?.path === "string" && hasDeclaredTool(body, "memory_get")) {
       return buildToolCallEventsWithArgs("memory_get", buildMemoryGetArgs(first));
     }
@@ -1636,41 +1633,19 @@ async function buildResponsesPayload(
     if (memoryToolUnavailable) {
       return buildAssistantEvents("NONE");
     }
-    const results = Array.isArray(toolJson?.results)
-      ? (toolJson.results as Array<Record<string, unknown>>)
-      : [];
-    const preferredSessionResult = results.find((result) => {
-      const resultPath = typeof result.path === "string" ? result.path : undefined;
-      if (result.source !== "sessions" && !resultPath?.startsWith("sessions/")) {
-        return false;
-      }
-      const memoryText =
-        typeof result.snippet === "string"
-          ? result.snippet
-          : typeof result.text === "string"
-            ? result.text
-            : "";
-      return extractOrbitCode(memoryText) !== null;
-    });
-    const sessionMemoryText =
-      typeof preferredSessionResult?.snippet === "string"
-        ? preferredSessionResult.snippet
-        : typeof preferredSessionResult?.text === "string"
-          ? preferredSessionResult.text
-          : "";
+    const preferredSessionResult = memoryResults.find(
+      (result) =>
+        isSessionMemoryResult(result) && extractOrbitCode(memoryResultText(result)) !== null,
+    );
     const retrievedOrbitCode =
-      extractOrbitCode(sessionMemoryText) ??
+      extractOrbitCode(memoryResultText(preferredSessionResult)) ??
       (typeof toolJson?.text === "string" ? extractOrbitCode(toolJson.text) : null);
     if (retrievedOrbitCode) {
       return buildAssistantEvents(
         `Protocol note: I checked memory and the current Project Nebula codename is ${retrievedOrbitCode}.`,
       );
     }
-    const first =
-      results.find((result) => {
-        const resultPath = typeof result.path === "string" ? result.path : undefined;
-        return result.source === "sessions" || resultPath?.startsWith("sessions/");
-      }) ?? results[0];
+    const first = memoryResults.find(isSessionMemoryResult) ?? memoryResults[0];
     if (
       typeof first?.path === "string" &&
       (typeof first.startLine === "number" || typeof first.endLine === "number")
@@ -2017,7 +1992,7 @@ export async function startQaMockOpenAiServer(params?: QaMockOpenAiServerOptions
     params?.repeatedRequestStalledResponsePauseMs ?? QA_REPEATED_REQUEST_STALLED_RESPONSE_PAUSE_MS;
   const terminalRequesterSettleGate = createTerminalRequesterSettleGate();
   const servedCompactionSummaryFaultMarkers = new Set<string>();
-  const scenarioStateFor = createQaMockScenarioStateStore();
+  const scenarioStates = new Map<string, MockScenarioState>();
   const requestLog = createMockOpenAiRequestLog();
   const inflightRequests = new Map<number, { prompt: string; allInputText: string }>();
   let nextInflightRequestId = 1;
@@ -2047,7 +2022,19 @@ export async function startQaMockOpenAiServer(params?: QaMockOpenAiServerOptions
     const prompt = extractLastUserText(input);
     const allInputText = extractAllRequestTexts(input, body);
     const sessionId = sessionIdentity.resolve(request, normalized);
-    const scenarioState = scenarioStateFor(sessionId);
+    // Transport identity survives prompt edits, provider switches, and cache boundaries.
+    const scenarioState = scenarioStates.get(sessionId ?? "") ?? {
+      anthropicThinkingErrorScenarioKeys: new Set<string>(),
+      compactionOverflowInjected: false,
+      compactionRetryActive: false,
+      subagentFanoutCompletedWorkers: new Set<"alpha" | "beta">(),
+      subagentFanoutPhase: 0,
+      subagentHandoffSpawned: false,
+      repeatedRequestRecoveryAttempts: 0,
+      stalledTurnRecoveryAttempts: 0,
+      toolLoopReadAttempts: 0,
+    };
+    scenarioStates.set(sessionId ?? "", scenarioState);
     const compactionSummaryFaultMode = resolveCompactionSummaryFaultMode({
       allInputText,
       requestKind,
@@ -2076,7 +2063,7 @@ export async function startQaMockOpenAiServer(params?: QaMockOpenAiServerOptions
       requestKind,
       compactionSummaryFaultMode,
       rawByteLength,
-    } satisfies MockOpenAiRequestSnapshotBase;
+    };
     if (
       requestKind === "agent-initial" &&
       (QA_COMPACTION_RETRY_PROMPT_RE.test(allInputText) ||
@@ -2146,7 +2133,6 @@ export async function startQaMockOpenAiServer(params?: QaMockOpenAiServerOptions
     if (request.route === "anthropic-messages") {
       events = adaptAnthropicToolCallIds(events);
     }
-    const plannedToolIdentity = extractPlannedToolIdentity(events);
     const plannedTool = extractScenarioPlannedTool(events);
     const terminalRequesterCase =
       subagentTurn?.kind === "kickoff" ? subagentTurn.caseName : undefined;
@@ -2185,9 +2171,9 @@ export async function startQaMockOpenAiServer(params?: QaMockOpenAiServerOptions
       ...(events.some((event) => event.type === "response.failed")
         ? { errorCode: "response_failed_no_details" }
         : {}),
-      plannedToolCallId: plannedToolIdentity.callId,
-      ...(request.route === "responses" && plannedToolIdentity.itemId
-        ? { plannedToolItemId: plannedToolIdentity.itemId }
+      plannedToolCallId: plannedTool.callId,
+      ...(request.route === "responses" && plannedTool.itemId
+        ? { plannedToolItemId: plannedTool.itemId }
         : {}),
       plannedToolName: plannedTool.name,
       ...(plannedTool.wireName && plannedTool.wireName !== plannedTool.name

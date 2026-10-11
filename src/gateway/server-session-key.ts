@@ -2,6 +2,7 @@ import { AgentSelectionRequiredError, resolveDefaultAgentId } from "../agents/ag
 import { getRuntimeConfig } from "../config/io.js";
 import type { SessionEntry } from "../config/sessions.js";
 import type { SessionTranscriptRuntimeTarget } from "../config/sessions/session-accessor.types.js";
+import { resolvePersistedSessionStoreOwner } from "../config/sessions/session-store-owner.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { getAgentRunContext } from "../infra/agent-run-registry.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
@@ -52,7 +53,12 @@ export function resolveSessionForRun(
     }
   }
   const cfg = getRuntimeConfig();
-  const requestedAgentId = explicitAgentId ?? normalizeAgentId(resolveDefaultAgentId(cfg));
+  const storeOwner = explicitAgentId ? undefined : resolvePersistedSessionStoreOwner(cfg);
+  const requestedAgentId =
+    explicitAgentId ??
+    (storeOwner?.kind === "configured"
+      ? storeOwner.agentId
+      : normalizeAgentId(resolveDefaultAgentId(cfg)));
   if (
     cached &&
     (!context?.agentId?.trim() || cachedAgentId === requestedAgentId) &&

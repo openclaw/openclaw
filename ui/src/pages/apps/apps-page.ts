@@ -19,7 +19,7 @@ import { McpAppCatalogController } from "../../lib/mcp-app-catalog.ts";
 import { mcpAppRouteFromSearch, resolveMcpAppRouteServer } from "../../lib/mcp-app-route.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
-import "../../components/mcp-app-catalog.ts";
+import "../../components/mcp-app-catalog.tsx";
 import { buildMacGatewayLaunchUrl } from "./gateway-launch.ts";
 import { renderApps } from "./view.ts";
 
@@ -36,9 +36,12 @@ class AppsPage extends OpenClawLightDomElement {
     this,
     () => this.context,
     () => ({
-      sessionKey: this.context?.gateway.snapshot.sessionKey ?? "",
+      sessionKey: mcpAppRouteFromSearch(this.appSearch)
+        ? (this.context?.gateway.snapshot.sessionKey ?? "")
+        : "",
       agentId: this.context?.agentSelection.state.selectedId ?? undefined,
     }),
+    () => true,
   );
 
   constructor() {
@@ -51,7 +54,7 @@ class AppsPage extends OpenClawLightDomElement {
     if (!this.conversationError) {
       void ensureCustomElementDefined(
         "openclaw-chat-pane",
-        () => import("./app-conversation.ts"),
+        () => import("../chat/route-entry.ts"),
       ).catch((error: unknown) => {
         this.conversationError = formatUiError(error);
         this.requestUpdate();

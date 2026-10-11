@@ -1,5 +1,6 @@
 // Discord tests cover reply delivery plugin behavior.
 import { expectDefined } from "@openclaw/normalization-core";
+import { createSubscribedSessionHarness } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
 import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import { createMessageReceiptFromOutboundResults } from "openclaw/plugin-sdk/channel-outbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -167,6 +168,48 @@ describe("deliverDiscordReply", () => {
     });
 
     expect(firstDeliverParams().payloads).toEqual([{ text: "Thinking\n\n_Because it helps_" }]);
+  });
+
+  it("delivers completed provider reasoning before a streamed answer block", async () => {
+    const { emit, subscription } = createSubscribedSessionHarness({
+      runId: "discord-reasoning-order",
+      reasoningMode: "on",
+      blockReplyBreak: "text_end",
+      onBlockReply: async (payload) => {
+        await deliverDiscordReply({
+          ...deliveryDefaults,
+          replies: [payload],
+          kind: "block",
+        });
+      },
+    });
+    try {
+      const thinking = { type: "thinking", thinking: "Because it helps" };
+      emit({ type: "message_start", message: { role: "assistant", content: [] } });
+      emit({
+        type: "message_update",
+        message: { role: "assistant", content: [thinking] },
+        assistantMessageEvent: { type: "thinking_end", content: "Because it helps" },
+      });
+      const message = {
+        role: "assistant",
+        content: [thinking, { type: "text", text: "Final answer" }],
+      };
+      emit({
+        type: "message_update",
+        message,
+        assistantMessageEvent: { type: "text_end", contentIndex: 1, content: "Final answer" },
+      });
+      emit({ type: "message_end", message });
+      await subscription.waitForPendingEvents();
+      const batches = sendDurableMessageBatchMock.mock.calls as unknown as Array<[DeliverParams]>;
+      expect(batches.map(([params]) => params.payloads)).toMatchObject([
+        [{ text: "Thinking\n\n_Because it helps_" }],
+        [{ text: "Final answer" }],
+      ]);
+    } finally {
+      subscription.unsubscribe();
+    }
   });
 
   it("preserves the accepted receipt when a later Discord delivery fails", async () => {

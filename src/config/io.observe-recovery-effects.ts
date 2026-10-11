@@ -1,11 +1,15 @@
 import type fs from "node:fs";
 import { hasErrnoCode } from "../infra/errno.js";
+import type { captureConfigAuditAppender } from "./io.audit.js";
 import type { captureConfigHealthStateStore } from "./io.health-state.js";
 import type { NormalizedConfigIoDeps } from "./io.read.types.js";
 
 export type ConfigRecoveryEffect<T> = {
   sync: () => T;
-  async: (health: ReturnType<typeof captureConfigHealthStateStore>) => T | Promise<T>;
+  async: (
+    health: ReturnType<typeof captureConfigHealthStateStore>,
+    appendAudit: ReturnType<typeof captureConfigAuditAppender>,
+  ) => T | Promise<T>;
 };
 
 export function createConfigRecoveryStatEffect(

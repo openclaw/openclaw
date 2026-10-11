@@ -12,8 +12,9 @@ import {
 } from "./embedded-agent-runner/result-fallback-classifier.js";
 import { runWithModelFallback } from "./model-fallback-runner.js";
 
+// mock-isolation: Outcome classification skips auth runtime and must not initialize credential-source state.
 vi.mock("./auth-profiles/source-check.js", () => ({
-  hasAnyAuthProfileStoreSource: () => false,
+  hasAnyAuthProfileStoreSourceAsync: () => false,
 }));
 
 const contractFallbackOverride = [

@@ -45,6 +45,8 @@ export function projectSubagentRunForSessionList(entry: SubagentRunRecord): Suba
     ...(entry.taskRunId !== undefined ? { taskRunId: entry.taskRunId } : {}),
     ...(entry.pauseReason ? { pauseReason: entry.pauseReason } : {}),
     ...(entry.swarmRunId ? { swarmRunId: entry.swarmRunId } : {}),
+    ...(entry.schedulerSlotId ? { schedulerSlotId: entry.schedulerSlotId } : {}),
+    ...(entry.swarmLaunchReplayKey ? { swarmLaunchReplayKey: entry.swarmLaunchReplayKey } : {}),
     childSessionKey: entry.childSessionKey,
     ...(entry.childAgentId ? { childAgentId: entry.childAgentId } : {}),
     ...(entry.controllerSessionKey ? { controllerSessionKey: entry.controllerSessionKey } : {}),
@@ -61,7 +63,6 @@ export function projectSubagentRunForSessionList(entry: SubagentRunRecord): Suba
     ...(entry.collectorCompletion
       ? { collectorCompletion: { status: entry.collectorCompletion.status } }
       : {}),
-    ...(entry.childAgentId ? { childAgentId: entry.childAgentId } : {}),
     ...(entry.requesterAgentId ? { requesterAgentId: entry.requesterAgentId } : {}),
     ...(entry.model ? { model: entry.model } : {}),
     ...(entry.generation !== undefined ? { generation: entry.generation } : {}),

@@ -125,21 +125,6 @@ export type GoogleInteractionsRequestBody = {
   stream: boolean;
 };
 
-function convertToolResultContent(content: Context["messages"][number]["content"]): unknown {
-  if (!Array.isArray(content)) {
-    return content;
-  }
-  return content.map((item) => {
-    if (item.type === "image") {
-      return { type: "image", mime_type: item.mimeType, data: item.data };
-    }
-    if (item.type === "text") {
-      return { type: "text", text: sanitizeSurrogates(item.text) };
-    }
-    return item;
-  });
-}
-
 function convertMessages<T extends GoogleApiType>(
   model: Model<T>,
   context: Context,
@@ -149,10 +134,11 @@ function convertMessages<T extends GoogleApiType>(
 
   for (const message of messages) {
     if (message.role === "user") {
+      const sourceContent = message.content;
       const parts =
-        typeof message.content === "string"
-          ? [{ type: "text" as const, text: message.content }]
-          : message.content;
+        typeof sourceContent === "string"
+          ? [{ type: "text" as const, text: sourceContent }]
+          : sourceContent;
       const content: Extract<GoogleInteractionsStep, { type: "user_input" }>["content"] = parts.map(
         (item) =>
           item.type === "text"
@@ -171,7 +157,11 @@ function convertMessages<T extends GoogleApiType>(
         type: "function_result",
         call_id: message.toolCallId,
         name: message.toolName || "tool",
-        result: convertToolResultContent(message.content),
+        result: message.content.map((item) =>
+          item.type === "image"
+            ? { type: "image", mime_type: item.mimeType, data: item.data }
+            : { type: "text", text: sanitizeSurrogates(item.text) },
+        ),
         is_error: message.isError,
       });
       continue;
@@ -233,7 +223,7 @@ function convertMessages<T extends GoogleApiType>(
         type: "function_call",
         id: block.id,
         name: block.name,
-        arguments: block.arguments ?? {},
+        arguments: block.arguments,
       });
     }
     flushText();

@@ -25,7 +25,6 @@ import {
   isInternalNonDeliveryChannel,
   normalizeMessageChannel,
 } from "../../utils/message-channel.js";
-import { normalizeSessionConversationLink } from "./conversation-link.js";
 import { buildGroupDisplayName, resolveGroupSessionKey } from "./group.js";
 import type { GroupKeyResolution, SessionEntry, SessionOrigin } from "./types.js";
 
@@ -91,7 +90,6 @@ const mergeSessionOrigin = (
   return Object.keys(merged).length > 0 ? merged : undefined;
 };
 
-/** Derives session origin metadata from an inbound message context. */
 export function deriveSessionOrigin(
   ctx: MsgContext,
   opts?: { skipSystemEventOrigin?: boolean },
@@ -199,11 +197,7 @@ export function deriveSessionMetaPatch(params: {
   const origin = deriveSessionOrigin(params.ctx, {
     skipSystemEventOrigin: params.skipSystemEventOrigin,
   });
-  const conversationLink =
-    !params.existing?.conversationLink && params.ctx.InternalTurnSource === undefined
-      ? normalizeSessionConversationLink(params.ctx.ConversationLink)
-      : undefined;
-  if (!groupPatch && !origin && !conversationLink) {
+  if (!groupPatch && !origin) {
     return null;
   }
 
@@ -248,9 +242,6 @@ export function deriveSessionMetaPatch(params: {
   }
 
   const patch: Partial<SessionEntry> = groupPatch ? { ...groupPatch } : {};
-  if (conversationLink) {
-    patch.conversationLink = conversationLink;
-  }
   const mergedOrigin = mergeSessionOrigin(existingOrigin, origin);
   if (mergedOrigin) {
     if (!patch.chatType && mergedOrigin.chatType) {

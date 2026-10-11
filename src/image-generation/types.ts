@@ -23,11 +23,9 @@ export type ImageGenerationBackground = "transparent" | "opaque" | "auto";
 
 export type ImageGenerationOpenAIBackground = ImageGenerationBackground;
 
-export type ImageGenerationOpenAIModeration = "low" | "auto";
-
 export type ImageGenerationOpenAIOptions = {
   background?: ImageGenerationOpenAIBackground;
-  moderation?: ImageGenerationOpenAIModeration;
+  moderation?: "low" | "auto";
   outputCompression?: number;
   user?: string;
 };
@@ -49,12 +47,7 @@ export type ImageGenerationIgnoredOverride = {
   value: string;
 };
 
-export type ImageGenerationSourceImage = {
-  buffer: Buffer;
-  mimeType: string;
-  fileName?: string;
-  metadata?: Record<string, unknown>;
-};
+export type ImageGenerationSourceImage = Omit<GeneratedImageAsset, "revisedPrompt">;
 
 export type ImageGenerationProviderConfiguredContext = {
   cfg?: OpenClawConfig;
