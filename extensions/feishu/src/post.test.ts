@@ -31,36 +31,6 @@ describe("parsePostContent", () => {
     expect(result.mentionedOpenIds).toStrictEqual([]);
   });
 
-  it.each([
-    {
-      style: ["underline"],
-      expected: "<u>x \\* y</u> <u>[Docs](https://example.com)</u> <u>@Alice</u>",
-    },
-    {
-      style: ["lineThrough", "bold", "italic"],
-      expected: "~~***x \\* y***~~ ~~***[Docs](https://example.com)***~~ ~~***@Alice***~~",
-    },
-    { style: [], expected: "x \\* y [Docs](https://example.com) @Alice" },
-  ])("preserves native inline styles $style", ({ style, expected }) => {
-    const result = parsePostContent(
-      JSON.stringify({
-        content: [
-          [
-            { tag: "text", text: "x * y", style },
-            { tag: "text", text: " " },
-            { tag: "a", text: "Docs", href: "https://example.com", style },
-            { tag: "text", text: " " },
-            { tag: "at", user_name: "Alice", user_id: "ou_alice", style },
-          ],
-        ],
-      }),
-    );
-
-    expect(result.textContent).toBe(expected);
-    expect(result.mentionedOpenIds).toEqual(["ou_alice"]);
-    expect(result.attachments).toEqual([]);
-  });
-
   it("keeps boundary whitespace outside emphasis delimiters", () => {
     const result = parsePostContent(
       JSON.stringify({
@@ -88,14 +58,19 @@ describe("parsePostContent", () => {
     });
   });
 
-  it("renders links and mentions", () => {
+  it("renders styled links and mentions", () => {
     const content = JSON.stringify({
       title: "",
       content: [
         [
-          { tag: "a", text: "Docs [v2]", href: "https://example.com/guide(a)" },
+          {
+            tag: "a",
+            text: "Docs [v2]",
+            href: "https://example.com/guide(a)",
+            style: ["lineThrough", "bold", "italic"],
+          },
           { tag: "text", text: " " },
-          { tag: "at", user_name: "alice_bob" },
+          { tag: "at", user_name: "alice_bob", style: ["underline"] },
           { tag: "text", text: " " },
           { tag: "at", open_id: "ou_123" },
           { tag: "text", text: " " },
@@ -107,7 +82,7 @@ describe("parsePostContent", () => {
     const result = parsePostContent(content);
 
     expect(result.textContent).toBe(
-      "[Docs \\[v2\\]](https://example.com/guide(a)) @alice\\_bob @ou\\_123 [https://example.com/no\\-text](https://example.com/no-text)",
+      "~~***[Docs \\[v2\\]](https://example.com/guide(a))***~~ <u>@alice\\_bob</u> @ou\\_123 [https://example.com/no\\-text](https://example.com/no-text)",
     );
     expect(result.mentionedOpenIds).toEqual(["ou_123"]);
   });
@@ -159,6 +134,109 @@ describe("parsePostContent", () => {
       { kind: "file", key: "file_last", fileName: "last.mov" },
       { kind: "image", key: "img_shared" },
     ]);
+  });
+
+  it("collects top-level files[] from captioned and multi-file posts", () => {
+    const captioned = JSON.stringify({
+      title: "",
+      content: [[{ tag: "text", text: "这是账本" }]],
+      content_v2: [[{ tag: "text", text: "这是账本" }]],
+      files: [
+        {
+          file_key: "file_v3_0015l_1a389bce-aabb-ccdd-eeff-1234567890ab",
+          file_name: "amount-2026-08-01_2026-08-31.csv",
+          is_folder: false,
+        },
+      ],
+    });
+
+    expect(parsePostContent(captioned)).toEqual({
+      textContent: "这是账本",
+      attachments: [
+        {
+          kind: "file",
+          key: "file_v3_0015l_1a389bce-aabb-ccdd-eeff-1234567890ab",
+          fileName: "amount-2026-08-01_2026-08-31.csv",
+          origin: "top-level",
+        },
+      ],
+      mentionedOpenIds: [],
+    });
+
+    const multiFile = JSON.stringify({
+      title: "",
+      content: [[]],
+      content_v2: [[]],
+      files: [
+        {
+          file_key: "file_v3_zip_aug",
+          file_name: "usage_data_2026-08-01_2026-08-31.zip",
+          is_folder: false,
+        },
+        {
+          file_key: "file_v3_zip_sep",
+          file_name: "usage_data_2026-09-01_2026-09-18.zip",
+          is_folder: false,
+        },
+        {
+          file_key: "file_v3_folder",
+          file_name: "ignored-folder",
+          is_folder: true,
+        },
+        {
+          file_key: "invalid/key",
+          file_name: "bad.csv",
+          is_folder: false,
+        },
+      ],
+    });
+
+    expect(parsePostContent(multiFile).attachments).toEqual([
+      {
+        kind: "file",
+        key: "file_v3_zip_aug",
+        fileName: "usage_data_2026-08-01_2026-08-31.zip",
+        origin: "top-level",
+      },
+      {
+        kind: "file",
+        key: "file_v3_zip_sep",
+        fileName: "usage_data_2026-09-01_2026-09-18.zip",
+        origin: "top-level",
+      },
+    ]);
+
+    expect(
+      parsePostContent(
+        JSON.stringify({
+          post: {
+            zh_cn: {
+              title: "",
+              content: [[{ tag: "text", text: "附件" }]],
+              files: [
+                {
+                  file_key: "file_v3_locale",
+                  file_name: "locale.csv",
+                  is_folder: false,
+                },
+              ],
+            },
+          },
+        }),
+      ).attachments,
+    ).toEqual([
+      { kind: "file", key: "file_v3_locale", fileName: "locale.csv", origin: "top-level" },
+    ]);
+
+    expect(
+      parsePostContent(
+        JSON.stringify({
+          title: "",
+          content: [[]],
+          files: [{ file_key: "file_pdf" }],
+        }),
+      ).attachments,
+    ).toEqual([{ kind: "file", key: "file_pdf", origin: "top-level" }]);
   });
 
   it("supports locale wrappers", () => {

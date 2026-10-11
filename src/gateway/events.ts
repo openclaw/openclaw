@@ -1,4 +1,3 @@
-// Gateway event payload constants shared by server broadcasts and UI clients.
 import type {
   UpdateAvailable,
   UpdateScheduleState,
@@ -6,19 +5,15 @@ import type {
 import { roleScopesAllow } from "../shared/operator-scope-compat.js";
 import { READ_SCOPE } from "./operator-scopes.js";
 
-/** Event name emitted when the paired-device projection changes. */
 export const GATEWAY_EVENT_DEVICE_PAIR_CHANGED = "device.pair.changed" as const;
 
-/** Event name emitted when a node's private runner declaration changes. */
 export const GATEWAY_EVENT_NODE_RUNNER_INVENTORY_CHANGED = "node.runnerInventory.changed" as const;
 
-/** Event name emitted when a newer OpenClaw version is available. */
 export const GATEWAY_EVENT_UPDATE_AVAILABLE = "update.available" as const;
 
 /** Active update ledger progress; detailed records remain admin-scoped. */
 export const GATEWAY_EVENT_UPDATE_RUN_CHANGED = "update.run.changed" as const;
 
-/** Returns whether this authenticated client may receive detailed update metadata. */
 export function canReadDetailedUpdateMetadata(role: string, scopes: readonly string[]): boolean {
   return roleScopesAllow({
     role,
@@ -42,7 +37,6 @@ export function projectUpdateAvailable(
   };
 }
 
-/** Gateway event payload for update availability broadcasts. */
 export type GatewayUpdateAvailableEventPayload = {
   updateAvailable: UpdateAvailable | null;
   schedule?: UpdateScheduleState;

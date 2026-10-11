@@ -18,6 +18,16 @@ For the personal-agent default — one rolling conversation shared by all your
 DM channels, with group activity and background work flowing into it — see
 [The main session](/concepts/main-session).
 
+Delivered command exchanges from the shared dispatcher are conversation history
+too. OpenClaw appends the user's command and delivered reply as ordinary
+user/assistant messages. Native menus and command acknowledgements on Discord
+and Telegram, and Slack argument menus, are also retained after delivery.
+Later turns and chat history can read these exchanges.
+Login, pairing, and sensitive `/config set` or `/debug set` values are redacted before storage.
+`/new` and `/reset` put their confirmation exchange in the new session; they do not
+rewrite the old session. `/btw` and `/side` stay ephemeral, and message edits or
+deletions do not rewrite earlier transcript rows.
+
 ## How messages are routed
 
 | Source          | Behavior                      |
@@ -28,12 +38,22 @@ DM channels, with group activity and background work flowing into it — see
 | Cron jobs       | Fresh session per run         |
 | Webhooks        | Isolated per hook             |
 
+Native catalog source IDs, Matrix room and thread IDs, and Signal group IDs are
+case-sensitive: IDs that differ only by case identify different conversations.
+
 With `session.scope: "global"`, the selected agent still owns its session.
 The shared key `global` does not merge different agents' conversations:
 commands, skills, replies, and background task notifications retain the
 agent selected by the route or explicit request.
 Session lists, model filters, previews, and sharing controls also retain the
 stored conversation's agent, rather than the aggregate view's default agent.
+Renaming, pinning, or editing session metadata retains the existing message
+preview without rereading the transcript. New messages, transcript replacements,
+completed transcript repairs, and cold-storage restoration refresh previews; changes to model selection
+or fallback state refresh the relevant model facts.
+Stopping with `/stop`, deleting, resetting, or archiving a session cancels only that agent's work for
+the selected conversation. Another agent's active turn and queued messages are
+preserved even when the agents use the same session key.
 
 ## DM isolation
 
@@ -124,6 +144,10 @@ context, and replies to the source room remain unchanged.
 
 Incognito sessions are available only from the Control UI's **New thread** screen. Turn on **Incognito** before starting the thread to keep its session entry, transcript, and compaction state in process memory instead of on disk. The thread expires 24 hours after creation or when the Gateway restarts, whichever comes first. Activity does not extend its lifetime. Expiry stops active work and deletes the session and transcript without an archive. Incognito does not run OpenClaw's automatic memory flush, and does not create a transcript archive when you reset or delete it. Codex-backed runs also start their harness thread in ephemeral mode, so Codex writes no rollout or local session-state files; other model providers use HTTP APIs and keep no local provider transcript in OpenClaw.
 
+<Warning>
+On the Codex runtime, the Codex app-server still writes each message you submit to its own diagnostic log database (`logs_2.sqlite` in that agent's Codex home), including messages in incognito threads. Codex currently offers no setting that turns this log off, so OpenClaw cannot prevent it. For conversations that must not reach disk, use an agent on the OpenClaw runtime.
+</Warning>
+
 Delegated work uses its native execution and completion owners. Live subagent activity and completion delivery remain available.
 
 The `incognito-` segment is reserved for dashboard, subagent, and hidden internal session keys; `openclaw doctor --fix` renames any colliding legacy durable keys.
@@ -154,6 +178,10 @@ Lossless Claw remain independent and can run alongside it. See
 and runtime details.
 
 ## Session lifecycle
+
+Independent sessions can initialize their first turns concurrently. Requests for
+the same session remain ordered; parent forks and resets retain their shared-state
+coordination.
 
 Sessions are reused until you reset them manually or opt into an automatic reset policy:
 
@@ -210,14 +238,47 @@ Accepting, queueing, or preparing a resume request alone does not refresh it.
 CLI backends that do not report turn acceptance refresh the budget only after
 observed assistant output or tool activity; silent startup does not refresh it.
 
+For a freshly created session's eligible local, idle, restart-safe initial turn,
+`sessions.create` commits the session first, then commits the input transcript and
+restart claim together before acknowledging a started run. Failure or a crash
+between those commits can leave the created session with no retained input bytes.
+After the input commits, restart recovery retains that turn even if the client
+never receives the acknowledgment. Queued input, hook-dependent input, worker
+placement, idle `chat.send`, and retries of existing durable input retain their
+existing admission and recovery behavior. A restart
+during managed worktree preparation resumes the accepted turn and prepares or
+reuses its local worktree before starting the agent. Recovery does not inherit
+the original caller's permission to run worktree setup scripts.
+
 When replaying an interrupted turn, recovery preserves its recorded tool calls
 and results, including nested tool activity, and reuses the original user message.
 A completed reply or a later user message closes that turn to replay.
+
+For authenticated operator turns, recovery revalidates the original caller's
+recorded permissions against current profile, role, access-grant, and device
+policy. A Control UI administrator can therefore continue authorized automation
+work after a restart without losing `operator.admin`. Recovery cannot gain scopes
+the original caller lacked, and revocation still stops the recovered run.
+Older interrupted turns without a recorded authorization source remain restricted;
+send a fresh authenticated message to continue privileged work. Session ownership
+or a saved display name never grants recovery permissions.
+
+This also covers parent turns started by subagent completion or pause notices.
+An interrupted parent continues independently of later child completions, and a
+retry of the same notice joins that recovery instead of starting the turn again.
+Parents still waiting after yielding to children remain owned by their child batch.
 
 Messages sent while restart recovery is waiting to start stay pending. Once
 recovery starts, they follow the session's normal message queue policy. You do
 not need to resend a message just because recovery is waiting for capacity.
 Stopping or replacing the session still cancels pending work.
+
+If subagent recovery changes session-protection facts while an incoming turn is
+being prepared, reply initialization refreshes those facts and retries within its
+existing bounded retry budget. Exhaustion reports an error asking you to retry
+the message. A saved user message that has not reached the model remains user
+input when a subagent announcement continues the session; it is not demoted to
+background context.
 
 If automatic recovery is exhausted, the transcript remains available. Use
 **Resume in new session** in WebChat, or `/new` or `/reset` in other channels,
@@ -228,6 +289,10 @@ to start a replacement session.
 - **Runtime session rows and transcripts:** `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite` by default
 - **Archived transcript files:** `~/.openclaw/agents/<agentId>/sessions/`
 - **Legacy row migration source:** `~/.openclaw/agents/<agentId>/sessions/sessions.json`
+
+Archive discovery uses the selected store, recorded transcript paths, and agent
+directories. The pre-agent `~/.openclaw/sessions/` directory is no longer an
+implicit fallback; explicitly configured paths still work.
 
 The session rows in the per-agent SQLite database keep separate lifecycle
 timestamps:
@@ -304,9 +369,9 @@ sessions retain their sidebar nesting; subagent runs appear in transcript activi
 and session transcripts. Existing child pins disappear and no longer protect the session
 from maintenance.
 
-Gateway model-run probe sessions are short-lived by default. Rows matching
+Gateway model-run check sessions are short-lived by default. Rows matching
 `agent:*:explicit:model-run-<uuid>` use fixed `24h` retention, but cleanup is
-pressure-gated: it only removes stale probe rows when session-entry
+pressure-gated: it only removes stale check rows when session-entry
 maintenance/cap pressure is reached, and runs before the broader stale-entry
 age cutoff and entry cap. Normal direct, group, thread, cron, hook, heartbeat,
 ACP, and sub-agent sessions do not inherit this 24h retention.
@@ -350,8 +415,8 @@ and deleting unneeded sessions. Checks resume on subsequent activity;
 `openclaw sessions cleanup --enforce` remains available immediately.
 
 Cleanup first tries to truncate the WAL without waiting for readers. If readers
-prevent truncation, a complete PASSIVE checkpoint is sufficient: every observed
-frame must have reached the main database, even if the WAL file remains allocated.
+prevent truncation, a complete PASSIVE checkpoint is sufficient: frames relevant
+to cleanup must have reached the main database, even if the WAL file remains allocated.
 Retained WAL bytes still count toward the physical budget. Successful cleanup
 logs one outcome with the before/after bytes and removal counts.
 
@@ -359,10 +424,13 @@ An incomplete SQLite WAL checkpoint is a separate deferral. Cleanup preserves
 archives and history instead of deleting more data behind the blocked checkpoint.
 The result records `deferredReason: "checkpoint-incomplete"`, WAL bytes before and
 after, and the checkpoint outcome. Automatic and manual budget passes remain
-deferred until the checkpoint owner observes a completed checkpoint; elapsed time
-or a budget change alone does not retry pruning. Normal periodic checkpointing
-continues, and subsequent activity can resume cleanup after recovery, including
-after a system clock correction.
+deferred until the checkpoint owner records completion after the pending cleanup
+work. Newer frames from concurrent writes do not erase that completion. Each SQLite cleanup
+deletion or vacuum commit requires a new completion before further pruning, so a
+reader pinning those changes still defers cleanup. Ordering uses monotonic time;
+elapsed time, a budget change, or a system clock correction cannot release the gate.
+Normal periodic checkpointing continues, and subsequent activity can resume cleanup
+after recovery.
 
 Look for `session history disk budget deferred until a completed WAL checkpoint is observed`
 in the Gateway log. Its checkpoint fields include bounded operation names for

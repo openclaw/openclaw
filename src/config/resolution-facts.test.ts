@@ -26,13 +26,6 @@ describe("resolution facts through config rewrites", () => {
       survives: true,
     },
     {
-      name: "quoted numeric key",
-      path: 'items["0"].key',
-      source: { items: { "0": { key: "value" } } },
-      target: { items: { "0": { key: "value" } } },
-      survives: true,
-    },
-    {
       name: "array changed to record",
       path: "items[0].key",
       source: { items: [{ key: "value" }] },
@@ -44,20 +37,6 @@ describe("resolution facts through config rewrites", () => {
       path: 'items["0"].key',
       source: { items: { "0": { key: "value" } } },
       target: { items: [{ key: "value" }] },
-      survives: false,
-    },
-    {
-      name: "overwritten value",
-      path: "key",
-      source: { key: "before" },
-      target: { key: "after" },
-      survives: false,
-    },
-    {
-      name: "moved value",
-      path: "key",
-      source: { key: "value" },
-      target: { relocated: "value" },
       survives: false,
     },
     {

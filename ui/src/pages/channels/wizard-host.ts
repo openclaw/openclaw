@@ -17,8 +17,7 @@ export class ChannelWizardHost {
   textValue = "";
   secretVisible = false;
   blockedByDirtyConfig = false;
-  private multiselectStepId: string | null = null;
-  private textStepId: string | null = null;
+  private stepId: string | null = null;
   private lastPhase = "idle";
   private readonly controller: ChannelWizardController;
 
@@ -81,10 +80,6 @@ export class ChannelWizardHost {
     this.deps.requestUpdate();
   }
 
-  setTextValue(value: string): void {
-    this.textValue = value;
-  }
-
   toggleSecretVisibility(): void {
     this.secretVisible = !this.secretVisible;
     this.deps.requestUpdate();
@@ -94,15 +89,12 @@ export class ChannelWizardHost {
     // Pending input state survives unrelated page re-renders but resets per step.
     const wizard = this.controller.state;
     const stepId = wizard.phase === "step" ? wizard.step.id : null;
-    if (stepId !== this.multiselectStepId) {
-      this.multiselectStepId = stepId;
+    if (stepId !== this.stepId) {
+      this.stepId = stepId;
       this.multiselect =
         wizard.phase === "step" && Array.isArray(wizard.step.initialValue)
           ? [...wizard.step.initialValue]
           : [];
-    }
-    if (stepId !== this.textStepId) {
-      this.textStepId = stepId;
       this.textValue =
         wizard.phase === "step" &&
         wizard.step.type === "text" &&
@@ -112,23 +104,30 @@ export class ChannelWizardHost {
       this.secretVisible = false;
     }
     if (wizard.phase === "done" && this.lastPhase !== "done") {
-      void this.handleCompleted(wizard.accounts);
+      void this.handleCompleted(wizard);
     }
     this.lastPhase = wizard.phase;
     this.deps.requestUpdate();
   }
 
   private async handleCompleted(
-    accounts: ReadonlyArray<{ channel: string; accountId: string }>,
+    wizard: Extract<ChannelWizardState, { phase: "done" }>,
   ): Promise<void> {
     const context = this.deps.getContext();
     if (!context) {
       return;
     }
+    const isCurrent = () => this.controller.state === wizard && this.deps.getContext() === context;
     // The wizard rewrote openclaw.json on the gateway; resync the local draft.
     await context.runtimeConfig.discardDraft({ reloadOnly: true });
+    if (!isCurrent()) {
+      return;
+    }
     await context.channels.refresh(true);
-    const whatsapp = accounts.find((entry) => entry.channel === "whatsapp");
+    if (!isCurrent()) {
+      return;
+    }
+    const whatsapp = wizard.accounts.find((entry) => entry.channel === "whatsapp");
     if (whatsapp) {
       // Jump straight into QR pairing for the account the wizard configured;
       // the wizard modal renders the QR phase.

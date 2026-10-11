@@ -12,10 +12,11 @@ import { resolveDiscordChannelId } from "../targets.js";
 import type { DiscordMessagingActionContext } from "./runtime.messaging.shared.js";
 
 function parseDiscordMessageLink(link: string) {
-  const normalized = link.trim();
-  const match = normalized.match(
-    /^(?:https?:\/\/)?(?:ptb\.|canary\.)?discord(?:app)?\.com\/channels\/(\d+)\/(\d+)\/(\d+)(?:\/?|\?.*)$/i,
-  );
+  const match = link
+    .trim()
+    .match(
+      /^(?:https?:\/\/)?(?:ptb\.|canary\.)?discord(?:app)?\.com\/channels\/(\d+)\/(\d+)\/(\d+)(?:\/?|\?.*)$/i,
+    );
   if (!match) {
     throw new Error(
       "Invalid Discord message link. Expected https://discord.com/channels/<guildId>/<channelId>/<messageId>.",
@@ -30,17 +31,24 @@ function parseDiscordMessageLink(link: string) {
 
 export async function handleDiscordMessageManagementAction(ctx: DiscordMessagingActionContext) {
   switch (ctx.action) {
-    case "permissions": {
-      if (!ctx.isActionEnabled("permissions")) {
-        throw new Error("Discord permissions are disabled.");
+    case "permissions":
+    case "listPins": {
+      const permissions = ctx.action === "permissions";
+      const gate = permissions ? "permissions" : "pins";
+      if (!ctx.isActionEnabled(gate)) {
+        throw new Error(`Discord ${gate} are disabled.`);
       }
       const channelId = ctx.resolveChannelId();
       await ctx.assertReadTargetAllowed({ channelId });
-      const permissions = await discordMessagingActionRuntime.fetchChannelPermissionsDiscord(
-        channelId,
-        ctx.withOpts(),
-      );
-      return jsonResult({ ok: true, permissions });
+      const value = permissions
+        ? await discordMessagingActionRuntime.fetchChannelPermissionsDiscord(
+            channelId,
+            ctx.withOpts(),
+          )
+        : (await discordMessagingActionRuntime.listPinsDiscord(channelId, ctx.withOpts())).map(
+            (pin) => ctx.normalizeMessage(pin),
+          );
+      return jsonResult({ ok: true, [gate]: value });
     }
     case "fetchMessage": {
       if (!ctx.isActionEnabled("messages")) {
@@ -51,10 +59,7 @@ export async function handleDiscordMessageManagementAction(ctx: DiscordMessaging
       let channelId = readStringParam(ctx.params, "channelId");
       let messageId = readStringParam(ctx.params, "messageId");
       if (messageLink) {
-        const parsed = parseDiscordMessageLink(messageLink);
-        guildId = parsed.guildId;
-        channelId = parsed.channelId;
-        messageId = parsed.messageId;
+        ({ guildId, channelId, messageId } = parseDiscordMessageLink(messageLink));
       }
       if (!guildId || !channelId || !messageId) {
         throw new Error(
@@ -120,6 +125,7 @@ export async function handleDiscordMessageManagementAction(ctx: DiscordMessaging
               active: true,
               seed: `${ctx.accountId}:${channelId}`,
               initialSnapshot: snapshot,
+              toolIcons: true,
             }).getText(),
             {
               maxChars: Math.min(ctx.accountConfig.textChunkLimit ?? 2000, 2000),
@@ -140,47 +146,25 @@ export async function handleDiscordMessageManagementAction(ctx: DiscordMessaging
       );
       return jsonResult({ ok: true, message });
     }
-    case "deleteMessage": {
-      if (!ctx.isActionEnabled("messages")) {
-        throw new Error("Discord message deletes are disabled.");
-      }
-      const channelId = ctx.resolveChannelId();
-      const messageId = readStringParam(ctx.params, "messageId", {
-        required: true,
-      });
-      await ctx.assertReadTargetAllowed({ channelId });
-      await discordMessagingActionRuntime.deleteMessageDiscord(
-        channelId,
-        messageId,
-        ctx.withOpts(),
-      );
-      return jsonResult({ ok: true });
-    }
+    case "deleteMessage":
     case "pinMessage":
     case "unpinMessage": {
-      if (!ctx.isActionEnabled("pins")) {
-        throw new Error("Discord pins are disabled.");
+      const deleting = ctx.action === "deleteMessage";
+      if (!ctx.isActionEnabled(deleting ? "messages" : "pins")) {
+        throw new Error(
+          deleting ? "Discord message deletes are disabled." : "Discord pins are disabled.",
+        );
       }
       const channelId = ctx.resolveChannelId();
-      const messageId = readStringParam(ctx.params, "messageId", {
-        required: true,
-      });
+      const messageId = readStringParam(ctx.params, "messageId", { required: true });
       await ctx.assertReadTargetAllowed({ channelId });
-      const mutate =
-        ctx.action === "pinMessage"
+      const mutate = deleting
+        ? discordMessagingActionRuntime.deleteMessageDiscord
+        : ctx.action === "pinMessage"
           ? discordMessagingActionRuntime.pinMessageDiscord
           : discordMessagingActionRuntime.unpinMessageDiscord;
       await mutate(channelId, messageId, ctx.withOpts());
       return jsonResult({ ok: true });
-    }
-    case "listPins": {
-      if (!ctx.isActionEnabled("pins")) {
-        throw new Error("Discord pins are disabled.");
-      }
-      const channelId = ctx.resolveChannelId();
-      await ctx.assertReadTargetAllowed({ channelId });
-      const pins = await discordMessagingActionRuntime.listPinsDiscord(channelId, ctx.withOpts());
-      return jsonResult({ ok: true, pins: pins.map((pin) => ctx.normalizeMessage(pin)) });
     }
     case "searchMessages": {
       if (!ctx.isActionEnabled("search")) {
@@ -194,7 +178,6 @@ export async function handleDiscordMessageManagementAction(ctx: DiscordMessaging
       }
       const channelId = readStringParam(ctx.params, "channelId");
       const channelIds = readStringArrayParam(ctx.params, "channelIds");
-      // Resolve guildId from channel info when not explicitly provided.
       if (!guildId) {
         const rawInferChannelId = channelId ?? channelIds?.[0];
         if (rawInferChannelId) {

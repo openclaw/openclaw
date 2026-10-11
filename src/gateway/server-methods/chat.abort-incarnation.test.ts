@@ -6,10 +6,11 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { subagentRuns } from "../../agents/subagents/registry/subagent-registry-memory.js";
-import { onSubagentRegistryPersisted } from "../../agents/subagents/registry/subagent-registry-state.js";
+import { subscribeSubagentRunChanges } from "../../agents/subagents/registry/subagent-registry-publication.js";
+import { loadSubagentRegistryFromSqlite } from "../../agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
 import { registerSubagentRun } from "../../agents/subagents/registry/subagent-registry.js";
 import { writeSubagentSessionEntry } from "../../agents/subagents/registry/subagent-registry.persistence.test-support.js";
-import { loadSubagentRegistryFromSqlite } from "../../agents/subagents/registry/subagent-registry.store.sqlite.js";
+import { isSameSubagentRunOwner } from "../../agents/subagents/registry/subagent-run-generation.js";
 import { enqueueSwarmRun, releaseSwarmRun } from "../../agents/subagents/swarm/swarm-scheduler.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import { loadExactSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
@@ -73,7 +74,7 @@ it.each([false, true].flatMap((reset) => [true, false].map((completed) => ({ res
         defaultSessionId: `${runId}-session`,
         lifecycleRevision: "original",
       });
-      const registration = registerSubagentRun({
+      await registerSubagentRun({
         runId,
         childSessionKey,
         requesterSessionKey: parentKey,
@@ -85,9 +86,6 @@ it.each([false, true].flatMap((reset) => [true, false].map((completed) => ({ res
         collect: true,
         expectsCompletionMessage: false,
       });
-      if (registration) {
-        await registration;
-      }
       // Running fixture turns need real ownership so cold lifecycle setup cannot
       // let the registry sweeper mistake them for lost executions.
       registerAgentRunContext(runId, {
@@ -103,12 +101,13 @@ it.each([false, true].flatMap((reset) => [true, false].map((completed) => ({ res
         stream: "lifecycle",
         data: { phase: "end", endedAt: Date.now() },
       });
-      await vi.waitFor(() => expect(ended.execution.status).toBe("terminal"));
+      await fixture.settle();
+      expect(subagentRuns.get("ended")?.execution.status).toBe("terminal");
       clearAgentRunContext("ended");
       await fixture.settle();
-      expect(ended.endedReason).toBe("subagent-complete");
+      expect(subagentRuns.get("ended")?.endedReason).toBe("subagent-complete");
     }
-    expect(subagentRuns.get("ended")).toBe(ended);
+    expect(isSameSubagentRunOwner(subagentRuns.get("ended"), ended)).toBe(true);
     const entered = createDeferred();
     const resume = createDeferred();
     const endedMutationEntered = createDeferred();
@@ -123,7 +122,7 @@ it.each([false, true].flatMap((reset) => [true, false].map((completed) => ({ res
     let holdEndedMutation = !completed;
     const mutation = vi
       .spyOn(sessionLifecycle, "runExclusiveSessionLifecycleMutation")
-      .mockImplementation(async (params) => {
+      .mockImplementation(async (operation, params) => {
         if (
           holdEndedMutation &&
           "scope" in params &&
@@ -136,7 +135,7 @@ it.each([false, true].flatMap((reset) => [true, false].map((completed) => ({ res
           endedMutationEntered.resolve();
           await resumeEndedMutation.promise;
         }
-        return await mutateSession(params);
+        return await mutateSession(operation, params);
       });
     const restoreDrain = observeSessionWorkAdmissionDrain(async (params, released) => {
       if (params.scope === storePath && Array.from(params.identities).includes(activeKey)) {
@@ -184,7 +183,7 @@ it.each([false, true].flatMap((reset) => [true, false].map((completed) => ({ res
       const session = loadExactSessionEntryReadOnly({ storePath, sessionKey: endedKey })?.entry;
       expect(session?.sessionId).toBe("ended-session");
       expect(session?.lifecycleRevision === "original").toBe(!reset);
-      expect(subagentRuns.get("ended")).toBe(ended);
+      expect(isSameSubagentRunOwner(subagentRuns.get("ended"), ended)).toBe(true);
       if (!completed) {
         newAdmission = await sessionLifecycle.beginSessionWorkAdmission({
           scope: storePath,
@@ -225,7 +224,7 @@ it.each([false, true].flatMap((reset) => [true, false].map((completed) => ({ res
       expect(subagentRuns.get("grandchild")?.execution.status).toBe(reset ? "queued" : "terminal");
       if (!completed) {
         expect(interrupted).toHaveBeenCalledTimes(reset ? 0 : 1);
-        expect(ended.execution.status).toBe(reset ? "running" : "terminal");
+        expect(subagentRuns.get("ended")?.execution.status).toBe(reset ? "running" : "terminal");
       }
       releaseSwarmRun("capacity");
       if (reset) {
@@ -309,7 +308,7 @@ it.each(["child", "ancestor"])(
     expect(database).toBeDefined();
     let original: Buffer | undefined;
     let fault: unknown;
-    const unsubscribe = onSubagentRegistryPersisted(() => {
+    const unsubscribe = subscribeSubagentRunChanges("persistence", () => {
       if (original || !subagentRuns.get("bad")?.killIntent) {
         return;
       }

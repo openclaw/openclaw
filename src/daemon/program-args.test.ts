@@ -29,6 +29,7 @@ vi.mock("node:fs/promises", async () => {
   };
 });
 
+import { resolveNodeRuntimeExecutable } from "../infra/node-runtime-executable.js";
 import { resolveGatewayHeapNodeOptions } from "./gateway-heap.js";
 import { resolveGatewayProgramArguments, resolveNodeProgramArguments } from "./program-args.js";
 import { stageScheduledTask } from "./schtasks-install.js";
@@ -89,42 +90,41 @@ describe("resolveGatewayProgramArguments", () => {
     },
   );
 
-  it.skipIf(Boolean(process.versions.bun))(
-    "sizes only the Gateway in an ordinary Node spawn tree",
-    async () => {
-      const entryPath = path.resolve("/opt/openclaw/dist/index.js");
-      mockEntrypoint(entryPath, originalExecPath);
-      const { programArguments } = await resolveGatewayProgramArguments({
-        port: 18789,
-        runtime: "node",
-        runtimePath: originalExecPath,
-      });
-      const measurement = "console.log(require('node:v8').getHeapStatistics().heap_size_limit)";
-      const environment = { NODE_OPTIONS: resolveGatewayHeapNodeOptions(undefined) };
-      const nativeDefault = spawnSync(originalExecPath, ["-e", measurement], {
-        env: environment,
-        encoding: "utf8",
-      });
-      const parent = spawnSync(
-        originalExecPath,
-        [
-          ...programArguments.slice(1, programArguments.indexOf(entryPath)),
-          "-e",
-          `const child = require('node:child_process').spawnSync(process.execPath, ['-e', ${JSON.stringify(measurement)}], { encoding: 'utf8' });
+  it.skipIf(
+    resolveNodeRuntimeExecutable({ requiredFlag: "--max-old-space-size" }) !== originalExecPath,
+  )("sizes only the Gateway in an ordinary Node spawn tree", async () => {
+    const entryPath = path.resolve("/opt/openclaw/dist/index.js");
+    mockEntrypoint(entryPath, originalExecPath);
+    const { programArguments } = await resolveGatewayProgramArguments({
+      port: 18789,
+      runtime: "node",
+      runtimePath: originalExecPath,
+    });
+    const measurement = "console.log(require('node:v8').getHeapStatistics().heap_size_limit)";
+    const environment = { NODE_OPTIONS: resolveGatewayHeapNodeOptions(undefined) };
+    const nativeDefault = spawnSync(originalExecPath, ["-e", measurement], {
+      env: environment,
+      encoding: "utf8",
+    });
+    const parent = spawnSync(
+      originalExecPath,
+      [
+        ...programArguments.slice(1, programArguments.indexOf(entryPath)),
+        "-e",
+        `const child = require('node:child_process').spawnSync(process.execPath, ['-e', ${JSON.stringify(measurement)}], { encoding: 'utf8' });
        if (child.status !== 0) throw new Error(child.stderr);
        console.log(JSON.stringify({ heap: require('node:v8').getHeapStatistics().heap_size_limit, used: process.memoryUsage().heapUsed, child: Number(child.stdout), options: process.env.NODE_OPTIONS }));`,
-        ],
-        { env: environment, encoding: "utf8" },
-      );
-      expect(nativeDefault.status, nativeDefault.stderr).toBe(0);
-      expect(parent.status, parent.stderr).toBe(0);
-      const result = JSON.parse(parent.stdout);
-      expect(result.heap).toBeGreaterThanOrEqual(16384 * 1024 ** 2);
-      expect(result.used).toBeLessThan(64 * 1024 ** 2);
-      expect(result.child).toBe(Number(nativeDefault.stdout));
-      expect(result.options).toBe("");
-    },
-  );
+      ],
+      { env: environment, encoding: "utf8" },
+    );
+    expect(nativeDefault.status, nativeDefault.stderr).toBe(0);
+    expect(parent.status, parent.stderr).toBe(0);
+    const result = JSON.parse(parent.stdout);
+    expect(result.heap).toBeGreaterThanOrEqual(16384 * 1024 ** 2);
+    expect(result.used).toBeLessThan(64 * 1024 ** 2);
+    expect(result.child).toBe(Number(nativeDefault.stdout));
+    expect(result.options).toBe("");
+  });
 
   it.each([
     { nodeOptions: "--max-old-space-size=24576", existing: [], expected: [] },
@@ -359,6 +359,7 @@ describe("resolveGatewayProgramArguments", () => {
     });
     expect(packaged.programArguments).toEqual([
       validatedBunPath,
+      "--no-install",
       packagedIndexPath,
       "gateway",
       "--port",
@@ -378,6 +379,7 @@ describe("resolveGatewayProgramArguments", () => {
     });
     expect(sourceCheckout.programArguments).toEqual([
       validatedBunPath,
+      "--no-install",
       repoEntryPath,
       "gateway",
       "--port",
@@ -555,6 +557,7 @@ describe("resolveNodeProgramArguments", () => {
 
     expect(result.programArguments).toEqual([
       validatedBunPath,
+      "--no-install",
       indexPath,
       "node",
       "run",
@@ -600,8 +603,8 @@ it.each([
         runtime,
         runtimePath,
       });
-      expect(gateway.programArguments[runtime === "node" ? 2 : 1]).toBe(expected);
-      expect(node.programArguments[1]).toBe(expected);
+      expect(gateway.programArguments[2]).toBe(expected);
+      expect(node.programArguments[runtime === "node" ? 1 : 2]).toBe(expected);
     }
   },
 );

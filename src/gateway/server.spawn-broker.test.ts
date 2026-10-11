@@ -134,16 +134,6 @@ describe.skipIf(process.platform === "win32")("Gateway spawn broker lifetime", (
     expect(() => process.kill(observed.brokerPid!, 0)).toThrow();
   });
 
-  nodeIt("joins the broker when runtime startup fails", async () => {
-    observed.failStartup = true;
-    try {
-      await expect(startGatewayServer()).rejects.toThrow("startup failed");
-      expect(() => process.kill(observed.brokerPid!, 0)).toThrow();
-    } finally {
-      observed.failStartup = false;
-    }
-  });
-
   nodeIt.each(["shutdown", "startup failure", "shutdown failure"] as const)(
     "owns the auth read child through runtime callbacks and %s",
     async (phase) => {
@@ -205,6 +195,7 @@ describe.skipIf(process.platform === "win32")("Gateway spawn broker lifetime", (
         expect(spawnCount).toBe(1);
         expect(child?.exitCode).toBe(0);
         expect(child?.connected).toBe(false);
+        expect(() => process.kill(observed.brokerPid!, 0)).toThrow();
       } finally {
         resume.resolve();
         await Promise.allSettled([runtimeRead]);

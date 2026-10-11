@@ -2,14 +2,17 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { AcpRuntimeEvent } from "@openclaw/acp-core/runtime/types";
-import type { OpenClawPluginService } from "openclaw/plugin-sdk/core";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/core";
 import {
   createPluginStateKeyedStoreForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
-import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
+import {
+  createTestPluginApi,
+  createTestPluginServiceScheduler,
+} from "openclaw/plugin-sdk/plugin-test-api";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import acpxPlugin from "../../../../extensions/acpx/index.js";
 import {
   getAcpSessionManager,
@@ -18,50 +21,44 @@ import {
 import type { AcpRunTurnInput } from "../../../../src/acp/control-plane/manager.types.js";
 import { prepareSystemAgentRunAdmission } from "../../../../src/agents/admitted-run-context.js";
 import { killSubagentRunAdmin } from "../../../../src/agents/subagents/registry/subagent-control.js";
-import { getSubagentRunByRunId } from "../../../../src/agents/subagents/registry/subagent-registry.js";
+import { subagentRuns } from "../../../../src/agents/subagents/registry/subagent-registry-memory.js";
+import * as subagentRegistry from "../../../../src/agents/subagents/registry/subagent-registry.js";
 import {
-  addSubagentRunForTests,
-  resetSubagentRegistryForTests,
-} from "../../../../src/agents/subagents/registry/subagent-registry.test-helpers.js";
+  getSubagentRunByRunId,
+  registerSubagentRun,
+} from "../../../../src/agents/subagents/registry/subagent-registry.js";
+import { resetSubagentRegistryForTests } from "../../../../src/agents/subagents/registry/subagent-registry.test-helpers.js";
 import { createSubagentsTool } from "../../../../src/agents/tools/subagents-tool.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../../../../src/config/config.js";
 import { resolveSessionStorePathCore } from "../../../../src/config/sessions/paths.js";
 import { replaceSessionEntrySync } from "../../../../src/config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../../../src/config/types.openclaw.js";
 import { startGatewayServer } from "../../../../src/gateway/server.js";
-import { getGatewayE2ePortBlock } from "../../../../src/gateway/test-helpers.e2e.js";
 import { snapshotGatewayStartupEnv } from "../../../../src/gateway/test-helpers.env.js";
+import {
+  acquireGatewayE2ePortBlock,
+  startClaimedGateway,
+} from "../../../../src/gateway/test-helpers.listener.js";
 import { resetPluginRuntimeStateForTest } from "../../../../src/plugins/runtime.js";
+import { getGatewayContextResolver } from "../../../../src/plugins/runtime/gateway-request-scope.js";
 import { withEnvAsync } from "../../../../src/test-utils/env.js";
-import { createDeferred } from "../../../helpers/promise.js";
+import { createDeferred, withinTest } from "../../../helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../helpers/temp-dir.js";
 
 const TOKEN = "native-cancellation-e2e-token";
 const ROUTE_OWNER = "agent:main:native-authority-proof";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-vi.mock(
-  "../../../../src/agents/subagents/registry/subagent-registry-state.js",
-  async (importOriginal) => ({
-    ...(await importOriginal<
-      typeof import("../../../../src/agents/subagents/registry/subagent-registry-state.js")
-    >()),
-    persistSubagentRunsToDisk: () => {},
-    persistSubagentRunsToDiskOrThrow: () => {},
-    restoreSubagentRunsFromDisk: () => 0,
-  }),
-);
-
-afterEach(() => {
+afterEach(async () => {
   clearConfigCache();
   clearRuntimeConfigSnapshot();
   acpManagerTesting.resetAcpSessionManagerForTests();
-  resetSubagentRegistryForTests({ persist: false });
+  await resetSubagentRegistryForTests({ persist: false });
   resetPluginStateStoreForTests();
   resetPluginRuntimeStateForTest();
 });
 
-function registerRunningSubagent(params: {
+async function registerRunningSubagent(params: {
   runId: string;
   childSessionKey: string;
   ownerKey: string;
@@ -78,9 +75,7 @@ function registerRunningSubagent(params: {
       parentSessionKey: params.ownerKey,
     },
   );
-  const startedAt = Date.now();
-  const generation = (getSubagentRunByRunId(params.runId)?.generation ?? 0) + 1;
-  addSubagentRunForTests({
+  await registerSubagentRun({
     runId: params.runId,
     childSessionKey: params.childSessionKey,
     controllerSessionKey: params.ownerKey,
@@ -88,10 +83,11 @@ function registerRunningSubagent(params: {
     requesterDisplayKey: params.ownerKey,
     task: `Running child ${params.runId}`,
     cleanup: "keep",
-    generation,
-    createdAt: startedAt,
-    startedAt,
   });
+  const generation = getSubagentRunByRunId(params.runId)?.generation;
+  if (typeof generation !== "number") {
+    throw new Error("Subagent registration did not publish a generation");
+  }
   return generation;
 }
 
@@ -110,7 +106,9 @@ async function readAcpTrace(tracePath: string): Promise<AcpFixtureTraceEntry[]> 
 }
 
 describe("native child cancellation authority", () => {
-  it("allows the owner and rejects foreign or replaced backing runs before termination", async () => {
+  it("allows the owner and rejects foreign or replaced backing runs before termination", async ({
+    signal,
+  }) => {
     const root = tempDirs.make("openclaw-native-cancellation-authz-");
     const stateDir = path.join(root, "state");
     const acpxStateDir = path.join(root, "acpx-state");
@@ -155,15 +153,32 @@ describe("native child cancellation authority", () => {
       async () => {
         clearConfigCache();
         clearRuntimeConfigSnapshot();
-        const port = await getGatewayE2ePortBlock();
-        const server = await startGatewayServer(port, {
-          auth: { mode: "token", token: TOKEN },
-          bind: "loopback",
-          controlUiEnabled: false,
-          sidecarStartup: "defer",
+        const activationEntered = createDeferred();
+        const releaseActivation = createDeferred();
+        const activate = subagentRegistry.activateSubagentRegistry;
+        const activation = vi
+          .spyOn(subagentRegistry, "activateSubagentRegistry")
+          .mockImplementation(async (resolver) => {
+            activationEntered.resolve();
+            await releaseActivation.promise;
+            return activate(resolver);
+          });
+        onTestFinished(() => {
+          releaseActivation.resolve();
+          activation.mockRestore();
         });
+        const claim = await acquireGatewayE2ePortBlock();
+        const server = await startClaimedGateway(claim, () =>
+          startGatewayServer(claim.port, {
+            auth: { mode: "token", token: TOKEN },
+            bind: "loopback",
+            controlUiEnabled: false,
+            sidecarStartup: "defer",
+          }),
+        );
         await server.startupSettled;
-        const acpxServices: OpenClawPluginService[] = [];
+        await withinTest(activationEntered.promise, signal);
+        const acpxServices: Parameters<OpenClawPluginApi["registerService"]>[0][] = [];
         const acpxRuntime = createPluginRuntimeMock({
           state: {
             openKeyedStore: (options) => createPluginStateKeyedStoreForTests("acpx", options),
@@ -190,7 +205,9 @@ describe("native child cancellation authority", () => {
         if (!acpxService) {
           throw new Error("ACPX plugin did not register its runtime service");
         }
+        const scheduler = createTestPluginServiceScheduler();
         const acpxServiceContext = {
+          scheduler,
           config,
           workspaceDir: root,
           stateDir,
@@ -205,7 +222,7 @@ describe("native child cancellation authority", () => {
           });
           const allowedRunId = "run-native-owned";
           const allowedChild = "agent:main:subagent:native-owned";
-          registerRunningSubagent({
+          await registerRunningSubagent({
             runId: allowedRunId,
             childSessionKey: allowedChild,
             ownerKey: ROUTE_OWNER,
@@ -222,7 +239,7 @@ describe("native child cancellation authority", () => {
 
           const foreignRunId = "run-native-foreign";
           const foreignChild = "agent:main:subagent:native-foreign";
-          registerRunningSubagent({
+          await registerRunningSubagent({
             runId: foreignRunId,
             childSessionKey: foreignChild,
             ownerKey: "agent:main:foreign-owner",
@@ -238,17 +255,45 @@ describe("native child cancellation authority", () => {
           for (const sameId of [false, true]) {
             const childSessionKey = `agent:main:subagent:replacement-${sameId}`;
             const runId = `native-original-${sameId}`;
-            const generation = registerRunningSubagent({
+            const generation = await registerRunningSubagent({
               runId,
               childSessionKey,
               ownerKey: ROUTE_OWNER,
             });
             const replacementRunId = sameId ? runId : "native-replacement";
-            registerRunningSubagent({
-              runId: replacementRunId,
-              childSessionKey,
-              ownerKey: ROUTE_OWNER,
-            });
+            const capture = subagentRuns.captureRegistrationOwnership.bind(subagentRuns);
+            let released = false;
+            const registration = vi
+              .spyOn(subagentRuns, "captureRegistrationOwnership")
+              .mockImplementation((...args) => {
+                const scope = capture(...args);
+                return {
+                  get superseded() {
+                    return scope.superseded;
+                  },
+                  accept: scope.accept,
+                  release: scope.release,
+                  assertCurrent: () => {
+                    scope.assertCurrent();
+                    if (!released) {
+                      released = true;
+                      releaseActivation.resolve();
+                    }
+                  },
+                };
+              });
+            try {
+              await registerRunningSubagent({
+                runId: replacementRunId,
+                childSessionKey,
+                ownerKey: ROUTE_OWNER,
+              });
+              expect(released).toBe(true);
+              expect(getGatewayContextResolver(subagentRuns.get(runId)!)).toBeDefined();
+            } finally {
+              releaseActivation.resolve();
+              registration.mockRestore();
+            }
             expect(
               await killSubagentRunAdmin({
                 cfg: config,
@@ -447,16 +492,8 @@ describe("native child cancellation authority", () => {
             expectedInstanceId: queuedTargetContext.operationalRunInstance.instanceId,
             expectedOwnerKey: ROUTE_OWNER,
           });
-          await vi.waitFor(
-            async () => {
-              const interruptCount = (await readAcpTrace(acpxTracePath)).filter(
-                (entry) => entry.method === "turn/interrupt",
-              ).length;
-              expect(interruptCount - interruptsBeforeQueuedCancel).toBeGreaterThan(0);
-            },
-            { interval: 10, timeout: 10_000 },
-          );
-          await queuedCancelPromise;
+          // Cancellation joins the native interrupt and target turn; the fixture traces before replying.
+          await withinTest(queuedCancelPromise, signal);
           const interruptsAfterTargetCancel = (await readAcpTrace(acpxTracePath)).filter(
             (entry) => entry.method === "turn/interrupt",
           );
@@ -504,8 +541,14 @@ describe("native child cancellation authority", () => {
             interruptsAfterSuccessor.filter((entry) => entry.turnId === successorTurnStart?.turnId),
           ).toHaveLength(0);
         } finally {
-          await acpxService.stop?.(acpxServiceContext);
-          await server.close();
+          releaseActivation.resolve();
+          scheduler.beginClose();
+          try {
+            await acpxService.stop?.(acpxServiceContext);
+          } finally {
+            await scheduler.stop();
+            await server.close();
+          }
         }
       },
     );

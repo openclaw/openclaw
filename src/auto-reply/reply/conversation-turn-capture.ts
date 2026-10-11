@@ -1,5 +1,5 @@
-import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { collectTextContentBlocks } from "../../agents/content-blocks.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "../../agents/harness/hook-helpers.js";
 import { redactTranscriptMessage } from "../../agents/transcript-redact.js";
 import {
@@ -8,19 +8,19 @@ import {
   markConversationDeliverySent,
 } from "../../config/sessions/conversation-delivery-store.js";
 import { conversationIdentityFromMsgContext } from "../../config/sessions/conversation-identity.js";
-import {
-  resolveConversationRegistryScope,
-  runConversationDatabaseWrite,
-} from "../../config/sessions/conversation-registry.js";
-import {
-  appendTranscriptEventSync,
-  loadSessionEntryReadOnly,
-} from "../../config/sessions/session-accessor.js";
+import { prepareConversationRegistryScope } from "../../config/sessions/conversation-registry.js";
+import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
+import { resolveSqliteSessionKey } from "../../config/sessions/session-accessor.sqlite-scope-helpers.js";
+import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
+import { captureSessionStoreCandidateIdentities } from "../../config/sessions/session-store-read-candidates.js";
+import { captureSessionStoreReadCandidates } from "../../config/sessions/session-store-target-inventory.js";
+import { appendPreparedTranscriptEvent } from "../../config/sessions/session-transcript-event.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import { buildConversationRef } from "../../routing/conversation-ref.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { claimPendingConversationTurnReply } from "../../sessions/conversation-turns.js";
+import { onSessionIdentityMutation } from "../../sessions/session-lifecycle-events.js";
 import {
   buildPersistedUserTurnMessage,
   preparePersistedUserTurnMessageForTranscriptWrite,
@@ -28,38 +28,14 @@ import {
 } from "../../sessions/user-turn-transcript.js";
 import { buildChannelUserTurnSender } from "../../sessions/user-turn-transcript.metadata.js";
 import type { FinalizedRuntimeMsgContext } from "../templating.js";
+import { normalizeMessageTimestampMs } from "./message-timestamp.js";
 
-const EPOCH_MILLISECONDS_THRESHOLD = 1_000_000_000_000;
 const CONVERSATION_TURN_REPLY_CUSTOM_TYPE = "openclaw.conversation-turn-reply";
 
 function readPersistedReplyText(message: unknown): string | undefined {
   const content = (message as { content?: unknown } | undefined)?.content;
-  if (typeof content === "string") {
-    return normalizeOptionalString(content);
-  }
-  if (!Array.isArray(content)) {
-    return undefined;
-  }
   return normalizeOptionalString(
-    content
-      .flatMap((part) => {
-        if (!part || typeof part !== "object") {
-          return [];
-        }
-        const record = part as Record<string, unknown>;
-        return record.type === "text" && typeof record.text === "string" ? [record.text] : [];
-      })
-      .join("\n"),
-  );
-}
-
-function normalizeTimestamp(value: unknown): number | undefined {
-  const timestamp = typeof value === "number" && Number.isFinite(value) ? value : undefined;
-  if (timestamp === undefined || timestamp <= 0) {
-    return undefined;
-  }
-  return asDateTimestampMs(
-    timestamp < EPOCH_MILLISECONDS_THRESHOLD ? Math.trunc(timestamp * 1_000) : timestamp,
+    typeof content === "string" ? content : collectTextContentBlocks(content).join("\n"),
   );
 }
 
@@ -89,22 +65,60 @@ async function capturePendingConversationTurnReplyUnsafe(params: {
   const replyToId =
     normalizeOptionalString(params.ctx.ReplyToIdFull) ??
     normalizeOptionalString(params.ctx.ReplyToId);
+  if (!replyToId) {
+    return false;
+  }
   const threadId =
     params.ctx.MessageThreadId == null
       ? undefined
       : normalizeOptionalString(String(params.ctx.MessageThreadId));
+  const replyTarget = {
+    messageId,
+    ...(replyToId ? { replyToId } : {}),
+    ...(threadId ? { threadId } : {}),
+  };
   const agentId =
     normalizeOptionalString(params.ctx.AgentId) ?? resolveAgentIdFromSessionKey(sessionKey);
-  const scope = resolveConversationRegistryScope({ agentId, config: params.cfg });
-  const sessionEntry = loadSessionEntryReadOnly({
-    ...scope,
-    sessionKey,
-    readConsistency: "latest",
+  const storePath = resolveSessionStorePathCore(params.cfg.session?.store, { agentId });
+  const databaseIdentities = new Set(
+    [
+      ...captureSessionStoreCandidateIdentities(
+        captureSessionStoreReadCandidates(storePath),
+      ).values(),
+    ].map((identity) => identity.key),
+  );
+  const storeSessionKey = resolveSqliteSessionKey(sessionKey, agentId);
+  let identityChanged = false;
+  // A reset during the first worker read must not become this reply's new lifecycle.
+  const unsubscribe = onSessionIdentityMutation((mutation) => {
+    if (
+      typeof mutation.databaseIdentity === "string" &&
+      databaseIdentities.has(`file:${mutation.databaseIdentity}`) &&
+      (mutation.previous.sessionKeys.includes(storeSessionKey) ||
+        (mutation.kind !== "delete" && mutation.current.sessionKeys.includes(storeSessionKey)))
+    ) {
+      identityChanged = true;
+    }
   });
+  let scope: Awaited<ReturnType<typeof prepareConversationRegistryScope>>;
+  let sessionEntry: Awaited<ReturnType<typeof readSessionEntryReadOnlyInWorker>>;
+  try {
+    scope = await prepareConversationRegistryScope({ agentId, config: params.cfg });
+    sessionEntry = await readSessionEntryReadOnlyInWorker(
+      { ...scope, sessionKey, readConsistency: "latest" },
+      () => {
+        if (identityChanged) {
+          throw new Error("session changed before captured reply persistence");
+        }
+      },
+    );
+  } finally {
+    unsubscribe();
+  }
   if (!sessionEntry) {
     return false;
   }
-  const timestamp = normalizeTimestamp(params.ctx.Timestamp);
+  const timestamp = normalizeMessageTimestampMs(params.ctx.Timestamp);
   const parentConversationRef = threadId
     ? (conversation.parentConversationRef ??
       buildConversationRef({
@@ -124,9 +138,7 @@ async function capturePendingConversationTurnReplyUnsafe(params: {
     transport: {
       channel: conversation.channel,
       conversationRef: conversation.conversationRef,
-      messageId,
-      ...(replyToId ? { replyToId } : {}),
-      ...(threadId ? { threadId } : {}),
+      ...replyTarget,
     },
     sender:
       conversation.kind === "group" || conversation.kind === "channel"
@@ -145,36 +157,27 @@ async function capturePendingConversationTurnReplyUnsafe(params: {
     timestamp,
   });
   if (!claim) {
-    if (!replyToId) {
-      return false;
+    const operation =
+      (await findConversationTurnDeliveryByReplyTarget(scope, {
+        conversationRef: conversation.conversationRef,
+        replyToId,
+      })) ??
+      (parentConversationRef && parentConversationRef !== conversation.conversationRef
+        ? await findConversationTurnDeliveryByReplyTarget(scope, {
+            conversationRef: parentConversationRef,
+            replyToId,
+          })
+        : undefined);
+    if (operation?.status === "replied" && operation.reply?.messageId === messageId) {
+      return true;
     }
-    // Delivery lookup can open a writable store, so acquisition belongs to admission too.
-    return await runConversationDatabaseWrite(scope, (writeScope) => {
-      const operation =
-        findConversationTurnDeliveryByReplyTarget(writeScope, {
-          conversationRef: conversation.conversationRef,
-          replyToId,
-        }) ??
-        (parentConversationRef && parentConversationRef !== conversation.conversationRef
-          ? findConversationTurnDeliveryByReplyTarget(writeScope, {
-              conversationRef: parentConversationRef,
-              replyToId,
-            })
-          : undefined);
-      if (operation?.status === "replied" && operation.reply?.messageId === messageId) {
-        // A transport retry of the already-captured message remains consumed;
-        // starting an ordinary turn would surface the same peer reply twice.
-        return true;
-      }
-      if (operation && operation.status !== "replied") {
-        // With no process-local waiter, ordinary inbound dispatch owns this
-        // reply. It proves the outbound send, but must not become replayable as
-        // an inline tool result on a later stable turn retry.
-        markConversationDeliverySent(writeScope, operation.operationId, replyToId);
-      }
-      return false;
-    });
+    if (operation && operation.status !== "replied") {
+      // Ordinary inbound dispatch owns this reply when no process-local waiter remains.
+      await markConversationDeliverySent(scope, operation.operationId, replyToId);
+    }
+    return false;
   }
+  let replyCommitted = false;
   try {
     if (sessionEntry.sessionId !== claim.sessionId) {
       throw new Error(`session changed before captured reply persistence: ${sessionKey}`);
@@ -195,73 +198,69 @@ async function capturePendingConversationTurnReplyUnsafe(params: {
     if (!persistedReplyText) {
       throw new Error("captured conversation turn reply has no persistable text");
     }
-    return await runConversationDatabaseWrite(scope, (writeScope) => {
-      claim.assertCurrent();
-      const current = loadSessionEntryReadOnly({
-        ...writeScope,
-        sessionKey,
-        readConsistency: "latest",
-      });
-      if (
-        current?.sessionId !== claim.sessionId ||
-        current.lifecycleRevision !== sessionEntry.lifecycleRevision
-      ) {
-        throw new Error(`session changed before captured reply persistence: ${sessionKey}`);
-      }
-      const artifactId = `conversation-turn-reply-${claim.turnId}`;
-      // Commit the replayable owner state before its optional audit artifact. A
-      // crash after this point can lose audit metadata, but never the claimed reply.
-      markConversationDeliveryReplied(writeScope, {
+    // Commit the replayable reply before its optional transcript audit artifact.
+    await markConversationDeliveryReplied(
+      scope,
+      {
         operationId: claim.turnId,
+        session: {
+          sessionKey,
+          sessionId: claim.sessionId,
+          lifecycleRevision: sessionEntry.lifecycleRevision,
+        },
         reply: {
-          messageId,
-          ...(replyToId ? { replyToId } : {}),
-          ...(threadId ? { threadId } : {}),
+          ...replyTarget,
           text: persistedReplyText,
           timestamp: timestamp ?? Date.now(),
         },
-      });
-      // The tool result owns model context. A side artifact keeps an audit trail
-      // without inserting a user row between an active tool call and its result.
-      let persisted = false;
-      try {
-        const appendResult = appendTranscriptEventSync(
-          { ...writeScope, sessionId: sessionEntry.sessionId, sessionKey },
-          {
-            type: "custom",
-            id: artifactId,
-            customType: CONVERSATION_TURN_REPLY_CUSTOM_TYPE,
-            appendMode: "side",
-            timestamp: timestamp ?? Date.now(),
-            data: {
-              turnId: claim.turnId,
-              conversationRef: conversation.conversationRef,
-              messageId,
-              ...(replyToId ? { replyToId } : {}),
-              ...(threadId ? { threadId } : {}),
-              message: persistedMessage,
-            },
+      },
+      claim.assertCurrent,
+    );
+    replyCommitted = true;
+    claim.assertCurrent();
+    const artifactId = `conversation-turn-reply-${claim.turnId}`;
+    // The tool result owns model context. A side artifact keeps an audit trail
+    // without inserting a user row between an active tool call and its result.
+    let persisted = false;
+    try {
+      persisted = await appendPreparedTranscriptEvent(
+        {
+          ...scope,
+          sessionId: sessionEntry.sessionId,
+          sessionKey,
+          expectedOwner: {
+            lifecycleRevision: sessionEntry.lifecycleRevision,
+            activeWriterRunId: sessionEntry.activeWriterRunId,
           },
-        );
-        persisted = appendResult.ok && appendResult.value;
-        if (!appendResult.ok) {
-          logVerbose(
-            `captured conversation turn reply audit persistence failed: ${appendResult.error.code}`,
-          );
-        }
-      } catch (error) {
-        logVerbose(`captured conversation turn reply audit persistence failed: ${String(error)}`);
-      }
-      if (!persisted) {
-        logVerbose("captured conversation turn reply audit artifact was not persisted");
-      }
-      claim.complete(persisted ? { transcriptArtifactId: artifactId } : undefined);
-      return true;
-    });
+        },
+        {
+          type: "custom",
+          id: artifactId,
+          customType: CONVERSATION_TURN_REPLY_CUSTOM_TYPE,
+          appendMode: "side",
+          timestamp: timestamp ?? Date.now(),
+          data: {
+            turnId: claim.turnId,
+            conversationRef: conversation.conversationRef,
+            ...replyTarget,
+            message: persistedMessage,
+          },
+        },
+        claim.assertCurrent,
+      );
+    } catch (error) {
+      logVerbose(`captured conversation turn reply audit persistence failed: ${String(error)}`);
+    }
+    if (!persisted) {
+      logVerbose("captured conversation turn reply audit artifact was not persisted");
+    }
+    claim.complete(persisted ? { transcriptArtifactId: artifactId } : undefined);
+    return true;
   } catch (error) {
     claim.release();
     logVerbose(`conversation turn reply capture failed: ${String(error)}`);
-    return false;
+    // A committed reply remains consumed if the waiter expires during audit admission.
+    return replyCommitted;
   }
 }
 

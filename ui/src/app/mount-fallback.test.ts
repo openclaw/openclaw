@@ -89,38 +89,6 @@ describe("Control UI mount fallback", () => {
     ["claw dark", { theme: "claw", themeMode: "dark" }, "dark", "rgb(14, 16, 21)"],
     ["OpenKnot dark", { theme: "knot", themeMode: "dark" }, "openknot", "rgb(8, 8, 8)"],
     ["Dash light", { theme: "dash", themeMode: "light" }, "dash-light", "rgb(247, 242, 236)"],
-    [
-      "Absolutely dark",
-      { theme: "absolutely", themeMode: "dark" },
-      "absolutely",
-      "rgb(28, 28, 26)",
-    ],
-    [
-      "Absolutely light",
-      { theme: "absolutely", themeMode: "light" },
-      "absolutely-light",
-      "rgb(250, 249, 245)",
-    ],
-    ["Tide dark", { theme: "tide", themeMode: "dark" }, "tide", "rgb(16, 21, 27)"],
-    ["Beacon dark", { theme: "beacon", themeMode: "dark" }, "beacon", "rgb(0, 0, 0)"],
-    ["Beacon light", { theme: "beacon", themeMode: "light" }, "beacon-light", "rgb(255, 255, 255)"],
-    ["Phosphor dark", { theme: "phosphor", themeMode: "dark" }, "phosphor", "rgb(10, 15, 10)"],
-    ["CRT dark", { theme: "crt", themeMode: "dark" }, "crt", "rgb(9, 10, 9)"],
-    ["CRT light", { theme: "crt", themeMode: "light" }, "crt-light", "rgb(245, 245, 244)"],
-    [
-      "Manuscript light",
-      { theme: "manuscript", themeMode: "light" },
-      "manuscript-light",
-      "rgb(246, 241, 228)",
-    ],
-    [
-      "Manuscript dark",
-      { theme: "manuscript", themeMode: "dark" },
-      "manuscript",
-      "rgb(33, 30, 24)",
-    ],
-    ["Ros\u00e9 dark", { theme: "rose", themeMode: "dark" }, "rose", "rgb(25, 23, 36)"],
-    ["Miami dark", { theme: "miami", themeMode: "dark" }, "miami", "rgb(20, 15, 30)"],
   ])(
     "paints %s before the app stylesheet loads",
     async (_name, settings, expectedTheme, expectedBackground) => {
@@ -215,6 +183,38 @@ describe("Control UI mount fallback", () => {
     );
   });
 
+  it("does not begin recovery while the unsupported browser screen is loading", async () => {
+    const frameWindow = createIsolatedWindow();
+    const fetch = vi.fn().mockResolvedValue({ ok: true });
+    Object.defineProperty(frameWindow, "fetch", { configurable: true, value: fetch });
+    installFallbackShell(frameWindow, await readIndexHtml());
+
+    frameWindow.dispatchEvent(new frameWindow.Event("openclaw-control-ui-unsupported-browser"));
+    await vi.advanceTimersByTimeAsync(mountTimeoutMs * 3);
+
+    expect(fetch).not.toHaveBeenCalled();
+    expect(frameWindow.document.getElementById("openclaw-mount-fallback")?.hidden).toBe(true);
+  });
+
+  it("keeps failed browser guidance visible without automatic recovery", async () => {
+    const frameWindow = createIsolatedWindow();
+    const fetch = vi.fn().mockResolvedValue({ ok: true });
+    Object.defineProperty(frameWindow, "fetch", { configurable: true, value: fetch });
+    installFallbackShell(frameWindow, await readIndexHtml());
+    frameWindow.dispatchEvent(new frameWindow.Event("openclaw-control-ui-unsupported-browser"));
+    frameWindow.dispatchEvent(
+      new frameWindow.Event("openclaw-control-ui-unsupported-browser-failed"),
+    );
+    await vi.advanceTimersByTimeAsync(mountTimeoutMs * 3);
+
+    const fallback = frameWindow.document.getElementById("openclaw-mount-fallback");
+    expect(fallback?.hidden).toBe(false);
+    expect(fallback?.querySelector("h1")?.textContent).toBe("Browser guidance could not load");
+    expect(frameWindow.document.getElementById("openclaw-mount-retry")?.hidden).toBe(false);
+    expect(frameWindow.document.getElementById("openclaw-mount-wait")?.hidden).toBe(true);
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
   it("times out stalled recovery probes so automatic retries can continue", async () => {
     const frameWindow = createIsolatedWindow();
     const signals: AbortSignal[] = [];
@@ -239,7 +239,7 @@ describe("Control UI mount fallback", () => {
     expect(signals.every((signal) => signal.aborted)).toBe(true);
   });
 
-  it.each(["Keep waiting", "first render"])(
+  it.each(["Keep waiting", "first render", "unsupported browser"])(
     "retires a pending recovery probe on %s",
     async (action) => {
       const frameWindow = createIsolatedWindow();
@@ -258,7 +258,13 @@ describe("Control UI mount fallback", () => {
       if (action === "Keep waiting") {
         frameWindow.document.getElementById("openclaw-mount-wait")?.click();
       } else {
-        frameWindow.dispatchEvent(new frameWindow.Event("openclaw-control-ui-rendered"));
+        frameWindow.dispatchEvent(
+          new frameWindow.Event(
+            action === "first render"
+              ? "openclaw-control-ui-rendered"
+              : "openclaw-control-ui-unsupported-browser",
+          ),
+        );
       }
       expect(fetch.mock.calls[0]?.[1]?.signal?.aborted).toBe(true);
       await vi.advanceTimersByTimeAsync(10);

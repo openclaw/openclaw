@@ -1,4 +1,3 @@
-// Zoom Web App selectors validated against the live guest surface on 2026-07-18.
 // Prefer Zoom-owned ids and accessibility labels; text remains the fallback where
 // the app-launch and nested captions menus expose no stable product identifier.
 export const ZOOM_MEETING_SELECTORS = {

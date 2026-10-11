@@ -1,14 +1,19 @@
 // Canonical user input shape and runtime/display projections share the same media metadata.
+import path from "node:path";
 import { mimeTypeFromFilePath } from "@openclaw/media-core/mime";
+import {
+  asFiniteNumberInRange,
+  asPositiveSafeInteger,
+} from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { AgentMessage } from "../../packages/agent-core/src/types.js";
-import { readPersistedMediaFacts, type MediaFact } from "../media/media-facts.js";
-import { applyInputProvenanceToUserMessage } from "./input-provenance.js";
 import {
-  normalizeStructuredMediaEntryForTranscript,
-  resolveTranscriptMediaPath,
-} from "./user-turn-transcript.media-normalize.js";
+  readPersistedMediaFacts,
+  type MediaFact,
+  type MediaFactInput,
+} from "../media/media-facts.js";
+import { applyInputProvenanceToUserMessage } from "./input-provenance.js";
 import { buildPersistedUserTurnMetadata } from "./user-turn-transcript.metadata.js";
 import type {
   PersistedUserTurnMediaInput,
@@ -16,6 +21,68 @@ import type {
   UserTurnInput,
   UserTurnMessagePersistenceParams,
 } from "./user-turn-transcript.types.js";
+
+const URL_LIKE_MEDIA_PATH_PATTERN = /^[a-z][a-z0-9+.-]*:/i;
+const STRUCTURED_MEDIA_KINDS = new Set<string>([
+  "image",
+  "audio",
+  "video",
+  "document",
+  "sticker",
+  "unknown",
+]);
+const MIME_TYPE_PATTERN = /^[a-z0-9!#$&^_.+-]+\/[a-z0-9!#$&^_.+-]+$/iu;
+
+function isStructuredMediaKind(
+  kind: string | undefined,
+): kind is NonNullable<MediaFactInput["kind"]> {
+  return kind !== undefined && STRUCTURED_MEDIA_KINDS.has(kind);
+}
+
+function resolveTranscriptMediaPath(pathValue: string, workspaceDir: string | undefined): string {
+  // Relative staged media paths are anchored to the media workspace; absolute
+  // paths and URL-like refs are already stable transcript references.
+  if (!workspaceDir || path.isAbsolute(pathValue) || URL_LIKE_MEDIA_PATH_PATTERN.test(pathValue)) {
+    return pathValue;
+  }
+  return path.join(workspaceDir, pathValue);
+}
+
+function normalizeStructuredMediaEntryForTranscript(
+  media: PersistedUserTurnMediaInput,
+): MediaFactInput {
+  const workspaceDir = normalizeOptionalString(media.workspaceDir);
+  const mediaPath = normalizeOptionalString(media.path);
+  const mediaUrl = normalizeOptionalString(media.url);
+  const legacyKind = normalizeOptionalString(media.kind);
+  const kind = isStructuredMediaKind(legacyKind) ? legacyKind : undefined;
+  const messageId = normalizeOptionalString(media.messageId);
+  const contentType =
+    normalizeOptionalString(media.contentType) ??
+    (kind || !legacyKind || !MIME_TYPE_PATTERN.test(legacyKind) ? undefined : legacyKind) ??
+    mimeTypeFromFilePath(mediaPath ?? mediaUrl);
+  const durationMs = asPositiveSafeInteger(media.durationMs);
+  const width = asPositiveSafeInteger(media.width);
+  const height = asPositiveSafeInteger(media.height);
+  const fileName = normalizeOptionalString(media.fileName);
+  const sizeBytes = asFiniteNumberInRange(media.sizeBytes, { min: 0 });
+  return {
+    ...(mediaPath ? { path: resolveTranscriptMediaPath(mediaPath, workspaceDir) } : {}),
+    ...(mediaUrl ? { url: mediaUrl } : {}),
+    ...(contentType ? { contentType } : {}),
+    ...(kind ? { kind } : {}),
+    ...(fileName ? { fileName } : {}),
+    ...(media.origin === "paste" || media.origin === "file" ? { origin: media.origin } : {}),
+    ...(sizeBytes !== undefined ? { sizeBytes } : {}),
+    ...(durationMs ? { durationMs } : {}),
+    ...(width ? { width } : {}),
+    ...(height ? { height } : {}),
+    ...(media.transcribed === true ? { transcribed: true } : {}),
+    ...(messageId ? { messageId } : {}),
+    ...(workspaceDir ? { workspaceDir } : {}),
+    ...(media.hydrationSuppressed === true ? { hydrationSuppressed: true } : {}),
+  };
+}
 
 export function resolvePersistedUserTurnText(value: string | null | undefined): string | undefined {
   return normalizeOptionalString(value);
@@ -86,6 +153,65 @@ export function buildLateMediaAttachedProjection(message: AgentMessage): {
 function readOpenClawMessageMeta(message: AgentMessage): Record<string, unknown> | undefined {
   return asOptionalRecord(Reflect.get(message, "__openclaw"));
 }
+
+export function readModelPromptProjection(message: unknown): string | undefined {
+  if (!isUserMessage(message)) {
+    return undefined;
+  }
+  const metadata = readOpenClawMessageMeta(message);
+  if (!metadata || !Object.hasOwn(metadata, "modelPromptProjection")) {
+    return undefined;
+  }
+  const projection = asOptionalRecord(metadata.modelPromptProjection);
+  if (projection?.version !== 1 || typeof projection.text !== "string") {
+    throw new Error(
+      "Unsupported or invalid user-turn model prompt projection; update OpenClaw to a compatible version or start a new session.",
+    );
+  }
+  return projection.text;
+}
+
+export function projectRecordedModelPrompt(
+  message: AgentMessage,
+  transcript?: AgentMessage,
+): AgentMessage {
+  if (!isUserMessage(message)) {
+    return message;
+  }
+  const text = readModelPromptProjection(transcript) ?? readModelPromptProjection(message);
+  if (text === undefined) {
+    return message;
+  }
+  let content = message.content;
+  if (Array.isArray(content)) {
+    let replaced = false;
+    content = content.map((block) => {
+      if (block.type !== "text" || replaced) {
+        return block;
+      }
+      replaced = true;
+      return { ...block, text };
+    });
+    if (!replaced) {
+      content = [{ type: "text", text }, ...content];
+    }
+  } else {
+    content = text;
+  }
+  const metadata = { ...message["__openclaw"] };
+  delete metadata.modelPromptProjection;
+  const projected: PersistedUserTurnMessage = {
+    ...message,
+    content,
+    timestamp: transcript?.role === "user" ? transcript.timestamp : message.timestamp,
+  };
+  delete projected["__openclaw"];
+  if (Object.keys(metadata).length > 0) {
+    projected["__openclaw"] = metadata;
+  }
+  return projected;
+}
+
 export function buildPersistedUserTurnMessage(params: UserTurnInput): PersistedUserTurnMessage {
   const normalizedMedia = (params.media ?? []).map(normalizeStructuredMediaEntryForTranscript);
   const text = params.text ?? "";
@@ -148,6 +274,7 @@ export function buildLateResolvedMediaMessage(params: {
     lateMedia: true,
   };
   delete metadata.humanMentions;
+  delete metadata.modelPromptProjection;
   // Like #111204, mark late-media scaffolding as wire-only so UIs never render it.
   return {
     ...params.resolvedMessage,

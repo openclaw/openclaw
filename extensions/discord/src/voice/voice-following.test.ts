@@ -581,9 +581,21 @@ defineDiscordVoiceTests(
       );
 
       await manager.autoJoin();
-      await manager.destroy();
-
       expect(client.rest.get).toHaveBeenCalledTimes(24);
+      for (let pass = 0; pass < 2; pass += 1) {
+        const before = client.rest.get.mock.calls.length;
+        await manager.autoJoin();
+        const calls = client.rest.get.mock.calls.slice(before);
+        expect(calls.length).toBeLessThanOrEqual(32);
+        expect(new Set(calls.map(([path]) => String(path).split("/")[2])).size).toBeLessThanOrEqual(
+          4,
+        );
+      }
+      const visitedGuilds = new Set(
+        client.rest.get.mock.calls.map(([path]) => String(path).split("/")[2]),
+      );
+      expect(visitedGuilds.size).toBe(10);
+      await manager.destroy();
     });
 
     it("keeps followed voice state when reconciliation hits a transient REST failure", async () => {
@@ -602,22 +614,24 @@ defineDiscordVoiceTests(
 
     it("does not reconnect from an in-flight followed user reconciliation after destroy", async () => {
       const client = createClient();
-      let resolveVoiceState: (state: unknown) => void = () => {};
-      client.rest.get.mockImplementation(
-        () =>
-          new Promise((resolve) => {
-            resolveVoiceState = resolve;
-          }),
-      );
+      const requested = Promise.withResolvers<void>();
+      const response = Promise.withResolvers<unknown>();
+      client.rest.get.mockImplementation(() => {
+        requested.resolve();
+        return response.promise;
+      });
       const manager = createFollowManager({}, client, { guilds: { g1: {} } });
 
       const autoJoinPromise = manager.autoJoin();
-      await vi.waitFor(() => {
-        expect(client.rest.get).toHaveBeenCalled();
+      await requested.promise;
+      let destroyed = false;
+      const destroying = manager.destroy().then(() => {
+        destroyed = true;
       });
-      await manager.destroy();
-      resolveVoiceState({ guild_id: "g1", user_id: "u-owner", channel_id: "1001" });
-      await autoJoinPromise;
+      await Promise.resolve();
+      expect(destroyed).toBe(false);
+      response.resolve({ guild_id: "g1", user_id: "u-owner", channel_id: "1001" });
+      await Promise.all([destroying, autoJoinPromise]);
 
       expect(joinVoiceChannelMock).not.toHaveBeenCalled();
       expect(manager.status()).toEqual([]);
@@ -639,13 +653,14 @@ defineDiscordVoiceTests(
       );
 
       await manager.autoJoin();
-      expect(client.rest.get).toHaveBeenCalledTimes(31);
+      expect(client.rest.get).toHaveBeenCalledTimes(32);
       expect(joinVoiceChannelMock).not.toHaveBeenCalled();
 
       await manager.autoJoin();
       await manager.destroy();
 
-      expect(client.rest.get).toHaveBeenCalledTimes(62);
+      // The bot slot needs no REST lookup after the followed user was found.
+      expect(client.rest.get).toHaveBeenCalledTimes(63);
       expect(joinVoiceChannelMock).toHaveBeenCalledWith(
         expect.objectContaining({ guildId: "g1", channelId: "1001" }),
       );
@@ -673,17 +688,17 @@ defineDiscordVoiceTests(
       );
 
       await manager.autoJoin();
-      expect(client.rest.get).toHaveBeenCalledTimes(31);
+      expect(client.rest.get).toHaveBeenCalledTimes(32);
       expect(joinVoiceChannelMock).not.toHaveBeenCalled();
 
       await manager.autoJoin();
       await manager.destroy();
 
-      expect(client.rest.get).toHaveBeenCalledTimes(62);
-      expect(client.rest.get.mock.calls.slice(0, 31)).toEqual(
+      expect(client.rest.get).toHaveBeenCalledTimes(64);
+      expect(client.rest.get.mock.calls.slice(0, 32)).toEqual(
         expect.arrayContaining([[expect.stringContaining("/guilds/g1/voice-states/u1")]]),
       );
-      expect(client.rest.get.mock.calls.slice(31)).toEqual(
+      expect(client.rest.get.mock.calls.slice(32)).toEqual(
         expect.arrayContaining([[expect.stringContaining("/guilds/g2/voice-states/u1")]]),
       );
       expect(joinVoiceChannelMock).toHaveBeenCalledWith(

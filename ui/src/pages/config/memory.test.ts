@@ -3,7 +3,7 @@
 import { html, render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import { renderConfigForm } from "../../components/config-form.ts";
-import { memorySchemaKeysForTab, memoryTabForRoute, narrowMemorySchema } from "./memory-schema.ts";
+import { memorySettingsSchema } from "./memory-schema.ts";
 import { renderMemory } from "./memory.ts";
 
 /** The view is the only public surface, so its props type comes from its signature. */
@@ -17,7 +17,7 @@ function createProps(overrides: Partial<MemoryViewProps> = {}): MemoryViewProps 
       { id: "memory-core", label: "OpenClaw Memory", available: true },
       { id: "memory-lancedb", label: "Memory LanceDB", available: true },
     ],
-    engineSelection: { kind: "auto", engineId: "memory-core" },
+    engineSelection: { kind: "default", pluginId: "memory-core" },
     engineState: "enabled",
     engineBusy: false,
     engineOutcome: null,
@@ -63,23 +63,6 @@ function renderInto(props: MemoryViewProps): HTMLElement {
 }
 
 describe("renderMemory", () => {
-  it.each(["overview", "memories", "dreams"] as const)(
-    "renders the Memory tabs without a duplicate agent picker on %s",
-    (activeTab) => {
-      const container = renderInto(createProps({ activeTab }));
-      const header = container.querySelector(".hub-page-header");
-
-      expect(header?.querySelector(".page-title")?.textContent).toBe("Memory");
-      expect(header?.querySelector(".page-subtitle")?.textContent).toContain(
-        "Choose how OpenClaw stores, searches, and maintains agent memory.",
-      );
-      expect(header?.querySelector(".memory-hub-tabs")).not.toBeNull();
-      expect(container.textContent).not.toContain("Agent view");
-
-      expect(header?.querySelector("openclaw-agent-select")).toBeNull();
-    },
-  );
-
   it("replaces the memory-import link with an admin-required note", () => {
     const container = renderInto(createProps({ canImportMemory: false }));
 
@@ -87,70 +70,26 @@ describe("renderMemory", () => {
     expect(container.textContent).toContain("Memory import requires operator.admin access.");
   });
 
-  it("reports whether the engine came from config or from the slot default", () => {
-    const auto = renderInto(createProps());
-    expect(auto.textContent).toContain("falls back to its default owner");
-    expect(auto.textContent).not.toContain("Using default:");
-
-    const pinned = renderInto(
-      createProps({ engineSelection: { kind: "pinned", engineId: "memory-core" } }),
-    );
-    expect(pinned.textContent).toContain("pinned in config");
-    expect(pinned.textContent).toContain("Default: OpenClaw Memory");
-  });
-
   it("keeps a configured missing engine selected and labels it unavailable", () => {
     const container = renderInto(
       createProps({
         engineOptions: [{ id: "retired-memory", label: "retired-memory", available: false }],
-        engineSelection: { kind: "pinned", engineId: "retired-memory" },
+        engineSelection: { kind: "pinned", pluginId: "retired-memory" },
         engineState: "unknown",
       }),
     );
 
     expect(
       container
-        .querySelector('wa-radio[value="retired-memory"]')
+        .querySelector('.settings-segmented__btn:has(input[value="retired-memory"])')
         ?.textContent?.replace(/\s+/g, " ")
         .trim(),
     ).toBe("retired-memory (Unavailable)");
     expect(
-      container
-        .querySelector('wa-radio[value="retired-memory"]')
-        ?.classList.contains("settings-segmented__btn--active"),
+      container.querySelector<HTMLInputElement>(
+        '.settings-segmented__input[value="retired-memory"]',
+      )?.checked,
     ).toBe(true);
-  });
-
-  it("renders enabled and disabled add-ons as accessible toggles", () => {
-    const container = renderInto(createProps());
-
-    const switches = [
-      ...container.querySelectorAll<HTMLElement & { checked: boolean }>("wa-switch"),
-    ];
-    expect(switches).toHaveLength(2);
-    expect(switches[0]?.checked).toBe(true);
-    expect(switches[1]?.checked).toBe(false);
-    expect(switches[0]?.textContent).toContain("Enable or disable Active memory");
-    expect(switches[1]?.textContent).toContain("Enable or disable Memory wiki");
-    const link = container.querySelector<HTMLAnchorElement>("a.memory-page__link");
-    expect(link?.getAttribute("href")).toBe("/settings/plugins");
-  });
-
-  it("keeps config only on Settings and the agent experience on Dreams", () => {
-    expect(
-      renderInto(createProps({ activeTab: "overview" })).querySelector(".test-overview"),
-    ).not.toBeNull();
-    expect(
-      renderInto(createProps({ activeTab: "memories" })).querySelector(".test-memories"),
-    ).not.toBeNull();
-
-    const settings = renderInto(createProps({ activeTab: "settings" }));
-    expect(settings.querySelector(".test-editor")).not.toBeNull();
-    expect(settings.querySelector(".test-dreaming-settings")).not.toBeNull();
-
-    const dreams = renderInto(createProps({ activeTab: "dreams" }));
-    expect(dreams.querySelector(".test-dreams")).not.toBeNull();
-    expect(dreams.querySelector(".test-editor")).toBeNull();
   });
 
   it("shows the shared advanced disclosure only on Settings and reveals advanced fields", () => {
@@ -203,38 +142,7 @@ describe("renderMemory", () => {
   });
 });
 
-describe("memoryTabForRoute", () => {
-  it("keeps old shared links working with the new destinations", () => {
-    expect(memoryTabForRoute({ tab: "search" })).toBe("settings");
-    expect(memoryTabForRoute({ tab: "dreaming" })).toBe("dreams");
-    expect(memoryTabForRoute({ tab: "overview" })).toBe("overview");
-    expect(memoryTabForRoute({ tab: "memories" })).toBe("memories");
-    expect(memoryTabForRoute({ tab: "unknown" })).toBeNull();
-  });
-
-  it("prefers an explicit canonical path over stale legacy route state", () => {
-    expect(
-      memoryTabForRoute({
-        pathname: "/settings/memory/dreams",
-        tab: "settings",
-        section: "memory",
-        targetBlockId: "config-section-memory",
-      }),
-    ).toBe("dreams");
-    expect(memoryTabForRoute({ pathname: "/settings/memory" })).toBe("overview");
-  });
-});
-
-describe("memorySchemaKeysForTab", () => {
-  it("shows builtin memory settings only on Settings", () => {
-    expect(memorySchemaKeysForTab("overview")).toEqual([]);
-    expect(memorySchemaKeysForTab("memories")).toEqual([]);
-    expect(memorySchemaKeysForTab("dreams")).toEqual([]);
-    expect(memorySchemaKeysForTab("settings")).toEqual(["citations", "search"]);
-  });
-});
-
-describe("narrowMemorySchema", () => {
+describe("memorySettingsSchema", () => {
   const schema = {
     type: "object",
     properties: {
@@ -243,31 +151,26 @@ describe("narrowMemorySchema", () => {
         properties: {
           citations: { type: "string" },
           search: { type: "object" },
+          internal: { type: "object" },
         },
       },
       tools: { type: "object" },
     },
   };
 
-  it("keeps only the requested memory children and drops sibling sections", () => {
-    const narrowed = narrowMemorySchema(schema, ["search"]) as {
+  it("keeps the curated settings and drops other fields and sibling sections", () => {
+    const narrowed = memorySettingsSchema(schema) as {
       properties: { memory: { properties: Record<string, unknown> }; tools?: unknown };
     };
 
     expect(Object.keys(narrowed.properties)).toEqual(["memory"]);
-    expect(Object.keys(narrowed.properties.memory.properties)).toEqual(["search"]);
-  });
-
-  it("returns a stable object per key set so schema analysis stays cached", () => {
-    expect(narrowMemorySchema(schema, ["search"])).toBe(narrowMemorySchema(schema, ["search"]));
-    expect(narrowMemorySchema(schema, ["search"])).not.toBe(
-      narrowMemorySchema(schema, ["citations"]),
-    );
+    expect(Object.keys(narrowed.properties.memory.properties)).toEqual(["citations", "search"]);
+    expect(memorySettingsSchema(schema)).toBe(narrowed);
   });
 
   it("passes non-memory schemas through untouched", () => {
     const unrelated = { type: "object", properties: { tools: {} } };
-    expect(narrowMemorySchema(unrelated, ["search"])).toBe(unrelated);
-    expect(narrowMemorySchema(null, ["search"])).toBeNull();
+    expect(memorySettingsSchema(unrelated)).toBe(unrelated);
+    expect(memorySettingsSchema(null)).toBeNull();
   });
 });

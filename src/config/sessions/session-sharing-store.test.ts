@@ -2,12 +2,14 @@ import fs from "node:fs";
 import type { Worker } from "node:worker_threads";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { sessionChanges, type SessionRowChange } from "../../sessions/session-row-changes.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   isOpenClawAgentDatabaseOpen,
   openOpenClawAgentDatabase,
+  resolveIncognitoOpenClawAgentSqlitePath,
   resolveOpenClawAgentSqlitePath,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
@@ -18,13 +20,67 @@ import {
   upsertSessionEntryCore,
 } from "./session-accessor.js";
 import * as sqliteArchive from "./session-accessor.sqlite-archive.js";
-import * as reclamation from "./session-accessor.sqlite-reclamation.js";
+import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
+import { readCommittedIncognitoSessionSharing } from "./session-accessor.sqlite-incognito-sharing.js";
+import * as reclamation from "./session-accessor.sqlite-reclamation-run.js";
+import { createSessionMaintenanceFinalizationOperation } from "./session-accessor.sqlite-reclamation.js";
 import { isSessionMember, listSessionMembers } from "./session-sharing-store.js";
 import { addSessionMember, removeSessionMember } from "./session-sharing-store.native.js";
+import type { SessionEntry } from "./types.js";
 
 afterEach(() => vi.restoreAllMocks());
 
 describe("session sharing store", () => {
+  it.each(["commit", "rollback"] as const)(
+    "keeps incognito capability and membership aligned after owner reversal (%s)",
+    async (outcome) => {
+      await withOpenClawTestState({ layout: "state-only" }, async ({ env }) => {
+        const sessionKey = "agent:main:subagent:incognito-owner-reversal";
+        const storePath = resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env });
+        const scope = { agentId: "main", env, sessionKey, storePath };
+        const options = { agentId: "main", env, path: storePath };
+        const entry: SessionEntry = {
+          sessionId: "incognito-owner-reversal",
+          updatedAt: 1,
+          incognito: true,
+          spawnedBy: "agent:main:requester-a",
+          spawnDepth: 1,
+          inheritedToolPolicyVersion: 1,
+          completionOwnerSessionKey: "agent:main:requester-a",
+        };
+        await upsertSessionEntryCore(scope, entry);
+        addSessionMember(scope, { identityId: "existing", addedBy: "owner" });
+        const database = openOpenClawAgentDatabase(options);
+        const rollback = new Error("Rollback owner reversal");
+        const reverseOwner = () =>
+          runOpenClawAgentWriteTransaction((writer) => {
+            writeSessionEntry(writer, sessionKey, {
+              ...entry,
+              completionOwnerSessionKey: "agent:main:requester-b",
+            });
+            addSessionMember(scope, { identityId: "late", addedBy: "owner" });
+            writeSessionEntry(writer, sessionKey, entry);
+            if (outcome === "rollback") {
+              throw rollback;
+            }
+          }, options);
+        if (outcome === "rollback") {
+          expect(reverseOwner).toThrow(rollback);
+        } else {
+          reverseOwner();
+        }
+        expect(loadSessionEntry(scope)?.completionOwnerSessionKey).toBe("agent:main:requester-a");
+        const published = readCommittedIncognitoSessionSharing(database.db, sessionKey);
+        expect(published?.capability?.completionOwnerSessionKey).toBe("agent:main:requester-a");
+        const expectedMembers = outcome === "commit" ? ["existing", "late"] : ["existing"];
+        expect([...(published?.membership ?? [])].toSorted()).toEqual(expectedMembers);
+        expect(listSessionMembers(scope).map((member) => member.identityId)).toEqual(
+          expectedMembers,
+        );
+      });
+    },
+  );
+
   it("joins exited maintenance leases before removing sharing fixture state", async () => {
     let fixtureRoot = "";
     const workers: Worker[] = [];
@@ -32,23 +88,25 @@ describe("session sharing store", () => {
       raw: ReturnType<typeof reclamation.runSqliteSessionReclamation>;
     }>();
     const spawn = sqliteArchive.createSqliteTranscriptArchiveWorker;
-    vi.spyOn(sqliteArchive, "createSqliteTranscriptArchiveWorker").mockImplementation((data) => {
-      const worker = spawn(data);
-      if (
-        expect
-          .objectContaining({
-            type: "sqlite-transcript-archive-v2",
-            operation: "reclaim",
-            databaseOptions: expect.objectContaining({
-              env: expect.objectContaining({ OPENCLAW_STATE_DIR: fixtureRoot }),
-            }),
-          })
-          .asymmetricMatch(data)
-      ) {
-        workers.push(worker);
-      }
-      return worker;
-    });
+    vi.spyOn(sqliteArchive, "createSqliteTranscriptArchiveWorker").mockImplementation(
+      (data, nativeLocations) => {
+        const worker = spawn(data, nativeLocations);
+        if (
+          expect
+            .objectContaining({
+              type: "sqlite-transcript-archive-v2",
+              operation: "reclaim",
+              databaseOptions: expect.objectContaining({
+                env: expect.objectContaining({ OPENCLAW_STATE_DIR: fixtureRoot }),
+              }),
+            })
+            .asymmetricMatch(data)
+        ) {
+          workers.push(worker);
+        }
+        return worker;
+      },
+    );
     const run = reclamation.runSqliteSessionReclamation;
     vi.spyOn(reclamation, "runSqliteSessionReclamation").mockImplementation((params) => {
       const raw = run(params);
@@ -68,13 +126,36 @@ describe("session sharing store", () => {
         sessionKey: "agent:main:main",
       };
       await upsertSessionEntryCore(scope, { sessionId: "session-main", updatedAt: 1 });
-      await expect((await maintenance.promise).raw).resolves.toMatchObject({
-        kind: "maintenance-plan",
-      });
+      expect(isOpenClawAgentDatabaseOpen(resolveOpenClawAgentSqlitePath(scope))).toBe(false);
+      const sql = observeHostDataSql();
+      try {
+        await expect((await maintenance.promise).raw).resolves.toMatchObject({
+          kind: "maintenance-plan",
+        });
+        expect(
+          sql.queries.filter((query) =>
+            /session_nodes|session_entry_snapshots|\bCOMMIT\b|\bBEGIN IMMEDIATE\b/i.test(query),
+          ),
+        ).toEqual([]);
+      } finally {
+        sql.restore();
+      }
+      expect(isOpenClawAgentDatabaseOpen(resolveOpenClawAgentSqlitePath(scope))).toBe(false);
+      await expect(
+        reclamation.runSqliteSessionReclamation({
+          forceInProcess: false,
+          plan: createSessionMaintenanceFinalizationOperation({
+            agentId: scope.agentId,
+            databaseOptions: scope,
+            entries: [],
+            materializedPlans: [],
+          }),
+        }),
+      ).resolves.toMatchObject({ kind: "maintenance-finalize" });
       expect(workers).toHaveLength(1);
       const worker = workers[0];
       if (!worker) {
-        throw new Error("Expected the automatic maintenance worker");
+        throw new Error("Expected the archive maintenance worker");
       }
       // Parent-owned lease cleanup still needs the original store after native exit.
       await worker.terminate();
@@ -162,6 +243,7 @@ describe("session sharing store", () => {
       addSessionMember(scope, { identityId: "guest", addedBy: "owner", addedAt: 2 });
       const databasePath = resolveOpenClawAgentSqlitePath({ agentId: scope.agentId, env });
       const missingPath = resolveOpenClawAgentSqlitePath({ agentId: missingScope.agentId, env });
+      await closeOpenClawAgentDatabasesAsync();
       closeOpenClawAgentDatabasesForTest();
 
       expect(listSessionMembers(scope)).toEqual([
@@ -198,6 +280,8 @@ describe("session sharing store", () => {
         { identityId: "zoe", addedBy: "owner", addedAt: 2 },
       ]);
       expect(isSessionMember(scope, "alice")).toBe(true);
+      expect(removeSessionMember(scope, "alice", { addedBy: "owner", addedAt: 2 })).toBeNull();
+      expect(listSessionMembers(scope)).toHaveLength(2);
       expect(removeSessionMember(scope, "alice")).toEqual({
         identityId: "alice",
         addedBy: "owner",
@@ -229,6 +313,29 @@ describe("session sharing store", () => {
           .prepare("SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = 'session_members'")
           .get(),
       ).toBeUndefined();
+    });
+  });
+
+  it("does not remove a newer membership grant using an older grant", async () => {
+    await withOpenClawTestState({ layout: "state-only" }, async ({ env }) => {
+      const scope = { agentId: "main", env, sessionKey: "agent:main:main" };
+      await upsertSessionEntryCore(scope, { sessionId: "session-main", updatedAt: 1 });
+      const original = addSessionMember(scope, {
+        identityId: "guest",
+        addedBy: "owner",
+        addedAt: 2,
+      }).member;
+      expect(removeSessionMember(scope, "guest", original)).toEqual(original);
+      const replacement = addSessionMember(scope, {
+        identityId: "guest",
+        addedBy: "owner",
+        addedAt: 3,
+      }).member;
+
+      expect(removeSessionMember(scope, "guest", original)).toBeNull();
+      expect(listSessionMembers(scope)).toEqual([replacement]);
+      expect(removeSessionMember(scope, "guest", replacement)).toEqual(replacement);
+      expect(listSessionMembers(scope)).toEqual([]);
     });
   });
 

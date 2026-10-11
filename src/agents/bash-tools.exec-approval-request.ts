@@ -9,6 +9,7 @@ import {
 } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString as parseString } from "@openclaw/normalization-core/string-coerce";
 import { isApprovalNotFoundError } from "../infra/approval-errors.js";
+import { isUnsupportedShellWrapperArgv } from "../infra/command-explainer/format.js";
 import type {
   ExecApprovalCommandSpan,
   ExecApprovalUnavailableDecision,
@@ -16,12 +17,6 @@ import type {
   ExecSecurity,
   SystemRunApprovalPlan,
 } from "../infra/exec-approvals.js";
-import { normalizeExecutableToken } from "../infra/exec-wrapper-tokens.js";
-import {
-  isShellWrapperExecutable,
-  POSIX_PARSEABLE_SHELL_WRAPPERS,
-  resolveShellWrapperTransportArgv,
-} from "../infra/shell-wrapper-resolution.js";
 import { createLazyPromise } from "../shared/lazy-runtime.js";
 import { markToolDecisionRecorded } from "./agent-tools.before-tool-call.decision.js";
 import {
@@ -29,8 +24,6 @@ import {
   DEFAULT_APPROVAL_TIMEOUT_MS,
 } from "./bash-tools.exec-runtime.js";
 import { callGatewayTool } from "./tools/gateway.js";
-
-const POSIX_COMMAND_HIGHLIGHT_SHELLS: ReadonlySet<string> = POSIX_PARSEABLE_SHELL_WRAPPERS;
 
 const loadExecApprovalCommandSpansRuntime = createLazyPromise(
   () => import("./bash-tools.exec-approval-request.runtime.js"),
@@ -207,28 +200,12 @@ async function resolveCommandSpans(
   }
 }
 
-function hasUnsupportedShellArgv(argv: readonly string[] | undefined): boolean {
-  if (!argv?.length) {
-    return false;
-  }
-  const shellWrapperArgv = resolveShellWrapperTransportArgv([...argv]) ?? argv;
-  const executable = shellWrapperArgv[0];
-  if (!executable) {
-    return false;
-  }
-  const normalizedExecutable = normalizeExecutableToken(executable);
-  return (
-    isShellWrapperExecutable(normalizedExecutable) &&
-    !POSIX_COMMAND_HIGHLIGHT_SHELLS.has(normalizedExecutable)
-  );
-}
-
 function shouldSkipGeneratedCommandSpans(params: HostExecApprovalParams): boolean {
   if (params.host === "gateway" && process.platform === "win32") {
     return true;
   }
   const argv = params.commandArgv?.length ? params.commandArgv : params.systemRunPlan?.argv;
-  return hasUnsupportedShellArgv(argv);
+  return argv?.length ? isUnsupportedShellWrapperArgv(argv) : false;
 }
 
 async function buildHostApprovalDecisionParams(

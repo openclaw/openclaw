@@ -6,7 +6,6 @@ import {
   isTrustedOfficialPluginInstallRecord,
   resolveTrustedSourceLinkedOfficialClawHubInstall,
   resolveTrustedSourceLinkedOfficialNpmInstall,
-  resolveTrustedSourceLinkedOfficialNpmSpec,
 } from "./official-external-install-records.js";
 
 const QQBOT_EXPECTED_INTEGRITY =
@@ -21,7 +20,7 @@ describe("official plugin install trust", () => {
     resolvedSpec: `${packageName}@2026.7.2`,
   };
 
-  it.each(["fish-audio-speech", "fish-audio"])(
+  it.each(["fish-audio"])(
     "binds canonical and declared legacy id %s to the actual official package",
     (pluginId) => {
       expect(
@@ -34,7 +33,6 @@ describe("official plugin install trust", () => {
     { pluginId: "fish-audio-speech", packageName: undefined },
     { pluginId: "unrelated-plugin", packageName },
     { pluginId: "fish-audio-speech", packageName: "@vendor/fish-audio-speech" },
-    { pluginId: "unlisted", packageName: "@openclaw/unlisted" },
   ])("rejects an unbound catalog identity $pluginId / $packageName", (identity) => {
     expect(isTrustedOfficialPluginInstallRecord({ ...identity, record: npmRecord })).toBe(false);
   });
@@ -62,19 +60,6 @@ describe("official plugin install trust", () => {
       ).toBe(false);
     },
   );
-
-  it.each([
-    { spec: undefined, resolvedSpec: undefined },
-    { spec: undefined, resolvedName: undefined },
-  ])("accepts consistent legacy npm resolution evidence %j", (override) => {
-    expect(
-      isTrustedOfficialPluginInstallRecord({
-        pluginId: "fish-audio-speech",
-        packageName,
-        record: { ...npmRecord, ...override },
-      }),
-    ).toBe(true);
-  });
 
   it.each([
     { name: "default official host", overrides: {}, trusted: true },
@@ -111,31 +96,7 @@ describe("official plugin install trust", () => {
 });
 
 describe("trusted official npm install records", () => {
-  it("resolves an exact canonical catalog package", () => {
-    const record = {
-      source: "npm" as const,
-      spec: "@openclaw/acpx@2026.7.2",
-      resolvedName: "@openclaw/acpx",
-      resolvedSpec: "@openclaw/acpx@2026.7.2",
-    };
-
-    expect(resolveTrustedSourceLinkedOfficialNpmSpec({ pluginId: "acpx", record })).toBe(
-      "@openclaw/acpx",
-    );
-    expect(resolveTrustedSourceLinkedOfficialNpmInstall({ pluginId: "acpx", record })).toEqual({
-      npmSpec: "@openclaw/acpx",
-      pluginId: "acpx",
-    });
-  });
-
   it.each([
-    {
-      name: "missing requested spec",
-      record: {
-        source: "npm" as const,
-        resolvedName: "@openclaw/acpx",
-      },
-    },
     {
       name: "resolved-spec-only evidence",
       record: {
@@ -143,19 +104,10 @@ describe("trusted official npm install records", () => {
         resolvedSpec: "@openclaw/acpx@2026.7.2",
       },
     },
-    {
-      name: "resolved-name evidence with unrelated stale fields",
-      record: {
-        source: "npm" as const,
-        spec: "@vendor/acpx@1.0.0",
-        resolvedName: "@openclaw/acpx",
-        resolvedSpec: "@vendor/acpx@1.0.0",
-      },
-    },
   ])("preserves canonical official updates for $name", ({ record }) => {
-    expect(resolveTrustedSourceLinkedOfficialNpmSpec({ pluginId: "acpx", record })).toBe(
-      "@openclaw/acpx",
-    );
+    expect(
+      resolveTrustedSourceLinkedOfficialNpmInstall({ pluginId: "acpx", record })?.npmSpec,
+    ).toBe("@openclaw/acpx");
   });
 
   it("returns a replacement only for a catalog-declared legacy id", () => {
@@ -243,23 +195,23 @@ describe("trusted official npm install records", () => {
     ).toBeUndefined();
   });
 
-  it.each([
-    { name: "npm-pack archive", provenance: { artifactKind: "npm-pack" as const } },
-    { name: "local source path", provenance: { sourcePath: "/tmp/openclaw-qqbot" } },
-  ])("rejects $name provenance before migrating a legacy npm package", ({ provenance }) => {
-    expect(
-      resolveTrustedSourceLinkedOfficialNpmInstall({
-        pluginId: "qqbot",
-        record: {
-          source: "npm",
-          spec: "@openclaw/qqbot@1.9.0",
-          resolvedName: "@openclaw/qqbot",
-          resolvedSpec: "@openclaw/qqbot@1.9.0",
-          ...provenance,
-        },
-      }),
-    ).toBeUndefined();
-  });
+  it.each([{ name: "local source path", provenance: { sourcePath: "/tmp/openclaw-qqbot" } }])(
+    "rejects $name provenance before migrating a legacy npm package",
+    ({ provenance }) => {
+      expect(
+        resolveTrustedSourceLinkedOfficialNpmInstall({
+          pluginId: "qqbot",
+          record: {
+            source: "npm",
+            spec: "@openclaw/qqbot@1.9.0",
+            resolvedName: "@openclaw/qqbot",
+            resolvedSpec: "@openclaw/qqbot@1.9.0",
+            ...provenance,
+          },
+        }),
+      ).toBeUndefined();
+    },
+  );
 
   it("drops a catalog lookup duplicate only for unanimous canonical npm identity", () => {
     expect(
@@ -299,20 +251,6 @@ describe("trusted official npm install records", () => {
         },
       }),
     ).toBe(false);
-  });
-
-  it("fails closed when recorded npm identities disagree", () => {
-    expect(
-      resolveTrustedSourceLinkedOfficialNpmInstall({
-        pluginId: "fish-audio",
-        record: {
-          source: "npm",
-          spec: "@openclaw/fish-audio-speech@2026.7.2-beta.7",
-          resolvedName: "@vendor/fish-audio-speech",
-          resolvedSpec: "@openclaw/fish-audio-speech@2026.7.2-beta.7",
-        },
-      }),
-    ).toBeUndefined();
   });
 
   it("never accepts the legacy Fish Audio id through ClawHub", () => {

@@ -2,6 +2,7 @@ import { zstdDecompressSync } from "node:zlib";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { convertToLlm } from "../../../../packages/agent-core/src/harness/messages.js";
 import { configureAiTransportHost } from "../../../../packages/ai/src/host.js";
 import {
   closeOpenAICodexWebSocketSessions,
@@ -215,6 +216,110 @@ async function fixture(
 }
 
 describe("explicit direct Responses continuation", () => {
+  it.each([
+    { transport: "sse", strategy: "native" },
+    { transport: "websocket", strategy: "native" },
+    { transport: "sse", strategy: "managed" },
+  ] as const)(
+    "preserves runtime context after the acknowledged turn over $strategy $transport",
+    async ({ transport, strategy }) => {
+      const f = await fixture(transport, [created, completed], strategy);
+      const carrier = {
+        role: "custom" as const,
+        customType: "openclaw.runtime-context",
+        content: "Runtime context must survive continuation.\n",
+        display: false,
+        details: {
+          source: "openclaw-runtime-context",
+          runtimeContextCarrier: true,
+        },
+        timestamp: 3,
+      };
+      const messages = convertToLlm([...context.messages, carrier]);
+      const before = JSON.stringify(messages);
+      const stream = await f.stream(
+        model,
+        { ...context, messages },
+        {
+          ...f.options,
+          onPayload: (payload: unknown) => {
+            if (!isRecord(payload) || !Array.isArray(payload.input)) {
+              throw new Error("Fixture expected Responses input");
+            }
+            return {
+              ...f.options.onPayload(payload),
+              input: payload.input.map((item: unknown) => {
+                if (!isRecord(item)) {
+                  throw new Error("Fixture expected a Responses input item");
+                }
+                return { ...item };
+              }),
+            };
+          },
+        },
+      );
+      const result = await stream.result();
+      expect(result.stopReason).toBe("stop");
+      expect(f.requests).toHaveLength(1);
+      expect(f.requests[0]?.input).toEqual([
+        { type: "message", role: "user", content: [{ type: "input_text", text: "old history" }] },
+        { type: "message", role: "user", content: [{ type: "input_text", text: steer }] },
+        {
+          type: "message",
+          role: "user",
+          content: [
+            {
+              type: "input_text",
+              text: `OpenClaw runtime context:\n${carrier.content}\nEnd OpenClaw runtime context.`,
+            },
+          ],
+        },
+      ]);
+      expect(JSON.stringify(messages)).toBe(before);
+      expect(messages.at(-1)).toMatchObject({ role: "user", runtimeContext: {} });
+      expect(store.entry?.providerReview).toBeUndefined();
+    },
+  );
+
+  it("keeps a mixed-media runtime carrier behind the reviewed user input", async () => {
+    const f = await fixture("sse");
+    const carrier = {
+      role: "user" as const,
+      content: [
+        { type: "text" as const, text: "Plugin runtime context" },
+        { type: "image" as const, mimeType: "image/png", data: "aW1n" },
+      ],
+      timestamp: 3,
+      runtimeContext: {},
+    };
+    const messages = [...context.messages, carrier];
+    const before = JSON.stringify(messages);
+
+    const result = await (await f.stream(model, { ...context, messages }, f.options)).result();
+
+    expect(result.stopReason).toBe("stop");
+    expect(f.requests).toHaveLength(1);
+    expect(f.requests[0]?.input).toEqual([
+      { type: "message", role: "user", content: [{ type: "input_text", text: "old history" }] },
+      { type: "message", role: "user", content: [{ type: "input_text", text: steer }] },
+      {
+        type: "message",
+        role: "user",
+        content: [
+          {
+            type: "input_text",
+            text: "Plugin runtime context",
+          },
+          {
+            type: "input_text",
+            text: "(image omitted: model does not support images)",
+          },
+        ],
+      },
+    ]);
+    expect(JSON.stringify(messages)).toBe(before);
+  });
+
   it.each(["sse", "websocket"] as const)(
     "sends the literal steer and one-shot metadata over %s, then leaves later tool calls ordinary",
     async (transport) => {
@@ -532,35 +637,139 @@ describe("explicit direct Responses continuation", () => {
     },
   );
 
-  it.each(["in-place", "replacement"] as const)(
-    "rejects additional user input from a %s payload hook before dispatch",
-    async (mode) => {
-      const f = await fixture("sse");
-      const stream = await f.stream(model, context, {
+  it.each([
+    ["extra in-place input", "payload added user input"],
+    ["extra replacement input", "payload added user input"],
+    ["replacement identity", "changed its next user input"],
+    ["reorder", "changed its next user input"],
+    ["replace-carrier", "changed its next user input"],
+    ["mutate-carrier", "changed its next user input"],
+    ["model", "changed the reviewed runtime or model"],
+  ])("rejects unreviewed payload changes before dispatch: %s", async (change, error) => {
+    const f = await fixture("sse");
+    const hasCarrier = ["reorder", "replace-carrier", "mutate-carrier"].includes(change);
+    const messages: Context["messages"] = hasCarrier
+      ? [
+          ...context.messages,
+          { role: "user", content: "Runtime context", timestamp: 3, runtimeContextCarrier: true },
+        ]
+      : context.messages;
+    const stream = await f.stream(
+      model,
+      { ...context, messages },
+      {
         ...f.options,
         onPayload: (payload: unknown) => {
           if (!isRecord(payload) || !Array.isArray(payload.input)) {
-            throw new Error("Fixture expected a Responses input array");
+            throw new Error("Fixture expected Responses input");
           }
-          const extraInput = [
-            { role: "user", content: [{ type: "input_text", text: "Extra unreviewed input" }] },
-            { role: "user", content: [{ type: "input_text", text: "Trailing input" }] },
-          ];
-          if (mode === "in-place") {
-            payload.input.push(...extraInput);
-            return undefined;
+          if (change === "model") {
+            return { ...payload, model: "other-model" };
           }
-          return { ...payload, input: [...payload.input, ...extraInput] };
+          if (change.startsWith("extra")) {
+            const extra = [
+              { role: "user", content: [{ type: "input_text", text: "Extra unreviewed input" }] },
+              { role: "user", content: [{ type: "input_text", text: "Trailing input" }] },
+            ];
+            if (change === "extra in-place input") {
+              payload.input.push(...extra);
+              return undefined;
+            }
+            return { ...payload, input: [...payload.input, ...extra] };
+          }
+          if (change === "replacement identity") {
+            return {
+              ...payload,
+              input: [
+                ...payload.input.slice(0, -1),
+                { role: "user", content: [{ type: "input_text", text: steer }] },
+              ],
+            };
+          }
+          if (change === "reorder") {
+            [payload.input[0], payload.input[1]] = [payload.input[1], payload.input[0]];
+          } else {
+            const carrier = payload.input.at(-1);
+            if (
+              !isRecord(carrier) ||
+              !Array.isArray(carrier.content) ||
+              !isRecord(carrier.content[0])
+            ) {
+              throw new Error("Fixture expected a runtime-context carrier");
+            }
+            if (change === "mutate-carrier") {
+              carrier.content[0].text = "Unreviewed input";
+            } else {
+              payload.input[payload.input.length - 1] = {
+                role: "user",
+                content: [{ type: "input_text", text: "Unreviewed input" }],
+              };
+            }
+          }
+          return payload;
         },
-      });
+      },
+    );
+    const result = await stream.result();
+    expect(result.stopReason).toBe("error");
+    expect(result.errorMessage).toContain(error);
+    expect(f.requests).toHaveLength(0);
+    expect(store.entry?.providerReview?.id).toBe("review-1");
+  });
+
+  it.each(["reorder", "replace-carrier", "mutate-carrier"] as const)(
+    "rejects a payload hook that changes the acknowledged turn's tail: %s",
+    async (change) => {
+      const f = await fixture("sse");
+      const messages: Context["messages"] = [
+        ...context.messages,
+        {
+          role: "user",
+          content: "OpenClaw runtime context:\nRuntime context",
+          timestamp: 3,
+          runtimeContext: {},
+        },
+      ];
+      const stream = await f.stream(
+        model,
+        { ...context, messages },
+        {
+          ...f.options,
+          onPayload: (payload: unknown) => {
+            if (!isRecord(payload) || !Array.isArray(payload.input)) {
+              throw new Error("Fixture expected Responses input");
+            }
+            if (change === "reorder") {
+              [payload.input[0], payload.input[1]] = [payload.input[1], payload.input[0]];
+            } else {
+              const carrier = payload.input.at(-1);
+              if (
+                !isRecord(carrier) ||
+                !Array.isArray(carrier.content) ||
+                !isRecord(carrier.content[0])
+              ) {
+                throw new Error("Fixture expected a runtime-context carrier");
+              }
+              if (change === "mutate-carrier") {
+                carrier.content[0].text = "Unreviewed input";
+              } else {
+                payload.input[payload.input.length - 1] = {
+                  role: "user",
+                  content: [{ type: "input_text", text: "Unreviewed input" }],
+                };
+              }
+            }
+            return payload;
+          },
+        },
+      );
       const result = await stream.result();
       expect(result.stopReason).toBe("error");
-      expect(result.errorMessage).toContain("payload added user input");
+      expect(result.errorMessage).toContain("changed its next user input");
       expect(f.requests).toHaveLength(0);
       expect(store.entry?.providerReview?.id).toBe("review-1");
     },
   );
-
   it("preserves effective settings, tools, and history transforms while keeping the exact steer", async () => {
     const f = await fixture("sse");
     const stream = await f.stream(model, context, {
@@ -598,22 +807,6 @@ describe("explicit direct Responses continuation", () => {
       ],
     });
     expect(store.entry?.providerReview).toBeUndefined();
-  });
-
-  it("rejects a payload hook that changes the reviewed model before dispatch", async () => {
-    const f = await fixture("sse");
-    const stream = await f.stream(model, context, {
-      ...f.options,
-      onPayload: (payload: unknown) => ({
-        ...(payload as Record<string, unknown>),
-        model: "other-model",
-      }),
-    });
-    const result = await stream.result();
-    expect(result.stopReason).toBe("error");
-    expect(result.errorMessage).toContain("changed the reviewed runtime or model");
-    expect(f.requests).toHaveLength(0);
-    expect(store.entry?.providerReview?.id).toBe("review-1");
   });
 
   it("rejects malformed existing metadata and unsupported API-key routes before dispatch", async () => {

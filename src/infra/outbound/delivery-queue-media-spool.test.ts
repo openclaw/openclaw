@@ -2,8 +2,12 @@ import { existsSync, statSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  openOpenClawStateDatabase,
+} from "../../state/openclaw-state-db.js";
 import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import { COMMAND_OWNER_OUTBOUND_DELIVERY_QUEUE_NAME } from "./delivery-queue-namespaces.js";
 import { loadPendingDeliveries } from "./delivery-queue.test-helpers.js";
@@ -39,16 +43,12 @@ vi.mock("@openclaw/fs-safe/store", async (importOriginal) => {
   };
 });
 
-const {
-  collectEntrySpoolPaths,
-  pruneOrphanedDeliveryQueueMedia,
-  releaseSpoolArtifacts,
-  stageQueuePayloadMedia,
-} = await import("./delivery-queue-media-spool.js");
+const { pruneOrphanedDeliveryQueueMedia, releaseSpoolArtifacts, stageQueuePayloadMedia } =
+  await import("./delivery-queue-media-spool.js");
 const { enqueueDelivery } = await import("./delivery-queue-storage.js");
-const { loadDeliveryQueueEntry, pruneExpiredDeliveryQueueTombstones } =
-  await import("../delivery-queue-sqlite.js");
-const { seedDeliveryQueueEntry } = await import("../delivery-queue-sqlite.test-support.js");
+const { pruneExpiredDeliveryQueueTombstones } = await import("../delivery-queue-sqlite.js");
+const { loadDeliveryQueueEntry, seedDeliveryQueueEntry } =
+  await import("../delivery-queue-sqlite.test-support.js");
 const {
   LEGACY_OUTBOUND_DELIVERY_QUEUE_NAME,
   OUTBOUND_DELIVERY_MIGRATION_QUEUE_NAME,
@@ -245,23 +245,6 @@ describe("retention", () => {
 });
 
 describe("ownership helpers", () => {
-  it("collects only spool-owned references", () => {
-    const spoolPath = path.join(spoolRoot, ARTIFACT_A);
-    const generationPath = path.join(spoolRoot, `g1-${ARTIFACT_A}`);
-    expect(
-      collectEntrySpoolPaths(
-        [
-          { mediaUrl: spoolPath },
-          { mediaUrl: generationPath },
-          { mediaUrl: path.join(spoolRoot, `g2-${ARTIFACT_A}`) },
-          { mediaUrl: "https://example.com/a.ogg" },
-          { mediaUrl: path.join(sourceDir, "b.ogg") },
-        ],
-        stateDir,
-      ),
-    ).toEqual([spoolPath, generationPath]);
-  });
-
   it("releases versioned artifacts without touching paths outside the spool", async () => {
     const outside = path.join(sourceDir, "not-ours.ogg");
     await fs.writeFile(outside, "bytes");
@@ -281,6 +264,47 @@ describe("ownership helpers", () => {
 
 describe("staging", () => {
   const mediaAccessFor = (roots: string[]) => ({ localRoots: roots });
+
+  it("stages local media while a competing writer needs the host to release its lock", async () => {
+    const source = path.join(sourceDir, "voice.ogg");
+    await fs.writeFile(source, "opus-bytes");
+    const database = openOpenClawStateDatabase({
+      env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+    });
+    const writer = new DatabaseSync(database.path);
+    try {
+      writer.exec("BEGIN IMMEDIATE");
+      // A worker can hold this lock while waiting for host admission. Staging
+      // must yield so the host can let that writer finish.
+      const staged = stageQueuePayloadMedia({
+        payloads: [{ mediaUrl: source }],
+        mediaAccess: mediaAccessFor([sourceDir]),
+        maxBytes: 1024 * 1024,
+        stateDir,
+      });
+      writer.exec("COMMIT");
+      const result = await staged;
+      expect(result.status).toBe("staged");
+      if (result.status !== "staged") {
+        return;
+      }
+      expect(await fs.readFile(result.artifacts[0]!, "utf8")).toBe("opus-bytes");
+      const id = await enqueueDelivery(
+        { channel: "telegram", to: "synthetic", payloads: result.payloads },
+        stateDir,
+        result.mediaStageId,
+      );
+      expect(await loadPendingDeliveries(stateDir)).toMatchObject([
+        { id, preparedBatch: { entries: [{ payload: { mediaUrl: result.artifacts[0] } }] } },
+      ]);
+    } finally {
+      if (writer.isTransaction) {
+        writer.exec("ROLLBACK");
+      }
+      await closeOpenClawStateDatabaseAsync();
+      writer.close();
+    }
+  });
 
   it("leaves replayable remote media untouched without creating the spool", async () => {
     const result = await stageQueuePayloadMedia({
@@ -365,31 +389,12 @@ describe("staging", () => {
     expect(await fs.readdir(spoolRoot).catch(() => [])).toEqual([]);
   });
 
-  it("copies a repeated source once", async () => {
+  it("preserves blank media slots and copies repeated local media once", async () => {
     const source = path.join(sourceDir, "voice.ogg");
     await fs.writeFile(source, "opus-bytes");
 
     const result = await stageQueuePayloadMedia({
-      payloads: [{ mediaUrl: source }, { mediaUrl: source }],
-      mediaAccess: mediaAccessFor([sourceDir]),
-      maxBytes: 1024 * 1024,
-      stateDir,
-    });
-
-    expect(result.status).toBe("staged");
-    if (result.status !== "staged") {
-      return;
-    }
-    expect(result.artifacts).toHaveLength(1);
-    expect(result.payloads[0]?.mediaUrl).toBe(result.payloads[1]?.mediaUrl);
-  });
-
-  it("preserves blank media slots while staging valid local media", async () => {
-    const source = path.join(sourceDir, "voice.ogg");
-    await fs.writeFile(source, "opus-bytes");
-
-    const result = await stageQueuePayloadMedia({
-      payloads: [{ mediaUrl: " ", mediaUrls: ["", source, "  "] }],
+      payloads: [{ mediaUrl: " ", mediaUrls: ["", source, source, "  "] }],
       mediaAccess: mediaAccessFor([sourceDir]),
       maxBytes: 1024 * 1024,
       stateDir,
@@ -402,7 +407,7 @@ describe("staging", () => {
     expect(result.artifacts).toHaveLength(1);
     expect(result.payloads[0]).toEqual({
       mediaUrl: " ",
-      mediaUrls: ["", result.artifacts[0], "  "],
+      mediaUrls: ["", result.artifacts[0], result.artifacts[0], "  "],
     });
   });
 });

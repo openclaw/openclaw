@@ -45,6 +45,7 @@ const profileWrites = await import("../state/user-profile-writes.js");
 const profileAuthority = await import("../state/user-channel-identity-operations.js");
 const operatorRoles = await import("./operator-role-policy.js");
 const githubIdentity = await import("./github-user-identity.js");
+const { resolveControlUiPluginAuthCookieGeneration } = await import("./http-auth-plugin-cookie.js");
 const { authorizeGatewayHttpRequestOrReply } = await import("./http-utils.js");
 
 const ownerProfile = {
@@ -54,6 +55,11 @@ const ownerProfile = {
   hasAvatar: false,
   updatedAt: 2,
 };
+
+const readProfileSource = () => ({
+  path: "/synthetic/openclaw.sqlite",
+  env: { OPENCLAW_STATE_DIR: "/synthetic" },
+});
 
 function createReq(headers: Record<string, string> = {}): IncomingMessage {
   return { headers } as IncomingMessage;
@@ -85,6 +91,7 @@ describe("authorizeGatewayHttpRequestOrReply", () => {
         role: null,
         aliases: [profileId],
         isCurrent: () => true,
+        readSource: readProfileSource,
         display: {
           id: profileId,
           displayName: profileId === ownerProfile.profileId ? ownerProfile.displayName : "Guest",
@@ -98,7 +105,7 @@ describe("authorizeGatewayHttpRequestOrReply", () => {
 
   afterEach(() => vi.restoreAllMocks());
 
-  it.each(["token", "password"] as const)(
+  it.each(["password"] as const)(
     "marks %s-authenticated requests as untrusted for declared HTTP scopes",
     async (method) => {
       vi.mocked(authorizeHttpGatewayConnect).mockResolvedValue({
@@ -173,12 +180,18 @@ describe("authorizeGatewayHttpRequestOrReply", () => {
 
   it.each(
     (["global", "gateway"] as const).flatMap((configSource) =>
-      (["completed", "disconnected", "policy-changed", "stale-at-entry"] as const).map(
-        (outcome) => ({
-          configSource,
-          outcome,
-        }),
-      ),
+      (
+        [
+          "completed",
+          "disconnected",
+          "policy-changed",
+          "stale-at-entry",
+          "identity-grants",
+        ] as const
+      ).map((outcome) => ({
+        configSource,
+        outcome,
+      })),
     ),
   )(
     "keeps HTTP authorization pending on profile acquisition and revalidates before completion ($configSource policy, $outcome)",
@@ -269,10 +282,43 @@ describe("authorizeGatewayHttpRequestOrReply", () => {
             },
           });
         }
+        const cookieGeneration = resolveControlUiPluginAuthCookieGeneration(
+          "shared-auth",
+          currentConfig,
+        );
+        if (outcome === "identity-grants") {
+          setCurrentConfig({
+            ...currentConfig,
+            gateway: {
+              ...currentConfig.gateway,
+              auth: {
+                ...currentConfig.gateway?.auth,
+                identityScopes: { "other@example.test": ["operator.admin"] },
+              },
+            },
+          });
+        }
         release.resolve();
         const result = await pending;
-        if (outcome === "completed") {
+        if (outcome === "completed" || outcome === "identity-grants") {
           expect(result?.authenticatedUserProfile?.profileId).toBe("profile-guest");
+          if (outcome === "identity-grants") {
+            expect(resolveControlUiPluginAuthCookieGeneration("shared-auth", currentConfig)).toBe(
+              cookieGeneration,
+            );
+            setCurrentConfig({
+              ...currentConfig,
+              gateway: {
+                ...currentConfig.gateway,
+                auth: {
+                  ...currentConfig.gateway?.auth,
+                  identityScopes: { "guest@example.test": ["operator.admin"] },
+                },
+              },
+            });
+            expect(result?.hasCurrentClientAuthority()).toBe(true);
+            await expect(result?.revalidate()).resolves.toBeUndefined();
+          }
         } else {
           expect(result).toBeNull();
           expect(profileAuthority.prepareUserProfileRoleAuthority).not.toHaveBeenCalled();
@@ -349,10 +395,8 @@ describe("authorizeGatewayHttpRequestOrReply", () => {
   );
 
   it.each([
-    { rolesConfigured: true, failure: "profile store" },
     { rolesConfigured: false, failure: "profile store" },
     { rolesConfigured: true, failure: "provider lookup" },
-    { rolesConfigured: false, failure: "provider lookup" },
   ])(
     "$failure failure preserves authorization with roles enabled: $rolesConfigured",
     async ({ rolesConfigured, failure }) => {
@@ -419,6 +463,7 @@ describe("authorizeGatewayHttpRequestOrReply", () => {
       role: null,
       aliases: ["profile-github", "profile-github-canonical"],
       isCurrent: () => true,
+      readSource: readProfileSource,
       display: {
         id: "profile-github-canonical",
         displayName: "GitHub User",

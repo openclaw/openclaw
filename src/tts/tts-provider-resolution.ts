@@ -1,14 +1,10 @@
 import { clampTimerTimeoutMs } from "../../packages/normalization-core/src/number-coercion.js";
+import { asNonArrayRecord } from "../../packages/normalization-core/src/record-coerce.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "../../packages/normalization-core/src/string-coerce.js";
-import type {
-  OpenClawConfig,
-  ResolvedTtsPersona,
-  TtsConfig,
-  TtsProvider,
-} from "../config/types.js";
+import type { OpenClawConfig, ResolvedTtsPersona, TtsProvider } from "../config/types.js";
 import type { SpeechProviderPlugin } from "../plugins/types.js";
 import { compareSpeechProviderOrder } from "./provider-registry-core.js";
 import {
@@ -22,7 +18,6 @@ import { withSpeakerSelectionCompat } from "./speaker.js";
 import {
   DEFAULT_TTS_TIMEOUT_MS,
   asProviderConfig,
-  asProviderConfigMap,
   normalizeConfiguredSpeechProviderId,
   readTtsPrefs as readPrefs,
   resolveTtsPersonaFromPrefs,
@@ -101,14 +96,19 @@ function canonicalizeSpeechProviderIdFromInventory(
   if (!providers) {
     return canonicalizeSpeechProviderId(providerId, cfg);
   }
-  const inventoryProvider = providers.find(
+  const inventoryProvider = findInventoryProvider(providers, normalized);
+  // A prepared inventory can omit voice-model-only providers. Preserve the
+  // registry's public alias contract on misses instead of exposing an alias.
+  return inventoryProvider?.id ?? canonicalizeSpeechProviderId(providerId, cfg) ?? normalized;
+}
+
+function findInventoryProvider(providers: readonly SpeechProviderPlugin[], providerId: string) {
+  const normalized = normalizeSpeechProviderId(providerId);
+  return providers.find(
     (provider) =>
       normalizeSpeechProviderId(provider.id) === normalized ||
       provider.aliases?.some((alias) => normalizeSpeechProviderId(alias) === normalized),
   );
-  // A prepared inventory can omit voice-model-only providers. Preserve the
-  // registry's public alias contract on misses instead of exposing an alias.
-  return inventoryProvider?.id ?? canonicalizeSpeechProviderId(providerId, cfg) ?? normalized;
 }
 
 function resolveConfiguredSpeechVoiceModelRefs(
@@ -201,18 +201,6 @@ export function mergeProviderConfigWithPersona(params: {
   };
 }
 
-function resolveRawProviderConfig(
-  raw: TtsConfig | undefined,
-  providerId: string,
-): SpeechProviderConfig {
-  if (!raw) {
-    return {};
-  }
-  const rawProviders = asProviderConfigMap(raw.providers);
-  const direct = rawProviders[providerId] ?? (raw as Record<string, unknown>)[providerId];
-  return withSpeakerSelectionCompat(asProviderConfig(direct));
-}
-
 function resolveLazyProviderConfig(
   config: ResolvedTtsConfig,
   providerId: string,
@@ -228,9 +216,9 @@ function resolveLazyProviderConfig(
   if (existing && !effectiveCfg) {
     return existing;
   }
-  const rawConfig = resolveRawProviderConfig(config.rawConfig, canonical);
   const rawBaseConfig = config.rawConfig as Record<string, unknown> | undefined;
-  const rawProviders = asProviderConfigMap(config.rawConfig?.providers);
+  const rawProviders = asNonArrayRecord(config.rawConfig?.providers);
+  const rawConfig = asProviderConfig(rawProviders[canonical] ?? rawBaseConfig?.[canonical]);
   const resolvedProvider = provider ?? registry.getSpeechProvider(canonical, effectiveCfg);
   let hasRawProviderConfig =
     Object.hasOwn(rawProviders, canonical) ||
@@ -257,7 +245,7 @@ function resolveLazyProviderConfig(
   const compatRawProviderConfig = applyVoiceModelToSpeechProviderConfig({
     cfg: effectiveCfg,
     providerId: canonical,
-    providerConfig: withSpeakerSelectionCompat(asProviderConfig(rawProviderConfig)),
+    providerConfig: asProviderConfig(rawProviderConfig),
     provider: resolvedProvider,
     voiceModel,
     registry,
@@ -274,13 +262,15 @@ function resolveLazyProviderConfig(
       : rawProviders,
     ...(shouldInjectCanonicalProviderConfig ? { [canonical]: compatRawProviderConfig } : {}),
   };
-  const next = withSpeakerSelectionCompat(
+  const next =
     effectiveCfg && resolvedProvider?.resolveConfig
-      ? resolvedProvider.resolveConfig({
-          cfg: effectiveCfg,
-          rawConfig: rawConfigForProvider,
-          timeoutMs: resolveSpeechProviderTimeoutMs({ config, provider: resolvedProvider }),
-        })
+      ? withSpeakerSelectionCompat(
+          resolvedProvider.resolveConfig({
+            cfg: effectiveCfg,
+            rawConfig: rawConfigForProvider,
+            timeoutMs: resolveSpeechProviderTimeoutMs({ config, provider: resolvedProvider }),
+          }),
+        )
       : applyVoiceModelToSpeechProviderConfig({
           cfg: effectiveCfg,
           providerId: canonical,
@@ -288,8 +278,7 @@ function resolveLazyProviderConfig(
           provider: resolvedProvider,
           voiceModel,
           registry,
-        }),
-  );
+        });
   if (!voiceModel) {
     config.providerConfigs[canonical] = next;
   }
@@ -403,14 +392,7 @@ export function resolvePreparedTtsProvider(params: {
   }
   if (params.preference?.source === "persona") {
     const preferredProvider = params.preference.provider;
-    const inventoryProvider = params.providers.find(
-      (provider) =>
-        normalizeSpeechProviderId(provider.id) === normalizeSpeechProviderId(preferredProvider) ||
-        provider.aliases?.some(
-          (alias) =>
-            normalizeSpeechProviderId(alias) === normalizeSpeechProviderId(preferredProvider),
-        ),
-    );
+    const inventoryProvider = findInventoryProvider(params.providers, preferredProvider);
     const personaProvider = inventoryProvider ?? getSpeechProvider(preferredProvider, effectiveCfg);
     if (personaProvider) {
       return personaProvider.id;
@@ -449,15 +431,10 @@ export function resolveTtsProviderOrder(
     const provider =
       canonicalizeSpeechProviderIdFromInventory(ref.provider, effectiveCfg, providers) ??
       ref.provider;
-    if (provider !== normalizedPrimary) {
-      ordered.add(provider);
-    }
+    ordered.add(provider);
   }
   for (const provider of sortSpeechProvidersForAutoSelection(effectiveCfg, providers)) {
-    const normalized = provider.id;
-    if (normalized !== normalizedPrimary) {
-      ordered.add(normalized);
-    }
+    ordered.add(provider.id);
   }
   return [...ordered];
 }

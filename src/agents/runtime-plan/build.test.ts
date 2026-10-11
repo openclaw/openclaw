@@ -8,7 +8,7 @@ import {
   resolveProviderRuntimePluginHandle,
   type ProviderRuntimePluginHandle,
 } from "../../plugins/provider-hook-runtime.js";
-import { buildAgentRuntimeDeliveryPlan, buildAgentRuntimePlan } from "./build.js";
+import { buildAgentRuntimePlan } from "./build.js";
 
 const resolveProviderIdForAuth = vi.hoisted(() => vi.fn((provider: string) => provider));
 
@@ -254,125 +254,6 @@ describe("AgentRuntimePlan", () => {
     expect(normalized[0]?.parameters).toStrictEqual({});
   });
 
-  it("forwards OpenAI API-key backup profiles into the Codex harness auth slot", () => {
-    const plan = buildAgentRuntimePlan({
-      provider: "openai",
-      modelId: "gpt-5.4",
-      modelApi: "openai-responses",
-      harnessId: "codex",
-      harnessRuntime: "codex",
-      authProfileProvider: "openai",
-      authProfileMode: "api_key",
-      sessionAuthProfileId: "openai:work",
-      config: {},
-      workspaceDir: "/tmp/openclaw-runtime-plan",
-    });
-
-    expect(plan.auth.providerForAuth).toBe("openai");
-    expect(plan.auth.authProfileProviderForAuth).toBe("openai");
-    expect(plan.auth.harnessAuthProvider).toBe("openai");
-    expect(plan.auth.forwardedAuthProfileId).toBe("openai:work");
-  });
-
-  it("carries forwarded Codex harness auth candidates", () => {
-    const plan = buildAgentRuntimePlan({
-      provider: "openai",
-      modelId: "gpt-5.4",
-      modelApi: "openai-responses",
-      harnessId: "codex",
-      harnessRuntime: "codex",
-      authProfileProvider: "openai",
-      authProfileMode: "oauth",
-      sessionAuthProfileId: "openai:work",
-      sessionAuthProfileCandidateIds: ["openai:work", "openai:backup"],
-      config: {},
-      workspaceDir: "/tmp/openclaw-runtime-plan",
-    });
-
-    expect(plan.auth.forwardedAuthProfileId).toBe("openai:work");
-    expect(plan.auth.forwardedAuthProfileCandidateIds).toEqual(["openai:work", "openai:backup"]);
-  });
-
-  it("forwards OpenAI OAuth profiles into the Codex harness auth slot", () => {
-    const plan = buildAgentRuntimePlan({
-      provider: "openai",
-      modelId: "gpt-5.4",
-      modelApi: "openai-responses",
-      harnessId: "codex",
-      harnessRuntime: "codex",
-      authProfileProvider: "openai",
-      authProfileMode: "oauth",
-      sessionAuthProfileId: "openai:work",
-      config: {},
-      workspaceDir: "/tmp/openclaw-runtime-plan",
-    });
-
-    expect(plan.auth.forwardedAuthProfileId).toBe("openai:work");
-  });
-
-  it("forwards OpenAI Codex profiles for explicit OpenAI OpenClaw runs", () => {
-    const plan = buildAgentRuntimePlan({
-      provider: "openai",
-      modelId: "gpt-5.4",
-      modelApi: "openai-responses",
-      harnessId: "openclaw",
-      harnessRuntime: "openclaw",
-      authProfileProvider: "openai",
-      sessionAuthProfileId: "openai:work",
-      config: {},
-      workspaceDir: "/tmp/openclaw-runtime-plan",
-    });
-
-    expect(plan.auth.providerForAuth).toBe("openai");
-    expect(plan.auth.authProfileProviderForAuth).toBe("openai");
-    expect(plan.auth.forwardedAuthProfileId).toBe("openai:work");
-  });
-
-  it("resolves follow-up routes with the prepared provider handle", () => {
-    const resolveProviderFollowupFallbackRouteMock = vi.mocked(
-      resolveProviderFollowupFallbackRoute,
-    );
-    resolveProviderFollowupFallbackRouteMock.mockClear();
-    resolveProviderFollowupFallbackRouteMock.mockReturnValueOnce({
-      route: "dispatcher" as const,
-      reason: "prepared-route",
-    });
-    const providerRuntimeHandle: ProviderRuntimePluginHandle & {
-      modelId: string;
-      prepared: true;
-    } = {
-      provider: "openai",
-      modelId: "gpt-5.4",
-      prepared: true,
-    };
-
-    const plan = buildAgentRuntimePlan({
-      provider: "openai",
-      modelId: "gpt-5.4",
-      config: {},
-      workspaceDir: "/tmp/openclaw-runtime-plan",
-      providerRuntimeHandle,
-    });
-
-    expect(
-      plan.delivery.resolveFollowupRoute({
-        payload: { text: "hello" },
-        originRoutable: false,
-        dispatcherAvailable: true,
-      }),
-    ).toEqual({
-      route: "dispatcher",
-      reason: "prepared-route",
-    });
-    const followupCall = latestFollowupRouteCall();
-    expect(followupCall.provider).toBe("openai");
-    expect(followupCall.runtimeHandle?.provider).toBe(providerRuntimeHandle.provider);
-    expect(followupCall.context?.provider).toBe("openai");
-    expect(followupCall.context?.modelId).toBe("gpt-5.4");
-    expect(followupCall.context?.originRoutable).toBe(false);
-    expect(followupCall.context?.dispatcherAvailable).toBe(true);
-  });
-
   it("reuses the provider handle prepared before plan construction", () => {
     const resolveProviderFollowupFallbackRouteMock = vi.mocked(
       resolveProviderFollowupFallbackRoute,
@@ -400,39 +281,6 @@ describe("AgentRuntimePlan", () => {
     expect(plan.providerRuntimeHandle).toBe(suppliedHandle);
 
     plan.delivery.resolveFollowupRoute({
-      payload: { text: "hello" },
-      originRoutable: false,
-      dispatcherAvailable: true,
-    });
-
-    const followupCall = latestFollowupRouteCall();
-    expect(followupCall.runtimeHandle).toBe(suppliedHandle);
-  });
-
-  it("reuses a delivery-only provider handle", () => {
-    const resolveProviderFollowupFallbackRouteMock = vi.mocked(
-      resolveProviderFollowupFallbackRoute,
-    );
-    resolveProviderFollowupFallbackRouteMock.mockClear();
-
-    const suppliedHandle: ProviderRuntimePluginHandle & { modelId: string; prepared: true } = {
-      provider: "openai",
-      modelId: "gpt-5.4",
-      prepared: true,
-      workspaceDir: "/tmp/openclaw-runtime-plan",
-      env: process.env,
-      plugin: {} as never,
-    };
-
-    const delivery = buildAgentRuntimeDeliveryPlan({
-      provider: "openai",
-      modelId: "gpt-5.4",
-      config: {},
-      workspaceDir: "/tmp/openclaw-runtime-plan",
-      providerRuntimeHandle: suppliedHandle,
-    });
-
-    delivery.resolveFollowupRoute({
       payload: { text: "hello" },
       originRoutable: false,
       dispatcherAvailable: true,

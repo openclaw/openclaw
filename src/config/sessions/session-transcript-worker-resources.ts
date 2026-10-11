@@ -1,23 +1,18 @@
 import { channel } from "node:diagnostics_channel";
+import path from "node:path";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
-import { ensureSqliteLibrarySelected } from "../../infra/bun-sqlite-library.js";
-import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
-import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
-import {
-  UsageCostWorkerReplyError,
-  type UsageCostWorkerDatabase,
-  type UsageCostWorkerInput,
-  type UsageCostWorkerReply,
+import { joinOwnedWorkerTasks } from "@openclaw/worker-runtime";
+import { encodeAgentDatabaseReaderRequest } from "../../infra/agent-database-readers.js";
+import type {
+  UsageCostWorkerDatabase,
+  UsageCostWorkerInput,
+  UsageCostWorkerReply,
 } from "../../infra/session-cost-usage-worker.types.js";
+import { runWithSqliteDatabaseAdmissionTurn } from "../../infra/sqlite-database-admission-turn.js";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../../infra/sqlite-handle-lifecycle.js";
-import { joinOwnedWorkerTasks } from "../../infra/worker-task-pool-owned.js";
-import {
-  createOwnedWorkerTaskPool,
-  WorkerTaskError,
-  WorkerTaskPool,
-} from "../../infra/worker-task-pool.js";
+import { WorkerTaskError, type WorkerTaskPool } from "../../infra/worker-task-pool.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
-import { runInDetachedAsyncContext } from "../../shared/async-work-scope.js";
+import { runInDetachedAsyncContext } from "../../shared/detached-async-context.js";
 import type { OpenClawAgentDatabaseOptions } from "../../state/openclaw-agent-db-contract.js";
 import {
   matchesAgentDatabaseReadCandidatePath,
@@ -25,9 +20,9 @@ import {
   registerOpenClawAgentDatabaseReadCandidateResource,
 } from "../../state/openclaw-agent-db-resources.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
+import { runOutsideOpenClawDatabaseMaintenanceScope } from "../../state/openclaw-state-db-async-lifecycle.js";
 import { registerOpenClawStateDatabaseAsyncResource } from "../../state/openclaw-state-db-cache.js";
 import {
-  sessionHistoryCleanupError,
   decodeSessionTranscriptWorkerReadError,
   unwrapSessionTranscriptWorkerReply,
 } from "./session-history-worker-errors.js";
@@ -41,74 +36,31 @@ import type {
   SessionStoreTargetReadResult,
   SessionStoreTargetInventoryResult,
 } from "./session-store-target-inventory.js";
-import type {
-  SessionHistoryWorkerInput,
-  SessionTranscriptWorkerReply,
-} from "./session-transcript-worker.types.js";
-
-const workerUrl = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.sessionTranscript);
-function createHistoryPool() {
-  return createOwnedWorkerTaskPool<
-    SessionHistoryWorkerInput,
-    SessionTranscriptWorkerReply<SessionHistoryWorkerInput["kind"]>
-  >({
-    workerUrl,
-    workerOptions: { resourceLimits: { maxOldGenerationSizeMb: 512 } },
-    maxWorkers: 1,
-    idleTimeoutMs: 0,
-    prepareWorker: () => {
-      ensureSqliteLibrarySelected();
-      return { options: {} };
-    },
-  });
-}
-
-const historyPages = createHistoryPool();
-const maintenancePages = createHistoryPool();
-
-function createUsageCostPool(kind: "read" | "refresh") {
-  return new WorkerTaskPool<UsageCostWorkerInput, UsageCostWorkerReply>({
-    workerUrl,
-    workerOptions: { resourceLimits: { maxOldGenerationSizeMb: 512 } },
-    maxWorkers: 1,
-    // Foreground reads must remain available while refresh awaits a host writer.
-    sharedCompute: kind === "refresh",
-    idleTimeoutMs: 0,
-    prepareWorker: () => {
-      ensureSqliteLibrarySelected();
-      return { options: {} };
-    },
-    validateResult(reply) {
-      if (!reply.ok) {
-        throw new UsageCostWorkerReplyError(reply.error);
-      }
-    },
-  });
-}
-
-type SessionDatabaseWorkerLane = {
-  name: string;
-  pool: { rotate: () => Promise<void> };
-  nativeSequence: number;
-  retiredSequence: number;
-  pending: number;
-  idleTimer?: NodeJS.Timeout;
-  rotation?: Promise<void>;
-};
+import {
+  createSessionTranscriptWorkerLanes,
+  type createSessionTranscriptHistoryPool,
+  type SessionDatabaseWorkerLane,
+} from "./session-transcript-read-pools.js";
+import type { SessionHistoryWorkerInput } from "./session-transcript-worker.types.js";
+import { captureSessionTranscriptStorageEnvironment } from "./transcript-target-binding.js";
 
 export type SessionCostWorkerLane = SessionDatabaseWorkerLane & {
   pool: WorkerTaskPool<UsageCostWorkerInput, UsageCostWorkerReply>;
 };
 
 export type SessionHistoryWorkerLane = SessionDatabaseWorkerLane & {
-  pool: ReturnType<typeof createHistoryPool>;
+  pool: ReturnType<typeof createSessionTranscriptHistoryPool>;
 };
 
 export type SessionDatabaseCleanup = { run: () => Promise<void> };
 
+/** Physical path for work; callers' lexical paths select the same owner for cleanup. */
+export type SessionHistoryDatabaseTarget = OpenClawAgentDatabaseOptions & {
+  requestedPaths?: readonly string[];
+};
+
 export type HistoryDatabaseResource = {
   database: { agentId: string; path: string };
-  generation: number;
   pending: number;
   revoked: boolean;
   nativeSequences: Map<SessionDatabaseWorkerLane, number>;
@@ -117,52 +69,31 @@ export type HistoryDatabaseResource = {
   aborters: Set<() => void>;
   closing?: Promise<void>;
   unregister: () => void;
+  retainAlias: (alias: string) => void;
 };
 
 const historyDatabases = new Map<string, HistoryDatabaseResource>();
 const historySetTimeout = setTimeout;
 export const historyClearTimeout = clearTimeout;
-let historyGeneration = 0;
-export const historyLane: SessionHistoryWorkerLane = {
-  name: "Session history",
-  pool: historyPages,
-  nativeSequence: 0,
-  retiredSequence: 0,
-  pending: 0,
-};
-// Keep list materialization independent of large history pages, with one extra reader per store.
-export const projectionLane: SessionHistoryWorkerLane = {
-  name: "Session projection",
-  pool: createHistoryPool(),
-  nativeSequence: 0,
-  retiredSequence: 0,
-  pending: 0,
-};
-// Full-store validation cannot yield its snapshot to a foreground history read.
-export const maintenanceLane: SessionHistoryWorkerLane = {
-  name: "Session maintenance",
-  pool: maintenancePages,
-  nativeSequence: 0,
-  retiredSequence: 0,
-  pending: 0,
-};
-export const costReadLane: SessionCostWorkerLane = {
-  name: "Session usage read",
-  pool: createUsageCostPool("read"),
-  nativeSequence: 0,
-  retiredSequence: 0,
-  pending: 0,
-};
-export const costRefreshLane: SessionCostWorkerLane = {
-  name: "Session usage refresh",
-  pool: createUsageCostPool("refresh"),
-  nativeSequence: 0,
-  retiredSequence: 0,
-  pending: 0,
-};
+export const {
+  historyLane,
+  transcriptSearchLane,
+  projectionLane,
+  maintenanceLane,
+  targetDiscoveryLane,
+  costReadLane,
+  costRefreshLane,
+} = createSessionTranscriptWorkerLanes();
 
-const historyWorkerLanes = [historyLane, projectionLane, maintenanceLane];
+const historyWorkerLanes = [
+  historyLane,
+  transcriptSearchLane,
+  projectionLane,
+  maintenanceLane,
+  targetDiscoveryLane,
+];
 const databaseWorkerLanes = [...historyWorkerLanes, costReadLane, costRefreshLane];
+
 const memoryPressure = channel("openclaw.memory.critical");
 let pressureSubscribed = false;
 
@@ -294,31 +225,34 @@ async function closeDatabaseWorkerResource(
   idle: boolean,
 ): Promise<void> {
   const pool = historyWorkerLanes.find((candidate) => candidate === lane)?.pool;
-  // Active reads and Bun retain native-exit custody. Idle Node readers can
-  // release the exact database while retaining the worker's loaded code.
-  if (!idle || process.versions.bun || !pool) {
+  // Active or unqualified readers keep native-exit custody. Proven idle readers
+  // release the exact database while retaining this worker's loaded code.
+  if (!idle || !pool?.canCloseNativeResources()) {
     await rotateDatabaseWorkers(lane);
     return;
   }
   const through = lane.nativeSequence;
-  try {
-    await pool.closeResources(JSON.stringify([{ path: resource.database.path }]));
-  } catch (error) {
-    try {
-      await rotateDatabaseWorkers(lane);
-    } catch (retirementError) {
-      throw sessionHistoryCleanupError(error, retirementError, "worker retirement");
-    }
-    throw error;
-  }
+  await pool.closeResources(JSON.stringify([{ path: resource.database.path }]));
   const sequence = resource.nativeSequences.get(lane);
   if (sequence !== undefined && sequence <= through) {
     resource.nativeSequences.delete(lane);
   }
 }
 
+/** One worker's eviction requests pool-wide cleanup before releasing database custody. */
+export async function settleSessionHistoryWorkerEviction(
+  lane: SessionHistoryWorkerLane,
+  database: SessionHistoryDatabaseTarget,
+): Promise<void> {
+  const resource = historyDatabases.get(JSON.stringify(database));
+  if (resource) {
+    // Preparing tasks can own input before a worker exists to receive a native close.
+    await closeDatabaseWorkerResource(resource, lane, lane.pool.getSnapshot().activeTasks === 0);
+  }
+}
+
 export function acquireHistoryDatabaseResource(
-  options: OpenClawAgentDatabaseOptions,
+  options: SessionHistoryDatabaseTarget,
 ): HistoryDatabaseResource {
   const database = {
     agentId: normalizeAgentId(options.agentId),
@@ -326,10 +260,11 @@ export function acquireHistoryDatabaseResource(
   };
   const key = JSON.stringify(database);
   let resource = historyDatabases.get(key);
+  let created = false;
   if (!resource || resource.revoked) {
+    const aliases = new Map<string, () => void>();
     const owned: HistoryDatabaseResource = {
       database,
-      generation: ++historyGeneration,
       pending: 0,
       revoked: false,
       nativeSequences: new Map(),
@@ -337,6 +272,21 @@ export function acquireHistoryDatabaseResource(
       cleanups: new Set(),
       aborters: new Set(),
       unregister: () => {},
+      retainAlias(alias) {
+        if (!aliases.has(alias)) {
+          aliases.set(
+            alias,
+            runOutsideOpenClawDatabaseMaintenanceScope(() =>
+              registerOpenClawAgentDatabaseAsyncResource({
+                ...database,
+                path: alias,
+                revoke,
+                close,
+              }),
+            ),
+          );
+        }
+      },
     };
     const close = () => {
       if (!owned.closing) {
@@ -351,6 +301,9 @@ export function acquireHistoryDatabaseResource(
           for (const cleanup of owned.cleanups) {
             await cleanup.run();
           }
+          if (owned.revoked) {
+            owned.unregister();
+          }
         })().finally(() => {
           owned.closing = undefined;
           pruneHistoryDatabases();
@@ -362,19 +315,45 @@ export function acquireHistoryDatabaseResource(
       }
       return owned.closing;
     };
-    owned.unregister = registerOpenClawAgentDatabaseAsyncResource({
+    const revoke = () => {
+      owned.revoked = true;
+      for (const abort of owned.aborters) {
+        abort();
+      }
+      void close();
+    };
+    let unregister: (() => void) | undefined = registerOpenClawAgentDatabaseAsyncResource({
       ...database,
-      revoke: () => {
-        owned.revoked = true;
-        for (const abort of owned.aborters) {
-          abort();
-        }
-        void close();
-      },
+      revoke,
       close,
     });
-    historyDatabases.set(key, owned);
+    // A revoked close and a later prune can both retire this owner; release custody once.
+    owned.unregister = () => {
+      unregister?.();
+      unregister = undefined;
+      for (const release of aliases.values()) {
+        release();
+      }
+      aliases.clear();
+    };
     resource = owned;
+    created = true;
+  }
+  try {
+    for (const requestedPath of options.requestedPaths ?? []) {
+      const alias = resolveOpenClawAgentSqlitePath({ ...options, path: requestedPath });
+      if (alias !== database.path) {
+        resource.retainAlias(alias);
+      }
+    }
+  } catch (error) {
+    if (created) {
+      resource.unregister();
+    }
+    throw error;
+  }
+  if (created) {
+    historyDatabases.set(key, resource);
   }
   return resource;
 }
@@ -396,8 +375,8 @@ export async function withSessionHistoryWorkerReadCandidates<T>(
   }) => Promise<T>,
   lane: SessionHistoryWorkerLane = historyLane,
 ): Promise<T> {
-  const capturedCandidates = candidates.map(({ path, physicalPath, scope }) => ({
-    path,
+  const capturedCandidates = candidates.map(({ path: requestedPath, physicalPath, scope }) => ({
+    path: requestedPath,
     physicalPath,
     scope,
   }));
@@ -405,17 +384,18 @@ export async function withSessionHistoryWorkerReadCandidates<T>(
     path: physicalPath,
     ...(scope ? { scope } : {}),
   }));
+  const admissionPaths = capturedCandidates
+    .filter((candidate) => !candidate.scope)
+    .map((candidate) => candidate.physicalPath);
+  const admissionFamilies = capturedCandidates
+    .filter((candidate) => candidate.scope === "sibling-family")
+    .map((candidate) => path.dirname(candidate.physicalPath));
   historyClearTimeout(lane.idleTimer);
   lane.pending++;
   refreshDatabaseWorkerPressureSubscription();
   try {
     let revoked = false;
-    let closing: Promise<void> | undefined;
-    let nativeCleanupPending = false;
-    let candidateCleanupPending = false;
     let dispatched = false;
-    let discoveryFailed = false;
-    let outcome: { value: T } | { error: unknown };
     const assertCurrent = () => {
       if (revoked) {
         throw new WorkerTaskError("Session target discovery was revoked", "unavailable");
@@ -423,58 +403,69 @@ export async function withSessionHistoryWorkerReadCandidates<T>(
     };
     const releases: Array<() => void> = [];
     const release = () => {
-      for (const unregister of releases.toReversed()) {
+      for (const unregister of releases.splice(0).toReversed()) {
         unregister();
       }
     };
-    const retire = (): Promise<void> => {
-      closing ??= (async () => {
-        nativeCleanupPending = true;
-        try {
-          await rotateDatabaseWorkers(lane);
-          nativeCleanupPending = false;
-        } finally {
-          closing = undefined;
-        }
-      })();
-      return closing;
-    };
     const settleCandidates = async () => {
-      // Bun and failed discovery can retain native handles outside candidate custody.
-      if (discoveryFailed || process.versions.bun) {
-        await retire();
+      if (!dispatched) {
+        return;
+      }
+      dispatched = false;
+      if (!lane.pool.canCloseNativeResources()) {
+        await rotateDatabaseWorkers(lane);
         return;
       }
       const through = lane.nativeSequence;
-      candidateCleanupPending = true;
-      try {
-        await lane.pool.closeResources(JSON.stringify(selected));
-        candidateCleanupPending = false;
-        for (const resource of historyDatabases.values()) {
-          const sequence = resource.nativeSequences.get(lane);
+      const retained = new Set<string>();
+      for (const resource of historyDatabases.values()) {
+        if (resource.revoked || !resource.nativeSequences.has(lane)) {
+          continue;
+        }
+        for (const candidate of capturedCandidates) {
           if (
-            sequence !== undefined &&
-            sequence <= through &&
-            selected.some((candidate) =>
-              matchesAgentDatabaseReadCandidatePath(candidate, resource.database.path),
+            !matchesAgentDatabaseReadCandidatePath(
+              { ...candidate, path: candidate.physicalPath },
+              resource.database.path,
             )
           ) {
-            resource.nativeSequences.delete(lane);
+            continue;
           }
+          const alias = candidate.scope
+            ? path.join(path.dirname(candidate.path), path.basename(resource.database.path))
+            : candidate.path;
+          if (alias !== resource.database.path) {
+            resource.retainAlias(alias);
+          }
+          retained.add(resource.database.path);
         }
-        pruneHistoryDatabases();
-      } catch (error) {
-        try {
-          await retire();
-          candidateCleanupPending = false;
-        } catch (retirementError) {
-          throw sessionHistoryCleanupError(error, retirementError, "worker retirement");
-        }
-        throw error;
       }
+      // Discovery uses its captured paths; changing aliases mid-read is best effort.
+      await lane.pool.closeResources(
+        encodeAgentDatabaseReaderRequest({
+          kind: "close",
+          candidates: selected,
+          retainedPaths: [...retained],
+          deleted: false,
+        }),
+      );
+      for (const resource of historyDatabases.values()) {
+        const sequence = resource.nativeSequences.get(lane);
+        if (
+          sequence !== undefined &&
+          sequence <= through &&
+          !retained.has(resource.database.path) &&
+          selected.some((candidate) =>
+            matchesAgentDatabaseReadCandidatePath(candidate, resource.database.path),
+          )
+        ) {
+          resource.nativeSequences.delete(lane);
+        }
+      }
+      pruneHistoryDatabases();
     };
     const close = async () => {
-      await retire();
+      await rotateDatabaseWorkers(lane);
       release();
     };
     const retained = new Set<string>();
@@ -498,19 +489,27 @@ export async function withSessionHistoryWorkerReadCandidates<T>(
           );
         }
       }
-      assertCurrent();
       const readStoreTargetResult = async (
         request: Omit<SessionStoreTargetReadRequest, "candidates">,
       ): Promise<Result<SessionStoreTargetReadResult, unknown>> => {
-        const preparedRequest = { ...request, candidates: capturedCandidates };
-        const reply = await lane.pool.run(
-          () => {
-            assertCurrent();
-            dispatched = true;
-            lane.nativeSequence++;
-            return { kind: "session-store-target", request: preparedRequest };
-          },
-          { inputBytes: JSON.stringify(preparedRequest).length * 2, timeoutMs: 60_000 },
+        const preparedRequest = {
+          ...request,
+          env: captureSessionTranscriptStorageEnvironment(request.env),
+          candidates: capturedCandidates,
+        };
+        const reply = await runWithSqliteDatabaseAdmissionTurn(
+          admissionPaths,
+          () =>
+            lane.pool.run(
+              () => {
+                assertCurrent();
+                dispatched = true;
+                lane.nativeSequence++;
+                return { kind: "session-store-target", request: preparedRequest };
+              },
+              { inputBytes: JSON.stringify(preparedRequest).length * 2, timeoutMs: 60_000 },
+            ),
+          admissionFamilies,
         );
         const result = unwrapSessionTranscriptWorkerReply<SessionHistoryWorkerInput["kind"]>(reply);
         if (
@@ -521,13 +520,11 @@ export async function withSessionHistoryWorkerReadCandidates<T>(
         ) {
           throw new Error("Session history worker returned another result instead of store target");
         }
-        assertCurrent();
-        discoveryFailed ||= "readError" in result;
         return "readError" in result
           ? err(decodeSessionTranscriptWorkerReadError(result.readError))
           : ok(result);
       };
-      const value = await operation({
+      return await operation({
         assertCurrent,
         readStoreTargetResult,
         readStoreTarget: async (request) => {
@@ -538,18 +535,27 @@ export async function withSessionHistoryWorkerReadCandidates<T>(
           return read.value;
         },
         readTargetInventory: async (request) => {
-          const preparedRequest = { ...request, candidates: capturedCandidates };
-          const reply = await lane.pool.run(
-            () => {
-              assertCurrent();
-              dispatched = true;
-              lane.nativeSequence++;
-              return { kind: "session-target-inventory", request: preparedRequest };
-            },
-            {
-              inputBytes: measureSessionStoreTargetInventoryInputBytes(preparedRequest),
-              timeoutMs: 60_000,
-            },
+          const preparedRequest = {
+            ...request,
+            env: captureSessionTranscriptStorageEnvironment(request.env),
+            candidates: capturedCandidates,
+          };
+          const reply = await runWithSqliteDatabaseAdmissionTurn(
+            admissionPaths,
+            () =>
+              lane.pool.run(
+                () => {
+                  assertCurrent();
+                  dispatched = true;
+                  lane.nativeSequence++;
+                  return { kind: "session-target-inventory", request: preparedRequest };
+                },
+                {
+                  inputBytes: measureSessionStoreTargetInventoryInputBytes(preparedRequest),
+                  timeoutMs: 60_000,
+                },
+              ),
+            admissionFamilies,
           );
           const result =
             unwrapSessionTranscriptWorkerReply<SessionHistoryWorkerInput["kind"]>(reply);
@@ -563,53 +569,20 @@ export async function withSessionHistoryWorkerReadCandidates<T>(
               "Session history worker returned another result instead of target inventory",
             );
           }
-          if (result.kind === "session-target-inventory") {
-            // Best-effort inventory can encode a failed read instead of throwing it.
-            discoveryFailed ||= result.agents.some(
-              ({ result: inventory }) =>
-                !inventory.available && inventory.reason !== "database-missing",
-            );
-          }
           if (result.kind === "session-target-registry-required") {
             // Release native readers before registry work without discarding a healthy worker.
-            discoveryFailed ||= result.readFailed === true;
             await settleCandidates();
           }
-          assertCurrent();
           return result;
         },
       });
-      assertCurrent();
-      outcome = { value };
-    } catch (error) {
-      outcome = { error };
-    }
-    // Discovery custody includes lexical aliases. Keep it until physical readers
-    // settle; a later close through an alias must never miss a retained handle.
-    if (dispatched) {
+    } finally {
       try {
-        if ("error" in outcome) {
-          await retire();
-        } else {
-          await settleCandidates();
-        }
-      } catch (cleanupError) {
-        outcome = {
-          error:
-            "error" in outcome
-              ? sessionHistoryCleanupError(outcome.error, cleanupError, "worker retirement")
-              : cleanupError,
-        };
+        await settleCandidates();
+      } finally {
+        release();
       }
     }
-    if (!nativeCleanupPending && !candidateCleanupPending) {
-      release();
-    }
-    if ("error" in outcome) {
-      throw outcome.error;
-    }
-    assertCurrent();
-    return outcome.value;
   } finally {
     lane.pending--;
     armDatabaseWorkerIdleRetirement(lane);

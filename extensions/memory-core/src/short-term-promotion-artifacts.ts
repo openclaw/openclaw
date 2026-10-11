@@ -29,8 +29,6 @@ import type {
   ShortTermAuditIssue,
   ShortTermAuditSummary,
   ShortTermLockEntry,
-  ShortTermRecallEntry,
-  ShortTermRecallStore,
 } from "./short-term-promotion-types.js";
 import {
   MAX_RECALL_DAYS,
@@ -43,6 +41,19 @@ import {
 
 export { resolveStorePath as resolveShortTermRecallStorePath } from "./short-term-promotion-store.js";
 export { resolveLockPath as resolveShortTermRecallLockPath } from "./memory-workspace-lock.js";
+
+async function inspectStaleShortTermLock(workspaceDir: string, repair: boolean): Promise<boolean> {
+  const lockKey = memoryCoreWorkspaceStateKey(workspaceDir);
+  const lockStore = openMemoryCoreStateStore<ShortTermLockEntry>({
+    namespace: SHORT_TERM_LOCK_NAMESPACE,
+    maxEntries: SHORT_TERM_LOCK_MAX_ENTRIES,
+  });
+  const lockEntry = await lockStore.lookup(lockKey);
+  if (!lockEntry || !isShortTermLockStealable(lockEntry, Date.now())) {
+    return false;
+  }
+  return repair ? await deleteShortTermLockEntryIfCurrent(lockStore, lockKey, lockEntry) : true;
+}
 
 export async function auditShortTermPromotionArtifacts(params: {
   workspaceDir: string;
@@ -67,14 +78,14 @@ export async function auditShortTermPromotionArtifacts(params: {
   if (exists) {
     const store = normalizeShortTermRecallStore(raw, nowIso);
     const entries = Object.values(store.entries);
-    const taggedEntries = entries.filter((entry) => (entry.conceptTags?.length ?? 0) > 0);
+    const taggedEntries = entries.filter((entry) => entry.conceptTags.length > 0);
     updatedAt = store.updatedAt;
     entryCount = entries.length;
     promotedCount = entries.filter((entry) => Boolean(entry.promotedAt)).length;
-    spacedEntryCount = entries.filter((entry) => (entry.recallDays?.length ?? 0) > 1).length;
+    spacedEntryCount = entries.filter((entry) => entry.recallDays.length > 1).length;
     conceptTaggedEntryCount = taggedEntries.length;
     conceptTagScripts = summarizeConceptTagScriptCoverage(
-      taggedEntries.map((entry) => entry.conceptTags ?? []),
+      taggedEntries.map((entry) => entry.conceptTags),
     );
     invalidEntryCount = rawEntryCount - entryCount;
     if (invalidEntryCount > 0) {
@@ -108,21 +119,13 @@ export async function auditShortTermPromotionArtifacts(params: {
     }
   }
 
-  const lockKey = memoryCoreWorkspaceStateKey(workspaceDir);
-  const lockStore = openMemoryCoreStateStore<ShortTermLockEntry>({
-    namespace: SHORT_TERM_LOCK_NAMESPACE,
-    maxEntries: SHORT_TERM_LOCK_MAX_ENTRIES,
-  });
-  const lockEntry = await lockStore.lookup(lockKey);
-  if (lockEntry) {
-    if (isShortTermLockStealable(lockKey, lockEntry, Date.now())) {
-      issues.push({
-        severity: "warn",
-        code: "recall-lock-stale",
-        message: "Short-term promotion lock appears stale.",
-        fixable: true,
-      });
-    }
+  if (await inspectStaleShortTermLock(workspaceDir, false)) {
+    issues.push({
+      severity: "warn",
+      code: "recall-lock-stale",
+      message: "Short-term promotion lock appears stale.",
+      fixable: true,
+    });
   }
 
   return {
@@ -150,78 +153,46 @@ export async function repairShortTermPromotionArtifacts(params: {
   let removedInvalidEntries = 0;
   let removedDanglingEntries = 0;
   let removedOverflowEntries = 0;
-  let removedStaleLock = false;
-
-  const lockKey = memoryCoreWorkspaceStateKey(workspaceDir);
-  const lockStore = openMemoryCoreStateStore<ShortTermLockEntry>({
-    namespace: SHORT_TERM_LOCK_NAMESPACE,
-    maxEntries: SHORT_TERM_LOCK_MAX_ENTRIES,
-  });
-  const lockEntry = await lockStore.lookup(lockKey);
-  if (lockEntry && isShortTermLockStealable(lockKey, lockEntry, Date.now())) {
-    removedStaleLock = await deleteShortTermLockEntryIfCurrent(lockStore, lockKey, lockEntry);
-  }
+  const removedStaleLock = await inspectStaleShortTermLock(workspaceDir, true);
 
   await withMemoryWorkspaceLock(workspaceDir, async () => {
     const raw = await readShortTermStore(workspaceDir, "recall", nowIso);
     const rawEntryCount = Object.keys(raw.entries).length;
     if (rawEntryCount > 0) {
-      const normalized = normalizeShortTermRecallStore(raw, nowIso);
-      removedInvalidEntries = Math.max(0, rawEntryCount - Object.keys(normalized.entries).length);
-      const nextEntries = Object.fromEntries(
-        Object.entries(normalized.entries).map(([key, entry]) => {
-          const conceptTags = deriveConceptTags({ path: entry.path, snippet: entry.snippet });
-          const fallbackDay = normalizeIsoDay(entry.lastRecalledAt) ?? nowIso.slice(0, 10);
-          return [
-            key,
-            {
-              ...entry,
-              recallDays: mergeRecentDistinct(entry.recallDays ?? [], fallbackDay, MAX_RECALL_DAYS),
-              conceptTags: conceptTags.length > 0 ? conceptTags : (entry.conceptTags ?? []),
-            } satisfies ShortTermRecallEntry,
-          ];
-        }),
-      );
-      const comparableStore: ShortTermRecallStore = {
-        version: 1,
-        updatedAt: normalized.updatedAt,
-        entries: nextEntries,
-      };
-      const liveEntries = await filterLiveShortTermRecallEntries({
-        workspaceDir,
-        entries: Object.values(comparableStore.entries),
-      });
-      const liveEntryKeys = new Set(liveEntries.map((entry) => entry.key));
-      const danglingEntryKeys = new Set<string>();
-      for (const key of Object.keys(comparableStore.entries)) {
-        if (!liveEntryKeys.has(key)) {
-          delete comparableStore.entries[key];
-          danglingEntryKeys.add(key);
-          removedDanglingEntries += 1;
+      const store = normalizeShortTermRecallStore(raw, nowIso);
+      const before = JSON.stringify(store.entries);
+      removedInvalidEntries = Math.max(0, rawEntryCount - Object.keys(store.entries).length);
+      for (const entry of Object.values(store.entries)) {
+        const conceptTags = deriveConceptTags({ path: entry.path, snippet: entry.snippet });
+        const fallbackDay = normalizeIsoDay(entry.lastRecalledAt) ?? nowIso.slice(0, 10);
+        entry.recallDays = mergeRecentDistinct(entry.recallDays, fallbackDay, MAX_RECALL_DAYS);
+        if (conceptTags.length > 0) {
+          entry.conceptTags = conceptTags;
         }
       }
-      removedOverflowEntries = enforceShortTermRecallStoreRetention(comparableStore);
-      const needsRewrite =
-        removedInvalidEntries > 0 ||
-        removedDanglingEntries > 0 ||
-        removedOverflowEntries > 0 ||
-        JSON.stringify(normalized.entries) !== JSON.stringify(comparableStore.entries);
-      if (needsRewrite) {
-        let phaseSignals: Awaited<ReturnType<typeof readPhaseSignalStore>> | undefined;
+      const liveEntries = await filterLiveShortTermRecallEntries({
+        workspaceDir,
+        entries: Object.values(store.entries),
+      });
+      const liveEntryKeys = new Set(liveEntries.map((entry) => entry.key));
+      const danglingEntryKeys = Object.keys(store.entries).filter((key) => !liveEntryKeys.has(key));
+      removedDanglingEntries = danglingEntryKeys.length;
+      for (const key of danglingEntryKeys) {
+        delete store.entries[key];
+      }
+      removedOverflowEntries = enforceShortTermRecallStoreRetention(store);
+      if (removedInvalidEntries > 0 || before !== JSON.stringify(store.entries)) {
         if (removedDanglingEntries > 0) {
-          phaseSignals = await readPhaseSignalStore(workspaceDir, nowIso);
+          const phaseSignals = await readPhaseSignalStore(workspaceDir, nowIso);
           for (const key of danglingEntryKeys) {
             delete phaseSignals.entries[key];
           }
           phaseSignals.updatedAt = nowIso;
-        }
-        // Phase signals are derived from recall rows. Remove signals for recalls
-        // already proven dangling first so a later failure stays retryable.
-        if (phaseSignals) {
+          // Remove derived signals first so a later recall write failure stays retryable.
           await writePhaseSignalStore(workspaceDir, phaseSignals);
         }
         await writeStore(workspaceDir, {
-          ...comparableStore,
+          ...store,
           updatedAt: nowIso,
         });
         rewroteStore = true;
@@ -254,11 +225,7 @@ export async function removeGroundedShortTermCandidates(params: {
     ]);
 
     for (const [key, entry] of Object.entries(store.entries)) {
-      if (
-        Math.max(0, Math.floor(entry.groundedCount ?? 0)) > 0 &&
-        Math.max(0, Math.floor(entry.recallCount ?? 0)) === 0 &&
-        Math.max(0, Math.floor(entry.dailyCount ?? 0)) === 0
-      ) {
+      if (entry.groundedCount > 0 && entry.recallCount === 0 && entry.dailyCount === 0) {
         delete store.entries[key];
         removed += 1;
       }
@@ -273,10 +240,16 @@ export async function removeGroundedShortTermCandidates(params: {
     if (removed > 0) {
       store.updatedAt = nowIso;
       phaseSignals.updatedAt = nowIso;
-      await Promise.all([
+      const writes = [
         writeStore(workspaceDir, store),
         writePhaseSignalStore(workspaceDir, phaseSignals),
-      ]);
+      ];
+      try {
+        await Promise.all(writes);
+      } finally {
+        // A failed write cannot release the workspace while its sibling still mutates it.
+        await Promise.allSettled(writes);
+      }
     }
   });
 

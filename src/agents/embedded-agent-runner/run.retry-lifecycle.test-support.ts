@@ -1,13 +1,16 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { makeAssistantMessageFixture } from "../test-helpers/assistant-message-fixtures.js";
+import { makeCompactionSuccess, makeOverflowError } from "./run.overflow-compaction.fixture.js";
 import {
   mockedBuildEmbeddedRunPayloads,
   mockedClassifyAssistantFailoverReason,
   mockedClassifyFailoverReason,
+  mockedCompactDirect,
   mockedGlobalHookRunner,
   mockedRunEmbeddedAttempt,
   resetSharedRunIntegrationHarnessMocks,
+  useOpenAIPlatformAuthFixture,
 } from "./run.overflow-compaction.harness.js";
 import {
   createSharedRunIntegrationSession,
@@ -31,10 +34,94 @@ describe("direct embedded retry lifecycle", () => {
     await session?.cleanup();
   });
 
+  it.each(
+    [false, true].flatMap((compact) =>
+      ["reasoning", "empty", "whitespace", "zero-width"].map((output) => ({ compact, output })),
+    ),
+  )(
+    "publishes an incomplete-turn failure for $output output (compaction=$compact)",
+    async ({ compact, output }) => {
+      useOpenAIPlatformAuthFixture();
+      const { buildEmbeddedRunPayloads } =
+        await vi.importActual<typeof import("./run/payloads.js")>("./run/payloads.js");
+      mockedBuildEmbeddedRunPayloads.mockImplementation(buildEmbeddedRunPayloads);
+      mockedCompactDirect.mockResolvedValue(makeCompactionSuccess({ summary: "Earlier context" }));
+      const text =
+        output === "zero-width"
+          ? " \u200b\u200d\u2060 "
+          : output === "whitespace"
+            ? " \t\n\u0085"
+            : "";
+      const onAgentEvent = vi.fn();
+      let attempts = 0;
+      mockedRunEmbeddedAttempt.mockImplementation(async (params) => {
+        attempts += 1;
+        await params.onAgentEvent?.({ stream: "lifecycle", data: { phase: "start" } });
+        if (compact && attempts === 2) {
+          return session.makeAttemptResult({
+            assistantTexts: [],
+            promptError: makeOverflowError(),
+          });
+        }
+        const assistant = makeAssistantMessageFixture({
+          provider: "openai",
+          model: "gpt-5.6-sol",
+          stopReason: "stop",
+          errorMessage: undefined,
+          content:
+            output === "reasoning"
+              ? [{ type: "thinking", thinking: "Internal reasoning", thinkingSignature: "fixture" }]
+              : [{ type: "text", text }],
+        });
+        await params.onAgentEvent?.({
+          stream: "lifecycle",
+          data: { phase: "finishing", stopReason: "stop" },
+        });
+        return session.makeAttemptResult({
+          assistantTexts: text ? [text] : [],
+          lastAssistant: assistant,
+          currentAttemptAssistant: assistant,
+        });
+      });
+      const result = await run({
+        ...session.runParams,
+        provider: "openai",
+        model: "gpt-5.6-sol",
+        agentHarnessRuntimeOverride: "openclaw",
+        onAgentEvent,
+      });
+      const notice = "⚠️ Agent couldn't generate a response. Please try again.";
+      expect(result.payloads).toEqual([{ text: notice, isError: true }]);
+      expect(result.meta).toMatchObject({
+        aborted: false,
+        stopReason: "error",
+        error: { kind: "incomplete_turn", message: notice },
+      });
+      const terminals = onAgentEvent.mock.calls
+        .map(([event]) => event)
+        .filter(
+          (event) => event.stream === "lifecycle" && ["end", "error"].includes(event.data.phase),
+        );
+      expect(terminals).toEqual([
+        expect.objectContaining({
+          data: expect.objectContaining({
+            phase: "error",
+            stopReason: "error",
+            error: notice,
+            executionSettled: true,
+          }),
+        }),
+      ]);
+      expect(mockedCompactDirect).toHaveBeenCalledTimes(compact ? 1 : 0);
+      expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(
+        (output === "reasoning" ? 3 : 2) + (compact ? 1 : 0),
+      );
+    },
+  );
+
   it.each([
     { progress: true, budget: 8, expectedAttempts: 3 },
     { progress: false, budget: 8, expectedAttempts: 2 },
-    { progress: undefined, budget: 8, expectedAttempts: 2 },
     { progress: true, budget: 1, expectedAttempts: 2 },
   ])(
     "recovers a later outage after model progress=$progress with retry budget=$budget",

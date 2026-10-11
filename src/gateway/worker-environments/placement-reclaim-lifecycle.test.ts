@@ -5,7 +5,10 @@ import {
 } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { NODE_WORKER_ENVIRONMENT_STOP_COMMAND } from "../../infra/node-commands.js";
-import type { NodeWorkerWorkspaceExecInput } from "../../worker/node-workspace-protocol.js";
+import {
+  NODE_WORKSPACE_QUIESCENCE_COMMAND,
+  type NodeWorkerWorkspaceExecInput,
+} from "../../worker/node-workspace-protocol.js";
 import { createNodeWorkerTunnelManager } from "./node-worker-tunnel.js";
 import * as nodeSupport from "./node-worker-tunnel.test-support.js";
 import { coordinateWorkerPlacementDispatch } from "./placement-dispatch-coordinator.js";
@@ -15,11 +18,6 @@ import { createWorkerPlacementIdleSweep } from "./placement-idle-sweep.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
 import * as support from "./service.test-support.js";
 import type { WorkerTunnelManager } from "./tunnel.js";
-import {
-  REMOTE_WORKSPACE_QUIESCE_JS,
-  REMOTE_WORKSPACE_RENEW_QUIESCENCE_JS,
-  REMOTE_WORKSPACE_RESUME_JS,
-} from "./workspace-quiescence-scripts.js";
 
 describe("placement reclaim with provider-owned node teardown", () => {
   support.setupWorkerEnvironmentServiceSuite();
@@ -95,8 +93,8 @@ describe("placement reclaim with provider-owned node teardown", () => {
           runId: "pending-run",
           owner: { kind: "worker", environmentId, ownerEpoch: attached.ownerEpoch },
         });
-        placements.markWorkspaceResultPending(claim);
-        placements.startWorkspaceResultDrain(claim);
+        await placements.markWorkspaceResultPending(claim);
+        await placements.startWorkspaceResultDrain(claim);
         placements = createWorkerSessionPlacementStore({ database: support.testState.stateDb });
         harness = createHarness(support.testState.stateDb, placements, harnessOptions);
       }
@@ -105,17 +103,23 @@ describe("placement reclaim with provider-owned node teardown", () => {
       const nodes = await transport.listCurrentNodes();
       nodes[0]!.nodeId = attached.nodeDeviceId!;
       transport.listCurrentNodes = async () => nodes;
-      const nonce = "d".repeat(32);
       const invoke = vi.fn<typeof transport.invoke>(async ({ command, params }) => {
         if (command === NODE_WORKER_ENVIRONMENT_STOP_COMMAND) {
           return { ok: true, payloadJSON: "null" };
         }
         const input = params as NodeWorkerWorkspaceExecInput;
+        const quiescence = input.quiescence;
+        if (quiescence) {
+          expect(input.argv).toEqual([
+            NODE_WORKSPACE_QUIESCENCE_COMMAND,
+            active.remoteWorkspaceDir,
+          ]);
+        }
         const stdout =
-          input.argv[2] === REMOTE_WORKSPACE_QUIESCE_JS
-            ? `quiesced ${nonce}`
-            : input.argv[2] === REMOTE_WORKSPACE_RENEW_QUIESCENCE_JS
-              ? `renewed ${nonce}`
+          quiescence?.action === "acquire"
+            ? `quiesced ${quiescence.nonce}`
+            : quiescence?.action === "renew"
+              ? `renewed ${quiescence.nonce}`
               : MANIFEST_REF;
         return {
           ok: true,
@@ -259,8 +263,7 @@ describe("placement reclaim with provider-owned node teardown", () => {
           expect(
             invoke.mock.calls.filter(
               ([call]) =>
-                (call.params as NodeWorkerWorkspaceExecInput).argv?.[2] ===
-                REMOTE_WORKSPACE_RESUME_JS,
+                (call.params as NodeWorkerWorkspaceExecInput).quiescence?.action === "release",
             ),
           ).toEqual([]);
           return;
@@ -276,8 +279,7 @@ describe("placement reclaim with provider-owned node teardown", () => {
           expect(
             invoke.mock.calls.filter(
               ([call]) =>
-                (call.params as NodeWorkerWorkspaceExecInput).argv?.[2] ===
-                REMOTE_WORKSPACE_RESUME_JS,
+                (call.params as NodeWorkerWorkspaceExecInput).quiescence?.action === "release",
             ),
           ).toHaveLength(1);
           await expect(coordinated.reclaim(request)).resolves.toMatchObject({
@@ -310,7 +312,7 @@ describe("placement reclaim with provider-owned node teardown", () => {
           expect.soft(outcome).toBe(primaryError);
         }
         expect(placements.get(active.sessionId)?.state).toBe("draining");
-        expect(placements.listPendingWorkspaceResults()).toEqual([
+        expect(await placements.listPendingWorkspaceResultsAsync()).toEqual([
           expect.objectContaining({ workspaceAcceptedAtMs: expect.any(Number) }),
         ]);
         expect(destroy).toHaveBeenCalledOnce();
@@ -321,15 +323,14 @@ describe("placement reclaim with provider-owned node teardown", () => {
           turnClaim: null,
           recoveryError: null,
         });
-        expect(placements.listPendingWorkspaceResults()).toEqual([]);
+        expect(await placements.listPendingWorkspaceResultsAsync()).toEqual([]);
         expect(service.get(environmentId)?.state).toBe("destroyed");
         expect(destroy).toHaveBeenCalledTimes(2);
         expect(harness.environments.startTunnel).toHaveBeenCalledOnce();
         expect(
           invoke.mock.calls.filter(
             ([call]) =>
-              (call.params as NodeWorkerWorkspaceExecInput).argv?.[2] ===
-              REMOTE_WORKSPACE_RESUME_JS,
+              (call.params as NodeWorkerWorkspaceExecInput).quiescence?.action === "release",
           ),
         ).toEqual([]);
       } finally {
@@ -407,6 +408,7 @@ describe("SSH placement cleanup after worker credential expiry", () => {
           placements,
           environments: service,
           dispatch: harness.service,
+          reportChanges: (sweep) => sweep(),
           getConfig: () => support.testState.config,
           now: () => support.testState.nowMs,
           info: vi.fn(),
@@ -423,7 +425,7 @@ describe("SSH placement cleanup after worker credential expiry", () => {
         state: operation === "move" ? "local" : "reclaimed",
         turnClaim: null,
       });
-      expect(placements.listPendingWorkspaceResults()).toEqual([]);
+      expect(await placements.listPendingWorkspaceResultsAsync()).toEqual([]);
     },
   );
 });

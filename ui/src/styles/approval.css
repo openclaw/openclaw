@@ -307,15 +307,7 @@
 }
 
 .approval-page__action--allow-once:hover:not(:disabled) {
-  border-color: var(--accent-hover);
-  background: var(--accent-hover);
-}
-
-:root[data-theme="dark"] .approval-page__action--allow-once:hover:not(:disabled) {
-  background: var(--primary-hover);
-}
-
-:root[data-theme="openknot"] .approval-page__action--allow-once:hover:not(:disabled) {
+  border-color: var(--primary-hover);
   background: var(--primary-hover);
 }
 
@@ -387,7 +379,7 @@
   border: 2px solid var(--border-strong);
   border-top-color: var(--accent);
   border-radius: 50%;
-  animation: approval-page-spin 800ms linear infinite;
+  animation: btn-spinner-spin 800ms linear infinite;
 }
 
 .approval-page__state-mark {
@@ -414,12 +406,6 @@
 
 .approval-page__back-link:hover {
   color: var(--text-strong);
-}
-
-@keyframes approval-page-spin {
-  to {
-    transform: rotate(360deg);
-  }
 }
 
 @media (max-width: 640px) {

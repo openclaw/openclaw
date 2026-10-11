@@ -3,7 +3,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import type { ControlUiNavigationItem } from "../../../src/plugin-sdk/control-ui.js";
 import type { GatewayControlUiPluginTab } from "../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../api/types.ts";
-import { SIDEBAR_NAV_ROUTES } from "../app-navigation.ts";
+import { parseSidebarEntry, serializeSidebarEntry, SIDEBAR_NAV_ROUTES } from "../app-navigation.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { listSelectableAgents } from "../lib/agents/display.ts";
 import { resolveSessionChannelPresentation } from "../lib/session-channel.ts";
@@ -22,7 +22,6 @@ import {
   sessionMatchesVisibleSessionScope,
 } from "../lib/sessions/index.ts";
 import {
-  areUiSessionKeysEquivalent,
   buildAgentMainSessionKey,
   isAcpSessionKey,
   isSubagentSessionKey,
@@ -46,6 +45,7 @@ import {
   type SidebarSessionStatusFilter,
 } from "./app-sidebar-session-types.ts";
 import { resolveCloudWorkerStopAction } from "./cloud-worker-stop.ts";
+import { restoreSnapshotSession, type SidebarSnapshotModel } from "./sidebar-snapshot-model.ts";
 
 type SessionRow = SessionsListResult["sessions"][number];
 
@@ -195,24 +195,28 @@ export function buildSidebarSessionNavigationState(input: {
       participantCount: row.participantCount,
       archivedBy: row.archivedBy,
       // Parent attention attributes subagent failures with the worker's own label.
-      label: resolveSessionDisplayName(row.key, row, { includeSubagentPrefix: false }),
+      label: resolveSessionDisplayName(row.key, row),
       userLabel: row.label,
       renameValue: resolveSessionRenameValue(row),
       subtitle: resolveSessionWorkSubtitle(row),
       workContext: resolveSessionWorkContext(row),
       active: row.key === navigation.activeRowKey,
       visuallyActive: input.highlightCurrentSession && row.key === navigation.currentSessionKey,
-      // Normalize optional gateway state before collapsing it to the sidebar's required fact.
       hasActiveRun: row.archived !== true && isSessionRunActive(row),
       gatewayHasActiveRun: row.hasActiveRun,
+      hasActiveSubagentRun: row.hasActiveSubagentRun,
       activeRunIds: row.archived === true ? undefined : row.activeRunIds,
       modelSelectionLocked: row.modelSelectionLocked === true,
       kind: row.kind,
       pinned: row.pinned === true,
       pinnable: isPinnableUiSessionRow(row),
+      sidebarRoot: row.sidebarRoot,
+      snoozedUntil: row.snoozedUntil,
       archived: row.archived === true,
       visibility: row.visibility,
       sharingRole: row.sharingRole,
+      communication: row.communication,
+      effectiveCommunication: row.effectiveCommunication,
       draftOwnedBySelf: isSidebarDraftOwnedBySelf(row, context?.gateway.snapshot.selfUser?.id),
       category: normalizeOptionalString(row.category),
       icon: normalizeOptionalString(row.icon),
@@ -250,7 +254,7 @@ export function buildSidebarSessionNavigationState(input: {
       hasAutomation: row.hasAutomation === true,
       pullRequest: context?.sessions.pullRequestSummary(row.key),
       outboxAttentionCount: input.outboxAttentionCountForSessionKey(row.key),
-      hasComposerDraft: input.hasSessionDraft(row.key),
+      hasComposerDraft: row.incognito !== true && input.hasSessionDraft(row.key),
       unread: row.archived !== true && row.unread === true,
       hiddenFromInvolvingMe: row.hiddenFromInvolvingMe,
       lastMessagePreview: normalizeOptionalString(row.lastMessagePreview),
@@ -293,9 +297,26 @@ export function buildReconciledSidebarZone(input: {
   rows: SidebarRecentSession[];
   pluginNavigation: readonly ControlUiRegistration<ControlUiNavigationItem>[];
   pluginTabs: readonly GatewayControlUiPluginTab[] | undefined;
+  snapshot?: { model: SidebarSnapshotModel; selectedKey: string };
+  pendingPlugins?: Pick<SidebarSnapshotModel, "entries" | "plugins"> | null;
 }) {
+  if (input.snapshot) {
+    const { model, selectedKey } = input.snapshot;
+    const restoredRows = [...model.sessions, ...model.pinnedSessions].map((row) =>
+      restoreSnapshotSession(row, selectedKey),
+    );
+    return {
+      entries: model.entries.flatMap((entry) => {
+        const parsed = parseSidebarEntry(entry);
+        return parsed ? [parsed] : [];
+      }),
+      sidebarEntries: model.entries,
+      sessionRows: new Map(restoredRows.map((row) => [row.key, row])),
+      pluginTabs: new Map(model.plugins.map(({ key, ...tab }) => [key, tab])),
+    };
+  }
   const navigation = input.pluginNavigation;
-  const occupiedPlacements = new Set(input.sidebarEntries);
+  const occupiedPlacements = new Set(SIDEBAR_NAV_ROUTES.map((route) => `route:${route}`));
   const pluginTabs = new Map(
     sidebarPluginTabs(input.pluginTabs)
       .filter(
@@ -307,31 +328,42 @@ export function buildReconciledSidebarZone(input: {
       )
       .map((tab) => [pluginTabKey(tab), tab]),
   );
-  const defaultPluginNavigationKeys = new Set([
-    ...pluginTabs.keys(),
-    ...navigation
-      .filter((entry) => entry.value.defaultVisible !== false)
-      .toSorted((a, b) => (a.value.order ?? 0) - (b.value.order ?? 0) || a.key.localeCompare(b.key))
-      .map((entry) => entry.key),
-  ]);
-  const pinnedRows = input.rows.filter((row) => row.pinned);
-  // Only loaded rows count as authoritative unpinned state; entries for
-  // other agents' sessions must survive canonical writes untouched.
-  const knownUnpinnedKeys = new Set(input.rows.filter((row) => !row.pinned).map((row) => row.key));
+  const availableRows = input.rows;
   const reconciled = reconcileSidebarZone(
     input.sidebarEntries,
-    pinnedRows,
+    availableRows,
     SIDEBAR_NAV_ROUTES,
-    knownUnpinnedKeys,
     new Set([...pluginTabs.keys(), ...navigation.map((entry) => entry.key)]),
-    defaultPluginNavigationKeys,
   );
-  return {
+  const live = {
     ...reconciled,
-    sessionRows: new Map(pinnedRows.map((row) => [row.key, row])),
+    sessionRows: new Map(availableRows.map((row) => [row.key, row])),
     pluginTabs,
-    defaultPluginNavigationKeys,
   };
+  const retained = input.pendingPlugins;
+  if (retained) {
+    const visible = new Set(live.entries.map(serializeSidebarEntry));
+    for (const [index, key] of retained.entries.entries()) {
+      const entry = parseSidebarEntry(key);
+      if (entry?.type !== "plugin" || visible.has(key)) {
+        continue;
+      }
+      const tab = retained.plugins.find((plugin) => plugin.key === entry.key);
+      if (!tab) {
+        continue;
+      }
+      live.pluginTabs.set(entry.key, tab);
+      const following = retained.entries
+        .slice(index + 1)
+        .find((candidate) => visible.has(candidate));
+      const position = following
+        ? live.entries.findIndex((candidate) => serializeSidebarEntry(candidate) === following)
+        : live.entries.length;
+      live.entries.splice(position, 0, entry);
+      visible.add(key);
+    }
+  }
+  return live;
 }
 
 type SidebarSessionSelection = {
@@ -441,18 +473,10 @@ export function collectCategorizedChildRootRows(input: {
     (row) =>
       !scopedRootKeys.has(row.key) &&
       !isSubagentSessionKey(row.key) &&
-      normalizeOptionalString(row.category) != null &&
+      (row.sidebarRoot === true || normalizeOptionalString(row.category) != null) &&
       resolveUiSessionNavigationParentKey(row) != null &&
       sessionMatchesVisibleSessionScope(row, input.visibilityOptions),
   );
-}
-
-export function resolveSidebarAgentResumeKey(
-  latest: SessionRow | null,
-  agentId: string,
-  mainKey: string,
-): string {
-  return latest?.key ?? buildAgentMainSessionKey({ agentId, mainKey });
 }
 
 export function collectKnownSidebarSessionCatalogIds(input: {
@@ -488,13 +512,6 @@ export function resolveSidebarMainSessionKey(input: {
   });
 }
 
-export function findSidebarMainSessionRow(
-  rows: readonly GatewaySessionRow[],
-  mainKey: string,
-): GatewaySessionRow | null {
-  return rows.find((row) => areUiSessionKeysEquivalent(row.key, mainKey)) ?? null;
-}
-
 /** Search the projected tree without flattening folded descendant state. */
 export function findSidebarSessionInTree(
   roots: readonly SidebarRecentSession[],
@@ -528,4 +545,58 @@ export function findProjectedSidebarSession(input: {
     }
   }
   return undefined;
+}
+
+/** Live canonical requests outlive a paginated row, but never supply its old private metadata. */
+export function projectSidebarVisibleMainSession(
+  host: {
+    mainSessionRow(agentId: string): GatewaySessionRow | null;
+    projectHomeSession(
+      row: GatewaySessionRow,
+      agentId: string,
+    ): SidebarRecentSession & { metadataVisible: boolean };
+    selectedAgentMainSessionKey(agentId: string): string;
+    readonly sessionOwnerFilterActive: boolean;
+    readonly sessionInvolvingMeFilterActive: boolean;
+    readonly sessionsStatusFilter: SidebarSessionStatusFilter;
+    readonly sessionDataContext: Pick<ApplicationContext, "sessions"> | undefined;
+    getSessionNavigationState(): SidebarSessionNavigationState;
+    resolveSessionAttention(
+      row: Pick<GatewaySessionRow, "key" | "agentId">,
+    ): SidebarRecentSession["attention"];
+  },
+  agentId: string,
+): SidebarRecentSession | null {
+  const row = host.mainSessionRow(agentId);
+  if (row) {
+    const home = host.projectHomeSession(row, agentId);
+    return home.metadataVisible ? home : null;
+  }
+  const key = host.selectedAgentMainSessionKey(agentId);
+  if (
+    host.sessionOwnerFilterActive ||
+    host.sessionInvolvingMeFilterActive ||
+    (host.sessionsStatusFilter !== "active" && host.sessionsStatusFilter !== "all") ||
+    host.sessionDataContext?.sessions.deletionState(key, agentId)
+  ) {
+    return null;
+  }
+  const attention = host.resolveSessionAttention({ key, agentId });
+  if (attention.kind !== "question" && attention.kind !== "approval") {
+    return null;
+  }
+  return {
+    ...host
+      .getSessionNavigationState()
+      .toSidebarSession({ key, agentId, kind: "direct", updatedAt: 0 }),
+    label: "",
+    renameValue: "",
+    attention,
+    ownAttention: attention,
+    pullRequest: undefined,
+    agentStatusNote: undefined,
+    workSession: false,
+    outboxAttentionCount: 0,
+    hasComposerDraft: false,
+  };
 }

@@ -8,17 +8,18 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { z } from "zod";
 import type { SessionCatalogTranscriptItem } from "../../packages/gateway-protocol/src/schema/sessions-catalog.js";
 import { readTranscriptSenderIdentity } from "../chat/sender-identity.js";
-import { loadSessionEntryReadOnly } from "../config/sessions/session-accessor.js";
 import type { SessionTranscriptReadScope } from "../config/sessions/session-accessor.sqlite-contract.js";
+import { resolveSessionEntry } from "../config/sessions/session-accessor.sqlite-exact-read.js";
 import { readSessionTranscriptHistoryEventPage } from "../config/sessions/session-accessor.sqlite-history-events.js";
 import { SessionTranscriptColdError } from "../config/sessions/session-cold-storage-state.js";
+import { assertCapturedSessionEntryReadSource } from "../config/sessions/session-entry-read-source.js";
 import { resolveSessionStorePathForScope } from "../config/sessions/session-store-path.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { redactToolPayloadText } from "../logging/redact.js";
 import { isAssistantTextContentType } from "./chat-display-projection.helpers.js";
 import { projectChatDisplayMessages } from "./chat-display-projection.js";
 import { isSuppressedControlReplyText } from "./control-reply-text.js";
-import { createSessionCatalogSourceParticipantProjector } from "./session-catalog-identity.js";
+import { prepareSessionCatalogSourceParticipantProjector } from "./session-catalog-identity.js";
 import { projectSessionDisplayMessage } from "./session-display-projection.js";
 import { sqliteMessageEventWithSeq } from "./session-transcript-entry-message.js";
 import { deriveSessionTitle } from "./session-utils-core.js";
@@ -122,7 +123,9 @@ function projectContentItem(
 function projectMessageItems(
   message: Record<string, unknown>,
   params: CatalogReadParams,
-  projectSender: ReturnType<typeof createSessionCatalogSourceParticipantProjector>,
+  projectSender: Awaited<
+    ReturnType<typeof prepareSessionCatalogSourceParticipantProjector>
+  >["project"],
 ): SessionCatalogTranscriptItem[] {
   const metadata = asOptionalRecord(message["__openclaw"]);
   const identity =
@@ -171,7 +174,18 @@ export async function readSessionTranscriptCatalogPage(
     throw new Error(`Session transcript limit must be an integer from 1 to ${MAX_CATALOG_ITEMS}.`);
   }
   const storePath = resolveSessionStorePathForScope(params);
-  const entry = loadSessionEntryReadOnly({ ...params, storePath });
+  let assertSourceCurrent: () => void = () => {
+    throw new Error("Session source was not captured");
+  };
+  const entry = resolveSessionEntry(
+    { ...params, storePath },
+    {
+      readOnly: true,
+      onReadSource: (source) => {
+        assertSourceCurrent = () => assertCapturedSessionEntryReadSource(source);
+      },
+    },
+  ).existing;
   if (!entry) {
     throw new Error("Session not found; refresh the session catalog.");
   }
@@ -229,23 +243,40 @@ export async function readSessionTranscriptCatalogPage(
   let skip = cursor?.skip ?? 0;
   let scanned = 0;
   const items: SessionCatalogTranscriptItem[] = [];
-  const projectSender = createSessionCatalogSourceParticipantProjector();
+  const senderProjectors = new Map<
+    string,
+    Awaited<ReturnType<typeof prepareSessionCatalogSourceParticipantProjector>>
+  >();
   while (before > 0 && items.length < limit && scanned < MAX_CATALOG_SCAN_MESSAGES) {
     const page = readCatalogHistoryPage(scope, {
       offset: snapshot.totalMessages - before,
       maxMessages: Math.min(before, limit + 1),
     });
-    // A source append preserves positions; a rewrite rotates displaySource and invalidates cursors.
-    if (
-      page.displaySource !== snapshot.displaySource ||
-      page.activeLeafEntryId !== snapshot.activeLeafEntryId ||
-      page.totalMessages !== snapshot.totalMessages
-    ) {
-      throw new Error("Session transcript changed during this read; retry the page.");
-    }
     const projected = projectChatDisplayMessages(page.events.map(sqliteMessageEventWithSeq), {
       maxChars: MAX_CATALOG_TEXT_CHARS,
+      // Catalog assistant items contain text/model facts, not forwarded sender labels.
+      resolveCronJobName: () => undefined,
     });
+    const identities = projected.flatMap((message) => {
+      const metadata = asOptionalRecord(message["__openclaw"]);
+      const identity =
+        message.role === "user"
+          ? readTranscriptSenderIdentity(metadata?.senderIdentity)
+          : undefined;
+      return identity && (identity.type !== "profile" || !senderProjectors.has(identity.id))
+        ? [identity]
+        : [];
+    });
+    const preparedSender = await prepareSessionCatalogSourceParticipantProjector(identities);
+    for (const identity of identities) {
+      if (identity.type === "profile") {
+        senderProjectors.set(identity.id, preparedSender);
+      }
+    }
+    const projectSender: typeof preparedSender.project = (sender) =>
+      sender.identity.type === "profile"
+        ? senderProjectors.get(sender.identity.id)!.project(sender)
+        : preparedSender.project(sender);
     const bySequence = new Map<unknown, SessionCatalogTranscriptItem[]>();
     for (const message of projected.toReversed()) {
       const seq = asOptionalRecord(message["__openclaw"])?.seq;
@@ -275,6 +306,7 @@ export async function readSessionTranscriptCatalogPage(
       break;
     }
   }
+  assertSourceCurrent();
   const nextCursor =
     before > 0 && anchor
       ? Buffer.from(

@@ -1,3 +1,4 @@
+import { readNonBlankString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   escapeCustomIdFieldValue,
   needsCustomIdFieldEscaping,
@@ -58,28 +59,27 @@ function decodeParsedCustomIdData(
   ) as ComponentParserResult["data"];
 }
 
+function buildDiscordFieldCustomId(key: string, fields: Record<string, string>): string {
+  const encoded = Object.values(fields).some(needsCustomIdFieldEscaping);
+  const parts = Object.entries(fields).map(
+    ([name, value]) => `${name}=${encoded ? escapeCustomIdFieldValue(value) : value}`,
+  );
+  const prefix = encoded ? `${key}:e=${ENCODED_CUSTOM_ID_VERSION};` : `${key}:`;
+  return prefix + parts.join(";");
+}
+
 export function buildDiscordComponentCustomId(params: {
   componentId: string;
   modalId?: string;
 }): string {
-  const encoded =
-    needsCustomIdFieldEscaping(params.componentId) ||
-    needsCustomIdFieldEscaping(params.modalId ?? "");
-  const componentId = encoded ? escapeCustomIdFieldValue(params.componentId) : params.componentId;
-  const base = encoded
-    ? `${DISCORD_COMPONENT_CUSTOM_ID_KEY}:e=${ENCODED_CUSTOM_ID_VERSION};cid=${componentId}`
-    : `${DISCORD_COMPONENT_CUSTOM_ID_KEY}:cid=${componentId}`;
-  const modalId = params.modalId;
-  if (!modalId) {
-    return base;
-  }
-  return `${base};mid=${encoded ? escapeCustomIdFieldValue(modalId) : modalId}`;
+  return buildDiscordFieldCustomId(DISCORD_COMPONENT_CUSTOM_ID_KEY, {
+    cid: params.componentId,
+    ...(params.modalId ? { mid: params.modalId } : {}),
+  });
 }
 
 export function buildDiscordModalCustomId(modalId: string): string {
-  return needsCustomIdFieldEscaping(modalId)
-    ? `${DISCORD_MODAL_CUSTOM_ID_KEY}:e=${ENCODED_CUSTOM_ID_VERSION};mid=${escapeCustomIdFieldValue(modalId)}`
-    : `${DISCORD_MODAL_CUSTOM_ID_KEY}:mid=${modalId}`;
+  return buildDiscordFieldCustomId(DISCORD_MODAL_CUSTOM_ID_KEY, { mid: modalId });
 }
 
 export function parseDiscordComponentCustomId(
@@ -90,14 +90,13 @@ export function parseDiscordComponentCustomId(
     return null;
   }
   const data = decodeParsedCustomIdData(parsed.data);
-  const componentId = data.cid;
-  if (typeof componentId !== "string" || !componentId.trim()) {
+  const componentId = readNonBlankString(data.cid);
+  if (!componentId) {
     return null;
   }
-  const modalId = data.mid;
   return {
     componentId,
-    modalId: typeof modalId === "string" && modalId.trim() ? modalId : undefined,
+    modalId: readNonBlankString(data.mid),
   };
 }
 
@@ -106,20 +105,11 @@ export function parseDiscordModalCustomId(id: string): string | null {
   if (parsed.key !== DISCORD_MODAL_CUSTOM_ID_KEY) {
     return null;
   }
-  const data = decodeParsedCustomIdData(parsed.data);
-  const modalId = data.mid;
-  if (typeof modalId !== "string" || !modalId.trim()) {
-    return null;
-  }
-  return modalId;
-}
-
-function isDiscordComponentWildcardRegistrationId(id: string): boolean {
-  return /^__openclaw_discord_component_[a-z_]+_wildcard__$/.test(id);
+  return readNonBlankString(decodeParsedCustomIdData(parsed.data).mid) ?? null;
 }
 
 function parseDiscordCustomIdForInteraction(id: string, key: string): ComponentParserResult {
-  if (id === "*" || isDiscordComponentWildcardRegistrationId(id)) {
+  if (id === "*" || /^__openclaw_discord_component_[a-z_]+_wildcard__$/.test(id)) {
     return { key: "*", data: {} };
   }
   const parsed = parseCustomId(id);

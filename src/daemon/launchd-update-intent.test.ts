@@ -214,7 +214,12 @@ beforeEach(async () => {
       prints++;
       onPrint?.();
       return isPidAlive(pid)
-        ? { code: 0, termination: "exit", stdout: `state = running\npid = ${pid}\n`, stderr: "" }
+        ? {
+            code: 0,
+            termination: "exit",
+            stdout: `${args[1]} = {\n\tstate = running\n\tpid = ${pid}\n}`,
+            stderr: "",
+          }
         : { code: 113, termination: "exit", stdout: "", stderr: "Could not find service" };
     }
     if (args[0] === "bootout" || args[0] === "disable") {
@@ -242,13 +247,19 @@ afterEach(async () => {
 });
 
 describe("managed-update LaunchAgent stop intent", () => {
-  it("records authenticated direct-original update intent in the effective service database before bootout", async () => {
-    await stop();
-    expect(atBootout).toMatchObject({ pid, reason: "update.run" });
-    expect(mutations).toEqual(["bootout"]);
-    expect(isPidAlive(pid)).toBe(false);
-    expect(fs.existsSync(env.OPENCLAW_STATE_DIR!)).toBe(false);
-  });
+  it.each(["direct-original", "transferred"])(
+    "records authenticated %s intent in the effective service database before bootout",
+    async (authority) => {
+      if (authority === "transferred") {
+        await transferred();
+      }
+      await stop();
+      expect(atBootout).toMatchObject({ pid, reason: "update.run" });
+      expect(mutations).toEqual(["bootout"]);
+      expect(isPidAlive(pid)).toBe(false);
+      expect(fs.existsSync(env.OPENCLAW_STATE_DIR!)).toBe(false);
+    },
+  );
   it.each(["unchanged", "lock-replaced", "native-pid-reused"])(
     "revalidates legacy serving identity before bootout: %s",
     async (change) => {
@@ -302,25 +313,21 @@ describe("managed-update LaunchAgent stop intent", () => {
       }
     },
   );
-  it("allows an already stopped service without creating restart intent", async () => {
-    await stopChildProcess(child, 5000);
-    await closed;
-    database().prepare("DELETE FROM state_leases WHERE scope='gateway-owner'").run();
-    await stop();
-    expect(atBootout).toBeUndefined();
-    expect(mutations).toEqual(["bootout"]);
-  });
-  it("leaves explicit Stop terminal despite a handoff tuple and inherited flag", async () => {
-    env.OPENCLAW_UPDATE_RUN_HANDOFF = "1";
-    await stop(false);
-    expect(atBootout).toBeUndefined();
-    expect(mutations).toEqual(["bootout"]);
-  });
-  it("admits a transferred current executor using selected metadata, not ambient process.env", async () => {
-    await transferred();
-    await stop();
-    expect(atBootout).toMatchObject({ pid, reason: "update.run" });
-  });
+  it.each(["already-stopped", "explicit-stop"])(
+    "does not record restart intent for %s",
+    async (mode) => {
+      if (mode === "already-stopped") {
+        await stopChildProcess(child, 5000);
+        await closed;
+        database().prepare("DELETE FROM state_leases WHERE scope='gateway-owner'").run();
+      } else {
+        env.OPENCLAW_UPDATE_RUN_HANDOFF = "1";
+      }
+      await stop(mode === "already-stopped");
+      expect(atBootout).toBeUndefined();
+      expect(mutations).toEqual(["bootout"]);
+    },
+  );
   it.each(["missing", "missing-marker", "wrong-run", "replaced", "wrong-pid", "stale-process"])(
     "refuses %s transferred authority without stopping",
     async (fault) => {
@@ -370,119 +377,99 @@ describe("managed-update LaunchAgent stop intent", () => {
       expect(isPidAlive(pid)).toBe(true);
     },
   );
-  it("refuses a serving owner that is live but outside the selected service PID", async () => {
-    const row = database()
-      .prepare("SELECT payload_json FROM state_leases WHERE scope='gateway-owner'")
-      .get()!;
-    const payload = JSON.parse(String(row.payload_json));
-    payload.owner = {
-      pid: process.pid,
-      host: hostname(),
-      startedAt: getFileLockProcessStartTime(process.pid),
-    };
-    database()
-      .prepare("UPDATE state_leases SET payload_json=? WHERE scope='gateway-owner'")
-      .run(JSON.stringify(payload));
-    await expect(stop()).rejects.toThrow("Cannot verify a live serving Gateway owner");
-    expect(mutations).toEqual([]);
-    expect(isPidAlive(pid)).toBe(true);
-  });
-  it("refuses replacement owner during native revalidation", async () => {
-    onPrint = () => {
-      if (prints === 3) {
-        database()
-          .prepare("UPDATE state_leases SET owner='new-owner' WHERE scope='gateway-owner'")
-          .run();
-      }
-    };
-    await expect(stop()).rejects.toThrow("Cannot verify a live serving Gateway owner");
-    expect(mutations).toEqual([]);
-    expect(intentRow()).toBeUndefined();
-  });
-  it("preserves runtime and disable policy if effective command preparation fails", async () => {
-    fs.rmSync(resolveLaunchAgentPlistPath(env));
-    await expect(stop(true, true)).rejects.toThrow(
-      "Effective LaunchAgent service command could not be inspected.",
-    );
-    expect(mutations).toEqual([]);
-    expect(isPidAlive(pid)).toBe(true);
-    expect(intentRow()).toBeUndefined();
-  });
-  it("refuses a revoked update owner before any native mutation", async () => {
-    onPrint = () => {
-      if (prints === 3) {
-        revoked = true;
-      }
-    };
-    await expect(stop()).rejects.toThrow("update owner revoked");
-    expect(mutations).toEqual([]);
-    expect(isPidAlive(pid)).toBe(true);
-  });
-  it("refuses a new serving owner after intent recording but before native mutation", async () => {
-    const write = existingWrites.runExistingOpenClawStateWriteTransaction;
-    vi.spyOn(existingWrites, "runExistingOpenClawStateWriteTransaction").mockImplementation(
-      (mutate, options, contract) => {
-        const result = write(mutate, options, contract);
-        if (contract.operationLabel === "gateway.restart-intent.write") {
-          queueMicrotask(() =>
-            database()
-              .prepare("UPDATE state_leases SET owner='successor' WHERE scope='gateway-owner'")
-              .run(),
-          );
-        }
-        return result;
-      },
-    );
-    await expect(stop()).rejects.toThrow("Cannot verify a live serving Gateway owner");
-    expect(mutations).toEqual([]);
-    expect(intentRow()).toBeUndefined();
-    expect(isPidAlive(pid)).toBe(true);
-  });
-  it("preserves runtime if intent storage admission fails", async () => {
-    const write = existingWrites.runExistingOpenClawStateWriteTransaction;
-    vi.spyOn(existingWrites, "runExistingOpenClawStateWriteTransaction").mockImplementation(
-      (mutate, options, contract) => {
-        if (contract.operationLabel === "gateway.restart-intent.write") {
-          throw new Error("fixture storage unavailable");
-        }
-        return write(mutate, options, contract);
-      },
-    );
-    await expect(stop()).rejects.toThrow("Cannot record restart intent");
-    expect(mutations).toEqual([]);
-    expect(intentRow()).toBeUndefined();
-    expect(isPidAlive(pid)).toBe(true);
-  });
-  it("clears its own intent on failed bootout", async () => {
-    bootoutFailure = true;
-    await expect(stop()).rejects.toThrow("fixture bootout failure");
-    expect(atBootout).toMatchObject({ pid, reason: "update.run" });
-    expect(intentRow()).toBeUndefined();
-    expect(isPidAlive(pid)).toBe(true);
-  });
-  it("preserves a legacy writer's successor intent with the same timestamp", async () => {
-    bootoutFailure = true;
-    onBootout = () => {
-      // Published writers use wall-clock timestamps, not the new writer's monotonic increment.
-      database().prepare("UPDATE gateway_restart_intent SET reason='gateway.restart'").run();
-    };
-    await expect(stop()).rejects.toThrow("fixture bootout failure");
-    expect(intentRow()).toMatchObject({ pid, reason: "gateway.restart" });
-  });
-  it.each(["successor", "update.run"])(
-    "does not erase a successor intent when bootout fails (reason=%s)",
-    async (reason) => {
-      bootoutFailure = true;
-      onBootout = () => {
-        vi.spyOn(Date, "now").mockReturnValue(
-          (atBootout as { updated_at_ms: number }).updated_at_ms,
-        );
-        expect(writeGatewayRestartIntentSync({ env: effectiveEnv, targetPid: pid, reason })).toBe(
-          true,
-        );
+  it.each([
+    ["foreign-pid", "Cannot verify a live serving Gateway owner"],
+    ["replaced-during-probe", "Cannot verify a live serving Gateway owner"],
+    ["missing-command", "Effective LaunchAgent service command could not be inspected."],
+    ["revoked", "update owner revoked"],
+    ["replaced-after-intent", "Cannot verify a live serving Gateway owner"],
+    ["storage-failure", "Cannot record restart intent"],
+  ])("preserves runtime and intent when preparation fails: %s", async (fault, error) => {
+    if (fault === "foreign-pid") {
+      const row = database()
+        .prepare("SELECT payload_json FROM state_leases WHERE scope='gateway-owner'")
+        .get()!;
+      const payload = JSON.parse(String(row.payload_json));
+      payload.owner = {
+        pid: process.pid,
+        host: hostname(),
+        startedAt: getFileLockProcessStartTime(process.pid),
       };
+      database()
+        .prepare("UPDATE state_leases SET payload_json=? WHERE scope='gateway-owner'")
+        .run(JSON.stringify(payload));
+    } else if (fault === "missing-command") {
+      fs.rmSync(resolveLaunchAgentPlistPath(env));
+    } else if (fault === "replaced-during-probe" || fault === "revoked") {
+      onPrint = () => {
+        if (prints !== 3) {
+          return;
+        }
+        if (fault === "revoked") {
+          revoked = true;
+        } else {
+          database()
+            .prepare("UPDATE state_leases SET owner='new-owner' WHERE scope='gateway-owner'")
+            .run();
+        }
+      };
+    } else {
+      const write = existingWrites.runExistingOpenClawStateWriteTransaction;
+      vi.spyOn(existingWrites, "runExistingOpenClawStateWriteTransaction").mockImplementation(
+        (mutate, options, contract) => {
+          if (
+            fault === "storage-failure" &&
+            contract.operationLabel === "gateway.restart-intent.write"
+          ) {
+            throw new Error("fixture storage unavailable");
+          }
+          const result = write(mutate, options, contract);
+          if (contract.operationLabel === "gateway.restart-intent.write") {
+            queueMicrotask(() =>
+              database()
+                .prepare("UPDATE state_leases SET owner='successor' WHERE scope='gateway-owner'")
+                .run(),
+            );
+          }
+          return result;
+        },
+      );
+    }
+    await expect(stop(true, fault === "missing-command")).rejects.toThrow(error);
+    expect(mutations).toEqual([]);
+    expect(intentRow()).toBeUndefined();
+    expect(isPidAlive(pid)).toBe(true);
+  });
+  it.each(["none", "legacy", "successor", "update.run"])(
+    "clears only its own intent on failed bootout (successor=%s)",
+    async (writer) => {
+      bootoutFailure = true;
+      if (writer !== "none") {
+        onBootout = () => {
+          if (writer === "legacy") {
+            // Published writers use wall-clock timestamps, not monotonic increments.
+            database().prepare("UPDATE gateway_restart_intent SET reason='gateway.restart'").run();
+          } else {
+            vi.spyOn(Date, "now").mockReturnValue(
+              (atBootout as { updated_at_ms: number }).updated_at_ms,
+            );
+            expect(
+              writeGatewayRestartIntentSync({ env: effectiveEnv, targetPid: pid, reason: writer }),
+            ).toBe(true);
+          }
+        };
+      }
       await expect(stop()).rejects.toThrow("fixture bootout failure");
-      expect(intentRow()).toMatchObject({ pid, reason });
+      expect(atBootout).toMatchObject({ pid, reason: "update.run" });
+      expect(isPidAlive(pid)).toBe(true);
+      if (writer === "none") {
+        expect(intentRow()).toBeUndefined();
+      } else {
+        expect(intentRow()).toMatchObject({
+          pid,
+          reason: writer === "legacy" ? "gateway.restart" : writer,
+        });
+      }
     },
   );
 });

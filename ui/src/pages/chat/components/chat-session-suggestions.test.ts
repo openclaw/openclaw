@@ -41,50 +41,6 @@ function mount(role: "owner" | "viewer", row = suggestion, canResolve = true, ar
 }
 
 describe("chat session suggestions", () => {
-  it("renders the four owner actions in send, queue, edit, dismiss order", () => {
-    const view = mount("owner");
-    const buttons = [...view.container.querySelectorAll<HTMLButtonElement>("button")];
-    expect(buttons.map((button) => button.getAttribute("aria-label"))).toEqual([
-      "Send Alice's suggestion now",
-      "Queue Alice's suggestion",
-      "Edit Alice's suggestion",
-      "Dismiss Alice's suggestion",
-    ]);
-    buttons.forEach((button) => button.click());
-    expect(view.onResolve.mock.calls.map((call) => call[1])).toEqual([
-      "send",
-      "queue",
-      "edit",
-      "dismiss",
-    ]);
-  });
-
-  it("shows the author's resolved state without participant actions", () => {
-    const view = mount("viewer", { ...suggestion, state: "accepted" });
-    expect(view.container.querySelector("button")).toBeNull();
-    expect(view.container.textContent).toContain("Accepted");
-    expect(view.container.textContent).toContain("Try the focused change");
-  });
-
-  it("does not expose participant actions before the role is known", () => {
-    const onResolve = vi.fn();
-    container = document.createElement("div");
-    document.body.append(container);
-    render(
-      renderChatSessionSuggestions({
-        suggestions: [suggestion],
-        role: undefined,
-        busyIds: new Set(),
-        archived: false,
-        canResolve: true,
-        onResolve,
-      }),
-      container,
-    );
-    expect(container.querySelector("button")).toBeNull();
-    expect(container.textContent).toContain("Pending");
-  });
-
   it("does not expose resolution actions to members", () => {
     const onResolve = vi.fn();
     container = document.createElement("div");

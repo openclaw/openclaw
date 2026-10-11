@@ -46,24 +46,17 @@ async function main(argv: string[]): Promise<void> {
       PRAGMA journal_mode = ${journalMode === "wal" ? "WAL" : "DELETE"};
       PRAGMA wal_autocheckpoint = 0;
     `);
-    const originalExec = database.exec.bind(database);
-    Object.defineProperty(database, "exec", {
-      configurable: true,
-      value: (sql: string) => {
-        originalExec(sql);
-        // The repair drops its probe only after replacing the canonical index.
-        // Pause here with every repair DDL change inside the unreleased savepoint.
-        if (sql.startsWith("DROP INDEX main.openclaw_probe_")) {
-          process.send?.({ kind: "crash-point" });
-          while (true) {
-            Atomics.wait(SLEEP_BUFFER, 0, 0, 60_000);
-          }
+    process.send?.({ kind: "ready" });
+    await waitForStart();
+    repairCanonicalSqliteIndexes(database, databasePath, INDEX_REPAIR_SCHEMA_SQL, {
+      validateAfterRepair: () => {
+        // All repaired indexes remain inside the owner's unreleased savepoint.
+        process.send?.({ kind: "crash-point" });
+        while (true) {
+          Atomics.wait(SLEEP_BUFFER, 0, 0, 60_000);
         }
       },
     });
-    process.send?.({ kind: "ready" });
-    await waitForStart();
-    repairCanonicalSqliteIndexes(database, databasePath, INDEX_REPAIR_SCHEMA_SQL);
     process.send?.({ kind: "completed" });
   } finally {
     database.close();

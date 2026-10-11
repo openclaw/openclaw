@@ -25,7 +25,6 @@ import {
   claimGitHubPublicationExecution,
   createGitHubPublicationExecutionStore,
   isGitHubPublicationExecutionOwner,
-  projectGitHubPublicationResult,
 } from "./github-publication-store.js";
 import { assertGitHubPublicationWorkflowChangesAllowed } from "./github-publication-workflows.js";
 import { REMOTE_GITHUB_PUBLICATION_SNAPSHOT_JS } from "./github-repository-publication-snapshot.js";
@@ -113,7 +112,7 @@ it.each([
       await registerClonedProjectRegistry({ path: source, name: "Handoff", originUrl: url });
       const scope = { agentId: "main", sessionKey: "agent:main:dashboard:handoff" };
       const store = getSessionRepositoryWorkspaceStore();
-      let repository = store.create({
+      let repository = await store.create({
         ...scope,
         url,
         runSetupScript: false,
@@ -121,7 +120,7 @@ it.each([
         assertCurrent: () => {},
       });
       const base = await captureWorkspaceManifest({ root: source, baseCommit });
-      repository = store.bindBase({
+      repository = await store.bindBase({
         workspaceId: repository.workspaceId,
         expectedRevision: repository.revision,
         baseCommit,
@@ -328,7 +327,7 @@ it.each([
           scenario === "unsettled" ? "awaiting a GitHub effect" : "differs from its recorded push",
         );
         expect(loadSessionEntry(scope)?.repositoryWorkspaceId).toBe(repository.workspaceId);
-        expect(managedWorktrees.findLiveByOwner("session", scope.sessionKey)).toBeUndefined();
+        expect(await managedWorktrees.findLiveByOwner("session", scope.sessionKey)).toBeUndefined();
         if (scenario === "foreign head") {
           return;
         }
@@ -353,16 +352,17 @@ it.each([
         });
         await expect(move()).rejects.toThrow("move revoked");
         expect(loadSessionEntry(scope)?.repositoryWorkspaceId).toBe(repository.workspaceId);
-        expect(managedWorktrees.findLiveByOwner("session", scope.sessionKey)).toBeUndefined();
+        expect(await managedWorktrees.findLiveByOwner("session", scope.sessionKey)).toBeUndefined();
         expect(await fs.readFile(path.join(source, "file.txt"), "utf8")).toBe("base\n");
         return;
       }
       await move();
-      expect(() => assertReceiptOwner(row)).toThrow();
+      const receiptWorkspace = await store.prepare(row.workspace_id);
+      expect(() => assertReceiptOwner(row, receiptWorkspace)).toThrow();
       expect(readRepositoryGitHubPublication(row.request_id)?.pushed_head_commit).toBe(
         publishedHead,
       );
-      const worktree = managedWorktrees.findLiveByOwner("session", scope.sessionKey)!;
+      const worktree = (await managedWorktrees.findLiveByOwner("session", scope.sessionKey))!;
       const moveHead = git(worktree.path, "rev-parse", "HEAD");
       if (scenario === "shifted membership") {
         expect(await fs.readFile(path.join(worktree.path, "published-only.ignored"), "utf8")).toBe(
@@ -426,7 +426,6 @@ it.each([
         },
         assertWorkflowChangesAllowed: () =>
           assertGitHubPublicationWorkflowChangesAllowed(requester),
-        projectResult: projectGitHubPublicationResult,
       }).finally(requester.release);
       const localHead = git(worktree.path, "rev-parse", "HEAD");
       const receipt = {
@@ -485,7 +484,7 @@ it("can hold publisher exclusion during an existing reclaim claim without taking
       environmentId: "handoff-worker",
       ownerEpoch: 1,
     });
-    const draining = placements.startDrain({
+    const draining = await placements.startDrain({
       sessionId: REQUEST.sessionId,
       environmentId: "handoff-worker",
       ownerEpoch: 1,
@@ -494,7 +493,7 @@ it("can hold publisher exclusion during an existing reclaim claim without taking
     if (draining.state !== "draining") {
       throw new Error(`Expected draining placement, received ${draining.state}`);
     }
-    const claim = placements.claimReclaimWorkspaceResult({
+    const claim = await placements.claimReclaimWorkspaceResult({
       sessionId: REQUEST.sessionId,
       sessionKey: REQUEST.sessionKey,
       agentId: "main",

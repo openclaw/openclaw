@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { observeCronStoreCommits } from "../../../test/helpers/cron/runtime-mutation.js";
 import {
   createCronRegressionState,
   createDueIsolatedJob,
@@ -26,7 +27,7 @@ import { loadCronStore, saveCronStore } from "../store.js";
 import { cronStoreKey } from "../store/key.js";
 import {
   findActiveCronRunReceiptInDatabase,
-  finishCronRunReceipt,
+  finishCronRunReceiptAsync,
   prepareCronRunReceiptClaim,
 } from "../store/run-receipt-store.js";
 import { claimCronRunReceiptInDatabaseForTest } from "../store/run-receipt-store.test-support.js";
@@ -99,7 +100,7 @@ function receipts(storePath: string, jobId: string) {
 }
 
 describe("ownerless reservation and manual completion", () => {
-  it("keeps an owned sibling reserved while recording only the ownerless scheduled skip", async () => {
+  it("keeps an owned sibling reserved alongside an ownerless job", async () => {
     const ownerless = commandJob("ownerless-batch");
     const owned = { ...commandJob("owned-batch"), agentId: "ops" };
     const { state, storePath, events, execute } = await setupOwnerlessJob(ownerless);
@@ -112,8 +113,10 @@ describe("ownerless reservation and manual completion", () => {
     });
     try {
       expect(reserved.map(({ job }) => job.id)).toEqual([owned.id]);
+      expect(reserved.map(({ runReceipt }) => runReceipt.agentId)).toEqual(["ops"]);
       const persisted = (await loadCronStore(storePath)).jobs;
-      expect(persisted.find((job) => job.id === ownerless.id)?.state).toMatchObject({
+      const withheld = persisted.find((job) => job.id === ownerless.id);
+      expect(withheld?.state).toMatchObject({
         lastRunStatus: "skipped",
         lastError: CRON_AGENT_SELECTION_REQUIRED_MESSAGE,
       });
@@ -129,11 +132,11 @@ describe("ownerless reservation and manual completion", () => {
           error: CRON_AGENT_SELECTION_REQUIRED_MESSAGE,
         }),
       ]);
-      expect(receipts(storePath, ownerless.id)).toEqual([]);
+      expect(receipts(storePath, ownerless.id)).toHaveLength(0);
       expect(execute).not.toHaveBeenCalled();
     } finally {
       for (const reservation of reserved) {
-        finishCronRunReceipt({
+        await finishCronRunReceiptAsync({
           handle: reservation.runReceipt,
           status: "skipped",
           finishedAtMs: NOW,
@@ -302,6 +305,76 @@ const changedPlans: Array<{ name: string; change: (job: CronJob) => void }> = [
 ];
 
 describe("ownerless skip transaction guards", () => {
+  it.each([
+    { label: "captured agent", configuredDefault: "original-agent", rawDefault: undefined },
+    { label: "captured absence", configuredDefault: undefined, rawDefault: undefined },
+  ])("finishes a committed skip after default routing changes ($label)", async (testCase) => {
+    const job = commandJob(`committed-skip-${testCase.label.replaceAll(" ", "-")}`);
+    job.failureAlert = { after: 1, cooldownMs: 0, includeSkipped: true };
+    let currentDefault: string | undefined = testCase.rawDefault;
+    const { state, storePath, events, execute } = await setupOwnerlessJob(
+      job,
+      () => currentDefault,
+    );
+    state.deps.defaultAgentId = testCase.configuredDefault;
+    const database = openOpenClawStateDatabase().db;
+    let switched = false;
+    const stopObserving = observeCronStoreCommits(storePath, () => {
+      const row = database
+        .prepare(
+          "SELECT json_extract(state_json, '$.lastRunStatus') AS status FROM cron_jobs WHERE store_key = ? AND job_id = ?",
+        )
+        .get(cronStoreKey(storePath), job.id);
+      if (!switched && row?.status === "skipped") {
+        switched = true;
+        currentDefault = "replacement-agent";
+      }
+    });
+    try {
+      const outcome = await persistQueuedCronRunReservations({
+        state,
+        candidates: [job],
+        reservedAtMs: NOW,
+      }).then(
+        (value) => ({ kind: "completed", value }),
+        (error: unknown) => ({ kind: "rejected", error }),
+      );
+      expect(switched).toBe(true);
+      expect.soft(outcome).toEqual({ kind: "completed", value: [] });
+      const persisted = (await loadCronStore(storePath)).jobs.find((entry) => entry.id === job.id);
+      expect(persisted?.state).toMatchObject({
+        lastRunStatus: "skipped",
+        lastFailureNotificationId: expect.any(String),
+      });
+      expect.soft(history(storePath, job.id)).toEqual([
+        expect.objectContaining({
+          status: "skipped",
+          error: CRON_AGENT_SELECTION_REQUIRED_MESSAGE,
+        }),
+      ]);
+      expect.soft(events.filter((event) => event.action === "finished")).toHaveLength(1);
+      const records = readCronRunRecordsForTests(job.id);
+      expect.soft(records).toHaveLength(1);
+      expect(records[0]?.agentId).toBeUndefined();
+      if (testCase.configuredDefault) {
+        expect.soft(state.deps.enqueueSystemEvent).toHaveBeenCalledOnce();
+        expect
+          .soft(state.deps.enqueueSystemEvent)
+          .toHaveBeenCalledWith(
+            expect.any(String),
+            expect.objectContaining({ agentId: testCase.configuredDefault }),
+          );
+      } else {
+        expect(state.deps.enqueueSystemEvent).not.toHaveBeenCalled();
+        expect(state.deps.requestHeartbeat).not.toHaveBeenCalled();
+      }
+      expect(receipts(storePath, job.id)).toEqual([]);
+      expect(execute).not.toHaveBeenCalled();
+    } finally {
+      stopObserving();
+    }
+  });
+
   it.each(changedPlans)(
     "does not overwrite changed $name or emit a scheduled completion",
     async ({ name, change }) => {
@@ -321,11 +394,11 @@ describe("ownerless skip transaction guards", () => {
     },
   );
 
-  it("rechecks a restored default owner inside the skip transaction", async () => {
+  it("uses a restored default owner captured before skip dispatch", async () => {
     const job = commandJob("ownerless-restored-owner");
     const { state, storePath, events } = await setupOwnerlessJob(job);
     const before = await loadCronStore(storePath);
-    // This controls the internal classification/write boundary, not a public timer race.
+    // Restore the owner between classification and the worker snapshot.
     state.deps.resolveDefaultAgentId = vi
       .fn<() => string | undefined>()
       .mockReturnValueOnce(undefined)
@@ -375,7 +448,7 @@ describe("ownerless skip transaction guards", () => {
       expect(history(storePath, job.id)).toEqual([]);
       expect(execute).not.toHaveBeenCalled();
     } finally {
-      finishCronRunReceipt({ handle: receipt, status: "skipped", finishedAtMs: NOW });
+      await finishCronRunReceiptAsync({ handle: receipt, status: "skipped", finishedAtMs: NOW });
     }
   });
 
@@ -410,35 +483,6 @@ describe("ownerless skip transaction guards", () => {
     ]);
     expect(terminalTracker.emitted).toBe(true);
     expect(receipts(storePath, planned.id)).toEqual([]);
-  });
-
-  it("rolls back a failed skip commit without publishing a skipped outcome", async () => {
-    const job = commandJob("ownerless-rollback");
-    const { state, storePath, events, execute } = await setupOwnerlessJob(job);
-    const before = await loadCronStore(storePath);
-    const database = openOpenClawStateDatabase().db;
-    database.exec(`
-      CREATE TEMP TRIGGER reject_ownerless_skip
-      BEFORE UPDATE OF state_json ON cron_jobs
-      WHEN NEW.job_id = 'ownerless-rollback'
-        AND json_extract(NEW.state_json, '$.lastRunStatus') = 'skipped'
-      BEGIN
-        SELECT RAISE(ABORT, 'ownerless skip commit failed');
-      END;
-    `);
-    try {
-      await expect(
-        persistQueuedCronRunReservations({ state, candidates: [job], reservedAtMs: NOW }),
-      ).rejects.toThrow("ownerless skip commit failed");
-      expect(await loadCronStore(storePath)).toEqual(before);
-      expect(state.store?.jobs[0]?.state.lastRunStatus).toBeUndefined();
-      expect(events).toEqual([]);
-      expect(history(storePath, job.id)).toEqual([]);
-      expect(receipts(storePath, job.id)).toEqual([]);
-      expect(execute).not.toHaveBeenCalled();
-    } finally {
-      database.exec("DROP TRIGGER IF EXISTS reject_ownerless_skip");
-    }
   });
 });
 

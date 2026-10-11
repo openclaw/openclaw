@@ -1,4 +1,3 @@
-// Resolves attachment payloads for plugin host hooks.
 import * as fsPromises from "node:fs/promises";
 import { lstat } from "node:fs/promises";
 import {
@@ -233,7 +232,7 @@ export async function sendPluginSessionAttachment(
     return { ok: false, error: validated.error };
   }
   const resolvedThreadId =
-    normalizeOptionalThreadId(resolvedDelivery.threadId) ??
+    resolvedDelivery.threadId ??
     normalizeOptionalThreadId(params.threadId) ??
     normalizeOptionalThreadId(threadId) ??
     normalizeOptionalThreadId(deliveryContext.threadId);

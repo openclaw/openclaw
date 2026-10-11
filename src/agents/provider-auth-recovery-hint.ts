@@ -1,16 +1,9 @@
-/**
- * Provider authentication recovery hint builder.
- *
- * Prefers plugin manifest login commands, then falls back to configure/env-var guidance.
- */
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveManifestProviderAuthChoices } from "../plugins/provider-auth-choices.js";
 import { resolveProviderAuthAliasMap } from "./provider-auth-aliases.js";
 
-// Builds short auth recovery hints for provider errors. Manifest auth choices
-// can supply a provider-specific login command before generic configure/env help.
 function normalizeProviderIdForAuth(
   providerId: string,
   aliases: Readonly<Record<string, string>>,
@@ -19,47 +12,29 @@ function normalizeProviderIdForAuth(
   return normalized ? (aliases[normalized] ?? normalized) : normalized;
 }
 
-function resolveProviderAuthLoginCommand(params: {
+export function buildProviderAuthRecoveryHint(params: {
   provider: string;
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
-}): string | undefined {
+  includeEnvVar?: boolean;
+}): string {
   const aliases = resolveProviderAuthAliasMap(params);
   const normalized = normalizeProviderIdForAuth(params.provider, aliases);
   const choice = resolveManifestProviderAuthChoices(params).find(
     (candidate) =>
       normalized && normalizeProviderIdForAuth(candidate.providerId, aliases) === normalized,
   );
-  if (!choice) {
-    return undefined;
-  }
-  const providerId = normalizeProviderIdForAuth(choice.providerId, aliases);
-  return formatCliCommand(`openclaw models auth login --provider ${providerId}`);
-}
-
-/** Build a concise user-facing hint for recovering provider authentication. */
-export function buildProviderAuthRecoveryHint(params: {
-  provider: string;
-  config?: OpenClawConfig;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
-  includeConfigure?: boolean;
-  includeEnvVar?: boolean;
-}): string {
-  const loginCommand = resolveProviderAuthLoginCommand(params);
+  const loginCommand = choice
+    ? formatCliCommand(`openclaw models auth login --provider ${normalized}`)
+    : undefined;
   const parts: string[] = [];
   if (loginCommand) {
     parts.push(`Run \`${loginCommand}\``);
   }
-  if (params.includeConfigure !== false) {
-    parts.push(`\`${formatCliCommand("openclaw configure")}\``);
-  }
+  parts.push(`\`${formatCliCommand("openclaw configure")}\``);
   if (params.includeEnvVar) {
     parts.push("set an API key env var");
-  }
-  if (parts.length === 0) {
-    return `Run \`${formatCliCommand("openclaw configure")}\`.`;
   }
   if (parts.length === 1) {
     return `${parts[0]}.`;

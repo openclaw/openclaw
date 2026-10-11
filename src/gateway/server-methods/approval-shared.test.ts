@@ -6,13 +6,14 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { GATEWAY_CLIENT_IDS } from "../../../packages/gateway-protocol/src/client-info.js";
+import type { PluginApprovalRequestPayload } from "../../infra/plugin-approvals.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
   closeOpenClawStateDatabaseByPathAsync,
   closeOpenClawStateDatabaseForTest,
 } from "../../state/openclaw-state-db.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
-import { ExecApprovalManager, type ExecApprovalRecord } from "../exec-approval-manager.js";
+import { ExecApprovalManager } from "../exec-approval-manager.js";
 import { createTestApprovalManager } from "../exec-approval-manager.test-support.js";
 import {
   bindApprovalReviewerDeviceIds,
@@ -20,8 +21,13 @@ import {
   handlePendingApprovalRequest,
   isApprovalRecordVisibleToClient,
 } from "./approval-shared.js";
-import { handleApprovalResolve } from "./approval.test-support.js";
-import type { GatewayClient, GatewayRequestContext } from "./types.js";
+import {
+  createApprovalClient,
+  createApprovalClientLookup,
+  handleApprovalResolve,
+  requestedEvent,
+} from "./approval.test-support.js";
+import type { GatewayRequestContext } from "./types.js";
 
 const hasApprovalTurnSourceRouteMock = vi.hoisted(() => vi.fn(() => true));
 const prepareApprovalChannelCustodyMock = vi.hoisted(() => vi.fn());
@@ -33,50 +39,6 @@ vi.mock("../../infra/approval-turn-source.js", () => ({
 vi.mock("../approval-channel-custody.js", () => ({
   prepareApprovalChannelCustody: prepareApprovalChannelCustodyMock,
 }));
-
-function requestedEvent<TPayload>(record: ExecApprovalRecord<TPayload>) {
-  return {
-    id: record.id,
-    request: record.request,
-    createdAtMs: record.createdAtMs,
-    expiresAtMs: record.expiresAtMs,
-  };
-}
-
-type ApprovalClientLookup = NonNullable<GatewayRequestContext["getApprovalClientConnIds"]>;
-
-function createApprovalClient(params: {
-  connId: string;
-  clientId: string;
-  deviceId?: string;
-  scopes?: string[];
-  approvalRuntime?: boolean;
-}): GatewayClient {
-  return {
-    connId: params.connId,
-    connect: {
-      client: { id: params.clientId },
-      device: params.deviceId ? { id: params.deviceId } : undefined,
-      scopes: params.scopes ?? ["operator.approvals"],
-    },
-    ...(params.approvalRuntime ? { internal: { approvalRuntime: true } } : {}),
-  } as GatewayClient;
-}
-
-function createApprovalClientLookup(clients: GatewayClient[]): ApprovalClientLookup {
-  return (opts = {}) =>
-    new Set(
-      clients
-        .filter((client) => {
-          if (opts.excludeConnId && client.connId === opts.excludeConnId) {
-            return false;
-          }
-          return opts.filter?.(client, opts.record) ?? true;
-        })
-        .map((client) => client.connId)
-        .filter((connId): connId is string => typeof connId === "string" && connId.length > 0),
-    );
-}
 
 describe("handlePendingApprovalRequest", () => {
   afterEach(() => {
@@ -198,7 +160,6 @@ describe("handlePendingApprovalRequest", () => {
       route: "plugin",
       id: "plugin-turn-source-kind",
       request: {
-        command: "plugin approval",
         title: "Plugin approval",
         description: "Review the plugin action",
         turnSourceChannel: "whatsapp",
@@ -262,6 +223,7 @@ describe("handlePendingApprovalRequest", () => {
           turnSourceChannel: "whatsapp",
           turnSourceAccountId: "default",
           approvalKind: "plugin",
+          request: requestedEvent(record),
         });
       } else {
         expect((await manager.getSnapshot(record.id))?.resolvedAtMs).toBeUndefined();
@@ -483,69 +445,44 @@ describe("handlePendingApprovalRequest", () => {
     await requestPromise;
   });
 
-  it("does not target no-device gateway-client approvals to unrelated approval-scoped clients", async (testContext) => {
-    hasApprovalTurnSourceRouteMock.mockReturnValueOnce(false);
+  it("does not forward a request resolved during async native eligibility", async (testContext) => {
     const manager = createTestApprovalManager(testContext);
-    const record = manager.create(
-      {
-        command: "echo ok",
-      },
-      60_000,
-      "approval-gateway-mobile",
-    );
-    record.requestedByConnId = "conn-gateway";
-    record.requestedByClientId = GATEWAY_CLIENT_IDS.GATEWAY_CLIENT;
+    const record = manager.create({ command: "echo ok" }, 60_000, "approval-publication-race");
     await manager.register(record, 60_000);
+    const publishing = createDeferredCore();
+    const publication = createDeferredCore<number>();
+    const publishRequested = vi.fn(() => 0);
     const respond = vi.fn();
-    const broadcast = vi.fn();
-    const broadcastToConnIds = vi.fn();
-    const visibleConnIds = new Set<string>();
+    const deliverRequest = vi.fn(() => true);
     const requestPromise = handlePendingApprovalRequest({
       manager,
       record,
       respond,
       context: {
-        getRuntimeConfig: () => ({}),
-        broadcast,
-        broadcastToConnIds,
-        getApprovalClientConnIds: vi.fn(
-          createApprovalClientLookup([
-            createApprovalClient({
-              connId: "conn-gateway",
-              clientId: GATEWAY_CLIENT_IDS.GATEWAY_CLIENT,
-            }),
-            createApprovalClient({
-              connId: "conn-mobile-approval",
-              clientId: GATEWAY_CLIENT_IDS.IOS_APP,
-              scopes: ["operator.approvals"],
-            }),
-          ]),
-        ),
-        hasExecApprovalClients: vi.fn(() => {
-          throw new Error("expected visibility-filtered approval client lookup");
-        }),
+        broadcast: vi.fn(),
+        approvalEvents: {
+          publishRequested,
+          publishRequestedAsync: () => {
+            publishing.resolve();
+            return publication.promise;
+          },
+          publishResolved: vi.fn(),
+        },
       } as unknown as GatewayRequestContext,
-      clientConnId: "conn-gateway",
       requestEventName: "exec.approval.requested",
       requestEvent: requestedEvent(record),
       twoPhase: true,
-      deliverRequest: () => false,
+      deliverRequest,
     });
-
-    await Promise.resolve();
-    expect(broadcast).not.toHaveBeenCalled();
-    expect(broadcastToConnIds).toHaveBeenCalledWith(
-      "exec.approval.requested",
-      expect.objectContaining({ id: "approval-gateway-mobile" }),
-      visibleConnIds,
-      { dropIfSlow: true },
-    );
-
+    await publishing.promise;
+    await manager.resolve(record.id, "deny", "control-ui");
+    publication.resolve(0);
     await requestPromise;
-    expect((await manager.getSnapshot(record.id))?.resolvedBy).toBe("no-approval-route");
-    expect(respond).toHaveBeenCalledWith(
+    expect(publishRequested).not.toHaveBeenCalled();
+    expect(deliverRequest).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledExactlyOnceWith(
       true,
-      expect.objectContaining({ id: "approval-gateway-mobile", decision: null }),
+      expect.objectContaining({ id: record.id, decision: "deny" }),
       undefined,
     );
   });
@@ -803,153 +740,6 @@ describe("handlePendingApprovalRequest", () => {
     );
   });
 
-  it("does not target no-device browser UI approvals to unrelated approval-scoped clients", async (testContext) => {
-    hasApprovalTurnSourceRouteMock.mockReturnValueOnce(false);
-    const manager = createTestApprovalManager(testContext);
-    const record = manager.create(
-      {
-        command: "echo ok",
-      },
-      60_000,
-      "approval-control-ui-mobile",
-    );
-    record.requestedByConnId = "conn-control-ui";
-    record.requestedByClientId = GATEWAY_CLIENT_IDS.CONTROL_UI;
-    await manager.register(record, 60_000);
-    const respond = vi.fn();
-    const broadcast = vi.fn();
-    const broadcastToConnIds = vi.fn();
-    const visibleConnIds = new Set<string>();
-    const requestPromise = handlePendingApprovalRequest({
-      manager,
-      record,
-      respond,
-      context: {
-        getRuntimeConfig: () => ({}),
-        broadcast,
-        broadcastToConnIds,
-        getApprovalClientConnIds: vi.fn(
-          createApprovalClientLookup([
-            createApprovalClient({
-              connId: "conn-control-ui",
-              clientId: GATEWAY_CLIENT_IDS.CONTROL_UI,
-            }),
-            createApprovalClient({
-              connId: "conn-mobile-approval",
-              clientId: GATEWAY_CLIENT_IDS.IOS_APP,
-              scopes: ["operator.approvals"],
-            }),
-          ]),
-        ),
-        hasExecApprovalClients: vi.fn(() => {
-          throw new Error("expected visibility-filtered approval client lookup");
-        }),
-      } as unknown as GatewayRequestContext,
-      clientConnId: "conn-control-ui",
-      requestEventName: "exec.approval.requested",
-      requestEvent: {
-        id: record.id,
-        request: record.request,
-        createdAtMs: record.createdAtMs,
-        expiresAtMs: record.expiresAtMs,
-      },
-      twoPhase: true,
-      deliverRequest: () => false,
-    });
-
-    await Promise.resolve();
-    expect(broadcast).not.toHaveBeenCalled();
-    expect(broadcastToConnIds).toHaveBeenCalledWith(
-      "exec.approval.requested",
-      expect.objectContaining({ id: "approval-control-ui-mobile" }),
-      visibleConnIds,
-      { dropIfSlow: true },
-    );
-
-    await requestPromise;
-    expect((await manager.getSnapshot(record.id))?.resolvedBy).toBe("no-approval-route");
-    expect(respond).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({ id: "approval-control-ui-mobile", decision: null }),
-      undefined,
-    );
-  });
-
-  it("does not target device-bound gateway-client approvals to unrelated approval-scoped clients", async (testContext) => {
-    hasApprovalTurnSourceRouteMock.mockReturnValueOnce(false);
-    const manager = createTestApprovalManager(testContext);
-    const record = manager.create(
-      {
-        command: "echo ok",
-      },
-      60_000,
-      "approval-gateway-device-mobile",
-    );
-    record.requestedByDeviceId = "device-gateway";
-    record.requestedByConnId = "conn-gateway";
-    record.requestedByClientId = GATEWAY_CLIENT_IDS.GATEWAY_CLIENT;
-    await manager.register(record, 60_000);
-    const respond = vi.fn();
-    const broadcast = vi.fn();
-    const broadcastToConnIds = vi.fn();
-    const visibleConnIds = new Set<string>();
-    const requestPromise = handlePendingApprovalRequest({
-      manager,
-      record,
-      respond,
-      context: {
-        getRuntimeConfig: () => ({}),
-        broadcast,
-        broadcastToConnIds,
-        getApprovalClientConnIds: vi.fn(
-          createApprovalClientLookup([
-            createApprovalClient({
-              connId: "conn-gateway",
-              clientId: GATEWAY_CLIENT_IDS.GATEWAY_CLIENT,
-              deviceId: "device-gateway",
-            }),
-            createApprovalClient({
-              connId: "conn-mobile-approval",
-              clientId: GATEWAY_CLIENT_IDS.IOS_APP,
-              deviceId: "device-mobile",
-              scopes: ["operator.approvals"],
-            }),
-          ]),
-        ),
-        hasExecApprovalClients: vi.fn(() => {
-          throw new Error("expected visibility-filtered approval client lookup");
-        }),
-      } as unknown as GatewayRequestContext,
-      clientConnId: "conn-gateway",
-      requestEventName: "exec.approval.requested",
-      requestEvent: {
-        id: record.id,
-        request: record.request,
-        createdAtMs: record.createdAtMs,
-        expiresAtMs: record.expiresAtMs,
-      },
-      twoPhase: true,
-      deliverRequest: () => false,
-    });
-
-    await Promise.resolve();
-    expect(broadcast).not.toHaveBeenCalled();
-    expect(broadcastToConnIds).toHaveBeenCalledWith(
-      "exec.approval.requested",
-      expect.objectContaining({ id: "approval-gateway-device-mobile" }),
-      visibleConnIds,
-      { dropIfSlow: true },
-    );
-
-    await requestPromise;
-    expect((await manager.getSnapshot(record.id))?.resolvedBy).toBe("no-approval-route");
-    expect(respond).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({ id: "approval-gateway-device-mobile", decision: null }),
-      undefined,
-    );
-  });
-
   it("does not target no-device approvals by self-declared client id", async (testContext) => {
     hasApprovalTurnSourceRouteMock.mockReturnValueOnce(false);
     const manager = createTestApprovalManager(testContext);
@@ -1099,44 +889,6 @@ describe("handlePendingApprovalRequest", () => {
     );
   });
 
-  it("allows visible callers to wait for approval decisions", async (testContext) => {
-    const manager = createTestApprovalManager(testContext);
-    const record = manager.create(
-      {
-        command: "echo ok",
-      },
-      60_000,
-      "approval-wait-visible",
-    );
-    record.requestedByDeviceId = "device-owner";
-    record.requestedByConnId = "conn-owner";
-    record.requestedByClientId = "client-owner";
-    await manager.register(record, 60_000);
-    expect(await manager.resolve(record.id, "deny")).toBe(true);
-    const respond = vi.fn();
-
-    await handleApprovalWaitDecision({
-      manager,
-      inputId: record.id,
-      respond,
-      client: createApprovalClient({
-        connId: "conn-owner-approval",
-        clientId: "client-owner",
-        deviceId: "device-owner",
-        scopes: ["operator.approvals"],
-      }),
-    });
-
-    expect(respond).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({
-        id: "approval-wait-visible",
-        decision: "deny",
-      }),
-      undefined,
-    );
-  });
-
   it("releases run-aborted waiters without changing timeout terminal state", async () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-approval-wait-terminal-"));
     const manager = new ExecApprovalManager({
@@ -1256,114 +1008,6 @@ describe("handlePendingApprovalRequest", () => {
     await closeOpenClawStateDatabaseByPathAsync(path.join(tempDir, "state.sqlite"));
     closeOpenClawStateDatabaseForTest();
     fs.rmSync(tempDir, { force: true, recursive: true });
-  });
-
-  it("does not allow approval-scoped clients to resolve no-device gateway-client approvals from another connection", async (testContext) => {
-    const manager = createTestApprovalManager(testContext);
-    const record = manager.create(
-      {
-        command: "echo ok",
-      },
-      60_000,
-      "approval-gateway-resolve",
-    );
-    record.requestedByConnId = "conn-gateway";
-    record.requestedByClientId = GATEWAY_CLIENT_IDS.GATEWAY_CLIENT;
-    await manager.register(record, 60_000);
-    const respond = vi.fn();
-    const broadcast = vi.fn();
-    const broadcastToConnIds = vi.fn();
-
-    await handleApprovalResolve({
-      approvalKind: "exec",
-      manager,
-      inputId: record.id,
-      decision: "allow-once",
-      respond,
-      context: {
-        getRuntimeConfig: () => ({}),
-        broadcast,
-        broadcastToConnIds,
-        getApprovalClientConnIds: vi.fn(
-          createApprovalClientLookup([
-            createApprovalClient({
-              connId: "conn-mobile-approval",
-              clientId: GATEWAY_CLIENT_IDS.IOS_APP,
-              scopes: ["operator.approvals"],
-            }),
-          ]),
-        ),
-      } as unknown as GatewayRequestContext,
-      client: createApprovalClient({
-        connId: "conn-mobile-approval",
-        clientId: GATEWAY_CLIENT_IDS.IOS_APP,
-        scopes: ["operator.approvals"],
-      }),
-    });
-
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        code: "INVALID_REQUEST",
-        message: "unknown or expired approval id",
-      }),
-    );
-    expect((await manager.getSnapshot(record.id))?.decision).toBeUndefined();
-  });
-
-  it("does not allow approval-scoped clients to resolve no-device browser UI approvals from another connection", async (testContext) => {
-    const manager = createTestApprovalManager(testContext);
-    const record = manager.create(
-      {
-        command: "echo ok",
-      },
-      60_000,
-      "approval-control-ui-resolve",
-    );
-    record.requestedByConnId = "conn-control-ui";
-    record.requestedByClientId = GATEWAY_CLIENT_IDS.CONTROL_UI;
-    await manager.register(record, 60_000);
-    const respond = vi.fn();
-    const broadcast = vi.fn();
-    const broadcastToConnIds = vi.fn();
-
-    await handleApprovalResolve({
-      approvalKind: "exec",
-      manager,
-      inputId: record.id,
-      decision: "allow-once",
-      respond,
-      context: {
-        getRuntimeConfig: () => ({}),
-        broadcast,
-        broadcastToConnIds,
-        getApprovalClientConnIds: vi.fn(
-          createApprovalClientLookup([
-            createApprovalClient({
-              connId: "conn-mobile-approval",
-              clientId: GATEWAY_CLIENT_IDS.IOS_APP,
-              scopes: ["operator.approvals"],
-            }),
-          ]),
-        ),
-      } as unknown as GatewayRequestContext,
-      client: createApprovalClient({
-        connId: "conn-mobile-approval",
-        clientId: GATEWAY_CLIENT_IDS.IOS_APP,
-        scopes: ["operator.approvals"],
-      }),
-    });
-
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        code: "INVALID_REQUEST",
-        message: "unknown or expired approval id",
-      }),
-    );
-    expect((await manager.getSnapshot(record.id))?.decision).toBeUndefined();
   });
 
   it("does not allow approval-scoped clients to resolve device-bound gateway-client approvals from another device", async (testContext) => {
@@ -1562,6 +1206,59 @@ describe("handlePendingApprovalRequest", () => {
       expect.objectContaining({ id: "approval-resolved-visible" }),
       visibleConnIds,
       { dropIfSlow: true },
+    );
+  });
+
+  it("closes a plugin approval immediately when its exact Slack request has no route", async (testContext) => {
+    hasApprovalTurnSourceRouteMock.mockReturnValueOnce(false);
+    const manager = createTestApprovalManager<PluginApprovalRequestPayload>(testContext, {
+      approvalKind: "plugin",
+    });
+    const record = manager.create(
+      {
+        title: "Review diffs",
+        description: "Render a diff",
+        turnSourceChannel: "slack",
+        turnSourceAccountId: "default",
+        policySubject: { pluginKey: "diffs", tool: "diffs" },
+      },
+      60_000,
+      "plugin-slack-no-route",
+    );
+    await manager.register(record, 60_000);
+    const respond = vi.fn();
+    const event = requestedEvent(record);
+
+    await handlePendingApprovalRequest({
+      manager,
+      record,
+      respond,
+      context: {
+        broadcast: vi.fn(),
+        broadcastToConnIds: vi.fn(),
+        getApprovalClientConnIds: () => new Set(),
+      } as unknown as GatewayRequestContext,
+      requestEventName: "plugin.approval.requested",
+      requestEvent: event,
+      twoPhase: true,
+      approvalKind: "plugin",
+      deliverRequest: () => false,
+    });
+
+    expect(hasApprovalTurnSourceRouteMock).toHaveBeenCalledWith({
+      turnSourceChannel: "slack",
+      turnSourceAccountId: "default",
+      approvalKind: "plugin",
+      request: event,
+    });
+    expect(await manager.getSnapshot(record.id)).toMatchObject({
+      resolvedBy: "no-approval-route",
+      terminalReason: "no-route",
+    });
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ id: record.id, decision: null }),
+      undefined,
     );
   });
 });

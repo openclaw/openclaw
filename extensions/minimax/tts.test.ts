@@ -15,10 +15,7 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
   };
 });
 
-import {
-  buildMinimaxMusicGenerationProvider,
-  buildMinimaxPortalMusicGenerationProvider,
-} from "./music-generation-provider.js";
+import { buildMinimaxMusicGenerationProvider } from "./music-generation-provider.js";
 import { buildMinimaxSpeechProvider } from "./speech-provider-factory.js";
 import { minimaxTTS } from "./tts.js";
 
@@ -160,10 +157,7 @@ async function runMinimaxLoopbackFixture(fixture: MinimaxWireFixture): Promise<B
     }
 
     const providerId = fixture.provider ?? "minimax";
-    const provider =
-      providerId === "minimax-portal"
-        ? buildMinimaxPortalMusicGenerationProvider()
-        : buildMinimaxMusicGenerationProvider();
+    const provider = buildMinimaxMusicGenerationProvider(providerId);
     const result = await provider.generateMusic({
       provider: providerId,
       model: "music-2.6",

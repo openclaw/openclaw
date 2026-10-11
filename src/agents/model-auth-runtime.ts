@@ -1,9 +1,7 @@
-/**
- * Snapshot-aware and synthetic provider-auth availability.
- */
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { getRuntimeConfigSnapshot } from "../config/config.js";
+import { resolveMergedModelProviderConfig } from "../config/model-provider-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   prepareProviderSyntheticAuthWithPlugin,
@@ -28,10 +26,8 @@ export type RuntimeProviderAuthLookup = {
   >;
   setupProviderFallbackRefs?: readonly string[];
   syntheticAuthProviderRefs?: readonly string[];
-  syntheticAuthProviderRefsComplete?: boolean;
 };
 
-/** Builds stable env/synthetic auth lookup data for repeated provider checks. */
 export function createRuntimeProviderAuthLookup(params: {
   cfg?: OpenClawConfig;
   workspaceDir?: string;
@@ -60,7 +56,6 @@ export function createRuntimeProviderAuthLookup(params: {
     syntheticAuthProviderRefs: syntheticAuthProviderRefs?.complete
       ? syntheticAuthProviderRefs.refs
       : undefined,
-    syntheticAuthProviderRefsComplete: syntheticAuthProviderRefs?.complete,
   };
 }
 
@@ -101,7 +96,7 @@ function listProviderSyntheticAuthRefs(params: {
   modelApi?: string;
 }): string[] {
   const refs = [params.provider];
-  const providerConfig = authConfig.resolveProviderConfig(params.cfg, params.provider);
+  const providerConfig = resolveMergedModelProviderConfig(params.cfg, params.provider);
   if (params.modelApi) {
     refs.push(params.modelApi);
   }
@@ -159,6 +154,13 @@ function resolveRuntimeAvailableProviderAuth<T>(
     ? authConfig.resolveInlineProviderApiKeyCooldownUntil(params.store, provider)
     : null;
   const inlineProviderApiKeyUsable = unusableUntil === null || unusableUntil <= Date.now();
+  const isUsableSource = (source: string) =>
+    !authConfig.isConfigBackedInlineProviderApiKey({
+      cfg: params.cfg,
+      provider,
+      source,
+      store: params.store,
+    }) || inlineProviderApiKeyUsable;
 
   const envAuth = resolveEnvApiKey(provider, params.env, {
     config: params.cfg,
@@ -176,13 +178,7 @@ function resolveRuntimeAvailableProviderAuth<T>(
       capability: params.capability,
       mode: envAuth.source.includes("OAUTH_TOKEN") ? "oauth" : "api-key",
     }) &&
-    (!authConfig.isConfigBackedInlineProviderApiKey({
-      cfg: params.cfg,
-      provider,
-      source: envAuth.source,
-      store: params.store,
-    }) ||
-      inlineProviderApiKeyUsable)
+    isUsableSource(envAuth.source)
   ) {
     return true;
   }
@@ -211,13 +207,7 @@ function resolveRuntimeAvailableProviderAuth<T>(
         mode: managedRuntimeAuth.mode,
         authFlow: managedRuntimeAuth.authFlow,
       })) &&
-    (!authConfig.isConfigBackedInlineProviderApiKey({
-      cfg: params.cfg,
-      provider,
-      source: managedRuntimeAuth.source,
-      store: params.store,
-    }) ||
-      inlineProviderApiKeyUsable)
+    isUsableSource(managedRuntimeAuth.source)
   ) {
     return true;
   }
@@ -237,7 +227,6 @@ function resolveRuntimeAvailableProviderAuth<T>(
   return false;
 }
 
-/** Fast auth-availability check for runtime provider/model selection. */
 export function hasRuntimeAvailableProviderAuth(params: RuntimeProviderAuthParams): boolean {
   return resolveRuntimeAvailableProviderAuth(params, (provider) =>
     Boolean(
@@ -293,7 +282,7 @@ function syntheticAuthLookup(
     context: {
       config,
       provider: params.provider,
-      providerConfig: authConfig.resolveProviderConfig(config, params.provider),
+      providerConfig: resolveMergedModelProviderConfig(config, params.provider),
     },
   };
 }

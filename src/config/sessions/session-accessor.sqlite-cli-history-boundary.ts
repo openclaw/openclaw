@@ -1,18 +1,13 @@
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import {
   getCliHistoryWriter,
-  isKnownCliHistoryBoundary,
-  type CliHistoryWriter,
+  advanceCliHistoryBoundary,
+  type CliHistoryWriterFacts,
 } from "./cli-history-boundary.js";
 import { readSessionEntryRow, writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
 import type { ResolvedTranscriptScope } from "./session-accessor.sqlite-scope.js";
 import { readTranscriptGenerationInTransaction } from "./session-accessor.sqlite-transcript-state.js";
 import type { InternalSessionEntry } from "./types.js";
-
-export type CliHistoryWriterFacts = Pick<
-  CliHistoryWriter,
-  "runId" | "authFingerprint" | "lifecycleRevision" | "expectedWriterRunId"
->;
 
 /** Advance only a contiguous prefix written by the exact prepared CLI account's live owner. */
 export function advanceCliHistoryBoundaryInTransaction(
@@ -47,32 +42,12 @@ export function advanceCliHistoryBoundaryRangeInTransaction(
     database,
     scope.sessionKey,
   )?.entry;
-  const boundary = entry?.cliHistoryBoundary;
   const generation = readTranscriptGenerationInTransaction(database, scope.sessionId);
-  if (
-    !entry ||
-    !isKnownCliHistoryBoundary(boundary) ||
-    entry.sessionId !== scope.sessionId ||
-    boundary.sessionId !== scope.sessionId ||
-    entry.activeWriterRunId !== writer.expectedWriterRunId ||
-    entry.lifecycleRevision !== writer.lifecycleRevision ||
-    boundary.writerRunId !== writer.runId ||
-    boundary.authFingerprint !== writer.authFingerprint ||
-    (boundary.maxSeq === null ? range.first !== 0 : boundary.maxSeq !== range.first - 1) ||
-    !generation ||
-    (boundary.generation === null ? range.first !== 0 : boundary.generation !== generation)
-  ) {
+  const next = advanceCliHistoryBoundary(entry, scope.sessionId, generation ?? null, range, writer);
+  if (!next) {
     return false;
   }
   assertCurrent();
-  writeSessionEntry(
-    database,
-    scope.sessionKey,
-    {
-      ...entry,
-      cliHistoryBoundary: { ...boundary, generation, maxSeq: range.last },
-    } satisfies InternalSessionEntry,
-    { previousEntry: entry },
-  );
+  writeSessionEntry(database, scope.sessionKey, next, { previousEntry: entry });
   return true;
 }

@@ -250,7 +250,7 @@ suite.define(() => {
         .toBe(true);
       await effort.press("Tab");
       const focusedEffortControl = composer.locator(
-        "[data-chat-thinking-slider]:not([disabled]), [data-chat-speed-toggle]:not([disabled])",
+        "[data-chat-thinking-slider]:not([disabled]), [data-chat-speed-option]:not([disabled])",
       );
       await expect
         .poll(() =>
@@ -545,14 +545,14 @@ suite.define(() => {
 
       await effort.click();
       const thinkingSlider = composer.locator('[data-chat-thinking-slider="true"]');
-      const speedToggle = composer.locator("[data-chat-speed-toggle]");
+      const fastOption = composer.locator('[data-chat-speed-option="on"]');
       await expect.poll(() => thinkingSlider.isVisible()).toBe(true);
       await expect
         .poll(() => thinkingSlider.getAttribute("data-chat-thinking-values"))
         .toBe("off,low,medium,high");
       await expect.poll(() => thinkingSlider.inputValue()).toBe("3");
       // OpenAI sessions toggle between the standard and priority tiers.
-      await expect.poll(() => speedToggle.getAttribute("aria-checked")).toBe("false");
+      await expect.poll(() => fastOption.getAttribute("aria-checked")).toBe("false");
       // Reasoning and speed commit immediately while the Effort picker stays open.
       await thinkingSlider.press("Home");
       await thinkingSlider.press("ArrowRight");
@@ -569,7 +569,7 @@ suite.define(() => {
         .toBe(true);
       await expect.poll(() => effort.getAttribute("data-chat-thinking-value")).toBe("low");
       await expect.poll(() => thinkingSlider.inputValue()).toBe("1");
-      await speedToggle.click();
+      await fastOption.click();
       await expect
         .poll(async () =>
           (await gateway.getRequests("sessions.patch")).some(
@@ -581,13 +581,13 @@ suite.define(() => {
           ),
         )
         .toBe(true);
-      await expect.poll(() => speedToggle.getAttribute("aria-checked")).toBe("true");
+      await expect.poll(() => fastOption.getAttribute("aria-checked")).toBe("true");
       await page.keyboard.press("Escape");
       await expect
         .poll(() => composer.locator(".chat-controls__effort-menu").isVisible())
         .toBe(false);
       await effort.click();
-      await expect.poll(() => speedToggle.getAttribute("aria-checked")).toBe("true");
+      await expect.poll(() => fastOption.getAttribute("aria-checked")).toBe("true");
       await expect
         .poll(() => composer.locator('[data-chat-thinking-slider="true"]').count())
         .toBe(1);
@@ -706,7 +706,7 @@ suite.define(() => {
             .locator('wa-dropdown-item[slot="submenu"] .session-menu__text')
             .allTextContents(),
         )
-        .toEqual(["Reasoning", "Tool calls", "Keep commentary"]);
+        .toEqual(["Reasoning", "Tool calls", "Keep commentary", "Speech bubbles"]);
       const reasoning = viewDropdown.getByRole("menuitemcheckbox", { name: "Reasoning" });
       await expect.poll(() => reasoning.isVisible()).toBe(true);
       await expect.poll(() => reasoning.getAttribute("aria-checked")).toBe("true");
@@ -976,7 +976,7 @@ suite.define(() => {
       expect(
         await composer
           .locator(".chat-controls__model-menu")
-          .getByText(/Effort|Fast mode/)
+          .getByText(/Effort|Speed/)
           .count(),
       ).toBe(0);
       await page.keyboard.press("Escape");

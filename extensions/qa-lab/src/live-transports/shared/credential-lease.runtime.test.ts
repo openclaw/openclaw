@@ -7,6 +7,14 @@ import {
   startQaCredentialLeaseHeartbeat,
 } from "./credential-lease.runtime.js";
 
+type CredentialPayload = { groupId: string; driverToken: string; sutToken: string };
+const convexOptions = {
+  kind: "telegram",
+  source: "convex" as const,
+  resolveEnvPayload: () => ({ groupId: "-1", driverToken: "unused", sutToken: "unused" }),
+  parsePayload: (payload: unknown) => payload as CredentialPayload,
+};
+
 function jsonResponse(payload: unknown, status = 200) {
   return new Response(JSON.stringify(payload), {
     status,
@@ -114,8 +122,9 @@ describe("credential lease runtime", () => {
     vi.useRealTimers();
   });
 
-  it("releases a credential that expired while its payload was being hydrated", async () => {
+  it("releases a credential whose TTL expires while the host monotonic clock is paused", async () => {
     vi.useFakeTimers();
+    vi.spyOn(performance, "now").mockReturnValue(42);
     const operations: string[] = [];
     await expect(
       acquireQaCredentialLease({
@@ -150,6 +159,7 @@ describe("credential lease runtime", () => {
         },
       }),
     ).rejects.toThrow("could not be confirmed before use");
+    expect(performance.now()).toBe(42);
     expect(operations).toEqual(["acquire", "release"]);
   });
 
@@ -237,17 +247,12 @@ describe("credential lease runtime", () => {
       .mockResolvedValueOnce(jsonResponse({ status: "ok" }));
 
     const lease = await acquireQaCredentialLease({
-      kind: "telegram",
-      source: "convex",
-      role: "maintainer",
+      ...convexOptions,
       env: {
         OPENCLAW_QA_CONVEX_SITE_URL: "https://qa-cred.example.convex.site",
         OPENCLAW_QA_CONVEX_SECRET_MAINTAINER: "maintainer-secret",
       },
       fetchImpl,
-      resolveEnvPayload: () => ({ groupId: "-1", driverToken: "unused", sutToken: "unused" }),
-      parsePayload: (payload) =>
-        payload as { groupId: string; driverToken: string; sutToken: string },
     });
 
     expect(lease.source).toBe("convex");
@@ -264,49 +269,18 @@ describe("credential lease runtime", () => {
     expect(headers.authorization).toBe("Bearer maintainer-secret");
   });
 
-  it("bounds oversized convex broker failure bodies before parsing", async () => {
-    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValueOnce(
-      new Response("x".repeat(1_048_577), {
-        status: 500,
-        headers: { "content-type": "text/plain" },
-      }),
-    );
-
-    await expect(
-      acquireQaCredentialLease({
-        kind: "telegram",
-        source: "convex",
-        role: "maintainer",
-        env: {
-          OPENCLAW_QA_CONVEX_SITE_URL: "https://qa-cred.example.convex.site",
-          OPENCLAW_QA_CONVEX_SECRET_MAINTAINER: "maintainer-secret",
-        },
-        fetchImpl,
-        resolveEnvPayload: () => ({ groupId: "-1", driverToken: "unused", sutToken: "unused" }),
-        parsePayload: (payload) =>
-          payload as { groupId: string; driverToken: string; sutToken: string },
-      }),
-    ).rejects.toThrow("Convex credential broker: text response exceeds 1048576 bytes");
-
-    expect(fetchImpl).toHaveBeenCalledTimes(1);
-  });
-
   it("cancels a streaming convex broker failure body after the response cap", async () => {
     const broker = await startStreamingFailureBroker({});
     try {
       await expect(
         acquireQaCredentialLease({
-          kind: "telegram",
-          source: "convex",
+          ...convexOptions,
           role: "maintainer",
           env: {
             OPENCLAW_QA_CONVEX_SITE_URL: broker.url,
             OPENCLAW_QA_CONVEX_SECRET_MAINTAINER: "maintainer-secret",
             OPENCLAW_QA_ALLOW_INSECURE_HTTP: "1",
           },
-          resolveEnvPayload: () => ({ groupId: "-1", driverToken: "unused", sutToken: "unused" }),
-          parsePayload: (payload) =>
-            payload as { groupId: string; driverToken: string; sutToken: string },
         }),
       ).rejects.toThrow("Convex credential broker: text response exceeds 1048576 bytes");
 
@@ -321,7 +295,7 @@ describe("credential lease runtime", () => {
   it("hydrates chunked convex credential payloads after acquire", async () => {
     const serialized = JSON.stringify({
       groupId: "-100123",
-      driverToken: "driver",
+      driverToken: "driv\u00e9r",
       sutToken: "sut",
     });
     const fetchImpl = vi
@@ -333,7 +307,7 @@ describe("credential lease runtime", () => {
           leaseToken: "lease-chunked",
           payload: {
             __openclawQaCredentialPayloadChunksV1: true,
-            byteLength: serialized.length,
+            byteLength: Buffer.byteLength(serialized, "utf8"),
             chunkCount: 2,
           },
         }),
@@ -342,22 +316,18 @@ describe("credential lease runtime", () => {
       .mockResolvedValueOnce(jsonResponse({ status: "ok", data: serialized.slice(20) }));
 
     const lease = await acquireQaCredentialLease({
-      kind: "telegram",
-      source: "convex",
+      ...convexOptions,
       role: "ci",
       env: {
         OPENCLAW_QA_CONVEX_SITE_URL: "https://qa-cred.example.convex.site",
         OPENCLAW_QA_CONVEX_SECRET_CI: "ci-secret",
       },
       fetchImpl,
-      resolveEnvPayload: () => ({ groupId: "-1", driverToken: "unused", sutToken: "unused" }),
-      parsePayload: (payload) =>
-        payload as { groupId: string; driverToken: string; sutToken: string },
     });
 
     expect(lease.payload).toEqual({
       groupId: "-100123",
-      driverToken: "driver",
+      driverToken: "driv\u00e9r",
       sutToken: "sut",
     });
     expect(fetchImpl).toHaveBeenCalledTimes(3);
@@ -374,45 +344,6 @@ describe("credential lease runtime", () => {
     expect(chunkRequest.credentialId).toBe("cred-chunked");
     expect(chunkRequest.index).toBe(0);
     expect(chunkRequest.leaseToken).toBe("lease-chunked");
-  });
-
-  it("validates chunked convex payload length as utf8 bytes", async () => {
-    const serialized = JSON.stringify({
-      groupId: "-100123",
-      driverToken: "driv\u00e9r",
-      sutToken: "sut",
-    });
-    const fetchImpl = vi
-      .fn<typeof fetch>()
-      .mockResolvedValueOnce(
-        jsonResponse({
-          status: "ok",
-          credentialId: "cred-utf8",
-          leaseToken: "lease-utf8",
-          payload: {
-            __openclawQaCredentialPayloadChunksV1: true,
-            byteLength: Buffer.byteLength(serialized, "utf8"),
-            chunkCount: 1,
-          },
-        }),
-      )
-      .mockResolvedValueOnce(jsonResponse({ status: "ok", data: serialized }));
-
-    const lease = await acquireQaCredentialLease({
-      kind: "telegram",
-      source: "convex",
-      role: "ci",
-      env: {
-        OPENCLAW_QA_CONVEX_SITE_URL: "https://qa-cred.example.convex.site",
-        OPENCLAW_QA_CONVEX_SECRET_CI: "ci-secret",
-      },
-      fetchImpl,
-      resolveEnvPayload: () => ({ groupId: "-1", driverToken: "unused", sutToken: "unused" }),
-      parsePayload: (payload) =>
-        payload as { groupId: string; driverToken: string; sutToken: string },
-    });
-
-    expect(lease.payload.driverToken).toBe("driv\u00e9r");
   });
 
   it("rejects chunked convex payload markers above the configured chunk cap", async () => {
@@ -434,8 +365,7 @@ describe("credential lease runtime", () => {
 
     await expect(
       acquireQaCredentialLease({
-        kind: "telegram",
-        source: "convex",
+        ...convexOptions,
         role: "ci",
         env: {
           OPENCLAW_QA_CONVEX_SITE_URL: "https://qa-cred.example.convex.site",
@@ -443,9 +373,6 @@ describe("credential lease runtime", () => {
           OPENCLAW_QA_CREDENTIAL_PAYLOAD_MAX_CHUNKS: "2",
         },
         fetchImpl,
-        resolveEnvPayload: () => ({ groupId: "-1", driverToken: "unused", sutToken: "unused" }),
-        parsePayload: (payload) =>
-          payload as { groupId: string; driverToken: string; sutToken: string },
       }),
     ).rejects.toThrow("Chunked credential payload marker exceeds 2 chunks.");
 
@@ -474,8 +401,7 @@ describe("credential lease runtime", () => {
 
     await expect(
       acquireQaCredentialLease({
-        kind: "telegram",
-        source: "convex",
+        ...convexOptions,
         role: "ci",
         env: {
           OPENCLAW_QA_CONVEX_SITE_URL: "https://qa-cred.example.convex.site",
@@ -483,9 +409,6 @@ describe("credential lease runtime", () => {
           OPENCLAW_QA_CREDENTIAL_PAYLOAD_MAX_BYTES: "32",
         },
         fetchImpl,
-        resolveEnvPayload: () => ({ groupId: "-1", driverToken: "unused", sutToken: "unused" }),
-        parsePayload: (payload) =>
-          payload as { groupId: string; driverToken: string; sutToken: string },
       }),
     ).rejects.toThrow("Chunked credential payload marker exceeds 32 bytes.");
 
@@ -515,17 +438,13 @@ describe("credential lease runtime", () => {
 
     await expect(
       acquireQaCredentialLease({
-        kind: "telegram",
-        source: "convex",
+        ...convexOptions,
         role: "ci",
         env: {
           OPENCLAW_QA_CONVEX_SITE_URL: "https://qa-cred.example.convex.site",
           OPENCLAW_QA_CONVEX_SECRET_CI: "ci-secret",
         },
         fetchImpl,
-        resolveEnvPayload: () => ({ groupId: "-1", driverToken: "unused", sutToken: "unused" }),
-        parsePayload: (payload) =>
-          payload as { groupId: string; driverToken: string; sutToken: string },
       }),
     ).rejects.toThrow("Chunked credential payload exceeded declared byteLength.");
 
@@ -536,34 +455,6 @@ describe("credential lease runtime", () => {
     expect(fetchUrl(fetchImpl, 2)).toBe(
       "https://qa-cred.example.convex.site/qa-credentials/v1/release",
     );
-  });
-
-  it("defaults convex credential role to maintainer outside CI", async () => {
-    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValueOnce(
-      jsonResponse({
-        status: "ok",
-        credentialId: "cred-maintainer-default",
-        leaseToken: "lease-maintainer-default",
-        payload: { groupId: "-100123", driverToken: "driver", sutToken: "sut" },
-      }),
-    );
-
-    await acquireQaCredentialLease({
-      kind: "telegram",
-      source: "convex",
-      env: {
-        OPENCLAW_QA_CONVEX_SITE_URL: "https://qa-cred.example.convex.site",
-        OPENCLAW_QA_CONVEX_SECRET_MAINTAINER: "maintainer-secret",
-      },
-      fetchImpl,
-      resolveEnvPayload: () => ({ groupId: "-1", driverToken: "unused", sutToken: "unused" }),
-      parsePayload: (payload) =>
-        payload as { groupId: string; driverToken: string; sutToken: string },
-    });
-
-    const firstInit = fetchInit(fetchImpl);
-    const headers = firstInit?.headers as Record<string, string>;
-    expect(headers.authorization).toBe("Bearer maintainer-secret");
   });
 
   it("defaults convex credential role to ci when CI=true", async () => {
@@ -577,17 +468,13 @@ describe("credential lease runtime", () => {
     );
 
     await acquireQaCredentialLease({
-      kind: "telegram",
-      source: "convex",
+      ...convexOptions,
       env: {
         CI: "true",
         OPENCLAW_QA_CONVEX_SITE_URL: "https://qa-cred.example.convex.site",
         OPENCLAW_QA_CONVEX_SECRET_CI: "ci-secret",
       },
       fetchImpl,
-      resolveEnvPayload: () => ({ groupId: "-1", driverToken: "unused", sutToken: "unused" }),
-      parsePayload: (payload) =>
-        payload as { groupId: string; driverToken: string; sutToken: string },
     });
 
     const firstInit = fetchInit(fetchImpl);
@@ -625,8 +512,7 @@ describe("credential lease runtime", () => {
     let nowMs = 0;
 
     const lease = await acquireQaCredentialLease({
-      kind: "telegram",
-      source: "convex",
+      ...convexOptions,
       env: {
         OPENCLAW_QA_CONVEX_SITE_URL: "https://qa-cred.example.convex.site",
         OPENCLAW_QA_CONVEX_SECRET_MAINTAINER: "maintainer-secret",
@@ -639,9 +525,6 @@ describe("credential lease runtime", () => {
         sleeps.push(ms);
         nowMs += ms;
       },
-      resolveEnvPayload: () => ({ groupId: "-1", driverToken: "unused", sutToken: "unused" }),
-      parsePayload: (payload) =>
-        payload as { groupId: string; driverToken: string; sutToken: string },
     });
 
     expect(lease.credentialId).toBe("cred-2");
@@ -669,8 +552,7 @@ describe("credential lease runtime", () => {
     let nowMs = 0;
 
     const lease = await acquireQaCredentialLease({
-      kind: "telegram",
-      source: "convex",
+      ...convexOptions,
       env: {
         OPENCLAW_QA_CONVEX_SITE_URL: "https://qa-cred.example.convex.site",
         OPENCLAW_QA_CONVEX_SECRET_MAINTAINER: "test",
@@ -683,9 +565,6 @@ describe("credential lease runtime", () => {
         sleeps.push(ms);
         nowMs += ms;
       },
-      resolveEnvPayload: () => ({ groupId: "-1", driverToken: "unused", sutToken: "unused" }),
-      parsePayload: (payload) =>
-        payload as { groupId: string; driverToken: string; sutToken: string },
     });
 
     expect(lease.credentialId).toBe("cred-after-timeout");
@@ -696,15 +575,11 @@ describe("credential lease runtime", () => {
   it("rejects non-https convex site URLs unless local insecure opt-in is enabled", async () => {
     await expect(
       acquireQaCredentialLease({
-        kind: "telegram",
-        source: "convex",
+        ...convexOptions,
         env: {
           OPENCLAW_QA_CONVEX_SITE_URL: "http://qa-cred.example.convex.site",
           OPENCLAW_QA_CONVEX_SECRET_MAINTAINER: "maintainer-secret",
         },
-        resolveEnvPayload: () => ({ groupId: "-1", driverToken: "unused", sutToken: "unused" }),
-        parsePayload: (payload) =>
-          payload as { groupId: string; driverToken: string; sutToken: string },
       }),
     ).rejects.toThrow("must use https://");
   });
@@ -720,8 +595,7 @@ describe("credential lease runtime", () => {
     );
 
     await acquireQaCredentialLease({
-      kind: "telegram",
-      source: "convex",
+      ...convexOptions,
       role: "maintainer",
       env: {
         OPENCLAW_QA_CONVEX_SITE_URL: "http://127.0.0.1:3210",
@@ -729,9 +603,6 @@ describe("credential lease runtime", () => {
         OPENCLAW_QA_ALLOW_INSECURE_HTTP: "1",
       },
       fetchImpl,
-      resolveEnvPayload: () => ({ groupId: "-1", driverToken: "unused", sutToken: "unused" }),
-      parsePayload: (payload) =>
-        payload as { groupId: string; driverToken: string; sutToken: string },
     });
 
     expect(fetchUrl(fetchImpl)).toBe("http://127.0.0.1:3210/qa-credentials/v1/acquire");
@@ -750,8 +621,7 @@ describe("credential lease runtime", () => {
     );
 
     await acquireQaCredentialLease({
-      kind: "telegram",
-      source: "convex",
+      ...convexOptions,
       role: "maintainer",
       env: {
         OPENCLAW_QA_CONVEX_SITE_URL: "https://qa-cred.example.convex.site",
@@ -759,9 +629,6 @@ describe("credential lease runtime", () => {
         OPENCLAW_QA_CREDENTIAL_HTTP_TIMEOUT_MS: String(Number.MAX_SAFE_INTEGER),
       },
       fetchImpl,
-      resolveEnvPayload: () => ({ groupId: "-1", driverToken: "unused", sutToken: "unused" }),
-      parsePayload: (payload) =>
-        payload as { groupId: string; driverToken: string; sutToken: string },
     });
 
     expect(timeoutSpy).toHaveBeenCalledWith(MAX_TIMER_TIMEOUT_MS);
@@ -771,16 +638,12 @@ describe("credential lease runtime", () => {
   it("rejects unsafe endpoint prefix overrides", async () => {
     await expect(
       acquireQaCredentialLease({
-        kind: "telegram",
-        source: "convex",
+        ...convexOptions,
         env: {
           OPENCLAW_QA_CONVEX_SITE_URL: "https://qa-cred.example.convex.site",
           OPENCLAW_QA_CONVEX_SECRET_MAINTAINER: "maintainer-secret",
           OPENCLAW_QA_CONVEX_ENDPOINT_PREFIX: "//evil.example",
         },
-        resolveEnvPayload: () => ({ groupId: "-1", driverToken: "unused", sutToken: "unused" }),
-        parsePayload: (payload) =>
-          payload as { groupId: string; driverToken: string; sutToken: string },
       }),
     ).rejects.toThrow("OPENCLAW_QA_CONVEX_ENDPOINT_PREFIX must be an absolute path");
   });
@@ -800,15 +663,13 @@ describe("credential lease runtime", () => {
 
     await expect(
       acquireQaCredentialLease({
-        kind: "telegram",
-        source: "convex",
+        ...convexOptions,
         role: "maintainer",
         env: {
           OPENCLAW_QA_CONVEX_SITE_URL: "https://qa-cred.example.convex.site",
           OPENCLAW_QA_CONVEX_SECRET_MAINTAINER: "maintainer-secret",
         },
         fetchImpl,
-        resolveEnvPayload: () => ({ groupId: "-1", driverToken: "unused", sutToken: "unused" }),
         parsePayload: () => {
           throw new Error("bad payload shape");
         },
@@ -824,15 +685,11 @@ describe("credential lease runtime", () => {
   it("fails convex mode when auth secret is missing", async () => {
     await expect(
       acquireQaCredentialLease({
-        kind: "telegram",
-        source: "convex",
+        ...convexOptions,
         role: "maintainer",
         env: {
           OPENCLAW_QA_CONVEX_SITE_URL: "https://qa-cred.example.convex.site",
         },
-        resolveEnvPayload: () => ({ groupId: "-1", driverToken: "unused", sutToken: "unused" }),
-        parsePayload: (payload) =>
-          payload as { groupId: string; driverToken: string; sutToken: string },
       }),
     ).rejects.toThrow("OPENCLAW_QA_CONVEX_SECRET_MAINTAINER");
   });

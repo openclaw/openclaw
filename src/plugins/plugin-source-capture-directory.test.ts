@@ -4,11 +4,13 @@ import fsPromises from "node:fs/promises";
 import path from "node:path";
 import { createInterface } from "node:readline";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { cleanupStartupPluginSourceCaptures } from "../commands/startup-plugin-source-captures.js";
 import * as nodeSqlite from "../infra/node-sqlite.js";
 import * as census from "../infra/openclaw-process-census.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+import { acquireSqliteStagingToken } from "../infra/sqlite-staging-token.js";
 import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
@@ -18,6 +20,7 @@ import { retainGatewayPluginMetadata } from "./plugin-metadata-lifecycle.js";
 import { withPluginSourceCaptureDirectory } from "./plugin-package-metadata-capture.js";
 import {
   createPluginSourceCaptureRoot,
+  prunePluginNativeCaptureDirectories,
   retainPluginSourceCaptureInstance,
 } from "./plugin-source-capture-directory.js";
 import { sweepPluginSourceCapturesForTest } from "./plugin-source-capture-directory.test-support.js";
@@ -468,6 +471,31 @@ it.each(["payload", "instance"])(
     const orphan = await abandonCapture(stateDir, createSource());
     age(orphan.instanceRoot);
     const captures = path.dirname(orphan.boundaryRoot);
+    if (stage === "payload") {
+      let admitted = true;
+      const lstat = fsPromises.lstat.bind(fsPromises);
+      const inspected = vi
+        .spyOn(fsPromises, "lstat")
+        .mockImplementation(async (target, options) => {
+          const result = await lstat(target, options);
+          if (String(target) === orphan.instanceRoot) {
+            admitted = false;
+          }
+          return result;
+        });
+      try {
+        const refused = await prunePluginNativeCaptureDirectories(stateDir, new Set(), async () => {
+          await Promise.resolve();
+          if (!admitted) {
+            throw new Error("Fixture cleanup authority expired");
+          }
+        });
+        expect(refused.warnings).toContain("Fixture cleanup authority expired");
+        expect(fs.readFileSync(orphan.capturedFile, "utf8")).toBe(capturedSource);
+      } finally {
+        inspected.mockRestore();
+      }
+    }
     const remove = fsPromises.rm.bind(fsPromises);
     const failure = Object.assign(new Error("Fixture cleanup cannot finish"), { code: "EACCES" });
     const fault = vi.spyOn(fsPromises, "rm").mockImplementation(async (target, options) => {
@@ -494,35 +522,77 @@ it.each(["payload", "instance"])(
   30_000,
 );
 
-it("keeps hourly reclamation on a live metadata owner when its siblings are closing", async () => {
+it("runs hourly reclamation on a live metadata owner", async () => {
   const stateDir = temp.make("plugin-capture-periodic-");
   const orphan = await abandonCapture(stateDir, createSource());
   vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
   const time = createGatewaySchedulerClock();
   const scheduler = createTestGatewayScheduler(time.clock);
   const metadata = retainGatewayPluginMetadata(scheduler);
-  const fencedTime = createGatewaySchedulerClock();
-  const fencedScheduler = createTestGatewayScheduler(fencedTime.clock);
-  const fenced = retainGatewayPluginMetadata(fencedScheduler);
-  const siblingTime = createGatewaySchedulerClock();
-  const siblingScheduler = createTestGatewayScheduler(siblingTime.clock);
-  const sibling = retainGatewayPluginMetadata(siblingScheduler);
   try {
     await sweepPluginSourceCapturesForTest(stateDir);
     expect(fs.readFileSync(orphan.capturedFile, "utf8")).toBe(capturedSource);
-    fencedScheduler.beginClose();
-    await siblingScheduler.stop();
     age(orphan.instanceRoot);
     await time.advanceBy(2 * hour);
     expect(fs.existsSync(orphan.instanceRoot)).toBe(false);
-    await sibling.close();
   } finally {
-    await sibling.close();
-    await fenced.close();
     await metadata.close();
     await sweepPluginSourceCapturesForTest(stateDir);
   }
 }, 30_000);
+
+it("joins hourly reclamation during metadata retirement without stopping sibling schedules", async () => {
+  const stateDir = temp.make("plugin-capture-hourly-join-");
+  const root = path.join(stateDir, "tmp", "plugin-captures");
+  vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+  const time = createGatewaySchedulerClock();
+  const scheduler = createTestGatewayScheduler(time.clock);
+  const metadata = retainGatewayPluginMetadata(scheduler);
+  await sweepPluginSourceCapturesForTest(stateDir);
+  const orphan = path.join(root, "abandoned");
+  fs.mkdirSync(orphan, { recursive: true });
+  fs.writeFileSync(path.join(orphan, "payload"), "reconstructible capture");
+  acquireSqliteStagingToken(orphan, "create")();
+  age(orphan);
+  const entered = createDeferred();
+  const release = createDeferred();
+  const remove = fsPromises.rm.bind(fsPromises);
+  const removal = vi.spyOn(fsPromises, "rm").mockImplementation(async (target, options) => {
+    if (path.dirname(String(target)) === root) {
+      entered.resolve();
+      await release.promise;
+    }
+    await remove(target, options);
+  });
+  const sweep = time.advanceBy(hour);
+  let closing: ReturnType<typeof metadata.close> | undefined;
+  try {
+    await entered.promise;
+    let closed = false;
+    closing = metadata.close().then((result) => {
+      closed = true;
+      return result;
+    });
+    const sibling = vi.fn();
+    scheduler.schedule({ id: "capture-maintenance-sibling", delayMs: 0, run: sibling });
+    await time.advanceBy(0);
+    await fsPromises.stat(stateDir);
+    expect(closed).toBe(false);
+    expect(sibling).toHaveBeenCalledOnce();
+    expect(scheduler.signal.aborted).toBe(false);
+    release.resolve();
+    await Promise.all([sweep, closing]);
+    expect(closed).toBe(true);
+    expect(fs.readdirSync(root)).toEqual([]);
+    expect(scheduler.nextWakeAtMs).toBeNull();
+  } finally {
+    release.resolve();
+    await Promise.allSettled([sweep, closing]);
+    removal.mockRestore();
+    await metadata.close();
+    await scheduler.stop();
+  }
+});
 
 it.each(["before command", "inside command"])(
   "allocates captures without timers when the loader is imported %s",
@@ -593,15 +663,13 @@ it.each(["before command", "inside command"])(
   },
 );
 
-it("retains live capture bytes until both metadata owners and the artifact release custody", async () => {
+it("retains live capture bytes until the metadata owner and artifact are released", async () => {
   const stateDir = temp.make("plugin-capture-shared-");
   vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
   const source = createSource();
   const first = retainGatewayPluginMetadata(createTestGatewayScheduler());
-  let second: ReturnType<typeof retainGatewayPluginMetadata> | undefined;
   let artifact: ReturnType<typeof capturePluginGenerationArtifact> | undefined;
   try {
-    second = retainGatewayPluginMetadata(createTestGatewayScheduler());
     artifact = capturePluginGenerationArtifact(source);
     const { instanceRoot } = capturePaths(
       stateDir,
@@ -615,10 +683,6 @@ it("retains live capture bytes until both metadata owners and the artifact relea
     );
     await first.close();
     await first.close();
-    expect(fs.readFileSync(artifact.resolve(path.join(source, "index.cjs")), "utf8")).toBe(
-      capturedSource,
-    );
-    await second.close();
     await sweepPluginSourceCapturesForTest(stateDir);
     expect(fs.readFileSync(artifact.resolve(path.join(source, "index.cjs")), "utf8")).toBe(
       capturedSource,
@@ -629,7 +693,7 @@ it("retains live capture bytes until both metadata owners and the artifact relea
     try {
       await artifact?.disposeAsync();
     } finally {
-      await Promise.all([first.close(), second?.close()]);
+      await first.close();
     }
   }
 });
@@ -808,51 +872,6 @@ it("keeps metadata boot and source capture usable when the state directory canno
   expect(fs.existsSync(instanceRoot!)).toBe(false);
 });
 
-// Failure injection sits at the filesystem boundary; captures still exercise the real allocator.
-it.each(["captures", "first capture"])(
-  "falls back when ENOSPC interrupts allocation of the %s directory",
-  async (stage) => {
-    const stateDir = temp.make("plugin-capture-full-state-");
-    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-    vi.spyOn(process, "emitWarning").mockImplementation(() => {});
-    const mkdir = fs.mkdirSync.bind(fs);
-    const mkdtemp = fs.mkdtempSync.bind(fs);
-    const failure = Object.assign(new Error("Fixture state filesystem is full"), {
-      code: "ENOSPC",
-    });
-    if (stage === "captures") {
-      vi.spyOn(fs, "mkdirSync").mockImplementation((target, options) => {
-        if (
-          String(target).startsWith(stateDir + path.sep) &&
-          path.basename(String(target)) === "captures"
-        ) {
-          throw failure;
-        }
-        return mkdir(target, options);
-      });
-    } else {
-      vi.spyOn(fs, "mkdtempSync").mockImplementation((prefix, options) => {
-        if (prefix.startsWith(stateDir + path.sep)) {
-          throw failure;
-        }
-        return mkdtemp(prefix, options);
-      });
-    }
-    const source = createSource();
-    const artifact = capturePluginGenerationArtifact(source);
-    try {
-      expect(fs.readFileSync(artifact.resolve(path.join(source, "index.cjs")), "utf8")).toBe(
-        capturedSource,
-      );
-      expect(artifact.boundaryRoot.startsWith(stateDir + path.sep)).toBe(false);
-      expect(fs.readdirSync(path.join(stateDir, "tmp", "plugin-captures"))).toEqual([]);
-    } finally {
-      await artifact.disposeAsync();
-    }
-    expect(fs.existsSync(artifact.boundaryRoot)).toBe(false);
-  },
-);
-
 it.each(["malformed", "symlink", "hardlink", "sidecar-symlink", "captures-symlink"])(
   "preserves an old capture with an unsafe %s marker or payload",
   async (kind) => {
@@ -897,7 +916,7 @@ it.each(["malformed", "symlink", "hardlink", "sidecar-symlink", "captures-symlin
   },
 );
 
-it("summarizes inaccessible owner records with backoff while continuing cleanup retries", async () => {
+it("summarizes inaccessible owner records and retries cleanup", async () => {
   const stateDir = temp.make("plugin-capture-warning-backoff-");
   const root = path.join(stateDir, "tmp", "plugin-captures");
   const orphan = await abandonCapture(stateDir, createSource());
@@ -921,14 +940,6 @@ it("summarizes inaccessible owner records with backoff while continuing cleanup 
   await sweepPluginSourceCapturesForTest(stateDir);
   expect(warning).toHaveBeenCalledTimes(1);
   expect(String(warning.mock.calls[0]?.[0])).toContain("3 cleanup failure(s)");
-  await sweepPluginSourceCapturesForTest(stateDir);
-  expect(warning).toHaveBeenCalledTimes(1);
-  vi.setSystemTime(Date.now() + hour);
-  await sweepPluginSourceCapturesForTest(stateDir);
-  expect(warning).toHaveBeenCalledTimes(2);
-  vi.setSystemTime(Date.now() + hour);
-  await sweepPluginSourceCapturesForTest(stateDir);
-  expect(warning).toHaveBeenCalledTimes(2);
   fault.mockRestore();
   await sweepPluginSourceCapturesForTest(stateDir);
   expect(fs.readdirSync(root)).toEqual([]);

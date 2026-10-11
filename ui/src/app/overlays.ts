@@ -3,6 +3,7 @@ import {
   GATEWAY_EVENT_UPDATE_RUN_CHANGED,
   type GatewayUpdateAvailableEventPayload,
 } from "../../../src/gateway/events.js";
+import { registerListener } from "../../../src/shared/listeners.js";
 import { t } from "../i18n/index.ts";
 import {
   closeDevicePairSetup as closeDevicePairSetupState,
@@ -181,19 +182,17 @@ export function createApplicationOverlays(
     }
     if (connected && !operatorAccess.canReviewApprovals) {
       approvalDecision = null;
+    }
+    if (!connected || !next.client || !operatorAccess.canReviewApprovals) {
       promptState.execApprovalQueue = [];
       promptState.execApprovalBusy = false;
       promptState.execApprovalErrors.clear();
       clearExecApprovalTimers(promptState);
     }
     if (!connected || !next.client) {
-      promptState.execApprovalQueue = [];
-      promptState.execApprovalBusy = false;
-      promptState.execApprovalErrors.clear();
       if (next.phase !== "reload-required" && !next.client) {
         connectedEpoch = 0;
       }
-      clearExecApprovalTimers(promptState);
       updates.synchronizeGateway(next);
       return;
     }
@@ -278,10 +277,7 @@ export function createApplicationOverlays(
     get snapshot() {
       return snapshot;
     },
-    subscribe(listener) {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
+    subscribe: (listener) => registerListener(listeners, listener),
     refreshUpdateStatus: updates.refreshUpdateStatus,
     acknowledgeUpdateRun: updates.acknowledgeUpdateRun,
     runUpdate: updates.runUpdate,

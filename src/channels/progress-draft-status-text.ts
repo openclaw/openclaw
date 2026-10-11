@@ -1,4 +1,3 @@
-// Progress-draft status text normalization for reasoning, preamble, and commentary lanes.
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { formatReasoningMessage } from "../agents/embedded-agent-utils.js";
 import { redactToolPayloadText } from "../logging/redact.js";
@@ -57,18 +56,10 @@ function readReasoningProgressTextOutsideCode(text: string): string | undefined 
       continue;
     }
     hasTags = true;
-    if (match[1]) {
-      if (inReasoning) {
-        chunks.push(text.slice(cursor, offset));
-      }
-      inReasoning = false;
-      cursor = offset + match[0].length;
-      continue;
-    }
     if (inReasoning) {
       chunks.push(text.slice(cursor, offset));
     }
-    inReasoning = true;
+    inReasoning = !match[1];
     cursor = offset + match[0].length;
   }
   if (!hasTags) {

@@ -2,56 +2,31 @@
 
 import { render } from "lit";
 import { expect, it, onTestFinished, vi } from "vitest";
-import { groupMessages } from "../chat-thread-grouping.ts";
-import { renderMessageGroup } from "./chat-message.ts";
+import { createApplicationContextProvider } from "../../../test-helpers/application-context.ts";
+import { createInitializationContext } from "../chat-pane.test-support.ts";
+import { renderMessageGroup } from "./chat-message-group.ts";
+import {
+  createAssistantCanvasBlock,
+  createAssistantMessage,
+  createMessageGroup,
+} from "./chat-message.test-support.ts";
+import { renderToolFixture, settleToolBridges } from "./chat-tool-render.test-support.ts";
 
 it("keeps MCP App raw details reachable from its widget menu", async () => {
-  const container = document.createElement("div");
+  const container = createApplicationContextProvider(createInitializationContext());
   onTestFinished(async () => {
     await vi.dynamicImportSettled();
     render(null, container);
   });
-  const preview = {
-    kind: "canvas",
-    surface: "assistant_message",
-    render: "url",
-    viewId: "cv_inline_mcp-raw",
-    title: "Inline demo",
-    url: "/__openclaw__/canvas/documents/cv_inline_mcp-raw/index.html",
-    preferredHeight: 360,
-    mcpApp: { viewId: "view-mcp-raw" },
-  };
-  const [group] = groupMessages([
-    {
-      kind: "message",
-      key: "assistant-message",
-      message: {
-        role: "assistant",
-        timestamp: 1,
-        content: [
-          {
-            type: "canvas",
-            preview,
-            rawText: JSON.stringify({
-              kind: "canvas",
-              view: {
-                backend: "canvas",
-                id: preview.viewId,
-                url: preview.url,
-                title: preview.title,
-                preferred_height: preview.preferredHeight,
-              },
-              presentation: { target: "assistant_message" },
-            }),
-          },
-        ],
-      },
-    },
-  ]);
-  if (group?.kind !== "group") {
-    throw new Error("expected a prepared assistant message group");
-  }
-  render(
+  const block = createAssistantCanvasBlock({ suffix: "mcp-raw" });
+  const group = createMessageGroup(
+    createAssistantMessage(
+      [{ ...block, preview: { ...block.preview, mcpApp: { viewId: "view-mcp-raw" } } }],
+      { timestamp: 1 },
+    ),
+    "assistant",
+  );
+  await renderToolFixture(
     renderMessageGroup(group, {
       showReasoning: true,
       showToolCalls: true,
@@ -63,6 +38,7 @@ it("keeps MCP App raw details reachable from its widget menu", async () => {
   );
   await vi.dynamicImportSettled();
   expect(customElements.get("mcp-app-view")).toBeDefined();
+  await settleToolBridges(container);
 
   const dropdown = container.querySelector("wa-dropdown");
   expect(dropdown).toBeInstanceOf(HTMLElement);

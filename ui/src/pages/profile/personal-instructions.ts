@@ -33,7 +33,6 @@ export class PersonalInstructions extends OpenClawLightDomElement {
   private gatewayUrl: string | null = null;
   private available = false;
   private multipleProfiles = false;
-  private generation = 0;
   private subscriptions: Array<() => void> = [];
   private drafts = new Map<string, { file: UsersPersonalFileGetResult; content: string }>();
 
@@ -51,7 +50,6 @@ export class PersonalInstructions extends OpenClawLightDomElement {
   override disconnectedCallback() {
     this.subscriptions.forEach((unsubscribe) => unsubscribe());
     this.subscriptions = [];
-    this.generation += 1;
     this.client = null;
     this.available = false;
     super.disconnectedCallback();
@@ -87,15 +85,11 @@ export class PersonalInstructions extends OpenClawLightDomElement {
       connectionId !== this.connectionId ||
       available !== this.available;
     if (sourceChanged) {
-      this.generation += 1;
       this.client = snapshot.client;
       this.connectionId = connectionId;
       this.gatewayUrl = gatewayUrl;
       this.profileId = profileId;
       this.available = available;
-      this.busy = null;
-      this.error = null;
-      this.saved = false;
       if (identityChanged) {
         this.file = null;
         this.draft = "";
@@ -114,15 +108,16 @@ export class PersonalInstructions extends OpenClawLightDomElement {
       } else {
         this.drafts.delete(this.agentId);
       }
-      this.generation += 1;
-      this.busy = null;
-      this.error = null;
-      this.saved = false;
       this.agentId = nextAgentId;
       const pending = this.drafts.get(nextAgentId);
       this.drafts.delete(nextAgentId);
       this.file = pending?.file ?? null;
       this.draft = pending?.content ?? "";
+    }
+    if (sourceChanged || agentChanged) {
+      this.busy = null;
+      this.error = null;
+      this.saved = false;
     }
     if (this.available && this.agentId && !this.dirty && (sourceChanged || agentChanged)) {
       void this.load();
@@ -137,32 +132,9 @@ export class PersonalInstructions extends OpenClawLightDomElement {
     if (!client || !this.available || !agentId || this.busy) {
       return;
     }
-    const generation = ++this.generation;
-    this.busy = "load";
-    this.error = null;
-    this.saved = false;
-    try {
-      const file = await client.request<UsersPersonalFileGetResult>("users.personalFile.get", {
-        agentId,
-      });
-      if (generation !== this.generation) {
-        return;
-      }
-      if (file.agentId !== agentId || file.profileId !== profileId) {
-        throw new Error(t("profilePage.personalInstructions.contextChanged"));
-      }
-      this.file = file;
-      this.draft = file.content;
-      this.drafts.delete(agentId);
-    } catch (error) {
-      if (generation === this.generation) {
-        this.error = formatUiError(error);
-      }
-    } finally {
-      if (generation === this.generation) {
-        this.busy = null;
-      }
-    }
+    await this.requestFile("load", { agentId, profileId }, () =>
+      client.request<UsersPersonalFileGetResult>("users.personalFile.get", { agentId }),
+    );
   }
 
   private async save() {
@@ -180,33 +152,54 @@ export class PersonalInstructions extends OpenClawLightDomElement {
     ) {
       return;
     }
-    const generation = ++this.generation;
     const content = this.draft;
-    this.busy = "save";
-    this.error = null;
-    this.saved = false;
-    try {
-      const result = await client.request<UsersPersonalFileSetResult>("users.personalFile.set", {
+    await this.requestFile("save", file, () =>
+      client.request<UsersPersonalFileSetResult>("users.personalFile.set", {
         agentId: file.agentId,
         content,
         expectedHash: file.hash,
-      });
-      if (generation !== this.generation) {
+      }),
+    );
+  }
+
+  private async requestFile(
+    operation: "load" | "save",
+    target: { agentId: string; profileId: string | null },
+    request: () => Promise<UsersPersonalFileGetResult>,
+  ) {
+    const client = this.client;
+    const connectionId = this.connectionId;
+    const draft = this.draft;
+    const isCurrent = () =>
+      this.available &&
+      this.client === client &&
+      this.connectionId === connectionId &&
+      this.agentId === target.agentId &&
+      this.profileId === target.profileId;
+    this.busy = operation;
+    this.error = null;
+    this.saved = false;
+    try {
+      const result = await request();
+      if (!isCurrent()) {
         return;
       }
-      if (result.agentId !== file.agentId || result.profileId !== file.profileId) {
+      if (result.agentId !== target.agentId || result.profileId !== target.profileId) {
         throw new Error(t("profilePage.personalInstructions.contextChanged"));
       }
       this.file = result;
-      this.draft = result.content;
+      if (this.draft === draft) {
+        this.busy = null;
+        this.draft = result.content;
+      }
       this.drafts.delete(result.agentId);
-      this.saved = true;
+      this.saved = operation === "save" && this.draft === result.content;
     } catch (error) {
-      if (generation === this.generation) {
+      if (isCurrent()) {
         this.error = formatUiError(error);
       }
     } finally {
-      if (generation === this.generation) {
+      if (isCurrent() && this.draft === draft) {
         this.busy = null;
       }
     }

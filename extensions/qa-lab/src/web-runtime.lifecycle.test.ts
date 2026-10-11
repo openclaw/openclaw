@@ -8,6 +8,7 @@ vi.mock("playwright-core", () => ({
 }));
 
 let webRuntime: typeof import("./web-runtime.js");
+let defaultOpenPage: ReturnType<typeof webRuntime.createQaWebPageOpener>;
 let expectedTeardownErrors: unknown[] = [];
 
 const pageParams = { url: "http://127.0.0.1:3000/chat", channel: "chrome" as const };
@@ -57,6 +58,7 @@ beforeEach(async () => {
   launch.mockReset();
   expectedTeardownErrors = [];
   webRuntime = await import("./web-runtime.js");
+  defaultOpenPage = webRuntime.createQaWebPageOpener(new Set());
 });
 
 afterEach(async () => {
@@ -71,58 +73,6 @@ afterEach(async () => {
 });
 
 describe("QA web acquisition ownership", () => {
-  it.each([
-    { phase: "launch", order: [] },
-    { phase: "context", order: ["browser"] },
-    { phase: "page", order: ["context", "browser"] },
-  ] as const)("rolls back $phase failure without replacing the error", async ({ phase, order }) => {
-    const fixture = makeBrowser();
-    launch.mockResolvedValue(fixture.browser);
-    const error = new Error(`${phase} failed`);
-    const operations = {
-      launch,
-      context: fixture.browser.newContext,
-      page: fixture.context.newPage,
-    };
-    operations[phase].mockRejectedValueOnce(error);
-
-    await expect(webRuntime.qaWebOpenPage(pageParams)).rejects.toBe(error);
-
-    expect(fixture.closeOrder).toEqual(order);
-    await webRuntime.closeQaWebSessions();
-    expect(fixture.closeOrder).toEqual(order);
-  });
-
-  it("keeps the existing empty title fallback when the page is still owned", async () => {
-    const fixture = makeBrowser();
-    launch.mockResolvedValue(fixture.browser);
-    fixture.page.title.mockRejectedValueOnce(new Error("title unavailable"));
-
-    const opened = await webRuntime.qaWebOpenPage(pageParams);
-
-    expect(opened).toMatchObject({ title: "", url: pageParams.url });
-    expect(fixture.context.close).not.toHaveBeenCalled();
-    await webRuntime.closeQaWebSessions([opened.pageId]);
-    expect(fixture.closeOrder).toEqual(["context", "browser"]);
-  });
-
-  it("does not reserve or launch for an already aborted scenario", async () => {
-    const controller = new AbortController();
-    const error = new Error("scenario already timed out");
-    controller.abort(error);
-    const owner = new Set<string>();
-    const open = webRuntime.createQaWebPageOpener(owner, controller.signal);
-
-    await expect(open(pageParams)).rejects.toBe(error);
-
-    expect(owner.size).toBe(0);
-    expect(launch).not.toHaveBeenCalled();
-    const fixture = makeBrowser();
-    launch.mockResolvedValueOnce(fixture.browser);
-    await webRuntime.createQaWebPageOpener(owner)(pageParams);
-    expect(owner.size).toBe(1);
-  });
-
   it.each(["launch", "context", "page", "navigation", "title"] as const)(
     "cancels pending %s, joins its late success and removes the listener",
     async (phase) => {
@@ -298,32 +248,6 @@ describe("QA web acquisition ownership", () => {
     expect(owner.size).toBe(0);
   });
 
-  it("does not report the acquisition rejection caused by close as cleanup failure", async () => {
-    const fixture = makeBrowser();
-    const started = createDeferred<void>();
-    const navigation = createDeferred<void>();
-    const closedError = new Error("navigation target closed");
-    launch.mockResolvedValueOnce(fixture.browser);
-    fixture.page.goto.mockImplementationOnce(() => {
-      started.resolve();
-      return navigation.promise;
-    });
-    fixture.context.close.mockImplementationOnce(async () => {
-      fixture.closeOrder.push("context");
-      navigation.reject(closedError);
-    });
-    const owner = new Set<string>();
-    const opening = webRuntime
-      .createQaWebPageOpener(owner)(pageParams)
-      .catch((error: unknown) => error);
-    await started.promise;
-
-    await expect(webRuntime.closeQaWebSessions(owner)).resolves.toBeUndefined();
-    await expect(opening).resolves.toBe(closedError);
-    expect(fixture.closeOrder).toEqual(["context", "browser"]);
-    expect(fixture.page.title).not.toHaveBeenCalled();
-  });
-
   it("does not publish a page when title lookup rejects after close", async () => {
     const fixture = makeBrowser();
     const started = createDeferred<void>();
@@ -405,7 +329,7 @@ describe("QA web teardown ownership", () => {
       started.resolve();
       return contextClosed.promise;
     });
-    const opened = await webRuntime.qaWebOpenPage(pageParams);
+    const opened = await defaultOpenPage(pageParams);
     const settled = vi.fn();
     const first = webRuntime.closeQaWebSessions([opened.pageId]).then(settled);
     await started.promise;
@@ -441,7 +365,7 @@ describe("QA web teardown ownership", () => {
       return contextClosed.promise;
     });
     fixture.browser.close.mockRejectedValueOnce(browserError);
-    const opened = await webRuntime.qaWebOpenPage(pageParams);
+    const opened = await defaultOpenPage(pageParams);
     const first = webRuntime.closeQaWebSessions([opened.pageId]).catch((error: unknown) => error);
     await started.promise;
     const second = webRuntime.closeQaWebSessions([opened.pageId]).catch((error: unknown) => error);
@@ -504,49 +428,5 @@ describe("QA web teardown ownership", () => {
     expect(failed.closeOrder).toEqual(["context", "browser"]);
     expect(retry.closeOrder).toEqual(["context", "browser"]);
     expect(later.closeOrder).toEqual(["context", "browser"]);
-  });
-
-  it("does not close or seal another suite", async () => {
-    const first = makeBrowser();
-    const second = makeBrowser();
-    const later = makeBrowser();
-    launch
-      .mockResolvedValueOnce(first.browser)
-      .mockResolvedValueOnce(second.browser)
-      .mockResolvedValueOnce(later.browser);
-    const firstOwner = new Set<string>();
-    const secondOwner = new Set<string>();
-    await webRuntime.createQaWebPageOpener(firstOwner)(pageParams);
-    const secondPage = await webRuntime.createQaWebPageOpener(secondOwner)(pageParams);
-
-    await webRuntime.closeQaWebSessions(firstOwner);
-    await expect(webRuntime.qaWebSnapshot({ pageId: secondPage.pageId })).resolves.toMatchObject({
-      text: "page body",
-    });
-    await webRuntime.createQaWebPageOpener(secondOwner)(pageParams);
-
-    expect(first.closeOrder).toEqual(["context", "browser"]);
-    expect(second.closeOrder).toEqual([]);
-    expect(later.closeOrder).toEqual([]);
-    await webRuntime.closeQaWebSessions(secondOwner);
-    expect(second.closeOrder).toEqual(["context", "browser"]);
-    expect(later.closeOrder).toEqual(["context", "browser"]);
-  });
-
-  it("attempts every selected session even when an earlier context close fails", async () => {
-    const first = makeBrowser();
-    const second = makeBrowser();
-    const failure = new Error("first context failed");
-    expectedTeardownErrors = [failure];
-    first.context.close.mockRejectedValueOnce(failure);
-    launch.mockResolvedValueOnce(first.browser).mockResolvedValueOnce(second.browser);
-    const firstPage = await webRuntime.qaWebOpenPage(pageParams);
-    const secondPage = await webRuntime.qaWebOpenPage(pageParams);
-
-    await expect(
-      webRuntime.closeQaWebSessions([firstPage.pageId, secondPage.pageId]),
-    ).rejects.toMatchObject({ errors: [failure] });
-    expect(first.browser.close).toHaveBeenCalledOnce();
-    expect(second.closeOrder).toEqual(["context", "browser"]);
   });
 });

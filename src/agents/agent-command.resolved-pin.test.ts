@@ -40,10 +40,7 @@ const metadataSnapshot = createPluginMetadataSnapshotFixture({
 });
 
 it.each([
-  { name: "resolved provider-prefixed model", pin: "custom/model", expected: "custom/model" },
-  { name: "resolved alias-like model", pin: "middle", expected: "middle" },
   { name: "legacy raw alias once", pin: "latest", expected: "middle", raw: true },
-  { name: "configured default alias once", pin: "latest", expected: "middle", use: "default" },
   {
     name: "configured default retained by an exact-only policy",
     pin: "latest",

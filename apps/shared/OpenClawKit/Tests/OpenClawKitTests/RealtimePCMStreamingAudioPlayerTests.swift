@@ -11,56 +11,84 @@ private struct RealtimePCMPlaybackFailure: Error {}
 
 private let realtimePCMPlaybackWaitTimeoutSeconds = 15.0
 
-@MainActor
-private final class RealtimePCMPlaybackBackend {
+private final class RealtimePCMPlaybackBackend: @unchecked Sendable {
+    private let lock = NSRecursiveLock()
     private struct Waiter {
         let count: Int
         let continuation: CheckedContinuation<Void, any Error>
     }
 
-    private(set) var scheduledFrames: [Data] = []
-    private(set) var completions: [@Sendable () -> Void] = []
-    private(set) var activeCount = 0
-    private(set) var maxActiveCount = 0
+    private var storedScheduledFrames: [Data] = []
+    private var storedCompletions: [@Sendable () -> Void] = []
+    private var storedActiveCount = 0
+    private var storedMaxActiveCount = 0
     private var completedCallbacks = 0
     private var scheduledWaiters: [UUID: Waiter] = [:]
     private var completionWaiters: [UUID: Waiter] = [:]
 
-    func prepare(sampleRate _: Double) throws {}
+    var scheduledFrames: [Data] {
+        self.lock.withLock { self.storedScheduledFrames }
+    }
+
+    var completions: [@Sendable () -> Void] {
+        self.lock.withLock { self.storedCompletions }
+    }
+
+    var activeCount: Int {
+        self.lock.withLock { self.storedActiveCount }
+    }
+
+    var maxActiveCount: Int {
+        self.lock.withLock { self.storedMaxActiveCount }
+    }
+
+    func prepare(sampleRate _: Double) throws {
+        self.lock.withLock {}
+    }
 
     func schedule(
         data: Data,
         sampleRate _: Double,
         completion: @escaping @Sendable () -> Void) throws
     {
-        self.scheduledFrames.append(data)
-        self.activeCount += 1
-        self.maxActiveCount = max(self.maxActiveCount, self.activeCount)
-        self.resumeScheduledWaiters()
-        self.completions.append { [weak self] in
-            Task { @MainActor in
-                self?.activeCount -= 1
-                self?.completedCallbacks += 1
-                self?.resumeCompletionWaiters()
+        self.lock.withLock {
+            self.storedScheduledFrames.append(data)
+            self.storedActiveCount += 1
+            self.storedMaxActiveCount = max(self.storedMaxActiveCount, self.storedActiveCount)
+            self.resumeScheduledWaiters()
+            self.storedCompletions.append { [weak self] in
+                self?.lock.withLock {
+                    self?.storedActiveCount -= 1
+                    self?.completedCallbacks += 1
+                    self?.resumeCompletionWaiters()
+                }
                 completion()
             }
         }
     }
 
     func stop() {
-        self.activeCount = 0
+        self.lock.withLock {
+            self.storedActiveCount = 0
+        }
     }
 
     func complete(at index: Int = 0) {
-        self.completions.remove(at: index)()
+        self.lock.withLock {
+            self.storedCompletions.remove(at: index)()
+        }
     }
 
     func takeCompletion(at index: Int = 0) -> @Sendable () -> Void {
-        self.completions.remove(at: index)
+        self.lock.withLock {
+            self.storedCompletions.remove(at: index)
+        }
     }
 
     func waitForScheduledFrames(_ count: Int) async throws {
-        if self.scheduledFrames.count >= count { return }
+        if self.lock.withLock({ self.storedScheduledFrames.count >= count }) {
+            return
+        }
         try await AsyncTimeout.withTimeout(
             seconds: realtimePCMPlaybackWaitTimeoutSeconds,
             onTimeout: { RealtimePCMPlaybackWaitTimeout(label: "scheduled frames \(count)") },
@@ -68,7 +96,9 @@ private final class RealtimePCMPlaybackBackend {
     }
 
     func waitForCompletionCallbacks(_ count: Int) async throws {
-        if self.completedCallbacks >= count { return }
+        if self.lock.withLock({ self.completedCallbacks >= count }) {
+            return
+        }
         try await AsyncTimeout.withTimeout(
             seconds: realtimePCMPlaybackWaitTimeoutSeconds,
             onTimeout: { RealtimePCMPlaybackWaitTimeout(label: "completion callbacks \(count)") },
@@ -79,14 +109,16 @@ private final class RealtimePCMPlaybackBackend {
         let id = UUID()
         try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in
-                if self.scheduledFrames.count >= count {
-                    continuation.resume()
-                } else {
-                    self.scheduledWaiters[id] = Waiter(count: count, continuation: continuation)
+                self.lock.withLock {
+                    if self.storedScheduledFrames.count >= count {
+                        continuation.resume()
+                    } else {
+                        self.scheduledWaiters[id] = Waiter(count: count, continuation: continuation)
+                    }
                 }
             }
         } onCancel: {
-            Task { @MainActor in self.cancelScheduledWaiter(id) }
+            self.cancelScheduledWaiter(id)
         }
     }
 
@@ -94,38 +126,48 @@ private final class RealtimePCMPlaybackBackend {
         let id = UUID()
         try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in
-                if self.completedCallbacks >= count {
-                    continuation.resume()
-                } else {
-                    self.completionWaiters[id] = Waiter(count: count, continuation: continuation)
+                self.lock.withLock {
+                    if self.completedCallbacks >= count {
+                        continuation.resume()
+                    } else {
+                        self.completionWaiters[id] = Waiter(count: count, continuation: continuation)
+                    }
                 }
             }
         } onCancel: {
-            Task { @MainActor in self.cancelCompletionWaiter(id) }
+            self.cancelCompletionWaiter(id)
         }
     }
 
     private func cancelScheduledWaiter(_ id: UUID) {
-        self.scheduledWaiters.removeValue(forKey: id)?.continuation.resume(throwing: CancellationError())
+        self.lock.withLock {
+            self.scheduledWaiters.removeValue(forKey: id)?.continuation.resume(throwing: CancellationError())
+        }
     }
 
     private func cancelCompletionWaiter(_ id: UUID) {
-        self.completionWaiters.removeValue(forKey: id)?.continuation.resume(throwing: CancellationError())
+        self.lock.withLock {
+            self.completionWaiters.removeValue(forKey: id)?.continuation.resume(throwing: CancellationError())
+        }
     }
 
     private func resumeScheduledWaiters() {
-        let ready = self.scheduledWaiters.filter { self.scheduledFrames.count >= $0.value.count }
-        for (id, waiter) in ready {
-            self.scheduledWaiters.removeValue(forKey: id)
-            waiter.continuation.resume()
+        self.lock.withLock {
+            let ready = self.scheduledWaiters.filter { self.storedScheduledFrames.count >= $0.value.count }
+            for (id, waiter) in ready {
+                self.scheduledWaiters.removeValue(forKey: id)
+                waiter.continuation.resume()
+            }
         }
     }
 
     private func resumeCompletionWaiters() {
-        let ready = self.completionWaiters.filter { self.completedCallbacks >= $0.value.count }
-        for (id, waiter) in ready {
-            self.completionWaiters.removeValue(forKey: id)
-            waiter.continuation.resume()
+        self.lock.withLock {
+            let ready = self.completionWaiters.filter { self.completedCallbacks >= $0.value.count }
+            for (id, waiter) in ready {
+                self.completionWaiters.removeValue(forKey: id)
+                waiter.continuation.resume()
+            }
         }
     }
 }
@@ -136,6 +178,18 @@ private final class RealtimePCMPlaybackResultProbe {
 
     func record(_ result: StreamingPlaybackResult) {
         self.results.append(result)
+    }
+}
+
+private final class RealtimePCMStartCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storedCount = 0
+    var count: Int {
+        self.lock.withLock { self.storedCount }
+    }
+
+    func increment() {
+        self.lock.withLock { self.storedCount += 1 }
     }
 }
 
@@ -203,7 +257,46 @@ struct RealtimePCMStreamingAudioPlayerTests {
         #expect(probe.results.first?.interruptedAt == nil)
     }
 
+    @Test func `playback starts after the prebuffer or at end of a short reply`() async throws {
+        for (frames, finish, expectedStarts) in [
+            (RealtimePCMStreamingAudioPlayer.prebufferFrames - 1, false, 0),
+            (RealtimePCMStreamingAudioPlayer.prebufferFrames, false, 1),
+            (2, true, 1),
+        ] {
+            let backend = RealtimePCMPlaybackBackend()
+            let starts = RealtimePCMStartCounter()
+            let started = RealtimeRelayTestSignal<Void>(timeoutSeconds: 5)
+            let player = RealtimePCMStreamingAudioPlayer(
+                preparePlayback: backend.prepare,
+                scheduleFrame: backend.schedule,
+                startPlayback: {
+                    starts.increment()
+                    started.send(())
+                },
+                stopPlayback: backend.stop,
+                playbackTime: { nil })
+            let (stream, continuation) = AsyncThrowingStream<Data, Error>.makeStream()
+            let playback = Task { _ = await player.play(stream: stream, sampleRate: self.sampleRate) }
+            continuation.yield(Data(repeating: 1, count: self.frameBytes * frames))
+            if finish {
+                continuation.finish()
+            }
+            try await backend.waitForScheduledFrames(frames)
+            if expectedStarts > 0 {
+                // The prebuffer start and the end-of-input start both run after scheduling returns.
+                _ = try await started.next("playback start frames=\(frames) finish=\(finish)")
+            }
+            // Every start decision runs on the backend queue; drain it so no decision is still pending.
+            await player._test_waitForBackendOperations()
+            #expect(starts.count == expectedStarts, "frames=\(frames) finish=\(finish)")
+            _ = player.stop()
+            continuation.finish()
+            await playback.value
+        }
+    }
+
     @Test func `withheld completions cap scheduling and one completion admits one frame`() async throws {
+        let cap = RealtimePCMStreamingAudioPlayer.maxScheduledBuffers
         let backend = RealtimePCMPlaybackBackend()
         let player = makeRealtimePCMPlayer(backend: backend)
         let probe = RealtimePCMPlaybackResultProbe()
@@ -213,29 +306,29 @@ struct RealtimePCMStreamingAudioPlayerTests {
             probe.record(result)
         }
 
-        continuation.yield(Data(repeating: 1, count: self.frameBytes * 5))
+        continuation.yield(Data(repeating: 1, count: self.frameBytes * (cap + 2)))
         continuation.finish()
-        try await backend.waitForScheduledFrames(3)
-        #expect(backend.scheduledFrames.count == 3)
-        #expect(backend.maxActiveCount == 3)
+        try await backend.waitForScheduledFrames(cap)
+        #expect(backend.scheduledFrames.count == cap)
+        #expect(backend.maxActiveCount == cap)
         #expect(probe.results.isEmpty)
 
         backend.complete()
-        try await backend.waitForScheduledFrames(4)
-        #expect(backend.scheduledFrames.count == 4)
-        #expect(backend.maxActiveCount == 3)
+        try await backend.waitForScheduledFrames(cap + 1)
+        #expect(backend.scheduledFrames.count == cap + 1)
+        #expect(backend.maxActiveCount == cap)
         #expect(probe.results.isEmpty)
 
         backend.complete()
-        try await backend.waitForScheduledFrames(5)
-        for _ in 0..<3 {
+        try await backend.waitForScheduledFrames(cap + 2)
+        for _ in 0..<cap {
             backend.complete()
         }
-        try await waitForPlayback(playback, label: "five-frame playback")
+        try await waitForPlayback(playback, label: "cap-plus-two-frame playback")
         #expect(probe.results.count == 1)
         #expect(probe.results.first?.finished == true)
         #expect(probe.results.first?.interruptedAt == nil)
-        #expect(backend.scheduledFrames.count == 5)
+        #expect(backend.scheduledFrames.count == cap + 2)
         #expect(backend.scheduledFrames.allSatisfy { $0.count == self.frameBytes })
     }
 
@@ -266,6 +359,7 @@ struct RealtimePCMStreamingAudioPlayerTests {
     }
 
     @Test func `stop restart ignores stale buffer completions`() async throws {
+        let cap = RealtimePCMStreamingAudioPlayer.maxScheduledBuffers
         let backend = RealtimePCMPlaybackBackend()
         let player = makeRealtimePCMPlayer(backend: backend)
         let (firstStream, firstContinuation) = AsyncThrowingStream<Data, Error>.makeStream()
@@ -288,27 +382,27 @@ struct RealtimePCMStreamingAudioPlayerTests {
             let result = await player.play(stream: secondStream, sampleRate: self.sampleRate)
             probe.record(result)
         }
-        secondContinuation.yield(Data(repeating: 2, count: self.frameBytes * 5))
+        secondContinuation.yield(Data(repeating: 2, count: self.frameBytes * (cap + 2)))
         secondContinuation.finish()
-        try await backend.waitForScheduledFrames(4)
-        #expect(backend.activeCount == 3)
+        try await backend.waitForScheduledFrames(cap + 1)
+        #expect(backend.activeCount == cap)
         #expect(probe.results.isEmpty)
 
         staleCompletion()
         try await backend.waitForCompletionCallbacks(1)
-        #expect(backend.scheduledFrames.count == 4)
-        #expect(backend.completions.count == 3)
+        #expect(backend.scheduledFrames.count == cap + 1)
+        #expect(backend.completions.count == cap)
         #expect(firstProbe.results.map(\.finished) == [false])
         #expect(probe.results.isEmpty)
         backend.complete()
-        try await backend.waitForScheduledFrames(5)
-        #expect(backend.scheduledFrames.count == 5)
+        try await backend.waitForScheduledFrames(cap + 2)
+        #expect(backend.scheduledFrames.count == cap + 2)
         #expect(probe.results.isEmpty)
         backend.complete()
-        try await backend.waitForScheduledFrames(6)
-        #expect(backend.scheduledFrames.count == 6)
+        try await backend.waitForScheduledFrames(cap + 3)
+        #expect(backend.scheduledFrames.count == cap + 3)
         #expect(probe.results.isEmpty)
-        for _ in 0..<3 {
+        for _ in 0..<cap {
             backend.complete()
         }
         try await waitForPlayback(secondPlayback, label: "replacement B playback")

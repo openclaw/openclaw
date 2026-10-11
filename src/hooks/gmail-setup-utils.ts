@@ -1,4 +1,3 @@
-// Gmail setup utilities write helper files and normalize Gmail setup settings.
 import fs from "node:fs";
 import path from "node:path";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -40,16 +39,6 @@ function findExecutablesOnPath(bins: string[]): string[] {
   return matches;
 }
 
-function ensurePathIncludes(dirPath: string, position: "append" | "prepend") {
-  const pathEnv = process.env.PATH ?? "";
-  const parts = pathEnv.split(path.delimiter).filter(Boolean);
-  if (parts.includes(dirPath)) {
-    return;
-  }
-  const next = position === "prepend" ? [dirPath, ...parts] : [...parts, dirPath];
-  process.env.PATH = next.join(path.delimiter);
-}
-
 function ensureGcloudOnPath(): boolean {
   if (hasBinary("gcloud")) {
     return true;
@@ -63,7 +52,11 @@ function ensureGcloudOnPath(): boolean {
   for (const candidate of candidates) {
     try {
       fs.accessSync(candidate, fs.constants.X_OK);
-      ensurePathIncludes(path.dirname(candidate), "append");
+      const dirPath = path.dirname(candidate);
+      const parts = (process.env.PATH ?? "").split(path.delimiter).filter(Boolean);
+      if (!parts.includes(dirPath)) {
+        process.env.PATH = [...parts, dirPath].join(path.delimiter);
+      }
       return true;
     } catch {
       // keep scanning
@@ -102,7 +95,7 @@ async function resolvePythonExecutablePath(): Promise<string | undefined> {
       continue;
     }
     const lines = res.stdout.trim().split(/\r?\n/);
-    const resolved = lines[0]?.trim().split(/\s+/)[0];
+    const resolved = lines[0]?.trim();
     if (!resolved) {
       continue;
     }
@@ -293,7 +286,7 @@ export async function resolveProjectIdFromGogCredentials(): Promise<string | nul
       const raw = fs.readFileSync(candidate, "utf-8");
       const parsed = JSON.parse(raw) as Record<string, unknown>;
       const clientId = extractGogClientId(parsed);
-      const projectNumber = extractProjectNumber(clientId);
+      const projectNumber = clientId?.match(/^(\d+)-/)?.[1] ?? null;
       if (!projectNumber) {
         continue;
       }
@@ -340,12 +333,4 @@ function extractGogClientId(parsed: Record<string, unknown>): string | null {
   const web = parsed.web as Record<string, unknown> | undefined;
   const candidate = installed?.client_id || web?.client_id || parsed.client_id || "";
   return typeof candidate === "string" ? candidate : null;
-}
-
-function extractProjectNumber(clientId: string | null): string | null {
-  if (!clientId) {
-    return null;
-  }
-  const match = clientId.match(/^(\d+)-/);
-  return match?.[1] ?? null;
 }

@@ -1,10 +1,8 @@
 import { isFutureDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import {
   AGENT_RUN_RESTART_ABORT_STOP_REASON,
-  createAgentRunRestartAbortError,
-  isAgentRunDirectAbortReason,
+  isAgentRunRestartAbortReason,
 } from "../../agents/run-termination.js";
-import { resolveSessionWorkStartError } from "../../config/sessions.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import {
   beginSessionWorkAdmission,
@@ -25,6 +23,7 @@ import {
   readGatewayDedupeEntry,
   setAbortedAgentDedupeEntries,
 } from "./agent-dedupe.js";
+import { resolveAgentSessionWorkStartError } from "./agent-handler-helpers.js";
 import type { AgentTurnContext, AgentTurnIo } from "./types.js";
 
 export function createAgentAdmissionController(params: {
@@ -81,10 +80,26 @@ export function createAgentAdmissionController(params: {
       if (commitOutcome) {
         postAdmissionAbort = latest;
       }
-      return;
+      return undefined;
     }
     if (params.dedupeLifecycle.isReserved()) {
-      if (!latest) {
+      let expiresAtMs: unknown;
+      if (latest) {
+        if (!latest.ok || !isAcceptedAgentDedupePayload(latest.payload)) {
+          if (commitOutcome) {
+            postAdmissionAbort = latest;
+          }
+          return undefined;
+        }
+        if (!params.dedupeLifecycle.ownsReservation()) {
+          if (commitOutcome) {
+            postAdmissionSuperseded = true;
+          }
+          return undefined;
+        }
+        expiresAtMs = latest.payload.expiresAtMs;
+      }
+      if (!latest || !isFutureDateTimestampMs(expiresAtMs, { nowMs: Date.now() })) {
         if (commitOutcome) {
           postAdmissionTimeout = buildAbortedAgentPayload(params.runId, "timeout");
           setAbortedAgentDedupeEntries({
@@ -96,33 +111,7 @@ export function createAgentAdmissionController(params: {
             stopReason: "timeout",
           });
         }
-        return;
-      }
-      if (!latest.ok || !isAcceptedAgentDedupePayload(latest.payload)) {
-        if (commitOutcome) {
-          postAdmissionAbort = latest;
-        }
-        return;
-      }
-      if (!params.dedupeLifecycle.ownsReservation()) {
-        if (commitOutcome) {
-          postAdmissionSuperseded = true;
-        }
-        return;
-      }
-      if (!isFutureDateTimestampMs(latest.payload.expiresAtMs, { nowMs: Date.now() })) {
-        if (commitOutcome) {
-          postAdmissionTimeout = buildAbortedAgentPayload(params.runId, "timeout");
-          setAbortedAgentDedupeEntries({
-            dedupe: params.context.dedupe,
-            keys: params.dedupeLifecycle.ownedReservationKeys(),
-            agentId: admissionAgentId(),
-            sessionKey: resolvedSessionKey,
-            runId: params.runId,
-            stopReason: "timeout",
-          });
-        }
-        return;
+        return undefined;
       }
     }
     if (params.lifecycleGeneration !== getAgentEventLifecycleGeneration()) {
@@ -132,10 +121,10 @@ export function createAgentAdmissionController(params: {
           agentId: admissionAgentId(),
         });
       }
-      return;
+      return undefined;
     }
     if (!resolvedSessionKey) {
-      return;
+      return undefined;
     }
     const admissionAgent = admissionAgentId();
     let latestEntry = loadSessionEntry(resolvedSessionKey, {
@@ -158,7 +147,7 @@ export function createAgentAdmissionController(params: {
     if (params.getSessionPersisted() && !latestEntry) {
       throw new Error(`Session "${resolvedSessionKey}" was deleted while starting work. Retry.`);
     }
-    const archivedError = resolveSessionWorkStartError(resolvedSessionKey, latestEntry);
+    const archivedError = resolveAgentSessionWorkStartError(resolvedSessionKey, latestEntry);
     if (archivedError) {
       throw new Error(archivedError);
     }
@@ -169,6 +158,7 @@ export function createAgentAdmissionController(params: {
     ) {
       params.setAdmittedSessionId(latestEntry.sessionId);
     }
+    return latestEntry;
   };
 
   const interrupt = (reason?: Error) => {
@@ -176,9 +166,9 @@ export function createAgentAdmissionController(params: {
     if (admittedRunAbort?.controller.signal.aborted) {
       return undefined;
     }
-    const stopReason = isAgentRunDirectAbortReason(reason)
-      ? "rpc"
-      : AGENT_RUN_RESTART_ABORT_STOP_REASON;
+    const stopReason = isAgentRunRestartAbortReason(reason)
+      ? AGENT_RUN_RESTART_ABORT_STOP_REASON
+      : "rpc";
     if (admittedRunAbort?.entry) {
       admittedRunAbort.entry.abortStopReason = stopReason;
     }
@@ -188,9 +178,7 @@ export function createAgentAdmissionController(params: {
         entry !== undefined &&
         params.context.chatAbortControllers.get(params.runId) === entry &&
         !entry.registrationCleanupRequested;
-      admittedRunAbort.controller.abort(
-        stopReason === "rpc" ? reason : createAgentRunRestartAbortError(),
-      );
+      admittedRunAbort.controller.abort(reason);
       return ownsRun ? { runId: params.runId } : undefined;
     }
     const keys = params.dedupeLifecycle.ownedReservationKeys();
@@ -220,36 +208,31 @@ export function createAgentAdmissionController(params: {
       }) ??
       (await beginSessionWorkAdmission({
         scope,
+        isSettling: () => admittedRunAbort?.entry?.terminalOutcomeObserved === true,
         identities: [params.getResolvedSessionKey(), params.getResolvedSessionId()],
         ...(params.admissionOwner ? { owner: params.admissionOwner } : {}),
-        assertAllowed: () => assertAllowed(false),
-        revalidateAllowed: assertAllowed,
+        assertAllowed: () => {
+          assertAllowed(false);
+        },
+        revalidateAllowed: () => {
+          assertAllowed();
+        },
         onInterrupt: interrupt,
       }));
   };
 
   const respondToOutcome = () => {
-    if (postAdmissionAbort) {
+    if (postAdmissionAbort || postAdmissionTimeout || postAdmissionSuperseded) {
       admission?.release();
       params.dedupeLifecycle.markAccepted(true);
       params.io.emitAcceptance(
-        [postAdmissionAbort.ok, postAdmissionAbort.payload, postAdmissionAbort.error],
-        {
-          cached: true,
-          runId: params.runId,
-        },
-      );
-      return true;
-    }
-    if (postAdmissionTimeout || postAdmissionSuperseded) {
-      admission?.release();
-      params.dedupeLifecycle.markAccepted(true);
-      params.io.emitAcceptance(
-        [
-          true,
-          postAdmissionTimeout ?? { runId: params.runId, status: "in_flight" as const },
-          undefined,
-        ],
+        postAdmissionAbort
+          ? [postAdmissionAbort.ok, postAdmissionAbort.payload, postAdmissionAbort.error]
+          : [
+              true,
+              postAdmissionTimeout ?? { runId: params.runId, status: "in_flight" as const },
+              undefined,
+            ],
         { cached: true, runId: params.runId },
       );
       return true;

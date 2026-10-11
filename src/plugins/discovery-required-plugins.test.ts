@@ -29,10 +29,8 @@ function discoveryEnv(stateDir: string): NodeJS.ProcessEnv {
 
 describe("required plugin discovery diagnostics", () => {
   it.each([
-    { installedId: "Core-Mixed", requiredId: "core-mixed", explicitFile: false },
-    { installedId: "core-mixed", requiredId: "CORE-MIXED", explicitFile: false },
-    { installedId: "Core-Mixed", requiredId: "core-mixed", explicitFile: true },
-    { installedId: "core-mixed", requiredId: "CORE-MIXED", explicitFile: true },
+    { installedId: "Core-Mixed", requiredId: "CORE-mixed", explicitFile: false },
+    { installedId: "Core-Mixed", requiredId: "CORE-mixed", explicitFile: true },
   ])(
     "matches $installedId -> $requiredId (explicit file: $explicitFile) without rewriting declared ids",
     ({ installedId, requiredId, explicitFile }) => {

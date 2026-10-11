@@ -1,4 +1,3 @@
-/** CLI entrypoint for channel message actions. */
 import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -10,7 +9,6 @@ import {
 } from "../../packages/gateway-protocol/src/client-info.js";
 import { resolveAmbientOwnerAgentId } from "../agents/agent-scope-config.js";
 import { CHANNEL_MESSAGE_ACTION_NAMES } from "../channels/plugins/message-action-names.js";
-import type { ChannelMessageActionName } from "../channels/plugins/types.public.js";
 import { resolveCommandConfigWithSecrets } from "../cli/command-config-resolution.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { getScopedChannelsCommandSecretTargets } from "../cli/command-secret-targets.js";
@@ -54,7 +52,6 @@ function buildMessageCliJson(result: Awaited<ReturnType<typeof runMessageAction>
   };
 }
 
-/** Resolves config/secrets, runs a channel message action, then renders JSON or text. */
 export async function messageCommand(
   opts: Record<string, unknown>,
   deps: CliDeps,
@@ -107,18 +104,16 @@ export async function messageCommand(
     surface: "message CLI",
     hint: `Run ${formatCliCommand("openclaw config set agents.defaults.systemAgent.agentId <id>")} with a configured agent ID.`,
   });
-  const actionMatch = (CHANNEL_MESSAGE_ACTION_NAMES as readonly string[]).find(
+  const action = CHANNEL_MESSAGE_ACTION_NAMES.find(
     (name) => normalizeLowercaseStringOrEmpty(name) === normalizedActionInput,
   );
-  if (!actionMatch) {
+  if (!action) {
     throw new Error(
       `Unknown message action "${actionInput}". Use one of ${CHANNEL_MESSAGE_ACTION_NAMES.join(
         ", ",
       )}. Example: ${formatCliCommand("openclaw message send --channel <channel> --target <id> --text <message>")}.`,
     );
   }
-  const action = actionMatch as ChannelMessageActionName;
-
   const outboundDeps: OutboundSendDeps = createOutboundSendDeps(deps);
 
   // Keep the gateway client identity explicit so channel plugins can distinguish

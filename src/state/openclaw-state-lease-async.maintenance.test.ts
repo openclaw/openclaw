@@ -1,4 +1,10 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  takeSqliteWorkerOperationAdmissionAttachment,
+  withSqliteWorkerOperationAdmission,
+} from "../infra/sqlite-worker-operation-admission.js";
+import type { SqliteWorkerOperationSettlement } from "../infra/sqlite-worker-operation-settlement.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
   createOpenClawDatabaseMaintenanceScope,
@@ -6,10 +12,14 @@ import {
   type OpenClawStateDatabaseAsyncResource,
 } from "./openclaw-state-db-async-lifecycle.js";
 import type { OpenClawStateAsyncLeaseContext } from "./openclaw-state-lease-context.js";
+import { leaseHeartbeatState } from "./openclaw-state-lease-heartbeat-shared.js";
 import type { LeaseHeartbeatCleanup } from "./openclaw-state-lease-heartbeat.js";
-import type { OpenClawStateLeaseIdentity } from "./openclaw-state-lease-store.js";
-import { withOpenClawStateLeaseWorkerAdmission } from "./openclaw-state-lease-worker-owner.js";
+import {
+  withOpenClawStateLeaseWorkerAdmission,
+  type WorkerLeaseScope,
+} from "./openclaw-state-lease-worker-owner.js";
 import { withOpenClawStateLeaseAsync } from "./openclaw-state-lease.js";
+import type { OpenClawStateLeaseIdentity } from "./openclaw-state-lease.types.js";
 import type { OpenClawStateWorkerContext } from "./openclaw-state-worker-context.types.js";
 
 type CreateStorage =
@@ -32,6 +42,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("./openclaw-state-lease-worker-storage.js", () => ({
   createOpenClawStateLeaseWorkerStorage: mocks.createStorage,
+  acquireLease: mocks.forbidden,
 }));
 vi.mock("./openclaw-state-lease-heartbeat.js", () => ({
   startOpenClawStateLeaseHeartbeat: mocks.startHeartbeat,
@@ -48,7 +59,6 @@ vi.mock("./openclaw-state-lease-storage.js", () => ({
   releaseOpenClawStateLeaseBestEffort: async (_params: unknown, execute?: () => Promise<void>) =>
     execute?.(),
   resolveLeaseDatabasePath: mocks.forbidden,
-  acquireLease: mocks.forbidden,
   renewOpenClawStateLease: mocks.forbidden,
   verifyOpenClawStateLeaseOwnership: mocks.forbidden,
   releaseOpenClawStateLease: mocks.forbidden,
@@ -56,16 +66,12 @@ vi.mock("./openclaw-state-lease-storage.js", () => ({
 vi.mock("./openclaw-state-db-readonly.js", () => ({
   withExistingOpenClawStateDatabaseArtifactPreservingReadOnly: mocks.forbidden,
 }));
-vi.mock("../infra/sqlite-worker-operation-admission.js", () => ({
-  createSqliteWorkerOperationAdmission: mocks.forbidden,
-}));
-vi.mock("../infra/sqlite-worker-identity.js", () => ({
+vi.mock("../infra/sqlite-worker-identity.js", async () => ({
+  ...(await vi.importActual<typeof import("../infra/sqlite-worker-identity.js")>(
+    "../infra/sqlite-worker-identity.js",
+  )),
   inspectDatabasePathIdentitySync: mocks.forbidden,
   readDatabasePathIdentitySync: mocks.forbidden,
-}));
-vi.mock("../infra/sqlite-lifecycle-errors.js", () => ({
-  createSqliteLifecycleAggregateError: (errors: unknown[], message: string, cause: unknown) =>
-    new AggregateError(errors, message, { cause }),
 }));
 
 beforeEach(() => {
@@ -87,6 +93,34 @@ function observe<T>(promise: Promise<T>) {
     },
   );
   return { outcome, settled: () => settled };
+}
+
+function publishExpiry(scope: WorkerLeaseScope, expiresAt: number): number {
+  const settled = createDeferredCore<SqliteWorkerOperationSettlement>();
+  const { admission } = scope.createAdmission({ settled: settled.promise });
+  try {
+    const attachment = withSqliteWorkerOperationAdmission(
+      { port: admission.port },
+      takeSqliteWorkerOperationAdmissionAttachment,
+    );
+    if (
+      !isRecord(attachment) ||
+      attachment.kind !== "state-lease-expiry" ||
+      !(attachment.observation instanceof SharedArrayBuffer)
+    ) {
+      throw new Error("Missing owner-bound expiry observation");
+    }
+    expect(attachment.identity).toEqual(scope.identity);
+    Atomics.store(
+      new BigInt64Array(attachment.observation),
+      leaseHeartbeatState.expiresAt,
+      BigInt(expiresAt),
+    );
+    return expiresAt;
+  } finally {
+    admission.finish();
+    settled.resolve({ kind: "completed" });
+  }
 }
 
 function fixture(
@@ -157,7 +191,7 @@ function fixture(
             scope.assertCurrent();
           }
           acquired.push(scope.identity);
-          return { kind: "acquired", expiresAt: Date.now() + leaseMs };
+          return { kind: "acquired", expiresAt: publishExpiry(scope, Date.now() + leaseMs) };
         }),
       release: (owner) =>
         owner.runLifecycle("release", async (scope) => {
@@ -241,6 +275,14 @@ function fixture(
     acquired,
     released,
     closeActor,
+    async dispose(outcome: Promise<unknown>) {
+      allowAcquire.resolve();
+      ready.resolve();
+      allowCleanup.resolve();
+      allowRetry.resolve();
+      await outcome;
+      await maintenance.close();
+    },
     options: {
       scope: "core:mcp-oauth",
       key: "synthetic-maintenance",
@@ -286,12 +328,12 @@ describe("async lease maintenance ownership", () => {
               // The independent child renewed while the actor was denied its writer turn.
               throw busy;
             }
-            return expiresAt;
+            return publishExpiry(scope, expiresAt);
           });
         storage.verify = (owner) =>
           owner.runLifecycle("verify", async (scope) => {
             scope.assertCurrent();
-            return expiresAt;
+            return publishExpiry(scope, expiresAt);
           });
         return storage;
       });
@@ -326,11 +368,7 @@ describe("async lease maintenance ownership", () => {
         expect(callback).toHaveBeenCalledOnce();
         expect(f.released).toEqual(f.acquired);
       } finally {
-        f.ready.resolve();
-        f.allowCleanup.resolve();
-        f.allowRetry.resolve();
-        await observed.outcome;
-        await f.maintenance.close();
+        await f.dispose(observed.outcome);
         vi.useRealTimers();
       }
     },
@@ -378,107 +416,83 @@ describe("async lease maintenance ownership", () => {
       expect(f.released).toEqual(f.acquired);
       expect(f.registered.size).toBe(0);
     } finally {
-      f.ready.resolve();
       finishCallback.resolve();
-      f.allowCleanup.resolve();
-      f.allowRetry.resolve();
-      await observed.outcome;
-      await f.maintenance.close();
+      await f.dispose(observed.outcome);
       await other.close();
     }
   });
 
-  it("retries retained heartbeat cleanup before actor close without replaying a rejected callback", async () => {
-    const callbackError = new Error("Synthetic callback failed");
-    const cleanupError = new Error("Synthetic heartbeat cleanup failed once");
-    const f = fixture({ firstCleanupError: cleanupError });
-    const write = vi.fn();
-    const callback = vi.fn(async (lease: OpenClawStateAsyncLeaseContext) => {
-      await withOpenClawStateLeaseWorkerAdmission(
-        lease,
-        f.context.admission.databasePath,
-        async (scope) => {
-          scope.assertCurrent();
-          write();
-        },
+  it.each(["heartbeat", "release"] as const)(
+    "retries retained %s cleanup before actor close without replaying the callback",
+    async (phase) => {
+      const callbackError = new Error("Synthetic callback failed");
+      const cleanupError = new Error("Synthetic cleanup failed once");
+      const f = fixture(
+        phase === "heartbeat"
+          ? { firstCleanupError: cleanupError }
+          : { firstReleaseError: cleanupError },
       );
-      throw callbackError;
-    });
-    const observed = observe(withOpenClawStateLeaseAsync(f.options, f.context, callback));
-    try {
-      await f.started.promise;
-      f.ready.resolve();
-      await f.cleanupStarted.promise;
-      f.allowCleanup.resolve();
-      expect(await observed.outcome).toMatchObject({
-        ok: false,
-        error: { cause: callbackError, errors: [callbackError, { errors: [cleanupError] }] },
+      const write = vi.fn();
+      const callback = vi.fn(async (lease: OpenClawStateAsyncLeaseContext) => {
+        if (phase === "heartbeat") {
+          await withOpenClawStateLeaseWorkerAdmission(
+            lease,
+            f.context.admission.databasePath,
+            async (scope) => {
+              scope.assertCurrent();
+              write();
+            },
+          );
+          throw callbackError;
+        }
+        return "completed";
       });
-      expect(f.registered.size).toBe(1);
-      expect(f.released).toEqual([]);
-      const closing = observe(f.maintenance.close());
-      await f.retryStarted.promise;
-      expect(closing.settled()).toBe(false);
-      expect(f.closeActor).not.toHaveBeenCalled();
-      expect(f.released).toEqual([]);
-      f.allowRetry.resolve();
-      expect(await closing.outcome).toEqual({ ok: true, value: undefined });
-      await f.maintenance.close();
-      expect(callback).toHaveBeenCalledOnce();
-      expect(write).toHaveBeenCalledOnce();
-      expect(f.acquired).toHaveLength(1);
-      expect(f.released).toEqual(f.acquired);
-      expect(f.closeActor).toHaveBeenCalledOnce();
-      expect(f.registered.size).toBe(0);
-      expect(f.events).toEqual([
-        "register",
-        "acquire",
-        "heartbeat-cleanup-failed",
-        "heartbeat-cleanup-complete",
-        "release",
-        "actor-close",
-      ]);
-    } finally {
-      f.ready.resolve();
-      f.allowCleanup.resolve();
-      f.allowRetry.resolve();
-      await observed.outcome;
-      await f.maintenance.close();
-    }
-  });
-
-  it("retains a failed exact-owner release for cleanup retry without replaying the callback", async () => {
-    const releaseError = new Error("Synthetic known release failure");
-    const f = fixture({ firstReleaseError: releaseError });
-    const callback = vi.fn(async () => "completed");
-    f.allowCleanup.resolve();
-    const observed = observe(withOpenClawStateLeaseAsync(f.options, f.context, callback));
-    try {
-      await f.started.promise;
-      f.ready.resolve();
-      expect(await observed.outcome).toEqual({ ok: false, error: releaseError });
-      expect(f.registered.size).toBe(1);
-      expect(f.released).toEqual([]);
-      await f.maintenance.close();
-      expect(callback).toHaveBeenCalledOnce();
-      expect(f.released).toEqual(f.acquired);
-      expect(f.registered.size).toBe(0);
-      expect(f.events).toEqual([
-        "register",
-        "acquire",
-        "heartbeat-cleanup-complete",
-        "release",
-        "release",
-        "actor-close",
-      ]);
-    } finally {
-      f.ready.resolve();
-      f.allowCleanup.resolve();
-      f.allowRetry.resolve();
-      await observed.outcome;
-      await f.maintenance.close();
-    }
-  });
+      const observed = observe(withOpenClawStateLeaseAsync(f.options, f.context, callback));
+      try {
+        await f.started.promise;
+        f.ready.resolve();
+        await f.cleanupStarted.promise;
+        f.allowCleanup.resolve();
+        if (phase === "heartbeat") {
+          expect(await observed.outcome).toMatchObject({
+            ok: false,
+            error: { cause: callbackError, errors: [callbackError, { errors: [cleanupError] }] },
+          });
+        } else {
+          expect(await observed.outcome).toEqual({ ok: false, error: cleanupError });
+        }
+        expect(f.registered.size).toBe(1);
+        expect(f.released).toEqual([]);
+        const closing = observe(f.maintenance.close());
+        if (phase === "heartbeat") {
+          await f.retryStarted.promise;
+          expect(closing.settled()).toBe(false);
+          expect(f.closeActor).not.toHaveBeenCalled();
+          expect(f.released).toEqual([]);
+          f.allowRetry.resolve();
+        }
+        expect(await closing.outcome).toEqual({ ok: true, value: undefined });
+        await f.maintenance.close();
+        expect(callback).toHaveBeenCalledOnce();
+        expect(write).toHaveBeenCalledTimes(phase === "heartbeat" ? 1 : 0);
+        expect(f.acquired).toHaveLength(1);
+        expect(f.released).toEqual(f.acquired);
+        expect(f.closeActor).toHaveBeenCalledOnce();
+        expect(f.registered.size).toBe(0);
+        expect(f.events).toEqual([
+          "register",
+          "acquire",
+          ...(phase === "heartbeat" ? ["heartbeat-cleanup-failed"] : []),
+          "heartbeat-cleanup-complete",
+          "release",
+          ...(phase === "release" ? ["release"] : []),
+          "actor-close",
+        ]);
+      } finally {
+        await f.dispose(observed.outcome);
+      }
+    },
+  );
 
   it.each(["all", "identity", "replacement"] as const)(
     "registers before acquisition so an external canonical close can drain the pending lease (%s)",
@@ -525,9 +539,7 @@ describe("async lease maintenance ownership", () => {
         expect(f.released).toEqual([]);
         expect(f.registered.size).toBe(0);
       } finally {
-        f.allowAcquire.resolve();
-        await observed.outcome;
-        await f.maintenance.close();
+        await f.dispose(observed.outcome);
       }
     },
   );

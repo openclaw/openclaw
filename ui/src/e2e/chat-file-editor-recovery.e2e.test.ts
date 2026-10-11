@@ -2,6 +2,7 @@ import path from "node:path";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { controlUiE2eBuiltModuleRequest } from "./control-ui-built-module.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "File editor recovery" });
@@ -30,6 +31,8 @@ async function openFilePreview(page: Page) {
           response: {
             root: "/workspace",
             file: {
+              previewKind: "text",
+              contentEncoding: "utf8",
               content: `Synthetic ${name} content`,
               kind: "read",
               missing: false,
@@ -54,7 +57,10 @@ suite.define(() => {
         recordVideo: { dir: suite.artifactDir, size: { width: 1280, height: 900 } },
       },
       async ({ page }) => {
-        await page.route(/\/assets\/file-editor-view-[^/]+\.js(?:\?.*)?$/u, async (route) => {
+        const fileEditorRequest = controlUiE2eBuiltModuleRequest(
+          "ui/src/pages/chat/components/file-editor-view.ts",
+        );
+        await page.route(fileEditorRequest, async (route) => {
           const url = new URL(route.request().url());
           if (url.searchParams.has("actual")) {
             await route.continue();
@@ -92,9 +98,9 @@ suite.define(() => {
         await page.evaluate(() => {
           window.editorInitMaySucceed = true;
           const panel = document.querySelector("openclaw-chat-detail-panel") as HTMLElement & {
-            requestUpdate(): void;
+            basePath: string;
           };
-          panel.requestUpdate();
+          panel.basePath = "/incidental-redraw";
         });
         await page.evaluate(
           () =>
@@ -124,18 +130,18 @@ suite.define(() => {
         let documentProbes = 0;
         const errors: string[] = [];
         page.on("pageerror", (error) => errors.push(error.message));
-        await page.route(
-          (url) => url.pathname.startsWith("/chat"),
-          async (route) => {
-            if (route.request().method() === "HEAD") {
-              documentProbes += 1;
-              await route.fulfill({ status: reachable ? 200 : 503, body: "" });
-            } else {
-              await route.continue();
-            }
-          },
+        await page.route(new URL("index.html", suite.server.baseUrl).href, async (route) => {
+          if (route.request().method() === "HEAD") {
+            documentProbes += 1;
+            await route.fulfill({ status: reachable ? 200 : 503, body: "" });
+          } else {
+            await route.continue();
+          }
+        });
+        const fileEditorRequest = controlUiE2eBuiltModuleRequest(
+          "ui/src/pages/chat/components/file-editor-view.ts",
         );
-        await page.route(/\/assets\/file-editor-view-[^/]+\.js$/u, async (route) => {
+        await page.route(fileEditorRequest, async (route) => {
           chunkRequests += 1;
           if (reachable) {
             await route.continue();
@@ -199,7 +205,10 @@ suite.define(() => {
         async ({ page }) => {
           const errors: string[] = [];
           page.on("pageerror", (error) => errors.push(error.message));
-          await page.route(/\/assets\/file-editor-view-[^/]+\.js(?:\?.*)?$/u, async (route) => {
+          const fileEditorRequest = controlUiE2eBuiltModuleRequest(
+            "ui/src/pages/chat/components/file-editor-view.ts",
+          );
+          await page.route(fileEditorRequest, async (route) => {
             const url = new URL(route.request().url());
             if (url.searchParams.has("actual")) {
               await route.continue();

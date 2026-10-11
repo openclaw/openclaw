@@ -16,12 +16,6 @@ export type ConfigSearchCriteria = {
   tags: string[];
 };
 
-type ConfigFieldMeta = {
-  label: string;
-  help?: string;
-  tags: string[];
-};
-
 type ConfigSearchTextMatcher = (value: string, query: string) => boolean;
 
 export function hasConfigSearchCriteria(criteria: ConfigSearchCriteria | undefined): boolean {
@@ -53,7 +47,7 @@ export function resolveConfigFieldMeta(
   path: Array<string | number>,
   schema: JsonSchema,
   hints: ConfigUiHints,
-): ConfigFieldMeta {
+) {
   const hint = localizedHintForPath(path, hints);
   const fallbackSegment = path.findLast((segment) => typeof segment === "string") ?? path.at(-1);
   const label = hint?.label ?? schema.title ?? humanize(String(fallbackSegment));
@@ -69,17 +63,6 @@ export function resolveConfigFieldMeta(
 
 function defaultTextMatcher(value: string, query: string): boolean {
   return normalizeLowercaseStringOrEmpty(value).includes(normalizeLowercaseStringOrEmpty(query));
-}
-
-function matchesText(
-  text: string,
-  candidates: Array<string | undefined>,
-  textMatcher: ConfigSearchTextMatcher,
-): boolean {
-  if (!text) {
-    return true;
-  }
-  return candidates.some((candidate) => candidate !== undefined && textMatcher(candidate, text));
 }
 
 function matchesTags(filterTags: string[], fieldTags: string[]): boolean {
@@ -113,10 +96,8 @@ export function matchesNodeSelf(params: {
     .filter((segment): segment is string => typeof segment === "string")
     .join(".");
   const enumText = schema.enum?.map((value) => String(value)).join(" ") ?? "";
-  return matchesText(
-    criteria.text,
-    [label, help, schema.title, schema.description, pathLabel, enumText],
-    textMatcher,
+  return [label, help, schema.title, schema.description, pathLabel, enumText].some(
+    (candidate) => candidate !== undefined && textMatcher(candidate, criteria.text),
   );
 }
 
@@ -129,9 +110,6 @@ export function matchesNodeSearch(params: {
   textMatcher?: ConfigSearchTextMatcher;
 }): boolean {
   const { schema, value, path, hints, criteria, textMatcher = defaultTextMatcher } = params;
-  if (!hasConfigSearchCriteria(criteria)) {
-    return true;
-  }
   if (matchesNodeSelf({ schema, path, hints, criteria, textMatcher })) {
     return true;
   }

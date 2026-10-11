@@ -1,5 +1,6 @@
 import { css, html, LitElement, type PropertyValues } from "lit";
 import { property } from "lit/decorators.js";
+import { subscribeThemeBranding } from "../app/theme-branding.ts";
 import { MascotAnimator } from "./mascot-animator.ts";
 import { drawMascot } from "./mascot-canvas.ts";
 import {
@@ -9,6 +10,7 @@ import {
   type MascotPose,
 } from "./mascot-pose.ts";
 import { currentThemeBranding, neutralMark } from "./neutral-mark.ts";
+import { renderThemeBrandIcon } from "./theme-brand-icon.ts";
 
 const DEFAULT_SIZE = 120;
 const MASCOT_MOODS = new Set<MascotMood>([
@@ -64,6 +66,7 @@ class OpenClawMascot extends LitElement {
   private reducedMotion = false;
   private intersectionObserver: IntersectionObserver | null = null;
   private themeObserver: MutationObserver | null = null;
+  private stopBranding?: () => void;
   private motionQuery: MediaQueryList | null = null;
 
   private readonly handleVisibilityChange = () => this.syncPlayback();
@@ -76,6 +79,7 @@ class OpenClawMascot extends LitElement {
   override connectedCallback(): void {
     super.connectedCallback();
     this.setAttribute("aria-hidden", "true");
+    this.stopBranding = subscribeThemeBranding(() => this.requestUpdate());
     document.addEventListener("visibilitychange", this.handleVisibilityChange);
 
     this.motionQuery = window.matchMedia?.("(prefers-reduced-motion: reduce)") ?? null;
@@ -101,6 +105,8 @@ class OpenClawMascot extends LitElement {
 
   override disconnectedCallback(): void {
     this.stopAnimation();
+    this.stopBranding?.();
+    this.stopBranding = undefined;
     document.removeEventListener("visibilitychange", this.handleVisibilityChange);
     this.motionQuery?.removeEventListener("change", this.handleMotionChange);
     this.motionQuery = null;
@@ -134,19 +140,11 @@ class OpenClawMascot extends LitElement {
     this.syncPlayback();
   }
 
-  catchOnce(): void {
-    if (!this.isConnected || this.reducedMotion || currentThemeBranding().mascot === "none") {
-      return;
-    }
-    const time = currentSeconds();
-    this.animator.playCatch(time);
-    this.drawCurrentFrame(time);
-    this.syncPlayback();
-  }
-
   override render() {
-    return currentThemeBranding().mascot === "none"
-      ? html`<span class="openclaw-mascot--neutral">${neutralMark}</span>`
+    return currentThemeBranding().brandIcon !== "claw"
+      ? html`<span class="openclaw-mascot--neutral"
+          >${renderThemeBrandIcon(neutralMark, currentThemeBranding(), neutralMark)}</span
+        >`
       : html`<canvas></canvas>`;
   }
 
@@ -161,7 +159,7 @@ class OpenClawMascot extends LitElement {
   private get shouldAnimate(): boolean {
     return (
       this.isConnected &&
-      currentThemeBranding().mascot === "claw" &&
+      currentThemeBranding().brandIcon === "claw" &&
       this.visible &&
       !this.reducedMotion &&
       document.visibilityState !== "hidden"
@@ -178,17 +176,12 @@ class OpenClawMascot extends LitElement {
   };
 
   private syncPlayback(): void {
-    if (!this.renderRoot.querySelector("canvas")) {
+    const canvas = this.renderRoot.querySelector("canvas");
+    if (!canvas || this.reducedMotion || !this.shouldAnimate) {
       this.stopAnimation();
-      return;
-    }
-    if (this.reducedMotion) {
-      this.stopAnimation();
-      this.drawPose(staticMascotPose(this.resolvedMood));
-      return;
-    }
-    if (!this.shouldAnimate) {
-      this.stopAnimation();
+      if (canvas && this.reducedMotion) {
+        this.drawPose(staticMascotPose(this.resolvedMood));
+      }
       return;
     }
     if (this.animationFrame === 0) {

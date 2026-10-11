@@ -1,5 +1,4 @@
-import crypto from "node:crypto";
-import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
+import { asSafeIntegerInRange } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { Type, type Static } from "typebox";
@@ -13,7 +12,12 @@ import { stringEnum } from "../schema/typebox.js";
 import { type AnyAgentTool, jsonResult, readToolStringParam, ToolInputError } from "./common.js";
 import { gatewayCallOptionSchemaProperties } from "./gateway-schema.js";
 import { readGatewayCallOptions } from "./gateway.js";
-import { invokeAgentNodeCommand, listNodes, type NodeListNode } from "./nodes-utils.js";
+import {
+  invokeAgentNodeCommand,
+  listNodes,
+  nodeToolIdempotencyKey,
+  type NodeListNode,
+} from "./nodes-utils.js";
 
 const MOBILE_UI_OBSERVE_COMMAND = "mobile.ui.observe";
 const MOBILE_UI_ACT_COMMAND = "mobile.ui.act";
@@ -89,21 +93,14 @@ type MobileUiSnapshot = ReturnType<typeof parseMobileUiSnapshot>;
 function readInteger(
   record: Record<string, unknown>,
   key: string,
-  options: { minimum?: number; maximum?: number } = {},
+  options: { minimum: number; maximum?: number },
 ): number {
-  const value = record[key];
-  if (
-    typeof value !== "number" ||
-    !Number.isSafeInteger(value) ||
-    (options.minimum !== undefined && value < options.minimum) ||
-    (options.maximum !== undefined && value > options.maximum)
-  ) {
+  const value = asSafeIntegerInRange(record[key], { min: options.minimum, max: options.maximum });
+  if (value === undefined) {
     const range =
-      options.minimum !== undefined && options.maximum !== undefined
+      options.maximum !== undefined
         ? ` between ${options.minimum} and ${options.maximum}`
-        : options.minimum !== undefined
-          ? ` >= ${options.minimum}`
-          : "";
+        : ` >= ${options.minimum}`;
     throw new ToolInputError(`${key} must be an integer${range}`);
   }
   return value;
@@ -198,16 +195,6 @@ const MOBILE_UI_NODE_MESSAGES: EligibleNodeMessages<NodeListNode> = {
       .map((node) => node.nodeId)
       .join(", ")}`,
 };
-
-function mobileUiActIdempotencyKey(params: { scope?: string; toolCallId: string }): string {
-  const stableScope = params.scope?.trim();
-  const stableCallId = params.toolCallId.trim();
-  if (!stableScope || !stableCallId) {
-    return crypto.randomUUID();
-  }
-  const digest = sha256Hex(JSON.stringify([stableScope, stableCallId, MOBILE_UI_ACT_COMMAND]));
-  return `mobile.ui.act:v1:${digest}`;
-}
 
 function payloadRecord(payload: unknown, label: string): Record<string, unknown> {
   let value = payload;
@@ -323,16 +310,6 @@ const SENSITIVE_EFFECTS: ReadonlyArray<{ pattern: RegExp; effect: string }> = [
   },
 ];
 
-function targetLabel(node: MobileUiNode): string {
-  return (
-    node.text?.trim() ||
-    node.contentDescription?.trim() ||
-    node.role ||
-    node.viewId?.trim() ||
-    node.ref
-  );
-}
-
 function enrichStateChangingEffect(
   snapshot: MobileUiSnapshot,
   selectedNode: MobileUiNode | undefined,
@@ -372,7 +349,13 @@ function stateChangingConfirmation(
     case "activate":
     case "set_text":
       node = snapshot.nodes.find((candidate) => candidate.ref === action.ref);
-      label = node ? targetLabel(node) : `node ${action.ref}`;
+      label = node
+        ? node.text?.trim() ||
+          node.contentDescription?.trim() ||
+          node.role ||
+          node.viewId?.trim() ||
+          node.ref
+        : `node ${action.ref}`;
       break;
     default:
       return null;
@@ -508,7 +491,8 @@ export function createMobileUiTool(options?: {
           command: MOBILE_UI_ACT_COMMAND,
           commandParams: { snapshotId, action: mobileAction },
           timeoutMs: invokeTimeoutMs,
-          idempotencyKey: mobileUiActIdempotencyKey({
+          idempotencyKey: nodeToolIdempotencyKey({
+            command: MOBILE_UI_ACT_COMMAND,
             scope: options?.idempotencyScope,
             toolCallId,
           }),

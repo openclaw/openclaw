@@ -23,6 +23,11 @@ SecurityAgent prompt during unattended work. The primary Gateway route still
 comes from the normal environment/config endpoint. Combine it with
 `--attach-only` when an external process owns the local Gateway.
 
+For background Accessibility automation and window-ID capture, launch the app
+binary with `--no-activate --chat` (or `--dashboard`). Windows remain behind the
+active app; macOS permission/file dialogs and interactive Keychain access are
+deferred. See [launch and debugging](https://docs.openclaw.ai/platforms/mac/webchat#launch-and-debugging).
+
 ## App profiles
 
 Launch a separately configured app instance with the same profile name used by the CLI:

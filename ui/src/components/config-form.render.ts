@@ -47,6 +47,8 @@ type ConfigFormProps = {
    *  section must stay silent there instead of claiming the page is empty. */
   embedded?: boolean;
   revealSensitive?: boolean;
+  /** Render sensitive strings as editable password inputs instead of redacted read-only text. */
+  maskSensitive?: boolean;
   isSensitivePathRevealed?: (path: Array<string | number>) => boolean;
   onToggleSensitivePath?: (path: Array<string | number>) => void;
   onPatch: (path: Array<string | number>, value: unknown) => void;
@@ -226,6 +228,7 @@ export function renderConfigForm(props: ConfigFormProps) {
         showHeaderMeta: true,
         searchCriteria,
         revealSensitive: props.revealSensitive ?? false,
+        maskSensitive: props.maskSensitive,
         isSensitivePathRevealed: props.isSensitivePathRevealed,
         onToggleSensitivePath: props.onToggleSensitivePath,
         onPatch: props.onPatch,
@@ -316,9 +319,10 @@ export function renderConfigForm(props: ConfigFormProps) {
           });
         })()
       : filteredEntries.map(([key, node]) => {
+          const hint = localizedHintForPath([key], props.uiHints);
           const meta = SECTION_META[key] ?? {
-            label: key.charAt(0).toUpperCase() + key.slice(1),
-            description: node.description ?? "",
+            label: hint?.label ?? key.charAt(0).toUpperCase() + key.slice(1),
+            description: hint?.help ?? node.description ?? "",
           };
 
           return renderSection({

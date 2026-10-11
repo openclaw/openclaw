@@ -1,6 +1,3 @@
-/**
- * HTTP handler for serving bundled A2UI renderer assets.
- */
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -69,14 +66,14 @@ async function resolveA2uiRootReal(): Promise<string | null> {
       const root = await resolveA2uiRoot();
       cachedA2uiRootReal = root ? await fs.realpath(root) : null;
       cachedA2uiResolvedAtMs = Date.now();
-      resolvingA2uiRoot = null;
       return cachedA2uiRootReal;
-    })();
+    })().finally(() => {
+      resolvingA2uiRoot = null;
+    });
   }
   return resolvingA2uiRoot;
 }
 
-/** Handles one HTTP request for the hosted A2UI asset surface. */
 export async function handleA2uiHttpRequest(
   req: A2uiHttpRequest,
   res: A2uiHttpResponse,

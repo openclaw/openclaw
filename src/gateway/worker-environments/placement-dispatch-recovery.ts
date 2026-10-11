@@ -1,20 +1,21 @@
 import { randomUUID } from "node:crypto";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
-import { supportsCurrentWorkerLaunch } from "./admission.js";
+import { supportsCurrentWorkerLaunch } from "../../worker/worker-build-identity.js";
 import { hasForcedWorkerEnvironmentAbandonment } from "./environment-errors.js";
 import {
-  isCurrentActiveWorkerEnvironment,
   isUnavailableEnvironment,
   workerDisappearanceError,
   type WorkerActiveDispatchPlacement,
   type WorkerDispatchEnvironmentService,
 } from "./placement-dispatch-failure.js";
-import { cleanupPendingWorkspaceResultOrphans } from "./placement-dispatch-orphan-cleanup.js";
+import {
+  cleanupPendingWorkspaceResultOrphans,
+  type PendingWorkspaceResultOrphanCleanup,
+} from "./placement-dispatch-orphan-cleanup.js";
 import { recoverPendingWorkspaceResults } from "./placement-dispatch-pending-results.js";
 import { forceAbandonWorkerEnvironment } from "./placement-force-abandon.js";
 import type { WorkerSessionPlacementProjection } from "./placement-read-projection.types.js";
-import { matchesWorkerPlacementTarget } from "./placement-reclaim-contract.js";
 import {
   placementTurnOwner,
   projectWorkerSessionTurnClaim,
@@ -24,6 +25,10 @@ import type {
   PlacementRecoveryDeps,
   WorkerPlacementRecoveryAdmission,
 } from "./placement-recovery-contract.js";
+import {
+  isCurrentActiveWorkerEnvironment,
+  matchesWorkerPlacementTarget,
+} from "./placement-target.js";
 import { WorkerRuntimeRefreshPendingError } from "./provider-runtime-refresh.js";
 import { boundedWorkerError } from "./worker-error.js";
 
@@ -64,9 +69,9 @@ export function createPlacementRecoveryActions(deps: PlacementRecoveryDeps) {
       return claim ? [serializeWorkerSessionTurnClaim(claim)] : [];
     }),
   );
-  // Orphan Git refs carry no live authority. Scan them once in the tracked full
-  // post-start sweep, never on readiness or targeted turn recovery.
-  let orphanCleanupPending = false;
+  // Retire orphan refs in bounded post-start sweeps, never on readiness or targeted recovery.
+  // Completed roots belong to this startup pass; settlement removes new refs itself.
+  let orphanCleanupPending: PendingWorkspaceResultOrphanCleanup | undefined;
 
   const reconcileActivePlacement = async (
     initialPlacement: WorkerActiveDispatchPlacement,
@@ -90,14 +95,17 @@ export function createPlacementRecoveryActions(deps: PlacementRecoveryDeps) {
         try {
           await environments.stopTunnel(placement.environmentId, placement.activeOwnerEpoch);
           await placements.closeWorkerTurnToolState(claim);
-          const current = placements.get(placement.sessionId);
+          const currentFacts = await placements.readProjection([placement.sessionId], {
+            current: true,
+          });
+          const current = currentFacts.placements.get(placement.sessionId);
           const currentEnvironment = environments.get(placement.environmentId);
           if (
             current?.state !== "active" ||
             current.generation !== placement.generation ||
             currentEnvironment?.nodeDeviceId !== environment.nodeDeviceId ||
             !isCurrentActiveWorkerEnvironment(current, currentEnvironment) ||
-            placements.getPlacementMove(placement.sessionId)
+            currentFacts.moves.has(placement.sessionId)
           ) {
             throw new Error("Interrupted worker owner changed while stopping");
           }
@@ -175,7 +183,7 @@ export function createPlacementRecoveryActions(deps: PlacementRecoveryDeps) {
           ownerEpoch: environment.ownerEpoch,
         });
       }
-      placements.adoptActive({
+      await placements.adoptActive({
         sessionId: placement.sessionId,
         expectedGeneration: placement.generation,
         environmentId: environment.environmentId,
@@ -195,9 +203,13 @@ export function createPlacementRecoveryActions(deps: PlacementRecoveryDeps) {
     sessionId: string,
     mode: "startup" | "restart" | "runtime",
     environmentId?: string,
+    resultsOnly?: "results-only",
   ): Promise<void> => {
     let facts = await placements.readProjection([sessionId], { current: true });
     const stagedOwners = await recoverPendingWorkspaceResults(deps, facts, environmentId);
+    if (resultsOnly === "results-only") {
+      return;
+    }
     facts = await placements.readProjection([sessionId], { current: true });
     const blocked =
       stagedOwners.has(sessionId) ||
@@ -325,7 +337,7 @@ export function createPlacementRecoveryActions(deps: PlacementRecoveryDeps) {
             return;
           }
           const claimId = `reclaim-${randomUUID()}`;
-          const claim = placements.claimReclaimWorkspaceResult(
+          const claim = await placements.claimReclaimWorkspaceResult(
             {
               sessionId: placement.sessionId,
               sessionKey: placement.sessionKey,
@@ -336,7 +348,7 @@ export function createPlacementRecoveryActions(deps: PlacementRecoveryDeps) {
             },
             (recoveryClaim) => environments.fenceWorkerTurnForRecovery(recoveryClaim),
           );
-          placements.handoffWorkspaceResultRecovery(claim);
+          await placements.handoffWorkspaceResultRecovery(claim);
         });
         const environmentId = abandonedEnvironmentId;
         if (environmentId) {
@@ -365,13 +377,17 @@ export function createPlacementRecoveryActions(deps: PlacementRecoveryDeps) {
     }
     const candidates = await placements.readRecoveryCandidates();
     if (mode === "startup") {
-      orphanCleanupPending = true;
+      orphanCleanupPending = { rootsBySession: new Map(), completedRoots: new Set() };
     }
     for (const { sessionId } of candidates) {
       await admit([sessionId], () => recoverSession(sessionId, mode ?? "restart"));
     }
-    if (mode !== "startup" && orphanCleanupPending) {
-      orphanCleanupPending = !(await cleanupPendingWorkspaceResultOrphans(deps, admit));
+    if (
+      mode !== "startup" &&
+      orphanCleanupPending &&
+      (await cleanupPendingWorkspaceResultOrphans(deps, admit, orphanCleanupPending))
+    ) {
+      orphanCleanupPending = undefined;
     }
   };
 
@@ -390,12 +406,16 @@ export function createPlacementRecoveryActions(deps: PlacementRecoveryDeps) {
       ) {
         continue;
       }
-      await admit([candidate.sessionId], () =>
-        recoverSession(candidate.sessionId, "runtime", environmentId),
+      await admit([candidate.sessionId], (mode) =>
+        recoverSession(candidate.sessionId, "runtime", environmentId, mode),
       );
     }
-    if (orphanCleanupPending && environmentId === undefined) {
-      orphanCleanupPending = !(await cleanupPendingWorkspaceResultOrphans(deps, admit));
+    if (
+      orphanCleanupPending &&
+      environmentId === undefined &&
+      (await cleanupPendingWorkspaceResultOrphans(deps, admit, orphanCleanupPending))
+    ) {
+      orphanCleanupPending = undefined;
     }
   };
 

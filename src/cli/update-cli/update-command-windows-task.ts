@@ -4,6 +4,7 @@ import {
 } from "../../daemon/schtasks.js";
 import { finishUpdateRun } from "../../infra/update-run-ledger.js";
 import { defaultRuntime } from "../../runtime.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import {
   registerSignalExitBarrier,
   registerSignalExitGate,
@@ -18,30 +19,19 @@ export class UpdateCommandAbort extends Error {
   }
 }
 
-export type WindowsTaskAutoStartRecovery = {
-  suspended: Promise<boolean>;
-  beginMutation: () => void;
-  assertRecoveryCurrent: () => void;
-  restore: (
-    restartSafe?: boolean,
-    guard?: () => Promise<void>,
-    assertCurrent?: () => void,
-  ) => Promise<void>;
-  handoff: (guard: () => Promise<void>) => void;
-  complete: (restartSafe?: boolean, options?: { preserveState?: true }) => Promise<void>;
-  interrupted: () => boolean;
-};
+export type WindowsTaskAutoStartRecovery = ReturnType<typeof createWindowsTaskAutoStartRecovery>;
 
 export function createWindowsTaskAutoStartRecovery(params: {
   serviceEnv: NodeJS.ProcessEnv;
   assertCurrentService?: () => Promise<void>;
-  assertCurrent?: () => void;
+  assertCurrent?: (phase?: "restore") => void;
   alreadySuspended?: true;
   updateRun?: UpdateCommandOptions["run"];
-}): WindowsTaskAutoStartRecovery {
+}) {
   let guard = params.assertCurrentService;
   let restorePromise: Promise<void> | undefined;
   let settlement: Promise<void> | undefined;
+  let shutdown: Promise<void> | undefined;
   let restoreAllowed = !params.alreadySuspended;
   let restorationAttempted = false;
   let restorationFailed = false;
@@ -49,26 +39,32 @@ export function createWindowsTaskAutoStartRecovery(params: {
   let closed = false;
   let interrupted = false;
   let unregisterSignalExitBarrier = () => {};
-  let finishUpdate: (() => void) | undefined;
-  const updateFinished = new Promise<void>((resolve) => {
-    finishUpdate = resolve;
-  });
-  const unregisterSignalExitGate = registerSignalExitGate(updateFinished);
+  const assertCurrentService = async (phase?: "restore") => {
+    params.assertCurrent?.(phase);
+    await guard?.();
+    params.assertCurrent?.(phase);
+  };
+  const updateFinished = createDeferredCore();
+  const unregisterSignalExitGate = registerSignalExitGate(updateFinished.promise);
   const onSignal = (exitCode: number) => {
+    if (shutdown) {
+      return;
+    }
     interrupted = true;
-    void waitForSignalExitBarriers()
+    shutdown = waitForSignalExitBarriers(exitCode === 143 ? "SIGTERM" : "SIGINT")
       .catch((error: unknown) => {
         defaultRuntime.error(`Failed to complete update shutdown cleanup: ${String(error)}`);
       })
-      .finally(() => process.exit(exitCode));
+      .finally(() => {
+        process.exitCode = exitCode;
+      });
   };
   const onSigint = () => onSignal(130);
   const onSigterm = () => onSignal(143);
-  const onSigbreak = () => onSignal(130);
   const removeSignalHandlers = () => {
     process.off("SIGINT", onSigint);
     process.off("SIGTERM", onSigterm);
-    process.off("SIGBREAK", onSigbreak);
+    process.off("SIGBREAK", onSigint);
     unregisterSignalExitBarrier();
   };
   const restore = (
@@ -89,11 +85,9 @@ export function createWindowsTaskAutoStartRecovery(params: {
           return;
         }
         await resumeScheduledTaskAutoStartAfterUpdate(params.serviceEnv, {
-          assertCurrent: params.assertCurrent,
+          assertCurrent: () => params.assertCurrent?.("restore"),
           beforeMutation: async () => {
-            params.assertCurrent?.();
-            await guard?.();
-            params.assertCurrent?.();
+            await assertCurrentService("restore");
             // Repair cancellation fences activation, while compensation retains its service guard.
             assertCurrent?.();
             if (closed || !restoreAllowed) {
@@ -136,12 +130,8 @@ export function createWindowsTaskAutoStartRecovery(params: {
           (await suspensionPromise.catch(() => false))
         ) {
           await suspendScheduledTaskAutoStartForUpdate(params.serviceEnv, {
-            assertCurrent: params.assertCurrent,
-            beforeMutation: async () => {
-              params.assertCurrent?.();
-              await guard?.();
-              params.assertCurrent?.();
-            },
+            assertCurrent: () => params.assertCurrent?.("restore"),
+            beforeMutation: () => assertCurrentService("restore"),
             // Failed verification removed the original safety proof. A timed-out
             // /DISABLE must never be compensated by enabling that installation.
             restoreOnFailure: false,
@@ -152,8 +142,8 @@ export function createWindowsTaskAutoStartRecovery(params: {
           cause instanceof Error ? cause : new Error("Windows native recovery failed", { cause });
       }
       try {
-        if (finishUpdate && recordInterruption && params.updateRun) {
-          params.assertCurrent?.();
+        if (recordInterruption && params.updateRun) {
+          params.assertCurrent?.("restore");
           const failed = restorationFailed || !restartSafe;
           finishUpdateRun(
             params.updateRun.runId,
@@ -181,20 +171,27 @@ export function createWindowsTaskAutoStartRecovery(params: {
             )
           : settlementFailure;
       } finally {
-        removeSignalHandlers();
-        finishUpdate?.();
-        finishUpdate = undefined;
+        // Repeated signals remain with this accepted drain until the enclosing
+        // command and all sibling recovery owners have released their gates.
+        if (shutdown) {
+          void shutdown.then(removeSignalHandlers, removeSignalHandlers);
+        } else {
+          removeSignalHandlers();
+        }
+        updateFinished.resolve();
         unregisterSignalExitGate();
       }
       if (failure) {
         throw failure;
       }
     })();
+    // complete may itself run inside a retained compensation. It releases this
+    // gate; joining the global signal drain here would wait on that same caller.
     return settlement;
   };
   process.on("SIGINT", onSigint);
   process.on("SIGTERM", onSigterm);
-  process.on("SIGBREAK", onSigbreak);
+  process.on("SIGBREAK", onSigint);
   unregisterSignalExitBarrier = registerSignalExitBarrier(restore);
   // The parent retains failed-handoff compensation; the fresh worker adopts
   // this observed suspension and enables only at its activation boundary.
@@ -202,16 +199,12 @@ export function createWindowsTaskAutoStartRecovery(params: {
     ? Promise.resolve(true)
     : suspendScheduledTaskAutoStartForUpdate(params.serviceEnv, {
         assertCurrent: params.assertCurrent,
-        beforeMutation: async () => {
-          params.assertCurrent?.();
-          await guard?.();
-          params.assertCurrent?.();
-        },
+        beforeMutation: assertCurrentService,
       });
   return {
     suspended: suspensionPromise,
     assertRecoveryCurrent: () => {
-      params.assertCurrent?.();
+      params.assertCurrent?.("restore");
       // Interruption can still recover the original runtime; transferred or settled owners cannot.
       if (closed || delegated) {
         throw new Error("Windows task recovery authority has closed or transferred.");
@@ -226,7 +219,7 @@ export function createWindowsTaskAutoStartRecovery(params: {
       restoreAllowed = false;
     },
     restore,
-    handoff: (guardianGuard) => {
+    handoff: (guardianGuard: () => Promise<void>) => {
       params.assertCurrent?.();
       if (closed || delegated) {
         throw new Error("Windows task recovery cannot transfer after settlement.");

@@ -1,5 +1,8 @@
 import type { DatabaseSync } from "node:sqlite";
-import { assertStateDatabaseAccessAllowed } from "../infra/gateway-state-owner.js";
+import {
+  acquireStateDatabaseSchemaLease,
+  assertStateDatabaseAccessAllowed,
+} from "../infra/gateway-state-owner.js";
 import { isGatewayExternallySupervised } from "../infra/gateway-supervision.js";
 import {
   clearNodeSqliteKyselyCacheForDatabase,
@@ -8,24 +11,26 @@ import {
 } from "../infra/kysely-sync.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
-import { OpenClawStateOwnershipMetadataError } from "../infra/sqlite-lifecycle-errors.js";
+import {
+  OpenClawStateOwnershipMetadataError,
+  runWithSqliteCleanup,
+} from "../infra/sqlite-lifecycle-errors.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import { configureSqliteWalMaintenance, type SqliteWalMaintenance } from "../infra/sqlite-wal.js";
 import { openClawStateDatabaseCache } from "./openclaw-state-db-cache.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "./openclaw-state-db-contract.js";
-import {
-  assertOpenClawStateDatabaseForMaintenance,
-  resolveDatabasePath,
-} from "./openclaw-state-db-maintenance.js";
+import { assertOpenClawStateDatabaseForMaintenance } from "./openclaw-state-db-maintenance.js";
 import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.generated.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "./openclaw-state-db.js";
+import { resolveDatabasePath } from "./openclaw-state-db.paths.js";
 import {
   inspectOpenClawStateOwnershipFromDatabase,
   normalizeOpenClawStateManagerId,
+  publishOpenClawStateOwnership,
   STATE_SUPERVISION_KEY,
   type OpenClawExternalStateOwnership,
 } from "./openclaw-state-ownership.js";
@@ -91,6 +96,7 @@ function claimOwnershipRow(
         }),
       ),
   );
+  publishOpenClawStateOwnership(database, ownership);
   return ownership;
 }
 
@@ -119,7 +125,6 @@ function repairMalformedOwnershipClaim(
       database,
       () => {
         assertStateDatabaseAccessAllowed(databasePath);
-        assertOpenClawStateDatabaseForMaintenance(database, { pathname: databasePath });
         return claimOwnershipRow(database, databasePath, managerId, true);
       },
       {
@@ -151,25 +156,33 @@ export function claimOpenClawStateOwnership(
     );
   }
   const normalizedManagerId = normalizeOpenClawStateManagerId(managerId);
-  try {
-    const database = openOpenClawStateDatabase(options);
-    const ownership = runOpenClawStateWriteTransaction(
-      ({ db, path: databasePath }) =>
-        claimOwnershipRow(db, databasePath, normalizedManagerId, false),
-      { ...options, database },
-      { operationLabel: "state.ownership.claim" },
-    );
-    requireOwnershipCheckpoint(database.walMaintenance, database.path);
-    return ownership;
-  } catch (error) {
-    if (!(error instanceof OpenClawStateOwnershipMetadataError)) {
-      throw error;
-    }
-    const ownership = repairMalformedOwnershipClaim(
-      resolveDatabasePath(options),
-      normalizedManagerId,
-    );
-    openOpenClawStateDatabase(options);
-    return ownership;
-  }
+  // Changing cached write authority needs exclusive custody through commit and checkpoint.
+  const lease = acquireStateDatabaseSchemaLease(resolveDatabasePath(options), {
+    busyTimeoutMs: 0,
+  });
+  return runWithSqliteCleanup(lease, "shared-state ownership claim", () =>
+    lease.run(() => {
+      try {
+        const database = openOpenClawStateDatabase(options);
+        const ownership = runOpenClawStateWriteTransaction(
+          ({ db, path: databasePath }) =>
+            claimOwnershipRow(db, databasePath, normalizedManagerId, false),
+          { ...options, database },
+          { operationLabel: "state.ownership.claim" },
+        );
+        requireOwnershipCheckpoint(database.walMaintenance, database.path);
+        return ownership;
+      } catch (error) {
+        if (!(error instanceof OpenClawStateOwnershipMetadataError)) {
+          throw error;
+        }
+        const ownership = repairMalformedOwnershipClaim(
+          resolveDatabasePath(options),
+          normalizedManagerId,
+        );
+        openOpenClawStateDatabase(options);
+        return ownership;
+      }
+    }),
+  );
 }

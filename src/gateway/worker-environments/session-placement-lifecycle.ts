@@ -1,38 +1,49 @@
+import { warnPluginSdkDeprecation } from "../../plugins/sdk-deprecation.js";
 import { parseCronRunScopeSuffix } from "../../sessions/session-key-utils.js";
 import { DEVICE_WORKER_PROVIDER_ID } from "./device-provider-identity.js";
+import type { WorkerEnvironmentRecord } from "./environment-record.js";
 import type { WorkerEnvironmentPlacementFacts } from "./placement-read-projection.types.js";
 import type { WorkerSessionPlacementRecord } from "./placement-record.js";
 import type {
   WorkerSessionPlacementRetirement,
   WorkerSessionPlacementStore,
 } from "./placement-store.js";
+import {
+  isCurrentActiveWorkerEnvironment,
+  isFailedWorkerPlacementEnvironmentGone,
+  matchesWorkerPlacementTarget,
+  type WorkerPlacementCancellationTarget,
+} from "./placement-target.js";
 import type {
+  WorkerPlacementDispatchRequest,
   WorkerEnvironmentServiceContract,
   WorkerPlacementDispatchContract,
   WorkerPlacementReclaimSourceCheck,
+  WorkerPlacementRedispatch,
 } from "./service-contract.js";
 
 export type SessionWorkerPlacementContext = {
   workerEnvironmentService?: Pick<WorkerEnvironmentServiceContract, "get">;
   workerPlacementDispatchService?: Pick<WorkerPlacementDispatchContract, "reclaim">;
   workerSessionPlacementService?: Pick<WorkerSessionPlacementStore, "getMany"> &
-    Partial<Pick<WorkerSessionPlacementStore, "retireSessionPlacement" | "listForReconcile">>;
+    Partial<
+      Pick<
+        WorkerSessionPlacementStore,
+        | "getManyAsync"
+        | "retireSessionPlacement"
+        | "listForReconcile"
+        | "listAsync"
+        | "retireSessionPlacementAsync"
+        | "prepareRuntimeRefresh"
+      >
+    >;
 };
 
 type PlacementMutationAction = "fork" | "reset" | "restore" | "rewind" | "switch";
 type Placement = WorkerSessionPlacementRecord;
 type PlacementState = Placement["state"];
-type PlacementOwner = Pick<
-  Placement,
-  | "sessionId"
-  | "sessionKey"
-  | "agentId"
-  | "state"
-  | "generation"
-  | "environmentId"
-  | "activeOwnerEpoch"
-  | "executionMode"
->;
+type PlacementOwner = WorkerPlacementCancellationTarget &
+  Pick<Placement, "sessionId" | "sessionKey" | "agentId" | "executionMode">;
 
 class SessionWorkerPlacementMutationError extends Error {
   constructor(state: PlacementState, action: PlacementMutationAction, key: string) {
@@ -64,41 +75,6 @@ type SessionWorkerPlacementMutationParams = {
 
 type RetirablePlacement = Extract<Placement, { state: "local" | "reclaimed" | "failed" }>;
 type FailedPlacement = Extract<Placement, { state: "failed" }>;
-
-export function isFailedWorkerPlacementEnvironmentGone(params: {
-  environmentService:
-    | {
-        get(
-          environmentId: string,
-        ):
-          | Pick<
-              NonNullable<ReturnType<WorkerEnvironmentServiceContract["get"]>>,
-              "state" | "leaseId"
-            >
-          | undefined;
-      }
-    | undefined;
-  placement: FailedPlacement;
-}): boolean {
-  if (params.placement.environmentId === null) {
-    return true;
-  }
-  // Provisioning persists deterministic allocation intent first; only the configured service
-  // can prove that the corresponding durable environment row was never created or is gone.
-  if (!params.environmentService) {
-    return false;
-  }
-  try {
-    const environment = params.environmentService.get(params.placement.environmentId);
-    return (
-      environment === undefined ||
-      environment.state === "destroyed" ||
-      (environment.state === "failed" && environment.leaseId === null)
-    );
-  } catch {
-    return false;
-  }
-}
 
 export function canRedispatchFailedWorkerPlacement(
   placement: FailedPlacement,
@@ -147,8 +123,8 @@ export function resolveWorkerPlacementArchiveRestoreError(params: {
 
 function resolveSessionWorkerPlacementMutationGuard(
   params: SessionWorkerPlacementMutationParams,
+  placement: Placement | undefined,
 ): SessionWorkerPlacementMutationGuard {
-  const placement = readSessionWorkerPlacement(params);
   if (!placement) {
     return { status: "allowed" };
   }
@@ -173,25 +149,54 @@ function resolveSessionWorkerPlacementMutationGuard(
   };
 }
 
-export function retireSessionWorkerPlacementBeforeMutation(
-  params: SessionWorkerPlacementMutationParams,
-): SessionWorkerPlacementMutationError | undefined {
-  const guard = resolveSessionWorkerPlacementMutationGuard(params);
+function selectPlacementRetirement(
+  service: SessionWorkerPlacementContext["workerSessionPlacementService"],
+) {
+  if (service?.retireSessionPlacementAsync) {
+    return service.retireSessionPlacementAsync.bind(service);
+  }
+  // Released Gateway contexts can still provide only the synchronous contract.
+  const legacyRetire = service?.retireSessionPlacement;
+  return legacyRetire
+    ? async (input: WorkerSessionPlacementRetirement, options?: { assertCurrent?: () => void }) => {
+        warnPluginSdkDeprecation({
+          family: "worker-placement-sync-writers",
+          method: "GatewayRequestContext.workerSessionPlacementService.retireSessionPlacement",
+          replacement: "retireSessionPlacementAsync",
+          compatibility:
+            "Synchronous calls retain their return values and commit before returning.",
+        });
+        options?.assertCurrent?.();
+        legacyRetire.call(service, input);
+      }
+    : undefined;
+}
+
+export async function retireSessionWorkerPlacementBeforeMutation(
+  params: SessionWorkerPlacementMutationParams & { assertCurrent?: () => void },
+): Promise<SessionWorkerPlacementMutationError | undefined> {
+  const placement = await readSessionWorkerPlacementAsync(params);
+  params.assertCurrent?.();
+  const guard = resolveSessionWorkerPlacementMutationGuard(params, placement);
   if (guard.status !== "retirement-required") {
     return guard.status === "blocked" ? guard.error : undefined;
   }
-  const retirementService = params.context.workerSessionPlacementService;
-  if (!retirementService?.retireSessionPlacement) {
+  const retire = selectPlacementRetirement(params.context.workerSessionPlacementService);
+  if (!retire) {
     throw new Error("Worker session placement retirement service is unavailable");
   }
-  retirementService.retireSessionPlacement(guard);
+  await retire(guard, { assertCurrent: params.assertCurrent });
+  params.assertCurrent?.();
   return undefined;
 }
 
 export function resolveSessionWorkerPlacementMutationError(
   params: SessionWorkerPlacementMutationParams,
 ): SessionWorkerPlacementMutationError | undefined {
-  const guard = resolveSessionWorkerPlacementMutationGuard(params);
+  const guard = resolveSessionWorkerPlacementMutationGuard(
+    params,
+    readSessionWorkerPlacement(params),
+  );
   return guard.status === "blocked" ? guard.error : undefined;
 }
 
@@ -206,6 +211,21 @@ function readSessionWorkerPlacement(params: {
     : undefined;
 }
 
+export async function readSessionWorkerPlacementAsync(params: {
+  context: SessionWorkerPlacementContext;
+  sessionId?: string;
+}): Promise<Placement | undefined> {
+  const service = params.context.workerSessionPlacementService;
+  if (!params.sessionId || !service) {
+    return undefined;
+  }
+  // Released Gateway contexts may supply only the synchronous placement reader.
+  const placements = service.getManyAsync
+    ? await service.getManyAsync([params.sessionId])
+    : service.getMany([params.sessionId]);
+  return placements.get(params.sessionId);
+}
+
 function samePlacementOwner(
   expected: PlacementOwner | undefined,
   current: PlacementOwner | undefined,
@@ -214,22 +234,18 @@ function samePlacementOwner(
     current?.sessionId === expected?.sessionId &&
     current?.sessionKey === expected?.sessionKey &&
     current?.agentId === expected?.agentId &&
-    current?.state === expected?.state &&
-    current?.generation === expected?.generation &&
-    current?.environmentId === expected?.environmentId &&
-    current?.activeOwnerEpoch === expected?.activeOwnerEpoch &&
+    matchesWorkerPlacementTarget(current, expected) &&
     current?.executionMode === expected?.executionMode
   );
 }
 
 /** Retain the exact stopped placement across fallible workspace or session mutations. */
-export function prepareSessionWorkerPlacementMutationCheck(
+function createSessionWorkerPlacementMutationCheck(
   params: Pick<SessionWorkerPlacementMutationParams, "context" | "sessionId">,
+  expected: Placement | undefined,
   operation: "mutation" | "retirement" = "mutation",
 ) {
-  const expected = readSessionWorkerPlacement(params);
-  const assertCurrent = () => {
-    const current = readSessionWorkerPlacement(params);
+  const assertPlacement = (current: Placement | undefined) => {
     if (
       !samePlacementOwner(expected, current) ||
       current?.turnClaim ||
@@ -238,30 +254,51 @@ export function prepareSessionWorkerPlacementMutationCheck(
       throw new Error(`Worker session placement ${params.sessionId} changed before ${operation}`);
     }
   };
-  assertCurrent();
-  return assertCurrent;
+  assertPlacement(expected);
+  // SDK and foreign writers can bypass retained owner observations. Keep the
+  // existing exact native predicate immediately before downstream effects.
+  return () => assertPlacement(readSessionWorkerPlacement(params));
+}
+
+export function prepareSessionWorkerPlacementMutationCheck(
+  params: Pick<SessionWorkerPlacementMutationParams, "context" | "sessionId">,
+  operation: "mutation" | "retirement" = "mutation",
+) {
+  return createSessionWorkerPlacementMutationCheck(
+    params,
+    readSessionWorkerPlacement(params),
+    operation,
+  );
+}
+
+export async function prepareSessionWorkerPlacementMutationCheckAsync(
+  params: Pick<SessionWorkerPlacementMutationParams, "context" | "sessionId">,
+) {
+  return createSessionWorkerPlacementMutationCheck(
+    params,
+    await readSessionWorkerPlacementAsync(params),
+  );
 }
 
 /** Archive visibility can change while a failed placement retains its physical cleanup. */
-export function prepareSessionWorkerPlacementArchiveCheck(
+function createSessionWorkerPlacementArchiveCheck(
   params: Pick<SessionWorkerPlacementMutationParams, "context" | "sessionId">,
+  expected: Placement | undefined,
 ): { assertCurrent: () => void; cleanupPending: boolean } {
-  const expected = readSessionWorkerPlacement(params);
   if (expected?.state !== "failed") {
     return {
-      assertCurrent: prepareSessionWorkerPlacementMutationCheck(params),
+      assertCurrent: createSessionWorkerPlacementMutationCheck(params, expected),
       cleanupPending: false,
     };
   }
-  const assertCurrent = () => {
-    const current = readSessionWorkerPlacement(params);
+  const assertPlacement = (current: Placement | undefined) => {
     if (!samePlacementOwner(expected, current) || current?.turnClaim) {
       throw new Error(`Worker session placement ${params.sessionId} changed before archive`);
     }
   };
-  assertCurrent();
+  assertPlacement(expected);
   return {
-    assertCurrent,
+    assertCurrent: () => assertPlacement(readSessionWorkerPlacement(params)),
     cleanupPending: !isFailedWorkerPlacementEnvironmentGone({
       environmentService: params.context.workerEnvironmentService,
       placement: expected,
@@ -269,27 +306,37 @@ export function prepareSessionWorkerPlacementArchiveCheck(
   };
 }
 
+export async function prepareSessionWorkerPlacementArchiveCheckAsync(
+  params: Pick<SessionWorkerPlacementMutationParams, "context" | "sessionId">,
+): Promise<{ assertCurrent: () => void; cleanupPending: boolean }> {
+  return createSessionWorkerPlacementArchiveCheck(
+    params,
+    await readSessionWorkerPlacementAsync(params),
+  );
+}
+
 /** Capture retirement without erasing cloud affinity before fallible session cleanup. */
-export function prepareSessionWorkerPlacementRetirement(
+export async function prepareSessionWorkerPlacementRetirement(
   params: Pick<SessionWorkerPlacementMutationParams, "context" | "sessionId">,
 ) {
-  const expected = readSessionWorkerPlacement(params);
-  const assertCurrent = prepareSessionWorkerPlacementMutationCheck(params, "retirement");
-  const retire = params.context.workerSessionPlacementService?.retireSessionPlacement;
+  const expected = await readSessionWorkerPlacementAsync(params);
+  const assertCurrent = createSessionWorkerPlacementMutationCheck(params, expected, "retirement");
+  const service = params.context.workerSessionPlacementService;
+  const retire = selectPlacementRetirement(service);
   if (expected && !retire) {
     throw new Error("Worker session placement retirement service is unavailable");
   }
   return {
     assertCurrent,
-    retire: () => {
+    retire: async () => {
       // Called only after confirmed deletion; orphan reconciliation may have
       // retired this placement while transcript archive publication awaited.
-      if (!readSessionWorkerPlacement(params)) {
+      if (!(await readSessionWorkerPlacementAsync(params))) {
         return;
       }
       assertCurrent();
       if (expected && retire && isWorkerPlacementSafeForMutation(params.context, expected)) {
-        retire({
+        await retire({
           sessionId: expected.sessionId,
           expectedState: expected.state,
           expectedGeneration: expected.generation,
@@ -377,4 +424,153 @@ export function prepareSessionWorkerPlacementStop(params: {
       expected?.state === "syncing" ||
       expected?.state === "starting",
   };
+}
+
+/** Initial placement, readiness, and recovery consume the same recorded destination. */
+export async function ensureWorkerSessionPlacement(params: {
+  request: WorkerPlacementDispatchRequest;
+  placements: Pick<WorkerSessionPlacementStore, "prepareSessionPlacement">;
+  environments: { get(environmentId: string): WorkerEnvironmentRecord | undefined };
+  dispatch: WorkerPlacementDispatchContract["dispatch"];
+  startDispatch: (
+    ...args: Parameters<WorkerPlacementDispatchContract["dispatch"]>
+  ) => Promise<WorkerSessionPlacementRecord>;
+  waitForInitialPlacement: (
+    placement: WorkerSessionPlacementRecord,
+    signal?: AbortSignal,
+  ) => Promise<unknown>;
+  redispatchPlacement: WorkerPlacementRedispatch;
+  prepareWorkspace: (canPrepare: () => boolean) => Promise<void>;
+  assertCurrent: () => void;
+  authorizeDispatch: () => void;
+  onTransition?: Parameters<WorkerPlacementDispatchContract["dispatch"]>[1];
+  signal?: AbortSignal;
+  waitForReady?: boolean;
+}): Promise<{ assertCurrent: () => void; release: () => void }> {
+  const { request } = params;
+  const prepared = await params.placements.prepareSessionPlacement(request.sessionId);
+  try {
+    const read = () => {
+      params.signal?.throwIfAborted();
+      params.assertCurrent();
+      const placement = prepared.current();
+      if (!placement || placement.state === "local") {
+        return placement;
+      }
+      if (
+        placement.agentId !== request.agentId ||
+        placement.sessionKey !== request.sessionKey ||
+        placement.executionMode !== request.executionMode
+      ) {
+        throw new Error(
+          "The existing placement conflicts with worker execution; repair its recorded owner before retrying.",
+        );
+      }
+      const environment = placement.environmentId
+        ? params.environments.get(placement.environmentId)
+        : undefined;
+      if (!environment && placement.state === "failed" && placement.environmentId) {
+        throw new Error(
+          "The session's recorded worker profile is unavailable; repair its environment record before retrying. Its workspace will not be moved automatically.",
+        );
+      }
+      if (environment && environment.profileId !== request.profileId) {
+        throw new Error(
+          "The session is bound to another worker profile; its workspace will not be moved automatically.",
+        );
+      }
+      return placement;
+    };
+    const assertReady = () => {
+      const placement = read();
+      const environment = placement?.environmentId
+        ? params.environments.get(placement.environmentId)
+        : undefined;
+      if (
+        placement?.state !== "active" ||
+        !isCurrentActiveWorkerEnvironment(placement, environment)
+      ) {
+        throw new Error(
+          "Worker placement is not ready; inspect its setup error or Stop the failed worker before retrying.",
+        );
+      }
+    };
+    const canStartDispatch = (placement: Placement | undefined) =>
+      !placement ||
+      placement.state === "local" ||
+      (placement.state === "failed" &&
+        placement.activeOwnerEpoch === null &&
+        isFailedWorkerPlacementEnvironmentGone({
+          placement,
+          environmentService: params.environments,
+        }));
+    const useRecorded = async () => {
+      const placement = read();
+      if (!placement || canStartDispatch(placement)) {
+        return false;
+      }
+      if (
+        placement.state === "reclaimed" ||
+        (placement.state === "failed" && placement.activeOwnerEpoch !== null)
+      ) {
+        await params.redispatchPlacement(placement, {
+          assertCurrent: params.assertCurrent,
+          signal: params.signal,
+        });
+        assertReady();
+      } else if (params.waitForReady !== false) {
+        if (["requested", "provisioning", "syncing", "starting"].includes(placement.state)) {
+          await params.waitForInitialPlacement(placement, params.signal);
+        }
+        assertReady();
+      }
+      return true;
+    };
+    const assertDestinationCurrent = () => {
+      read();
+    };
+    if (await useRecorded()) {
+      return { assertCurrent: assertDestinationCurrent, release: prepared.release };
+    }
+    await params.prepareWorkspace(() => {
+      const placement = read();
+      if (placement?.turnClaim) {
+        throw new Error("A local turn is still active; stop it before worker setup.");
+      }
+      return canStartDispatch(placement);
+    });
+    if (await useRecorded()) {
+      return { assertCurrent: assertDestinationCurrent, release: prepared.release };
+    }
+    const placement = read();
+    const previousEnvironment =
+      placement?.state === "failed" && placement.environmentId
+        ? params.environments.get(placement.environmentId)
+        : undefined;
+    const dispatch = params.waitForReady === false ? params.startDispatch : params.dispatch;
+    await dispatch(
+      {
+        ...request,
+        ...(previousEnvironment
+          ? {
+              inheritedProfile: {
+                providerId: previousEnvironment.providerId,
+                profileSnapshot: previousEnvironment.profileSnapshot,
+              },
+            }
+          : {}),
+      },
+      params.onTransition,
+      params.authorizeDispatch,
+      params.signal,
+    );
+    read();
+    if (params.waitForReady !== false) {
+      assertReady();
+    }
+    return { assertCurrent: assertDestinationCurrent, release: prepared.release };
+  } catch (error) {
+    prepared.release();
+    throw error;
+  }
 }

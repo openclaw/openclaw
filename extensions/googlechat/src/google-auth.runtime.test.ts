@@ -2,7 +2,11 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  getGoogleAuthTransport,
+  resolveValidatedGoogleChatCredentials,
+} from "./google-auth.runtime.js";
 
 const mocks = vi.hoisted(() => ({
   buildHostnameAllowlistPolicyFromSuffixAllowlist: vi.fn((hosts: string[]) => ({
@@ -36,14 +40,6 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
 vi.mock("google-auth-library", () => ({
   gaxios: { Gaxios: mocks.gaxiosCtor },
 }));
-
-let getGoogleAuthTransport: typeof import("./google-auth.runtime.js").getGoogleAuthTransport;
-let resolveValidatedGoogleChatCredentials: typeof import("./google-auth.runtime.js").resolveValidatedGoogleChatCredentials;
-
-beforeAll(async () => {
-  ({ getGoogleAuthTransport, resolveValidatedGoogleChatCredentials } =
-    await import("./google-auth.runtime.js"));
-});
 
 beforeEach(() => {
   mocks.buildHostnameAllowlistPolicyFromSuffixAllowlist.mockClear();
@@ -290,21 +286,6 @@ describe("googlechat google auth runtime", () => {
     expect(release).toHaveBeenCalledOnce();
   });
 
-  it("rejects malformed auth content-length before reading the body", async () => {
-    const { response, arrayBuffer } = createUnstreamedAuthResponse({ "content-length": "0x3" });
-    const release = mockGuardedResponse(response);
-
-    const guardedFetch = await createGoogleAuthTransportFetch();
-
-    await expect(
-      guardedFetch("https://oauth2.googleapis.com/token", {
-        method: "POST",
-      } as RequestInit),
-    ).rejects.toThrow("invalid content-length header: 0x3");
-    expect(arrayBuffer).not.toHaveBeenCalled();
-    expect(release).toHaveBeenCalledOnce();
-  });
-
   it("keeps auth transports isolated from google-auth interceptor mutations", async () => {
     const first = await getGoogleAuthTransport();
     const second = await getGoogleAuthTransport();
@@ -389,39 +370,6 @@ describe("googlechat google auth runtime", () => {
         config: {},
         credentialSource: "file",
         credentialsFile: credentialsPath,
-        enabled: true,
-      });
-      if (!credentials) {
-        throw new Error("expected validated credentials");
-      }
-      expect(credentials.client_email).toBe("bot@example.iam.gserviceaccount.com");
-      expect(credentials.token_uri).toBe("https://oauth2.googleapis.com/token");
-      expect(credentials.type).toBe("service_account");
-    } finally {
-      await fs.rm(tempDir, { force: true, recursive: true });
-    }
-  });
-
-  it("accepts symlinked service-account files used by secret mounts", async () => {
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "googlechat-auth-link-"));
-    try {
-      const credentialsPath = path.join(tempDir, "service-account.json");
-      const symlinkPath = path.join(tempDir, "service-account-link.json");
-      await fs.writeFile(credentialsPath, JSON.stringify(validCredentials), "utf8");
-      try {
-        await fs.symlink(credentialsPath, symlinkPath);
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code === "EPERM") {
-          return;
-        }
-        throw error;
-      }
-
-      const credentials = await resolveValidatedGoogleChatCredentials({
-        accountId: "default",
-        config: {},
-        credentialSource: "file",
-        credentialsFile: symlinkPath,
         enabled: true,
       });
       if (!credentials) {

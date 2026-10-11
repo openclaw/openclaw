@@ -65,13 +65,9 @@ export function parseSmsPublicWebhookUrl(value: string): URL | undefined {
   ) {
     return undefined;
   }
-  let url: URL;
-  try {
-    url = new URL(trimmed);
-  } catch {
-    return undefined;
-  }
+  const url = URL.parse(trimmed);
   if (
+    !url ||
     (url.protocol !== "http:" && url.protocol !== "https:") ||
     url.username ||
     url.password ||

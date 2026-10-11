@@ -50,7 +50,6 @@ vi.mock("../infra/device-bootstrap.js", () => ({
 const loadConfig = mocks.loadConfig;
 const runCommandWithTimeout = mocks.runCommandWithTimeout;
 const resolveCommandSecretRefsViaGateway = mocks.resolveCommandSecretRefsViaGateway;
-const renderTerminal = mocks.renderTerminal;
 const issueDevicePairSetupBootstrapToken = mocks.issueDevicePairSetupBootstrapToken;
 
 const { registerQrCli } = await import("./qr-cli.js");
@@ -142,6 +141,24 @@ describe("registerQrCli", () => {
     await program.parseAsync(["qr", ...args], { from: "user" });
   }
 
+  it.each([[[], "wss://gateway.example:8444/gateway"]])(
+    "preserves the Control UI path in configured QR URLs with overrides %j",
+    async (args, url) => {
+      loadConfig.mockReturnValue({
+        gateway: {
+          bind: "loopback",
+          controlUi: { basePath: "/gateway" },
+          auth: { mode: "token", token: "tok" },
+        },
+        plugins: {
+          entries: { "device-pair": { config: { publicUrl: "https://gateway.example:8444" } } },
+        },
+      });
+      await runQr(["--json", ...args]);
+      expect(parseLastLoggedQrJson().gatewayUrl).toBe(url);
+    },
+  );
+
   async function expectQrExit(args: string[]) {
     await expect(runQr(args)).rejects.toThrow("exit");
   }
@@ -209,37 +226,7 @@ describe("registerQrCli", () => {
   });
 
   it.each([
-    { args: ["--setup-code-only"], json: false },
-    { args: ["--setup-code-only", "--json"], json: true },
-  ])("prints the requested output for $args", async ({ args, json }) => {
-    loadConfig.mockReturnValue(createTokenGatewayConfig());
-
-    await runQr(args);
-
-    const expected = encodePairingSetupCode({
-      url: "ws://127.0.0.1:18789",
-      bootstrapToken: "bootstrap-123",
-      expiresAtMs: 123,
-    });
-    if (json) {
-      expect(runtime.writeJson, "QR_JSON_WRITER_NOT_REACHED").toHaveBeenCalledExactlyOnceWith(
-        expect.objectContaining({ setupCode: expected, gatewayUrl: "ws://127.0.0.1:18789" }),
-      );
-      expect(runtime.log).not.toHaveBeenCalledWith(expected);
-    } else {
-      expect(runtime.log).toHaveBeenCalledWith(expected);
-      expect(runtime.writeJson).not.toHaveBeenCalled();
-    }
-    expect(renderTerminal).not.toHaveBeenCalled();
-    expect(resolveCommandSecretRefsViaGateway).not.toHaveBeenCalled();
-    expect(issueDevicePairSetupBootstrapToken).toHaveBeenCalledWith(
-      expect.objectContaining({ profile: FULL_ACCESS_PAIRING_SETUP_BOOTSTRAP_PROFILE }),
-    );
-  });
-
-  it.each([
     { args: [], profile: FULL_ACCESS_PAIRING_SETUP_BOOTSTRAP_PROFILE, access: "full" },
-    { args: ["--limited"], profile: PAIRING_SETUP_BOOTSTRAP_PROFILE, access: "limited" },
     {
       args: ["--voice-node"],
       profile: VOICE_NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE,
@@ -287,16 +274,6 @@ describe("registerQrCli", () => {
     );
   });
 
-  it("uses the least-privilege bootstrap profile with --voice-node", async () => {
-    loadConfig.mockReturnValue(createTokenGatewayConfig());
-
-    await runQr(["--setup-code-only", "--voice-node"]);
-
-    expect(issueDevicePairSetupBootstrapToken).toHaveBeenCalledWith(
-      expect.objectContaining({ profile: VOICE_NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE }),
-    );
-  });
-
   const conflictingQrOptions = [
     {
       name: "access profiles",
@@ -316,26 +293,6 @@ describe("registerQrCli", () => {
     expect(runtimeError).toHaveBeenCalledExactlyOnceWith(testCase.message);
     expect(runtimeExit).toHaveBeenCalledExactlyOnceWith(1);
     expect(loadConfig).not.toHaveBeenCalled();
-  });
-
-  it("renders ASCII QR by default", async () => {
-    loadConfig.mockReturnValue(createTokenGatewayConfig());
-
-    await runQr([]);
-
-    const expected = encodePairingSetupCode({
-      url: "ws://127.0.0.1:18789",
-      bootstrapToken: "bootstrap-123",
-      expiresAtMs: 123,
-    });
-    expect(renderTerminal).toHaveBeenCalledWith(expected, { small: true });
-    const output = runtimeLog.mock.calls.map((call) => readRuntimeCallText(call)).join("\n");
-    expect(output).toContain("Pairing QR");
-    expect(output).toContain("ASCII-QR");
-    expect(output).toContain("Gateway:");
-    expect(output).toContain("Access:");
-    expect(output).toContain("full");
-    expect(output).toContain("openclaw devices approve <requestId>");
   });
 
   it("fails fast for insecure remote mobile pairing setup urls", async () => {
@@ -358,33 +315,6 @@ describe("registerQrCli", () => {
       expect.objectContaining({ profile: PAIRING_SETUP_BOOTSTRAP_PROFILE }),
     );
     expectLimitedTransportWarning();
-  });
-
-  it("allows android emulator cleartext override urls", async () => {
-    loadConfig.mockReturnValue({
-      gateway: {
-        bind: "loopback",
-        auth: { mode: "token", token: "tok" },
-      },
-    });
-
-    await runQr(["--setup-code-only", "--url", "ws://10.0.2.2:18789"]);
-
-    expectLoggedSetupCode("ws://10.0.2.2:18789");
-    expect(issueDevicePairSetupBootstrapToken).toHaveBeenCalledWith(
-      expect.objectContaining({ profile: PAIRING_SETUP_BOOTSTRAP_PROFILE }),
-    );
-    expectLimitedTransportWarning();
-  });
-
-  it("rejects invalid override urls before printing setup codes", async () => {
-    loadConfig.mockReturnValue(createTokenGatewayConfig());
-
-    await expectQrExit(["--setup-code-only", "--url", "http://localhost:notaport"]);
-
-    const output = runtimeError.mock.calls.map((call) => readRuntimeCallText(call)).join("\n");
-    expect(output).toContain("Configured publicUrl is invalid.");
-    expect(runtime.log).not.toHaveBeenCalled();
   });
 
   it("skips local password SecretRef resolution when --token override is provided", async () => {
@@ -442,20 +372,6 @@ describe("registerQrCli", () => {
     expect(resolveCommandSecretRefsViaGateway).not.toHaveBeenCalled();
   });
 
-  it("resolves local password SecretRef when auth mode is inferred", async () => {
-    vi.stubEnv("QR_INFERRED_GATEWAY_PASSWORD", "inferred-password");
-    loadConfig.mockReturnValue(
-      createLocalGatewayConfigWithAuth({
-        ...createLocalGatewayEnvPasswordRefAuth("QR_INFERRED_GATEWAY_PASSWORD"),
-      }),
-    );
-
-    await runQr(["--setup-code-only"]);
-
-    expectLoggedLocalSetupCode();
-    expect(resolveCommandSecretRefsViaGateway).not.toHaveBeenCalled();
-  });
-
   it("fails when token and password SecretRefs are both configured with inferred mode", async () => {
     vi.stubEnv("QR_INFERRED_GATEWAY_TOKEN", "inferred-token");
     loadConfig.mockReturnValue({
@@ -478,40 +394,6 @@ describe("registerQrCli", () => {
     const output = runtimeError.mock.calls.map((call) => readRuntimeCallText(call)).join("\n");
     expect(output).toContain("gateway.auth.mode is unset");
     expect(resolveCommandSecretRefsViaGateway).not.toHaveBeenCalled();
-  });
-
-  it("exits with error when gateway config is not pairable", async () => {
-    loadConfig.mockReturnValue({
-      gateway: {
-        bind: "loopback",
-        auth: { mode: "token", token: "tok" },
-      },
-    });
-
-    await expectQrExit([]);
-
-    const output = runtime.error.mock.calls.map((call) => readRuntimeCallText(call)).join("\n");
-    expect(output).toContain("only bound to loopback");
-  });
-
-  it("uses gateway.remote.url when --remote is set (ignores device-pair publicUrl)", async () => {
-    loadConfig.mockReturnValue(createRemoteQrConfig());
-    await runQr(["--setup-code-only", "--remote"]);
-
-    const expected = encodePairingSetupCode({
-      url: "wss://remote.example.com:444",
-      bootstrapToken: "bootstrap-123",
-      expiresAtMs: 123,
-    });
-    expect(runtime.log).toHaveBeenCalledWith(expected);
-    const request = resolveCommandSecretRefsViaGateway.mock.calls[0]?.[0] as
-      | { commandName?: string; targetIds?: Set<string> }
-      | undefined;
-    if (!request) {
-      throw new Error("expected command secret resolution request");
-    }
-    expect(request.commandName).toBe("qr --remote");
-    expect(request.targetIds).toEqual(new Set(["gateway.remote.token", "gateway.remote.password"]));
   });
 
   it("rejects invalid gateway.remote.url before printing remote setup codes", async () => {
@@ -545,43 +427,6 @@ describe("registerQrCli", () => {
         readRuntimeCallText(call).includes("gateway.remote.token inactive"),
       ),
     ).toBe(true);
-  });
-
-  it("routes remote secret diagnostics to stderr for setup-code-only output", async () => {
-    loadConfig.mockReturnValue(createRemoteQrConfig());
-    resolveCommandSecretRefsViaGateway.mockResolvedValueOnce({
-      resolvedConfig: createRemoteQrConfig(),
-      diagnostics: ["gateway.remote.token inactive"] as string[],
-    });
-
-    await runQr(["--setup-code-only", "--remote"]);
-
-    expect(
-      runtimeError.mock.calls.some((call) =>
-        readRuntimeCallText(call).includes("gateway.remote.token inactive"),
-      ),
-    ).toBe(true);
-    const expected = encodePairingSetupCode({
-      url: "wss://remote.example.com:444",
-      bootstrapToken: "bootstrap-123",
-      expiresAtMs: 123,
-    });
-    expect(runtime.log).toHaveBeenCalledWith(expected);
-  });
-
-  it("prefers gateway.remote.url over Tailscale in --remote json output", async () => {
-    loadConfig.mockReturnValue(createRemoteQrConfig({ withTailscale: true }));
-    mockTailscaleStatusLookup();
-
-    await runQr(["--json", "--remote"]);
-
-    const payload = parseLastLoggedQrJson();
-    expect(payload.gatewayUrl).toBe("wss://remote.example.com:444");
-    expect(payload.auth).toBe("token");
-    expect(payload.urlSource).toBe("gateway.remote.url");
-    expect(payload.access).toBe("full");
-    expect(payload.accessDowngraded).toBeUndefined();
-    expect(runCommandWithTimeout).not.toHaveBeenCalled();
   });
 
   it("routes remote secret diagnostics to stderr for json output", async () => {

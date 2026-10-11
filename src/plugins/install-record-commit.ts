@@ -12,6 +12,7 @@ import {
   type TransformConfigFileWithRetryParams,
 } from "../config/config.js";
 import type { ConfigWriteOptions } from "../config/io.js";
+import { ConfigWritePostCommitError } from "../config/io.write-errors.js";
 import type { ConfigReplaceInput } from "../config/mutate.js";
 import {
   copyPluginInstallRecordMap,
@@ -22,6 +23,7 @@ import {
 import { copyRuntimeConfigWriteApplication } from "../config/runtime-write-application.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
+import { composeConfigWriteAssertions } from "../config/write-authority.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { resolveDefaultPluginNpmDir, resolvePluginNpmProjectsDir } from "./install-paths.js";
 import { resolveInstalledPluginIndexInstallOwner } from "./installed-plugin-index-install-owner.js";
@@ -46,8 +48,16 @@ import {
   resolveRetainedManagedNpmInstallMarkerPath,
 } from "./managed-npm-retention.js";
 import { withPluginLifecycleLease } from "./plugin-lifecycle-lease.js";
+import { readPluginMetadataStateRow } from "./plugin-metadata-state-worker.js";
 import { recordPluginPackageUninstallPlan } from "./uninstall-package-plan.js";
 import { planPluginUninstall } from "./uninstall.js";
+
+const retainedPublications = new WeakMap<Error, Readonly<{ current: boolean }>>();
+
+/** Recorded disposition of this failure, not authority to activate or overwrite a newer index. */
+export function getRetainedPluginInstallPublication(error: unknown) {
+  return error instanceof Error ? retainedPublications.get(error) : undefined;
+}
 
 function mergeUnsetPaths(
   left?: ConfigWriteOptions["unsetPaths"],
@@ -220,9 +230,6 @@ function resolveRetainedManagedNpmInstallMarkerTarget(params: {
   if (!plan.ok || !plan.directoryRemoval || plan.directoryRemoval.cleanup?.kind !== "npm") {
     return null;
   }
-  if (nextInstallPath && installPathsOverlap(previousInstallPath, nextInstallPath)) {
-    return null;
-  }
   return previousInstallPath;
 }
 
@@ -255,7 +262,6 @@ async function markRetiredManagedNpmInstallRecords(params: {
   createdMarkerPaths: string[];
   assertCurrent: () => void;
 }): Promise<void> {
-  const markedPreviousPluginIds = new Set<string>();
   const activeInstallPaths = Object.values(params.nextInstallRecords).flatMap((record) => {
     const installPath = record.installPath?.trim();
     return installPath ? [installPath] : [];
@@ -299,7 +305,6 @@ async function markRetiredManagedNpmInstallRecords(params: {
       // Record each marker immediately so a later filesystem failure can roll it back.
       params.createdMarkerPaths.push(markerPath);
     }
-    markedPreviousPluginIds.add(pluginId);
   };
 
   for (const [pluginId, nextRecord] of Object.entries(params.nextInstallRecords)) {
@@ -310,10 +315,7 @@ async function markRetiredManagedNpmInstallRecords(params: {
     );
   }
   for (const [pluginId, previousRecord] of Object.entries(params.previousInstallRecords)) {
-    if (
-      markedPreviousPluginIds.has(pluginId) ||
-      getPluginInstallRecordMapEntry(params.nextInstallRecords, pluginId)
-    ) {
+    if (getPluginInstallRecordMapEntry(params.nextInstallRecords, pluginId)) {
       continue;
     }
     await markRetiredInstall(
@@ -418,16 +420,15 @@ async function commitPluginInstallRecordsWithWriter<T extends ConfigReplaceResul
   commit: ConfigCommit<T>;
 }): Promise<{
   committed: T;
-  nextInstallRecords: Record<string, PluginInstallRecord>;
   indexWrite: InstalledPluginIndexWriteReceipt;
 }> {
   return await withPluginLifecycleLease({}, async (lease) => {
     // The lifecycle owner shares refusal with outer package settlement.
-    const assertOwned = () => lease.assertOwned();
-    const assertCurrent = () => {
-      assertOwned();
-      params.writeOptions?.assertConfigPathForWrite?.();
-    };
+    const assertOwned = lease.assertOwned;
+    const assertCurrent = composeConfigWriteAssertions(
+      assertOwned,
+      params.writeOptions?.assertConfigPathForWrite,
+    );
     let tentativeWrite: InstalledPluginIndexWriteReceipt | undefined;
     const retainedMarkerPaths: string[] = [];
     const clearedMarkerSnapshots: Array<{ markerPath: string; contents: string }> = [];
@@ -435,7 +436,7 @@ async function commitPluginInstallRecordsWithWriter<T extends ConfigReplaceResul
       const storeOptions = { filePath: lease.databasePath };
       const prepared = await params.prepareInstallRecords(storeOptions);
       // Preparation and lease acquisition can outlive the approving operation.
-      // The index writer below completes its mutation synchronously.
+      // The worker rechecks the live caller at transaction and commit admission.
       await params.beforePersistentEffect?.();
       assertCurrent();
       tentativeWrite = await writePersistedInstalledPluginIndexInstallRecordsWithLease(
@@ -444,6 +445,10 @@ async function commitPluginInstallRecordsWithWriter<T extends ConfigReplaceResul
           ...storeOptions,
           config: params.nextConfig,
           lease,
+          assertCurrent: params.writeOptions?.assertConfigPathForWrite,
+          onAcknowledged: (receipt) => {
+            tentativeWrite = receipt;
+          },
         },
       );
       if (params.recheckStagedActivation) {
@@ -489,10 +494,34 @@ async function commitPluginInstallRecordsWithWriter<T extends ConfigReplaceResul
       const committed = await params.commit(params.nextConfig, writeOptions);
       return {
         committed,
-        nextInstallRecords: prepared.nextInstallRecords,
         indexWrite: tentativeWrite,
       };
     } catch (error) {
+      if (
+        tentativeWrite &&
+        error instanceof ConfigWritePostCommitError &&
+        error.rollbackStatus !== "restored"
+      ) {
+        try {
+          assertOwned();
+          const row = await readPluginMetadataStateRow("installed-index", {
+            path: lease.databasePath,
+          });
+          assertOwned();
+          retainedPublications.set(error, {
+            current: row?.value_json === tentativeWrite.mutation.after.value_json,
+          });
+        } catch (inspectionError) {
+          const failure = new AggregateError(
+            [error, inspectionError],
+            "Config publication could not be rolled back and its package records could not be inspected.",
+            { cause: inspectionError },
+          );
+          retainedPublications.set(failure, { current: false });
+          throw failure;
+        }
+        throw error;
+      }
       // Revoked invokers cannot authorize new effects, but the lease still owns compensation.
       assertOwned();
       const failures: unknown[] = [error];
@@ -587,7 +616,6 @@ export async function commitPluginInstallRecordsOnly(params: {
 }
 
 type PluginConfigCommit = ConfigReplaceResult & {
-  installRecords: Record<string, PluginInstallRecord>;
   movedInstallRecords: boolean;
 };
 
@@ -621,7 +649,6 @@ export async function commitConfigWriteWithPendingPluginInstalls(params: {
     });
     return {
       ...committed,
-      installRecords: {},
       movedInstallRecords: false,
     };
   }
@@ -649,7 +676,6 @@ export async function commitConfigWriteWithPendingPluginInstalls(params: {
   });
   return {
     ...result.committed,
-    installRecords: result.nextInstallRecords,
     movedInstallRecords: true,
   };
 }

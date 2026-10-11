@@ -2,11 +2,7 @@ import { createHash } from "node:crypto";
 import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import type { PendingUpload } from "./pending-uploads.js";
 import { getMSTeamsRuntime } from "./runtime.js";
-import {
-  resolveMSTeamsSqliteStateEnv,
-  toPluginJsonValue,
-  withMSTeamsSqliteMutationLock,
-} from "./sqlite-state.js";
+import { toPluginJsonValue, withMSTeamsSqliteMutationLock } from "./sqlite-state.js";
 
 /** TTL for persisted pending uploads (matches in-memory store). */
 const PENDING_UPLOAD_TTL_MS = 5 * 60 * 1000;
@@ -33,31 +29,17 @@ type PendingUploadChunkRecord = {
   dataBase64: string;
 };
 
-type PendingUploadsFsOptions = {
-  env?: NodeJS.ProcessEnv;
-  homedir?: () => string;
-  stateDir?: string;
-  storePath?: string;
-  ttlMs?: number;
-};
-
-function createMetaStore(
-  options: PendingUploadsFsOptions | undefined,
-): PluginStateKeyedStore<PendingUploadMetaRecord> {
+function createMetaStore(): PluginStateKeyedStore<PendingUploadMetaRecord> {
   return getMSTeamsRuntime().state.openKeyedStore<PendingUploadMetaRecord>({
     namespace: PENDING_UPLOAD_META_NAMESPACE,
     maxEntries: PENDING_UPLOAD_META_MAX_ENTRIES,
-    env: resolveMSTeamsSqliteStateEnv(options),
   });
 }
 
-function createChunkStore(
-  options: PendingUploadsFsOptions | undefined,
-): PluginStateKeyedStore<PendingUploadChunkRecord> {
+function createChunkStore(): PluginStateKeyedStore<PendingUploadChunkRecord> {
   return getMSTeamsRuntime().state.openKeyedStore<PendingUploadChunkRecord>({
     namespace: PENDING_UPLOAD_CHUNKS_NAMESPACE,
     maxEntries: MAX_PENDING_UPLOAD_CHUNK_ROWS,
-    env: resolveMSTeamsSqliteStateEnv(options),
   });
 }
 
@@ -105,7 +87,6 @@ async function registerUploadRows(
   record: PendingUpload,
   metaStore: PluginStateKeyedStore<PendingUploadMetaRecord>,
   chunkStore: PluginStateKeyedStore<PendingUploadChunkRecord>,
-  ttlMs: number,
 ): Promise<void> {
   const buffer = Buffer.from(record.buffer);
   const chunkCount = Math.max(1, Math.ceil(buffer.byteLength / RAW_CHUNK_BYTES));
@@ -115,7 +96,7 @@ async function registerUploadRows(
     );
   }
   await deleteUploadRows(record.id, metaStore, chunkStore);
-  await pruneUploadStore(metaStore, chunkStore, ttlMs, chunkCount);
+  await pruneUploadStore(metaStore, chunkStore, chunkCount);
   for (let index = 0; index < chunkCount; index += 1) {
     const chunk = buffer.subarray(index * RAW_CHUNK_BYTES, (index + 1) * RAW_CHUNK_BYTES);
     await chunkStore.register(
@@ -140,13 +121,6 @@ async function registerUploadRows(
       byteLength: buffer.byteLength,
     }),
   );
-}
-
-async function withPendingUploadLock<T>(
-  options: PendingUploadsFsOptions | undefined,
-  run: () => Promise<T>,
-): Promise<T> {
-  return await withMSTeamsSqliteMutationLock(options, PENDING_UPLOAD_MUTATION_KEY, run);
 }
 
 async function readUploadRows(
@@ -187,7 +161,6 @@ async function readUploadRows(
 async function pruneUploadStore(
   metaStore: PluginStateKeyedStore<PendingUploadMetaRecord>,
   chunkStore: PluginStateKeyedStore<PendingUploadChunkRecord>,
-  ttlMs: number,
   extraChunkRows = 0,
 ): Promise<void> {
   const rows = await metaStore.entries();
@@ -195,7 +168,7 @@ async function pruneUploadStore(
   const now = Date.now();
   let liveChunkRows = 0;
   for (const row of rows) {
-    if (now - row.value.createdAt > ttlMs) {
+    if (now - row.value.createdAt > PENDING_UPLOAD_TTL_MS) {
       await deleteUploadRows(row.value.id, metaStore, chunkStore);
       continue;
     }
@@ -231,12 +204,10 @@ async function pruneUploadStore(
  */
 export async function storePendingUploadFs(
   upload: Omit<PendingUpload, "createdAt">,
-  options?: PendingUploadsFsOptions,
 ): Promise<void> {
-  const ttlMs = options?.ttlMs ?? PENDING_UPLOAD_TTL_MS;
-  const metaStore = createMetaStore(options);
-  const chunkStore = createChunkStore(options);
-  await withPendingUploadLock(options, async () => {
+  const metaStore = createMetaStore();
+  const chunkStore = createChunkStore();
+  await withMSTeamsSqliteMutationLock(PENDING_UPLOAD_MUTATION_KEY, async () => {
     await registerUploadRows(
       {
         id: upload.id,
@@ -249,57 +220,46 @@ export async function storePendingUploadFs(
       },
       metaStore,
       chunkStore,
-      ttlMs,
     );
-    await pruneUploadStore(metaStore, chunkStore, ttlMs);
+    await pruneUploadStore(metaStore, chunkStore);
   });
 }
 
 export async function getPendingUploadFs(
   id: string | undefined,
-  options?: PendingUploadsFsOptions,
 ): Promise<PendingUpload | undefined> {
   if (!id) {
     return undefined;
   }
-  const ttlMs = options?.ttlMs ?? PENDING_UPLOAD_TTL_MS;
-  const metaStore = createMetaStore(options);
-  const chunkStore = createChunkStore(options);
+  const metaStore = createMetaStore();
+  const chunkStore = createChunkStore();
   const upload = await readUploadRows(id, metaStore, chunkStore);
   if (!upload) {
     return undefined;
   }
-  if (Date.now() - upload.createdAt > ttlMs) {
-    await removePendingUploadFs(id, options);
+  if (Date.now() - upload.createdAt > PENDING_UPLOAD_TTL_MS) {
+    await removePendingUploadFs(id);
     return undefined;
   }
   return upload;
 }
 
-export async function removePendingUploadFs(
-  id: string | undefined,
-  options?: PendingUploadsFsOptions,
-): Promise<void> {
+export async function removePendingUploadFs(id: string | undefined): Promise<void> {
   if (!id) {
     return;
   }
-  const metaStore = createMetaStore(options);
-  const chunkStore = createChunkStore(options);
-  await withPendingUploadLock(options, async () => {
+  const metaStore = createMetaStore();
+  const chunkStore = createChunkStore();
+  await withMSTeamsSqliteMutationLock(PENDING_UPLOAD_MUTATION_KEY, async () => {
     await deleteUploadRows(id, metaStore, chunkStore);
   });
 }
 
-export async function setPendingUploadActivityIdFs(
-  id: string,
-  activityId: string,
-  options?: PendingUploadsFsOptions,
-): Promise<void> {
-  const ttlMs = options?.ttlMs ?? PENDING_UPLOAD_TTL_MS;
-  const metaStore = createMetaStore(options);
-  await withPendingUploadLock(options, async () => {
+export async function setPendingUploadActivityIdFs(id: string, activityId: string): Promise<void> {
+  const metaStore = createMetaStore();
+  await withMSTeamsSqliteMutationLock(PENDING_UPLOAD_MUTATION_KEY, async () => {
     const record = await metaStore.lookup(buildMetaKey(id));
-    if (!record || Date.now() - record.createdAt > ttlMs) {
+    if (!record || Date.now() - record.createdAt > PENDING_UPLOAD_TTL_MS) {
       return;
     }
     await metaStore.register(

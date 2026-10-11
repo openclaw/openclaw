@@ -1,21 +1,36 @@
 import os from "node:os";
-import { enqueueGitRefMutation } from "../../infra/git-exec.js";
+import { runGitBuffered } from "../../agents/worktrees/git.js";
+import { enqueueGitRefMutation, gitCommandArgv } from "../../infra/git-exec.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 
 export const WORKSPACE_RESULT_GIT_TIMEOUT_MS = 10 * 60_000;
 
+export function workspaceResultCheckpointInitArgs(): string[] {
+  return ["init", "--quiet", "--bare", "--object-format=sha1"];
+}
+
+export async function readWorkspaceResultGit(
+  root: string,
+  args: string[],
+  options: { maxOutputBytes: number; input?: Uint8Array },
+  failureMessage = `git ${args[0]} failed`,
+): Promise<Buffer> {
+  const result = await runGitBuffered(root, args, {
+    timeoutMs: WORKSPACE_RESULT_GIT_TIMEOUT_MS,
+    ...options,
+  });
+  if (result.termination !== "exit" || result.code !== 0) {
+    throw new Error(result.stderr.toString("utf8").trim() || failureMessage);
+  }
+  return result.stdout;
+}
+
 export function workspaceResultGitCommand(cwd: string, args: string[]): string[] {
-  return [
-    "git",
-    "-c",
+  return gitCommandArgv(cwd, args, [
     // The platform null device disables hooks without trusting an unowned path.
     `core.hooksPath=${os.devNull}`,
-    "-c",
     "core.fsmonitor=false",
-    "-C",
-    cwd,
-    ...args,
-  ];
+  ]);
 }
 
 export async function requireWorkspaceResultGit(

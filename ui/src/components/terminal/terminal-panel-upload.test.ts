@@ -10,9 +10,10 @@ import { createApplicationContextProvider } from "../../test-helpers/application
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import type { TerminalGatewayClient } from "./terminal-connection.ts";
+import { defineTerminalPanelElement } from "./terminal-panel-registration.ts";
 import { TerminalPanelUploadController } from "./terminal-panel-upload.ts";
 import { terminalOpenResult } from "./terminal-panel.test-support.ts";
-import { OpenClawTerminalPanel } from "./terminal-panel.ts";
+import type { OpenClawTerminalPanel } from "./terminal-panel.ts";
 
 const TERMINAL_UPLOAD_RETENTION_MS = 24 * 60 * 60 * 1000;
 
@@ -27,6 +28,7 @@ function createTerminalController() {
   return {
     readOnly: false,
     terminal: {
+      options: { fontFamily: "" },
       cols: 100,
       rows: 30,
       viewportY: 0,
@@ -52,11 +54,13 @@ type CreateGhosttyTerminalMock = Mock<
 const createGhosttyTerminalMock: CreateGhosttyTerminalMock = vi.fn();
 const TERMINAL_PANEL_ELEMENT_NAME = `test-openclaw-terminal-panel-upload-${crypto.randomUUID()}`;
 
-class TestTerminalPanel extends OpenClawTerminalPanel {
-  override createTerminalController = createGhosttyTerminalMock as unknown as TerminalFactory;
-}
+defineTerminalPanelElement(TERMINAL_PANEL_ELEMENT_NAME);
 
-customElements.define(TERMINAL_PANEL_ELEMENT_NAME, TestTerminalPanel);
+function createUploadPanel(): OpenClawTerminalPanel {
+  const panel = document.createElement(TERMINAL_PANEL_ELEMENT_NAME) as OpenClawTerminalPanel;
+  panel.createTerminalController = createGhosttyTerminalMock as unknown as TerminalFactory;
+  return panel;
+}
 
 function terminalUploadFile(name: string, content: string): File {
   const file = new File([content], name);
@@ -64,6 +68,26 @@ function terminalUploadFile(name: string, content: string): File {
     value: async () => new TextEncoder().encode(content).buffer,
   });
   return file;
+}
+
+async function mountReadyPanel(client: TerminalGatewayClient) {
+  const panel = createUploadPanel();
+  panel.client = client;
+  panel.available = true;
+  document.body.append(panel);
+  panel.toggle();
+  await waitForFast(() => {
+    expect(panel.renderRoot.querySelector<HTMLButtonElement>(".tp-upload")?.disabled).toBe(false);
+  });
+  return panel;
+}
+
+function dropFiles(panel: OpenClawTerminalPanel, files: File[]) {
+  const drop = new Event("drop", { bubbles: true, cancelable: true });
+  Object.defineProperty(drop, "dataTransfer", {
+    value: { types: ["Files"], files, dropEffect: "none" },
+  });
+  panel.renderRoot.querySelector(".tp-viewport")?.dispatchEvent(drop);
 }
 
 describe("OpenClawTerminalPanel upload lifecycle", () => {
@@ -105,7 +129,7 @@ describe("OpenClawTerminalPanel upload lifecycle", () => {
   it("reacts to upload policy changes without intercepting text drops", async () => {
     const config = createApplicationConfigCapability({ resourceBasePath: "" });
     const host = createApplicationContextProvider({ config } as ApplicationContext);
-    const panel = document.createElement(TERMINAL_PANEL_ELEMENT_NAME) as OpenClawTerminalPanel;
+    const panel = createUploadPanel();
     panel.embedded = true;
     panel.available = true;
     host.append(panel);
@@ -160,6 +184,7 @@ describe("OpenClawTerminalPanel upload lifecycle", () => {
 
   afterEach(async () => {
     document.body.replaceChildren();
+    await Promise.resolve();
     createGhosttyTerminalMock.mockReset();
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
@@ -203,16 +228,7 @@ describe("OpenClawTerminalPanel upload lifecycle", () => {
         },
         addEventListener: () => () => {},
       };
-      const panel = document.createElement(TERMINAL_PANEL_ELEMENT_NAME) as OpenClawTerminalPanel;
-      panel.client = client;
-      panel.available = true;
-      document.body.append(panel);
-      panel.toggle();
-      await waitForFast(() => {
-        expect(panel.renderRoot.querySelector<HTMLButtonElement>(".tp-upload")?.disabled).toBe(
-          false,
-        );
-      });
+      const panel = await mountReadyPanel(client);
       expect(panel.renderRoot.querySelector<HTMLInputElement>(".tp-file-input")?.multiple).toBe(
         true,
       );
@@ -221,11 +237,7 @@ describe("OpenClawTerminalPanel upload lifecycle", () => {
       Object.defineProperty(file, "arrayBuffer", {
         value: async () => new TextEncoder().encode("pdf").buffer,
       });
-      const drop = new Event("drop", { bubbles: true, cancelable: true });
-      Object.defineProperty(drop, "dataTransfer", {
-        value: { types: ["Files"], files: [file], dropEffect: "none" },
-      });
-      panel.renderRoot.querySelector(".tp-viewport")?.dispatchEvent(drop);
+      dropFiles(panel, [file]);
 
       await waitForFast(() => {
         expect(requests).toContainEqual({
@@ -280,27 +292,11 @@ describe("OpenClawTerminalPanel upload lifecycle", () => {
       },
       addEventListener: () => () => {},
     };
-    const panel = document.createElement(TERMINAL_PANEL_ELEMENT_NAME) as OpenClawTerminalPanel;
-    panel.client = client;
-    panel.available = true;
-    document.body.append(panel);
-    panel.toggle();
-    await waitForFast(() => {
-      expect(panel.renderRoot.querySelector<HTMLButtonElement>(".tp-upload")?.disabled).toBe(false);
-    });
-
-    const drop = new Event("drop", { bubbles: true, cancelable: true });
-    Object.defineProperty(drop, "dataTransfer", {
-      value: {
-        types: ["Files"],
-        files: [
-          terminalUploadFile("scan final.pdf", "pdf"),
-          terminalUploadFile("notes.txt", "note"),
-        ],
-        dropEffect: "none",
-      },
-    });
-    panel.renderRoot.querySelector(".tp-viewport")?.dispatchEvent(drop);
+    const panel = await mountReadyPanel(client);
+    dropFiles(panel, [
+      terminalUploadFile("scan final.pdf", "pdf"),
+      terminalUploadFile("notes.txt", "note"),
+    ]);
 
     await waitForFast(() => {
       const progress = panel.renderRoot.querySelector(".tp-upload-progress");
@@ -412,24 +408,8 @@ describe("OpenClawTerminalPanel upload lifecycle", () => {
       },
       addEventListener: () => () => {},
     };
-    const panel = document.createElement(TERMINAL_PANEL_ELEMENT_NAME) as OpenClawTerminalPanel;
-    panel.client = client;
-    panel.available = true;
-    document.body.append(panel);
-    panel.toggle();
-    await waitForFast(() => {
-      expect(panel.renderRoot.querySelector<HTMLButtonElement>(".tp-upload")?.disabled).toBe(false);
-    });
-
-    const drop = new Event("drop", { bubbles: true, cancelable: true });
-    Object.defineProperty(drop, "dataTransfer", {
-      value: {
-        types: ["Files"],
-        files: [terminalUploadFile("archive.zip", "zip")],
-        dropEffect: "none",
-      },
-    });
-    panel.renderRoot.querySelector(".tp-viewport")?.dispatchEvent(drop);
+    const panel = await mountReadyPanel(client);
+    dropFiles(panel, [terminalUploadFile("archive.zip", "zip")]);
     await waitForFast(() => {
       expect(panel.renderRoot.querySelector(".tp-upload-card")?.textContent).toContain(
         "Uploading 1 of 1",
@@ -467,24 +447,8 @@ describe("OpenClawTerminalPanel upload lifecycle", () => {
       },
       addEventListener: () => () => {},
     };
-    const panel = document.createElement(TERMINAL_PANEL_ELEMENT_NAME) as OpenClawTerminalPanel;
-    panel.client = client;
-    panel.available = true;
-    document.body.append(panel);
-    panel.toggle();
-    await waitForFast(() => {
-      expect(panel.renderRoot.querySelector<HTMLButtonElement>(".tp-upload")?.disabled).toBe(false);
-    });
-
-    const drop = new Event("drop", { bubbles: true, cancelable: true });
-    Object.defineProperty(drop, "dataTransfer", {
-      value: {
-        types: ["Files"],
-        files: [terminalUploadFile("archive.zip", "zip")],
-        dropEffect: "none",
-      },
-    });
-    panel.renderRoot.querySelector(".tp-viewport")?.dispatchEvent(drop);
+    const panel = await mountReadyPanel(client);
+    dropFiles(panel, [terminalUploadFile("archive.zip", "zip")]);
     await waitForFast(() => {
       expect(panel.renderRoot.querySelector(".tp-upload-card")?.textContent).toContain(
         "Uploading 1 of 1",

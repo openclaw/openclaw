@@ -1,8 +1,10 @@
 import path from "node:path";
+import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { openChatSidePanelType } from "./chat-side-panel.test-support.ts";
+import { controlUiE2eBuiltModuleRequest } from "./control-ui-built-module.test-support.ts";
 import {
   createControlUiE2eSuite,
   holdModuleResponse,
@@ -10,6 +12,14 @@ import {
 import { openSessionMenuSubmenu } from "./session-management.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "side-chat input focus" });
+
+async function enterSideCommand(scope: Page | Locator, command: string): Promise<void> {
+  const input = scope.locator(".agent-chat__composer-shell textarea");
+  await input.fill(command);
+  // Drafting starts before history admission; slash commands wait for Send readiness.
+  await scope.locator(".chat-send-btn--send:enabled").waitFor({ state: "visible" });
+  await input.press("Enter");
+}
 
 suite.define(() => {
   for (const viewport of [
@@ -54,8 +64,7 @@ suite.define(() => {
       const input = page.getByRole("textbox", { name: "Ask in side chat", exact: true });
       expect(await input.isVisible()).toBe(false);
       for (const draft of ["", "Keep this side draft"]) {
-        await mainInput.fill(command);
-        await mainInput.press("Enter");
+        await enterSideCommand(page, command);
         await expect.poll(() => input.isVisible()).toBe(true);
         await expect
           .poll(() => input.evaluate((element) => document.activeElement === element))
@@ -78,13 +87,15 @@ suite.define(() => {
     "preserves newer main focus while %s opens a delayed rail",
     async (command) => {
       await suite.withPage({ viewport: { width: 1440, height: 900 } }, async ({ page }) => {
-        const held = await holdModuleResponse(page, /\/assets\/chat-session-rail-[^/]+\.js$/u);
+        const held = await holdModuleResponse(
+          page,
+          controlUiE2eBuiltModuleRequest("ui/src/pages/chat/components/chat-session-rail.ts"),
+        );
         try {
           await installMockGateway(page);
           await page.goto(`${suite.server.baseUrl}chat`);
           const mainInput = page.locator(".agent-chat__composer-shell textarea");
-          await mainInput.fill(command);
-          await mainInput.press("Enter");
+          await enterSideCommand(page, command);
           await held.request;
           const sideInput = page.getByRole("textbox", { name: "Ask in side chat", exact: true });
           expect(await sideInput.count()).toBe(0);
@@ -114,13 +125,14 @@ suite.define(() => {
     "focuses a new Side chat opening after %s supersedes an unmounted command",
     async (action) => {
       await suite.withPage({ viewport: { width: 1440, height: 900 } }, async ({ page }) => {
-        const held = await holdModuleResponse(page, /\/assets\/chat-session-rail-[^/]+\.js$/u);
+        const held = await holdModuleResponse(
+          page,
+          controlUiE2eBuiltModuleRequest("ui/src/pages/chat/components/chat-session-rail.ts"),
+        );
         try {
           await installMockGateway(page);
           await page.goto(`${suite.server.baseUrl}chat`);
-          const mainInput = page.locator(".agent-chat__composer-shell textarea");
-          await mainInput.fill("/btw");
-          await mainInput.press("Enter");
+          await enterSideCommand(page, "/btw");
           await held.request;
           const sideInput = page.getByRole("textbox", { name: "Ask in side chat", exact: true });
           expect(await sideInput.count()).toBe(0);
@@ -184,8 +196,7 @@ suite.define(() => {
             .toBe(true);
         }
         const mainInput = page.locator(".agent-chat__composer-shell textarea");
-        await mainInput.fill("/btw what is this?");
-        await mainInput.press("Enter");
+        await enterSideCommand(page, "/btw what is this?");
         const request = await gateway.waitForRequest("sessions.companion.ask");
         expect(request.params).toMatchObject({ question: "what is this?" });
         await page.locator(".chat-session-rail__exchange--pending").waitFor();
@@ -219,8 +230,7 @@ suite.define(() => {
         await expect.poll(() => panes.count()).toBe(2);
         const firstInput = panes.first().locator(".agent-chat__composer-shell textarea");
         const secondInput = panes.last().locator(".agent-chat__composer-shell textarea");
-        await firstInput.fill("/btw what is this?");
-        await firstInput.press("Enter");
+        await enterSideCommand(panes.first(), "/btw what is this?");
         await gateway.waitForRequest("sessions.companion.ask");
         const sideInput = panes
           .first()
@@ -275,8 +285,7 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}chat`);
       const mainInput = page.locator(".agent-chat__composer-shell textarea");
       const sideInput = page.locator(".chat-session-rail__input");
-      await mainInput.fill("/btw what is this?");
-      await mainInput.press("Enter");
+      await enterSideCommand(page, "/btw what is this?");
       const request = await gateway.waitForRequest("sessions.companion.ask");
       expect(request.params).toMatchObject({ agentId: "main", sessionKey: "global" });
       await page.locator(".chat-session-rail__exchange--pending").waitFor();
@@ -322,7 +331,10 @@ suite.define(() => {
     await suite.withPage({ viewport: { width: 1440, height: 900 } }, async ({ page }) => {
       const held =
         intent === "sidebar menu before mount"
-          ? await holdModuleResponse(page, /\/assets\/chat-session-rail-[^/]+\.js$/u)
+          ? await holdModuleResponse(
+              page,
+              controlUiE2eBuiltModuleRequest("ui/src/pages/chat/components/chat-session-rail.ts"),
+            )
           : null;
       try {
         const gateway = await installMockGateway(page, {
@@ -333,8 +345,7 @@ suite.define(() => {
         });
         await page.goto(`${suite.server.baseUrl}chat`);
         const mainInput = page.locator(".agent-chat__composer-shell textarea");
-        await mainInput.fill("/btw what is this?");
-        await mainInput.press("Enter");
+        await enterSideCommand(page, "/btw what is this?");
         await gateway.waitForRequest("sessions.companion.ask");
         const sideInput = page.locator(".chat-session-rail__input");
         if (held) {
@@ -366,6 +377,7 @@ suite.define(() => {
             .locator('[data-session-key="agent:main:sidebar-focus"] .sidebar-recent-session__link')
             .focus();
           await page.keyboard.press("Shift+F10");
+          await openSessionMenuSubmenu(page, "Advanced");
           await openSessionMenuSubmenu(page, "Icon & color");
           await page.getByRole("button", { name: "Custom icon…", exact: true }).click();
           foregroundInput = page.getByRole("textbox", { name: "Custom icon", exact: true });

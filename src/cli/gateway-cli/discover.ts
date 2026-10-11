@@ -1,4 +1,3 @@
-// Gateway discovery rendering helpers for Bonjour and wide-area DNS beacon output.
 import { colorize, theme } from "../../../packages/terminal-core/src/theme.js";
 import {
   resolveGatewayDiscoveryEndpoint,
@@ -41,14 +40,14 @@ export function renderBeaconLines(beacon: GatewayBonjourBeacon, rich: boolean): 
 
   const lines = [`- ${title} ${domain}`];
 
-  if (beacon.tailnetDns) {
-    lines.push(`  ${colorize(rich, theme.info, "tailnet")}: ${beacon.tailnetDns}`);
-  }
-  if (beacon.lanHost) {
-    lines.push(`  ${colorize(rich, theme.info, "lan")}: ${beacon.lanHost}`);
-  }
-  if (beacon.host) {
-    lines.push(`  ${colorize(rich, theme.info, "host")}: ${beacon.host}`);
+  for (const [label, value] of [
+    ["tailnet", beacon.tailnetDns],
+    ["lan", beacon.lanHost],
+    ["host", beacon.host],
+  ] as const) {
+    if (value) {
+      lines.push(`  ${colorize(rich, theme.info, label)}: ${value}`);
+    }
   }
 
   if (target.wsUrl) {

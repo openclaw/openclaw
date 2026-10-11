@@ -32,9 +32,27 @@ vi.mock("../../agents/worktrees/service.js", () => ({
     resolveRepositoryIdentity: mocks.repository,
   },
 }));
+vi.mock("../../agents/worktrees/registry-read.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../agents/worktrees/registry-read.js")>()),
+  readLiveRegistryWorktreeByOwner: async (_context: unknown, kind: string, id: string) =>
+    mocks.worktree(kind, id),
+}));
 vi.mock("../session-utils.js", () => ({ loadGatewaySessionEntryReadOnly: mocks.session }));
+vi.mock("../session-utils-store-worker.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../session-utils-store-worker.js")>()),
+  loadGatewaySessionEntryReadOnlyInWorker: async (
+    params: Parameters<
+      typeof import("../session-utils-store-worker.js").loadGatewaySessionEntryReadOnlyInWorker
+    >[0],
+  ) => mocks.session(params.key, { agentId: params.agentId }),
+}));
 vi.mock("../../state/session-repository-workspaces.js", () => ({
-  getSessionRepositoryWorkspaceStore: () => ({ get: mocks.repositoryWorkspace }),
+  getSessionRepositoryWorkspaceStore: () => ({
+    prepare: async () => ({
+      workspace: mocks.repositoryWorkspace(),
+      current: mocks.repositoryWorkspace,
+    }),
+  }),
 }));
 vi.mock("../../process/exec.js", () => ({ runCommandBuffered: mocks.nativeToken }));
 
@@ -105,7 +123,9 @@ describe("worker GitHub launch binding", () => {
       remoteUrl: "https://github.com/owner/repo.git",
       gitAuthor: { name: "Shared Bot" },
     });
-    expect(mocks.verify).toHaveBeenCalledWith(token);
+    expect(mocks.verify).toHaveBeenCalledWith(token, {
+      apiBaseUrl: "https://api.github.com",
+    });
     expect(mocks.nativeToken).not.toHaveBeenCalled();
   });
 

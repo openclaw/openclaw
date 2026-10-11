@@ -7,6 +7,7 @@ import {
   PLUGIN_COMMAND_DISPATCH,
 } from "../../plugins/plugin-command-runtime.js";
 import { isNativeCommandTurn, resolveCommandTurnContext } from "../command-turn-context.js";
+import { isExplicitCommandTurnContext } from "../command-turn-detection.js";
 import {
   findCommandByNativeName,
   normalizeCommandBody,
@@ -16,7 +17,6 @@ import { shouldHandleTextCommands } from "../commands-text-routing.js";
 import type { FinalizedRuntimeMsgContext } from "../templating.js";
 import { resolveCommandChannel } from "./commands-context.js";
 import { resolveCommandContextText } from "./context-text.js";
-import { isExplicitSourceReplyCommand } from "./source-reply-delivery-mode.js";
 
 export function shouldBypassPluginOwnedBindingForCommand(
   ctx: FinalizedRuntimeMsgContext,
@@ -73,20 +73,17 @@ export function shouldBypassPluginOwnedBindingForCommand(
     }
     return true;
   }
-  if (!isExplicitSourceReplyCommand(ctx, cfg)) {
+  if (!isExplicitCommandTurnContext(ctx, cfg)) {
     return false;
   }
   if (resolveTextCommand(commandBody)) {
     return true;
   }
   const provider = normalizeOptionalString(ctx.Provider ?? ctx.Surface);
-  if (
+  return Boolean(
     commandTurn.commandName &&
     findCommandByNativeName(commandTurn.commandName, provider, {
       includeBundledChannelFallback: true,
-    })
-  ) {
-    return true;
-  }
-  return false;
+    }),
+  );
 }

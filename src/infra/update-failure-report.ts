@@ -1,6 +1,7 @@
 /** Privacy-bounded, consent-gated reporting for one terminal update failure. */
 import { randomUUID } from "node:crypto";
 import { resolveStateDir } from "../config/paths.js";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import {
   browserFallbackResult,
   submitGithubIssue,
@@ -34,15 +35,16 @@ import {
   discardSavedUpdateFailureReportBestEffort,
   publishPreparedUpdateFailureReport,
   savePreparedUpdateFailureReport,
-  type SavedUpdateFailureReport,
 } from "./update-failure-report-artifact.js";
 import {
   assertUpdateReportPreCreateState,
+  assertUpdateReportSubmissionAuthority,
   retryUpdateReportStateWrite,
   retryUpdateReportStateWriteAfterNoStart,
   UpdateReportPreCreateGuardError,
 } from "./update-failure-report-precreate.js";
 import type { PreparedUpdateFailureReport } from "./update-failure-report-prepare.js";
+import { confirmUpdateFailureReportReceipt } from "./update-failure-report-receipt.js";
 
 export { prepareUpdateFailureReport } from "./update-failure-report-prepare.js";
 export type {
@@ -69,21 +71,7 @@ export type UpdateFailureReportSubmitResult =
       fallbackUrl?: undefined;
       message: string;
       savedReportPath: string;
-      status: "pending";
-      url?: undefined;
-    }
-  | {
-      fallbackUrl?: undefined;
-      message: string;
-      savedReportPath: string;
-      status: "retryable";
-      url?: undefined;
-    }
-  | {
-      fallbackUrl?: undefined;
-      message: string;
-      savedReportPath: string;
-      status: "stale";
+      status: "pending" | "retryable" | "stale";
       url?: undefined;
     };
 
@@ -95,13 +83,7 @@ function resultFromExistingReceipt(
         .savedReportPath
     : prepared.savedReportPath,
 ): UpdateFailureReportSubmitResult {
-  if (
-    receipt &&
-    (receipt.status === "pending" ||
-      receipt.status === "preparing" ||
-      receipt.status === "prepared" ||
-      receipt.status === "retryable")
-  ) {
+  if (receipt && receipt.status !== "created" && receipt.status !== "fallback") {
     return {
       message: {
         pending: "This update attempt already has a report submission in progress.",
@@ -134,62 +116,6 @@ function resultFromExistingReceipt(
   };
 }
 
-function receiptMatchesBestEffort(
-  readReceipt: () => UpdateFailureReportReceipt | null,
-  expected: UpdateFailureReportReceipt,
-): boolean {
-  try {
-    const receipt = readReceipt();
-    return (
-      receipt?.reservationId === expected.reservationId &&
-      receipt.status === expected.status &&
-      receipt.previewDigest === expected.previewDigest &&
-      receipt.cleanup === expected.cleanup &&
-      receipt.url === expected.url &&
-      receipt.fallbackUrl === expected.fallbackUrl
-    );
-  } catch {
-    return false;
-  }
-}
-
-async function cleanOwnedReportArtifact(
-  prepared: PreparedUpdateFailureReport,
-  receipt: UpdateFailureReportSweepReceipt,
-  stateEnv: NodeJS.ProcessEnv,
-  sweepHooks?: UpdateFailureReportSweepHooks,
-): Promise<boolean> {
-  if (
-    receipt.artifactSweep &&
-    !(await cleanRetiredUpdateFailureReportArtifacts(
-      prepared,
-      receipt,
-      stateEnv,
-      false,
-      sweepHooks,
-    ))
-  ) {
-    return false;
-  }
-  const ownedPrepared = bindSavedReportArtifact(
-    prepared,
-    receipt.reservationId,
-    receipt.previewDigest,
-  );
-  try {
-    await discardSavedUpdateFailureReport(
-      ownedPrepared,
-      { reportCreated: false, reportDirCreated: false, stagedReportCreated: false },
-      true,
-    );
-  } catch {
-    return false;
-  }
-  return retryUpdateReportStateWrite(() =>
-    completeUpdateFailureReportReceiptCleanup(prepared.attemptId, receipt.reservationId, stateEnv),
-  );
-}
-
 /** Consumes one reviewed preview and invokes the shared GitHub issue creator at most once. */
 export async function submitUpdateFailureReport(
   prepared: PreparedUpdateFailureReport,
@@ -205,15 +131,20 @@ export async function submitUpdateFailureReport(
     /** Interactive CLI retries stay in the terminal instead of publishing a browser handoff. */
     allowBrowserFallback?: boolean;
     artifactSweepHooks?: UpdateFailureReportSweepHooks;
-    finalizeReceipt?: typeof finalizeUpdateFailureReportReceipt;
+    finalizeReceipt?: (
+      ...args: Parameters<typeof finalizeUpdateFailureReportReceipt>
+    ) => boolean | Promise<boolean>;
     hasCurrentAuthority?: () => boolean;
-    markPending?: typeof markUpdateFailureReportReceiptPending;
-    readReceipt?: typeof readUpdateFailureReportReceipt;
+    markPending?: (
+      ...args: Parameters<typeof markUpdateFailureReportReceiptPending>
+    ) => boolean | Promise<boolean>;
+    readReceipt?: (
+      ...args: Parameters<typeof readUpdateFailureReportReceipt>
+    ) => UpdateFailureReportReceipt | null | Promise<UpdateFailureReportReceipt | null>;
     reconcileIssue?: (
       issue: PreparedGithubIssue,
       hooks: GithubIssueReconcileHooks,
     ) => Promise<GithubIssueReconcileResult>;
-    refreshPreparation?: typeof refreshUpdateFailureReportReceiptPreparation;
     stateDir?: string;
     validateCurrentAttempt?: () => boolean | Promise<boolean>;
   } = {},
@@ -224,11 +155,58 @@ export async function submitUpdateFailureReport(
   const env = options.env ?? process.env;
   const stateDir = options.stateDir ?? resolveStateDir(env);
   const stateEnv = { ...env, OPENCLAW_STATE_DIR: stateDir };
-  if (options.hasCurrentAuthority && !options.hasCurrentAuthority()) {
-    throw new Error("Update report submission requires a current authenticated client.");
-  }
+  const context = captureOpenClawStateWorkerContext({ env: stateEnv });
+  const ensureAuthority = (operation: "submission" | "reconciliation") => {
+    if (options.hasCurrentAuthority && !options.hasCurrentAuthority()) {
+      throw new Error(`Update report ${operation} requires a current authenticated client.`);
+    }
+  };
+  ensureAuthority("submission");
   const finalizeReceipt = options.finalizeReceipt ?? finalizeUpdateFailureReportReceipt;
   const readReceipt = options.readReceipt ?? readUpdateFailureReportReceipt;
+  const ensureReconciliationAuthority = () => ensureAuthority("reconciliation");
+  const cleanRetiredArtifacts = (receipt: UpdateFailureReportSweepReceipt, keepCurrent: boolean) =>
+    cleanRetiredUpdateFailureReportArtifacts(
+      prepared,
+      receipt,
+      stateEnv,
+      keepCurrent,
+      options.artifactSweepHooks,
+      context,
+    );
+  const cleanOwnedArtifact = async (receipt: UpdateFailureReportSweepReceipt): Promise<boolean> => {
+    if (receipt.artifactSweep && !(await cleanRetiredArtifacts(receipt, false))) {
+      return false;
+    }
+    const ownedPrepared = bindSavedReportArtifact(
+      prepared,
+      receipt.reservationId,
+      receipt.previewDigest,
+    );
+    try {
+      context.admission.assertCurrent();
+      await discardSavedUpdateFailureReport(ownedPrepared);
+    } catch {
+      return false;
+    }
+    return retryUpdateReportStateWrite(() =>
+      completeUpdateFailureReportReceiptCleanup(
+        prepared.attemptId,
+        receipt.reservationId,
+        stateEnv,
+        context,
+      ),
+    );
+  };
+  const cleanPreparation = async (
+    receipt: UpdateFailureReportSweepReceipt,
+    beginCleanup = beginUpdateFailureReportReceiptCleanup,
+  ): Promise<boolean> => {
+    const cleanupRecorded = await retryUpdateReportStateWrite(() =>
+      beginCleanup(prepared.attemptId, receipt.reservationId, stateEnv, context),
+    );
+    return cleanupRecorded ? cleanOwnedArtifact(receipt) : false;
+  };
   const recordCreatedIssue = async (url: string, reservationId: string) => {
     const receipt: UpdateFailureReportReceipt = {
       cleanup: "pending",
@@ -237,56 +215,63 @@ export async function submitUpdateFailureReport(
       status: "created",
       url,
     };
-    const finalized = retryUpdateReportStateWrite(() =>
-      finalizeReceipt(prepared.attemptId, receipt, stateEnv),
+    const finalized = await retryUpdateReportStateWrite(() =>
+      finalizeReceipt(prepared.attemptId, receipt, stateEnv, context),
     );
     if (
       !finalized &&
-      !receiptMatchesBestEffort(() => readReceipt(prepared.attemptId, stateEnv), receipt)
+      !(await confirmUpdateFailureReportReceipt(
+        () => readReceipt(prepared.attemptId, stateEnv, context),
+        receipt,
+      ))
     ) {
       return undefined;
     }
-    await cleanOwnedReportArtifact(prepared, receipt, stateEnv, options.artifactSweepHooks);
+    await cleanOwnedArtifact(receipt);
     return receipt;
   };
   const persistKnownNoStartReceipt = async (
     receipt: UpdateFailureReportReceipt,
   ): Promise<boolean> =>
-    await retryUpdateReportStateWriteAfterNoStart(() => {
+    await retryUpdateReportStateWriteAfterNoStart(async () => {
       try {
-        if (finalizeReceipt(prepared.attemptId, receipt, stateEnv)) {
+        if (await finalizeReceipt(prepared.attemptId, receipt, stateEnv, context)) {
           return true;
         }
-      } catch {
-        // A lost acknowledgement is resolved by the authoritative read below.
+      } catch (error) {
+        if (
+          await confirmUpdateFailureReportReceipt(
+            () => readReceipt(prepared.attemptId, stateEnv, context),
+            receipt,
+          )
+        ) {
+          return true;
+        }
+        throw error;
       }
-      return receiptMatchesBestEffort(() => readReceipt(prepared.attemptId, stateEnv), receipt);
+      return confirmUpdateFailureReportReceipt(
+        () => readReceipt(prepared.attemptId, stateEnv, context),
+        receipt,
+      );
     });
   const existingResult = async (receipt: UpdateFailureReportReceipt | null) => {
     if (receipt?.status === "created") {
       await discardSavedUpdateFailureReportBestEffort(
         bindSavedReportArtifact(prepared, receipt.reservationId, receipt.previewDigest),
-        { reportCreated: false, reportDirCreated: false, stagedReportCreated: false },
-        true,
       );
     }
     return resultFromExistingReceipt(receipt, prepared);
   };
-  let existingReceipt = readReceipt(prepared.attemptId, stateEnv);
+  let existingReceipt = await readReceipt(prepared.attemptId, stateEnv, context);
   if (existingReceipt?.cleanup === "pending") {
-    await cleanOwnedReportArtifact(prepared, existingReceipt, stateEnv, options.artifactSweepHooks);
-    existingReceipt = readReceipt(prepared.attemptId, stateEnv);
+    await cleanOwnedArtifact(existingReceipt);
+    existingReceipt = await readReceipt(prepared.attemptId, stateEnv, context);
   }
   if (
     existingReceipt?.status === "pending" &&
     options.publicationMode !== "browser" &&
     existingReceipt.previewDigest === prepared.previewDigest
   ) {
-    const ensureCurrentAuthority = () => {
-      if (options.hasCurrentAuthority && !options.hasCurrentAuthority()) {
-        throw new Error("Update report reconciliation requires a current authenticated client.");
-      }
-    };
     const reconcileIssue =
       options.reconcileIssue ??
       ((issue: PreparedGithubIssue, hooks: GithubIssueReconcileHooks) =>
@@ -294,9 +279,9 @@ export async function submitUpdateFailureReport(
     let reconciled: GithubIssueReconcileResult;
     try {
       reconciled = await reconcileIssue(prepared, {
-        beforeIssueLookup: ensureCurrentAuthority,
+        beforeIssueLookup: ensureReconciliationAuthority,
       });
-      ensureCurrentAuthority();
+      ensureReconciliationAuthority();
     } catch {
       reconciled = { status: "unavailable" };
     }
@@ -313,13 +298,7 @@ export async function submitUpdateFailureReport(
     existingReceipt.status !== "prepared" &&
     existingReceipt.status !== "retryable"
   ) {
-    await cleanRetiredUpdateFailureReportArtifacts(
-      prepared,
-      existingReceipt,
-      stateEnv,
-      true,
-      options.artifactSweepHooks,
-    );
+    await cleanRetiredArtifacts(existingReceipt, true);
   }
   // A status check cannot become a new publication if its receipt disappears.
   if (!existingReceipt && options.publicationMode === "reconcile") {
@@ -346,121 +325,70 @@ export async function submitUpdateFailureReport(
     };
   }
   if (existingReceipt?.status === "preparing" || existingReceipt?.status === "prepared") {
-    const preparingReceipt = existingReceipt;
-    const cleanupRecorded = retryUpdateReportStateWrite(() =>
-      beginStaleUpdateFailureReportReceiptCleanup(
-        prepared.attemptId,
-        preparingReceipt.reservationId,
-        stateEnv,
-      ),
-    );
-    if (cleanupRecorded) {
-      await cleanOwnedReportArtifact(
-        prepared,
-        preparingReceipt,
-        stateEnv,
-        options.artifactSweepHooks,
-      );
-    }
-    existingReceipt = readReceipt(prepared.attemptId, stateEnv);
+    await cleanPreparation(existingReceipt, beginStaleUpdateFailureReportReceiptCleanup);
+    existingReceipt = await readReceipt(prepared.attemptId, stateEnv, context);
   }
   if (existingReceipt?.status === "retryable" && existingReceipt.replacementReady !== true) {
-    const retryableReceipt = existingReceipt;
-    const cleanupRecorded = retryUpdateReportStateWrite(() =>
-      beginUpdateFailureReportReceiptCleanup(
-        prepared.attemptId,
-        retryableReceipt.reservationId,
-        stateEnv,
-      ),
-    );
-    if (cleanupRecorded) {
-      await cleanOwnedReportArtifact(
-        prepared,
-        retryableReceipt,
-        stateEnv,
-        options.artifactSweepHooks,
-      );
-    }
+    await cleanPreparation(existingReceipt);
   }
   if (existingReceipt?.status === "retryable" && existingReceipt.replacementReady === true) {
-    if (
-      !(await cleanRetiredUpdateFailureReportArtifacts(
-        prepared,
-        existingReceipt,
-        stateEnv,
-        false,
-        options.artifactSweepHooks,
-      ))
-    ) {
-      const currentReceipt = readReceipt(prepared.attemptId, stateEnv);
+    if (!(await cleanRetiredArtifacts(existingReceipt, false))) {
+      const currentReceipt = await readReceipt(prepared.attemptId, stateEnv, context);
       return resultFromExistingReceipt(currentReceipt, prepared);
     }
   }
 
   const reservationId = randomUUID();
-  const reservation = reserveUpdateFailureReportReceipt(
+  const reservation = await reserveUpdateFailureReportReceipt(
     prepared.attemptId,
     reservationId,
     prepared.previewDigest,
     stateEnv,
+    context,
   );
   if (!reservation.reserved) {
     return existingResult(reservation.receipt);
   }
 
   const ownedPrepared = bindSavedReportArtifact(prepared, reservationId);
-  const saved: SavedUpdateFailureReport = {
-    reportCreated: false,
-    reportDirCreated: false,
-    stagedReportCreated: false,
-  };
-  const currentResult = () =>
+  const ownedResult = (status: "pending" | "retryable" | "stale", message: string) => ({
+    message,
+    savedReportPath: ownedPrepared.savedReportPath,
+    status,
+  });
+  const currentResult = async () =>
     resultFromExistingReceipt(
-      readReceipt(prepared.attemptId, stateEnv),
+      await readReceipt(prepared.attemptId, stateEnv, context),
       prepared,
       ownedPrepared.savedReportPath,
     );
-  const cleanupOwnedPreparation = async (): Promise<boolean> => {
-    const cleanupRecorded = retryUpdateReportStateWrite(() =>
-      beginUpdateFailureReportReceiptCleanup(prepared.attemptId, reservationId, stateEnv),
-    );
-    return cleanupRecorded
-      ? await cleanOwnedReportArtifact(
-          prepared,
-          { previewDigest: prepared.previewDigest, reservationId },
-          stateEnv,
-          options.artifactSweepHooks,
-        )
-      : false;
-  };
+  const cleanupOwnedPreparation = () =>
+    cleanPreparation({ previewDigest: prepared.previewDigest, reservationId });
   try {
-    await savePreparedUpdateFailureReport(ownedPrepared, saved, options.hasCurrentAuthority);
+    await savePreparedUpdateFailureReport(ownedPrepared, options.hasCurrentAuthority);
     if (options.validateCurrentAttempt && !(await options.validateCurrentAttempt())) {
       if (!(await cleanupOwnedPreparation())) {
         return currentResult();
       }
-      return {
-        message: "This failed update attempt is stale or unavailable.",
-        savedReportPath: ownedPrepared.savedReportPath,
-        status: "stale",
-      };
+      return ownedResult("stale", "This failed update attempt is stale or unavailable.");
     }
-    if (options.hasCurrentAuthority && !options.hasCurrentAuthority()) {
-      throw new Error("Update report submission requires a current authenticated client.");
-    }
-    const publicationReserved = retryUpdateReportStateWrite(() =>
+    ensureAuthority("submission");
+    const publicationReserved = await retryUpdateReportStateWrite(() =>
       markUpdateFailureReportReceiptPrepared(
         prepared.attemptId,
         reservationId,
         prepared.previewDigest,
         stateEnv,
+        context,
       ),
     );
     if (!publicationReserved) {
-      await discardSavedUpdateFailureReportBestEffort(ownedPrepared, saved, true);
+      await discardSavedUpdateFailureReportBestEffort(ownedPrepared);
       return currentResult();
     }
-    await publishPreparedUpdateFailureReport(ownedPrepared, saved);
+    context.admission.assertCurrent();
+    ensureAuthority("submission");
+    await publishPreparedUpdateFailureReport(ownedPrepared);
   } catch (error) {
     try {
       await cleanupOwnedPreparation();
@@ -472,24 +400,51 @@ export async function submitUpdateFailureReport(
 
   const assertCurrentPreCreateState = () => assertUpdateReportPreCreateState(options);
   let publicationAdmitted = false;
+  const assertPublicationCurrent = () => {
+    context.admission.assertCurrent();
+    assertUpdateReportSubmissionAuthority(options);
+  };
   const beforeIssueCreate = async () => {
+    assertPublicationCurrent();
+    const markPending = options.markPending ?? markUpdateFailureReportReceiptPending;
+    let marked: boolean;
+    try {
+      marked = await markPending(
+        prepared.attemptId,
+        reservationId,
+        prepared.previewDigest,
+        stateEnv,
+        context,
+        assertPublicationCurrent,
+      );
+    } catch (error) {
+      // If both worker replies were lost, the exact durable pending row still proves admission.
+      let current: UpdateFailureReportReceipt | null;
+      try {
+        current = await readReceipt(prepared.attemptId, stateEnv, context);
+      } catch {
+        throw error;
+      }
+      if (
+        current?.status !== "pending" ||
+        current.reservationId !== reservationId ||
+        current.previewDigest !== prepared.previewDigest
+      ) {
+        throw error;
+      }
+      marked = true;
+    }
+    if (!marked) {
+      throw new UpdateReportPreCreateGuardError(
+        "Update report preparation is no longer owned by this request.",
+        "reservation",
+      );
+    }
+    // Pending cannot be stolen by preparation cleanup; the transport still checks live authority.
+    publicationAdmitted = true;
     await assertCurrentPreCreateState();
-    // Transport invokes this after its last await, immediately before starting the child.
     return (): undefined => {
-      if (options.hasCurrentAuthority && !options.hasCurrentAuthority()) {
-        throw new UpdateReportPreCreateGuardError(
-          "Update report submission requires a current authenticated client.",
-          "authority",
-        );
-      }
-      const markPending = options.markPending ?? markUpdateFailureReportReceiptPending;
-      if (!markPending(prepared.attemptId, reservationId, prepared.previewDigest, stateEnv)) {
-        throw new UpdateReportPreCreateGuardError(
-          "Update report preparation is no longer owned by this request.",
-          "reservation",
-        );
-      }
-      publicationAdmitted = true;
+      assertPublicationCurrent();
     };
   };
   const createIssue =
@@ -499,12 +454,7 @@ export async function submitUpdateFailureReport(
   let created: GithubIssueSubmitResult;
   try {
     // Publication yields; fence host authentication as well as issue creation.
-    if (options.hasCurrentAuthority && !options.hasCurrentAuthority()) {
-      throw new UpdateReportPreCreateGuardError(
-        "Update report submission requires a current authenticated client.",
-        "authority",
-      );
-    }
+    assertUpdateReportSubmissionAuthority(options);
     if (options.publicationMode === "browser") {
       await assertCurrentPreCreateState();
       created = browserFallbackResult(prepared, "browser-requested");
@@ -513,13 +463,7 @@ export async function submitUpdateFailureReport(
         created = await createIssue(prepared, {
           afterAuthPreflight: assertCurrentPreCreateState,
           beforeIssueCreate,
-          beforeIssueLookup: () => {
-            if (options.hasCurrentAuthority && !options.hasCurrentAuthority()) {
-              throw new Error(
-                "Update report reconciliation requires a current authenticated client.",
-              );
-            }
-          },
+          beforeIssueLookup: ensureReconciliationAuthority,
         });
       } catch (error) {
         if (!publicationAdmitted || error instanceof UpdateReportPreCreateGuardError) {
@@ -534,18 +478,21 @@ export async function submitUpdateFailureReport(
       throw error;
     }
     if (error.reason === "reservation") {
-      await discardSavedUpdateFailureReportBestEffort(ownedPrepared, saved, true);
+      await discardSavedUpdateFailureReportBestEffort(ownedPrepared);
       return currentResult();
+    }
+    if (publicationAdmitted) {
+      await persistKnownNoStartReceipt({
+        previewDigest: prepared.previewDigest,
+        reservationId,
+        status: "retryable",
+      });
     }
     if (!(await cleanupOwnedPreparation())) {
       return currentResult();
     }
     if (error.reason === "stale") {
-      return {
-        message: error.message,
-        savedReportPath: ownedPrepared.savedReportPath,
-        status: "stale",
-      };
+      return ownedResult("stale", error.message);
     }
     throw error;
   }
@@ -564,12 +511,10 @@ export async function submitUpdateFailureReport(
     };
   }
   if (created.status === "outcome-unknown") {
-    return {
-      message:
-        "GitHub issue submission may have completed, but confirmation was unavailable. Do not submit this report again.",
-      savedReportPath: ownedPrepared.savedReportPath,
-      status: "pending",
-    };
+    return ownedResult(
+      "pending",
+      "GitHub issue submission may have completed, but confirmation was unavailable. Do not submit this report again.",
+    );
   }
   if (
     created.status === "fallback-unavailable" ||
@@ -581,26 +526,22 @@ export async function submitUpdateFailureReport(
       status: "retryable",
     };
     if (!(await persistKnownNoStartReceipt(receipt))) {
-      return {
-        message:
-          "GitHub issue creation did not start, but retry state could not be saved. Do not retry this report yet.",
-        savedReportPath: ownedPrepared.savedReportPath,
-        status: "pending",
-      };
+      return ownedResult(
+        "pending",
+        "GitHub issue creation did not start, but retry state could not be saved. Do not retry this report yet.",
+      );
     }
     const reason = created.status === "fallback-unavailable" ? created.cause : created.reason;
     const unavailable =
       reason === "authentication-unavailable"
         ? "GitHub authentication is unavailable."
         : "GitHub submission is unavailable.";
-    return {
-      message:
-        options.allowBrowserFallback === false
-          ? `${unavailable} No issue was submitted. Fix the problem, then choose Report update failure to retry.\nSaved sanitized report: ${ownedPrepared.savedReportPath}`
-          : "The sanitized report was saved, but it is too large for a browser handoff.",
-      savedReportPath: ownedPrepared.savedReportPath,
-      status: "retryable",
-    };
+    return ownedResult(
+      "retryable",
+      options.allowBrowserFallback === false
+        ? `${unavailable} No issue was submitted. Fix the problem, then choose Report update failure to retry.\nSaved sanitized report: ${ownedPrepared.savedReportPath}`
+        : "The sanitized report was saved, but it is too large for a browser handoff.",
+    );
   }
   const message =
     created.reason === "browser-requested"
@@ -608,17 +549,18 @@ export async function submitUpdateFailureReport(
       : created.reason === "authentication-unavailable"
         ? "GitHub authentication is unavailable. Review and submit the prefilled issue in your browser."
         : "GitHub submission is unavailable. Review and submit the prefilled issue in your browser.";
-  const preparationRefreshed = retryUpdateReportStateWrite(() =>
-    (options.refreshPreparation ?? refreshUpdateFailureReportReceiptPreparation)(
+  const preparationRefreshed = await retryUpdateReportStateWrite(() =>
+    refreshUpdateFailureReportReceiptPreparation(
       prepared.attemptId,
       reservationId,
       stateEnv,
+      context,
     ),
   );
   if (!preparationRefreshed) {
     let replacement: UpdateFailureReportReceipt | null = null;
     try {
-      replacement = readReceipt(prepared.attemptId, stateEnv);
+      replacement = await readReceipt(prepared.attemptId, stateEnv, context);
     } catch {
       // Without an authoritative owner, a browser link must not be published or persisted.
     }
@@ -635,12 +577,10 @@ export async function submitUpdateFailureReport(
     status: "fallback",
   };
   if (!(await persistKnownNoStartReceipt(receipt))) {
-    return {
-      message:
-        "The browser report handoff could not be saved safely. No issue submission was started; retry this action later.",
-      savedReportPath: ownedPrepared.savedReportPath,
-      status: "retryable",
-    };
+    return ownedResult(
+      "retryable",
+      "The browser report handoff could not be saved safely. No issue submission was started; retry this action later.",
+    );
   }
   // Persistence may wait on contention. Retain its receipt, but never expose a
   // handoff for an attempt or authority that retired during those waits.
@@ -648,11 +588,7 @@ export async function submitUpdateFailureReport(
     await assertCurrentPreCreateState();
   } catch (error) {
     if (error instanceof UpdateReportPreCreateGuardError && error.reason === "stale") {
-      return {
-        message: error.message,
-        savedReportPath: ownedPrepared.savedReportPath,
-        status: "stale",
-      };
+      return ownedResult("stale", error.message);
     }
     throw error;
   }

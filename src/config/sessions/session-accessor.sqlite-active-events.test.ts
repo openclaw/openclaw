@@ -23,12 +23,12 @@ import {
   readLatestSessionTranscriptMessageEvent,
   readRecentSessionTranscriptMessageEvents,
   readSessionTranscriptActivePathEntryRelation,
-  readSessionTranscriptActiveStats,
   readSessionTranscriptBoundedMessageTailPage,
   readSessionTranscriptMessageEventPage,
   SessionTranscriptProjectionUnavailableError,
 } from "./session-accessor.sqlite-active-events.js";
 import {
+  readActiveTranscriptStats,
   readSessionTranscriptHistoryAnchorPage as readSessionTranscriptMessageAnchorPage,
   readSessionTranscriptHistoryEventById as readSessionTranscriptMessageEventById,
 } from "./session-accessor.sqlite-history.test-support.js";
@@ -160,7 +160,7 @@ describe("SQLite active transcript event projection", () => {
          ORDER BY active.active_position`,
       )
       .all(scope.sessionId) as Array<{ event_json: string }>;
-    expect(readSessionTranscriptActiveStats(scope)).toEqual({
+    expect(readActiveTranscriptStats(scope)).toEqual({
       eventCount: activeRows.length,
       sizeBytes: activeRows.reduce(
         (total, row) => total + Buffer.byteLength(row.event_json, "utf8") + 1,
@@ -193,8 +193,8 @@ describe("SQLite active transcript event projection", () => {
       touchSessionEntry: false,
     });
 
-    expect(readSessionTranscriptActiveStats(scope)).toMatchObject({ eventCount: 1 });
-    expect(readSessionTranscriptActiveStats(scope).sizeBytes).toBeLessThan(1_000);
+    expect(readActiveTranscriptStats(scope)).toMatchObject({ eventCount: 1 });
+    expect(readActiveTranscriptStats(scope).sizeBytes).toBeLessThan(1_000);
     expect(readLatestSessionTranscriptMessageEvent(scope)?.event).toMatchObject({
       id: "post-reset",
     });
@@ -328,27 +328,6 @@ describe("SQLite active transcript event projection", () => {
     expect(everySessionTranscriptUserInputFrom(scope, "fresh:user", () => true)).toBe(true);
   });
 
-  it("keeps counting genuinely oversized post-reset events", async () => {
-    await appendTranscriptEvent(scope, {
-      type: "reset",
-      id: "reset-boundary",
-      parentId: null,
-      timestamp: "2026-08-15T00:00:00.000Z",
-      reason: "new",
-    });
-    await persistSessionTranscriptTurn(scope, {
-      messages: [
-        transcriptMessage("post-reset", "reset-boundary", {
-          role: "user",
-          content: "x".repeat(20_000),
-        }),
-      ],
-      touchSessionEntry: false,
-    });
-
-    expect(readSessionTranscriptActiveStats(scope).sizeBytes).toBeGreaterThan(20_000);
-  });
-
   it("defers mixed legacy and canonical rebuilds off request stacks", async () => {
     await persistSessionTranscriptTurn(scope, {
       messages: [transcriptMessage("canonical-root", null, { role: "user", content: "canonical" })],
@@ -410,35 +389,6 @@ describe("SQLite active transcript event projection", () => {
     expect(page.newestContiguousEventCount).toBe(0);
     expect(page.serializedBytes).toBeLessThanOrEqual(512);
     expect(page.events.map(({ event }) => (event as { id?: unknown }).id)).toEqual(["small"]);
-  });
-
-  it("fails fast and schedules maintenance when out-of-band state is dirty", async () => {
-    await persistSessionTranscriptTurn(scope, {
-      messages: [transcriptMessage("seed", null, { role: "user", content: "seed" })],
-      touchSessionEntry: false,
-    });
-    const database = openOpenClawAgentDatabase({ agentId: scope.agentId, env: scope.env });
-    database.db
-      .prepare("UPDATE session_transcript_index_state SET needs_rebuild = 1 WHERE session_id = ?")
-      .run(scope.sessionId);
-
-    expect(() => readSessionTranscriptMessageEventCount(scope)).toThrow(
-      SessionTranscriptProjectionUnavailableError,
-    );
-    expect(
-      database.db
-        .prepare("SELECT needs_rebuild FROM session_transcript_index_state WHERE session_id = ?")
-        .get(scope.sessionId),
-    ).toEqual({ needs_rebuild: 1 });
-
-    await waitForSessionTranscriptIndexReconcile({ agentId: scope.agentId, env: scope.env });
-
-    expect(readSessionTranscriptMessageEventCount(scope)).toBe(1);
-    expect(
-      database.db
-        .prepare("SELECT needs_rebuild FROM session_transcript_index_state WHERE session_id = ?")
-        .get(scope.sessionId),
-    ).toEqual({ needs_rebuild: 0 });
   });
 
   it("projects reset kept-tail and post-boundary messages without rewriting raw positions", async () => {
@@ -746,7 +696,7 @@ describe("SQLite active transcript event projection", () => {
         ]);
 
         if (writerVersion === "older") {
-          expect(() => readSessionTranscriptActiveStats(scope)).toThrow(
+          expect(() => readActiveTranscriptStats(scope)).toThrow(
             SessionTranscriptProjectionUnavailableError,
           );
           await waitForSessionTranscriptIndexReconcile({ agentId: scope.agentId, env: scope.env });

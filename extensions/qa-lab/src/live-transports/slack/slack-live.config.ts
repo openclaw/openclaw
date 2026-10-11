@@ -9,16 +9,10 @@ import {
   type SlackQaWebClient as WebClient,
 } from "./slack-live.contracts.js";
 
-function normalizeSlackId(value: string, label: string) {
-  const normalized = value.trim();
-  if (!/^[A-Z][A-Z0-9]+$/.test(normalized)) {
-    throw new Error(`${label} must be a Slack id like C123 or U123.`);
-  }
-  return normalized;
-}
-
 function validateSlackQaRuntimeEnv(runtimeEnv: SlackQaRuntimeEnv, label: string) {
-  normalizeSlackId(runtimeEnv.channelId, `${label} channelId`);
+  if (!/^[A-Z][A-Z0-9]+$/.test(runtimeEnv.channelId)) {
+    throw new Error(`${label} channelId must be a Slack id like C123 or U123.`);
+  }
   return runtimeEnv;
 }
 
@@ -121,39 +115,32 @@ export function buildSlackQaConfig(
   const codexEntryConfig = asNonArrayRecord(codexEntry?.config);
   const codexAppServerConfig = asNonArrayRecord(codexEntryConfig.appServer);
   const approvalForwardingConfig = buildLiveQaApprovalForwardingConfig(baseCfg, approvalOverrides);
-  const codexAgentDefaults =
-    codexApprovalConfig && primaryModel
-      ? {
-          ...baseCfg.agents?.defaults,
-          models: {
-            ...baseCfg.agents?.defaults?.models,
-            [primaryModel]: {
-              ...baseCfg.agents?.defaults?.models?.[primaryModel],
-              agentRuntime: { id: "codex" as const },
-            },
-          },
-        }
-      : baseCfg.agents?.defaults;
-  const qaAgentDefaults = progressOverrides
-    ? {
-        ...codexAgentDefaults,
-        ...(progressOverrides.verboseDefault
-          ? { verboseDefault: progressOverrides.verboseDefault }
-          : {}),
-      }
-    : codexAgentDefaults;
-  const qaAgentList = progressOverrides
-    ? baseCfg.agents?.list?.map((agent) => {
-        if (agent.id !== "qa") {
-          return agent;
-        }
-        // Slack draft edits cannot preserve custom authorship. Remove the
-        // synthetic QA identity so progress scenarios reach the draft path.
-        const qaAgent = { ...agent };
-        delete qaAgent.identity;
-        return qaAgent;
-      })
-    : baseCfg.agents?.list;
+  let qaAgentDefaults = baseCfg.agents?.defaults;
+  if (codexApprovalConfig && primaryModel) {
+    qaAgentDefaults = {
+      ...qaAgentDefaults,
+      models: {
+        ...qaAgentDefaults?.models,
+        [primaryModel]: {
+          ...qaAgentDefaults?.models?.[primaryModel],
+          agentRuntime: { id: "codex" },
+        },
+      },
+    };
+  }
+  if (progressOverrides) {
+    qaAgentDefaults = { ...qaAgentDefaults };
+    if (progressOverrides.verboseDefault) {
+      qaAgentDefaults.verboseDefault = progressOverrides.verboseDefault;
+    }
+  }
+  const qaAgentEntries = { ...baseCfg.agents?.entries };
+  if (progressOverrides && qaAgentEntries.qa) {
+    // Slack draft edits cannot preserve custom authorship. Remove the
+    // synthetic QA identity so progress scenarios reach the draft path.
+    qaAgentEntries.qa = { ...qaAgentEntries.qa };
+    delete qaAgentEntries.qa.identity;
+  }
   const execApprovalsConfig = approvalOverrides
     ? {
         enabled: true,
@@ -161,33 +148,21 @@ export function buildSlackQaConfig(
         target: approvalOverrides.target ?? ("channel" as const),
       }
     : undefined;
-  const explicitToolAllow = baseCfg.tools?.allow;
-  const messageToolPolicy = params.overrides?.messageTool
-    ? explicitToolAllow && explicitToolAllow.length > 0
-      ? { allow: uniqueStrings([...explicitToolAllow, "message"]) }
-      : { alsoAllow: uniqueStrings([...(baseCfg.tools?.alsoAllow ?? []), "message"]) }
-    : {};
-  const toolsConfig =
-    codexApprovalConfig || params.overrides?.messageTool
-      ? {
-          tools: {
-            ...baseCfg.tools,
-            ...messageToolPolicy,
-            ...(codexApprovalConfig
-              ? {
-                  exec: {
-                    ...baseCfg.tools?.exec,
-                    mode: "ask" as const,
-                  },
-                }
-              : {}),
-          },
-        }
-      : {};
+  const tools = { ...baseCfg.tools };
+  if (params.overrides?.messageTool) {
+    if (tools.allow?.length) {
+      tools.allow = uniqueStrings([...tools.allow, "message"]);
+    } else {
+      tools.alsoAllow = uniqueStrings([...(tools.alsoAllow ?? []), "message"]);
+    }
+  }
+  if (codexApprovalConfig) {
+    tools.exec = { ...tools.exec, mode: "ask" };
+  }
   return {
     ...baseCfg,
     ...approvalForwardingConfig,
-    ...toolsConfig,
+    ...(codexApprovalConfig || params.overrides?.messageTool ? { tools } : {}),
     plugins: {
       ...baseCfg.plugins,
       allow: pluginAllow,
@@ -216,7 +191,7 @@ export function buildSlackQaConfig(
           agents: {
             ...baseCfg.agents,
             ...(qaAgentDefaults ? { defaults: qaAgentDefaults } : {}),
-            ...(qaAgentList ? { list: qaAgentList } : {}),
+            ...(baseCfg.agents?.entries ? { entries: qaAgentEntries } : {}),
           },
         }
       : {}),

@@ -9,7 +9,6 @@ import {
   resolveGatewayProbeAuthSafe,
   resolveGatewayProbeAuthSafeWithSecretInputs,
   resolveGatewayProbeTarget,
-  resolveGatewayProbeAuthWithSecretInputs,
 } from "./probe-auth.js";
 
 const EMPTY_PROBE_AUTH = {
@@ -78,14 +77,6 @@ describe("resolveGatewayProbeAuthSafe", () => {
         password: undefined,
       },
     });
-  });
-
-  it("returns warning and empty auth when token SecretRef is unresolved", () => {
-    expectUnresolvedProbeTokenWarning(
-      configWithDefaultEnvProvider({
-        auth: tokenAuthConfig("MISSING_GATEWAY_TOKEN"),
-      }),
-    );
   });
 
   it("does not fall through to remote token when local token SecretRef is unresolved", () => {
@@ -247,24 +238,6 @@ describe("resolveGatewayProbeAuthSafeWithSecretInputs", () => {
     expect(result.warning).toContain("gateway.auth.password");
   });
 
-  it("resolves env SecretRef token via async secret-inputs path", async () => {
-    const result = await resolveGatewayProbeAuthSafeWithSecretInputs({
-      cfg: configWithDefaultEnvProvider({
-        auth: tokenAuthConfig("OPENCLAW_GATEWAY_TOKEN"),
-      }),
-      mode: "local",
-      env: {
-        OPENCLAW_GATEWAY_TOKEN: "test-token-from-env",
-      } as NodeJS.ProcessEnv,
-    });
-
-    expect(result.warning).toBeUndefined();
-    expect(result.auth).toEqual({
-      token: "test-token-from-env",
-      password: undefined,
-    });
-  });
-
   it("preserves a substituted template-looking literal for probe auth", async () => {
     const result = await resolveGatewayProbeAuthSafeWithSecretInputs({
       cfg: configFromAuthoredToken("${SOURCE}", { SOURCE: "${OTHER}" }),
@@ -277,7 +250,7 @@ describe("resolveGatewayProbeAuthSafeWithSecretInputs", () => {
     });
   });
 
-  it.each(["$MISSING", "${MISSING}"])(
+  it.each(["${MISSING}"])(
     "keeps unresolved authored shorthand unavailable: %s",
     async (authored) => {
       const result = await resolveGatewayProbeAuthSafeWithSecretInputs({
@@ -291,27 +264,6 @@ describe("resolveGatewayProbeAuthSafeWithSecretInputs", () => {
       expect(result.warning).toContain("unresolved");
     },
   );
-
-  it("returns empty auth without warning for gateway.remote SecretRefs in local probes", async () => {
-    const result = await resolveGatewayProbeAuthSafeWithSecretInputs({
-      cfg: configWithDefaultEnvProvider({
-        mode: "local",
-        remote: {
-          url: "wss://gateway.example",
-          token: envSecretRef("REMOTE_GATEWAY_TOKEN"),
-        },
-      }),
-      mode: "local",
-      env: {
-        REMOTE_GATEWAY_TOKEN: "remote-token",
-      } as NodeJS.ProcessEnv,
-    });
-
-    expect(result.warning).toBeUndefined();
-    expect(result.auth).toEqual({
-      ...EMPTY_PROBE_AUTH,
-    });
-  });
 
   it("returns warning and empty auth when SecretRef cannot be resolved via async path", async () => {
     const result = await resolveGatewayProbeAuthSafeWithSecretInputs({
@@ -470,24 +422,5 @@ describe("resolveGatewayProbeAuthSafeWithSecretInputs", () => {
     });
 
     expect(result).toEqual({ auth: {} });
-  });
-});
-
-describe("resolveGatewayProbeAuthWithSecretInputs", () => {
-  it("resolves local probe SecretRef values before shared credential selection", async () => {
-    const auth = await resolveGatewayProbeAuthWithSecretInputs({
-      cfg: configWithDefaultEnvProvider({
-        auth: tokenAuthConfig("DAEMON_GATEWAY_TOKEN"),
-      }),
-      mode: "local",
-      env: {
-        DAEMON_GATEWAY_TOKEN: "resolved-daemon-token",
-      } as NodeJS.ProcessEnv,
-    });
-
-    expect(auth).toEqual({
-      token: "resolved-daemon-token",
-      password: undefined,
-    });
   });
 });

@@ -300,7 +300,7 @@ describe("buildModelProviderCards", () => {
       id: "anthropic",
       credentialProviderIds: ["claude-cli"],
       displayName: "Claude",
-      auth: { kind: "ok", profileCount: 1 },
+      auth: { kind: "ok" },
     });
     expect(firstCard(cards).usage).toMatchObject({
       provider: "anthropic",
@@ -382,7 +382,6 @@ describe("buildModelProviderCards", () => {
     expect(cards).toHaveLength(1);
     expect(firstCard(cards).auth).toMatchObject({
       kind: "expired",
-      profileCount: 2,
       expiryLabel: "-1m",
     });
     expect(firstCard(cards).credentialProviderIds).toEqual(["anthropic", "claude-cli"]);
@@ -466,7 +465,7 @@ describe("buildModelProviderCards", () => {
       ]),
     });
 
-    expect(firstCard(cards).auth).toMatchObject({ kind: "missing", profileCount: 1 });
+    expect(firstCard(cards).auth).toMatchObject({ kind: "missing" });
   });
 
   it("preserves missing MiniMax OAuth beside a separate API key", () => {
@@ -489,7 +488,7 @@ describe("buildModelProviderCards", () => {
       ]),
     });
 
-    expect(firstCard(cards).auth).toMatchObject({ kind: "missing", profileCount: 0 });
+    expect(firstCard(cards).auth).toMatchObject({ kind: "missing" });
   });
 
   it("prefers usage.status snapshots over the auth-status embed", () => {
@@ -589,9 +588,10 @@ describe("buildModelProviderCards", () => {
   it("keeps API key provenance and config-only providers", () => {
     const cards = buildModelProviderCards({
       ...EMPTY_INPUT,
-      configProviderIds: ["mistral", "OpenAI"],
-      configApiKeyProviderIds: ["OpenAI"],
-      configProviderAuthModes: { OpenAI: "api-key" },
+      configProviders: [
+        { key: "mistral", hasApiKey: false },
+        { key: "OpenAI", hasApiKey: true, authMode: "api-key" },
+      ],
       authStatus: authStatus([
         {
           provider: "openai",
@@ -671,9 +671,10 @@ describe("model provider configuration data", () => {
         },
       }),
     ).toEqual({
-      providerIds: ["openai", "anthropic"],
-      apiKeyProviderIds: ["openai"],
-      providerAuthModes: {},
+      providers: [
+        { key: "openai", hasApiKey: true },
+        { key: "anthropic", hasApiKey: false },
+      ],
       defaults: {
         primary: "openai/gpt-5",
         fallbacks: ["anthropic/claude-sonnet-4-5"],
@@ -692,8 +693,8 @@ describe("model provider configuration data", () => {
     expect(
       readModelProviderConfig({
         models: { providers: { OpenAI: { auth: "oauth" } } },
-      }).providerAuthModes,
-    ).toEqual({ OpenAI: "oauth" });
+      }).providers,
+    ).toEqual([{ key: "OpenAI", hasApiKey: false, authMode: "oauth" }]);
   });
 
   it("lists known providers that are not configured", () => {

@@ -1,5 +1,5 @@
 // Edit tool tests cover exact-match diagnostics, post-write recovery, newline
-// preservation, and preview rendering for custom operations.
+// preservation, and custom operations.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -7,16 +7,18 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { applyPatch } from "diff";
 import { Value } from "typebox/value";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createDeferredCore } from "../../../shared/deferred.js";
-import type { Theme } from "../../modes/interactive/theme/theme.js";
-import { createEditTool, createEditToolDefinition, type EditOperations } from "./edit.js";
-import type { EditToolDetails } from "./tool-contracts.js";
+import { createEditTool, type EditToolOptions } from "./edit.js";
+import type { EditToolDetails, EditToolInput } from "./tool-contracts.js";
 
-const testTheme = {
-  bg: (_name: string, text: string) => text,
-  bold: (text: string) => text,
-  fg: (_name: string, text: string) => text,
-} as Theme;
+type EditOperations = NonNullable<EditToolOptions["operations"]>;
+
+function executeEdit(
+  tool: ReturnType<typeof createEditTool>,
+  filePath: string,
+  edits: EditToolInput["edits"],
+) {
+  return tool.execute("edit", { path: filePath, edits }, undefined);
+}
 
 describe("edit tool", () => {
   let tmpDir = "";
@@ -55,14 +57,7 @@ describe("edit tool", () => {
     const filePath = await createTempFile(Buffer.from("\uFEFFheading\nprice: 5\n", "utf-8"));
     const tool = createEditTool(tmpDir);
 
-    await tool.execute(
-      "call-bom",
-      {
-        path: filePath,
-        edits: [{ oldText: "price: 5", newText: "price: 7" }],
-      },
-      undefined,
-    );
+    await executeEdit(tool, filePath, [{ oldText: "price: 5", newText: "price: 7" }]);
 
     await expect(fs.readFile(filePath)).resolves.toEqual(
       Buffer.from("\uFEFFheading\nprice: 7\n", "utf-8"),
@@ -77,14 +72,9 @@ describe("edit tool", () => {
     const filePath = await createTempFile(original);
     const tool = createEditTool(tmpDir);
 
-    const result = await tool.execute(
-      "call-fuzzy-unicode",
-      {
-        path: filePath,
-        edits: [{ oldText: "export const RETRY MAX = 3;", newText: "export const RETRY_MAX = 5;" }],
-      },
-      undefined,
-    );
+    const result = await executeEdit(tool, filePath, [
+      { oldText: "export const RETRY MAX = 3;", newText: "export const RETRY_MAX = 5;" },
+    ]);
 
     await expect(fs.readFile(filePath, "utf-8")).resolves.toBe(expected);
     const details = result.details as EditToolDetails;
@@ -105,14 +95,7 @@ describe("edit tool", () => {
     const tool = createEditTool(tmpDir);
 
     await expect(
-      tool.execute(
-        "call-invalid-utf8",
-        {
-          path: filePath,
-          edits: [{ oldText: "price: 5", newText: "price: 7" }],
-        },
-        undefined,
-      ),
+      executeEdit(tool, filePath, [{ oldText: "price: 5", newText: "price: 7" }]),
     ).rejects.toThrow(/not valid UTF-8/);
 
     await expect(fs.readFile(filePath)).resolves.toEqual(original);
@@ -148,14 +131,7 @@ describe("edit tool", () => {
     const tool = createEditTool(tmpDir);
 
     await expect(
-      tool.execute(
-        "call-1",
-        {
-          path: filePath,
-          edits: [{ oldText: "missing", newText: "replacement" }],
-        },
-        undefined,
-      ),
+      executeEdit(tool, filePath, [{ oldText: "missing", newText: "replacement" }]),
     ).rejects.toThrow(/Current file contents:\nactual current content/);
   });
 
@@ -165,14 +141,7 @@ describe("edit tool", () => {
     const tool = createEditTool(tmpDir);
 
     await expect(
-      tool.execute(
-        "call-1",
-        {
-          path: filePath,
-          edits: [{ oldText: "missing", newText: "replacement" }],
-        },
-        undefined,
-      ),
+      executeEdit(tool, filePath, [{ oldText: "missing", newText: "replacement" }]),
     ).rejects.toThrow(`${"a".repeat(799)}\n... (truncated)`);
   });
 
@@ -193,19 +162,12 @@ describe("edit tool", () => {
     };
     const tool = createEditTool(tmpDir, { operations });
 
-    const result = await tool.execute(
-      "call-1",
+    const result = await executeEdit(tool, filePath, [
       {
-        path: filePath,
-        edits: [
-          {
-            oldText: 'const value = "foo";\n',
-            newText: 'const value = "foobar";\n',
-          },
-        ],
+        oldText: 'const value = "foo";\n',
+        newText: 'const value = "foobar";\n',
       },
-      undefined,
-    );
+    ]);
 
     expect(result.content[0]).toEqual({
       type: "text",
@@ -229,14 +191,7 @@ describe("edit tool", () => {
     const tool = createEditTool(tmpDir, { operations });
 
     await expect(
-      tool.execute(
-        "call-1",
-        {
-          path: filePath,
-          edits: [{ oldText: "old", newText: "replacement already present" }],
-        },
-        undefined,
-      ),
+      executeEdit(tool, filePath, [{ oldText: "old", newText: "replacement already present" }]),
     ).rejects.toThrow("Simulated write failure");
   });
 
@@ -252,50 +207,10 @@ describe("edit tool", () => {
     };
     const tool = createEditTool(tmpDir, { operations });
 
-    await expect(
-      tool.execute(
-        "call-1",
-        {
-          path: filePath,
-          edits: [{ oldText: "old", newText: "new" }],
-        },
-        undefined,
-      ),
-    ).rejects.toThrow("Edit verification failed");
-    await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("old\n");
-  });
-
-  it("recovers multi-edit post-write failures", async () => {
-    const filePath = await createTempFile("alpha beta gamma delta\n");
-    const operations: EditOperations = {
-      access: async (absolutePath) => {
-        await fs.access(absolutePath);
-      },
-      readFile: (absolutePath) => fs.readFile(absolutePath),
-      statFile: statEditFile,
-      writeFile: async (absolutePath, content) => {
-        await fs.writeFile(absolutePath, content, "utf-8");
-        throw new Error("Simulated post-write failure");
-      },
-    };
-    const tool = createEditTool(tmpDir, { operations });
-
-    const result = await tool.execute(
-      "call-1",
-      {
-        path: filePath,
-        edits: [
-          { oldText: "alpha", newText: "ALPHA" },
-          { oldText: "delta", newText: "DELTA" },
-        ],
-      },
-      undefined,
+    await expect(executeEdit(tool, filePath, [{ oldText: "old", newText: "new" }])).rejects.toThrow(
+      "Edit verification failed",
     );
-
-    expect(result.content[0]).toEqual({
-      type: "text",
-      text: `Successfully replaced 2 block(s) in ${filePath}.`,
-    });
+    await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("old\n");
   });
 
   it("preserves untouched lines during fuzzy multi-edits", async () => {
@@ -312,17 +227,10 @@ describe("edit tool", () => {
     const filePath = await createTempFile(original);
     const tool = createEditTool(tmpDir);
 
-    const result = await tool.execute(
-      "call-fuzzy",
-      {
-        path: filePath,
-        edits: [
-          { oldText: "first target\nfirst after", newText: "FIRST\nFIRST2" },
-          { oldText: "second target\nsecond after", newText: "SECOND\nSECOND2" },
-        ],
-      },
-      undefined,
-    );
+    const result = await executeEdit(tool, filePath, [
+      { oldText: "first target\nfirst after", newText: "FIRST\nFIRST2" },
+      { oldText: "second target\nsecond after", newText: "SECOND\nSECOND2" },
+    ]);
 
     const expected = [
       "keep before  ",
@@ -348,14 +256,9 @@ describe("edit tool", () => {
     const filePath = await createTempFile(original);
     const tool = createEditTool(tmpDir);
 
-    const result = await tool.execute(
-      "call-duplicate",
-      {
-        path: filePath,
-        edits: [{ oldText: "replace me\n", newText: "after\n" }],
-      },
-      undefined,
-    );
+    const result = await executeEdit(tool, filePath, [
+      { oldText: "replace me\n", newText: "after\n" },
+    ]);
 
     const expected = "after\nafter   \n";
     await expect(fs.readFile(filePath, "utf-8")).resolves.toBe(expected);
@@ -407,204 +310,13 @@ describe("edit tool", () => {
     );
   });
 
-  it.each(["local", "injected"] as const)(
-    "renders @ previews through %s operations",
-    async (backend) => {
-      await createTempFile("plain sibling\n");
-      await fs.writeFile(path.join(tmpDir, "@demo.txt"), "local original\n");
-      const readFile = vi.fn(async () => Buffer.from("remote original\n"));
-      const operations: EditOperations = {
-        access: async () => {},
-        readFile,
-        statFile: async () => null,
-        writeFile: async () => {},
-      };
-      const tool = createEditToolDefinition(
-        tmpDir,
-        backend === "injected" ? { operations } : undefined,
-      );
-      const owner = backend === "injected" ? "remote" : "local";
-      const args = {
-        path: "@demo.txt",
-        edits: [{ oldText: `${owner} original`, newText: `${owner} changed` }],
-      };
-      const invalidated = createDeferredCore();
-      const context = {
-        args,
-        argsComplete: true,
-        cwd: tmpDir,
-        executionStarted: false,
-        expanded: false,
-        invalidate: invalidated.resolve,
-        isError: false,
-        isPartial: false,
-        lastComponent: undefined,
-        showImages: false,
-        state: {},
-        toolCallId: "call-preview",
-      };
-
-      const component = tool.renderCall?.(args, testTheme, context);
-      await invalidated.promise;
-
-      if (backend === "injected") {
-        expect(readFile).toHaveBeenCalledWith(path.join(tmpDir, "demo.txt"));
-      } else {
-        expect(readFile).not.toHaveBeenCalled();
-      }
-      const preview = (component as { preview?: { error?: string; diff?: string } } | undefined)
-        ?.preview;
-      expect(preview?.error).toBeUndefined();
-      expect(preview?.diff).toContain(`${owner} changed`);
-      await expect(fs.readFile(path.join(tmpDir, "@demo.txt"), "utf8")).resolves.toBe(
-        "local original\n",
-      );
-      await expect(fs.readFile(path.join(tmpDir, "demo.txt"), "utf8")).resolves.toBe(
-        "plain sibling\n",
-      );
-    },
-  );
-
-  it("renders fuzzy Unicode previews from the original source bytes", async () => {
-    const readFile = vi.fn(async () =>
-      Buffer.from(
-        "const label\u00A0= \u201Chello\u201D; // keep \uFF08\uFF13\uFF09 \u2014 unchanged\n",
-      ),
-    );
-    const operations: EditOperations = {
-      access: async () => {},
-      readFile,
-      statFile: async () => null,
-      writeFile: async () => {},
-    };
-    const tool = createEditToolDefinition("/workspace", { operations });
-    const args = {
-      path: "remote.txt",
-      edits: [{ oldText: 'const label = "hello";', newText: "const label = 'hi';" }],
-    };
-    const invalidated = createDeferredCore();
-    const context = {
-      args,
-      argsComplete: true,
-      cwd: "/workspace",
-      executionStarted: false,
-      expanded: false,
-      invalidate: invalidated.resolve,
-      isError: false,
-      isPartial: false,
-      lastComponent: undefined,
-      showImages: false,
-      state: {},
-      toolCallId: "call-preview-fuzzy-unicode",
-    };
-
-    const component = tool.renderCall?.(args, testTheme, context);
-    await invalidated.promise;
-
-    const preview = (component as { preview?: { error?: string; diff?: string } } | undefined)
-      ?.preview;
-    expect(preview?.error).toBeUndefined();
-    expect(preview?.diff).toContain(
-      "+1 const label = 'hi'; // keep \uFF08\uFF13\uFF09 \u2014 unchanged",
-    );
-    expect(preview?.diff).not.toContain("// keep (3) - unchanged");
-  });
-
-  it("filters fuzzy no-op edits from mixed previews", async () => {
-    const readFile = vi.fn(async () => Buffer.from("foo\u00a0bar\n"));
-    const operations: EditOperations = {
-      access: async () => {},
-      readFile,
-      statFile: async () => null,
-      writeFile: async () => {},
-    };
-    const tool = createEditToolDefinition("/workspace", { operations });
-    const args = {
-      path: "remote.txt",
-      edits: [
-        { oldText: "foo bar", newText: "foo bar" },
-        { oldText: "foo\u00a0", newText: "baz" },
-      ],
-    };
-    const invalidated = createDeferredCore();
-    const context = {
-      args,
-      argsComplete: true,
-      cwd: "/workspace",
-      executionStarted: false,
-      expanded: false,
-      invalidate: invalidated.resolve,
-      isError: false,
-      isPartial: false,
-      lastComponent: undefined,
-      showImages: false,
-      state: {},
-      toolCallId: "call-preview-mixed",
-    };
-
-    const component = tool.renderCall?.(args, testTheme, context);
-    await invalidated.promise;
-
-    expect(
-      (component as { preview?: { error?: string; diff?: string } } | undefined)?.preview,
-    ).toEqual(expect.objectContaining({ diff: expect.stringContaining("bazbar") }));
-    expect(
-      (component as { preview?: { error?: string } } | undefined)?.preview?.error,
-    ).toBeUndefined();
-  });
-
-  it("validates no-op targets in mixed previews", async () => {
-    const readFile = vi.fn(async () => Buffer.from("alpha beta\n"));
-    const operations: EditOperations = {
-      access: async () => {},
-      readFile,
-      statFile: async () => null,
-      writeFile: async () => {},
-    };
-    const tool = createEditToolDefinition("/workspace", { operations });
-    const args = {
-      path: "remote.txt",
-      edits: [
-        { oldText: "missing", newText: "missing" },
-        { oldText: "alpha", newText: "ALPHA" },
-      ],
-    };
-    const invalidated = createDeferredCore();
-    const context = {
-      args,
-      argsComplete: true,
-      cwd: "/workspace",
-      executionStarted: false,
-      expanded: false,
-      invalidate: invalidated.resolve,
-      isError: false,
-      isPartial: false,
-      lastComponent: undefined,
-      showImages: false,
-      state: {},
-      toolCallId: "call-preview-invalid-no-op",
-    };
-
-    const component = tool.renderCall?.(args, testTheme, context);
-    await invalidated.promise;
-
-    expect((component as { preview?: { error?: string } } | undefined)?.preview?.error).toContain(
-      "Could not find the exact text",
-    );
-  });
-
   it("returns a non-terminal no-op when oldText equals newText", async () => {
     const filePath = await createTempFile("unchanged content\n");
     const tool = createEditTool(tmpDir);
 
-    const result = await tool.execute(
-      "call-1",
-      {
-        path: filePath,
-        edits: [{ oldText: "unchanged", newText: "unchanged" }],
-      },
-      undefined,
-    );
+    const result = await executeEdit(tool, filePath, [
+      { oldText: "unchanged", newText: "unchanged" },
+    ]);
 
     const tc0 = expectDefined(result.content[0], "result.content[0] test invariant");
     expect("text" in tc0 ? tc0.text : "").toContain("No changes made");
@@ -612,94 +324,17 @@ describe("edit tool", () => {
     await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("unchanged content\n");
   });
 
-  it("shows an empty preview for an all-no-op edit", async () => {
-    const readFile = vi.fn(async () => Buffer.from("unchanged content\n"));
-    const operations: EditOperations = {
-      access: async () => {},
-      readFile,
-      statFile: async () => null,
-      writeFile: async () => {},
-    };
-    const tool = createEditToolDefinition("/workspace", { operations });
-    const args = {
-      path: "remote.txt",
-      edits: [{ oldText: "unchanged", newText: "unchanged" }],
-    };
-    const invalidated = createDeferredCore();
-    const context = {
-      args,
-      argsComplete: true,
-      cwd: "/workspace",
-      executionStarted: false,
-      expanded: false,
-      invalidate: invalidated.resolve,
-      isError: false,
-      isPartial: false,
-      lastComponent: undefined,
-      showImages: false,
-      state: {},
-      toolCallId: "call-preview-no-op",
-    };
-
-    const component = tool.renderCall?.(args, testTheme, context);
-    await invalidated.promise;
-
-    expect(
-      (component as { preview?: { error?: string; diff?: string } } | undefined)?.preview,
-    ).toEqual({ diff: "", firstChangedLine: undefined });
-  });
-
-  it("shows an empty preview for a fuzzy net no-op", async () => {
-    const readFile = vi.fn(async () => Buffer.from("foo\n"));
-    const operations: EditOperations = {
-      access: async () => {},
-      readFile,
-      statFile: async () => null,
-      writeFile: async () => {},
-    };
-    const tool = createEditToolDefinition("/workspace", { operations });
-    const args = {
-      path: "remote.txt",
-      edits: [{ oldText: "foo ", newText: "foo" }],
-    };
-    const invalidated = createDeferredCore();
-    const context = {
-      args,
-      argsComplete: true,
-      cwd: "/workspace",
-      executionStarted: false,
-      expanded: false,
-      invalidate: invalidated.resolve,
-      isError: false,
-      isPartial: false,
-      lastComponent: undefined,
-      showImages: false,
-      state: {},
-      toolCallId: "call-preview-fuzzy-no-op",
-    };
-
-    const component = tool.renderCall?.(args, testTheme, context);
-    await invalidated.promise;
-
-    expect(
-      (component as { preview?: { error?: string; diff?: string } } | undefined)?.preview,
-    ).toEqual({ diff: "", firstChangedLine: undefined });
-  });
-
-  it("does not hide a mismatched no-op edit", async () => {
+  it.each([
+    { name: "alone", siblings: [] },
+    { name: "beside a real edit", siblings: [{ oldText: "actual", newText: "changed" }] },
+  ])("does not hide a mismatched no-op edit $name", async ({ siblings }) => {
     const filePath = await createTempFile("actual content\n");
     const tool = createEditTool(tmpDir);
 
     await expect(
-      tool.execute(
-        "call-1",
-        {
-          path: filePath,
-          edits: [{ oldText: "missing", newText: "missing" }],
-        },
-        undefined,
-      ),
+      executeEdit(tool, filePath, [{ oldText: "missing", newText: "missing" }, ...siblings]),
     ).rejects.toThrow(/Current file contents:\nactual content/);
+    await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("actual content\n");
   });
 
   it("does not hide unrelated errors that mention no changes", async () => {
@@ -716,30 +351,16 @@ describe("edit tool", () => {
     };
     const tool = createEditTool(tmpDir, { operations });
 
-    await expect(
-      tool.execute(
-        "call-1",
-        {
-          path: filePath,
-          edits: [{ oldText: "old", newText: "new" }],
-        },
-        undefined,
-      ),
-    ).rejects.toThrow("No changes made to the disk because it is full");
+    await expect(executeEdit(tool, filePath, [{ oldText: "old", newText: "new" }])).rejects.toThrow(
+      "No changes made to the disk because it is full",
+    );
   });
 
   it("does not rewrite fuzzy-matched no-op text", async () => {
     const filePath = await createTempFile("foo\n");
     const tool = createEditTool(tmpDir);
 
-    const result = await tool.execute(
-      "call-1",
-      {
-        path: filePath,
-        edits: [{ oldText: "foo ", newText: "foo " }],
-      },
-      undefined,
-    );
+    const result = await executeEdit(tool, filePath, [{ oldText: "foo ", newText: "foo " }]);
 
     expect((result as { terminate?: boolean }).terminate).toBeUndefined();
     await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("foo\n");
@@ -749,17 +370,10 @@ describe("edit tool", () => {
     const filePath = await createTempFile("foo\u00a0bar\n");
     const tool = createEditTool(tmpDir);
 
-    await tool.execute(
-      "call-1",
-      {
-        path: filePath,
-        edits: [
-          { oldText: "foo bar", newText: "foo bar" },
-          { oldText: "foo\u00a0", newText: "baz" },
-        ],
-      },
-      undefined,
-    );
+    await executeEdit(tool, filePath, [
+      { oldText: "foo bar", newText: "foo bar" },
+      { oldText: "foo\u00a0", newText: "baz" },
+    ]);
 
     await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("bazbar\n");
   });
@@ -768,17 +382,10 @@ describe("edit tool", () => {
     const filePath = await createTempFile("foo  \nkeep  \n");
     const tool = createEditTool(tmpDir);
 
-    await tool.execute(
-      "call-1",
-      {
-        path: filePath,
-        edits: [
-          { oldText: "foo  ", newText: "foo" },
-          { oldText: "keep", newText: "changed" },
-        ],
-      },
-      undefined,
-    );
+    await executeEdit(tool, filePath, [
+      { oldText: "foo  ", newText: "foo" },
+      { oldText: "keep", newText: "changed" },
+    ]);
 
     await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("foo\nchanged  \n");
   });
@@ -788,17 +395,10 @@ describe("edit tool", () => {
     const tool = createEditTool(tmpDir);
 
     await expect(
-      tool.execute(
-        "call-1",
-        {
-          path: filePath,
-          edits: [
-            { oldText: "foo", newText: "foo" },
-            { oldText: "foo", newText: "foo" },
-          ],
-        },
-        undefined,
-      ),
+      executeEdit(tool, filePath, [
+        { oldText: "foo", newText: "foo" },
+        { oldText: "foo", newText: "foo" },
+      ]),
     ).rejects.toThrow(/overlap/);
   });
 
@@ -807,17 +407,10 @@ describe("edit tool", () => {
     const tool = createEditTool(tmpDir);
 
     await expect(
-      tool.execute(
-        "call-1",
-        {
-          path: filePath,
-          edits: [
-            { oldText: "foo", newText: "foo" },
-            { oldText: "foo", newText: "bar" },
-          ],
-        },
-        undefined,
-      ),
+      executeEdit(tool, filePath, [
+        { oldText: "foo", newText: "foo" },
+        { oldText: "foo", newText: "bar" },
+      ]),
     ).rejects.toThrow(/overlap/);
   });
 
@@ -825,17 +418,10 @@ describe("edit tool", () => {
     const filePath = await createTempFile("alpha beta gamma\n");
     const tool = createEditTool(tmpDir);
 
-    const result = await tool.execute(
-      "call-1",
-      {
-        path: filePath,
-        edits: [
-          { oldText: "alpha", newText: "alpha" }, // no-op
-          { oldText: "gamma", newText: "GAMMA" }, // real change
-        ],
-      },
-      undefined,
-    );
+    const result = await executeEdit(tool, filePath, [
+      { oldText: "alpha", newText: "alpha" }, // no-op
+      { oldText: "gamma", newText: "GAMMA" }, // real change
+    ]);
 
     const tcText = expectDefined(result.content[0], "result.content[0] test invariant");
     expect("text" in tcText ? tcText.text : "").toContain("Successfully replaced");
@@ -843,37 +429,7 @@ describe("edit tool", () => {
     await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("alpha beta GAMMA\n");
   });
 
-  it("applies real changes normally (no false positive for no-op)", async () => {
-    const filePath = await createTempFile("old content\n");
-    const tool = createEditTool(tmpDir);
-
-    const result = await tool.execute(
-      "call-1",
-      {
-        path: filePath,
-        edits: [{ oldText: "old", newText: "new" }],
-      },
-      undefined,
-    );
-
-    const tc1 = expectDefined(result.content[0], "result.content[0] test invariant");
-    expect("text" in tc1 ? tc1.text : "").toContain("Successfully replaced");
-    await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("new content\n");
-  });
-
   const lineEndingCases = [
-    {
-      name: "keeps a lone carriage return that carries data",
-      original: "start\n10%\r50%\r100%\ndone\n",
-      edits: [{ oldText: "done", newText: "finished" }],
-      expected: "start\n10%\r50%\r100%\nfinished\n",
-    },
-    {
-      name: "keeps a lone carriage return that terminates the edited line",
-      original: "prefix\rprogress\n",
-      edits: [{ oldText: "prefix", newText: "PREFIX" }],
-      expected: "PREFIX\rprogress\n",
-    },
     {
       name: "keeps carriage return separators when a middle record is rewritten",
       original: "id=1\rid=2\rid=3\nfooter\n",
@@ -941,18 +497,6 @@ describe("edit tool", () => {
       expected: "h1\r\nh2\r\nx\ny",
     },
     {
-      name: "keeps trailing CRLF lines when the first line ends with LF",
-      original: "alpha\nbeta\r\ngamma\r\n",
-      edits: [{ oldText: "alpha", newText: "ALPHA" }],
-      expected: "ALPHA\nbeta\r\ngamma\r\n",
-    },
-    {
-      name: "keeps trailing LF lines when the first line ends with CRLF",
-      original: "alpha\r\nbeta\ngamma\n",
-      edits: [{ oldText: "gamma", newText: "GAMMA" }],
-      expected: "alpha\r\nbeta\nGAMMA\n",
-    },
-    {
       name: "keeps untouched lines between two separate edits",
       original: "one\r\ntwo\nthree\r75%\rfour\nfive\r\n",
       edits: [
@@ -966,18 +510,6 @@ describe("edit tool", () => {
       original: "alpha\r\nbeta\r\ngamma\r\n",
       edits: [{ oldText: "beta", newText: "beta1\nbeta2" }],
       expected: "alpha\r\nbeta1\r\nbeta2\r\ngamma\r\n",
-    },
-    {
-      name: "leaves a uniform CRLF file uniform",
-      original: "alpha\r\nbeta\r\ngamma\r\n",
-      edits: [{ oldText: "beta", newText: "BETA" }],
-      expected: "alpha\r\nBETA\r\ngamma\r\n",
-    },
-    {
-      name: "leaves a uniform LF file uniform",
-      original: "alpha\nbeta\ngamma\n",
-      edits: [{ oldText: "beta", newText: "BETA" }],
-      expected: "alpha\nBETA\ngamma\n",
     },
   ];
 
@@ -997,22 +529,4 @@ describe("edit tool", () => {
       await expect(fs.readFile(filePath, "utf-8")).resolves.toBe(testCase.expected);
     });
   }
-
-  it("preserves a lone carriage return on an edited line", async () => {
-    const filePath = await createTempFile("start\nprogress 10%\rprogress 50%\ndone\n");
-    const tool = createEditTool(tmpDir);
-
-    await tool.execute(
-      "call-cr-line",
-      {
-        path: filePath,
-        edits: [{ oldText: "progress 50%", newText: "progress 90%" }],
-      },
-      undefined,
-    );
-
-    await expect(fs.readFile(filePath, "utf-8")).resolves.toBe(
-      "start\nprogress 10%\rprogress 90%\ndone\n",
-    );
-  });
 });

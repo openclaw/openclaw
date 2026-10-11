@@ -5,8 +5,9 @@ import { selectApplicationSession } from "../../app/agent-selection.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { LazyCustomElementRequestController } from "../../app/lazy-custom-element.ts";
 import type { ImageLightboxItem } from "../../components/image-lightbox.types.ts";
-import "../../styles/new-session-attachment-panel.css";
 import { renderLazyViewError } from "../../components/lazy-view-error.ts";
+import "../../styles/new-session-attachment-panel.css";
+import { renderSessionBackground } from "../../components/session-background-view.ts";
 import { t } from "../../i18n/index.ts";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
 import { normalizeAgentTargetLabel, resolveAgentTextAvatar } from "../../lib/agents/display.ts";
@@ -24,30 +25,39 @@ import { renderChatImageLightbox } from "../chat/components/chat-image-lightbox.
 import "../../styles/chat/composer.css";
 import "../../styles/chat/composer-surface.css";
 import "../../styles/new-session.css";
+import { renderChatPermissionPicker } from "../chat/components/chat-permission-picker.ts";
 import { installChatComposerPickerDismissal } from "../chat/components/chat-picker-overlay.ts";
 import type { SidebarContent } from "../chat/components/chat-sidebar-content-types.ts";
 import { renderWelcomeState } from "../chat/components/chat-welcome.ts";
 import * as catalog from "./catalog-target.ts";
 import { NewSessionDictationControl } from "./composer-dictation-control.ts";
-import { ConnectMachineSetupState, renderConnectMachineDialog } from "./connect-machine-dialog.ts";
-import { renderNewSessionBody } from "./draft-body.ts";
+import { renderNewSessionComposer } from "./composer.ts";
+import { ConnectMachineSetupState } from "./connect-machine-dialog.ts";
+import { isWorktreeNameValid } from "./create-params.ts";
+import { renderCreationComposer } from "./creation-composer-render.ts";
+import { renderDraftError, renderNewSessionBody } from "./draft-body.ts";
 import { NewSessionDraftController } from "./draft-controller.ts";
 import type { DraftGatewayState } from "./draft-gateway-state.ts";
-import * as drafts from "./draft-navigation-handoff.ts";
+import {
+  activateDraft,
+  restoreDraft,
+  restoreDraftOwner,
+  retainDraft,
+} from "./draft-navigation-handoff.ts";
 import type { DraftPlaceBrowser } from "./draft-place-browser.ts";
 import type { DraftPlaceState } from "./draft-place-state.ts";
 import type { DraftSubmissionFlow } from "./draft-submission-flow.ts";
 import { NewSessionTitleController } from "./draft-title.ts";
-import { renderNewSessionDraftView } from "./draft-view.ts";
-import { renderNewSessionIncognitoControl } from "./incognito-control.ts";
+import {
+  renderNewSessionIncognitoControl,
+  renderNewSessionIncognitoNotice,
+} from "./incognito-control.ts";
 import { forgetInstantThreadPage } from "./instant-thread-restore.ts";
 import type { NewSessionRouteData } from "./location.ts";
 import { closeAgentPicker, closeSessionMenus } from "./new-session-runtime.ts";
 import { renderAgentSelect, renderNewSessionPlaceControls } from "./target-controls.ts";
 
 registerNewSessionSetupEnglish();
-
-const { activateDraft, restoreDraft, restoreDraftOwner, retainDraft } = drafts;
 
 const attachmentPanelElement = {
   tagName: "openclaw-chat-detail-panel",
@@ -56,7 +66,7 @@ const attachmentPanelElement = {
   },
   loadModule: async () => {
     await import("../../styles/chat/sidebar.css");
-    await import("../chat/components/chat-detail-panel.ts");
+    await import("../chat/components/chat-detail-panel.tsx");
   },
 };
 
@@ -95,10 +105,6 @@ export class NewSessionPage extends OpenClawLightDomElement {
   };
   @state() private imageLightbox: ImageLightboxItem | null = null;
   @state() private agentPickerOpen = false;
-  private readonly groupRouteRevalidation = new catalog.GroupRouteRevalidation(
-    () => this.data,
-    () => this.context?.revalidate("new-session"),
-  );
   private readonly draft: NewSessionDraftController;
   private readonly gateway: DraftGatewayState;
   private readonly browser: DraftPlaceBrowser;
@@ -186,31 +192,12 @@ export class NewSessionPage extends OpenClawLightDomElement {
     });
     this.subscriptions = new SubscriptionsController(this)
       .effect(() => this.ownerDocument, installChatComposerPickerDismissal)
-      .watch(
-        () => this.context?.theme,
-        (theme, notify) => theme.subscribe(notify),
-      )
-      .watch(
-        () => this.context?.agents,
-        (agents, notify) => agents.subscribe(notify),
-      )
-      .watch(
-        () => this.context?.agentIdentity,
-        (agentIdentity, notify) => agentIdentity.subscribe(notify),
-      )
-      .watch(
-        () => this.context?.sessions,
-        (sessions, notify) => sessions.subscribe(notify),
-        (sessions) => this.groupRouteRevalidation.synchronize(sessions),
-      )
-      .watch(
-        () => this.context?.placementStartup,
-        (startup, notify) => startup.subscribe(notify),
-      )
-      .watch(
-        () => this.context?.runtimeConfig,
-        (runtimeConfig, notify) => runtimeConfig.subscribe(notify),
-      )
+      .watchStore(() => this.context?.theme)
+      .watchStore(() => this.context?.agents)
+      .watchStore(() => this.context?.agentIdentity)
+      .watchStore(() => this.context?.sessions)
+      .watchStore(() => this.context?.placementStartup)
+      .watchStore(() => this.context?.runtimeConfig)
       .watch(
         () => this.context?.config,
         (config, notify) => config.subscribe(() => notify()),
@@ -416,21 +403,126 @@ export class NewSessionPage extends OpenClawLightDomElement {
   }
 
   private renderDraftBlock() {
-    return renderNewSessionDraftView({
-      context: this.context,
-      gateway: this.gateway,
-      place: this.place,
-      submission: this.submission,
-      dictation: this.dictation,
-      titlePreparation: this.titlePreparation,
-      draftOwnerKey: this.routeOwnerKey(),
-      isCatalogTarget: catalog.isTarget(this.data),
-      renderTargetBar: () => this.renderTargetBar(),
-      requestUpdate: () => this.requestUpdate(),
-      onMessage: (message, mentions) => this.setMessageFromUser(message, mentions),
-      onOpenImage: this.setImageLightbox,
-      onOpenSidebar: this.openAttachmentPanel,
-    });
+    const { context, gateway, place, submission, dictation, titlePreparation } = this;
+    const draftOwnerKey = this.routeOwnerKey();
+    const isCatalogTarget = catalog.isTarget(this.data);
+    const capabilities = submission.capabilities;
+    const preferences = context?.theme.settings;
+    const voiceControl = dictation.render(draftOwnerKey, preferences?.realtimeTalkInputDeviceId);
+    const dictationLocked = dictation.active;
+    const worktreeNameInvalid = place.worktree && !isWorktreeNameValid(place.worktreeName);
+    return html`
+      <div
+        class="new-session-page__draft"
+        aria-busy=${String(submission.submitting)}
+        @compositionstart=${() => {
+          titlePreparation.setComposing(true);
+        }}
+        @compositionend=${() => {
+          titlePreparation.setComposing(false);
+        }}
+        @focusout=${() => {
+          // Browsers can drop compositionend on blur/detach mid-IME; a stuck
+          // composing flag would silently disable naming for the mounted page.
+          titlePreparation.setComposing(false);
+        }}
+      >
+        ${this.renderTargetBar()}
+        ${worktreeNameInvalid ? renderDraftError(t("newSession.worktreeNameInvalid")) : nothing}
+        ${
+          isCatalogTarget && capabilities.toolOverrides
+            ? renderDraftError(t("newSession.terminalCapabilityOverridesUnsupported"), {
+                label: t("common.reset"),
+                onClick: () => capabilities.setToolOverrides(null),
+              })
+            : nothing
+        }
+        ${
+          submission.submissionOutcomeUnknown
+            ? renderDraftError(
+                t(
+                  submission.submissionOutcomeUnknown === "gateway-changed"
+                    ? "newSession.createOutcomeUnknown"
+                    : "newSession.placementSetupInterrupted",
+                ),
+                submission.pendingPlacement.sessionKey
+                  ? {
+                      label: t("common.reset"),
+                      onClick: () => submission.clearPendingPlacementRecovery(),
+                    }
+                  : undefined,
+              )
+            : nothing
+        }
+        ${renderNewSessionComposer({
+          agent: place.selectedAgent(),
+          agentId: place.agentId,
+          attachmentDraft: submission.attachmentDraft,
+          canSubmit: !submission.submitting && !dictationLocked && submission.canSubmit(),
+          submitDisabledReason: submission.submitDisabledReason(),
+          blockedSubmitNotice: submission.blockedSubmitNotice(),
+          get dictationActive() {
+            return dictation.active;
+          },
+          dictationPreview: dictation.previewDraft(),
+          dictationStatus: dictation.renderStatus(),
+          context,
+          isCatalogTarget,
+          draftOwnerKey,
+          get message() {
+            return submission.message;
+          },
+          mentions: submission.mentions,
+          getMentions: () => submission.mentions,
+          visibility: submission.visibility,
+          draftAvailable: capabilities.canStartAsDraft(context),
+          ...capabilities.composerProps(context, gateway, place.agentId),
+          modelControl: place.modelControl,
+          permissionControl: isCatalogTarget
+            ? undefined
+            : renderChatPermissionPicker({
+                canSelectFull: place.isAdmin(),
+                defaultMode: place.selectedAgent()?.defaultPermissionMode,
+                disabled: submission.submitting || Boolean(submission.pendingPlacement.sessionKey),
+                disabledReason: submission.submitting ? t("newSession.starting") : undefined,
+                mode: submission.permissionMode,
+                onSelect: (permissionMode) =>
+                  submission.setPermissionMode(permissionMode ?? undefined),
+              }),
+          requiresModifier: preferences?.chatSendShortcut === "modifier-enter",
+          requestUpdate: () => this.requestUpdate(),
+          get submitting() {
+            return submission.submitting;
+          },
+          textareaController: submission.composerTextarea,
+          voiceControl,
+          get messageLocked() {
+            return Boolean(submission.pendingPlacement.sessionKey);
+          },
+          nativeTerminal: isCatalogTarget,
+          onUnsupportedAttachment: () =>
+            submission.setError(t("newSession.terminalAttachmentsUnsupported")),
+          onInput: (message, mentions) => this.setMessageFromUser(message, mentions),
+          onOpenImage: this.setImageLightbox,
+          onOpenSidebar: this.openAttachmentPanel,
+          onVisibilityChange: (visibility) => {
+            if (!submission.submitting && !submission.pendingPlacement.sessionKey) {
+              submission.setVisibility(visibility);
+            }
+          },
+          onSubmit: () => void submission.submit(),
+          onBackgroundSubmit:
+            submission.visibility === "draft" || isCatalogTarget
+              ? undefined
+              : () => void submission.submit(undefined, true),
+        })}
+        ${
+          !isCatalogTarget
+            ? renderNewSessionIncognitoNotice(submission.visibility === "incognito")
+            : nothing
+        }
+      </div>
+    `;
   }
 
   private renderWelcome() {
@@ -442,7 +534,13 @@ export class NewSessionPage extends OpenClawLightDomElement {
       assistantName: agent ? normalizeAgentTargetLabel(agent, identity) : "",
       assistantAvatar: resolveAgentTextAvatar(agent ?? {}, identity),
       assistantAvatarUrl: resolveAgentAvatarUrl(agent ?? {}, identity),
-      hint: t(catalog.isTarget(this.data) ? "newSession.nativeTerminalHint" : "newSession.hint"),
+      hint: t(
+        catalog.isTarget(this.data)
+          ? "newSession.nativeTerminalHint"
+          : this.place.requiredPlacement
+            ? "newSession.requiredWorkerHint"
+            : "newSession.hint",
+      ),
       composer: this.renderDraftBlock(),
       hideSecondaryContent: this.submission.visibility === "incognito",
       fadeSecondaryContent: this.submission.message.trim().length > 0,
@@ -492,6 +590,7 @@ export class NewSessionPage extends OpenClawLightDomElement {
           incognito ? "new-session-page--incognito" : ""
         }"
       >
+        ${renderSessionBackground(this.context, "new-session")}
         ${
           catalog.isTarget(this.data)
             ? nothing
@@ -524,20 +623,10 @@ export class NewSessionPage extends OpenClawLightDomElement {
           renderDraft: () => (completed ? this.renderDraftBlock() : this.renderWelcome()),
           onOpenImage: this.setImageLightbox,
         })}
-        ${renderConnectMachineDialog({
-          open: this.connectMachine.open && this.place.isAdmin(),
-          loading: this.connectMachine.loading,
-          error: this.connectMachine.error,
-          setup: this.connectMachine.setup,
-          onRefresh: () => void this.connectMachine.refresh(),
-          onClose: () => {
-            this.connectMachine.close();
-            this.requestUpdate();
-          },
-          onManageDevices: () => {
-            this.connectMachine.close();
-            this.context?.navigate("devices");
-          },
+        ${renderCreationComposer(this.submission.creationComposer, this.setImageLightbox)}
+        ${this.connectMachine.render(this.place.isAdmin(), () => {
+          this.connectMachine.close();
+          this.context?.navigate("devices");
         })}
         ${renderChatImageLightbox(this.imageLightbox, () => this.setImageLightbox(null))}
       </div>

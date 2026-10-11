@@ -7,7 +7,7 @@ import type { createPluginRegistryOwner } from "../plugins/runtime.js";
 import type { OpenClawPluginApi } from "../plugins/types.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { activeSessions } from "../transcripts/capture.js";
+import { activeSessions } from "../transcripts/capture-startup.js";
 import type {
   TranscriptOccupancyWatchRequest,
   TranscriptSourceProvider,
@@ -48,15 +48,11 @@ export async function startTranscriptReloadFixtureSidecars(
       cfgAtStart: config,
       getConfig: fixture.getConfig,
       getReadiness: () => ({ ready: true, failing: [], uptimeMs: 0 }),
-      bindHost: "127.0.0.1",
-      bindHosts: ["127.0.0.1"],
       port: 0,
-      tlsEnabled: false,
       log,
       isNixMode: false,
       broadcastToConnIds: vi.fn(),
       getClientConnIds: () => new Set(),
-      controlUiBasePath: "/",
       gatewayPluginConfigAtStart: config,
       activationSourceConfig: config,
       pluginManifestRecords: [],
@@ -64,7 +60,9 @@ export async function startTranscriptReloadFixtureSidecars(
       defaultWorkspaceDir: workspaceDir,
       deps: {},
       startChannels: async () => {},
+      isRestartRecoverySuppressed: () => false,
       recoveryRuntime: {
+        prepareRestartRecovery: unusedRecovery,
         dispatchSessionMethod: unusedRecovery,
         dispatchAgent: unusedRecovery,
         waitForAgent: unusedRecovery,

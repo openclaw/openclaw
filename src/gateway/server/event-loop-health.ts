@@ -1,7 +1,9 @@
-// Event-loop health monitor samples delay, utilization, and CPU pressure for gateway readiness snapshots.
 import { cpus, type CpuInfo } from "node:os";
 import { createHistogram, performance, type RecordableHistogram } from "node:perf_hooks";
 import { isMainThread, Worker } from "node:worker_threads";
+import type { Static } from "typebox";
+import type { SchemaContract } from "../../../packages/gateway-protocol/src/schema-contract.js";
+import type { GatewayEventLoopHealthSchema } from "../../../packages/gateway-protocol/src/schema/runtime-vitals.js";
 import { hasInternalDiagnosticEventInterest } from "../../infra/diagnostic-event-listener-presence.js";
 import {
   areDiagnosticsEnabledForProcess,
@@ -9,7 +11,9 @@ import {
 } from "../../infra/diagnostic-events.js";
 import { runWithDiagnosticTraceContext } from "../../infra/diagnostic-trace-context.js";
 import type { GatewayScheduler } from "../../infra/gateway-scheduler.js";
+import { createMainThreadStallMonitor } from "../../infra/main-thread-stall.js";
 import { getTrackedWorkerCpuSources } from "../../infra/worker-cpu.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 
 const EVENT_LOOP_MONITOR_RESOLUTION_MS = 20;
 const EVENT_LOOP_DELAY_WARN_MS = 1_000;
@@ -21,28 +25,15 @@ const LOAD_DEGRADATION_DELAY_COEVIDENCE_MS = 25;
 const SUSTAINED_LOAD_SAMPLE_MIN_INTERVAL_MS = 1_000;
 // A native request can wait on a blocked worker. It must not delay the sampler.
 const WORKER_CPU_SAMPLE_BUDGET_MS = 100;
+const log = createSubsystemLogger("gateway/event-loop");
 
 type EventLoopUtilization = ReturnType<typeof performance.eventLoopUtilization>;
 
-type GatewayEventLoopHealthReason = "event_loop_delay" | "event_loop_utilization" | "cpu";
-
-export type GatewayEventLoopHealth = {
-  degraded: boolean;
+export type GatewayEventLoopHealth = SchemaContract<Static<typeof GatewayEventLoopHealthSchema>> & {
   degradedSinceMs: number | null;
-  reasons: GatewayEventLoopHealthReason[];
-  intervalMs: number;
-  delayP99Ms: number;
-  delayMaxMs: number;
-  utilization: number;
-  cpuCoreRatio: number;
-  cpuBreakdown?: {
-    mainThreadCoreRatio?: number;
-    workerCoreRatio?: number;
-    otherThreadsCoreRatio?: number;
-    hostUtilization?: number;
-    hostCpuCount?: number;
-  };
 };
+
+type GatewayEventLoopHealthReason = GatewayEventLoopHealth["reasons"][number];
 
 type GatewayEventLoopHealthMonitor = {
   snapshot: () => GatewayEventLoopHealth | undefined;
@@ -183,6 +174,8 @@ export function createGatewayEventLoopHealthMonitor(
   const readCpuUsage = deps.cpuUsage ?? process.cpuUsage.bind(process);
   const readEventLoopUtilization =
     deps.eventLoopUtilization ?? performance.eventLoopUtilization.bind(performance);
+  const stalls = createMainThreadStallMonitor(nowMs);
+  let unattributedDelayMs = 0;
   let histogram: RecordableHistogram | null = null;
   let lastSampleAt = nowMs();
   let lastWallAt = lastSampleAt;
@@ -292,12 +285,30 @@ export function createGatewayEventLoopHealthMonitor(
     }
 
     const now = nowMs();
+    const attributed = stalls.drain();
+    if (unattributedDelayMs > 0 && attributed.stalls.length === 0) {
+      log.warn(`main-thread stall: elapsedMs=${Math.round(unattributedDelayMs)} task=unattributed`);
+    }
+    // The sampler can run inside the same scheduler callback as the blocking job.
+    // Give its after hook one turn to publish before declaring the delay unattributed.
+    unattributedDelayMs =
+      now - lastSampleAt > EVENT_LOOP_DELAY_WARN_MS && attributed.stalls.length === 0
+        ? now - lastSampleAt
+        : 0;
+    for (const stall of attributed.stalls) {
+      log.warn(
+        `main-thread stall: elapsedMs=${Math.round(stall.elapsedMs)} task=${JSON.stringify(stall.task.slice(0, 160))} taskMs=${Math.round(stall.taskMs)}`,
+      );
+    }
     // A window reset must not erase the pending sample's monotonic anchor.
     // Native interval histograms reset that anchor before an overdue callback runs.
     histogram.record(BigInt(Math.max(1, Math.round((now - lastSampleAt) * 1_000_000))));
     lastSampleAt = now;
     const intervalMs = Math.max(1, now - lastWallAt);
     const delayMaxMs = nanosecondsToMilliseconds(histogram.max);
+    if (attributed.dropped > 0) {
+      log.warn(`main-thread stall: omitted=${attributed.dropped} pendingLimit=8`);
+    }
     if (
       delayMaxMs < EVENT_LOOP_DELAY_WARN_MS &&
       intervalMs < SUSTAINED_LOAD_SAMPLE_MIN_INTERVAL_MS
@@ -383,6 +394,8 @@ export function createGatewayEventLoopHealthMonitor(
   }
 
   const reset = () => {
+    stalls.drain();
+    unattributedDelayMs = 0;
     histogram?.reset();
     lastSampleAt = nowMs();
     lastWallAt = lastSampleAt;
@@ -411,6 +424,7 @@ export function createGatewayEventLoopHealthMonitor(
     },
     reset,
     stop: () => {
+      stalls.stop();
       samplingJob?.cancel();
       histogram = null;
       cancelWorkerCpuSample?.();

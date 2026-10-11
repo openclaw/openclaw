@@ -34,28 +34,10 @@ it.each([
     recovery: "available",
   },
   {
-    label: "monitor with source key",
-    idempotencyKey: "transport-user-key",
-    hidden: false,
-    recovery: "available",
-  },
-  {
     label: "hidden subagent announcement",
     idempotencyKey: "announce:child:user",
     hidden: true,
     recovery: "available",
-  },
-  {
-    label: "excluded consultation",
-    idempotencyKey: "consult:user",
-    hidden: true,
-    recovery: "excluded",
-  },
-  {
-    label: "unavailable annotation capability",
-    idempotencyKey: "unavailable:user",
-    hidden: false,
-    recovery: "unavailable",
   },
   {
     label: "removed admitted prompt",

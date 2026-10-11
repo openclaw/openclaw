@@ -1,4 +1,3 @@
-// Defines message queue and delivery configuration types.
 import type { z } from "zod";
 import type {
   BroadcastSchema,
@@ -56,11 +55,7 @@ export type MessagesConfig = Omit<MessagesSchemaInput, "groupChat" | "visibleRep
   groupChat?: GroupChatConfig;
 };
 
-export type StatusReactionsConfig = NonNullable<MessagesConfig["statusReactions"]>;
-
 export type NativeCommandsSetting = boolean | "auto";
-
-export type CommandAllowFrom = Record<string, Array<string | number>>;
 
 export type CommandsConfig = DefinedSchemaInput<typeof CommandsSchema> & {
   /** @deprecated Doctor-only legacy input. */

@@ -18,6 +18,18 @@ const CAPABILITY_FACT_KEYS = {
   voice: "newSession.capabilityVoice",
 } as const;
 
+export function environmentIssueFact(
+  environment: DraftEnvironment | undefined,
+): string | undefined {
+  const update = environment?.issues?.find((issue) => issue.code === "update-required");
+  return update
+    ? t("newSession.nodeUpdateRequired", {
+        updateCommand: update.updateCommand,
+        restartCommand: update.headlessReconnectCommand,
+      })
+    : environment?.issues?.find((issue) => issue.code === "worker-host-unavailable")?.message;
+}
+
 function environmentLifecycleFact(params: {
   environment: DraftEnvironment | undefined;
   connected: boolean;
@@ -46,18 +58,12 @@ export function environmentMenuFacts(
   environment: DraftEnvironment | undefined,
   options: { connected?: boolean; nowMs?: number } = {},
 ): string[] {
-  const updateIssue = environment?.issues?.find((issue) => issue.code === "update-required");
   const lifecycle = environmentLifecycleFact({
     environment,
     connected: options.connected ?? true,
     nowMs: options.nowMs ?? Date.now(),
   });
-  const priorityFact = updateIssue
-    ? t("newSession.nodeUpdateRequired", {
-        updateCommand: updateIssue.updateCommand,
-        restartCommand: updateIssue.headlessReconnectCommand,
-      })
-    : lifecycle;
+  const priorityFact = environmentIssueFact(environment) ?? lifecycle;
   const facts = priorityFact ? [priorityFact] : [];
   if (environment?.platform) {
     facts.push(prettifyPlatform(environment.platform));

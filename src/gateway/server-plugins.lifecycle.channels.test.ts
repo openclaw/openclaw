@@ -2,7 +2,6 @@
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
-import chokidar from "chokidar";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { ChannelPlugin } from "../channels/plugins/types.public.js";
@@ -10,6 +9,7 @@ import {
   attachRuntimeConfigWriteApplication,
   createRuntimeConfigWriteApplication,
 } from "../config/runtime-write-application.js";
+import * as configFileSource from "../config/source-file.js";
 import { registerPluginHttpRoute } from "../plugins/http-registry.js";
 import { commitConfigWithPendingPluginInstalls } from "../plugins/install-record-commit.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
@@ -17,6 +17,7 @@ import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-
 import { createDeferredCore } from "../shared/deferred.js";
 import { createChannelTestPluginBase } from "../test-utils/channel-plugins.js";
 import { acquireTestPortBlock } from "../test-utils/port-claims.js";
+import { createWatcherMock } from "./config-reload.watcher.test-support.js";
 import {
   clearInstanceBindingProbeCoordinators,
   installInstanceBindingProbeCoordinator,
@@ -34,6 +35,23 @@ import {
   rpcReq,
   startTestGatewayServer,
 } from "./test-helpers.server.js";
+
+// Post-ready maintenance refreshes the derived registry under the plugin lifecycle lease, and
+// plugins.reload refuses a busy lease instead of queueing. Tests await that refresh first.
+async function observePostReadyStartupMaintenance(): Promise<{ settled: Promise<void> }> {
+  const startupPlugins = await import("./server-startup-plugins.js");
+  const runMaintenance = startupPlugins.runGatewayPostReadyStartupMaintenance;
+  const settled = createDeferredCore();
+  const observer = vi
+    .spyOn(startupPlugins, "runGatewayPostReadyStartupMaintenance")
+    .mockImplementation((params) => {
+      const maintenance = runMaintenance(params);
+      maintenance.then(settled.resolve, settled.resolve);
+      return maintenance;
+    });
+  onTestFinished(() => observer.mockRestore());
+  return { settled: settled.promise };
+}
 
 // Fixtures must register real plugins after the shared helpers install their mocks.
 vi.doUnmock("../plugins/loader.js");
@@ -189,17 +207,26 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
       await useGatewayGraphPluginRuntime();
       const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
       const port = portClaim.port;
-      const watch = chokidar.watch;
-      let configWatcher: ReturnType<typeof watch> | undefined;
-      const watchSpy = vi.spyOn(chokidar, "watch").mockImplementation((paths, options) => {
-        if (!(typeof paths === "string" ? [paths] : paths).includes(configPath)) {
-          return watch(paths, options);
-        }
-        // Explicit writes own reloads; inject the filesystem echo at its race boundary below.
-        configWatcher = new chokidar.FSWatcher(options);
-        queueMicrotask(() => configWatcher?.emit("ready"));
-        return configWatcher;
-      });
+      const createConfigFileAdapter = configFileSource.createConfigFileAdapter;
+      let configWatcher: ReturnType<typeof createWatcherMock> | undefined;
+      const watchSpy = vi
+        .spyOn(configFileSource, "createConfigFileAdapter")
+        .mockImplementation((options) => {
+          if (options.path !== configPath) {
+            return createConfigFileAdapter(options);
+          }
+          // Explicit writes own reloads; inject the filesystem echo at its race boundary below.
+          const watcher = createWatcherMock();
+          configWatcher = watcher;
+          const adapter = watcher.attach(options);
+          return {
+            ...adapter,
+            start() {
+              adapter.start();
+              queueMicrotask(() => watcher.emit("ready"));
+            },
+          };
+        });
       onTestFinished(() => watchSpy.mockRestore());
       server = await startTestGatewayServer(portClaim, {
         auth: { mode: "none" },
@@ -424,6 +451,7 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
     await useGatewayGraphPluginRuntime();
     const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
     const port = portClaim.port;
+    const maintenance = await observePostReadyStartupMaintenance();
     server = await startTestGatewayServer(portClaim, {
       auth: { mode: "none" },
       controlUiEnabled: false,
@@ -431,6 +459,7 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
       hotReloadRecovery,
     });
     await server.startupSettled;
+    await maintenance.settled;
     const probe = async (accountId: string) => {
       const response = await fetch(`http://127.0.0.1:${port}/reload-webhook/${accountId}`, {
         method: "POST",

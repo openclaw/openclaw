@@ -52,6 +52,7 @@ function createCrabboxCloudWorkerProfileCheck(openclawRoot: string): HealthCheck
         }
         return pending;
       };
+      let managed: ReturnType<typeof managedBinary.findManagedCrabboxBinary> | undefined;
       const findings: HealthFinding[] = [];
       for (const [profileId, profile] of profiles) {
         const explicitBinary = nonEmptyString(readRecord(profile.settings)?.binary);
@@ -64,9 +65,11 @@ function createCrabboxCloudWorkerProfileCheck(openclawRoot: string): HealthCheck
         if (result?.status === "supported") {
           continue;
         }
-        let managedPath: string;
         try {
-          managedPath = managedBinary.resolveManagedCrabboxBinaryPath(ctx.env);
+          managed ??= managedBinary.findManagedCrabboxBinary({ env: ctx.env });
+          if (await managed) {
+            continue;
+          }
         } catch (error) {
           findings.push({
             checkId: CRABBOX_CLOUD_WORKER_PROFILE_CHECK_ID,
@@ -75,10 +78,6 @@ function createCrabboxCloudWorkerProfileCheck(openclawRoot: string): HealthCheck
             target: profileId,
             message: error instanceof Error ? error.message : "Crabbox host is unsupported",
           });
-          continue;
-        }
-        const installed = findCrabboxBinary({ explicit: managedPath, openclawRoot });
-        if (installed && (await probe(installed)).status === "supported") {
           continue;
         }
         const reason = !result
@@ -164,6 +163,15 @@ export function registerCrabboxWorkerProviderDoctorChecks(
             source: "crabbox",
             target: image.profileKey,
           } as const;
+          if (image.captureUnsupported) {
+            findings.push({
+              ...details,
+              severity: "info",
+              message: `Warm-image native capture${display} is unsupported: ${image.captureUnsupported.message}`,
+              fixHint:
+                "Workers use an existing compatible snapshot when one is available and otherwise provision cold; capture attempts are skipped until `warmImages.refreshAfter` has elapsed since the refusal. Set `settings.warmImage: false` on the profile to stop capture attempts, or use a Crabbox configuration that supports native checkpoints.",
+            });
+          }
           if (image.capture) {
             const uncertain = image.capture.phase === "uncertain";
             findings.push({

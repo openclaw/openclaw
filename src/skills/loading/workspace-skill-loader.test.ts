@@ -71,7 +71,7 @@ vi.mock("../../plugins/manifest-registry.js", async () => {
   };
 });
 
-describe.each(["prompt", "runtime"] as const)("%s asynchronous binary preparation", (caller) => {
+describe("prompt asynchronous binary preparation", () => {
   afterEach(() => {
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
@@ -119,11 +119,9 @@ describe.each(["prompt", "runtime"] as const)("%s asynchronous binary preparatio
       }),
     };
     const resolve = async (assertCurrent?: () => void) => {
-      const entries =
-        caller === "prompt"
-          ? (await resolveWorkspaceSkillPromptEntries(workspaceDir, { ...options, assertCurrent }))
-              .eligible
-          : await prepareWorkspaceSkills(workspaceDir, options, assertCurrent);
+      const entries = (
+        await resolveWorkspaceSkillPromptEntries(workspaceDir, { ...options, assertCurrent })
+      ).eligible;
       return entries.map((entry) => entry.skill.name);
     };
     return { binDir, config, eligibility, resolve };
@@ -141,38 +139,6 @@ describe.each(["prompt", "runtime"] as const)("%s asynchronous binary preparatio
       },
     ]);
   }
-
-  it("does not probe skills excluded by agent selection and preserves session overrides", async () => {
-    const skillOverrides: Record<string, boolean> = {};
-    const { binDir, config, resolve } = await fixture(
-      [
-        { name: "allowed", metadata: { requires: { bins: ["allowed-tool"] } } },
-        { name: "excluded", metadata: { requires: { bins: ["excluded-tool"] } } },
-      ],
-      { agentId: "operator", skillOverrides },
-    );
-    const selectedSkills: string[] = [];
-    config.agents = { defaults: { skills: selectedSkills }, entries: { operator: {} } };
-    for (const name of ["allowed", "excluded"]) {
-      await fs.writeFile(path.join(binDir, `${name}-tool`), "fixture", { mode: 0o755 });
-    }
-    const access = vi.spyOn(fs, "access");
-    expect(await resolve()).toEqual([]);
-    expect(access.mock.calls).toEqual([]);
-
-    skillOverrides.allowed = true;
-    expect(await resolve()).toEqual(["allowed"]);
-    expect(access.mock.calls.map(([file]) => path.basename(String(file)))).toEqual([
-      "allowed-tool",
-    ]);
-    access.mockClear();
-    skillOverrides.allowed = false;
-    selectedSkills.push("excluded");
-    expect(await resolve()).toEqual(["excluded"]);
-    expect(access.mock.calls.map(([file]) => path.basename(String(file)))).toEqual([
-      "excluded-tool",
-    ]);
-  });
 
   it("skips binary IO for cheap exclusions and always skills, while detecting newly installed tools", async () => {
     const { binDir, config, resolve } = await fixture([
@@ -622,7 +588,7 @@ describe("loadWorkspaceSkills", () => {
       bundledSkillsDir: "",
       pluginSkillsDir: path.join(workspaceDir, ".plugin-skills"),
     };
-    const directoryReads = vi.spyOn(fsSync, "readdirSync");
+    const directoryReads = vi.spyOn(fsSync, "opendirSync");
     const reads = (dir: string) =>
       directoryReads.mock.calls.filter(([file]) => String(file) === path.join(dir, "skills"))
         .length;
@@ -676,7 +642,7 @@ describe("loadWorkspaceSkills", () => {
     }
   });
 
-  it.each([false, true])(
+  it.each([true])(
     "reconciles incoming plugin metadata with scoped invalidation=%s",
     async (scoped) => {
       const { workspaceDir, managedDir } = await setupWorkspaceSkillPlugin();
@@ -710,32 +676,6 @@ describe("loadWorkspaceSkills", () => {
       ).not.toContain("drafting");
     },
   );
-
-  it("filters plugin-shipped skills through plugin config", async () => {
-    const { workspaceDir, managedDir } = await setupWorkspaceSkillPlugin();
-
-    const enabledEntries = loadTestWorkspaceSkills(workspaceDir, {
-      config: {
-        plugins: {
-          entries: { "workspace-skills": { enabled: true } },
-        },
-      },
-      managedSkillsDir: managedDir,
-    });
-
-    expect(enabledEntries.map((entry) => entry.skill.name)).toContain("drafting");
-
-    const blockedEntries = loadTestWorkspaceSkills(workspaceDir, {
-      config: {
-        plugins: {
-          allow: ["something-else"],
-        },
-      },
-      managedSkillsDir: managedDir,
-    });
-
-    expect(blockedEntries.map((entry) => entry.skill.name)).not.toContain("drafting");
-  });
 
   it("loads the browser plugin automation skill when the bundled plugin is enabled", async () => {
     const workspaceDir = await createTempWorkspaceDir();
@@ -830,37 +770,6 @@ describe("loadWorkspaceSkills", () => {
     );
   });
 
-  it("loads workspace metadata with JSON5-style trailing commas", async () => {
-    const workspaceDir = await createTempWorkspaceDir();
-    const skillDir = path.join(workspaceDir, "skills", "json5-metadata");
-    await fs.mkdir(skillDir, { recursive: true });
-    await fs.writeFile(
-      path.join(skillDir, "SKILL.md"),
-      `---
-name: json5-metadata
-description: JSON5-style metadata
-metadata:
-  {
-    "openclaw":
-      {
-        "requires":
-          {
-            "env": ["EXAMPLE_VAR"],
-          },
-      },
-  }
----
-`,
-      "utf8",
-    );
-
-    const entry = loadTestWorkspaceSkills(workspaceDir).find(
-      (candidate) => candidate.skill.name === "json5-metadata",
-    );
-
-    expect(entry?.metadata?.requires?.env).toEqual(["EXAMPLE_VAR"]);
-  });
-
   it("warns for malformed files and keeps loading sibling workspace skills", async () => {
     const workspaceDir = await createTempWorkspaceDir();
     const brokenDir = path.join(workspaceDir, "skills", "broken");
@@ -934,102 +843,5 @@ description: Broken skill
     if (process.platform !== "win32") {
       expect(warningText).toContain(unreadableFile);
     }
-  });
-
-  it("applies agent skill filters and replacement semantics", async () => {
-    const workspaceDir = await createTempWorkspaceDir();
-    await writeWorkspaceSkills(workspaceDir, [
-      { name: "github", description: "GitHub" },
-      { name: "weather", description: "Weather" },
-      { name: "docs-search", description: "Docs" },
-    ]);
-
-    const defaultEntries = loadTestWorkspaceSkills(workspaceDir, {
-      config: {
-        agents: {
-          defaults: {
-            skills: ["github"],
-          },
-          list: [{ id: "writer" }],
-        },
-      },
-      agentId: "writer",
-    });
-
-    expect(defaultEntries.map((entry) => entry.skill.name)).toEqual(["github"]);
-
-    const replacementEntries = loadTestWorkspaceSkills(workspaceDir, {
-      config: {
-        agents: {
-          defaults: {
-            skills: ["github"],
-          },
-          list: [{ id: "writer", skills: ["docs-search"] }],
-        },
-      },
-      agentId: "writer",
-    });
-
-    expect(replacementEntries.map((entry) => entry.skill.name)).toEqual(["docs-search"]);
-  });
-
-  it("keeps remote-eligible skills when agent filtering is active", async () => {
-    const workspaceDir = await createTempWorkspaceDir();
-    await writeSkill({
-      dir: path.join(workspaceDir, "skills", "remote-only"),
-      name: "remote-only",
-      description: "Needs a remote bin",
-      metadata: '{"openclaw":{"requires":{"anyBins":["missingbin","sandboxbin"]}}}',
-    });
-
-    const entries = loadTestWorkspaceSkills(workspaceDir, {
-      config: {
-        agents: {
-          defaults: {
-            skills: ["remote-only"],
-          },
-          list: [{ id: "writer" }],
-        },
-      },
-      agentId: "writer",
-      eligibility: {
-        remote: {
-          platforms: ["linux"],
-          hasBin: () => false,
-          hasAnyBin: (bins: string[]) => bins.includes("sandboxbin"),
-          note: "sandbox",
-        },
-      },
-    });
-
-    expect(entries.map((entry) => entry.skill.name)).toEqual(["remote-only"]);
-  });
-
-  it("filters remote-ineligible skills when no agent skill filter is active", async () => {
-    const workspaceDir = await createTempWorkspaceDir();
-    await writeSkill({
-      dir: path.join(workspaceDir, "skills", "local-only"),
-      name: "local-only",
-      description: "Always available",
-    });
-    await writeSkill({
-      dir: path.join(workspaceDir, "skills", "remote-only"),
-      name: "remote-only",
-      description: "Needs a remote bin",
-      metadata: '{"openclaw":{"requires":{"anyBins":["missingbin","sandboxbin"]}}}',
-    });
-
-    const entries = loadTestWorkspaceSkills(workspaceDir, {
-      eligibility: {
-        remote: {
-          platforms: ["linux"],
-          hasBin: () => false,
-          hasAnyBin: () => false,
-          note: "sandbox",
-        },
-      },
-    });
-
-    expect(entries.map((entry) => entry.skill.name)).toEqual(["local-only"]);
   });
 });

@@ -46,6 +46,7 @@ type AgentCommandRecoveryFixture = {
 export async function withStoredAgentCommandRecoverySession(
   fixture: AgentCommandRecoveryFixture,
   run: (scope: { agentId: string; sessionKey: string; storePath: string }) => Promise<void>,
+  overrides: CommandSessionEntryFixture = {},
 ): Promise<void> {
   await withOpenClawTestState({ label: "command-recovery-delivery" }, async (testState) => {
     const scope = {
@@ -53,7 +54,7 @@ export async function withStoredAgentCommandRecoverySession(
       sessionKey: "agent:default:main",
       storePath: path.join(testState.sessionsDir("default"), "sessions.json"),
     };
-    const { entry } = fixture.setupBareStoredSession({}, scope.storePath, scope.sessionKey);
+    const { entry } = fixture.setupBareStoredSession(overrides, scope.storePath, scope.sessionKey);
     fixture.state.resolvedSessionKeyMock = scope.sessionKey;
     await sessionAccessor.replaceSessionEntry(scope, entry);
     const { persistAgentSession: persist } = await vi.importActual<
@@ -70,59 +71,51 @@ export async function withStoredAgentCommandRecoverySession(
 export function registerAgentCommandRecoveryCases(
   getFixture: () => AgentCommandRecoveryFixture,
 ): void {
-  it.each([false, true])(
-    "preserves rejected best-effort delivery intent without private diagnostics (Incognito: %s)",
-    async (incognito) => {
-      const {
-        state,
-        agentCommand,
-        setupSingleAttemptFallback,
-        setupBareStoredSession,
-        makeSuccessResult,
-      } = getFixture();
+  it("preserves bounded delivery evidence when strict post-turn delivery throws", async () => {
+    const fixture = getFixture();
+    const { state, agentCommand, setupSingleAttemptFallback, makeSuccessResult } = fixture;
+    await withStoredAgentCommandRecoverySession(fixture, async (scope) => {
       setupSingleAttemptFallback();
       state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("openai", "gpt-5.4"));
-      const now = Date.now();
-      setupBareStoredSession(incognito ? { incognito: true, createdAt: now, updatedAt: now } : {});
-      state.resolveAgentDeliveryPlanWithSessionRouteMock.mockResolvedValueOnce({
-        baseDelivery: {},
-        resolvedChannel: "discord",
-        resolvedTo: "channel:missing",
-        deliveryTargetMode: "explicit",
-        targetResolutionError: new Error('Unknown Discord target "channel:missing"'),
+      const secret = ["sk", "strict-delivery-secret-value"].join("-");
+      state.deliverAgentCommandResultMock.mockImplementation(async (params: unknown) => {
+        (
+          params as {
+            onDeliveryResult?: (result: { deliveryStatus: Record<string, unknown> }) => void;
+          }
+        ).onDeliveryResult?.({
+          deliveryStatus: {
+            status: "failed",
+            errorMessage: `Authorization: Bearer ${secret}`,
+            target: "discord:dm:private",
+          },
+        });
+        throw new Error("strict delivery failed");
       });
-
       await expect(
         agentCommand({
           message: "hello",
+          sessionKey: scope.sessionKey,
           channel: "discord",
-          to: "channel:missing",
+          to: "discord:dm:123",
+          accountId: "main",
           deliver: true,
-          bestEffortDeliver: true,
         }),
-      ).resolves.toMatchObject({ payloads: [{ text: "ok" }] });
+      ).rejects.toThrow("strict delivery failed");
 
-      expect(state.runAgentAttemptMock).toHaveBeenCalled();
-      expect(state.commandWarnMock).toHaveBeenCalledWith(
-        expect.stringContaining("delivery preflight failed"),
-      );
-      const diagnostics = JSON.stringify(state.commandWarnMock.mock.calls);
-      if (incognito) {
-        expect(diagnostics).not.toContain("channel:missing");
-      } else {
-        expect(diagnostics).toContain("channel:missing");
+      const lifecycleError = state.emitAgentEventMock.mock.calls
+        .map((call) => call[0] as { stream?: string; data?: Record<string, unknown> })
+        .find((event) => event.stream === "lifecycle" && event.data?.phase === "error");
+      expect(lifecycleError?.data?.terminalDelivery).toEqual({ status: "failed", resultCount: 0 });
+      for (const field of ["stopReason", "terminalReceipt", "terminalReply"]) {
+        expect(lifecycleError?.data).not.toHaveProperty(field);
       }
-      expect(state.deliverAgentCommandResultMock).toHaveBeenCalledWith(
-        expect.objectContaining({ opts: expect.objectContaining({ deliver: true }) }),
-      );
-      const pendingEntries = state.persistSessionEntryMock.mock.calls
-        .map((call) => (call[0] as { entry?: SessionEntry }).entry)
-        .filter((entry): entry is SessionEntry => entry?.pendingFinalDelivery !== undefined);
-      expect(pendingEntries).toEqual([]);
-    },
-  );
+      expect(JSON.stringify(lifecycleError)).not.toContain(secret);
+      expect(JSON.stringify(lifecycleError)).not.toContain("discord:dm:private");
+    });
+  });
 
-  it("persists and clears current run delivery context for restart recovery", async () => {
+  it("preserves rejected best-effort delivery intent without private Incognito diagnostics", async () => {
     const {
       state,
       agentCommand,
@@ -132,33 +125,39 @@ export function registerAgentCommandRecoveryCases(
     } = getFixture();
     setupSingleAttemptFallback();
     state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("openai", "gpt-5.4"));
-    setupBareStoredSession();
-    state.deliverAgentCommandResultMock.mockResolvedValue({ deliverySucceeded: true });
-
-    await agentCommand({
-      message: "hello",
-      channel: "discord",
-      to: "discord:dm:123",
-      accountId: "main",
-      threadId: "reply-1",
-      deliver: true,
+    const now = Date.now();
+    setupBareStoredSession({ incognito: true, createdAt: now, updatedAt: now });
+    state.resolveAgentDeliveryPlanWithSessionRouteMock.mockResolvedValueOnce({
+      baseDelivery: {},
+      resolvedChannel: "discord",
+      resolvedTo: "channel:missing",
+      deliveryTargetMode: "explicit",
+      targetResolutionError: new Error('Unknown Discord target "channel:missing"'),
     });
 
-    const persistedContexts = state.persistSessionEntryMock.mock.calls.map((call) => {
-      const params = call[0] as { entry?: SessionEntry };
-      return params.entry?.restartRecoveryDeliveryContext;
-    });
-    expect(persistedContexts).toContainEqual({
-      channel: "discord",
-      to: "discord:dm:123",
-      accountId: "main",
-      threadId: "reply-1",
-    });
-    const cleanupParams = state.persistSessionEntryMock.mock.calls.at(-1)?.[0] as
-      | { sessionStore?: Record<string, SessionEntry> }
-      | undefined;
-    const stored = cleanupParams?.sessionStore?.["agent:main:main"];
-    expect(stored?.restartRecoveryDeliveryContext).toBeUndefined();
+    await expect(
+      agentCommand({
+        message: "hello",
+        channel: "discord",
+        to: "channel:missing",
+        deliver: true,
+        bestEffortDeliver: true,
+      }),
+    ).resolves.toMatchObject({ payloads: [{ text: "ok" }] });
+
+    expect(state.runAgentAttemptMock).toHaveBeenCalled();
+    expect(state.commandWarnMock).toHaveBeenCalledWith(
+      expect.stringContaining("delivery preflight failed"),
+    );
+    const diagnostics = JSON.stringify(state.commandWarnMock.mock.calls);
+    expect(diagnostics).not.toContain("channel:missing");
+    expect(state.deliverAgentCommandResultMock).toHaveBeenCalledWith(
+      expect.objectContaining({ opts: expect.objectContaining({ deliver: true }) }),
+    );
+    const pendingEntries = state.persistSessionEntryMock.mock.calls
+      .map((call) => (call[0] as { entry?: SessionEntry }).entry)
+      .filter((entry): entry is SessionEntry => entry?.pendingFinalDelivery !== undefined);
+    expect(pendingEntries).toEqual([]);
   });
 
   it("does not capture restart status as a final before the outer signal aborts", async () => {
@@ -193,7 +192,7 @@ export function registerAgentCommandRecoveryCases(
       throw new Error("Restart interruption must not retry the model");
     }
     expect(terminal.result.meta).toMatchObject({ aborted: true, stopReason: "restart" });
-    expect(input.activateInternalPrompt).not.toHaveBeenCalled();
+    expect(input.sessionPromptState.activateInternalPrompt).not.toHaveBeenCalled();
     state.runAgentAttemptMock.mockResolvedValue(terminal.result);
 
     await expect(
@@ -218,6 +217,53 @@ export function registerAgentCommandRecoveryCases(
       }),
     );
   });
+
+  it.each(["runtime error", "outer signal"] as const)(
+    "retains the admitted Control UI source when a restart abort comes from the %s",
+    async (cause) => {
+      const fixture = getFixture();
+      const { state, agentCommand, setupSingleAttemptFallback } = fixture;
+      const runId = "restart-aborted-chat";
+      setupSingleAttemptFallback();
+      const controller = new AbortController();
+      state.runAgentAttemptMock.mockImplementation(async () => {
+        const error = createAgentRunRestartAbortError();
+        if (cause === "outer signal") {
+          controller.abort(error);
+        }
+        throw error;
+      });
+      await withStoredAgentCommandRecoverySession(
+        fixture,
+        async (scope) => {
+          await expect(
+            agentCommand({
+              message: "Finish the interrupted work",
+              sessionKey: scope.sessionKey,
+              runId,
+              abortSignal: controller.signal,
+            }),
+          ).rejects.toMatchObject({ code: "OPENCLAW_RESTART_ABORT" });
+          const saved = sessionAccessor.loadSessionEntry(scope);
+          expect(saved).toMatchObject({
+            restartRecoveryDeliveryRunId: runId,
+            restartRecoveryDeliverySourceRunId: runId,
+            restartRecoverySourceIngress: "control-ui",
+          });
+          expect(saved?.restartRecoveryTerminalRunIds ?? []).not.toContain(runId);
+          expect(controller.signal.aborted).toBe(cause === "outer signal");
+          expect(state.deliverAgentCommandResultMock).not.toHaveBeenCalled();
+        },
+        {
+          activeWriterRunId: runId,
+          lifecycleRunId: runId,
+          restartRecoveryDeliveryRunId: runId,
+          restartRecoveryDeliverySourceRunId: runId,
+          restartRecoverySourceIngress: "control-ui",
+        },
+      );
+    },
+  );
 
   it("clears the native admitted completion claim when cancellation wins after its commit", async () => {
     const { state, agentCommand, setupSingleAttemptFallback, setupBareStoredSession } =

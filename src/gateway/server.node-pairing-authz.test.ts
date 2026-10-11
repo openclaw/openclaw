@@ -483,6 +483,40 @@ describe("gateway node pairing authorization", () => {
       }
     });
 
+    test("approves a pending node pair when requestId has clipboard padding", async () => {
+      const victimNodeId = "node-padded-request-id-victim";
+      const request = await requestVictimNodeSurface(victimNodeId);
+      const operator = await issueOperatorToken({
+        name: "node-padded-request-id-operator",
+        approvedScopes: ["operator.pairing", "operator.write"],
+      });
+
+      const ws = await openTrackedWs(getStarted().port);
+      try {
+        await connectOk(ws, {
+          token: "secret",
+          deviceIdentityPath: operator.identityPath,
+          scopes: ["operator.pairing", "operator.write"],
+        });
+
+        const approve = await rpcReq(ws, "node.pair.approve", {
+          requestId: `  ${request.request.requestId}  `,
+        });
+        expect(approve.ok).toBe(true);
+        expect(approve.payload).toEqual(
+          expect.objectContaining({
+            requestId: request.request.requestId,
+            node: expect.objectContaining({ nodeId: victimNodeId }),
+          }),
+        );
+        await expect(findPairedNode(victimNodeId)).resolves.toMatchObject({
+          commands: [NODE_MCP_TOOLS_CALL_COMMAND],
+        });
+      } finally {
+        ws.close();
+      }
+    });
+
     test("allows an admin device-token session to manage another device's node surface", async () => {
       const victimNodeId = "node-admin-device-victim";
       const request = await requestVictimNodeSurface(victimNodeId);
@@ -547,16 +581,15 @@ describe("gateway node pairing authorization", () => {
         type NodeRead = { nodeId: string; displayName?: string; connected?: boolean };
         const readNodes = async (): Promise<NodeRead[]> => {
           const listed = await rpcReq<{ nodes?: NodeRead[] }>(controlWs, "node.list", {});
+          expect(listed.ok, JSON.stringify(listed.error)).toBe(true);
           return listed.payload?.nodes ?? [];
         };
         const readConnectedNode = async (): Promise<NodeRead | undefined> => {
           return (await readNodes()).find((entry) => entry.nodeId === pairedNode.identity.deviceId);
         };
-        await vi.waitFor(async () => {
-          expect(await readConnectedNode()).toMatchObject({
-            displayName: "Operator Name",
-            connected: true,
-          });
+        expect(await readConnectedNode()).toMatchObject({
+          displayName: "Operator Name",
+          connected: true,
         });
         const listedNodes = await readNodes();
         expect(resolveNodeIdFromNodeList(listedNodes, "Operator Name")).toBe(
@@ -581,11 +614,9 @@ describe("gateway node pairing authorization", () => {
           commands: [],
           displayName: "Replacement Live Name",
         });
-        await vi.waitFor(async () => {
-          expect(await readConnectedNode()).toMatchObject({
-            displayName: "Operator Name",
-            connected: true,
-          });
+        expect(await readConnectedNode()).toMatchObject({
+          displayName: "Operator Name",
+          connected: true,
         });
       } finally {
         await nodeClient?.stopAndWait();

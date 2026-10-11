@@ -31,7 +31,7 @@ function applyAcpResetTailContext(ctx: HandleCommandsParams["ctx"], resetTail: s
   ctx.AcpDispatchTailAfterReset = true;
 }
 
-function isResetAuthorized(params: ResetCommandParams): boolean {
+async function isResetAuthorized(params: ResetCommandParams): Promise<boolean> {
   return isResetAuthorizedForContext({
     ctx: params.ctx,
     cfg: params.cfg,
@@ -47,7 +47,7 @@ export async function maybeHandleResetCommand(
   if (!resetMatch) {
     return null;
   }
-  if (!isResetAuthorized(params)) {
+  if (!(await isResetAuthorized(params))) {
     logVerbose(
       `Ignoring /${resetMatch[1]} from unauthorized sender: ${params.command.senderId || "<unknown>"}`,
     );
@@ -61,21 +61,18 @@ export async function maybeHandleResetCommand(
   }
   const commandTargetSessionKey = resolveCommandTurnTargetSessionKey(params.ctx);
   const softReset = parseSoftResetCommand(params.command.commandBodyNormalized);
+  const commandAction: ResetCommandAction =
+    resetMatch[1]?.toLowerCase() === "reset" ? "reset" : "new";
+  const resetTail = params.command.commandBodyNormalized.slice(resetMatch[0].length).trimStart();
+  const boundAcpSessionKey = await resolveBoundAcpThreadSessionKey(params, commandTargetSessionKey);
+  params.opts?.abortSignal?.throwIfAborted();
+  const boundAcpKey =
+    boundAcpSessionKey && isAcpSessionKey(boundAcpSessionKey)
+      ? boundAcpSessionKey.trim()
+      : undefined;
   if (softReset.matched) {
-    const boundAcpSessionKey = await resolveBoundAcpThreadSessionKey(
-      params,
-      commandTargetSessionKey,
-    );
-    params.opts?.abortSignal?.throwIfAborted();
-    const boundAcpKey =
-      boundAcpSessionKey && isAcpSessionKey(boundAcpSessionKey)
-        ? boundAcpSessionKey.trim()
-        : undefined;
     if (boundAcpKey) {
-      return {
-        shouldContinue: false,
-        reply: { text: "Usage: /reset soft is not available for ACP-bound sessions yet." },
-      };
+      return commandReply("Usage: /reset soft is not available for ACP-bound sessions yet.");
     }
 
     const targetSessionEntry = params.sessionStore?.[params.sessionKey] ?? params.sessionEntry;
@@ -103,7 +100,7 @@ export async function maybeHandleResetCommand(
             storePath: params.storePath,
             sessionKey: params.sessionKey,
           },
-          async (entry) => {
+          (entry) => {
             const next = { ...entry };
             clearAllCliSessions(next);
             return {
@@ -120,34 +117,17 @@ export async function maybeHandleResetCommand(
     }
 
     await emitResetCommandHooks({
+      ...params,
       action: "reset",
-      agentId: params.agentId,
-      ctx: params.ctx,
-      cfg: params.cfg,
-      command: params.command,
-      sessionKey: params.sessionKey,
-      storePath: params.storePath,
       sessionEntry: targetSessionEntry,
       previousSessionEntry,
-      previousSessionMemory: params.previousSessionMemory,
-      previousSessionResetMessages: params.previousSessionResetMessages,
       onObservedReplyDelivery: params.opts?.onObservedReplyDelivery,
-      workspaceDir: params.workspaceDir,
     });
     params.command.softResetTriggered = true;
     params.command.softResetTail = softReset.tail;
     return null;
   }
 
-  const commandAction: ResetCommandAction =
-    resetMatch[1]?.toLowerCase() === "reset" ? "reset" : "new";
-  const resetTail = params.command.commandBodyNormalized.slice(resetMatch[0].length).trimStart();
-  const boundAcpSessionKey = await resolveBoundAcpThreadSessionKey(params, commandTargetSessionKey);
-  params.opts?.abortSignal?.throwIfAborted();
-  const boundAcpKey =
-    boundAcpSessionKey && isAcpSessionKey(boundAcpSessionKey)
-      ? boundAcpSessionKey.trim()
-      : undefined;
   if (boundAcpKey) {
     const resetResult = await resetConfiguredBindingTargetInPlace({
       cfg: params.cfg,
@@ -163,6 +143,7 @@ export async function maybeHandleResetCommand(
         (params.opts as InternalResetCommandOptions | undefined)?.onSessionPrepared?.({
           sessionKey: resetResult.sessionKey ?? boundAcpKey,
           sessionId: resetResult.sessionId,
+          lifecycleRevision: resetResult.lifecycleRevision,
           storePath: resetResult.storePath,
         });
       }
@@ -174,49 +155,30 @@ export async function maybeHandleResetCommand(
         }
         return { shouldContinue: false };
       }
-      return {
-        shouldContinue: false,
-        reply: { text: "✅ ACP session reset in place.", isStatusNotice: true },
-      };
     }
-    return {
-      shouldContinue: false,
-      reply: {
-        text: "⚠️ ACP session reset failed. Check /acp status and try again.",
-        isStatusNotice: true,
-      },
-    };
+    return commandReply({
+      text: resetResult.ok
+        ? "✅ ACP session reset in place."
+        : "⚠️ ACP session reset failed. Check /acp status and try again.",
+      isStatusNotice: true,
+    });
   }
 
   const targetSessionEntry = params.sessionStore?.[params.sessionKey] ?? params.sessionEntry;
 
   const hookResult = await emitResetCommandHooks({
+    ...params,
     action: commandAction,
-    agentId: params.agentId,
-    ctx: params.ctx,
-    cfg: params.cfg,
-    command: params.command,
-    sessionKey: params.sessionKey,
-    storePath: params.storePath,
     sessionEntry: targetSessionEntry,
-    previousSessionEntry: params.previousSessionEntry,
-    previousSessionMemory: params.previousSessionMemory,
-    previousSessionResetMessages: params.previousSessionResetMessages,
     onObservedReplyDelivery: params.opts?.onObservedReplyDelivery,
-    workspaceDir: params.workspaceDir,
   });
   if (!resetTail) {
-    return {
-      shouldContinue: false,
-      ...(hookResult.routedReply
-        ? {}
-        : {
-            reply: {
-              text: commandAction === "reset" ? "✅ Session reset." : "✅ New session started.",
-              isStatusNotice: true,
-            },
-          }),
-    };
+    return hookResult.routedReply
+      ? { shouldContinue: false }
+      : commandReply({
+          text: commandAction === "reset" ? "✅ Session reset." : "✅ New session started.",
+          isStatusNotice: true,
+        });
   }
   return null;
 }

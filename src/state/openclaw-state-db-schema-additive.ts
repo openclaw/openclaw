@@ -1,8 +1,10 @@
-import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
-import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { parseSqliteTableDefinition } from "../infra/sqlite-schema-contract-assembly.js";
 import { assertSqliteSchemaContains } from "../infra/sqlite-schema-contract.js";
+import {
+  getAdmittedSqliteSchemaFacts,
+  type SqliteSchemaFacts,
+} from "../infra/sqlite-schema-facts.js";
 import { extractSqliteTableSchema } from "../infra/sqlite-schema-sql.js";
 import {
   ORDERED_STARTUP_ADDITIVE_STATE_COLUMNS as columns,
@@ -17,103 +19,99 @@ import {
   ensureOperatorApprovalResolutionRefs,
   repairLegacySubagentExecutionPayloads,
   repairLegacySubagentRetainedResults,
-  repairLegacySubagentSuspensionReasons,
 } from "./openclaw-state-db-legacy-backfills.js";
 import { ensureColumn, tableExists, tableHasColumn } from "./openclaw-state-db-schema-helpers.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 
-const repositoryWorkspacePendingSchemas = new WeakSet<DatabaseSync>();
-
-function hasRepositoryWorkspacePendingResultSchema(database: DatabaseSync): boolean {
-  if (repositoryWorkspacePendingSchemas.has(database)) {
-    return true;
-  }
-  const exists = tableHasColumn(
-    database,
-    "worker_workspace_pending_results",
-    "repository_workspace_id",
-  );
-  // Another process can create the column; cache only committed presence.
-  // First-use DDL inside an outer transaction may still roll back.
-  if (exists && !database.isTransaction) {
-    repositoryWorkspacePendingSchemas.add(database);
-  }
-  return exists;
+function ensureTable(
+  database: DatabaseSync,
+  table: string,
+  options?: Parameters<typeof extractSqliteTableSchema>[2],
+): void {
+  database.exec(extractSqliteTableSchema(OPENCLAW_STATE_SCHEMA_SQL, table, options)); // sqlite-allow-raw -- Canonical feature-owned additive DDL only.
 }
 
 export function ensureRepositoryWorkspacePendingResultSchema(database: DatabaseSync): void {
-  if (!hasRepositoryWorkspacePendingResultSchema(database)) {
-    ensureColumn(database, "worker_workspace_pending_results", "repository_workspace_id TEXT");
+  const table = "worker_workspace_pending_results";
+  const sql = getAdmittedSqliteSchemaFacts(database)?.tableSql.get(table);
+  if (sql && parseSqliteTableDefinition(sql, table).columns.has("repository_workspace_id")) {
+    return;
   }
+  ensureColumn(database, table, "repository_workspace_id TEXT");
 }
 
 export function ensureSessionRepositoryWorkspaceSchema(database: DatabaseSync): void {
-  database.exec(
-    extractSqliteTableSchema(OPENCLAW_STATE_SCHEMA_SQL, "session_repository_workspaces", {
-      errorMessage: "Repository workspace schema marker is missing.",
-    }),
-  ); // sqlite-allow-raw -- Canonical first-use DDL; workspace rows use Kysely.
+  ensureTable(database, "session_repository_workspaces", {
+    errorMessage: "Repository workspace schema marker is missing.",
+  });
 }
 
 export function ensureRepositoryGitHubPublicationSchema(database: DatabaseSync): void {
-  database.exec(
-    extractSqliteTableSchema(OPENCLAW_STATE_SCHEMA_SQL, "github_repository_publication_requests", {
-      endMarker:
-        "ON github_repository_publication_requests(owner_profile_id, session_id, idempotency_key) WHERE owner_profile_id IS NOT NULL;",
-      errorMessage: "Repository GitHub publication schema marker is missing.",
-    }),
-  ); // sqlite-allow-raw -- Canonical first-use DDL; publication rows use Kysely.
+  if (tableExists(database, "github_repository_publication_requests")) {
+    return;
+  }
+  ensureTable(database, "github_repository_publication_requests", {
+    endMarker:
+      "ON github_repository_publication_requests(owner_profile_id, session_id, idempotency_key) WHERE owner_profile_id IS NOT NULL;",
+    errorMessage: "Repository GitHub publication schema marker is missing.",
+  });
 }
 
 export function ensureGitHubPublicationSessionLifecycleSchema(database: DatabaseSync): void {
-  database.exec(
-    extractSqliteTableSchema(OPENCLAW_STATE_SCHEMA_SQL, "github_publication_session_lifecycles", {
-      errorMessage: "GitHub publication lifecycle schema marker is missing.",
-    }),
-  ); // sqlite-allow-raw -- Canonical first-use DDL; bindings use Kysely.
+  if (tableExists(database, "github_publication_session_lifecycles")) {
+    return;
+  }
+  ensureTable(database, "github_publication_session_lifecycles", {
+    errorMessage: "GitHub publication lifecycle schema marker is missing.",
+  });
 }
 
 /** Lazily install the additive secret store table and index on first write. */
 export function ensureSecretStoreSchema(database: DatabaseSync): void {
-  database.exec(
-    extractSqliteTableSchema(OPENCLAW_STATE_SCHEMA_SQL, "secret_store_entries", {
-      endMarker:
-        "ON secret_store_entries (scope_kind, scope_id, name) WHERE deleted_at_ms IS NULL;",
-      errorMessage: "OpenClaw secret store schema marker is missing.",
-    }),
-  ); // sqlite-allow-raw -- Canonical additive DDL only.
+  ensureTable(database, "secret_store_entries", {
+    endMarker: "ON secret_store_entries (scope_kind, scope_id, name) WHERE deleted_at_ms IS NULL;",
+    errorMessage: "OpenClaw secret store schema marker is missing.",
+  });
   ensureColumn(database, "secret_store_entries", "allowed_hosts TEXT");
 }
 
 /** Lazily install durable MCP OAuth callback correlation on first feature use. */
 export function ensureMcpOAuthPendingSchema(database: DatabaseSync): void {
-  database.exec(
-    extractSqliteTableSchema(OPENCLAW_STATE_SCHEMA_SQL, "mcp_oauth_pending_authorizations", {
-      errorMessage: "OpenClaw MCP OAuth pending schema marker is missing.",
-    }),
-  ); // sqlite-allow-raw -- Canonical additive DDL only.
+  ensureTable(database, "mcp_oauth_pending_authorizations", {
+    errorMessage: "OpenClaw MCP OAuth pending schema marker is missing.",
+  });
 }
 
 /** Lazily install the additive device join-code table on first mint or redemption. */
 export function ensureDevicePairingJoinCodeSchema(database: DatabaseSync): void {
-  database.exec(
-    extractSqliteTableSchema(OPENCLAW_STATE_SCHEMA_SQL, "device_pairing_join_codes", {
-      errorMessage: "OpenClaw device pairing join-code schema marker is missing.",
-    }),
-  ); // sqlite-allow-raw -- Canonical additive DDL only.
+  ensureTable(database, "device_pairing_join_codes", {
+    errorMessage: "OpenClaw device pairing join-code schema marker is missing.",
+  });
 }
 
 /** Lazily installs the Gateway's installation-local config revision key owner. */
 export function ensureConfigRevisionKeySchema(database: DatabaseSync): void {
-  database.exec(
-    extractSqliteTableSchema(OPENCLAW_STATE_SCHEMA_SQL, "config_revision_keys", {
-      errorMessage: "OpenClaw config revision key schema marker is missing.",
-    }),
-  ); // sqlite-allow-raw -- Canonical additive DDL only; key rows use Kysely.
+  ensureTable(database, "config_revision_keys", {
+    errorMessage: "OpenClaw config revision key schema marker is missing.",
+  });
 }
 
+const journalAvailability = new WeakMap<SqliteSchemaFacts, boolean>();
+
 export function assertAgentDeletionJournalAvailable(database: DatabaseSync): void {
-  if (!tableHasColumn(database, "agent_deletion_journal", "agent_id")) {
+  const schema = getAdmittedSqliteSchemaFacts(database);
+  let available = schema && journalAvailability.get(schema);
+  if (available === undefined) {
+    const sql = schema?.tableSql.get("agent_deletion_journal");
+    available = schema
+      ? sql !== undefined &&
+        parseSqliteTableDefinition(sql, "agent_deletion_journal").columns.has("agent_id")
+      : tableHasColumn(database, "agent_deletion_journal", "agent_id");
+    if (schema) {
+      journalAvailability.set(schema, available);
+    }
+  }
+  if (!available) {
     throw new Error(
       "Agent deletion journal missing; run openclaw doctor --fix to reconstruct it before restoring or deleting agents.",
     );
@@ -135,7 +133,12 @@ export function reconstructAgentDeletionJournalSchema(
 }
 
 export function ensureAgentDatabaseLeaseSchema(database: DatabaseSync): void {
-  database.exec(extractSqliteTableSchema(OPENCLAW_STATE_SCHEMA_SQL, "agent_database_leases"));
+  const sql = getAdmittedSqliteSchemaFacts(database)?.tableSql.get("agent_database_leases");
+  if (sql && parseSqliteTableDefinition(sql, "agent_database_leases").columns.has("provenance")) {
+    return;
+  }
+  ensureTable(database, "agent_database_leases");
+  ensureColumn(database, "agent_database_leases", "provenance TEXT");
 }
 
 /**
@@ -144,9 +147,7 @@ export function ensureAgentDatabaseLeaseSchema(database: DatabaseSync): void {
  * a downgraded reader simply loses setup-completion reconciliation.
  */
 export function ensureDevicePairSetupCompletionSchema(database: DatabaseSync): void {
-  database.exec(
-    extractSqliteTableSchema(OPENCLAW_STATE_SCHEMA_SQL, "device_pair_setup_completions"),
-  );
+  ensureTable(database, "device_pair_setup_completions");
 }
 
 /** Lazily add setup correlation only when setup pairing first writes or consumes a token. */
@@ -164,53 +165,9 @@ export function ensureWorkerEnvironmentNodeEnrollmentSchema(database: DatabaseSy
 /** Register fixed build ownership on the dedicated node's current transaction. */
 export function ensureNodeWorkerPreparedWorkspaceSchema(database: DatabaseSync): void {
   // Registration can still roll back; never cache a nested transaction's DDL.
-  database.exec(
-    extractSqliteTableSchema(OPENCLAW_STATE_SCHEMA_SQL, "node_worker_prepared_workspaces", {
-      errorMessage: "Node prepared workspace schema marker is missing.",
-    }),
-  ); // sqlite-allow-raw -- Canonical first-use DDL; workspace rows use Kysely.
-}
-
-function resolveLegacyManagedImageRoot(recordJson: unknown): string | null {
-  if (typeof recordJson !== "string") {
-    return null;
-  }
-  const record = safeParseJsonRecord(recordJson);
-  if (!record || !isRecord(record.original)) {
-    return null;
-  }
-  const mediaRoot = record.original.mediaRoot;
-  if (typeof mediaRoot === "string" && mediaRoot.trim()) {
-    return path.resolve(mediaRoot);
-  }
-  const originalPath = record.original.path;
-  if (typeof originalPath !== "string" || !originalPath.trim()) {
-    return null;
-  }
-  const resolvedOriginalPath = path.resolve(originalPath);
-  return path.dirname(path.dirname(path.dirname(resolvedOriginalPath)));
-}
-
-function backfillLegacyManagedImageRoots(db: DatabaseSync): void {
-  const rows = db
-    .prepare("SELECT attachment_id, record_json FROM managed_outgoing_image_records")
-    .all() as Array<{ attachment_id: string; record_json: unknown }>;
-  const updateRoot = db.prepare(
-    "UPDATE managed_outgoing_image_records SET original_media_root = ? WHERE attachment_id = ?",
-  );
-  const deleteRecord = db.prepare(
-    "DELETE FROM managed_outgoing_image_records WHERE attachment_id = ?",
-  );
-  for (const row of rows) {
-    const mediaRoot = resolveLegacyManagedImageRoot(row.record_json);
-    if (mediaRoot) {
-      updateRoot.run(mediaRoot, row.attachment_id);
-    } else {
-      // This table had no shipped writer. Discard malformed unexpected rows
-      // instead of retaining unusable empty roots or wedging every database open.
-      deleteRecord.run(row.attachment_id);
-    }
-  }
+  ensureTable(database, "node_worker_prepared_workspaces", {
+    errorMessage: "Node prepared workspace schema marker is missing.",
+  });
 }
 
 function ensureWorkerSessionToolStateSchema(db: DatabaseSync): void {
@@ -223,21 +180,23 @@ function ensureWorkerSessionToolStateSchema(db: DatabaseSync): void {
 }
 
 export function ensureGitHubPublicationSchema(db: DatabaseSync): void {
-  db.exec(
-    extractSqliteTableSchema(OPENCLAW_STATE_SCHEMA_SQL, "github_publication_requests", {
-      endMarker: "ON github_publication_requests(status, updated_at_ms, request_id);",
-    }),
-  );
+  if (tableExists(db, "github_publication_requests")) {
+    return;
+  }
+  ensureTable(db, "github_publication_requests", {
+    endMarker: "ON github_publication_requests(status, updated_at_ms, request_id);",
+  });
 }
 
 /** First personal publication write only; status and old readers leave this surface dormant. */
 export function ensurePersonalGitHubPublicationSchema(db: DatabaseSync): void {
-  db.exec(
-    extractSqliteTableSchema(OPENCLAW_STATE_SCHEMA_SQL, "github_personal_publication_requests", {
-      endMarker: "ON github_personal_publication_requests(status, updated_at_ms, request_id);",
-      errorMessage: "Personal GitHub publication schema marker is missing.",
-    }),
-  ); // sqlite-allow-raw -- Canonical lazy additive DDL only.
+  if (tableExists(db, "github_personal_publication_requests")) {
+    return;
+  }
+  ensureTable(db, "github_personal_publication_requests", {
+    endMarker: "ON github_personal_publication_requests(status, updated_at_ms, request_id);",
+    errorMessage: "Personal GitHub publication schema marker is missing.",
+  });
 }
 
 /**
@@ -344,16 +303,12 @@ export function ensureAdditiveStateColumns(db: DatabaseSync, scope: "runtime" | 
   // The shipped JSON runtime predeclared this table but never populated it.
   // The transitional default makes ADD COLUMN portable; schema-v2 tables are
   // rebuilt from canonical STRICT SQL immediately afterward, removing it.
-  const addedOriginalMediaRoot = ensureColumn(db, ...columns.originalMediaRoot[0]);
-  if (addedOriginalMediaRoot) {
-    backfillLegacyManagedImageRoots(db);
-  }
+  ensureColumn(db, ...columns.originalMediaRoot[0]);
   ensureColumns(db, columns.beforeTaskAttribution);
   // Keep the released physical layout without repairing retired Task attribution or bindings.
   ensureColumns(db, columns.taskRequester);
   ensureColumns(db, columns.taskRunDetails);
   if (repairHistoricalRows) {
-    repairLegacySubagentSuspensionReasons(db);
     repairLegacySubagentExecutionPayloads(db);
     repairLegacySubagentRetainedResults(db);
   }

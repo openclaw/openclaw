@@ -18,7 +18,6 @@ export type DoctorConfigPreflightOptions = {
   invocationPurpose?: LegacyStateMigrationInvocationPurpose;
   migrateLegacyConfig?: boolean;
   repairPrefixedConfig?: boolean;
-  recoverCorruptTargetStore?: boolean;
   invalidConfigNote?: string | false;
   observe?: boolean;
   measure?: ConfigSnapshotReadMeasure;
@@ -32,6 +31,9 @@ export type DoctorConfigPreflightOptions = {
 export type DoctorConfigPreflightResult = {
   snapshot: ConfigFileSnapshot;
   baseConfig: OpenClawConfig;
+  /** Original resolved roster retained until its config and data migrations finish. */
+  rosterMigrationSource?: OpenClawConfig;
+  rosterMigrationOwnerId?: string;
   deferredPluginMigrations?: readonly DeferredPluginMigration[];
   modelBillingRouteMigrationSource?: OpenClawConfig;
   pluginMetadataSnapshot?: PluginMetadataSnapshot;

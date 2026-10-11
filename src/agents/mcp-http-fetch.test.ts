@@ -9,6 +9,7 @@ import type { FetchLike } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildMcpHttpFetch,
+  buildMcpOAuthHttpFetch,
   withoutMcpAuthorizationHeader,
   withSameOriginMcpHttpHeaders,
 } from "./mcp-http-fetch.js";
@@ -27,6 +28,7 @@ vi.mock("node:dns/promises", () => ({
 }));
 
 vi.mock("./mcp-oauth.js", () => ({
+  recordMcpOAuthAuthorizationRequired: vi.fn(),
   resolveMcpOAuthAccessToken: oauthResolveMock,
 }));
 
@@ -323,7 +325,9 @@ describe("MCP HTTP fetch helpers", () => {
     const expectedKeepalive = process.versions.bun ? undefined : true;
     const fetch = withMcpOAuthBearer({
       fetchFn: buildMcpHttpFetch({ resourceUrl }),
-      authFetchFn: buildMcpHttpFetch({ resourceUrl }),
+      authFetchFn: buildMcpOAuthHttpFetch({
+        resourceUrl,
+      }),
       identity: operatorMcpOAuthIdentity("docs", resourceUrl),
     });
 

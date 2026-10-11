@@ -1,18 +1,24 @@
 import type { DatabaseSync } from "node:sqlite";
+import { getAdmittedSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
 import { extractSqliteTableSchema } from "../infra/sqlite-schema-sql.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
 
 export const MESSAGE_TOOL_RUN_OUTCOMES_TABLE = "message_tool_run_outcomes";
 
-const ENSURED_DATABASES = new WeakSet<DatabaseSync>();
-
 /** Lazily installs the additive outcome table on first use. */
-export function ensureMessageToolRunOutcomeSchema(db: DatabaseSync): void {
-  if (ENSURED_DATABASES.has(db)) {
+export function ensureMessageToolRunOutcomeSchema(
+  db: DatabaseSync,
+  admit?: (stage: "transaction" | "commit") => void,
+): void {
+  const facts = getAdmittedSqliteSchemaFacts(db);
+  if (
+    facts?.tables.has(MESSAGE_TOOL_RUN_OUTCOMES_TABLE) &&
+    facts.indexes.has("idx_agent_message_tool_run_outcomes_occurred")
+  ) {
     return;
   }
-  runSqliteImmediateTransactionSync(db, () => {
+  const install = () => {
     // sqlite-allow-raw -- Canonical additive DDL only.
     db.exec(
       extractSqliteTableSchema(OPENCLAW_AGENT_SCHEMA_SQL, MESSAGE_TOOL_RUN_OUTCOMES_TABLE, {
@@ -21,6 +27,22 @@ export function ensureMessageToolRunOutcomeSchema(db: DatabaseSync): void {
         errorMessage: "OpenClaw message-tool run outcome schema markers are missing.",
       }),
     );
-  });
-  ENSURED_DATABASES.add(db);
+  };
+  if (db.isTransaction) {
+    install();
+    return;
+  }
+  runSqliteImmediateTransactionSync(
+    db,
+    () => {
+      admit?.("transaction");
+      install();
+    },
+    {
+      withCommit(commit) {
+        admit?.("commit");
+        commit();
+      },
+    },
+  );
 }

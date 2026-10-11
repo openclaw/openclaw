@@ -187,7 +187,7 @@ export function clawCronSchedulerJobFromResult(value: unknown): { id: string } |
 function schedulerJobRecordByDeclarationKey(
   value: unknown,
   declarationKey: string,
-): Record<string, unknown> | undefined {
+): (Record<string, unknown> & { id: string }) | undefined {
   if (!value || typeof value !== "object") {
     return undefined;
   }
@@ -196,28 +196,16 @@ function schedulerJobRecordByDeclarationKey(
     return undefined;
   }
   const matches = jobs.filter(
-    (job): job is Record<string, unknown> =>
+    (job): job is Record<string, unknown> & { id: string } =>
       Boolean(job) &&
       typeof job === "object" &&
       (job as Record<string, unknown>).declarationKey === declarationKey &&
       typeof (job as Record<string, unknown>).id === "string",
   );
-  const match = matches.length === 1 ? matches[0] : undefined;
-  return match;
+  return matches.length === 1 ? matches[0] : undefined;
 }
 
-function schedulerJobByDeclarationKey(
-  value: unknown,
-  declarationKey: string,
-): { id: string } | undefined {
-  const match = schedulerJobRecordByDeclarationKey(value, declarationKey);
-  return match ? { id: match.id as string } : undefined;
-}
-
-export function clawCronGatewayInput(
-  agentId: string,
-  ref: PersistedClawCronRef,
-): Record<string, unknown> {
+export function clawCronGatewayInput(agentId: string, ref: PersistedClawCronRef) {
   const job = ref.job;
   return {
     name: job.name ?? job.id,
@@ -346,7 +334,7 @@ export async function installClawCronJobs(
             refs,
           );
         }
-        result = { id: listedJob.id as string };
+        result = listedJob;
         if (result.id !== pending.schedulerJobId) {
           refs[refs.length - 1] = updateRef(
             pending,
@@ -368,7 +356,7 @@ export async function installClawCronJobs(
         agentAvailable = true;
       }
       if (options.gateway.list) {
-        result = schedulerJobByDeclarationKey(
+        result = schedulerJobRecordByDeclarationKey(
           await options.gateway.list(plan.agent.finalId),
           pending.declarationKey,
         );

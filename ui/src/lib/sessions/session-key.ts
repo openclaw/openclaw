@@ -14,6 +14,15 @@ import {
 
 export { buildAgentMainSessionKey, DEFAULT_MAIN_KEY };
 export const DEFAULT_AGENT_ID = "main";
+const DEFAULT_MAIN_SESSION_KEY = buildAgentMainSessionKey({
+  agentId: DEFAULT_AGENT_ID,
+  mainKey: DEFAULT_MAIN_KEY,
+});
+
+// Normalization depends only on the input string. Bound retention across roster churn;
+// clearing at 4,096 entries needs no clock or session/config invalidation.
+const comparisonKeys = new Map<string, string>();
+const COMPARISON_KEY_CACHE_LIMIT = 4_096;
 
 export type UiSessionDefaultsHost = {
   assistantAgentId?: string | null;
@@ -72,8 +81,15 @@ export function isPinnableUiSessionRow(row: {
   key: string;
   parentSessionKey?: string | null;
   spawnedBy?: string | null;
+  sidebarRoot?: boolean;
 }): boolean {
-  if (isSubagentSessionKey(row.key) || normalizeOptionalString(row.spawnedBy)) {
+  if (isSubagentSessionKey(row.key)) {
+    return false;
+  }
+  if (row.sidebarRoot) {
+    return true;
+  }
+  if (normalizeOptionalString(row.spawnedBy)) {
     return false;
   }
   const parentSessionKey = normalizeOptionalString(row.parentSessionKey);
@@ -88,6 +104,22 @@ export function isPinnableUiSessionRow(row: {
 }
 
 export function normalizeSessionKeyForUiComparison(sessionKey: string | undefined | null): string {
+  if (sessionKey == null) {
+    return "";
+  }
+  const cached = comparisonKeys.get(sessionKey);
+  if (cached !== undefined) {
+    return cached;
+  }
+  const normalized = normalizeComparisonKey(sessionKey);
+  if (comparisonKeys.size >= COMPARISON_KEY_CACHE_LIMIT) {
+    comparisonKeys.clear();
+  }
+  comparisonKeys.set(sessionKey, normalized);
+  return normalized;
+}
+
+function normalizeComparisonKey(sessionKey: string): string {
   const raw = normalizeOptionalString(sessionKey);
   if (!raw) {
     return "";
@@ -348,15 +380,16 @@ export function normalizeDefaultMainSessionAliasForUi(
   sessionKey: string | undefined | null,
 ): string {
   const normalized = normalizeSessionKeyForUiComparison(sessionKey);
-  return normalized === DEFAULT_MAIN_KEY
-    ? buildAgentMainSessionKey({ agentId: DEFAULT_AGENT_ID, mainKey: DEFAULT_MAIN_KEY })
-    : normalized;
+  return normalized === DEFAULT_MAIN_KEY ? DEFAULT_MAIN_SESSION_KEY : normalized;
 }
 
 export function areUiSessionKeysEquivalent(
   left: string | undefined | null,
   right: string | undefined | null,
 ): boolean {
+  if (left === right) {
+    return Boolean(left?.trim());
+  }
   const normalizedLeft = normalizeDefaultMainSessionAliasForUi(left);
   const normalizedRight = normalizeDefaultMainSessionAliasForUi(right);
   return Boolean(normalizedLeft && normalizedRight && normalizedLeft === normalizedRight);
@@ -442,4 +475,13 @@ export function isSubagentSessionKey(sessionKey: string | undefined | null): boo
 /** ACP-backed sessions (`agent:<id>:acp:<uuid>`) belong to the Coding zone, not chat threads. */
 export function isAcpSessionKey(sessionKey: string | undefined | null): boolean {
   return hasSessionKeyPrefix(sessionKey, "acp:");
+}
+
+/**
+ * Dashboard sessions (`agent:<id>:dashboard:<uuid>`) are opened in their own
+ * right. A child with such a key was launched with `visible`; every other child
+ * of a session runs hidden, as its subagent.
+ */
+export function isDashboardSessionKey(sessionKey: string | undefined | null): boolean {
+  return hasSessionKeyPrefix(sessionKey, "dashboard:");
 }

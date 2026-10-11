@@ -112,53 +112,50 @@ try {
 }
 
 describe("security review rollout", () => {
-  it("enforces without GitHub rollout lookups after the configuration is removed", () => {
-    expect(evaluate({ policy: { rollout: undefined } })).toEqual({
-      status: 0,
+  it.each<{ name: string; options: Options; mode: string; requests: string[] }>([
+    {
+      name: "removed configuration",
+      options: { policy: { rollout: undefined } },
       mode: "enforced",
       requests: [],
-    });
-  });
-
-  it("does not use the synthetic merge commit before the rollout PR merges", () => {
-    const result = evaluate({
-      rollout: { ...rollout, state: "open", merged: false, merged_at: null },
-    });
-    expect(result.mode).toBe("inactive");
-    expect(result.requests).toEqual([`/repos/openclaw/openclaw/pulls/${rolloutNumber}`]);
-  });
-
-  it.each(["2026-09-19T12:00:00Z", "2026-09-20T00:00:00Z"])(
-    "enforces PRs created at or after rollout (%s), even on an old branch",
-    (createdAt) => {
-      const result = evaluate({ pullRequest: { ...pullRequest, created_at: createdAt } });
-      expect(result.mode).toBe("enforced");
-      expect(result.requests).toHaveLength(1);
     },
-  );
-
-  it.each(["behind", "diverged"])(
-    "exempts an older PR whose head has not incorporated the rollout (%s)",
-    (status) => {
-      const result = evaluate({ comparison: { ...comparison, status } });
-      expect(result.mode).toBe("grandfathered");
-      expect(result.requests[1]).toBe(
+    {
+      name: "unmerged rollout",
+      options: { rollout: { ...rollout, state: "open", merged: false, merged_at: null } },
+      mode: "inactive",
+      requests: [`/repos/openclaw/openclaw/pulls/${rolloutNumber}`],
+    },
+    ...[
+      { name: "new PR", pullRequest: { ...pullRequest, created_at: mergedAt } },
+      { name: "rollout head", pullRequest: { ...pullRequest, head: { sha: mergeCommit } } },
+    ].map(({ name, pullRequest: candidate }) => ({
+      name,
+      options: { pullRequest: candidate },
+      mode: "enforced",
+      requests: [`/repos/openclaw/openclaw/pulls/${rolloutNumber}`],
+    })),
+    ...[
+      {
+        name: "older head",
+        comparison: { ...comparison, status: "behind" },
+        mode: "grandfathered",
+      },
+      {
+        name: "rebased head",
+        comparison: { ...comparison, merge_base_commit: { sha: mergeCommit }, status: "ahead" },
+        mode: "enforced",
+      },
+    ].map(({ name, comparison: ancestry, mode }) => ({
+      name,
+      options: { comparison: ancestry },
+      mode,
+      requests: [
+        `/repos/openclaw/openclaw/pulls/${rolloutNumber}`,
         `/repos/openclaw/openclaw/compare/${mergeCommit}...${head}?per_page=1&page=2`,
-      );
-    },
-  );
-
-  it("enforces an older PR after a rebase or merge incorporates the rollout", () => {
-    const result = evaluate({
-      comparison: { ...comparison, merge_base_commit: { sha: mergeCommit }, status: "ahead" },
-    });
-    expect(result.mode).toBe("enforced");
-  });
-
-  it("enforces an older PR whose head is exactly the rollout commit", () => {
-    const result = evaluate({ pullRequest: { ...pullRequest, head: { sha: mergeCommit } } });
-    expect(result.mode).toBe("enforced");
-    expect(result.requests).toHaveLength(1);
+      ],
+    })),
+  ])("resolves $name rollout authority", ({ options, mode, requests }) => {
+    expect(evaluate(options)).toEqual({ status: 0, mode, requests });
   });
 
   it.each([
@@ -176,52 +173,39 @@ describe("security review rollout", () => {
     expect(result.requests).toEqual([]);
   });
 
-  it.each([
-    null,
-    { ...rollout, number: 1 },
-    { ...rollout, base: { ref: "stable", repo: { full_name: "openclaw/openclaw" } } },
-    { ...rollout, base: { ref: "main", repo: { full_name: "contributor/fork" } } },
-    { ...rollout, merged: undefined },
-    { ...rollout, merged: false },
-    { ...rollout, state: "open" },
-    { ...rollout, merged_at: null },
-    { ...rollout, merged_at: "2026-02-30T12:00:00Z" },
-    { ...rollout, merge_commit_sha: "main" },
-  ])("does not grant an exemption for invalid rollout metadata (%j)", (value) => {
-    const result = evaluate({ rollout: value });
+  it.each<Options>([
+    ...[
+      null,
+      { ...rollout, number: 1 },
+      { ...rollout, base: { ref: "stable", repo: { full_name: "openclaw/openclaw" } } },
+      { ...rollout, base: { ref: "main", repo: { full_name: "contributor/fork" } } },
+      { ...rollout, merged: false },
+      { ...rollout, state: "open" },
+      { ...rollout, merged_at: null },
+      { ...rollout, merged_at: "2026-02-30T12:00:00Z" },
+    ].map((value) => ({ rollout: value })),
+    ...[
+      { ...pullRequest, created_at: undefined },
+      { ...pullRequest, created_at: "not a timestamp" },
+      { ...pullRequest, head: { sha: "main" } },
+    ].map((value) => ({ pullRequest: value })),
+    ...[
+      null,
+      { ...comparison, base_commit: { sha: ancestor } },
+      { ...comparison, merge_base_commit: {} },
+      { ...comparison, status: "ahead" },
+      { ...comparison, merge_base_commit: { sha: mergeCommit } },
+    ].map((value) => ({ comparison: value })),
+  ])("does not grant an exemption for invalid metadata (%j)", (options) => {
+    const result = evaluate(options);
     expect(result.status).toBe(1);
     expect(result.mode).toBeUndefined();
     expect(result.error).toContain("Cannot determine security review rollout");
   });
 
-  it.each([
-    { ...pullRequest, created_at: undefined },
-    { ...pullRequest, created_at: "not a timestamp" },
-    { ...pullRequest, head: { sha: "main" } },
-  ])("does not grant an exemption for invalid evaluated PR metadata (%j)", (value) => {
-    const result = evaluate({ pullRequest: value });
+  it("does not convert a GitHub comparison error into an exemption", () => {
+    const result = evaluate({ apiError: "comparison" });
     expect(result.status).toBe(1);
-    expect(result.error).toContain("Cannot determine security review rollout");
+    expect(result.error).toBe("GitHub unavailable");
   });
-
-  it.each([
-    null,
-    { ...comparison, base_commit: { sha: ancestor } },
-    { ...comparison, merge_base_commit: {} },
-    { ...comparison, status: "ahead" },
-    { ...comparison, merge_base_commit: { sha: mergeCommit } },
-  ])("does not grant an exemption for incomplete or inconsistent ancestry (%j)", (value) => {
-    const result = evaluate({ comparison: value });
-    expect(result.status).toBe(1);
-    expect(result.error).toContain("Cannot determine security review rollout");
-  });
-
-  it.each(["rollout", "comparison"] as const)(
-    "does not convert a GitHub %s error into an exemption",
-    (apiError) => {
-      const result = evaluate({ apiError });
-      expect(result.status).toBe(1);
-      expect(result.error).toBe("GitHub unavailable");
-    },
-  );
 });

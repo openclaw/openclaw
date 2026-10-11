@@ -58,7 +58,7 @@ suite.define(() => {
       ["chat.metadata", "chat.startup", "projects.list", "sessions.create", "sessions.dispatch"],
     );
     try {
-      const sidebarCreate = page.locator(".sidebar-brand__new-thread");
+      const sidebarCreate = page.locator(".sidebar-session-toolbar .sidebar-new-session");
       const submit = page.getByRole("button", { name: "Start session" });
       const incognito = page.getByRole("switch", { name: "Incognito" });
 
@@ -88,7 +88,9 @@ suite.define(() => {
       const incognito = page.getByRole("switch", { name: "Incognito" });
       const effort = page.locator('[data-chat-thinking-select="true"]');
 
-      await expect.poll(() => page.locator(".sidebar-brand__new-thread").isEnabled()).toBe(true);
+      await expect
+        .poll(() => page.locator(".sidebar-session-toolbar .sidebar-new-session").isEnabled())
+        .toBe(true);
       await expect.poll(() => submit.isEnabled()).toBe(true);
       await expect.poll(() => incognito.isDisabled()).toBe(true);
       await page.locator("#new-session-where-trigger").click();
@@ -99,12 +101,14 @@ suite.define(() => {
       expect(await where.locator('[data-action="manage-cloud-workers"]').count()).toBe(0);
       await page.keyboard.press("Escape");
       await effort.click();
-      const fastMode = page.locator("[data-chat-speed-toggle]");
+      const fastMode = page.locator('[data-chat-speed-option="on"]');
       await expect.poll(() => fastMode.isEnabled()).toBe(true);
-      await expect.poll(() => fastMode.getAttribute("data-chat-speed-toggle")).toBe("on");
+      await expect.poll(() => fastMode.getAttribute("role")).toBe("radio");
       await expect.poll(() => fastMode.getAttribute("aria-checked")).toBe("false");
       await fastMode.click();
-      await expect.poll(() => fastMode.getAttribute("data-chat-speed-toggle")).toBe("off");
+      await expect
+        .poll(() => page.locator('[data-chat-speed-option="off"]').getAttribute("aria-checked"))
+        .toBe("false");
       await expect.poll(() => fastMode.getAttribute("aria-checked")).toBe("true");
       await submit.click();
 
@@ -494,7 +498,9 @@ suite.define(() => {
       ["chat.metadata", "chat.startup"],
     );
     try {
-      await expect.poll(() => page.locator(".sidebar-brand__new-thread").isDisabled()).toBe(true);
+      await expect
+        .poll(() => page.locator(".sidebar-session-toolbar .sidebar-new-session").isDisabled())
+        .toBe(true);
       const submit = page.getByRole("button", { name: "Start session" });
       await expect.poll(() => submit.isDisabled()).toBe(true);
       await submit.click({ force: true });

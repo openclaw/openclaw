@@ -22,7 +22,7 @@ const suite = createControlUiE2eSuite({
   unavailableMessage: (executablePath) => `Playwright Chromium is unavailable at ${executablePath}`,
 });
 
-const STORAGE_KEY = "openclaw:control-ui:community-invite";
+const STORAGE_KEY = "openclaw:control-ui:community-invite:v2";
 
 async function traceInviteMounts(page: Page) {
   await page.addInitScript(() => {
@@ -149,7 +149,7 @@ suite.define(() => {
     const artworkRequest = new Promise<void>((resolve) => {
       artworkRequested = resolve;
     });
-    await page.route("**/community-art/discord-invite.webp*", async (route) => {
+    await page.route("**/community-art/community-invite-*.webp*", async (route) => {
       artworkRequested();
       await artworkReady;
       await route.continue();
@@ -335,6 +335,12 @@ suite.define(() => {
               }
             }
             await card.waitFor({ state: "visible" });
+            const targetHeights = await card
+              .locator(".invite__cta")
+              .evaluateAll((links) => links.map((link) => link.getBoundingClientRect().height));
+            for (const height of targetHeights) {
+              expect(height).toBeGreaterThanOrEqual(interaction === "touch" ? 44 : 40);
+            }
             if (interaction === "touch") {
               await row.locator("[data-sidebar-session-menu]").tap();
             } else {
@@ -446,10 +452,16 @@ suite.define(() => {
     }
   });
 
-  it("shows immediately, survives Join, and stays dismissed across gateway connections on one origin", async () => {
+  it("renews the old invitation once and preserves new dismissals across gateway connections", async () => {
     const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     await installMockGateway(page, { communityInviteDismissed: false });
+    await page.addInitScript(() => {
+      localStorage.setItem(
+        "openclaw:control-ui:community-invite",
+        JSON.stringify({ dismissedAtMs: 1_760_000_001_000 }),
+      );
+    });
 
     try {
       await page.goto(`${suite.server.baseUrl}chat/main`);
@@ -458,7 +470,10 @@ suite.define(() => {
 
       expect(await page.evaluate((key) => localStorage.getItem(key), STORAGE_KEY)).toBeNull();
 
-      const cta = page.getByRole("link", { name: "Join us on Discord", exact: true });
+      const cta = page.getByRole("link", {
+        name: "Join the OpenClaw community on Discord",
+        exact: true,
+      });
       expect(await cta.getAttribute("href")).toBe("https://discord.gg/clawd");
       expect(await cta.getAttribute("target")).toBe("_blank");
       expect((await cta.getAttribute("rel"))?.split(/\s+/u)).toEqual(

@@ -1,6 +1,4 @@
-// Table row helpers for status report sections.
-// These functions keep terminal styling decisions out of the scan/data layer.
-
+import type { buildChannelsTable } from "./channels.js";
 import { formatTimeAgo } from "./format.js";
 
 type AgentStatusLike = {
@@ -16,12 +14,6 @@ type AgentStatusLike = {
   }>;
 };
 
-type ChannelDetailLike = {
-  title: string;
-  columns: string[];
-  rows: Array<Record<string, string>>;
-};
-
 export const statusOverviewTableColumns = [
   { key: "Item", header: "Item", minWidth: 10 },
   { key: "Value", header: "Value", flex: true, minWidth: 24 },
@@ -35,7 +27,6 @@ export const statusAgentsTableColumns = [
   { key: "Store", header: "Store", flex: true, minWidth: 34 },
 ] as const;
 
-/** Formats agent status rows for the status report table. */
 export function buildStatusAgentTableRows(params: {
   agentStatus: AgentStatusLike;
   ok: (text: string) => string;
@@ -62,9 +53,8 @@ export function buildStatusAgentTableRows(params: {
   }));
 }
 
-/** Converts per-channel account detail rows into renderable table sections. */
 export function buildStatusChannelDetailSections(params: {
-  details: ChannelDetailLike[];
+  details: Awaited<ReturnType<typeof buildChannelsTable>>["details"];
   ok: (text: string) => string;
   warn: (text: string) => string;
 }) {

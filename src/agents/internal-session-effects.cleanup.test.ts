@@ -12,16 +12,20 @@ const { state, remove, loadEntry } = vi.hoisted(() => {
   return {
     state: storageState,
     remove: vi.fn<(params: LifecycleMutation) => Promise<void>>(),
-    loadEntry: vi.fn<() => { entry: InternalSessionEntry } | undefined>(),
+    loadEntry: vi.fn<() => Promise<InternalSessionEntry | undefined>>(),
   };
 });
 
+// mock-isolation: Control lifecycle mutations so ownership can change while cleanup is admitted.
 vi.mock("../config/sessions/session-accessor.js", () => ({
   applySessionEntryLifecycleMutation: remove,
-  loadExactSessionEntry: loadEntry,
   forkSessionFromParentTranscript: vi.fn(),
-  replaceTranscriptEvents: vi.fn(),
   upsertSessionEntryCore: vi.fn(),
+}));
+
+// mock-isolation: Read the controlled lifecycle state without opening a separate database worker.
+vi.mock("../config/sessions/session-entry-read-runtime.js", () => ({
+  readSessionEntryReadOnlyInWorker: loadEntry,
 }));
 
 const target = {
@@ -46,7 +50,7 @@ beforeEach(() => {
   state.beforeRemoval = undefined;
   loadEntry
     .mockReset()
-    .mockImplementation(() => (state.entry ? { entry: structuredClone(state.entry) } : undefined));
+    .mockImplementation(async () => (state.entry ? structuredClone(state.entry) : undefined));
   remove.mockReset().mockImplementation(async ({ removals }) => {
     await state.beforeRemoval?.();
     for (const removal of removals ?? []) {

@@ -17,15 +17,8 @@ import {
 } from "../../hooks/message-hook-mappers.js";
 import { hasOutboundReplyContent } from "../../plugin-sdk/reply-payload.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
-import { formatErrorMessage } from "../errors.js";
 import { normalizeEmptyPayloadForDelivery } from "./deliver-payload.js";
-import {
-  OutboundDeliveryError,
-  type OutboundDeliveryFailureStage,
-  type OutboundDeliveryResult,
-  type OutboundPayloadDeliveryOutcome,
-  type OutboundPayloadDeliverySuppressionReason,
-} from "./deliver-types.js";
+import type { OutboundPayloadDeliveryOutcome } from "./deliver-types.js";
 import type { QueuedReplyPayloadSendingHook } from "./delivery-queue-storage.js";
 import {
   summarizeOutboundPayloadForTransport,
@@ -37,6 +30,13 @@ export type ReplyPayloadSuppressedObserver = (
   info: Parameters<ReplyDispatchBeforeDeliver>[1],
   reason: "cancelled_by_reply_payload_sending_hook" | "empty_after_reply_payload_sending_hook",
 ) => void | Promise<void>;
+
+type PayloadSendingHookResult = {
+  cancelled: boolean;
+  changed: boolean;
+  payload: ReplyPayload;
+  hookEffect?: Extract<OutboundPayloadDeliveryOutcome, { status: "suppressed" }>["hookEffect"];
+};
 
 export function buildInboundReplyPayloadSendingBeforeDeliver(
   ctx: MsgContext | FinalizedMsgContext,
@@ -144,19 +144,11 @@ export async function applyMessageSendingHook(params: {
   replyToId?: string | null;
   threadId?: string | number | null;
   sessionKey?: string;
-}): Promise<{
-  cancelled: boolean;
-  cancelReason?: string;
-  hookMetadata?: Record<string, unknown>;
-  contentRewritten: boolean;
-  payload: ReplyPayload;
-  payloadSummary: NormalizedOutboundPayload;
-}> {
+}): Promise<PayloadSendingHookResult> {
   const unchanged = () => ({
     cancelled: false,
-    contentRewritten: false,
+    changed: false,
     payload: params.payload,
-    payloadSummary: params.payloadSummary,
   });
   if (!params.enabled) {
     return unchanged();
@@ -184,13 +176,17 @@ export async function applyMessageSendingHook(params: {
       },
     );
     if (sendingResult?.cancel) {
+      const { cancelReason, metadata } = sendingResult;
       return {
+        ...unchanged(),
         cancelled: true,
-        ...(sendingResult.cancelReason ? { cancelReason: sendingResult.cancelReason } : {}),
-        ...(sendingResult.metadata ? { hookMetadata: sendingResult.metadata } : {}),
-        contentRewritten: false,
-        payload: params.payload,
-        payloadSummary: params.payloadSummary,
+        hookEffect:
+          cancelReason || metadata
+            ? {
+                ...(cancelReason ? { cancelReason } : {}),
+                ...(metadata ? { metadata } : {}),
+              }
+            : undefined,
       };
     }
     if (sendingResult?.content == null) {
@@ -203,12 +199,8 @@ export async function applyMessageSendingHook(params: {
     });
     return {
       cancelled: false,
-      contentRewritten: true,
+      changed: true,
       payload,
-      payloadSummary: {
-        ...params.payloadSummary,
-        [spokenOnly ? "hookContent" : "text"]: sendingResult.content,
-      },
     };
   } catch {
     // Don't block delivery on hook failure.
@@ -222,11 +214,7 @@ export async function applyReplyPayloadSendingHook(
     payload: ReplyPayload;
   },
   hookRunner = getGlobalHookRunner(),
-): Promise<{
-  cancelled: boolean;
-  payload: ReplyPayload;
-  changed: boolean;
-}> {
+): Promise<PayloadSendingHookResult> {
   if (!params.hook) {
     return { cancelled: false, payload: params.payload, changed: false };
   }
@@ -241,47 +229,9 @@ export async function applyReplyPayloadSendingHook(
     },
     hookRunner,
   );
-  if (!nextPayload) {
-    return { cancelled: true, payload: params.payload, changed: false };
-  }
   return {
-    cancelled: false,
-    payload: nextPayload,
-    changed: nextPayload !== params.payload,
+    cancelled: !nextPayload,
+    payload: nextPayload ?? params.payload,
+    changed: nextPayload !== null && nextPayload !== params.payload,
   };
 }
-
-export function toOutboundDeliveryError(params: {
-  error: unknown;
-  results: readonly OutboundDeliveryResult[];
-  payloadOutcomes: readonly OutboundPayloadDeliveryOutcome[];
-  stage: OutboundDeliveryFailureStage;
-}): OutboundDeliveryError {
-  if (params.error instanceof OutboundDeliveryError) {
-    return params.error;
-  }
-  return new OutboundDeliveryError(formatErrorMessage(params.error), {
-    cause: params.error,
-    results: params.results,
-    payloadOutcomes: params.payloadOutcomes,
-    stage: params.stage,
-  });
-}
-
-export function suppressedPayloadOutcome(params: {
-  index: number;
-  reason: OutboundPayloadDeliverySuppressionReason;
-  hookEffect?: {
-    cancelReason?: string;
-    metadata?: Record<string, unknown>;
-  };
-}): OutboundPayloadDeliveryOutcome {
-  return {
-    index: params.index,
-    status: "suppressed",
-    reason: params.reason,
-    ...(params.hookEffect ? { hookEffect: params.hookEffect } : {}),
-  };
-}
-
-/** Adds directive-derived media to the queue copy before spool custody. */

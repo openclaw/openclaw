@@ -37,10 +37,13 @@ interface BrowserPanelDownloadHost {
 
 /** Saves the displayed document; address-bar edits never select the download. */
 export class BrowserPanelDownload {
-  pending = false;
   private request: AbortController | null = null;
 
   constructor(private readonly panel: BrowserPanelDownloadHost) {}
+
+  get pending(): boolean {
+    return this.request !== null;
+  }
 
   private get url(): string | null {
     const panel = this.panel;
@@ -55,11 +58,8 @@ export class BrowserPanelDownload {
     if (!url) {
       return null;
     }
-    try {
-      return ["http:", "https:"].includes(new URL(url).protocol) ? url : null;
-    } catch {
-      return null;
-    }
+    const protocol = URL.parse(url)?.protocol;
+    return protocol === "http:" || protocol === "https:" ? url : null;
   }
 
   get available(): boolean {
@@ -75,7 +75,6 @@ export class BrowserPanelDownload {
   cancel(): void {
     this.request?.abort();
     this.request = null;
-    this.pending = false;
   }
 
   async save(): Promise<void> {
@@ -89,7 +88,6 @@ export class BrowserPanelDownload {
     const client = nativeTab ? null : panel.operations.captureClient();
     const request = new AbortController();
     this.request = request;
-    this.pending = true;
     panel.setState("errorText", null);
     panel.setState("noticeText", null);
     panel.host.requestUpdate();
@@ -147,7 +145,6 @@ export class BrowserPanelDownload {
     } finally {
       if (this.request === request) {
         this.request = null;
-        this.pending = false;
         panel.host.requestUpdate();
       }
     }

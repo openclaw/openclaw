@@ -102,6 +102,7 @@ Options:
 - `--node-id <id>`: Override the client instance ID stored in shared SQLite state (does not reset pairing)
 - `--display-name <name>`: Override the node display name
 - `--session-host`: Host worker sessions for this foreground process without changing the saved worker-hosting preference
+- `--auth-from-env`: Explicitly use environment Gateway credentials instead of the saved paired credential
 - `--commands <ids>`: Persist an exact comma-separated command allowlist (repeatable); advertise only available matches and their required capabilities. Disables computer use, skills, plugin tools, MCP servers, and worker hosting. Omitting the flag preserves the saved list.
 - `--all-commands`: Advertise the full default command surface and forget any saved `--commands` allowlist. Cannot be combined with `--commands`.
 - `--share-installed-apps`: On macOS, advertise installed applications through `device.apps`
@@ -129,15 +130,37 @@ An expired setup code cannot enroll a new state directory or replace a revoked
 device token; provision a fresh code when needed. Explicit `--pair` still rejects
 expired setup codes.
 
-`openclaw node run` and `openclaw node install` resolve gateway auth from config/env (no `--token`/`--password` flags on node commands):
+`openclaw node run` and `openclaw node install` use the paired device credential
+when reconnecting to the saved Gateway endpoint. Ambient credentials from
+`OPENCLAW_GATEWAY_TOKEN` / `OPENCLAW_GATEWAY_PASSWORD`, config `env.vars`,
+the state-directory `.env`, or a co-located Gateway's `gateway.auth.*` do not
+override that pairing. A paired service install does not save those ambient
+Gateway credentials in its service environment.
+
+For an intentional shared-token or password connection, use `--auth-from-env`:
+
+```bash
+openclaw node run --auth-from-env
+openclaw node install --auth-from-env --force
+```
+
+Set `OPENCLAW_GATEWAY_TOKEN` or `OPENCLAW_GATEWAY_PASSWORD` for the target
+Gateway before running these commands. The install command saves the selected
+environment credentials and the explicit flag for restarts. Reapply the flag
+when reinstalling if you want to retain this override. When this replaces an
+available paired credential, startup names the selected environment variable
+in a warning without printing its value.
+
+Without an existing pairing for the selected endpoint, normal config/env
+resolution remains available (there are no `--token`/`--password` flags):
 
 - `OPENCLAW_GATEWAY_TOKEN` / `OPENCLAW_GATEWAY_PASSWORD` are checked first.
-- When reconnecting to the saved Gateway endpoint with a paired node credential, use that credential and skip config auth. An explicit environment override supplies only its own credentials.
 - Otherwise, local config fallback applies: `gateway.auth.token` / `gateway.auth.password`.
 - In local mode, node host intentionally does not inherit `gateway.remote.token` / `gateway.remote.password`.
-- If config fallback selects an unresolved `gateway.auth.token` / `gateway.auth.password` SecretRef, node auth resolution fails closed (no remote fallback masking).
+- If config fallback selects an unresolved `gateway.auth.token` / `gateway.auth.password` SecretRef, node authentication stops without falling back to remote credentials.
 - In `gateway.mode=remote`, remote client fields (`gateway.remote.token` / `gateway.remote.password`) are also eligible per remote precedence rules.
 - Node host auth resolution only honors `OPENCLAW_GATEWAY_*` env vars.
+- A CWD `.env` cannot supply `OPENCLAW_*` variables; those are blocked by workspace dotenv policy.
 
 The saved endpoint includes its host, port, TLS mode, and context path. Changing
 any of these restores normal config/env auth resolution. A node can therefore
@@ -147,7 +170,7 @@ paired Gateway, without sending the local Gateway's password on restart.
 For a Gateway behind Cloudflare Access, set `CF_ACCESS_CLIENT_ID` and
 `CF_ACCESS_CLIENT_SECRET` together before `openclaw connect`, `openclaw node
 run`, or `openclaw node install`. The node stores env SecretRefs under its
-canonical `gateway.cloudflareAccess.clientId` and `clientSecret` connection
+current `gateway.cloudflareAccess.clientId` and `clientSecret` connection
 keys. Installed services keep the values in the managed service environment
 file, not in service arguments or inline supervisor definitions. Access
 credentials require HTTPS/WSS; plaintext HTTP/WS fails before SecretRef
@@ -157,7 +180,7 @@ resolution while credential-free plaintext node routes remain unchanged. See
 For a node connecting to a plaintext `ws://` Gateway, loopback, private IP
 literals, `.local`, and Tailnet `*.ts.net` hosts are accepted. For other
 trusted private-DNS names, set `OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1`; without
-it, node startup fails closed and asks you to use `wss://`, an SSH tunnel, or
+it, node startup stops and asks you to use `wss://`, an SSH tunnel, or
 Tailscale. This is a process-environment opt-in, not an `openclaw.json` config
 key.
 `openclaw node install` persists it into the supervised node service when it is
@@ -188,6 +211,7 @@ Options:
 - `--no-share-installed-apps`: Disable installed application sharing
 - `--runtime <node|bun>`: Service runtime (default: `node`). Bun 1.4+ with WAL-reset-safe `node:sqlite` is an explicit opt-in; Node remains recommended.
 - `--runtime-path <path>`: Pin an absolute Node/Bun executable that passes runtime capability checks.
+- `--auth-from-env`: Persist environment Gateway credentials and select them explicitly on service restarts
 - `--force`: Reinstall/overwrite if already installed
 
 The explicit pin is saved in machine-state metadata and retained
@@ -200,10 +224,10 @@ Set `OPENCLAW_WRAPPER` to an executable wrapper file to use it instead of the
 selected runtime and CLI entrypoint. The wrapper receives `node run` and the
 connection arguments; it must launch OpenClaw and forward those arguments.
 
-If installation reports a runtime probe failure, check the executable and
+If installation reports a runtime check failure, check the executable and
 working directory named in the error. For example, when switching users with
 `runuser`, first change to a directory that the target user can read. A failed
-probe does not mean that the installed Node version is unsupported; upgrade
+check does not mean that the installed Node version is unsupported; upgrade
 advice is reserved for missing or unsupported runtimes.
 
 > **Linux (systemd user service):** Run `sudo loginctl enable-linger <user>` after
@@ -236,8 +260,9 @@ an absent service remains a successful no-op.
 The node host retries Gateway restart and network closes in-process. If the
 Gateway reports a terminal token/password/bootstrap auth pause, the node host
 logs the close detail and exits non-zero so launchd/systemd/Task Scheduler can
-restart it with fresh config and credentials. Pairing-required pauses stay in
-the foreground flow so the pending request can be approved.
+restart it with fresh config and credentials. While device pairing is pending,
+the node keeps reconnecting with exponential backoff capped at 30 seconds and
+connects automatically after approval.
 
 ## Automatic updates
 
@@ -280,17 +305,20 @@ openclaw devices list
 openclaw devices approve <deviceRequestId>
 ```
 
-Device approval admits the connection, not its command surface. Restart an
-installed node with `openclaw node restart`, or stop and rerun the foreground
-`openclaw node run` command. A node paused on `PAIRING_REQUIRED` does not resume
-automatically after manual approval. This reconnect creates a separate
-command-surface request on the Gateway:
+Device approval admits the connection; the command surface needs separate
+approval. The node keeps reconnecting while device approval is pending, with
+exponential backoff capped at 30 seconds. After approval, its next reconnect
+creates a separate command-surface request on the Gateway:
 
 ```bash
 openclaw nodes pending
 openclaw nodes approve <nodeRequestId>
 openclaw nodes describe --node <idOrNameOrIp>
 ```
+
+If an older client already reports that reconnect is paused, restart the
+installed node with `openclaw node restart`, or stop and rerun its foreground
+`openclaw node run` command once.
 
 The device and node request IDs are distinct. An initial unapproved surface has
 no effective commands. SSH-verified and bootstrap enrollment can approve the
@@ -366,9 +394,9 @@ revoke and re-pair a node:
    attempt can request pairing.
 3. On the Gateway, run `openclaw devices list`, then
    `openclaw devices approve <deviceRequestId>`.
-4. Restart or rerun the node again. A client paused for pairing does not resume
-   automatically after approval; this reconnect creates the separate
-   command-surface request.
+4. Wait for the node's automatic reconnect, which creates the separate
+   command-surface request. If an older client already paused for pairing,
+   restart or rerun it once.
 5. On the Gateway, run `openclaw nodes pending`, then
    `openclaw nodes approve <nodeRequestId>`.
 
@@ -380,11 +408,11 @@ Older OpenClaw releases stored node-host state in `node.json`, the signed
 identity in `identity/device.json`, and paired auth in
 `identity/device-auth.json`. Stop the node host and run
 `openclaw doctor --fix` once; Doctor validates the retired inputs, imports and
-verifies their canonical SQLite rows, then removes the old files. Node startup,
+verifies their stored SQLite rows, then removes the old files. Node startup,
 including the macOS app's worker, leaves these inputs for Doctor. Pending device
 auth or exec approvals stop startup before capabilities are prepared. A missing
-canonical identity plus retired identity data or an interrupted import claim
-also stops startup before a new key can be created. An existing valid canonical
+stored identity plus retired identity data or an interrupted import claim
+also stops startup before a new key can be created. An existing valid stored
 identity remains authoritative when an older release recreates `identity/device.json`;
 Doctor owns that stale file's cleanup. Keep `state/openclaw.sqlite` private;
 it contains the device keypair and auth tokens.
@@ -400,7 +428,7 @@ it contains the device keypair and auth tokens.
   replace with `openclaw approvals set --node <id|name|ip> --file <path>`; see the
   [Approvals CLI](/cli/approvals).
 
-For approved async node exec, OpenClaw prepares a canonical `systemRunPlan`
+For approved async node exec, OpenClaw prepares a `systemRunPlan`
 before prompting. The later approved `system.run` forward reuses that stored
 plan, so edits to command/cwd/session fields after the approval request was
 created are rejected instead of changing what the node executes.

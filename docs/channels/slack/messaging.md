@@ -67,7 +67,7 @@ reply retains the settings it started with. The same behavior applies to account
 - `partial`: replace preview text with the latest partial output. Set this to restore the pre-2026.8.1 default, before `progress` became the default ([#122552](https://github.com/openclaw/openclaw/pull/122552)).
 - `block`: append chunked preview updates.
 - `progress` (default): show structured progress in a reply thread using a native task card when Slack supports it, with a Block Kit session-card fallback. Outside reply threads, leave only the final answer by default.
-- `streaming.progress.toolProgress`: `progress` mode is quiet by default (`false`). Set `true` to add one task row (native card) or activity line (Block Kit card) per tool call, plus tool/file/time counters on the Block Kit card. `streaming.preview.toolProgress` controls tool previews in `partial` and `block` modes (default: `true`).
+- `streaming.progress.toolProgress`: `progress` mode is quiet by default (`false`). Set `true` to add one task row per tool call on the native card, or tool activity, the plan checklist, and tool/file/time totals on the Block Kit card. Finished Block Kit cards retain only file diff totals. `streaming.preview.toolProgress` controls tool previews in `partial` and `block` modes (default: `true`).
 - `streaming.preview.commandText` / `streaming.progress.commandText`: `status` keeps compact tool-progress lines while hiding raw command/exec text (default); set `raw` to opt into command text.
 
 Show the tool log while hiding raw command/exec text:
@@ -96,7 +96,9 @@ For threaded turns, including Agent View, Assistant View, and Slack-managed thre
 
 Without an authored or explicit headline, native summary rows finish as **Completed** or **Failed**.
 
-Set `channels.slack.streaming.progress.nativeTaskCards` to `false` to fall back to the Block Kit session card, which posts a separate message showing title, narration, plan checklist, and authored commentary, and finalizes to success or error. Without an authored or explicit title, finished cards show **Done** or **Failed**. With `progress.toolProgress: true` it also lists recent tool activity, tool/file totals, and elapsed time.
+Set `channels.slack.streaming.progress.nativeTaskCards` to `false` to fall back to the Block Kit session card. By default, this separate message shows commentary and text, including italic narration and reasoning, plus actionable approval requests. Only an explicitly configured progress `label` appears as a plain title. Finished cards keep the **Open in OpenClaw** or **Open work session** link when available. The card adds no emoji, bold text, or status headings in either mode, except a plain Failed line when the turn fails. A card is posted only once it has something to show, so a turn with only tool activity and no commentary shows no card by default. A working or successful card whose last visible row goes away, such as a resolved approval, is deleted instead of keeping stale rows. Failed turns keep their card marked Failed, even without an error reply; failed turns with no reply post a plain Failed card even if none appeared while working.
+
+Set `progress.toolProgress: true` for the detailed Block Kit card: it adds recent tool activity, a plan checklist with a completed-step count, intermediate error and recovery rows, and tool/file/time totals while working. Finished detailed cards retain only file diff totals in their footer.
 
 Set `channels.slack.streaming.progress.style` to `"compact"` for one plain-text progress draft instead of either card surface. Explicitly setting `progress.toolProgress: false` also selects compact style when `style` is unset. Set `style: "card"` to keep a card with `toolProgress: false`, or to select a Block Kit card for top-level turns. Commentary appears as italic text, and authored reasoning and approval requests remain visible. Terminal task errors still use normal error delivery. The final response is posted as a new message, then the temporary preview is deleted after Slack confirms delivery. Older previews displaced by human replies are cleaned up with it; durable messages and videos stay in the conversation.
 
@@ -123,6 +125,8 @@ For streamed preambles, Slack waits for the first complete preamble before creat
 Compact progress always uses normal final delivery, including for media and errors. Other draft modes use normal delivery when the reply cannot safely replace the draft, including oversized text, split block payloads, custom outbound identity, or an edit failure.
 
 Both surfaces link the session with **Open in OpenClaw**, but only when that link can work: `gateway.publicOrigin` must be set (the externally reachable Gateway origin) and the Control UI must not be disabled via `gateway.controlUi.enabled: false`. Installations that leave `publicOrigin` unset — where there is no way to reach OpenClaw from Slack — get no link rather than a dead one. If the Control UI is served below a path prefix, also set `gateway.controlUi.basePath`.
+
+When a turn spawns a visible work session, the finished card instead links to that child with **Open work session**. For multiple visible work sessions, it shows up to five links in acceptance order, using their labels or numbered **Open work session** links; hidden subagents do not replace the conversation link.
 
 - A reply thread must be available for native text streaming and Slack session status to appear. Thread selection still follows `replyToMode`.
 - Channel, group-chat, and top-level DM roots use draft previews when explicitly selected. Default `progress` turns without a reply thread use only the temporary typing reaction.
@@ -171,7 +175,7 @@ Legacy keys:
 - `channels.slack.streamMode` (`replace | status_final | append`) is a legacy alias for `channels.slack.streaming.mode`.
 - boolean `channels.slack.streaming` is a legacy alias for `channels.slack.streaming.mode` and `channels.slack.streaming.nativeTransport`.
 - top-level `channels.slack.chunkMode` and `channels.slack.nativeStreaming` are legacy aliases for `channels.slack.streaming.chunkMode` and `channels.slack.streaming.nativeTransport`.
-- Legacy aliases are not read at runtime; run `openclaw doctor --fix` to rewrite persisted Slack streaming config to the canonical keys.
+- Legacy aliases are not read at runtime; run `openclaw doctor --fix` to rewrite persisted Slack streaming config to the current keys.
 
 ## Typing reaction fallback
 

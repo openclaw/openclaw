@@ -497,9 +497,9 @@ cat input.txt >> "$HOME/count"
       await fs.readFile(path.join(preparedA.workspaceDir, "build/original-path"), "utf8"),
     ).toBe(preparedA.workspaceDir);
     expect(
-      (await fs.readdir(path.join(preparedA.homeDir, ".openclaw-worker", "manifests"))).filter(
-        (file) => file.endsWith(".json"),
-      ),
+      (await fs.readdir(path.join(preparedA.homeDir, ".openclaw-worker", "manifests")))
+        .filter((file) => file.endsWith(".json"))
+        .toSorted(),
     ).toEqual(
       [preparedA.sourceManifestRef, preparedA.preparedManifestRef]
         .map((ref) => `${ref.slice(7)}.json`)

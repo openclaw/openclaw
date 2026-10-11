@@ -1,12 +1,17 @@
 {
   "$schema": "../../node_modules/oxlint/configuration_schema.json",
   "plugins": [],
-  "jsPlugins": ["../../scripts/oxlint-boundary-guards.mjs"],
+  "jsPlugins": [
+    "../../scripts/oxlint-boundary-guards.mjs",
+    "../../scripts/oxlint-solid-migration.mjs"
+  ],
   "categories": { "correctness": "off" },
   "rules": {
+    "openclaw-boundaries/no-forced-process-exit": "error",
     "openclaw-boundaries/no-raw-window-open-call": "error",
     "openclaw-boundaries/no-register-http-handler-call": "error",
     "openclaw-boundaries/no-widen-then-assert": "error",
-    "openclaw-boundaries/no-chained-type-assertions": "error"
+    "openclaw-boundaries/no-chained-type-assertions": "error",
+    "openclaw-solid-migration/no-pending-conversion": "error"
   }
 }

@@ -208,7 +208,7 @@ describe("worker environment service provision replay", () => {
     const placement = await placements.startDispatch(REQUEST);
     const idempotencyKey = `session-dispatch:${REQUEST.sessionId}:${placement.generation}`;
     const intent = deriveEnvironmentIntent(idempotencyKey);
-    placements.transition({
+    await placements.transition({
       sessionId: placement.sessionId,
       from: "requested",
       to: "provisioning",
@@ -341,7 +341,8 @@ describe("worker environment service provision replay", () => {
     await Promise.all([recovery, overlappingEnvironmentReconcile, overlappingPlacementReconcile]);
     await uninstallReconcileGuard();
 
-    expect(placements.get(REQUEST.sessionId)).toMatchObject({
+    const activePlacement = placements.get(REQUEST.sessionId);
+    expect(activePlacement).toMatchObject({
       state: "active",
       environmentId: intent.environmentId,
       workerBundleHash: support.BUNDLE_HASH,
@@ -360,6 +361,10 @@ describe("worker environment service provision replay", () => {
     expect(nodeTunnelManager.start).toHaveBeenCalledOnce();
     expect(syncWorkspace).toHaveBeenCalledOnce();
     expect(onActivated).toHaveBeenCalledOnce();
+    expect(onActivated).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionId: REQUEST.sessionId }),
+      activePlacement,
+    );
     expect(destroy).not.toHaveBeenCalled();
   });
 

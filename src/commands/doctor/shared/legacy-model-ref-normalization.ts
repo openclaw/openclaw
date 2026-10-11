@@ -72,21 +72,6 @@ function applyRetiredModelTable(
   return Object.hasOwn(table, normalizedModel) ? (table[normalizedModel] ?? null) : null;
 }
 
-function hasRetiredVersionPrefix(normalized: string, prefix: string): boolean {
-  if (normalized === prefix) {
-    return true;
-  }
-  if (!normalized.startsWith(prefix)) {
-    return false;
-  }
-  const next = normalized[prefix.length];
-  return next === "-" || next === "." || next === ":" || next === "@";
-}
-
-function hasAnyRetiredVersionPrefix(normalized: string, prefixes: readonly string[]): boolean {
-  return prefixes.some((prefix) => hasRetiredVersionPrefix(normalized, prefix));
-}
-
 const RETIRED_OPUS_ALIASES = new Set("opus-4.5 opus-4.1 opus-4 opus-3".split(" "));
 const RETIRED_SONNET_ALIASES = new Set(
   "sonnet-4.5 sonnet-4.1 sonnet-4.0 sonnet-4 sonnet-3.7 sonnet-3.5 sonnet-3 haiku-3.5 haiku-3".split(
@@ -105,47 +90,15 @@ function upgradeOldClaudeToken(
   }
   const opusTarget = claudeTargetModelId("opus", separator, provider);
   const sonnetTarget = claudeTargetModelId("sonnet", separator, provider);
-  if (
-    normalized.startsWith("claude-opus-4-7") ||
-    normalized.startsWith("claude-opus-4.7") ||
-    normalized.startsWith("claude-opus-4-6") ||
-    normalized.startsWith("claude-opus-4.6") ||
-    normalized.startsWith("claude-sonnet-4-6") ||
-    normalized.startsWith("claude-sonnet-4.6")
-  ) {
+  if (/^claude-(?:opus-4[-.][67]|sonnet-4[-.]6|haiku-4[-.]5)/.test(normalized)) {
     return null;
   }
-  // claude-haiku-4-5 is a current production model and must not be migrated.
-  if (normalized.startsWith("claude-haiku-4-5") || normalized.startsWith("claude-haiku-4.5")) {
-    return null;
-  }
-  if (
-    normalized === "claude-opus-4" ||
-    hasAnyRetiredVersionPrefix(normalized, [
-      "claude-opus-4-5",
-      "claude-opus-4.5",
-      "claude-opus-4-1",
-      "claude-opus-4.1",
-      "claude-opus-4-0",
-      "claude-opus-4.0",
-    ]) ||
-    /^claude-opus-4-20\d{6}/.test(normalized)
-  ) {
-    return opusTarget;
-  }
-  if (
-    normalized === "claude-sonnet-4" ||
-    hasAnyRetiredVersionPrefix(normalized, [
-      "claude-sonnet-4-5",
-      "claude-sonnet-4.5",
-      "claude-sonnet-4-1",
-      "claude-sonnet-4.1",
-      "claude-sonnet-4-0",
-      "claude-sonnet-4.0",
-    ]) ||
-    /^claude-sonnet-4-20\d{6}/.test(normalized)
-  ) {
-    return sonnetTarget;
+  // A minor-version alias needs a suffix boundary; dated Claude 4 ids are prefixes.
+  const retiredClaude4 = /^claude-(opus|sonnet)-4(?:$|[-.][510](?:$|[-.:@])|-20\d{6})/.exec(
+    normalized,
+  );
+  if (retiredClaude4) {
+    return retiredClaude4[1] === "opus" ? opusTarget : sonnetTarget;
   }
   if (normalized.startsWith("claude-3") && normalized.includes("opus")) {
     return opusTarget;
@@ -157,9 +110,6 @@ function upgradeOldClaudeToken(
     return sonnetTarget;
   }
   if (normalized.startsWith("anthropic.claude-opus-")) {
-    if (provider === "amazon-bedrock" || provider === "amazon-bedrock-mantle") {
-      return null;
-    }
     if (
       normalized.startsWith("anthropic.claude-opus-4-7") ||
       normalized.startsWith("anthropic.claude-opus-4-6")
@@ -172,9 +122,6 @@ function upgradeOldClaudeToken(
     normalized.startsWith("anthropic.claude-sonnet-") ||
     normalized.startsWith("anthropic.claude-haiku-")
   ) {
-    if (provider === "amazon-bedrock" || provider === "amazon-bedrock-mantle") {
-      return null;
-    }
     if (normalized.startsWith("anthropic.claude-sonnet-4-6")) {
       return null;
     }

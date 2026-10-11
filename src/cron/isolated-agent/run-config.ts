@@ -24,7 +24,12 @@ export function resolveCronActiveRuntimeConfig(cfg: OpenClawConfig): OpenClawCon
   );
 }
 
-function extractCronAgentDefaultsOverride(agentConfigOverride?: ResolvedAgentConfig) {
+/** Selects the active runtime snapshot, then derives isolated cron agent defaults from it. */
+export function resolveCronAgentConfig(params: {
+  config: OpenClawConfig;
+  agentConfigOverride?: ResolvedAgentConfig;
+}) {
+  const runtimeConfig = resolveCronActiveRuntimeConfig(params.config);
   const {
     model: _agentModelOverride,
     sandbox: _agentSandboxOverride,
@@ -32,24 +37,11 @@ function extractCronAgentDefaultsOverride(agentConfigOverride?: ResolvedAgentCon
     models: _agentModelsOverride,
     params: _agentParamsOverride,
     ...agentOverrideRest
-  } = agentConfigOverride ?? {};
-  return {
-    overrideModel: resolveAgentModelConfigForRuntime(agentConfigOverride),
-    definedOverrides: Object.fromEntries(
-      Object.entries(agentOverrideRest).filter(([, value]) => value !== undefined),
-    ) as Partial<AgentDefaultsConfig>,
-  };
-}
-
-/** Derives isolated cron agent defaults from one immutable config snapshot. */
-export function resolveCronAgentConfigFromSnapshot(params: {
-  config: OpenClawConfig;
-  agentConfigOverride?: ResolvedAgentConfig;
-}) {
-  const runtimeConfig = params.config;
-  const { overrideModel, definedOverrides } = extractCronAgentDefaultsOverride(
-    params.agentConfigOverride,
-  );
+  } = params.agentConfigOverride ?? {};
+  const overrideModel = resolveAgentModelConfigForRuntime(params.agentConfigOverride);
+  const definedOverrides = Object.fromEntries(
+    Object.entries(agentOverrideRest).filter(([, value]) => value !== undefined),
+  ) as Partial<AgentDefaultsConfig>;
   // Agent-aware resolvers merge these scopes themselves. Flattening partial maps
   // erases inherited sandbox, memory, model-runtime and request-parameter settings.
   const agentDefaults: AgentDefaultsConfig = {
@@ -69,15 +61,4 @@ export function resolveCronAgentConfigFromSnapshot(params: {
       agents: Object.assign({}, runtimeConfig.agents, { defaults: agentDefaults }),
     } satisfies OpenClawConfig,
   };
-}
-
-/** Selects the active runtime snapshot before deriving isolated cron agent defaults. */
-export function resolveCronAgentConfig(params: {
-  config: OpenClawConfig;
-  agentConfigOverride?: ResolvedAgentConfig;
-}) {
-  return resolveCronAgentConfigFromSnapshot({
-    ...params,
-    config: resolveCronActiveRuntimeConfig(params.config),
-  });
 }

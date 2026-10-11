@@ -2,72 +2,61 @@ import { Type } from "typebox";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resetAgentRunRegistryForTest } from "../../infra/agent-run-registry.js";
 import {
-  createOperationalRunInstanceRef,
-  prepareAgentRunAdmission,
-  type PreparedAgentRunAdmission,
-} from "../admitted-run-context.js";
-import {
   createCronScheduledToolProjection,
   readCronScheduledToolProjection,
 } from "../exec-tool-target-pinning.js";
 import type { AnyAgentTool } from "../tools/common.js";
-import { createAgentHarnessHostCapabilities } from "./host-capability.js";
+import { createAdmittedHostCapabilityTestFixture } from "./host-capability.test-support.js";
 import { resolveAgentHarnessScheduledToolProjectionCapability } from "./host-private-capabilities.js";
 
-type HostAttempt = Parameters<typeof createAgentHarnessHostCapabilities>[0]["attempt"];
-
-const admissions: PreparedAgentRunAdmission[] = [];
-
-async function admittedAttempt(runId: string): Promise<HostAttempt> {
-  const admission = prepareAgentRunAdmission({
-    cfg: {},
-    facts: {
-      runId,
-      agentId: "main",
-      ingress: { kind: "system", boundary: "host-capability-test", state: "present" },
-    },
-    operationalRunInstance: createOperationalRunInstanceRef(runId),
-  });
-  admissions.push(admission);
-  return {
+const hosts: Array<Awaited<ReturnType<typeof createAdmittedHostCapabilityTestFixture>>> = [];
+async function createHost(runId: string) {
+  const host = await createAdmittedHostCapabilityTestFixture({
+    runId,
     agentId: "main",
     sessionId: "session-1",
     sessionKey: "agent:main:session-1",
-    runId,
     cwd: "/attempt/worktree",
     workspaceDir: "/workspace",
     currentChannelId: "chat-1",
     messageChannel: "telegram",
-    admittedRunContext: await admission.admit("plugin-harness", `harness-${runId}`),
-  };
+  });
+  hosts.push(host);
+  return host;
 }
-
 afterEach(() => {
-  for (const admission of admissions.splice(0)) {
-    admission.close();
+  for (const host of hosts.splice(0)) {
+    host.closeHost();
+    host.closeAdmission();
   }
   resetAgentRunRegistryForTest();
 });
 
 describe("agent harness scheduled tool projection", () => {
   it("issues scheduled shell projections only from this host-created tool surface", async () => {
-    const attempt = await admittedAttempt("run-scheduled-tool-projection");
-    const host = createAgentHarnessHostCapabilities({ attempt, pluginId: "codex" });
-    const sourceTools = host.capabilities.createToolSurface?.({}) ?? [];
+    const host = await createHost("run-scheduled-tool-projection");
+    expect(
+      resolveAgentHarnessScheduledToolProjectionCapability({
+        hostCapabilities: host.hostCapabilities,
+        ownerPluginId: "other-harness",
+      }),
+    ).toBeUndefined();
+    const sourceTools = (await host.hostCapabilities.createToolSurfaceAsync?.({})) ?? [];
     const execTool = sourceTools.find((tool) => tool.name === "exec");
     const createProjection = resolveAgentHarnessScheduledToolProjectionCapability({
-      hostCapabilities: host.capabilities,
+      hostCapabilities: host.hostCapabilities,
       ownerPluginId: "codex",
     });
     if (!execTool || !createProjection) {
       throw new Error("expected host-created exec projection test surface");
     }
-    const alias = createProjection(execTool, {
-      kind: "exec",
+    const projection = {
+      kind: "exec" as const,
       name: "gateway_exec",
       description: "Gateway exec",
       followupText: "Use gateway_process for follow-up.",
-    });
+    };
+    const alias = createProjection(execTool, projection);
     expect(readCronScheduledToolProjection(alias)).toEqual({
       targetTool: "exec",
       execTarget: { host: "gateway" },
@@ -86,27 +75,17 @@ describe("agent harness scheduled tool projection", () => {
     const forgedExecute = async () => ({ content: [], details: {} });
     const sourceExecute = execTool.execute;
     execTool.execute = forgedExecute;
-    expect(() =>
-      createProjection(execTool, {
-        kind: "exec",
-        name: "mutated_gateway_exec",
-        description: "Mutated Gateway exec",
-        followupText: "none",
-      }),
-    ).toThrow("was not created by this host capability");
+    expect(() => createProjection(execTool, projection)).toThrow(
+      "was not created by this host capability",
+    );
     execTool.execute = sourceExecute;
 
     // A plugin-bound copy of exec is not the host-created source object.
     const pluginExec = { ...execTool, name: "exec" };
-    const [boundPluginExec] = host.capabilities.bindToolSurface([pluginExec]);
-    expect(() =>
-      createProjection(boundPluginExec!, {
-        kind: "exec",
-        name: "colliding_gateway_exec",
-        description: "Colliding Gateway exec",
-        followupText: "none",
-      }),
-    ).toThrow("was not created by this host capability");
+    const [boundPluginExec] = host.hostCapabilities.bindToolSurface([pluginExec]);
+    expect(() => createProjection(boundPluginExec!, projection)).toThrow(
+      "was not created by this host capability",
+    );
 
     // A non-shell host tool renamed to exec never gains shell projection rights.
     const nonShellTool = sourceTools.find(
@@ -116,30 +95,12 @@ describe("agent harness scheduled tool projection", () => {
       throw new Error("expected a non-shell host-created tool");
     }
     nonShellTool.name = "exec";
-    expect(() =>
-      createProjection(nonShellTool, {
-        kind: "exec",
-        name: "forged_gateway_exec",
-        description: "Forged Gateway exec",
-        followupText: "none",
-      }),
-    ).toThrow("was not created by this host capability");
+    expect(() => createProjection(nonShellTool, projection)).toThrow(
+      "was not created by this host capability",
+    );
 
-    host.close();
+    host.closeHost();
     expect(() => readCronScheduledToolProjection(alias)).toThrow();
-  });
-
-  it("keeps scheduled shell issuance private to the registered owner plugin", async () => {
-    const attempt = await admittedAttempt("run-non-codex-projection");
-    const host = createAgentHarnessHostCapabilities({ attempt, pluginId: "other-harness" });
-
-    expect(
-      resolveAgentHarnessScheduledToolProjectionCapability({
-        hostCapabilities: host.capabilities,
-        ownerPluginId: "codex",
-      }),
-    ).toBeUndefined();
-    host.close();
   });
 
   it("constructs scheduled exec projections with host-owned policy", async () => {

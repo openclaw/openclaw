@@ -1,11 +1,14 @@
 /* @vitest-environment jsdom */
 
-import { render } from "lit";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { i18n } from "../../i18n/index.ts";
-import { renderCurrentWork } from "./current-work-view.ts";
+import { renderCurrentWork } from "./current-work-view.tsx";
+import { mountSolid } from "./session-activity-view.test-harness.ts";
 import type { ActivityEntry, ActivityStatus } from "./tool-activity.ts";
-import { renderActivity } from "./view.ts";
+import { renderActivity } from "./view.tsx";
+
+const renderActivitySolid = mountSolid(renderActivity);
+const renderCurrentWorkSolid = mountSolid(renderCurrentWork);
 
 type ActivityProps = Parameters<typeof renderActivity>[0];
 
@@ -65,8 +68,8 @@ describe("renderActivity", () => {
   });
 
   it("keeps raw global status visible without linking to another session outside global scope", async () => {
-    render(
-      renderCurrentWork({
+    renderCurrentWorkSolid(
+      {
         basePath: "/control",
         fallbackAgentId: "main",
         mainKey: "main",
@@ -99,7 +102,7 @@ describe("renderActivity", () => {
             },
           ],
         },
-      }),
+      },
       container,
     );
     const raw = container.querySelector('[data-session-key="global"]');
@@ -114,8 +117,8 @@ describe("renderActivity", () => {
   it.each([false, true])(
     "distinguishes an incomplete empty snapshot from a normal empty refresh (incomplete: %s)",
     async (incomplete) => {
-      render(
-        renderCurrentWork({
+      renderCurrentWorkSolid(
+        {
           basePath: "/control",
           fallbackAgentId: "main",
           mainKey: "main",
@@ -132,7 +135,7 @@ describe("renderActivity", () => {
             defaults: { model: null, modelProvider: null, contextTokens: null },
             sessions: [],
           },
-        }),
+        },
         container,
       );
       expect(container.querySelector('[role="status"]')?.textContent).toContain(
@@ -161,7 +164,7 @@ describe("renderActivity", () => {
         ["de", "0 Argumente ausgeblendet"],
       ] as const) {
         await i18n.setLocale(locale);
-        render(renderActivity(props), container);
+        renderActivitySolid(props, container);
         expect(container.querySelector(".activity-entry__text")?.textContent?.trim()).toBe(summary);
         expect(
           Array.from(
@@ -184,7 +187,7 @@ describe("renderActivity", () => {
   it("groups the named activity stream without overriding native disclosure semantics", async () => {
     await i18n.setLocale("en");
 
-    render(renderActivity(createProps()), container);
+    renderActivitySolid(createProps(), container);
 
     const stream = container.querySelector(".activity-stream");
     expect(stream?.getAttribute("role")).toBe("group");
@@ -199,17 +202,15 @@ describe("renderActivity", () => {
     const onFilterTextChange = vi.fn();
     const onToolFilterChange = vi.fn();
 
-    render(
-      renderActivity(
-        createProps({
-          entries: [
-            createEntry({ toolName: "exec" }),
-            createEntry({ id: "run-2", toolName: "read" }),
-          ],
-          onFilterTextChange,
-          onToolFilterChange,
-        }),
-      ),
+    renderActivitySolid(
+      createProps({
+        entries: [
+          createEntry({ toolName: "exec" }),
+          createEntry({ id: "run-2", toolName: "read" }),
+        ],
+        onFilterTextChange,
+        onToolFilterChange,
+      }),
       container,
     );
 
@@ -217,7 +218,9 @@ describe("renderActivity", () => {
     expect(
       toolbar?.querySelectorAll('.activity-status-filter input[type="checkbox"]'),
     ).toHaveLength(3);
-    expect(toolbar?.querySelector(".activity-live-autofollow wa-switch")).not.toBeNull();
+    expect(
+      toolbar?.querySelector(".activity-live-autofollow input.settings-toggle__input"),
+    ).not.toBeNull();
     const filterTrigger = toolbar?.querySelector("#activity-live-filter-trigger");
     expect(filterTrigger?.getAttribute("aria-haspopup")).toBe("dialog");
     expect(filterTrigger?.getAttribute("aria-expanded")).toBe("false");
@@ -227,7 +230,7 @@ describe("renderActivity", () => {
       throw new Error("Expected the live activity search input");
     }
     search.value = "run";
-    search.dispatchEvent(new Event("input"));
+    search.dispatchEvent(new Event("input", { bubbles: true }));
     expect(onFilterTextChange).toHaveBeenCalledWith("run");
 
     const tool = container.querySelector<HTMLSelectElement>(".activity-live-filter-popover select");
@@ -235,28 +238,64 @@ describe("renderActivity", () => {
       throw new Error("Expected the live activity tool filter");
     }
     tool.value = "read";
-    tool.dispatchEvent(new Event("change"));
+    tool.dispatchEvent(new Event("change", { bubbles: true }));
     expect(onToolFilterChange).toHaveBeenCalledWith("read");
   });
 
-  it("renders selected answer candidates without tool-only facts", async () => {
-    render(
-      renderActivity(
-        createProps({
-          entries: [
-            createEntry({
-              id: "run-1:answer_candidate:answer-1",
-              entryKind: "answer_candidate",
-              itemId: "answer-1",
-              toolCallId: "answer-1",
-              toolName: "answer_candidate",
-              candidateStatus: "selected",
-              status: "done",
-              outputPreview: "Final answer",
-            }),
-          ],
-        }),
+  it("restores the selected tool when Live controls mount", () => {
+    const props = createProps({
+      entries: [createEntry({ toolName: "exec" }), createEntry({ id: "read", toolName: "read" })],
+      toolFilter: "read",
+    });
+    renderActivitySolid(props, container);
+
+    const tool = container.querySelector<HTMLSelectElement>(".activity-live-filter-popover select");
+    expect(tool?.value).toBe("read");
+    expect(tool?.selectedOptions[0]?.textContent).toBe("read");
+    expect(
+      Array.from(container.querySelectorAll(".activity-entry__tool"), (entry) =>
+        entry.textContent?.trim(),
       ),
+    ).toEqual(["read"]);
+
+    renderActivitySolid({ ...props, toolFilter: "" }, container);
+    expect(tool?.value).toBe("");
+    expect(tool?.selectedOptions[0]?.textContent).toBe("All tools");
+    expect(container.querySelectorAll(".activity-entry")).toHaveLength(2);
+  });
+
+  it("keeps the selected tool as older tool entries leave the stream", () => {
+    const read = createEntry({ id: "read", toolName: "read" });
+    const props = createProps({ entries: [createEntry({ toolName: "exec" }), read] });
+    renderActivitySolid(props, container);
+    for (const toolFilter of ["exec", "read"]) {
+      renderActivitySolid({ ...props, toolFilter }, container);
+    }
+    renderActivitySolid({ ...props, entries: [read], toolFilter: "read" }, container);
+
+    const tool = container.querySelector<HTMLSelectElement>(".activity-live-filter-popover select");
+    expect(tool?.value).toBe("read");
+    expect(tool?.selectedOptions[0]?.textContent).toBe("read");
+    expect(container.querySelectorAll(".activity-entry")).toHaveLength(1);
+    expect(container.querySelector(".activity-entry__tool")?.textContent?.trim()).toBe("read");
+  });
+
+  it("renders selected answer candidates without tool-only facts", async () => {
+    renderActivitySolid(
+      createProps({
+        entries: [
+          createEntry({
+            id: "run-1:answer_candidate:answer-1",
+            entryKind: "answer_candidate",
+            itemId: "answer-1",
+            toolCallId: "answer-1",
+            toolName: "answer_candidate",
+            candidateStatus: "selected",
+            status: "done",
+            outputPreview: "Final answer",
+          }),
+        ],
+      }),
       container,
     );
 
@@ -275,7 +314,7 @@ describe("renderActivity", () => {
   });
 
   it("normalizes rounded minute durations that would otherwise show 60 seconds", async () => {
-    render(renderActivity(createProps()), container);
+    renderActivitySolid(createProps(), container);
 
     const meta = Array.from(container.querySelectorAll(".activity-entry__meta span")).map(
       (element) => element.textContent?.trim(),
@@ -284,8 +323,8 @@ describe("renderActivity", () => {
   });
 
   it("links the displayed run id to the deep-link inspector", async () => {
-    render(
-      renderActivity(createProps({ entries: [createEntry({ runId: "live run:a/b" })] })),
+    renderActivitySolid(
+      createProps({ entries: [createEntry({ runId: "live run:a/b" })] }),
       container,
     );
 

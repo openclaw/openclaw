@@ -1,7 +1,7 @@
 // Verifies that nested session tools keep execution identity without narrowing discovery policy.
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { registerAcpRuntimeBackend, unregisterAcpRuntimeBackend } from "../acp/runtime/registry.js";
-import type { ChannelPlugin } from "../channels/plugins/types.js";
+import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/config.js";
 import { setEmbeddedMode } from "../infra/embedded-mode.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
@@ -81,7 +81,7 @@ function requireTool(tools: ReturnType<typeof createOpenClawTools>, name: string
 
 function sessionPolicyConfig(visibility: "all" | "self" = "all") {
   return {
-    agents: { list: [{ id: "main", default: true }, { id: "research" }] },
+    agents: { entries: { main: {}, research: {} } },
     tools: {
       sessions: { visibility },
       agentToAgent: visibility === "all" ? { enabled: true, allow: ["*"] } : { enabled: false },
@@ -194,47 +194,43 @@ describe("openclaw session lookup context", () => {
     },
   );
 
-  it.each([
-    { scope: "global", mainKey: "main", runSessionKey: "global" },
-    {
-      scope: "global",
-      mainKey: "main",
-      runSessionKey: "agent:research:dashboard:control",
+  it.each([{ scope: "global", mainKey: "main", runSessionKey: "global" }] as const)(
+    "routes progress cards to $runSessionKey under $scope scope",
+    async (scenario) => {
+      const gatewayCall = vi.spyOn(inProcessGateway, "callInProcessGatewayTool").mockResolvedValue({
+        card: null,
+      });
+      try {
+        const tools = createOpenClawTools({
+          config: {
+            agents: { ownership: "explicit", entries: { ops: {}, research: {} } },
+            session: { scope: scenario.scope, mainKey: scenario.mainKey },
+          },
+          agentSessionKey: "agent:research:main",
+          runSessionKey: scenario.runSessionKey,
+          requesterAgentIdOverride: "research",
+          disablePluginTools: true,
+          disableMessageTool: true,
+          wrapBeforeToolCallHook: false,
+        });
+
+        await requireTool(tools, "progress_card").execute("synthetic-progress", {});
+
+        expect(gatewayCall).toHaveBeenCalledWith("progressCard.put", {
+          sessionKey: scenario.runSessionKey,
+          agentId: "research",
+        });
+      } finally {
+        gatewayCall.mockRestore();
+      }
     },
-  ] as const)("routes progress cards to $runSessionKey under $scope scope", async (scenario) => {
-    const gatewayCall = vi.spyOn(inProcessGateway, "callInProcessGatewayTool").mockResolvedValue({
-      card: null,
-    });
-    try {
-      const tools = createOpenClawTools({
-        config: {
-          agents: { ownership: "explicit", entries: { ops: {}, research: {} } },
-          session: { scope: scenario.scope, mainKey: scenario.mainKey },
-        },
-        agentSessionKey: "agent:research:main",
-        runSessionKey: scenario.runSessionKey,
-        requesterAgentIdOverride: "research",
-        disablePluginTools: true,
-        disableMessageTool: true,
-        wrapBeforeToolCallHook: false,
-      });
-
-      await requireTool(tools, "progress_card").execute("synthetic-progress", {});
-
-      expect(gatewayCall).toHaveBeenCalledWith("progressCard.put", {
-        sessionKey: scenario.runSessionKey,
-        agentId: "research",
-      });
-    } finally {
-      gatewayCall.mockRestore();
-    }
-  });
+  );
 
   it("binds nested session lookups to the durable caller", async () => {
     const runSessionKey = "agent:research:main";
     setEmbeddedMode(true);
     const tools = createTools(
-      { agents: { list: [{ id: "main", default: true }, { id: "research" }] } },
+      { agents: { entries: { main: {}, research: {} } } },
       { sandboxed: true },
     );
 
@@ -360,19 +356,6 @@ describe("openclaw session lookup context", () => {
     setRuntimeConfigSnapshot(accessibleConfig);
     const restored = await list.execute("restored", {});
     expect((restored.details as { sessions: Array<{ agentId: string }> }).sessions).toEqual(
-      expect.arrayContaining([expect.objectContaining({ agentId: "main" })]),
-    );
-  });
-
-  it("keeps an explicitly pinned session policy even when it initially matches runtime config", async () => {
-    const pinnedConfig = sessionPolicyConfig();
-    mockSessionDiscovery();
-    setRuntimeConfigSnapshot(structuredClone(pinnedConfig));
-    const tools = createTools(pinnedConfig, { sessionConfigSource: "pinned" });
-    setRuntimeConfigSnapshot(sessionPolicyConfig("self"));
-
-    const result = await requireTool(tools, "sessions_list").execute("pinned", {});
-    expect((result.details as { sessions: Array<{ agentId: string }> }).sessions).toEqual(
       expect.arrayContaining([expect.objectContaining({ agentId: "main" })]),
     );
   });

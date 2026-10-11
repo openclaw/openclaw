@@ -1,4 +1,3 @@
-// Local package and development-manifest reader for Claws.
 import { createHash } from "node:crypto";
 import { realpath, stat } from "node:fs/promises";
 import { basename, dirname, isAbsolute, relative, resolve, sep } from "node:path";
@@ -6,9 +5,11 @@ import { assertNoSymlinkParents } from "@openclaw/fs-safe/advanced";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES } from "../agents/workspace-bootstrap-read.js";
 import { FsSafeError, root as fsSafeRoot, type OpenResult } from "../infra/fs-safe.js";
+import { digestClawBytes } from "./digest.js";
 import { readClawOpenClawProfile } from "./openclaw-profile.js";
 import { isCanonicalClawHubPackageName, isExactSemVer } from "./schema-portability.js";
 import { clawManifestWorkspaceConflictsWithPath, parseClawManifest } from "./schema.js";
+import { clawWorkspaceSourceFailure } from "./source-diagnostics.js";
 import {
   MAX_CLAW_MANIFEST_BYTES,
   MAX_MANAGED_FILE_BYTES,
@@ -37,17 +38,6 @@ type ResolvedClawSource = Omit<ClawSourceIdentity, "integrity" | "integrityKind"
 const CLAW_MARKDOWN_FILENAME = "CLAW.md";
 const MAX_CLAW_PACKAGE_JSON_BYTES = 256 * 1024;
 
-async function readBoundedFile(path: string, maxBytes: number): Promise<Buffer> {
-  const fileRoot = await fsSafeRoot(dirname(path));
-  const read = await fileRoot.read(basename(path), {
-    hardlinks: "reject",
-    maxBytes,
-    nonBlockingRead: true,
-    symlinks: "reject",
-  });
-  return read.buffer;
-}
-
 function fileDiagnostic(code: string, message: string, path = "$"): ClawDiagnostic {
   return { level: "error", code, phase: "parse", path, message };
 }
@@ -61,39 +51,9 @@ function isContained(root: string, candidate: string): boolean {
   return child !== ".." && !child.startsWith(`..${sep}`) && !isAbsolute(child);
 }
 
-function updateSnapshotHash(
-  hash: ReturnType<typeof createHash>,
-  label: string,
-  bytes: Buffer,
-): void {
-  hash.update(`${Buffer.byteLength(label, "utf8")}:${label}:${bytes.byteLength}:`, "utf8");
-  hash.update(bytes);
-}
-
 function workspaceSourceDiagnostic(error: unknown, sourcePath: string): ClawDiagnostic {
-  if (error instanceof FsSafeError && error.code === "too-large") {
-    return fileDiagnostic(
-      "workspace_source_too_large",
-      `Workspace source ${JSON.stringify(sourcePath)} exceeds ${MAX_MANAGED_FILE_BYTES} bytes.`,
-      "$.workspace",
-    );
-  }
-  if (
-    (error instanceof FsSafeError &&
-      (error.code === "symlink" || error.code === "hardlink" || error.code === "path-mismatch")) ||
-    (error instanceof Error && error.message.includes("symlinked directory"))
-  ) {
-    return fileDiagnostic(
-      "workspace_source_unsafe",
-      `Workspace source ${JSON.stringify(sourcePath)} must be a regular, non-symlinked, non-hardlinked file.`,
-      "$.workspace",
-    );
-  }
-  return fileDiagnostic(
-    "workspace_source_invalid",
-    `Workspace source ${JSON.stringify(sourcePath)} must resolve inside the Claw source.`,
-    "$.workspace",
-  );
+  const { code, message } = clawWorkspaceSourceFailure(error, sourcePath, "source");
+  return fileDiagnostic(code, message, "$.workspace");
 }
 
 async function buildDevelopmentSnapshot(params: {
@@ -116,12 +76,13 @@ async function buildDevelopmentSnapshot(params: {
   const hash = createHash("sha256");
   let byteLength = 0;
   const add = (label: string, bytes: Buffer) => {
-    updateSnapshotHash(hash, label, bytes);
+    hash.update(`${Buffer.byteLength(label, "utf8")}:${label}:${bytes.byteLength}:`, "utf8");
+    hash.update(bytes);
     byteLength += bytes.byteLength;
   };
   const snapshotFile = (bytes: Buffer) => ({
     byteLength: bytes.byteLength,
-    digest: `sha256:${createHash("sha256").update(bytes).digest("hex")}`,
+    digest: digestClawBytes(bytes),
   });
   const manifest = snapshotFile(params.manifestRaw);
   const openClawProfile = params.openClawProfile
@@ -151,7 +112,6 @@ async function buildDevelopmentSnapshot(params: {
       const read = await sourceRoot.read("BOOTSTRAP.md", {
         hardlinks: "reject",
         maxBytes: MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES,
-        nonBlockingRead: true,
         symlinks: "reject",
       });
       const text = new TextDecoder("utf-8", { fatal: true }).decode(read.buffer);
@@ -162,7 +122,7 @@ async function buildDevelopmentSnapshot(params: {
           "$.bootstrap",
         );
       }
-      const digest = `sha256:${createHash("sha256").update(read.buffer).digest("hex")}`;
+      const digest = digestClawBytes(read.buffer);
       add("bootstrap:BOOTSTRAP.md", read.buffer);
       packageBootstrap = {
         sourcePath: "BOOTSTRAP.md",
@@ -249,11 +209,10 @@ async function buildDevelopmentSnapshot(params: {
           "$.workspace",
         );
       }
-      const normalizedSourcePath = sourcePath.replaceAll("\\", "/");
-      const digest = `sha256:${createHash("sha256").update(bytes).digest("hex")}`;
-      add(`workspace:${sourcePath.replaceAll("\\", "/")}`, bytes);
+      const digest = digestClawBytes(bytes);
+      add(`workspace:${sourcePath}`, bytes);
       workspaceSources.push({
-        sourcePath: normalizedSourcePath,
+        sourcePath,
         realPath: opened.realPath,
         byteLength: bytes.byteLength,
         digest,
@@ -351,7 +310,13 @@ async function readClawDocument(
 > {
   let raw: Buffer;
   try {
-    raw = await readBoundedFile(path, maxBytes);
+    const fileRoot = await fsSafeRoot(dirname(path));
+    const read = await fileRoot.read(basename(path), {
+      hardlinks: "reject",
+      maxBytes,
+      symlinks: "reject",
+    });
+    raw = read.buffer;
   } catch (error) {
     const tooLarge =
       error instanceof RangeError || (error instanceof FsSafeError && error.code === "too-large");
@@ -494,18 +459,20 @@ export async function readClawManifestFile(
       "$.workspace",
     );
   }
+  const resolvedSource = sourceResult.source;
+  const sourceIdentity = {
+    kind: resolvedSource.kind,
+    name: resolvedSource.name,
+    version: resolvedSource.version,
+    packageRoot: resolvedSource.packageRoot,
+    manifestPath: resolvedSource.manifestPath,
+  };
   const allowLegacyDynamicToolProfile =
     options.allowLegacyDynamicToolProfile === true ||
     (options.authorizeLegacyDynamicToolProfile
       ? await options.authorizeLegacyDynamicToolProfile({
           manifest: parsed.manifest,
-          source: {
-            kind: sourceResult.source.kind,
-            name: sourceResult.source.name,
-            version: sourceResult.source.version,
-            packageRoot: sourceResult.source.packageRoot,
-            manifestPath: sourceResult.source.manifestPath,
-          },
+          source: { ...sourceIdentity },
         })
       : false);
   const profile = await readClawOpenClawProfile({
@@ -527,13 +494,8 @@ export async function readClawManifestFile(
   if (!snapshot.ok) {
     return snapshot;
   }
-  const resolvedSource = sourceResult.source;
   const source: ClawSourceIdentity = {
-    kind: resolvedSource.kind,
-    name: resolvedSource.name,
-    version: resolvedSource.version,
-    packageRoot: resolvedSource.packageRoot,
-    manifestPath: resolvedSource.manifestPath,
+    ...sourceIdentity,
     integrityKind: "development-snapshot",
     integrity: snapshot.integrity,
     byteLength: snapshot.byteLength,

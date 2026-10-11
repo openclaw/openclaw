@@ -1,4 +1,6 @@
 import { randomUUID } from "node:crypto";
+import { setTimeout as sleep } from "node:timers/promises";
+import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
@@ -11,9 +13,10 @@ import {
   normalizeQaCredentialConvexSiteUrl,
   normalizeQaCredentialEndpointPrefix,
   parseQaCredentialPositiveIntegerEnv,
+  parseQaCredentialResponsePayload,
   QA_CREDENTIALS_DEFAULT_ENDPOINT_PREFIX,
 } from "../../qa-credentials-common.runtime.js";
-import { captureQaLeaseClock, createQaLeaseHealth } from "./credential-lease-health.js";
+import { createQaLeaseHealth } from "./credential-lease-health.js";
 
 const DEFAULT_ACQUIRE_TIMEOUT_MS = 90_000;
 const DEFAULT_HEARTBEAT_INTERVAL_MS = 30_000;
@@ -54,28 +57,7 @@ const convexPayloadChunkSuccessSchema = z.object({
   data: z.string(),
 });
 
-type ConvexCredentialBrokerConfig = {
-  acquireTimeoutMs: number;
-  acquireUrl: string;
-  authToken: string;
-  heartbeatIntervalMs: number;
-  heartbeatUrl: string;
-  httpTimeoutMs: number;
-  leaseTtlMs: number;
-  ownerId: string;
-  payloadMaxBytes: number;
-  payloadMaxChunks: number;
-  payloadChunkUrl: string;
-  releaseUrl: string;
-  role: QaCredentialRole;
-};
-
-type QaCredentialLeaseHeartbeat = {
-  getFailure(): Error | null;
-  stop(): Promise<void>;
-  throwIfFailed(): void;
-  whenFailed: Promise<Error>;
-};
+type ConvexCredentialBrokerConfig = ReturnType<typeof resolveConvexCredentialBrokerConfig>;
 
 type QaCredentialRole = "ci" | "maintainer";
 
@@ -166,7 +148,7 @@ function resolveConvexCredentialBrokerConfig(params: {
   env: NodeJS.ProcessEnv;
   ownerId?: string;
   role: QaCredentialRole;
-}): ConvexCredentialBrokerConfig {
+}) {
   const siteUrl = params.env.OPENCLAW_QA_CONVEX_SITE_URL?.trim();
   if (!siteUrl) {
     throw new Error("Missing OPENCLAW_QA_CONVEX_SITE_URL for --credential-source convex.");
@@ -277,40 +259,31 @@ function toBrokerError(params: {
   });
 }
 
-async function postConvexBroker(params: {
-  authToken: string;
-  body: Record<string, unknown>;
-  fetchImpl: typeof fetch;
-  maxBytes: number;
-  timeoutMs: number;
-  url: string;
-}): Promise<unknown> {
-  const timeoutMs = resolveTimerTimeoutMs(params.timeoutMs, DEFAULT_HTTP_TIMEOUT_MS);
-  const response = await params.fetchImpl(params.url, {
+async function postConvexBroker(
+  config: ConvexCredentialBrokerConfig,
+  fetchImpl: typeof fetch,
+  endpoint: "acquire" | "heartbeat" | "payloadChunk" | "release",
+  body: Record<string, unknown>,
+): Promise<unknown> {
+  const url = config[`${endpoint}Url`];
+  const timeoutMs = resolveTimerTimeoutMs(config.httpTimeoutMs, DEFAULT_HTTP_TIMEOUT_MS);
+  const response = await fetchImpl(url, {
     method: "POST",
     headers: {
-      authorization: `Bearer ${params.authToken}`,
+      authorization: `Bearer ${config.authToken}`,
       "content-type": "application/json",
     },
-    body: JSON.stringify(params.body),
+    body: JSON.stringify(body),
     signal: AbortSignal.timeout(timeoutMs),
   });
 
   // Keep ordinary broker responses small, while allowing chunk payloads to use
   // the larger declared payload ceiling.
   const text = await readProviderTextResponse(response, "Convex credential broker", {
-    maxBytes: params.maxBytes,
+    maxBytes:
+      endpoint === "payloadChunk" ? config.payloadMaxBytes : CONVEX_BROKER_RESPONSE_MAX_BYTES,
   });
-  const payload: unknown = (() => {
-    if (!text.trim()) {
-      return undefined;
-    }
-    try {
-      return JSON.parse(text) as unknown;
-    } catch {
-      return text;
-    }
-  })();
+  const payload = parseQaCredentialResponsePayload(text);
 
   const brokerError = toBrokerError({
     payload,
@@ -321,7 +294,7 @@ async function postConvexBroker(params: {
   }
   if (!response.ok) {
     throw new Error(
-      `Convex credential broker request to ${params.url} failed with HTTP ${response.status}.`,
+      `Convex credential broker request to ${url} failed with HTTP ${response.status}.`,
     );
   }
   return payload;
@@ -346,20 +319,13 @@ async function resolveConvexCredentialPayload(params: {
   let serializedBytes = 0;
   for (let index = 0; index < marker.chunkCount; index += 1) {
     params.signal?.throwIfAborted();
-    const payload = await postConvexBroker({
-      fetchImpl: params.fetchImpl,
-      maxBytes: params.config.payloadMaxBytes,
-      timeoutMs: params.config.httpTimeoutMs,
-      authToken: params.config.authToken,
-      url: params.config.payloadChunkUrl,
-      body: {
-        kind: params.kind,
-        ownerId: params.config.ownerId,
-        actorRole: params.config.role,
-        credentialId: params.acquired.credentialId,
-        leaseToken: params.acquired.leaseToken,
-        index,
-      },
+    const payload = await postConvexBroker(params.config, params.fetchImpl, "payloadChunk", {
+      kind: params.kind,
+      ownerId: params.config.ownerId,
+      actorRole: params.config.role,
+      credentialId: params.acquired.credentialId,
+      leaseToken: params.acquired.leaseToken,
+      index,
     });
     params.signal?.throwIfAborted();
     const parsed = convexPayloadChunkSuccessSchema.parse(payload);
@@ -391,18 +357,8 @@ function computeAcquireBackoffMs(params: {
 }
 
 function assertConvexOk(payload: unknown, actionLabel: string) {
-  if (payload === undefined) {
+  if (payload === undefined || convexOkSchema.safeParse(payload).success) {
     return;
-  }
-  if (convexOkSchema.safeParse(payload).success) {
-    return;
-  }
-  const brokerError = toBrokerError({
-    payload,
-    fallback: `Convex credential ${actionLabel} failed.`,
-  });
-  if (brokerError) {
-    throw brokerError;
   }
   throw new Error(`Convex credential ${actionLabel} failed with an invalid response payload.`);
 }
@@ -448,12 +404,7 @@ export async function acquireQaCredentialLease<TPayload>(
     ownerId: opts.ownerId,
   });
   const fetchImpl = opts.fetchImpl ?? fetch;
-  const sleepImpl =
-    opts.sleepImpl ??
-    ((ms: number) =>
-      new Promise((resolve) => {
-        setTimeout(resolve, ms);
-      }));
+  const sleepImpl = opts.sleepImpl ?? sleep;
   const timeImpl = opts.timeImpl ?? (() => Date.now());
   const randomImpl = opts.randomImpl ?? (() => Math.random());
   const startedAt = timeImpl();
@@ -463,36 +414,22 @@ export async function acquireQaCredentialLease<TPayload>(
     opts.signal?.throwIfAborted();
     attempt += 1;
     try {
-      const acquiredAt = captureQaLeaseClock();
-      const payload = await postConvexBroker({
-        fetchImpl,
-        maxBytes: CONVEX_BROKER_RESPONSE_MAX_BYTES,
-        timeoutMs: config.httpTimeoutMs,
-        authToken: config.authToken,
-        url: config.acquireUrl,
-        body: {
-          kind: opts.kind,
-          ownerId: config.ownerId,
-          actorRole: config.role,
-          leaseTtlMs: config.leaseTtlMs,
-          heartbeatIntervalMs: config.heartbeatIntervalMs,
-        },
+      const acquiredAt = Date.now();
+      const payload = await postConvexBroker(config, fetchImpl, "acquire", {
+        kind: opts.kind,
+        ownerId: config.ownerId,
+        actorRole: config.role,
+        leaseTtlMs: config.leaseTtlMs,
+        heartbeatIntervalMs: config.heartbeatIntervalMs,
       });
       const acquired = convexAcquireSuccessSchema.parse(payload);
       const releaseLease = async () => {
-        const releasePayload = await postConvexBroker({
-          fetchImpl,
-          maxBytes: CONVEX_BROKER_RESPONSE_MAX_BYTES,
-          timeoutMs: config.httpTimeoutMs,
-          authToken: config.authToken,
-          url: config.releaseUrl,
-          body: {
-            kind: opts.kind,
-            ownerId: config.ownerId,
-            credentialId: acquired.credentialId,
-            leaseToken: acquired.leaseToken,
-            actorRole: config.role,
-          },
+        const releasePayload = await postConvexBroker(config, fetchImpl, "release", {
+          kind: opts.kind,
+          ownerId: config.ownerId,
+          credentialId: acquired.credentialId,
+          leaseToken: acquired.leaseToken,
+          actorRole: config.role,
         });
         assertConvexOk(releasePayload, "release");
       };
@@ -538,21 +475,14 @@ export async function acquireQaCredentialLease<TPayload>(
         payload: parsedPayload,
         async heartbeat() {
           health.assertHealthy();
-          const requestStartedAt = captureQaLeaseClock();
-          const heartbeatPayload = await postConvexBroker({
-            fetchImpl,
-            maxBytes: CONVEX_BROKER_RESPONSE_MAX_BYTES,
-            timeoutMs: config.httpTimeoutMs,
-            authToken: config.authToken,
-            url: config.heartbeatUrl,
-            body: {
-              kind: opts.kind,
-              ownerId: config.ownerId,
-              credentialId: acquired.credentialId,
-              leaseToken: acquired.leaseToken,
-              actorRole: config.role,
-              leaseTtlMs,
-            },
+          const requestStartedAt = Date.now();
+          const heartbeatPayload = await postConvexBroker(config, fetchImpl, "heartbeat", {
+            kind: opts.kind,
+            ownerId: config.ownerId,
+            credentialId: acquired.credentialId,
+            leaseToken: acquired.leaseToken,
+            actorRole: config.role,
+            leaseTtlMs,
           });
           assertConvexOk(heartbeatPayload, "heartbeat");
           health.confirm(requestStartedAt);
@@ -631,7 +561,7 @@ export function startQaCredentialLeaseHeartbeat(
     setTimeoutImpl?: typeof setTimeout;
     clearTimeoutImpl?: typeof clearTimeout;
   },
-): QaCredentialLeaseHeartbeat {
+) {
   const intervalMs = opts?.intervalMs ?? lease.heartbeatIntervalMs;
   if (lease.source !== "convex" || !Number.isFinite(intervalMs) || intervalMs < 1) {
     return {
@@ -650,10 +580,7 @@ export function startQaCredentialLeaseHeartbeat(
   let stopped = false;
   let timer: ReturnType<typeof setTimeout> | null = null;
   let inFlight: Promise<void> | null = null;
-  let resolveFailure: (error: Error) => void = () => undefined;
-  const whenFailed = new Promise<Error>((resolve) => {
-    resolveFailure = resolve;
-  });
+  const { promise: whenFailed, resolve: resolveFailure } = createDeferred<Error>();
   const getFailure = () => {
     if (!failure) {
       try {

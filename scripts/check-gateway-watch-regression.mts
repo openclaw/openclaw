@@ -33,9 +33,19 @@ const DEFAULTS = {
   cpuFailMs: 8_000,
   distRuntimeFileGrowthMax: 200,
   distRuntimeByteGrowthMax: 2 * 1024 * 1024,
-  keepLogs: true,
   skipBuild: false,
 };
+const NUMERIC_FLAGS = Object.entries({
+  "--window-ms": "windowMs",
+  "--ready-timeout-ms": "readyTimeoutMs",
+  "--ready-settle-ms": "readySettleMs",
+  "--sigkill-grace-ms": "sigkillGraceMs",
+  "--sigkill-exit-grace-ms": "sigkillExitGraceMs",
+  "--cpu-warn-ms": "cpuWarnMs",
+  "--cpu-fail-ms": "cpuFailMs",
+  "--dist-runtime-file-growth-max": "distRuntimeFileGrowthMax",
+  "--dist-runtime-byte-growth-max": "distRuntimeByteGrowthMax",
+} as const);
 
 const WATCH_GATEWAY_SKIP_ENV = {
   OPENCLAW_DISABLE_BONJOUR: "1",
@@ -169,7 +179,7 @@ export function updateWatchBuildDetection(
 ): { buffer: string; triggered: boolean; reason: string | null } {
   const combined = `${state.buffer ?? ""}${String(chunk)}`;
   const next = appendBoundedWatchLog("", combined, WATCH_BUILD_DETECTION_MAX_CHARS);
-  const reason = detectWatchBuildReason(combined, "");
+  const reason = combined.match(/Building TypeScript \(dist is stale: ([a-z_]+)/)?.[1] ?? null;
   const triggered = state.triggered || combined.includes("Building TypeScript (dist is stale");
   return {
     buffer: next.text,
@@ -191,42 +201,14 @@ export function parseArgs(argv: string[]): WatchOptions {
       i += 1;
       return next;
     };
+    const numericKey = NUMERIC_FLAGS.find(([flag]) => flag === arg)?.[1];
+    if (numericKey) {
+      options[numericKey] = readNonNegativeInteger(readValue(), arg);
+      continue;
+    }
     switch (arg) {
       case "--output-dir":
         options.outputDir = path.resolve(readValue());
-        break;
-      case "--window-ms":
-        options.windowMs = readNonNegativeInteger(readValue(), "--window-ms");
-        break;
-      case "--ready-timeout-ms":
-        options.readyTimeoutMs = readNonNegativeInteger(readValue(), "--ready-timeout-ms");
-        break;
-      case "--ready-settle-ms":
-        options.readySettleMs = readNonNegativeInteger(readValue(), "--ready-settle-ms");
-        break;
-      case "--sigkill-grace-ms":
-        options.sigkillGraceMs = readNonNegativeInteger(readValue(), "--sigkill-grace-ms");
-        break;
-      case "--sigkill-exit-grace-ms":
-        options.sigkillExitGraceMs = readNonNegativeInteger(readValue(), "--sigkill-exit-grace-ms");
-        break;
-      case "--cpu-warn-ms":
-        options.cpuWarnMs = readNonNegativeInteger(readValue(), "--cpu-warn-ms");
-        break;
-      case "--cpu-fail-ms":
-        options.cpuFailMs = readNonNegativeInteger(readValue(), "--cpu-fail-ms");
-        break;
-      case "--dist-runtime-file-growth-max":
-        options.distRuntimeFileGrowthMax = readNonNegativeInteger(
-          readValue(),
-          "--dist-runtime-file-growth-max",
-        );
-        break;
-      case "--dist-runtime-byte-growth-max":
-        options.distRuntimeByteGrowthMax = readNonNegativeInteger(
-          readValue(),
-          "--dist-runtime-byte-growth-max",
-        );
         break;
       case "--skip-build":
         options.skipBuild = true;
@@ -236,14 +218,6 @@ export function parseArgs(argv: string[]): WatchOptions {
     }
   }
   return options;
-}
-
-function ensureDir(dirPath: string) {
-  fs.mkdirSync(dirPath, { recursive: true });
-}
-
-function removePathIfExists(targetPath: string) {
-  fs.rmSync(targetPath, { recursive: true, force: true });
 }
 
 function lstatIfExists(targetPath: string): {
@@ -364,7 +338,7 @@ function writeSnapshot(snapshotDir: string): {
   dist: TreeSnapshot;
   distRuntime: TreeSnapshot;
 } {
-  ensureDir(snapshotDir);
+  fs.mkdirSync(snapshotDir, { recursive: true });
   const pathEntries = [...listTreeEntries("dist"), ...listTreeEntries("dist-runtime")];
   fs.writeFileSync(path.join(snapshotDir, "paths.txt"), `${pathEntries.join("\n")}\n`, "utf8");
 
@@ -584,7 +558,7 @@ export async function runTimedWatch(
     const stdoutPath = path.join(outputDir, "watch.stdout.log");
     const stderrPath = path.join(outputDir, "watch.stderr.log");
     for (const stalePath of [pidFilePath, timeFilePath, stdoutPath, stderrPath]) {
-      removePathIfExists(stalePath);
+      fs.rmSync(stalePath, { recursive: true, force: true });
     }
     const port = await allocatePort();
     fs.writeFileSync(path.join(outputDir, "watch.port.txt"), `${String(port)}\n`, "utf8");
@@ -673,6 +647,13 @@ export async function runTimedWatch(
       },
     );
     const errors: unknown[] = [];
+    let watchPid: number | null = null;
+    let exit: WatchExit | null = null;
+    let exitedBeforeReady = false;
+    let exitedBeforeStop = false;
+    let readyBeforeWindow = false;
+    let idleCpuStartMs: number | null = null;
+    let idleCpuEndMs: number | null = null;
     const raceChildLifecycle = async <Value,>(
       operation: (signal: AbortSignal) => Value | PromiseLike<Value>,
     ) => {
@@ -724,31 +705,24 @@ export async function runTimedWatch(
       if (outcome.type === "operation-error") {
         throw outcome.error;
       }
+      if (outcome.type !== "value") {
+        exit = outcome.value;
+        if (outcome.type === "child-exit") {
+          exitedBeforeReady = !readyBeforeWindow;
+          exitedBeforeStop = true;
+        }
+      }
       return outcome;
     };
 
-    let watchPid: number | null = null;
-    let exit: WatchExit | null = null;
-    let exitedBeforeReady = false;
-    let exitedBeforeStop = false;
-    let readyBeforeWindow = false;
-    let idleCpuStartMs: number | null = null;
-    let idleCpuEndMs: number | null = null;
     try {
       for (let attempt = 0; attempt < 50; attempt += 1) {
         if (fs.existsSync(pidFilePath)) {
           watchPid = Number(fs.readFileSync(pidFilePath, "utf8").trim());
           break;
         }
-        const waitResult = await raceChildLifecycle((signal) => sleepMs(100, signal));
-        if (waitResult.type === "spawn-error") {
-          exit = waitResult.value;
-          break;
-        }
-        if (waitResult.type === "child-exit") {
-          exit = waitResult.value;
-          exitedBeforeReady = true;
-          exitedBeforeStop = true;
+        await raceChildLifecycle((signal) => sleepMs(100, signal));
+        if (exit) {
           break;
         }
       }
@@ -757,38 +731,19 @@ export async function runTimedWatch(
         const readyResult = await raceChildLifecycle((signal) =>
           waitReady(() => `${stdout}\n${stderr}`, options.readyTimeoutMs, signal),
         );
-        if (readyResult.type === "spawn-error") {
-          exit = readyResult.value;
-        } else if (readyResult.type === "child-exit") {
-          exit = readyResult.value;
-          exitedBeforeReady = true;
-          exitedBeforeStop = true;
-        } else {
+        if (readyResult.type === "value") {
           readyBeforeWindow = readyResult.value;
         }
       }
       if (!exit && readyBeforeWindow && options.readySettleMs > 0) {
-        const settleResult = await raceChildLifecycle((signal) =>
-          sleepMs(options.readySettleMs, signal),
-        );
-        if (settleResult.type === "spawn-error") {
-          exit = settleResult.value;
-        } else if (settleResult.type === "child-exit") {
-          exit = settleResult.value;
-          exitedBeforeStop = true;
-        }
+        await raceChildLifecycle((signal) => sleepMs(options.readySettleMs, signal));
       }
       if (!exit && readyBeforeWindow) {
         idleCpuStartMs = watchPid ? readCpuMs(watchPid) : null;
         const windowResult = await raceChildLifecycle((signal) =>
           sleepMs(options.windowMs, signal),
         );
-        if (windowResult.type === "spawn-error") {
-          exit = windowResult.value;
-        } else if (windowResult.type === "child-exit") {
-          exit = windowResult.value;
-          exitedBeforeStop = true;
-        } else {
+        if (windowResult.type === "value") {
           idleCpuEndMs = watchPid ? readCpuMs(watchPid) : null;
         }
       }
@@ -899,7 +854,7 @@ function parsePathFile(filePath: string): string[] {
 
 function writeDiffArtifacts(outputDir: string, preDir: string, postDir: string) {
   const diffDir = path.join(outputDir, "diff");
-  ensureDir(diffDir);
+  fs.mkdirSync(diffDir, { recursive: true });
   const prePaths = parsePathFile(path.join(preDir, "paths.txt"));
   const postPaths = parsePathFile(path.join(postDir, "paths.txt"));
   const preSet = new Set(prePaths);
@@ -920,17 +875,11 @@ function warn(message: string) {
   console.error(`WARN: ${message}`);
 }
 
-function detectWatchBuildReason(stdout: string, stderr: string): string | null {
-  const combined = `${stdout}\n${stderr}`;
-  const match = combined.match(/Building TypeScript \(dist is stale: ([a-z_]+)/);
-  return match?.[1] ?? null;
-}
-
-function buildRunNodeDeps(env: NodeJS.ProcessEnv) {
+function buildRunNodeDeps() {
   const cwd = process.cwd();
   return {
     cwd,
-    env,
+    env: process.env,
     fs,
     spawnSync,
     distRoot: path.join(cwd, "dist"),
@@ -1083,7 +1032,7 @@ function printWatchLogDiagnostics(watchResult: TimedWatchResult) {
 
 async function main() {
   const options = parseArgs(process.argv.slice(2));
-  ensureDir(options.outputDir);
+  fs.mkdirSync(options.outputDir, { recursive: true });
   if (!options.skipBuild) {
     runCheckedCommand("node", ["--import", "tsx", "scripts/build-all.mts", "gatewayWatch"]);
     // The watch harness must start from a completed dist/runtime baseline.
@@ -1096,7 +1045,7 @@ async function main() {
     refreshLocalBuildStampTimes();
   }
 
-  let preflightBuildRequirement = resolveBuildRequirement(buildRunNodeDeps(process.env));
+  let preflightBuildRequirement = resolveBuildRequirement(buildRunNodeDeps());
   if (
     shouldRefreshBuildStampForRestoredArtifacts({
       skipBuild: options.skipBuild,
@@ -1107,7 +1056,7 @@ async function main() {
     // Refresh the stamps so checkout mtimes for package/config files do not
     // force a duplicate build during the bounded gateway:watch window.
     refreshLocalBuildStampTimes();
-    preflightBuildRequirement = resolveBuildRequirement(buildRunNodeDeps(process.env));
+    preflightBuildRequirement = resolveBuildRequirement(buildRunNodeDeps());
   }
   if (preflightBuildRequirement.shouldBuild) {
     const summary = {
@@ -1132,7 +1081,7 @@ async function main() {
   const pre = writeSnapshot(preDir);
 
   const watchDir = path.join(options.outputDir, "watch");
-  ensureDir(watchDir);
+  fs.mkdirSync(watchDir, { recursive: true });
   const watchResult = await runTimedWatch(options, watchDir);
 
   const postDir = path.join(options.outputDir, "post");

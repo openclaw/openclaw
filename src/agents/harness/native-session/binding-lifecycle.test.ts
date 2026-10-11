@@ -6,6 +6,7 @@ import {
   createBindingTestState,
   prepareBindingTestLease,
 } from "./binding.test-support.js";
+import { wrapNativeSessionDeletionMutation } from "./deletion-participant.js";
 
 const deletion = {
   prepareLease: prepareBindingTestLease,
@@ -18,6 +19,28 @@ afterEach(() => {
 });
 
 describe("native session binding lifecycle", () => {
+  it("revalidates opaque native rollback authority before invoking the released SDK callback", () => {
+    const rollback = vi.fn();
+    const failure = new Error("opaque deletion owner retired");
+    let current = true;
+    const mutation = wrapNativeSessionDeletionMutation(
+      { commit() {}, rollback },
+      {
+        assertCurrent() {
+          if (!current) {
+            throw failure;
+          }
+        },
+        committed() {},
+        rolledBack() {},
+      },
+    );
+    mutation.commit();
+    current = false;
+    expect(() => mutation.rollback()).toThrow(failure);
+    expect(rollback).not.toHaveBeenCalled();
+  });
+
   it("deletes only the requested owner and restores it on transaction rollback", async () => {
     const { state, values } = createBindingTestState();
     const lifecycle = createNativeSessionBindingLifecycle(state, bindingTestOptions);

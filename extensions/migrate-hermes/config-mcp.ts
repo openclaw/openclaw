@@ -1,9 +1,9 @@
-// Hermes MCP config mapping and manual follow-up planning.
 import { createMigrationManualItem } from "openclaw/plugin-sdk/migration";
 import { asPositiveFiniteNumber as readPositiveNumber } from "openclaw/plugin-sdk/number-runtime";
 import type { MigrationItem } from "openclaw/plugin-sdk/plugin-entry";
 import {
   asBoolean,
+  asOptionalRecord,
   isRecord,
   normalizeOptionalString,
   parseBooleanValue,
@@ -15,13 +15,7 @@ const MCP_RESOURCE_UTILITY_TOOLS = ["resources_list", "resources_read"] as const
 const MCP_PROMPT_UTILITY_TOOLS = ["prompts_list", "prompts_get"] as const;
 
 function readPositiveNumeric(value: unknown): number | undefined {
-  if (typeof value === "number") {
-    return readPositiveNumber(value);
-  }
-  if (typeof value !== "string" || !value.trim()) {
-    return undefined;
-  }
-  return readPositiveNumber(Number(value));
+  return readPositiveNumber(typeof value === "string" ? Number(value) : value);
 }
 
 function readToolFilterList(value: unknown): string[] | undefined {
@@ -40,11 +34,7 @@ function hasUnsupportedToolPattern(pattern: string): boolean {
 }
 
 function mapHermesToolFilter(value: Record<string, unknown>): Record<string, unknown> | undefined {
-  const direct = isRecord(value.toolFilter)
-    ? value.toolFilter
-    : isRecord(value.tool_filter)
-      ? value.tool_filter
-      : undefined;
+  const direct = asOptionalRecord(value.toolFilter) ?? asOptionalRecord(value.tool_filter);
   if (direct) {
     const include = readToolFilterList(direct.include);
     const exclude = readToolFilterList(direct.exclude);
@@ -54,7 +44,7 @@ function mapHermesToolFilter(value: Record<string, unknown>): Record<string, unk
     return exclude !== undefined && exclude.length > 0 ? { exclude } : undefined;
   }
 
-  const tools = isRecord(value.tools) ? value.tools : undefined;
+  const tools = asOptionalRecord(value.tools);
   if (!tools) {
     return undefined;
   }
@@ -120,7 +110,7 @@ export function importsMcpSensitiveValues(
 }
 
 function mapHermesMcpOauth(value: Record<string, unknown>): Record<string, unknown> | undefined {
-  const oauth = isRecord(value.oauth) ? value.oauth : undefined;
+  const oauth = asOptionalRecord(value.oauth);
   if (!oauth) {
     return undefined;
   }
@@ -166,23 +156,18 @@ export function mapMcpServer(
   }
   // Canonical timeout fields are finite().positive(); drop non-positive or
   // overflowing source values instead of importing config that fails validation.
-  const connectionTimeoutSeconds = value.connectTimeout ?? value.connect_timeout;
-  if (
-    next.connectionTimeoutMs === undefined &&
-    typeof connectionTimeoutSeconds === "number" &&
-    connectionTimeoutSeconds > 0 &&
-    Number.isFinite(connectionTimeoutSeconds * 1_000)
-  ) {
-    next.connectionTimeoutMs = connectionTimeoutSeconds * 1_000;
-  }
-  const requestTimeoutSeconds = value.timeout;
-  if (
-    next.requestTimeoutMs === undefined &&
-    typeof requestTimeoutSeconds === "number" &&
-    requestTimeoutSeconds > 0 &&
-    Number.isFinite(requestTimeoutSeconds * 1_000)
-  ) {
-    next.requestTimeoutMs = requestTimeoutSeconds * 1_000;
+  for (const [key, seconds] of [
+    ["connectionTimeoutMs", value.connectTimeout ?? value.connect_timeout],
+    ["requestTimeoutMs", value.timeout],
+  ] as const) {
+    if (
+      next[key] === undefined &&
+      typeof seconds === "number" &&
+      seconds > 0 &&
+      Number.isFinite(seconds * 1_000)
+    ) {
+      next[key] = seconds * 1_000;
+    }
   }
   next.supportsParallelToolCalls = asBoolean(
     value.supportsParallelToolCalls ?? value.supports_parallel_tool_calls,
@@ -192,7 +177,7 @@ export function mapMcpServer(
   next.oauth = mapHermesMcpOauth(value);
   Object.assign(next, mapHermesClientCertificate(value));
   next.toolFilter = mapHermesToolFilter(value);
-  const tools = isRecord(value.tools) ? value.tools : undefined;
+  const tools = asOptionalRecord(value.tools);
   if (
     tools &&
     readToolFilterList(tools.include) === undefined &&
@@ -280,13 +265,7 @@ export function mcpManualItems(params: {
     );
   } else if (
     (cert !== undefined || key !== undefined) &&
-    !(
-      (Array.isArray(cert) &&
-        cert.length === 2 &&
-        normalizeOptionalString(cert[0]) &&
-        normalizeOptionalString(cert[1])) ||
-      (normalizeOptionalString(cert) && key)
-    )
+    !mapHermesClientCertificate(raw).clientCert
   ) {
     add(
       "client-cert",
@@ -319,7 +298,7 @@ export function mcpManualItems(params: {
       "Configure an equivalent OpenClaw MCP authentication mode manually.",
     );
   }
-  const oauth = isRecord(raw.oauth) ? raw.oauth : undefined;
+  const oauth = asOptionalRecord(raw.oauth);
   if (auth === "oauth" || oauth) {
     add(
       "oauth-login",
@@ -341,7 +320,7 @@ export function mcpManualItems(params: {
     );
   }
 
-  const tools = isRecord(raw.tools) ? raw.tools : undefined;
+  const tools = asOptionalRecord(raw.tools);
   const include = tools ? readToolFilterList(tools.include) : undefined;
   const activePatterns = include ?? (tools ? readToolFilterList(tools.exclude) : undefined);
   if (activePatterns?.some(hasUnsupportedToolPattern)) {
@@ -393,5 +372,5 @@ export function mcpManualItems(params: {
       );
     }
   }
-  return [...new Map(items.map((item) => [item.id, item])).values()];
+  return items;
 }

@@ -1,4 +1,5 @@
 import type { ModelCompatConfig } from "../config/types.models.js";
+import { finalizeAgentToolAvailability } from "./agent-tool-availability.js";
 import { wrapToolWithAbortSignal } from "./agent-tools.abort.js";
 import type { HookContext } from "./agent-tools.before-tool-call.types.js";
 import {
@@ -16,15 +17,15 @@ type FinalizeAgentToolsOptions = {
   modelId?: string;
   modelCompat?: ModelCompatConfig;
   hookContext: HookContext;
-  wrapBeforeToolCallHook?: boolean;
+  wrapBeforeToolCallHook?: boolean | ((tool: AnyAgentTool) => boolean);
   emitBeforeToolCallDiagnostics?: boolean;
   approvalMode?: "request" | "report" | "deny";
   abortSignal?: AbortSignal;
   recordToolPrepStage?: (name: string) => void;
 };
 
-/** Apply the shared schema, hook, abort, and description wrappers to an authorized tool set. */
 export function finalizeAgentTools(options: FinalizeAgentToolsOptions): AnyAgentTool[] {
+  finalizeAgentToolAvailability(options.tools, { beforeNormalization: true });
   const normalized = options.tools.map((tool) =>
     normalizeToolParameters(tool, {
       modelProvider: options.modelProvider,
@@ -41,9 +42,12 @@ export function finalizeAgentTools(options: FinalizeAgentToolsOptions): AnyAgent
     options.wrapBeforeToolCallHook === false
       ? normalized
       : normalized.map((tool) =>
-          isToolWrappedWithBeforeToolCallHook(tool)
-            ? rewrapToolWithBeforeToolCallHook(tool, options.hookContext, hookOptions)
-            : wrapToolWithBeforeToolCallHook(tool, options.hookContext, hookOptions),
+          typeof options.wrapBeforeToolCallHook === "function" &&
+          !options.wrapBeforeToolCallHook(tool)
+            ? tool
+            : isToolWrappedWithBeforeToolCallHook(tool)
+              ? rewrapToolWithBeforeToolCallHook(tool, options.hookContext, hookOptions)
+              : wrapToolWithBeforeToolCallHook(tool, options.hookContext, hookOptions),
         );
   options.recordToolPrepStage?.("tool-hooks");
   const abortSignal = options.abortSignal;

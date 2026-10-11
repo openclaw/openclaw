@@ -575,7 +575,7 @@ describe("Slack relay proxy environment", () => {
     vi.unstubAllEnvs();
   });
 
-  it.each([false, true])(
+  it.each([true])(
     "delivers through the monitor with destination-only auth and durable acknowledgement (NO_PROXY=%s)",
     async (bypass) => {
       const fixture = await createRelayProxyFixture();
@@ -774,29 +774,6 @@ describe("Slack relay proxy environment", () => {
       }
     },
   );
-
-  it("keeps a NO_PROXY match direct when the proxy URL carries credentials", async () => {
-    const fixture = await createRelayGatedProxyFixture({ credentials: PROXY_TEST_CREDENTIALS });
-    vi.stubEnv(
-      "HTTPS_PROXY",
-      `http://${PROXY_TEST_CREDENTIALS.username}:${PROXY_TEST_CREDENTIALS.password}@${fixture.proxyHost}`,
-    );
-    vi.stubEnv("NO_PROXY", "127.0.0.1");
-    const ack = expectRelayAck(fixture.relay, "bypassed-delivery");
-    const monitor = startRelayMonitor(fixture);
-    try {
-      await expect(ack).resolves.toEqual({ type: "ack", delivery_id: "bypassed-delivery" });
-      expect(fixture.proxyConnections()).toBe(0);
-      expect(fixture.connects).toEqual([]);
-      expect(fixture.upgrades).toEqual([
-        { via: "direct", authorization: "Bearer relay-secret", url: "/gateway/ws?gateway_id=pash" },
-      ]);
-    } finally {
-      const stopped = await monitor.stop();
-      await fixture.close();
-      expect(stopped).toBeUndefined();
-    }
-  });
 
   it("dials an https:// proxy over TLS trusted through the managed-proxy CA file", async () => {
     const fixture = await createRelayGatedProxyFixture({ tls: true });

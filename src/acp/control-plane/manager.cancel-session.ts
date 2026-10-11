@@ -1,4 +1,3 @@
-/** Cancellation path for active ACP turns and idle runtime handles. */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   AcpRuntimeError,
@@ -8,8 +7,8 @@ import {
 import {
   matchesAcpSessionRuntimeLocator,
   resolveAcpSessionControlOwner,
-  type AcpSessionRuntimeLocator,
 } from "../runtime/session-control-owner.js";
+import type { AcpSessionRuntimeLocator } from "../runtime/session-meta-control.types.js";
 import type { AcceptedTurnState, AcceptedTurns } from "./manager.accepted-turns.js";
 import type { ManagerRuntimeHandleCache } from "./manager.runtime-handle-cache.js";
 import type {
@@ -35,7 +34,6 @@ async function settleManagerCancellations(cancellations: Promise<void>[]): Promi
   }
 }
 
-/** Cancels either the active ACP turn or the idle runtime handle for a session. */
 export async function runManagerCancelSession(params: {
   assertActive?: () => void;
   cfg: OpenClawConfig;

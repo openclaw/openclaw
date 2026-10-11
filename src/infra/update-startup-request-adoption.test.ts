@@ -10,6 +10,11 @@ const checkUpdateStatus = vi.hoisted(() =>
   vi.fn<typeof import("./update-check.js").checkUpdateStatus>(),
 );
 
+vi.mock("../version.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../version.js")>()),
+  VERSION: "2026.9.7",
+}));
+
 vi.mock("./update-check.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./update-check.js")>()),
   checkUpdateStatus,
@@ -45,6 +50,7 @@ it.each(["complete", "close"] as const)(
       owner = createGatewayUpdateCheck({
         lifecycle,
         getConfig: () => ({}),
+        applyRemoteCatalogUpdate: async () => "unchanged",
         log: { info: vi.fn() },
         isNixMode: false,
       });
@@ -106,6 +112,7 @@ it("aborts and joins early update requests before the post-ready scheduler loads
     scheduler,
     createUpdateCheck: factory,
     getConfig: () => ({}),
+    getPluginRegistry: () => undefined,
     log: { info: vi.fn(), warn: vi.fn() },
     isNixMode: false,
     broadcastToConnIds: vi.fn(),

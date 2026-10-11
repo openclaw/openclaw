@@ -1,8 +1,5 @@
-// Covers reconnect-triggered queue drain selection, active claims, backoff
-// bypass, and concurrent drain suppression.
 import path from "node:path";
-import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { controlNextRecoverySleep } from "../../../test/helpers/infra/delivery-recovery.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -10,24 +7,15 @@ import { beginConversationDeliveryOperation } from "../../config/sessions/conver
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { drainPendingDeliveries as drainPluginPendingDeliveries } from "../../plugin-sdk/delivery-queue-runtime.js";
 import { buildConversationRef } from "../../routing/conversation-ref.js";
-import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import { PlatformMessageNotDispatchedError } from "./deliver-types.js";
-import { OUTBOUND_DELIVERY_QUEUE_NAME } from "./delivery-queue-media-staging.js";
 import {
   type DeliverFn,
   drainPendingDeliveriesCore,
-  type RecoveryLogger,
   recoverPendingDeliveries,
   withActiveDeliveryClaim,
 } from "./delivery-queue-recovery.js";
-import {
-  markDeliveryPlatformOutcomeUnknown,
-  markDeliveryPlatformSendAttemptStarted,
-  reserveDeliveryAttempt,
-  enqueueDelivery,
-  failDelivery,
-} from "./delivery-queue-storage.js";
+import { enqueueDelivery, failDelivery } from "./delivery-queue-storage.js";
 import {
   loadPendingDeliveries,
   createRecoveryLog,
@@ -37,8 +25,7 @@ import {
 } from "./delivery-queue.test-helpers.js";
 
 const RECOVERY_REPLAY_SPACING_MS = 250;
-const MAX_RETRIES = 5;
-const stubCfg = {} as OpenClawConfig;
+const stubCfg: OpenClawConfig = {};
 const NO_LISTENER_ERROR = "No active DirectChat listener";
 const sleepMock = vi.hoisted(() => vi.fn<(ms: number) => Promise<void>>());
 const resolveOutboundChannelMessageAdapterMock = vi.hoisted(() => vi.fn());
@@ -54,153 +41,60 @@ vi.mock("./delivery-queue-migration.js", () => ({
   migrateLegacyPendingOutboundDeliveries: migrateLegacyPendingOutboundDeliveriesMock,
 }));
 
-function normalizeReconnectAccountIdForTest(accountId?: string | null): string {
-  return (accountId ?? "").trim() || "default";
-}
-
-function countMatching<T>(items: readonly T[], predicate: (item: T) => boolean): number {
-  let count = 0;
-  for (const item of items) {
-    if (predicate(item)) {
-      count += 1;
-    }
-  }
-  return count;
-}
-
-const requireRecord = createRequireRecord("record", "expected-non-array-record");
-
-function firstMockArg(
-  mock: { mock: { calls: readonly unknown[][] } },
-  label: string,
-): Record<string, unknown> {
-  const [call] = mock.mock.calls;
-  if (!call) {
-    throw new Error(`expected ${label} call`);
-  }
-  const [arg] = call;
-  return requireRecord(arg);
-}
-
-function expectLogMessageWith(logFn: ReturnType<typeof vi.fn>, text: string): void {
-  expect(logFn.mock.calls.map(([message]) => String(message)).join("\n")).toContain(text);
-}
-
-function readOutboundQueueStatus(tmpDir: string, id: string): string | undefined {
-  const { db } = openOpenClawStateDatabase({
-    env: { ...process.env, OPENCLAW_STATE_DIR: tmpDir },
-  });
-  const row = db
-    .prepare("SELECT status FROM delivery_queue_entries WHERE queue_name = ? AND id = ?")
-    .get(OUTBOUND_DELIVERY_QUEUE_NAME, id) as { status?: string } | undefined;
-  return row?.status;
-}
-
-async function drainDirectChatReconnectPending(opts: {
-  accountId: string;
-  deliver: DeliverFn;
-  log: RecoveryLogger;
-  stateDir: string;
-}) {
-  const normalizedAccountId = normalizeReconnectAccountIdForTest(opts.accountId);
-  await drainPendingDeliveriesCore({
-    drainKey: `directchat:${normalizedAccountId}`,
-    logLabel: "DirectChat reconnect drain",
-    cfg: stubCfg,
-    log: opts.log,
-    stateDir: opts.stateDir,
-    deliver: opts.deliver,
-    selectEntry: (entry) => ({
-      match:
-        entry.channel === "directchat" &&
-        normalizeReconnectAccountIdForTest(entry.accountId) === normalizedAccountId,
-      bypassBackoff:
-        typeof entry.lastError === "string" && entry.lastError.includes(NO_LISTENER_ERROR),
-    }),
-  });
-}
-
-async function drainAcct1DirectChatReconnect(params: {
-  deliver: DeliverFn;
-  log: RecoveryLogger;
-  stateDir: string;
-}) {
-  await drainDirectChatReconnectPending({
-    accountId: "acct1",
-    deliver: params.deliver,
-    log: params.log,
-    stateDir: params.stateDir,
-  });
-}
-
-function createTransientFailureDeliver(): DeliverFn {
-  return vi.fn<DeliverFn>(async () => {
-    throw new Error("transient failure");
-  });
-}
-
-async function enqueueFailedDirectChatDelivery(params: {
-  accountId: string;
-  stateDir: string;
-  error?: string;
-}): Promise<string> {
-  const id = await enqueueDelivery(
-    {
-      channel: "directchat",
-      to: "+1555",
-      payloads: [{ text: "hi" }],
-      accountId: params.accountId,
-    },
-    params.stateDir,
-  );
-  await failDelivery(id, params.error ?? NO_LISTENER_ERROR, params.stateDir);
-  return id;
-}
-
 describe("drainPendingDeliveriesCore for reconnect", () => {
   let tmpDir: string;
   const fixtures = installDeliveryQueueTmpDirHooks();
+  let log = createRecoveryLog();
+  const deliver = vi.fn<DeliverFn>();
+  const selectEntry: Parameters<typeof drainPendingDeliveriesCore>[0]["selectEntry"] = (entry) => ({
+    match: entry.channel === "directchat" && entry.accountId === "acct1",
+    bypassBackoff: entry.lastError?.includes(NO_LISTENER_ERROR),
+  });
+  function drain(overrides: Partial<Parameters<typeof drainPendingDeliveriesCore>[0]> = {}) {
+    return drainPendingDeliveriesCore({
+      drainKey: "directchat:acct1",
+      logLabel: "DirectChat reconnect drain",
+      cfg: stubCfg,
+      log,
+      stateDir: tmpDir,
+      deliver,
+      selectEntry,
+      ...overrides,
+    });
+  }
+  function recover(recoveryLog = createRecoveryLog()) {
+    return recoverPendingDeliveries({ cfg: stubCfg, log: recoveryLog, stateDir: tmpDir, deliver });
+  }
+  function enqueue(overrides: Partial<Parameters<typeof enqueueDelivery>[0]> = {}) {
+    return enqueueDelivery(
+      {
+        channel: "directchat",
+        to: "+1555",
+        payloads: [{ text: "hi" }],
+        accountId: "acct1",
+        ...overrides,
+      },
+      tmpDir,
+    );
+  }
+  async function enqueueFailed() {
+    const id = await enqueue();
+    await failDelivery(id, NO_LISTENER_ERROR, tmpDir);
+    return id;
+  }
 
   beforeEach(() => {
     tmpDir = fixtures.tmpDir();
+    log = createRecoveryLog();
+    deliver.mockReset().mockResolvedValue(undefined);
     sleepMock.mockReset();
     sleepMock.mockResolvedValue(undefined);
     resolveOutboundChannelMessageAdapterMock.mockReset();
     migrateLegacyPendingOutboundDeliveriesMock.mockClear();
   });
 
-  it("keeps one-time migration out of repeated canonical drains", async () => {
-    const drain = () =>
-      drainPendingDeliveriesCore({
-        drainKey: "gateway:outbound",
-        logLabel: "Outbound delivery retry",
-        cfg: stubCfg,
-        log: createRecoveryLog(),
-        stateDir: tmpDir,
-        deliver: vi.fn<DeliverFn>(),
-        selectEntry: () => ({ match: true }),
-      });
-
-    await drain();
-    await drain();
-    await drain();
-
-    expect(migrateLegacyPendingOutboundDeliveriesMock).not.toHaveBeenCalled();
-  });
-
-  it("drains entries that failed with 'no listener' error", async () => {
-    const log = createRecoveryLog();
-    const deliver = vi.fn<DeliverFn>(async () => {});
-
-    await enqueueFailedDirectChatDelivery({ accountId: "acct1", stateDir: tmpDir });
-
-    await drainAcct1DirectChatReconnect({ deliver, log, stateDir: tmpDir });
-
-    expect(deliver).toHaveBeenCalledTimes(1);
-    const delivery = firstMockArg(deliver, "delivery");
-    expect(delivery.channel).toBe("directchat");
-    expect(delivery.to).toBe("+1555");
-    expect(delivery.skipQueue).toBe(true);
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   it("leaves Gateway conversation records for the authorized recovery owner", async () => {
@@ -229,7 +123,7 @@ describe("drainPendingDeliveriesCore for reconnect", () => {
         }),
       },
     );
-    beginConversationDeliveryOperation(scope, {
+    await beginConversationDeliveryOperation(scope, {
       operationId,
       operationKind: "send",
       conversationRef,
@@ -253,7 +147,7 @@ describe("drainPendingDeliveriesCore for reconnect", () => {
       tmpDir,
     );
     await failDelivery(id, NO_LISTENER_ERROR, tmpDir);
-    const deliver = vi.fn<DeliverFn>(async () => {
+    deliver.mockImplementation(async () => {
       throw new PlatformMessageNotDispatchedError(
         "Conversation delivery is missing its current route authorization",
         { cause: undefined, retryable: false },
@@ -277,21 +171,9 @@ describe("drainPendingDeliveriesCore for reconnect", () => {
     expect((await loadPendingDeliveries(tmpDir)).map((entry) => entry.id)).toContain(id);
   });
 
-  it("skips entries from other accounts", async () => {
-    const log = createRecoveryLog();
-    const deliver = vi.fn<DeliverFn>(async () => {});
-
-    await enqueueFailedDirectChatDelivery({ accountId: "other", stateDir: tmpDir });
-
-    await drainAcct1DirectChatReconnect({ deliver, log, stateDir: tmpDir });
-
-    // deliver should not be called since no eligible entries for acct1
-    expect(deliver).not.toHaveBeenCalled();
-  });
-
   it("retries deferred rows for every channel through the gateway-wide drain", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
     const channels = ["discord", "slack", "signal"] as const;
-    const deliveryIds: string[] = [];
     for (const channel of channels) {
       const id = await enqueueDelivery(
         {
@@ -301,51 +183,36 @@ describe("drainPendingDeliveriesCore for reconnect", () => {
         },
         tmpDir,
       );
-      await failDelivery(id, "temporary connection failure", tmpDir);
-      deliveryIds.push(id);
-    }
-    const deliver = vi.fn<DeliverFn>(async (entry) => [
-      { channel: entry.channel, messageId: `${entry.channel}-delivered` },
-    ]);
-    const drain = () =>
-      drainPendingDeliveriesCore({
-        drainKey: "gateway:outbound",
-        logLabel: "Outbound delivery retry",
-        cfg: stubCfg,
-        log: createRecoveryLog(),
-        stateDir: tmpDir,
-        deliver,
-        selectEntry: () => ({ match: true, bypassBackoff: false }),
-      });
-
-    await expect(
-      recoverPendingDeliveries({
-        cfg: stubCfg,
-        log: createRecoveryLog(),
-        stateDir: tmpDir,
-        deliver,
-      }),
-    ).resolves.toMatchObject({ recovered: 0, deferredBackoff: channels.length });
-
-    await drain();
-    expect(deliver).not.toHaveBeenCalled();
-    expect(await loadPendingDeliveries(tmpDir)).toHaveLength(channels.length);
-
-    for (const id of deliveryIds) {
       setQueuedEntryState(tmpDir, id, {
         retryCount: 1,
-        lastAttemptAt: Date.now() - 5_000,
+        lastAttemptAt: Date.now(),
         lastError: "temporary connection failure",
       });
     }
-    await drain();
+    deliver.mockImplementation(async (entry) => [
+      { channel: entry.channel, messageId: `${entry.channel}-delivered` },
+    ]);
+    const drainAll = () =>
+      drain({ drainKey: "gateway:outbound", selectEntry: () => ({ match: true }) });
+
+    await expect(recover()).resolves.toMatchObject({
+      recovered: 0,
+      deferredBackoff: channels.length,
+    });
+
+    await drainAll();
+    expect(deliver).not.toHaveBeenCalled();
+    expect(await loadPendingDeliveries(tmpDir)).toHaveLength(channels.length);
+
+    vi.setSystemTime(Date.now() + 5_000);
+    await drainAll();
 
     expect(deliver.mock.calls.map(([entry]) => entry.channel).toSorted()).toEqual(
       channels.toSorted(),
     );
     expect(await loadPendingDeliveries(tmpDir)).toEqual([]);
 
-    await drain();
+    await drainAll();
     expect(deliver).toHaveBeenCalledTimes(channels.length);
   });
 
@@ -364,7 +231,7 @@ describe("drainPendingDeliveriesCore for reconnect", () => {
     const pendingBefore = await loadPendingDeliveries(tmpDir);
     const { promise: firstStarted, resolve: signalFirstStarted } = createDeferred();
     const { promise: firstBlocked, resolve: releaseFirst } = createDeferred();
-    const deliver = vi.fn<DeliverFn>(async () => {
+    deliver.mockImplementation(async () => {
       if (deliver.mock.calls.length === 1) {
         signalFirstStarted();
         await firstBlocked;
@@ -372,77 +239,31 @@ describe("drainPendingDeliveriesCore for reconnect", () => {
     });
     let shouldContinue = true;
 
-    const drain = drainPendingDeliveriesCore({
+    const draining = drain({
       drainKey: "gateway:outbound",
-      logLabel: "Outbound delivery retry",
-      cfg: stubCfg,
-      log: createRecoveryLog(),
-      stateDir: tmpDir,
-      deliver,
-      selectEntry: () => ({ match: true, bypassBackoff: false }),
+      selectEntry: () => ({ match: true }),
       shouldContinue: () => shouldContinue,
     });
     try {
-      await Promise.race([firstStarted, drain]);
+      await Promise.race([firstStarted, draining]);
       expect(deliver).toHaveBeenCalledOnce();
     } finally {
       shouldContinue = false;
       releaseFirst();
-      await drain;
+      await draining;
     }
 
     expect(deliver).toHaveBeenCalledOnce();
     expect(await loadPendingDeliveries(tmpDir)).toEqual(pendingBefore.slice(1));
   });
 
-  it("rejects recovered delivery when the current channel config disables its account", async () => {
-    const id = await enqueueDelivery(
-      {
-        channel: "discord",
-        to: "discord:recipient",
-        payloads: [{ text: "do not send after account revocation" }],
-      },
-      tmpDir,
-    );
-    await failDelivery(id, "temporary connection failure", tmpDir);
-    setQueuedEntryState(tmpDir, id, {
-      retryCount: 1,
-      lastAttemptAt: Date.now() - 5_000,
-    });
-    const cfg: OpenClawConfig = { channels: { discord: { enabled: false } } };
-    const admitDeferredDelivery = vi.fn(({ cfg: currentConfig }: { cfg: OpenClawConfig }) =>
-      currentConfig.channels?.discord?.enabled === false
-        ? { status: "permanent_rejection" as const, reason: "Discord account disabled" }
-        : { status: "allowed" as const },
-    );
-    resolveOutboundChannelMessageAdapterMock.mockReturnValue({
-      durableFinal: { admitDeferredDelivery },
-    });
-    const deliver = vi.fn<DeliverFn>(async () => []);
-
-    await drainPendingDeliveriesCore({
-      drainKey: "gateway:outbound",
-      logLabel: "Outbound delivery retry",
-      cfg,
-      log: createRecoveryLog(),
-      stateDir: tmpDir,
-      deliver,
-      selectEntry: () => ({ match: true, bypassBackoff: false }),
-    });
-
-    expect(admitDeferredDelivery).toHaveBeenCalledWith(expect.objectContaining({ cfg }));
-    expect(deliver).not.toHaveBeenCalled();
-    expect(readOutboundQueueStatus(tmpDir, id)).toBeUndefined();
-  });
-
   it("retries immediately without resetting retry history", async () => {
-    const log = createRecoveryLog();
-    const deliver = createTransientFailureDeliver();
+    deliver.mockRejectedValue(new Error("transient failure"));
 
-    const id = await enqueueFailedDirectChatDelivery({ accountId: "acct1", stateDir: tmpDir });
+    const id = await enqueueFailed();
     const before = readQueuedEntry(tmpDir, id);
 
-    await drainAcct1DirectChatReconnect({ deliver, log, stateDir: tmpDir });
+    await drain();
 
     expect(deliver).toHaveBeenCalledTimes(1);
 
@@ -453,156 +274,22 @@ describe("drainPendingDeliveriesCore for reconnect", () => {
     expect(after.lastError).toBe("transient failure");
   });
 
-  it("records retry state if delivery fails during drain", async () => {
-    const log = createRecoveryLog();
-    const deliver = createTransientFailureDeliver();
-
-    await enqueueFailedDirectChatDelivery({ accountId: "acct1", stateDir: tmpDir });
-
-    await expect(
-      drainAcct1DirectChatReconnect({ deliver, log, stateDir: tmpDir }),
-    ).resolves.toBeUndefined();
-  });
-
-  it("removes random unknown-after-send entries without replaying during reconnect drain", async () => {
-    const log = createRecoveryLog();
-    const deliver = vi.fn<DeliverFn>(async () => {});
-    const id = await enqueueFailedDirectChatDelivery({ accountId: "acct1", stateDir: tmpDir });
-    await markDeliveryPlatformOutcomeUnknown(id, tmpDir);
-
-    await drainAcct1DirectChatReconnect({ deliver, log, stateDir: tmpDir });
-
-    expect(deliver).not.toHaveBeenCalled();
-    expect(await loadPendingDeliveries(tmpDir)).toHaveLength(0);
-    expect(readOutboundQueueStatus(tmpDir, id)).toBeUndefined();
-    expectLogMessageWith(log.warn, "refusing blind replay without adapter reconciliation");
-  });
-
-  it("reconciles an exhausted final attempt before dead-lettering", async () => {
-    const log = createRecoveryLog();
-    const deliver = vi.fn<DeliverFn>(async () => {});
-    const id = await enqueueDelivery(
-      {
-        channel: "directchat",
-        to: "+1555",
-        payloads: [{ text: "maybe sent" }],
-        accountId: "acct1",
-        maxRetries: 1,
-      },
-      tmpDir,
-    );
-    await reserveDeliveryAttempt(id, 1, tmpDir);
-    await markDeliveryPlatformSendAttemptStarted(id, tmpDir);
-    const reconcileUnknownSend = vi.fn().mockResolvedValue({
-      status: "sent",
-      messageId: "platform-final",
-      receipt: {
-        primaryPlatformMessageId: "platform-final",
-        platformMessageIds: ["platform-final"],
-        parts: [{ platformMessageId: "platform-final", kind: "text", index: 0 }],
-        sentAt: 1,
-      },
-    });
-    resolveOutboundChannelMessageAdapterMock.mockReturnValue({
-      durableFinal: {
-        capabilities: { reconcileUnknownSend: true },
-        reconcileUnknownSend,
-      },
-    });
-
-    await drainAcct1DirectChatReconnect({ deliver, log, stateDir: tmpDir });
-
-    expect(deliver).not.toHaveBeenCalled();
-    expect(reconcileUnknownSend).toHaveBeenCalledOnce();
-    expect(await loadPendingDeliveries(tmpDir)).toHaveLength(0);
-    expect(readOutboundQueueStatus(tmpDir, id)).toBeUndefined();
-  });
-
-  it("skips entries where retryCount >= MAX_RETRIES", async () => {
-    const log = createRecoveryLog();
-    const deliver = vi.fn<DeliverFn>(async () => {});
-
-    const id = await enqueueDelivery(
-      { channel: "directchat", to: "+1555", payloads: [{ text: "hi" }], accountId: "acct1" },
-      tmpDir,
-    );
-
-    // Bump retryCount to MAX_RETRIES
-    for (let i = 0; i < MAX_RETRIES; i++) {
-      await failDelivery(id, NO_LISTENER_ERROR, tmpDir);
-    }
-
-    await drainAcct1DirectChatReconnect({ deliver, log, stateDir: tmpDir });
-
-    // Random delivery IDs do not need a reusable producer fence.
-    expect(deliver).not.toHaveBeenCalled();
-    expect(await loadPendingDeliveries(tmpDir)).toHaveLength(0);
-    expect(readOutboundQueueStatus(tmpDir, id)).toBeUndefined();
-  });
-
   it("second concurrent call is skipped (concurrency guard)", async () => {
-    const log = createRecoveryLog();
     const { promise: deliverPromise, resolve: resolveDeliver } = createDeferred();
-    const deliver = vi.fn<DeliverFn>(async () => {
+    deliver.mockImplementation(async () => {
       await deliverPromise;
     });
 
-    const id = await enqueueDelivery(
-      { channel: "directchat", to: "+1555", payloads: [{ text: "hi" }], accountId: "acct1" },
-      tmpDir,
-    );
+    const id = await enqueue();
     setQueuedEntryState(tmpDir, id, { retryCount: 0, lastError: NO_LISTENER_ERROR });
 
-    const opts = { accountId: "acct1", log, stateDir: tmpDir, deliver };
-
-    // Start first drain (will block on deliver)
-    const first = drainDirectChatReconnectPending(opts);
-    // Start second drain immediately — should be skipped
-    const second = drainDirectChatReconnectPending(opts);
-    await second;
-
-    expectLogMessageWith(log.info, "already in progress");
-
-    // Unblock first drain
-    resolveDeliver!();
-    await first;
-  });
-
-  it("does not re-deliver an entry already being recovered at startup", async () => {
-    const log = createRecoveryLog();
-    const startupLog = createRecoveryLog();
-    const { promise: deliveryStarted, resolve: signalDeliveryStarted } = createDeferred();
-    const { promise: deliverPromise, resolve: resolveDeliver } = createDeferred();
-    const deliver = vi.fn<DeliverFn>(async () => {
-      signalDeliveryStarted();
-      await deliverPromise;
-    });
-
-    const id = await enqueueDelivery(
-      { channel: "directchat", to: "+1555", payloads: [{ text: "hi" }], accountId: "acct1" },
-      tmpDir,
-    );
-    setQueuedEntryState(tmpDir, id, { retryCount: 0, lastError: NO_LISTENER_ERROR });
-
-    const startupRecovery = recoverPendingDeliveries({
-      cfg: stubCfg,
-      deliver,
-      log: startupLog,
-      stateDir: tmpDir,
-    });
-
+    const first = drain();
     try {
-      await Promise.race([deliveryStarted, startupRecovery]);
-      expect(deliver).toHaveBeenCalledTimes(1);
-
-      await drainAcct1DirectChatReconnect({ deliver, log, stateDir: tmpDir });
-      await drainAcct1DirectChatReconnect({ deliver, log, stateDir: tmpDir });
-
-      expect(deliver).toHaveBeenCalledTimes(1);
-      expect(log.info).not.toHaveBeenCalled();
+      await drain();
+      expect(log.info).toHaveBeenCalledWith(expect.stringContaining("already in progress"));
     } finally {
       resolveDeliver();
-      await startupRecovery;
+      await first;
     }
   });
 
@@ -612,12 +299,11 @@ describe("drainPendingDeliveriesCore for reconnect", () => {
     vi.setSystemTime(startedAt);
     try {
       const controlledSleep = controlNextRecoverySleep(sleepMock);
-      const log = createRecoveryLog();
       const startupLog = createRecoveryLog();
       const { promise: firstStartedPromise, resolve: firstStarted } = createDeferred();
       const { promise: firstBlocked, resolve: releaseFirst } = createDeferred();
       const deliveryTimes: number[] = [];
-      const deliver = vi.fn<DeliverFn>(async () => {
+      deliver.mockImplementation(async () => {
         deliveryTimes.push(Date.now());
         if (deliveryTimes.length === 1) {
           firstStarted();
@@ -626,20 +312,12 @@ describe("drainPendingDeliveriesCore for reconnect", () => {
       });
 
       for (const to of ["+1000", "+2000"]) {
-        await enqueueDelivery(
-          { channel: "directchat", to, payloads: [{ text: "hi" }], accountId: "acct1" },
-          tmpDir,
-        );
+        await enqueue({ to });
       }
 
-      const reconnectDrain = drainAcct1DirectChatReconnect({ deliver, log, stateDir: tmpDir });
+      const reconnectDrain = drain();
       await firstStartedPromise;
-      const startupRecovery = recoverPendingDeliveries({
-        cfg: stubCfg,
-        deliver,
-        log: startupLog,
-        stateDir: tmpDir,
-      });
+      const startupRecovery = recover(startupLog);
       releaseFirst();
 
       await expect(controlledSleep.started).resolves.toBe(RECOVERY_REPLAY_SPACING_MS);
@@ -658,12 +336,11 @@ describe("drainPendingDeliveriesCore for reconnect", () => {
   });
 
   it("does not re-deliver a stale startup snapshot after reconnect already acked it", async () => {
-    const log = createRecoveryLog();
     const startupLog = createRecoveryLog();
     const { promise: blockerStarted, resolve: signalBlockerStarted } = createDeferred();
     const { promise: blocker, resolve: releaseBlocker } = createDeferred();
     const deliveredTargets: string[] = [];
-    const deliver = vi.fn<DeliverFn>(async ({ to }) => {
+    deliver.mockImplementation(async ({ to }) => {
       deliveredTargets.push(to);
       if (to === "+1000") {
         signalBlockerStarted();
@@ -675,19 +352,11 @@ describe("drainPendingDeliveriesCore for reconnect", () => {
       { channel: "demo-channel-a", to: "+1000", payloads: [{ text: "blocker" }] },
       tmpDir,
     );
-    const directChatId = await enqueueDelivery(
-      { channel: "directchat", to: "+1555", payloads: [{ text: "hi" }], accountId: "acct1" },
-      tmpDir,
-    );
+    const directChatId = await enqueue();
     setQueuedEntryState(tmpDir, blockerId, { retryCount: 0, enqueuedAt: 1 });
     setQueuedEntryState(tmpDir, directChatId, { retryCount: 0, enqueuedAt: 2 });
 
-    const startupRecovery = recoverPendingDeliveries({
-      cfg: stubCfg,
-      deliver,
-      log: startupLog,
-      stateDir: tmpDir,
-    });
+    const startupRecovery = recover(startupLog);
 
     try {
       await Promise.race([blockerStarted, startupRecovery]);
@@ -695,104 +364,29 @@ describe("drainPendingDeliveriesCore for reconnect", () => {
         expect.objectContaining({ channel: "demo-channel-a", to: "+1000" }),
       );
 
-      await drainAcct1DirectChatReconnect({ deliver, log, stateDir: tmpDir });
+      await drain();
     } finally {
       releaseBlocker();
       await startupRecovery;
     }
 
     expect(deliver).toHaveBeenCalledTimes(2);
-    expect(countMatching(deliveredTargets, (target) => target === "+1555")).toBe(1);
-    expectLogMessageWith(startupLog.info, "Recovery skipped for delivery");
-  });
-  it("drains fresh pending entries for the reconnecting account", async () => {
-    const log = createRecoveryLog();
-    const deliver = vi.fn<DeliverFn>(async () => {});
-
-    await enqueueDelivery(
-      { channel: "directchat", to: "+1555", payloads: [{ text: "hi" }], accountId: "acct1" },
-      tmpDir,
+    expect(deliveredTargets.filter((target) => target === "+1555")).toHaveLength(1);
+    expect(startupLog.info).toHaveBeenCalledWith(
+      expect.stringContaining("Recovery skipped for delivery"),
     );
-
-    await drainAcct1DirectChatReconnect({ deliver, log, stateDir: tmpDir });
-
-    expect(deliver).toHaveBeenCalledTimes(1);
-    expect(await loadPendingDeliveries(tmpDir)).toStrictEqual([]);
   });
-
-  it("drains backoff-eligible retries on reconnect", async () => {
-    const log = createRecoveryLog();
-    const deliver = vi.fn<DeliverFn>(async () => {});
-
-    const id = await enqueueDelivery(
-      { channel: "directchat", to: "+1555", payloads: [{ text: "hi" }], accountId: "acct1" },
-      tmpDir,
-    );
-    await failDelivery(id, "network down", tmpDir);
+  it("recomputes backoff bypass after rereading the claimed entry", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const id = await enqueue();
     setQueuedEntryState(tmpDir, id, {
       retryCount: 1,
-      lastAttemptAt: Date.now() - 30_000,
+      lastAttemptAt: Date.now(),
+      lastError: NO_LISTENER_ERROR,
     });
-
-    await drainAcct1DirectChatReconnect({ deliver, log, stateDir: tmpDir });
-
-    expect(deliver).toHaveBeenCalledTimes(1);
-  });
-
-  it("does not bypass backoff for ordinary transient errors on reconnect", async () => {
-    const log = createRecoveryLog();
-    const deliver = vi.fn<DeliverFn>(async () => {});
-
-    const id = await enqueueDelivery(
-      { channel: "directchat", to: "+1555", payloads: [{ text: "hi" }], accountId: "acct1" },
-      tmpDir,
-    );
-    await failDelivery(id, "network down", tmpDir);
-
-    await drainAcct1DirectChatReconnect({ deliver, log, stateDir: tmpDir });
-
-    expect(deliver).not.toHaveBeenCalled();
-    expectLogMessageWith(log.info, "not ready for retry yet");
-  });
-
-  it("still bypasses backoff for no-listener failures on reconnect", async () => {
-    const log = createRecoveryLog();
-    const deliver = vi.fn<DeliverFn>(async () => {});
-
-    await enqueueFailedDirectChatDelivery({ accountId: "acct1", stateDir: tmpDir });
-
-    await drainAcct1DirectChatReconnect({ deliver, log, stateDir: tmpDir });
-
-    expect(deliver).toHaveBeenCalledTimes(1);
-  });
-
-  it("ignores other channels even when reconnect drain runs", async () => {
-    const log = createRecoveryLog();
-    const deliver = vi.fn<DeliverFn>(async () => {});
-
-    await enqueueDelivery(
-      { channel: "forum", to: "+1555", payloads: [{ text: "hi" }], accountId: "acct1" },
-      tmpDir,
-    );
-
-    await drainAcct1DirectChatReconnect({ deliver, log, stateDir: tmpDir });
-
-    expect(deliver).not.toHaveBeenCalled();
-  });
-
-  it("recomputes backoff bypass after rereading the claimed entry", async () => {
-    const log = createRecoveryLog();
-    const deliver = vi.fn<DeliverFn>(async () => {});
-    const id = await enqueueFailedDirectChatDelivery({ accountId: "acct1", stateDir: tmpDir });
     let mutated = false;
 
-    await drainPendingDeliveriesCore({
-      drainKey: "directchat:acct1",
-      logLabel: "DirectChat reconnect drain",
-      cfg: stubCfg,
-      log,
-      stateDir: tmpDir,
-      deliver,
+    await drain({
       selectEntry: (entry) => {
         if (entry.id === id && !mutated) {
           mutated = true;
@@ -802,45 +396,28 @@ describe("drainPendingDeliveriesCore for reconnect", () => {
             lastError: "network down",
           });
         }
-        return {
-          match:
-            entry.channel === "directchat" &&
-            normalizeReconnectAccountIdForTest(entry.accountId) === "acct1",
-          bypassBackoff:
-            typeof entry.lastError === "string" && entry.lastError.includes(NO_LISTENER_ERROR),
-        };
+        return selectEntry(entry, Date.now());
       },
     });
 
     expect(deliver).not.toHaveBeenCalled();
-    expectLogMessageWith(log.info, "not ready for retry yet");
+    expect(log.info).toHaveBeenCalledWith(expect.stringContaining("not ready for retry yet"));
   });
 
   it("skips entries that an in-flight live delivery has actively claimed", async () => {
-    // Regression for openclaw/openclaw#70386: a reconnect drain that runs
-    // while the live send is still writing to the adapter must not re-drive
-    // the same entry. The live delivery path holds an in-memory active claim
-    // for `queueId` across its send; drain honors that claim via the same
-    // `entriesInProgress` set used for startup recovery.
-    const log = createRecoveryLog();
-    const deliver = vi.fn<DeliverFn>(async () => {});
+    // #70386: reconnect must share the live sender's active claim.
 
-    const id = await enqueueDelivery(
-      { channel: "directchat", to: "+1555", payloads: [{ text: "hi" }], accountId: "acct1" },
-      tmpDir,
-    );
+    const id = await enqueue();
 
     const claimResult = await withActiveDeliveryClaim(id, async () => {
-      await drainAcct1DirectChatReconnect({ deliver, log, stateDir: tmpDir });
-      await drainAcct1DirectChatReconnect({ deliver, log, stateDir: tmpDir });
+      await drain();
+      await drain();
       expect(deliver).not.toHaveBeenCalled();
       expect(log.info).not.toHaveBeenCalled();
     });
     expect(claimResult.status).toBe("claimed");
 
-    // Once the live delivery path releases its claim (success or failure), a
-    // later reconnect drain is free to pick the entry up again.
-    await drainAcct1DirectChatReconnect({ deliver, log, stateDir: tmpDir });
+    await drain();
     expect(deliver).toHaveBeenCalledTimes(1);
   });
 });

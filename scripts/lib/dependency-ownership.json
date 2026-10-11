@@ -85,7 +85,12 @@
     "@openclaw/fs-safe": {
       "owner": "core:filesystem-safety",
       "class": "core-runtime",
-      "risk": ["filesystem", "path-safety"]
+      "risk": ["native", "filesystem", "path-safety", "secret-input"]
+    },
+    "@openclaw/proc-safe": {
+      "owner": "core:process-execution",
+      "class": "core-runtime",
+      "risk": ["native", "process-execution", "service-manager"]
     },
     "@silvia-odwyer/photon-node": {
       "owner": "core:media",
@@ -108,11 +113,6 @@
       "owner": "core:cli",
       "class": "core-runtime",
       "risk": ["formatting"]
-    },
-    "chokidar": {
-      "owner": "core:watch-mode",
-      "class": "core-runtime",
-      "risk": ["filesystem-watch"]
     },
     "chrome-devtools-mcp": {
       "owner": "plugin:browser",
@@ -214,11 +214,6 @@
       "class": "core-runtime",
       "risk": ["archive-parser", "untrusted-files"]
     },
-    "koffi": {
-      "owner": "core:process-execution",
-      "class": "core-runtime",
-      "risk": ["native", "ffi", "process-execution", "secret-input"]
-    },
     "kysely": {
       "owner": "core:sqlite-storage",
       "class": "core-runtime",
@@ -239,6 +234,11 @@
       "owner": "plugin:microsoft",
       "class": "plugin-runtime",
       "risk": ["tts", "network"]
+    },
+    "npm": {
+      "owner": "core:plugin-install",
+      "class": "core-runtime",
+      "risk": ["package-manager", "network", "filesystem"]
     },
     "openai": {
       "owner": "provider:openai",

@@ -32,11 +32,11 @@ class VectorKnnSubprocessError extends Error {
   }
 }
 
-function buildChildEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+function buildChildEnv(): NodeJS.ProcessEnv {
   const childEnv: NodeJS.ProcessEnv = {};
   for (const name of ["PATH", "SystemRoot", "SYSTEMROOT", "WINDIR", "TEMP", "TMP", "TMPDIR"]) {
-    if (env[name]) {
-      childEnv[name] = env[name];
+    if (process.env[name]) {
+      childEnv[name] = process.env[name];
     }
   }
   return childEnv;
@@ -301,21 +301,12 @@ async function runAdmittedVectorKnn(params: VectorKnnSubprocessParams): Promise<
   child.stdout.removeAllListeners("data");
   setChildReferenced(child, true);
   return await new Promise<VectorKnnResponse>((resolve, reject) => {
-    const stdoutChunks: Buffer[] = [];
     const stderrChunks: Buffer[] = [];
-    let stdoutBytes = 0;
-    let stderrBytes = 0;
     let closed = false;
     let callerSettled = false;
     let terminationReason: Error | undefined;
     let killExitTimer: ReturnType<typeof setTimeout> | undefined;
 
-    const clearKillExitTimer = () => {
-      if (killExitTimer) {
-        clearTimeout(killExitTimer);
-        killExitTimer = undefined;
-      }
-    };
     const settleCaller = (action: () => void) => {
       if (callerSettled) {
         return;
@@ -328,10 +319,6 @@ async function runAdmittedVectorKnn(params: VectorKnnSubprocessParams): Promise<
       child.removeListener("error", onError);
       child.removeListener("close", onClose);
       action();
-    };
-    const releaseClosedChild = () => {
-      clearKillExitTimer();
-      params.signal?.removeEventListener("abort", abort);
     };
     const requestTermination = (reason: Error) => {
       if (terminationReason || closed) {
@@ -369,62 +356,58 @@ async function runAdmittedVectorKnn(params: VectorKnnSubprocessParams): Promise<
     if (params.signal?.aborted) {
       abort();
     }
-    child.stdout.on("data", (chunk: Buffer) => {
-      stdoutBytes += chunk.byteLength;
-      if (stdoutBytes > MAX_STDOUT_BYTES + (chunk[chunk.length - 1] === 10 ? 1 : 0)) {
-        const failure = new VectorKnnSubprocessError(
-          "memory vector KNN child stdout exceeded its limit",
-          "protocol",
-        );
-        stdoutChunks.length = 0;
-        requestTermination(failure);
-        return;
-      }
-      stdoutChunks.push(chunk);
-      const newline = chunk.indexOf(10);
-      if (newline < 0) {
-        return;
-      }
-      try {
-        if (newline !== chunk.length - 1) {
-          throw new VectorKnnSubprocessError(
-            "memory vector KNN child returned extra output",
-            "protocol",
+    for (const stream of ["stdout", "stderr"] as const) {
+      const chunks: Buffer[] = stream === "stderr" ? stderrChunks : [];
+      const maxBytes = stream === "stdout" ? MAX_STDOUT_BYTES : MAX_STDERR_BYTES;
+      let bytes = 0;
+      child[stream].on("data", (chunk: Buffer) => {
+        bytes += chunk.byteLength;
+        const frameBytes = stream === "stdout" && chunk[chunk.length - 1] === 10 ? 1 : 0;
+        if (bytes > maxBytes + frameBytes) {
+          if (stream === "stdout") {
+            chunks.length = 0;
+          }
+          requestTermination(
+            new VectorKnnSubprocessError(
+              `memory vector KNN child ${stream} exceeded its limit`,
+              "protocol",
+            ),
           );
-        }
-        const result = parseChildResult(
-          Buffer.concat(stdoutChunks),
-          params.request.limit,
-          input.id,
-        );
-        if (terminationReason) {
           return;
         }
-        settleCaller(() => resolve(result));
-        child.stdout.on("data", ownedWorker.retire);
-        ownedWorker.idleTimer = setTimeout(ownedWorker.retire, SQLITE_IDLE_HANDLE_TTL_MS);
-        ownedWorker.idleTimer.unref();
-        if (vectorKnnAdmission.waiting) {
-          ownedWorker.retire();
-        } else {
-          setChildReferenced(child, false);
+        chunks.push(chunk);
+        if (stream === "stderr") {
+          return;
         }
-      } catch (error) {
-        requestTermination(error instanceof Error ? error : new Error(String(error)));
-      }
-    });
-    child.stderr.on("data", (chunk: Buffer) => {
-      stderrBytes += chunk.byteLength;
-      if (stderrBytes > MAX_STDERR_BYTES) {
-        const failure = new VectorKnnSubprocessError(
-          "memory vector KNN child stderr exceeded its limit",
-          "protocol",
-        );
-        requestTermination(failure);
-        return;
-      }
-      stderrChunks.push(chunk);
-    });
+        const newline = chunk.indexOf(10);
+        if (newline < 0) {
+          return;
+        }
+        try {
+          if (newline !== chunk.length - 1) {
+            throw new VectorKnnSubprocessError(
+              "memory vector KNN child returned extra output",
+              "protocol",
+            );
+          }
+          const result = parseChildResult(Buffer.concat(chunks), params.request.limit, input.id);
+          if (terminationReason) {
+            return;
+          }
+          settleCaller(() => resolve(result));
+          child.stdout.on("data", ownedWorker.retire);
+          ownedWorker.idleTimer = setTimeout(ownedWorker.retire, SQLITE_IDLE_HANDLE_TTL_MS);
+          ownedWorker.idleTimer.unref();
+          if (vectorKnnAdmission.waiting) {
+            ownedWorker.retire();
+          } else {
+            setChildReferenced(child, false);
+          }
+        } catch (error) {
+          requestTermination(error instanceof Error ? error : new Error(String(error)));
+        }
+      });
+    }
     const onStdinError = (error: NodeJS.ErrnoException) => {
       if (!terminationReason && error.code !== "EPIPE") {
         requestTermination(new VectorKnnSubprocessError(error.message, "failed"));
@@ -439,7 +422,11 @@ async function runAdmittedVectorKnn(params: VectorKnnSubprocessParams): Promise<
       closed = true;
       // close is the authoritative process/stdio completion; a recycled numeric
       // PID must not turn a successful query into a false cleanup failure.
-      releaseClosedChild();
+      if (killExitTimer) {
+        clearTimeout(killExitTimer);
+        killExitTimer = undefined;
+      }
+      params.signal?.removeEventListener("abort", abort);
       settleCaller(() => {
         if (terminationReason) {
           reject(terminationReason);

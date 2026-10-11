@@ -1,7 +1,4 @@
-// Line helper module supports webhook utils behavior.
-import type { webhook } from "@line/bot-sdk";
 import { resolveWebhookPath } from "openclaw/plugin-sdk/webhook-ingress";
-export { validateLineSignature } from "./signature.js";
 
 /** Route the gateway serves when an account configures no `webhookPath`. */
 const LINE_DEFAULT_WEBHOOK_PATH = "/line/webhook";
@@ -15,12 +12,4 @@ export function resolveLineWebhookPath(webhookPath: string | undefined): string 
     resolveWebhookPath({ webhookPath, defaultPath: LINE_DEFAULT_WEBHOOK_PATH }) ??
     LINE_DEFAULT_WEBHOOK_PATH
   );
-}
-
-export function parseLineWebhookBody(rawBody: string): webhook.CallbackRequest | null {
-  try {
-    return JSON.parse(rawBody) as webhook.CallbackRequest;
-  } catch {
-    return null;
-  }
 }

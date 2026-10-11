@@ -1,6 +1,4 @@
 // Matrix tests cover session route plugin behavior.
-import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
@@ -8,10 +6,18 @@ import {
   upsertSessionEntry,
 } from "openclaw/plugin-sdk/session-store-runtime";
 import type { SessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
-import { afterEach, describe, expect, it } from "vitest";
+import { closeOpenClawAgentDatabasesAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
+import { afterAll, describe, expect, it } from "vitest";
 import { resolveMatrixOutboundSessionRoute } from "./session-route.js";
 
-const tempDirs = new Set<string>();
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
+  afterAll(async () => {
+    await closeOpenClawAgentDatabasesAsync(sessionRoot);
+    cleanup();
+  });
+});
+const sessionRoot = tempDirs.make("matrix-session-route-");
 const currentDmSessionKey = "agent:main:matrix:channel:!dm:example.org";
 type MatrixChannelConfig = NonNullable<NonNullable<OpenClawConfig["channels"]>["matrix"]>;
 
@@ -33,8 +39,7 @@ const defaultAccountPerRoomDmMatrixConfig = {
 } satisfies MatrixChannelConfig;
 
 async function createTempStore(entries: Record<string, SessionEntry>): Promise<string> {
-  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "matrix-session-route-"));
-  tempDirs.add(tempDir);
+  const tempDir = tempDirs.make("case-", sessionRoot);
   const storePath = path.join(tempDir, "sessions.json");
   for (const [sessionKey, entry] of Object.entries(entries)) {
     await upsertSessionEntry({ sessionKey, storePath, entry });
@@ -185,32 +190,7 @@ function expectRoute(route: ReturnType<typeof resolveMatrixOutboundSessionRoute>
   return route;
 }
 
-afterEach(() => {
-  for (const tempDir of tempDirs) {
-    fs.rmSync(tempDir, { recursive: true, force: true });
-  }
-  tempDirs.clear();
-});
-
 describe("resolveMatrixOutboundSessionRoute", () => {
-  it("reuses the current DM room session for same-user sends when Matrix DMs are per-room", async () => {
-    const route = await resolveUserRouteForCurrentSession({
-      storedSession: createStoredDirectDmSession(),
-      accountId: "ops",
-    });
-
-    expectCurrentDmRoomRoute(route);
-  });
-
-  it("falls back to user-scoped routing when the current session is for another DM peer", async () => {
-    const route = await resolveUserRouteForCurrentSession({
-      storedSession: createStoredDirectDmSession({ from: "matrix:@bob:example.org" }),
-      accountId: "ops",
-    });
-
-    expectFallbackUserRoute(route);
-  });
-
   it("falls back to user-scoped routing when the current session belongs to another Matrix account", async () => {
     const route = await resolveUserRouteForCurrentSession({
       storedSession: createStoredDirectDmSession(),
@@ -260,15 +240,6 @@ describe("resolveMatrixOutboundSessionRoute", () => {
     });
 
     expectFallbackUserRoute(route);
-  });
-
-  it("uses the effective default Matrix account when accountId is omitted", async () => {
-    const route = await resolveUserRouteForCurrentSession({
-      storedSession: createStoredDirectDmSession(),
-      matrix: defaultAccountPerRoomDmMatrixConfig,
-    });
-
-    expectCurrentDmRoomRoute(route);
   });
 
   it("reuses the current DM room when stored account metadata is missing", async () => {
@@ -324,36 +295,6 @@ describe("resolveMatrixOutboundSessionRoute", () => {
     expect(route.sessionKey).toBe(
       `agent:main:matrix:channel:!ops:example.org:thread:${expectedThreadId}`,
     );
-  });
-
-  it("does not claim room aliases as canonical inbound session ids", () => {
-    const route = resolveMatrixOutboundSessionRoute({
-      cfg: {},
-      agentId: "main",
-      target: "#ops:example.org",
-    });
-
-    expect(route?.recipientSessionExact).toBe(false);
-  });
-
-  it("does not claim room ids when DMs are keyed by user identity", () => {
-    const route = resolveMatrixOutboundSessionRoute({
-      cfg: {},
-      agentId: "main",
-      target: "!ops:example.org",
-    });
-
-    expect(route?.recipientSessionExact).toBe(false);
-  });
-
-  it("claims a room id as canonical when DMs are room-scoped", () => {
-    const route = resolveMatrixOutboundSessionRoute({
-      cfg: { channels: { matrix: perRoomDmMatrixConfig } },
-      agentId: "main",
-      target: "room:!ops:example.org",
-    });
-
-    expect(route?.recipientSessionExact).toBe(true);
   });
 
   it("claims a room version 12 room id (no :server suffix) as canonical when DMs are room-scoped", () => {

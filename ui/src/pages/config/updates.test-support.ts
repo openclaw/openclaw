@@ -80,10 +80,10 @@ export function createUpdatesViewDom() {
 
   function automaticUpdatesControl(): {
     row: HTMLElement;
-    toggle: HTMLElement & { checked: boolean };
+    toggle: HTMLInputElement;
   } {
     const automaticRow = row("Automatic updates");
-    const toggle = automaticRow.querySelector<HTMLElement & { checked: boolean }>("wa-switch");
+    const toggle = automaticRow.querySelector<HTMLInputElement>(".settings-toggle__input");
     if (!toggle) {
       throw new Error("Missing automatic updates control");
     }

@@ -1,7 +1,11 @@
 // Hermes provider config collection and migration planning.
 import { createMigrationManualItem } from "openclaw/plugin-sdk/migration";
 import type { MigrationItem } from "openclaw/plugin-sdk/plugin-entry";
-import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asNonArrayRecord,
+  isRecord,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   HERMES_TRANSPORTS,
   collectProviderModels,
@@ -17,23 +21,11 @@ import {
   resolveProviderApi,
   type HermesProviderConfig,
 } from "./config-provider-contract.js";
-import { childRecord, sanitizeName } from "./helpers.js";
+import { sanitizeName } from "./helpers.js";
 import { normalizeHermesCustomProviderId, resolveHermesConfiguredProviderId } from "./model.js";
 
-type HermesProviderSecretBinding = {
-  envVar: string;
-  provider: string;
-};
-
-type HermesProviderSource = {
-  id: string;
-  raw: Record<string, unknown>;
-  source: string;
-  custom: boolean;
-};
-
-function* providerSources(config: Record<string, unknown>): Generator<HermesProviderSource> {
-  for (const [id, raw] of Object.entries(childRecord(config, "providers"))) {
+function* providerSources(config: Record<string, unknown>) {
+  for (const [id, raw] of Object.entries(asNonArrayRecord(config.providers))) {
     if (isRecord(raw)) {
       yield { id, raw, source: `config.yaml:providers.${id}`, custom: false };
     }
@@ -145,7 +137,7 @@ export function collectHermesProviders(
 export function collectHermesProviderSecretBindings(
   config: Record<string, unknown>,
   env: Record<string, string> = {},
-): HermesProviderSecretBinding[] {
+) {
   const bindings = collectHermesProviders(config, env).flatMap((entry) =>
     entry.apiKeyEnv ? [{ envVar: entry.apiKeyEnv, provider: entry.id }] : [],
   );
@@ -202,7 +194,7 @@ export function providerManualItems(
   includeSecrets: boolean,
 ): MigrationItem[] {
   const currentProviderIds = new Set(
-    Object.keys(childRecord(config, "providers")).map(normalizeHermesCustomProviderId),
+    Object.keys(asNonArrayRecord(config.providers)).map(normalizeHermesCustomProviderId),
   );
   const entries = [...providerSources(config)].filter(
     ({ id, custom }) => !custom || !currentProviderIds.has(normalizeHermesCustomProviderId(id)),

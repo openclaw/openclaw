@@ -1,4 +1,3 @@
-// Gateway daemon install plan builder, including service env and SecretRef passthrough policy.
 import path from "node:path";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import { formatCliCommand } from "../cli/command-format.js";
@@ -49,7 +48,11 @@ import { evaluateGatewayAuthSurfaceStates } from "../secrets/runtime-gateway-aut
 import { hasSecretRefCandidate } from "../secrets/runtime-secret-scan.js";
 import { createResolverContext } from "../secrets/runtime-shared.js";
 import { discoverConfigSecretTargets } from "../secrets/target-registry.js";
-import { createLazyPromise } from "../shared/lazy-runtime.js";
+import {
+  collectAuthProfileSecretRefs,
+  collectAuthProfileServiceEnvVars,
+  resolveAuthProfileStoreForServiceEnv,
+} from "./daemon-install-auth-profile-env.js";
 import {
   resolveDaemonInstallRuntimeInputs,
   resolveDaemonServicePathDirs,
@@ -67,99 +70,6 @@ const NON_PERSISTED_CONFIG_SECRET_ENV_TARGET_IDS = new Set([
   "gateway.auth.password",
   "gateway.auth.token",
 ]);
-const EXEC_SECRET_REF_PASS_ENV_ALLOWED_OVERRIDE_ONLY_KEYS = new Set(["HOME"]);
-
-function isBlockedExecSecretRefPassEnvKey(key: string): boolean {
-  if (isDangerousHostEnvVarName(key)) {
-    return true;
-  }
-  if (!isDangerousHostEnvOverrideVarName(key)) {
-    return false;
-  }
-  return !EXEC_SECRET_REF_PASS_ENV_ALLOWED_OVERRIDE_ONLY_KEYS.has(key.toUpperCase());
-}
-
-const loadDaemonInstallAuthProfileSourceRuntime = createLazyPromise(
-  () => import("./daemon-install-auth-profiles-source.runtime.js"),
-  { cacheRejections: true },
-);
-
-const loadDaemonInstallAuthProfileStoreRuntime = createLazyPromise(
-  () => import("./daemon-install-auth-profiles-store.runtime.js"),
-  { cacheRejections: true },
-);
-
-const loadDaemonInstallProviderManifestRuntime = createLazyPromise(
-  () => import("../plugins/manifest-contract-eligibility.js"),
-  { cacheRejections: true },
-);
-
-async function resolveAuthProfileStoreForServiceEnv(
-  authStore: AuthProfileStore | undefined,
-): Promise<AuthProfileStore | undefined> {
-  if (authStore) {
-    return authStore;
-  }
-  // Keep the daemon install cold path cheap when there is no auth store to read.
-  const { hasAnyAuthProfileStoreSource } = await loadDaemonInstallAuthProfileSourceRuntime();
-  if (!hasAnyAuthProfileStoreSource()) {
-    return undefined;
-  }
-  const { loadAuthProfileStoreForSecretsRuntime } =
-    await loadDaemonInstallAuthProfileStoreRuntime();
-  return loadAuthProfileStoreForSecretsRuntime();
-}
-
-function collectAuthProfileSecretRefs(authStore: AuthProfileStore | undefined): SecretRef[] {
-  if (!authStore) {
-    return [];
-  }
-  const refs: SecretRef[] = [];
-  for (const credential of Object.values(authStore.profiles)) {
-    const ref =
-      credential.type === "api_key"
-        ? credential.keyRef
-        : credential.type === "token"
-          ? credential.tokenRef
-          : undefined;
-    if (ref) {
-      refs.push(ref);
-    }
-  }
-  return refs;
-}
-
-function collectAuthProfileServiceEnvVars(params: {
-  env: Record<string, string | undefined>;
-  authStore?: AuthProfileStore;
-  warn?: DaemonInstallWarnFn;
-}): Record<string, string> {
-  const entries: Record<string, string> = {};
-
-  for (const ref of collectAuthProfileSecretRefs(params.authStore)) {
-    if (ref.source !== "env") {
-      continue;
-    }
-    const key = normalizeEnvVarKey(ref.id, { portable: true });
-    if (!key) {
-      continue;
-    }
-    if (isDangerousHostEnvVarName(key) || isDangerousHostEnvOverrideVarName(key)) {
-      params.warn?.(
-        `Auth profile env ref "${key}" blocked by host-env security policy`,
-        "Auth profile",
-      );
-      continue;
-    }
-    const value = params.env[key]?.trim();
-    if (!value) {
-      continue;
-    }
-    entries[key] = value;
-  }
-
-  return entries;
-}
 
 async function collectAmbientProviderApiKeyServiceEnvVars(params: {
   env: Record<string, string | undefined>;
@@ -203,7 +113,7 @@ async function collectAmbientProviderApiKeyServiceEnvVars(params: {
     return {};
   }
   const { isManifestPluginAvailableForControlPlane, loadManifestMetadataSnapshot } =
-    await loadDaemonInstallProviderManifestRuntime();
+    await import("../plugins/manifest-contract-eligibility.js");
   const config = params.config ?? {};
   const snapshot = loadManifestMetadataSnapshot({ config, env: params.env });
   return Object.fromEntries(
@@ -401,7 +311,10 @@ function collectExecSecretRefPassEnvServiceEnvVars(params: {
       if (!value) {
         continue;
       }
-      if (isBlockedExecSecretRefPassEnvKey(key)) {
+      if (
+        isDangerousHostEnvVarName(key) ||
+        (isDangerousHostEnvOverrideVarName(key) && key.toUpperCase() !== "HOME")
+      ) {
         params.warn?.(
           `Exec SecretRef passEnv ref "${key}" blocked by host-env security policy`,
           warningTitle,
@@ -626,17 +539,19 @@ async function buildGatewayInstallEnvironment(params: {
   };
 }
 
-/** Build command, working directory, and environment for installing the Gateway service. */
 export async function buildGatewayInstallPlan(params: {
   env: Record<string, string | undefined>;
   port: number;
   allowUnconfigured?: boolean;
   runtime: GatewayDaemonRuntime;
+  runtimeExplicit?: boolean;
   existingEnvironment?: Record<string, string | undefined>;
   existingCommand?: GatewayServiceCommandConfig | null;
   devMode?: boolean;
   runtimePath?: string;
   pinnedRuntimePath?: string;
+  /** Retained CLI to plan for instead of this process's own entrypoint and executable. */
+  serviceCli?: { executable: string; entrypoint: string };
   wrapperPath?: string;
   platform?: NodeJS.Platform;
   warn?: DaemonInstallWarnFn;
@@ -670,13 +585,15 @@ export async function buildGatewayInstallPlan(params: {
   const wrapperPath = wrapperPointsAtGeneratedScript
     ? undefined
     : await resolveOpenClawWrapperPath(wrapperInput);
-  const { devMode, runtimePath } = await resolveDaemonInstallRuntimeInputs({
+  const { devMode, runtime, runtimePath } = await resolveDaemonInstallRuntimeInputs({
     env: params.env,
     runtime: params.runtime,
-    devMode: params.devMode,
+    runtimeExplicit: params.runtimeExplicit,
+    devMode: params.serviceCli ? false : params.devMode,
     runtimePath: params.runtimePath,
     pinnedRuntimePath: params.pinnedRuntimePath,
     wrapperPath,
+    warn: params.warn,
   });
   const serviceInputEnv = { ...params.env };
   if (wrapperPath) {
@@ -693,22 +610,24 @@ export async function buildGatewayInstallPlan(params: {
           "--allow-unconfigured",
         ) === true),
     dev: devMode,
-    runtime: params.runtime,
+    runtime,
     runtimePath,
     wrapperPath,
+    cliEntrypoint: params.serviceCli?.entrypoint,
     ...(params.existingCommand ? { existingCommand: params.existingCommand } : {}),
   });
   await emitNodeRuntimeWarning({
     env: params.env,
-    runtime: params.runtime,
+    runtime,
     nodeProgram: programArguments[0],
     warn: params.warn,
     title: "Gateway runtime",
   });
   const serviceEnvironment = buildServiceEnvironment({
     env: serviceInputEnv,
+    execPath: params.serviceCli?.executable,
     port: params.port,
-    runtime: params.runtime,
+    runtime,
     existingNodeOptions: resolveManagedGatewayServiceCommand(params.existingCommand)?.environment
       ?.NODE_OPTIONS,
     launchdLabel:
@@ -718,6 +637,7 @@ export async function buildGatewayInstallPlan(params: {
     platform,
     extraPathDirs: resolveDaemonServicePathDirs({
       runtimePath,
+      argv: params.serviceCli && [params.serviceCli.executable, params.serviceCli.entrypoint],
       env: serviceInputEnv,
       platform,
     }),
@@ -736,6 +656,7 @@ export async function buildGatewayInstallPlan(params: {
 
   // Lowest to highest: preserved custom vars, durable config, SecretRef env, generated service env.
   return {
+    runtime,
     programArguments,
     workingDirectory:
       workingDirectory ||
@@ -756,10 +677,8 @@ function normalizeServicePathForCompare(
   return platform === "win32" ? path.win32.resolve(trimmed).toLowerCase() : path.resolve(trimmed);
 }
 
-/** Return the user-facing recovery hint for failed Gateway service installation. */
 export function gatewayInstallErrorHint(platform = process.platform): string {
   return platform === "win32"
     ? "Tip: native Windows now falls back to a per-user Startup-folder login item when Scheduled Task creation is denied; if install still fails, rerun from an elevated PowerShell or skip service install."
     : `Tip: rerun \`${formatCliCommand("openclaw gateway install")}\` after fixing the error.`;
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -1,6 +1,8 @@
 import { CryptoEvent } from "matrix-js-sdk/lib/crypto-api/CryptoEvent.js";
 import { DecryptionFailureCode } from "matrix-js-sdk/lib/crypto-api/index.js";
 import { MatrixEventEvent, type MatrixEvent } from "matrix-js-sdk/lib/matrix.js";
+import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
+import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
 import { LogService, noop } from "./logger.js";
 
 type MatrixDecryptIfNeededClient = {
@@ -161,16 +163,7 @@ export class MatrixDecryptBridge<TRawEvent extends DecryptBridgeRawEvent> {
       return;
     }
     LogService.debug("MatrixClientLite", `Retrying pending decryptions due to ${reason}`);
-    for (const [retryKey, state] of pending) {
-      if (state.timer) {
-        clearTimeout(state.timer);
-        state.timer = null;
-      }
-      if (state.inFlight) {
-        continue;
-      }
-      this.runDecryptRetry(retryKey).catch(noop);
-    }
+    this.startPendingRetries(pending);
   }
 
   bindCryptoRetrySignals(crypto: MatrixCryptoRetrySignalSource | undefined): void {
@@ -179,22 +172,14 @@ export class MatrixDecryptBridge<TRawEvent extends DecryptBridgeRawEvent> {
     }
     this.cryptoRetrySignalsBound = true;
 
-    const trigger = (reason: string, options?: { includeExhausted?: boolean }): void => {
-      this.retryPendingNow(reason, options);
-    };
-
-    crypto.on(CryptoEvent.KeyBackupDecryptionKeyCached, () => {
-      trigger("crypto.keyBackupDecryptionKeyCached", { includeExhausted: true });
-    });
-    crypto.on(CryptoEvent.RehydrationCompleted, () => {
-      trigger("dehydration.RehydrationCompleted", { includeExhausted: true });
-    });
-    crypto.on(CryptoEvent.DevicesUpdated, () => {
-      trigger("crypto.devicesUpdated");
-    });
-    crypto.on(CryptoEvent.KeysChanged, () => {
-      trigger("crossSigning.keysChanged");
-    });
+    for (const [eventName, reason, includeExhausted] of [
+      [CryptoEvent.KeyBackupDecryptionKeyCached, "crypto.keyBackupDecryptionKeyCached", true],
+      [CryptoEvent.RehydrationCompleted, "dehydration.RehydrationCompleted", true],
+      [CryptoEvent.DevicesUpdated, "crypto.devicesUpdated", false],
+      [CryptoEvent.KeysChanged, "crossSigning.keysChanged", false],
+    ] as const) {
+      crypto.on(eventName, () => this.retryPendingNow(reason, { includeExhausted }));
+    }
   }
 
   stop(): void {
@@ -210,7 +195,23 @@ export class MatrixDecryptBridge<TRawEvent extends DecryptBridgeRawEvent> {
   async drainPendingDecryptions(_reason: string): Promise<void> {
     this.quiescing = true;
     const pendingSdkDecryptions = Array.from(this.pendingSdkDecryptions);
-    const pending = Array.from(this.decryptRetries.entries());
+    this.startPendingRetries(Array.from(this.decryptRetries.entries()));
+    await raceWithTimeout(
+      Promise.all([
+        Promise.allSettled(pendingSdkDecryptions),
+        this.waitForActiveRetryRunsToFinish(),
+      ]),
+      MATRIX_DECRYPT_DRAIN_TIMEOUT_MS,
+      () => {
+        throw new Error(
+          `Matrix decryption drain did not finish within ${MATRIX_DECRYPT_DRAIN_TIMEOUT_MS}ms`,
+        );
+      },
+      { ref: false },
+    );
+  }
+
+  private startPendingRetries(pending: Iterable<[string, MatrixDecryptRetryState]>): void {
     for (const [retryKey, state] of pending) {
       if (state.timer) {
         clearTimeout(state.timer);
@@ -218,29 +219,6 @@ export class MatrixDecryptBridge<TRawEvent extends DecryptBridgeRawEvent> {
       }
       if (!state.inFlight) {
         this.runDecryptRetry(retryKey).catch(noop);
-      }
-    }
-    let timeout: ReturnType<typeof setTimeout> | undefined;
-    try {
-      await Promise.race([
-        Promise.all([
-          Promise.allSettled(pendingSdkDecryptions),
-          this.waitForActiveRetryRunsToFinish(),
-        ]),
-        new Promise<never>((_, reject) => {
-          timeout = setTimeout(() => {
-            reject(
-              new Error(
-                `Matrix decryption drain did not finish within ${MATRIX_DECRYPT_DRAIN_TIMEOUT_MS}ms`,
-              ),
-            );
-          }, MATRIX_DECRYPT_DRAIN_TIMEOUT_MS);
-          timeout.unref?.();
-        }),
-      ]);
-    } finally {
-      if (timeout !== undefined) {
-        clearTimeout(timeout);
       }
     }
   }
@@ -443,13 +421,7 @@ export class MatrixDecryptBridge<TRawEvent extends DecryptBridgeRawEvent> {
         this.exhaustedDecryptRetries.delete(retryKey);
       }
     }
-    while (this.exhaustedDecryptRetries.size > MATRIX_DECRYPT_EXHAUSTED_RETRY_MAX_ENTRIES) {
-      const oldest = this.exhaustedDecryptRetries.keys().next().value;
-      if (oldest === undefined) {
-        break;
-      }
-      this.exhaustedDecryptRetries.delete(oldest);
-    }
+    pruneMapToMaxSize(this.exhaustedDecryptRetries, MATRIX_DECRYPT_EXHAUSTED_RETRY_MAX_ENTRIES);
   }
 
   private rememberDecryptedMessage(roomId: string, eventId: string): void {
@@ -468,14 +440,7 @@ export class MatrixDecryptBridge<TRawEvent extends DecryptBridgeRawEvent> {
         this.decryptedMessageDedupe.delete(key);
       }
     }
-    const maxEntries = 2048;
-    while (this.decryptedMessageDedupe.size > maxEntries) {
-      const oldest = this.decryptedMessageDedupe.keys().next().value;
-      if (oldest === undefined) {
-        break;
-      }
-      this.decryptedMessageDedupe.delete(oldest);
-    }
+    pruneMapToMaxSize(this.decryptedMessageDedupe, 2048);
   }
 
   private async waitForActiveRetryRunsToFinish(): Promise<void> {
@@ -484,10 +449,6 @@ export class MatrixDecryptBridge<TRawEvent extends DecryptBridgeRawEvent> {
     }
     await new Promise<void>((resolve) => {
       this.retryIdleResolvers.add(resolve);
-      if (this.activeRetryRuns === 0) {
-        this.retryIdleResolvers.delete(resolve);
-        resolve();
-      }
     });
   }
 

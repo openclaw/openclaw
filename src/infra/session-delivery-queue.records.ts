@@ -2,6 +2,7 @@ import type { ReplyMediaAttachment } from "../auto-reply/reply-payload.js";
 import type { SourceReplyDeliveryMode } from "../auto-reply/source-reply-delivery-mode.types.js";
 import type { ChatType } from "../channels/chat-type.js";
 import type { InputProvenance } from "../sessions/input-provenance.js";
+import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import { sha256Hex } from "./crypto-digest.js";
 import type { DeliveryQueueCompletionRetention } from "./delivery-queue-sqlite.types.js";
 import { generateSecureUuid } from "./secure-random.js";
@@ -18,12 +19,7 @@ type SessionDeliveryOwnerReference = {
   deadlineAt: number;
 };
 
-type SessionDeliveryContext = {
-  channel?: string;
-  to?: string;
-  accountId?: string;
-  threadId?: string | number;
-};
+type SessionDeliveryContext = Pick<DeliveryContext, "channel" | "to" | "accountId" | "threadId">;
 
 type SessionDeliveryRetryPolicy = {
   maxRetries?: number;

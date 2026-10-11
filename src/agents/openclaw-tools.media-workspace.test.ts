@@ -3,9 +3,10 @@ import path from "node:path";
 import { Type } from "typebox";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { getMediaDir, saveMediaBuffer } from "../media/store.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
-import { applyNodesToolWorkspaceGuard } from "./openclaw-tools.nodes-workspace-guard.js";
+import { applyNodesToolWorkspaceGuard } from "./openclaw-tools.registration.js";
 import { createHostSandboxFsBridge } from "./test-helpers/host-sandbox-fs-bridge.js";
 import { loadMediaToolReferences } from "./tools/media-tool-shared.js";
 
@@ -14,6 +15,7 @@ vi.mock("./openclaw-plugin-tools.js", () => ({
 }));
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+afterEach(() => vi.unstubAllEnvs());
 const png = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a/BsAAAAASUVORK5CYII=",
   "base64",
@@ -80,35 +82,55 @@ async function expectLoadedImage(tool: ReturnType<typeof createMediaTool>, image
 }
 
 describe("media references in task workspaces", () => {
-  it.each([false, true])(
-    "loads session-worktree images with workspaceOnly=%s",
-    async (workspaceOnly) => {
-      const workspaceDir = tempDirs.make("openclaw-media-canonical-");
-      const sessionRoot = tempDirs.make("openclaw-media-worktree-");
-      const cwd = path.join(sessionRoot, "task");
-      await fs.mkdir(cwd);
-      const imagePath = path.join(cwd, "screenshot.png");
-      await fs.writeFile(imagePath, png);
-      await fs.writeFile(path.join(sessionRoot, "shared.png"), png);
-      const tool = createMediaTool("view_image", {
-        workspaceDir,
-        cwd,
-        fsPolicy: { workspaceOnly, root: sessionRoot },
-      });
+  it("loads Gateway media with workspace-only access while rejecting outside files and symlinks", async () => {
+    vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("openclaw-media-state-"));
+    const workspaceDir = tempDirs.make("openclaw-media-worktree-");
+    const tool = createMediaTool("view_image", {
+      workspaceDir,
+      fsPolicy: { workspaceOnly: true, root: workspaceDir },
+    });
+    for (const subdir of ["browser", "inbound/openclaw-staged-fixture", "generated"]) {
+      const saved = await saveMediaBuffer(png, "image/png", subdir);
+      await expectLoadedImage(tool, saved.path);
+    }
 
-      await expectLoadedImage(tool, imagePath);
-      await expectLoadedImage(tool, "screenshot.png");
-      await expectLoadedImage(tool, "../shared.png");
+    const outsidePath = path.join(tempDirs.make("openclaw-media-outside-"), "private.png");
+    await fs.writeFile(outsidePath, png);
+    const aliasPath = path.join(getMediaDir(), "escape.png");
+    await fs.symlink(outsidePath, aliasPath);
+    for (const imagePath of [outsidePath, aliasPath]) {
+      await expect(tool.execute("outside-image", { path: imagePath })).rejects.toThrow(
+        /not under an allowed directory/i,
+      );
+    }
+  });
 
-      if (workspaceOnly) {
-        const outsideImage = path.join(workspaceDir, "outside.png");
-        await fs.writeFile(outsideImage, png);
-        await expect(tool.execute("outside-image", { path: outsideImage })).rejects.toThrow(
-          /not under an allowed directory/i,
-        );
-      }
-    },
-  );
+  it.each([true])("loads session-worktree images with workspaceOnly=%s", async (workspaceOnly) => {
+    const workspaceDir = tempDirs.make("openclaw-media-canonical-");
+    const sessionRoot = tempDirs.make("openclaw-media-worktree-");
+    const cwd = path.join(sessionRoot, "task");
+    await fs.mkdir(cwd);
+    const imagePath = path.join(cwd, "screenshot.png");
+    await fs.writeFile(imagePath, png);
+    await fs.writeFile(path.join(sessionRoot, "shared.png"), png);
+    const tool = createMediaTool("view_image", {
+      workspaceDir,
+      cwd,
+      fsPolicy: { workspaceOnly, root: sessionRoot },
+    });
+
+    await expectLoadedImage(tool, imagePath);
+    await expectLoadedImage(tool, "screenshot.png");
+    await expectLoadedImage(tool, "../shared.png");
+
+    if (workspaceOnly) {
+      const outsideImage = path.join(workspaceDir, "outside.png");
+      await fs.writeFile(outsideImage, png);
+      await expect(tool.execute("outside-image", { path: outsideImage })).rejects.toThrow(
+        /not under an allowed directory/i,
+      );
+    }
+  });
 
   it("keeps sandbox media on its bridge despite a different host session root", async () => {
     const workspaceDir = tempDirs.make("openclaw-media-canonical-");

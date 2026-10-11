@@ -25,7 +25,7 @@ import {
   resolveSessionStorePathCore,
   type SessionEntry,
 } from "../config/sessions.js";
-import { loadSessionEntryReadOnly } from "../config/sessions/session-accessor.js";
+import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   buildAgentMainSessionKey,
@@ -58,13 +58,10 @@ function normalizeExplainSessionKey(params: {
       agentId: params.agentId,
     });
   }
-  if (raw.includes(":")) {
+  if (raw.includes(":") || raw === "global") {
     // Fully-qualified session keys are already scoped; only short names need
     // agent/main-key expansion.
     return raw;
-  }
-  if (raw === "global") {
-    return "global";
   }
   return buildAgentMainSessionKey({
     agentId: params.agentId,
@@ -147,12 +144,23 @@ export async function sandboxExplainCommand(
     session: opts.session,
   });
 
+  const storePath = resolveSessionStorePathCore(cfg.session?.store, {
+    agentId: resolvedAgentId,
+  });
+  // CLI reads must not join the Gateway's writable SQLite lifecycle (#101290).
+  const sessionEntry = await readSessionEntryReadOnlyInWorker({
+    agentId: resolvedAgentId,
+    sessionKey,
+    storePath,
+  });
+
   const toolPolicy = resolveSandboxToolPolicyForAgent(cfg, resolvedAgentId);
   const sandboxRuntime = resolveSandboxRuntimeStatus({
     cfg,
     sessionKey,
     agentId: resolvedAgentId,
     classificationAgentId: resolvedAgentId,
+    preparedSessionEntry: sessionEntry ?? null,
   });
   const configuredSandbox = resolveSandboxConfigForAgent(cfg, resolvedAgentId);
   const sandboxCfg = sandboxRuntime.sandboxRequired
@@ -164,15 +172,6 @@ export async function sandboxExplainCommand(
     : configuredSandbox;
   const mainSessionKey = sandboxRuntime.mainSessionKey;
   const sessionIsSandboxed = sandboxRuntime.sandboxed;
-  const storePath = resolveSessionStorePathCore(cfg.session?.store, {
-    agentId: resolvedAgentId,
-  });
-  // CLI reads must not join the Gateway's writable SQLite lifecycle (#101290).
-  const sessionEntry = loadSessionEntryReadOnly({
-    agentId: resolvedAgentId,
-    sessionKey,
-    storePath,
-  });
 
   const agentConfig = resolveAgentConfig(cfg, resolvedAgentId);
   // Spawned sessions persist their inherited workspace and direct-mode cwd so
@@ -261,26 +260,19 @@ export async function sandboxExplainCommand(
   const elevatedFailures: Array<{ gate: string; key: string }> = [];
   // Track each failed gate separately so the human report points at concrete
   // config keys instead of only saying elevated access is disabled.
-  if (!elevatedGlobalEnabled) {
-    elevatedFailures.push({ gate: "enabled", key: "tools.elevated.enabled" });
-  }
-  if (!elevatedAgentEnabled) {
-    elevatedFailures.push({
-      gate: "enabled",
-      key: "agents.entries.*.tools.elevated.enabled",
-    });
-  }
-  if (channel && globalAllowTokens.length === 0) {
-    elevatedFailures.push({
-      gate: "allowFrom",
-      key: `tools.elevated.allowFrom.${channel}`,
-    });
-  }
-  if (channel && elevatedAgent?.allowFrom && agentAllowTokens.length === 0) {
-    elevatedFailures.push({
-      gate: "allowFrom",
-      key: `agents.entries.*.tools.elevated.allowFrom.${channel}`,
-    });
+  for (const [failed, gate, key] of [
+    [!elevatedGlobalEnabled, "enabled", "tools.elevated.enabled"],
+    [!elevatedAgentEnabled, "enabled", "agents.entries.*.tools.elevated.enabled"],
+    [channel && globalAllowTokens.length === 0, "allowFrom", `tools.elevated.allowFrom.${channel}`],
+    [
+      channel && elevatedAgent?.allowFrom && agentAllowTokens.length === 0,
+      "allowFrom",
+      `agents.entries.*.tools.elevated.allowFrom.${channel}`,
+    ],
+  ] as const) {
+    if (failed) {
+      elevatedFailures.push({ gate, key });
+    }
   }
 
   const fixIt: string[] = [];

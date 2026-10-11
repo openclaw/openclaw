@@ -1,9 +1,3 @@
-/**
- * Browser proxy file helpers.
- *
- * Persists files returned by node-hosted browser proxy calls and rewrites
- * proxied result paths to local saved media paths.
- */
 import {
   canonicalizeBase64,
   estimateBase64DecodedBytes,

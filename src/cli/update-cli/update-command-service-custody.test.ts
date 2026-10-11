@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { setTimeout as waitForProcessTick } from "node:timers/promises";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as entrypoints from "../../daemon/gateway-entrypoint.js";
@@ -40,6 +41,18 @@ const sourceImportArgs = sourceLoader ? ["--import", sourceLoader] : [];
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
 
+// The receiver's close event does not join its source-loader descendants, and
+// the process-group owner exposes no extinction promise. Only the test bounds this wait.
+async function waitForReceiverTreeExit(child: ReturnType<typeof spawn>, signal: AbortSignal) {
+  while (isChildProcessTreeAlive(child)) {
+    try {
+      await waitForProcessTick(10, undefined, { signal });
+    } catch (cause) {
+      throw new Error("Fixture tree did not settle", { cause });
+    }
+  }
+}
+
 it.each([
   { supported: true, destination: "same" },
   { supported: false, destination: "same" },
@@ -72,6 +85,9 @@ it.each([
     const mode=process.argv[process.argv.indexOf("--update-executor")+1];
     const action=process.argv[3];
     if(mode==="check") {
+      // EOF follows the parent's committed PID/start binding; receipts observe that bound row.
+      const {finished}=await import("node:stream/promises");
+      await finished(process.stdin.resume(),{cleanup:true});
       if(!process.argv.includes("--json")) {
         process.stdout.write("Recorded warnings from the current update. ");
       }
@@ -94,8 +110,6 @@ it.each([
     }
     else if(mode==="check" && ${JSON.stringify(supported)}==="without-backup") {
       process.stdout.write(JSON.stringify({updateExecutor:"root-spawner-v1",targetRootBinding:true}));
-      const {finished}=await import("node:stream/promises");
-      await finished(process.stdin.resume(),{cleanup:true});
     }
     else try { await runGatewayServiceUpdateCommand(mode,action,async()=>{
       fs.writeFileSync(${JSON.stringify(receipt)},JSON.stringify({pid:process.pid,parent:process.ppid,noRespawn:process.env.OPENCLAW_NO_RESPAWN}));
@@ -182,7 +196,14 @@ it.each([
       await expect(fs.stat(effect)).rejects.toMatchObject({ code: "ENOENT" });
       await expect(fs.stat(receipt)).rejects.toMatchObject({ code: "ENOENT" });
     }
-    const probe = JSON.parse(await fs.readFile(probeReceipt, "utf8"));
+    const probe = JSON.parse(
+      await fs.readFile(probeReceipt, "utf8").catch((cause: unknown) => {
+        throw new Error(
+          `${cause instanceof Error ? cause.message : String(cause)}; native probe receipt runner: ${JSON.stringify(observed)}`,
+          { cause },
+        );
+      }),
+    );
     expect(probe).toMatchObject({ owner: runId, helper: process.pid });
     expect(probe.pid).not.toBe(process.pid);
     expect(probe.key.startsWith(root + "/.openclaw-update-child-")).toBe(true);
@@ -251,9 +272,9 @@ it.each(["receiver-root", "original-lineage", "stripped-lineage"] as const)(
   },
 );
 
-it.each([false, true])(
+it.for([false, true])(
   "refuses equal lease rows in a retargeted database (strip pin=%s)",
-  async (stripPin) => {
+  async (stripPin, { signal }) => {
     const scratch = dirs.make("native-database-correlation-");
     const root = await fs.realpath(scratch);
     const receiverRoot = await fs.realpath(process.cwd());
@@ -324,21 +345,17 @@ it.each([false, true])(
             });
             child.once("close", (code) => {
               clearTimeout(watchdog);
-              void vi
-                .waitFor(() => expect(isChildProcessTreeAlive(child)).toBe(false), {
-                  timeout: 5000,
-                })
-                .then(
-                  () => resolve({ code, stderr }),
-                  (error: unknown) => {
-                    forceKillChildProcessTree(child);
-                    reject(
-                      error instanceof Error
-                        ? error
-                        : new Error("Fixture tree did not settle", { cause: error }),
-                    );
-                  },
-                );
+              void waitForReceiverTreeExit(child, signal).then(
+                () => resolve({ code, stderr }),
+                (error: unknown) => {
+                  forceKillChildProcessTree(child);
+                  reject(
+                    error instanceof Error
+                      ? error
+                      : new Error("Fixture tree did not settle", { cause: error }),
+                  );
+                },
+              );
             });
           }),
       );

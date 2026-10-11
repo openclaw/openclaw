@@ -11,20 +11,15 @@ import { walkDirectorySync } from "@openclaw/fs-safe/walk";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { writeError } from "./bus-server.js";
 
+const UI_CONTENT_TYPES: Record<string, string> = {
+  ".css": "text/css; charset=utf-8",
+  ".js": "text/javascript; charset=utf-8",
+  ".json": "application/json; charset=utf-8",
+  ".svg": "image/svg+xml",
+};
+
 export function detectContentType(filePath: string): string {
-  if (filePath.endsWith(".css")) {
-    return "text/css; charset=utf-8";
-  }
-  if (filePath.endsWith(".js")) {
-    return "text/javascript; charset=utf-8";
-  }
-  if (filePath.endsWith(".json")) {
-    return "application/json; charset=utf-8";
-  }
-  if (filePath.endsWith(".svg")) {
-    return "image/svg+xml";
-  }
-  return "text/html; charset=utf-8";
+  return UI_CONTENT_TYPES[filePath.slice(filePath.lastIndexOf("."))] ?? "text/html; charset=utf-8";
 }
 
 export function missingUiHtml() {

@@ -1,5 +1,6 @@
-/* @vitest-environment jsdom */
 import { expectDefined } from "@openclaw/normalization-core";
+/* @vitest-environment jsdom */
+import { flush } from "solid-js";
 import { describe, expect, it, vi } from "vitest";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { showToast } from "../../lib/toast.ts";
@@ -40,8 +41,28 @@ describe("Cloud worker snapshots", () => {
     }
   });
 
-  it("loads on entry, groups old and current records, and refreshes only on request", async () => {
-    const fixture = mountPage(["crabbox.images.list", "crabbox.images.recover"]);
+  it("loads and groups snapshots with cold-only capture guidance, and refreshes only on request", async () => {
+    const result = snapshotListFixture();
+    result.images.push({
+      profileKey: "profile-key-unsupported",
+      profileId: "unsupported-build",
+      backend: "hetzner",
+      machineClass: "standard",
+      os: "linux",
+      state: "no-image",
+      allocationCount: 0,
+      held: false,
+      captureUnsupported: {
+        atMs: 1234,
+        provider: "hetzner",
+        message: "Native checkpoints are not supported by this coordinator.",
+      },
+    });
+    let currentResult = result;
+    const fixture = mountPage(["crabbox.images.list", "crabbox.images.recover"], {
+      result,
+      response: (method) => (method === "crabbox.images.list" ? currentResult : undefined),
+    });
     try {
       await waitForFast(() =>
         expect(fixture.page.textContent).toContain("No cloud worker profiles"),
@@ -116,6 +137,23 @@ describe("Cloud worker snapshots", () => {
       );
       expect(classless.textContent).toContain("aws · linux · Warm images off");
       expect(classless.textContent).not.toContain("Unlabeled");
+      const unsupported = expectDefined(
+        groups.find((group) =>
+          group.querySelector("h2")?.textContent?.includes("unsupported-build"),
+        ),
+        "Profile whose native capture is unsupported",
+      );
+      expect(unsupported.textContent).toContain("hetzner · standard · linux");
+      expect(unsupported.querySelector(".settings-status")?.textContent?.trim()).toBe("Cold only");
+      expect(unsupported.textContent).toContain(
+        "Native checkpoints are not supported by this coordinator.",
+      );
+      expect(unsupported.textContent).toContain("otherwise provision cold");
+      expect(unsupported.textContent).toContain(
+        "Capture attempts are skipped until warmImages.refreshAfter has elapsed since the refusal.",
+      );
+      expect(unsupported.textContent).toContain("settings.warmImage: false");
+      expect(unsupported.querySelector("button")).toBeNull();
       expect(snapshots.textContent).toContain("Needs migration");
       expect(snapshots.textContent).toContain("openclaw doctor --fix");
       expect(
@@ -126,12 +164,22 @@ describe("Cloud worker snapshots", () => {
           (entry) => entry.textContent?.trim() === "Recover",
         ),
       ).toHaveLength(1);
+      const recover = button(snapshots, "Recover");
+      recover.focus();
+      currentResult = {
+        ...result,
+        images: result.images.map((image) =>
+          Object.assign({}, image, { allocationCount: image.allocationCount + 1 }),
+        ),
+      };
       button(snapshots, "Refresh").click();
-      await waitForFast(() =>
-        expect(
-          fixture.request.mock.calls.filter(([method]) => method === "crabbox.images.list"),
-        ).toHaveLength(2),
-      );
+      await waitForFast(() => expect(projectRow.textContent).toContain("Allocations: 22"));
+      expect(snapshots.querySelectorAll(".settings-section")[1]).toBe(groups[1]);
+      expect(button(snapshots, "Recover")).toBe(recover);
+      expect(document.activeElement).toBe(recover);
+      expect(
+        fixture.request.mock.calls.filter(([method]) => method === "crabbox.images.list"),
+      ).toHaveLength(2);
     } finally {
       fixture.dispose();
     }
@@ -309,6 +357,7 @@ describe("Cloud worker snapshots", () => {
         input.dispatchEvent(
           new Event(input instanceof HTMLSelectElement ? "change" : "input", { bubbles: true }),
         );
+        flush();
       };
       const save = () => button(fixture.page, "Save retention policy").click();
       expect(
@@ -317,7 +366,15 @@ describe("Cloud worker snapshots", () => {
       expect(
         fixture.page.querySelector<HTMLInputElement>('[aria-label="Retain unused"]')?.value,
       ).toBe("14d");
+      const refreshInput = expectDefined(
+        fixture.page.querySelector<HTMLInputElement>('[aria-label="Refresh after"]'),
+        "Refresh policy input",
+      );
+      await waitForFast(() => expect(refreshInput.disabled).toBe(false));
+      refreshInput.focus();
       set("Refresh after", "59m");
+      expect(fixture.page.querySelector('[aria-label="Refresh after"]')).toBe(refreshInput);
+      expect(document.activeElement).toBe(refreshInput);
       save();
       await waitForFast(() =>
         expect(fixture.page.textContent).toContain("Enter a duration of at least 1h"),

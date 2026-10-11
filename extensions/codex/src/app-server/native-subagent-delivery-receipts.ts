@@ -5,33 +5,18 @@ import { isJsonObject, type CodexServerNotification } from "./protocol.js";
 
 type ReceiptParent = Readonly<{
   parentThreadId: string;
-  requesterSessionKey?: string;
   deliveryReceipts: CodexNativeSubagentDeliveryReceipts;
 }>;
 type KnownReceiptChild<Parent extends ReceiptParent> = Readonly<{
   parent: Parent;
-  nativeParentThreadId: string;
   deliveryReceipts: CodexNativeSubagentDeliveryReceipts;
   agentPaths: Set<string>;
-  pendingTurns: readonly Readonly<{ turnId: string }>[];
 }>;
 export function buildCodexNativeSubagentAgentPathKey(
   parentThreadId: string,
   agentPath: string,
 ): string {
   return `${parentThreadId}\0${agentPath}`;
-}
-
-export function resolveCodexNativeSubagentReceiptOwner<Parent extends ReceiptParent>(params: {
-  state: Parent;
-  childThreadId: string;
-  known: KnownReceiptChild<Parent> | undefined;
-}): CodexNativeSubagentDeliveryReceipts {
-  const { state, known } = params;
-  if (known?.parent === state) {
-    return known.deliveryReceipts;
-  }
-  return state.deliveryReceipts;
 }
 
 export function registerCodexNativeSubagentReceiptAlias<Parent extends ReceiptParent>(params: {
@@ -156,23 +141,20 @@ export class CodexNativeSubagentDeliveryReceipts {
       );
       // Raw native receipts have no child turn ID. Prefer the oldest matching
       // result; a delayed predecessor receipt must never acknowledge its successor.
-      let match: [string, Outcome] | undefined;
-      for (const candidate of matches) {
-        const outcome = candidate[1];
-        if (
-          (outcome.result !== undefined && outcome.result === receipt.result) ||
-          outcome.receiptResults.has(receipt.result)
-        ) {
-          match = candidate;
-          break;
-        }
-        if (outcome.result === undefined) {
-          // An unresolved predecessor can still own this receipt.
-          match = matches.length === 1 ? candidate : undefined;
-          break;
-        }
-      }
-      if (!match) {
+      const match = matches.find(
+        ([, outcome]) =>
+          outcome.result === undefined ||
+          outcome.result === receipt.result ||
+          outcome.receiptResults.has(receipt.result),
+      );
+      // An unresolved predecessor can still own this receipt unless its exact
+      // rendering was already accepted before the successor appeared.
+      const ambiguous =
+        match &&
+        match[1].result === undefined &&
+        !match[1].receiptResults.has(receipt.result) &&
+        matches.length > 1;
+      if (!match || ambiguous) {
         index += 1;
         continue;
       }

@@ -6,10 +6,10 @@ import type { JitiOptions, JitiResolveOptions } from "jiti";
 import { isPathInside } from "../infra/path-guards.js";
 import { createJiti } from "./jiti-factory.js";
 import {
-  isJavaScriptModulePath,
   resolvePluginLoaderTryNative,
   isPluginSourceModulePath,
   supportsBunRuntimeOnResolveTargets,
+  useNodeModuleHooks,
 } from "./native-module-require.js";
 import type { PluginModuleLoader } from "./plugin-cache-artifacts.js";
 import { bindPluginCacheRoot, getPluginCache, withPluginCache } from "./plugin-cache.js";
@@ -29,17 +29,18 @@ import {
   type PluginSourceLoadMode,
 } from "./plugin-source-build.js";
 import { inspectPluginTypeScriptExecutionFacts } from "./plugin-source-references.js";
+import { captureBundledPluginStateOperationModules } from "./plugin-state-operation-module-loader.js";
+import { bindPluginStateOperationModuleSource } from "./plugin-state-operation-source.js";
 import { preparePluginLoaderAliases, isPluginSdkAliasSpecifier } from "./sdk-alias.js";
 
 /** Runtime and setup share code identity policy while keeping separate instance authority. */
 export function bindPluginInstanceModuleLoader(params: PluginInstanceModuleLoaderParams): void {
   const cache = getPluginCache();
-  if (params.origin === "bundled" && isJavaScriptModulePath(params.source)) {
+  if (params.origin === "bundled") {
     if (params.expectedSourceDigest !== undefined) {
       throw new Error("Source digest validation is not applicable to core-bundled runtime modules");
     }
-    // Core-shipped code keeps process identity. Recapturing it creates native ESM
-    // module jobs that Node retains after the inventory and its callbacks retire.
+    // Recaptured bundled code leaves native ESM jobs alive after its inventory retires.
     let loader: PluginModuleLoader;
     if (params.createHostModuleLoader) {
       loader = params.createHostModuleLoader();
@@ -62,10 +63,15 @@ export function bindPluginInstanceModuleLoader(params: PluginInstanceModuleLoade
       rootDir: params.rootDir,
       cache,
       loader,
+      source: captureBundledPluginStateOperationModules({
+        rootDir: params.rootDir,
+        source: params.source,
+        devSourceRoot: params.devSourceRoot,
+        pluginSdkResolution: params.pluginSdkResolution,
+      }),
     });
     return;
   }
-  const nativeHooks = typeof Module.registerHooks === "function";
   const sourceBuilds = new Map<string, ReturnType<typeof buildPluginTypeScriptSource>>();
   const sourceForOutput = (filename: string): PluginSourceFile => {
     for (const build of sourceBuilds.values()) {
@@ -113,6 +119,7 @@ export function bindPluginInstanceModuleLoader(params: PluginInstanceModuleLoade
   if (aliases.packageRoot) {
     artifact.linkHost(aliases.packageRoot);
   }
+  bindPluginStateOperationModuleSource({ ...params, artifact });
   installOpenClawPluginSdkNativeResolver({
     moduleUrl: import.meta.url,
     pluginModulePath: params.source,
@@ -120,7 +127,7 @@ export function bindPluginInstanceModuleLoader(params: PluginInstanceModuleLoade
     allowedParentRoots: [artifact.boundaryRoot],
     pluginSdkResolution: params.pluginSdkResolution,
   });
-  if (!nativeHooks) {
+  if (!useNodeModuleHooks()) {
     const capturedSource = artifact.resolve(params.source);
     artifact.prepareModule(capturedSource);
     const bunSourceFacts =
@@ -133,7 +140,7 @@ export function bindPluginInstanceModuleLoader(params: PluginInstanceModuleLoade
         : undefined;
     for (const { specifier } of bunSourceFacts?.staticImports ?? []) {
       if (path.isAbsolute(specifier) || specifier.startsWith("file:")) {
-        artifact.captureModule(capturedSource, specifier, ["node", "import"]);
+        artifact.captureModule(capturedSource, specifier, ["node", "module-sync", "import"]);
       }
     }
     const bunNeedsNativeSource =
@@ -146,7 +153,7 @@ export function bindPluginInstanceModuleLoader(params: PluginInstanceModuleLoade
     const tryNative =
       process.env.JITI_JSX === "1" || process.env.JITI_JSX === "true"
         ? false
-        : (process.versions.bun && artifact.boundaryRoot.includes("\\")) || bunNeedsNativeSource
+        : bunNeedsNativeSource
           ? true
           : undefined;
     const effectiveTryNative = tryNative ?? resolvePluginLoaderTryNative(params.source);

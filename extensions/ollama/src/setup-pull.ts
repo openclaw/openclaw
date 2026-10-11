@@ -2,6 +2,7 @@ import { formatErrorMessage, toErrorObject } from "openclaw/plugin-sdk/error-run
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
 import type { WizardPrompter } from "openclaw/plugin-sdk/setup";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
+import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
 import { buildOllamaBaseUrlSsrFPolicy, resolveOllamaApiBase } from "./provider-models.js";
 import { normalizeOllamaModelName } from "./setup-model-selection.js";
 import { checkNdjsonRecordCap } from "./stream-ndjson-cap.js";
@@ -31,21 +32,19 @@ function formatOllamaPullStatus(status: string): { text: string; hidePercent: bo
 async function readOllamaPullChunkWithIdleTimeout(
   reader: ReadableStreamDefaultReader<Uint8Array>,
 ): Promise<ReadableStreamReadResult<Uint8Array>> {
-  return await new Promise((resolve, reject) => {
-    const timeoutId = setTimeout(() => {
+  return await raceWithTimeout(
+    () =>
+      reader.read().catch((error: unknown) => {
+        throw toErrorObject(error, "Non-Error rejection");
+      }),
+    OLLAMA_PULL_STREAM_IDLE_TIMEOUT_MS,
+    () => {
       void reader.cancel().catch(() => undefined);
-      reject(
-        new Error(
-          `Ollama pull stalled: no data received for ${Math.round(OLLAMA_PULL_STREAM_IDLE_TIMEOUT_MS / 1000)}s`,
-        ),
+      throw new Error(
+        `Ollama pull stalled: no data received for ${Math.round(OLLAMA_PULL_STREAM_IDLE_TIMEOUT_MS / 1000)}s`,
       );
-    }, OLLAMA_PULL_STREAM_IDLE_TIMEOUT_MS);
-
-    void reader
-      .read()
-      .then(resolve, (error: unknown) => reject(toErrorObject(error, "Non-Error rejection")))
-      .finally(() => clearTimeout(timeoutId));
-  });
+    },
+  );
 }
 
 async function pullOllamaModelCore(params: {

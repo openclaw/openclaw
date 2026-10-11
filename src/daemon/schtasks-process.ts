@@ -8,24 +8,30 @@ import { GATEWAY_SERVICE_STOP_TIMEOUT_MS } from "../infra/gateway-shutdown-budge
 import { tryAcquireGatewayStateOwner } from "../infra/gateway-state-owner.js";
 import { inspectPortUsage } from "../infra/ports-inspect.js";
 import type { PortListener } from "../infra/ports-types.js";
+import { throwSqliteLifecycleErrors } from "../infra/sqlite-lifecycle-errors.js";
 import { parseTcpPort, parseTcpPortFromArgs } from "../infra/tcp-port.js";
 import { getWindowsSystem32ExePath } from "../infra/windows-install-roots.js";
 import { readWindowsProcessArgsSync } from "../infra/windows-port-pids.js";
 import { readWindowsProcessStartTimeSync } from "../infra/windows-process-start.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { killProcessTree } from "../process/kill-tree.js";
+import { parseWindowsNativeCommandLine } from "../process/windows-command-line.js";
+import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { sleep } from "../utils.js";
 import { ABSOLUTE_DEADLINE_EXPIRED, awaitWithinDeadline } from "../utils/absolute-deadline.js";
-import { parseCmdScriptCommandLine } from "./cmd-argv.js";
 import { NODE_SERVICE_KIND } from "./constants.js";
 import { resolveGatewayServiceProbeHosts } from "./gateway-service-probe-hosts.js";
 import { readScheduledTaskCommand, resolveTaskName } from "./schtasks-layout.js";
 import {
+  findInstalledGatewayChildPid,
+  findInstalledProcessPid,
   getSnapshotProcessId,
   isCompleteWindowsProcessSnapshot,
+  isNodeHostArgv,
+  matchesInstalledGatewayChildArguments,
+  matchesInstalledProgramArguments,
   readWindowsProcessSnapshot,
-  type WindowsProcessSnapshotEntry,
 } from "./schtasks-process-snapshot.js";
 import {
   isScheduledTaskSqliteSharingError,
@@ -40,12 +46,7 @@ import { resolveServiceManagerEnv } from "./service-process-env.js";
 import type { GatewayServiceRuntime } from "./service-runtime.js";
 import type { GatewayServiceCommandConfig, GatewayServiceEnv } from "./service-types.js";
 import { assertGatewayServiceUpdateCurrent } from "./service-update-authority.js";
-import {
-  readWindowsTaskSupervisorRestartExitCode,
-  WINDOWS_TASK_SUPERVISOR_FLAG,
-} from "./windows-task-supervisor-contract.js";
-
-export { readWindowsProcessSnapshot } from "./schtasks-process-snapshot.js";
+import { WINDOWS_TASK_SUPERVISOR_FLAG } from "./windows-task-supervisor-contract.js";
 
 const WINDOWS_FORCED_PROCESS_EXIT_TIMEOUT_MS = 15_000;
 
@@ -58,105 +59,6 @@ export function resolveScheduledTaskCommandPort(
     parseTcpPort(command?.environment?.OPENCLAW_GATEWAY_PORT) ??
     parseTcpPort(env.OPENCLAW_GATEWAY_PORT)
   );
-}
-
-export function isNodeHostArgv(programArguments: string[]): boolean {
-  const normalized = normalizeProgramArguments(programArguments);
-  return normalized.some((arg, index) => arg === "node" && normalized[index + 1] === "run");
-}
-
-function normalizeProgramArguments(programArguments: string[]): string[] {
-  return programArguments.map((arg) => normalizeLowercaseStringOrEmpty(arg.replaceAll("\\", "/")));
-}
-
-function matchesInstalledProgramArguments(
-  actualArguments: string[],
-  installedArguments: string[],
-): boolean {
-  const actual = normalizeProgramArguments(actualArguments);
-  const installed = normalizeProgramArguments(installedArguments);
-  return (
-    actual.length === installed.length && actual.every((arg, index) => arg === installed[index])
-  );
-}
-
-export function findInstalledProcessPid(
-  entries: WindowsProcessSnapshotEntry[],
-  port: number,
-  installedArguments: string[],
-  matchesProcess: (argv: string[]) => boolean,
-  comparableArguments: (argv: string[]) => string[] = (argv) => argv,
-): number | null {
-  for (const entry of entries) {
-    const commandLine = normalizeLowercaseStringOrEmpty(entry.CommandLine ?? "");
-    if (!commandLine) {
-      continue;
-    }
-    const argv = parseCmdScriptCommandLine(entry.CommandLine ?? "");
-    if (
-      !matchesProcess(argv) ||
-      parseTcpPortFromArgs(argv) !== port ||
-      !matchesInstalledProgramArguments(comparableArguments(argv), installedArguments)
-    ) {
-      continue;
-    }
-    const pid = getSnapshotProcessId(entry);
-    if (pid) {
-      return pid;
-    }
-  }
-  return null;
-}
-
-function matchesInstalledGatewayChildArguments(
-  actualArguments: string[],
-  installedArguments: string[],
-): boolean {
-  return (
-    readWindowsTaskSupervisorRestartExitCode(actualArguments) !== undefined &&
-    matchesInstalledProgramArguments(actualArguments.slice(0, -1), installedArguments)
-  );
-}
-
-/** Finds the current supervised child or a legacy directly launched Gateway. */
-export function findInstalledGatewayChildPid(
-  entries: WindowsProcessSnapshotEntry[],
-  port: number,
-  installedArguments: string[],
-): number | null {
-  const supervisedPid = findInstalledProcessPid(
-    entries,
-    port,
-    installedArguments,
-    (argv) => readWindowsTaskSupervisorRestartExitCode(argv) !== undefined,
-    (argv) => argv.slice(0, -1),
-  );
-  return supervisedPid ?? findInstalledProcessPid(entries, port, installedArguments, () => true);
-}
-
-async function resolveScheduledTaskNodeHostProcess(
-  env: GatewayServiceEnv,
-  installedCommand?: GatewayServiceCommandConfig | null,
-): Promise<{ pid: number; port: number } | null> {
-  const command =
-    installedCommand === undefined
-      ? await readScheduledTaskCommand(env).catch(() => null)
-      : installedCommand;
-  const installedArguments = command?.programArguments;
-  if (!installedArguments?.length) {
-    return null;
-  }
-  const port = resolveScheduledTaskCommandPort(env, command);
-  if (!port) {
-    return null;
-  }
-  const snapshot = readWindowsProcessSnapshot();
-  if (!snapshot) {
-    return null;
-  }
-  // Match full persisted argv so a same-port OpenClaw process cannot impersonate this task.
-  const pid = findInstalledProcessPid(snapshot, port, installedArguments, isNodeHostArgv);
-  return pid ? { pid, port } : null;
 }
 
 export function shouldManageGatewayListenerPort(env: GatewayServiceEnv): boolean {
@@ -180,7 +82,7 @@ export function resolveGatewayListenerPids(listeners: PortListener[]): number[] 
       listeners.flatMap((listener) =>
         typeof listener.pid === "number" &&
         listener.commandLine &&
-        classifyOpenClawArgv(parseCmdScriptCommandLine(listener.commandLine), {
+        classifyOpenClawArgv(parseWindowsNativeCommandLine(listener.commandLine) ?? [], {
           command: "gateway",
           pid: listener.pid,
         }).kind === "openclaw"
@@ -229,12 +131,12 @@ async function resolveScheduledTaskGatewayOwnership(
     ? owner.port === port && hasCurrentProcessIdentity(owner) && isTaskSupervisor(owner.supervisor)
       ? [owner.pid]
       : []
-    : await resolveLegacyScheduledTaskOwnedGatewayPids(env, context, command);
+    : await resolveLegacyScheduledTaskOwnedGatewayPids(env, command, port, context?.probeHosts);
   if (captureExisting && owner && pids.length > 0) {
     pids.push(
-      ...(await resolveLegacyScheduledTaskOwnedGatewayPids(env, context, command)).filter(
-        (pid) => pid !== owner.pid,
-      ),
+      ...(
+        await resolveLegacyScheduledTaskOwnedGatewayPids(env, command, port, context?.probeHosts)
+      ).filter((pid) => pid !== owner.pid),
     );
   }
   const starts = new Map<number, number | null>();
@@ -309,22 +211,14 @@ async function resolveScheduledTaskGatewayOwnership(
 
 async function resolveLegacyScheduledTaskOwnedGatewayPids(
   env: GatewayServiceEnv,
-  context?: { port: number | null; probeHosts?: readonly string[] },
-  installedCommand?: GatewayServiceCommandConfig | null,
+  command: GatewayServiceCommandConfig | null,
+  port: number,
+  probeHosts?: readonly string[],
 ): Promise<number[]> {
-  const command =
-    installedCommand === undefined
-      ? await readScheduledTaskCommand(env).catch(() => null)
-      : installedCommand;
   const installedArguments = command?.programArguments;
   if (!installedArguments?.length) {
     return [];
   }
-  const port = context ? context.port : resolveScheduledTaskCommandPort(env, command);
-  if (!port) {
-    return [];
-  }
-
   const snapshot = readWindowsProcessSnapshot();
   if (process.platform === "win32" && snapshot) {
     // Before a Gateway exists, capture its exact supervisor, which can outlive /End.
@@ -349,9 +243,9 @@ async function resolveLegacyScheduledTaskOwnedGatewayPids(
     return [];
   }
   // Per-PID fallback still requires the same port and persisted argv.
-  const probeHosts =
-    context?.probeHosts ?? (await resolveGatewayServiceProbeHosts({ env, command }));
-  const diagnostics = await inspectPortUsage(port, { probeHosts }).catch(() => null);
+  const diagnostics = await inspectPortUsage(port, {
+    probeHosts: probeHosts ?? (await resolveGatewayServiceProbeHosts({ env, command })),
+  }).catch(() => null);
   if (diagnostics?.status !== "busy") {
     return [];
   }
@@ -362,7 +256,7 @@ async function resolveLegacyScheduledTaskOwnedGatewayPids(
       continue;
     }
     const argv = listener.commandLine
-      ? parseCmdScriptCommandLine(listener.commandLine)
+      ? parseWindowsNativeCommandLine(listener.commandLine)
       : process.platform === "win32"
         ? readWindowsProcessArgsSync(listener.pid)
         : null;
@@ -381,43 +275,12 @@ async function resolveLegacyScheduledTaskOwnedGatewayPids(
   return Array.from(ownedPids);
 }
 
-export async function describeUnverifiedPortListeners(
-  port: number,
-  probeHosts?: readonly string[],
-): Promise<string> {
-  const diagnostics = await inspectPortUsage(port, probeHosts ? { probeHosts } : undefined).catch(
-    () => null,
-  );
-  const listeners = diagnostics?.status === "busy" ? diagnostics.listeners : [];
-  if (!listeners || listeners.length === 0) {
-    return "";
-  }
-  const described = listeners.map((listener) => {
-    const pid = typeof listener.pid === "number" ? listener.pid : null;
-    const argv = listener.commandLine ? parseCmdScriptCommandLine(listener.commandLine) : null;
-    const identity = argv
-      ? classifyOpenClawArgv(argv, { command: "gateway" }).kind === "openclaw"
-        ? "openclaw gateway"
-        : "not an openclaw gateway"
-      : "argv unavailable";
-    const name = listener.command ?? "unknown";
-    return pid ? `pid ${pid} (${name}, ${identity})` : `${name} (${identity})`;
-  });
-  const pids = listeners
-    .map((listener) => listener.pid)
-    .filter((pid): pid is number => typeof pid === "number");
-  const hint = pids.length
-    ? ` If one of these is this gateway, stop it with "Stop-Process -Id <pid> -Force" and retry.`
-    : "";
-  return ` Remaining listener(s): ${described.join(", ")}. If gateway.cmd redirects output, quote the entire redirection target, including environment variables.${hint}`;
-}
-
 /** A completed native snapshot distinguishes no match from unavailable inspection. */
 export async function readBoundedScheduledTaskProcess(
   env: GatewayServiceEnv,
   deadlineMs: number,
   installedCommand?: GatewayServiceCommandConfig | null,
-): Promise<{ port: number; pid: number | null } | null> {
+): Promise<{ port: number; pid: number | null; command: GatewayServiceCommandConfig } | null> {
   const remaining = () => {
     const value = deadlineMs - performance.now();
     if (!Number.isFinite(value) || value <= 0) {
@@ -455,13 +318,65 @@ export async function readBoundedScheduledTaskProcess(
   if (!snapshot || !snapshot.some((entry) => getSnapshotProcessId(entry) !== null)) {
     return null;
   }
-  const pid = shouldManageGatewayListenerPort(env)
+  const gateway = shouldManageGatewayListenerPort(env);
+  let pid = gateway
     ? findInstalledGatewayChildPid(snapshot, port, command.programArguments)
     : findInstalledProcessPid(snapshot, port, command.programArguments, isNodeHostArgv);
+  if (pid === null && gateway && parseTcpPortFromArgs(command.programArguments) === null) {
+    // Identical argv can serve different profiles/ports; an environment port needs its scoped owner.
+    const candidates = snapshot.filter((entry) => {
+      if (getSnapshotProcessId(entry) === null) {
+        return false;
+      }
+      const argv = parseWindowsNativeCommandLine(entry.CommandLine ?? "");
+      return (
+        argv !== null &&
+        (matchesInstalledProgramArguments(argv, command.programArguments) ||
+          matchesInstalledGatewayChildArguments(argv, command.programArguments))
+      );
+    });
+    if (candidates.length > 0) {
+      const owner = readGatewayOwnerLease({ env: mergeGatewayServiceEnv(env, command) });
+      remaining();
+      if (
+        owner?.state !== "live" ||
+        owner.port !== port ||
+        owner.supervisor?.kind !== "schtasks" ||
+        owner.supervisor.name?.toLowerCase() !== resolveTaskName(env).toLowerCase()
+      ) {
+        return null;
+      }
+      pid = candidates.some((entry) => getSnapshotProcessId(entry) === owner.pid)
+        ? owner.pid
+        : null;
+      if (pid === null) {
+        return null;
+      }
+    }
+  }
+  if (
+    pid === null &&
+    gateway &&
+    snapshot.some((entry) => {
+      const argv = parseWindowsNativeCommandLine(entry.CommandLine ?? "");
+      return (
+        getSnapshotProcessId(entry) !== null &&
+        argv !== null &&
+        matchesInstalledProgramArguments(argv, [
+          ...command.programArguments,
+          WINDOWS_TASK_SUPERVISOR_FLAG,
+        ])
+      );
+    })
+  ) {
+    // A surviving supervisor can still create a child; neither state nor a free port proves absence.
+    return null;
+  }
   // An exact match proves presence; only a complete snapshot can prove absence.
-  const complete = pid !== null || isCompleteWindowsProcessSnapshot(snapshot);
+  const complete =
+    pid !== null || isCompleteWindowsProcessSnapshot(snapshot, command.programArguments[0]);
   remaining();
-  return complete ? { port, pid } : null;
+  return complete ? { port, pid, command } : null;
 }
 
 export async function resolveListenerBackedScheduledTaskRuntime(
@@ -469,40 +384,38 @@ export async function resolveListenerBackedScheduledTaskRuntime(
   deadlineMs?: number,
   installedCommand?: GatewayServiceCommandConfig | null,
 ): Promise<Pick<GatewayServiceRuntime, "status" | "pid" | "detail"> | null> {
-  if (deadlineMs !== undefined) {
-    // Scheduler state remains authoritative without an exact running process.
-    const observed = await readBoundedScheduledTaskProcess(env, deadlineMs, installedCommand);
-    return observed?.pid
-      ? {
-          status: "running",
-          pid: observed.pid,
-          detail: `Matching installed process detected for gateway port ${observed.port}.`,
-        }
-      : null;
+  // A task lease proves control ownership, not that its process uses today's definition.
+  const observed = await readBoundedScheduledTaskProcess(
+    env,
+    deadlineMs ?? performance.now() + 5_000,
+    installedCommand,
+  );
+  if (!observed) {
+    return {
+      status: "unknown",
+      detail: "Scheduled Task process inspection could not verify its current command.",
+    };
   }
-  if (!shouldManageGatewayListenerPort(env)) {
-    const matched = await resolveScheduledTaskNodeHostProcess(env, installedCommand);
-    return matched
-      ? {
-          status: "running",
-          pid: matched.pid,
-          detail: `Node host process detected for gateway port ${matched.port}.`,
-        }
-      : null;
+  if (observed.pid) {
+    return {
+      status: "running",
+      pid: observed.pid,
+      detail: `Matching installed process detected for gateway port ${observed.port}.`,
+    };
   }
-  const command =
-    installedCommand === undefined
-      ? await readScheduledTaskCommand(env).catch(() => null)
-      : installedCommand;
-  const context = {
-    port: resolveScheduledTaskCommandPort(env, command),
-  };
-  const pids = await resolveScheduledTaskOwnedGatewayPids(env, context, command);
-  return pids.length > 0
+  const owner = readGatewayOwnerLease({ env: mergeGatewayServiceEnv(env, observed.command) });
+  if (deadlineMs !== undefined && performance.now() >= deadlineMs) {
+    throw new Error("Scheduled Task inspection deadline expired.");
+  }
+  // A previous owned process prevents a stopped claim, but never attests the new command.
+  return owner &&
+    owner.state !== "dead" &&
+    owner.port === observed.port &&
+    owner.supervisor?.kind === "schtasks" &&
+    owner.supervisor.name?.toLowerCase() === resolveTaskName(env).toLowerCase()
     ? {
-        status: "running",
-        pid: pids[0],
-        detail: `Gateway process detected for gateway port ${context.port}.`,
+        status: "unknown",
+        detail: "The task's previous Gateway owner has not been verified stopped.",
       }
     : null;
 }
@@ -510,13 +423,32 @@ export async function resolveListenerBackedScheduledTaskRuntime(
 export async function terminateScheduledTaskNodeHost(
   env: GatewayServiceEnv,
   assertCurrent?: () => void,
+  beforeMutation?: () => Promise<void>,
 ): Promise<number[]> {
-  const matched = await resolveScheduledTaskNodeHostProcess(env);
-  if (!matched) {
+  const command = await readScheduledTaskCommand(env).catch(() => null);
+  const installedArguments = command?.programArguments;
+  if (!installedArguments?.length) {
     return [];
   }
-  await terminateGatewayProcessTree(matched.pid, 300, assertCurrent);
-  return [matched.pid];
+  const port = resolveScheduledTaskCommandPort(env, command);
+  if (!port) {
+    return [];
+  }
+  const snapshot = readWindowsProcessSnapshot();
+  if (!snapshot) {
+    return [];
+  }
+  // Match full persisted argv so a same-port OpenClaw process cannot impersonate this task.
+  const pid = findInstalledProcessPid(snapshot, port, installedArguments, isNodeHostArgv);
+  if (!pid) {
+    return [];
+  }
+  if (beforeMutation) {
+    await beforeMutation();
+    assertCurrent?.();
+  }
+  await terminateGatewayProcessTree(pid, assertCurrent);
+  return [pid];
 }
 
 export async function terminateScheduledTaskGatewayListeners(
@@ -525,6 +457,7 @@ export async function terminateScheduledTaskGatewayListeners(
   assertCurrent?: () => void,
   stop?: {
     end: () => Promise<void>;
+    beforeMutation?: () => Promise<void>;
     restart?: boolean;
     onStopped?: () => void;
     warn: (message: string) => void;
@@ -544,9 +477,19 @@ export async function terminateScheduledTaskGatewayListeners(
     return [];
   }
   const exclusion = ownership.acquireTerminationExclusion();
-  try {
+  // Authority checks read shared state while an ownerless Task is excluded.
+  // Keep those reads admitted across settlement awaits, then drain before release.
+  const resources = exclusion
+    ? createOpenClawDatabaseMaintenanceScope({
+        assertOwnerCurrent: exclusion.assertCurrent,
+        assertDatabaseAccess: exclusion.assertDatabaseAccess,
+      })
+    : undefined;
+  const terminate = async () => {
+    await stop?.beforeMutation?.();
     const settle = stop && windows ? prepareScheduledTaskSettlement(resolveTaskName(env)) : null;
     try {
+      await stop?.beforeMutation?.();
       const owner = ownership.owner;
       if (stop && windows && owner && ownership.pids.includes(owner.pid)) {
         let dispatched = false;
@@ -582,7 +525,7 @@ export async function terminateScheduledTaskGatewayListeners(
           continue;
         }
         await retryScheduledTaskLeaseRead(() => ownership.assertOwnerCurrent(pid));
-        await terminateGatewayProcessTree(pid, 300, () => {
+        await terminateGatewayProcessTree(pid, () => {
           assertCurrent?.();
           ownership.assertOwnerCurrent(pid);
         });
@@ -622,14 +565,26 @@ export async function terminateScheduledTaskGatewayListeners(
       }
     }
     return ownership.pids;
+  };
+  const errors: unknown[] = [];
+  try {
+    return await (resources ? resources.run(terminate) : terminate());
   } catch (error) {
+    errors.push(error);
     if (!stop || error !== ownership.changed) {
       throw error;
     }
     stop.warn("Gateway replacement or unverified process preserved during stop.");
     return null;
   } finally {
-    exclusion?.release();
+    // Failed drainage is terminal for native CLI control; retain exclusion until process exit.
+    try {
+      await resources?.close();
+      exclusion?.release();
+    } catch (error) {
+      errors.push(error);
+      throwSqliteLifecycleErrors(errors, "Scheduled Task stop and state cleanup failed");
+    }
   }
 }
 
@@ -677,9 +632,9 @@ async function waitForProcessExit(pid: number, timeoutMs: number): Promise<boole
 
 export async function terminateGatewayProcessTree(
   pid: number,
-  graceMs: number,
   assertCurrent?: () => void,
 ): Promise<void> {
+  const graceMs = 300;
   assertGatewayServiceUpdateCurrent();
   assertCurrent?.();
   if (process.platform !== "win32") {
@@ -688,24 +643,21 @@ export async function terminateGatewayProcessTree(
     return;
   }
   const taskkillPath = getWindowsSystem32ExePath("taskkill.exe");
-  const graceful = spawnSync(taskkillPath, ["/T", "/PID", String(pid)], {
-    env: resolveServiceManagerEnv(),
-    stdio: "ignore",
-    timeout: 5_000,
-    windowsHide: true,
-  });
+  const taskkill = (force: boolean) =>
+    spawnSync(taskkillPath, [...(force ? ["/F"] : []), "/T", "/PID", String(pid)], {
+      env: resolveServiceManagerEnv(),
+      stdio: "ignore",
+      timeout: 5_000,
+      windowsHide: true,
+    });
+  const graceful = taskkill(false);
   // Direct PID probes avoid signaling an exited owner despite a lagging CIM snapshot.
   if (await waitForProcessExit(pid, graceful.status === 0 && !graceful.error ? graceMs : 0)) {
     return;
   }
   assertGatewayServiceUpdateCurrent();
   assertCurrent?.();
-  const forced = spawnSync(taskkillPath, ["/F", "/T", "/PID", String(pid)], {
-    env: resolveServiceManagerEnv(),
-    stdio: "ignore",
-    timeout: 5_000,
-    windowsHide: true,
-  });
+  const forced = taskkill(true);
   if (forced.error || forced.status !== 0) {
     if (probeProcessState(pid) === "missing") {
       return;
@@ -719,15 +671,11 @@ export async function terminateGatewayProcessTree(
 
 export async function waitForGatewayPortRelease(
   port: number,
-  timeoutMs = 5_000,
-  options?: { probeHosts?: readonly string[] },
+  probeHosts: readonly string[],
 ): Promise<boolean> {
-  const deadline = Date.now() + timeoutMs;
+  const deadline = Date.now() + 5_000;
   while (Date.now() < deadline) {
-    const diagnostics = await inspectPortUsage(
-      port,
-      options?.probeHosts ? { probeHosts: options.probeHosts } : undefined,
-    ).catch(() => null);
+    const diagnostics = await inspectPortUsage(port, { probeHosts }).catch(() => null);
     if (diagnostics?.status === "free") {
       return true;
     }

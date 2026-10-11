@@ -1,9 +1,7 @@
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import { resolveIntegerOption } from "openclaw/plugin-sdk/number-runtime";
-import type {
-  PluginStateCompareIntent,
-  PluginStateKeyedStore,
-} from "openclaw/plugin-sdk/plugin-state-runtime";
+import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
+import type { IMessageAccountConfig } from "../account-types.js";
 import { getIMessageRuntime } from "../runtime.js";
 import {
   IMESSAGE_CATCHUP_CURSOR_NAMESPACE,
@@ -25,13 +23,7 @@ const DEFAULT_MAX_FAILURE_RETRIES = 10;
 const MAX_MAX_FAILURE_RETRIES = 1_000;
 const cursorWriteQueue = new KeyedAsyncQueue();
 
-type IMessageCatchupConfig = {
-  enabled?: boolean;
-  maxAgeMinutes?: number;
-  perRunLimit?: number;
-  firstRunLookbackMinutes?: number;
-  maxFailureRetries?: number;
-};
+type IMessageCatchupConfig = NonNullable<IMessageAccountConfig["catchup"]>;
 
 export type IMessageCatchupRow = {
   guid: string;
@@ -41,26 +33,10 @@ export type IMessageCatchupRow = {
   isFromMe?: boolean;
 };
 
-export type IMessageCatchupSummary = {
-  querySucceeded: boolean;
-  fullyCaughtUp: boolean;
-  fetchedCount: number;
-  replayed: number;
-  skippedFromMe: number;
-  skippedPreCursor: number;
-  /** GUIDs already at the retry ceiling before this pass. */
-  skippedGivenUp: number;
-  failed: number;
-  /** GUIDs that reached the retry ceiling during this pass. */
-  givenUp: number;
-  cursorBefore: { lastSeenMs: number; lastSeenRowid: number } | null;
-  cursorAfter: { lastSeenMs: number; lastSeenRowid: number };
-  windowStartMs: number;
-  windowEndMs: number;
-};
+export type IMessageCatchupSummary = Awaited<ReturnType<typeof performIMessageCatchup>>;
 
-function openCatchupCursorStore(): PluginStateKeyedStore<IMessageCatchupCursor> {
-  return getIMessageRuntime().state.openKeyedStore<IMessageCatchupCursor>({
+function openCatchupCursorStore(): PluginStateKeyedStore<IMessageCatchupCursor, 2> {
+  return getIMessageRuntime().state.openKeyedStoreV2<IMessageCatchupCursor>({
     namespace: IMESSAGE_CATCHUP_CURSOR_NAMESPACE,
     maxEntries: IMESSAGE_CATCHUP_CURSOR_MAX_ENTRIES,
   });
@@ -94,14 +70,14 @@ function normalizeIMessageCatchupCursor(value: unknown): IMessageCatchupCursor |
   if (typeof raw.lastSeenRowid !== "number" || !Number.isFinite(raw.lastSeenRowid)) {
     return null;
   }
-  const failureRetries = sanitizeFailureRetriesInput(raw.failureRetries);
-  const hasRetries = Object.keys(failureRetries).length > 0;
-  return {
-    lastSeenMs: raw.lastSeenMs,
-    lastSeenRowid: raw.lastSeenRowid,
-    updatedAt: typeof raw.updatedAt === "number" ? raw.updatedAt : 0,
-    ...(hasRetries ? { failureRetries } : {}),
-  };
+  return buildIMessageCatchupCursor(
+    {
+      lastSeenMs: raw.lastSeenMs,
+      lastSeenRowid: raw.lastSeenRowid,
+      failureRetries: raw.failureRetries,
+    },
+    typeof raw.updatedAt === "number" ? raw.updatedAt : 0,
+  );
 }
 
 async function loadIMessageCatchupCursor(accountId: string): Promise<IMessageCatchupCursor | null> {
@@ -132,71 +108,41 @@ function decideCatchupCursorSave(
   existingValue: IMessageCatchupCursor | undefined,
   cursor: IMessageCatchupCursor,
   allowCursorRewindForRetries: boolean,
-): PluginStateCompareIntent<IMessageCatchupCursor> {
+): IMessageCatchupCursor | undefined {
   const existing = normalizeIMessageCatchupCursor(existingValue);
   if (existing && cursor.lastSeenRowid < existing.lastSeenRowid) {
     if (!allowCursorRewindForRetries) {
-      return { operation: "update", action: "keep" };
+      return undefined;
     }
-    return {
-      operation: "update",
-      action: "set",
-      value: buildIMessageCatchupCursor(
-        {
-          lastSeenMs: cursor.lastSeenMs,
-          lastSeenRowid: cursor.lastSeenRowid,
-          failureRetries: { ...existing.failureRetries, ...cursor.failureRetries },
-        },
-        cursor.updatedAt,
-      ),
-    };
+    return buildIMessageCatchupCursor(
+      {
+        lastSeenMs: cursor.lastSeenMs,
+        lastSeenRowid: cursor.lastSeenRowid,
+        failureRetries: { ...existing.failureRetries, ...cursor.failureRetries },
+      },
+      cursor.updatedAt,
+    );
   }
-  return { operation: "update", action: "set", value: cursor };
-}
-
-async function saveIMessageCatchupCursor(
-  accountId: string,
-  next: { lastSeenMs: number; lastSeenRowid: number; failureRetries?: Record<string, number> },
-  options: { allowCursorRewindForRetries?: boolean } = {},
-): Promise<void> {
-  const cursor = buildIMessageCatchupCursor(next, Date.now());
-  const allowCursorRewindForRetries = options.allowCursorRewindForRetries === true;
-  await updateIMessageCatchupCursor(accountId, (existing) =>
-    decideCatchupCursorSave(existing, cursor, allowCursorRewindForRetries),
-  );
+  return cursor;
 }
 
 async function updateIMessageCatchupCursor(
   accountId: string,
-  decide: (
-    existing: IMessageCatchupCursor | undefined,
-  ) => PluginStateCompareIntent<IMessageCatchupCursor>,
+  decide: (existing: IMessageCatchupCursor | undefined) => IMessageCatchupCursor | undefined,
 ): Promise<boolean> {
-  const store = openCatchupCursorStore();
-  if (!store.observe || !store.compareAndApply) {
-    throw new Error(
-      "iMessage catchup cursor persistence requires plugin-state comparison support.",
-    );
-  }
   const key = resolveIMessageCatchupCursorKey(accountId);
-  let observation = await store.observe(key);
-  for (;;) {
-    const intent = decide(observation.value);
-    const result = await store.compareAndApply(key, observation.comparison, intent);
-    if (result.status !== "conflict") {
-      return result.status === "applied";
+  return await cursorWriteQueue.enqueue(key, async () => {
+    const store = openCatchupCursorStore();
+    const next = decide(await store.lookup(key));
+    if (!next) {
+      return false;
     }
-    observation = result.current;
-  }
+    await store.register(key, next);
+    return true;
+  });
 }
 
-export type ResolvedCatchupConfig = {
-  enabled: boolean;
-  maxAgeMinutes: number;
-  perRunLimit: number;
-  firstRunLookbackMinutes: number;
-  maxFailureRetries: number;
-};
+export type ResolvedCatchupConfig = Required<IMessageCatchupConfig>;
 
 function clampInt(value: number | undefined, min: number, max: number, fallback: number): number {
   return resolveIntegerOption(value, fallback, { min, max });
@@ -260,29 +206,25 @@ function decideLiveCatchupCursorAdvance(
   existingValue: IMessageCatchupCursor | undefined,
   next: IMessageCatchupCursor,
   maxFailureRetries: number,
-): PluginStateCompareIntent<IMessageCatchupCursor> {
+): IMessageCatchupCursor | undefined {
   const cursor = normalizeIMessageCatchupCursor(existingValue);
   if (cursor && next.lastSeenRowid <= cursor.lastSeenRowid) {
-    return { operation: "update", action: "keep" };
+    return undefined;
   }
   const blockingFailure = Object.values(cursor?.failureRetries ?? {}).some(
     (count) => count < maxFailureRetries,
   );
   if (blockingFailure) {
-    return { operation: "update", action: "keep" };
+    return undefined;
   }
-  return {
-    operation: "update",
-    action: "set",
-    value: buildIMessageCatchupCursor(
-      {
-        lastSeenMs: Math.max(cursor?.lastSeenMs ?? next.lastSeenMs, next.lastSeenMs),
-        lastSeenRowid: next.lastSeenRowid,
-        failureRetries: cursor?.failureRetries,
-      },
-      next.updatedAt,
-    ),
-  };
+  return buildIMessageCatchupCursor(
+    {
+      lastSeenMs: Math.max(cursor?.lastSeenMs ?? next.lastSeenMs, next.lastSeenMs),
+      lastSeenRowid: next.lastSeenRowid,
+      failureRetries: cursor?.failureRetries,
+    },
+    next.updatedAt,
+  );
 }
 
 export async function advanceIMessageCatchupCursor(
@@ -294,18 +236,13 @@ export async function advanceIMessageCatchupCursor(
     return false;
   }
 
-  return await cursorWriteQueue.enqueue(resolveIMessageCatchupCursorKey(accountId), async () => {
-    const cursor = buildIMessageCatchupCursor(next, Date.now());
-    const maxFailureRetries = config.maxFailureRetries;
-    return updateIMessageCatchupCursor(accountId, (existing) =>
-      decideLiveCatchupCursorAdvance(existing, cursor, maxFailureRetries),
-    );
-  });
+  const cursor = buildIMessageCatchupCursor(next, Date.now());
+  return await updateIMessageCatchupCursor(accountId, (existing) =>
+    decideLiveCatchupCursorAdvance(existing, cursor, config.maxFailureRetries),
+  );
 }
 
-export async function performIMessageCatchup(
-  params: PerformCatchupParams,
-): Promise<IMessageCatchupSummary> {
+export async function performIMessageCatchup(params: PerformCatchupParams) {
   const now = params.now ?? Date.now();
   const cfg = params.config;
   const cursor = await loadIMessageCatchupCursor(params.accountId);
@@ -316,15 +253,17 @@ export async function performIMessageCatchup(
   const windowEndMs = now;
   const sinceRowid = cursor?.lastSeenRowid ?? 0;
 
-  const summary: IMessageCatchupSummary = {
+  const summary = {
     querySucceeded: false,
     fullyCaughtUp: false,
     fetchedCount: 0,
     replayed: 0,
     skippedFromMe: 0,
     skippedPreCursor: 0,
+    // GUIDs already at the retry ceiling before this pass.
     skippedGivenUp: 0,
     failed: 0,
+    // GUIDs that reached the retry ceiling during this pass.
     givenUp: 0,
     cursorBefore: cursor
       ? { lastSeenMs: cursor.lastSeenMs, lastSeenRowid: cursor.lastSeenRowid }
@@ -374,12 +313,13 @@ export async function performIMessageCatchup(
       summary.skippedPreCursor += 1;
       continue;
     }
+    // A held failure clamps the final cursor below this watermark.
+    highWatermarkMs = Math.max(highWatermarkMs, row.date);
+    highWatermarkRowid = Math.max(highWatermarkRowid, row.rowid);
     if (row.date < ageBoundMs) {
       // Row predates the recency ceiling. Skip but advance the cursor so we
       // don't re-fetch it next pass.
       summary.skippedPreCursor += 1;
-      highWatermarkMs = Math.max(highWatermarkMs, row.date);
-      highWatermarkRowid = Math.max(highWatermarkRowid, row.rowid);
       continue;
     }
     if (row.isFromMe) {
@@ -391,15 +331,11 @@ export async function performIMessageCatchup(
         );
       }
       summary.skippedFromMe += 1;
-      highWatermarkMs = Math.max(highWatermarkMs, row.date);
-      highWatermarkRowid = Math.max(highWatermarkRowid, row.rowid);
       continue;
     }
     const priorCount = failureRetries[row.guid] ?? 0;
     if (priorCount >= cfg.maxFailureRetries) {
       summary.skippedGivenUp += 1;
-      highWatermarkMs = Math.max(highWatermarkMs, row.date);
-      highWatermarkRowid = Math.max(highWatermarkRowid, row.rowid);
       continue;
     }
 
@@ -414,8 +350,6 @@ export async function performIMessageCatchup(
     if (dispatched.ok) {
       summary.replayed += 1;
       delete failureRetries[row.guid];
-      highWatermarkMs = Math.max(highWatermarkMs, row.date);
-      highWatermarkRowid = Math.max(highWatermarkRowid, row.rowid);
       continue;
     }
 
@@ -427,8 +361,6 @@ export async function performIMessageCatchup(
       params.warn?.(
         `imessage catchup: giving up on guid=${row.guid} after ${nextCount} failures; advancing cursor past it`,
       );
-      highWatermarkMs = Math.max(highWatermarkMs, row.date);
-      highWatermarkRowid = Math.max(highWatermarkRowid, row.rowid);
       continue;
     }
     // Below the retry ceiling: hold the cursor BEFORE this row so the next
@@ -461,16 +393,12 @@ export async function performIMessageCatchup(
 
   const capped = capFailureRetriesMap(failureRetries);
   summary.cursorAfter = { lastSeenMs, lastSeenRowid };
-  await saveIMessageCatchupCursor(
-    params.accountId,
-    {
-      lastSeenMs,
-      lastSeenRowid,
-      failureRetries: capped,
-    },
-    {
-      allowCursorRewindForRetries: earliestHeldFailureRow !== null,
-    },
+  const next = buildIMessageCatchupCursor(
+    { lastSeenMs, lastSeenRowid, failureRetries: capped },
+    Date.now(),
+  );
+  await updateIMessageCatchupCursor(params.accountId, (existing) =>
+    decideCatchupCursorSave(existing, next, earliestHeldFailureRow !== null),
   );
 
   if (summary.replayed > 0 || summary.failed > 0 || summary.givenUp > 0) {

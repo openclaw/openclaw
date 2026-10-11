@@ -1,6 +1,5 @@
 #!/usr/bin/env node
 
-// Runs grouped Vitest plans for one or more bundled plugins.
 import path from "node:path";
 import pMap from "p-map";
 import { waitForever } from "../src/cli/wait.ts";
@@ -33,7 +32,7 @@ import { isDirectScriptRun, runVitestBatch } from "./lib/vitest-batch-runner.mts
 import type { VitestBatchRunParams } from "./lib/vitest-batch-runner.mts";
 import { prepareVitestRuntime } from "./lib/vitest-build-prerequisites.mts";
 import { resolveVitestCacheRoot, resolveVitestCacheSlotPath } from "./lib/vitest-cache-slots.mts";
-import { resolveExplicitVitestMode } from "./lib/vitest-cli-mode.mts";
+import { collectVitestFileFilters, resolveExplicitVitestMode } from "./lib/vitest-cli-mode.mts";
 import { resolveVitestHomeSelection } from "./lib/vitest-home-selection.mts";
 import { createVitestReportOwner, type VitestReportOutcome } from "./lib/vitest-report-owner.mts";
 import { resolveVitestRuntimeCliSelections } from "./lib/vitest-runtime-selection.mts";
@@ -53,9 +52,6 @@ function printUsage() {
   );
 }
 
-/**
- * Parses comma-separated plugin ids and separates Vitest passthrough args.
- */
 export function parseExtensionIds(rawArgs: string[]) {
   const normalizedArgs = rawArgs[0] === "--" ? rawArgs.slice(1) : rawArgs;
   const separatorIndex = normalizedArgs.indexOf("--");
@@ -83,13 +79,10 @@ export function parseExtensionIds(rawArgs: string[]) {
   };
 }
 
-/**
- * Resolves bounded parallelism for extension test config groups.
- */
 export function resolveExtensionBatchParallelism(groupCount: number, env = process.env) {
   const raw = env[PARALLEL_ENV_KEY]?.trim();
   const override = raw ? parsePositiveInt(raw, PARALLEL_ENV_KEY) : 1;
-  return Math.min(Math.max(1, override), Math.max(1, groupCount));
+  return Math.min(override, Math.max(1, groupCount));
 }
 
 function createGroupEnv({
@@ -118,7 +111,7 @@ function orderPlanGroups(planGroups: ExtensionTestPlanGroup[], parallelism: numb
   if (parallelism <= 1) {
     return planGroups;
   }
-  return [...planGroups].toSorted((left, right) => {
+  return planGroups.toSorted((left, right) => {
     if (left.estimatedCost !== right.estimatedCost) {
       return right.estimatedCost - left.estimatedCost;
     }
@@ -178,6 +171,7 @@ function preparePlanGroup(
   exactExcludePaths: Set<string>,
 ) {
   const targets = resolveGroupTargets(group, exactExcludePaths);
+  const hasFileFilters = collectVitestFileFilters(vitestArgs).length > 0;
   const targetChunks =
     targets.length === 0
       ? []
@@ -195,7 +189,11 @@ function preparePlanGroup(
         group,
         watchMode: resolveExplicitVitestMode(["run", ...vitestArgs]) === "watch",
       }),
-      targets: chunk.map((target) => relativizeExtensionVitestPath(target)),
+      targets: chunk.map((target) => {
+        const relative = relativizeExtensionVitestPath(target);
+        // Bound default discovery without widening an explicit CLI file selection.
+        return !hasFileFilters && group.extensionIds.includes(relative) ? `${relative}/` : relative;
+      }),
     }),
   );
   const bunInvocations: typeof invocations = [];
@@ -238,7 +236,12 @@ function combineSinglePluginGroups(
                 config,
                 args: relativizeExtensionVitestArgs(vitestArgs),
                 targets: targets.filter(
-                  (target) => !targets.some((root) => target.startsWith(`${root}/`)),
+                  (target) =>
+                    !targets.some(
+                      (root) =>
+                        root !== target &&
+                        target.startsWith(root.endsWith("/") ? root : `${root}/`),
+                    ),
                 ),
                 env: {
                   ...createGroupEnv({
@@ -282,9 +285,6 @@ async function runPlanGroup(
   return finalExitCode;
 }
 
-/**
- * Runs a resolved extension batch plan, optionally in parallel config groups.
- */
 export async function runExtensionBatchPlan(
   batchPlan: ExtensionBatchPlan,
   params: {

@@ -10,7 +10,7 @@ export { normalizeFastMode };
 export type { FastMode };
 
 /** Canonical thinking level values accepted by chat commands and session state. */
-const ALL_THINKING_LEVELS = [
+export const ALL_THINKING_LEVELS = [
   "off",
   "minimal",
   "low",
@@ -72,41 +72,22 @@ export function normalizeThinkLevel(raw?: string | null): ThinkLevel | undefined
     return undefined;
   }
   const collapsed = key.replace(/[\s_-]+/g, "");
-  if (collapsed === "adaptive" || collapsed === "auto") {
-    return "adaptive";
-  }
-  if (collapsed === "max" || collapsed === "maximum") {
-    return "max";
-  }
-  if (collapsed === "ultra") {
-    return "ultra";
-  }
-  if (collapsed === "xhigh" || collapsed === "extrahigh") {
-    return "xhigh";
-  }
   // `none` is a documented provider-native spelling for disabled reasoning; store canonical off.
-  if (["off", "none"].includes(key)) {
-    return "off";
-  }
-  if (["on", "enable", "enabled"].includes(key)) {
-    return "low";
-  }
-  if (["min", "minimal"].includes(key)) {
-    return "minimal";
-  }
-  if (["low", "thinkhard", "think-hard", "think_hard"].includes(key)) {
-    return "low";
-  }
-  if (["mid", "med", "medium", "thinkharder", "think-harder", "harder"].includes(key)) {
-    return "medium";
-  }
-  if (["high", "ultrathink", "thinkhardest", "highest"].includes(key)) {
-    return "high";
-  }
-  if (["think"].includes(key)) {
-    return "minimal";
-  }
-  return undefined;
+  return (
+    normalizeAliasedLevel<ThinkLevel>(collapsed, [
+      ["adaptive", "auto"],
+      ["max", "maximum"],
+      ["ultra"],
+      ["xhigh", "extrahigh"],
+    ]) ??
+    normalizeAliasedLevel<ThinkLevel>(key, [
+      ["off", "none"],
+      ["low", "on", "enable", "enabled", "thinkhard", "think-hard", "think_hard"],
+      ["minimal", "min", "think"],
+      ["medium", "mid", "med", "thinkharder", "think-harder", "harder"],
+      ["high", "ultrathink", "thinkhardest", "highest"],
+    ])
+  );
 }
 
 /** Returns true for command values that clear an inherited session override. */
@@ -163,19 +144,6 @@ type ResponseUsageDefaultConfig =
   | ResponseUsageInput
   | { default?: ResponseUsageInput; [channel: string]: ResponseUsageInput | undefined };
 
-function resolveMessagesResponseUsageDefault(
-  configured: ResponseUsageDefaultConfig | undefined,
-  channel?: string,
-): ResponseUsageInput | undefined {
-  if (typeof configured === "string") {
-    return configured;
-  }
-  if (configured && typeof configured === "object") {
-    return (channel ? configured[channel] : undefined) ?? configured.default;
-  }
-  return undefined;
-}
-
 export function resolveEffectiveResponseUsage(
   sessionRaw: string | undefined | null,
   configured: ResponseUsageDefaultConfig | undefined,
@@ -185,7 +153,10 @@ export function resolveEffectiveResponseUsage(
   if (sessionNormalized !== undefined) {
     return sessionNormalized;
   }
-  const configDefault = resolveMessagesResponseUsageDefault(configured, channel);
+  const configDefault =
+    typeof configured === "string"
+      ? configured
+      : ((channel ? configured?.[channel] : undefined) ?? configured?.default);
   return resolveResponseUsageMode(configDefault);
 }
 

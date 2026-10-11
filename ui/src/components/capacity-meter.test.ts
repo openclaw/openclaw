@@ -1,13 +1,10 @@
 /* @vitest-environment jsdom */
-import { nothing, render } from "lit";
 import { describe, expect, it } from "vitest";
-import { workerCapacityPresentation } from "./worker-capacity.ts";
+import { mountSolid } from "../test-helpers/mount-solid.ts";
+import { workerCapacityPresentation } from "./solid/worker-capacity.tsx";
 
 function renderCapacity(params: Parameters<typeof workerCapacityPresentation>[0]) {
-  const container = document.createElement("div");
-  const capacity = workerCapacityPresentation(params);
-  render(capacity?.meter ?? nothing, container);
-  return container;
+  return mountSolid(() => workerCapacityPresentation(params)?.meter).container;
 }
 
 describe("worker capacity meter", () => {
@@ -35,14 +32,6 @@ describe("worker capacity meter", () => {
       filled: 8,
       tone: "warn",
       label: "8 of 8 slots busy",
-    },
-    {
-      name: "offline with a last-known metric",
-      available: 5,
-      unavailable: true,
-      filled: 0,
-      tone: "stale",
-      label: "Slot utilization unavailable",
     },
     {
       name: "ineligible and saturated",

@@ -2,9 +2,14 @@
 // oxfmt-ignore
 import { useSubagentControlFixture } from "./subagent-control.test-support.js";
 import { expect, it, vi } from "vitest";
-import { createDeferred } from "../../../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../../../test/helpers/promise.js";
 import { getRuntimeConfig } from "../../../config/config.js";
 import { reactivateCompletedSubagentSession } from "../../../gateway/session-subagent-reactivation.js";
+import * as lifecycleAdmission from "../../../sessions/session-lifecycle-admission.js";
 import {
   beginSessionWorkAdmission,
   getActiveSessionLifecycleMutationCount,
@@ -145,7 +150,7 @@ it.each(["before interruption", "after interruption", "after abort"] as const)(
     const releaseBlocker = createDeferred();
     const blocker =
       revocation === "before interruption"
-        ? runExclusiveSessionLifecycleMutation({
+        ? runExclusiveSessionLifecycleMutation("subagent-kill", {
             scope: storePath,
             identities: [sessionKey, sessionId],
             run: async () => {
@@ -249,7 +254,7 @@ it.each([
     const releaseBlocker = createDeferred();
     const blocker =
       phase === "queued"
-        ? runExclusiveSessionLifecycleMutation({
+        ? runExclusiveSessionLifecycleMutation("subagent-kill", {
             scope: storePath,
             identities: [sessionKey, sessionId],
             run: async () => {
@@ -260,6 +265,19 @@ it.each([
         : Promise.resolve();
     if (phase === "queued") {
       await blockerEntered.promise;
+    }
+    const mutationQueued = createDeferred();
+    if (phase === "queued") {
+      const mutate = lifecycleAdmission.runExclusiveSessionLifecycleMutation;
+      vi.spyOn(lifecycleAdmission, "runExclusiveSessionLifecycleMutation").mockImplementation(
+        (operation, params) => {
+          const mutation = mutate(operation, params);
+          if ("scope" in params && params.scope === storePath && params.prepare) {
+            mutationQueued.resolve();
+          }
+          return mutation;
+        },
+      );
     }
     const readEntered = createDeferred();
     const releaseRead = createDeferred();
@@ -298,9 +316,12 @@ it.each([
       settled = true;
     });
     try {
-      if (phase === "accepted") {
-        await interrupted.promise;
-      }
+      await Promise.race([
+        phase === "accepted" ? interrupted.promise : mutationQueued.promise,
+        pending.then(() => {
+          throw new Error("Cancellation never reached its selected lifecycle phase.");
+        }),
+      ]);
       needsRead = true;
       releaseBlocker.resolve();
       admission.release();
@@ -314,7 +335,7 @@ it.each([
       expect(aborted).toHaveBeenCalledTimes(phase === "accepted" ? 1 : 0);
       expect(getActiveSessionLifecycleMutationCount()).toBeGreaterThan(0);
       if (terminal) {
-        expect(markSubagentRunTerminated({ runId, reason: "killed" })).toBe(1);
+        expect(await markSubagentRunTerminated({ runId, reason: "killed" })).toBe(1);
         expect(resolveSubagentSessionStatus(subagentRuns.get(runId))).toBe("killed");
       }
       releaseRead.resolve();
@@ -346,275 +367,288 @@ it.each([
   },
 );
 
-it.each(["bulk", "admin"] as const)(
-  "%s cancellation interrupts every sibling before waiting for any sibling to drain",
-  async (boundary) => {
-    const requester = "agent:main:main";
-    const sessionKey = (id: string) => `agent:main:subagent:${id}`;
-    const owner = boundary === "admin" ? sessionKey("root") : requester;
-    const running = Array.from({ length: 8 }, (_, index) => `running-${index}`);
-    const queued = ["queued-0", "queued-1"];
-    const selected = [...running, ...queued];
-    let storePath = "";
-    for (const id of boundary === "admin" ? ["root", ...selected] : selected) {
-      storePath = await writeSubagentSessionEntry({
-        stateDir: fixture.stateDir,
-        agentId: "main",
-        sessionKey: sessionKey(id),
-        defaultSessionId: `${id}-session`,
-      });
-      await registerSubagentRun({
-        runId: id,
-        childSessionKey: sessionKey(id),
-        requesterSessionKey: id === "root" ? requester : owner,
-        requesterAgentId: "main",
-        requesterDisplayKey: requester,
-        task: id,
-        cleanup: "keep",
-        collect: true,
-        queued: queued.includes(id),
-        expectsCompletionMessage: false,
-      });
-    }
-    const start = vi.fn(async () => {});
-    const cleanupGate = createDeferred();
-    const removed = vi.fn(async () => await cleanupGate.promise);
-    for (const runId of queued) {
-      enqueueSwarmRun({
-        groupId: "sibling-cancellation",
-        runId,
-        maxConcurrent: running.length,
-        activeRunIds: running,
-        start,
-        onStartFailure: () => true,
-        onRemoved: removed,
-      });
-    }
-    const interrupted: string[] = [];
-    const firstInterrupted = createDeferred();
-    const leases: SessionWorkAdmissionLease[] = [];
-    const activeRuns = running.map((runId) => ({
-      runId,
-      handle: createEmbeddedRunHandle({ runId }),
-    }));
-    for (const { runId, handle } of activeRuns) {
-      setActiveEmbeddedRun(`${runId}-session`, handle, sessionKey(runId));
-      leases.push(
-        await beginSessionWorkAdmission({
-          scope: storePath,
-          identities: [sessionKey(runId), `${runId}-session`],
-          assertAllowed: () => {},
-          onInterrupt: () => {
-            interrupted.push(runId);
-            firstInterrupted.resolve();
-            // Cancellation releases real scheduler capacity while these admissions
-            // remain held. Selected queued children must still never dispatch.
-            expect(releaseSwarmRun(runId)).toBe(true);
-          },
-        }),
-      );
-    }
-    const cfg = getRuntimeConfig();
-    let settled = false;
-    const pending = (
-      boundary === "admin"
-        ? killSubagentRunAdmin({ cfg, sessionKey: owner, expectedRunId: "root" })
-        : killAllControlledSubagentRuns({
-            cfg,
-            controller: {
-              controllerSessionKey: owner,
-              controllerAgentId: "main",
-              callerSessionKey: owner,
-              callerIsSubagent: false,
-              controlScope: "children",
-            },
-            runs: selected.map((id) => subagentRuns.get(id)!),
-          })
-    ).finally(() => {
-      settled = true;
+it("admin cancellation interrupts every sibling before waiting for any sibling to drain", async ({
+  signal,
+}) => {
+  const requester = "agent:main:main";
+  const sessionKey = (id: string) => `agent:main:subagent:${id}`;
+  const owner = sessionKey("root");
+  const running = Array.from({ length: 8 }, (_, index) => `running-${index}`);
+  const queued = ["queued-0", "queued-1"];
+  const selected = [...running, ...queued];
+  let storePath = "";
+  for (const id of ["root", ...selected]) {
+    storePath = await writeSubagentSessionEntry({
+      stateDir: fixture.stateDir,
+      agentId: "main",
+      sessionKey: sessionKey(id),
+      defaultSessionId: `${id}-session`,
     });
-    try {
-      await firstInterrupted.promise;
-      await vi.waitFor(() => expect(interrupted.toSorted()).toEqual(running));
-      expect(getActiveSessionWorkAdmissionCount()).toBe(running.length);
-      expect(start).not.toHaveBeenCalled();
-      for (const lease of leases.toReversed()) {
-        lease.release();
-      }
-      await vi.waitFor(() => expect(removed).toHaveBeenCalledTimes(queued.length));
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
-      expect(settled).toBe(false);
-      cleanupGate.resolve();
-      const result = await pending;
-      expect(result).toMatchObject(
-        boundary === "admin"
-          ? { found: true, killed: true, cascadeKilled: selected.length, cascadeLabels: selected }
-          : { status: "ok", killed: selected.length, labels: selected },
-      );
-      for (const id of selected) {
-        expect(resolveSubagentSessionStatus(subagentRuns.get(id))).toBe("killed");
-      }
-      expect(start).not.toHaveBeenCalled();
-    } finally {
-      cleanupGate.resolve();
-      for (const lease of leases) {
-        lease.release();
-      }
-      await pending;
-      for (const { runId, handle } of activeRuns) {
-        clearActiveEmbeddedRun(`${runId}-session`, handle, sessionKey(runId));
-      }
-      expect(getActiveSessionWorkAdmissionCount()).toBe(0);
-      expect(getActiveSessionLifecycleMutationCount()).toBe(0);
+    await registerSubagentRun({
+      runId: id,
+      childSessionKey: sessionKey(id),
+      requesterSessionKey: id === "root" ? requester : owner,
+      requesterAgentId: "main",
+      requesterDisplayKey: requester,
+      task: id,
+      cleanup: "keep",
+      collect: true,
+      queued: queued.includes(id),
+      expectsCompletionMessage: false,
+    });
+  }
+  const start = vi.fn(async () => {});
+  const cleanupGate = createDeferred();
+  const allRemoved = createDeferred();
+  let removals = 0;
+  const removed = vi.fn(async () => {
+    removals += 1;
+    if (removals === queued.length) {
+      allRemoved.resolve();
     }
-  },
-);
-
-it.each(["after interrupt", "before capacity release"] as const)(
-  "keeps a late descendant queued when registered %s on an independent sibling that releases first",
-  async (registration) => {
-    const owner = "agent:main:main";
-    const key = (id: string) => `agent:main:subagent:${id}`;
-    const parents = { a: owner, b: owner, d: key("a"), x: key("d"), g: key("d") };
-    let storePath = "";
-    const register = (id: keyof typeof parents, queued = false) =>
-      registerSubagentRun({
-        runId: id,
-        childSessionKey: key(id),
-        requesterSessionKey: parents[id],
-        controllerSessionKey: parents[id],
-        swarmRequesterSessionKey: parents[id],
-        requesterAgentId: "main",
-        requesterDisplayKey: parents[id],
-        groupId: "shared-name",
-        task: id,
-        cleanup: "keep",
-        collect: true,
-        queued,
-        expectsCompletionMessage: false,
-      });
-    for (const id of ["a", "b", "d", "x", "g"] as const) {
-      storePath = await writeSubagentSessionEntry({
-        stateDir: fixture.stateDir,
-        agentId: "main",
-        sessionKey: key(id),
-        defaultSessionId: `${id}-session`,
-      });
-      if (id !== "g") {
-        await register(id);
-      }
-    }
-    const unrelatedStart = vi.fn(async () => {});
-    const startG = vi.fn(async () => {});
-    const startFailure = vi.fn(() => true);
+    await cleanupGate.promise;
+  });
+  for (const runId of queued) {
     enqueueSwarmRun({
-      groupId: JSON.stringify(["main", owner, "shared-name"]),
-      runId: "unrelated",
-      maxConcurrent: 2,
-      activeRunIds: ["a", "b"],
-      start: unrelatedStart,
-      onStartFailure: startFailure,
+      groupId: "sibling-cancellation",
+      runId,
+      maxConcurrent: running.length,
+      activeRunIds: running,
+      start,
+      onStartFailure: () => true,
+      onRemoved: removed,
     });
-    const aInterrupted = createDeferred();
-    const bInterrupted = createDeferred();
-    const bReleased = createDeferred();
-    const admissionA = await beginSessionWorkAdmission({
-      scope: storePath,
-      identities: [key("a"), "a-session"],
-      assertAllowed: () => {},
-      onInterrupt: () => aInterrupted.resolve(),
-    });
-    const admissionB = await beginSessionWorkAdmission({
-      scope: storePath,
-      identities: [key("b"), "b-session"],
-      assertAllowed: () => {},
-      onInterrupt: () => bInterrupted.resolve(),
-    });
-    const interruptD = vi.fn(() => admissionD.release());
-    const admissionD = await beginSessionWorkAdmission({
-      scope: storePath,
-      identities: [key("d"), "d-session"],
-      assertAllowed: () => {},
-      onInterrupt: interruptD,
-    });
-    const registerG = () =>
-      admissionD.run(async () => {
-        const pendingRegistration = register("g", true);
-        // Keep G queued before B releases capacity, without detaching its durable registration.
-        enqueueSwarmRun({
-          groupId: JSON.stringify(["main", key("d"), "shared-name"]),
-          runId: "g",
-          maxConcurrent: 1,
-          activeRunIds: ["x"],
-          start: startG,
-          onStartFailure: startFailure,
-        });
-        await pendingRegistration;
-      });
-    let lateRegistration: Promise<void> | undefined;
-    const handleB = createEmbeddedRunHandle({
-      runId: "b",
-      abort: () => {
-        if (registration === "before capacity release") {
-          lateRegistration = registerG();
-        }
-        expect(releaseSwarmRun("b")).toBe(true);
-        bReleased.resolve();
-      },
-    });
-    const handleX = createEmbeddedRunHandle({
-      runId: "x",
-      abort: () => expect(releaseSwarmRun("x")).toBe(true),
-    });
-    setActiveEmbeddedRun("b-session", handleB, key("b"));
-    setActiveEmbeddedRun("x-session", handleX, key("x"));
-    const pending = killAllControlledSubagentRuns({
-      cfg: getRuntimeConfig(),
-      controller: {
-        controllerSessionKey: owner,
-        controllerAgentId: "main",
-        callerSessionKey: owner,
-        callerIsSubagent: false,
-        controlScope: "children",
-      },
-      runs: [subagentRuns.get("a")!, subagentRuns.get("b")!],
-    });
-    try {
-      await Promise.all([aInterrupted.promise, bInterrupted.promise]);
-      expect(interruptD).not.toHaveBeenCalled();
-      // Register after B's refresh, including immediately before its capacity release.
-      // Reusing a group name does not merge different callers' scheduler lanes.
-      if (registration === "after interrupt") {
-        lateRegistration = registerG();
-        await lateRegistration;
-      }
-      admissionB.release();
-      await bReleased.promise;
-      expect(lateRegistration).toBeDefined();
-      await lateRegistration;
-      await vi.waitFor(() => expect(unrelatedStart).toHaveBeenCalledOnce());
-      expect(interruptD).not.toHaveBeenCalled();
-      expect(startG).not.toHaveBeenCalled();
-      admissionA.release();
-      expect(await pending).toMatchObject({
-        status: "ok",
-        killed: 5,
-        labels: ["a", "d", "x", "g", "b"],
-      });
-      expect(resolveSubagentSessionStatus(subagentRuns.get("g"))).toBe("killed");
-      expect(startG).not.toHaveBeenCalled();
-      expect(startFailure).not.toHaveBeenCalled();
-    } finally {
-      admissionA.release();
-      admissionB.release();
-      admissionD.release();
-      await Promise.all([pending, lateRegistration]);
-      clearActiveEmbeddedRun("b-session", handleB, key("b"));
-      clearActiveEmbeddedRun("x-session", handleX, key("x"));
-      expect(getActiveSessionWorkAdmissionCount()).toBe(0);
-      expect(getActiveSessionLifecycleMutationCount()).toBe(0);
+  }
+  const interrupted: string[] = [];
+  const allInterrupted = createDeferred();
+  const leases: SessionWorkAdmissionLease[] = [];
+  const activeRuns = running.map((runId) => ({
+    runId,
+    handle: createEmbeddedRunHandle({ runId }),
+  }));
+  for (const { runId, handle } of activeRuns) {
+    setActiveEmbeddedRun(`${runId}-session`, handle, sessionKey(runId));
+    leases.push(
+      await beginSessionWorkAdmission({
+        scope: storePath,
+        identities: [sessionKey(runId), `${runId}-session`],
+        assertAllowed: () => {},
+        onInterrupt: () => {
+          interrupted.push(runId);
+          if (interrupted.length === running.length) {
+            allInterrupted.resolve();
+          }
+          // Cancellation releases real scheduler capacity while these admissions
+          // remain held. Selected queued children must still never dispatch.
+          expect(releaseSwarmRun(runId)).toBe(true);
+        },
+      }),
+    );
+  }
+  const cfg = getRuntimeConfig();
+  let settled = false;
+  const pending = killSubagentRunAdmin({ cfg, sessionKey: owner, expectedRunId: "root" }).finally(
+    () => {
+      settled = true;
+    },
+  );
+  try {
+    // Await the owner's own publications instead of polling: a loaded host must not
+    // turn healthy scheduler work into a wall-clock race.
+    await withinTest(
+      awaitGateBeforeSettlement(
+        allInterrupted.promise,
+        pending,
+        "Cancellation settled before interrupting every running sibling.",
+      ),
+      signal,
+    );
+    expect(interrupted.toSorted()).toEqual(running);
+    expect(getActiveSessionWorkAdmissionCount()).toBe(running.length);
+    expect(start).not.toHaveBeenCalled();
+    for (const lease of leases.toReversed()) {
+      lease.release();
     }
-  },
-);
+    await withinTest(
+      awaitGateBeforeSettlement(
+        allRemoved.promise,
+        pending,
+        "Cancellation settled before removing every queued sibling.",
+      ),
+      signal,
+    );
+    expect(removed).toHaveBeenCalledTimes(queued.length);
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    expect(settled).toBe(false);
+    cleanupGate.resolve();
+    const result = await pending;
+    expect(result).toMatchObject({
+      found: true,
+      killed: true,
+      cascadeKilled: selected.length,
+      cascadeLabels: selected,
+    });
+    for (const id of selected) {
+      expect(resolveSubagentSessionStatus(subagentRuns.get(id))).toBe("killed");
+    }
+    expect(start).not.toHaveBeenCalled();
+  } finally {
+    cleanupGate.resolve();
+    for (const lease of leases) {
+      lease.release();
+    }
+    await pending;
+    for (const { runId, handle } of activeRuns) {
+      clearActiveEmbeddedRun(`${runId}-session`, handle, sessionKey(runId));
+    }
+    expect(getActiveSessionWorkAdmissionCount()).toBe(0);
+    expect(getActiveSessionLifecycleMutationCount()).toBe(0);
+  }
+});
+
+it("keeps a late descendant queued when registered before capacity release on an independent sibling that releases first", async ({
+  signal,
+}) => {
+  const owner = "agent:main:main";
+  const key = (id: string) => `agent:main:subagent:${id}`;
+  const parents = { a: owner, b: owner, d: key("a"), x: key("d"), g: key("d") };
+  let storePath = "";
+  const register = (id: keyof typeof parents, queued = false) =>
+    registerSubagentRun({
+      runId: id,
+      childSessionKey: key(id),
+      requesterSessionKey: parents[id],
+      controllerSessionKey: parents[id],
+      swarmRequesterSessionKey: parents[id],
+      requesterAgentId: "main",
+      requesterDisplayKey: parents[id],
+      groupId: "shared-name",
+      task: id,
+      cleanup: "keep",
+      collect: true,
+      queued,
+      expectsCompletionMessage: false,
+    });
+  for (const id of ["a", "b", "d", "x", "g"] as const) {
+    storePath = await writeSubagentSessionEntry({
+      stateDir: fixture.stateDir,
+      agentId: "main",
+      sessionKey: key(id),
+      defaultSessionId: `${id}-session`,
+    });
+    if (id !== "g") {
+      await register(id);
+    }
+  }
+  const unrelatedStarted = createDeferred();
+  const unrelatedStart = vi.fn(async () => {
+    unrelatedStarted.resolve();
+  });
+  const startG = vi.fn(async () => {});
+  const startFailure = vi.fn(() => true);
+  enqueueSwarmRun({
+    groupId: JSON.stringify(["main", owner, "shared-name"]),
+    runId: "unrelated",
+    maxConcurrent: 2,
+    activeRunIds: ["a", "b"],
+    start: unrelatedStart,
+    onStartFailure: startFailure,
+  });
+  const aInterrupted = createDeferred();
+  const bInterrupted = createDeferred();
+  const bReleased = createDeferred();
+  const admissionA = await beginSessionWorkAdmission({
+    scope: storePath,
+    identities: [key("a"), "a-session"],
+    assertAllowed: () => {},
+    onInterrupt: () => aInterrupted.resolve(),
+  });
+  const admissionB = await beginSessionWorkAdmission({
+    scope: storePath,
+    identities: [key("b"), "b-session"],
+    assertAllowed: () => {},
+    onInterrupt: () => bInterrupted.resolve(),
+  });
+  const interruptD = vi.fn(() => admissionD.release());
+  const admissionD = await beginSessionWorkAdmission({
+    scope: storePath,
+    identities: [key("d"), "d-session"],
+    assertAllowed: () => {},
+    onInterrupt: interruptD,
+  });
+  const registerG = () =>
+    admissionD.run(async () => {
+      const pendingRegistration = register("g", true);
+      // Keep G queued before B releases capacity, without detaching its durable registration.
+      enqueueSwarmRun({
+        groupId: JSON.stringify(["main", key("d"), "shared-name"]),
+        runId: "g",
+        maxConcurrent: 1,
+        activeRunIds: ["x"],
+        start: startG,
+        onStartFailure: startFailure,
+      });
+      await pendingRegistration;
+    });
+  let lateRegistration: Promise<void> | undefined;
+  const handleB = createEmbeddedRunHandle({
+    runId: "b",
+    abort: () => {
+      lateRegistration = registerG();
+      expect(releaseSwarmRun("b")).toBe(true);
+      bReleased.resolve();
+    },
+  });
+  const handleX = createEmbeddedRunHandle({
+    runId: "x",
+    abort: () => expect(releaseSwarmRun("x")).toBe(true),
+  });
+  setActiveEmbeddedRun("b-session", handleB, key("b"));
+  setActiveEmbeddedRun("x-session", handleX, key("x"));
+  const pending = killAllControlledSubagentRuns({
+    cfg: getRuntimeConfig(),
+    controller: {
+      controllerSessionKey: owner,
+      controllerAgentId: "main",
+      callerSessionKey: owner,
+      callerIsSubagent: false,
+      controlScope: "children",
+    },
+    runs: [subagentRuns.get("a")!, subagentRuns.get("b")!],
+  });
+  try {
+    await Promise.all([aInterrupted.promise, bInterrupted.promise]);
+    expect(interruptD).not.toHaveBeenCalled();
+    // Reusing a group name does not merge different callers' scheduler lanes.
+    admissionB.release();
+    await bReleased.promise;
+    expect(lateRegistration).toBeDefined();
+    await lateRegistration;
+    // The kill cannot settle while admission A is held, so only the test deadline bounds this.
+    await withinTest(unrelatedStarted.promise, signal);
+    expect(unrelatedStart).toHaveBeenCalledOnce();
+    expect(interruptD).not.toHaveBeenCalled();
+    expect(startG).not.toHaveBeenCalled();
+    admissionA.release();
+    const result = await pending;
+    expect(result, JSON.stringify(result)).toMatchObject({
+      status: "ok",
+      killed: 5,
+      labels: ["a", "d", "x", "g", "b"],
+    });
+    expect(resolveSubagentSessionStatus(subagentRuns.get("g"))).toBe("killed");
+    expect(startG).not.toHaveBeenCalled();
+    expect(startFailure).not.toHaveBeenCalled();
+  } finally {
+    admissionA.release();
+    admissionB.release();
+    admissionD.release();
+    await Promise.all([pending, lateRegistration]);
+    clearActiveEmbeddedRun("b-session", handleB, key("b"));
+    clearActiveEmbeddedRun("x-session", handleX, key("x"));
+    expect(getActiveSessionWorkAdmissionCount()).toBe(0);
+    expect(getActiveSessionLifecycleMutationCount()).toBe(0);
+  }
+});

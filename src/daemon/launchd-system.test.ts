@@ -9,9 +9,7 @@ const state = vi.hoisted(() => ({
   launchctl: { stdout: "", stderr: "Could not find service", code: 113 },
   files: new Map<string, string>(),
   accessErrors: new Map<string, string>(),
-  readdirError: "",
   plutilValues: new Map<string, unknown>(),
-  plutilErrors: new Map<string, string>(),
   capturedPaths: new Map<Uint8Array, string>(),
 }));
 
@@ -22,9 +20,6 @@ function fsError(code: string, target: string): NodeJS.ErrnoException {
 vi.mock("node:fs/promises", () => {
   const mocked = {
     readdir: vi.fn(async (dir: string) => {
-      if (state.readdirError) {
-        throw fsError(state.readdirError, dir);
-      }
       const prefix = `${dir}/`;
       return Array.from(state.files.keys())
         .filter((file) => file.startsWith(prefix) && !file.slice(prefix.length).includes("/"))
@@ -71,10 +66,6 @@ const runExec = vi.hoisted(() =>
     const target = state.capturedPaths.get(options.input);
     if (!target) {
       throw new Error("Native parser requires the captured definition bytes");
-    }
-    const error = state.plutilErrors.get(target);
-    if (error) {
-      throw new Error(error);
     }
     return { stdout: JSON.stringify(state.plutilValues.get(target) ?? {}), stderr: "" };
   }),
@@ -185,9 +176,7 @@ describe("system LaunchDaemon ownership", () => {
     state.launchctl = { stdout: "", stderr: "Could not find service", code: 113 };
     state.files.clear();
     state.accessErrors.clear();
-    state.readdirError = "";
     state.plutilValues.clear();
-    state.plutilErrors.clear();
     state.capturedPaths.clear();
     if (originalPlatformDescriptor) {
       Object.defineProperty(process, "platform", {
@@ -269,14 +258,13 @@ describe("system LaunchDaemon ownership", () => {
       status: "absent",
       serviceTarget: "system/ai.openclaw.gateway",
     });
-    expect(execLaunchctl).toHaveBeenCalledTimes(2);
+    expect(execLaunchctl).toHaveBeenCalledTimes(1);
   });
 
   it("skips an unreadable foreign plist", async () => {
     const unrelated = "/Library/LaunchDaemons/com.vendor.locked.plist";
     state.files.set(unrelated, "<plist/>");
     state.accessErrors.set(unrelated, "EACCES");
-    state.plutilErrors.set(unrelated, "Operation not permitted");
 
     await expect(inspectSystemLaunchDaemonOwnership("ai.openclaw.gateway")).resolves.toEqual({
       status: "absent",
@@ -312,7 +300,6 @@ describe("system LaunchDaemon ownership", () => {
     const owner = "/Library/LaunchDaemons/vendor-openclaw.plist";
     state.files.set(unrelated, "<plist/>");
     state.accessErrors.set(unrelated, "EACCES");
-    state.plutilErrors.set(unrelated, "Operation not permitted");
     state.files.set(owner, "<plist/>");
     state.plutilValues.set(owner, { Label: "ai.openclaw.gateway" });
 
@@ -321,28 +308,6 @@ describe("system LaunchDaemon ownership", () => {
       serviceTarget: "system/ai.openclaw.gateway",
       plistPath: owner,
     });
-  });
-
-  it("rechecks the system domain after a negative plist snapshot", async () => {
-    execLaunchctl
-      .mockResolvedValueOnce({
-        stdout: "",
-        stderr: "Could not find service",
-        code: 113,
-        termination: "exit",
-      })
-      .mockResolvedValueOnce({
-        stdout: "state = running",
-        stderr: "",
-        code: 0,
-        termination: "exit",
-      });
-
-    await expect(inspectSystemLaunchDaemonOwnership("ai.openclaw.gateway")).resolves.toEqual({
-      status: "loaded",
-      serviceTarget: "system/ai.openclaw.gateway",
-    });
-    expect(execLaunchctl).toHaveBeenCalledTimes(2);
   });
 
   it("can skip the installed-plist scan for read-only status probes", async () => {
@@ -412,7 +377,7 @@ describe("system LaunchDaemon ownership", () => {
 
   it.each([
     ["loaded", "exit 0", 1, "loaded system LaunchDaemon"],
-    ["absent", absentQuery, 2, ""],
+    ["absent", absentQuery, 1, ""],
     ["query error", 'printf "Operation not permitted\\n" >&2\nexit 1', 1, "could not verify"],
     ["signal", 'printf "Could not find service\\n" >&2\nkill -TERM $$', 1, "could not verify"],
     [
@@ -427,21 +392,9 @@ describe("system LaunchDaemon ownership", () => {
       1,
       "could not verify",
     ],
-    [
-      "signal after scan",
-      `if [ "$query_count" -eq 1 ]; then\n${absentQuery}\nfi\nprintf "Could not find service\\n" >&2\nkill -TERM $$`,
-      2,
-      "could not verify",
-    ],
-    [
-      "loaded after scan",
-      `if [ "$query_count" -eq 2 ]; then exit 0; fi\n${absentQuery}`,
-      2,
-      "loaded system LaunchDaemon",
-    ],
   ] as const)(
     "executes the rendered ownership query with %s outcome",
-    (_, body, queries, detail) => {
+    (scenario, body, _queries, detail) => {
       const result = runRenderedProbe("foreign.plist", "unlabeled", body);
       expect(result.conflict).toBe(detail ? "system/ai.openclaw.gateway" : "");
       if (detail) {
@@ -449,7 +402,7 @@ describe("system LaunchDaemon ownership", () => {
       } else {
         expect(result.detail).toBe("");
       }
-      expect(result.events).toEqual(queries === 1 ? ["query"] : ["query", "scan", "scan", "query"]);
+      expect(result.events).toEqual(scenario === "absent" ? ["query", "scan", "scan"] : ["query"]);
     },
   );
 });

@@ -1,4 +1,3 @@
-// Shared cron CLI formatting, parsing, delivery preview, and warning helpers.
 import {
   MAX_DATE_TIMESTAMP_MS,
   parseStrictNonNegativeInteger,
@@ -13,8 +12,10 @@ import { readCronJobNotFoundError } from "../../../packages/gateway-protocol/src
 import { truncateToVisibleWidth, visibleWidth } from "../../../packages/terminal-core/src/ansi.js";
 import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-text.js";
 import { colorize, isRich, theme } from "../../../packages/terminal-core/src/theme.js";
+import { normalizeThinkLevel, THINKING_LEVELS_HELP } from "../../auto-reply/thinking.shared.js";
 import { listChannelPlugins } from "../../channels/plugins/index.js";
 import { parseAbsoluteTimeMs } from "../../cron/parse.js";
+import type { assertSupportedJobSpec } from "../../cron/service/jobs-validation.js";
 import { resolveCronStaggerMs } from "../../cron/stagger.js";
 import type { CronDeliveryPreview, CronJob, CronSchedule } from "../../cron/types.js";
 import { danger } from "../../globals.js";
@@ -39,12 +40,31 @@ import { exitCliAfterOutput } from "../one-shot-exit.js";
 import { parseDurationMs as parseSharedDurationMs } from "../parse-duration.js";
 import { CronCliError, type CronCliJobMatch } from "./cron-cli-error.js";
 
+export async function assertCronCliJobSpec(job: Parameters<typeof assertSupportedJobSpec>[0]) {
+  const { assertSupportedJobSpec: assertJobSpec } =
+    await import("../../cron/service/jobs-validation.js");
+  try {
+    assertJobSpec(job);
+  } catch (error) {
+    throw new CronCliError(error instanceof Error ? error.message : String(error));
+  }
+}
+
 export function parseCronStringOption(value: unknown, flag: string): string | undefined {
   const parsed = normalizeOptionalString(value);
   if (typeof value === "string" && !parsed) {
     throw new CronCliError(`${flag} must not be blank`);
   }
   return parsed;
+}
+
+export function parseCronThinkingOption(value: unknown): string | undefined {
+  const thinking = normalizeOptionalString(value);
+  if (thinking && !normalizeThinkLevel(thinking)) {
+    throw new CronCliError(`Invalid --thinking. Use one of: ${THINKING_LEVELS_HELP}.`);
+  }
+  // Preserve accepted spellings; the runtime owns model-specific thinking selection.
+  return thinking;
 }
 
 export function parseCronIntegerOption(
@@ -204,18 +224,15 @@ export function enrichCronJsonWithStatus(value: unknown): unknown {
   }
   const obj = value as Record<string, unknown>;
 
-  // Single job object (has 'state' and 'enabled')
   if ("state" in obj && "enabled" in obj) {
     return { ...obj, status: computeStatus(obj) };
   }
 
-  // List response (has 'jobs' array)
   if ("jobs" in obj && Array.isArray(obj.jobs)) {
-    const enrichedJobs = (obj.jobs as CronJob[]).map((job) => {
-      const status = computeStatus(job);
-      return Object.assign({}, job, { status });
-    });
-    return { ...obj, jobs: enrichedJobs };
+    return {
+      ...obj,
+      jobs: obj.jobs.map((job: CronJob) => Object.assign({}, job, { status: computeStatus(job) })),
+    };
   }
 
   return value;
@@ -433,10 +450,7 @@ export function parseCronStringList(input: unknown): string[] | undefined {
     : typeof input === "string"
       ? input
       : "";
-  return raw
-    .split(/[,\s]+/u)
-    .map((entry) => normalizeOptionalString(entry))
-    .filter((entry): entry is string => Boolean(entry));
+  return raw.split(/[,\s]+/u).filter(Boolean);
 }
 
 const INVALID_CRON_TIMEZONE_MESSAGE =
@@ -450,13 +464,7 @@ export function parseCronTimezoneOption(value: unknown): string | undefined {
   return timezone;
 }
 
-/**
- * Parse a one-shot `--at` value into an ISO string (UTC).
- *
- * When `tz` is provided and the input is an offset-less datetime
- * (e.g. `2026-03-23T23:00:00`), the datetime is interpreted in
- * that IANA timezone instead of UTC.
- */
+// Offset-less datetimes use the supplied IANA timezone instead of UTC.
 export function parseAt(input: string, tz?: string): string | null {
   const raw = input.trim();
   if (!raw) {
@@ -521,9 +529,7 @@ const formatCell = (value: unknown, width: number) => {
   const truncated =
     visibleWidth(text) <= width
       ? text
-      : width <= TRUNCATED_SUFFIX.length
-        ? truncateToVisibleWidth(text, width)
-        : `${truncateToVisibleWidth(text, width - TRUNCATED_SUFFIX.length)}${TRUNCATED_SUFFIX}`;
+      : `${truncateToVisibleWidth(text, width - TRUNCATED_SUFFIX.length)}${TRUNCATED_SUFFIX}`;
   const remaining = width - visibleWidth(truncated);
   return remaining > 0 ? `${truncated}${" ".repeat(remaining)}` : truncated;
 };

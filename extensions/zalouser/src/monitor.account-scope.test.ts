@@ -1,8 +1,9 @@
 // Zalouser tests cover monitor.account scope plugin behavior.
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { PluginRuntime } from "openclaw/plugin-sdk/core";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig, PluginRuntime } from "../runtime-api.js";
 // Preserve module setup before modules that consume it.
 // oxfmt-ignore
 import { sendMessageZalouserMock } from "./monitor.send.test-mocks.js";
@@ -11,7 +12,7 @@ import { sendMessageZalouserMock } from "./monitor.send.test-mocks.js";
 import { startZaloListenerMock } from "./zalo-js.test-mocks.js";
 import {
   createRawZalouserMessageFromNormalized,
-  waitForZalouserIngressVerdict,
+  observeZalouserIngressVerdict,
   withZalouserIngressTestQueue,
 } from "./ingress.test-support.js";
 import { monitorZalouserProvider } from "./monitor.js";
@@ -123,8 +124,9 @@ describe("zalouser monitor pairing account scoping", () => {
       });
       try {
         const listenerParams = await listenerReady;
+        const terminal = observeZalouserIngressVerdict(ingressQueue, "msg-1", "completed");
         await listenerParams.onMessage(createRawZalouserMessageFromNormalized(message));
-        await waitForZalouserIngressVerdict(ingressQueue, "msg-1", "completed");
+        await terminal;
       } finally {
         abortController.abort();
         await run;

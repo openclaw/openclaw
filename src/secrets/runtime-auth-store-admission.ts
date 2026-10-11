@@ -1,3 +1,4 @@
+import { copyCanonicalAuthProfileCredentialObservations } from "../agents/auth-profiles/credential-observation.js";
 import {
   AuthProfileMigrationRequiredError,
   markAuthProfileMigrationRequired,
@@ -32,6 +33,10 @@ export function loadAdmittedAuthStores(params: {
       refusal?.paths.some((pathname) => isSameOpenClawAgentDatabasePath(pathname, databasePath))
     ) {
       // The admission owner keeps this store unavailable, including cached credentials.
+      // Pending preparation resolves its secrets before publishing successful admission.
+      if (refusal.code === "agent-database-inspection-pending") {
+        continue;
+      }
       degradedOwners.push({
         ownerKind: "route",
         ownerId: shortenHomePath(databasePath),
@@ -44,7 +49,10 @@ export function loadAdmittedAuthStores(params: {
       continue;
     }
     try {
-      authStores.push({ agentDir, store: structuredClone(params.loadAuthStore(agentDir)) });
+      const source = params.loadAuthStore(agentDir);
+      const store = structuredClone(source);
+      copyCanonicalAuthProfileCredentialObservations(source.profiles, store.profiles);
+      authStores.push({ agentDir, store });
     } catch (error) {
       if (!(error instanceof AuthProfileMigrationRequiredError) || !params.allowUnavailable) {
         throw error;

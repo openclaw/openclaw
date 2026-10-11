@@ -5,13 +5,13 @@ import { promisify } from "node:util";
 import { gunzip, gzip } from "node:zlib";
 import { runTasksWithConcurrency } from "openclaw/plugin-sdk/concurrency-runtime";
 import { MAX_DATE_TIMESTAMP_MS, timestampMsToIsoString } from "openclaw/plugin-sdk/number-runtime";
+import type { PluginLogger } from "openclaw/plugin-sdk/plugin-entry";
 import type {
   PluginBlobEntry,
   PluginBlobEntryInfo,
   PluginBlobStore,
 } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
-import type { PluginLogger } from "../api.js";
 import {
   DIFF_ARTIFACT_ID_PATTERN,
   DIFF_ARTIFACT_TOKEN_PATTERN,
@@ -26,7 +26,7 @@ import {
 const DEFAULT_TTL_MS = 30 * 60 * 1000;
 const MAX_TTL_MS = 6 * 60 * 60 * 1000;
 const SWEEP_FALLBACK_AGE_MS = 24 * 60 * 60 * 1000;
-const DEFAULT_CLEANUP_INTERVAL_MS = 5 * 60 * 1000;
+const CLEANUP_INTERVAL_MS = 5 * 60 * 1000;
 const CLEANUP_CONCURRENCY = 4;
 const MAX_DECODED_HTML_BYTES = 64 * 1024 * 1024;
 const ARTIFACT_ID_ATTEMPTS = 8;
@@ -35,31 +35,18 @@ const EMPTY_BLOB = new Uint8Array();
 const gzipAsync = promisify(gzip);
 const gunzipAsync = promisify(gunzip);
 
-type CreateArtifactParams = {
+type CreateArtifactParams = Pick<
+  DiffArtifactMeta,
+  "title" | "inputKind" | "fileCount" | "context"
+> & {
   html: string;
-  title: string;
-  inputKind: DiffArtifactMeta["inputKind"];
-  fileCount: number;
   ttlMs?: number;
-  context?: DiffArtifactContext;
 };
 
 type CreateStandaloneFileArtifactParams = {
   format?: DiffOutputFormat;
   ttlMs?: number;
   context?: DiffArtifactContext;
-};
-
-type DiffStandaloneFileArtifact = {
-  id: string;
-  filePath: string;
-  expiresAt: string;
-  context?: DiffArtifactContext;
-};
-
-type DiffAuthorizedViewer = {
-  artifact: DiffArtifactMeta;
-  html: Uint8Array;
 };
 
 function isBlobLimitError(error: unknown): boolean {
@@ -75,7 +62,6 @@ export class DiffArtifactStore {
   private readonly rootDir: string;
   private readonly blobStore: PluginBlobStore<DiffArtifactBlobMetadata>;
   private readonly logger?: PluginLogger;
-  private readonly cleanupIntervalMs: number;
   private readonly renderingFileIds = new Set<string>();
   private cleanupInFlight: Promise<void> | null = null;
   private cleanupStopped = false;
@@ -85,15 +71,10 @@ export class DiffArtifactStore {
     rootDir: string;
     blobStore: PluginBlobStore<DiffArtifactBlobMetadata>;
     logger?: PluginLogger;
-    cleanupIntervalMs?: number;
   }) {
     this.rootDir = path.resolve(params.rootDir);
     this.blobStore = params.blobStore;
     this.logger = params.logger;
-    this.cleanupIntervalMs =
-      params.cleanupIntervalMs === undefined
-        ? DEFAULT_CLEANUP_INTERVAL_MS
-        : Math.max(0, Math.floor(params.cleanupIntervalMs));
   }
 
   async createArtifact(params: CreateArtifactParams): Promise<DiffArtifactMeta> {
@@ -120,7 +101,7 @@ export class DiffArtifactStore {
     return viewerEntryToMeta(entry, token);
   }
 
-  async readAuthorizedViewer(id: string, token: string): Promise<DiffAuthorizedViewer | null> {
+  async readAuthorizedViewer(id: string, token: string) {
     if (!DIFF_ARTIFACT_ID_PATTERN.test(id) || !DIFF_ARTIFACT_TOKEN_PATTERN.test(token)) {
       return null;
     }
@@ -149,9 +130,7 @@ export class DiffArtifactStore {
     };
   }
 
-  async createStandaloneFileArtifact(
-    params: CreateStandaloneFileArtifactParams = {},
-  ): Promise<DiffStandaloneFileArtifact> {
+  async createStandaloneFileArtifact(params: CreateStandaloneFileArtifactParams = {}) {
     const format = params.format ?? "png";
     const ttlMs = normalizeTtlMs(params.ttlMs);
     const metadata: DiffRenderedFileArtifactMetadata = {
@@ -333,7 +312,7 @@ export class DiffArtifactStore {
       return;
     }
 
-    this.nextCleanupAt = now + this.cleanupIntervalMs;
+    this.nextCleanupAt = now + CLEANUP_INTERVAL_MS;
     void this.cleanupExpired().catch((error: unknown) => {
       this.nextCleanupAt = 0;
       this.logger?.warn(`Failed to clean expired diff artifacts: ${String(error)}`);

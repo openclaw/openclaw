@@ -1,39 +1,27 @@
 import { html } from "lit";
 import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
+import { base64ToBytes } from "../../../lib/bytes-base64.ts";
 import type { ChatAttachment } from "../../../lib/chat/chat-types.ts";
 import {
   getChatAttachmentDataUrl,
   getChatAttachmentPreviewUrl,
-  releaseChatAttachmentPayload,
 } from "../attachment-payload-store.ts";
 import type { ChatAttachmentControlsProps } from "./chat-attachment-controls.types.ts";
-
-function currentAttachments(props: ChatAttachmentControlsProps): ChatAttachment[] {
-  return props.getAttachments?.() ?? props.attachments ?? [];
-}
+import { currentAttachments, removeDraftAttachment } from "./chat-attachment-draft.ts";
+import { renderAttachmentRemove } from "./chat-attachment-file.ts";
 
 function readTextFromDataUrl(dataUrl: string): string | null {
   const match = /^data:([^,]*),(.*)$/s.exec(dataUrl);
   if (!match) {
     return null;
   }
-  const metadata = match[1];
-  const payload = match[2];
-  if (metadata === undefined || payload === undefined) {
-    return null;
-  }
-  if (metadata.toLowerCase().includes(";base64")) {
-    try {
-      const binary = atob(payload);
-      const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0));
-      return new TextDecoder().decode(bytes);
-    } catch {
-      return null;
-    }
-  }
+  const metadata = match[1]!;
+  const payload = match[2]!;
   try {
-    return decodeURIComponent(payload.replace(/\+/g, "%20"));
+    return metadata.toLowerCase().includes(";base64")
+      ? new TextDecoder().decode(base64ToBytes(payload))
+      : decodeURIComponent(payload.replace(/\+/g, "%20"));
   } catch {
     return null;
   }
@@ -52,11 +40,7 @@ function showPastedTextInComposer(att: ChatAttachment, props: ChatAttachmentCont
   if (!text || !props.onDraftChange) {
     return;
   }
-  const nextAttachments = currentAttachments(props).filter(
-    (attachment) => attachment.id !== att.id,
-  );
-  releaseChatAttachmentPayload(att.id);
-  props.onAttachmentsChange?.(nextAttachments);
+  removeDraftAttachment(att, props);
   props.onDraftChange(appendPastedTextToDraft(props.getDraft?.() ?? props.draft ?? "", text));
   props.onRequestUpdate?.();
 }
@@ -69,6 +53,12 @@ export function renderComposerPastedText(att: ChatAttachment, props: ChatAttachm
   const removeLabel = att.fileName?.trim()
     ? t("chat.composer.removeNamedAttachment", { name: att.fileName })
     : t("chat.composer.removeAttachment");
+  const remove = () => {
+    if (!current() || props.disabled) {
+      return;
+    }
+    removeDraftAttachment(att, props);
+  };
   const renderRestoreAction = () => html`<button
     class="chat-attachment-text-action"
     type="button"
@@ -109,13 +99,7 @@ export function renderComposerPastedText(att: ChatAttachment, props: ChatAttachm
           type="button"
           aria-label=${removeLabel}
           ?disabled=${props.disabled}
-          @click=${() => {
-            if (current() && !props.disabled) {
-              const next = currentAttachments(props).filter((item) => item.id !== att.id);
-              releaseChatAttachmentPayload(att.id);
-              props.onAttachmentsChange?.(next);
-            }
-          }}
+          @click=${remove}
         >
           ${icons.trash}
         </button>`,
@@ -127,5 +111,6 @@ export function renderComposerPastedText(att: ChatAttachment, props: ChatAttachm
     .scope=${att.id}
     .onOpen=${open}
     .composerAction=${renderRestoreAction()}
+    .composerRemoveAction=${renderAttachmentRemove(removeLabel, props.disabled, remove)}
   ></openclaw-chat-pasted-text>`;
 }

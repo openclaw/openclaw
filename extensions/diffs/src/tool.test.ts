@@ -2,28 +2,36 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type {
+  OpenClawPluginApi,
+  OpenClawPluginToolContext,
+} from "openclaw/plugin-sdk/plugin-entry";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig, OpenClawPluginApi, OpenClawPluginToolContext } from "../api.js";
-import type { DiffScreenshotter } from "./browser.runtime.js";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { PlaywrightDiffScreenshotter } from "./browser.runtime.js";
 import { resolveDiffsPluginDefaults } from "./config.js";
 import { registerDiffsPlugin } from "./plugin.js";
 import { DiffArtifactStore } from "./store.js";
 import { createDiffStoreHarness, expireDiffArtifactForTest } from "./test-helpers.js";
-import { createDiffsTool } from "./tool.js";
 import type { DiffRenderOptions } from "./types.js";
 
-const { resolvePreferredOpenClawTmpDir } = vi.hoisted(() => ({
+let createDiffsTool: typeof import("./tool.js").createDiffsTool;
+type DiffScreenshotter = Pick<PlaywrightDiffScreenshotter, "screenshotHtml">;
+
+const { resolvePreferredOpenClawTmpDir, browserRuntime } = vi.hoisted(() => ({
   resolvePreferredOpenClawTmpDir: vi.fn(),
+  browserRuntime: { screenshotter: undefined as DiffScreenshotter | undefined },
 }));
 
-vi.mock("../api.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../api.js")>()),
+vi.mock("openclaw/plugin-sdk/temp-path", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/temp-path")>()),
   resolvePreferredOpenClawTmpDir,
 }));
 
-vi.mock("./browser.runtime.js", () => {
-  throw new Error("viewer-only rendering must not load the Playwright renderer");
+afterAll(() => {
+  vi.doUnmock("./browser.runtime.js");
+  vi.resetModules();
 });
 
 const DEFAULT_DIFFS_TOOL_DEFAULTS = resolveDiffsPluginDefaults(undefined);
@@ -35,6 +43,20 @@ describe("diffs tool", () => {
   let blobStore: Awaited<ReturnType<typeof createDiffStoreHarness>>["blobStore"];
 
   beforeEach(async () => {
+    vi.resetModules();
+    browserRuntime.screenshotter = undefined;
+    vi.doMock("./browser.runtime.js", async (importOriginal) => {
+      if (!browserRuntime.screenshotter) {
+        throw new Error("viewer-only rendering must not load the Playwright renderer");
+      }
+      return {
+        ...(await importOriginal<typeof import("./browser.runtime.js")>()),
+        PlaywrightDiffScreenshotter: vi.fn(function () {
+          return browserRuntime.screenshotter;
+        }),
+      };
+    });
+    ({ createDiffsTool } = await import("./tool.js"));
     resolvePreferredOpenClawTmpDir.mockReturnValue(os.tmpdir());
     ({
       rootDir,
@@ -208,9 +230,8 @@ describe("diffs tool", () => {
       },
     });
 
-    const tool = createTool({
-      screenshotter,
-    });
+    browserRuntime.screenshotter = screenshotter;
+    const tool = createTool();
 
     const result = await tool.execute?.("tool-2b", {
       before: "one\n",
@@ -240,7 +261,9 @@ describe("diffs tool", () => {
       mode: "file",
     });
 
-    expectArtifactOnlyFileResult(screenshotter, result);
+    expect(screenshotter["screenshotHtml"]).toHaveBeenCalledTimes(1);
+    expect(readDetails(result).mode).toBe("file");
+    expect(readDetails(result).viewerUrl).toBeUndefined();
     expect(requireString(readDetails(result).artifactId, "artifactId")).toMatch(/^[a-f0-9]{20}$/u);
     expect(requireString(readDetails(result).expiresAt, "expiresAt")).toMatch(
       /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/u,
@@ -325,13 +348,12 @@ describe("diffs tool", () => {
   });
 
   it("falls back to view output when both mode cannot render an image", async () => {
-    const tool = createTool({
-      screenshotter: {
-        screenshotHtml: vi.fn(async () => {
-          throw new Error("browser missing");
-        }),
-      },
-    });
+    browserRuntime.screenshotter = {
+      screenshotHtml: vi.fn(async () => {
+        throw new Error("browser missing");
+      }),
+    };
+    const tool = createTool();
 
     const result = await tool.execute?.("tool-3", {
       before: "one\n",
@@ -581,22 +603,13 @@ function createToolWithScreenshotter(
     agentAccountId: "default",
   },
 ) {
+  browserRuntime.screenshotter = screenshotter;
   return createDiffsTool({
     getConfig: () => ({}),
     store,
     defaults,
-    screenshotter,
     context,
   });
-}
-
-function expectArtifactOnlyFileResult(
-  screenshotter: DiffScreenshotter,
-  result: { details?: unknown } | null | undefined,
-) {
-  expect(screenshotter["screenshotHtml"]).toHaveBeenCalledTimes(1);
-  expect((result!.details as Record<string, unknown>).mode).toBe("file");
-  expect((result!.details as Record<string, unknown>).viewerUrl).toBeUndefined();
 }
 
 function createPngScreenshotter(

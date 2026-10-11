@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { formatCliCommand } from "../cli/command-format.js";
+import { resolveGatewayStartupTiming } from "../commands/gateway-startup-timing.js";
 import { quoteCmdScriptArg } from "../daemon/cmd-argv.js";
 import { resolveGatewayWindowsTaskName } from "../daemon/constants.js";
 import { renderCmdRestartLogSetup } from "../daemon/restart-logs.js";
@@ -15,8 +16,7 @@ import { resolvePreferredOpenClawTmpDir } from "./tmp-openclaw-dir.js";
 import { getWindowsCmdExePath } from "./windows-install-roots.js";
 import { encodeWindowsLauncherScript } from "./windows-launcher-encoding.js";
 
-// Match the Windows CLI restart budget, including slow cold starts.
-const TASK_RESTART_WAIT_SECONDS = 180;
+const TASK_STOP_WAIT_SECONDS = 180;
 const TASK_RESTART_RETRY_LIMIT = 12;
 const TASK_RESTART_RETRY_DELAY_SEC = 1;
 
@@ -43,15 +43,16 @@ function buildScheduledTaskRestartScript(params: {
 }): string {
   const { quotedLogPath, setupLines, taskName, taskScriptPath, port } = params;
   const quotedTaskName = quoteCmdScriptArg(taskName);
+  const readinessWaitSeconds = Math.ceil(resolveGatewayStartupTiming("win32").deadlineMs / 1000);
   const waitForExitCommand = [
     "$ErrorActionPreference = 'Stop'",
     `$old = Get-Process -Id ${process.pid} -ErrorAction SilentlyContinue`,
-    `if ($null -ne $old -and -not $old.WaitForExit(${TASK_RESTART_WAIT_SECONDS * 1000})) { Write-Output 'Outgoing Gateway did not exit within ${TASK_RESTART_WAIT_SECONDS}s'; exit 1 }`,
+    `if ($null -ne $old -and -not $old.WaitForExit(${TASK_STOP_WAIT_SECONDS * 1000})) { Write-Output 'Outgoing Gateway did not exit within ${TASK_STOP_WAIT_SECONDS}s'; exit 1 }`,
     "exit 0",
   ].join("; ");
   const observeReplacementCommand = [
     "$ErrorActionPreference = 'Stop'",
-    `$deadline = [DateTime]::UtcNow.AddSeconds(${TASK_RESTART_WAIT_SECONDS})`,
+    `$deadline = [DateTime]::UtcNow.AddSeconds(${readinessWaitSeconds})`,
     `$entry = [regex]::Escape(${quotePowerShellSingleQuotedLiteral(params.entryPath)})`,
     "$boundary = '[\\s' + [char]34 + ']'",
     "do {",
@@ -66,7 +67,7 @@ function buildScheduledTaskRestartScript(params: {
     "}",
     "Start-Sleep -Seconds 1",
     "} while ([DateTime]::UtcNow -lt $deadline)",
-    `Write-Output 'No matching replacement Gateway listener appeared within ${TASK_RESTART_WAIT_SECONDS}s'`,
+    `Write-Output 'No matching replacement Gateway listener appeared within ${readinessWaitSeconds}s'`,
     "exit 1",
   ].join("; ");
   const lines = [

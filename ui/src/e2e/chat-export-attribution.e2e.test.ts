@@ -15,6 +15,7 @@ import {
   openSessionMenuSubmenu,
   sessionsListResponse,
 } from "./session-management.test-support.ts";
+import { selectAllSidebarSessions } from "./sidebar-navigation.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI chat export attribution",
@@ -22,6 +23,7 @@ const suite = createControlUiE2eSuite({
 });
 const sessionKey = "agent:main:export-attribution";
 const messages = [
+  { role: "user", content: "Please review the checklist.", __openclaw: { senderIsOwner: true } },
   { role: "user", senderLabel: "Alex", content: "I will write the release notes." },
   {
     role: "user",
@@ -66,6 +68,15 @@ suite.define(() => {
             sessionKey,
             featureMethods: ["chat.metadata", "chat.startup", "chat.history"],
             historyMessages: messages,
+            hasMultipleSessionSharingIdentities: true,
+            presenceUsers: [
+              {
+                id: action,
+                identity: { type: "profile", id: action },
+                name: action === "download" ? "Maya Chen" : "Jules Rivera",
+                self: true,
+              },
+            ],
             methodResponses: {
               "sessions.list": sessionsListResponse([
                 sessionRow(sessionKey, "Release planning", Date.parse("2026-08-15T06:00:00Z")),
@@ -81,6 +92,15 @@ suite.define(() => {
             });
           }
           await captureUiProof(suite, page, `${action}-transcript.png`);
+          const unattributed = thread.locator(".chat-group.user").filter({
+            has: page.getByText("Please review the checklist.", { exact: true }),
+          });
+          expect(await unattributed.locator(".chat-sender-name").textContent()).toBe("Message");
+          expect(
+            await unattributed
+              .locator(".chat-avatar, .chat-author-avatar, a.chat-sender-name")
+              .count(),
+          ).toBe(0);
 
           let markdown: string;
           if (action === "download") {
@@ -95,10 +115,13 @@ suite.define(() => {
             }
             markdown = await text(stream);
           } else {
+            // Selecting All owners must not attribute this ownerless transcript to the viewer.
+            await selectAllSidebarSessions(page);
             const row = page.locator(`.sidebar-recent-session[data-session-key="${sessionKey}"]`);
             await row.hover();
             await row.click({ button: "right" });
-            await openSessionMenuSubmenu(page, "Copy");
+            await openSessionMenuSubmenu(page, "Advanced");
+            await openSessionMenuSubmenu(page, "Copy details");
             const copy = page.locator("openclaw-session-menu").getByRole("menuitem", {
               name: "Conversation as Markdown",
               exact: true,
@@ -106,14 +129,16 @@ suite.define(() => {
             if (captureUiProofEnabled) {
               await waitForControlUiProofSurface(
                 page.locator('openclaw-session-menu > wa-dropdown [part="menu"]'),
-                [page.getByRole("menuitem", { name: "Copy", exact: true })],
+                [page.getByRole("menuitem", { name: "Copy details", exact: true })],
               );
             }
             await captureUiProof(
               suite,
               page,
               "copy-menu.png",
-              page.getByRole("menuitem", { name: "Copy", exact: true }).locator('[part="submenu"]'),
+              page
+                .getByRole("menuitem", { name: "Copy details", exact: true })
+                .locator('[part="submenu"]'),
               [copy],
             );
             await copy.click({ trial: true });
@@ -136,6 +161,7 @@ suite.define(() => {
             await preview.close();
           }
           expect(markdown.match(/^## .+$/gm)).toEqual([
+            "## Message",
             "## Alex",
             "## Sam",
             "## Tool",

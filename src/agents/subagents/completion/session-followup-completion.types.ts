@@ -8,6 +8,10 @@ type FollowupCustody = {
   signal: AbortSignal;
   release(): void;
 };
+export type FollowupRequesterAuthority = {
+  release(): void;
+  run<T>(runId: string, run: () => Promise<T>): Promise<T>;
+};
 export type FollowupRequest = {
   runId: string;
   requesterSessionKey: string;
@@ -16,6 +20,7 @@ export type FollowupRequest = {
   targetSessionKey: string;
   targetAgentId: string;
   custody: FollowupCustody;
+  requesterAuthority?: FollowupRequesterAuthority | undefined;
   completion?: FollowupCompletionOwner;
 };
 export type FollowupCohort = { entries: readonly SubagentRunRecord[]; generation: number };
@@ -51,6 +56,6 @@ export interface FollowupCompletionOwner {
     assertCurrent?: () => void,
   ): Promise<FollowupSettlement>;
   take(timeoutMs?: number): Promise<FollowupReply | undefined>;
-  replaceCohortEntry(previous: SubagentRunRecord, next: SubagentRunRecord): () => void;
+  replaceCohortEntry(previous: SubagentRunRecord, next: SubagentRunRecord): void;
   close(error?: unknown): void;
 }

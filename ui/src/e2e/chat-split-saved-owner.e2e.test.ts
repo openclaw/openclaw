@@ -11,6 +11,7 @@ import {
 } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { waitForCommittedChatRoute } from "./new-session-page.test-support.ts";
+import { openHomeFullPage } from "./sidebar-navigation.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Saved split conversation owner" });
 const homeKey = "agent:main:main";
@@ -95,6 +96,8 @@ suite.define(() => {
         const errors: string[] = [];
         page.on("pageerror", (error) => errors.push(error.message));
         const gateway = await installMockGateway(page, {
+          // The final reload has only an unbound pane; selecting Home releases the roster.
+          awaitInitialRoster: false,
           sessionKey: homeKey,
           sessionScope,
           mainSessionKey: sessionScope === "global" ? "global" : homeKey,
@@ -174,7 +177,7 @@ suite.define(() => {
         });
         await waitForCommittedChatRoute(page);
         expect(await cells.first().locator("openclaw-chat-pane").count()).toBe(0);
-        await page.locator(".nav-item--home").click();
+        await openHomeFullPage(page);
         await expect
           .poll(() =>
             cells

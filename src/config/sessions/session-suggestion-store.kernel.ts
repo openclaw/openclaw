@@ -6,29 +6,27 @@ import {
 } from "../../infra/kysely-sync.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
-import { SessionWorkStartInvalidatedError } from "./lifecycle.js";
 import { readSessionEntryInstanceId } from "./session-accessor.sqlite-entry-identity.js";
+import type {
+  SessionSuggestionClaimParams,
+  SessionSuggestionDispatchClaim,
+  SessionSuggestionFinalizeParams,
+  SessionSuggestionReleaseParams,
+  SessionSuggestionListParams,
+  StoredSessionSuggestion,
+  StoredSessionSuggestionResolution,
+  StoredSessionSuggestionState,
+} from "./session-sharing-store.types.js";
+import { SessionWorkStartInvalidatedError } from "./work-start-error.js";
 
 type SuggestionDatabase = Pick<OpenClawAgentKyselyDatabase, "session_suggestions">;
-
-type StoredSessionSuggestionState = "pending" | "accepted" | "dismissed";
-type StoredSessionSuggestionResolution = "send" | "queue" | "edit" | "dismiss";
-
-export type StoredSessionSuggestion = {
-  id: string;
-  authorId: string;
-  authorLabel?: string;
-  text: string;
-  createdAt: number;
-  state: StoredSessionSuggestionState;
-};
 
 const MAX_PENDING_SESSION_SUGGESTIONS_PER_AUTHOR = 20;
 const MAX_PENDING_SESSION_SUGGESTIONS_PER_SESSION = 100;
 const MAX_RETAINED_RESOLVED_SESSION_SUGGESTIONS = 200;
 export const SESSION_SUGGESTION_DISPATCH_CLAIM_TTL_MS = 30_000;
 
-function suggestionDb(database: OpenClawAgentDatabase) {
+function suggestionDb(database: Pick<OpenClawAgentDatabase, "db">) {
   return getNodeSqliteKysely<SuggestionDatabase>(database.db);
 }
 
@@ -69,28 +67,21 @@ function pruneResolvedSessionSuggestions(
   sessionKey: string,
 ): void {
   const db = suggestionDb(database);
-  const resolvedRows = executeSqliteQuerySync(
-    database.db,
-    db
-      .selectFrom("session_suggestions")
-      .select("id")
-      .where("session_key", "=", sessionKey)
-      .where("state", "!=", "pending")
-      .orderBy("created_at", "desc")
-      .orderBy("id", "desc")
-      // SQLite requires LIMIT for OFFSET; -1 preserves the unbounded deletion tail.
-      .limit((eb) => eb.lit(-1))
-      .offset((eb) => eb.lit(MAX_RETAINED_RESOLVED_SESSION_SUGGESTIONS)),
-  ).rows;
-  if (resolvedRows.length === 0) {
-    return;
-  }
   executeSqliteQuerySync(
     database.db,
     db.deleteFrom("session_suggestions").where(
       "id",
       "in",
-      resolvedRows.map((row) => row.id),
+      db
+        .selectFrom("session_suggestions")
+        .select("id")
+        .where("session_key", "=", sessionKey)
+        .where("state", "!=", "pending")
+        .orderBy("created_at", "desc")
+        .orderBy("id", "desc")
+        // SQLite requires LIMIT for OFFSET; -1 preserves the unbounded deletion tail.
+        .limit((eb) => eb.lit(-1))
+        .offset((eb) => eb.lit(MAX_RETAINED_RESOLVED_SESSION_SUGGESTIONS)),
     ),
   );
 }
@@ -149,9 +140,9 @@ export function addSessionSuggestionInDatabase(
 }
 
 export function listSessionSuggestionsInDatabase(
-  database: OpenClawAgentDatabase,
+  database: Pick<OpenClawAgentDatabase, "db">,
   sessionKey: string,
-  params: { authorId?: string; pendingOnly?: boolean } = {},
+  params: SessionSuggestionListParams = {},
 ): StoredSessionSuggestion[] {
   let query = suggestionDb(database)
     .selectFrom("session_suggestions")
@@ -169,21 +160,10 @@ export function listSessionSuggestionsInDatabase(
   ).rows.map(toSuggestion);
 }
 
-type SessionSuggestionDispatchClaim =
-  | { kind: "busy" }
-  | { kind: "mismatch"; resolution: StoredSessionSuggestionResolution }
-  | { kind: "claimed"; suggestion: StoredSessionSuggestion; token: string };
-
 export function claimSessionSuggestionDispatchInDatabase(
   database: OpenClawAgentDatabase,
   sessionKey: string,
-  params: {
-    id: string;
-    expectedSessionId?: string;
-    resolution: StoredSessionSuggestionResolution;
-    now?: number;
-    claimTtlMs?: number;
-  },
+  params: Omit<SessionSuggestionClaimParams, "expectedEntry">,
 ): SessionSuggestionDispatchClaim | null {
   assertSessionInstance(database, sessionKey, params.expectedSessionId);
   const db = suggestionDb(database);
@@ -210,11 +190,10 @@ export function claimSessionSuggestionDispatchInDatabase(
     return null;
   }
   const now = params.now ?? Date.now();
-  const claimTtlMs = params.claimTtlMs ?? SESSION_SUGGESTION_DISPATCH_CLAIM_TTL_MS;
   if (
     row.dispatch_token &&
     row.dispatch_started_at !== null &&
-    now - row.dispatch_started_at < claimTtlMs
+    now - row.dispatch_started_at < SESSION_SUGGESTION_DISPATCH_CLAIM_TTL_MS
   ) {
     return { kind: "busy" };
   }
@@ -245,7 +224,7 @@ export function claimSessionSuggestionDispatchInDatabase(
 export function releaseSessionSuggestionDispatchInDatabase(
   database: OpenClawAgentDatabase,
   sessionKey: string,
-  params: { id: string; token: string; expectedSessionId?: string },
+  params: SessionSuggestionReleaseParams,
 ): boolean {
   assertSessionInstance(database, sessionKey, params.expectedSessionId);
   const result = executeSqliteQuerySync(
@@ -264,29 +243,11 @@ export function releaseSessionSuggestionDispatchInDatabase(
 export function finalizeSessionSuggestionClaimInDatabase(
   database: OpenClawAgentDatabase,
   sessionKey: string,
-  params: {
-    id: string;
-    token: string;
-    state: Exclude<StoredSessionSuggestionState, "pending">;
-    expectedSessionId?: string;
-  },
+  params: Omit<SessionSuggestionFinalizeParams, "expectedEntry">,
 ): StoredSessionSuggestion | null {
   assertSessionInstance(database, sessionKey, params.expectedSessionId);
   const db = suggestionDb(database);
   const row = executeSqliteQueryTakeFirstSync(
-    database.db,
-    db
-      .selectFrom("session_suggestions")
-      .select(["id", "author_id", "author_label", "text", "created_at", "state"])
-      .where("session_key", "=", sessionKey)
-      .where("id", "=", params.id)
-      .where("state", "=", "pending")
-      .where("dispatch_token", "=", params.token),
-  );
-  if (!row) {
-    return null;
-  }
-  const updated = executeSqliteQuerySync(
     database.db,
     db
       .updateTable("session_suggestions")
@@ -299,11 +260,12 @@ export function finalizeSessionSuggestionClaimInDatabase(
       .where("session_key", "=", sessionKey)
       .where("id", "=", params.id)
       .where("state", "=", "pending")
-      .where("dispatch_token", "=", params.token),
+      .where("dispatch_token", "=", params.token)
+      .returning(["id", "author_id", "author_label", "text", "created_at", "state"]),
   );
-  if ((updated.numAffectedRows ?? 0n) === 0n) {
+  if (!row) {
     return null;
   }
   pruneResolvedSessionSuggestions(database, sessionKey);
-  return { ...toSuggestion(row), state: params.state };
+  return toSuggestion(row);
 }

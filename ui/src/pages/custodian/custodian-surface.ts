@@ -2,15 +2,23 @@ import "../../styles/chat/startup-layout.css";
 import { consume } from "@lit/context";
 import { html, nothing, type TemplateResult } from "lit";
 import { property } from "lit/decorators.js";
+import { SYSTEM_AGENT_ID } from "../../../../src/system-agent/agent-id.js";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { icons } from "../../components/icons.ts";
 import { markdownBlocks } from "../../components/markdown-blocks.ts";
 import { handleMarkdownCodeBlockClick } from "../../components/markdown-code-blocks.ts";
 import { handleMarkdownTableInteraction } from "../../components/markdown-tables.ts";
 import { renderPanelRefreshStatus } from "../../components/panel-refresh-status.ts";
+import { renderWizardStepControls } from "../../components/wizard-step-controls.ts";
+import "../../components/option-card.ts";
 import "../../components/openclaw-mascot.ts";
 import { t } from "../../i18n/index.ts";
 import { registerPluginManagementEnglish } from "../../i18n/locales/en-plugin-management.ts";
+import type { MessageGroup } from "../../lib/chat/chat-types.ts";
+import { resolveMessageDisplayMarkdown } from "../../lib/chat/message-display.ts";
+import { normalizeMessage } from "../../lib/chat/message-normalizer.ts";
+import { resolveMessageVisibleContent } from "../../lib/chat/message-visibility.ts";
+import { formatUiExternalText } from "../../lib/format-error.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import "../../styles/chat/grouped.css";
@@ -25,6 +33,8 @@ import {
   disconnectTextareaOverflowObserver,
   observeTextareaOverflow,
 } from "../chat/components/chat-composer-dom.ts";
+import { renderChatDivider } from "../chat/components/chat-divider.ts";
+import { renderMessageGroup } from "../chat/components/chat-message.ts";
 import { renderCustodianAlertCard } from "./custodian-alert-card.ts";
 import { custodianAlertStore } from "./custodian-alert-store.ts";
 import { custodianSessionStore, type CustodianSessionStore } from "./custodian-session-store.ts";
@@ -35,9 +45,122 @@ import {
   pluginHelpFocusRequest,
 } from "./plugin-help.ts";
 import { sessionVariant } from "./session-lifecycle.ts";
-import { renderCustodianTranscriptEntry } from "./transcript.ts";
+import type { CustodianMessage } from "./transcript.ts";
 
 registerPluginManagementEnglish();
+
+function toCustodianMessageGroup(message: CustodianMessage): MessageGroup {
+  const key = `msg-${message.id}`;
+  const rawMessage = { role: message.role, content: message.text };
+  const normalized = normalizeMessage(rawMessage);
+  const visibleContent = resolveMessageVisibleContent(rawMessage, normalized);
+  return {
+    kind: "group",
+    key,
+    role: message.role,
+    messages: [
+      {
+        message: rawMessage,
+        key,
+        hasVisibleContent:
+          visibleContent === "non-text" ||
+          Boolean(resolveMessageDisplayMarkdown(rawMessage, normalized).trim()),
+      },
+    ],
+    visibleContent,
+    timestamp: message.at,
+    isStreaming: false,
+  };
+}
+
+function renderCustodianTranscriptEntry(
+  store: CustodianSessionStore,
+  message: CustodianMessage,
+  activeWizardMessage: CustodianMessage | undefined,
+) {
+  const question = message.question;
+  const step = message.step;
+  const questionKey = question ? `${message.id}:${question.id}` : "";
+  return html`
+    ${
+      message.text
+        ? renderMessageGroup(toCustodianMessageGroup(message), {
+            showReasoning: false,
+            showToolCalls: false,
+            assistantName: t("custodian.title"),
+            agentId: SYSTEM_AGENT_ID,
+          })
+        : nothing
+    }
+    ${
+      message.id === store.earlierBoundaryAfterId
+        ? renderChatDivider({
+            kind: "divider",
+            key: "custodian-earlier",
+            label: t("custodian.earlier"),
+            timestamp: message.at,
+          })
+        : nothing
+    }
+    ${
+      question && !store.dismissedQuestions.has(questionKey)
+        ? html`<div class="custodian__option-card">
+            <openclaw-option-card
+              .props=${{
+                header: question.header,
+                question: question.question,
+                options: question.options.map((option) => ({
+                  value: option.label,
+                  label: option.label,
+                  description: option.description,
+                  recommended: option.recommended,
+                })),
+                disabled: !store.canSend || store.answeredQuestions.has(questionKey),
+                onSelect: (label: string) => store.answerQuestion(message, label),
+                onSkip: () => void store.dismissQuestion(message),
+              }}
+            ></openclaw-option-card>
+          </div>`
+        : nothing
+    }
+    ${
+      message === activeWizardMessage && step
+        ? html`<section
+            class="custodian__wizard-step"
+            aria-label=${formatUiExternalText(step.title ?? step.message, "Setup")}
+          >
+            ${
+              step.title
+                ? html`<strong class="custodian__wizard-title"
+                    >${formatUiExternalText(step.title)}</strong
+                  >`
+                : nothing
+            }
+            ${renderWizardStepControls({
+              step,
+              value: store.wizardValue,
+              busy: !store.canSend,
+              inputId: `custodian-wizard-input-${message.id}`,
+              sensitiveRevealed: store.wizardSecretVisible,
+              onValueChange: (value) => store.setWizardValue(value),
+              onAnswer: (value) => store.answerWizardStep(message, value),
+              leadingAction: store.wizardCancelAvailable
+                ? html`<button
+                    class="btn btn--ghost custodian__wizard-cancel"
+                    type="button"
+                    ?disabled=${!store.canSend}
+                    @click=${() => store.cancelWizardStep(message)}
+                  >
+                    ${t("custodian.cancel")}
+                  </button>`
+                : undefined,
+              onToggleSensitiveVisibility: () => store.toggleWizardSecretVisibility(),
+            })}
+          </section>`
+        : nothing
+    }
+  `;
+}
 
 class CustodianSurface extends OpenClawLightDomElement {
   @consume({ context: applicationContext, subscribe: true })
@@ -60,14 +183,8 @@ class CustodianSurface extends OpenClawLightDomElement {
   constructor() {
     super();
     void new SubscriptionsController(this)
-      .watch(
-        () => this.store,
-        (store, notify) => store.subscribe(notify),
-      )
-      .watch(
-        () => custodianAlertStore,
-        (alerts, notify) => alerts.subscribe(notify),
-      );
+      .watchStore(() => this.store)
+      .watchStore(() => custodianAlertStore);
   }
 
   protected override async getUpdateComplete(): Promise<boolean> {
@@ -208,18 +325,16 @@ class CustodianSurface extends OpenClawLightDomElement {
         >
           ${alertCard}
           ${
-            this.channelOnboardingError
-              ? eventNudgeState.renderCustodianChannelOnboardingError({
+            this.channelOnboardingError || this.showChannelOnboardingNudge
+              ? eventNudgeState.renderCustodianChannelOnboardingNudge({
+                  error: Boolean(this.channelOnboardingError),
                   retrying: this.channelOnboardingRetrying,
-                  onRetry: this.onRetryChannelOnboarding,
+                  onAction: this.channelOnboardingError
+                    ? this.onRetryChannelOnboarding
+                    : () => store.openChannelsFromOnboarding(),
                   onDismiss: () => store.dismissChannelOnboardingNudge(),
                 })
-              : this.showChannelOnboardingNudge
-                ? eventNudgeState.renderCustodianChannelOnboardingNudge({
-                    onOpenChannels: () => store.openChannelsFromOnboarding(),
-                    onDismiss: () => store.dismissChannelOnboardingNudge(),
-                  })
-                : nothing
+              : nothing
           }
           ${
             !this.onboarding && store.eventNudge && !store.eventNudgePending
@@ -236,56 +351,30 @@ class CustodianSurface extends OpenClawLightDomElement {
               ? html`<div class="custodian__plugin-intro">
                   <h2>${t("custodian.pluginIntroTitle", { plugin: plugin.name })}</h2>
                   <div class="custodian__plugin-starters">
-                    ${[
-                      {
-                        label: t("custodian.pluginStarterPurpose"),
-                        prompt: t("custodian.pluginPromptPurpose", { plugin: plugin.name }),
-                      },
-                      {
-                        label: t("custodian.pluginStarterTools"),
-                        prompt: t("custodian.pluginPromptTools", { plugin: plugin.name }),
-                      },
-                      {
-                        label: t("custodian.pluginStarterSetup"),
-                        prompt: t("custodian.pluginPromptSetup", { plugin: plugin.name }),
-                      },
-                    ].map(
-                      ({ label, prompt }) => html`<button
+                    ${(
+                      [
+                        ["custodian.pluginStarterPurpose", "custodian.pluginPromptPurpose"],
+                        ["custodian.pluginStarterTools", "custodian.pluginPromptTools"],
+                        ["custodian.pluginStarterSetup", "custodian.pluginPromptSetup"],
+                      ] as const
+                    ).map(([labelKey, promptKey]) => {
+                      const label = t(labelKey);
+                      const prompt = t(promptKey, { plugin: plugin.name });
+                      return html`<button
                         class="btn"
                         type="button"
                         @click=${() => void askPlugin?.({ question: prompt })}
                       >
                         ${label}
-                      </button>`,
-                    )}
+                      </button>`;
+                    })}
                   </div>
                 </div>`
               : nothing
           }
           ${store.messages
             .filter((message) => !pluginWelcome || !message.optionalWelcome)
-            .map((message) => {
-              const questionKey = message.question ? `${message.id}:${message.question.id}` : "";
-              const showQuestion =
-                message.question !== null && !store.dismissedQuestions.has(questionKey);
-              return renderCustodianTranscriptEntry({
-                message,
-                boundaryAfterId: store.earlierBoundaryAfterId,
-                showQuestion,
-                questionDisabled: !store.canSend || store.answeredQuestions.has(questionKey),
-                onSelect: (label) => store.answerQuestion(message, label),
-                onSkip: () => void store.dismissQuestion(message),
-                showWizardStep: message === activeWizardMessage,
-                wizardValue: store.wizardValue,
-                wizardDisabled: !store.canSend,
-                wizardSecretVisible: store.wizardSecretVisible,
-                onWizardValueChange: (value) => store.setWizardValue(value),
-                onWizardAnswer: (value) => store.answerWizardStep(message, value),
-                showWizardCancel: store.wizardCancelAvailable,
-                onWizardCancel: () => store.cancelWizardStep(message),
-                onToggleWizardSecretVisibility: () => store.toggleWizardSecretVisibility(),
-              });
-            })}
+            .map((message) => renderCustodianTranscriptEntry(store, message, activeWizardMessage))}
           ${
             store.sending
               ? html`<div class="chat-group assistant custodian__thinking-row" role="status">

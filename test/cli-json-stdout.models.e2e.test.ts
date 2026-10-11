@@ -167,12 +167,11 @@ describe("cli json stdout contract", () => {
         await seedPendingStateMigration(stateDir);
         const human = runRefresh(["refresh"], "initial");
         expect(human.status, human.stderr).toBe(0);
-        expect(human.stdout).toContain("Remote catalog refresh: updated (1 providers, 1 models;");
+        expect(human.stdout).toBe(
+          `Remote catalog refresh: updated (1 providers, 1 models; generated ${new Date(bundle.generatedAt).toISOString()})\n`,
+        );
         expect(human.stdout).not.toContain(migrationDiagnostic);
         expect(human.stderr).toContain(migrationDiagnostic);
-        expect(human.stdout).toContain(
-          "A running Gateway applies the updated catalog after its next restart.",
-        );
 
         const updated = runRefresh(["refresh", "--json"], "updated");
         expect(updated.status, updated.stderr).toBe(0);

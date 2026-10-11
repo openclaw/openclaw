@@ -1,7 +1,11 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { applyCodeModeCatalog, runCodeModeScriptHeadless } from "./code-mode.js";
+import {
+  applyCodeModeCatalog,
+  runCodeModeScriptHeadless,
+  type CodeModeHeadlessResult,
+} from "./code-mode.js";
 import {
   createCodeModeHarness,
   createHeadlessCodeModeHarness,
@@ -48,29 +52,41 @@ function snapshotFixture() {
 }
 
 describe("QuickJS checkpoint admission through Code Mode", () => {
-  it.each(["exec", "wait"])(
+  it.each(["exec", "wait", "headless"] as const)(
     "preserves output and cancels earlier tools when a %s resume exceeds the snapshot cap",
     async (mode) => {
-      const { ctx, config, tools } = createCodeModeHarness({ codeMode: { executor: "quickjs" } });
       const { pendingStarted, pending, fixture, fresh, code } = snapshotFixture();
-      applyCodeModeCatalog({ ...ctx, config, tools: [...tools, pending, fixture, fresh] });
-      const exec = expectDefined(tools[0], "exec");
-      const wait = expectDefined(tools[1], "wait");
-      const input = {
-        code: `${mode === "wait" ? 'text("delivered"); await yield_control();' : ""}${code}`,
-      };
-      const first = mode === "wait" ? resultDetails(await exec.execute("park", input)) : undefined;
-      if (first) {
-        expect(first).toMatchObject({
-          status: "waiting",
-          output: [{ type: "text", text: "delivered" }],
+      let result: CodeModeHeadlessResult | ReturnType<typeof resultDetails>;
+      if (mode === "headless") {
+        result = await runCodeModeScriptHeadless({
+          ctx: createHeadlessCodeModeHarness([pending, fixture, fresh], {
+            codeMode: { executor: "quickjs" },
+          }),
+          code,
         });
+        expect(result.toolCallCount).toBe(2);
+      } else {
+        const { ctx, config, tools } = createCodeModeHarness({ codeMode: { executor: "quickjs" } });
+        applyCodeModeCatalog({ ...ctx, config, tools: [...tools, pending, fixture, fresh] });
+        const exec = expectDefined(tools[0], "exec");
+        const wait = expectDefined(tools[1], "wait");
+        const input = {
+          code: `${mode === "wait" ? 'text("delivered"); await yield_control();' : ""}${code}`,
+        };
+        const first =
+          mode === "wait" ? resultDetails(await exec.execute("park", input)) : undefined;
+        if (first) {
+          expect(first).toMatchObject({
+            status: "waiting",
+            output: [{ type: "text", text: "delivered" }],
+          });
+        }
+        result = resultDetails(
+          await (first
+            ? wait.execute("resume", { runId: first.runId })
+            : exec.execute("inline", input)),
+        );
       }
-      const result = resultDetails(
-        await (first
-          ? wait.execute("resume", { runId: first.runId })
-          : exec.execute("inline", input)),
-      );
       expect(result).toMatchObject({ status: "failed", code: "snapshot_limit_exceeded" });
       expect(pending.execute).toHaveBeenCalledOnce();
       expect(fixture.execute).toHaveBeenCalledOnce();
@@ -118,25 +134,4 @@ describe("QuickJS checkpoint admission through Code Mode", () => {
       expect(testing.activeRuns.size).toBe(0);
     },
   );
-
-  it("preserves output and cancels earlier tools when a headless resume exceeds the snapshot cap", async () => {
-    const { pendingStarted, pending, fixture, fresh, code } = snapshotFixture();
-    const result = await runCodeModeScriptHeadless({
-      ctx: createHeadlessCodeModeHarness([pending, fixture, fresh], {
-        codeMode: { executor: "quickjs" },
-      }),
-      code,
-    });
-
-    expect(result).toMatchObject({ status: "failed", code: "snapshot_limit_exceeded" });
-    expect(result.toolCallCount).toBe(2);
-    expect(result.output).toEqual([
-      { type: "text", text: "accepted first" },
-      { type: "text", text: "accepted inline" },
-    ]);
-    expect(pending.execute).toHaveBeenCalledOnce();
-    expect(fixture.execute).toHaveBeenCalledOnce();
-    expect(fresh.execute).not.toHaveBeenCalled();
-    expect((await pendingStarted.promise).aborted).toBe(true);
-  });
 });

@@ -1,4 +1,3 @@
-// Qa Lab plugin module implements generic QA evidence gallery data.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -626,22 +625,15 @@ function readMatrixDimensionIds(params: {
   if (!Array.isArray(params.value)) {
     return sanitizeGalleryStringArray(params.fallback, params);
   }
-  const ids = sanitizeGalleryStringArray(
-    params.value.map((entry) => {
-      if (typeof entry === "string") {
-        return entry;
-      }
-      return readStringValue(readRecord(entry)?.id) ?? null;
-    }),
+  return sanitizeGalleryStringArray(
+    [
+      ...params.value.map((entry) =>
+        typeof entry === "string" ? entry : (readStringValue(readRecord(entry)?.id) ?? null),
+      ),
+      ...params.fallback,
+    ],
     params,
   );
-  for (const rawFallbackId of params.fallback) {
-    const fallbackId = sanitizeGalleryText(rawFallbackId, params);
-    if (!ids.includes(fallbackId)) {
-      ids.push(fallbackId);
-    }
-  }
-  return ids;
 }
 
 function uxMatrixEntryKey(
@@ -902,6 +894,8 @@ export async function buildQaEvidenceGalleryModel(params: {
     repoRoot,
   });
   const hrefEvidencePath = toRepoRelativePath(repoRoot, evidencePath);
+  const viewContext = { extraRoots: [requestedRepoRoot], hrefEvidencePath, repoRoot };
+  const sanitizeEntryText = (value: string) => sanitizeGalleryText(value, viewContext);
   const summary = validateQaEvidenceSummaryJson(
     JSON.parse(await fs.readFile(evidencePath, "utf8")) as unknown,
   );
@@ -931,9 +925,7 @@ export async function buildQaEvidenceGalleryModel(params: {
           artifactIndex,
           evidenceDir,
           entryIndex,
-          extraRoots: [requestedRepoRoot],
-          hrefEvidencePath,
-          repoRoot,
+          ...viewContext,
         }),
     ),
   );
@@ -952,11 +944,6 @@ export async function buildQaEvidenceGalleryModel(params: {
     const artifactCount = projectedArtifacts[entryIndex]!.length;
     const artifacts = artifactViews.slice(artifactOffset, artifactOffset + artifactCount);
     artifactOffset += artifactCount;
-    const sanitizeEntryText = (value: string) =>
-      sanitizeGalleryText(value, {
-        extraRoots: [requestedRepoRoot],
-        repoRoot,
-      });
     return {
       artifacts,
       key: String(entryIndex),
@@ -971,10 +958,7 @@ export async function buildQaEvidenceGalleryModel(params: {
       id: sanitizeEntryText(entry.test.id),
       kind: sanitizeEntryText(entry.test.kind),
       sourcePath: entry.test.source?.path
-        ? displayGalleryPath(entry.test.source.path, {
-            extraRoots: [requestedRepoRoot],
-            repoRoot,
-          })
+        ? displayGalleryPath(entry.test.source.path, viewContext)
         : null,
       status: entry.result.status,
       title: sanitizeEntryText(entry.test.title),
@@ -986,14 +970,10 @@ export async function buildQaEvidenceGalleryModel(params: {
     evidenceMode: summary.evidenceMode,
     evidencePath: hrefEvidencePath,
     generatedAt: summary.generatedAt,
-    profile: summary.profile
-      ? sanitizeGalleryText(summary.profile, { extraRoots: [requestedRepoRoot], repoRoot })
-      : null,
+    profile: summary.profile ? sanitizeEntryText(summary.profile) : null,
     producerContext: await buildProducerContext({
       evidencePath,
-      extraRoots: [requestedRepoRoot],
-      hrefEvidencePath,
-      repoRoot,
+      ...viewContext,
       summaryEntries: summary.entries,
       effectiveEntries,
     }),

@@ -1,4 +1,3 @@
-// Session goal state tracks objective progress and token budgets in the session store.
 import {
   recordSessionGoalChanged,
   type SessionStateActorType,
@@ -10,7 +9,8 @@ import {
   buildUpdatedSessionGoalObjective,
   buildUpdatedSessionGoalStatus,
 } from "./goals-transitions.js";
-import { loadSessionEntryReadOnly, patchSessionEntryCore } from "./session-accessor.js";
+import { patchSessionEntryCore } from "./session-accessor.js";
+import { withSessionEntryReadOnlyInWorker } from "./session-entry-read-runtime.js";
 import type { SessionEntry, SessionGoal, SessionGoalStatus } from "./types.js";
 
 type SessionGoalSnapshot = {
@@ -109,13 +109,20 @@ export async function getSessionGoal(
   const now = nowMs(options.now);
   if (options.persist === false) {
     // Status rendering should not write incidental budget/baseline adoption unless callers opt in.
-    const entry =
-      loadSessionEntryReadOnly({ sessionKey: options.sessionKey, storePath: options.storePath }) ??
-      options.fallbackEntry;
-    const projected = entry
-      ? resolveSessionGoalDisplayState(entry, now, { adoptFreshBaseline: false })
-      : undefined;
-    return projected ? { status: "found", goal: projected } : { status: "missing" };
+    return withSessionEntryReadOnlyInWorker(
+      { sessionKey: options.sessionKey, storePath: options.storePath },
+      () => {},
+      async (read) => {
+        if (!read.ok) {
+          throw read.error;
+        }
+        const entry = read.value ?? options.fallbackEntry;
+        const goal = entry
+          ? resolveSessionGoalDisplayState(entry, now, { adoptFreshBaseline: false })
+          : undefined;
+        return goal ? { status: "found", goal } : { status: "missing" };
+      },
+    );
   }
   let goal: SessionGoal | undefined;
   const result = await patchSessionEntryCore(

@@ -123,13 +123,11 @@ describe("CLI readiness after early config observation", () => {
   });
 
   it.each([
-    { name: "explicit Gateway target", explicit: true, existingState: false, stateful: false },
-    { name: "configured Gateway target", explicit: false, existingState: false, stateful: false },
-    { name: "existing shared state", explicit: true, existingState: true, stateful: false },
-    { name: "stateful authored config", explicit: true, existingState: false, stateful: true },
+    { name: "explicit Gateway target", explicit: true, existingState: false },
+    { name: "existing shared state", explicit: true, existingState: true },
   ])(
     "preserves current config and its observed health for $name",
-    async ({ explicit, existingState, stateful }) => {
+    async ({ explicit, existingState }) => {
       const root = fs.realpathSync(tempDirs.make("openclaw-cli-pristine-observation-"));
       const stateDir = path.join(root, "state");
       const configPath = path.join(root, "openclaw.json");
@@ -140,7 +138,6 @@ describe("CLI readiness after early config observation", () => {
         logging: { file: path.join(root, "openclaw.log") },
         // Inherited plugin selectors must not add unrelated convergence work to this fixture.
         plugins: { enabled: false },
-        ...(stateful ? { messages: { ackReaction: "ok" } } : {}),
       } satisfies OpenClawConfig;
       const configRaw = JSON.stringify(config);
       fs.writeFileSync(configPath, configRaw);

@@ -253,6 +253,7 @@ export function createHarness(sharedHost = false, withPolicy = true) {
     store: { get: () => state.environment },
     placements: {
       get: () => state.placement,
+      getAsync: async () => structuredClone(state.placement),
       validateTurnClaim: (candidate: WorkerSessionTurnClaim) =>
         isCurrentPlacementTurnClaim(state.placement, candidate),
       registerTurnClaimClosedHandler(handler: (closed: WorkerSessionTurnClaim) => void) {

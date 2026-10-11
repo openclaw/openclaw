@@ -53,6 +53,7 @@ describe("GatewayClient OpenClaw wrapper watchdog integration", () => {
     });
     const client = new GatewayClient({
       url: `ws://[::1]:${bind.port}`,
+      deviceIdentity: null,
       connectChallengeTimeoutMs: 1000,
       onConnectError,
     });

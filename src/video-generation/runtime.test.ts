@@ -13,6 +13,7 @@ import type { VideoGenerationProvider, VideoGenerationRequest } from "./types.js
 let providers: VideoGenerationProvider[] = [];
 let listedConfigs: Array<OpenClawConfig | undefined> = [];
 let providerEnvVars: Record<string, string[]> = {};
+let warnings: string[] = [];
 
 const runtimeDeps = {
   getProvider: (providerId) => providers.find((provider) => provider.id === providerId),
@@ -23,7 +24,7 @@ const runtimeDeps = {
   getProviderEnvVars: (providerId) => providerEnvVars[providerId] ?? [],
   log: {
     debug: () => {},
-    warn: () => {},
+    warn: (message) => warnings.push(message),
   },
 } satisfies NonNullable<Parameters<typeof generateVideo>[1]>;
 
@@ -92,6 +93,7 @@ describe("video-generation runtime", () => {
     providers = [];
     listedConfigs = [];
     providerEnvVars = {};
+    warnings = [];
   });
 
   it("generates videos through the active video-generation provider", async () => {
@@ -210,6 +212,9 @@ describe("video-generation runtime", () => {
         error: "Your request was blocked by our moderation system.",
       },
     ]);
+    expect(warnings).toContain(
+      "video-generation candidate failed: openai/sora-2: Your request was blocked by our moderation system.",
+    );
   });
 
   it("falls through when a video provider returns an empty buffer", async () => {
@@ -867,6 +872,50 @@ describe("video-generation runtime", () => {
     expect(requests[0]?.resolution).toBeUndefined();
     expect(result.ignoredOverrides).toEqual([{ key: "resolution", value: "4K" }]);
     expect(result.normalization).toBeUndefined();
+  });
+
+  it("reports unparseable video sizes as ignored instead of dropping them silently", async () => {
+    const requests = useCapturingProvider({
+      id: "minimax",
+      capabilities: {
+        generate: {
+          supportsSize: true,
+          sizes: ["1280x720", "1920x1080"],
+        },
+      },
+    });
+    const result = await runGenerateVideo({
+      cfg: videoConfig({ primary: "minimax/MiniMax-Hailuo-2.3" }),
+      prompt: "animate a lobster",
+      size: "4k",
+    });
+    expect(requests[0]?.size).toBeUndefined();
+    expect(result.ignoredOverrides).toEqual([{ key: "size", value: "4k" }]);
+    expect(result.normalization).toBeUndefined();
+  });
+
+  it("keeps supported video sizes while reporting only unrecognized overrides", async () => {
+    const requests = useCapturingProvider({
+      id: "minimax",
+      capabilities: {
+        generate: {
+          supportsSize: true,
+          sizes: ["1280x720", "1920x1080"],
+          supportsAspectRatio: true,
+          aspectRatios: ["16:9"],
+        },
+      },
+    });
+    const result = await runGenerateVideo({
+      cfg: videoConfig({ primary: "minimax/MiniMax-Hailuo-2.3" }),
+      prompt: "animate a lobster",
+      size: "1600x900",
+      aspectRatio: "16:9",
+    });
+    expect(requests[0]).toMatchObject({ size: "1920x1080", aspectRatio: "16:9" });
+    expect(result.ignoredOverrides).toStrictEqual([]);
+    expect(result.normalization?.size?.requested).toBe("1600x900");
+    expect(result.normalization?.size?.applied).toBe("1920x1080");
   });
 
   it("uses mode-specific capabilities for image-to-video requests", async () => {

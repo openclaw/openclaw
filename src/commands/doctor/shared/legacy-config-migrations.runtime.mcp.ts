@@ -1,6 +1,4 @@
-// Legacy MCP runtime config migrations.
 import {
-  defineLegacyConfigMigration,
   getRecord,
   type LegacyConfigMigrationSpec,
   type LegacyConfigRule,
@@ -8,7 +6,6 @@ import {
 import {
   canonicalizeConfiguredMcpServer,
   isKnownCliMcpTypeAlias,
-  resolveOpenClawMcpTransportAlias,
 } from "../../../config/mcp-config-normalize.js";
 import { isRecord } from "./legacy-config-record-shared.js";
 
@@ -26,41 +23,20 @@ function* mcpServerEntries(value: unknown): Generator<[string, Record<string, un
   }
 }
 
-const MCP_SERVER_TYPE_RULE: LegacyConfigRule = {
-  path: ["mcp", "servers"],
-  message:
-    'mcp.servers entries use OpenClaw transport names; CLI-native type aliases are legacy here. Run "openclaw doctor --fix".',
-  match: (value) =>
-    isRecord(value) &&
-    Object.values(value).some((server) => isRecord(server) && isKnownCliMcpTypeAlias(server.type)),
-};
-
-const MCP_SERVER_DISABLED_RULES: LegacyConfigRule[] = [
-  ["mcp", "servers"],
-  ["nodeHost", "mcp", "servers"],
-].map((path) => ({
-  path,
-  message:
-    `${path.join(".")} entries use the unsupported "disabled" key; use "enabled" with the inverse boolean value. ` +
-    'Run "openclaw doctor --fix" to migrate it.',
-  match: (value) =>
-    isRecord(value) &&
-    Object.values(value).some((server) => isRecord(server) && typeof server.disabled === "boolean"),
-}));
-
-const MCP_SERVER_TIMEOUT_ALIASES_RULES: LegacyConfigRule[] = [
-  ["mcp", "servers"],
-  ["nodeHost", "mcp", "servers"],
-].map((path) => ({
-  path,
-  message: `${path.join(".")} timeout aliases were retired; use connectionTimeoutMs and requestTimeoutMs. Run "openclaw doctor --fix".`,
-  match: (value) =>
-    isRecord(value) &&
-    Object.values(value).some(
-      (server) =>
-        isRecord(server) && MCP_SERVER_TIMEOUT_ALIASES.some(([key]) => Object.hasOwn(server, key)),
-    ),
-}));
+function mcpServerRules(
+  message: string,
+  match: (server: Record<string, unknown>) => boolean,
+): LegacyConfigRule[] {
+  return [
+    ["mcp", "servers"],
+    ["nodeHost", "mcp", "servers"],
+  ].map((path) => ({
+    path,
+    message: `${path.join(".")} ${message}`,
+    match: (value) =>
+      isRecord(value) && Object.values(value).some((server) => isRecord(server) && match(server)),
+  }));
+}
 
 function hasMcpServerLegacyAliases(server: Record<string, unknown>): boolean {
   const codex = isRecord(server.codex) ? server.codex : undefined;
@@ -73,24 +49,13 @@ function hasMcpServerLegacyAliases(server: Record<string, unknown>): boolean {
   );
 }
 
-const MCP_SERVER_ALIASES_RULES: LegacyConfigRule[] = [
-  ["mcp", "servers"],
-  ["nodeHost", "mcp", "servers"],
-].map((path) => ({
-  path,
-  message: `${path.join(".")} legacy aliases were retired; use camelCase spellings and cwd. Run "openclaw doctor --fix".`,
-  match: (value) =>
-    isRecord(value) &&
-    Object.values(value).some((server) => isRecord(server) && hasMcpServerLegacyAliases(server)),
-}));
-
 function migrateMcpServerAliases(servers: unknown, pathPrefix: string, changes: string[]): void {
   const records = getRecord(servers);
   if (!records) {
     return;
   }
   for (const [serverName, value] of mcpServerEntries(records)) {
-    if (!hasMcpServerLegacyAliases(value)) {
+    if (!hasMcpServerLegacyAliases(value) && !isKnownCliMcpTypeAlias(value.type)) {
       continue;
     }
     const normalized = canonicalizeConfiguredMcpServer(value);
@@ -159,16 +124,26 @@ function migrateMcpServerDisabledFlags(
   }
 }
 
-/** Legacy config migration specs for MCP server config compatibility. */
 export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_MCP: LegacyConfigMigrationSpec[] = [
-  defineLegacyConfigMigration({
+  {
     id: "mcp.servers.canonicalize",
-    describe: "Normalize legacy MCP server config",
     legacyRules: [
-      ...MCP_SERVER_DISABLED_RULES,
-      MCP_SERVER_TYPE_RULE,
-      ...MCP_SERVER_TIMEOUT_ALIASES_RULES,
-      ...MCP_SERVER_ALIASES_RULES,
+      ...mcpServerRules(
+        'entries use the unsupported "disabled" key; use "enabled" with the inverse boolean value. Run "openclaw doctor --fix" to migrate it.',
+        (server) => typeof server.disabled === "boolean",
+      ),
+      ...mcpServerRules(
+        'entries use OpenClaw transport names; CLI-native type aliases are legacy here. Run "openclaw doctor --fix".',
+        (server) => isKnownCliMcpTypeAlias(server.type),
+      ),
+      ...mcpServerRules(
+        'timeout aliases were retired; use connectionTimeoutMs and requestTimeoutMs. Run "openclaw doctor --fix".',
+        (server) => MCP_SERVER_TIMEOUT_ALIASES.some(([key]) => Object.hasOwn(server, key)),
+      ),
+      ...mcpServerRules(
+        'legacy aliases were retired; use camelCase spellings and cwd. Run "openclaw doctor --fix".',
+        hasMcpServerLegacyAliases,
+      ),
     ],
     apply: (raw, changes) => {
       const mcp = getRecord(raw.mcp);
@@ -181,25 +156,6 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_MCP: LegacyConfigMigrationSpec[] =
         migrateMcpServerTimeoutAliases(owner?.servers, path, changes);
         migrateMcpServerAliases(owner?.servers, path, changes);
       }
-
-      for (const [serverName, rawServer] of mcpServerEntries(mcp?.servers)) {
-        if (!isKnownCliMcpTypeAlias(rawServer.type)) {
-          continue;
-        }
-        const rawType = typeof rawServer.type === "string" ? rawServer.type : "";
-        const alias = resolveOpenClawMcpTransportAlias(rawServer.type);
-        if (typeof rawServer.transport !== "string" && alias) {
-          rawServer.transport = alias;
-          changes.push(`Moved mcp.servers.${serverName}.type "${rawType}" → transport "${alias}".`);
-        } else if (typeof rawServer.transport === "string") {
-          changes.push(
-            `Removed mcp.servers.${serverName}.type (transport "${rawServer.transport}" already set).`,
-          );
-        } else {
-          changes.push(`Removed mcp.servers.${serverName}.type "${rawType}".`);
-        }
-        delete rawServer.type;
-      }
     },
-  }),
+  },
 ];

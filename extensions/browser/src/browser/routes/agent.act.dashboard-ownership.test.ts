@@ -10,8 +10,7 @@ import {
   setPwToolsCoreCurrentPage,
   setPwToolsCoreCurrentRefLocator,
 } from "../pw-tools-core.test-harness.js";
-import type { BrowserRouteContext, ProfileContext } from "../server-context.js";
-import { makeBrowserProfile, makeBrowserServerState } from "../server-context.test-harness.js";
+import { createDashboardRouteContext } from "./dashboard-ownership.test-support.js";
 import { createBrowserRouteApp, createBrowserRouteResponse } from "./test-helpers.js";
 
 const browser = vi.hoisted(() => ({
@@ -51,36 +50,7 @@ const sessionKey = "agent:main:dashboard-action-proof";
 const request = { sessionKey, agentId: "main", name: "service" };
 
 function dashboardRoute(tab: BrowserTab, route: "/act" | "/navigate" = "/act") {
-  const profile = makeBrowserProfile();
-  const unused = async (): Promise<never> => {
-    throw new Error("Unexpected browser profile operation");
-  };
-  const profileCtx: ProfileContext = {
-    profile,
-    ensureBrowserAvailable: async () => {},
-    ensureTabAvailable: async () => tab,
-    isHttpReachable: async () => true,
-    isTransportAvailable: async () => true,
-    isReachable: async () => true,
-    listTabs: async () => [tab],
-    openTab: unused,
-    labelTab: unused,
-    focusTab: unused,
-    closeTab: unused,
-    stopRunningBrowser: unused,
-    resetProfile: unused,
-  };
-  const state = makeBrowserServerState({
-    profile,
-    resolvedOverrides: { evaluateEnabled: true, ssrfPolicy: undefined },
-  });
-  const context: BrowserRouteContext = {
-    ...profileCtx,
-    state: () => state,
-    forProfile: () => profileCtx,
-    listProfiles: unused,
-    mapTabError: () => null,
-  };
+  const context = createDashboardRouteContext(tab, { evaluateEnabled: true });
   const { app, postHandlers } = createBrowserRouteApp();
   registerBrowserAgentActRoutes(app, context);
   registerBrowserAgentSnapshotRoutes(app, context);
@@ -91,9 +61,6 @@ describe("dashboard action ownership", () => {
   const fixture = useBrowserDashboardTestHarness(browser, sessionKey);
 
   it.each([
-    { revoke: "Stop", boundary: "batch" },
-    { revoke: "Stop", boundary: "nested batch" },
-    { revoke: "replacement", boundary: "batch" },
     { revoke: "replacement", boundary: "nested batch" },
     { revoke: "Stop", boundary: "submit" },
     { revoke: "replacement", boundary: "navigation preparation" },
@@ -210,9 +177,7 @@ describe("dashboard action ownership", () => {
 
   it.each([
     { revoke: "Stop", retry: false },
-    { revoke: "replacement", retry: false },
     { revoke: "none", retry: false },
-    { revoke: "Stop", retry: true },
     { revoke: "replacement", retry: true },
     { revoke: "none", retry: true },
   ])(

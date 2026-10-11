@@ -1,11 +1,15 @@
 import type { DatabaseSync } from "node:sqlite";
-import { stageSqliteTransactionState } from "../../infra/sqlite-post-commit.js";
+import {
+  deferSqlitePostCommitPublication,
+  stageSqliteTransactionState,
+} from "../../infra/sqlite-post-commit.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
+import { findOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { readSessionMaintenanceAgeQueries } from "./session-accessor.sqlite-maintenance-age-queries.js";
 import { hasCanonicalSessionValidationProjection } from "./session-canonical-key.js";
+import { getSessionMaintenanceActivityAt } from "./store-maintenance-activity.js";
 import {
-  getSessionMaintenanceActivityAt,
   shouldPreserveMaintenanceEntry,
   type ResolvedSessionMaintenanceConfig,
 } from "./store-maintenance.js";
@@ -13,18 +17,79 @@ import type { SessionEntry } from "./types.js";
 
 export type SessionEntryMaintenanceAgeFact = {
   maintenance: ResolvedSessionMaintenanceConfig;
+  entryCount?: number;
   next: { at: number };
   recheckAt: number;
 };
-export type SessionEntryMaintenanceAgeCapture = { fact?: SessionEntryMaintenanceAgeFact };
+type SessionEntryMaintenanceAgeCapture = { fact?: SessionEntryMaintenanceAgeFact };
+type MaintenanceActivity = Pick<
+  SessionEntry,
+  "updatedAt" | "lastActivityAt" | "lastInteractionAt" | "sessionStartedAt" | "archivedAt"
+>;
+export type SessionEntryMaintenanceAgeChange = {
+  sessionKey: string;
+  entry: MaintenanceActivity;
+  previousEntry?: MaintenanceActivity;
+};
+const changeObservers = new Map<
+  string | symbol,
+  Set<(change: SessionEntryMaintenanceAgeChange) => void>
+>();
+
+export function captureSessionEntryMaintenanceAgeChange(
+  change: SessionEntryMaintenanceAgeChange,
+): SessionEntryMaintenanceAgeChange {
+  const pick = ({
+    updatedAt,
+    lastActivityAt,
+    lastInteractionAt,
+    sessionStartedAt,
+    archivedAt,
+  }: MaintenanceActivity) => ({
+    updatedAt,
+    lastActivityAt,
+    lastInteractionAt,
+    sessionStartedAt,
+    archivedAt,
+  });
+  return {
+    sessionKey: change.sessionKey,
+    entry: pick(change.entry),
+    previousEntry: change.previousEntry && pick(change.previousEntry),
+  };
+}
+
+export function observeSessionEntryMaintenanceAgeChanges(
+  identity: string | symbol,
+  observe: (change: SessionEntryMaintenanceAgeChange) => void,
+): () => void {
+  const observers = changeObservers.get(identity) ?? new Set();
+  observers.add(observe);
+  changeObservers.set(identity, observers);
+  return () => {
+    observers.delete(observe);
+    if (!observers.size && changeObservers.get(identity) === observers) {
+      changeObservers.delete(identity);
+    }
+  };
+}
+
+export function publishSessionEntryMaintenanceAgeChanges(
+  identity: string | symbol,
+  changes: readonly SessionEntryMaintenanceAgeChange[],
+): void {
+  for (const change of changes) {
+    for (const observe of changeObservers.get(identity) ?? []) {
+      observe(change);
+    }
+  }
+}
 
 type Activity = Parameters<typeof getSessionMaintenanceActivityAt>[0];
 
 export const SESSION_ENTRY_MAINTENANCE_INTERVAL_MS = 30 * 60 * 1_000;
 
 // Ordinary updates retain this age lower bound across entry-cache revision churn.
-// New active entries rotate the capture so in-flight count decisions observe them.
-// Maintenance readers enforce the recheck deadline, including paths without a kick.
 const ageFacts = new WeakMap<DatabaseSync, SessionEntryMaintenanceAgeCapture>();
 
 export function stageSessionEntryMaintenanceAgeFact(
@@ -69,39 +134,6 @@ export function readSessionEntryMaintenanceAgeFact(
   return fact;
 }
 
-/** Capture identity stays local; only its scalar fact crosses the Worker boundary. */
-export function captureSessionEntryMaintenanceAgeFact(
-  db: DatabaseSync,
-  maintenance: ResolvedSessionMaintenanceConfig,
-): SessionEntryMaintenanceAgeCapture {
-  readSessionEntryMaintenanceAgeFact(db, maintenance);
-  let capture = ageFacts.get(db);
-  if (!capture) {
-    capture = {};
-    ageFacts.set(db, capture);
-  }
-  return capture;
-}
-
-export function isSessionEntryMaintenanceAgeCaptureCurrent(
-  db: DatabaseSync,
-  capture: SessionEntryMaintenanceAgeCapture,
-): boolean {
-  return ageFacts.get(db) === capture;
-}
-
-export function adoptSessionEntryMaintenanceAgeFact(
-  db: DatabaseSync,
-  capture: SessionEntryMaintenanceAgeCapture,
-  fact: SessionEntryMaintenanceAgeFact | undefined,
-): void {
-  // A synchronous writer can run after native commit but before parent settlement.
-  // Keep its newer state without turning an already committed result into failure.
-  if (isSessionEntryMaintenanceAgeCaptureCurrent(db, capture)) {
-    capture.fact = fact;
-  }
-}
-
 function isDashboardKey(key: string): boolean {
   return parseAgentSessionKey(key)?.rest.startsWith("dashboard:") === true;
 }
@@ -109,27 +141,52 @@ function isDashboardKey(key: string): boolean {
 /** Tracked writes can only bring the conservative age boundary forward. */
 export function advanceSessionEntryMaintenanceAgeFact(
   db: DatabaseSync,
-  update: { sessionKey: string; entry: SessionEntry; previousEntry?: SessionEntry },
+  update: SessionEntryMaintenanceAgeChange,
 ): void {
-  const fact = ageFacts.get(db)?.fact;
+  if (changeObservers.size) {
+    const identity = findOpenClawAgentDatabaseIdentity({ db })?.identity;
+    if (identity !== undefined && changeObservers.has(identity)) {
+      const change = captureSessionEntryMaintenanceAgeChange(update);
+      const publish = () => publishSessionEntryMaintenanceAgeChanges(identity, [change]);
+      if (!deferSqlitePostCommitPublication(db, publish) && !db.isTransaction) {
+        publish();
+      }
+    }
+  }
+  applySessionEntryMaintenanceAgeChange(db, update);
+}
+
+export function applySessionEntryMaintenanceAgeChange(
+  db: DatabaseSync,
+  update: SessionEntryMaintenanceAgeChange,
+): void {
+  const fact = updateSessionEntryMaintenanceAgeFact(ageFacts.get(db)?.fact, update);
+  // Reader handles can receive a coalesced change already applied by their writer.
+  // Only the scheduling replica counts deltas; a database pass takes a fresh count.
+  stageSessionEntryMaintenanceAgeFact(db, fact && { ...fact, entryCount: undefined });
+}
+
+/** The scheduling replica consumes the same acknowledged entry changes as the worker. */
+export function updateSessionEntryMaintenanceAgeFact(
+  fact: SessionEntryMaintenanceAgeFact | undefined,
+  update: SessionEntryMaintenanceAgeChange,
+): SessionEntryMaintenanceAgeFact | undefined {
   if (!fact) {
-    // An empty capture must also observe writes while Worker results are in flight.
-    invalidateSessionEntryMaintenanceAgeFact(db);
-    return;
+    return undefined;
   }
   if (update.entry.archivedAt !== undefined) {
-    return;
+    return {
+      ...fact,
+      entryCount:
+        fact.entryCount === undefined || !update.previousEntry
+          ? undefined
+          : fact.entryCount - (update.previousEntry.archivedAt === undefined ? 1 : 0),
+    };
   }
   const { entry, previousEntry } = update;
-  if (
-    previousEntry &&
-    (previousEntry.archivedAt !== undefined ||
-      entry.updatedAt < previousEntry.updatedAt ||
-      getSessionMaintenanceActivityAt(entry) < getSessionMaintenanceActivityAt(previousEntry))
-  ) {
+  if (previousEntry && !isMonotoneSessionEntryMaintenanceAgeChange(update)) {
     // Exact replacement/lifecycle writers also own backdates and archive restores.
-    invalidateSessionEntryMaintenanceAgeFact(db);
-    return;
+    return undefined;
   }
   // A newly inserted historical entry must retain already-due transitions too.
   const at = nextEntryAgeAt(
@@ -138,9 +195,25 @@ export function advanceSessionEntryMaintenanceAgeFact(
     fact.maintenance,
     previousEntry ? Date.now() : -Infinity,
   );
-  if (!previousEntry || at < fact.next.at) {
-    stageSessionEntryMaintenanceAgeFact(db, { ...fact, next: { at: Math.min(at, fact.next.at) } });
-  }
+  return {
+    ...fact,
+    entryCount:
+      fact.entryCount === undefined ? undefined : fact.entryCount + (previousEntry ? 0 : 1),
+    next: { at: Math.min(at, fact.next.at) },
+  };
+}
+
+function isMonotoneSessionEntryMaintenanceAgeChange({
+  entry,
+  previousEntry,
+}: SessionEntryMaintenanceAgeChange): boolean {
+  return (
+    previousEntry !== undefined &&
+    previousEntry.archivedAt === undefined &&
+    entry.archivedAt === undefined &&
+    entry.updatedAt >= previousEntry.updatedAt &&
+    getSessionMaintenanceActivityAt(entry) >= getSessionMaintenanceActivityAt(previousEntry)
+  );
 }
 
 function agePolicy(maintenance: ResolvedSessionMaintenanceConfig): string {
@@ -198,10 +271,12 @@ export function recordSessionEntryMaintenanceAgeFact(
   database: Pick<OpenClawAgentDatabase, "db">,
   maintenance: ResolvedSessionMaintenanceConfig,
   plannedAt: number,
+  entryCount?: number,
 ): SessionEntryMaintenanceAgeFact {
   const next = { at: Infinity };
   const fact: SessionEntryMaintenanceAgeFact = {
     maintenance,
+    entryCount,
     next,
     recheckAt: plannedAt + SESSION_ENTRY_MAINTENANCE_INTERVAL_MS,
   };
@@ -251,7 +326,7 @@ export function recordSessionEntryMaintenanceAgeFact(
 
 /** The kick uses the same periodic deadline as inline maintenance callers. */
 export function readSessionEntryMaintenanceNextAgeAt(
-  database: OpenClawAgentDatabase,
+  database: Pick<OpenClawAgentDatabase, "db">,
   maintenance: ResolvedSessionMaintenanceConfig,
 ): number | undefined {
   if (maintenance.mode !== "enforce") {

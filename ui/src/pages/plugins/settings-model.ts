@@ -45,6 +45,15 @@ export function pluginConfigSchema(
   return schemaProperty(pluginEntrySchema(rootSchema, pluginId), "config");
 }
 
+function selectSchemaProperties(schema: JsonSchema, keys: readonly string[]) {
+  return Object.fromEntries(
+    keys.flatMap((key) => {
+      const property = schema.properties?.[key];
+      return property ? [[key, property] as const] : [];
+    }),
+  );
+}
+
 export function pluginHostControlsSchema(
   rootSchema: JsonSchema | null,
   pluginId: string,
@@ -54,12 +63,7 @@ export function pluginHostControlsSchema(
     return null;
   }
   const keys = ["hooks", "llm", "subagent"];
-  const properties = Object.fromEntries(
-    keys.flatMap((key) => {
-      const schema = entry.properties?.[key];
-      return schema ? [[key, schema] as const] : [];
-    }),
-  );
+  const properties = selectSchemaProperties(entry, keys);
   return Object.keys(properties).length > 0
     ? {
         ...entry,
@@ -75,12 +79,7 @@ export function pluginAdvancedSchema(rootSchema: JsonSchema | null): JsonSchema 
   if (!plugins?.properties) {
     return null;
   }
-  const properties = Object.fromEntries(
-    ["enabled", "allow", "deny", "load", "slots"].flatMap((key) => {
-      const schema = plugins.properties?.[key];
-      return schema ? [[key, schema] as const] : [];
-    }),
-  );
+  const properties = selectSchemaProperties(plugins, ["enabled", "allow", "deny", "load", "slots"]);
   return { ...plugins, properties };
 }
 

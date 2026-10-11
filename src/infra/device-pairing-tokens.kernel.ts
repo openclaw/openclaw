@@ -1,6 +1,5 @@
 import { normalizeDeviceAuthScopes } from "../shared/device-auth.js";
 import { resolveMissingRequestedScope, roleScopesAllow } from "../shared/operator-scope-compat.js";
-// Device token issuance, verification, rotation, and revocation for paired devices.
 import type {
   RotateDeviceTokenResult,
   RevokeDeviceTokenResult,
@@ -8,19 +7,17 @@ import type {
 import {
   clearNodePairingGenerationState,
   listApprovedPairedDeviceRoles,
+  resolveApprovedDeviceScopeBaseline,
   resolveNodePairingGeneration,
 } from "./device-pairing-identity.js";
 import { requestDevicePairingMutationAdmission } from "./device-pairing-mutation.worker.js";
 import {
-  cloneDevicePairingTokens,
   loadDevicePairingStateForMutation,
-  normalizeDevicePairingId,
   normalizeDevicePairingRole,
 } from "./device-pairing-state.kernel.js";
 import {
   persistDevicePairingStoreState as persistState,
   updatePairedDeviceInTransaction,
-  type DevicePairingStoreState,
 } from "./device-pairing-store.js";
 import { createDeviceAuthToken } from "./device-pairing-token-utils.js";
 import type { DeviceAuthToken, PairedDevice } from "./device-pairing.types.js";
@@ -29,13 +26,6 @@ import { verifyPairingToken } from "./pairing-token.js";
 const SHARED_GATEWAY_AUTH_ISSUER_KIND = "shared-gateway-auth";
 const BROWSER_DEVICE_CLIENT_IDS = new Set(["openclaw-control-ui", "webchat-ui"]);
 const BROWSER_DEVICE_CLIENT_MODE = "webchat";
-
-function getPairedDeviceFromState(
-  state: DevicePairingStoreState,
-  deviceId: string,
-): PairedDevice | null {
-  return state.pairedByDeviceId[normalizeDevicePairingId(deviceId)] ?? null;
-}
 
 function isBrowserRelatedPairedDevice(device: Pick<PairedDevice, "clientId" | "clientMode">) {
   const clientMode = device.clientMode?.trim().toLowerCase();
@@ -54,14 +44,6 @@ function deviceTokenIssuerMatches(
     return !entry.issuer;
   }
   return entry.issuer?.kind === issuer.kind && entry.issuer.generation === issuer.generation;
-}
-
-function resolveApprovedDeviceScopeBaseline(device: PairedDevice): string[] | null {
-  const baseline = device.approvedScopes ?? device.scopes;
-  if (!Array.isArray(baseline)) {
-    return null;
-  }
-  return normalizeDeviceAuthScopes(baseline);
 }
 
 function scopesWithinApprovedDeviceBaseline(params: {
@@ -87,11 +69,9 @@ export function verifyDeviceTokenInWorker(params: {
   scopes: string[];
   requiredSharedGatewaySessionGeneration?: string;
   nowMs: number;
-  baseDir?: string;
 }): { ok: boolean; reason?: string; issuer?: DeviceAuthToken["issuer"] } {
   return updatePairedDeviceInTransaction<ReturnType<typeof verifyDeviceTokenInWorker>>(
     params.deviceId,
-    params.baseDir,
     (device) => {
       if (!device) {
         return { value: { ok: false, reason: "device-not-paired" } };
@@ -156,63 +136,58 @@ export function ensureDeviceTokenInWorker(params: {
   scopes: string[];
   issuer?: DeviceAuthToken["issuer"];
   nowMs: number;
-  baseDir?: string;
 }): DeviceAuthToken | null {
-  return updatePairedDeviceInTransaction<DeviceAuthToken | null>(
-    params.deviceId,
-    params.baseDir,
-    (paired) => {
-      requestDevicePairingMutationAdmission({ kind: "pairing-token-issuance" });
-      const requestedScopes = normalizeDeviceAuthScopes(params.scopes);
-      const context = resolveDeviceTokenUpdateContext({
-        device: paired,
-        role: params.role,
-      });
-      if (!context) {
-        return { value: null };
-      }
-      const { device, role, tokens, existing } = context;
-      const previousNodeGeneration = resolveNodePairingGeneration(device);
-      const approvedScopes = resolveApprovedDeviceScopeBaseline(device);
-      if (
-        !scopesWithinApprovedDeviceBaseline({
-          role,
-          scopes: requestedScopes,
-          approvedScopes,
-        })
-      ) {
-        return { value: null };
-      }
-      if (existing && !existing.revokedAtMs) {
-        const existingWithinApproved = scopesWithinApprovedDeviceBaseline({
-          role,
-          scopes: existing.scopes,
-          approvedScopes,
-        });
-        const issuerAllowsReuse = deviceTokenIssuerMatches(existing, params.issuer);
-        if (
-          existingWithinApproved &&
-          issuerAllowsReuse &&
-          roleScopesAllow({ role, requestedScopes, allowedScopes: existing.scopes })
-        ) {
-          return { value: existing };
-        }
-      }
-      const now = params.nowMs;
-      const next = createDeviceAuthToken({
+  return updatePairedDeviceInTransaction<DeviceAuthToken | null>(params.deviceId, (paired) => {
+    requestDevicePairingMutationAdmission({ kind: "pairing-token-issuance" });
+    const requestedScopes = normalizeDeviceAuthScopes(params.scopes);
+    const context = resolveDeviceTokenUpdateContext({
+      device: paired,
+      role: params.role,
+    });
+    if (!context) {
+      return { value: null };
+    }
+    const { device, role, tokens, existing } = context;
+    const previousNodeGeneration = resolveNodePairingGeneration(device);
+    const approvedScopes = resolveApprovedDeviceScopeBaseline(device);
+    if (
+      !scopesWithinApprovedDeviceBaseline({
         role,
         scopes: requestedScopes,
-        issuer: params.issuer,
-        existing,
-        now,
-        rotatedAtMs: existing ? now : undefined,
+        approvedScopes,
+      })
+    ) {
+      return { value: null };
+    }
+    if (existing && !existing.revokedAtMs) {
+      const existingWithinApproved = scopesWithinApprovedDeviceBaseline({
+        role,
+        scopes: existing.scopes,
+        approvedScopes,
       });
-      tokens[role] = next;
-      device.tokens = tokens;
-      clearNodePairingGenerationState(device, previousNodeGeneration);
-      return { value: next, patch: { tokens, nodeSurface: device.nodeSurface } };
-    },
-  );
+      const issuerAllowsReuse = deviceTokenIssuerMatches(existing, params.issuer);
+      if (
+        existingWithinApproved &&
+        issuerAllowsReuse &&
+        roleScopesAllow({ role, requestedScopes, allowedScopes: existing.scopes })
+      ) {
+        return { value: existing };
+      }
+    }
+    const now = params.nowMs;
+    const next = createDeviceAuthToken({
+      role,
+      scopes: requestedScopes,
+      issuer: params.issuer,
+      existing,
+      now,
+      rotatedAtMs: existing ? now : undefined,
+    });
+    tokens[role] = next;
+    device.tokens = tokens;
+    clearNodePairingGenerationState(device, previousNodeGeneration);
+    return { value: next, patch: { tokens, nodeSurface: device.nodeSurface } };
+  });
 }
 
 function resolveDeviceTokenUpdateContext(params: { device: PairedDevice | null; role: string }): {
@@ -234,7 +209,7 @@ function resolveDeviceTokenUpdateContext(params: { device: PairedDevice | null; 
   if (!listApprovedPairedDeviceRoles(device).includes(role)) {
     return null;
   }
-  const tokens = cloneDevicePairingTokens(device);
+  const tokens = { ...device.tokens };
   const existing = tokens[role];
   return { device, role, tokens, existing };
 }
@@ -246,11 +221,10 @@ export function rotateDeviceTokenInWorker(params: {
   scopes?: string[];
   callerScopes?: readonly string[];
   nowMs: number;
-  baseDir?: string;
 }): RotateDeviceTokenResult {
-  const state = loadDevicePairingStateForMutation(params.nowMs, params.baseDir);
+  const state = loadDevicePairingStateForMutation(params.nowMs);
   const context = resolveDeviceTokenUpdateContext({
-    device: getPairedDeviceFromState(state, params.deviceId),
+    device: state.pairedByDeviceId[params.deviceId.trim()] ?? null,
     role: params.role,
   });
   if (!context) {
@@ -310,7 +284,7 @@ export function rotateDeviceTokenInWorker(params: {
       ? { deviceId: device.deviceId, expectedToken: existing.token }
       : undefined;
   // Retire the matching legacy cache with the token, even if the CLI loses its response.
-  persistState(state, params.baseDir, "paired", { retiredNodeToken });
+  persistState(state, undefined, "paired", { retiredNodeToken });
   return { ok: true, entry: next };
 }
 
@@ -320,11 +294,10 @@ export function revokeDeviceTokenInWorker(params: {
   role: string;
   callerScopes?: readonly string[];
   nowMs: number;
-  baseDir?: string;
 }): RevokeDeviceTokenResult {
-  const state = loadDevicePairingStateForMutation(params.nowMs, params.baseDir);
+  const state = loadDevicePairingStateForMutation(params.nowMs);
   const context = resolveDeviceTokenUpdateContext({
-    device: getPairedDeviceFromState(state, params.deviceId),
+    device: state.pairedByDeviceId[params.deviceId.trim()] ?? null,
     role: params.role,
   });
   if (!context || !context.existing) {
@@ -350,6 +323,6 @@ export function revokeDeviceTokenInWorker(params: {
   device.tokens = tokens;
   clearNodePairingGenerationState(device, previousNodeGeneration);
   state.pairedByDeviceId[device.deviceId] = device;
-  persistState(state, params.baseDir, "paired");
+  persistState(state, undefined, "paired");
   return { ok: true, entry };
 }

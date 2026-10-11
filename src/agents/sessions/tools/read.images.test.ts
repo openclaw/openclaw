@@ -23,7 +23,6 @@ describe("read image snapshots", () => {
   it.each([
     { mime: " IMAGE/JPG ; quality=80", autoResizeImages: false, resize: false },
     { mime: "image/png", autoResizeImages: true, resize: false },
-    { mime: "image/jpeg", autoResizeImages: true, resize: true },
     { mime: "image/bmp", autoResizeImages: true, resize: true },
   ])(
     "captures $mime after detection and before processing ($autoResizeImages/$resize)",

@@ -153,7 +153,7 @@ Gateway upserts a presence entry for that connection.
 
 #### Why ephemeral control-plane connections do not show up
 
-CLI commands, backend RPC clients, and probes often connect briefly. To avoid
+CLI commands, backend RPC clients, and checks often connect briefly. To avoid
 retaining that churn for the full presence TTL, clients in `cli`, `backend`,
 or `probe` mode are **not** turned into presence entries. Test-mode clients
 stay tracked because test suites use them as stand-ins for real clients.
@@ -194,7 +194,8 @@ ID matching a profile ID never combines their watched sessions, connection facts
 or viewer counts. The Gateway uses the same namespace boundary for online/activity
 timing and collaborative typing counts. Overlapping tabs share timing facts only
 within their namespace. Later activity stays separate if a raw tab gains profile
-qualification. Self exclusion follows the authenticated user's recorded
+qualification. The Online roster includes your own connected identity. Session
+viewer indicators exclude you according to the authenticated user's recorded
 qualification, using the current connection only when that user is unavailable.
 Only a displayed owner with the exact qualified profile identity is deduplicated
 from a session's live viewers. The [people card](/concepts/multi-user#people-cards) keeps online duration

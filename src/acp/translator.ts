@@ -1,4 +1,3 @@
-/** Agent Client Protocol bridge that translates ACP sessions/prompts to Gateway chat sessions. */
 import type {
   Agent,
   AgentSideConnection,
@@ -30,7 +29,6 @@ type AcpGatewayAgentOptions = AcpServerOptions & {
   sessionStore?: AcpSessionStore;
 };
 
-/** ACP Agent implementation backed by the OpenClaw Gateway and replay ledger. */
 export class AcpGatewayAgent implements Agent {
   private readonly sessionUpdates: AcpTranslatorSessionUpdates;
   private readonly promptStream: AcpTranslatorPromptStream;
@@ -55,14 +53,10 @@ export class AcpGatewayAgent implements Agent {
   ) {
     this.log = opts.verbose ? (msg: string) => process.stderr.write(`[acp] ${msg}\n`) : () => {};
     // Injected stores remain caller-owned; only the agent-created registry follows shutdown.
-    let sessionStore: AcpSessionStore;
-    if (opts.sessionStore === undefined) {
-      this.ownedSessionStore = createInMemorySessionStore();
-      sessionStore = this.ownedSessionStore;
-    } else {
-      this.ownedSessionStore = undefined;
-      sessionStore = opts.sessionStore;
-    }
+    const sessionStore =
+      opts.sessionStore === undefined
+        ? (this.ownedSessionStore = createInMemorySessionStore())
+        : opts.sessionStore;
     this.sessionUpdates = new AcpTranslatorSessionUpdates({
       connection,
       eventLedger: opts.eventLedger,
@@ -118,10 +112,11 @@ export class AcpGatewayAgent implements Agent {
   }
 
   async shutdown(): Promise<void> {
-    this.sessionUpdates.stop();
+    const updatesClosed = this.sessionUpdates.stop();
     try {
       await this.promptStream.shutdown();
     } finally {
+      await updatesClosed;
       this.ownedSessionStore?.dispose();
     }
   }

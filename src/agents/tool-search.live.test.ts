@@ -180,7 +180,7 @@ module.exports = {
           },
         },
         agents: {
-          list: [{ id: "main", default: true, workspace: state.workspaceDir }],
+          entries: { main: { workspace: state.workspaceDir } },
           defaults: {
             skipBootstrap: true,
             models: { [`openai/${modelId}`]: { params: { transport: "sse" } } },
@@ -232,29 +232,27 @@ module.exports = {
                   );
                   throw wireFailure;
                 }
-                if (typeof init?.body !== "string") {
-                  throw new Error("Live tool-search expected a JSON Responses request");
-                }
-                const request = JSON.parse(init.body) as ResponseCreateParamsStreaming;
+                // Responses bodies are pre-encoded bytes; decode without consuming init.
+                const body = await new Request(input, init).text();
+                const request = JSON.parse(body) as ResponseCreateParamsStreaming;
                 const toolNames = (request.tools ?? []).flatMap((tool) =>
                   tool.type === "function" ? [tool.name] : [],
                 );
                 requests.push({
                   toolNames,
                   toolBytes: Buffer.byteLength(JSON.stringify(request.tools ?? [])),
-                  payloadBytes: Buffer.byteLength(init.body),
+                  payloadBytes: Buffer.byteLength(body),
                 });
                 if (requests.length === 1) {
-                  firstRequestBody = init.body;
+                  firstRequestBody = body;
                 }
                 try {
                   expect(request.tool_choice === undefined || request.tool_choice === "auto").toBe(
                     true,
                   );
-                  expect(
-                    init.body.includes(DENIED),
-                    "denied decoy leaked into provider payload",
-                  ).toBe(false);
+                  expect(body.includes(DENIED), "denied decoy leaked into provider payload").toBe(
+                    false,
+                  );
                   expect(toolNames).toContain(DIRECT_ONLY);
                   const expected =
                     lane === "direct"
@@ -263,7 +261,7 @@ module.exports = {
                   expect(toolNames.toSorted()).toEqual(expected.toSorted());
                   if (requests.length === 1 && lane !== "direct") {
                     expect(
-                      init.body.includes(TARGET_ORDER_FIELD),
+                      body.includes(TARGET_ORDER_FIELD),
                       "deferred input schema leaked into the initial provider payload",
                     ).toBe(false);
                   }

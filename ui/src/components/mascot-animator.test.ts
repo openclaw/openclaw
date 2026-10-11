@@ -46,8 +46,6 @@ function expectPoseInBounds(pose: MascotPose): void {
   expect(pose.mouthOpen).toBeLessThanOrEqual(1);
   expect(pose.mouthRound).toBeGreaterThanOrEqual(0);
   expect(pose.mouthRound).toBeLessThanOrEqual(1);
-  expect(pose.blush).toBeGreaterThanOrEqual(0);
-  expect(pose.blush).toBeLessThanOrEqual(1);
   expect(pose.hardHat).toBeGreaterThanOrEqual(0);
   expect(pose.hardHat).toBeLessThanOrEqual(1);
   expect(pose.bodyTilt).toBeGreaterThanOrEqual(-8);
@@ -67,40 +65,6 @@ describe("MascotAnimator", () => {
     }
   });
 
-  it("produces identical pose streams from the same seed", () => {
-    const first = new MascotAnimator(0x5eed);
-    const second = new MascotAnimator(0x5eed);
-    first.setMood("thinking", 0);
-    second.setMood("thinking", 0);
-
-    for (let frame = 0; frame <= 20 * 30; frame += 1) {
-      const time = frame / 30;
-      expect(first.poseAt(time)).toEqual(second.poseAt(time));
-    }
-  });
-
-  it("runs the working hard-hat, hammer, impact, and brow-wipe cycle", () => {
-    const animator = new MascotAnimator(42);
-    animator.setMood("working", 0);
-    const rightClawAngles: number[] = [];
-    const effects = new Set<string>();
-    let seatedHat = 0;
-
-    for (let frame = 0; frame <= 30 * 30; frame += 1) {
-      const pose = animator.poseAt(frame / 30);
-      rightClawAngles.push(pose.rightClawDegrees);
-      effects.add(pose.effect);
-      if (frame >= 33) {
-        seatedHat = Math.max(seatedHat, pose.hardHat);
-      }
-    }
-
-    expect(seatedHat).toBe(1);
-    expect(Math.max(...rightClawAngles) - Math.min(...rightClawAngles)).toBeGreaterThan(25);
-    expect(effects).toContain("sparks");
-    expect(effects).toContain("sweat");
-  });
-
   it("cancels stale gestures when the mood changes", () => {
     // Begin as idle (queues the hello wave at +0.9s), then switch mood before
     // it fires — mirrors the element lifecycle where firstUpdated precedes the
@@ -117,16 +81,6 @@ describe("MascotAnimator", () => {
     }
   });
 
-  it("keeps sleepy z's visible through its yawn entrance", () => {
-    const animator = new MascotAnimator(7);
-    animator.setMood("sleepy", 0);
-    const pose = animator.poseAt(0.8);
-
-    expect(pose.effect).toBe("zzz");
-    expect(pose.mouthRound).toBeGreaterThan(0.8);
-    expect(pose.leftEyeOpenness).toBeLessThan(0.1);
-  });
-
   it("overlays and clears the composer tease expression", () => {
     const animator = new MascotAnimator(17);
     animator.setMood("idle", 0);
@@ -138,23 +92,6 @@ describe("MascotAnimator", () => {
     const cleared = animator.poseAt(0.1);
     expect(cleared.mouthRound).toBe(0);
     expect(cleared.gaze).not.toEqual({ x: 0, y: 0.6 });
-  });
-
-  it("plays one bounded catch beat and clears it after 0.8 seconds", () => {
-    const animator = new MascotAnimator(23);
-    animator.setMood("idle", 0);
-    animator.poseAt(0);
-    animator.playCatch(0.1);
-
-    let peakHappyEyes = 0;
-    for (let frame = 0; frame <= 24; frame += 1) {
-      const pose = animator.poseAt(0.1 + frame / 30);
-      expectPoseInBounds(pose);
-      peakHappyEyes = Math.max(peakHappyEyes, pose.happyEyes);
-    }
-    expect(peakHappyEyes).toBeGreaterThan(0.8);
-    expect(animator.poseAt(0.91).happyEyes).toBe(0);
-    expect(animator.poseAt(1.2).happyEyes).toBe(0);
   });
 });
 

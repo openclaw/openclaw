@@ -26,8 +26,7 @@ struct ChatNarration {
         // not transcript rows, but an empty update can retract a sealed item.
         guard text.isEmpty || (phase != "start" && phase != "update") else { return }
         let rawItemID = event.data["itemId"]?.value as? String ?? event.data["id"]?.value as? String
-        let itemID = rawItemID?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let key = itemID?.isEmpty == false ? itemID : nil
+        let key = ChatPayloadDecoding.trimmedNonEmptyString(rawItemID)
         if let key, history.contains(where: {
             $0.streamSegmentID == key && ($0.transcriptRunID ?? $0.streamFallback?.runId) == event.runId
         }) { return }
@@ -118,5 +117,14 @@ extension OpenClawChatViewModel {
         if !self.isApplyingRunSnapshot { self.invalidateRunSnapshots() }
         self.narration.receive(event, history: self.messages)
         self.markTimelineChanged()
+    }
+}
+
+extension OpenClawChatMessage {
+    /// Text blocks as sent, without Markdown parsing, for comparing transcript and streaming sources.
+    var rawText: String {
+        self.content.compactMap {
+            ChatMessageVisibleText.isVisibleContentType($0.type, role: self.role) ? $0.text : nil
+        }.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }

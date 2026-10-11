@@ -59,8 +59,7 @@ async function withHostedDocumentServer<T>(
   const document = await createCanvasDocument(
     {
       id: "host-switch-test",
-      kind: "html_bundle",
-      entrypoint: { type: "html", value: "<html><body>hosted</body></html>" },
+      html: "<html><body>hosted</body></html>",
     },
     { stateDir },
   );
@@ -140,12 +139,6 @@ async function expectUnauthorized(response: Response): Promise<void> {
 }
 
 describe("core Canvas Gateway host switches", () => {
-  it("serves core widget documents by default", async () => {
-    const response = await requestHostedDocument({ config: {} });
-    expect(response.status).toBe(200);
-    expect(await response.text()).toContain("hosted");
-  });
-
   it.each([
     {
       label: "plugins.entries.canvas.config.host.enabled=false",

@@ -1,16 +1,19 @@
 import { isDeepStrictEqual } from "node:util";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { composePlacementAuthorization } from "./placement-authorization.js";
 import type {
   WorkerDispatchPlacement,
   WorkerProvisioningDispatchPlacement,
 } from "./placement-dispatch-failure.js";
 import type { WorkerPlacementDispatchService } from "./placement-dispatch.js";
-import { matchesWorkerPlacementTarget } from "./placement-reclaim-contract.js";
-import type {
-  WorkerPlacementDispatchAdmission,
-  WorkerPlacementCancellationTarget,
-} from "./service-contract.js";
+import type { WorkerPlacementRecoveryAdmission } from "./placement-recovery-contract.js";
+import {
+  matchesWorkerPlacementTarget,
+  type WorkerPlacementCancellationTarget,
+} from "./placement-target.js";
+import type { WorkerPlacementDispatchAdmission } from "./service-contract.js";
+import { ensureWorkerSessionPlacement } from "./session-placement-lifecycle.js";
 
 function trackPlacementOperation<T extends WorkerDispatchPlacement | void>(
   run: (report: (placement: WorkerDispatchPlacement) => void) => Promise<T>,
@@ -28,7 +31,6 @@ function trackPlacementOperation<T extends WorkerDispatchPlacement | void>(
     };
   };
   return {
-    superseded: new AbortController(),
     currentPlacement: () => current,
     completedPlacement: () => completed,
     operation: run((placement) => {
@@ -51,7 +53,24 @@ export function coordinateWorkerPlacementDispatch(
   admitDispatch: WorkerPlacementDispatchAdmission,
   recoverInitialPlacement?: (placement: WorkerProvisioningDispatchPlacement) => Promise<void>,
   reportReconciliation?: (operation: () => Promise<void>) => Promise<void>,
+  sessionPreparation?: Pick<
+    Parameters<typeof ensureWorkerSessionPlacement>[0],
+    "placements" | "environments" | "redispatchPlacement"
+  > & { warn: (message: string) => void },
 ): WorkerPlacementDispatchService & {
+  ensurePlacement(
+    params: Omit<
+      Parameters<typeof ensureWorkerSessionPlacement>[0],
+      | "placements"
+      | "environments"
+      | "redispatchPlacement"
+      | "dispatch"
+      | "startDispatch"
+      | "waitForInitialPlacement"
+    >,
+  ): ReturnType<typeof ensureWorkerSessionPlacement>;
+  /** Wait for interrupted session work to release its turn claim. */
+  awaitTurnClaimRelease(sessionId: string, wait: () => Promise<void>): Promise<void>;
   isPlacementOperationInFlight(sessionId: string): boolean;
   hasPendingPlacementLifecycleOperation(sessionId: string): boolean;
   getPendingDeviceDispatchCount(deviceId: string, excludeSessionId?: string): number;
@@ -93,10 +112,16 @@ export function coordinateWorkerPlacementDispatch(
     };
   };
   const recoveryAdmission =
-    (wait: boolean) =>
-    async (sessionIds: readonly string[], run: () => Promise<void>): Promise<boolean> => {
-      if (!wait && sessionIds.some((key) => sessionTails.has(key) || operationsInFlight.has(key))) {
-        return false;
+    (wait: boolean): WorkerPlacementRecoveryAdmission =>
+    async (sessionIds, run) => {
+      if (sessionIds.some((key) => sessionTails.has(key) || operationsInFlight.has(key))) {
+        if (!wait || sessionIds.length !== 1) {
+          return false;
+        }
+        // Result recovery may release the claim a lifecycle operation is awaiting.
+        // Its durable result owner already serializes writes; it needs no queue handoff.
+        await run("results-only");
+        return true;
       }
       const admission = reserveSessions(sessionIds);
       // Only recovery units enter here. Environment reconciliation stays outside admission
@@ -145,13 +170,6 @@ export function coordinateWorkerPlacementDispatch(
   const pendingOperations = (sessionId: string) => [...(operationsInFlight.get(sessionId) ?? [])];
   const registerOperation = (record: PlacementOperation) => {
     const pending = operationsInFlight.get(record.request.sessionId) ?? new Set();
-    // A new lifecycle operation permanently invalidates waiters on its predecessor,
-    // even if Stop/Move/replacement finishes before that predecessor resolves.
-    for (const predecessor of pending) {
-      predecessor.superseded.abort(
-        new Error("Worker setup was superseded by another placement operation"),
-      );
-    }
     pending.add(record);
     operationsInFlight.set(record.request.sessionId, pending);
     for (const observe of setupWaiters.get(record.request.sessionId) ?? []) {
@@ -172,7 +190,56 @@ export function coordinateWorkerPlacementDispatch(
     authorize?.();
     return result;
   };
-  return {
+  const runSessionOperation = <T>(
+    sessionId: string,
+    signal: AbortSignal | undefined,
+    run: () => Promise<T>,
+  ): Promise<T> => {
+    signal?.throwIfAborted();
+    const admission = reserveSessions([sessionId]);
+    return admission.hold(
+      (async () => {
+        await racePromiseWithAbortSignal(admission.ready, signal);
+        signal?.throwIfAborted();
+        return await run();
+      })(),
+    );
+  };
+  const coordinator: ReturnType<typeof coordinateWorkerPlacementDispatch> = {
+    async ensurePlacement(params) {
+      if (!sessionPreparation) {
+        throw new Error("Session placement preparation is unavailable");
+      }
+      return await ensureWorkerSessionPlacement({
+        ...sessionPreparation,
+        ...params,
+        dispatch: coordinator.dispatch,
+        waitForInitialPlacement: coordinator.waitForInitialPlacement,
+        startDispatch: async (request, onTransition, authorize, signal) => {
+          const started = createDeferredCore<WorkerDispatchPlacement>();
+          const operation = coordinator.dispatch(
+            request,
+            (placement) => {
+              started.resolve(placement);
+              onTransition?.(placement);
+            },
+            authorize,
+            signal,
+          );
+          void operation.catch((error: unknown) => {
+            try {
+              sessionPreparation.warn("Worker setup failed: " + String(error));
+            } catch {
+              /* Reporting cannot replace durable setup failure. */
+            }
+          });
+          return await Promise.race([started.promise, operation]);
+        },
+      });
+    },
+    async awaitTurnClaimRelease(_sessionId, wait) {
+      await wait();
+    },
     isPlacementOperationInFlight: (sessionId) => operationsInFlight.has(sessionId),
     hasPendingPlacementLifecycleOperation: (sessionId) =>
       pendingOperations(sessionId).some((operation) => operation.kind !== "recovery"),
@@ -217,19 +284,9 @@ export function coordinateWorkerPlacementDispatch(
       if (pending.length ? !initialOwner || !matchesOwner(initialOwner) : !recover) {
         throw missingOwner();
       }
-      const superseded = new AbortController();
-      let recoveryFailure: { error: unknown } | undefined;
-      const waitSignal = signal ? AbortSignal.any([signal, superseded.signal]) : superseded.signal;
-      let nextOwner = createDeferredCore<PlacementOperation>();
-      const observe = (owner: PlacementOperation) => {
-        // A restart can leave a gap between provider recovery passes. Stop, Move, or
-        // replacement during that gap still permanently invalidates the held input.
-        if (pendingOperations(placement.sessionId).length !== 1 || !matchesOwner(owner)) {
-          superseded.abort(missingOwner());
-        } else {
-          nextOwner.resolve(owner);
-        }
-      };
+      let nextOwner = createDeferredCore<PlacementOperation | undefined>();
+      const observe = (owner: PlacementOperation) =>
+        nextOwner.resolve(matchesOwner(owner) ? owner : undefined);
       const waiters = setupWaiters.get(placement.sessionId) ?? new Set();
       waiters.add(observe);
       setupWaiters.set(placement.sessionId, waiters);
@@ -237,20 +294,16 @@ export function coordinateWorkerPlacementDispatch(
         if (initialOwner) {
           nextOwner.resolve(initialOwner);
         } else if (recover) {
-          // Subscribe before waking the existing guarded recovery owner. Its environment
-          // coordinator deduplicates concurrent waiters and owns subsequent provider passes.
-          void recover().catch((error: unknown) => {
-            recoveryFailure = { error };
-            superseded.abort(error);
-          });
+          void recover().catch(nextOwner.reject);
         }
         for (;;) {
-          const owner = await racePromiseWithAbortSignal(nextOwner.promise, waitSignal);
-          nextOwner = createDeferredCore<PlacementOperation>();
-          const ownerSignal = AbortSignal.any([waitSignal, owner.superseded.signal]);
-          const completed = await racePromiseWithAbortSignal(owner.operation, ownerSignal);
-          ownerSignal.throwIfAborted();
-          if (completed && matchesWorkerPlacementTarget(owner.completedPlacement(), completed)) {
+          const owner = await racePromiseWithAbortSignal(nextOwner.promise, signal);
+          if (!owner) {
+            throw missingOwner();
+          }
+          nextOwner = createDeferredCore<PlacementOperation | undefined>();
+          const completed = await racePromiseWithAbortSignal(owner.operation, signal);
+          if (completed) {
             return completed;
           }
           if (
@@ -265,8 +318,6 @@ export function coordinateWorkerPlacementDispatch(
             "Worker setup did not publish a ready placement. Inspect the setup recovery error.",
           );
         }
-      } catch (error) {
-        throw recoveryFailure ? recoveryFailure.error : error;
       } finally {
         waiters.delete(observe);
         if (waiters.size === 0) {
@@ -299,17 +350,15 @@ export function coordinateWorkerPlacementDispatch(
         );
         return await admitDispatch(
           request,
-          (signal) => {
-            signal?.throwIfAborted();
-            const admission = reserveSessions([request.sessionId]);
-            return admission.hold(
-              (async () => {
-                await racePromiseWithAbortSignal(admission.ready, signal);
-                signal?.throwIfAborted();
-                return await service.dispatch(request, report, authorize, signal);
-              })(),
-            );
-          },
+          (signal, assertSessionCurrent) =>
+            runSessionOperation(request.sessionId, signal, () =>
+              service.dispatch(
+                request,
+                report,
+                composePlacementAuthorization(authorize, () => assertSessionCurrent?.()),
+                signal,
+              ),
+            ),
           authorize,
           callerSignal,
         );
@@ -319,38 +368,22 @@ export function coordinateWorkerPlacementDispatch(
       return await operation;
     },
     forceDestroyEnvironment: async (environmentId, onCleanupError) => {
-      const knownSessionIds = new Set(service.getEnvironmentAttachedSessionIds(environmentId));
+      const sessionIds = new Set(await service.readEnvironmentSessionIds(environmentId));
+      for (const sessionId of service.getEnvironmentAttachedSessionIds(environmentId)) {
+        sessionIds.add(sessionId);
+      }
       for (const [sessionId, operations] of operationsInFlight) {
         if (
-          [...operations].some(
-            (operation) => operation.currentPlacement()?.environmentId === environmentId,
-          )
+          [...operations].some((entry) => entry.currentPlacement()?.environmentId === environmentId)
         ) {
-          knownSessionIds.add(sessionId);
+          sessionIds.add(sessionId);
         }
       }
-      const admission = reserveSessions([...knownSessionIds]);
+      const admission = reserveSessions([...sessionIds]);
       return await admission.hold(
         (async () => {
-          const sessionIds = await service.readEnvironmentSessionIds(environmentId);
-          // Durable-only owners had no attachment or live operation here at call time.
-          // Skip busy owners: intervening lifecycle writes are CAS-guarded and environment
-          // effects use environment/workspace locks; overlapping destroys are ordered by
-          // a shared phase-1 key. Waiting here while holding phase 1 can deadlock on growth.
-          const durableAdmission = reserveSessions(
-            sessionIds.filter(
-              (sessionId) =>
-                !knownSessionIds.has(sessionId) &&
-                !sessionTails.has(sessionId) &&
-                !operationsInFlight.has(sessionId),
-            ),
-          );
-          return await durableAdmission.hold(
-            (async () => {
-              await admission.ready;
-              return await service.forceDestroyEnvironment(environmentId, onCleanupError);
-            })(),
-          );
+          await admission.ready;
+          return await service.forceDestroyEnvironment(environmentId, onCleanupError);
         })(),
       );
     },
@@ -371,17 +404,15 @@ export function coordinateWorkerPlacementDispatch(
         await Promise.allSettled(predecessors.map((pending) => pending.operation));
         return await admitDispatch(
           request,
-          (signal) => {
-            signal?.throwIfAborted();
-            const admission = reserveSessions([request.sessionId]);
-            return admission.hold(
-              (async () => {
-                await racePromiseWithAbortSignal(admission.ready, signal);
-                signal?.throwIfAborted();
-                return await service.move(request, report, authorize, signal);
-              })(),
-            );
-          },
+          (signal, assertSessionCurrent) =>
+            runSessionOperation(request.sessionId, signal, () =>
+              service.move(
+                request,
+                report,
+                composePlacementAuthorization(authorize, () => assertSessionCurrent?.()),
+                signal,
+              ),
+            ),
           authorize,
         );
       }, onTransition);
@@ -417,15 +448,7 @@ export function coordinateWorkerPlacementDispatch(
           request,
           authorize,
           beforeDrain,
-          (run) => {
-            const admission = reserveSessions([request.sessionId]);
-            return admission.hold(
-              (async () => {
-                await admission.ready;
-                return await run();
-              })(),
-            );
-          },
+          (run) => runSessionOperation(request.sessionId, undefined, run),
           operations.length
             ? {
                 isCurrent: isPending,
@@ -484,10 +507,12 @@ export function coordinateWorkerPlacementDispatch(
           },
           report,
           (runRecovery) =>
-            admitDispatch(placement, async (signal) => {
+            admitDispatch(placement, async (signal, assertSessionCurrent) => {
               try {
                 signal?.throwIfAborted();
+                assertSessionCurrent?.();
                 const recovered = await runRecovery(signal);
+                assertSessionCurrent?.();
                 if (providerPending) {
                   foreground.resolve(recovered);
                 }
@@ -517,4 +542,5 @@ export function coordinateWorkerPlacementDispatch(
       return foreground.promise;
     },
   };
+  return coordinator;
 }

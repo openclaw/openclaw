@@ -1,6 +1,16 @@
 import type { SubagentRunReadRecord } from "./subagent-registry-read.types.js";
 import { latestSubagentRun, recordLatestSubagentRun } from "./subagent-run-generation.js";
 
+const NO_DESCENDANTS: readonly never[] = Object.freeze([]);
+
+function updateIndex<T>(index: Map<string, T>, key: string, value: T | undefined): void {
+  if (value === undefined) {
+    index.delete(key);
+  } else {
+    index.set(key, value);
+  }
+}
+
 export function resolveControllerSessionKey(
   entry: Pick<SubagentRunReadRecord, "controllerSessionKey" | "requesterSessionKey">,
 ): string {
@@ -19,6 +29,8 @@ export function buildSubagentRunReadTopology<T extends SubagentRunReadRecord>(pa
   const runsByControllerSessionKey = new Map<string, T[]>();
   const swarmRunsByRequesterSessionKey = new Map<string, T[]>();
   const latestRunByRequesterAndChildSessionKey = new Map<string, Map<string, T>>();
+  const descendantsBySessionKey = new Map<string, readonly T[]>();
+  let revision = {};
   const snapshotRunsByChildSessionKey = new Map<string, T[]>();
   const memoryRunsByChildSessionKey = new Map<string, T[]>();
   const memoryChildKeys = new Map<string, string>();
@@ -29,34 +41,43 @@ export function buildSubagentRunReadTopology<T extends SubagentRunReadRecord>(pa
     entry.collect && entry.groupId ? (entry.swarmRequesterSessionKey ?? "") : "",
     entry.requesterSessionKey,
   ];
-  const updateBucket = (
-    index: Map<string, T[]>,
-    key: string,
-    runId: string,
-    entry?: T,
-    replace = true,
-  ) => {
+  const positionsByIndex = new Map<Map<string, T[]>, Map<string, number>>();
+  const updateBucket = (index: Map<string, T[]>, key: string, runId: string, entry?: T) => {
     if (!key) {
       return;
     }
     const rows = index.get(key) ?? [];
-    const position = replace ? rows.findIndex((row) => row.runId === runId) : -1;
-    if (position >= 0) {
-      rows.splice(position, 1, ...(entry ? [entry] : []));
+    let positions = positionsByIndex.get(index);
+    if (!positions) {
+      positions = new Map();
+      positionsByIndex.set(index, positions);
+    }
+    const position = positions.get(runId);
+    if (position !== undefined) {
+      if (entry) {
+        rows[position] = entry;
+      } else {
+        rows.splice(position, 1);
+        positions.delete(runId);
+        // Preserve published group order and repair only positions shifted by removal.
+        for (let next = position; next < rows.length; next++) {
+          const row = rows[next];
+          if (row) {
+            positions.set(row.runId, next);
+          }
+        }
+      }
     } else if (entry) {
+      positions.set(runId, rows.length);
       rows.push(entry);
     }
-    if (rows.length) {
-      index.set(key, rows);
-    } else {
-      index.delete(key);
-    }
+    updateIndex(index, key, rows.length ? rows : undefined);
   };
 
   for (const entry of params.inMemoryRuns ?? []) {
     const childSessionKey = entry.childSessionKey.trim();
     memoryChildKeys.set(entry.runId, childSessionKey);
-    updateBucket(memoryRunsByChildSessionKey, childSessionKey, entry.runId, entry, false);
+    updateBucket(memoryRunsByChildSessionKey, childSessionKey, entry.runId, entry);
     if (!childSessionKey) {
       continue;
     }
@@ -71,6 +92,8 @@ export function buildSubagentRunReadTopology<T extends SubagentRunReadRecord>(pa
     changes: ReadonlyMap<string, T | undefined>,
     inMemoryChanges: ReadonlyMap<string, T | undefined>,
   ): void {
+    descendantsBySessionKey.clear();
+    revision = {};
     const affected = new Map<string, Set<string>>();
     const touch = (child: string) => {
       if (child && !affected.has(child)) {
@@ -98,13 +121,7 @@ export function buildSubagentRunReadTopology<T extends SubagentRunReadRecord>(pa
         if (previous[position] && previous[position] !== next[position]) {
           updateBucket(index, previous[position], runId);
         }
-        updateBucket(
-          index,
-          next[position] ?? "",
-          runId,
-          entry,
-          previous[position] === next[position],
-        );
+        updateBucket(index, next[position] ?? "", runId, entry);
       });
       if (entry) {
         // Initialization reads the caller's Map; only patches write new facts.
@@ -125,12 +142,8 @@ export function buildSubagentRunReadTopology<T extends SubagentRunReadRecord>(pa
       if (previous !== next) {
         updateBucket(memoryRunsByChildSessionKey, previous, runId);
       }
-      updateBucket(memoryRunsByChildSessionKey, next, runId, entry, previous === next);
-      if (entry) {
-        memoryChildKeys.set(runId, next);
-      } else {
-        memoryChildKeys.delete(runId);
-      }
+      updateBucket(memoryRunsByChildSessionKey, next, runId, entry);
+      updateIndex(memoryChildKeys, runId, entry ? next : undefined);
     }
     for (const [child, previousRequesters] of affected) {
       const rows = snapshotRunsByChildSessionKey.get(child) ?? [];
@@ -149,18 +162,10 @@ export function buildSubagentRunReadTopology<T extends SubagentRunReadRecord>(pa
         [inMemoryDisplayByChildSessionKey, memory],
         [latestRunsByChildSessionKey, latest],
       ] as const) {
-        if (entry) {
-          index.set(child, entry);
-        } else {
-          index.delete(child);
-        }
+        updateIndex(index, child, entry);
       }
       const candidates = [...new Set([...rows, ...(memory ? [memory] : [])])];
-      if (candidates.length) {
-        runsByChildSessionKey.set(child, candidates);
-      } else {
-        runsByChildSessionKey.delete(child);
-      }
+      updateIndex(runsByChildSessionKey, child, candidates.length ? candidates : undefined);
       const byRequester = new Map<string, T>();
       for (const row of rows) {
         if (row.requesterSessionKey) {
@@ -171,16 +176,12 @@ export function buildSubagentRunReadTopology<T extends SubagentRunReadRecord>(pa
         const children =
           latestRunByRequesterAndChildSessionKey.get(requester) ?? new Map<string, T>();
         const entry = byRequester.get(requester);
-        if (entry) {
-          children.set(child, entry);
-        } else {
-          children.delete(child);
-        }
-        if (children.size) {
-          latestRunByRequesterAndChildSessionKey.set(requester, children);
-        } else {
-          latestRunByRequesterAndChildSessionKey.delete(requester);
-        }
+        updateIndex(children, child, entry);
+        updateIndex(
+          latestRunByRequesterAndChildSessionKey,
+          requester,
+          children.size ? children : undefined,
+        );
       }
     }
   }
@@ -190,14 +191,47 @@ export function buildSubagentRunReadTopology<T extends SubagentRunReadRecord>(pa
       runsByChildSessionKey.set(key, [entry]);
     }
   }
+  function getDescendantRuns(rootSessionKey: string): readonly T[] {
+    const root = rootSessionKey.trim();
+    if (!root || !latestRunByRequesterAndChildSessionKey.has(root)) {
+      return NO_DESCENDANTS;
+    }
+    const cached = descendantsBySessionKey.get(root);
+    if (cached) {
+      return cached;
+    }
+    const descendants: T[] = [];
+    const pending = [root];
+    const visited = new Set(pending);
+    for (const requester of pending) {
+      for (const [childSessionKey, entry] of latestRunByRequesterAndChildSessionKey.get(
+        requester,
+      ) ?? []) {
+        // Superseded generations cannot keep their former parent's descendants alive.
+        if (latestRunsByChildSessionKey.get(childSessionKey) !== entry) {
+          continue;
+        }
+        descendants.push(entry);
+        if (!visited.has(childSessionKey)) {
+          visited.add(childSessionKey);
+          pending.push(childSessionKey);
+        }
+      }
+    }
+    descendantsBySessionKey.set(root, Object.freeze(descendants));
+    return descendants;
+  }
   return {
     inputs,
+    get revision() {
+      return revision;
+    },
+    getDescendantRuns,
     inMemoryDisplayByChildSessionKey,
     runsByChildSessionKey,
     latestRunsByChildSessionKey,
     runsByControllerSessionKey,
     swarmRunsByRequesterSessionKey,
-    latestRunByRequesterAndChildSessionKey,
     patch,
   };
 }

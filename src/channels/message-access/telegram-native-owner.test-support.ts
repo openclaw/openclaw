@@ -15,7 +15,8 @@ import {
 import type { PluginRuntime } from "../../plugins/runtime/types.js";
 import type { PluginCommandContext } from "../../plugins/types.js";
 import { linkUserChannelIdentity } from "../../state/user-channel-identities.js";
-import { ensureProfileForEmail, setUserProfileRole } from "../../state/user-profiles.js";
+import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
+import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { loadBundledPluginFacade } from "../../test-utils/bundled-plugin-public-surface.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import {
@@ -55,7 +56,7 @@ const { createTelegramNativeCommandTestDriver } = await loadBundledPluginFacade<
   createTelegramNativeCommandTestDriver: (options: {
     cfg: OpenClawConfig;
     runtime: PluginRuntime;
-  }) => TelegramNativeCommandTestDriver;
+  }) => Promise<TelegramNativeCommandTestDriver>;
 }>({
   pluginId: "telegram",
   artifactBasename: "native-command.test-support.js",
@@ -80,7 +81,7 @@ export async function withTelegramNativeOwners(
       null,
       "default",
     );
-    const fixture = createFixture(asserted, state);
+    const fixture = await createFixture(asserted, state);
     try {
       await run(fixture);
     } finally {
@@ -90,7 +91,7 @@ export async function withTelegramNativeOwners(
   });
 }
 
-function createFixture(asserted: boolean, state: OpenClawTestState) {
+async function createFixture(asserted: boolean, state: OpenClawTestState) {
   const cfg: OpenClawConfig = {
     commands: { ownerAllowFrom: ["telegram:999999"] },
     channels: { telegram: { dmPolicy: "pairing", allowFrom: [] } },
@@ -170,7 +171,7 @@ function createFixture(asserted: boolean, state: OpenClawTestState) {
       },
     },
   });
-  const driver = createTelegramNativeCommandTestDriver({ cfg, runtime });
+  const driver = await createTelegramNativeCommandTestDriver({ cfg, runtime });
   return {
     state,
     cfg,

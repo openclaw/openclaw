@@ -15,8 +15,6 @@ if [[ -z "$TRUSTED_HARNESS_DIR" || ! -d "$TRUSTED_HARNESS_DIR" ]]; then
 fi
 TRUSTED_HARNESS_DIR="$(cd "$TRUSTED_HARNESS_DIR" && pwd)"
 source "$TRUSTED_HARNESS_DIR/scripts/lib/live-docker-auth.sh"
-source "$TRUSTED_HARNESS_DIR/scripts/lib/frozen-target-compat.sh"
-openclaw_resolve_frozen_live_cli_backend_package_mode "$ROOT_DIR"
 IMAGE_NAME="${OPENCLAW_IMAGE:-openclaw:local}"
 LIVE_IMAGE_NAME="${OPENCLAW_LIVE_IMAGE:-${IMAGE_NAME}-live}"
 CONFIG_DIR="${OPENCLAW_CONFIG_DIR:-$HOME/.openclaw}"
@@ -54,11 +52,7 @@ tmp_dir="$(mktemp -d)"
 trusted_scripts_dir="${OPENCLAW_LIVE_DOCKER_SCRIPTS_DIR:-/src/scripts}"
 source "$trusted_scripts_dir/lib/live-docker-stage.sh"
 openclaw_live_stage_mounted_auth
-openclaw_live_stage_source_tree "$tmp_dir"
-openclaw_live_stage_node_modules "$tmp_dir"
-openclaw_live_link_runtime_tree "$tmp_dir"
-openclaw_live_stage_state_dir "$tmp_dir/.openclaw-state"
-openclaw_live_prepare_staged_config
+openclaw_live_stage_workspace "$tmp_dir"
 cd "$tmp_dir"
 openclaw_live_prepare_cli_backend_docker_packages \
   "${OPENCLAW_LIVE_GATEWAY_PROVIDERS:-}" \
@@ -83,10 +77,6 @@ echo "==> Profile file: $PROFILE_STATUS"
 echo "==> External auth dirs: ${AUTH_DIRS_CSV:-none}"
 echo "==> External auth files: ${AUTH_FILES_CSV:-none}"
 DOCKER_RUN_ARGS=()
-FROZEN_TARGET_DOCKER_ENV=()
-if [[ "${OPENCLAW_FROZEN_TARGET_LIVE_CLI_BACKEND_PACKAGE_MODE:-current}" == "legacy" ]]; then
-  FROZEN_TARGET_DOCKER_ENV+=( -e "OPENCLAW_FROZEN_TARGET_LIVE_CLI_BACKEND_PACKAGE_MODE=legacy" )
-fi
 openclaw_live_init_docker_run_args DOCKER_RUN_ARGS "${OPENCLAW_LIVE_GATEWAY_DOCKER_RUN_TIMEOUT:-2100s}"
 DOCKER_RUN_ARGS+=(--rm -t \
   -u "$DOCKER_USER" \
@@ -126,7 +116,6 @@ DOCKER_RUN_ARGS+=(--rm -t \
   -e OPENCLAW_LIVE_GATEWAY_STEP_TIMEOUT_MS="$LIVE_GATEWAY_STEP_TIMEOUT_MS" \
   -e OPENCLAW_LIVE_GATEWAY_MODEL_TIMEOUT_MS="$LIVE_GATEWAY_MODEL_TIMEOUT_MS" \
   -e OPENCLAW_VITEST_FS_MODULE_CACHE=0)
-openclaw_live_append_array DOCKER_RUN_ARGS FROZEN_TARGET_DOCKER_ENV
 openclaw_live_append_array DOCKER_RUN_ARGS DOCKER_HOME_MOUNT
 openclaw_live_append_array DOCKER_RUN_ARGS DOCKER_TRUSTED_HARNESS_MOUNT
 DOCKER_RUN_ARGS+=(\

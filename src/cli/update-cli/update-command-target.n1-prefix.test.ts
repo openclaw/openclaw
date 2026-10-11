@@ -1,10 +1,18 @@
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { resolveNodeRuntimeInfo } from "../../daemon/runtime-paths.js";
+import {
+  buildRuntimeProbeEnv,
+  resolveBunRuntimeInfo,
+  resolveNodeRuntimeInfo,
+} from "../../daemon/runtime-paths.js";
+import { pkgQueryResult } from "../../infra/update-freebsd-pkg-ownership.test-support.js";
+import { withMockedPlatform } from "../../test-utils/vitest-spies.js";
 import { preparePackageUpdateRuntime } from "./update-command-node-runtime.js";
 
 const state = vi.hoisted(() => ({
   calls: [] as string[][],
+  manager: "npm" as "npm" | "bun",
+  sqliteText: true,
 }));
 vi.mock("../../infra/update-global.js", async (original) => {
   const actual = await original<typeof import("../../infra/update-global.js")>();
@@ -13,7 +21,9 @@ vi.mock("../../infra/update-global.js", async (original) => {
     createGlobalInstallEnv: async () => ({}),
   };
 });
-vi.mock("../../process/exec.js", () => ({
+vi.mock("../../process/exec.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../process/exec.js")>()),
+  runCommandBuffered: async () => pkgQueryResult(),
   runCommandWithTimeout: async (argv: string[]) => {
     state.calls.push(argv);
     if (argv.includes("--version")) {
@@ -31,7 +41,7 @@ vi.mock("./shared.js", async (importOriginal) => ({
   normalizeTag: () => null,
   readPackageName: async () => "openclaw",
   readPackageVersion: async () => "2026.9.4",
-  resolveGlobalManager: async () => "npm",
+  resolveGlobalManager: async () => state.manager,
   resolveNodeRunner: () => "/current/node",
   resolveTargetVersion: vi.fn(),
   UpdatePreMutationError: class extends Error {},
@@ -53,7 +63,29 @@ vi.mock("../../infra/update-check.js", async (original) => ({
 vi.mock("../../infra/update-check-package-target.js", () => ({
   fetchNpmPackageTargetStatus: async () => ({ version: "2027.1.0", nodeEngine: ">=26.1.0" }),
 }));
-vi.mock("../../daemon/runtime-paths.js", () => ({ resolveNodeRuntimeInfo: vi.fn() }));
+vi.mock("../../../node-sqlite.mjs", async (original) => ({
+  ...(await original<typeof import("../../../node-sqlite.mjs")>()),
+  detectCurrentSqliteCapabilities: async () => ({
+    available: true,
+    version: "3.53.4",
+    text: state.sqliteText,
+    blob: true,
+    json: true,
+  }),
+}));
+vi.mock("../../daemon/runtime-paths.js", async (original) => ({
+  ...(await original<typeof import("../../daemon/runtime-paths.js")>()),
+  resolveBunRuntimeInfo: vi.fn(),
+  resolveNodeRuntimeInfo: vi.fn(),
+}));
+vi.mock("../../infra/package-update-activation-paths.js", async (original) => ({
+  ...(await original<typeof import("../../infra/package-update-activation-paths.js")>()),
+  capturePackageActivationRuntime: vi.fn((kind, executable) => ({
+    kind,
+    path: executable,
+    identity: `fixture:${executable}`,
+  })),
+}));
 vi.mock("./update-command-node-runtime-resolution.js", () => ({
   resolveTargetNodeRuntime: async () => undefined,
 }));
@@ -61,7 +93,18 @@ import { resolveUpdateCommandTarget } from "./update-command-target.js";
 
 beforeEach(() => {
   state.calls = [];
+  state.manager = "npm";
+  state.sqliteText = true;
   vi.mocked(resolveNodeRuntimeInfo).mockReset();
+  vi.mocked(resolveBunRuntimeInfo)
+    .mockReset()
+    .mockResolvedValue({
+      status: "supported",
+      version: "1.4.3",
+      sqliteVersion: "3.53.4",
+      nodeSharedSqlite: false,
+      sqliteProbe: { available: true, version: "3.53.4", text: true, blob: true, json: true },
+    });
 });
 afterEach(() => vi.unstubAllGlobals());
 const rootB = path.resolve(".n1-fixture/B/node_modules/openclaw");
@@ -84,26 +127,42 @@ async function resolve(servicePlan: {
     typeof resolveUpdateCommandTarget
   >[1];
   const executor = { enter: vi.fn(async () => ({ assertCurrent: vi.fn() })) };
-  const target = await resolveUpdateCommandTarget(
-    { json: true, dryRun: true },
-    recovery,
-    undefined,
-    prepared,
-    executor,
-    1000,
+  const target = await withMockedPlatform("linux", () =>
+    resolveUpdateCommandTarget(
+      { json: true, dryRun: true },
+      recovery,
+      undefined,
+      prepared,
+      executor,
+      1000,
+    ),
   );
   if (!target) {
     throw new Error("Expected an admitted update target");
   }
   return target;
 }
-it("keeps writable rebind target B without a recognized service Node instead of PATH npm A", async () => {
-  const selected = await resolve({ rootRedirect: null, serviceRoot: rootA });
-  expect(selected.packageInstallTarget?.packageRoot).toBe(rootB);
-  expect(selected.packageInstallTarget?.directNodeModulesRoot).toBe(true);
-  expect(state.calls.some((argv) => argv[1] === "root")).toBe(false);
-  expect(selected.packageUpdateNodeRunner).toBe(process.versions.bun ? undefined : "/current/node");
-});
+it.each(["writable rebind", "protected redirect", "unowned project"] as const)(
+  "selects the package root for a %s",
+  async (kind) => {
+    const selected = await resolve({
+      rootRedirect: kind === "protected redirect" ? { root: rootA, previousRoot: rootB } : null,
+      ...(kind === "writable rebind" ? { serviceRoot: rootA } : {}),
+    });
+    expect(selected.packageInstallTarget?.packageRoot).toBe(
+      kind === "writable rebind" ? rootB : rootA,
+    );
+    if (kind !== "protected redirect") {
+      expect(state.calls.some((argv) => argv[1] === "root")).toBe(kind === "unowned project");
+    }
+    if (kind === "writable rebind") {
+      expect(selected.packageInstallTarget?.directNodeModulesRoot).toBe(true);
+      expect(selected.packageUpdateNodeRunner).toBe(
+        process.versions.bun ? undefined : "/current/node",
+      );
+    }
+  },
+);
 it("rejects a Bun-driven split-root update when the recorded service Node cannot run the target", async () => {
   vi.stubGlobal("process", {
     ...process,
@@ -142,7 +201,7 @@ it("rejects a Bun-driven split-root update when the recorded service Node cannot
   expect(result).toMatchObject({
     ok: false,
     error: expect.stringContaining(
-      "requires Node >=26.1.0; selected runtime is Node 24.16.0 at /old/node",
+      "Required: openclaw@2027.1.0 Node >=26.1.0; detected: Node 24.16.0 at /old/node",
     ),
     failureFacts: [{ check: "node-runtime", code: "node-runtime-preflight" }],
   });
@@ -150,14 +209,64 @@ it("rejects a Bun-driven split-root update when the recorded service Node cannot
     "/old/node",
   ]);
 });
-it("preserves protected-definition redirect to A", async () => {
-  expect(
-    (await resolve({ rootRedirect: { root: rootA, previousRoot: rootB } })).packageInstallTarget
-      ?.packageRoot,
-  ).toBe(rootA);
-});
-it("does not reinterpret an unowned direct project as a selected global target", async () => {
-  const selected = await resolve({ rootRedirect: null });
-  expect(selected.packageInstallTarget?.packageRoot).toBe(rootA);
-  expect(state.calls.some((argv) => argv[1] === "root")).toBe(true);
-});
+it.each([
+  { node: "24.16.0", sqliteText: true, admitted: false },
+  { node: "26.1.0", sqliteText: false, admitted: false },
+  { node: "26.1.0", sqliteText: true, admitted: true },
+])(
+  "checks updater Node $node (SQLite text=$sqliteText) before a Bun service-root update",
+  async ({ node, sqliteText, admitted }) => {
+    vi.stubGlobal(
+      "process",
+      Object.create(process, {
+        execPath: { value: "/current/node" },
+        versions: { value: { ...process.versions, node, bun: undefined } },
+      }),
+    );
+    state.sqliteText = sqliteText;
+    state.manager = "bun";
+    const serviceRoot = path.resolve(".n1-fixture/service/install/global/node_modules/openclaw");
+    const bun = "/service/bin/bun";
+    const target = await resolve({
+      rootRedirect: { root: serviceRoot, previousRoot: rootB },
+      nodeRunner: bun,
+    });
+    expect(target.root).toBe(serviceRoot);
+    expect(target.packageUpdateNodeRunner).toBe(bun);
+    expect(target.packageInstallTarget).toMatchObject({
+      manager: "bun",
+      command: bun,
+      packageRoot: serviceRoot,
+    });
+    const result = await preparePackageUpdateRuntime({
+      ...target,
+      shouldRestart: true,
+      opts: { json: true },
+      executor: { enter: async () => ({ assertCurrent: vi.fn() }) },
+      timeoutMs: 1000,
+    });
+    expect(result).toMatchObject(
+      admitted
+        ? {
+            ok: true,
+            value: {
+              nodeRunner: bun,
+              activationRuntime: { kind: "bun", path: bun, identity: `fixture:${bun}` },
+            },
+          }
+        : {
+            ok: false,
+            error: expect.stringContaining(
+              `Required: openclaw@2027.1.0 Node >=26.1.0; detected: Node ${node}`,
+            ),
+            failureFacts: [{ check: "node-runtime", code: "node-runtime-preflight" }],
+          },
+    );
+    expect(resolveBunRuntimeInfo).toHaveBeenCalledWith(
+      bun,
+      undefined,
+      buildRuntimeProbeEnv(process.env),
+    );
+    expect(resolveNodeRuntimeInfo).not.toHaveBeenCalled();
+  },
+);

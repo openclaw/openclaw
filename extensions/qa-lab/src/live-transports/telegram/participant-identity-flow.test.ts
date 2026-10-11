@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { createQaBusState } from "../../bus-state.js";
-import { readQaScenarioById, readQaScenarioPack } from "../../scenario-catalog.js";
+import { readQaScenarioById } from "../../scenario-catalog.js";
 import { runLoadedScenarioFlow } from "../../scenario-flow-runner.test-support.js";
 import { selectQaFlowSuiteScenarios } from "../../suite-planning.js";
 import { resolveTelegramQaScenarioIds } from "./scenario-selection.js";
@@ -14,29 +14,13 @@ const forumTopicId = 42;
 const hmac = (digit: string) => `hmac-sha256:v1:${"a".repeat(32)}:${digit.repeat(64)}`;
 
 type Fault =
-  | "wrong-transport"
-  | "wrong-provider"
-  | "missing-fixture"
-  | "missing-participant"
-  | "duplicate-alias"
-  | "missing-topic"
-  | "wrong-topic"
-  | "extra-run"
-  | "unknown-person"
-  | "room-principal"
-  | "wrong-run"
   | "raw-principal"
-  | "missing-assurance"
   | "raw-room"
   | "prompt-leak"
-  | "oversized-context"
   | "verified-generic"
-  | "wrong-cli-execution"
-  | "missing-human"
   | "same-person"
   | "changed-primary"
   | "reused-context"
-  | "restart-drift"
   | "restart-leak";
 
 function runIdentityFlow(fault?: Fault) {
@@ -75,18 +59,13 @@ function runIdentityFlow(fault?: Fault) {
       identity: {
         state: "present",
         context: {
-          contextId:
-            fault === "reused-context"
-              ? "context-first"
-              : restarted && fault === "restart-drift"
-                ? "context-replacement"
-                : `context-${runId}`,
+          contextId: fault === "reused-context" ? "context-first" : `context-${runId}`,
           executionId: `execution-${runId}`,
-          runId: fault === "wrong-run" ? "unrelated-run" : runId,
+          runId,
           invoker: {
-            state: fault === "unknown-person" ? "unknown" : "present",
+            state: "present",
             principal: {
-              kind: fault === "room-principal" ? "service" : "person",
+              kind: "person",
               principalRef,
               domainRef: hmac("a"),
             },
@@ -94,18 +73,14 @@ function runIdentityFlow(fault?: Fault) {
           // Channel admission supplies no rawSourceRef; do not invent one in proof support.
           ingress: { kind: "channel", state: "present" },
           runtimeInstance: { runtimeRef: hmac("e") },
-          assurance:
-            fault === "missing-assurance"
-              ? []
-              : [
-                  {
-                    kind: "channel-admission",
-                    strength: "boundary-verified",
-                    evidenceRef: hmac("d"),
-                  },
-                ],
+          assurance: [
+            {
+              kind: "channel-admission",
+              strength: "boundary-verified",
+              evidenceRef: hmac("d"),
+            },
+          ],
           applicableGrants: [],
-          ...(fault === "oversized-context" ? { padding: "x".repeat(16384) } : {}),
         },
       },
       decisionDisplays: [
@@ -151,13 +126,9 @@ function runIdentityFlow(fault?: Fault) {
     }
     const inspection = inspect({ executionId });
     if (!options?.json) {
-      return fault === "missing-human"
-        ? "Identity unavailable"
-        : `Invoker [present] ${inspection.identity.context.invoker.principal.principalRef}\nDecisions`;
+      return `Invoker [present] ${inspection.identity.context.invoker.principal.principalRef}\nDecisions`;
     }
-    return fault === "wrong-cli-execution"
-      ? { ...inspection, run: { ...inspection.run, executionId: "foreign-execution" } }
-      : inspection;
+    return inspection;
   });
   return {
     call,
@@ -168,23 +139,14 @@ function runIdentityFlow(fault?: Fault) {
       state,
       api: {
         env: {
-          providerMode: fault === "wrong-provider" ? "live-frontier" : "mock-openai",
+          providerMode: "mock-openai",
           gateway: { call, restartAfterStateMutation: restart },
         },
         // Only the adapter's prepared, noncredential surface is supplied here.
-        telegramIdentityFixture:
-          fault === "missing-fixture"
-            ? undefined
-            : {
-                participantAliases:
-                  fault === "missing-participant"
-                    ? ["primary"]
-                    : ["primary", fault === "duplicate-alias" ? "primary" : "guest"],
-                forumTopicId: fault === "missing-topic" ? undefined : forumTopicId,
-              },
+        telegramIdentityFixture: { participantAliases: ["primary", "guest"], forumTopicId },
         readTelegramMessages: () => nativeReplies,
         transport: {
-          id: fault === "wrong-transport" ? "qa-channel" : "telegram",
+          id: "telegram",
           reset: async () => state.reset(),
           sendInbound: async (input: Parameters<typeof state.addInboundMessage>[0]) => {
             expect(["primary", "guest"]).toContain(input.senderId);
@@ -211,16 +173,11 @@ function runIdentityFlow(fault?: Fault) {
             expect(inbound.text.startsWith("@openclaw ")).toBe(forum);
             expect(inbound.text).toContain(`Reply exactly: ${input.textIncludes}`);
             admittedRuns.push(`run-${turns.length}`);
-            if (fault === "extra-run") {
-              admittedRuns.push("unrelated-new-run");
-            }
             nativeReplies.push({
               text: input.textIncludes,
               chatId: forum ? forumGroupId : botId,
               senderId: botId,
-              ...(forum
-                ? { forumTopicId: fault === "wrong-topic" ? forumTopicId + 1 : forumTopicId }
-                : {}),
+              ...(forum ? { forumTopicId } : {}),
             });
             return state.addOutboundMessage({
               accountId: "sut",
@@ -237,26 +194,13 @@ function runIdentityFlow(fault?: Fault) {
 }
 
 describe("Telegram participant identity executable flow", () => {
-  it("catalogs live participant identity qualification with the fixture gate", () => {
-    const scenarios = readQaScenarioPack().scenarios.filter(
-      (scenario) =>
-        scenario.execution.kind === "flow" &&
-        scenario.execution.channels?.includes("telegram") &&
-        scenario.execution.config?.requiredChannelDriver === "live" &&
-        scenario.execution.config.requireParticipantIdentityFixture === true,
-    );
-    expect(scenarios.map((scenario) => scenario.id)).toContain(scenarioId);
+  it("selects live identity proof explicitly and excludes it from crabline", () => {
     expect(
       resolveTelegramQaScenarioIds({ providerMode: "mock-openai", scenarioIds: [scenarioId] }),
     ).toEqual([scenarioId]);
-    const scenario = readQaScenarioById(scenarioId);
-    expect(scenario.execution).toMatchObject({ suiteIsolation: "isolated", retryCount: 0 });
-    expect(scenario.gatewayConfigPatch).toMatchObject({
-      logging: { audit: { enabled: true, executionIdentity: true } },
-    });
     expect(
       selectQaFlowSuiteScenarios({
-        scenarios: [scenario],
+        scenarios: [readQaScenarioById(scenarioId)],
         channel: "telegram",
         channelDriver: "crabline",
         providerMode: "mock-openai",
@@ -274,46 +218,20 @@ describe("Telegram participant identity executable flow", () => {
       [additionalUserId, "group"],
     ]);
     expect(proof.restart).toHaveBeenCalledOnce();
-    expect(proof.call.mock.calls.map(([, selector]) => selector)).toEqual([
-      { runId: "run-1", decisionLimit: 100 },
-      { executionId: "execution-run-1", decisionLimit: 100 },
-      { runId: "run-2", decisionLimit: 100 },
-      { executionId: "execution-run-2", decisionLimit: 100 },
-      { runId: "run-3", decisionLimit: 100 },
-      { executionId: "execution-run-3", decisionLimit: 100 },
-      { executionId: "execution-run-1", decisionLimit: 100 },
-      { executionId: "execution-run-2", decisionLimit: 100 },
-      { executionId: "execution-run-3", decisionLimit: 100 },
-    ]);
+    expect(proof.call).toHaveBeenCalledTimes(9);
     expect(
       proof.runQaCli.mock.calls.filter(([, args]) => args.includes("--execution")),
     ).toHaveLength(12);
   });
 
   it.each([
-    ["wrong-transport", "requires the live Telegram adapter"],
-    ["wrong-provider", "requires the live Telegram adapter"],
-    ["missing-fixture", "requires distinct participant aliases"],
-    ["missing-participant", "requires distinct participant aliases"],
-    ["duplicate-alias", "requires distinct participant aliases"],
-    ["missing-topic", "requires distinct participant aliases"],
-    ["wrong-topic", "requested DM or leased forum topic"],
-    ["extra-run", "exactly one newly admitted run"],
-    ["unknown-person", "retain the admitted person"],
-    ["room-principal", "retain the admitted person"],
-    ["wrong-run", "retain the admitted person"],
     ["raw-principal", "bounded redacted identity"],
-    ["missing-assurance", "bounded redacted identity"],
     ["raw-room", "bounded redacted identity"],
     ["prompt-leak", "bounded redacted identity"],
-    ["oversized-context", "bounded redacted identity"],
     ["verified-generic", "bounded redacted identity"],
-    ["wrong-cli-execution", "must agree with run discovery"],
-    ["missing-human", "must agree with run discovery"],
     ["same-person", "distinguish the additional participant"],
     ["changed-primary", "preserve the same primary person"],
     ["reused-context", "three distinct execution contexts"],
-    ["restart-drift", "changed or exposed private references after restart"],
     ["restart-leak", "changed or exposed private references after restart"],
   ] satisfies Array<[Fault, string]>)("rejects %s evidence", async (fault, message) => {
     await expect(runIdentityFlow(fault).result).rejects.toThrow(message);

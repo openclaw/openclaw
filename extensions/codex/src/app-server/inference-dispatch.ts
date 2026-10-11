@@ -2,7 +2,6 @@ import { isUtf8 } from "node:buffer";
 import type { IncomingHttpHeaders, IncomingMessage } from "node:http";
 import { promisify } from "node:util";
 import { zstdCompress, zstdDecompress } from "node:zlib";
-import type { RawData } from "openclaw/plugin-sdk/websocket-runtime";
 import type { CodexAppServerClient } from "./client.js";
 import type { createCodexInferenceContext } from "./inference-context.js";
 import { readCodexInferenceMetadata, type CodexInferenceMetadata } from "./inference-metadata.js";
@@ -121,13 +120,13 @@ export function createCodexInferenceModelBinding(params: {
     ) {
       throw new CodexInferenceAuthorizationError("owner");
     }
-    if (path === "/responses" && metadata.requestKind === "prewarm" && body.generate === false) {
-      return { assertCurrent: assertClient, release: () => {} };
-    }
     const memory =
       metadata.threadSource === "memory_consolidation" &&
       (metadata.requestKind === "memory" || metadata.subagent === "memory_consolidation");
-    if (memory && params.memoryConfigured() && path === "/responses") {
+    if (
+      (path === "/responses" && metadata.requestKind === "prewarm" && body.generate === false) ||
+      (memory && params.memoryConfigured() && path === "/responses")
+    ) {
       return { assertCurrent: assertClient, release: () => {} };
     }
     const parentExecution = reviewer || classifier || metadata.subagent === "review";
@@ -173,6 +172,11 @@ export function createCodexInferenceModelBinding(params: {
     };
     let model: ReturnType<NonNullable<NonNullable<typeof captured.source>["bindModelExecution"]>>;
     let releaseAbort = () => {};
+    const release = () => {
+      releaseAbort();
+      model?.release();
+      captured.release();
+    };
     try {
       captured.assertCurrent();
       signal.throwIfAborted();
@@ -203,11 +207,10 @@ export function createCodexInferenceModelBinding(params: {
         if (!model) {
           throw new CodexInferenceAuthorizationError("owner");
         }
-        const revoke = cancelNativeTurn;
-        model?.signal.addEventListener("abort", revoke, { once: true });
-        releaseAbort = () => model?.signal.removeEventListener("abort", revoke);
-        if (model?.signal.aborted) {
-          revoke();
+        model.signal.addEventListener("abort", cancelNativeTurn, { once: true });
+        releaseAbort = () => model?.signal.removeEventListener("abort", cancelNativeTurn);
+        if (model.signal.aborted) {
+          cancelNativeTurn();
         }
       }
       if (!parentExecution) {
@@ -228,16 +231,10 @@ export function createCodexInferenceModelBinding(params: {
       return {
         assertCurrent: assertExecution,
         signal: model?.signal ?? captured.source?.signal,
-        release: () => {
-          releaseAbort();
-          model?.release();
-          captured.release();
-        },
+        release,
       };
     } catch (error) {
-      releaseAbort();
-      model?.release();
-      captured.release();
+      release();
       return refuseOwner(error, signal);
     }
   };
@@ -255,13 +252,13 @@ export function createCodexInferenceDispatch(params: {
   const { context, assertCurrent } = params;
   const prepare = async (
     bytes: Buffer,
-    sampling: boolean,
     path: string,
     headers: IncomingHttpHeaders,
     signal: AbortSignal,
     transport: "http" | "websocket",
   ) => {
     assertCurrent();
+    const sampling = path === "/responses";
     let execution: CodexInferenceModelExecution | undefined;
     let released = false;
     const release = () => {
@@ -338,7 +335,6 @@ export function createCodexInferenceDispatch(params: {
   };
   const prepareHttp = async (
     req: IncomingMessage,
-    sampling: boolean,
     path: string,
     signal: AbortSignal,
     release: () => void,
@@ -352,7 +348,7 @@ export function createCodexInferenceDispatch(params: {
     const decoded =
       encoding === "zstd" ? await decompress(wire, { maxOutputLength: MAX_BODY_BYTES }) : wire;
     signal.throwIfAborted();
-    const prepared = await prepare(decoded, sampling, path, req.headers, signal, "http");
+    const prepared = await prepare(decoded, path, req.headers, signal, "http");
     try {
       const body =
         prepared.bytes === decoded
@@ -393,14 +389,6 @@ export async function readProxyBody(stream: IncomingMessage, maxBytes: number): 
     chunks.push(bytes);
   }
   return Buffer.concat(chunks);
-}
-
-export function readProxyWebSocketBody(data: RawData): Buffer {
-  return Array.isArray(data)
-    ? Buffer.concat(data)
-    : Buffer.isBuffer(data)
-      ? data
-      : Buffer.from(data);
 }
 
 export function isTerminalResponse(bytes: Buffer): boolean {

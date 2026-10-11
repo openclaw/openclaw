@@ -40,7 +40,7 @@ type OllamaDiscoveryContext = {
   };
 };
 
-function readOllamaStringValue(value: unknown): string | undefined {
+export function readOllamaStringValue(value: unknown): string | undefined {
   if (typeof value === "string") {
     return normalizeOptionalString(value);
   }
@@ -135,15 +135,9 @@ export function isLocalOllamaBaseUrl(baseUrl: string | undefined | null): boolea
   if (!baseUrl) {
     return true;
   }
-  let parsed: URL;
-  try {
-    parsed = new URL(baseUrl);
-  } catch {
+  const host = readOllamaHostname(baseUrl);
+  if (host === undefined) {
     return false;
-  }
-  let host = parsed.hostname.toLowerCase();
-  if (host.startsWith("[") && host.endsWith("]")) {
-    host = host.slice(1, -1);
   }
   return (
     LOCAL_OLLAMA_HOSTNAMES.has(host) ||
@@ -159,17 +153,13 @@ function isLoopbackOllamaBaseUrl(baseUrl: string | undefined | null): boolean {
   if (!baseUrl) {
     return true;
   }
-  let parsed: URL;
-  try {
-    parsed = new URL(baseUrl);
-  } catch {
-    return false;
-  }
-  let host = parsed.hostname.toLowerCase();
-  if (host.startsWith("[") && host.endsWith("]")) {
-    host = host.slice(1, -1);
-  }
-  return LOOPBACK_OLLAMA_HOSTNAMES.has(host) || isLoopbackHost(host);
+  const host = readOllamaHostname(baseUrl);
+  return host !== undefined && (LOOPBACK_OLLAMA_HOSTNAMES.has(host) || isLoopbackHost(host));
+}
+
+function readOllamaHostname(baseUrl: string): string | undefined {
+  const host = URL.parse(baseUrl)?.hostname.toLowerCase();
+  return host?.startsWith("[") && host.endsWith("]") ? host.slice(1, -1) : host;
 }
 
 function hasExplicitRemoteOllamaApiProvider(
@@ -222,29 +212,16 @@ function hasMeaningfulExplicitOllamaConfig(
   if (baseUrl) {
     return resolveOllamaApiBase(baseUrl) !== OLLAMA_DEFAULT_BASE_URL;
   }
-  if (readOllamaStringValue(providerConfig.apiKey)) {
-    return true;
-  }
-  if (providerConfig.auth) {
-    return true;
-  }
-  if (typeof providerConfig.authHeader === "boolean") {
-    return true;
-  }
-  if (
-    providerConfig.headers &&
-    typeof providerConfig.headers === "object" &&
-    Object.keys(providerConfig.headers).length > 0
-  ) {
-    return true;
-  }
-  if (providerConfig.request) {
-    return true;
-  }
-  if (typeof providerConfig.injectNumCtxForOpenAICompat === "boolean") {
-    return true;
-  }
-  return false;
+  return Boolean(
+    readOllamaStringValue(providerConfig.apiKey) ||
+    providerConfig.auth ||
+    typeof providerConfig.authHeader === "boolean" ||
+    (providerConfig.headers &&
+      typeof providerConfig.headers === "object" &&
+      Object.keys(providerConfig.headers).length > 0) ||
+    providerConfig.request ||
+    typeof providerConfig.injectNumCtxForOpenAICompat === "boolean",
+  );
 }
 
 export async function resolveOllamaDiscoveryResult(params: {
@@ -264,16 +241,14 @@ export async function resolveOllamaDiscoveryResult(params: {
   const hasRemoteOllamaApiProvider = hasExplicitRemoteOllamaApiProvider(
     params.ctx.config.models?.providers,
   );
-  const discoveryEnabled = params.pluginConfig.discovery?.enabled;
-  if (!hasExplicitModels && discoveryEnabled === false) {
-    return null;
-  }
-  // When the base URL points to hosted Ollama Cloud, skip auto-discovery.
-  // Cloud instances are shared tenants where available models are managed
-  // by the provider; only use explicitly configured models.
-  // Remote self-hosted Ollama endpoints still auto-discover as before.
+  // Hosted Ollama Cloud models are provider-managed, and the plugin can opt out of discovery;
+  // both use only configured models. Self-hosted endpoints always list `/api/tags`, so a model
+  // pulled after setup appears beside the configured rows instead of being pinned out.
   const configuredBaseUrl = readProviderBaseUrl(explicit);
-  if (!hasExplicitModels && configuredBaseUrl && isHostedOllamaCloud(configuredBaseUrl)) {
+  const skipDiscovery =
+    params.pluginConfig.discovery?.enabled === false ||
+    Boolean(configuredBaseUrl && isHostedOllamaCloud(configuredBaseUrl));
+  if (skipDiscovery && !hasExplicitModels) {
     return null;
   }
   const resolvedOllamaAuth = params.ctx.resolveProviderApiKey(OLLAMA_PROVIDER_ID);
@@ -289,7 +264,7 @@ export async function resolveOllamaDiscoveryResult(params: {
     return null;
   }
   const { apiKey, discoveryApiKey } = auth;
-  if (hasExplicitModels && explicit) {
+  if (skipDiscovery && explicit) {
     const discoveredBaseUrl = resolveOllamaApiBase(configuredBaseUrl);
     const api = explicit.api ?? "ollama";
     return {
@@ -317,9 +292,19 @@ export async function resolveOllamaDiscoveryResult(params: {
         ...(discoveryApiKey ? { apiKey: discoveryApiKey } : {}),
       });
       const api = explicit?.api ?? provider.api;
+      // Configured rows own their settings (for example `compat.supportsTools: false` for models
+      // that fail on tool schemas), so discovery only adds models the config does not list.
+      const configuredIds = new Set(explicit?.models?.map((model) => model.id));
       return {
         provider: {
           ...provider,
+          models: provider.models
+            .filter((model) => !configuredIds.has(model.id))
+            .map((model) =>
+              api !== "ollama" && model.thinkingLevelMap
+                ? Object.assign({}, model, { thinkingLevelMap: undefined })
+                : model,
+            ),
           baseUrl: resolveOllamaRuntimeBaseUrl({
             api,
             configuredBaseUrl,

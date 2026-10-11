@@ -252,7 +252,7 @@ suite.define(() => {
       await gateway.resolveDeferred("sessions.list", workspaceList);
       await expect.poll(() => trigger.getAttribute("data-chat-select-value")).toBe("workspace");
       await expect.poll(() => trigger.isEnabled()).toBe(true);
-      expect(await trigger.textContent()).toContain("Workspace");
+      expect(await trigger.getAttribute("aria-label")).toContain("Workspace");
 
       // Admit this event's refresh before measuring the next mutation's own roster request.
       await waitForRequests(gateway, "sessions.list", workspaceEventListCount + 1, rosterMatch);
@@ -280,7 +280,7 @@ suite.define(() => {
       });
       await gateway.resolveDeferred("sessions.list", defaultList);
       await expect.poll(() => trigger.getAttribute("data-chat-select-value")).toBe("");
-      expect(await trigger.textContent()).toContain("Default");
+      expect(await trigger.getAttribute("aria-label")).toContain("Default");
 
       // A rejection still belongs to this pane while its physical session remains current.
       await gateway.deferNext("sessions.patch");

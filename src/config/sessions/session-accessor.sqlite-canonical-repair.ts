@@ -33,6 +33,8 @@ import { parseSessionEntryJson } from "./session-accessor.sqlite-status.js";
 import { ensureTranscriptGenerationInTransaction } from "./session-accessor.sqlite-transcript-state.js";
 import { canonicalSessionKeyMigrationRequiredError } from "./session-canonical-key.js";
 import { assertSessionTranscriptHot } from "./session-cold-storage-state.js";
+import { attachSessionEntrySnapshots } from "./session-entry-snapshot-values.js";
+import { sessionEntrySnapshotColumns } from "./session-entry-snapshots.js";
 import { normalizeStoreSessionKey } from "./store-entry.js";
 import type { SessionEntry } from "./types.js";
 
@@ -63,7 +65,11 @@ export function readExactSessionEntryRowForCanonicalRepair(
   const db = getSessionKysely(database.db);
   const row = executeSqliteQueryTakeFirstSync(
     database.db,
-    db.selectFrom("session_nodes").selectAll().where("session_key", "=", sessionKey),
+    db
+      .selectFrom("session_nodes")
+      .selectAll()
+      .select(sessionEntrySnapshotColumns)
+      .where("session_key", "=", sessionKey),
   );
   if (!row) {
     return undefined;
@@ -87,12 +93,14 @@ export function readExactSessionEntryRowForCanonicalRepair(
       `invalid persisted session row requires repair for ${sessionKey}`,
     );
   }
-  return {
-    entry:
-      parsedEntry ??
-      ({ sessionId: row.current_session_id, updatedAt: row.updated_at } satisfies SessionEntry),
-    row,
+  const entry: SessionEntry = parsedEntry ?? {
+    sessionId: row.current_session_id,
+    updatedAt: row.updated_at,
   };
+  if (!parsedEntry) {
+    attachSessionEntrySnapshots(entry, row);
+  }
+  return { entry, row };
 }
 
 /** Doctor-only cross-store copy; the source node remains until lifecycle archival succeeds. */
@@ -228,7 +236,7 @@ export function rehomeSqliteSessionDeliveryReferencesForCanonicalRepairBatch(
   const storedSessionKeySet = new Set(storedSessionKeys);
   const identityCounts = new Map<string, number>();
   for (const sessionKey of storedSessionKeys) {
-    const identity = normalizeStoreSessionKey(sessionKey.trim());
+    const identity = normalizeStoreSessionKey(sessionKey);
     identityCounts.set(identity, (identityCounts.get(identity) ?? 0) + 1);
   }
   for (const repair of repairs) {
@@ -238,7 +246,7 @@ export function rehomeSqliteSessionDeliveryReferencesForCanonicalRepairBatch(
       if (!storedSessionKeySet.has(sessionKey)) {
         continue;
       }
-      const identity = normalizeStoreSessionKey(sessionKey.trim());
+      const identity = normalizeStoreSessionKey(sessionKey);
       ownedIdentityCounts.set(identity, (ownedIdentityCounts.get(identity) ?? 0) + 1);
     }
     const aliases = resolveSqliteCanonicalRepairLookupKeys(
@@ -251,7 +259,7 @@ export function rehomeSqliteSessionDeliveryReferencesForCanonicalRepairBatch(
       if (ownedKeys.has(key)) {
         return true;
       }
-      const identity = normalizeStoreSessionKey(key.trim());
+      const identity = normalizeStoreSessionKey(key);
       return (identityCounts.get(identity) ?? 0) <= (ownedIdentityCounts.get(identity) ?? 0);
     });
     if (aliases.length === 0) {
@@ -306,9 +314,7 @@ function copySqliteSessionOwnedStateForRepair(params: {
     ...sessionLinks.map((row) => row.conversation_id),
   ]);
   const sourceKeyReferences = new Set(sourceKeys);
-  const sourceLineageIdentities = new Set(
-    sourceKeys.map((key) => normalizeStoreSessionKey(key.trim())),
-  );
+  const sourceLineageIdentities = new Set(sourceKeys.map(normalizeStoreSessionKey));
   const deliveryLookupKeys = resolveSqliteCanonicalRepairLookupKeys(
     params.canonicalKey,
     sourceKeys,
@@ -318,15 +324,13 @@ function copySqliteSessionOwnedStateForRepair(params: {
       params.source.db,
       sourceDb.selectFrom("session_nodes").select("session_key"),
     ).rows.flatMap((row) =>
-      sourceKeyReferences.has(row.session_key)
-        ? []
-        : [normalizeStoreSessionKey(row.session_key.trim())],
+      sourceKeyReferences.has(row.session_key) ? [] : [normalizeStoreSessionKey(row.session_key)],
     ),
   );
   const deliverySourceKeys = deliveryLookupKeys.filter(
     (key) =>
       sourceKeyReferences.has(key) ||
-      !competingDeliveryIdentities.has(normalizeStoreSessionKey(key.trim())),
+      !competingDeliveryIdentities.has(normalizeStoreSessionKey(key)),
   );
   const deliverySourceKeyReferences = new Set(deliverySourceKeys);
   const deliveries = executeSqliteQuerySync(

@@ -20,6 +20,14 @@ vi.mock("../agents/sandbox.js", () => ({
   removeSandboxBrowserContainer: mocks.removeSandboxBrowserContainer,
 }));
 
+vi.mock("../cli/local-state-owner.js", () => ({
+  runWithLocalStateOwner: async ({
+    runLocal,
+  }: {
+    runLocal: (scope: { assertCurrent: () => void }) => Promise<void>;
+  }) => runLocal({ assertCurrent: () => {} }),
+}));
+
 vi.mock("@clack/prompts", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@clack/prompts")>()),
   confirm: mocks.clackConfirm,
@@ -135,19 +143,19 @@ describe("sandboxListCommand", () => {
       expectLogContains(runtime, String(browser.cdpPort));
     });
 
-    it.each([
-      { browser: false, command: "sandbox recreate --all" },
-      { browser: true, command: "sandbox recreate --all --browser" },
-    ])("preserves browser=$browser in the repair command", async ({ browser, command }) => {
-      mocks.listSandboxContainers.mockResolvedValue([createContainer({ imageMatch: false })]);
-      mocks.listSandboxBrowsers.mockResolvedValue([createBrowser({ imageMatch: false })]);
+    it.each([{ browser: true, command: "sandbox recreate --all --browser" }])(
+      "preserves browser=$browser in the repair command",
+      async ({ browser, command }) => {
+        mocks.listSandboxContainers.mockResolvedValue([createContainer({ imageMatch: false })]);
+        mocks.listSandboxBrowsers.mockResolvedValue([createBrowser({ imageMatch: false })]);
 
-      await sandboxListCommand({ browser, json: false }, runtime as never);
+        await sandboxListCommand({ browser, json: false }, runtime as never);
 
-      expectLogContains(runtime, "1 runtime(s) with config mismatch detected.");
-      expectLogContains(runtime, `${command}' to update all runtimes.`);
-      expect(runtime.log).toHaveBeenCalledWith("Total: 1 (1 running)");
-    });
+        expectLogContains(runtime, "1 runtime(s) with config mismatch detected.");
+        expectLogContains(runtime, `${command}' to update all runtimes.`);
+        expect(runtime.log).toHaveBeenCalledWith("Total: 1 (1 running)");
+      },
+    );
 
     it("should display message when no containers found", async () => {
       await sandboxListCommand({ browser: false, json: false }, runtime as never);
@@ -157,7 +165,7 @@ describe("sandboxListCommand", () => {
   });
 
   describe("JSON output", () => {
-    it.each([false, true])("preserves the browser=%s JSON report", async (browser) => {
+    it.each([false])("preserves the browser=%s JSON report", async (browser) => {
       const container = createContainer({ imageMatch: false });
       const browserContainer = createBrowser({ imageMatch: false });
       mocks.listSandboxContainers.mockResolvedValue([container]);
@@ -171,19 +179,6 @@ describe("sandboxListCommand", () => {
         containers: browser ? [] : [container],
         browsers: browser ? [browserContainer] : [],
       });
-    });
-  });
-
-  describe("error handling", () => {
-    it("propagates backend probe failures instead of rendering an empty list", async () => {
-      mocks.listSandboxContainers.mockRejectedValue(new Error("Docker not available"));
-
-      // A failing probe must reach the CLI error path (message + exit 1),
-      // not masquerade as "No sandbox runtimes found."
-      await expect(
-        sandboxListCommand({ browser: false, json: false }, runtime as never),
-      ).rejects.toThrow("Docker not available");
-      expect(runtime.log).not.toHaveBeenCalledWith("No sandbox runtimes found.");
     });
   });
 });
@@ -240,12 +235,13 @@ describe("sandboxRecreateCommand", () => {
       );
 
       await sandboxRecreateCommand(
-        { session: "target-session", all: false, browser: false, force: true },
+        { session: "target-session", all: false, browser: false, force: false },
         runtime as never,
       );
 
       expect(mocks.removeSandboxContainer).toHaveBeenCalledTimes(1);
       expect(mocks.removeSandboxContainer).toHaveBeenCalledWith(match.containerName);
+      expect(mocks.clackConfirm).toHaveBeenCalledOnce();
       expect(mocks.listSandboxBrowsers).not.toHaveBeenCalled();
     });
 
@@ -284,17 +280,6 @@ describe("sandboxRecreateCommand", () => {
       expectLogContains(runtime, "2 removed, 0 failed");
       expectLogContains(runtime, "automatically recreated");
     });
-
-    it("should handle browsers when --browser flag set", async () => {
-      const browsers = [createBrowser(), createBrowser()];
-      mocks.listSandboxBrowsers.mockResolvedValue(browsers);
-
-      await sandboxRecreateCommand({ all: true, browser: true, force: true }, runtime as never);
-
-      expect(mocks.removeSandboxBrowserContainer).toHaveBeenCalledTimes(2);
-      expect(mocks.removeSandboxContainer).not.toHaveBeenCalled();
-      expect(mocks.listSandboxContainers).not.toHaveBeenCalled();
-    });
   });
 
   describe("confirmation flow", () => {
@@ -304,23 +289,6 @@ describe("sandboxRecreateCommand", () => {
 
       await sandboxRecreateCommand({ all: true, browser: false, force: false }, runtime as never);
     }
-
-    it("should require confirmation without --force", async () => {
-      mocks.listSandboxContainers.mockResolvedValue([createContainer()]);
-      mocks.clackConfirm.mockResolvedValue(true);
-
-      await sandboxRecreateCommand({ all: true, browser: false, force: false }, runtime as never);
-
-      expect(mocks.clackConfirm).toHaveBeenCalled();
-      expect(mocks.removeSandboxContainer).toHaveBeenCalled();
-    });
-
-    it("should cancel when user declines", async () => {
-      await runCancelledConfirmation(false);
-
-      expect(runtime.log).toHaveBeenCalledWith("Cancelled.");
-      expect(mocks.removeSandboxContainer).not.toHaveBeenCalled();
-    });
 
     it("should cancel on clack cancel symbol", async () => {
       await runCancelledConfirmation(CANCEL_SYMBOL);

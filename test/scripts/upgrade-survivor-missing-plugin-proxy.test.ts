@@ -1,12 +1,11 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
-import { readFileSync } from "node:fs";
 import { createServer, request, type Server } from "node:http";
 import path from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { z } from "zod";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
-import { waitForFixtureFile } from "../helpers/process-wait.js";
+import { awaitGateBeforeSettlement, withinTest } from "../helpers/promise.js";
 import { stopChildProcess } from "../helpers/stop-child-process.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
@@ -43,7 +42,9 @@ async function startUpstream(body: string) {
   return { url: `http://127.0.0.1:${address.port}`, requests };
 }
 
-it("pins both registry proxies to their upstream while preserving Codex availability", async () => {
+it("pins both registry proxies to their upstream while preserving Codex availability", async ({
+  signal,
+}) => {
   const root = tempDirs.make("openclaw-missing-plugin-proxy-");
   const upstream = await startUpstream("upstream");
   const decoy = await startUpstream("decoy");
@@ -51,6 +52,13 @@ it("pins both registry proxies to their upstream while preserving Codex availabi
   const child = spawn(
     resolveTestNodeExecPath(),
     [
+      "--input-type=module",
+      "-e",
+      `import { readFileSync } from "node:fs";
+import { pathToFileURL } from "node:url";
+// The serve module settles after both listeners bind and the ports file is renamed.
+await import(pathToFileURL(process.argv[1]).href);
+process.send(JSON.parse(readFileSync(process.argv[3], "utf8")));`,
       "scripts/e2e/lib/upgrade-survivor/missing-configured-plugin-migration.mjs",
       "serve",
       portFile,
@@ -65,14 +73,17 @@ it("pins both registry proxies to their upstream while preserving Codex availabi
         OPENCLAW_STATE_DIR: path.join(root, "state"),
         OPENCLAW_CONFIG_PATH: path.join(root, "openclaw.json"),
       },
-      stdio: "ignore",
+      stdio: ["ignore", "ignore", "ignore", "ipc"],
     },
   );
   children.push(child);
-  await waitForFixtureFile(portFile, once(child, "close"));
-  const endpoints = z
-    .object({ npm: z.url(), clawhub: z.url() })
-    .parse(JSON.parse(readFileSync(portFile, "utf8")));
+  const ready = once(child, "message");
+  const closed = once(child, "close");
+  const [ports] = await withinTest(
+    awaitGateBeforeSettlement(ready, closed, `Child exited before writing ${portFile}`),
+    signal,
+  );
+  const endpoints = z.object({ npm: z.url(), clawhub: z.url() }).parse(ports);
 
   for (const proxy of [endpoints.npm, endpoints.clawhub]) {
     const body = await new Promise<string>((resolve, reject) => {

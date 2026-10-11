@@ -3,15 +3,10 @@ import { sql } from "kysely";
 import { iterateSqliteQuerySync, sqliteStringSet } from "../../infra/kysely-sync.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
-import {
-  parseSessionEntryJson,
-  sessionEntryMetadataJson,
-} from "./session-accessor.sqlite-status.js";
+import { parseSessionEntryJson } from "./session-accessor.sqlite-status.js";
 import { normalizeStoreSessionKey } from "./store-entry.js";
-import {
-  getSessionMaintenanceActivityAt,
-  shouldPreserveMaintenanceEntry,
-} from "./store-maintenance.js";
+import { getSessionMaintenanceActivityAt } from "./store-maintenance-activity.js";
+import { shouldPreserveMaintenanceEntry } from "./store-maintenance.js";
 import type { SessionEntry } from "./types.js";
 
 const maintenanceFields = [
@@ -21,11 +16,16 @@ const maintenanceFields = [
   "lastActivityAt",
   "lastInteractionAt",
   "sessionStartedAt",
-  "status",
   "pinnedAt",
+  "sidebarRoot",
   "spawnedBy",
   "parentSessionKey",
   "modelSelectionLocked",
+  "mainRestartRecovery",
+  "restartRecoveryRuns",
+  "restartRecoveryTerminalRunIds",
+  "restartRecoveryDeliveryRunId",
+  "pendingFinalDelivery",
   "chatType",
   "delivery",
 ];
@@ -39,7 +39,7 @@ function maintenanceCandidates(database: Pick<OpenClawAgentDatabase, "db">) {
       WHEN 'object' THEN json(value) WHEN 'array' THEN json(value)
       WHEN 'true' THEN json('true') WHEN 'false' THEN json('false')
       ELSE value END) FROM json_each(entry_json) WHERE key IN (${sql.join(maintenanceFields)}))
-    ELSE ${sessionEntryMetadataJson.expression} END`.as("entry_json");
+    ELSE entry_json END`.as("entry_json");
   return getSessionKysely(database.db)
     .selectFrom("session_nodes")
     .select([projection, "current_session_id", "session_key", "updated_at", "archived_at"])
@@ -68,6 +68,7 @@ export function collectSqliteSessionMaintenanceBaseKeys(
 
 export function readSessionMaintenanceKeyProjection(
   database: Pick<OpenClawAgentDatabase, "db">,
+  sessionKeys?: readonly string[],
 ): Record<string, SessionEntry> {
   const db = getSessionKysely(database.db);
   const store: Record<string, SessionEntry> = {};
@@ -76,6 +77,9 @@ export function readSessionMaintenanceKeyProjection(
     db
       .selectFrom("session_nodes")
       .select(["current_session_id", "parent_session_key", "session_key", "updated_at"])
+      .$if(sessionKeys !== undefined, (query) =>
+        query.where("session_key", "in", sqliteStringSet(sessionKeys ?? [])),
+      )
       .where("archived_at", "is", null)
       .orderBy("session_key", "asc"),
   )) {

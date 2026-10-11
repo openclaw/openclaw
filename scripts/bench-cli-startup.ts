@@ -71,26 +71,7 @@ type SampleMemory = {
   error?: string;
 };
 
-type CaseRuns = {
-  warmupSamples: Sample[];
-  samples: Sample[];
-};
-
-type SummaryStats = {
-  avg: number;
-  p50: number;
-  p95: number;
-  min: number;
-  max: number;
-};
-
-type CaseSummary = {
-  sampleCount: number;
-  durationMs: SummaryStats;
-  firstOutputMs: SummaryStats | null;
-  maxRssMb: SummaryStats | null;
-  exitSummary: string;
-};
+type CaseSummary = ReturnType<typeof summarizeSamples>;
 
 type SuiteResult = {
   entry: string;
@@ -124,18 +105,6 @@ type CaseDelta = {
   durationAvgDeltaPct: number;
   maxRssAvgDeltaMb: number | null;
   maxRssAvgDeltaPct: number | null;
-};
-
-type BenchmarkComparison = {
-  baseline: string;
-  candidate: string;
-  deltas: CaseDelta[];
-};
-
-type BenchmarkComparisonResult = {
-  baseline: SuiteResult;
-  candidate: SuiteResult;
-  comparison: BenchmarkComparison;
 };
 
 type CliOptions = {
@@ -455,56 +424,31 @@ const COMMAND_CASES: readonly CommandCase[] = [
   },
 ] as const;
 
-function parseFlagValue(flag: string): string | undefined {
-  const idx = process.argv.indexOf(flag);
-  if (idx === -1) {
-    return undefined;
-  }
-  const value = process.argv[idx + 1];
-  if (!value || value.startsWith("-")) {
-    throw new Error(`${flag} requires a value`);
-  }
-  return value;
-}
-
-function hasFlag(flag: string): boolean {
-  return process.argv.includes(flag);
-}
-
-function parseRepeatableFlag(flag: string): string[] {
-  const values: string[] = [];
-  for (let i = 0; i < process.argv.length; i += 1) {
-    const value = process.argv[i + 1];
-    if (process.argv[i] === flag && value && !value.startsWith("-")) {
-      values.push(value);
-    }
-  }
-  return values;
-}
-
-function validateCliArgs(argv: readonly string[] = process.argv.slice(2)): void {
-  const seenSingleValueFlags = new Set<string>();
+function validateCliArgs(argv: readonly string[] = process.argv.slice(2)): Map<string, string[]> {
+  const flags = new Map<string, string[]>();
   for (let index = 0; index < argv.length; index += 1) {
     const arg = expectDefined(argv[index], `CLI benchmark argument at index ${index}`);
     if (VALUE_FLAGS.has(arg)) {
-      if (arg !== "--case") {
-        if (seenSingleValueFlags.has(arg)) {
-          throw new Error(`${arg} was provided more than once`);
-        }
-        seenSingleValueFlags.add(arg);
+      if (arg !== "--case" && flags.has(arg)) {
+        throw new Error(`${arg} was provided more than once`);
       }
       const value = argv[index + 1];
       if (!value || value.startsWith("-")) {
         throw new Error(`${arg} requires a value`);
       }
+      const values = flags.get(arg) ?? [];
+      values.push(value);
+      flags.set(arg, values);
       index += 1;
       continue;
     }
     if (BOOLEAN_FLAGS.has(arg)) {
+      flags.set(arg, []);
       continue;
     }
     throw new Error(`Unknown argument: ${arg}`);
   }
+  return flags;
 }
 
 function parsePositiveInt(raw: string | undefined, fallback: number, label = "value"): number {
@@ -592,46 +536,27 @@ function resolveCases(options: { presets: string[]; caseIds: string[] }): Comman
   );
 }
 
-function median(values: number[]): number {
-  if (values.length === 0) {
-    return 0;
-  }
-  const sorted = [...values].toSorted((a, b) => a - b);
+function summarizeNumbers(values: number[]) {
+  const sorted = values.toSorted((a, b) => a - b);
   const mid = Math.floor(sorted.length / 2);
-  if (sorted.length % 2 === 0) {
-    return (
-      (expectDefined(sorted[mid - 1], "lower middle CLI benchmark sample") +
-        expectDefined(sorted[mid], "upper middle CLI benchmark sample")) /
-      2
-    );
-  }
-  return expectDefined(sorted[mid], "middle CLI benchmark sample");
-}
-
-function percentile(values: number[], p: number): number {
-  if (values.length === 0) {
-    return 0;
-  }
-  const sorted = [...values].toSorted((a, b) => a - b);
-  const index = Math.min(sorted.length - 1, Math.floor((p / 100) * sorted.length));
-  return sorted[index] ?? 0;
-}
-
-function summarizeNumbers(values: number[]): SummaryStats {
   const total = values.reduce((sum, value) => sum + value, 0);
-  const avg = values.length > 0 ? total / values.length : 0;
-  const min = values.length > 0 ? Math.min(...values) : 0;
-  const max = values.length > 0 ? Math.max(...values) : 0;
   return {
-    avg,
-    p50: median(values),
-    p95: percentile(values, 95),
-    min,
-    max,
+    avg: values.length > 0 ? total / values.length : 0,
+    p50:
+      sorted.length === 0
+        ? 0
+        : sorted.length % 2 === 0
+          ? (expectDefined(sorted[mid - 1], "lower middle CLI benchmark sample") +
+              expectDefined(sorted[mid], "upper middle CLI benchmark sample")) /
+            2
+          : expectDefined(sorted[mid], "middle CLI benchmark sample"),
+    p95: sorted[Math.min(sorted.length - 1, Math.floor(0.95 * sorted.length))] ?? 0,
+    min: values.length > 0 ? Math.min(...values) : 0,
+    max: values.length > 0 ? Math.max(...values) : 0,
   };
 }
 
-function summarizeSamples(samples: Sample[]): CaseSummary {
+function summarizeSamples(samples: Sample[]) {
   const durations = summarizeNumbers(samples.map((sample) => sample.ms));
   const firstOutputValues = samples
     .map((sample) => sample.firstOutputMs)
@@ -863,24 +788,8 @@ function memoryInvocationEntries(entry: string): string[] {
   return entries;
 }
 
-function nodeImportSpecifierForPath(filePath: string): string {
-  return pathToFileURL(filePath).href;
-}
-
-function buildCpuOrHeapFlags(options: { cpuProfDir?: string; heapProfDir?: string }): string[] {
-  const flags: string[] = [];
-  if (options.cpuProfDir) {
-    flags.push("--cpu-prof", "--cpu-prof-dir", options.cpuProfDir);
-  }
-  if (options.heapProfDir) {
-    flags.push("--heap-prof", "--heap-prof-dir", options.heapProfDir);
-  }
-  return flags;
-}
-
-function appendLimited(current: string, chunk: Buffer | string, maxLength: number): string {
-  const next = current + String(chunk);
-  return next.length > maxLength ? next.slice(next.length - maxLength) : next;
+function appendLimited(current: string, chunk: Buffer | string): string {
+  return (current + String(chunk)).slice(-32 * 1024 * 1024);
 }
 
 async function runSample(params: {
@@ -921,11 +830,9 @@ async function runSample(params: {
         ]
       : []),
     "--import",
-    nodeImportSpecifierForPath(rssHookPath),
-    ...buildCpuOrHeapFlags({
-      cpuProfDir: params.cpuProfDir,
-      heapProfDir: params.heapProfDir,
-    }),
+    pathToFileURL(rssHookPath).href,
+    ...(params.cpuProfDir ? ["--cpu-prof", "--cpu-prof-dir", params.cpuProfDir] : []),
+    ...(params.heapProfDir ? ["--heap-prof", "--heap-prof-dir", params.heapProfDir] : []),
     params.entry,
     ...params.commandCase.args,
   ];
@@ -938,7 +845,6 @@ async function runSample(params: {
   let timedOut = false;
   let forceKillAt: number | null = null;
   let forceKillTimer: ReturnType<typeof setTimeout> | null = null;
-  const maxOutputLength = 32 * 1024 * 1024;
   const memoryDirectory = params.runtimeRss
     ? mkdtempSync(path.join(path.dirname(params.rssHookPath), "sample-"))
     : undefined;
@@ -1035,19 +941,15 @@ async function runSample(params: {
 
       proc.stdout?.on("data", (chunk) => {
         markFirstOutput();
-        stdout = appendLimited(stdout, chunk, maxOutputLength);
+        stdout = appendLimited(stdout, chunk);
       });
       proc.stderr?.on("data", (chunk) => {
         markFirstOutput();
-        stderr = appendLimited(stderr, chunk, maxOutputLength);
+        stderr = appendLimited(stderr, chunk);
       });
       proc.once("error", (error) => {
         clearTimeout(timeout);
-        stderr = appendLimited(
-          stderr,
-          error instanceof Error ? error.message : String(error),
-          maxOutputLength,
-        );
+        stderr = appendLimited(stderr, error instanceof Error ? error.message : String(error));
         finish({
           exitCode: null,
           signal: null,
@@ -1147,7 +1049,7 @@ async function runCase(params: {
   cpuProfDir?: string;
   heapProfDir?: string;
   rssHookPath: string;
-}): Promise<CaseRuns> {
+}) {
   const warmupSamples: Sample[] = [];
   const samples: Sample[] = [];
   const totalRuns = params.warmup + params.runs;
@@ -1345,26 +1247,27 @@ async function buildSuiteResult(params: {
   };
 }
 
-function parseOptions(): CliOptions {
-  const presets = parsePresets(parseFlagValue("--preset"));
+function parseOptions(flags: Map<string, string[]>): CliOptions {
+  const value = (flag: string) => flags.get(flag)?.[0];
+  const presets = parsePresets(value("--preset"));
   const cases = resolveCases({
     presets,
-    caseIds: parseRepeatableFlag("--case"),
+    caseIds: flags.get("--case") ?? [],
   });
   return {
     cases,
-    compareBaseline: parseFlagValue("--compare-baseline"),
-    compareCandidate: parseFlagValue("--compare-candidate"),
-    entryPrimary: parseFlagValue("--entry-primary") ?? parseFlagValue("--entry") ?? DEFAULT_ENTRY,
-    entrySecondary: parseFlagValue("--entry-secondary"),
-    runs: parsePositiveInt(parseFlagValue("--runs"), DEFAULT_RUNS, "--runs"),
-    warmup: parseNonNegativeInt(parseFlagValue("--warmup"), DEFAULT_WARMUP, "--warmup"),
-    timeoutMs: parsePositiveInt(parseFlagValue("--timeout-ms"), DEFAULT_TIMEOUT_MS, "--timeout-ms"),
-    runtimeRss: hasFlag("--runtime-rss"),
-    json: hasFlag("--json"),
-    output: parseFlagValue("--output"),
-    cpuProfDir: parseFlagValue("--cpu-prof-dir"),
-    heapProfDir: parseFlagValue("--heap-prof-dir"),
+    compareBaseline: value("--compare-baseline"),
+    compareCandidate: value("--compare-candidate"),
+    entryPrimary: value("--entry-primary") ?? value("--entry") ?? DEFAULT_ENTRY,
+    entrySecondary: value("--entry-secondary"),
+    runs: parsePositiveInt(value("--runs"), DEFAULT_RUNS, "--runs"),
+    warmup: parseNonNegativeInt(value("--warmup"), DEFAULT_WARMUP, "--warmup"),
+    timeoutMs: parsePositiveInt(value("--timeout-ms"), DEFAULT_TIMEOUT_MS, "--timeout-ms"),
+    runtimeRss: flags.has("--runtime-rss"),
+    json: flags.has("--json"),
+    output: value("--output"),
+    cpuProfDir: value("--cpu-prof-dir"),
+    heapProfDir: value("--heap-prof-dir"),
   };
 }
 
@@ -1406,31 +1309,14 @@ function writeJsonOutput(filePath: string, value: unknown): void {
   writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
 }
 
-function readBenchmarkComparison(
-  baselinePath: string,
-  candidatePath: string,
-): BenchmarkComparisonResult {
-  const baseline = readBenchmarkReport(baselinePath);
-  const candidate = readBenchmarkReport(candidatePath);
-  return {
-    baseline: baseline.primary,
-    candidate: candidate.primary,
-    comparison: {
-      baseline: baselinePath,
-      candidate: candidatePath,
-      deltas: buildCaseDeltas(baseline.primary, candidate.primary),
-    },
-  };
-}
-
 async function main(): Promise<void> {
-  validateCliArgs();
-  if (hasFlag("--help")) {
+  const flags = validateCliArgs();
+  if (flags.has("--help")) {
     printUsage();
     return;
   }
 
-  const options = parseOptions();
+  const options = parseOptions(flags);
   const transport = sampleTransport();
   if (transport && options.runtimeRss) {
     throw new Error("Cross-user runtime RSS sampling is not supported");
@@ -1444,10 +1330,13 @@ async function main(): Promise<void> {
     if (!options.compareBaseline || !options.compareCandidate) {
       throw new Error("--compare-baseline and --compare-candidate must be provided together");
     }
-    const { baseline, candidate, comparison } = readBenchmarkComparison(
-      options.compareBaseline,
-      options.compareCandidate,
-    );
+    const baseline = readBenchmarkReport(options.compareBaseline).primary;
+    const candidate = readBenchmarkReport(options.compareCandidate).primary;
+    const comparison = {
+      baseline: options.compareBaseline,
+      candidate: options.compareCandidate,
+      deltas: buildCaseDeltas(baseline, candidate),
+    };
     if (options.output) {
       writeJsonOutput(options.output, comparison);
     }
@@ -1541,7 +1430,6 @@ async function main(): Promise<void> {
 export const testing = {
   buildConfigFixture,
   collectFailedSamples,
-  nodeImportSpecifierForPath,
   parseGatewayPortEnv,
   parseNonNegativeInt,
   parsePositiveInt,

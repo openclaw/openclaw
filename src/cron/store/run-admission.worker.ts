@@ -4,6 +4,7 @@ import { assertTransactionUsable } from "../../infra/sqlite-transaction.js";
 import { getSqliteWorkerStateContext } from "../../infra/sqlite-worker-state-context.js";
 import type { OpenClawStateDatabase } from "../../state/openclaw-state-db-contract.js";
 import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
+import { describeUnavailableCronAgent } from "../agent-availability.js";
 import { resolveCronJobEffectiveAgentId } from "../agent-id.js";
 import { resolveCronJobConfigRevision } from "../config-revision.js";
 import { recomputeJobNextRunAtMs } from "../service/jobs-scheduling.js";
@@ -13,8 +14,9 @@ import {
   deleteStaleCronJobFamilyRows,
   loadedCronStoreFromRows,
   loadCronRows,
-  upsertCronJobRow,
+  updateCronRuntimeRow,
 } from "./row-codec.js";
+import { markCronDeliveryStartedInDatabase } from "./run-receipt-delivery.js";
 import { readActiveCronRunReceiptsInDatabase } from "./run-receipt-read.js";
 import {
   activateCronRunReceiptInDatabase,
@@ -25,19 +27,19 @@ import {
   CronRunReceiptRevisionError,
   ensureCronRunReceiptSchema,
   finishCronRunReceiptInDatabase,
+  isCronRunReceiptOwnerStale,
 } from "./run-receipt-store.js";
 import { prepareCronRunReceiptWriteSchema } from "./run-receipt-write-admission.js";
 import {
   loadCronRuntimeAuthorities,
   repairCronRuntimeAuthorityRows,
 } from "./runtime-authority-store.js";
-import type { CronRuntimeMutationContracts } from "./runtime-mutation.types.js";
-import {
-  createCronMutationLogger,
-  prepareCronRuntimeMutation,
-  retainCronRuntimeMutationOutcome,
-} from "./runtime-mutation.worker.js";
-import type { CronRuntimeWorkerOperations } from "./runtime-worker.types.js";
+import { createCronMutationLogger } from "./runtime-mutation.worker.js";
+import type {
+  CronRuntimeMutationContracts,
+  CronRuntimeWorkerOperations,
+} from "./runtime-worker.types.js";
+import { releaseSchedulerReservationsInWorker } from "./scheduler-reservation.worker.js";
 
 function loadRuntimeRows(db: DatabaseSync, storeKey: string, jobIds: Iterable<string>) {
   const rows = loadCronRows(db, storeKey, new Set(jobIds), {
@@ -68,10 +70,30 @@ export function reserveCronRunsInWorker(
           const { rows, jobs } = loadRuntimeRows(db, input.storeKey, jobIds);
           const receiptSchema = prepareCronRunReceiptWriteSchema(db);
           ensureCronRunReceiptSchema(db);
-          const preparation = prepareCronRuntimeMutation("cron.reserveRuns", input.nonce, {
-            receipts: readActiveCronRunReceiptsInDatabase(db, input.storeKey, jobIds),
-          });
-          const claims = new Map(preparation.claims.map((claim) => [claim.handle.jobId, claim]));
+          const preparation = input.snapshot;
+          const observed = new Map(
+            readActiveCronRunReceiptsInDatabase(db, input.storeKey, jobIds).map((receipt) => [
+              receipt.jobId,
+              receipt,
+            ]),
+          );
+          const claims = new Map(
+            preparation.claims.map((claim) => {
+              const receipt = observed.get(claim.handle.jobId);
+              return [
+                claim.handle.jobId,
+                {
+                  ...claim,
+                  observed: receipt,
+                  observedStale:
+                    receipt !== undefined &&
+                    (receipt.ownerPid === process.pid
+                      ? !preparation.locallyOwnedReceiptIds.includes(receipt.receiptId)
+                      : isCronRunReceiptOwnerStale(receipt, input.reservedAtMs)),
+                },
+              ];
+            }),
+          );
           const replacements = new Map(
             preparation.replacements.map((receipt) => [receipt.jobId, receipt]),
           );
@@ -125,6 +147,7 @@ export function reserveCronRunsInWorker(
               resolveAgentId: (current) =>
                 resolveCronJobEffectiveAgentId(current, preparation.defaultAgentId),
             });
+            const previousEnabled = job.enabled ?? true;
             if (input.onExit) {
               job.enabled = false;
               job.updatedAtMs = input.reservedAtMs;
@@ -137,10 +160,10 @@ export function reserveCronRunsInWorker(
               retainManualOneShotOccurrence(job, input.scheduleOwnershipAtMs);
             }
             job.state.queuedAtMs = input.reservedAtMs;
-            upsertCronJobRow(db, input.storeKey, job, row.sort_order, { knownExistingRow: row });
+            updateCronRuntimeRow(db, input.storeKey, job, previousEnabled);
             outcome.reservations.push({ job, runReceipt });
           }
-          return retainCronRuntimeMutationOutcome("cron.reserveRuns", db, input.nonce, outcome);
+          return { outcome };
         } catch (error) {
           if (error instanceof CronRunReceiptConflictError) {
             transactionConflict = error;
@@ -160,7 +183,7 @@ export function reserveCronRunsInWorker(
       throw error;
     }
     // This result describes a rolled-back transaction; it carries no commit receipt.
-    return { nonce: input.nonce, conflict: transactionConflict.receipt };
+    return { conflict: transactionConflict.receipt };
   }
 }
 
@@ -172,7 +195,7 @@ export function activateCronRunInWorker(
     ({ db }) => {
       const { rows, jobs } = loadRuntimeRows(db, input.storeKey, [input.handle.jobId]);
       const current = jobs.get(input.handle.jobId);
-      const preparation = prepareCronRuntimeMutation("cron.activateRun", input.nonce, {});
+      const preparation = input.snapshot;
       const outcome: CronRuntimeMutationContracts["cron.activateRun"]["outcome"] = {};
       const row = rows.get(input.handle.jobId);
       const matchesExit =
@@ -199,14 +222,14 @@ export function activateCronRunInWorker(
           current.state.runningReceiptId = receipt.receiptId;
           delete current.state.runningScheduleChangeId;
           current.state.lastError = undefined;
-          upsertCronJobRow(db, input.storeKey, current, row.sort_order, { knownExistingRow: row });
+          updateCronRuntimeRow(db, input.storeKey, current);
         } catch (error) {
           if (!(error instanceof CronRunReceiptRevisionError)) {
             throw error;
           }
         }
       }
-      return retainCronRuntimeMutationOutcome("cron.activateRun", db, input.nonce, outcome);
+      return { outcome };
     },
     { database, path: database.path, env: getSqliteWorkerStateContext().environment },
     { operationLabel: "cron.run-activation" },
@@ -217,16 +240,26 @@ export function releaseCronReservationsInWorker(
   database: OpenClawStateDatabase,
   input: CronRuntimeWorkerOperations["cron.releaseReservations"]["input"],
 ) {
+  const { policy } = input;
+  if (policy.kind !== "general") {
+    return releaseSchedulerReservationsInWorker(database, { ...input, policy });
+  }
   return runOpenClawStateWriteTransaction(
     ({ db }) => {
       const { rows, jobs } = loadRuntimeRows(db, input.storeKey, input.jobIds);
       const receiptSchema = prepareCronRunReceiptWriteSchema(db);
-      const preparation = prepareCronRuntimeMutation("cron.releaseReservations", input.nonce, {
-        deletionBlocked:
-          input.requireCurrentReceipt === true &&
-          input.terminal !== undefined &&
-          isAgentDeletionBlocked(input.terminal.handle.agentId, {}, db),
-      });
+      const preparation = input.snapshot;
+      if (
+        policy.requireCurrentReceipt &&
+        policy.terminal &&
+        isAgentDeletionBlocked(policy.terminal.handle.agentId, {}, db)
+      ) {
+        throw new CronRunReceiptRevisionError(
+          policy.terminal.handle.receiptId,
+          describeUnavailableCronAgent(policy.terminal.handle.agentId),
+          "owner-unavailable",
+        );
+      }
       const outcome: CronRuntimeMutationContracts["cron.releaseReservations"]["outcome"] = {
         jobs: [],
         notifications: [],
@@ -238,15 +271,15 @@ export function releaseCronReservationsInWorker(
           log: createCronMutationLogger(outcome.logs),
         },
       };
-      if (input.requireCurrentReceipt && input.terminal) {
+      if (policy.requireCurrentReceipt && policy.terminal) {
         assertCronRunReceiptCurrentInDatabase({
           database: db,
-          handle: input.terminal.handle,
+          handle: policy.terminal.handle,
           resolveAgentId: (job) => resolveCronJobEffectiveAgentId(job, preparation.defaultAgentId),
         });
       }
       for (const reservation of preparation.reservations) {
-        if (!input.terminal) {
+        if (!policy.terminal) {
           finishCronRunReceiptInDatabase({
             database: db,
             receiptSchema,
@@ -266,7 +299,8 @@ export function releaseCronReservationsInWorker(
         if (!queuedMatches && !runningMatches) {
           continue;
         }
-        if (input.restoreLastError && reservation.activationPreviousLastError) {
+        const previousEnabled = job.enabled ?? true;
+        if (policy.restoreLastError && reservation.activationPreviousLastError) {
           job.state.lastError = reservation.activationPreviousLastError.value;
         }
         if (queuedMatches) {
@@ -277,7 +311,7 @@ export function releaseCronReservationsInWorker(
           delete job.state.runningReceiptId;
           delete job.state.runningScheduleChangeId;
         }
-        if (input.recompute && job.enabled && job.state.nextRunAtMs === undefined) {
+        if (policy.recompute && job.enabled && job.state.nextRunAtMs === undefined) {
           recomputeJobNextRunAtMs({
             state,
             job,
@@ -285,16 +319,47 @@ export function releaseCronReservationsInWorker(
             deferredNotifications: outcome.notifications,
           });
         }
-        upsertCronJobRow(db, input.storeKey, job, row.sort_order, { knownExistingRow: row });
+        updateCronRuntimeRow(db, input.storeKey, job, previousEnabled);
         outcome.jobs.push(job);
       }
-      if (input.terminal && !preparation.deferTerminal) {
-        finishCronRunReceiptInDatabase({ database: db, receiptSchema, ...input.terminal });
+      if (policy.terminal && !preparation.deferTerminal) {
+        finishCronRunReceiptInDatabase({ database: db, receiptSchema, ...policy.terminal });
       }
-      return retainCronRuntimeMutationOutcome("cron.releaseReservations", db, input.nonce, outcome);
+      return { outcome };
     },
     { database, path: database.path, env: getSqliteWorkerStateContext().environment },
     { operationLabel: "cron.run-reservation-cleanup" },
+  );
+}
+
+export function markCronDeliveryStartedInWorker(
+  database: OpenClawStateDatabase,
+  input: CronRuntimeWorkerOperations["cron.markDeliveryStarted"]["input"],
+) {
+  return runOpenClawStateWriteTransaction(
+    ({ db }) => {
+      if (input.storeKey !== input.handle.storeKey) {
+        throw new CronRunReceiptRevisionError(input.handle.receiptId);
+      }
+      const deletionBlocked = isAgentDeletionBlocked(input.handle.agentId, {}, db);
+      const preparation = input.snapshot;
+      if (deletionBlocked) {
+        throw new CronRunReceiptRevisionError(
+          input.handle.receiptId,
+          "cron agent is unavailable",
+          "owner-unavailable",
+        );
+      }
+      markCronDeliveryStartedInDatabase({
+        database: db,
+        handle: input.handle,
+        allowMissingJob: preparation.allowMissingJob,
+        resolveAgentId: (job) => resolveCronJobEffectiveAgentId(job, preparation.defaultAgentId),
+      });
+      return { outcome: {} };
+    },
+    { database, path: database.path, env: getSqliteWorkerStateContext().environment },
+    { operationLabel: "cron.run-receipt.mark-delivery-started" },
   );
 }
 
@@ -304,13 +369,12 @@ export function finishCronReceiptInWorker(
 ) {
   return runOpenClawStateWriteTransaction(
     ({ db }) => {
-      prepareCronRuntimeMutation("cron.finishReceipt", input.nonce, {});
       finishCronRunReceiptInDatabase({
         database: db,
         receiptSchema: prepareCronRunReceiptWriteSchema(db),
         ...input.terminal,
       });
-      return retainCronRuntimeMutationOutcome("cron.finishReceipt", db, input.nonce, {});
+      return { outcome: {} };
     },
     { database, path: database.path, env: getSqliteWorkerStateContext().environment },
     { operationLabel: "cron.run-receipt.finish" },
@@ -323,11 +387,8 @@ export function removeStaleCronFamilyInWorker(
 ) {
   return runOpenClawStateWriteTransaction(
     ({ db }) => {
-      prepareCronRuntimeMutation("cron.removeStaleFamily", input.nonce, {});
       const removed = deleteStaleCronJobFamilyRows(db, input.storeKey, input.family);
-      return retainCronRuntimeMutationOutcome("cron.removeStaleFamily", db, input.nonce, {
-        removed,
-      });
+      return { outcome: { removed } };
     },
     { database, path: database.path, env: getSqliteWorkerStateContext().environment },
     { operationLabel: "cron.job-family-adoption" },

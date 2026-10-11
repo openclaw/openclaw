@@ -1,6 +1,6 @@
 import type { Readable } from "node:stream";
 
-type VoiceCaptureEntry = {
+export type VoiceCaptureEntry = {
   stream?: Readable;
   stopInput?: () => void;
   startRecording?: () => void;
@@ -8,10 +8,6 @@ type VoiceCaptureEntry = {
 };
 
 export type VoiceCaptureState = Map<string, VoiceCaptureEntry>;
-
-export function createVoiceCaptureState(): VoiceCaptureState {
-  return new Map();
-}
 
 export function stopVoiceCaptureState(state: VoiceCaptureState): void {
   const captures = [...state.values()];
@@ -57,16 +53,6 @@ export async function waitForVoiceCaptureAdmission(params: {
   return params.isRecordingCurrent() || (await params.conversationAuthorized);
 }
 
-export function beginVoiceCapture(
-  state: VoiceCaptureState,
-  userId: string,
-  stream?: Readable,
-): VoiceCaptureEntry {
-  const capture = { stream };
-  state.set(userId, capture);
-  return capture;
-}
-
 export function finishVoiceCapture(
   state: VoiceCaptureState,
   userId: string,
@@ -85,9 +71,8 @@ export function scheduleVoiceCaptureFinalize(params: {
   state: VoiceCaptureState;
   userId: string;
   delayMs: number;
-  onFinalize?: (capture: VoiceCaptureEntry) => void;
 }): boolean {
-  const { state, userId, delayMs, onFinalize } = params;
+  const { state, userId, delayMs } = params;
   const capture = state.get(userId);
   if (!capture) {
     return false;
@@ -97,7 +82,6 @@ export function scheduleVoiceCaptureFinalize(params: {
     if (!finishVoiceCapture(state, userId, capture)) {
       return;
     }
-    onFinalize?.(capture);
     capture.stream?.destroy();
   }, delayMs);
   return true;

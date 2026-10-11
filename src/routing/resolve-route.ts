@@ -174,7 +174,7 @@ export function pickFirstExistingAgentId(cfg: OpenClawConfig, agentId: string): 
     return DEFAULT_AGENT_ID;
   }
   if (lookup.agentIds.size === 0) {
-    return normalizeAgentId(trimmed);
+    return normalized;
   }
   throw new AgentSelectionRequiredError([...lookup.agentIds], {
     surface: "route binding",
@@ -242,32 +242,6 @@ function formatRouteCachePeer(peer: RoutePeer | null): string {
   return `${peer.kind}:${peer.id}`;
 }
 
-function buildResolvedRouteCacheKey(params: {
-  channel: string;
-  defaultAgentId: string;
-  accountId: string;
-  peer: RoutePeer | null;
-  parentPeer: RoutePeer | null;
-  guildId: string;
-  teamId: string;
-  memberRoleIds: string[];
-  dmScope: string;
-  groupScope: string;
-}): string {
-  return JSON.stringify([
-    params.channel,
-    params.defaultAgentId,
-    params.accountId,
-    formatRouteCachePeer(params.peer),
-    formatRouteCachePeer(params.parentPeer),
-    params.guildId ?? null,
-    params.teamId ?? null,
-    params.memberRoleIds.toSorted(),
-    params.dmScope,
-    params.groupScope,
-  ]);
-}
-
 function matchesBindingScope(match: NormalizedBindingMatch, scope: BindingScope): boolean {
   if (match.peer.state === "valid") {
     if (
@@ -309,18 +283,18 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
   const routeCache =
     !shouldLogDebug && !identityLinks ? resolveRouteCacheForConfig(input.cfg) : null;
   const routeCacheKey = routeCache
-    ? buildResolvedRouteCacheKey({
+    ? JSON.stringify([
         channel,
         defaultAgentId,
         accountId,
-        peer,
-        parentPeer,
+        formatRouteCachePeer(peer),
+        formatRouteCachePeer(parentPeer),
         guildId,
         teamId,
-        memberRoleIds,
+        memberRoleIds.toSorted(),
         dmScope,
         groupScope,
-      })
+      ])
     : "";
   if (routeCache && routeCacheKey) {
     const cachedRoute = routeCache.get(routeCacheKey);
@@ -354,12 +328,10 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
       groupScope: effectiveGroupScope,
       identityLinks,
     });
-    const mainSessionKey = normalizeLowercaseStringOrEmpty(
-      buildAgentMainSessionKey({
-        agentId: resolvedAgentId,
-        mainKey: input.cfg.session?.mainKey,
-      }),
-    );
+    const mainSessionKey = buildAgentMainSessionKey({
+      agentId: resolvedAgentId,
+      mainKey: input.cfg.session?.mainKey,
+    });
     const route = {
       agentId: resolvedAgentId,
       channel,

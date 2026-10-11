@@ -1,16 +1,20 @@
-import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import {
   type AgentsFilesGetParams,
+  type AgentsFilesGetResult,
   ErrorCodes,
   errorShape,
   validateAgentsFilesGetParams,
   validateAgentsFilesListParams,
   validateAgentsFilesSetParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { listAgentIds, resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
-import { buildIdentityMarkdownForWrite } from "../../agents/identity-file.js";
+import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
+import {
+  buildIdentityMarkdownForWrite,
+  loadAgentIdentityFromWorkspaceAsync,
+} from "../../agents/identity-file.js";
 import { getAgentWorkspaceAccess } from "../../agents/workspace-access.js";
 import { MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES } from "../../agents/workspace-bootstrap-read.js";
 import {
@@ -24,7 +28,7 @@ import type { IdentityConfig } from "../../config/types.base.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isMissingPathError } from "../../infra/errors.js";
 import { root, FsSafeError, type ReadResult } from "../../infra/fs-safe.js";
-import { normalizeAgentIdStrict } from "../../routing/session-key.js";
+import { resolveConfiguredAgentIdOrRespondError } from "./agent-id-shared.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
 import { enqueueWorkspaceFileUpdate } from "./workspace-fs.js";
@@ -47,23 +51,6 @@ const CORE_FILE_NAMES_POST_ONBOARDING = CORE_FILE_NAMES.filter(
 // still writable for clients that manage it directly.
 const ALLOWED_FILE_NAMES = new Set<string>(WORKSPACE_BOOTSTRAP_FILENAMES);
 
-function resolveAgentIdOrError(agentIdRaw: string, cfg: OpenClawConfig) {
-  const normalized = normalizeAgentIdStrict(agentIdRaw);
-  if (!normalized.ok) {
-    return null;
-  }
-  const agentId = normalized.value;
-  const allowed = new Set(listAgentIds(cfg));
-  if (!allowed.has(agentId)) {
-    return null;
-  }
-  return agentId;
-}
-
-function respondAgentNotFound(respond: RespondFn, agentId: string): void {
-  respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, `agent "${agentId}" not found`));
-}
-
 function resolveAgentWorkspaceFileOrRespondError(
   params: AgentsFilesGetParams,
   respond: RespondFn,
@@ -73,9 +60,8 @@ function resolveAgentWorkspaceFileOrRespondError(
   workspaceDir: string;
   name: string;
 } | null {
-  const agentId = resolveAgentIdOrError(params.agentId, cfg);
+  const agentId = resolveConfiguredAgentIdOrRespondError(params.agentId, cfg, respond);
   if (!agentId) {
-    respondAgentNotFound(respond, params.agentId);
     return null;
   }
   const name = params.name.trim();
@@ -105,39 +91,6 @@ async function statWorkspaceFileSafely(
   } catch {
     return null;
   }
-}
-
-async function listAgentFiles(workspaceDir: string, options?: { hideBootstrap?: boolean }) {
-  const access = getAgentWorkspaceAccess(workspaceDir);
-  const workspaceRoot = access ? null : await root(workspaceDir).catch(() => null);
-  const names = options?.hideBootstrap ? CORE_FILE_NAMES_POST_ONBOARDING : CORE_FILE_NAMES;
-  return await Promise.all(
-    names.map(async (name) => {
-      let meta: FileMeta | null;
-      if (access) {
-        const stat = await access.bridge.stat({ filePath: name });
-        if (getAgentWorkspaceAccess(workspaceDir) !== access) {
-          throw new Error("Workspace access changed while listing Agent documents");
-        }
-        meta =
-          stat?.type === "file" ? { size: stat.size, updatedAtMs: Math.floor(stat.mtimeMs) } : null;
-      } else {
-        meta = await statWorkspaceFileSafely(workspaceRoot, name);
-      }
-      return Object.assign(
-        {
-          name,
-          path: path.join(workspaceDir, name),
-          missing: meta === null,
-        },
-        meta ?? { expectedAbsent: isExpectedAbsentBootstrapFile(name) },
-      );
-    }),
-  );
-}
-
-function hashWorkspaceFileContent(content: Buffer | string): string {
-  return createHash("sha256").update(content).digest("hex");
 }
 
 function respondWorkspaceFileUnsafe(respond: RespondFn, name: string): void {
@@ -207,7 +160,6 @@ async function readWorkspaceFileContent(
     const workspaceRoot = await root(workspaceDir);
     const safeRead = await workspaceRoot.read(name, {
       hardlinks: "reject",
-      nonBlockingRead: true,
     });
     return safeRead.buffer.toString("utf-8");
   } catch (err) {
@@ -236,31 +188,6 @@ export async function buildIdentityMarkdownOrRespondUnsafe(params: {
   }
 }
 
-function respondWorkspaceFileMissing(params: {
-  respond: RespondFn;
-  agentId: string;
-  workspaceDir: string;
-  name: string;
-  filePath: string;
-}): void {
-  params.respond(
-    true,
-    {
-      agentId: params.agentId,
-      workspace: params.workspaceDir,
-      // Clients merge this entry over the listed one, so it must carry the same
-      // absence classification or a picked optional file re-renders as a fault.
-      file: {
-        name: params.name,
-        path: params.filePath,
-        missing: true,
-        expectedAbsent: isExpectedAbsentBootstrapFile(params.name),
-      },
-    },
-    undefined,
-  );
-}
-
 async function readWorkspaceFileHash(
   workspaceRoot: WorkspaceRoot,
   name: string,
@@ -268,9 +195,8 @@ async function readWorkspaceFileHash(
   try {
     const safeRead = await workspaceRoot.read(name, {
       hardlinks: "reject",
-      nonBlockingRead: true,
     });
-    return hashWorkspaceFileContent(safeRead.buffer);
+    return sha256Hex(safeRead.buffer);
   } catch (err) {
     if (isMissingPathError(err)) {
       return undefined;
@@ -306,9 +232,8 @@ export const agentFileHandlers: Pick<
       return;
     }
     const cfg = context.getRuntimeConfig();
-    const agentId = resolveAgentIdOrError(params.agentId, cfg);
+    const agentId = resolveConfiguredAgentIdOrRespondError(params.agentId, cfg, respond);
     if (!agentId) {
-      respondAgentNotFound(respond, params.agentId);
       return;
     }
     const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
@@ -318,7 +243,34 @@ export const agentFileHandlers: Pick<
     } catch {
       // Fall back to showing BOOTSTRAP if workspace state cannot be read.
     }
-    const files = await listAgentFiles(workspaceDir, { hideBootstrap });
+    const access = getAgentWorkspaceAccess(workspaceDir);
+    const workspaceRoot = access ? null : await root(workspaceDir).catch(() => null);
+    const names = hideBootstrap ? CORE_FILE_NAMES_POST_ONBOARDING : CORE_FILE_NAMES;
+    const files = await Promise.all(
+      names.map(async (name) => {
+        let meta: FileMeta | null;
+        if (access) {
+          const stat = await access.bridge.stat({ filePath: name });
+          if (getAgentWorkspaceAccess(workspaceDir) !== access) {
+            throw new Error("Workspace access changed while listing Agent documents");
+          }
+          meta =
+            stat?.type === "file"
+              ? { size: stat.size, updatedAtMs: Math.floor(stat.mtimeMs) }
+              : null;
+        } else {
+          meta = await statWorkspaceFileSafely(workspaceRoot, name);
+        }
+        return Object.assign(
+          {
+            name,
+            path: path.join(workspaceDir, name),
+            missing: meta === null,
+          },
+          meta ?? { expectedAbsent: isExpectedAbsentBootstrapFile(name) },
+        );
+      }),
+    );
     respond(true, { agentId, workspace: workspaceDir, files }, undefined);
   },
   "agents.files.get": async ({ params, respond, context }) => {
@@ -335,6 +287,22 @@ export const agentFileHandlers: Pick<
     }
     const { agentId, workspaceDir, name } = resolved;
     const filePath = path.join(workspaceDir, name);
+    const respondFile = (file?: Omit<AgentsFilesGetResult["file"], "name" | "path" | "missing">) =>
+      respond(
+        true,
+        {
+          agentId,
+          workspace: workspaceDir,
+          file: {
+            name,
+            path: filePath,
+            missing: file === undefined,
+            // Missing entries retain the same absence classification as the file list.
+            ...(file ?? { expectedAbsent: isExpectedAbsentBootstrapFile(name) }),
+          },
+        },
+        undefined,
+      );
     const access = getAgentWorkspaceAccess(workspaceDir);
     let file: FileMeta & { hash: string; content: string };
     if (access) {
@@ -343,7 +311,7 @@ export const agentFileHandlers: Pick<
         throw new Error("Workspace access changed while reading an Agent document");
       }
       if (!stat) {
-        respondWorkspaceFileMissing({ respond, agentId, workspaceDir, name, filePath });
+        respondFile();
         return;
       }
       const data = await access.bridge.readFile({
@@ -359,7 +327,7 @@ export const agentFileHandlers: Pick<
       file = {
         size: data.length,
         updatedAtMs: Math.floor(stat.mtimeMs),
-        hash: hashWorkspaceFileContent(data),
+        hash: sha256Hex(data),
         content: new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(data),
       };
     } else {
@@ -368,11 +336,10 @@ export const agentFileHandlers: Pick<
         const workspaceRoot = await root(workspaceDir);
         safeRead = await workspaceRoot.read(name, {
           hardlinks: "reject",
-          nonBlockingRead: true,
         });
       } catch (err) {
         if (isMissingPathError(err)) {
-          respondWorkspaceFileMissing({ respond, agentId, workspaceDir, name, filePath });
+          respondFile();
           return;
         }
         if (err instanceof FsSafeError) {
@@ -384,24 +351,11 @@ export const agentFileHandlers: Pick<
       file = {
         size: safeRead.stat.size,
         updatedAtMs: Math.floor(safeRead.stat.mtimeMs),
-        hash: hashWorkspaceFileContent(safeRead.buffer),
+        hash: sha256Hex(safeRead.buffer),
         content: safeRead.buffer.toString("utf-8"),
       };
     }
-    respond(
-      true,
-      {
-        agentId,
-        workspace: workspaceDir,
-        file: {
-          name,
-          path: filePath,
-          missing: false,
-          ...file,
-        },
-      },
-      undefined,
-    );
+    respondFile(file);
   },
   "agents.files.set": async ({ params, respond, context }) => {
     if (!assertValidParams(params, validateAgentsFilesSetParams, "agents.files.set", respond)) {
@@ -467,7 +421,7 @@ export const agentFileHandlers: Pick<
             if (data.length > MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES) {
               throw new Error("Workspace document exceeds its read bound");
             }
-            currentHash = hashWorkspaceFileContent(data);
+            currentHash = sha256Hex(data);
           }
           if (currentHash !== expectedHash) {
             return { currentHash };
@@ -521,6 +475,11 @@ export const agentFileHandlers: Pick<
     const meta: Partial<FileMeta> | null = access
       ? { size: Buffer.byteLength(content) }
       : await statWorkspaceFileSafely(workspaceRoot, name);
+    if (name === DEFAULT_IDENTITY_FILENAME) {
+      // Drain reads admitted before the write before clients start their replacement read.
+      await loadAgentIdentityFromWorkspaceAsync(workspaceDir);
+      context.broadcast("agent.identity.changed", { agentId });
+    }
     respond(
       true,
       {
@@ -533,7 +492,7 @@ export const agentFileHandlers: Pick<
           missing: false,
           size: meta?.size,
           ...(!access ? { updatedAtMs: meta?.updatedAtMs } : {}),
-          hash: hashWorkspaceFileContent(content),
+          hash: sha256Hex(content),
           content,
         },
       },

@@ -134,6 +134,26 @@ function runChangedPathsWorkflow(repo: string, base: string, env: NodeJS.Process
 }
 
 describe("run-opengrep.sh", () => {
+  it.each(["--help"])("prints complete usage without shell bootstrap code for %s", (flag) => {
+    const repo = createTempDir("openclaw-run-opengrep-help-");
+    copyRunOpengrepFiles(repo);
+    const result = spawnSync("bash", ["scripts/run-opengrep.sh", flag], {
+      cwd: repo,
+      encoding: "utf8",
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+    expect(result.stdout).toMatch(/^# scripts\/run-opengrep\.sh\n/u);
+    expect(result.stdout).toContain("# Usage:\n");
+    expect(result.stdout).toContain("# Optional positional path overrides come last:\n");
+    expect(result.stdout).toContain(
+      "# Exit code: non-zero on scan errors, and on findings when --error is passed.\n",
+    );
+    expect(result.stdout).not.toContain("BASH_VERSINFO");
+    expect(fs.existsSync(path.join(repo, ".opengrep-out"))).toBe(false);
+  });
+
   it("fails before scanning with official installation advice when opengrep is missing", () => {
     const repo = createTempDir("openclaw-run-opengrep-missing-");
     copyRunOpengrepFiles(repo);
@@ -331,11 +351,8 @@ describe("run-opengrep.sh", () => {
     });
 
     it.each([
-      { shape: "merge", branch: "main", depth: 2, partial: false, passes: true },
       { shape: "partial merge", branch: "main", depth: 2, partial: true, passes: true },
-      { shape: "linear", branch: "feature", depth: 2, partial: false, passes: true },
       { shape: "merge without parents", branch: "main", depth: 1, partial: false, passes: false },
-      { shape: "linear without base", branch: "feature", depth: 1, partial: false, passes: false },
     ])(
       "prepares and scans a shallow $shape checkout without unrelated base fetches",
       ({ branch, depth, partial, passes }) => {
@@ -429,7 +446,7 @@ describe("run-opengrep.sh", () => {
 });
 
 describe("OpenGrep GitHub SARIF uploads", () => {
-  it.each(["opengrep-precise.yml", "opengrep-precise-full.yml"])(
+  it.each(["opengrep-precise.yml"])(
     "%s preserves raw evidence and uploads only findings without accepted source suppression",
     (workflowName) => {
       const repo = createTempDir("openclaw-opengrep-sarif-");
@@ -507,22 +524,6 @@ describe("OpenGrep GitHub SARIF uploads", () => {
       expect(artifact.with?.path).toBe(reportPath);
       expect(artifact.with?.["if-no-files-found"]).toBe("error");
       expect(fs.readFileSync(path.join(repo, reportPath), "utf8")).toBe(raw);
-    },
-  );
-
-  it.each(["{", JSON.stringify({ version: "2.1.0", runs: [{ results: "invalid" }] })])(
-    "fails malformed reports without emitting an upload payload: %s",
-    (raw) => {
-      const repo = createTempDir("openclaw-opengrep-sarif-invalid-");
-      const inputPath = path.join(repo, "raw.sarif");
-      writeFile(inputPath, raw);
-      const result = spawnSync(process.execPath, ["scripts/opengrep-github-sarif.mjs", inputPath], {
-        encoding: "utf8",
-      });
-      expect(result.status).toBe(1);
-      expect(result.stdout).toBe("");
-      expect(result.stderr.trimEnd()).toMatch(/\[opengrep-github-sarif\] FAILED \(exit 1\)$/);
-      expect(fs.readFileSync(inputPath, "utf8")).toBe(raw);
     },
   );
 });

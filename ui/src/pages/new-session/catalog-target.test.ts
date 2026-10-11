@@ -1,15 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { SessionCapability } from "../../lib/sessions/session-capability.ts";
 import {
   allowsSelectedAgent,
-  GroupRouteRevalidation,
   resolveAgentId,
   resolveCreateTarget,
   routeKey,
   routeKeyFromSearch,
 } from "./catalog-target.ts";
-import type { NewSessionRouteData } from "./location.ts";
 
 describe("new-session catalog target", () => {
   const agents = [{ id: "main" }, { id: "research" }];
@@ -19,7 +16,6 @@ describe("new-session catalog target", () => {
       agentId: "main",
       requestedAgentId: "main",
       catalogId: "claude",
-      model: "",
       catalogLabel: "",
       startTerminal: false,
     };
@@ -38,7 +34,6 @@ describe("new-session catalog target", () => {
     const requested = {
       requestedAgentId: "research",
       catalogId: "claude",
-      model: "",
       catalogLabel: "",
       startTerminal: false,
     };
@@ -56,7 +51,6 @@ describe("new-session catalog target", () => {
       agentId: "",
       requestedAgentId: "research",
       catalogId: "claude",
-      model: "",
       catalogLabel: "",
       startTerminal: false,
     };
@@ -70,12 +64,11 @@ describe("new-session catalog target", () => {
       agentId: "main",
       requestedAgentId: "main",
       catalogId: "",
-      model: "",
       catalogLabel: "",
       startTerminal: false,
     };
-    const first = { ...plain, requestedModel: "example/first", model: "example/first" };
-    const second = { ...plain, requestedModel: "example/second", model: "example/second" };
+    const first = { ...plain, requestedModel: "example/first" };
+    const second = { ...plain, requestedModel: "example/second" };
     expect(routeKey(plain)).toBe('["main","",""]');
     expect(routeKey(first)).not.toBe(routeKey(plain));
     expect(routeKey(first)).not.toBe(routeKey(second));
@@ -132,7 +125,6 @@ describe("new-session catalog target", () => {
     await expect(
       resolveCreateTarget({ request } as unknown as GatewayBrowserClient, "claude", "research"),
     ).resolves.toEqual({
-      model: "",
       catalogLabel: "Claude Code",
       startTerminal: true,
       terminalHosts: [{ hostId: "node:dev", label: "Dev" }],
@@ -152,39 +144,5 @@ describe("new-session catalog target", () => {
 
     expect(resolveAgentId(location, [], "main")).toBe("main");
     expect(resolveAgentId(location, [{ id: "roboclaw" }], "roboclaw")).toBe("roboclaw");
-  });
-
-  it("revalidates when a missing group reappears with empty defaults", async () => {
-    let data: NewSessionRouteData = {
-      agentId: "main",
-      requestedAgentId: "main",
-      catalogId: "",
-      model: "",
-      catalogLabel: "",
-      startTerminal: false,
-      group: "Client",
-      groupStatus: "resolved",
-      groupCwd: "",
-      groupWorktree: false,
-      groupCatalogGeneration: 1,
-      groupDefaultsStatus: "ready",
-    };
-    const state = { groupSettings: [] as Array<{ name: string; position: number }> };
-    const sessions = {
-      state,
-      groupsGeneration: () => 1,
-      groupsStatus: () => "ready",
-    } as unknown as SessionCapability;
-    const revalidate = vi.fn(async () => {
-      data = { ...data, groupStatus: "missing" };
-    });
-    const coordinator = new GroupRouteRevalidation(() => data, revalidate);
-
-    coordinator.synchronize(sessions);
-    await vi.waitFor(() => expect(revalidate).toHaveBeenCalledTimes(1));
-    state.groupSettings = [{ name: "Client", position: 0 }];
-    coordinator.synchronize(sessions);
-
-    await vi.waitFor(() => expect(revalidate).toHaveBeenCalledTimes(2));
   });
 });

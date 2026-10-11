@@ -76,7 +76,8 @@ export class DiscordAudioWorker {
   }
 
   async connect(): Promise<void> {
-    const deadline = Date.now() + this.options.connectTimeoutMs;
+    // Readiness and retries share an elapsed budget; native timeout delays require whole milliseconds.
+    const deadline = performance.now() + this.options.connectTimeoutMs;
     for (let attempt = 0; attempt < 2; attempt += 1) {
       if (this.stopped) {
         return;
@@ -110,7 +111,7 @@ export class DiscordAudioWorker {
           this.sdk.VoiceConnectionStatus.Ready,
           AbortSignal.any([
             this.stopAbort.signal,
-            AbortSignal.timeout(Math.max(1, deadline - Date.now())),
+            AbortSignal.timeout(Math.max(1, Math.floor(deadline - performance.now()))),
           ]),
         );
         if (this.stopped) {
@@ -140,7 +141,7 @@ export class DiscordAudioWorker {
         if (
           attempt === 0 &&
           !this.stopped &&
-          Date.now() < deadline &&
+          performance.now() < deadline &&
           error instanceof Error &&
           error.message.toLowerCase().includes("operation was aborted")
         ) {
@@ -249,7 +250,7 @@ export class DiscordAudioWorker {
         break;
       }
       case "output-audio":
-        this.outputs.get(command.id)?.appendAdmitted(Buffer.from(command.audio), command.audible);
+        this.outputs.get(command.id)?.append(Buffer.from(command.audio), command.audible);
         break;
       case "output-mark":
         this.outputs
@@ -288,12 +289,11 @@ export class DiscordAudioWorker {
           break;
         }
         const writable = this.fileInput.stream.write(Buffer.from(command.audio));
+        const onDrain = () => this.post({ type: "stream-drain", id: command.id });
         if (writable) {
-          this.post({ type: "stream-drain", id: command.id });
+          onDrain();
         } else {
-          this.fileInput.stream.once("drain", () =>
-            this.post({ type: "stream-drain", id: command.id }),
-          );
+          this.fileInput.stream.once("drain", onDrain);
         }
         break;
       }
@@ -361,29 +361,26 @@ export class DiscordAudioWorker {
     });
   }
 
-  private readonly onSpeakingStart = (userId: string) => {
-    if (this.stopped) {
-      return;
-    }
-    for (const capture of this.captures.values()) {
-      if (capture.userId === userId) {
-        clearTimeout(capture.timer);
-        capture.timer = undefined;
-      }
-    }
-    this.post({ type: "speaking", userId, speaking: true });
-  };
-  private readonly onSpeakingEnd = (userId: string) => {
+  private readonly onSpeakingStart = (userId: string) => this.onSpeaking(userId, true);
+  private readonly onSpeakingEnd = (userId: string) => this.onSpeaking(userId, false);
+
+  private onSpeaking(userId: string, speaking: boolean): void {
     if (this.stopped) {
       return;
     }
     for (const [id, capture] of this.captures) {
-      if (capture.userId === userId) {
+      if (capture.userId !== userId) {
+        continue;
+      }
+      if (speaking) {
+        clearTimeout(capture.timer);
+        capture.timer = undefined;
+      } else {
         this.finalizeLater(id, capture);
       }
     }
-    this.post({ type: "speaking", userId, speaking: false });
-  };
+    this.post({ type: "speaking", userId, speaking });
+  }
   private stopCapture(capture: Capture): void {
     if (capture.closed) {
       return;

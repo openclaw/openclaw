@@ -10,12 +10,12 @@ import { isNonSecretApiKeyMarker } from "../agents/model-auth-markers.js";
 import { isAuthModeAllowedForModel } from "../agents/model-auth-policy.js";
 import {
   profileTypeToAuthMode,
-  resolveProviderConfig,
   resolveProviderEntryApiKeyProfileReference,
   resolveUsableCustomProviderApiKey,
 } from "../agents/model-auth-provider-config.js";
 import { resolveManagedSecretRefRuntimeProviderAuth } from "../agents/model-auth-runtime-config.js";
 import { resolveDirectProviderCredentialMode } from "../agents/model-auth-runtime-shared.js";
+import { resolveMergedModelProviderConfig } from "../config/model-provider-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
 type ProviderAuthProfileLookup = {
@@ -54,20 +54,15 @@ export function createProviderAuthAvailability(
   /**
    * Checks whether a provider has usable config/env auth or matching local auth profiles.
    */
-  function isProviderApiKeyConfigured(params: {
-    /** Provider id to check for config/env auth or local auth profiles. */
-    provider: string;
-    /** Optional runtime config used to resolve provider-owned API-key credentials. */
-    cfg?: OpenClawConfig;
-    /** Agent directory containing auth profiles. */
-    agentDir?: string;
-    /** Optional allowed profile credential types. */
-    profileTypes?: readonly AuthProfileCredential["type"][];
-    /** Provider capability the credential must authorize. */
-    capability?: string;
-    /** Optional provider-owned acceptance predicate for a known selected credential. */
-    acceptsApiKey?: (apiKey: string) => boolean;
-  }): boolean {
+  function isProviderApiKeyConfigured(
+    params: Pick<
+      ProviderAuthProfileLookup,
+      "provider" | "cfg" | "agentDir" | "profileTypes" | "capability"
+    > & {
+      /** Optional provider-owned acceptance predicate for a known selected credential. */
+      acceptsApiKey?: (apiKey: string) => boolean;
+    },
+  ): boolean {
     const agentDir = params.agentDir?.trim();
     if (params.acceptsApiKey) {
       const { acceptsApiKey, ...availability } = params;
@@ -75,7 +70,7 @@ export function createProviderAuthAvailability(
         return false;
       }
 
-      const providerConfig = resolveProviderConfig(params.cfg, params.provider);
+      const providerConfig = resolveMergedModelProviderConfig(params.cfg, params.provider);
       const authoredApiKey = providerConfig?.apiKey;
       const store = agentDir
         ? ensureAuthProfileStore(agentDir, { allowKeychainPrompt: false })
@@ -127,7 +122,7 @@ export function createProviderAuthAvailability(
             mode,
             authFlow,
           }));
-      const authoredApiKey = resolveProviderConfig(params.cfg, params.provider)?.apiKey;
+      const authoredApiKey = resolveMergedModelProviderConfig(params.cfg, params.provider)?.apiKey;
       const profileId = typeof authoredApiKey === "string" ? authoredApiKey.trim() : undefined;
       if (agentDir && profileId) {
         const credential = findPersistedAuthProfileCredential({ agentDir, profileId });
@@ -255,14 +250,11 @@ export function createProviderAuthAvailability(
     return undefined;
   }
 
-  function resolveUsableProviderAuthProfiles(params: {
-    provider: string;
-    cfg?: OpenClawConfig;
-    agentDir?: string;
-    allowKeychainPrompt?: boolean;
-    includeExternalCliAuth?: boolean;
-    includePendingOAuthRefresh?: boolean;
-  }): { agentDir: string; profileIds: string[]; store: AuthProfileStore } {
+  function resolveUsableProviderAuthProfiles(
+    params: Omit<ProviderAuthProfileLookup, "profileTypes" | "capability"> & {
+      includePendingOAuthRefresh?: boolean;
+    },
+  ): { agentDir: string; profileIds: string[]; store: AuthProfileStore } {
     const agentDir = params.agentDir?.trim() || resolveDefaultAgentDir(params.cfg ?? {});
     const externalCli = params.includeExternalCliAuth
       ? externalCliDiscoveryForProviderAuth({

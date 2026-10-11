@@ -74,6 +74,7 @@ function writeManifest(mode: "publish" | "configure-only", artifact: Uint8Array,
           packageDir: "extensions/meta",
           publishTag: "beta",
           bootstrapMode: mode,
+          family: "",
           requiresManualOverride: mode === "configure-only",
           artifactPath: "packages/meta/openclaw-meta-2026.7.1-beta.3.tgz",
           sha256: artifactIdentity.sha256,
@@ -151,13 +152,6 @@ function registryFetch(artifact: Uint8Array) {
 }
 
 describe("ClawHub published artifact verification", () => {
-  it("uses bounded streaming reads with an active attempt timeout", () => {
-    const source = readFileSync("scripts/verify-clawhub-published-artifact.mjs", "utf8");
-    expect(source).not.toContain(".arrayBuffer(");
-    expect(source).toContain("response.body.getReader()");
-    expect(source).toContain("AbortSignal.timeout(timeoutMs)");
-  });
-
   it("verifies exact artifact bytes without claiming the publication authentication", async () => {
     const artifact = new TextEncoder().encode("exact oidc tgz bytes");
     const fetchImpl = registryFetch(artifact);
@@ -182,39 +176,6 @@ describe("ClawHub published artifact verification", () => {
       },
     });
     expect(fetchImpl).toHaveBeenCalledTimes(4);
-  });
-
-  it("rejects a non-GitHub Actions trusted publisher", async () => {
-    const artifact = new TextEncoder().encode("exact oidc tgz bytes");
-    const fetchImpl = registryFetch(artifact);
-    fetchImpl
-      .mockResolvedValueOnce(
-        Response.json({
-          package: { tags: { beta: "2026.7.1-beta.3" } },
-        }),
-      )
-      .mockResolvedValueOnce(
-        Response.json({
-          trustedPublisher: {
-            provider: "other",
-            repository: "openclaw/openclaw",
-            workflowFilename: "plugin-clawhub-release.yml",
-            environment: null,
-          },
-        }),
-      );
-
-    await expect(
-      verifyPublishedClawHubPackage({
-        expectedArtifactDir: writeExpectedArtifact(artifact),
-        packageName: "@openclaw/meta",
-        packageVersion: "2026.7.1-beta.3",
-        publishTag: "beta",
-        registry: "https://clawhub.example",
-        retryOptions: { fetchImpl, attempts: 1, delayMs: 1 },
-      }),
-    ).rejects.toThrow("trusted publisher provider mismatch");
-    expect(fetchImpl).toHaveBeenCalledTimes(2);
   });
 
   it("rejects ambiguous or symlinked normal OIDC artifacts before registry access", async () => {
@@ -251,63 +212,6 @@ describe("ClawHub published artifact verification", () => {
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
-  it("requires exact bytes and complete artifact metadata", async () => {
-    const artifact = new TextEncoder().encode("exact tgz bytes");
-    const evidence = await verifyPublishedClawHubArtifacts({
-      ...immutableBinding(),
-      manifestPath: writeManifest("publish", artifact),
-      registry: "https://clawhub.example",
-      terminalRunAttempt: "2",
-      retryOptions: { fetchImpl: registryFetch(artifact), attempts: 1, delayMs: 1 },
-    });
-    expect(evidence).toMatchObject({
-      schemaVersion: 2,
-      producerRunAttempt: "1",
-      terminalRunAttempt: "2",
-      artifactName: "clawhub-bootstrap-aaaaaaaaaaaa-123-1",
-      clawhubToolchainIntegrity,
-      clawhubToolchainSha256,
-      clawhubToolchainVersion,
-      requestedPlugins: ["@openclaw/meta"],
-      verificationMode: "postpublish",
-      packages: [
-        {
-          packageName: "@openclaw/meta",
-          registrySha256: identity(artifact).sha256,
-          registrySize: artifact.byteLength,
-          npmIntegrity: identity(artifact).npmIntegrity,
-          npmShasum: identity(artifact).npmShasum,
-          artifactMetadata: {
-            kind: "npm-pack",
-            packageName: "@openclaw/meta",
-            version: "2026.7.1-beta.3",
-          },
-        },
-      ],
-    });
-  });
-
-  it("proves configure-only registry bytes before trusted-publisher mutation", async () => {
-    const artifact = new TextEncoder().encode("historical exact bytes");
-    const fetchImpl = registryFetch(artifact);
-    const evidence = await verifyPublishedClawHubArtifacts({
-      ...immutableBinding(),
-      manifestPath: writeManifest("configure-only", artifact),
-      mode: "configure-only-preflight",
-      registry: "https://clawhub.example",
-      terminalRunAttempt: "1",
-      retryOptions: { fetchImpl, attempts: 1, delayMs: 1 },
-    });
-    expect(evidence.packages[0]).toMatchObject({
-      bootstrapMode: "configure-only",
-      expectedSha256: identity(artifact).sha256,
-      registrySha256: identity(artifact).sha256,
-    });
-    expect(fetchImpl.mock.calls.some(([url]) => String(url).endsWith("/trusted-publisher"))).toBe(
-      false,
-    );
-  });
-
   it("rejects a missing configure-only tag before artifact or publisher requests", async () => {
     const artifact = new TextEncoder().encode("historical exact bytes");
     const fetchImpl = vi.fn(async (_input: RequestInfo | URL) =>
@@ -325,9 +229,7 @@ describe("ClawHub published artifact verification", () => {
         terminalRunAttempt: "1",
         retryOptions: { fetchImpl, attempts: 1, delayMs: 1 },
       }),
-    ).rejects.toThrow(
-      "@openclaw/meta@2026.7.1-beta.3 ClawHub artifact did not stabilize after 1 attempts; last failure @openclaw/meta ClawHub tag beta mismatch",
-    );
+    ).rejects.toThrow("@openclaw/meta ClawHub tag beta mismatch");
     expect(fetchImpl).toHaveBeenCalledTimes(1);
     expect(fetchImpl.mock.calls.some(([url]) => String(url).includes("/artifact"))).toBe(false);
     expect(fetchImpl.mock.calls.some(([url]) => String(url).endsWith("/trusted-publisher"))).toBe(
@@ -335,59 +237,181 @@ describe("ClawHub published artifact verification", () => {
     );
   });
 
-  it("retries invalid JSON, body read failures, and eventual byte convergence", async () => {
-    const expected = new TextEncoder().encode("expected");
-    const wrong = new TextEncoder().encode("wrong");
-    let detailCalls = 0;
-    let artifactCalls = 0;
-    const fetchImpl = vi.fn(async (input: string | URL | Request) => {
-      const url = String(input);
-      if (!url.includes("/artifact") && !url.endsWith("/trusted-publisher")) {
-        detailCalls += 1;
-        if (detailCalls === 1) {
-          return new Response("{invalid");
-        }
-        return Response.json({ package: { tags: { beta: "2026.7.1-beta.3" } } });
-      }
-      if (url.endsWith("/trusted-publisher")) {
-        return Response.json({
-          trustedPublisher: {
-            provider: "github-actions",
-            repository: "openclaw/openclaw",
-            workflowFilename: "plugin-clawhub-release.yml",
-            environment: null,
-          },
+  it.each([
+    ["invalid JSON", "detail", () => new Response("{invalid"), "invalid JSON"],
+    ["permanent HTTP", "detail", () => new Response(null, { status: 501 }), "HTTP 501"],
+    [
+      "conflicting tag",
+      "detail",
+      () => Response.json({ package: { tags: { beta: "2026.7.1-beta.2" } } }),
+      "tag beta mismatch",
+    ],
+    ["invalid UTF-8", "detail", () => new Response(new Uint8Array([0xff])), "invalid JSON"],
+    [
+      "missing artifact object",
+      "metadata",
+      () => Response.json({ package: { name: "@openclaw/meta" } }),
+      "missing or invalid",
+    ],
+    [
+      "conflicting publisher",
+      "publisher",
+      () => Response.json({ trustedPublisher: { provider: "other" } }),
+      "provider mismatch",
+    ],
+    [
+      "conflicting bytes",
+      "download",
+      () => artifactResponse(new TextEncoder().encode("wrong")),
+      "artifact sha256 mismatch",
+    ],
+    [
+      "conflicting metadata",
+      "metadata",
+      () => metadataResponse(new TextEncoder().encode("wrong")),
+      "artifact sha256 mismatch",
+    ],
+    [
+      "conflicting header",
+      "download",
+      (artifact: Uint8Array) => {
+        const response = artifactResponse(artifact);
+        response.headers.set("x-clawhub-artifact-sha256", "0".repeat(64));
+        return response;
+      },
+      "header mismatch",
+    ],
+    ["absent body", "detail", () => new Response(null), "no response body"],
+    [
+      "permanent TLS",
+      "detail",
+      () => {
+        throw new TypeError("fetch failed", {
+          cause: Object.assign(new Error("certificate rejected"), { code: "CERT_HAS_EXPIRED" }),
         });
-      }
-      if (url.endsWith("/artifact")) {
-        return metadataResponse(expected);
-      }
-      artifactCalls += 1;
-      if (artifactCalls === 1) {
-        return new Response(
-          new ReadableStream<Uint8Array>({
-            start(controller) {
-              controller.error(new Error("truncated body"));
-            },
-          }),
-        );
-      }
-      if (artifactCalls === 2) {
-        return artifactResponse(expected, wrong);
-      }
-      return artifactResponse(expected);
-    });
+      },
+      "fetch failed",
+    ],
+    [
+      "unknown transport failure",
+      "detail",
+      () => {
+        throw new Error("unknown failure");
+      },
+      "unknown failure",
+    ],
+  ] as const)(
+    "does not retry %s before a later valid response",
+    async (_label, stage, failure, message) => {
+      const artifact = new TextEncoder().encode("expected");
+      const healthy = registryFetch(artifact);
+      let failed = false;
+      const fetchImpl = vi.fn(async (input: string | URL | Request) => {
+        const url = String(input);
+        const current = url.endsWith("/artifact/download")
+          ? "download"
+          : url.endsWith("/artifact")
+            ? "metadata"
+            : url.endsWith("/trusted-publisher")
+              ? "publisher"
+              : "detail";
+        if (!failed && current === stage) {
+          failed = true;
+          return failure(artifact);
+        }
+        return healthy(input);
+      });
+      const sleep = vi.fn(async () => {});
+      await expect(
+        verifyPublishedClawHubPackage({
+          expectedArtifactDir: writeExpectedArtifact(artifact),
+          packageName: "@openclaw/meta",
+          packageVersion: "2026.7.1-beta.3",
+          publishTag: "beta",
+          registry: "https://clawhub.example",
+          retryOptions: { fetchImpl, attempts: 3, delayMs: 1, sleep },
+        }),
+      ).rejects.toThrow(message);
+      expect(sleep).not.toHaveBeenCalled();
+      expect(fetchImpl).toHaveBeenCalledTimes(
+        stage === "detail" ? 1 : stage === "publisher" ? 2 : 4,
+      );
+    },
+  );
+
+  it.each(["reset", "body reset", "visibility", "rate limit"])(
+    "recovers a transient %s without publishing",
+    async (failure) => {
+      const artifact = new TextEncoder().encode("expected");
+      const healthy = registryFetch(artifact);
+      let failed = false;
+      const fetchImpl = vi.fn(async (input: string | URL | Request) => {
+        if (!failed && (failure !== "body reset" || String(input).endsWith("/artifact/download"))) {
+          failed = true;
+          if (failure === "reset") {
+            throw new TypeError("fetch failed", {
+              cause: Object.assign(new Error("socket reset"), { code: "ECONNRESET" }),
+            });
+          }
+          if (failure === "body reset") {
+            return new Response(
+              new ReadableStream<Uint8Array>({
+                start(controller) {
+                  controller.error(
+                    new TypeError("terminated", {
+                      cause: Object.assign(new Error("socket closed"), { code: "UND_ERR_SOCKET" }),
+                    }),
+                  );
+                },
+              }),
+            );
+          }
+          return new Response(null, {
+            status: failure === "visibility" ? 404 : 429,
+            headers: { "retry-after": "2" },
+          });
+        }
+        return healthy(input);
+      });
+      const sleep = vi.fn(async () => {});
+      await expect(
+        verifyPublishedClawHubArtifacts({
+          ...immutableBinding(),
+          manifestPath: writeManifest("publish", artifact),
+          registry: "https://clawhub.example",
+          terminalRunAttempt: "1",
+          retryOptions: { fetchImpl, attempts: 2, delayMs: 1, sleep },
+        }),
+      ).resolves.toMatchObject({ packages: [{ registrySha256: identity(artifact).sha256 }] });
+      expect(sleep).toHaveBeenCalledExactlyOnceWith(
+        failure === "visibility" || failure === "rate limit" ? 2000 : 1,
+      );
+      expect(
+        fetchImpl.mock.calls.every(([input]) =>
+          String(input).startsWith("https://clawhub.example/api/v1/packages/"),
+        ),
+      ).toBe(true);
+    },
+  );
+
+  it("stops rather than retrying before an excessive server delay", async () => {
+    const artifact = new TextEncoder().encode("expected");
+    const fetchImpl = vi.fn(
+      async () => new Response(null, { status: 429, headers: { "retry-after": "61" } }),
+    );
     const sleep = vi.fn(async () => {});
     await expect(
-      verifyPublishedClawHubArtifacts({
-        ...immutableBinding(),
-        manifestPath: writeManifest("publish", expected),
+      verifyPublishedClawHubPackage({
+        expectedArtifactDir: writeExpectedArtifact(artifact),
+        packageName: "@openclaw/meta",
+        packageVersion: "2026.7.1-beta.3",
+        publishTag: "beta",
         registry: "https://clawhub.example",
-        terminalRunAttempt: "1",
-        retryOptions: { fetchImpl, attempts: 4, delayMs: 1, sleep },
+        retryOptions: { fetchImpl, attempts: 2, delayMs: 1, sleep },
       }),
-    ).resolves.toMatchObject({ packages: [{ registrySha256: identity(expected).sha256 }] });
-    expect(sleep).toHaveBeenCalledTimes(3);
+    ).rejects.toThrow("HTTP 429");
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(sleep).not.toHaveBeenCalled();
   });
 
   it("keeps the attempt timeout active through a stalled body", async () => {

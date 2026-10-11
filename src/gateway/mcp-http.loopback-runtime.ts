@@ -1,4 +1,6 @@
 // Process-local MCP loopback runtime state for owner/non-owner HTTP access.
+import { raceWithTimeout } from "../../packages/retry/src/index.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { resolveGlobalMap } from "../shared/global-singleton.js";
 type McpLoopbackRuntime = {
   port: number;
@@ -98,24 +100,18 @@ function notifyMcpLoopbackToolCallCaptureActivity(capture: McpLoopbackToolCallCa
 }
 
 /** Start loopback tool-call result capture for one serialized CLI invocation. */
-export function beginMcpLoopbackToolCallCapture(
-  params: McpLoopbackToolCallObservers & { captureKey: string },
-): void {
-  const captureKey = params.captureKey.trim();
+export function beginMcpLoopbackToolCallCapture({
+  captureKey: rawCaptureKey,
+  ...observers
+}: McpLoopbackToolCallObservers & { captureKey: string }): void {
+  const captureKey = rawCaptureKey.trim();
   if (!captureKey) {
     return;
   }
   nextToolCallCaptureGeneration += 1;
   toolCallCaptures.set(captureKey, {
+    ...observers,
     generation: nextToolCallCaptureGeneration,
-    onYield: params.onYield,
-    onRequestStart: params.onRequestStart,
-    onRequestClassified: params.onRequestClassified,
-    onRequestFinish: params.onRequestFinish,
-    onToolCallStart: params.onToolCallStart,
-    onToolCallUpdate: params.onToolCallUpdate,
-    onToolCallFinish: params.onToolCallFinish,
-    onToolCallResult: params.onToolCallResult,
     inFlight: 0,
     activityVersion: 0,
     activityWaiters: new Set(),
@@ -276,22 +272,16 @@ async function waitForMcpLoopbackToolCallCaptureActivity(
   capture: McpLoopbackToolCallCapture,
   timeoutMs: number,
 ): Promise<boolean> {
-  return await new Promise<boolean>((resolve) => {
-    let settled = false;
-    const finish = (active: boolean) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      clearTimeout(timer);
-      capture.activityWaiters.delete(resolveActivity);
-      resolve(active);
-    };
-    const resolveActivity = () => finish(true);
-    const timer = setTimeout(() => finish(false), Math.max(0, timeoutMs));
-    timer.unref?.();
-    capture.activityWaiters.add(resolveActivity);
-  });
+  const activity = createDeferredCore<boolean>();
+  const resolveActivity = () => activity.resolve(true);
+  capture.activityWaiters.add(resolveActivity);
+  try {
+    return await raceWithTimeout(activity.promise, Math.max(0, timeoutMs), () => false, {
+      ref: false,
+    });
+  } finally {
+    capture.activityWaiters.delete(resolveActivity);
+  }
 }
 
 /** Wait for admitted calls to settle and for a quiet request-admission grace. */

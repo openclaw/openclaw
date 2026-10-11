@@ -4,11 +4,13 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { createFixtureLifetime } from "./helpers/fixture-lifetime.js";
+import { requireNodeTool } from "./helpers/node-toolchain.js";
 import { runVitestShutdownCommand } from "./helpers/vitest-shutdown-command.js";
 
 const lifetime = createFixtureLifetime();
 afterEach(() => lifetime.cleanup());
 const source = process.cwd();
+const nodeExecPath = requireNodeTool("node");
 const publishedScript = path.join(source, "test/scripts/fixtures/update-gateway-2026.9.4.sh");
 // Exact 3a9d69db306cd7f081e06254cb89c4bcc14a7107 bytes; never patch the running old driver.
 const publishedSha256 = "944d24f53a4f6b4134326d6d3dc5fe135ab5524d7fdccd2af5b85572e00db652";
@@ -124,7 +126,7 @@ exec "$LEGACY_FIXTURE_NODE" --import "$LEGACY_FIXTURE_SOURCE/scripts/tsx.mjs" --
           cwd: checkout,
           signal,
           env: {
-            PATH: `${bin}${path.delimiter}${path.dirname(process.execPath)}${path.delimiter}${process.env.PATH ?? ""}`,
+            PATH: `${bin}${path.delimiter}${path.dirname(nodeExecPath)}${path.delimiter}${process.env.PATH ?? ""}`,
             HOME: home,
             TMPDIR: root,
             OPENCLAW_PROFILE: "selected",
@@ -136,7 +138,7 @@ exec "$LEGACY_FIXTURE_NODE" --import "$LEGACY_FIXTURE_SOURCE/scripts/tsx.mjs" --
             ).href,
             LEGACY_FIXTURE_ROOT: checkout,
             LEGACY_FIXTURE_BIN: bin,
-            LEGACY_FIXTURE_NODE: process.execPath,
+            LEGACY_FIXTURE_NODE: nodeExecPath,
             LEGACY_FIXTURE_MODE: mode,
             LEGACY_FIXTURE_PROFILE: mode === "explicit-profile" ? "qaRuntime" : "full",
             ...(restart === undefined ? {} : { OPENCLAW_UPDATE_RESTART_CMD: restart }),
@@ -149,7 +151,7 @@ exec "$LEGACY_FIXTURE_NODE" --import "$LEGACY_FIXTURE_SOURCE/scripts/tsx.mjs" --
         : [];
       expect(events.filter((event) => event === "stop")).toHaveLength(owns ? 1 : 0);
       if (["manual", "whitespace", "sibling", "unavailable", "explicit-profile"].includes(mode)) {
-        expect(result.stderr).toContain("Refusing to rebuild dist");
+        expect(result.stderr).toContain("Refusing to rebuild artifacts");
         expect(events).toEqual([]);
       } else if (mode.startsWith("build-throw-")) {
         expect(result.stderr).toContain("fixture compiler rejected");

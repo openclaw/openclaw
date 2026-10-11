@@ -6,19 +6,19 @@ import { nativeGatewaysCapability } from "../app/native-gateways.runtime.ts";
 import type { ThemeMode } from "../app/theme.ts";
 import { t } from "../i18n/index.ts";
 import { KEYBOARD_SHORTCUT_COMBOS } from "../lib/keyboard-shortcut-contract.ts";
-import { openExternalUrlSafe } from "../lib/open-external-url.ts";
 import type { PresenceViewer } from "../lib/presence-users.ts";
 import { requestDebugOverlayToggle } from "../pages/debug/debug-overlay-contract.ts";
 import {
   closeMenuAfterOwnDropdownHide,
   COMMAND_VALUE_PREFIX,
-  LINK_VALUE_PREFIX,
+  consumeSidebarMenuSelection,
   moveSidebarMenuFocus,
   renderSidebarHelpMenu,
 } from "./app-sidebar-agent-menu.ts";
-import { renderSidebarMenuAction, renderSidebarMenuTrigger } from "./app-sidebar-nav-menus.ts";
+import { renderSidebarMenuAction } from "./app-sidebar-nav-menus.ts";
 import { icons } from "./icons.ts";
 import { renderKbd, renderKeyboardShortcut } from "./kbd.ts";
+import { renderMenuTrigger } from "./menu-surface.ts";
 import "./sidebar-build-chip.ts";
 import "./viewer-facepile.ts";
 import { syncDropdownItemRadio, trackDropdownKeyboardDismissal } from "./web-awesome.ts";
@@ -139,28 +139,16 @@ export function renderSidebarIdentityMenu(params: SidebarIdentityMenuParams) {
       .distance=${0}
       aria-label=${t("profilePage.identity.menuLabel")}
       @wa-select=${(event: CustomEvent<{ item: HTMLElement & { value?: string } }>) => {
-        event.preventDefault();
-        const item = event.detail.item;
-        if (item.dataset.nativeNavigation) {
-          delete item.dataset.nativeNavigation;
-          params.onClose(false);
-          return;
-        }
-        const value = item.value;
+        const value = consumeSidebarMenuSelection(event, params.onClose);
         if (!value) {
           return;
         }
-        params.onClose(false);
         const capability = nativeGatewaysCapability();
         if (value.startsWith("gateway:")) {
           const id = decodeURIComponent(value.slice("gateway:".length));
           if (id !== capability?.snapshot?.currentId) {
             capability?.select(id);
           }
-          return;
-        }
-        if (value.startsWith(LINK_VALUE_PREFIX)) {
-          openExternalUrlSafe(decodeURIComponent(value.slice(LINK_VALUE_PREFIX.length)));
           return;
         }
         switch (value) {
@@ -206,7 +194,7 @@ export function renderSidebarIdentityMenu(params: SidebarIdentityMenuParams) {
       }}
       @wa-after-hide=${(event: Event) => closeMenuAfterOwnDropdownHide(event, params.onClose)}
     >
-      ${renderSidebarMenuTrigger(
+      ${renderMenuTrigger(
         { x: position.x, y: position.bottom },
         t("profilePage.identity.menuLabel"),
         "bottom",

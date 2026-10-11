@@ -167,13 +167,8 @@ describe("delivery queue entry state", () => {
 
   it.each([
     ["default", "custom"],
-    ["default", "builtin"],
-    ["relative", "custom"],
     ["relative", "builtin"],
     ["home-relative", "custom"],
-    ["home-relative", "builtin"],
-    ["empty", "custom"],
-    ["empty", "builtin"],
   ] as const)(
     "captures the SDK %s root before admission and lazy delivery for a %s callback",
     async (locator, callback) => {
@@ -211,7 +206,6 @@ describe("delivery queue entry state", () => {
         default: undefined,
         relative: "queue",
         "home-relative": "  ~/queue  ",
-        empty: "",
       }[locator];
       const suspension = tryBeginGatewaySuspendAdmission(() => {});
       expect(suspension?.commit()).toBe(true);

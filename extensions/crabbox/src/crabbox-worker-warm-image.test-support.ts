@@ -12,6 +12,7 @@ import {
 import { operationLeaseId } from "./crabbox-worker-profile.js";
 import type { createCrabboxWorkerProvider } from "./crabbox-worker-provider.js";
 import {
+  destroyAndWait,
   commandResult,
   createProviderFixtures,
   nodeEnrollmentFixture,
@@ -28,6 +29,19 @@ export const NODE_RUNTIME_IDENTITY = {
   nodeBootstrapSha256: createNodeBootstrapFixture().sha256,
   executionMode: "worker-turn" as const,
 };
+
+export function unsupportedCaptureReceipt(leaseId: string, provider = "aws") {
+  return {
+    schema: "crabbox.checkpoint.create.failure.v1",
+    outcome: "not_submitted",
+    reason: "native_unsupported",
+    provider,
+    leaseId,
+    localReservation: "none",
+    message:
+      "checkpoint create --mode native is unsupported for provider=aws target=linux through coordinator https://coordinator.example: the provider does not offer native checkpoints for coordinator-brokered leases with this mode and strategy; use --mode archive or a provider configuration that offers native checkpoints",
+  };
+}
 
 export const tempDirs: ReturnType<typeof useAutoCleanupTempDirTracker> =
   useAutoCleanupTempDirTracker(afterEach);
@@ -71,7 +85,7 @@ export function createWarmProvider(
   vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
   vi.spyOn(managedBinary, "ensureManagedCrabboxBinary").mockImplementation(async (params) => ({
     binary: params?.binary ?? "crabbox",
-    version: "0.55.0",
+    version: "999.0.0",
   }));
   const calls: CommandCall[] = [];
   const warn = vi.fn();
@@ -152,7 +166,7 @@ export async function captureWarmImage(
   machineClass?: string,
 ) {
   const lease = await provisionWarmProfile(provider, profile, operationId, machineClass);
-  await provider.destroy({ leaseId: lease.leaseId, profile });
+  await destroyAndWait(provider, { leaseId: lease.leaseId, profile });
 }
 
 export const PROJECT_KEY = "a".repeat(64);

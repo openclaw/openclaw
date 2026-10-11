@@ -1,14 +1,10 @@
-// Public usage fetch helpers for provider plugins.
 import { createLazyRuntimeMethod } from "../shared/lazy-runtime.js";
 
 export type {
-  ProviderUsageCostBreakdown,
   ProviderUsageCostDaily,
-  ProviderUsageCostHistory,
   ProviderUsageModelBreakdown,
   ProviderUsageBilling,
   ProviderUsageSnapshot,
-  UsageProviderId,
   UsageWindow,
 } from "../infra/provider-usage.types.js";
 

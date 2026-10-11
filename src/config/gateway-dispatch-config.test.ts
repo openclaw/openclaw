@@ -2,7 +2,11 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  GatewaySecretRefUnavailableError,
+  resolveGatewayCredentialsFromConfig,
+} from "../gateway/credentials.js";
 import {
   readGatewayDispatchConfig,
   readGatewayDispatchConfigWithShellEnvFallback,
@@ -19,6 +23,13 @@ vi.mock("../infra/shell-env.js", () => shellEnvMocks);
 
 const tempDirs: string[] = [];
 
+beforeEach(() => {
+  shellEnvMocks.loadShellEnvFallback.mockReset().mockReturnValue({ ok: true, applied: [] });
+  shellEnvMocks.resolveShellEnvFallbackTimeoutMs.mockReset().mockReturnValue(50);
+  shellEnvMocks.shouldDeferShellEnvFallback.mockReset().mockReturnValue(false);
+  shellEnvMocks.shouldEnableShellEnvFallback.mockReset().mockReturnValue(false);
+});
+
 function createTempConfig(files: Record<string, string>): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-gateway-dispatch-config-"));
   tempDirs.push(dir);
@@ -29,7 +40,7 @@ function createTempConfig(files: Record<string, string>): string {
 }
 
 afterEach(() => {
-  vi.clearAllMocks();
+  vi.restoreAllMocks();
   for (const dir of tempDirs.splice(0)) {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -50,7 +61,7 @@ describe("readGatewayDispatchConfig", () => {
         env: { vars: { OPENCLAW_GATEWAY_TOKEN: "inline-token" } },
         agents: {
           defaults: { timeoutSeconds: 42 },
-          list: [{ id: "ops", default: true }],
+          entries: { ops: {} },
         },
         plugins: {
           allow: ["vault"],
@@ -67,7 +78,7 @@ describe("readGatewayDispatchConfig", () => {
     expect(config.gateway?.port).toBe(18888);
     expect(config.gateway?.auth).toMatchObject({ mode: "token", token: "inline-token" });
     expect(config.agents?.defaults?.timeoutSeconds).toBe(42);
-    expect(config.agents?.list?.[0]?.id).toBe("ops");
+    expect(config.agents?.entries).toEqual({ ops: {} });
     expect(config.plugins).toEqual({
       allow: ["vault"],
       entries: { vault: { enabled: true } },
@@ -91,6 +102,63 @@ describe("readGatewayDispatchConfig", () => {
     );
   });
 
+  it.each([
+    { name: "escaped", token: "$${TOKEN}", env: {}, expected: "${TOKEN}" },
+    {
+      name: "environment-resolved",
+      token: "${GATEWAY_SECRET}",
+      env: { GATEWAY_SECRET: "${TOKEN}" },
+      expected: "${TOKEN}",
+    },
+  ])("preserves $name literal credentials through session defaults", ({ token, env, expected }) => {
+    const configPath = createTempConfig({
+      "openclaw.json5": JSON.stringify({
+        gateway: { auth: { mode: "token", token } },
+        session: { mainKey: "custom" },
+      }),
+    });
+
+    const config = readGatewayDispatchConfig({ configPath, env });
+
+    expect(resolveGatewayCredentialsFromConfig({ cfg: config, env })).toEqual({
+      token: expected,
+      password: undefined,
+    });
+    expect(config.session?.mainKey).toBe("main");
+  });
+
+  it.each(["${MISSING_TOKEN}", "prefix-${MISSING_TOKEN}"])(
+    "rejects an unresolved credential %s",
+    (token) => {
+      const configPath = createTempConfig({
+        "openclaw.json5": JSON.stringify({ gateway: { auth: { mode: "token", token } } }),
+      });
+      const config = readGatewayDispatchConfig({ configPath, env: {} });
+
+      expect(() => resolveGatewayCredentialsFromConfig({ cfg: config, env: {} })).toThrow(
+        GatewaySecretRefUnavailableError,
+      );
+    },
+  );
+
+  it.each([
+    { name: "disabled", enabled: false, deferred: false },
+    { name: "deferred", enabled: true, deferred: true },
+    { name: "unchanged", enabled: true, deferred: false },
+  ])("reads config once when shell fallback is $name", async ({ enabled, deferred }) => {
+    const configPath = createTempConfig({
+      "openclaw.json5": JSON.stringify({ gateway: { port: 18888 } }),
+    });
+    shellEnvMocks.shouldEnableShellEnvFallback.mockReturnValue(enabled);
+    shellEnvMocks.shouldDeferShellEnvFallback.mockReturnValue(deferred);
+    const readFile = vi.spyOn(fs, "readFileSync");
+
+    const config = await readGatewayDispatchConfigWithShellEnvFallback({ configPath, env: {} });
+
+    expect(config.gateway?.port).toBe(18888);
+    expect(readFile.mock.calls.filter(([file]) => file === configPath)).toHaveLength(1);
+  });
+
   it("loads only gateway credential shell env keys on explicit fallback", async () => {
     const configPath = createTempConfig({
       "openclaw.json5": `{
@@ -101,6 +169,7 @@ describe("readGatewayDispatchConfig", () => {
     const env: NodeJS.ProcessEnv = { OPENCLAW_CONFIG_PATH: configPath };
     shellEnvMocks.loadShellEnvFallback.mockImplementation(({ env: targetEnv }) => {
       targetEnv.OPENCLAW_GATEWAY_TOKEN = "shell-token";
+      return { ok: true, applied: ["OPENCLAW_GATEWAY_TOKEN"] };
     });
 
     const config = await readGatewayDispatchConfigWithShellEnvFallback({ env });

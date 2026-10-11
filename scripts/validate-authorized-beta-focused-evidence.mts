@@ -690,11 +690,7 @@ async function produceAuthorizedEligibilityPlan(
   }
 }
 
-async function collectInventory(
-  policy: AuthorizedBetaFocusedPolicy,
-  candidateRoot: string,
-  includeTrust: boolean,
-) {
+async function collectInventory(policy: AuthorizedBetaFocusedPolicy, candidateRoot: string) {
   const plan = await produceAuthorizedEligibilityPlan(policy, candidateRoot);
   const eligibilityPlanDigest = await assertAuthorizedEligibilityPlanDigest(
     plan,
@@ -706,34 +702,30 @@ async function collectInventory(
   const clawHubNames = plan.inventory.packages
     .filter((entry) => entry.targets.includes("clawhub"))
     .map((entry) => entry.name);
-  const inventory = {
+  const packageInventory = {
     eligibilityPlanDigest,
     npmCount: npmNames.length,
     npmNamesSha256: digestAuthorizedPackageNames(npmNames),
     clawHubCount: clawHubNames.length,
     clawHubNamesSha256: digestAuthorizedPackageNames(clawHubNames),
-    trustedPublisherCount: policy.inventory.trustedPublisherCount,
-    trustedPublisherNamesSha256: policy.inventory.trustedPublisherNamesSha256,
-    bootstrapCount: policy.inventory.bootstrapCount,
-    bootstrapNamesSha256: policy.inventory.bootstrapNamesSha256,
-    missingTrustedPublisherCount: policy.inventory.missingTrustedPublisherCount,
   };
-  if (includeTrust) {
-    const { collectPluginClawHubReleasePlan } = await import("./lib/plugin-clawhub-release.ts");
-    const trustPlan = await collectPluginClawHubReleasePlan({
-      rootDir: candidateRoot,
-      selectionMode: "all-publishable",
-    });
-    const trusted = trustPlan.candidates.map((entry) => entry.packageName);
-    const bootstrap = [...trustPlan.bootstrapCandidates, ...trustPlan.missingTrustedPublisher].map(
-      (entry) => entry.packageName,
-    );
-    inventory.trustedPublisherCount = trusted.length;
-    inventory.trustedPublisherNamesSha256 = digestAuthorizedPackageNames(trusted);
-    inventory.bootstrapCount = bootstrap.length;
-    inventory.bootstrapNamesSha256 = digestAuthorizedPackageNames(bootstrap);
-    inventory.missingTrustedPublisherCount = trustPlan.missingTrustedPublisher.length;
-  }
+  const { collectPluginClawHubReleasePlan } = await import("./lib/plugin-clawhub-release.ts");
+  const trustPlan = await collectPluginClawHubReleasePlan({
+    rootDir: candidateRoot,
+    selectionMode: "all-publishable",
+  });
+  const trusted = trustPlan.candidates.map((entry) => entry.packageName);
+  const bootstrap = [...trustPlan.bootstrapCandidates, ...trustPlan.missingTrustedPublisher].map(
+    (entry) => entry.packageName,
+  );
+  const inventory = {
+    ...packageInventory,
+    trustedPublisherCount: trusted.length,
+    trustedPublisherNamesSha256: digestAuthorizedPackageNames(trusted),
+    bootstrapCount: bootstrap.length,
+    bootstrapNamesSha256: digestAuthorizedPackageNames(bootstrap),
+    missingTrustedPublisherCount: trustPlan.missingTrustedPublisher.length,
+  };
   for (const [key, expected] of Object.entries(policy.inventory)) {
     if (inventory[key as keyof typeof inventory] !== expected) {
       fail(
@@ -803,7 +795,7 @@ async function main() {
   assertHistoricalAndFocusedEvidence(policy);
 
   if (command === "create") {
-    const inventory = await collectInventory(policy, candidateRoot, true);
+    const inventory = await collectInventory(policy, candidateRoot);
     const evidence: AuthorizedBetaFocusedEvidence = {
       schema: "openclaw.authorized-beta-focused-evidence.v1",
       mode: "authorized-beta-focused-v1",

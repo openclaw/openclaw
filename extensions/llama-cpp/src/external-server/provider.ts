@@ -10,11 +10,8 @@ import {
   runLiveProviderCatalog,
 } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { LLAMA_CPP_PROVIDER_ID } from "../defaults.js";
-import {
-  hasLlamaServerAuthorizationHeader,
-  resolveLlamaServerProviderHeaders,
-  resolveLlamaServerRuntimeApiKey,
-} from "./auth.js";
+import { hasLlamaServerAuthorizationHeader } from "./auth-policy.js";
+import { resolveLlamaServerProviderHeaders, resolveLlamaServerRuntimeApiKey } from "./auth.js";
 import { discoverLlamaServer } from "./discovery.js";
 import { resolveLlamaServerEndpoint } from "./endpoint.js";
 import { buildLlamaServerProviderConfig } from "./models.js";
@@ -44,7 +41,6 @@ export async function discoverLlamaServerProvider(
         baseUrl: configured?.baseUrl,
         apiKey,
         headers,
-        cacheTtlMs: 0,
       });
       if (discovery.kind !== "success") {
         if (!configured && !apiKey && !headers) {
@@ -81,7 +77,6 @@ export async function prepareLlamaServerDynamicModel(
     baseUrl: ctx.providerConfig?.baseUrl,
     apiKey: hasLlamaServerAuthorizationHeader(headers) ? undefined : apiKey,
     headers,
-    cacheTtlMs: 0,
   });
   const model =
     discovery.kind === "success"

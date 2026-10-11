@@ -4,7 +4,6 @@ import type {
   EnvironmentSummary,
 } from "@openclaw/gateway-protocol";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import type { ReactiveControllerHost } from "lit";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { readSessionChangedEvent } from "../../lib/sessions/reconcile.ts";
 import type { SessionCapability } from "../../lib/sessions/session-capability.ts";
@@ -12,21 +11,13 @@ import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import { PollController } from "../../lit/poll-controller.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { resolveChatPaneDesktopTarget } from "../../pages/chat/chat-pane-placement.ts";
+import type { SolidPanelController } from "../solid-panel-controller.ts";
 import { loadDesktopEnvironments } from "./desktop-source.ts";
 
-// Keep the chat placement dependency in this lazily loaded desktop owner, outside the boot chunk.
-async function resolveDesktopDocumentSessionTarget(
-  sessions: Pick<SessionCapability, "describe">,
-  client: Pick<GatewayBrowserClient, "request">,
-  sessionKey: string,
-  refresh: boolean,
-): Promise<string | null> {
-  // The exact-key lookup can find sessions outside a paged roster.
-  const { session } = await sessions.describe({ key: sessionKey }, { client, refresh });
-  return resolveChatPaneDesktopTarget(session ?? undefined);
-}
-
-type DesktopSessionHost = ReactiveControllerHost & {
+type DesktopSessionHost = Pick<
+  SolidPanelController,
+  "addController" | "removeController" | "requestUpdate" | "updateComplete"
+> & {
   isConnected: boolean;
   client: GatewayBrowserClient | null;
   sessions: Pick<SessionCapability, "describe">;
@@ -139,7 +130,7 @@ export class DesktopSessionController {
     this.stopStartup()?.resolve(undefined);
   }
 
-  targetChanged(changed: ReadonlyMap<string, unknown>, automaticSource: boolean): boolean {
+  targetChanged(changed: ReadonlyMap<PropertyKey, unknown>, automaticSource: boolean): boolean {
     return (
       changed.has("client") ||
       changed.has("available") ||
@@ -342,7 +333,9 @@ export class DesktopSessionController {
     return {
       target:
         target === undefined && documentMode && sessionKey !== null
-          ? resolveDesktopDocumentSessionTarget(sessions, client, sessionKey, refresh)
+          ? sessions
+              .describe({ key: sessionKey }, { client, refresh })
+              .then(({ session }) => resolveChatPaneDesktopTarget(session ?? undefined))
           : Promise.resolve(target ?? (sessionKey !== null ? null : undefined)),
       // Carry this owner across both target resolution and the selected status request.
       isCurrent,

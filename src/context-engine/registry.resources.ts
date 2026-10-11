@@ -59,7 +59,9 @@ export class ContextEngineFactoryResources {
   }
 
   run<T>(operation: () => T | Promise<T>): Promise<T> {
-    return this.work.track(() => this.context(() => this.invoke(operation)));
+    return this.work.track(() =>
+      this.context(() => (this.invocations ? this.invocations.run(operation) : operation())),
+    );
   }
 
   runCleanup<T>(operation: () => T): T {
@@ -77,10 +79,6 @@ export class ContextEngineFactoryResources {
 
   beginCleanup(): void {
     this.cleanupInvocations ??= this.invocations?.beginCleanup();
-  }
-
-  private invoke<T>(operation: () => T): T {
-    return this.invocations ? this.invocations.run(operation) : operation();
   }
 
   wrap<T>(value: T): T {
@@ -271,24 +269,39 @@ export async function resolveContextEngineFactory<T extends { engine: ContextEng
   return ref;
 }
 
+export type ContextEngineFactoryPreparation = {
+  completion: Promise<unknown>;
+  assertCurrent?: () => void;
+};
+
 /** Foreground engine resolution shares the same factory execution and physical resource owner. */
 export async function createContextEngineWithResources<T>(
   registry: PluginRegistry,
   registration: ContextEngineRegistration,
   create: (source: ContextEngineFactoryResources | undefined) => Promise<T>,
+  preparation?: ContextEngineFactoryPreparation,
 ): Promise<T> {
+  const completion = preparation?.completion;
+  const assertCurrent = preparation?.assertCurrent;
   return await runContextEngineFactoryResolution(async (abandon) => {
-    const source = retainContextEngineFactorySource(
-      registry,
-      registration,
-      getPluginRegistryInspectionResources(registry),
-      abandon,
-    );
+    let source: ContextEngineFactoryResources | undefined;
     try {
+      source = retainContextEngineFactorySource(
+        registry,
+        registration,
+        getPluginRegistryInspectionResources(registry),
+        abandon,
+      );
+      if (completion) {
+        await completion;
+        assertCurrent?.();
+      }
       return await (source ? source.run(() => create(source)) : create(undefined));
     } catch (error) {
       abandon(source);
       throw error;
+    } finally {
+      await completion;
     }
   });
 }

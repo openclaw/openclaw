@@ -1,4 +1,3 @@
-// Compares TUI selections, returned metadata, and Gateway or embedded events.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import {
   readSessionMessageIdentity,
@@ -15,6 +14,27 @@ import { extractTuiImageSources, type TuiImageSource } from "./tui-images.js";
 import type { SessionMessageEvent, TuiStateAccess } from "./tui-types.js";
 
 type OwnedTuiEvent = { sessionKey?: string | null; agentId?: string | null };
+
+export function captureTuiSessionSelection(
+  state: Pick<TuiStateAccess, "currentAgentId" | "currentSessionKey">,
+) {
+  return { sessionKey: state.currentSessionKey, agentId: state.currentAgentId };
+}
+
+/** A first durable ID may bind an unresolved selection, but a replacement retires it. */
+export function captureTuiSessionIncarnation(state: TuiStateAccess) {
+  const selection = captureTuiSessionSelection(state);
+  const sessionId = state.currentSessionId;
+  const generation = state.sessionGeneration ?? 0;
+  return {
+    selection,
+    sessionId,
+    isCurrent: () =>
+      matchesTuiSessionSelection(state, selection) &&
+      (state.sessionGeneration ?? 0) === generation &&
+      (sessionId === null || state.currentSessionId === sessionId),
+  };
+}
 
 /** Explicit selections stay distinct even when Gateway response aliases can match. */
 export function matchesTuiSessionSelection(

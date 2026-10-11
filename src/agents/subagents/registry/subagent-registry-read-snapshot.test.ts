@@ -1,23 +1,34 @@
-import { renameSync } from "node:fs";
 import { expect, it, vi } from "vitest";
+import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../../infra/kysely-sync.js";
 import { AsyncWorkScope } from "../../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
-import {
-  closeOpenClawStateDatabaseByPathAsync,
-  registerOpenClawStateDatabaseAsyncResource,
-} from "../../../state/openclaw-state-db-cache.js";
+import { closeOpenClawStateDatabaseByPathAsync } from "../../../state/openclaw-state-db-cache.js";
 import { withOpenClawStateDatabaseReadSnapshot } from "../../../state/openclaw-state-db-readonly.js";
+import type { DB as OpenClawStateKyselyDatabase } from "../../../state/openclaw-state-db.generated.js";
 import { openOpenClawStateDatabase } from "../../../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
-import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
+import {
+  createSubagentRunRecord,
+  configureMockSubagentRegistryPersistence,
+} from "../../subagent-test-fixtures.test-helpers.js";
+import { subagentRuns } from "./subagent-registry-memory.js";
+import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
 import type { PreparedSubagentRunsRead } from "./subagent-registry-read-snapshot.js";
 import {
+  persistRegistryFixture,
+  saveSubagentRegistryToSqlite,
+} from "./subagent-registry-state.fixture.test-support.js";
+import {
   clearSubagentRunsReadCacheForTest,
-  persistSubagentRunsToDiskOrThrow,
+  prepareSubagentMaintenanceRunsSnapshotForRead,
   prepareSubagentRunsSnapshotForRunIds,
+  prepareSubagentRunsSnapshotForSessions,
 } from "./subagent-registry-state.js";
-import { saveSubagentRegistryToSqlite } from "./subagent-registry.store.sqlite.js";
+import {
+  loadSubagentRunsForSessionsInDatabase,
+  subagentRunsDurableBasisMatches,
+} from "./subagent-registry.store.sqlite.js";
 
 function retainedRun() {
   return createSubagentRunRecord({
@@ -45,6 +56,26 @@ async function withPersistedReads(run: () => Promise<void>) {
   );
 }
 
+it("captures current committed maintenance protection after preparation", async () => {
+  await withPersistedReads(async () => {
+    const entry = retainedRun();
+    persistRegistryFixture(new Map([[entry.runId, entry]]));
+    const prepared = await prepareSubagentMaintenanceRunsSnapshotForRead(new Map());
+    const completed = { ...entry, cleanupCompletedAt: 100 };
+    const active = { ...entry, runId: "new-child", childSessionKey: "agent:main:subagent:new" };
+    persistRegistryFixture(
+      new Map([
+        [completed.runId, completed],
+        [active.runId, active],
+      ]),
+      [completed.runId, active.runId],
+    );
+    const current = prepared.capture();
+    expect(current.get(entry.runId)?.cleanupCompletedAt).toBe(100);
+    expect(current.get(active.runId)?.childSessionKey).toBe(active.childSessionKey);
+  });
+});
+
 it("does not retain a removed live-only row as a prepared durable payload", async () => {
   await withPersistedReads(async () => {
     const entry = retainedRun();
@@ -55,58 +86,7 @@ it("does not retain a removed live-only row as a prepared durable payload", asyn
   });
 });
 
-it.each(["reopening", "replacing"] as const)(
-  "rejects a retired published snapshot after %s the database file",
-  async (change) => {
-    await withPersistedReads(async () => {
-      const entry = retainedRun();
-      persistSubagentRunsToDiskOrThrow(new Map([[entry.runId, entry]]));
-      const context = captureOpenClawStateWorkerContext();
-      const original = await prepareSubagentRunsSnapshotForRunIds(new Map(), ["collector"]);
-      const release = createDeferredCore();
-      const unregister = registerOpenClawStateDatabaseAsyncResource({
-        close: () => release.promise,
-      });
-      const closing = closeOpenClawStateDatabaseByPathAsync(context.admission.databasePath);
-      try {
-        expect(() => captureOpenClawStateWorkerContext()).toThrow("read admission is closed");
-        const retired = {
-          ...entry,
-          completion: { required: false, resultText: "retired publication" },
-        };
-        persistSubagentRunsToDiskOrThrow(new Map([[entry.runId, retired]]), [entry.runId]);
-        release.resolve();
-        await closing;
-        if (change === "replacing") {
-          renameSync(context.admission.databasePath, `${context.admission.databasePath}.retired`);
-        }
-        const reopened = {
-          ...entry,
-          completion: { required: false, resultText: "reopened durable result" },
-        };
-        saveSubagentRegistryToSqlite(new Map([[entry.runId, reopened]]));
-        const current = captureOpenClawStateWorkerContext();
-        expect(current.admission.identity.key === context.admission.identity.key).toBe(
-          change === "reopening",
-        );
-        const consume = vi.fn();
-        expect(() => original.consume(consume)).toThrow("read admission changed");
-        expect(consume).not.toHaveBeenCalled();
-        const prepared = await prepareSubagentRunsSnapshotForRunIds(new Map(), ["collector"]);
-        expect(prepared.consume((runs) => runs.get(entry.runId)?.completion?.resultText)).toEqual({
-          ready: true,
-          value: "reopened durable result",
-        });
-      } finally {
-        release.resolve();
-        await closing;
-        unregister();
-      }
-    });
-  },
-);
-
-it.each(["delete", "replace", "move alias", "full publication"] as const)(
+it.each(["delete", "replace", "move alias", "update"] as const)(
   "applies a %s in the prepared read's consuming frame",
   async (publication) => {
     await withPersistedReads(async () => {
@@ -121,10 +101,7 @@ it.each(["delete", "replace", "move alias", "full publication"] as const)(
         completion: { required: false, resultText: "current result" },
       };
       const current = new Map(publication === "delete" ? [] : [[replacement.runId, replacement]]);
-      persistSubagentRunsToDiskOrThrow(
-        current,
-        publication === "full publication" ? undefined : [entry.runId, replacement.runId],
-      );
+      persistRegistryFixture(current, [entry.runId, replacement.runId]);
       expect(prepared.consume((runs) => [...runs.values()])).toEqual({
         ready: true,
         value: publication === "delete" || publication === "move alias" ? [] : [replacement],
@@ -199,3 +176,193 @@ it("keeps a prepared private read inside its exact active snapshot", async () =>
     }
   });
 });
+
+it("prepares durable grandchildren through live-only parents and refuses changed live topology", async () => {
+  await withPersistedReads(async () => {
+    const root = "agent:main:cron:prepared";
+    const parent = {
+      ...retainedRun(),
+      runId: "live-parent",
+      requesterSessionKey: root,
+      childSessionKey: "agent:main:subagent:live-parent",
+    };
+    const grandchild = {
+      ...retainedRun(),
+      runId: "persisted-grandchild",
+      requesterSessionKey: parent.childSessionKey,
+      childSessionKey: "agent:main:subagent:persisted-grandchild",
+    };
+    saveSubagentRegistryToSqlite(new Map([[grandchild.runId, grandchild]]));
+    const memory = new Map([[parent.runId, parent]]);
+    const prepared = await prepareSubagentRunsSnapshotForSessions(memory, [root]);
+    expect(
+      prepared.consume((runs) => ({
+        rawParent: runs.get(parent.runId) === parent,
+        grandchild: runs.get(grandchild.runId)?.childSessionKey,
+      })),
+    ).toEqual({
+      ready: true,
+      value: { rawParent: true, grandchild: grandchild.childSessionKey },
+    });
+    expect(prepared.basis.digest).toMatch(/^[a-f0-9]{64}$/u);
+    expect(Object.isFrozen(prepared.basis)).toBe(true);
+    memory.set("new-child", {
+      ...parent,
+      runId: "new-child",
+      childSessionKey: "agent:main:subagent:new",
+    });
+    const consume = vi.fn();
+    expect(prepared.consume(consume)).toEqual({ ready: false });
+    expect(consume).not.toHaveBeenCalled();
+  });
+});
+
+it("shares immutable live topology until a registry mutation and still fences relevant changes", async () => {
+  await withPersistedReads(async () => {
+    const entry = retainedRun();
+    subagentRuns.set(entry.runId, entry);
+    const prepare = () =>
+      prepareSubagentRunsSnapshotForSessions(subagentRuns, [entry.requesterSessionKey]);
+    try {
+      const first = await prepare();
+      const second = await prepare();
+      expect(second.basis.liveTopology).toBe(first.basis.liveTopology);
+      expect(Object.isFrozen(first.basis.liveTopology)).toBe(true);
+      expect(Object.isFrozen(first.basis.liveTopology[0])).toBe(true);
+
+      const unrelated = {
+        ...entry,
+        runId: "unrelated",
+        requesterSessionKey: "agent:other:main",
+        childSessionKey: "agent:other:subagent:child",
+      };
+      subagentRuns.set(unrelated.runId, unrelated);
+      expect(first.consume((runs) => [...runs.keys()])).toEqual({
+        ready: true,
+        value: [entry.runId],
+      });
+      const third = await prepare();
+      expect(third.basis.liveTopology).not.toBe(first.basis.liveTopology);
+      expect(first.basis.liveTopology).toEqual([
+        { childSessionKey: entry.childSessionKey, requesterSessionKey: entry.requesterSessionKey },
+      ]);
+
+      subagentRuns.set(entry.runId, { ...entry, childSessionKey: "agent:main:subagent:moved" });
+      expect(first.consume(() => "stale")).toEqual({ ready: false });
+      subagentRuns.delete(entry.runId);
+      expect((await prepare()).consume((runs) => runs.size)).toEqual({ ready: true, value: 0 });
+    } finally {
+      subagentRuns.delete(entry.runId);
+      subagentRuns.delete("unrelated");
+    }
+  });
+});
+
+it.each(["update", "delete"] as const)(
+  "preserves fresh durable descendants after a refused named %s",
+  async (kind) => {
+    await withPersistedReads(async () => {
+      const entry = retainedRun();
+      persistRegistryFixture(new Map([[entry.runId, entry]]));
+      // A foreign committed value must beat the old resident committed snapshot.
+      const foreign = { ...entry, task: "foreign committed task" };
+      saveSubagentRegistryToSqlite(new Map([[foreign.runId, foreign]]));
+      const fresh = await prepareSubagentRunsSnapshotForSessions(new Map(), [
+        entry.requesterSessionKey,
+      ]);
+      expect(fresh.consume((runs) => runs.get(entry.runId)?.task)).toEqual({
+        ready: true,
+        value: foreign.task,
+      });
+      const write = await configureMockSubagentRegistryPersistence({
+        persistRegistryRows: () => {
+          throw new Error("synthetic persistence refusal");
+        },
+      });
+      try {
+        const update = { ...entry, task: "refused local task" };
+        await expect(
+          mutateSubagentRuns(
+            [entry.runId],
+            () => ({
+              value: undefined,
+              postimages: new Map([[entry.runId, kind === "update" ? update : null]]),
+            }),
+            { runs: new Map([[foreign.runId, foreign]]) },
+          ),
+        ).rejects.toThrow("synthetic persistence refusal");
+        const prepared = await prepareSubagentRunsSnapshotForSessions(new Map(), [
+          entry.requesterSessionKey,
+        ]);
+        expect(prepared.consume((runs) => runs.get(entry.runId)?.task)).toEqual({
+          ready: true,
+          value: foreign.task,
+        });
+      } finally {
+        write.mockRestore();
+      }
+    });
+  },
+);
+
+it.each(["malformed payload", "duplicate identity", "topology", "unrelated row"] as const)(
+  "compares the durable descendant basis after a physical %s change",
+  async (change) => {
+    await withPersistedReads(async () => {
+      const root = "agent:main:cron:basis";
+      const liveTopology = [{ requesterSessionKey: root, childSessionKey: "agent:main:live" }];
+      const child = { ...retainedRun(), requesterSessionKey: "agent:main:live" };
+      const malformed = {
+        ...retainedRun(),
+        runId: "malformed",
+        childSessionKey: "agent:main:malformed",
+        requesterSessionKey: ["duplicate identity", "unrelated row"].includes(change)
+          ? "agent:main:other"
+          : root,
+      };
+      saveSubagentRegistryToSqlite(
+        new Map([
+          [child.runId, child],
+          [malformed.runId, malformed],
+        ]),
+      );
+      const database = openOpenClawStateDatabase();
+      const db = getNodeSqliteKysely<Pick<OpenClawStateKyselyDatabase, "subagent_runs">>(
+        database.db,
+      );
+      const physicalId = change === "duplicate identity" ? ` ${child.runId} ` : malformed.runId;
+      executeSqliteQuerySync(
+        database.db,
+        db
+          .updateTable("subagent_runs")
+          .set({ run_id: physicalId, payload_json: "{}" })
+          .where("run_id", "=", malformed.runId),
+      );
+      const before = loadSubagentRunsForSessionsInDatabase(database, [root], liveTopology);
+      expect([...before.runs.keys()]).toEqual([child.runId]);
+      const basis = {
+        databasePath: database.path,
+        databaseIdentity: "comparison-owned-by-caller",
+        sessionKeys: [root],
+        liveTopology,
+        digest: before.digest,
+      };
+      expect(subagentRunsDurableBasisMatches(database, basis)).toBe(true);
+      executeSqliteQuerySync(
+        database.db,
+        db
+          .updateTable("subagent_runs")
+          .set(
+            change === "topology"
+              ? { requester_session_key: "agent:main:moved" }
+              : { payload_json: '{"unreadable":true}' },
+          )
+          .where("run_id", "=", physicalId),
+      );
+      expect([
+        ...loadSubagentRunsForSessionsInDatabase(database, [root], liveTopology).runs.keys(),
+      ]).toEqual([child.runId]);
+      expect(subagentRunsDurableBasisMatches(database, basis)).toBe(change === "unrelated row");
+    });
+  },
+);

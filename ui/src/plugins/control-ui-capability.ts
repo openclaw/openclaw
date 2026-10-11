@@ -35,6 +35,7 @@ export type ControlUiContributions = {
 export type ControlUiPluginCapability = {
   readonly errors: readonly PluginControlUiDiagnostic[];
   readonly hasPlugins: boolean;
+  readonly registryStatus: "pending" | "complete" | "failed";
   readonly canReload: boolean;
   isLoading: (pluginId: string) => boolean;
   reload: () => Promise<void>;

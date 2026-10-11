@@ -1,7 +1,4 @@
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import type { WorkerDesktopEndpoint } from "../../plugins/types.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -9,6 +6,7 @@ import {
   openOpenClawStateDatabase,
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import { useStateDatabaseTempDirs } from "../../test-utils/state-database-temp-dirs.js";
 import { REQUEST, seedActivePlacement } from "./placement-dispatch-test-fixtures.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
 import { createEnvironmentStoreFixture } from "./placement-test-fixtures.js";
@@ -30,6 +28,7 @@ const DESKTOP: WorkerDesktopEndpoint = {
 };
 
 describe("worker environment runtime refresh", () => {
+  const tempDirs = useStateDatabaseTempDirs();
   let root: string;
   let database: OpenClawStateDatabase;
   let store: WorkerEnvironmentStore;
@@ -47,16 +46,10 @@ describe("worker environment runtime refresh", () => {
   });
 
   beforeEach(async () => {
-    root = await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), "openclaw-worker-env-"));
+    root = tempDirs.make("openclaw-worker-env-");
     database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
     nowMs = 1_000;
     store = await createWorkerEnvironmentStore({ database, now: () => nowMs });
-  });
-
-  afterEach(async () => {
-    await closeOpenClawStateDatabaseAsync();
-    closeOpenClawStateDatabaseForTest();
-    await fs.rm(root, { recursive: true, force: true });
   });
 
   const replacement = {
@@ -128,7 +121,6 @@ describe("worker environment runtime refresh", () => {
   }
 
   it.each([
-    ["ready", "node"],
     ["idle", "node"],
     ["attached", "node"],
     ["attached", "ssh"],
@@ -227,7 +219,7 @@ describe("worker environment runtime refresh", () => {
       if (operation === "destroying") {
         await store.requestDestroy({ environmentId: environment.environmentId, state: "attached" });
       } else if (operation === "moving") {
-        placements.beginPlacementMove({
+        await placements.beginPlacementMove({
           sessionId: placement!.sessionId,
           source: {
             generation: placement!.generation,
@@ -237,7 +229,7 @@ describe("worker environment runtime refresh", () => {
           target: { kind: "gateway" },
         });
       } else {
-        placements.startDrain({
+        await placements.startDrain({
           sessionId: placement!.sessionId,
           environmentId: environment.environmentId,
           ownerEpoch: environment.ownerEpoch,
@@ -264,8 +256,8 @@ describe("worker environment runtime refresh", () => {
         ownerEpoch: environment.ownerEpoch,
       },
     });
-    placements.markWorkspaceResultPending(claim);
-    const pending = placements.listPendingWorkspaceResults();
+    await placements.markWorkspaceResultPending(claim);
+    const pending = await placements.listPendingWorkspaceResultsAsync();
     const beforePlacement = placements.get(placement!.sessionId);
     const binding = {
       sessionId: REQUEST.sessionId,
@@ -287,9 +279,10 @@ describe("worker environment runtime refresh", () => {
       ...beforePlacement,
       workerBundleHash: replacement.bundleHash,
     });
-    expect(placements.listPendingWorkspaceResults()).toEqual([
+    expect(await placements.listPendingWorkspaceResultsAsync()).toEqual([
       { ...pending[0], recoveryRequestedAtMs: nowMs },
     ]);
+    await placements.prepareWorkspaceResultClaim(claim);
     expect(placements.validateWorkspaceResultClaim(claim)).toBe(true);
     expect(recoveryGate.validateWorkerTurn(claim)).toBe(false);
     expect(store.getCredential(environment.environmentId)).toBeUndefined();

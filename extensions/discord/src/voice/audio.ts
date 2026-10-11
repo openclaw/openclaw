@@ -75,17 +75,13 @@ function buildWavBuffer(chunks: readonly Buffer[]): Buffer {
   return wav;
 }
 
-export function createDiscordOpusEncodeStream(): DiscordOpusEncodeStream {
-  return new DiscordOpusEncodeStream();
-}
-
 export function createDiscordOpusPlaybackStream(input: Readable | string): Readable {
   const inputSource = typeof input === "string" ? input : "pipe:0";
   const ffmpeg = spawn(resolveFfmpegBin(), ["-i", inputSource, ...FFMPEG_PCM_ARGUMENTS, "pipe:1"], {
     stdio: ["pipe", "pipe", "pipe"],
     windowsHide: true,
   });
-  const opusStream = createDiscordOpusEncodeStream();
+  const opusStream = new DiscordOpusEncodeStream();
   const stderr = Buffer.alloc(FFMPEG_ERROR_OUTPUT_BYTES);
   let stderrBytes = 0;
   let ffmpegClosed = false;
@@ -150,7 +146,7 @@ export function createDiscordOpusPlaybackStream(input: Readable | string): Reada
   return opusStream;
 }
 
-class DiscordOpusEncodeStream extends Duplex {
+export class DiscordOpusEncodeStream extends Duplex {
   #partialFrame = Buffer.alloc(DISCORD_OPUS_FRAME_BYTES);
   #partialBytes = 0;
   #pending: { chunk: Buffer; offset: number; done: StreamCallback } | undefined;
@@ -312,10 +308,6 @@ class DiscordOpusEncodeStream extends Duplex {
   }
 }
 
-function pcmInt16ToBuffer(pcm: Int16Array): Buffer {
-  return Buffer.from(pcm.buffer, pcm.byteOffset, pcm.byteLength);
-}
-
 export async function decodeOpusStreamChunks(
   stream: Readable,
   params: OpusDecodeCallbacks & {
@@ -356,7 +348,10 @@ async function* decodeOpusFrames(
       }
       const decoded = decoder.decode(chunk, { maxFrameSize: DISCORD_OPUS_MAX_DECODE_FRAME_SIZE });
       if (decoded.length > 0) {
-        yield { pcm: pcmInt16ToBuffer(decoded), packet: chunk };
+        yield {
+          pcm: Buffer.from(decoded.buffer, decoded.byteOffset, decoded.byteLength),
+          packet: chunk,
+        };
       }
     }
   } catch (err) {

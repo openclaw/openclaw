@@ -2,7 +2,7 @@
 
 import { appendFile } from "node:fs/promises";
 import {
-  SupersededReviewError,
+  ObsoleteReviewError,
   finishGuard,
   openGuard,
   securityReviewContracts,
@@ -45,7 +45,9 @@ function renderComment({ changes, pullRequest, approval }) {
   const lines = [marker, "", `### ${heading}`, ""];
   if (changes.length > 0 && approval?.kind === "author") {
     lines.push(
-      "This maintainer PR changes sensitive security components. This comment is informational because the PR author has repository Maintain or Admin access.",
+      "This maintainer PR changes sensitive security components.",
+      "",
+      "**No secops approval is required. This comment is informational because the PR author has Maintain or Admin access.**",
       "",
       `- Current SHA: ${code(pullRequest.head.sha)}`,
       `- Maintainer: @${sanitizeGuardDisplayValue(approval.login)}`,
@@ -119,6 +121,7 @@ export async function reviewSecuritySensitiveChanges(prepared) {
     repo,
     issuePath,
     labelNames: new Set(labels.map((label) => label.name)),
+    recoverCommentWrites: true,
   });
   const allowed = await finishGuard(
     guard,
@@ -157,7 +160,7 @@ export async function reviewSecuritySensitiveChanges(prepared) {
 if (import.meta.url === `file://${process.argv[1]}`) {
   reviewSecuritySensitiveChanges().catch(
     /** @param {unknown} error */ (error) => {
-      if (error instanceof SupersededReviewError) {
+      if (error instanceof ObsoleteReviewError) {
         console.log(error.message);
         return;
       }

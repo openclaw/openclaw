@@ -8,6 +8,8 @@ import { createNodeBootstrapFixture } from "./crabbox-worker-node-enrollment.tes
 
 const require = createRequire(import.meta.url);
 const leaseId = "cbx_replay_fixture";
+// Slowest identity probe (lsof) measured on a CPU-starved macOS host; native inspection is heavier.
+const LOADED_HOST_PROBE_MS = 27_042;
 
 async function replay(
   platform: "linux" | "darwin",
@@ -171,7 +173,7 @@ async function replay(
     "--enrollment-mode",
     "connect",
   ];
-  const spawnSync = vi.fn((binary: string, args: string[]) => {
+  const spawnSync = vi.fn((binary: string, args: string[], options?: { timeout?: number }) => {
     if (binary === "/usr/bin/node") {
       if (args[0] !== cli) {
         throw new Error("Unexpected runtime executable");
@@ -180,6 +182,18 @@ async function replay(
     }
     if (failure === "unavailable") {
       return { status: 1, stdout: "" };
+    }
+    if (
+      failure === "loaded-host" &&
+      (binary === "ps" || binary.endsWith("lsof") || binary === hostArguments[0]) &&
+      (options?.timeout ?? Infinity) <= LOADED_HOST_PROBE_MS
+    ) {
+      // spawnSync's watchdog kills an overrun probe and reports ETIMEDOUT without a status.
+      return {
+        status: null,
+        stdout: "",
+        error: Object.assign(new Error(`spawnSync ${binary} ETIMEDOUT`), { code: "ETIMEDOUT" }),
+      };
     }
     if (binary === hostArguments[0]) {
       if (
@@ -350,9 +364,12 @@ it.each([
     output: expect.stringContaining("release and reprovision the worker"),
   });
 });
-it.each(["lsof-fallback"])("uses the available macOS %s probe", async (variant) => {
-  expect(await replay("darwin", variant)).toMatchObject({ code: 0 });
-});
+it.each(["lsof-fallback", "loaded-host"])(
+  "verifies macOS identity with %s probes",
+  async (variant) => {
+    expect(await replay("darwin", variant)).toMatchObject({ code: 0 });
+  },
+);
 
 describe("macOS desktop host enrollment replay", () => {
   it.each(["dangling-runtime", "receipt-only"] as const)(
@@ -393,10 +410,8 @@ describe("macOS desktop host enrollment replay", () => {
     },
   );
 
-  it("preserves native argv bytes despite a different SSH locale", async () => {
-    expect(
-      await replay("darwin", undefined, true, "Cloud worker Développement 👨‍👩‍👧‍👦\tline\n"),
-    ).toMatchObject({ code: 0 });
+  it("verifies the native host and node with loaded-host probes", async () => {
+    expect(await replay("darwin", "loaded-host", true)).toMatchObject({ code: 0 });
   });
 
   it("binds the runtime directory and original Node argv under a Unicode path", async () => {
@@ -405,7 +420,7 @@ describe("macOS desktop host enrollment replay", () => {
         "darwin",
         "original-argv",
         true,
-        "Replay fixture",
+        "Cloud worker Développement 👨‍👩‍👧‍👦\tline\n",
         "/Users/Développement 👨‍👩‍👧‍👦\tline\n",
       ),
     ).toMatchObject({ code: 0 });

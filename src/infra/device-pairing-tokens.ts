@@ -45,28 +45,20 @@ export async function ensureDeviceToken(params: {
   baseDir?: string;
 }): Promise<DeviceAuthToken | null> {
   const { baseDir, isIssuanceCurrent, ...input } = params;
-  return await withDevicePairingLock(async () => {
-    try {
-      return await executeDevicePairingMutation(
-        { type: "devicePairing.ensureToken", input: { ...input, nowMs: Date.now() } },
-        {
-          baseDir,
-          assertCurrent: () => {
-            if (isIssuanceCurrent?.() === false) {
-              throw new DevicePairingAuthorityRefusedError(
-                "Device token issuance authority changed",
-              );
-            }
-          },
+  return await withDevicePairingLock(() =>
+    executeDevicePairingMutation(
+      { type: "devicePairing.ensureToken", input: { ...input, nowMs: Date.now() } },
+      {
+        baseDir,
+        onAuthorityRefused: () => null,
+        assertCurrent: () => {
+          if (isIssuanceCurrent?.() === false) {
+            throw new DevicePairingAuthorityRefusedError("Device token issuance authority changed");
+          }
         },
-      );
-    } catch (error) {
-      if (error instanceof DevicePairingAuthorityRefusedError) {
-        return null;
-      }
-      throw error;
-    }
-  });
+      },
+    ),
+  );
 }
 
 export async function rotateDeviceToken(params: {

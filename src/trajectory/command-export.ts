@@ -1,4 +1,3 @@
-// Trajectory command export helpers implement CLI export behavior.
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { pathScope } from "@openclaw/fs-safe/advanced";
@@ -8,20 +7,9 @@ import { exportTrajectoryBundle, resolveDefaultTrajectoryExportDir } from "./exp
 
 // CLI-facing trajectory export wrapper: resolves safe workspace-local paths,
 // writes the diagnostic bundle, and formats the terse success summary.
-export type TrajectoryCommandExportSummary = {
-  outputDir: string;
-  displayPath: string;
-  sessionId: string;
-  eventCount: number;
-  runtimeEventCount: number;
-  transcriptEventCount: number;
-  files: string[];
-};
+export type TrajectoryCommandExportSummary = Awaited<ReturnType<typeof exportTrajectoryForCommand>>;
 
-async function resolveTrajectoryExportBaseDir(workspaceDir: string): Promise<{
-  baseDir: string;
-  realBase: string;
-}> {
+async function resolveTrajectoryExportBaseDir(workspaceDir: string) {
   const workspacePath = path.resolve(workspaceDir);
   const realWorkspace = await fsp.realpath(workspacePath);
   const relative = path.join(".openclaw", "trajectory-exports");
@@ -70,7 +58,7 @@ export async function exportTrajectoryForCommand(params: {
   sessionId: string;
   sessionKey: string;
   workspaceDir: string;
-}): Promise<TrajectoryCommandExportSummary> {
+}) {
   const outputDir =
     params.outputDir ??
     (await resolveTrajectoryCommandOutputDir({

@@ -9,14 +9,9 @@ export type AuditWriterRequest =
   | { type: "record-execution-decision"; receipt: DecisionReceiptV1 }
   | { type: "record-execution-decision-work"; work: ExecutionDecisionWork };
 
-type AuditMaintenanceFamily = "events" | "identity" | "decisions" | "progress";
+export type AuditMaintenanceFamily = "events" | "identity" | "decisions" | "progress";
 
 /** Only a completed native contention attempt authorizes the FIFO to retry. */
 export type AuditWriterResult =
   | { status: "settled"; deleted?: number; error?: string }
   | { status: "retry" };
-
-export type AuditWriterOperations = {
-  "audit.writer.process": { input: AuditWriterRequest; output: AuditWriterResult };
-  "audit.writer.prune": { input: AuditMaintenanceFamily; output: AuditWriterResult };
-};

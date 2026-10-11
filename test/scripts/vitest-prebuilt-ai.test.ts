@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { runManagedCommand } from "../../scripts/lib/managed-child-process.mts";
-import { prepareVitestRuntime } from "../../scripts/lib/vitest-build-prerequisites.mts";
+import { preparePrebuiltAiPackage } from "../../scripts/lib/vitest-build-prerequisites.mts";
 import { resolveVitestRuntimeCliSelections } from "../../scripts/lib/vitest-runtime-selection.mts";
 
 vi.mock("../../scripts/lib/managed-child-process.mts", () => ({
@@ -19,36 +19,45 @@ afterEach(() => {
   vi.mocked(runManagedCommand).mockReset();
 });
 
-describe("prebuilt AI package preparation", () => {
-  it.each([false, true])("repairs missing declarations (partially built: %s)", async (partial) => {
-    const selections = resolveVitestRuntimeCliSelections(config, ["run", file], env);
-    vi.spyOn(fs, "readFileSync").mockReturnValue(
-      JSON.stringify({
-        types: "./dist/index.d.mts",
-        exports: {
-          ".": { types: "./dist/index.d.mts" },
-          "./nested": { types: "./dist/nested.d.mts" },
-        },
-      }),
-    );
-    vi.spyOn(fs, "existsSync").mockImplementation(
-      (entry) => partial && entry === path.join(packageRoot, "dist/index.d.mts"),
-    );
-    vi.mocked(runManagedCommand).mockResolvedValue(0);
+describe("CI prebuilt AI package preparation", () => {
+  it.each([
+    { partial: false, code: 0 },
+    { partial: true, code: 0 },
+    { partial: false, code: 23 },
+  ])(
+    "propagates declaration build exit $code (partially built: $partial)",
+    async ({ partial, code }) => {
+      const selections = resolveVitestRuntimeCliSelections(config, ["run", file], env);
+      if (code === 0) {
+        vi.spyOn(fs, "readFileSync").mockReturnValue(
+          JSON.stringify({
+            types: "./dist/index.d.mts",
+            exports: {
+              ".": { types: "./dist/index.d.mts" },
+              "./nested": { types: "./dist/nested.d.mts" },
+            },
+          }),
+        );
+      }
+      vi.spyOn(fs, "existsSync").mockImplementation(
+        (entry) => partial && entry === path.join(packageRoot, "dist/index.d.mts"),
+      );
+      vi.mocked(runManagedCommand).mockResolvedValue(code);
 
-    expect(await prepareVitestRuntime(selections, env)).toBe(0);
-    expect(runManagedCommand).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({
-        args: ["--import", "tsx", "scripts/tsdown-build.mts", "--config", "tsdown.ai.config.ts"],
-        env: { ...env, OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "0" },
-      }),
-    );
-  });
+      expect(await preparePrebuiltAiPackage(selections, env)).toBe(code);
+      expect(runManagedCommand).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          args: ["--import", "tsx", "scripts/tsdown-build.mts", "--config", "tsdown.ai.config.ts"],
+          env: { ...env, OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "0" },
+        }),
+      );
+    },
+  );
 
   it("reuses a package with all declared entries", async () => {
     const selections = resolveVitestRuntimeCliSelections(config, ["run", file], env);
     vi.spyOn(fs, "existsSync").mockReturnValue(true);
-    expect(await prepareVitestRuntime(selections, env)).toBe(0);
+    expect(await preparePrebuiltAiPackage(selections, env)).toBe(0);
     expect(runManagedCommand).not.toHaveBeenCalled();
   });
 
@@ -60,15 +69,8 @@ describe("prebuilt AI package preparation", () => {
   ])("adds no build for %s", async (_name, args, commandEnv) => {
     const selections = resolveVitestRuntimeCliSelections(config, args, commandEnv);
     const read = vi.spyOn(fs, "readFileSync");
-    expect(await prepareVitestRuntime(selections, commandEnv)).toBe(0);
+    expect(await preparePrebuiltAiPackage(selections, commandEnv)).toBe(0);
     expect(read).not.toHaveBeenCalled();
     expect(runManagedCommand).not.toHaveBeenCalled();
-  });
-
-  it("propagates the typed build failure before admitting workers", async () => {
-    const selections = resolveVitestRuntimeCliSelections(config, ["run", file], env);
-    vi.spyOn(fs, "existsSync").mockReturnValue(false);
-    vi.mocked(runManagedCommand).mockResolvedValue(23);
-    expect(await prepareVitestRuntime(selections, env)).toBe(23);
   });
 });

@@ -1,9 +1,6 @@
 import type { Result } from "@openclaw/normalization-core/result";
 import { containsAsciiControlCharacter } from "@openclaw/normalization-core/string-normalization";
-import {
-  MAX_HUMAN_MENTIONS,
-  type HumanMention,
-} from "../../../packages/gateway-protocol/src/index.js";
+import type { HumanMention } from "../../../packages/gateway-protocol/src/index.js";
 import { sanitizeChatSendMessageInput } from "../chat-input-sanitize.js";
 
 const INVALID_MENTIONS = "Selected mentions no longer match the message. Select the people again.";
@@ -23,9 +20,6 @@ export function normalizeChatHumanMentions(
   if (!mentions?.length) {
     return { ok: true, value: undefined };
   }
-  if (mentions.length > MAX_HUMAN_MENTIONS) {
-    return { ok: false, error: INVALID_MENTIONS };
-  }
   const leadingSpace = sanitizedText.length - sanitizedText.trimStart().length;
   const trimmed = sanitizedText.trim();
   const normalized: HumanMention[] = [];
@@ -33,8 +27,6 @@ export function normalizeChatHumanMentions(
   for (const mention of mentions) {
     const token = text.slice(mention.start, mention.end);
     if (
-      !Number.isSafeInteger(mention.start) ||
-      !Number.isSafeInteger(mention.end) ||
       mention.start < previousEnd ||
       mention.end > text.length ||
       mention.end <= mention.start + 1 ||

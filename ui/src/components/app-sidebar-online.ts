@@ -2,7 +2,7 @@ import { html, nothing } from "lit";
 import { repeat } from "lit/directives/repeat.js";
 import { html as staticHtml, literal } from "lit/static-html.js";
 import { presenceUserKey } from "../../../src/shared/presence-user.ts";
-import { readPresenceEntries, resolveCurrentSelfUser } from "../app/user-profile.ts";
+import type { ApplicationGateway } from "../app/gateway.ts";
 import { t } from "../i18n/index.ts";
 import { renderHoverMarquee } from "../lib/hover-marquee.ts";
 import {
@@ -10,54 +10,63 @@ import {
   presenceActivityLabel,
   presenceViewerLabel,
   projectOnlinePresenceViewers,
-  type PresenceViewer,
 } from "../lib/presence-users.ts";
 import type { AppSidebarRenderHost } from "./app-sidebar-render.ts";
 import { renderSidebarSessionSectionHeader } from "./app-sidebar-session-section-header.ts";
 import { icons } from "./icons.ts";
 import { personActivityLink, personActivityRouting } from "./person-activity-link.ts";
+import { sidebarOnlineCountFor, SidebarOnlineOrder } from "./sidebar-online-order.ts";
+
+const onlineOrders = new WeakMap<
+  AppSidebarRenderHost,
+  {
+    gateway: ApplicationGateway | undefined;
+    revision: number | undefined;
+    viewerId: string | undefined;
+    order: SidebarOnlineOrder;
+  }
+>();
+
+export function sidebarOnlineOrder(host: AppSidebarRenderHost): SidebarOnlineOrder {
+  const gateway = host.sessionDataContext?.gateway;
+  const revision = gateway?.connectionRevision;
+  const viewerId = host.sidebarSnapshot?.footer?.id ?? gateway?.snapshot.selfUser?.id;
+  let cached = onlineOrders.get(host);
+  if (
+    !cached ||
+    cached.gateway !== gateway ||
+    cached.revision !== revision ||
+    cached.viewerId !== viewerId
+  ) {
+    cached = { gateway, revision, viewerId, order: new SidebarOnlineOrder() };
+    onlineOrders.set(host, cached);
+  }
+  return cached.order;
+}
 
 export function renderAppSidebarOnline(host: AppSidebarRenderHost) {
   const sectionId = "online";
   const team = host.sidebarAgentsMode === "roster";
   const collapsed = team ? !host.teamOnlineExpanded : host.collapsedSessionSections.has(sectionId);
   const label = t("presence.rosterTitle");
-  const selfUser = resolveCurrentSelfUser({
-    snapshotUser: host.sessionDataContext?.gateway.snapshot.selfUser,
-    presenceEntries: readPresenceEntries(host.sessionData.presencePayload),
-    presenceInstanceId: host.sessionData.presenceInstanceId,
+  const snapshot = host.sidebarSnapshot;
+  const {
+    users: onlineUsers,
+    listUsers,
+    counts,
+  } = sidebarOnlineOrder(host).resolve({
+    users:
+      snapshot?.onlineUsers ??
+      (host.sessionData.presencePayload
+        ? projectOnlinePresenceViewers(host.sessionData.presencePayload)
+        : null),
+    counts: snapshot ? new Map(snapshot.onlineCounts) : host.sessionData.ownerCounts.counts,
+    countsFailed: !snapshot && host.sessionData.ownerCounts.error !== null,
+    presentation: snapshot ? "snapshot" : "live",
+    sortMode: host.people.sortMode,
+    statusFilter: host.people.statusFilter,
   });
-  const onlineUsers = projectOnlinePresenceViewers(
-    host.sessionData.presencePayload,
-    selfUser,
-    host.sessionData.presenceInstanceId,
-  );
-  if (onlineUsers.length === 0) {
-    return nothing;
-  }
-  const counts = host.sessionData.ownerCounts.counts;
-  const countsFor = (user: PresenceViewer) =>
-    counts && user.identity?.type === "profile"
-      ? (counts.get(user.identity.id) ?? { open: 0, running: 0 })
-      : null;
-  const users = onlineUsers.filter(
-    (user) => !host.onlineRunningOnly || !counts || (countsFor(user)?.running ?? 0) > 0,
-  );
-  const sort = host.onlineSessionSort;
-  if (sort !== "presence") {
-    users.sort((a, b) => (countsFor(b)?.[sort] ?? -1) - (countsFor(a)?.[sort] ?? -1));
-  }
-  const totals = users.reduce(
-    (total, user) => {
-      const value = countsFor(user);
-      return {
-        open: total.open + (value?.open ?? 0),
-        running: total.running + (value?.running ?? 0),
-        complete: total.complete && value !== null,
-      };
-    },
-    { open: 0, running: 0, complete: counts !== null },
-  );
+  const filtered = host.people.statusFilter === "running";
   const routing = personActivityRouting(
     { basePath: host.basePath, navigate: (route, options) => host.onNavigate?.(route, options) },
     () => host.dismissTransientMenus(),
@@ -100,43 +109,35 @@ export function renderAppSidebarOnline(host: AppSidebarRenderHost) {
                 : nothing
             }
           </button>
+          ${
+            collapsed
+              ? nothing
+              : html`<button
+                  type="button"
+                  class="sidebar-session-toolbar__button sidebar-online__filter-toggle sidebar-session-sort ${filtered ? "sidebar-session-sort--filtered" : ""}"
+                  aria-label=${t("presence.filters.label")}
+                  title=${t("presence.filters.label")}
+                  aria-haspopup="dialog"
+                  aria-expanded=${String(host.sidebarMenus.peopleFilterMenuPosition !== null)}
+                  @click=${(event: MouseEvent) => {
+                    if (event.currentTarget instanceof HTMLElement) {
+                      host.sidebarMenus.togglePositionedMenu("peopleFilter", event.currentTarget);
+                    }
+                  }}
+                >
+                  ${icons.listFilter}
+                </button>`
+          }
         `,
       })}
       ${
         collapsed
           ? nothing
-          : html`<div class="sidebar-online__columns">
-                <button
-                  type="button"
-                  class="sidebar-online__filter"
-                  aria-pressed=${String(host.onlineRunningOnly)}
-                  aria-label=${t("presence.sessions.runningOnly")}
-                  ?disabled=${counts === null}
-                  @click=${() => {
-                    host.onlineRunningOnly = !host.onlineRunningOnly;
-                  }}
-                >
-                  ${t(host.onlineRunningOnly ? "presence.sessions.running" : "presence.sessions.all")}
-                </button>
-                ${(["open", "running"] as const).map(
-                  (key) => html`<button
-                    type="button"
-                    class="sidebar-online__column"
-                    aria-label=${t(key === "open" ? "presence.sessions.sortOpen" : "presence.sessions.sortRunning")}
-                    aria-pressed=${String(sort === key)}
-                    title=${t(key === "open" ? "presence.sessions.openHint" : "presence.sessions.runningHint")}
-                    @click=${() => {
-                      host.onlineSessionSort = sort === key ? "presence" : key;
-                    }}
-                  >
-                    ${t(key === "open" ? "presence.sessions.open" : "presence.sessions.running")}${sort === key ? html`<span aria-hidden="true"> ↓</span>` : nothing}
-                  </button>`,
-                )}
-              </div>
-              <div class="sidebar-online__list">
-                ${repeat(users, presenceUserKey, (user) => {
+          : html`<div class="sidebar-online__list">
+                ${listUsers.length === 0 ? html`<span class="sidebar-session-empty-hint">${counts === null ? t("presence.sessions.unavailable") : t("presence.filters.noMatches")}</span>` : nothing}
+                ${repeat(listUsers, presenceUserKey, (user) => {
                   const activityState = presenceViewerActivity(user);
-                  const workload = countsFor(user);
+                  const workload = sidebarOnlineCountFor(counts, user);
                   const workloadLabel = workload
                     ? t("presence.sessions.counts", {
                         open: String(workload.open),
@@ -151,19 +152,28 @@ export function renderAppSidebarOnline(host: AppSidebarRenderHost) {
                   const tag = activity ? literal`a` : literal`button`;
                   return staticHtml`<div
                   class="sidebar-online__row"
+                  draggable=${!snapshot && user.identity?.type === "profile" ? "true" : "false"}
+                  @dragstart=${(event: DragEvent) => {
+                    if (user.identity?.type === "profile") {
+                      host.sessionOrganizer.startSidebarEntryDrag(event, {
+                        type: "person",
+                        profileId: user.identity.id,
+                      });
+                    }
+                  }}
+                  @dragend=${() => host.sessionOrganizer.finishSidebarEntryDrag()}
                   data-person-card
                   data-person-card-section="online"
                 >
                   <${tag}
-                    class="sidebar-online__person ${
-                      activityState === "idle" ? "sidebar-online__person--away" : ""
-                    }"
+                    class="sidebar-online__person"
                     type=${activity ? nothing : "button"}
                     href=${activity?.href ?? nothing}
                     @click=${activity?.open ?? nothing}
                     data-online-user-id=${user.id}
                     data-presence-activity=${activityState}
                     aria-description=${`${presenceActivityLabel(activityState)} · ${workloadLabel}`}
+                    title=${workload ? nothing : t("presence.sessions.unavailable")}
                     data-person-card-key=${presenceUserKey(user)}
                     data-person-card-trigger
                     aria-haspopup="dialog"
@@ -172,27 +182,59 @@ export function renderAppSidebarOnline(host: AppSidebarRenderHost) {
                       name: presenceViewerLabel(user),
                     })}
                   >
-                    <openclaw-viewer-avatar
-                      .user=${user}
-                      .markAsViewer=${false}
-                      variant="footer"
-                      aria-hidden="true"
-                    ></openclaw-viewer-avatar>
-                    <span class="sidebar-online__person-copy">
-                      <span class="sidebar-online__person-name">${presenceViewerLabel(user)}</span>
-                      <span class="sidebar-online__person-status" aria-hidden="true">${t(activityState === "active" ? "presence.active" : activityState === "idle" ? "presence.idle" : "presence.rosterTitle")}</span>
+                    <span class="sidebar-online__avatar" aria-hidden="true">
+                      <openclaw-viewer-avatar
+                        .user=${user}
+                        .markAsViewer=${false}
+                        variant="footer"
+                      ></openclaw-viewer-avatar>
                     </span>
-                    <span class="sidebar-online__count" data-session-count="open" aria-hidden="true">${workload?.open ?? "—"}</span>
-                    <span class="sidebar-online__count ${workload?.running ? "sidebar-online__count--running" : "sidebar-online__count--zero"}" data-session-count="running" aria-hidden="true">${workload?.running ?? "—"}</span>
+                    <span class="sidebar-online__person-name">${presenceViewerLabel(user)}</span>
+                    ${
+                      workload && (workload.open > 0 || workload.running > 0)
+                        ? html`<span class="sidebar-online__counts" aria-hidden="true">
+                            ${(["running", "open"] as const).map((kind) =>
+                              workload[kind] > 0
+                                ? html`<span
+                                    class=${`sidebar-online__${kind}`}
+                                    data-session-count=${kind}
+                                    title=${t(`presence.sessions.${kind}Count`, { count: String(workload[kind]) })}
+                                    ><span
+                                      class=${kind === "running" ? "session-run-spinner" : "sidebar-online__open-icon"}
+                                      >${kind === "running" ? nothing : icons.messageCircle}</span
+                                    ><span class="sidebar-online__count"
+                                      >${workload[kind]}</span
+                                    ></span
+                                  >`
+                                : nothing,
+                            )}
+                          </span>`
+                        : nothing
+                    }
                   </${tag}>
+                  ${
+                    user.identity?.type === "profile"
+                      ? html`<button
+                          type="button"
+                          class="sidebar-pages__pin"
+                          ?disabled=${Boolean(snapshot)}
+                          aria-label=${t("nav.pin")}
+                          @click=${() => {
+                            if (user.identity?.type === "profile") {
+                              host.sessionOrganizer.writeSidebarEntryAt(
+                                `person:${user.identity.id}`,
+                                undefined,
+                                undefined,
+                              );
+                            }
+                          }}
+                        >
+                          ${icons.pin}
+                        </button>`
+                      : nothing
+                  }
                 </div>`;
                 })}
-                ${users.length === 0 ? html`<p class="sidebar-online__empty">${t("presence.sessions.noneRunning")}</p>` : nothing}
-              </div>
-              <div class="sidebar-online__totals" title=${t("presence.sessions.scope")}>
-                <span>${t("presence.sessions.total")}</span>
-                <span data-session-total="open">${totals.complete ? totals.open : "—"}</span>
-                <span data-session-total="running">${totals.complete ? totals.running : "—"}</span>
               </div>
               ${
                 host.sessionData.ownerCounts.error

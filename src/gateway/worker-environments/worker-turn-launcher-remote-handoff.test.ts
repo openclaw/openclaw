@@ -1,9 +1,15 @@
 import { mkdir, realpath } from "node:fs/promises";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { Value } from "typebox/value";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { WorkerConnectRequestFrameSchema } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { makeTextToolResult } from "../../../test/helpers/text-tool-result.js";
+import {
+  installSessionPlacementAdmissionProvider,
+  withSessionPlacementTurnAdmission,
+} from "../../agents/session-placement-admission.js";
+import { SessionManager } from "../../agents/sessions/session-manager.js";
 import {
   makeAgentAssistantMessage,
   makeAgentUserMessage,
@@ -13,12 +19,18 @@ import {
   type ExecutionIdentityAdmissionWork,
 } from "../../audit/execution-identity-admission.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import {
+  runWithoutOwnedSessionTranscriptWrites,
+  withOwnedSessionTranscriptWrites,
+} from "../../config/sessions/transcript-write-context.js";
 import { setActiveNodeContexts } from "../../infra/active-node-context.js";
 import { saveMediaBuffer } from "../../media/store.js";
 import { runCommandWithTimeout, type SpawnResult } from "../../process/exec.js";
+import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
+import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import {
   buildWorkerConnectParams,
-  completeWorkerLaunchDescriptor,
+  parseWorkerLaunchDescriptor,
   type WorkerLaunchDescriptor,
 } from "../../worker/launch-descriptor.js";
 import { createAgentRuntimeApprovalAuthorityValidator } from "../agent-runtime-approval-authority.js";
@@ -50,12 +62,14 @@ import {
   type WorkerTurnEnvironmentService,
 } from "./worker-turn-launcher.test-support.js";
 
+afterAll(closeStateDatabaseForTest);
+
 describe("worker turn launcher remote handoff", () => {
   beforeEach(setupWorkerTurnLauncherTest);
-  afterEach(cleanupWorkerTurnLauncherTest);
+  afterEach(() => cleanupWorkerTurnLauncherTest({ reuseReadWorkers: true }));
   afterEach(() => setActiveNodeContexts([]));
 
-  it("round-trips the stored bootstrap receipt while reporting keep-local conflicts", async () => {
+  it("settles a delegated worker reply and conflict without borrowing its parent transcript", async () => {
     setActiveNodeContexts([{ nodeId: "active-mac" }]);
     let admissionWork: ExecutionIdentityAdmissionWork | undefined;
     setWorkerTurnAdmissionCleanup(
@@ -78,19 +92,23 @@ describe("worker turn launcher remote handoff", () => {
     });
     expect(initialized.code).toBe(0);
     await seedActivePlacement();
-    const manager = openSessionManager();
-    const earlierRequestId = manager.appendMessage(
+    const manager = await openSessionManager();
+    const earlierRequestId = await manager.appendMessageAsync(
       makeAgentUserMessage({ content: "Earlier request", timestamp: 10 }),
     );
-    manager.appendMessage(
+    await manager.appendMessageAsync(
       makeAgentAssistantMessage({
         content: [{ type: "toolCall", id: "call-1", name: "read", arguments: {} }],
         timestamp: 11,
       }),
     );
-    manager.appendCustomMessageEntry("context", "Custom durable context", true, {});
-    manager.appendCompaction("Compacted durable context", earlierRequestId, 100);
-    manager.appendMessage(makeTextToolResult("call-1", "read", "result", false, 12));
+    await manager.appendCustomMessageEntryAsync("context", "Custom durable context", true, {});
+    await manager.appendCompactionAsync(
+      "Compacted durable context",
+      expectDefined(earlierRequestId, "persisted pre-compaction user entry"),
+      100,
+    );
+    await manager.appendMessageAsync(makeTextToolResult("call-1", "read", "result", false, 12));
     let descriptor: WorkerLaunchDescriptor | undefined;
     const environment = browserEnvironment();
     environment.desktop!.apps![0]!.args = ["-File", "C:\\ProgramData\\OpenClaw\\browser.ps1"];
@@ -105,16 +123,18 @@ describe("worker turn launcher remote handoff", () => {
           throw new Error("expected a local workspace source");
         }
         expect(request.source.stagedResult).toBeDefined();
-        request.source.stagedResult!.record(request.source.stagedResult!.ref);
-        expect(placements.listPendingWorkspaceResults()).toMatchObject([
+        await request.source.stagedResult!.record(request.source.stagedResult!.ref);
+        expect(await placements.listPendingWorkspaceResultsAsync()).toMatchObject([
           { stagedResultRef: request.source.stagedResult!.ref, workspaceAcceptedAtMs: null },
         ]);
-        request.source.journal.commit(MANIFEST_REF);
+        await request.source.journal.commit(MANIFEST_REF);
         return {
           manifestRef: MANIFEST_REF,
           changed: false,
           verifyStable: async () => {},
           verifyLocalStable: async () => {},
+          publishStagedResult: async () => {},
+          discardPreparedStagedResult: async () => {},
           getAppliedWorkspaceResult: () => ({
             manifestRef: MANIFEST_REF,
             manifest: { version: 1 as const, baseCommit: null, entries: [] },
@@ -132,7 +152,7 @@ describe("worker turn launcher remote handoff", () => {
             owner: "worker",
             runId: "run-worker-turn",
           });
-          expect(placements.listPendingWorkspaceResults()).toHaveLength(1);
+          expect(await placements.listPendingWorkspaceResultsAsync()).toHaveLength(1);
         }),
       })),
       launchTurn: vi.fn(async (request): Promise<SpawnResult> => {
@@ -141,9 +161,12 @@ describe("worker turn launcher remote handoff", () => {
           runId: "run-worker-turn",
           ownerEpoch: OWNER_EPOCH,
         });
-        descriptor = completeWorkerLaunchDescriptor(structuredClone(request.plan), {
-          kind: "unix",
-          socketPath: "/worker/gateway.sock",
+        descriptor = parseWorkerLaunchDescriptor({
+          ...structuredClone(request.plan),
+          connectionEndpoint: {
+            kind: "unix",
+            socketPath: "/worker/gateway.sock",
+          },
         });
         const connectFrame = {
           type: "req" as const,
@@ -174,14 +197,17 @@ describe("worker turn launcher remote handoff", () => {
         expect(acknowledgeCredentialDelivery).not.toHaveBeenCalled();
         request.onDispatchReady?.();
         expect(acknowledgeCredentialDelivery).toHaveBeenCalledOnce();
-        const completed = openSessionManager();
-        const leafId = completed.appendMessage(
-          makeAgentAssistantMessage({
-            content: [{ type: "text", text: "Worker reply" }],
-            timestamp: 21,
-          }),
-        );
-        return acknowledgeCompletedWorkerTurn(request.turnClaim, leafId);
+        // Remote commits arrive on their own RPC context, outside the launching tool.
+        return runWithoutOwnedSessionTranscriptWrites(async () => {
+          const completed = await openSessionManager();
+          const leafId = await completed.appendMessageAsync(
+            makeAgentAssistantMessage({
+              content: [{ type: "text", text: "Worker reply" }],
+              timestamp: 21,
+            }),
+          );
+          return acknowledgeCompletedWorkerTurn(request.turnClaim, leafId);
+        });
       }),
       reconcileWorkspace,
     });
@@ -198,29 +224,63 @@ describe("worker turn launcher remote handoff", () => {
       environments,
       placements,
       resolveWorkspace,
+      reconcileActivePlacement: async () => {},
     });
     const runLocal = vi.fn(async () => ({ meta: { durationMs: 1 } }));
     const onAgentEvent = vi.fn(() => {
       throw new Error("supplemental event failed");
     });
 
-    const result = await provider.executeTurn(
+    onTestFinished(installSessionPlacementAdmissionProvider(provider));
+    const input = turn("run-worker-turn", true);
+    onTestFinished(() => input.preparedRunAdmission.close());
+    const recorder = createUserTurnTranscriptRecorder({
+      target: { ...sessionTarget, sessionEntry: undefined, config: input.config },
+      input: { text: "Canonical transcript request" },
+    });
+    await recorder.persistApproved();
+    const parentTarget = {
+      ...sessionTarget,
+      sessionId: "parent-session",
+      sessionKey: "agent:worker-agent:parent",
+    };
+    await upsertSessionEntryCore(parentTarget, {
+      sessionId: parentTarget.sessionId,
+      activeWriterRunId: "parent-run",
+      updatedAt: 1,
+    });
+    const parent = await SessionManager.openAsync(parentTarget);
+    await parent.appendMessageAsync(makeAgentUserMessage({ content: "Delegate this task" }));
+    const parentEntries = parent.getPersistedEntries();
+    const result = await withOwnedSessionTranscriptWrites(
       {
-        sessionId: SESSION_ID,
-        sessionKey: sessionTarget.sessionKey,
-        agentId: sessionTarget.agentId,
-        runId: "run-worker-turn",
+        sessionTarget: { ...parentTarget, expectedWriterRunId: "parent-run" },
+        assertCommitAllowed: () => {},
+        withTranscriptWrite: async (write) => await write(),
       },
-      {
-        ...turn("run-worker-turn", true),
-        gatewayUiCommandTarget: { connId: "requesting-ui", profileId: "requester" },
-        toolsAllow: ["browser"],
-        workspaceDir: path.join(root, "stale-caller-workspace"),
-        transcriptPrompt: "Canonical transcript request",
-        extraSystemPrompt: "Keep the worker guidance.",
-        onAgentEvent,
-      },
-      runLocal,
+      () =>
+        withSessionPlacementTurnAdmission(
+          {
+            sessionId: SESSION_ID,
+            sessionKey: sessionTarget.sessionKey,
+            agentId: sessionTarget.agentId,
+            runId: input.runId,
+          },
+          {
+            ...input,
+            userTurnTranscriptRecorder: recorder,
+            gatewayUiCommandTarget: { connId: "requesting-ui", profileId: "requester" },
+            toolsAllow: ["browser"],
+            workspaceDir: path.join(root, "stale-caller-workspace"),
+            transcriptPrompt: "Canonical transcript request",
+            extraSystemPrompt: "Keep the worker guidance.",
+            onAgentEvent,
+          },
+          runLocal,
+        ),
+    );
+    expect((await SessionManager.openAsync(parentTarget)).getPersistedEntries()).toEqual(
+      parentEntries,
     );
 
     expect(runLocal).not.toHaveBeenCalled();
@@ -250,17 +310,20 @@ describe("worker turn launcher remote handoff", () => {
       },
     });
     expect(
-      openSessionManager()
+      (await openSessionManager())
         .getBranch()
         .some(
           (entry) =>
             entry.type === "custom_message" && entry.customType === "cloud-workspace-conflict",
         ),
     ).toBe(true);
-    expect(descriptor?.assignment.prompt).toBe("Inspect this workspace");
-    expect(descriptor?.assignment.systemPrompt).toBe(
-      "Keep the worker guidance.\n\nCurrent active computer (latest reported app/system input, not message origin): active_node=active-mac active_node_identity=unknown",
-    );
+    expect(descriptor?.assignment.prompt).toMatch(/^\[[^\]]+\] Inspect this workspace$/u);
+    const systemPrompt = descriptor?.assignment.systemPrompt;
+    expect(systemPrompt).toContain("You are a personal assistant running inside OpenClaw.");
+    expect(systemPrompt).toContain("Keep the worker guidance.");
+    expect(systemPrompt).toContain("active_node=active-mac");
+    expect(systemPrompt).toContain("active_node_identity=unknown");
+    expect(systemPrompt).toContain("Working directory: /worker/workspace");
     expect(descriptor?.assignment.suppressPromptTranscript).toBe(true);
     expect(descriptor?.assignment.agentId).toBe(sessionTarget.agentId);
     expect(descriptor?.version).toBe(4);
@@ -311,15 +374,10 @@ describe("worker turn launcher remote handoff", () => {
       },
       {
         role: "user",
-        content: [{ type: "text", text: "Earlier request" }],
+        content: [{ type: "text", text: expect.stringMatching(/^\[[^\]]+\] Earlier request$/u) }],
         timestamp: 10,
       },
       expect.objectContaining({ role: "assistant" }),
-      {
-        role: "user",
-        content: [{ type: "text", text: "Custom durable context" }],
-        timestamp: expect.any(Number),
-      },
       {
         role: "toolResult",
         toolCallId: "call-1",
@@ -328,14 +386,19 @@ describe("worker turn launcher remote handoff", () => {
         isError: false,
         timestamp: 12,
       },
+      {
+        role: "user",
+        content: [{ type: "text", text: "Custom durable context" }],
+        timestamp: expect.any(Number),
+      },
     ]);
     expect(
-      openSessionManager()
+      (await openSessionManager())
         .getEntries()
         .flatMap((entry) =>
           entry.type === "message" && entry.message.role === "user" ? [entry.message.content] : [],
         ),
-    ).toContainEqual([{ type: "text", text: "Canonical transcript request" }]);
+    ).toContain("Canonical transcript request");
   });
 
   it("keeps reset tool pairs valid without replaying the already-persisted current user", async () => {
@@ -360,38 +423,38 @@ describe("worker turn launcher remote handoff", () => {
       "offloaded.png",
     );
     const imagePath = savedImage.path;
-    const manager = openSessionManager();
-    manager.appendMessage(
+    const manager = await openSessionManager();
+    await manager.appendMessageAsync(
       makeAgentAssistantMessage({
         content: [{ type: "toolCall", id: "shared-call", name: "read", arguments: {} }],
         stopReason: "toolUse",
         timestamp: 16,
       }),
     );
-    const firstKeptEntryId = manager.appendMessage(
+    const firstKeptEntryId = await manager.appendMessageAsync(
       makeAgentUserMessage({ content: "Earlier request", timestamp: 17 }),
     );
-    manager.appendMessage(
+    await manager.appendMessageAsync(
       makeTextToolResult("shared-call", "read", "Discarded owner result", false, 18),
     );
-    manager.appendMessage(
+    await manager.appendMessageAsync(
       makeAgentAssistantMessage({
         content: [{ type: "toolCall", id: "shared-call", name: "read", arguments: {} }],
         stopReason: "toolUse",
         timestamp: 19,
       }),
     );
-    manager.appendMessage(
+    await manager.appendMessageAsync(
       makeTextToolResult("shared-call", "read", "Kept owner result", false, 20),
     );
-    manager.appendMessage(
+    await manager.appendMessageAsync(
       makeAgentAssistantMessage({
         content: [{ type: "text", text: "Earlier reply" }],
         timestamp: 21,
       }),
     );
-    manager.appendResetBoundary("new", firstKeptEntryId);
-    manager.appendMessage(
+    await manager.appendResetBoundaryAsync("new", firstKeptEntryId);
+    await manager.appendMessageAsync(
       makeAgentUserMessage({ content: "Inspect this workspace", timestamp: 22 }),
     );
     let descriptor: WorkerLaunchDescriptor | undefined;
@@ -408,12 +471,15 @@ describe("worker turn launcher remote handoff", () => {
       stageAttachments: vi.fn(async () => {}),
       launchTurn: vi.fn(async (request): Promise<SpawnResult> => {
         request.onDispatchReady?.();
-        descriptor = completeWorkerLaunchDescriptor(structuredClone(request.plan), {
-          kind: "unix",
-          socketPath: "/worker/gateway.sock",
+        descriptor = parseWorkerLaunchDescriptor({
+          ...structuredClone(request.plan),
+          connectionEndpoint: {
+            kind: "unix",
+            socketPath: "/worker/gateway.sock",
+          },
         });
-        const completed = openSessionManager();
-        const leafId = completed.appendMessage(
+        const completed = await openSessionManager();
+        const leafId = await completed.appendMessageAsync(
           makeAgentAssistantMessage({
             content: [{ type: "text", text: "Worker reply" }],
             timestamp: 21,
@@ -465,9 +531,12 @@ describe("worker turn launcher remote handoff", () => {
       "media/inbound/openclaw-staged-",
     );
     expect(tunnel.stageAttachments).toHaveBeenCalledOnce();
-    expect(descriptor?.assignment.systemPrompt).toBe(
-      "Current active computer (latest reported app/system input, not message origin): active_node=unknown active_node_identity=unknown",
+    expect(descriptor?.assignment.systemPrompt).toContain(
+      "You are a personal assistant running inside OpenClaw.",
     );
+    expect(descriptor?.assignment.systemPrompt).toContain("active_node=unknown");
+    expect(descriptor?.assignment.systemPrompt).toContain("active_node_identity=unknown");
+    expect(descriptor?.assignment.systemPrompt).not.toContain("disconnected-mac");
     const verifiedRuntimeIdentity = await verifyAgentRuntimeIdentityToken(
       descriptor?.assignment.agentRuntimeIdentityToken,
     );
@@ -487,7 +556,7 @@ describe("worker turn launcher remote handoff", () => {
     expect(JSON.stringify(descriptor?.assignment.initialMessages)).not.toContain(
       "Discarded owner result",
     );
-    const persistedEntries = openSessionManager().getEntries();
+    const persistedEntries = (await openSessionManager()).getEntries();
     const persistedCurrentUsers = persistedEntries.filter((entry) => {
       if (typeof entry !== "object" || entry === null || !("message" in entry)) {
         return false;

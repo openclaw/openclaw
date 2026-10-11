@@ -11,16 +11,26 @@ beforeEach(() => {
 });
 
 const acpAgent = {
-  id: "research",
   runtime: { type: "acp", acp: { agent: "cursor" } },
   model: "gpt-5.6-sol[context=272k,reasoning=medium,fast=false]",
-} satisfies NonNullable<NonNullable<OpenClawConfig["agents"]>["list"]>[number];
+} satisfies NonNullable<NonNullable<OpenClawConfig["agents"]>["entries"]>[string];
 
 describe("subagent initial model plan", () => {
+  it("threads explicit fast mode into the initial child session patch", async () => {
+    const plan = await resolveSubagentModelAndThinkingPlan({
+      cfg: {},
+      targetAgentId: "research",
+      fastMode: "ultrafast",
+    });
+    expect(plan).toMatchObject({ status: "ok", initialSessionPatch: { fastMode: "ultrafast" } });
+  });
   it("applies an explicit native model instead of ACP defaults", async () => {
     const plan = await resolveSubagentModelAndThinkingPlan({
       cfg: {
-        agents: { defaults: { subagents: { model: "minimax/MiniMax-M2.7" } }, list: [acpAgent] },
+        agents: {
+          defaults: { subagents: { model: "minimax/MiniMax-M2.7" } },
+          entries: { research: acpAgent },
+        },
       },
       targetAgentId: "research",
       targetAgentConfig: acpAgent,
@@ -31,7 +41,7 @@ describe("subagent initial model plan", () => {
       resolvedModel: "openrouter/meta-llama/llama-3.3-70b:free",
       modelApplied: true,
       initialSessionPatch: {
-        model: "openrouter/meta-llama/llama-3.3-70b:free",
+        model: "meta-llama/llama-3.3-70b:free",
         modelOverrideSource: "user",
       },
     });
@@ -67,7 +77,7 @@ describe("subagent initial model plan", () => {
       status: "ok",
       resolvedModel: "openai/gpt-5.4",
       initialSessionPatch: {
-        model: "openai/gpt-5.4",
+        model: "gpt-5.4",
         modelOverrideSource: "auto",
         modelOverrideFallbackOriginProvider: "openai",
         modelOverrideFallbackOriginModel: "gpt-5.4",
@@ -111,7 +121,7 @@ describe("subagent initial model plan", () => {
               model: { primary: "minimax/MiniMax-M2.7" },
               subagents: { model: defaultModel },
             },
-            list: [targetAgentConfig],
+            entries: { research: targetAgentConfig },
           },
         },
         targetAgentId: "research",
@@ -122,7 +132,9 @@ describe("subagent initial model plan", () => {
         throw new Error(plan.error);
       }
       expect(plan.resolvedModel).toBe(expected);
-      expect(plan.initialSessionPatch.model).toBe(expected);
+      expect(`${plan.initialSessionPatch.modelProvider}/${plan.initialSessionPatch.model}`).toBe(
+        expected,
+      );
       expect(plan.initialSessionPatch.modelOverrideSource).toBe("auto");
       expect(plan.initialSessionPatch.modelOverrideFallbackOriginProvider).toBe(originProvider);
       expect(plan.initialSessionPatch.modelOverrideFallbackOriginModel).toBe(originModel);

@@ -73,16 +73,6 @@ const materializingSessionEntryAccessorNames = new Set([
   "loadSessionEntry",
 ]);
 
-// Shipped beta.5 official plugins import these deprecated helpers during
-// doctor migrations. Remove this ratchet with the compatibility bridge once
-// beta.5 is outside the supported upgrade window; do not add runtime callers.
-const allowedSessionStoreRuntimeFileBackedCompatExports = new Set([
-  "loadSessionStore",
-  "resolveSessionFilePath",
-  "resolveSessionStoreEntry",
-  "updateSessionStore",
-]);
-
 const gatewaySessionServerMethodFiles = [
   "src/gateway/server-methods/sessions-abort.ts",
   "src/gateway/server-methods/sessions-compact.ts",
@@ -204,7 +194,6 @@ const migratedSessionAccessorWriteFiles = new Set([
   "src/auto-reply/reply/commands-session-store.ts",
   "src/auto-reply/reply/directive-handling.impl.ts",
   "src/auto-reply/reply/directive-handling.persist.ts",
-  "src/auto-reply/reply/dispatch-from-config.runtime.ts",
   "src/auto-reply/reply/followup-runner.ts",
   "src/auto-reply/reply/get-reply.ts",
   "src/auto-reply/reply/model-selection.ts",
@@ -316,19 +305,19 @@ function propertyAccessName(expression: ts.Expression) {
 }
 
 function bindingName(node: ts.BindingElement) {
-  if (node.propertyName && ts.isIdentifier(node.propertyName)) {
-    return node.propertyName.text;
-  }
-  if (node.name && ts.isIdentifier(node.name)) {
-    return node.name.text;
-  }
-  return null;
+  const name =
+    node.propertyName && ts.isIdentifier(node.propertyName) ? node.propertyName : node.name;
+  return name && ts.isIdentifier(name) ? name.text : null;
 }
 
 function findNamedBoundaryViolations(
   sourceFile: ts.SourceFile,
   legacyNames: ReadonlySet<string>,
   subject: string,
+  allowed?: {
+    import?: (declaration: ts.ImportDeclaration, specifier: ts.ImportSpecifier) => boolean;
+    reference?: (node: ts.PropertyAccessExpression) => boolean;
+  },
 ) {
   const violations: BoundaryViolation[] = [];
   const addViolation = (node: ts.Node, action: string, name: string) => {
@@ -344,7 +333,7 @@ function findNamedBoundaryViolations(
       if (namedBindings && ts.isNamedImports(namedBindings)) {
         for (const specifier of namedBindings.elements) {
           const importedName = specifier.propertyName?.text ?? specifier.name.text;
-          if (legacyNames.has(importedName)) {
+          if (legacyNames.has(importedName) && !allowed?.import?.(node, specifier)) {
             addViolation(specifier, "imports", importedName);
           }
         }
@@ -358,7 +347,11 @@ function findNamedBoundaryViolations(
       }
     }
 
-    if (ts.isPropertyAccessExpression(node) && legacyNames.has(node.name.text)) {
+    if (
+      ts.isPropertyAccessExpression(node) &&
+      legacyNames.has(node.name.text) &&
+      !allowed?.reference?.(node)
+    ) {
       addViolation(node.name, "references", node.name.text);
     }
 
@@ -388,12 +381,9 @@ function findNamedBoundaryViolations(
   return violations;
 }
 
-function findNamedSessionStoreViolations(
-  sourceFile: ts.SourceFile,
-  legacyNames: ReadonlySet<string>,
-  legacyKind: string,
-) {
-  return findNamedBoundaryViolations(sourceFile, legacyNames, `legacy session store ${legacyKind}`);
+function namedBoundaryRule(legacyNames: ReadonlySet<string>, subject: string) {
+  return (_content: string, _fileName: string, sourceFile: ts.SourceFile) =>
+    findNamedBoundaryViolations(sourceFile, legacyNames, subject);
 }
 
 export function collectSessionStoreRuntimeFileBackedCompatExports(
@@ -453,19 +443,10 @@ export function findSessionStoreRuntimeFileBackedCompatExportViolations(
   sourceFile: ts.SourceFile,
 ) {
   const exports = collectSessionStoreRuntimeFileBackedCompatExports(content, fileName, sourceFile);
-  const violations: BoundaryViolation[] = [];
-  for (const [exportedName, exported] of exports) {
-    if (
-      exportedName !== exported.sourceName ||
-      !allowedSessionStoreRuntimeFileBackedCompatExports.has(exportedName)
-    ) {
-      violations.push({
-        line: exported.line,
-        reason: `exports unratcheted file-backed SDK session helper "${exported.sourceName}"`,
-      });
-    }
-  }
-  return violations;
+  return Array.from(exports.values(), (exported) => ({
+    line: exported.line,
+    reason: `exports retired file-backed SDK session helper "${exported.sourceName}"`,
+  }));
 }
 
 export function findSessionAccessorBoundaryViolations(
@@ -475,20 +456,13 @@ export function findSessionAccessorBoundaryViolations(
 ) {
   const legacyNames = legacyNamesForFile(fileName);
   const legacyKind = legacyNames === legacyWholeStoreAccessNames ? "access" : "reader";
-  return findNamedSessionStoreViolations(sourceFile, legacyNames, legacyKind);
+  return findNamedBoundaryViolations(sourceFile, legacyNames, `legacy session store ${legacyKind}`);
 }
 
-export function findReadOnlySessionAccessorViolations(
-  _content: string,
-  _fileName: string,
-  sourceFile: ts.SourceFile,
-) {
-  return findNamedBoundaryViolations(
-    sourceFile,
-    materializingSessionEntryAccessorNames,
-    "materializing session entry accessor",
-  );
-}
+export const findReadOnlySessionAccessorViolations = namedBoundaryRule(
+  materializingSessionEntryAccessorNames,
+  "materializing session entry accessor",
+);
 
 export function findEmbeddedAgentSessionTargetViolations(
   _content: string,
@@ -512,14 +486,8 @@ export function findEmbeddedAgentSessionTargetViolations(
   const visitRunOptions = (options: ts.ObjectLiteralExpression) => {
     for (const property of options.properties) {
       if (
-        ts.isPropertyAssignment(property) &&
+        (ts.isPropertyAssignment(property) || ts.isShorthandPropertyAssignment(property)) &&
         getPropertyNameText(property.name) === "sessionFile"
-      ) {
-        recordDeprecatedSessionFile(property.name);
-      } else if (
-        ts.isShorthandPropertyAssignment(property) &&
-        ts.isIdentifier(property.name) &&
-        property.name.text === "sessionFile"
       ) {
         recordDeprecatedSessionFile(property.name);
       }
@@ -544,23 +512,36 @@ export function findEmbeddedAgentSessionTargetViolations(
 
 export function findSessionAccessorWriteBoundaryViolations(
   _content: string,
-  _fileName: string,
+  fileName: string,
   sourceFile: ts.SourceFile,
 ) {
-  return findNamedSessionStoreViolations(sourceFile, legacyWriterNames, "writer");
+  return findNamedBoundaryViolations(sourceFile, legacyWriterNames, "legacy session store writer", {
+    // These owners forward released SDK callbacks; internal calls remain forbidden.
+    import: (declaration, specifier) =>
+      ts.isStringLiteral(declaration.moduleSpecifier) &&
+      declaration.moduleSpecifier.text === "../../plugin-sdk/session-store-runtime.js" &&
+      !specifier.propertyName &&
+      ((specifier.name.text === "updateLastRoute" &&
+        (fileName === "src/plugins/runtime/runtime-channel.ts" ||
+          fileName.endsWith("/src/plugins/runtime/runtime-channel.ts"))) ||
+        (specifier.name.text === "updateSessionStoreEntry" &&
+          (fileName === "src/plugins/runtime/runtime-agent.ts" ||
+            fileName.endsWith("/src/plugins/runtime/runtime-agent.ts")))),
+    reference: (node) =>
+      (fileName === "src/plugins/registry-runtime-channel.ts" ||
+        fileName.endsWith("/src/plugins/registry-runtime-channel.ts")) &&
+      node.name.text === "updateLastRoute" &&
+      ts.isPropertyAccessExpression(node.expression) &&
+      node.expression.name.text === "session" &&
+      ts.isIdentifier(node.expression.expression) &&
+      node.expression.expression.text === "channel",
+  });
 }
 
-export function findTranscriptWriterBoundaryViolations(
-  _content: string,
-  _fileName: string,
-  sourceFile: ts.SourceFile,
-) {
-  return findNamedBoundaryViolations(
-    sourceFile,
-    legacyTranscriptWriterNames,
-    "legacy transcript writer",
-  );
-}
+export const findTranscriptWriterBoundaryViolations = namedBoundaryRule(
+  legacyTranscriptWriterNames,
+  "legacy transcript writer",
+);
 
 export function findGatewaySessionCreateLifecycleViolations(
   _content: string,
@@ -598,29 +579,15 @@ export function findGatewaySessionCreateLifecycleViolations(
   return violations;
 }
 
-export function findSessionCompactManualTrimBoundaryViolations(
-  _content: string,
-  _fileName: string,
-  sourceFile: ts.SourceFile,
-) {
-  return findNamedSessionStoreViolations(
-    sourceFile,
-    legacyManualCompactTrimNames,
-    "manual compact trim",
-  );
-}
+export const findSessionCompactManualTrimBoundaryViolations = namedBoundaryRule(
+  legacyManualCompactTrimNames,
+  "legacy session store manual compact trim",
+);
 
-export function findSessionLifecycleCleanupBoundaryViolations(
-  _content: string,
-  _fileName: string,
-  sourceFile: ts.SourceFile,
-) {
-  return findNamedSessionStoreViolations(
-    sourceFile,
-    legacyLifecycleCleanupNames,
-    "lifecycle cleanup",
-  );
-}
+export const findSessionLifecycleCleanupBoundaryViolations = namedBoundaryRule(
+  legacyLifecycleCleanupNames,
+  "legacy session store lifecycle cleanup",
+);
 
 // Source roots shared by the enforced boundary checks in main() and the debt
 // ratchet below; keeping one list prevents the two scans from drifting apart.
@@ -789,7 +756,6 @@ function sortRecordByKey<Value>(record: Record<string, Value>) {
   );
 }
 
-/** Counts legacy call sites per unmigrated file for every debt concern. */
 async function collectSessionAccessorDebtCounts(repoRoot: string) {
   const counts: SessionAccessorDebtCounts = {};
   for (const [key, concern] of Object.entries(sessionAccessorDebtConcerns)) {
@@ -812,7 +778,6 @@ async function collectSessionAccessorDebtCounts(repoRoot: string) {
   return sortRecordByKey(counts);
 }
 
-/** Ratchet compare: counts above baseline are regressions, below are improvements. */
 export function compareSessionAccessorDebt(
   currentCounts: SessionAccessorDebtCounts,
   baselineCounts: SessionAccessorDebtCounts,

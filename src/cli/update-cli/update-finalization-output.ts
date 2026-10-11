@@ -91,14 +91,13 @@ export class UpdateFinalizationOutput {
   }
 
   snapshot() {
-    if (!this.doctor) {
-      return undefined;
-    }
-    return {
-      phase: this.doctor.phase,
-      stdout: this.doctor.stdout.snapshot(),
-      stderr: this.doctor.stderr.snapshot(),
-    };
+    return this.doctor
+      ? {
+          phase: this.doctor.phase,
+          stdout: this.doctor.stdout.snapshot(),
+          stderr: this.doctor.stderr.snapshot(),
+        }
+      : undefined;
   }
 
   close(): void {

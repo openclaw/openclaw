@@ -22,11 +22,26 @@ struct RootSidebarTypographyTests {
 }
 
 struct OpenClawTypographyTests {
-    @Test func `file attachment controls use branded typography`() throws {
+    @Test func `Access actions use native branded controls`() throws {
+        let settings = try String(contentsOf: Self.sourceURL("Design/SettingsProTabSections.swift"), encoding: .utf8)
+        for label in ["Cancel sign-in", "Sign in to Cloudflare Access", "Sign out of Cloudflare Access"] {
+            #expect(settings.contains("Text(\"\(label)\").font(OpenClawType.body)"))
+        }
+        #expect(settings.contains("Text(\"Access Host\")"))
+        #expect(settings.contains("Text(verbatim: target.origin.url.absoluteString)"))
+        #expect(settings.contains(".fixedSize(horizontal: false, vertical: true)"))
+        #expect(settings.contains(".textSelection(.enabled)"))
+        let dashboard = try String(contentsOf: Self.sourceURL("Settings/DashboardPageScreen.swift"), encoding: .utf8)
+        #expect(dashboard.contains("Text(\"Open Gateway settings\")"))
+        #expect(dashboard.contains(".font(OpenClawType.body)"))
+    }
+
+    @Test(arguments: ["ChatFileAttachment.swift", "ChatMessageReactions.swift"])
+    func `chat accessory controls use branded typography`(filename: String) throws {
         let source = try String(
             contentsOf: URL(fileURLWithPath: #filePath)
                 .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-                .appendingPathComponent("shared/OpenClawKit/Sources/OpenClawChatUI/ChatFileAttachment.swift"),
+                .appendingPathComponent("shared/OpenClawKit/Sources/OpenClawChatUI/\(filename)"),
             encoding: .utf8)
         #expect(source.contains(".font(OpenClawChatTypography.footnote)"))
         #expect(source.contains(".font(OpenClawChatTypography.caption)"))
@@ -56,8 +71,7 @@ struct OpenClawTypographyTests {
         #expect(support.contains("Label(\"Delete…\""))
         #expect(support.contains(".font(OpenClawType.subhead)"))
         #expect(support.contains(".font(OpenClawType.subheadSemiBold)"))
-        #expect(commandCenter.contains("Toggle(isOn: self.$showArchived)"))
-        #expect(commandCenter.contains("Text(\"Show Archived\")"))
+        #expect(!commandCenter.contains(".font(."))
         #expect(commandCenter.contains(".font(OpenClawType.captionMedium)"))
     }
 
@@ -644,7 +658,7 @@ struct OpenClawTypographyTests {
         for fontRange in self.fontModifierRanges(in: code) {
             let fontCall = String(decoding: sourceBytes[fontRange], as: UTF8.self)
             let hasBrandedFont = fontTokens.contains { fontCall.contains($0) }
-                || self.hasAllowedBrandedFontParameter(fontCall, relativePath: relativePath)
+                || self.hasAllowedBrandedFontParameter(fontCall, relativePath: relativePath, code: code)
             guard !hasBrandedFont, !imageFontRanges.contains(fontRange) else { continue }
 
             let fontLine = code[..<fontRange.lowerBound].count(where: { $0 == 10 })
@@ -870,7 +884,11 @@ struct OpenClawTypographyTests {
         return cursor
     }
 
-    private static func hasAllowedBrandedFontParameter(_ fontCall: String, relativePath: String) -> Bool {
+    private static func hasAllowedBrandedFontParameter(
+        _ fontCall: String,
+        relativePath: String,
+        code: [UInt8]) -> Bool
+    {
         switch relativePath {
         case "apps/ios/Sources/Design/OpenClawProComponents.swift":
             fontCall.contains(".font(self.titleFont)") ||
@@ -878,6 +896,9 @@ struct OpenClawTypographyTests {
         case "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatMarkdownRenderer.swift":
             // Qualified values are composed here, then styled at the prose render boundary.
             fontCall.contains(".font(self.font)") || fontCall.contains(".font(font)")
+        case "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionManagementViews.swift":
+            self.hasBrandedFormFont(code) &&
+                [".font(self.formFont)", ".font(self.formFont.weight(.medium))"].contains(fontCall)
         default:
             false
         }
@@ -909,6 +930,80 @@ struct OpenClawTypographyTests {
 }
 
 extension OpenClawTypographyTests {
+    @Test func `font boundary scanner excludes only whole macOS files`() {
+        let font = "Text(title).font(.body)"
+        let cases: [(String, Bool)] = [
+            ("#if os(macOS)\n\(font)\n#endif", true),
+            ("// Header\n#if os(macOS)\n\(font)\n#endif\n// Footer", true),
+            ("#if os(macOS)\n#if DEBUG\n\(font)\n#else\n\(font)\n#endif\n#endif", true),
+            ("#if os(macOS)\n#if(DEBUG)\n\(font)\n#endif\n#endif", true),
+            (font, false),
+            ("#if os(iOS)\n\(font)\n#endif", false),
+            ("#if os(macOS) || os(iOS)\n\(font)\n#endif", false),
+            ("#if os(macOS)\n\(font)\n#else\n\(font)\n#endif", false),
+            ("#if os(macOS)\n\(font)\n#elseif os(iOS)\n\(font)\n#endif", false),
+            ("#if os(macOS)\n\(font)\n#elseif(os(iOS))\n\(font)\n#endif", false),
+            ("import SwiftUI\n#if os(macOS)\n\(font)\n#endif", false),
+            ("#if os(macOS)\n#endif\n\(font)", false),
+            ("#if os(macOS)\n\(font)", false),
+            ("#if os(macOS)\n#endif\n#if os(iOS)\n\(font)\n#endif", false),
+            ("// #if os(macOS)\n\(font)\n// #endif", false),
+        ]
+        for (source, isMacOSOnly) in cases {
+            #expect(Self.isCompleteMacOSSourceEnvelope(Self.maskedSwiftCode(source)) == isMacOSOnly)
+            #expect(Self.unbrandedTextCallOffenders(in: source, relativePath: "Sample.swift").isEmpty == isMacOSOnly)
+        }
+    }
+
+    @Test func `form font alias requires its audited branded definition`() {
+        let path = "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionManagementViews.swift"
+        let source = """
+        private var formFont: Font {
+            #if os(macOS)
+            OpenClawChatTypography.body(size: 13, weight: .regular, relativeTo: .body)
+            #else
+            OpenClawChatTypography.body
+            #endif
+        }
+        Text(title).font(self.formFont)
+        Text(title).font(self.formFont.weight(.medium))
+        """
+        #expect(Self.unbrandedTextCallOffenders(in: source, relativePath: path).isEmpty)
+        #expect(Self.unbrandedTextCallOffenders(in: source, relativePath: "Sample.swift").count == 2)
+        for altered in [
+            source.replacingOccurrences(of: "OpenClawChatTypography.body", with: "Font.system"),
+            source.replacingOccurrences(of: "#else\n    OpenClawChatTypography.body", with: "#else\n    .body"),
+            source.replacingOccurrences(of: "private var formFont", with: "private var anotherFont"),
+        ] {
+            #expect(Self.unbrandedTextCallOffenders(in: altered, relativePath: path).count == 2)
+        }
+        for declaration in [
+            "let formFont: Font = .body", "let formFont = Font.body",
+            "var formFont: Font = .body", "var formFont = Font.body",
+            "let `formFont` = Font.body", "let other = Font.body, formFont = Font.body",
+        ] {
+            let shadow = "struct Other: View { \(declaration); " +
+                "var body: some View { Text(title).font(self.formFont) } }"
+            #expect(Self.unbrandedTextCallOffenders(in: source + shadow, relativePath: path).count == 3)
+        }
+        #expect(Self.unbrandedTextCallOffenders(
+            in: source + "\nText(title).font(self.otherFont)", relativePath: path).count == 1)
+        #expect(Self.unbrandedTextCallOffenders(
+            in: source + "\nText(title).font(self.formFont.weight(.bold))", relativePath: path).count == 1)
+    }
+
+    private static func hasBrandedFormFont(_ code: [UInt8]) -> Bool {
+        // Audit the alias producer as well as its uses, so a system-font substitution still fails.
+        guard let source = String(bytes: code, encoding: .utf8) else { return false }
+        let compact = source.filter { !$0.isWhitespace }
+        let definition = "privatevarformFont:Font{#ifos(macOS)" +
+            "OpenClawChatTypography.body(size:13,weight:.regular,relativeTo:.body)" +
+            "#elseOpenClawChatTypography.body#endif}"
+        // Any additional unqualified occurrence may declare another producer; keep uncertain source audited.
+        let withoutUses = compact.replacingOccurrences(of: "self.formFont", with: "")
+        return withoutUses.components(separatedBy: "formFont").count == 2 && compact.contains(definition)
+    }
+
     @Test func `font boundary scanner excludes only complete macOS source envelopes`() {
         let macOnly = """
         // A shared directory can contain a macOS-only view.
@@ -942,27 +1037,24 @@ extension OpenClawTypographyTests {
 
     private static func isCompleteMacOSSourceEnvelope(_ code: [UInt8]) -> Bool {
         guard let source = String(bytes: code, encoding: .utf8) else { return false }
-        let lines = source.split(separator: "\n")
-            .map { $0.trimmingCharacters(in: .whitespaces) }
-            .filter { !$0.isEmpty }
-        guard lines.first?.filter({ !$0.isWhitespace }) == "#ifos(macOS)" else { return false }
-
-        // Only a whole-file Mac envelope is outside this audit. Mixed-platform
-        // branches remain audited without interpreting arbitrary Swift conditions.
+        let lines = source.components(separatedBy: .newlines)
+            .map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+        guard lines.first == "#if os(macOS)", lines.last == "#endif" else { return false }
         var depth = 0
         for (index, line) in lines.enumerated() {
-            switch line.split(whereSeparator: \.isWhitespace).first {
+            switch line.prefix(while: { $0 == "#" || $0.isLetter }) {
             case "#if":
                 depth += 1
             case "#else", "#elseif":
                 if depth == 1 { return false }
             case "#endif":
                 depth -= 1
-                if depth == 0 { return index == lines.count - 1 }
+                if depth == 0, index != lines.count - 1 { return false }
             default:
                 break
             }
+            if depth < 0 { return false }
         }
-        return false
+        return depth == 0
     }
 }

@@ -17,14 +17,11 @@ import {
   setRuntimeConfigSnapshot,
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { createOpenClawTestState, type OpenClawTestState } from "openclaw/plugin-sdk/test-state";
-import { afterEach, beforeEach, vi } from "vitest";
+import { afterEach, beforeEach, vi, type Mock } from "vitest";
 import { getOrCreateAccountThrottler } from "./account-throttler.js";
 import { resolveTelegramAccount } from "./accounts.js";
-import { defaultTelegramBotDeps } from "./bot-deps.js";
-import {
-  enqueueTelegramMenuSync,
-  resolveTelegramMenuRemoteOwner,
-} from "./bot-native-command-menu-state.js";
+import { defaultTelegramBotDeps, type TelegramBotDeps } from "./bot-deps.js";
+import { syncTelegramMenuCommands } from "./bot-native-command-menu.js";
 import { telegramBotInfoForTest } from "./bot.create-telegram-bot.test-support.js";
 import { createTelegramBot } from "./bot.js";
 import { apiThrottler } from "./bot.runtime.js";
@@ -59,8 +56,14 @@ const http = useTelegramHttpFixture();
 type ReplyResolver = NonNullable<Parameters<typeof dispatchInboundMessage>[0]["replyResolver"]>;
 const replySpy = vi.fn<ReplyResolver>();
 const buildModelsProviderData = vi.fn(defaultTelegramBotDeps.buildModelsProviderData);
-const listSkillCommandsForAgents = vi.fn(defaultTelegramBotDeps.listSkillCommandsForAgents);
+const prepareSkillCommandsForAgents = vi.fn(defaultTelegramBotDeps.prepareSkillCommandsForAgents);
 const pendingUpdates = new Set<Promise<void>>();
+const pendingMenuSyncs = new Set<Promise<void>>();
+
+export async function settleMenuSyncs(): Promise<void> {
+  await Promise.all(pendingMenuSyncs);
+  pendingMenuSyncs.clear();
+}
 
 async function settleUpdates(): Promise<void> {
   while (pendingUpdates.size > 0) {
@@ -68,22 +71,33 @@ async function settleUpdates(): Promise<void> {
   }
 }
 
-export const harness = {
+export const harness: {
+  readonly state: OpenClawTestState;
+  replySpy: Mock<ReplyResolver>;
+  transcribeFirstAudio: typeof transcribeFirstAudio;
+  settleUpdates: typeof settleUpdates;
+  prepareSkillCommandsForAgents: typeof prepareSkillCommandsForAgents;
+  telegramBotDepsForTest: TelegramBotDeps;
+} = {
   get state() {
     return state;
   },
   replySpy,
   transcribeFirstAudio,
   settleUpdates,
-  listSkillCommandsForAgents,
+  prepareSkillCommandsForAgents,
   telegramBotDepsForTest: {
     ...defaultTelegramBotDeps,
     buildModelsProviderData,
-    listSkillCommandsForAgents,
+    prepareSkillCommandsForAgents,
+    syncTelegramMenuCommands: (params) => {
+      const pending = syncTelegramMenuCommands(params);
+      pendingMenuSyncs.add(pending);
+      return pending;
+    },
   },
 };
 const bots: Array<{ bot: Bot; abort: AbortController }> = [];
-const menuOwnerIds = new Set<number>();
 export const chat = { id: 42001, type: "private", first_name: "Alice" } as const;
 export const from = { id: 42001, is_bot: false, first_name: "Alice" } as const;
 export const groupChat = {
@@ -182,7 +196,6 @@ export async function createBot(
     );
     return pending;
   };
-  menuOwnerIds.add(botInfo.id);
   bots.push({ bot, abort });
   return bot;
 }
@@ -288,9 +301,9 @@ beforeEach(async () => {
   };
   replySpy.mockReset().mockResolvedValue({ text: "Test response" });
   transcribeFirstAudio.mockReset();
-  listSkillCommandsForAgents
+  prepareSkillCommandsForAgents
     .mockReset()
-    .mockImplementation(defaultTelegramBotDeps.listSkillCommandsForAgents);
+    .mockImplementation(defaultTelegramBotDeps.prepareSkillCommandsForAgents);
   buildModelsProviderData.mockReset().mockResolvedValue({
     byProvider: new Map(),
     providers: [],
@@ -313,20 +326,12 @@ afterEach(async () => {
     abort.abort();
   }
   await settleUpdates();
-  for (const botId of menuOwnerIds) {
-    await new Promise<void>((resolve, reject) => {
-      enqueueTelegramMenuSync({
-        ownerKey: resolveTelegramMenuRemoteOwner({ botId }).queueKey,
-        sync: async () => resolve(),
-        onError: reject,
-      });
-    });
-  }
-  menuOwnerIds.clear();
+  await settleMenuSyncs();
   await Promise.all(bots.splice(0).map(({ bot }) => bot.stop()));
   clearRuntimeConfigSnapshot();
   clearTelegramRuntimeForTest();
   resetPluginRuntimeStateForTest();
-  resetPluginStateStoreForTests();
+  // The state owner drains agent workers before retiring their shared-state admission.
+  resetPluginStateStoreForTests({ closeDatabase: false });
   await state.cleanup();
 });

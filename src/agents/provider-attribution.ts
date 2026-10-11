@@ -32,7 +32,6 @@ type ProviderAttributionHook =
   | "user-agent-extra"
   | "custom-user-agent";
 
-/** Product attribution policy emitted for verified provider hooks. */
 export type ProviderAttributionPolicy = {
   provider: string;
   enabledByDefault: boolean;
@@ -45,12 +44,9 @@ export type ProviderAttributionPolicy = {
   headers?: Record<string, string>;
 };
 
-/** Transport family used when resolving provider-specific request policy. */
 export type ProviderRequestTransport = "stream" | "websocket" | "http" | "media-understanding";
-/** Capability family used when endpoint rules differ by media or LLM request type. */
 export type ProviderRequestCapability = "llm" | "audio" | "image" | "video" | "other";
 
-/** Normalized endpoint class used by provider policy and SSRF/attribution decisions. */
 export type ProviderEndpointClass =
   | "default"
   | "anthropic-public"
@@ -71,6 +67,7 @@ export type ProviderEndpointClass =
   | "opencode-go-native"
   | "azure-openai"
   | "openrouter"
+  | "vercel-ai-gateway"
   | "xai-native"
   | "xiaomi-native"
   | "zai-native"
@@ -80,14 +77,12 @@ export type ProviderEndpointClass =
   | "custom"
   | "invalid";
 
-/** Parsed endpoint facts derived from provider id and base URL. */
 export type ProviderEndpointResolution = {
   endpointClass: ProviderEndpointClass;
   hostname?: string;
   googleVertexRegion?: string;
 };
 
-/** Raw model/provider fields accepted by policy resolution. */
 export type ProviderRequestPolicyInput = {
   provider?: string | null;
   api?: string | null;
@@ -113,16 +108,13 @@ export type ProviderRequestPolicyResolution = {
   usesExplicitProxyLikeEndpoint: boolean;
 };
 
-/** Policy input plus model compatibility fields for feature-level capability resolution. */
 export type ProviderRequestCapabilitiesInput = ProviderRequestPolicyInput & {
   modelId?: string | null;
   compat?: unknown;
 };
 
-/** Known compatibility family that needs provider-specific request adjustments. */
 export type ProviderRequestCompatibilityFamily = "moonshot";
 
-/** Feature capability facts for one resolved provider/model request route. */
 export type ProviderRequestCapabilities = ProviderRequestPolicyResolution & {
   isKnownNativeEndpoint: boolean;
   allowsOpenAIServiceTier: boolean;
@@ -148,8 +140,8 @@ function readCompatBoolean(
 
 const OPENCLAW_ATTRIBUTION_PRODUCT = "OpenClaw";
 const OPENCLAW_ATTRIBUTION_ORIGINATOR = "openclaw";
-const OPENROUTER_ATTRIBUTION_CATEGORIES =
-  "cli-agent,cloud-agent,programming-app,creative-writing,writing-assistant,general-chat,personal-agent";
+// OpenRouter honors at most two recognized categories per request and silently drops the rest.
+const OPENROUTER_ATTRIBUTION_CATEGORIES = "personal-agent,cli-agent";
 
 const LOCAL_ENDPOINT_HOSTS = new Set(["localhost", "127.0.0.1", "::1", "[::1]"]);
 const OPENAI_RESPONSES_APIS = new Set([
@@ -158,6 +150,12 @@ const OPENAI_RESPONSES_APIS = new Set([
   "openai-chatgpt-responses",
 ]);
 const OPENAI_RESPONSES_PROVIDERS = new Set(["openai", "azure-openai", "azure-openai-responses"]);
+const ENDPOINT_ATTRIBUTION_PROVIDERS = new Map<ProviderEndpointClass, string>([
+  ["openrouter", "openrouter"],
+  ["vercel-ai-gateway", "vercel-ai-gateway"],
+  ["nvidia-native", "nvidia"],
+  ["google-generative-ai", "google"],
+]);
 
 function resolveUrlHostname(value: unknown): string | undefined {
   const trimmed = normalizeOptionalString(value);
@@ -190,14 +188,12 @@ function resolveProviderMetadataOwners(
   };
 }
 
-function resolveManifestProviderRequest(params: {
-  provider: string | undefined;
-  providerMetadataOwners?: PluginMetadataSnapshotOwnerMaps;
-}): PluginManifestProviderRequestProvider | undefined {
-  return params.provider
-    ? resolveProviderMetadataOwners(params.providerMetadataOwners).providerRequests.get(
-        params.provider,
-      )
+function resolveManifestProviderRequest(
+  provider: string | undefined,
+  providerMetadataOwners?: PluginMetadataSnapshotOwnerMaps,
+): PluginManifestProviderRequestProvider | undefined {
+  return provider
+    ? resolveProviderMetadataOwners(providerMetadataOwners).providerRequests.get(provider)
     : undefined;
 }
 
@@ -214,20 +210,6 @@ function buildManifestEndpointResolution(
     hostname: host,
     ...(googleVertexRegion ? { googleVertexRegion } : {}),
   };
-}
-
-function resolveManifestProviderEndpoint(params: {
-  host: string;
-  normalizedBaseUrl?: string;
-  providerMetadataOwners?: PluginMetadataSnapshotOwnerMaps;
-}): ProviderEndpointResolution | undefined {
-  for (const endpoint of resolveProviderMetadataOwners(params.providerMetadataOwners)
-    .providerEndpoints) {
-    if (matchesPluginProviderEndpoint(endpoint, params)) {
-      return buildManifestEndpointResolution(endpoint, params.host);
-    }
-  }
-  return undefined;
 }
 
 function isLocalEndpointHost(host: string): boolean {
@@ -258,13 +240,10 @@ export function resolveProviderEndpoint(
     return { endpointClass: "invalid" };
   }
   const normalizedBaseUrl = normalizePluginProviderBaseUrl(baseUrl);
-  const manifestEndpoint = resolveManifestProviderEndpoint({
-    host,
-    normalizedBaseUrl,
-    ...(providerMetadataOwners ? { providerMetadataOwners } : {}),
-  });
-  if (manifestEndpoint) {
-    return manifestEndpoint;
+  for (const endpoint of resolveProviderMetadataOwners(providerMetadataOwners).providerEndpoints) {
+    if (matchesPluginProviderEndpoint(endpoint, { host, normalizedBaseUrl })) {
+      return buildManifestEndpointResolution(endpoint, host);
+    }
   }
   if (isLocalEndpointHost(host)) {
     return { endpointClass: "local", hostname: host };
@@ -276,10 +255,7 @@ function resolveKnownProviderFamily(
   provider: string | undefined,
   providerMetadataOwners?: PluginMetadataSnapshotOwnerMaps,
 ): string {
-  const manifestFamily = resolveManifestProviderRequest({
-    provider,
-    ...(providerMetadataOwners ? { providerMetadataOwners } : {}),
-  })?.family;
+  const manifestFamily = resolveManifestProviderRequest(provider, providerMetadataOwners)?.family;
   if (manifestFamily) {
     return manifestFamily;
   }
@@ -308,7 +284,8 @@ function resolveProviderAttributionPolicy(
       return {
         ...policy,
         docsUrl: "https://openrouter.ai/docs/app-attribution",
-        reviewNote: "Documented app attribution headers. Verified in OpenClaw runtime wrapper.",
+        reviewNote:
+          "Documented app attribution headers. Applied on OpenRouter endpoints regardless of configured provider id.",
         headers: {
           "HTTP-Referer": "https://openclaw.ai",
           "X-OpenRouter-Title": policy.product,
@@ -330,6 +307,25 @@ function resolveProviderAttributionPolicy(
           "Gemini API partner integration guidance requires x-goog-api-client on partner and library traffic.",
         headers: { "x-goog-api-client": userAgent },
       };
+    case "vercel-ai-gateway":
+      return {
+        ...policy,
+        docsUrl: "https://vercel.com/docs/ai-gateway/ecosystem/app-attribution",
+        reviewNote:
+          'Vercel documents: "AI Gateway reads two request headers when present: http-referer … x-title". Applied on ai-gateway.vercel.sh regardless of configured provider id.',
+        headers: {
+          "HTTP-Referer": "https://openclaw.ai",
+          "X-Title": policy.product,
+        },
+      };
+    case "perplexity":
+      return {
+        ...policy,
+        docsUrl: "https://docs.perplexity.ai/docs/getting-started/integrations/opencode",
+        reviewNote:
+          'Perplexity documents integrations identifying themselves with "X-Pplx-Integration": "<client>/<version>". Applied only on the direct Perplexity API.',
+        headers: { "X-Pplx-Integration": userAgent },
+      };
     case "openai":
     case "xai":
       return {
@@ -344,6 +340,14 @@ function resolveProviderAttributionPolicy(
           version,
           "User-Agent": userAgent,
         },
+      };
+    case "opencode":
+      return {
+        ...policy,
+        verification: "internal-runtime",
+        reviewNote:
+          "Identify OpenClaw on native OpenCode Zen requests without impersonating OpenCode.",
+        headers: { "User-Agent": userAgent },
       };
     case "opencode-go":
       return {
@@ -399,31 +403,28 @@ export function resolveProviderRequestPolicy(
   let attributionProvider: string | undefined;
   if (provider === "openai" && usesVerifiedOpenAIAttributionHost) {
     attributionProvider = "openai";
-  } else if (provider === "openrouter" && policy?.enabledByDefault) {
-    // OpenRouter attribution is documented, but only apply it to known
-    // OpenRouter endpoints or the default (unset) baseUrl path.
-    if (endpointClass === "openrouter" || endpointClass === "default") {
-      attributionProvider = "openrouter";
-    }
   } else if (provider === "xai" && policy?.enabledByDefault) {
     // Default (unset baseUrl) maps to api.x.ai; custom baseUrls are treated as proxies and withheld.
     if (endpointClass === "xai-native" || endpointClass === "default") {
       attributionProvider = "xai";
     }
   } else if (
-    provider === "opencode-go" &&
     policy?.enabledByDefault &&
-    endpointClass === "opencode-go-native"
+    ((provider === "opencode-go" && endpointClass === "opencode-go-native") ||
+      (provider === "opencode" && endpointClass === "opencode-native"))
   ) {
-    // The documented identification contract belongs to Go's native endpoint.
-    // A custom baseUrl is a proxy and must not inherit OpenClaw attribution.
-    attributionProvider = "opencode-go";
+    // Native OpenCode routes identify OpenClaw; custom proxies do not inherit attribution.
+    attributionProvider = provider;
   }
-  if (!attributionProvider && endpointClass === "nvidia-native") {
-    attributionProvider = "nvidia";
-  }
-  if (!attributionProvider && endpointClass === "google-generative-ai") {
-    attributionProvider = "google";
+  if (!attributionProvider) {
+    // Endpoint-owned attribution also applies to custom provider ids on the native host.
+    // Perplexity's plugin uses the default route; any configured baseUrl is a proxy.
+    attributionProvider =
+      ENDPOINT_ATTRIBUTION_PROVIDERS.get(endpointClass) ??
+      (endpointClass === "default" &&
+      ["openrouter", "vercel-ai-gateway", "perplexity"].includes(provider)
+        ? provider
+        : undefined);
   }
 
   const attributionPolicy = attributionProvider
@@ -488,12 +489,10 @@ export function resolveProviderRequestCapabilities(
     endpointClass === "google-generative-ai" ||
     endpointClass === "google-vertex";
 
-  const manifestProviderRequest = resolveManifestProviderRequest({
+  const manifestProviderRequest = resolveManifestProviderRequest(
     provider,
-    ...(input.providerMetadataOwners
-      ? { providerMetadataOwners: input.providerMetadataOwners }
-      : {}),
-  });
+    input.providerMetadataOwners,
+  );
   const compatibilityFamily = manifestProviderRequest?.compatibilityFamily;
 
   const isResponsesApi = api !== undefined && OPENAI_RESPONSES_APIS.has(api);
@@ -559,7 +558,7 @@ export function resolveProviderRequestCapabilities(
 
 function describeProviderRequestRoutingPolicy(
   policy: ProviderRequestPolicyResolution,
-): "hidden" | "documented" | "sdk-hook-only" | "none" {
+): "hidden" | "documented" | "none" {
   if (!policy.attributionProvider) {
     return "none";
   }
@@ -568,8 +567,6 @@ function describeProviderRequestRoutingPolicy(
       return "hidden";
     case "vendor-documented":
       return "documented";
-    case "vendor-sdk-hook-only":
-      return "sdk-hook-only";
     default:
       return "none";
   }

@@ -44,13 +44,9 @@ class PluginSessionSummary extends OpenClawLightDomElement {
   constructor() {
     super();
     new SubscriptionsController(this)
-      .watch(
-        () => (this.presented ? this.agentIdentity : null),
-        (identity, notify) => identity.subscribe(notify),
-      )
-      .watch(
+      .watchStore(() => (this.presented ? this.agentIdentity : null))
+      .watchStore(
         () => (this.presented ? this.gateway : null),
-        (gateway, notify) => gateway.subscribe(notify),
         (gateway) => {
           if (gateway === this.gateway) {
             this.synchronizeHistory();
@@ -143,6 +139,7 @@ class PluginSessionSummary extends OpenClawLightDomElement {
     void client
       .request<ChatHistoryResult>("chat.history", {
         ...target,
+        toolResultMaxChars: 2_000,
         limit: 20,
         maxChars: 12000,
       })

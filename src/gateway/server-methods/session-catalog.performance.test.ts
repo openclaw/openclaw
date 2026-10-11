@@ -68,17 +68,18 @@ it("measures 100 composed catalog lists against real session and plugin stores",
       try {
         counters.begin();
         fixture = await createComposedCatalogFixture(state, counters);
+        await fixture.setupList();
         const catalogNamespace = await counters.catalogPersisted;
-        const first = await fixture.list();
+        const first = await fixture.setupList();
         expect(first.sessions.length).toBeGreaterThan(0);
         const sourceHomeId = first.sessions[0]?.sourceHomeId;
         if (!sourceHomeId) {
           throw new Error("Native catalog did not expose its source home identity");
         }
-        let page = await fixture.list();
+        let page = await fixture.setupList();
         let visibleCount = page.sessions.length;
         while (page.nextCursor) {
-          page = await fixture.list({ cursors: { [page.hostId]: page.nextCursor } });
+          page = await fixture.setupList({ cursors: { [page.hostId]: page.nextCursor } });
           visibleCount += page.sessions.length;
         }
         expect(visibleCount).toBe(3_000);
@@ -110,9 +111,9 @@ it("measures 100 composed catalog lists against real session and plugin stores",
         do {
           await fixture.projection.ensureMaterialized();
         } while (fixture.projection.needsMaterialization);
-        const head = await fixture.list();
+        const head = await fixture.setupList();
         expect(head.sessions.filter((session) => session.sessionKey)).toHaveLength(3);
-        const search = await fixture.list({ search: "Project 7", limitPerHost: 32 });
+        const search = await fixture.setupList({ search: "Project 7", limitPerHost: 32 });
         if (!head.nextCursor || !search.nextCursor) {
           throw new Error("Expected native continuation fixtures");
         }
@@ -129,7 +130,7 @@ it("measures 100 composed catalog lists against real session and plugin stores",
         const warmResponses: SessionCatalogHost[] = [];
         for (const query of variants) {
           for (let warm = 0; warm < 3; warm++) {
-            const result = await fixture.list(query);
+            const result = await fixture.setupList(query);
             if (warm === 2) {
               warmResponses.push(result);
             }
@@ -139,7 +140,7 @@ it("measures 100 composed catalog lists against real session and plugin stores",
           await fixture.projection.ensureMaterialized();
         } while (fixture.projection.needsMaterialization);
         const cpuReferenceP50Ms = measureHostCpuReference();
-        expect(fixture.setupMaintenance).toEqual({ started: 3, completed: 3 });
+        expect(fixture.setupMaintenance).toEqual({ completed: 3 });
         counters.begin();
         const durations: number[] = [];
         const workPerList = [];
@@ -158,6 +159,12 @@ it("measures 100 composed catalog lists against real session and plugin stores",
             sqliteFreshnessReads: currentIo.sqliteFreshnessReads - previousIo.sqliteFreshnessReads,
             bindingAuthorityReads:
               currentIo.bindingAuthorityReads - previousIo.bindingAuthorityReads,
+            fileReadCalls: currentIo.fileReadCalls - previousIo.fileReadCalls,
+            ownershipFileReadCalls:
+              currentIo.ownershipFileReadCalls - previousIo.ownershipFileReadCalls,
+            fileOpenCalls: currentIo.fileOpenCalls - previousIo.fileOpenCalls,
+            ownershipFileOpenCalls:
+              currentIo.ownershipFileOpenCalls - previousIo.ownershipFileOpenCalls,
             pluginStateWorkerOperations:
               currentIo.pluginStateWorkerOperations - previousIo.pluginStateWorkerOperations,
           });
@@ -173,7 +180,7 @@ it("measures 100 composed catalog lists against real session and plugin stores",
         durations.sort((a, b) => a - b);
 
         const inspector = new InspectorSession();
-        expect(fixture.setupMaintenance).toEqual({ started: 3, completed: 3 });
+        expect(fixture.setupMaintenance).toEqual({ completed: 3 });
         inspector.connect();
         let sampledAllocationBytes: number;
         let cpuSamples: ReturnType<typeof observedCpuSamples>;
@@ -218,26 +225,29 @@ it("measures 100 composed catalog lists against real session and plugin stores",
               Object.entries(io).map(([key, value]) => [key, value / 100]),
             ),
             scope:
-              "Explicit local Codex host through Gateway request admission, registered provider, session accessor and plugin stores. Main-thread SQL counts include freshness and binding authority reads; worker read operations are reported separately. File counts cover sync, callback and promise fs read/open APIs.",
+              "Explicit local Codex host through Gateway request admission, registered provider, session accessor and plugin stores. Binding authority is acquired through the plugin-state worker; calling-thread SQL and worker operations are counted separately. File counts cover sync, callback and promise fs read/open APIs, including separately attributed live ownership checks. Descriptor classification adds fstat instrumentation cost.",
           }),
         );
         expect(cpuSamples.totalCpuSamples).toBeGreaterThan(0);
         expect(cpuSamples.catalogPreviewSamples).toBe(0);
         expect(cpuSamples.sanitizeTerminalTextSamples).toBe(0);
         expect(io.nativeRpcCalls).toBe(0);
-        expect(io.fileReadCalls).toBe(0);
-        expect(io.fileOpenCalls).toBe(0);
-        expect(io.pluginStateWorkerReadOperations).toBe(0);
+        expect(io.fileReadCalls).toBe(io.ownershipFileReadCalls);
+        expect(io.fileOpenCalls).toBe(io.ownershipFileOpenCalls);
+        expect(io.pluginStateWorkerReadOperations).toBe(100);
         expect(io.sessionEntryReads).toBe(0);
         expect(io.sessionPayloadReads).toBe(0);
-        // Cached-handle and reused-read admission each check published/content freshness.
-        // The adopted cohort still shares one bulk binding query without rescanning rows.
+        // Binding authority stays in the worker; warm reads reuse process-owned admission.
         for (const work of workPerList) {
           expect(work).toEqual({
-            sqliteReadCalls: 5,
-            sqliteFreshnessReads: 4,
-            bindingAuthorityReads: 1,
-            pluginStateWorkerOperations: 0,
+            sqliteReadCalls: 0,
+            sqliteFreshnessReads: 0,
+            bindingAuthorityReads: 0,
+            fileReadCalls: 0,
+            ownershipFileReadCalls: 0,
+            fileOpenCalls: 0,
+            ownershipFileOpenCalls: 0,
+            pluginStateWorkerOperations: 1,
           });
         }
         // Two-CPU reference 1.568–1.615 ms gives 31.36–32.30 ms: >3x the prior 9.43 ms

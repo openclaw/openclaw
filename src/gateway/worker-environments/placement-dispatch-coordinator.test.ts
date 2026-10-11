@@ -299,6 +299,7 @@ describe("worker placement dispatch coordinator", () => {
   it("forwards in-process transition and authorization hooks outside request equality", async () => {
     const observer = vi.fn();
     const authorize = vi.fn();
+    const sessionCurrent = vi.fn();
     const placement = { state: "active" };
     const dispatch = vi.fn(async (_request, report, assertCurrent) => {
       assertCurrent?.();
@@ -313,13 +314,17 @@ describe("worker placement dispatch coordinator", () => {
       reconcileActive: vi.fn(async () => {}),
     } as unknown as DispatchService;
 
-    await coordinateWorkerPlacementDispatch(service, (_request, run) => run()).dispatch(
-      REQUEST,
-      observer,
-      authorize,
-    );
+    await coordinateWorkerPlacementDispatch(service, (_request, run) =>
+      run(undefined, sessionCurrent),
+    ).dispatch(REQUEST, observer, authorize);
 
-    expect(dispatch).toHaveBeenCalledWith(REQUEST, expect.any(Function), authorize, undefined);
+    expect(dispatch).toHaveBeenCalledWith(
+      REQUEST,
+      expect.any(Function),
+      expect.any(Function),
+      undefined,
+    );
+    expect(sessionCurrent).toHaveBeenCalledOnce();
     expect(authorize).toHaveBeenCalledOnce();
     expect(observer).toHaveBeenCalledExactlyOnceWith(placement);
   });

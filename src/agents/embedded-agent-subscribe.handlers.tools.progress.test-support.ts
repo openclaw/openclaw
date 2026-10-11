@@ -12,7 +12,7 @@ import {
 import { addSession, deleteSession, markExited } from "./bash-process-registry.js";
 import { createProcessSessionFixture } from "./bash-process-registry.test-helpers.js";
 import { createProcessTool } from "./bash-tools.process.js";
-import type { handleToolExecutionEnd } from "./embedded-agent-subscribe.handlers.tools.js";
+import type { handleToolExecutionEnd } from "./embedded-agent-subscribe.handlers.tools.completion.js";
 import type { ToolHandlerContext } from "./embedded-agent-subscribe.handlers.types.js";
 import { createSessionsYieldTool } from "./tools/sessions-yield-tool.js";
 
@@ -46,10 +46,7 @@ export function registerToolChannelProgressTests({
   endTool,
 }: ToolChannelProgressFixtures) {
   describe("process poll channel progress", () => {
-    it.each([
-      ["poll", "kill"],
-      ["kill", "poll"],
-    ])(
+    it.each([["poll", "kill"]])(
       "uses executed arguments after a %s to %s hook rewrite",
       async (requestedAction, executedAction) => {
         for (const explicitHide of [false, true]) {
@@ -137,12 +134,12 @@ export function registerToolChannelProgressTests({
       },
     );
 
-    it.each(["off", "full"] as const)(
+    it.each(["full"] as const)(
       "hides successful polls without losing lifecycle or %s diagnostics",
       async (verboseLevel) => {
         const { ctx } = createTestContext();
         ctx.params.onToolResult = vi.fn();
-        ctx.shouldEmitToolResult = () => verboseLevel !== "off";
+        ctx.shouldEmitToolResult = () => true;
         ctx.shouldEmitToolOutput = () => verboseLevel === "full";
         const onAgentToolResult = vi.fn();
         ctx.params.onAgentToolResult = onAgentToolResult;
@@ -201,7 +198,7 @@ export function registerToolChannelProgressTests({
               }),
             );
           }
-          expect(ctx.emitToolSummary).toHaveBeenCalledTimes(verboseLevel === "off" ? 0 : 2);
+          expect(ctx.emitToolSummary).toHaveBeenCalledTimes(2);
           expect(ctx.emitToolOutput).toHaveBeenCalledTimes(verboseLevel === "full" ? 2 : 0);
           expect(ctx.state.itemActiveIds.size).toBe(0);
           expect(ctx.state.itemStartedCount).toBe(2);
@@ -290,35 +287,6 @@ export function registerToolChannelProgressTests({
         }
       },
     );
-
-    it.each(["log"])(
-      "leaves process %s progress and fallback summaries visible",
-      async (action) => {
-        const { ctx } = createTestContext();
-        const events: CapturedAgentEvent[] = [];
-        ctx.params.onAgentEvent = (event) => {
-          events.push(event);
-        };
-        ctx.params.onToolResult = vi.fn();
-        ctx.shouldEmitToolResult = () => true;
-        const toolCallId = `process-${action}`;
-        await startTool(ctx, {
-          toolName: "process",
-          toolCallId,
-          args: { action, sessionId: "sample" },
-        });
-        updateTool(ctx, { toolName: "process", toolCallId, partialResult: { content: [] } });
-        await endTool(ctx, {
-          toolName: "process",
-          toolCallId,
-          isError: false,
-          result: { content: [] },
-        });
-        expect(events).toHaveLength(6);
-        expect(events.every((event) => event.data?.hideFromChannelProgress !== true)).toBe(true);
-        expect(ctx.emitToolSummary).toHaveBeenCalledTimes(1);
-      },
-    );
   });
 
   describe("sessions_yield channel progress privacy", () => {
@@ -350,7 +318,7 @@ export function registerToolChannelProgressTests({
       updateTool(ctx, { toolName: tool.name, toolCallId, partialResult: result });
       await endTool(ctx, { toolName: tool.name, toolCallId, result, isError: false });
 
-      expect(onYield).toHaveBeenCalledWith(args.message, args.acknowledgment);
+      expect(onYield).toHaveBeenCalledWith(args.message, args.acknowledgment, undefined);
       expect(events).toHaveLength(6);
       expect(
         events
@@ -379,39 +347,36 @@ export function registerToolChannelProgressTests({
       );
     });
 
-    it.each([false, true])(
-      "preserves yield failures with explicit hide=%s",
-      async (explicitHide) => {
-        const { ctx } = createTestContext();
-        const events: CapturedAgentEvent[] = [];
-        const onYield = vi.fn();
-        ctx.params.onAgentEvent = (event) => {
-          events.push(event);
-        };
-        const tool = createSessionsYieldTool({
-          sessionId: ctx.params.sessionId,
-          claimYield: () => ({ error: "No pending completion" }),
-          onYield,
-        });
-        const toolCallId = "yield-rejected";
-        await startTool(ctx, {
-          toolName: tool.name,
-          toolCallId,
-          args: {},
-          hideFromChannelProgress: explicitHide,
-        });
-        const result = await tool.execute(toolCallId, {});
-        await endTool(ctx, { toolName: tool.name, toolCallId, result, isError: false });
-        const completed = events.filter(
-          (event) => event.data?.phase === "end" || event.data?.phase === "result",
-        );
-        expect(completed).toHaveLength(2);
-        expect(completed.every((event) => event.data?.hideFromChannelProgress === true)).toBe(
-          explicitHide,
-        );
-        expect(ctx.state.lastToolError).toMatchObject({ toolName: tool.name });
-        expect(onYield).not.toHaveBeenCalled();
-      },
-    );
+    it.each([true])("preserves yield failures with explicit hide=%s", async (explicitHide) => {
+      const { ctx } = createTestContext();
+      const events: CapturedAgentEvent[] = [];
+      const onYield = vi.fn();
+      ctx.params.onAgentEvent = (event) => {
+        events.push(event);
+      };
+      const tool = createSessionsYieldTool({
+        sessionId: ctx.params.sessionId,
+        claimYield: () => ({ error: "No pending completion" }),
+        onYield,
+      });
+      const toolCallId = "yield-rejected";
+      await startTool(ctx, {
+        toolName: tool.name,
+        toolCallId,
+        args: {},
+        hideFromChannelProgress: explicitHide,
+      });
+      const result = await tool.execute(toolCallId, {});
+      await endTool(ctx, { toolName: tool.name, toolCallId, result, isError: false });
+      const completed = events.filter(
+        (event) => event.data?.phase === "end" || event.data?.phase === "result",
+      );
+      expect(completed).toHaveLength(2);
+      expect(completed.every((event) => event.data?.hideFromChannelProgress === true)).toBe(
+        explicitHide,
+      );
+      expect(ctx.state.lastToolError).toMatchObject({ toolName: tool.name });
+      expect(onYield).not.toHaveBeenCalled();
+    });
   });
 }

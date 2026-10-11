@@ -1,15 +1,15 @@
-import type { WorkboardCard } from "@openclaw/workboard-contract";
+import { WORKBOARD_STATUSES, type WorkboardCard } from "@openclaw/workboard-contract";
 import { jsonResult, readStringParam } from "openclaw/plugin-sdk/core";
+import { resolveIntegerOption } from "openclaw/plugin-sdk/number-runtime";
 import type { AnyAgentTool, OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry";
 import { Type } from "typebox";
 import { redactClaimToken } from "./card-redaction.js";
+import { normalizeCappedStringList } from "./store-string-lists.js";
 import type { WorkboardStore } from "./store.js";
 import {
   cardIdField,
   claimTokenField,
   createWorkboardCardMutations,
-  createWorkboardMoveTool,
-  redactedCardResult,
   strictObject,
   workspaceField,
 } from "./tools-card-mutations.js";
@@ -17,35 +17,6 @@ import { createWorkboardOrchestrationTools } from "./tools-orchestration.js";
 
 function contextOwner(ctx: OpenClawPluginToolContext | undefined): string {
   return ctx?.agentId || ctx?.sessionKey || ctx?.sessionId || "agent";
-}
-
-function readParentIds(value: unknown): string[] {
-  if (value == null) {
-    return [];
-  }
-  const entries =
-    typeof value === "string" ? value.split(",") : Array.isArray(value) ? value : undefined;
-  if (!entries) {
-    throw new Error("parents must be an array or comma-separated string.");
-  }
-  const parents: string[] = [];
-  for (const entry of entries) {
-    if (typeof entry !== "string") {
-      throw new Error("parents must contain only strings.");
-    }
-    const parent = entry.trim();
-    if (!parent || parents.includes(parent)) {
-      continue;
-    }
-    if (parent.length > 120) {
-      throw new Error("parents must be 120 characters or fewer.");
-    }
-    parents.push(parent);
-    if (parents.length >= 20) {
-      break;
-    }
-  }
-  return parents;
 }
 
 function summarizeCard(card: WorkboardCard) {
@@ -101,10 +72,8 @@ export function createWorkboardTools(params: {
 }): AnyAgentTool[] {
   const { store } = params;
   const ownerId = contextOwner(params.context);
-  const { readScopedCardToolParams, runClaimedCardMutation } = createWorkboardCardMutations(
-    store,
-    ownerId,
-  );
+  const { readScopedCardToolParams, scopedCardMutation, claimedCardMutation } =
+    createWorkboardCardMutations(store, ownerId);
   const tools: AnyAgentTool[] = [
     {
       name: "workboard_list",
@@ -133,10 +102,7 @@ export function createWorkboardTools(params: {
         const agentId = typeof record.agentId === "string" ? record.agentId : undefined;
         const tenant = typeof record.tenant === "string" ? record.tenant : undefined;
         const boardId = typeof record.boardId === "string" ? record.boardId : undefined;
-        const limit =
-          typeof record.limit === "number" && Number.isFinite(record.limit)
-            ? Math.max(1, Math.min(200, Math.trunc(record.limit)))
-            : 50;
+        const limit = resolveIntegerOption(record.limit, 50, { min: 1, max: 200 });
         const cards = (await store.list({ boardId }))
           .filter((card) => record.includeArchived === true || !card.metadata?.archivedAt)
           .filter((card) => !status || card.status === status)
@@ -151,7 +117,7 @@ export function createWorkboardTools(params: {
       name: "workboard_create",
       label: "Workboard Create",
       description:
-        "Create a Workboard card, optionally with parent dependencies, tenant, skills, workspace, and idempotency key.",
+        "Create a Workboard card, optionally with parent dependencies, tenant, skills, workspace, and idempotency key. Sessions boards do not hold cards; use workboard_sessions_board_read/update/move for them.",
       parameters: strictObject({
         title: Type.String({ description: "Card title." }),
         notes: Type.Optional(Type.String({ description: "Card notes or acceptance criteria." })),
@@ -175,7 +141,7 @@ export function createWorkboardTools(params: {
       }),
       execute: async (_toolCallId, rawParams) => {
         const record = rawParams as Record<string, unknown>;
-        readParentIds(record.parents);
+        normalizeCappedStringList(record.parents, "parents");
         return jsonResult({
           card: redactClaimToken(
             await store.create(record, { ownerId, token: record.token as string | undefined }),
@@ -253,15 +219,9 @@ export function createWorkboardTools(params: {
         token: claimTokenField(),
         note: Type.Optional(Type.String({ description: "Optional compact progress note." })),
       }),
-      execute: async (_toolCallId, rawParams) => {
-        const { record, id, scope } = await readScopedCardToolParams(rawParams);
-        return redactedCardResult(
-          await store.heartbeat(id, {
-            ...scope,
-            note: record.note,
-          }),
-        );
-      },
+      execute: scopedCardMutation((id, record, scope) =>
+        store.heartbeat(id, { ...scope, note: record.note }),
+      ),
     },
     {
       name: "workboard_release",
@@ -275,15 +235,9 @@ export function createWorkboardTools(params: {
           Type.String({ description: "Optional next card status after release." }),
         ),
       }),
-      execute: async (_toolCallId, rawParams) => {
-        const { record, id, scope } = await readScopedCardToolParams(rawParams);
-        return redactedCardResult(
-          await store.releaseClaim(id, {
-            ...scope,
-            status: record.status,
-          }),
-        );
-      },
+      execute: scopedCardMutation((id, record, scope) =>
+        store.releaseClaim(id, { ...scope, status: record.status }),
+      ),
     },
     {
       name: "workboard_comment",
@@ -294,10 +248,9 @@ export function createWorkboardTools(params: {
         body: Type.String({ description: "Comment body." }),
         token: ScopedClaimTokenField,
       }),
-      execute: async (_toolCallId, rawParams) => {
-        const { record, id, scope } = await readScopedCardToolParams(rawParams);
-        return redactedCardResult(await store.addComment(id, { body: record.body }, scope));
-      },
+      execute: scopedCardMutation((id, record, scope) =>
+        store.addComment(id, { body: record.body }, scope),
+      ),
     },
     {
       name: "workboard_proof",
@@ -373,11 +326,7 @@ export function createWorkboardTools(params: {
           Type.Array(Type.String(), { description: "Cards created during this run." }),
         ),
       }),
-      execute: async (_toolCallId, rawParams) => {
-        return runClaimedCardMutation(rawParams, (id, record, scope) =>
-          store.complete(id, record, scope),
-        );
-      },
+      execute: claimedCardMutation((id, record, scope) => store.complete(id, record, scope)),
     },
     {
       name: "workboard_attachment_add",
@@ -392,12 +341,9 @@ export function createWorkboardTools(params: {
         note: Type.Optional(Type.String({ description: "Optional attachment note." })),
         token: ScopedClaimTokenField,
       }),
-      execute: async (_toolCallId, rawParams) => {
-        const { record, id, scope } = await readScopedCardToolParams(rawParams);
-        return redactedCardResult(
-          await store.addAttachment(id, record, scope, params.context?.assertInputCommitAllowed),
-        );
-      },
+      execute: scopedCardMutation((id, record, scope) =>
+        store.addAttachment(id, record, scope, params.context?.assertInputCommitAllowed),
+      ),
     },
     {
       name: "workboard_attachment_read",
@@ -426,11 +372,10 @@ export function createWorkboardTools(params: {
         attachmentId: Type.String({ description: "Attachment id." }),
         token: ScopedClaimTokenField,
       }),
-      execute: async (_toolCallId, rawParams) => {
-        const { record, id, scope } = await readScopedCardToolParams(rawParams);
+      execute: scopedCardMutation((id, record, scope) => {
         const attachmentId = readStringParam(record, "attachmentId", { required: true });
-        return redactedCardResult(await store.deleteAttachment(id, attachmentId, scope));
-      },
+        return store.deleteAttachment(id, attachmentId, scope);
+      }),
     },
     {
       name: "workboard_block",
@@ -441,23 +386,32 @@ export function createWorkboardTools(params: {
         token: claimTokenField(),
         reason: Type.Optional(Type.String({ description: "Blocker summary." })),
       }),
-      execute: async (_toolCallId, rawParams) => {
-        return runClaimedCardMutation(rawParams, (id, record, scope) =>
-          store.block(id, record, scope),
-        );
-      },
+      execute: claimedCardMutation((id, record, scope) => store.block(id, record, scope)),
     },
     {
       name: "workboard_unblock",
       label: "Workboard Unblock",
       description: "Move a blocked Workboard card back to todo after adding enough context.",
       parameters: CardIdSchema,
-      execute: async (_toolCallId, rawParams) => {
-        const { id, scope } = await readScopedCardToolParams(rawParams);
-        return redactedCardResult(await store.unblock(id, scope));
-      },
+      execute: scopedCardMutation((id, _record, scope) => store.unblock(id, scope)),
     },
-    createWorkboardMoveTool({ store, readScopedCardToolParams }),
+    {
+      name: "workboard_move",
+      label: "Workboard Move",
+      description:
+        "Move a Workboard card to another status. Claimed cards require matching claim scope.",
+      parameters: strictObject({
+        id: cardIdField(),
+        status: Type.Union(
+          WORKBOARD_STATUSES.map((status) => Type.Literal(status)),
+          { description: "Target Workboard status." },
+        ),
+        token: claimTokenField("Claim token for claimed cards."),
+      }),
+      execute: scopedCardMutation((id, record, scope) =>
+        store.move(id, record.status, undefined, scope),
+      ),
+    },
     ...createWorkboardOrchestrationTools({ store, ownerId }),
   ];
   for (const tool of tools) {

@@ -1,4 +1,5 @@
 import type { GatewayPresenceUpdate } from "discord-api-types/v10";
+import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 
 /**
  * In-memory cache of Discord user presence data.
@@ -8,40 +9,31 @@ import type { GatewayPresenceUpdate } from "discord-api-types/v10";
 const MAX_PRESENCE_PER_ACCOUNT = 5000;
 const presenceCache = new Map<string, Map<string, GatewayPresenceUpdate>>();
 
-function resolveAccountKey(accountId?: string): string {
-  return accountId ?? "default";
-}
-
 export function setPresence(
   accountId: string | undefined,
   userId: string,
   data: GatewayPresenceUpdate,
 ): void {
-  const accountKey = resolveAccountKey(accountId);
+  const accountKey = accountId ?? "default";
   let accountCache = presenceCache.get(accountKey);
   if (!accountCache) {
     accountCache = new Map();
     presenceCache.set(accountKey, accountCache);
   }
   accountCache.set(userId, data);
-  if (accountCache.size > MAX_PRESENCE_PER_ACCOUNT) {
-    const oldest = accountCache.keys().next().value;
-    if (oldest !== undefined) {
-      accountCache.delete(oldest);
-    }
-  }
+  pruneMapToMaxSize(accountCache, MAX_PRESENCE_PER_ACCOUNT);
 }
 
 export function getPresence(
   accountId: string | undefined,
   userId: string,
 ): GatewayPresenceUpdate | undefined {
-  return presenceCache.get(resolveAccountKey(accountId))?.get(userId);
+  return presenceCache.get(accountId ?? "default")?.get(userId);
 }
 
 export function clearPresences(accountId?: string): void {
   if (accountId) {
-    presenceCache.delete(resolveAccountKey(accountId));
+    presenceCache.delete(accountId);
     return;
   }
   presenceCache.clear();

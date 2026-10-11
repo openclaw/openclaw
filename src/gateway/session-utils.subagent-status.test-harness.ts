@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { addSubagentRunForTests } from "../agents/subagents/registry/subagent-registry.test-helpers.js";
+import { seedSubagentRunForReadTest } from "../agents/subagents/registry/subagent-registry.test-helpers.js";
 import type { InternalSessionEntry as SessionEntry } from "../config/sessions.js";
 import { claimAgentRunContext } from "../infra/agent-run-registry.js";
 import type { SessionsListResult } from "./session-utils.types.js";
@@ -43,7 +43,7 @@ export function registerSubagentSessionStatusTests(
       } as SessionEntry,
     };
 
-    addSubagentRunForTests({
+    seedSubagentRunForReadTest({
       runId: "run-parent",
       childSessionKey: "agent:main:subagent:parent",
       controllerSessionKey: "agent:main:main",
@@ -56,7 +56,7 @@ export function registerSubagentSessionStatusTests(
       { sessionKey: "agent:main:subagent:parent" },
       { trackOwner: true, ownsContext: true },
     );
-    addSubagentRunForTests({
+    seedSubagentRunForReadTest({
       runId: "run-child",
       childSessionKey: "agent:main:subagent:child",
       controllerSessionKey: "agent:main:subagent:parent",
@@ -66,7 +66,7 @@ export function registerSubagentSessionStatusTests(
       outcome: { status: "ok" },
       model: "openai/gpt-5.4",
     });
-    addSubagentRunForTests({
+    seedSubagentRunForReadTest({
       runId: "run-failed",
       childSessionKey: "agent:main:subagent:failed",
       controllerSessionKey: "agent:main:main",
@@ -125,7 +125,7 @@ export function registerSubagentSessionStatusTests(
     async ({ lifecycleRunId, status }) => {
       const now = Date.now();
       const childSessionKey = "agent:main:subagent:restart-delivery";
-      addSubagentRunForTests({
+      seedSubagentRunForReadTest({
         runId: "restart-run",
         childSessionKey,
         controllerSessionKey: "agent:main:main",

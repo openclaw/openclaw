@@ -172,17 +172,15 @@ async function withRepairResources<T>(run: () => Promise<T>): Promise<T> {
 }
 
 export async function prepareUpdateRepairInference(signal: AbortSignal, timeoutMs: number) {
-  return withRepairResources(() => prepareRepairInference(signal, timeoutMs));
-}
-
-async function prepareRepairInference(signal: AbortSignal, timeoutMs: number) {
-  signal.throwIfAborted();
-  const { getRuntimeConfig } = await import("../config/io.js");
-  signal.throwIfAborted();
-  const config = getRuntimeConfig();
-  const { selectUpdateRepairInference } = await import("./update-repair-inference.js");
-  signal.throwIfAborted();
-  return await selectUpdateRepairInference({ config, runtime: repairRuntime, signal, timeoutMs });
+  return withRepairResources(async () => {
+    signal.throwIfAborted();
+    const { getRuntimeConfig } = await import("../config/io.js");
+    signal.throwIfAborted();
+    const config = getRuntimeConfig();
+    const { selectUpdateRepairInference } = await import("./update-repair-inference.js");
+    signal.throwIfAborted();
+    return await selectUpdateRepairInference({ config, runtime: repairRuntime, signal, timeoutMs });
+  });
 }
 
 // Operator-owned updates permit prompt-free exec, never past an explicit deny.
@@ -297,7 +295,10 @@ type UpdateRepairTurnParams = {
   timeoutMs: number;
   maxToolCalls: number;
   signal: AbortSignal;
+  /** Full authority for model candidates, tool admission, and tool effect guards. */
   isCurrent?: () => boolean;
+  /** Repeated run-preparation source checks; defaults to `isCurrent`. */
+  isLive?: () => boolean;
   maintenanceHandoff?: true;
 };
 
@@ -316,12 +317,14 @@ async function runScopedUpdateRepairTurn(params: UpdateRepairTurnParams) {
   const runConfig = buildExecRunConfig({ base: config.value.runConfig, cwd: target.installRoot });
   const controller = new AbortController();
   const signal = AbortSignal.any([params.signal, controller.signal]);
-  const assertCurrent = () => {
+  const isLive = params.isLive ?? params.isCurrent;
+  const assertAuthority = (isCurrent: (() => boolean) | undefined) => {
     signal.throwIfAborted();
-    if (params.isCurrent?.() === false) {
+    if (isCurrent?.() === false) {
       throw new Error("Repair no longer owns the failed update.");
     }
   };
+  const assertCurrent = () => assertAuthority(params.isCurrent);
   const runId = `update-repair-${randomUUID()}`;
   const sessionKey = `agent:${route.agentId}:update-repair:${runId}`;
   const preparedRunAdmission = prepareSystemAgentRunAdmission(
@@ -329,7 +332,7 @@ async function runScopedUpdateRepairTurn(params: UpdateRepairTurnParams) {
     runId,
     route.agentId,
     "update.repair",
-    assertCurrent,
+    () => assertAuthority(isLive),
   );
   const toolBudget = createAgentToolExecutionBudget({
     maxToolCalls: params.maxToolCalls,

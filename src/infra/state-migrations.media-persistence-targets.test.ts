@@ -3,10 +3,7 @@ import path from "node:path";
 import { afterEach, beforeEach, expect, it } from "vitest";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 import { resolveConfiguredAgentDatabaseTargets } from "../config/sessions/targets.js";
-import {
-  beginAgentDeletionJournal,
-  completeAgentDeletionJournalInDatabase,
-} from "../state/agent-deletion-journal.js";
+import { completeAgentDeletionJournalInDatabase } from "../state/agent-deletion-journal.js";
 import {
   registerOpenClawAgentDatabase,
   unregisterOpenClawAgentDatabase,
@@ -23,6 +20,7 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
+import { beginAgentDeletionJournal } from "../test-utils/agent-deletion-journal.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
 import { migrateLegacyMediaPersistence } from "./state-migrations.media-persistence.js";
 import { createLegacyDatabaseFixture } from "./state-migrations.media-persistence.test-support.js";

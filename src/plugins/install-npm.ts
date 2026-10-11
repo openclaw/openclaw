@@ -6,7 +6,7 @@ import { resolveManagedNpmRootDependencySpec } from "../infra/npm-managed-root.j
 import {
   formatPrereleaseResolutionError,
   isPrereleaseResolutionAllowed,
-  parseRegistryNpmSpec,
+  parseRegistryNpmSpecResult,
 } from "../infra/npm-registry-spec.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { resolveUserPath } from "../utils.js";
@@ -18,6 +18,7 @@ import {
   resolveLatestCompatibleNpmResolution,
   resolveTrustedOfficialPrereleaseResolution,
   validateNpmResolutionCompatibility,
+  type TrustedOfficialPrereleaseResolution,
 } from "./install-npm-metadata.js";
 import { resolveDefaultPluginNpmDir } from "./install-paths.js";
 import { preflightPluginNpmInstallPolicy } from "./install-security-scan.js";
@@ -44,6 +45,11 @@ export async function installPluginFromNpmSpec(
     signal?: AbortSignal;
     expectedReplacementPluginId?: string;
     expectedIntegrity?: string;
+    npmMetadata?: {
+      spec: string;
+      metadata: NpmSpecResolution;
+      trustedPrereleaseResolution?: TrustedOfficialPrereleaseResolution;
+    };
     onIntegrityDrift?: (params: PluginNpmIntegrityDriftParams) => boolean | Promise<boolean>;
   },
 ): Promise<InstallPluginResult> {
@@ -54,27 +60,23 @@ export async function installPluginFromNpmSpec(
   );
   const expectedPluginId = params.expectedPluginId;
   const spec = params.spec.trim();
-  const specError = runtime.validateRegistryNpmSpec(spec);
-  if (specError) {
+  const parsed = parseRegistryNpmSpecResult(spec);
+  if (!parsed.ok) {
     return {
       ok: false,
-      error: specError,
+      error: parsed.error,
       code: PLUGIN_INSTALL_ERROR_CODE.INVALID_NPM_SPEC,
     };
   }
+  const parsedSpec = parsed.parsed;
 
-  const parsedSpec = parseRegistryNpmSpec(spec);
-  if (!parsedSpec) {
-    return {
-      ok: false,
-      error: "unsupported npm spec",
-      code: PLUGIN_INSTALL_ERROR_CODE.INVALID_NPM_SPEC,
-    };
-  }
-
-  const metadataResult = await withInstallActivity(logger, "resolve", () =>
-    resolveNpmSpecMetadata({ spec, timeoutMs, signal: params.signal }),
-  );
+  // A channel fallback changes the attempt's spec and must resolve its own metadata.
+  const preparedMetadata = params.npmMetadata?.spec === spec ? params.npmMetadata : undefined;
+  const metadataResult = preparedMetadata
+    ? { ok: true as const, metadata: preparedMetadata.metadata }
+    : await withInstallActivity(logger, "resolve", () =>
+        resolveNpmSpecMetadata({ spec, timeoutMs, signal: params.signal }),
+      );
   if (!metadataResult.ok) {
     return {
       ok: false,
@@ -97,16 +99,21 @@ export async function installPluginFromNpmSpec(
       resolvedVersion: npmResolution.version,
     })
   ) {
+    const preparedResolution = preparedMetadata?.trustedPrereleaseResolution;
     const trustedResolution = params.trustedSourceLinkedOfficialInstall
-      ? await resolveTrustedOfficialPrereleaseResolution({
-          spec: parsedSpec,
-          resolvedPrereleaseVersion: npmResolution.version,
-          timeoutMs,
-          signal: params.signal,
-          killProcessTree: true,
-          logger,
-        })
+      ? preparedResolution?.resolvedPrereleaseVersion === npmResolution.version
+        ? preparedResolution
+        : await resolveTrustedOfficialPrereleaseResolution({
+            spec: parsedSpec,
+            resolvedPrereleaseVersion: npmResolution.version,
+            timeoutMs,
+            signal: params.signal,
+            killProcessTree: true,
+          })
       : null;
+    if (trustedResolution) {
+      logger.warn?.(trustedResolution.warning);
+    }
     if (trustedResolution?.kind === "stable" || trustedResolution?.kind === "prerelease-only") {
       Object.assign(npmResolution, trustedResolution.resolution, {
         resolvedAt: npmResolution.resolvedAt,
@@ -240,7 +247,6 @@ export async function installPluginFromNpmSpec(
       logger,
       mode,
       dryRun,
-      skipPolicyPreflight: true,
       expectedPluginId,
       expectedReplacementPluginId: params.expectedReplacementPluginId,
       onBeforePluginArtifactCommit: params.onBeforePluginArtifactCommit,

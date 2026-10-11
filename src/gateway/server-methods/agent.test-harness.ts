@@ -28,6 +28,7 @@ import { agentIdentityHandlers } from "./agent-identity.js";
 import { createAgentTestSessionRowProjection } from "./agent-session-projection.test-support.js";
 import { agentHandlers } from "./agent.js";
 import { resetSubagentRegistryMocks } from "./agent.subagent-registry.mocks.test-support.js";
+import { getAgentTestStorePath } from "./agent.user-turn-recorder.test-support.js";
 import { flushPendingSessionsChangedEvents } from "./session-change-event.js";
 import { suspendHandlers } from "./suspend.js";
 import type { GatewayRequestContext } from "./types.js";
@@ -138,16 +139,17 @@ export function mockMainSessionEntry(
   entry: Record<string, unknown>,
   cfg: Record<string, unknown> = {},
 ) {
+  const sessionEntry = buildExistingMainStoreEntry(entry);
   mocks.loadSessionEntry.mockReturnValue({
     cfg,
-    storePath: mocks.userTurnStorePath ?? "/tmp/sessions.json",
-    entry: {
-      sessionId: "existing-session-id",
-      updatedAt: Date.now(),
-      ...entry,
-    },
+    agentId: "main",
+    storePath: mocks.userTurnStorePath ?? getAgentTestStorePath(),
+    store: { "agent:main:main": sessionEntry },
+    storeKeys: ["agent:main:main"],
+    entry: sessionEntry,
     canonicalKey: "agent:main:main",
-  });
+    legacyKey: undefined,
+  } satisfies ReturnType<typeof import("../session-utils.js").loadSessionEntry>);
 }
 
 export function buildExistingMainStoreEntry(overrides: Record<string, unknown> = {}) {
@@ -188,16 +190,20 @@ export async function expectResetCall(expectedMessage: string) {
   return call;
 }
 
+export function mockSuccessfulAgentCommand() {
+  mocks.agentCommand.mockResolvedValue({
+    payloads: [{ text: "ok" }],
+    meta: { durationMs: 100 },
+  });
+}
+
 export function primeMainAgentRun(params?: { sessionId?: string; cfg?: Record<string, unknown> }) {
   mockMainSessionEntry(
     { sessionId: params?.sessionId ?? "existing-session-id" },
     params?.cfg ?? {},
   );
   mocks.updateSessionStore.mockResolvedValue(undefined);
-  mocks.agentCommand.mockResolvedValue({
-    payloads: [{ text: "ok" }],
-    meta: { durationMs: 100 },
-  });
+  mockSuccessfulAgentCommand();
 }
 
 export async function runMainAgent(message: string, idempotencyKey: string) {
@@ -227,10 +233,7 @@ export async function runMainAgentAndCaptureEntry(idempotencyKey: string) {
     capturedEntry = structuredClone(store[canonicalKey]) as Record<string, unknown>;
     return result;
   });
-  mocks.agentCommand.mockResolvedValue({
-    payloads: [{ text: "ok" }],
-    meta: { durationMs: 100 },
-  });
+  mockSuccessfulAgentCommand();
   await runMainAgent("hi", idempotencyKey);
   return requireValue(capturedEntry, "updated session entry missing");
 }
@@ -299,7 +302,7 @@ export function setupCronContinuationReleaseFixture() {
   };
   mocks.loadSessionEntry.mockReturnValue({
     cfg: {},
-    storePath: mocks.userTurnStorePath ?? "/tmp/sessions.json",
+    storePath: mocks.userTurnStorePath ?? getAgentTestStorePath(),
     canonicalKey: sessionKey,
     entry,
   });
@@ -520,8 +523,9 @@ export const describe0AfterEach0 = async () => {
   await flushPendingSessionsChangedEvents();
   envSnapshot.restore();
   resetDiagnosticEventsForTest();
-  resetSubagentRegistryForTests({ persist: false });
+  await resetSubagentRegistryForTests({ persist: false });
   resetSubagentRegistryMocks();
+  mocks.getLatestLiveSubagentRunByChildSessionKey.mockReset();
   mocks.agentCommand.mockReset();
   mocks.updateSessionStore.mockReset().mockResolvedValue(undefined);
   mocks.loadConfigReturn = {};
@@ -551,7 +555,7 @@ export const describe0AfterEach0 = async () => {
 async function resetIntegrationState() {
   await flushPendingSessionsChangedEvents();
   envSnapshot.restore();
-  resetSubagentRegistryForTests({ persist: false });
+  await resetSubagentRegistryForTests({ persist: false });
   resetSubagentRegistryMocks();
   mocks.agentCommand.mockReset();
   mocks.loadConfigReturn = {};
@@ -561,6 +565,7 @@ async function resetIntegrationState() {
   mocks.emitGatewaySessionEndPluginHook.mockReset();
   mocks.emitGatewaySessionStartPluginHook.mockReset();
   mocks.getLatestSubagentRunByChildSessionKey.mockReset();
+  mocks.getLatestLiveSubagentRunByChildSessionKey.mockReset();
   mocks.replaceSubagentRunAfterSteer.mockReset();
   mocks.resolveExplicitAgentSessionKey.mockReset().mockReturnValue(undefined);
   mocks.readAcpSessionMetaAsync.mockReset().mockResolvedValue(undefined);

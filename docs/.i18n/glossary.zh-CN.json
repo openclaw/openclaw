@@ -1,5 +1,21 @@
 [
   {
+    "source": "X / Twitter",
+    "target": "X / Twitter"
+  },
+  {
+    "source": "X plugin reference",
+    "target": "X 插件参考"
+  },
+  {
+    "source": "X replies",
+    "target": "X 回复"
+  },
+  {
+    "source": "x",
+    "target": "x"
+  },
+  {
     "source": "Radius",
     "target": "Radius"
   },
@@ -808,8 +824,24 @@
     "target": "Kubernetes"
   },
   {
+    "source": "Cloudflare",
+    "target": "Cloudflare"
+  },
+  {
     "source": "Cloudflare Containers",
     "target": "Cloudflare Containers"
+  },
+  {
+    "source": "Cloudflare plugin",
+    "target": "Cloudflare 插件"
+  },
+  {
+    "source": "Cloudflare plugin reference",
+    "target": "Cloudflare 插件参考"
+  },
+  {
+    "source": "cloudflare",
+    "target": "cloudflare"
   },
   {
     "source": "Fly.io",
@@ -1466,6 +1498,26 @@
   {
     "source": "Zoom meetings plugin",
     "target": "Zoom 会议插件"
+  },
+  {
+    "source": "Slack huddles plugin",
+    "target": "Slack 快速通话插件"
+  },
+  {
+    "source": "Slack huddles plugin reference",
+    "target": "Slack 快速通话插件参考"
+  },
+  {
+    "source": "slack-huddles",
+    "target": "slack-huddles"
+  },
+  {
+    "source": "Slack channel",
+    "target": "Slack 频道"
+  },
+  {
+    "source": "Transcripts CLI",
+    "target": "转录 CLI"
   },
   {
     "source": "Voice call plugin",
@@ -2478,6 +2530,10 @@
   {
     "source": "Gateway service and process",
     "target": "Gateway 网关服务与进程"
+  },
+  {
+    "source": "Config validation and checks",
+    "target": "配置验证与检查"
   },
   {
     "source": "Config validation and probes",
@@ -3956,6 +4012,10 @@
     "target": "标准场景覆盖"
   },
   {
+    "source": "Scenario coverage",
+    "target": "场景覆盖"
+  },
+  {
     "source": "Channel QA reference",
     "target": "通道 QA 参考"
   },
@@ -4332,6 +4392,18 @@
     "target": "存储变更与发布预检"
   },
   {
+    "source": "storage",
+    "target": "storage"
+  },
+  {
+    "source": "Storage locations",
+    "target": "存储位置"
+  },
+  {
+    "source": "Storage CLI",
+    "target": "存储 CLI"
+  },
+  {
     "source": "Agent schema history",
     "target": "Agent 数据库 schema 历史"
   },
@@ -4624,8 +4696,12 @@
     "target": "Telegram 传输方式"
   },
   {
-    "source": "Telegram Dashboard Mini App",
-    "target": "Telegram 仪表盘小程序"
+    "source": "Control UI Mini App",
+    "target": "Control UI 小程序"
+  },
+  {
+    "source": "Telegram Control UI Mini App",
+    "target": "Telegram Control UI 小程序"
   },
   {
     "source": "Telegram troubleshooting",
@@ -4954,5 +5030,13 @@
   {
     "source": "Deploy a team server",
     "target": "部署团队服务器"
+  },
+  {
+    "source": "Worker-local inference",
+    "target": "工作器本地推理"
+  },
+  {
+    "source": "Recommended models",
+    "target": "推荐模型"
   }
 ]

@@ -3,6 +3,7 @@ import { vi, type MockInstance } from "vitest";
 import { writeSessionEntry } from "../../../config/sessions/session-accessor.sqlite-entry-store.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import * as approvals from "../../../infra/exec-approvals-store.js";
+import { saveExecApprovals } from "../../../infra/exec-approvals-store.test-support.js";
 import { openOpenClawAgentDatabase } from "../../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { prepareSystemAgentRunAdmission } from "../../admitted-run-context.js";
@@ -45,7 +46,7 @@ export async function withPromptFixture(
       updatedAt: 1,
       ...(testCase.required ? { sandbox: "required" } : {}),
     });
-    approvals.saveExecApprovals({
+    saveExecApprovals({
       version: 1,
       defaults: { security: "allowlist", ask: "off" },
       agents: {},
@@ -54,7 +55,7 @@ export async function withPromptFixture(
       agents: {
         ownership: "explicit",
         defaults: { model: { primary: "openai/gpt-5.6-luna" } },
-        list: [{ id: "main", sandbox: { mode: "all" } }],
+        entries: { main: { sandbox: { mode: "all" } } },
       },
       session: { store: database.path },
       tools: { exec: { host: "gateway", mode: "full" } },

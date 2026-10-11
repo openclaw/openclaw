@@ -1,4 +1,3 @@
-// Devices CLI lazy tests cover lazy device command imports and registration.
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -9,6 +8,7 @@ describe("devices cli lazy runtime boundary", () => {
 
   afterEach(() => {
     vi.doUnmock("./devices-cli.runtime.js");
+    vi.doUnmock("./devices-cli-join.js");
     vi.resetModules();
   });
 
@@ -16,16 +16,13 @@ describe("devices cli lazy runtime boundary", () => {
     const runtimeLoaded = vi.fn();
     vi.doMock("./devices-cli.runtime.js", () => {
       runtimeLoaded();
-      return {
-        runDevicesApproveCommand: vi.fn(),
-        runDevicesClearCommand: vi.fn(),
-        runDevicesJoinCodeCommand: vi.fn(),
-        runDevicesListCommand: vi.fn(),
-        runDevicesRejectCommand: vi.fn(),
-        runDevicesRemoveCommand: vi.fn(),
-        runDevicesRevokeCommand: vi.fn(),
-        runDevicesRotateCommand: vi.fn(),
-      };
+      throw new Error("devices runtime loaded during help");
+    });
+    const joinLoaded = vi.fn();
+    // mock-isolation: Loading the real join module would defeat this cold-help import sentinel.
+    vi.doMock("./devices-cli-join.js", () => {
+      joinLoaded();
+      throw new Error("join runtime loaded during help");
     });
 
     const { registerDevicesCli } = await import("./devices-cli.js");
@@ -43,35 +40,6 @@ describe("devices cli lazy runtime boundary", () => {
       },
     );
     expect(runtimeLoaded).not.toHaveBeenCalled();
-  });
-
-  it("loads the devices runtime for command actions", async () => {
-    const runDevicesListCommand = vi.fn().mockResolvedValue(undefined);
-    const runtimeLoaded = vi.fn();
-    vi.doMock("./devices-cli.runtime.js", () => {
-      runtimeLoaded();
-      return {
-        runDevicesApproveCommand: vi.fn(),
-        runDevicesClearCommand: vi.fn(),
-        runDevicesJoinCodeCommand: vi.fn(),
-        runDevicesListCommand,
-        runDevicesRejectCommand: vi.fn(),
-        runDevicesRemoveCommand: vi.fn(),
-        runDevicesRevokeCommand: vi.fn(),
-        runDevicesRotateCommand: vi.fn(),
-      };
-    });
-
-    const { registerDevicesCli } = await import("./devices-cli.js");
-    const program = new Command();
-    registerDevicesCli(program);
-
-    await program.parseAsync(["devices", "list", "--json"], { from: "user" });
-
-    expect(runtimeLoaded).toHaveBeenCalledTimes(1);
-    expect(runDevicesListCommand).toHaveBeenCalledWith(
-      expect.objectContaining({ json: true }),
-      expect.any(Command),
-    );
+    expect(joinLoaded).not.toHaveBeenCalled();
   });
 });

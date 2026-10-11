@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import { hostname as readHostName } from "node:os";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { isLoopbackHost } from "openclaw/plugin-sdk/request-url";
@@ -15,11 +14,9 @@ import type {
 } from "./config-contracts.js";
 import { selectGuardianSandbox } from "./config-exec-policy.js";
 import { DEFAULT_CODEX_APP_SERVER_NETWORK_PROXY_PROFILE_PREFIX } from "./config-parsing.js";
-import { stringifyCodexPolicy } from "./config-policy-json.js";
+import { fingerprintCodexPolicy } from "./config-policy-json.js";
 import {
-  parseAllowedApprovalPoliciesFromCodexRequirements,
-  parseAllowedApprovalsReviewersFromCodexRequirements,
-  parseAllowedSandboxModesFromCodexRequirements,
+  parseCodexRequirementsPolicy,
   readCodexRequirementsToml,
   selectGuardianApprovalPolicy,
   selectGuardianApprovalsReviewer,
@@ -72,7 +69,9 @@ export function resolveCodexAppServerNetworkProxy(
     },
     network: networkConfig,
   };
-  const profileName = resolveNetworkProxyPermissionProfileName(config, profile);
+  const profileName =
+    readNonEmptyString(config.profileName) ??
+    `${DEFAULT_CODEX_APP_SERVER_NETWORK_PROXY_PROFILE_PREFIX}-${fingerprintCodexPolicy({ version: 1, profile }).slice(0, 16)}`;
   const configPatch: JsonObject = {
     "features.network_proxy.enabled": true,
     default_permissions: profileName,
@@ -83,27 +82,10 @@ export function resolveCodexAppServerNetworkProxy(
   return {
     networkProxy: {
       profileName,
-      configFingerprint: createHash("sha256")
-        .update(stringifyCodexPolicy(configPatch))
-        .digest("hex"),
+      configFingerprint: fingerprintCodexPolicy(configPatch),
       configPatch,
     },
   };
-}
-
-function resolveNetworkProxyPermissionProfileName(
-  config: CodexAppServerNetworkProxyConfig,
-  profile: JsonObject,
-): string {
-  const explicitProfileName = readNonEmptyString(config.profileName);
-  if (explicitProfileName) {
-    return explicitProfileName;
-  }
-  const suffix = createHash("sha256")
-    .update(stringifyCodexPolicy({ version: 1, profile }))
-    .digest("hex")
-    .slice(0, 16);
-  return `${DEFAULT_CODEX_APP_SERVER_NETWORK_PROXY_PROFILE_PREFIX}-${suffix}`;
 }
 
 function normalizeNetworkProxyPermissionMap(
@@ -171,10 +153,6 @@ export function withMcpElicitationsApprovalPolicy(
   };
 }
 
-export function resolveTransport(value: unknown): CodexAppServerTransportMode {
-  return value === "websocket" || value === "unix" ? value : "stdio";
-}
-
 export function inferCodexAppServerConnectionClass(params: {
   transport: CodexAppServerTransportMode;
   url?: string;
@@ -182,7 +160,11 @@ export function inferCodexAppServerConnectionClass(params: {
   if (params.transport !== "websocket") {
     return "local-loopback";
   }
-  return params.url && isLoopbackWebSocketUrl(params.url) ? "local-loopback" : "remote";
+  const parsed = params.url ? URL.parse(params.url) : null;
+  return (parsed?.protocol === "ws:" || parsed?.protocol === "wss:") &&
+    isLoopbackHost(parsed.hostname)
+    ? "local-loopback"
+    : "remote";
 }
 
 /** Applies the canonical remote-auth boundary to any Codex AppServer transport. */
@@ -194,38 +176,16 @@ export function assertCodexAppServerConnectionSecurity(params: {
 }): void {
   if (
     inferCodexAppServerConnectionClass(params) === "remote" &&
-    !hasIdentityBearingWebSocketAuth(params)
+    !readNonEmptyString(params.authToken) &&
+    !Object.entries(params.headers).some(
+      ([key, value]) =>
+        key.trim().toLowerCase() === "authorization" && Boolean(readNonEmptyString(value)),
+    )
   ) {
     throw new Error(
       "remote Codex app-server WebSocket URLs require appServer.authToken or an Authorization header",
     );
   }
-}
-
-function isLoopbackWebSocketUrl(value: string): boolean {
-  let parsed: URL;
-  try {
-    parsed = new URL(value);
-  } catch {
-    return false;
-  }
-  if (parsed.protocol !== "ws:" && parsed.protocol !== "wss:") {
-    return false;
-  }
-  return isLoopbackHost(parsed.hostname);
-}
-
-function hasIdentityBearingWebSocketAuth(params: {
-  authToken?: string;
-  headers: Record<string, string>;
-}): boolean {
-  if (readNonEmptyString(params.authToken)) {
-    return true;
-  }
-  return Object.entries(params.headers).some(
-    ([key, value]) =>
-      key.trim().toLowerCase() === "authorization" && Boolean(readNonEmptyString(value)),
-  );
 }
 
 export function resolvePolicyMode(value: unknown): CodexAppServerPolicyMode | undefined {
@@ -252,19 +212,11 @@ export function resolveDefaultCodexAppServerPolicy(params: {
   if (content === undefined && !params.forceGuardian) {
     return { mode: "yolo", dangerFullAccessAllowed: true };
   }
-  const allowedSandboxModes =
-    content === undefined
-      ? undefined
-      : parseAllowedSandboxModesFromCodexRequirements(
-          content,
-          readNonEmptyString(params.hostName) ?? readHostName(),
-        );
-  const allowedApprovalPolicies =
-    content === undefined ? undefined : parseAllowedApprovalPoliciesFromCodexRequirements(content);
-  const allowedApprovalsReviewers =
-    content === undefined
-      ? undefined
-      : parseAllowedApprovalsReviewersFromCodexRequirements(content);
+  const { allowedSandboxModes, allowedApprovalPolicies, allowedApprovalsReviewers } =
+    parseCodexRequirementsPolicy(
+      content,
+      content === undefined ? undefined : (readNonEmptyString(params.hostName) ?? readHostName()),
+    );
   const yoloSandboxAllowed =
     allowedSandboxModes === undefined || allowedSandboxModes.has("danger-full-access");
   const yoloApprovalAllowed =

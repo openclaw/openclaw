@@ -29,7 +29,10 @@ import { onTimer } from "./service/timer.test-support.js";
 import * as cronStoreModule from "./store.js";
 import { loadCronStore, saveCronStore } from "./store.js";
 import { cronStoreKey } from "./store/key.js";
-import { finishCronRunReceipt, prepareCronRunReceiptClaim } from "./store/run-receipt-store.js";
+import {
+  finishCronRunReceiptAsync,
+  prepareCronRunReceiptClaim,
+} from "./store/run-receipt-store.js";
 import {
   claimCronRunReceiptInDatabaseForTest,
   inspectActiveCronRunReceipt,
@@ -110,7 +113,20 @@ describe("cron service cross-tick admission", () => {
     let now = t0;
     const blocked = blockedRuns([jobA, jobB, jobC]);
     const runIsolatedAgentJob = blocked.run;
+    const clock = createGatewaySchedulerClock(t0);
+    const capacityWakeArmed = createDeferred();
+    const scheduler = createTestGatewayScheduler({
+      ...clock.clock,
+      arm: (wake, delayMs) => {
+        const cancel = clock.clock.arm(wake, delayMs);
+        if (delayMs === 0) {
+          capacityWakeArmed.resolve();
+        }
+        return cancel;
+      },
+    });
     const state = createCronRegressionState({
+      scheduler,
       storePath: store.storePath,
       nowMs: () => now,
       runIsolatedAgentJob,
@@ -137,6 +153,8 @@ describe("cron service cross-tick admission", () => {
     ).toBeUndefined();
 
     blocked.release(jobA);
+    await capacityWakeArmed.promise;
+    const capacityTick = clock.advanceBy(0);
     await blocked.started(jobC);
     expect(getActiveGatewayRootWorkCount()).toBe(2);
     expect(store.receipt(jobC)).toBeDefined();
@@ -147,7 +165,8 @@ describe("cron service cross-tick admission", () => {
     await firstTick;
     expect(getActiveGatewayRootWorkCount()).toBe(1);
     blocked.release(jobC);
-    await vi.waitFor(() => expect(state.activeTimerTicks).toBe(0));
+    await capacityTick;
+    expect(state.activeTimerTicks).toBe(0);
     expect(getActiveGatewayRootWorkCount()).toBe(0);
     expect(state.queuedRunReservationsByJobId.size).toBe(0);
     expect(store.receipt(jobC)).toBeUndefined();
@@ -175,7 +194,10 @@ describe("cron service cross-tick admission", () => {
     );
     let peakTicks = 0;
     const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const }));
+    const clock = createGatewaySchedulerClock(t0);
+    const scheduler = createTestGatewayScheduler(clock.clock);
     const state: ReturnType<typeof createCronRegressionState> = createCronRegressionState({
+      scheduler,
       storePath: store.storePath,
       nowMs: () => {
         peakTicks = Math.max(peakTicks, state.activeTimerTicks);
@@ -205,9 +227,10 @@ describe("cron service cross-tick admission", () => {
       expect(state.timer).not.toBeNull();
       expect(runIsolatedAgentJob).not.toHaveBeenCalled();
 
-      finishCronRunReceipt({ handle: receipt, status: "skipped", finishedAtMs: t0 });
+      await finishCronRunReceiptAsync({ handle: receipt, status: "skipped", finishedAtMs: t0 });
       await onTimer(state);
 
+      await clock.advanceBy(0);
       // The resumed tick rechecks capacity to run the second due job.
       await admissions.expectReleased(3);
       expect(runIsolatedAgentJob).toHaveBeenCalledTimes(2);
@@ -219,7 +242,7 @@ describe("cron service cross-tick admission", () => {
       ).toBe(true);
     } finally {
       unrelated!.release();
-      finishCronRunReceipt({ handle: receipt, status: "skipped", finishedAtMs: t0 });
+      await finishCronRunReceiptAsync({ handle: receipt, status: "skipped", finishedAtMs: t0 });
       stop(state);
     }
   });
@@ -244,7 +267,10 @@ describe("cron service cross-tick admission", () => {
       expect(job.id).toBe(pending.id);
       return { status: "ok" as const, summary: "pending done" };
     });
+    const clock = createGatewaySchedulerClock(t0);
+    const scheduler = createTestGatewayScheduler(clock.clock);
     const state = createCronRegressionState({
+      scheduler,
       storePath: store.storePath,
       nowMs: () => {
         nowCalls += 1;
@@ -275,6 +301,7 @@ describe("cron service cross-tick admission", () => {
 
     try {
       await onTimer(state);
+      await clock.advanceBy(0);
 
       expect(foreignReceipt).toBeDefined();
       expect(runIsolatedAgentJob).toHaveBeenCalledOnce();
@@ -286,7 +313,7 @@ describe("cron service cross-tick admission", () => {
       ).toMatchObject({ lastRunStatus: "ok" });
     } finally {
       if (foreignReceipt) {
-        finishCronRunReceipt({
+        await finishCronRunReceiptAsync({
           handle: foreignReceipt,
           status: "interrupted",
           finishedAtMs: t0 + 2,
@@ -366,6 +393,7 @@ describe("cron service cross-tick admission", () => {
 
     try {
       stop(state);
+      await retiredTimer;
       await start(state);
       const restartedTimer = state.timer;
       nowMs += 1_000;
@@ -399,7 +427,10 @@ describe("cron service cross-tick admission", () => {
 
     const blocked = blockedRuns([scheduledA, scheduledB, pending, directA, directB]);
     const pendingStarted = createDeferred();
+    const clock = createGatewaySchedulerClock(t0);
+    const scheduler = createTestGatewayScheduler(clock.clock);
     const state = createCronRegressionState({
+      scheduler,
       storePath: store.storePath,
       nowMs: () => t0,
       onEvent: (event) => {
@@ -437,8 +468,11 @@ describe("cron service cross-tick admission", () => {
       ).toBe(2);
 
       blocked.release(directA);
+      await directRunA;
+      const capacityTick = clock.advanceBy(0);
       // The capacity wake still observes active receipts before admitting pending work.
       await pendingStarted.promise;
+      await blocked.started(pending);
       expect(blocked.run.mock.calls.filter(([{ job }]) => job.id === pending.id)).toHaveLength(1);
       await directRunA;
 
@@ -450,8 +484,9 @@ describe("cron service cross-tick admission", () => {
       expect(getActiveGatewayRootWorkCount()).toBe(1);
 
       blocked.release(pending);
-      await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
-      await vi.waitFor(() => expect(state.activeTimerTicks).toBe(0));
+      await capacityTick;
+      expect(getActiveGatewayRootWorkCount()).toBe(0);
+      expect(state.activeTimerTicks).toBe(0);
     } finally {
       blocked.release(scheduledA);
       blocked.release(scheduledB);
@@ -467,7 +502,7 @@ describe("cron service cross-tick admission", () => {
     }
   });
 
-  it("restores the timer root when an open partial-batch listener wakes from a direct run", async () => {
+  it("gives an open partial-batch wake its own Gateway root", async () => {
     const t0 = Date.parse("2026-02-06T10:09:30.000Z");
     const scheduledA = dueJob("open-listener-scheduled-a", t0);
     const scheduledB = dueJob("open-listener-scheduled-b", t0);
@@ -479,7 +514,10 @@ describe("cron service cross-tick admission", () => {
     const pendingStarted = createDeferred();
     const directRootRetired = createDeferred();
     const subordinateResult = createDeferred<unknown>();
+    const clock = createGatewaySchedulerClock(t0);
+    const scheduler = createTestGatewayScheduler(clock.clock);
     const state = createCronRegressionState({
+      scheduler,
       storePath: store.storePath,
       nowMs: () => t0,
       runIsolatedAgentJob: vi.fn(async ({ job }: { job: CronJob }) => {
@@ -513,14 +551,17 @@ describe("cron service cross-tick admission", () => {
       expect(getActiveGatewayRootWorkCount()).toBe(2);
 
       blocked.release(direct);
+      await directRun;
+      const capacityTick = clock.advanceBy(0);
       await pendingStarted.promise;
       await directRun;
-      expect(getActiveGatewayRootWorkCount()).toBe(1);
+      expect(getActiveGatewayRootWorkCount()).toBe(2);
       directRootRetired.resolve();
 
       const result = await subordinateResult.promise;
       expect(result).not.toBeInstanceOf(GatewayDrainingError);
       expect(result).toBe("accepted");
+      await capacityTick;
       expect(getActiveGatewayRootWorkCount()).toBe(1);
     } finally {
       directRootRetired.resolve();
@@ -542,7 +583,10 @@ describe("cron service cross-tick admission", () => {
       expect(job.id).toBe(pending.id);
       return { status: "ok" as const, summary: "pending" };
     });
+    const clock = createGatewaySchedulerClock(t0);
+    const scheduler = createTestGatewayScheduler(clock.clock);
     const state = createCronRegressionState({
+      scheduler,
       storePath: store.storePath,
       nowMs: () => t0,
       runIsolatedAgentJob,
@@ -560,7 +604,7 @@ describe("cron service cross-tick admission", () => {
           queuedReloads += 1;
           if (queuedReloads === 2) {
             skippedJob.enabled = false;
-            await saveCronStore(storePath, loaded.store);
+            await saveCronStore(store.storePath, loaded.store);
           }
         }
         return loaded;
@@ -568,6 +612,7 @@ describe("cron service cross-tick admission", () => {
 
     try {
       await onTimer(state);
+      await clock.advanceBy(0);
 
       expect(queuedReloads).toBeGreaterThanOrEqual(2);
       expect(runIsolatedAgentJob).toHaveBeenCalledOnce();

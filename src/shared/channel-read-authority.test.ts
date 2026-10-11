@@ -15,96 +15,71 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
+const activeAuthority = () => {};
+
 describe("channel read completion ownership", () => {
   it("keeps nested output until the outer read accepts it without retaining the inner callable", async () => {
     const settle = vi.fn(async (_accepted: boolean) => {});
     let innerAssertion: (() => void) | undefined;
-    await withChannelReadAuthority(
-      () => {},
-      async () => {
-        await withChannelReadAuthority(
-          () => {},
-          async () => {
-            innerAssertion = captureChannelReadAuthority();
-            captureChannelReadScope()!.registerResource({ key: "created-media", settle });
-          },
-        );
-        expect(() => innerAssertion!()).toThrow("no longer active");
-        expect(settle).not.toHaveBeenCalled();
-        expect(() => captureChannelReadAuthority()!()).not.toThrow();
-      },
-    );
+    await withChannelReadAuthority(activeAuthority, async () => {
+      await withChannelReadAuthority(activeAuthority, async () => {
+        innerAssertion = captureChannelReadAuthority();
+        captureChannelReadScope()!.registerResource({ key: "created-media", settle });
+      });
+      expect(() => innerAssertion!()).toThrow("no longer active");
+      expect(settle).not.toHaveBeenCalled();
+      expect(() => captureChannelReadAuthority()!()).not.toThrow();
+    });
     expect(settle).toHaveBeenCalledExactlyOnceWith(true);
   });
 
-  it("retains the creating provider's live check after its inner scope returns", async () => {
-    const settle = vi.fn(async (_accepted: boolean) => {});
-    let providerActive = true;
-    await expect(
-      withChannelReadAuthority(
-        () => {},
-        async () => {
+  it.each(["provider", "source signal"])(
+    "retains child %s revocation until the outer read accepts output",
+    async (authority) => {
+      const settle = vi.fn(async (_accepted: boolean) => {});
+      const source = new AbortController();
+      const revoked = new Error("child read revoked");
+      let providerActive = true;
+      await expect(
+        withChannelReadAuthority(activeAuthority, async () => {
           await withChannelReadAuthority(
             () => {
               if (!providerActive) {
-                throw new Error("provider revoked");
+                throw revoked;
               }
             },
             async () => {
               captureChannelReadScope()!.registerResource({ key: "created-media", settle });
             },
+            authority === "source signal" ? source.signal : undefined,
           );
-          providerActive = false;
-        },
-      ),
-    ).rejects.toThrow("provider revoked");
-    expect(settle).toHaveBeenCalledExactlyOnceWith(false);
-  });
+          if (authority === "provider") {
+            providerActive = false;
+          } else {
+            source.abort(revoked);
+          }
+        }),
+      ).rejects.toBe(revoked);
+      expect(settle).toHaveBeenCalledExactlyOnceWith(false);
+    },
+  );
 
   it("discards a failed inner read even when its parent catches the error", async () => {
     const outer = vi.fn(async (_accepted: boolean) => {});
     const inner = vi.fn(async (_accepted: boolean) => {});
-    await withChannelReadAuthority(
-      () => {},
-      async () => {
-        captureChannelReadScope()!.registerResource({ key: "outer-media", settle: outer });
-        await expect(
-          withChannelReadAuthority(
-            () => {},
-            async () => {
-              captureChannelReadScope()!.registerResource({ key: "inner-media", settle: inner });
-              throw new Error("download failed");
-            },
-          ),
-        ).rejects.toThrow("download failed");
-        expect(inner).toHaveBeenCalledExactlyOnceWith(false);
-        expect(outer).not.toHaveBeenCalled();
-      },
-    );
+    await withChannelReadAuthority(activeAuthority, async () => {
+      captureChannelReadScope()!.registerResource({ key: "outer-media", settle: outer });
+      await expect(
+        withChannelReadAuthority(activeAuthority, async () => {
+          captureChannelReadScope()!.registerResource({ key: "inner-media", settle: inner });
+          throw new Error("download failed");
+        }),
+      ).rejects.toThrow("download failed");
+      expect(inner).toHaveBeenCalledExactlyOnceWith(false);
+      expect(outer).not.toHaveBeenCalled();
+    });
     expect(outer).toHaveBeenCalledExactlyOnceWith(true);
     expect(inner).toHaveBeenCalledOnce();
-  });
-
-  it("retains a child's independent source signal until the enclosing read accepts its output", async () => {
-    const source = new AbortController();
-    const aborted = new Error("child source canceled");
-    const settle = vi.fn(async (_accepted: boolean) => {});
-    await expect(
-      withChannelReadAuthority(
-        () => {},
-        async () => {
-          await withChannelReadAuthority(
-            () => {},
-            async () => {
-              captureChannelReadScope()!.registerResource({ key: "created-media", settle });
-            },
-            source.signal,
-          );
-          source.abort(aborted);
-        },
-      ),
-    ).rejects.toBe(aborted);
-    expect(settle).toHaveBeenCalledExactlyOnceWith(false);
   });
 
   it("publishes checked acceptance before asynchronous resource teardown", async () => {
@@ -168,16 +143,13 @@ describe("channel read completion ownership", () => {
     const otherChunk = await import("./channel-read-authority.js");
     const settle = vi.fn(async (_accepted: boolean) => {});
     let retained: (() => void) | undefined;
-    await withChannelReadAuthority(
-      () => {},
-      async () => {
-        retained = otherChunk.captureChannelReadAuthority();
-        expect(typeof retained).toBe("function");
-        expect(retained).toBe(captureChannelReadAuthority());
-        retained!();
-        otherChunk.captureChannelReadScope()!.registerResource({ key: "created-media", settle });
-      },
-    );
+    await withChannelReadAuthority(activeAuthority, async () => {
+      retained = otherChunk.captureChannelReadAuthority();
+      expect(typeof retained).toBe("function");
+      expect(retained).toBe(captureChannelReadAuthority());
+      retained!();
+      otherChunk.captureChannelReadScope()!.registerResource({ key: "created-media", settle });
+    });
     expect(settle).toHaveBeenCalledExactlyOnceWith(true);
     expect(() => retained!()).toThrow("no longer active");
   });

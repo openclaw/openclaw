@@ -27,13 +27,15 @@ import {
   setCodexTestModelSupportsTools,
   setupRunAttemptTestHooks,
   tempDir,
+  threadStartResult,
+  turnStartResult,
 } from "./run-attempt-test-harness.js";
 import { attachSqliteSessionTarget } from "./sqlite-session.test-helpers.js";
 
 setupRunAttemptTestHooks();
 vi.mock("openclaw/plugin-sdk/node-selection-runtime", { spy: true });
 
-it.each(["delayed-success", "opaque-steer", "wait-before-admission"] as const)(
+it.each(["delayed-success", "opaque-steer", "wait-before-admission", "yield-receipt"] as const)(
   "preserves accepted follow-up through sessions_yield (%s)",
   async (scenario) => {
     // Keep discovery off ambient Gateway I/O while using the real admitted host and monitor.
@@ -54,6 +56,7 @@ it.each(["delayed-success", "opaque-steer", "wait-before-admission"] as const)(
       }
     });
     let waitAfterAdmission: unknown;
+    let claimedAfterStart: boolean | undefined;
     const harness = createStartedThreadHarness();
     const lifetime = new AbortController();
     const params = createTestParams();
@@ -193,15 +196,38 @@ it.each(["delayed-success", "opaque-steer", "wait-before-admission"] as const)(
         },
       });
       expect(yieldResponse).toMatchObject({ success: true });
+      if (scenario === "yield-receipt") {
+        // The native receipt queues input without starting another parent turn.
+        // Keep teardown open after the real yield has been accepted.
+        await turn(childThreadId, turnB);
+        claimedAfterStart = isCodexAppServerLiveThreadClaimed(harness.client, childThreadId);
+        await parentItem(
+          {
+            type: "agent_message",
+            author: childThreadId,
+            recipient: "/root",
+            content: [
+              {
+                type: "input_text",
+                text: `Message Type: FINAL_ANSWER\nTask name: /root\nSender: ${childThreadId}\nPayload:\nB result`,
+              },
+            ],
+          },
+          "rawResponseItem/completed",
+        );
+        await turn(childThreadId, turnB, "B result");
+      }
       await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
       expect(readAttemptTerminal(await run)).toMatchObject({ aborted: false, promptError: null });
       await nativeHookRelayUnregisterQueue.flush();
       host.closeHost();
       host.closeAdmission();
-      if (scenario !== "wait-before-admission") {
+      if (scenario !== "wait-before-admission" && scenario !== "yield-receipt") {
         await turn(childThreadId, turnB);
       }
-      const claimedAfterStart = isCodexAppServerLiveThreadClaimed(harness.client, childThreadId);
+      if (scenario !== "yield-receipt") {
+        claimedAfterStart = isCodexAppServerLiveThreadClaimed(harness.client, childThreadId);
+      }
       if (accepted) {
         await turn(childThreadId, turnB, "B result");
         await turn(childThreadId, turnB, "B result");
@@ -266,3 +292,152 @@ it.each(["delayed-success", "opaque-steer", "wait-before-admission"] as const)(
     }
   },
 );
+
+it("reports an earlier turn's unsettled native child to a later turn's sessions_yield", async () => {
+  vi.mocked(loadNodeExecAvailability).mockResolvedValue({
+    cacheKey: "[]",
+    isAvailable: () => false,
+  });
+  initializeGlobalHookRunner(
+    createMockPluginRegistry([{ hookName: "before_tool_call", handler: async () => undefined }]),
+  );
+  const delivery = vi
+    .spyOn(defaultNativeSubagentMonitorRuntime, "deliverAgentHarnessCompletion")
+    .mockResolvedValue({ delivered: true, path: "direct" });
+  const turns: string[] = [];
+  const harness = createStartedThreadHarness(async (method) => {
+    if (method === "thread/resume") {
+      return threadStartResult();
+    }
+    if (method === "turn/start") {
+      turns.push(`turn-${turns.length + 1}`);
+      return turnStartResult(turns.at(-1));
+    }
+    return undefined;
+  });
+  const notify = (method: string, params: JsonObject) =>
+    harness.notify({ method, params } as CodexServerNotification);
+  const childTurn = (threadId: string, result?: string) =>
+    notify(result === undefined ? "turn/started" : "turn/completed", {
+      threadId,
+      turn: {
+        id: `${threadId}-turn`,
+        status: result === undefined ? "inProgress" : "completed",
+        error: null,
+        items:
+          result === undefined
+            ? []
+            : [
+                {
+                  type: "agentMessage",
+                  id: `${threadId}-result`,
+                  phase: "final_answer",
+                  text: result,
+                },
+              ],
+      },
+    });
+  const spawn = async (threadId: string) => {
+    await notify("thread/started", {
+      thread: {
+        id: threadId,
+        parentThreadId: "thread-1",
+        source: { subAgent: { thread_spawn: { parent_thread_id: "thread-1", depth: 1 } } },
+      },
+    });
+    await notify("item/completed", {
+      threadId: "thread-1",
+      turnId: turns.at(-1)!,
+      item: {
+        id: `spawn-${threadId}`,
+        type: "collabAgentToolCall",
+        tool: "spawnAgent",
+        status: "completed",
+        senderThreadId: "thread-1",
+        receiverThreadIds: [threadId],
+      },
+    });
+    await childTurn(threadId);
+  };
+  const hosts: Array<Awaited<ReturnType<typeof createAdmittedHostCapabilityTestFixture>>> = [];
+  const startTurn = async (runId: string) => {
+    const params = createTestParams();
+    params.runId = runId;
+    await attachSqliteSessionTarget(params, path.join(tempDir, "sessions.json"), "yield-session");
+    params.runtimePlan = createCodexRuntimePlanFixture();
+    setCodexTestModelSupportsTools(params, true);
+    const host = await createAdmittedHostCapabilityTestFixture(params, {
+      nativeModelPolicySupport: "exact",
+    });
+    hosts.push(host);
+    assert(host.agentHarnessCompletionScope, "Expected an admitted completion scope");
+    params.hostCapabilities = host.hostCapabilities;
+    params.agentHarnessCompletionScope = host.agentHarnessCompletionScope;
+    const run = runCodexAppServerAttempt(params, {
+      nativeHookRelay: { enabled: true, events: ["pre_tool_use"] },
+    });
+    await run.waitForTurnAccepted();
+    // Wrapped so awaiting the accepted turn does not also await the attempt.
+    return { run };
+  };
+  const completeTurn = async ({ run }: Awaited<ReturnType<typeof startTurn>>) => {
+    await harness.completeTurn({ threadId: "thread-1", turnId: turns.at(-1)! });
+    expect(readAttemptTerminal(await run)).toMatchObject({ aborted: false, promptError: null });
+    await nativeHookRelayUnregisterQueue.flush();
+  };
+  const yieldTurn = async () => {
+    const callId = `yield-${turns.at(-1)}`;
+    const response = (await harness.handleServerRequest({
+      id: callId,
+      method: "item/tool/call",
+      params: {
+        threadId: "thread-1",
+        turnId: turns.at(-1)!,
+        callId,
+        namespace: null,
+        tool: "sessions_yield",
+        arguments: { message: "Waiting for children" },
+      },
+    })) as { contentItems: Array<{ text: string }> };
+    return JSON.parse(response.contentItems[0]!.text) as Record<string, unknown>;
+  };
+
+  try {
+    // The first turn spawns two native children, one finishes, and the turn yields.
+    const first = await startTurn("run-1");
+    await spawn("child-settled");
+    await childTurn("child-settled", "Settled result");
+    await spawn("child-running");
+    expect(await yieldTurn()).toMatchObject({ status: "yielded" });
+    await completeTurn(first);
+    // The finished child's detached delivery settles it once its parent turn ends.
+    await vi.waitFor(() =>
+      expect(delivery).toHaveBeenCalledWith(
+        expect.objectContaining({ childSessionKey: "codex-thread:child-settled" }),
+      ),
+    );
+
+    // A later turn owns no new claim, yet the still-running child will resume the session.
+    const second = await startTurn("run-2");
+    const result = await yieldTurn();
+    expect(result).toMatchObject({
+      status: "already_pending",
+      pendingChildren: [
+        {
+          runId: "codex-thread:child-running",
+          childSessionKey: "codex-thread:child-running",
+          state: "running",
+          wakeArmed: false,
+        },
+      ],
+    });
+    expect(result.pendingChildren).toHaveLength(1);
+    await completeTurn(second);
+  } finally {
+    harness.close();
+    for (const host of hosts) {
+      host.closeHost();
+      host.closeAdmission();
+    }
+  }
+});

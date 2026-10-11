@@ -1,6 +1,12 @@
-import { getEventStreamCompletion, onLlmRequestActivity } from "@openclaw/ai/internal/runtime";
+import {
+  getEventStreamCompletion,
+  getFirstStreamEventTimeoutMs,
+  onLlmRequestActivity,
+} from "@openclaw/ai/internal/runtime";
+import { withProviderAcceptanceObserver } from "@openclaw/ai/transports";
 import { isCloudModelRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import {
+  asPositiveFiniteNumber,
   finiteSecondsToTimerSafeMilliseconds,
   clampTimerTimeoutMs,
   MAX_TIMER_TIMEOUT_MS,
@@ -11,13 +17,13 @@ import { toErrorObject } from "../../../infra/errors.js";
 import type { AssistantMessageEvent } from "../../../llm/types.js";
 import { markDiagnosticRunProgress } from "../../../logging/diagnostic-run-activity.js";
 import { captureAsyncWorkTracker } from "../../../shared/async-work-scope.js";
+import { getLastToolActivityMs, onToolActivity } from "../../../shared/tool-activity-heartbeat.js";
 import { recordAgentCleanupFailure } from "../../run-cleanup-timeout.js";
 import type { EmbeddedRunTrigger } from "../../run-trigger.js";
 import type { StreamFn } from "../../runtime/index.js";
 import type { MutableAssistantMessageEventStream } from "../../stream-compat.js";
 import { createStreamIteratorWrapper } from "../../stream-iterator-wrapper.js";
 import { abortable } from "./abortable.js";
-import { getLastToolActivityMs, onToolActivity } from "./tool-activity-heartbeat.js";
 
 const DEFAULT_LLM_IDLE_TIMEOUT_MS = 120_000;
 const SELF_HOSTED_LLM_IDLE_TIMEOUT_MS = 300_000;
@@ -28,6 +34,11 @@ const LOCAL_LLM_FIRST_EVENT_TIMEOUT_MS = 300_000;
 const CRON_LLM_IDLE_TIMEOUT_MS = 60_000;
 const LOCAL_PROVIDER_AUTH_MARKERS = new Set(["custom-local", "ollama-local"]);
 const SELF_HOSTED_PROVIDER_ID_PREFIXES = ["ollama", "lmstudio", "vllm", "sglang", "llama-cpp"];
+const EXPLICIT_LOCAL_HOSTNAMES = new Set([
+  "docker.orb.internal",
+  "host.docker.internal",
+  "host.orb.internal",
+]);
 
 /**
  * Local endpoints can stay silent during prompt evaluation. Classify the URL
@@ -72,18 +83,7 @@ function isLocalProviderHostname(hostname: string): boolean {
   );
 }
 
-function isExplicitLocalHostname(hostname: string): boolean {
-  return (
-    hostname === "docker.orb.internal" ||
-    hostname === "host.docker.internal" ||
-    hostname === "host.orb.internal"
-  );
-}
-
 function isBareProviderHostname(hostname: string): boolean {
-  if (hostname.includes(".") || hostname.includes(":")) {
-    return false;
-  }
   return /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(hostname);
 }
 
@@ -106,13 +106,12 @@ function findConfiguredProviderConfig(
     return undefined;
   }
   const providers = cfg?.models?.providers;
-  const exact = providers?.[normalizedProvider];
-  if (exact) {
-    return exact;
-  }
-  return Object.entries(providers ?? {}).find(
-    ([key]) => key.trim().toLowerCase() === normalizedProvider,
-  )?.[1];
+  return (
+    providers?.[normalizedProvider] ||
+    Object.entries(providers ?? {}).find(
+      ([key]) => key.trim().toLowerCase() === normalizedProvider,
+    )?.[1]
+  );
 }
 
 function hasLocalProviderAuthMarker(apiKey: unknown): boolean {
@@ -142,14 +141,8 @@ type LlmTimeoutParams = {
  */
 function resolveRuntimeModelLocality(params?: LlmTimeoutParams) {
   const baseUrl = params?.model?.baseUrl;
-  let hostname: string | undefined;
-  if (typeof baseUrl === "string" && baseUrl.length > 0) {
-    try {
-      hostname = new URL(baseUrl).hostname.toLowerCase();
-    } catch {
-      hostname = undefined;
-    }
-  }
+  const hostname =
+    typeof baseUrl === "string" ? URL.parse(baseUrl)?.hostname.toLowerCase() : undefined;
   const notCloudModel = !isCloudModelRef(params?.model?.id);
   return {
     isLocalRuntimeModel: Boolean(hostname && isLocalProviderHostname(hostname) && notCloudModel),
@@ -158,7 +151,7 @@ function resolveRuntimeModelLocality(params?: LlmTimeoutParams) {
       (isSelfHostedProviderId(params?.model?.provider) ||
         Boolean(
           hostname &&
-          (isExplicitLocalHostname(hostname) ||
+          (EXPLICIT_LOCAL_HOSTNAMES.has(hostname) ||
             (isBareProviderHostname(hostname) &&
               hasConfiguredLocalProviderSignal({
                 cfg: params?.cfg,
@@ -169,121 +162,78 @@ function resolveRuntimeModelLocality(params?: LlmTimeoutParams) {
 }
 
 function resolveLlmTimeoutBounds(params?: LlmTimeoutParams) {
-  const runTimeoutMs = params?.runTimeoutMs;
+  const runTimeoutMs = asPositiveFiniteNumber(params?.runTimeoutMs);
   const agentTimeoutMs = finiteSecondsToTimerSafeMilliseconds(
     params?.cfg?.agents?.defaults?.timeoutSeconds,
   );
-  const hasExplicitRunTimeout =
-    typeof runTimeoutMs === "number" && Number.isFinite(runTimeoutMs) && runTimeoutMs > 0;
+  const hasExplicitRunTimeout = runTimeoutMs !== undefined;
   // Unlimited runs omit the sentinel but still retain provider liveness defaults.
   const boundedRunTimeoutMs =
     hasExplicitRunTimeout && runTimeoutMs < MAX_TIMER_TIMEOUT_MS ? runTimeoutMs : undefined;
   const timeoutBounds = [
     boundedRunTimeoutMs,
     hasExplicitRunTimeout ? undefined : agentTimeoutMs,
-  ].filter(
-    (value): value is number =>
-      typeof value === "number" &&
-      Number.isFinite(value) &&
-      value > 0 &&
-      value < MAX_TIMER_TIMEOUT_MS,
-  );
+  ].filter((value): value is number => value !== undefined && value < MAX_TIMER_TIMEOUT_MS);
   return { boundedRunTimeoutMs, agentTimeoutMs, timeoutBounds };
 }
 
 const clampTimeoutMs = (valueMs: number) => clampTimerTimeoutMs(valueMs) ?? 1;
 
-/**
- * Resolves the stream-idle watchdog timeout for one embedded run. Explicit
- * provider request timeouts and bounded run/agent timeouts cap the watchdog;
- * local provider base URLs disable the implicit cloud-provider default.
- */
-export function resolveLlmIdleTimeoutMs(
+function resolveLlmTimeoutMs(
+  phase: "idle" | "first-event",
   params?: LlmTimeoutParams & { trigger?: EmbeddedRunTrigger },
 ): number {
   const { boundedRunTimeoutMs, agentTimeoutMs, timeoutBounds } = resolveLlmTimeoutBounds(params);
   const { isLocalRuntimeModel, isSelfHostedRuntimeModel } = resolveRuntimeModelLocality(params);
-
-  // Run/agent budgets bound idle from below the provider-class ceiling; they
-  // must not shrink class tolerance (local has no ceiling, self-hosted 300s).
-  // Clamping every class to the cloud default reopened #85826-style kills for
-  // self-hosted users with explicit budgets above 120s.
-  const clampToClassIdleCeiling = (budgetMs: number): number => {
-    if (isLocalRuntimeModel) {
-      return clampTimeoutMs(budgetMs);
-    }
-    const classIdleTimeoutMs = isSelfHostedRuntimeModel
-      ? SELF_HOSTED_LLM_IDLE_TIMEOUT_MS
-      : DEFAULT_LLM_IDLE_TIMEOUT_MS;
-    return clampTimeoutMs(Math.min(budgetMs, classIdleTimeoutMs));
-  };
-
-  // Explicit per-model idle timeout (`models.providers.<id>.timeoutSeconds`) wins
-  // over the NO_TIMEOUT_MS sentinel that runTimeoutMs may carry when the caller
-  // declared "run is unlimited". The two are independent: an unlimited run does
-  // not imply opting out of chunk-level hang detection.
-  const modelRequestTimeoutMs = params?.modelRequestTimeoutMs;
-  if (
-    typeof modelRequestTimeoutMs === "number" &&
-    Number.isFinite(modelRequestTimeoutMs) &&
-    modelRequestTimeoutMs > 0
-  ) {
-    // Provider opt-ins may exceed the cloud ceiling; shorter run budgets still win.
-    const boundedTimeoutMs = Math.min(modelRequestTimeoutMs, ...timeoutBounds);
-    return clampTimeoutMs(boundedTimeoutMs);
+  const modelRequestTimeoutMs = asPositiveFiniteNumber(params?.modelRequestTimeoutMs);
+  // Provider opt-ins can exceed class defaults, while finite run/agent budgets still win.
+  // An unlimited run does not disable this independent request-liveness budget.
+  if (modelRequestTimeoutMs !== undefined) {
+    return clampTimeoutMs(Math.min(modelRequestTimeoutMs, ...timeoutBounds));
+  }
+  if (phase === "first-event") {
+    const defaultTimeoutMs =
+      isLocalRuntimeModel || isSelfHostedRuntimeModel
+        ? LOCAL_LLM_FIRST_EVENT_TIMEOUT_MS
+        : CLOUD_LLM_FIRST_EVENT_TIMEOUT_MS;
+    return clampTimeoutMs(Math.min(defaultTimeoutMs, ...timeoutBounds));
   }
 
-  // Unlimited run budget bounds total cost, not stream liveness. Only finite
-  // explicit run budgets cap the idle watchdog.
-  if (boundedRunTimeoutMs !== undefined) {
-    if (params?.trigger === "cron") {
-      if (isLocalRuntimeModel || isSelfHostedRuntimeModel) {
-        return clampTimeoutMs(boundedRunTimeoutMs);
-      }
-      return clampTimeoutMs(Math.min(boundedRunTimeoutMs, CRON_LLM_IDLE_TIMEOUT_MS));
-    }
-    return clampToClassIdleCeiling(boundedRunTimeoutMs);
+  const classIdleTimeoutMs = isSelfHostedRuntimeModel
+    ? SELF_HOSTED_LLM_IDLE_TIMEOUT_MS
+    : DEFAULT_LLM_IDLE_TIMEOUT_MS;
+  const budgetMs = boundedRunTimeoutMs ?? agentTimeoutMs;
+  if (budgetMs === undefined) {
+    return isLocalRuntimeModel ? 0 : classIdleTimeoutMs;
   }
-
-  if (agentTimeoutMs !== undefined) {
-    return clampToClassIdleCeiling(agentTimeoutMs);
+  const boundedCron = boundedRunTimeoutMs !== undefined && params?.trigger === "cron";
+  // Local endpoints have no idle ceiling. Explicit cron budgets also own
+  // self-hosted stalls; ordinary self-hosted runs retain their 300s tolerance.
+  if (isLocalRuntimeModel || (boundedCron && isSelfHostedRuntimeModel)) {
+    return clampTimeoutMs(budgetMs);
   }
+  return clampTimeoutMs(
+    Math.min(budgetMs, boundedCron ? CRON_LLM_IDLE_TIMEOUT_MS : classIdleTimeoutMs),
+  );
+}
 
-  // Local models have no implicit idle cap; proxied Ollama cloud models still do.
-  if (isLocalRuntimeModel) {
-    return 0;
-  }
-
-  return isSelfHostedRuntimeModel ? SELF_HOSTED_LLM_IDLE_TIMEOUT_MS : DEFAULT_LLM_IDLE_TIMEOUT_MS;
+export function resolveLlmIdleTimeoutMs(
+  params?: LlmTimeoutParams & { trigger?: EmbeddedRunTrigger },
+): number {
+  return resolveLlmTimeoutMs("idle", params);
 }
 
 export function resolveLlmFirstEventTimeoutMs(params?: LlmTimeoutParams): number {
-  const { timeoutBounds } = resolveLlmTimeoutBounds(params);
-  const { isLocalRuntimeModel, isSelfHostedRuntimeModel } = resolveRuntimeModelLocality(params);
-
-  const modelRequestTimeoutMs = params?.modelRequestTimeoutMs;
-  if (
-    typeof modelRequestTimeoutMs === "number" &&
-    Number.isFinite(modelRequestTimeoutMs) &&
-    modelRequestTimeoutMs > 0
-  ) {
-    return clampTimeoutMs(Math.min(modelRequestTimeoutMs, ...timeoutBounds));
-  }
-
-  const defaultTimeoutMs =
-    isLocalRuntimeModel || isSelfHostedRuntimeModel
-      ? LOCAL_LLM_FIRST_EVENT_TIMEOUT_MS
-      : CLOUD_LLM_FIRST_EVENT_TIMEOUT_MS;
-  return clampTimeoutMs(Math.min(defaultTimeoutMs, ...timeoutBounds));
+  return resolveLlmTimeoutMs("first-event", params);
 }
 
 /**
  * Wraps a stream function with idle timeout detection for both stream creation
  * and iterator progress. Each successful `next()` resets the timer; a timeout
  * aborts the provider request and surfaces the same Error to the caller.
- * `scope: "creation-only"` bounds only the creation phase: local providers opt
- * out of gap policing, but a request whose headers never arrive must still fail
- * instead of wedging the turn until the run budget.
+ * Creation ends at provider acceptance or stream activity, not when a producer
+ * returns its stream object. `scope: "creation-only"` leaves local providers
+ * free of gap policing after that boundary.
  *
  * When `runId` is provided, run-scoped tool activity can reset the active wait
  * and recent activity before stream creation bridges into the first wait.
@@ -296,19 +246,75 @@ export function streamWithIdleTimeout(
 ): StreamFn {
   const guardIterationGaps = opts?.scope !== "creation-only";
   const runId = opts?.runId;
+  const progressTimeoutMs = clampTimeoutMs(timeoutMs * 2);
   return (model, context, options) => {
     const trackCleanup = captureAsyncWorkTracker();
-    const createIdleTimeoutError = () =>
-      new Error(`LLM idle timeout (${Math.floor(timeoutMs / 1000)}s): no response from model`);
-
     const streamAbortController = new AbortController();
-    const sourceSignal = options?.signal;
-    const abortStream = (reason?: unknown) => {
-      if (!streamAbortController.signal.aborted) {
-        streamAbortController.abort(reason);
+    const firstEventTimeoutMs = clampTimeoutMs(getFirstStreamEventTimeoutMs(options) ?? timeoutMs);
+    const startTimer = (
+      delay: number,
+      reject: (error: Error) => void,
+      budget = timeoutMs,
+      reason = "no response from model",
+    ) => {
+      const timer = setTimeout(() => {
+        if (requestDeadline?.reject === reject) {
+          requestTimedOut = true;
+        }
+        clearRequestDeadline();
+        const error = new Error(`LLM idle timeout (${Math.floor(budget / 1000)}s): ${reason}`);
+        streamAbortController.abort(error);
+        onIdleTimeout?.(error);
+        reject(error);
+      }, delay);
+      timer.unref?.();
+      return timer;
+    };
+    let requestDeadline:
+      | { timer: NodeJS.Timeout; reject: (error: Error) => void; accepted: boolean }
+      | undefined;
+    let iterationWatchdogActive = false;
+    let requestTimedOut = false;
+    let requestTimeout: Promise<never> | undefined = new Promise<never>((_, reject) => {
+      requestDeadline = {
+        timer: startTimer(firstEventTimeoutMs, reject, firstEventTimeoutMs),
+        reject,
+        accepted: false,
+      };
+    });
+    // A synchronous producer can time out before a consumer starts iterating.
+    void requestTimeout.catch(() => {});
+    const clearRequestDeadline = () => {
+      clearTimeout(requestDeadline?.timer);
+      requestDeadline = undefined;
+      if (!requestTimedOut) {
+        requestTimeout = undefined;
+      }
+      unsubscribeCreationActivity();
+    };
+    const finishCreation = () => {
+      if (!requestDeadline || requestDeadline.accepted) {
+        return;
+      }
+      requestDeadline.accepted = true;
+      unsubscribeCreationActivity();
+      clearTimeout(requestDeadline.timer);
+      // Acceptance can precede factory resolution and iterator admission.
+      if (guardIterationGaps && !iterationWatchdogActive) {
+        requestDeadline.timer = startTimer(timeoutMs, requestDeadline.reject);
+      } else {
+        clearRequestDeadline();
       }
     };
-    const abortFromSourceSignal = () => abortStream(sourceSignal?.reason);
+    const unsubscribeCreationActivity = onLlmRequestActivity(
+      streamAbortController.signal,
+      finishCreation,
+    );
+    const sourceSignal = options?.signal;
+    const abortFromSourceSignal = () => {
+      clearRequestDeadline();
+      streamAbortController.abort(sourceSignal?.reason);
+    };
     // Mirror caller cancellation into the provider request while still allowing
     // this wrapper to abort independently on idle timeout.
     if (sourceSignal?.aborted) {
@@ -317,36 +323,32 @@ export function streamWithIdleTimeout(
       sourceSignal?.addEventListener("abort", abortFromSourceSignal, { once: true });
     }
     const cleanupSourceSignal = () => {
+      clearRequestDeadline();
       sourceSignal?.removeEventListener("abort", abortFromSourceSignal);
     };
     const withSourceAbort = <T>(promise: Promise<T>) =>
       sourceSignal ? abortable(sourceSignal, promise) : promise;
-    const wrappedOptions = {
-      ...options,
-      signal: streamAbortController.signal,
-    };
-    const createTimeoutPromise = (setTimer: (timer: NodeJS.Timeout) => void): Promise<never> => {
-      return new Promise((_, reject) => {
-        const timer = setTimeout(() => {
-          const error = createIdleTimeoutError();
-          abortStream(error);
-          onIdleTimeout?.(error);
-          reject(error);
-        }, timeoutMs);
-        timer.unref?.();
-        setTimer(timer);
-      });
-    };
+    const withRequestTimeout = <T>(promise: Promise<T>) =>
+      requestTimeout ? Promise.race([promise, requestTimeout]) : promise;
 
     let maybeStream: ReturnType<StreamFn>;
     try {
-      maybeStream = baseFn(model, context, wrappedOptions);
+      maybeStream = baseFn(
+        model,
+        context,
+        withProviderAcceptanceObserver(
+          { ...options, signal: streamAbortController.signal },
+          finishCreation,
+        ),
+      );
     } catch (error) {
       cleanupSourceSignal();
       throw error;
     }
 
     const wrapStream = (stream: MutableAssistantMessageEventStream) => {
+      const producerCompletion = getEventStreamCompletion(stream);
+      void producerCompletion?.then(cleanupSourceSignal, cleanupSourceSignal);
       const originalAsyncIterator = stream[Symbol.asyncIterator].bind(stream);
       stream[Symbol.asyncIterator] = function () {
         const iterator = originalAsyncIterator();
@@ -362,60 +364,62 @@ export function streamWithIdleTimeout(
           void returning.catch(() => recordAgentCleanupFailure());
           return returning;
         };
-        const producerCompletion = getEventStreamCompletion(stream);
-        let idleTimer: NodeJS.Timeout | null = null;
+        let idleTimer: NodeJS.Timeout | undefined;
+        let progressTimer: NodeJS.Timeout | undefined;
         let rejectIdleTimeout: ((error: Error) => void) | undefined;
-        let firstArmPending = true;
-        // Pre-stream tool timestamps are consumed after the first bridged wait
-        // so that subsequent provider chunk progress restores a full idle budget.
-        // Without this guard a stale pre-stream timestamp would shorten every
-        // per-chunk wait, eventually aborting a legitimately slow active stream.
+        // Consume pre-stream tool activity once; reusing it shortens later chunk budgets.
         let streamFirstArmDone = false;
-        // The watchdog polices provider silence, not consumer position: once
-        // iteration starts it stays armed until the producer settles or the
-        // iterator closes, and every delivered event, provider activity
-        // notification, or run-scoped tool heartbeat restores the full budget.
-        // A consumer parked between next() calls (for example awaiting an
-        // event handler) must not leave a dead provider connection unpoliced.
+        // Police parked consumers until the native producer settles. Content-free
+        // activity resets only connection liveness.
         let settled = false;
 
-        const clearTimer = () => {
-          if (idleTimer) {
-            clearTimeout(idleTimer);
-            idleTimer = null;
-          }
+        const clearTimers = () => {
+          clearTimeout(idleTimer);
+          clearTimeout(progressTimer);
+          idleTimer = progressTimer = undefined;
         };
-        const armTimer = () => {
-          clearTimer();
+        const rejectTimeout = (error: Error) => {
+          clearTimers();
+          rejectIdleTimeout?.(error);
+        };
+        const armTimer = (progress = true) => {
+          clearTimeout(idleTimer);
           if (!guardIterationGaps || settled || (!producerCompletion && !rejectIdleTimeout)) {
+            clearTimers();
             return;
           }
           const activeToolMs = runId ? getLastToolActivityMs(runId) : 0;
           const recentActivity = activeToolMs > 0 && Date.now() - activeToolMs < timeoutMs;
-          const isFirstStreamArm = firstArmPending && !streamFirstArmDone;
+          const isFirstStreamArm = !streamFirstArmDone;
           const effectiveTimeout =
             isFirstStreamArm && recentActivity
               ? Math.max(1, timeoutMs - Math.max(0, Date.now() - activeToolMs))
               : timeoutMs;
-          firstArmPending = false;
-          if (isFirstStreamArm) {
-            streamFirstArmDone = true;
+          streamFirstArmDone = true;
+          idleTimer = startTimer(effectiveTimeout, rejectTimeout);
+          iterationWatchdogActive = true;
+          if (requestDeadline?.accepted) {
+            clearRequestDeadline();
           }
-          idleTimer = setTimeout(() => {
-            idleTimer = null;
-            const error = createIdleTimeoutError();
-            abortStream(error);
-            onIdleTimeout?.(error);
-            rejectIdleTimeout?.(error);
-          }, effectiveTimeout);
-          idleTimer.unref?.();
+          if (progress || !progressTimer) {
+            clearTimeout(progressTimer);
+            progressTimer = startTimer(
+              progressTimeoutMs,
+              rejectTimeout,
+              progressTimeoutMs,
+              "no model progress",
+            );
+          }
         };
-        const unsubscribeLlmActivity = onLlmRequestActivity(streamAbortController.signal, () => {
-          armTimer();
-          if (runId && areDiagnosticsEnabledForProcess()) {
-            markDiagnosticRunProgress({ runId, reason: "model_call:stream_progress" });
-          }
-        });
+        const unsubscribeLlmActivity = onLlmRequestActivity(
+          streamAbortController.signal,
+          (progress) => {
+            armTimer(progress);
+            if (progress && runId && areDiagnosticsEnabledForProcess()) {
+              markDiagnosticRunProgress({ runId, reason: "model_call:stream_progress" });
+            }
+          },
+        );
         const unsubscribeStreamToolActivity = runId ? onToolActivity(runId, armTimer) : undefined;
         const settle = () => {
           if (settled) {
@@ -423,7 +427,7 @@ export function streamWithIdleTimeout(
           }
           settled = true;
           rejectIdleTimeout = undefined;
-          clearTimer();
+          clearTimers();
           unsubscribeLlmActivity();
           unsubscribeStreamToolActivity?.();
           cleanupSourceSignal();
@@ -441,13 +445,15 @@ export function streamWithIdleTimeout(
             try {
               const timeoutPromise = new Promise<never>((_, reject) => {
                 rejectIdleTimeout = reject;
-                firstArmPending = true;
-                armTimer();
+                armTimer(false);
               });
               // Providers may ignore their mirrored abort signal, so caller
               // cancellation must also settle this exact iterator wait.
               pendingNext = streamIterator.next();
-              const result = await withSourceAbort(Promise.race([pendingNext, timeoutPromise]));
+              const result = await withSourceAbort(
+                withRequestTimeout(Promise.race([pendingNext, timeoutPromise])),
+              );
+              finishCreation();
 
               if (result.done) {
                 settle();
@@ -488,39 +494,19 @@ export function streamWithIdleTimeout(
 
     if (maybeStream && typeof maybeStream === "object" && "then" in maybeStream) {
       const source = Promise.resolve(maybeStream);
-      let streamPromiseTimer: NodeJS.Timeout | null = null;
-      const clearStreamPromiseTimer = () => {
-        if (streamPromiseTimer) {
-          clearTimeout(streamPromiseTimer);
-          streamPromiseTimer = null;
-        }
-      };
-
-      // Some providers return a pending Promise before the stream object exists;
-      // protect that creation phase with the same idle watchdog.
-      const timeoutPromise = createTimeoutPromise((timer) => {
-        streamPromiseTimer = timer;
+      const streamPromise = withSourceAbort(withRequestTimeout(source));
+      return streamPromise.then(wrapStream, (error: unknown) => {
+        cleanupSourceSignal();
+        // Cancellation can win before an iterator exists. Retain late setup
+        // and close its eventual stream through the same captured work owner.
+        void trackCleanup(async () => {
+          const late = await source.catch(() => undefined);
+          if (late) {
+            await late[Symbol.asyncIterator]().return?.();
+          }
+        }).catch(() => recordAgentCleanupFailure());
+        throw error;
       });
-      const streamPromise = withSourceAbort(Promise.race([source, timeoutPromise]));
-      return streamPromise.then(
-        (stream) => {
-          clearStreamPromiseTimer();
-          return wrapStream(stream);
-        },
-        (error: unknown) => {
-          clearStreamPromiseTimer();
-          cleanupSourceSignal();
-          // Cancellation can win before an iterator exists. Retain late setup
-          // and close its eventual stream through the same captured work owner.
-          void trackCleanup(async () => {
-            const late = await source.catch(() => undefined);
-            if (late) {
-              await late[Symbol.asyncIterator]().return?.();
-            }
-          }).catch(() => recordAgentCleanupFailure());
-          throw error;
-        },
-      );
     }
     return wrapStream(maybeStream);
   };

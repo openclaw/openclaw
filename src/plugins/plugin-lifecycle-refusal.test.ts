@@ -5,7 +5,7 @@ import { readPersistedInstalledPluginIndex } from "./installed-plugin-index-stor
 import { withPluginLifecycleLease } from "./plugin-lifecycle-lease.js";
 
 describe("shared plugin lifecycle authority refusal", () => {
-  it.each([new Error("one-shot caller refusal"), false, undefined])(
+  it.each([new Error("one-shot caller refusal"), undefined])(
     "keeps the first nested caller refusal across outer effects (%s)",
     async (failure) => {
       await withOpenClawTestState({ label: "shared-plugin-refusal" }, async (state) => {

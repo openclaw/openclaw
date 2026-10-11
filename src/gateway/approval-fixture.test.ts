@@ -18,15 +18,9 @@ import {
   invokeDemoPolicy,
   setDangerousDemoCommandRegistry,
 } from "./node-invoke-plugin-policy.test-helpers.js";
-import {
-  waitForApprovalAccepted,
-  waitForApprovalRequested,
-} from "./server-methods/approval-request.test-support.js";
+import { waitForApprovalAccepted } from "./server-methods/approval-request.test-support.js";
 import { createExecApprovalHandlers } from "./server-methods/exec-approval.js";
-import {
-  withAcceptedExecApproval,
-  withRequestedExecApproval,
-} from "./server-methods/exec-approval.test-support.js";
+import { withRequestedExecApproval } from "./server-methods/exec-approval.test-support.js";
 import { createGatewayRequestContext } from "./server-request-context.js";
 import { makeContextParams, makeGatewayClient } from "./server-request-context.test-support.js";
 import { GatewayClientRegistry } from "./server/client-registry.js";
@@ -37,119 +31,100 @@ afterEach(() => {
 });
 
 describe("approval fixture request ownership", () => {
-  it.for(["accepted", "requested"] as const)(
-    "prepares the real approval worker before starting a %s request",
-    async (kind, testContext) => {
-      const prepared = createDeferredCore();
-      const releasePreparation = createDeferredCore();
-      const attemptedCreate = createDeferredCore();
-      const prepare = approvalFixtures.createPreparedTestApprovalManager;
-      let preparedManager: unknown;
-      vi.spyOn(approvalFixtures, "createPreparedTestApprovalManager").mockImplementationOnce(
-        async (...args) => {
-          const fixture = await prepare(...args);
-          preparedManager = fixture.manager;
-          prepared.resolve();
-          await releasePreparation.promise;
-          return fixture;
-        },
-      );
-      const earlyCreate = vi
-        .spyOn(ExecApprovalManager.prototype, "create")
-        .mockImplementation(() => {
-          attemptedCreate.resolve();
-          throw new Error("Approval record created before worker preparation completed");
-        });
-      const withApproval =
-        kind === "accepted" ? withAcceptedExecApproval : withRequestedExecApproval;
-      const request = withApproval(
-        testContext,
-        { request: { id: `prepared-${kind}`, twoPhase: true } },
-        async ({ manager, id, requestPromise }) => {
-          expect(manager).toBe(preparedManager);
-          expect(await manager.resolve(id, "deny")).toBe(true);
-          await requestPromise;
-        },
-      );
-      const settled = Promise.allSettled([request]);
-      try {
-        expect(
-          await Promise.race([
-            prepared.promise.then(() => "prepared"),
-            attemptedCreate.promise.then(() => "record-created"),
-            request.then(() => "request-completed"),
-          ]),
-        ).toBe("prepared");
-        expect(earlyCreate).not.toHaveBeenCalled();
-        earlyCreate.mockRestore();
-        releasePreparation.resolve();
-        await request;
-      } finally {
-        earlyCreate.mockRestore();
-        releasePreparation.resolve();
-        await settled;
-      }
-    },
-  );
+  it("prepares the real approval worker before starting a requested request", async (testContext) => {
+    const prepared = createDeferredCore();
+    const releasePreparation = createDeferredCore();
+    const attemptedCreate = createDeferredCore();
+    const prepare = approvalFixtures.createPreparedTestApprovalManager;
+    let preparedManager: unknown;
+    vi.spyOn(approvalFixtures, "createPreparedTestApprovalManager").mockImplementationOnce(
+      async (...args) => {
+        const fixture = await prepare(...args);
+        preparedManager = fixture.manager;
+        prepared.resolve();
+        await releasePreparation.promise;
+        return fixture;
+      },
+    );
+    const earlyCreate = vi.spyOn(ExecApprovalManager.prototype, "create").mockImplementation(() => {
+      attemptedCreate.resolve();
+      throw new Error("Approval record created before worker preparation completed");
+    });
+    const request = withRequestedExecApproval(
+      testContext,
+      { request: { id: "prepared-requested", twoPhase: true } },
+      async ({ manager, id, requestPromise }) => {
+        expect(manager).toBe(preparedManager);
+        expect(await manager.resolve(id, "deny")).toBe(true);
+        await requestPromise;
+      },
+    );
+    const settled = Promise.allSettled([request]);
+    try {
+      expect(
+        await Promise.race([
+          prepared.promise.then(() => "prepared"),
+          attemptedCreate.promise.then(() => "record-created"),
+          request.then(() => "request-completed"),
+        ]),
+      ).toBe("prepared");
+      expect(earlyCreate).not.toHaveBeenCalled();
+      earlyCreate.mockRestore();
+      releasePreparation.resolve();
+      await request;
+    } finally {
+      earlyCreate.mockRestore();
+      releasePreparation.resolve();
+      await settled;
+    }
+  });
 
-  it.for(["broadcast", "broadcastToConnIds"] as const)(
-    "waits for each real registration before observing %s",
-    async (transport, testContext) => {
-      const fixture = createTestApprovalFixture<PluginApprovalRequestPayload>(testContext, {
-        approvalKind: "plugin",
-      });
-      const { manager } = fixture;
-      setDangerousDemoCommandRegistry([createApprovalRequestPolicy()]);
-      const { context } = createContext({
-        pluginApprovalManager: manager,
-        hasExecApprovalClients: () => true,
-        ...(transport === "broadcastToConnIds"
-          ? { getApprovalClientConnIds: createApprovalClientLookup([createOperatorClient()]) }
-          : {}),
-      });
-      const published = vi.mocked(context[transport]);
-      const register = manager.register.bind(manager);
-      await fixture.run(async () => {
-        // Reuse the context: the second request must not borrow the first event.
-        for (let index = 0; index < 2; index++) {
-          const entered = createDeferredCore();
-          const release = createDeferredCore();
-          const held = vi.spyOn(manager, "register").mockImplementationOnce(async (...args) => {
-            entered.resolve();
-            await release.promise;
-            return register(...args);
-          });
-          let settled = false;
-          const ready = expectSinglePendingApproval(manager, context, () =>
-            fixture.track(invokeDemoPolicy(context, createOperatorClient())),
-          );
-          void ready.then(
-            () => {
-              settled = true;
-            },
-            () => {
-              settled = true;
-            },
-          );
-          try {
-            await Promise.race([entered.promise, ready]);
-            expect(settled).toBe(false);
-            expect(
-              published.mock.calls.filter(([event]) => event === "plugin.approval.requested"),
-            ).toHaveLength(index);
-            release.resolve();
-            const { record, pending } = await ready;
-            expect(await manager.resolve(record.id, "deny")).toBe(true);
-            await pending;
-          } finally {
-            release.resolve();
-            await Promise.allSettled([ready]);
-            held.mockRestore();
-          }
+  it("waits for each real registration before observing broadcastToConnIds", async (testContext) => {
+    const fixture = createTestApprovalFixture<PluginApprovalRequestPayload>(testContext, {
+      approvalKind: "plugin",
+    });
+    const { manager } = fixture;
+    setDangerousDemoCommandRegistry([createApprovalRequestPolicy()]);
+    const { context } = createContext({
+      pluginApprovalManager: manager,
+      hasExecApprovalClients: () => true,
+      getApprovalClientConnIds: createApprovalClientLookup([createOperatorClient()]),
+    });
+    const published = vi.mocked(context.broadcastToConnIds);
+    const register = manager.register.bind(manager);
+    await fixture.run(async () => {
+      // Reuse the context: the second request must not borrow the first event.
+      for (let index = 0; index < 2; index++) {
+        const entered = createDeferredCore();
+        const release = createDeferredCore();
+        const held = vi.spyOn(manager, "register").mockImplementationOnce(async (...args) => {
+          entered.resolve();
+          await release.promise;
+          return register(...args);
+        });
+        const settled = vi.fn();
+        const ready = expectSinglePendingApproval(manager, context, () =>
+          fixture.track(invokeDemoPolicy(context, createOperatorClient())),
+        );
+        void ready.then(settled, settled);
+        try {
+          await Promise.race([entered.promise, ready]);
+          expect(settled).not.toHaveBeenCalled();
+          expect(
+            published.mock.calls.filter(([event]) => event === "plugin.approval.requested"),
+          ).toHaveLength(index);
+          release.resolve();
+          const { record, pending } = await ready;
+          expect(await manager.resolve(record.id, "deny")).toBe(true);
+          await pending;
+        } finally {
+          release.resolve();
+          await Promise.allSettled([ready]);
+          held.mockRestore();
         }
-      });
-    },
-  );
+      }
+    });
+  });
 
   it("does not expose a registered approval before publication", async (testContext) => {
     const fixture = createTestApprovalFixture<PluginApprovalRequestPayload>(testContext, {
@@ -266,7 +241,7 @@ describe("approval fixture request ownership", () => {
         twoPhase: true,
         timeoutMs: 60_000,
       };
-      let settled = false;
+      const settled = vi.fn();
       const ready = waitForApprovalAccepted(respond, (observedRespond) =>
         fixture.track(
           Promise.resolve(
@@ -281,18 +256,11 @@ describe("approval fixture request ownership", () => {
           ),
         ),
       );
-      void ready.then(
-        () => {
-          settled = true;
-        },
-        () => {
-          settled = true;
-        },
-      );
+      void ready.then(settled, settled);
       try {
         await Promise.race([entered.promise, ready]);
         expect(respond).not.toHaveBeenCalled();
-        expect(settled).toBe(false);
+        expect(settled).not.toHaveBeenCalled();
         release.resolve();
         const { pending, response } = await ready;
         const [record] = await manager.listPendingRecords();
@@ -330,16 +298,6 @@ describe("approval fixture request ownership", () => {
     }
   });
 
-  it("rejects request completion without a new publication and restores the context", async () => {
-    const { context } = createContext();
-    const broadcast = context.broadcast;
-    broadcast("plugin.approval.requested", { id: "previous-request" });
-    await expect(
-      waitForApprovalRequested(context, "plugin.approval.requested", async () => {}),
-    ).rejects.toThrow("Approval request completed before the expected RPC event");
-    expect(context.broadcast).toBe(broadcast);
-  });
-
   it("joins a late outer handler before releasing its database after an assertion failure", async (testContext) => {
     let joined = false;
     testContext.onTestFinished(() => {
@@ -352,7 +310,7 @@ describe("approval fixture request ownership", () => {
     const unwinding = createDeferredCore();
     const release = createDeferredCore();
     const failure = new Error("inspection failed");
-    let settled = false;
+    const settled = vi.fn();
     let pending: Promise<void> | undefined;
     const body = fixture.run(async () => {
       const record = fixture.manager.create({ command: "echo fixture" }, 60_000);
@@ -373,17 +331,10 @@ describe("approval fixture request ownership", () => {
       );
       throw failure;
     });
-    void body.then(
-      () => {
-        settled = true;
-      },
-      () => {
-        settled = true;
-      },
-    );
+    void body.then(settled, settled);
     try {
       await Promise.race([unwinding.promise, body]);
-      expect(settled).toBe(false);
+      expect(settled).not.toHaveBeenCalled();
       expect(database.db.isOpen).toBe(true);
       release.resolve();
       await expect(body).rejects.toBe(failure);

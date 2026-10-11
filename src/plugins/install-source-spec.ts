@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { parseRegistryNpmSpec } from "../infra/npm-registry-spec.js";
 import { shortenHomePath } from "../utils.js";
 import type { BundledPluginSource } from "./bundled-sources.js";
@@ -10,7 +9,7 @@ export function resolveFileNpmSpecToLocalPath(
   raw: string,
 ): { ok: true; path: string } | { ok: false; error: string } | null {
   const trimmed = raw.trim();
-  if (!normalizeLowercaseStringOrEmpty(trimmed).startsWith("file:")) {
+  if (!trimmed.toLowerCase().startsWith("file:")) {
     return null;
   }
   const rest = trimmed.slice("file:".length);
@@ -34,7 +33,7 @@ export function resolveFileNpmSpecToLocalPath(
 
 export function parseNpmPrefixSpec(raw: string): string | null {
   const trimmed = raw.trim();
-  if (!normalizeLowercaseStringOrEmpty(trimmed).startsWith("npm:")) {
+  if (!trimmed.toLowerCase().startsWith("npm:")) {
     return null;
   }
   return trimmed.slice("npm:".length).trim();
@@ -42,7 +41,7 @@ export function parseNpmPrefixSpec(raw: string): string | null {
 
 export function parseNpmPackPrefixPath(raw: string): string | null {
   const trimmed = raw.trim();
-  if (!normalizeLowercaseStringOrEmpty(trimmed).startsWith("npm-pack:")) {
+  if (!trimmed.toLowerCase().startsWith("npm-pack:")) {
     return null;
   }
   return trimmed.slice("npm-pack:".length).trim();

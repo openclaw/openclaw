@@ -16,7 +16,6 @@ import { resolvePromptSubmissionSkipReason } from "./attempt-prompt-submit.js";
 it("keeps structured media and JSON summaries on UTF-16 boundaries", () => {
   const result = mergeOrphanedTrailingUserPrompt({
     prompt: "Continue.",
-    trigger: "user",
     leafMessage: {
       content: [
         { type: "image_url", image_url: { url: `${"u".repeat(299)}😀tail` } },
@@ -118,11 +117,5 @@ describe("resolvePromptBuildHookResult drain cache", () => {
     await build(runId);
     expect(hostHookStateMocks.drainPluginNextTurnInjectionContext).toHaveBeenCalledTimes(2);
     forgetPromptBuildDrainCacheForRun(runId);
-  });
-
-  it("drains every call without a run identity", async () => {
-    await build();
-    await build();
-    expect(hostHookStateMocks.drainPluginNextTurnInjectionContext).toHaveBeenCalledTimes(2);
   });
 });

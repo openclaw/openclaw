@@ -1,5 +1,6 @@
 // Control UI tests cover agents utils behavior.
 import { describe, expect, it } from "vitest";
+import { formatAgentRuntimeLabel } from "../../../../src/shared/agent-runtime-display.js";
 import { AVATAR_MAX_DATA_URL_CHARS } from "../../../../src/shared/avatar-limits.js";
 import {
   isRenderableControlUiAvatarUrl,
@@ -11,7 +12,6 @@ import {
   buildAgentContext,
   buildModelOptions,
   createPrimaryModelExclusion,
-  formatAgentRuntimeLabel,
   formatBytes,
   listSelectableAgents,
   normalizeAgentLabel,
@@ -513,7 +513,7 @@ describe("resolveAgentSkillsFilter", () => {
         {
           agents: {
             defaults: { skills: [" github ", "weather"] },
-            entries: { main: { default: true } },
+            entries: { main: {} },
           },
         },
         "main",
@@ -572,7 +572,7 @@ describe("buildAgentContext", () => {
               fallbacks: ["openai/gpt-5.2-codex"],
             },
           },
-          entries: { main: { default: true } },
+          entries: { main: {} },
         },
       },
       null,
@@ -591,7 +591,7 @@ describe("buildAgentContext", () => {
       {
         agents: {
           defaults: { skills: ["github", "weather"] },
-          entries: { main: { default: true } },
+          entries: { main: {} },
         },
       },
       null,

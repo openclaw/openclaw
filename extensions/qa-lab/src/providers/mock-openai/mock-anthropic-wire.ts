@@ -1,4 +1,3 @@
-// QA Lab Anthropic Messages wire conversion and response events.
 import { createHash } from "node:crypto";
 import {
   type ResponsesInputItem,
@@ -33,31 +32,15 @@ function stringifyToolResultContent(
   return "";
 }
 
-export function convertAnthropicMessagesToResponsesInput(params: {
-  system?: AnthropicMessagesRequest["system"];
-  messages: AnthropicMessage[];
-}): ResponsesInputItem[] {
+export function convertAnthropicMessagesToResponsesInput(
+  messages: AnthropicMessage[],
+): ResponsesInputItem[] {
   const items: ResponsesInputItem[] = [];
-  const systemText = normalizeAnthropicSystemToString(params.system);
-  if (systemText) {
-    items.push({
-      role: "system",
-      content: [{ type: "input_text", text: systemText }],
-    });
-  }
-  for (const message of params.messages) {
-    const content = message.content;
-    if (typeof content === "string") {
-      items.push({
-        role: message.role,
-        content: [
-          message.role === "assistant"
-            ? { type: "output_text", text: content }
-            : { type: "input_text", text: content },
-        ],
-      });
-      continue;
-    }
+  for (const message of messages) {
+    const content =
+      typeof message.content === "string"
+        ? [{ type: "text" as const, text: message.content }]
+        : message.content;
     if (!Array.isArray(content)) {
       continue;
     }
@@ -105,9 +88,7 @@ export function convertAnthropicMessagesToResponsesInput(params: {
       items.push({ role: message.role, content: [...textPieces, ...imagePieces] });
     }
     // A tool-result-only turn has no user message: it continues the active turn.
-    for (const item of [...toolUseItems, ...toolResultItems]) {
-      items.push(item);
-    }
+    items.push(...toolUseItems, ...toolResultItems);
   }
   return items;
 }
@@ -120,24 +101,11 @@ type ExtractedAssistantOutput = {
 const NATIVE_ANTHROPIC_TOOL_USE_ID_RE = /^toolu_[A-Za-z0-9_]+$/;
 const ANTHROPIC_TOOL_USE_ID_MAX_LENGTH = 64;
 
-function isNativeAnthropicToolUseId(id: string): boolean {
-  return id.length <= ANTHROPIC_TOOL_USE_ID_MAX_LENGTH && NATIVE_ANTHROPIC_TOOL_USE_ID_RE.test(id);
-}
-
 export function adaptAnthropicToolCallIds(events: StreamEvent[]): StreamEvent[] {
-  const adaptedIds = new Map<string, string>();
-  const adaptId = (id: string) => {
-    if (isNativeAnthropicToolUseId(id)) {
-      return id;
-    }
-    const existing = adaptedIds.get(id);
-    if (existing) {
-      return existing;
-    }
-    const adapted = `toolu${createHash("sha256").update(id).digest("hex").slice(0, 35)}`;
-    adaptedIds.set(id, adapted);
-    return adapted;
-  };
+  const adaptId = (id: string) =>
+    id.length <= ANTHROPIC_TOOL_USE_ID_MAX_LENGTH && NATIVE_ANTHROPIC_TOOL_USE_ID_RE.test(id)
+      ? id
+      : `toolu${createHash("sha256").update(id).digest("hex").slice(0, 35)}`;
   const adaptItem = (item: Record<string, unknown>) => {
     if (
       (item.type === "function_call" || item.type === "custom_tool_call") &&
@@ -241,6 +209,30 @@ export function buildAnthropicMessageResponse(params: {
   };
 }
 
+function buildAnthropicMessageStart(message: ReturnType<typeof buildAnthropicMessageResponse>) {
+  return {
+    type: "message_start",
+    message: {
+      ...message,
+      content: [],
+      stop_reason: null,
+      usage: { input_tokens: message.usage.input_tokens, output_tokens: 0 },
+    },
+  };
+}
+
+function buildAnthropicContentBlockEvents(
+  index: number,
+  contentBlock: Record<string, unknown>,
+  deltas: Array<Record<string, unknown>>,
+): AnthropicStreamEvent[] {
+  return [
+    { type: "content_block_start", index, content_block: contentBlock },
+    ...deltas.map((delta) => ({ type: "content_block_delta", index, delta })),
+    { type: "content_block_stop", index },
+  ];
+}
+
 export function buildAnthropicFailureResponse(failure: QaMockProviderFailure) {
   return {
     type: "error",
@@ -273,53 +265,17 @@ export function buildAnthropicThinkingErrorResponse(params: {
 export function buildAnthropicThinkingErrorStreamEvents(params: {
   model: string;
 }): AnthropicStreamEvent[] {
-  const messageId = `msg_mock_${Math.floor(Math.random() * 1_000_000).toString(16)}`;
   return [
-    {
-      type: "message_start",
-      message: {
-        id: messageId,
-        type: "message",
-        role: "assistant",
-        model: params.model || "claude-opus-4-8",
-        content: [],
-        stop_reason: null,
-        stop_sequence: null,
-        usage: {
-          input_tokens: 64,
-          output_tokens: 0,
-        },
-      },
-    },
-    {
-      type: "content_block_start",
-      index: 0,
-      content_block: {
-        type: "thinking",
-        thinking: "",
-        signature: "",
-      },
-    },
-    {
-      type: "content_block_delta",
-      index: 0,
-      delta: {
-        type: "thinking_delta",
-        thinking: QA_ANTHROPIC_THINKING_ERROR_TEXT,
-      },
-    },
-    {
-      type: "content_block_delta",
-      index: 0,
-      delta: {
-        type: "signature_delta",
-        signature: QA_ANTHROPIC_THINKING_ERROR_SIGNATURE,
-      },
-    },
-    {
-      type: "content_block_stop",
-      index: 0,
-    },
+    buildAnthropicMessageStart(
+      buildAnthropicMessageResponse({
+        model: params.model,
+        extracted: { text: "", toolCalls: [] },
+      }),
+    ),
+    ...buildAnthropicContentBlockEvents(0, { type: "thinking", thinking: "", signature: "" }, [
+      { type: "thinking_delta", thinking: QA_ANTHROPIC_THINKING_ERROR_TEXT },
+      { type: "signature_delta", signature: QA_ANTHROPIC_THINKING_ERROR_SIGNATURE },
+    ]),
     {
       type: "message_delta",
       delta: {},
@@ -342,44 +298,22 @@ export function buildAnthropicMessageStreamEvents(
   message: ReturnType<typeof buildAnthropicMessageResponse>,
   failure?: QaMockProviderFailure,
 ): AnthropicStreamEvent[] {
-  const events: AnthropicStreamEvent[] = [
-    {
-      type: "message_start",
-      message: {
-        ...message,
-        content: [],
-        stop_reason: null,
-        usage: {
-          input_tokens: message.usage.input_tokens,
-          output_tokens: 0,
-        },
-      },
-    },
-  ];
+  const events: AnthropicStreamEvent[] = [buildAnthropicMessageStart(message)];
   for (const [index, block] of message.content.entries()) {
-    events.push({
-      type: "content_block_start",
-      index,
-      content_block: {
-        ...block,
-        ...(block.type === "text" ? { text: "" } : { input: {} }),
-      },
-    });
     const delta = block.type === "text" ? block.text : JSON.stringify(block.input);
-    if (delta) {
-      events.push({
-        type: "content_block_delta",
+    events.push(
+      ...buildAnthropicContentBlockEvents(
         index,
-        delta:
-          block.type === "text"
-            ? { type: "text_delta", text: delta }
-            : { type: "input_json_delta", partial_json: delta },
-      });
-    }
-    events.push({
-      type: "content_block_stop",
-      index,
-    });
+        { ...block, ...(block.type === "text" ? { text: "" } : { input: {} }) },
+        delta
+          ? [
+              block.type === "text"
+                ? { type: "text_delta", text: delta }
+                : { type: "input_json_delta", partial_json: delta },
+            ]
+          : [],
+      ),
+    );
   }
   if (failure) {
     events.push(buildAnthropicFailureResponse(failure));

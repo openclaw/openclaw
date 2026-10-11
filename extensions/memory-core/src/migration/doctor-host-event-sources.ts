@@ -30,6 +30,14 @@ export type ReadyLegacyMemoryHostEventSource = Extract<
   { kind: "ready" }
 >;
 
+function legacyMemoryHostEventPatterns(relativePath: string) {
+  const baseName = path.basename(relativePath).replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+  return {
+    archivePattern: new RegExp(`^${baseName}\\.migrated(?:\\.([2-9]|[1-9][0-9]+))?$`, "u"),
+    claimPattern: new RegExp(`^\\.${baseName}\\.doctor-importing(?:\\.([2-9]|[1-9][0-9]+))?$`, "u"),
+  };
+}
+
 export function memoryHostWorkspacePrefix(workspaceDir: string): string {
   return crypto
     .createHash("sha256")
@@ -64,12 +72,7 @@ export async function collectLegacyMemoryHostEventSources(
       filePath = resolveMemoryHostEventLogPath(canonicalWorkspaceDir);
       const relativePath = path.relative(canonicalWorkspaceDir, filePath);
       const directoryRelativePath = path.dirname(relativePath);
-      const baseName = path.basename(relativePath).replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
-      const archivePattern = new RegExp(`^${baseName}\\.migrated(?:\\.([2-9]|[1-9][0-9]+))?$`, "u");
-      const claimPattern = new RegExp(
-        `^\\.${baseName}\\.doctor-importing(?:\\.([2-9]|[1-9][0-9]+))?$`,
-        "u",
-      );
+      const { archivePattern, claimPattern } = legacyMemoryHostEventPatterns(relativePath);
       // Discover names before containment checks: shared notes without legacy
       // events need no repair. Each actual source still goes through guarded stat/read.
       const entries = await fs.readdir(path.join(workspaceRoot.rootReal, directoryRelativePath));
@@ -84,13 +87,13 @@ export async function collectLegacyMemoryHostEventSources(
           continue;
         }
         const claim = claimPattern.exec(entry);
-        if (claim) {
-          candidates.push({ entry, storage: "claim", generation: BigInt(claim[1] ?? "1") });
-          continue;
-        }
-        const archive = archivePattern.exec(entry);
-        if (archive) {
-          candidates.push({ entry, storage: "archive", generation: BigInt(archive[1] ?? "1") });
+        const match = claim ?? archivePattern.exec(entry);
+        if (match) {
+          candidates.push({
+            entry,
+            storage: claim ? "claim" : "archive",
+            generation: BigInt(match[1] ?? "1"),
+          });
         }
       }
       candidates.sort((left, right) => {
@@ -131,9 +134,7 @@ export async function collectLegacyMemoryHostEventSources(
       if (code === "ENOENT" || code === "ENOTDIR" || code === "not-found") {
         continue;
       }
-      if (!seenWorkspaces.has(canonicalWorkspaceDir)) {
-        seenWorkspaces.add(canonicalWorkspaceDir);
-      }
+      seenWorkspaces.add(canonicalWorkspaceDir);
       sources.push({
         kind: "rejected",
         workspaceDir: canonicalWorkspaceDir,
@@ -154,12 +155,7 @@ export async function resolveMemoryHostEventArchivePath(
     resolveMemoryHostEventLogPath(source.workspaceDir),
   );
   const directoryPath = path.join(source.root.rootReal, path.dirname(activeRelativePath));
-  const baseName = path.basename(activeRelativePath).replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
-  const archivePattern = new RegExp(`^${baseName}\\.migrated(?:\\.([2-9]|[1-9][0-9]+))?$`, "u");
-  const claimPattern = new RegExp(
-    `^\\.${baseName}\\.doctor-importing(?:\\.([2-9]|[1-9][0-9]+))?$`,
-    "u",
-  );
+  const { archivePattern, claimPattern } = legacyMemoryHostEventPatterns(activeRelativePath);
   let latestGeneration = 0n;
   for (const entry of await fs.readdir(directoryPath)) {
     const match = archivePattern.exec(entry) ?? claimPattern.exec(entry);

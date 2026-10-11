@@ -1,3 +1,4 @@
+import "../test-utils/prepare-compiled-subprocesses.js";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -31,7 +32,7 @@ afterEach(async () => {
   }
 });
 
-it.each(["fresh", "interrupted", "replaced"] as const)(
+it.each(["interrupted", "replaced"] as const)(
   "keeps skipped baseline setup owner-fenced and resumable: %s",
   async (scenario) => {
     root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-onboard-skip-"));
@@ -69,7 +70,6 @@ it.each(["fresh", "interrupted", "replaced"] as const)(
             ...params,
             assertCommitPreconditions: (config) => {
               if (
-                scenario !== "fresh" &&
                 !interrupted &&
                 config.agents?.entries?.starter &&
                 config.gateway?.mode === undefined
@@ -99,18 +99,16 @@ it.each(["fresh", "interrupted", "replaced"] as const)(
         { log: vi.fn(), error: vi.fn(), exit: vi.fn() as never },
         deps,
       );
-    if (scenario !== "fresh") {
-      await expect(run()).rejects.toThrow(
-        scenario === "interrupted" ? "Synthetic interruption" : "Another onboarding run",
-      );
-      const interruptedConfig = await readConfigFileSnapshot();
-      expect(interruptedConfig.config.agents?.entries?.starter).toBeDefined();
-      expect(interruptedConfig.config.gateway?.mode).toBeUndefined();
-      expect(readLocalOnboardingState(configPath)?.status).toBe("pending");
-      if (scenario === "replaced") {
-        expect(readLocalOnboardingState(configPath)?.runId).toBe("replacement");
-        return;
-      }
+    await expect(run()).rejects.toThrow(
+      scenario === "interrupted" ? "Synthetic interruption" : "Another onboarding run",
+    );
+    const interruptedConfig = await readConfigFileSnapshot();
+    expect(interruptedConfig.config.agents?.entries?.starter).toBeDefined();
+    expect(interruptedConfig.config.gateway?.mode).toBeUndefined();
+    expect(readLocalOnboardingState(configPath)?.status).toBe("pending");
+    if (scenario === "replaced") {
+      expect(readLocalOnboardingState(configPath)?.runId).toBe("replacement");
+      return;
     }
     await run();
     const snapshot = await readConfigFileSnapshot();

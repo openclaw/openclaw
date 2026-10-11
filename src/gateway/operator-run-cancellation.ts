@@ -18,16 +18,9 @@ import { formatForLog } from "./ws-log.js";
 
 type OperatorRunCancellationContext = Pick<
   GatewayRequestContext,
-  | "agentRunSeq"
-  | "broadcast"
-  | "cancelRunBoundApprovals"
-  | "chatAbortControllers"
+  | keyof Parameters<typeof createChatAbortOps>[0]
   | "chatQueuedTurns"
-  | "chatRunState"
-  | "getRuntimeConfig"
   | "logGateway"
-  | "nodeSendToSession"
-  | "removeChatRun"
   | "trackExecution"
 >;
 

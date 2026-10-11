@@ -1,18 +1,12 @@
 import { embeddedAgentLog, formatErrorMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
-import type {
-  ChildState,
-  ParentState,
-  ThreadStatusRevision,
-} from "./native-subagent-monitor-types.js";
+import type { ChildState, ParentState } from "./native-subagent-monitor-types.js";
 import type { CodexNativeSubagentCompletion } from "./native-subagent-notification.js";
 import { delayForAttempt } from "./native-subagent-retry.js";
 
 type NativeSubagentRecoveryDependencies = {
   isDisposed: () => boolean;
   isRegisteredChild: (child: ChildState) => boolean;
-  currentChild: (threadId: string) => ChildState | undefined;
   parentState: (parentThreadId: string) => ParentState | undefined;
-  isRetiredParent: (state: ParentState) => boolean;
   reconcileChildState: (child: ChildState) => Promise<boolean>;
   processCompletion: (
     state: ParentState,
@@ -20,7 +14,6 @@ type NativeSubagentRecoveryDependencies = {
     completion: CodexNativeSubagentCompletion,
     eventAt: number,
   ) => Promise<void>;
-  now: () => number;
   recoveryPollDelaysMs?: readonly number[];
 };
 
@@ -29,7 +22,7 @@ export const DEFAULT_RECOVERY_POLL_DELAYS_MS = [
 ];
 
 export class CodexNativeSubagentRecoveryCoordinator {
-  private readonly threadStatusRevisions = new Map<string, ThreadStatusRevision>();
+  private readonly terminalThreads = new Map<string, string>();
   private readonly recoveryPollDelaysMs: readonly number[];
 
   constructor(private readonly dependencies: NativeSubagentRecoveryDependencies) {
@@ -37,33 +30,13 @@ export class CodexNativeSubagentRecoveryCoordinator {
       dependencies.recoveryPollDelaysMs ?? DEFAULT_RECOVERY_POLL_DELAYS_MS;
   }
 
-  hasRevision(threadId: string): boolean {
-    return this.threadStatusRevisions.has(threadId);
+  isTerminalThread(threadId: string): boolean {
+    return this.terminalThreads.has(threadId);
   }
 
-  observeRevision(threadId: string): void {
-    const revision = this.threadStatusRevisions.get(threadId);
-    if (revision) {
-      revision.value += 1;
-    }
-  }
-
-  isTerminalRevision(threadId: string): boolean {
-    return this.threadStatusRevisions.get(threadId)?.terminal === true;
-  }
-
-  markTerminalRevision(threadId: string): void {
-    const revision = this.threadStatusRevisions.get(threadId);
-    if (revision) {
-      revision.terminal = true;
-    }
-  }
-
-  seedRevision(threadId: string, parentThreadId: string): void {
-    this.threadStatusRevisions.set(
-      threadId,
-      this.threadStatusRevisions.get(threadId) ?? { value: 0, readers: 0, parentThreadId },
-    );
+  markTerminalThread(threadId: string, parentThreadId: string): void {
+    // Late spawn evidence must not regrant executable hook authority.
+    this.terminalThreads.set(threadId, parentThreadId);
   }
 
   async reconcileRegisteredChild(childState: ChildState): Promise<boolean> {
@@ -88,29 +61,11 @@ export class CodexNativeSubagentRecoveryCoordinator {
     }
   }
 
-  clearTerminalRevisionsForParent(parentThreadId: string): void {
-    for (const [threadId, revision] of this.threadStatusRevisions) {
-      if (revision.parentThreadId === parentThreadId) {
-        this.collectThreadStatusRevision(threadId, revision);
+  clearTerminalThreadsForParent(parentThreadId: string): void {
+    for (const [threadId, parent] of this.terminalThreads) {
+      if (parent === parentThreadId) {
+        this.terminalThreads.delete(threadId);
       }
-    }
-  }
-
-  collectThreadStatusRevision(
-    threadId: string,
-    revision = this.threadStatusRevisions.get(threadId),
-  ) {
-    if (!revision || revision.readers > 0 || Boolean(this.dependencies.currentChild(threadId))) {
-      return;
-    }
-    const parent = revision.parentThreadId
-      ? this.dependencies.parentState(revision.parentThreadId)
-      : undefined;
-    if (parent?.owners.size) {
-      return;
-    }
-    if (this.threadStatusRevisions.get(threadId) === revision) {
-      this.threadStatusRevisions.delete(threadId);
     }
   }
 
@@ -145,7 +100,7 @@ export class CodexNativeSubagentRecoveryCoordinator {
               state,
               childState,
               fallback,
-              fallback.completedAt ?? this.dependencies.now(),
+              fallback.completedAt ?? Date.now(),
             );
             return;
           }
@@ -184,34 +139,9 @@ export class CodexNativeSubagentRecoveryCoordinator {
     childState.fallbackCompletion = undefined;
   }
 
-  retainThreadStatusRevision(threadId: string): {
-    isCurrent: () => boolean;
-    release: () => void;
-  } {
-    const revision = this.threadStatusRevisions.get(threadId) ?? { value: 0, readers: 0 };
-    this.threadStatusRevisions.set(threadId, revision);
-    revision.readers += 1;
-    const capturedValue = revision.value;
-    let retained = true;
-    return {
-      isCurrent: () =>
-        this.threadStatusRevisions.get(threadId) === revision && revision.value === capturedValue,
-      release: () => {
-        if (!retained) {
-          return;
-        }
-        retained = false;
-        revision.readers -= 1;
-        this.collectThreadStatusRevision(threadId, revision);
-      },
-    };
-  }
-
   clearRecoveryTimers(childState: ChildState): void {
-    if (childState.recoveryTimer) {
-      clearTimeout(childState.recoveryTimer);
-      childState.recoveryTimer = undefined;
-    }
+    clearTimeout(childState.recoveryTimer);
+    childState.recoveryTimer = undefined;
   }
 }
 

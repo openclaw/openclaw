@@ -39,22 +39,7 @@ type SearchProviderEntryWithInstall = PluginWebSearchProviderEntry & {
   [SEARCH_INSTALL_CATALOG_ENTRY]?: WebSearchInstallCatalogEntry;
 };
 
-function resolveSearchProviderCredentialLabel(
-  entry: Pick<PluginWebSearchProviderEntry, "label" | "credentialLabel" | "requiresCredential">,
-): string {
-  if (entry.requiresCredential === false) {
-    return `${entry.label} setup`;
-  }
-  return normalizeOptionalString(entry.credentialLabel) || `${entry.label} API key`;
-}
-
 export { resolveSearchProviderOptions as listSearchProviderOptions };
-
-function showsSearchProviderInSetup(
-  entry: Pick<PluginWebSearchProviderEntry, "onboardingScopes">,
-): boolean {
-  return entry.onboardingScopes?.includes("text-inference") ?? false;
-}
 
 export function resolveSearchProviderOptions(
   config?: OpenClawConfig,
@@ -87,7 +72,7 @@ export function resolveSearchProviderOptions(
     );
   const providers = sortPluginEntriesById([...runtimeProviders, ...installCatalogProviders]);
   return providers
-    .filter(showsSearchProviderInSetup)
+    .filter((entry) => entry.onboardingScopes?.includes("text-inference") ?? false)
     .toSorted(
       (left, right) => left.label.localeCompare(right.label) || left.id.localeCompare(right.id),
     );
@@ -111,20 +96,6 @@ function defaultModelUsesCodexRuntime(config: OpenClawConfig): boolean {
   );
 }
 
-function prioritizeSearchProvider(
-  providers: readonly PluginWebSearchProviderEntry[],
-  preferredProvider: string | undefined,
-): PluginWebSearchProviderEntry[] {
-  if (!preferredProvider) {
-    return [...providers];
-  }
-  const preferred = providers.find((provider) => provider.id === preferredProvider);
-  if (!preferred) {
-    return [...providers];
-  }
-  return [preferred, ...providers.filter((provider) => provider.id !== preferredProvider)];
-}
-
 function resolveSearchProviderEntry(
   config: OpenClawConfig,
   provider: SearchProvider,
@@ -136,16 +107,6 @@ export function hasKeyInEnv(entry: Pick<PluginWebSearchProviderEntry, "envVars">
   return entry.envVars.some((k) => Boolean(normalizeOptionalString(process.env[k])));
 }
 
-function providerNeedsCredential(
-  entry: Pick<PluginWebSearchProviderEntry, "requiresCredential">,
-): boolean {
-  return entry.requiresCredential !== false;
-}
-
-function formatAuthProviderLabel(providerId: string): string {
-  return providerId === "xai" ? "xAI" : providerId;
-}
-
 function providerIsReady(
   config: OpenClawConfig,
   entry: Pick<
@@ -153,7 +114,7 @@ function providerIsReady(
     "id" | "authProviderId" | "envVars" | "requiresCredential"
   >,
 ): boolean {
-  if (!providerNeedsCredential(entry)) {
+  if (entry.requiresCredential === false) {
     return true;
   }
   if (
@@ -166,11 +127,6 @@ function providerIsReady(
     return true;
   }
   return hasExistingKey(config, entry.id) || hasKeyInEnv(entry);
-}
-
-function formatSearchProviderOptionLabel(label: string, note: string): string {
-  const normalizedNote = normalizeOptionalString(note);
-  return normalizedNote ? `${label} (${normalizedNote})` : label;
 }
 
 function rawKeyValue(config: OpenClawConfig, provider: SearchProvider): unknown {
@@ -204,24 +160,6 @@ function buildSearchEnvRef(config: OpenClawConfig, provider: SearchProvider): Se
   return { source: "env", provider: DEFAULT_SECRET_PROVIDER_ALIAS, id: resolvedEnvVar };
 }
 
-export function applySearchKey(
-  config: OpenClawConfig,
-  provider: SearchProvider,
-  key: SecretInput,
-): OpenClawConfig {
-  const providerEntry = resolveSearchProviderEntry(config, provider);
-  if (!providerEntry) {
-    return config;
-  }
-  const next = applySearchProviderSelectionConfig(config, providerEntry, {
-    ...config.tools?.web?.search,
-    provider,
-    enabled: true,
-  });
-  providerEntry.setConfiguredCredentialValue?.(next, key);
-  return next;
-}
-
 function applySearchProviderSelectionConfig(
   config: OpenClawConfig,
   providerEntry: Pick<PluginWebSearchProviderEntry, "pluginId" | "applySelectionConfig">,
@@ -243,19 +181,24 @@ function applySearchProviderSelectionConfig(
   return next;
 }
 
-export function applySearchProviderSelection(
+function applySearchProviderSelection(
   config: OpenClawConfig,
   provider: SearchProvider,
+  key?: SecretInput,
 ): OpenClawConfig {
   const providerEntry = resolveSearchProviderEntry(config, provider);
   if (!providerEntry) {
     return config;
   }
-  return applySearchProviderSelectionConfig(config, providerEntry, {
+  const next = applySearchProviderSelectionConfig(config, providerEntry, {
     ...config.tools?.web?.search,
     provider,
     enabled: true,
   });
+  if (key !== undefined) {
+    providerEntry.setConfiguredCredentialValue?.(next, key);
+  }
+  return next;
 }
 
 function preserveDisabledState(original: OpenClawConfig, result: OpenClawConfig): OpenClawConfig {
@@ -421,10 +364,12 @@ export async function runSearchSetupFlow(
   const codexRecommended =
     defaultModelUsesCodexRuntime(config) &&
     availableProviderOptions.some((entry) => entry.id === CODEX_HOSTED_SEARCH_PROVIDER_ID);
-  const providerOptions = prioritizeSearchProvider(
-    availableProviderOptions,
-    codexRecommended ? CODEX_HOSTED_SEARCH_PROVIDER_ID : undefined,
-  );
+  const preferred = codexRecommended
+    ? availableProviderOptions.find((entry) => entry.id === CODEX_HOSTED_SEARCH_PROVIDER_ID)
+    : undefined;
+  const providerOptions = preferred
+    ? [preferred, ...availableProviderOptions.filter((entry) => entry.id !== preferred.id)]
+    : [...availableProviderOptions];
   if (providerOptions.length === 0) {
     await prompter.note(
       [
@@ -480,7 +425,7 @@ export async function runSearchSetupFlow(
       return autoDetected.id;
     }
     const detected = providerOptions.find(
-      (entry) => providerNeedsCredential(entry) && providerIsReady(config, entry),
+      (entry) => entry.requiresCredential !== false && providerIsReady(config, entry),
     );
     if (detected) {
       return detected.id;
@@ -499,8 +444,10 @@ export async function runSearchSetupFlow(
               // URL); a generic "API key required" suffix contradicts the hint.
               t("wizard.search.credentialRequired", { label: entry.credentialLabel })
             : t("wizard.search.apiKeyRequired");
-    const hint = [normalizeOptionalString(entry.hint), credentialHint].filter(Boolean).join(" · ");
-    return { value: entry.id, label: formatSearchProviderOptionLabel(entry.label, hint) };
+    const hint = normalizeOptionalString(
+      [normalizeOptionalString(entry.hint), credentialHint].filter(Boolean).join(" · "),
+    );
+    return { value: entry.id, label: hint ? `${entry.label} (${hint})` : entry.label };
   });
 
   const choice = await prompter.select({
@@ -559,7 +506,10 @@ export async function runSearchSetupFlow(
       prompter,
       opts,
     });
-  const credentialLabel = resolveSearchProviderCredentialLabel(entry);
+  const credentialLabel =
+    entry.requiresCredential === false
+      ? `${entry.label} setup`
+      : normalizeOptionalString(entry.credentialLabel) || `${entry.label} API key`;
   const existingKey = resolveExistingKey(config, choice);
   const keyConfigured = hasExistingKey(config, choice);
   const envAvailable = hasKeyInEnv(entry);
@@ -576,16 +526,12 @@ export async function runSearchSetupFlow(
           type: "oauth",
         })
       : false;
-  const needsCredential = providerNeedsCredential(entry);
-
   if (opts?.quickstartDefaults && (providerAuthProfileAvailable || keyConfigured || envAvailable)) {
-    const result = existingKey
-      ? applySearchKey(config, choice, existingKey)
-      : applySearchProviderSelection(config, choice);
+    const result = applySearchProviderSelection(config, choice, existingKey || undefined);
     return await finalizeSelection(result);
   }
 
-  if (!needsCredential) {
+  if (entry.requiresCredential === false) {
     await prompter.note(
       [
         `${entry.label} works without an API key.`,
@@ -601,25 +547,16 @@ export async function runSearchSetupFlow(
     await prompter.note(entry.credentialNote, entry.label);
   }
 
-  if (oauthAuthProfileAvailable && authProviderId) {
-    const authProviderLabel = formatAuthProviderLabel(authProviderId);
-    await prompter.note(
-      [
-        `${entry.label} can use your existing ${authProviderLabel} OAuth sign-in for web_search.`,
-        "No separate API key is required; API-key auth remains available as a fallback.",
-        `Docs: ${entry.docsUrl ?? WEB_SEARCH_DOCS_URL}`,
-      ].join("\n"),
-      "Web search",
-    );
-    return await finalizeSelection(applySearchProviderSelection(config, choice));
-  }
-
   if (providerAuthProfileAvailable && authProviderId) {
-    const authProviderLabel = formatAuthProviderLabel(authProviderId);
+    const authProviderLabel = authProviderId === "xai" ? "xAI" : authProviderId;
     await prompter.note(
       [
-        `${entry.label} can use your existing ${authProviderLabel} auth profile for web_search.`,
-        "No separate web-search key is required; API-key auth remains available as a fallback.",
+        oauthAuthProfileAvailable
+          ? `${entry.label} can use your existing ${authProviderLabel} OAuth sign-in for web_search.`
+          : `${entry.label} can use your existing ${authProviderLabel} auth profile for web_search.`,
+        oauthAuthProfileAvailable
+          ? "No separate API key is required; API-key auth remains available as a fallback."
+          : "No separate web-search key is required; API-key auth remains available as a fallback.",
         `Docs: ${entry.docsUrl ?? WEB_SEARCH_DOCS_URL}`,
       ].join("\n"),
       "Web search",
@@ -642,7 +579,7 @@ export async function runSearchSetupFlow(
       ].join("\n"),
       "Web search",
     );
-    return await finalizeSelection(applySearchKey(config, choice, ref));
+    return await finalizeSelection(applySearchProviderSelection(config, choice, ref));
   }
 
   const keyInput = await prompter.text({
@@ -657,11 +594,11 @@ export async function runSearchSetupFlow(
 
   const key = normalizeOptionalString(keyInput) ?? "";
   if (key) {
-    return await finalizeSelection(applySearchKey(config, choice, key));
+    return await finalizeSelection(applySearchProviderSelection(config, choice, key));
   }
 
   if (existingKey) {
-    return await finalizeSelection(applySearchKey(config, choice, existingKey));
+    return await finalizeSelection(applySearchProviderSelection(config, choice, existingKey));
   }
 
   if (keyConfigured || envAvailable) {

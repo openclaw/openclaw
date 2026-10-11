@@ -27,9 +27,10 @@ import { initializeSessionReadContext } from "../../gateway/server-methods/sessi
 import { createSyntheticPluginRuntimeClient } from "../../gateway/server-plugin-runtime-client.js";
 import { resolveGatewayScopedTools } from "../../gateway/tool-resolution.js";
 import { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
-import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
+import { closeOpenClawStateDatabaseByPathAsync } from "../../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { unlinkUserChannelIdentity } from "../../state/user-channel-identities.js";
-import { setUserProfileRole } from "../../state/user-profiles.js";
+import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
 import { withAdminIngress } from "./operator-authority.test-support.js";
 
 type Fixture = Parameters<Parameters<typeof withAdminIngress>[0]>[0];
@@ -37,14 +38,15 @@ const humanSessionKey = "agent:main:dashboard:human-created";
 const spawnedSessionKey = "agent:main:dashboard:agent-created";
 const revokedMessage = "Channel operator authority changed; send a new request.";
 
-async function prepareAssignment(fixture: Fixture, turn: MsgContext) {
+async function prepareAssignment(fixture: Fixture, turn: MsgContext, nativeAgent = false) {
   const { cfg, state, gateway, admins } = fixture;
   const sessionKey = turn.SessionKey!;
   const scope = (key: string) => ({ agentId: "main", sessionKey: key, env: state.env });
   await upsertSessionEntryCore(scope(sessionKey), {
-    sessionId: "slack-requester",
+    sessionId: "channel-requester",
     updatedAt: 1,
     visibility: "shared",
+    createdActor: { type: "agent", id: "main" },
   });
   await upsertSessionEntryCore(scope(humanSessionKey), {
     sessionId: "human-created",
@@ -67,10 +69,10 @@ async function prepareAssignment(fixture: Fixture, turn: MsgContext) {
   await initializeSessionReadContext(gateway);
   const prepared = prepareChannelRunAdmission({
     cfg,
-    runId: "slack-assignment",
+    runId: "channel-assignment",
     agentId: "main",
     ingressKind: "channel",
-    boundary: "slack",
+    boundary: turn.Provider!,
     assertSourceCurrent: captureCommandOwnerAssertion(turn),
     operatorAuthority: prepareInternalGetReplyOptions(undefined, turn)?.operatorAuthority,
   });
@@ -81,19 +83,23 @@ async function prepareAssignment(fixture: Fixture, turn: MsgContext) {
     ctx: turn,
     commandAuthorized: true,
   });
-  const tools = resolveGatewayScopedTools({
-    cfg,
-    sessionKey,
-    messageProvider: "slack",
-    senderIsOwner,
-    surface: "loopback",
-  }).tools;
+  const tools = (
+    await resolveGatewayScopedTools({
+      cfg,
+      sessionKey,
+      messageProvider: turn.Provider,
+      senderIsOwner,
+      surface: "loopback",
+      admittedRunContext: admitted,
+    })
+  ).tools;
   const run = <T>(action: () => Promise<T>) =>
     withPluginRuntimeGatewayRequestScope(
       {
         context: gateway,
-        // Native plugin work retains its profileless caller, not a standalone System grant.
-        client: createSyntheticPluginRuntimeClient(),
+        // Native agent tools use their admitted Gateway binding. Plugin invocations
+        // retain the separate profileless client and its narrower permissions.
+        client: nativeAgent ? null : createSyntheticPluginRuntimeClient(),
         isWebchatConnect: () => false,
       },
       () =>
@@ -124,57 +130,100 @@ async function prepareAssignment(fixture: Fixture, turn: MsgContext) {
 }
 
 export function registerOperatorAssignmentTests() {
-  it("assigns another human's visible session and an agent-created session as the linked Slack admin", async () => {
-    await withAdminIngress(
-      async (fixture) => {
-        const turn = await fixture.context(fixture.admins[0]!.identity.senderId);
-        const metadata = JSON.parse(
-          buildInboundUserContextPrefix(turn).match(/```json\n([\s\S]*?)\n```/)![1]!,
-        );
-        const assignment = await prepareAssignment(fixture, turn);
-        try {
-          // The router must authorize another visible session before the mutation handler runs.
-          expect(
-            (await assignment.assign(humanSessionKey, metadata.requester_profile.id)).details,
-          ).toMatchObject({
-            status: "updated",
-            owner: { type: "human", id: fixture.admins[0]!.profile.id },
-          });
-          await assignment.run(() =>
-            callInProcessGatewayToolWithCreation(
-              "sessions.create",
-              { key: spawnedSessionKey, agentId: "main", visibility: "shared" },
-              {
-                via: "spawn",
-                actor: { type: "agent", id: "main" },
-                requesterSessionKey: turn.SessionKey,
-              },
-            ),
+  it.each([
+    { channel: "slack", role: "admin" },
+    { channel: "discord", role: "member" },
+  ] as const)(
+    "assigns visible and newly created sessions to the linked $channel $role",
+    async ({ channel, role }) => {
+      await withAdminIngress(
+        async (fixture) => {
+          setUserProfileRole(fixture.admins[0]!.profile.id, role);
+          const turn = await fixture.context(fixture.admins[0]!.identity.senderId);
+          const metadata = JSON.parse(
+            buildInboundUserContextPrefix(turn).match(/```json\n([\s\S]*?)\n```/)![1]!,
           );
-          expect(loadSessionEntry(assignment.scope(spawnedSessionKey))).toMatchObject({
-            createdVia: "spawn",
-            createdActor: { type: "agent", id: "main" },
-          });
-          expect(
-            (await assignment.assign(spawnedSessionKey, metadata.requester_profile.id)).details,
-          ).toMatchObject({
-            status: "updated",
-            owner: { type: "human", id: fixture.admins[0]!.profile.id },
-          });
-          for (const key of [humanSessionKey, spawnedSessionKey]) {
-            expect(loadSessionEntry(assignment.scope(key))?.owner?.actor).toEqual({
-              type: "human",
-              id: metadata.requester_profile.id,
+          const assignment = await prepareAssignment(fixture, turn, channel === "discord");
+          try {
+            if (role === "member") {
+              expect(assignment.operatorAuthority).toBeUndefined();
+              const tool = assignment.tools.find((entry) => entry.name === "sessions")!;
+              expect(tool.parameters).toHaveProperty("properties.action.enum", ["assign_owner"]);
+              await expect(
+                assignment.run(() =>
+                  tool.execute("deny-settings", { action: "patch", label: "forbidden" }),
+                ),
+              ).rejects.toThrow("Only assign_owner");
+            }
+            // The router must authorize another visible session before the mutation handler runs.
+            if (role === "admin") {
+              expect(
+                (await assignment.assign(humanSessionKey, metadata.requester_profile.id)).details,
+              ).toMatchObject({
+                status: "updated",
+                owner: { type: "human", id: fixture.admins[0]!.profile.id },
+              });
+            }
+            await assignment.run(() =>
+              callInProcessGatewayToolWithCreation(
+                "sessions.create",
+                {
+                  key: spawnedSessionKey,
+                  agentId: "main",
+                  visibility: "shared",
+                  parentSessionKey: turn.SessionKey,
+                  spawnDepth: 1,
+                },
+                {
+                  via: "spawn",
+                  actor: { type: "agent", id: "main" },
+                  requesterSessionKey: turn.SessionKey,
+                  inheritedToolPolicy: { version: 1, allow: [], deny: [] },
+                },
+              ),
+            );
+            expect(loadSessionEntry(assignment.scope(spawnedSessionKey))).toMatchObject({
+              createdVia: "spawn",
+              createdActor: { type: "agent", id: "main" },
+              owner: { actor: { type: "agent", id: "main" } },
             });
+            expect(
+              (await assignment.assign(spawnedSessionKey, metadata.requester_profile.id)).details,
+            ).toMatchObject({
+              status: "updated",
+              owner: { type: "human", id: fixture.admins[0]!.profile.id },
+            });
+            const listed = await assignment.run(async () => {
+              const tool = assignment.tools.find((entry) => entry.name === "sessions_list")!;
+              expect(tool).toBeDefined();
+              return await tool.execute("read-owner", { search: spawnedSessionKey });
+            });
+            expect(listed.details).toMatchObject({
+              sessions: [
+                {
+                  key: spawnedSessionKey,
+                  createdActor: { type: "agent", id: "main" },
+                  owner: { actor: { type: "human", id: metadata.requester_profile.id } },
+                },
+              ],
+            });
+            for (const key of role === "admin"
+              ? [humanSessionKey, spawnedSessionKey]
+              : [spawnedSessionKey]) {
+              expect(loadSessionEntry(assignment.scope(key))?.owner?.actor).toEqual({
+                type: "human",
+                id: metadata.requester_profile.id,
+              });
+            }
+          } finally {
+            assignment.prepared.close();
           }
-        } finally {
-          assignment.prepared.close();
-        }
-      },
-      "role",
-      "slack",
-    );
-  });
+        },
+        "role",
+        channel,
+      );
+    },
+  );
 
   it.each(["unlink", "role", "lifecycle", "gateway", "database", "stale-copy"] as const)(
     "rejects a retained Slack assignment after its %s authority changes",
@@ -196,7 +245,9 @@ export function registerOperatorAssignmentTests() {
             } else if (change === "gateway") {
               fixture.replaceGatewayContext();
             } else if (change === "database") {
-              await closeOpenClawStateDatabaseAsync();
+              await closeOpenClawStateDatabaseByPathAsync(
+                resolveOpenClawStateSqlitePath(fixture.state.env),
+              );
             }
             await expect(assignment.assign()).rejects.toThrow(revokedMessage);
             expect(loadSessionEntry(assignment.scope(humanSessionKey))?.owner).toBeUndefined();
@@ -288,8 +339,12 @@ export function registerOperatorAssignmentTests() {
         const assignment = await prepareAssignment(fixture, turn);
         try {
           expect(assignment.operatorAuthority).toBeUndefined();
-          expect(assignment.tools.some((tool) => tool.name === "sessions")).toBe(configuredOwner);
-          // Missing tools are the first boundary; dispatch independently remains closed.
+          const tool = assignment.tools.find((entry) => entry.name === "sessions");
+          expect(tool).toBeDefined();
+          if (!configuredOwner) {
+            expect(tool!.parameters).toHaveProperty("properties.action.enum", ["assign_owner"]);
+          }
+          // An admitted agent may assign responsibility, but a bare RPC has no agent caller.
           await expect(
             assignment.run(() =>
               callInProcessGatewayTool("sessions.assignOwner", {

@@ -11,6 +11,7 @@ import {
   sessionsListResponse,
 } from "./session-management.test-support.ts";
 import { waitForSettledFormControls } from "./settle.test-support.ts";
+import { openHomeFullPage } from "./sidebar-navigation.test-support.ts";
 
 const suite = createSessionManagementE2eSuite();
 
@@ -41,7 +42,7 @@ suite.define(() => {
 
     try {
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, mainKey));
-      const homeRow = page.locator(".nav-item--home");
+      const homeRow = page.locator(".sidebar-footer-bar__home");
       const secondRow = page.locator(`[data-session-key="${secondKey}"]`);
       const composer = page.locator(
         'openclaw-chat-pane[aria-hidden="false"] .agent-chat__composer-combobox > textarea',
@@ -51,6 +52,8 @@ suite.define(() => {
       await composer.waitFor({ state: "visible" });
       await captureUiProof(suite, page, "draft-indicator-before.png");
 
+      const homeBox = await homeRow.boundingBox();
+      const restingActivity = await homeRow.getByRole("img", { name: "Active run" }).boundingBox();
       await composer.fill("Keep this unsent");
       const activity = homeRow.getByRole("img", { name: "Active run" });
       const draft = homeRow.getByRole("img", { name: "Unsent draft" });
@@ -58,17 +61,32 @@ suite.define(() => {
       await draft.waitFor();
       const activityBox = await activity.boundingBox();
       const draftBox = await draft.boundingBox();
-      if (!activityBox || !draftBox) {
+      if (!activityBox || !draftBox || !homeBox || !restingActivity) {
         throw new Error("expected activity and draft icon bounds");
       }
-      expect(draftBox.x).toBeGreaterThanOrEqual(activityBox.x + activityBox.width);
+      // The compact badge overlays the corner, not the centered run glyph.
+      expect(activityBox.x + activityBox.width / 2).toBeCloseTo(
+        restingActivity.x + restingActivity.width / 2,
+        1,
+      );
+      expect(activityBox.y + activityBox.height / 2).toBeCloseTo(
+        restingActivity.y + restingActivity.height / 2,
+        1,
+      );
+      expect(draftBox.x).toBeGreaterThanOrEqual(homeBox.x);
+      expect(draftBox.x + draftBox.width).toBeLessThanOrEqual(homeBox.x + homeBox.width);
+      expect(draftBox.y + draftBox.height).toBeLessThanOrEqual(homeBox.y + homeBox.height);
+      expect(
+        draftBox.x > activityBox.x + activityBox.width / 2 ||
+          draftBox.y > activityBox.y + activityBox.height / 2,
+      ).toBe(true);
       await captureUiProof(suite, page, "draft-indicator-active.png");
 
       await secondRow.getByRole("link").click();
       await expect.poll(() => new URL(page.url()).pathname).toBe(controlUiSessionPath(secondKey));
       await draft.waitFor();
 
-      await homeRow.click();
+      await openHomeFullPage(page);
       await waitForControlUiRoute(page, {
         pathname: controlUiSessionPath(mainKey),
         routeId: "chat",
@@ -87,6 +105,11 @@ suite.define(() => {
       await composer.fill("");
       await waitForSettledFormControls(page, [{ locator: composer, value: "" }]);
       await expect.poll(() => draft.count()).toBe(0);
+      // Opening Home collapses the desktop list while keeping the rail available.
+      await page
+        .locator(".sidebar-rail")
+        .getByRole("button", { name: "Sessions", exact: true })
+        .click();
       await secondRow.getByRole("link").click();
       await expect.poll(() => new URL(page.url()).pathname).toBe(controlUiSessionPath(secondKey));
       await expect.poll(() => draft.count()).toBe(0);

@@ -1,6 +1,5 @@
 #!/usr/bin/env node
 
-// Reproduces memory-search file descriptor retention with a synthetic workspace.
 import { spawnSync, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import net from "node:net";
@@ -52,9 +51,6 @@ const DEFAULT_FILE_COUNT = 512;
 const DEFAULT_MAX_WORKSPACE_REG_FDS = process.platform === "darwin" ? 8 : 64;
 const GATEWAY_READY_OUTPUT_MAX_CHARS = 128 * 1024;
 const MEMORY_SEARCH_RESPONSE_MAX_BYTES = 256 * 1024;
-/**
- * Probe query expected to hit the synthetic top-level memory file.
- */
 const MEMORY_SEARCH_PROBE_QUERY = "Top-level memory file";
 
 const SKIP_GATEWAY_ENV = {
@@ -252,8 +248,8 @@ function logStep(message: string) {
   console.log(`[memory-fd-repro] ${message}`);
 }
 
-async function getFreePort() {
-  return await new Promise<number>((resolve, reject) => {
+function getFreePort() {
+  return new Promise<number>((resolve, reject) => {
     const server = net.createServer();
     server.unref();
     server.on("error", reject);
@@ -315,7 +311,6 @@ export function writeConfig({ homeDir, workspaceDir, port, token }: ConfigOption
       },
       entries: {
         main: {
-          default: true,
           tools: { allow: ["memory_search"] },
         },
       },
@@ -379,7 +374,7 @@ export function updateGatewayReadyOutputState(
 ) {
   const combined = `${state.tail ?? ""}${chunk}`;
   return {
-    tail: combined.length > maxChars ? combined.slice(-maxChars) : combined,
+    tail: formatTail(combined, maxChars),
     readySeen: state.readySeen || combined.includes("[gateway] ready"),
   };
 }
@@ -523,19 +518,21 @@ export function classifyMemorySearchInvokeResponse({
   status,
   bodyText,
 }: InvokeResponseOptions) {
-  const parsedBody = safeParseJson(bodyText);
-  const body = asRecord(parsedBody);
-  if (!httpOk) {
+  const body = asRecord(safeParseJson(bodyText));
+  const gatewayOk = body?.ok === true ? true : body?.ok === false ? false : undefined;
+  if (!httpOk || gatewayOk === false) {
     const errorRecord = asRecord(body?.error);
     return {
       ok: false,
       httpOk,
       status,
-      gatewayOk: body?.ok === true ? true : body?.ok === false ? false : undefined,
+      gatewayOk,
       error:
         readNonBlankString(errorRecord?.message) ??
         readNonBlankString(body?.error) ??
-        `memory_search HTTP request failed with status ${status}`,
+        (!httpOk
+          ? `memory_search HTTP request failed with status ${status}`
+          : "memory_search gateway invocation failed"),
     };
   }
   if (!body) {
@@ -544,21 +541,6 @@ export function classifyMemorySearchInvokeResponse({
       httpOk,
       status,
       error: "memory_search response was not JSON",
-    };
-  }
-
-  const gatewayOk = body.ok === true ? true : body.ok === false ? false : undefined;
-  if (gatewayOk === false) {
-    const errorRecord = asRecord(body.error);
-    return {
-      ok: false,
-      httpOk,
-      status,
-      gatewayOk,
-      error:
-        readNonBlankString(errorRecord?.message) ??
-        readNonBlankString(body.error) ??
-        "memory_search gateway invocation failed",
     };
   }
 
@@ -930,12 +912,7 @@ async function main() {
   }
 }
 
-function isMainModule() {
-  const entrypoint = process.argv[1];
-  return Boolean(entrypoint && import.meta.url === pathToFileURL(path.resolve(entrypoint)).href);
-}
-
-if (isMainModule()) {
+if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
   main().catch((error: unknown) => {
     console.error(
       `[memory-fd-repro] failed: ${error instanceof Error ? error.message : String(error)}`,
