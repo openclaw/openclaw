@@ -93,6 +93,21 @@ describe("redactSensitiveText token ordering", () => {
     expect(redactSensitiveText(dataUrl, { mode: "tools" })).toBe(dataUrl);
   });
 
+  it("does not mask AWS-shaped segments glued into file paths", () => {
+    // The middle run "openclaw/workspace/tmp/iterant/LangWatch" is exactly 40 AWS-alphabet chars.
+    const filePath = "/root/.openclaw/workspace/tmp/iterant/LangWatch-Iterant-pack.zip";
+    for (const text of [`MEDIA:${filePath}`, `scp host:${filePath} ~/Downloads/`]) {
+      expect(redactSensitiveText(text, { mode: "tools" })).toBe(text);
+    }
+  });
+
+  it("still masks a bare AWS-shaped key followed by punctuation", () => {
+    const secret = fakeAwsCredentialWithPadding();
+    for (const text of [`the key is ${secret}.`, `the key is ${secret}-- rotate it`]) {
+      expect(redactSensitiveText(text, { mode: "tools" })).not.toContain(secret);
+    }
+  });
+
   it("masks encoded AWS secret access key aliases", () => {
     const secret = fakeAwsCredentialWithPadding();
     const output = redactSensitiveText(

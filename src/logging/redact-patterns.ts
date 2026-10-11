@@ -156,8 +156,10 @@ function* matchAwsSecretAccessKeys(text: string): Iterable<RedactMatch> {
           context.authorityEnd > run.origin &&
           run.end > context.authorityEnd &&
           after === "@";
+        // "_" glues the run into an identifier. A leading "." makes it a dot-folder path
+        // segment, such as "/root/.openclaw/workspace/tmp/iterant/LangWatch-pack.zip".
         if (
-          (!slashCredential && (before === "_" || isAwsValueCharacter(before))) ||
+          (!slashCredential && (before === "_" || before === "." || isAwsValueCharacter(before))) ||
           after === "_" ||
           text.slice(run.origin - 8, run.origin) === ";base64," ||
           (publicUrl && !portCredential && run.start >= context.start && run.end <= context.end)
