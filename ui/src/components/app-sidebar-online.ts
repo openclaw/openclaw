@@ -66,9 +66,6 @@ export function renderAppSidebarOnline(host: AppSidebarRenderHost) {
     sortMode: host.people.sortMode,
     statusFilter: host.people.statusFilter,
   });
-  if (onlineUsers.length === 0) {
-    return nothing;
-  }
   const filtered = host.people.statusFilter === "running";
   const routing = personActivityRouting(
     { basePath: host.basePath, navigate: (route, options) => host.onNavigate?.(route, options) },
