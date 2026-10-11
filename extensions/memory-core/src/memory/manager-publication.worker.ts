@@ -19,7 +19,9 @@ import {
   resolveExistingSqliteFileUri,
   requestSqliteWorkerOperationAdmission,
   readSqliteDatabasePendingWriteToken,
+  readSqliteDatabaseWriteTokenForPath,
   runSqliteImmediateTransactionSync,
+  runSqliteSingleStatementSync,
   setSqliteBusyTimeout,
   supportsNodeSqliteExtensionLoading,
   tableExists,
@@ -294,6 +296,44 @@ function createPublicationBackend(
         { withCommit: hooks.withCommit },
       ),
     );
+  const writeSingleStatement = <T>(statement: () => T): MemoryPublicationResult<T> => {
+    let entered = false;
+    let committed = false;
+    let restoredBusyTimeout = true;
+    const restoreBusyTimeout = () => {
+      if (!restoredBusyTimeout) {
+        setSqliteBusyTimeout(db, input.pragmas.busy_timeout);
+        restoredBusyTimeout = true;
+      }
+    };
+    try {
+      entered = true;
+      admit("transaction");
+      // Autocommit makes the statement the effect boundary.
+      admit("commit");
+      setSqliteBusyTimeout(db, 0);
+      restoredBusyTimeout = false;
+      let value: T;
+      try {
+        value = runSqliteSingleStatementSync(db, statement);
+      } catch (error) {
+        const nativeCode = failure(error).errcode;
+        // Lock refusal leaves no durable write, so the preparing host may retry.
+        entered = nativeCode === undefined || ![5, 6].includes(nativeCode & 0xff);
+        throw error;
+      }
+      committed = true;
+      const writeToken = readSqliteDatabaseWriteTokenForPath(databasePath);
+      restoreBusyTimeout();
+      return { ok: true, value, writeToken };
+    } catch (error) {
+      return { ok: false, error: failure(error), entered, committed };
+    } finally {
+      if (db.isOpen) {
+        restoreBusyTimeout();
+      }
+    }
+  };
   const withFacts = <T>(result: MemoryPublicationResult<T>): MemoryPublicationResult<T> =>
     result.ok ? { ...result, facts: readMemoryDatabaseFacts(db) } : result;
   const writeMeta = (value: string) => {
@@ -367,13 +407,16 @@ function createPublicationBackend(
         return readMemorySourceChunks(db, command.input.source, command.input.path);
       }
       if (command.type === "index.writeMetadata") {
-        return withFacts(write(() => writeMeta(JSON.stringify(command.input))));
+        const serialized = JSON.stringify(command.input);
+        return withFacts(writeSingleStatement(() => writeMeta(serialized)));
       }
       if (command.type === "source.state") {
         return loadMemorySourceFileState({ db, ...command.input });
       }
       if (command.type === "source.refresh") {
-        return withFacts(write(() => refreshMemorySessionSourceState(db, command.input)));
+        return withFacts(
+          writeSingleStatement(() => refreshMemorySessionSourceState(db, command.input)),
+        );
       }
       if (command.type === "session.current") {
         return hasMemorySessionTombstone(db, command.input.agentId, command.input.sessionId)

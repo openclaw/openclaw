@@ -1,14 +1,7 @@
-import {
-  createEffect,
-  createMemo,
-  createSignal,
-  onCleanup,
-  onSettled,
-  Show,
-  untrack,
-} from "solid-js";
+import { createEffect, createMemo, createSignal, onCleanup, onSettled, Show } from "solid-js";
 import { LazyCustomElementRequestController } from "../../../app/lazy-custom-element.ts";
-import { MarkdownBlocks } from "../../../components/markdown-blocks.ts";
+import { MarkdownBlocks } from "../../../components/markdown-blocks-owner.ts";
+import { createMarkdownRef } from "../../../components/markdown-dom-ref.ts";
 import { toSanitizedMarkdownHtml } from "../../../components/markdown.ts";
 import { CopyButton } from "../../../components/solid/copy-button.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
@@ -41,15 +34,14 @@ declare module "@solidjs/web" {
 
 function MarkdownAttachment(props: { text: string; label: string }) {
   let article!: HTMLElement;
+  const markdown = createMarkdownRef(() => ({
+    content: toSanitizedMarkdownHtml(props.text, {
+      mode: "document",
+      remoteImages: false,
+      codeBlockInteraction: "interactive",
+    }),
+  }));
   onSettled(() => {
-    // The reader is keyed by source and text; populate its sanitized document once.
-    article.innerHTML = untrack(() =>
-      toSanitizedMarkdownHtml(props.text, {
-        mode: "document",
-        remoteImages: false,
-        codeBlockInteraction: "interactive",
-      }),
-    );
     const blocks = new MarkdownBlocks(article);
     blocks.update(true);
     return () => blocks.dispose();
@@ -58,6 +50,7 @@ function MarkdownAttachment(props: { text: string; label: string }) {
     <article
       ref={(element) => {
         article = element;
+        markdown(element);
       }}
       class="sidebar-attachment-preview__markdown sidebar-markdown-reader sidebar-markdown"
       dir={detectTextDirection(props.text)}

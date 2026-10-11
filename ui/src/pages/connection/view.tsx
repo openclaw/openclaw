@@ -14,7 +14,7 @@ import {
   SettingsSection,
   SettingsStatus,
 } from "../../components/solid/settings-ui.tsx";
-import type { SparklineSample } from "../../components/sparkline-tile.ts";
+import type { SparklineSample } from "../../components/sparkline-tile.tsx";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { formatGatewayHost } from "../../lib/gateway-host.ts";
 import { classifyGatewaySecret } from "../../lib/gateway-secret-shape.ts";

@@ -25,6 +25,8 @@ export type GroupedMessageOptions = {
   duplicateCount?: number;
   showReasoning: boolean;
   bubbleMode?: boolean;
+  /** First visible message of the containing group/frame; null means none. */
+  firstBubbleKey?: string | null;
   showToolCalls?: boolean;
   runActive?: boolean;
   asyncQuestions?: AsyncQuestionPresentation;

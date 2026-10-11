@@ -705,7 +705,9 @@ it.skipIf(!isLiveTestEnabled() || process.platform === "win32")(
         evidence.providerBeforeOrphanRestart = providerBeforeOrphanRestart;
         orphanGate.release("ORPHAN_GATE_RELEASED");
         evidence.phase = "orphan-child-restart";
-        logLiveProgress("subagent restart: nonannouncing orphan interrupted; verifying no replay");
+        logLiveProgress(
+          "subagent restart: nonannouncing orphan interrupted; verifying parent handoff",
+        );
         await instance.startGateway();
         client = await connect();
         const settledOrphan = await vi.waitFor(
@@ -720,7 +722,6 @@ it.skipIf(!isLiveTestEnabled() || process.platform === "win32")(
                 interruptionReason: "gateway-restart",
               },
             });
-            expect(settled?.requesterSettleWake).toBeUndefined();
             return settled!;
           },
           { timeout: 30_000 },
@@ -730,13 +731,26 @@ it.skipIf(!isLiveTestEnabled() || process.platform === "win32")(
           providerBeforeOrphanRestart,
           (text) => text.includes("[Subagent Task]") && text.includes(orphanGate.url),
         ).length;
-        expect(orphanProviderDispatches).toBe(0);
-        expect(orphanGate.snapshot().requests).toBe(orphanGateRequests);
+        await vi.waitFor(
+          () =>
+            expect(
+              workerRequests(
+                provider!.requests,
+                providerBeforeOrphanRestart,
+                (text) =>
+                  text.includes("Reconcile every listed unfinished child") &&
+                  text.includes(orphan.childSessionKey),
+              ).length,
+            ).toBeGreaterThan(0),
+          { timeout: WAIT_MS },
+        );
         Object.assign(evidence, {
           phase: "passed",
           orphanRunId: orphan.runId,
           orphanCleanupCompletedAt: settledOrphan.cleanupCompletedAt,
           orphanProviderDispatches,
+          orphanGateRequestsBeforeRestart: orphanGateRequests,
+          orphanParentContinuationObserved: true,
         });
         logLiveProgress(`subagent cold restart proof passed; evidence=${artifactDir}`);
       },
