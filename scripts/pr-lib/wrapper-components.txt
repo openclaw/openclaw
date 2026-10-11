@@ -345,6 +345,8 @@ src/agents/worktrees/repository-paths.ts
 src/agents/worktrees/run-end-lifecycle.ts
 src/agents/sandbox/registry-lifecycle.ts
 src/agents/sandbox/registry-publication.ts
+src/config/sessions/session-actor-executor.ts
+src/config/sessions/session-actor-sqlite.ts
 src/config/sessions/session-actor-transaction.ts
 src/infra/sqlite-database-write-receipts.ts
 src/state/openclaw-agent-execution-incognito-session-actors.ts
@@ -613,8 +615,10 @@ src/config/sessions/session-cold-storage-state.ts
 src/config/sessions/session-entry-codec.ts
 src/config/sessions/session-entry-cohort.worker.ts
 src/config/sessions/session-entry-json.ts
+src/config/sessions/session-entry-snapshot-values.ts
 src/config/sessions/session-entry-snapshots.ts
 src/config/sessions/session-entry-state-format.ts
+src/config/sessions/transcript-append-parent.ts
 src/config/sessions/types.ts
 src/config/sessions/session-history-worker-errors.ts
 src/acp/runtime/session-meta-worker-mutation.ts
