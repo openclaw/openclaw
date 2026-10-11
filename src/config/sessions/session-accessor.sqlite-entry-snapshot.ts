@@ -49,7 +49,7 @@ export function captureSessionEntrySnapshot(
 ): SqliteLifecycleTargetSnapshot[number] {
   let window: SessionEntryWindowFacts | undefined;
   if (selected.row.window_json !== undefined) {
-    // The SQL projection contains this owner's bounded scalar window fields.
+    // SAFETY: window_json is produced only by the typed window-column SQL projection or actor.window serialization.
     const row = selected.row.window_json
       ? (JSON.parse(selected.row.window_json) as SessionEntryWindowRow)
       : null;
