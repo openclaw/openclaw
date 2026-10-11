@@ -10,7 +10,7 @@ import {
 } from "../../app/gateway-store.test-support.ts";
 import { setAvatarGatewayOrigin } from "../../lib/identity-avatar-context.ts";
 import { page } from "./route.ts";
-import type { UsageRouteData } from "./usage-page.ts";
+import type { UsageRouteData } from "./usage-page.tsx";
 
 const usageMethods = ["sessions.usage", "usage.status"];
 const totals = {

@@ -553,5 +553,4 @@ ui/src/pages/chat/talk/gateway-relay.test.ts
 ui/src/pages/config/config-page.ts
 ui/src/pages/config/view.browser.test.ts
 ui/src/pages/sessions/sessions-page.ts
-ui/src/pages/usage/view.ts
 ui/src/test-helpers/control-ui-e2e.ts

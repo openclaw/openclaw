@@ -66,6 +66,10 @@ suite.define(() => {
           // Navigation skips the closed drawer; geometry needs its full roster after opening.
           await waitForControlUiInitialRoster(page);
         }
+        if (overflow) {
+          await page.getByRole("button", { name: "Show more", exact: true }).click();
+          await expect.poll(() => page.locator(".sidebar-recent-session").count()).toBe(20);
+        }
         const active = page.locator(
           `.sidebar-recent-session--active[data-session-key="${sessionKey}"]`,
         );

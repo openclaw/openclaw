@@ -26,7 +26,10 @@ export function createWorkerWorkspaceReconcileRequest(params: {
   remoteWorkspaceDir: string;
   baseManifestRef: string;
   journal: WorkerLocalWorkspaceReconcileRequest["journal"];
-  stagedResult: WorkerLocalWorkspaceReconcileRequest["stagedResult"];
+  stagedResult: {
+    ref: string;
+    record(ref: string, workspaceId?: string): void | Promise<void>;
+  };
   assertCurrent: () => void;
 }): WorkerWorkspaceReconcileRequest {
   const { workspace, remoteWorkspaceDir, baseManifestRef, journal, stagedResult } = params;
@@ -71,7 +74,7 @@ export function createWorkerWorkspaceReconcileRequest(params: {
             params.assertCurrent();
             // The immutable ref is discoverable if the process stops between
             // checkpoint acceptance and recording its pending-result pointer.
-            await stagedResult.record(prepared.checkpointRef);
+            await stagedResult.record(prepared.checkpointRef, workspace.repository.workspaceId);
             params.assertCurrent();
             await journal.commit(payload.currentManifestRef);
             return accepted;
