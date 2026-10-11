@@ -12,7 +12,7 @@ import {
 import { resolveAuthoredModelContextTokens } from "../agents/context-resolution.js";
 import { resolveContextTokensForModel } from "../agents/context.js";
 import { resolveCronStyleNow } from "../agents/current-time.js";
-import { DEFAULT_CONTEXT_TOKENS, DEFAULT_PROVIDER } from "../agents/defaults.js";
+import { DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { resolveExtraParams } from "../agents/embedded-agent-runner/extra-params.js";
 import { resolveFastModeState } from "../agents/fast-mode.js";
 import { findModelInCatalog } from "../agents/model-catalog-lookup.js";
@@ -193,12 +193,11 @@ function resolveExecutionLabel(
 }
 
 const formatTokens = (total: number | null | undefined, contextTokens: number | null) => {
-  const ctx = contextTokens ?? null;
-  const ctxLabel = ctx ? formatTokenCount(ctx) : "?";
+  const ctxLabel = contextTokens ? formatTokenCount(contextTokens) : "?";
   if (total == null) {
     return `?/${ctxLabel}`;
   }
-  const pct = ctx ? Math.min(999, Math.round((total / ctx) * 100)) : null;
+  const pct = contextTokens ? Math.min(999, Math.round((total / contextTokens) * 100)) : null;
   const totalLabel = formatTokenCount(total);
   return `${totalLabel}/${ctxLabel}${pct !== null ? ` (${pct}%)` : ""}`;
 };
@@ -215,8 +214,7 @@ const formatEstimatedContextBudgetTokens = (
     return null;
   }
   const estimatedPromptTokens = Math.floor(estimate);
-  const ctx =
-    asPositiveFiniteNumber(contextTokens) ?? asPositiveFiniteNumber(status.contextTokenBudget);
+  const ctx = asPositiveFiniteNumber(contextTokens);
   const pct = ctx ? Math.min(999, Math.round((estimatedPromptTokens / ctx) * 100)) : null;
   const totalLabel = formatTokenCount(estimatedPromptTokens);
   const ctxLabel = ctx ? formatTokenCount(ctx) : "?";
@@ -546,18 +544,14 @@ export function buildStatusMessageParts(args: StatusArgs) {
     const runtimeMatchesSelectedModel =
       normalizeLowercaseStringOrEmpty(runtimeModelRaw) ===
       normalizeLowercaseStringOrEmpty(modelRefs.selected.label || "unknown");
-    // Legacy fallback sessions can persist provider-qualified runtime ids
-    // without a separate modelProvider field. Preserve provider-aware lookup
-    // when the stored slash id is the selected model or the active fallback
-    // target; otherwise keep the raw model-only lookup for OpenRouter-style
-    // slash ids.
-    if (
-      (fallbackMatchesRuntimeModel || runtimeMatchesSelectedModel) &&
-      embeddedProvider === normalizeLowercaseStringOrEmpty(activeProvider)
+    // A slash can be part of a provider-local model ID. Prefer its current
+    // catalog identity before interpreting a legacy provider-qualified ID.
+    if (findModelInCatalog(args.thinkingCatalog ?? [], activeProvider, runtimeModelRaw)) {
+      contextLookupModel = runtimeModelRaw;
+    } else if (
+      (!fallbackMatchesRuntimeModel && !runtimeMatchesSelectedModel) ||
+      embeddedProvider !== normalizeLowercaseStringOrEmpty(activeProvider)
     ) {
-      contextLookupProvider = activeProvider;
-      contextLookupModel = activeModel;
-    } else {
       contextLookupProvider = undefined;
       contextLookupModel = runtimeModelRaw;
     }
@@ -596,7 +590,10 @@ export function buildStatusMessageParts(args: StatusArgs) {
       }
       if (!entry?.model && !args.activeModel && logUsage.model) {
         const slashIndex = logUsage.model.indexOf("/");
-        if (slashIndex > 0) {
+        if (
+          slashIndex > 0 &&
+          !findModelInCatalog(args.thinkingCatalog ?? [], activeProvider, logUsage.model)
+        ) {
           const provider = logUsage.model.slice(0, slashIndex).trim();
           const model = logUsage.model.slice(slashIndex + 1).trim();
           if (provider && model) {
@@ -609,9 +606,7 @@ export function buildStatusMessageParts(args: StatusArgs) {
           }
         } else {
           activeModel = logUsage.model;
-          // Bare transcript model IDs should keep provider-aware lookup when the
-          // active provider is already known so shared model names still resolve
-          // to the correct provider-specific window.
+          // Bare IDs and catalog-owned slash IDs retain the known provider.
           contextLookupProvider = activeProvider;
           contextLookupModel = logUsage.model;
         }
@@ -648,6 +643,7 @@ export function buildStatusMessageParts(args: StatusArgs) {
     modelContextWindow: args.selectedContextWindow,
     modelContextTokens: args.selectedContextTokens,
     allowAsyncLoad: false,
+    allowCacheLookup: false,
   });
   const activeCatalogEntry = contextLookupProvider
     ? findModelInCatalog(args.thinkingCatalog ?? [], contextLookupProvider, contextLookupModel)
@@ -675,6 +671,7 @@ export function buildStatusMessageParts(args: StatusArgs) {
         ? args.runtimeContextTokens
         : undefined),
     allowAsyncLoad: false,
+    allowCacheLookup: false,
   });
   const channelModelNote = resolveChannelModelNote({
     config: args.config,
@@ -707,9 +704,7 @@ export function buildStatusMessageParts(args: StatusArgs) {
     entry?.modelSelectionLocked !== true &&
     runtimeDiffersFromSelected &&
     !runtimeSnapshotHasFallbackProvenance;
-  const contextTokens = useSelectedContext
-    ? (selectedContextTokens ?? DEFAULT_CONTEXT_TOKENS)
-    : (projectedActiveContextTokens ?? DEFAULT_CONTEXT_TOKENS);
+  const contextTokens = useSelectedContext ? selectedContextTokens : projectedActiveContextTokens;
 
   const thinkLevel =
     args.resolvedThink ?? args.sessionEntry?.thinkingLevel ?? args.agent?.thinkingDefault ?? "off";
@@ -928,7 +923,7 @@ export function buildStatusMessageParts(args: StatusArgs) {
   const queueHasSignal = (args.queue?.depth ?? 0) > 0 || args.queue?.showDetails === true;
   const compactionValue = formatCompactionStatus(entry);
   const contextPct =
-    typeof totalTokens === "number" && totalTokens > 0 && contextTokens > 0
+    typeof totalTokens === "number" && totalTokens > 0 && contextTokens != null && contextTokens > 0
       ? Math.min(999, Math.round((totalTokens / contextTokens) * 100))
       : null;
   const filled = Math.min(10, Math.max(0, Math.round((contextPct ?? 0) / 10)));

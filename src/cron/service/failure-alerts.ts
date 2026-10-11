@@ -28,7 +28,6 @@ import { isJobEnabled } from "./jobs-scheduling.js";
 import {
   cronNotificationJob,
   type CronNotificationIntent,
-  type CronNotificationJob,
   type ResolvedFailureAlert,
 } from "./notification-intents.js";
 import type { CronJobPolicyContext, DeferredCronNotifications } from "./state.js";
@@ -219,7 +218,7 @@ type FailureAlertIncident = NonNullable<CronJob["state"]["failureAlertIncident"]
 type FailureAlertSignal = Required<Omit<FailureAlertIncident, "repair">>;
 
 function buildFailureAlertPayload(params: {
-  job: CronNotificationJob;
+  job: CronJob;
   error?: string;
   errorReason?: FailoverReason;
   failureNotificationDetail?: CronFailureNotificationDetail;
@@ -244,7 +243,10 @@ function buildFailureAlertPayload(params: {
       : params.localProviderUnavailable
         ? [
             "Cause: the local model provider is unreachable.",
-            "Start the provider or check its configured endpoint in automation history. OpenClaw will check again on a later scheduled run.",
+            "Start the provider or check its configured endpoint in automation history.",
+            isJobEnabled(params.job) && params.job.state.nextRunAtMs !== undefined
+              ? "OpenClaw will check again on a later scheduled run."
+              : "After restoring the provider, use Run Now or reschedule this automation.",
           ]
         : cronFailureDetailLines(errorReason, params.failureNotificationDetail);
   const text = [
@@ -410,7 +412,7 @@ function maybeEmitFailureAlert(
     kind: "failure-alert",
     job,
     payload: buildFailureAlertPayload({
-      job,
+      job: params.job,
       error: params.error,
       errorReason: params.errorReason,
       failureNotificationDetail: params.failureNotificationDetail,

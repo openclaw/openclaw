@@ -68,6 +68,86 @@ describe("Codex supervision request lifetime", () => {
     }
   });
 
+  it.each(
+    ["codex_session_read", "codex_sessions_list", "codex_endpoint_probe"].flatMap((toolName) =>
+      ["response", "final-auth"].map((timing) => ({ toolName, timing })),
+    ),
+  )("$toolName honors policy revocation at $timing", async ({ toolName, timing }) => {
+    const privateText = "private transcript contents";
+    let pluginConfig = {
+      appServer: { homeScope: "agent" as const },
+      supervision: { enabled: true, allowRawTranscripts: true },
+    };
+    let responseReturned = false;
+    const revoke = () => {
+      pluginConfig = {
+        ...pluginConfig,
+        supervision: {
+          enabled: toolName !== "codex_endpoint_probe",
+          allowRawTranscripts: false,
+        },
+      };
+    };
+    const harness = createClientHarness({
+      onWrite(line, send) {
+        const request = JSON.parse(line) as { id: number; method: string };
+        if (request.method === "thread/read" || toolName === "codex_endpoint_probe") {
+          responseReturned = true;
+          if (timing === "response") {
+            revoke();
+          }
+        }
+        send({
+          id: request.id,
+          result:
+            request.method === "thread/loaded/list"
+              ? { data: toolName === "codex_endpoint_probe" ? [] : ["thread-1"] }
+              : {
+                  thread: {
+                    id: "thread-1",
+                    status: { type: "idle" },
+                    preview: privateText,
+                    name: privateText,
+                    turns: [{ text: privateText }],
+                  },
+                },
+        });
+      },
+    });
+    sharedClientMocks.getLeasedSharedCodexAppServerClient.mockResolvedValue(harness.client);
+    const tool = createCodexSupervisionTools({
+      getPluginConfig: () => pluginConfig,
+      senderIsOwner: true,
+      env: {},
+      resolveAuthProfileId: async () => {
+        if (responseReturned && timing === "final-auth") {
+          revoke();
+        }
+        return "synthetic:account";
+      },
+      resolveAuthProfileIdAtEffect: () => "synthetic:account",
+      resolveRuntimeOptions: resolveCodexSupervisionAppServerRuntimeOptions,
+    }).find((candidate) => candidate.name === toolName)!;
+    try {
+      const { result, error } = await Promise.resolve(
+        tool.execute("read", { endpoint_id: "local", thread_id: "thread-1" }),
+      ).then(
+        (result) => ({ result, error: undefined }),
+        (error: unknown) => ({ result: undefined, error }),
+      );
+      if (error) {
+        expect(String(error)).toMatch(/Codex (?:supervision|session reads).*disabled/);
+      }
+      expect(result !== undefined && !pluginConfig.supervision.enabled).toBe(false);
+      expect(
+        JSON.stringify(result)?.includes(privateText) &&
+          !pluginConfig.supervision.allowRawTranscripts,
+      ).not.toBe(true);
+    } finally {
+      harness.client.close();
+    }
+  });
+
   it.each([
     { toolName: "codex_session_send", method: "turn/steer" },
     { toolName: "codex_session_interrupt", method: "turn/interrupt" },

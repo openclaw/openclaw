@@ -922,25 +922,24 @@ function assertCurrentEndpointAtEffect(
   }
 }
 
-async function requireCurrentEndpointSet(
+function requireCurrentEndpointSet(
   options: CodexSupervisionToolsOptions,
   expected: ResolvedSupervisionEndpoint[],
-): Promise<{ pluginConfig: unknown }> {
-  const current = await requireLiveToolPolicy(options, "enabled");
+): { pluginConfig: unknown } {
+  const pluginConfig = requireLiveToolPolicyConfig(options, "enabled");
+  const current = normalizeEndpoints(pluginConfig, options);
   const unchanged =
-    current.endpoints.length === expected.length &&
-    expected.every((endpoint) =>
-      current.endpoints.some(
-        (candidate) =>
-          candidate.id === endpoint.id && candidate.connectionKey === endpoint.connectionKey,
-      ),
-    );
+    current.length === expected.length &&
+    expected.every((endpoint) => current.some((candidate) => candidate.id === endpoint.id));
   if (!unchanged) {
     throw new CodexSupervisionPolicyError(
       "Codex supervision endpoint configuration changed during the request.",
     );
   }
-  return { pluginConfig: current.pluginConfig };
+  for (const endpoint of expected) {
+    assertCurrentEndpointAtEffect(options, "enabled", endpoint);
+  }
+  return { pluginConfig };
 }
 
 function idleContinuationError(threadId: string): Error {
@@ -1022,7 +1021,7 @@ export function createCodexSupervisionTools(options: CodexSupervisionToolsOption
       description: "Check configured Codex app-server endpoints.",
       parameters: EmptyParamsSchema,
       execute: async () => {
-        const { pluginConfig, endpoints } = await current();
+        const { endpoints } = await current();
         const health: CodexSupervisorEndpointHealth[] = [];
         for (const endpoint of endpoints) {
           try {
@@ -1035,7 +1034,7 @@ export function createCodexSupervisionTools(options: CodexSupervisionToolsOption
             health.push({ endpointId: endpoint.id, ok: false });
           }
         }
-        await requireCurrentEndpointSet(options, endpoints);
+        const { pluginConfig } = requireCurrentEndpointSet(options, endpoints);
         return jsonResult({
           summary: `codex endpoints: ${health.filter((entry) => entry.ok).length}/${health.length} ok`,
           endpoints: endpoints.map((endpoint) =>
@@ -1064,7 +1063,7 @@ export function createCodexSupervisionTools(options: CodexSupervisionToolsOption
           includeStored: params.include_stored === true,
           maxStoredSessions: readIntegerParam(params, "max_stored_sessions"),
         });
-        const { pluginConfig } = await requireCurrentEndpointSet(options, endpoints);
+        const { pluginConfig } = requireCurrentEndpointSet(options, endpoints);
         return jsonResult({
           summary: `codex sessions: ${result.sessions.length}`,
           ...sanitizeSessionListResult(
@@ -1096,7 +1095,7 @@ export function createCodexSupervisionTools(options: CodexSupervisionToolsOption
           threadId,
           includeTurns: params.include_turns === true,
         });
-        await requireCurrentEndpoint(options, "raw-transcripts", endpoint);
+        assertCurrentEndpointAtEffect(options, "raw-transcripts", endpoint);
         return jsonResult({
           summary: `codex session: ${threadId}`,
           response: redactCodexSupervisionValue({ thread }),

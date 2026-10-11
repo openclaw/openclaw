@@ -506,7 +506,6 @@ describe("recoverEmbeddedRunOverflow", () => {
         sessionFile: "unused",
       },
       compactionReplayEnabled: false,
-      contextEngineAssemblySucceeded: false,
       contextEnginePromptAuthority: "assembled",
       contextTokenBudget: contextWindow,
       hookMessagesForCurrentPrompt: manager.buildSessionContext().messages,

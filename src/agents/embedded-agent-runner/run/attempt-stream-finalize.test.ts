@@ -191,7 +191,6 @@ function createFixture(overrides: FixtureOverrides = {}) {
       cache: {},
       history: {
         contextEnginePromptAuthority: "assembled",
-        contextEngineAssemblySucceeded: true,
       },
       isProbeSession: false,
       onBlockReplyFlush: undefined,

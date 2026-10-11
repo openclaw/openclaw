@@ -238,7 +238,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +15: approved async auth, model, and TTS replacement pairs.
       // +7: approved async session, command-menu, model-override, TTS-path, and list replacements.
       // +1: preview adapters strip only normalization-owned response decoration.
-      3695,
+      // +1: shared stale-read cache replaces board, preview, search, and credential cache policies.
+      3696,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -262,7 +263,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +15: the same auth, model, and TTS replacement pairs.
       // +7: the same session, command-menu, model-override, TTS-path, and list replacements.
       // +1: stripReplyPayloadResponsePrefix preserves durable text while assembling previews.
-      2156,
+      // +1: the same bounded stale-read cache factory on collection-runtime.
+      2157,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
