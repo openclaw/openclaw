@@ -361,7 +361,7 @@ it("coalesces automatic maintenance through native planning and finalization", a
     const reclaim = reclamationRun.runSqliteSessionReclamation;
     vi.spyOn(reclamationRun, "runSqliteSessionReclamation").mockImplementation(async (params) => {
       const result = await reclaim(params);
-      if (params.plan.kind === "maintenance-age" && params.plan.expected === undefined) {
+      if (params.plan.kind === "maintenance-age") {
         deadlineRead.resolve();
       }
       return result;

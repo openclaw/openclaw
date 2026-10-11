@@ -4,22 +4,68 @@ import type {
   MemoryEmbeddingCacheMutation,
   MemoryPublicationOperations,
   MemoryPublicationResult,
+  MemoryPublicationState,
 } from "./manager-publication-task.js";
 import {
   memoryEmbeddingCacheBatches,
   memoryEmbeddingCacheFitsInline,
+  memoryPublicationBatches,
+  memoryPublicationHeader,
+  memoryPublicationInline,
 } from "./manager-publication-transfer.js";
+import type { MemorySourceIndexReplacement } from "./manager-source-index-kernel.js";
 
-/** The caller retains its writer turn through revision preparation and invalidation. */
+type PublicationScope = Pick<SqliteWorkerStore<MemoryPublicationOperations>, "execute">;
+type PublicationRetry = <T>(
+  run: () => Promise<MemoryPublicationResult<T>>,
+  prepare: () => Promise<boolean>,
+) => Promise<T | undefined>;
+
+/** Small publications use one request; larger inputs retain their bounded transfer scope. */
+export async function publishMemorySource(params: {
+  replacement: MemorySourceIndexReplacement;
+  state: () => MemoryPublicationState;
+  execute: PublicationScope["execute"];
+  run: <T>(operation: (scope: PublicationScope) => Promise<T>) => Promise<T>;
+  retry: PublicationRetry;
+  prepare: () => Promise<boolean>;
+  assertPublished: (() => void) | undefined;
+}) {
+  const { replacement, state, execute, run, retry, prepare, assertPublished } = params;
+  const inline = memoryPublicationInline(replacement);
+  if (inline) {
+    return retry(
+      () => execute({ type: "source.replace.inline", input: { ...inline, state: state() } }),
+      prepare,
+    );
+  }
+  return run(async (scope) => {
+    const operation = randomUUID();
+    const { header, rows } = memoryPublicationHeader(replacement);
+    await scope.execute({ type: "stage.start", input: { operation, header, rows } });
+    for (const fragments of memoryPublicationBatches(replacement)) {
+      await scope.execute({ type: "stage.append", input: { operation, fragments } });
+    }
+    const result = await retry(
+      () => scope.execute({ type: "source.replace", input: { operation, state: state() } }),
+      prepare,
+    );
+    assertPublished?.();
+    // Thrown failures close through the host owner; another command could hide the write outcome.
+    if (result === undefined) {
+      await scope.execute({ type: "stage.discard", input: { operation } });
+    }
+    return result;
+  });
+}
+
+/** The committing worker checks the captured revision before retaining vectors. */
 export async function publishMemoryEmbeddingCache(params: {
-  scope: Pick<SqliteWorkerStore<MemoryPublicationOperations>, "execute">;
+  scope: PublicationScope;
   mutation: MemoryEmbeddingCacheMutation;
   prepareRevision: () => number | undefined;
   invalidate: () => void;
-  retry: <T>(
-    run: () => Promise<MemoryPublicationResult<T>>,
-    prepare: () => Promise<boolean>,
-  ) => Promise<T | undefined>;
+  retry: PublicationRetry;
 }): Promise<boolean | undefined> {
   const { scope, mutation, prepareRevision, invalidate, retry } = params;
   const expectedRevision = prepareRevision();

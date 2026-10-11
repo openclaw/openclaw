@@ -3,7 +3,15 @@
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { createRouter } from "@openclaw/uirouter";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  onTestFinished as registerTestCleanup,
+  vi,
+} from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 
 vi.mock("./chat-pane.ts", () => ({}));
@@ -251,24 +259,47 @@ describe("chat page retained sessions", () => {
     expect(chatInputOwnerForContext(context).current).toBe("dock");
   });
 
-  it("binds newly resolved Home defaults even when the canonical route is equivalent", async () => {
-    const page = new ChatPage();
-    const { context, navigate, replace } = setNavigationContext(page);
-    page.data = { sessionKey: "main" };
-    document.body.append(page);
-    await page.updateComplete;
-    context.gateway.snapshot.hello = {
-      snapshot: { sessionDefaults: { mainKey: "main", mainSessionKey: "agent:main:main" } },
-    } as GatewayHelloOk;
-    const pane = page.querySelector<RenderedPane>("openclaw-chat-pane")!;
+  it.each([
+    { routeKey: "main", canonicalKey: "agent:main:main", scope: "per-sender" },
+    { routeKey: "agent:main:main", canonicalKey: "global", scope: "global" },
+  ] as const)(
+    "keeps a route draft while binding $scope Home defaults",
+    async ({ routeKey, canonicalKey, scope }) => {
+      const previousHref = window.location.href;
+      registerTestCleanup(() => window.history.replaceState({}, "", previousHref));
+      window.history.replaceState({}, "", "/chat/main?draft=What+can+you+do%3F");
+      const page = new ChatPage();
+      const { context, navigate, replace } = setNavigationContext(page);
+      page.data = { sessionKey: routeKey };
+      document.body.append(page);
+      await page.updateComplete;
+      context.agents.state.agentsList = {
+        defaultId: "main",
+        mainKey: "main",
+        scope,
+        agents: [{ id: "main" }],
+      };
+      context.gateway.snapshot.hello = {
+        snapshot: {
+          sessionDefaults: {
+            defaultAgentId: "main",
+            mainKey: "main",
+            mainSessionKey: canonicalKey,
+          },
+        },
+      } as GatewayHelloOk;
+      const pane = page.querySelector<RenderedPane>("openclaw-chat-pane")!;
+      page.data = { sessionKey: routeKey, draft: "What can you do?" };
 
-    pane.onPaneSessionChange?.(pane.paneId, "agent:main:main");
+      pane.onPaneSessionChange?.(pane.paneId, canonicalKey, { replace: true });
 
-    expect(context.gateway.setSessionKey).toHaveBeenLastCalledWith("agent:main:main");
-    expect(loadSettings().sessionKey).toBe("agent:main:main");
-    expect(navigate).not.toHaveBeenCalled();
-    expect(replace).not.toHaveBeenCalled();
-  });
+      expect(navigate).not.toHaveBeenCalled();
+      expect(replace).not.toHaveBeenCalled();
+      expect(context.gateway.setSessionKey).toHaveBeenLastCalledWith(canonicalKey);
+      expect(loadSettings().sessionKey).toBe(canonicalKey);
+      expect(getRouteDraftForActivePane(page)).toBe("What can you do?");
+    },
+  );
 
   it("hands each route-provided draft to the active pane only once", async () => {
     window.history.replaceState({}, "", "/chat/main?draft=one-shot%20draft&panel=details#pane");

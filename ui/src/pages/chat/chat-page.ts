@@ -524,9 +524,9 @@ export class ChatPage extends OpenClawLightDomElement implements SessionSplitHos
     if (!pane || !areUiSessionKeysEquivalent(pane.sessionKey, sourceSessionKey)) {
       return false;
     }
-    // Canonical wire spelling must not erase the Home owner kept by a split.
+    // Canonical wire spelling must not replace the owned Home route and discard
+    // a pending route draft, including after a split collapses to one pane.
     if (
-      this.layout &&
       isUiGlobalSessionKey(trimmed) &&
       resolveUiGlobalAliasAgentId(
         {

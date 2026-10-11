@@ -7,23 +7,17 @@ registerModelSetupEnglish();
 
 type DiscoveryOwner = {
   client: GatewayBrowserClient | null;
-  epoch: number;
-  agentEpoch: number;
   agentId: string | null;
-  selectionIntentRevision: number;
-  selectionPending: boolean;
 };
 type DiscoveryOptions = {
   canOpen: () => boolean;
   getOwner: () => DiscoveryOwner;
-  isCurrent: (owner: DiscoveryOwner) => boolean;
   onClose: () => void;
   onError: (error: unknown) => void;
 };
 
 export class ModelProviderDiscoveryController implements ReactiveController {
   private state: "closed" | "loading" | "ready" = "closed";
-  private generation = 0;
   private owner: DiscoveryOwner | null = null;
 
   constructor(
@@ -38,7 +32,6 @@ export class ModelProviderDiscoveryController implements ReactiveController {
   }
 
   reset(): void {
-    this.generation += 1;
     this.state = "closed";
     this.owner = null;
     this.host.requestUpdate();
@@ -49,19 +42,15 @@ export class ModelProviderDiscoveryController implements ReactiveController {
     if (!owner) {
       return;
     }
-    const current = this.options.getOwner();
-    if (
-      (this.state === "loading" && !this.options.isCurrent(owner)) ||
-      current.selectionIntentRevision !== owner.selectionIntentRevision ||
-      (!current.selectionPending && current.agentId !== owner.agentId)
-    ) {
+    const agentId = this.options.getOwner().agentId;
+    // Reconnect can temporarily clear the roster selection. The mounted setup
+    // owns wizard recovery and authorization loss; only a new selection replaces it.
+    if (agentId !== null && agentId !== owner.agentId) {
       this.reset();
     }
   }
 
   cancelLoading(): void {
-    // Once mounted, ModelSetupPage owns reconnect recovery and authority loss.
-    // Only an unfinished import belongs to the parent transport epoch.
     if (this.state === "loading") {
       this.reset();
     }
@@ -79,20 +68,17 @@ export class ModelProviderDiscoveryController implements ReactiveController {
     if (!owner.client) {
       return;
     }
-    const generation = this.generation;
-    const isCurrent = () =>
-      generation === this.generation && this.state === "loading" && this.options.isCurrent(owner);
     this.owner = owner;
     this.state = "loading";
     this.host.requestUpdate();
     try {
       await import("../model-setup/model-setup-page.ts");
-      if (isCurrent()) {
+      if (this.state === "loading") {
         this.state = "ready";
         this.host.requestUpdate();
       }
     } catch (error) {
-      if (isCurrent()) {
+      if (this.state === "loading") {
         this.reset();
         this.options.onError(error);
       }
@@ -103,13 +89,10 @@ export class ModelProviderDiscoveryController implements ReactiveController {
     if (this.state === "closed") {
       return nothing;
     }
-    const generation = this.generation;
     const close = (refresh = false) => {
-      if (generation === this.generation) {
-        this.reset();
-        if (refresh) {
-          this.options.onClose();
-        }
+      this.reset();
+      if (refresh) {
+        this.options.onClose();
       }
     };
     if (this.state === "loading") {
