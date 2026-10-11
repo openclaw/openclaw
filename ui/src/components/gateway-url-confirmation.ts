@@ -1,11 +1,15 @@
 import { gatewayOriginScope } from "@openclaw/gateway-client/browser";
 import { html, nothing } from "lit";
 import { property } from "lit/decorators.js";
+import {
+  isOptionalElementDefined,
+  LazyCustomElementRequestController,
+} from "../app/lazy-custom-element.ts";
 import { t } from "../i18n/index.ts";
 import { formatGatewayHost } from "../lib/gateway-host.ts";
 import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
 import { icons } from "./icons.ts";
-import "./modal-dialog.ts";
+import { renderLazyElementState } from "./lazy-view-error.ts";
 
 type GatewayUrlConfirmationProps = {
   pendingGatewayUrl: string | null;
@@ -20,10 +24,38 @@ type GatewayUrlConfirmationProps = {
 class GatewayUrlConfirmation extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) props?: GatewayUrlConfirmationProps;
 
+  private readonly dialogElement = {
+    tagName: "openclaw-modal-dialog",
+    get label() {
+      return t("connection.switchGateway.title");
+    },
+    loadModule: () => import("./modal-dialog.ts"),
+  };
+  private readonly dialogLoader = new LazyCustomElementRequestController(this, () =>
+    this.props?.onCancel(),
+  );
+
+  override willUpdate() {
+    this.dialogLoader.requestWhileActive(
+      this.dialogElement,
+      Boolean(this.props?.pendingGatewayUrl),
+    );
+  }
+
   override render() {
     const props = this.props;
     if (!props?.pendingGatewayUrl) {
       return nothing;
+    }
+    if (!isOptionalElementDefined(this.dialogElement)) {
+      const state = this.dialogLoader.visibleState;
+      return state
+        ? renderLazyElementState(
+            state,
+            () => this.dialogLoader.retry(),
+            () => this.dialogLoader.close(),
+          )
+        : nothing;
     }
     const title = t("connection.switchGateway.title");
     const summary = t("connection.switchGateway.summary");

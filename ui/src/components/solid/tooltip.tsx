@@ -1,91 +1,109 @@
-import type { JSX as SolidJSX } from "@solidjs/web";
-import { Show, createEffect, createSignal, onCleanup, onSettled, untrack } from "solid-js";
+import { render } from "@solidjs/web";
+import type { JSX } from "@solidjs/web";
+import { nothing, render as renderLit, type TemplateResult } from "lit";
+import { Show, createEffect, createSignal, flush, onCleanup } from "solid-js";
 import { acquireNativeOverlaySurface } from "../../lib/native-overlay-occlusion.ts";
 import { createOverlayAnchor } from "../overlay-anchor.ts";
 import { createOverlay, findOverlayParent } from "../overlay-lifecycle.ts";
-import { isTooltipTriggerElement } from "../tooltip-content.ts";
-import { TooltipController, type TooltipPolicyProps } from "../tooltip-controller.ts";
+import type { TooltipController } from "../tooltip-controller.ts";
+import { TooltipElement, type TooltipProps, type TooltipRuntime } from "../tooltip.ts";
 import { retainShadowStyles } from "./shadow-styles.ts";
 import overlayStyles from "./overlay.css?inline";
 import tooltipStyles from "./tooltip.css?inline";
 
-export function TooltipChildren(props: { children?: SolidJSX.Element }) {
-  return <>{props.children}</>;
+export type { TooltipElement } from "../tooltip.ts";
+
+/** Opaque Lit presentation stays inside a leaf owned only by Lit. */
+function TooltipTemplate(props: { template: TemplateResult }) {
+  const leaf = document.createElement("span");
+  createEffect(
+    () => props.template,
+    (template) => {
+      renderLit(template, leaf);
+    },
+  );
+  onCleanup(() => renderLit(nothing, leaf));
+  return leaf;
 }
 
-export interface TooltipContentsProps extends TooltipPolicyProps {
-  host: HTMLElement;
-  contentTemplate?: SolidJSX.Element;
-  expose?: (handle: NativeTooltipHandle | undefined) => void;
-  preview: (anchor: HTMLElement | SVGElement, content: string) => void;
-}
-
-export interface NativeTooltipHandle {
-  controller: TooltipController;
-  connected(): void;
-  disconnected(): void;
-}
-
-/** The bridge and Solid host share this renderer; policy stays synchronous and renderer-neutral. */
-export function TooltipContents(props: TooltipContentsProps) {
-  let surface!: HTMLDivElement;
-  let rich!: HTMLSpanElement;
-  let triggerSlot!: HTMLSlotElement;
-  let contentSlot!: HTMLSlotElement;
-  const readPolicyProps = (): TooltipPolicyProps => ({
-    content: props.content,
-    placement: props.placement,
-    closeDelay: props.closeDelay,
-    hoverDismissDelay: props.hoverDismissDelay,
-    delay: props.delay,
-    describe: props.describe,
-    autoSize: props.autoSize,
-    disabled: props.disabled,
-    openOnClick: props.openOnClick,
-    anchor: props.anchor,
-  });
-  let currentProps = untrack(readPolicyProps);
-  let controller: TooltipController | undefined;
+/** The native tag owns policy and slots; Solid owns only its lazily loaded text content. */
+export function mountTooltipView(
+  host: TooltipElement,
+  surface: HTMLDivElement,
+  rich: HTMLSpanElement,
+  policy: TooltipController,
+): TooltipRuntime {
+  const content = host.ownerDocument.createElement("span");
+  content.className = "tooltip-content";
+  surface.insertBefore(content, rich);
+  let updateContent = () => {};
+  const disposeContent = render(() => {
+    const [revision, setRevision] = createSignal(0);
+    updateContent = () => setRevision((value) => value + 1);
+    const template = () => {
+      revision();
+      return host.contentTemplate;
+    };
+    const text = () => {
+      revision();
+      return host.content;
+    };
+    return (
+      <Show when={template()} fallback={text()}>
+        {(value) => <TooltipTemplate template={value()} />}
+      </Show>
+    );
+  }, content);
   let anchorBinding: ReturnType<typeof createOverlayAnchor> | undefined;
   let anchoredTrigger: HTMLElement | SVGElement | null = null;
   let anchoredPlacement: string | undefined;
-  const [materialized, setMaterialized] = createSignal(false);
   const overlay = createOverlay("tooltip", undefined, {
     exclusiveGroup: "tooltip",
     dismissOutsidePointer: false,
     dismissOutsideFocus: false,
     dismissEscape: false,
     reflectTriggerExpanded: false,
-    isValid: () => !currentProps.disabled && Boolean(controller?.trigger?.isConnected),
+    isValid: () => !host.disabled && Boolean(policy.trigger?.isConnected),
     acquireOcclusion: acquireNativeOverlaySurface,
-    onInteraction: (event, target) => controller?.handleInteraction(event, target),
-    interactionElements: () => (controller?.trigger ? [controller.trigger] : []),
+    onInteraction: (event, target) => policy.handleInteraction(event, target),
+    interactionElements: () => (policy.trigger ? [policy.trigger] : []),
     onRootChange: (root) =>
-      root === props.host.shadowRoot
+      root === host.shadowRoot
         ? retainShadowStyles(root, [overlayStyles, tooltipStyles])
         : undefined,
   });
-
-  const forward = (source: Event, name: string) => {
-    if (source.target !== surface) {
-      return;
-    }
-    source.stopPropagation();
-    if (
-      !props.host.dispatchEvent(
-        new CustomEvent(name, { bubbles: true, composed: true, cancelable: source.cancelable }),
-      )
-    ) {
-      source.preventDefault();
-    }
-  };
-
+  overlay.bindSurface(surface);
+  overlay.setParent(findOverlayParent(policy.trigger ?? host));
+  const unsubscribe = overlay.subscribe((open) => policy.acceptedOpen(open));
+  const events = [
+    ["overlay-show", "wa-show"],
+    ["overlay-hide", "wa-hide"],
+    ["overlay-after-show", "wa-after-show"],
+    ["overlay-after-hide", "wa-after-hide"],
+  ] as const;
+  const listeners = events.map(([source, target]) => {
+    const listener = (event: Event) => {
+      if (event.target !== surface) {
+        return;
+      }
+      event.stopPropagation();
+      if (
+        !host.dispatchEvent(
+          new CustomEvent(target, { bubbles: true, composed: true, cancelable: event.cancelable }),
+        )
+      ) {
+        event.preventDefault();
+      }
+    };
+    surface.addEventListener(source, listener);
+    return () => surface.removeEventListener(source, listener);
+  });
   const updateAnchor = () => {
-    const trigger = controller?.trigger;
-    if (!trigger || !controller) {
+    const trigger = policy.trigger;
+    if (!trigger) {
       return;
     }
-    const placement = controller.resolvedPlacement;
+    const placement = policy.resolvedPlacement;
     if (trigger !== anchoredTrigger || placement !== anchoredPlacement) {
       anchorBinding ??= createOverlayAnchor(surface);
       anchorBinding.update(trigger, placement);
@@ -94,126 +112,58 @@ export function TooltipContents(props: TooltipContentsProps) {
     }
     surface.setAttribute("placement", placement);
   };
-
-  onSettled(() => {
-    const readTrigger = () => {
-      const element = triggerSlot.assignedElements({ flatten: true }).find(isTooltipTriggerElement);
-      return isTooltipTriggerElement(element) ? element : null;
-    };
-    const policy = new TooltipController(props.host, {
-      props: () => currentProps,
-      trigger: readTrigger,
-      richContent: () => contentSlot.assignedNodes({ flatten: true }),
-      richContainer: () => rich,
-      preview: (anchor, content) => props.preview(anchor, content),
-      retire: () => overlay.retire(),
-      requestOpen: (open) => {
-        const trigger = policy.trigger;
-        if (open && trigger) {
-          overlay.setParent(findOverlayParent(trigger));
-        }
-        overlay.bindTrigger(trigger instanceof HTMLElement ? trigger : undefined);
+  return {
+    request(open) {
+      const trigger = policy.trigger;
+      if (open && trigger) {
+        overlay.setParent(findOverlayParent(trigger));
+      }
+      overlay.bindTrigger(trigger instanceof HTMLElement ? trigger : undefined);
+      updateAnchor();
+      return overlay.request(open);
+    },
+    update() {
+      updateContent();
+      flush();
+      if (overlay.open) {
         updateAnchor();
-        return overlay.request(open);
-      },
-    });
-    controller = policy;
-    surface.id = policy.id;
-    overlay.bindSurface(surface);
-    const unsubscribe = overlay.subscribe((open) => {
-      if (open) {
-        setMaterialized(true);
       }
-      policy.acceptedOpen(open);
-    });
-    const events = [
-      ["overlay-show", "wa-show"],
-      ["overlay-hide", "wa-hide"],
-      ["overlay-after-show", "wa-after-show"],
-      ["overlay-after-hide", "wa-after-hide"],
-    ] as const;
-    const listeners = events.map(([source, target]) => {
-      const listener = (event: Event) => forward(event, target);
-      surface.addEventListener(source, listener);
-      return () => surface.removeEventListener(source, listener);
-    });
-    policy.refresh();
-    const childObserver = new MutationObserver(() => {
-      if (!currentProps.anchor && readTrigger() !== policy.trigger) {
-        policy.refresh();
-      }
-    });
-    childObserver.observe(props.host, { childList: true });
-    props.expose?.({
-      controller: policy,
-      connected: () => {
-        policy.refresh();
-        overlay.request(overlay.open);
-      },
-      disconnected: () => overlay.retire(),
-    });
-    return () => {
-      props.expose?.(undefined);
-      childObserver.disconnect();
+    },
+    retire: () => overlay.retire(),
+    dispose() {
       unsubscribe();
       overlay.dispose();
       anchorBinding?.dispose();
-      policy.dispose();
+      disposeContent();
+      content.remove();
       for (const remove of listeners) {
         remove();
       }
-      controller = undefined;
-    };
-  });
-
-  createEffect(readPolicyProps, (next) => {
-    currentProps = next;
-    controller?.refresh();
-    if (overlay.open) {
-      updateAnchor();
-    }
-  });
-  onCleanup(() => overlay.dispose());
-
-  return (
-    <>
-      <slot
-        ref={(element) => {
-          triggerSlot = element;
-        }}
-        onSlotChange={() => controller?.refresh()}
-      />
-      <div
-        ref={(element) => {
-          surface = element;
-        }}
-        class="oc-overlay tooltip-surface"
-        popover="manual"
-        role="tooltip"
-      >
-        <Show when={materialized()}>
-          <span class="tooltip-content">{props.contentTemplate ?? props.content}</span>
-        </Show>
-        <span
-          ref={(element) => {
-            rich = element;
-          }}
-          class="tooltip-rich-content"
-          inert
-          onPointerEnter={(event) => controller?.handleContentPointerEnter(event)}
-          onPointerLeave={(event) => controller?.handleContentPointerLeave(event)}
-          onFocusIn={() => controller?.handleFocusIn()}
-          onFocusOut={(event) => controller?.handleFocusOut(event)}
-        >
-          <slot
-            name="content"
-            ref={(element) => {
-              contentSlot = element;
-            }}
-            onSlotChange={() => controller?.contentChanged()}
-          />
-        </span>
-      </div>
-    </>
-  );
+    },
+  };
 }
+
+type ComponentProps = TooltipProps & Omit<JSX.HTMLAttributes<TooltipElement>, keyof TooltipProps>;
+
+/** Solid callers use the same native tag without pulling presentation into startup. */
+export const Tooltip = Object.assign(
+  function Tooltip(props: ComponentProps) {
+    return (
+      <openclaw-tooltip
+        {...props}
+        prop:content={props.content ?? ""}
+        prop:contentTemplate={props.contentTemplate}
+        prop:placement={props.placement ?? "top"}
+        prop:closeDelay={props.closeDelay ?? 100}
+        prop:hoverDismissDelay={props.hoverDismissDelay}
+        prop:delay={props.delay}
+        prop:describe={props.describe ?? true}
+        prop:autoSize={props.autoSize ?? false}
+        prop:disabled={props.disabled ?? false}
+        prop:openOnClick={props.openOnClick ?? false}
+        prop:anchor={props.anchor ?? null}
+      />
+    );
+  },
+  { Element: TooltipElement },
+);

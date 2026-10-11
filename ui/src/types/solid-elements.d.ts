@@ -44,7 +44,16 @@ declare module "@solidjs/web" {
       };
       "openclaw-tooltip": HTMLAttributes<HTMLElementTagNameMap["openclaw-tooltip"]> & {
         "prop:content"?: string;
+        "prop:contentTemplate"?: HTMLElementTagNameMap["openclaw-tooltip"]["contentTemplate"];
+        "prop:placement"?: HTMLElementTagNameMap["openclaw-tooltip"]["placement"];
+        "prop:closeDelay"?: number;
+        "prop:hoverDismissDelay"?: number;
+        "prop:delay"?: number;
         "prop:describe"?: boolean;
+        "prop:autoSize"?: boolean;
+        "prop:disabled"?: boolean;
+        "prop:openOnClick"?: boolean;
+        "prop:anchor"?: HTMLElementTagNameMap["openclaw-tooltip"]["anchor"];
         placement?: HTMLElementTagNameMap["openclaw-tooltip"]["placement"];
         "open-on-click"?: boolean;
         "auto-size"?: boolean;

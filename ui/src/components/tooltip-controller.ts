@@ -1,10 +1,10 @@
 import { containsComposed } from "./overlay-registry.ts";
 import { isTooltipTextRedundant, normalizeTooltipText } from "./tooltip-content.ts";
+import type { TooltipProvider } from "./tooltip.ts";
 
 const DESCRIBABLE_SELECTOR =
   'a[href], button, input, select, textarea, [tabindex]:not([tabindex="-1"])';
 const HOVER_DELAY = 150;
-const SKIP_DELAY = 300;
 const RICH_CONTENT_CLOSE_DELAY = 100;
 let nextTooltipId = 0;
 const createTooltipId = () => `openclaw-tooltip-${++nextTooltipId}`;
@@ -44,65 +44,9 @@ export interface TooltipPolicyOptions {
   preview: (anchor: HTMLElement | SVGElement, content: string) => void;
 }
 
-export class TooltipProvider extends HTMLElement {
-  delayed = true;
-  #focusInput: "keyboard" | "pointer" = "keyboard";
-  #skipDelayTimer: number | null = null;
-
-  connectedCallback() {
-    this.style.display = "contents";
-    this.#focusInput = "keyboard";
-    // Pointer focus can arrive after an action re-renders. Keep modality at
-    // the provider so delayed focus cannot reopen the action's tooltip.
-    this.ownerDocument.addEventListener("keydown", this.#handleDocumentKeyDown, true);
-    this.ownerDocument.addEventListener("pointerdown", this.#handleDocumentPointerDown, true);
-  }
-
-  disconnectedCallback() {
-    this.ownerDocument.removeEventListener("keydown", this.#handleDocumentKeyDown, true);
-    this.ownerDocument.removeEventListener("pointerdown", this.#handleDocumentPointerDown, true);
-    TooltipController.closeForProvider(this);
-    this.#clearSkipDelayTimer();
-    this.delayed = true;
-  }
-
-  focusOpensTooltip() {
-    return this.#focusInput === "keyboard";
-  }
-
-  openTooltip() {
-    this.delayed = false;
-    this.#clearSkipDelayTimer();
-  }
-
-  closeTooltip() {
-    this.#clearSkipDelayTimer();
-    this.#skipDelayTimer = window.setTimeout(() => {
-      this.#skipDelayTimer = null;
-      this.delayed = true;
-    }, SKIP_DELAY);
-  }
-
-  #clearSkipDelayTimer() {
-    if (this.#skipDelayTimer !== null) {
-      window.clearTimeout(this.#skipDelayTimer);
-      this.#skipDelayTimer = null;
-    }
-  }
-
-  readonly #handleDocumentKeyDown = (event: KeyboardEvent) => {
-    if (!["Alt", "Control", "Meta", "Shift"].includes(event.key)) {
-      this.#focusInput = "keyboard";
-    }
-  };
-
-  readonly #handleDocumentPointerDown = () => {
-    this.#focusInput = "pointer";
-  };
-}
-
 export class TooltipController {
   static readonly #activeByDocument = new WeakMap<Document, TooltipController>();
+  static readonly #pendingByDocument = new WeakMap<Document, TooltipController>();
 
   static readonly consumeEscape = (event: KeyboardEvent, ownerDocument: Document): boolean => {
     if (
@@ -113,7 +57,9 @@ export class TooltipController {
     ) {
       return false;
     }
-    const active = TooltipController.#activeByDocument.get(ownerDocument);
+    const active =
+      TooltipController.#pendingByDocument.get(ownerDocument) ??
+      TooltipController.#activeByDocument.get(ownerDocument);
     if (!active) {
       return false;
     }
@@ -135,7 +81,9 @@ export class TooltipController {
   };
 
   static closeForProvider(provider: TooltipProvider) {
-    const active = TooltipController.#activeByDocument.get(provider.ownerDocument);
+    const active =
+      TooltipController.#pendingByDocument.get(provider.ownerDocument) ??
+      TooltipController.#activeByDocument.get(provider.ownerDocument);
     if (active && active.#tooltipProvider === provider) {
       active.options.retire();
     }
@@ -143,6 +91,7 @@ export class TooltipController {
 
   #triggerElement: HTMLElement | SVGElement | null = null;
   #pinned = false;
+  #pending = false;
   #describedElement: Element | null = null;
   #openTimer: number | null = null;
   #closeTimer: number | null = null;
@@ -390,15 +339,19 @@ export class TooltipController {
   // way to read it.
   readonly #handleClick = () => {
     if (this.openOnClick && !this.#pinned) {
-      this.#show();
-      this.#pinned = this.host.hasAttribute("open");
+      this.#pinned = this.#show();
       return;
     }
     this.#close();
   };
 
   #scheduleOpen() {
-    if (this.disabled || this.host.hasAttribute("open") || this.#openTimer !== null) {
+    if (
+      this.disabled ||
+      this.#pending ||
+      this.host.hasAttribute("open") ||
+      this.#openTimer !== null
+    ) {
       return;
     }
     const provider = this.#tooltipProvider;
@@ -420,13 +373,33 @@ export class TooltipController {
       this.#isRedundant() ||
       !this.#isPresented()
     ) {
-      return;
+      return false;
     }
-    this.options.requestOpen(true);
+    return this.options.requestOpen(true);
+  }
+
+  /** Loading is cancelable intent; only the overlay lifecycle may accept visibility. */
+  pendingOpen() {
+    const previous = TooltipController.#pendingByDocument.get(this.host.ownerDocument);
+    if (previous && previous !== this) {
+      previous.#close();
+    }
+    this.#pending = true;
+    this.#observePresentation();
+    TooltipController.#pendingByDocument.set(this.host.ownerDocument, this);
+    this.host.ownerDocument.defaultView?.addEventListener(
+      "keydown",
+      this.#handleWindowKeyDown,
+      true,
+    );
   }
 
   /** Apply only lifecycle-admitted state; canceled requests never alter interaction policy. */
   acceptedOpen(open: boolean) {
+    this.#pending = false;
+    if (TooltipController.#pendingByDocument.get(this.host.ownerDocument) === this) {
+      TooltipController.#pendingByDocument.delete(this.host.ownerDocument);
+    }
     if (!open) {
       this.#presentationObserver.disconnect();
       this.#presentationAncestors = [];

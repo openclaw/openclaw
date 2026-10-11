@@ -64,15 +64,20 @@ afterEach(() => {
   container.remove();
 });
 
-async function mountModal(host = container, variant = "", autofocus = true) {
+async function mountModal(
+  host = container,
+  variant = "",
+  autofocus = true,
+  fieldDocument = host.ownerDocument,
+) {
   const modal = document.createElement("openclaw-modal-dialog");
   modal.label = "Edit details";
   modal.className = variant;
-  const name = document.createElement("input");
+  const name = fieldDocument.createElement("input");
   name.autofocus = autofocus;
   name.value = "Original name";
   name.setAttribute("aria-label", "Name");
-  const notes = document.createElement("textarea");
+  const notes = fieldDocument.createElement("textarea");
   notes.setAttribute("aria-label", "Notes");
   modal.append(name, notes);
   modal.addEventListener("modal-cancel", (event) => {
@@ -592,6 +597,27 @@ describe.runIf(browserMode)("modal native focus ownership", () => {
     expect(notes.value).toBe("Shadow draft");
     expect(name.value).toBe("Original name");
   });
+
+  it.each(["parent", "iframe"])(
+    "preserves a field created in the %s document when iframe dialog chrome receives focus",
+    async (realm) => {
+      const frame = document.createElement("iframe");
+      container.append(frame);
+      const doc = frame.contentDocument!;
+      const host = doc.createElement("div");
+      doc.body.append(host);
+      const { dialog, name, notes } = await mountModal(
+        host,
+        "",
+        true,
+        realm === "parent" ? document : doc,
+      );
+      expect(doc.activeElement).toBe(name);
+      notes.focus();
+      dialog.focus();
+      expect(doc.activeElement).toBe(notes);
+    },
+  );
 
   it("returns to an external shadow-root trigger when the modal owner is removed", async () => {
     const triggerHost = document.createElement("div");

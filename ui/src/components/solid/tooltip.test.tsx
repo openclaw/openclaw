@@ -2,7 +2,7 @@
 import { cleanup, render } from "@solidjs/testing-library";
 import { createSignal, flush } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { Tooltip, type TooltipElement } from "../tooltip.ts";
+import { Tooltip, type TooltipElement } from "./tooltip.tsx";
 
 let open: WeakSet<Element>;
 let restorePopover: () => void;
@@ -10,6 +10,7 @@ let restorePopover: () => void;
 beforeEach(() => {
   vi.useFakeTimers();
   open = new WeakSet();
+  // oxlint-disable-next-line typescript/unbound-method -- The DOM intrinsic is called below with its explicit element receiver.
   const matches = Element.prototype.matches;
   vi.spyOn(Element.prototype, "matches").mockImplementation(function (selector) {
     return selector === ":popover-open" ? open.has(this) : matches.call(this, selector);
@@ -76,7 +77,7 @@ function fixture(rich = false) {
 }
 
 describe("Solid tooltip policy", () => {
-  it("mounts the plain host before policy setup and keeps descriptions outside lazy content", () => {
+  it("mounts the plain host before policy setup and keeps descriptions outside lazy content", async () => {
     const { host, trigger, surface } = fixture();
     expect(host).toBeInstanceOf(Tooltip.Element);
     expect(trigger.getAttribute("aria-describedby")).toBeTruthy();
@@ -87,6 +88,7 @@ describe("Solid tooltip policy", () => {
     vi.advanceTimersByTime(149);
     expect(host.hasAttribute("open")).toBe(false);
     vi.advanceTimersByTime(1);
+    await host.updateComplete;
     flush();
     expect(open.has(surface)).toBe(true);
     expect(surface.querySelector(".tooltip-content")?.textContent).toBe("Action details");

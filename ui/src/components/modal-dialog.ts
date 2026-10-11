@@ -100,14 +100,26 @@ function acquirePresentation(host: HTMLElement): () => void {
   };
 }
 
+function isHtmlElement(value: EventTarget | null): value is HTMLElement {
+  // Namespace survives document adoption; realm-specific constructors do not.
+  return (
+    value !== null &&
+    "namespaceURI" in value &&
+    value.namespaceURI === "http://www.w3.org/1999/xhtml"
+  );
+}
+
 function activeElement(host: HTMLElement): HTMLElement | null {
+  const view = host.ownerDocument.defaultView;
   const root = host.getRootNode();
   let active =
-    (root instanceof ShadowRoot ? root.activeElement : null) ?? host.ownerDocument.activeElement;
-  while (active instanceof HTMLElement && active.shadowRoot?.activeElement) {
+    (root instanceof ShadowRoot || (view && root instanceof view.ShadowRoot)
+      ? root.activeElement
+      : null) ?? host.ownerDocument.activeElement;
+  while (isHtmlElement(active) && active.shadowRoot?.activeElement) {
     active = active.shadowRoot.activeElement;
   }
-  return active instanceof HTMLElement ? active : null;
+  return isHtmlElement(active) ? active : null;
 }
 
 function restoreFocus(target: HTMLElement) {
@@ -421,7 +433,7 @@ function createModalPolicy(host: OpenClawModalDialog, props: ModalDialogProperti
   const focusin = (event: FocusEvent) => {
     if (event.target === dialog) {
       focusBeforeChrome =
-        event.relatedTarget instanceof HTMLElement && containsComposed(dialog, event.relatedTarget)
+        isHtmlElement(event.relatedTarget) && containsComposed(dialog, event.relatedTarget)
           ? event.relatedTarget
           : null;
       focusInitialContent();

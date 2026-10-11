@@ -116,7 +116,8 @@ async function duringSecondaryOpening(surface: SecondarySurface, action: () => v
   // This retained WA fixture supplies its theme; initialize the native tooltip's motion token.
   popup.style.setProperty("--control-ui-transition-fast", "200ms");
   surface.anchor.blur();
-  expect(getComputedStyle(popup).opacity).toBe("0");
+  // Cold tooltips load their skin with the view, while the native popover stays hidden.
+  await expect.element(popup).not.toBeVisible();
   surface.anchor.focus();
   let animation: Animation | undefined;
   let rate = 1;
