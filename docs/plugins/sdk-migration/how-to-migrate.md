@@ -9,6 +9,123 @@ sidebarTitle: "How to migrate"
 
 The ordered migration steps. Work through them in order; each step is self-contained. Part of the [Plugin SDK migration](/plugins/sdk-migration) guide.
 
+## Await GitHub publication operations
+
+The Gateway context's `githubPublicationService` provides versioned requests and
+awaited lifecycle operations for shared, personal, and repository publication.
+Use the same service from `GatewayRequestHandlerOptions` in `core` or
+`gateway-runtime`, or from the current `plugin-runtime` request scope. There is
+no new GitHub-specific SDK subpath.
+
+| Deprecated method           | Replacement                        |
+| --------------------------- | ---------------------------------- |
+| `requestForSession`         | `requestForSessionV2`              |
+| `requestForClaim`           | `requestForClaimV2`                |
+| `requestPersonalForSession` | `requestPersonalForSessionV2`      |
+| `confirmPersonal`           | `confirmPersonalV2`                |
+| `deferClaimPreparation`     | `await deferClaimPreparationAsync` |
+| `deferOrphanedRequests`     | `await deferOrphanedRequestsAsync` |
+| `listUnreportedResults`     | `await listUnreportedResultsAsync` |
+| `markReported`              | `await markReportedAsync`          |
+
+The same Gateway context exposes personal connection operations through
+`githubOAuthService.personal`. Replace
+`personal.cancelAuthorization(action, requestId)` with
+`await personal.cancelAuthorizationAsync(action, requestId)`, and
+`personal.disconnect(action)` with `await personal.disconnectAsync(action)`.
+The arguments are unchanged. The legacy methods retain their synchronous
+`boolean` and `void` results and commit before returning; the async methods
+resolve after the worker commits and installs the connection facts. They share
+the publication family's deprecation warning and removal window below.
+
+The V2 request methods require the host's `GitHubPublicationRequesterV2`;
+personal methods require `PersonalGitHubSessionActionV2`. Prepare them through
+`prepareGitHubPublicationRequesterV2` or `preparePersonalGitHubSessionActionV2`
+from `openclaw/plugin-sdk/gateway-runtime`, passing the admitted Gateway handler
+options and selected session. Forward the original object through adapters.
+These capabilities include `version: 2`,
+a lifetime `signal`, and `prepareSource`, in addition to their existing caller
+assertions. Do not synthesize them from request parameters, a saved requester
+snapshot, or a legacy callback. Their source capability is bound to the admitted
+session and physical database lifetime and cannot be reconstructed from JSON.
+
+Replace the legacy call `await service.requestForSession({ ...input, requester })`
+and its opaque requester assertions with a retained host preparation:
+
+```ts
+import {
+  prepareGitHubPublicationRequesterV2,
+  type GatewayRequestHandlerOptions,
+} from "openclaw/plugin-sdk/gateway-runtime";
+
+type Publications = NonNullable<
+  GatewayRequestHandlerOptions["context"]["githubPublicationService"]
+>;
+type PublicationInput = Omit<
+  Parameters<Publications["requestForSessionV2"]>[0],
+  "requester" | "sessionKey"
+> & { sessionKey: string };
+
+async function publish(options: GatewayRequestHandlerOptions, input: PublicationInput) {
+  const service = options.context.githubPublicationService;
+  if (!service) throw new Error("GitHub publication is unavailable.");
+  const prepared = await prepareGitHubPublicationRequesterV2(options, {
+    agentId: input.agentId,
+    sessionKey: input.sessionKey,
+  });
+  try {
+    return await service.requestForSessionV2({ ...input, requester: prepared.requester });
+  } finally {
+    prepared.release();
+  }
+}
+```
+
+For personal publication, call
+`await preparePersonalGitHubSessionActionV2(options, { sessionKey, agentId })`,
+pass its `action` to `requestPersonalForSessionV2` or `confirmPersonalV2`, and
+release it in the same `try`/`finally` pattern. The factory derives personal and
+session authority from the admitted handler context; a claimed profile ID does
+not grant access.
+
+V2 prepares host policy before acquiring database reservations. The worker
+compares the selected session lifecycle, requester, connection, and workspace
+facts under source exclusion, then commits the request and lifecycle binding in
+one destination transaction. The source remains reserved until that transaction
+settles. Async completion includes installation of its committed facts. Keep the
+requester's owner alive until the operation and its cleanup settle.
+
+Legacy requester assertions may read or mutate SQLite. The service selects their
+native compatibility route before invoking them; it does not serialize closures
+or invoke arbitrary host policy from inside a reserved worker transaction.
+Migrating to V2 changes that callback ordering: preparation precedes reservation,
+and typed predicates authorize commit. It does not preserve arbitrary
+transaction-local callback visibility. A failed or uncertain worker operation
+never retries through the legacy route or replays an accepted external effect.
+
+Await deferral and reporting before dependent reads or shutdown. Reporting and
+claim deferral each update the relevant publication kinds in one worker transaction. Accepted
+bookkeeping, including execution claims, head updates, dispatch markers, observed effects, and completion, can settle
+after action cancellation while the execution owner retains custody. The worker
+applies its request and execution predicates inside its transaction; it does not
+request another host grant for each bookkeeping commit. This grants no authority
+for another push or pull request. New external effects always require current
+caller and source authority at the point of effect.
+An attempted-dispatch marker can remain when that final guard refuses the action;
+only an observed response records the effect as observed.
+
+Checkpoint-preparation failure and stale-request retirement also record outcomes
+without source reservations. A checkpoint becoming available or a session being
+restored after the check may require a new publication request; the original
+content and recorded GitHub effects remain intact.
+
+The deprecated methods retain their released signatures and completion timing;
+synchronous mutations still commit before returning. Actual legacy use emits one
+warning per plugin and the `github-publication` family per Gateway process,
+through the shared SDK warning helper. Unknown direct SDK consumers share one
+bounded family warning. These methods will be **removed in the next Plugin SDK
+major**. No schema, stored-data, retention, or update migration is required.
+
 ## Replace native SQLite runtime writes
 
 Plugins using the internal `sqlite-runtime` facade should send data-only commands
@@ -269,11 +386,18 @@ behavior.
 
 ## Await placement preparation
 
-Gateway contexts provide `workerSessionPlacementService.getManyAsync` and
-`retireSessionPlacementAsync`. Await their results before using placement facts,
+Gateway contexts provide `workerSessionPlacementService.getAsync`, `getManyAsync`,
+`listAsync`, `listForReconcileAsync`, and `retireSessionPlacementAsync`.
+Await their results before using placement facts,
 starting dependent work, or releasing request resources. Their synchronous
 counterparts shipped through the 2026.9.8 Gateway SDK and remain deprecated
 compatibility methods until the next Plugin SDK major.
+
+Placement activation callbacks receive the committed active placement directly.
+Use that result for maintenance scheduling instead of reading it again. Native
+readers remain available for final synchronous execution or disclosure guards;
+prepared placement facts do not replace those checks. Legacy placement reads
+warn once per plugin and capability family.
 
 Startup also awaits `clearLocalTurnClaimsAfterRestartAsync` while holding the
 state-directory lock, before admitting turns. The placement worker clears stale

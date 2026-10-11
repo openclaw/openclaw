@@ -21,6 +21,18 @@ export function createCronViewJob(id: string, overrides: Partial<CronJob> = {}):
   } as CronJob;
 }
 
+export function scheduledJob(id: string, overrides: Partial<CronJob> = {}): CronJob {
+  return createCronViewJob(id, {
+    name: "Nightly digest",
+    schedule: { kind: "every", everyMs: 60_000 },
+    sessionTarget: "isolated",
+    wakeMode: "now",
+    payload: { kind: "agentTurn", message: "digest" },
+    state: {},
+    ...overrides,
+  });
+}
+
 export function createCronViewProps(overrides: Partial<CronProps> = {}): CronProps {
   return {
     loading: false,
