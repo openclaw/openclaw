@@ -26,6 +26,15 @@ export type ChatSubagentWait = {
   child?: { key: string; label: string };
 };
 
+export type ChatSubagentActivity = {
+  session: GatewaySessionRow;
+  key: string;
+  label: string;
+  status: "queued" | "running" | "waiting";
+  activity?: string;
+  listed: boolean;
+};
+
 // A count or a name says which children are left, so it waits for the pane's
 // own child query. Rows seeded from another list can hold only some of them.
 function unfinishedChildren(session: GatewaySessionRow, roster: SubagentRoster) {
@@ -36,7 +45,7 @@ function unfinishedChildren(session: GatewaySessionRow, roster: SubagentRoster) 
     const parent = resolveUiSessionNavigationParentKey(row);
     return (
       !row.archived &&
-      isUnfinishedSubagent(row) &&
+      (row.status === "queued" || isUnfinishedSubagent(row)) &&
       !areUiSessionKeysEquivalent(row.key, session.key) &&
       (parent
         ? areUiSessionKeysEquivalent(parent, session.key)
@@ -73,10 +82,39 @@ export function projectSubagentStatus(
   // Dashboard children count as sessions, never named subagents.
   const children = unfinished.filter((row) => !isDashboardSessionKey(row.key));
   const running = children.length;
-  const child = running === 1 ? children[0] : undefined;
+  const hydrated = input.subagentSessionsHydrated && !input.subagentSessionsPending;
+  const child = hydrated && running === 1 ? children[0] : undefined;
+  // Launch order stays stable as activity updates reorder the source roster.
+  // The roster already carries live observer headlines; no child transcript
+  // reads or second execution/status owner are needed for inline progress.
+  const activity: ChatSubagentActivity[] = searchFiltering
+    ? []
+    : children
+        .toSorted(
+          (a, b) =>
+            (a.createdAt ?? a.startedAt ?? 0) - (b.createdAt ?? b.startedAt ?? 0) ||
+            a.key.localeCompare(b.key),
+        )
+        .map((row) => {
+          const status =
+            row.status === "queued" ? "queued" : isSessionRunActive(row) ? "running" : "waiting";
+          const digest = row.observerDigest;
+          return {
+            session: row,
+            key: row.key,
+            label: resolveSessionDisplayName(row.key, row),
+            status,
+            // A retained headline from the previous run is not current activity.
+            activity:
+              status === "running" && digest?.runId && row.activeRunIds?.includes(digest.runId)
+                ? digest.headline.trim() || undefined
+                : undefined,
+            listed: isSubagentsPanelSession(row),
+          };
+        });
   // A hydrated roster with no unfinished children ends the wait.
   const wait: ChatSubagentWait | null =
-    shouldWait && (!input.subagentSessionsHydrated || unfinished.length > 0)
+    shouldWait && (!hydrated || unfinished.length > 0)
       ? {
           // The yield's transcript row can predate the handoff by its whole wrapping
           // step; the parent's run end is the handoff itself.
@@ -87,8 +125,10 @@ export function projectSubagentStatus(
               ? session.endedAt
               : handoffAt,
           ...(handoffAt !== null && pending?.runId ? { runId: pending.runId } : {}),
-          runningCount: running,
-          ...(unfinished.length > running ? { sessionCount: unfinished.length - running } : {}),
+          runningCount: hydrated ? running : 0,
+          ...(hydrated && unfinished.length > running
+            ? { sessionCount: unfinished.length - running }
+            : {}),
           ...(child
             ? {
                 child: {
@@ -112,9 +152,10 @@ export function projectSubagentStatus(
         ? { startedAt: wait.startedAt, runId: wait.runId }
         : undefined,
     running,
+    activity,
     listed,
     // Key only the working line's facts so unrelated roster patches stay memoized.
-    statusKey: JSON.stringify(
+    statusKey: JSON.stringify([
       wait
         ? [
             wait.startedAt,
@@ -125,7 +166,15 @@ export function projectSubagentStatus(
             listed,
           ]
         : [running, listed],
-    ),
+      activity.map(({ session: row, ...display }) => [
+        display,
+        row.sessionId,
+        row.lifecycleRevision,
+        row.agentId,
+        row.activeRunIds,
+        row.observerDigest,
+      ]),
+    ]),
     rowsKey: spawnedSubagentsRenderKey(input.subagentSessions),
   };
 }

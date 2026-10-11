@@ -5,7 +5,6 @@ import type { GatewaySessionRow } from "../../api/types.ts";
 import { hasOperatorApprovalsAccess, hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import { loadSettings, patchSettings } from "../../app/settings.ts";
 import type { BoardWidgetPageMenu } from "../../components/board/board-widget-cell-render.ts";
-import { renderPanelLoadingSkeleton } from "../../components/panel-loading-skeleton.ts";
 import { t } from "../../i18n/index.ts";
 import { BOARD_GRID_COLUMNS } from "../../lib/board/grid.ts";
 import {
@@ -627,16 +626,14 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
     if (!this.isBoardPanelAvailable(board)) {
       return nothing;
     }
-    if (!board.provider.hasLoadedSnapshot) {
-      const error = board.provider.loadError$.value;
-      return error
-        ? html`<div
-            class="board-session-surface__state board-session-surface__state--error"
-            role="alert"
-          >
-            ${t("dashboardDocument.loadFailed", { error })}
-          </div>`
-        : renderPanelLoadingSkeleton("board", t("common.loading"));
+    const error = !board.provider.hasLoadedSnapshot && board.provider.loadError$.value;
+    if (error) {
+      return html`<div
+        class="board-session-surface__state board-session-surface__state--error"
+        role="alert"
+      >
+        ${t("dashboardDocument.loadFailed", { error })}
+      </div>`;
     }
     // Only the loaded board acknowledgment supplies a missing owner; its display key
     // must not replace the original session target (notably global versus a literal key).
@@ -651,7 +648,7 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
           preview: () => !this.presented && this.connectionGeneration === connectionGeneration,
         },
         session,
-        snapshot: board.snapshot,
+        snapshot: board.provider.hasLoadedSnapshot ? board.snapshot : undefined,
         activeTabId: board.activeTabId,
         pageWidgetName: this.pageBoardWidget(layout, board)?.name,
         canMutate: board.provider.canMutate,

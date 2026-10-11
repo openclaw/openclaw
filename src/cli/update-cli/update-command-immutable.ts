@@ -150,14 +150,14 @@ export async function tryRunImmutableUpdateCommand(opts: UpdateCommandOptions): 
   const message =
     result.status === "error"
       ? "Immutable preparation failed; the selected generation was preserved."
-      : typeof activation !== "string"
-        ? activationMessage(activation)
-        : activation === "disabled"
-          ? PREPARATION_ONLY
-          : activation === "skipped"
-            ? "Sealed generation preparation completed; activation was skipped by --no-restart."
-            : activation === "planned"
-              ? "Would activate the prepared generation under the enabled adoption record."
+      : result.status === "dry-run"
+        ? "Inspection only; no generation was prepared or activated."
+        : typeof activation !== "string"
+          ? activationMessage(activation)
+          : activation === "disabled"
+            ? PREPARATION_ONLY
+            : activation === "skipped"
+              ? "Sealed generation preparation completed; activation was skipped by --no-restart."
               : "No immutable activation was needed.";
   if (opts.json) {
     defaultRuntime.writeJson({
@@ -183,6 +183,15 @@ export async function tryRunImmutableUpdateCommand(opts: UpdateCommandOptions): 
     );
     for (const warning of result.warnings) {
       defaultRuntime.error(`Warning: ${warning}`);
+    }
+    if (result.coverage) {
+      const { formatImmutableUpdateCoverage } =
+        await import("../../infra/update-immutable-inspection.js");
+      const { sanitizeTerminalText } =
+        await import("../../../packages/terminal-core/src/safe-text.js");
+      for (const line of formatImmutableUpdateCoverage(result.coverage)) {
+        defaultRuntime.log(sanitizeTerminalText(line));
+      }
     }
     defaultRuntime.log(message);
     if (typeof activation !== "string" && activation.recoveryCommand) {

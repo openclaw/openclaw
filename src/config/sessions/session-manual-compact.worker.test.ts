@@ -17,10 +17,10 @@ import {
   upsertConversationIdentities,
 } from "./session-accessor.sqlite-conversation.js";
 import { replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
-import { replaceTranscriptEventsSync } from "./session-accessor.sqlite-transcript-write.js";
+import { replaceTranscriptEventsSync } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { trimSessionTranscriptForManualCompact } from "./session-accessor.transcript.js";
 import { createSessionCompoundWorkerFixture } from "./session-compound-worker.test-support.js";
-import { captureSessionEntryCurrentCheck } from "./session-entry-current-check.js";
+import { captureSessionEntryCurrentCheckInternal } from "./session-entry-current-check.js";
 import * as rewrite from "./session-message-rewrite-domain.js";
 import { createManualCompactRecords } from "./transcript-message.test-support.js";
 
@@ -229,7 +229,7 @@ it.each([
           });
         }
       }, sourceOptions);
-      const current = await captureSessionEntryCurrentCheck({
+      const current = await captureSessionEntryCurrentCheckInternal({
         ...sourceScope,
         alternatives: conversations.map((identity, index) => ({
           conversations: [{ ...identity, sessionKey: sourceScope.sessionKey }],

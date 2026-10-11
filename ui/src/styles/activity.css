@@ -5,12 +5,16 @@ main.content:where(.content--activity-page) {
   overflow: hidden;
 }
 
-main.content:where(.content--activity-page) > openclaw-router-outlet {
+main.content:where(.content--activity-page) > openclaw-router-outlet,
+.activity-feed {
   display: flex;
   flex-direction: column;
   width: 100%;
   height: 100%;
   min-height: 0;
+}
+
+main.content:where(.content--activity-page) > openclaw-router-outlet {
   margin-top: 0;
 }
 
@@ -114,11 +118,6 @@ a.activity-current-work__row:hover {
 }
 
 .activity-feed {
-  display: flex;
-  flex-direction: column;
-  width: 100%;
-  height: 100%;
-  min-height: 0;
   overflow: hidden;
 }
 
@@ -543,13 +542,17 @@ a.activity-current-work__row:hover {
   }
 }
 
-.activity-feed__note {
+.activity-feed__note,
+.activity-feed__git {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
   gap: var(--space-2);
-  color: var(--muted);
   font-size: var(--control-ui-text-xs);
+}
+
+.activity-feed__note {
+  color: var(--muted);
 }
 
 .activity-feed__note-action {
@@ -575,12 +578,7 @@ a.activity-current-work__row:hover {
 }
 
 .activity-feed__git {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: var(--space-2);
   padding: 0 var(--space-4) var(--space-3) calc(var(--space-4) + 28px + var(--space-3));
-  font-size: var(--control-ui-text-xs);
 }
 
 .activity-feed__pr,
@@ -763,13 +761,17 @@ a.activity-current-work__row:hover {
   white-space: nowrap;
 }
 
-.activity-feed__session-meta {
+.activity-feed__session-meta,
+.activity-feed__session-time {
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  min-width: 0;
   color: var(--muted);
   font-size: var(--control-ui-text-sm);
+}
+
+.activity-feed__session-meta {
+  min-width: 0;
 }
 
 .activity-feed__session-meta .agent-row-chip {
@@ -794,13 +796,8 @@ a.activity-current-work__row:hover {
 }
 
 .activity-feed__session-time {
-  display: flex;
   max-width: 260px;
-  align-items: center;
   justify-content: flex-end;
-  gap: var(--space-2);
-  color: var(--muted);
-  font-size: var(--control-ui-text-sm);
   white-space: nowrap;
 }
 

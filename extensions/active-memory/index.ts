@@ -174,16 +174,20 @@ export default definePluginEntry({
         }
         const commandAgentId = resolveStatusUpdateAgentId({ sessionKey });
         const liveConfig = readCurrentConfig();
-        const commandRecallEnabled =
-          isEnabledForAgent(config, commandAgentId) ||
-          (config.enabled && resolveRememberAcrossConversations(liveConfig, commandAgentId));
-        if (!commandRecallEnabled) {
+        const triggerRecallConfigured = isEnabledForAgent(config, commandAgentId);
+        const rememberEnabled =
+          config.enabled && resolveRememberAcrossConversations(liveConfig, commandAgentId);
+        if (!triggerRecallConfigured && !rememberEnabled) {
           return { text: "Active Memory: off for this session." };
         }
         if (action === "status") {
           const disabled = await isSessionActiveMemoryDisabled({ api, sessionKey });
           return {
-            text: `Active Memory: ${disabled ? "off" : "on"} for this session.`,
+            text: [
+              `Active Memory: ${disabled ? "off" : "on"} for this session.`,
+              `Trigger recall configuration: ${triggerRecallConfigured ? "on" : "off"} for agent ${commandAgentId}.`,
+              `Remember across conversations setting: ${rememberEnabled ? "on" : "off"}.`,
+            ].join("\n"),
           };
         }
         if (enabled !== undefined) {
@@ -467,6 +471,12 @@ export default definePluginEntry({
                 api.logger.debug?.(
                   "active-memory: lane-1 trigger recall skipped: preflight budget exhausted",
                 );
+              }
+            } else if (invocationConfig.enabled && effectiveAgentId && !activeMemoryConfigured) {
+              const line = `active-memory: lane-1 skipped reason=agent-not-configured agent=${effectiveAgentId}`;
+              api.logger.debug?.(line);
+              if (invocationConfig.logging) {
+                api.logger.info?.(line);
               }
             }
             const laneOneContext = laneOne.context;

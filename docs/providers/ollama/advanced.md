@@ -10,6 +10,12 @@ sidebarTitle: "Advanced"
 
 ## Advanced configuration
 
+Native Ollama requests keep exact session identities and runtime facts in the
+first user message, after the shared system and tool prefix. This allows local
+prompt caches to reuse that prefix across equivalent subagent spawns while
+preserving earlier message bytes on follow-up turns. Cache reuse still depends
+on the model template, available cache slots, and unchanged instructions/tools.
+
 <AccordionGroup>
   <Accordion title="Legacy OpenAI-compatible mode">
     <Warning>
@@ -36,7 +42,12 @@ sidebarTitle: "Advanced"
     ```
 
     This mode may not support streaming and tool calling simultaneously; you
-    may need `params: { streaming: false }` on the model.
+    may need `params: { streaming: false }` on the model in
+    `models.providers.ollama.models`. You can also set it under
+    `agents.defaults.models["ollama/<model>"].params`. For `openai-completions`,
+    this sends `stream: false` upstream and delivers the completed reply with
+    its usage, reasoning, and tool calls. Streaming remains enabled when unset;
+    this setting does not change native Ollama `/api/chat` requests.
 
     OpenClaw injects `options.num_ctx` by default in this mode so Ollama does
     not silently fall back to a 4096-token context. If your proxy rejects
@@ -157,7 +168,18 @@ sidebarTitle: "Advanced"
     OpenClaw forwards thinking as Ollama expects it: top-level `think`, not
     `options.think`. Auto-discovered models whose `/api/show` reports a
     `thinking` capability expose `/think low`, `/think medium`, `/think high`,
-    and `/think max`; non-thinking models expose only `/think off`.
+    and `/think max`; non-thinking models expose only `/think off`. When
+    `/api/show` also reports `thinking.values`, discovery caches a model-specific
+    mapping. Boolean models send `false` or `true`; graded models send their
+    supported effort strings. Advertised `xhigh` is also available through
+    `/think xhigh` and `--thinking xhigh`.
+
+    Existing selections map to the nearest supported tier using OpenClaw's
+    shared thinking ladder. For example, a model advertising `low`, `medium`,
+    and `xhigh` receives `xhigh` for High and Maximum. If the model cannot
+    disable thinking, Off uses its lowest supported tier. OpenClaw keeps its
+    existing Off default rather than adopting `thinking.default`. Discovery
+    caches these mappings with model metadata; turns do not fetch them again.
 
     When replaying an assistant message, native requests retain its available
     reasoning in Ollama's separate `thinking` field alongside text and tool
@@ -188,9 +210,11 @@ sidebarTitle: "Advanced"
     Per-model `params.think`/`params.thinking` can disable or force API
     thinking for a specific model. OpenClaw preserves that explicit config
     when the active run only has the implicit `off` default; a non-off
-    runtime command such as `/think medium` still overrides it. A truthy
-    thinking request is never sent to a model explicitly marked
-    `reasoning: false`; a `think: false` request is always sent regardless.
+    runtime command such as `/think medium` still overrides it. A model marked
+    `reasoning: false` suppresses enabled runtime selections. However, a
+    mandatory-thinking model still uses its lowest supported tier for Off or a
+    configured `false`, keeping reasoning out of the answer even when its
+    visibility is disabled.
 
   </Accordion>
 
@@ -229,8 +253,12 @@ sidebarTitle: "Advanced"
     | Property | Value |
     | --- | --- |
     | Default model | `nomic-embed-text` |
-    | Auto-pull | Yes, if not present locally |
+    | Auto-pull | No; pull the model on the Ollama host first |
     | Embedding concurrency | Provider-owned; no memory-search tuning key is required |
+
+    Before indexing memory, run `ollama pull nomic-embed-text` on the configured
+    Ollama host (or pull the model selected by `memory.search.model`). A missing
+    model returns HTTP 404; OpenClaw does not download it automatically.
 
     Query-time embeddings use retrieval prefixes for models that require or
     recommend them: `nomic-embed-text`, `qwen3-embedding`, and
@@ -273,8 +301,10 @@ sidebarTitle: "Advanced"
     For native requests, `/think off`, `openclaw agent --thinking off`, and
     plugin `api.runtime.llm.complete({ reasoning: "off" })` calls send top-level
     `think: false` unless an explicit `params.think`/`params.thinking` is
-    configured. Direct completions that omit `reasoning` keep the model default.
-    `/think low|medium|high` send the matching effort string. Verified full-effort
+    configured or discovery reports a model that cannot disable thinking.
+    Direct completions that omit `reasoning` keep the model default.
+    Without a discovered thinking descriptor, `/think low|medium|high` send
+    the matching effort string. Verified full-effort
     Ollama Cloud families such as GLM 5.2, GLM 5.3, GLM 5.3 Flash, Kimi K3,
     DeepSeek V4, and DeepSeek V4.1 Flash also send native
     `think: "max"` for `/think max`; other models and local servers keep the

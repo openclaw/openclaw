@@ -7,6 +7,7 @@ import {
 } from "../../packages/gateway-protocol/src/client-info.js";
 import { ConnectErrorDetailCodes } from "../../packages/gateway-protocol/src/connect-error-details.js";
 import { startMinimalRealGateway } from "../gateway/minimal-gateway.test-helpers.js";
+import { ExitError } from "../runtime.js";
 import { encodeResumeHandoff } from "../shared/resume-handoff.js";
 import type { TuiSessionList } from "../tui/tui-backend.js";
 import { resolveResumeSession } from "../tui/tui-session-picker.js";
@@ -34,7 +35,8 @@ vi.mock("../tui/tui.js", () => ({
   runTui: mocks.runTui,
 }));
 
-vi.mock("../runtime.js", () => ({
+vi.mock("../runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../runtime.js")>()),
   defaultRuntime: mocks,
 }));
 
@@ -250,7 +252,6 @@ describe("runResumeCommand", () => {
         tlsFingerprint: "sha256:explicit-pin",
       },
       session: sessionKey,
-      forceProcessExitOnReturn: true,
     });
   });
 
@@ -328,7 +329,6 @@ describe("runResumeCommand", () => {
           tlsFingerprint: "sha256:resolved-pin",
         },
         session: "agent:main:alpha",
-        forceProcessExitOnReturn: true,
       }),
     );
   });
@@ -368,6 +368,26 @@ describe("runResumeCommand", () => {
 });
 
 describe("resume command registration", () => {
+  it("preserves the reported session miss through an exiting runtime", async () => {
+    const client = createGatewayClient([]);
+    const exit = new ExitError(1);
+    mocks.exit.mockImplementation(() => {
+      throw exit;
+    });
+    const program = new Command().name("openclaw");
+    registerResumeCli(program);
+    await expect(program.parseAsync(["resume", "missing"], { from: "user" })).rejects.toBe(exit);
+    expect(mocks.exit).toHaveBeenCalledExactlyOnceWith(1);
+    expect(mocks.error.mock.calls).toEqual([
+      ['No recent session matched "missing".'],
+      [
+        "Run `openclaw resume` to choose from recent sessions or `openclaw sessions` to inspect all sessions.",
+      ],
+    ]);
+    expect(client.stop).toHaveBeenCalledOnce();
+    expect(mocks.runTui).not.toHaveBeenCalled();
+  });
+
   it("documents the additive opaque handoff option", () => {
     const program = new Command().name("openclaw");
     registerResumeCli(program);
@@ -404,7 +424,7 @@ describe("real Gateway session boundary", () => {
       expect.objectContaining({ agentId: "work", includeGlobal: true }),
     );
     expect(mocks.runTui).toHaveBeenCalledWith(
-      expect.objectContaining({ session: "agent:work:global", forceProcessExitOnReturn: true }),
+      expect.objectContaining({ session: "agent:work:global" }),
     );
   });
 
@@ -478,7 +498,7 @@ describe("real Gateway session boundary", () => {
     expect(harness.sessionListRequests).toHaveLength(listStart);
     expect(mocks.connect).toHaveBeenCalledTimes(3);
     expect(mocks.runTui).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({ session: "agent:main:alpha", forceProcessExitOnReturn: true }),
+      expect.objectContaining({ session: "agent:main:alpha" }),
     );
     expect(lifecycle).toEqual(["stopped", "tui", "stopped", "stopped"]);
   });

@@ -15,11 +15,14 @@ import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { AgentsApiBinding } from "./agentsapi-bindings.js";
 import { AgentsApiClient, type AgentsApiInputFile } from "./agentsapi-client.js";
+import { registerNativeLifecycleTests } from "./agentsapi-harness.lifecycle.test-helpers.js";
+import { registerMigrationTests } from "./agentsapi-harness.migration.test-helpers.js";
 import {
   connectedEnvironment,
   createAttempt,
   executorFixture,
   registerHarness,
+  mockClient,
   reopenState,
   requireExecutorHarness,
 } from "./agentsapi-harness.persistence.test-helpers.js";
@@ -138,7 +141,7 @@ it("reopens an existing hosted binding and requires reset before persisting a fr
           kind: "failed",
           error: expect.objectContaining({
             message:
-              "Agents API model, environment, or MCP configuration changed; reset the OpenClaw session before continuing",
+              "Agents API model, environment, MCP, or web-search policy changed; reset the OpenClaw session before continuing",
           }),
         },
       });
@@ -311,7 +314,9 @@ it.each([
   async ({ uploadsBeforeDisconnect }) => {
     await withOpenClawTestState({ label: "agentsapi-original-images" }, async (state) => {
       const params = await createAttempt(state.stateDir);
-      const { create, message } = mockClient("image-session");
+      const { create, message, session } = mockClient("image-session");
+      // Attachment transport owns the session/environment lookup in this fixture.
+      session.mockRestore();
       const upload = vi.spyOn(AgentsApiClient.prototype, "uploadFile");
       let uploadedCount = 0;
       fetchWithSsrFGuardMock.mockImplementation(async ({ url, init, beforeRequest }) => {
@@ -372,7 +377,7 @@ it.each([
               resolveInputAttachmentMedia: async () => media,
             },
           });
-          expect(result).toMatchObject({ terminal: { kind: "ok" } });
+          expect(result).toHaveProperty("terminal", { kind: "ok" });
         }
         const firstFile = create.mock.calls[0]?.[3]?.files?.[0];
         expect(firstFile).toBeDefined();
@@ -779,6 +784,8 @@ it("retains earlier controlled bindings and explains the required upgrade cutove
   });
 });
 
+registerNativeLifecycleTests(resolveProviderAuth);
+
 it("can reset an owned executor after Gateway restart when its controller is unavailable", async () => {
   await withOpenClawTestState({ label: "agentsapi-executor-missing-controller" }, async (state) => {
     const fixture = await executorFixture(state);
@@ -839,19 +846,15 @@ it.each([false, true])(
 
         await harness.withSessionDeletion(
           { ...fixture.params.sessionTarget, assertCurrent: () => {} },
-          async (mutation) => {
+          async (settle) => {
             expect(fixture.events).toEqual(["cancel", "retire"]);
-            mutation.commit();
-            fixture.events.push("commit");
-            if (rollback) {
-              mutation.rollback();
-              fixture.events.push("rollback");
-            }
+            await settle(rollback ? "rollback" : "commit");
+            fixture.events.push(rollback ? "rollback" : "commit");
           },
         );
 
         expect(fixture.events).toEqual(
-          rollback ? ["cancel", "retire", "commit", "rollback"] : ["cancel", "retire", "commit"],
+          rollback ? ["cancel", "retire", "rollback"] : ["cancel", "retire", "commit"],
         );
         expect(await fixture.openStore().lookup(fixture.params.sessionId)).toEqual(
           rollback ? saved : undefined,
@@ -859,7 +862,7 @@ it.each([false, true])(
         if (rollback) {
           await harness.withSessionDeletion(
             { ...fixture.params.sessionTarget, assertCurrent: () => {} },
-            async (mutation) => mutation.commit(),
+            async (settle) => settle(),
           );
           expect(fixture.controller.retire.mock.calls.map(([binding]) => binding)).toEqual([
             saved?.executor,
@@ -885,7 +888,7 @@ it("completes session deletion when unused executor retirement fails", async () 
         new Error("Executor retirement was not acknowledged"),
       );
       const target = { ...fixture.params.sessionTarget, assertCurrent: () => {} };
-      await harness.withSessionDeletion(target, async (mutation) => mutation.commit());
+      await harness.withSessionDeletion(target, async (settle) => settle());
       expect(fixture.controller.retire).toHaveBeenCalledExactlyOnceWith(
         saved?.executor,
         expect.any(Object),
@@ -940,7 +943,7 @@ it.each([
               ? harness.reset({ sessionId: fixture.params.sessionId, reason: "reset" })
               : harness.withSessionDeletion(
                   { ...fixture.params.sessionTarget, assertCurrent: () => {} },
-                  async (mutation) => mutation.commit(),
+                  async (settle) => settle(),
                 );
           if (operation === "reset") {
             await expect(cleanup()).rejects.toMatchObject({
@@ -1006,7 +1009,7 @@ it.each(["auth failure", "authority revoked", "missing key", "oauth credential"]
                 }
               },
             },
-            async (mutation) => mutation.commit(),
+            async (settle) => settle(),
           );
         if (failureMode === "missing key" || failureMode === "oauth credential") {
           await expect(cleanup()).rejects.toThrow();
@@ -1028,10 +1031,4 @@ it.each(["auth failure", "authority revoked", "missing key", "oauth credential"]
   },
 );
 
-function mockClient(sessionId: string) {
-  const create = vi.spyOn(AgentsApiClient.prototype, "create").mockResolvedValue(sessionId);
-  const update = vi.spyOn(AgentsApiClient.prototype, "setReasoningEffort").mockResolvedValue();
-  const message = vi.spyOn(AgentsApiClient.prototype, "message").mockResolvedValue();
-  vi.spyOn(AgentsApiClient.prototype, "items").mockResolvedValue([]);
-  return { create, update, message };
-}
+registerMigrationTests(fetchWithSsrFGuardMock);

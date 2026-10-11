@@ -75,6 +75,7 @@ function readGeneration(pathname: string): SqliteFileGeneration {
   };
 }
 
+/** Raw source reads require an isolated process or a drained database owner. */
 export function readStableSqliteFileGeneration(pathname: string): SqliteFileGeneration {
   const first = readGeneration(pathname);
   const second = readGeneration(pathname);

@@ -83,15 +83,6 @@ import {
 } from "./setup-native-session-catalogs.js";
 import { captureSystemAgentOwnerPluginArtifacts } from "./verified-inference.js";
 
-function resolveRouteModelRef(ctx: StageContext, defaultModelRef: string): string | StageFailure {
-  return resolveSetupModel({
-    label: ctx.params.kind,
-    providerId: parseInferenceRef(defaultModelRef).provider,
-    defaultModel: defaultModelRef,
-    modelRef: ctx.params.modelRef,
-  });
-}
-
 async function stageCandidate(ctx: StageContext): Promise<StagedCandidate | StageFailure> {
   const { params, cfg } = ctx;
   const hasProviderTarget =
@@ -148,40 +139,45 @@ async function stageCandidate(ctx: StageContext): Promise<StagedCandidate | Stag
         ...(route.authProfileId ? { authProfileId: route.authProfileId } : {}),
       };
     }
-    case "codex-cli": {
-      const modelRef = resolveRouteModelRef(ctx, CODEX_APP_SERVER_DEFAULT_MODEL_REF);
-      return typeof modelRef === "string" ? await stageCodexCandidate(ctx, modelRef) : modelRef;
-    }
     case "api-key":
       return await stageProviderAuthCandidate(ctx, false);
     case "provider-auth":
       return await stageProviderAuthCandidate(ctx, true);
-    case "claude-cli": {
-      const modelRef = resolveRouteModelRef(ctx, CLAUDE_CLI_DEFAULT_MODEL_REF);
-      if (typeof modelRef !== "string") {
-        return modelRef;
-      }
-      const ref = parseInferenceRef(modelRef);
-      const provider =
-        resolveCliRuntimeCanonicalProvider({
-          runtime: ref.provider,
-          config: cfg,
-          env: process.env,
-          includeSetupRegistry: true,
-        }) ?? ref.provider;
-      return { modelRef: `${provider}/${ref.model}`, agentRuntimeId: "claude-cli", config: cfg };
-    }
+    case "codex-cli":
+    case "claude-cli":
     case "gemini-cli":
     case "openai-api-key":
     case "anthropic-api-key": {
       const defaults = {
+        "codex-cli": CODEX_APP_SERVER_DEFAULT_MODEL_REF,
+        "claude-cli": CLAUDE_CLI_DEFAULT_MODEL_REF,
         "gemini-cli": GEMINI_CLI_DEFAULT_MODEL_REF,
         "openai-api-key": OPENAI_API_DEFAULT_MODEL_REF,
         "anthropic-api-key": ANTHROPIC_API_DEFAULT_MODEL_REF,
       };
-      const modelRef = resolveRouteModelRef(ctx, defaults[params.kind]);
+      const defaultModel = defaults[params.kind];
+      const modelRef = resolveSetupModel({
+        label: params.kind,
+        providerId: parseInferenceRef(defaultModel).provider,
+        defaultModel,
+        modelRef: params.modelRef,
+      });
       if (typeof modelRef !== "string") {
         return modelRef;
+      }
+      if (params.kind === "codex-cli") {
+        return await stageCodexCandidate(ctx, modelRef);
+      }
+      if (params.kind === "claude-cli") {
+        const ref = parseInferenceRef(modelRef);
+        const provider =
+          resolveCliRuntimeCanonicalProvider({
+            runtime: ref.provider,
+            config: cfg,
+            env: process.env,
+            includeSetupRegistry: true,
+          }) ?? ref.provider;
+        return { modelRef: `${provider}/${ref.model}`, agentRuntimeId: "claude-cli", config: cfg };
       }
       return {
         modelRef,
@@ -202,26 +198,21 @@ async function withSetupInferenceErrorRedaction<T>(
     return await operation();
   } catch (error) {
     const redacted = await redactSetupInferenceError(error, apiKey);
-    if (error instanceof WizardCancelledError) {
-      throw new WizardCancelledError(redacted);
-    }
     if (error instanceof WizardNavigationError) {
       throw new WizardNavigationError(error.direction);
     }
     if (error instanceof SetupInferenceCancelledError) {
       throw new SetupInferenceCancelledError();
     }
-    if (error instanceof SetupInferenceActivationUnavailableError) {
-      throw new SetupInferenceActivationUnavailableError(redacted);
-    }
-    if (error instanceof SetupInferenceOwnerDriftError) {
-      throw new SetupInferenceOwnerDriftError(redacted);
-    }
-    if (error instanceof SetupInferenceActivationIndeterminateError) {
-      throw new SetupInferenceActivationIndeterminateError(redacted);
-    }
-    // oxlint-disable-next-line preserve-caught-error -- The original cause can contain the submitted setup secret.
-    throw new Error(redacted);
+    // Original causes and stacks can contain the submitted secret.
+    const RedactedError =
+      [
+        WizardCancelledError,
+        SetupInferenceActivationUnavailableError,
+        SetupInferenceOwnerDriftError,
+        SetupInferenceActivationIndeterminateError,
+      ].find((ErrorType) => error instanceof ErrorType) ?? Error;
+    throw new RedactedError(redacted);
   }
 }
 
@@ -289,7 +280,7 @@ async function activateCandidate(
     workspace: params.workspace?.trim()
       ? resolveUserPath(params.workspace)
       : resolveSetupInferenceWorkspace(snapshot),
-    credentialsSaved: false,
+    effects: { credentialsSaved: false },
     beforePersistentEffect: async () => {
       throwIfSetupInferenceCancelled(params);
       await params.beforePersistentEffect?.();
@@ -299,7 +290,7 @@ async function activateCandidate(
   const staged = await stageCandidate(ctx);
   const failure = (result: Extract<ActivateSetupInferenceResult, { ok: false }>) => ({
     ...result,
-    ...(ctx.credentialsSaved
+    ...(ctx.effects.credentialsSaved
       ? {
           error: `Credentials saved; default unchanged. ${result.error} Choose the saved sign-in in Model Setup to retry without signing in again.`,
         }

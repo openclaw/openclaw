@@ -172,6 +172,7 @@ describe("registered guest publication target discovery", () => {
         expect(unavailable).toHaveBeenCalledWith(true, {
           personal: null,
           shared: null,
+          sharedUnavailableReason: "unsupported_workspace",
           pendingPersonal: null,
           latestShared: receipt,
         });
@@ -291,6 +292,9 @@ describe("registered guest publication target discovery", () => {
         ).toHaveBeenCalledWith(true, {
           personal: null,
           shared: url.includes("github.com") ? publisher : null,
+          ...(url.includes("github.com")
+            ? {}
+            : { sharedUnavailableReason: "unsupported_workspace" }),
           pendingPersonal: null,
           latestShared: receipt,
         });

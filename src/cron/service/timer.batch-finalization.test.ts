@@ -20,7 +20,7 @@ import {
 import { createCronExecutionId } from "../run-id.js";
 import { loadCronStore, saveCronStore } from "../store.js";
 import { cronStoreKey } from "../store/key.js";
-import type { CronJob } from "../types.js";
+import type { CronJob, CronRunErrorClassification } from "../types.js";
 import { start, stop } from "./ops-lifecycle.js";
 import { add, remove } from "./ops-mutations.js";
 import * as runtimeMutation from "./runtime-mutation.js";
@@ -89,6 +89,7 @@ function finalizeError(
   job: CronJob,
   error: string,
   options?: Parameters<typeof finalizeCompletedCronRunOutcomes>[2],
+  errorClassification?: CronRunErrorClassification,
 ) {
   const outcome = authorCronRunCompletion(job, {
     jobId: job.id,
@@ -96,6 +97,7 @@ function finalizeError(
     activeJobMarker: markCronJobActive(job.id),
     status: "error",
     error,
+    ...(errorClassification ? { errorClassification } : {}),
     startedAt: DUE_AT,
     endedAt: DUE_AT + 10,
   });
@@ -359,7 +361,13 @@ describe("cron batch outcome finalization", () => {
       resolveOriginDeliveryContext,
       requestHeartbeat,
     });
-    await finalizeError(state, job, "cron: job execution timed out at /private/agent/work");
+    await finalizeError(
+      state,
+      job,
+      "cron: job execution timed out at /private/agent/work",
+      undefined,
+      { kind: "reason", reason: "timeout" },
+    );
     expect(order).toEqual(["notify", "heartbeat"]);
     expect(enqueueSystemEvent).toHaveBeenCalledExactlyOnceWith(
       expect.stringContaining(`openclaw automations enable ${job.id}`),

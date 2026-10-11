@@ -350,25 +350,30 @@ export async function readMantisLaneResult(params: {
   };
 }
 
-export async function copyMantisLaneArtifact(params: {
-  kind: "screenshot" | "video";
+export async function copyMantisLaneArtifacts(params: {
   lane: "baseline" | "candidate";
   result: LaneResult;
-}): Promise<string | undefined> {
-  const artifactPath =
-    params.kind === "screenshot" ? params.result.screenshotPath : params.result.videoPath;
-  if (!artifactPath) {
-    return undefined;
+}): Promise<LaneResult> {
+  const copied = {
+    screenshotPath: params.result.screenshotPath,
+    videoPath: params.result.videoPath,
+  };
+  for (const [field, extension] of [
+    ["screenshotPath", "png"],
+    ["videoPath", "mp4"],
+  ] as const) {
+    const artifactPath = params.result[field];
+    if (!artifactPath) {
+      continue;
+    }
+    const source = path.isAbsolute(artifactPath)
+      ? artifactPath
+      : path.join(params.result.outputDir, artifactPath);
+    const target = path.join(params.result.outputDir, `${params.lane}.${extension}`);
+    await fs.copyFile(source, target);
+    copied[field] = target;
   }
-  const source = path.isAbsolute(artifactPath)
-    ? artifactPath
-    : path.join(params.result.outputDir, artifactPath);
-  const target = path.join(
-    params.result.outputDir,
-    `${params.lane}.${params.kind === "screenshot" ? "png" : "mp4"}`,
-  );
-  await fs.copyFile(source, target);
-  return target;
+  return { ...params.result, ...copied };
 }
 
 export async function stageMantisLaneOutput(sourceDir: string, targetDir: string): Promise<void> {

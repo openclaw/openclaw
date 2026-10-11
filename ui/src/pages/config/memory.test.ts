@@ -110,28 +110,30 @@ describe("renderMemory", () => {
 
     expect(
       container
-        .querySelector('wa-radio[value="retired-memory"]')
+        .querySelector('.settings-segmented__btn:has(input[value="retired-memory"])')
         ?.textContent?.replace(/\s+/g, " ")
         .trim(),
     ).toBe("retired-memory (Unavailable)");
     expect(
-      container
-        .querySelector('wa-radio[value="retired-memory"]')
-        ?.classList.contains("settings-segmented__btn--active"),
+      container.querySelector<HTMLInputElement>(
+        '.settings-segmented__input[value="retired-memory"]',
+      )?.checked,
     ).toBe(true);
   });
 
   it("renders enabled and disabled add-ons as accessible toggles", () => {
     const container = renderInto(createProps());
 
-    const switches = [
-      ...container.querySelectorAll<HTMLElement & { checked: boolean }>("wa-switch"),
-    ];
+    const switches = [...container.querySelectorAll<HTMLInputElement>(".settings-toggle__input")];
     expect(switches).toHaveLength(2);
     expect(switches[0]?.checked).toBe(true);
     expect(switches[1]?.checked).toBe(false);
-    expect(switches[0]?.textContent).toContain("Enable or disable Active memory");
-    expect(switches[1]?.textContent).toContain("Enable or disable Memory wiki");
+    expect(switches[0]?.closest(".settings-toggle")?.textContent).toContain(
+      "Enable or disable Active memory",
+    );
+    expect(switches[1]?.closest(".settings-toggle")?.textContent).toContain(
+      "Enable or disable Memory wiki",
+    );
     const link = container.querySelector<HTMLAnchorElement>("a.memory-page__link");
     expect(link?.getAttribute("href")).toBe("/settings/plugins");
   });

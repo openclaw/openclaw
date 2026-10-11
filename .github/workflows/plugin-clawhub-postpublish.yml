@@ -1,7 +1,7 @@
 name: Plugin ClawHub Postpublish
 
 on:
-  workflow_run: # zizmor: ignore[dangerous-triggers] read-only verifier; authenticates exact successful parent/child attempts and immutable receipt/artifact tuples; never executes downloaded content
+  workflow_run: # zizmor: ignore[dangerous-triggers] read-only verifier; authenticates exact sealed parent/child attempts and immutable receipt/artifact tuples; never executes downloaded content
     workflows: [OpenClaw Release Publish]
     types: [completed]
 
@@ -22,7 +22,7 @@ jobs:
       github.repository == 'openclaw/openclaw' &&
       github.event.workflow_run.repository.full_name == 'openclaw/openclaw' &&
       github.event.workflow_run.event == 'workflow_dispatch' &&
-      github.event.workflow_run.conclusion == 'success'
+      (github.event.workflow_run.conclusion == 'success' || github.event.workflow_run.conclusion == 'failure')
     runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON('ubuntu-latest'))) || ('ubuntu-latest') }}
     timeout-minutes: 60
     steps:
@@ -41,6 +41,7 @@ jobs:
       - name: Verify terminal publication and canonical registry bytes
         env:
           GH_TOKEN: ${{ github.token }}
+          PARENT_STATE_POLICY: ${{ github.event.workflow_run.conclusion == 'failure' && 'sealed-producer' || 'completed-success' }}
           VERIFIER_SHA: ${{ github.workflow_sha }}
         run: node scripts/clawhub-postpublish.mjs
 
