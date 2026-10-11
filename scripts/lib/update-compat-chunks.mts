@@ -403,14 +403,20 @@ function collectRequiredCompatibilityChunks(
   return [...requiredByPath.values()];
 }
 
+const STABLE_10_1_CLEANUP_FACADE = "runtime-cleanup-DlrF_x2c.mjs";
+const STABLE_10_1_CLEANUP_OWNER = "runtime-cleanup-Dowg583v.mjs";
+
 export function listUpdateCompatibilityChunkPaths(
   inventory: UpdateCompatibilityInventory,
 ): string[] {
   return [
     ...new Set(
-      inventory.releases.flatMap((release) =>
-        release.chunks.filter((chunk) => HASHED_CHUNK.test(chunk.path)).map((chunk) => chunk.path),
-      ),
+      inventory.releases.flatMap((release) => [
+        ...release.chunks
+          .filter((chunk) => HASHED_CHUNK.test(chunk.path))
+          .map((chunk) => chunk.path),
+        ...(release.version === "2026.10.1" ? [STABLE_10_1_CLEANUP_OWNER] : []),
+      ]),
     ),
   ].toSorted();
 }
@@ -543,9 +549,30 @@ export function writeUpdateCompatibilityChunks(params: {
       if (!specifier.startsWith(".")) {
         specifier = `./${specifier}`;
       }
-      lines.push(
-        `export { ${match.exported} as ${entry.exported} } from ${JSON.stringify(specifier)};`,
-      );
+      if (
+        chunk.path === STABLE_10_1_CLEANUP_FACADE &&
+        entry.exported === "runCliDisposerAfterPending"
+      ) {
+        // Published 10.1 loads the queue owner before updating, then imports this
+        // facade after replacement. Resolve through that original URL so Node uses
+        // its cached disposer queue, not the candidate's empty queue. Keep the owner
+        // path resolver-visible until upgrades from 10.1 are no longer supported.
+        const owner = path.join(distDir, STABLE_10_1_CLEANUP_OWNER);
+        if (!fs.existsSync(owner) || isUpdateCompatibilityChunk(fs.readFileSync(owner, "utf8"))) {
+          outputs.set(
+            STABLE_10_1_CLEANUP_OWNER,
+            `${UPDATE_COMPATIBILITY_CHUNK_HEADER}\nexport { ${match.exported} as i } from ${JSON.stringify(specifier)};\n`,
+          );
+        }
+        lines.push(
+          "// 10.1's already-loaded owner must drain its original pending disposer queue.",
+          `export { i as runCliDisposerAfterPending } from "./${STABLE_10_1_CLEANUP_OWNER}";`,
+        );
+      } else {
+        lines.push(
+          `export { ${match.exported} as ${entry.exported} } from ${JSON.stringify(specifier)};`,
+        );
+      }
     }
     const contents = `${lines.join("\n")}\n`;
     outputs.set(chunk.path, contents);
