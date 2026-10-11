@@ -200,8 +200,9 @@ export function readSessionEntryRow(
   database: OpenClawAgentDatabaseReader,
   sessionKey: string,
   projection: SessionEntryProjection = "full",
+  includeWindowFacts?: true,
 ): ResolvedSessionEntryRow | undefined {
-  return scanSessionEntryRows(database, sessionKey, projection)?.selected;
+  return scanSessionEntryRows(database, sessionKey, projection, true, includeWindowFacts)?.selected;
 }
 
 /** Identity preparation retains normal alias validation without loading participant display data. */
@@ -219,17 +220,12 @@ export function readSessionEntryIdentity(
   );
 }
 
-/**
- * Reads the selected row plus every raw row the lookup scanned. A write transaction that must
- * prove this logical row is unchanged can re-read and compare the raw rows instead of decoding
- * the entry JSON again.
- */
+/** Read the selected entry and the exact lookup rows in one owner snapshot. */
 export function readSessionEntryRowScan(
   database: OpenClawAgentDatabaseReader,
   sessionKey: string,
   includeWindowFacts?: true,
 ) {
-  // Mutation snapshots must retain every raw column, including the saved prompts.
   return scanSessionEntryRows(database, sessionKey, "full", true, includeWindowFacts);
 }
 
@@ -255,7 +251,13 @@ function scanSessionEntryRows(
         const row = actor.entryRows.get(key)?.row;
         return row ? [structuredClone(row)] : [];
       }),
-      selected: readExactSessionEntryRow(database, sessionKey, projection),
+      selected: readExactSessionEntryRow(
+        database,
+        sessionKey,
+        projection,
+        undefined,
+        includeWindowFacts,
+      ),
     };
   }
   return runSqliteReadOperationSync(database.db, () => {
@@ -343,7 +345,18 @@ export function readExactSessionEntryRow(
     const selected = actor.entryRows.get(sessionKey);
     return (
       selected && {
-        row: structuredClone(selected.row),
+        row: {
+          ...structuredClone(selected.row),
+          ...(includeWindowFacts
+            ? {
+                window_json: actor.window ? JSON.stringify(actor.window) : null,
+                member_ids_json: JSON.stringify(
+                  actor.hot.members.map((member) => member.identityId),
+                ),
+                board_present: actor.hasBoard ? 1 : 0,
+              }
+            : {}),
+        },
         entry: attachSessionEntrySnapshots(structuredClone(selected.entry), {}, projection),
       }
     );
@@ -621,7 +634,11 @@ export function readQualifiedSessionEntryRow(
   database: OpenClawAgentDatabaseReader,
   agentId: string,
   sessionKey: string,
-  options: { allowCanonicalMove?: boolean; projection?: SessionEntryProjection } = {},
+  options: {
+    allowCanonicalMove?: boolean;
+    projection?: SessionEntryProjection;
+    includeWindowFacts?: true;
+  } = {},
 ) {
   const parsed = parseAgentSessionKey(sessionKey);
   const sentinel = parsed?.rest ?? sessionKey;
@@ -630,7 +647,12 @@ export function readQualifiedSessionEntryRow(
     (parsed && parsed.agentId !== agentId) ||
     (sentinel !== "global" && sentinel !== "unknown")
   ) {
-    return readSessionEntryRow(database, sessionKey, options.projection);
+    return readSessionEntryRow(
+      database,
+      sessionKey,
+      options.projection,
+      options.includeWindowFacts,
+    );
   }
   return readSessionEntryTargetRow(
     database,

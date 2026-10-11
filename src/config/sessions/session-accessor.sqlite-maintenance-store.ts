@@ -7,6 +7,7 @@ import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import type { SessionStateDeletePlan } from "./session-accessor.sqlite-archive-types.js";
 import { planSessionStateDeleteIfUnreferenced } from "./session-accessor.sqlite-delete-snapshot.js";
 import { prepareExactSessionEntryRowReads } from "./session-accessor.sqlite-entry-read.js";
+import { captureSessionEntrySnapshot } from "./session-accessor.sqlite-entry-snapshot.js";
 import { readSessionEntryCount, writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
 import {
   collectProjectedReferencedSessionIds,
@@ -32,6 +33,7 @@ import {
 import { SqliteReclamationInputsChangedError } from "./session-accessor.sqlite-reclamation-worker-diagnostics.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import { readTranscriptContextVersionInTransaction } from "./session-accessor.sqlite-transcript-state.js";
+import type { SessionEntryWritePostimages } from "./session-entry-write-postimage.js";
 import { transcriptEventReadBytesSql } from "./session-transcript-read-bytes.js";
 import { normalizeStoreSessionKey } from "./store-entry.js";
 import { planSessionEntryMaintenance } from "./store-maintenance-plan.js";
@@ -114,6 +116,7 @@ export function applySessionEntryMaintenanceInDatabase(
   readPreservation: () => SessionMaintenancePreservationSnapshot,
   onArchived?: (sessionKey: string, previous: SessionEntry, current: SessionEntry) => void,
   refreshCandidates?: (sessionKeys: readonly string[]) => SessionMaintenancePreservationSnapshot,
+  postimages?: SessionEntryWritePostimages,
 ): SessionEntryMaintenancePlan {
   let preservation: SessionMaintenancePreservationSnapshot | undefined;
   const prepared = prepareSessionEntryMaintenanceInDatabase(
@@ -123,12 +126,13 @@ export function applySessionEntryMaintenanceInDatabase(
     refreshCandidates,
   );
   const apply = prepared.kind === "no-op" ? prepared.apply : prepared.captureMutation();
-  return apply(database, onArchived);
+  return apply(database, onArchived, postimages);
 }
 
 export type SessionEntryMaintenanceApply = (
   database: OpenClawAgentDatabase,
   onArchived?: Parameters<typeof applySessionEntryMaintenanceInDatabase>[3],
+  postimages?: SessionEntryWritePostimages,
 ) => SessionEntryMaintenancePlan;
 
 type SessionEntryMaintenancePreparation =
@@ -261,6 +265,7 @@ export function prepareSessionEntryMaintenanceInDatabase(
     expected: ReturnType<typeof readInputs>,
     database: OpenClawAgentDatabase,
     onArchived?: Parameters<typeof applySessionEntryMaintenanceInDatabase>[3],
+    postimages?: SessionEntryWritePostimages,
   ): SessionEntryMaintenancePlan => {
     if (
       !isDeepStrictEqual(expected, readInputs(database)) ||
@@ -276,13 +281,17 @@ export function prepareSessionEntryMaintenanceInDatabase(
       selectedKeys,
       "full",
       "canonical",
-      { projectParticipants: false },
+      postimages
+        ? { includeWindowFacts: true, includeBoardPresence: true, includeMembership: true }
+        : { projectParticipants: false },
     );
     const selectedEntries: Record<string, SessionEntry> = {};
+    const selectedRows = new Map<string, NonNullable<ReturnType<typeof readSelected>>>();
     for (const key of selectedKeys) {
-      const entry = readSelected(key)?.entry;
-      if (entry) {
-        selectedEntries[key] = entry;
+      const selected = readSelected(key);
+      if (selected) {
+        selectedEntries[key] = selected.entry;
+        selectedRows.set(key, selected);
       }
     }
     if (selectedKeys.length > 0) {
@@ -329,8 +338,16 @@ export function prepareSessionEntryMaintenanceInDatabase(
         archiveReason: planned.archiveReason,
       };
       delete entry.archivedBy;
-      writeSessionEntry(database, key, entry, { canonicalPreviousEntry: previousEntry });
-      onArchived?.(key, previousEntry, entry);
+      const selected = selectedRows.get(key);
+      const previousFacts = selected && captureSessionEntrySnapshot(selected);
+      const written = writeSessionEntry(database, key, entry, {
+        canonicalPreviousEntry: previousEntry,
+        canonicalPreviousRow: selected?.row,
+        canonicalPreviousWindow: previousFacts?.window,
+        canonicalPreviousSideTables: previousFacts?.sideTables,
+        postimages,
+      });
+      onArchived?.(key, previousEntry, written);
       archivedEntries.push({ sessionKey: key, sessionId: entry.sessionId });
     }
     const removals = [...removalReasons].flatMap(([sessionKey, maintenanceReason]) => {
@@ -397,7 +414,8 @@ export function prepareSessionEntryMaintenanceInDatabase(
     captureMutation() {
       // Capture only for a mutation, synchronously within the planning read transaction.
       const expected = readInputs(reader);
-      return (database, onArchived) => apply(expected, database, onArchived);
+      return (database, onArchived, postimages) =>
+        apply(expected, database, onArchived, postimages);
     },
   };
 }

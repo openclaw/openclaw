@@ -5,6 +5,7 @@ import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { readPreparedSessionEntryChange } from "./session-accessor.sqlite-entry-cache-publication.js";
 import {
   projectSessionSharingEntry,
   retainPreparedSessionSharingFacts,
@@ -14,6 +15,7 @@ import {
   writeSessionEntry,
 } from "./session-accessor.sqlite-entry-store.js";
 import { replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
+import { recordSessionParticipant } from "./session-accessor.sqlite-participants.native.js";
 import { applySessionEntryCanonicalReplacements } from "./session-accessor.sqlite-replacement-projection.js";
 import { listSessionMembersInDatabase } from "./session-sharing-store.kernel.js";
 import { addSessionMember } from "./session-sharing-store.native.js";
@@ -45,6 +47,19 @@ it.each([false, true])(
           { agentId: "main", storePath: database.path, sessionKey: key },
           { identityId, addedBy: "owner", addedAt: 1 },
         );
+        recordSessionParticipant(
+          { agentId: "main", storePath: database.path, sessionKey: key },
+          {
+            identity: {
+              type: "remote",
+              pluginId: "test-channel",
+              domain: "workspace",
+              idKind: "user",
+              id: identityId,
+            },
+            promptedAt: key === sessionKey ? 1 : 2,
+          },
+        );
       }
       const identity = readOpenClawAgentDatabaseIdentity(database).identity;
       if (typeof identity !== "string") {
@@ -59,6 +74,12 @@ it.each([false, true])(
         ),
       });
       expect(sharing.readCurrent()?.membership).toEqual(new Set(["target-member"]));
+      let published: ReturnType<typeof readPreparedSessionEntryChange>;
+      const stop = sessionChanges.subscribeFacts((change) => {
+        if ("sessionKey" in change && change.sessionKey === sessionKey) {
+          published = readPreparedSessionEntryChange(change, sessionKey);
+        }
+      });
       delivery.afterResult = () => {
         if (newerNative) {
           replaceSessionEntrySync(
@@ -92,8 +113,23 @@ it.each([false, true])(
                 membership: new Set(["alias-member", "target-member"]),
               },
         );
+        if (!newerNative) {
+          expect(published?.entry).toMatchObject({
+            participants: ["target-member", "alias-member"].map((id) => ({
+              identity: {
+                type: "remote",
+                pluginId: "test-channel",
+                domain: "workspace",
+                idKind: "user",
+                id,
+              },
+            })),
+            participantCount: 2,
+          });
+        }
       } finally {
         delivery.afterResult = undefined;
+        stop();
         sharing.release();
       }
     });

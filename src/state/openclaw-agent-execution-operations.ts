@@ -6,6 +6,7 @@ import type {
   SessionEntryCohortRequest,
   SessionEntryReadWorkerInput,
 } from "../config/sessions/session-entry-read.types.js";
+import type { SessionEntryWritePostimages } from "../config/sessions/session-entry-write-postimage.js";
 import type {
   SessionTranscriptExecutionReadInputs,
   SessionTranscriptExecutionReadResult,
@@ -271,31 +272,40 @@ export async function loadAgentReplacementOperations() {
     ) =>
       context.writeTransaction("session.entry-replacements", "Session replacement", (current) => {
         assertSessionSubagentRunsCurrent(input, context.options.env ?? process.env);
-        const result = kernel.commitSessionEntryReplacementsInDatabase(current, input, () => {
-          const initialization = input.initializeTranscript;
-          if (!initialization) {
-            return;
-          }
-          try {
-            if (!transcript) {
-              throw new Error("Session transcript initialization was not prepared");
+        const postimages: SessionEntryWritePostimages = new Map();
+        const result = kernel.commitSessionEntryReplacementsInDatabase(
+          current,
+          input,
+          () => {
+            const initialization = input.initializeTranscript;
+            if (!initialization) {
+              return;
             }
-            const { initialize } = transcript;
-            const assertIdentity: typeof transcript.assertIdentity = transcript.assertIdentity;
-            assertIdentity(initialization);
-            initialize(
-              current,
-              { agentId: context.options.agentId, path: context.options.path, ...initialization },
-              initialization.cwd,
-            );
-          } catch (error) {
-            throw Object.assign(new Error(formatErrorMessage(error), { cause: error }), {
-              name: "SessionTranscriptInitializationError",
-            });
-          }
-        });
+            try {
+              if (!transcript) {
+                throw new Error("Session transcript initialization was not prepared");
+              }
+              const { initialize } = transcript;
+              const assertIdentity: typeof transcript.assertIdentity = transcript.assertIdentity;
+              assertIdentity(initialization);
+              initialize(
+                current,
+                { agentId: context.options.agentId, path: context.options.path, ...initialization },
+                initialization.cwd,
+              );
+            } catch (error) {
+              throw Object.assign(new Error(formatErrorMessage(error), { cause: error }), {
+                name: "SessionTranscriptInitializationError",
+              });
+            }
+          },
+          undefined,
+          undefined,
+          postimages,
+        );
         const publication = kernel.prepareSessionEntryReplacementPublication(result, current, {
           captureFullFacts: true,
+          postimages,
         });
         const candidate = { ...result, publication };
         if (publication.source && publication.fullEntries?.size) {

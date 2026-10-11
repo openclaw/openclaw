@@ -21,10 +21,10 @@ import {
   type ResolvedSessionEntryRow,
 } from "./session-accessor.sqlite-entry-read.js";
 import { readSessionNodesGeneration } from "./session-accessor.sqlite-entry-revision.js";
+import { captureSessionEntrySnapshot } from "./session-accessor.sqlite-entry-snapshot.js";
 import {
   deleteLegacySessionEntryRows,
   readExactSessionEntryRow,
-  readWrittenSessionEntryPostimage,
   writeSessionEntry,
 } from "./session-accessor.sqlite-entry-store.js";
 import { captureSessionEntryMaintenanceAgeChange } from "./session-accessor.sqlite-maintenance-age.js";
@@ -46,31 +46,17 @@ import {
   hasSessionEntryPublicationCapacity,
 } from "./session-entry-publication-source.js";
 import { attachSessionEntrySnapshots } from "./session-entry-snapshots.js";
+import type { SessionEntryWritePostimages } from "./session-entry-write-postimage.js";
 import { readStagedSessionTranscriptAuthority } from "./session-transcript-authority.js";
 import type { SessionMaintenancePreservationSnapshot } from "./store-maintenance-preserve-snapshot.types.js";
 import type { SessionEntry } from "./types.js";
-
-/** Complete transaction-local postimages, invalid after any subsequent native mutation. */
-export type SessionEntryReplacementPostimages = {
-  database: OpenClawAgentDatabase["db"];
-  revision: number;
-  entries: ReadonlyMap<string, SessionEntry>;
-  sideTables?: ReadonlyMap<string, { memberIdsJson: string; hasBoard: boolean }>;
-};
 
 /** Display metadata and bounded full-entry facts share the writer's final persisted read. */
 export function prepareSessionEntryReplacementPublication(
   result: SessionEntryReplacementCommitted,
   database: OpenClawAgentDatabase,
-  options?: { captureFullFacts?: boolean; postimages?: SessionEntryReplacementPostimages },
+  options?: { captureFullFacts?: boolean; postimages?: SessionEntryWritePostimages },
 ): SessionEntryReplacementPublication {
-  const retained =
-    options?.postimages?.database === database.db &&
-    options.postimages.revision === readSqliteNativeMutationRevision(database.db)
-      ? options.postimages
-      : undefined;
-  const reusePostimages =
-    retained !== undefined && [...result.current.keys()].every((key) => retained.entries.has(key));
   const archived = new Set(
     result.maintenancePlans.flatMap((plan) =>
       plan.archivedEntries.map(({ sessionKey }) => sessionKey),
@@ -81,55 +67,27 @@ export function prepareSessionEntryReplacementPublication(
   const fullEntries = options?.captureFullFacts ? new Map<string, SessionEntry>() : undefined;
   const projection = new Map<string, SessionEntryProjectionFacts>();
   const unavailableParticipantKeys = new Set<string>();
-  const written = new Map(
-    [...result.current].flatMap(([key, entry]) => {
-      const postimage =
-        reusePostimages || fullEntries
-          ? undefined
-          : readWrittenSessionEntryPostimage(database, key, entry);
-      return postimage ? [[key, postimage] as const] : [];
-    }),
-  );
-  const readWritten =
-    written.size === 0
-      ? undefined
-      : prepareExactSessionEntryRowReads(database, [...written.keys()], "list", undefined, {
-          includeBoardPresence: true,
-          includeMembership: true,
-          projectParticipants: false,
-        });
   let readCommitted: ReturnType<typeof prepareExactSessionEntryRowReads> | undefined;
   for (const key of result.current.keys()) {
-    const retainedSideTables = reusePostimages ? retained?.sideTables?.get(key) : undefined;
-    const writtenEntry = written.get(key);
+    const postimage = options?.postimages?.get(key);
     let committed: ResolvedSessionEntryRow | undefined;
-    if (writtenEntry) {
-      const row = readWritten?.(key)?.row;
-      committed = row ? { entry: writtenEntry, row } : undefined;
-      if (!committed) {
-        throw new Error(`Session publication lost its committed metadata: ${key}`);
-      }
-    } else if (!retainedSideTables) {
+    if (!postimage) {
+      // Owners without a complete write receipt still acquire their final projection here.
       readCommitted ??= prepareExactSessionEntryRowReads(
         database,
-        [...result.current.keys()].filter((currentKey) => !written.has(currentKey)),
+        [...result.current.keys()].filter((currentKey) => !options?.postimages?.has(currentKey)),
         fullEntries ? "full" : "list",
         undefined,
         {
           includeBoardPresence: true,
           includeMembership: true,
-          ...(reusePostimages ? { projectParticipants: false as const } : {}),
           onParticipantProjectionError: (sessionKey) => unavailableParticipantKeys.add(sessionKey),
         },
       );
-      // Assignment, aliases and changed generations still acquire final side-table facts.
       committed = readCommitted(key);
-      if (!committed) {
-        throw new Error(`Session publication lost its committed metadata: ${key}`);
-      }
     }
     const memberIds: unknown = JSON.parse(
-      retainedSideTables?.memberIdsJson ?? committed?.row.member_ids_json ?? "null",
+      postimage?.sideTables.memberIdsJson ?? committed?.row.member_ids_json ?? "null",
     );
     if (
       !Array.isArray(memberIds) ||
@@ -137,8 +95,7 @@ export function prepareSessionEntryReplacementPublication(
     ) {
       throw new Error(`Session publication lost its committed membership: ${key}`);
     }
-    const committedEntry =
-      (reusePostimages ? retained?.entries.get(key) : undefined) ?? committed?.entry;
+    const committedEntry = postimage?.entry ?? committed?.entry;
     if (!committedEntry) {
       throw new Error(`Session publication lost its committed metadata: ${key}`);
     }
@@ -168,7 +125,7 @@ export function prepareSessionEntryReplacementPublication(
           },
           projectedEntry.sessionId,
         ],
-        hasBoard: retainedSideTables?.hasBoard ?? committed?.row.board_present === 1,
+        hasBoard: postimage?.sideTables.hasBoard ?? committed?.row.board_present === 1,
         activitySummaryWatermark: readSessionActivitySummary(projectedEntry)
           ? readSessionTranscriptWatermarkInDatabase(database, projectedEntry.sessionId)
           : undefined,
@@ -254,6 +211,7 @@ export function commitSessionEntryReplacementsInDatabase(
   beforeReplacements: () => void,
   refreshCandidates?: (sessionKeys: readonly string[]) => SessionMaintenancePreservationSnapshot,
   onArchived?: (sessionKey: string, previous: SessionEntry, current: SessionEntry) => void,
+  postimages?: SessionEntryWritePostimages,
 ): SessionEntryReplacementCommitted {
   if (input.labelClaim) {
     assertSessionCreationLabelAvailable(
@@ -272,7 +230,7 @@ export function commitSessionEntryReplacementsInDatabase(
   }
   const transactionRows = new Map<string, ResolvedSessionEntryRow>();
   for (const sessionKey of input.validationKeys) {
-    const transactionRow = readExactSessionEntryRow(database, sessionKey);
+    const transactionRow = readExactSessionEntryRow(database, sessionKey, "full", undefined, true);
     const expectedRow = input.expectedRows.get(sessionKey);
     if (
       transactionRow?.row.entry_json !== expectedRow?.row.entry_json ||
@@ -284,7 +242,6 @@ export function commitSessionEntryReplacementsInDatabase(
       transactionRows.set(sessionKey, transactionRow);
     }
   }
-  const validatedRevision = readSqliteNativeMutationRevision(database.db);
   beforeReplacements();
   if (input.preparedTranscript) {
     const { sessionKey, sessionId, events } = input.preparedTranscript;
@@ -311,9 +268,8 @@ export function commitSessionEntryReplacementsInDatabase(
     for (const { entry, sessionKey } of sourceEntries) {
       previous.set(sessionKey, entry);
     }
-    const canReuseRow =
-      validatedRevision !== undefined &&
-      validatedRevision === readSqliteNativeMutationRevision(database.db);
+    const canonical = transactionRows.get(replacement.sessionKey);
+    const canonicalFacts = canonical && captureSessionEntrySnapshot(canonical);
     const written = writeSessionEntry(
       database,
       replacement.sessionKey,
@@ -321,11 +277,11 @@ export function commitSessionEntryReplacementsInDatabase(
       {
         ...(input.consumePendingReset ? { consumePendingReset: true } : {}),
         previousEntry: selectedBefore ?? null,
-        canonicalPreviousEntry: transactionRows.get(replacement.sessionKey)?.entry ?? null,
-        canonicalPreviousRow: canReuseRow
-          ? transactionRows.get(replacement.sessionKey)?.row
-          : undefined,
-        forceSnapshotWrite: !canReuseRow,
+        canonicalPreviousEntry: canonical?.entry ?? null,
+        canonicalPreviousRow: canonical?.row,
+        canonicalPreviousWindow: canonicalFacts?.window,
+        canonicalPreviousSideTables: canonicalFacts?.sideTables,
+        postimages,
       },
     );
     deleteLegacySessionEntryRows(
@@ -334,6 +290,10 @@ export function commitSessionEntryReplacementsInDatabase(
       replacement.sessionKey,
       {
         rehomeMembers: selectedBefore?.sessionId === replacement.entry.sessionId,
+        validatedEntries: new Map(
+          [...transactionRows].map(([key, selected]) => [key, selected.entry]),
+        ),
+        postimages,
       },
     );
     if (replacement.previousSessionKeys?.some((key) => key !== replacement.sessionKey)) {
@@ -346,7 +306,7 @@ export function commitSessionEntryReplacementsInDatabase(
     const { sessionKey, owner } = input.ownerAssignment;
     if (
       !current.has(sessionKey) ||
-      !replaceSessionOwnerInTransaction(database, sessionKey, owner)
+      !replaceSessionOwnerInTransaction(database, sessionKey, owner, postimages)
     ) {
       throw new Error("Session owner assignment lost its creation target");
     }
@@ -358,10 +318,27 @@ export function commitSessionEntryReplacementsInDatabase(
           database,
           maintenance,
           () => preservation,
-          onArchived,
+          (sessionKey, previousEntry, currentEntry) => {
+            if (!previous.has(sessionKey)) {
+              previous.set(sessionKey, previousEntry);
+            }
+            current.set(sessionKey, currentEntry);
+            onArchived?.(sessionKey, previousEntry, currentEntry);
+          },
           refreshCandidates,
+          postimages,
         )
       : emptySessionEntryMaintenancePlan();
+  if (postimages) {
+    for (const sessionKey of current.keys()) {
+      const postimage = postimages.get(sessionKey);
+      if (postimage) {
+        current.set(sessionKey, postimage.entry);
+      } else {
+        current.delete(sessionKey);
+      }
+    }
+  }
   return {
     // Fresh creation must not retry another session's failed export.
     pendingArchiveRecovery:

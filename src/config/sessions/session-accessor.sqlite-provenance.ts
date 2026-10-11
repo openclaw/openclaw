@@ -1,11 +1,11 @@
 import { expressionBuilder, type Selectable } from "kysely";
 import { jsonObjectFrom } from "kysely/helpers/sqlite";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
-import { readSqliteNativeMutationRevision } from "../../infra/sqlite-schema-facts.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { hasStoredTranscriptEvents } from "./session-accessor.sqlite-transcript-presence.js";
 import { readSessionActorTransactionState } from "./session-actor-transaction.js";
+import { readStagedSessionTranscriptAuthority } from "./session-transcript-authority.js";
 import type { SessionEntry } from "./types.js";
 
 const sessionEntryWindowColumns = [
@@ -55,8 +55,6 @@ export type SessionEntryWindowRow = Pick<
 >;
 
 export type SessionEntryWindowFacts = {
-  database: OpenClawAgentDatabase["db"];
-  revision: number;
   sessionId: string;
   row: SessionEntryWindowRow | null;
 };
@@ -87,24 +85,28 @@ export function bindSessionEntryProvenance(entry: SessionEntry): SessionProvenan
   };
 }
 
-export function prepareSessionEntryWindowRow<T extends SessionProvenanceRow>(params: {
+export function prepareSessionEntryWindowRow<
+  T extends Omit<SessionEntryWindowRow, "transcript_observed_at" | "transcript_updated_at">,
+>(params: {
   boundSessionRow: T;
   database: OpenClawAgentDatabase;
   entry: SessionEntry;
   previousEntry?: SessionEntry;
   retainOwner: boolean;
   prepared?: SessionEntryWindowFacts;
-}): { row: T & { transcript_observed_at: number }; changed: boolean } {
+}): {
+  row: T & { transcript_observed_at: number };
+  postimage: SessionEntryWindowRow;
+  changed: boolean;
+} {
   const db = getNodeSqliteKysely<OpenClawAgentKyselyDatabase>(params.database.db);
   const actor = readSessionActorTransactionState(params.database, {
     sessionId: params.entry.sessionId,
   });
   const prepared = params.prepared;
-  const existingRoot = actor
+  let existingRoot = actor
     ? actor.window
-    : prepared?.database === params.database.db &&
-        prepared.sessionId === params.entry.sessionId &&
-        prepared.revision === readSqliteNativeMutationRevision(params.database.db)
+    : prepared?.sessionId === params.entry.sessionId
       ? prepared.row
       : executeSqliteQueryTakeFirstSync(
           params.database.db,
@@ -113,6 +115,27 @@ export function prepareSessionEntryWindowRow<T extends SessionProvenanceRow>(par
             .select(sessionEntryWindowColumns)
             .where("session_id", "=", params.entry.sessionId),
         );
+  // Prepared appends publish their exact watermark in the same transaction.
+  // Consume that owner fact instead of rereading the retained window.
+  if (existingRoot && !actor) {
+    for (const receipt of readStagedSessionTranscriptAuthority(params.database) ?? []) {
+      for (const fact of receipt.facts.values()) {
+        if (
+          fact.kind === "postimage" &&
+          fact.value.sessionId === params.entry.sessionId &&
+          fact.value.updatedAt !== null
+        ) {
+          existingRoot = {
+            ...existingRoot,
+            transcript_updated_at: Math.max(
+              existingRoot.transcript_updated_at ?? 0,
+              fact.value.updatedAt,
+            ),
+          };
+        }
+      }
+    }
+  }
   // Registry writes snapshot the current transcript watermark so recovery can
   // distinguish same-millisecond transcript writes before and after this row.
   let row = {
@@ -144,6 +167,12 @@ export function prepareSessionEntryWindowRow<T extends SessionProvenanceRow>(par
   const previous = new Map(Object.entries(existingRoot ?? {}));
   return {
     row,
+    postimage: {
+      ...row,
+      created_at: existingRoot?.created_at ?? row.created_at,
+      session_key: params.retainOwner && existingRoot ? existingRoot.session_key : row.session_key,
+      transcript_updated_at: existingRoot?.transcript_updated_at ?? null,
+    },
     changed:
       !existingRoot ||
       Object.entries(row).some(
