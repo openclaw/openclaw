@@ -17,6 +17,7 @@ declare module "@solidjs/web" {
       "openclaw-chat-pane": HTMLAttributes<ChatPane> &
         Properties<ChatPane> & {
           "prop:agentId"?: ChatPane["agentId"];
+          "prop:mcpAppLaunch"?: ChatPane["mcpAppLaunch"];
           "prop:onBackToSubagents"?: ChatPane["onBackToSubagents"];
           "prop:onPaneSessionChange"?: ChatPane["onPaneSessionChange"];
         };

@@ -144,13 +144,21 @@ export function createControlUiCodeSplitting(options: { includeBootGroups?: bool
         priority: 20,
       },
       {
-        name: (id: string) =>
-          normalizeModuleId(id).includes("/ui/src/") ? "control-ui-core" : "control-ui-foundation",
+        name: "control-ui-core",
+        test: (id: string) => normalizeModuleId(id).includes("/ui/src/"),
         tags: ["$initial"] as ["$initial"],
         priority: 10,
         // Keep the boot graph in fewer partitions; the performance checker owns
         // the compressed-size and request budgets for the emitted chunks.
         maxSize: 1024 * 1024,
+      },
+      {
+        name: "control-ui-foundation",
+        test: (id: string) => !normalizeModuleId(id).includes("/ui/src/"),
+        tags: ["$initial"] as ["$initial"],
+        priority: 10,
+        // These modules are already eager. Splitting their shared contracts by
+        // route importers adds startup requests and compression overhead.
       },
       ...(options.includeBootGroups === false
         ? []

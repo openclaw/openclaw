@@ -13,12 +13,12 @@ import {
   createTestGatewayClient,
   type GatewayRequestHandler,
 } from "../../test-helpers/gateway-client.ts";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { questionPanelIn } from "../chat/components/chat-question-card.test-support.ts";
-import { QuestionPage } from "./question-page.ts";
+import type { QuestionPage } from "./question-page.tsx";
+import "./question-page-registration.ts";
 
-// Keep the registered page paired with this module's context in the shared UI runner.
-const tag = `test-question-page-${crypto.randomUUID()}`;
-customElements.define(tag, class extends QuestionPage {});
+const tag = "openclaw-question-page";
 
 function question(id = "question-one") {
   return {
@@ -117,7 +117,7 @@ it("recovers a failed reconnect lookup without losing the typed answer", async (
     },
     expect.any(Object),
   );
-  expect(page.textContent).toContain("Answered");
+  await waitForSolid(() => expect(page.textContent).toContain("Answered"));
 });
 
 it.each(["id", "client"] as const)(

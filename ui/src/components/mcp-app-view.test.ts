@@ -660,7 +660,7 @@ describe("mcp-app-view localization", () => {
       import("../pages/chat/components/chat-transcript.test-support.ts"),
       import("../pages/chat/outbox-browser.test-support.ts"),
       import("../test-helpers/storage.ts"),
-      import("../pages/apps/apps-page.ts"),
+      import("../pages/apps/apps-page.tsx"),
     ]);
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
     installOutboxBrowserStorage();
