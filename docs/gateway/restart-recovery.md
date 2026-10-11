@@ -18,6 +18,10 @@ until you inspect or replace it.
 This page describes what survives a restart, how interrupted work is detected,
 and what the automatic resume looks like.
 
+During startup, a new reply waits for its agent's model and plugin runtime to
+finish loading. Agents that are already ready can serve replies while other
+agents continue loading. Startup preparation failures still report an error.
+
 ## What survives a restart
 
 | State                          | Storage                                            | Behavior across restart                                                 |

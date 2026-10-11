@@ -35,6 +35,7 @@ type Resource = {
   closing: boolean;
   closeObservers: { worker?: number; parent?: number };
   closed: boolean;
+  nativeClose?: Promise<void>;
   sequence: number;
   ownerSequence: number;
   ownerMessages: Map<number, { value: unknown; size: number }>;
@@ -56,6 +57,7 @@ export async function createBrokerNativeResourceServer(options: {
   const connections = new Set<ResourceSocket>();
   let available = true;
   let sourceSealed = false;
+  let closePromise: Promise<void> | undefined;
   let ownerBufferedBytes = 0;
   let ownerBufferedMessages = 0;
   const live = () => available && process.connected;
@@ -116,6 +118,27 @@ export async function createBrokerNativeResourceServer(options: {
     }
     publish(resource, reply);
   };
+  const closeOwner = (resource: Resource): Promise<void> => {
+    if (resource.closed) {
+      return Promise.resolve();
+    }
+    if (resource.nativeClose) {
+      return resource.nativeClose;
+    }
+    const closing = Promise.resolve().then(async () => {
+      await resource.owner?.close();
+      resource.closed = true;
+      seal(resource, [resource.target, resource.ownerPort]);
+    });
+    resource.nativeClose = closing;
+    void closing.catch(() => {
+      // Ordinary retained cleanup may retry; terminal retirement joins the same attempt.
+      if (available) {
+        resource.nativeClose = undefined;
+      }
+    });
+    return closing;
+  };
   const closeResource = async (resource: Resource, requestId: number) => {
     if (resource.closed) {
       publish(resource, { type: "resource-closed", id: resource.attachment.id, requestId });
@@ -151,11 +174,7 @@ export async function createBrokerNativeResourceServer(options: {
       if (!live()) {
         return;
       }
-      if (!resource.closed) {
-        await resource.owner?.close();
-        resource.closed = true;
-        seal(resource, [resource.target, resource.ownerPort]);
-      }
+      await closeOwner(resource);
       outcome = { ok: true };
     } catch (error) {
       outcome = { ok: false, error };
@@ -524,18 +543,48 @@ export async function createBrokerNativeResourceServer(options: {
     }
   });
   server.maxConnections = 256;
+  const serverClosed = new Promise<void>((resolve) => {
+    server.once("close", resolve);
+  });
   function disconnect() {
     if (!available) {
       return;
     }
     available = false;
+    sourceSealed = true;
     server.close();
     for (const connection of connections) {
       connection.close();
     }
     for (const resource of resources.values()) {
+      resource.finishInitializationWait?.();
       seal(resource, [resource.target, resource.ownerPort]);
     }
+    // Transport loss revokes admission, not the retained native cleanup obligation.
+    void close().catch(() => {
+      process.exitCode = 1;
+      process.stderr.write("Spawn broker native resource cleanup failed.\n");
+    });
+  }
+  function close(): Promise<void> {
+    closePromise ??= Promise.resolve().then(async () => {
+      const outcomes = await Promise.allSettled(
+        [...resources.values()].map(async (resource) => {
+          await resource.initialized;
+          await closeOwner(resource);
+        }),
+      );
+      await serverClosed;
+      const errors = outcomes.flatMap((outcome) =>
+        outcome.status === "rejected" ? [outcome.reason] : [],
+      );
+      if (errors.length) {
+        throw new AggregateError(errors, "Spawn broker native resource cleanup failed");
+      }
+      resources.clear();
+    });
+    disconnect();
+    return closePromise;
   }
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
@@ -548,6 +597,7 @@ export async function createBrokerNativeResourceServer(options: {
   return {
     receive,
     disconnect,
+    close,
     get size() {
       return resources.size;
     },

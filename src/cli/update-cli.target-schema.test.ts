@@ -17,6 +17,7 @@ import { withEnvAsync } from "../test-utils/env.js";
 import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 import { createCommandResult as commandResult } from "../test-utils/npm-spec-install-test-helpers.js";
 import { VERSION } from "../version.js";
+import { waitForCliSignalExit } from "./signal-exit-barrier.js";
 import {
   expectNoSideEffects,
   freshRestartCalls,
@@ -423,10 +424,8 @@ describe("update-cli", () => {
     const root = await mockPackageInstallAtCaseDir("openclaw-early-signal");
     const packageBefore = await fs.readFile(path.join(root, "package.json"), "utf8");
     const processOnSpy = vi.spyOn(process, "on");
-    const exitCalled = createDeferred();
     const processExitSpy = vi.spyOn(process, "exit").mockImplementation(() => {
-      exitCalled.resolve();
-      return undefined as never;
+      throw new Error("update must settle without a forced native exit");
     });
     let entered!: () => void;
     let release!: () => void;
@@ -458,7 +457,7 @@ describe("update-cli", () => {
       for (const listener of listeners) {
         listener();
       }
-      await exitCalled.promise;
+      expect(await waitForCliSignalExit()).toBe(143);
       // Inspect while preflight remains blocked: ordinary unwind cannot settle this row.
       expect(listUpdateRuns({ limit: 1 })[0]).toMatchObject({
         runId: before.runId,
@@ -467,7 +466,8 @@ describe("update-cli", () => {
         reason: "interrupted",
         finishedAtMs: expect.any(Number),
       });
-      expect(processExitSpy).toHaveBeenCalledWith(143);
+      expect(process.exitCode).toBe(143);
+      expect(processExitSpy).not.toHaveBeenCalled();
       expect(await fs.readFile(path.join(root, "package.json"), "utf8")).toBe(packageBefore);
       expect(packageInstallCommandCall()).toBeUndefined();
       expect(serviceStop).not.toHaveBeenCalled();

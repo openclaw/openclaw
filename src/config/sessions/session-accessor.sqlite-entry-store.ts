@@ -475,6 +475,13 @@ export function writeSessionEntry(
       : options.canonicalPreviousEntryRevision === inputRevision
         ? inputRevision
         : undefined;
+  if (
+    canonicalPreviousEntry?.sessionId === normalizedEntry.sessionId &&
+    canonicalPreviousEntry.lifecycleRevision === normalizedEntry.lifecycleRevision &&
+    canonicalPreviousEntry.compactionQualityDegraded
+  ) {
+    normalizedEntry = { ...normalizedEntry, compactionQualityDegraded: true };
+  }
   if (!options.providerReviewMutation && !options.allowStoredAliases) {
     // Bookkeeping can carry a stale snapshot; only the review owner may clear its pause.
     normalizedEntry = {
