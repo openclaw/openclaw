@@ -18,7 +18,8 @@ heading with no following content stays searchable. Oversized headings already
 split across chunks keep their fragments, and provider input limits still apply
 to merged chunks.
 Headings with their own recall annotations remain independent, preserving their
-project scope, triggers, and importance.
+project scope, triggers, and importance. Heading-like fragments inside a curated
+entry stay with that entry's annotation scope.
 
 After upgrading, existing builtin indexes rebuild once on the next normal search
 or sync to apply this chunking change. No configuration change or manual

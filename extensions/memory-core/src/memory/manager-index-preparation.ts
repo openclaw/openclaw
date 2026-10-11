@@ -75,6 +75,7 @@ export function prepareMemoryIndexChunks({
     if (
       source === "memory" &&
       previous &&
+      previous.entryStartLine === undefined &&
       chunk.endLine > previous.endLine &&
       // Annotated headings own their metadata; size-split headings also differ from source lines.
       previous.text

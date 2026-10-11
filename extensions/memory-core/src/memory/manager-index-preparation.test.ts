@@ -3,6 +3,28 @@ import { describe, expect, it } from "vitest";
 import { prepareMemoryIndexChunks } from "./manager-index-preparation.js";
 
 describe("heading chunks at the indexing boundary", () => {
+  it("keeps a heading fragment with its containing curated entry's annotations", () => {
+    const { chunks } = prepareMemoryIndexChunks({
+      entry: { path: "MEMORY.md", mtimeMs: 1 },
+      source: "memory",
+      content: [
+        "- Scoped entry. <!-- project: alpha-key -->",
+        "  ## Private heading",
+        "- Global neighbor. <!-- trigger: global -->",
+      ].join("\n"),
+      pathClassification: { curatedRoot: true, originClass: "agent" },
+      chunking: { tokens: 8, overlap: 0 },
+      hardMaxInputTokens: 8192,
+    });
+    expect(
+      chunks.map(({ text, projectKey, triggers }) => ({ text, projectKey, triggers })),
+    ).toEqual([
+      { text: "- Scoped entry.", projectKey: "alpha-key", triggers: null },
+      { text: "  ## Private heading", projectKey: "alpha-key", triggers: null },
+      { text: "- Global neighbor.", projectKey: null, triggers: "global" },
+    ]);
+  });
+
   it.each([0, 2])("keeps a whole heading when chunk overlap is %s", (overlap) => {
     const content = "# Plan\nThe irrigation starts at dawn.";
     const { chunks } = prepareMemoryIndexChunks({

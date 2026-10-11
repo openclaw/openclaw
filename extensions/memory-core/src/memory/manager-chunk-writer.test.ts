@@ -95,7 +95,7 @@ describe("memory chunk publication", () => {
           importance: 9,
         });
         expect(await manager.listTriggerCandidates({ activeProjectKeys: [] })).toEqual([
-          expect.objectContaining({ snippet: "- Global neighbor.", projectKey: null }),
+          expect.objectContaining({ snippet: "- Global neighbor." }),
         ]);
         expect(await manager.listTriggerCandidates({ activeProjectKeys: ["beta-key"] })).toEqual(
           expect.arrayContaining([
