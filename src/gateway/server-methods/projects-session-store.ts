@@ -1,3 +1,4 @@
+import { loadOpenIncognitoSessionStores } from "../../config/sessions/combined-store-gateway.js";
 import type { withIncognitoSessionStoreEntries } from "../../config/sessions/session-incognito-binding.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import type { SessionRowProjection } from "../session-row-projection.js";
@@ -27,7 +28,7 @@ export function loadProjectSessionStore(
       (left, right) => left.order - right.order || Buffer.compare(left.keyBytes, right.keyBytes),
     );
   const store = Object.fromEntries(entries.map(({ key, entry }) => [key, entry]));
-  for (const source of incognitoStores ?? []) {
+  for (const source of incognitoStores ?? loadOpenIncognitoSessionStores()) {
     for (const { sessionKey, entry } of source.entries) {
       if (isIncognitoSessionKey(sessionKey) && entry.incognito === true) {
         store[sessionKey] = entry;

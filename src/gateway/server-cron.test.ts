@@ -1978,13 +1978,24 @@ describe("buildGatewayCronService", () => {
   it("does not retry cancelled command output while still notifying terminal failure", async () => {
     vi.stubEnv("OPENCLAW_TEST_FAST", "1");
     let deliverySignal: AbortSignal | undefined;
-    sendCronAnnouncePayloadStrictMock.mockImplementationOnce(async (request) => {
-      deliverySignal = request.abortSignal;
-      expect(abortActiveCronTaskRuns("Cancelled by operator.")).toBe(1);
-      throw new PlatformMessageNotDispatchedError("platform unavailable before dispatch", {
-        cause: new Error("connect ECONNREFUSED"),
+    const failureDelivered = createDeferred<void>();
+    const send = expectDefined(
+      sendCronAnnouncePayloadStrictMock.getMockImplementation(),
+      "cron delivery mock",
+    );
+    sendCronAnnouncePayloadStrictMock
+      .mockImplementationOnce(async (request) => {
+        deliverySignal = request.abortSignal;
+        expect(abortActiveCronTaskRuns("Cancelled by operator.")).toBe(1);
+        throw new PlatformMessageNotDispatchedError("platform unavailable before dispatch", {
+          cause: new Error("connect ECONNREFUSED"),
+        });
+      })
+      .mockImplementationOnce(async (...args) => {
+        const result = await send(...args);
+        failureDelivered.resolve();
+        return result;
       });
-    });
 
     try {
       await withCronService(createCronConfig("cron-cancelled-retry"), async (state) => {
@@ -1994,6 +2005,7 @@ describe("buildGatewayCronService", () => {
           delivery: { mode: "announce", channel: "telegram", to: "123" },
         });
         await state.cron.run(job.id, "force");
+        await failureDelivered.promise;
 
         expect(sendCronAnnouncePayloadStrictMock).toHaveBeenCalledTimes(2);
         const completion = sendCronAnnouncePayloadStrictMock.mock.calls[0]?.[0];

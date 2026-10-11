@@ -110,6 +110,21 @@ function loadGatewayStoreEntries(params: {
   });
 }
 
+/** Snapshot the existing process-held ephemeral stores without durable discovery. */
+export function loadOpenIncognitoSessionStores(
+  projection: GatewaySessionEntryProjection = "list",
+  targets: readonly SessionStoreTarget[] = listOpenIncognitoAgentDatabases(),
+) {
+  return targets.map((target) => ({
+    ...target,
+    entries: loadGatewayStoreEntries({
+      ...target,
+      includeOpenDatabases: true,
+      projection,
+    }),
+  }));
+}
+
 // The listing accessor owns delivery-key validation; federation owns config aliases and targets.
 function mergeSessionEntryIntoCombined(params: {
   combined: Record<string, SessionEntry>;
@@ -166,15 +181,11 @@ function mergeOpenIncognitoStores(params: {
   readEntries?: (target: SessionStoreTarget) => SessionEntrySummary[];
 }): string[] {
   const storePaths: string[] = [];
-  for (const target of params.targets) {
-    const store =
-      params.readEntries?.(target) ??
-      loadGatewayStoreEntries({
-        agentId: target.agentId,
-        includeOpenDatabases: true,
-        projection: params.projection,
-        storePath: target.storePath,
-      });
+  const readEntries = params.readEntries;
+  const stores = readEntries
+    ? params.targets.map((target) => ({ ...target, entries: readEntries(target) }))
+    : loadOpenIncognitoSessionStores(params.projection, params.targets);
+  for (const { entries: store, ...target } of stores) {
     let merged = false;
     const addModelEntry = params.modelSources.prepareStore(target);
     const modelTarget = { agentId: target.agentId, storeTarget: target };
