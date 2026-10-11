@@ -13,6 +13,7 @@ import {
   resolveReplyPersonalToolTargets,
   resolveReplyToolAuthorityContext,
 } from "../reply-tool-authority.js";
+import { carryFollowupDrainFailure } from "./drain-failures.js";
 import {
   FollowupRunDeferredError,
   isFollowupRunAborted,
@@ -451,7 +452,7 @@ export function getFollowupOriginRouting(source: FollowupRun) {
 }
 
 export function createOverflowSummaryRetrySource(source: FollowupRun): FollowupRun {
-  return {
+  const retry: FollowupRun = {
     prompt: source.prompt,
     sourceTurnId: source.sourceTurnId,
     admissionSessionId: source.admissionSessionId,
@@ -482,4 +483,6 @@ export function createOverflowSummaryRetrySource(source: FollowupRun): FollowupR
       : {}),
     run: source.run,
   };
+  carryFollowupDrainFailure(source, retry);
+  return retry;
 }

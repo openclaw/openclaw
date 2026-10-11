@@ -1,13 +1,9 @@
 import { createHash } from "node:crypto";
-import type { HumanMention } from "@openclaw/gateway-protocol";
 import { expectDefined } from "@openclaw/normalization-core";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { MediaImageLayout } from "../../../agents/embedded-agent-runner/run/prompt-image-metadata.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "../../../agents/harness/hook-helpers.js";
 import { runOutsidePreparedModelRuntimePluginGenerationScope } from "../../../agents/prepared-model-runtime-generation-scope.js";
 import { normalizeChatType } from "../../../channels/chat-type.js";
-import { resolveSessionStorePathCore } from "../../../config/sessions.js";
-import { loadSessionEntryReadOnly } from "../../../config/sessions/session-accessor.js";
 import {
   channelRouteCompactKey,
   channelRouteDedupeKey,
@@ -19,13 +15,8 @@ import {
   waitForGatewayRestartFenceSettlement,
 } from "../../../process/gateway-work-admission.js";
 import { defaultRuntime } from "../../../runtime.js";
-import {
-  buildPersistedUserTurnMediaInputsFromFields,
-  createUserTurnTranscriptRecorder,
-  type PersistedUserTurnMessage,
-} from "../../../sessions/user-turn-transcript.js";
-import { extractTextFromChatContent } from "../../../shared/chat-content.js";
-import { resolveGlobalMap, resolveGlobalSingleton } from "../../../shared/global-singleton.js";
+import { createUserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.js";
+import { resolveGlobalMap } from "../../../shared/global-singleton.js";
 import { AgentDatabaseExecutionAdmissionClosedError } from "../../../state/agent-database-admission-error.js";
 import {
   buildCollectPrompt,
@@ -38,6 +29,12 @@ import {
   waitForQueueDebounce,
 } from "../../../utils/queue-helpers.js";
 import { isRoutableChannel } from "../route-reply.js";
+import {
+  buildCollectTranscriptInput,
+  createCollectUserTurnTranscriptRecorder,
+  renderCollectItem,
+  resolveFollowupTranscriptTarget,
+} from "./collect-transcript.js";
 import { resolveCollectedRun } from "./collected-run.js";
 import {
   assertSingleAdmissionOwner,
@@ -50,6 +47,11 @@ import {
   resolveFollowupReplyAnchor,
   resolveOverflowSummaryInboundEventKind,
 } from "./delivery-context.js";
+import {
+  handleFollowupDrainFailure,
+  resetFollowupDrainFailures,
+  trackFollowupDrainAttempts,
+} from "./drain-retry.js";
 import {
   admitFollowupRunLifecycle,
   completeFollowupRunLifecycle,
@@ -87,103 +89,6 @@ const FOLLOWUP_DRAIN_CALLBACKS_KEY = Symbol.for("openclaw.followupDrainCallbacks
 const FOLLOWUP_RUN_CALLBACKS = resolveGlobalMap<string, (run: FollowupRun) => Promise<void>>(
   FOLLOWUP_DRAIN_CALLBACKS_KEY,
 );
-
-// Failures belong to attempted source identities, not session keys or whichever
-// item becomes the head while delivery awaits. Retry clones share the identity;
-// queue replacement starts a fresh budget and weak keys retain no cleared work.
-type FollowupDrainFailure = { queue: FollowupQueueState; failures: number };
-const FOLLOWUP_DRAIN_FAILURES = resolveGlobalSingleton(
-  Symbol.for("openclaw.followupDrainFailures"),
-  () => new WeakMap<FollowupRun, FollowupDrainFailure>(),
-);
-const FOLLOWUP_DRAIN_RETRY_BASE_MS = 500;
-const FOLLOWUP_DRAIN_RETRY_MAX_MS = 10_000;
-const FOLLOWUP_DRAIN_MAX_FAILURES = 7;
-
-function resolveFollowupDrainFailure(queue: FollowupQueueState, source: FollowupRun) {
-  let failure = FOLLOWUP_DRAIN_FAILURES.get(source);
-  if (!failure || failure.queue !== queue) {
-    failure = { queue, failures: 0 };
-    FOLLOWUP_DRAIN_FAILURES.set(source, failure);
-  }
-  return failure;
-}
-
-function scheduleFollowupDrainAfter(
-  key: string,
-  queue: FollowupQueueState,
-  runFollowup: (run: FollowupRun) => Promise<void>,
-  failures: number,
-): void {
-  const delayMs = Math.min(
-    FOLLOWUP_DRAIN_RETRY_MAX_MS,
-    FOLLOWUP_DRAIN_RETRY_BASE_MS * 2 ** Math.max(0, failures - 1),
-  );
-  const cancel = () => {
-    clearTimeout(timer);
-    if (queue.retryTimer === timer) {
-      delete queue.retryTimer;
-    }
-    queue.abortController.signal.removeEventListener("abort", cancel);
-  };
-  const timer = setTimeout(() => {
-    cancel();
-    if (FOLLOWUP_QUEUES.get(key) === queue && !queue.abortController.signal.aborted) {
-      scheduleFollowupDrain(key, runFollowup);
-    }
-  }, delayMs);
-  queue.retryTimer = timer;
-  queue.abortController.signal.addEventListener("abort", cancel, { once: true });
-  timer.unref?.();
-}
-
-/** Identify failed work without logging prompt content. */
-function describeFailedFollowupItem(item: FollowupRun): string {
-  return `messageId=${item.messageId ?? "unknown"} channel=${item.originatingChannel ?? "unknown"} promptChars=${item.prompt.length}`;
-}
-
-function handleFollowupDrainFailure(params: {
-  key: string;
-  queue: FollowupQueueState;
-  attemptedSources: FollowupRun[];
-  callback: (run: FollowupRun) => Promise<void>;
-  error: unknown;
-}): void {
-  const { key, queue, attemptedSources, callback, error } = params;
-  const attemptedFailures = new Set(
-    attemptedSources.map((source) => resolveFollowupDrainFailure(queue, source)),
-  );
-  const pendingSources = [...followupQueueSources(queue)].filter((source) => {
-    const failure = FOLLOWUP_DRAIN_FAILURES.get(source);
-    return failure && attemptedFailures.has(failure);
-  });
-  // Admission may have consumed a failed aggregate already. Its error
-  // must not spend the retry budget of untouched work behind it.
-  if (attemptedSources.length > 0 && pendingSources.length === 0) {
-    scheduleFollowupDrain(key, callback);
-    return;
-  }
-  // A canceled member of a failed collect batch no longer owns a retry.
-  // Only failure identities still represented by pending work spend a budget.
-  const pendingFailures = new Set(
-    pendingSources.map((source) => resolveFollowupDrainFailure(queue, source)),
-  );
-  const failures =
-    pendingFailures.size > 0
-      ? Math.max(...[...pendingFailures].map((failure) => ++failure.failures))
-      : (queue.drainFailureCount = (queue.drainFailureCount ?? 0) + 1);
-  if (failures >= FOLLOWUP_DRAIN_MAX_FAILURES) {
-    // Repetition is not evidence that accepted input is permanently invalid.
-    // Park the queue without settling sources or consuming summary content.
-    queue.drainSuspended = true;
-    defaultRuntime.error?.(
-      `followup queue suspended for ${key} after ${failures} consecutive drain failures; ` +
-        `queued work retained and automatic retries stopped; use /queue reset after resolving the failure (${attemptedSources.map(describeFailedFollowupItem).join("; ") || "source not yet reserved"}): ${String(error)}`,
-    );
-  } else {
-    scheduleFollowupDrainAfter(key, queue, callback, failures);
-  }
-}
 
 let followedRestartDrainSignal: AbortSignal | undefined;
 
@@ -244,11 +149,7 @@ export function resumeSuspendedFollowupDrain(
   if (FOLLOWUP_QUEUES.get(key) !== queue) {
     return false;
   }
-  for (const source of followupQueueSources(queue)) {
-    resolveFollowupDrainFailure(queue, source).failures = 0;
-  }
-  queue.drainFailureCount = 0;
-  delete queue.drainSuspended;
+  resetFollowupDrainFailures(queue);
   scheduleFollowupDrain(key, callback);
   return true;
 }
@@ -344,40 +245,6 @@ function resolveOriginRoutingMetadata(items: FollowupRun[]) {
   return source ? getFollowupOriginRouting(source) : {};
 }
 
-function renderCollectItem(item: FollowupRun, idx: number): string {
-  return renderCollectItemPrompt(
-    item,
-    idx,
-    resolveCollectedSourceText(
-      item.userTurnTranscriptRecorder?.getPendingInputMessage?.(),
-      item.prompt,
-    ),
-  );
-}
-
-function resolveCollectedSourceText(
-  message: PersistedUserTurnMessage | undefined,
-  fallback: string,
-): string {
-  return message
-    ? (extractTextFromChatContent(message.content, {
-        normalizeText: (text) => text,
-        joinWith: "\n",
-      }) ?? "")
-    : fallback;
-}
-
-function buildCollectItemPrefix(item: FollowupRun, idx: number): string {
-  const senderLabel =
-    item.run.senderName ?? item.run.senderUsername ?? item.run.senderId ?? item.run.senderE164;
-  const senderSuffix = senderLabel ? ` (from ${senderLabel})` : "";
-  return `---\nQueued #${idx + 1}${senderSuffix}\n`;
-}
-
-function renderCollectItemPrompt(item: FollowupRun, idx: number, prompt: string): string {
-  return `${buildCollectItemPrefix(item, idx)}${prompt}`.trim();
-}
-
 function collectQueuedPromptMedia(
   items: FollowupRun[],
 ): Pick<FollowupRun, "images" | "imageOrder" | "media"> &
@@ -422,118 +289,6 @@ function collectQueuedPromptMedia(
     ...(mediaImageLayout ? { mediaImageLayout } : {}),
     ...(media.length > 0 ? { media } : {}),
   };
-}
-
-function buildCollectTranscriptInput(
-  items: FollowupRun[],
-  messages?: (PersistedUserTurnMessage | undefined)[],
-): { text: string; mentions: HumanMention[] } {
-  const title = "[Queued messages while agent was busy]";
-  const mentions: HumanMention[] = [];
-  let offset = title.length;
-  const text = buildCollectPrompt({
-    title,
-    items,
-    renderItem: (item, index) => {
-      const message = messages?.[index] ?? item.userTurnTranscriptRecorder?.message;
-      // Staging may redact or rewrite a source. Collection must never restore
-      // its pre-approval text from the queue's display/runtime projection.
-      const sourceText = resolveCollectedSourceText(message, item.transcriptPrompt ?? item.prompt);
-      const block = renderCollectItemPrompt(item, index, sourceText);
-      const sourceOffset = offset + 2 + buildCollectItemPrefix(item, index).length;
-      const sourceEnd = sourceText.trimEnd().length;
-      for (const mention of message?.["__openclaw"]?.humanMentions ?? []) {
-        if (mention.end <= sourceEnd) {
-          mentions.push({
-            ...mention,
-            start: sourceOffset + mention.start,
-            end: sourceOffset + mention.end,
-          });
-        }
-      }
-      offset += 2 + block.length;
-      return block;
-    },
-  });
-  return { text, mentions };
-}
-
-function resolveFollowupTranscriptTarget(source: FollowupRun) {
-  const sessionKey = normalizeOptionalString(source.run.sessionKey) ?? source.run.sessionId;
-  const storePath = resolveSessionStorePathCore(source.run.config.session?.store, {
-    agentId: source.run.agentId,
-  });
-  const sessionEntry = loadSessionEntryReadOnly({
-    storePath,
-    sessionKey,
-    clone: false,
-  });
-  return {
-    sessionId: sessionEntry?.sessionId ?? source.run.sessionId,
-    sessionKey,
-    sessionEntry,
-    storePath,
-    agentId: source.run.agentId,
-    cwd: source.run.cwd ?? source.run.workspaceDir,
-    config: source.run.config,
-  };
-}
-
-function createCollectUserTurnTranscriptRecorder(items: FollowupRun[]) {
-  const transcriptSources = items.filter((item) => item.userTurnTranscriptRecorder);
-  const source = transcriptSources.at(-1);
-  if (!source) {
-    return undefined;
-  }
-  const buildInput = async () => {
-    const messages = await Promise.all(
-      transcriptSources.map(
-        async (item) => await item.userTurnTranscriptRecorder?.resolveMessage(),
-      ),
-    );
-    const media = messages.flatMap((message) =>
-      buildPersistedUserTurnMediaInputsFromFields(message),
-    );
-    const timestamp = messages.reduce<number | undefined>((latest, message) => {
-      const candidate = message?.timestamp;
-      return typeof candidate === "number" && (latest === undefined || candidate > latest)
-        ? candidate
-        : latest;
-    }, undefined);
-    const transcriptInput = buildCollectTranscriptInput(transcriptSources, messages);
-    const identityHash = createHash("sha256")
-      .update(
-        JSON.stringify(
-          transcriptSources.map((item) => [
-            item.messageId ?? "",
-            item.enqueuedAt,
-            item.transcriptPrompt,
-          ]),
-        ),
-      )
-      .digest("hex");
-    return {
-      ...transcriptInput,
-      senderIsOwner: source.run.senderIsOwner,
-      provenance: source.run.inputProvenance,
-      idempotencyKey: `followup-collect:${source.run.sessionId}:${identityHash}`,
-      ...(timestamp === undefined ? {} : { timestamp }),
-      ...(media.length === 0 ? {} : { media }),
-    };
-  };
-  const initialTranscriptInput = buildCollectTranscriptInput(transcriptSources);
-  return createUserTurnTranscriptRecorder({
-    input: {
-      ...initialTranscriptInput,
-      senderIsOwner: source.run.senderIsOwner,
-      provenance: source.run.inputProvenance,
-    },
-    resolveInput: buildInput,
-    pendingInputSources: transcriptSources.flatMap((item) => item.userTurnTranscriptRecorder ?? []),
-    target: () => resolveFollowupTranscriptTarget(source),
-    errorContext: "collected followup user turn transcript",
-    beforeMessageWrite: runAgentHarnessBeforeMessageWriteHook,
-  });
 }
 
 function resolveAggregateOwner(items: readonly FollowupRun[]): FollowupRun | undefined {
@@ -665,14 +420,8 @@ function releaseQueueSummaryDeliveryForRetry(
   for (const source of delivery.sources) {
     const sourceIndex = queue.summarySources.indexOf(source);
     if (sourceIndex >= 0) {
-      const retry = createOverflowSummaryRetrySource(source);
-      // The clone is a fresh object; carry its failure identity forward so a
-      // retried summary source still counts toward the same backoff budget.
-      const failure = FOLLOWUP_DRAIN_FAILURES.get(source);
-      if (failure) {
-        FOLLOWUP_DRAIN_FAILURES.set(retry, failure);
-      }
-      queue.summarySources[sourceIndex] = retry;
+      // The clone carries the source's failure identity (see drain-failures.ts).
+      queue.summarySources[sourceIndex] = createOverflowSummaryRetrySource(source);
     }
     if (!source.turnAdoptionLifecycle) {
       completeFollowupRunLifecycle(source);
@@ -1049,29 +798,8 @@ export function scheduleFollowupDrain(
     }
   };
   const callback = FOLLOWUP_RUN_CALLBACKS.get(key) ?? runFollowup;
-  let attemptedSources: FollowupRun[] = [];
-  const effectiveRunFollowup = async (run: FollowupRun) => {
-    // Reservation owners expose the exact sources for individual, priority,
-    // collected, and overflow deliveries before crossing the async callback.
-    attemptedSources = [...queue.inFlight];
-    const failures = attemptedSources.map((source) => resolveFollowupDrainFailure(queue, source));
-    try {
-      await callback(run);
-    } catch (error) {
-      if (error instanceof FollowupRunDeferredError || isGatewayRestartDrainError(error)) {
-        for (const failure of failures) {
-          failure.failures = 0;
-        }
-        queue.drainFailureCount = 0;
-      }
-      throw error;
-    }
-    for (const failure of failures) {
-      failure.failures = 0;
-    }
-    queue.drainFailureCount = 0;
-    attemptedSources = [];
-  };
+  const attempts = trackFollowupDrainAttempts(queue, callback);
+  const effectiveRunFollowup = attempts.run;
   const reserveOptions = {
     inFlight: queue.inFlight,
     shouldRestoreOnError: () =>
@@ -1305,9 +1033,10 @@ export function scheduleFollowupDrain(
           handleFollowupDrainFailure({
             key,
             queue,
-            attemptedSources,
+            attemptedSources: attempts.attemptedSources,
             callback,
             error: unclassifiedFailure.error,
+            reschedule: scheduleFollowupDrain,
           });
         } else if (!databaseAdmissionClosed || drainOwner.rescheduleRequested) {
           scheduleFollowupDrain(key, callback);

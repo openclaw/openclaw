@@ -17,13 +17,14 @@ import { parseInlineSessionDirectives } from "../src/auto-reply/reply/directive-
 import { createFollowupRunner } from "../src/auto-reply/reply/followup-runner.js";
 import type { FollowupRun, QueueSettings } from "../src/auto-reply/reply/queue.js";
 import {
-  clearSessionQueues,
   enqueueFollowupRun,
   FollowupRunDeferredError,
   scheduleFollowupDrain,
 } from "../src/auto-reply/reply/queue.js";
-import { FOLLOWUP_QUEUES } from "../src/auto-reply/reply/queue/state.js";
+import { clearFollowupDrainCallback } from "../src/auto-reply/reply/queue/drain.js";
+import { clearFollowupQueue, FOLLOWUP_QUEUES } from "../src/auto-reply/reply/queue/state.js";
 import { CONFIG_PATH, STATE_DIR } from "../src/config/paths.js";
+import { resolveDefaultSessionStorePath } from "../src/config/sessions/paths.js";
 import {
   ensureSessionEntrySync,
   loadSessionEntry,
@@ -116,7 +117,7 @@ async function scenarioBoundedSuspension(): Promise<void> {
 
   const expectedLadderMs = EXPECTED_BACKOFF_LADDER_MS.reduce((sum, ms) => sum + ms, 0);
   console.log(
-    `[1/4] wedged item: expecting ${EXPECTED_MAX_CONSECUTIVE_FAILURES} attempts over ~${Math.round(expectedLadderMs / 1000)}s of production backoff...`,
+    `[1/5] wedged item: expecting ${EXPECTED_MAX_CONSECUTIVE_FAILURES} attempts over ~${Math.round(expectedLadderMs / 1000)}s of production backoff...`,
   );
   const startedAt = Date.now();
   enqueueFollowupRun(key, createRun("wedged", "proof-m1"), SETTINGS);
@@ -198,7 +199,7 @@ async function scenarioDeferredStillRetries(): Promise<void> {
   };
 
   console.log(
-    `[2/4] deferred item: expecting ${deferrals} deferrals (past the ${EXPECTED_MAX_CONSECUTIVE_FAILURES}-failure cap) then delivery...`,
+    `[2/5] deferred item: expecting ${deferrals} deferrals (past the ${EXPECTED_MAX_CONSECUTIVE_FAILURES}-failure cap) then delivery...`,
   );
   enqueueFollowupRun(key, createRun("deferred", "proof-m2"), SETTINGS);
   scheduleFollowupDrain(key, runFollowup);
@@ -233,7 +234,7 @@ async function scenarioRestartFenceParks(): Promise<void> {
   };
 
   console.log(
-    "[3/4] restart fence: expecting the drain to park until rollback, without suspension...",
+    "[3/5] restart fence: expecting the drain to park until rollback, without suspension...",
   );
   enqueueFollowupRun(key, createRun("fenced", "proof-m3"), SETTINGS);
   scheduleFollowupDrain(key, runFollowup);
@@ -257,6 +258,83 @@ async function scenarioRestartFenceParks(): Promise<void> {
   await waitFor(() => delivered, "the fenced item to drain after rollback", 30_000);
   assert(attempts === 2, `expected 2 attempts after rollback, saw ${attempts}`);
   console.log("      ok: parked on the fence, then delivered after rollback");
+}
+
+async function scenarioConcurrentOverflowKeepsBudget(): Promise<void> {
+  const key = `proof-w91n-overflow-${Date.now()}`;
+  capturedErrors.length = 0;
+  const settings: QueueSettings = { ...SETTINGS, cap: 1, dropPolicy: "summarize" };
+  const attemptTimestamps: number[] = [];
+  let releaseFirstAttempt: (() => void) | undefined;
+  const runFollowup = async (run: FollowupRun): Promise<void> => {
+    if (!run.prompt.includes("[Queue overflow]")) {
+      return;
+    }
+    attemptTimestamps.push(Date.now());
+    if (attemptTimestamps.length === 1) {
+      // Hold the first overflow-summary delivery open across an enqueue.
+      await new Promise<void>((resolve) => {
+        releaseFirstAttempt = resolve;
+      });
+    }
+    throw new Error(AUTHORITY_ERROR);
+  };
+
+  console.log(
+    "[5/5] concurrent overflow: compacting an attempted summary source mid-delivery must keep its retry budget...",
+  );
+  enqueueFollowupRun(key, createRun("summarized", "proof-m5-summary"), settings);
+  enqueueFollowupRun(key, createRun("survivor", "proof-m5-survivor"), settings);
+  scheduleFollowupDrain(key, runFollowup);
+  await waitFor(() => attemptTimestamps.length === 1, "the first summary attempt", 10_000);
+
+  const queue = FOLLOWUP_QUEUES.get(key);
+  const attempted = queue?.summarySources[0];
+  assert(attempted?.messageId === "proof-m5-summary", "expected the summary source in flight");
+  enqueueFollowupRun(key, createRun("overflow", "proof-m5-overflow"), settings);
+  const compacted = queue?.summaryElisions.flatMap((entry) => entry.sources) ?? [];
+  assert(
+    !queue?.summarySources.includes(attempted) &&
+      compacted.length === 1 &&
+      compacted[0] !== attempted &&
+      compacted[0]?.messageId === "proof-m5-summary",
+    "expected the concurrent enqueue to compact the attempted source into a fresh clone",
+  );
+  releaseFirstAttempt?.();
+
+  const expectedLadderMs = EXPECTED_BACKOFF_LADDER_MS.reduce((sum, ms) => sum + ms, 0);
+  await waitFor(
+    () => FOLLOWUP_QUEUES.get(key)?.drainSuspended === true,
+    "the compacted queue to be suspended",
+    expectedLadderMs + 30_000,
+  );
+  const attemptsAtSuspension = attemptTimestamps.length;
+  await sleep(2_000);
+  assert(
+    attemptsAtSuspension === EXPECTED_MAX_CONSECUTIVE_FAILURES,
+    `expected exactly ${EXPECTED_MAX_CONSECUTIVE_FAILURES} attempts before suspension, saw ${attemptsAtSuspension} — the compacted clone restarted the budget`,
+  );
+  assert(
+    attemptTimestamps.length === attemptsAtSuspension,
+    "expected the drain loop to stop after suspension",
+  );
+  const gaps = attemptTimestamps
+    .slice(1)
+    .map((timestamp, index) => timestamp - (attemptTimestamps[index] ?? timestamp));
+  for (const [index, gap] of gaps.entries()) {
+    const expected = EXPECTED_BACKOFF_LADDER_MS[index] ?? 0;
+    assert(
+      gap >= expected * 0.8,
+      `expected retry ${index + 1} to wait at least ${expected}ms of backoff, waited ${gap}ms — the compacted failure bypassed backoff`,
+    );
+  }
+  assert(
+    FOLLOWUP_QUEUES.get(key)?.items[0]?.messageId === "proof-m5-overflow",
+    "expected the overflow successor to stay queued behind the suspended summary",
+  );
+  console.log(
+    `      ok: ${attemptsAtSuspension} attempts, gaps ${gaps.join("/")}ms, suspended with the compacted source retained`,
+  );
 }
 
 const PROOF_CHANNEL = "proofchan";
@@ -346,7 +424,7 @@ function registerProofDeliveryChannel(delivered: DeliveredReply[]): void {
     outbound: {
       deliveryMode: "direct",
       sendText: async (payload: { to?: string; text?: string }) => {
-        delivered.push({ to: String(payload?.to ?? ""), text: String(payload?.text ?? "") });
+        delivered.push({ to: payload?.to ?? "", text: payload?.text ?? "" });
         return { channel: PROOF_CHANNEL, messageId: `proof-${delivered.length}` };
       },
       sendMedia: async () => ({ channel: PROOF_CHANNEL, messageId: "proof-media" }),
@@ -372,7 +450,9 @@ async function scenarioAcceptedCommandRecovery(): Promise<void> {
   const deliveredCount = (): number => delivered.length;
   const endpoint = await startLoopbackModelEndpoint();
   const workspaceDir = path.join(proofHomeDir, "workspace");
-  const storePath = path.join(proofHomeDir, "sessions.json");
+  // The agent's own default store: the reply runner resolves this database for
+  // its session lookup, so the recovery command must commit to the same file.
+  const storePath = resolveDefaultSessionStorePath("agent");
   fs.mkdirSync(workspaceDir, { recursive: true });
 
   const cfg = {
@@ -476,7 +556,7 @@ async function scenarioAcceptedCommandRecovery(): Promise<void> {
 
   resetGatewayWorkAdmission();
   console.log(
-    "[4/4] accepted-command recovery: suspending, then recovering through the production reply path...",
+    "[4/5] accepted-command recovery: suspending, then recovering through the production reply path...",
   );
   console.log(
     `      isolated home, ${scrubbedCredentialEnvNames.length} provider credential env vars removed; model endpoint ${endpoint.baseUrl}`,
@@ -559,7 +639,7 @@ async function scenarioAcceptedCommandRecovery(): Promise<void> {
   );
   console.log(`      accepted command: ${ack?.text?.trim()}`);
   console.log(
-    `      persisted store committed: queueMode ${String(storedBefore?.queueMode)} -> ${String(storedAfter?.queueMode)}`,
+    `      persisted store committed: queueMode ${storedBefore?.queueMode} -> ${String(storedAfter?.queueMode)}`,
   );
 
   try {
@@ -653,9 +733,15 @@ export async function runProofScenarios(): Promise<void> {
     await scenarioDeferredStillRetries();
     await scenarioRestartFenceParks();
     await scenarioAcceptedCommandRecovery();
+    await scenarioConcurrentOverflowKeepsBudget();
   } finally {
     clearInterval(keepAlive);
-    clearSessionQueues([...FOLLOWUP_QUEUES.keys()]);
+    // Teardown goes through the two retained owners: queue state (which aborts
+    // the generation and cancels any backoff timer) and the drain callback map.
+    for (const key of FOLLOWUP_QUEUES.keys()) {
+      clearFollowupQueue(key);
+      clearFollowupDrainCallback(key);
+    }
     resetGatewayWorkAdmission();
     restoreRuntimeError();
   }

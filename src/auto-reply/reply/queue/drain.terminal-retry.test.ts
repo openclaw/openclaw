@@ -358,6 +358,55 @@ describe("followup drain failure ownership", () => {
     expect(FOLLOWUP_QUEUES.get(key)?.summarySources.map((run) => run.prompt)).toEqual(["summary"]);
   });
 
+  it("keeps an attempted summary source's budget when concurrent overflow compacts it", async () => {
+    const settings = { ...SETTINGS, cap: 1, dropPolicy: "summarize" as const };
+    enqueueFollowupRun(key, createRun({ prompt: "summary", messageId: "summary" }), settings);
+    enqueueFollowupRun(key, createRun({ prompt: "survivor", messageId: "survivor" }), settings);
+    const attempts: number[] = [];
+    let releaseFirstAttempt: (() => void) | undefined;
+    scheduleFollowupDrain(key, async (run) => {
+      if (!run.prompt.includes("[Queue overflow]")) {
+        return;
+      }
+      attempts.push(Date.now());
+      if (attempts.length === 1) {
+        // Hold the first summary delivery open so an enqueue can overflow
+        // while the attempted source is still reserved.
+        await new Promise<void>((resolve) => {
+          releaseFirstAttempt = resolve;
+        });
+      }
+      throw new Error("summary failure");
+    });
+    await flush();
+    expect(attempts).toHaveLength(1);
+    const queue = FOLLOWUP_QUEUES.get(key);
+    const attempted = queue?.summarySources[0];
+    expect(attempted?.prompt).toBe("summary");
+    enqueueFollowupRun(key, createRun({ prompt: "overflow", messageId: "overflow" }), settings);
+    // Enqueue-side compaction replaced the attempted source with a fresh clone.
+    expect(attempted && queue?.summarySources.includes(attempted)).toBe(false);
+    expect(
+      queue?.summaryElisions.flatMap((entry) => entry.sources).map((run) => run.prompt),
+    ).toEqual(["summary"]);
+    releaseFirstAttempt?.();
+    await finish();
+    // The clone keeps the attempted source's failure identity: the first failure
+    // spends budget and every retry waits on the backoff ladder until suspension.
+    expect(attempts, JSON.stringify(errors)).toHaveLength(CAP);
+    expect(
+      attempts.slice(1).map((time, index) => {
+        const previous = attempts[index];
+        if (previous === undefined) {
+          throw new Error("Missing previous drain attempt");
+        }
+        return time - previous;
+      }),
+    ).toEqual([500, 1000, 2000, 4000, 8000, 10000]);
+    expect(errors.filter((error) => error.includes("queue suspended"))).toHaveLength(1);
+    expect(FOLLOWUP_QUEUES.get(key)?.items.map((run) => run.prompt)).toEqual(["overflow"]);
+  });
+
   it("parks a failed collect batch without consuming work appended during its last attempt", async () => {
     const settings = { ...SETTINGS, mode: "collect" as const };
     for (const prompt of ["first", "second"]) {

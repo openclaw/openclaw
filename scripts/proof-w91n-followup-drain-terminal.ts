@@ -25,6 +25,10 @@
 //      plugin. The only simulated things are the two literal edges — a loopback
 //      HTTP endpoint in place of the provider API, and that channel adapter in
 //      place of the platform transport.
+//   5. With `drop:summarize`, an enqueue that overflows while an overflow
+//      summary delivery is still awaiting compacts the attempted source into a
+//      fresh clone; that clone keeps the source's retry budget, so the failing
+//      summary still backs off on the ladder and suspends after the same cap.
 //
 // This file is only a bootstrap. It must not statically import production code:
 // OpenClaw modules pin runtime paths while their module bodies evaluate
