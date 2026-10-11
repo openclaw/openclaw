@@ -26,8 +26,5 @@ export function resolveBootstrapMode(params: {
   if (!params.isPrimaryRun || !params.isInteractiveUserFacing) {
     return "none";
   }
-  if (!params.hasBootstrapFileAccess) {
-    return "limited";
-  }
-  return params.isCanonicalWorkspace ? "full" : "limited";
+  return params.hasBootstrapFileAccess && params.isCanonicalWorkspace ? "full" : "limited";
 }

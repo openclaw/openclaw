@@ -2,11 +2,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Selectable } from "kysely";
 import type { ProgressCard, ProgressCardStep } from "../../packages/gateway-protocol/src/index.js";
-import {
-  executeSqliteQuerySync,
-  executeSqliteQueryTakeFirstSync,
-  getNodeSqliteKysely,
-} from "../infra/kysely-sync.js";
+import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-db.generated.js";
 import { ensureOpenClawAgentProgressCardSchemaInTransaction } from "../state/openclaw-agent-progress-card-schema.js";
@@ -14,10 +10,6 @@ import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 
 type ProgressCardDatabase = Pick<OpenClawAgentKyselyDatabase, "session_progress_cards">;
 type StoredProgressCardRow = Selectable<ProgressCardDatabase["session_progress_cards"]>;
-type StoredProgressCardMetadata = Pick<
-  StoredProgressCardRow,
-  "session_key" | "revision" | "created_at" | "updated_at"
->;
 
 function selectProgressCard(db: DatabaseSync, sessionKey: string): StoredProgressCardRow | null {
   const kysely = getNodeSqliteKysely<ProgressCardDatabase>(db);
@@ -33,39 +25,32 @@ function selectProgressCard(db: DatabaseSync, sessionKey: string): StoredProgres
   );
 }
 
-function selectProgressCardMetadata(
-  db: DatabaseSync,
-  sessionKey: string,
-): StoredProgressCardMetadata | null {
-  const kysely = getNodeSqliteKysely<ProgressCardDatabase>(db);
-  return (
-    executeSqliteQueryTakeFirstSync(
-      db,
-      kysely
-        .selectFrom("session_progress_cards")
-        .select(["session_key", "revision", "created_at", "updated_at"])
-        .where("session_key", "=", sessionKey)
-        .limit(1),
-    ) ?? null
-  );
-}
-
 function clearProgressCardInTransaction(
   db: DatabaseSync,
   sessionKey: string,
-  previous: StoredProgressCardMetadata,
-): void {
-  executeSqliteQuerySync(
-    db,
-    getNodeSqliteKysely<ProgressCardDatabase>(db)
-      .updateTable("session_progress_cards")
-      .set({
-        markdown: null,
-        steps_json: null,
-        revision: previous.revision + 1,
-        updated_at: Date.now(),
-      })
-      .where("session_key", "=", sessionKey),
+  expectedRevision?: number,
+): boolean {
+  const query = getNodeSqliteKysely<ProgressCardDatabase>(db)
+    .updateTable("session_progress_cards")
+    .set((eb) => ({
+      markdown: null,
+      steps_json: null,
+      revision: eb("revision", "+", 1),
+      updated_at: Date.now(),
+    }))
+    .where("session_key", "=", sessionKey);
+  return (
+    executeSqliteQueryTakeFirstSync(
+      db,
+      (expectedRevision === undefined
+        ? query
+        : query
+            .where("revision", "=", expectedRevision)
+            .where((eb) =>
+              eb.or([eb("markdown", "is not", null), eb("steps_json", "is not", null)]),
+            )
+      ).returning(["revision", "created_at"]),
+    ) !== undefined
   );
 }
 
@@ -117,17 +102,11 @@ export function clearSessionProgressCardForReset(db: DatabaseSync, sessionKey: s
   if (!tableExists(db, "session_progress_cards")) {
     return false;
   }
-  const previous = selectProgressCardMetadata(db, sessionKey);
-  if (!previous) {
-    return false;
-  }
-  if (db.isTransaction) {
-    clearProgressCardInTransaction(db, sessionKey, previous);
-  } else {
-    // Standalone callers must reread after write admission; the reset owner already holds it.
-    writeSessionProgressCard(db, sessionKey, {});
-  }
-  return true;
+  return db.isTransaction
+    ? clearProgressCardInTransaction(db, sessionKey)
+    : runSqliteImmediateTransactionSync(db, () => clearProgressCardInTransaction(db, sessionKey), {
+        operationLabel: "progress-card.reset",
+      });
 }
 
 export function writeSessionProgressCard(
@@ -163,26 +142,16 @@ export function writePreparedSessionProgressCard(
     const kysely = getNodeSqliteKysely<ProgressCardDatabase>(db);
     const { markdown, steps, stepsJson } = input;
     if (!markdown && !steps) {
-      let previous: StoredProgressCardMetadata | null;
-      if (input.expectedRevision !== undefined) {
-        const currentRow = selectProgressCard(db, sessionKey);
-        const current = currentRow ? rowToProgressCard(currentRow) : null;
-        if (!currentRow || currentRow.revision !== input.expectedRevision || !current) {
-          return { card: current };
-        }
-        previous = currentRow;
-      } else {
-        previous = selectProgressCardMetadata(db, sessionKey);
-      }
-      if (previous) {
-        clearProgressCardInTransaction(db, sessionKey, previous);
+      if (
+        !clearProgressCardInTransaction(db, sessionKey, input.expectedRevision) &&
+        input.expectedRevision !== undefined
+      ) {
+        return { card: readSessionProgressCard(db, sessionKey) };
       }
       return { cleared: true };
     }
-    const previous = selectProgressCardMetadata(db, sessionKey);
     const now = Date.now();
-    const revision = (previous?.revision ?? 0) + 1;
-    executeSqliteQuerySync(
+    const written = executeSqliteQueryTakeFirstSync(
       db,
       kysely
         .insertInto("session_progress_cards")
@@ -190,23 +159,24 @@ export function writePreparedSessionProgressCard(
           session_key: sessionKey,
           markdown: markdown ?? null,
           steps_json: stepsJson,
-          revision,
-          created_at: previous?.created_at ?? now,
+          revision: 1,
+          created_at: now,
           updated_at: now,
         })
         .onConflict((conflict) =>
-          conflict.column("session_key").doUpdateSet({
+          conflict.column("session_key").doUpdateSet((eb) => ({
             markdown: markdown ?? null,
             steps_json: stepsJson,
-            revision,
+            revision: eb("session_progress_cards.revision", "+", 1),
             updated_at: now,
-          }),
-        ),
+          })),
+        )
+        .returning(["revision", "created_at"]),
     );
     return {
       card: {
         sessionKey,
-        revision,
+        revision: written!.revision,
         updatedAt: now,
         ...(markdown ? { markdown } : {}),
         ...(steps ? { steps } : {}),

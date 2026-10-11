@@ -599,6 +599,7 @@ it("keeps stopped inspection limited to verified changed artifacts", async () =>
   expect(retained.root).toBeUndefined();
   const blobsRead = () => hostReads.mock.calls.filter(([, args]) => args[1] === "--batch").length;
   const beforeOversized = blobsRead();
+  expect(beforeOversized).toBeGreaterThan(0);
   const oversized = expectError(
     await invoke("sessions.files.get", { sessionKey, path: "oversized.txt" }, context),
   );

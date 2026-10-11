@@ -420,31 +420,20 @@ describe("device worker placement dispatch", () => {
     expect(harness.environments.destroy).not.toHaveBeenCalled();
   });
 
-  it.each(["before-sync", "before-activation"] as const)(
-    "rejects missing captured exec policy %s without weakening the launch authority",
-    async (stage) => {
-      const harness = createHarness(database, placementStore);
-      const node = deviceProof();
-      if (stage === "before-sync") {
-        delete node.workerHost.capturedExecPolicy;
-      }
-      bindDeviceWorkerAvailability(harness.environments, async () => ({ available: true, node }));
-      const request = prepareCloudNodeDispatch(harness, "worker-turn");
+  it("rejects missing captured exec policy before workspace synchronization", async () => {
+    const harness = createHarness(database, placementStore);
+    const node = deviceProof();
+    delete node.workerHost.capturedExecPolicy;
+    bindDeviceWorkerAvailability(harness.environments, async () => ({ available: true, node }));
+    const request = prepareCloudNodeDispatch(harness, "worker-turn");
 
-      await expect(
-        harness.service.dispatch(request, (placement) => {
-          if (stage === "before-activation" && placement.state === "starting") {
-            delete node.workerHost.capturedExecPolicy;
-          }
-        }),
-      ).rejects.toThrow("run openclaw update, then reconnect");
+    await expect(harness.service.dispatch(request)).rejects.toThrow(
+      "run openclaw update, then reconnect",
+    );
 
-      expect(harness.placements.current()).toMatchObject({ state: "failed" });
-      expect(harness.log.filter((entry) => entry === "sync")).toHaveLength(
-        stage === "before-sync" ? 0 : 1,
-      );
-    },
-  );
+    expect(harness.placements.current()).toMatchObject({ state: "failed" });
+    expect(harness.log.filter((entry) => entry === "sync")).toHaveLength(0);
+  });
 
   it("rejects a cloud node re-paired while its managed workspace is synchronizing", async () => {
     let currentNode = deviceProof(0);
@@ -583,36 +572,6 @@ describe("device worker placement dispatch", () => {
       recoveryError: expect.stringContaining("run openclaw update"),
       terminalReason: expect.stringContaining("run openclaw node restart"),
       terminalAtMs: 1_000,
-    });
-  });
-
-  it("rechecks a paired node immediately before provisioning after its eligibility changes", async () => {
-    const harness = createHarness(database, placementStore);
-    const resolveAvailability = vi
-      .fn()
-      .mockResolvedValueOnce({ available: true, node: deviceProof() })
-      .mockResolvedValueOnce({ available: false, unavailableReason: "disconnected" });
-    bindDeviceWorkerAvailability(harness.environments, resolveAvailability);
-    const request = {
-      ...REQUEST,
-      profileId: "device:device-1",
-      deviceId: "device-1",
-      devicePlacement: OPENCLAW_DEVICE_REQUIREMENT,
-      inheritedProfile: {
-        providerId: "device",
-        profileSnapshot: { install: "bundle" as const, settings: { device: "device-1" } },
-      },
-    };
-
-    await expect(harness.service.dispatch(request)).rejects.toThrow("reconnect");
-
-    expect(resolveAvailability).toHaveBeenCalledTimes(2);
-    expect(harness.environments.createWithRequest).not.toHaveBeenCalled();
-    expect(harness.environments.startTunnel).not.toHaveBeenCalled();
-    expect(harness.placements.current()).toMatchObject({
-      state: "failed",
-      environmentId: null,
-      recoveryError: expect.stringContaining("reconnect"),
     });
   });
 

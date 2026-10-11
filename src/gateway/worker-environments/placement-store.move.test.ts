@@ -132,7 +132,7 @@ describe("worker session placement moves", () => {
     } finally {
       sql.restore();
     }
-    expect(store.getPlacementMove(SESSION.sessionId)).toBeUndefined();
+    expect(await store.getPlacementMoveAsync(SESSION.sessionId)).toBeUndefined();
     expect(store.get(SESSION.sessionId)?.state).toBe("local");
   });
 
@@ -174,7 +174,7 @@ describe("worker session placement moves", () => {
       }
       expect(revoked).toBe(true);
       expect(store.get(SESSION.sessionId)).toEqual(active);
-      expect(store.getPlacementMove(SESSION.sessionId)).toBeUndefined();
+      expect(await store.getPlacementMoveAsync(SESSION.sessionId)).toBeUndefined();
     },
   );
 
@@ -238,7 +238,7 @@ describe("worker session placement moves", () => {
     expect(database.db.prepare("PRAGMA user_version").get()).toEqual({
       user_version: OPENCLAW_STATE_SCHEMA_VERSION,
     });
-    expect(store.getPlacementMove(SESSION.sessionId)).toEqual(begun.intent);
+    expect(await store.getPlacementMoveAsync(SESSION.sessionId)).toEqual(begun.intent);
     expect(await store.readProjection([SESSION.sessionId, "missing"])).toMatchObject({
       placements: new Map([[SESSION.sessionId, begun.placement]]),
       moves: new Map([[SESSION.sessionId, begun.intent]]),
@@ -271,7 +271,9 @@ describe("worker session placement moves", () => {
 
   it("persists explicit abandonment and atomically completes its exact failed source", async () => {
     const { active, begun } = await beginGatewayMove(true);
-    expect(store.getPlacementMove(active.sessionId)).toMatchObject({ abandonSource: true });
+    expect(await store.getPlacementMoveAsync(active.sessionId)).toMatchObject({
+      abandonSource: true,
+    });
     const reconciling = await reconcileMove(active, begun.placement.generation);
     const recoveryError = "Worker result abandoned by forced operator teardown";
     const failed = await store.fail({
@@ -296,7 +298,7 @@ describe("worker session placement moves", () => {
         expectedRecoveryError: recoveryError,
       }),
     ).toMatchObject({ state: "local", generation: failed.generation + 1 });
-    expect(store.getPlacementMove(active.sessionId)).toBeUndefined();
+    expect(await store.getPlacementMoveAsync(active.sessionId)).toBeUndefined();
   });
 
   it("permits draining an active placement with a pending workspace result when abandoning source", async () => {
@@ -339,7 +341,9 @@ describe("worker session placement moves", () => {
       placement: { state: "draining" },
       intent: { abandonSource: true },
     });
-    expect(store.getPlacementMove(active.sessionId)).toMatchObject({ abandonSource: true });
+    expect(await store.getPlacementMoveAsync(active.sessionId)).toMatchObject({
+      abandonSource: true,
+    });
     expect(store.validateWorkspaceResultClaim(claim)).toBe(true);
   });
 
@@ -357,13 +361,13 @@ describe("worker session placement moves", () => {
       target: { ...target, machineClass: " beast " },
     });
 
-    expect(store.getPlacementMove(SESSION.sessionId)).toMatchObject({ target });
+    expect(await store.getPlacementMoveAsync(SESSION.sessionId)).toMatchObject({ target });
     expect(
       database.db
         .prepare("SELECT target_os FROM worker_session_placement_moves WHERE session_id = ?")
         .get(SESSION.sessionId),
     ).toEqual({ target_os: null });
-    expect(store.getPlacementMove(SESSION.sessionId)?.target).not.toHaveProperty("os");
+    expect((await store.getPlacementMoveAsync(SESSION.sessionId))?.target).not.toHaveProperty("os");
     expect(
       await store.beginPlacementMove({ sessionId: SESSION.sessionId, source, target }),
     ).toMatchObject({ joined: true, intent: { operationId: begun.intent.operationId, target } });
@@ -391,7 +395,7 @@ describe("worker session placement moves", () => {
       )
       .run(SESSION.sessionId);
 
-    expect(() => store.getPlacementMove(SESSION.sessionId)).toThrow(
+    await expect(store.getPlacementMoveAsync(SESSION.sessionId)).rejects.toThrow(
       "Invalid worker placement move target: gateway",
     );
   });
@@ -460,7 +464,7 @@ describe("worker session placement moves", () => {
           `UPDATE worker_session_placement_moves SET ${column.name} = ? WHERE session_id = ?`,
         )
         .run(column.value, SESSION.sessionId);
-      const replacement = store.getPlacementMove(SESSION.sessionId);
+      const replacement = await store.getPlacementMoveAsync(SESSION.sessionId);
 
       await expect(
         store.transition({
@@ -470,7 +474,7 @@ describe("worker session placement moves", () => {
           expectedGeneration: reconciling.generation,
         }),
       ).resolves.toMatchObject({ state: "reclaimed" });
-      expect(store.getPlacementMove(SESSION.sessionId)).toEqual(replacement);
+      expect(await store.getPlacementMoveAsync(SESSION.sessionId)).toEqual(replacement);
     },
   );
 
@@ -484,13 +488,15 @@ describe("worker session placement moves", () => {
         expectedLocalGeneration: begun.placement.generation,
       }),
     ).resolves.toBe(false);
-    expect(store.getPlacementMove(SESSION.sessionId)).toEqual(begun.intent);
+    expect(await store.getPlacementMoveAsync(SESSION.sessionId)).toEqual(begun.intent);
 
-    const observed: Array<string | null | undefined> = [];
+    const observed: Array<Promise<string | null | undefined>> = [];
     onTestFinished(
       sessionChanges.subscribe((change) => {
         if ("all" in change && change.scope === "worker-placements") {
-          observed.push(store.getPlacementMove(SESSION.sessionId)?.lastError);
+          observed.push(
+            store.getPlacementMoveAsync(SESSION.sessionId).then((move) => move?.lastError),
+          );
         }
       }),
     );
@@ -509,10 +515,10 @@ describe("worker session placement moves", () => {
         error: "workspace reconciliation is waiting",
       }),
     ).toBe(true);
-    expect(store.getPlacementMove(SESSION.sessionId)?.lastError).toBe(
+    expect((await store.getPlacementMoveAsync(SESSION.sessionId))?.lastError).toBe(
       "workspace reconciliation is waiting",
     );
-    expect(observed).toEqual(["workspace reconciliation is waiting"]);
+    expect(await Promise.all(observed)).toEqual(["workspace reconciliation is waiting"]);
 
     const reconciling = await reconcileMove(active, begun.placement.generation);
     await expect(
@@ -530,8 +536,8 @@ describe("worker session placement moves", () => {
         expectedGeneration: reconciling.generation,
       }),
     ).toMatchObject({ state: "local", generation: reconciling.generation + 1 });
-    expect(store.getPlacementMove(SESSION.sessionId)).toBeUndefined();
-    expect(observed).toEqual(["workspace reconciliation is waiting", undefined]);
+    expect(await store.getPlacementMoveAsync(SESSION.sessionId)).toBeUndefined();
+    expect(await Promise.all(observed)).toEqual(["workspace reconciliation is waiting", undefined]);
   });
 
   it("completes a worker move only against the exact attached destination", async () => {
@@ -552,7 +558,7 @@ describe("worker session placement moves", () => {
       sessionId: SESSION.sessionId,
       expectedGeneration: reconciling.generation,
     });
-    expect(store.getPlacementMove(SESSION.sessionId)).toEqual(begun.intent);
+    expect(await store.getPlacementMoveAsync(SESSION.sessionId)).toEqual(begun.intent);
     database.db
       .prepare(
         "UPDATE worker_environments SET state = 'destroyed', attached_session_ids_json = '[]'",
@@ -582,7 +588,7 @@ describe("worker session placement moves", () => {
         ownerEpoch: destination.activeOwnerEpoch,
       }),
     ).toMatchObject({ state: "active", generation: destination.generation });
-    expect(store.getPlacementMove(SESSION.sessionId)).toBeUndefined();
+    expect(await store.getPlacementMoveAsync(SESSION.sessionId)).toBeUndefined();
   });
 
   it("completes a persisted abandonment only after a later sweep makes its placement local", async () => {
@@ -620,7 +626,7 @@ describe("worker session placement moves", () => {
     await moves.recoverSession(await store.readProjection([active.sessionId], { current: true }));
 
     expect(store.get(active.sessionId)).toEqual(failed);
-    expect(store.getPlacementMove(active.sessionId)?.lastError).toBe(
+    expect((await store.getPlacementMoveAsync(active.sessionId))?.lastError).toBe(
       "device teardown is still pending",
     );
     await moves.recoverSession(await store.readProjection([active.sessionId], { current: true }));
@@ -630,7 +636,7 @@ describe("worker session placement moves", () => {
       state: "local",
       generation: failed.generation + 1,
     });
-    expect(store.getPlacementMove(active.sessionId)).toBeUndefined();
+    expect(await store.getPlacementMoveAsync(active.sessionId)).toBeUndefined();
     expect(abandonSource).toHaveBeenCalledTimes(2);
   });
 
@@ -652,7 +658,7 @@ describe("worker session placement moves", () => {
 
     const recovered = store.get(active.sessionId);
     expect(recovered).toMatchObject({ state: "local", generation: reconciling.generation + 1 });
-    expect(store.getPlacementMove(active.sessionId)).toBeUndefined();
+    expect(await store.getPlacementMoveAsync(active.sessionId)).toBeUndefined();
     await moves.recoverSession(await store.readProjection([active.sessionId], { current: true }));
     expect(store.get(active.sessionId)).toEqual(recovered);
   });
@@ -715,6 +721,6 @@ describe("worker session placement moves", () => {
       recoveryError:
         "Cloud worker move request authority expired after Gateway restart; retry move",
     });
-    expect(restartedStore.getPlacementMove(source.sessionId)).toBeUndefined();
+    expect(await restartedStore.getPlacementMoveAsync(source.sessionId)).toBeUndefined();
   });
 });

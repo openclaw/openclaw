@@ -122,7 +122,7 @@ export function renderWikiPreviewOverlay(props: DreamingProps) {
         };
         return (
           <openclaw-modal-dialog
-            prop:label={current().page.title || t("dreaming.wiki.previewFallbackTitle")}
+            label={current().page.title || t("dreaming.wiki.previewFallbackTitle")}
             style="--openclaw-modal-width: 1120px"
             onModal-cancel={() => closeWikiPreview(props)}
           >
