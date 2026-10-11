@@ -1,5 +1,3 @@
-import type WaDropdownItem from "@awesome.me/webawesome/dist/components/dropdown-item/dropdown-item.js";
-import type WaDropdown from "@awesome.me/webawesome/dist/components/dropdown/dropdown.js";
 import type { JSX } from "@solidjs/web";
 import "../../components/agent-row-chip.ts";
 import "../../components/session-owner-chip.ts";
@@ -22,15 +20,6 @@ declare module "@solidjs/web" {
         HTMLElementTagNameMap["openclaw-session-owner-chip"],
         "owner"
       > & { size?: HTMLElementTagNameMap["openclaw-session-owner-chip"]["size"] };
-      "wa-dropdown": JSX.HTMLAttributes<WaDropdown> & {
-        placement?: WaDropdown["placement"];
-        "onWa-select"?: (event: CustomEvent<{ item: WaDropdownItem }>) => void;
-      };
-      "wa-dropdown-item": LegacyElement<WaDropdownItem, "checked"> & {
-        value?: string;
-        type?: WaDropdownItem["type"];
-        disabled?: boolean;
-      };
     }
   }
 }

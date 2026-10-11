@@ -68,7 +68,7 @@ extension installation approval; the companion does not ask for a pairing key.
 The dashboard adapter is
 `window.webkit.messageHandlers.openclawDeviceSettings.postMessage({type: "chrome-extension-setup", action})`,
 where `action` is `inspect`, `install`, or `verify`. Its Promise resolves directly
-to the canonical CLI setup JSON, including pending and blocked results, and
+to the CLI setup JSON, including pending and blocked results, and
 rejects on transport, invalid-action, or CLI execution errors. It shares the
 existing native browser document token, origin/path, and generation checks;
 reading tabs and other dashboard windows do not receive this bridge.
@@ -154,7 +154,7 @@ keychain is still unavailable, check its configuration in Keychain Access before
 attempting any repair.
 
 For real managed-service smoke tests, use a disposable OS account with its
-canonical account `HOME`. Core deliberately denies native-service authority
+normal account home directory (`HOME`). Core deliberately denies native-service authority
 when `HOME` or the profile's state directory is relocated. A temporary `HOME`
 alone therefore cannot prove Gateway installation or runtime switching.
 
@@ -344,7 +344,7 @@ review before installation. Successful verification may require a
 Gateway restart before the new model becomes available.
 
 The custom endpoint option supports OpenAI- and Anthropic-compatible services.
-For a local Gateway, it opens the canonical guided endpoint setup. For a remote
+For a local Gateway, it opens the guided endpoint setup. For a remote
 Gateway, run `openclaw onboard --auth-choice custom-api-key` on the Gateway host as directed by the setup
 message; custom-provider secrets must be entered on their owning host. The
 desktop companion does not copy remote provider secrets to this computer.
@@ -373,7 +373,7 @@ the additional sign-in options.
 ## Gateway runtime
 
 On Linux, fresh local setup installs the Gateway on the bundled OpenClaw Bun
-fork through the canonical CLI. The install carries an `--expected-runtime-pin`
+fork through the CLI. The install carries an `--expected-runtime-pin`
 guard with `definition: null`, so it refuses if a service has appeared since
 setup observed no service. The app records an informational marker; it never uses
 that marker as permission to change a service automatically.
@@ -444,7 +444,7 @@ changes. Computer Control and Keep computer awake retain their separate
 settings and permissions.
 
 The CLI remains the owner of local configuration, including `$include` files.
-The companion reads its resolved setting and passes the canonical config path
+The companion reads its resolved setting and passes the resolved config path
 to the node. Missing CLI support, invalid config, and failed startup appear in
 **Desktop sharing status** with a recovery message. If an off preference cannot
 be saved, sharing stops for this run and the status warns that the previous
@@ -481,7 +481,7 @@ credential store and uncheck it again to save the off preference.
 
 Quick Chat advertises the Gateway `inline-widgets` capability and renders hosted `show_widget` results in isolated child WebViews. The parent Quick Chat WebView is the only one granted Tauri commands; widget WebViews match no capability and therefore have no IPC access. Quick Chat accepts only assistant-message widget previews under the capability-scoped `/__openclaw__/canvas/documents/` route, blocks navigation away from the original document, uses nonpersistent WebViews, and keeps stable widget instances while switching among multiple previews. Connections that require a custom Gateway TLS leaf pin remain text-only because the platform WebView cannot bind that pin. Like the other native clients, Quick Chat does not expose the Control UI `sendPrompt` bridge.
 
-Retrying an unchanged Quick Chat draft after a connection error reuses its original idempotency key while the Gateway and agent remain unchanged. If the Gateway confirms the turn already completed, Quick Chat attempts to recover the matching reply from bounded session history instead of resending it. Unavailable or incomplete history produces an error; further retries of that unchanged draft on the same configured Gateway only retry recovery. Widget previews can refresh access after reconnecting to the same configured Gateway, but switching Gateways prevents old previews from using the new connection's access, even after switching back to the original URL.
+Retrying an unchanged Quick Chat draft after a connection error reuses its original request key to prevent duplicate sends while the Gateway and agent remain unchanged. If the Gateway confirms the turn already completed, Quick Chat attempts to recover the matching reply from bounded session history instead of resending it. Unavailable or incomplete history produces an error; further retries of that unchanged draft on the same configured Gateway only retry recovery. Widget previews can refresh access after reconnecting to the same configured Gateway, but switching Gateways prevents old previews from using the new connection's access, even after switching back to the original URL.
 
 Quick Chat pins its native request identity before sending, so activity from other runs cannot evict its buffered reply while the acknowledgment is pending. If an earlier retry prefix was already lost, a complete snapshot or recovered history can restore it; otherwise Quick Chat reports incomplete text instead of silently completing an empty reply.
 
