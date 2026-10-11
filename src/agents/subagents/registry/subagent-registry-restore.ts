@@ -189,11 +189,15 @@ export function createSubagentRegistryRestorer(config: {
         continue;
       }
       assertReadCurrent();
-      const sessionEntry = await loadSubagentSessionEntry({
-        childSessionKey: selected.childSessionKey,
-        childAgentId: selected.childAgentId,
-        assertCurrent: assertReadCurrent,
-      });
+      // Terminal delivery has its own session checks; startup only reconciles unfinished runs.
+      const sessionEntry =
+        typeof selected.execution.endedAt === "number"
+          ? undefined
+          : await loadSubagentSessionEntry({
+              childSessionKey: selected.childSessionKey,
+              childAgentId: selected.childAgentId,
+              assertCurrent: assertReadCurrent,
+            });
       assertReadCurrent();
       const entry = getCurrentSubagentRunOwner(runs, snapshot);
       if (!entry || entry.runId !== runId) {
