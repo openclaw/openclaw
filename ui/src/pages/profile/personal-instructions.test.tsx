@@ -110,7 +110,7 @@ function button(element: HTMLElement, text: string) {
 async function input(element: HTMLElement, value: string) {
   const editor = element.querySelector("textarea")!;
   editor.value = value;
-  editor.dispatchEvent(new Event("input"));
+  editor.dispatchEvent(new Event("input", { bubbles: true }));
   flush();
 }
 
@@ -312,6 +312,30 @@ it.each(["agent", "profile", "connection hello"])(
   },
 );
 
+it("keeps a replacement load locked when the previous connection's read completes", async () => {
+  const old = createDeferred<typeof file>();
+  const current = createDeferred<typeof file>();
+  const request = vi.fn().mockReturnValueOnce(old.promise).mockReturnValueOnce(current.promise);
+  const { element, emit } = mount(request);
+  await waitForSolid(() => expect(request).toHaveBeenCalledTimes(1));
+  emit({ hello: { ...hello, server: { connId: "connection-2" } } });
+  await waitForSolid(() => expect(request).toHaveBeenCalledTimes(2));
+
+  old.resolve(file);
+  await old.promise;
+  flush();
+  expect(element.querySelector("textarea")).toBeNull();
+  expect(button(element, "Save").disabled).toBe(true);
+
+  current.resolve({ ...file, content: "Current instructions" });
+  await waitForSolid(() =>
+    expect(element.querySelector("textarea")?.value).toBe("Current instructions"),
+  );
+  await input(element, "New draft");
+  expect(element.querySelector("textarea")?.value).toBe("New draft");
+  expect(button(element, "Save").disabled).toBe(false);
+});
+
 it("retains the unsettled draft but ignores an old save completion after reconnecting", async () => {
   const saving = createDeferred<typeof file>();
   const request = vi.fn().mockResolvedValueOnce(file).mockReturnValueOnce(saving.promise);
@@ -341,6 +365,45 @@ it("retains the unsettled draft but ignores an old save completion after reconne
   await waitForSolid(() => expect(element.querySelector('[aria-busy="true"]')).toBeNull());
   expect(element.querySelector("textarea")?.value).toBe("Old draft");
   expect(element.textContent).toContain("Unsaved changes");
+});
+
+it("preserves newer draft edits after returning to an agent with a pending save", async () => {
+  const saving = createDeferred<typeof file>();
+  const request = vi
+    .fn()
+    .mockResolvedValueOnce(file)
+    .mockReturnValueOnce(saving.promise)
+    .mockResolvedValueOnce({ ...file, agentId: "other", content: "Other instructions" })
+    .mockResolvedValueOnce({ ...file, hash: "hash-3" });
+  const { element, selection } = mount(request);
+  await waitForSolid(() => expect(element.querySelector("textarea")?.value).toBe(file.content));
+  await input(element, "First edit");
+  button(element, "Save").click();
+  await waitForSolid(() => expect(request).toHaveBeenCalledTimes(2));
+  selection.set("other");
+  await waitForSolid(() =>
+    expect(element.querySelector("textarea")?.value).toBe("Other instructions"),
+  );
+  selection.set("main");
+  await waitForSolid(() => expect(element.querySelector("textarea")?.value).toBe("First edit"));
+  await input(element, "Second edit");
+
+  saving.resolve({ ...file, content: "First edit", hash: "hash-2" });
+  await saving.promise;
+  flush();
+  expect(element.querySelector("textarea")?.value).toBe("Second edit");
+  expect(element.textContent).toContain("Unsaved changes");
+  expect(button(element, "Save").disabled).toBe(false);
+
+  await input(element, file.content);
+  expect(button(element, "Save").disabled).toBe(false);
+  button(element, "Save").click();
+  expect(request).toHaveBeenLastCalledWith("users.personalFile.set", {
+    agentId: "main",
+    content: file.content,
+    expectedHash: "hash-2",
+  });
+  await waitForSolid(() => expect(element.textContent).toContain("Saved"));
 });
 
 it("rejects a response for a different profile rather than enabling a save", async () => {

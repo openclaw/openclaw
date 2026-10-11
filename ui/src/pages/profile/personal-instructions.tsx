@@ -29,7 +29,6 @@ class PersonalInstructionsState {
   gatewayUrl: string | null = null;
   available = false;
   multipleProfiles = false;
-  generation = 0;
   drafts = new Map<string, { file: UsersPersonalFileGetResult; content: string }>();
 
   constructor(
@@ -45,7 +44,6 @@ class PersonalInstructionsState {
   }
 
   dispose() {
-    this.generation += 1;
     this.client = null;
     this.available = false;
   }
@@ -102,7 +100,6 @@ class PersonalInstructionsState {
       this.draft = pending?.content ?? "";
     }
     if (sourceChanged || agentChanged) {
-      this.generation += 1;
       this.busy = null;
       this.error = null;
       this.saved = false;
@@ -155,30 +152,43 @@ class PersonalInstructionsState {
     target: { agentId: string; profileId: string | null },
     request: () => Promise<UsersPersonalFileGetResult>,
   ) {
-    const generation = ++this.generation;
+    const client = this.client;
+    const connectionId = this.connectionId;
+    const draft = this.draft;
+    const isCurrent = () =>
+      this.available &&
+      this.client === client &&
+      this.connectionId === connectionId &&
+      this.agentId === target.agentId &&
+      this.profileId === target.profileId;
     this.busy = operation;
     this.error = null;
     this.saved = false;
     this.publish();
     try {
       const result = await request();
-      if (generation !== this.generation) {
+      if (!isCurrent()) {
         return;
       }
       if (result.agentId !== target.agentId || result.profileId !== target.profileId) {
         throw new Error(t("profilePage.personalInstructions.contextChanged"));
       }
       this.file = result;
-      this.draft = result.content;
+      if (this.draft === draft) {
+        this.busy = null;
+        this.draft = result.content;
+      }
       this.drafts.delete(result.agentId);
-      this.saved = operation === "save";
+      this.saved = operation === "save" && this.draft === result.content;
     } catch (error) {
-      if (generation === this.generation) {
+      if (isCurrent()) {
         this.error = formatUiError(error);
       }
     } finally {
-      if (generation === this.generation) {
-        this.busy = null;
+      if (isCurrent()) {
+        if (this.draft === draft) {
+          this.busy = null;
+        }
         this.publish();
       }
     }

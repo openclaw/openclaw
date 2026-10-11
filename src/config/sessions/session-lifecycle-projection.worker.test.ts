@@ -23,7 +23,7 @@ import {
 import { readExactSessionEntryRow } from "./session-accessor.sqlite-entry-store.js";
 import { replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
 import { applySessionEntryLifecycleMutation } from "./session-accessor.sqlite-projection.js";
-import * as reclamation from "./session-accessor.sqlite-reclamation-commit.js";
+import * as reclamation from "./session-accessor.sqlite-reclamation-run.js";
 import {
   SessionEntryLifecycleUpsertConflictError,
   SqliteSessionMutationConflictError,
@@ -165,16 +165,13 @@ async function runMaintenanceDrift(
     dispose() {},
   }));
   if (drift.removalOnly) {
-    const authorize = reclamation.withSqliteReclamationAuthorization;
-    vi.spyOn(reclamation, "withSqliteReclamationAuthorization").mockImplementation(
-      (gate, database, assertCurrent, run) => {
-        const assertAfterDrift = () => {
-          changed();
-          assertCurrent();
-        };
-        return authorize(gate, database, assertAfterDrift, run);
-      },
-    );
+    const reclaim = reclamation.runSqliteSessionReclamation;
+    vi.spyOn(reclamation, "runSqliteSessionReclamation").mockImplementation((params) => {
+      if (params.plan.kind === "lifecycle-projection-commit") {
+        changed();
+      }
+      return reclaim(params);
+    });
   } else {
     probe.admission(admission, (request, grant, callback) => {
       if (delivery.currentCommand === "session.lifecycle.project" && request.stage === "commit") {

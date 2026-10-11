@@ -17,6 +17,7 @@ import {
   type OpenKeyedStoreOptions,
   type PluginStateKeyedStore,
 } from "../../plugin-state/plugin-state-store.js";
+import { PluginInstance } from "../../plugins/plugin-instance.js";
 import { loadBundledPluginPublicArtifactModuleSync } from "../../plugins/public-surface-loader.js";
 import type {
   MemoryPluginRuntime,
@@ -47,6 +48,12 @@ vi.mock("../../agents/agent-scope.js", async (importOriginal) => ({
 import { memorySearchHandlers } from "./memory-search.js";
 
 let testState: OpenClawTestState;
+const { createMemoryRuntime: createCliMemoryRuntime } = await vi.importActual<{
+  createMemoryRuntime: (host: object) => {
+    searchForCli: NonNullable<MemoryPluginRuntime["searchForCli"]>;
+  };
+}>("../../../extensions/memory-core/runtime-api.js");
+const searchForCli = createCliMemoryRuntime({}).searchForCli;
 
 function createConfig(workspaceDir: string): OpenClawConfig {
   return {
@@ -157,7 +164,7 @@ describe("memory.search gateway method", () => {
       notice.warning = "A keyword rebuild was attempted.";
       return hits.slice(0, options?.maxResults ?? 75);
     });
-    getActiveMemorySearchManagerCore.mockResolvedValue({ manager });
+    getActiveMemorySearchManagerCore.mockResolvedValue({ manager, searchForCli });
     await withOwner(cfg, async (expectedOwnerId) => {
       for (const maxResults of [0, -1, 1.5]) {
         const response = await invokeMemorySearch(
@@ -229,7 +236,7 @@ describe("memory.search gateway method", () => {
     const cfg = createConfig(testState.workspaceDir);
     const manager = createStubManager();
     manager.close.mockRejectedValue(new Error("fixture manager cleanup failed"));
-    getActiveMemorySearchManagerCore.mockResolvedValue({ manager });
+    getActiveMemorySearchManagerCore.mockResolvedValue({ manager, searchForCli });
     await withOwner(cfg, async (expectedOwnerId) => {
       const legacy = await invokeMemorySearch({ query: "tea" }, cfg);
       expect(legacy).toHaveBeenCalledWith(
@@ -260,16 +267,19 @@ describe("memory.search gateway method", () => {
     }>({ dirName: "memory-core", artifactBasename: "runtime-api.js" });
     let current = true;
     let revokeOnRecall = false;
-    configureMemoryCoreDreamingState(<T>(options: OpenKeyedStoreOptions) => {
-      const store = createPluginStateKeyedStore<T>("memory-core", {
-        ...options,
-        env: testState.env,
-      });
-      if (revokeOnRecall && options.namespace === "short-term-recall") {
-        current = false;
-      }
-      return store;
-    });
+    const instance = new PluginInstance("memory-core");
+    instance.run(() =>
+      configureMemoryCoreDreamingState(<T>(options: OpenKeyedStoreOptions) => {
+        const store = createPluginStateKeyedStore<T>("memory-core", {
+          ...options,
+          env: testState.env,
+        });
+        if (revokeOnRecall && options.namespace === "short-term-recall") {
+          current = false;
+        }
+        return store;
+      }),
+    );
     const manager = createStubManager();
     manager.status.mockReturnValue({
       backend: "builtin",
@@ -287,61 +297,74 @@ describe("memory.search gateway method", () => {
       provenance: { originClass: "owner", sessionKind: "interactive", observedAt: 1000 },
     };
     manager.search.mockResolvedValue([hit]);
-    getActiveMemorySearchManagerCore.mockResolvedValue({ manager });
+    getActiveMemorySearchManagerCore.mockResolvedValue({
+      manager,
+      searchForCli: instance.wrap(searchForCli),
+    });
     const recalls = createPluginStateKeyedStore<{ value: { recallCount: number } }>("memory-core", {
       namespace: "short-term-recall",
       maxEntries: 50_000,
       env: testState.env,
     });
-    await withOwner(cfg, async (expectedOwnerId) => {
-      const invalid = await invokeMemorySearch(
-        { query: "tea", expectedOwnerId: "replaced-owner" },
-        cfg,
-        "memory.search.owner",
-      );
-      expect(invalid).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({ code: "UNAVAILABLE" }),
-      );
-      expect(manager.search).not.toHaveBeenCalled();
-      const response = await invokeMemorySearch(
-        { query: "tea", expectedOwnerId },
-        cfg,
-        "memory.search.owner",
-      );
-      expect(response).toHaveBeenCalledWith(true, { results: [hit] }, undefined);
-      expect((await recalls.entries()).map((entry) => entry.value.value.recallCount)).toEqual([1]);
-      manager.search.mockImplementationOnce(async () => {
-        current = false;
-        return [hit];
+    try {
+      await withOwner(cfg, async (expectedOwnerId) => {
+        const invalid = await invokeMemorySearch(
+          { query: "tea", expectedOwnerId: "replaced-owner" },
+          cfg,
+          "memory.search.owner",
+        );
+        expect(invalid).toHaveBeenCalledWith(
+          false,
+          undefined,
+          expect.objectContaining({ code: "UNAVAILABLE" }),
+        );
+        expect(manager.search).not.toHaveBeenCalled();
+        const response = await invokeMemorySearch(
+          { query: "tea", expectedOwnerId },
+          cfg,
+          "memory.search.owner",
+        );
+        expect(response).toHaveBeenCalledWith(true, { results: [hit] }, undefined);
+        expect((await recalls.entries()).map((entry) => entry.value.value.recallCount)).toEqual([
+          1,
+        ]);
+        manager.search.mockImplementationOnce(async () => {
+          current = false;
+          return [hit];
+        });
+        const revoked = await invokeMemorySearch(
+          { query: "tea", expectedOwnerId },
+          cfg,
+          "memory.search.owner",
+          () => current,
+        );
+        expect(revoked).not.toHaveBeenCalledWith(true, expect.anything(), undefined);
+        expect((await recalls.entries()).map((entry) => entry.value.value.recallCount)).toEqual([
+          1,
+        ]);
+        current = true;
+        revokeOnRecall = true;
+        const duringRecall = await invokeMemorySearch(
+          { query: "tea", expectedOwnerId },
+          cfg,
+          "memory.search.owner",
+          () => current,
+        );
+        expect(current).toBe(false);
+        expect(duringRecall).not.toHaveBeenCalledWith(true, expect.anything(), undefined);
+        const locks = createPluginStateKeyedStore("memory-core", {
+          namespace: "short-term-locks",
+          maxEntries: 4096,
+          env: testState.env,
+        });
+        expect(await locks.entries()).toEqual([]);
+        expect((await recalls.entries()).map((entry) => entry.value.value.recallCount)).toEqual([
+          1,
+        ]);
       });
-      const revoked = await invokeMemorySearch(
-        { query: "tea", expectedOwnerId },
-        cfg,
-        "memory.search.owner",
-        () => current,
-      );
-      expect(revoked).not.toHaveBeenCalledWith(true, expect.anything(), undefined);
-      expect((await recalls.entries()).map((entry) => entry.value.value.recallCount)).toEqual([1]);
-      current = true;
-      revokeOnRecall = true;
-      const duringRecall = await invokeMemorySearch(
-        { query: "tea", expectedOwnerId },
-        cfg,
-        "memory.search.owner",
-        () => current,
-      );
-      expect(current).toBe(false);
-      expect(duringRecall).not.toHaveBeenCalledWith(true, expect.anything(), undefined);
-      const locks = createPluginStateKeyedStore("memory-core", {
-        namespace: "short-term-locks",
-        maxEntries: 4096,
-        env: testState.env,
-      });
-      expect(await locks.entries()).toEqual([]);
-      expect((await recalls.entries()).map((entry) => entry.value.value.recallCount)).toEqual([1]);
-    });
+    } finally {
+      await instance.dispose();
+    }
   });
 
   it("rejects a missing or whitespace-only query before acquiring a manager", async () => {
