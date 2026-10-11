@@ -1,4 +1,4 @@
-import { createMemo, createRenderEffect, For, onCleanup, Show, type Accessor } from "solid-js";
+import { createEffect, createMemo, For, onCleanup, Show, type Accessor } from "solid-js";
 import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
 import type { HumanMention } from "../../../lib/chat/chat-types.ts";
@@ -54,7 +54,8 @@ function mentionOverflow(readPeople: Accessor<readonly MentionPerson[]>) {
       .join(", ");
     people[0]!.style.maxWidth = `${Math.max(0, available - (more.hidden ? 0 : moreWidth + gap))}px`;
   };
-  createRenderEffect(readPeople, sync);
+  // Measure the current recipients after the keyed list and avatars have committed.
+  createEffect(readPeople, sync);
   const observer = typeof ResizeObserver === "undefined" ? undefined : new ResizeObserver(sync);
   onCleanup(() => {
     disposed = true;

@@ -868,10 +868,7 @@ suite.define(() => {
       }
       await expectRequestCountStable(gateway, "sessions.patch", 0);
 
-      await gateway.setMethodResponse(
-        "sessions.list",
-        chatSessionListResponse([{ ...session, thinkingLevel: "ultra" }]),
-      );
+      await gateway.deferNext("sessions.patch");
       await thinkingSlider.evaluate((input) => {
         input.dispatchEvent(new Event("change", { bubbles: true }));
       });
@@ -880,6 +877,10 @@ suite.define(() => {
         key: sessionKey,
         thinkingLevel: "ultra",
       });
+      await gateway.setSessionsListResponse(
+        chatSessionListResponse([{ ...session, thinkingLevel: "ultra" }]),
+      );
+      await gateway.resolveDeferred("sessions.patch");
       await expect.poll(() => effortPicker.getAttribute("data-chat-thinking-value")).toBe("ultra");
       await expect.poll(() => effortPicker.textContent()).toContain("Ultra");
       await page.keyboard.press("Escape");

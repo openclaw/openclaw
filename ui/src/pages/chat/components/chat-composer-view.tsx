@@ -26,6 +26,7 @@ import {
   renderComposerDictationStatusSolid,
 } from "./chat-composer-controls.tsx";
 import { focusComposerFromChrome, paneDomId } from "./chat-composer-dom.ts";
+import { EmojiMenu } from "./chat-composer-emoji.tsx";
 import { GoalComposerMode, type GoalComposerController } from "./chat-composer-goal-mode.tsx";
 import { renderChatGoalRecoverySolid } from "./chat-composer-goal.tsx";
 import { LitContent } from "./chat-composer-interop.tsx";
@@ -340,11 +341,14 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
               {context.menus.skillMenuVisible ? (
                 <SkillMenu args={[context.state, context.skillMenuHost, context.requestUpdate]} />
               ) : undefined}
-              {context.state.emojiMenu.renderSolid(
-                props.paneId,
-                context.state.composerTextarea,
-                context.requestUpdate,
-              )}
+              <EmojiMenu
+                args={[
+                  context.state.emojiMenu,
+                  props.paneId,
+                  context.state.composerTextarea,
+                  context.requestUpdate,
+                ]}
+              />
               {context.menus.mentionMenuVisible ? (
                 <HumanMentionMenuView
                   args={[context.state.mentionMenu, context.mentionMenuHost, context.requestUpdate]}

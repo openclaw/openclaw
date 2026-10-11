@@ -1,0 +1,211 @@
+# Temporary W-CHAT-5 evidence job; remove before merging the composer PR.
+name: Composer migration proof
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, reopened, synchronize, ready_for_review]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: composer-migration-proof-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  NODE_VERSION: "24.21.0"
+
+jobs:
+  composer-proof:
+    if: >-
+      github.repository == 'openclaw/openclaw' &&
+      github.event.pull_request.head.repo.full_name == 'openclaw/openclaw' &&
+      github.event.pull_request.head.ref == 'solid2/w-chat-5' &&
+      !github.event.pull_request.draft
+    runs-on: blacksmith-16vcpu-ubuntu-2404
+    timeout-minutes: 25
+    steps:
+      - name: Check out exact composer head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Prepare Git owner
+        uses: openclaw/openclaw/.github/actions/git-owner@dd4528b6393e7d00063067a080ca7241b48ce475
+
+      - name: Pin source and merge base
+        id: source
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PINNED_BASE_SHA: 5d9a5ff1b44ce83a536eb87fecc256b20711cafd
+        shell: bash
+        run: |
+          set -euo pipefail
+          g() { python3 -I -S "$CI_GIT_OWNER" --git 0 "$@"; }
+          [[ "$EXPECTED_HEAD" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$PR_BASE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$(g rev-parse HEAD)" = "$EXPECTED_HEAD"
+          merge_base="$(g merge-base "$EXPECTED_HEAD" "$PINNED_BASE_SHA")"
+          test "$merge_base" = "$PINNED_BASE_SHA"
+          proof_root="$RUNNER_TEMP/composer-proof-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          base_worktree="$RUNNER_TEMP/composer-base-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          mkdir -p "$proof_root"
+          python3 -I -S "$CI_GIT_OWNER" --checkout-git 0 worktree add --detach "$base_worktree" "$merge_base"
+          export MERGE_BASE_SHA="$merge_base" PROOF_ROOT="$proof_root" BASE_WORKTREE="$base_worktree"
+          python3 - <<'PY'
+          import hashlib, json, os
+          from pathlib import Path
+          def digest(path):
+              return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+          root = Path(os.environ['PROOF_ROOT'])
+          receipt = {
+              'headSha': os.environ['EXPECTED_HEAD'],
+              'prBaseSha': os.environ['PR_BASE_SHA'],
+              'mergeBaseSha': os.environ['MERGE_BASE_SHA'],
+              'workflowRunId': os.environ['GITHUB_RUN_ID'],
+              'workflowRunAttempt': os.environ['GITHUB_RUN_ATTEMPT'],
+              'lockfiles': {
+                  'baseSha256': digest(Path(os.environ['BASE_WORKTREE']) / 'pnpm-lock.yaml'),
+                  'headSha256': digest('pnpm-lock.yaml'),
+              },
+          }
+          (root / 'source-receipt.json').write_text(json.dumps(receipt, indent=2) + '\n')
+          PY
+          printf 'PROOF_ROOT=%s\nBASE_WORKTREE=%s\nMERGE_BASE_SHA=%s\nEXPECTED_HEAD=%s\n' \
+            "$proof_root" "$base_worktree" "$merge_base" "$EXPECTED_HEAD" >> "$GITHUB_ENV"
+          printf 'artifact-root=%s\n' "$proof_root" >> "$GITHUB_OUTPUT"
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: "24.x"
+          cache-mode: restore
+          install-bun: "false"
+
+      - name: Setup Playwright Chromium
+        uses: ./.github/actions/setup-playwright-chromium
+        with:
+          cache-mode: restore
+
+      - name: Generate manifest and run selected E2E A/B
+        env:
+          OPENCLAW_UI_E2E_SKIP_REAL_GATEWAY: "1"
+          OPENCLAW_CAPTURE_UI_PROOF: "1"
+        shell: bash
+        run: |
+          set -euo pipefail
+          g() { python3 -I -S "$CI_GIT_OWNER" --git 0 "$@"; }
+          printf 'phase\texit\twall_seconds\n' > "$PROOF_ROOT/results.tsv"
+          failed=0
+          last_result=0
+          run_phase() {
+            local phase=$1 started ended
+            shift
+            started=$(date +%s)
+            set +e
+            (set -e; "$@") > "$PROOF_ROOT/$phase.log" 2>&1
+            last_result=$?
+            set -e
+            ended=$(date +%s)
+            printf '%s\t%s\t%s\n' "$phase" "$last_result" "$((ended-started))" | tee -a "$PROOF_ROOT/results.tsv"
+            if ((last_result != 0)); then
+              failed=1
+              tail -80 "$PROOF_ROOT/$phase.log"
+            fi
+          }
+          tests=(
+            ui/src/e2e/chat-flow.models-reasoning.e2e.test.ts
+            ui/src/e2e/chat-workspace-directory-race.e2e.test.ts
+            ui/src/e2e/chat-composer-capability-menu.e2e.test.ts
+            ui/src/e2e/command-palette-mentions.e2e.test.ts
+            ui/src/e2e/guest-session-controls.e2e.test.ts
+            ui/src/e2e/chat-attachment-focus.e2e.test.ts
+            ui/src/e2e/chat-emoji.e2e.test.ts
+            ui/src/e2e/github-panel.e2e.test.ts
+            ui/src/e2e/link-reader-checks.e2e.test.ts
+          )
+          printf '%s\n' "${tests[@]}" > "$PROOF_ROOT/selected-tests.txt"
+          base_install() { (cd "$BASE_WORKTREE" && pnpm install --frozen-lockfile); }
+          fingerprint_head() {
+            test "$(g rev-parse HEAD)" = "$EXPECTED_HEAD"
+            test -z "$(g diff --name-only HEAD -- . ':!ui/config/control-ui-boot-modules.json')"
+            g add -- ui/config/control-ui-boot-modules.json
+            g diff --exit-code
+            TESTED_TREE="$(g write-tree)"
+            TESTED_UI_TREE="$(g rev-parse "$TESTED_TREE:ui")"
+            BASE_UI_TREE="$(g rev-parse "$MERGE_BASE_SHA:ui")"
+            export TESTED_TREE TESTED_UI_TREE BASE_UI_TREE
+            python3 - <<'PYRECEIPT'
+          import hashlib, json, os
+          from pathlib import Path
+          root = Path(os.environ['PROOF_ROOT'])
+          receipt = json.loads((root / 'source-receipt.json').read_text())
+          receipt.update({
+              'testedTree': os.environ['TESTED_TREE'],
+              'testedUiTree': os.environ['TESTED_UI_TREE'],
+              'baseUiTree': os.environ['BASE_UI_TREE'],
+              'generatedManifestSha256': hashlib.sha256(Path('ui/config/control-ui-boot-modules.json').read_bytes()).hexdigest(),
+          })
+          (root / 'source-receipt.json').write_text(json.dumps(receipt, indent=2) + '\n')
+          PYRECEIPT
+          }
+          selected_e2e() {
+            local revision=$1 directory=$2
+            (cd "$directory"
+             export OPENCLAW_UI_E2E_ARTIFACT_DIR="$PROOF_ROOT/$revision-e2e"
+             export OPENCLAW_UI_E2E_DIAGNOSTIC_DIR="$PROOF_ROOT/$revision-diagnostics"
+             mkdir -p "$OPENCLAW_UI_E2E_ARTIFACT_DIR" "$OPENCLAW_UI_E2E_DIAGNOSTIC_DIR"
+             node scripts/run-vitest.mjs run \
+               --config test/vitest/vitest.ui-e2e.config.ts --configLoader runner \
+               --maxWorkers 2 "${tests[@]}")
+          }
+          verify_sources() {
+            test "$(g rev-parse HEAD)" = "$EXPECTED_HEAD"
+            g diff --exit-code
+            test "$(g write-tree)" = "$TESTED_TREE"
+            test "$(g -C "$BASE_WORKTREE" rev-parse HEAD)" = "$MERGE_BASE_SHA"
+            g -C "$BASE_WORKTREE" diff --exit-code HEAD
+          }
+          run_phase base-install base_install
+          base_install_result=$last_result
+          run_phase boot-manifest pnpm ui:boot-manifest:gen
+          manifest_result=$last_result
+          cp ui/config/control-ui-boot-modules.json "$PROOF_ROOT/control-ui-boot-modules.json"
+          g diff --binary HEAD -- ui/config/control-ui-boot-modules.json > "$PROOF_ROOT/boot-manifest.patch"
+          if ((manifest_result == 0)); then
+            run_phase fingerprint fingerprint_head
+            if ((last_result == 0)); then
+              TESTED_TREE=$(python3 -c 'import json, os; from pathlib import Path; print(json.loads((Path(os.environ["PROOF_ROOT"]) / "source-receipt.json").read_text())["testedTree"])')
+              export TESTED_TREE
+            fi
+          fi
+          run_phase head-e2e selected_e2e head "$GITHUB_WORKSPACE"
+          if ((base_install_result == 0)); then
+            run_phase base-e2e selected_e2e base "$BASE_WORKTREE"
+          else
+            printf 'base-e2e\t125\t0\n' | tee -a "$PROOF_ROOT/results.tsv"
+          fi
+          if [[ -n "${TESTED_TREE:-}" ]]; then run_phase source-consistency verify_sources; fi
+          {
+            printf '### Composer selected E2E comparison\n\n'
+            printf 'Head: `%s`\n\nComparison base: `%s`\n\n' "$EXPECTED_HEAD" "$MERGE_BASE_SHA"
+            printf '```text\n'
+            cat "$PROOF_ROOT/results.tsv"
+            printf '```\n'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit "$failed"
+
+      - name: Upload composer proof
+        if: always() && steps.source.outputs.artifact-root != ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: composer-proof-${{ github.event.pull_request.number }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ steps.source.outputs.artifact-root }}
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 7

@@ -8,6 +8,7 @@ import type {
   ChatFastModeSelectValue,
 } from "../../../lib/chat/model-select-state.ts";
 import type { ChatThinkingSelectState } from "../../../lib/chat/thinking.ts";
+import { liveValue } from "../../../lib/reactive/live-value.ts";
 import { handleChatComposerDetailsToggle, syncChatPickerOverlay } from "./chat-picker-overlay.ts";
 
 registerModelControlsEnglish();
@@ -136,6 +137,8 @@ export function ChatEffortPicker(props: ChatEffortPickerParams) {
     };
   });
   const visible = () => props.reserved || view().showReasoning || props.fastMode.supported;
+  // Catalog and status refreshes must not overwrite an uncommitted native drag.
+  const committedSliderValue = createMemo(() => String(view().sliderIndex));
   const sliderFillPercent = (index: number, count: number) =>
     count > 1 ? (index / (count - 1)) * 100 : 0;
   const onSpeedKeyDown = (event: KeyboardEvent) => {
@@ -353,7 +356,7 @@ export function ChatEffortPicker(props: ChatEffortPickerParams) {
                         min="0"
                         max={view().sliderStops.length - 1}
                         step="1"
-                        value={String(view().sliderIndex)}
+                        ref={liveValue(committedSliderValue)}
                         style={{
                           "--reasoning-fill": `${sliderFillPercent(view().sliderIndex, view().sliderStops.length)}%`,
                         }}

@@ -36,7 +36,6 @@ import {
 import {
   renderBackRow,
   renderCapabilityMenuState,
-  renderCapabilityToggleRow,
   renderCapabilityToggleRow as CapabilityToggleRow,
   menuDivider,
 } from "./chat-composer-menu-rows.tsx";
@@ -145,122 +144,125 @@ const internalLink = (href: string, label: string): JSX.Element => (
   </a>
 );
 
-function renderRootView(props: ChatComposerPlusMenuContentProps) {
-  const overrideCount = countSessionToolOverrides(props.toolOverrides);
-  const connectorCount = props.mcpServers.filter((server) =>
-    resolveToolOverrideState(
-      server.enabled,
-      readOwnEntry(props.toolOverrides?.mcpServers, server.name),
-    ),
-  ).length;
-  const hasSkillOverrides = Object.keys(props.toolOverrides?.skills ?? {}).length > 0;
-  const enabledSkillCount = props.skills?.filter((skill) => skill.enabled).length ?? 0;
-  const webSearchEnabled = resolveWebSearchToolOverrideState(
-    props.webSearchBaseEnabled,
-    props.toolOverrides?.webSearch,
-  );
-  const staleWebSearchEnable =
-    !props.webSearchBaseEnabled && props.toolOverrides?.webSearch === true;
-  const webSearchDisabled =
-    props.mutationBlockedReason !== null || (!props.webSearchBaseEnabled && !staleWebSearchEnable);
-  const webSearchTitle =
-    props.mutationBlockedReason ??
-    (staleWebSearchEnable
+function RootView(props: { menu: ChatComposerPlusMenuContentProps }) {
+  const overrideCount = () => countSessionToolOverrides(props.menu.toolOverrides);
+  const connectorCount = () =>
+    props.menu.mcpServers.filter((server) =>
+      resolveToolOverrideState(
+        server.enabled,
+        readOwnEntry(props.menu.toolOverrides?.mcpServers, server.name),
+      ),
+    ).length;
+  const hasSkillOverrides = () => Object.keys(props.menu.toolOverrides?.skills ?? {}).length > 0;
+  const enabledSkillCount = () => props.menu.skills?.filter((skill) => skill.enabled).length ?? 0;
+  const webSearchEnabled = () =>
+    resolveWebSearchToolOverrideState(
+      props.menu.webSearchBaseEnabled,
+      props.menu.toolOverrides?.webSearch,
+    );
+  const staleWebSearchEnable = () =>
+    !props.menu.webSearchBaseEnabled && props.menu.toolOverrides?.webSearch === true;
+  const webSearchDisabled = () =>
+    props.menu.mutationBlockedReason !== null ||
+    (!props.menu.webSearchBaseEnabled && !staleWebSearchEnable());
+  const webSearchTitle = () =>
+    props.menu.mutationBlockedReason ??
+    (staleWebSearchEnable()
       ? t("chat.composer.menu.webSearchClearStaleEnable")
-      : !props.webSearchBaseEnabled
+      : !props.menu.webSearchBaseEnabled
         ? t("chat.composer.menu.webSearchGloballyDisabled")
         : "");
-  const canUpload = uploadsEnabled(props.attachments.uploadConfig);
-  const attachments = canUpload ? renderAttachmentOptions() : null;
-  const rootToggles = props.rootToggles ?? [];
-  if (!props.showCapabilities && rootToggles.length === 0) {
-    return attachments;
-  }
-  // Core gates managed and Codex-native search. Config sniffing misses env/native providers;
-  // without a provider, this session override is a harmless no-op.
+  const canUpload = () => uploadsEnabled(props.menu.attachments.uploadConfig);
   return (
     <>
-      {attachments} {canUpload ? menuDivider() : null}
-      <For keyed={(item) => item} each={rootToggles}>
-        {(toggle) => <>{renderCapabilityToggleRow(toggle())}</>}
-      </For>
-      {props.showCapabilities ? (
-        <>
-          <For keyed={(view) => view} each={["skills", "connectors"] as const}>
-            {(menuItem) => (
-              <wa-dropdown-item
-                class="agent-chat__capability-menu-item"
-                value={`open-${menuItem()}`}
-              >
-                <span slot="icon" aria-hidden="true">
-                  <Icon name={menuItem() === "skills" ? "book" : "plug"} />
-                </span>
-                <span>{t(`chat.composer.menu.${menuItem()}`)}</span>
-                <span slot="details" class="agent-chat__capability-menu-details">
-                  <Show when={menuItem() === "connectors" || hasSkillOverrides}>
-                    <span class="agent-chat__capability-menu-badge">
-                      {menuItem() === "connectors"
-                        ? connectorCount
-                        : t("chat.composer.menu.enabledCount", {
-                            count: String(enabledSkillCount),
-                          })}
-                    </span>
-                  </Show>
-                  <span class="agent-chat__capability-menu-chevron" aria-hidden="true">
-                    <LitContent value={icons.chevronRight} />
-                  </span>
-                </span>
-              </wa-dropdown-item>
-            )}
-          </For>
-          {renderCapabilityToggleRow({
-            value: "toggle-web-search",
-            label: t("chat.composer.menu.webSearch"),
-            checked: webSearchEnabled,
-            disabled: webSearchDisabled,
-            title: webSearchTitle,
-            icon: icons.globe,
-            checkbox: true,
-          })}
-          {menuDivider()}
-          <wa-dropdown-item class="agent-chat__capability-menu-item" value="manage-plugins">
-            <span slot="icon" aria-hidden="true">
-              <LitContent value={icons.plug} />
-            </span>
-            {internalLink(
-              pathForRoute("plugins", props.basePath),
-              t("chat.composer.menu.managePlugins"),
-            )}
-          </wa-dropdown-item>
-          {overrideCount > 0 ? (
-            <wa-dropdown-item
-              class="agent-chat__capability-menu-item agent-chat__capability-menu-overrides"
-              value="clear-overrides"
-              disabled={props.mutationBlockedReason !== null}
-              title={props.mutationBlockedReason ?? ""}
-            >
+      <Show when={canUpload()}>{renderAttachmentOptions()}</Show>
+      <Show when={props.menu.showCapabilities || props.menu.rootToggles?.length}>
+        <Show when={canUpload()}>{menuDivider()}</Show>
+        <For each={props.menu.rootToggles ?? []} keyed={(toggle) => toggle.value}>
+          {(toggle) => (
+            <CapabilityToggleRow
+              value={toggle().value}
+              label={toggle().label}
+              checked={toggle().checked}
+              disabled={toggle().disabled}
+              title={toggle().title}
+              icon={toggle().icon}
+            />
+          )}
+        </For>
+      </Show>
+      <Show when={props.menu.showCapabilities}>
+        <For each={["skills", "connectors"] as const} keyed={(view) => view}>
+          {(view) => (
+            <wa-dropdown-item class="agent-chat__capability-menu-item" value={`open-${view()}`}>
               <span slot="icon" aria-hidden="true">
-                <LitContent value={icons.settings} />
+                <Icon name={view() === "skills" ? "book" : "plug"} />
               </span>
-              <span>
-                {t(
-                  overrideCount === 1
-                    ? "chat.composer.overrides.countOne"
-                    : "chat.composer.overrides.count",
-                  { count: String(overrideCount) },
-                )}
-              </span>
-              <span
-                slot="details"
-                class="agent-chat__capability-menu-clear-overrides"
-                aria-hidden="true"
-              >
-                <LitContent value={icons.x} />
+              <span>{t(`chat.composer.menu.${view()}`)}</span>
+              <span slot="details" class="agent-chat__capability-menu-details">
+                <Show when={view() === "connectors" || hasSkillOverrides()}>
+                  <span class="agent-chat__capability-menu-badge">
+                    {view() === "connectors"
+                      ? connectorCount()
+                      : t("chat.composer.menu.enabledCount", {
+                          count: String(enabledSkillCount()),
+                        })}
+                  </span>
+                </Show>
+                <span class="agent-chat__capability-menu-chevron" aria-hidden="true">
+                  <Icon name="chevronRight" />
+                </span>
               </span>
             </wa-dropdown-item>
-          ) : null}
-        </>
-      ) : null}
+          )}
+        </For>
+        <CapabilityToggleRow
+          value="toggle-web-search"
+          label={t("chat.composer.menu.webSearch")}
+          checked={webSearchEnabled()}
+          disabled={webSearchDisabled()}
+          title={webSearchTitle()}
+          icon={icons.globe}
+          checkbox={true}
+        />
+        {menuDivider()}
+        <wa-dropdown-item class="agent-chat__capability-menu-item" value="manage-plugins">
+          <span slot="icon" aria-hidden="true">
+            <Icon name="plug" />
+          </span>
+          {internalLink(
+            pathForRoute("plugins", props.menu.basePath),
+            t("chat.composer.menu.managePlugins"),
+          )}
+        </wa-dropdown-item>
+        <Show when={overrideCount() > 0}>
+          <wa-dropdown-item
+            class="agent-chat__capability-menu-item agent-chat__capability-menu-overrides"
+            value="clear-overrides"
+            disabled={props.menu.mutationBlockedReason !== null}
+            title={props.menu.mutationBlockedReason ?? ""}
+          >
+            <span slot="icon" aria-hidden="true">
+              <Icon name="settings" />
+            </span>
+            <span>
+              {t(
+                overrideCount() === 1
+                  ? "chat.composer.overrides.countOne"
+                  : "chat.composer.overrides.count",
+                { count: String(overrideCount()) },
+              )}
+            </span>
+            <span
+              slot="details"
+              class="agent-chat__capability-menu-clear-overrides"
+              aria-hidden="true"
+            >
+              <Icon name="x" />
+            </span>
+          </wa-dropdown-item>
+        </Show>
+      </Show>
     </>
   );
 }
@@ -398,12 +400,11 @@ const mcpDiscoveryNotice = (result: ToolsEffectiveResult | null, serverName: str
       MCP_DISCOVERY_NOTICE_IDS.has(notice.id) && notice.servers?.includes(serverName) === true,
   );
 
-function isToolDenied(props: ChatComposerPlusMenuContentProps, tool: McpToolEntry): boolean {
-  return props.toolOverrides != null
+const isToolDenied = (props: ChatComposerPlusMenuContentProps, tool: McpToolEntry): boolean =>
+  props.toolOverrides != null
     ? (readOwnEntry(props.toolOverrides.mcpToolsDeny, tool.mcpServer)?.includes(tool.mcpToolName) ??
-        false)
+      false)
     : tool.deniedBySession === true;
-}
 
 function ToolAccessView(props: { menu: ChatComposerPlusMenuContentProps; serverName: string }) {
   const tools = createMemo(() => toolsForServer(props.menu.toolsEffectiveResult, props.serverName));
@@ -668,7 +669,7 @@ function PlusMenuSurface(props: { menu: ChatComposerPlusMenuContentProps }) {
                 )}
               </>
             ) : (
-              <>{renderRootView(props.menu)}</>
+              <RootView menu={props.menu} />
             )
           }
         </Show>
