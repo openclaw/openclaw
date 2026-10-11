@@ -9,7 +9,7 @@ import {
 import type { runEmbeddedAgent } from "../../agents/embedded-agent.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
-  captureAgentRunTerminalWriteContext,
+  captureAgentRunTerminalPersistence,
   type CapturedAgentRunTerminalWriteContext,
 } from "../../infra/agent-run-terminal-writes.js";
 import {
@@ -47,7 +47,7 @@ it.each([false, true])(
       const admitted = await resolvePreparedRunAdmission({ ...params, runtimeKind: "embedded" });
       // The Gateway captures and tracks the terminal session write while the
       // run's terminal lifecycle event is dispatched inside the runner.
-      const writeContext = captureAgentRunTerminalWriteContext(params.runId);
+      const writeContext = captureAgentRunTerminalPersistence(params.runId).writeContext;
       assert(writeContext);
       const persistence = commit.promise.then(() =>
         writeContext.run(() => writeContext.assertCurrent()),

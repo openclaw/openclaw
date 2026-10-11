@@ -452,21 +452,13 @@ export async function resolveApiKeyForProviderCore(input: {
     const customKey = authConfig.resolveUsableCustomProviderApiKey(directAuthParams);
     if (customKey) {
       authConfig.assertInlineProviderApiKeyUsable({ store: getScopedStore(), provider });
-      return {
-        apiKey: customKey.apiKey,
-        source: customKey.source,
-        mode: "api-key",
-      };
+      return { ...customKey, mode: "api-key" };
     }
   }
   const providerConfig = resolveMergedModelProviderConfig(cfg, provider);
   const configuredLocalKey = authConfig.resolveUsableCustomProviderApiKey(directAuthParams);
   if (configuredLocalKey && isNonSecretApiKeyMarker(configuredLocalKey.apiKey)) {
-    return {
-      apiKey: configuredLocalKey.apiKey,
-      source: configuredLocalKey.source,
-      mode: "api-key",
-    };
+    return { ...configuredLocalKey, mode: "api-key" };
   }
   const localMarkerEnv = authConfig.resolveConfigAwareEnvApiKey(
     cfg,
@@ -475,11 +467,7 @@ export async function resolveApiKeyForProviderCore(input: {
     params.skipSetupProviderFallback,
   );
   if (localMarkerEnv && isNonSecretApiKeyMarker(localMarkerEnv.apiKey)) {
-    return {
-      apiKey: localMarkerEnv.apiKey,
-      source: localMarkerEnv.source,
-      mode: "api-key",
-    };
+    return { ...localMarkerEnv, mode: "api-key" };
   }
   const store = getScopedStore();
   const order =
@@ -587,7 +575,7 @@ export async function resolveApiKeyForProviderCore(input: {
     });
     if (modeAllowed(mode)) {
       authConfig.assertInlineProviderApiKeyUsable({ store: getScopedStore(), provider });
-      return { apiKey: customKey.apiKey, source: customKey.source, mode };
+      return { ...customKey, mode };
     }
   }
 

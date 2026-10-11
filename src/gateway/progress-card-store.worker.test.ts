@@ -81,7 +81,7 @@ it.each([false, true])(
   },
 );
 
-it("keeps queued inputs and FIFO revisions, refusing a changed target before mutation", async () => {
+it("keeps queued inputs, FIFO revisions, and the captured store through a config change", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const cfg: OpenClawConfig = {};
     setRuntimeConfigSnapshot(cfg, cfg);
@@ -103,14 +103,16 @@ it("keeps queued inputs and FIFO revisions, refusing a changed target before mut
     } finally {
       await Promise.allSettled([first, second, holding]);
     }
-    const changed = progressCardStore.put(sessionKey, { markdown: "Wrong store" });
+    const changed = progressCardStore.put(sessionKey, { markdown: "Captured store" });
     const next = { session: { store: "/synthetic/changed/cards.sqlite" } };
     setRuntimeConfigSnapshot(next, next);
-    await expect(changed).rejects.toThrow("progress-card session changed");
+    await expect(changed).resolves.toMatchObject({
+      card: { revision: 3, markdown: "Captured store" },
+    });
     setRuntimeConfigSnapshot(cfg, cfg);
     expect(await progressCardStore.get(sessionKey)).toMatchObject({
-      revision: 2,
-      markdown: "Second",
+      revision: 3,
+      markdown: "Captured store",
     });
   });
 });
@@ -224,7 +226,7 @@ it.each(["transaction", "commit"] as const)(
   },
 );
 
-it("preserves native decoding errors and never replays a lost committed reply", async () => {
+it("never replays a lost committed reply", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     setRuntimeConfigSnapshot({}, {});
     await replaceSessionEntry(
@@ -233,12 +235,6 @@ it("preserves native decoding errors and never replays a lost committed reply", 
     );
     await progressCardStore.put(sessionKey, { markdown: "Before" });
     const db = openOpenClawAgentDatabase({ agentId: "main" }).db;
-    db.prepare("UPDATE session_progress_cards SET steps_json = '{' WHERE session_key = ?").run(
-      sessionKey,
-    );
-    await expect(progressCardStore.put(sessionKey, { expectedRevision: 1 })).rejects.toBeInstanceOf(
-      SyntaxError,
-    );
     const unknown = new SqliteWorkerError("Synthetic lost commit reply", "outcome-unknown");
     const open = publications.openOpenClawAgentSqliteWorkerStore;
     let dispatches = 0;

@@ -269,7 +269,6 @@ export function createExecTool(defaults?: ExecToolDefaults) {
       const elevatedRequested = elevatedMode !== "off";
       if (elevatedRequested && (!elevatedDefaults?.enabled || !elevatedDefaults.allowed)) {
         const runtime = defaults?.sandbox ? "sandboxed" : "direct";
-        const gates: string[] = [];
         const contextParts: string[] = [];
         const provider = normalizeOptionalString(defaults?.messageProvider);
         const sessionKey = normalizeOptionalString(defaults?.sessionKey);
@@ -279,17 +278,13 @@ export function createExecTool(defaults?: ExecToolDefaults) {
         if (sessionKey) {
           contextParts.push(`session=${sessionKey}`);
         }
-        if (!elevatedDefaults?.enabled) {
-          gates.push("enabled (tools.elevated.enabled / agents.entries.*.tools.elevated.enabled)");
-        } else {
-          gates.push(
-            "allowFrom (tools.elevated.allowFrom.<provider> / agents.entries.*.tools.elevated.allowFrom.<provider>)",
-          );
-        }
+        const gate = !elevatedDefaults?.enabled
+          ? "enabled (tools.elevated.enabled / agents.entries.*.tools.elevated.enabled)"
+          : "allowFrom (tools.elevated.allowFrom.<provider> / agents.entries.*.tools.elevated.allowFrom.<provider>)";
         throw new Error(
           [
             `elevated is not available right now (runtime=${runtime}).`,
-            `Failing gates: ${gates.join(", ")}`,
+            `Failing gates: ${gate}`,
             contextParts.length > 0 ? `Context: ${contextParts.join(" ")}` : undefined,
             "Fix-it keys:",
             "- tools.elevated.enabled",

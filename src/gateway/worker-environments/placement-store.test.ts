@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { beforeEach, describe, expect, it } from "vitest";
+import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import {
   openOpenClawStateDatabase,
   type OpenClawStateDatabase,
@@ -251,7 +252,7 @@ describe("worker session placement store", () => {
     expect(store.validateTurnClaim(workerClaim)).toBe(false);
   });
 
-  it("clears dead local claims on restart while adopting active worker ownership", async () => {
+  it("clears dead local claims idempotently on restart while adopting active worker ownership", async () => {
     const localIdentity = {
       ...SESSION,
       sessionId: "session-local-restart",
@@ -279,7 +280,14 @@ describe("worker session placement store", () => {
     database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
     store = createWorkerSessionPlacementStore({ database, now: () => nowMs });
 
-    expect(store.clearLocalTurnClaimsAfterRestart()).toBe(1);
+    const queries = observeHostDataSql();
+    try {
+      expect(await store.clearLocalTurnClaimsAfterRestartAsync()).toBe(1);
+      expect(await store.clearLocalTurnClaimsAfterRestartAsync()).toBe(0);
+      expect(queries.queries).toEqual([]);
+    } finally {
+      queries.restore();
+    }
     expect(store.get(localIdentity.sessionId)?.turnClaim).toBeNull();
     expect(store.validateTurnClaim(workerClaim)).toBe(true);
     expect(
@@ -323,7 +331,7 @@ describe("worker session placement store", () => {
     database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
     store = createWorkerSessionPlacementStore({ database, now: () => nowMs });
 
-    expect(store.clearLocalTurnClaimsAfterRestart()).toBe(1);
+    expect(await store.clearLocalTurnClaimsAfterRestartAsync()).toBe(1);
     expect(store.get(SESSION.sessionId)).toMatchObject({ state: "active", turnClaim: null });
     expect(store.validateTurnClaim(claim)).toBe(false);
   });
