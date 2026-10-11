@@ -5,6 +5,7 @@ export const REQUIRED_TURN_SEND_SCENARIO_IDS = [
   "suppressed-not-charged",
   "idempotent-replay",
   "concurrent-cap",
+  "concurrent-replay",
   "direct-repeat",
   "authority-chain",
 ] as const;
