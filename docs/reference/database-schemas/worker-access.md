@@ -477,6 +477,93 @@ changes. Existing published updaters need no migration for these process-local
 receipts, and no synchronous SDK method is removed or given an asynchronous
 completion contract.
 
+### Session phase actor (B1, inactive)
+
+The shared session actor contract adds an inactive foundation for durable and
+incognito sessions. Production callers retain their existing routes. The actor
+lives inside the canonical agent execution worker and shares its physical writer
+queue; it does not introduce another database, worker service, or writer owner.
+Durable actors bind the physical database identity and session key. Incognito
+actors bind the existing memory database's handle and incarnation.
+
+Native incognito acquisition returns `not-actor-owned`; those sessions keep
+their existing owner and get no actor savings until Phase E / P12. The actor
+has no native incognito adapter. Worker-backed incognito acquisition selects
+the captured memory execution owner. Closing that owner invalidates captured
+targets; acquisition cannot revive its old run authority or create a replacement
+memory database. Follow-on input, turn, and delivery cutovers must honor the
+native decline until P12 selects the worker-backed actor.
+
+A cold actor read hydrates its entry, participants, membership, pending-input
+custody, and transcript metadata in one autocommit statement. A cold phase
+command uses that same statement inside its own write transaction, without a
+preceding read request. The versioned hot state
+includes exact anchors, idempotency identities, model-context membership, and
+the entry's lifecycle, recovery, and final-delivery fields. Anchor availability
+is explicit when the display projection is unready. When canonical facts
+cannot prove model context, it remains explicitly unavailable; an empty context
+is a different result. Payload history keeps its existing reader. Hydration and
+actor reads reuse process-wide schema and integrity admission without new format
+checks or foreign-commit probes.
+
+The persistence interface carries typed commands, explicit version and domain
+predicates, and complete postimage receipts. Database handles and SQL dialect
+operations stay inside the storage adapter. Actor writes use held state and
+in-process receipt counters instead of reading the legacy connection-local TEMP
+cache-generation table; callers awaiting cutover retain their existing cache.
+
+Typed commands cover input acceptance, run adoption and pre-hook checkpoints,
+tool results, transcript events, turn completion, pre-send custody, and delivery
+settlement. Each command uses one synchronous transaction and the resident
+preimage through the existing mutation kernels. Only a confirmed commit installs
+the new postimage. Commands may omit the expected version and use their admitted
+preimage. An explicit version mismatch returns a typed `stale-version` outcome
+with the current postimage before running any phase mutation. A caller can retry
+once with that version; an unknown outcome is never retryable.
+Phase-local pure reducers can join the next command; a
+remaining reducer batch commits before that phase settles. These batches do not
+move input, tool-result, or delivery acknowledgement across its required durable
+boundary. Compositions retain actor lifetime across asynchronous work, while
+individual commands acquire their own FIFO turn. No transaction awaits a hook,
+network operation, or another actor command.
+
+The MAIN replica retains complete committed hot state. A synchronous snapshot
+reads installed facts; an ordered read joins the existing physical writer FIFO
+and requests actor state only on a miss. Commit receipts identify the command,
+phase, and before/after version, and install before command acknowledgement.
+Existing session publications and in-process write receipts invalidate only
+the affected logical keys and shared transcript/window dependencies. Unrelated
+session snapshots survive. Raw writes with unknown coverage, schema changes,
+lost writers, and explicitly global maintenance retain database-wide fences.
+Scoped receipt counters share the physical admission lifetime; inactive actor
+paths do not allocate them or add worker requests. Partial entry or
+transcript receipts cannot certify complete pending-input and model-context
+facts. Native, SDK, recovery, and maintenance writers keep their existing
+publication and final-authority guards during this incremental cutover.
+
+Confirmed rollback leaves committed state intact. A lost reply reconciles
+against native commit evidence; an unknown outcome fences further commands and
+disclosure until a read rehydrates the original owner. Neither path replays the
+mutation: additive accounting reducers lack durable deduplication, so a generic
+retry could apply usage twice. The replica trusts the command owner's receipt
+validation and checks only freshness before installing its detached postimage.
+Lifetime closure joins accepted commands and phase flushes before
+releasing transport custody. Durable residency eviction drops settled snapshots,
+not stored sessions. Rehydration starts a new actor epoch and restores durable
+custody evidence without reviving a prior process's run or placement authority.
+Residency has a session-count bound and a soft byte budget; one oversized working
+set remains resident until another session displaces it.
+Incognito keeps its memory-only storage, original nonrenewing 24-hour expiry,
+and terminal session loss on worker failure; snapshot eviction does not delete
+its memory database.
+
+Actor command diagnostics record phase and settlement without payloads. Census
+consumers count commands, database worker requests, transfer frames, native SQL
+statements, and committed transactions separately. This inactive stage claims
+no production SQL reduction or T1 retirement. Schemas, stored bytes, durability,
+retention, permissions, released SDK completion contracts, and update behavior
+are unchanged; existing published updaters need no actor migration.
+
 ### Conversation and plugin-state receipt coverage
 
 Bundled keyed-state mutations use the data-only V2 store and the existing
