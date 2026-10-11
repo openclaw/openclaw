@@ -25,6 +25,7 @@ import { readMessageIdempotencyKey } from "./transcript-message-identity.js";
 
 type MessageInput = TranscriptMessageAppendOptions<unknown> & {
   messageJson?: string;
+  appendMode?: "side";
   custody?: { facts: SessionPendingInputWorkerFacts; relocation?: string };
   preparedMessage?: SessionTurnPlan["options"]["messages"][number]["preparedMessage"];
   fresh?: () => void;
@@ -110,7 +111,7 @@ export function createSessionActorMemoryMessages(
             sourceRow.message_json !== source.messageJson ||
             sourceRow.state !== "queued" ||
             (sourceRow.consumed_event_id !== null &&
-              sourceRow.consumed_event_id !== facts?.inputId)))
+              sourceRow.consumed_event_id !== facts?.transcriptInputId)))
       ) {
         throw new SessionPendingInputCustodyError(
           "Pending input custody changed before transcript promotion",
@@ -125,7 +126,7 @@ export function createSessionActorMemoryMessages(
     });
     const promoted =
       usesCustody &&
-      accepted.every((value) => !value || value.consumed_event_id === facts?.inputId);
+      accepted.every((value) => !value || value.consumed_event_id === facts?.transcriptInputId);
     const relocating = promoted && input.custody?.relocation !== undefined;
     const acceptedMessage =
       usesCustody && facts ? parseSessionPendingInputMessage(facts.messageJson) : undefined;
@@ -238,6 +239,7 @@ export function createSessionActorMemoryMessages(
       id: messageId,
       parentId: parent(input),
       timestamp: resolveTimestampMsToIsoString(input.now ?? Date.now()),
+      ...(input.appendMode ? { appendMode: input.appendMode } : {}),
     };
     const eventJson = `${JSON.stringify(envelope).slice(0, -1)},"message":${messageJson}}`;
     const event: unknown = JSON.parse(eventJson);
