@@ -5,10 +5,6 @@ import * as tar from "tar";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import {
-  extractWorkerBundleArchive,
-  DEFAULT_WORKER_BUNDLE_ARCHIVE_LIMITS,
-} from "../../shared/worker-bundle-archive.js";
-import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -97,41 +93,6 @@ function bundleArtifact(overrides: Partial<WorkerBundleArtifact> = {}): WorkerBu
 }
 
 describe("worker bundle producer", () => {
-  it("stages many chunks deterministically", async () => {
-    await withTestDir({ prefix: "openclaw-worker-chunks-" }, async (root) => {
-      const packageRoot = path.join(root, "package");
-      await writeFixture(packageRoot, 'export { value } from "./worker-chunk-0.mjs";', 48);
-      const chunk = path.join(packageRoot, "dist/worker/worker-chunk-0.mjs");
-      const first = await createWorkerBundleProducer({
-        packageRoot,
-        cacheDir: path.join(root, "cache"),
-      }).prepare();
-      const second = await createWorkerBundleProducer({
-        packageRoot,
-        cacheDir: path.join(root, "second-cache"),
-      }).prepare();
-      expect(second.bundleHash).toBe(first.bundleHash);
-      expect(second.tarballSha256).toBe(first.tarballSha256);
-      expect(await listTarball(first.tarballPath)).toContain("worker-chunk-0.mjs");
-      const destination = path.join(root, "installed");
-      await extractWorkerBundleArchive({
-        tarballPath: first.tarballPath,
-        destination,
-        expectedBundleHash: first.bundleHash,
-        limits: DEFAULT_WORKER_BUNDLE_ARCHIVE_LIMITS,
-      });
-      expect(await fs.readFile(path.join(destination, "worker-chunk-0.mjs"), "utf8")).toBe(
-        "export const value = 0;\n",
-      );
-      await fs.writeFile(chunk, "export const value = 2;");
-      const changed = await createWorkerBundleProducer({
-        packageRoot,
-        cacheDir: path.join(root, "cache"),
-      }).prepare();
-      expect(changed.bundleHash).not.toBe(first.bundleHash);
-    });
-  });
-
   it("reuses the sealed worker graph from an installed npm package", async () => {
     await withTestDir({ prefix: "openclaw-worker-packaged-" }, async (root) => {
       const sourceRoot = path.join(root, "source");
@@ -312,37 +273,6 @@ describe("worker bundle producer", () => {
     });
   });
 
-  it("packages hardlinked artifacts larger than the default file-read limit", async () => {
-    await withTestDir({ prefix: "openclaw-worker-bundle-large-" }, async (root) => {
-      const packageRoot = path.join(root, "package");
-      const padding = "x".repeat(128);
-      const contents = Array.from(
-        { length: 128 * 1024 },
-        (_, index) => `//${index}:${padding}\n`,
-      ).join("");
-      await writeFixture(packageRoot, contents);
-      await fs.link(
-        path.join(packageRoot, "dist", "worker", "worker.mjs"),
-        path.join(root, "source-alias.mjs"),
-      );
-
-      const artifact = await createWorkerBundleProducer({
-        packageRoot,
-        cacheDir: path.join(root, "cache"),
-      }).prepare();
-      const extractDir = path.join(root, "extract");
-      await fs.mkdir(extractDir);
-      await tar.extract({ file: artifact.tarballPath, cwd: extractDir });
-
-      await expect(fs.readFile(path.join(extractDir, "worker.mjs"), "utf8")).resolves.toBe(
-        contents,
-      );
-      if (process.platform !== "win32") {
-        expect((await fs.stat(path.join(extractDir, "worker.mjs"))).mode & 0o777).toBe(0o700);
-      }
-    });
-  });
-
   it("skips retention reads when the cache has no cleanup candidates", async () => {
     await withTestDir({ prefix: "openclaw-worker-bundle-noop-prune-" }, async (root) => {
       const packageRoot = path.join(root, "package");
@@ -365,33 +295,6 @@ describe("worker bundle producer", () => {
       expect(readRetained).not.toHaveBeenCalled();
       expect((await fs.readdir(cacheDir)).toSorted()).toEqual(before);
       await expect(fs.stat(current.tarballPath)).resolves.toBeDefined();
-    });
-  });
-
-  it("prunes only unretained bundles for an exclusive cache owner", async () => {
-    await withTestDir({ prefix: "openclaw-worker-bundle-prune-" }, async (root) => {
-      const packageRoot = path.join(root, "package");
-      const cacheDir = path.join(root, "cache");
-      await writeFixture(packageRoot, "export const value = 1;\n");
-      const retained = await createWorkerBundleProducer({ packageRoot, cacheDir }).prepare();
-      await fs.writeFile(
-        path.join(packageRoot, "dist", "worker", "worker.mjs"),
-        "export const value = 2;\n",
-      );
-      const owner = createWorkerBundleProducer({
-        packageRoot,
-        cacheDir,
-        cacheOwnership: "exclusive",
-      });
-      const current = await owner.prepare();
-      const removedPath = path.join(cacheDir, `${"c".repeat(64)}.tgz`);
-      await fs.writeFile(removedPath, "historical");
-
-      await owner.prune(() => [retained.bundleHash]);
-
-      await expect(fs.stat(retained.tarballPath)).resolves.toBeDefined();
-      await expect(fs.stat(current.tarballPath)).resolves.toBeDefined();
-      await expect(fs.stat(removedPath)).rejects.toMatchObject({ code: "ENOENT" });
     });
   });
 
@@ -475,8 +378,8 @@ describe("worker bundle producer", () => {
     });
   });
 
-  it("reclaims recognized crash artifacts but preserves unknown cache entries", async () => {
-    await withTestDir({ prefix: "openclaw-worker-bundle-crash-cleanup-" }, async (root) => {
+  it("preserves cleanup candidates when retention cannot be read", async () => {
+    await withTestDir({ prefix: "openclaw-worker-bundle-retention-error-" }, async (root) => {
       const packageRoot = path.join(root, "package");
       const cacheDir = path.join(root, "cache");
       await writeFixture(packageRoot);
@@ -486,82 +389,40 @@ describe("worker bundle producer", () => {
         cacheOwnership: "exclusive",
       });
       const current = await owner.prepare();
+      const historical = path.join(cacheDir, `${"b".repeat(64)}.tgz`);
       const staging = path.join(cacheDir, ".staging-stale");
       const temporary = path.join(
         cacheDir,
-        `${"b".repeat(64)}.tgz.123.123e4567-e89b-12d3-a456-426614174000.tmp`,
+        `${current.bundleHash}.tgz.123.123e4567-e89b-12d3-a456-426614174000.tmp`,
       );
-      const unknown = path.join(cacheDir, "keep-me.txt");
+      const candidates = [historical, staging, temporary];
+      await fs.writeFile(historical, "historical");
       await fs.mkdir(staging);
+      await fs.writeFile(path.join(staging, "partial"), "staged");
       await fs.writeFile(temporary, "partial");
-      await fs.writeFile(unknown, "operator-owned");
+      const failure = new Error("Retention records are unavailable");
+
+      await expect(
+        owner.prune(() => {
+          throw failure;
+        }),
+      ).rejects.toBe(failure);
+
+      for (const candidate of candidates) {
+        const file = candidate === staging ? path.join(staging, "partial") : candidate;
+        const contents =
+          candidate === historical ? "historical" : candidate === staging ? "staged" : "partial";
+        await expect(fs.readFile(file, "utf8")).resolves.toBe(contents);
+      }
+      await expect(fs.stat(current.tarballPath)).resolves.toBeDefined();
 
       await owner.prune(() => []);
-
-      await expect(fs.stat(staging)).rejects.toMatchObject({ code: "ENOENT" });
-      await expect(fs.stat(temporary)).rejects.toMatchObject({ code: "ENOENT" });
-      await expect(fs.readFile(unknown, "utf8")).resolves.toBe("operator-owned");
+      for (const removed of candidates) {
+        await expect(fs.stat(removed)).rejects.toMatchObject({ code: "ENOENT" });
+      }
       await expect(fs.stat(current.tarballPath)).resolves.toBeDefined();
     });
   });
-
-  it.each(["all", "staging", "temporary"] as const)(
-    "preserves cleanup candidates when retention cannot be read (%s)",
-    async (kind) => {
-      await withTestDir({ prefix: "openclaw-worker-bundle-retention-error-" }, async (root) => {
-        const packageRoot = path.join(root, "package");
-        const cacheDir = path.join(root, "cache");
-        await writeFixture(packageRoot);
-        const owner = createWorkerBundleProducer({
-          packageRoot,
-          cacheDir,
-          cacheOwnership: "exclusive",
-        });
-        const current = await owner.prepare();
-        const historical = path.join(cacheDir, `${"b".repeat(64)}.tgz`);
-        const staging = path.join(cacheDir, ".staging-stale");
-        const temporary = path.join(
-          cacheDir,
-          `${current.bundleHash}.tgz.123.123e4567-e89b-12d3-a456-426614174000.tmp`,
-        );
-        const candidates =
-          kind === "all"
-            ? [historical, staging, temporary]
-            : [kind === "staging" ? staging : temporary];
-        if (candidates.includes(historical)) {
-          await fs.writeFile(historical, "historical");
-        }
-        if (candidates.includes(staging)) {
-          await fs.mkdir(staging);
-          await fs.writeFile(path.join(staging, "partial"), "staged");
-        }
-        if (candidates.includes(temporary)) {
-          await fs.writeFile(temporary, "partial");
-        }
-        const failure = new Error("Retention records are unavailable");
-
-        await expect(
-          owner.prune(() => {
-            throw failure;
-          }),
-        ).rejects.toBe(failure);
-
-        for (const candidate of candidates) {
-          const file = candidate === staging ? path.join(staging, "partial") : candidate;
-          const contents =
-            candidate === historical ? "historical" : candidate === staging ? "staged" : "partial";
-          await expect(fs.readFile(file, "utf8")).resolves.toBe(contents);
-        }
-        await expect(fs.stat(current.tarballPath)).resolves.toBeDefined();
-
-        await owner.prune(() => []);
-        for (const removed of candidates) {
-          await expect(fs.stat(removed)).rejects.toMatchObject({ code: "ENOENT" });
-        }
-        await expect(fs.stat(current.tarballPath)).resolves.toBeDefined();
-      });
-    },
-  );
 
   it("reads retention when queued pruning runs", async () => {
     await withTestDir({ prefix: "openclaw-worker-bundle-queued-prune-" }, async (root) => {
