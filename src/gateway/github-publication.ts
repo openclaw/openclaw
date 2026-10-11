@@ -49,6 +49,7 @@ import {
   createGitHubPublicationExecutionStoreAsync,
   deferGitHubPublicationRequestsAsync,
   readGitHubPublicationRequestAsync,
+  runGitHubPublicationMaintenanceAsync,
 } from "./github-publication-store-async.js";
 import {
   claimGitHubPublicationExecution as claimExecution,
@@ -283,7 +284,7 @@ export function createGitHubPublicationCoordinator(params: {
               : await claimGitHubPublicationExecutionAsync(
                   initial.request_id,
                   instanceId,
-                  assertCustody,
+                  assertCurrent,
                 );
           if (claimed.status === "published" || claimed.status === "failed") {
             return publicationResult(claimed);
@@ -310,7 +311,7 @@ export function createGitHubPublicationCoordinator(params: {
             mode === "legacy"
               ? createGitHubPublicationExecutionStore(instanceId)
               : createGitHubPublicationExecutionStoreAsync(instanceId, {
-                  assertCustody,
+                  assertCustody: assertCurrent,
                   assertAction() {
                     assertCustody();
                     signal.throwIfAborted();
@@ -412,7 +413,7 @@ export function createGitHubPublicationCoordinator(params: {
                 } else {
                   await deferGitHubPublicationRequestsAsync(
                     { kind: "request", row },
-                    assertCustody,
+                    assertCurrent,
                   );
                 }
                 const deferred =
@@ -563,8 +564,7 @@ export function createGitHubPublicationCoordinator(params: {
       repository.deferClaimPreparation(claim);
     },
     async deferClaimPreparationAsync(claim: WorkerSessionTurnClaim) {
-      await deferGitHubPublicationRequestsAsync({ kind: "claim", claim }, assertCurrent);
-      await repository.deferClaimPreparationAsync(claim);
+      await runGitHubPublicationMaintenanceAsync({ operation: "deferClaim", claim }, assertCurrent);
     },
     /** @deprecated Use requestForSessionV2; removed in the next Plugin SDK major. */
     requestForSession(input: Parameters<typeof methods.requestForSession>[0]) {
@@ -711,8 +711,7 @@ export function createGitHubPublicationCoordinator(params: {
       repository.markReported(requestId);
     },
     async markReportedAsync(requestId: string) {
-      await methods.markReportedAsync(requestId);
-      await repository.markReportedAsync(requestId);
+      await runGitHubPublicationMaintenanceAsync({ operation: "report", requestId }, assertCurrent);
     },
   };
 }

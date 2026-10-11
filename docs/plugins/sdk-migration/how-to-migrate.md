@@ -103,8 +103,9 @@ and typed predicates authorize commit. It does not preserve arbitrary
 transaction-local callback visibility. A failed or uncertain worker operation
 never retries through the legacy route or replays an accepted external effect.
 
-Await deferral and reporting before dependent reads or shutdown. Accepted
-bookkeeping, including head updates, dispatch markers, observed effects, and completion, can settle
+Await deferral and reporting before dependent reads or shutdown. Reporting and
+claim deferral each update the relevant publication kinds in one worker transaction. Accepted
+bookkeeping, including execution claims, head updates, dispatch markers, observed effects, and completion, can settle
 after action cancellation while the execution owner retains custody. The worker
 applies its request and execution predicates inside its transaction; it does not
 request another host grant for each bookkeeping commit. This grants no authority

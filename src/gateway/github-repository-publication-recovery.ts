@@ -283,12 +283,6 @@ export function createRepositoryGitHubPublicationRecovery(params: {
           .map((row) => row.request_id),
       );
     },
-    async deferClaimPreparationAsync(claim: WorkerSessionTurnClaim): Promise<void> {
-      await deferRepositoryGitHubPublicationClaimsAsync(
-        { kind: "claim", claim },
-        params.assertCurrent,
-      );
-    },
     async resumeSessionRequests(): Promise<void> {
       const failures: Error[] = [];
       const rows = await listRepositoryGitHubPublicationsAsync({

@@ -556,10 +556,10 @@ export function isGitHubPublicationExecutionOwner(
   requestId: string,
   gatewayInstanceId: string,
 ): boolean {
-  if (!hasGitHubPublicationStore()) {
+  const db = openOpenClawStateDatabase().db;
+  if (!tableExists(db, "github_publication_requests")) {
     return false;
   }
-  const db = openOpenClawStateDatabase().db;
   const row = executeSqliteQuerySync(
     db,
     githubPublicationDatabase(db)
@@ -570,7 +570,7 @@ export function isGitHubPublicationExecutionOwner(
   return row?.status === "publishing" && row.gateway_instance_id === gatewayInstanceId;
 }
 
-/** @deprecated Use markGitHubPublicationReportedAsync; removed in the next Plugin SDK major. */
+/** @deprecated Use runGitHubPublicationMaintenanceAsync; removed in the next Plugin SDK major. */
 export function markGitHubPublicationReported(
   kind: "personal" | "repository",
   requestId: string,
@@ -578,7 +578,7 @@ export function markGitHubPublicationReported(
   warnPluginSdkDeprecation({
     family: "github-publication",
     method: "markGitHubPublicationReported",
-    replacement: "markGitHubPublicationReportedAsync",
+    replacement: "runGitHubPublicationMaintenanceAsync",
   });
   const table =
     kind === "personal"

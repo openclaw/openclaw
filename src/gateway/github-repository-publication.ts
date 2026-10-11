@@ -54,7 +54,6 @@ import {
   listRepositoryGitHubPublicationsAsync,
   readRepositoryGitHubPublicationBranchAsync,
   readRepositoryGitHubPublicationAsync,
-  markGitHubPublicationReportedAsync,
 } from "./github-publication-store-async.js";
 import { markGitHubPublicationReported } from "./github-publication-store.js";
 import { createRepositoryGitHubPublicationExecution } from "./github-repository-publication-execution.js";
@@ -632,8 +631,6 @@ export function createRepositoryGitHubPublicationCoordinator(params: {
     },
     /** @deprecated Await markReportedAsync; removed in the next Plugin SDK major. */
     markReported: (requestId: string) => markGitHubPublicationReported("repository", requestId),
-    markReportedAsync: (requestId: string) =>
-      markGitHubPublicationReportedAsync("repository", requestId, params.assertCurrent),
   };
   return {
     ...methods,

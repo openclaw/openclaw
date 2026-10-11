@@ -12,6 +12,7 @@ import {
 import type {
   GitHubPublicationDeferral,
   PersonalPublicationMutation,
+  PublicationMaintenanceMutation,
   PublicationMutationReceipt,
   PublicationReadOperations,
   RepositoryPublicationMutation,
@@ -247,10 +248,8 @@ export function createGitHubPublicationExecutionStoreAsync(
       input: Extract<SharedPublicationMutation, { operation: "updatePublishingFacts" }>["input"],
     ) {
       return requireRow(
-        await sharedMutation(
-          scope,
-          { operation: "updatePublishingFacts", input, instanceId },
-          authority,
+        await sharedMutation(scope, { operation: "updatePublishingFacts", input, instanceId }, () =>
+          authority.assertCustody(),
         ),
       );
     },
@@ -325,21 +324,16 @@ export async function requirePersonalGitHubPublicationConfirmationAsync(
   );
 }
 
-export async function markGitHubPublicationReportedAsync(
-  kind: "personal" | "repository" | "shared",
-  requestId: string,
+export async function runGitHubPublicationMaintenanceAsync(
+  input: PublicationMaintenanceMutation,
   assertCurrent?: () => void,
 ) {
   const scope = mutationScope();
-  const input = { operation: "report" as const, requestId };
-  const assertOwned = assertCurrent ?? scope.assertCurrent;
-  if (kind === "personal") {
-    await personalMutation(scope, input, assertOwned);
-  } else if (kind === "repository") {
-    await repositoryMutation(scope, input, assertOwned);
-  } else {
-    await sharedMutation(scope, input, assertOwned);
-  }
+  await scope.mutate(
+    { type: "githubPublications.maintenance", input: { ...input, operationId: randomUUID() } },
+    assertCurrent ?? scope.assertCurrent,
+    publish,
+  );
 }
 
 export async function readPersonalGitHubPublicationAsync(

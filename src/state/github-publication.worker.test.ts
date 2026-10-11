@@ -11,7 +11,7 @@ import {
 } from "../gateway/github-publication-source.js";
 import {
   claimRepositoryGitHubPublicationAsync,
-  markGitHubPublicationReportedAsync,
+  runGitHubPublicationMaintenanceAsync,
 } from "../gateway/github-publication-store-async.js";
 import {
   claimRepositoryGitHubPublicationInDatabase,
@@ -493,7 +493,7 @@ it("publishes a committed receipt before a delayed ordinary worker reply", async
     () => {},
   );
   await expect(
-    markGitHubPublicationReportedAsync("repository", row.request_id),
+    runGitHubPublicationMaintenanceAsync({ operation: "report", requestId: row.request_id }),
   ).resolves.toBeUndefined();
   expect(await read(row)).toMatchObject({
     ok: true,

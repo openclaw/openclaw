@@ -162,6 +162,10 @@ export type SharedPublicationMutation =
     }
   | { operation: "defer"; selection: GitHubPublicationDeferral };
 
+export type PublicationMaintenanceMutation =
+  | { operation: "report"; requestId: string }
+  | { operation: "deferClaim"; claim: WorkerSessionTurnClaim };
+
 /** Postimages install only after the native destination COMMIT. */
 export type PublicationMutationResult = {
   operationId: string;
@@ -170,6 +174,7 @@ export type PublicationMutationResult = {
   | { kind: "shared"; rows: GitHubPublicationRow[] }
   | { kind: "personal"; rows: PersonalPublicationRow[] }
   | { kind: "repository"; rows: RepositoryPublicationRow[] }
+  | { kind: "maintenance"; rows: [] }
 );
 
 export type PublicationMutationReceipt = PublicationMutationResult & {

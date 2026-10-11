@@ -41,7 +41,6 @@ import {
   listGitHubPublicationsForClaimAsync,
   listSharedGitHubPublicationsAsync,
   listUnreportedPersonalGitHubPublicationsAsync,
-  markGitHubPublicationReportedAsync,
   readGitHubPublicationRequestAsync,
 } from "./github-publication-store-async.js";
 import {
@@ -659,10 +658,6 @@ export function createGitHubPublicationCoordinatorMethods(params: {
         undefined,
         { operationLabel: "github-publication.report" },
       );
-    },
-    async markReportedAsync(requestId: string): Promise<void> {
-      await markGitHubPublicationReportedAsync("personal", requestId, params.assertCurrent);
-      await markGitHubPublicationReportedAsync("shared", requestId, params.assertCurrent);
     },
   };
 }
