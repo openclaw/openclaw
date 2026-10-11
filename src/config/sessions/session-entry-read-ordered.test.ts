@@ -1,5 +1,6 @@
 import { expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
+import { closeOpenClawAgentDatabaseByPathAsync } from "../../state/openclaw-agent-db-lifecycle.js";
 import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
@@ -10,6 +11,7 @@ import {
 } from "../../state/openclaw-agent-write-admission.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { resolveInternalSessionEffectsIdentity } from "./internal-session-key.js";
+import { readSessionNodesGeneration } from "./session-accessor.sqlite-entry-revision.js";
 import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
 import { patchSessionEntryCore, replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
 import { recordSessionParticipant } from "./session-accessor.sqlite-participants.native.js";
@@ -278,6 +280,33 @@ it("observes native and worker entry, participant, and membership writes after c
     } finally {
       requests.restore();
     }
+  });
+});
+
+it("keeps an ordered read current when session generation tracking initializes", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
+    const options = { agentId: "main", env };
+    const seeded = openOpenClawAgentDatabase(options);
+    const sessionKey = "agent:main:cold-generation";
+    writeSessionEntry(seeded, sessionKey, { sessionId: "original", updatedAt: 1 });
+    await closeOpenClawAgentDatabaseByPathAsync(seeded.path, seeded.agentId);
+    const database = openOpenClawAgentDatabase(options);
+    await expect(
+      withSessionEntriesFromStoresInWorker(
+        [{ ...options, storePath: database.path, sessionKeys: [sessionKey] }],
+        ([read]) => {
+          read!.assertCurrent();
+          return read!.result.entries[0]?.entry.sessionId;
+        },
+        {
+          ordered: true,
+          onReadAdmitted: () => {
+            expect(database.db.prepare("SELECT name FROM temp.sqlite_schema").all()).toEqual([]);
+            expect(readSessionNodesGeneration(database.db)).toBe(0);
+          },
+        },
+      ),
+    ).resolves.toBe("original");
   });
 });
 

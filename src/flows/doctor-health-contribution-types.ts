@@ -2,6 +2,7 @@ import type { RetiredAuthProfileCleanupPlan } from "../commands/doctor-auth-lega
 import type { probeGatewayMemoryStatus } from "../commands/doctor-gateway-health.js";
 import type { DoctorOptions, DoctorPrompter } from "../commands/doctor-prompter.js";
 import type { DoctorConfigReferenceSource } from "../commands/doctor/shared/config-flow-steps.js";
+import type { ProviderRename } from "../commands/doctor/shared/provider-rename.js";
 import type { ConfigWritePostCommitError } from "../config/io.write-errors.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
 import type { buildGatewayConnectionDetails } from "../gateway/call.js";
@@ -48,6 +49,8 @@ type DoctorConfigResult = {
   openAICodexAuthProfileIdMap?: ReadonlyMap<string, string>;
   /** Transient pre-retirement alias/default interpretation; current config owns auth and routes. */
   retiredModelRefConfig?: Pick<OpenClawConfig, "agents" | "models">;
+  /** Matched source providers whose references must move before config publication. */
+  providerRenames?: readonly ProviderRename[];
   runWithPluginMetadataSnapshot?: PluginMetadataSnapshotScopeRunner;
   invalidatePluginMetadataSnapshot?: () => void;
   stateMigrationStepReceipts?: LegacyStateMigrationStepReceipt[];

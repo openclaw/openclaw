@@ -121,6 +121,10 @@ the tool. The asking turn then yields; it does not keep a live answer waiter or
 extend its run budget. The original absolute question deadline survives a Gateway
 restart and transcript compaction.
 
+For transient callers, this remains a maximum human wait subject to earlier agent
+run cancellation or the current model attempt's timeout. A pending transient
+question does not pause or extend that attempt's execution budget.
+
 Some existing channel conversations lack the session generation required by durable
 questions. For those conversations, durable registration is refused without an
 acknowledgement. Use `/new` or `/reset` to establish a new generation before asking

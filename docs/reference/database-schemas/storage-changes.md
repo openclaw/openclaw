@@ -13,6 +13,10 @@ This is a preparatory design for issue #167266. Maintainer acceptance of the
 persistent contract is pending; this section records a proposal, not an accepted
 storage decision. The implementing PR must link acceptance before merge.
 
+The storage prerequisite installs dormant custody APIs and migration support.
+It does not register or resume durable questions in production. Gateway admission,
+restart replay exclusion, and channel recovery activate in the dependent integration.
+
 The canonical per-agent database would own `session_questions` in schema 26.
 Registration stores the immutable question, original absolute deadline, exact
 session generation, original producer authorization reference, and delivery

@@ -1,5 +1,4 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { createSqliteCommitReceipt } from "../../infra/sqlite-commit-receipt.js";
 import { getAdmittedSqliteSchemaFacts } from "../../infra/sqlite-schema-facts.js";
 import { freezeJsonSnapshot } from "../../shared/immutable-data.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
@@ -12,14 +11,12 @@ import { readWrittenSessionEntryPostimage } from "./session-accessor.sqlite-entr
 import {
   sessionSharingEntriesEqual,
   type SessionEntryProjectionFacts,
-  type SessionEntryReplacementPostimage,
   type SessionEntryReplacementPublication,
 } from "./session-accessor.sqlite-entry-cache.types.js";
 import { sqliteSessionEntriesEqual } from "./session-accessor.sqlite-entry-equality.js";
 import { prepareExactSessionEntryRowReads } from "./session-accessor.sqlite-entry-read.js";
 import { readSessionNodesGeneration } from "./session-accessor.sqlite-entry-revision.js";
 import {
-  assertQuestionAliasRelocation,
   deleteLegacySessionEntryRows,
   readExactSessionEntryRow,
   writeSessionEntry,
@@ -37,11 +34,13 @@ import type {
 } from "./session-accessor.sqlite-replacement-types.js";
 import { appendTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
 import { readSessionTranscriptWatermarkInDatabase } from "./session-accessor.sqlite-transcript-watermark.js";
+import { readSessionActorTransactionState } from "./session-actor-transaction.js";
 import {
   captureSessionEntryPublicationSource,
   hasSessionEntryPublicationCapacity,
 } from "./session-entry-publication-source.js";
 import { attachSessionEntrySnapshots } from "./session-entry-snapshots.js";
+import { assertQuestionAliasRelocation } from "./session-question-recovery-owner.js";
 import { readStagedSessionTranscriptAuthority } from "./session-transcript-authority.js";
 import type { SessionMaintenancePreservationSnapshot } from "./store-maintenance-preserve-snapshot.types.js";
 import type { SessionEntry } from "./types.js";
@@ -143,39 +142,15 @@ export function prepareSessionEntryReplacementPublication(
   const source = getAdmittedSqliteSchemaFacts(database.db)
     ? captureSessionEntryPublicationSource(database.db, {
         ...readOpenClawAgentDatabaseIdentity(database),
-        revision: readSessionNodesGeneration(database.db),
+        // Actor receipts carry the complete postimage at the native writer revision.
+        ...(!readSessionActorTransactionState(database)
+          ? { revision: readSessionNodesGeneration(database.db) }
+          : {}),
       })
     : undefined;
   const changedKeys = [
     ...new Set([...result.previous.keys(), ...result.current.keys(), ...archived]),
   ];
-  const receipt =
-    source &&
-    createSqliteCommitReceipt<SessionEntryReplacementPostimage, typeof source>({
-      source,
-      domain: "session-entry-replacement",
-      keys: changedKeys,
-      readFact(key) {
-        const entry = current.get(key);
-        const facts = projection.get(key);
-        if (entry && facts) {
-          return {
-            kind: "postimage",
-            value: {
-              entry,
-              ...(fullEntries ? { fullEntry: fullEntries.get(key) } : {}),
-              projection: facts,
-            },
-          };
-        }
-        if (entry && unavailableParticipantKeys.has(key)) {
-          return { kind: "postimage", value: { entry, participantProjectionUnavailable: true } };
-        }
-        return result.previous.has(key) && !current.has(key)
-          ? { kind: "absent" }
-          : { kind: "unknown" };
-      },
-    });
   const publication: SessionEntryReplacementPublication = {
     kind: "session-entry-replacements",
     transcriptPublication: readStagedSessionTranscriptAuthority(database),
@@ -215,7 +190,7 @@ export function prepareSessionEntryReplacementPublication(
         previousEntry: result.previous.get(sessionKey),
       }),
     ),
-    ...(source ? { source, receipt } : {}),
+    ...(source ? { source } : {}),
     changedKeys,
   };
   boundSessionEntryReplacementPublication(publication);
@@ -233,14 +208,6 @@ export function boundSessionEntryReplacementPublication(
   delete publication.fullEntries;
   if (publication.source) {
     delete publication.source.writeToken;
-  }
-  if (publication.receipt) {
-    delete publication.receipt.source.writeToken;
-    for (const fact of publication.receipt.facts.values()) {
-      if (fact.kind === "postimage") {
-        delete fact.value.fullEntry;
-      }
-    }
   }
 }
 

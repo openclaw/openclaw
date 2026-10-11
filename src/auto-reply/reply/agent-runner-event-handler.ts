@@ -221,7 +221,9 @@ export function createAgentRunEventHandler(params: {
     const phase = readStringValue(evt.data.phase) ?? "";
     const backend = readStringValue(evt.data.backend);
     const hookMessages = normalizeTrimmedStringList(evt.data.messages);
-    const sendCompactionUserNotices = async (noticePhase: "start" | "end" | "incomplete") => {
+    const sendCompactionUserNotices = async (
+      noticePhase: "start" | "end" | "incomplete" | "degraded",
+    ) => {
       if (hookMessages.length > 0) {
         const noticePayload = createCompactionHookNoticePayload({
           messages: hookMessages,
@@ -232,7 +234,7 @@ export function createAgentRunEventHandler(params: {
           await deliverCompactionNoticePayload(noticePayload, "hook");
         }
       }
-      if (params.notifyUserAboutCompaction) {
+      if (noticePhase === "degraded" || params.notifyUserAboutCompaction) {
         await deliverCompactionNoticePayload(
           createCompactionNoticePayload({
             phase: noticePhase,
@@ -278,6 +280,6 @@ export function createAgentRunEventHandler(params: {
       });
     }
     await params.turn.opts?.onCompactionEnd?.({ completed: true });
-    await sendCompactionUserNotices("end");
+    await sendCompactionUserNotices(evt.data.qualityDegraded === true ? "degraded" : "end");
   };
 }

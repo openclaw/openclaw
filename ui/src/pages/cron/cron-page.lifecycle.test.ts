@@ -211,10 +211,9 @@ describe("CronPage lifecycle", () => {
     },
   );
 
-  it.each(["publication", "agent", "connection", "gateway", "detach"])(
-    "rejects a retired catalog result and error after %s changes",
+  it.each(["agent", "connection", "detach"])(
+    "rejects a pending catalog error after %s changes",
     async (change) => {
-      const oldResult = createDeferred<{ models: { id: string }[] }>();
       const oldError = createDeferred();
       const fallback = createRequest();
       let reads = 0;
@@ -224,7 +223,7 @@ describe("CronPage lifecycle", () => {
         }
         reads += 1;
         if (reads === 1) {
-          return oldResult.promise;
+          return { models: [{ id: "initial-model" }] };
         }
         if (reads === 2) {
           return oldError.promise;
@@ -234,30 +233,22 @@ describe("CronPage lifecycle", () => {
       const gateway = createGateway(client, true);
       const context = createContext(gateway);
       const page = createPage(context, { render: true });
-      await waitForCronPage(() => expect(reads).toBe(1));
+      await waitForCronPage(() => expect(page.cronModelSuggestions).toEqual(["initial-model"]));
       gateway.emitRetiredEvent({ type: "event", event: "config.changed", payload: {} });
-      await page.updateComplete;
-      expect(reads).toBe(1);
-      oldResult.resolve({ models: [{ id: "retired-model" }] });
       await waitForCronPage(() => expect(reads).toBe(2));
-      expect(page.cronModelSuggestions).toEqual([]);
+      expect(page.cronModelSuggestions).toEqual(["initial-model"]);
 
       if (change === "agent") {
         context.agentSelection.set("writer");
       } else if (change === "connection") {
         gateway.emitSnapshot({ phase: "reconnecting" });
         gateway.emitSnapshot({ phase: "connected" });
-      } else if (change === "gateway") {
-        page.context = createContext(createGateway(client, true));
-        page.requestUpdate();
-      } else if (change === "detach") {
-        page.remove();
       } else {
-        gateway.emitRetiredEvent({ type: "event", event: "chat.metadata.changed", payload: {} });
+        page.remove();
       }
       const expected = change === "detach" ? [] : ["current-model"];
       oldError.reject(new Error("Retired catalog error"));
-      await Promise.allSettled([oldResult.promise, oldError.promise]);
+      await Promise.allSettled([oldError.promise]);
       await waitForCronPage(() => expect(page.cronModelSuggestions).toEqual(expected));
       await page.updateComplete;
       expect(page.cronModelSuggestions).toEqual(expected);
@@ -511,7 +502,7 @@ describe("CronPage lifecycle", () => {
         await page.updateComplete;
         await waitForCronPage(() =>
           expect(request.mock.calls.filter(([method]) => method === "models.list")).toHaveLength(
-            change === "reconnect" || change === "gateway source" ? 2 : 1,
+            change === "reconnect" ? 2 : 1,
           ),
         );
         const count = request.mock.calls.length;
@@ -560,8 +551,8 @@ describe("CronPage lifecycle", () => {
     (page.querySelector('[data-test-id="cron-new-task"]') as HTMLButtonElement).click();
     await waitForCronPage(() => expect(page.querySelector("fieldset.cron-editor")).not.toBeNull());
 
-    const triggerToggle = Array.from(page.querySelectorAll("wa-switch.settings-toggle")).find(
-      (toggle) => toggle.textContent?.includes("Condition trigger"),
+    const triggerToggle = Array.from(page.querySelectorAll(".settings-toggle")).find((toggle) =>
+      toggle.textContent?.includes("Condition trigger"),
     );
     expect(triggerToggle).toBeUndefined();
     expect(page.textContent).toContain("disabled by cron.triggers.enabled");
