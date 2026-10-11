@@ -166,7 +166,7 @@ function PluginSettingsRow(props: FieldProps) {
           </button>
           <wa-dropdown-item
             value="reset"
-            disabled={
+            prop:disabled={
               props.field.disabled ||
               props.field.value === undefined ||
               (props.field.isRequired && props.field.schema.default === undefined)
