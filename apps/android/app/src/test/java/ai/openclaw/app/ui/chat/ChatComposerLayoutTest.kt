@@ -3473,7 +3473,7 @@ class ChatComposerLayoutTest {
 
   @Test
   @Config(qualifiers = "w800dp-h800dp-mdpi")
-  fun effortCommandsRecheckAdminAndFastRunEligibility() =
+  fun effortCommandsRecheckWriteAndFastRunEligibility() =
     withEffortRequests { model, requests, _ ->
       openEffortSheet()
       val select = checkNotNull(effortSlider().fetchSemanticsNode().config[SemanticsActions.SetProgress].action)
@@ -3505,12 +3505,15 @@ class ChatComposerLayoutTest {
             .getDeclaredField("_operatorScopes")
             .apply { isAccessible = true }
             .get(runtime) as MutableStateFlow<List<String>>
-        scopes.value = listOf("operator.read", "operator.write")
+        // Gateway effort patches accept operator.write; drop write to prove live recheck.
+        scopes.value = listOf("operator.read")
       }
-      composeRule.waitUntil { "operator.admin" !in model.operatorScopes.value }
+      composeRule.waitUntil {
+        "operator.write" !in model.operatorScopes.value && "operator.admin" !in model.operatorScopes.value
+      }
       composeRule.runOnUiThread { select(2f) }
       composeRule.waitForIdle()
-      assertEquals("Thinking must recheck admin instead of using the old enabled value", 0, requests.size)
+      assertEquals("Thinking must recheck write instead of using the old enabled value", 0, requests.size)
     }
 
   @Test

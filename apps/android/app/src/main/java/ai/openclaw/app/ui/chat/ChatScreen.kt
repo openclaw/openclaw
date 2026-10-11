@@ -569,7 +569,7 @@ internal fun ChatScreen(
     )
 
   fun canChangeThinking() =
-    operatorScopesAllowAdmin(viewModel.operatorScopes.value) &&
+    operatorScopesAllowWrite(viewModel.operatorScopes.value) &&
       chatThinkingSupported(
         selection = viewModel.chatThinkingLevelSelection.value,
         fallbackSupported = thinkingSupportedForSelection(viewModel.chatSelectedModelRef.value, viewModel.chatModelCatalog.value),
@@ -582,7 +582,7 @@ internal fun ChatScreen(
           requestSupported = currentFastModeRequestSupported(),
           hasConfiguredFastModeOverride = currentEffortSession()?.fastMode != null,
         ),
-      adminAuthorized = operatorScopesAllowAdmin(viewModel.operatorScopes.value),
+      writeAuthorized = operatorScopesAllowWrite(viewModel.operatorScopes.value),
       connected = viewModel.gatewayConnectionDisplay.value.isConnected,
       gatewayAvailable = viewModel.chatHealthOk.value,
       loading = viewModel.chatHistoryLoading.value || viewModel.chatSessionCreating.value,
@@ -617,7 +617,7 @@ internal fun ChatScreen(
     selectionGeneration,
     thinkingLevel,
     thinkingLevelSelection.options,
-    canAdminSessionSettings,
+    canWriteSessionSettings,
   ) { mutableStateOf<String?>(null) }
   val reviewDiff = rememberChatPicker(viewModel)
   val attachmentPicker = rememberChatPicker(viewModel)
@@ -965,7 +965,7 @@ internal fun ChatScreen(
   val fastModeEnabled =
     chatFastModeControlEnabled(
       supported = fastModeSupported,
-      adminAuthorized = canAdminSessionSettings,
+      writeAuthorized = canWriteSessionSettings,
       connected = gatewayConnectionDisplay.isConnected,
       gatewayAvailable = healthOk,
       loading = historyLoading || sessionCreating,
@@ -1095,7 +1095,7 @@ internal fun ChatScreen(
       thinkingLevel = effortPreview ?: thinkingLevel,
       thinkingOptions = thinkingLevelSelection.options,
       thinkingSupported = thinkingSupported,
-      thinkingLevelEnabled = canAdminSessionSettings,
+      thinkingLevelEnabled = canWriteSessionSettings,
       fastMode = fastMode,
       fastModeEnabled = fastModeEnabled,
       selectedModelLabel = selectedModelLabel,
@@ -1303,7 +1303,7 @@ internal fun ChatScreen(
         options = options,
         selectedId = selectedId,
         thinkingSupported = thinkingSupported,
-        thinkingLevelEnabled = canAdminSessionSettings,
+        thinkingLevelEnabled = canWriteSessionSettings,
         fastMode = fastMode,
         fastModeEnabled = canChangeFastMode(opening.composerOwner),
         onPreviewChange = { level ->
@@ -3582,6 +3582,8 @@ private fun ChatThinkingLevelPicker(
   fastModeEnabled: Boolean,
   onOpen: () -> Unit,
 ) {
+  // Gateway effort patches accept operator.write (same as model selection). Keep the
+  // dial disabled—not secretly clickable—when the model has no reasoning profile.
   val enabled = (thinkingSupported && thinkingLevelEnabled) || fastModeEnabled
   val languageTag = currentAppLanguage().languageTag
   val position = resolveChatEffortPosition(selectedId, options)
@@ -3594,12 +3596,16 @@ private fun ChatThinkingLevelPicker(
     onClick = onOpen,
     enabled = enabled,
     modifier =
-      Modifier.size(ClawTheme.spacing.touchTarget).semantics {
-        contentDescription = description
-        stateDescription = chatThinkingChipStateDescription(fastMode, selectedId, options, languageTag)
-      },
+      Modifier
+        .size(ClawTheme.spacing.touchTarget)
+        .semantics {
+          contentDescription = description
+          role = Role.Button
+          stateDescription = chatThinkingChipStateDescription(fastMode, selectedId, options, languageTag)
+        },
     shape = CircleShape,
     color = Color.Transparent,
+    contentColor = if (enabled) ClawTheme.colors.text else ClawTheme.colors.textSubtle,
   ) {
     Box(contentAlignment = Alignment.Center) {
       Box(modifier = Modifier.size(28.dp).testTag("chat-thinking-gauge")) {
@@ -4717,7 +4723,7 @@ internal fun chatThinkingSupported(
 
 internal fun chatFastModeControlEnabled(
   supported: Boolean,
-  adminAuthorized: Boolean,
+  writeAuthorized: Boolean,
   connected: Boolean,
   gatewayAvailable: Boolean,
   loading: Boolean,
@@ -4727,7 +4733,7 @@ internal fun chatFastModeControlEnabled(
   settingsMutationPending: Boolean,
 ): Boolean =
   supported &&
-    adminAuthorized &&
+    writeAuthorized &&
     connected &&
     gatewayAvailable &&
     !loading &&

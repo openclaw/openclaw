@@ -554,6 +554,130 @@ class ChatControllerModelSelectionTest {
     }
 
   @Test
+  fun offUltraPickerPreservesGatewayMediumOnSelectionSendAndQueuedReconnect() =
+    runTest {
+      val sentThinkingLevels = mutableListOf<String>()
+      val sessionPayload =
+        """{"sessions":[{"key":"main","modelProvider":"growter","model":"deepseek-v4-flash",${thinkingFields("medium", "off", "ultra")}}]}"""
+      val controller =
+        createScriptedChatController {
+          respond("sessions.list", sessionPayload)
+          respond("chat.send") { paramsJson ->
+            val params = json.parseToJsonElement(paramsJson.orEmpty()) as JsonObject
+            sentThinkingLevels += (params["thinking"] as JsonPrimitive).content
+            """{"runId":"run-ok","status":"ok"}"""
+          }
+        }
+
+      controller.refreshSessions()
+      advanceUntilIdle()
+
+      assertEquals(
+        listOf("off", "ultra"),
+        controller.thinkingLevelSelection.value.options
+          .map { it.id },
+      )
+      assertEquals("medium", controller.thinkingLevel.value)
+      controller.handleGatewayEvent("health", null)
+      assertTrue(
+        controller.sendMessageAwaitAcceptance(
+          message = "keep gateway medium",
+          thinkingLevel = controller.thinkingLevel.value,
+          attachments = emptyList(),
+        ),
+      )
+      runCurrent()
+      assertEquals(listOf("medium"), sentThinkingLevels)
+
+      controller.onDisconnected("Reconnecting…")
+      assertTrue(
+        controller.sendMessageAwaitAcceptance(
+          message = "queued medium",
+          thinkingLevel = "medium",
+          attachments = emptyList(),
+        ),
+      )
+      assertEquals(
+        ChatOutboxStatus.Queued,
+        controller.outboxItems.value
+          .single { it.text == "queued medium" }
+          .status,
+      )
+      controller.refreshSessions()
+      advanceUntilIdle()
+      assertEquals("medium", controller.thinkingLevel.value)
+      controller.handleGatewayEvent("health", null)
+      advanceUntilIdle()
+      assertEquals(listOf("medium", "medium"), sentThinkingLevels)
+    }
+
+  @Test
+  fun incompletePickerMetadataPreservesEffectiveMediumOnSelectionSendAndReconnect() =
+    runTest {
+      // Mirrors Gateway session-utils.metadata-perf: missing/identity-only catalog keeps
+      // effective Medium while picker options are Off/High/Low/Ultra.
+      val sessionPayload =
+        """{"sessions":[{"key":"main","modelProvider":"row-thinking-fixture","model":"reasoner",${thinkingFields("medium", "off", "high", "low", "ultra")}}]}"""
+      val sentThinkingLevels = mutableListOf<String>()
+      val controller =
+        createScriptedChatController {
+          respond("sessions.list", sessionPayload)
+          respond("chat.history") {
+            """{"sessionId":"reasoner-session","messages":[],"sessionInfo":{"key":"main","sessionId":"reasoner-session",${thinkingFields("medium", "off", "high", "low", "ultra")}}}"""
+          }
+          respond("chat.send") { paramsJson ->
+            val params = json.parseToJsonElement(paramsJson.orEmpty()) as JsonObject
+            sentThinkingLevels += (params["thinking"] as JsonPrimitive).content
+            """{"runId":"run-ok","status":"ok"}"""
+          }
+        }
+
+      controller.refreshSessions()
+      advanceUntilIdle()
+
+      assertEquals(
+        listOf("off", "high", "low", "ultra"),
+        controller.thinkingLevelSelection.value.options
+          .map { it.id },
+      )
+      assertEquals("medium", controller.thinkingLevel.value)
+
+      controller.handleGatewayEvent("health", null)
+      assertTrue(
+        controller.sendMessageAwaitAcceptance(
+          message = "preserve incomplete-metadata medium",
+          thinkingLevel = controller.thinkingLevel.value,
+          attachments = emptyList(),
+        ),
+      )
+      runCurrent()
+      assertEquals(listOf("medium"), sentThinkingLevels)
+
+      controller.onDisconnected("Reconnecting…")
+      controller.onGatewayConnected()
+      controller.refreshSessions()
+      advanceUntilIdle()
+
+      assertEquals("medium", controller.thinkingLevel.value)
+      assertEquals(
+        listOf("off", "high", "low", "ultra"),
+        controller.thinkingLevelSelection.value.options
+          .map { it.id },
+      )
+
+      controller.handleGatewayEvent("health", null)
+      assertTrue(
+        controller.sendMessageAwaitAcceptance(
+          message = "preserve medium after reconnect",
+          thinkingLevel = controller.thinkingLevel.value,
+          attachments = emptyList(),
+        ),
+      )
+      runCurrent()
+      assertEquals(listOf("medium", "medium"), sentThinkingLevels)
+    }
+
+  @Test
   fun failedSelectionDoesNotRecordRecentOrUpdateSelectedModel() =
     runTest {
       val recents = mutableListOf<String>()
