@@ -57,6 +57,7 @@ import {
 import {
   applyBeforeMessageWriteToAssistant,
   type AssistantBeforeMessageWrite,
+  type SessionTranscriptAssistantMessage,
 } from "./transcript-assistant-message.js";
 import {
   findLatestEquivalentAssistantMessageId,
@@ -110,10 +111,7 @@ type InternalSessionTranscriptDeliveryMirror =
     }
   | SkillWorkshopChangeNotice;
 
-export type SessionTranscriptAssistantMessage = Parameters<SessionManager["appendMessage"]>[0] & {
-  role: "assistant";
-  [ASSISTANT_DISPLAY_CONTENT_FIELD]?: Array<Record<string, unknown>>;
-};
+export type { SessionTranscriptAssistantMessage } from "./transcript-assistant-message.js";
 
 export type SessionRecentConversationText = {
   id?: string;

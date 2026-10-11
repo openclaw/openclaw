@@ -8,7 +8,7 @@ import { rethrowIncognitoSessionError } from "../../state/incognito-session-erro
 import type { OpenClawConfig } from "../types.openclaw.js";
 import type { SessionTranscriptTurnWriteContext } from "./session-accessor.js";
 import { prepareSessionTranscriptHydration } from "./session-transcript-hydration.js";
-import type { SessionTranscriptAssistantMessage } from "./transcript.js";
+import type { SessionTranscriptAssistantMessage } from "./transcript-assistant-message.js";
 
 export function isRedundantDeliveryMirror(message: SessionTranscriptAssistantMessage): boolean {
   return (
@@ -28,6 +28,7 @@ async function readLatestVisibleTranscriptMessage(scope: {
     if (!event || typeof event !== "object" || Array.isArray(event)) {
       return undefined;
     }
+    // SAFETY: The non-array object was checked above; optional fields remain unknown until narrowed.
     const record = event as { id?: unknown; message?: unknown };
     if (record.message === undefined) {
       return undefined;
@@ -79,12 +80,19 @@ export async function findLatestEquivalentAssistantMessageId(
       sessionKey: target.sessionKey,
       storePath: target.storePath,
     });
+    // SAFETY: Only the optional role discriminator is read; optional chaining handles absent bodies.
     const latestMessage = latest?.message as { role?: unknown } | undefined;
     if (latestMessage?.role !== "assistant") {
       return undefined;
     }
     const candidateText = latest
-      ? extractAssistantMessageText(redactTranscriptMessage(latest.message as AgentMessage, config))
+      ? extractAssistantMessageText(
+          redactTranscriptMessage(
+            // SAFETY: Active-message hydration decodes persisted AgentMessage bodies; the assistant role was checked above.
+            latest.message as AgentMessage,
+            config,
+          ),
+        )
       : undefined;
     return candidateText === expectedText ? latest?.id : undefined;
   }
