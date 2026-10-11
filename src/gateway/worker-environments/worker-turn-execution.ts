@@ -72,6 +72,7 @@ import {
 export async function executeWorkerTurn(
   params: Omit<Parameters<typeof executeRemoteExecTurn>[0], "environments" | "runLocal"> & {
     environments: WorkerTurnEnvironmentService;
+    assertRunCurrent: () => void;
     onTerminal: () => void;
   },
 ) {
@@ -86,7 +87,7 @@ export async function executeWorkerTurn(
     },
     { pluginGeneration: input.pluginGeneration, abortSignal: input.abortSignal },
   );
-  params.assertRunCurrent?.();
+  params.assertRunCurrent();
   input.abortSignal?.throwIfAborted();
   const turn = { ...input, config: preparedRuntime.snapshot.config };
   const modelRef = assertSupportedTurn(turn);
@@ -124,14 +125,16 @@ export async function executeWorkerTurn(
     }
   }
   await recoverWorkspaceBeforeTurn({ ...params, signal: turn.abortSignal });
-  params.assertRunCurrent?.();
+  params.assertRunCurrent();
   turn.abortSignal?.throwIfAborted();
   // Shared account refresh and repository lookup own their own lifetime. A
   // cancelled turn may stop waiting, but cannot consume a late binding.
   const githubContext = {
     ...placement,
-    assertCurrent: () =>
-      !turn.abortSignal?.aborted && params.placements.validateTurnClaim(params.turnClaim),
+    assertCurrent: () => {
+      params.assertRunCurrent();
+      return !turn.abortSignal?.aborted;
+    },
   };
   const [github, githubPublicationAvailable] = await raceNodeWorkerOperation(
     Promise.all([
@@ -140,16 +143,13 @@ export async function executeWorkerTurn(
     ]),
     turn.abortSignal,
   );
-  params.assertRunCurrent?.();
+  params.assertRunCurrent();
   turn.abortSignal?.throwIfAborted();
 
   const startedAt = Date.now();
   await turn.onExecutionStarted?.({ lifecycleGeneration: turn.lifecycleGeneration, backend });
-  params.assertRunCurrent?.();
+  params.assertRunCurrent();
   turn.abortSignal?.throwIfAborted();
-  if (!params.placements.validateTurnClaim(params.turnClaim)) {
-    throw new Error("Worker turn claim is no longer current");
-  }
   turn.onExecutionPhase?.({ phase: "runner_entered", backend });
   const transcriptTarget = resolveWorkerTurnTranscriptTarget(turn);
   const recorder = turn.userTurnTranscriptRecorder;
@@ -161,8 +161,6 @@ export async function executeWorkerTurn(
       signal: turn.abortSignal,
       assertRunCurrent: params.assertRunCurrent,
       isBlocked: () => blocked,
-      placements: params.placements,
-      turnClaim: params.turnClaim,
     });
   assertContextCurrent();
   if (recorder?.hasRuntimePersistencePending()) {
