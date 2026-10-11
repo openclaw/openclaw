@@ -15,6 +15,7 @@ declare module "@solidjs/web" {
     interface IntrinsicElements {
       "openclaw-tooltip": HTMLAttributes<HTMLElementTagNameMap["openclaw-tooltip"]> & {
         "prop:content"?: string;
+        "prop:describe"?: boolean;
         placement?: HTMLElementTagNameMap["openclaw-tooltip"]["placement"];
         "open-on-click"?: boolean;
         "auto-size"?: boolean;

@@ -527,23 +527,7 @@ class SessionProgressHovercardController {
       return;
     }
     card.addEventListener("pointerleave", this.hovercard.handleCardPointerLeave);
-    let dispose: (() => void) | undefined = undefined;
-    let retired = false;
-    this.hovercard.mount(
-      target,
-      card,
-      sessionProgressHoverPlacementForTarget(target),
-      false,
-      () => {
-        retired = true;
-        this.cardUpdates.delete(card);
-        dispose?.();
-      },
-    );
-    if (this.hovercard.card !== card) {
-      return;
-    }
-    dispose = runWithOwner(null, () =>
+    const dispose = runWithOwner(null, () =>
       render(() => {
         const [snapshot, setSnapshot] = createSignal({ input, afterCommit });
         this.cardUpdates.set(card, (next, committed) =>
@@ -556,9 +540,24 @@ class SessionProgressHovercardController {
         return <SessionHovercard {...snapshot().input} />;
       }, card),
     );
-    // An empty initial render can retire its portal before render() returns its disposer.
-    if (retired) {
-      dispose?.();
+    // Render before mounting: rich children can settle inside their own bridge roots.
+    if (!card.firstElementChild) {
+      this.cardUpdates.delete(card);
+      dispose();
+      return;
+    }
+    this.hovercard.mount(
+      target,
+      card,
+      sessionProgressHoverPlacementForTarget(target),
+      false,
+      () => {
+        this.cardUpdates.delete(card);
+        dispose();
+      },
+    );
+    if (this.hovercard.card !== card) {
+      return;
     }
     if (animateEntry) {
       void card.offsetWidth;

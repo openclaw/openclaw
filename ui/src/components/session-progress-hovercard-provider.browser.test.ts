@@ -4,6 +4,7 @@ import type { ApplicationContext } from "../app/context.ts";
 import type { ApplicationGateway } from "../app/gateway.ts";
 import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../lib/session-pull-requests.ts";
 import { flush, waitForSolid } from "../test-helpers/solid-settle.ts";
+import type { SidebarSessionHovercardRow } from "./app-sidebar-session-types.ts";
 import type { SessionProgressHovercardProvider } from "./session-progress-hovercard.runtime.tsx";
 import "./session-progress-hovercard.runtime.tsx";
 
@@ -11,7 +12,10 @@ const key = "agent:research:provider-probe";
 const buildHref = "https://example.com/build";
 const mountedProviders: HTMLElement[] = [];
 
-function fixture(initialCard: ProgressCard | null) {
+function fixture(
+  initialCard: ProgressCard | null,
+  rowDetails: Partial<SidebarSessionHovercardRow> = {},
+) {
   let card = initialCard;
   const eventListeners = new Set<Parameters<ApplicationGateway["subscribeEvents"]>[0]>();
   const request = vi.fn(async (method: string) => {
@@ -65,6 +69,7 @@ function fixture(initialCard: ProgressCard | null) {
       label: "Synthetic provider session",
       kind: "direct",
       lastMessagePreview: "Synthetic latest turn",
+      ...rowDetails,
     }),
   });
   const row = document.createElement("div");
@@ -86,6 +91,9 @@ function fixture(initialCard: ProgressCard | null) {
     row,
     trigger,
     getReads,
+    getPullRequestReads: () =>
+      request.mock.calls.filter(([method]) => method === SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD)
+        .length,
     async mount() {
       document.body.append(provider);
       mountedProviders.push(provider);
@@ -149,6 +157,46 @@ describe("progress hovercard provider boundary", () => {
     expect(disconnections).toBe(0);
     expect(child.parentElement).toBe(h.provider);
   });
+
+  it.each(["participants", "channel avatar"] as const)(
+    "opens a pointer-held %s attribution card without repeating presentation work",
+    async (kind) => {
+      const { userEvent } = await import("vitest/browser");
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      const h = fixture(progress(1, "**Synthetic progress**"), {
+        createdActor: {
+          type: "human",
+          id: "profile-ada",
+          label: "Ada King",
+          identity: { type: "profile", id: "profile-ada" },
+        },
+        ...(kind === "participants"
+          ? {
+              participants: [
+                { identity: { type: "profile" as const, id: "profile-ada" }, label: "Ada King" },
+                { identity: { type: "profile" as const, id: "profile-mira" }, label: "Mira" },
+              ],
+              participantCount: 2,
+            }
+          : { channelAvatarUrl: "/__openclaw__/channel-avatar/synthetic" }),
+      });
+      await h.mount();
+      await userEvent.hover(h.row);
+      await vi.advanceTimersByTimeAsync(450);
+      flush();
+      await waitForSolid(() => expect(portal()?.textContent).toContain("Ada King"));
+      expect(h.getReads()).toBe(1);
+      expect(h.getPullRequestReads()).toBe(1);
+      const heldPortal = portal();
+      await vi.advanceTimersByTimeAsync(500);
+      flush();
+      expect(portal()).toBe(heldPortal);
+      expect(heldPortal?.querySelector(".session-hovercard__creator-avatar")).not.toBeNull();
+      expect(h.getReads()).toBe(1);
+      expect(h.getPullRequestReads()).toBe(1);
+      await userEvent.unhover(h.row);
+    },
+  );
 
   it("enters by Tab, retains the focused progress href on refresh, and returns focus when removed", async () => {
     const { userEvent } = await import("vitest/browser");
