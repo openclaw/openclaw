@@ -215,7 +215,7 @@ flow:
             message:
               expr: "`second-turn history kept the plugin's core-named path ${pluginPath} as written: ${history}`"
         - assert:
-            expr: "history.includes(`plugin ${config.placeholder}/generated/${pluginFile} unmanaged ${unmanagedPath}`)"
+            expr: "history.includes(`plugin ${config.placeholder}${path.sep}generated${path.sep}${pluginFile} unmanaged ${unmanagedPath}`)"
             message:
               expr: "`second-turn history should mark only the plugin path unverified and keep the unmanaged one: ${history}`"
       detailsExpr: "JSON.stringify({ pluginPath, unmanagedPath, history })"

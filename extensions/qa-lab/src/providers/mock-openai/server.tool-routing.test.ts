@@ -954,3 +954,42 @@ it("refuses a QA tool plan step the request does not declare", async () => {
 
   expect(outputText(await turn.request())).toBe("BUG-QA-TOOL-PLAN-UNDECLARED music_generate");
 });
+
+it("names a drive-rooted media path from a plain-text QA tool plan result", async () => {
+  const tools = [{ type: "function", name: "music_generate", parameters: { type: "object" } }];
+  const plan = { calls: [{ name: "music_generate", args: {} }], reply: "plugin {{media:0}}" };
+  const turn = await startTurn(`QA tool plan: ${JSON.stringify(plan)}`, { tools });
+
+  const call = outputToolCall(await turn.request(), "music_generate");
+  const done = await turn.complete(call, "Generated music at C:\\state\\media\\generated\\b.mp3");
+
+  expect(outputText(done)).toBe("plugin C:\\state\\media\\generated\\b.mp3");
+});
+
+it("waits for a QA tool plan step that Code Mode leaves running", async () => {
+  const waitTool = {
+    type: "function",
+    name: "wait",
+    parameters: { type: "object", properties: { runId: { type: "string" } }, required: ["runId"] },
+  };
+  const tools = [{ type: "function", ...guestCodeModeExecTool }, waitTool];
+  const plan = {
+    calls: [{ name: "music_generate", args: { prompt: "melody" } }],
+    reply: "plugin {{media:0}}",
+  };
+  const turn = await startTurn(`QA tool plan: ${JSON.stringify(plan)}`, { tools });
+
+  const exec = outputToolCall(await turn.request(), "exec");
+  const waiting = JSON.stringify({ status: "waiting", runId: "qa-plan-music" });
+  const wait = outputToolCall(await turn.complete(exec, waiting), "wait");
+  expect(callArgs(wait)).toEqual({ runId: "qa-plan-music" });
+  const done = await turn.complete(
+    wait,
+    JSON.stringify({
+      status: "completed",
+      value: "Generated music at /state/media/generated/b.mp3",
+    }),
+  );
+
+  expect(outputText(done)).toBe("plugin /state/media/generated/b.mp3");
+});
