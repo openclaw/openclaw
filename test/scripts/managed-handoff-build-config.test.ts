@@ -1,6 +1,15 @@
 import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { mkdirSync, readdirSync, realpathSync, readFileSync, lstatSync } from "node:fs";
+import {
+  globSync,
+  mkdirSync,
+  readdirSync,
+  realpathSync,
+  readFileSync,
+  lstatSync,
+  writeFileSync,
+} from "node:fs";
+import { createRequire } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { build } from "tsdown";
@@ -72,6 +81,73 @@ vi.mock("../../src/infra/runtime-worker-url.js", async (importOriginal) => {
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 afterEach(() => vi.restoreAllMocks());
+
+function publishedProcSafeRuntimeFiles(packageDirectory: string): string[] {
+  const root = realpathSync(packageDirectory);
+  const manifest = JSON.parse(readFileSync(path.join(root, "package.json"), "utf8")) as {
+    files: string[];
+  };
+  const published = globSync(manifest.files, { cwd: root });
+  for (const file of published) {
+    const relative = path.relative(root, realpathSync(path.resolve(root, file)));
+    if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+      throw new Error(`Published proc-safe file escapes its package: ${file}`);
+    }
+  }
+  // Staging retains package metadata and licensing, plus published JavaScript under dist.
+  return [
+    "package.json",
+    "LICENSE",
+    ...new Set(
+      published.filter(
+        (file) =>
+          file.startsWith(`dist${path.sep}`) &&
+          file.endsWith(".js") &&
+          lstatSync(path.join(root, file)).isFile(),
+      ),
+    ),
+  ].toSorted();
+}
+
+it("derives staged runtime files from the package manifest as published files grow", () => {
+  const root = tempDirs.make("openclaw-proc-safe-manifest-");
+  const packageDirectory = path.join(root, "package");
+  const files = [
+    "LICENSE",
+    "dist/identity.js",
+    "dist/nested/ancestry.js",
+    "dist/nested/ancestry.d.ts",
+    "dist/unpublished.js",
+    "docs/identity.md",
+    "unrelated.js",
+  ];
+  for (const file of files) {
+    const target = path.join(packageDirectory, file);
+    mkdirSync(path.dirname(target), { recursive: true });
+    writeFileSync(target, "fixture");
+  }
+  const manifestPath = path.join(packageDirectory, "package.json");
+  const published = ["LICENSE", "dist/identity.js", "dist/nested/**/*", "docs/**/*.md"];
+  writeFileSync(manifestPath, JSON.stringify({ files: published }));
+  expect(publishedProcSafeRuntimeFiles(packageDirectory)).toEqual(
+    ["LICENSE", "package.json", "dist/identity.js", "dist/nested/ancestry.js"].toSorted(),
+  );
+  writeFileSync(path.join(packageDirectory, "dist/nested/new-api.js"), "fixture");
+  expect(publishedProcSafeRuntimeFiles(packageDirectory)).toEqual(
+    [
+      "LICENSE",
+      "package.json",
+      "dist/identity.js",
+      "dist/nested/ancestry.js",
+      "dist/nested/new-api.js",
+    ].toSorted(),
+  );
+  writeFileSync(path.join(root, "outside.js"), "must not be staged");
+  writeFileSync(manifestPath, JSON.stringify({ files: [...published, "../outside.js"] }));
+  expect(() => publishedProcSafeRuntimeFiles(packageDirectory)).toThrow(
+    "Published proc-safe file escapes its package",
+  );
+});
 
 it.each(
   (["managed", "package"] as const).filter(
@@ -155,17 +231,11 @@ it.each(
       const nativeAssets =
         process.platform === "freebsd"
           ? [
-              ...[
-                "package.json",
-                "LICENSE",
-                "dist/darwin.js",
-                "dist/errors.js",
-                "dist/identity.js",
-                "dist/index.js",
-                "dist/native-binding.js",
-                "dist/native-error.js",
-                "dist/native.js",
-              ].map((file) =>
+              ...publishedProcSafeRuntimeFiles(
+                path.dirname(
+                  createRequire(import.meta.url).resolve("@openclaw/proc-safe/package.json"),
+                ),
+              ).map((file) =>
                 path.join(directory, "runtime", "node_modules", "@openclaw", "proc-safe", file),
               ),
               ...["package.json", "proc-safe-native.node"].map((file) =>
@@ -180,7 +250,14 @@ it.each(
               ),
             ]
           : [];
-      expect(staged).toEqual([entry, ...nativeAssets]);
+      expect(staged.toSorted()).toEqual([entry, ...nativeAssets].toSorted());
+      if (process.platform === "freebsd") {
+        const privateModules = path.join(directory, "runtime", "node_modules");
+        const stagedPackageFiles = globSync("**/*", { cwd: privateModules })
+          .map((file) => path.join(privateModules, file))
+          .filter((file) => lstatSync(file).isFile());
+        expect(stagedPackageFiles.toSorted()).toEqual(nativeAssets.toSorted());
+      }
       expect(readdirSync(directory)).toEqual(["runtime"]);
       expect(readdirSync(path.dirname(entry))).toEqual(
         process.platform === "freebsd"
