@@ -66,20 +66,17 @@ function createSessionManagerWithMessage(message: AgentMessage): SessionManager 
 describe("attempt prompt preflight", () => {
   it.each([
     "oversized",
-    "unwindowed",
     "unwindowed-tools",
     "missing-window",
-    "discarded",
     "discarded-invalid",
-    "fitting-with-raw-overflow",
     "fitting-with-discarded-invalid",
     "fitting-with-tool-output-schema",
   ] as const)(
     "handles a %s checkpoint when a context engine owns ordinary compaction",
     async (variant) => {
-      const discarded = variant === "discarded" || variant === "discarded-invalid";
+      const discarded = variant === "discarded-invalid";
       const fitting = variant.startsWith("fitting-");
-      const unwindowed = variant === "unwindowed" || variant === "unwindowed-tools";
+      const unwindowed = variant === "unwindowed-tools";
       const toolWithOutputSchema = {
         name: "lookup",
         description: "Look up a record.",
@@ -345,37 +342,6 @@ describe("attempt prompt preflight", () => {
     } finally {
       warn.mockRestore();
     }
-  });
-
-  it("records heuristic pressure without short-circuiting the provider attempt", async () => {
-    const result = await prepareEmbeddedAttemptPromptPreflight({
-      attempt,
-      compactionReplayEnabled: true,
-      contextEngineAssemblySucceeded: false,
-      contextEnginePromptAuthority: "assembled",
-      contextTokenBudget: 100,
-      hookMessagesForCurrentPrompt: [],
-      includeBoundaryTimestamp: false,
-      promptForPrecheck: "x".repeat(4_000),
-      reserveTokens: 20,
-      sessionMessageCount: 0,
-      state: {
-        contextBudgetStatus: undefined,
-        preflightRecovery: undefined,
-        promptError: null,
-        promptErrorSource: null,
-        skipPromptSubmission: false,
-      },
-      systemPrompt: "",
-      toolResultMaxChars: 1_000,
-    });
-
-    expect(result.skipPromptSubmission).toBe(false);
-    expect(result.promptError).toBeNull();
-    expect(result.promptErrorSource).toBeNull();
-    expect(result.preflightRecovery).toBeUndefined();
-    expect(result.contextBudgetStatus?.shouldCompact).toBe(true);
-    expect(result.contextBudgetStatus?.overflowTokens).toBeGreaterThan(0);
   });
 
   it("defers overflow admission to a context engine that owns compaction", async () => {

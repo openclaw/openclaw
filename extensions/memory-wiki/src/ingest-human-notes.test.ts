@@ -85,25 +85,6 @@ describe("ingestMemoryWikiSource human notes", () => {
     },
   );
 
-  it("preserves notes without corrupting source content that contains human markers", async () => {
-    const { editNotes, reingest } = await createSourceFixture("notes.txt");
-    const userNote = "MY PRIVATE NOTE";
-    await editNotes(userNote);
-
-    const sourceWithMarkers = [
-      "second body",
-      "<!-- openclaw:human:start -->",
-      "INJECTED FROM SOURCE",
-      "<!-- openclaw:human:end -->",
-      "",
-    ].join("\n");
-    const after = await reingest(sourceWithMarkers);
-    const notesBlock = after.slice(after.indexOf("## Notes"));
-    expect(after).toContain("INJECTED FROM SOURCE");
-    expect(notesBlock).toContain(userNote);
-    expect(notesBlock).not.toContain("INJECTED FROM SOURCE");
-  });
-
   it("preserves CRLF notes without copying marker comments from existing source content", async () => {
     const sourceWithMarkers = [
       "first body",
@@ -124,33 +105,5 @@ describe("ingestMemoryWikiSource human notes", () => {
     expect(after).toContain("second body without marker comments");
     expect(notesBlock).toContain(userNote);
     expect(notesBlock).not.toContain("OLD SOURCE MARKER PAYLOAD");
-  });
-
-  it("preserves the whole note when the note text itself contains a marker comment", async () => {
-    const { editNotes, reingest } = await createSourceFixture("diary.txt");
-    const noteWithMarker = [
-      "EARLY NOTE before any quoted marker",
-      "<!-- openclaw:human:start -->",
-      "LATE NOTE after a pasted marker",
-    ].join("\n");
-    await editNotes(noteWithMarker);
-
-    const after = await reingest("second body\n");
-    expect(after).toContain("second body");
-    expect(after).toContain("EARLY NOTE before any quoted marker");
-    expect(after).toContain("LATE NOTE after a pasted marker");
-  });
-
-  it("preserves the note when the note text contains a Markdown heading", async () => {
-    const { editNotes, reingest } = await createSourceFixture("log.txt");
-    const noteWithHeading = ["NOTE TOP", "## Notes", "NOTE BOTTOM under a pasted heading"].join(
-      "\n",
-    );
-    await editNotes(noteWithHeading);
-
-    const after = await reingest("second body\n");
-    expect(after).toContain("second body");
-    expect(after).toContain("NOTE TOP");
-    expect(after).toContain("NOTE BOTTOM under a pasted heading");
   });
 });

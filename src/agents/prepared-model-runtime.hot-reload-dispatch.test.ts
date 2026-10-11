@@ -605,18 +605,13 @@ describe("retained config and committed model publication", () => {
       return { entries: [] };
     });
     const publication = publish(committed);
-    const reading = createDeferred();
     let read: ReturnType<typeof readPreparedGatewayModelCatalogOwnerSnapshot> | undefined;
     try {
       await entered.promise;
       read = readPreparedGatewayModelCatalogOwnerSnapshot({
         agentId: "default",
-        getConfig: () => {
-          reading.resolve();
-          return committed;
-        },
+        getConfig: () => committed,
       });
-      await reading.promise;
       release.resolve();
       await publication;
       const catalog = await read;

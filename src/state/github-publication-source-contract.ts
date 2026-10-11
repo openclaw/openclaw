@@ -5,7 +5,7 @@ import type {
 } from "./github-publication-source.types.js";
 
 /** Physical owners and exact prepared predicates, never host callbacks. */
-type GitHubPublicationSourcePredicate = {
+export type GitHubPublicationSourcePredicate = {
   destination: SqliteSourceFenceIdentity;
   source: SqliteSourceFenceIdentity;
   selector: GitHubPublicationSourceSelector;

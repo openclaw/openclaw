@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { performance } from "node:perf_hooks";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
@@ -168,7 +169,9 @@ export function createGatewayRunSignals(params: {
       }
     });
   };
-  const onSigterm = () => {
+  // In-process emitters can retire their async scope during shutdown. The loop
+  // owns signal consumption and restart, including the next state-lock acquisition.
+  const onSigterm = AsyncLocalStorage.bind(() => {
     if (!signalsActive || params.isTerminal()) {
       return;
     }
@@ -219,8 +222,8 @@ export function createGatewayRunSignals(params: {
         });
       },
     );
-  };
-  const onSigint = () => {
+  });
+  const onSigint = AsyncLocalStorage.bind(() => {
     if (!signalsActive || params.isTerminal()) {
       return;
     }
@@ -236,7 +239,7 @@ export function createGatewayRunSignals(params: {
         request("stop", "SIGINT", undefined, undefined, undefined, { acceptedAtMs }),
       (error) => gatewayLog.error(`failed to handle SIGINT: ${formatErrorMessage(error)}`),
     );
-  };
+  });
   const restartSignalFailed = (err: unknown, releaseToken = true) => {
     gatewayLog.error(`SIGUSR2 handler failed: ${formatErrorMessage(err)}`);
     if (!releaseToken) {
@@ -255,7 +258,7 @@ export function createGatewayRunSignals(params: {
       }
     }
   };
-  const onRestartSignal = () => {
+  const onRestartSignal = AsyncLocalStorage.bind(() => {
     if (!signalsActive || params.isTerminal()) {
       return;
     }
@@ -311,7 +314,7 @@ export function createGatewayRunSignals(params: {
     } catch (err) {
       restartSignalFailed(err);
     }
-  };
+  });
 
   process.on("SIGTERM", onSigterm);
   process.on("SIGINT", onSigint);

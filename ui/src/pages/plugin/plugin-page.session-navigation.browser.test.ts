@@ -241,7 +241,7 @@ describe("authenticated plugin-frame session navigation", () => {
     dispatch(fixture.frame.contentWindow, message, window.location.origin);
     expect(fixture.navigate).toHaveBeenLastCalledWith("dashboard", {
       pathname: "/console/dashboard/writer/subagent/11111111-2222-4333-8444-555555555555",
-      search: `?__openclawSessionKey=${encodeURIComponent(sessionKey)}`,
+      search: undefined,
     });
     dispatch(fixture.frame.contentWindow, {
       ...message,

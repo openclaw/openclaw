@@ -5,6 +5,7 @@ import {
 } from "../infra/device-identity.js";
 import { refreshSqlitePlannerStatistics } from "../infra/sqlite-planner-statistics.js";
 import { assertNoActiveSqliteReaders } from "../infra/sqlite-reader-lifecycle.js";
+import { SQLITE_WORKER_SOURCE_FENCE } from "../infra/sqlite-source-fence-contract.js";
 import { assertTransactionUsable } from "../infra/sqlite-transaction.js";
 import {
   SQLITE_WORKER_PREPARE_COMMAND,
@@ -219,7 +220,13 @@ function createSharedStateWorkerBackend(
   return {
     [SQLITE_WORKER_PREPARE_ADMITTED](command) {
       const source =
-        command.type === "githubPublication.sourceFacts" ? command.input.source : undefined;
+        command.type === "githubPublication.sourceFacts" ||
+        command.type === "githubPublications.shared" ||
+        command.type === "githubPublications.insert" ||
+        command.type === "githubPublications.personal" ||
+        command.type === "githubPublications.repository"
+          ? command.input.source
+          : undefined;
       if (source) {
         if (!publicationSource) {
           throw new Error("GitHub publication source runtime is not prepared.");
@@ -227,6 +234,22 @@ function createSharedStateWorkerBackend(
         publicationSourceReader ??= publicationSource.createGitHubPublicationSourceWorker();
         publicationSourceReader.prepare(source, open().db);
       }
+    },
+    [SQLITE_WORKER_SOURCE_FENCE](command) {
+      if (
+        command.type === "githubPublications.shared" ||
+        command.type === "githubPublications.insert" ||
+        command.type === "githubPublications.personal" ||
+        command.type === "githubPublications.repository"
+      ) {
+        if (command.input.source) {
+          if (!publicationSourceReader) {
+            throw new Error("GitHub publication source is unavailable.");
+          }
+          return publicationSourceReader.fence(command.input.source);
+        }
+      }
+      return undefined;
     },
     [SQLITE_WORKER_OPERATION_CLEANUP]() {
       publicationSourceReader?.close();
@@ -240,12 +263,23 @@ function createSharedStateWorkerBackend(
       }
     },
     [SQLITE_WORKER_PREPARE_COMMAND](commandType) {
-      if (commandType === "githubPublication.sourceFacts") {
-        return publicationSource
-          ? undefined
-          : import("./github-publication-source.worker.js").then((loaded) => {
-              publicationSource = loaded;
-            });
+      if (
+        commandType === "githubPublication.sourceFacts" ||
+        commandType.startsWith("githubPublications.")
+      ) {
+        return Promise.all([
+          publicationSource
+            ? Promise.resolve()
+            : import("./github-publication-source.worker.js").then((loaded) => {
+                publicationSource = loaded;
+              }),
+          commandType === "githubPublication.sourceFacts"
+            ? Promise.resolve()
+            : import("./openclaw-state-worker-runtime.js").then((loaded) => {
+                runtime = loaded;
+                return runtime.prepareSharedStateCommand(commandType);
+              }),
+        ]).then(() => undefined);
       }
       if (
         commandType.startsWith("deviceAuth.") ||

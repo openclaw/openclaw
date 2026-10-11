@@ -38,6 +38,12 @@ if (!customElements.get("openclaw-elapsed-time")) {
   customElements.define("openclaw-elapsed-time", ElapsedTime);
 }
 
+declare global {
+  interface HTMLElementTagNameMap {
+    "openclaw-elapsed-time": ElapsedTime;
+  }
+}
+
 declare module "@solidjs/web" {
   namespace JSX {
     interface IntrinsicElements {

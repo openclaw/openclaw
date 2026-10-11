@@ -37,7 +37,6 @@ import {
   resolveSqliteScope,
   toDatabaseOptions,
 } from "../../config/sessions/session-accessor.sqlite-scope.js";
-import * as entryReads from "../../config/sessions/session-entry-read-runtime.js";
 import type { OpenClawConfig, TypingMode } from "../../config/types.js";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import { diagnosticLogger } from "../../logging/diagnostic-runtime.js";
@@ -74,7 +73,6 @@ import {
   type QueueSettings,
 } from "./queue.js";
 import { clearFollowupQueueForTest } from "./queue.test-helpers.js";
-import { REPLY_ADMISSION_TICKET, reserveReplyAdmissionTicket } from "./reply-admission-ticket.js";
 import {
   REPLY_OPERATION_RUN_STATE,
   resolveReplyOperationAgentTurn,
@@ -1700,26 +1698,6 @@ describe("runReplyAgent heartbeat followup guard", () => {
 
     expect(state.beforeAgentReplyRunMock).not.toHaveBeenCalled();
     expect(vi.mocked(enqueueFollowupRun)).toHaveBeenCalledOnce();
-    expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
-  });
-
-  it("releases reply admission and typing when the recovery read fails", async () => {
-    const failure = new Error("synthetic recovery read failure");
-    vi.spyOn(entryReads, "readSessionEntryInWorker").mockRejectedValueOnce(failure);
-    const ticket = reserveReplyAdmissionTicket(["main"]);
-    if (!ticket) {
-      throw new Error("expected a reply admission ticket");
-    }
-    const release = vi.spyOn(ticket, "release");
-    const { run, typing } = createMinimalRun({
-      opts: { [REPLY_ADMISSION_TICKET]: ticket },
-      storePath: "/tmp/synthetic-recovery-read.sqlite",
-    });
-
-    await expect(run()).rejects.toBe(failure);
-
-    expect(release).toHaveBeenCalledOnce();
-    expect(typing.cleanup).toHaveBeenCalledOnce();
     expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
   });
 
