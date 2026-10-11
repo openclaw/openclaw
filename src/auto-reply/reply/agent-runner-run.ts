@@ -129,7 +129,6 @@ export async function runReplyAgent(
   let activeSessionEntry = sessionEntry;
   const effectiveResetTriggered = resetTriggered === true;
 
-  const isHeartbeat = opts?.isHeartbeat === true;
   const replyExpectation = (followupRun.run.terminalReplyExpectation ??=
     resolveSourceReplyExpectation({
       ctx: {
@@ -138,7 +137,6 @@ export async function runReplyAgent(
         InputProvenance: followupRun.run.inputProvenance ?? sessionCtx.InputProvenance,
       },
       cfg: followupRun.run.config,
-      isHeartbeat,
     }));
   let didDeliverVisiblePartialReply = false;
   const onPartialReply = opts?.onPartialReply;
@@ -172,7 +170,6 @@ export async function runReplyAgent(
   const traceAttributes = {
     provider: followupRun.run.provider,
     hasSessionKey: Boolean(sessionKey ?? followupRun.run.sessionKey),
-    isHeartbeat,
     queueMode: resolvedQueue.mode,
     isActive,
     blockStreamingEnabled,
@@ -244,7 +241,7 @@ export async function runReplyAgent(
     return undefined;
   }
 
-  const effectiveShouldSteer = !isHeartbeat && !effectiveResetTriggered && shouldSteer;
+  const effectiveShouldSteer = !effectiveResetTriggered && shouldSteer;
   const effectiveShouldFollowup = !effectiveResetTriggered && shouldFollowup;
   const messageInjectionDisposition = opts?.messageInjectionDisposition ?? "none";
   const activeReplyOperation = sessionKey
@@ -260,7 +257,6 @@ export async function runReplyAgent(
   const typingSignals = createTypingSignaler({
     typing,
     mode: typingMode,
-    isHeartbeat,
   });
   // New steering must not reuse a terminal source claim. Compare the active
   // source identity so unrelated retained tombstones still permit steering.
@@ -368,18 +364,9 @@ export async function runReplyAgent(
   const activeRunQueueAction = resolveActiveRunQueueAction({
     hasQueuedFollowups,
     isActive,
-    isHeartbeat,
     shouldFollowup: effectiveShouldFollowup || shouldQueueProvidedSteer,
     resetTriggered: effectiveResetTriggered,
   });
-  if (activeRunQueueAction === "drop") {
-    if (replyOperationRunState) {
-      replyOperationRunState.admission = { status: "skipped", reason: "active-run" };
-    }
-    releaseUnusedAdmission();
-    return undefined;
-  }
-
   if (activeRunQueueAction === "enqueue-followup") {
     bindReplyOperationQueueDisposition(followupRun, replyOperationRunState);
     const enqueued = enqueueFollowupRun(
@@ -607,7 +594,7 @@ export async function runReplyAgent(
     shouldDrainQueuedFollowupsAfterClear = true;
     return value;
   };
-  if (replyOperationRunState && !isHeartbeat && replyExpectation === "required") {
+  if (replyOperationRunState && replyExpectation === "required") {
     // Dispatch owns the stall notice; this owner holds the queue facts needed to answer
     // instead. The same sender's next queued request inherits the guidance; otherwise one
     // recovery run bound to this turn's route and authority is queued.
@@ -665,7 +652,6 @@ export async function runReplyAgent(
       resolveVisibleReplyDelivery,
       activeIsNewSession: isNewSession,
       getActiveSessionEntry: () => activeSessionEntry,
-      isHeartbeat,
       isRestartRecoveryArmed,
       opts: runOpts,
       pendingToolTasks,
@@ -700,7 +686,6 @@ export async function runReplyAgent(
     );
     const result = await handleReplyAgentRunError(error, {
       resolveVisibleReplyDelivery,
-      isHeartbeat,
       replyExpectation,
       isRestartRecoveryArmed,
       replyOperation,
@@ -713,7 +698,6 @@ export async function runReplyAgent(
     await cleanupReplyAgentRun({
       blockReplyPipeline,
       clearRestartRecoveryDeliveryClaim,
-      isHeartbeat,
       providedReplyOperation: callerOwnedReplyOperation,
       queueKey,
       replyOperation,

@@ -39,7 +39,8 @@ async function fixture(jobs: CronJob[], overrides: Partial<CronServiceDeps> = {}
     cronEnabled: true,
     log: logger,
     enqueueSystemEvent: vi.fn(),
-    requestHeartbeat: vi.fn(),
+    enqueueSessionEvent: vi.fn(),
+    runSessionEvent: vi.fn(async () => ({ status: "ok" as const })),
     onEvent: vi.fn(),
     runCommandJob: vi.fn(async () => ({ status: "ok" as const })),
     runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
@@ -133,8 +134,8 @@ describe("CronService restart catch-up", () => {
       ],
       async (cron, deps) => {
         expect(deps.runIsolatedAgentJob).not.toHaveBeenCalled();
-        expect(deps.enqueueSystemEvent).not.toHaveBeenCalled();
-        expect(deps.requestHeartbeat).not.toHaveBeenCalled();
+        expect(deps.enqueueSessionEvent).not.toHaveBeenCalled();
+        expect(deps.runSessionEvent).not.toHaveBeenCalled();
         expect(cron.getJob("restart-job")?.state).toMatchObject({
           lastRunStatus: "skipped",
           nextRunAtMs: time("2025-12-14T09:10:00Z"),
@@ -143,7 +144,7 @@ describe("CronService restart catch-up", () => {
     );
   });
 
-  it("replays a cron slot due exactly at restart behind a completed persisted slot", async () => {
+  it("defers a cron slot due exactly at restart behind a completed persisted slot", async () => {
     vi.setSystemTime(time("2025-12-13T04:02:00Z"));
     await withRestartedCron(
       [
@@ -155,12 +156,24 @@ describe("CronService restart catch-up", () => {
           },
         }),
       ],
-      async (_cron, deps) => {
-        expect(deps.enqueueSystemEvent).toHaveBeenCalledExactlyOnceWith(
-          "tick",
-          expect.objectContaining({ agentId: "main" }),
+      async (cron, deps) => {
+        expect(deps.runSessionEvent).not.toHaveBeenCalled();
+        expect(cron.getJob("restart-job")?.state).toMatchObject({
+          lastRunAtMs: time("2025-12-13T04:01:00Z"),
+          nextRunAtMs: time("2025-12-13T04:04:00Z"),
+          startupCatchupAtMs: time("2025-12-13T04:04:00Z"),
+        });
+        vi.setSystemTime(time("2025-12-13T04:04:00Z"));
+        await expect(cron.run("restart-job", "due")).resolves.toMatchObject({
+          ok: true,
+          ran: true,
+        });
+        expect(deps.runSessionEvent).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({
+            text: "tick",
+            job: expect.objectContaining({ id: "restart-job" }),
+          }),
         );
-        expect(deps.requestHeartbeat).toHaveBeenCalled();
       },
     );
   });
@@ -175,8 +188,8 @@ describe("CronService restart catch-up", () => {
         }),
       ],
       async (cron, deps) => {
-        expect(deps.enqueueSystemEvent).not.toHaveBeenCalled();
-        expect(deps.requestHeartbeat).not.toHaveBeenCalled();
+        expect(deps.enqueueSessionEvent).not.toHaveBeenCalled();
+        expect(deps.runSessionEvent).not.toHaveBeenCalled();
         const stored = cron.getJob("restart-job");
         expect(stored?.state.runningAtMs).toBeUndefined();
         expect(stored?.state).toMatchObject({
@@ -213,7 +226,16 @@ describe("CronService restart catch-up", () => {
         }),
       ],
       async (cron, deps) => {
-        expect(deps.enqueueSystemEvent).toHaveBeenCalledTimes(2);
+        expect(deps.runSessionEvent).not.toHaveBeenCalled();
+        expect(cron.getJob("recurring")?.state.queuedAtMs).toBeUndefined();
+        expect(cron.getJob("one-shot")?.state.queuedAtMs).toBeUndefined();
+        expect(cron.getJob("recurring")?.state.nextRunAtMs).toBe(time("2025-12-13T17:02:00Z"));
+        expect(cron.getJob("one-shot")?.state.nextRunAtMs).toBe(time("2025-12-13T17:02:05Z"));
+        vi.setSystemTime(time("2025-12-13T17:02:05Z"));
+        for (const id of ["recurring", "one-shot"]) {
+          await expect(cron.run(id, "due")).resolves.toMatchObject({ ok: true, ran: true });
+        }
+        expect(deps.runSessionEvent).toHaveBeenCalledTimes(2);
         expect(cron.getJob("recurring")).toMatchObject({
           enabled: true,
           state: { lastRunStatus: "ok" },
@@ -256,8 +278,8 @@ describe("CronService restart catch-up", () => {
         expect(recovered?.state.runningAtMs).toBeUndefined();
         expect(recovered?.state.nextRunAtMs).toBeUndefined();
         expect(recovered?.state.startupCatchupAtMs).toBeUndefined();
-        expect(deps.enqueueSystemEvent).not.toHaveBeenCalled();
-        expect(deps.requestHeartbeat).not.toHaveBeenCalled();
+        expect(deps.enqueueSessionEvent).not.toHaveBeenCalled();
+        expect(deps.runSessionEvent).not.toHaveBeenCalled();
         expect(deps.onEvent).toHaveBeenCalledWith(
           expect.objectContaining({
             jobId: "restart-job",
@@ -286,13 +308,22 @@ describe("CronService restart catch-up", () => {
         }),
       ],
       async (cron, deps) => {
-        expect(deps.enqueueSystemEvent).not.toHaveBeenCalled();
-        expect(deps.requestHeartbeat).not.toHaveBeenCalled();
+        expect(deps.enqueueSessionEvent).not.toHaveBeenCalled();
+        expect(deps.runSessionEvent).not.toHaveBeenCalled();
         expect(cron.getJob("restart-job")?.state.nextRunAtMs).toBe(time("2025-12-13T04:02:00Z"));
         cron.stop();
         vi.setSystemTime(time("2025-12-13T04:02:00Z"));
         await cron.start();
-        expect(deps.enqueueSystemEvent).toHaveBeenCalledExactlyOnceWith("tick", expect.anything());
+        expect(deps.runSessionEvent).not.toHaveBeenCalled();
+        expect(cron.getJob("restart-job")?.state.nextRunAtMs).toBe(time("2025-12-13T04:04:00Z"));
+        vi.setSystemTime(time("2025-12-13T04:04:00Z"));
+        await expect(cron.run("restart-job", "due")).resolves.toMatchObject({
+          ok: true,
+          ran: true,
+        });
+        expect(deps.runSessionEvent).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({ text: "tick" }),
+        );
       },
     );
   });
@@ -313,8 +344,8 @@ describe("CronService restart catch-up", () => {
         }),
       ],
       async (cron, deps) => {
-        expect(deps.enqueueSystemEvent).not.toHaveBeenCalled();
-        expect(deps.requestHeartbeat).not.toHaveBeenCalled();
+        expect(deps.enqueueSessionEvent).not.toHaveBeenCalled();
+        expect(deps.runSessionEvent).not.toHaveBeenCalled();
         expect(cron.getJob("restart-job")?.state.nextRunAtMs).toBe(time("2025-12-13T04:02:00Z"));
         expect(cron.getJob("restart-job")?.state.lastRunStatus).toBe("error");
         expect(cron.getJob("restart-job")?.state.lastStatus).toBeUndefined();
@@ -322,7 +353,7 @@ describe("CronService restart catch-up", () => {
     );
   });
 
-  it("stagger-limits overdue disabled-heartbeat one-shot retries after restart", async () => {
+  it("stagger-limits overdue failed one-shot retries after restart", async () => {
     const now = Date.now();
     const jobs = [now - 60_000, now - 45_000].map((nextRunAtMs, index) =>
       job({
@@ -334,9 +365,9 @@ describe("CronService restart catch-up", () => {
         state: {
           nextRunAtMs,
           lastRunAtMs: nextRunAtMs - 30_000,
-          lastRunStatus: "skipped",
-          lastError: "disabled",
-          consecutiveSkipped: 1,
+          lastRunStatus: "error",
+          lastError: "temporary timeout",
+          consecutiveErrors: 1,
         },
       }),
     );
@@ -346,15 +377,16 @@ describe("CronService restart catch-up", () => {
     });
     const state = createCronServiceState(deps);
     await runMissedJobs(state);
-    expect(deps.enqueueSystemEvent).toHaveBeenCalledExactlyOnceWith("retry-0", expect.anything());
-    expect(deps.requestHeartbeat).toHaveBeenCalledOnce();
+    expect(deps.runSessionEvent).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ text: "retry-0" }),
+    );
     expect((await loadCronStore(store.storePath)).jobs).toEqual([
       expect.objectContaining({
         id: "retry-1",
         enabled: true,
         state: expect.objectContaining({
-          lastRunStatus: "skipped",
-          lastError: "disabled",
+          lastRunStatus: "error",
+          lastError: "temporary timeout",
           nextRunAtMs: now + 5_000,
         }),
       }),

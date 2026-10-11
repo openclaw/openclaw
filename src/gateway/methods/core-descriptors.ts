@@ -641,6 +641,13 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   ["plugins.reload", "plugins-mutations", "operator.admin", "2026.9", CONTROL_PLANE_WRITE],
   ["claws.packages.remove", "claws-packages", "operator.admin", "2026.9", CONTROL_PLANE_WRITE],
   [
+    "claws.automations.mutate",
+    "claws-automations",
+    "operator.admin",
+    "2026.9",
+    CONTROL_PLANE_WRITE,
+  ],
+  [
     "claws.removalJournal",
     "claws-removal-journal",
     "operator.admin",

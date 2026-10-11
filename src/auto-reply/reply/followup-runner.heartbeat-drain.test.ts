@@ -41,7 +41,7 @@ vi.mock("./followup-delivery.js", () => ({
 
 const { createFollowupRunner } = await import("./followup-runner.js");
 const state = getFollowupTurnTestState();
-const key = "followup-heartbeat-drain";
+const key = "followup-source-options-drain";
 
 beforeEach(() => {
   vi.useFakeTimers();
@@ -53,7 +53,9 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-it("keeps heartbeat cleanup options out of a deferred queued user turn", async ({ signal }) => {
+it("keeps source-specific cleanup options out of a deferred queued user turn", async ({
+  signal,
+}) => {
   const firstStarted = createDeferred();
   const releaseFirst = createDeferred();
   const settled = createDeferred();
@@ -75,16 +77,14 @@ it("keeps heartbeat cleanup options out of a deferred queued user turn", async (
     defaultModel: "gpt-test",
     opts: {},
   });
-  const heartbeatRunner = createFollowupRunner({
+  const eventRunner = createFollowupRunner({
     typing,
     typingMode: "never",
     defaultModel: "gpt-test",
     opts: {
-      isHeartbeat: true,
-      useHeartbeatFailureCopy: true,
+      internalEventExecution: { onStarted() {}, onTerminal() {} },
+      onDeliberateSilentTerminalReply() {},
       cleanupBundleMcpOnRunEnd: true,
-      enableHeartbeatTool: true,
-      forceHeartbeatTool: true,
       sourceReplyDeliveryMode: "message_tool_only",
       bootstrapContextMode: "lightweight",
     },
@@ -109,15 +109,14 @@ it("keeps heartbeat cleanup options out of a deferred queued user turn", async (
   try {
     scheduleFollowupDrain(key, userRunner);
     await withinTest(firstStarted.promise, signal);
-    const { replyOperation: heartbeatOperation } = createMockReplyOperation({ key });
+    const { replyOperation: eventOperation } = createMockReplyOperation({ key });
     await cleanupReplyAgentRun({
       blockReplyPipeline: null,
       clearRestartRecoveryDeliveryClaim: async () => {},
-      isHeartbeat: true,
-      providedReplyOperation: heartbeatOperation,
+      providedReplyOperation: eventOperation,
       queueKey: key,
-      replyOperation: heartbeatOperation,
-      runFollowupTurn: heartbeatRunner,
+      replyOperation: eventOperation,
+      runFollowupTurn: eventRunner,
       sessionKey: key,
       shouldDrainQueuedFollowupsAfterClear: true,
       typing,
@@ -128,14 +127,12 @@ it("keeps heartbeat cleanup options out of a deferred queued user turn", async (
 
     expect(getExistingFollowupQueue(key)).toBeUndefined();
     expect(state.execute).toHaveBeenCalledTimes(2);
-    expect(retriedExecution).toMatchObject({
-      isHeartbeat: false,
-      opts: { isHeartbeat: false },
+    expect(retriedExecution?.opts).toMatchObject({
+      internalEventExecution: undefined,
+      scheduledAutomation: undefined,
     });
     for (const option of [
-      "enableHeartbeatTool",
-      "forceHeartbeatTool",
-      "useHeartbeatFailureCopy",
+      "onDeliberateSilentTerminalReply",
       "cleanupBundleMcpOnRunEnd",
       "bootstrapContextMode",
       "sourceReplyDeliveryMode",

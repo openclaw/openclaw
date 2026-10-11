@@ -165,8 +165,8 @@ it.each([
   },
 );
 
-it("reads ACP requester delivery and heartbeat routing from the bound actor", async () => {
-  const parentKey = await create(parent, "heartbeat", {
+it("reads ACP parent delivery without granting implicit relay to an ordinary session", async () => {
+  const parentKey = await create(parent, "relay", {
     delivery: {
       kind: "external",
       route: {
@@ -186,13 +186,13 @@ it("reads ACP requester delivery and heartbeat routing from the bound actor", as
       }),
     ).toMatchObject({ channel: "telegram", to: "123" });
     const requester = await resolveAcpSpawnRequesterState({
-      cfg: { agents: { defaults: { heartbeat: { every: "5m", target: "last" } } } },
+      cfg: {},
       parentSessionKey: parentKey,
       requesterAgentId: parent.agentId,
       ownerAgentId: sibling.agentId,
       ctx: {},
     });
-    expect(requester.heartbeatRelayRouteUsable).toBe(true);
+    expect(requester).toMatchObject({ isSubagentSession: false, sessionRelayRouteUsable: false });
   });
 });
 

@@ -72,7 +72,9 @@ describe("channel-inbound public helpers", () => {
     async (surface) => {
       const callback = vi.fn();
       const replyOptions = {
-        isHeartbeat: true,
+        onReplyStart: callback,
+        scheduledAutomation: { assertCurrent: callback },
+        modelOverride: "untrusted/model",
         internalEventExecution: { onStarted: callback },
         onReplyOperationOwned: callback,
       };
@@ -97,7 +99,9 @@ describe("channel-inbound public helpers", () => {
           dispatched = true;
           expect(params.replyOptions).not.toHaveProperty("internalEventExecution");
           expect(params.replyOptions).not.toHaveProperty("onReplyOperationOwned");
-          expect(params.replyOptions?.isHeartbeat).toBe(true);
+          expect(params.replyOptions).not.toHaveProperty("scheduledAutomation");
+          expect(params.replyOptions).not.toHaveProperty("modelOverride");
+          expect(params.replyOptions?.onReplyStart).toBe(callback);
           return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } };
         },
       };

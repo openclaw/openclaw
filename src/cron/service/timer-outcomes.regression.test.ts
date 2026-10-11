@@ -109,22 +109,17 @@ describe("cron timer outcome and failure policy regressions", () => {
       await saveCronStore(store.storePath, { version: 1, jobs });
 
       const order: string[] = [];
-      const enqueueSystemEvent = vi.fn(() => {
+      const enqueueSessionEvent = vi.fn(() => {
         const persisted = openOpenClawStateDatabase()
           .db.prepare("SELECT enabled FROM cron_jobs WHERE store_key = ? AND job_id = ?")
           .get(cronStoreKey(store.storePath), malformed.id) as { enabled: number };
         expect(persisted.enabled).toBe(0);
         order.push("notify");
       });
-      const requestHeartbeat = vi.fn(() => {
-        expect(order.at(-1)).toBe("notify");
-        order.push("heartbeat");
-      });
       const state = createCronServiceState({
         storePath: store.storePath,
         nowMs: () => now,
-        enqueueSystemEvent,
-        requestHeartbeat,
+        enqueueSessionEvent,
         runIsolatedAgentJob: createDefaultIsolatedRunner(),
       });
       if (path === "startup catch-up") {
@@ -133,7 +128,7 @@ describe("cron timer outcome and failure policy regressions", () => {
         await onTimer(state);
       }
 
-      expect(order).toEqual(["notify", "heartbeat"]);
+      expect(order).toEqual(["notify"]);
       expect(state.store?.jobs.find((job) => job.id === malformed.id)?.enabled).toBe(false);
       expect(
         (await loadCronStore(store.storePath)).jobs.find((job) => job.id === malformed.id),
@@ -144,7 +139,7 @@ describe("cron timer outcome and failure policy regressions", () => {
   it("records failure diagnostics and auto-disables on the tenth consecutive failure", async () => {
     const startedAt = Date.parse("2026-08-01T12:00:00.000Z");
     const deferredNotifications: DeferredCronNotifications = [];
-    const enqueueSystemEvent = vi.fn();
+    const enqueueSessionEvent = vi.fn();
     const sendCronFailureAlert = vi.fn(async () => undefined);
     const log = { ...noopLogger, warn: vi.fn() };
     const diagnostics = {
@@ -164,7 +159,7 @@ describe("cron timer outcome and failure policy regressions", () => {
       {
         state: { consecutiveErrors: 8 },
       },
-      { enqueueSystemEvent, sendCronFailureAlert, log },
+      { enqueueSessionEvent, sendCronFailureAlert, log },
     );
     job.failureAlert = { after: 10, cooldownMs: 0 };
 
@@ -219,7 +214,7 @@ describe("cron timer outcome and failure policy regressions", () => {
     });
     expect(deferredNotifications).toHaveLength(1);
     await runPostPersistCronNotifications(state, structuredClone(deferredNotifications));
-    expect(enqueueSystemEvent).toHaveBeenCalledOnce();
+    expect(enqueueSessionEvent).toHaveBeenCalledOnce();
     expect(sendCronFailureAlert).not.toHaveBeenCalled();
   });
 

@@ -180,7 +180,7 @@ describe("applyInlineDirectiveOverrides", () => {
       aliasIndex: { byAlias: new Map(), byKey: new Map() },
       provider: "openai",
       model: "gpt-5.5",
-      hasResolvedHeartbeatModelOverride: false,
+      hasResolvedTurnModelOverride: false,
       typing: createTypingController({}),
       opts,
     });

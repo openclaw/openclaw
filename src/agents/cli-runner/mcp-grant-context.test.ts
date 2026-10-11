@@ -36,7 +36,7 @@ function buildGrant(
 }
 
 describe("buildCliMcpGrantContext source-reply authority", () => {
-  it.each(["heartbeat", "cron-event", "exec-event"])(
+  it.each(["session-event", "cron-event", "exec-event"])(
     "keeps the reply channel separate from the %s turn source",
     (messageProvider) => {
       expect(buildGrant({ messageProvider, messageChannel: "telegram" }).messageProvider).toBe(

@@ -8,6 +8,11 @@ import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execu
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { prepareSystemAgentRunAdmission } from "../../agents/admitted-run-context.js";
 import { buildPreparedCliRunContext } from "../../agents/cli-runner.test-helpers.js";
+import { assertSessionEventTargetCurrent } from "../../auto-reply/reply/session-event-target.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import {
   replaceSessionEntry,
   replaceSessionEntrySync,
@@ -42,24 +47,24 @@ import type { GatewayRequestHandlerOptions } from "./types.js";
 const { toolsEffectiveInventoryMocks } = await import("./tools-effective.test-support.js");
 const { testing, toolsEffectiveHandlers } = await import("./tools-effective.js");
 
-const { cfg, heartbeat, prepareRegistry, ingress } = vi.hoisted(() => ({
+const { cfg, enqueueEvent, prepareRegistry, ingress } = vi.hoisted(() => ({
   cfg: {
     agents: { entries: { main: {}, native: {}, sibling: {} } },
     gateway: { terminal: { enabled: true } },
   },
-  heartbeat: vi.fn(),
+  enqueueEvent:
+    vi.fn<
+      typeof import("../../auto-reply/reply/session-event-handoff.js").enqueueSessionEventForHost
+    >(),
   ingress: vi.fn(async () => {}),
   prepareRegistry: vi.fn(async () => false),
 }));
 // mock-isolation: Exercise Gateway admission and actor persistence without running a model turn.
 vi.mock("../../commands/agent.js", () => ({ agentCommandFromIngress: ingress }));
-vi.mock("../../config/io.js", async (original) => ({
-  ...(await original<typeof import("../../config/io.js")>()),
-  getRuntimeConfig: () => cfg,
-}));
-vi.mock("../../infra/heartbeat-wake.js", async (original) => ({
-  ...(await original<typeof import("../../infra/heartbeat-wake.js")>()),
-  requestHeartbeat: heartbeat,
+// mock-isolation: Keep real target capture and authority checks; stop before model execution.
+vi.mock("../../auto-reply/reply/session-event-handoff.js", async (original) => ({
+  ...(await original<typeof import("../../auto-reply/reply/session-event-handoff.js")>()),
+  enqueueSessionEventForHost: enqueueEvent,
 }));
 vi.mock("../../agents/subagents/registry/subagent-registry-state.js", async (original) => ({
   ...(await original<
@@ -91,6 +96,7 @@ function request(method: string, params: Record<string, unknown>): GatewayReques
 beforeAll(async () => {
   env = { OPENCLAW_STATE_DIR: dirs.make("incognito-session-controls-") };
   vi.stubEnv("OPENCLAW_STATE_DIR", env.OPENCLAW_STATE_DIR);
+  setRuntimeConfigSnapshot(cfg, cfg);
   const opened = await captureOpenClawAgentDatabaseExecution({
     kind: "ephemeral",
     agentId: "main",
@@ -102,13 +108,26 @@ beforeAll(async () => {
 });
 beforeEach(() => {
   vi.stubEnv("OPENCLAW_STATE_DIR", env.OPENCLAW_STATE_DIR);
+  setRuntimeConfigSnapshot(cfg, cfg);
+  enqueueEvent.mockReset().mockImplementation((_text, options) => {
+    options.assertAcceptanceCurrent?.();
+    if (options.expectedTarget) {
+      assertSessionEventTargetCurrent(options.expectedTarget);
+    }
+    return {
+      id: "incognito-control-event",
+      cancel: () => false,
+      accepted: Promise.resolve({ ok: true }),
+      settled: Promise.resolve({ status: "completed", executionStarted: true, delivered: false }),
+    };
+  });
 });
 afterEach(() => {
   testing.resetToolsEffectiveCacheForTest();
   toolsEffectiveInventoryMocks.resolveEffectiveToolInventory.mockClear();
-  heartbeat.mockClear();
   ingress.mockClear();
   resetSystemEventsForTest();
+  clearRuntimeConfigSnapshot();
   vi.restoreAllMocks();
 });
 afterAll(async () => {
@@ -285,8 +304,16 @@ it("routes actor system wakes and parent approval audiences without host SQL", a
       ]);
     });
     expect(options.respond).toHaveBeenCalledWith(true, { ok: true }, undefined);
-    expect(peekSystemEvents(child)).toEqual(["Synthetic wake"]);
-    expect(heartbeat).toHaveBeenCalledWith(expect.objectContaining({ sessionKey: child }));
+    expect(peekSystemEvents(child)).toEqual([]);
+    expect(enqueueEvent).toHaveBeenCalledExactlyOnceWith(
+      "Synthetic wake",
+      expect.objectContaining({
+        source: "session",
+        agentId: "main",
+        sessionKey: child,
+        expectedTarget: expect.objectContaining({ sessionId: "child" }),
+      }),
+    );
     expect(host.queries).toEqual([]);
   } finally {
     host.restore();
@@ -344,7 +371,16 @@ it.each(["agent:native:dashboard:incognito-native-controls", "agent:native:contr
     const options = request("system-event", { text: "Native wake", sessionKey, wake: true });
     await systemHandlers["system-event"]!(options);
     expect(options.respond).toHaveBeenCalledWith(true, { ok: true }, undefined);
-    expect(peekSystemEvents(sessionKey)).toEqual(["Native wake"]);
+    expect(peekSystemEvents(sessionKey)).toEqual([]);
+    expect(enqueueEvent).toHaveBeenCalledExactlyOnceWith(
+      "Native wake",
+      expect.objectContaining({
+        source: "session",
+        agentId: "native",
+        sessionKey,
+        expectedTarget: expect.objectContaining({ sessionId: sessionKey }),
+      }),
+    );
     expect(captureOpenClawAgentDatabaseExecution.listIncognito(env)).toEqual(before);
   },
 );

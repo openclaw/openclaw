@@ -26,6 +26,7 @@ import type { DirectBlockDelivery } from "./reply-delivery.js";
 
 type AgentFallbackRunContext = {
   preparedRunAdmission: PreparedAgentRunAdmission;
+  scheduledMessageActionTurnCapability?: string;
   turn: AgentTurnParams;
   runtimeConfig: OpenClawConfig;
   runId: string;

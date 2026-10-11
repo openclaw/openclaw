@@ -1390,7 +1390,7 @@ describe("sender command dispatch ownership", () => {
         aliasIndex: { byAlias: new Map(), byKey: new Map() },
         provider: "openai",
         model: "gpt-4o-mini",
-        hasResolvedHeartbeatModelOverride: false,
+        hasResolvedTurnModelOverride: false,
         typing,
       });
       expect(directiveResult.kind).toBe("continue");

@@ -136,7 +136,6 @@ async function setup() {
     cronEnabled: false,
     log: createNoopLogger(),
     enqueueSystemEvent() {},
-    requestHeartbeat() {},
     runIsolatedAgentJob: async () => ({ status: "ok" }),
   });
   const created = await cron.add(

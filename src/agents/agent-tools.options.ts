@@ -55,8 +55,6 @@ export type OpenClawCodingToolsOptions = {
   trace?: DiagnosticTraceContext;
   /** What initiated this run (for trigger-specific tool restrictions). */
   trigger?: string;
-  /** Heartbeat-transported turn that continues a conversation (its own command completion). */
-  continuesConversation?: boolean;
   /** Stable cron job identifier populated for cron-triggered runs. */
   jobId?: string;
   /** Relative workspace path that memory-triggered writes may append to. */
@@ -103,8 +101,6 @@ export type OpenClawCodingToolsOptions = {
   skillInstructionDeliveryCache?: SkillInstructionDeliveryCache;
   /** Keep the message tool available even when the selected profile omits it. */
   forceMessageTool?: boolean;
-  /** Keep the heartbeat response tool available even when the selected profile omits it. */
-  forceHeartbeatTool?: boolean;
   /** If false, build plugin tools only while preserving the shared policy pipeline. */
   includeCoreTools?: boolean;
   /** Include Tool Search control tools when enabled for this run. */

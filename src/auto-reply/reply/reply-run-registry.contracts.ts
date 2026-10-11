@@ -23,7 +23,7 @@ import type { ReplyOperationStaleReason } from "./reply-run-finalization-lease.j
 
 export type ReplyBackendCancelReason = "user_abort" | "restart" | "superseded";
 
-export type ReplyTurnKind = "visible" | "heartbeat" | "queued_followup";
+export type ReplyTurnKind = "visible" | "background" | "queued_followup";
 
 export type ReplyBackendQueueMessageOptions = {
   /** Prepared context for this queue item, separate from its transcript and answer text. */

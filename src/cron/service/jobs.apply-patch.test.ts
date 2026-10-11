@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import { resolveCronDeliveryPlan, resolveFailureDestination } from "../delivery-plan.js";
 import { projectCronJobThroughStorageCodec } from "../store/row-codec.js";
 import type { CronJob, CronJobCreate, CronJobPatch } from "../types.js";
-import { applyJobPatch, createJob } from "./jobs.js";
+import { applyDeclarativeJobSpec, applyJobPatch, createJob } from "./jobs.js";
 
 function makeJob(overrides: Partial<CronJob> = {}): CronJob {
   const now = Date.now();
@@ -23,6 +23,59 @@ function makeJob(overrides: Partial<CronJob> = {}): CronJob {
     ...overrides,
   };
 }
+
+describe("automation execution policy", () => {
+  it("preserves execution policy through declaration convergence and clears omitted fields", () => {
+    const job = makeJob({ delivery: { mode: "none" } });
+    const input: CronJobCreate = {
+      ...job,
+      activeHours: { start: "08:00", end: "24:00", timezone: "UTC" },
+      idleOnly: true,
+      payload: {
+        kind: "agentTurn",
+        message: "Read scratch.",
+        skipIfScratchEmpty: true,
+        includeReasoning: true,
+      },
+    };
+
+    applyDeclarativeJobSpec(job, input, { enabledExplicit: false, nowMs: job.createdAtMs });
+
+    expect(projectCronJobThroughStorageCodec(job)).toMatchObject({
+      activeHours: input.activeHours,
+      idleOnly: true,
+      payload: input.payload,
+    });
+    const { activeHours: _activeHours, idleOnly: _idleOnly, ...withoutPolicy } = input;
+    applyDeclarativeJobSpec(job, withoutPolicy, {
+      enabledExplicit: false,
+      nowMs: job.createdAtMs,
+    });
+    expect(job.activeHours).toBeUndefined();
+    expect(job.idleOnly).toBeUndefined();
+  });
+
+  it("updates and clears policy while retaining omitted payload choices", () => {
+    const job = makeJob();
+    applyJobPatch(job, {
+      activeHours: { start: "22:00", end: "06:00" },
+      idleOnly: true,
+      payload: { kind: "agentTurn", skipIfScratchEmpty: true, includeReasoning: true },
+    });
+    expect(job.activeHours).toEqual({ start: "22:00", end: "06:00" });
+    expect(job.idleOnly).toBe(true);
+    expect(job.payload).toMatchObject({ skipIfScratchEmpty: true, includeReasoning: true });
+
+    applyJobPatch(job, {
+      activeHours: null,
+      idleOnly: null,
+      payload: { kind: "agentTurn", includeReasoning: false },
+    });
+    expect(job.activeHours).toBeUndefined();
+    expect(job.idleOnly).toBeUndefined();
+    expect(job.payload).toMatchObject({ skipIfScratchEmpty: true, includeReasoning: false });
+  });
+});
 
 describe("applyJobPatch schedule retention", () => {
   it.each([
@@ -147,6 +200,49 @@ describe("schedule activation ownership", () => {
 });
 
 describe("applyJobPatch delivery merge", () => {
+  it("sets and clears owner delivery without requiring a channel before execution", () => {
+    const job = makeJob({ delivery: undefined });
+
+    applyJobPatch(
+      job,
+      { delivery: { target: "owner", directPolicy: "block" } },
+      { configuredChannels: ["telegram", "slack"] },
+    );
+    expect(job.delivery).toEqual({ mode: "announce", target: "owner", directPolicy: "block" });
+
+    applyJobPatch(job, { delivery: { target: null, directPolicy: null } });
+    expect(job.delivery).toEqual({ mode: "announce" });
+  });
+
+  it.each([{ to: "recipient-1" }, { threadId: 42 }])(
+    "rejects conflicting destinations on owner delivery: %j",
+    (delivery) => {
+      const job = makeJob({ delivery: { mode: "announce", target: "owner" } });
+      expect(() => applyJobPatch(job, { delivery })).toThrow(
+        "cron owner delivery cannot specify a recipient or thread",
+      );
+    },
+  );
+
+  it("clears chat-only delivery policy when switching an owner route to a webhook", () => {
+    const job = makeJob({
+      delivery: {
+        mode: "announce",
+        target: "owner",
+        directPolicy: "block",
+        channel: "telegram",
+        accountId: "bot-a",
+      },
+    });
+
+    applyJobPatch(job, { delivery: { mode: "webhook", to: "https://example.test/result" } });
+
+    expect(projectCronJobThroughStorageCodec(job).delivery).toEqual({
+      mode: "webhook",
+      to: "https://example.test/result",
+    });
+  });
+
   it("threads explicit delivery threadId patches into delivery", () => {
     const job = makeJob();
     const patch = { delivery: { threadId: "99" } } as Parameters<typeof applyJobPatch>[1];
@@ -196,7 +292,7 @@ describe("applyJobPatch delivery merge", () => {
     const job = makeJob({ delivery: undefined });
 
     applyJobPatch(job, {
-      delivery: { channel: null },
+      delivery: { channel: null, target: null, directPolicy: null },
     });
 
     expect(job.delivery).toBeUndefined();
@@ -252,6 +348,8 @@ describe("applyJobPatch delivery merge", () => {
     existingDelivery?: CronJob["delivery"];
   }>([
     { name: "announce mode", delivery: { mode: "announce" } },
+    { name: "owner target", delivery: { target: "owner" } },
+    { name: "direct delivery policy", delivery: { directPolicy: "block" } },
     { name: "channel", delivery: { channel: "telegram" } },
     { name: "recipient", delivery: { to: "123" } },
     {

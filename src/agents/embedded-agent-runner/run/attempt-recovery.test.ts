@@ -380,6 +380,30 @@ describe("recoverEmbeddedRunAttempt", () => {
     },
   );
 
+  it("leaves a provider compaction checkpoint with its terminal continuation owner", async () => {
+    const { recovery, continueFromCurrentTranscript, failoverRetryController } =
+      await recoverAfterTransportDrop({
+        noTools: true,
+        assistant: buildEmbeddedRunnerAssistant({
+          stopReason: "length",
+          content: [],
+          providerReplay: {
+            v: 1,
+            type: "openai-responses-compaction",
+            id: "cmp-output-limit",
+            data: "opaque-compaction",
+            provider: "openai",
+            api: "openai-responses",
+            model: "mock-1",
+            baseUrlHash: "base-url-hash",
+          },
+        }),
+      });
+    expect(recovery).toEqual({ action: "proceed" });
+    expect(continueFromCurrentTranscript).not.toHaveBeenCalled();
+    expect(failoverRetryController.transientRetryCount).toBe(0);
+  });
+
   it("routes a zero-output length overflow to compaction before output retries", async () => {
     await expect(
       recoverAfterTransportDrop({

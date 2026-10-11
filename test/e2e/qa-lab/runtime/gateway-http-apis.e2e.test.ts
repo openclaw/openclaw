@@ -6,6 +6,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { createConfigIO, resetConfigRuntimeState } from "../../../../src/config/config.js";
 import { resolveMainSessionKeyFromConfig } from "../../../../src/config/sessions.js";
+import { saveCronJobsStore } from "../../../../src/cron/store.js";
 import {
   agentCommandMock,
   getGatewayTestPort,
@@ -14,6 +15,7 @@ import {
   testState,
 } from "../../../../src/gateway/test-helpers.js";
 import { peekSystemEventEntries } from "../../../../src/infra/system-events.js";
+import { captureEnv, setTestEnvValue } from "../../../../src/test-utils/env.js";
 
 installGatewayTestHooks();
 
@@ -86,6 +88,7 @@ async function fetchJson(port: number, pathname: string, init?: RequestInit) {
 describe("Gateway HTTP API product proof", () => {
   it("serves OpenAI-compatible, tool invocation, and hook ingress APIs over TCP", async () => {
     const embeddingFixture = await startEmbeddingFixture();
+    const envSnapshot = captureEnv(["OPENCLAW_SKIP_CRON"]);
     let gateway: Awaited<ReturnType<typeof startTestGatewayServer>> | undefined;
 
     try {
@@ -120,6 +123,31 @@ describe("Gateway HTTP API product proof", () => {
         },
       };
       testState.hooksConfig = { enabled: true, token: HOOK_TOKEN };
+      const cronStorePath = path.join(path.dirname(configPath), "cron", "qa-http-jobs.json");
+      const nowMs = Date.now();
+      const nextRunAtMs = nowMs + 3_600_000;
+      await saveCronJobsStore(cronStorePath, {
+        version: 1,
+        jobs: [
+          {
+            id: "qa-http-hook-receiver",
+            agentId: "main",
+            name: "HTTP hook notices",
+            enabled: true,
+            createdAtMs: nowMs,
+            updatedAtMs: nowMs,
+            schedule: { kind: "at", at: new Date(nextRunAtMs).toISOString() },
+            sessionTarget: "main",
+            wakeMode: "now",
+            payload: { kind: "agentTurn", message: "Review scheduled notices." },
+            delivery: { mode: "none" },
+            state: { nextRunAtMs },
+          },
+        ],
+      });
+      testState.cronStorePath = cronStorePath;
+      testState.cronEnabled = true;
+      setTestEnvValue("OPENCLAW_SKIP_CRON", "0");
       agentCommandMock
         .mockResolvedValueOnce({ payloads: [{ text: "qa chat response" }] } as never)
         .mockResolvedValueOnce({ payloads: [{ text: "qa responses response" }] } as never);
@@ -279,6 +307,7 @@ describe("Gateway HTTP API product proof", () => {
     } finally {
       await gateway?.close({ reason: "Gateway HTTP API QA proof complete" });
       await embeddingFixture.close();
+      envSnapshot.restore();
     }
   }, 60_000);
 });

@@ -537,7 +537,7 @@ rereads `app/installed` once with the resulting thread ID and
 non-callable, OpenClaw logs one warning listing the unavailable apps and
 continues with the remaining tools. Codex still enforces the thread's effective
 app, managed, workspace, and tool policies. An unavailable optional app does
-not block unrelated chat or heartbeat runs.
+not block unrelated chat or automation runs.
 
 If the snapshot request itself fails, the provisional thread is never bound
 or used. OpenClaw deletes a failed persistent provisional thread, unsubscribes

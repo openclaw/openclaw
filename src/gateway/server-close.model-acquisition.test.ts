@@ -244,7 +244,6 @@ it.each(["static catalog", "synthetic auth"] as const)(
       defaults: {
         workspace: fixture.state.workspaceDir,
         model: `${provider}/model`,
-        heartbeat: { agentId: "main" },
         systemAgent: { agentId: "main" },
       },
       entries: {

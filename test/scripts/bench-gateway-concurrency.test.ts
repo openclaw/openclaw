@@ -2257,7 +2257,7 @@ syncBuiltinESMExports();\n`,
             config: { dreaming: { enabled: false } },
           });
           expect(config.agents.defaults.maxConcurrent).toBe(1);
-          expect(config.agents.defaults.heartbeat).toEqual({ every: "0m" });
+          expect(config.agents.defaults).not.toHaveProperty("heartbeat");
           if (liveFailure) {
             expect(Object.keys(config.agents.entries)).toEqual(["main"]);
             expect(config.models.providers.openai.apiKey).toEqual({

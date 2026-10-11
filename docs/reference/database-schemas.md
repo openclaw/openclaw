@@ -44,6 +44,11 @@ registrations or unpublished facts remain unknown until the transaction closes;
 schema readers retain their conservative snapshot validation. The next read
 outside the transaction can refresh those facts through the existing owner.
 
+Current shared state uses [schema 21](/reference/database-schemas/state-schema-history#state-schema-21),
+which fences ordinary automation policies after Heartbeat retirement without adding
+tables. The agent schema remains 25. Deferred physical cleanup is recorded in the
+[state storage README](https://github.com/openclaw/openclaw/blob/main/src/state/README.md).
+
 Native SQLite initialization reads the loaded library's version and extension
 capability in one query before admitting real state databases. Auth-profile
 readers install their lock-wait timeout at connection open.

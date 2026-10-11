@@ -9,8 +9,6 @@ import {
 } from "openclaw/plugin-sdk/channel-ingress-test-runtime";
 import { createMessageReceiptFromOutboundResults } from "openclaw/plugin-sdk/channel-outbound";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
-// Slack helper module supports monitor helpers behavior.
-import type { PluginRuntime } from "openclaw/plugin-sdk/core";
 import type { PluginServiceSchedulerV1 } from "openclaw/plugin-sdk/plugin-entry";
 import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
@@ -408,20 +406,21 @@ export async function resetSlackTestState(
   );
   lastSlackTestStateDir = stateDir;
   process.env.OPENCLAW_STATE_DIR = stateDir;
-  setSlackRuntime({
-    channel: createPluginRuntimeMock().channel,
-    state: {
-      openChannelIngressQueue: (
-        options?: Omit<Parameters<typeof createChannelIngressQueueForTests>[0], "channelId">,
-      ) =>
-        createChannelIngressQueueForTests({
-          ...options,
-          channelId: "slack",
-          stateDir: options?.stateDir ?? stateDir,
-        }),
-      resolveStateDir: () => stateDir,
-    },
-  } as unknown as PluginRuntime);
+  setSlackRuntime(
+    createPluginRuntimeMock({
+      state: {
+        openChannelIngressQueue: (
+          options?: Omit<Parameters<typeof createChannelIngressQueueForTests>[0], "channelId">,
+        ) =>
+          createChannelIngressQueueForTests({
+            ...options,
+            channelId: "slack",
+            stateDir: options?.stateDir ?? stateDir,
+          }),
+        resolveStateDir: () => stateDir,
+      },
+    }),
+  );
   slackTestState.config = config;
   slackTestState.appConstructorArgs = undefined;
   slackTestState.appConstructed = createSlackTestEvent();

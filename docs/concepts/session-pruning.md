@@ -94,8 +94,8 @@ history. Old results retain their projected bytes through
 tool loops and restarts. Original
 text and non-text content stay in the transcript. Compaction drops projections
 for results no longer in the active history; `/new` and session reset
-start without the old session's projections. Cache-TTL marker timestamps still
-support the existing cache and heartbeat bookkeeping.
+start without the old session's projections. Cache-TTL marker timestamps remain
+part of cache bookkeeping; they do not create a recurring schedule.
 
 Two safety rules apply regardless of thresholds: the last three assistant turns are never pruned, and nothing before the session's first user message is ever pruned (protects bootstrap reads like `SOUL.md`/`USER.md`). The size thresholds and trim windows above are built-in behavior, not config keys; the configurable surface is `agents.defaults.contextPruning` (`mode`, `ttl`, `tools`, `hardClear`).
 
@@ -114,17 +114,21 @@ attachments for history viewers.
 
 ## Smart defaults
 
-The bundled Anthropic plugin auto-configures pruning and heartbeat cadence the first time it resolves an Anthropic (or Claude CLI) auth profile, but only for fields you have not already set explicitly:
-
-| Auth mode                                | `contextPruning.mode` | `contextPruning.ttl` | `heartbeat.every` |
-| ---------------------------------------- | --------------------- | -------------------- | ----------------- |
-| OAuth/token (including Claude CLI reuse) | `cache-ttl`           | `1h`                 | `1h`              |
-| API key                                  | `cache-ttl`           | `1h`                 | `30m`             |
-
-If you set `agents.defaults.contextPruning.mode` or `agents.defaults.heartbeat.every` yourself, OpenClaw does not override them. This auto-default only fires for Anthropic-family auth; other providers get pruning `off` unless you configure it.
+The bundled Anthropic plugin seeds `contextPruning.mode: "cache-ttl"` when it
+resolves Anthropic or Claude CLI authentication and no pruning mode is authored.
+It uses a `1h` TTL unless you already set one. An explicit
+`agents.defaults.contextPruning.mode` is preserved. This default applies only to
+Anthropic-family auth; other providers get pruning `off` unless you configure it.
 
 The seeded `ttl` applies to client-side pruning. Direct Anthropic API-key requests
-use the token thresholds above while retaining the same heartbeat defaults.
+use the token thresholds above.
+
+Proactive scheduling is separate. When explicit setup provisions the ambient
+owner's ordinary automation job, the selected Anthropic provider supplies a
+one-hour initial interval for OAuth/token auth (including Claude CLI reuse) or
+30 minutes for API-key auth. It does not write heartbeat config or overwrite an
+existing job's cadence. Edit the job with `openclaw automations edit <job-id>
+--every <duration>`; see [Heartbeat migration](/gateway/heartbeat).
 
 ## Enable or disable
 

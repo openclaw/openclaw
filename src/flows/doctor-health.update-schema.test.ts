@@ -135,7 +135,7 @@ describe("Doctor schema bumps under an updating parent", () => {
         const doctor = runDoctorHealthFlow(runtime, { repair: true, nonInteractive: true });
         if (damage === "orphan") {
           await doctor;
-          expect(readDatabase(shared).version).toBe(20);
+          expect(readDatabase(shared).version).toBe(OPENCLAW_STATE_SCHEMA_VERSION);
           const migrationBackup = fs
             .readdirSync(path.dirname(shared))
             .find(

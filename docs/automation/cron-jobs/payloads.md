@@ -17,12 +17,12 @@ Every job carries exactly one payload kind, chosen by flag:
 
 | Payload       | Flag                                           | Runs                                                       |
 | ------------- | ---------------------------------------------- | ---------------------------------------------------------- |
-| System event  | `--system-event <text>`                        | Enqueued into the main session, no model call by itself    |
+| System event  | `--system-event <text>`                        | An ordinary agent turn in the owning agent's main session  |
 | Agent message | `--message <text>`                             | A model-backed agent turn                                  |
 | Command       | `--command <shell>` or `--command-argv <json>` | A shell/process on the Gateway host, no model call         |
 | Script        | `--script <file\|->`                           | A headless code-mode script using the owning agent's tools |
 
-System-owned monitor jobs are gateway-converged and cannot be created or edited through the CLI or API. The `heartbeat` kind creates one heartbeat monitor job per heartbeat-enabled agent (see [Heartbeat](/gateway/heartbeat)). Monitor jobs appear in `openclaw cron list`; use `--all` to include disabled rows.
+Former heartbeat monitors migrate to ordinary editable `agentTurn` jobs (see [Heartbeat migration](/gateway/heartbeat)); `heartbeat` is no longer an accepted job payload. Jobs appear in `openclaw automations list`; use `--all` to include disabled rows.
 
 The weekly Skill Workshop curator (declaration key `skill-collection-review:<agentId>`, and the older `skillCollectionReview` payload kind) is retired. The Gateway deletes those stored rows when it loads the cron store and creates no replacement; the declaration-key namespace stays reserved. Learned-skill cleanup now runs without a schedule; see [Unused-skill cleanup](/tools/skill-workshop#unused-skill-cleanup).
 
@@ -35,7 +35,7 @@ The weekly Skill Workshop curator (declaration key `skill-collection-review:<age
   Model override; must resolve to an allowed model or the run fails with a validation error.
 </ParamField>
 <ParamField path="--fallbacks" type="string">
-  Per-job fallback model list, for example `--fallbacks openai/gpt-6-astra,openrouter/meta-llama/llama-3.3-70b-instruct:free`. Pass `--fallbacks ""` for a strict run with no fallbacks.
+  Per-job fallback model list, for example `--fallbacks openai/gpt-5.6-sol,openrouter/meta-llama/llama-3.3-70b-instruct:free`. Pass `--fallbacks ""` for a strict run with no fallbacks.
 </ParamField>
 <ParamField path="--clear-fallbacks" type="boolean">
   On `automations edit`, removes the per-job fallback override so the job follows configured fallback precedence. Cannot combine with `--fallbacks`.
@@ -51,6 +51,12 @@ The weekly Skill Workshop curator (declaration key `skill-collection-review:<age
 </ParamField>
 <ParamField path="--light-context" type="boolean">
   Skip workspace bootstrap file injection.
+</ParamField>
+<ParamField path="--skip-if-scratch-empty" type="boolean">
+  Skip an agent turn when its stored scratch is explicitly empty. Missing scratch still runs. Use `--no-skip-if-scratch-empty` to turn this off.
+</ParamField>
+<ParamField path="--include-reasoning" type="boolean">
+  Include reasoning returned by the agent in delivery. Use `--no-include-reasoning` to keep it out of delivery. This is separate from the model's thinking level.
 </ParamField>
 <ParamField path="--tools" type="string">
   Restrict which tools the job can use, for example `--tools exec,read`. Pass `--tools ""` for an empty allowlist that disables all agent tools, including tools used by a condition trigger.
@@ -185,6 +191,50 @@ Before an isolated run starts, OpenClaw checks reachable local endpoints for con
 
 Client-side preflight timeouts are not cached. The next scheduled run checks the endpoint again instead of inheriting a timeout from another run.
 
+### Job scratch and quiet results
+
+Each job can keep private task context in scratch stored in the shared state
+database, capped at 256 KiB. Present scratch is injected into the job's bounded
+run context. It is omitted from job lists, full job definitions, and run-history
+responses.
+
+<Warning>
+Do not put API keys, tokens, or other secrets in scratch. It becomes model prompt
+context even though it is omitted from job-list and history responses.
+</Warning>
+
+```bash
+openclaw automations scratch <job-id> --set "Check only for newly blocked work."
+openclaw automations scratch <job-id> --json
+```
+
+Scratch updates use revision compare-and-swap. The CLI reads the current revision
+before writing; `--expected-revision <n>` pins a known revision. During an
+automation turn, the `automations` tool exposes self-scoped `scratch_get`,
+`scratch_set`, and `record_result` actions. They do not grant access to another
+job's scratch or settings.
+
+`scratch_get` returns content and the current revision. `scratch_set` replaces
+the complete content, or clears it with `null`, and requires `expectedRevision`
+from that read. If the prompt says scratch was shortened, reread the complete
+content before replacing it. On a revision conflict, read again and reconcile
+the content instead of overwriting another edit.
+
+Use a normal final reply for a visible result and `NO_REPLY` for silence.
+`record_result` accepts one outcome (`no_change`, `progress`, `done`, `blocked`,
+or `needs_attention`) and a nonempty summary capped at 2000 characters. It records
+the result without sending a notification by itself. Meaningful outcomes are
+retained in ordinary run history and bounded session context, including when the
+final reply is silent; this is not a delivery retry queue. `no_change` keeps
+runner delivery silent. Adaptive scheduling still uses `next_check` on a paced
+job. Scratch is context, not another scheduler:
+runtime does not parse `tasks:` blocks or read `HEARTBEAT.md`.
+
+With `payload.skipIfScratchEmpty: true` (`--skip-if-scratch-empty`), blank text,
+comments, headings, fence markers, and empty checklist stubs count as an empty
+checklist. Removing scratch with `--unset` is different: missing scratch does
+not suppress a run. Disable the job when it should stop regardless of scratch.
+
 ### Command payloads
 
 Command payloads run deterministic scripts inside the Gateway scheduler without starting a model-backed turn. They execute on the Gateway host, capture stdout/stderr, record the run in the job's run history, and reuse the same `announce`, `webhook`, and `none` delivery modes as agent-turn jobs.
@@ -234,7 +284,7 @@ Script payloads can call configured MCP server tools as `MCP.<server>.<tool>({ .
 The script may return an object with these optional fields:
 
 - `notify`: Text delivered through the job's `announce`, `webhook`, or `none` delivery mode. If omitted, nothing is delivered. For a `main` job, the text becomes a system event.
-- `wake`: `"now"` requests an immediate heartbeat after enqueueing `notify` (or a compact completion event); `"next-heartbeat"` enqueues the event for the next heartbeat.
+- `wake`: `"now"` requests immediate session processing of `notify` (or a compact completion event). The legacy `"next-heartbeat"` value defers to a valid scheduled target; it does not start a separate heartbeat engine.
 - `state`: JSON state, capped at 16 KB and persisted only after a successful run. The next run receives a frozen copy as `trigger.state`, matching trigger scripts. Because that namespace has one persisted owner, a script payload cannot be combined with a condition trigger on the same job.
 - `nextCheck`: A duration such as `"15m"`. It is valid only for jobs with pacing enabled and uses the same pacing clamp as agent-turn proposals.
 
@@ -298,13 +348,13 @@ only when it needs Codex app access. See
 | Current session | `current`           | Detached; commits to the creation-bound conversation | Context-aware recurring work    |
 | Custom session  | `session:custom-id` | Persistent named session                             | Workflows that build on history |
 
-Agent-turn jobs default to the creating conversation when the create request carries session context. Callers without a session key, including CLI and API callers that do not supply one, fall back to `isolated`. System events and heartbeats still default to `main`; command and script payloads still default to `isolated`.
+Agent-turn jobs default to the creating conversation when the create request carries session context. Callers without a session key, including CLI and API callers that do not supply one, fall back to `isolated`. System events default to `main`; command and script payloads default to `isolated`.
 
 With `announce`, agent, command, and script results belong to the chat or topic that receives them. A different delivery destination gets the result instead of the creating conversation; without an external route, the creating conversation receives it. An isolated run still does not read that conversation's history. See [Automation delivery](/automation/cron-jobs/delivery) for generation checks and duplicate prevention.
 
 <AccordionGroup>
   <Accordion title="Main session vs current vs isolated vs custom">
-    **Main session** jobs enqueue a system event into the owning agent's main session and optionally wake the heartbeat (`--wake now` or `--wake next-heartbeat`). The event is processed with that session's existing context and last delivery context. Internal automation turns do not extend daily or idle reset freshness; only visible user activity updates session freshness. **Current-session** jobs execute in a detached run session, read a bounded tail of the conversation captured when the job was created, and deliver the final visible assistant result to the resolved destination (the creating conversation when no external route is configured). **Isolated** jobs run a dedicated agent turn with a fresh session. **Custom sessions** (`session:xxx`) persist context across runs, enabling workflows like daily standups that build on previous summaries.
+    **Main session** jobs submit their system event through the owning agent's normal session execution when due. Execution settles before the job reports its final result; no periodic monitor is needed. The deprecated stored `wakeMode` field does not add another deferral step. The event uses the session's existing context and delivery route. Internal automation turns do not extend daily or idle reset freshness; only visible user activity updates session freshness. **Current-session** jobs execute in a detached run session, read a bounded tail of the conversation captured when the job was created, and deliver the final visible assistant result to the resolved destination (the creating conversation when no external route is configured). **Isolated** jobs run a dedicated agent turn with a fresh session. **Custom sessions** (`session:xxx`) persist context across runs, enabling workflows like daily standups that build on history.
 
     `current` binds conversation context, not the original agent execution or its worktree; announce results belong to the resolved delivery destination. The detached run has its own session identity and uses the scheduled agent's workspace and captured tool restrictions. It does not inherit the conversation's cloud worker placement. Messages sent to the job's cron session address its latest detached run, independently of the bound conversation. In-flight turns sent through that stable cron key are canceled if the key is reassigned. A task-specific checkout path in the prompt does not grant access to it. Before using a job to continue repository work, verify that its execution environment can access the required checkout and tools; otherwise keep the work with its existing execution owner. A result committed to the conversation does not itself resume the original agent.
 
@@ -314,7 +364,7 @@ With `announce`, agent, command, and script results belong to the chat or topic 
 
     Custom-session agent turns use the existing session’s saved workspace and working directory, including its managed worktree. Requester-scoped jobs may use a saved workspace only for their owning conversation; trusted operator-scheduled jobs can target another conversation’s saved workspace. A missing, retired, or mismatched worktree stops the run instead of falling back to the agent’s default workspace. Filesystem containment and the job’s tool restrictions still apply; a path in the job prompt does not grant access. Persistent-session rollover keeps the saved workspace binding, permission mode, containment root, and inherited tool restrictions; detached runs do not inherit this workspace context. A new `session:custom-id` without an existing session starts in the configured agent workspace. Use `delivery: { mode: "none" }` without an external target for quiet named-session work that needs no runner fallback announcement.
 
-    Main-session automation events are self-contained system-event reminders. They do not automatically include the default heartbeat prompt or the heartbeat monitor scratch; say it explicitly in the automation event text if a reminder should consult that context.
+    Main-session automation events are self-contained system-event reminders. They do not inherit another monitor's prompt or scratch. Put required instructions in the job itself.
 
     Main-session jobs use the owning session's delivery context, not a separate chat announce target. Edits that enable announce delivery, or set a chat target without explicitly choosing no delivery, are rejected without changing the job. Use an isolated job with `--message` and `--announce` for chat delivery. Primary webhook delivery remains supported for main-session jobs.
 

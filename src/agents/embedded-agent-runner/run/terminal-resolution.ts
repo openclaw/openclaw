@@ -273,9 +273,10 @@ export async function resolveEmbeddedRunTerminal(input: {
   const nextReasoningOnlyRetryInstruction = replyRecoveryAllowed
     ? resolveReasoningOnlyRetryInstruction(retryInput)
     : null;
-  const nextEmptyResponseRetryInstruction = replyRecoveryAllowed
-    ? resolveEmptyResponseRetryInstruction(retryInput)
-    : null;
+  const nextEmptyResponseRetryInstruction =
+    replyRecoveryAllowed && !isCompactionReplayCheckpoint(input.attemptAssistant?.providerReplay)
+      ? resolveEmptyResponseRetryInstruction(retryInput)
+      : null;
   if (
     nextReasoningOnlyRetryInstruction &&
     retryState.reasoningOnlyAttempts < DEFAULT_REASONING_ONLY_RETRY_LIMIT

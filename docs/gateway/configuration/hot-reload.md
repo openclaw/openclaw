@@ -74,6 +74,11 @@ shows as unapplied config. `openclaw plugins reload <id> --wait` also lets you
 watch a timed-out replacement finish. A Gateway restart applies the saved config
 in full.
 
+`config.get` also reports `reloadSettled`, a live readiness fact. Matching saved
+and applied revisions can precede reload cleanup. Claw automation setup waits for
+the requested agent, matching revisions, and `reloadSettled: true` before sending
+its mutation; the Gateway still rechecks authority before committing it.
+
 Direct file edits are treated as untrusted until they validate. The source's file adapter waits
 for editor temp-write/rename churn to settle, reads the final file, and rejects
 invalid external edits without rewriting `openclaw.json`. OpenClaw-owned config
@@ -133,7 +138,7 @@ Reload planning classifies each changed path as one of three outcomes:
 - **Gateway restart (`restart`)**: restart the Gateway process.
 - **Hot reload (`hot`)**: apply the change while keeping the Gateway process
   running. This can include restarting the owning subsystem, such as a channel,
-  cron, or heartbeat.
+  or the automation scheduler.
 - **No reload action (`none`)**: update the runtime config snapshot without
   scheduling a reload action for that path. Consumers that read the current
   config can observe the new value on a later read.
@@ -185,7 +190,7 @@ notification handoff.
 | ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------- |
 | Channels                  | `channels.*`, `web` (WhatsApp)                                                                                                                                                                                                                                     | Depends on setting and loaded plugin                                                           |
 | Agent & models            | `agents`, `models`, `auth.order`, `auth.profiles`, `broadcast`, `worktreeRoot`, `worktreeAcceleration`                                                                                                                                                             | No                                                                                             |
-| Automation                | `hooks`, `cron`, `agents.defaults.heartbeat`                                                                                                                                                                                                                       | No (reloads the owning subsystem)                                                              |
+| Automation                | `hooks`, `cron`                                                                                                                                                                                                                                                    | No (reloads the owning subsystem)                                                              |
 | Sessions & messages       | `session`, `messages`                                                                                                                                                                                                                                              | No                                                                                             |
 | Tools & media             | `tools`, `skills`, `mcp` except Apps listener settings, `audio`, `talk`, `tts`, `memory.citations`, `attachments.ttlHours`                                                                                                                                         | No                                                                                             |
 | Plugin config             | `plugins.entries.*`, `plugins.allow`, `plugins.deny`, `plugins.enabled`, `plugins.slots`, `plugins.load`, legacy `plugins.installs`                                                                                                                                | No (reloads plugin runtime by default)                                                         |
@@ -210,6 +215,12 @@ notification handoff.
 | Gateway server            | Other `gateway.*` settings (port, bind, auth mode, tailscale, TLS)                                                                                                                                                                                                 | **Yes**                                                                                        |
 | Infrastructure            | Other `discovery` and `browser` settings, MCP Apps listener settings, `secrets.egressProxy`                                                                                                                                                                        | **Yes**                                                                                        |
 
+Periodic monitoring is stored as ordinary automation jobs. Edit schedules and
+per-job policies through the **Automations** page or `openclaw automations edit`;
+these are job mutations, not config reloads. After Doctor migrates legacy
+heartbeat configuration, startup and config reload do not overwrite those jobs
+or recreate deleted ones.
+
 Channel plugins declare which settings restart their channel
 (`reload.configPrefixes`) and which need no reload action (`reload.noopPrefixes`).
 For example, with WhatsApp loaded, `channels.whatsapp.enabled` restarts the
@@ -228,7 +239,7 @@ Discord, Matrix, Signal, Slack, Telegram, or WhatsApp. Other channel plugins
 refresh unless they declare that they read the policy live. Per-channel and
 per-account overrides still take precedence; admitted turns retain their policy.
 
-`diagnostics.enabled` updates diagnostic dispatch and heartbeat ownership live.
+`diagnostics.enabled` updates diagnostic dispatch and the diagnostic heartbeat live.
 With `diagnostics-otel` loaded, `diagnostics.otel` restarts only its exporter service,
 flushing the old generation before starting the new one. Externally preloaded
 OpenTelemetry providers retain their transport and shutdown ownership.

@@ -1,5 +1,6 @@
 // Schedule error isolation tests cover one bad job not blocking other cron jobs.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import type { CronJob } from "../types.js";
 import { recomputeNextRunsForMaintenance } from "./jobs-scheduling.js";
@@ -18,7 +19,6 @@ function createMockState(jobs: CronJob[]): CronServiceState {
     nowMs: () => Date.now(),
     log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
     enqueueSystemEvent: vi.fn(),
-    requestHeartbeat: vi.fn(),
     runIsolatedAgentJob: vi.fn(),
     onEvent: vi.fn(),
   });
@@ -99,10 +99,13 @@ describe("cron schedule error isolation", () => {
       state: { scheduleErrorCount: 2 }, // Already had 2 errors
     });
     const state = createMockState([badJob]);
+    const enqueueSessionEvent =
+      vi.fn<NonNullable<CronServiceState["deps"]["enqueueSessionEvent"]>>();
+    state.deps.enqueueSessionEvent = enqueueSessionEvent;
 
     const deferredNotifications: DeferredCronNotifications = [];
     recomputeNextRunsForMaintenance(state, { recomputeExpired: true, deferredNotifications });
-    expect(state.deps.enqueueSystemEvent).not.toHaveBeenCalled();
+    expect(enqueueSessionEvent).not.toHaveBeenCalled();
     await runPostPersistCronNotifications(state, structuredClone(deferredNotifications));
 
     // After 3rd error, job should be disabled
@@ -122,14 +125,54 @@ describe("cron schedule error isolation", () => {
       },
       "cron: auto-disabled job after repeated schedule errors",
     );
-    expect(state.deps.enqueueSystemEvent).toHaveBeenCalledWith(
+    expect(enqueueSessionEvent).toHaveBeenCalledWith(
       expect.stringContaining("openclaw automations enable bad-job"),
       expect.objectContaining({ contextKey: "cron:bad-job:auto-disabled" }),
     );
-    const notification = vi.mocked(state.deps.enqueueSystemEvent).mock.calls[0]?.[0];
+    const notification = enqueueSessionEvent.mock.calls[0]?.[0];
     expect(notification).toContain("Check automation history for details.");
     expect(notification).not.toContain("invalid configuration format");
   });
+
+  it.each(["accepted", "refused", "rejected"])(
+    "observes async notice %s without blocking the next notification",
+    async (outcome) => {
+      const jobs = ["first", "next"].map((id) =>
+        createJob({ id, agentId: "main", enabled: false }),
+      );
+      const state = createMockState(jobs);
+      const acceptance = createDeferredCore<{ ok: true } | { ok: false; error: string }>();
+      const enqueue = vi
+        .fn<NonNullable<CronServiceState["deps"]["enqueueSessionEvent"]>>()
+        .mockImplementationOnce(() => acceptance.promise);
+      state.deps.enqueueSessionEvent = enqueue;
+
+      await runPostPersistCronNotifications(
+        state,
+        jobs.map((job) => ({ kind: "auto-disabled", job, text: `notice-${job.id}` })),
+      );
+
+      expect(enqueue.mock.calls.map(([text]) => text)).toEqual(["notice-first", "notice-next"]);
+      expect(state.deps.log.warn).not.toHaveBeenCalled();
+      if (outcome === "rejected") {
+        acceptance.reject(new Error("notification-rejected"));
+      } else {
+        acceptance.resolve(
+          outcome === "accepted" ? { ok: true } : { ok: false, error: "notification-refused" },
+        );
+      }
+      await vi.advanceTimersByTimeAsync(0);
+
+      if (outcome === "accepted") {
+        expect(state.deps.log.warn).not.toHaveBeenCalled();
+      } else {
+        expect(state.deps.log.warn).toHaveBeenCalledExactlyOnceWith(
+          { jobId: "first", kind: "auto-disabled", error: `notification-${outcome}` },
+          "cron: notification admission failed",
+        );
+      }
+    },
+  );
 
   it("clears scheduleErrorCount when schedule computation succeeds", () => {
     const job = createJob({

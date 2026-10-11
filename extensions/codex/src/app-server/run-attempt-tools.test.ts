@@ -120,7 +120,7 @@ it("keeps OpenClaw control-path tools direct when code-mode-only is enabled", ()
   const tools = [
     createRuntimeDynamicTool("message"),
     createRuntimeDynamicTool("web_search"),
-    createRuntimeDynamicTool("heartbeat_respond"),
+    createRuntimeDynamicTool("automations"),
     createRuntimeDynamicTool("agents_list"),
     createRuntimeDynamicTool("sessions_spawn"),
     createRuntimeDynamicTool("sessions_yield"),
@@ -133,7 +133,7 @@ it("keeps OpenClaw control-path tools direct when code-mode-only is enabled", ()
   const specs = flattenSpecsWithNamespace(toolBridge.specs);
   const message = specs.find((tool) => tool.name === "message");
   const webSearch = specs.find((tool) => tool.name === "web_search");
-  const heartbeat = specs.find((tool) => tool.name === "heartbeat_respond");
+  const automation = specs.find((tool) => tool.name === "automations");
   const agentsList = specs.find((tool) => tool.name === "agents_list");
   const sessionsSpawn = specs.find((tool) => tool.name === "sessions_spawn");
   const sessionsYield = specs.find((tool) => tool.name === "sessions_yield");
@@ -141,8 +141,8 @@ it("keeps OpenClaw control-path tools direct when code-mode-only is enabled", ()
   expect(message).not.toHaveProperty("deferLoading");
   expect(webSearch?.namespace).toBe("openclaw");
   expect(webSearch?.deferLoading).toBe(true);
-  expect(heartbeat?.namespace).toBe("openclaw");
-  expect(heartbeat?.deferLoading).toBe(true);
+  expect(automation?.namespace).toBe("openclaw");
+  expect(automation?.deferLoading).toBe(true);
   expect(agentsList).not.toHaveProperty("namespace");
   expect(agentsList).not.toHaveProperty("deferLoading");
   expect(sessionsSpawn).not.toHaveProperty("namespace");

@@ -34,6 +34,7 @@ import {
   buildFallbackCandidateTurnParams,
   buildReplyRunStateParams,
   resolveRunModelHasVision,
+  resolveReplyScheduledToolPolicy,
 } from "./agent-runner-run-params.js";
 import { buildReplyRouteThreadingToolContext } from "./agent-runner-utils.js";
 import { prepareCliReplyPayload } from "./cli-reply-payload.js";
@@ -41,6 +42,7 @@ import { shouldBridgeCliPreambleEvents } from "./get-reply.types.js";
 import { hasInboundAudio } from "./inbound-media.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
 import { resolveReplyOperationTerminationFields } from "./reply-operation-abort.js";
+import { hasReplyOperationExecutionStarted } from "./reply-run-registry.state.js";
 import { resolveReplyRunTrigger } from "./reply-turn-kind.js";
 
 export async function runCliFallbackCandidate(
@@ -243,6 +245,9 @@ export async function runCliFallbackCandidate(
           lifecycleGeneration: params.lifecycleGeneration,
           startedAt: cliLifecycleStartedAt,
           onAgentRunStart: params.notifyAgentRunStart,
+          deferLifecycleStartUntilExecution: turn.followupRun.run.scheduledAutomation
+            ? true
+            : undefined,
           suppressAssistantBridge: turn.followupRun.run.silentExpected,
           onActivity: () => turn.replyOperation?.recordActivity(),
           onErrorBeforeLifecycle:
@@ -363,6 +368,35 @@ export async function runCliFallbackCandidate(
             runtimePolicySessionKey:
               turn.followupRun.run.runtimePolicySessionKey ?? turn.runtimePolicySessionKey,
             agentId: turn.followupRun.run.agentId,
+            jobId: turn.followupRun.run.scheduledAutomation?.job.id,
+            onExecutionStarted: turn.followupRun.run.scheduledAutomation
+              ? async () => {
+                  try {
+                    await turn.followupRun.run.internalEventExecution?.beforeScheduledStart?.(
+                      params.runId,
+                    );
+                    params.runAbortSignal?.throwIfAborted();
+                    turn.followupRun.run.internalEventExecution?.assertCurrent?.();
+                  } catch (error) {
+                    if (
+                      !turn.replyOperation ||
+                      !hasReplyOperationExecutionStarted(turn.replyOperation)
+                    ) {
+                      lifecycleBackstop.note({
+                        stream: "lifecycle",
+                        data: {
+                          phase: "finishing",
+                          executionStarted: false,
+                          providerStarted: false,
+                        },
+                      });
+                    }
+                    throw error;
+                  }
+                  await turn.followupRun.run.scheduledAutomation?.executionIdentity?.onExecutionStarted?.();
+                }
+              : undefined,
+            scheduledToolPolicy: resolveReplyScheduledToolPolicy(turn.followupRun.run),
             config: params.runtimeConfig,
             persistAssistantTranscript:
               turn.followupRun.currentInboundEventKind !== "room_event" &&

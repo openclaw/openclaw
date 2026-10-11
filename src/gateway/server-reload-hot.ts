@@ -286,9 +286,6 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
           params.setState(nextState);
           runtimeCommitted = true;
         }
-        if (plan.restartHeartbeat) {
-          nextState.heartbeatRunner.updateConfig(nextConfig);
-        }
         if (modelRuntime.required) {
           // Retire model/auth inputs together so requests cannot mix generations.
           preparedModelRuntimeReplacementGateId = markPreparedModelRuntimeSnapshotsStale(
@@ -350,21 +347,13 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
           failConfigCommit(error);
         }
       }
-      if (plan.restartHeartbeat) {
+      if (plan.refreshHooksPolicy) {
         await reviveAgentDatabasesAfterConfigCommit(listAgentIds(nextConfig), (message) =>
           params.logReload.warn(message),
         );
       }
       if (!ownsCron()) {
         return;
-      }
-      // Only accepted runtime state may own monitor writes and emitted events.
-      if (
-        plan.reconcileSystemJobs &&
-        (await nextState.cronState.reconcileSystemJobs().catch(failConfigCommit)) ===
-          "retry-scheduled"
-      ) {
-        failConfigCommit(new GatewayHotReloadRecoveryError("cron monitor"));
       }
       if (plan.restartCron && ownsCron()) {
         startGatewayCronWithLogging({

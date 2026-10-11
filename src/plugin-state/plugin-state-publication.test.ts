@@ -521,4 +521,54 @@ describe("plugin state committed facts", () => {
       }
     });
   });
+
+  it("does not reuse a worker postimage after a newer raw native write", async () => {
+    await withOpenClawTestState(
+      { label: "plugin-state-raw-receipt-supersession" },
+      async ({ env }) => {
+        const store = createPluginStateKeyedStore<string>("receipt-test", {
+          namespace: "receipts",
+          maxEntries: 2,
+          env,
+        });
+        const original = admission.observeSqliteWorkerCommittedFacts;
+        const intercept = vi
+          .spyOn(admission, "observeSqliteWorkerCommittedFacts")
+          .mockImplementation((owner, listener) => {
+            original(owner, (receipt) => {
+              openOpenClawStateDatabase({ env })
+                .db.prepare(
+                  "UPDATE plugin_state_entries SET value_json = ? WHERE plugin_id = ? AND namespace = ? AND entry_key = ?",
+                )
+                .run(JSON.stringify("raw"), "receipt-test", "receipts", "key");
+              listener(receipt);
+            });
+          });
+        try {
+          await store.register("key", "worker");
+        } finally {
+          intercept.mockRestore();
+        }
+        await expect(store.lookup("key")).resolves.toBe("raw");
+      },
+    );
+  });
+
+  it("does not cache a native postimage superseded by raw SQL in the same transaction", async () => {
+    await withOpenClawTestState({ label: "plugin-state-raw-transaction" }, async ({ env }) => {
+      const options = { namespace: "receipts", maxEntries: 2, env };
+      const native = createPluginStateSyncKeyedStore<string>("receipt-test", options);
+      const store = createPluginStateKeyedStore<string>("receipt-test", options);
+      runOpenClawStateWriteTransaction(
+        ({ db }) => {
+          native.register("key", "typed");
+          db.prepare(
+            "UPDATE plugin_state_entries SET value_json = ? WHERE plugin_id = ? AND namespace = ? AND entry_key = ?",
+          ).run(JSON.stringify("raw"), "receipt-test", "receipts", "key");
+        },
+        { env },
+      );
+      await expect(store.lookup("key")).resolves.toBe("raw");
+    });
+  });
 });

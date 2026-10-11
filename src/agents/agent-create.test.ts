@@ -15,6 +15,7 @@ const mocks = vi.hoisted(() => ({
   rootWrite: vi.fn(),
   mkdir: vi.fn(),
   recordAgentProvenance: vi.fn(),
+  provisionDefaultProactiveJob: vi.fn(),
   readAgentDeletionJournal: vi.fn(() => undefined as Record<string, unknown> | undefined),
   claimCompletedAgentDeletion: vi.fn(() => true),
   migrateLegacyMainSessionKeys: vi.fn(),
@@ -55,6 +56,10 @@ vi.mock("../state/agent-deletion-journal.read.js", () => ({
 
 vi.mock("../state/agent-provenance.js", () => ({
   recordAgentProvenance: mocks.recordAgentProvenance,
+}));
+// mock-isolation: Keep automation provisioning outside the config fixture's synthetic stores.
+vi.mock("../cron/default-proactive-job.js", () => ({
+  provisionDefaultProactiveJob: mocks.provisionDefaultProactiveJob,
 }));
 
 // mock-isolation: Workspace/config unit cases do not own a real SQLite worker or creation store.

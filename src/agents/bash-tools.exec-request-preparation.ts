@@ -176,9 +176,6 @@ export function resolveExecNotificationDefaults(defaults?: ExecToolDefaults) {
     notifySessionKey,
     resolveSubagentSession,
     notifyDeliveryContext,
-    // Preserve conversation provenance for passive subagent completion notices.
-    notifyFromConversationTurn:
-      defaults?.trigger === "user" || defaults?.continuesConversation === true,
   };
 }
 
@@ -552,21 +549,22 @@ export function resolvePreparedExecEnvironment(params: {
     ...params.credentialScrubEnv,
     ...(params.host === "gateway" ? params.localIdentityEnv : undefined),
   };
-  // Inherited Git parameters can contain credentials; keep them out of request overrides.
-  const gitPolicyEnv =
-    params.host === "gateway" && params.localGitConfigParameters
-      ? {
-          GIT_CONFIG_PARAMETERS: [
-            resolveEnvironmentValue(preparedEnv, "GIT_CONFIG_PARAMETERS") ??
-              resolveEnvironmentValue(env, "GIT_CONFIG_PARAMETERS"),
-            params.localGitConfigParameters,
-          ]
-            .filter(Boolean)
-            .join(" "),
-        }
-      : undefined;
   // Prepared values win locally; nodes sanitize their own base env and reject scrub override keys.
-  const executionEnv = mergeProcessEnv([env, preparedEnv, routingEnv, gitPolicyEnv]);
+  let executionEnv = mergeProcessEnv([env, preparedEnv, routingEnv]);
+  if (params.host === "gateway" && params.localGitConfigParameters) {
+    // Apply policy to the composed local environment, never to forwarded request overrides.
+    const inheritedGitConfigParameters =
+      resolveEnvironmentValue(executionEnv, "GIT_CONFIG_PARAMETERS") ??
+      resolveEnvironmentValue(env, "GIT_CONFIG_PARAMETERS");
+    executionEnv = mergeProcessEnv([
+      executionEnv,
+      {
+        GIT_CONFIG_PARAMETERS: [inheritedGitConfigParameters, params.localGitConfigParameters]
+          .filter(Boolean)
+          .join(" "),
+      },
+    ]);
+  }
   const forwardedEnv =
     params.host === "node" || !routingEnv ? requestedEnv : { ...requestedEnv, ...routingEnv };
 

@@ -48,23 +48,21 @@ async function startEveryJob(text: string) {
 }
 
 describe("CronService interval/cron jobs fire on time", () => {
-  const expectMainSystemEvent = (
-    enqueueSystemEvent: ReturnType<typeof vi.fn>,
+  const expectMainSessionTurn = (
+    runSessionEvent: ReturnType<typeof vi.fn>,
     expectedText: string,
   ) => {
-    const matchingCall = enqueueSystemEvent.mock.calls.find(([text]) => text === expectedText);
+    const matchingCall = runSessionEvent.mock.calls.find(
+      ([request]) => request.text === expectedText,
+    );
     if (!matchingCall) {
       throw new Error(`missing system event ${expectedText}`);
     }
-    const options = matchingCall[1] as Record<string, unknown>;
-    expect(options.agentId).toBe("main");
-    expect(options.sessionKey).toBeUndefined();
-    expect(typeof options.contextKey).toBe("string");
-    expect(String(options.contextKey).startsWith("cron:")).toBe(true);
+    expect(matchingCall[0].job.sessionTarget).toBe("main");
   };
 
   it("keeps admission closed until a real cron scheduler resume retry succeeds", async () => {
-    const { cron, enqueueSystemEvent, finished, store, clock, job, logger } =
+    const { cron, runSessionEvent, finished, store, clock, job, logger } =
       await startEveryJob("recovered-tick");
     resetGatewayWorkAdmission();
 
@@ -91,7 +89,7 @@ describe("CronService interval/cron jobs fire on time", () => {
       const finishedRun = finished.waitForOk(job.id);
       await clock.advanceBy(9_005);
       await finishedRun;
-      expectMainSystemEvent(enqueueSystemEvent, "recovered-tick");
+      expectMainSessionTurn(runSessionEvent, "recovered-tick");
     } finally {
       cron.stop();
       resetGatewayWorkAdmission();
@@ -100,7 +98,7 @@ describe("CronService interval/cron jobs fire on time", () => {
   });
 
   it("keeps a due timer pending when restart signal admission rolls back", async () => {
-    const { cron, enqueueSystemEvent, finished, store, clock, job } =
+    const { cron, runSessionEvent, finished, store, clock, job } =
       await startEveryJob("rollback-tick");
     resetGatewayWorkAdmission();
     let wake: ReturnType<typeof clock.advanceBy> = undefined;
@@ -110,11 +108,11 @@ describe("CronService interval/cron jobs fire on time", () => {
       expect(pendingSignal).not.toBeNull();
       const finishedRun = finished.waitForOk(job.id);
       wake = clock.advanceBy(10_005);
-      expect(enqueueSystemEvent).not.toHaveBeenCalled();
+      expect(runSessionEvent).not.toHaveBeenCalled();
 
       expect(pendingSignal?.rollback()).toBe(true);
       await finishedRun;
-      expectMainSystemEvent(enqueueSystemEvent, "rollback-tick");
+      expectMainSessionTurn(runSessionEvent, "rollback-tick");
     } finally {
       cron.stop();
       resetGatewayWorkAdmission();
@@ -126,7 +124,7 @@ describe("CronService interval/cron jobs fire on time", () => {
   it("keeps every jobs due while minute cron jobs recompute schedules", async () => {
     const store = await makeStorePath();
     const enqueueSystemEvent = vi.fn();
-    const requestHeartbeat = vi.fn();
+    const runSessionEvent = vi.fn(async (_params: { text: string }) => ({ status: "ok" as const }));
     const nowMs = Date.parse("2025-12-13T00:00:00.000Z");
     const clock = createGatewaySchedulerClock(nowMs);
 
@@ -165,7 +163,7 @@ describe("CronService interval/cron jobs fire on time", () => {
       cronEnabled: true,
       log: noopLogger,
       enqueueSystemEvent,
-      requestHeartbeat,
+      runSessionEvent,
       runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
     });
 
@@ -182,9 +180,11 @@ describe("CronService interval/cron jobs fire on time", () => {
     const sfRun = await cron.run("loaded-every", "due");
     expect(sfRun).toEqual({ ok: true, ran: true });
 
-    const sfRuns = enqueueSystemEvent.mock.calls.filter(([text]) => text === "sf-tick").length;
-    const minuteRuns = enqueueSystemEvent.mock.calls.filter(
-      ([text]) => text === "minute-tick",
+    const sfRuns = runSessionEvent.mock.calls.filter(
+      ([request]) => request.text === "sf-tick",
+    ).length;
+    const minuteRuns = runSessionEvent.mock.calls.filter(
+      ([request]) => request.text === "minute-tick",
     ).length;
     expect(minuteRuns).toBeGreaterThan(0);
     expect(sfRuns).toBeGreaterThan(0);

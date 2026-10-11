@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import { createServer, type ServerResponse } from "node:http";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { retireHeartbeatWithDoctor } from "../../../../src/commands/doctor-heartbeat-retirement.js";
 import {
   clearConfigCache,
   clearRuntimeConfigSnapshot,
@@ -13,7 +14,9 @@ import {
   replaceSessionEntry,
 } from "../../../../src/config/sessions/session-accessor.js";
 import { clearSessionStoreCacheForTest } from "../../../../src/config/sessions/store-writer-state.js";
+import type { LegacyHeartbeatConfig } from "../../../../src/config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../../../../src/config/types.openclaw.js";
+import { readDefaultProactiveJobReceiptsAsync } from "../../../../src/cron/proactive-job-receipt.js";
 import { readSessionMessagesAsync } from "../../../../src/gateway/session-transcript-readers.js";
 import {
   disconnectGatewayClient,
@@ -212,7 +215,7 @@ describe("Gateway heartbeat session routing", () => {
   });
 
   it(
-    "routes monitor wakes through heartbeat.session while preserving explicit wake sessions",
+    "migrates monitor session routing while preserving explicit wake sessions and passive notices",
     { timeout: 90_000 },
     async ({ signal }) => {
       const envSnapshot = captureEnv([...ISOLATED_GATEWAY_ENV_KEYS]);
@@ -261,6 +264,7 @@ describe("Gateway heartbeat session routing", () => {
       const configuredSessionKey = "agent:main:ops-heartbeat";
       const configuredSessionId = nextId("configured-heartbeat-session");
       const configuredEvent = nextId("configured-heartbeat-event");
+      const configuredPrompt = nextId("configured-monitor-prompt");
       const configuredReply = nextId("configured-heartbeat-reply");
       const explicitSessionKey = "agent:main:user-session";
       const explicitSessionId = nextId("explicit-heartbeat-session");
@@ -288,7 +292,7 @@ describe("Gateway heartbeat session routing", () => {
           const serialized = JSON.stringify(body);
           writeAssistantResponse(
             response,
-            serialized.includes(configuredEvent)
+            serialized.includes(configuredPrompt)
               ? configuredReply
               : serialized.includes(explicitQueuedEvent) || serialized.includes(explicitWakeText)
                 ? explicitReply
@@ -316,12 +320,17 @@ describe("Gateway heartbeat session routing", () => {
           `http://127.0.0.1:${providerAddress.port}/v1`,
           "gpt-heartbeat-session-routing",
         );
-        const config = {
+        const legacyConfig = {
           agents: {
             defaults: {
               workspace: workspaceDir,
               skipBootstrap: true,
-              heartbeat: { every: "24h", session: "ops-heartbeat", target: "last" },
+              heartbeat: {
+                every: "24h",
+                session: "ops-heartbeat",
+                target: "last",
+                prompt: configuredPrompt,
+              },
               model: { primary: provider.modelRef },
               models: {
                 [provider.modelRef]: {
@@ -343,7 +352,7 @@ describe("Gateway heartbeat session routing", () => {
               },
             },
           },
-          // Full configs may contain nested nulls; heartbeat admission must not reinterpret them as patches.
+          // Full configs may contain nested nulls; session admission must not reinterpret them as patches.
           tts: { providers: { fixture: { disabledVoice: null } } },
           gateway: { auth: { mode: "token", token } },
           plugins: {
@@ -353,7 +362,13 @@ describe("Gateway heartbeat session routing", () => {
             entries: { [PROOF_CHANNEL_ID]: { enabled: true } },
             slots: { memory: "none" },
           },
-        } satisfies OpenClawConfig;
+        } satisfies OpenClawConfig & {
+          agents: { defaults: { heartbeat: LegacyHeartbeatConfig } };
+        };
+        const config = await retireHeartbeatWithDoctor(legacyConfig);
+        expect(config.agents?.defaults).not.toHaveProperty("heartbeat");
+        const receipt = (await readDefaultProactiveJobReceiptsAsync(undefined, ["main"])).main;
+        expect(receipt).toMatchObject({ phase: "complete", jobId: expect.any(String) });
 
         gateway = await startGatewayWithClient({
           cfg: config,
@@ -437,17 +452,18 @@ describe("Gateway heartbeat session routing", () => {
             sessionTarget: string;
           }>;
         }>("cron.list", { includeDisabled: true });
-        const monitor = listed.jobs.find((job) => job.declarationKey === "heartbeat:main");
+        const monitor = listed.jobs.find((job) => job.id === receipt?.jobId);
         expect(monitor).toMatchObject({
           agentId: "main",
-          declarationKey: "heartbeat:main",
           enabled: true,
-          payload: { kind: "heartbeat" },
-          sessionTarget: "main",
+          payload: { kind: "agentTurn" },
+          sessionTarget: `session:${configuredSessionKey}`,
         });
         if (!monitor) {
-          throw new Error("system-owned main-agent heartbeat monitor was not listed");
+          throw new Error("migrated main-agent automation was not listed");
         }
+
+        expect(monitor).not.toHaveProperty("declarationKey");
 
         const configuredRequestBaseline = providerRequests.length;
         const configuredRun = await client.request<{
@@ -482,13 +498,9 @@ describe("Gateway heartbeat session routing", () => {
           .poll(() => providerRequests.length, { timeout: 15_000, interval: 50 })
           .toBeGreaterThan(configuredRequestBaseline);
         const configuredRequest = JSON.stringify(providerRequests[configuredRequestBaseline]);
-        expect(configuredRequest).toContain(configuredEvent);
-        await expect
-          .poll(() => peekSystemEvents(configuredSessionKey).includes(configuredEvent), {
-            timeout: 15_000,
-            interval: 50,
-          })
-          .toBe(false);
+        expect(configuredRequest).toContain(configuredPrompt);
+        expect(configuredRequest).not.toContain(configuredEvent);
+        expect(peekSystemEvents(configuredSessionKey)).toContain(configuredEvent);
         await expect
           .poll(() => readDeliveryTrace(deliveryTracePath), { timeout: 15_000, interval: 50 })
           .toHaveLength(1);
@@ -542,17 +554,9 @@ describe("Gateway heartbeat session routing", () => {
           .poll(() => providerRequests.length, { timeout: 15_000, interval: 50 })
           .toBeGreaterThan(explicitRequestBaseline);
         const explicitRequest = JSON.stringify(providerRequests[explicitRequestBaseline]);
-        expect(explicitRequest).toContain(explicitQueuedEvent);
+        expect(explicitRequest).not.toContain(explicitQueuedEvent);
         expect(explicitRequest).toContain(explicitWakeText);
-        await expect
-          .poll(
-            () => {
-              const queued = peekSystemEvents(explicitSessionKey);
-              return queued.includes(explicitQueuedEvent) || queued.includes(explicitWakeText);
-            },
-            { timeout: 15_000, interval: 50 },
-          )
-          .toBe(false);
+        expect(peekSystemEvents(explicitSessionKey)).toContain(explicitQueuedEvent);
         await expect
           .poll(() => readDeliveryTrace(deliveryTracePath), { timeout: 15_000, interval: 50 })
           .toHaveLength(2);
@@ -583,6 +587,8 @@ describe("Gateway heartbeat session routing", () => {
             readConsistency: "latest",
           })?.sessionId,
         ).toBe(explicitSessionId);
+        expect(peekSystemEvents(explicitSessionKey)).toContain(explicitQueuedEvent);
+        expect(peekSystemEvents(explicitSessionKey)).not.toContain(explicitWakeText);
         const explicitTranscript = JSON.stringify(await readSessionTranscript(explicitSessionKey));
         expect(explicitTranscript).toContain(explicitReply);
         expect(explicitTranscript).not.toContain(configuredReply);

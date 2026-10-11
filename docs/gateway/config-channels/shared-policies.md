@@ -70,9 +70,11 @@ For group/thread conversations, keys are channel-specific group IDs, topic IDs, 
 
 DM-specific keys only match in direct-message conversations; they do not affect group/thread routing.
 
-## Channel defaults and heartbeat
+<a id="channel-defaults-and-heartbeat" />
 
-Use `channels.defaults` for shared group-policy, implicit-mention, and heartbeat behavior across providers. Changes refresh loaded channel runtimes without restarting the Gateway; manually stopped accounts stay stopped:
+## Channel defaults
+
+Use `channels.defaults` for shared group-policy, context visibility, and implicit-mention behavior across providers. Changes refresh loaded channel runtimes without restarting the Gateway; manually stopped accounts stay stopped:
 
 ```json5
 {
@@ -85,11 +87,6 @@ Use `channels.defaults` for shared group-policy, implicit-mention, and heartbeat
         quotedBot: true,
         threadParticipation: true,
       },
-      heartbeatVisibility: {
-        showOk: false,
-        showAlerts: true,
-        useIndicator: true,
-      },
     },
   },
 }
@@ -98,9 +95,10 @@ Use `channels.defaults` for shared group-policy, implicit-mention, and heartbeat
 - `channels.defaults.groupPolicy`: fallback group policy when a provider-level `groupPolicy` is unset.
 - `channels.defaults.contextVisibility`: default supplemental context visibility mode for all channels. Values: `all` (default, include all quoted/thread/history context), `allowlist` (only include context from allowlisted senders), `allowlist_quote` (same as allowlist but keep explicit quote/reply context). Per-channel override: `channels.<channel>.contextVisibility`.
 - `channels.defaults.implicitMentions`: controls which supported inbound facts count as mentions. `replyToBot`, `quotedBot`, and `threadParticipation` each default to `true`, preserving current behavior. The names are positive: set a flag to `false` to stop that fact from bypassing mention gating. Among bundled channels, Mattermost, Slack, and Tlon read this policy; on those channels you can also override it per channel with `channels.<channel>.implicitMentions` or per account with `channels.<channel>.accounts.<id>.implicitMentions`, and each flag resolves account -> channel -> defaults independently. Other bundled channels that produce implicit mention facts do not currently read these settings, so on those channels the facts always count as mentions and the override has no effect. Native explicit mentions are always allowed, and a flag has no effect when the channel does not produce that fact. See [Mention gating](/channels/groups#mention-gating-default) for the current producer matrix. These settings do not change outbound reply/thread modes or authorized command handling.
-- `channels.defaults.heartbeatVisibility.showOk`: deliver legacy `HEARTBEAT_OK` acknowledgments when the monitor has nothing to report (default `false`).
-- `channels.defaults.heartbeatVisibility.showAlerts`: deliver user-facing heartbeat monitor alerts (default `true`).
-- `channels.defaults.heartbeatVisibility.useIndicator`: emit heartbeat status indicator events (default `true`).
+
+Scheduled checks use each [automation job's delivery settings](/automation/cron-jobs/delivery).
+Run `openclaw doctor --fix` to migrate retired heartbeat visibility settings;
+see [Heartbeat migration](/gateway/heartbeat).
 
 ## Multi-account (all channels)
 

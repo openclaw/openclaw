@@ -301,7 +301,6 @@ describe("mcp connection resolver helpers", () => {
       let gatewayState: GatewayReloadProofState = {
         hooksConfig: null,
         hookClientIpConfig: { trustedProxies: undefined, allowRealIpFallback: false },
-        heartbeatRunner: { stop() {}, updateConfig() {} },
         cronState: {
           cron: {
             async start() {},
@@ -312,7 +311,6 @@ describe("mcp connection resolver helpers", () => {
           reconcileExitWatchers: async () => {},
           reconcileStreamWatchers: async () => {},
           stopStreamWatchers: async () => {},
-          reconcileSystemJobs: async () => "converged" as const,
         },
       };
       const reloadLog = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };

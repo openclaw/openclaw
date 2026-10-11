@@ -215,7 +215,7 @@ OpenClaw provisionally admits only explicitly allowed, ownership-proven apps,
 starts the thread with `_default.enabled = false`, and reads `app/installed`
 once with that thread's ID and `forceRefresh: false`. Missing, disabled, or
 non-callable apps produce one warning without blocking unrelated chat or
-heartbeat runs. Codex still enforces app/tool permissions, managed restrictions,
+automation runs. Codex still enforces app/tool permissions, managed restrictions,
 and workspace policy; continuing the conversation does not enable an unavailable app.
 
 The check runs before OpenClaw starts a turn or commits a thread binding. If the

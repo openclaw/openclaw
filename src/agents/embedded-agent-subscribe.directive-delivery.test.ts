@@ -69,7 +69,7 @@ function createDeliveryHarness(
       return { text, skip: !text.trim() };
     },
     applyReplyToMode: createReplyToModeFilterForChannel("all"),
-    typingSignals: createTypingSignaler({ typing, mode: "never", isHeartbeat: false }),
+    typingSignals: createTypingSignaler({ typing, mode: "never" }),
     blockStreamingEnabled: true,
     blockReplyPipeline: pipeline,
     directBlockDeliveries: [],

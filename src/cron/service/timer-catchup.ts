@@ -1,4 +1,3 @@
-import { isHeartbeatTaskCronJob } from "../heartbeat-task.js";
 import { tryCronScheduleIdentity } from "../schedule-identity.js";
 import type { StartupDeferredJob } from "../store/runtime-worker.types.js";
 import type { CronJob } from "../types.js";
@@ -109,13 +108,7 @@ async function planStartupCatchup(
     const deferredAgentJobs: CronJob[] = [];
     const startupEligible: CronJob[] = [];
     for (const job of sorted) {
-      const waitsForAgent =
-        job.payload.kind === "agentTurn" ||
-        job.payload.kind === "heartbeat" ||
-        isHeartbeatTaskCronJob(job) ||
-        (job.sessionTarget === "main" &&
-          job.payload.kind === "systemEvent" &&
-          job.wakeMode === "now");
+      const waitsForAgent = job.payload.kind === "agentTurn" || job.payload.kind === "systemEvent";
       (opts?.deferAgentWork && waitsForAgent ? deferredAgentJobs : startupEligible).push(job);
     }
     const startupCandidates = startupEligible.slice(0, maxImmediate);
@@ -125,7 +118,7 @@ async function planStartupCatchup(
       state.deps.startupDeferredMissedAgentJobDelayMs ??
         DEFAULT_STARTUP_DEFERRED_MISSED_AGENT_JOB_DELAY_MS,
     );
-    // Heartbeat waits can be unlimited too; agent work must not own scheduler startup.
+    // Agent work must not own scheduler startup while waiting for session admission.
     const deferredJob = (job: CronJob, delayMs?: number): StartupDeferredJob => ({
       jobId: job.id,
       ...(delayMs === undefined ? {} : { delayMs }),

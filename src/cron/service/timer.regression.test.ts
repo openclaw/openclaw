@@ -5,15 +5,10 @@ import {
   createDefaultIsolatedRunner,
   createDueIsolatedJob,
   createIsolatedRegressionJob,
+  createMainRegressionJob as mainJob,
   setupCronRegressionFixtures,
 } from "../../../test/helpers/cron/service-regression-fixtures.js";
-import { createDeferred } from "../../../test/helpers/promise.js";
-import {
-  HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT,
-  requestHeartbeatAndWait as requestOwnedHeartbeatAndWait,
-  setHeartbeatWakeHandler,
-  type HeartbeatRunResult,
-} from "../../infra/heartbeat-wake.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import {
   createGatewaySchedulerClock,
@@ -52,20 +47,6 @@ const timerRegressionFixtures = setupCronRegressionFixtures({
 
 function dueJob(id: string, nowMs: number, nextRunAtMs = nowMs) {
   return createDueIsolatedJob({ id, nowMs, nextRunAtMs });
-}
-
-function mainJob(id: string, at: number, payload: CronJob["payload"]): CronJob {
-  const job = dueJob(id, at);
-  delete job.delivery;
-  return {
-    ...job,
-    name: id.replaceAll("-", " "),
-    createdAtMs: at - 60_000,
-    updatedAtMs: at - 60_000,
-    sessionTarget: "main",
-    wakeMode: "now",
-    payload,
-  };
 }
 
 async function storeJobs(jobs: CronJob[]) {
@@ -259,67 +240,70 @@ describe("cron service timer regressions", () => {
     expect(state.deps.runIsolatedAgentJob).toHaveBeenCalledOnce();
   });
 
-  it("keeps job cancellation from retracting a conditioned main payload after handoff", async () => {
+  it("retains cancellation of a conditioned main payload after session execution begins", async () => {
     const scheduledAt = Date.parse("2026-02-15T13:00:00.000Z");
     const cronJob = mainJob("main-session-cancel-boundary", scheduledAt, {
       kind: "systemEvent",
-      text: "queued downstream work",
+      text: "conditioned session work",
     });
     cronJob.schedule = { kind: "every", everyMs: 60_000, anchorMs: scheduledAt - 60_000 };
     cronJob.trigger = { script: "json({ fire: true })" };
     const storePath = await storeJobs([cronJob]);
 
-    let now = scheduledAt;
-    const heartbeatStarted = createDeferred();
-    const heartbeatResult = createDeferred<HeartbeatRunResult>();
-    const requestHeartbeatAndWait = vi.fn(async (): Promise<HeartbeatRunResult> => {
-      heartbeatStarted.resolve();
-      return await heartbeatResult.promise;
-    });
-    const enqueueSystemEvent = vi.fn();
-    const requestHeartbeat = vi.fn();
+    const runnerStarted = createDeferred<AbortSignal | undefined>();
+    const runnerResult = createDeferred<{ status: "ok"; summary: string }>();
+    const runSessionEvent = vi.fn<NonNullable<CronServiceDeps["runSessionEvent"]>>(
+      async ({ abortSignal, onExecutionStarted }) => {
+        onExecutionStarted?.({ jobId: cronJob.id, phase: "model_call_started" });
+        runnerStarted.resolve(abortSignal);
+        // An abort-ignoring runner must not replace the recorded cancellation.
+        return await runnerResult.promise;
+      },
+    );
     const state = createCronServiceState({
       storePath,
-      nowMs: () => now,
-      enqueueSystemEvent,
-      requestHeartbeat,
-      requestHeartbeatAndWait,
+      nowMs: () => scheduledAt,
+      runSessionEvent,
       evaluateCronTrigger: async () => ({ kind: "evaluated", fire: true }),
       runIsolatedAgentJob: createDefaultIsolatedRunner(),
     });
 
     const timerPromise = onTimer(state);
     try {
-      await Promise.race([
-        heartbeatStarted.promise,
-        timerPromise.then(() => {
-          throw new Error("Cron timer completed before main-session heartbeat handoff");
-        }),
-      ]);
-      expect(requestHeartbeatAndWait).toHaveBeenCalledTimes(1);
-
-      requestActiveCronJobCancellation(cronJob.id, "Cancelled by operator.");
-      expect(inspectActiveCronRunReceipt({ storePath, jobId: cronJob.id })).toBeDefined();
-
-      now = scheduledAt + 2_000;
-      heartbeatResult.resolve({ status: "ran", durationMs: 1 });
-      await vi.advanceTimersByTimeAsync(0);
-      await timerPromise;
-
-      expect(requireJob(state, cronJob.id).state.lastStatus).toBe("ok");
-      expect(enqueueSystemEvent).toHaveBeenCalledWith(
-        "queued downstream work",
+      const abortSignal = await awaitGateBeforeSettlement(
+        runnerStarted.promise,
+        timerPromise,
+        "Cron timer completed before main-session execution began",
+      );
+      const runId = requireAdmittedRunId(storePath, cronJob.id);
+      expect(runSessionEvent).toHaveBeenCalledExactlyOnceWith(
         expect.objectContaining({
-          agentId: "main",
-          contextKey: "cron:main-session-cancel-boundary",
+          job: expect.objectContaining({ id: cronJob.id, sessionTarget: "main" }),
+          text: "conditioned session work",
         }),
       );
-      expect(enqueueSystemEvent.mock.calls[0]?.[1]).not.toHaveProperty("sessionKey");
-      expect(requestHeartbeat).not.toHaveBeenCalled();
+
+      requestActiveCronJobCancellation(cronJob.id, "Cancelled by operator.");
+      expect(abortSignal?.aborted).toBe(true);
+      expect(inspectActiveCronRunReceipt({ storePath, jobId: cronJob.id })).toBeDefined();
+      await timerPromise;
+
+      expect(requireJob(state, cronJob.id).state).toMatchObject({
+        lastStatus: "error",
+        lastError: "Cancelled by operator.",
+      });
+      expect(getSuspensionVisibleCronTaskRunCount()).toBe(1);
+      runnerResult.resolve({ status: "ok", summary: "late success" });
+      await drain(timerPromise, runnerResult.promise);
+      expect(
+        readCronRunRecordsForTests(cronJob.id).filter((entry) => entry.runId === runId),
+      ).toEqual([expect.objectContaining({ status: "failed", error: "Cancelled by operator." })]);
+      expect(requireJob(state, cronJob.id).state.lastStatus).toBe("error");
+      expect(state.deps.enqueueSystemEvent).not.toHaveBeenCalled();
     } finally {
       stop(state);
-      heartbeatResult.resolve({ status: "ran", durationMs: 0 });
-      await drain(timerPromise, heartbeatResult.promise);
+      runnerResult.resolve({ status: "ok", summary: "late success" });
+      await drain(timerPromise, runnerResult.promise);
       resetActiveCronTaskRunsForTests();
     }
   });
@@ -344,13 +328,19 @@ describe("cron service timer regressions", () => {
       wake: "now";
     }>();
     const enqueueSystemEvent = vi.fn();
-    const requestHeartbeat = vi.fn();
+    const enqueueSessionEvent = vi.fn();
     const state = createCronServiceState({
       cronConfig: { triggers: { enabled: true } },
       storePath,
       nowMs: () => scheduledAt,
       enqueueSystemEvent,
-      requestHeartbeat,
+      enqueueSessionEvent,
+      captureSessionEventTarget: async () => ({
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        sessionId: "script-session",
+        generation: "script-generation",
+      }),
       runIsolatedAgentJob: createDefaultIsolatedRunner(),
       runScriptJob: vi.fn(async ({ abortSignal }) => {
         runnerStarted.resolve();
@@ -387,7 +377,7 @@ describe("cron service timer regressions", () => {
       await vi.advanceTimersByTimeAsync(0);
       await Promise.resolve();
       expect(enqueueSystemEvent).not.toHaveBeenCalled();
-      expect(requestHeartbeat).not.toHaveBeenCalled();
+      expect(enqueueSessionEvent).not.toHaveBeenCalled();
     } finally {
       stop(state);
       runnerResult.resolve({ status: "ok", notify: "stale", wake: "now" });
@@ -432,7 +422,6 @@ describe("cron service timer regressions", () => {
       const persisted = await loadCronStore(storePath);
       expect(persisted.jobs[0]?.state.lastStatus).not.toBe("ok");
       expect(state.deps.enqueueSystemEvent).not.toHaveBeenCalled();
-      expect(state.deps.requestHeartbeat).not.toHaveBeenCalled();
     } finally {
       stop(state);
       release.resolve({ status: "ok", notify: "stale" });
@@ -471,16 +460,16 @@ describe("cron service timer regressions", () => {
     const now = Date.now();
     const cronJob = dueJob("condition-cancel-before-bind", now);
     cronJob.sessionTarget = "main";
-    cronJob.payload = { kind: "systemEvent", text: "must not enqueue" };
+    cronJob.payload = { kind: "systemEvent", text: "must not execute" };
     cronJob.schedule = { kind: "every", everyMs: 60_000, anchorMs: now - 60_000 };
     cronJob.trigger = { script: "json({ fire: true })" };
     const activeJobMarker = markCronJobActive(cronJob.id);
     requestActiveCronJobCancellation(cronJob.id, "Cron job disabled by operator.");
     const evaluateCronTrigger = vi.fn(async () => ({ kind: "evaluated" as const, fire: true }));
-    const enqueueSystemEvent = vi.fn();
+    const runSessionEvent = vi.fn(async () => ({ status: "ok" as const }));
     const state = createCronServiceState({
       storePath,
-      enqueueSystemEvent,
+      runSessionEvent,
       evaluateCronTrigger,
       runIsolatedAgentJob: createDefaultIsolatedRunner(),
     });
@@ -492,64 +481,95 @@ describe("cron service timer regressions", () => {
         error: "Cron job disabled by operator.",
       });
       expect(evaluateCronTrigger).not.toHaveBeenCalled();
-      expect(enqueueSystemEvent).not.toHaveBeenCalled();
+      expect(runSessionEvent).not.toHaveBeenCalled();
     } finally {
       clearCronJobActive(cronJob.id, activeJobMarker);
       await vi.waitFor(() => expect(getSuspensionVisibleCronTaskRunCount()).toBe(0));
     }
   });
 
-  it("retries recurring wake-now main jobs until temporary lane pressure clears (#75964)", async () => {
-    const { storePath } = timerRegressionFixtures.makeStorePath();
-    const nowMs = () => Date.now();
-    const runHeartbeat = vi
-      .fn<() => Promise<HeartbeatRunResult>>()
-      .mockResolvedValueOnce({ status: "skipped", reason: HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT })
-      .mockResolvedValueOnce({ status: "ran", durationMs: 12 });
-    const enqueueSystemEvent = vi.fn();
-    const requestHeartbeat = vi.fn();
-    const job: CronJob = {
-      id: "busy-recurring-main",
-      name: "busy recurring main",
-      enabled: true,
-      createdAtMs: 0,
-      updatedAtMs: 0,
-      schedule: { kind: "cron", expr: "*/3 * * * *", tz: "UTC", staggerMs: 0 },
-      sessionTarget: "main",
-      wakeMode: "now",
-      payload: { kind: "systemEvent", text: "tick" },
-      state: { nextRunAtMs: 1 },
-    };
+  it("settles a recurring main job only after ordinary session admission completes (#75964)", async () => {
+    const scheduledAt = Date.now();
+    const job = mainJob("busy-recurring-main", scheduledAt, { kind: "systemEvent", text: "tick" });
+    job.schedule = { kind: "cron", expr: "*/3 * * * *", tz: "UTC", staggerMs: 0 };
+    const storePath = await storeJobs([job]);
+    const queued = createDeferred();
+    const admitted = createDeferred();
+    const runSessionEvent = vi.fn<NonNullable<CronServiceDeps["runSessionEvent"]>>(
+      async ({ onLaneWait, onExecutionStarted }) => {
+        onLaneWait?.({ waiting: true });
+        queued.resolve();
+        await admitted.promise;
+        onLaneWait?.({ waiting: false });
+        onExecutionStarted?.({ jobId: job.id, phase: "model_call_started" });
+        return { status: "ok", summary: "tick delivered", delivered: true };
+      },
+    );
+    const events: CronEvent[] = [];
+    const finished = createDeferred();
     const state = createCronServiceState({
       storePath,
-      nowMs,
-      enqueueSystemEvent,
-      requestHeartbeat,
-      requestHeartbeatAndWait: (wake, lifecycle) =>
-        requestOwnedHeartbeatAndWait({ ...wake, coalesceMs: 0 }, lifecycle),
+      nowMs: () => scheduledAt,
+      runSessionEvent,
+      onEvent: (event) => {
+        events.push(event);
+        if (event.jobId === job.id && event.action === "finished") {
+          finished.resolve();
+        }
+      },
       runIsolatedAgentJob: createDefaultIsolatedRunner(),
     });
-    state.store = { version: 1, jobs: [job] };
-    await saveCronStore(storePath, { version: 1, jobs: [job] });
 
-    const disposeWake = setHeartbeatWakeHandler(runHeartbeat);
-    const runPromise = runMissedJobs(state);
+    const runPromise = onTimer(state);
     try {
-      await vi.waitFor(() => expect(runHeartbeat).toHaveBeenCalledTimes(1));
-      await vi.advanceTimersByTimeAsync(1_000);
       await runPromise;
-    } finally {
-      disposeWake();
-    }
+      await awaitGateBeforeSettlement(
+        queued.promise,
+        finished.promise,
+        "Cron timer completed before ordinary session admission",
+      );
+      const runId = requireAdmittedRunId(storePath, job.id);
+      expect(requireJob(state, job.id).state.runningAtMs).toBe(scheduledAt);
+      expect(inspectActiveCronRunReceipt({ storePath, jobId: job.id })).toMatchObject({
+        jobId: job.id,
+      });
+      expect(events.filter((event) => event.action === "finished")).toEqual([]);
 
-    const persistedJob = (await loadCronStore(storePath)).jobs.find(
-      (candidate) => candidate.id === job.id,
-    );
-    expect(enqueueSystemEvent).toHaveBeenCalledTimes(1);
-    expect(runHeartbeat).toHaveBeenCalledTimes(2);
-    expect(requestHeartbeat).not.toHaveBeenCalled();
-    expect(persistedJob?.state.lastStatus).toBe("ok");
-    expect(persistedJob?.state.runningAtMs).toBeUndefined();
+      admitted.resolve();
+      await finished.promise;
+      const persistedJob = requireJob({ store: await loadCronStore(storePath) }, job.id);
+      expect(runSessionEvent).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          job: expect.objectContaining({ id: job.id, sessionTarget: "main" }),
+          text: "tick",
+        }),
+      );
+      expect(persistedJob.state).toMatchObject({
+        lastStatus: "ok",
+        lastDelivered: true,
+        lastDeliveryStatus: "delivered",
+      });
+      expect(persistedJob.state.runningAtMs).toBeUndefined();
+      expect(inspectActiveCronRunReceipt({ storePath, jobId: job.id })).toBeUndefined();
+      expect(events.filter((event) => event.action === "finished")).toEqual([
+        expect.objectContaining({
+          jobId: job.id,
+          status: "ok",
+          summary: "tick delivered",
+          delivered: true,
+          deliveryStatus: "delivered",
+        }),
+      ]);
+      expect(readCronRunRecordsForTests(job.id).filter((entry) => entry.runId === runId)).toEqual([
+        expect.objectContaining({ status: "succeeded" }),
+      ]);
+      expect(state.deps.enqueueSystemEvent).not.toHaveBeenCalled();
+      expect(state.deps.enqueueSessionEvent).not.toHaveBeenCalled();
+    } finally {
+      stop(state);
+      admitted.resolve();
+      await drain(runPromise);
+    }
   });
 
   it("retries cron schedule computation from the next second when the first attempt returns undefined (#17821)", () => {

@@ -1,8 +1,10 @@
+import { isDeepStrictEqual } from "node:util";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
+import { requestSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
 import { assertAgentDeletionWorkerPredicate } from "../state/agent-deletion.worker.js";
 import {
   CLAW_PACKAGE_LIFECYCLE_LEASE_SCOPE,
@@ -16,7 +18,9 @@ import {
 } from "../state/openclaw-state-lease-worker.js";
 import type { WorkerOperationHandlers } from "../state/worker-operation-registry.js";
 import { rowToRef, selectMcpRefs } from "./mcp-records.js";
+import { readClawMonitorCleanupSnapshotInDatabase } from "./monitor-cleanup-read.kernel.js";
 import { updateClawPackageRefStatusInDatabase } from "./package-status.kernel.js";
+import { mutatePortableHeartbeatInWorker } from "./portable-heartbeat-write.kernel.js";
 import {
   readClawInstallRecordFromDatabase,
   readClawOrphanWorkspaceInDatabase,
@@ -25,6 +29,26 @@ import type { ClawProvenanceWriteOperations } from "./provenance-write.worker-co
 import { mutateClawRemovalJournalInWorker } from "./removal-journal.worker.js";
 
 export const clawProvenanceOperations = {
+  "clawProvenance.portableHeartbeat": (
+    input: ClawProvenanceWriteOperations["clawProvenance.portableHeartbeat"]["input"],
+    { open, stateOptions },
+  ) => mutatePortableHeartbeatInWorker(open(), input, stateOptions()),
+  "clawProvenance.monitorCleanupGuard": (
+    input: ClawProvenanceWriteOperations["clawProvenance.monitorCleanupGuard"]["input"],
+    { open, stateOptions },
+  ) =>
+    runOpenClawStateWriteTransaction(
+      ({ db }) => {
+        const snapshot = readClawMonitorCleanupSnapshotInDatabase(db, input);
+        if (!isDeepStrictEqual(snapshot, input.expected)) {
+          throw new Error(
+            "Attached scheduled work or Claw removal ownership changed before monitor cancellation.",
+          );
+        }
+        requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
+      },
+      { database: open(), ...stateOptions() },
+    ),
   "clawProvenance.removalJournal": (
     input: ClawProvenanceWriteOperations["clawProvenance.removalJournal"]["input"],
     { open, stateOptions },

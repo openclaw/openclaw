@@ -91,7 +91,6 @@ config.models.providers["heap-rig-utility"] = {
 config.agents.defaults.utilityModel = "heap-rig-utility/gpt-5.6-luna";
 config.agents.defaults = {
   ...config.agents.defaults,
-  heartbeat: { every: "0m" },
   skipBootstrap: true,
   skills: [],
   modelPolicy: {},

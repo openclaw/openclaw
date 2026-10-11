@@ -38,7 +38,7 @@ export function registerRequiredReplyCompletionCases({
     });
 
     const { run } = createMinimalRun({
-      opts: { isHeartbeat: false, onPartialReply, onBlockReply, onReasoningStream },
+      opts: { onPartialReply, onBlockReply, onReasoningStream },
       blockStreamingEnabled: true,
       runOverrides: { silentExpected: true, terminalReplyExpectation: "optional" },
     });
@@ -65,7 +65,7 @@ export function registerRequiredReplyCompletionCases({
       });
 
       const { run } = createMinimalRun({
-        opts: { isHeartbeat: false, onPartialReply, onBlockReply, onReasoningStream },
+        opts: { onPartialReply, onBlockReply, onReasoningStream },
         blockStreamingEnabled: true,
         runOverrides: { silentExpected: true, terminalReplyExpectation },
       });

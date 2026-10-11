@@ -8,20 +8,15 @@ import {
 } from "../../agents/admitted-run-context.js";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
 import { classifyFailoverReason } from "../../agents/embedded-agent-helpers.js";
-import {
-  createDeferredEmbeddedRunLifecycleManager,
-  type DeferredEmbeddedRunLifecycleManager,
-} from "../../agents/embedded-agent-runner/run/deferred-lifecycle-owner.js";
+import type { DeferredEmbeddedRunLifecycleManager } from "../../agents/embedded-agent-runner/run/deferred-lifecycle-owner.js";
 import type { RunEmbeddedAgentParams } from "../../agents/embedded-agent-runner/run/params.js";
 import { renderRateLimitOrOverloadedCopy } from "../../agents/failover/user-copy.js";
 import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
 import { leaseMcpAppModelContextForSessionTurn } from "../../agents/mcp-ui-resource.js";
 import { resolveReplyExpectation } from "../../agents/reply-completion.js";
 import { createAgentPatchedSessionModelRunGuard } from "../../agents/session-model-auto-revert.js";
-import { readChannelContextGatewayContextResolver } from "../../channels/message-access/admission-evidence.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
-import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import { logVerbose } from "../../globals.js";
 import {
   captureAgentRunLifecycleGeneration,
@@ -29,22 +24,15 @@ import {
 } from "../../infra/agent-events.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
 import { emitAgentRunStatusEvent } from "../../infra/agent-run-status-events.js";
-import {
-  bindAgentRunTerminalWriteSettlement,
-  drainAgentRunTerminalWrites,
-} from "../../infra/agent-run-terminal-writes.js";
+import { bindAgentRunTerminalWriteSettlement } from "../../infra/agent-run-terminal-writes.js";
 import { isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { logSessionTurnCreated } from "../../logging/diagnostic.js";
-import {
-  bindGatewayContextResolver,
-  getPluginRuntimeGatewayRequestScope,
-} from "../../plugins/runtime/gateway-request-scope.js";
 import { progressCardRefreshRunProjection } from "../../sessions/input-provenance.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
-import { captureCommandOwnerAssertion } from "../command-owner-authority.js";
 import type { PreparedReplyTranscriptStart } from "../get-reply-options.types.js";
 import type { ReplyPayload } from "../types.js";
+import { prepareReplyTurnExecution } from "./agent-runner-admission.js";
 import {
   clearRecoveredAutoFallbackPrimaryProbeSelection,
   resolveRunAfterAutoFallbackPrimaryProbeRecheck,
@@ -80,11 +68,9 @@ import {
   resolveRunStartupPhase,
 } from "./agent-runner-turn-timing.js";
 import { resolveQueuedReplyRuntimeConfig } from "./agent-runner-utils.js";
-import { prepareChannelRunAdmission } from "./channel-run-admission.js";
 import { shouldNotifyUserAboutCompaction } from "./compaction-notice.js";
 import { type CurrentTurnImages, resolveCurrentTurnImages } from "./current-turn-images.js";
 import type { FollowupRun } from "./queue.js";
-import { resolveFollowupAbortSignal } from "./queue/types.js";
 import { resolveReplyFailureVisibility, type DirectBlockDelivery } from "./reply-delivery.js";
 import { createReplyMediaContext, type ReplyMediaContext } from "./reply-media-paths.js";
 import { resolveReplyOperationAbortReason } from "./reply-operation-abort.js";
@@ -105,6 +91,7 @@ async function executeAgentTurnInternalLoop(
   admittedRunContext: { current?: AdmittedRunContext },
   deferredLifecycle: DeferredEmbeddedRunLifecycleManager,
   compaction: AgentTurnCompaction,
+  scheduledMessageActionTurnCapability?: string,
 ): Promise<AgentTurnInternalResult> {
   let params = inputParams;
   const heartbeatState = { didLogStrip: false };
@@ -168,7 +155,6 @@ async function executeAgentTurnInternalLoop(
       agentId: params.followupRun.run.agentId,
       lifecycleGeneration,
       verboseLevel: params.resolvedVerboseLevel,
-      isHeartbeat: params.isHeartbeat,
       isControlUiVisible: shouldSurfaceToControlUi,
       ...progressCardRefreshRunProjection(params.followupRun.run.inputProvenance),
       completionSource: params.completionSource,
@@ -387,6 +373,7 @@ async function executeAgentTurnInternalLoop(
       });
       const cycleParams: AgentFallbackCycleParams = {
         preparedRunAdmission,
+        scheduledMessageActionTurnCapability,
         turn: params,
         effectiveRun,
         runtimeConfig,
@@ -496,10 +483,12 @@ async function executeAgentTurnInternalLoop(
   await modelPatch.finish(!terminalRunFailed && !patchedModelNeedsRevert);
   let terminalFailurePayload: ReplyPayload | undefined;
   if (terminalRunFailed) {
-    const replyExpectation = resolveReplyExpectation(params.followupRun.run);
+    const replyExpectation = resolveReplyExpectation({
+      terminalReplyExpectation: params.followupRun.run.terminalReplyExpectation,
+      inputProvenance: params.followupRun.run.inputProvenance,
+      scheduledAutomation: params.followupRun.run.scheduledAutomation !== undefined,
+    });
     terminalFailurePayload = buildTerminalAgentRunFailureReplyPayload({
-      isHeartbeat: params.isHeartbeat,
-      useHeartbeatFailureCopy: params.opts?.useHeartbeatFailureCopy,
       replyExpectation,
       visibleReplyDelivered:
         replyExpectation === "optional"
@@ -549,14 +538,12 @@ async function executeAgentTurnOutcome(
   let modelContextLease: AppContextTurnParams["mcpAppContextLease"];
   const prepareMcpAppModelContext = async () => {
     requester?.assertCurrent();
-    modelContextLease = executionParams.isHeartbeat
-      ? undefined
-      : await leaseMcpAppModelContextForSessionTurn({
-          agentId: executionParams.followupRun.run.agentId,
-          sessionId: executionParams.followupRun.run.sessionId,
-          sessionKey: executionParams.sessionKey ?? executionParams.followupRun.run.sessionKey,
-          requesterId: requester?.profileId,
-        });
+    modelContextLease = await leaseMcpAppModelContextForSessionTurn({
+      agentId: executionParams.followupRun.run.agentId,
+      sessionId: executionParams.followupRun.run.sessionId,
+      sessionKey: executionParams.sessionKey ?? executionParams.followupRun.run.sessionKey,
+      requesterId: requester?.profileId,
+    });
     requester?.assertCurrent();
     return modelContextLease;
   };
@@ -579,63 +566,21 @@ async function executeAgentTurnOutcome(
   try {
     const internal = await withAgentRunLifecycleGeneration(lifecycleGeneration, async () => {
       try {
-        const admittedRunContext: { current?: AdmittedRunContext } = {};
-        const gatewayContextResolver =
-          readChannelContextGatewayContextResolver(executionParams.sessionCtx) ??
-          getPluginRuntimeGatewayRequestScope()?.resolveGatewayContext;
-        const preparedRunAdmission = prepareChannelRunAdmission({
-          sourceContext: executionParams.followupRun.run,
-          cfg: resolveQueuedReplyRuntimeConfig(executionParams.followupRun.run.config),
-          runId,
-          agentId: executionParams.followupRun.run.agentId,
-          ingressKind: "channel",
-          boundary: "auto-reply.agent-runner",
-          operatorAuthority: executionParams.followupRun.operatorAuthority,
-          evidence: executionParams.followupRun.channelAdmissionEvidence,
-          gatewayLocalUserIngress: executionParams.followupRun.gatewayLocalUserIngress,
-          assertSourceCurrent: composeSessionSourceAssertion([
-            executionParams.followupRun.run.senderIsOwner === true
-              ? captureCommandOwnerAssertion(executionParams.followupRun.run)
-              : undefined,
-            executionParams.followupRun.run.internalEventExecution?.assertCurrent,
-          ]),
-          onAdmitted: (context) => {
-            bindGatewayContextResolver(context, gatewayContextResolver);
-            admittedRunContext.current = context;
-            executionParams.followupRun.run.skillLibraryAuthoring?.bind(context);
-          },
-        });
-        const deferredLifecycle = createDeferredEmbeddedRunLifecycleManager({
-          runId,
-          agentId: executionParams.followupRun.run.agentId,
-          sessionId: executionParams.followupRun.run.sessionId,
-          sessionKey: executionParams.sessionKey,
-          sessionFile: executionParams.followupRun.run.sessionFile,
-          abortSignal: resolveFollowupAbortSignal({
-            abortSignal:
-              executionParams.replyOperation?.abortSignal ?? executionParams.opts?.abortSignal,
-            operatorAuthority: executionParams.followupRun.operatorAuthority,
-          }),
-        });
+        const execution = prepareReplyTurnExecution(executionParams, runId);
         try {
           return await executeAgentTurnInternalLoop(
             executionParams,
             runId,
             commitTerminalOutcome,
             prepareMcpAppModelContext,
-            preparedRunAdmission,
-            admittedRunContext,
-            deferredLifecycle,
+            execution.preparedRunAdmission,
+            execution.admittedRunContext,
+            execution.deferredLifecycle,
             compaction,
+            execution.scheduledMessageActionTurnCapability,
           );
         } finally {
-          try {
-            await deferredLifecycle.complete();
-          } finally {
-            await drainAgentRunTerminalWrites(preparedRunAdmission.operationalRunInstance).finally(
-              preparedRunAdmission.close,
-            );
-          }
+          await execution.close();
         }
       } finally {
         modelContextLease?.rollback();

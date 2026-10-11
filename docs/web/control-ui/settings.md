@@ -113,7 +113,7 @@ unchanged settings show a disabled **Connecting…** or **Reconnecting…** acti
 Editing the URL or secret enables **Apply and reconnect**, so you can replace a
 connection that is stuck retrying. A disconnected connection offers **Connect**
 or **Retry connection**.
-Open **Connection details** for authentication and heartbeat information, or use
+Open **Connection details** for authentication and connection information, or use
 its **Reconnect** action to troubleshoot the current connection.
 
 The separate **Session** section saves the **Default session** for the current
@@ -143,7 +143,7 @@ original timestamp and measured round-trip time.
 Activity polling reads process counters through `system.info`, without running
 the full task and session inspection used by the operator `status` report.
 
-Ping measures a lightweight `last-heartbeat` request over the existing WebSocket,
+Ping measures a read-only `cron.status` request over the existing WebSocket,
 including Gateway request handling. It is not ICMP ping or model response time.
 
 ## Language support

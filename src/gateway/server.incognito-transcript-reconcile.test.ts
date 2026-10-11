@@ -42,7 +42,6 @@ it("serves authorized incognito descriptions, events, and reconciled history", a
             workspace: state.workspaceDir,
             skipBootstrap: true,
             model: { primary: "openai/gpt-5.5" },
-            heartbeat: { every: "0m" },
           },
         },
         plugins: { slots: { memory: "none" } },

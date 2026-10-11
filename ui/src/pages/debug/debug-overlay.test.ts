@@ -37,6 +37,61 @@ async function updateOverlayVitals(overlay: TestDebugOverlay): Promise<void> {
 useDebugTestEnvironment();
 
 describe("DebugOverlay", () => {
+  it("shows canonical job outcomes, redacts reasons, and omits compatibility alias noise", async () => {
+    vi.useFakeTimers();
+    const request = vi.fn(async (method: string) =>
+      method === "sessions.list"
+        ? { sessions: [] }
+        : method === "system.info"
+          ? {}
+          : diagnosticResponse(method),
+    );
+    const overlay = document.createElement("openclaw-debug-overlay") as TestDebugOverlay;
+    overlay.context = createDebugApplicationContext(request);
+    Object.assign(overlay.context.gateway, {
+      eventLog: [
+        { ts: 3, event: "heartbeat", payload: { status: "skipped", reason: "alias only" } },
+        {
+          ts: 2,
+          event: "cron",
+          payload: {
+            jobId: "monitor-42",
+            runId: "run-17",
+            action: "finished",
+            status: "skipped",
+            error: "owner unavailable; token=synthetic-private-token",
+            job: { payload: { message: "private prompt" } },
+            summary: "private scratch",
+          },
+        },
+        {
+          ts: 1,
+          event: "cron",
+          payload: { action: "finished", status: "error", error: "No route" },
+        },
+      ],
+    });
+    document.body.append(overlay);
+    try {
+      overlay.toggle();
+      await vi.advanceTimersByTimeAsync(0);
+      await updateOverlayVitals(overlay);
+      const rows = overlay.querySelectorAll(".debug-overlay__events li");
+      expect(rows).toHaveLength(2);
+      expect(normalizedText(rows[0])).toContain(
+        "cron · Job monitor-42 · Run run-17 · skipped · owner unavailable",
+      );
+      expect(normalizedText(rows[0])).not.toContain("synthetic-private-token");
+      expect(normalizedText(rows[0])).not.toContain("private prompt");
+      expect(normalizedText(rows[0])).not.toContain("private scratch");
+      expect(normalizedText(rows[1])).toContain("cron · error · No route");
+      expect(normalizedText(rows[1])).not.toContain("Job");
+      expect(normalizedText(rows[1])).not.toContain("Run");
+    } finally {
+      overlay.remove();
+      vi.useRealTimers();
+    }
+  });
   it("keeps vitals live while an active-run read is pending and minimizes invisible work", async () => {
     vi.useFakeTimers();
     const heldRuns = deferred<unknown>();

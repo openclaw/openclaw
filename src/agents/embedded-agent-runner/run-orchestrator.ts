@@ -487,10 +487,7 @@ async function runEmbeddedAgentForSession(
                 runId: params.runId,
                 trigger: params.trigger,
                 event: { cleanedBody: params.prompt },
-                context: {
-                  ...hookCtx,
-                  heartbeatEventQueueSessionKey: params.heartbeatEventQueueSessionKey,
-                },
+                context: hookCtx,
                 onDispatch: () =>
                   notifyExecutionPhase("before_agent_reply", { provider, model: modelId }),
                 onDeclined: () =>

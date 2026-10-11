@@ -184,6 +184,7 @@ describe("status-overview-rows", () => {
   it("builds status-all overview rows from the shared surface", () => {
     const summary = createStatusCommandOverviewRowsParams().summary;
     const rows = buildStatusAllOverviewRows({
+      automations: { ok: true, value: { enabled: true, jobs: 0, nextWakeAtMs: null } },
       surface: {
         ...baseStatusOverviewSurface,
         tailscaleMode: "off",

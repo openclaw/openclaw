@@ -136,12 +136,14 @@ export function trackSqliteStatementExecutions<Key extends string>(
 export function observeHostDataSql(onQuery?: (sql: string, database?: DatabaseSync) => void): {
   calls: Mock[];
   queries: string[];
+  executedQueries: string[];
   restore: () => void;
 } {
   // Validate the real runtime once before measurement. The owner's capability
   // probes are setup, not an exemption for arbitrary in-memory database SQL.
   const native = requireNodeSqlite();
   const queries: string[] = [];
+  const executedQueries: string[] = [];
   const recordQuery = (sql: string, database?: DatabaseSync) => {
     queries.push(sql);
     onQuery?.(sql, database);
@@ -166,6 +168,7 @@ export function observeHostDataSql(onQuery?: (sql: string, database?: DatabaseSy
       sql,
     ) {
       exec(sql);
+      executedQueries.push(sql);
       recordQuery(sql, this);
       return originalExec.call(this, sql);
     }),
@@ -177,7 +180,9 @@ export function observeHostDataSql(onQuery?: (sql: string, database?: DatabaseSy
       new Proxy(original, {
         apply(target, receiver: StatementSync, args) {
           called(...args);
-          recordQuery(receiver.sourceSQL);
+          const sql = receiver.sourceSQL;
+          executedQueries.push(sql);
+          recordQuery(sql);
           return Reflect.apply(target, receiver, args);
         },
       }),
@@ -187,6 +192,7 @@ export function observeHostDataSql(onQuery?: (sql: string, database?: DatabaseSy
   return {
     calls: [prepare, exec, ...statements.map(({ called }) => called)],
     queries,
+    executedQueries,
     restore: () => {
       spies.forEach((spy) => spy.mockRestore());
       statements.forEach(({ spy }) => spy.mockRestore());

@@ -194,7 +194,6 @@ describe("Discord admission through Gateway policy publication", () => {
     let state: ReturnType<GatewayReloadHandlerParams["getState"]> = {
       hooksConfig: null,
       hookClientIpConfig: { allowRealIpFallback: false },
-      heartbeatRunner: { stop: vi.fn(), updateConfig: vi.fn() },
       cronState: createLazyGatewayCronState({
         scheduler,
         cfg,

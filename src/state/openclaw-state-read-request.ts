@@ -37,6 +37,18 @@ export function captureCommand(command: OpenClawStateReadCommand): OpenClawState
   ) {
     return structuredClone(command);
   }
+  if (
+    command.type === "clawMonitorCleanup.snapshot" ||
+    command.type === "clawMonitorCleanup.portable"
+  ) {
+    return structuredClone(command);
+  }
+  if (
+    command.type === "automationProactive.receipts" ||
+    command.type === "automationProactive.jobs"
+  ) {
+    return { ...command, input: { ...command.input, agentIds: [...command.input.agentIds] } };
+  }
   if (isWorkspaceJournalReadCommand(command)) {
     return command.type === "placementJournals.owners"
       ? { ...command }

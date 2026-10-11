@@ -21,7 +21,7 @@ it("records delivered delivery without a duplicate relay", async () => {
         delivered: true,
       })),
     },
-    async ({ cron, enqueueSystemEvent, requestHeartbeat }) => {
+    async ({ cron, enqueueSystemEvent, enqueueSessionEvent }) => {
       const job = await cron.add({
         name: "announce-delivered",
         enabled: true,
@@ -33,7 +33,7 @@ it("records delivered delivery without a duplicate relay", async () => {
       });
       expect(await cron.run(job.id, "force")).toEqual({ ok: true, ran: true });
       expect(enqueueSystemEvent).not.toHaveBeenCalled();
-      expect(requestHeartbeat).not.toHaveBeenCalled();
+      expect(enqueueSessionEvent).not.toHaveBeenCalled();
       expect(cron.getJob(job.id)?.state.lastDeliveryStatus).toBe("delivered");
     },
   );
@@ -47,7 +47,7 @@ it("rejects an authored delivery object without a mode", async () => {
       logger: createNoopLogger(),
       cronEnabled: false,
     },
-    async ({ cron, enqueueSystemEvent }) => {
+    async ({ cron, enqueueSystemEvent, enqueueSessionEvent }) => {
       const delivery = { mode: "announce" as const, channel: "telegram", to: "123" };
       Reflect.deleteProperty(delivery, "mode");
       await expect(
@@ -63,6 +63,7 @@ it("rejects an authored delivery object without a mode", async () => {
       ).rejects.toThrow("delivery requires an explicit mode");
       expect(await cron.list()).toEqual([]);
       expect(enqueueSystemEvent).not.toHaveBeenCalled();
+      expect(enqueueSessionEvent).not.toHaveBeenCalled();
     },
   );
 });

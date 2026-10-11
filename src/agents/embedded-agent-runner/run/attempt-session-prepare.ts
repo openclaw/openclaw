@@ -375,6 +375,7 @@ export async function prepareEmbeddedAttemptSessionBoundary(input: {
         );
         // Keep unanswered user input in history through failed internal continuations.
         const preserveUnansweredUser =
+          !isMainSessionRestartRecoveryInputProvenance(attempt.inputProvenance) &&
           shouldPreserveUserFacingSessionStateForInputProvenance(attempt.inputProvenance) &&
           (!orphanProvenance || orphanProvenance.kind === "external_user");
         if (reconciledCurrentUser || preserveUnansweredUser) {

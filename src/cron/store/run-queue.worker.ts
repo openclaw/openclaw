@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import { isAgentDeletionBlocked } from "../../agents/agent-lifecycle-registry.js";
 import {
@@ -11,6 +12,7 @@ import type { OpenClawStateDatabase } from "../../state/openclaw-state-db-contra
 import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
 import { resolveCronJobEffectiveAgentId, tryResolveCronJobEffectiveAgentId } from "../agent-id.js";
 import { resolveCronJobConfigRevision } from "../config-revision.js";
+import { CRON_ADMISSION_DEFERRED_RECEIPT_ERROR } from "../service/admission-deferred.js";
 import { isJobEnabled } from "../service/jobs-scheduling.js";
 import { retainManualOneShotOccurrence } from "../service/one-shot-schedule.js";
 import type { CronJob } from "../types.js";
@@ -31,7 +33,7 @@ import {
 import type { CronRunReceiptWriteSchema } from "./run-receipt-write-admission.js";
 import { prepareCronRunReceiptWriteSchema } from "./run-receipt-write-admission.js";
 import type { CronRunReceiptHandle } from "./run-receipt.types.js";
-import { parseCronScheduledRunId } from "./run-request-id.js";
+import { createCronScheduledRunId, parseCronScheduledRunId } from "./run-request-id.js";
 import {
   loadCronRuntimeAuthorities,
   repairCronRuntimeAuthorityRows,
@@ -139,8 +141,12 @@ export function requestCronRunsInWorker(
             .where("status", "=", "running"),
         );
         const timed = parseCronScheduledRunId(request.receiptId);
+        const deferred =
+          request.mode === "scheduled" &&
+          existing?.status === "skipped" &&
+          existing.error_text === CRON_ADMISSION_DEFERRED_RECEIPT_ERROR;
         let reason: string | undefined;
-        if (existing) {
+        if (existing && !deferred) {
           reason = "already-requested";
         } else if (
           !job ||
@@ -184,7 +190,17 @@ export function requestCronRunsInWorker(
           continue;
         }
         const handle: CronRunReceiptHandle = {
-          receiptId: request.receiptId,
+          // An unstarted attempt did not consume its slot. Give the next
+          // attempt its own fence while preserving that slot's identity.
+          receiptId:
+            deferred && timed
+              ? createCronScheduledRunId(
+                  input.storeKey,
+                  job.id,
+                  timed.scheduledSlotMs,
+                  randomUUID(),
+                )
+              : request.receiptId,
           storeKey: input.storeKey,
           jobId: job.id,
           configRevision: request.configRevision,

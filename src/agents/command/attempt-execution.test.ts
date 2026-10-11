@@ -27,6 +27,7 @@ import {
   claudeCliSessionTranscriptHasContent,
   claudeCliSessionTranscriptHasOrphanedToolUse,
   createAcpVisibleTextAccumulator,
+  resolveFallbackRetryContext,
   resolveFallbackRetryPrompt,
   sessionTranscriptHasContent,
 } from "./attempt-execution.helpers.js";
@@ -60,6 +61,19 @@ describe("resolveFallbackRetryPrompt", () => {
     expect(result).toBe(
       `${prelude}\n\n[Retry after the previous model attempt failed or timed out]\n\n${originalBody}`,
     );
+    expect(
+      resolveFallbackRetryContext({
+        isFallbackRetry: true,
+        sessionHasHistory: false,
+        priorContextPrelude: prelude,
+      }),
+    ).toEqual([
+      { kind: "conversation-data", text: prelude },
+      {
+        kind: "runtime-instruction",
+        text: "[Retry after the previous model attempt failed or timed out]",
+      },
+    ]);
   });
 });
 

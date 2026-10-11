@@ -203,7 +203,7 @@ it("waits for recovery release before admitting a queued successor", async () =>
   await Promise.resolve();
   expect(settled).toBe(false);
   await expect(
-    admit({ storePath, expectedSessionId: sessionId, kind: "heartbeat" }),
+    admit({ storePath, expectedSessionId: sessionId, kind: "background" }),
   ).resolves.toEqual({ status: "skipped", reason: "active-run" });
   release.release();
   owned(await successor).complete();
@@ -379,11 +379,11 @@ it("keeps an already-waiting follow-up behind the delivery barrier", async () =>
     owned(await admission).complete();
   }
 });
-it("skips heartbeat turns while delivery settles", async () => {
+it("skips background turns while delivery settles", async () => {
   const active = operation();
   const barrier = createDeferred();
   active.completeWithAfterClearBarrier(barrier.promise);
-  await expect(admit({ sessionId: "heartbeat-session", kind: "heartbeat" })).resolves.toEqual({
+  await expect(admit({ sessionId: "background-session", kind: "background" })).resolves.toEqual({
     status: "skipped",
     reason: "active-run",
   });

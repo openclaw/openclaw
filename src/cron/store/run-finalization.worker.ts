@@ -4,6 +4,7 @@ import { getSqliteWorkerStateContext } from "../../infra/sqlite-worker-state-con
 import type { OpenClawStateDatabase } from "../../state/openclaw-state-db-contract.js";
 import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
 import { resolveCronJobEffectiveAgentId } from "../agent-id.js";
+import { isDeferredCronAdmission } from "../service/admission-deferred.js";
 import type { CronJobPolicyContext } from "../service/state.js";
 import { applyOutcomeToAuthoritativeJob } from "../service/timer-outcomes.js";
 import {
@@ -93,6 +94,16 @@ export function finalizeCronRunsInWorker(
                 const job = jobs.get(completed.jobId);
                 if (!job || completed.activeJobMarker?.jobRemoved === true) {
                   outcome.eventPlans.push({ outcomeIndex });
+                  continue;
+                }
+                if (isDeferredCronAdmission(completed.job, completed)) {
+                  // Unstarted work retains its cadence and buffered input. Only
+                  // release the exact receipt checked above for the next attempt.
+                  delete job.state.queuedAtMs;
+                  delete job.state.runningAtMs;
+                  delete job.state.runningReceiptId;
+                  delete job.state.runningScheduleChangeId;
+                  outcome.upsertedJobs.push(job);
                   continue;
                 }
                 if (

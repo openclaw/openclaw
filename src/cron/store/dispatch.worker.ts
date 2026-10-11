@@ -40,6 +40,8 @@ const loadScheduler = createLazyRuntimeModule(() => import("./scheduler-state.wo
 let scheduler: typeof import("./scheduler-state.worker.js") | undefined;
 const loadStartup = createLazyRuntimeModule(() => import("./startup-plan.worker.js"));
 let startup: typeof import("./startup-plan.worker.js") | undefined;
+const loadProactive = createLazyRuntimeModule(() => import("../default-proactive-job.worker.js"));
+let proactive: typeof import("../default-proactive-job.worker.js") | undefined;
 
 export function prepareCronStateWorkerCommand(type: PropertyKey): Promise<void> | undefined {
   if (
@@ -58,6 +60,11 @@ export function prepareCronStateWorkerCommand(type: PropertyKey): Promise<void> 
   if (type === "cron.finalizeRuns" && !finalization) {
     return loadFinalization().then((loaded) => {
       finalization = loaded;
+    });
+  }
+  if (type === "cron.provisionDefaultProactive" && !proactive) {
+    return loadProactive().then((loaded) => {
+      proactive = loaded;
     });
   }
   if (type === "cron.planStartup" && !startup) {
@@ -122,6 +129,7 @@ export function isCronStateWorkerCommand(command: {
     case "cron.requestRuns":
     case "cron.drainQueue":
     case "cron.cancelRequests":
+    case "cron.provisionDefaultProactive":
     case "cron.recordSkippedRuns":
     case "cron.planStartup":
     case "cron.mutateExternalState":
@@ -172,6 +180,11 @@ export function executeCronStateCommand(
         throw new Error("Cron startup deferral worker is not prepared");
       }
       return startupDeferral.deferCronStartupJobsInWorker(database, command.input);
+    case "cron.provisionDefaultProactive":
+      if (!proactive) {
+        throw new Error("Default automation provisioning worker is not prepared");
+      }
+      return proactive.provisionDefaultProactiveJobInWorker(database, command.input);
     case "cron.registerQuarantine":
       return runOpenClawStateWriteTransaction(
         ({ db }) => registerCronQuarantineInDatabase(db, command.input),

@@ -343,16 +343,15 @@ describe("ownerless skip transaction guards", () => {
       expect.soft(records).toHaveLength(1);
       expect(records[0]?.agentId).toBeUndefined();
       if (testCase.configuredDefault) {
-        expect.soft(state.deps.enqueueSystemEvent).toHaveBeenCalledOnce();
+        expect.soft(state.deps.enqueueSessionEvent).toHaveBeenCalledOnce();
         expect
-          .soft(state.deps.enqueueSystemEvent)
+          .soft(state.deps.enqueueSessionEvent)
           .toHaveBeenCalledWith(
             expect.any(String),
             expect.objectContaining({ agentId: testCase.configuredDefault }),
           );
       } else {
-        expect(state.deps.enqueueSystemEvent).not.toHaveBeenCalled();
-        expect(state.deps.requestHeartbeat).not.toHaveBeenCalled();
+        expect(state.deps.enqueueSessionEvent).not.toHaveBeenCalled();
       }
       expect(receipts(storePath, job.id)).toEqual([]);
       expect(execute).not.toHaveBeenCalled();

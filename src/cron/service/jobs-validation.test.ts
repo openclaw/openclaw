@@ -30,11 +30,14 @@ describe("cron target and payload guidance", () => {
     );
   });
 
-  it("points main-session agent turns to the supported targets", () => {
+  it("accepts main-session agent turns and rejects command payloads", () => {
     expect(() =>
       assertSupportedJobSpec({ sessionTarget: "main", payload: { kind: "agentTurn" } }),
+    ).not.toThrow();
+    expect(() =>
+      assertSupportedJobSpec({ sessionTarget: "main", payload: { kind: "command" } }),
     ).toThrow(
-      'cron sessionTarget "main" requires payload.kind="systemEvent" or "script"; agent turns use "isolated", "current", or "session:<key>"',
+      'cron sessionTarget "main" requires payload.kind="systemEvent", "agentTurn", or "script"',
     );
   });
 });

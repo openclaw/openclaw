@@ -83,7 +83,6 @@ function expectNoPath(entries: Diagnostics, pathValue: string) {
 describe("config plugin validation", () => {
   let fixtureRoot = "";
   let suiteHome = "";
-  let chatPluginDir = "";
   let googleOverridePluginDir = "";
   let manifestlessClaudeBundleDir = "";
   let blockedPluginDir = "";
@@ -139,13 +138,6 @@ describe("config plugin validation", () => {
     await chmodSafeDir(fixtureRoot);
     suiteHome = path.join(fixtureRoot, "home");
     await mkdirSafe(suiteHome);
-    chatPluginDir = path.join(suiteHome, "chat-plugin");
-    await writePluginFixture({
-      dir: chatPluginDir,
-      id: "chat-plugin",
-      channels: ["chat"],
-      schema: { type: "object" },
-    });
     googleOverridePluginDir = path.join(suiteHome, "google");
     await writePluginFixture({
       dir: googleOverridePluginDir,
@@ -436,19 +428,6 @@ describe("config plugin validation", () => {
           },
         },
         warns: false,
-      },
-      {
-        name: "warns when an effective heartbeat route needs Codex",
-        config: {
-          agents: {
-            defaults: {
-              model: { primary: "anthropic/claude-sonnet-4-6", fallbacks: [] },
-              heartbeat: { model: "openai/gpt-5.3-codex-spark" },
-            },
-            entries: { openclaw: {} },
-          },
-        },
-        warns: true,
       },
       {
         name: "warns when a channel model override needs Codex",
@@ -1177,40 +1156,6 @@ describe("config plugin validation", () => {
     expect(res.ok).toBe(true);
   });
 
-  it("accepts plugin heartbeat targets", () => {
-    const res = validateInSuite({
-      agents: { defaults: { heartbeat: { target: "chat" } }, entries: { openclaw: {} } },
-      plugins: { enabled: false, load: { paths: [chatPluginDir] } },
-    });
-    expect(res.ok).toBe(true);
-  });
-
-  it("accepts bundled channel aliases for heartbeat targets", () => {
-    const res = validateInSuite({
-      agents: { defaults: { heartbeat: { target: "gchat" } }, entries: { pi: {} } },
-    });
-    expect(res.ok).toBe(true);
-  });
-
-  it("rejects unknown heartbeat targets", () => {
-    const res = validateInSuite({
-      agents: {
-        defaults: { heartbeat: { target: "not-a-channel" } },
-        entries: { openclaw: {} },
-      },
-    });
-    expect(res.ok).toBe(false);
-    if (!res.ok) {
-      expect(
-        res.issues.filter((issue) => issue.path === "agents.defaults.heartbeat.target"),
-      ).toEqual([
-        {
-          path: "agents.defaults.heartbeat.target",
-          message: "unknown heartbeat target: not-a-channel",
-        },
-      ]);
-    }
-  });
   it("accepts ask destructive policy without dropping adjacent Codex plugin config", () => {
     const res = validateConfigObjectWithPlugins(
       {

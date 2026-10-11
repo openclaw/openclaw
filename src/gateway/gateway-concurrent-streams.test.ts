@@ -490,7 +490,6 @@ describe("Gateway concurrent HTTP streams", () => {
                 workspace: state.workspaceDir,
                 skipBootstrap: true,
                 maxConcurrent: 2,
-                heartbeat: { every: "0m" },
                 model: { primary: provider.modelRef },
                 models: {
                   [provider.modelRef]: {

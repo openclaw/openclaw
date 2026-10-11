@@ -1,6 +1,6 @@
-import { requestHeartbeat } from "openclaw/plugin-sdk/heartbeat-runtime";
+import type { PluginRuntime } from "openclaw/plugin-sdk/channel-core";
 import { asOptionalObjectRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { enqueueRoutedSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
+import { getSlackRuntime } from "../../runtime.js";
 import { truncateSlackText } from "../../truncate.js";
 
 const SLACK_INTERACTION_EVENT_PREFIX = "Slack interaction: ";
@@ -154,19 +154,26 @@ function formatSlackInteractionSystemEvent(payload: Record<string, unknown>): st
   });
 }
 
+type SessionEventOptions = Parameters<PluginRuntime["system"]["enqueueSessionEvent"]>[1];
+
 export function enqueueSlackInteractionEvent(
   payload: Record<string, unknown>,
-  route: Parameters<typeof enqueueRoutedSystemEvent>[1],
-  options: Parameters<typeof enqueueRoutedSystemEvent>[2],
+  route: Pick<SessionEventOptions, "agentId" | "sessionKey">,
+  options: Omit<SessionEventOptions, "agentId" | "sessionKey">,
+  log?: (message: string) => void,
 ): void {
-  if (enqueueRoutedSystemEvent(formatSlackInteractionSystemEvent(payload), route, options)) {
-    requestHeartbeat({
-      source: "hook",
-      intent: "immediate",
-      reason: "hook:slack-interaction",
+  const receipt = getSlackRuntime().system.enqueueSessionEvent(
+    formatSlackInteractionSystemEvent(payload),
+    {
+      ...options,
+      createIfMissing: true,
       agentId: route.agentId,
       sessionKey: route.sessionKey,
-      heartbeat: { target: "last" },
-    });
-  }
+    },
+  );
+  void receipt.settled.then((outcome) => {
+    if (outcome.status !== "completed") {
+      log?.(`slack:interaction follow-up ${outcome.status}: ${outcome.error ?? "cancelled"}`);
+    }
+  });
 }

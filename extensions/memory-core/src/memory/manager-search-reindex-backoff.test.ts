@@ -123,6 +123,8 @@ describe("memory search reindex backoff", () => {
     async (force) => {
       const sessionId = "queued-cooldown";
       const sessionKey = `agent:main:chat:${sessionId}`;
+      const unqueuedSessionId = "unqueued-rebuild";
+      const unqueuedSessionKey = `agent:main:chat:${unqueuedSessionId}`;
       const manager = await fixture.getFreshManager(
         fixture.createConfig({
           provider: "openai",
@@ -137,6 +139,11 @@ describe("memory search reindex backoff", () => {
         sessionId,
         sessionKey,
         messages: [{ role: "user", timestamp: 1, content: "Amethyst queue marker." }],
+      });
+      await fixture.seedSessionTranscript({
+        sessionId: unqueuedSessionId,
+        sessionKey: unqueuedSessionKey,
+        messages: [{ role: "user", timestamp: 1, content: "Topaz full rebuild marker." }],
       });
       let now = Date.now();
       vi.spyOn(Date, "now").mockImplementation(() => now);
@@ -160,12 +167,17 @@ describe("memory search reindex backoff", () => {
       await failed;
       await queued;
       const fields = manager as unknown as { db: DatabaseSync };
+      const unqueuedChunks = () =>
+        readPublishedSessionIndex(fields.db, `sessions/main/${unqueuedSessionId}.jsonl`, "topaz")
+          .chunks;
       expect(
         readPublishedSessionIndex(fields.db, `sessions/main/${sessionId}.jsonl`, "amethyst").chunks,
       ).toHaveLength(1);
+      expect(unqueuedChunks()).toHaveLength(0);
       expect(manager.status().lastSyncError).toContain("queued rebuild failed");
       const embedding = vi.fn(async () => {});
       fixture.provider.beforeEmbedBatch = embedding;
+      fixture.provider.embeddedBatchTexts = [];
       await fixture.seedSessionTranscript({
         sessionId,
         sessionKey,
@@ -173,9 +185,17 @@ describe("memory search reindex backoff", () => {
       });
       await manager.sync({ reason: "search" });
       expect(embedding).not.toHaveBeenCalled();
+      expect(unqueuedChunks()).toHaveLength(0);
       now += 30_000;
       await manager.sync({ reason: "search" });
-      expect(embedding).toHaveBeenCalledTimes(1);
+      expect(fixture.provider.embeddedBatchTexts).toHaveLength(2);
+      expect(fixture.provider.embeddedBatchTexts).toEqual(
+        expect.arrayContaining([
+          expect.stringContaining("Jade pending marker."),
+          expect.stringContaining("Topaz full rebuild marker."),
+        ]),
+      );
+      expect(unqueuedChunks()).toHaveLength(1);
       expect(manager.status().lastSyncError).toBeUndefined();
       expect(
         readPublishedSessionIndex(fields.db, `sessions/main/${sessionId}.jsonl`, "jade").chunks,

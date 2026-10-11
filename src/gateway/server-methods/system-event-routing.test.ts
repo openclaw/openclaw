@@ -1,29 +1,48 @@
-/** Targeted system-event routing and wake behavior. */
-
+/** System events retain their target and requester across asynchronous admission. */
+import "../../test-utils/prepare-compiled-subprocesses.js";
 import { randomUUID } from "node:crypto";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   SYSTEM_PRESENCE_CLEAR_LAST_INPUT_TAG,
   SYSTEM_PRESENCE_LEGACY_CLEAR_LAST_INPUT_SECONDS,
-} from "../../../packages/gateway-protocol/src/schema.js";
-import { peekSystemEvents, resetSystemEventsForTest } from "../../infra/system-events.js";
+} from "../../../packages/gateway-protocol/src/schema/system-event.js";
+import type { SessionEventTarget } from "../../auto-reply/reply/session-event-contract.js";
+import {
+  loadSessionEntryReadOnly,
+  replaceSessionEntry,
+} from "../../config/sessions/session-accessor.sqlite-entry.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { makeCronJob } from "../../cron/delivery.test-helpers.js";
+import {
+  enqueueSystemEventWithReceipt,
+  peekSystemEventEntries,
+  peekSystemEvents,
+  resetSystemEventsForTest,
+  SystemEventQueueFullError,
+} from "../../infra/system-events.js";
 import { listSystemPresence } from "../../infra/system-presence.js";
+import { createDeferredCore } from "../../shared/deferred.js";
+import {
+  createOpenClawTestState,
+  type OpenClawTestState,
+} from "../../test-utils/openclaw-test-state.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
 const mocks = vi.hoisted(() => ({
-  requestHeartbeat: vi.fn(),
-  loadGatewaySessionEntryReadOnly: vi.fn(),
+  captureTarget: vi.fn(),
+  enqueueEvent: vi.fn(),
+  readReceipts: vi.fn(),
 }));
 
-vi.mock("../../infra/heartbeat-wake.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../infra/heartbeat-wake.js")>()),
-  requestHeartbeat: mocks.requestHeartbeat,
+// mock-isolation: Control target-capture gates and receipts without admitting real reply work.
+vi.mock("../../auto-reply/reply/session-event-handoff.js", () => ({
+  captureSessionEventTargetForHost: mocks.captureTarget,
+  enqueueSessionEventForHost: mocks.enqueueEvent,
 }));
-
-vi.mock("../session-utils.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../session-utils.js")>()),
-  loadGatewaySessionEntryReadOnly: mocks.loadGatewaySessionEntryReadOnly,
+// mock-isolation: Use controlled migration receipts for requester revocation without shared-state reads.
+vi.mock("../../cron/proactive-job-receipt.js", () => ({
+  readDefaultProactiveJobReceiptsAsync: mocks.readReceipts,
 }));
 
 vi.mock("../session-utils-store-worker.js", async (importOriginal) => ({
@@ -34,109 +53,186 @@ vi.mock("../session-utils-store-worker.js", async (importOriginal) => ({
 
 import { systemHandlers } from "./system.js";
 
-describe("system-event routing", () => {
-  beforeEach(() => {
-    resetSystemEventsForTest();
-  });
+const systemEvent = expectDefined(systemHandlers["system-event"], "system-event handler");
+const setHeartbeats = expectDefined(systemHandlers["set-heartbeats"], "set-heartbeats handler");
+let state: OpenClawTestState;
+let mainConfig: OpenClawConfig;
 
-  afterEach(() => {
-    resetSystemEventsForTest();
-    mocks.requestHeartbeat.mockReset();
-    mocks.loadGatewaySessionEntryReadOnly.mockReset();
-  });
+function createRequest(params: Record<string, unknown>, cfg = mainConfig) {
+  const respond = vi.fn();
+  const publishPresence = vi.fn();
+  const options = {
+    params,
+    respond,
+    context: { publishPresence, getRuntimeConfig: () => cfg },
+  } as unknown as GatewayRequestHandlerOptions;
+  return { options, respond, publishPresence };
+}
 
-  it("queues and immediately wakes the requested session", async () => {
-    const respond = vi.fn();
-    const sessionKey = "agent:main:main";
-    mocks.loadGatewaySessionEntryReadOnly.mockReturnValue({ entry: { sessionId: "session" } });
-    const request = {
-      params: {
-        text: "OpenClaw updated. Welcome the user back.",
-        sessionKey,
-        wake: true,
-      },
-      respond,
-      context: {
-        publishPresence: vi.fn(),
-        getRuntimeConfig: vi.fn(() => ({ agents: { entries: { main: {} } } })),
-      },
-    } as unknown as GatewayRequestHandlerOptions;
+beforeAll(async () => {
+  state = await createOpenClawTestState({ label: "system-event-routing", layout: "state-only" });
+  mainConfig = { agents: { entries: { main: {} } } };
+  await replaceSessionEntry(
+    { agentId: "main", sessionKey: "agent:main:main" },
+    { sessionId: "session-main", updatedAt: 1 },
+  );
+  for (const archivedAt of [0, 1]) {
+    await replaceSessionEntry(
+      { agentId: "main", sessionKey: `agent:main:archived-${archivedAt}` },
+      { sessionId: `session-archived-${archivedAt}`, updatedAt: 1, archivedAt },
+    );
+  }
+});
 
-    await expectDefined(
-      systemHandlers["system-event"],
-      'systemHandlers["system-event"] test invariant',
-    )(request);
+afterAll(async () => state?.cleanup());
 
-    expect(peekSystemEvents(sessionKey)).toEqual(["OpenClaw updated. Welcome the user back."]);
-    expect(mocks.requestHeartbeat).toHaveBeenCalledWith({
-      source: "notifications-event",
-      intent: "immediate",
-      reason: "wake",
+beforeEach(() => {
+  resetSystemEventsForTest();
+  mocks.captureTarget
+    .mockReset()
+    .mockImplementation(async (agentId: string, sessionKey: string) => ({
+      agentId,
       sessionKey,
-      heartbeat: { target: "last" },
-    });
-    expect(respond).toHaveBeenCalledWith(true, { ok: true }, undefined);
+      sessionId: "captured-session",
+      generation: "captured-generation",
+    }));
+  mocks.enqueueEvent.mockReset().mockReturnValue({
+    id: "event-occurrence",
+    cancel: () => false,
+    accepted: Promise.resolve({ ok: true }),
+    settled: Promise.resolve({ status: "completed", executionStarted: true, delivered: true }),
+  });
+  mocks.readReceipts.mockReset().mockResolvedValue({
+    main: { phase: "complete", jobId: "converted", provisionedAtMs: 1 },
+  });
+});
+
+afterEach(() => resetSystemEventsForTest());
+
+describe("system-event routing", () => {
+  it.each([true, false])(
+    "acknowledges a fresh wake only after acceptance succeeds: %s",
+    async (ok) => {
+      const entered = createDeferredCore();
+      const acceptance = createDeferredCore<{ ok: true } | { ok: false; error: string }>();
+      mocks.enqueueEvent.mockImplementationOnce(() => {
+        entered.resolve(undefined);
+        return {
+          id: "pending",
+          cancel: () => false,
+          accepted: acceptance.promise,
+          settled: Promise.resolve({
+            status: ok ? "completed" : "failed",
+            executionStarted: ok,
+            delivered: false,
+          }),
+        };
+      });
+      const request = createRequest({ text: "Fresh wake.", wake: true });
+      const pending = Promise.resolve(systemEvent(request.options));
+      const outcome = pending.then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+      await entered.promise;
+      const responsesBeforeAcceptance = request.respond.mock.calls.length;
+      const publicationsBeforeAcceptance = request.publishPresence.mock.calls.length;
+      acceptance.resolve(ok ? { ok: true } : { ok: false, error: "target replaced" });
+      const result = await outcome;
+      expect(responsesBeforeAcceptance).toBe(0);
+      expect(publicationsBeforeAcceptance).toBe(0);
+      expect(result).toEqual(ok ? undefined : new Error("target replaced"));
+      expect(request.respond).toHaveBeenCalledTimes(ok ? 1 : 0);
+      expect(request.publishPresence).toHaveBeenCalledTimes(ok ? 1 : 0);
+    },
+  );
+
+  it("refuses an overflowing passive event without acknowledging or replacing queued work", async () => {
+    const sessionKey = "agent:main:main";
+    for (let index = 0; index < 20; index++) {
+      enqueueSystemEventWithReceipt(`Pending manual event ${index}`, { sessionKey });
+    }
+    const queued = peekSystemEventEntries(sessionKey);
+    const request = createRequest({ text: "Overflowing manual event", sessionKey });
+
+    await expect(systemEvent(request.options)).rejects.toBeInstanceOf(SystemEventQueueFullError);
+
+    expect(request.respond).not.toHaveBeenCalled();
+    expect(peekSystemEventEntries(sessionKey)).toEqual(queued);
   });
 
-  it("keeps ambient explicit-owner events on the global session queue", async () => {
-    const respond = vi.fn();
-    const request = {
-      params: { text: "Wake the system owner.", wake: true },
-      respond,
-      context: {
-        publishPresence: vi.fn(),
-        getRuntimeConfig: vi.fn(() => ({
+  it("admits one ordinary occurrence for a live requested session without duplicating its queue", async () => {
+    const sessionKey = "agent:main:main";
+    const text = "OpenClaw updated. Welcome the user back.";
+    const request = createRequest({ text, sessionKey, wake: true });
+
+    await systemEvent(request.options);
+
+    expect(mocks.captureTarget).toHaveBeenCalledExactlyOnceWith("main", sessionKey, {
+      assertCaptureCurrent: expect.any(Function),
+    });
+    expect(mocks.enqueueEvent).toHaveBeenCalledExactlyOnceWith(text, {
+      source: "session",
+      createIfMissing: undefined,
+      assertAcceptanceCurrent: expect.any(Function),
+      agentId: "main",
+      sessionKey,
+      expectedTarget: {
+        agentId: "main",
+        sessionKey,
+        sessionId: "captured-session",
+        generation: "captured-generation",
+      },
+    });
+    expect(peekSystemEvents(sessionKey)).toEqual([]);
+    expect(request.respond).toHaveBeenCalledExactlyOnceWith(true, { ok: true }, undefined);
+  });
+
+  it.each([false, true])(
+    "routes ambient explicit-owner events to global with wake=%s",
+    async (wake) => {
+      const request = createRequest(
+        { text: "System owner notice.", wake },
+        {
           session: { scope: "global" },
           agents: {
             ownership: "explicit",
             defaults: { systemAgent: { agentId: "main" } },
             entries: { main: {}, molty: {} },
           },
-        })),
-      },
-    } as unknown as GatewayRequestHandlerOptions;
+        },
+      );
 
-    await expectDefined(
-      systemHandlers["system-event"],
-      'systemHandlers["system-event"] test invariant',
-    )(request);
+      await systemEvent(request.options);
 
-    expect(peekSystemEvents("agent:main:global")).toEqual(["Wake the system owner."]);
-    expect(peekSystemEvents("agent:main:main")).toEqual([]);
-    expect(mocks.requestHeartbeat).toHaveBeenCalledWith({
-      source: "notifications-event",
-      intent: "immediate",
-      reason: "wake",
-      agentId: "main",
-      sessionKey: "global",
-      heartbeat: { target: "last" },
-    });
-    expect(respond).toHaveBeenCalledWith(true, { ok: true }, undefined);
-  });
+      if (wake) {
+        expect(mocks.captureTarget).toHaveBeenCalledExactlyOnceWith("main", "global", {
+          assertCaptureCurrent: expect.any(Function),
+        });
+        expect(mocks.enqueueEvent).toHaveBeenCalledExactlyOnceWith(
+          "System owner notice.",
+          expect.objectContaining({ agentId: "main", sessionKey: "global", createIfMissing: true }),
+        );
+        expect(peekSystemEvents("agent:main:global")).toEqual([]);
+      } else {
+        expect(mocks.captureTarget).not.toHaveBeenCalled();
+        expect(mocks.enqueueEvent).not.toHaveBeenCalled();
+        expect(peekSystemEvents("agent:main:global")).toEqual(["System owner notice."]);
+      }
+      expect(peekSystemEvents("agent:main:main")).toEqual([]);
+      expect(request.respond).toHaveBeenCalledExactlyOnceWith(true, { ok: true }, undefined);
+    },
+  );
 
   it("rejects immediate wakes for unconfigured agents", async () => {
-    const respond = vi.fn();
-    const request = {
-      params: {
-        text: "OpenClaw updated. Welcome the user back.",
-        sessionKey: "agent:bogus:main",
-        wake: true,
-      },
-      respond,
-      context: {
-        publishPresence: vi.fn(),
-        getRuntimeConfig: vi.fn(() => ({ agents: { entries: { main: {} } } })),
-      },
-    } as unknown as GatewayRequestHandlerOptions;
+    const request = createRequest({ text: "Wake.", sessionKey: "agent:bogus:main", wake: true });
 
-    await expectDefined(
-      systemHandlers["system-event"],
-      'systemHandlers["system-event"] test invariant',
-    )(request);
+    await systemEvent(request.options);
 
     expect(peekSystemEvents("agent:bogus:main")).toEqual([]);
-    expect(mocks.requestHeartbeat).not.toHaveBeenCalled();
-    expect(respond).toHaveBeenCalledWith(
+    expect(mocks.captureTarget).not.toHaveBeenCalled();
+    expect(mocks.enqueueEvent).not.toHaveBeenCalled();
+    expect(request.respond).toHaveBeenCalledExactlyOnceWith(
       false,
       undefined,
       expect.objectContaining({ message: 'Unknown agent id "bogus"' }),
@@ -144,109 +240,152 @@ describe("system-event routing", () => {
   });
 
   it.each([undefined, 0, 1])(
-    "rejects immediate wakes for missing or archived sessions (%s)",
+    "rejects persisted missing or archived sessions (%s)",
     async (archivedAt) => {
-      const respond = vi.fn();
-      const sessionKey = "agent:main:missing";
-      mocks.loadGatewaySessionEntryReadOnly.mockReturnValue({
-        entry: archivedAt === undefined ? undefined : { sessionId: "archived-session", archivedAt },
-      });
-      const request = {
-        params: {
-          text: "OpenClaw updated. Welcome the user back.",
-          sessionKey,
-          wake: true,
-        },
-        respond,
-        context: {
-          publishPresence: vi.fn(),
-          getRuntimeConfig: vi.fn(() => ({ agents: { entries: { main: {} } } })),
-        },
-      } as unknown as GatewayRequestHandlerOptions;
+      const sessionKey =
+        archivedAt === undefined ? "agent:main:missing" : `agent:main:archived-${archivedAt}`;
+      const request = createRequest({ text: "Wake.", sessionKey, wake: true });
 
-      await expectDefined(
-        systemHandlers["system-event"],
-        'systemHandlers["system-event"] test invariant',
-      )(request);
+      await systemEvent(request.options);
 
       expect(peekSystemEvents(sessionKey)).toEqual([]);
-      expect(mocks.requestHeartbeat).not.toHaveBeenCalled();
-      expect(respond).toHaveBeenCalledWith(
+      expect(mocks.captureTarget).not.toHaveBeenCalled();
+      expect(mocks.enqueueEvent).not.toHaveBeenCalled();
+      expect(request.publishPresence).not.toHaveBeenCalled();
+      expect(request.respond).toHaveBeenCalledExactlyOnceWith(
         false,
         undefined,
         expect.objectContaining({ message: `Unknown or archived session "${sessionKey}"` }),
       );
+      const entry = loadSessionEntryReadOnly({ agentId: "main", sessionKey });
+      if (archivedAt === undefined) {
+        expect(entry).toBeUndefined();
+      } else {
+        expect(entry).toMatchObject({ sessionId: `session-archived-${archivedAt}`, archivedAt });
+      }
     },
   );
 
-  it("rejects wake requests mixed with node presence events", async () => {
-    const respond = vi.fn();
+  it("rejects wake requests mixed with node presence events before admission", async () => {
     const sessionKey = "agent:main:main";
-    const request = {
-      params: {
-        text: "Node: Operator Mac",
-        deviceId: "device-1",
-        sessionKey,
-        wake: true,
-      },
-      respond,
-      context: {
-        publishPresence: vi.fn(),
-        getRuntimeConfig: vi.fn(() => ({ agents: { entries: { main: {} } } })),
-      },
-    } as unknown as GatewayRequestHandlerOptions;
+    const request = createRequest({
+      text: "Node: Operator Mac",
+      deviceId: "device-1",
+      sessionKey,
+      wake: true,
+    });
 
-    await expectDefined(
-      systemHandlers["system-event"],
-      'systemHandlers["system-event"] test invariant',
-    )(request);
+    await systemEvent(request.options);
 
     expect(peekSystemEvents(sessionKey)).toEqual([]);
-    expect(mocks.loadGatewaySessionEntryReadOnly).not.toHaveBeenCalled();
-    expect(mocks.requestHeartbeat).not.toHaveBeenCalled();
-    expect(respond).toHaveBeenCalledWith(
+    expect(mocks.captureTarget).not.toHaveBeenCalled();
+    expect(mocks.enqueueEvent).not.toHaveBeenCalled();
+    expect(request.publishPresence).not.toHaveBeenCalled();
+    expect(request.respond).toHaveBeenCalledExactlyOnceWith(
       false,
       undefined,
       expect.objectContaining({ message: "wake is not supported for node presence events" }),
     );
   });
 
+  it("rechecks requester authority after asynchronous target capture", async () => {
+    const entered = createDeferredCore();
+    const capture = createDeferredCore<SessionEventTarget>();
+    mocks.captureTarget.mockImplementationOnce(() => {
+      entered.resolve(undefined);
+      return capture.promise;
+    });
+    let current = true;
+    const sessionKey = "agent:main:main";
+    const instanceId = `revoked-event-${randomUUID()}`;
+    const request = createRequest({ text: "Wake.", sessionKey, wake: true, instanceId });
+    request.options.hasCurrentClientAuthority = () => current;
+    const pending = systemEvent(request.options);
+    const refused = expect(pending).rejects.toThrow("Gateway requester authority changed");
+    await entered.promise;
+    current = false;
+    capture.resolve({ sessionId: "session-main", generation: "captured-generation" });
+    await refused;
+
+    expect(mocks.enqueueEvent).not.toHaveBeenCalled();
+    expect(peekSystemEvents(sessionKey)).toEqual([]);
+    expect(listSystemPresence().find((entry) => entry.instanceId === instanceId)).toBeUndefined();
+    expect(request.publishPresence).not.toHaveBeenCalled();
+    expect(request.respond).not.toHaveBeenCalled();
+  });
+
   it("passes explicit input activity clearing into system presence", async () => {
     const instanceId = `presence-clear-${randomUUID()}`;
-    const handler = expectDefined(
-      systemHandlers["system-event"],
-      'systemHandlers["system-event"] test invariant',
-    );
-    const context = {
-      publishPresence: vi.fn(),
-      getRuntimeConfig: vi.fn(() => ({ agents: { entries: { main: {} } } })),
-    };
-
-    await handler({
-      params: {
-        text: "Node: Operator Mac",
-        instanceId,
-        host: "Operator Mac",
-        mode: "ui",
-        lastInputSeconds: 5,
-      },
-      respond: vi.fn(),
-      context,
-    } as unknown as GatewayRequestHandlerOptions);
-    await handler({
-      params: {
-        text: "Node: Operator Mac",
-        instanceId,
-        host: "Operator Mac",
-        mode: "ui",
+    for (const activity of [
+      { lastInputSeconds: 5 },
+      {
         lastInputSeconds: SYSTEM_PRESENCE_LEGACY_CLEAR_LAST_INPUT_SECONDS,
         tags: [SYSTEM_PRESENCE_CLEAR_LAST_INPUT_TAG],
       },
-      respond: vi.fn(),
-      context,
-    } as unknown as GatewayRequestHandlerOptions);
-
+    ]) {
+      await systemEvent(
+        createRequest({
+          text: "Node: Operator Mac",
+          instanceId,
+          host: "Operator Mac",
+          mode: "ui",
+          ...activity,
+        }).options,
+      );
+    }
     const entry = listSystemPresence().find((candidate) => candidate.instanceId === instanceId);
     expect(entry?.lastInputSeconds).toBeUndefined();
   });
+});
+
+describe("set-heartbeats compatibility authority", () => {
+  it.each(["discovery", "commit"] as const)(
+    "rejects revocation during automation %s",
+    async (stage) => {
+      const entered = createDeferredCore();
+      const resume = createDeferredCore();
+      let current = true;
+      const committed = vi.fn();
+      const job = makeCronJob({ id: "converted" });
+      const list = vi.fn(async () => {
+        if (stage === "discovery") {
+          entered.resolve(undefined);
+          await resume.promise;
+        }
+        return [job];
+      });
+      const update = vi.fn(
+        async (_id: string, _patch: unknown, options?: { commitGuard?: () => void }) => {
+          if (stage === "commit") {
+            entered.resolve(undefined);
+            await resume.promise;
+          }
+          options?.commitGuard?.();
+          committed();
+          return job;
+        },
+      );
+      const request = createRequest({ enabled: false });
+      request.options.hasCurrentClientAuthority = () => current;
+      request.options.context = {
+        ...request.options.context,
+        cron: { list, update },
+      } as unknown as GatewayRequestHandlerOptions["context"];
+      const pending = setHeartbeats(request.options);
+      await entered.promise;
+      current = false;
+      resume.resolve(undefined);
+      await pending;
+
+      expect(committed).not.toHaveBeenCalled();
+      expect(update).toHaveBeenCalledTimes(stage === "commit" ? 1 : 0);
+      expect(request.respond).toHaveBeenCalledExactlyOnceWith(
+        false,
+        undefined,
+        expect.objectContaining({
+          message: expect.stringContaining("Gateway requester authority changed"),
+        }),
+      );
+    },
+  );
 });

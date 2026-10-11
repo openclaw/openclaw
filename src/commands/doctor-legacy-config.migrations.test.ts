@@ -75,35 +75,34 @@ describe("normalizeCompatibilityConfigValues", () => {
     expect(res.changes).toContain("Removed null workspace value from agents.entries entry.");
   });
 
-  it("removes invalid heartbeat active-hours windows so saved config can load", () => {
+  it.each([
+    {
+      name: "malformed",
+      defaults: { start: "99:99", end: "17:00" },
+      agent: { start: "09:00", end: "not-a-time" },
+    },
+    {
+      name: "valid",
+      defaults: { start: "09:00", end: "24:00", timezone: "user" },
+      agent: { start: "22:00", end: "06:00" },
+    },
+  ])("preserves $name heartbeat hours for durable Doctor migration", ({ defaults, agent }) => {
     const res = normalizeCompatibilityConfigValues({
       agents: {
-        defaults: {
-          heartbeat: {
-            every: "30m",
-            activeHours: { start: "99:99", end: "17:00" },
-          },
-        },
-        entries: {
-          ops: {
-            heartbeat: {
-              prompt: "Check alerts",
-              activeHours: { start: "09:00", end: "not-a-time" },
-            },
-          },
-        },
+        defaults: { heartbeat: { every: "30m", activeHours: defaults } },
+        entries: { ops: { heartbeat: { prompt: "Check alerts", activeHours: agent } } },
       },
     });
 
-    expect(res.config.agents?.defaults?.heartbeat).toEqual({ every: "30m" });
-    expect(res.config.agents?.entries?.ops?.heartbeat).toEqual({ prompt: "Check alerts" });
-    expect(res.changes).toContain(
-      "Removed invalid agents.defaults.heartbeat.activeHours; heartbeats will use unrestricted hours until it is reconfigured.",
-    );
-    expect(res.changes).toContain(
-      "Removed invalid agents.entries.ops.heartbeat.activeHours; heartbeats will use unrestricted hours until it is reconfigured.",
-    );
-    expect(validateConfigObject(res.config).ok).toBe(true);
+    expect(res.config.agents?.defaults?.heartbeat).toEqual({
+      every: "30m",
+      activeHours: defaults,
+    });
+    expect(res.config.agents?.entries?.ops?.heartbeat).toEqual({
+      prompt: "Check alerts",
+      activeHours: agent,
+    });
+    expect(res.changes).toEqual([]);
   });
 
   it("removes bindings for missing configured agents", () => {

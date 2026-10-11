@@ -93,7 +93,6 @@ async function withWebchatTool(
       defaultAgentId: "main",
       log: createNoopLogger(),
       enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
       runIsolatedAgentJob: async () => {
         throw new Error("disabled fixture must not run an agent");
       },

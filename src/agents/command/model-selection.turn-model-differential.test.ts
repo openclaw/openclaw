@@ -6,7 +6,6 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   TURN_MODEL_DEFAULT_REF,
   TURN_MODEL_DIFFERENTIAL_FIXTURES,
-  TURN_MODEL_OVERRIDE_REF,
   turnModelRefLabel,
   turnModelVerdict,
   type TurnModelDifferentialFixture,
@@ -182,10 +181,10 @@ async function observeCommandSelection(fixture: TurnModelDifferentialFixture) {
     messageChannel: fixture.ctx.Provider,
     groupId: fixture.child.groupId,
     groupChannel: fixture.child.groupChannel,
-    ...(fixture.heartbeat
+    ...(fixture.modelOverride
       ? {
-          provider: TURN_MODEL_OVERRIDE_REF.provider,
-          model: TURN_MODEL_OVERRIDE_REF.model,
+          provider: fixture.modelOverride.provider,
+          model: fixture.modelOverride.model,
           allowModelOverride: true,
         }
       : {}),
@@ -215,7 +214,7 @@ async function observeCommandSelection(fixture: TurnModelDifferentialFixture) {
   });
   return turnModelVerdict(
     { provider: selection.provider, model: selection.model },
-    fixture.locked ? "locked" : fixture.heartbeat ? "explicit" : undefined,
+    fixture.locked ? "locked" : fixture.modelOverride ? "explicit" : undefined,
   );
 }
 

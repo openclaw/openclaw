@@ -550,20 +550,22 @@ describe("cron service ops regressions", () => {
       ],
     });
 
-    const enqueueSystemEvent = vi.fn();
+    const runSessionEvent = vi.fn(async () => ({ status: "ok" as const }));
     const state = createCronRegressionState({
       storePath: store.storePath,
       nowMs: () => now,
-      enqueueSystemEvent,
+      runSessionEvent,
       runIsolatedAgentJob: vi.fn().mockResolvedValue({ status: "ok", summary: "ok" }),
     });
 
     const result = await run(state, "stale-running", "force");
     expect(result).toEqual({ ok: true, ran: true });
-    expect(enqueueSystemEvent).toHaveBeenCalledTimes(1);
-    const [text, options] = mockCall(enqueueSystemEvent, 0) as [string, { agentId?: unknown }?];
-    expect(text).toBe("stale-running");
-    expect(options?.agentId).toBe("main");
+    expect(runSessionEvent).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        text: "stale-running",
+        job: expect.objectContaining({ id: "stale-running", sessionTarget: "main" }),
+      }),
+    );
   });
 
   it("clears an orphaned queued reservation and executes the due job", async () => {

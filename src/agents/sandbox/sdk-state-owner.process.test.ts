@@ -77,6 +77,9 @@ type Reply = {
 describe("plugin SDK sandbox process ownership", () => {
   it("refuses foreign live-owner mutations while preserving disabled and standalone SDK calls", async () => {
     const root = roots.make("openclaw-sdk-state-owner-");
+    const runtimeArtifacts = roots.make("openclaw-sdk-runtime-artifacts-");
+    // Runtime caches and diagnostics must stay outside the SDK state tree being compared.
+    vi.stubEnv("BUN_RUNTIME_TRANSPILER_CACHE_PATH", runtimeArtifacts);
     vi.stubEnv("HOME", root);
     vi.stubEnv("USERPROFILE", root);
     const env = {
@@ -89,6 +92,8 @@ describe("plugin SDK sandbox process ownership", () => {
       OPENCLAW_CONFIG_PATH: path.join(root, "openclaw.json"),
       OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
       NODE_DISABLE_COMPILE_CACHE: "1",
+      BUN_RUNTIME_TRANSPILER_CACHE_PATH: runtimeArtifacts,
+      OPENCLAW_TEST_LOG_FILE: path.join(runtimeArtifacts, "sdk-owner.log"),
     };
     let parentOwner = await acquireGatewayLock({ env, allowInTests: true, timeoutMs: 0 });
     expect(parentOwner).not.toBeNull();

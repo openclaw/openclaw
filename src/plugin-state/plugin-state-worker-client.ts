@@ -5,7 +5,10 @@ import type {
   SessionEntriesCurrentCheck,
 } from "../config/sessions/session-entry-current.types.js";
 import { assertStateDatabaseReadAllowed } from "../infra/gateway-state-owner.js";
-import { hasSqliteDatabaseSchemaAdmissionForIdentity } from "../infra/sqlite-database-admission.js";
+import {
+  hasSqliteDatabaseSchemaAdmissionForIdentity,
+  readSqliteDatabaseWriteRevisionForIdentity,
+} from "../infra/sqlite-database-admission.js";
 import type { SqliteWorkerStore } from "../infra/sqlite-worker-contract.js";
 import type {
   SqliteWorkerAdmissionFactory,
@@ -157,12 +160,13 @@ async function execute<Key extends keyof PluginStateWorkerOperations>(
         typedCommand.type === "pluginState.lookupMany")
     ) {
       const identity = context.admission.identity.key;
+      const writeRevision = readSqliteDatabaseWriteRevisionForIdentity(context.admission.identity);
       const keys =
         typedCommand.type === "pluginState.lookupMany"
           ? typedCommand.input.keys
           : [typedCommand.input.key];
       const cached = keys.map((key) =>
-        readPluginStateObservationCache(identity, { ...typedCommand.input, key }),
+        readPluginStateObservationCache(identity, { ...typedCommand.input, key }, writeRevision),
       );
       if (cached.every((entry) => entry !== undefined)) {
         const terminalFailure =
@@ -214,7 +218,11 @@ async function execute<Key extends keyof PluginStateWorkerOperations>(
         operationStarted = false;
       }
       if (typedCommand.type === "pluginState.observe") {
-        installObservation = preparePluginStateObservationCacheRead(identity, typedCommand.input);
+        installObservation = preparePluginStateObservationCacheRead(
+          identity,
+          typedCommand.input,
+          writeRevision,
+        );
       }
     }
     // A write-only await here would let later reads overtake it before broker admission.

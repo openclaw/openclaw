@@ -89,6 +89,12 @@ When announce delivery uses `channel: "last"` or omits `channel`, a provider-pre
 
 For isolated jobs, chat delivery is shared: if a chat route is available, the agent can use the `message` tool even with `--no-deliver`. If the agent sends to the configured/current target, OpenClaw skips the fallback announce. Otherwise `announce`, `webhook`, and `none` only control what the runner does with the final reply after the agent turn.
 
+Background commands started by a job with `delivery.mode: "none"` retain that
+no-fallback-delivery policy after the job's turn ends. Their ordinary completion
+turns can process results and start more work without automatically sending a
+final reply to the session's stored channel route. Explicitly targeted `message`
+actions remain subject to the normal tool policy.
+
 Scheduled `message` actions use the Gateway that owns the live run. Keep the
 job's account, channel, target, and configured delivery route, but do not supply
 per-call `gatewayUrl` or `gatewayToken` fields. Ordinary and standalone message
@@ -105,6 +111,33 @@ including current cancellation and tool-policy withdrawal.
 When an agent creates an isolated reminder from an active chat, OpenClaw stores the preserved live delivery target for the fallback announce route. Internal session keys may be lowercase; provider delivery targets are not reconstructed from those keys when current chat context is available.
 
 Implicit announce delivery uses configured channel allowlists to validate and reroute stale targets. DM pairing-store approvals are not fallback automation recipients; set `delivery.to` or configure the channel `allowFrom` entry when a scheduled job should proactively send to a DM.
+
+### Owner delivery and direct messages
+
+Set `delivery.target: "owner"` (`--delivery-target owner`) when a job should
+resolve a positively identified owner DM at delivery time. This does not follow
+the last group conversation or guess a recipient when owner identity is
+ambiguous. `delivery.directPolicy: "block"` (`--direct-policy block`) blocks
+direct/DM delivery for that job; the default is `allow`.
+
+A missing owner route does not skip execution. The job still runs, and ordinary
+delivery settlement records the unavailable destination without falling back to
+the last conversation. An explicit DM block remains intentional non-delivery.
+
+```bash
+openclaw automations edit <job-id> \
+  --announce --channel telegram --delivery-target owner
+```
+
+These policies require a non-main job with chat delivery. Owner targeting cannot
+be combined with `--to`, `--thread-id`, or `--webhook`. Setting it on an existing
+job clears the previous explicit recipient and thread. Selecting a new explicit
+recipient replaces owner targeting. Use `--clear-delivery-target` or
+`--clear-direct-policy` to remove the stored policy.
+
+Use `payload.includeReasoning: true` (`--include-reasoning`) on an agent-turn
+job only when reasoning returned by the agent should be included in delivery.
+Omitting it keeps ordinary final-output delivery.
 
 ### Failure notifications
 
@@ -149,7 +182,7 @@ Repair is on by default. Upgrading changes what you see for owned automations th
 
 When a job created from a conversation (it has an owner session) reaches its execution-failure alert threshold and the alert would go to chat (`announce` mode), OpenClaw sends a repair request to that owner conversation instead of the alert. The request names the job and includes its schedule, name, payload, and last error; the name, payload, and error are marked as untrusted data. Command jobs and on-exit or stream schedules are operator-only and alert as before.
 
-The conversation handles the request as an ordinary agent turn, as if it had received a message: it runs in that conversation's session, with its transcript, workspace, and tool policy, and the reply goes to the conversation's own route, including its thread or topic. Heartbeat settings do not apply. For recurring jobs, a transient outage gets no reply, a problem it can fix in the workspace (for example the helper script or instructions file the job follows) gets fixed with a one-line note, and otherwise it asks you for exactly what it needs. For a terminal one-shot failure, the agent does the still-needed work or schedules a corrected automation, stays silent if the work is no longer needed, or asks you for what is missing. The request does not carry your sender identity, so owner-only tools such as automation control stay unavailable; changing the job itself happens in your reply turn.
+The conversation handles the request as an ordinary agent turn, as if it had received a message: it runs in that conversation's session, with its transcript, workspace, and tool policy, and the reply goes to the conversation's own route, including its thread or topic. Unrelated scheduled-job policies do not apply. For recurring jobs, a transient outage gets no reply, a problem it can fix in the workspace (for example the helper script or instructions file the job follows) gets fixed with a one-line note, and otherwise it asks you for exactly what it needs. For a terminal one-shot failure, the agent does the still-needed work or schedules a corrected automation, stays silent if the work is no longer needed, or asks you for what is missing. The request does not carry your sender identity, so owner-only tools such as automation control stay unavailable; changing the job itself happens in your reply turn.
 
 Each failure streak gets at most one repair request, even if its cause changes later. The alert is sent as before when the job has no owner conversation or is excluded from repair. If a one-shot's repair request cannot start, the normal failure alert is sent instead. If the job fails again after the request, you get the normal failure alert, noting that a repair was requested; later alerts in the streak follow the usual cooldown. A successful run clears the streak silently.
 

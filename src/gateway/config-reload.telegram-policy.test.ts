@@ -55,7 +55,6 @@ describe("decision model reload planning", () => {
         reloadPlugins,
         refreshHooksPolicy: true,
         reloadInternalHooks: true,
-        restartHeartbeat: true,
       });
     },
   );

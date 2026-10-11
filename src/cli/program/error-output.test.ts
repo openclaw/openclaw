@@ -215,10 +215,10 @@ describe("formatCliParseErrorOutput", () => {
       machineOutput: isProxyMachineOutput,
     },
     {
-      name: "nested system heartbeat",
-      args: ["system", "heartbeat", "last", "--unknown"],
+      name: "system presence",
+      args: ["system", "presence", "--unknown"],
       root: "system",
-      children: ["heartbeat", "last"],
+      children: ["presence"],
       message: 'OpenClaw does not recognize option "--unknown".',
       machineOutput: isSystemMachineOutput,
     },

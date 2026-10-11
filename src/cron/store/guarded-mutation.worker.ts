@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import { isAgentDeletionBlocked } from "../../agents/agent-lifecycle-registry.js";
+import { prepareClawPortableRemoval } from "../../claws/portable-heartbeat-removal.kernel.js";
 import { assertTransactionUsable } from "../../infra/sqlite-transaction.js";
 import { getSqliteWorkerStateContext } from "../../infra/sqlite-worker-state-context.js";
 import type { OpenClawStateDatabase } from "../../state/openclaw-state-db-contract.js";
@@ -183,6 +184,20 @@ export function mutateCronJobsInWorker(
           if (input.agentId !== undefined && isAgentDeletionBlocked(input.agentId, {}, db)) {
             throw new Error(describeUnavailableCronAgent(input.agentId));
           }
+          const claw = input.clawPrecondition;
+          if (
+            claw &&
+            (!input.changes.changedIds.has(claw.jobId) ||
+              input.changes.nextById.has(claw.jobId) ||
+              [...input.changes.changedIds].some(
+                (id) => id !== claw.jobId && !input.changes.nextById.has(id),
+              ))
+          ) {
+            throw new Error("Portable removal does not own these automation changes.");
+          }
+          const assertRemovalCurrent = claw
+            ? prepareClawPortableRemoval(database, input.storeKey, claw)
+            : undefined;
           if (input.preconditionJob || input.expectedJob || input.replacement) {
             const current = loadCronMutationStore(db, input.storeKey);
             if (
@@ -267,6 +282,7 @@ export function mutateCronJobsInWorker(
             ...loadCronMutationStore(db, input.storeKey),
             names: readCronJobNamesInDatabase(db, undefined, input.storeKey),
           };
+          assertRemovalCurrent?.();
           return { outcome };
         } catch (error) {
           if (

@@ -1,5 +1,4 @@
 import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
-import type { HeartbeatWakeRequest } from "../../infra/heartbeat-wake.js";
 import { normalizeAgentId, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
 import { deliveryContextFromSession } from "../../utils/delivery-context.read.js";
@@ -83,18 +82,13 @@ export type IsolatedAgentSetupTimeoutResult = {
 };
 
 export type ExecuteJobCoreOptions = {
+  idleAdmission?: import("./state.js").CronIdleAdmissionSource;
+  waitForIdle?: import("./state.js").CronIdleAdmissionWait;
   deliveryAttemptFence?: CronCompletionDeliveryFence;
   activeJobMarker?: CronActiveJobMarker;
-  onPayloadExecutionStarted?: () => void;
   onExecutionStarted?: (info?: CronAgentExecutionStarted) => void;
   onExecutionPhase?: (info: CronAgentExecutionPhaseUpdate) => void;
   onLaneWait?: (info?: { waiting?: boolean }) => void;
-  onHeartbeatExecutionStarted?: (opts: HeartbeatWakeRequest & { agentId: string }) =>
-    | {
-        onAttemptStarted?: () => void;
-        onQueued?: () => void;
-      }
-    | undefined;
   executionIdentity?: import("./state.js").CronExecutionIdentityAdmission;
   /** Revalidates the durable run fence after awaited planning and before effects. */
   assertRunCurrent?: () => Promise<void>;
@@ -104,11 +98,6 @@ export type ExecuteJobCoreOptions = {
   streamScheduleKey?: string;
   streamSourceIdentity?: string;
 };
-
-/** Payloads that execute outside the main session own cancellable task-run state. */
-export function runsDetachedFromMainSession(job: CronJob): boolean {
-  return job.sessionTarget !== "main" || job.payload.kind === "script";
-}
 
 export async function resolveMainSessionCronDeliveryContext(
   state: CronServiceState,

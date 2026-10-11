@@ -47,7 +47,6 @@ describe("prepared primary route inheritance", () => {
             models: {
               "openai/gpt-5.5": { alias: "metered", agentRuntime: { id: runtime } },
             },
-            heartbeat: { model: "openai/gpt-5.4-mini" },
           },
         },
         auth:
@@ -106,7 +105,6 @@ describe("explicit authentication before inherited billing intent", () => {
         agents: {
           defaults: {
             model: hasEnvironmentKey ? "openai/gpt-5.5" : "openai/gpt-5.5@openai:chatgpt-default",
-            heartbeat: { model: "openai/gpt-5.4-mini" },
           },
         },
         auth: {

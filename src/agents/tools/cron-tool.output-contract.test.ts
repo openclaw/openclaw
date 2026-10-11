@@ -80,7 +80,7 @@ function createCronService(storePath: string) {
     sessionStorePath: path.join(path.dirname(storePath), "sessions.json"),
     log: createNoopLogger(),
     enqueueSystemEvent: vi.fn(),
-    requestHeartbeat: vi.fn(),
+    enqueueSessionEvent: vi.fn(),
     runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
   });
 }

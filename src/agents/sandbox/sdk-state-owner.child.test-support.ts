@@ -6,6 +6,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { acquireGatewayLock, type GatewayLockHandle } from "../../infra/gateway-lock.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 import { registerSealedRuntime } from "../../infra/sealed-runtime-registry.js";
+import { applyLoggingConfig } from "../../logging/logger.js";
 import { resolveSandboxContext } from "../../plugin-sdk/agent-harness-runtime.js";
 import { createPluginRuntime } from "../../plugins/runtime/index.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
@@ -59,6 +60,7 @@ const restoreBackend = registerSandboxBackend("docker", async (params) => {
 });
 const runtime = createPluginRuntime();
 const config: OpenClawConfig = {
+  logging: { file: process.env.OPENCLAW_TEST_LOG_FILE },
   agents: {
     defaults: {
       skipBootstrap: true,
@@ -75,6 +77,7 @@ const config: OpenClawConfig = {
   tools: { elevated: { enabled: false }, sandbox: { tools: { allow: ["read"] } } },
   skills: { load: { watch: false } },
 };
+applyLoggingConfig(config.logging);
 fs.writeFileSync(process.env.OPENCLAW_CONFIG_PATH!, JSON.stringify(config));
 
 async function callApis(phase: string, selectedConfig = config, workspaceRoot = root) {

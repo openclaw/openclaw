@@ -1,4 +1,5 @@
 import { formatByteSize } from "@openclaw/normalization-core";
+import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { JSX as SolidJSX } from "@solidjs/web";
 import { For, Show, untrack } from "solid-js";
@@ -15,6 +16,7 @@ import {
   type GatewayStatusSnapshot,
 } from "../../components/gateway-vitals.ts";
 import { formatDurationHuman } from "../../lib/format-duration.ts";
+import { formatUiExternalText } from "../../lib/format-error.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
 import {
   loadCommandLaneDiagnostics,
@@ -186,8 +188,44 @@ function ActiveRuns(props: { value: SessionsListResult }) {
     </>
   );
 }
+function safeEventText(value: unknown): string {
+  return typeof value === "string"
+    ? truncateUtf16Safe(formatUiExternalText(value).replace(/[\r\n\t]/g, " "), 160)
+    : "";
+}
+
+function describeCronEvent(payload: unknown): string {
+  const event = asOptionalObjectRecord(payload);
+  if (!event) {
+    return "cron";
+  }
+  const parts = ["cron"];
+  const jobId = safeEventText(event.jobId);
+  const runId = safeEventText(event.runId);
+  if (jobId) {
+    parts.push(t("debug.overlay.eventJob", { id: jobId }));
+  }
+  if (runId) {
+    parts.push(t("debug.overlay.eventRun", { id: runId }));
+  }
+  const outcome = safeEventText(event.status) || safeEventText(event.action);
+  if (outcome) {
+    parts.push(outcome);
+  }
+  // Only owner-recorded fields belong here; do not infer identity or expose prompts/scratch.
+  const reason =
+    safeEventText(event.error) ||
+    safeEventText(event.deliveryError) ||
+    safeEventText(event.deliverySuppressionReason);
+  if (reason) {
+    parts.push(reason);
+  }
+  return parts.join(" · ");
+}
+
 function Events(props: { gateway: ApplicationGateway }) {
-  const events = () => props.gateway.eventLog.slice(0, 8);
+  const events = () =>
+    props.gateway.eventLog.filter((event) => event.event !== "heartbeat").slice(0, 8);
   return (
     <Show
       when={events().length > 0}
@@ -197,7 +235,11 @@ function Events(props: { gateway: ApplicationGateway }) {
         <For each={events()}>
           {(event) => (
             <li>
-              <span class="mono">{event.event}</span>
+              <span class="mono">
+                {event.event === "cron"
+                  ? describeCronEvent(event.payload)
+                  : safeEventText(event.event)}
+              </span>
               <time>{formatRelativeTimestamp(event.ts)}</time>
             </li>
           )}

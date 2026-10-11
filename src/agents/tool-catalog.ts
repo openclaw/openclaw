@@ -180,7 +180,6 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     ["message", "Send messages"],
   ]),
   ...coreTools("automation", { profiles: [], includeInOpenClawGroup: true }, [
-    ["heartbeat_respond", "Accept heartbeat outcomes for post-turn handling"],
     [AUTOMATIONS_TOOL_NAME, CRON_TOOL_DISPLAY_SUMMARY, { profiles: ["coding"] }],
     [
       "gateway",

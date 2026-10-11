@@ -1282,7 +1282,7 @@ write `agents.entries`. This compatibility window adds no runtime warnings.
     | --- | --- |
     | New system event producers | `api.runtime.system.enqueueSystemEvent` |
     | System event snapshot inspection and consumption | `openclaw/plugin-sdk/system-event-runtime` |
-    | Heartbeat wake requests | `api.runtime.system.requestHeartbeat` |
+    | Immediate session follow-ups | Capture the destination with `api.runtime.system.captureSessionEventTarget`, then call `api.runtime.system.enqueueSessionEvent` and await its receipt. |
     | Channel activity telemetry | `api.runtime.channel.activity.record` and `.get` |
     | `createDedupeCache`, `resolveGlobalDedupeCache` | `openclaw/plugin-sdk/dedupe-runtime` |
     | Safe local-file/media paths, regular-file checks, and symlink-parent checks | `openclaw/plugin-sdk/security-runtime` (itself a deprecated broad barrel) |
@@ -1299,7 +1299,7 @@ write `agents.entries`. This compatibility window adds no runtime warnings.
     adopting ordinary exec policy; there is no replacement command-text detector.
 
     These are symbol-specific mappings, not replacements for the whole barrel.
-    Private-local entries such as `heartbeat-runtime`, `delivery-queue-runtime`,
+    Private-local entries such as `delivery-queue-runtime`,
     `fetch-runtime`, `runtime-fetch`, and `file-lock` are JavaScript-only host
     exports, not typed third-party APIs. Heartbeat event/summary/visibility
     helpers, pending-delivery drain, transport readiness, concurrency, and file

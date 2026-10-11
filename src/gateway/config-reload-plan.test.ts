@@ -166,7 +166,7 @@ describe("Gateway core reload policy", () => {
       "discovery.wideArea.domain",
       "security.unknownPolicy",
       "secrets.egressProxy.enabled",
-    ].map((path) => ({ path, restart: true, heartbeat: false })),
+    ].map((path) => ({ path, restart: true })),
     ...[
       "tools.codeMode.enabled",
       "gateway.controlUi.experimental.customPlugins",
@@ -174,15 +174,13 @@ describe("Gateway core reload policy", () => {
     ].map((path) => ({
       path,
       restart: false,
-      heartbeat: false,
     })),
-    { path: "agents.defaults.model", restart: false, heartbeat: true },
-  ])("classifies reload path: $path", ({ path, restart, heartbeat }) => {
+    { path: "agents.defaults.model", restart: false },
+  ])("classifies reload path: $path", ({ path, restart }) => {
     const plan = buildGatewayReloadPlan([path]);
     expect(plan.restartGateway).toBe(restart);
     expect(plan.restartReasons).toEqual(restart ? [path] : []);
     expect(plan.hotReasons).toEqual(restart ? [] : [path]);
-    expect(plan.restartHeartbeat).toBe(heartbeat);
     expect(resolveConfigReloadMetadata(path).kind).toBe(restart ? "restart" : "hot");
   });
 });

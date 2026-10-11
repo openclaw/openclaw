@@ -48,7 +48,7 @@ const runtimeContextDetailsSchema = z.object({
   runtimeContextCarrier: z.literal(true),
   fragments: z.array(
     z.object({
-      kind: z.enum(["runtime-instruction", "conversation-data", "heartbeat-outcome"]),
+      kind: z.enum(["runtime-instruction", "conversation-data"]),
       text: z.string(),
     }),
   ),

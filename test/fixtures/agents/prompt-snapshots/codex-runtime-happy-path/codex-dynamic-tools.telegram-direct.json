@@ -364,23 +364,11 @@
     "tools": [
       {
         "deferLoading": true,
-        "description": "Schedule reminders, delayed self-wakeups, recurring work, event watchers. Never exec sleep/poll as timer.\n\nACTIONS: status | list (summaries; follow nextOffset) | get jobId (full details) | add job | update jobId job (partial; null clears) | remove jobId (operator removal requests active-run cancellation) | run jobId (runMode:\"force\"=now; waits up to timeoutMs, default 60s; unfinished runs return runId) | runs jobId runId? (history) | next_check in:\"30m\" (own paced run) | wake text (caller-owned session; mode defaults to next-heartbeat). Check unfinished runs later with runs, never a scheduled verification job. wake has no delay; for a later resume use an at job below.\n\nSCOPE: Authenticated configured channel owners and Control UI administrators can manage any Gateway automation. Other turns see caller-visible jobs and scoped counts only: an empty list or failed list/get/update/remove (including not-found) does not establish global absence, even for IDs from your history. Never recreate or replace a known automation for update/remove/reconciliation based on these results; report the visibility limit and ask an authorized administrator to check through a fresh authenticated owner/administrator turn or the Automations page. New requested automations may still be created.\n\nADD: job requires schedule+payload.\n\nSCHEDULE:\n- {kind:\"at\",at:\"ISO-8601\"}: one-shot; missing timezone=UTC. Auto-deletes after successful completion; failed/unknown required delivery retains it disabled.\n- {kind:\"every\",everyMs}.\n- {kind:\"cron\",expr,tz?:\"IANA\"}: wall time in tz, never UTC-convert; omitted tz=Gateway host local.\n- {kind:\"stream\",command:[argv]}: supervised process output.\n\nTARGET+PAYLOAD:\n- \"current\" (agentTurn default) = this conversation's context: the run stays detached, reads bounded chat context, then delivers its final visible assistant result to the resolved destination (this conversation unless another destination is configured). Delayed work/loop = at|every + agentTurn + current. This is not a resumed parent turn: it uses the scheduled agent workspace with its own session identity, not the conversation worktree or cloud worker placement. In-flight turns sent through the job's stable cron key are canceled if that key is reassigned. Verify required checkout/tool access before delegating repository work; result delivery alone does not resume the original agent.\n- \"isolated\" = fresh detached session; standalone background work recorded in cron run history.\n- \"main\" = heartbeat lane; payload {kind:\"systemEvent\",text} (systemEvent default target).\n- \"session:<key>\" + agentTurn runs a turn inside that existing conversation (same history, saved workspace/worktree). To come back here later (wait for CI, recheck), add an at + agentTurn job with sessionTarget \"session:<your session key from Runtime>\" and message = instructions for your next turn.\n- {kind:\"agentTurn\",message}; timeoutSeconds 0=none.\n- Inherited MCP authority covers model-callable tools, not interactive app-view-only capabilities.\n- {kind:\"script\",script}: headless, main|isolated only; automations is self-scoped (no add/update/run/wake), cannot resume a conversation.\n\nPACED LOOP: recurring job + pacing{min?,max?} durations (at least one). Call next_check in:\"15m\" inside its run; delay is clamped to bounds and measured from run end. Failed runs keep normal backoff.\n\nAUTHORING: keep repeatable logic in workspace scripts and detailed instructions in referenced files. Name exact tools/arguments; cap toolsAllow to what the run needs. Use triggers/script payloads to skip the model on quiet checks. Scripts reach MCP only through toolsAllow entries <server>__tool or <server>__*. Throw to record script failure (returning {error} succeeds); recurring-job failure alerts wait for consecutive failures, run output follows delivery.\n\nTRIGGER (condition watcher on every/cron): {script}. Never model-poll. Headless check: 30s/5 tool calls/16KB state. Read frozen trigger.state; return json({fire,message?,state?}) with new state for dedupe. fire:false saves state without a model call; fire:true runs payload with self-contained message. Fire on failures/timeouts too. Keep checks read-only; actions belong in payload. once:true disables after first fire. Code Mode: await exec({command:\"...\"}).\n\nDELIVERY: omitted=announce. Agent, command, and script jobs send their final visible result to the destination, then add confirmed delivery once to that conversation, independently of isolated/current/persistent execution. Set channel/to/accountId/threadId to select another destination; the creating conversation is the fallback when no external route exists. Verified matching message-tool delivery suppresses the notification resend, not the conversation result. Failed or uncertain external sends are not added to conversation history; a failed history write after confirmed delivery records a warning without failing delivery. With no external route, the conversation commit completes delivery and appears live and after reconnect. Use none for no automatic result or notification.  Silent watcher=>mode:\"none\". webhook posts finished-run event (successful empty summary is intentional silence, no POST) to URL in `to`. To keep announce delivery and also POST completion, use mode:\"announce\" with completionDestination:{mode:\"webhook\",to:\"https://...\"}.\n\nFAILURE ALERTS: routed jobs default to 2 consecutive execution failures and 1h cooldown; terminal one-shot failures bypass that count. failureAlert:false disables execution/delivery alerts, not auto-disable notices. bestEffort suppresses inherited execution alerts. Required-delivery failures use an alternate route, bypass after, and share the cooldown without incrementing the execution streak.\n\nMain-job wakeMode: \"now\"(default)|\"next-heartbeat\". Scheduled runs: self status/list/get/runs/remove + own next_check only. Use jobId. contextMessages 0-10 embeds recent chat lines in reminder text.",
+        "description": "Schedule reminders, delayed self-wakeups, recurring work, event watchers. Never exec sleep/poll as timer.\n\nACTIONS: status | list (summaries; follow nextOffset) | get jobId (full details) | add job | update jobId job (partial; null clears) | remove jobId (operator removal requests active-run cancellation) | run jobId (runMode:\"force\"=now; waits up to timeoutMs, default 60s; unfinished runs return runId) | runs jobId runId? (history) | wake text enqueues a normal follow-up in the caller-owned session (sessionKey/agentId to pick another). Check unfinished runs later with runs, never a scheduled verification job. wake has no delay; for a later resume use an at job below.\n\nSCOPE: Authenticated configured channel owners and Control UI administrators can manage any Gateway automation. Other turns see caller-visible jobs and scoped counts only: an empty list or failed list/get/update/remove (including not-found) does not establish global absence, even for IDs from your history. Never recreate or replace a known automation for update/remove/reconciliation based on these results; report the visibility limit and ask an authorized administrator to check through a fresh authenticated owner/administrator turn or the Automations page. New requested automations may still be created.\n\nADD: job requires schedule+payload.\n\nSCHEDULE:\n- {kind:\"at\",at:\"ISO-8601\"}: one-shot; missing timezone=UTC. Auto-deletes after successful completion; failed/unknown required delivery retains it disabled.\n- {kind:\"every\",everyMs}.\n- {kind:\"cron\",expr,tz?:\"IANA\"}: wall time in tz, never UTC-convert; omitted tz=Gateway host local.\n- {kind:\"stream\",command:[argv]}: supervised process output.\n\nTARGET+PAYLOAD:\n- \"current\" (agentTurn default) = this conversation's context: the run stays detached, reads bounded chat context, then delivers its final visible assistant result to the resolved destination (this conversation unless another destination is configured). Delayed work/loop = at|every + agentTurn + current. This is not a resumed parent turn: it uses the scheduled agent workspace with its own session identity, not the conversation worktree or cloud worker placement. In-flight turns sent through the job's stable cron key are canceled if that key is reassigned. Verify required checkout/tool access before delegating repository work; result delivery alone does not resume the original agent.\n- \"isolated\" = fresh detached session; standalone background work recorded in cron run history.\n- \"main\" = normal main-session follow-up; payload {kind:\"systemEvent\",text} (systemEvent default target). The run waits for actual execution and delivery.\n- \"session:<key>\" + agentTurn runs a turn inside that existing conversation (same history, saved workspace/worktree). To come back here later (wait for CI, recheck), add an at + agentTurn job with sessionTarget \"session:<your session key from Runtime>\" and message = instructions for your next turn.\n- {kind:\"agentTurn\",message,includeReasoning?}; includeReasoning includes reasoning only alongside a meaningful delivered result; timeoutSeconds 0=none.\n- Inherited MCP authority covers model-callable tools, not interactive app-view-only capabilities.\n- {kind:\"script\",script}: headless, main|isolated only; automations is self-scoped (no add/update/run/wake), cannot resume a conversation.\n\nPACED LOOP: recurring job + pacing{min?,max?} durations (at least one). Call next_check in:\"15m\" inside its run; delay is clamped to bounds and measured from run end. Failed runs keep normal backoff.\n\nAUTHORING: keep repeatable logic in workspace scripts and detailed instructions in referenced files. Name exact tools/arguments; cap toolsAllow to what the run needs. Use triggers/script payloads to skip the model on quiet checks. Scripts reach MCP only through toolsAllow entries <server>__tool or <server>__*. Throw to record script failure (returning {error} succeeds); recurring-job failure alerts wait for consecutive failures, run output follows delivery.\n\nTRIGGER (condition watcher on every/cron): {script}. Never model-poll. Headless check: 30s/5 tool calls/16KB state. Read frozen trigger.state; return json({fire,message?,state?}) with new state for dedupe. fire:false saves state without a model call; fire:true runs payload with self-contained message. Fire on failures/timeouts too. Keep checks read-only; actions belong in payload. once:true disables after first fire. Code Mode: await exec({command:\"...\"}).\n\nDELIVERY: omitted=announce. Agent, command, and script jobs send their final visible result to the destination, then add confirmed delivery once to that conversation, independently of isolated/current/persistent execution. Set channel/to/accountId/threadId to select another destination; the creating conversation is the fallback when no external route exists. Verified matching message-tool delivery suppresses the notification resend, not the conversation result. Failed or uncertain external sends are not added to conversation history; a failed history write after confirmed delivery records a warning without failing delivery. With no external route, the conversation commit completes delivery and appears live and after reconnect. Use none for no automatic result or notification.  Silent watcher=>mode:\"none\". webhook posts finished-run event (successful empty summary is intentional silence, no POST) to URL in `to`. To keep announce delivery and also POST completion, use mode:\"announce\" with completionDestination:{mode:\"webhook\",to:\"https://...\"}.\n\nFAILURE ALERTS: routed jobs default to 2 consecutive execution failures and 1h cooldown; terminal one-shot failures bypass that count. failureAlert:false disables execution/delivery alerts, not auto-disable notices. bestEffort suppresses inherited execution alerts. Required-delivery failures use an alternate route, bypass after, and share the cooldown without incrementing the execution streak.\n\nOptional job policy: activeHours{start,end,timezone?} is an end-exclusive execution window (including manual runs); idleOnly yields to foreground work. delivery.target:\"owner\" resolves the owner DM dynamically, never the last group; delivery.directPolicy:\"block\" prohibits DMs. agentTurn skipIfScratchEmpty skips an explicitly empty checklist, not missing scratch. jobId canonical (id=compat). contextMessages 0-10 embeds recent chat lines into reminder text.",
         "inputSchema": {
-          "additionalProperties": true,
           "properties": {
             "action": {
-              "enum": [
-                "status",
-                "list",
-                "get",
-                "add",
-                "update",
-                "remove",
-                "run",
-                "runs",
-                "next_check",
-                "wake"
-              ],
+              "enum": ["status", "list", "get", "add", "update", "remove", "run", "runs", "wake"],
               "type": "string"
             },
             "agentId": {
@@ -401,10 +389,6 @@
             "id": {
               "type": "string"
             },
-            "in": {
-              "description": "Relative duration for action=\"next_check\" (for example, \"15m\")",
-              "type": "string"
-            },
             "includeDisabled": {
               "type": "boolean"
             },
@@ -412,6 +396,29 @@
               "additionalProperties": true,
               "description": "Job fields. action=\"add\": full job. action=\"update\": partial patch — only supplied fields change; null clears.",
               "properties": {
+                "activeHours": {
+                  "anyOf": [
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "end": {
+                          "type": "string"
+                        },
+                        "start": {
+                          "type": "string"
+                        },
+                        "timezone": {
+                          "type": "string"
+                        }
+                      },
+                      "required": ["start", "end"],
+                      "type": "object"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
                 "declarationKey": {
                   "description": "Idempotent declaration key (add only).",
                   "maxLength": 200,
@@ -474,6 +481,17 @@
                         }
                       ],
                       "description": "Completion webhook; requires delivery.mode=announce; null clears."
+                    },
+                    "directPolicy": {
+                      "anyOf": [
+                        {
+                          "enum": ["allow", "block"],
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
                     },
                     "failureDestination": {
                       "anyOf": [
@@ -541,6 +559,17 @@
                       "description": "Delivery mode",
                       "enum": ["none", "announce", "webhook"],
                       "type": "string"
+                    },
+                    "target": {
+                      "anyOf": [
+                        {
+                          "const": "owner",
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
                     },
                     "threadId": {
                       "anyOf": [
@@ -636,6 +665,16 @@
                   ],
                   "description": "Failure alert policy/route override; null clears. Route-backed jobs default to after=2 for execution failures and cooldownMs=3600000 for all failure alerts; false disables execution/delivery alerts but not the auto-disable safety notice."
                 },
+                "idleOnly": {
+                  "anyOf": [
+                    {
+                      "type": "boolean"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
                 "name": {
                   "description": "Job name",
                   "type": "string"
@@ -695,6 +734,10 @@
                       ],
                       "description": "Fallback models, or null to clear"
                     },
+                    "includeReasoning": {
+                      "description": "Include reasoning with a meaningful delivered result",
+                      "type": "boolean"
+                    },
                     "kind": {
                       "description": "Payload kind",
                       "enum": ["systemEvent", "agentTurn", "script"],
@@ -722,6 +765,9 @@
                     "script": {
                       "description": "Headless code-mode script",
                       "type": "string"
+                    },
+                    "skipIfScratchEmpty": {
+                      "type": "boolean"
                     },
                     "text": {
                       "description": "systemEvent text",
@@ -875,11 +921,6 @@
                       "type": "null"
                     }
                   ]
-                },
-                "wakeMode": {
-                  "description": "Wake timing",
-                  "enum": ["now", "next-heartbeat"],
-                  "type": "string"
                 }
               },
               "type": "object"
@@ -892,11 +933,6 @@
               "maximum": 200,
               "minimum": 1,
               "type": "integer"
-            },
-            "mode": {
-              "description": "Wake mode for action=\"wake\" (default next-heartbeat)",
-              "enum": ["now", "next-heartbeat"],
-              "type": "string"
             },
             "offset": {
               "description": "Job offset for action=\"list\"; use nextOffset to load the next page",

@@ -219,10 +219,10 @@ describe("session actor usage accounting", () => {
       absent: ["agentHarnessId"],
     },
     {
-      name: "preserves the displayed session model when heartbeat usage uses a heartbeat model",
+      name: "preserves the displayed session model when a turn-local model is used",
       seed: { modelProvider: "openai", model: "gpt-5.4" },
       update: {
-        isHeartbeat: true,
+        preserveRuntimeModel: true,
         usage: { input: 1_200, output: 100, cacheRead: 300, cacheWrite: 10 },
         lastCallUsage: { input: 900, output: 80, cacheRead: 200, cacheWrite: 5 },
         providerUsed: "openai",

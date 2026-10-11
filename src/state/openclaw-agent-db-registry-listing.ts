@@ -35,6 +35,7 @@ import {
 } from "./openclaw-state-db-async-lifecycle.js";
 import type { OpenClawStateDatabaseOptions } from "./openclaw-state-db-contract.js";
 import {
+  isArtifactPreservingStateRead,
   withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync,
   withExistingOpenClawStateDatabaseReadOnly,
   executeExistingOpenClawStateRead,
@@ -500,6 +501,10 @@ export async function inspectOpenClawRegisteredAgentDatabases(
 export function listOpenClawRegisteredAgentDatabases(
   options: AgentDatabaseRegistryListOptions = {},
 ): OpenClawRegisteredAgentDatabase[] {
+  if (isArtifactPreservingStateRead("shared", resolveDatabasePath(options))) {
+    // Inspection owns its captured rows; never reuse or populate the runtime memo.
+    return readRegisteredAgentDatabases(options, false);
+  }
   const memo = activateRegisteredAgentDatabasesMemo(options);
   // Discovery runs per row in list hot paths, so the legacy-schema gate and the
   // query share one process-held state handle instead of opening two connections.

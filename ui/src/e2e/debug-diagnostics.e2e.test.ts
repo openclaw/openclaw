@@ -25,7 +25,7 @@ beforeEach(() => {
 });
 
 suite.define(() => {
-  it("renders Gateway diagnostics and current work independently of session history", async () => {
+  it("renders automation diagnostics and current work independently of session history", async () => {
     if (captureUiProof) {
       await mkdir(path.join(proofDir, "video"), { recursive: true });
     }
@@ -94,6 +94,10 @@ suite.define(() => {
             },
             status: {
               runtime: "diagnostics-e2e",
+              heartbeat: {
+                defaultAgentId: "main",
+                agents: [{ enabled: false, every: "disabled" }],
+              },
               securityAudit: { summary: { critical: 0, warn: 1, info: 2 } },
             },
             "system.info": {
@@ -120,7 +124,8 @@ suite.define(() => {
                 heapTotalBytes: 256 * 1_048_576,
               },
             },
-            health: { ok: true, gateway: "healthy" },
+            health: { ok: true, gateway: "healthy", heartbeatSeconds: 0 },
+            "cron.status": { enabled: true, triggersEnabled: true, jobs: 3, nextWakeAtMs: null },
             "models.list": {
               models: [
                 {
@@ -131,7 +136,6 @@ suite.define(() => {
                 },
               ],
             },
-            "last-heartbeat": { ageMs: 1250, source: "gateway-heartbeat" },
             "diagnostics.lanes": {
               lanes: [
                 {
@@ -156,9 +160,22 @@ suite.define(() => {
         });
         await snapshots.waitFor();
         await expect.poll(() => snapshots.textContent()).toContain("1 warning");
-        await expect.poll(() => snapshots.textContent()).toContain("diagnostics-e2e");
-        await expect.poll(() => snapshots.textContent()).toContain("healthy");
-        await expect.poll(() => snapshots.textContent()).toContain("gateway-heartbeat");
+        await expect
+          .poll(() => snapshots.textContent())
+          .toContain("Scheduler Enabled · 3 total jobs");
+        await expect.poll(() => snapshots.textContent()).toContain("none scheduled");
+        expect(await snapshots.textContent()).not.toContain("defaultAgentId");
+        const raw = page.locator(".settings-section", {
+          has: page.getByRole("heading", { name: "Raw protocol inspection" }),
+        });
+        await expect.poll(() => raw.textContent()).toContain("diagnostics-e2e");
+        await expect.poll(() => raw.textContent()).toContain("healthy");
+        const payloads = await raw.locator("pre").allTextContents();
+        expect(JSON.parse(payloads[0] ?? "null").heartbeat).toEqual({
+          defaultAgentId: "main",
+          agents: [{ enabled: false, every: "disabled" }],
+        });
+        expect(JSON.parse(payloads[1] ?? "null").heartbeatSeconds).toBe(0);
         const models = page.locator(".settings-section", {
           has: page.getByRole("heading", { name: "Models" }),
         });
@@ -168,7 +185,7 @@ suite.define(() => {
           "status",
           "health",
           "models.list",
-          "last-heartbeat",
+          "cron.status",
           "diagnostics.lanes",
         ]) {
           const requests = await gateway.getRequests(method);
@@ -177,6 +194,8 @@ suite.define(() => {
             method === "models.list" ? { agentId: "main", view: "default" } : {},
           );
         }
+
+        expect(await gateway.getRequests("last-heartbeat")).toHaveLength(0);
 
         if (captureUiProof) {
           await writeFile(
@@ -199,6 +218,50 @@ suite.define(() => {
         const systemInfoCount = (await gateway.getRequests("system.info")).length;
         await page.getByRole("button", { name: /^Open overlay/u }).click();
         const overlay = page.getByRole("complementary", { name: "System busyness" });
+        const jobId = "7621d9a5-fb76-4598-b93f-93aa746d96b1";
+        const runId = `manual:${jobId}:1788320410309:1`;
+        await gateway.emitGatewayEvent("cron", {
+          jobId,
+          runId,
+          action: "finished",
+          status: "skipped",
+        });
+        const eventText = `cron · Job ${jobId} · Run ${runId} · skipped`;
+        const event = overlay.locator(".debug-overlay__events li", {
+          has: page.getByText(eventText, { exact: true }),
+        });
+        await event.waitFor();
+        for (const width of [1280, 390]) {
+          await page.setViewportSize({ width, height: 1000 });
+          await event.scrollIntoViewIfNeeded();
+          const clippedLines = await event.evaluate((element) => {
+            const span = element.querySelector(".mono")!;
+            const timestamp = element.querySelector("time")!.getBoundingClientRect();
+            const column = span.getBoundingClientRect();
+            const row = element.getBoundingClientRect();
+            const range = document.createRange();
+            range.selectNodeContents(span);
+            // Text survives clipping in the DOM; inspect each rendered line, including outcome.
+            return Array.from(range.getClientRects())
+              .filter(
+                (line) =>
+                  line.left < Math.max(column.left, row.left) - 1 ||
+                  line.right > Math.min(column.right, row.right, timestamp.left) + 1 ||
+                  line.top < row.top - 1 ||
+                  line.bottom > row.bottom + 1,
+              )
+              .map((line) => line.toJSON());
+          });
+          expect(clippedLines).toEqual([]);
+          if (captureUiProof) {
+            await writeFile(
+              path.join(proofDir, `automation-event-${width}.png`),
+              await takeControlUiElementScreenshot(page, event, [event]),
+            );
+          }
+        }
+        await page.setViewportSize({ height: 1000, width: 1280 });
+        await overlay.locator(".gateway-vital--memory").scrollIntoViewIfNeeded();
         await expect
           .poll(() => overlay.locator(".gateway-vital--memory").textContent())
           .toContain("432 MB");
@@ -547,7 +610,7 @@ suite.define(() => {
         await gateway.waitForRequest("status", { after: statusRequestCount });
         await expect.poll(() => refresh.textContent()).toMatch(/^\s*Refreshing…\s*$/u);
         expect(await refresh.isDisabled()).toBe(true);
-        await expect.poll(() => snapshots.textContent()).toContain("diagnostics-e2e");
+        await expect.poll(() => raw.textContent()).toContain("diagnostics-e2e");
         expect(
           await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
         ).toBe(true);
@@ -575,7 +638,7 @@ suite.define(() => {
           .poll(() => snapshots.textContent())
           .toContain("Connect to the Gateway to refresh diagnostics.");
         expect(await refresh.isDisabled()).toBe(true);
-        await expect.poll(() => snapshots.textContent()).toContain("diagnostics-e2e");
+        await expect.poll(() => raw.textContent()).toContain("diagnostics-e2e");
         await page.setViewportSize({ height: 844, width: 390 });
         expect(
           await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),

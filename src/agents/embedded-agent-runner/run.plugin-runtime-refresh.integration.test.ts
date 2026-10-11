@@ -161,7 +161,6 @@ describe("plugin runtime refresh admission", () => {
       messagingToolSentTargets: result.messagingToolSentTargets,
       messageProvider: "telegram",
       originatingTo: "telegram:123",
-      isHeartbeat: false,
       didLogHeartbeatStrip: false,
       blockStreamingEnabled: false,
       blockReplyPipeline: null,

@@ -26,7 +26,9 @@ import {
   describe2BeforeEach0,
   requireBlockReplyHandler,
 } from "./dispatch-from-config.test-support.js";
+import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
+import type { SourceReplyDeliveryRuntimeOptions } from "./source-reply-delivery-runtime.js";
 import { buildTestCtx } from "./test-ctx.js";
 
 beforeAll(globalBeforeAll0);
@@ -746,7 +748,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     currentEntry: typeof sessionStoreMocks.currentEntry;
     ctx: Partial<MsgContext>;
     cfg: OpenClawConfig;
-    replyOptions?: GetReplyOptions;
+    replyOptions?: InternalGetReplyOptions;
     expectedMode: "automatic" | "message_tool_only";
     text: string;
   };
@@ -902,14 +904,14 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       text: "visible switched-model reply",
     },
     {
-      name: "honors heartbeat model overrides before Codex direct source delivery defaults",
+      name: "honors per-turn model overrides before Codex direct source delivery defaults",
       supportsProvider: "codex",
       currentEntry: codexEntry,
       ctx: telegramDirectCtx,
       cfg: emptyConfig,
-      replyOptions: { isHeartbeat: true, heartbeatModelOverride: "anthropic/claude-sonnet-4.6" },
+      replyOptions: { modelOverride: "anthropic/claude-sonnet-4.6" },
       expectedMode: "automatic",
-      text: "visible heartbeat-model reply",
+      text: "visible model-override reply",
     },
     {
       name: "preserves non-Codex harness direct source delivery defaults",
@@ -940,11 +942,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     const onError = vi.fn();
     const dispatcher = createReplyDispatcher({ deliver, onError });
     const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
-      const internalOpts = opts as
-        | (GetReplyOptions & {
-            onSourceReplyDeliveryModeResolved?: (mode: "automatic") => void;
-          })
-        | undefined;
+      const internalOpts = opts as SourceReplyDeliveryRuntimeOptions | undefined;
       internalOpts?.onSourceReplyDeliveryModeResolved?.("automatic");
       return { text: "Rejected fallback final" } satisfies ReplyPayload;
     });
@@ -1038,7 +1036,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     ctx: Partial<MsgContext>;
     cfg: OpenClawConfig;
     text: string;
-    replyOptions?: GetReplyOptions;
+    replyOptions?: InternalGetReplyOptions;
     checkTyping?: boolean;
   }) {
     setNoAbort();

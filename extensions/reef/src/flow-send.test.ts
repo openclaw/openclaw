@@ -1,6 +1,11 @@
+import { PAIRING_APPROVED_MESSAGE } from "openclaw/plugin-sdk/channel-status";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
+import { getSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { effectiveGuardPolicyVersion, generateIdentity } from "../protocol/index.js";
 import { MemoryAuditStore, MemoryReplayStore } from "../protocol/memory-stores.test-support.js";
+import { openReefAuditStore } from "./audit-state.js";
 import { isPermanentReefOutboundRejection, ReefMessageFlow } from "./flow.js";
 import {
   allow,
@@ -14,8 +19,10 @@ import {
   trust,
 } from "./flow.test-helpers.js";
 import { reefPeerIdentity } from "./friend-types.js";
+import { createReefOwnerNoticeHandler, notifyOverdueReefDeliveries } from "./owner-notice.js";
 import { reefMessageTextHash } from "./rejection-resend.js";
 import { ReefTransportClient } from "./transport.js";
+import { openReefTrustStore } from "./trust-store.js";
 
 beforeEach(resetFlowStoresForTests);
 afterEach(resetFlowStoresForTests);
@@ -52,6 +59,83 @@ describe("ReefMessageFlow send recovery", () => {
     expect(isPermanentReefOutboundRejection(error)).toBe(true);
     expect(fetcher).not.toHaveBeenCalled();
   });
+
+  it.each([false, true])(
+    "handles an overdue first pairing send with current peer authority (revoked=%s)",
+    async (revoked) => {
+      const cfg = config();
+      const stores = flowStores();
+      const trusted = openReefTrustStore(stores.runtime, cfg);
+      await trusted.set("alice", peerTrust(generateIdentity()));
+      const sessionKey = "agent:main:reef:direct:alice";
+      const sessionScope = {
+        agentId: "main",
+        sessionKey,
+        env: { OPENCLAW_STATE_DIR: stores.stateDir },
+      };
+      expect(getSessionEntry(sessionScope)).toBeUndefined();
+      const keys = reefKeys();
+      const relay = new ReefTransportClient("https://reef.example", "bob", keys);
+      const sendEnvelope = vi
+        .spyOn(relay, "sendEnvelope")
+        .mockImplementation(async (_peer, envelope) => ({
+          id: envelope.id,
+          status: "queued",
+        }));
+      const onIngress = vi.fn(async () => {});
+      const flow = new ReefMessageFlow({
+        config: cfg,
+        trust: trusted,
+        keys,
+        transport: relay,
+        guard: guard(allow),
+        audit: openReefAuditStore(stores.runtime, new Uint8Array(32).fill(7)),
+        replay: new MemoryReplayStore(),
+        ...stores,
+        onIngress,
+        onOwnerNotice: async () => {},
+      });
+      const id = await flow.send("alice", PAIRING_APPROVED_MESSAGE);
+      expect(sendEnvelope).toHaveBeenCalledOnce();
+      expect(onIngress).not.toHaveBeenCalled();
+      expect(getSessionEntry(sessionScope)).toBeUndefined();
+      if (revoked) {
+        await trusted.remove("alice");
+      }
+      const hostConfig: OpenClawConfig = {
+        agents: { entries: { main: {} } },
+        session: { dmScope: "per-channel-peer" },
+      };
+      vi.mocked(stores.runtime.channel.routing.resolveAgentRoute).mockImplementation(
+        resolveAgentRoute,
+      );
+      const ownerNotice = createReefOwnerNoticeHandler({
+        runtime: stores.runtime,
+        cfg: hostConfig,
+        handle: "bob",
+      });
+      const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now() + 12 * 60_000);
+      try {
+        await notifyOverdueReefDeliveries({ trust: trusted, ownerNotice });
+      } finally {
+        clock.mockRestore();
+      }
+      if (revoked) {
+        expect(stores.runtime.system.captureSessionEventTarget).not.toHaveBeenCalled();
+        expect(stores.runtime.system.enqueueSessionEvent).not.toHaveBeenCalled();
+      } else {
+        expect(stores.runtime.system.enqueueSessionEvent).toHaveBeenCalledExactlyOnceWith(
+          expect.stringContaining(`Reef message ${id} to @alice has not been confirmed delivered`),
+          expect.objectContaining({
+            sessionKey,
+            expectedTarget: expect.any(Object),
+            createIfMissing: true,
+          }),
+        );
+        expect(await trusted.overdueOutboundDeliveries(10 * 60_000)).toEqual([]);
+      }
+    },
+  );
 
   it("persists automatic resends as non-resendable deliveries", async () => {
     const alice = reefKeys();

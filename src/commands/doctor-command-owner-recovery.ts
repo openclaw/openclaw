@@ -3,8 +3,8 @@ import JSON5 from "json5";
 import { normalizeChatChannelId } from "../channels/ids.js";
 import { CONFIG_BACKUP_COUNT } from "../config/backup-rotation.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveHeartbeatAgents, resolveHeartbeatIntervalMs } from "../infra/heartbeat-config.js";
 import { createCommandOwnerChannelResolver } from "./doctor-command-owner.js";
+import { resolveHeartbeatAgents, resolveHeartbeatIntervalMs } from "./doctor-heartbeat-legacy.js";
 import {
   containsAuthoredInclude,
   readDoctorConfigBackup,

@@ -177,6 +177,21 @@ function collectInstallFindings(
       }),
     );
   }
+  if (
+    record.portableHeartbeat &&
+    record.portableHeartbeat.state !== "present" &&
+    record.portableHeartbeat.state !== "released"
+  ) {
+    findings.push(
+      finding({
+        message: `Claw portable automation ${record.portableHeartbeat.schedulerJobId ?? "(unresolved)"} is ${record.portableHeartbeat.state}. Current ordinary job/scratch state was retained; export or package updates may be unavailable.`,
+        path: `claws.${agentId}.portableHeartbeat`,
+        target: agentId,
+        fixHint:
+          "Inspect the ordinary automation and scratch. Deleted jobs are intentional and are never recreated by Doctor.",
+      }),
+    );
+  }
   for (const cron of record.cronJobs) {
     if (cron.status !== "complete" || !cron.schedulerJobId) {
       findings.push(

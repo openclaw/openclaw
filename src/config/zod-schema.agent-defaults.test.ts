@@ -229,30 +229,10 @@ describe("agent defaults schema", () => {
     expect(agent.contextLimits?.memoryGetMaxChars).toBe(18_000);
   });
 
-  it("accepts positive heartbeat timeoutSeconds on defaults and agent entries", () => {
-    expect(
-      AgentDefaultsSchema.parse({ heartbeat: { timeoutSeconds: 45 } })?.heartbeat?.timeoutSeconds,
-    ).toBe(45);
-    expect(
-      AgentEntrySchema.parse({ id: "ops", heartbeat: { timeoutSeconds: 45 } }).heartbeat
-        ?.timeoutSeconds,
-    ).toBe(45);
-  });
-
-  it("rejects invalid heartbeat activeHours without an explicit cadence", () => {
-    expectSchemaFailurePath(
-      AgentDefaultsSchema.safeParse({
-        heartbeat: { activeHours: { start: "99:99", end: "17:00" } },
-      }),
-      "heartbeat.activeHours.start",
-    );
-    expectSchemaFailurePath(
-      AgentEntrySchema.safeParse({
-        id: "ops",
-        heartbeat: { activeHours: { start: "09:00", end: "not-a-time" } },
-      }),
-      "heartbeat.activeHours.end",
-    );
+  it("rejects retired heartbeat config at both runtime agent scopes", () => {
+    const heartbeat = { every: "30m", target: "owner" };
+    expect(AgentDefaultsSchema.safeParse({ heartbeat }).success).toBe(false);
+    expect(AgentEntrySchema.safeParse({ id: "ops", heartbeat }).success).toBe(false);
   });
 
   it("accepts per-agent TTS overrides", () => {

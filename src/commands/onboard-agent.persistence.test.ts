@@ -18,6 +18,7 @@ import { writeSessionEntry } from "../config/sessions/session-accessor.sqlite-en
 import { readTranscriptEventRows } from "../config/sessions/session-accessor.sqlite-read.js";
 import { appendTranscriptEventInTransaction } from "../config/sessions/session-accessor.sqlite-transcript-store.js";
 import { runSessionStartupMigration } from "../config/sessions/startup-migration.js";
+import { loadCronJobsStore, resolveCronJobsStorePathFromConfig } from "../cron/store.js";
 import { resetAgentRunRegistryForTest } from "../infra/agent-run-registry.js";
 import {
   completeAgentDeletionJournalInDatabase,
@@ -61,7 +62,12 @@ describe("onboarding authored config persistence", () => {
   let envSnapshot: ReturnType<typeof captureEnv>;
 
   beforeEach(() => {
-    envSnapshot = captureEnv(["OPENCLAW_AGENT_DIR", "OPENCLAW_STATE_DIR", "OPENCLAW_TOKEN"]);
+    envSnapshot = captureEnv([
+      "OPENCLAW_AGENT_DIR",
+      "OPENCLAW_STATE_DIR",
+      "OPENCLAW_TOKEN",
+      "OPENCLAW_CONFIG_PATH",
+    ]);
   });
 
   afterEach(() => {
@@ -71,6 +77,37 @@ describe("onboarding authored config persistence", () => {
     closeOpenClawAgentDatabasesForTest();
     closeOpenClawStateDatabaseForTest();
     resetConfigRuntimeState();
+  });
+
+  it("provisions the staged provider's cadence when creating the first agent", async () => {
+    await withTempHome(async (home) => {
+      setTestEnvValue("OPENCLAW_STATE_DIR", path.join(home, ".openclaw"));
+      setTestEnvValue("OPENCLAW_CONFIG_PATH", path.join(home, ".openclaw", "openclaw.json"));
+      deleteTestEnvValue("OPENCLAW_AGENT_DIR");
+      resetConfigRuntimeState();
+      const snapshot = await readConfigFileSnapshot();
+      const candidate = {
+        ...snapshot.config,
+        agents: { ...snapshot.config.agents, defaults: { model: "anthropic/claude-sonnet-4-6" } },
+        auth: { profiles: { fixture: { provider: "anthropic", mode: "oauth" as const } } },
+      };
+      const result = await ensureOnboardingAgent({
+        config: candidate,
+        baseConfig: snapshot.config,
+        firstAgent: { name: "main" },
+        workspace: path.join(home, "workspace"),
+      });
+      const jobs = (await loadCronJobsStore(resolveCronJobsStorePathFromConfig(result.config)))
+        .jobs;
+      expect(jobs).toEqual([
+        expect.objectContaining({
+          agentId: "main",
+          payload: expect.objectContaining({ kind: "agentTurn" }),
+          schedule: expect.objectContaining({ kind: "every", everyMs: 3_600_000 }),
+        }),
+      ]);
+      expect(result.config.agents?.defaults).not.toHaveProperty("heartbeat");
+    });
   });
 
   it.each(["sourceConfig", "config"] as const)(

@@ -45,7 +45,8 @@ type CronRegressionDefaults =
   | "cronEnabled"
   | "log"
   | "enqueueSystemEvent"
-  | "requestHeartbeat";
+  | "enqueueSessionEvent"
+  | "runSessionEvent";
 
 export function createCronRegressionState(
   deps: Omit<CronServiceDeps, CronRegressionDefaults> &
@@ -57,8 +58,9 @@ export function createCronRegressionState(
     cronEnabled: true,
     log: noopLogger,
     enqueueSystemEvent: vi.fn(),
-    requestHeartbeat: vi.fn(),
-    ...deps,
+    enqueueSessionEvent: vi.fn(),
+    runSessionEvent: vi.fn(async () => ({ status: "ok" as const })),
+    ...stateParams,
   });
   fixtureStates.get(path.dirname(path.resolve(deps.storePath)))?.add(state);
   return state;
@@ -140,6 +142,24 @@ export function createDueIsolatedJob(params: {
     payload: { kind: "agentTurn", message: params.id },
     delivery: { mode: "none" },
     state: { nextRunAtMs: params.nextRunAtMs },
+  };
+}
+
+export function createMainRegressionJob(
+  id: string,
+  at: number,
+  payload: CronJob["payload"],
+): CronJob {
+  const job = createDueIsolatedJob({ id, nowMs: at, nextRunAtMs: at });
+  delete job.delivery;
+  return {
+    ...job,
+    name: id.replaceAll("-", " "),
+    createdAtMs: at - 60_000,
+    updatedAtMs: at - 60_000,
+    sessionTarget: "main",
+    wakeMode: "now",
+    payload,
   };
 }
 

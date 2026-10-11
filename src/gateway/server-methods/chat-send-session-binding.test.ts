@@ -562,7 +562,6 @@ it.each(
             sessionCtx: { Provider: "webchat" },
             // Deliberately offer the original read admission. It must not transfer to this run.
             opts: { dashboardReadAdmission: initial.options.replyOptions?.dashboardReadAdmission },
-            isHeartbeat: false,
           },
           executionRunId,
         );

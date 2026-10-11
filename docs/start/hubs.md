@@ -89,7 +89,7 @@ Use these hubs to discover more of the documentation, including deep dives and r
 - [Gateway lock](/gateway/gateway-lock)
 - [Background process](/gateway/background-process)
 - [Health](/gateway/health)
-- [Heartbeat](/gateway/heartbeat)
+- [Heartbeat migration](/gateway/heartbeat)
 - [Doctor](/gateway/doctor)
 - [Logging](/gateway/logging)
 - [Sandboxing](/gateway/sandboxing)

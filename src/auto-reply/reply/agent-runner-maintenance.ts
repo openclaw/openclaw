@@ -24,7 +24,6 @@ export function scheduleReplySessionMaintenance(params: {
     !accounting.providerUsed ||
     !replyOperation.ownerSettlement ||
     !replyOperation.lifecycleGeneration ||
-    context.isHeartbeat ||
     accounting.preserveUserFacingSessionState ||
     context.execution.status !== "ok" ||
     accounting.fallbackExhausted ||

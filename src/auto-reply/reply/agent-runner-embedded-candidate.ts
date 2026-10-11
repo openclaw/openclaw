@@ -28,6 +28,7 @@ import { buildEmbeddedRunExecutionParams } from "./agent-runner-utils.js";
 import type { DirectBlockDelivery } from "./reply-delivery.js";
 import { resolveReplyOperationTerminationFields } from "./reply-operation-abort.js";
 import { markReplyOperationGlobalLaneWaitProgress } from "./reply-run-registry.js";
+import { hasReplyOperationExecutionStarted } from "./reply-run-registry.state.js";
 import {
   bindSourceReplyDeliveryRuntime,
   readSourceReplyDeliveryRuntime,
@@ -140,7 +141,16 @@ export async function runEmbeddedFallbackCandidate(
           agentHarnessPolicy.runtimeSource !== "implicit" ? agentHarnessPolicy.runtime : undefined,
         sandboxSessionKey: turn.runtimePolicySessionKey,
         explicitSkillSelections: turn.followupRun.explicitSkillSelections,
-        forceMessageTool: turn.followupRun.run.sourceReplyDeliveryMode === "message_tool_only",
+        forceMessageTool:
+          turn.followupRun.run.scheduledAutomation?.sourceDelivery?.messageTool.force ??
+          turn.followupRun.run.sourceReplyDeliveryMode === "message_tool_only",
+        ...(turn.followupRun.run.scheduledAutomation
+          ? {
+              disableMessageTool:
+                turn.followupRun.run.scheduledAutomation.sourceDelivery?.messageTool.enabled ===
+                false,
+            }
+          : {}),
         suppressTranscriptOnlyAssistantPersistence:
           turn.followupRun.run.suppressTranscriptOnlyAssistantPersistence,
         assistantErrorTranscript: params.assistantErrorTranscript,
@@ -155,8 +165,6 @@ export async function runEmbeddedFallbackCandidate(
         toolProgressDetail: turn.toolProgressDetail,
         // Marks reply-owned policy; final attempt preparation binds its concrete route.
         toolAuthorityFingerprint: turn.replyOperation?.toolAuthorityFingerprint,
-        enableHeartbeatTool: turn.opts?.enableHeartbeatTool,
-        forceHeartbeatTool: turn.opts?.forceHeartbeatTool,
         deferTerminalLifecycle: true,
         onAttemptStart: lifecycleBackstop.beginAttempt,
         onCompactionAccounting: (fact) => {
@@ -174,6 +182,24 @@ export async function runEmbeddedFallbackCandidate(
           }
           if (agentHarnessPolicy.runtime !== "openclaw" || info?.backend === "cloud-worker") {
             await params.prepareAgentRunStart();
+          }
+          if (turn.followupRun.run.scheduledAutomation) {
+            try {
+              await turn.followupRun.run.internalEventExecution?.beforeScheduledStart?.(
+                params.runId,
+              );
+              params.runAbortSignal?.throwIfAborted();
+              turn.followupRun.run.internalEventExecution?.assertCurrent?.();
+            } catch (error) {
+              if (!turn.replyOperation || !hasReplyOperationExecutionStarted(turn.replyOperation)) {
+                lifecycleBackstop.note({
+                  stream: "lifecycle",
+                  data: { phase: "finishing", executionStarted: false, providerStarted: false },
+                });
+              }
+              throw error;
+            }
+            await turn.followupRun.run.scheduledAutomation.executionIdentity?.onExecutionStarted?.();
           }
         },
         onExecutionPhase: (info) => {

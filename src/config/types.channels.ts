@@ -26,7 +26,7 @@ export type ChannelDefaultsConfig = {
   groupPolicy?: GroupPolicy;
   /** Default history/context visibility inherited by channel configs. */
   contextVisibility?: ContextVisibilityMode;
-  /** Default heartbeat visibility for all channels. */
+  /** @deprecated Doctor input only; use automation delivery policy. */
   heartbeatVisibility?: ChannelHeartbeatVisibilityConfig;
   /** Default pair loop guard settings for channels that support bot loop protection. */
   botLoopProtection?: ChannelBotLoopProtectionConfig;

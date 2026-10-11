@@ -170,7 +170,6 @@ describe("current-session completion media", () => {
           isAgentAvailable: () => available,
           log: createNoopLogger(),
           enqueueSystemEvent: vi.fn(),
-          requestHeartbeat: vi.fn(),
           runIsolatedAgentJob: async ({ job, abortSignal, deliveryAttemptFence }) => {
             expect(deliveryAttemptFence).not.toBeNull();
             fixture.params.job = job;

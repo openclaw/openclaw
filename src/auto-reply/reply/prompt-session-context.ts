@@ -79,10 +79,9 @@ export function prepareReplyConversation(params: {
     Pick<TemplateContext, "From" | "InternalTurnSource" | "InputProvenance">;
   sessionEntry?: SessionEntry;
   groupResolution?: GroupKeyResolution;
-  isHeartbeat?: boolean;
 }): PreparedReplyConversation {
   const { ctx, sessionEntry, groupResolution } = params;
-  const isSystemEvent = params.isHeartbeat === true || ctx.InternalTurnSource !== undefined;
+  const isSystemEvent = ctx.InternalTurnSource !== undefined;
   const route = isSystemEvent
     ? resolveEffectiveReplyRoute({ ctx, entry: sessionEntry })
     : undefined;

@@ -18,7 +18,6 @@ import {
   type CompactNodeTestShard,
   type NodeTestShardGroup,
   createNodeTestShardBundles,
-  createSelectedNodeTestShardBundles,
   isExclusiveCompactShardName,
 } from "../../scripts/lib/ci-node-test-plan.mts";
 import { rebalanceRuntimeTestJobs } from "../../scripts/lib/ci-runtime-test-placement.mts";
@@ -504,6 +503,7 @@ describe("runtime placement observations", () => {
         ),
       );
     onTestFinished(() => spy.mockRestore());
+    return consumers;
   }
   function mockRuntimePlacementCosts() {
     // Keep spare capacity independent of growing production prices; observations supply overload.
@@ -773,8 +773,8 @@ describe("runtime placement observations", () => {
     ),
   )(
     "admits complete $compactMode runtime placement without changing inventories or precise capacity (Gateway recipient: $gatewayRecipient)",
-    ({ compactMode, gatewayRecipient }) => {
-      selectRuntimeConsumers();
+    async ({ compactMode, gatewayRecipient }) => {
+      const consumers = selectRuntimeConsumers();
       const originalShards = fullSuiteVitestShards.slice();
       const runtimeConfig = "test/vitest/vitest.runtime-config.config.ts";
       const infrastructure = "test/vitest/vitest.infra.config.ts";
@@ -804,6 +804,53 @@ describe("runtime placement observations", () => {
         runnerBackend: "hybrid",
         includeReleaseOnlyPluginShards: false,
       };
+      // Split inventories are process-stable. Install this case's workload before
+      // importing its planner so unrelated repository growth cannot fill the recipient.
+      vi.resetModules();
+      vi.doMock("../../scripts/lib/list-test-files.mts", async (importOriginal) => {
+        const original =
+          await importOriginal<typeof import("../../scripts/lib/list-test-files.mts")>();
+        return {
+          ...original,
+          listTrackedTestFiles: (...args: Parameters<typeof original.listTrackedTestFiles>) => {
+            const files = original.listTrackedTestFiles(...args);
+            return gatewayRecipient && ["src/infra", "src/config"].includes(args[0])
+              ? files.filter(
+                  (file) => consumers.has(file) || file === "src/config/allowed-values.test.ts",
+                )
+              : files;
+          },
+        };
+      });
+      vi.doMock("../vitest/vitest.database-worker-core-paths.mjs", async (importOriginal) => {
+        const original =
+          await importOriginal<typeof import("../vitest/vitest.database-worker-core-paths.mjs")>();
+        return {
+          ...original,
+          databaseWorkerCoreTestFiles: gatewayRecipient
+            ? original.databaseWorkerCoreTestFiles.filter((file) => consumers.has(file))
+            : original.databaseWorkerCoreTestFiles,
+        };
+      });
+      vi.doMock("../vitest/vitest.test-shards.mjs", async (importOriginal) => ({
+        ...(await importOriginal<typeof import("../vitest/vitest.test-shards.mjs")>()),
+        fullSuiteVitestShards,
+      }));
+      vi.doMock("../../scripts/lib/ci-test-timings.mts", async (importOriginal) => ({
+        ...(await importOriginal<typeof import("../../scripts/lib/ci-test-timings.mts")>()),
+        readCompactGroupTimings: testTimings.readCompactGroupTimings,
+        readRuntimePlacementTimings: testTimings.readRuntimePlacementTimings,
+      }));
+      vi.doMock("../../scripts/lib/local-check-runtime.mts", async (importOriginal) => ({
+        ...(await importOriginal<typeof import("../../scripts/lib/local-check-runtime.mts")>()),
+        isExclusiveCiTestConfig: localCheckRuntime.isExclusiveCiTestConfig,
+      }));
+      vi.doMock("../../scripts/lib/vitest-build-prerequisites.mts", async (importOriginal) => ({
+        ...(await importOriginal<
+          typeof import("../../scripts/lib/vitest-build-prerequisites.mts")
+        >()),
+        resolveVitestPretestBuildMode: buildPrerequisites.resolveVitestPretestBuildMode,
+      }));
       try {
         fullSuiteVitestShards.splice(
           0,
@@ -814,14 +861,18 @@ describe("runtime placement observations", () => {
               projects: shard.projects.filter((config) => configs.has(config)),
             }))
             .filter((shard) => shard.projects.length > 0),
+          // Sibling Gateway groups occupy different jobs. The ordinary config
+          // child can share one, leaving a recipient outside the donor's family.
           ...(gatewayRecipient
-            ? ["agentic-gateway-server-isolated", "agentic-agents-core-subagents"].map((name) => {
-                const config = `fixture-${name}.config.ts`;
-                return { name, config, projects: [config] };
-              })
+            ? ["agentic-gateway-core-1", "agentic-gateway-core-2"].map((name) => ({
+                name,
+                config: gatewayFixtureConfig,
+                projects: [gatewayFixtureConfig],
+              }))
             : []),
         );
-        const before = createNodeTestShardBundles(options);
+        const planner = await import("../../scripts/lib/ci-node-test-plan.mts");
+        const before = planner.createNodeTestShardBundles(options);
         const runtimeGroups = before
           .flatMap((job) => job.groups)
           .filter((group) => group.pretestBuildMode === "runtime");
@@ -852,7 +903,7 @@ describe("runtime placement observations", () => {
           ]),
         );
         const selected = ["src/config/state-startup-corpus.test.ts"];
-        const preciseBefore = createSelectedNodeTestShardBundles(selected, {
+        const preciseBefore = planner.createSelectedNodeTestShardBundles(selected, {
           runnerBackend: "hybrid",
         });
         const blacksmith: RuntimePlacementTiming[] = runtimeGroups.map((group) => ({
@@ -869,15 +920,19 @@ describe("runtime placement observations", () => {
               : 20,
         }));
         spy.mockImplementation((profile) => (profile === "blacksmith" ? blacksmith : []));
-        const after = createNodeTestShardBundles(options);
+        const after = planner.createNodeTestShardBundles(options);
         if (compactMode === "pull-request") {
           expect(
-            createNodeTestShardBundles({ ...options, compactMode: undefined, compact: true }),
+            planner.createNodeTestShardBundles({
+              ...options,
+              compactMode: undefined,
+              compact: true,
+            }),
           ).toEqual(after);
         }
-        expect(createSelectedNodeTestShardBundles(selected, { runnerBackend: "hybrid" })).toEqual(
-          preciseBefore,
-        );
+        expect(
+          planner.createSelectedNodeTestShardBundles(selected, { runnerBackend: "hybrid" }),
+        ).toEqual(preciseBefore);
         const groups = (jobs: typeof before) =>
           jobs
             .flatMap((job) =>
@@ -958,7 +1013,7 @@ describe("runtime placement observations", () => {
             ? blacksmith.filter((entry) => !entry.configs.includes(runtimeConfig))
             : [],
         );
-        const unmeasured = createNodeTestShardBundles(options);
+        const unmeasured = planner.createNodeTestShardBundles(options);
         expect(unmeasured.map((job) => [job.checkName, job.runner, job.groups])).toEqual(
           before.map((job) => [job.checkName, job.runner, job.groups]),
         );
@@ -974,7 +1029,7 @@ describe("runtime placement observations", () => {
             ? blacksmith.map((entry) => Object.assign({}, entry, { seconds: 1_000 }))
             : [],
         );
-        const unfit = createNodeTestShardBundles(options);
+        const unfit = planner.createNodeTestShardBundles(options);
         expect(groups(unfit)).toEqual(groups(before));
         expect(unfit.map((job) => [job.checkName, job.runner, job.groups])).toEqual(
           before.map((job) => [job.checkName, job.runner, job.groups]),
@@ -984,6 +1039,13 @@ describe("runtime placement observations", () => {
         spy.mockRestore();
         compactSpy.mockRestore();
         gatewayConfigSpy?.mockRestore();
+        vi.doUnmock("../../scripts/lib/list-test-files.mts");
+        vi.doUnmock("../vitest/vitest.database-worker-core-paths.mjs");
+        vi.doUnmock("../vitest/vitest.test-shards.mjs");
+        vi.doUnmock("../../scripts/lib/ci-test-timings.mts");
+        vi.doUnmock("../../scripts/lib/local-check-runtime.mts");
+        vi.doUnmock("../../scripts/lib/vitest-build-prerequisites.mts");
+        vi.resetModules();
         fullSuiteVitestShards.splice(0, fullSuiteVitestShards.length, ...originalShards);
       }
     },

@@ -193,13 +193,13 @@ Sessions are reused until you reset them manually or opt into an automatic reset
   metadata writes.
 - **Idle reset** (`mode: "idle"`) - opt into a new session after `session.reset.idleMinutes`
   of inactivity. Idle freshness is based on the last real user/channel
-  interaction, so heartbeat, cron, and exec system events do not keep the
+  interaction, so automation and exec system events do not keep the
   session alive.
 - **Manual reset** - type `/new` or `/reset` in chat. `/new <model>` also
   switches the model.
 
 When both daily and idle resets are configured, whichever expires first wins.
-Heartbeat, cron, exec, and other system-event turns may write session metadata,
+Automation, exec, and other system-event turns may write session metadata,
 but those writes do not extend daily or idle reset freshness. When a reset
 rolls the session, queued system-event notices for the old session are
 discarded so stale background updates are not prepended to the first prompt in

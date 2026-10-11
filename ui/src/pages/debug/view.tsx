@@ -1,5 +1,6 @@
 import { createMemo, For, Show, untrack } from "solid-js";
 import type { EventLogEntry } from "../../api/event-log.ts";
+import type { CronStatus } from "../../api/types.ts";
 import { isNativeEmbedHost } from "../../app/native-web-chrome.ts";
 import { highlightJsonHtml } from "../../components/markdown-code-blocks.ts";
 import { KeyboardShortcut, ShortcutText } from "../../components/solid/kbd.tsx";
@@ -27,7 +28,7 @@ export type DebugProps = {
   status: Record<string, unknown> | null;
   health: Record<string, unknown> | null;
   models: unknown[];
-  heartbeat: unknown;
+  automations: CronStatus | null;
   lanes: CommandLaneSnapshot[];
   dynamic: CommandLaneDynamicSummary | null;
   diagnosticsError: string | null;
@@ -132,9 +133,29 @@ export function DebugPageView(props: DebugProps) {
           </div>
         </Show>
         <SecurityRow status={props.status} />
-        <For each={["status", "health", "heartbeat"] as const}>
+        <Row
+          title={t("debug.automations")}
+          description={t("debug.automationsSubtitle")}
+          control={
+            <>
+              {props.automations
+                ? t("debug.automationsSummary", {
+                    state: t(props.automations.enabled ? "common.enabled" : "common.disabled"),
+                    count: String(props.automations.jobs),
+                    next:
+                      props.automations.nextWakeAtMs == null
+                        ? t("debug.noWakeScheduled")
+                        : formatTimeMs(props.automations.nextWakeAtMs),
+                  })
+                : t("debug.overlay.unavailable")}
+            </>
+          }
+        />
+      </Section>
+      <Section title={t("debug.rawProtocolTitle")} description={t("debug.rawProtocolSubtitle")}>
+        <For each={["status", "health"] as const}>
           {(key) => {
-            const title = () => t(key === "heartbeat" ? "debug.lastHeartbeat" : `debug.${key}`);
+            const title = () => t(`debug.${key}`);
             return (
               <Row
                 title={title()}

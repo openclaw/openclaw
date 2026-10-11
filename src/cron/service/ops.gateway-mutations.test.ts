@@ -81,7 +81,6 @@ async function withCronGateway(
       defaultAgentId: "main",
       log: logger,
       enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
       runIsolatedAgentJob,
       listConfiguredChannels,
       onEvent: (event) => {

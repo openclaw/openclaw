@@ -10,11 +10,8 @@ import type { PluginInstallBatchReload } from "../plugins/install-runtime-batch.
 import type { RuntimeEnv } from "../runtime.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import { clawTargetPackages } from "./application-provenance.js";
-import {
-  applyClawCronUpdate,
-  ClawCronUpdateError,
-  type ClawCronUpdateExecution,
-} from "./cron-update.js";
+import type { ClawCronUpdateExecution } from "./cron-update-contract.js";
+import { applyClawCronUpdate, ClawCronUpdateError } from "./cron-update.js";
 import type { ClawCronGateway } from "./cron.js";
 import { digestClawValue as digest } from "./digest.js";
 import { buildClawAddPlan, type ClawAddPlanContext } from "./lifecycle.js";
@@ -30,6 +27,7 @@ import {
   type ClawPackageUpdateExecution,
 } from "./package-update.js";
 import { runClawPluginBatch, type ClawPluginRuntimeOptions } from "./plugin-runtime.js";
+import { ClawPortableMutationUncertainError } from "./portable-heartbeat-write.js";
 import {
   readClawInstallRecord,
   updateClawInstallRecord,
@@ -541,7 +539,7 @@ export async function applyClawUpdatePlan(
   const applyCron = options.applyCron ?? applyClawCronUpdate;
   let cronExecution: ClawCronUpdateExecution;
   try {
-    cronExecution = await applyCron(fresh, params.targetManifest, options);
+    cronExecution = await applyCron(fresh, params.targetManifest, { ...options, targetAddPlan });
   } catch (error) {
     if (error instanceof ClawCronUpdateError && error.partial) {
       try {
@@ -564,14 +562,32 @@ export async function applyClawUpdatePlan(
 
   let installRecord: PersistedClawInstall;
   try {
-    installRecord = persistInstall(targetAddPlan, {
-      ...installPersistenceOptions,
-      expectedClaw: fresh.currentClaw,
-    });
+    const persist = () =>
+      persistInstall(targetAddPlan, {
+        ...installPersistenceOptions,
+        expectedClaw: fresh.currentClaw,
+      });
+    installRecord = cronExecution.commit
+      ? await cronExecution.commit({
+          plan: targetAddPlan,
+          expectedClaw: fresh.currentClaw,
+          ...(adoptedAgentConfigDigest ? { agentConfigDigest: adoptedAgentConfigDigest } : {}),
+        })
+      : persist();
   } catch (error) {
+    if (error instanceof ClawPortableMutationUncertainError) {
+      throw partialMutation(error.message, { cause: error });
+    }
     const rollbackFailures = await rollbackCompleted(cronExecution);
     throwIfUpdatePartial(error, rollbackFailures);
     throw new ClawUpdateMutationError("provenance_update_failed", coerceErrorMessage(error));
+  }
+  try {
+    await cronExecution.publish?.();
+  } catch (error) {
+    throw partialMutation(
+      `Update committed but Gateway adoption was not acknowledged: ${coerceErrorMessage(error)}`,
+    );
   }
   return {
     schemaVersion: CLAW_UPDATE_RESULT_SCHEMA_VERSION,

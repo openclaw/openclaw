@@ -9,7 +9,9 @@ import {
   loadPublishedGatewayReplyDispatchRuntime,
   type PreparedModelRuntimeLease,
 } from "../../agents/prepared-model-runtime.js";
+import { captureSessionEventTargetForHost } from "../../auto-reply/reply/session-event-target.js";
 import { resolveAgentModelPrimaryValue } from "../../config/model-input.js";
+import { resolveAgentMainSessionKey } from "../../config/sessions/main-session.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { resolveCreatorSandbox } from "../../gateway/operator-role-policy.js";
 import { isCronSessionKey, parseAgentSessionKey } from "../../routing/session-key.js";
@@ -23,25 +25,24 @@ import { resolveCronSkillsSnapshot } from "../../skills/runtime/cron-snapshot.js
 import { resolveCronJobEffectiveAgentId } from "../agent-id.js";
 import { createCronRunDiagnosticsFromError } from "../run-diagnostics.js";
 import { resolveCronScheduledToolPolicy } from "../scheduled-tool-policy.js";
-import { isDetachedCronSessionTarget } from "../session-target.js";
+import { isDetachedCronSessionTarget, resolveCronDeliverySessionKey } from "../session-target.js";
 import { resolveCronRunToolsAllow } from "../tools-allow.js";
 import {
   resolveCronModelSelection,
   resolveCronModelSelectionOwner,
   resolveCronThinkingSelection,
 } from "./model-selection.js";
+import { resolveCronAutomationMessage } from "./run-automation-context.js";
 import { resolveCronCommandPromptPreflight } from "./run-command-preflight.js";
+import { prepareCronCommandPrompt } from "./run-command-prompt.js";
 import { resolveCronActiveRuntimeConfig, resolveCronAgentConfig } from "./run-config.js";
-import { buildCurrentConversationContextBlock } from "./run-current-context.js";
 import {
   createCronToolsAllowPreflightDiagnostics,
   resolveCronDeliveryContext,
 } from "./run-delivery-trace.js";
 import { resolveCronPreflight } from "./run-fallback-policy.js";
 import {
-  appendCronUnattendedRunPreamble,
   resolveCronAuthSelection,
-  loadCronExternalContentRuntime,
   loadSessionAccessorRuntime,
   retireRolledCronSessionMcpRuntime,
   type RunCronAgentTurnParams,
@@ -60,9 +61,7 @@ import {
 import { resolveCronRunTimeoutOverrideMs } from "./run-timeout.js";
 import { prepareCronSessionWorkspace, type CronWorkspaceLease } from "./run-workspace.js";
 import {
-  isExternalHookSession,
   logWarn,
-  mapHookExternalContentSource,
   normalizeAgentId,
   resolveAgentConfig,
   resolveAgentDir,
@@ -88,6 +87,7 @@ export async function prepareCronRunContext(params: {
   onLifecycleInterrupt: () => void;
 }) {
   const { input } = params;
+  input.assertCurrent?.();
   const commandPromptPreflight = resolveCronCommandPromptPreflight(input.job);
   if (commandPromptPreflight) {
     return { ok: false as const, result: commandPromptPreflight };
@@ -103,6 +103,16 @@ export async function prepareCronRunContext(params: {
   );
   await using runtimeResources = new AsyncDisposableStack();
   let runtimeLease: ReturnType<typeof scopePreparedModelRuntimeLease> | undefined;
+  const resultSessionKey =
+    (input.job.sessionTarget === "isolated"
+      ? input.job.sourceConversation?.sessionKey
+      : undefined) ??
+    resolveCronDeliverySessionKey(input.job) ??
+    resolveAgentMainSessionKey({ cfg: requestedRuntimeCfg, agentId: initialAgentId });
+  const resultTarget = await captureSessionEventTargetForHost(initialAgentId, resultSessionKey, {
+    assertCaptureCurrent: input.assertCurrent,
+  });
+  input.assertCurrent?.();
   const publishedRuntime = await loadPublishedGatewayReplyDispatchRuntime({
     agentId: initialAgentId,
     demand: "scheduled",
@@ -254,22 +264,41 @@ export async function prepareCronRunContext(params: {
         update,
         assertCommitAllowed,
       }) => {
+        const assertCurrent = () => {
+          input.assertCurrent?.();
+          assertCommitAllowed?.();
+        };
         const { applySessionEntryLifecycleMutation, patchSessionEntryCore } =
           await loadSessionAccessorRuntime();
         if (resetBoundary) {
+          const followsOwnedReset =
+            resultTarget.agentId === agentId &&
+            resultTarget.sessionKey === sessionKey &&
+            resultTarget.storePath === storePath &&
+            resultTarget.sessionId === cronSession.initialSessionEntry?.sessionId &&
+            resultTarget.lifecycleRevision === cronSession.initialSessionEntry?.lifecycleRevision;
           await applySessionEntryLifecycleMutation({
             activeSessionKey: sessionKey,
             agentId,
             storePath,
+            commitGuard: assertCurrent,
             upserts: [
               {
                 sessionKey,
                 resetBoundary,
-                buildEntry: ({ currentEntry }) => update(currentEntry),
+                buildEntry: ({ currentEntry }) => {
+                  assertCurrent();
+                  return update(currentEntry);
+                },
               },
             ],
             skipMaintenance: true,
           });
+          if (followsOwnedReset) {
+            // Advance only this committed reset; retain the target's physical-store capture.
+            resultTarget.sessionId = fallbackEntry.sessionId;
+            resultTarget.lifecycleRevision = fallbackEntry.lifecycleRevision;
+          }
           return;
         }
         // Guarded replace reads the freshest row so lifecycle claims reject stale owners.
@@ -279,7 +308,7 @@ export async function prepareCronRunContext(params: {
           {
             fallbackEntry,
             replaceEntry: true,
-            workerGuard: { assertCurrent: assertCommitAllowed },
+            workerGuard: { assertCurrent },
           },
         );
       };
@@ -477,58 +506,34 @@ export async function prepareCronRunContext(params: {
       });
 
       const { formattedTime, timeLine } = resolveCronStyleNow(runtimeCfg, now);
-      // Current jobs stay detached; a bounded tail preserves context without transcript continuation.
-      const currentConversationContext =
-        input.job.sessionTarget === "current" && agentPayload && sourceSessionKey && sourceEntry
-          ? await buildCurrentConversationContextBlock({
-              agentId,
-              sourceSessionEntry: sourceEntry,
-              sourceSessionKey,
-              storePath: cronSession.storePath,
-            })
-          : undefined;
-      const turnMessage =
-        input.job.payload.kind === "agentTurn" ? input.job.payload.message : input.message;
-      const message = currentConversationContext
-        ? `${currentConversationContext}\n\n${turnMessage}`
-        : turnMessage;
-      const sourcePromptPrefix = `[cron:${input.job.id} ${input.job.name}]`;
-      const base = `${sourcePromptPrefix} ${message}`.trim();
-      const isExternalHook =
-        hookExternalContentSource !== undefined || isExternalHookSession(baseSessionKey);
-      const allowUnsafeExternalContent =
-        agentPayload?.allowUnsafeExternalContent === true ||
-        (isGmailHook && input.cfg.hooks?.gmail?.allowUnsafeExternalContent === true);
-      const shouldWrapExternal = isExternalHook && !allowUnsafeExternalContent;
-      let commandBody: string;
-
-      if (isExternalHook) {
-        const { detectSuspiciousPatterns } = await loadCronExternalContentRuntime();
-        const suspiciousPatterns = detectSuspiciousPatterns(message);
-        if (suspiciousPatterns.length > 0) {
-          logWarn(
-            `[security] Suspicious patterns detected in external hook content ` +
-              `(session=${baseSessionKey}, patterns=${suspiciousPatterns.length}): ${suspiciousPatterns.slice(0, 3).join(", ")}`,
-          );
-        }
-      }
-
-      if (shouldWrapExternal) {
-        const { buildSafeExternalPrompt } = await loadCronExternalContentRuntime();
-        const hookType = mapHookExternalContentSource(hookExternalContentSource ?? "webhook");
-        const safeContent = buildSafeExternalPrompt({
-          content: message,
-          source: hookType,
-          jobName: input.job.name,
-          jobId: input.job.id,
-          timestamp: formattedTime,
-        });
-        commandBody = `${safeContent}\n\n${timeLine}`.trim();
-      } else {
-        commandBody = `${base}\n${timeLine}`.trim();
-      }
-      commandBody = appendCronUnattendedRunPreamble(commandBody, {
-        externalHook: isExternalHook,
+      const message = await resolveCronAutomationMessage({
+        cfg: admittedConfig,
+        job: input.job,
+        agentId,
+        runSessionKey,
+        message: input.message,
+        sourceSessionKey,
+        sourceEntry,
+        storePath: cronSession.storePath,
+        assertCurrent: () => {
+          input.assertCurrent?.();
+          (input.abortSignal ?? input.signal)?.throwIfAborted();
+          if (!sessionWorkAdmission.isActive()) {
+            throw new CronSessionLifecycleClaimError(agentSessionKey);
+          }
+        },
+      });
+      const { commandBody, isExternalHook, sourcePromptPrefix } = await prepareCronCommandPrompt({
+        input,
+        baseSessionKey,
+        hookExternalContentSource,
+        allowUnsafeExternalContent:
+          agentPayload?.allowUnsafeExternalContent === true ||
+          (isGmailHook && input.cfg.hooks?.gmail?.allowUnsafeExternalContent === true),
+        message,
+        formattedTime,
+        timeLine,
+        admittedConfig,
       });
 
       const skillsSnapshot = await resolveCronSkillsSnapshot({
@@ -629,6 +634,7 @@ export async function prepareCronRunContext(params: {
           agentCfg,
           agentDir,
           agentSessionKey,
+          resultTarget,
           sourceSessionKey: input.job.sourceConversation?.sessionKey ?? sourceSessionKey,
           sourceSessionGeneration,
           runSessionId,

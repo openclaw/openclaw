@@ -21,11 +21,7 @@ import {
   closeOpenClawAgentDatabasesForTest,
 } from "../state/openclaw-agent-db.js";
 import { getStatusSummary } from "../status/summary.js";
-import {
-  createDirectOutboundTestAdapter,
-  createOutboundTestPlugin,
-  createTestRegistry,
-} from "../test-utils/channel-plugins.js";
+import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -35,26 +31,6 @@ import { formatStatusSummary } from "../tui/tui-status-summary.js";
 describe("getStatusSummary read-only session access", () => {
   const previousRegistry = getActivePluginRegistry();
   const tempDirs = useSessionStoreTempDirs(afterAll, "openclaw-status-session-stores-");
-
-  function registerTelegramFixture() {
-    const telegram = createOutboundTestPlugin({
-      id: "telegram",
-      outbound: createDirectOutboundTestAdapter({ channel: "telegram" }),
-      messaging: {
-        targetPrefixes: ["telegram"],
-        inferTargetChatType: ({ to }) => {
-          return /^(?:telegram:)?\d+$/.test(to) ? "direct" : undefined;
-        },
-      },
-    });
-    telegram.config = {
-      ...telegram.config,
-      resolveAllowFrom: ({ cfg }) => cfg.channels?.telegram?.allowFrom ?? [],
-    };
-    setActivePluginRegistry(
-      createTestRegistry([{ pluginId: "telegram", plugin: telegram, source: "test" }]),
-    );
-  }
 
   beforeEach(() => {
     setActivePluginRegistry(createTestRegistry());
@@ -73,7 +49,7 @@ describe("getStatusSummary read-only session access", () => {
     }
   });
 
-  it("does not create the heartbeat session database while checking its route", async () => {
+  it("does not create session state while reporting an absent proactive automation", async () => {
     const tempDir = tempDirs.make();
     const databasePath = path.join(tempDir, "openclaw-agent.sqlite");
 
@@ -82,31 +58,9 @@ describe("getStatusSummary read-only session access", () => {
       config: { session: { store: databasePath } },
     });
 
-    expect(summary.heartbeat.agents[0]?.waitingForRoute).toBe(true);
+    expect(summary.heartbeat.agents[0]).toMatchObject({ enabled: false, waitingForRoute: false });
     expect(fs.existsSync(databasePath)).toBe(false);
   });
-
-  it.each([undefined, "owner"])(
-    "resolves the configured owner DM without writing session state for target %s",
-    async (target) => {
-      registerTelegramFixture();
-      const tempDir = tempDirs.make();
-      const databasePath = path.join(tempDir, "openclaw-agent.sqlite");
-
-      const summary = await getStatusSummary({
-        includeChannelSummary: false,
-        config: {
-          ...(target ? { agents: { defaults: { heartbeat: { target } } } } : {}),
-          commands: { ownerAllowFrom: ["telegram:123"] },
-          channels: { telegram: { allowFrom: ["123"] } },
-          session: { store: databasePath },
-        },
-      });
-
-      expect(summary.heartbeat.agents[0]?.waitingForRoute).toBe(false);
-      expect(fs.existsSync(databasePath)).toBe(false);
-    },
-  );
 
   it.each(["sessions.json", "shared.sqlite"])(
     "reports each agent's activity and reads each physical session store once for %s",
@@ -215,7 +169,7 @@ describe("getStatusSummary read-only session access", () => {
   it("shares one local session snapshot across the complete status scan", async () => {
     await withOpenClawTestState({ prefix: "openclaw-status-scan-snapshot-" }, async (state) => {
       const config = {
-        agents: { defaults: { heartbeat: { every: "0m" } }, entries: { main: {} } },
+        agents: { entries: { main: {} } },
         gateway: { mode: "remote" as const, remote: { url: "ws://127.0.0.1:1", token: "fixture" } },
         plugins: { enabled: false },
       };
@@ -344,7 +298,6 @@ describe("getStatusSummary read-only session access", () => {
         const storePath = state.path("shared.sqlite");
         const config = {
           agents: {
-            defaults: { heartbeat: { every: "0m" } },
             entries: { main: {}, ops: {} },
           },
           session: { store: storePath },
@@ -396,7 +349,7 @@ describe("getStatusSummary read-only session access", () => {
   it("keeps session payload hydration off the status caller", async () => {
     await withOpenClawTestState({ prefix: "openclaw-status-recent-window-" }, async (state) => {
       const config = {
-        agents: { defaults: { heartbeat: { every: "0m" } }, entries: { main: {} } },
+        agents: { entries: { main: {} } },
       };
       const storePath = resolveSessionStorePathCore(undefined, {
         agentId: "main",

@@ -386,7 +386,7 @@ export function createDispatchReplyOperationCoordinator(params: {
       allowGatewayQueueResolution &&
       (activeReplyOperation
         ? phase !== "pre_dispatch" &&
-          (activeReplyOperation.turnKind !== "heartbeat" ||
+          (activeReplyOperation.turnKind !== "background" ||
             params.replyOptions?.internalEventExecution !== undefined)
         : activeEmbeddedSessionId === operationSessionId)
     ) {

@@ -1,3 +1,4 @@
+import type { CronServiceRunOptions } from "../service-contract.js";
 import type { CronJob, CronPayload } from "../types.js";
 
 export type OnExitRunOptions = {
@@ -15,6 +16,7 @@ export type ManualRunOptions = {
   commitGuard?: () => void;
   scheduleOwnershipAtMs?: number;
   payload?: CronPayload;
+  delivery?: CronServiceRunOptions["delivery"];
   terminalTracker?: { emitted: boolean };
   evaluateTrigger?: boolean;
   streamBatch?: string;

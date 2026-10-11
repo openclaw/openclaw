@@ -83,7 +83,9 @@ function expectSnapshots(page: TestDebugPage, marker: string): void {
   expect(readSnapshot(page, "Status")).toEqual({ version: marker });
   expect(readSnapshot(page, "Health")).toEqual({ marker, ok: true });
   expect(readSnapshot(page, "Models")).toEqual([{ id: marker }]);
-  expect(readSnapshot(page, "Last heartbeat")).toEqual({ source: marker });
+  expect(normalizedText(page.querySelector(".settings-section"))).toContain(
+    `Scheduler Enabled · ${marker.length} total jobs`,
+  );
   expect(normalizedText(page.querySelector(".command-lane-row"))).toContain(marker);
 }
 
@@ -95,7 +97,7 @@ function createProps(overrides: Partial<DebugProps> = {}): DebugProps {
     status: null,
     health: null,
     models: [],
-    heartbeat: null,
+    automations: null,
     lanes: [],
     dynamic: null,
     diagnosticsError: null,
@@ -117,6 +119,46 @@ function createProps(overrides: Partial<DebugProps> = {}): DebugProps {
 useDebugTestEnvironment();
 
 describe("DebugPageView", () => {
+  it.each([
+    [true, 1, "Scheduler Enabled · 1 total jobs"],
+    [true, 0, "Scheduler Enabled · 0 total jobs"],
+    [false, 2, "Scheduler Disabled · 2 total jobs"],
+  ] as const)(
+    "uses canonical scheduler=%s and total=%s while retaining raw protocol data",
+    (enabled, jobs, text) => {
+      const container = document.createElement("div");
+      const status = {
+        heartbeat: { defaultAgentId: "main", agents: [{ enabled: false, every: "disabled" }] },
+      };
+      const health = { heartbeatSeconds: 0, agents: [] };
+      mountView(
+        createProps({
+          status,
+          health,
+          automations: { enabled, triggersEnabled: true, jobs, nextWakeAtMs: null },
+        }),
+        container,
+      );
+      const sections = container.querySelectorAll(".settings-section");
+      expect(normalizedText(sections[0])).toContain(text);
+      expect(normalizedText(sections[0])).toContain("none scheduled");
+      expect(normalizedText(sections[0])).not.toContain("defaultAgentId");
+      expect(normalizedText(sections[1])).toContain("Raw protocol inspection");
+      const raw = sections[1]?.querySelectorAll("pre");
+      expect(JSON.parse(raw?.[0]?.textContent ?? "null")).toEqual(status);
+      expect(JSON.parse(raw?.[1]?.textContent ?? "null")).toEqual(health);
+    },
+  );
+
+  it("shows unavailable diagnostics instead of claiming a disabled scheduler", () => {
+    const container = document.createElement("div");
+    mountView(createProps({ diagnosticsError: "cron.status unavailable" }), container);
+    const summary = container.querySelector(".settings-section");
+    expect(normalizedText(summary)).toContain("Unavailable");
+    expect(normalizedText(summary)).toContain("cron.status unavailable");
+    expect(normalizedText(summary)).not.toContain("Scheduler Disabled");
+  });
+
   it("retains event payload DOM and only highlights changed diagnostics", () => {
     const container = document.createElement("div");
     const events = Array.from({ length: 250 }, (_, index) => ({
@@ -162,11 +204,11 @@ describe("DebugPageView", () => {
         ...nextProps,
         status: { version: "updated" },
         health: { ok: true },
-        heartbeat: { source: "updated" },
+        automations: { enabled: true, triggersEnabled: true, jobs: 2, nextWakeAtMs: null },
         models: [{ id: "updated" }],
         callResult: '{"result":"updated"}',
       });
-      expect(highlight).toHaveBeenCalledTimes(5);
+      expect(highlight).toHaveBeenCalledTimes(4);
       expect(container.textContent).toContain("updated");
 
       update({ ...props, eventLog: [] });
@@ -299,7 +341,7 @@ describe("DebugPage", () => {
           if (holdModels && method === "models.list") {
             return pendingModels.promise;
           }
-          if (holdLive && (method === "last-heartbeat" || method === "diagnostics.lanes")) {
+          if (holdLive && (method === "cron.status" || method === "diagnostics.lanes")) {
             await pending.promise;
             return diagnosticResponse(method, "stale");
           }
@@ -412,12 +454,12 @@ describe("DebugPage", () => {
     expect(readSnapshot(page, "Status")).toEqual({});
     expect(readSnapshot(page, "Health")).toEqual({});
     expect(readSnapshot(page, "Models")).toEqual([]);
-    expect(readSnapshot(page, "Last heartbeat")).toEqual({});
+    expect(normalizedText(page.querySelector(".settings-section"))).toContain("Unavailable");
     expect(page.querySelector(".command-lane-row")).toBeNull();
     expect(page.textContent).not.toContain("stale");
   });
 
-  it("polls live lanes and heartbeat while full snapshots change only on Refresh", async () => {
+  it("polls live lanes and automations while full snapshots change only on Refresh", async () => {
     vi.useFakeTimers();
     let marker = "initial";
     const pendingRefresh = deferred();
@@ -438,7 +480,9 @@ describe("DebugPage", () => {
       expect(readSnapshot(page, "Status")).toEqual({ version: "initial" });
       expect(readSnapshot(page, "Health")).toEqual({ marker: "initial", ok: true });
       expect(readSnapshot(page, "Models")).toEqual([{ id: "initial" }]);
-      expect(readSnapshot(page, "Last heartbeat")).toEqual({ source: "live" });
+      expect(normalizedText(page.querySelector(".settings-section"))).toContain(
+        "Scheduler Enabled · 4 total jobs",
+      );
       expect(normalizedText(page.querySelector(".command-lane-row"))).toContain("live");
       marker = "manual";
       const refresh = page.querySelector<HTMLButtonElement>(".settings-section button")!;

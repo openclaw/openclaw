@@ -56,7 +56,7 @@ async function createState(jobs: CronJob[]) {
     log: logger,
     nowMs: () => NOW,
     enqueueSystemEvent: vi.fn(),
-    requestHeartbeat: vi.fn(),
+    runSessionEvent: vi.fn(async () => ({ status: "ok" as const })),
     runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
   });
   state.schedulerStarted = true;
@@ -116,7 +116,7 @@ describe("cron timer maintenance admission", () => {
       expect(maintenance).not.toHaveBeenCalled();
       expect(state.deps.runIsolatedAgentJob).not.toHaveBeenCalled();
       expect(state.deps.enqueueSystemEvent).not.toHaveBeenCalled();
-      expect(state.deps.requestHeartbeat).not.toHaveBeenCalled();
+      expect(state.deps.runSessionEvent).not.toHaveBeenCalled();
       expect(state.running).toBe(false);
       expect(state.deps.scheduler.nextWakeAtMs).toBe(nextRunAtMs);
       expect(previousRuns).toHaveBeenCalledTimes(0);

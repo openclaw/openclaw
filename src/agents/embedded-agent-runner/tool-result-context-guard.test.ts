@@ -506,10 +506,11 @@ describe("installContextEngineLoopHook", () => {
     "ingests only new messages when afterTurn is absent (batch: %s)",
     async (batch) => {
       const engine = makeEngine();
-      const { run } = hook(
-        { ...engine, afterTurn: undefined, ingestBatch: batch ? engine.ingestBatch : undefined },
-        { isHeartbeat: true },
-      );
+      const { run } = hook({
+        ...engine,
+        afterTurn: undefined,
+        ingestBatch: batch ? engine.ingestBatch : undefined,
+      });
       const first = [makeUser("first"), makeToolResult("one", "result")];
       await run(first);
       const second = [...first, makeUser("second"), makeToolResult("two", "result")];
@@ -519,20 +520,11 @@ describe("installContextEngineLoopHook", () => {
           first.slice(1),
           second.slice(2),
         ]);
-        expect(engine.ingestBatch.mock.calls.map(([params]) => params.isHeartbeat)).toEqual([
-          true,
-          true,
-        ]);
         expect(engine.ingest).not.toHaveBeenCalled();
       } else {
         expect(engine.ingest.mock.calls.map(([params]) => params.message)).toEqual([
           ...first.slice(1),
           ...second.slice(2),
-        ]);
-        expect(engine.ingest.mock.calls.map(([params]) => params.isHeartbeat)).toEqual([
-          true,
-          true,
-          true,
         ]);
       }
       expect(engine.assemble).toHaveBeenCalledTimes(2);

@@ -97,7 +97,10 @@ export function registerControlUiOwnerBootstrapSuite(): void {
         throw new Error("expected control ui owner device token");
       }
       expect(recoveryScope).toMatch(/^[A-Za-z0-9_-]+$/u);
-      expect((await rpcReq(wsBootstrap, "set-heartbeats", { enabled: false })).ok).toBe(true);
+      expect(await rpcReq(wsBootstrap, "exec.approvals.get", {})).toMatchObject({
+        ok: true,
+        payload: { file: { version: 1 } },
+      });
       wsBootstrap.close();
 
       const iconResponse = await fetch(
@@ -214,9 +217,9 @@ export function registerControlUiOwnerBootstrapSuite(): void {
       expect(auth?.scopes).toEqual([...BOOTSTRAP_HANDOFF_OPERATOR_SCOPES]);
       expect(auth?.scopes).not.toContain("operator.admin");
       expect(auth?.scopes).not.toContain("operator.pairing");
-      const adminMutation = await rpcReq(wsBootstrap, "set-heartbeats", { enabled: false });
-      expect(adminMutation.ok).toBe(false);
-      expect(adminMutation.error?.message ?? "").toContain("missing scope");
+      const adminRequest = await rpcReq(wsBootstrap, "exec.approvals.get", {});
+      expect(adminRequest.ok).toBe(false);
+      expect(adminRequest.error?.message ?? "").toContain("missing scope: operator.admin");
       wsBootstrap.close();
 
       expect(
@@ -288,7 +291,10 @@ export function registerControlUiOwnerBootstrapSuite(): void {
       }
       expect(upgradedToken).not.toBe(previousToken);
       expect(auth?.scopes).toEqual([...CONTROL_UI_OWNER_BOOTSTRAP_OPERATOR_SCOPES]);
-      expect((await rpcReq(wsUpgrade, "set-heartbeats", { enabled: false })).ok).toBe(true);
+      expect(await rpcReq(wsUpgrade, "exec.approvals.get", {})).toMatchObject({
+        ok: true,
+        payload: { file: { version: 1 } },
+      });
       wsUpgrade.close();
 
       expect(

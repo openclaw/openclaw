@@ -362,7 +362,6 @@ function createTestConfig(baseUrl: string): OpenClawConfig {
     plugins: { enabled: false },
     agents: {
       defaults: {
-        heartbeat: { every: "0m" },
         maxConcurrent: 8,
         model: { primary: MODEL_REF },
         models: { [MODEL_REF]: { agentRuntime: { id: "openclaw" } } },

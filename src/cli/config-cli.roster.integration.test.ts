@@ -612,10 +612,10 @@ describe("config cli roster integration", () => {
       expect(after.agents).toMatchObject({
         ownership: "explicit",
         defaults: {
-          heartbeat: { agentId: ownerId },
           systemAgent: { agentId: ownerId },
         },
       });
+      expect(after.agents.defaults).not.toHaveProperty("heartbeat");
       expect(after.agents.entries).toEqual({
         [ownerId]: { name: "original-owner", workspace },
         work: { name: "new-worker" },

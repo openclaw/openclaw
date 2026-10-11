@@ -85,7 +85,7 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
   } = createDispatchBlockReplyHandler(state);
   const flushDeferredFinalText = async () => {
     try {
-      if (!state.deferFinalTtsText || params.replyOptions?.isHeartbeat === true) {
+      if (!state.deferFinalTtsText) {
         return;
       }
       const deferredVisibleText = state.cleanBlockTtsDirectiveText
@@ -245,9 +245,6 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                 toolLifecycleOptions,
               ),
               onToolResult: (payload) => {
-                if (state.replyOperationRunState.heartbeat) {
-                  return Promise.resolve();
-                }
                 state.getDispatchReplyOperation()?.recordActivity();
                 markProgress();
                 const run = async () => {
@@ -473,7 +470,6 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
     const failedAgentRun = getAgentRunTerminalOutcome() === "failed";
     const adopted = state.turnAdoptionState?.adopted === true;
     if (
-      params.replyOptions?.isHeartbeat === true ||
       (!failedAgentRun && !didDeliverVisiblePartialReply && !adopted) ||
       isDispatchOperationAborted()
     ) {

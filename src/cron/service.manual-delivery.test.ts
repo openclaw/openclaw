@@ -91,7 +91,7 @@ describe("manual cron delivery occurrence", () => {
         cronConfig: { triggers: { enabled: true } },
         log: createNoopLogger(),
         enqueueSystemEvent: vi.fn(),
-        requestHeartbeat: vi.fn(),
+        enqueueSessionEvent: vi.fn(),
         runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
         runScriptJob,
         onEvent: (event) => {
@@ -189,7 +189,7 @@ describe("manual cron delivery occurrence", () => {
             nowMs: () => now,
             log: createNoopLogger(),
             enqueueSystemEvent: vi.fn(),
-            requestHeartbeat: vi.fn(),
+            enqueueSessionEvent: vi.fn(),
             onEvent: (event) => {
               events.push(event);
               if (event.action === "finished") {

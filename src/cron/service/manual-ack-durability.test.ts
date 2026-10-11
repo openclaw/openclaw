@@ -70,7 +70,7 @@ it("records the exact acknowledged manual request after SIGKILL before worker ac
             cronEnabled: true,
             defaultAgentId: "main",
             log: { info() {}, warn() {}, error() {}, debug() {} },
-            enqueueSystemEvent() {}, requestHeartbeat() {},
+            enqueueSystemEvent() {},
             runIsolatedAgentJob: async () => { throw new Error("unexpected execution"); },
             runCommandJob: async ({ job }) => {
               if (!job.id.startsWith("manual-crash-blocker-")) throw new Error("unexpected execution");
@@ -150,7 +150,7 @@ it.each(["removed", "write-failed"] as const)(
       cronEnabled: false,
       log: createNoopLogger(),
       enqueueSystemEvent() {},
-      requestHeartbeat() {},
+      enqueueSessionEvent() {},
       runIsolatedAgentJob: async (params) => {
         if (blockers.some((entry) => entry.id === params.job.id)) {
           if (++blockerCount === blockers.length) {

@@ -180,6 +180,7 @@ describe("GitHub publication requester authority schema migration", () => {
       const { options, databasePath, before } = createV17PublicationState({ deferred });
       expect(detectOpenClawStateDatabaseSchemaMigrations(options)).toEqual([
         { kind: "github-publication-requester-authority-v18", path: databasePath },
+        { kind: "automation-policy-fence-v21", path: databasePath },
       ]);
       if (via === "doctor repair") {
         expect(repairOpenClawStateDatabaseSchema(options)).toEqual({

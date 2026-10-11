@@ -1,0 +1,182 @@
+--- telegram-direct-codex-message-tool.md	sha256=ac864d030875bedd3f7ec5415c41982aee4e6290f7c4000c52d03e74d1d3084a
++++ telegram-automation-codex-tool.md	sha256=9a49ed6bda5b0c7e66a4fd3b80527206f4d0b40110b4619c3f0acdc8bed091ef
+@@ -1,1 +1,1 @@
+-# Telegram Direct Codex Message Tool Turn
++# Telegram Direct Codex Automation Turn
+@@ -7,2 +7,2 @@
+-- Default happy path: OpenAI model through the Codex harness/runtime, Telegram direct conversation, and message-tool-only visible replies.
+-- A quiet turn is represented by not calling `message(action=send)`; the normal final assistant text is private to OpenClaw/Codex.
++- Ordinary scheduled automation: Codex receives the current job's scratch and structured-result actions through the Automations tool.
++- The current invocation owns scratch CAS and result recording; ordinary source-reply delivery owns visible messages, and NO_REPLY keeps a quiet result silent.
+@@ -29,3 +29,3 @@
+-  "sourceReplyDeliveryMode": "message_tool_only",
+-  "toolSnapshot": "codex-dynamic-tools.telegram-direct.json",
+-  "trigger": "user"
++  "sourceReplyDeliveryMode": "automatic",
++  "toolSnapshot": "codex-dynamic-tools.automation-turn.json",
++  "trigger": "cron"
+@@ -133,1 +133,1 @@
+-  "threadId": "thread-telegram-direct-codex-message-tool"
++  "threadId": "thread-telegram-automation-codex-tool"
+@@ -146,4 +145,0 @@
+-    "openclaw_current_sender": {
+-      "kind": "untrusted",
+-      "value": "{\"sender\":{\"id\":\"1000001\",\"name\":\"Pash\",\"username\":\"pash\"}}"
+-    },
+@@ -152,1 +148,1 @@
+-      "value": "Current source-delivery policy for this turn (replaces earlier source-delivery guidance):\nVisible source replies are not automatically delivered for this run. Use `message(action=send)` for user-visible source-channel output. For progress, set `final=false`. Set `final=true`, or omit it, for the completed reply to the current source conversation; OpenClaw stops after confirming delivery. Do not repeat visible message content in your final answer.\n\n`send`: `message`; current source is default target. Set `target` only elsewhere.\n\nCommentary is optional progress and may be hidden. Answer user questions or status requests received during ongoing work with `message(action=send, final=false)`, then continue the task. Before finishing, deliver every still-pending answer through this turn's visible-reply route. Do not repeat answers already delivered."
++      "value": "Current source-delivery policy for this turn (replaces earlier source-delivery guidance):\nYou can participate in the conversation throughout your work. Use `message` when you have something worth saying; you don’t need to wait until you’re finished, and sending a message doesn’t end your task. OpenClaw delivers your final response automatically.\n\n`send`: `message`; current source is default target. Set `target` only elsewhere.\n\nCommentary is optional progress and may be hidden. Answer user questions or status requests received during ongoing work with `message(action=send, final=false)`, then continue the task. Before finishing, deliver every still-pending answer through this turn's visible-reply route. Do not repeat answers already delivered."
+@@ -183,2 +179,2 @@
+-  "threadId": "thread-telegram-direct-codex-message-tool",
+-  "turnTrigger": "user"
++  "threadId": "thread-telegram-automation-codex-tool",
++  "turnTrigger": "cron"
+@@ -223,1 +219,1 @@
+-    "dynamicToolsFrom": "codex-dynamic-tools.telegram-direct.json",
++    "dynamicToolsFrom": "codex-dynamic-tools.automation-turn.json",
+@@ -236,2 +232,2 @@
+-    "chars": 1348,
+-    "roughTokens": 337
++    "chars": 1115,
++    "roughTokens": 279
+@@ -256,2 +252,2 @@
+-    "chars": 73492,
+-    "roughTokens": 18373
++    "chars": 45656,
++    "roughTokens": 11414
+@@ -260,2 +256,2 @@
+-    "chars": 3194,
+-    "roughTokens": 799
++    "chars": 2962,
++    "roughTokens": 741
+@@ -264,2 +260,2 @@
+-    "chars": 507,
+-    "roughTokens": 127
++    "chars": 1246,
++    "roughTokens": 312
+@@ -268,2 +264,2 @@
+-    "chars": 27580,
+-    "roughTokens": 6895
++    "chars": 28503,
++    "roughTokens": 7126
+@@ -272,2 +268,2 @@
+-    "chars": 101074,
+-    "roughTokens": 25269
++    "chars": 74161,
++    "roughTokens": 18541
+@@ -276,2 +272,2 @@
+-    "chars": 879,
+-    "roughTokens": 220
++    "chars": 1528,
++    "roughTokens": 382
+@@ -446,0 +443,8 @@
++This is an OpenClaw cron automation turn. Apply these instructions only to this scheduled job; ordinary chat turns should stay in Codex Default mode.
++
++Execute the cron payload directly. If it asks you to run an exact command, run that command before doing any investigation, planning, memory review, or workspace bootstrap.
++
++Use context already provided by the runtime, but do not spend time loading or re-reading workspace bootstrap, memory, or project-doc files before executing the cron payload. Inspect those files only if the payload asks for them or the command fails and they are needed to diagnose it.
++
++Keep output concise and automation-oriented. Prefer the final command result or a short failure summary over status narration.
++
+@@ -512,1 +516,1 @@
+-You are in a Telegram direct conversation. Normal final replies are private and are not automatically sent to this conversation. To post visible output here, use the message tool with action=send; the target defaults to this conversation. If no visible direct response is needed, do not call message(action=send). Your normal final answer stays private and will not be posted to the conversation.
++You are in a Telegram direct conversation. Your replies are automatically sent to this conversation unless the current-turn context says final replies stay private.
+@@ -525,6 +528,0 @@
+-### User: OpenClaw Additional Context (openclaw_current_sender)
+-
+-```text
+-<external_openclaw_current_sender>{"sender":{"id":"1000001","name":"Pash","username":"pash"}}</external_openclaw_current_sender>
+-```
+-
+@@ -535,1 +533,1 @@
+-Visible source replies are not automatically delivered for this run. Use `message(action=send)` for user-visible source-channel output. For progress, set `final=false`. Set `final=true`, or omit it, for the completed reply to the current source conversation; OpenClaw stops after confirming delivery. Do not repeat visible message content in your final answer.
++You can participate in the conversation throughout your work. Use `message` when you have something worth saying; you don’t need to wait until you’re finished, and sending a message doesn’t end your task. OpenClaw delivers your final response automatically.
+@@ -554,1 +551,0 @@
+-[OpenClaw conversation info: sender={"id":"1000001","name":"Pash","username":"pash"}]
+@@ -573,1 +570,1 @@
+-{"chat_id":"user:1000001","message_id":"tg-msg-0001","sender":{"id":"1000001","name":"Pash","username":"pash"}}
++{"chat_id":"user:1000001","message_id":"automation-0001","sender":{"id":"1000001","name":"Pash","username":"pash"}}
+@@ -576,1 +573,6 @@
+-Can you check whether the nightly build finished and tell me what happened?
++Check whether the nightly build needs attention.
++
++This is an unattended scheduled run. Nobody is present to clarify or approve, so complete the task with what you have. Your final reply is the deliverable — not a plan, an acknowledgement, or a request for input. If nothing needs doing, reply exactly NO_REPLY. If something failed, start with AUTOMATION_FAILED on its own line, then state what failed and what you tried — the scheduler owns retries and failure alerts. Where the job's own instructions conflict with this preamble, the job's instructions win (a question or plan the job explicitly requests is a valid deliverable). If this job is no longer needed, remove it if your available tools allow.
++
++Automation scratch (revision 1):
++Report a newly failed build once; keep the last checked build here.
+@@ -581,1 +583,1 @@
+-Full JSON: `codex-dynamic-tools.telegram-direct.json`
++Full tool overrides: `codex-dynamic-tools.automation-turn.json` (base: `codex-dynamic-tools.telegram-direct.json`)
+@@ -752,0 +755,72 @@
++  },
++  {
++    "deferLoading": true,
++    "description": "Inspect or remove only the current automation. Actions: status; list [includeDisabled]; get/runs/remove jobId. Use the current job ID. To stop a finished job, remove it; creating/updating/running jobs and waking sessions are unavailable. Return the task result; the scheduler owns delivery. scratch_get reads this job's checklist and revision; scratch_set replaces or clears content using expectedRevision from the read (reread after a revision conflict). record_result accepts one outcome (no_change, progress, done, blocked, needs_attention) and concise summary for this run. no_change or NO_REPLY keeps the response silent.",
++    "inputSchema": {
++      "properties": {
++        "action": {
++          "enum": [
++            "status",
++            "list",
++            "get",
++            "remove",
++            "runs",
++            "scratch_get",
++            "scratch_set",
++            "record_result"
++          ],
++          "type": "string"
++        },
++        "content": {
++          "anyOf": [
++            {
++              "maxLength": 262144,
++              "type": "string"
++            },
++            {
++              "type": "null"
++            }
++          ]
++        },
++        "expectedRevision": {
++          "minimum": 0,
++          "type": "integer"
++        },
++        "gatewayToken": {
++          "type": "string"
++        },
++        "gatewayUrl": {
++          "type": "string"
++        },
++        "id": {
++          "type": "string"
++        },
++        "includeDisabled": {
++          "type": "boolean"
++        },
++        "jobId": {
++          "type": "string"
++        },
++        "outcome": {
++          "enum": ["no_change", "progress", "done", "blocked", "needs_attention"],
++          "type": "string"
++        },
++        "runId": {
++          "description": "Run id from action=\"run\" to read with action=\"runs\"",
++          "type": "string"
++        },
++        "summary": {
++          "maxLength": 2000,
++          "minLength": 1,
++          "type": "string"
++        },
++        "timeoutMs": {
++          "minimum": 1,
++          "type": "integer"
++        }
++      },
++      "required": ["action"],
++      "type": "object"
++    },
++    "name": "automations",
++    "type": "function"

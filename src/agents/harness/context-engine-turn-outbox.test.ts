@@ -100,7 +100,6 @@ function createPayload(params: {
   } satisfies TranscriptTurnBoundary;
   return {
     boundary,
-    isHeartbeat: false,
     messages: [],
   };
 }
@@ -388,7 +387,6 @@ describe("context-engine turn outbox", () => {
         admission,
         database,
         engineId: "test",
-        isHeartbeat: accepted,
       });
       const terminal = await appendTranscriptMessage(target, {
         message: { role: "assistant", content: accepted ? "first answer" : "rejected fallback" },
@@ -403,7 +401,6 @@ describe("context-engine turn outbox", () => {
           boundary: { admission, terminal: terminal.anchor },
           database,
           engineId: "test",
-          isHeartbeat: true,
           runtimeContext: {
             provider: "anthropic",
             modelId: "claude-sonnet-4-6",
@@ -437,7 +434,6 @@ describe("context-engine turn outbox", () => {
       const warn = vi.fn();
       await drainPendingContextEngineTurnsBeforeRun({
         admission: accepted ? undefined : currentAdmission,
-        isHeartbeat: false,
         lease,
         warn,
         ...(accepted ? { recorder, sessionTarget: target } : {}),
@@ -447,7 +443,6 @@ describe("context-engine turn outbox", () => {
         expect(commitTurn).toHaveBeenCalledWith(
           expect.objectContaining({
             advancementKey: admission.logicalTurnId,
-            isHeartbeat: true,
             runtimeContext: {
               provider: "anthropic",
               modelId: "claude-sonnet-4-6",
@@ -481,7 +476,6 @@ describe("context-engine turn outbox", () => {
       expect(queued[0]?.advancement_key).toBe(currentAdmission.logicalTurnId);
       expect(JSON.parse(queued[0]?.payload_json ?? "{}")).toMatchObject({
         state: "admitted",
-        isHeartbeat: false,
       });
       if (accepted) {
         expect(lease.degradeBeforeStart).not.toHaveBeenCalled();
@@ -503,7 +497,6 @@ describe("context-engine turn outbox", () => {
       admission: payload.boundary.admission,
       database,
       engineId: "test",
-      isHeartbeat: false,
     });
     const storedState = () =>
       database.db
@@ -514,7 +507,6 @@ describe("context-engine turn outbox", () => {
       boundary: payload.boundary,
       database,
       engineId: "test",
-      isHeartbeat: false,
     });
     expect(storedState()).toBe("accepted");
     const warn = vi.fn();
@@ -830,7 +822,7 @@ describe("context-engine turn outbox", () => {
     });
     const command = {
       type: "prepareRun" as const,
-      input: { engineId: "test", sessionId: "snapshot-session", isHeartbeat: false },
+      input: { engineId: "test", sessionId: "snapshot-session" },
     };
     enqueueContextEngineTurnCommit({ database, engineId: "test", payload });
     const queries: string[] = [];

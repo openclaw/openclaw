@@ -44,6 +44,12 @@ export type CompactionAccountingFact = Readonly<
 export type RunEmbeddedAgentInternalParams = RunEmbeddedAgentParams & {
   /** The logical run already invoked model routing before preparing its candidate chain. */
   resolvedModelSelection?: ResolvedRunEntryModelSelection;
+  /** OpenClaw separates retry context after the prepared harness is selected. */
+  openclawFallbackPrompt?: {
+    prompt: string;
+    execApprovalContinuationPromptRange?: RunEmbeddedAgentParams["execApprovalContinuationPromptRange"];
+    runtimeContextFragments: NonNullable<RunEmbeddedAgentParams["runtimeContextFragments"]>;
+  };
   preparedTtsPreferences?: PreparedTtsPreferences;
   /** Fail-closed caller input admission against the actual prepared model, before dispatch. */
   assertModelInput?: (model: Pick<Model, "input">) => void;

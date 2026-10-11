@@ -76,7 +76,7 @@ title: "Features"
 
 - Browser automation, exec, sandboxing
 - Web search (Brave, DuckDuckGo, Exa, Firecrawl, Gemini, Grok, Kimi, MiniMax Search, Ollama Web Search, Perplexity, SearXNG, Tavily)
-- Cron jobs and heartbeat scheduling
+- Automations for scheduled jobs and proactive checks
 - Skills, plugins, and workflow pipelines (Lobster)
 
 ## Related

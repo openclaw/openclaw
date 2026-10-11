@@ -273,7 +273,6 @@ it.skipIf(process.platform === "win32")(
                         params: { transport: "sse", openaiWsWarmup: false },
                       },
                     },
-                    heartbeat: { every: "0m" },
                     skipBootstrap: true,
                     skills: [],
                     timeoutSeconds: 120,

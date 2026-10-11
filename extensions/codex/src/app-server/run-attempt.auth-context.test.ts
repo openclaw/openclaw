@@ -75,7 +75,7 @@ describe("runCodexAppServerAttempt authenticated hook context", () => {
 
   it("omits sender and chat identity from non-user prompt and compaction hooks", async () => {
     const contexts = await compactWithHooks({
-      trigger: "heartbeat",
+      trigger: "cron",
       senderId: "must-not-leak",
       channelContext: { sender: { id: "must-not-leak" }, chat: { id: "must-not-leak" } },
     });
@@ -83,7 +83,7 @@ describe("runCodexAppServerAttempt authenticated hook context", () => {
       expect(context).toMatchObject({
         accountId: "account-a",
         channel: "telegram",
-        trigger: "heartbeat",
+        trigger: "cron",
       });
       for (const key of ["senderId", "chatId", "channelContext"]) {
         expect(context).not.toHaveProperty(key);

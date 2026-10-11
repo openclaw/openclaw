@@ -2,6 +2,8 @@ import type { AdmittedRunContext } from "../../agents/admitted-run-context.js";
 import type { ExecutionIdentityAdmissionFacts } from "../../audit/execution-identity-admission.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { NormalizeReplySkipReason } from "../../auto-reply/reply/normalize-reply-skip-reason.js";
+import type { ReplyOperation } from "../../auto-reply/reply/reply-run-registry.contracts.js";
+import type { SessionEventTarget } from "../../auto-reply/reply/session-event-contract.js";
 import type { SessionCreatedActor } from "../../config/sessions/session-entry-provenance.js";
 import type { CronConfig } from "../../config/types.cron.js";
 import type {
@@ -9,8 +11,6 @@ import type {
   GatewayScheduledJob,
   GatewaySchedulerScope,
 } from "../../infra/gateway-scheduler.js";
-import type { HeartbeatRunResult, HeartbeatWakeRequest } from "../../infra/heartbeat-wake.js";
-import type { SessionEventWakeWaitOptions } from "../../infra/session-event-wake.js";
 import { LEGACY_IMPLICIT_AGENT_ID } from "../../routing/session-key.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import type { CronAgentAvailability } from "../agent-availability.js";
@@ -18,6 +18,7 @@ import type { CronCompletionDeliveryFence } from "../delivery-attempt-fence.js";
 import { toPublicCronJob } from "../public-job.js";
 import type { CronRuntimeAuthority } from "../runtime-authority.js";
 import type { CronScheduledToolPolicy } from "../scheduled-tool-policy.js";
+import type { CronJobScratchState } from "../scratch-contract.js";
 import type { QuarantinedCronConfigJob } from "../types-shared.js";
 import type {
   CronCompletionStatus,
@@ -95,7 +96,7 @@ export type Logger = {
   error: (obj: unknown, msg?: string) => void;
 };
 
-export type CronSystemEventEnqueueResult =
+type CronSystemEventEnqueueResult =
   | boolean
   | void
   | {
@@ -106,6 +107,23 @@ export type CronSystemEventEnqueueResult =
 /** Notifications queued by cron mutations until their state is durable. */
 export type DeferredCronNotifications = CronNotificationIntent[];
 
+/** One captured notice selection and scratch read retained through its scheduled turn. */
+export type CronSessionRunPreparation = {
+  agentId: string;
+  sessionKey: string;
+  notices: Awaited<
+    ReturnType<typeof import("../../infra/system-events.js").prepareAutomationSystemEvents>
+  >;
+  scratch?: CronJobScratchState;
+};
+
+export type CronIdleAdmissionWait = (
+  ownSessionKey?: string,
+  signal?: AbortSignal,
+  ownReplyOperation?: ReplyOperation,
+) => Promise<void>;
+export type CronIdleAdmissionSource = { signal: AbortSignal; assertCurrent: () => void };
+
 export type CronServiceDeps = {
   nowMs?: () => number;
   scheduler: GatewayScheduler;
@@ -114,6 +132,34 @@ export type CronServiceDeps = {
   cronEnabled: boolean;
   /** CronConfig for session retention settings. */
   cronConfig?: CronConfig;
+  resolveUserTimezone?: () => string | undefined;
+  /** Resident admission facts; normal reply admission owns recovery barriers. */
+  isExecutionIdle?: (
+    job: CronJob,
+    ownSessionKey?: string,
+    ownReplyOperation?: ReplyOperation,
+  ) => boolean;
+  runSessionEvent?: (params: {
+    waitForIdle?: CronIdleAdmissionWait;
+    admissionSource: NonNullable<AdmittedRunContext["admissionSource"]>;
+    sessionPreparation?: CronSessionRunPreparation;
+    deliveryAttemptFence: CronCompletionDeliveryFence | null;
+    onExecutionStarted?: (info?: CronAgentExecutionStarted) => void;
+    onLaneWait?: (info?: { waiting?: boolean }) => void;
+    executionIdentity?: CronExecutionIdentityAdmission;
+    job: CronStoredJob;
+    text: string;
+    deliveryContext?: DeliveryContext;
+    abortSignal?: AbortSignal;
+    prepare?: () => Promise<void>;
+    assertCurrent: () => void;
+  }) => Promise<
+    CronRunOutcome &
+      CronRunTelemetry &
+      CronRunDeliveryResult & {
+        nextCheck?: CronNextCheckProposal;
+      }
+  >;
   /** List enabled, configured channel ids without exposing channel machinery to cron core. */
   listConfiguredChannels?: () => readonly string[] | Promise<readonly string[]>;
   evaluateCronTrigger?: (params: {
@@ -175,17 +221,39 @@ export type CronServiceDeps = {
   }) => DeliveryContext | undefined | Promise<DeliveryContext | undefined>;
   /** Binds the Gateway for complete scheduled operations, including admission and settlement. */
   runSchedulerOwned?: <T>(run: () => Promise<T>) => Promise<T>;
-  requestHeartbeat: (opts: HeartbeatWakeRequest) => void;
-  /** Waits for the terminal result of a cron-owned coalesced heartbeat wake. */
-  requestHeartbeatAndWait?: (
-    opts: HeartbeatWakeRequest,
-    lifecycle: SessionEventWakeWaitOptions,
-  ) => Promise<HeartbeatRunResult>;
-  /** Resolves the outer watchdog for an awaited heartbeat handoff. */
-  resolveHeartbeatTimeoutMs?: (
-    opts: HeartbeatWakeRequest & { agentId: string },
-  ) => number | undefined;
+  /** Producer events enter ordinary session admission even when scheduling is disabled. */
+  enqueueSessionEvent?: (
+    text: string,
+    opts?: {
+      agentId?: string;
+      sessionKey?: string;
+      contextKey?: string;
+      deliveryContext?: DeliveryContext;
+      expectedTarget?: SessionEventTarget;
+      createIfMissing?: true;
+      assertAcceptanceCurrent?: () => void;
+    },
+  ) => void | Promise<{ ok: true } | { ok: false; error: string }>;
+  deferSessionEvent?: (
+    text: string,
+    job: CronJob,
+    expectedTarget: SessionEventTarget | undefined,
+    assertCurrent: () => void,
+    notBeforeRunAtMs: number,
+    coalescing?: {
+      revision: string;
+      assertCurrent: () => void;
+      onOutcome: (outcome: "queued" | "coalesced") => void;
+    },
+    createIfMissing?: true,
+  ) => void | Promise<void>;
+  captureSessionEventTarget?: (job: CronJob) => Promise<SessionEventTarget | undefined>;
+  resolveSessionEventTarget?: (opts?: { agentId?: string; sessionKey?: string }) => {
+    agentId?: string;
+    sessionKey?: string;
+  };
   runIsolatedAgentJob: (params: {
+    waitForIdle?: CronIdleAdmissionWait;
     deliveryAttemptFence: CronCompletionDeliveryFence | null;
     job: CronJob;
     admissionSource?: AdmittedRunContext["admissionSource"];
@@ -263,6 +331,7 @@ export type CronServiceDeps = {
    */
   runCronFailureRepair?: (request: CronFailureRepairRequest) => Promise<void>;
   onEvent?: (evt: CronEvent, context?: CronEventContext) => void;
+  onProvisionedJobsReloaded?: () => Promise<void>;
 };
 
 /** The scheduler's repair request for one failure incident of an owned job. */
@@ -448,7 +517,7 @@ export type CronAddOptions = {
   skillLibrarySelections?: CronStoredJob["skillLibrarySelections"];
   matchesExisting?: (job: CronJob) => boolean;
   enabledExplicit?: boolean;
-  /** Gateway/doctor-owned heartbeat jobs require this opt-in at service creation. */
+  /** Reserved system declaration namespaces require this trusted opt-in. */
   systemOwned?: boolean;
   /** Trusted creator provenance persisted with new jobs; never accepted from public input. */
   createdActor?: SessionCreatedActor;

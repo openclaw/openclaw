@@ -312,7 +312,6 @@ async function writeGatewayConfig(params: {
           [`${modelProvider}/${params.model}`]: { agentRuntime: { id: "codex" } },
         },
         skipBootstrap: true,
-        heartbeat: { every: "0m" },
         sandbox: { mode: "off" },
       },
     },

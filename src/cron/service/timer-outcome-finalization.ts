@@ -6,6 +6,10 @@ import {
   CronRunReceiptRevisionError,
   releaseLocalCronRunReceiptOwnership,
 } from "../store/run-receipt-store.js";
+import {
+  CRON_ADMISSION_DEFERRED_RECEIPT_ERROR,
+  isDeferredCronAdmission,
+} from "./admission-deferred.js";
 import { locked } from "./locked.js";
 import { clearManualCronJobActive, maybeNotifyManualIsolatedSetupTimeout } from "./ops-shared.js";
 import { finalizeCronRuntimeRows, type CronFinalizationReceipt } from "./run-finalization.js";
@@ -40,6 +44,28 @@ export async function finalizeCompletedCronRunOutcomes(
   if (outcomes.length === 0) {
     return [];
   }
+  if (
+    outcomes.length > 1 &&
+    outcomes.some((outcome) => isDeferredCronAdmission(outcome.job, outcome))
+  ) {
+    const completed = outcomes.filter((outcome) => !isDeferredCronAdmission(outcome.job, outcome));
+    const deferred = outcomes.filter((outcome) => isDeferredCronAdmission(outcome.job, outcome));
+    const finalized: TimedCronRunOutcome[] = [];
+    const failures: unknown[] = [];
+    // Preserve completed siblings' recovery facts before fallible deferred settlement.
+    // Each batch keeps its own exact receipt cleanup, including after a sibling fails.
+    for (const batch of [completed, ...deferred.map((outcome) => [outcome])]) {
+      try {
+        finalized.push(...(await finalizeCompletedCronRunOutcomes(state, batch, opts)));
+      } catch (error) {
+        failures.push(error);
+      }
+    }
+    if (failures.length) {
+      throw new AggregateError(failures, "Cron outcome settlement failed");
+    }
+    return finalized;
+  }
   for (const outcome of outcomes) {
     if (outcome.runReceipt && !outcome.runReceiptContext) {
       throw new Error("Cron finalization lost its original receipt context");
@@ -52,6 +78,7 @@ export async function finalizeCompletedCronRunOutcomes(
   let finalizedOutcomes: TimedCronRunOutcome[] = [];
   let finalizationSucceeded = false;
   const emittedRequests = new Set<TimedCronRunOutcome>();
+  const deferredOutcomes = new Set<TimedCronRunOutcome>();
   const missingRequestedJobs = new Set<TimedCronRunOutcome>();
   const canPublish = (outcome: TimedCronRunOutcome) =>
     !(state.stopped && opts?.discardWhenStopped) &&
@@ -59,9 +86,21 @@ export async function finalizeCompletedCronRunOutcomes(
   try {
     await locked(state, async () => {
       await ensureLoaded(state, { forceReload: true });
+      for (const outcome of outcomes) {
+        if (!isDeferredCronAdmission(outcome.job, outcome)) {
+          continue;
+        }
+        if (!outcome.runReceipt || !outcome.runReceiptContext) {
+          throw new Error("Deferred Cron admission lost its exact receipt owner");
+        }
+        deferredOutcomes.add(outcome);
+      }
       // Payload outcomes survive a failed row write as recovery facts. Quiet
       // evaluations have no payload outcome and finalize only after the commit.
       for (const outcome of outcomes) {
+        if (deferredOutcomes.has(outcome)) {
+          continue;
+        }
         if (
           outcome.request &&
           (outcome.activeJobMarker?.jobRemoved === true ||
@@ -105,7 +144,9 @@ export async function finalizeCompletedCronRunOutcomes(
                     outcome.triggerEval?.fired,
                   ),
                   finishedAtMs: outcome.endedAt,
-                  error: outcome.error,
+                  error: deferredOutcomes.has(outcome)
+                    ? CRON_ADMISSION_DEFERRED_RECEIPT_ERROR
+                    : outcome.error,
                 },
               },
             ]
@@ -160,7 +201,9 @@ export async function finalizeCompletedCronRunOutcomes(
           );
         }
       }
-      finalizedOutcomes = finalizedOutcomes.filter(canPublish);
+      finalizedOutcomes = finalizedOutcomes.filter(
+        (outcome) => canPublish(outcome) && !deferredOutcomes.has(outcome),
+      );
       finalizationSucceeded = true;
       if (finalizedOutcomes.length === 0) {
         await runPostPersistCronNotifications(state, postPersistNotifications);
@@ -222,7 +265,10 @@ export async function finalizeCompletedCronRunOutcomes(
       }
       const missingJob =
         outcome.activeJobMarker?.jobRemoved === true || missingRequestedJobs.has(outcome);
-      if (finalizedOutcomes.includes(outcome) && canPublish(outcome)) {
+      if (
+        (finalizedOutcomes.includes(outcome) || deferredOutcomes.has(outcome)) &&
+        canPublish(outcome)
+      ) {
         if (!missingJob) {
           maybeNotifyManualIsolatedSetupTimeout(state, {
             jobId: outcome.jobId,

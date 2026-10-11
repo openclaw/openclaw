@@ -1,5 +1,6 @@
 // Legacy config migration bridge for channel doctor compatibility contracts.
 
+import { z } from "zod";
 import { isChannelConfigMetadataKey } from "../../../channels/config-metadata.js";
 import { getBootstrapChannelPlugin } from "../../../channels/plugins/bootstrap-registry.js";
 import { loadBundledChannelDoctorContractApi } from "../../../channels/plugins/doctor-contract-api.js";
@@ -20,7 +21,45 @@ import { HISTORICAL_WEBHOOK_CHANNELS } from "./legacy-webhook-pins.js";
 
 const log = createSubsystemLogger("plugins/doctor-contracts");
 
-function migrateHeartbeatVisibility(raw: Record<string, unknown>, changes: string[]): void {
+export const LegacyHeartbeatVisibilitySchema = z
+  .object({
+    showOk: z.boolean().optional(),
+    showAlerts: z.boolean().optional(),
+    useIndicator: z.boolean().optional(),
+  })
+  .strict()
+  .optional();
+
+/** Feishu owns visibility/intervalMs; only its shared heartbeat keys belong to retirement. */
+export function selectLegacyHeartbeatVisibility(
+  channel: string,
+  entry: Record<string, unknown> | undefined,
+) {
+  if (!entry) {
+    return undefined;
+  }
+  const keys =
+    channel === "feishu"
+      ? (["heartbeatVisibility", "heartbeat"] as const)
+      : (["heartbeatVisibility"] as const);
+  for (const key of keys) {
+    const value = entry[key];
+    if (value === undefined) {
+      continue;
+    }
+    if (
+      channel === "feishu" &&
+      (!isRecord(value) ||
+        !["showOk", "showAlerts", "useIndicator"].some((field) => Object.hasOwn(value, field)))
+    ) {
+      continue;
+    }
+    return { key, value };
+  }
+  return undefined;
+}
+
+export function migrateHeartbeatVisibility(raw: Record<string, unknown>, changes: string[]): void {
   const channels = isRecord(raw.channels) ? raw.channels : null;
   if (!channels) {
     return;
@@ -36,6 +75,13 @@ function migrateHeartbeatVisibility(raw: Record<string, unknown>, changes: strin
       !heartbeat ||
       (preserveEmptyPluginBlock && keys.length === 0) ||
       keys.some((key) => key !== "showOk" && key !== "showAlerts" && key !== "useIndicator")
+    ) {
+      return;
+    }
+    if (
+      preserveEmptyPluginBlock &&
+      entry.heartbeatVisibility !== undefined &&
+      selectLegacyHeartbeatVisibility("feishu", entry)?.key !== "heartbeatVisibility"
     ) {
       return;
     }
