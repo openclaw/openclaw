@@ -37,6 +37,7 @@ describe("memory chunk publication", () => {
           "## Project notes",
           "- Oversized alpha entry. <!-- trigger: oversized alpha --> <!-- importance: 8 --> <!-- project: alpha-key -->",
           `  ${"alpha-fragment-body ".repeat(400)}`,
+          "# Scoped beta rule. <!-- project: beta-key --> <!-- trigger: scoped beta --> <!-- importance: 9 -->",
           "- Global neighbor. <!-- trigger: global neighbor -->",
         ].join("\n"),
       );
@@ -84,9 +85,23 @@ describe("memory chunk publication", () => {
           ),
         ).toBe(true);
         expect(rows.find((row) => row.triggers === "global neighbor")).toMatchObject({
+          text: "- Global neighbor.",
           projectKey: null,
           importance: null,
         });
+        expect(rows.find((row) => row.triggers === "scoped beta")).toMatchObject({
+          text: "# Scoped beta rule.",
+          projectKey: "beta-key",
+          importance: 9,
+        });
+        expect(await manager.listTriggerCandidates({ activeProjectKeys: [] })).toEqual([
+          expect.objectContaining({ snippet: "- Global neighbor.", projectKey: null }),
+        ]);
+        expect(await manager.listTriggerCandidates({ activeProjectKeys: ["beta-key"] })).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({ snippet: "# Scoped beta rule.", projectKey: "beta-key" }),
+          ]),
+        );
         expect(preparedTables).toEqual([]);
 
         await fs.writeFile(memoryPath, "");

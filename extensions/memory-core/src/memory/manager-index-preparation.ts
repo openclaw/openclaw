@@ -76,14 +76,13 @@ export function prepareMemoryIndexChunks({
       source === "memory" &&
       previous &&
       chunk.endLine > previous.endLine &&
-      // Size-split heading fragments share line numbers without being overlapping text.
+      // Annotated headings own their metadata; size-split headings also differ from source lines.
       previous.text
         .split("\n")
         .every(
           (line, index) =>
             (!line.trim() || /^ {0,3}#{1,6}(?:\s|$)/u.test(line)) &&
-            line.replace(/\r$/u, "") ===
-              stripMemoryAnnotationCarriers(sourceLines[previous.startLine + index - 1] ?? ""),
+            line.trimEnd() === (sourceLines[previous.startLine + index - 1] ?? "").trimEnd(),
         )
     ) {
       // Keep the following entry's annotation span, and do not repeat overlapping headings.
