@@ -248,7 +248,10 @@ describe("createCliJsonlStreamingParser framing", () => {
     {
       name: "line-count",
       overflow: (parser: ReturnType<typeof createCliJsonlStreamingParser>) => {
-        parser.push("\n".repeat(20_001));
+        // Ordinary records: partial-message text deltas are exempt from the
+        // line odometer, so they could never be what spends it.
+        const ordinaryRecord = JSON.stringify({ type: "system", subtype: "status" });
+        parser.push(`${ordinaryRecord}\n`.repeat(20_001));
       },
       truncation: "JSONL output exceeded 20000 lines",
     },
@@ -263,6 +266,9 @@ describe("createCliJsonlStreamingParser framing", () => {
       });
 
       overflow(parser);
+      // The budget really is spent before anything below depends on it: with no
+      // terminal result yet, a spent budget still reads as a hard error.
+      expect(parser.getErrorText()).toContain(truncation);
       // Records other than the terminal result stay unassembled past the budget.
       parser.push(
         `${joinJsonlFrames(

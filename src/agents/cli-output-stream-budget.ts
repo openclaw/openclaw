@@ -12,6 +12,7 @@
 // Only traffic the parent lane actually assembles is charged. Claude Code
 // forwards subagent output on the parent's stdout for the parent to discard, so
 // charging it spends a budget on bytes that never become parent output.
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type {
   CliBackendConfig,
   CliBackendParseJsonlEvent,
@@ -24,7 +25,12 @@ import type {
 } from "./cli-output-contracts.js";
 import { dispatchClaudeCliStreamingToolEvent } from "./cli-output-events.js";
 import { isClaudeSubagentJsonlLine } from "./cli-output-jsonl-scan.js";
-import { decodeCliRecords, readClaudeAttributedSubagentProgressId } from "./cli-output-records.js";
+import {
+  decodeCliRecords,
+  isClaudeSubagentRecord,
+  isClaudeToolUseBlockType,
+  readClaudeAttributedSubagentProgressId,
+} from "./cli-output-records.js";
 import { streamJsonOutputLimitErrorText } from "./cli-output-stream-limits.js";
 import type { createToolUseTracker } from "./cli-output-tool-tracker.js";
 
@@ -127,6 +133,46 @@ export function createTerminalResultEventDispatcher(
 }
 
 /**
+ * Reply-shape facts of parent records past a spent budget. No text is assembled
+ * any more, but which already-assembled text the terminal result keeps still
+ * depends on where the final message starts and whether tool splits connect it
+ * to that text — the same facts the parser tracks before the budget is spent.
+ */
+export type ClaudePostBudgetReplyBoundaries = {
+  onMessageStart: (messageId: string | undefined) => void;
+  onAssistantMessageId: (messageId: string) => void;
+  onToolUse: () => void;
+  /** A parent record that may carry text the spent budget no longer assembles. */
+  onText: (record: Record<string, unknown>) => void;
+};
+
+function observePostBudgetReplyBoundaries(
+  boundaries: ClaudePostBudgetReplyBoundaries,
+  record: Record<string, unknown>,
+): void {
+  // Forwarded child traffic never shapes the parent's reply.
+  if (isClaudeSubagentRecord(record)) {
+    return;
+  }
+  const message = isRecord(record.message) ? record.message : undefined;
+  if (record.type === "assistant" && typeof message?.id === "string" && message.id) {
+    boundaries.onAssistantMessageId(message.id);
+  }
+  const event = record.type === "stream_event" && isRecord(record.event) ? record.event : undefined;
+  if (event?.type === "message_start") {
+    const started = isRecord(event.message) ? event.message : undefined;
+    boundaries.onMessageStart(typeof started?.id === "string" ? started.id : undefined);
+  } else if (
+    event?.type === "content_block_start" &&
+    isRecord(event.content_block) &&
+    isClaudeToolUseBlockType(event.content_block.type)
+  ) {
+    boundaries.onToolUse();
+  }
+  boundaries.onText(record);
+}
+
+/**
  * Handles each post-budget line. Assembly has stopped, but the process is still
  * running: tool starts, tool results and attributed subagent progress are the
  * only facts the gateway's stall detector reads once a tool is active, so they
@@ -149,19 +195,33 @@ export function createClaudePostBudgetWatcher(params: {
   onToolUseStart?: (delta: CliToolUseStartDelta) => void;
   onToolResult?: (delta: CliToolResultDelta) => void;
   onAttributedSubagentProgress?: (parentToolUseId: string) => void;
+  boundaries?: ClaudePostBudgetReplyBoundaries;
 }): (line: string) => void {
+  const boundaries = params.boundaries;
   const projectProgress = (record: Record<string, unknown>) => {
     const attributedParentToolUseId = readClaudeAttributedSubagentProgressId(record);
     if (attributedParentToolUseId) {
       params.onAttributedSubagentProgress?.(attributedParentToolUseId);
       return;
     }
+    if (boundaries) {
+      observePostBudgetReplyBoundaries(boundaries, record);
+    }
+    // As before the budget: a tool started by an assistant snapshot splits the
+    // message it belongs to. The tracker reports each start once.
+    const onToolUseStart =
+      boundaries && record.type === "assistant"
+        ? (tool: CliToolUseStartDelta) => {
+            boundaries.onToolUse();
+            params.onToolUseStart?.(tool);
+          }
+        : params.onToolUseStart;
     dispatchClaudeCliStreamingToolEvent({
       backend: params.backend,
       providerId: params.providerId,
       parsed: record,
       tracker: params.tracker,
-      onToolUseStart: params.onToolUseStart,
+      onToolUseStart,
       onToolResult: params.onToolResult,
     });
   };

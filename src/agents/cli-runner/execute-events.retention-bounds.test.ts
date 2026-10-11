@@ -90,11 +90,11 @@ function buildHandlers(runId: string) {
 type Handlers = ReturnType<typeof createCliEventHandlers>;
 
 function startTool(handlers: Handlers, toolCallId: string, args: Record<string, unknown>): void {
-  handlers.emitCliToolUseStart({ toolCallId, name: "Bash", kind: "tool_use", args });
+  handlers.emitParsedToolUseStart({ toolCallId, name: "Bash", kind: "tool_use", args });
 }
 
 function finishTool(handlers: Handlers, toolCallId: string): void {
-  handlers.emitCliToolResult({ toolCallId, name: "Bash", isError: false, result: "ok" });
+  handlers.emitParsedToolResult({ toolCallId, name: "Bash", isError: false, result: "ok" });
 }
 
 function resultArgsFor(events: AgentEventRuntimePayload[], toolCallId: string): unknown {
@@ -168,7 +168,7 @@ describe("cli event handler retention bounds", () => {
     try {
       for (let index = 0; index < calls; index += 1) {
         startTool(handlers, `call-${index}`, {});
-        handlers.emitCliToolResult({
+        handlers.emitParsedToolResult({
           toolCallId: `call-${index}`,
           name: "Bash",
           isError: index % 2 === 0,

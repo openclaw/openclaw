@@ -50,6 +50,26 @@ export const MAX_REDUCED_MESSAGING_ARG_CHARS = 8 * 1024;
  * fact.
  */
 const MAX_REDUCED_MESSAGING_ARG_VALUE_CHARS = 2 * 1024;
+/**
+ * The arguments core's settle path reads to classify a send, retained before
+ * any other entry can spend the reduced allowance. Order matters: an absent
+ * `final` reads as `true`, so a flag dropped for want of room would silently
+ * turn a progress send into the final reply. The two boolean flags go first,
+ * so nothing else is ever charged before them. Explicit-route keys mirror
+ * `EXPLICIT_MESSAGE_ROUTE_KEYS` in `embedded-agent-message-tool-source-reply.ts`.
+ */
+const MESSAGING_SETTLEMENT_ARG_KEYS = [
+  "final",
+  "dryRun",
+  "action",
+  "channel",
+  "target",
+  "to",
+  "channelId",
+  "provider",
+  "targets",
+] as const;
+const MESSAGING_SETTLEMENT_ARG_KEY_SET = new Set<string>(MESSAGING_SETTLEMENT_ARG_KEYS);
 
 function measureToolArgEntryChars(key: string, value: unknown): number {
   try {
@@ -73,7 +93,9 @@ function measureToolArgEntryChars(key: string, value: unknown): number {
  *
  * What degrades when an entry is reduced is the *evidence* echoed for that send
  * (its text and inline media). What is preserved is every fact the settle path
- * reads to decide whether a real send happened and where it went.
+ * reads to decide whether a real send happened and where it went. Those keys
+ * are taken first, so where they sit in the decoded object cannot decide
+ * whether many small provider fields spend the allowance before them.
  */
 export function reduceMessagingToolArgs(args: Record<string, unknown>): {
   args: Record<string, unknown>;
@@ -83,7 +105,13 @@ export function reduceMessagingToolArgs(args: Record<string, unknown>): {
   const retained: Record<string, unknown> = {};
   let budget = 0;
   let reduced = false;
-  for (const [key, value] of Object.entries(args)) {
+  const entries: Array<[string, unknown]> = [
+    ...MESSAGING_SETTLEMENT_ARG_KEYS.filter((key) => Object.hasOwn(args, key)).map(
+      (key): [string, unknown] => [key, args[key]],
+    ),
+    ...Object.entries(args).filter(([key]) => !MESSAGING_SETTLEMENT_ARG_KEY_SET.has(key)),
+  ];
+  for (const [key, value] of entries) {
     const entryChars = measureToolArgEntryChars(key, value);
     if (
       entryChars > MAX_REDUCED_MESSAGING_ARG_VALUE_CHARS ||

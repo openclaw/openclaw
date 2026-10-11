@@ -70,6 +70,43 @@ function terminalResultLine(result: string) {
   });
 }
 
+/**
+ * An ordinary parent record: not a partial-message delta (those are exempt from
+ * the line odometer) and not forwarded subagent traffic (never charged), so it
+ * is exactly what the line budget counts.
+ */
+function parentStatusLine() {
+  return JSON.stringify({
+    type: "system",
+    subtype: "status",
+    parent_tool_use_id: null,
+    session_id: "budget-session",
+  });
+}
+
+/**
+ * Spends the line budget with chargeable ordinary records and proves it is
+ * spent before the caller tests anything that depends on it: with no terminal
+ * result yet, a spent budget is still a hard error.
+ */
+function exhaustLineBudget(parser: ReturnType<typeof createCliJsonlStreamingParser>) {
+  parser.push(`${parentStatusLine()}\n`.repeat(CLI_STREAM_JSON_OUTPUT_LIMITS.maxTurnLines + 1));
+  expect(parser.getErrorText()).toContain("JSONL output exceeded 20000 lines");
+}
+
+function parentStreamEventLine(event: Record<string, unknown>) {
+  return JSON.stringify({ type: "stream_event", parent_tool_use_id: null, event });
+}
+
+const parentMessageStartLine = (id: string) =>
+  parentStreamEventLine({ type: "message_start", message: { id } });
+const parentMessageStopLine = parentStreamEventLine({ type: "message_stop" });
+const parentToolBlockStartLine = parentStreamEventLine({
+  type: "content_block_start",
+  index: 1,
+  content_block: { type: "tool_use", id: "toolu_split", name: "Read" },
+});
+
 describe("CLI stream-json turn budget and forwarded subagent traffic", () => {
   it("does not charge forwarded subagent traffic against the parent line budget", () => {
     const { parser, assistantDeltas } = createRecordingParser();
@@ -106,19 +143,34 @@ describe("CLI stream-json turn budget and forwarded subagent traffic", () => {
   it("still charges parent-lane records that carry an explicit null parent tool id", () => {
     const { parser } = createRecordingParser();
 
-    parser.push(
-      `${parentAssistantTextLine("x")}\n`.repeat(CLI_STREAM_JSON_OUTPUT_LIMITS.maxTurnLines + 1),
-    );
+    // `exhaustLineBudget` streams `parent_tool_use_id: null` records and
+    // asserts the budget is spent by them.
+    exhaustLineBudget(parser);
     parser.push(`${terminalResultLine("recovered")}\n`);
     parser.finish();
 
     expect(parser.getOutputTruncationText()).toContain("JSONL output exceeded 20000 lines");
   });
 
+  it("does not charge partial-message text deltas against the line budget", () => {
+    // Control for the fixture above: these are exempt, so they cannot be what
+    // spends a line budget in any test.
+    const { parser, assistantDeltas } = createRecordingParser();
+
+    parser.push(
+      `${parentAssistantTextLine("x")}\n`.repeat(CLI_STREAM_JSON_OUTPUT_LIMITS.maxTurnLines + 1),
+    );
+    parser.push(`${terminalResultLine("recovered")}\n`);
+    parser.finish();
+
+    expect(parser.getOutputTruncationText()).toBeNull();
+    expect(assistantDeltas).toHaveLength(CLI_STREAM_JSON_OUTPUT_LIMITS.maxTurnLines + 1);
+  });
+
   it("keeps emitting parent tool start and result past an exhausted budget", () => {
     const { parser, toolStarts, toolResults } = createRecordingParser();
 
-    parser.push("\n".repeat(CLI_STREAM_JSON_OUTPUT_LIMITS.maxTurnLines + 1));
+    exhaustLineBudget(parser);
     expect(toolStarts).toEqual([]);
 
     parser.push(`${parentToolUseLine("toolu_bash_after_budget", "Bash")}\n`);
@@ -138,7 +190,7 @@ describe("CLI stream-json turn budget and forwarded subagent traffic", () => {
   it("keeps reporting attributed subagent progress past an exhausted budget", () => {
     const { parser, attributedProgress } = createRecordingParser();
 
-    parser.push("\n".repeat(CLI_STREAM_JSON_OUTPUT_LIMITS.maxTurnLines + 1));
+    exhaustLineBudget(parser);
     parser.push(`${subagentLine("still working")}\n`);
     parser.finish();
 
@@ -148,11 +200,126 @@ describe("CLI stream-json turn budget and forwarded subagent traffic", () => {
   it("does not assemble parent assistant text past an exhausted budget", () => {
     const { parser, assistantDeltas } = createRecordingParser();
 
-    parser.push("\n".repeat(CLI_STREAM_JSON_OUTPUT_LIMITS.maxTurnLines + 1));
+    exhaustLineBudget(parser);
     parser.push(`${parentAssistantTextLine("dropped")}\n`);
     parser.finish();
 
     expect(assistantDeltas).toEqual([]);
+  });
+
+  it("counts actual blank Claude frames as ordinary lines", () => {
+    // Main's accounting: a blank frame is not a partial-message delta.
+    const { parser } = createRecordingParser();
+
+    parser.push("\n".repeat(CLI_STREAM_JSON_OUTPUT_LIMITS.maxTurnLines + 1));
+
+    expect(parser.getErrorText()).toContain("JSONL output exceeded 20000 lines");
+  });
+});
+
+describe("terminal selection past a spent budget keeps the tool-split reply", () => {
+  function selectReply(frames: { beforeBudget: string[]; afterBudget: string[] }) {
+    const { parser, assistantDeltas } = createRecordingParser();
+    parser.push(frames.beforeBudget.map((line) => `${line}\n`).join(""));
+    const deltasAtExhaustion = assistantDeltas.length;
+    exhaustLineBudget(parser);
+    parser.push(frames.afterBudget.map((line) => `${line}\n`).join(""));
+    parser.finish();
+    // Nothing past the budget is assembled, whatever the selection keeps.
+    expect(assistantDeltas).toHaveLength(deltasAtExhaustion);
+    expect(parser.getErrorText()).toBeNull();
+    expect(parser.getOutputTruncationText()).toContain("kept watching for the terminal result");
+    return parser.getOutput()?.text;
+  }
+
+  it("keeps the pre-tool text when the final message arrives after exhaustion", () => {
+    // The existing tool-split contract ("Before.\n\nDONE" from a result of
+    // "DONE"), with the budget spent between the tool and the final message.
+    expect(
+      selectReply({
+        beforeBudget: [
+          parentMessageStartLine("msg_1"),
+          parentAssistantTextLine("Before."),
+          parentToolBlockStartLine,
+        ],
+        afterBudget: [
+          parentMessageStopLine,
+          parentMessageStartLine("msg_2"),
+          parentAssistantTextLine("DONE"),
+          terminalResultLine("DONE"),
+        ],
+      }),
+    ).toBe("Before.\n\nDONE");
+  });
+
+  it("keeps the pre-tool text when exhaustion lands inside the final message", () => {
+    expect(
+      selectReply({
+        beforeBudget: [
+          parentMessageStartLine("msg_1"),
+          parentAssistantTextLine("Before."),
+          parentToolBlockStartLine,
+          parentMessageStopLine,
+          parentMessageStartLine("msg_2"),
+          parentAssistantTextLine("DO"),
+        ],
+        afterBudget: [parentAssistantTextLine("NE"), terminalResultLine("DONE")],
+      }),
+    ).toBe("Before.\n\nDONE");
+  });
+
+  it("keeps the pre-tool text across a tool started by an assistant snapshot", () => {
+    expect(
+      selectReply({
+        beforeBudget: [
+          parentMessageStartLine("msg_parent_tool"),
+          parentAssistantTextLine("Before."),
+        ],
+        afterBudget: [
+          parentToolUseLine("toolu_snapshot", "Bash"),
+          parentMessageStartLine("msg_2"),
+          parentAssistantTextLine("DONE"),
+          terminalResultLine("DONE"),
+        ],
+      }),
+    ).toBe("Before.\n\nDONE");
+  });
+
+  it("still drops a superseded draft across a non-tool boundary", () => {
+    // Control: only tool splits connect earlier text to the result.
+    expect(
+      selectReply({
+        beforeBudget: [
+          parentMessageStartLine("msg_1"),
+          parentAssistantTextLine("Draft."),
+          parentMessageStopLine,
+        ],
+        afterBudget: [
+          parentMessageStartLine("msg_2"),
+          parentAssistantTextLine("Final."),
+          terminalResultLine("Final."),
+        ],
+      }),
+    ).toBe("Final.");
+  });
+
+  it("ignores forwarded subagent messages when placing the final message", () => {
+    expect(
+      selectReply({
+        beforeBudget: [
+          parentMessageStartLine("msg_1"),
+          parentAssistantTextLine("Before."),
+          parentToolBlockStartLine,
+        ],
+        afterBudget: [
+          subagentLine("child chatter"),
+          parentMessageStopLine,
+          parentMessageStartLine("msg_2"),
+          parentAssistantTextLine("DONE"),
+          terminalResultLine("DONE"),
+        ],
+      }),
+    ).toBe("Before.\n\nDONE");
   });
 });
 

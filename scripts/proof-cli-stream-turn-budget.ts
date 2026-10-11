@@ -57,6 +57,22 @@
  *                       bounded too, and — settling one send from each side of
  *                       the bound — that delivery, the source reply and the
  *                       send's target still settle from the facts it keeps.
+ * 10. tool-split-reply — "Before." streams, a tool starts, the budget is spent,
+ *                       then the final message and a terminal result carrying
+ *                       only that message arrive. Pins that the reply keeps the
+ *                       pre-tool text exactly as an unbudgeted turn does, and —
+ *                       as a control — that a non-tool boundary still drops a
+ *                       superseded draft.
+ * 11. reduced-final-flag — a `message` send past the retention bound whose
+ *                       decoded arguments put 1,000 small provider fields ahead
+ *                       of a trailing `final: false`, settled through the real
+ *                       consumer pair. Pins that the reduced entry still settles
+ *                       as a progress send, not as the final reply.
+ *
+ * Both overflow helpers drive the parser until IT reports the budget spent and
+ * assert that, rather than assuming a byte or line count spends it: partial
+ * text deltas are exempt from the line odometer and charged below their raw
+ * size, so a fixed count can silently leave the budget unspent.
  *
  * Run: pnpm tsx scripts/proof-cli-stream-turn-budget.ts
  */
@@ -169,10 +185,26 @@ function createParser(assistantDeltas: string[]) {
 
 type Parser = ReturnType<typeof createParser>;
 
-/** Streams realistic frames until the cumulative character budget is spent. */
+/**
+ * Proves the budget is spent before a scenario depends on it. With no terminal
+ * result yet, a spent budget still reads as the hard limit error.
+ */
+function assertBudgetSpent(parser: Parser, measure: string, streamed: number): void {
+  const errorText = parser.getErrorText();
+  assert(
+    errorText?.includes(`JSONL output exceeded ${measure}`),
+    `overflow: ${streamed} streamed without spending the ${measure} budget (error text ${JSON.stringify(errorText)}); every post-budget assertion would be vacuous`,
+  );
+}
+
+/** Streams realistic frames until the parser reports the character budget spent. */
 function overflowRawCharBudget(parser: Parser): number {
   let streamed = 0;
-  for (let index = 0; streamed <= CLI_STREAM_JSON_OUTPUT_LIMITS.maxTurnRawChars; index += 1) {
+  // Partial deltas are charged below their raw size, so raw bytes streamed is
+  // not the stop condition; the parser's own verdict is. Capped so a parser
+  // that never charges cannot loop forever.
+  const cap = 4 * CLI_STREAM_JSON_OUTPUT_LIMITS.maxTurnRawChars;
+  for (let index = 0; parser.getErrorText() === null && streamed <= cap; index += 1) {
     const frames = [
       textDeltaFrame(`step ${index} `),
       toolResultFrame(index, 96_000),
@@ -182,17 +214,36 @@ function overflowRawCharBudget(parser: Parser): number {
     streamed += chunk.length;
     parser.push(chunk);
   }
+  assertBudgetSpent(
+    parser,
+    `${CLI_STREAM_JSON_OUTPUT_LIMITS.maxTurnRawChars} characters`,
+    streamed,
+  );
   return streamed;
 }
 
-/** Streams blank frames until the cumulative line budget is spent. */
+/**
+ * Streams ordinary records until the line budget is spent. Partial-message
+ * text deltas are exempt from the line odometer, so they cannot spend it.
+ */
 function overflowLineBudget(parser: Parser): number {
   const lines = CLI_STREAM_JSON_OUTPUT_LIMITS.maxTurnLines + 1;
-  parser.push("\n".repeat(lines));
+  const ordinaryRecord = JSON.stringify({
+    type: "system",
+    subtype: "status",
+    parent_tool_use_id: null,
+    session_id: SESSION_ID,
+  });
+  parser.push(`${ordinaryRecord}\n`.repeat(lines));
+  assertBudgetSpent(parser, `${CLI_STREAM_JSON_OUTPUT_LIMITS.maxTurnLines} lines`, lines);
   return lines;
 }
 
-function scenarioRecovered(name: string, overflow: (parser: Parser) => number): void {
+function scenarioRecovered(
+  name: string,
+  overflow: (parser: Parser) => number,
+  unit: "chars" | "lines",
+): void {
   const assistantDeltas: string[] = [];
   const parser = createParser(assistantDeltas);
   const streamed = overflow(parser);
@@ -225,7 +276,7 @@ function scenarioRecovered(name: string, overflow: (parser: Parser) => number): 
     `${name}: ${assistantDeltas.length - deltasAtOverflow} assistant delta(s) were assembled after the budget was spent`,
   );
   console.log(
-    `[${name}] streamed ${streamed} chars past the budget, recovered "${output.text}"; truncation: ${truncation}`,
+    `[${name}] streamed ${streamed} ${unit} to spend the budget, recovered "${output.text}"; truncation: ${truncation}`,
   );
 }
 
@@ -970,6 +1021,205 @@ function scenarioMessagingRetentionBound(): void {
   );
 }
 
+function parentStreamEventFrame(event: Record<string, unknown>): string {
+  return JSON.stringify({
+    type: "stream_event",
+    parent_tool_use_id: null,
+    session_id: SESSION_ID,
+    event,
+  });
+}
+
+/**
+ * The tool-split reply contract across a spent budget. Unbudgeted, a turn that
+ * says "Before.", runs a tool and then answers in a new message yields
+ * "Before.\n\n<answer>" even though the terminal result carries only the
+ * answer. The budget is spent between the tool and the final message, so the
+ * final message's text reaches the parser only as dropped post-budget traffic.
+ */
+function scenarioToolSplitReply(): void {
+  const preToolText = "Here is what the subagents found.";
+  const run = (name: string, toolSplit: boolean): string | undefined => {
+    const assistantDeltas: string[] = [];
+    const parser = createParser(assistantDeltas);
+    const frames = [
+      parentStreamEventFrame({ type: "message_start", message: { id: `msg_${name}_1` } }),
+      parentStreamEventFrame({
+        type: "content_block_delta",
+        index: 0,
+        delta: { type: "text_delta", text: preToolText },
+      }),
+      ...(toolSplit
+        ? [
+            parentStreamEventFrame({
+              type: "content_block_start",
+              index: 1,
+              content_block: { type: "tool_use", id: `toolu_${name}`, name: "Agent" },
+            }),
+          ]
+        : []),
+    ];
+    parser.push(`${frames.join("\n")}\n`);
+    overflowLineBudget(parser);
+    const deltasAtOverflow = assistantDeltas.length;
+    parser.push(
+      `${[
+        parentStreamEventFrame({ type: "message_stop" }),
+        parentStreamEventFrame({ type: "message_start", message: { id: `msg_${name}_2` } }),
+        parentStreamEventFrame({
+          type: "content_block_delta",
+          index: 0,
+          delta: { type: "text_delta", text: FINAL_ANSWER },
+        }),
+        terminalResultFrame(),
+      ].join("\n")}\n`,
+    );
+    parser.finish();
+    assert(parser.getErrorText() === null, `${name}: ${parser.getErrorText()}`);
+    assert(
+      parser.getOutputTruncationText()?.includes("kept watching for the terminal result"),
+      `${name}: truncation was not reported`,
+    );
+    assert(
+      assistantDeltas.length === deltasAtOverflow,
+      `${name}: text was assembled after the budget was spent`,
+    );
+    return parser.getOutput()?.text;
+  };
+
+  const expected = `${preToolText}\n\n${FINAL_ANSWER}`;
+  const split = run("tool-split-reply", true);
+  assert(
+    split === expected,
+    `tool-split-reply: expected ${JSON.stringify(expected)}, got ${JSON.stringify(split)}; the pre-tool explanation was erased`,
+  );
+  const draft = run("tool-split-reply-control", false);
+  assert(
+    draft === FINAL_ANSWER,
+    `tool-split-reply-control: a non-tool boundary must still drop the superseded draft, got ${JSON.stringify(draft)}`,
+  );
+  console.log(
+    `[tool-split-reply] budget spent between the tool and the final message; reply ${JSON.stringify(split)}; ` +
+      `control without a tool split kept only ${JSON.stringify(draft)}`,
+  );
+}
+
+/**
+ * A reduced send's `final: false` survives regardless of where it sits. The
+ * send is past the runner's retention bound, so its delivery evidence is cut to
+ * the 8 KiB reduced allowance — and 1,000 one-character provider fields ahead of
+ * the flag are enough to spend that allowance to within a few bytes.
+ */
+function scenarioReducedFinalFlag(): void {
+  const context = buildProofRunContext("proof-reduced-final", "agent:proof:reduced-final");
+  const toolTracking = createCliToolTracking(context);
+  const handlers = createCliEventHandlers({
+    context,
+    toolTracking,
+    getRunState: () => ({ failed: false, error: undefined }),
+  });
+  const parser = createCliJsonlStreamingParser({
+    backend: { command: "claude", output: "jsonl", jsonlDialect: "claude-stream-json" },
+    providerId: "claude-cli",
+    onAssistantDelta: handlers.emitCliAssistantDelta,
+    onCompletedReply: handlers.emitCliCompletedReply,
+    onToolUseStart: handlers.emitParsedToolUseStart,
+    onToolResult: handlers.emitParsedToolResult,
+    onDisplayToolUseStart: handlers.emitCliDisplayToolUseStart,
+    onDisplayToolResult: handlers.emitCliDisplayToolResult,
+  });
+  overflowRawCharBudget(parser);
+
+  // Fill the runner's retention budget with unresolved sends first, so the send
+  // under test is the one whose arguments are refused and reduced.
+  const contentChars = 1024 * 1024;
+  const fillers = Math.ceil(MAX_RETAINED_TOOL_ARG_CHARS / contentChars) + 1;
+  for (let index = 0; index < fillers; index += 1) {
+    parser.push(`${messageSendToolUseFrame(index, contentChars)}\n`);
+  }
+  const smallFields = Object.fromEntries(
+    Array.from({ length: 1_000 }, (_, index) => [`p${index}`, "x"]),
+  );
+  assert(
+    JSON.stringify(smallFields).length > MAX_REDUCED_MESSAGING_ARG_CHARS,
+    "reduced-final-flag: the small fields do not outgrow the reduced allowance; the bound never engaged",
+  );
+  const sendId = "toolu_send_reduced_final";
+  parser.push(
+    `${JSON.stringify({
+      type: "assistant",
+      parent_tool_use_id: null,
+      session_id: SESSION_ID,
+      message: {
+        id: "msg_send_reduced_final",
+        content: [
+          {
+            type: "tool_use",
+            id: sendId,
+            name: "mcp__openclaw__message",
+            input: {
+              action: "send",
+              channel: "slack",
+              target: "C0PROOF",
+              content: "m".repeat(contentChars),
+              ...smallFields,
+              final: false,
+            },
+          },
+        ],
+      },
+    })}\n`,
+  );
+  const retained = handlers.getRetainedStateSizes();
+  assert(
+    retained.reducedMessagingCalls > 0,
+    `reduced-final-flag: no send was reduced, so the scenario proves nothing: ${JSON.stringify(retained)}`,
+  );
+  parser.push(
+    `${JSON.stringify({
+      type: "user",
+      session_id: SESSION_ID,
+      message: {
+        content: [
+          {
+            type: "tool_result",
+            tool_use_id: sendId,
+            content: {
+              details: {
+                messageDelivery: {
+                  status: "settled",
+                  partialDelivery: false,
+                  createdThreadIds: [],
+                  sourceReplyDelivered: true,
+                },
+                sourceReplySink: "internal-ui",
+                deliveryStatus: "sent",
+                sourceReply: { text: "progress update" },
+              },
+            },
+          },
+        ],
+      },
+    })}\n`,
+  );
+  parser.push(`${terminalResultFrame()}\n`);
+  parser.finish();
+  const evidence = toolTracking.withExecutionEvidence({ text: "" });
+  const payloads = evidence.messagingToolSourceReplyPayloads ?? [];
+  assert(
+    evidence.didDeliverSourceReplyViaMessageTool === true && payloads.length === 1,
+    `reduced-final-flag: the reduced send did not settle as a source reply: ${JSON.stringify(payloads)}`,
+  );
+  assert(
+    payloads[0]?.sourceReplyFinal === false,
+    `reduced-final-flag: a progress send settled as sourceReplyFinal=${String(payloads[0]?.sourceReplyFinal)}; the turn's real reply would be suppressed`,
+  );
+  console.log(
+    `[reduced-final-flag] send reduced past the retention bound (retained ${JSON.stringify(retained)}); ` +
+      `final:false behind 1,000 small fields settled as ${JSON.stringify(payloads[0])}`,
+  );
+}
+
 // The retention scenarios run first: a heap baseline taken after the other
 // scenarios carries their transient graphs and can mask the growth these
 // measure.
@@ -977,9 +1227,11 @@ scenarioRetentionFlat();
 scenarioStartSnapshotBound();
 scenarioConsumerRetentionBound();
 scenarioMessagingRetentionBound();
-scenarioRecovered("recovered-raw", overflowRawCharBudget);
-scenarioRecovered("recovered-lines", overflowLineBudget);
+scenarioRecovered("recovered-raw", overflowRawCharBudget, "chars");
+scenarioRecovered("recovered-lines", overflowLineBudget, "lines");
 scenarioUnknowable();
 scenarioSubagentExempt();
 scenarioProgressPastBudget();
+scenarioToolSplitReply();
+scenarioReducedFinalFlag();
 console.log("All runtime assertions passed.");

@@ -10,7 +10,10 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/types.js";
 import { buildPreparedCliRunContext } from "../cli-runner.test-helpers.js";
-import { MAX_RETAINED_TOOL_ARG_CHARS } from "./execute-event-retention.js";
+import {
+  MAX_REDUCED_MESSAGING_ARG_CHARS,
+  MAX_RETAINED_TOOL_ARG_CHARS,
+} from "./execute-event-retention.js";
 import { createCliEventHandlers } from "./execute-events.js";
 import { createCliToolTracking } from "./execute-tool-tracking.js";
 import type { PreparedCliRunContext } from "./types.js";
@@ -43,7 +46,7 @@ function startSend(
   toolCallId: string,
   args: Record<string, unknown>,
 ): void {
-  handlers.emitCliToolUseStart({
+  handlers.emitParsedToolUseStart({
     toolCallId,
     name: "mcp__openclaw__message",
     kind: "mcp_tool_use",
@@ -65,7 +68,7 @@ function settledSendResult(): unknown {
 }
 
 function finishSend(handlers: ReturnType<typeof createCliEventHandlers>, toolCallId: string): void {
-  handlers.emitCliToolResult({
+  handlers.emitParsedToolResult({
     toolCallId,
     name: "mcp__openclaw__message",
     isError: false,
@@ -154,6 +157,65 @@ describe("CLI delivery-evidence retention bounds", () => {
     // The conservative direction: a turn that fails after this must not deliver
     // the same message a second time.
     expect(toolTracking.withExecutionEvidence({ text: "" }).didSendViaMessagingTool).toBe(true);
+  });
+
+  // Individually tiny provider fields, enough of them to fill the reduced
+  // allowance to within a few characters, so a 15-character `{"final":false}`
+  // charged after them cannot fit. Where `final` sits in the decoded object must
+  // not decide whether it survives: an absent flag reads as `final: true`.
+  const SMALL_FIELDS = 1_000;
+  function smallFields(): Record<string, unknown> {
+    return Object.fromEntries(
+      Array.from({ length: SMALL_FIELDS }, (_, index) => [`p${index}`, "x"]),
+    );
+  }
+  it.each([
+    { order: "before the small fields", finalFirst: true },
+    { order: "after the small fields", finalFirst: false },
+  ])("keeps a reduced send's final:false $order at the aggregate bound", ({ finalFirst }) => {
+    const { toolTracking, handlers } = buildRuntime();
+    for (let index = 0; index < SENDS - 1; index += 1) {
+      startSend(handlers, `send-${index}`, {
+        action: "send",
+        channel: "slack",
+        target: "c1",
+        content: sendBody(index),
+      });
+    }
+    const routing = { action: "send", channel: "slack", target: "c1" };
+    const args = finalFirst
+      ? { final: false, ...routing, content: sendBody(SENDS - 1), ...smallFields() }
+      : { ...routing, content: sendBody(SENDS - 1), ...smallFields(), final: false };
+    // The fixture really is past both bounds: the run's retention refuses this
+    // send, and its small fields alone outgrow the reduced allowance.
+    expect(JSON.stringify(smallFields()).length).toBeGreaterThan(MAX_REDUCED_MESSAGING_ARG_CHARS);
+    startSend(handlers, `send-${SENDS - 1}`, args);
+    expect(handlers.getRetainedStateSizes().reducedMessagingCalls).toBeGreaterThan(0);
+
+    handlers.emitParsedToolResult({
+      toolCallId: `send-${SENDS - 1}`,
+      name: "mcp__openclaw__message",
+      isError: false,
+      result: {
+        details: {
+          ...(settledSendResult() as { details: Record<string, unknown> }).details,
+          sourceReplySink: "internal-ui",
+          deliveryStatus: "sent",
+          sourceReply: { text: "progress update" },
+        },
+      },
+    });
+    const evidence = toolTracking.withExecutionEvidence({ text: "" });
+    expect(evidence.didDeliverSourceReplyViaMessageTool).toBe(true);
+    // A progress send stays a progress send: recording it as the final reply
+    // would suppress the reply the turn still owes.
+    expect(evidence.messagingToolSourceReplyPayloads).toEqual([
+      { text: "progress update", sourceReplyFinal: false },
+    ]);
+    expect(evidence.messagingToolSentTargets?.[0]).toMatchObject({
+      provider: "slack",
+      sourceReplyFinal: false,
+    });
   });
 
   it("does not touch a send that stays well inside every bound", () => {
