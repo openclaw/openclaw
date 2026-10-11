@@ -303,6 +303,52 @@ describe("personal navigation rail", () => {
     );
   });
 
+  it.each(["missing", "failed"] as const)(
+    "labels unloaded pins without claiming a count failure and handles a %s lookup",
+    async (outcome) => {
+      const { sidebar, sessions } = await fixture();
+      const key = "agent:research:unloaded";
+      sidebar.sidebarEntries = [`session:${key}`, "plugin:reports/unloaded-panel"];
+      await sidebar.updateComplete;
+      const pending = createDeferred<Awaited<ReturnType<typeof sessions.sessions.describe>>>();
+      const describeRead = vi
+        .spyOn(sessions.sessions, "describe")
+        .mockReturnValueOnce(pending.promise);
+      const navigate = vi.fn();
+      sidebar.onNavigate = navigate;
+      const showToast = vi.spyOn(toast, "showToast");
+      const pin = sidebar.querySelector<HTMLElement>(
+        `.sidebar-rail [data-sidebar-entry="session:${key}"]`,
+      )!;
+      const button = pin.querySelector<HTMLButtonElement>("button.sidebar-rail__button")!;
+      expect(button.getAttribute("aria-label")).toBe("Open session");
+      expect(button.disabled).toBe(false);
+      expect(pin.querySelector("wa-dropdown")?.getAttribute("aria-label")).toBe(
+        "Reorder Open session",
+      );
+      const plugin = sidebar.querySelector<HTMLButtonElement>(
+        '.sidebar-rail [data-sidebar-entry="plugin:reports/unloaded-panel"] button.sidebar-rail__button',
+      )!;
+      expect(plugin.getAttribute("aria-label")).toBe("Plugin");
+      expect(plugin.disabled).toBe(true);
+      expect(describeRead).not.toHaveBeenCalled();
+      button.click();
+      expect(describeRead).toHaveBeenCalledWith({ key });
+      if (outcome === "failed") {
+        pending.reject(new Error("Gateway temporarily unavailable"));
+      } else {
+        pending.resolve({ session: null });
+      }
+      await pending.promise.catch(() => undefined);
+      await sidebar.updateComplete;
+      expect(navigate).not.toHaveBeenCalled();
+      expect(showToast).toHaveBeenCalledWith({
+        message:
+          outcome === "missing" ? "Session not found" : "Could not open this session. Try again.",
+      });
+    },
+  );
+
   it.each(["rail", "row", "main", "home", "disconnect"] as const)(
     "retires an unloaded pin lookup after newer %s intent without requiring a route change",
     async (target) => {

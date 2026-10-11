@@ -14,6 +14,7 @@ import { disposeOpenClawAgentDatabaseByPath } from "../state/openclaw-agent-db-d
 import { captureEnv, setTestEnvValue, withEnvAsync } from "../test-utils/env.js";
 import { prepareSystemAgentRunAdmission } from "./admitted-run-context.js";
 import {
+  buildEmbeddedCachePrompt,
   buildEmbeddedRunnerConfig,
   normalizeLiveUsage,
   runEmbeddedReleasePrefixScenario,
@@ -69,6 +70,8 @@ type CacheTraceEvent = {
     snapshot?: ReturnType<typeof beginPromptCacheObservation>["snapshot"];
     previousCacheRead?: number;
     cacheRead?: number;
+    input?: number;
+    cacheWrite?: number;
     requestGapMs?: number;
     providerPrefix?: string;
     changes?: Array<{ code?: string; detail?: string }>;
@@ -161,19 +164,6 @@ async function expectCacheTraceStages(
   }
 }
 
-function buildEmbeddedCachePrompt(suffix: string, sections = 48): string {
-  const lines = [
-    `Reply with exactly CACHE-OK ${suffix}.`,
-    "Do not add any extra words or punctuation.",
-  ];
-  for (let index = 0; index < sections; index += 1) {
-    lines.push(
-      `Embedded cache section ${index + 1}: deterministic prose about prompt stability, session affinity, request shaping, transport continuity, and cache reuse across identical stable prefixes.`,
-    );
-  }
-  return lines.join("\n");
-}
-
 function buildNoisyStructuredPromptVariant(text: string): string {
   return `\r\n${text
     .split("\n")
@@ -201,10 +191,13 @@ async function runEmbeddedCacheProbe(params: {
   transport?: "sse" | "websocket";
   promptSections?: number;
   config?: OpenClawConfig;
+  toolLoop?: boolean;
 }): Promise<CacheRun> {
   const sessionPaths = buildRunnerSessionPaths(params.sessionId);
   const runId = `${params.sessionId}-${params.suffix}-${params.transport ?? "default"}`;
-  const prompt = buildEmbeddedCachePrompt(params.suffix, params.promptSections);
+  const prompt = params.toolLoop
+    ? `Call cache_probe with step 1, then after its result call cache_probe with step 2. Only after both results: Reply with exactly CACHE-OK ${params.suffix}. Do not summarize the records.`
+    : buildEmbeddedCachePrompt(params.suffix, params.promptSections);
   await fs.mkdir(sessionPaths.workspaceDir, { recursive: true });
   const config =
     params.config ??
@@ -244,7 +237,10 @@ async function runEmbeddedCacheProbe(params: {
         timeoutMs: params.providerTag === "openai" ? OPENAI_TIMEOUT_MS : ANTHROPIC_TIMEOUT_MS,
         runId,
         extraSystemPrompt: params.prefix,
-        disableTools: true,
+        disableTools: !params.toolLoop,
+        ...(params.toolLoop
+          ? { toolsAllow: ["cache_probe"], codeModeOverride: false as const }
+          : {}),
         cleanupBundleMcpOnRunEnd: true,
         ...(params.config ? { thinkLevel: "off", streamParams: { maxTokens: 128 } } : {}),
       }),
@@ -307,6 +303,7 @@ async function runReleasePrefixScenario(
         suffix,
         transport: "sse",
         promptSections: 0,
+        toolLoop: provider === "openai",
       });
       return run.usage;
     },

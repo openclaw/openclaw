@@ -1,4 +1,3 @@
-import { createInlineCodeState } from "../../packages/markdown-core/src/code-spans.js";
 import { parseReplyDirectives } from "../auto-reply/reply/reply-directives.js";
 import { splitTrailingDirective } from "../auto-reply/reply/streaming-directives.js";
 import type { AssistantMessage } from "../llm/types.js";
@@ -18,6 +17,7 @@ import type {
   EmbeddedAgentSubscribeState,
 } from "./embedded-agent-subscribe.handlers.types.js";
 import {
+  createAssistantStreamBlockState,
   prepareAssistantVisibleText,
   stripDowngradedToolCallText,
 } from "./embedded-agent-utils.js";
@@ -46,11 +46,7 @@ export function extractAssistantStreamSnapshot(
   } else if (options?.observedText !== undefined) {
     observedMessage = { ...message, content: [{ type: "text", text: options.observedText }] };
   }
-  const state: EmbeddedAgentSubscribeState["partialBlockState"] = {
-    thinking: false,
-    final: false,
-    inlineCode: createInlineCodeState(),
-  };
+  const state: EmbeddedAgentSubscribeState["partialBlockState"] = createAssistantStreamBlockState();
   let rawText = "";
   const blockSources: { text: string; separator: string; finalAnswer: boolean }[] = [];
   const parts: { separator: string; index?: number }[] = [];
@@ -142,11 +138,11 @@ export function reconcileBlockReplySnapshot(
     if (index > (snapshot.parts.at(-1)?.index ?? 0)) {
       return snapshot.blockText;
     }
-    return extractAssistantStreamSnapshot(ctx, snapshot.message, {
-      throughIndex: index,
-      observedText: "",
+    const prefix = extractAssistantStreamSnapshot(ctx, snapshot.message, {
+      throughIndex: index - 1,
       final: false,
     }).blockText;
+    return prefix + (snapshot.parts.find((part) => part.index === index)?.separator ?? "");
   };
   const scope = ctx.state.blockReplyScopeStart;
   const scopePosition = (snapshot: typeof next) => {

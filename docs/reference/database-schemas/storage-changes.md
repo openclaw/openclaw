@@ -136,10 +136,10 @@ Canonical shutdown joins accepted publication and planner lease cleanup; a newer
 scheduled owner cannot be consumed by an older retired pass. Schemas, retention,
 permissions, and update behavior are unchanged.
 
-The transcript reconcile pool admits the smallest pending session backlog first,
-with original operation order breaking ties. At a completed session boundary, a
-planner yields only to a strictly smaller waiting backlog and reserves its place
-before releasing the worker. Each resumed pass refreshes its backlog in preflight.
+The transcript reconcile pool uses its bounded worker's FIFO queue. At a completed
+session boundary, a planner yields when another reconcile operation is present,
+so a large backlog does not monopolize the worker. Each resumed pass refreshes
+its backlog in preflight; scheduling does not retain priority reservations.
 Direct reconciliation awaits its observed backlog; Gateway startup runs that
 maintenance after readiness, with cancellation tied to startup lifetime. The pool
 retains one worker, and lease release tasks bypass backlog admission.

@@ -30,7 +30,7 @@ import {
 } from "./test-support.js";
 
 export type AttemptClientHarness = ReturnType<typeof createClientHarness>;
-export const HARNESS_REQUEST_TIMEOUT_MS = 15_000;
+const HARNESS_REQUEST_TIMEOUT_MS = 15_000;
 
 export function createAttemptClientHarness(): AttemptClientHarness {
   return createInferenceReadyClientHarness({
@@ -152,15 +152,6 @@ export async function answerInitialize(harness: AttemptClientHarness): Promise<v
   });
   const initialize = JSON.parse(harness.writes[0] ?? "{}") as { id?: number };
   harness.send({ id: initialize.id, result: { userAgent: "openclaw/0.149.0 (macOS; test)" } });
-}
-
-export async function answerPreparedApiKeyLogin(harness: AttemptClientHarness): Promise<void> {
-  const login = await waitForRequest(harness, "account/login/start");
-  expect(login.params).toEqual({
-    type: "apiKey",
-    apiKey: "prepared-platform-key",
-  });
-  harness.send({ id: login.id, result: { type: "apiKey" } });
 }
 
 export async function waitForRequest(

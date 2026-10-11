@@ -4,6 +4,7 @@ import { html, render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { QuestionPrompt } from "../../app/question-prompt.ts";
 import {
+  createComposerContainer,
   createComposerProps as props,
   renderComposerFixture as renderComposer,
   resetComposerFixture,
@@ -43,7 +44,7 @@ describe("composer question takeover", () => {
   it.each([true, false])(
     "swaps the expanded question with the composer and restores its draft, focus, and progress (open=%s)",
     async (progressOpen) => {
-      const container = document.createElement("div");
+      const container = createComposerContainer();
       document.body.append(container);
       const prompt = questionPrompt("question-swap", "Choose a release target");
       const composerProps = props({

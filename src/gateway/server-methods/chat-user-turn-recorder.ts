@@ -4,6 +4,7 @@ import { stableStringify } from "@openclaw/normalization-core/stable-stringify";
 import { runAgentHarnessBeforeMessageWriteHook } from "../../agents/harness/hook-helpers.js";
 import { createRestartRecoveryOperatorSource } from "../../agents/operator-run-recovery-source.js";
 import { normalizeMessageClientSources } from "../../chat/message-client-source.js";
+import { bindUserTurnInputActor } from "../../config/sessions/session-input-actor.js";
 import {
   composeSessionSourceAssertion,
   type SessionSourceAssertion,
@@ -257,6 +258,7 @@ export function createGatewayChatUserTurnController(params: {
         }
       : {}),
   });
+  bindUserTurnInputActor(recorder, { phase: "acceptInput", acquire: admission.acquireInputActor });
   const persist: GatewayChatUserTurnController["persist"] = async (options) => {
     if (options?.contextFreeCommand === true && !recorder.hasPersisted()) {
       contextFreeCommand = true;

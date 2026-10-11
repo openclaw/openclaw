@@ -69,11 +69,7 @@ import { removeSettledManagedWorktree, type RemoveWorktreeParams } from "./remov
 import { captureWorktreeRunEndContext, withWorktreeRunEnd } from "./run-end-lifecycle.js";
 import { worktreeRunLeaseScope } from "./run-lease-owner.js";
 import { reapWorktreeRunLeases } from "./run-lease-store.js";
-import {
-  abortWorktreeRemoval,
-  claimWorktreeRemoval,
-  hasLiveWorktreeRunLease,
-} from "./run-lease.js";
+import { abortWorktreeRemoval, claimWorktreeRemoval } from "./run-lease.js";
 import { reconcileListedWorktrees } from "./service-list.js";
 import {
   removeFailedWorktree,
@@ -512,13 +508,12 @@ export class ManagedWorktreeService {
         prepared = true;
         return created;
       });
-      const provisionedPaths = await this.completeRepositoryWorktreeSetup(
-        params,
-        repository,
-        materialized,
+      const provisionedPaths = await timeWorktreePreparationPhase("provision", () =>
+        this.completeRepositoryWorktreeSetup(params, repository, materialized),
       );
-      return await this.withAllocationLease(params, (allocation) =>
-        withWorktreeSource({ ...params, ...allocation }, async (current) => {
+      // Pending → live preserves the slot count; retained checkout custody owns publication.
+      return await timeWorktreePreparationPhase("publication", () =>
+        withWorktreeSource(params, async (current) => {
           current.signal?.throwIfAborted();
           current.commitGuard?.();
           await requireAllocationSpace(current, this.env, materialized.worktreePath, repository);
@@ -592,7 +587,9 @@ export class ManagedWorktreeService {
     params.commitGuard?.();
     await requireAllocationSpace(params, this.env, worktreePath, repository);
     params.commitGuard?.();
-    const base = await resolveWorktreeCreationBase(repository.repoRoot, params);
+    const base = await timeWorktreePreparationPhase("base", () =>
+      resolveWorktreeCreationBase(repository.repoRoot, params),
+    );
     let gitBytes = 0;
     const provisionedBytes =
       params.provisionIgnoredFiles === false
@@ -1096,11 +1093,7 @@ export class ManagedWorktreeService {
         }
       }
       const liveLeaseScopes = new Set(leases.liveScopes);
-      const observedIds = new Set(records.map((record) => record.id));
-      const hasLiveLease = (id: string) =>
-        observedIds.has(id)
-          ? liveLeaseScopes.has(worktreeRunLeaseScope(id))
-          : hasLiveWorktreeRunLease(this.env, id);
+      const hasLiveLease = (id: string) => liveLeaseScopes.has(worktreeRunLeaseScope(id));
       const protect = (record: ManagedWorktreeRecord) =>
         autoRemovalProtectionReason(
           record,

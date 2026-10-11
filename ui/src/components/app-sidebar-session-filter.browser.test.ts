@@ -441,6 +441,49 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar session filter popov
     },
   );
 
+  it.each([
+    { scope: "mine", ownerId: "profile-ada", selected: "Ada (You)", label: "Ada (You)" },
+    { scope: "all", ownerId: "profile-bob", selected: "Bob", label: "profile-bob" },
+  ])(
+    "keeps the selected owner display for an empty Archived list ($scope)",
+    async ({ scope, ownerId, selected, label }) => {
+      const { sidebar, sessions, page } = await mountFilters(1440);
+      if (scope === "mine") {
+        await page.getByRole("button", { name: "Mine", exact: true }).click();
+      }
+      await page.getByRole("button", { name: "Filter & sort", exact: true }).click();
+      if (scope === "all") {
+        await page.getByRole("button", { name: "Owners: All owners", exact: true }).click();
+        await page.getByRole("option", { name: selected, exact: true }).click();
+      }
+      await expect
+        .element(page.getByRole("button", { name: `Owners: ${selected}`, exact: true }))
+        .toBeVisible();
+      sessions.list.mockResolvedValue({
+        ...sessions.sessions.state.result!,
+        sessions: [],
+        // An unresolved facet keeps an explicit All owner selected without inventing a name.
+        owners: scope === "mine" ? [] : undefined,
+      });
+      await page.getByRole("radio", { name: "Archived", exact: true }).click();
+      await expect
+        .element(page.getByRole("radio", { name: "Archived", exact: true }))
+        .toBeChecked();
+      await expect.poll(() => sidebar.sessionData.sessionsResult?.sessions).toEqual([]);
+      await expect
+        .element(page.getByRole("button", { name: `Owners: ${label}`, exact: true }))
+        .toBeVisible();
+      await expect
+        .element(page.getByRole("button", { name: scope === "mine" ? "Mine" : "All", exact: true }))
+        .toHaveAttribute("aria-pressed", "true");
+      expect(sessions.list).toHaveBeenLastCalledWith(
+        expect.objectContaining({ ownerId, archivedFilter: "archived" }),
+      );
+      await page.getByRole("button", { name: `Owners: ${label}`, exact: true }).click();
+      expect(ownerOptions(sidebar)).toEqual(["All owners", "Involving me", label]);
+    },
+  );
+
   it("applies every preference instantly and resets filters and display", async () => {
     const { sidebar, sessions, page } = await mountFilters(1440);
     await page.getByRole("button", { name: "Filter & sort", exact: true }).click();

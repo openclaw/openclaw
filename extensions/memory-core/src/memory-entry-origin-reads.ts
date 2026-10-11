@@ -4,24 +4,22 @@ import {
   readMemoryEntryOriginsInDatabase,
   sqliteStringSetEntries,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import { withFreshOpenClawAgentDatabaseReadOnly } from "openclaw/plugin-sdk/sqlite-runtime";
 import {
   executeSqliteQuerySync,
   getNodeSqliteKysely,
   sqliteStringSet,
   tableExists,
-  withFreshOpenClawAgentDatabaseReadOnly,
-} from "openclaw/plugin-sdk/sqlite-runtime";
+} from "openclaw/plugin-sdk/sqlite-worker-runtime";
 import {
   MEMORY_SESSION_TOMBSTONE_BATCH_SIZE,
   type MemoryOriginReadInput,
   type MemoryOriginReadOutput,
 } from "./memory-entry-origins-task.js";
-import { extractPromotionKeys } from "./short-term-promotion-memory-write.js";
 
 type OriginReadDatabase = {
   memory_entry_origins: { entry_key: string; agent_id: string; session_id: string };
   memory_session_tombstones: { session_id: string; agent_id: string };
-  memory_index_chunks: { text: string; source: string };
 };
 
 function queryOrigins(
@@ -52,41 +50,28 @@ function queryOrigins(
     }
     return { kind: request.kind, exists };
   }
-  if (request.kind === "session-tombstones") {
-    if (!db || !tableExists(db, "memory_session_tombstones")) {
-      return { kind: request.kind, indices: [] };
-    }
-    const query = getNodeSqliteKysely<OriginReadDatabase>(db)
-      .selectFrom(sqliteStringSetEntries(encodeSqliteStringSet(request.sessionIds)).as("selected"))
-      .select("selected.key")
-      .where("selected.key", "<", MEMORY_SESSION_TOMBSTONE_BATCH_SIZE)
-      .where((expression) =>
-        expression.exists(
-          expression
-            .selectFrom("memory_session_tombstones")
-            .select("session_id")
-            .where("agent_id", "=", request.agentId)
-            .whereRef("session_id", "=", "selected.value"),
-        ),
-      )
-      .orderBy("selected.key", "asc")
-      .limit(MEMORY_SESSION_TOMBSTONE_BATCH_SIZE);
-    return {
-      kind: request.kind,
-      indices: executeSqliteQuerySync(db, query).rows.map((row) => row.key),
-    };
+  if (!db || !tableExists(db, "memory_session_tombstones")) {
+    return { kind: request.kind, indices: [] };
   }
-  const keys = db
-    ? executeSqliteQuerySync(
-        db,
-        getNodeSqliteKysely<OriginReadDatabase>(db)
-          .selectFrom("memory_index_chunks")
-          .select("text")
-          .where("source", "=", "memory")
-          .where("text", "like", "%openclaw-memory-promotion:%"),
-      ).rows.flatMap(({ text }) => extractPromotionKeys(text))
-    : [];
-  return { kind: request.kind, keys };
+  const query = getNodeSqliteKysely<OriginReadDatabase>(db)
+    .selectFrom(sqliteStringSetEntries(encodeSqliteStringSet(request.sessionIds)).as("selected"))
+    .select("selected.key")
+    .where("selected.key", "<", MEMORY_SESSION_TOMBSTONE_BATCH_SIZE)
+    .where((expression) =>
+      expression.exists(
+        expression
+          .selectFrom("memory_session_tombstones")
+          .select("session_id")
+          .where("agent_id", "=", request.agentId)
+          .whereRef("session_id", "=", "selected.value"),
+      ),
+    )
+    .orderBy("selected.key", "asc")
+    .limit(MEMORY_SESSION_TOMBSTONE_BATCH_SIZE);
+  return {
+    kind: request.kind,
+    indices: executeSqliteQuerySync(db, query).rows.map((row) => row.key),
+  };
 }
 
 export function readMemoryOriginsInWorker(request: MemoryOriginReadInput): MemoryOriginReadOutput {

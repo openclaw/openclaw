@@ -21,7 +21,7 @@ afterEach(resetPluginLoaderTestStateForTest);
 afterAll(cleanupPluginLoaderFixturesForTest);
 
 it.each(["system-agent", "install-roots", "install-state"] as const)(
-  "fences %s changes without mutating the supplied config or env",
+  "prepares %s scopes without mutating the supplied config or env",
   async (kind) => {
     const root = fs.realpathSync(makePluginLoaderTempDir());
     for (const id of ["alpha", "beta"]) {
@@ -64,28 +64,9 @@ it.each(["system-agent", "install-roots", "install-state"] as const)(
     for (const id of ["alpha", "beta"]) {
       const run = async () => {
         const serialized = JSON.stringify([cfg, env]);
-        if (previous.length) {
-          await expect(previous[0]!.register(new Command())).rejects.toThrow(
-            /preparation inputs changed/,
-          );
-        }
         expect(
           (await loadPluginCliDescriptors({ cfg, env, session })).map(({ name }) => name),
         ).toEqual([id]);
-        previous = await loadPluginCliRegistrationEntriesWithDefaults({ cfg, env, session });
-        const loaderOptions: import("./cli-registry-loader.js").PluginCliLoaderOptions = {
-          pluginSdkResolution: "src",
-        };
-        const captured = await loadPluginCliRegistrationEntriesWithDefaults({
-          cfg,
-          env,
-          session,
-          loaderOptions,
-        });
-        loaderOptions.pluginSdkResolution = "dist";
-        await expect(captured[0]!.register(new Command())).rejects.toThrow(
-          /preparation inputs changed/,
-        );
         previous = await loadPluginCliRegistrationEntriesWithDefaults({ cfg, env, session });
         const program = new Command();
         await previous[0]!.register(program);
@@ -128,14 +109,12 @@ it("retains the exact new config object when a fresh read has identical serializ
   const cfg = { plugins: { enabled: false } };
   const fresh = { ...cfg };
   const session = createPluginCliLoadSession();
-  const previous = session.resolve({ cfg, env });
+  session.resolve({ cfg, env });
   const next = session.resolve({ cfg: fresh, env });
   expect(next.context.rawConfig).toBe(fresh);
   expect(next.context.activationSourceConfig).toBe(fresh);
-  expect(() => previous.assertCurrent()).toThrow(/preparation inputs changed/);
   const freshEnv = { ...env };
   const changedEnv = session.resolve({ cfg: fresh, env: freshEnv });
   expect(changedEnv).not.toBe(next);
-  expect(() => next.assertCurrent()).toThrow(/preparation inputs changed/);
   session.close();
 });
