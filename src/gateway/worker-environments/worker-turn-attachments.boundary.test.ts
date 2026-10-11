@@ -166,7 +166,6 @@ describe("current attachments in an active remote placement", () => {
               environmentId: ENVIRONMENT_ID,
               ownerEpoch: OWNER_EPOCH,
               sessionId: SESSION_ID,
-              generation: 1,
               localPath: local,
               isAuthorized: request.isAuthorized,
             });

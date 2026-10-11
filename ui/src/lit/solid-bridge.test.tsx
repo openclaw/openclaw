@@ -5,10 +5,10 @@ import { createSignal, flush, onCleanup } from "solid-js";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { applicationContext, type ApplicationContext } from "../app/context.ts";
 import { ShellLayoutOwner } from "../app/shell-layout-owner.ts";
-import { SettingsPage, SettingsPageHeader } from "../components/solid/settings-ui.tsx";
-import { SettingsWorkspace } from "../components/solid/settings-workspace.tsx";
+import { ShellLayoutBoundary, ShellLayoutProvider } from "../app/shell-layout-traits-solid.tsx";
 import { ApplicationProvider, useApplication } from "../lib/reactive/context.ts";
 import { collectGarbageForTest } from "../test-helpers/garbage-collection.ts";
+import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "./solid-bridge.ts";
 
 type Props = { label: string; enabled: boolean; count: number; payload: object | null };
@@ -237,38 +237,6 @@ it("uses a single Solid-owned host and preserves reactive props, children, event
   expect(disposed).toHaveBeenCalledTimes(1);
 });
 
-it("publishes and retires shell layout through a registered bridge", async () => {
-  defineSolidBridge(
-    "openclaw-solid-layout-test",
-    () => (
-      <>
-        <SettingsPageHeader title="Models" />
-        <SettingsWorkspace>
-          <SettingsPage>Provider settings</SettingsPage>
-        </SettingsWorkspace>
-      </>
-    ),
-    { properties: {} },
-  );
-  const content = document.createElement("main");
-  content.className = "content";
-  document.body.append(content);
-  const owner = new ShellLayoutOwner();
-  owner.contentRef(content);
-  const host = document.createElement("openclaw-solid-layout-test");
-  content.append(host);
-  await Promise.resolve();
-  flush();
-  expect(content.classList.contains("content--settings-page")).toBe(true);
-  expect(content.classList.contains("content--settings-workspace")).toBe(true);
-  expect(content.classList.contains("content--toolbar-header")).toBe(true);
-  expect(host.querySelector("h1")?.textContent).toBe("Models");
-  host.remove();
-  await Promise.resolve();
-  expect(content.className).toBe("content");
-  owner.contentRef(undefined);
-});
-
 it("provides the existing Lit application context, rebinds replacements, and unsubscribes", async () => {
   const seen = vi.fn();
   const ContextBridge = defineSolidBridge(
@@ -355,6 +323,68 @@ it("releases the old provider when a nearer provider takes over without moving t
   innerProvider.setValue(second);
   await host.updateComplete;
   expect(seen).not.toHaveBeenCalled();
+});
+
+it("publishes a Lit-hosted page's layout traits to the existing shell owner", async () => {
+  defineSolidBridge(
+    "openclaw-solid-lit-layout-test",
+    (props: { active: boolean }) => (
+      <ShellLayoutBoundary traits={{ toolbarHeader: props.active }}>
+        <h1>Page header</h1>
+      </ShellLayoutBoundary>
+    ),
+    { properties: { active: { default: true, attribute: false } } },
+  );
+  const main = document.createElement("main");
+  main.className = "content";
+  document.body.append(main);
+  const owner = new ShellLayoutOwner();
+  owner.contentRef(main);
+  const host = document.createElement("openclaw-solid-lit-layout-test") as SolidBridgeElement<{
+    active: boolean;
+  }>;
+  main.append(host);
+  await host.updateComplete;
+  expect(main.classList.contains("content--toolbar-header")).toBe(true);
+  host.active = false;
+  await host.updateComplete;
+  expect(main.classList.contains("content--toolbar-header")).toBe(false);
+  host.active = true;
+  await host.updateComplete;
+  expect(main.classList.contains("content--toolbar-header")).toBe(true);
+  host.remove();
+  await Promise.resolve();
+  expect(main.classList.contains("content--toolbar-header")).toBe(false);
+});
+
+it("preserves the inherited layout scope of a Solid-owned page", () => {
+  const LayoutBridge = defineSolidBridge(
+    "openclaw-solid-owned-layout-test",
+    () => (
+      <ShellLayoutBoundary traits={{ settingsPage: true }}>
+        <h1>Settings</h1>
+      </ShellLayoutBoundary>
+    ),
+    { properties: {} },
+  );
+  const main = document.createElement("main");
+  main.className = "content";
+  const route = document.createElement("div");
+  main.append(route);
+  document.body.append(main);
+  const owner = new ShellLayoutOwner();
+  owner.contentRef(main);
+  const view = mountSolid(
+    () => (
+      <ShellLayoutProvider value={{ owner, host: route }}>
+        <LayoutBridge />
+      </ShellLayoutProvider>
+    ),
+    { container: route },
+  );
+  expect(main.classList.contains("content--settings-page")).toBe(true);
+  view.unmount();
+  expect(main.classList.contains("content--settings-page")).toBe(false);
 });
 
 it("releases a disconnected Solid root while the custom element itself is retained", async () => {

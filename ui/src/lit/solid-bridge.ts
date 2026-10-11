@@ -1,6 +1,8 @@
 import { render, spread, type JSX } from "@solidjs/web";
+import { nothing, render as renderLit } from "lit";
 import {
   createComponent,
+  createEffect,
   createRenderEffect,
   createSignal,
   flush,
@@ -216,6 +218,7 @@ export function defineSolidBridge<Props extends object, Methods extends object =
         source = [...this.#content.childNodes];
       }
       this.#mountedApplication = this.#application;
+      const layout = !this.#solidOwned ? shellLayoutOwnerForHost(this) : undefined;
       this.#dispose = render(() => {
         const [revision, setRevision] = createSignal(0);
         this.#notify = () => setRevision((value) => value + 1);
@@ -233,25 +236,24 @@ export function defineSolidBridge<Props extends object, Methods extends object =
             },
           });
         }
-        const layoutOwner = shellLayoutOwnerForHost(this);
-        const view = () => content(props, this.#host);
-        const withLayout = () =>
-          layoutOwner
+        const renderContent = () => content(props, this.#host);
+        const view = () =>
+          layout
             ? createComponent(ShellLayoutProvider, {
-                value: { owner: layoutOwner, host: this },
+                value: { owner: layout, host: this },
                 get children() {
-                  return view();
+                  return renderContent();
                 },
               })
-            : view();
+            : renderContent();
         return this.#application
           ? createComponent(ApplicationProvider, {
               value: this.#application,
               get children() {
-                return withLayout();
+                return view();
               },
             })
-          : withLayout();
+          : view();
       }, this);
     }
 
@@ -295,4 +297,22 @@ export function defineSolidBridge<Props extends object, Methods extends object =
   return function SolidBridge(props: ComponentProps<Props, Methods>): JSX.Element {
     return BridgeElement.render(props);
   };
+}
+
+/** Unported stateless templates exclusively own this adapter's descendants. */
+export function LitContent(props: { render: () => unknown }) {
+  const host = document.createElement("span");
+  host.style.display = "contents";
+  let part: ReturnType<typeof renderLit> | undefined;
+  createEffect(
+    () => props.render(),
+    (template) => {
+      part = renderLit(template, host, { host });
+    },
+  );
+  onCleanup(() => {
+    part?.setConnected(false);
+    renderLit(nothing, host);
+  });
+  return host;
 }

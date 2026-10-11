@@ -31,7 +31,9 @@ export function createGatewayMethodsIsolatedVitestConfig(
     // This Gateway composition owns native Node modules and renders the actual Solid UI.
     plugins: [
       ...(config.plugins ?? []),
-      import("../../ui/vite.config.ts").then(({ controlUiSolidPlugin }) => controlUiSolidPlugin()),
+      import("../../ui/config/control-ui-solid.ts").then(({ controlUiSolidPlugin }) =>
+        controlUiSolidPlugin(),
+      ),
     ],
   };
 }

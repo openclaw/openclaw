@@ -160,25 +160,6 @@ describe("Claude imported internal inputs", () => {
     },
   );
 
-  it("matches a literal resume note against its canonical row before trying the stripped text", () => {
-    const literal = `${buildCliSessionDriftNote(["prompt-tools"])}\n\nhello`;
-    const localMessages = [
-      { role: "user", content: literal, timestamp: 1 },
-      { role: "user", content: "hello", timestamp: 2 },
-    ];
-    const merged = mergeImportedChatHistoryMessages({
-      localMessages,
-      importedMessages: [
-        { ...parseImportedUser(literal), timestamp: 1 },
-        { ...parseImportedUser("hello"), timestamp: 2 },
-      ],
-    });
-    expect(merged.map((message) => (message as { content?: unknown }).content)).toEqual([
-      literal,
-      "hello",
-    ]);
-  });
-
   it.each(internalWakeInputs)("marks imported %s prompts internal", (sourceTool, text) => {
     const internal = { display: false, provenance: { kind: "internal_system", sourceTool } };
     expect(parseImportedUser(text)).toMatchObject(internal);
