@@ -262,6 +262,7 @@ function getMemorySearchToolOutcome(details: Record<string, unknown>): unknown {
   if (!Array.isArray(details.results)) {
     return undefined;
   }
+  // Rank and hit content carry progress; aggregate scores also decay with wall time.
   const results = details.results.map((result) => {
     if (!isPlainObject(result)) {
       return result;
@@ -327,7 +328,7 @@ function hashToolOutcome(
   if (isError) {
     return { resultHash: digestToolOutcome(result) };
   }
-  if (toolName === "memory_search") {
+  if (toolName === "memory_search" && result.isError !== true) {
     const outcome = getMemorySearchToolOutcome(details);
     if (outcome !== undefined) {
       return { resultHash: digestToolOutcome(outcome) };
