@@ -1,4 +1,5 @@
 import path from "node:path";
+import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { buildWidgetDocument } from "../../../src/canvas/wrap.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
@@ -17,14 +18,10 @@ const title = "Mission control";
 
 suite.define(() => {
   const sandbox = useCanvasSandboxFixture();
-  it("restores the dashboard layout and title before hello without an empty-chat frame", async () => {
-    await suite.withPage(
-      {
-        viewport: { width: 1440, height: 900 },
-        serviceWorkers: "block",
-        permissions: ["local-network-access"],
-      },
-      async ({ page }) => {
+  async function restoresDashboardBeforeHello(
+    page: Page,
+    options: { evictTranscript: boolean; screenshotPrefix: string },
+  ) {
         const documentRequested = createDeferred();
         const documentRelease = createDeferred();
         const configRelease = createDeferred();
@@ -131,6 +128,43 @@ suite.define(() => {
             }),
           )
           .toBe(true);
+        if (options.evictTranscript) {
+          await expect
+            .poll(() => page.evaluate(countSnapshotStore, "snapshots"))
+            .toBeGreaterThan(0);
+          await page.evaluate(async () => {
+            await new Promise<void>((resolve, reject) => {
+              const open = indexedDB.open("openclaw-chat-snapshots");
+              open.addEventListener("error", () =>
+                reject(open.error ?? new Error("Boot snapshot open failed")),
+              );
+              open.addEventListener("success", () => {
+                const db = open.result;
+                const names = ["snapshots", "snapshotMetadata"].filter((name) =>
+                  db.objectStoreNames.contains(name),
+                );
+                if (names.length === 0) {
+                  db.close();
+                  resolve();
+                  return;
+                }
+                const transaction = db.transaction(names, "readwrite");
+                for (const name of names) {
+                  transaction.objectStore(name).clear();
+                }
+                transaction.addEventListener("complete", () => {
+                  db.close();
+                  resolve();
+                });
+                transaction.addEventListener("error", () =>
+                  reject(transaction.error ?? new Error("Transcript snapshot clear failed")),
+                );
+              });
+            });
+          });
+          expect(await page.evaluate(countSnapshotStore, "snapshots")).toBe(0);
+          expect(await page.evaluate(countSnapshotStore, "sidebarSnapshots")).toBeGreaterThan(0);
+        }
         await page.addInitScript(() => {
           const frames: Array<{
             title: string;
@@ -171,7 +205,9 @@ suite.define(() => {
           await gateway.waitForRequest("connect");
           const skeleton = page.locator("[data-panel-skeleton=board]");
           await skeleton.waitFor();
-          await page.screenshot({ path: path.join(suite.artifactDir, "before-hello.png") });
+          await page.screenshot({
+            path: path.join(suite.artifactDir, `${options.screenshotPrefix}before-hello.png`),
+          });
           const frames = await page.evaluate(() => Reflect.get(window, "dashboardPaints"));
           console.log("Dashboard reload painted frames", JSON.stringify(frames));
           expect(frames.length).toBeGreaterThan(0);
@@ -199,7 +235,9 @@ suite.define(() => {
           await gateway.resolveDeferred("board.get");
           await documentRequested.promise;
           expect(await skeleton.count()).toBe(1);
-          await page.screenshot({ path: path.join(suite.artifactDir, "before-widget.png") });
+          await page.screenshot({
+            path: path.join(suite.artifactDir, `${options.screenshotPrefix}before-widget.png`),
+          });
           documentRelease.resolve();
           await page
             .frameLocator(".board-widget__frame")
@@ -207,12 +245,68 @@ suite.define(() => {
             .getByText("All systems ready")
             .waitFor();
           await skeleton.waitFor({ state: "detached" });
-          await page.screenshot({ path: path.join(suite.artifactDir, "widget-ready.png") });
+          await page.screenshot({
+            path: path.join(suite.artifactDir, `${options.screenshotPrefix}widget-ready.png`),
+          });
         } finally {
           documentRelease.resolve();
           configRelease.resolve();
         }
+  }
+
+  it("restores the dashboard layout and title before hello without an empty-chat frame", async () => {
+    await suite.withPage(
+      {
+        viewport: { width: 1440, height: 900 },
+        serviceWorkers: "block",
+        permissions: ["local-network-access"],
+      },
+      async ({ page }) => {
+        await restoresDashboardBeforeHello(page, {
+          evictTranscript: false,
+          screenshotPrefix: "",
+        });
+      },
+    );
+  });
+
+  it("keeps welcome hidden before hello when the transcript cache was evicted", async () => {
+    await suite.withPage(
+      {
+        viewport: { width: 1440, height: 900 },
+        serviceWorkers: "block",
+        permissions: ["local-network-access"],
+      },
+      async ({ page }) => {
+        await restoresDashboardBeforeHello(page, {
+          evictTranscript: true,
+          screenshotPrefix: "evicted-",
+        });
       },
     );
   });
 });
+
+function countSnapshotStore(storeName: "snapshots" | "sidebarSnapshots"): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const open = indexedDB.open("openclaw-chat-snapshots");
+    open.addEventListener("error", () => reject(open.error ?? new Error("Boot snapshot open failed")));
+    open.addEventListener("success", () => {
+      const db = open.result;
+      if (!db.objectStoreNames.contains(storeName)) {
+        db.close();
+        resolve(0);
+        return;
+      }
+      const transaction = db.transaction(storeName, "readonly");
+      const request = transaction.objectStore(storeName).count();
+      transaction.addEventListener("complete", () => {
+        db.close();
+        resolve(request.result);
+      });
+      transaction.addEventListener("error", () =>
+        reject(transaction.error ?? new Error("Boot snapshot count failed")),
+      );
+    });
+  });
+}

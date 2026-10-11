@@ -32,11 +32,16 @@ import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { invalidateChatAvatarCache } from "./chat-avatar.ts";
 import { commitCurrentChatHistorySnapshot } from "./chat-history-snapshot.ts";
 import {
+  chatHistoryRequests,
   getChatHistoryLoadState,
   synchronizeInitialChatSnapshotConnection,
 } from "./chat-history-state.ts";
 import { syncSelectedSessionMessageSubscription } from "./chat-history-subscription.ts";
-import { applyChatAgentsList, resumePendingChatHistoryLoad } from "./chat-history.ts";
+import {
+  applyChatAgentsList,
+  loadChatHistory,
+  resumePendingChatHistoryLoad,
+} from "./chat-history.ts";
 import { ChatPaneLifecycle } from "./chat-pane-lifecycle.ts";
 import { resolvePlacementComposer } from "./chat-pane-placement.ts";
 import { chatSessionPresentationKey } from "./chat-pane-session-presentation.ts";
@@ -67,6 +72,27 @@ import { migrateLegacyDockVisibility } from "./sidebar-layout-legacy-migration.t
 import { normalizeSidebarLayout } from "./sidebar-layout.ts";
 import { maybeResetToolStream } from "./stream-reconciliation.ts";
 import { reconcileWaitingApprovalsFromSnapshot } from "./tool-stream-status.ts";
+
+/** Record startup history before the first disconnected paint.
+
+Optional transcript cache is not an empty conversation. A missing or late snapshot
+must stay pending until Gateway history commits, without an offline RPC. */
+function admitPendingStartupHistory(state: ChatPageHost, wasConnected: boolean): void {
+  if (wasConnected || state.chatMessages.length > 0 || parseCatalogSessionKey(state.sessionKey)) {
+    return;
+  }
+  if (!state.sessionKey.trim()) {
+    return;
+  }
+  const accepted = chatHistoryRequests(state).acceptedHistory;
+  if (accepted?.sessionKey === state.sessionKey && accepted.sessionInfo?.sessionId) {
+    return;
+  }
+  if (getChatHistoryLoadState(state).phase !== "idle") {
+    return;
+  }
+  void loadChatHistory(state, { startup: true, deferBranches: true });
+}
 
 export abstract class ChatPaneContext extends ChatPaneLifecycle {
   protected transcriptSessionProps(selectedSession: GatewaySessionRow | undefined) {
@@ -618,6 +644,7 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       setQuestionPromptClient(this.questionPromptState, null);
       stopChatRealtimeTalk(state);
       maybeResetToolStream(state, { preserveStreamSegments: state.chatRunId !== null });
+      admitPendingStartupHistory(state, wasConnected);
       state.requestUpdate?.();
       return;
     }

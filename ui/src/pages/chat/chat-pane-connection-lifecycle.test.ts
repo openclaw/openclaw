@@ -84,6 +84,41 @@ describe("chat pane connection lifecycle", () => {
     expect(state.chatLoading).toBe(true);
   });
 
+  it("admits startup history before hello when no transcript is cached", async () => {
+    const request = createReconnectRequest({ messages: [] });
+    const client = createTestGatewayClient(request);
+    const { pane, state } = createTestChatPane({ client });
+    const connected = pane.context.gateway.snapshot;
+    state.connected = false;
+    state.client = null;
+    state.chatMessages = [];
+
+    pane.applyGatewaySnapshot({
+      ...connected,
+      client,
+      phase: "connecting",
+      hello: null,
+    });
+
+    expect(request).not.toHaveBeenCalled();
+    expect(getChatHistoryLoadState(state)).toMatchObject({
+      phase: "pending-connection",
+      sessionKey: state.sessionKey,
+      startup: true,
+    });
+    expect(state.chatLoading).toBe(true);
+
+    state.currentSessionId = "cached-session";
+    expect(state.chatLoading).toBe(true);
+    expect(getChatHistoryLoadState(state).phase).toBe("pending-connection");
+
+    pane.connectedClient = null;
+    pane.applyGatewaySnapshot(connected);
+
+    await vi.waitFor(() => expect(requestCalls(request, "chat.startup")).toHaveLength(1));
+    expect(requestCalls(request, "chat.history")).toHaveLength(0);
+  });
+
   it("notifies the owning shell after a pane leaves its DOM subtree", async () => {
     const { pane } = createTestChatPane({
       client: { request: vi.fn() } as unknown as GatewayBrowserClient,

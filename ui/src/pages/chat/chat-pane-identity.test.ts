@@ -56,7 +56,8 @@ describe("chat pane assistant identity snapshots", () => {
 
       state.chatMessages = [];
       draw();
-      expect(container.querySelector(".agent-chat__welcome")).not.toBeNull();
+      expect(container.querySelector(".agent-chat__welcome")).toBeNull();
+      expect(container.querySelector("openclaw-panel-loading-skeleton")).not.toBeNull();
 
       state.currentSessionId = null;
       state.connected = true;
