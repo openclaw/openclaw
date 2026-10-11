@@ -47,6 +47,7 @@ import { runBestEffortCallback } from "../embedded-agent-subscribe.callback.js";
 import type { AgentHarnessPluginSelection } from "../harness/runtime-plugin-load-plan.js";
 import { resolveLegacyInheritedAuthDir } from "../legacy-inherited-auth-dir.js";
 import { resolveModelCandidateChain } from "../model-fallback-candidates.js";
+import { copyPreparedModelRuntimeAuthBindings } from "../prepared-model-runtime-auth.js";
 import {
   getPreparedModelRuntimePluginGeneration,
   runOutsidePreparedModelRuntimePluginGenerationScope,
@@ -393,6 +394,10 @@ async function runEmbeddedAgentForSession(
               ...preparedModelRuntimeOwnerSnapshot,
               ...projects,
             });
+            copyPreparedModelRuntimeAuthBindings(
+              preparedModelRuntimeOwnerSnapshot,
+              preparedModelRuntime,
+            );
             const runPrepared = async () => {
               params = refresh.withDeliveryCallbacks(params);
               const preparedAgentId = workspaceResolution.agentId;

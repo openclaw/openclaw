@@ -14,12 +14,16 @@ import {
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveEmbeddedRunModelSetup } from "./embedded-agent-runner/run/model-setup.js";
-import type { AgentHarnessModelCatalogResult } from "./harness/types.js";
+import type {
+  AgentHarnessModelCatalogParams,
+  AgentHarnessModelCatalogResult,
+} from "./harness/types.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "./model-catalog.types.js";
 import {
   loadProviderScopedThinkingCatalog,
   loadPublishedPreparedModelCatalogOwnerSnapshot,
 } from "./prepared-model-catalog.js";
+import { bindPreparedModelRuntimeAuth } from "./prepared-model-runtime-auth.js";
 import { withPreparedModelRuntimePluginGenerationScope } from "./prepared-model-runtime-generation-scope.js";
 import * as fullCatalog from "./prepared-model-runtime.full-catalog.js";
 import {
@@ -81,14 +85,23 @@ async function renewProvider(owner: PreparedModelRuntimeSnapshot, provider: stri
   }
 }
 
-async function fixture(standalone = false, cold = false, runtimeA = "native-a") {
+async function fixture(
+  standalone = false,
+  cold = false,
+  runtimeA = "native-a",
+  options: { readinessRuntimes?: readonly string[] } = {},
+) {
   const { resolveNativeModelPrimary } =
     await vi.importActual<typeof import("./agent-scope.js")>("./agent-scope.js");
   mocks.resolveNativeModelPrimary.mockImplementation(resolveNativeModelPrimary);
   const a = { provider: "provider-a", id: "model", name: "A", nativeRuntime: runtimeA };
   const b = { provider: "provider-b", id: "model", name: "B", nativeRuntime: "native-b" };
-  const loadA = vi.fn<() => Promise<AgentHarnessModelCatalogResult>>(async () => [a]);
-  const loadB = vi.fn<() => Promise<AgentHarnessModelCatalogResult>>(async () => [b]);
+  const loadA = vi.fn<
+    (params: AgentHarnessModelCatalogParams) => Promise<AgentHarnessModelCatalogResult>
+  >(async () => [a]);
+  const loadB = vi.fn<
+    (params: AgentHarnessModelCatalogParams) => Promise<AgentHarnessModelCatalogResult>
+  >(async () => [b]);
   mocks.loadAgentRuntimePluginRegistryHandle.mockImplementation(() => {
     const registry = createEmptyPluginRegistry();
     for (const [entry, loadModelCatalog] of [
@@ -104,6 +117,12 @@ async function fixture(standalone = false, cold = false, runtimeA = "native-a") 
           supports: () => ({ supported: true }),
           runAttempt: vi.fn(),
           loadModelCatalog,
+          ...(options.readinessRuntimes?.includes(entry.nativeRuntime)
+            ? {
+                authBootstrap: "harness" as const,
+                readModelCatalogReadiness: () => ({ accountType: "native" }),
+              }
+            : {}),
         },
       });
     }
@@ -155,6 +174,9 @@ async function resolveNativeSelection(
     repoRoot: workspaceDir,
     projectKey: "native-selection-project",
     activeProjectKeys: ["native-selection-project"],
+  });
+  bindPreparedModelRuntimeAuth(preparedModelRuntime, {
+    store: { version: 1, profiles: {} },
   });
   return await withPluginRuntimeGenerationScope(preparedModelRuntime, () =>
     resolveEmbeddedRunModelSetup({
@@ -285,7 +307,9 @@ it("reuses published native facts without renewing providers during warm API and
 it.each(["before", "during", "revoked"] as const)(
   "keeps native selection bound to its admitted lease (publication/authority=%s)",
   async (transition) => {
-    const { input, owner, b, loadB } = await fixture(false, true);
+    const { input, owner, b, loadB } = await fixture(false, true, "native-a", {
+      readinessRuntimes: ["native-b"],
+    });
     const lease = await acquirePreparedModelRuntimeSnapshot(input);
     let leaseOpen = true;
     let runCurrent = true;
@@ -371,7 +395,9 @@ it.each(["before", "during", "revoked"] as const)(
 it.each([false, true])(
   "carries a cold native selection into a stable run lease (standalone=%s)",
   async (standalone) => {
-    const { input, owner, b, loadA, loadB } = await fixture(standalone, true);
+    const { input, owner, b, loadA, loadB } = await fixture(standalone, true, "native-a", {
+      readinessRuntimes: ["native-b"],
+    });
     expect(loadA).not.toHaveBeenCalled();
     expect(loadB).not.toHaveBeenCalled();
     const selected = {

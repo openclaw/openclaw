@@ -29,6 +29,8 @@ import {
   assertAgentHarnessExecutionEnvironment,
   resolveAgentHarnessNativeToolPolicyRestricted,
 } from "../../harness/execution-environment.js";
+import { resolveReadyNativeModelCatalogEntry } from "../../harness/native-model-catalog-resolution.js";
+import type { ReadyNativeModelCatalogSelection } from "../../harness/native-model-catalog-resolution.js";
 import { getRegisteredAgentHarness } from "../../harness/registry.js";
 import { ensureSelectedAgentHarnessPlugin } from "../../harness/runtime-plugin.js";
 import { selectAgentHarness } from "../../harness/selection.js";
@@ -39,11 +41,16 @@ import {
   createModelCatalogSnapshotView,
   listModelCatalogObservedRoutes,
 } from "../../model-catalog-view.js";
-import type { ModelCatalogEntry } from "../../model-catalog.types.js";
 import { resolveModelCandidateChain } from "../../model-fallback-candidates.js";
 import type { ModelRef } from "../../model-selection.js";
 import { resolveSelectedOpenAIRuntimeProvider } from "../../openai-routing.js";
+import {
+  getPreparedModelRuntimeBorrowedSnapshot,
+  getPreparedModelRuntimePluginGeneration,
+} from "../../prepared-model-runtime-generation-scope.js";
+import { assertPreparedModelRuntimeInputCurrent } from "../../prepared-model-runtime.errors.js";
 import type { PreparedModelRuntimeSnapshot } from "../../prepared-model-runtime.js";
+import { capturePreparedModelRuntimeLifetime } from "../../prepared-model-runtime.lifecycle.js";
 import { resolveTieredModel } from "../model-resolution.js";
 import { createEmptyAgentDiscoveryStores } from "../model.js";
 import type { RunEmbeddedAgentInternalParams } from "./internal-params.js";
@@ -367,45 +374,89 @@ export async function resolveEmbeddedRunModelSetup(params: {
     );
   }
 
-  let catalog = params.preparedModelRuntime?.modelCatalog;
-  let nativeCatalogFailure: { error: unknown } | undefined;
-  const ownsSelectedNativeModel = (entry: ModelCatalogEntry) =>
-    entry.provider === provider && entry.id === modelId && entry.nativeRuntime === agentHarness.id;
-  const hasSelectedNativeModel = () =>
-    catalog?.entries.some(ownsSelectedNativeModel) === true ||
-    catalog?.routeVariants.some(ownsSelectedNativeModel) === true;
-  if (
-    !nativeSessionRuntime &&
-    pluginHarnessOwnsTransport &&
-    agentHarness.loadModelCatalog &&
-    params.preparedModelRuntime?.loadNativeModelCatalog &&
-    !hasSelectedNativeModel()
-  ) {
-    try {
-      catalog = await params.preparedModelRuntime.loadNativeModelCatalog({
-        provider,
-        modelId,
-        runtime: agentHarness.id,
-      });
-    } catch (error) {
-      nativeCatalogFailure = { error };
-    }
+  let nativeCatalogSelection: ReadyNativeModelCatalogSelection | undefined;
+  if (!nativeSessionRuntime) {
+    const preparedRuntime = params.preparedModelRuntime;
+    const assertRuntimeCurrent = capturePreparedModelRuntimeLifetime();
+    const generation = getPreparedModelRuntimePluginGeneration();
+    const borrowedSnapshot = generation
+      ? getPreparedModelRuntimeBorrowedSnapshot(generation)
+      : undefined;
+    // Run projections add prompt-project facts while keeping the owner's native operation.
+    const isCurrent =
+      generation &&
+      borrowedSnapshot?.loadNativeModelCatalog === preparedRuntime?.loadNativeModelCatalog
+        ? () => getPreparedModelRuntimeBorrowedSnapshot(generation) === borrowedSnapshot
+        : preparedRuntime?.isCurrent;
+    nativeCatalogSelection = await resolveReadyNativeModelCatalogEntry({
+      snapshot: params.preparedModelRuntime,
+      isCurrent,
+      harness: agentHarness,
+      provider,
+      modelId,
+      ...(runParams.authProfileIdSource && runParams.authProfileId
+        ? { authProfileId: runParams.authProfileId }
+        : {}),
+    });
     runParams.abortSignal?.throwIfAborted();
     params.assertCurrent();
+    assertRuntimeCurrent();
+    if (preparedRuntime && isCurrent) {
+      assertPreparedModelRuntimeInputCurrent(preparedRuntime, isCurrent);
+    }
   }
-  const nativeModelOwned =
-    nativeSessionRuntime !== undefined || (pluginHarnessOwnsTransport && hasSelectedNativeModel());
+  const nativeCatalogEntry = nativeCatalogSelection?.entry;
+  const nativeModelOwned = nativeSessionRuntime !== undefined || nativeCatalogEntry !== undefined;
   const modelConfigProvider = provider;
+  let resolvedModelProvider = provider;
   let modelResolution;
   let observedRoutes: ProviderModelRouteSource[] | undefined;
   if (nativeModelOwned) {
+    const nativeModel = createNativeModelOwnedRuntimeModel({ provider, modelId });
+    const catalogModel = nativeCatalogEntry
+      ? {
+          ...nativeModel,
+          name: nativeCatalogEntry.name,
+          ...(nativeCatalogEntry.api ? { api: nativeCatalogEntry.api } : {}),
+          ...(nativeCatalogEntry.reasoning !== undefined
+            ? { reasoning: nativeCatalogEntry.reasoning }
+            : {}),
+          ...(nativeCatalogEntry.input
+            ? {
+                input: nativeCatalogEntry.input.filter(
+                  (input): input is "text" | "image" => input === "text" || input === "image",
+                ),
+              }
+            : {}),
+          ...(nativeCatalogEntry.contextWindow !== undefined
+            ? { contextWindow: nativeCatalogEntry.contextWindow }
+            : nativeCatalogEntry.contextTokens !== undefined
+              ? { contextWindow: nativeCatalogEntry.contextTokens }
+              : {}),
+          ...(nativeCatalogEntry.contextTokens !== undefined
+            ? { contextTokens: nativeCatalogEntry.contextTokens }
+            : {}),
+          ...(nativeCatalogEntry.params ? { params: nativeCatalogEntry.params } : {}),
+          ...(nativeCatalogEntry.compat ? { compat: nativeCatalogEntry.compat } : {}),
+        }
+      : nativeModel;
+    if (
+      nativeCatalogEntry &&
+      nativeCatalogEntry.contextWindow === undefined &&
+      nativeCatalogEntry.contextTokens === undefined
+    ) {
+      Reflect.deleteProperty(catalogModel, "contextWindow");
+      Reflect.deleteProperty(catalogModel, "contextTokens");
+      Reflect.deleteProperty(catalogModel, "maxTokens");
+    }
     modelResolution = {
-      model: createNativeModelOwnedRuntimeModel({ provider, modelId }),
+      model: catalogModel,
       ...createEmptyAgentDiscoveryStores(),
     };
+    const routeCatalog = nativeCatalogSelection?.catalog;
     const routeVariants =
-      catalog &&
-      createModelCatalogSnapshotView(runParams.config ?? {}, catalog).variantsOf({
+      routeCatalog &&
+      createModelCatalogSnapshotView(runParams.config ?? {}, routeCatalog).variantsOf({
         provider,
         id: modelId,
       });
@@ -436,16 +487,14 @@ export async function resolveEmbeddedRunModelSetup(params: {
       preparedModelRuntime: params.preparedModelRuntime,
       staticCatalogOwnsTransport: pluginHarnessOwnsTransport,
     });
-    provider = tieredResolution.provider;
+    resolvedModelProvider = tieredResolution.provider;
     modelResolution = tieredResolution.resolution;
     if (modelResolution.model) {
       modelId = modelResolution.logicalRef.model;
     }
   }
+  provider = resolvedModelProvider;
   if (!modelResolution.model) {
-    if (nativeCatalogFailure) {
-      throw nativeCatalogFailure.error;
-    }
     throw new FailoverError(modelResolution.error ?? `Unknown model: ${provider}/${modelId}`, {
       reason: "model_not_found",
       provider,
@@ -470,6 +519,9 @@ export async function resolveEmbeddedRunModelSetup(params: {
     pluginHarnessOwnsTransport,
     pinnedHarnessId,
     nativeModelOwned,
+    ...(nativeCatalogSelection?.assertCurrent
+      ? { assertNativeModelSelectionCurrent: nativeCatalogSelection.assertCurrent }
+      : {}),
     observedRoutes,
     nativeSessionRuntime,
     modelConfigProvider,

@@ -440,6 +440,11 @@ export type AgentHarnessModelCatalogParams = {
   agentDir: string;
   workspaceDir: string;
   configuredModelRefs?: readonly ModelRef[];
+  /**
+   * When set for a session-selected profile, load/readiness/authority must use this exact
+   * profile; a harness that cannot honor it must return no scoped native rows.
+   */
+  authProfileId?: string;
 };
 
 export type AgentHarnessModelCatalogResult =
@@ -447,6 +452,18 @@ export type AgentHarnessModelCatalogResult =
   | {
       entries: readonly import("../model-catalog.types.js").ModelCatalogEntry[];
       outcomes?: readonly import("../../plugins/provider-catalog-outcome.js").ProviderCatalogOutcome[];
+    };
+
+type AgentHarnessModelCatalogSelectionAttempt =
+  | {
+      phase: "bind";
+      authBindingFingerprint: string;
+      attemptFingerprint: string;
+    }
+  | {
+      phase: "assert";
+      authBindingFingerprint?: string;
+      attemptFingerprint: string;
     };
 
 type AgentHarnessContract<
@@ -645,7 +662,7 @@ type AgentHarnessContract<
     serviceTiers: readonly string[];
   }): readonly string[];
   /**
-   * Reads current, secret-free native account evidence for this exact catalog scope/model.
+   * Reads current, secret-free native account evidence for this exact catalog scope/model/profile.
    * No I/O or discovery here. Missing/stale/disposed evidence returns undefined; this is
    * picker metadata only, never execution authorization or a host-route credential.
    * When known, authMode describes this same account observation.
@@ -653,6 +670,16 @@ type AgentHarnessContract<
   readModelCatalogReadiness?(
     params: AgentHarnessModelCatalogParams & { provider: string; modelId: string },
   ): { accountType: string; authMode?: string } | undefined;
+  /**
+   * Captures a secret-free authority assertion for this exact native model selection.
+   * The harness calls the returned callback after expected prepared-auth startup changes
+   * to bind the exact attempt, then immediately before first-turn model I/O to assert it
+   * remains current. It must throw if the selected account/catalog, owning runtime, or
+   * bound attempt has changed. Attempt fingerprints are opaque and secret-free.
+   */
+  captureModelCatalogSelectionAuthority?(
+    params: AgentHarnessModelCatalogParams & { provider: string; modelId: string },
+  ): ((attempt?: AgentHarnessModelCatalogSelectionAttempt) => void) | undefined;
 };
 
 /**

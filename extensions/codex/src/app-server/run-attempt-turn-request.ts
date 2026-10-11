@@ -29,6 +29,7 @@ import {
 import type { CodexAttemptResources } from "./run-attempt-resources.js";
 import type { CodexAttemptTurnState } from "./run-attempt-turn-state.js";
 import { resolveCodexUltrafastServiceTier } from "./service-tier.js";
+import { fingerprintCodexModelCatalogAttemptAuthority } from "./thread-fingerprints.js";
 import { recordCodexTrajectoryContext } from "./trajectory.js";
 import { buildCodexParentLocalInstructions, buildTurnStartParams } from "./turn-params.js";
 import type { CodexThreadRouteReservation } from "./turn-router.js";
@@ -55,8 +56,13 @@ export async function prepareCodexAttemptTurnRequest(
     nativeHistoryProvenancePrefix,
   } = prompt;
   const { runtime, attemptTools, hookContextWindowFields, workspaceBootstrapContext } = context;
-  const { connection, runtimeParams, effectiveRuntimeProviderId, effectiveRuntimeModelId } =
-    runtime;
+  const {
+    connection,
+    runtimeParams,
+    effectiveRuntimeProviderId,
+    effectiveRuntimeModelId,
+    preparedAuthBinding,
+  } = runtime;
   const { tools, toolBridge } = attemptTools;
   const {
     params,
@@ -311,6 +317,14 @@ export async function prepareCodexAttemptTurnRequest(
           withCurrent: connection.withCurrent,
           assertCurrent: () => {
             assertTurnCurrent();
+            params.assertNativeModelSelectionCurrent?.({
+              phase: "assert",
+              authBindingFingerprint: preparedAuthBinding?.fingerprint,
+              attemptFingerprint: fingerprintCodexModelCatalogAttemptAuthority({
+                clientInstanceId: turnClient.getInstanceId(),
+                modelCatalogRevision: turnClient.getModelCatalogRevision(),
+              }),
+            });
             continuation?.dispatch();
           },
         }),

@@ -262,6 +262,8 @@ export function createCodexAppServerAgentHarness(
         pluginConfig: resolveAttemptPluginConfig(params.config),
       });
     },
+    captureModelCatalogSelectionAuthority: (params) =>
+      modelCatalog?.captureSelectionAuthority(params, resolveAttemptPluginConfig(params.config)),
     loadMcpToolCatalog: async (params) => {
       const { loadCodexEffectiveMcpCatalog } =
         await import("./src/app-server/effective-mcp-catalog.js");

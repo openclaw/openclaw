@@ -53,6 +53,8 @@ export function createAttemptThreadStarter(
     overrides?: {
       pluginConfig?: CodexPluginConfig;
       startupPreparedAuth?: CodexAppServerPreparedAuth;
+      startupAuthBindingFingerprint?: string;
+      assertNativeModelSelectionCurrent?: EmbeddedRunAttemptParams["assertNativeModelSelectionCurrent"];
       attemptClientFactory?: (harness: AttemptClientHarness) => CodexAppServerClientFactory;
       buildAttemptParams?: () => EmbeddedRunAttemptParams;
       harness?: AttemptClientHarness;
@@ -88,7 +90,7 @@ export function createAttemptThreadStarter(
         ...(overrides?.startupPreparedAuth
           ? { preparedAuth: overrides.startupPreparedAuth }
           : { authProfileId: undefined }),
-        authBindingFingerprint: undefined,
+        authBindingFingerprint: overrides?.startupAuthBindingFingerprint,
         authRequirement: undefined,
         ...(overrides?.runtimeArtifactRequest
           ? {
@@ -99,6 +101,7 @@ export function createAttemptThreadStarter(
             }
           : {}),
       },
+      assertNativeModelSelectionCurrent: overrides?.assertNativeModelSelectionCurrent,
       ...(overrides?.runtimeArtifactRequest
         ? { runtimeArtifactRequest: overrides.runtimeArtifactRequest }
         : {}),

@@ -210,6 +210,9 @@ export async function augmentModelCatalogWithAgentHarness(params: {
         agentDir: params.agentDir,
         workspaceDir: params.workspaceDir,
         configuredModelRefs,
+        ...(params.nativeSelection?.authProfileId
+          ? { authProfileId: params.nativeSelection.authProfileId }
+          : {}),
       });
       // v2026.9.5 plugins return plain rows; structured results also own discovery outcomes.
       if (isCatalogRowList(loaded)) {
@@ -375,20 +378,32 @@ export function isPreparedNativeModelCatalogReady(params: {
   const harness = pluginGeneration.pluginRegistry?.agentHarnesses.find(
     (registration) => registration.harness.id === selection.runtime,
   )?.harness;
+  const selectedProvider = normalizeProviderId(selection.provider);
+  if (
+    snapshot.nativeProviderOutcomes?.[selection.runtime]?.some(
+      (outcome) =>
+        normalizeProviderId(outcome.provider) === selectedProvider && outcome.status !== "ready",
+    )
+  ) {
+    return false;
+  }
   return (
-    !harness?.readModelCatalogReadiness ||
-    withPluginRuntimeGenerationScope(
-      {
-        metadataSnapshot: pluginGeneration.pluginMetadataSnapshot,
-        pluginRegistry: pluginGeneration.pluginRegistry,
-      },
-      () =>
-        harness.readModelCatalogReadiness?.({
-          ...preparedHarnessCatalogScope(params.input),
-          provider: selection.provider,
-          modelId: selection.modelId,
-        }),
-    ) !== undefined
+    (snapshot.authoritative !== false ||
+      typeof harness?.readModelCatalogReadiness === "function") &&
+    (!harness?.readModelCatalogReadiness ||
+      withPluginRuntimeGenerationScope(
+        {
+          metadataSnapshot: pluginGeneration.pluginMetadataSnapshot,
+          pluginRegistry: pluginGeneration.pluginRegistry,
+        },
+        () =>
+          harness.readModelCatalogReadiness?.({
+            ...preparedHarnessCatalogScope(params.input),
+            provider: selection.provider,
+            modelId: selection.modelId,
+            ...(selection.authProfileId ? { authProfileId: selection.authProfileId } : {}),
+          }),
+      ) !== undefined)
   );
 }
 

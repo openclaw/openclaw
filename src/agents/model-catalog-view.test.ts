@@ -4,6 +4,11 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import * as providerPolicySurface from "../plugins/provider-policy-surface.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import {
+  captureActivePluginRegistrySnapshot,
+  restoreActivePluginRegistrySnapshot,
+  setActivePluginRegistry,
+} from "../plugins/runtime.js";
 import type { ModelAuthAvailabilityEvaluation } from "./model-auth-availability.js";
 import {
   createModelCatalogView,
@@ -445,7 +450,56 @@ describe("prepared native catalog readiness", () => {
     expect(enumerateProviders).toHaveBeenCalledTimes(preparedEnumerations);
   });
 
+  it("uses native readiness when an OpenAI profile is present but not selected", () => {
+    const openaiNativeEntry = { ...nativeEntry, provider: "openai" };
+    const cfg: OpenClawConfig = {
+      auth: {
+        profiles: {
+          "openai:work": { provider: "openai", mode: "oauth" },
+        },
+      },
+    };
+    const view = prepareModelCatalogView({
+      ...facts(cfg),
+      snapshot: snapshot([openaiNativeEntry]),
+      observationConfig: cfg,
+      isCurrent: () => true,
+      pluginRegistry: nativeRegistry(() => ({ accountType: "chatgpt", authMode: "oauth" })),
+    });
+
+    expect(view.evaluateNative(openaiNativeEntry, host, "native-test")).toMatchObject({
+      availability: true,
+      availabilityAuthoritative: true,
+      runtimeAuth: { id: "native-test", source: "native" },
+      selectedAuthMode: "oauth",
+    });
+  });
+
+  it("reads the captured registry while an unrelated registry is active", () => {
+    const previous = captureActivePluginRegistrySnapshot();
+    setActivePluginRegistry(nativeRegistry(() => undefined));
+    try {
+      const cfg: OpenClawConfig = {};
+      const view = prepareModelCatalogView({
+        ...facts(cfg),
+        snapshot: snapshot([nativeEntry]),
+        observationConfig: cfg,
+        isCurrent: () => true,
+        pluginRegistry: nativeRegistry(() => ({ accountType: "apiKey", authMode: "oauth" })),
+      });
+      expect(view.evaluateNative(nativeEntry, host, "native-test").availability).toBe(true);
+    } finally {
+      restoreActivePluginRegistrySnapshot(previous);
+    }
+  });
+
   it.each([
+    { name: "preferred account", preferredProfileId: "custom:chosen", cfg: {} },
+    { name: "pinned account", pinnedProfileId: "custom:chosen", cfg: {} },
+    {
+      name: "auth profile order",
+      cfg: { auth: { order: { custom: ["custom:chosen"] } } },
+    },
     {
       name: "authored route",
       cfg: {

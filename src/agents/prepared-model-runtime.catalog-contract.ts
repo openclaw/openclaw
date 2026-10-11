@@ -15,6 +15,7 @@ import type {
   PreparedConfiguredRuntimeModel,
   PreparedModelCatalogInventory,
   PreparedModelCatalogRefreshOptions,
+  PreparedNativeModelCatalogLoadOptions,
   PreparedNativeModelSelection,
   PreparedRuntimeCapabilityModel,
   PreparedModelRuntimeInput,
@@ -72,7 +73,6 @@ export type PreparedModelCatalogCandidate = {
   configuredRuntimeModels: PreparedModelRuntimeCatalogFacts["configuredRuntimeModels"];
   nativeCatalogAcquired: boolean;
 };
-
 export type PreparedModelRuntimeCatalogAccess = Readonly<{
   initialAuth: PreparedModelCatalogAuth;
   accountCatalog?: PreparedAccountCatalogAccess;
@@ -87,6 +87,7 @@ export type PreparedModelRuntimeCatalogAccess = Readonly<{
   ) => Promise<ModelCatalogSnapshot>;
   loadNativeModelCatalog: (
     selection?: PreparedNativeModelSelection,
+    options?: PreparedNativeModelCatalogLoadOptions,
   ) => Promise<ModelCatalogSnapshot>;
   loadAuth: (scope: PreparedModelRuntimeAuthScope) => Promise<PreparedModelRuntimeAuth>;
 }>;
