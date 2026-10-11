@@ -125,6 +125,30 @@ describe("channels command", () => {
     expect(lines.join("\n")).toContain("transport:");
   });
 
+  it("surfaces positive integer channel restart attempts", () => {
+    const render = (reconnectAttempts?: unknown) =>
+      formatGatewayChannelsStatusLines({
+        channelLabels: { signal: "Signal" },
+        channelAccounts: {
+          signal: [
+            {
+              accountId: "default",
+              enabled: true,
+              configured: true,
+              running: false,
+              ...(reconnectAttempts === undefined ? {} : { reconnectAttempts }),
+            },
+          ],
+        },
+      }).join("\n");
+
+    expect(render(10)).toContain("restarts:10");
+    expect(render(2)).toContain("restarts:2");
+    for (const reconnectAttempts of [undefined, 0, -1, 1.5, "2", Number.NaN]) {
+      expect(render(reconnectAttempts)).not.toContain("restarts:");
+    }
+  });
+
   it("formats phone allowlists without interpreting arbitrary account names", () => {
     const lines = formatGatewayChannelsStatusLines({
       channelLabels: { signal: "Signal" },
