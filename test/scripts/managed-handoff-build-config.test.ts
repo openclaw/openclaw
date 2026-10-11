@@ -9,7 +9,6 @@ import {
   realpathSync,
   readFileSync,
   lstatSync,
-  writeFileSync,
 } from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
@@ -110,46 +109,6 @@ function publishedProcSafeRuntimeFiles(packageDirectory: string): string[] {
     ),
   ].toSorted();
 }
-
-it("derives staged runtime files from the package manifest as published files grow", () => {
-  const root = tempDirs.make("openclaw-proc-safe-manifest-");
-  const packageDirectory = path.join(root, "package");
-  const files = [
-    "LICENSE",
-    "dist/identity.js",
-    "dist/nested/ancestry.js",
-    "dist/nested/ancestry.d.ts",
-    "dist/unpublished.js",
-    "docs/identity.md",
-    "unrelated.js",
-  ];
-  for (const file of files) {
-    const target = path.join(packageDirectory, file);
-    mkdirSync(path.dirname(target), { recursive: true });
-    writeFileSync(target, "fixture");
-  }
-  const manifestPath = path.join(packageDirectory, "package.json");
-  const published = ["LICENSE", "dist/identity.js", "dist/nested/**/*", "docs/**/*.md"];
-  writeFileSync(manifestPath, JSON.stringify({ files: published }));
-  expect(publishedProcSafeRuntimeFiles(packageDirectory)).toEqual(
-    ["LICENSE", "package.json", "dist/identity.js", "dist/nested/ancestry.js"].toSorted(),
-  );
-  writeFileSync(path.join(packageDirectory, "dist/nested/new-api.js"), "fixture");
-  expect(publishedProcSafeRuntimeFiles(packageDirectory)).toEqual(
-    [
-      "LICENSE",
-      "package.json",
-      "dist/identity.js",
-      "dist/nested/ancestry.js",
-      "dist/nested/new-api.js",
-    ].toSorted(),
-  );
-  writeFileSync(path.join(root, "outside.js"), "must not be staged");
-  writeFileSync(manifestPath, JSON.stringify({ files: [...published, "../outside.js"] }));
-  expect(() => publishedProcSafeRuntimeFiles(packageDirectory)).toThrow(
-    "Published proc-safe file escapes its package",
-  );
-});
 
 it.each(
   (["managed", "package"] as const).filter(

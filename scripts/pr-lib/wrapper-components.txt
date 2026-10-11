@@ -319,7 +319,6 @@ src/agents/worktrees/eviction.runtime.ts
 src/agents/worktrees/filesystem-apfs.native.ts
 src/agents/worktrees/filesystem-backend.ts
 src/agents/worktrees/filesystem-native.ts
-src/agents/worktrees/filesystem-refs.native.ts
 src/agents/worktrees/gc-dependencies.ts
 src/agents/worktrees/gc-fingerprint.runtime.ts
 src/agents/worktrees/git-lock.ts
