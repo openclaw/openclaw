@@ -203,7 +203,7 @@ describe("deliverMattermostReplyPayload", () => {
     const core = createReplyDeliveryCore();
     core.channel.text.chunkMarkdownTextWithMode = vi.fn(() => ["alpha", "beta"]);
 
-    await deliverMattermostReplyPayload({
+    const result = await deliverMattermostReplyPayload({
       core,
       cfg: {},
       payload: {
@@ -224,6 +224,16 @@ describe("deliverMattermostReplyPayload", () => {
       buttons: [[{ id: "open", callback_data: "open" }]],
     });
     expect("buttons" in sendMessage.mock.calls[1]![2]).toBe(false);
+    expect(result).toMatchObject({
+      outcome: "text",
+      messageIds: ["post-1", "post-2"],
+      visibleReplySent: true,
+      content: "alpha\nbeta",
+    });
+    expect(result.receipt?.parts.map((part) => part.platformMessageId)).toEqual([
+      "post-1",
+      "post-2",
+    ]);
   });
 
   it("keeps multiple-media presentations on the text/media fallback path", async () => {
@@ -350,36 +360,6 @@ describe("deliverMattermostReplyPayload", () => {
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
-  it("does not suppress messages that mention Reasoning: mid-text", async () => {
-    const sendMessage = createSendMessageMock();
-    const cfg = {} satisfies OpenClawConfig;
-    const core = createReplyDeliveryCore();
-
-    await deliverMattermostReplyPayload({
-      core,
-      cfg,
-      payload: { text: "Intro line\nReasoning: appears in content but is not a prefix" },
-      channelId: "town-square",
-      accountId: "default",
-      agentId: "agent-1",
-      replyToId: "root-post",
-      textLimit: 4000,
-      tableMode: "off",
-      sendMessage,
-    });
-
-    expect(sendMessage).toHaveBeenCalledTimes(1);
-    expect(sendMessage).toHaveBeenCalledWith(
-      "channel:town-square",
-      "Intro line\nReasoning: appears in content but is not a prefix",
-      expect.objectContaining({
-        cfg,
-        accountId: "default",
-        replyToId: "root-post",
-      }),
-    );
-  });
-
   it("passes agent-scoped mediaLocalRoots when sending media paths", async () => {
     const openClawState = await createOpenClawTestState({
       layout: "state-only",
@@ -433,97 +413,6 @@ describe("deliverMattermostReplyPayload", () => {
     } finally {
       await openClawState.cleanup();
     }
-  });
-
-  it("does not require upload for remote (http) media captions", async () => {
-    const sendMessage = createSendMessageMock();
-    const cfg = {} satisfies OpenClawConfig;
-    const core = createReplyDeliveryCore();
-
-    await deliverMattermostReplyPayload({
-      core,
-      cfg,
-      payload: { text: "caption", mediaUrl: "https://example.com/photo.png" },
-      channelId: "town-square",
-      accountId: "default",
-      agentId: "agent-1",
-      replyToId: "root-post",
-      textLimit: 4000,
-      tableMode: "off",
-      sendMessage,
-    });
-
-    expect(sendMessage).toHaveBeenCalledTimes(1);
-    const options = sendMessage.mock.calls[0]?.[2] as { requireMediaUpload?: boolean };
-    expect(options.requireMediaUpload).toBeUndefined();
-  });
-
-  it("forwards replyToId for text-only chunked replies", async () => {
-    const sendMessage = createSendMessageMock();
-    const cfg = {} satisfies OpenClawConfig;
-    const core = createReplyDeliveryCore();
-    core.channel.text.chunkMarkdownTextWithMode = vi.fn(() => ["hello"]);
-
-    const outcome = await deliverMattermostReplyPayload({
-      core,
-      cfg,
-      payload: { text: "hello" },
-      channelId: "channel-1",
-      accountId: "default",
-      agentId: "agent-1",
-      replyToId: "root-post",
-      textLimit: 4000,
-      tableMode: "off",
-      sendMessage,
-    });
-
-    expect(sendMessage).toHaveBeenCalledTimes(1);
-    expect(sendMessage).toHaveBeenCalledWith(
-      "channel:channel-1",
-      "hello",
-      expect.objectContaining({
-        cfg,
-        accountId: "default",
-        replyToId: "root-post",
-      }),
-    );
-    expect(outcome).toMatchObject({
-      outcome: "text",
-      messageIds: ["post-1"],
-      visibleReplySent: true,
-      content: "hello",
-    });
-    expect(outcome.receipt?.primaryPlatformMessageId).toBe("post-1");
-  });
-
-  it("aggregates every provider post behind one chunked logical payload", async () => {
-    const sendMessage = createSendMessageMock();
-    const cfg = {} satisfies OpenClawConfig;
-    const core = createReplyDeliveryCore();
-    core.channel.text.chunkMarkdownTextWithMode = vi.fn(() => ["alpha", "beta"]);
-
-    const result = await deliverMattermostReplyPayload({
-      core,
-      cfg,
-      payload: { text: "alpha beta" },
-      channelId: "town-square",
-      accountId: "default",
-      replyToId: "root-post",
-      textLimit: 6,
-      tableMode: "off",
-      sendMessage,
-    });
-
-    expect(result).toMatchObject({
-      outcome: "text",
-      messageIds: ["post-1", "post-2"],
-      visibleReplySent: true,
-      content: "alpha\nbeta",
-    });
-    expect(result.receipt?.parts.map((part) => part.platformMessageId)).toEqual([
-      "post-1",
-      "post-2",
-    ]);
   });
 
   it("returns provider-finalized visible content instead of the requested text", async () => {

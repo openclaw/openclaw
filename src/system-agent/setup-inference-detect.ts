@@ -4,7 +4,7 @@ import { raceWithTimeout } from "../../packages/retry/src/index.js";
 import { normalizeOptionalAgentRuntimeId } from "../agents/agent-runtime-id.js";
 import { resolveAmbientOwnerAgentId } from "../agents/agent-scope-config.js";
 import { resolveAgentDir } from "../agents/agent-scope.js";
-import { loadAuthProfileStoreWithoutExternalProfiles } from "../agents/auth-profiles/store-runtime.js";
+import { loadAuthProfileStoreWithoutExternalProfilesAsync } from "../agents/auth-profiles/store-runtime.js";
 import { areRuntimeModelRefsEquivalent } from "../agents/model-runtime-aliases.js";
 import { resolveModelRuntimePolicy } from "../agents/model-runtime-policy.js";
 import { readUtilityModelSetting } from "../agents/utility-model-setting.js";
@@ -57,7 +57,7 @@ async function listSavedSetupInferenceCandidates(params: {
 }): Promise<SetupInferenceCandidate[]> {
   const { withSetupProviderAuthMethod } = await import("./setup-provider-method.js");
   const agentDir = resolveAgentDir(params.cfg, params.agentId);
-  const store = loadAuthProfileStoreWithoutExternalProfiles(agentDir);
+  const store = await loadAuthProfileStoreWithoutExternalProfilesAsync(agentDir);
   const candidates: SetupInferenceCandidate[] = [];
   for (const [profileId, credential] of Object.entries(store.profiles)) {
     params.signal.throwIfAborted();

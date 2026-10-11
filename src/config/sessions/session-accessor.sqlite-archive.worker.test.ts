@@ -35,6 +35,7 @@ import {
   waitForSessionTranscriptIndexReconcilesInStateDir,
   waitForSessionTranscriptProjection,
 } from "./session-transcript-reconcile.js";
+import { prepareTranscriptPayload } from "./transcript-payload.js";
 
 type TestEvent = { id: string; [key: string]: unknown };
 const event = (id: string, content = "archive me"): TestEvent => ({ type: "session", id, content });
@@ -587,7 +588,10 @@ describe("SQLite transcript archive worker", () => {
                 .values({
                   session_id: sessionId,
                   seq: 1,
-                  event_json: JSON.stringify(event("concurrent-event", "concurrent append")),
+                  ...prepareTranscriptPayload(
+                    transaction.db,
+                    JSON.stringify(event("concurrent-event", "concurrent append")),
+                  ),
                   created_at: Date.now(),
                 }),
             );

@@ -58,9 +58,9 @@ export const loadCodexAbortTranscriptTestFixture = () =>
 type CodexHarnessPromptSnapshot = {
   developerInstructions: string;
   parentLocalInstructions: string | null;
-  threadStartParams: ReturnType<typeof buildThreadStartParams>;
-  threadResumeParams: ReturnType<typeof buildThreadResumeParams>;
-  turnStartParams: ReturnType<typeof buildTurnStartParams>;
+  threadStartParams: Awaited<ReturnType<typeof buildThreadStartParams>>;
+  threadResumeParams: Awaited<ReturnType<typeof buildThreadResumeParams>>;
+  turnStartParams: Awaited<ReturnType<typeof buildTurnStartParams>>;
 };
 
 /** Resolves deterministic app-server options for prompt snapshot tests. */
@@ -75,7 +75,7 @@ export function resolveCodexPromptSnapshotAppServerOptions(
 }
 
 /** Builds thread/resume/turn prompt payload snapshots for a Codex harness attempt. */
-export function buildCodexHarnessPromptSnapshot(params: {
+export async function buildCodexHarnessPromptSnapshot(params: {
   attempt: EmbeddedRunAttemptParams;
   cwd: string;
   threadId: string;
@@ -85,7 +85,7 @@ export function buildCodexHarnessPromptSnapshot(params: {
   promptText?: string;
   developerInstructionAdditions?: string;
   personaInstructions?: string;
-}): CodexHarnessPromptSnapshot {
+}): Promise<CodexHarnessPromptSnapshot> {
   const developerInstructions = joinPresentSections(
     buildDeveloperInstructions(params.attempt, {
       dynamicTools: params.dynamicTools,
@@ -97,20 +97,20 @@ export function buildCodexHarnessPromptSnapshot(params: {
     parentLocalInstructions: buildCodexParentLocalInstructions(params.attempt, {
       personaInstructions: params.personaInstructions,
     }),
-    threadStartParams: buildThreadStartParams(params.attempt, {
+    threadStartParams: await buildThreadStartParams(params.attempt, {
       cwd: params.cwd,
       dynamicTools: params.dynamicTools,
       appServer: params.appServer,
       developerInstructions,
       config: params.config,
     }),
-    threadResumeParams: buildThreadResumeParams(params.attempt, {
+    threadResumeParams: await buildThreadResumeParams(params.attempt, {
       threadId: params.threadId,
       appServer: params.appServer,
       developerInstructions,
       config: params.config,
     }),
-    turnStartParams: buildTurnStartParams(params.attempt, {
+    turnStartParams: await buildTurnStartParams(params.attempt, {
       threadId: params.threadId,
       cwd: params.cwd,
       appServer: params.appServer,
