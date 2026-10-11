@@ -341,15 +341,23 @@ it("revokes personal source authority at commit before reply delivery without re
       }),
     ).toThrow("rollback connection");
     expect(() => bindGitHubPublicationSource(source)).not.toThrow();
+    const receipt = holdNextReceipt();
     const reply = holdNextReply("userGitHubConnections.mutate");
     const disconnected = mutateUserGitHubConnection(owner, { kind: "disconnect" }, () => {});
     try {
       await withinTest(
-        awaitGateBeforeSettlement(reply.ready, disconnected, "connection reply was not held"),
+        awaitGateBeforeSettlement(
+          Promise.all([receipt.ready, reply.ready]),
+          disconnected,
+          "connection receipt and reply were not held",
+        ),
         signal,
       );
+      // Receipt and reply use separate ports; deliver the real commit facts before asserting.
+      receipt.release();
       expect(() => bindGitHubPublicationSource(source)).toThrow("source authority changed");
     } finally {
+      receipt.release();
       reply.release();
       await disconnected;
     }

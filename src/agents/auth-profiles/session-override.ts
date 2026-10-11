@@ -13,7 +13,7 @@ import { resolveProviderModelRoutes } from "../../plugins/provider-model-routes.
 import { shouldPreserveUnavailableSessionAuthProfileOverride } from "../../sessions/auth-profile-preservation.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { isUserModelAuthProfileId } from "../../state/user-model-account-id.js";
-import { resolveUserProfileAuthLink } from "../../state/user-model-accounts.js";
+import { listUserProfileAuthLinksAsync } from "../../state/user-model-accounts.js";
 import { resolveNativeModelPrimary } from "../agent-scope.js";
 import {
   isConfiguredAwsSdkAuthProfileForProvider,
@@ -35,7 +35,10 @@ import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../openai-routing
 import { authProfilesLog } from "./constants.js";
 import { createSelectedAuthProfileUnavailableError } from "./selection-error.js";
 import { hasAnyAuthProfileStoreSourceAsync } from "./source-check.js";
-import { ensureAuthProfileStoreAsync } from "./store-runtime.js";
+import {
+  ensureAuthProfileStoreAsync,
+  loadAuthProfileStoreForRuntimeAsync,
+} from "./store-runtime.js";
 import type { AuthProfileStore } from "./types.js";
 
 // Read-only auth resolution must not import session persistence.
@@ -225,16 +228,16 @@ export async function resolveUserLinkedAuthProfile(params: {
   store?: AuthProfileStore;
 }): Promise<{ profileId: string; store: AuthProfileStore } | undefined> {
   const providers = uniqueProviders(params.provider, params.acceptedProviderIds);
-  const profileId = resolveUserProfileAuthLink({
-    profileId: params.requesterProfileId,
-    providers,
-  });
+  const links = await listUserProfileAuthLinksAsync(params.requesterProfileId);
+  const profileId = providers
+    .map((provider) => links.find((link) => link.provider === provider)?.authProfileId)
+    .find((id) => id !== undefined);
   if (!profileId) {
     return undefined;
   }
   const store =
     !params.store || isUserModelAuthProfileId(profileId)
-      ? await ensureAuthProfileStoreAsync(params.agentDir, {
+      ? await loadAuthProfileStoreForRuntimeAsync(params.agentDir, {
           allowKeychainPrompt: false,
           profileId,
         })

@@ -3,8 +3,8 @@ import type { LoadedCronStore } from "./types.js";
 
 export type CronStoreWorkerOperations = {
   "cron.loadMutable": {
-    input: { storeKey: string };
-    output: { repairCommits: number } & (
+    input: { storeKey?: string };
+    output: { storeKey: string; repairCommits: number } & (
       | { ok: true; loaded: LoadedCronStore }
       | { ok: false; error: Extract<SqliteWorkerReply, { ok: false }>["error"] }
     );

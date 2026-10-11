@@ -57,9 +57,9 @@ import {
 import { createSessionRepositoryWorkspaceStore } from "./session-repository-workspaces.js";
 
 // Two retained actors, one scoped peer, and shared-state cleanup fit four broker slots.
-vi.mock("node:os", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("node:os")>()),
-  availableParallelism: () => 32,
+vi.mock("../infra/worker-pool-sizing.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/worker-pool-sizing.js")>()),
+  resolveSqliteBrokerWorkerCount: () => 4,
 }));
 
 const probe = useIncognitoActorProbe();

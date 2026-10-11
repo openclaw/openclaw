@@ -604,7 +604,7 @@ describe("cron service cross-tick admission", () => {
           queuedReloads += 1;
           if (queuedReloads === 2) {
             skippedJob.enabled = false;
-            await saveCronStore(storePath, loaded.store);
+            await saveCronStore(store.storePath, loaded.store);
           }
         }
         return loaded;

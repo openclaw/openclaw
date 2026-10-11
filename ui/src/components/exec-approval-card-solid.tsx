@@ -74,7 +74,7 @@ function useApprovalClock(onTick?: (nowMs: number) => void) {
   return now;
 }
 
-export const ApprovalCountdown = defineSolidBridge<{ expiresAtMs: number; compact: boolean }>(
+defineSolidBridge<{ expiresAtMs: number; compact: boolean }>(
   "openclaw-approval-countdown",
   (props, host) => {
     host.style.display = "contents";
@@ -472,7 +472,7 @@ export const ExecApprovalCard = defineSolidBridge<{ props?: ExecApprovalCardProp
   },
   { properties: { props: { default: undefined, attribute: false } } },
 );
-export const SidebarApprovalRow = defineSolidBridge<{ props?: SidebarApprovalRowProps }>(
+defineSolidBridge<{ props?: SidebarApprovalRowProps }>(
   "openclaw-sidebar-approval-row",
   (props, host) => {
     host.style.display = "contents";

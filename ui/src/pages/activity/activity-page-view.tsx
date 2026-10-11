@@ -1,4 +1,3 @@
-import type { RouteLocation } from "@openclaw/uirouter";
 import {
   createEffect,
   createMemo,
@@ -23,14 +22,13 @@ import {
   presenceViewerLastActivity,
   projectPresencePayload,
 } from "../../lib/presence-users.ts";
-import { useApplication } from "../../lib/reactive/context.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import {
   isUiGlobalScopeConfigured,
   resolveUiConfiguredMainKey,
   resolveUiDefaultAgentId,
 } from "../../lib/sessions/session-key.ts";
-import { defineSolidBridge, LitContent } from "../../lit/solid-bridge.ts";
+import { LitContent } from "../../lit/solid-bridge.ts";
 import { ActivityPageController } from "./activity-page-controller.ts";
 import { renderCurrentWork as CurrentWork } from "./current-work-view.tsx";
 import { renderRunInspector as RunInspector } from "./run-inspector-view.tsx";
@@ -345,25 +343,3 @@ export function ActivityPageView(props: {
     </Show>
   );
 }
-
-export const ActivityPage = defineSolidBridge<{
-  routeLocation?: RouteLocation;
-}>(
-  "openclaw-activity-page",
-  (props, host) => {
-    const context = useApplication();
-    const [revision, setRevision] = createSignal(0);
-    const controller = new ActivityPageController(() => setRevision((value) => value + 1));
-    createEffect(
-      () => context,
-      (value) => controller.connect(value),
-    );
-    createEffect(
-      () => props.routeLocation,
-      (location) => controller.setRouteLocation(location),
-    );
-    onCleanup(() => controller.dispose());
-    return <ActivityPageView controller={controller} revision={revision} host={host} />;
-  },
-  { properties: { routeLocation: { default: undefined, attribute: false } } },
-);

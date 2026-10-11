@@ -407,12 +407,18 @@ export function createReplyDispatcher(
     };
     try {
       if (beforeDeliver) {
+        const originalText = payload.text;
         let deliverPayload: ReplyPayload | null;
         try {
           deliverPayload = await beforeDeliver(payload, info);
         } catch (error) {
           await notifyBeforeDeliverCancelled(payload, info);
           throw error;
+        }
+        // Rewritten text is a new snapshot, not a continuation of the old preview.
+        if (deliverPayload?.textMode === "delta" && deliverPayload.text !== originalText) {
+          const { textMode: _textMode, ...snapshot } = deliverPayload;
+          deliverPayload = snapshot;
         }
         deliveryInput = deliverPayload
           ? replaceDispatchPayload(input, copyReplyPayloadMetadata(payload, deliverPayload))
