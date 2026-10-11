@@ -1,7 +1,6 @@
 import type { BoardGetParams } from "@openclaw/gateway-protocol";
 import { Show, createEffect, createMemo, createSignal, onCleanup, untrack } from "solid-js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
-import { ensureCustomElementDefined } from "../app/lazy-custom-element.ts";
 import { Icon } from "../components/solid/icon.tsx";
 import {
   acquireBoardProviderForSession,
@@ -27,6 +26,8 @@ function PluginSessionDashboardContent(props: PluginSessionDashboardProps) {
   const [expanded, setExpanded] = createSignal(false);
   const [activeTabId, setActiveTabId] = createSignal("");
   const [viewError, setViewError] = createSignal<string | null>(null);
+  const [boardView, setBoardView] =
+    createSignal<typeof import("../components/board/board-view.tsx").BoardView>();
   const [viewAttempt, setViewAttempt] = createSignal(0);
   const [expansionInitialized, setExpansionInitialized] = createSignal(false);
   const scope = createMemo(
@@ -114,14 +115,17 @@ function PluginSessionDashboardContent(props: PluginSessionDashboardProps) {
   createEffect(viewAttempt, () => {
     let current = true;
     setViewError(null);
-    void ensureCustomElementDefined(
-      "openclaw-board-view",
-      () => import("../components/board/board-view.ts"),
-    ).catch((error: unknown) => {
-      if (current) {
-        setViewError(error instanceof Error ? error.message : String(error));
-      }
-    });
+    void import("../components/board/board-view.tsx")
+      .then((module) => {
+        if (current) {
+          setBoardView(() => module.BoardView);
+        }
+      })
+      .catch((error: unknown) => {
+        if (current) {
+          setViewError(error instanceof Error ? error.message : String(error));
+        }
+      });
     return () => {
       current = false;
     };
@@ -167,18 +171,22 @@ function PluginSessionDashboardContent(props: PluginSessionDashboardProps) {
             fallback={<p class="plugin-session-dashboard__empty">{t("pluginUi.dashboardEmpty")}</p>}
           >
             {(current) => (
-              <openclaw-board-view
-                prop:active={expanded() && props.presented}
-                prop:session={current().session}
-                prop:snapshot={current().snapshot}
-                prop:activeTabId={activeTabId()}
-                prop:widgetFrameUrl={(name: string, revision: number) =>
-                  current().lease.provider.widgetFrameUrl(name, revision)
-                }
-                prop:callbacks={current().callbacks}
-                prop:canMutate={props.canMutate}
-                prop:canGrant={props.canGrant}
-              />
+              <Show when={boardView()} keyed>
+                {(BoardView) => (
+                  <BoardView
+                    active={expanded() && props.presented}
+                    session={current().session}
+                    snapshot={current().snapshot}
+                    activeTabId={activeTabId()}
+                    widgetFrameUrl={(name: string, revision: number) =>
+                      current().lease.provider.widgetFrameUrl(name, revision)
+                    }
+                    callbacks={current().callbacks}
+                    canMutate={props.canMutate}
+                    canGrant={props.canGrant}
+                  />
+                )}
+              </Show>
             )}
           </Show>
         )}

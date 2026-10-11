@@ -41,6 +41,7 @@ class SurfaceTestHost extends LitElement {
     const defaultView = html`<button class="builtin-action" @click=${increment}>
         Built-in action
       </button>
+      <input class="builtin-input" aria-label="Built-in input" />
       ${this.navigation}`;
     if (this.surface === "composer") {
       return renderPluginSurface(
@@ -442,6 +443,15 @@ describe("native UI built-in delegation", () => {
     host.querySelector<HTMLButtonElement>(".builtin-action")!.click();
     expect(host.count).toBe(4);
     expect(reportError).toHaveBeenCalledWith("review", failure);
+    const input = host.querySelector<HTMLInputElement>(".builtin-input")!;
+    input.value = "Unsent input";
+    input.focus();
+    host.requestUpdate();
+    await host.updateComplete;
+    await host.querySelector("openclaw-plugin-view")!.updateComplete;
+    expect(host.querySelector(".builtin-input")).toBe(input);
+    expect(input.value).toBe("Unsent input");
+    expect(document.activeElement).toBe(input);
     host.remove();
     await Promise.resolve();
     expect(listeners.size).toBe(0);
@@ -497,6 +507,7 @@ describe("native UI built-in delegation", () => {
   it("gives append-only views fresh roots across replacement, session changes, and reconnection", async () => {
     const roots: HTMLElement[] = [];
     const signals: AbortSignal[] = [];
+    const mountedViews: ControlUiViewContext<ControlUiSurfaceProps["workspace"]>[] = [];
     const replacement: ControlUiReplacement<"workspace"> = {
       id: "append-only",
       label: "Append-only workspace",
@@ -504,10 +515,11 @@ describe("native UI built-in delegation", () => {
       mount(container, context) {
         roots.push(container);
         signals.push(context.signal);
+        mountedViews.push(context);
         container.append(document.createTextNode("Plugin content"));
       },
     };
-    const { host, provider, listeners, select } = mountSurface(replacement);
+    const { host, provider, listeners, select, request } = mountSurface(replacement);
     let presented = true;
     host.presentation = { owner: host, isPresented: () => presented };
     await vi.waitFor(() => expect(roots).toHaveLength(1));
@@ -524,7 +536,15 @@ describe("native UI built-in delegation", () => {
     expect(signals[1]?.aborted).toBe(true);
     expect(host.textContent).toBe("Plugin content");
 
+    const navigationParent = host.navigation.parentNode;
+    const defaultTarget = document.createElement("div");
     host.remove();
+    expect(() => mountedViews[2]!.mountDefault(defaultTarget)).toThrow("view has ended");
+    expect(defaultTarget.childNodes).toHaveLength(0);
+    expect(host.navigation.parentNode).toBe(navigationParent);
+    const detachedRequest = mountedViews[2]!.host.request("fixture.detached-view");
+    expect(request).not.toHaveBeenCalled();
+    await expect(detachedRequest).rejects.toThrow("view has ended");
     await Promise.resolve();
     expect(signals[2]?.aborted).toBe(true);
     expect(listeners.size).toBe(0);

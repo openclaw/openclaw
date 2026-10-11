@@ -5,10 +5,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SIDEBAR_SESSION_ROSTER_LIMIT } from "../../../../src/shared/session-list-limits.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import {
-  DASHBOARD_DOCUMENT_ELEMENT,
-  ensureCustomElementDefined,
-} from "../../app/lazy-custom-element.ts";
 import { i18n } from "../../i18n/index.ts";
 import type { SessionListOptions, SessionListSnapshot } from "../../lib/sessions/index.ts";
 import { createTestSessionCapability } from "../../lib/sessions/session-capability.test-support.ts";
@@ -104,23 +100,23 @@ async function settleDashboardPreviews(element: DashboardsPageElement, runFrame:
   const previews = element.querySelectorAll<HTMLElement>("openclaw-dashboard-preview");
   expect(previews.length).toBeGreaterThan(0);
   for (const preview of previews) {
-    await waitForSolid(() => {
-      const board = preview.querySelector("openclaw-board-document");
-      expect(board).not.toBeNull();
-      const view = board?.querySelector("openclaw-board-view");
-      expect(view, board?.textContent ?? "").not.toBeNull();
-      expect(view?.querySelector('[data-test-id="board-empty"]')).not.toBeNull();
-    });
+    // The first visible preview also waits for the lazy board module to load.
+    await waitForSolid(
+      () => {
+        const board = preview.querySelector("openclaw-board-document");
+        expect(board, preview.textContent ?? "").not.toBeNull();
+        const view = board?.querySelector("openclaw-board-view");
+        expect(view, board?.textContent ?? "").not.toBeNull();
+        expect(view?.querySelector('[data-test-id="board-empty"]')).not.toBeNull();
+      },
+      { timeout: 10_000 },
+    );
   }
 }
 
 describe("DashboardsPage", () => {
   beforeEach(async () => {
     await i18n.setLocale("en");
-    await ensureCustomElementDefined(
-      DASHBOARD_DOCUMENT_ELEMENT.tagName,
-      DASHBOARD_DOCUMENT_ELEMENT.loadModule,
-    );
   });
 
   afterEach(() => {
@@ -194,7 +190,7 @@ describe("DashboardsPage", () => {
 
     selectionState.scopeId = "writer";
     selectionListeners.forEach((listener) => listener());
-    await vi.waitFor(() => expect(refreshList).toHaveBeenCalledTimes(1));
+    await waitForSolid(() => expect(refreshList).toHaveBeenCalledTimes(1));
     expect(refreshList).toHaveBeenCalledWith({
       limit: SIDEBAR_SESSION_ROSTER_LIMIT,
       rowMode: "compact",
@@ -229,7 +225,7 @@ describe("DashboardsPage", () => {
       loading: false,
       error: null,
     });
-    await vi.waitFor(() => expect(element.textContent).toContain("Writer dashboard"));
+    await waitForSolid(() => expect(element.textContent).toContain("Writer dashboard"));
     await settleDashboardPreviews(element, runFrame);
     retiredListener({
       result: result(row("agent:main:retired", "Retired")),
@@ -333,7 +329,7 @@ describe("DashboardsPage", () => {
       });
       const element = mounted.container;
       try {
-        await vi.waitFor(() => expect(requests).toHaveLength(2));
+        await waitForSolid(() => expect(requests).toHaveLength(2));
         if (retired) {
           source.publish({ ...source.gateway.snapshot, phase: "reconnecting", client: null });
           resolvePage(page([secondRow], 1, false));
@@ -342,7 +338,7 @@ describe("DashboardsPage", () => {
           expect(element.textContent).not.toContain("Old dashboard");
           return;
         }
-        await vi.waitFor(() =>
+        await waitForSolid(() =>
           expect(element.querySelectorAll("[data-dashboard-session]")).toHaveLength(2),
         );
         await settleDashboardPreviews(element, runFrame);

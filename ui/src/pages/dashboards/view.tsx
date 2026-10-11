@@ -77,7 +77,6 @@ function DashboardCard(props: {
   row: DashboardRow;
   handlers: DashboardGalleryHandlers;
   gatewaySnapshot?: ApplicationGatewaySnapshot;
-  previewError?: string | null;
 }) {
   const target = createMemo(() =>
     isSessionKeyAddressable(props.row.key, props.data.globalScope)
@@ -116,7 +115,6 @@ function DashboardCard(props: {
             gatewaySnapshot={props.gatewaySnapshot}
             sessionKey={props.row.key}
             agentId={props.row.agentId}
-            error={props.previewError ?? null}
           />
         </div>
         <div class="dashboard-card__body">
@@ -158,7 +156,6 @@ function DashboardList(props: {
   filters: DashboardGalleryFilters;
   handlers: DashboardGalleryHandlers;
   gatewaySnapshot?: ApplicationGatewaySnapshot;
-  previewError?: string | null;
 }) {
   const rows = createMemo(() => props.data.result?.sessions ?? []);
   const owners = createMemo(() =>
@@ -219,8 +216,9 @@ function DashboardList(props: {
                 value={props.filters.sort}
                 onChange={(event) => {
                   const sort = event.currentTarget.value;
-                  if (sort === "updated" || sort === "title")
+                  if (sort === "updated" || sort === "title") {
                     props.handlers.onFilterChange({ sort });
+                  }
                 }}
               >
                 <option value="updated">{t("dashboardsPage.sortUpdated")}</option>
@@ -251,7 +249,6 @@ function DashboardList(props: {
                     row={row()}
                     handlers={props.handlers}
                     gatewaySnapshot={props.gatewaySnapshot}
-                    previewError={props.previewError}
                   />
                 )}
               </For>
@@ -313,7 +310,6 @@ export function DashboardsView(props: {
   filters: DashboardGalleryFilters;
   handlers: DashboardGalleryHandlers;
   gatewaySnapshot?: ApplicationGatewaySnapshot;
-  previewError?: string | null;
 }) {
   return (
     <>
@@ -354,7 +350,6 @@ export function DashboardsView(props: {
                 filters={props.filters}
                 handlers={props.handlers}
                 gatewaySnapshot={props.gatewaySnapshot}
-                previewError={props.previewError}
               />
             </>
           )}

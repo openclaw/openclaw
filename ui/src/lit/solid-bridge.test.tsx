@@ -342,7 +342,7 @@ it("releases a disconnected Solid root while the custom element itself is retain
 });
 
 it("publishes Solid layout traits through a connected Lit shell and releases them", async () => {
-  const Layout = defineSolidBridge<{ wide: boolean }>(
+  defineSolidBridge<{ wide: boolean }>(
     "openclaw-solid-layout-test",
     (props) => (
       <ShellLayoutBoundary traits={{ toolbarHeader: true, settingsWide: props.wide }}>
@@ -351,7 +351,6 @@ it("publishes Solid layout traits through a connected Lit shell and releases the
     ),
     { properties: { wide: { default: true, type: Boolean } } },
   );
-  void Layout;
   const content = document.createElement("main");
   content.className = "content";
   const owner = new ShellLayoutOwner();

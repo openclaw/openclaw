@@ -1,5 +1,5 @@
 import { createEffect, createMemo, createSignal, Match, onCleanup, Show, Switch } from "solid-js";
-import { registerShellLayoutTraits } from "../../app/shell-layout-traits.ts";
+import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
 import { isStaleChunkImportError } from "../../app/stale-chunk-reload.ts";
 import { LazyViewError } from "../../components/solid/lazy-view-error.tsx";
 import { LoadingState } from "../../components/solid/loading-state.tsx";
@@ -97,10 +97,6 @@ function PluginPageContent(props: PluginPageProps, host: HTMLElement) {
       ? t("pluginTabs.unavailableSubtitle")
       : (context.plugins?.errors.find((entry) => entry.pluginId === props.pluginId)?.message ??
         t("pluginTabs.unavailableSubtitle"));
-  createEffect(
-    () => view().mode === "frame",
-    (visible) => (visible ? registerShellLayoutTraits(host, { pluginEmbed: true }) : undefined),
-  );
   return (
     <Switch>
       <Match when={view().mode === "native"}>
@@ -141,23 +137,25 @@ function PluginPageContent(props: PluginPageProps, host: HTMLElement) {
         </section>
       </Match>
       <Match when={view().mode === "frame"}>
-        <section class="plugin-tab-embed">
-          <Show when={view().generation} keyed>
-            {(_generation) => {
-              onCleanup(() => lifecycle.syncPluginThemeFrame(null));
-              return (
-                <iframe
-                  class="plugin-tab-embed__frame"
-                  src={view().info?.path}
-                  title={view().info?.label}
-                  sandbox={resolveEmbedSandbox(context.config.current.embedSandboxMode)}
-                  ref={(frame) => lifecycle.syncPluginThemeFrame(frame)}
-                  onLoad={lifecycle.handlePluginThemeLoad}
-                />
-              );
-            }}
-          </Show>
-        </section>
+        <ShellLayoutBoundary traits={{ pluginEmbed: true }}>
+          <section class="plugin-tab-embed">
+            <Show when={view().generation} keyed>
+              {(_generation) => {
+                onCleanup(() => lifecycle.syncPluginThemeFrame(null));
+                return (
+                  <iframe
+                    class="plugin-tab-embed__frame"
+                    src={view().info?.path}
+                    title={view().info?.label}
+                    sandbox={resolveEmbedSandbox(context.config.current.embedSandboxMode)}
+                    ref={(frame) => lifecycle.syncPluginThemeFrame(frame)}
+                    onLoad={lifecycle.handlePluginThemeLoad}
+                  />
+                );
+              }}
+            </Show>
+          </section>
+        </ShellLayoutBoundary>
       </Match>
       <Match when={view().mode === "loading"}>
         <LoadingState />

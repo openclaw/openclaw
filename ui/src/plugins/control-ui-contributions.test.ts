@@ -92,6 +92,25 @@ it("renders customization inline and retains pending reload state", async () => 
     if (!select) {
       throw new Error("Missing replacement selector");
     }
+    plugins.selectReplacement("composer", replacement.key);
+    await vi.waitFor(() => expect(select.value).toBe(replacement.key));
+    plugins.selectReplacement("composer", null);
+    await vi.waitFor(() => expect(select.value).toBe(""));
+
+    plugins.errors = [];
+    listeners.forEach((listener) => listener());
+    await vi.waitFor(() => expect(manager.querySelector('[role="status"]')).toBeNull());
+    plugins.errors = [{ pluginId: "custom-review", message: "Synthetic activation failure" }];
+    listeners.forEach((listener) => listener());
+    await vi.waitFor(() =>
+      expect(manager.querySelector('[role="alert"]')?.textContent).toContain(
+        "Synthetic activation failure",
+      ),
+    );
+    plugins.errors = [];
+    listeners.forEach((listener) => listener());
+    await vi.waitFor(() => expect(manager.querySelector('[role="alert"]')).toBeNull());
+
     select.value = replacement.key;
     select.dispatchEvent(new Event("change", { bubbles: true }));
     expect(plugins.selectReplacement).toHaveBeenLastCalledWith("composer", replacement.key);
@@ -461,12 +480,12 @@ describe("native plugin session actions", () => {
     await element.updateComplete;
 
     element.remove();
-    expect(invocation.signal.aborted).toBe(true);
-    await expect(invocation.host.request("fixture.retired-action")).rejects.toThrow(
-      "view has ended",
-    );
+    const retiredRequest = invocation.host.request("fixture.retired-action");
     expect(
       request.mock.calls.filter(([method]) => method === "fixture.retired-action"),
     ).toHaveLength(0);
+    await expect(retiredRequest).rejects.toThrow("view has ended");
+    await Promise.resolve();
+    expect(invocation.signal.aborted).toBe(true);
   });
 });

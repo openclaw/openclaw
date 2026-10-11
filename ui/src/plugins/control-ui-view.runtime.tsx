@@ -14,7 +14,6 @@ import { defineSolidBridge, type SolidBridgeElement } from "../lit/solid-bridge.
 import type { ControlUiRegistration } from "./control-ui-capability.ts";
 import { scopeControlUiHost } from "./control-ui-scope.ts";
 import type { ViewKind } from "./control-ui-view.ts";
-
 import "./control-ui-contributions.solid.tsx";
 
 type ViewRegistration = ControlUiRegistration<{ mount: ControlUiView<unknown> }>;
@@ -70,9 +69,9 @@ function MountedContent(props: { value: unknown; host?: object }) {
     () => ({ value: props.value, host: props.host }),
     ({ value, host }) => {
       renderLit(value, container, { host });
-      return () => renderLit(nothing, container);
     },
   );
+  onCleanup(() => renderLit(nothing, container));
   return (
     <div
       style={{ display: "contents" }}
@@ -240,6 +239,10 @@ function PluginViewContent(props: PluginViewProps, host: PluginViewElement) {
       ];
     },
     () => {
+      // The Lit caller may already have restored its nodes before this queued effect runs.
+      if (!host.isConnected) {
+        return;
+      }
       const next = resolveRegistration();
       if (
         registration?.value !== next?.value ||
@@ -256,7 +259,7 @@ function PluginViewContent(props: PluginViewProps, host: PluginViewElement) {
     },
   );
   const mount = (container: HTMLElement) => {
-    if (disposed || !registration || registration.signal.aborted || error) {
+    if (!host.isConnected || disposed || !registration || registration.signal.aborted || error) {
       return;
     }
     const abort = new AbortController();
@@ -271,12 +274,12 @@ function PluginViewContent(props: PluginViewProps, host: PluginViewElement) {
     );
     try {
       viewContext = {
-        host: scopeControlUiHost(registration.host, abort.signal),
+        host: scopeControlUiHost(registration.host, abort.signal, () => host.isConnected),
         signal: abort.signal,
         props: scopedProps(abort.signal),
         presented: host.presented,
         mountDefault: (target) => {
-          if (abort.signal.aborted) {
+          if (!host.isConnected || abort.signal.aborted) {
             throw new Error("This plugin UI view has ended.");
           }
           defaultContainers.add(target);

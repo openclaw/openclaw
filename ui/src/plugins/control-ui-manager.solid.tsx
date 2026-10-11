@@ -20,106 +20,104 @@ function PluginManagerContent(_props: object, host: HTMLElement) {
   const surfaces = () => [...new Set(replacements().map((entry) => entry.value.surface))];
   return (
     <Show when={source.read()}>
-      {(runtime) => (
-        <Show
-          when={
-            replacements().length ||
-            runtime().errors.length ||
-            (runtime().hasPlugins && runtime().canReload)
-          }
-        >
-          <SettingsSection title={t("pluginUi.customize")} carapace>
-            <SettingsRow
-              title={t("pluginUi.selectionScope")}
-              carapace
-              stackedOnNarrow
-              control={
-                <>
-                  <Show when={runtime().canReload}>
-                    <button
-                      class="btn btn--sm oc-action oc-action-secondary"
-                      type="button"
-                      disabled={reloading()}
-                      onClick={async () => {
-                        setReloading(true);
-                        setReloadError("");
-                        try {
-                          await runtime().reload();
-                        } catch (error) {
-                          setReloadError(error instanceof Error ? error.message : String(error));
-                        } finally {
-                          setReloading(false);
-                        }
-                      }}
-                    >
-                      {t("pluginUi.reload")}
-                    </button>
-                  </Show>
+      <Show
+        when={
+          replacements().length ||
+          source.read()?.errors.length ||
+          (source.read()?.hasPlugins && source.read()?.canReload)
+        }
+      >
+        <SettingsSection title={t("pluginUi.customize")} carapace>
+          <SettingsRow
+            title={t("pluginUi.selectionScope")}
+            carapace
+            stackedOnNarrow
+            control={
+              <>
+                <Show when={source.read()?.canReload}>
                   <button
                     class="btn btn--sm oc-action oc-action-secondary"
                     type="button"
-                    onClick={() => void runtime().refresh()}
-                  >
-                    {t("common.retry")}
-                  </button>
-                </>
-              }
-            />
-            <For each={surfaces()}>
-              {(surface) => (
-                <SettingsRow
-                  title={t(`pluginUi.surface.${surface}`)}
-                  carapace
-                  stackedOnNarrow
-                  control={
-                    <select
-                      class="settings-select oc-select"
-                      aria-label={t(`pluginUi.surface.${surface}`)}
-                      value={runtime().selectedReplacement(surface)?.key ?? ""}
-                      onChange={(event) =>
-                        runtime().selectReplacement(surface, event.currentTarget.value || null)
+                    disabled={reloading()}
+                    onClick={async () => {
+                      setReloading(true);
+                      setReloadError("");
+                      try {
+                        await source.read()?.reload();
+                      } catch (error) {
+                        setReloadError(error instanceof Error ? error.message : String(error));
+                      } finally {
+                        setReloading(false);
                       }
+                    }}
+                  >
+                    {t("pluginUi.reload")}
+                  </button>
+                </Show>
+                <button
+                  class="btn btn--sm oc-action oc-action-secondary"
+                  type="button"
+                  onClick={() => void source.read()?.refresh()}
+                >
+                  {t("common.retry")}
+                </button>
+              </>
+            }
+          />
+          <For each={surfaces()}>
+            {(surface) => (
+              <SettingsRow
+                title={t(`pluginUi.surface.${surface}`)}
+                carapace
+                stackedOnNarrow
+                control={
+                  <select
+                    class="settings-select oc-select"
+                    aria-label={t(`pluginUi.surface.${surface}`)}
+                    value={source.read()?.selectedReplacement(surface)?.key ?? ""}
+                    onChange={(event) =>
+                      source.read()?.selectReplacement(surface, event.currentTarget.value || null)
+                    }
+                  >
+                    <option value="">{t("pluginUi.builtin")}</option>
+                    <For
+                      each={replacements().filter((entry) => entry.value.surface === surface)}
+                      keyed={(entry) => entry.key}
                     >
-                      <option value="">{t("pluginUi.builtin")}</option>
-                      <For
-                        each={replacements().filter((entry) => entry.value.surface === surface)}
-                        keyed={(entry) => entry.key}
-                      >
-                        {(entry) => (
-                          <option value={entry().key}>
-                            {entry().value.label} ({entry().pluginId})
-                          </option>
-                        )}
-                      </For>
-                    </select>
-                  }
-                />
-              )}
-            </For>
-            <For each={runtime().errors} keyed={(entry) => entry.pluginId}>
-              {(entry) => (
-                <SettingsRow
-                  title={entry().pluginId}
-                  carapace
-                  stacked
-                  role={entry().code === "custom-plugin-ui-disabled" ? "status" : "alert"}
-                  control={
-                    <Show
-                      when={entry().code === "custom-plugin-ui-disabled"}
-                      fallback={<span>{entry().message}</span>}
-                    >
-                      <CustomPluginUiDisabled context={context} pluginId={entry().pluginId} />
-                    </Show>
-                  }
-                />
-              )}
-            </For>
-            <Show when={reloadError()}>
-              <SettingsRow title={reloadError()} role="alert" carapace />
-            </Show>
-          </SettingsSection>
-        </Show>
-      )}
+                      {(entry) => (
+                        <option value={entry().key}>
+                          {entry().value.label} ({entry().pluginId})
+                        </option>
+                      )}
+                    </For>
+                  </select>
+                }
+              />
+            )}
+          </For>
+          <For each={source.read()?.errors} keyed={(entry) => entry.pluginId}>
+            {(entry) => (
+              <SettingsRow
+                title={entry().pluginId}
+                carapace
+                stacked
+                role={entry().code === "custom-plugin-ui-disabled" ? "status" : "alert"}
+                control={
+                  <Show
+                    when={entry().code === "custom-plugin-ui-disabled"}
+                    fallback={<span>{entry().message}</span>}
+                  >
+                    <CustomPluginUiDisabled context={context} pluginId={entry().pluginId} />
+                  </Show>
+                }
+              />
+            )}
+          </For>
+          <Show when={reloadError()}>
+            <SettingsRow title={reloadError()} role="alert" carapace />
+          </Show>
+        </SettingsSection>
+      </Show>
     </Show>
   );
 }

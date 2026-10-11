@@ -3,7 +3,7 @@ import {
   type BoardGetParams,
   type BoardSnapshot,
 } from "@openclaw/gateway-protocol";
-import { createEffect, createMemo, createSignal, onCleanup, Show } from "solid-js";
+import { createEffect, createMemo, createSignal, onCleanup, Show, untrack } from "solid-js";
 import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { hasOperatorApprovalsAccess, hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import { t } from "../../i18n/index.ts";
@@ -25,7 +25,7 @@ import { defineSolidBridge, type SolidBridgeElement } from "../../lit/solid-brid
 import { Icon } from "../solid/icon.tsx";
 import { PanelLoadingSkeleton } from "../solid/panel-loading-skeleton.tsx";
 import "../../styles/board-document.css";
-import "./board-view.ts";
+import { BoardView } from "./board-view.tsx";
 
 type DashboardDocumentState =
   | "loading"
@@ -304,7 +304,7 @@ class BoardDocumentController {
 }
 
 function BoardDocumentContent(props: BoardDocumentProps) {
-  const [revision, setRevision] = createSignal(0);
+  const [revision, setRevision] = createSignal(0, { ownedWrite: true });
   const controller = new BoardDocumentController(props, () => setRevision((value) => value + 1));
   createEffect(
     () => ({
@@ -313,7 +313,7 @@ function BoardDocumentContent(props: BoardDocumentProps) {
       sessionKey: props.sessionKey,
       preparedSession: props.preparedSession,
     }),
-    () => controller.update(),
+    () => untrack(() => controller.update()),
   );
   onCleanup(() => controller.dispose());
   const state = createMemo(() => {
@@ -359,17 +359,17 @@ function BoardDocumentContent(props: BoardDocumentProps) {
         </Show>
         <Show when={state().kind === "ready" && state().board}>
           {(board) => (
-            <openclaw-board-view
-              prop:active={true}
-              prop:bridgeEnabled={!props.passive}
-              prop:fitAutoContent={true}
-              prop:session={board().session}
-              prop:snapshot={board().snapshot}
-              prop:activeTabId={board().activeTabId}
-              prop:widgetFrameUrl={board().widgetFrameUrl}
-              prop:callbacks={board().callbacks}
-              prop:canMutate={!props.passive && board().provider.canMutate}
-              prop:canGrant={!props.passive && board().provider.canGrant}
+            <BoardView
+              active={true}
+              bridgeEnabled={!props.passive}
+              fitAutoContent={true}
+              session={board().session}
+              snapshot={board().snapshot}
+              activeTabId={board().activeTabId}
+              widgetFrameUrl={board().widgetFrameUrl}
+              callbacks={board().callbacks}
+              canMutate={!props.passive && board().provider.canMutate}
+              canGrant={!props.passive && board().provider.canGrant}
             />
           )}
         </Show>

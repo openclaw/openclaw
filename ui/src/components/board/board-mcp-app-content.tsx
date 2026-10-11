@@ -1,5 +1,5 @@
 import type { JSX as SolidJSX } from "@solidjs/web";
-import { createEffect, createSignal, onCleanup, Show } from "solid-js";
+import { createEffect, createSignal, onCleanup, Show, untrack } from "solid-js";
 import { t } from "../../i18n/index.ts";
 import type { BoardWidget } from "../../lib/board/types.ts";
 import type { BoardWidgetAppViewState } from "../../lib/board/view-types.ts";
@@ -26,7 +26,7 @@ export function BoardMcpAppContent(props: {
 }) {
   let element: RetiringAppView | undefined;
   let generation = 0;
-  const [presented, setPresented] = createSignal<ReadyAppView>();
+  const [presented, setPresented] = createSignal<ReadyAppView>(undefined, { ownedWrite: true });
   createEffect(
     () => {
       const view = props.appView;
@@ -48,14 +48,14 @@ export function BoardMcpAppContent(props: {
         void retirement.then(() => {
           if (current === generation) {
             setPresented(undefined);
-            props.retired?.();
+            untrack(() => props.retired?.());
           } else {
             element?.restartAfterTeardown?.();
           }
         });
       } else {
         setPresented(undefined);
-        props.retired?.();
+        untrack(() => props.retired?.());
       }
     },
   );
@@ -85,7 +85,7 @@ export function BoardMcpAppContent(props: {
                   class="btn btn--small btn--primary"
                   type="button"
                   disabled={props.loading}
-                  onClick={props.retry}
+                  onClick={() => props.retry()}
                 >
                   {t("board.widget.retry")}
                 </button>
@@ -93,7 +93,7 @@ export function BoardMcpAppContent(props: {
                   class="btn btn--small"
                   type="button"
                   disabled={props.busy}
-                  onClick={props.remove}
+                  onClick={() => props.remove()}
                 >
                   {t("board.widget.remove")}
                 </button>
@@ -113,7 +113,7 @@ export function BoardMcpAppContent(props: {
             prop:fillContainer={true}
             prop:surface="board"
             prop:title={props.widget.title || props.widget.name}
-            onOpenclaw-mcp-app-view-expired={props.expired}
+            onOpenclaw-mcp-app-view-expired={() => props.expired()}
           />
         )}
       </Show>

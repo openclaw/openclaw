@@ -1,8 +1,12 @@
-import type { BoardGetParams } from "@openclaw/gateway-protocol";
-import { createSignal, onSettled, Show } from "solid-js";
+import { createSignal, Errored, lazy, Loading, onSettled, Show } from "solid-js";
 import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { NearViewportObserver } from "../../components/near-viewport-observer.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import { t } from "../../lib/reactive/i18n.ts";
+
+const BoardDocument = lazy(() => import("../../components/board/board-document.tsx"), {
+  export: "OpenClawBoardDocument",
+});
 
 export type DashboardPreviewProps = {
   gatewaySnapshot?: ApplicationGatewaySnapshot;
@@ -14,10 +18,16 @@ export type DashboardPreviewProps = {
 export function DashboardPreviewContent(props: DashboardPreviewProps, host: HTMLElement) {
   const [nearVisible, setNearVisible] = createSignal(false);
   onSettled(() => {
-    const visibility = new NearViewportObserver(200, () => setNearVisible(visibility.nearVisible));
+    let active = true;
+    const visibility = new NearViewportObserver(200, () => {
+      if (active) {
+        setNearVisible(visibility.nearVisible);
+      }
+    });
     // Bounds before the first paint would activate every gallery preview at once.
     const frame = window.requestAnimationFrame(() => visibility.observe(host));
     return () => {
+      active = false;
       window.cancelAnimationFrame(frame);
       visibility.disconnect();
     };
@@ -32,24 +42,22 @@ export function DashboardPreviewContent(props: DashboardPreviewProps, host: HTML
           </div>
         }
       >
-        <openclaw-board-document
-          prop:passive={true}
-          prop:gatewaySnapshot={props.gatewaySnapshot}
-          prop:preparedSession={{ sessionKey: props.sessionKey ?? "", agentId: props.agentId }}
-        />
+        <Errored
+          fallback={(error) => (
+            <div class="dashboard-preview__error">
+              {t("dashboardDocument.loadFailed", { error: formatUiError(error()) })}
+            </div>
+          )}
+        >
+          <Loading>
+            <BoardDocument
+              passive={true}
+              gatewaySnapshot={props.gatewaySnapshot}
+              preparedSession={{ sessionKey: props.sessionKey ?? "", agentId: props.agentId }}
+            />
+          </Loading>
+        </Errored>
       </Show>
     </Show>
   );
-}
-
-declare module "@solidjs/web" {
-  namespace JSX {
-    interface IntrinsicElements {
-      "openclaw-board-document": JSX.HTMLAttributes<HTMLElement> & {
-        "prop:passive"?: boolean;
-        "prop:gatewaySnapshot"?: ApplicationGatewaySnapshot;
-        "prop:preparedSession"?: BoardGetParams;
-      };
-    }
-  }
 }

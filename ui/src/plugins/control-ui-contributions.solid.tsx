@@ -230,6 +230,7 @@ function PluginContributionsContent(props: ContributionsProps, host: Contributio
                           agentId: host.agentId,
                           session: currentSession(),
                           signal: current.signal,
+                          isCurrent: () => host.isConnected && host.presented,
                         });
                       } catch (error) {
                         if (!current.signal.aborted) {

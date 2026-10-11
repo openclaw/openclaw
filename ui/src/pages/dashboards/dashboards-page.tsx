@@ -1,9 +1,4 @@
-import { createEffect, createMemo, createSignal, onSettled } from "solid-js";
-import {
-  DASHBOARD_DOCUMENT_ELEMENT,
-  ensureCustomElementDefined,
-} from "../../app/lazy-custom-element.ts";
-import { formatUiError } from "../../lib/format-error.ts";
+import { createEffect, createMemo, createSignal, untrack } from "solid-js";
 import { projectAgentSelection, projectGateway } from "../../lib/reactive/application.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { projectSessionList } from "../../lib/reactive/domain-capabilities.ts";
@@ -20,8 +15,7 @@ export function DashboardsPage(props: DashboardsPageProps) {
     ownerId: "",
     sort: "updated",
   });
-  const [previewError, setPreviewError] = createSignal<string | null>(null);
-  const [data, setData] = createSignal(() => props.routeData);
+  const [data, setData] = createSignal(() => props.routeData, { ownedWrite: true });
   const gateway = projectGateway(context.gateway);
 
   const selection = projectAgentSelection(context.agentSelection);
@@ -29,40 +23,36 @@ export function DashboardsPage(props: DashboardsPageProps) {
   const query = createMemo(() => dashboardSessionListQuery(scopeId()));
   const list = createMemo(() => projectSessionList({ sessions: context.sessions, scope: query() }));
   createEffect(
-    () => ({ snapshot: list().read(), query: query() }),
-    ({ snapshot, query: scope }) => {
-      if (snapshot.result || snapshot.error || !data()?.result) {
-        setData(dashboardsRouteData(context, snapshot));
-      }
-      if (snapshot.result?.hasMore && !snapshot.loading && !snapshot.error) {
-        void context.sessions.refreshList({
-          ...scope,
-          append: true,
-          offset: snapshot.result.nextOffset ?? snapshot.result.sessions.length,
-        });
-      } else if (
-        !snapshot.result &&
-        !snapshot.loading &&
-        !snapshot.error &&
-        context.gateway.snapshot.phase === "connected"
-      ) {
-        void context.sessions.refreshList(scope);
-      }
+    () => ({ projection: list(), scope: query() }),
+    ({ projection, scope }) => {
+      const apply = () => {
+        const snapshot = untrack(projection.read);
+        setData((previous) =>
+          !snapshot.result && !snapshot.error && previous?.result
+            ? previous
+            : dashboardsRouteData(context, snapshot),
+        );
+        if (snapshot.pagination?.hasMore && !snapshot.loading && !snapshot.error) {
+          void context.sessions.refreshList({
+            ...scope,
+            append: true,
+            offset: snapshot.pagination.nextOffset ?? snapshot.pagination.count,
+          });
+        } else if (
+          !snapshot.result &&
+          !snapshot.loading &&
+          !snapshot.error &&
+          context.gateway.snapshot.phase === "connected"
+        ) {
+          void context.sessions.refreshList(scope);
+        }
+      };
+      // Append during the owner's completion notification, before its request drain settles.
+      const stop = projection.subscribe(apply);
+      apply();
+      return stop;
     },
   );
-
-  onSettled(() => {
-    let active = true;
-    void ensureCustomElementDefined(
-      DASHBOARD_DOCUMENT_ELEMENT.tagName,
-      DASHBOARD_DOCUMENT_ELEMENT.loadModule,
-    ).catch((error: unknown) => {
-      if (active) setPreviewError(formatUiError(error));
-    });
-    return () => {
-      active = false;
-    };
-  });
 
   return (
     <DashboardsView
@@ -73,7 +63,6 @@ export function DashboardsPage(props: DashboardsPageProps) {
         onNavigate: context.navigate,
       }}
       gatewaySnapshot={gateway.read().snapshot}
-      previewError={previewError()}
     />
   );
 }

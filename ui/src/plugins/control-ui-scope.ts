@@ -1,22 +1,27 @@
 import type { ControlUiHost } from "../../../src/plugin-sdk/control-ui.js";
 
 /** A mounted view cannot retain host calls or listeners after its own lifetime ends. */
-export function scopeControlUiHost(host: ControlUiHost, signal: AbortSignal): ControlUiHost {
+export function scopeControlUiHost(
+  host: ControlUiHost,
+  signal: AbortSignal,
+  isCurrent?: () => boolean,
+): ControlUiHost {
+  const active = () => !signal.aborted && !host.signal.aborted && (isCurrent?.() ?? true);
   const check = () => {
-    if (signal.aborted || host.signal.aborted) {
+    if (!active()) {
       throw new Error("This plugin UI view has ended.");
     }
   };
   const bindCallback =
     <Args extends unknown[]>(listener: (...args: Args) => void) =>
     (...args: Args) => {
-      if (!signal.aborted && !host.signal.aborted) {
+      if (active()) {
         listener(...args);
       }
     };
   const disposers = new Set<() => void>();
   const keep = (dispose: () => void) => {
-    if (signal.aborted || host.signal.aborted) {
+    if (!active()) {
       dispose();
       check();
     }

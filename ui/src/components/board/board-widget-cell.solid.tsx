@@ -101,6 +101,7 @@ function BoardWidgetCellContent(
   let connected = true;
   const [renderedMcp, setRenderedMcp] = createSignal(
     untrack(() => props.widget?.contentKind === "mcp-app"),
+    { ownedWrite: true },
   );
   const active = () => props.active !== false;
   const canMutate = () => props.canMutate !== false;
@@ -122,26 +123,27 @@ function BoardWidgetCellContent(
     return value?.status === "error" ? value : undefined;
   };
   const appView = new BoardMcpAppLifecycle({
-    active,
+    active: () => untrack(active),
     connected: () => connected,
     requestUpdate,
-    sessionKey: () => props.sessionKey ?? "",
-    widget: () => props.widget,
+    sessionKey: () => untrack(() => props.sessionKey ?? ""),
+    widget: () => untrack(() => props.widget),
   });
   const frame = new BoardWidgetFrameLifecycle({
-    active,
+    active: () => untrack(active),
     connected: () => connected,
-    loadingCovered: () => props.loadingCovered ?? false,
-    bridgeEnabled: () => props.bridgeEnabled !== false,
+    loadingCovered: () => untrack(() => props.loadingCovered ?? false),
+    bridgeEnabled: () => untrack(() => props.bridgeEnabled !== false),
     context: () => context,
-    refreshFrame: () => props.callbacks?.frameLoadFailed,
-    reportContentHeight: (name, height) => props.callbacks?.reportContentHeight(name, height),
+    refreshFrame: () => untrack(() => props.callbacks?.frameLoadFailed),
+    reportContentHeight: (name, height) =>
+      untrack(() => props.callbacks?.reportContentHeight(name, height)),
     scrollBy: (deltaY) =>
       host.closest("openclaw-board-view")?.scrollBy({ top: deltaY, behavior: "auto" }),
     requestUpdate,
-    resolveFrameUrl: () => props.widgetFrameUrl,
+    resolveFrameUrl: () => untrack(() => props.widgetFrameUrl),
     root: () => host,
-    widget: () => props.widget,
+    widget: () => untrack(() => props.widget),
   });
   const state = createMemo(() => {
     revision();
@@ -232,7 +234,7 @@ function BoardWidgetCellContent(
     frame.presentationReady;
   cells.set(host, {
     get presentationReady() {
-      return presentationReady();
+      return untrack(presentationReady);
     },
     selectMenuItem,
     async teardown() {
@@ -257,44 +259,44 @@ function BoardWidgetCellContent(
         contribution(),
         gateway.read(),
       ] as const,
-    () => {
-      if (previousWidget && previousWidget !== props.widget) {
-        actionError = "";
-        frame.widgetChanged(previousWidget, props.widget);
+    () =>
+      untrack(() => {
+        if (previousWidget && previousWidget !== props.widget) {
+          actionError = "";
+          frame.widgetChanged(previousWidget, props.widget);
+          requestUpdate();
+        }
+        previousWidget = props.widget;
+        appView.update(props.widget, props.callbacks);
+        appView.activityChanged();
+        frame.activityChanged();
+        for (const element of CORE_BOARD_WIDGET_ELEMENTS) {
+          loader.requestWhileActive(element, active() && contribution() === element);
+        }
+        if (props.widget?.contentKind === "mcp-app") {
+          void ensureCustomElementDefined("mcp-app-view", loadMcpAppView).catch(() => undefined);
+        }
         requestUpdate();
-      }
-      previousWidget = props.widget;
-      appView.update(props.widget, props.callbacks);
-      appView.activityChanged();
-      frame.activityChanged();
-      for (const element of CORE_BOARD_WIDGET_ELEMENTS) {
-        loader.requestWhileActive(element, active() && contribution() === element);
-      }
-      if (props.widget?.contentKind === "mcp-app") {
-        void ensureCustomElementDefined("mcp-app-view", loadMcpAppView).catch(() => undefined);
-      }
-      requestUpdate();
-    },
+      }),
   );
   createEffect(
     () => [revision(), props.widget, active(), props.loadingCovered, props.bridgeEnabled] as const,
-    () => {
-      appView.observe(
-        host.querySelector(".board-widget"),
-        active() && props.widget?.contentKind === "mcp-app",
-      );
-      queueMicrotask(() => {
-        if (connected) {
-          appView.sync();
+    () =>
+      untrack(() => {
+        appView.observe(
+          host.querySelector(".board-widget"),
+          active() && props.widget?.contentKind === "mcp-app",
+        );
+        queueMicrotask(() => {
+          if (connected) {
+            appView.sync();
+          }
+        });
+        frame.update();
+        if (props.loadingCovered && presentationReady()) {
+          host.dispatchEvent(new Event("openclaw-board-widget-presentation", { bubbles: true }));
         }
-      });
-      frame.update();
-      if (props.loadingCovered && presentationReady()) {
-        props
-          .host()
-          .dispatchEvent(new Event("openclaw-board-widget-presentation", { bubbles: true }));
-      }
-    },
+      }),
   );
   createEffect(
     () => props.widget?.contentKind,
