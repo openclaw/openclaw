@@ -1,5 +1,6 @@
 /** Prepares the admitted writer context and teardown tracker for one attempt. */
 import { getReplyOperationSessionReader } from "../../../auto-reply/reply/reply-run-registry.state.js";
+import type { SessionTranscriptRuntimeTarget } from "../../../config/sessions/session-accessor.js";
 import { prepareCronRootSessionGeneration } from "../../../config/sessions/session-delivery-generation.js";
 import { composeSessionSourceAssertion } from "../../../config/sessions/session-source-authority.js";
 import {
@@ -38,7 +39,9 @@ export async function prepareEmbeddedAttemptTranscriptLifecycle(input: {
 }): Promise<{
   compactionTimeoutMs: number;
   assertCronRootCurrent?: () => void;
-  ownedTranscriptWriteContext: OwnedSessionTranscriptWriteContext;
+  ownedTranscriptWriteContext: OwnedSessionTranscriptWriteContext & {
+    sessionTarget: SessionTranscriptRuntimeTarget;
+  };
   transcriptLifecycle: ReturnType<typeof createEmbeddedAttemptTranscriptLifecycle>;
   withOwnedTranscriptWrite: WithOwnedTranscriptWrite;
 }> {
@@ -101,7 +104,9 @@ export async function prepareEmbeddedAttemptTranscriptLifecycle(input: {
     initialWriter
       ? initialWriter.withTranscriptWrite(() => transcriptLifecycle.withTranscriptWrite(operation))
       : transcriptLifecycle.withTranscriptWrite(operation);
-  const ownedTranscriptWriteContext: OwnedSessionTranscriptWriteContext = {
+  const ownedTranscriptWriteContext: OwnedSessionTranscriptWriteContext & {
+    sessionTarget: SessionTranscriptRuntimeTarget;
+  } = {
     sessionFile: attempt.sessionFile,
     sessionKey: attempt.sessionKey,
     sessionTarget: fencedSessionTarget,

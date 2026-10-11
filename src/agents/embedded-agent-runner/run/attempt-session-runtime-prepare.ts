@@ -100,6 +100,11 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
   const effectiveToolCount = effectiveTools.length;
   const sessionPreparation = {
     attempt,
+    assertCurrent: () => {
+      runAbortSignal.throwIfAborted();
+      sessionLock.ownedTranscriptWriteContext.assertCommitAllowed?.();
+      sessionLock.ownedTranscriptWriteContext.initialWriter?.assertActive();
+    },
     ...(input.activeContextEngine ? { activeContextEngine: input.activeContextEngine } : {}),
     agentDir: input.agentDir,
     effectiveCwd,
@@ -108,11 +113,13 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
   };
   const preparedSessionManager = await prepareEmbeddedAttemptSessionManager({
     ...sessionPreparation,
+    sessionTarget: sessionLock.ownedTranscriptWriteContext.sessionTarget,
     onSessionManagerCreated: (manager) => {
       resources.sessionManager = manager;
     },
     replayAllowedToolNames: toolSearchRunPlan.replayAllowedToolNames,
     resolveActiveContextEnginePluginId: input.resolveActiveContextEnginePluginId,
+    runAbortSignal,
     withOwnedTranscriptWrite: sessionLock.withOwnedTranscriptWrite,
   });
   const { isOpenAIResponsesApi, preparedUserTurnMessage, sessionManager, transcriptPolicy } =
