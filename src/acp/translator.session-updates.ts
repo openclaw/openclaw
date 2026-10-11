@@ -1,16 +1,13 @@
-/** Emits ACP session updates and mirrors replayable updates into the event ledger. */
 import type { AgentSideConnection, PromptRequest, SessionUpdate } from "@agentclientprotocol/sdk";
 import { getAvailableCommands } from "./commands.js";
 import type { AcpEventLedger, AcpEventLedgerReplay } from "./event-ledger.js";
 
-/** Session identity used when emitting and recording ACP translator updates. */
 type AcpTranslatorSessionRef = {
   sessionId: string;
   sessionKey: string;
   ledgerSessionId?: string;
 };
 
-// Session update helper records ACP-visible updates into the replay ledger when requested.
 type AcpTranslatorLedgerSessionRef = AcpTranslatorSessionRef & {
   cwd: string;
 };
@@ -25,17 +22,29 @@ function resolveLedgerSessionId(session: { sessionId: string; ledgerSessionId?: 
   return session.ledgerSessionId ?? session.sessionId;
 }
 
-/** Helper that keeps ACP client updates and replay ledger writes in sync. */
 export class AcpTranslatorSessionUpdates {
   private stopped = false;
+  private readonly pending = new Set<Promise<unknown>>();
   // Queue each ledger session at emission time so a detached disconnect notice
   // cannot overtake its older update or block unrelated session settlement.
   private ledgerMutationTails = new Map<string, Promise<void>>();
 
   constructor(private options: AcpTranslatorSessionUpdatesOptions) {}
 
-  stop(): void {
+  async stop(): Promise<void> {
     this.stopped = true;
+    // Revoking admission cannot retire the database or transport while an
+    // already-admitted ledger write, replay read, or delivery still uses it.
+    await Promise.allSettled([...this.pending, ...this.ledgerMutationTails.values()]);
+  }
+
+  private track<T>(operation: Promise<T>): Promise<T> {
+    this.pending.add(operation);
+    void operation.then(
+      () => this.pending.delete(operation),
+      () => this.pending.delete(operation),
+    );
+    return operation;
   }
 
   async startLedgerSession(
@@ -46,13 +55,15 @@ export class AcpTranslatorSessionUpdates {
       return;
     }
     try {
-      await this.options.eventLedger.startSession({
-        sessionId: resolveLedgerSessionId(session),
-        sessionKey: session.sessionKey,
-        cwd: session.cwd,
-        complete: options.complete,
-        ...(options.reset ? { reset: true } : {}),
-      });
+      await this.track(
+        this.options.eventLedger.startSession({
+          sessionId: resolveLedgerSessionId(session),
+          sessionKey: session.sessionKey,
+          cwd: session.cwd,
+          complete: options.complete,
+          ...(options.reset ? { reset: true } : {}),
+        }),
+      );
     } catch (err) {
       this.options.log(
         `event ledger session start failed for ${session.sessionId}: ${String(err)}`,
@@ -60,70 +71,58 @@ export class AcpTranslatorSessionUpdates {
     }
   }
 
-  async readLedgerReplay(params: {
+  readLedgerReplay(params: {
     sessionId: string;
     sessionKey: string;
   }): Promise<AcpEventLedgerReplay> {
+    return this.readReplay(
+      () => this.options.eventLedger.readReplay(params),
+      `replay fallback for ${params.sessionId}`,
+    );
+  }
+
+  readLedgerReplayBySessionId(sessionId: string): Promise<AcpEventLedgerReplay> {
+    return this.readReplay(
+      () => this.options.eventLedger.readReplayBySessionId({ sessionId }),
+      `exact replay fallback for ${sessionId}`,
+    );
+  }
+
+  readLedgerReplayBySessionKey(sessionKey: string): Promise<AcpEventLedgerReplay> {
+    return this.readReplay(
+      () => this.options.eventLedger.readReplayBySessionKey({ sessionKey }),
+      `session-key replay fallback for ${sessionKey}`,
+    );
+  }
+
+  private async readReplay(
+    read: () => Promise<AcpEventLedgerReplay>,
+    failure: string,
+  ): Promise<AcpEventLedgerReplay> {
     if (this.stopped) {
       return { complete: false, events: [] };
     }
     try {
-      return await this.options.eventLedger.readReplay(params);
+      return await this.track(read());
     } catch (err) {
-      this.options.log(`event ledger replay fallback for ${params.sessionId}: ${String(err)}`);
+      this.options.log(`event ledger ${failure}: ${String(err)}`);
       return { complete: false, events: [] };
     }
   }
 
-  async readLedgerReplayBySessionId(sessionId: string): Promise<AcpEventLedgerReplay> {
-    if (this.stopped) {
-      return { complete: false, events: [] };
-    }
-    try {
-      return await this.options.eventLedger.readReplayBySessionId({ sessionId });
-    } catch (err) {
-      this.options.log(`event ledger exact replay fallback for ${sessionId}: ${String(err)}`);
-      return { complete: false, events: [] };
-    }
-  }
-
-  async readLedgerReplayBySessionKey(sessionKey: string): Promise<AcpEventLedgerReplay> {
-    if (this.stopped) {
-      return { complete: false, events: [] };
-    }
-    try {
-      return await this.options.eventLedger.readReplayBySessionKey({ sessionKey });
-    } catch (err) {
-      this.options.log(
-        `event ledger session-key replay fallback for ${sessionKey}: ${String(err)}`,
-      );
-      return { complete: false, events: [] };
-    }
-  }
-
-  async recordUserPrompt(
+  recordUserPrompt(
     session: AcpTranslatorSessionRef,
     runId: string,
     prompt: PromptRequest["prompt"],
   ): Promise<void> {
-    await this.enqueueLedgerMutation(resolveLedgerSessionId(session), async () => {
-      if (this.stopped) {
-        return;
-      }
-      try {
-        await this.options.eventLedger.recordUserPrompt({
-          sessionId: resolveLedgerSessionId(session),
-          sessionKey: session.sessionKey,
-          runId,
-          prompt,
-        });
-      } catch (err) {
-        this.options.log(
-          `event ledger prompt record failed for ${session.sessionId}: ${String(err)}`,
-        );
-        await this.markLedgerIncomplete(session);
-      }
-    });
+    return this.recordLedgerMutation(session, "prompt", () =>
+      this.options.eventLedger.recordUserPrompt({
+        sessionId: resolveLedgerSessionId(session),
+        sessionKey: session.sessionKey,
+        runId,
+        prompt,
+      }),
+    );
   }
 
   async emit(params: {
@@ -138,10 +137,12 @@ export class AcpTranslatorSessionUpdates {
     if (this.stopped) {
       return;
     }
-    const delivery = this.options.connection.sessionUpdate({
-      sessionId: params.sessionId,
-      update: params.update,
-    });
+    const delivery = this.track(
+      this.options.connection.sessionUpdate({
+        sessionId: params.sessionId,
+        update: params.update,
+      }),
+    );
     const recording =
       params.record && params.sessionKey
         ? this.recordLedgerUpdate({
@@ -178,43 +179,43 @@ export class AcpTranslatorSessionUpdates {
     });
   }
 
-  private async recordLedgerUpdate(params: {
+  private recordLedgerUpdate(params: {
     sessionId: string;
     sessionKey: string;
     ledgerSessionId?: string;
     runId?: string;
     update: SessionUpdate;
   }): Promise<void> {
-    await this.enqueueLedgerMutation(params.ledgerSessionId ?? params.sessionId, async () => {
+    return this.recordLedgerMutation(params, "update", () =>
+      this.options.eventLedger.recordUpdate({
+        sessionId: resolveLedgerSessionId(params),
+        sessionKey: params.sessionKey,
+        ...(params.runId ? { runId: params.runId } : {}),
+        update: params.update,
+      }),
+    );
+  }
+
+  private recordLedgerMutation(
+    session: AcpTranslatorSessionRef,
+    kind: "prompt" | "update",
+    mutation: () => Promise<void>,
+  ): Promise<void> {
+    const ledgerSessionId = resolveLedgerSessionId(session);
+    const previous = this.ledgerMutationTails.get(ledgerSessionId) ?? Promise.resolve();
+    const pending = previous.then(async () => {
       if (this.stopped) {
         return;
       }
       try {
-        await this.options.eventLedger.recordUpdate({
-          sessionId: params.ledgerSessionId ?? params.sessionId,
-          sessionKey: params.sessionKey,
-          ...(params.runId ? { runId: params.runId } : {}),
-          update: params.update,
-        });
+        await mutation();
       } catch (err) {
         this.options.log(
-          `event ledger update record failed for ${params.sessionId}: ${String(err)}`,
+          `event ledger ${kind} record failed for ${session.sessionId}: ${String(err)}`,
         );
-        await this.markLedgerIncomplete({
-          sessionId: params.sessionId,
-          sessionKey: params.sessionKey,
-          ...(params.ledgerSessionId ? { ledgerSessionId: params.ledgerSessionId } : {}),
-        });
+        await this.markLedgerIncomplete(session);
       }
     });
-  }
-
-  private enqueueLedgerMutation(
-    ledgerSessionId: string,
-    mutation: () => Promise<void>,
-  ): Promise<void> {
-    const previous = this.ledgerMutationTails.get(ledgerSessionId) ?? Promise.resolve();
-    const pending = previous.then(mutation, mutation);
     const tail = pending.catch(() => {});
     this.ledgerMutationTails.set(ledgerSessionId, tail);
     void tail.then(() => {

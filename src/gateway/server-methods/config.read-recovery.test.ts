@@ -1,9 +1,6 @@
-import { writeFileSync } from "node:fs";
-import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { ConfigWritePostCommitError } from "../../config/io.write-errors.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { invalidateConfigGetResponseCache, readConfigGetResponse } from "../config-get-response.js";
@@ -26,39 +23,6 @@ vi.mock("../config-get-response.js", () => ({
   readConfigGetResponse: vi.fn(),
   invalidateConfigGetResponseCache: vi.fn(),
 }));
-const dirs = createTempDirTracker();
-afterEach(dirs.cleanup);
-
-it.each([
-  { exists: false, valid: true, backup: true },
-  { exists: true, valid: false, backup: true },
-  { exists: false, valid: true, backup: false },
-  { exists: true, valid: false, backup: false },
-  { exists: true, valid: true, backup: true },
-  { exists: true, valid: true, backup: false },
-])(
-  "config.get preserves diagnostics without inferring rollback from a backup: %j",
-  async ({ exists, valid, backup }) => {
-    const configPath = path.join(dirs.make("config-read-recovery-"), "openclaw.json");
-    const recoveryBackupPath = `${configPath}.bak`;
-    if (backup) {
-      writeFileSync(recoveryBackupPath, '{"gateway":{"mode":"local"}}');
-    }
-    const snapshot = {
-      ...createConfigWriteSnapshot({}).snapshot,
-      path: configPath,
-      exists,
-      valid,
-      issues: valid ? [] : [{ path: "gateway.port", message: "Expected number, received string" }],
-      configRevisionHash: "revision",
-      appliedConfigHash: null,
-    };
-    vi.mocked(readConfigGetResponse).mockResolvedValue(snapshot);
-    const { options, respond } = createConfigHandlerHarness({ method: "config.get" });
-    await expectDefined(configHandlers["config.get"], "registered config.get")(options);
-    expect(respond).toHaveBeenCalledWith(true, snapshot, undefined);
-  },
-);
 
 it("config.get keeps recorded publication failure across an older read and reconciles a fresh valid read", async () => {
   const writeHarness = createConfigHandlerHarness({
@@ -130,3 +94,85 @@ it("config.get keeps recorded publication failure across an older read and recon
   await get(laterInvalid.options);
   expect(laterInvalid.respond).toHaveBeenCalledWith(true, invalid, undefined);
 });
+
+it("reports only the committed config with a projected hash and redacted secrets after failed application", async () => {
+  const committed = createDeferred();
+  const application = createDeferred<"failed">();
+  const queueFollowUp = vi.fn();
+  write.mockImplementationOnce(async () => {
+    committed.resolve();
+    return {
+      path: "/tmp/openclaw.json",
+      config: {
+        hooks: { enabled: true },
+        gateway: { auth: { token: "synthetic-persisted-token" } },
+      },
+      hash: "committed-hash",
+      application: application.promise,
+      queueFollowUp,
+    };
+  });
+  const harness = createConfigHandlerHarness({
+    method: "config.patch",
+    params: { raw: '{"hooks":{"enabled":true}}', baseHash: "public:base-hash" },
+    contextOverrides: {
+      configRevisionProjector: {
+        projectRawHash: (hash) => `public:${hash}`,
+        projectResolvedHash: (hash) => hash,
+        hashResponseSessionBearer: () => "unused-test-scope",
+      },
+    },
+  });
+  const operation = expectDefined(
+    configHandlers["config.patch"],
+    "registered config.patch",
+  )(harness.options);
+  await committed.promise;
+  expect(harness.respond).not.toHaveBeenCalled();
+  application.resolve("failed");
+  await operation;
+  expect(harness.respond).toHaveBeenCalledExactlyOnceWith(
+    false,
+    undefined,
+    expect.objectContaining({
+      code: "UNAVAILABLE",
+      details: {
+        persistedConfig: {
+          hash: "public:committed-hash",
+          config: {
+            hooks: { enabled: true },
+            gateway: { auth: { token: "__OPENCLAW_REDACTED__" } },
+          },
+        },
+      },
+    }),
+  );
+  expect(queueFollowUp).toHaveBeenCalledOnce();
+});
+
+it.each(["restored", "not-restored"] as const)(
+  "does not report a committed receipt when publication rollback is %s",
+  async (rollbackStatus) => {
+    write.mockRejectedValueOnce(
+      new ConfigWritePostCommitError({
+        configPath: "/tmp/openclaw.json",
+        publication: "partial",
+        rollbackStatus,
+        cause: new Error("synthetic publication failure"),
+      }),
+    );
+    const harness = createConfigHandlerHarness({
+      method: "config.patch",
+      params: { raw: '{"hooks":{"enabled":true}}', baseHash: "base-hash" },
+    });
+    await expectDefined(configHandlers["config.patch"], "registered config.patch")(harness.options);
+    expect(harness.respond).toHaveBeenCalledExactlyOnceWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: "UNAVAILABLE",
+        details: expect.not.objectContaining({ persistedConfig: expect.anything() }),
+      }),
+    );
+  },
+);

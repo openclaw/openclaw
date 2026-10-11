@@ -1,11 +1,16 @@
 import { resolveActiveReplyOperationForSessionId } from "../../auto-reply/reply/reply-run-registry.js";
 import { getAttachedBackend } from "../../auto-reply/reply/reply-run-registry.state.js";
+import { createReplyTurnParticipants } from "../../auto-reply/reply/reply-run-registry.tool-authority.js";
 import {
   prepareReplyToolAuthority,
   type ReplyToolAuthorityInput,
 } from "../../auto-reply/reply/reply-tool-authority.js";
+import { readChannelSourceTurnId } from "../../auto-reply/reply/source-turn-id.js";
 import { withSessionTranscriptQuestionAnswers } from "../../config/sessions/session-transcript-read-fence.js";
-import { resolveAdmittedRunActiveAssertion } from "../admitted-run-context.js";
+import {
+  readAdmittedRunOperatorAuthority,
+  resolveAdmittedRunActiveAssertion,
+} from "../admitted-run-context.js";
 import type { EmbeddedRunAttemptInternalParams } from "../embedded-agent-runner/run/internal-params.js";
 import {
   getGatewayToolCallerIdentity,
@@ -13,6 +18,7 @@ import {
 } from "../tools/gateway-caller-context.js";
 import {
   createAgentQuestionAnswerAuthority,
+  prepareReplyToolAuthorityCallerRead,
   registerAgentHarnessQuestionAnswerAuthority,
   withAgentQuestionAnswerAuthority,
 } from "./host-private-capabilities.js";
@@ -56,6 +62,7 @@ export async function withPreparedEmbeddedRunToolAuthority<T, Attempt extends To
     originatingChannel: attempt.messageChannel,
     toolsAllow: attempt.toolsAllow,
     disableTools: attempt.disableTools,
+    operatorAuthority: readAdmittedRunOperatorAuthority(admitted),
     run: {
       ...attempt,
       model: attempt.modelId,
@@ -80,7 +87,13 @@ export async function withPreparedEmbeddedRunToolAuthority<T, Attempt extends To
   if (operation) {
     assertActive();
   }
-  const fingerprint = operation ? operation.bindToolAuthorityRoute(route) : direct?.fingerprint();
+  const fingerprint = operation
+    ? await operation.bindToolAuthorityRouteAsync(route)
+    : await direct?.fingerprintAsync();
+  assertActive();
+  const personalToolParticipants = operation
+    ? operation.personalToolParticipants
+    : createReplyTurnParticipants(direct?.personalToolOwner);
   function assertActive() {
     if (
       !live ||
@@ -106,6 +119,7 @@ export async function withPreparedEmbeddedRunToolAuthority<T, Attempt extends To
   }
   const assertQuestionActive = () => {
     assertActive();
+    input.operatorAuthority?.assertCurrent();
     if (
       operation &&
       (resolveActiveReplyOperationForSessionId(sessionId) !== operation ||
@@ -124,7 +138,16 @@ export async function withPreparedEmbeddedRunToolAuthority<T, Attempt extends To
         const questionAuthority = sessionKey
           ? createAgentQuestionAnswerAuthority({
               sessionKey,
+              requesterProfileId: input.operatorAuthority?.profileId,
               fingerprint,
+              prepareCaller: async (caller) =>
+                prepareReplyToolAuthorityCallerRead(
+                  operation?.projectToolAuthorityFingerprintAsync ?? direct?.projectAsync,
+                  caller,
+                  fingerprint,
+                  route,
+                  assertQuestionActive,
+                ),
               project: (caller) =>
                 operation
                   ? operation.projectToolAuthorityFingerprint(caller)
@@ -151,6 +174,7 @@ export async function withPreparedEmbeddedRunToolAuthority<T, Attempt extends To
         agentId,
         sessionKey,
         operationalRunInstance: instance,
+        personalToolParticipants,
         embeddedRunToolAuthorityBinding: (registration) => {
           assertActive();
           const { handle } = registration;
@@ -179,7 +203,9 @@ export async function withPreparedEmbeddedRunToolAuthority<T, Attempt extends To
               operation.toolAuthorityRoute.model === route.model);
           assertRegistered();
           return {
+            personalToolParticipants,
             source: operation ? "reply" : "attempt",
+            sourceTurnId: readChannelSourceTurnId(internal) ?? runId,
             assertActive: assertRegistered,
             project: (overlay) => {
               assertRegistered();
@@ -192,6 +218,39 @@ export async function withPreparedEmbeddedRunToolAuthority<T, Attempt extends To
               assertRegistered();
               return ownsOperation() ? projected : undefined;
             },
+            projectAsync: async (overlay) => {
+              assertRegistered();
+              if (!ownsOperation()) {
+                return undefined;
+              }
+              const prepared =
+                !operation && direct
+                  ? await prepareReplyToolAuthorityCallerRead(
+                      direct.projectAsync,
+                      overlay,
+                      fingerprint,
+                      route,
+                      assertRegistered,
+                    )
+                  : undefined;
+              if (prepared) {
+                await prepared.prepareCurrent();
+                assertRegistered();
+                return ownsOperation() ? fingerprint : undefined;
+              }
+              if (!operation && direct) {
+                const current = await direct.fingerprintAsync(route);
+                assertRegistered();
+                if (!ownsOperation() || current !== fingerprint) {
+                  return undefined;
+                }
+              }
+              const projected = operation
+                ? await operation.projectToolAuthorityFingerprintAsync(overlay)
+                : await direct?.projectAsync(overlay, route);
+              assertRegistered();
+              return ownsOperation() ? projected : undefined;
+            },
           };
         },
       },
@@ -200,5 +259,8 @@ export async function withPreparedEmbeddedRunToolAuthority<T, Attempt extends To
   } finally {
     // Retained ALS callbacks do not extend the attempt's authority.
     live = false;
+    if (!operation) {
+      personalToolParticipants?.close();
+    }
   }
 }

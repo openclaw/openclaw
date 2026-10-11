@@ -28,7 +28,10 @@ export type LogbookOperations = {
   unbatchedActiveFrames: Operation<{ limit: number }, Pick<LogbookFrame, "id" | "capturedAtMs">[]>;
   countUnbatchedActiveFrames: Operation<undefined, number>;
   frameById: Operation<{ id: number }, LogbookFrame | null>;
-  framesInRange: Operation<{ startMs: number; endMs: number }, LogbookFrame[]>;
+  framesInRange: Operation<
+    { startMs: number; endMs: number },
+    Pick<LogbookFrame, "id" | "capturedAtMs" | "idle">[]
+  >;
   createBatch: Operation<LogbookBatchInput, number>;
   setBatchStatus: Operation<
     { batchId: number; status: LogbookBatchStatus; error?: string; model?: string },
@@ -38,7 +41,6 @@ export type LogbookOperations = {
   resetRunningBatches: Operation<undefined, void>;
   resetErrorBatches: Operation<undefined, number>;
   nextPendingBatch: Operation<undefined, LogbookBatch | null>;
-  batchFrames: Operation<{ batchId: number }, LogbookFrame[]>;
   sampledBatchFrames: Operation<{ batchId: number }, LogbookFrame[]>;
   replaceObservations: Operation<
     { batchId: number; day: string; segments: LogbookObservationInput[] },

@@ -37,7 +37,13 @@ suite.define(() => {
               index === 1
                 ? [
                     { type: "text", text: "Delayed image." },
-                    { type: "image", url: imageUrl, alt: "Intrinsic size proof" },
+                    {
+                      type: "image",
+                      url: imageUrl,
+                      alt: "Intrinsic size proof",
+                      width: 480,
+                      height: 240,
+                    },
                   ]
                 : `Image fixture message ${index}.`,
             timestamp: index + 1,
@@ -161,9 +167,11 @@ suite.define(() => {
             await skeleton.waitFor({ state: "visible" });
             await waitForChatScrollIdle(page);
             const before = await frame.boundingBox();
-            expect(before?.width).toBe(400);
-            expect(before?.height).toBeCloseTo(400 / 1.5, 1);
-            expect(await frame.textContent()).toBe("");
+            const surface = frame.locator(".chat-image-surface");
+            const imageBefore = await surface.boundingBox();
+            expect(imageBefore?.width).toBe(400);
+            expect(imageBefore?.height).toBeCloseTo(400 / 1.5, 1);
+            expect((await frame.textContent())?.trim()).toBe("");
             expect(await frame.locator("svg").count()).toBe(0);
             const motion = await skeleton.evaluate((element) => {
               const style = getComputedStyle(element, "::after");
@@ -171,13 +179,22 @@ suite.define(() => {
                 name: style.animationName,
                 duration: Number.parseFloat(style.animationDuration),
                 iterations: style.animationIterationCount,
+                running: element
+                  .getAnimations({ subtree: true })
+                  .some((animation) => animation.playState === "running"),
+                transform: style.transform,
+                width: element.clientWidth,
               };
             });
-            expect(motion.name).toBe("shimmer");
             if (reducedMotion === "reduce") {
+              expect(motion.name).toBe("none");
               expect(motion.duration).toBeLessThan(0.001);
               expect(motion.iterations).toBe("1");
+              expect(motion.running).toBe(false);
+              const highlightX = Number.parseFloat(motion.transform.split(",")[4] ?? "NaN");
+              expect(Math.abs(highlightX + motion.width)).toBeLessThanOrEqual(1);
             } else {
+              expect(motion.name).toBe("shimmer");
               expect(motion.duration).toBe(2.4);
               expect(motion.iterations).toBe("infinite");
             }
@@ -187,6 +204,7 @@ suite.define(() => {
             await image.evaluate((element) => (element as HTMLImageElement).decode());
             await waitForChatScrollIdle(page);
             expect(await frame.boundingBox()).toEqual(before);
+            expect(await surface.boundingBox()).toEqual(imageBefore);
             expect(await skeleton.count()).toBe(0);
             const loadedSource = await image.getAttribute("src");
             const thread = page.locator(".chat-pane-cache__pane--active .chat-thread");

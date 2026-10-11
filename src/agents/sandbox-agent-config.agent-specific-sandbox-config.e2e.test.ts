@@ -1,6 +1,7 @@
 // Verifies agent-specific sandbox config, workspace roots, and Docker setup commands.
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import "../test-utils/prepare-compiled-subprocesses.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { splitSandboxBindSpec } from "./sandbox/bind-spec.js";
 import { sandboxMountOptionsReadOnly } from "./sandbox/workspace-mounts.js";
@@ -9,6 +10,7 @@ import { createRestrictedAgentSandboxConfig } from "./test-helpers/sandbox-agent
 type SpawnCall = {
   command: string;
   args: string[];
+  containerId?: string;
 };
 
 const spawnCalls = vi.hoisted(() => [] as SpawnCall[]);
@@ -19,9 +21,10 @@ function inspectCreatedDockerMounts(containerName: string | undefined) {
     (call) =>
       call.command === "docker" &&
       call.args[0] === "create" &&
-      call.args[call.args.indexOf("--name") + 1] === containerName,
+      (call.args[call.args.indexOf("--name") + 1] === containerName ||
+        call.containerId === containerName),
   );
-  if (!create) {
+  if (!create?.containerId) {
     throw new Error(`No recorded Docker create for ${containerName}`);
   }
   const mounts: { Type: "bind"; Source: string; Destination: string; RW: boolean }[] = [];
@@ -80,12 +83,18 @@ function inspectCreatedDockerMounts(containerName: string | undefined) {
       return `${entry.id} ${parent?.id ?? 1} ${backing} ${escapePath(entry.destination)} ${mode} - ${filesystem}`;
     }),
   ].join("\n");
-  return { mounts, tmpfs, mountinfo };
+  return { containerId: create.containerId, mounts, tmpfs, mountinfo };
 }
 
 async function spawnDockerProcess(commandAndArgs: string[]) {
   const [command = "", ...args] = commandAndArgs;
-  spawnCalls.push({ command, args });
+  spawnCalls.push({
+    command,
+    args,
+    ...(command === "docker" && args[0] === "create"
+      ? { containerId: (spawnCalls.length + 1).toString(16).padStart(64, "0") }
+      : {}),
+  });
   const shouldFailContainerInspect =
     command === "docker" &&
     args[0] === "inspect" &&
@@ -93,7 +102,11 @@ async function spawnDockerProcess(commandAndArgs: string[]) {
     args[2] === "{{.State.Running}}";
   const code = command === "docker" && !shouldFailContainerInspect ? 0 : 1;
   let stdout = "";
-  if (
+  if (command === "docker" && args[0] === "create") {
+    stdout = inspectCreatedDockerMounts(args[args.indexOf("--name") + 1]).containerId;
+  } else if (command === "docker" && args[0] === "inspect" && args[2] === "{{.Id}}") {
+    stdout = inspectCreatedDockerMounts(args[3]).containerId;
+  } else if (
     command === "docker" &&
     args[0] === "inspect" &&
     args[1] === "--format" &&
@@ -139,19 +152,23 @@ async function resolveContext(config: OpenClawConfig, sessionKey: string, worksp
     workspaceDir,
   });
   if (context) {
+    const { containerId } = inspectCreatedDockerMounts(context.containerName);
     expect(
       spawnCalls.filter(
         (call) =>
           call.command === "docker" &&
-          (call.args[2] === mountInspectFormat || call.args[3] === "/proc/self/mountinfo"),
+          (call.args[2] === "{{.Id}}" ||
+            call.args[2] === mountInspectFormat ||
+            call.args[3] === "/proc/self/mountinfo"),
       ),
     ).toEqual([
       {
         command: "docker",
-        args: ["inspect", "--format", mountInspectFormat, context.containerName],
+        args: ["inspect", "--format", mountInspectFormat, containerId],
       },
-      { command: "docker", args: ["exec", context.containerName, "cat", "/proc/self/mountinfo"] },
+      { command: "docker", args: ["exec", containerId, "cat", "/proc/self/mountinfo"] },
     ]);
+    expect(spawnCalls).toContainEqual({ command: "docker", args: ["start", containerId] });
     expect(context.fsBridge?.resolvePath({ filePath: "marker.txt" }).hostPath).toBe(
       path.join(context.workspaceDir, "marker.txt"),
     );
@@ -198,9 +215,8 @@ function createWorkSetupCommandConfig(scope: "agent" | "shared"): OpenClawConfig
           },
         },
       },
-      list: [
-        {
-          id: "work",
+      entries: {
+        work: {
           workspace: "~/openclaw-work",
           sandbox: {
             mode: "all",
@@ -210,7 +226,7 @@ function createWorkSetupCommandConfig(scope: "agent" | "shared"): OpenClawConfig
             },
           },
         },
-      ],
+      },
     },
   };
 }
@@ -239,9 +255,8 @@ describe("Agent-specific sandbox config", () => {
             workspaceRoot: "~/.openclaw/sandboxes",
           },
         },
-        list: [
-          {
-            id: "isolated",
+        entries: {
+          isolated: {
             workspace: "~/openclaw-isolated",
             sandbox: {
               mode: "all",
@@ -249,7 +264,7 @@ describe("Agent-specific sandbox config", () => {
               workspaceRoot: "/tmp/isolated-sandboxes",
             },
           },
-        ],
+        },
       },
     };
 
@@ -270,23 +285,21 @@ describe("Agent-specific sandbox config", () => {
             scope: "session",
           },
         },
-        list: [
-          {
-            id: "main",
+        entries: {
+          main: {
             workspace: "~/openclaw",
             sandbox: {
               mode: "off",
             },
           },
-          {
-            id: "family",
+          family: {
             workspace: "~/openclaw-family",
             sandbox: {
               mode: "all",
               scope: "agent",
             },
           },
-        ],
+        },
       },
     };
 
@@ -337,12 +350,11 @@ describe("Agent-specific sandbox config", () => {
             scope: "agent",
           },
         },
-        list: [
-          {
-            id: "main",
+        entries: {
+          main: {
             workspace: "~/openclaw",
           },
-        ],
+        },
       },
     };
 
@@ -383,9 +395,8 @@ describe("Agent-specific sandbox config", () => {
             },
           },
         },
-        list: [
-          {
-            id: "work",
+        entries: {
+          work: {
             workspace: "~/openclaw-work",
             sandbox: {
               mode: "all",
@@ -396,7 +407,7 @@ describe("Agent-specific sandbox config", () => {
               },
             },
           },
-        ],
+        },
       },
     };
 
@@ -406,7 +417,11 @@ describe("Agent-specific sandbox config", () => {
   });
 
   it("should honor agent-specific sandbox mode overrides", () => {
-    for (const scenario of [
+    const scenarios: Array<{
+      cfg: OpenClawConfig;
+      sessionKey: string;
+      assert: (runtime: ReturnType<typeof resolveSandboxRuntimeStatus>) => void;
+    }> = [
       {
         cfg: {
           agents: {
@@ -416,15 +431,14 @@ describe("Agent-specific sandbox config", () => {
                 scope: "agent",
               },
             },
-            list: [
-              {
-                id: "main",
+            entries: {
+              main: {
                 workspace: "~/openclaw",
                 sandbox: {
                   mode: "off",
                 },
               },
-            ],
+            },
           },
         } satisfies OpenClawConfig,
         sessionKey: "agent:main:main",
@@ -441,16 +455,15 @@ describe("Agent-specific sandbox config", () => {
                 mode: "off",
               },
             },
-            list: [
-              {
-                id: "family",
+            entries: {
+              family: {
                 workspace: "~/openclaw-family",
                 sandbox: {
                   mode: "all",
                   scope: "agent",
                 },
               },
-            ],
+            },
           },
         } satisfies OpenClawConfig,
         sessionKey: "agent:family:whatsapp:group:123",
@@ -459,7 +472,8 @@ describe("Agent-specific sandbox config", () => {
           expect(runtime.sandboxed).toBe(true);
         },
       },
-    ]) {
+    ];
+    for (const scenario of scenarios) {
       const runtime = resolveSandboxRuntimeStatus({
         cfg: scenario.cfg,
         sessionKey: scenario.sessionKey,
@@ -477,16 +491,15 @@ describe("Agent-specific sandbox config", () => {
             scope: "session",
           },
         },
-        list: [
-          {
-            id: "work",
+        entries: {
+          work: {
             workspace: "~/openclaw-work",
             sandbox: {
               mode: "all",
               scope: "agent",
             },
           },
-        ],
+        },
       },
     };
 

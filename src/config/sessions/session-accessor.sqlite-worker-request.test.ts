@@ -18,7 +18,7 @@ test("runs reused Worker request callbacks in the requesting operation context",
     await expect(
       owner.run("request-7", () =>
         runSqliteMutationWorkerRequest({
-          worker,
+          transport: { kind: "dedicated", channel: worker },
           operationId: 7,
           completion: "exit",
           onCommitRequest: () => {
@@ -59,7 +59,7 @@ test("joins native exit before rejecting a Worker initialization error", async (
     throw new Error("Failed initialization must not request write admission");
   });
   const outcome = runSqliteMutationWorkerRequest({
-    worker,
+    transport: { kind: "dedicated", channel: worker },
     operationId: 1,
     completion: "exit",
     onCommitRequest,
@@ -91,7 +91,7 @@ test("joins queued admission after Worker exit without granting the dead Worker"
   const worker = new Worker(
     `const { parentPort } = require("node:worker_threads");
      parentPort.on("message", () => {});
-     parentPort.postMessage({ type: "admission-request", operationId: 8, admissionId: 1 });`,
+     parentPort.postMessage({ type: "admission-request", operationId: 8 });`,
     { eval: true, execArgv: [] },
   );
   const queued = createDeferred();
@@ -102,7 +102,7 @@ test("joins queued admission after Worker exit without granting the dead Worker"
   let requestSettled = false;
   let admissionTask: Promise<void> | undefined;
   const outcome = runSqliteMutationWorkerRequest({
-    worker,
+    transport: { kind: "dedicated", channel: worker },
     operationId: 8,
     completion: "result",
     onCommitRequest,

@@ -86,10 +86,7 @@ export function createQaEvidenceInvocation(params: {
       throw new Error("continued evidence requires recorded v3 invocation custody");
     }
     const containment = resolveQaEvidenceContainment(continued.occurrences, continued.entries);
-    const continuedAnchors = continued.occurrences.filter(
-      (occurrence) =>
-        occurrence.scenario?.kind === "instance" && !containment.parentById.has(occurrence.id),
-    );
+    const continuedAnchors = containment.rootInstances;
     if (!params.anchors || JSON.stringify(continuedAnchors) !== JSON.stringify(anchors)) {
       throw new Error("continued evidence does not match the captured invocation");
     }
@@ -253,11 +250,19 @@ export function createQaEvidenceInvocation(params: {
 
   function select(index: number, occurrenceId: string): string;
   function select(index: number, occurrenceId: null): null;
+  function select(index: number, occurrenceId: string | null): string | null;
   function select(index: number, occurrenceId: string | null): string | null {
     anchorFor(index);
     const nextAnchors = structuredClone(anchors);
     const nextObservations = structuredClone(observations);
     const nextEntries = structuredClone(entries);
+    const setEffective = (id: string, effective: boolean) => {
+      for (const entry of nextEntries) {
+        if (entry.binding.occurrenceId === id) {
+          entry.effective = effective;
+        }
+      }
+    };
     const anchor = nextAnchors[index]!;
     const pending = pendingChildren.get(index);
     if (pending) {
@@ -266,11 +271,7 @@ export function createQaEvidenceInvocation(params: {
         nextObservations[offset] = structuredClone(completion);
       }
       for (const update of pending.updates) {
-        for (const entry of nextEntries) {
-          if (entry.binding.occurrenceId === update.occurrenceId) {
-            entry.effective = update.effective;
-          }
-        }
+        setEffective(update.occurrenceId, update.effective);
       }
       nextObservations.splice(pending.observationOffset, 0, ...structuredClone(pending.additions));
       nextEntries.splice(pending.entryOffset, 0, ...structuredClone(pending.rows));
@@ -305,11 +306,7 @@ export function createQaEvidenceInvocation(params: {
     // Retrying changes whole-attempt selection, never individual assertion rows.
     let priorId = selected?.retryOf ?? null;
     while (priorId !== null) {
-      for (const entry of nextEntries) {
-        if (entry.binding.occurrenceId === priorId) {
-          entry.effective = false;
-        }
-      }
+      setEffective(priorId, false);
       priorId = byId.get(priorId)!.retryOf;
     }
     for (const occurrence of nextObservations) {
@@ -318,11 +315,7 @@ export function createQaEvidenceInvocation(params: {
         ancestor = byId.get(ancestor)!.retryOf;
       }
       if (selectedId !== null && ancestor === selectedId && occurrence.terminalStatus !== "pass") {
-        for (const entry of nextEntries) {
-          if (entry.binding.occurrenceId === occurrence.id) {
-            entry.effective = false;
-          }
-        }
+        setEffective(occurrence.id, false);
       }
     }
     // Validate the full proposed selection before changing authoritative state
@@ -446,18 +439,9 @@ export function createQaEvidenceInvocation(params: {
       const pending = pendingChildren.get(index);
       if (pending) {
         if (
-          JSON.stringify([
-            pending.additions,
-            pending.completions,
-            pending.rows,
-            pending.updates,
-          ]) !==
-          JSON.stringify([
-            proposed.additions,
-            proposed.completions,
-            proposed.rows,
-            proposed.updates,
-          ])
+          (["additions", "completions", "rows", "updates"] as const).some(
+            (key) => JSON.stringify(pending[key]) !== JSON.stringify(proposed[key]),
+          )
         ) {
           throw new Error("child evidence changed its pending observation");
         }

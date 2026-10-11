@@ -1,0 +1,82 @@
+import { describe, expect, it } from "vitest";
+import { normalizeChromeMcpOptions } from "./chrome-mcp-options.js";
+
+describe("Chrome MCP profile options", () => {
+  it.each([
+    {
+      mcpCommand: undefined,
+      cdpUrl: "http://127.0.0.1:9222",
+      flag: "--browserUrl",
+      other: "--wsEndpoint",
+    },
+    {
+      mcpCommand: "npx",
+      cdpUrl: "ws://127.0.0.1:9222/devtools/browser/abc",
+      flag: "--wsEndpoint",
+      other: "--browserUrl",
+    },
+  ])(
+    "launches the packaged Chrome MCP on the current runtime with $flag and command $mcpCommand",
+    ({ mcpCommand, cdpUrl, flag, other }) => {
+      const { command, args, env } = normalizeChromeMcpOptions({
+        cdpUrl,
+        mcpCommand,
+      });
+
+      expect(command).toBe(process.execPath);
+      expect(env).toEqual({ CHROME_DEVTOOLS_MCP_NO_UPDATE_CHECKS: "1" });
+      expect(args[0]).toMatch(
+        /[/\\]chrome-devtools-mcp[/\\]build[/\\]src[/\\]bin[/\\]chrome-devtools-mcp\.js$/,
+      );
+      expect(args[1]).toBe("--experimentalVision");
+      expect(args).toContain(flag);
+      expect(args).toContain(cdpUrl);
+      expect(args).not.toContain(other);
+    },
+  );
+
+  it("keeps endpoint-looking arguments after -- positional", () => {
+    const cdpUrl = "https://configured.example";
+    const positionalArgs = ["--browserUrl", "https://positional.example"];
+    const { args, browserUrl } = normalizeChromeMcpOptions({
+      cdpUrl,
+      mcpArgs: ["--", ...positionalArgs],
+    });
+
+    expect(browserUrl).toBe(cdpUrl);
+    expect(args.slice(0, args.indexOf("--"))).toContain(cdpUrl);
+    expect(args.slice(args.indexOf("--") + 1)).toEqual(positionalArgs);
+  });
+
+  it.each([["--autoConnect=false"], ["--auto-connect", "false"], ["--no-auto-connect"]])(
+    "does not substitute cdpUrl for the explicit local connection choice %s",
+    (...mcpArgs) => {
+      const cdpUrl = "https://configured.example";
+      const { args, browserUrl } = normalizeChromeMcpOptions({ cdpUrl, mcpArgs });
+
+      expect(browserUrl).toBeUndefined();
+      expect(args).not.toContain(cdpUrl);
+      expect(args.slice(-mcpArgs.length)).toEqual(mcpArgs);
+    },
+  );
+
+  it("preserves unrelated custom command arguments verbatim", () => {
+    const mcpArgs = [
+      "--headless=false",
+      "--user-data-dir",
+      "/tmp/chrome profile",
+      "--chrome-arg=--disable-features=One,Two",
+    ];
+    const options = normalizeChromeMcpOptions({ mcpCommand: "custom-chrome-mcp", mcpArgs });
+
+    expect(options.command).toBe("custom-chrome-mcp");
+    expect(options.env).toBeUndefined();
+    expect(options.args).toEqual([
+      "--autoConnect",
+      "--no-usage-statistics",
+      "--experimentalStructuredContent",
+      "--experimental-page-id-routing",
+      ...mcpArgs,
+    ]);
+  });
+});

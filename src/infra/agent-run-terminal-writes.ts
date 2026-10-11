@@ -1,5 +1,10 @@
+import { composeSessionSourceAssertion } from "../config/sessions/session-source-authority.js";
 import type { AgentRunDelegatedAuthority } from "./agent-run-authority.types.js";
-import { getAgentRunContext, validateAgentRunDelegatedAuthority } from "./agent-run-registry.js";
+import {
+  captureAgentRunDelegatedSourceAssertion,
+  getAgentRunContext,
+  validateAgentRunDelegatedAuthority,
+} from "./agent-run-registry.js";
 import type { AgentRunContext } from "./agent-run-registry.types.js";
 
 type OperationalRunInstance = AgentRunDelegatedAuthority["operationalRunInstance"];
@@ -48,31 +53,54 @@ export function captureAgentRunTerminalWriteContext(
   runId: string,
 ): CapturedAgentRunTerminalWriteContext | undefined {
   const owner = getAgentRunContext(runId);
-  const current = owner ? terminalWrites.get(owner) : undefined;
-  const context = current?.context;
-  if (!owner || !current || !context) {
+  const authority = owner?.delegatedAuthority;
+  if (!owner || !authority) {
     return undefined;
   }
-  const assertCurrent = () => {
+  const refuse = (): never => {
+    throw new Error("Terminal write owner changed before commit");
+  };
+  const source = captureAgentRunDelegatedSourceAssertion(authority, refuse);
+  if (!source) {
+    return undefined;
+  }
+  // Embedded runtimes have no account-specific CLI context, but their accepted
+  // terminal writes must settle before the same operational admission closes.
+  let current = terminalWrites.get(owner);
+  if (!current) {
+    current = { authority, pending: new Set() };
+    terminalWrites.set(owner, current);
+  }
+  if (current.authority !== authority) {
+    return undefined;
+  }
+  const captured = current;
+  const context = captured.context;
+  const assertBinding = () => {
     if (
       getAgentRunContext(runId) !== owner ||
-      terminalWrites.get(owner) !== current ||
-      current.context !== context ||
-      owner.delegatedAuthority !== current.authority ||
-      !validateAgentRunDelegatedAuthority(current.authority)
+      terminalWrites.get(owner) !== captured ||
+      captured.context !== context ||
+      owner.delegatedAuthority !== captured.authority ||
+      captured.authority !== authority
     ) {
-      throw new Error("Terminal write owner changed before commit");
+      refuse();
     }
+    source.assertBinding();
   };
+  const assertCurrent = composeSessionSourceAssertion([source.assertCurrent], (assertSource) => {
+    assertBinding();
+    assertSource();
+  });
   return {
     assertCurrent,
     run: (write) => {
-      assertCurrent();
-      return context.run(write);
+      assertBinding();
+      return context ? context.run(write) : write();
     },
     track: (persistence) => {
-      current.pending.add(persistence);
-      const settled = () => current.pending.delete(persistence);
+      captured.pending.add(persistence);
+      const settled = () => captured.pending.delete(persistence);
       void persistence.then(settled, settled);
     },
   };

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { resolveSessionMethodScope } from "./session-method-scopes-base.js";
 import { resolveDynamicSessionMutationRequiredScope } from "./session-method-scopes.js";
 
 describe("resolveDynamicSessionMutationRequiredScope", () => {
@@ -117,8 +118,34 @@ describe("resolveDynamicSessionMutationRequiredScope", () => {
   });
 
   it.each([
+    { pinned: true },
+    { sidebarRoot: true },
+    { sidebarRoot: false },
+    { archived: true },
+    { snoozedUntil: 1_800_000_000_000 },
+    { snoozedUntil: null },
+  ])("allows session-scoped visibility mutations for single and batch patch %j", (patch) => {
+    const target = {
+      key: "agent:main:thread",
+      expectedSessionId: "session-1",
+      expectedSidebarRoot: false,
+      expectedCategory: null,
+      expectedArchived: false,
+    };
+    for (const [method, params] of [
+      ["sessions.patch", { ...target, ...patch }],
+      ["sessions.patchMany", { targets: [target], patch }],
+    ] as const) {
+      expect(resolveSessionMethodScope(method, params)).toBe("operator.sessions.write");
+      expect(resolveDynamicSessionMutationRequiredScope(method, params)).toBe("operator.write");
+    }
+  });
+
+  it.each([
     { contextWindow: "extended" },
     { toolOverrides: {} },
+    { sandboxMode: "off" },
+    { sandboxMode: null },
     { verboseLevel: "full" },
     { reasoningLevel: "high" },
     { thinkingLevel: "high", verboseLevel: "full" },
@@ -134,6 +161,14 @@ describe("resolveDynamicSessionMutationRequiredScope", () => {
   });
 
   it("scopes sessions.patchMany from the shared patch only", () => {
+    for (const sandboxMode of ["off", null]) {
+      expect(
+        resolveDynamicSessionMutationRequiredScope("sessions.patchMany", {
+          targets: [{ key: "agent:main:thread", expectedSandboxMode: null }],
+          patch: { sandboxMode },
+        }),
+      ).toBe("operator.admin");
+    }
     expect(
       resolveDynamicSessionMutationRequiredScope("sessions.patchMany", {
         targets: [

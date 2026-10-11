@@ -39,10 +39,8 @@ function parseCopilotApiBaseUrl(value: unknown, domain: string): string {
   if (typeof api !== "string" || !api.trim()) {
     throw new Error("GitHub Copilot user response has an invalid endpoints.api URL");
   }
-  let url: URL;
-  try {
-    url = new URL(api);
-  } catch {
+  const url = URL.parse(api);
+  if (!url) {
     throw new Error("GitHub Copilot user response has an invalid endpoints.api URL");
   }
   const host = url.hostname.toLowerCase();

@@ -1,4 +1,4 @@
-import { html } from "lit";
+import { html, nothing } from "lit";
 import { property } from "lit/decorators.js";
 import type { ThemeMode } from "../app/theme.ts";
 import { t } from "../i18n/index.ts";
@@ -13,6 +13,7 @@ export type ThemeModeChangeDetail = {
 
 class ThemeModeToggle extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) mode: ThemeMode = "system";
+  @property({ attribute: false }) menuItem = false;
 
   private readonly handleModeChange = (event: Event) => {
     const mode = this.mode === "system" ? "light" : this.mode === "light" ? "dark" : "system";
@@ -40,6 +41,7 @@ class ThemeModeToggle extends OpenClawLightDomContentsElement {
         <button
           type="button"
           class="theme-mode-toggle"
+          role=${this.menuItem ? "menuitem" : nothing}
           aria-label=${tooltip}
           @click=${this.handleModeChange}
         >

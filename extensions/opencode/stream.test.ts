@@ -31,9 +31,28 @@ function toolCallMessage(
   };
 }
 
+async function wrapOpenCodeStream(streamFn: StreamFn, modelId = "gpt-5.6-sol") {
+  const provider = await registerSingleProviderPlugin(plugin);
+  const wrapped = provider.wrapStreamFn?.({ streamFn, providerId: "opencode", modelId } as never);
+  if (!wrapped) {
+    throw new Error("expected OpenCode stream wrapper");
+  }
+  return wrapped;
+}
+
+function recordTool(name: string, field: string, valueSchema: Record<string, unknown> = {}) {
+  return {
+    type: "function",
+    name,
+    parameters: {
+      type: "object",
+      properties: { [field]: { type: "object", patternProperties: { "^.*$": valueSchema } } },
+    },
+  };
+}
+
 describe("OpenCode stream adapter", () => {
   it("aliases the reserved web_search function across OpenCode Responses requests", async () => {
-    const provider = await registerSingleProviderPlugin(plugin);
     let capturedPayload: Record<string, unknown> | undefined;
     const existingAlias = "openclaw_web_search";
     const wireAlias = "openclaw_web_search_2";
@@ -73,14 +92,7 @@ describe("OpenCode stream adapter", () => {
       });
       return stream;
     };
-    const streamFn = provider.wrapStreamFn?.({
-      streamFn: baseStreamFn,
-      providerId: "opencode",
-      modelId: "gpt-5.6-sol",
-    } as never);
-    if (!streamFn) {
-      throw new Error("expected OpenCode stream wrapper");
-    }
+    const streamFn = await wrapOpenCodeStream(baseStreamFn);
 
     const stream = await streamFn(
       { provider: "opencode", id: "gpt-5.6-sol", api: "openai-responses" } as never,
@@ -88,19 +100,7 @@ describe("OpenCode stream adapter", () => {
       {
         onPayload: () => ({
           tools: [
-            {
-              type: "function",
-              name: "web_search",
-              parameters: {
-                type: "object",
-                properties: {
-                  options: {
-                    type: "object",
-                    patternProperties: { "^.*$": { type: "string" } },
-                  },
-                },
-              },
-            },
+            recordTool("web_search", "options", { type: "string" }),
             { type: "function", name: existingAlias },
             { type: "function", name: "read" },
           ],
@@ -172,7 +172,6 @@ describe("OpenCode stream adapter", () => {
   });
 
   it("does not restore an unaliased OpenCode Responses function name", async () => {
-    const provider = await registerSingleProviderPlugin(plugin);
     const existingAlias = "openclaw_web_search";
     const source = createAssistantMessageEventStream();
     const payload = { tools: [{ type: "function", name: existingAlias }] };
@@ -181,13 +180,9 @@ describe("OpenCode stream adapter", () => {
       queueMicrotask(() => source.end(toolCallMessage(existingAlias)));
       return source;
     };
-    const streamFn = provider.wrapStreamFn?.({
-      streamFn: baseStreamFn,
-      providerId: "opencode",
-      modelId: "gpt-5.6-sol",
-    } as never);
+    const streamFn = await wrapOpenCodeStream(baseStreamFn);
 
-    const stream = await streamFn?.(
+    const stream = await streamFn(
       { provider: "opencode", id: "gpt-5.6-sol", api: "openai-responses" } as never,
       { messages: [] } as never,
       {},
@@ -198,7 +193,6 @@ describe("OpenCode stream adapter", () => {
   });
 
   it("round-trips dynamic record tool arguments through OpenCode-compatible schemas", async () => {
-    const provider = await registerSingleProviderPlugin(plugin);
     let capturedPayload: Record<string, unknown> | undefined;
     let producerDelta: Extract<AssistantMessageEvent, { type: "toolcall_delta" }> | undefined;
     const baseStreamFn: StreamFn = async (model, _context, options) => {
@@ -211,6 +205,13 @@ describe("OpenCode stream adapter", () => {
           command: "node app.js",
           env: [{ key: "NODE_ENV", value: "test" }],
         });
+        const streamingCall = {
+          ...execMessage.content[0]!,
+          partialJson: JSON.stringify({
+            command: "node app.js",
+            env: [{ key: "NODE_ENV", value: "test" }],
+          }),
+        };
         producerDelta = {
           type: "toolcall_delta",
           contentIndex: 0,
@@ -218,7 +219,7 @@ describe("OpenCode stream adapter", () => {
             command: "node app.js",
             env: [{ key: "NODE_ENV", value: "test" }],
           }),
-          partial: execMessage,
+          partial: { ...execMessage, content: [streamingCall] },
         };
         stream.push(producerDelta);
         stream.push({
@@ -263,14 +264,7 @@ describe("OpenCode stream adapter", () => {
       });
       return stream;
     };
-    const streamFn = provider.wrapStreamFn?.({
-      streamFn: baseStreamFn,
-      providerId: "opencode",
-      modelId: "gpt-5.6-sol",
-    } as never);
-    if (!streamFn) {
-      throw new Error("expected OpenCode stream wrapper");
-    }
+    const streamFn = await wrapOpenCodeStream(baseStreamFn);
 
     const stream = await streamFn(
       { provider: "opencode", id: "gpt-5.6-sol", api: "openai-responses" } as never,
@@ -278,45 +272,9 @@ describe("OpenCode stream adapter", () => {
       {
         onPayload: () => ({
           tools: [
-            {
-              type: "function",
-              name: "exec",
-              parameters: {
-                type: "object",
-                properties: {
-                  env: {
-                    type: "object",
-                    patternProperties: { "^.*$": { type: "string" } },
-                  },
-                },
-              },
-            },
-            {
-              type: "function",
-              name: "video_generate",
-              parameters: {
-                type: "object",
-                properties: {
-                  providerOptions: {
-                    type: "object",
-                    patternProperties: { "^.*$": {} },
-                  },
-                },
-              },
-            },
-            {
-              type: "function",
-              name: "dashboard",
-              parameters: {
-                type: "object",
-                properties: {
-                  props: {
-                    type: "object",
-                    patternProperties: { "^.*$": {} },
-                  },
-                },
-              },
-            },
+            recordTool("exec", "env", { type: "string" }),
+            recordTool("video_generate", "providerOptions"),
+            recordTool("dashboard", "props"),
           ],
           input: [
             {
@@ -372,6 +330,9 @@ describe("OpenCode stream adapter", () => {
         content: [{ arguments: { command: "node app.js", env: { NODE_ENV: "test" } } }],
       },
     });
+    if (events[0]?.type === "toolcall_delta") {
+      expect(events[0].partial.content[0]).not.toHaveProperty("partialJson");
+    }
     expect(producerDelta).toMatchObject({
       delta: '{"command":"node app.js","env":[{"key":"NODE_ENV","value":"test"}]}',
       partial: {
@@ -430,23 +391,8 @@ describe("OpenCode stream adapter", () => {
   });
 
   it("rebuilds dynamic record metadata when a Responses request payload is rebuilt", async () => {
-    const provider = await registerSingleProviderPlugin(plugin);
     const firstPayload = {
-      tools: [
-        {
-          type: "function",
-          name: "exec",
-          parameters: {
-            type: "object",
-            properties: {
-              env: {
-                type: "object",
-                patternProperties: { "^.*$": { type: "string" } },
-              },
-            },
-          },
-        },
-      ],
+      tools: [recordTool("exec", "env", { type: "string" })],
     };
     const secondPayload = {
       tools: [
@@ -473,19 +419,15 @@ describe("OpenCode stream adapter", () => {
       );
       return source;
     };
-    const streamFn = provider.wrapStreamFn?.({
-      streamFn: baseStreamFn,
-      providerId: "opencode",
-      modelId: "gpt-5.6-sol",
-    } as never);
+    const streamFn = await wrapOpenCodeStream(baseStreamFn);
 
-    const stream = await streamFn?.(
+    const stream = await streamFn(
       { provider: "opencode", id: "gpt-5.6-sol", api: "openai-responses" } as never,
       { messages: [] } as never,
       {},
     );
 
-    expect(firstPayload.tools[0]?.parameters.properties.env.type).toBe("array");
+    expect(firstPayload.tools[0]?.parameters.properties).toMatchObject({ env: { type: "array" } });
     expect(secondPayload.tools[0]?.parameters.properties.env).toEqual({
       type: "array",
       items: { type: "string" },
@@ -500,7 +442,6 @@ describe("OpenCode stream adapter", () => {
   });
 
   it("leaves web_search unchanged for non-Responses OpenCode models", async () => {
-    const provider = await registerSingleProviderPlugin(plugin);
     const source = createAssistantMessageEventStream();
     const payload = { tools: [{ type: "function", name: "web_search" }] };
     const baseStreamFn: StreamFn = (model, _context, options) => {
@@ -508,13 +449,9 @@ describe("OpenCode stream adapter", () => {
       queueMicrotask(() => source.end(toolCallMessage("web_search")));
       return source;
     };
-    const streamFn = provider.wrapStreamFn?.({
-      streamFn: baseStreamFn,
-      providerId: "opencode",
-      modelId: "kimi-k2.6",
-    } as never);
+    const streamFn = await wrapOpenCodeStream(baseStreamFn, "kimi-k2.6");
 
-    const stream = await streamFn?.(
+    const stream = await streamFn(
       { provider: "opencode", id: "kimi-k2.6", api: "openai-completions" } as never,
       { messages: [] } as never,
       {},

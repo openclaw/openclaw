@@ -139,9 +139,12 @@ extension SettingsProTab {
             }
 
             self.gatewaySetupCard
-            self.pairedGatewaysCard
+            // Fixtures hide saved gateways, so an empty list would read as unpaired.
+            if !self.appModel.isLocalGatewayFixtureEnabled {
+                self.pairedGatewaysCard
+            }
 
-            self.detailListCard {
+            Section {
                 SettingsDetailRow("Address", value: .verbatim(self.gatewayAddress))
                 SettingsDetailRow("Server", value: .verbatim(self.gatewayServer))
                 SettingsDetailRow(
@@ -187,7 +190,10 @@ extension SettingsProTab {
 
             self.agentSelectionCard
             self.deviceIdentityCard
-            self.manualGatewayCard
+            // Fixtures never load the saved manual Gateway's route, so Connect Manual would target the wrong identity.
+            if !self.appModel.isLocalGatewayFixtureEnabled {
+                self.manualGatewayCard
+            }
             self.gatewayAdvancedCard
         }
         .font(OpenClawType.body)
@@ -203,12 +209,13 @@ extension SettingsProTab {
         if showScanHero {
             scanAction = { self.openGatewayQRScanner() }
         }
+        let gateway = self.gatewayStatusPresentation
         return self.detailStatusCard(
             icon: "antenna.radiowaves.left.and.right",
             title: "Gateway",
-            detail: .verbatim(self.gatewayStatusDetail),
-            value: .verbatim(self.gatewayStatusValue),
-            color: self.gatewayStatusColor,
+            detail: .verbatim(gateway.detail),
+            value: .verbatim(gateway.value),
+            color: gateway.color,
             actionTitle: showScanHero ? "Scan QR to Pair" : nil,
             actionSystemImage: "qrcode.viewfinder",
             action: scanAction)
@@ -219,20 +226,20 @@ extension SettingsProTab {
             self.detailStatusCard(
                 icon: "checkmark.shield.fill",
                 title: "Approvals",
-                detail: .verbatim(self.notificationsNeedAttention
+                detail: .verbatim(self.notificationPresentation.needsAttention
                     ? String(localized: "Out-of-app approval alerts need notification permission.")
-                    : (self.pendingApprovalCount == 0
+                    : (self.appModel.pendingExecApprovalCount == 0
                         ? String(localized: "No gateway actions are waiting for review.")
                         : String(localized: "Review pending gateway actions."))),
-                value: self.notificationsNeedAttention
+                value: self.notificationPresentation.needsAttention
                     ? .verbatim(String(localized: "Alerts Off"))
-                    : (self.pendingApprovalCount == 0
+                    : (self.appModel.pendingExecApprovalCount == 0
                         ? .verbatim(String(localized: "clear"))
                         : .verbatim(self.approvalWaitingText)),
-                color: self.notificationsNeedAttention ? OpenClawBrand.warn :
-                    (self.pendingApprovalCount == 0 ? OpenClawBrand.ok : OpenClawBrand.warn))
+                color: self.notificationPresentation.needsAttention ? OpenClawBrand.warn :
+                    (self.appModel.pendingExecApprovalCount == 0 ? OpenClawBrand.ok : OpenClawBrand.warn))
 
-            if self.notificationsNeedAttention {
+            if self.notificationPresentation.needsAttention {
                 self.approvalNotificationsWarningCard
             }
 
@@ -356,7 +363,7 @@ extension SettingsProTab {
             }
         }
 
-        if let pendingApproval {
+        if let pendingApproval = self.appModel.pendingExecApprovalPrompt {
             Section("Reviewing") {
                 ForEach(self.approvalItems, id: \.id) { item in
                     SettingsApprovalRow(item: item)
@@ -429,7 +436,7 @@ extension SettingsProTab {
                     }
                 }
             }
-        } else if self.pendingApprovalCount == 0 {
+        } else if self.appModel.pendingExecApprovalCount == 0 {
             Section {
                 Label {
                     VStack(alignment: .leading, spacing: 2) {
@@ -481,8 +488,8 @@ extension SettingsProTab {
 
             self.diagnosticChecksCard
 
-            self.detailListCard {
-                SettingsDetailRow("Device", value: .verbatim(DeviceInfoHelper.deviceFamily()))
+            Section {
+                SettingsDetailRow("Device", value: .verbatim(InstanceIdentity.deviceFamily))
                 SettingsDetailRow(
                     "Platform",
                     value: .verbatim(DeviceInfoHelper.platformStringForDisplay()))
@@ -585,8 +592,8 @@ extension SettingsProTab {
             }
 
             // Concise public details only; deep hardware identifiers live in Diagnostics.
-            detailListCard {
-                SettingsDetailRow("Device", value: .verbatim(DeviceInfoHelper.deviceFamily()))
+            Section {
+                SettingsDetailRow("Device", value: .verbatim(InstanceIdentity.deviceFamily))
                 SettingsDetailRow(
                     "iOS",
                     value: .verbatim(DeviceInfoHelper.iOSVersionStringForDisplay()))
@@ -916,15 +923,68 @@ extension SettingsProTab {
     var gatewayAdvancedCard: some View {
         Section {
             self.settingsToggle("Auto-connect on launch", isOn: self.$gatewayAutoConnect)
-            self.gatewaySecureField("Gateway Auth Token", text: self.gatewayTokenBinding)
-            self.gatewaySecureField("Gateway Password", text: self.gatewayPasswordBinding)
-            if let headersStableID = self.gatewayCustomHeadersTargetStableID {
-                NavigationLink {
-                    GatewayCustomHeadersSettingsView(gatewayStableID: headersStableID)
-                } label: {
-                    Text("Custom Headers")
-                        .font(OpenClawType.body)
+            // Fixtures never load the saved manual Gateway, so a credential edit would overwrite
+            // its pair with blank fields and headers would target the wrong identity.
+            if !self.appModel.isLocalGatewayFixtureEnabled {
+                self.gatewaySecureField("Gateway Auth Token", text: self.gatewayCredentialBinding(\.token))
+                self.gatewaySecureField("Gateway Password", text: self.gatewayCredentialBinding(\.password))
+                if let headersStableID = self.gatewayCustomHeadersTargetStableID {
+                    NavigationLink {
+                        GatewayCustomHeadersSettingsView(gatewayStableID: headersStableID)
+                    } label: {
+                        Text("Custom Headers")
+                            .font(OpenClawType.body)
+                    }
                 }
+            }
+            if !self.appModel.isLocalGatewayFixtureEnabled,
+               let attention = Self.gatewayAccessAttention(
+                   in: self.gatewayRegistry, ingress: self.gatewayController.ingress)
+            {
+                Text(attention.message)
+                    .font(OpenClawType.footnote)
+                    .foregroundStyle(.secondary)
+                if self.gatewayController.ingress.signingIn {
+                    Button {
+                        self.gatewayController.ingress.cancelSignIn()
+                    } label: {
+                        Text("Cancel sign-in").font(OpenClawType.body)
+                    }
+                } else if attention.canSignIn {
+                    Button {
+                        Task { await self.reconnectGateway(ingressAttention: attention) }
+                    } label: {
+                        Text("Sign in to Cloudflare Access").font(OpenClawType.body)
+                    }
+                    .disabled(self.isReconnectingGateway)
+                }
+            }
+            if !self.appModel.isLocalGatewayFixtureEnabled,
+               let target = Self.gatewayAccessSessionTarget(
+                   in: self.gatewayRegistry, ingress: self.gatewayController.ingress)
+            {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Access Host")
+                        .font(OpenClawType.body)
+                    Text(verbatim: target.origin.url.absoluteString)
+                        .font(OpenClawType.subhead)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(nil)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .textSelection(.enabled)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                Button {
+                    Task {
+                        await self.gatewayController.ingress.signOut(
+                            stableID: target.stableID, expectedOrigin: target.origin)
+                    }
+                } label: {
+                    Text("Sign out of Cloudflare Access").font(OpenClawType.body)
+                }
+                Text("Signs out gateways using this host’s Access session. Your browser may stay signed in.")
+                    .font(OpenClawType.footnote)
+                    .foregroundStyle(.secondary)
             }
             Button(role: .destructive) {
                 self.showResetOnboardingAlert = true

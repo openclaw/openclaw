@@ -3,19 +3,32 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
+import { createRequire } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { resolveWorkerCellExport } from "./worker-cell-package.mjs";
+import {
+  readSqliteTranscriptPayload,
+  sqliteTranscriptPayloadColumns,
+} from "../../../lib/sqlite-transcript-payload.mjs";
+import { childOf, retainedSnapshots, sqliteFamily } from "./fixture-files.mjs";
+import {
+  resolveWorkerCellExport,
+  resolveWorkerCellFunctionBinding,
+} from "./worker-cell-package.mjs";
 
 const BASELINE = "3a9d69db306cd7f081e06254cb89c4bcc14a7107";
+const BASELINE_AGENT_SCHEMA = 19;
 const KEY = "agent:main:dashboard:legacy-project-worktree";
 const OTHER_KEY = "agent:main:dashboard:legacy-project-sentinel";
 const SESSION = "00000000-0000-4000-8000-000000000001";
 const OTHER_SESSION = "00000000-0000-4000-8000-000000000002";
 const STAGES = new Set([
   "published-import",
+  "after-update",
+  "before-schema",
   "before-startup",
   "after-first-stop",
+  "after-doctor",
   "after-second-stop",
 ]);
 const BASELINE_BINDINGS = {
@@ -60,15 +73,6 @@ function digest(file) {
 function writeJson(file, value) {
   fs.writeFileSync(file, JSON.stringify(value, null, 2) + "\n", { flag: "wx" });
 }
-function childOf(root, file) {
-  const relative = path.relative(root, file);
-  return (
-    relative !== "" &&
-    relative !== ".." &&
-    !relative.startsWith(`..${path.sep}`) &&
-    !path.isAbsolute(relative)
-  );
-}
 function context() {
   const get = (name) => {
     assert(path.isAbsolute(process.env[name] ?? ""), `Missing isolated ${name}`);
@@ -92,31 +96,6 @@ function context() {
     importReceipt: path.join(artifacts, "project-worktree-import.json"),
   };
 }
-function sqliteFamily(file) {
-  return Object.fromEntries(
-    ["", "-wal", "-shm", "-journal"].flatMap((suffix) =>
-      fs.existsSync(file + suffix) ? [[suffix || "main", digest(file + suffix)]] : [],
-    ),
-  );
-}
-function retainedSnapshots(roots) {
-  const results = [];
-  function visit(dir) {
-    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-      const file = path.join(dir, entry.name);
-      if (/^openclaw-(sqlite-readonly-|doctor-lint-state-)/.test(entry.name)) {
-        results.push(file);
-      }
-      if (entry.isDirectory()) {
-        visit(file);
-      }
-    }
-  }
-  for (const root of new Set(roots)) {
-    visit(root);
-  }
-  return results.toSorted((a, b) => a.localeCompare(b));
-}
 function loadFixture(ctx) {
   const f = readJson(ctx.fixture);
   assert.equal(f.stateDir, ctx.stateDir);
@@ -138,6 +117,7 @@ async function owners(ctx, packageRoot, baseline, bindingFile) {
   assert.equal(identity.buildInfo.commit, baseline ? BASELINE : candidateCommit);
   assert.equal(fs.realpathSync(path.join(packageRoot, "openclaw.mjs")), identity.cli);
   let bindings = BASELINE_BINDINGS;
+  let agentSchema = BASELINE_AGENT_SCHEMA;
   if (!baseline) {
     const approved = readJson(bindingFile);
     assert.equal(approved.commit, candidateCommit);
@@ -152,7 +132,17 @@ async function owners(ctx, packageRoot, baseline, bindingFile) {
       approved.agentSchema,
     );
     bindings = approved.operations;
+    agentSchema = approved.agentSchema;
   }
+  return {
+    ...(await loadBindings(identity, packageRoot, bindings)),
+    identity,
+    baseline,
+    agentSchema,
+  };
+}
+
+async function loadBindings(identity, packageRoot, bindings) {
   const api = {};
   const evidence = [];
   for (const [role, [name, symbol, expectedHash]] of Object.entries(bindings)) {
@@ -172,11 +162,92 @@ async function owners(ctx, packageRoot, baseline, bindingFile) {
     api[role] = module[alias];
     evidence.push({ role, relative, symbol, alias, sha256: expectedHash });
   }
-  return { api, evidence, baseline };
+  return { api, evidence };
+}
+
+async function prepareSchema(ctx, packageRoot, bindings) {
+  const owner = await owners(ctx, packageRoot, false, bindings);
+  const before = readJson(path.join(ctx.artifacts, "worktree-before-schema.json"));
+  assert.equal(before.agent.schema.userVersion, BASELINE_AGENT_SCHEMA);
+  assert(
+    owner.agentSchema > BASELINE_AGENT_SCHEMA,
+    "Expected a published-to-candidate schema upgrade",
+  );
+  const require = createRequire(import.meta.url);
+  const parserPath = fs.realpathSync(require.resolve("typescript/unstable/sync"));
+  const { version: parserVersion } = readJson(require.resolve("typescript/package.json"));
+  const { createNativeTypeScriptParser } = await import("../../../lib/native-typescript.mts");
+  const parser = createNativeTypeScriptParser({ cwd: packageRoot });
+  const doctorBindings = {};
+  try {
+    for (const [role, prefix, symbol] of [
+      ["lock", "doctor-sqlite-maintenance-lock", "withDoctorSqliteMaintenanceLock"],
+      ["migrate", "state-migrations.media-persistence", "migrateLegacyMediaPersistence"],
+      ["drain", "global-singleton", "drainGlobalSingletonLifecycleState"],
+      ["close", "openclaw-state-db-cache", "closeOpenClawStateDatabaseByPathAsync"],
+    ]) {
+      doctorBindings[role] = await resolveWorkerCellFunctionBinding(
+        owner.identity,
+        packageRoot,
+        prefix,
+        symbol,
+        parser,
+      );
+    }
+  } finally {
+    parser.close();
+  }
+  const doctor = await loadBindings(owner.identity, packageRoot, doctorBindings);
+  const { agentDb } = readJson(ctx.importReceipt);
+  const errors = [];
+  let result;
+  try {
+    result = await doctor.api.lock({
+      env: process.env,
+      operation: "project worktree fixture schema preparation",
+      run: () =>
+        doctor.api.migrate({
+          env: process.env,
+          configuredAgentDatabaseTargets: [{ agentId: "main", path: agentDb }],
+        }),
+    });
+  } catch (error) {
+    errors.push(error);
+  }
+  for (const [operation, argument] of [
+    [doctor.api.drain, "close"],
+    [doctor.api.close, ctx.stateDb],
+  ]) {
+    try {
+      await operation(argument);
+    } catch (error) {
+      errors.push(error);
+    }
+  }
+  if (errors.length) {
+    throw new AggregateError(errors, "Doctor schema preparation did not settle");
+  }
+  writeJson(path.join(ctx.artifacts, "worktree-schema-doctor.json"), {
+    ownerBindings: doctor.evidence,
+    parser: { source: "harness", version: parserVersion, sha256: digest(parserPath) },
+    fromSchema: before.agent.schema,
+    targetSchema: owner.agentSchema,
+    result,
+  });
+  assert.deepEqual(
+    result,
+    {
+      changes: [
+        `Upgraded agent database schema in ${agentDb}: v${BASELINE_AGENT_SCHEMA} -> v${owner.agentSchema}.`,
+      ],
+      warnings: [],
+    },
+    "Doctor schema preparation warned, refused, or changed more than the schema",
+  );
 }
 
 async function inspectDatabase(owner, file, read) {
-  const before = sqliteFamily(file);
+  const before = sqliteFamily(file, digest);
   const prepared = owner.api.prepare(file);
   assert.notEqual(
     prepared.location,
@@ -209,14 +280,15 @@ async function inspectDatabase(owner, file, read) {
   if (errors.length) {
     throw new AggregateError(errors, "Project startup observer did not settle");
   }
-  assert.deepEqual(sqliteFamily(file), before, "Observer modified source SQLite files");
+  assert.deepEqual(sqliteFamily(file, digest), before, "Observer modified source SQLite files");
   return value;
 }
 
 async function seed(ctx, packageRoot) {
   assert(!fs.existsSync(ctx.fixture));
-  const repo = path.join(ctx.root, "project-repo");
-  const workspace = path.join(ctx.root, "agent-default");
+  const fixtureRoot = path.dirname(ctx.stateDir);
+  const repo = path.join(fixtureRoot, "project-repo");
+  const workspace = path.join(fixtureRoot, "agent-default");
   fs.mkdirSync(path.join(repo, "packages/app"), { recursive: true });
   fs.mkdirSync(workspace);
   fs.writeFileSync(path.join(repo, "README.md"), "Published-owner project fixture\n", {
@@ -277,7 +349,7 @@ async function seed(ctx, packageRoot) {
     );
     const service = new owner.api.worktrees({
       env: gitEnv,
-      getConfig: () => ({ worktreeRoot: path.join(ctx.root, "managed") }),
+      getConfig: () => ({ worktreeRoot: path.join(fixtureRoot, "managed") }),
     });
     worktree = await service.create({
       repoRoot: project.repoRoot,
@@ -307,9 +379,11 @@ async function seed(ctx, packageRoot) {
     throw new AggregateError(errors, "Published fixture owners did not settle");
   }
   const spawnedCwd = path.join(worktree.path, "packages/app");
+  // Keep Doctor's title repair separate from workspace preservation.
   const entries = {
     [KEY]: {
       sessionId: SESSION,
+      displayName: "Legacy project worktree",
       updatedAt: 10,
       lastActivityAt: 10,
       projectId: project.id,
@@ -317,7 +391,12 @@ async function seed(ctx, packageRoot) {
       worktree: { id: worktree.id, branch: worktree.branch, repoRoot: worktree.repoRoot },
       sessionFile: `${SESSION}.jsonl`,
     },
-    [OTHER_KEY]: { sessionId: OTHER_SESSION, updatedAt: 20, sessionFile: `${OTHER_SESSION}.jsonl` },
+    [OTHER_KEY]: {
+      sessionId: OTHER_SESSION,
+      displayName: "Unrelated legacy session",
+      updatedAt: 20,
+      sessionFile: `${OTHER_SESSION}.jsonl`,
+    },
   };
   writeJson(legacyStore, entries);
   for (const id of [SESSION, OTHER_SESSION]) {
@@ -455,7 +534,7 @@ export function assertProjectWorktreeStartupLog(log, start) {
       /session: recorded canonical workspaces for (\d+) managed-worktree session\(s\)/g,
     ),
   ].map((match) => Number(match[1]));
-  assert.deepEqual(backfills, start === "first" ? [1] : [], "Unexpected startup migration count");
+  assert.deepEqual(backfills, [], "Gateway startup performed a Doctor-owned workspace repair");
   assert.match(log, /(?:\[shutdown\]|shutdown) completed cleanly in \d+ms/);
   assert(
     !/(?:\[shutdown\]|shutdown) (?:completed in \d+ms with warnings:|failed in \d+ms)/.test(log),
@@ -470,14 +549,12 @@ export function assertProjectWorktreeStartupPreservation(actual, original, expec
   for (const row of actual.agent.sessions) {
     const before = original.agent.sessions.find((s) => s.session_key === row.session_key);
     assert(before, `Unexpected session row: ${row.session_key}`);
-    if (row.session_key !== KEY) {
+    if (row.session_key !== KEY || expectedWorkspace === undefined) {
       assert.deepEqual(row, before);
       continue;
     }
     const expected = JSON.parse(before.entry_json);
-    if (expectedWorkspace) {
-      expected.worktree.canonicalWorkspaceDir = expectedWorkspace;
-    }
+    expected.worktree.canonicalWorkspaceDir = expectedWorkspace;
     assert.deepEqual(JSON.parse(row.entry_json), expected);
     assert.equal(row.updated_at, before.updated_at);
     assert.equal(row.current_session_id, before.current_session_id);
@@ -495,6 +572,14 @@ async function snapshot(ctx, stage, packageRoot, bindings) {
     worktrees: rows(db.prepare("SELECT * FROM worktrees ORDER BY id")),
   }));
   const agent = await inspectDatabase(owner, imported.agentDb, (db) => ({
+    schema: {
+      userVersion: db.prepare("PRAGMA user_version").get().user_version,
+      metadataVersion: db
+        .prepare("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'")
+        .get().schema_version,
+      agentId: db.prepare("SELECT agent_id FROM schema_meta WHERE meta_key = 'primary'").get()
+        .agent_id,
+    },
     sessions: rows(
       db.prepare(
         "SELECT session_key,current_session_id,entry_json,updated_at FROM session_nodes WHERE session_key IN ('agent:main:dashboard:legacy-project-worktree','agent:main:dashboard:legacy-project-sentinel') ORDER BY session_key",
@@ -502,10 +587,23 @@ async function snapshot(ctx, stage, packageRoot, bindings) {
     ),
     transcript: rows(
       db.prepare(
-        "SELECT session_id,seq,event_json,created_at FROM transcript_events WHERE session_id IN ('00000000-0000-4000-8000-000000000001','00000000-0000-4000-8000-000000000002') ORDER BY session_id,seq",
+        `SELECT session_id,seq,${sqliteTranscriptPayloadColumns(db)},created_at FROM transcript_events WHERE session_id IN ('00000000-0000-4000-8000-000000000001','00000000-0000-4000-8000-000000000002') ORDER BY session_id,seq`,
       ),
-    ),
+    ).map((row) => ({
+      session_id: row.session_id,
+      seq: row.seq,
+      event_json: readSqliteTranscriptPayload(row),
+      created_at: row.created_at,
+    })),
   }));
+  const expectedSchema = ["published-import", "before-schema"].includes(stage)
+    ? BASELINE_AGENT_SCHEMA
+    : owner.agentSchema;
+  assert.deepEqual(agent.schema, {
+    userVersion: expectedSchema,
+    metadataVersion: expectedSchema,
+    agentId: "main",
+  });
   assert.equal(agent.sessions.length, 2);
   assert.equal(agent.transcript.length, 4);
   const row = agent.sessions.find((s) => s.session_key === KEY);
@@ -518,7 +616,9 @@ async function snapshot(ctx, stage, packageRoot, bindings) {
   assert.equal(entry.worktree.repoRoot, f.project.repoRoot);
   assert.equal(entry.updatedAt, 10);
   assert.equal(entry.lastActivityAt, 10);
-  const expectedWorkspace = stage.startsWith("after-") ? f.project.repoRoot : undefined;
+  const expectedWorkspace = ["after-update", "after-doctor", "after-second-stop"].includes(stage)
+    ? f.project.repoRoot
+    : undefined;
   assert.equal(
     entry.worktree.canonicalWorkspaceDir,
     expectedWorkspace,
@@ -540,9 +640,13 @@ async function snapshot(ctx, stage, packageRoot, bindings) {
     assertProjectWorktreeStartupPreservation(result, original, expectedWorkspace);
   }
   if (stage === "after-second-stop") {
-    const first = readJson(path.join(ctx.artifacts, "worktree-after-first-stop.json"));
-    assert.deepEqual(agent, first.agent, "Second startup changed persisted session/history bytes");
-    assert.deepEqual(shared, first.shared);
+    const repaired = readJson(path.join(ctx.artifacts, "worktree-after-doctor.json"));
+    assert.deepEqual(
+      agent,
+      repaired.agent,
+      "Second startup changed repaired session/history bytes",
+    );
+    assert.deepEqual(shared, repaired.shared);
   }
   writeJson(path.join(ctx.artifacts, `worktree-${stage}.json`), result);
 }
@@ -559,6 +663,9 @@ async function main() {
   } else if (mode === "snapshot") {
     assert.equal(args.length, 3);
     await snapshot(ctx, ...args);
+  } else if (mode === "prepare-schema") {
+    assert.equal(args.length, 2);
+    await prepareSchema(ctx, ...args);
   } else if (mode === "assert-logs") {
     assert.equal(args.length, 2);
     const [start, file] = args;
@@ -570,7 +677,7 @@ async function main() {
     });
   } else {
     throw new Error(
-      "Expected seed, assert-import, snapshot, or assert-logs; see reviewed recipe for arguments",
+      "Expected seed, assert-import, snapshot, prepare-schema, or assert-logs; see reviewed recipe for arguments",
     );
   }
 }

@@ -28,21 +28,18 @@ data class GatewayModelSummary(
   val thinkingDefault: String? = null,
   val supportsTools: Boolean? = null,
   val agentRuntime: JsonObject? = null,
-  val unavailableUntil: Long? = null,
 ) {
   val runtimeName: String?
-    get() =
-      if (agentRuntime?.get("source")?.jsonPrimitive?.content in setOf("model", "provider")) {
-        when (agentRuntime?.get("id")?.jsonPrimitive?.content) {
-          "codex", "codex-cli" -> "Codex"
-          "claude-cli" -> "Claude CLI"
-          "google-gemini-cli" -> "Gemini CLI"
-          "openclaw" -> "OpenClaw"
-          else -> null
-        }
-      } else {
-        null
+    get() {
+      if (agentRuntime?.get("source")?.jsonPrimitive?.content !in setOf("model", "provider")) return null
+      return when (agentRuntime?.get("id")?.jsonPrimitive?.content) {
+        "codex", "codex-cli" -> "Codex"
+        "claude-cli" -> "Claude CLI"
+        "google-gemini-cli" -> "Gemini CLI"
+        "openclaw" -> "OpenClaw"
+        else -> null
       }
+    }
 }
 
 enum class GatewayModelUnavailableReason {
@@ -95,6 +92,5 @@ internal fun parseGatewayModels(models: JsonArray?): List<GatewayModelSummary> =
       thinkingDefault = row["thinkingDefault"]?.jsonPrimitive?.content,
       supportsTools = row["supportsTools"]?.jsonPrimitive?.booleanOrNull,
       agentRuntime = row["agentRuntime"]?.jsonObject,
-      unavailableUntil = row["unavailableUntil"]?.jsonPrimitive?.longOrNull,
     )
   }

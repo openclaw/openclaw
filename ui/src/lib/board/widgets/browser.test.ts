@@ -29,7 +29,7 @@ function widget(instanceId: string): BoardWidget {
     grantState: "none",
   };
 }
-function response(instanceId: string, paused = false) {
+function response(instanceId: string, paused = false, targetId = instanceId) {
   return {
     sessionKey,
     name: "status",
@@ -41,20 +41,28 @@ function response(instanceId: string, paused = false) {
     ...(paused
       ? {}
       : {
-          browserTab: { target: "host", profile: "openclaw", targetId: instanceId },
+          browserTab: { target: "host", profile: "openclaw", targetId },
         }),
   };
 }
-function mount(handle: Parameters<typeof createBrowserClient>[0], active = true) {
+function mount(
+  handle: Parameters<typeof createBrowserClient>[0],
+  active = true,
+  scopes: readonly string[] = ["operator.admin"],
+  methods: readonly string[] = ["browser.request", "browser.dashboard.request"],
+) {
   const requests: BrowserRequestEnvelope[] = [];
-  const { client, request } = createBrowserClient(async (envelope) => {
-    requests.push(envelope);
-    return await handle(envelope);
-  });
+  const { client, request } = createBrowserClient(
+    async (envelope) => {
+      requests.push(envelope);
+      return await handle(envelope);
+    },
+    { sessionScoped: !scopes.includes("operator.admin") },
+  );
   const { gateway, publishEvent } = createApplicationGateway({
     phase: "connected",
     client,
-    hello: gatewayHelloForMethods(["browser.request"]),
+    hello: gatewayHelloForMethods(methods, scopes),
     offlineStable: false,
     canvasPluginSurfaceUrl: null,
     assistantAgentId: "main",
@@ -77,57 +85,108 @@ function mount(handle: Parameters<typeof createBrowserClient>[0], active = true)
 afterEach(() => document.body.replaceChildren());
 
 describe("Browser dashboard presentation", () => {
-  it.each(["user", "agent"] as const)(
-    "keeps an unfinished %s Stop visible until closure is confirmed",
-    async (initiator) => {
-      let stopping = false;
-      let paused = false;
-      let changed = () => {};
-      const { element, requests, publishEvent } = mount(async (envelope) => {
-        if (envelope.path !== "/dashboard") {
-          return { running: false, tabs: [] };
-        }
-        if (envelope.method === "DELETE") {
-          stopping = true;
-          paused = true;
-          changed();
-          throw new Error("Temporary browser close failure");
-        }
-        return { ...response("first", paused), stopping };
-      });
-      changed = () =>
-        publishEvent({
-          type: "event",
-          event: "plugin.browser.dashboard_changed",
-          payload: { sessionKey, name: "status", instanceId: "first" },
-        });
-      const button = (text: string) =>
-        [...element.querySelectorAll("button")].find((entry) => entry.textContent?.trim() === text);
-      await vi.waitFor(() => expect(button("Stop browser")).toBeDefined());
-      if (initiator === "user") {
-        button("Stop browser")!.click();
-      } else {
+  it.each([false, true])("routes dashboard access and transfers for admin=%s", async (admin) => {
+    const { element, request } = mount(
+      async (envelope) =>
+        envelope.path === "/dashboard" ? response("first") : { running: false, tabs: [] },
+      true,
+      [admin ? "operator.admin" : "operator.sessions.write"],
+    );
+    await vi.waitFor(() => expect(element.querySelector("openclaw-browser-panel")).not.toBeNull());
+    const panel = element.querySelector("openclaw-browser-panel")!;
+    await panel.updateComplete;
+    expect(request).toHaveBeenCalledWith(
+      admin ? "browser.request" : "browser.dashboard.request",
+      expect.objectContaining(
+        admin
+          ? { target: "host", path: "/dashboard" }
+          : {
+              sessionKey,
+              dashboard: { name: "status", instanceId: "first" },
+              method: "POST",
+              path: "/dashboard",
+            },
+      ),
+      { timeoutMs: 150_000 },
+    );
+    expect(panel.dashboardTarget?.sessionScoped).toBe(admin ? undefined : true);
+    const download = panel.shadowRoot?.querySelector('[aria-label="Download file"]');
+    if (admin) {
+      expect(download).not.toBeNull();
+    } else {
+      expect(download).toBeNull();
+      expect(panel.shadowRoot?.querySelector('[aria-label="New tab"]')).toBeNull();
+      expect(element.textContent).toContain("isolated session browser");
+    }
+  });
+
+  it.each([
+    [["operator.sessions.read"], ["browser.dashboard.request"]],
+    [["operator.write"], ["browser.request"]],
+  ])(
+    "does not dispatch without scoped write access and advertised capability (%j)",
+    async (scopes, methods) => {
+      const { element, request } = mount(async () => response("first"), true, scopes, methods);
+      await element.updateComplete;
+      expect(request).not.toHaveBeenCalled();
+      expect(element.textContent).toContain("Connect to a Gateway with browser access");
+    },
+  );
+
+  it("shows a session admission rejection without falling back to global browser access", async () => {
+    const { element, request } = mount(
+      async () => {
+        throw new Error("Session browser requires a supported sandbox backend");
+      },
+      true,
+      ["operator.write"],
+    );
+    await vi.waitFor(() => expect(element.textContent).toContain("supported sandbox backend"));
+    expect(element.querySelector("openclaw-browser-panel")).toBeNull();
+    expect(request).toHaveBeenCalledOnce();
+    expect(request.mock.calls[0]?.[0]).toBe("browser.dashboard.request");
+  });
+
+  it("keeps an unfinished Stop visible until closure is confirmed", async () => {
+    let stopping = false;
+    let paused = false;
+    let changed = () => {};
+    const { element, requests, publishEvent } = mount(async (envelope) => {
+      if (envelope.path !== "/dashboard") {
+        return { running: false, tabs: [] };
+      }
+      if (envelope.method === "DELETE") {
         stopping = true;
         paused = true;
         changed();
+        throw new Error("Temporary browser close failure");
       }
-      await vi.waitFor(() => expect(element.textContent).toContain("Browser stop is pending"));
-      expect(element.textContent).not.toContain("browser is stopped");
-      expect(button("Resume browser")).toBeUndefined();
-      button("Retry stop")!.click();
-      await vi.waitFor(() =>
-        expect(requests.filter((entry) => entry.method === "DELETE")).toHaveLength(
-          initiator === "user" ? 2 : 1,
-        ),
-      );
-      stopping = false;
-      changed();
-      await vi.waitFor(() => expect(element.textContent).toContain("browser is stopped"));
-      expect(button("Retry stop")).toBeUndefined();
-      expect(button("Resume browser")).toBeDefined();
-      expect(requests.filter((entry) => entry.method === "POST")).toHaveLength(1);
-    },
-  );
+      return { ...response("first", paused), stopping };
+    });
+    changed = () =>
+      publishEvent({
+        type: "event",
+        event: "plugin.browser.dashboard_changed",
+        payload: { sessionKey, name: "status", instanceId: "first" },
+      });
+    const button = (text: string) =>
+      [...element.querySelectorAll("button")].find((entry) => entry.textContent?.trim() === text);
+    await vi.waitFor(() => expect(button("Stop browser")).toBeDefined());
+    button("Stop browser")!.click();
+    await vi.waitFor(() => expect(element.textContent).toContain("Browser stop is pending"));
+    expect(element.textContent).not.toContain("browser is stopped");
+    expect(button("Resume browser")).toBeUndefined();
+    button("Retry stop")!.click();
+    await vi.waitFor(() =>
+      expect(requests.filter((entry) => entry.method === "DELETE")).toHaveLength(2),
+    );
+    stopping = false;
+    changed();
+    await vi.waitFor(() => expect(element.textContent).toContain("browser is stopped"));
+    expect(button("Retry stop")).toBeUndefined();
+    expect(button("Resume browser")).toBeDefined();
+    expect(requests.filter((entry) => entry.method === "POST")).toHaveLength(1);
+  });
 
   it("observes an agent stop/resume without reopening or replacing the dashboard", async () => {
     const opening = createDeferred<ReturnType<typeof response>>();
@@ -140,14 +199,7 @@ describe("Browser dashboard presentation", () => {
       if (envelope.method === "POST") {
         return opening.promise;
       }
-      return {
-        ...response("first", paused),
-        ...(paused
-          ? {}
-          : {
-              browserTab: { target: "host", profile: "openclaw", targetId },
-            }),
-      };
+      return response("first", paused, targetId);
     });
     const changed = (instanceId = "first") =>
       publishEvent({

@@ -1,3 +1,7 @@
+import { writeFile } from "node:fs/promises";
+import path from "node:path";
+import type { Locator } from "playwright";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import type { MockGatewayControls, MockGatewayRequest } from "../test-helpers/control-ui-e2e.ts";
 
 export function requestRaw(request: MockGatewayRequest): Record<string, unknown> {
@@ -28,4 +32,18 @@ export async function resolveConfigMutation(
       ? { provider: apiKeyProvider, profileId: `${apiKeyProvider}:manual-api-key` }
       : { ok: true, config, hash },
   );
+}
+
+export function providerConfig(value: string): { apiKey: string } {
+  return Object.fromEntries([["apiKey", value]]) as { apiKey: string };
+}
+
+export function createProviderProofCapture(getArtifactDir: () => string) {
+  return async (fileName: string, content: Locator): Promise<void> => {
+    const page = content.page();
+    await writeFile(
+      path.join(getArtifactDir(), fileName),
+      await takeControlUiViewportScreenshot(page, page.locator(".shell"), [content]),
+    );
+  };
 }

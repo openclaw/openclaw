@@ -1,30 +1,31 @@
 import path from "node:path";
-import { resolveMemorySearchStaleness } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import {
-  resolveMemoryDreamingConfig,
+  defaultRuntime,
+  formatErrorMessage,
+  setVerbose,
+  shortenHomeInString,
+  shortenHomePath,
+  theme,
+} from "openclaw/plugin-sdk/memory-core-host-runtime-cli";
+import { getRuntimeConfig } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
+import {
   resolveMemoryDreamingWorkspace,
   resolveMemoryDeepDreamingConfig,
 } from "openclaw/plugin-sdk/memory-core-host-status";
+import { resolveNonNegativeIntegerOption } from "openclaw/plugin-sdk/number-runtime";
+import { resolveForeignMemorySlotOwner } from "./cli-memory-slot.js";
 import {
-  buildCliMemorySearchSessionKey,
+  emitMemoryCoreSidecarNotice,
   formatAuditCounts,
   formatExtraPaths,
   formatMemoryIndexOutcome,
   resolveMemoryAgent,
   resolveMemoryPluginConfig,
   scanMemoryManagerSources,
+  syncMemoryWithProgress,
   withMemoryCommand,
 } from "./cli-runtime-common.js";
-import {
-  defaultRuntime,
-  formatErrorMessage,
-  getRuntimeConfig,
-  setVerbose,
-  shortenHomeInString,
-  shortenHomePath,
-  theme,
-  withProgressTotals,
-} from "./cli.host.runtime.js";
+import { renderMemorySearch } from "./cli-search-output.js";
 import type {
   MemoryCommandOptions,
   MemoryForgetCommandOptions,
@@ -34,14 +35,13 @@ import type {
 } from "./cli.types.js";
 import { resolveMemoryPromotionFileMaxChars } from "./memory-budget.js";
 import { forgetMemoryEntries } from "./memory-forget.js";
-import { captureMemoryRebuildNotice } from "./memory-rebuild-notice.js";
+import { searchMemoryForCli } from "./memory-search-operation.js";
 import { formatMemoryVectorDegradedWriteReason } from "./memory/manager-vector-warning.js";
 import type { MemoryCoreRuntimeHost } from "./memory/runtime-host.js";
 import {
   applyShortTermPromotions,
   auditShortTermPromotionArtifacts,
   rankShortTermPromotionCandidates,
-  recordShortTermRecalls,
   resolveShortTermRecallLockPath,
   resolveShortTermRecallStorePath,
 } from "./short-term-promotion.js";
@@ -64,7 +64,7 @@ export async function runMemoryIndex(
   setVerbose(Boolean(opts.verbose));
   await withMemoryCommand({
     commandName: "memory index",
-    agent: opts.agent,
+    options: { agent: opts.agent },
     allAgents: true,
     purpose: "cli",
     inspectSources: true,
@@ -98,63 +98,11 @@ export async function runMemoryIndex(
           defaultRuntime.log(lines.join("\n"));
           defaultRuntime.log("");
         }
-        const startedAt = Date.now();
-        let lastLabel = "Indexing memory…";
-        let lastCompleted = 0;
-        let lastTotal = 0;
-        const formatDuration = (elapsedMs: number) => {
-          const seconds = Math.floor(elapsedMs / 1000);
-          return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
-        };
-        const buildLabel = () => {
-          const elapsedMs = Math.max(1, Date.now() - startedAt);
-          const elapsed = formatDuration(elapsedMs);
-          if (lastTotal <= 0 || lastCompleted <= 0) {
-            return `${lastLabel} · elapsed ${elapsed}`;
-          }
-          const remainingMs = Math.max(
-            0,
-            ((lastTotal - lastCompleted) * elapsedMs) / lastCompleted,
-          );
-          return `${lastLabel} · elapsed ${elapsed} · eta ${formatDuration(remainingMs)}`;
-        };
         if (!syncFn) {
           defaultRuntime.log("Memory backend does not support manual reindex.");
           return;
         }
-        await withProgressTotals(
-          {
-            label: "Indexing memory…",
-            total: 0,
-            fallback: opts.verbose ? "line" : undefined,
-          },
-          async (update, progress) => {
-            const interval = setInterval(() => {
-              progress.setLabel(buildLabel());
-            }, 1000);
-            try {
-              await syncFn({
-                reason: "cli",
-                force: Boolean(opts.force),
-                progress: (syncUpdate) => {
-                  if (syncUpdate.label) {
-                    lastLabel = syncUpdate.label;
-                  }
-                  lastCompleted = syncUpdate.completed;
-                  lastTotal = syncUpdate.total;
-                  update({
-                    completed: syncUpdate.completed,
-                    total: syncUpdate.total,
-                    label: buildLabel(),
-                  });
-                  progress.setLabel(buildLabel());
-                },
-              });
-            } finally {
-              clearInterval(interval);
-            }
-          },
-        );
+        await syncMemoryWithProgress({ sync: syncFn, options: opts, elapsed: true });
         let postIndexStatus = manager.status();
         const scan = await scanMemoryManagerSources(postIndexStatus);
         const outcome = formatMemoryIndexOutcome(postIndexStatus, scan, agentId);
@@ -203,76 +151,21 @@ export async function runMemorySearch(
 ) {
   await withMemoryCommand({
     commandName: "memory search",
-    agent: opts.agent,
-    diagnosticsToStderr: Boolean(opts.json),
-    onUnavailable: opts.json ? defaultRuntime.writeJson : undefined,
+    options: opts,
+    requiresMemorySlot: true,
     purpose: "cli",
     inspectSources: true,
     ...hostOptions,
     run: async ({ manager, cfg, agentId }) => {
-      const memoryPluginConfig = resolveMemoryPluginConfig(cfg);
-      const dreamingEnabled = resolveMemoryDreamingConfig({
-        pluginConfig: memoryPluginConfig,
+      const result = await searchMemoryForCli({
+        manager,
         cfg,
-      }).enabled;
-      const dreaming = resolveMemoryDeepDreamingConfig({
-        pluginConfig: memoryPluginConfig,
-        cfg,
+        agentId,
+        query,
+        maxResults: opts.maxResults,
+        minScore: opts.minScore,
       });
-      const sessionKey = buildCliMemorySearchSessionKey(agentId);
-      let readRebuildWarning: () => string | undefined = () => undefined;
-      let results: Awaited<ReturnType<typeof manager.search>>;
-      try {
-        readRebuildWarning = captureMemoryRebuildNotice(manager.status());
-        results = await manager.search(query, {
-          maxResults: opts.maxResults,
-          minScore: opts.minScore,
-          sessionKey,
-        });
-      } catch (err) {
-        const message = formatErrorMessage(err);
-        throw new Error(
-          [`Memory search failed: ${message}`, readRebuildWarning()].filter(Boolean).join(" "),
-          { cause: err },
-        );
-      }
-      const status = manager.status();
-      const staleness = resolveMemorySearchStaleness(status, agentId);
-      const warning = [staleness?.warning, readRebuildWarning()]
-        .filter((message): message is string => typeof message === "string")
-        .join(" ");
-      const workspaceDir = status.workspaceDir;
-      if (dreamingEnabled) {
-        await recordShortTermRecalls({
-          workspaceDir,
-          query,
-          results,
-          timezone: dreaming.timezone,
-        }).catch(() => {
-          // Persistence is best-effort, but the short-lived CLI must await it
-          // so process exit cannot discard an in-flight recall write.
-        });
-      }
-      if (opts.json) {
-        defaultRuntime.writeJson({ results, ...staleness, ...(warning ? { warning } : {}) });
-        return;
-      }
-      if (warning) {
-        defaultRuntime.error([warning, staleness?.action].filter(Boolean).join(" "));
-      }
-      if (results.length === 0) {
-        defaultRuntime.log("No matches.");
-        return;
-      }
-      const lines: string[] = [];
-      for (const result of results) {
-        lines.push(
-          `${success(result.score.toFixed(3))} ${accent(`${shortenHomePath(result.path)}:${result.startLine}-${result.endLine}`)}`,
-        );
-        lines.push(muted(result.snippet));
-        lines.push("");
-      }
-      defaultRuntime.log(lines.join("\n").trim());
+      renderMemorySearch(result, opts.json);
     },
   });
 }
@@ -281,6 +174,10 @@ export async function runMemoryForget(opts: MemoryForgetCommandOptions) {
   try {
     const cfg = getRuntimeConfig({ skipPluginValidation: true });
     const agentId = resolveMemoryAgent(cfg, opts.agent);
+    const slotOwner = resolveForeignMemorySlotOwner(cfg);
+    if (slotOwner) {
+      emitMemoryCoreSidecarNotice(slotOwner, { json: Boolean(opts.json) });
+    }
     const report = await forgetMemoryEntries({
       cfg,
       agentId,
@@ -357,21 +254,21 @@ function matchesPromotionSelector(
     return false;
   }
   return (
-    candidate.key.toLowerCase() === trimmed ||
     candidate.key.toLowerCase().includes(trimmed) ||
     candidate.path.toLowerCase().includes(trimmed) ||
     candidate.snippet.toLowerCase().includes(trimmed)
   );
 }
-export async function runMemoryPromote(
+async function runMemoryPromotion(
   opts: MemoryPromoteCommandOptions,
-  hostOptions?: MemoryCoreRuntimeHost,
+  hostOptions: MemoryCoreRuntimeHost | undefined,
+  selector?: string,
 ) {
+  const explain = selector !== undefined;
+  const command = explain ? "promote-explain" : "promote";
   await withMemoryCommand({
-    commandName: "memory promote",
-    agent: opts.agent,
-    diagnosticsToStderr: Boolean(opts.json),
-    onUnavailable: opts.json ? defaultRuntime.writeJson : undefined,
+    commandName: `memory ${command}`,
+    options: opts,
     purpose: "status",
     ...hostOptions,
     run: async ({ manager, cfg, agentId }) => {
@@ -382,27 +279,79 @@ export async function runMemoryPromote(
         cfg,
       });
       if (!workspaceDir) {
-        throw new Error("Memory promote requires a resolvable workspace directory.");
+        throw new Error(`Memory ${command} requires a resolvable workspace directory.`);
       }
       let candidates: Awaited<ReturnType<typeof rankShortTermPromotionCandidates>>;
       try {
-        const gatherAllForApply = Boolean(opts.apply);
+        const gatherAllForApply = !explain && Boolean(opts.apply);
+        const unrestricted = explain || gatherAllForApply;
         candidates = await rankShortTermPromotionCandidates({
           workspaceDir,
-          limit: gatherAllForApply ? undefined : opts.limit,
-          minScore: gatherAllForApply ? 0 : (opts.minScore ?? dreaming.minScore),
-          minRecallCount: gatherAllForApply ? 0 : (opts.minRecallCount ?? dreaming.minRecallCount),
-          minUniqueQueries: gatherAllForApply
-            ? 0
-            : (opts.minUniqueQueries ?? dreaming.minUniqueQueries),
+          limit: unrestricted ? undefined : opts.limit,
+          minScore: unrestricted ? 0 : (opts.minScore ?? dreaming.minScore),
+          minRecallCount: unrestricted ? 0 : (opts.minRecallCount ?? dreaming.minRecallCount),
+          minUniqueQueries: unrestricted ? 0 : (opts.minUniqueQueries ?? dreaming.minUniqueQueries),
           recencyHalfLifeDays: dreaming.recencyHalfLifeDays,
           maxAgeDays: gatherAllForApply ? undefined : dreaming.maxAgeDays,
           includePromoted: Boolean(opts.includePromoted),
         });
       } catch (err) {
-        throw new Error(`Memory promote ranking failed: ${formatErrorMessage(err)}`, {
-          cause: err,
-        });
+        throw new Error(
+          `${explain ? "Memory promote-explain" : "Memory promote ranking"} failed: ${formatErrorMessage(err)}`,
+          {
+            cause: err,
+          },
+        );
+      }
+      if (selector !== undefined) {
+        const candidate = candidates.find((entry) => matchesPromotionSelector(entry, selector));
+        if (!candidate) {
+          throw new Error(`No promotion candidate matched "${selector}".`);
+        }
+        const thresholds = {
+          minScore: dreaming.minScore,
+          minRecallCount: dreaming.minRecallCount,
+          minUniqueQueries: dreaming.minUniqueQueries,
+          maxAgeDays: dreaming.maxAgeDays ?? null,
+        };
+        if (opts.json) {
+          defaultRuntime.writeJson({
+            workspaceDir,
+            thresholds,
+            candidate,
+            passes: {
+              score: candidate.score >= thresholds.minScore,
+              // Engine gate is aggregate signalCount vs minRecallCount (config name unchanged).
+              recallCount: candidate.signalCount >= thresholds.minRecallCount,
+              uniqueQueries: candidate.uniqueQueries >= thresholds.minUniqueQueries,
+              maxAge:
+                thresholds.maxAgeDays === null ? true : candidate.ageDays <= thresholds.maxAgeDays,
+            },
+          });
+          return;
+        }
+        const lines = [
+          `${heading("Promotion Explain")} ${muted("(" + agentId + ")")}`,
+          accent(candidate.key),
+          muted(
+            `${shortenHomePath(candidate.path)}:${String(candidate.startLine)}-${String(candidate.endLine)}`,
+          ),
+          candidate.snippet,
+          muted(
+            `score=${candidate.score.toFixed(3)} signals=${candidate.signalCount} recalls=${candidate.recallCount} uniqueQueries=${candidate.uniqueQueries} ageDays=${candidate.ageDays.toFixed(1)}`,
+          ),
+          muted(
+            `components: frequency=${candidate.components.frequency.toFixed(2)} relevance=${candidate.components.relevance.toFixed(2)} diversity=${candidate.components.diversity.toFixed(2)} recency=${candidate.components.recency.toFixed(2)} consolidation=${candidate.components.consolidation.toFixed(2)} conceptual=${candidate.components.conceptual.toFixed(2)}`,
+          ),
+          muted(
+            `thresholds: minScore=${thresholds.minScore} minRecallCount=${thresholds.minRecallCount} minUniqueQueries=${thresholds.minUniqueQueries} maxAgeDays=${thresholds.maxAgeDays ?? "none"}`,
+          ),
+        ];
+        if (candidate.conceptTags.length > 0) {
+          lines.push(muted(`concepts=${candidate.conceptTags.join(", ")}`));
+        }
+        defaultRuntime.log(lines.join("\n"));
+        return;
       }
       let applyResult: Awaited<ReturnType<typeof applyShortTermPromotions>> | undefined;
       if (opts.apply) {
@@ -434,10 +383,7 @@ export async function runMemoryPromote(
           });
         }
       }
-      const outputLimit =
-        typeof opts.limit === "number" && Number.isFinite(opts.limit)
-          ? Math.max(0, Math.floor(opts.limit))
-          : candidates.length;
+      const outputLimit = resolveNonNegativeIntegerOption(opts.limit, candidates.length);
       const rejectedCandidates = applyResult
         ? applyResult.rejectedCandidates.slice(
             0,
@@ -539,91 +485,17 @@ export async function runMemoryPromote(
     },
   });
 }
+export async function runMemoryPromote(
+  opts: MemoryPromoteCommandOptions,
+  hostOptions?: MemoryCoreRuntimeHost,
+) {
+  await runMemoryPromotion(opts, hostOptions);
+}
+
 export async function runMemoryPromoteExplain(
   selector: string,
   opts: MemoryPromoteExplainOptions,
   hostOptions?: MemoryCoreRuntimeHost,
 ) {
-  await withMemoryCommand({
-    commandName: "memory promote-explain",
-    agent: opts.agent,
-    diagnosticsToStderr: Boolean(opts.json),
-    onUnavailable: opts.json ? defaultRuntime.writeJson : undefined,
-    purpose: "status",
-    ...hostOptions,
-    run: async ({ manager, cfg, agentId }) => {
-      const status = manager.status();
-      const workspaceDir = status.workspaceDir?.trim();
-      const dreaming = resolveMemoryDeepDreamingConfig({
-        pluginConfig: resolveMemoryPluginConfig(cfg),
-        cfg,
-      });
-      if (!workspaceDir) {
-        throw new Error("Memory promote-explain requires a resolvable workspace directory.");
-      }
-      let candidates: Awaited<ReturnType<typeof rankShortTermPromotionCandidates>>;
-      try {
-        candidates = await rankShortTermPromotionCandidates({
-          workspaceDir,
-          minScore: 0,
-          minRecallCount: 0,
-          minUniqueQueries: 0,
-          includePromoted: Boolean(opts.includePromoted),
-          recencyHalfLifeDays: dreaming.recencyHalfLifeDays,
-          maxAgeDays: dreaming.maxAgeDays,
-        });
-      } catch (err) {
-        throw new Error(`Memory promote-explain failed: ${formatErrorMessage(err)}`, {
-          cause: err,
-        });
-      }
-      const candidate = candidates.find((entry) => matchesPromotionSelector(entry, selector));
-      if (!candidate) {
-        throw new Error(`No promotion candidate matched "${selector}".`);
-      }
-      const thresholds = {
-        minScore: dreaming.minScore,
-        minRecallCount: dreaming.minRecallCount,
-        minUniqueQueries: dreaming.minUniqueQueries,
-        maxAgeDays: dreaming.maxAgeDays ?? null,
-      };
-      if (opts.json) {
-        defaultRuntime.writeJson({
-          workspaceDir,
-          thresholds,
-          candidate,
-          passes: {
-            score: candidate.score >= thresholds.minScore,
-            // Engine gate is aggregate signalCount vs minRecallCount (config name unchanged).
-            recallCount: candidate.signalCount >= thresholds.minRecallCount,
-            uniqueQueries: candidate.uniqueQueries >= thresholds.minUniqueQueries,
-            maxAge:
-              thresholds.maxAgeDays === null ? true : candidate.ageDays <= thresholds.maxAgeDays,
-          },
-        });
-        return;
-      }
-      const lines = [
-        `${heading("Promotion Explain")} ${muted("(" + agentId + ")")}`,
-        accent(candidate.key),
-        muted(
-          `${shortenHomePath(candidate.path)}:${String(candidate.startLine)}-${String(candidate.endLine)}`,
-        ),
-        candidate.snippet,
-        muted(
-          `score=${candidate.score.toFixed(3)} signals=${candidate.signalCount} recalls=${candidate.recallCount} uniqueQueries=${candidate.uniqueQueries} ageDays=${candidate.ageDays.toFixed(1)}`,
-        ),
-        muted(
-          `components: frequency=${candidate.components.frequency.toFixed(2)} relevance=${candidate.components.relevance.toFixed(2)} diversity=${candidate.components.diversity.toFixed(2)} recency=${candidate.components.recency.toFixed(2)} consolidation=${candidate.components.consolidation.toFixed(2)} conceptual=${candidate.components.conceptual.toFixed(2)}`,
-        ),
-        muted(
-          `thresholds: minScore=${thresholds.minScore} minRecallCount=${thresholds.minRecallCount} minUniqueQueries=${thresholds.minUniqueQueries} maxAgeDays=${thresholds.maxAgeDays ?? "none"}`,
-        ),
-      ];
-      if (candidate.conceptTags.length > 0) {
-        lines.push(muted(`concepts=${candidate.conceptTags.join(", ")}`));
-      }
-      defaultRuntime.log(lines.join("\n"));
-    },
-  });
+  await runMemoryPromotion(opts, hostOptions, selector);
 }

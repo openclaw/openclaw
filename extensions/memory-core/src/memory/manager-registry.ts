@@ -1,5 +1,6 @@
 // Memory Core plugin module owns manager cache and close serialization.
 import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
+import { enqueueKeyedTask } from "openclaw/plugin-sdk/keyed-async-queue";
 import type {
   MemoryEmbeddingProvider,
   MemoryEmbeddingProviderAdapter,
@@ -10,7 +11,6 @@ import {
   type ResolvedMemorySearchConfig,
 } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import type { MemoryEmbeddingProbeResult } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
-import type { MemoryPluginRuntime } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import {
   resolveMemoryCoreLocalServiceHostIdentity,
@@ -18,7 +18,6 @@ import {
 } from "./embedding-local-service.js";
 import {
   MemoryManagerReloadError,
-  prepareMemoryManagerReload,
   type MemoryManagerLifecycle,
   type MemoryReloadState,
 } from "./lifecycle.js";
@@ -26,10 +25,6 @@ import {
 const log = createSubsystemLogger("memory");
 
 export type MemoryIndexManagerPurpose = "default" | "status" | "cli" | "maintenance";
-
-export function isTransientMemoryIndexManagerPurpose(purpose: MemoryIndexManagerPurpose): boolean {
-  return purpose !== "default";
-}
 
 export function normalizeMemoryIndexManagerPurpose(
   purpose: MemoryIndexManagerPurpose | undefined,
@@ -92,13 +87,11 @@ type ManagerOwnership = {
   retiring: boolean;
 };
 
-type MemoryReloadChange = Parameters<NonNullable<MemoryPluginRuntime["prepareReload"]>>[0];
 export class MemoryManagerRegistry<T extends ClosableMemoryManager> {
   readonly embeddingProbeCache = new Map<string, MemoryEmbeddingProbeCacheEntry>();
   private readonly cache = new Map<string, T>();
   private readonly scopeOperations = new Map<string, Promise<void>>();
   private closePromise: Promise<void> | null = null;
-  private closeFailed = false;
   private readonly managers = new Map<T, ManagerOwnership>();
   constructor(private readonly lifecycle: MemoryManagerLifecycle = {}) {
     lifecycle.prepare = (reload) => this.prepareManagersForReload(reload);
@@ -178,12 +171,6 @@ export class MemoryManagerRegistry<T extends ClosableMemoryManager> {
     this.managers.get(manager)?.providers.delete(provider);
   }
 
-  prepareReload(
-    change: MemoryReloadChange,
-  ): ReturnType<NonNullable<MemoryPluginRuntime["prepareReload"]>> {
-    return prepareMemoryManagerReload(change, this.lifecycle);
-  }
-
   private prepareManagersForReload(reload: MemoryReloadState) {
     // A probe can outlive its transient manager, but never the adapter that produced it.
     for (const [key, entry] of this.embeddingProbeCache) {
@@ -195,12 +182,10 @@ export class MemoryManagerRegistry<T extends ClosableMemoryManager> {
       // Overlapping reloads join the manager's existing close; retirement alone
       // does not mean its cleanup has completed.
       const selected = [...this.managers].filter(
-        ([, owner]) =>
+        ([manager, owner]) =>
           owner.retiring ||
           reload.retireRuntime ||
-          [...owner.pending.values(), ...owner.providers.values(), ...owner.failedAdapters].some(
-            (adapter) => reload.adapters.has(adapter),
-          ),
+          this.getProbeOwners(manager).some((adapter) => reload.adapters.has(adapter)),
       );
       for (const [manager, owner] of selected) {
         owner.retiring = true;
@@ -229,10 +214,7 @@ export class MemoryManagerRegistry<T extends ClosableMemoryManager> {
   ): Promise<T | null> {
     // A detached search handoff may race global teardown. Decline late
     // maintenance acquisition so closing the default manager cannot wait on itself.
-    if (
-      params.purpose === "maintenance" &&
-      (this.reload?.retireRuntime || this.closePromise || this.closeFailed)
-    ) {
+    if (params.purpose === "maintenance" && (this.reload?.retireRuntime || this.closePromise)) {
       return null;
     }
     if (this.reload?.retireRuntime) {
@@ -242,9 +224,6 @@ export class MemoryManagerRegistry<T extends ClosableMemoryManager> {
       if (this.reload?.retireRuntime) {
         throw new MemoryManagerReloadError();
       }
-      if (this.closeFailed) {
-        await this.retryFailedGlobalClose();
-      }
       const prepared = await callbacks.prepare();
       if (!prepared) {
         return null;
@@ -252,7 +231,6 @@ export class MemoryManagerRegistry<T extends ClosableMemoryManager> {
       if (this.reload?.retireRuntime) {
         throw new MemoryManagerReloadError();
       }
-      const transient = isTransientMemoryIndexManagerPurpose(params.purpose);
       const create = async () => {
         if (this.reload?.retireRuntime) {
           throw new MemoryManagerReloadError();
@@ -266,7 +244,7 @@ export class MemoryManagerRegistry<T extends ClosableMemoryManager> {
         }
         return manager;
       };
-      if (transient) {
+      if (params.purpose !== "default") {
         return await create();
       }
       const cachedManager = this.cache.get(prepared.key);
@@ -297,7 +275,14 @@ export class MemoryManagerRegistry<T extends ClosableMemoryManager> {
   }
 
   async closeAll(): Promise<void> {
-    await this.runGlobalClose(() => this.retryFailedGlobalClose());
+    const previous = this.closePromise ?? Promise.resolve();
+    const operation = () => this.closeAllUnlocked();
+    const closePromise = previous.then(operation, operation);
+    this.closePromise = closePromise;
+    await closePromise;
+    if (this.closePromise === closePromise) {
+      this.closePromise = null;
+    }
   }
 
   async closeForAgent(params: {
@@ -305,35 +290,13 @@ export class MemoryManagerRegistry<T extends ClosableMemoryManager> {
     purpose: MemoryIndexManagerPurpose;
   }): Promise<void> {
     const scope = { agentId: normalizeAgentId(params.agentId), purpose: params.purpose };
-    await this.runScopeOperation(scope, async () => {
-      await this.closeScopeUnlocked(scope);
-    });
+    await this.runScopeOperation(scope, () => this.closeScopeUnlocked(scope));
   }
 
   deleteIfCurrent(key: string, manager: T): void {
     this.managers.delete(manager);
     if (this.cache.get(key) === manager) {
       this.cache.delete(key);
-    }
-  }
-
-  private async retryFailedGlobalClose(): Promise<void> {
-    try {
-      await this.closeAllUnlocked();
-      this.closeFailed = false;
-    } catch (err) {
-      this.closeFailed = true;
-      throw err;
-    }
-  }
-
-  private async runGlobalClose(operation: () => Promise<void>): Promise<void> {
-    const previous = this.closePromise ?? Promise.resolve();
-    const closePromise = previous.then(operation, operation);
-    this.closePromise = closePromise;
-    await closePromise;
-    if (this.closePromise === closePromise) {
-      this.closePromise = null;
     }
   }
 
@@ -351,21 +314,11 @@ export class MemoryManagerRegistry<T extends ClosableMemoryManager> {
         }
       }
     }
-    const scopeKey = JSON.stringify([params.agentId, params.purpose]);
-    const previousOperation = this.scopeOperations.get(scopeKey) ?? Promise.resolve();
-    const result = previousOperation.then(operation, operation);
-    const tail = result.then(
-      () => undefined,
-      () => undefined,
-    );
-    this.scopeOperations.set(scopeKey, tail);
-    try {
-      return await result;
-    } finally {
-      if (this.scopeOperations.get(scopeKey) === tail) {
-        this.scopeOperations.delete(scopeKey);
-      }
-    }
+    return await enqueueKeyedTask({
+      tails: this.scopeOperations,
+      key: JSON.stringify([params.agentId, params.purpose]),
+      task: operation,
+    });
   }
 
   private async closeAllUnlocked(): Promise<void> {

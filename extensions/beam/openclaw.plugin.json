@@ -16,6 +16,14 @@
       "sensitive": true
     }
   },
+  "configGroups": [
+    {
+      "id": "session-mirroring",
+      "title": "Session mirroring",
+      "order": 10,
+      "properties": ["mirror"]
+    }
+  ],
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

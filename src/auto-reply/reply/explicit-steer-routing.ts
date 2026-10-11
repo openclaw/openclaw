@@ -1,9 +1,5 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveActiveEmbeddedRunSessionId } from "../../agents/embedded-agent-runner/active-run-projections.js";
-import {
-  resolveInternalSessionKey,
-  resolveMainSessionAlias,
-} from "../../agents/tools/sessions-helpers.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   isAuthorizedTextSlashCommandTurn,
@@ -11,45 +7,24 @@ import {
   resolveCommandTurnContext,
 } from "../command-turn-context.js";
 import type { MsgContext } from "../templating.js";
+import { resolveCommandSourceSessionKey } from "./command-source-session-key.js";
 import { replyRunRegistry } from "./reply-run-registry.js";
 
 export function parseSteerMessage(raw: string): string | null {
   const match = raw.trim().match(/^\/(?:steer|tell)(?:\s+([\s\S]*))?$/i);
-  if (!match) {
-    return null;
-  }
-  return (match[1] ?? "").trim();
+  return match ? (match[1] ?? "").trim() : null;
 }
 
 function listSteerCandidateSessionKeys(targetSessionKey: string): string[] {
-  const candidates = [targetSessionKey];
   // Authorized text slash turns can still arrive on a source-only :slash:
   // lane while the direct conversation owns the active reply operation.
-  if (targetSessionKey.includes(":slash:")) {
-    candidates.push(
-      targetSessionKey.replace(":slash:", ":direct:"),
-      targetSessionKey.replace(":slash:", ":dm:"),
-    );
-  }
-  return [...new Set(candidates)];
-}
-
-function resolveSteerSourceSessionKey(params: {
-  cfg: OpenClawConfig;
-  ctx: MsgContext;
-  sessionKey?: string;
-}): string | undefined {
-  const commandTarget = normalizeOptionalString(params.ctx.CommandTargetSessionKey);
-  const commandSession = normalizeOptionalString(params.sessionKey ?? params.ctx.SessionKey);
-  const raw = isNativeCommandTurn(resolveCommandTurnContext(params.ctx))
-    ? commandTarget || commandSession
-    : commandSession || commandTarget;
-  if (!raw) {
-    return undefined;
-  }
-
-  const { mainKey, alias } = resolveMainSessionAlias(params.cfg);
-  return resolveInternalSessionKey({ key: raw, alias, mainKey });
+  return targetSessionKey.includes(":slash:")
+    ? [
+        targetSessionKey,
+        targetSessionKey.replace(":slash:", ":direct:"),
+        targetSessionKey.replace(":slash:", ":dm:"),
+      ]
+    : [targetSessionKey];
 }
 
 /**
@@ -79,7 +54,10 @@ export function resolveActiveExplicitSteerSessionKey(params: {
     return undefined;
   }
 
-  const sourceSessionKey = resolveSteerSourceSessionKey(params);
+  const sourceSessionKey = resolveCommandSourceSessionKey({
+    ...params,
+    sessionKey: params.sessionKey ?? params.ctx.SessionKey,
+  });
   if (!sourceSessionKey) {
     return undefined;
   }

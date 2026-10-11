@@ -29,14 +29,17 @@ function gitResult(stdout: string, code = 0): GitResult {
 describe("empty-tree preparation", () => {
   beforeEach(() => vi.mocked(runGit).mockReset());
 
-  it("reads the repository's current object format without retaining failures", async () => {
-    vi.mocked(runGit).mockResolvedValueOnce(gitResult("", 128));
-    await expect(resolveSessionDiffEmptyTree("repo")).resolves.toBeNull();
-    vi.mocked(runGit).mockResolvedValueOnce(gitResult("format-specific-empty-tree\n"));
-    await expect(resolveSessionDiffEmptyTree("repo")).resolves.toEqual({
-      base: "format-specific-empty-tree",
-    });
-  });
+  it.each([undefined, "--show-object-format", "unknown-format"])(
+    "reads Git's empty tree for format %s without retaining failures",
+    async (objectFormat) => {
+      vi.mocked(runGit).mockResolvedValueOnce(gitResult("", 128));
+      await expect(resolveSessionDiffEmptyTree("repo", objectFormat)).resolves.toBeNull();
+      vi.mocked(runGit).mockResolvedValueOnce(gitResult("format-specific-empty-tree\n"));
+      await expect(resolveSessionDiffEmptyTree("repo", objectFormat)).resolves.toEqual({
+        base: "format-specific-empty-tree",
+      });
+    },
+  );
 });
 
 describe("branch base resolution", () => {

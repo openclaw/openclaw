@@ -1,4 +1,3 @@
-// Systemd lingering setup helpers for gateway install/start flows.
 // Lingering keeps user services alive after logout on Linux hosts.
 
 import { note } from "../../packages/terminal-core/src/note.js";
@@ -25,7 +24,6 @@ async function readGatewayServiceLingerStatus(env: NodeJS.ProcessEnv) {
   return await readSystemdUserLingerStatus({ env, user });
 }
 
-/** Ensures systemd user lingering interactively, prompting before sudo when requested. */
 export async function ensureSystemdUserLingerInteractive(params: {
   runtime: RuntimeEnv;
   prompter?: LingerPrompter;
@@ -83,16 +81,9 @@ export async function ensureSystemdUserLingerInteractive(params: {
     env,
     user: status.user,
   });
-  if (resultNoSudo.ok) {
-    await prompter.note(`Enabled systemd lingering for ${status.user}.`, title);
-    return;
-  }
-
-  const result = await enableSystemdUserLinger({
-    env,
-    user: status.user,
-    sudoMode: "prompt",
-  });
+  const result = resultNoSudo.ok
+    ? resultNoSudo
+    : await enableSystemdUserLinger({ env, user: status.user, sudoMode: "prompt" });
   if (result.ok) {
     await prompter.note(`Enabled systemd lingering for ${status.user}.`, title);
     return;
@@ -104,7 +95,6 @@ export async function ensureSystemdUserLingerInteractive(params: {
   await prompter.note(`Run manually: sudo loginctl enable-linger ${status.user}`, title);
 }
 
-/** Best-effort non-interactive lingering enablement for install scripts and CI-like flows. */
 export async function ensureSystemdUserLingerNonInteractive(params: {
   runtime: RuntimeEnv;
   env?: NodeJS.ProcessEnv;

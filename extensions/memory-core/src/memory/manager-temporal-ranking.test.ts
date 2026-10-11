@@ -5,7 +5,7 @@ import { resolveSessionTranscriptsDirForAgent } from "openclaw/plugin-sdk/memory
 import { deleteSessionEntry, upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { openOpenClawAgentDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
 import { describe, expect, it } from "vitest";
-import { createMemorySearchTool } from "../tools.js";
+import { createMemorySearchToolOrThrow } from "../tools.test-helpers.js";
 import { createManagerIndexFixture } from "./manager-index.test-support.js";
 
 const { closeAllMemorySearchManagers, getMemorySearchManager } = await import("./index.js");
@@ -16,6 +16,41 @@ describe("memory source temporal ranking", () => {
     getMemorySearchManager,
     closeAllMemorySearchManagers,
   });
+
+  it.each(["keyword-only", "hybrid", "vector-only"])(
+    "keeps old dated notes above the relevance threshold through %s",
+    async (mode) => {
+      fixture.provider.forceNoProvider = mode === "keyword-only";
+      const cfg = fixture.createConfig({
+        provider: mode === "keyword-only" ? "none" : "openai",
+        vectorEnabled: false,
+        minScore: 0.35,
+      });
+      const dated = "memory/records/2000-01-01-alpha.md";
+      await fs.writeFile(path.join(fixture.paths.memory, "2026-01-12.md"), "Beta unrelated note.");
+      await fs.mkdir(path.join(fixture.paths.workspace, "memory/records"), { recursive: true });
+      await fs.writeFile(path.join(fixture.paths.workspace, dated), "Alpha cobalt orchid.");
+      await fs.writeFile(path.join(fixture.paths.memory, "evergreen.md"), "Alpha cobalt orchid.");
+      let manager = await fixture.getFreshManager(cfg);
+      await manager.sync({ reason: "test", force: true });
+      if (mode === "vector-only") {
+        await manager.close();
+        openOpenClawAgentDatabase({ agentId: "main" }).db.exec(`
+          DROP TABLE memory_index_chunks_fts;
+          CREATE VIEW memory_index_chunks_fts AS
+            SELECT text, id, path, source, model, start_line, end_line FROM memory_index_chunks;
+        `);
+        manager = await fixture.getFreshManager(cfg, "cli");
+        expect(manager.status().fts?.available).toBe(false);
+      }
+
+      const results = await manager.search("alpha cobalt orchid", { maxResults: 2 });
+      expect(results.map((entry) => entry.path)).toEqual(["memory/evergreen.md", dated]);
+      expect(results[1]?.score).toBeLessThan(0.35);
+      expect(results[1]?.snippet).toContain("Alpha cobalt orchid.");
+      expect(results[1]).not.toHaveProperty("eligibilityScore");
+    },
+  );
 
   it.each([
     {
@@ -204,14 +239,11 @@ describe("memory source temporal ranking", () => {
       ).toBe(`sessions/main/${freshSession.fileName}`);
 
       if (!lexicalOnly && !archived) {
-        const tool = createMemorySearchTool({
+        const tool = createMemorySearchToolOrThrow({
           config: cfg,
           agentId: "main",
           agentSessionKey: "agent:main:memory:z-fresh",
         });
-        if (!tool) {
-          throw new Error("Expected memory_search tool");
-        }
         const result = await tool.execute("source-recency", {
           query,
           corpus: "sessions",

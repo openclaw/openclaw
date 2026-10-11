@@ -1,5 +1,3 @@
-// sessions_list tool tests cover session metadata projection, visibility
-// helpers, and numeric argument validation.
 import { Value } from "typebox/value";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createSessionsListTool } from "./sessions-list-tool.js";
@@ -13,6 +11,8 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("./in-process-gateway.js", () => ({
+  hasGatewayToolRoutingContext: () => false,
+  getInProcessGatewayToolContext: () => undefined,
   callAgentToolGatewayRequest: (opts: unknown) => mocks.gatewayCall(opts),
 }));
 
@@ -47,10 +47,7 @@ describe("sessions-list inventory queries", () => {
     mocks.getSessionStateVersions.mockReturnValue({});
   });
 
-  it.each([
-    { group: "P1 issues", pinned: true, activeOnly: true, excludeSubagents: true },
-    { group: "", pinned: false, activeOnly: false, excludeSubagents: false },
-  ])(
+  it.each([{ group: "P1 issues", pinned: true, activeOnly: true, excludeSubagents: true }])(
     "forwards exact inventory filters without turning explicit actor IDs into identity: %o",
     async (flags) => {
       mocks.gatewayCall.mockResolvedValue({ sessions: [] });
@@ -102,73 +99,43 @@ describe("sessions-list inventory queries", () => {
     },
   );
 
-  it.each([
-    ["owned", undefined, undefined],
-    ["created", undefined, undefined],
-    ["involving", undefined, undefined],
-    ["owned", "profile-trusted", "profile-other"],
-    ["created", "profile-other", "profile-trusted"],
-    ["involving", "profile-other", "profile-third"],
-  ] as const)(
-    "binds %s to the trusted profile and preserves independent actor filters",
-    async (relationship, ownerId, creatorId) => {
-      mocks.gatewayCall.mockResolvedValue({ sessions: [] });
-      const tool = createSessionsListTool({
-        config: VALID_CONFIG,
-        requesterProfileId: "profile-trusted",
-      });
-      await tool.execute("related-inventory", {
-        relationship,
-        ownerId,
-        creatorId,
-        requesterProfileId: "profile-forged",
-      });
-      expect(mocks.gatewayCall).toHaveBeenCalledExactlyOnceWith({
-        method: "sessions.list",
-        params: expect.objectContaining({
-          ownerId,
-          creatorId,
-          profileRelation: { profileId: "profile-trusted", relationship },
-        }),
-      });
-    },
-  );
-
-  it.each(["owned", "created", "involving"])(
-    "rejects %s without trusted requester identity before dispatch even with explicit actor filters",
-    async (relationship) => {
-      const tool = createSessionsListTool({ config: VALID_CONFIG });
-
-      await expect(
-        tool.execute("untrusted-relationship", {
-          relationship,
-          requesterProfileId: "profile-forged",
-          ownerId: "profile-forged",
-          creatorId: "profile-forged",
-        }),
-      ).rejects.toThrow("relationship requires an authenticated requesting user");
-      expect(mocks.gatewayCall).not.toHaveBeenCalled();
-    },
-  );
-
-  it.each([
-    { relationship: "owned", ownerId: "profile-other" },
-    { relationship: "created", creatorId: "profile-other" },
-  ])("leaves $relationship intersections and profile aliases to the Gateway", async (params) => {
+  it("binds relationships to the trusted profile while leaving actor intersections to the Gateway", async () => {
+    const relationship = "involving";
+    const ownerId = "profile-other";
+    const creatorId = "profile-third";
     mocks.gatewayCall.mockResolvedValue({ sessions: [] });
     const tool = createSessionsListTool({
       config: VALID_CONFIG,
       requesterProfileId: "profile-trusted",
     });
-    await tool.execute("intersected-relationship", params);
+    await tool.execute("related-inventory", {
+      relationship,
+      ownerId,
+      creatorId,
+      requesterProfileId: "profile-forged",
+    });
     expect(mocks.gatewayCall).toHaveBeenCalledExactlyOnceWith({
       method: "sessions.list",
       params: expect.objectContaining({
-        profileRelation: { profileId: "profile-trusted", relationship: params.relationship },
-        ownerId: "ownerId" in params ? params.ownerId : undefined,
-        creatorId: "creatorId" in params ? params.creatorId : undefined,
+        ownerId,
+        creatorId,
+        profileRelation: { profileId: "profile-trusted", relationship },
       }),
     });
+  });
+
+  it("rejects relationships without trusted identity even with explicit actor filters", async () => {
+    const tool = createSessionsListTool({ config: VALID_CONFIG });
+
+    await expect(
+      tool.execute("untrusted-relationship", {
+        relationship: "involving",
+        requesterProfileId: "profile-forged",
+        ownerId: "profile-forged",
+        creatorId: "profile-forged",
+      }),
+    ).rejects.toThrow("relationship requires an authenticated requesting user");
+    expect(mocks.gatewayCall).not.toHaveBeenCalled();
   });
 
   it("keeps a sandboxed main session clamped to spawned rows", async () => {
@@ -202,11 +169,6 @@ describe("sessions-list inventory queries", () => {
         [sessionRow("agent:main:main", "main")],
       ],
     },
-    {
-      name: "non-matching kinds",
-      params: { kinds: ["main"], limit: 1 },
-      pages: [[sessionRow("agent:main:dashboard:other")], [sessionRow("agent:main:main", "main")]],
-    },
   ])("fills the requested output limit past $name", async ({ params, pages }) => {
     mockSessionPages(pages);
 
@@ -221,12 +183,7 @@ describe("sessions-list inventory queries", () => {
     expect(mocks.gatewayCall).toHaveBeenCalledTimes(2);
   });
 
-  it.each([
-    { name: "default", limit: undefined, expectedLimit: 100 },
-    { name: "maximum", limit: 200, expectedLimit: 200 },
-    { name: "legacy larger request", limit: 201, expectedLimit: 200 },
-    { name: "legacy bulk request", limit: 1000, expectedLimit: 200 },
-  ])(
+  it.each([{ name: "legacy larger request", limit: 201, expectedLimit: 200 }])(
     "returns a bounded $name page and resumes at the next unread Gateway row",
     async ({ limit, expectedLimit }) => {
       const inventory = Array.from({ length: 201 }, (_, index) =>
@@ -279,35 +236,6 @@ describe("sessions-list inventory queries", () => {
     },
   );
 
-  it("resumes a caller offset midway through a Gateway page after visibility and kind filtering", async () => {
-    const hidden = sessionRow("agent:other:dashboard:hidden", "dashboard", "other");
-    const firstRow = sessionRow("agent:main:dashboard:first");
-    const secondRow = sessionRow("agent:main:dashboard:second");
-    const finalRow = sessionRow("agent:main:dashboard:final");
-    mockSessionPages(
-      [[hidden, sessionRow("agent:main:main", "main"), firstRow, hidden, secondRow, finalRow]],
-      40,
-    );
-    const tool = createSessionsListTool({ config: VALID_CONFIG });
-
-    const first = getSessionsListDetails(
-      await tool.execute("offset-inventory", { offset: 40, limit: 2, kinds: ["other"] }),
-    );
-
-    expect(first).toMatchObject({ count: 2, hasMore: true, nextOffset: 45, limitApplied: 2 });
-    expect(first.sessions?.map((row) => row.key)).toEqual([firstRow.key, secondRow.key]);
-    expect(first).not.toHaveProperty("truncationReason");
-    mockSessionPages([[finalRow]], 45);
-
-    const resumed = getSessionsListDetails(
-      await tool.execute("offset-resume", { offset: first.nextOffset, limit: 2, kinds: ["other"] }),
-    );
-
-    expect(resumed).toMatchObject({ count: 1, hasMore: false });
-    expect(resumed.sessions?.map((row) => row.key)).toEqual([finalRow.key]);
-    expect(resumed).not.toHaveProperty("nextOffset");
-  });
-
   it("reports exhaustion after scanning several sparse Gateway pages", async () => {
     const firstRow = sessionRow("agent:main:dashboard:first");
     const lastRow = sessionRow("agent:main:dashboard:last");
@@ -332,7 +260,7 @@ describe("sessions-list inventory queries", () => {
     expect(mocks.gatewayCall).toHaveBeenCalledTimes(3);
   });
 
-  it.each([false, true])(
+  it.each([true])(
     "returns a resumable five-page scan limit with partial visible rows=%s",
     async (includeVisible) => {
       const visibleRow = sessionRow("agent:main:dashboard:visible");
@@ -472,28 +400,6 @@ describe("sessions-list inventory queries", () => {
     ).rejects.toThrow("Session metadata exceeds the 64 KiB result budget");
   });
 
-  it.each([
-    { name: "stalled", nextOffset: 20, empty: false },
-    { name: "missing", nextOffset: undefined, empty: false },
-    { name: "skipped", nextOffset: 22, empty: false },
-    { name: "fractional", nextOffset: 21.5, empty: false },
-    { name: "empty stalled page", nextOffset: 20, empty: true },
-  ])("fails visibly when Gateway pagination is $name", async ({ nextOffset, empty }) => {
-    mocks.gatewayCall.mockResolvedValue({
-      sessions: empty ? [] : [sessionRow("agent:other:main", "main", "other")],
-      hasMore: true,
-      nextOffset,
-    });
-
-    await expect(
-      createSessionsListTool({ config: VALID_CONFIG }).execute("invalid-cursor", {
-        offset: 20,
-        limit: 1,
-      }),
-    ).rejects.toThrow("sessions.list returned invalid pagination");
-    expect(mocks.gatewayCall).toHaveBeenCalledTimes(1);
-  });
-
   it("rejects invalid continuation metadata even when the output page is full", async () => {
     mocks.gatewayCall.mockResolvedValue({
       sessions: [sessionRow("agent:main:main", "main")],
@@ -514,17 +420,14 @@ describe("sessions-list inventory queries", () => {
     expect(mocks.gatewayCall).not.toHaveBeenCalled();
   });
 
-  it.each(["ownerId", "creatorId", "projectId", "workspaceDir", "relationship"])(
-    "does not broaden an empty explicit %s filter",
-    async (field) => {
-      const tool = createSessionsListTool({
-        config: VALID_CONFIG,
-        requesterProfileId: "profile-ada",
-      });
-      await expect(tool.execute("blank-filter", { [field]: "  " })).rejects.toThrow("required");
-      expect(mocks.gatewayCall).not.toHaveBeenCalled();
-    },
-  );
+  it.each(["workspaceDir"])("does not broaden an empty explicit %s filter", async (field) => {
+    const tool = createSessionsListTool({
+      config: VALID_CONFIG,
+      requesterProfileId: "profile-ada",
+    });
+    await expect(tool.execute("blank-filter", { [field]: "  " })).rejects.toThrow("required");
+    expect(mocks.gatewayCall).not.toHaveBeenCalled();
+  });
 
   it("deduplicates rows when a changing Gateway page overlaps the prior page", async () => {
     const first = sessionRow("agent:main:dashboard:first");

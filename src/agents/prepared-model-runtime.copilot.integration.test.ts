@@ -80,7 +80,7 @@ it("prepares an agent-local Copilot BYOK harness without replacing the active ro
     },
     plugins: { allow: ["copilot"], slots: { memory: "none" } },
   };
-  const root = loadAndActivateRootPluginRegistry({
+  const root = await loadAndActivateRootPluginRegistry({
     config,
     env,
     workspaceDir,
@@ -106,6 +106,7 @@ it("prepares an agent-local Copilot BYOK harness without replacing the active ro
       runtimePluginSelections: [selection],
     },
     metadata,
+    vi.fn(),
   );
 
   expect(runtimePluginRegistry).not.toBe(root);

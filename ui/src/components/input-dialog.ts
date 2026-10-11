@@ -1,4 +1,3 @@
-// Control UI helper presents Promise-based text input without relying on a native prompt bridge.
 import { html, nothing } from "lit";
 import { t } from "../i18n/index.ts";
 import { formatUiError } from "../lib/format-error.ts";
@@ -45,10 +44,7 @@ function presentInputDialog(options: InputDialogOptions): Promise<string | null>
         (options.requireChange === true && value === (options.defaultValue ?? ""))
       );
     };
-    // Tracked so the submit button can reflect an entry the caller refuses. It
-    // flips only across that boundary, never per keystroke: the value binding is
-    // constant, so the input stays uncontrolled and keeps its caret and IME
-    // composition across the repaints this triggers.
+    // Repaint only when validity changes; keep the input uncontrolled for caret/IME stability.
     let blocked = submitBlocked(options.defaultValue ?? "");
 
     const inputElement = () => host.querySelector<HTMLInputElement>('input[name="value"]');
@@ -81,10 +77,7 @@ function presentInputDialog(options: InputDialogOptions): Promise<string | null>
       submitting = true;
       failure = null;
       paint();
-      // A thrown operation still has to produce a visible outcome: without this
-      // the dialog would stay disabled forever and wedge every later request.
-      // The call itself is inside the try, so a callback that throws before it
-      // returns a promise is caught too.
+      // Catch synchronous throws too, so a failed callback cannot leave submission disabled.
       let message: string | null;
       try {
         message = await options.submit(value);

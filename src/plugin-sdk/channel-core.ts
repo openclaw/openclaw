@@ -1,6 +1,3 @@
-/**
- * Public SDK facade for core channel plugin construction helpers.
- */
 export type {
   ChannelConfigUiHint,
   ChannelPlugin,

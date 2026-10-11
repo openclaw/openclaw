@@ -5,6 +5,17 @@ import Testing
 
 @Suite("Completed transcript work")
 struct ChatCompletedWorkTests {
+    @Test func `spoken rendition stays visible when a consult answer is persisted later`() throws {
+        let voice = try Self.decode(#"""
+        {"role":"assistant","content":"The latest build is on your phone.","timestamp":1000,
+         "model":"realtime-voice","provenance":{"kind":"realtime_voice","sourceChannel":"talk"}}
+        """#)
+        let consult = Self.message("assistant", "The build went on at about 14:15.", at: 2000, phase: "final_answer")
+        let rows = Self.collapse([voice, consult])
+        #expect(Self.visibleIDs(rows) == [voice.id, consult.id])
+        #expect(Self.work(in: rows).isEmpty)
+    }
+
     @Test func `completed work folds around visible answers and leaves unresolved tails exposed`() throws {
         let user = Self.message("user", "Check the layout", at: 1000)
         let progress = Self.message("assistant", "Checking", at: 2000, phase: "commentary")
@@ -187,6 +198,27 @@ struct ChatCompletedWorkTests {
         #expect(Self.work(in: refreshed).map(\.id) == groups.map(\.id))
     }
 
+    @MainActor
+    @Test func `retained consult answer keeps its place when later history arrives`() {
+        let question = Self.message("user", "Count files", at: 1)
+        let consult = Self.message("assistant", "Thirteen files.", at: 2)
+        let spoken = Self.message("assistant", "Thirteen.", at: 3)
+        let typed = Self.message("user", "Thanks", at: 4)
+        let reply = Self.message("assistant", "You are welcome.", at: 5)
+        let merged = OpenClawChatViewModel.insertingRetainedMessages(
+            [consult.id],
+            from: [question, consult, spoken],
+            into: [question, spoken, typed, reply])
+        #expect(merged.map(\.id) == [question.id, consult.id, spoken.id, typed.id, reply.id])
+        let orphan = OpenClawChatViewModel.insertingRetainedMessages(
+            [consult.id], from: [consult, question], into: [question, spoken])
+        #expect(orphan.map(\.id) == [consult.id, question.id, spoken.id])
+        // With no surviving neighbor, retained rows are newer than the history and keep their order at the end.
+        let unanchored = OpenClawChatViewModel.insertingRetainedMessages(
+            [typed.id, reply.id], from: [typed, reply], into: [question, spoken])
+        #expect(unanchored.map(\.id) == [question.id, spoken.id, typed.id, reply.id])
+    }
+
     @Test @MainActor func `gateway split projections keep work and stable display IDs`() throws {
         // Real history projects text and tools with the same canonical ID, then
         // delivers the parent's final answer on a requester-settle run.
@@ -264,7 +296,7 @@ struct ChatCompletedWorkTests {
             let marker = encoded.dictionaryValue?["openclawStreamFallback"]?.dictionaryValue
             #expect(marker?["itemId"]?.stringValue == "first")
             #expect(marker?["runId"]?.stringValue == "active")
-            let roundTrip = try ChatPayloadDecoding.decode(encoded, as: OpenClawChatMessage.self)
+            let roundTrip = try GatewayPayloadDecoding.decode(encoded, as: OpenClawChatMessage.self)
             #expect(Self.work(in: Self.collapse([failed, roundTrip])).isEmpty)
         }
         let final = Self.message("assistant", "The first read failed; the next file is ready.", at: 5000)

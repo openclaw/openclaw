@@ -14,7 +14,7 @@ Run this after any config change or before exposing network surfaces:
 
 ```bash
 openclaw security audit
-openclaw security audit --deep    # attempts a live Gateway probe
+openclaw security audit --deep    # attempts a live Gateway check
 openclaw security audit --fix     # apply safe remediations
 openclaw security audit --json
 ```
@@ -34,7 +34,6 @@ openclaw security audit --json
 - **Plugins** - loading without an explicit allowlist.
 - **Policy drift** - sandbox Docker settings configured but sandbox mode off; `gateway.nodes.commands.deny` entries that look effective but only match exact command IDs (for example `system.run`), not shell text inside the payload; dangerous `gateway.nodes.commands.allow` entries; global `tools.profile="minimal"` overridden per agent; plugin-owned tools reachable under a permissive policy.
 - **Runtime expectation drift** - assuming implicit exec still means `sandbox` when `tools.exec.host` now defaults to `auto`, or setting `tools.exec.host="sandbox"` while sandbox mode is off.
-- **Model hygiene** - warns on legacy configured models (soft warning, not a hard block).
 
 Each finding has a structured `checkId` (for example `gateway.bind_no_auth`, `tools.exec.security_full_configured`). Prefixes: `fs.*` (permissions), `gateway.*` (bind/auth/Tailscale/Control UI/trusted-proxy), `hooks.*`/`browser.*`/`sandbox.*`/`tools.exec.*` (per-surface hardening), `plugins.*`/`skills.*` (supply chain), `security.exposure.*` (access policy x tool blast radius), `security.trust_model.*` (shared-context and cross-agent defaults). Full catalog with severity and auto-fix support: [Security audit checks](/gateway/security/audit-checks). See also [Formal Verification](/security/formal-verification).
 
@@ -45,4 +44,3 @@ Each finding has a structured `checkId` (for example `gateway.bind_no_auth`, `to
 3. Browser control remote exposure: treat like operator access (tailnet-only, pair nodes deliberately, no public exposure).
 4. Permissions: state/config/credentials/auth must not be group/world-readable.
 5. Plugins: load only what you explicitly trust.
-6. Model choice: prefer modern, instruction-hardened models for any bot with tools.

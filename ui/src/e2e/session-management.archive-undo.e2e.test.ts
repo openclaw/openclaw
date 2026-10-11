@@ -119,7 +119,7 @@ suite.define(() => {
           await page.locator(".chat-header-session-menu__trigger").click();
         } else {
           await rowFor(archived.key).hover();
-          await rowFor(archived.key).getByRole("button", { name: "Open session menu" }).click();
+          await rowFor(archived.key).click({ button: "right" });
         }
         await activateSelfRemovingControl(
           page
@@ -153,9 +153,16 @@ suite.define(() => {
           (params) => params.key === archived.key && params.archived === false,
         );
         expect(restored.params).toMatchObject({
+          key: archived.key,
           expectedSessionId: archived.sessionId,
-          pinned: true,
+          archived: false,
+          ...(surface === "header" ? { pinned: true } : {}),
         });
+        // Header Undo retains the legacy shared flag; the personal sidebar does not write it.
+        if (surface === "sidebar") {
+          expect(restored.params).not.toHaveProperty("pinned");
+        }
+        expect(await gateway.getRequests("sessions.patch")).toHaveLength(2);
         await rowFor(archived.key).waitFor({ state: "visible" });
         expect(new URL(page.url()).pathname).toBe(controlUiSessionPath(target.key));
       } finally {
@@ -221,7 +228,7 @@ suite.define(() => {
           await sidebar.getByRole("button", { name: /Switch agent/ }).click();
           await sidebar
             .locator("wa-dropdown.sidebar-agent-menu")
-            .getByRole("menuitemradio", { name, exact: true })
+            .getByRole("menuitem", { name, exact: true })
             .click();
         };
         await rowFor(archived.key).waitFor({ state: "visible" });
@@ -235,6 +242,7 @@ suite.define(() => {
         const undo = page.getByRole("button", { name: "Undo", exact: true });
         await undo.waitFor({ state: "visible" });
         if (queued) {
+          await undo.hover();
           const listsBefore = (
             await gateway.getRequests("sessions.list", { agentId: "main", includeGlobal: true })
           ).length;
@@ -268,9 +276,15 @@ suite.define(() => {
         await captureUiProof(suite, page, "cross-agent-after-pagination.png");
         await switchAgent("Main");
         await rowFor(archived.key).waitFor({ state: "visible" });
+        // Restoring legacy shared metadata does not author a personal navigation pin.
         await rowFor(archived.key)
-          .getByRole("button", { name: "Unpin session", exact: true })
+          .getByRole("button", { name: "Pin session", exact: true })
           .waitFor({ state: "attached" });
+        expect(
+          await page
+            .locator(`.sidebar-rail [data-sidebar-entry="session:${archived.key}"]`)
+            .count(),
+        ).toBe(0);
       } finally {
         await context.close();
       }

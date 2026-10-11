@@ -1,8 +1,10 @@
 import fs from "node:fs/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
+import { ServiceInspectionError } from "./service-inspection-error.js";
 import { readGatewayServiceState, resolveGatewayService, type GatewayService } from "./service.js";
 import { createMockGatewayService, mockSystemAccountHome } from "./service.test-helpers.js";
+import { readSystemdServiceRuntime } from "./systemd-runtime.js";
 
 const serviceEnv = (scenario: string) => ({
   HOME: `/openclaw-service-proof/${scenario}`,
@@ -21,6 +23,84 @@ afterEach(() => {
 });
 
 describe("readGatewayServiceState absence", () => {
+  it.each(
+    (["user", "system"] as const).flatMap((scope) =>
+      ["missing-tools", "not-booted"].map((manager) => ({ scope, manager })),
+    ),
+  )("reports a stale $scope unit with $manager", async ({ scope, manager }) => {
+    mockProcessPlatform("linux");
+    const env = serviceEnv(`${scope}-${manager}`);
+    const unitPath =
+      scope === "user"
+        ? `${env.HOME}/.config/systemd/user/openclaw-gateway.service`
+        : "/etc/systemd/system/openclaw-gateway.service";
+    const missing = () => Object.assign(new Error("missing"), { code: "ENOENT" });
+    vi.spyOn(fs, "readFile").mockImplementation(async (file) => {
+      if (file !== unitPath) {
+        throw missing();
+      }
+      return "[Service]\nExecStart=/usr/bin/node /old/openclaw/dist/index.js gateway\n";
+    });
+    vi.spyOn(fs, "access").mockImplementation(async (file) => {
+      if (file !== unitPath) {
+        throw missing();
+      }
+    });
+    vi.spyOn(fs, "readdir").mockResolvedValue([]);
+    vi.spyOn(await import("./exec-file.js"), "execFileUtf8").mockImplementation(async () => ({
+      code: 1,
+      termination: manager === "missing-tools" ? "error" : "exit",
+      errorCode: manager === "missing-tools" ? "ENOENT" : undefined,
+      stdout: "",
+      stderr: "System has not been booted with systemd as init system (PID 1). Can't operate.",
+    }));
+    const state = await readGatewayServiceState(resolveGatewayService(), { env });
+    expect(state.systemdInstallation?.kind).toBe(scope);
+    expect(state.installed).toBe(true);
+    expect(state.inspectionReason).toBe("service-manager-unavailable");
+    expect(state.runtime?.inspectionReason).toBe("service-manager-unavailable");
+  });
+
+  it("retains proven manager absence without a recorded unit", async () => {
+    mockProcessPlatform("linux");
+    const missing = () => Object.assign(new Error("missing"), { code: "ENOENT" });
+    vi.spyOn(fs, "lstat").mockRejectedValue(missing());
+    vi.spyOn(fs, "access").mockRejectedValue(missing());
+    vi.spyOn(fs, "readdir").mockResolvedValue([]);
+    const native = vi.spyOn(await import("./exec-file.js"), "execFileUtf8");
+    const state = await readGatewayServiceState(resolveGatewayService(), {
+      env: { ...serviceEnv("no-manager-or-unit"), DBUS_SESSION_BUS_ADDRESS: undefined },
+    });
+    expect(state).toMatchObject({
+      inspectionReason: "service-manager-unavailable",
+      installed: false,
+      command: null,
+      runtime: { inspectionReason: "service-manager-unavailable", missingUnit: true },
+    });
+    expect(native).not.toHaveBeenCalled();
+  });
+
+  it("preserves command inspection diagnosis when runtime availability also fails", async () => {
+    vi.spyOn(await import("./systemd-exec.js"), "assertSystemdAvailable").mockRejectedValue(
+      new Error("systemctl not available"),
+    );
+    const state = await readSystemdServiceRuntime(serviceEnv("runtime-failure"), {
+      systemdReadTarget: {
+        scope: "user",
+        unitName: "openclaw-gateway.service",
+        unitPath: "/openclaw-service-proof/runtime-failure/gateway.service",
+      },
+      commandInspection: {
+        kind: "unavailable",
+        error: new ServiceInspectionError("service-manager-unavailable"),
+      },
+    });
+    expect(state).toMatchObject({
+      status: "unknown",
+      inspectionReason: "service-manager-unavailable",
+    });
+  });
+
   it("does not require a user bus to inspect a running system service", async () => {
     mockProcessPlatform("linux");
     const missing = () => Object.assign(new Error("missing"), { code: "ENOENT" });

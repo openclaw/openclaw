@@ -7,21 +7,20 @@ import {
   clearDeviceAuthToken,
   loadCurrentDeviceAuthToken,
   loadDeviceAuthToken,
+  peekStoredDeviceIdentityId,
   storeDeviceAuthToken,
 } from "./index.ts";
-import { rotateDeviceToken } from "./page-operations.ts";
+import { createInitialDevicesState, rotateDeviceToken } from "./page-operations.ts";
 
 function createState(request: (method: string, params?: unknown) => Promise<unknown>) {
   return {
-    client: {
-      request: request as <T = unknown>(method: string, params?: unknown) => Promise<T>,
-    },
-    connected: true,
+    ...createInitialDevicesState({
+      client: {
+        request: request as <T = unknown>(method: string, params?: unknown) => Promise<T>,
+      },
+      connected: true,
+    }),
     requestGeneration: 1,
-    devicesLoading: false,
-    devicesQueuedRefresh: "none" as const,
-    devicesError: null as string | null,
-    devicesList: null,
   };
 }
 
@@ -127,6 +126,34 @@ describe("current browser device token", () => {
     });
 
     expect(loadCurrentDeviceAuthToken(tokenParams.gatewayUrl)).toBeNull();
+  });
+});
+
+describe("peekStoredDeviceIdentityId", () => {
+  it("reads the stored device id without minting or fingerprint-verifying an identity", () => {
+    // A hanging digest would stall any path that verifies the identity; the
+    // peek must answer synchronously without touching it (render-gate contract).
+    const { digestMock } = deferIdentityFingerprint();
+    storeIdentity();
+
+    expect(peekStoredDeviceIdentityId()).toBe("00");
+    expect(digestMock).not.toHaveBeenCalled();
+    expect(localStorage.length).toBe(1);
+  });
+
+  it.each([
+    { name: "no stored identity", raw: null },
+    { name: "malformed JSON", raw: "{not-json" },
+    { name: "unsupported version", raw: JSON.stringify({ version: 2, deviceId: "00" }) },
+    { name: "missing device id", raw: JSON.stringify({ version: 1 }) },
+  ])("returns null for $name without creating one", ({ raw }) => {
+    if (raw !== null) {
+      localStorage.setItem("openclaw-device-identity-v1", raw);
+    }
+    const before = localStorage.length;
+
+    expect(peekStoredDeviceIdentityId()).toBeNull();
+    expect(localStorage.length).toBe(before);
   });
 });
 

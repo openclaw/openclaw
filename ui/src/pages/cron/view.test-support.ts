@@ -2,9 +2,8 @@ import { render } from "lit";
 import { expect } from "vitest";
 import type { CronJob } from "../../api/types.ts";
 import { DEFAULT_CRON_FORM } from "../../test-helpers/cron.ts";
+import type { CronProps } from "./view-types.ts";
 import { renderCron } from "./view.ts";
-
-type CronProps = Parameters<typeof renderCron>[0];
 
 export function createCronViewJob(id: string, overrides: Partial<CronJob> = {}): CronJob {
   return {
@@ -23,8 +22,6 @@ export function createCronViewJob(id: string, overrides: Partial<CronJob> = {}):
 
 function createCronViewProps(overrides: Partial<CronProps> = {}): CronProps {
   return {
-    basePath: "",
-    agentId: "main",
     loading: false,
     hasLoaded: true,
     listError: null,
@@ -58,7 +55,7 @@ function createCronViewProps(overrides: Partial<CronProps> = {}): CronProps {
     channels: [],
     channelLabels: {},
     runs: [],
-    runsTotal: 0,
+    runsState: "ready",
     runsHasMore: false,
     runsLoadingMore: false,
     runsStatuses: [],
@@ -70,6 +67,7 @@ function createCronViewProps(overrides: Partial<CronProps> = {}): CronProps {
     thinkingSuggestions: [],
     timezoneSuggestions: [],
     deliveryToSuggestions: [],
+    failureAlertToSuggestions: [],
     accountSuggestions: [],
     onListTabChange: () => undefined,
     onDetailTabChange: () => undefined,
@@ -124,18 +122,12 @@ export function getElement<T extends Element>(
 }
 
 export function selectSegmented(control: HTMLElement) {
-  const group = control.closest<HTMLElement & { value: string }>("wa-radio-group");
-  expect(group).not.toBeNull();
-  if (!group) {
-    return;
-  }
-  group.value = control.getAttribute("value") ?? "";
-  group.dispatchEvent(new Event("change", { bubbles: true }));
+  getElement(control, "input.settings-segmented__input", HTMLInputElement).click();
 }
 
 export function findToggleByLabel(container: Element, label: string) {
   return (
-    Array.from(container.querySelectorAll("wa-switch.settings-toggle")).find((toggle) =>
+    Array.from(container.querySelectorAll(".settings-toggle")).find((toggle) =>
       toggle.textContent?.includes(label),
     ) ?? null
   );

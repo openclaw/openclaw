@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { Type } from "typebox";
+import { captureIncognitoSessionSource } from "../../config/sessions/session-incognito-binding.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { GatewayRequestContext } from "../../gateway/server-methods/types.js";
 import { renderTerminalBufferText } from "../../gateway/terminal/buffer-text.js";
@@ -13,6 +14,8 @@ import {
 } from "../bash-tools.exec-approval-request.js";
 import {
   resolveExecDefaults,
+  prepareExecDefaults,
+  resolvePreparedExecDefaultsAsync,
   type ExecPolicyOverrides,
   type ExecSessionDefaults,
 } from "../exec-defaults.js";
@@ -72,7 +75,6 @@ type TerminalToolOptions = {
   config?: OpenClawConfig;
   execSession?: ExecSessionDefaults;
   execOverrides?: ExecPolicyOverrides & { mode?: ExecMode };
-  runId?: string;
   approvalReviewerDeviceIds?: string[];
   getGatewayContext?: () => TerminalToolGatewayContext | undefined;
 };
@@ -173,15 +175,39 @@ export function createTerminalTool(opts: TerminalToolOptions = {}): AnyAgentTool
         allowEmpty: true,
       });
       let execSession = opts.execSession;
+      let assertSessionCurrent = () => {};
+      let actorPolicy = false;
       if (!execSession) {
-        const { loadGatewaySessionEntryReadOnly } =
-          await import("../../gateway/session-utils-store.js");
-        const entry = loadGatewaySessionEntryReadOnly(agentSessionKey, {
-          agentId,
-          clone: false,
-        }).entry;
+        const source = captureIncognitoSessionSource({ agentId, sessionKey: agentSessionKey });
+        const entry = source
+          ? "kind" in source
+            ? undefined
+            : source.actor.sessions.readPolicy(agentSessionKey)
+          : (await import("../../gateway/session-utils-store.js")).loadGatewaySessionEntryReadOnly(
+              agentSessionKey,
+              { agentId, clone: false },
+            ).entry;
         if (!entry || entry.sessionId?.trim() !== agentSessionId) {
           throw new ToolInputError(TERMINAL_UNAVAILABLE_MESSAGE);
+        }
+        if (source && !("kind" in source)) {
+          actorPolicy = true;
+          const claim = source.actor.sessions.captureCurrent(agentSessionKey);
+          assertSessionCurrent = () => {
+            source.admissionSignal?.throwIfAborted();
+            source.actor.assertReadable();
+            claim.assertCurrent();
+            const current = source.actor.sessions.readPolicy(agentSessionKey);
+            if (
+              current?.sessionId !== entry.sessionId ||
+              current?.permissionMode !== entry.permissionMode ||
+              current?.sandbox !== entry.sandbox ||
+              current?.execHost !== entry.execHost ||
+              current?.execNode !== entry.execNode
+            ) {
+              throw new ToolInputError("Terminal execution policy changed; try again");
+            }
+          };
         }
         execSession = entry;
         // A lazy policy read may cross Gateway retirement; the replacement
@@ -190,13 +216,21 @@ export function createTerminalTool(opts: TerminalToolOptions = {}): AnyAgentTool
           throw new ToolInputError(TERMINAL_UNAVAILABLE_MESSAGE);
         }
       }
-      const policy = resolveExecDefaults({
+      const policyInput = {
         cfg: opts.config,
         sessionEntry: execSession,
         execOverrides: opts.execOverrides,
         agentId,
         sessionKey: agentSessionKey,
-      });
+      };
+      const policy = actorPolicy
+        ? await resolvePreparedExecDefaultsAsync(prepareExecDefaults(policyInput), async () => {
+            const { loadExecApprovalsReadOnlyAsync } =
+              await import("../../infra/exec-approvals-store.js");
+            return loadExecApprovalsReadOnlyAsync();
+          })
+        : resolveExecDefaults(policyInput);
+      assertSessionCurrent();
       if (policy.mode === "deny") {
         throw new ToolInputError("Terminal input denied by execution policy");
       }
@@ -244,6 +278,7 @@ export function createTerminalTool(opts: TerminalToolOptions = {}): AnyAgentTool
         }
       }
       signal?.throwIfAborted();
+      assertSessionCurrent();
       // Every write, including unprompted Full access, is bound to its exact live
       // run and Gateway immediately before synchronous PTY I/O.
       if (

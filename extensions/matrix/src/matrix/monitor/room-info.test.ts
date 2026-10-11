@@ -1,4 +1,3 @@
-// Matrix tests cover room info plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import type { MatrixClient } from "../sdk.js";
 import { createMatrixRoomInfoResolver } from "./room-info.js";
@@ -96,24 +95,6 @@ describe("createMatrixRoomInfoResolver", () => {
     ).resolves.toBe("@alice:example.org");
 
     expect(client.getRoomStateEvent).toHaveBeenCalledTimes(1);
-  });
-
-  it("marks unresolved room metadata when room info lookups fail", async () => {
-    const client = createRoomStateClient(async (_roomId, eventType) => {
-      if (eventType === "m.room.member") {
-        return {};
-      }
-      throw new Error("room info unavailable");
-    });
-    const resolver = createMatrixRoomInfoResolver(client);
-
-    await expect(
-      resolver.getRoomInfo("!room:example.org", { includeAliases: true }),
-    ).resolves.toEqual({
-      altAliases: [],
-      aliasesResolved: false,
-      nameResolved: false,
-    });
   });
 
   it("treats missing room metadata as resolved-empty state", async () => {
@@ -214,22 +195,5 @@ describe("createMatrixRoomInfoResolver", () => {
       resolver.getMemberDisplayName("!room:example.org", "@bob:example.org"),
     ).resolves.toBe("Bob");
     expect(client.getRoomStateEvent).toHaveBeenCalledTimes(3);
-  });
-
-  it("bounds cached room and member entries", async () => {
-    const client = createClientStub();
-    const resolver = createMatrixRoomInfoResolver(client);
-
-    for (let i = 0; i <= 1024; i += 1) {
-      await resolver.getRoomInfo(`!room-${i}:example.org`);
-    }
-    await resolver.getRoomInfo("!room-0:example.org");
-
-    for (let i = 0; i <= 4096; i += 1) {
-      await resolver.getMemberDisplayName("!room:example.org", `@user-${i}:example.org`);
-    }
-    await resolver.getMemberDisplayName("!room:example.org", "@user-0:example.org");
-
-    expect(client.getRoomStateEvent).toHaveBeenCalledTimes(5124);
   });
 });

@@ -1,21 +1,46 @@
 /** Real handler and registry proof for session-wide descendant cancellation ownership. */
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
-import { registerSubagentRun } from "../../agents/subagents/registry/subagent-registry.js";
-import { settleSubagentRegistryPersistenceWork } from "../../agents/subagents/registry/subagent-registry.persistence.test-support.js";
+// Preserve module setup before modules that consume it.
+// oxfmt-ignore
+import { useChatAbortRegistryFixture } from "./chat.abort-registry.test-support.js";
+import { expectDefined } from "@openclaw/normalization-core/expect";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { describe, expect, it, vi } from "vitest";
 import {
-  addSubagentRunForTests,
-  getSubagentRunByChildSessionKey,
-  resetSubagentRegistryForTests,
-  testing as subagentRegistryTesting,
-} from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../../test/helpers/promise.js";
+import {
+  deleteSession,
+  getSession,
+  waitForExecSession,
+  type ProcessSession,
+} from "../../agents/bash-process-registry.js";
+import { createLazyExecTool } from "../../agents/lazy-exec-tool.js";
+import { registerSubagentRun } from "../../agents/subagents/registry/subagent-registry.js";
+import { writeSubagentSessionEntry } from "../../agents/subagents/registry/subagent-registry.persistence.test-support.js";
+import { getSubagentRunByChildSessionKey } from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
 import { enqueueSwarmRun, releaseSwarmRun } from "../../agents/subagents/swarm/swarm-scheduler.js";
-import { testing as swarmSchedulerTesting } from "../../agents/subagents/swarm/swarm-scheduler.test-support.js";
+import { getRuntimeConfig } from "../../config/config.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import {
+  captureExecRequestOwners,
+  withExecRequestOwners,
+  withExecRequestTurn,
+} from "../../infra/exec-request-context.js";
+import {
+  consumeSelectedSystemEventEntries,
+  enqueueSystemEventEntry,
+} from "../../infra/system-events.js";
+import { getProcessSupervisor } from "../../process/supervisor/index.js";
 import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
+import { isPidDefinitelyDead } from "../../shared/pid-alive.js";
+import { withEnvAsync } from "../../test-utils/env.js";
+import { createWorkerInferenceCancellationService } from "../worker-environments/inference-control.test-helpers.js";
 import { handleChatAbortRequestWithLifecycle } from "./chat-abort-handler.js";
 import * as transcriptInject from "./chat-transcript-inject.js";
+import * as transcriptPersistence from "./chat-transcript-persistence.js";
 import { requireLastRespondCall } from "./chat.abort-authorization.test-helpers.js";
 import {
   createActiveRun,
@@ -23,29 +48,332 @@ import {
   invokeChatAbortHandler,
 } from "./chat.abort.test-helpers.js";
 
-vi.mock("../session-utils.js", async () => ({
-  ...(await vi.importActual<typeof import("../session-utils.js")>("../session-utils.js")),
-  loadSessionEntry: (sessionKey: string) => ({
-    cfg: {},
+const fixture = useChatAbortRegistryFixture();
+const writeSession = (sessionKey: string, sessionId: string) =>
+  writeSubagentSessionEntry({
+    stateDir: fixture.stateDir,
     agentId: "main",
-    canonicalKey: sessionKey,
-    entry: { sessionId: "main-session" },
-  }),
-}));
+    sessionKey,
+    defaultSessionId: sessionId,
+  });
 
 describe("descendant cascade ownership", () => {
-  beforeEach(() => {
-    subagentRegistryTesting.setDepsForTest({
-      persistSubagentRunsToDisk: () => {},
-      persistSubagentRunsToDiskOrThrow: () => {},
+  it("stops the original request's continuation child while preserving a later human child", async ({
+    signal,
+  }) => {
+    const sessionKey = "agent:main:main";
+    const continuationChildKey = "agent:main:subagent:exec-continuation-child";
+    const laterChildKey = "agent:main:subagent:later-human-child";
+    await writeSession(sessionKey, "main-session");
+    await writeSession(continuationChildKey, "exec-continuation-child");
+    await writeSession(laterChildKey, "later-human-child");
+    const originalIdentity = {
+      runId: "original-command-request",
+      sessionKey,
+      sessionId: "main-session",
+      agentId: "main",
+      ownerConnId: "request-owner",
+    };
+    const originalOwners = await withExecRequestTurn({ identity: originalIdentity }, async () =>
+      expectDefined(captureExecRequestOwners(originalIdentity), "original command owners"),
+    );
+    const completion = expectDefined(
+      enqueueSystemEventEntry(
+        "Exec completed (original-command, code 0) :: Continue original work",
+        withExecRequestOwners({ sessionKey }, originalOwners),
+      ),
+      "original completion occurrence",
+    );
+    const continuationStart = vi.fn(async () => {
+      releaseSwarmRun("exec-continuation-child");
     });
+    const laterStarted = createDeferred();
+    const laterStart = vi.fn(async () => {
+      laterStarted.resolve();
+      releaseSwarmRun("later-human-child");
+    });
+    const reserveChild = async (
+      runId: string,
+      childSessionKey: string,
+      requesterTurnRunId: string,
+      start: () => Promise<void>,
+    ) => {
+      await registerSubagentRun({
+        runId,
+        childSessionKey,
+        requesterSessionKey: sessionKey,
+        requesterAgentId: "main",
+        requesterTurnRunId,
+        requesterDisplayKey: sessionKey,
+        task: "preserve exact requester ownership",
+        cleanup: "keep",
+        collect: true,
+        queued: true,
+      });
+      enqueueSwarmRun({
+        groupId: "exec-continuation-ownership",
+        runId,
+        maxConcurrent: 1,
+        activeRunIds: ["held-continuation-capacity"],
+        start,
+        onStartFailure: () => true,
+      });
+    };
+    try {
+      await withExecRequestTurn(
+        {
+          identity: { ...originalIdentity, runId: "command-continuation" },
+          owners: originalOwners,
+        },
+        () =>
+          reserveChild(
+            "exec-continuation-child",
+            continuationChildKey,
+            "command-continuation",
+            continuationStart,
+          ),
+      );
+      const laterIdentity = { ...originalIdentity, runId: "later-human-request" };
+      const laterOwners = await withExecRequestTurn({ identity: laterIdentity }, async () => {
+        await reserveChild("later-human-child", laterChildKey, "later-human-request", laterStart);
+        return expectDefined(captureExecRequestOwners(laterIdentity), "later human owners");
+      });
+      const laterRun = createActiveRun(sessionKey, {
+        sessionId: "main-session",
+        agentId: "main",
+        owner: { connId: "request-owner" },
+      });
+      const context = createChatAbortContext({
+        chatAbortControllers: new Map([["later-human-request", laterRun]]),
+      });
+      const respond = await invokeChatAbortHandler({
+        handler: handleChatAbortRequestWithLifecycle,
+        context,
+        request: { sessionKey, runId: "original-command-request" },
+        client: { connId: "request-owner", connect: { scopes: ["operator.write"] } },
+      });
+      expect(requireLastRespondCall(respond).slice(0, 2)).toEqual([
+        true,
+        { ok: true, aborted: true, runIds: [] },
+      ]);
+      expect(
+        (await getSubagentRunByChildSessionKey(laterChildKey))?.execution.endedAt,
+      ).toBeUndefined();
+      expect(laterRun.controller.signal.aborted).toBe(false);
+      expect(laterOwners.every((owner) => !owner.signal.aborted)).toBe(true);
+      expect(originalOwners.every((owner) => owner.signal.aborted)).toBe(true);
+
+      releaseSwarmRun("held-continuation-capacity");
+      await withinTest(laterStarted.promise, signal);
+      expect(laterStart).toHaveBeenCalledOnce();
+      expect(continuationStart).not.toHaveBeenCalled();
+      expect(await getSubagentRunByChildSessionKey(continuationChildKey)).toMatchObject({
+        runId: "exec-continuation-child",
+        requesterTurnRunId: "command-continuation",
+        endedReason: "subagent-killed",
+        execution: { status: "terminal" },
+      });
+      expect(await getSubagentRunByChildSessionKey(laterChildKey)).toMatchObject({
+        runId: "later-human-child",
+        requesterTurnRunId: "later-human-request",
+      });
+    } finally {
+      consumeSelectedSystemEventEntries(sessionKey, [completion]);
+      releaseSwarmRun("held-continuation-capacity");
+      releaseSwarmRun("exec-continuation-child");
+      releaseSwarmRun("later-human-child");
+    }
   });
-  afterEach(async () => {
-    await settleSubagentRegistryPersistenceWork();
-    resetSubagentRegistryForTests({ persist: false });
-    subagentRegistryTesting.setDepsForTest();
-    swarmSchedulerTesting.reset();
-    vi.restoreAllMocks();
+
+  it("does not stop descendants after the original caller is revoked during parent cancellation", async ({
+    signal,
+  }) => {
+    const sessionKey = "agent:main:main";
+    const childKey = "agent:main:subagent:retained-stop";
+    await writeSession(sessionKey, "main-session");
+    await writeSession(childKey, "retained-stop-child");
+    await registerSubagentRun({
+      runId: "retained-stop-child",
+      childSessionKey: childKey,
+      requesterSessionKey: sessionKey,
+      requesterAgentId: "main",
+      requesterTurnRunId: "parent",
+      requesterDisplayKey: sessionKey,
+      task: "retain original Stop authority",
+      cleanup: "keep",
+      collect: true,
+      queued: true,
+    });
+    const started = createDeferred();
+    const start = vi.fn(async () => {
+      started.resolve();
+    });
+    enqueueSwarmRun({
+      groupId: "retained-stop",
+      runId: "retained-stop-child",
+      maxConcurrent: 1,
+      activeRunIds: ["held-capacity"],
+      start,
+      onStartFailure: () => true,
+    });
+    let current = true;
+    const parent = createActiveRun(sessionKey, {
+      sessionId: "main-session",
+      agentId: "main",
+      owner: { connId: "owner" },
+    });
+    const turnAborted = createDeferred();
+    parent.controller.signal.addEventListener("abort", () => {
+      current = false;
+      turnAborted.resolve();
+    });
+    const context = createChatAbortContext({ chatAbortControllers: new Map([["parent", parent]]) });
+    context.chatRunState.getOrCreate("parent").buffer = "cancelled parent partial";
+    using persist = vi
+      .spyOn(transcriptPersistence, "persistAbortedPartials")
+      .mockResolvedValue(undefined);
+    const commandReady = createDeferred();
+    const cleanupEntered = createDeferred();
+    const releaseCleanup = createDeferred();
+    const supervisor = getProcessSupervisor();
+    const spawn = supervisor.spawn.bind(supervisor);
+    let rootExitObserved = false;
+    let managedCommand: Awaited<ReturnType<typeof supervisor.spawn>> | undefined;
+    const spawnFailure = vi.spyOn(supervisor, "spawn").mockImplementation(async (input) => {
+      const managed = await spawn(input);
+      managedCommand = managed;
+      return {
+        ...managed,
+        waitForExtinction: async () => {
+          await managed.wait();
+          await managed.waitForExtinction?.();
+          rootExitObserved = isPidDefinitelyDead(expectDefined(managed.pid, "command pid"));
+          cleanupEntered.resolve();
+          await releaseCleanup.promise;
+          throw new Error("Synthetic command finalization failure");
+        },
+      };
+    });
+    let command: ProcessSession | undefined;
+    const execution = withEnvAsync({ OPENCLAW_EXEC_SHELL_SNAPSHOT: "0" }, () =>
+      withExecRequestTurn(
+        {
+          identity: {
+            runId: "parent",
+            sessionKey,
+            sessionId: "main-session",
+            agentId: "main",
+            ownerConnId: "owner",
+          },
+          abortSignal: parent.controller.signal,
+        },
+        async () => {
+          const tool = createLazyExecTool({
+            runId: "parent",
+            sessionKey,
+            sessionId: "main-session",
+            agentId: "main",
+            config: getRuntimeConfig(),
+            cwd: fixture.stateDir,
+            scopeKey: sessionKey,
+            host: "gateway",
+            mode: "full",
+            ask: "off",
+            allowBackground: true,
+            notifyOnExit: false,
+            preparedStoreEnvironment: {},
+          });
+          const result = await tool.execute(
+            "ordinary-command",
+            {
+              command: `node -e "require('fs').watch('.', () => {})"`,
+              yieldMs: 10,
+              timeoutSeconds: 60,
+            },
+            parent.controller.signal,
+          );
+          const details = asOptionalRecord(result.details);
+          expect(details?.status).toBe("running");
+          if (typeof details?.sessionId !== "string") {
+            throw new Error("Expected an ordinary command to yield its process handle");
+          }
+          command = expectDefined(getSession(details.sessionId), "ordinary command");
+          commandReady.resolve();
+          await turnAborted.promise;
+        },
+      ),
+    );
+    void execution.catch((error: unknown) => commandReady.reject(error));
+    let stopping: ReturnType<typeof invokeChatAbortHandler> | undefined;
+    try {
+      await withinTest(commandReady.promise, signal);
+      const respond = vi.fn();
+      stopping = invokeChatAbortHandler({
+        handler: (options) =>
+          handleChatAbortRequestWithLifecycle({
+            ...options,
+            hasCurrentClientAuthority: () => current,
+          }),
+        context,
+        request: { sessionKey, runId: "parent" },
+        client: { connId: "owner", connect: { scopes: ["operator.write"] } },
+        respond,
+      });
+      await withinTest(
+        awaitGateBeforeSettlement(
+          cleanupEntered.promise,
+          stopping,
+          "Stop returned before accepted command cleanup",
+        ),
+        signal,
+      );
+      expect(rootExitObserved).toBe(true);
+      expect(respond).not.toHaveBeenCalled();
+      releaseCleanup.resolve();
+      await stopping;
+      await execution;
+      expect(respond).toHaveBeenCalledExactlyOnceWith(
+        false,
+        undefined,
+        expect.objectContaining({
+          code: "UNAVAILABLE",
+          message: expect.stringMatching(
+            /Parent run stopped, but descendant cancellation was incomplete: .*Gateway requester authority changed/,
+          ),
+        }),
+      );
+      expect(respond.mock.calls[0]?.[2]?.message).toContain(
+        "command cleanup could not be confirmed",
+      );
+      expect(command).toMatchObject({
+        exited: true,
+        exitReason: "manual-cancel",
+        finalizationFailed: true,
+      });
+      expect(parent.controller.signal.aborted).toBe(true);
+      expect(persist).toHaveBeenCalledOnce();
+      expect(persist.mock.calls[0]?.[0].snapshots.map((snapshot) => snapshot.runId)).toEqual([
+        "parent",
+      ]);
+      expect((await getSubagentRunByChildSessionKey(childKey))?.execution.endedAt).toBeUndefined();
+      expect(start).not.toHaveBeenCalled();
+      releaseSwarmRun("held-capacity");
+      await started.promise;
+      expect(start).toHaveBeenCalledOnce();
+    } finally {
+      releaseCleanup.resolve();
+      turnAborted.resolve();
+      managedCommand?.cancel("manual-cancel");
+      if (command) {
+        await waitForExecSession(command);
+        deleteSession(command.id);
+      }
+      await execution.catch(() => {});
+      await stopping?.catch(() => {});
+      await managedCommand?.wait();
+      spawnFailure.mockRestore();
+      releaseSwarmRun("held-capacity");
+    }
   });
 
   it.each([
@@ -69,6 +397,8 @@ describe("descendant cascade ownership", () => {
     const sessionKey = kind.includes("worker") ? "global" : "agent:main:main";
     const cfg: OpenClawConfig = sessionKey === "global" ? { session: { scope: "global" } } : {};
     const childKey = "agent:main:subagent:cascade-ownership";
+    await writeSession(sessionKey, "main-session");
+    await writeSession(childKey, "cascade-queued");
     const canCascade = ["owned", "orphan", "represented worker", "late descendant"].includes(kind);
     const hasOwnedActive = kind !== "orphan" && !kind.startsWith("all foreign");
     const mine = createActiveRun(sessionKey, {
@@ -141,11 +471,11 @@ describe("descendant cascade ownership", () => {
           : kind === "hidden worker"
             ? "run-foreign"
             : "worker-run";
-      context.workerEnvironmentService = {
+      context.workerEnvironmentService = createWorkerInferenceCancellationService(
+        "main-session",
+        [workerRunId],
         cancelInferenceForSession,
-        hasInferenceForSession: (sessionId: string, runId?: string) =>
-          sessionId === "main-session" && (!runId || runId === workerRunId),
-      };
+      );
     }
     const registerChild = () =>
       registerSubagentRun({
@@ -161,7 +491,8 @@ describe("descendant cascade ownership", () => {
         queued: true,
       });
     if (kind === "late descendant") {
-      addSubagentRunForTests({
+      await writeSession("agent:main:subagent:orchestrator", "orchestrator");
+      await registerSubagentRun({
         runId: "orchestrator",
         childSessionKey: "agent:main:subagent:orchestrator",
         requesterSessionKey: sessionKey,
@@ -170,11 +501,10 @@ describe("descendant cascade ownership", () => {
         requesterDisplayKey: sessionKey,
         task: "live orchestrator",
         cleanup: "keep",
-        createdAt: 1,
-        startedAt: 2,
+        collect: true,
       });
     } else {
-      registerChild();
+      await registerChild();
     }
     const start = vi.fn(async () => {});
     enqueueSwarmRun({
@@ -236,9 +566,10 @@ describe("descendant cascade ownership", () => {
         await entered.promise;
         if (kind === "late descendant") {
           expect(
-            getSubagentRunByChildSessionKey("agent:main:subagent:orchestrator")?.execution.endedAt,
+            (await getSubagentRunByChildSessionKey("agent:main:subagent:orchestrator"))?.execution
+              .endedAt,
           ).toBeUndefined();
-          registerChild();
+          await registerChild();
         }
         if (canCascade) {
           expect(
@@ -256,7 +587,7 @@ describe("descendant cascade ownership", () => {
       proceed.resolve();
       const respond = await pending;
       expect(requireLastRespondCall(respond)[0]).toBe(!kind.startsWith("all foreign"));
-      const child = getSubagentRunByChildSessionKey(childKey);
+      const child = await getSubagentRunByChildSessionKey(childKey);
       if (canCascade) {
         expect(child).toMatchObject({
           endedReason: "subagent-killed",

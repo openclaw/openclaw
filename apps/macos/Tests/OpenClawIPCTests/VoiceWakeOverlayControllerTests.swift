@@ -31,6 +31,27 @@ struct VoiceWakeOverlayControllerTests {
         #expect(controller.snapshot().token == nil)
     }
 
+    @Test func `sending a cleared edited transcript dismisses without stale recognition`() throws {
+        let coordinator = VoiceSessionCoordinator.shared
+        let controller = VoiceWakeOverlayController.shared
+        let token = coordinator.startSession(
+            source: .wakeWord,
+            text: "recognized words",
+            forwardEnabled: true)
+        defer { coordinator.dismiss(token: token, reason: .explicit, outcome: .empty) }
+
+        controller.userBeganEditing()
+        controller.updateText("corrected words")
+        try #require(coordinator.snapshot().text == "corrected words")
+
+        controller.updateText(" \n ")
+        controller.requestSend(token: token)
+
+        #expect(coordinator.snapshot().token == nil)
+        #expect(controller.snapshot().token == nil)
+        #expect(!controller.model.isSending)
+    }
+
     @Test func `evaluate token drops mismatch and no active`() {
         let active = UUID()
         #expect(VoiceWakeOverlayController.evaluateToken(active: nil, incoming: active) == .dropNoActive)

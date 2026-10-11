@@ -9,9 +9,9 @@ import {
   createPluginCache,
   getPluginMetadataSnapshotCache,
   withPluginCache,
+  type PluginCache,
 } from "../../../plugins/plugin-cache.js";
 import {
-  completePluginMetadataSnapshot,
   isPluginMetadataSnapshotCompatible,
   loadPluginMetadataSnapshot,
   rebasePluginMetadataSnapshotManifestRegistry,
@@ -20,9 +20,10 @@ import {
 
 export type DoctorPluginMetadataSnapshotState = {
   current?: PluginMetadataSnapshot;
+  inventoryChanged?: boolean;
 };
 
-type DoctorPluginMetadataSnapshotScope = {
+type DoctorPluginMetadataSnapshotScope = AsyncDisposable & {
   run: PluginMetadataSnapshotScopeRunner;
   invalidate: () => void;
 };
@@ -45,49 +46,40 @@ export function resolveConfigWideDoctorPluginMetadataSnapshot(params: {
     // may describe the pre-repair manifest and must not restore stale owners.
     allowCurrent: false,
   });
-  const snapshot = rebasePluginMetadataSnapshotManifestRegistry(params.snapshot, manifestRegistry);
+  const snapshot =
+    manifestRegistry === params.snapshot.manifestRegistry
+      ? params.snapshot
+      : rebasePluginMetadataSnapshotManifestRegistry(params.snapshot, manifestRegistry);
   configWideDoctorSnapshots.add(snapshot);
   return snapshot;
 }
 
-/** Promotes validation-scoped metadata to a complete immutable Doctor snapshot. */
-export function completeDoctorPluginMetadataSnapshot(params: {
-  snapshot?: PluginMetadataSnapshot;
-  config: OpenClawConfig;
-  env?: NodeJS.ProcessEnv;
-}): PluginMetadataSnapshot | undefined {
-  const snapshot = completePluginMetadataSnapshot(params);
-  return snapshot
-    ? resolveConfigWideDoctorPluginMetadataSnapshot({
-        snapshot,
-        config: params.config,
-        env: params.env,
-      })
-    : undefined;
-}
-
 /** Reuses one exact immutable plugin metadata generation per Doctor workspace. */
 export function createDoctorPluginMetadataSnapshotScope(params: {
-  baseSnapshot?: PluginMetadataSnapshot;
   getBaseSnapshot?: () => PluginMetadataSnapshot | undefined;
   env?: NodeJS.ProcessEnv;
   getDeferredPluginIds?: () => readonly string[];
 }): DoctorPluginMetadataSnapshotScope {
   const env = params.env ?? process.env;
   const snapshotsByWorkspace = new Map<string | undefined, PluginMetadataSnapshot>();
-  const readBaseSnapshot = () => params.getBaseSnapshot?.() ?? params.baseSnapshot;
   let currentBaseSnapshot: PluginMetadataSnapshot | undefined;
-  let cache = createPluginCache();
+  const ownedCaches = new Set<PluginCache>();
+  const createOwnedCache = () => {
+    const cache = createPluginCache();
+    ownedCaches.add(cache);
+    return cache;
+  };
+  let cache = createOwnedCache();
 
   const refreshBaseSnapshot = () => {
-    const nextBaseSnapshot = readBaseSnapshot();
+    const nextBaseSnapshot = params.getBaseSnapshot?.();
     if (nextBaseSnapshot === currentBaseSnapshot) {
       return;
     }
     currentBaseSnapshot = nextBaseSnapshot;
     cache = nextBaseSnapshot
       ? getPluginMetadataSnapshotCache(nextBaseSnapshot)
-      : createPluginCache();
+      : createOwnedCache();
     snapshotsByWorkspace.clear();
     if (nextBaseSnapshot && nextBaseSnapshot.pluginIds === undefined) {
       snapshotsByWorkspace.set(nextBaseSnapshot.workspaceDir, nextBaseSnapshot);
@@ -101,31 +93,24 @@ export function createDoctorPluginMetadataSnapshotScope(params: {
       workspaceDir === undefined && currentBaseSnapshot?.pluginIds === undefined
         ? currentBaseSnapshot
         : undefined;
-    for (const current of [snapshotsByWorkspace.get(workspaceDir), inheritedBase]) {
-      if (
-        current &&
+    const current = [snapshotsByWorkspace.get(workspaceDir), inheritedBase].find(
+      (snapshot) =>
+        snapshot &&
         isPluginMetadataSnapshotCompatible({
-          snapshot: current,
+          snapshot,
           config,
           env,
-          workspaceDir: workspaceDir ?? current.workspaceDir,
-        })
-      ) {
-        const snapshot = resolveConfigWideDoctorPluginMetadataSnapshot({
-          snapshot: current,
-          config,
-          env,
-        });
-        snapshotsByWorkspace.set(workspaceDir, snapshot);
-        return snapshot;
-      }
-    }
+          workspaceDir: workspaceDir ?? snapshot.workspaceDir,
+        }),
+    );
     const snapshot = resolveConfigWideDoctorPluginMetadataSnapshot({
-      snapshot: loadPluginMetadataSnapshot({
-        config,
-        env,
-        ...(workspaceDir ? { workspaceDir } : {}),
-      }),
+      snapshot:
+        current ??
+        loadPluginMetadataSnapshot({
+          config,
+          env,
+          ...(workspaceDir ? { workspaceDir } : {}),
+        }),
       config,
       env,
     });
@@ -148,13 +133,18 @@ export function createDoctorPluginMetadataSnapshotScope(params: {
   };
 
   return {
+    async [Symbol.asyncDispose]() {
+      // Borrowed snapshots retain their caller's lifetime; only retire our private inventories.
+      await Promise.all([...ownedCaches].map((owned) => owned[Symbol.asyncDispose]()));
+      ownedCaches.clear();
+    },
     run,
     invalidate: () => {
       // Inventory repairs invalidate every derived workspace generation even
       // when updater preflight intentionally left the base snapshot absent.
       currentBaseSnapshot = undefined;
       snapshotsByWorkspace.clear();
-      cache = createPluginCache();
+      cache = createOwnedCache();
     },
   };
 }

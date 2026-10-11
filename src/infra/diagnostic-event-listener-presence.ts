@@ -45,7 +45,21 @@ function getDiagnosticEventListenerPresence(): DiagnosticEventListenerPresence {
 export type InternalDiagnosticEventInterest<EventType extends string = string> = Readonly<{
   include?: readonly EventType[];
   exclude?: readonly EventType[];
+  /** Restricts trusted events only; untrusted events still use include/exclude. */
+  includeTrusted?: readonly EventType[];
 }>;
+
+export function isInternalDiagnosticEventInterested<EventType extends string>(
+  interest: InternalDiagnosticEventInterest<EventType> | undefined,
+  type: EventType,
+  trusted: boolean,
+): boolean {
+  return (
+    (!interest?.include || interest.include.includes(type)) &&
+    !interest?.exclude?.includes(type) &&
+    (!trusted || !interest?.includeTrusted || interest.includeTrusted.includes(type))
+  );
+}
 
 function updateEventInterestDelta(
   state: DiagnosticEventListenerPresence,
@@ -65,17 +79,15 @@ export function updateInternalDiagnosticEventInterest(
   delta: 1 | -1,
 ): void {
   const state = getDiagnosticEventListenerPresence();
-  if (interest?.include) {
-    for (const type of new Set(interest.include)) {
-      if (!interest.exclude?.includes(type)) {
-        updateEventInterestDelta(state, type, delta);
-      }
-    }
-    return;
+  const usesIncludeList = Boolean(interest?.include);
+  if (!usesIncludeList) {
+    state.broadInterestCount += delta;
   }
-  state.broadInterestCount += delta;
-  for (const type of new Set(interest?.exclude ?? [])) {
-    updateEventInterestDelta(state, type, -delta);
+  const types = usesIncludeList ? interest?.include : (interest?.exclude ?? []);
+  for (const type of new Set(types)) {
+    if (!usesIncludeList || !interest?.exclude?.includes(type)) {
+      updateEventInterestDelta(state, type, usesIncludeList ? delta : -delta);
+    }
   }
 }
 

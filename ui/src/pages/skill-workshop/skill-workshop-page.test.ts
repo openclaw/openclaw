@@ -1,21 +1,8 @@
-import type { RouteLoaderOptions } from "@openclaw/uirouter";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../../test/helpers/promise.js";
-import { GatewayRequestError } from "../../api/gateway.ts";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { SessionsListResult } from "../../api/types.ts";
-import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
-import type { SkillWorkshopProposal } from "../../lib/skill-workshop/index.ts";
-import { settleLitElement } from "../../test-helpers/lit-settle.ts";
-import {
-  inspectResult,
-  ISO_NOW,
-  proposal as createActionProposal,
-  REVISION_HASH,
-} from "../../test-helpers/skill-workshop-proposal-fixture.ts";
-import { createSkillWorkshopState, skillWorkshopRouteData } from "./proposals.ts";
-import type { SkillWorkshopRouteData } from "./proposals.ts";
-import { page as skillWorkshopRoute } from "./route.ts";
+import type { SkillsWorkshopListResult, SkillWorkshopChange } from "@openclaw/gateway-protocol";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferredCore } from "../../../../src/shared/deferred.js";
+import type { ApplicationContext } from "../../app/context.ts";
+import { createRuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
 import "./skill-workshop-page.ts";
 import {
   createContext,
@@ -23,1039 +10,350 @@ import {
   type SkillWorkshopPageTestElement,
 } from "./skill-workshop-page.test-support.ts";
 
-const PAGE_LOAD_METHODS = ["skills.proposals.list"];
+const SKILL = "actual-budget-operations";
+const VERSION = "20260929T010000000Z-patch";
 
-function emptyWorkshopManifest() {
-  return {
-    schema: "openclaw.skill-workshop.proposals-manifest.v1",
-    updatedAt: "2026-08-16T10:00:00.000Z",
-    proposals: [],
-    installedSkills: [],
-  };
+const list: SkillsWorkshopListResult = {
+  agentId: "research",
+  mode: "auto",
+  root: "/agents/research/workshop-skills",
+  skills: [
+    {
+      name: SKILL,
+      description: "Use when reconciling Actual Budget accounts",
+      updatedAtMs: Date.now() - 60_000,
+      sizeBytes: 900,
+      files: ["SKILL.md"],
+      useCount: 3,
+    },
+  ],
+  archived: [
+    {
+      name: SKILL,
+      live: true,
+      versions: [{ id: VERSION, action: "patch", createdAtMs: Date.now() - 60_000 }],
+    },
+  ],
+};
+
+const change: SkillWorkshopChange = {
+  id: "change-1",
+  agentId: "research",
+  skillName: SKILL,
+  action: "patch",
+  actor: "review",
+  summary: "tightened reconciliation step",
+  versionId: VERSION,
+  createdAtMs: Date.now() - 60_000,
+};
+
+function workshopGateway(changes: SkillWorkshopChange[] = [change]) {
+  return vi.fn(async (method: string) => {
+    switch (method) {
+      case "skills.workshop.list":
+        return list;
+      case "skills.workshop.changes":
+        return { changes };
+      case "skills.workshop.restore":
+        return { change: { ...change, id: "change-2", action: "restore", actor: "user" } };
+      case "skills.workshop.archive":
+        return { change: { ...change, id: "change-3", action: "archive", actor: "user" } };
+      default:
+        throw new Error(`unexpected ${method}`);
+    }
+  });
 }
 
-beforeEach(() => {
-  localStorage.setItem("openclaw:control-ui:skill-workshop-mode:v1", "suggestions");
-});
-
-function waitForSkillWorkshop(assertion: () => void) {
-  return vi.waitFor(assertion, { interval: 1 });
-}
-
-function callsFor(request: ReturnType<typeof vi.fn>, method: string) {
-  return request.mock.calls.filter(([calledMethod]) => calledMethod === method);
-}
-
-function mountLoadedPage(data: SkillWorkshopRouteData, context: ApplicationContext) {
+async function mount(context: ApplicationContext) {
   const page = document.createElement(
     "openclaw-skill-workshop-page",
   ) as SkillWorkshopPageTestElement;
-  page.data = data;
   page.context = context;
   document.body.append(page);
+  await page.updateComplete;
   return page;
 }
 
-function createProposal(overrides: Partial<SkillWorkshopProposal>): SkillWorkshopProposal {
-  return {
-    key: "proposal",
-    kind: "update",
-    slug: "proposal",
-    name: "Proposal",
-    oneLine: "",
-    body: "",
-    status: "pending",
-    version: 1,
-    revisionHash: null,
-    createdAt: 0,
-    recencyGroup: "today",
-    ageLabel: "now",
-    supportFiles: [],
-    bodyLoaded: true,
-    ...overrides,
-  };
+function button(page: HTMLElement, label: string) {
+  return Array.from(page.querySelectorAll("button")).find(
+    (entry) => entry.textContent?.trim() === label,
+  );
 }
 
-afterEach(() => {
-  document.body.replaceChildren();
-  vi.useRealTimers();
-  localStorage.removeItem("openclaw:control-ui:skill-workshop-current-chat-revisions:v1");
-  localStorage.removeItem("openclaw:control-ui:skill-workshop-mode:v1");
-});
+afterEach(() => document.body.replaceChildren());
 
-describe("SkillWorkshopPage lifecycle", () => {
-  it.each(["apply", "reject"] as const)(
-    "%s removes pending actions, paints success during refresh, and expires the notice",
-    async (action) => {
-      const refresh = createDeferred<unknown>();
-      const request = vi.fn(async (method: string) => {
-        if (method === "skills.proposals.list") {
-          return refresh.promise;
-        }
-        const record = {
-          id: "proposal-receipt",
-          kind: "create",
-          status: action === "apply" ? "applied" : "rejected",
-          title: "Inbox review",
-          description: "Review unread threads",
-          createdAt: "2026-09-01T10:00:00.000Z",
-          updatedAt: "2026-09-01T10:01:00.000Z",
-          proposedVersion: "v3",
-          draftHash: "b".repeat(64),
-          target: { skillName: "Inbox review", skillKey: "inbox-review" },
-        };
-        return action === "apply"
-          ? { record, targetSkillFile: "skills/inbox-review/SKILL.md" }
-          : record;
-      });
-      const loaded = createSkillWorkshopState();
-      loaded.skillWorkshopAgentId = "research";
-      loaded.skillWorkshopLoaded = true;
-      loaded.skillWorkshopProposals = [
-        createProposal({
-          key: "proposal-receipt",
-          slug: "inbox-review",
-          name: "Inbox review",
-          body: "Review unread threads before archiving.",
-          version: 3,
-          revisionHash: "a".repeat(64),
-        }),
-      ];
-      loaded.skillWorkshopSelectedKey = "proposal-receipt";
-      const page = document.createElement(
-        "openclaw-skill-workshop-page",
-      ) as SkillWorkshopPageTestElement;
-      page.data = skillWorkshopRouteData(loaded);
-      page.context = createContext(request, {
-        methods: [
-          `skills.proposals.${action}`,
-          "skills.proposals.list",
-          "skills.proposals.inspect",
-        ],
-      });
-      document.body.append(page);
-      await settleLitElement(page);
-      const selector = action === "apply" ? ".sw-btn--primary" : ".sw-btn--danger";
-      const button = page.querySelector<HTMLButtonElement>(`.sw-action-bar ${selector}`);
-      expect(button).not.toBeNull();
-      expect(button?.disabled).toBe(false);
-      vi.useFakeTimers();
-      button?.click();
-      try {
-        await waitForSkillWorkshop(() =>
-          expect(callsFor(request, "skills.proposals.list")).toHaveLength(1),
-        );
-        await settleLitElement(page);
-        expect(page.querySelector(".sw-action-toast")?.textContent).toContain(
-          action === "apply" ? "Applied" : "Rejected",
-        );
-        expect(page.querySelector(".sw-action-bar")).toBeNull();
-        expect(page.state?.skillWorkshopLoading).toBe(true);
-        refresh.reject(new Error("refresh unavailable"));
-        await waitForSkillWorkshop(() => expect(page.state?.skillWorkshopLoading).toBe(false));
-        await settleLitElement(page);
-        expect(page.querySelector(".sw-action-toast")?.textContent).toContain(
-          action === "apply" ? "Applied" : "Rejected",
-        );
-        expect(page.querySelector(".sw-action-bar")).toBeNull();
-        expect(page.querySelector(".sw-error")?.textContent).toContain("refresh unavailable");
-        await vi.advanceTimersByTimeAsync(2800);
-        await page.updateComplete;
-        expect(page.querySelector(".sw-action-toast")).toBeNull();
-        expect(page.querySelector(".sw-error")?.textContent).toContain("refresh unavailable");
-      } finally {
-        refresh.resolve(emptyWorkshopManifest());
-        if (page.state?.skillWorkshopActionNoticeTimer) {
-          clearTimeout(page.state.skillWorkshopActionNoticeTimer);
-        }
-      }
-    },
-  );
-
-  it("expires the evaluation notice while keeping its results visible", async () => {
-    const evaluation = {
-      id: "evaluation-notice",
-      proposedVersion: "v1",
-      revisionHash: REVISION_HASH,
-      trigger: "manual",
-      startedAt: ISO_NOW,
-      completedAt: ISO_NOW,
-      outcomes: [],
-    } as const;
-    const inspected = inspectResult();
-    const evaluated = { ...inspected.record, evaluation };
-    const request = vi.fn(async (method: string) =>
-      method === "skills.proposals.evaluate"
-        ? { record: evaluated, evaluation }
-        : { ...inspected, record: evaluated },
-    );
-    const loaded = createSkillWorkshopState();
-    loaded.skillWorkshopAgentId = "research";
-    loaded.skillWorkshopLoaded = true;
-    loaded.skillWorkshopProposals = [createActionProposal()];
-    loaded.skillWorkshopSelectedKey = "proposal-1";
-    const page = document.createElement(
-      "openclaw-skill-workshop-page",
-    ) as SkillWorkshopPageTestElement;
-    page.data = skillWorkshopRouteData(loaded);
-    page.context = createContext(request, {
-      methods: ["skills.proposals.evaluate", "skills.proposals.inspect"],
+describe("Skill Workshop page", () => {
+  it("shows a failed configuration read and retries only when requested", async () => {
+    const firstRead = createDeferredCore<unknown>();
+    const configRead = vi.fn().mockReturnValueOnce(firstRead.promise).mockResolvedValue({
+      config: {},
+      hash: "recovered",
+      valid: true,
+      issues: [],
     });
-    document.body.append(page);
-    await settleLitElement(page);
-    const button = Array.from(
-      page.querySelectorAll<HTMLButtonElement>(".sw-action-bar button"),
-    ).find((candidate) => candidate.textContent?.trim() === "Evaluate");
-    expect(button?.disabled).toBe(false);
-    vi.useFakeTimers();
-    button?.click();
-    await waitForSkillWorkshop(() =>
-      expect(page.querySelector(".sw-action-toast")?.textContent).toContain("Evaluated"),
-    );
-    await settleLitElement(page);
-    expect(page.querySelector(".sw-evaluation")).not.toBeNull();
-    await vi.advanceTimersByTimeAsync(2800);
-    await page.updateComplete;
-    expect(page.querySelector(".sw-action-toast")).toBeNull();
-    expect(page.querySelector(".sw-evaluation")).not.toBeNull();
-  });
-
-  it.each(
-    (["apply", "reject"] as const).flatMap((action) =>
-      (["success", "error", "revision"] as const).map((outcome) => ({ action, outcome })),
-    ),
-  )(
-    "ignores late $action $outcome after the selected agent changes A → B → A",
-    async ({ action, outcome }) => {
-      const mutation = createDeferred<unknown>();
-      const listeners = new Set<() => void>();
-      const request = vi.fn(async (method: string) =>
-        method === `skills.proposals.${action}` ? mutation.promise : emptyWorkshopManifest(),
-      );
-      const context = createContext(request, {
-        methods: [
-          `skills.proposals.${action}`,
-          "skills.proposals.list",
-          "skills.proposals.inspect",
-        ],
-        agentSelectionSubscribe: (listener) => {
-          listeners.add(listener);
-          return () => listeners.delete(listener);
-        },
-      });
-      let selectedId = "research";
-      const selection = context.agentSelection.state;
-      Object.defineProperty(context.agentSelection, "state", {
-        get: () => ({ ...selection, selectedId, scopeId: selectedId }),
-      });
-      const loaded = createSkillWorkshopState();
-      loaded.skillWorkshopAgentId = "research";
-      loaded.skillWorkshopLoaded = true;
-      loaded.skillWorkshopProposals = [
-        createProposal({
-          key: "proposal-scope",
-          name: "Scoped suggestion",
-          revisionHash: "a".repeat(64),
-        }),
-      ];
-      loaded.skillWorkshopSelectedKey = "proposal-scope";
-      const page = mountLoadedPage(skillWorkshopRouteData(loaded), context);
-      await settleLitElement(page);
-      const selector = action === "apply" ? ".sw-btn--primary" : ".sw-btn--danger";
-      const button = page.querySelector<HTMLButtonElement>(`.sw-action-bar ${selector}`);
-      expect(button).not.toBeNull();
-      button?.click();
-      await waitForSkillWorkshop(() =>
-        expect(callsFor(request, `skills.proposals.${action}`)).toHaveLength(1),
-      );
-      for (const agentId of ["ops", "research"]) {
-        selectedId = agentId;
-        for (const listener of listeners) {
-          listener();
-        }
-        await waitForSkillWorkshop(() => expect(page.state?.skillWorkshopAgentId).toBe(agentId));
-        await waitForSkillWorkshop(() => expect(page.state?.skillWorkshopLoaded).toBe(true));
-        await settleLitElement(page);
-      }
-      expect(callsFor(request, "skills.proposals.list")).toHaveLength(2);
-      if (outcome === "success") {
-        const record = {
-          id: "proposal-scope",
-          kind: "create",
-          status: action === "apply" ? "applied" : "rejected",
-          title: "Scoped suggestion",
-          description: "Review the selected agent",
-          createdAt: "2026-09-01T10:00:00.000Z",
-          updatedAt: "2026-09-01T10:01:00.000Z",
-          proposedVersion: "v1",
-          draftHash: "b".repeat(64),
-          target: { skillName: "Scoped suggestion", skillKey: "scoped-suggestion" },
-        };
-        mutation.resolve(
-          action === "apply"
-            ? { record, targetSkillFile: "skills/scoped-suggestion/SKILL.md" }
-            : record,
-        );
-      } else if (outcome === "error") {
-        mutation.reject(new Error("late action failure"));
-      } else {
-        mutation.reject(
-          new GatewayRequestError({
-            code: "INVALID_REQUEST",
-            message: "Skill proposal revision changed",
-            details: {
-              code: "SKILL_PROPOSAL_REVISION_CHANGED",
-              currentRevisionHash: "b".repeat(64),
-              expectedRevisionHash: "a".repeat(64),
-            },
-          }),
-        );
-      }
-      await mutation.promise.catch(() => undefined);
-      await settleLitElement(page);
-      expect(page.state?.skillWorkshopProposals).toEqual([]);
-      expect(page.state?.skillWorkshopActionNotice).toBeNull();
-      expect(page.state?.skillWorkshopError).toBeNull();
-      expect(callsFor(request, "skills.proposals.list")).toHaveLength(2);
-      expect(callsFor(request, "skills.proposals.inspect")).toHaveLength(0);
-      expect(page.querySelector(".sw-action-toast, .sw-error")).toBeNull();
-    },
-  );
-
-  it("renders a completed skill read after a repeated same-agent notification", async () => {
-    localStorage.setItem("openclaw:control-ui:skill-workshop-mode:v1", "skills");
-    const skill = {
-      name: "release-review",
-      skillKey: "release-review",
-      description: "Release checks",
-    };
-    const content = createDeferred<unknown>();
-    const listeners = new Set<() => void>();
-    const request = vi.fn(async (method: string) => {
-      if (method === "skills.proposals.list") {
-        return { ...emptyWorkshopManifest(), installedSkills: [skill] };
+    const workshopRequest = workshopGateway();
+    const request = vi.fn((method: string) => {
+      if (method === "config.get") {
+        return configRead();
       }
       if (method === "skills.workshop.read") {
-        return content.promise;
+        return Promise.resolve({
+          name: SKILL,
+          filePath: "SKILL.md",
+          content: "Synthetic procedure",
+          files: ["SKILL.md"],
+        });
       }
-      return null;
+      return workshopRequest(method);
     });
-    const page = document.createElement(
-      "openclaw-skill-workshop-page",
-    ) as SkillWorkshopPageTestElement;
-    page.context = createContext(request, {
-      agentSelectionSubscribe: (listener) => {
-        listeners.add(listener);
-        return () => listeners.delete(listener);
-      },
-    });
-    document.body.append(page);
-    await waitForSkillWorkshop(() =>
-      expect(callsFor(request, "skills.workshop.read")).toHaveLength(1),
-    );
-    await page.updateComplete;
-    for (const listener of listeners) {
-      listener();
+    const context = createContext(request, { methods: ["config.patch"] });
+    const runtimeConfig = createRuntimeConfigCapability(context.gateway);
+    Object.assign(context, { runtimeConfig });
+    const page = await mount(context);
+    try {
+      const initialLoad = runtimeConfig.ensureLoaded();
+      firstRead.reject(new Error("Configuration temporarily unavailable"));
+      await initialLoad;
+      await page.updateComplete;
+
+      expect(configRead).toHaveBeenCalledOnce();
+      expect(page.querySelector('[role="alert"]')?.textContent).toContain(
+        "Configuration temporarily unavailable",
+      );
+      const retry = button(page, "Retry");
+      expect(retry).toBeDefined();
+      retry!.click();
+      expect(configRead).toHaveBeenCalledTimes(2);
+      await runtimeConfig.ensureLoaded();
+      await page.updateComplete;
+
+      expect(configRead).toHaveBeenCalledTimes(2);
+      expect(runtimeConfig.state.configSnapshot?.hash).toBe("recovered");
+      expect(page.textContent).not.toContain("Configuration temporarily unavailable");
+      expect(button(page, "Auto")?.getAttribute("aria-pressed")).toBe("true");
+    } finally {
+      page.remove();
+      runtimeConfig.dispose();
     }
-    await settleLitElement(page);
-    content.resolve({ ...skill, content: "# Release review\n\nCurrent checks are ready." });
-    await waitForSkillWorkshop(() =>
-      expect(page.querySelector(".sw-collection__reader")?.textContent).toContain(
-        "Current checks are ready.",
-      ),
-    );
   });
 
-  it("renders revisions in the shared modal and handles modal cancellation", async () => {
-    const proposal = createProposal({
-      key: "proposal-modal",
-      slug: "proposal-modal",
-      name: "Modal proposal",
-      oneLine: "Shared modal coverage",
-      body: "## Workflow\n- test",
-    });
-    const loadedState = createSkillWorkshopState();
-    loadedState.skillWorkshopLoaded = true;
-    loadedState.skillWorkshopProposals = [proposal];
-    loadedState.skillWorkshopSelectedKey = proposal.key;
-    loadedState.skillWorkshopRevisionKey = proposal.key;
-    loadedState.skillWorkshopRevisionDraft = "Make it clearer";
-    const page = document.createElement(
-      "openclaw-skill-workshop-page",
-    ) as SkillWorkshopPageTestElement;
-    page.data = skillWorkshopRouteData(loadedState);
-    page.context = createContext(vi.fn(async () => emptyWorkshopManifest()));
-    document.body.append(page);
-    await page.updateComplete;
-
-    const modal = page.querySelector("openclaw-modal-dialog");
-    expect(modal).not.toBeNull();
-    expect(page.querySelector(".sw-revision-backdrop")).toBeNull();
-    expect(page.querySelector(".sw-revision-dialog__input")).toBeInstanceOf(HTMLTextAreaElement);
-
-    modal?.dispatchEvent(new CustomEvent("modal-cancel", { bubbles: true, composed: true }));
-    await page.updateComplete;
-    expect(page.querySelector("openclaw-modal-dialog")).toBeNull();
-  });
-
-  it("keeps complete suggested skills readable as sanitized Markdown", async () => {
-    localStorage.setItem("openclaw:control-ui:skill-workshop-mode:v1", "suggestions");
-    const previewText = `${"a".repeat(118)}😀trailing`;
-    const proposal = createProposal({
-      key: "proposal-utf16-preview",
-      slug: "proposal-utf16-preview",
-      name: "UTF-16 preview",
-      oneLine: "Preview boundary coverage",
-      body: [
-        "## Проверка",
-        "Read this before sending.",
-        `- **Required:** ${previewText}\n- Second step\n- Third step\n- Final step`,
-        "```sh\nverify --all\n```",
-        "Read the [runbook](https://example.org/runbook).",
-        "| Check | Result |\n| --- | --- |\n| Export | Passed |",
-        "![Diagram](https://example.org/diagram.png)",
-        "[Unsafe](javascript:alert(1))",
-        '<img src="invalid" onerror="alert(1)">',
-      ].join("\n\n"),
-      updatedAt: 0,
-      origin: {
-        agentId: "research",
-        sessionKey: "agent:research:proposal-utf16-preview",
-      },
-    });
-    const loadedState = createSkillWorkshopState();
-    loadedState.skillWorkshopAgentId = "research";
-    loadedState.skillWorkshopLoaded = true;
-    loadedState.skillWorkshopProposals = [proposal];
-    loadedState.skillWorkshopSelectedKey = proposal.key;
-    const page = document.createElement(
-      "openclaw-skill-workshop-page",
-    ) as SkillWorkshopPageTestElement;
-    page.data = skillWorkshopRouteData(loadedState);
-    page.context = createContext(vi.fn(async () => emptyWorkshopManifest()));
-    document.body.append(page);
-    await page.updateComplete;
-
-    const body = page.querySelector(".sw-body-card .sidebar-markdown");
-    expect(body?.querySelector("h2")?.textContent).toBe("Проверка");
-    expect(body?.querySelector("p")?.textContent).toBe("Read this before sending.");
-    expect(body?.querySelector("li")?.textContent).toBe(`Required: ${previewText}`);
-    expect(body?.querySelectorAll("li")).toHaveLength(4);
-    expect(body?.querySelector("pre")?.textContent).toContain("verify --all");
-    expect(body?.querySelector('a[href="https://example.org/runbook"]')?.textContent).toBe(
-      "runbook",
+  it("lists learned skills and undoes a change by restoring its saved version", async () => {
+    const request = workshopGateway();
+    const page = await mount(
+      createContext(request, {
+        methods: ["skills.workshop.archive", "skills.workshop.restore"],
+      }),
     );
-    expect(body?.querySelector("table tbody td")?.textContent).toBe("Export");
-    expect(body?.querySelector('img[src="https://example.org/diagram.png"]')).toBeNull();
-    expect(body?.querySelector('a[href="https://example.org/diagram.png"]')).not.toBeNull();
-    expect(body?.querySelector('script, [onerror], a[href^="javascript:"]')).toBeNull();
-    await waitForSkillWorkshop(() =>
+    await vi.waitFor(() => {
+      expect(page.textContent).toContain("Use when reconciling Actual Budget accounts");
+      expect(page.textContent).toContain("tightened reconciliation step");
+    });
+    expect(request).toHaveBeenCalledWith("skills.workshop.list", { agentId: "research" });
+
+    button(page, "Undo")?.click();
+
+    await vi.waitFor(() =>
       expect(
-        page.querySelector('.sw-row openclaw-agent-row-chip [data-agent-id="research"]'),
-      ).not.toBeNull(),
+        request.mock.calls.filter(([method]) => method === "skills.workshop.list"),
+      ).toHaveLength(2),
     );
+    expect(request).toHaveBeenCalledWith("skills.workshop.restore", {
+      agentId: "research",
+      name: SKILL,
+      versionId: VERSION,
+    });
   });
 
-  it("forces a fresh proposal load when the gateway source changes", async () => {
-    const firstRequest = vi.fn(async () => emptyWorkshopManifest());
-    const secondRequest = vi.fn(async () => emptyWorkshopManifest());
-    const loadedState = createSkillWorkshopState();
-    loadedState.skillWorkshopAgentId = "research";
-    loadedState.skillWorkshopLoaded = true;
-    const page = document.createElement(
-      "openclaw-skill-workshop-page",
-    ) as SkillWorkshopPageTestElement;
-    page.data = skillWorkshopRouteData(loadedState);
-    page.context = createContext(firstRequest);
-    document.body.append(page);
-    await page.updateComplete;
-    page.requestUpdate();
-    await page.updateComplete;
-    expect(firstRequest).not.toHaveBeenCalled();
+  it("undoes restoring an archived skill by archiving it again", async () => {
+    const request = workshopGateway([
+      { ...change, action: "restore", actor: "user", summary: "restored", versionId: undefined },
+    ]);
+    const page = await mount(
+      createContext(request, {
+        methods: ["skills.workshop.archive", "skills.workshop.restore"],
+      }),
+    );
+    await vi.waitFor(() => expect(button(page, "Undo")).toBeDefined());
 
-    page.context = createContext(secondRequest, { methods: PAGE_LOAD_METHODS });
-    page.requestUpdate();
-    await page.updateComplete;
+    button(page, "Undo")?.click();
 
-    await waitForSkillWorkshop(() =>
-      expect(secondRequest).toHaveBeenCalledWith("skills.proposals.list", {
+    await vi.waitFor(() =>
+      expect(request).toHaveBeenCalledWith("skills.workshop.archive", {
         agentId: "research",
+        name: SKILL,
       }),
     );
   });
 
-  it("reloads proposals on route activation and removes Apply after reconciliation", async () => {
-    let activation = 0;
+  it("keeps a new agent's restore pending when the former agent's archive fails", async () => {
+    const archive = createDeferredCore<unknown>();
+    const restore = createDeferredCore<unknown>();
+    const workshopRequest = workshopGateway();
+    const request = vi.fn((method: string) => {
+      if (method === "skills.workshop.archive") {
+        return archive.promise;
+      }
+      if (method === "skills.workshop.restore") {
+        return restore.promise;
+      }
+      if (method === "skills.workshop.read") {
+        return Promise.resolve({
+          name: SKILL,
+          filePath: "SKILL.md",
+          content: "Synthetic procedure",
+          files: ["SKILL.md"],
+        });
+      }
+      return workshopRequest(method);
+    });
+    const context = createContext(request, {
+      methods: ["skills.workshop.archive", "skills.workshop.restore"],
+    });
+    const page = await mount(context);
+    await vi.waitFor(() => expect(button(page, "Archive")).toBeDefined());
+    button(page, "Archive")!.click();
+    await page.updateComplete;
+
+    Object.assign(context.agentSelection.state, { selectedId: "scout" });
+    page.requestUpdate();
+    await page.updateComplete;
+    await vi.waitFor(() => expect(button(page, "Undo")).toBeDefined());
+    const restoreButton = button(page, "Undo")!;
+    restoreButton.click();
+    await page.updateComplete;
+    expect(restoreButton.disabled).toBe(true);
+
+    archive.reject(new Error("Retired archive failed"));
+    await archive.promise.catch(() => undefined);
+    await page.updateComplete;
+    expect(restoreButton.disabled).toBe(true);
+    expect(page.textContent).not.toContain("Retired archive failed");
+
+    restore.resolve({ change });
+    await vi.waitFor(() => expect(button(page, "Undo")?.disabled).toBe(false));
+    expect(request).toHaveBeenCalledWith("skills.workshop.restore", {
+      agentId: "scout",
+      name: SKILL,
+      versionId: VERSION,
+    });
+  });
+
+  it("offers no undo once the change's saved version has been pruned", async () => {
+    const page = await mount(
+      createContext(
+        workshopGateway([
+          { ...change, summary: "an older patch", versionId: "20260101T000000000Z-patch" },
+        ]),
+        { methods: ["skills.workshop.archive", "skills.workshop.restore"] },
+      ),
+    );
+    await vi.waitFor(() => expect(page.textContent).toContain("an older patch"));
+    expect(button(page, "Undo")).toBeUndefined();
+  });
+
+  it("opens the skill a chat notice links to, even when it is archived", async () => {
+    const archivedVersion = "20260930T010000000Z-archive";
     const request = vi.fn(async (method: string) => {
-      if (method === "skills.proposals.list") {
-        activation += 1;
+      if (method === "skills.workshop.list") {
         return {
-          schema: "openclaw.skill-workshop.proposals-manifest.v1",
-          installedSkills: [],
-          updatedAt: "2026-08-12T00:00:00.000Z",
-          proposals: [
+          ...list,
+          archived: [
+            ...list.archived,
             {
-              id: "proposal-route-refresh",
-              kind: "create",
-              status: activation === 1 ? "pending" : "stale",
-              title: "Route Refresh",
-              description: "Refresh stale proposal state on route activation.",
-              skillName: "Route Refresh",
-              skillKey: "route-refresh",
-              createdAt: "2026-08-12T00:00:00.000Z",
-              updatedAt: "2026-08-12T00:00:00.000Z",
-              scanState: "clean",
+              name: "release-notes",
+              live: false,
+              versions: [{ id: archivedVersion, action: "archive", createdAtMs: Date.now() }],
             },
           ],
         };
       }
-      if (method === "skills.proposals.inspect") {
-        const status = activation === 1 ? "pending" : "stale";
-        return {
-          record: {
-            id: "proposal-route-refresh",
-            kind: "create",
-            status,
-            title: "Route Refresh",
-            description: "Refresh stale proposal state on route activation.",
-            createdAt: "2026-08-12T00:00:00.000Z",
-            updatedAt: "2026-08-12T00:00:00.000Z",
-            proposedVersion: "v1",
-            draftHash: "a".repeat(64),
-            target: {
-              skillName: "Route Refresh",
-              skillKey: "route-refresh",
-            },
-          },
-          revisionHash: "b".repeat(64),
-          content: "# Route Refresh\n",
-          supportFiles: [],
-        };
-      }
-      return {};
+      return method === "skills.workshop.changes"
+        ? { changes: [] }
+        : { content: "", files: ["SKILL.md"] };
     });
-    const context = createContext(request, {
-      methods: [...PAGE_LOAD_METHODS, "skills.proposals.inspect"],
-    });
-    const options = {
-      signal: new AbortController().signal,
-      shouldRun: () => true,
-      revalidating: false,
-      location: { pathname: "/skill-workshop", search: "", hash: "" },
-      deps: "",
-      cause: "navigation",
-    } satisfies RouteLoaderOptions;
-    if (!skillWorkshopRoute.loader) {
-      throw new Error("skill workshop route has no loader");
-    }
+    const page = await mount(createContext(request, { search: "?skill=release-notes" }));
 
-    const first = (await skillWorkshopRoute.loader(context, options)) as SkillWorkshopRouteData;
-    const second = (await skillWorkshopRoute.loader(context, options)) as SkillWorkshopRouteData;
-    expect(callsFor(request, "skills.proposals.list")).toHaveLength(2);
-    expect(first.skillWorkshopProposals[0]?.status).toBe("pending");
-    expect(second.skillWorkshopProposals[0]?.status).toBe("stale");
-
-    const secondPage = document.createElement(
-      "openclaw-skill-workshop-page",
-    ) as SkillWorkshopPageTestElement;
-    secondPage.data = second;
-    secondPage.context = context;
-    document.body.append(secondPage);
-    await secondPage.updateComplete;
-
-    expect(secondPage.querySelector(".sw-action-bar .sw-btn--primary")).toBeNull();
-  });
-
-  it("does not issue duplicate list requests while a load is in flight", async () => {
-    const manifest = createDeferred<unknown>();
-    const request = vi.fn(() => manifest.promise);
-    const page = document.createElement(
-      "openclaw-skill-workshop-page",
-    ) as SkillWorkshopPageTestElement;
-    page.context = createContext(request, { methods: PAGE_LOAD_METHODS });
-    document.body.append(page);
-    await page.updateComplete;
-
-    // Extra update cycles during the pending load used to re-enter
-    // loadProposals, whose early-return finally scheduled the next update and
-    // spun the page at 100% CPU until the request settled.
-    page.requestUpdate();
-    await page.updateComplete;
-    page.requestUpdate();
-    await page.updateComplete;
-    expect(callsFor(request, "skills.proposals.list")).toHaveLength(1);
-
-    manifest.resolve({
-      schema: "openclaw.skill-workshop.proposals-manifest.v1",
-      installedSkills: [],
-      updatedAt: "2026-07-08T00:00:00.000Z",
-      proposals: [],
-    });
-    await waitForSkillWorkshop(() => expect(page.state?.skillWorkshopLoaded).toBe(true));
-    expect(callsFor(request, "skills.proposals.list")).toHaveLength(1);
-  });
-
-  it("stops auto-retrying after a failed proposal load", async () => {
-    const request = vi.fn(async () => {
-      throw new Error("gateway offline");
-    });
-    const page = document.createElement(
-      "openclaw-skill-workshop-page",
-    ) as SkillWorkshopPageTestElement;
-    page.context = createContext(request, { methods: PAGE_LOAD_METHODS });
-    document.body.append(page);
-    await page.updateComplete;
-    await waitForSkillWorkshop(() =>
-      expect(page.state?.skillWorkshopError).toContain("gateway offline"),
-    );
-
-    page.requestUpdate();
-    await page.updateComplete;
-    page.requestUpdate();
-    await page.updateComplete;
-    expect(callsFor(request, "skills.proposals.list")).toHaveLength(1);
-  });
-
-  it("detaches an in-flight proposal load on a same-client disconnect", async () => {
-    const manifest = createDeferred<unknown>();
-    const request = vi.fn(() => manifest.promise);
-    let gatewayListener: ((snapshot: ApplicationGatewaySnapshot) => void) | undefined;
-    const context = createContext(request, {
-      methods: PAGE_LOAD_METHODS,
-      gatewaySubscribe: (listener) => {
-        gatewayListener = listener;
-        return () => undefined;
-      },
-    });
-    const page = document.createElement(
-      "openclaw-skill-workshop-page",
-    ) as SkillWorkshopPageTestElement;
-    page.context = context;
-    document.body.append(page);
-    await page.updateComplete;
-    page.requestUpdate();
-    await page.updateComplete;
-    await waitForSkillWorkshop(() =>
-      expect(callsFor(request, "skills.proposals.list")).toHaveLength(1),
-    );
-    const loadingState = page.state;
-
-    gatewayListener?.({ ...context.gateway.snapshot, phase: "stopped" });
-    expect(page.state).not.toBe(loadingState);
-    expect(page.state?.skillWorkshopLoaded).toBe(false);
-
-    manifest.resolve({
-      schema: "openclaw.skill-workshop.proposals-manifest.v1",
-      installedSkills: [],
-      updatedAt: "2026-07-08T00:00:00.000Z",
-      proposals: [],
-    });
-    await manifest.promise;
-    await Promise.resolve();
-    expect(page.state?.skillWorkshopLoaded).toBe(false);
-    expect(page.state?.skillWorkshopProposals).toEqual([]);
-  });
-
-  it("does not prepare or navigate a revision resolved by a replaced context", async () => {
-    const sessionList = createDeferred<SessionsListResult>();
-    const oldSessions = {
-      state: { agentId: null, result: null, loading: false, error: null },
-      list: vi.fn(() => sessionList.promise),
-      create: vi.fn(async () => null),
-    } as unknown as ApplicationContext["sessions"];
-    const oldContext = createContext(
-      vi.fn(async () => emptyWorkshopManifest()),
-      { sessions: oldSessions },
-    );
-    const loadedState = createSkillWorkshopState();
-    loadedState.skillWorkshopAgentId = "research";
-    loadedState.skillWorkshopLoaded = true;
-    const proposal = createProposal({
-      key: "proposal-1",
-      slug: "proposal-1",
-      updatedAt: 0,
-      origin: {
+    await vi.waitFor(() =>
+      expect(request).toHaveBeenCalledWith("skills.workshop.read", {
         agentId: "research",
-        sessionKey: "agent:research:revision",
-      },
-    });
-    loadedState.skillWorkshopProposals = [proposal];
-    loadedState.skillWorkshopSelectedKey = proposal.key;
-    const page = mountLoadedPage(skillWorkshopRouteData(loadedState), oldContext);
-    await page.updateComplete;
-    page.requestUpdate();
-    await page.updateComplete;
-
-    const revision = page.handleRevisionRequest("revise it", proposal, "research", "a".repeat(64));
-    await waitForSkillWorkshop(() => expect(oldSessions.list).toHaveBeenCalledTimes(1));
-
-    const newContext = createContext(
-      vi.fn(async () => emptyWorkshopManifest()),
-      { methods: PAGE_LOAD_METHODS },
-    );
-    page.context = newContext;
-    page.requestUpdate();
-    await page.updateComplete;
-
-    sessionList.resolve({
-      sessions: [
-        {
-          key: "agent:research:revision",
-          archived: false,
-          hasActiveRun: false,
-        },
-      ],
-    } as SessionsListResult);
-    await expect(revision).resolves.toMatchObject({ status: "retryable-failed" });
-
-    expect(oldContext.navigate).not.toHaveBeenCalled();
-    expect(newContext.navigate).not.toHaveBeenCalled();
-  });
-
-  it.each([false, true])(
-    "submits a revision and expires its notice despite legacy current-chat setting %s",
-    async (enabled) => {
-      localStorage.setItem(
-        "openclaw:control-ui:skill-workshop-current-chat-revisions:v1",
-        String(enabled),
-      );
-      const sessions = {
-        state: {
-          agentId: "research",
-          result: {
-            sessions: [
-              {
-                key: "agent:research:revision",
-                archived: false,
-                hasActiveRun: false,
-              },
-            ],
-          },
-          loading: false,
-          error: null,
-        },
-        list: vi.fn(),
-        create: vi.fn(),
-      } as unknown as ApplicationContext["sessions"];
-      const request = vi.fn(async (method: string) =>
-        method === "skills.proposals.requestRevision"
-          ? { status: "started" }
-          : emptyWorkshopManifest(),
-      );
-      const context = createContext(request, {
-        sessions,
-        methods: ["skills.proposals.requestRevision"],
-      });
-      const loadedState = createSkillWorkshopState();
-      loadedState.skillWorkshopAgentId = "research";
-      loadedState.skillWorkshopLoaded = true;
-      const proposal = createProposal({
-        key: "proposal-owner",
-        slug: "proposal-owner",
-        revisionHash: "a".repeat(64),
-        updatedAt: 0,
-        origin: {
-          agentId: "research",
-          sessionKey: "agent:research:revision",
-        },
-      });
-      loadedState.skillWorkshopProposals = [proposal];
-      loadedState.skillWorkshopSelectedKey = proposal.key;
-      loadedState.skillWorkshopRevisionKey = proposal.key;
-      loadedState.skillWorkshopRevisionDraft = "revise it";
-      const page = mountLoadedPage(skillWorkshopRouteData(loadedState), context);
-      await settleLitElement(page);
-
-      const button = page.querySelector<HTMLButtonElement>(
-        ".sw-revision-dialog__actions .sw-btn--primary",
-      );
-      expect(button?.disabled).toBe(false);
-      vi.useFakeTimers();
-      button?.click();
-      await waitForSkillWorkshop(() =>
-        expect(page.querySelector(".sw-action-toast")?.textContent).toContain("Revision requested"),
-      );
-      await settleLitElement(page);
-      expect(page.querySelector("openclaw-modal-dialog")).toBeNull();
-      expect(context.navigate).toHaveBeenCalledWith("chat", {
-        pathname: "/chat/research/revision",
-      });
-
-      expect(request).toHaveBeenCalledWith("skills.proposals.requestRevision", {
-        agentId: "research",
-        targetAgentId: "research",
-        proposalId: "proposal-owner",
-        expectedRevisionHash: "a".repeat(64),
-        instructions: "revise it",
-        sessionKey: "agent:research:revision",
-        idempotencyKey: expect.any(String),
-      });
-      await vi.advanceTimersByTimeAsync(2800);
-      await page.updateComplete;
-      expect(page.querySelector(".sw-action-toast")).toBeNull();
-    },
-  );
-
-  it("does not create a fallback revision session after a same-context reconnect", async () => {
-    const sessionList = createDeferred<SessionsListResult>();
-    const create = vi.fn(async () => "agent:research:revision");
-    const sessions = {
-      state: { agentId: null, result: null, loading: false, error: null },
-      list: vi.fn(() => sessionList.promise),
-      create,
-    } as unknown as ApplicationContext["sessions"];
-    let gatewayListener: ((snapshot: ApplicationGatewaySnapshot) => void) | undefined;
-    const context = createContext(
-      vi.fn(async () => emptyWorkshopManifest()),
-      {
-        methods: ["sessions.create"],
-        scopes: ["operator.write"],
-        sessions,
-        gatewaySubscribe: (listener) => {
-          gatewayListener = listener;
-          return () => undefined;
-        },
-      },
-    );
-    const loadedState = createSkillWorkshopState();
-    loadedState.skillWorkshopAgentId = "research";
-    loadedState.skillWorkshopLoaded = true;
-    const proposal = createProposal({
-      key: "proposal-reconnect",
-      slug: "proposal-reconnect",
-      updatedAt: 0,
-    });
-    loadedState.skillWorkshopProposals = [proposal];
-    loadedState.skillWorkshopSelectedKey = proposal.key;
-    const page = mountLoadedPage(skillWorkshopRouteData(loadedState), context);
-    await page.updateComplete;
-
-    const revision = page.handleRevisionRequest("revise it", proposal, "research", "a".repeat(64));
-    await waitForSkillWorkshop(() => expect(sessions.list).toHaveBeenCalledTimes(1));
-
-    const replacement = {
-      ...context.gateway.snapshot,
-      client: {
-        request: vi.fn(async () => emptyWorkshopManifest()),
-      } as unknown as GatewayBrowserClient,
-    };
-    Object.defineProperty(context.gateway, "snapshot", {
-      configurable: true,
-      get: () => replacement,
-    });
-    gatewayListener?.(replacement);
-    sessionList.resolve({
-      ts: 0,
-      path: "",
-      count: 0,
-      defaults: {
-        modelProvider: null,
-        model: null,
-        contextTokens: null,
-      },
-      sessions: [],
-    });
-    await expect(revision).resolves.toMatchObject({ status: "retryable-failed" });
-
-    expect(create).not.toHaveBeenCalled();
-    expect(context.navigate).not.toHaveBeenCalled();
-  });
-
-  it("does not create a fallback revision session without sessions.create access", async () => {
-    const create = vi.fn(async () => "agent:research:revision");
-    const sessions = {
-      state: { agentId: "research", result: { sessions: [] }, loading: false, error: null },
-      list: vi.fn(async () => ({ sessions: [] })),
-      create,
-    } as unknown as ApplicationContext["sessions"];
-    const context = createContext(
-      vi.fn(async () => emptyWorkshopManifest()),
-      { methods: ["sessions.create"], scopes: ["operator.read"], sessions },
-    );
-    const loadedState = createSkillWorkshopState();
-    loadedState.skillWorkshopAgentId = "research";
-    loadedState.skillWorkshopLoaded = true;
-    const proposal = createProposal({
-      key: "proposal-read-only",
-      slug: "proposal-read-only",
-      updatedAt: 0,
-    });
-    loadedState.skillWorkshopProposals = [proposal];
-    loadedState.skillWorkshopSelectedKey = proposal.key;
-    const page = mountLoadedPage(skillWorkshopRouteData(loadedState), context);
-    await page.updateComplete;
-
-    await expect(
-      page.handleRevisionRequest("revise it", proposal, "research", "a".repeat(64)),
-    ).resolves.toMatchObject({ status: "retryable-failed" });
-
-    expect(create).not.toHaveBeenCalled();
-    expect(context.navigate).not.toHaveBeenCalled();
-  });
-});
-
-describe("SkillWorkshopPage self-learning toggle", () => {
-  function createLoadedPage(
-    runtimeConfig: ReturnType<typeof createRuntimeConfigStub>,
-    options?: {
-      gatewaySubscribe?: (listener: (snapshot: ApplicationGatewaySnapshot) => void) => () => void;
-    },
-  ) {
-    const loadedState = createSkillWorkshopState();
-    loadedState.skillWorkshopAgentId = "research";
-    loadedState.skillWorkshopLoaded = true;
-    const page = document.createElement(
-      "openclaw-skill-workshop-page",
-    ) as SkillWorkshopPageTestElement;
-    page.data = skillWorkshopRouteData(loadedState);
-    page.context = createContext(
-      vi.fn(async () => emptyWorkshopManifest()),
-      {
-        methods: ["config.patch"],
-        runtimeConfig,
-        gatewaySubscribe: options?.gatewaySubscribe,
-      },
-    );
-    document.body.append(page);
-    return page;
-  }
-
-  it("reflects the config value in the header toggle and hides it without a snapshot", async () => {
-    const enabledPage = createLoadedPage(
-      createRuntimeConfigStub({
-        sourceConfig: { skills: { workshop: { autonomous: { mode: "auto" } } } },
+        name: "release-notes",
+        filePath: "SKILL.md",
+        versionId: archivedVersion,
       }),
     );
-    await enabledPage.updateComplete;
-    const toggle = enabledPage.querySelector<HTMLInputElement>(
-      ".sw-header-controls input[aria-label='Toggle autonomous self-learning']",
+    expect(request).not.toHaveBeenCalledWith(
+      "skills.workshop.read",
+      expect.objectContaining({ name: SKILL }),
     );
-    expect(toggle?.checked).toBe(true);
-    document.body.replaceChildren();
-
-    const noSnapshotPage = createLoadedPage(createRuntimeConfigStub());
-    await noSnapshotPage.updateComplete;
-    expect(
-      noSnapshotPage.querySelector(
-        ".sw-header-controls input[aria-label='Toggle autonomous self-learning']",
-      ),
-    ).toBeNull();
+    // The Archived list is shown, so the linked skill is visible: sorting exists only on Active.
+    await vi.waitFor(() => expect(page.querySelector(".sw-sort")).toBeNull());
   });
 
-  it("enables self-learning from the empty-state pitch via a config merge patch", async () => {
-    const patch = vi.fn(async () => true);
-    const runtimeConfig = createRuntimeConfigStub({
-      sourceConfig: { skills: { workshop: { autonomous: { mode: "off" } } } },
-      patch,
-    });
-    const page = createLoadedPage(runtimeConfig);
-    await page.updateComplete;
-
-    const button = page.querySelector<HTMLButtonElement>(".sw-empty-state__selflearn button");
-    expect(button).not.toBeNull();
-    button?.click();
-
-    await waitForSkillWorkshop(() =>
-      expect(patch).toHaveBeenCalledWith({
-        raw: { skills: { workshop: { autonomous: { mode: "auto" } } } },
-        note: "Enable Skill Workshop self-learning",
+  it("offers no undo to an operator without admin scope", async () => {
+    const page = await mount(
+      createContext(workshopGateway(), {
+        methods: ["skills.workshop.archive", "skills.workshop.restore"],
+        scopes: ["operator.read"],
       }),
     );
-    await waitForSkillWorkshop(() => expect(runtimeConfig.refresh).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(page.textContent).toContain("tightened reconciliation step"));
+    expect(button(page, "Undo")).toBeUndefined();
   });
 
-  it("refreshes a stale config snapshot and retries the self-learning toggle", async () => {
-    const runtimeConfig = createRuntimeConfigStub({
-      sourceConfig: { skills: { workshop: { autonomous: { mode: "off" } } } },
-    });
-    runtimeConfig.patch = vi
-      .fn()
-      .mockImplementationOnce(async () => {
-        runtimeConfig.state.lastError =
-          "GatewayRequestError: config changed since last load; re-run config.get and retry";
-        return false;
-      })
-      .mockImplementationOnce(async () => {
-        runtimeConfig.state.lastError = null;
-        return true;
-      });
-    runtimeConfig.refresh = vi.fn(async () => {
-      runtimeConfig.state.lastError = null;
-      if (runtimeConfig.patch.mock.calls.length === 2) {
-        runtimeConfig.state.configSnapshot = {
-          hash: "hash-3",
-          sourceConfig: { skills: { workshop: { autonomous: { mode: "auto" } } } },
-        };
-      }
-    });
-    const page = createLoadedPage(runtimeConfig);
-    await page.updateComplete;
-
-    page.querySelector<HTMLButtonElement>(".sw-empty-state__selflearn button")?.click();
-
-    await waitForSkillWorkshop(() => expect(runtimeConfig.patch).toHaveBeenCalledTimes(2));
-    await waitForSkillWorkshop(() => expect(runtimeConfig.refresh).toHaveBeenCalledTimes(2));
-    await page.updateComplete;
-    expect(page.querySelector(".sw-error")).toBeNull();
-    expect(
-      page.querySelector<HTMLInputElement>(
-        ".sw-header-controls input[aria-label='Toggle autonomous self-learning']",
-      )?.checked,
-    ).toBe(true);
-  });
-
-  it("does not retry a conflicted self-learning write after gateway replacement", async () => {
-    const refresh = createDeferred<undefined>();
-    let gatewayListener: ((snapshot: ApplicationGatewaySnapshot) => void) | undefined;
-    const runtimeConfig = createRuntimeConfigStub({
-      sourceConfig: { skills: { workshop: { autonomous: { mode: "off" } } } },
-    });
-    runtimeConfig.patch = vi.fn(async () => {
-      runtimeConfig.state.lastError =
-        "GatewayRequestError: config changed since last load; re-run config.get and retry";
-      return false;
-    });
-    runtimeConfig.refresh = vi.fn(() => refresh.promise);
-    const page = createLoadedPage(runtimeConfig, {
-      gatewaySubscribe: (listener) => {
-        gatewayListener = listener;
-        return () => undefined;
-      },
-    });
-    await page.updateComplete;
-
-    page.querySelector<HTMLButtonElement>(".sw-empty-state__selflearn button")?.click();
-    await waitForSkillWorkshop(() => expect(runtimeConfig.refresh).toHaveBeenCalledTimes(1));
-    gatewayListener?.({
-      ...page.context.gateway.snapshot,
-      client: {
-        request: vi.fn(async () => emptyWorkshopManifest()),
-      } as unknown as GatewayBrowserClient,
-    });
-    refresh.resolve(undefined);
-
-    await waitForSkillWorkshop(() => expect(runtimeConfig.patch).toHaveBeenCalledTimes(1));
-  });
-
-  it("surfaces a patch failure and keeps the toggle off", async () => {
-    const patch = vi.fn(async () => false);
-    const runtimeConfig = createRuntimeConfigStub({
-      sourceConfig: { skills: { workshop: { autonomous: { mode: "off" } } } },
-      patch,
-    });
-    const page = createLoadedPage(runtimeConfig);
-    await page.updateComplete;
-
-    page.querySelector<HTMLButtonElement>(".sw-empty-state__selflearn button")?.click();
-    await waitForSkillWorkshop(() =>
-      expect(page.querySelector(".sw-error")?.textContent).toContain(
-        "Could not update the self-learning setting.",
-      ),
+  it("compares a saved version's own metadata against today's", async () => {
+    const skillFile = (description: string) =>
+      `---\nname: ${SKILL}\ndescription: ${description}\n---\n\nSynthetic procedure`;
+    const workshopRequest = workshopGateway();
+    const request = vi.fn(async (method: string, params?: { versionId?: string }) =>
+      method === "skills.workshop.read"
+        ? {
+            name: SKILL,
+            filePath: "SKILL.md",
+            content: skillFile(
+              params?.versionId ? "Synthetic old summary" : list.skills[0]!.description,
+            ),
+            files: ["SKILL.md"],
+          }
+        : workshopRequest(method),
     );
-    expect(runtimeConfig.refresh).not.toHaveBeenCalled();
-    const toggle = page.querySelector<HTMLInputElement>(
-      ".sw-header-controls input[aria-label='Toggle autonomous self-learning']",
+    const page = await mount(createContext(request));
+    await vi.waitFor(() => expect(page.textContent).toContain("Synthetic procedure"));
+
+    page.querySelectorAll<HTMLButtonElement>(".sw-tab")[2]!.click();
+    await page.updateComplete;
+    button(page, "Compare")!.click();
+
+    await vi.waitFor(() =>
+      expect(page.querySelector(".sw-detail__desc")?.textContent).toBe("Synthetic old summary"),
     );
-    expect(toggle?.checked).toBe(false);
+    const lines = Array.from(page.querySelectorAll(".sw-diff__line"), (line) => [
+      line.classList.contains("sw-diff__line--remove")
+        ? "-"
+        : line.classList.contains("sw-diff__line--add")
+          ? "+"
+          : " ",
+      line.querySelector(".sw-diff__text")?.textContent,
+    ]);
+    expect(lines).toContainEqual(["-", "description: Synthetic old summary"]);
+    expect(lines).toContainEqual(["+", `description: ${list.skills[0]!.description}`]);
+    expect(page.querySelector(".sw-diff__same")).toBeNull();
+  });
+
+  it("switches the learning mode through the config key", async () => {
+    const runtimeConfig = createRuntimeConfigStub({
+      sourceConfig: { skills: { workshop: { autonomous: { mode: "auto" } } } },
+    });
+    const page = await mount(
+      createContext(workshopGateway(), { methods: ["config.patch"], runtimeConfig }),
+    );
+    expect(button(page, "Auto")?.getAttribute("aria-pressed")).toBe("true");
+
+    button(page, "Off")?.click();
+
+    await vi.waitFor(() => expect(runtimeConfig.refresh).toHaveBeenCalled());
+    expect(runtimeConfig.patch).toHaveBeenCalledExactlyOnceWith({
+      raw: { skills: { workshop: { autonomous: { mode: "off" } } } },
+      note: "Disable Skill Workshop learning",
+    });
   });
 });

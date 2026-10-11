@@ -4,7 +4,6 @@ import { registerDesktopEnglish } from "../../i18n/locales/en-desktop.ts";
 import { strokeIcon } from "../icons-tools.ts";
 import { icons } from "../icons.ts";
 import { renderPanelLoadingSkeleton } from "../panel-loading-skeleton.ts";
-import type { DesktopPanelState } from "./desktop-panel-state.ts";
 import {
   renderDesktopPanelContent,
   renderDesktopSizing,
@@ -26,16 +25,15 @@ const KEYBOARD_GLYPH = strokeIcon(svg`
   <path d="M8 17h8" />
 `);
 
-type DesktopDocumentViewOptions = {
-  state: DesktopPanelState;
+type DesktopDocumentViewOptions = Omit<
+  Parameters<typeof renderDesktopPanelContent>[0],
+  "connection"
+> & {
   controlling: boolean;
   sizing: DesktopSizingOptions;
-  notice: TemplateResult | typeof nothing;
-  picker: TemplateResult;
-  credentials: TemplateResult;
-  recovery: TemplateResult;
   keyboardInputValue: string;
   pictureInPictureControl: TemplateResult;
+  audioControl?: TemplateResult;
   onControlToggle: () => void;
   onKeyboardFocus: (event: MouseEvent) => void;
   onKeyboardEvent: (event: KeyboardEvent) => void;
@@ -67,12 +65,13 @@ export function renderDesktopDocumentView(options: DesktopDocumentViewOptions) {
         @input=${options.onKeyboardInput}
       ></textarea>
       <nav class="desktop-touch-toolbar" aria-label=${t("desktop.touchControls")}>
-        ${options.pictureInPictureControl}
+        ${options.audioControl ?? nothing} ${options.pictureInPictureControl}
         <button
           class="desktop-touch-action"
           type="button"
           aria-label=${t(options.controlling ? "desktop.switchToViewOnly" : "desktop.takeControl")}
           aria-pressed=${options.controlling ? "true" : "false"}
+          ?disabled=${options.state !== "connected"}
           @click=${options.onControlToggle}
         >
           <span class="desktop-touch-action__icon" aria-hidden="true">
@@ -108,14 +107,7 @@ export function renderDesktopDocumentView(options: DesktopDocumentViewOptions) {
 
   return html`
     <section class="desktop-document" aria-label=${t("desktop.title")}>
-      ${renderDesktopPanelContent({
-        state: options.state,
-        notice: options.notice,
-        picker: options.picker,
-        recovery: options.recovery,
-        credentials: options.credentials,
-        connection,
-      })}
+      ${renderDesktopPanelContent({ ...options, connection })}
     </section>
   `;
 }

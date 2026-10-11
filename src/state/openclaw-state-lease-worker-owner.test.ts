@@ -51,6 +51,128 @@ async function nextMessageTurn(): Promise<void> {
 }
 
 describe("state lease worker result boundary", () => {
+  it.each([
+    "none",
+    "transaction",
+    "commit",
+    "beforeTransaction replacement",
+    "beforeTransaction expiry",
+    "beforeCommit expiry",
+  ] as const)("keeps caller authority and expiry live through commit (%s)", async (withdrawAt) => {
+    const f = fixture();
+    const settled = createDeferredCore<SqliteWorkerOperationSettlement>();
+    const expiresDuringCommit = withdrawAt === "beforeCommit expiry";
+    const expiresDuringTransaction = withdrawAt === "beforeTransaction expiry";
+    const replacesTransactionGuard = withdrawAt === "beforeTransaction replacement";
+    const withdrawn = new Error("Synthetic login was retired");
+    const now = Date.now();
+    const clock =
+      expiresDuringCommit || expiresDuringTransaction
+        ? vi.spyOn(Date, "now").mockReturnValue(now)
+        : undefined;
+    const beforeTransaction = vi.fn(() => {
+      if (replacesTransactionGuard) {
+        throw withdrawn;
+      }
+      if (expiresDuringTransaction) {
+        clock?.mockReturnValue(now + 30_000);
+      }
+    });
+    const beforeCommit = vi.fn(() => {
+      clock?.mockReturnValue(now + 30_000);
+    });
+    let current = true;
+    const authority = {
+      assertCurrent() {
+        if (!current) {
+          throw withdrawn;
+        }
+      },
+      beforeTransaction,
+      beforeCommit,
+    };
+    if (replacesTransactionGuard) {
+      const replacement = vi.fn();
+      f.lease.assertOwned = () => {
+        authority.beforeTransaction = replacement;
+      };
+    }
+    try {
+      await withOpenClawStateLeaseWorkerAdmission(
+        f.lease,
+        f.databasePath,
+        async (scope) => {
+          const { admission } = scope.createAdmission({ settled: settled.promise });
+          scope.assertCurrent();
+          expect(beforeTransaction).not.toHaveBeenCalled();
+          expect(beforeCommit).not.toHaveBeenCalled();
+          const request = (stage: "transaction" | "commit") => {
+            const decision = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
+            admission.port.postMessage(
+              {
+                stage,
+                facts: {
+                  kind: "state-lease",
+                  identity: scope.identity,
+                  expiresAt: Date.now() + 30_000,
+                },
+                decision: decision.buffer,
+              },
+              [],
+            );
+            admission.service();
+            return Atomics.load(decision, 0);
+          };
+          try {
+            current = withdrawAt !== "transaction";
+            expect(request("transaction")).toBe(
+              current && !expiresDuringTransaction && !replacesTransactionGuard ? 1 : 2,
+            );
+            expect(beforeCommit).not.toHaveBeenCalled();
+            if (!current) {
+              expect(admission.failure).toBe(withdrawn);
+              return;
+            }
+            expect(beforeTransaction).toHaveBeenCalledOnce();
+            if (replacesTransactionGuard) {
+              expect(admission.failure).toBe(withdrawn);
+              return;
+            }
+            if (expiresDuringTransaction) {
+              expect(admission.failure).toMatchObject({ code: "OPENCLAW_STATE_LEASE_LOST" });
+              return;
+            }
+            // One bounded mutation can verify its lease before several statements.
+            expect(request("transaction")).toBe(1);
+            expect(beforeTransaction).toHaveBeenCalledOnce();
+            current = withdrawAt !== "commit";
+            expect(request("commit")).toBe(current && !expiresDuringCommit ? 1 : 2);
+            if (current) {
+              expect(beforeCommit).toHaveBeenCalledOnce();
+              if (expiresDuringCommit) {
+                expect(admission.failure).toMatchObject({ code: "OPENCLAW_STATE_LEASE_LOST" });
+              }
+              // Acknowledgement remains deliverable after the commit grant.
+              current = false;
+            } else {
+              expect(beforeCommit).not.toHaveBeenCalled();
+              expect(admission.failure).toBe(withdrawn);
+            }
+          } finally {
+            admission.finish();
+            settled.resolve({ kind: "completed" });
+          }
+        },
+        authority,
+      );
+    } finally {
+      clock?.mockRestore();
+      settled.resolve({ kind: "completed" });
+      await f.owner.drain();
+      f.owner.close();
+    }
+  });
+
   it.each(["reject", "handled failure"] as const)(
     "reports unknown settlement before a caller observes %s",
     async (completion) => {

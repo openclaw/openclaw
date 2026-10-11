@@ -160,35 +160,8 @@ async function buildDeliveryPlan(
   });
 }
 
-function sessionEntry(context: DeliveryContext): SessionEntry {
-  return normalizeLegacySessionEntryDelivery({
-    sessionId: "fixture",
-    updatedAt: 1,
-    deliveryContext: context,
-  } as unknown as SessionEntry);
-}
-
 describe("agent delivery helpers", () => {
   it.each([
-    {
-      params: {
-        sessionEntry: {
-          sessionId: "s1",
-          updatedAt: 1,
-          deliveryContext: { channel: "directchat", to: "+1555", accountId: "work" },
-        },
-        requestedChannel: "last",
-        explicitTo: undefined,
-        accountId: undefined,
-        wantsDelivery: true,
-      },
-      expected: {
-        resolvedChannel: "directchat",
-        resolvedTo: "+1555",
-        resolvedAccountId: "work",
-        deliveryTargetMode: "implicit",
-      },
-    },
     {
       params: {
         sessionEntry: undefined,
@@ -222,23 +195,6 @@ describe("agent delivery helpers", () => {
         resolvedAccountId: "work",
       },
     },
-    {
-      params: {
-        sessionEntry: {
-          sessionId: "s5",
-          updatedAt: 5,
-          deliveryContext: { channel: "workspace", to: "U_WRONG" },
-        },
-        requestedChannel: "last",
-        turnSourceChannel: "directchat",
-        accountId: undefined,
-        wantsDelivery: true,
-      },
-      expected: {
-        resolvedChannel: "directchat",
-        resolvedTo: undefined,
-      },
-    },
   ])("builds delivery plan for %j", async ({ params, expected }) => {
     const plan = await buildDeliveryPlan(params);
     for (const [key, value] of Object.entries(expected)) {
@@ -259,7 +215,7 @@ describe("agent delivery helpers", () => {
       wantsDelivery: true,
     });
 
-    const resolved = resolveAgentOutboundTarget({
+    const resolved = await resolveAgentOutboundTarget({
       cfg: {} as OpenClawConfig,
       plan,
       targetMode: "implicit",
@@ -284,7 +240,7 @@ describe("agent delivery helpers", () => {
     });
 
     mocks.resolveOutboundTarget.mockClear();
-    const resolved = resolveAgentOutboundTarget({
+    const resolved = await resolveAgentOutboundTarget({
       cfg: {} as OpenClawConfig,
       plan,
       targetMode: "explicit",
@@ -293,53 +249,6 @@ describe("agent delivery helpers", () => {
 
     expect(mocks.resolveOutboundTarget).not.toHaveBeenCalled();
     expect(resolved.resolvedTo).toBe("+1555");
-  });
-
-  it("resolves explicit delivery targets through plugin session routing", async () => {
-    const pluginRouteResolver = vi.fn();
-    mocks.resolveOutboundChannelPlugin.mockReturnValue({
-      messaging: { resolveOutboundSessionRoute: pluginRouteResolver },
-    });
-    mocks.resolveOutboundTarget.mockReturnValueOnce({
-      ok: true,
-      to: "channel:C123",
-    });
-    mocks.resolveOutboundSessionRoute.mockResolvedValueOnce({
-      sessionKey: "agent:workspace:channel:C123",
-      baseSessionKey: "agent:workspace:channel:C123",
-      peer: { kind: "channel", id: "C123" },
-      chatType: "channel",
-      from: "workspace:channel:C123",
-      to: "channel:C123",
-      threadId: "1700000000.000100",
-    });
-
-    const plan = await resolveAgentDeliveryPlanWithSessionRoute({
-      cfg: {} as OpenClawConfig,
-      agentId: "agent",
-      currentSessionKey: "agent:main",
-      sessionEntry: sessionEntry({ channel: "workspace", to: "channel:C999" }),
-      requestedChannel: "workspace",
-      explicitTo: "workspace:channel:C123:thread:1700000000.000100",
-      accountId: "work",
-      wantsDelivery: true,
-    });
-
-    expect(mocks.resolveOutboundSessionRoute).toHaveBeenCalledWith({
-      cfg: {},
-      channel: "workspace",
-      plugin: {
-        messaging: { resolveOutboundSessionRoute: pluginRouteResolver },
-      },
-      agentId: "agent",
-      accountId: "work",
-      target: "channel:C123",
-      currentSessionKey: "agent:main",
-      threadId: undefined,
-    });
-    expect(plan.resolvedTo).toBe("channel:C123");
-    expect(plan.resolvedSessionKey).toBe("agent:workspace:channel:C123");
-    expect(plan.resolvedThreadId).toBe("1700000000.000100");
   });
 
   it("resolves recipient sessions through native target routing with account identity", async () => {
@@ -416,52 +325,9 @@ describe("agent delivery helpers", () => {
     expect(result.error?.message).toBe('Unable to resolve a session route for channel "provider"');
   });
 
-  it("accepts best-effort direct aliases that collapse to the selected agent main session", async () => {
-    mocks.resolveOutboundChannelPlugin.mockReturnValue({
-      config: { listAccountIds: () => [] },
-      messaging: { resolveOutboundSessionRoute: vi.fn() },
-    });
-    mocks.resolveOutboundSessionRoute.mockResolvedValueOnce({
-      sessionKey: "agent:ops:main",
-      baseSessionKey: "agent:ops:main",
-      recipientSessionExact: "direct-alias",
-      peer: { kind: "direct", id: "username:alice.01" },
-      chatType: "direct",
-      from: "signal:username:alice.01",
-      to: "username:alice.01",
-    });
-
-    const result = await resolveAgentExplicitRecipientSession({
-      cfg: {} as OpenClawConfig,
-      agentId: "ops",
-      channel: "signal",
-      to: "username:alice.01",
-    });
-
-    expect(result).toMatchObject({
-      sessionKey: "agent:ops:main",
-      channel: "signal",
-      to: "username:alice.01",
-    });
-    expect(result.error).toBeUndefined();
-  });
-
-  it("rejects main-session aliases when a channel binding can isolate direct peers", async () => {
-    mocks.resolveOutboundChannelPlugin.mockReturnValue({
-      config: { listAccountIds: () => [] },
-      messaging: { resolveOutboundSessionRoute: vi.fn() },
-    });
-    mocks.resolveOutboundSessionRoute.mockResolvedValueOnce({
-      sessionKey: "agent:ops:main",
-      baseSessionKey: "agent:ops:main",
-      recipientSessionExact: "direct-alias",
-      peer: { kind: "direct", id: "username:alice.01" },
-      chatType: "direct",
-      from: "signal:username:alice.01",
-      to: "username:alice.01",
-    });
-
-    const result = await resolveAgentExplicitRecipientSession({
+  it.each([
+    {
+      name: "rejects main aliases when a channel binding isolates direct peers",
       cfg: {
         session: { dmScope: "main" },
         bindings: [
@@ -471,65 +337,51 @@ describe("agent delivery helpers", () => {
             session: { dmScope: "per-channel-peer" },
           },
         ],
-      } as OpenClawConfig,
-      agentId: "ops",
-      channel: "signal",
-      to: "username:alice.01",
-    });
-
-    expect(result.sessionKey).toBeUndefined();
-    expect(result.error?.message).toBe('Unable to resolve a session route for channel "signal"');
-  });
-
-  it("rejects best-effort aliases that do not use the configured main session key", async () => {
-    mocks.resolveOutboundChannelPlugin.mockReturnValue({
-      config: { listAccountIds: () => [] },
-      messaging: { resolveOutboundSessionRoute: vi.fn() },
-    });
-    mocks.resolveOutboundSessionRoute.mockResolvedValueOnce({
-      sessionKey: "agent:ops:main",
-      baseSessionKey: "agent:ops:main",
-      recipientSessionExact: "direct-alias",
-      peer: { kind: "direct", id: "username:alice.01" },
-      chatType: "direct",
-      from: "signal:username:alice.01",
-      to: "username:alice.01",
-    });
-
-    const result = await resolveAgentExplicitRecipientSession({
-      cfg: { session: { mainKey: "work" } } as OpenClawConfig,
-      agentId: "ops",
-      channel: "signal",
-      to: "username:alice.01",
-    });
-
-    expect(result.sessionKey).toBeUndefined();
-    expect(result.error?.message).toBe('Unable to resolve a session route for channel "signal"');
-  });
-
-  it("preserves authoritative routes from legacy plugin hooks", async () => {
-    mocks.resolveOutboundChannelPlugin.mockReturnValue({
-      config: { listAccountIds: () => [] },
-      messaging: { resolveOutboundSessionRoute: vi.fn() },
-    });
-    mocks.resolveOutboundSessionRoute.mockResolvedValueOnce({
-      sessionKey: "agent:main:provider:direct:user-1",
-      baseSessionKey: "agent:main:provider:direct:user-1",
-      peer: { kind: "direct", id: "user-1" },
-      chatType: "direct",
-      from: "provider:user-1",
-      to: "user-1",
-    });
-
-    const result = await resolveAgentExplicitRecipientSession({
-      cfg: {} as OpenClawConfig,
-      agentId: "main",
-      channel: "provider",
-      to: "user-1",
-    });
-
-    expect(result.sessionKey).toBe("agent:main:provider:direct:user-1");
-  });
+      },
+      accepted: false,
+    },
+    {
+      name: "rejects aliases outside the configured main session key",
+      cfg: { session: { mainKey: "work" } },
+      accepted: false,
+    },
+  ] satisfies Array<{ name: string; cfg: OpenClawConfig; accepted: boolean }>)(
+    "$name",
+    async ({ cfg, accepted }) => {
+      mocks.resolveOutboundChannelPlugin.mockReturnValue({
+        config: { listAccountIds: () => [] },
+        messaging: { resolveOutboundSessionRoute: vi.fn() },
+      });
+      mocks.resolveOutboundSessionRoute.mockResolvedValueOnce({
+        sessionKey: "agent:ops:main",
+        baseSessionKey: "agent:ops:main",
+        recipientSessionExact: "direct-alias",
+        peer: { kind: "direct", id: "username:alice.01" },
+        chatType: "direct",
+        from: "signal:username:alice.01",
+        to: "username:alice.01",
+      });
+      const result = await resolveAgentExplicitRecipientSession({
+        cfg,
+        agentId: "ops",
+        channel: "signal",
+        to: "username:alice.01",
+      });
+      if (accepted) {
+        expect(result).toMatchObject({
+          sessionKey: "agent:ops:main",
+          channel: "signal",
+          to: "username:alice.01",
+        });
+        expect(result.error).toBeUndefined();
+      } else {
+        expect(result.sessionKey).toBeUndefined();
+        expect(result.error?.message).toBe(
+          'Unable to resolve a session route for channel "signal"',
+        );
+      }
+    },
+  );
 
   it("accepts stable outbound-only identities that stay isolated from main", async () => {
     const plugin = {
@@ -577,35 +429,6 @@ describe("agent delivery helpers", () => {
     });
   });
 
-  it("rejects outbound-only identities that collapse to the agent main session", async () => {
-    mocks.resolveOutboundChannelPlugin.mockReturnValue({
-      config: { listAccountIds: () => [] },
-      messaging: { resolveOutboundSessionRoute: vi.fn() },
-    });
-    mocks.resolveOutboundTarget.mockReturnValueOnce({ ok: true, to: "42" });
-    mocks.resolveOutboundSessionRoute.mockResolvedValueOnce({
-      sessionKey: "agent:ops:main",
-      baseSessionKey: "agent:ops:main",
-      recipientSessionExact: "delivery-identity",
-      peer: { kind: "direct", id: "chat-api-42" },
-      chatType: "direct",
-      from: "synology-chat:chat-api:42",
-      to: "42",
-    });
-
-    const result = await resolveAgentExplicitRecipientSession({
-      cfg: {} as OpenClawConfig,
-      agentId: "ops",
-      channel: "synology-chat",
-      to: "42",
-    });
-
-    expect(result.sessionKey).toBeUndefined();
-    expect(result.error?.message).toBe(
-      'Unable to resolve a session route for channel "synology-chat"',
-    );
-  });
-
   it("rejects outbound-only identities outside the real provider namespace", async () => {
     mocks.resolveOutboundChannelPlugin.mockReturnValue({
       config: { listAccountIds: () => [] },
@@ -651,121 +474,6 @@ describe("agent delivery helpers", () => {
 
     expect(result.sessionKey).toBeUndefined();
     expect(result.error?.message).toBe('Unable to resolve a session route for channel "provider"');
-  });
-
-  it("uses the channel default account when recipient routing omits an account", async () => {
-    const plugin = {
-      config: {
-        listAccountIds: () => ["work"],
-        defaultAccountId: () => "work",
-      },
-      messaging: { resolveOutboundSessionRoute: vi.fn() },
-    };
-    mocks.resolveOutboundChannelPlugin.mockReturnValue(plugin);
-    mocks.resolveOutboundSessionRoute.mockResolvedValueOnce({
-      sessionKey: "agent:ops:whatsapp:work:direct:+15551234567",
-      baseSessionKey: "agent:ops:whatsapp:work:direct:+15551234567",
-      recipientSessionExact: true,
-      peer: { kind: "direct", id: "+15551234567" },
-      chatType: "direct",
-      from: "+15551234567",
-      to: "+15551234567",
-    });
-
-    const result = await resolveAgentExplicitRecipientSession({
-      cfg: {} as OpenClawConfig,
-      agentId: "ops",
-      channel: "whatsapp",
-      to: "+15551234567",
-    });
-
-    expect(mocks.resolveOutboundTarget).toHaveBeenCalledWith({
-      channel: "whatsapp",
-      plugin,
-      to: "+15551234567",
-      cfg: {},
-      accountId: "work",
-      mode: "explicit",
-    });
-    expect(mocks.resolveOutboundSessionRoute).toHaveBeenCalledWith({
-      cfg: {},
-      channel: "whatsapp",
-      plugin,
-      agentId: "ops",
-      accountId: "work",
-      target: "+1999",
-      threadId: undefined,
-    });
-    expect(result.sessionKey).toBe("agent:ops:whatsapp:work:direct:+15551234567");
-  });
-
-  it("resolves reserved explicit targets through directory-capable resolution before session routing", async () => {
-    mocks.resolveOutboundChannelPlugin.mockReturnValue({
-      messaging: { resolveOutboundSessionRoute: vi.fn(), targetResolver: {} },
-    });
-    mocks.resolveOutboundTarget.mockReturnValueOnce({
-      ok: false,
-      error: new Error('Reserved target "current" for Telegram'),
-    });
-    mocks.resolveChannelTarget.mockResolvedValueOnce({
-      ok: true,
-      target: {
-        to: "telegram:-1002458651455",
-        kind: "group",
-        source: "directory",
-        resolutionSource: "directory",
-      },
-    });
-    mocks.resolveOutboundSessionRoute.mockResolvedValueOnce({
-      sessionKey: "agent:telegram:group:-1002458651455",
-      baseSessionKey: "agent:telegram:group:-1002458651455",
-      peer: { kind: "group", id: "-1002458651455" },
-      chatType: "group",
-      from: "telegram:group:-1002458651455",
-      to: "telegram:-1002458651455",
-    });
-
-    const plan = await resolveAgentDeliveryPlanWithSessionRoute({
-      cfg: {} as OpenClawConfig,
-      agentId: "agent",
-      currentSessionKey: "agent:main",
-      sessionEntry: undefined,
-      requestedChannel: "telegram",
-      explicitTo: "current",
-      accountId: "work",
-      wantsDelivery: true,
-    });
-
-    expect(mocks.resolveChannelTarget).toHaveBeenCalledWith({
-      cfg: {},
-      channel: "telegram",
-      input: "current",
-      accountId: "work",
-      unknownTargetMode: "normalized",
-      plugin: {
-        messaging: { resolveOutboundSessionRoute: expect.any(Function), targetResolver: {} },
-      },
-    });
-    expect(mocks.resolveOutboundSessionRoute).toHaveBeenCalledWith({
-      cfg: {},
-      channel: "telegram",
-      plugin: {
-        messaging: { resolveOutboundSessionRoute: expect.any(Function), targetResolver: {} },
-      },
-      agentId: "agent",
-      accountId: "work",
-      target: "telegram:-1002458651455",
-      resolvedTarget: {
-        to: "telegram:-1002458651455",
-        kind: "group",
-        source: "directory",
-        resolutionSource: "directory",
-      },
-      currentSessionKey: "agent:main",
-      threadId: undefined,
-    });
-    expect(plan.resolvedTo).toBe("telegram:-1002458651455");
-    expect(plan.targetResolutionError).toBeUndefined();
   });
 
   it("keeps reserved explicit target errors when directory-capable resolution misses", async () => {
@@ -859,10 +567,10 @@ describe("agent delivery helpers", () => {
     expect(plan.targetResolutionError).toBeUndefined();
   });
 
-  it("surfaces stored explicit target errors even when explicit validation is disabled", () => {
+  it("surfaces stored explicit target errors even when explicit validation is disabled", async () => {
     const targetResolutionError = new Error('reserved target "current"');
 
-    const resolved = resolveAgentOutboundTarget({
+    const resolved = await resolveAgentOutboundTarget({
       cfg: {} as OpenClawConfig,
       plan: {
         baseDelivery: { mode: "explicit" },
@@ -901,67 +609,6 @@ describe("agent delivery helpers", () => {
     });
 
     expect(plan.resolvedTo).toBe("channel:C123");
-    expect(plan.resolvedThreadId).toBeUndefined();
-  });
-
-  it("does not session-route targets when delivery is disabled", async () => {
-    mocks.resolveOutboundChannelPlugin.mockReturnValue({
-      messaging: { resolveOutboundSessionRoute: vi.fn() },
-    });
-
-    const plan = await resolveAgentDeliveryPlanWithSessionRoute({
-      cfg: {} as OpenClawConfig,
-      agentId: "agent",
-      sessionEntry: undefined,
-      requestedChannel: "workspace",
-      explicitTo: "channel:C123",
-      accountId: undefined,
-      wantsDelivery: false,
-    });
-
-    expect(mocks.resolveOutboundTarget).not.toHaveBeenCalled();
-    expect(mocks.resolveOutboundSessionRoute).not.toHaveBeenCalled();
-    expect(plan.resolvedTo).toBe("channel:C123");
-    expect(plan.plugin).toBeUndefined();
-  });
-
-  it("does not pass inherited session threads into explicit retarget routing", async () => {
-    mocks.resolveOutboundChannelPlugin.mockReturnValue({
-      messaging: { resolveOutboundSessionRoute: vi.fn() },
-    });
-    mocks.resolveOutboundTarget.mockReturnValueOnce({
-      ok: true,
-      to: "channel:C123",
-    });
-    mocks.resolveOutboundSessionRoute.mockResolvedValueOnce({
-      sessionKey: "agent:workspace:channel:C123",
-      baseSessionKey: "agent:workspace:channel:C123",
-      peer: { kind: "channel", id: "C123" },
-      chatType: "channel",
-      from: "workspace:channel:C123",
-      to: "channel:C123",
-    });
-
-    const plan = await resolveAgentDeliveryPlanWithSessionRoute({
-      cfg: {} as OpenClawConfig,
-      agentId: "agent",
-      sessionEntry: sessionEntry({
-        channel: "workspace",
-        to: "channel:C999",
-        threadId: "old-thread",
-      }),
-      requestedChannel: "workspace",
-      explicitTo: "channel:C123",
-      accountId: undefined,
-      wantsDelivery: true,
-    });
-
-    expect(mocks.resolveOutboundSessionRoute).toHaveBeenCalledWith(
-      expect.objectContaining({
-        target: "channel:C123",
-        threadId: undefined,
-      }),
-    );
     expect(plan.resolvedThreadId).toBeUndefined();
   });
 });

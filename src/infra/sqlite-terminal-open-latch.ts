@@ -1,10 +1,7 @@
 import path from "node:path";
 import { isPathInside } from "./path-guards.js";
-import {
-  readStableSqliteFileGeneration,
-  sameSqliteFileGeneration,
-  type SqliteFileGeneration,
-} from "./sqlite-file-generation.js";
+import { readSqliteFileGenerationSync } from "./sqlite-file-generation-worker.js";
+import { sameSqliteFileGeneration, type SqliteFileGeneration } from "./sqlite-file-generation.js";
 
 type TerminalOpenFailure = {
   error: Error;
@@ -13,7 +10,7 @@ type TerminalOpenFailure = {
 
 function generationMatchesPath(pathname: string, expected: SqliteFileGeneration): boolean {
   try {
-    return sameSqliteFileGeneration(expected, readStableSqliteFileGeneration(pathname));
+    return sameSqliteFileGeneration(expected, readSqliteFileGenerationSync(pathname));
   } catch {
     return false;
   }
@@ -30,6 +27,8 @@ export function createSqliteTerminalOpenLatch(options: {
   const failures = new Map<string, TerminalOpenFailure>();
 
   return {
+    /** Read the owner's recorded fact without running filesystem or database inspection. */
+    peek: (pathname: string): Error | undefined => failures.get(path.resolve(pathname))?.error,
     get: (pathname: string): Error | undefined => {
       const resolvedPath = path.resolve(pathname);
       const failure = failures.get(resolvedPath);

@@ -1,5 +1,3 @@
-import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { WebClient } from "@slack/web-api";
@@ -14,28 +12,41 @@ import {
 import {
   getSessionEntry,
   normalizeSessionDeliveryState,
-  patchSessionEntry as patchStoredSessionEntry,
+  prepareSessionEntryPatch as prepareStoredSessionEntryPatch,
   upsertSessionEntry,
 } from "openclaw/plugin-sdk/session-store-runtime";
-import * as sessionStoreRuntime from "openclaw/plugin-sdk/session-store-runtime";
 // Slack tests cover Agent View lifecycle handling.
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useSessionStoreTempDirs } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { getSlackListenerWriteClient } from "../../client.js";
 import { appendSlackStream, markSlackStreamsStopped, startSlackStream } from "../../streaming.js";
+import * as sessionEventRouting from "../message-handler/prepare-routing.js";
 import { deliverSlackSlashReplies } from "../replies.js";
 import { getSlackSessionRuns, registerSlackSessionRun } from "../session-run-targets.js";
 import { getSlackSlashMocks, resetSlackSlashMocks } from "../slash.test-harness.js";
 import { registerSlackAgentEvents } from "./agent.js";
 import { createSlackSystemEventTestHarness } from "./system-event-test-harness.js";
 
-const { patchSessionEntry } = vi.hoisted(() => ({
-  patchSessionEntry: vi.fn<PluginRuntime["agent"]["session"]["patchSessionEntry"]>(),
+const { prepareSessionEntryPatch } = vi.hoisted(() => ({
+  prepareSessionEntryPatch: vi.fn<PluginRuntime["agent"]["session"]["prepareSessionEntryPatch"]>(),
 }));
 
-vi.mock("../../runtime.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../runtime.js")>()),
-  getSlackRuntime: () => ({ agent: { session: { patchSessionEntry } } }),
-}));
+vi.mock("../../runtime.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../runtime.js")>();
+  return {
+    ...actual,
+    getSlackRuntime: () => {
+      const runtime = actual.getSlackRuntime();
+      return {
+        ...runtime,
+        agent: {
+          ...runtime.agent,
+          session: { ...runtime.agent.session, prepareSessionEntryPatch },
+        },
+      };
+    },
+  };
+});
 
 vi.mock("../../streaming.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../streaming.js")>();
@@ -45,6 +56,7 @@ vi.mock("../../streaming.js", async (importOriginal) => {
 const slashMocks = getSlackSlashMocks();
 
 let tempDir: string;
+const sessionDirs = useSessionStoreTempDirs(afterAll, "slack-session-events-");
 
 function createSessionEventHarness(channelType: "im" | "channel" | "mpim" = "im") {
   const harness = createSlackSystemEventTestHarness({ channelType, allowFrom: ["*"] });
@@ -58,7 +70,7 @@ function createSessionEventHarness(channelType: "im" | "channel" | "mpim" = "im"
     ok: true,
     messages: [],
   });
-  const setSlackSessionStatus = vi.fn(async () => {});
+  const setSlackSessionStatus = vi.fn(async () => true);
   const recordSlackSessionTitle = vi.fn();
   const storePath = path.join(tempDir, "sessions.sqlite");
   Object.assign(harness.ctx, {
@@ -117,18 +129,14 @@ function createSessionEventHarness(channelType: "im" | "channel" | "mpim" = "im"
 
 describe("registerSlackAgentEvents", () => {
   beforeEach(() => {
-    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "slack-session-events-"));
+    tempDir = sessionDirs.make();
     vi.clearAllMocks();
     clearRuntimeConfigSnapshot();
     resetSlackSlashMocks();
-    patchSessionEntry.mockImplementation(patchStoredSessionEntry);
+    prepareSessionEntryPatch.mockImplementation(prepareStoredSessionEntryPatch);
     slashMocks.deliverSlackSlashRepliesMock.mockImplementation(async (params: unknown) => {
       await deliverSlackSlashReplies(params as Parameters<typeof deliverSlackSlashReplies>[0]);
     });
-  });
-
-  afterEach(() => {
-    fs.rmSync(tempDir, { recursive: true, force: true });
   });
 
   it("records Agent View for app_context_changed", async () => {
@@ -354,7 +362,7 @@ describe("registerSlackAgentEvents", () => {
         body: {},
       });
 
-      expect(patchSessionEntry).toHaveBeenCalledOnce();
+      expect(prepareSessionEntryPatch).toHaveBeenCalledOnce();
       expect(
         getSessionEntry({ agentId: "main", sessionKey, storePath: harness.storePath }),
       ).toMatchObject({ displayName: "Renamed in Slack", updatedAt: 100 });
@@ -402,7 +410,9 @@ describe("registerSlackAgentEvents", () => {
           }),
         );
       } else {
-        expect(patchSessionEntry).toHaveBeenCalledWith(expect.objectContaining({ sessionKey }));
+        expect(prepareSessionEntryPatch).toHaveBeenCalledWith(
+          expect.objectContaining({ sessionKey }),
+        );
       }
     },
   );
@@ -473,7 +483,7 @@ describe("registerSlackAgentEvents", () => {
             }),
           );
         } else {
-          expect(patchSessionEntry).toHaveBeenLastCalledWith(
+          expect(prepareSessionEntryPatch).toHaveBeenLastCalledWith(
             expect.objectContaining({ sessionKey }),
           );
         }
@@ -521,7 +531,7 @@ describe("registerSlackAgentEvents", () => {
         body: {},
       });
       expect(slashMocks.dispatchMock).not.toHaveBeenCalled();
-      expect(patchSessionEntry).not.toHaveBeenCalled();
+      expect(prepareSessionEntryPatch).not.toHaveBeenCalled();
       expect(harness.recordSlackSessionTitle).not.toHaveBeenCalled();
       expect(markSlackStreamsStopped).not.toHaveBeenCalled();
       expect(harness.setSlackSessionStatus).not.toHaveBeenCalled();
@@ -567,11 +577,11 @@ describe("registerSlackAgentEvents", () => {
       const moving = createDeferred<void>();
       const releaseMove = createDeferred<void>();
       const titleQueued = createDeferred<void>();
-      const move = patchStoredSessionEntry({
+      const move = prepareStoredSessionEntryPatch({
         agentId: "main",
         sessionKey,
         storePath: harness.storePath,
-        update: async () => {
+        prepare: async () => {
           moving.resolve();
           await releaseMove.promise;
           return {
@@ -588,9 +598,9 @@ describe("registerSlackAgentEvents", () => {
         },
       });
       await moving.promise;
-      patchSessionEntry.mockImplementation((params) => {
+      prepareSessionEntryPatch.mockImplementation((params) => {
         titleQueued.resolve();
-        return patchStoredSessionEntry(params);
+        return prepareStoredSessionEntryPatch(params);
       });
       const rename = harness.getHandler("agent_session_title_changed")?.({
         event: {
@@ -652,14 +662,14 @@ describe("registerSlackAgentEvents", () => {
           : undefined;
       const moving = createDeferred<void>();
       const releaseMove = createDeferred<void>();
-      const move = patchStoredSessionEntry({
+      const move = prepareStoredSessionEntryPatch({
         agentId: "main",
         sessionKey,
         storePath: harness.storePath,
         ...(change === "created"
           ? { fallbackEntry: { sessionId: "created-session", updatedAt: Date.now() } }
           : {}),
-        update: async () => {
+        prepare: async () => {
           moving.resolve();
           await releaseMove.promise;
           return {
@@ -677,13 +687,14 @@ describe("registerSlackAgentEvents", () => {
         },
       });
       await moving.promise;
-      const readOwner = sessionStoreRuntime.getConversationSession;
+      const resolveRouting = sessionEventRouting.resolveSlackSessionEventRoutingContext;
       const lookup = vi
-        .spyOn(sessionStoreRuntime, "getConversationSession")
-        .mockImplementationOnce((params) => {
-          const owner = readOwner(params);
+        .spyOn(sessionEventRouting, "resolveSlackSessionEventRoutingContext")
+        .mockImplementationOnce(async (params) => {
+          const owner = await resolveRouting(params);
           if (phase === "admission") {
             releaseMove.resolve();
+            await move;
           }
           return owner;
         });
@@ -750,7 +761,7 @@ describe("registerSlackAgentEvents", () => {
         body: {},
       });
       expect(harness.ctx.runtime.error).not.toHaveBeenCalled();
-      expect(patchSessionEntry).toHaveBeenCalledWith(
+      expect(prepareSessionEntryPatch).toHaveBeenCalledWith(
         expect.objectContaining({ sessionKey: route.sessionKey }),
       );
     } finally {
@@ -758,42 +769,85 @@ describe("registerSlackAgentEvents", () => {
     }
   });
 
-  it("keeps a proven DM parent when its live publisher finishes before the title write", async () => {
-    const harness = createSessionEventHarness();
-    harness.ctx.isSlackAgentView = async () => false;
-    const route = resolveAgentRoute({
-      cfg: harness.ctx.cfg,
-      channel: "slack",
-      accountId: "default",
-      peer: { kind: "direct", id: "U123" },
-    });
-    const threadTs = "1712345678.000001";
-    await harness.recordSession({ sessionKey: route.sessionKey, peerId: "U123" });
-    const release = registerSlackSessionRun(harness.ctx, { channelId: "D123", threadTs }, route);
-    patchSessionEntry.mockImplementation((params) => {
-      release();
-      return patchStoredSessionEntry(params);
-    });
-    await harness.getHandler("agent_session_title_changed")?.({
-      event: {
-        type: "agent_session_title_changed",
-        channel: "D123",
-        thread_ts: threadTs,
-        user: "U123",
-        event_ts: "1712345679.000001",
-        title: "Finished DM",
-      },
-      body: {},
-    });
-    expect(harness.ctx.runtime.error).not.toHaveBeenCalled();
-    expect(
-      getSessionEntry({
+  it.each([
+    { state: "finished", phase: "before preparation" },
+    { state: "replacement", phase: "before preparation" },
+    { state: "recorded", phase: "before preparation" },
+    { state: "finished", phase: "after preparation" },
+    { state: "replacement", phase: "after preparation" },
+  ] as const)(
+    "revalidates a proven DM parent after its publisher is $state $phase",
+    async ({ state, phase }) => {
+      const harness = createSessionEventHarness();
+      harness.ctx.isSlackAgentView = async () => false;
+      const route = resolveAgentRoute({
+        cfg: harness.ctx.cfg,
+        channel: "slack",
+        accountId: "default",
+        peer: { kind: "direct", id: "U123" },
+      });
+      const threadTs = "1712345678.000001";
+      await harness.recordSession({ sessionKey: route.sessionKey, peerId: "U123" });
+      const release = registerSlackSessionRun(harness.ctx, { channelId: "D123", threadTs }, route);
+      let releaseReplacement: (() => void) | undefined;
+      const finishPublisher = () => {
+        release();
+        if (state !== "finished") {
+          releaseReplacement = registerSlackSessionRun(
+            harness.ctx,
+            { channelId: "D123", threadTs },
+            { ...route, sessionKey: "replacement-session" },
+          );
+        }
+      };
+      prepareSessionEntryPatch.mockImplementation(async (params) => {
+        if (phase === "after preparation") {
+          return prepareStoredSessionEntryPatch({
+            ...params,
+            prepare: (entry, context) => {
+              finishPublisher();
+              return params.prepare(entry, context);
+            },
+          });
+        }
+        finishPublisher();
+        if (state === "recorded") {
+          await harness.recordSession({
+            sessionKey: route.sessionKey,
+            peerId: "U123",
+            threadId: threadTs,
+          });
+        }
+        return prepareStoredSessionEntryPatch(params);
+      });
+      await harness.getHandler("agent_session_title_changed")?.({
+        event: {
+          type: "agent_session_title_changed",
+          channel: "D123",
+          thread_ts: threadTs,
+          user: "U123",
+          event_ts: "1712345679.000001",
+          title: "Finished DM",
+        },
+        body: {},
+      });
+      releaseReplacement?.();
+      const entry = getSessionEntry({
         agentId: "main",
         sessionKey: route.sessionKey,
         storePath: harness.storePath,
-      }),
-    ).toMatchObject({ displayName: "Finished DM" });
-  });
+      });
+      if (state === "replacement") {
+        expect(harness.ctx.runtime.error).toHaveBeenCalled();
+        expect(entry).not.toHaveProperty("displayName");
+        expect(harness.recordSlackSessionTitle).not.toHaveBeenCalled();
+      } else {
+        expect(harness.ctx.runtime.error).not.toHaveBeenCalled();
+        expect(entry).toMatchObject({ displayName: "Finished DM" });
+        expect(harness.recordSlackSessionTitle).toHaveBeenCalledOnce();
+      }
+    },
+  );
 
   it("stops pending MPIM publishers with no stored entries before delivering confirmations", async () => {
     const harness = createSessionEventHarness("mpim");
@@ -883,7 +937,9 @@ describe("registerSlackAgentEvents", () => {
           }),
         );
       } else {
-        expect(patchSessionEntry).toHaveBeenCalledWith(expect.objectContaining({ sessionKey }));
+        expect(prepareSessionEntryPatch).toHaveBeenCalledWith(
+          expect.objectContaining({ sessionKey }),
+        );
       }
     },
   );
@@ -898,7 +954,7 @@ describe("registerSlackAgentEvents", () => {
 
       expect(slashMocks.dispatchMock).not.toHaveBeenCalled();
       expect(markSlackStreamsStopped).not.toHaveBeenCalled();
-      expect(patchSessionEntry).not.toHaveBeenCalled();
+      expect(prepareSessionEntryPatch).not.toHaveBeenCalled();
       expect(harness.recordSlackSessionTitle).not.toHaveBeenCalled();
       expect(harness.setSlackSessionStatus).not.toHaveBeenCalled();
     },

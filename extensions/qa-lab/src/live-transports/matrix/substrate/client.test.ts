@@ -2,20 +2,9 @@
 import { describe, expect, it } from "vitest";
 import {
   buildMatrixQaMessageContent,
-  buildMatrixQaReplacementMessageContent,
-  buildMatrixReactionRelation,
   resolveNextRegistrationAuth,
 } from "./client-message-content.js";
 import { createMatrixQaClient, provisionMatrixQaRoom } from "./client.js";
-import { createMatrixQaRoomObserver } from "./sync.js";
-
-const testing = {
-  buildMatrixQaMessageContent,
-  buildMatrixQaReplacementMessageContent,
-  buildMatrixReactionRelation,
-  createMatrixQaRoomObserver,
-  resolveNextRegistrationAuth,
-};
 
 function resolveRequestUrl(input: RequestInfo | URL) {
   if (typeof input === "string") {
@@ -35,27 +24,9 @@ function parseJsonRequestBody(init?: RequestInit) {
 }
 
 describe("matrix driver client", () => {
-  it("builds Matrix HTML mentions for QA driver messages", () => {
-    expect(
-      testing.buildMatrixQaMessageContent({
-        body: "@sut:matrix-qa.test reply with exactly: TOKEN",
-        mentionUserIds: ["@sut:matrix-qa.test"],
-      }),
-    ).toEqual({
-      body: "@sut:matrix-qa.test reply with exactly: TOKEN",
-      msgtype: "m.text",
-      format: "org.matrix.custom.html",
-      formatted_body:
-        '<a href="https://matrix.to/#/%40sut%3Amatrix-qa.test">@sut:matrix-qa.test</a> reply with exactly: TOKEN',
-      "m.mentions": {
-        user_ids: ["@sut:matrix-qa.test"],
-      },
-    });
-  });
-
   it("omits Matrix HTML markup when the body has no visible mention token", () => {
     expect(
-      testing.buildMatrixQaMessageContent({
+      buildMatrixQaMessageContent({
         body: "reply with exactly: TOKEN",
         mentionUserIds: ["@sut:matrix-qa.test"],
       }),
@@ -68,76 +39,9 @@ describe("matrix driver client", () => {
     });
   });
 
-  it("builds trimmed Matrix reaction relations for QA driver events", () => {
-    expect(testing.buildMatrixReactionRelation(" $msg-1 ", " 👍 ")).toEqual({
-      "m.relates_to": {
-        rel_type: "m.annotation",
-        event_id: "$msg-1",
-        key: "👍",
-      },
-    });
-  });
-
-  it("builds Matrix replacement messages with replacement-local mention metadata", () => {
-    expect(
-      testing.buildMatrixQaReplacementMessageContent({
-        body: "@sut:matrix-qa.test updated prompt",
-        mentionUserIds: ["@sut:matrix-qa.test"],
-        targetEventId: " $msg-1 ",
-      }),
-    ).toEqual({
-      body: "* @sut:matrix-qa.test updated prompt",
-      msgtype: "m.text",
-      "m.new_content": {
-        body: "@sut:matrix-qa.test updated prompt",
-        msgtype: "m.text",
-        format: "org.matrix.custom.html",
-        formatted_body:
-          '<a href="https://matrix.to/#/%40sut%3Amatrix-qa.test">@sut:matrix-qa.test</a> updated prompt',
-        "m.mentions": {
-          user_ids: ["@sut:matrix-qa.test"],
-        },
-      },
-      "m.relates_to": {
-        rel_type: "m.replace",
-        event_id: "$msg-1",
-      },
-    });
-  });
-
-  it("advances Matrix registration through token then dummy auth stages", () => {
-    const firstStage = testing.resolveNextRegistrationAuth({
-      registrationToken: "reg-token",
-      response: {
-        session: "uiaa-session",
-        flows: [{ stages: ["m.login.registration_token", "m.login.dummy"] }],
-      },
-    });
-
-    expect(firstStage).toEqual({
-      session: "uiaa-session",
-      type: "m.login.registration_token",
-      token: "reg-token",
-    });
-
-    expect(
-      testing.resolveNextRegistrationAuth({
-        registrationToken: "reg-token",
-        response: {
-          session: "uiaa-session",
-          completed: ["m.login.registration_token"],
-          flows: [{ stages: ["m.login.registration_token", "m.login.dummy"] }],
-        },
-      }),
-    ).toEqual({
-      session: "uiaa-session",
-      type: "m.login.dummy",
-    });
-  });
-
   it("rejects Matrix UIAA flows that require unsupported stages", () => {
     expect(() =>
-      testing.resolveNextRegistrationAuth({
+      resolveNextRegistrationAuth({
         registrationToken: "reg-token",
         response: {
           session: "uiaa-session",
@@ -263,8 +167,8 @@ describe("matrix driver client", () => {
 
     await expect(
       client.sendReaction({
-        emoji: "👍",
-        messageId: "$msg-1",
+        emoji: " 👍 ",
+        messageId: " $msg-1 ",
         roomId: "!room:matrix-qa.test",
       }),
     ).resolves.toBe("$reaction-1");
@@ -292,7 +196,7 @@ describe("matrix driver client", () => {
         body: "@sut:matrix-qa.test updated prompt",
         mentionUserIds: ["@sut:matrix-qa.test"],
         roomId: "!room:matrix-qa.test",
-        targetEventId: "$msg-1",
+        targetEventId: " $msg-1 ",
       }),
     ).resolves.toBe("$replacement-1");
     await expect(
@@ -306,11 +210,19 @@ describe("matrix driver client", () => {
     expect(requests[0]?.url).toContain(
       "/_matrix/client/v3/rooms/!room%3Amatrix-qa.test/send/m.room.message/",
     );
-    const relation = requests[0]?.body?.["m.relates_to"] as
-      | { event_id?: string; rel_type?: string }
-      | undefined;
-    expect(relation?.rel_type).toBe("m.replace");
-    expect(relation?.event_id).toBe("$msg-1");
+    expect(requests[0]?.body).toEqual({
+      body: "* @sut:matrix-qa.test updated prompt",
+      msgtype: "m.text",
+      "m.new_content": {
+        body: "@sut:matrix-qa.test updated prompt",
+        msgtype: "m.text",
+        format: "org.matrix.custom.html",
+        formatted_body:
+          '<a href="https://matrix.to/#/%40sut%3Amatrix-qa.test">@sut:matrix-qa.test</a> updated prompt',
+        "m.mentions": { user_ids: ["@sut:matrix-qa.test"] },
+      },
+      "m.relates_to": { rel_type: "m.replace", event_id: "$msg-1" },
+    });
     expect(requests[1]?.url).toMatch(
       /^http:\/\/127\.0\.0\.1:28008\/_matrix\/client\/v3\/rooms\/!room%3Amatrix-qa\.test\/redact\/%24reaction-1\/[0-9a-f-]{36}$/,
     );
@@ -378,10 +290,6 @@ describe("matrix driver client", () => {
   });
 
   it("fails closed when the media upload response streams an over-cap body", async () => {
-    // Sibling coverage to requestMatrixJson: the /_matrix/media/v3/upload
-    // response is also parsed from an external homeserver, so an oversized
-    // upload body must trip the same 16 MiB cap and cancel the stream rather
-    // than buffering it whole and OOMing the QA runner.
     const chunkSize = 1024 * 1024;
     const chunkCount = 32; // 32 MiB total, past the 16 MiB cap
     let reads = 0;
@@ -427,9 +335,6 @@ describe("matrix driver client", () => {
   });
 
   it("still tolerates malformed in-bounds media upload JSON", async () => {
-    // Malformed-but-in-bounds upload bodies fall back to `{}`, so the upload
-    // surfaces the pre-existing "did not return content_uri" error rather than
-    // a parse crash — unchanged from before the bound was added.
     const fetchImpl: typeof fetch = async () =>
       new Response("{ not json", {
         status: 200,
@@ -502,6 +407,7 @@ describe("matrix driver client", () => {
 
   it("provisions a three-member room so Matrix QA runs in a group context", async () => {
     const createRoomBodies: Array<Record<string, unknown>> = [];
+    const tokenAuthedUsers = new Set<string>();
     const fetchImpl: typeof fetch = async (input, init) => {
       const url = resolveRequestUrl(input);
       const body = parseJsonRequestBody(init);
@@ -526,6 +432,12 @@ describe("matrix driver client", () => {
           );
         }
         if ((auth as { type?: string }).type === "m.login.registration_token") {
+          expect(auth).toEqual({
+            session: `session-${username}`,
+            type: "m.login.registration_token",
+            token: "reg-token",
+          });
+          tokenAuthedUsers.add(username);
           return Response.json(
             {
               session: `session-${username}`,
@@ -535,6 +447,8 @@ describe("matrix driver client", () => {
             { status: 401 },
           );
         }
+        expect(tokenAuthedUsers.has(username)).toBe(true);
+        expect(auth).toEqual({ session: `session-${username}`, type: "m.login.dummy" });
         return Response.json({
           access_token: `token-${username}`,
           device_id: `device-${username}`,
@@ -639,10 +553,7 @@ describe("matrix driver client", () => {
       }
       if (url.endsWith("/_matrix/client/v3/createRoom")) {
         createRoomBodies.push(body);
-        return new Response(JSON.stringify({ room_id: roomIds.shift() }), {
-          status: 200,
-          headers: { "content-type": "application/json" },
-        });
+        return Response.json({ room_id: roomIds.shift() });
       }
       if (url.includes("/_matrix/client/v3/join/")) {
         return Response.json({ room_id: "!joined:matrix-qa.test" });

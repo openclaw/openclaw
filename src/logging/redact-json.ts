@@ -15,40 +15,39 @@ import {
   type RedactionField,
 } from "./redact-json-tokens.js";
 import {
-  iterateRedactMatches,
+  visitRedactMatches,
   type RedactMatch,
   type ResolvedRedactPattern,
 } from "./redact-pattern-runtime.js";
 
 export type { RedactionField, RedactionOrigins } from "./redact-json-tokens.js";
 
-export type RedactionTarget = {
+type RedactionTarget = {
   start: number;
   end: number;
   value: string;
 };
-export type RedactionEditSelector = (
+export type RedactionCapture = RedactionTarget & {
+  redact: (target: RedactionTarget) => RedactionEdit | undefined;
+};
+type RedactionCaptureSelector = (
   match: RedactMatch,
   pattern: ResolvedRedactPattern,
-  project: (start: number, end: number) => RedactionTarget | undefined,
-) => RedactionEdit | undefined;
+) => RedactionCapture | undefined;
 
 export function getPatternRedactionEdits(
   value: string,
   pattern: ResolvedRedactPattern,
-  getEdit: RedactionEditSelector,
+  getCapture: RedactionCaptureSelector,
 ): RedactionEdit[] {
   const edits: RedactionEdit[] = [];
-  for (const match of iterateRedactMatches(value, pattern)) {
-    const edit = getEdit(match, pattern, (start, end) => ({
-      start,
-      end,
-      value: value.slice(start, end),
-    }));
+  visitRedactMatches(value, pattern, (match) => {
+    const capture = getCapture(match, pattern);
+    const edit = capture?.redact(capture);
     if (edit && edit.end >= edit.start) {
       edits.push(edit);
     }
-  }
+  });
   return edits;
 }
 
@@ -65,14 +64,14 @@ export type RedactionMessage = {
   }[];
 };
 
-function stringBoundaries(text: string, token: ScalarToken): Map<number, number> {
+function stringBoundaries(text: string, start: number, end: number): Map<number, number> {
   const boundaries = new Map<number, number>();
   let decoded = 0;
-  for (let offset = token.start + 1; offset < token.end - 1; decoded += 1) {
+  for (let offset = start; offset < end; decoded += 1) {
     boundaries.set(offset, decoded);
     offset += text[offset] === "\\" ? (text[offset + 1] === "u" ? 6 : 2) : 1;
   }
-  boundaries.set(token.end - 1, decoded);
+  boundaries.set(end, decoded);
   return boundaries;
 }
 
@@ -80,7 +79,7 @@ function decodedBoundary(text: string, token: ScalarToken, offset: number): numb
   if (!token.escaped) {
     return offset - token.start - 1;
   }
-  token.boundaries ??= stringBoundaries(text, token);
+  token.boundaries ??= stringBoundaries(text, token.start + 1, token.end - 1);
   return token.boundaries.get(offset);
 }
 
@@ -89,7 +88,7 @@ function encodedBoundary(text: string, token: ScalarToken, offset: number): numb
     return token.start + 1 + offset;
   }
   if (!token.encodedBoundaries) {
-    token.boundaries ??= stringBoundaries(text, token);
+    token.boundaries ??= stringBoundaries(text, token.start + 1, token.end - 1);
     token.encodedBoundaries = [];
     for (const [encoded, decoded] of token.boundaries) {
       token.encodedBoundaries[decoded] = encoded;
@@ -238,14 +237,7 @@ function currentDecodedBoundary(
     }
     let boundaries = replacements.get(edit.replacement);
     if (!boundaries) {
-      boundaries = new Map();
-      let decoded = 0;
-      for (let encoded = 0; encoded < edit.replacement.length; decoded += 1) {
-        boundaries.set(encoded, decoded);
-        encoded +=
-          edit.replacement[encoded] === "\\" ? (edit.replacement[encoded + 1] === "u" ? 6 : 2) : 1;
-      }
-      boundaries.set(edit.replacement.length, decoded);
+      boundaries = stringBoundaries(edit.replacement, 0, edit.replacement.length);
       replacements.set(edit.replacement, boundaries);
     }
     const decoded = boundaries.get(within);
@@ -370,7 +362,7 @@ export function redactJsonRecord(
   input: string,
   origins: RedactionOrigins,
   patternPhases: readonly [readonly RedactionPatternGroup[], readonly RedactionPatternGroup[]],
-  getEdit: RedactionEditSelector,
+  getCapture: RedactionCaptureSelector,
   legacyFieldEdits: (field: RedactionField, currentValue: string) => RedactionEdit[],
   fieldEdits: (field: RedactionField) => RedactionEdit[],
   prepEdits: (field: RedactionField) => RedactionEdit[],
@@ -456,6 +448,14 @@ export function redactJsonRecord(
       (token.pending ??= []).push(edit);
       pending.add(token);
     };
+    let decodedToken: ScalarToken;
+    const visitDecodedMatch = (match: RedactMatch, pattern: ResolvedRedactPattern) => {
+      const capture = getCapture(match, pattern);
+      const edit = capture?.redact(capture);
+      if (edit && edit.end >= edit.start) {
+        add(decodedToken, edit);
+      }
+    };
     for (const group of groups) {
       // Earlier serialized rules can change the boundaries inspected by the next group.
       if (group.couldMatch && !group.couldMatch(current)) {
@@ -463,20 +463,14 @@ export function redactJsonRecord(
       }
       for (const pattern of group.patterns) {
         if (phase === 0) {
-          for (const token of decodedTokens) {
-            for (const edit of getPatternRedactionEdits(token.currentValue, pattern, getEdit)) {
-              add(token, edit);
-            }
+          for (decodedToken of decodedTokens) {
+            visitRedactMatches(decodedToken.currentValue, pattern, visitDecodedMatch);
           }
         } else {
-          for (const match of iterateRedactMatches(current, pattern)) {
-            let capture: { start: number; end: number } | undefined;
-            getEdit(match, pattern, (start, end) => {
-              capture = { start, end };
-              return undefined;
-            });
+          visitRedactMatches(current, pattern, (match) => {
+            const capture = getCapture(match, pattern);
             if (!capture || capture.end < capture.start) {
-              continue;
+              return;
             }
             // Batch rules need token coordinates only after a serialized match exists.
             if (batch && tokens.length === 0) {
@@ -535,14 +529,14 @@ export function redactJsonRecord(
                 continue;
               }
               const { start: captureStart, end: captureEnd } = capture;
-              const edit = getEdit(match, pattern, () => ({
+              const edit = capture.redact({
                 start,
                 end,
                 value: current.slice(
                   Math.max(captureStart, token.currentStart + padding),
                   Math.min(captureEnd, token.currentEnd - padding),
                 ),
-              }));
+              });
               if (!edit) {
                 continue;
               }
@@ -556,7 +550,7 @@ export function redactJsonRecord(
               }
               add(token, { ...edit, replacement });
             }
-          }
+          });
         }
         if (pending.size === 0) {
           continue;

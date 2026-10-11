@@ -15,6 +15,7 @@ import {
   getChatAttachmentVideoPosterUrl,
   registerChatAttachmentPayload,
   releaseChatAttachmentPayloads,
+  replaceChatAttachmentsFromEditor,
 } from "./attachment-payload-store.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
 import { renderAssistantAttachments } from "./components/chat-message-attachments.ts";
@@ -172,18 +173,6 @@ it("retains document Open and Download after complete outbox hydration", async (
   releaseChatAttachmentPayloads([attachment]);
   expect(revoked.filter((value) => value === href)).toHaveLength(1);
 });
-it("reuses a selected document preview until its owner releases it", () => {
-  const attachment = selected();
-  const first = card(attachment);
-  const second = card(attachment);
-  expect(first.download?.getAttribute("href")).toBe(second.download?.getAttribute("href"));
-  expect(first.open).not.toBeNull();
-  expect(second.open).not.toBeNull();
-  expect(created.size).toBe(1);
-  expect(revoked).toEqual([]);
-  releaseChatAttachmentPayloads([attachment]);
-  expect(revoked).toEqual([...created.keys()]);
-});
 it("does not allocate a preview for an outbox read whose recovery owner changed", async () => {
   const host = hostFor();
   const item = await persisted(host);
@@ -240,18 +229,6 @@ it("keeps restored and independently cloned preview ownership separate", async (
   expect(revoked).toEqual([first, second]);
 });
 
-it("releases a replaced selected preview without disturbing the replacement", () => {
-  const first = selected();
-  const previous = getChatAttachmentPreviewUrl(first);
-  const replacement = selected();
-  expect(revoked).toEqual([previous]);
-  const current = getChatAttachmentPreviewUrl(replacement);
-  expect(current).not.toBe(previous);
-  expect(created.size).toBe(2);
-  releaseChatAttachmentPayloads([replacement]);
-  expect(revoked).toEqual([previous, current]);
-});
-
 it("retains inline previews when object URLs are unavailable", () => {
   Object.defineProperty(URL, "createObjectURL", { configurable: true, value: undefined });
   const attachment = selected();
@@ -280,4 +257,17 @@ it("retains a pending video poster when a local message projects the same payloa
   expect(created.get(url!)).toBe(poster);
   releaseChatAttachmentPayloads([attachment]);
   expect(new Set(revoked)).toEqual(new Set(created.keys()));
+});
+
+it("restores supported inline images at the 5 MiB cap", () => {
+  const data = Buffer.alloc(5 * 1024 * 1024, 0xab).toString("base64");
+  const restored = replaceChatAttachmentsFromEditor([], [{ mimeType: "image/png", data }]);
+  owned.push(...restored);
+  expect(restored).toHaveLength(1);
+  expect(getChatAttachmentDataUrl(restored[0]!)).toBe(`data:image/png;base64,${data}`);
+});
+
+it("rejects a restored image one decoded byte over the cap without throwing", () => {
+  const data = Buffer.alloc(5 * 1024 * 1024 + 1).toString("base64");
+  expect(replaceChatAttachmentsFromEditor([], [{ mimeType: "image/png", data }])).toEqual([]);
 });

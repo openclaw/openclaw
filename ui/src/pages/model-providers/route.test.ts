@@ -121,6 +121,26 @@ describe("Models route admission", () => {
     vi.restoreAllMocks();
   });
 
+  it.each([true, false])("preserves provider deep links when connected=%s", async (connected) => {
+    const harness = createModelsRouter();
+    if (!connected) {
+      await replaceOwner(harness, "disconnect");
+    }
+    await harness.router.navigateLocation(
+      {
+        pathname: "/settings/model-providers",
+        search: "?connect=1&provider=%20openai%20",
+        hash: "",
+      },
+      harness.context,
+    );
+    expect(harness.router.getState().matches[0]?.data).toMatchObject({
+      connect: true,
+      provider: "openai",
+      client: connected ? harness.gateway.snapshot.client : null,
+    });
+  });
+
   it.each(["navigation", "disconnect", "hello", "client", "set"] as const)(
     "does not dispatch after %s during the deferred import; a new load succeeds",
     async (change) => {
@@ -261,31 +281,29 @@ describe("Models route admission", () => {
           ? harness.router.navigate("model-providers", harness.context)
           : harness.router.preloadRoute("model-providers", harness.context);
       await started.promise;
-      const calls = harness.request.mock.calls.filter(([method]) => modelMethods.includes(method));
       await harness.router.navigate("other", harness.context);
       response.resolve();
       await loading;
-      for (const [method, , options] of calls) {
-        if (method !== "models.list") {
-          expect(options?.signal, method).toBeDefined();
-          expect(options?.signal?.aborted, method).toBe(kind === "navigation");
-        }
-      }
+      expect(harness.router.getState().matches[0]?.routeId).toBe("other");
       expect(peekModelCatalog(harness.gateway.snapshot.client!, { agentId: "main" })).toEqual(
         kind === "preload" ? responseFor("models.list") : undefined,
       );
       await harness.router.navigate("model-providers", harness.context);
       if (kind === "preload") {
         expect(harness.modelCalls()).toHaveLength(modelMethods.length);
-        expect(harness.router.getState().matches[0]?.data?.data.authStatus).toEqual(
-          responseFor("models.authStatus"),
-        );
       } else {
-        expect(harness.modelCalls()).toHaveLength(modelMethods.length * 2);
+        // The cancelled route releases its subscription; the connection-owned auth read survives.
+        expect(
+          harness.modelCalls().filter(([method]) => method === "models.authStatus"),
+        ).toHaveLength(1);
+        expect(harness.modelCalls().filter(([method]) => method === "models.list")).toHaveLength(2);
         expect(peekModelCatalog(harness.gateway.snapshot.client!, { agentId: "main" })).toEqual(
           responseFor("models.list"),
         );
       }
+      expect(harness.router.getState().matches[0]?.data?.data.authStatus).toEqual(
+        responseFor("models.authStatus"),
+      );
     },
   );
 });

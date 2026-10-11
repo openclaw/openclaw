@@ -12,22 +12,37 @@ import type { AgentRunTerminalReplySnapshot } from "../../agents/agent-run-termi
 import { runEmbeddedAgentEntry } from "../../agents/embedded-agent-runner/run-entry.js";
 import { runEmbeddedAgent } from "../../agents/embedded-agent-runner/run.js";
 import { resolveModelFallbackError } from "../../agents/failover-error.js";
+import {
+  getGeneratedMediaTaskIdsForSessionKey,
+  hasNewGeneratedMediaTaskForSessionKey,
+} from "../../agents/media-generation-activity.js";
 import { runWithModelFallback } from "../../agents/model-fallback-runner.js";
 import { installSessionPlacementAdmissionProvider } from "../../agents/session-placement-admission.js";
 import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { claimAgentRunContext, releaseAgentRunContext } from "../../infra/agent-run-registry.js";
 import type { SpawnResult } from "../../process/exec.js";
+import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
-import {
-  getGeneratedMediaTaskIdsForSessionKey,
-  hasNewGeneratedMediaTaskForSessionKey,
-} from "../../tasks/task-status-access.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { NodeWorkerWorkspaceTransferError } from "../../worker/node-workspace-transfer-protocol.js";
+import { createGatewayWorkerDispatchAdmission } from "../server-worker-placement-dispatch-admission.js";
+import { createGatewayWorkerPlacementMoveBarrier } from "../server-worker-placement-move-barrier.js";
+import { createGatewayWorkerPlacementReclaimBarriers } from "../server-worker-placement-reclaim.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
 import { hashWorkerCredential } from "./credential.js";
 import { createWorkerInferenceStore } from "./inference-store.js";
 import { createWorkerLiveEventReceiver } from "./live-events.js";
+import { coordinateWorkerPlacementDispatch } from "./placement-dispatch-coordinator.js";
+import {
+  ACTIVE_PLACEMENT,
+  LOCAL_PLACEMENT,
+  REQUEST,
+  createCoordinatorTestService,
+} from "./placement-dispatch-coordinator.test-support.js";
+import { createHarness } from "./placement-dispatch-test-harness.js";
+import { createWorkerPlacementMoveService } from "./placement-move-service.js";
 import { createWorkerSessionPlacementGate } from "./placement-worker-gate.js";
 import { createWorkerEnvironmentService } from "./service.js";
 import * as support from "./service.test-support.js";
@@ -38,6 +53,10 @@ import {
   WorkerWorkspaceReconciliationError,
 } from "./worker-turn-failure.js";
 import {
+  createWorkerTurnTunnel,
+  reconcileUnchangedLocalWorkspace,
+  acknowledgeCompletedWorkerTurn,
+  abortWorkerTurnClaimWaitOnSignal,
   ENVIRONMENT_ID,
   MANIFEST_REF,
   OWNER_EPOCH,
@@ -47,8 +66,9 @@ import {
   cleanupWorkerTurnLauncherTest,
   createWorkerSessionTurnPlacementProvider,
   credential,
-  measureLaunchTurn,
+  database as launcherDatabase,
   openSessionManager,
+  createWorkerTurnSessionRuntimeLoader,
   placements,
   root,
   seedActivePlacement,
@@ -59,19 +79,21 @@ import {
   unusedEnvironments,
   type WorkerTurnEnvironmentService,
 } from "./worker-turn-launcher.test-support.js";
+import { createWorkerWorkspaceOperationCoordinator } from "./workspace-operation-coordinator.js";
+import { gitInit } from "./workspace-recovery.test-support.js";
 
 describe("worker finishing admission", () => {
   support.setupWorkerEnvironmentServiceSuite();
 
-  it("revalidates a credential replaced during synchronous live publication before terminal ACK", async () => {
+  it("revalidates a credential replaced during live publication before terminal ACK", async () => {
     const { apply, liveEvents } = support.sequencedLiveEvents();
-    const { identity, placementStore, workerService } = support.placementHarness(
+    const { identity, placementStore, workerService } = await support.placementHarness(
       "worker-live-reentrant-credential",
       "session-live-reentrant-credential",
       { liveEvents },
     );
     apply.mockImplementationOnce(async () => {
-      support.testState.store.renewCredential({
+      await support.testState.store.renewCredential({
         environmentId: identity.environmentId,
         expectedOwnerEpoch: identity.ownerEpoch,
         sessionId: identity.sessionId,
@@ -91,6 +113,12 @@ describe("worker finishing admission", () => {
 describe("worker turn launcher terminal results", () => {
   beforeEach(setupWorkerTurnLauncherTest);
   afterEach(cleanupWorkerTurnLauncherTest);
+
+  const completedWorkerMessage = () =>
+    makeAgentAssistantMessage({
+      content: [{ type: "text", text: "Remote work completed" }],
+      timestamp: 21,
+    });
 
   it.each<{
     stopReason: "stop" | "error";
@@ -116,22 +144,17 @@ describe("worker turn launcher terminal results", () => {
     "retains the ACKed finishing outcome after assistant $stopReason (reconciliation fails: $reconciliationFails; cleanup: $cleanupFailure; provider fallback: $providerFailure)",
     async ({ stopReason, reconciliationFails, cleanupFailure, providerFailure }) => {
       const outerFallback = cleanupFailure !== undefined || providerFailure === true;
-      seedActivePlacement();
+      await seedActivePlacement();
       const grant = credential();
       const environment = attachedEnvironment();
       const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
       const gate = createWorkerSessionPlacementGate(placements);
       const getConfig = () => ({ session: { store: sessionTarget.storePath } });
-      const liveEvents = createWorkerLiveEventReceiver({
-        getConfig,
-        startupBindings: [
-          { environmentId: ENVIRONMENT_ID, runEpoch: OWNER_EPOCH, sessionId: SESSION_ID },
-        ],
-        startupOwners: new Map([[ENVIRONMENT_ID, OWNER_EPOCH]]),
-      });
+      const liveEvents = createWorkerLiveEventReceiver();
       const service = createWorkerEnvironmentService({
+        scheduler: createTestGatewayScheduler(),
         store: {
-          ...createWorkerEnvironmentStore({ database }),
+          ...(await createWorkerEnvironmentStore({ database })),
           get: () => environment,
           getCredential: () => ({
             environmentId: ENVIRONMENT_ID,
@@ -149,7 +172,7 @@ describe("worker turn launcher terminal results", () => {
         prepareInstallation: vi.fn(),
         bootstrapWorker: vi.fn(),
         executeInference: vi.fn(),
-        inferenceStore: createWorkerInferenceStore({ database }),
+        inferenceStore: createWorkerInferenceStore({ path: database.path }),
         placementStore: gate,
         liveEvents,
       });
@@ -178,15 +201,7 @@ describe("worker turn launcher terminal results", () => {
       }
       const workerTurn = turn(runId);
       let identity: WorkerConnectionIdentity;
-      const tunnel = {
-        environmentId: ENVIRONMENT_ID,
-        ownerEpoch: OWNER_EPOCH,
-        quiesceWorkspace: vi.fn(async () => ({
-          assertActive: vi.fn(async () => {}),
-          resume: vi.fn(async () => {}),
-        })),
-        runWorkspaceCommand: vi.fn(),
-        measureLaunchTurn,
+      const tunnel = createWorkerTurnTunnel({
         launchTurn: vi.fn(async (request): Promise<SpawnResult> => {
           request.onDispatchReady?.();
           launchedModels.push(request.plan.assignment.modelRef.model);
@@ -197,7 +212,9 @@ describe("worker turn launcher terminal results", () => {
             // The second launch is the assertion boundary; do not replay its live-event stream.
             throw new WorkerTurnExecutionError("Unexpected second worker execution");
           }
-          const leafId = openSessionManager().appendMessage(
+          const leafId = await (
+            await openSessionManager()
+          ).appendMessageAsync(
             makeAgentAssistantMessage({
               content: providerFailure ? [] : [{ type: "text", text: "Remote answer" }],
               stopReason,
@@ -205,7 +222,7 @@ describe("worker turn launcher terminal results", () => {
               timestamp: 21,
             }),
           );
-          gate.updateAckCursors({ claim: request.turnClaim, transcriptSeq: 2 });
+          await gate.updateAckCursors({ claim: request.turnClaim, transcriptSeq: 2 });
           identity = {
             environmentId: ENVIRONMENT_ID,
             credentialHash: grant.deliveryId,
@@ -239,7 +256,7 @@ describe("worker turn launcher terminal results", () => {
             ok: true,
             result: { ackedSeq: 0 },
           });
-          expect(placements.listPendingWorkspaceResults()).toHaveLength(0);
+          expect(await placements.listPendingWorkspaceResultsAsync()).toHaveLength(0);
           await expect(
             service.pushLiveEvent(identity, {
               ...finishing,
@@ -260,7 +277,7 @@ describe("worker turn launcher terminal results", () => {
               event: { kind: "lifecycle", payload: { phase: "start", startedAt: 1 } },
             }),
           ).resolves.toEqual({ ok: true, result: { ackedSeq: 2 } });
-          expect(placements.listPendingWorkspaceResults()).toHaveLength(1);
+          expect(await placements.listPendingWorkspaceResultsAsync()).toHaveLength(1);
           return {
             stdout: JSON.stringify({
               status: "failed",
@@ -283,16 +300,17 @@ describe("worker turn launcher terminal results", () => {
           if (request.source.kind !== "local") {
             throw new Error("expected local workspace source");
           }
-          request.source.journal.commit(MANIFEST_REF);
+          await request.source.journal.commit(MANIFEST_REF);
           return {
             manifestRef: MANIFEST_REF,
             changed: false,
             verifyStable: async () => {},
             verifyLocalStable: async () => {},
+            publishStagedResult: async () => {},
+            discardPreparedStagedResult: async () => {},
           };
         }),
-        stop: vi.fn(async () => {}),
-      } satisfies WorkerTunnelHandle;
+      }) satisfies WorkerTunnelHandle;
       const environments: WorkerTurnEnvironmentService = {
         ...unusedEnvironments(),
         get: vi.fn(() => environment),
@@ -301,17 +319,17 @@ describe("worker turn launcher terminal results", () => {
           grant.deliveryId = hashWorkerCredential(grant.credential, claim);
           return grant;
         }),
-        acknowledgeCredentialDelivery: vi.fn(() => true),
+        acknowledgeCredentialDelivery: vi.fn(async () => true),
         startTunnel: vi.fn(async () => tunnel),
         destroy: vi.fn(async () => environment),
       };
       const reconcileActivePlacement = vi.fn(async () => {
-        const [pending] = placements.listPendingWorkspaceResults();
+        const [pending] = await placements.listPendingWorkspaceResultsAsync();
         if (!pending) {
           throw new Error("expected pending workspace result");
         }
         expect(pending).toMatchObject({ sessionId: SESSION_ID, runId });
-        placements.failWorkspaceResultAndReleaseTurn(pending, reconciliationError);
+        await placements.failWorkspaceResultAndReleaseTurn(pending, reconciliationError);
       });
       const provider = createWorkerSessionTurnPlacementProvider({
         environments,
@@ -333,8 +351,8 @@ describe("worker turn launcher terminal results", () => {
           agents: {
             defaults: {
               models: {
-                "openai/gpt-test": { agentRuntime: { id: "openclaw" } },
-                "openai/gpt-test-next": { agentRuntime: { id: "openclaw" } },
+                "openai/gpt-5.6-luna": { agentRuntime: { id: "openclaw" } },
+                "openai/gpt-5.6-sol": { agentRuntime: { id: "openclaw" } },
               },
             },
           },
@@ -359,9 +377,9 @@ describe("worker turn launcher terminal results", () => {
             selection: {
               cfg: config,
               provider: "openai",
-              model: "gpt-test",
+              model: "gpt-5.6-luna",
               manifestPlugins: [],
-              fallbacksOverride: ["openai/gpt-test-next"],
+              fallbacksOverride: ["openai/gpt-5.6-sol"],
             },
             identity: { sessionId: SESSION_ID, sessionKey: SESSION_KEY, agentId: "main", runId },
             harness: {
@@ -397,7 +415,7 @@ describe("worker turn launcher terminal results", () => {
           expect(candidateFailures[0]).toBeInstanceOf(WorkerTurnExecutionError);
           expect(candidateFailures[0]).toMatchObject({ message: failure });
           expect(tunnel.reconcileWorkspace).toHaveBeenCalledOnce();
-          expect(openSessionManager().getLeafEntry()).toMatchObject({
+          expect((await openSessionManager()).getLeafEntry()).toMatchObject({
             type: "message",
             message: {
               role: "assistant",
@@ -406,10 +424,10 @@ describe("worker turn launcher terminal results", () => {
             },
           });
           expect(placements.get(SESSION_ID)).toMatchObject({ state: "active", turnClaim: null });
-          expect(placements.listPendingWorkspaceResults()).toHaveLength(0);
+          expect(await placements.listPendingWorkspaceResultsAsync()).toHaveLength(0);
           expect(environments.destroy).not.toHaveBeenCalled();
           if (providerFailure) {
-            expect(launchedModels).toEqual(["gpt-test", "gpt-test-next"]);
+            expect(launchedModels).toEqual(["gpt-5.6-luna", "gpt-5.6-sol"]);
             expect(runCandidate).toHaveBeenCalledTimes(2);
             expect(observed).toMatchObject({ message: "Unexpected second worker execution" });
             await expect(fs.stat(effectFile)).rejects.toMatchObject({ code: "ENOENT" });
@@ -417,7 +435,7 @@ describe("worker turn launcher terminal results", () => {
           }
           expect
             .soft(launchedModels, "cleanup must not replay the committed worker effect")
-            .toEqual(["gpt-test"]);
+            .toEqual(["gpt-5.6-luna"]);
           expect.soft(await fs.readFile(effectFile, "utf8")).toBe("effect\n");
           expect.soft(runCandidate).toHaveBeenCalledOnce();
           expect.soft(observed).toBe(candidateFailures[0]);
@@ -443,7 +461,7 @@ describe("worker turn launcher terminal results", () => {
           state: reconciliationFails ? "failed" : "active",
           turnClaim: null,
         });
-        expect(placements.listPendingWorkspaceResults()).toHaveLength(0);
+        expect(await placements.listPendingWorkspaceResultsAsync()).toHaveLength(0);
         expect(environments.destroy).not.toHaveBeenCalled();
         await expect(
           service.pushLiveEvent(identity!, {
@@ -466,97 +484,358 @@ describe("worker turn launcher terminal results", () => {
     },
   );
 
-  it("requests immediate recovery when reconciliation fails after worker finishing", async () => {
-    seedActivePlacement();
+  it("settles targeted result recovery while same-session Stop waits for its turn claim", async () => {
+    await seedActivePlacement();
+    const stopController = new AbortController();
+    const claimWaitCleanup = new AbortController();
+    const transferEntered = createDeferredCore();
+    const failTransfer = createDeferredCore();
+    const claimWaitEntered = createDeferredCore();
+    const targetedAdmission = createDeferredCore();
     const destroy = vi.fn(async () => attachedEnvironment());
     const tunnelFailure = new NodeWorkerWorkspaceTransferError(
       "workspace-transfer-failed: gateway TLS fingerprint mismatch",
     );
-    const tunnel: WorkerTunnelHandle = {
-      environmentId: ENVIRONMENT_ID,
-      ownerEpoch: OWNER_EPOCH,
-      quiesceWorkspace: vi.fn(async () => ({
-        assertActive: vi.fn(async () => {}),
-        resume: vi.fn(async () => {}),
-      })),
-      runWorkspaceCommand: vi.fn(),
-      measureLaunchTurn,
+    const targetRecovery = vi.fn(async () => {
+      const [pending] = await placements.listPendingWorkspaceResultsAsync();
+      if (!pending) {
+        throw new Error("expected pending workspace result");
+      }
+      await placements.failWorkspaceResultAndReleaseTurn(pending, tunnelFailure);
+    });
+    const stopCleanup = vi.fn(async () => ({
+      ...LOCAL_PLACEMENT,
+      sessionId: SESSION_ID,
+      sessionKey: SESSION_KEY,
+    }));
+    const waitForClaim = placements.waitForTurnClaimRelease;
+    vi.spyOn(placements, "waitForTurnClaimRelease").mockImplementation((sessionId, options) => {
+      const pending = waitForClaim(sessionId, { ...options, signal: claimWaitCleanup.signal });
+      claimWaitEntered.resolve();
+      return pending;
+    });
+    const entry = { sessionId: SESSION_ID, updatedAt: 1 };
+    const barriers = createGatewayWorkerPlacementReclaimBarriers({
+      placements,
+      loadSessionRuntime: async () => ({
+        managedWorktrees: { findLiveByOwner: async () => undefined },
+        resolveGatewaySessionStoreTargetWithStore: () => ({
+          storePath: sessionTarget.storePath,
+          canonicalKey: SESSION_KEY,
+          storeKeys: [SESSION_KEY],
+          agentId: "main",
+          store: { [SESSION_KEY]: entry },
+        }),
+        resolveCanonicalSessionEntryFromStoreKeys: () => entry,
+      }),
+      cancelSessionWork: async ({ assertCurrent }) => {
+        assertCurrent();
+        stopController.abort(new Error("Stop requested"));
+      },
+      revokeSessionAuthority: () => {},
+    });
+    const dispatch = coordinateWorkerPlacementDispatch(
+      createCoordinatorTestService({
+        dispatch: async (request) => ({ ...ACTIVE_PLACEMENT, ...request }),
+        reclaim: async (request, authorize, beforeDrain, serialize, pendingOperations) =>
+          barriers.runReclaimPreparation({
+            ...request,
+            authorize,
+            beforeDrain,
+            pendingOperations,
+            run: async () => serialize!(stopCleanup),
+          }),
+        reconcileActive: async (_environmentId, admit) => {
+          const pending = admit ? admit([SESSION_ID], targetRecovery) : targetRecovery();
+          targetedAdmission.resolve();
+          await pending;
+        },
+      }),
+      (_request, run) => run(),
+    );
+    const tunnel: WorkerTunnelHandle = createWorkerTurnTunnel({
       launchTurn: vi.fn(async (request): Promise<SpawnResult> => {
         request.onDispatchReady?.();
-        const completed = openSessionManager();
-        const leafId = completed.appendMessage(
-          makeAgentAssistantMessage({
-            content: [{ type: "text", text: "Remote work completed" }],
-            timestamp: 21,
-          }),
-        );
-        createWorkerSessionPlacementGate(placements).updateAckCursors({
-          claim: request.turnClaim,
-          transcriptSeq: 2,
-          liveSeq: 1,
-        });
-        return {
-          stdout: JSON.stringify({
-            status: "completed",
-            transcriptLeafId: leafId,
-            transcriptNextSeq: (placements.get(SESSION_ID)?.lastTranscriptAckCursor ?? 0) + 1,
-          }),
-          stderr: "",
-          code: 0,
-          signal: null,
-          killed: false,
-          termination: "exit",
-        };
-      }),
-      syncWorkspace: vi.fn(async () => {
-        throw new Error("unexpected workspace sync");
+        const completed = await openSessionManager();
+        const leafId = await completed.appendMessageAsync(completedWorkerMessage());
+        return acknowledgeCompletedWorkerTurn(request.turnClaim, leafId);
       }),
       reconcileWorkspace: vi.fn(async () => {
+        transferEntered.resolve();
+        await failTransfer.promise;
         throw tunnelFailure;
       }),
-      stop: vi.fn(async () => {}),
-    };
+    });
     const environments: WorkerTurnEnvironmentService = {
       ...unusedEnvironments(),
       get: vi.fn(() => attachedEnvironment()),
       acquireTurnCredential: vi.fn(async () => credential()),
-      acknowledgeCredentialDelivery: vi.fn(() => true),
+      acknowledgeCredentialDelivery: vi.fn(async () => true),
       startTunnel: vi.fn(async () => tunnel),
       destroy,
     };
-    const reconcileActivePlacement = vi.fn(async () => {
-      const [pending] = placements.listPendingWorkspaceResults();
-      if (!pending) {
-        throw new Error("expected pending workspace result");
-      }
-      placements.failWorkspaceResultAndReleaseTurn(pending, tunnelFailure);
-    });
+    const reconcileActivePlacement = vi.fn(dispatch.reconcileActive);
     const provider = createWorkerSessionTurnPlacementProvider({
       environments,
       placements,
       reconcileActivePlacement,
     });
 
-    await expect(
-      provider.executeTurn(
+    const workerTurn = {
+      ...turn("run-reconcile-tunnel-loss"),
+      abortSignal: stopController.signal,
+    };
+    const running = provider
+      .executeTurn(
         {
           sessionId: SESSION_ID,
           sessionKey: SESSION_KEY,
           agentId: "main",
           runId: "run-reconcile-tunnel-loss",
         },
-        turn("run-reconcile-tunnel-loss"),
+        workerTurn,
         async () => ({ meta: { durationMs: 1 } }),
-      ),
-    ).rejects.toMatchObject({
-      name: "WorkerWorkspaceReconciliationError",
-      message:
-        "Cloud worker finished, but its workspace result could not be reconciled: workspace-transfer-failed: gateway TLS fingerprint mismatch",
-    });
+      )
+      .catch((error: unknown) => error);
+    await transferEntered.promise;
+    const stopping = dispatch
+      .reclaim({ sessionId: SESSION_ID, sessionKey: SESSION_KEY, agentId: "main" })
+      .catch((error: unknown) => error);
+    try {
+      await claimWaitEntered.promise;
+      expect(placements.get(SESSION_ID)?.turnClaim).not.toBeNull();
+      failTransfer.resolve();
+      await targetedAdmission.promise;
+      // An unrelated completed dispatch gives admitted recovery a deterministic progress
+      // boundary; a Stop that reserved this session too early leaves recovery unentered.
+      await dispatch.dispatch({ ...REQUEST, sessionId: "unrelated" });
+      expect(targetRecovery).toHaveBeenCalledOnce();
+      await expect(running).resolves.toMatchObject({
+        name: "WorkerWorkspaceReconciliationError",
+        message:
+          "Cloud worker finished, but its workspace result could not be reconciled: workspace-transfer-failed: gateway TLS fingerprint mismatch",
+      });
+      await expect(stopping).resolves.toMatchObject({ state: "local", sessionId: SESSION_ID });
+      expect(stopCleanup).toHaveBeenCalledOnce();
+    } finally {
+      failTransfer.resolve();
+      // Failure cleanup aborts only the waiter; recovery remains the sole claim-release owner.
+      claimWaitCleanup.abort();
+      await Promise.all([running, stopping]);
+      workerTurn.preparedRunAdmission.close();
+    }
 
     expect(reconcileActivePlacement).toHaveBeenCalledWith(ENVIRONMENT_ID);
     expect(placements.get(SESSION_ID)).toMatchObject({ state: "failed", turnClaim: null });
-    expect(placements.listPendingWorkspaceResults()).toHaveLength(0);
+    expect(await placements.listPendingWorkspaceResultsAsync()).toHaveLength(0);
+    expect(destroy).not.toHaveBeenCalled();
+  });
+
+  it("lends durable reconcile Move retry admission to production result recovery while interrupting its admitted turn", async () => {
+    await seedActivePlacement();
+    await gitInit(root);
+    const source = placements.get(SESSION_ID);
+    if (source?.state !== "active") {
+      throw new Error("Expected active source");
+    }
+    const request = {
+      sessionId: SESSION_ID,
+      sessionKey: SESSION_KEY,
+      agentId: "main",
+      source: {
+        generation: source.generation,
+        environmentId: source.environmentId,
+        ownerEpoch: source.activeOwnerEpoch,
+      },
+      target: { kind: "gateway" as const },
+    };
+    const claimWaitCleanup = new AbortController();
+    const transferEntered = createDeferredCore();
+    const failTransfer = createDeferredCore();
+    const barrierEntered = createDeferredCore();
+    const startBarrier = createDeferredCore();
+    const interrupted = createDeferredCore();
+    const turnAbort = new AbortController();
+    const targetedAdmission = createDeferredCore();
+    const recoverySettled = createDeferredCore();
+    const workspaceOperations = createWorkerWorkspaceOperationCoordinator();
+    const completeResult = vi.spyOn(placements, "completeWorkspaceResultAndReleaseTurn");
+    const destroy = vi.fn(async () => attachedEnvironment());
+    const tunnelFailure = new NodeWorkerWorkspaceTransferError(
+      "workspace-transfer-failed: gateway TLS fingerprint mismatch",
+    );
+    const recoveryEntered = vi.fn((_mode?: "results-only") => {});
+    const harness = createHarness(launcherDatabase, placements, {
+      workspacePath: root,
+      workspaceOperations,
+    });
+    vi.mocked(harness.environments.get).mockReturnValue(attachedEnvironment());
+    const reconcileActive = harness.service.reconcileActive;
+    vi.spyOn(harness.service, "reconcileActive").mockImplementation(
+      (environmentId, admitRecovery) =>
+        reconcileActive(environmentId, (sessionIds, run) => {
+          const pending = admitRecovery!(sessionIds, (mode) => {
+            recoveryEntered(mode);
+            return run(mode).finally(() => recoverySettled.resolve());
+          });
+          targetedAdmission.resolve();
+          return pending;
+        }),
+    );
+    abortWorkerTurnClaimWaitOnSignal(claimWaitCleanup.signal);
+    const unexpected = async (): Promise<never> => {
+      throw new Error("Unexpected destination or abandoned-source work");
+    };
+    const reclaimSource = vi.fn(async (): Promise<never> => {
+      expect(placements.get(SESSION_ID)).toMatchObject({ state: "draining", turnClaim: null });
+      throw new Error("fixture: Move barrier complete");
+    });
+    const loadSessionRuntime = createWorkerTurnSessionRuntimeLoader();
+    const moveBarrier = createGatewayWorkerPlacementMoveBarrier({
+      placements,
+      loadSessionRuntime,
+      revokeSessionAuthority: () => {},
+      awaitTurnClaimRelease: (sessionId, wait) => dispatch.awaitTurnClaimRelease(sessionId, wait),
+    });
+    const moveService = createWorkerPlacementMoveService({
+      placements,
+      environments: { get: () => attachedEnvironment() },
+      runMoveBarrier: async (params) => {
+        barrierEntered.resolve();
+        await startBarrier.promise;
+        return moveBarrier(params);
+      },
+      dispatch: unexpected,
+      reclaimSource,
+      validateAbandonSource: () => {
+        throw new Error("Unexpected abandonment");
+      },
+      abandonSource: unexpected,
+      resolveDestination: unexpected,
+    });
+    const admit = createGatewayWorkerDispatchAdmission(loadSessionRuntime);
+    const dispatch = coordinateWorkerPlacementDispatch(
+      {
+        ...harness.service,
+        forceDestroyEnvironment: async () => attachedEnvironment(),
+        getEnvironmentAttachedSessionIds: () => ["unrelated"],
+        readEnvironmentSessionIds: async () => ["unrelated"],
+        move: moveService.move,
+      },
+      admit,
+    );
+    const tunnel = createWorkerTurnTunnel({
+      launchTurn: vi.fn(async (launchRequest): Promise<SpawnResult> => {
+        launchRequest.onDispatchReady?.();
+        // A prior Move can fail its admission drain before terminal ACK. Its exact retry
+        // joins the durable intent, while the admitted worker retains its original claim.
+        await placements.beginPlacementMove(request);
+        const completed = await openSessionManager();
+        const leafId = await completed.appendMessageAsync(completedWorkerMessage());
+        return acknowledgeCompletedWorkerTurn(launchRequest.turnClaim, leafId);
+      }),
+      reconcileWorkspace: vi
+        .fn(reconcileUnchangedLocalWorkspace)
+        .mockImplementationOnce(async () => {
+          transferEntered.resolve();
+          await failTransfer.promise;
+          throw tunnelFailure;
+        }),
+    });
+    vi.mocked(harness.environments.startTunnel).mockResolvedValue(tunnel);
+    const environments: WorkerTurnEnvironmentService = {
+      ...unusedEnvironments(),
+      get: vi.fn(() => attachedEnvironment()),
+      acquireTurnCredential: vi.fn(async () => credential()),
+      acknowledgeCredentialDelivery: vi.fn(async () => true),
+      startTunnel: vi.fn(async () => tunnel),
+      destroy,
+    };
+    const reconcileActivePlacement = vi.fn(dispatch.reconcileActive);
+    const provider = createWorkerSessionTurnPlacementProvider({
+      environments,
+      placements,
+      reconcileActivePlacement,
+      workspaceOperations,
+    });
+
+    const workerTurn = turn("run-reconcile-tunnel-loss");
+    const admission = await beginSessionWorkAdmission({
+      scope: sessionTarget.storePath,
+      identities: [SESSION_KEY, SESSION_ID],
+      assertAllowed: () => {},
+      onInterrupt: (reason) => {
+        turnAbort.abort(reason);
+        interrupted.resolve();
+      },
+    });
+    const running = admission
+      .run(() =>
+        provider.executeTurn(
+          {
+            sessionId: SESSION_ID,
+            sessionKey: SESSION_KEY,
+            agentId: "main",
+            runId: "run-reconcile-tunnel-loss",
+          },
+          { ...workerTurn, abortSignal: turnAbort.signal },
+          async () => ({ meta: { durationMs: 1 } }),
+        ),
+      )
+      .finally(() => admission.release())
+      .catch((error: unknown) => error);
+    await transferEntered.promise;
+    expect(placements.get(SESSION_ID)?.state).toBe("draining");
+    expect(await placements.listPendingWorkspaceResultsAsync()).toHaveLength(1);
+    const moving = dispatch.move(request).catch((error: unknown) => error);
+    try {
+      await barrierEntered.promise;
+      failTransfer.resolve();
+      await targetedAdmission.promise;
+      expect(admission.isActive()).toBe(true);
+      expect(recoveryEntered).not.toHaveBeenCalled();
+      expect(placements.get(SESSION_ID)?.turnClaim).not.toBeNull();
+      startBarrier.resolve();
+      await Promise.race([
+        interrupted.promise,
+        moving.then(() => {
+          throw new Error("Move ended before interrupting its admitted turn");
+        }),
+      ]);
+      expect(turnAbort.signal.aborted).toBe(true);
+      // Independent admission settles after targeted recovery could enter this session.
+      await dispatch.forceDestroyEnvironment("unrelated");
+      expect(recoveryEntered).toHaveBeenCalledOnce();
+      expect(recoveryEntered).toHaveBeenCalledWith("results-only");
+      await recoverySettled.promise;
+      expect(completeResult).toHaveBeenCalledOnce();
+      expect(placements.get(SESSION_ID)?.turnClaim).toBeNull();
+      await expect(moving).resolves.toMatchObject({
+        message: "fixture: Move barrier complete",
+      });
+      expect(reclaimSource).toHaveBeenCalledOnce();
+      await expect(running).resolves.toMatchObject({
+        name: "WorkerWorkspaceReconciliationError",
+        message:
+          "Cloud worker finished, but its workspace result could not be reconciled: workspace-transfer-failed: gateway TLS fingerprint mismatch",
+      });
+    } finally {
+      failTransfer.resolve();
+      startBarrier.resolve();
+      admission.release();
+      // Failure cleanup aborts only the waiter; recovery remains the sole claim-release owner.
+      claimWaitCleanup.abort();
+      await Promise.all([running, moving]);
+      workerTurn.preparedRunAdmission.close();
+    }
+
+    expect(reconcileActivePlacement).toHaveBeenCalledWith(ENVIRONMENT_ID);
+    expect(placements.get(SESSION_ID)).toMatchObject({ state: "draining", turnClaim: null });
+    expect(await placements.listPendingWorkspaceResultsAsync()).toHaveLength(0);
+    expect(tunnel.reconcileWorkspace).toHaveBeenCalledTimes(2);
+    expect(harness.environments.startTunnel).toHaveBeenCalledOnce();
+    expect(harness.reportWorkspaceResultRecoveryFailure).not.toHaveBeenCalled();
+    expect(harness.environments.destroy).not.toHaveBeenCalled();
     expect(destroy).not.toHaveBeenCalled();
   });
 
@@ -626,99 +905,62 @@ describe("worker turn launcher terminal results", () => {
       terminalReply,
       costs = { first: 0, last: 0, total: 0 },
     }) => {
-      seedActivePlacement();
+      await seedActivePlacement();
       const environments: WorkerTurnEnvironmentService = {
         get: vi.fn(() => attachedEnvironment()),
         acquireTurnCredential: vi.fn(async () => credential()),
-        acknowledgeCredentialDelivery: vi.fn(() => true),
-        startTunnel: vi.fn(async () => ({
-          environmentId: ENVIRONMENT_ID,
-          ownerEpoch: OWNER_EPOCH,
-          quiesceWorkspace: vi.fn(async () => ({
-            assertActive: vi.fn(async () => {}),
-            resume: vi.fn(async () => {}),
-          })),
-          runWorkspaceCommand: vi.fn(),
-          measureLaunchTurn,
-          launchTurn: vi.fn(async (request): Promise<SpawnResult> => {
-            request.onDispatchReady?.();
-            const completed = openSessionManager();
-            completed.appendMessage(
-              makeAgentAssistantMessage({
-                content: [{ type: "toolCall", id: "call-usage", name: "read", arguments: {} }],
-                provider: "openai",
-                model: "gpt-first-call",
-                stopReason: "toolUse",
-                timestamp: 21,
-                usage: {
-                  input: 100,
-                  output: 10,
-                  cacheRead: 20,
-                  cacheWrite: 5,
-                  totalTokens: 135,
-                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: costs.first },
-                },
-              }),
-            );
-            completed.appendMessage(
-              makeTextToolResult("call-usage", "read", "usage result", false, 22),
-            );
-            const leafId = completed.appendMessage(
-              makeAgentAssistantMessage({
-                content,
-                provider: "anthropic",
-                model: "claude-reported",
-                timestamp: 23,
-                usage: {
-                  input: 200,
-                  output: 30,
-                  cacheRead: 40,
-                  cacheWrite: 0,
-                  contextUsage: {
-                    state: "available",
-                    promptTokens: 240,
-                    totalTokens: 270,
+        acknowledgeCredentialDelivery: vi.fn(async () => true),
+        startTunnel: vi.fn(async () =>
+          createWorkerTurnTunnel({
+            launchTurn: vi.fn(async (request): Promise<SpawnResult> => {
+              request.onDispatchReady?.();
+              const completed = await openSessionManager();
+              await completed.appendMessageAsync(
+                makeAgentAssistantMessage({
+                  content: [{ type: "toolCall", id: "call-usage", name: "read", arguments: {} }],
+                  provider: "openai",
+                  model: "gpt-first-call",
+                  stopReason: "toolUse",
+                  timestamp: 21,
+                  usage: {
+                    input: 100,
+                    output: 10,
+                    cacheRead: 20,
+                    cacheWrite: 5,
+                    totalTokens: 135,
+                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: costs.first },
                   },
-                  totalTokens: 270,
-                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: costs.last },
-                },
-              }),
-            );
-            createWorkerSessionPlacementGate(placements).updateAckCursors({
-              claim: request.turnClaim,
-              transcriptSeq: 2,
-              liveSeq: 1,
-            });
-            return {
-              stdout: JSON.stringify({
-                status: "completed",
-                transcriptLeafId: leafId,
-                transcriptNextSeq: (placements.get(SESSION_ID)?.lastTranscriptAckCursor ?? 0) + 1,
-              }),
-              stderr: "",
-              code: 0,
-              signal: null,
-              killed: false,
-              termination: "exit",
-            };
+                }),
+              );
+              await completed.appendMessageAsync(
+                makeTextToolResult("call-usage", "read", "usage result", false, 22),
+              );
+              const leafId = await completed.appendMessageAsync(
+                makeAgentAssistantMessage({
+                  content,
+                  provider: "anthropic",
+                  model: "claude-reported",
+                  timestamp: 23,
+                  usage: {
+                    input: 200,
+                    output: 30,
+                    cacheRead: 40,
+                    cacheWrite: 0,
+                    contextUsage: {
+                      state: "available",
+                      promptTokens: 240,
+                      totalTokens: 270,
+                    },
+                    totalTokens: 270,
+                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: costs.last },
+                  },
+                }),
+              );
+              return acknowledgeCompletedWorkerTurn(request.turnClaim, leafId);
+            }),
+            reconcileWorkspace: vi.fn(reconcileUnchangedLocalWorkspace),
           }),
-          syncWorkspace: vi.fn(async () => {
-            throw new Error("unexpected workspace sync");
-          }),
-          reconcileWorkspace: vi.fn(async (request) => {
-            if (request.source.kind !== "local") {
-              throw new Error("expected a local workspace source");
-            }
-            request.source.journal.commit(MANIFEST_REF);
-            return {
-              manifestRef: MANIFEST_REF,
-              changed: false,
-              verifyStable: async () => {},
-              verifyLocalStable: async () => {},
-            };
-          }),
-          stop: vi.fn(async () => {}),
-        })),
+        ),
         stopTunnel: vi.fn(async () => {}),
         destroy: vi.fn(async () => attachedEnvironment()),
       };

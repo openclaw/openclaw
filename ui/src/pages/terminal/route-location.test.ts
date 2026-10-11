@@ -4,7 +4,12 @@ import { INTERNAL_TERMINAL_PATH_PARAM } from "../../app-route-paths.ts";
 import { catalogSessionSearch } from "../../lib/sessions/catalog-key.ts";
 import { resolveTerminalRouteLocation } from "./route-location.ts";
 
-const catalog = { catalogId: "codex", hostId: "node:local", threadId: "thread ?&/1" };
+const catalog = {
+  catalogId: "codex",
+  hostId: "node:local",
+  threadId: "thread ?&/1",
+  sourceHomeId: "selected-home",
+};
 
 describe("terminal route location", () => {
   it("opens the default terminal surface without a target", () => {

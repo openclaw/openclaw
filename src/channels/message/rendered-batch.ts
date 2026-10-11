@@ -1,8 +1,3 @@
-/**
- * Rendered channel message batch planner.
- *
- * Summarizes reply payloads so delivery can pick adapter paths and recovery metadata.
- */
 import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type {
@@ -12,18 +7,16 @@ import type {
   RenderedMessageBatchPlanKind,
 } from "./types.js";
 
-function collectMediaUrls(payload: ReplyPayload): string[] {
-  const mediaUrls = normalizeTrimmedStringList(payload.mediaUrls);
-  const mediaUrl = payload.mediaUrl?.trim();
-  return mediaUrl && !mediaUrls.includes(mediaUrl) ? [mediaUrl, ...mediaUrls] : mediaUrls;
-}
-
 function createRenderedMessageBatchPlanItem(
   payload: ReplyPayload,
   index: number,
 ): RenderedMessageBatchPlanItem {
   const text = payload.text?.trim();
-  const mediaUrls = collectMediaUrls(payload);
+  const mediaUrls = normalizeTrimmedStringList(payload.mediaUrls);
+  const mediaUrl = payload.mediaUrl?.trim();
+  if (mediaUrl && !mediaUrls.includes(mediaUrl)) {
+    mediaUrls.unshift(mediaUrl);
+  }
   const presentationBlockCount = payload.presentation?.blocks?.length ?? 0;
   const kinds: RenderedMessageBatchPlanKind[] = [];
   if (text) {
@@ -53,7 +46,6 @@ function createRenderedMessageBatchPlanItem(
   };
 }
 
-/** Summarizes rendered reply payloads so delivery can choose adapter paths and recovery metadata. */
 export function createRenderedMessageBatchPlan(
   payloads: readonly ReplyPayload[],
 ): RenderedMessageBatchPlan {
@@ -82,7 +74,6 @@ export function createRenderedMessageBatchPlan(
   );
 }
 
-/** Pairs reply payloads with their render plan for durable send and live-preview flows. */
 export function createRenderedMessageBatch(
   payloads: ReplyPayload[],
 ): RenderedMessageBatch<ReplyPayload> {

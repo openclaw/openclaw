@@ -4,6 +4,7 @@
 import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-text.js";
+import type { ChannelStatusIssue } from "../../channels/plugins/types.core.js";
 import type { ProgressReporter } from "../../cli/progress.js";
 import { formatConfigIssueLine } from "../../config/issue-format.js";
 import {
@@ -27,11 +28,9 @@ import {
   type PluginCompatibilityNotice,
 } from "../../plugins/status.js";
 import { dedupeByKey } from "../../shared/dedupe-by-key.js";
-import {
-  hasMissingSkillRequirements,
-  type SkillStatusReport,
-} from "../../skills/discovery/status.js";
+import type { buildWorkspaceSkillReadiness } from "../../skills/discovery/status.js";
 import { formatDeliveryQueueHealthLine } from "../health-format.js";
+import { countActiveStatusAgents } from "../status-overview-values.js";
 import type {
   resolveStatusGatewayHealthSafe,
   StatusGatewayDiagnosticsResult,
@@ -56,14 +55,6 @@ type ConfigSnapshotLike = {
 
 type PortUsageLike = Pick<PortUsage, "listeners" | "port" | "status" | "hints">;
 
-type ChannelIssueLike = {
-  channel: string;
-  accountId: string;
-  kind: string;
-  message: string;
-  fix?: string;
-};
-
 type DeliveryDiagnosticsLike = {
   summary?: {
     byType?: Record<string, number>;
@@ -77,26 +68,16 @@ type DeliveryDiagnosticsLike = {
   }>;
 };
 
-type AgentStatusLike = {
+type AgentStatusLike = Parameters<typeof countActiveStatusAgents>[0]["agentStatus"] & {
   totalSessions: number;
-  agents: Array<{
-    id: string;
-    lastActiveAgeMs?: number | null;
-  }>;
 };
 
 const AGENT_ACTIVITY_SOFT_WARNING_MS = 30 * 60_000;
 
-function countRecentAgentSessions(agentStatus: AgentStatusLike, thresholdMs: number): number {
-  return agentStatus.agents.filter(
-    (agent) => agent.lastActiveAgeMs != null && agent.lastActiveAgeMs <= thresholdMs,
-  ).length;
-}
-
 function countGatewayListenerPids(portUsage: PortUsageLike): number {
   const pids = new Set<number>();
   for (const listener of portUsage.listeners) {
-    if (classifyPortListener(listener, portUsage.port) !== "gateway") {
+    if (classifyPortListener(listener) !== "gateway") {
       continue;
     }
     if (typeof listener.pid === "number" && Number.isFinite(listener.pid)) {
@@ -134,7 +115,6 @@ function latestDeliveryEventAgeMs(snapshot: DeliveryDiagnosticsLike): number | n
   return latestTs > 0 ? Date.now() - latestTs : null;
 }
 
-/** Appends config, gateway, channel, delivery, and log diagnostics to the status-all report. */
 export async function appendStatusAllDiagnosis(params: {
   lines: string[];
   progress: ProgressReporter;
@@ -153,23 +133,37 @@ export async function appendStatusAllDiagnosis(params: {
   tailscaleMode: string;
   tailscaleDns: string | null;
   tailscaleHttpsUrl: string | null;
-  skillStatus: SkillStatusReport | null;
+  skillReadiness: ReturnType<typeof buildWorkspaceSkillReadiness> | null;
   pluginCompatibility: PluginCompatibilityNotice[];
   channelsStatus: unknown;
-  channelIssues: ChannelIssueLike[];
+  channelIssues: ChannelStatusIssue[];
   deliveryDiagnostics: StatusGatewayDiagnosticsResult | null;
   exporterDiagnostics: StatusGatewayDiagnosticsResult | null;
   agentStatus?: AgentStatusLike;
   gatewayReachable: boolean;
+  gatewayStartupPhase?: string;
+  localGatewayHealthy?: boolean;
+  gatewayServer?: NonNullable<
+    Parameters<typeof formatUpdateRestartStatusValue>[1]
+  >["gatewayServer"];
   health: Awaited<ReturnType<typeof resolveStatusGatewayHealthSafe>> | null | undefined;
   nodeOnlyGateway: NodeOnlyGatewayInfo | null;
 }) {
   const { lines, muted, ok, warn, fail } = params;
+  const emitDetail = (text: string) => lines.push(`  ${muted(text)}`);
+  const emitLimited = <T>(items: T[], limit: number, format: (item: T) => string) => {
+    for (const item of items.slice(0, limit)) {
+      lines.push(format(item));
+    }
+    if (items.length > limit) {
+      emitDetail(`… +${items.length - limit} more`);
+    }
+  };
 
   const emitCheck = (label: string, status: "ok" | "warn" | "fail") => {
-    const icon = status === "ok" ? ok("✓") : status === "warn" ? warn("!") : fail("✗");
-    const colored = status === "ok" ? ok(label) : status === "warn" ? warn(label) : fail(label);
-    lines.push(`${icon} ${colored}`);
+    const decorate = status === "ok" ? ok : status === "warn" ? warn : fail;
+    const icon = status === "ok" ? "✓" : status === "warn" ? "!" : "✗";
+    lines.push(`${decorate(icon)} ${decorate(label)}`);
   };
   const emitUnavailableDiagnostics = (diagnostic: {
     label: string;
@@ -177,10 +171,10 @@ export async function appendStatusAllDiagnosis(params: {
     retry: string;
   }) => {
     emitCheck(`${diagnostic.label}: unavailable`, "warn");
-    lines.push(
-      `  ${muted(sanitizeTerminalText(redactStatusSecrets(redactSensitiveUrlLikeString(diagnostic.detail))))}`,
+    emitDetail(
+      sanitizeTerminalText(redactStatusSecrets(redactSensitiveUrlLikeString(diagnostic.detail))),
     );
-    lines.push(`  ${muted(`Retry: ${diagnostic.retry}`)}`);
+    emitDetail(`Retry: ${diagnostic.retry}`);
   };
 
   lines.push("");
@@ -188,7 +182,7 @@ export async function appendStatusAllDiagnosis(params: {
   for (const line of redactStatusSecrets(params.connectionDetailsForReport)
     .split("\n")
     .map((l) => l.trimEnd())) {
-    lines.push(`  ${muted(line)}`);
+    emitDetail(line);
   }
 
   lines.push("");
@@ -200,12 +194,7 @@ export async function appendStatusAllDiagnosis(params: {
       [...(params.snap.legacyIssues ?? []), ...(params.snap.issues ?? [])],
       (issue) => `${issue.path.length}:${issue.path}${issue.message}`,
     );
-    for (const issue of uniqueIssues.slice(0, 12)) {
-      lines.push(`  ${formatConfigIssueLine(issue, "-")}`);
-    }
-    if (uniqueIssues.length > 12) {
-      lines.push(`  ${muted(`… +${uniqueIssues.length - 12} more`)}`);
-    }
+    emitLimited(uniqueIssues, 12, (issue) => `  ${formatConfigIssueLine(issue, "-")}`);
   } else {
     emitCheck("Config: read failed", "warn");
   }
@@ -213,31 +202,33 @@ export async function appendStatusAllDiagnosis(params: {
   if (params.remoteUrlMissing) {
     lines.push("");
     emitCheck("Gateway remote mode misconfigured (gateway.remote.url missing)", "warn");
-    lines.push(`  ${muted("Fix: set gateway.remote.url, or set gateway.mode=local.")}`);
+    emitDetail("Fix: set gateway.remote.url, or set gateway.mode=local.");
   }
 
   emitCheck(
     `Secret diagnostics (${params.secretDiagnostics.length})`,
     params.secretDiagnostics.length === 0 ? "ok" : "warn",
   );
-  for (const diagnostic of params.secretDiagnostics.slice(0, 10)) {
-    lines.push(`  - ${muted(redactStatusSecrets(diagnostic))}`);
-  }
-  if (params.secretDiagnostics.length > 10) {
-    lines.push(`  ${muted(`… +${params.secretDiagnostics.length - 10} more`)}`);
-  }
+  emitLimited(
+    params.secretDiagnostics,
+    10,
+    (diagnostic) => `  - ${muted(redactStatusSecrets(diagnostic))}`,
+  );
 
   if (params.sentinel?.payload) {
     emitCheck("Restart sentinel present", "warn");
-    lines.push(
-      `  ${muted(`${summarizeRestartSentinel(params.sentinel.payload)} · ${formatTimeAgo(Date.now() - params.sentinel.payload.ts)}`)}`,
+    emitDetail(
+      `${summarizeRestartSentinel(params.sentinel.payload)} · ${formatTimeAgo(Date.now() - params.sentinel.payload.ts)}`,
     );
-    const updateRestartValue = formatUpdateRestartStatusValue(params.sentinel.payload);
+    const updateRestartValue = formatUpdateRestartStatusValue(params.sentinel.payload, {
+      localGatewayHealthy: params.localGatewayHealthy,
+      gatewayServer: params.gatewayServer,
+    });
     if (updateRestartValue) {
-      lines.push(`  ${muted(`Update restart: ${updateRestartValue}`)}`);
+      emitDetail(`Update restart: ${updateRestartValue}`);
     }
     for (const line of formatUpdateRestartActionLines(params.sentinel.payload)) {
-      lines.push(`  ${muted(line)}`);
+      emitDetail(line);
     }
   } else {
     emitCheck("Restart sentinel: none", "ok");
@@ -245,11 +236,11 @@ export async function appendStatusAllDiagnosis(params: {
 
   const lastErrClean = normalizeOptionalString(params.lastErr) ?? "";
   // Restart logs sometimes end with a single brace from truncated JSON; suppress that noise.
-  const isTrivialLastErr = lastErrClean.length < 8 || lastErrClean === "}" || lastErrClean === "{";
+  const isTrivialLastErr = lastErrClean.length < 8;
   if (lastErrClean && !isTrivialLastErr) {
     lines.push("");
-    lines.push(muted("Gateway last log line:"));
-    lines.push(`  ${muted(redactStatusSecrets(lastErrClean))}`);
+    lines.push(muted("Recent Gateway log error (may be from an earlier run):"));
+    emitDetail(redactStatusSecrets(lastErrClean));
   }
 
   if (params.portUsage) {
@@ -268,19 +259,19 @@ export async function appendStatusAllDiagnosis(params: {
     if (!portOk) {
       const gatewayPidCount = countGatewayListenerPids(params.portUsage);
       if (gatewayPidCount > 1) {
-        lines.push(
-          `  ${muted(`${gatewayPidCount} OpenClaw gateway processes appear to be listening on port ${params.port}; stop stale gateway processes before trusting channel health.`)}`,
+        emitDetail(
+          `${gatewayPidCount} OpenClaw gateway processes appear to be listening on port ${params.port}; stop stale gateway processes before trusting channel health.`,
         );
       }
       for (const line of formatPortDiagnostics(params.portUsage)) {
-        lines.push(`  ${muted(line)}`);
+        emitDetail(line);
       }
     } else if (benignDualStackLoopback) {
-      lines.push(
-        `  ${muted("Detected dual-stack loopback listeners (127.0.0.1 + ::1) for one gateway process.")}`,
+      emitDetail(
+        "Detected dual-stack loopback listeners (127.0.0.1 + ::1) for one gateway process.",
       );
     } else if (expectedGatewayListeners) {
-      lines.push(`  ${muted("Detected OpenClaw Gateway listener on the configured port.")}`);
+      emitDetail("Detected OpenClaw Gateway listener on the configured port.");
     }
   }
 
@@ -289,14 +280,13 @@ export async function appendStatusAllDiagnosis(params: {
     params.tailscaleMode === "off" ? "ok" : "warn",
   );
   if (params.tailscaleHttpsUrl) {
-    lines.push(`  ${muted(`https: ${params.tailscaleHttpsUrl}`)}`);
+    emitDetail(`https: ${params.tailscaleHttpsUrl}`);
   }
 
-  if (params.skillStatus) {
-    const eligible = params.skillStatus.skills.filter((s) => s.eligible).length;
-    const missing = params.skillStatus.skills.filter(hasMissingSkillRequirements).length;
+  if (params.skillReadiness) {
+    const { eligible, missing, workspaceDir } = params.skillReadiness;
     emitCheck(
-      `Skills: ${eligible} eligible · ${missing} missing · ${params.skillStatus.workspaceDir}`,
+      `Skills: ${eligible} eligible · ${missing} missing · ${workspaceDir}`,
       missing === 0 ? "ok" : "warn",
     );
   }
@@ -305,19 +295,16 @@ export async function appendStatusAllDiagnosis(params: {
     `Plugin compatibility (${params.pluginCompatibility.length || "none"})`,
     params.pluginCompatibility.length === 0 ? "ok" : "warn",
   );
-  for (const notice of params.pluginCompatibility.slice(0, 12)) {
+  emitLimited(params.pluginCompatibility, 12, (notice) => {
     const severity = notice.severity === "warn" ? "warn" : "info";
-    lines.push(`  - [${severity}] ${formatPluginCompatibilityNotice(notice)}`);
-  }
-  if (params.pluginCompatibility.length > 12) {
-    lines.push(`  ${muted(`… +${params.pluginCompatibility.length - 12} more`)}`);
-  }
+    return `  - [${severity}] ${formatPluginCompatibilityNotice(notice)}`;
+  });
 
   if (params.agentStatus) {
-    const recentSessions = countRecentAgentSessions(
-      params.agentStatus,
-      AGENT_ACTIVITY_SOFT_WARNING_MS,
-    );
+    const recentSessions = countActiveStatusAgents({
+      agentStatus: params.agentStatus,
+      activeThresholdMs: AGENT_ACTIVITY_SOFT_WARNING_MS,
+    });
     const hasKnownSessions = params.agentStatus.totalSessions > 0;
     const shouldWarn = hasKnownSessions && recentSessions === 0;
     emitCheck(
@@ -325,8 +312,8 @@ export async function appendStatusAllDiagnosis(params: {
       shouldWarn ? "warn" : "ok",
     );
     if (shouldWarn) {
-      lines.push(
-        `  ${muted("No agent session was updated in the last 30m; if channels received messages, verify inbound dispatch and turn creation.")}`,
+      emitDetail(
+        "No agent session was updated in the last 30m; if channels received messages, verify inbound dispatch and turn creation.",
       );
     }
   }
@@ -337,7 +324,7 @@ export async function appendStatusAllDiagnosis(params: {
       if (exporterSummary) {
         emitCheck(exporterSummary.title, exporterSummary.status);
         for (const line of exporterSummary.lines) {
-          lines.push(`  ${muted(line)}`);
+          emitDetail(line);
         }
       }
     } else {
@@ -349,9 +336,18 @@ export async function appendStatusAllDiagnosis(params: {
     }
   }
 
-  if (!params.nodeOnlyGateway && params.deliveryDiagnostics?.ok) {
-    if (isDeliveryDiagnosticsLike(params.deliveryDiagnostics.value)) {
-      const deliveryDiagnostics = params.deliveryDiagnostics.value;
+  if (!params.nodeOnlyGateway && params.deliveryDiagnostics) {
+    const diagnostic = params.deliveryDiagnostics;
+    if (!diagnostic.ok || !isDeliveryDiagnosticsLike(diagnostic.value)) {
+      emitUnavailableDiagnostics({
+        label: "Inbound delivery telemetry",
+        detail: diagnostic.ok
+          ? "Delivery diagnostics returned an invalid response."
+          : `Delivery diagnostics failed: ${diagnostic.error}`,
+        retry: "openclaw gateway stability",
+      });
+    } else {
+      const deliveryDiagnostics = diagnostic.value;
       const received = countDeliveryEvent(deliveryDiagnostics, "message.received");
       const dispatchStarted = countDeliveryEvent(deliveryDiagnostics, "message.dispatch.started");
       const dispatchCompleted = countDeliveryEvent(
@@ -371,40 +367,24 @@ export async function appendStatusAllDiagnosis(params: {
         hasReceivedWithoutDispatch || hasDispatchWithoutTurn || hasDispatchGap ? "warn" : "ok",
       );
       if (latestAgeMs != null) {
-        lines.push(`  ${muted(`latest delivery event: ${formatTimeAgo(latestAgeMs)}`)}`);
+        emitDetail(`latest delivery event: ${formatTimeAgo(latestAgeMs)}`);
       }
       if (hasReceivedWithoutDispatch) {
-        lines.push(
-          `  ${muted("Messages were received, but no gateway dispatch started; inspect inbound routing and dispatch handoff.")}`,
+        emitDetail(
+          "Messages were received, but no gateway dispatch started; inspect inbound routing and dispatch handoff.",
         );
       }
       if (hasDispatchWithoutTurn) {
-        lines.push(
-          `  ${muted("Gateway dispatch started, but no agent turn was created; inspect reply resolver and session creation.")}`,
+        emitDetail(
+          "Gateway dispatch started, but no agent turn was created; inspect reply resolver and session creation.",
         );
       }
       if (hasDispatchGap) {
-        lines.push(
-          `  ${muted("Multiple gateway dispatches have not completed yet; if this persists, inspect stuck sessions or model runs.")}`,
+        emitDetail(
+          "Multiple gateway dispatches have not completed yet; if this persists, inspect stuck sessions or model runs.",
         );
       }
-    } else {
-      emitUnavailableDiagnostics({
-        label: "Inbound delivery telemetry",
-        detail: "Delivery diagnostics returned an invalid response.",
-        retry: "openclaw gateway stability",
-      });
     }
-  } else if (
-    !params.nodeOnlyGateway &&
-    params.deliveryDiagnostics &&
-    !params.deliveryDiagnostics.ok
-  ) {
-    emitUnavailableDiagnostics({
-      label: "Inbound delivery telemetry",
-      detail: `Delivery diagnostics failed: ${params.deliveryDiagnostics.error}`,
-      retry: "openclaw gateway stability",
-    });
   }
 
   params.progress.setLabel("Reading logs…");
@@ -412,7 +392,7 @@ export async function appendStatusAllDiagnosis(params: {
     try {
       // macOS supervised installs write stdout/stderr differently than node-managed gateway logs.
       return process.platform === "darwin"
-        ? resolveGatewaySupervisorLogPaths(process.env, { platform: "darwin" })
+        ? resolveGatewaySupervisorLogPaths(process.env)
         : resolveGatewayLogPaths(process.env);
     } catch {
       return null;
@@ -430,24 +410,21 @@ export async function appendStatusAllDiagnosis(params: {
     if (stderrTail.length > 0 || stdoutTail.length > 0) {
       lines.push("");
       lines.push(muted(`Gateway logs (tail, summarized): ${logPaths.logDir}`));
-      if (readStderr) {
-        lines.push(`  ${muted(`# stderr: ${logPaths.stderrPath}`)}`);
-        for (const line of summarizeLogTail(stderrTail, { maxLines: 22 }).map(
-          redactStatusSecrets,
-        )) {
-          lines.push(`  ${muted(line)}`);
+      for (const [stream, filePath, tail] of [
+        ...(readStderr ? [["stderr", logPaths.stderrPath, stderrTail] as const] : []),
+        ["stdout", logPaths.stdoutPath, stdoutTail] as const,
+      ]) {
+        emitDetail(`# ${stream}: ${filePath}`);
+        for (const line of summarizeLogTail(tail, { maxLines: 22 }).map(redactStatusSecrets)) {
+          emitDetail(line);
         }
-      }
-      lines.push(`  ${muted(`# stdout: ${logPaths.stdoutPath}`)}`);
-      for (const line of summarizeLogTail(stdoutTail, { maxLines: 22 }).map(redactStatusSecrets)) {
-        lines.push(`  ${muted(line)}`);
       }
     }
     if (restartTail.length > 0) {
       lines.push("");
       lines.push(muted(`Gateway restart attempts (tail): ${restartLogPath}`));
       for (const line of summarizeLogTail(restartTail, { maxLines: 16 }).map(redactStatusSecrets)) {
-        lines.push(`  ${muted(line)}`);
+        emitDetail(line);
       }
     }
   }
@@ -458,18 +435,18 @@ export async function appendStatusAllDiagnosis(params: {
       `Channel issues (${params.channelIssues.length || "none"})`,
       params.channelIssues.length === 0 ? "ok" : "warn",
     );
-    for (const issue of params.channelIssues.slice(0, 12)) {
+    emitLimited(params.channelIssues, 12, (issue) => {
       const fixText = issue.fix ? ` · fix: ${issue.fix}` : "";
-      lines.push(
-        `  - ${issue.channel}[${issue.accountId}] ${issue.kind}: ${issue.message}${fixText}`,
-      );
-    }
-    if (params.channelIssues.length > 12) {
-      lines.push(`  ${muted(`… +${params.channelIssues.length - 12} more`)}`);
-    }
+      return `  - ${issue.channel}[${issue.accountId}] ${issue.kind}: ${issue.message}${fixText}`;
+    });
   } else if (params.nodeOnlyGateway) {
     emitCheck(
       `Channel issues skipped (node-only mode; query ${params.nodeOnlyGateway.gatewayTarget})`,
+      "ok",
+    );
+  } else if (params.gatewayStartupPhase) {
+    emitCheck(
+      `Channel issues skipped (gateway still starting (phase ${params.gatewayStartupPhase}))`,
       "ok",
     );
   } else {
@@ -484,7 +461,7 @@ export async function appendStatusAllDiagnosis(params: {
       if (params.health.error) {
         lines.push("");
         lines.push(muted("Gateway health:"));
-        lines.push(`  ${muted(redactStatusSecrets(params.health.error))}`);
+        emitDetail(redactStatusSecrets(params.health.error));
       }
     } else {
       const deliveryQueueLine = formatDeliveryQueueHealthLine(params.health);

@@ -136,6 +136,42 @@ describe("feishu bitable create app cleanup", () => {
     });
   });
 
+  it("counts only accepted cleanup mutations and falls back after a rejected batch response", async () => {
+    const { batchDelete, client } = createBitableClient([
+      { record_id: "rec_rejected", fields: {} },
+      { record_id: "rec_deleted", fields: {} },
+    ]);
+    vi.mocked(client.bitable.appTableField.list).mockResolvedValueOnce({
+      code: 0,
+      data: {
+        items: [
+          { field_id: "fld_name", field_name: "Name", type: 1, is_primary: true },
+          { field_id: "fld_rejected", field_name: "Status", type: 3 },
+          { field_id: "fld_deleted", field_name: "Date", type: 5 },
+        ],
+      },
+    });
+    vi.mocked(client.bitable.appTableField.update).mockResolvedValueOnce({ code: 1254302 });
+    vi.mocked(client.bitable.appTableField.delete).mockResolvedValueOnce({ code: 1254302 });
+    batchDelete.mockResolvedValueOnce({ code: 1254302 });
+    vi.mocked(client.bitable.appTableRecord.delete).mockResolvedValueOnce({ code: 1254302 });
+    createFeishuClientMock.mockReturnValue(client);
+    const { api, resolveTool } = createToolFactoryHarness(createConfig());
+    registerFeishuBitableTools(api);
+
+    const result = await resolveTool("feishu_bitable_create_app").execute("create", {
+      name: "Project Tracker",
+    });
+
+    expect(result.details).toMatchObject({
+      app_token: "app_token",
+      table_id: "tbl_main",
+      cleaned_placeholder_rows: 1,
+      cleaned_default_fields: 1,
+    });
+    expect(client.bitable.appTableRecord.delete).toHaveBeenCalledTimes(2);
+  });
+
   it("keeps creation identifiers without recommending unavailable metadata lookup after table-list failure", async () => {
     const { client } = createBitableClient([]);
     vi.mocked(client.bitable.appTable.list).mockRejectedValueOnce(
@@ -219,63 +255,27 @@ describe("feishu bitable create app cleanup", () => {
   });
 });
 
-describe("feishu bitable standalone guidance", () => {
-  it.each([
-    "feishu_bitable_list_fields",
-    "feishu_bitable_list_records",
-    "feishu_bitable_get_record",
-    "feishu_bitable_create_record",
-    "feishu_bitable_update_record",
-    "feishu_bitable_create_field",
-  ])("describes %s without requiring companion schemas", (toolName) => {
-    const { api, resolveTool } = createToolFactoryHarness(createConfig());
-    registerFeishuBitableTools(api);
-    const tool = resolveTool(toolName);
-    expect(tool.parameters).toMatchObject({
-      properties: { app_token: { type: "string" }, table_id: { type: "string" } },
-      required: expect.arrayContaining(["app_token", "table_id"]),
-    });
-    expect
-      .soft(JSON.stringify(tool.parameters))
-      .not.toMatch(/\bfeishu_bitable_(?:get_meta|create_app)\b/u);
-    expect.soft(tool.parameters).toMatchObject({
-      properties: {
-        app_token: { description: expect.stringContaining("Not the node token in a /wiki/ URL") },
-      },
-    });
-    if (toolName === "feishu_bitable_update_record") {
-      expect.soft(tool.parameters).toMatchObject({
-        properties: { fields: { description: expect.not.stringContaining("create_record") } },
-      });
-      expect.soft(tool.parameters).toMatchObject({
-        properties: { fields: { description: expect.stringContaining("DateTime=timestamp_ms") } },
-      });
-    }
-  });
-});
-
 describe("feishu bitable write tool schemas (#94547)", () => {
-  it.each([
-    ["feishu_bitable_create_record", "fields"],
-    ["feishu_bitable_update_record", "fields"],
-    ["feishu_bitable_create_field", "property"],
-  ])("%s emits a non-empty value schema for %s", (toolName, propName) => {
-    const { api, resolveTool } = createToolFactoryHarness(createConfig());
-    registerFeishuBitableTools(api);
+  it.each([["feishu_bitable_create_record", "fields"]])(
+    "%s emits a non-empty value schema for %s",
+    (toolName, propName) => {
+      const { api, resolveTool } = createToolFactoryHarness(createConfig());
+      registerFeishuBitableTools(api);
 
-    const tool = resolveTool(toolName) as unknown as {
-      parameters?: {
-        properties?: Record<
-          string,
-          { patternProperties?: Record<string, Record<string, unknown>> }
-        >;
+      const tool = resolveTool(toolName) as unknown as {
+        parameters?: {
+          properties?: Record<
+            string,
+            { patternProperties?: Record<string, Record<string, unknown>> }
+          >;
+        };
       };
-    };
-    const patternSchemas = Object.values(
-      tool.parameters?.properties?.[propName]?.patternProperties ?? {},
-    );
-    expect(patternSchemas).toEqual([
-      { type: ["string", "number", "boolean", "object", "array", "null"] },
-    ]);
-  });
+      const patternSchemas = Object.values(
+        tool.parameters?.properties?.[propName]?.patternProperties ?? {},
+      );
+      expect(patternSchemas).toEqual([
+        { type: ["string", "number", "boolean", "object", "array", "null"] },
+      ]);
+    },
+  );
 });

@@ -15,9 +15,13 @@ export async function selectDevicePlacementCandidates(params: {
   environmentService: object | undefined;
   requirement: DevicePlacementRequirement | undefined;
   runtimeId: string;
+  executionMode: "worker-turn" | "remote-exec";
   config: OpenClawConfig;
   getPendingDispatchCount?: (deviceId: string) => number;
-  getAdmittedSessionCounts?: () => ReadonlyMap<string, number> | undefined;
+  getAdmittedSessionCounts?: () =>
+    | ReadonlyMap<string, number>
+    | undefined
+    | Promise<ReadonlyMap<string, number> | undefined>;
 }): Promise<DevicePlacementSelection> {
   const { requirement } = params;
   if (!requirement) {
@@ -70,6 +74,7 @@ export async function selectDevicePlacementCandidates(params: {
           environmentService: params.environmentService,
           deviceId,
           runtimeId: params.runtimeId,
+          executionMode: params.executionMode,
           requirement,
           config: params.config,
           currentNode: params.nodeRegistry.get(deviceId),
@@ -82,13 +87,13 @@ export async function selectDevicePlacementCandidates(params: {
                 0,
                 eligibility.availableSlots - (params.getPendingDispatchCount?.(deviceId) ?? 0),
               )
-            : (node.workerSlots?.available ?? 0),
+            : 0,
           eligibility,
         };
       }),
   );
   const admittedSessions = requirement.consumesWorkerSlot
-    ? params.getAdmittedSessionCounts?.()
+    ? await params.getAdmittedSessionCounts?.()
     : undefined;
   const candidates = attempts
     .filter(
@@ -114,6 +119,15 @@ export async function selectDevicePlacementCandidates(params: {
   if (attempts.length === 0 && outdatedError) {
     return { ok: false, error: outdatedError };
   }
+  const updateRequired = attempts.find(({ eligibility }) => !eligibility.ok && eligibility.issue);
+  if (updateRequired && !updateRequired.eligibility.ok) {
+    return { ok: false, error: updateRequired.eligibility.error };
+  }
+  // Live eligibility owns the refusal; stale inventory cannot prove capacity.
+  const failed = attempts.find(({ eligibility }) => !eligibility.ok);
+  if (failed && !failed.eligibility.ok) {
+    return { ok: false, error: failed.eligibility.error };
+  }
   const atCapacity =
     requirement.consumesWorkerSlot && attempts.every(({ availableSlots }) => availableSlots === 0);
   if (atCapacity) {
@@ -125,12 +139,9 @@ export async function selectDevicePlacementCandidates(params: {
       )}`,
     };
   }
-  const failed = attempts.find(({ eligibility }) => !eligibility.ok);
   return {
     ok: false,
     error:
-      failed && !failed.eligibility.ok
-        ? failed.eligibility.error
-        : "no paired session-host node supports this runtime; check node commands and reconnect an eligible host",
+      "no paired session-host node supports this runtime; check node commands and reconnect an eligible host",
   };
 }

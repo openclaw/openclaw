@@ -2,6 +2,7 @@ import { html, nothing } from "lit";
 import { property } from "lit/decorators.js";
 import type { ControlUiEnvironment } from "../../../src/gateway/control-ui-bootstrap-contract.js";
 import { t } from "../i18n/index.ts";
+import { renderHoverMarquee } from "../lib/hover-marquee.ts";
 import { IdentityAvatarController } from "../lib/identity-avatar-loader.ts";
 import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
 import { icons } from "./icons.ts";
@@ -24,7 +25,7 @@ class SidebarAgentCard extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) switcherAvailable = false;
   @property({ attribute: false }) onToggleMenu?: (trigger: HTMLElement) => void;
   @property({ attribute: false })
-  onMenuPointerEnter?: (trigger: HTMLElement, event: PointerEvent) => void;
+  onMenuPointerMove?: (trigger: HTMLElement, event: PointerEvent) => void;
   @property({ attribute: false }) onMenuPointerLeave?: () => void;
 
   private readonly avatarLoader = new IdentityAvatarController(this);
@@ -48,9 +49,9 @@ class SidebarAgentCard extends OpenClawLightDomContentsElement {
           aria-haspopup="menu"
           aria-expanded=${String(this.menuOpen)}
           aria-label="${this.agentName} · ${menuLabel}"
-          @pointerenter=${(event: PointerEvent) => {
+          @pointermove=${(event: PointerEvent) => {
             if (this.switcherAvailable && event.currentTarget instanceof HTMLElement) {
-              this.onMenuPointerEnter?.(event.currentTarget, event);
+              this.onMenuPointerMove?.(event.currentTarget, event);
             }
           }}
           @pointerleave=${() => this.onMenuPointerLeave?.()}
@@ -84,7 +85,7 @@ class SidebarAgentCard extends OpenClawLightDomContentsElement {
           </span>
           <span class="sidebar-agent-card__text">
             <span class="sidebar-agent-card__name">
-              <span class="sidebar-agent-card__name-text">${this.agentName}</span>
+              ${renderHoverMarquee(this.agentName, "sidebar-agent-card__name-text", { loop: true, delay: 300, speed: 35 })}
               <span class="sidebar-agent-card__chevron" aria-hidden="true"
                 >${icons.chevronsUpDown}</span
               >

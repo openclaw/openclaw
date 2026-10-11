@@ -4,10 +4,10 @@ import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import type { OpenClawConfig } from "./types.js";
 import {
-  type PreparedConfigValidationPluginMetadata,
   validateConfigObjectWithPlugins,
   validateConfigObjectWithPluginsAsync,
 } from "./validation.js";
+import type { PreparedConfigValidationPluginMetadata } from "./validation.types.js";
 
 const env = {
   HOME: "/fixture/home",
@@ -106,12 +106,16 @@ describe("async config plugin validation", () => {
     }
   });
 
-  it.each(["full", "skip", "core-only"] as const)(
-    "keeps synchronous %s policy and legacy ownership results",
+  it.each(["full", "core-only"] as const)(
+    "keeps synchronous %s policy and explicit ownership results",
     async (pluginValidation) => {
       const metadata = preparedMetadata();
       const raw = {
-        agents: { entries: { main: { default: true }, ops: {} } },
+        agents: {
+          ownership: "explicit",
+          defaults: { systemAgent: { agentId: "main" } },
+          entries: { main: {}, ops: {} },
+        },
         plugins: {
           allow: ["validation-fixture"],
           entries: { "validation-fixture": { enabled: true, config: {} } },

@@ -1,10 +1,11 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach } from "vitest";
 import { gatewayOriginScope } from "../../packages/gateway-client/src/gateway-origin-scope.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { storeOriginDeviceToken } from "../infra/device-auth-store.js";
+import { seedOriginDeviceToken } from "../infra/device-auth-store.test-support.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
@@ -27,6 +28,18 @@ export async function prepareGatewayCliFixture(
   await fs.mkdir(stateDir, { recursive: true });
   await fs.writeFile(configPath, JSON.stringify({ gateway }));
   return { stateDir, configPath };
+}
+
+// Establish SQLite coordination files before asserting byte-for-byte RPC non-mutation.
+export function prepareSharedStateReadArtifacts(stateDir: string): void {
+  const database = new DatabaseSync(path.join(stateDir, "state", "openclaw.sqlite"), {
+    readOnly: true,
+  });
+  try {
+    database.prepare("PRAGMA schema_version").get();
+  } finally {
+    database.close();
+  }
 }
 
 export async function snapshotDirectoryContents(root: string): Promise<Record<string, string>> {
@@ -84,7 +97,7 @@ export async function prepareUnreachableGatewayCliFixture(params: {
       OPENCLAW_STATE_DIR: stateDir,
     };
     const identity = loadOrCreateDeviceIdentity({ env: stateEnv });
-    storeOriginDeviceToken({
+    seedOriginDeviceToken({
       gatewayScope: gatewayOriginScope(UNREACHABLE_GATEWAY_URL),
       deviceId: identity.deviceId,
       role: "operator",
@@ -93,6 +106,7 @@ export async function prepareUnreachableGatewayCliFixture(params: {
       env: stateEnv,
     });
     closeOpenClawStateDatabaseForTest();
+    prepareSharedStateReadArtifacts(stateDir);
   }
   return { root, stateDir, configPath };
 }

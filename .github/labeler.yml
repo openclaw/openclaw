@@ -25,6 +25,11 @@
           - "docs/nodes/camera.md"
           - "docs/nodes/location-command.md"
           - "docs/platforms/linux.md"
+"plugin: code-mode-quickjs":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/code-mode-quickjs/**"
+          - "docs/plugins/reference/code-mode-quickjs.md"
 "plugin: cua-computer":
   - changed-files:
       - any-glob-to-any-file:
@@ -34,6 +39,18 @@
       - any-glob-to-any-file:
           - "extensions/pixverse/**"
           - "docs/providers/pixverse.md"
+"plugin: typesafe":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/typesafe/**"
+          - "docs/plugins/typesafe.md"
+          - "docs/plugins/reference/typesafe.md"
+"plugin: onnx":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/onnx/**"
+          - "docs/plugins/onnx.md"
+          - "docs/plugins/reference/onnx.md"
 "channel: a2a":
   - changed-files:
       - any-glob-to-any-file:
@@ -77,6 +94,13 @@
       - any-glob-to-any-file:
           - "extensions/imap/**"
           - "docs/automation/imap.md"
+"plugin: facetime":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/facetime/**"
+          - "docs/plugins/facetime.md"
+          - "docs/plugins/facetime-recovery.md"
+          - "docs/plugins/reference/facetime.md"
 "plugin: google-meet":
   - changed-files:
       - any-glob-to-any-file:
@@ -90,6 +114,12 @@
           - "extensions/teams-meetings/**"
           - "docs/plugins/teams-meetings.md"
           - "docs/plugins/reference/teams-meetings.md"
+"plugin: slack-huddles":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/slack-huddles/**"
+          - "docs/plugins/slack-huddles.md"
+          - "docs/plugins/reference/slack-huddles.md"
 "plugin: zoom":
   - changed-files:
       - any-glob-to-any-file:
@@ -257,6 +287,12 @@
       - any-glob-to-any-file:
           - "extensions/whatsapp/**"
           - "docs/channels/whatsapp.md"
+"channel: x":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/x/**"
+          - "docs/channels/x.md"
+          - "docs/plugins/reference/x.md"
 "channel: zalo":
   - changed-files:
       - any-glob-to-any-file:
@@ -319,14 +355,6 @@
           - "packages/gateway-protocol/src/**"
           - "src/daemon/**"
           - "docs/gateway/**"
-
-"fleet":
-  - changed-files:
-      - any-glob-to-any-file:
-          - "src/fleet/**"
-          - "src/cli/fleet-cli/**"
-          - "docs/gateway/multi-tenant-hosting.md"
-          - "docs/cli/fleet.md"
 
 "docs":
   - changed-files:
@@ -464,10 +492,6 @@
           - "extensions/onepassword/**"
           - "docs/plugins/onepassword.md"
           - "docs/plugins/reference/onepassword.md"
-"extensions: webhooks":
-  - changed-files:
-      - any-glob-to-any-file:
-          - "extensions/webhooks/**"
 "extensions: web-readability":
   - changed-files:
       - any-glob-to-any-file:
@@ -562,6 +586,11 @@
           - "extensions/anthropic/**"
           - "docs/providers/anthropic.md"
           - "docs/plugins/reference/anthropic.md"
+"extensions: cloudflare":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/cloudflare/**"
+          - "docs/plugins/cloudflare.md"
 "extensions: cloudflare-ai-gateway":
   - changed-files:
       - any-glob-to-any-file:
@@ -611,10 +640,15 @@
       - any-glob-to-any-file:
           - "extensions/litellm/**"
           - "docs/providers/litellm.md"
+"extensions: agentsapi":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/agentsapi/**"
 "extensions: openai":
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/openai/**"
+          - "docs/providers/openai/authentication.md"
 "extensions: codex":
   - changed-files:
       - any-glob-to-any-file:
@@ -632,6 +666,12 @@
           - "extensions/copilot/**"
           - "docs/plugins/copilot.md"
           - "docs/plugins/reference/copilot.md"
+"extensions: kie":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/kie/**"
+          - "docs/providers/kie.md"
+          - "docs/plugins/reference/kie.md"
 "extensions: kimi-coding":
   - changed-files:
       - any-glob-to-any-file:
@@ -777,6 +817,12 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/anthropic-vertex/**"
+"extensions: apple-fm":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/apple-fm/**"
+          - "docs/plugins/apple-fm.md"
+          - "docs/plugins/reference/apple-fm.md"
 "extensions: brave":
   - changed-files:
       - any-glob-to-any-file:
@@ -819,6 +865,11 @@
           - "extensions/fireworks/**"
           - "docs/providers/fireworks.md"
           - "docs/plugins/reference/fireworks.md"
+"extensions: github":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/github/**"
+          - "docs/plugins/github.md"
 "extensions: github-copilot":
   - changed-files:
       - any-glob-to-any-file:

@@ -4,9 +4,11 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginChannelCatalogEntry } from "../../plugins/channel-catalog-registry.js";
+import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import {
   collectBundledChannelPackageStateLoadFailures,
   hasBundledChannelPackageState,
+  hasBundledChannelPackageStateAsync,
   listBundledChannelIdsForPackageState,
 } from "./package-state-probes.js";
 
@@ -72,6 +74,96 @@ afterEach(() => {
 });
 
 describe("channel package-state probes", () => {
+  it("awaits the selected async checker and never retries a refusal through the sync checker", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-package-state-async-"));
+    tempDirs.push(root);
+    fs.writeFileSync(
+      path.join(root, "auth-presence.js"),
+      [
+        "module.exports.hasState = () => { throw new Error('sync checker must not run'); };",
+        "module.exports.hasStateAsync = async ({ env }) => {",
+        "  if (env.REFUSE) throw new Error('owner refused');",
+        "  return env.HAS_STATE === 'yes';",
+        "};",
+      ].join("\n"),
+    );
+    listChannelCatalogEntriesMock.mockReturnValue([
+      {
+        pluginId: "fixture",
+        origin: "bundled",
+        rootDir: root,
+        channel: {
+          id: "fixture",
+          persistedAuthState: {
+            specifier: "./auth-presence",
+            exportName: "hasState",
+            exportNameAsync: "hasStateAsync",
+          },
+        },
+      } satisfies PluginChannelCatalogEntry,
+    ]);
+    const probe = (env: NodeJS.ProcessEnv) =>
+      hasBundledChannelPackageStateAsync({
+        metadataKey: "persistedAuthState",
+        channelId: "fixture",
+        cfg: {},
+        env,
+      });
+    await expect(probe({ HAS_STATE: "yes" })).resolves.toBe(true);
+    await expect(probe({ HAS_STATE: "no" })).resolves.toBe(false);
+    await expect(probe({ REFUSE: "yes" })).rejects.toThrow("owner refused");
+  });
+
+  it.each(["plugin-state", undefined, "future-store"])(
+    "preserves checker loading and newly created state for backing store %s",
+    (backingStore) => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-presence-prerequisite-"));
+      tempDirs.push(root);
+      const pluginRoot = path.join(root, "extensions", "fixture");
+      const marker = path.join(root, "loaded");
+      const env = { OPENCLAW_STATE_DIR: path.join(root, "state") };
+      const database = resolveOpenClawStateSqlitePath(env);
+      fs.mkdirSync(pluginRoot, { recursive: true });
+      fs.writeFileSync(
+        path.join(pluginRoot, "auth-presence.js"),
+        [
+          `const fs = require("node:fs");`,
+          `fs.writeFileSync(${JSON.stringify(marker)}, "loaded");`,
+          `module.exports.hasState = () => fs.existsSync(${JSON.stringify(database)});`,
+        ].join("\n"),
+      );
+      listChannelCatalogEntriesMock.mockReturnValue([
+        {
+          pluginId: "fixture",
+          origin: "bundled",
+          rootDir: pluginRoot,
+          channel: {
+            id: "fixture",
+            persistedAuthState: {
+              specifier: "./auth-presence",
+              exportName: "hasState",
+              backingStore,
+            },
+          },
+        },
+      ]);
+      const probe = () =>
+        hasBundledChannelPackageState({
+          metadataKey: "persistedAuthState",
+          channelId: "fixture",
+          cfg: {},
+          env,
+        });
+      expect(probe()).toBe(false);
+      expect(fs.existsSync(database)).toBe(false);
+      expect(fs.existsSync(marker)).toBe(backingStore !== "plugin-state");
+      fs.mkdirSync(path.dirname(database), { recursive: true });
+      fs.writeFileSync(database, "existing fixture; checker owns interpretation");
+      expect(probe()).toBe(true);
+      expect(fs.readFileSync(marker, "utf8")).toBe("loaded");
+    },
+  );
+
   it("uses channel ids when manifest plugin ids differ", () => {
     listChannelCatalogEntriesMock.mockReturnValue([
       makeBundledChannelCatalogEntry({

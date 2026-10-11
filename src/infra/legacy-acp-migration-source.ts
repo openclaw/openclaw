@@ -46,8 +46,13 @@ export function prepareLegacyAcpMigrationSource(params: {
   sessionId?: string;
   lifecycleRevision?: string;
   meta: SessionAcpMeta;
+  sourceEntry?: Pick<SessionEntry, "sessionId" | "sessionStartedAt" | "updatedAt">;
 }): LegacyAcpMigrationSource {
-  const serialized = stableStringify({ ...sourceBinding(params), meta: params.meta });
+  const serialized = stableStringify({
+    ...sourceBinding(params),
+    meta: params.meta,
+    ...(params.sourceEntry ? { sourceEntry: params.sourceEntry } : {}),
+  });
   return {
     sourcePath: path.resolve(params.sourcePath),
     sourceSessionKey: params.sourceSessionKey.trim(),
