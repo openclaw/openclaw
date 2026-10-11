@@ -37,6 +37,7 @@ import {
 } from "../agents/tools/gateway-caller-context.js";
 import { loadSessionEntryReadOnly } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { onAgentEvent } from "../infra/agent-events.js";
 import * as backoff from "../infra/backoff.js";
 import { requestHeartbeatAndWait } from "../infra/heartbeat-wake.js";
 import { extractTextFromChatContent } from "../shared/chat-content.js";
@@ -310,6 +311,12 @@ describe("sessions_spawn model fallback through the Gateway", () => {
       const home = await setupGatewayTempHome({ prefix: "openclaw-spawn-fallback-" });
       let provider: Awaited<ReturnType<typeof startProvider>> | undefined;
       let gateway: Awaited<ReturnType<typeof startGatewayWithClient>> | undefined;
+      const lifecycleErrors: unknown[] = [];
+      const unsubscribe = onAgentEvent((event) => {
+        if (event.stream === "lifecycle" && event.data.phase === "error") {
+          lifecycleErrors.push({ runId: event.runId, ...event.data });
+        }
+      });
       await runQaGatewayFixture(
         async () => {
           provider = await startProvider(scenario);
@@ -521,9 +528,10 @@ describe("sessions_spawn model fallback through the Gateway", () => {
           const childRequests = provider.requests
             .slice(requestOffset)
             .filter((request) => request.child);
-          expect(terminal.status, JSON.stringify({ terminal, requests: provider.requests })).toBe(
-            scenario.backup ? "ok" : "error",
-          );
+          expect(
+            terminal.status,
+            JSON.stringify({ terminal, requests: provider.requests, lifecycleErrors }),
+          ).toBe(scenario.backup ? "ok" : "error");
           expect(entry?.modelOverrideSource).toBe(scenario.model ? "user" : "auto");
           if (!scenario.model && !scenario.inherited) {
             expect(entry).toMatchObject({
@@ -571,6 +579,7 @@ describe("sessions_spawn model fallback through the Gateway", () => {
         () => provider?.stop(),
         () => removeGatewayTempHome(home.tempHome),
         () => home.envSnapshot.restore(),
+        unsubscribe,
         resetGatewayTestState,
       );
     },

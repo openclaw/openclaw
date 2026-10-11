@@ -28,6 +28,8 @@ import {
   resolveSharedAuthStorePath as resolveSharedAuthPath,
 } from "./path-resolve.js";
 import { materializePreparedPersonalAuthProfile } from "./personal-profiles.js";
+import { readAuthProfileStoreInWorker } from "./runtime-read.worker.js";
+import { getWorkerAuthProfileWrites } from "./runtime-scope.js";
 import { createEmptyAuthProfileStore } from "./runtime-snapshot-owner.js";
 import { runtimeAuthProfileRowsCache } from "./runtime-snapshots.js";
 import { resolveSharedMainAuthAgentDir } from "./shared-main-dir.js";
@@ -226,6 +228,21 @@ export function createAuthProfileStoreRuntimeReader({
       ...scopedOptions,
       inheritedAuthDir,
     });
+    const worker = getWorkerAuthProfileWrites();
+    if (worker) {
+      return readAuthProfileStoreInWorker(
+        {
+          worker,
+          env,
+          effectiveAgentDir,
+          options: capturedOptions,
+          scope,
+          loadAuthProfileStoreForAgent,
+          loadRuntimeAuthProfileStore,
+        },
+        consume,
+      );
+    }
     const profileId = capturedOptions.profileId;
     const personalProfileId =
       !scope.isolated && profileId && isUserModelAuthProfileId(profileId) ? profileId : undefined;

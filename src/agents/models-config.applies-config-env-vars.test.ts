@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import { createConfigRuntimeEnv } from "../config/env-vars.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import * as authProfileStoreRuntime from "./auth-profiles/store-runtime.js";
 import { unsetEnv, withTempEnv } from "./models-config.e2e-harness.js";
 import { planModelsJsonForTest } from "./models-config.plan.test-support.js";
 import * as modelsConfigProviders from "./models-config.providers.js";
@@ -73,11 +74,13 @@ function provider(overrides: Partial<ProviderConfig> = {}): ProviderConfig {
   };
 }
 async function generate(params: Partial<Parameters<typeof planModelsJsonForTest>[0]> = {}) {
+  const authStore = params.authStore ?? { version: 1, profiles: {} };
+  vi.spyOn(authProfileStoreRuntime, "ensureAuthProfileStoreAsync").mockResolvedValue(authStore);
   const plan = await planModelsJsonForTest({
     cfg: { models: { providers: {} } },
     agentDir: "/tmp/openclaw-models-config-env-vars-test",
     env: {},
-    authStore: { version: 1, profiles: {} },
+    authStore,
     ...params,
   });
   if (plan.action !== "write") {

@@ -3861,8 +3861,8 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       await runBasicAgentCommand();
 
       expect(state.clearSessionAuthProfileOverrideMock).toHaveBeenCalledTimes(preserve ? 0 : 1);
-      const { ensureAuthProfileStore } = await import("./auth-profiles/store-runtime.js");
-      expect(ensureAuthProfileStore).toHaveBeenCalledWith(
+      const { ensureAuthProfileStoreAsync } = await import("./auth-profiles/store-runtime.js");
+      expect(ensureAuthProfileStoreAsync).toHaveBeenCalledWith(
         "/tmp/agent",
         expect.objectContaining({ profileId, allowKeychainPrompt: false }),
       );
