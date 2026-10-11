@@ -3,7 +3,7 @@ import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { describe, expect, it, vi } from "vitest";
 import { openWarmImageStore } from "./crabbox-state.test-support.js";
-import { commandResult } from "./crabbox-worker-provider.test-support.js";
+import { destroyAndWait, commandResult } from "./crabbox-worker-provider.test-support.js";
 import type { WarmProfileRecord } from "./crabbox-worker-warm-image-store.js";
 import {
   createWarmProvider,
@@ -74,7 +74,7 @@ describe("Crabbox idle image maintenance", () => {
       const record = retainedColdProfile(now - age);
       store.register("retained", record);
 
-      await provider.destroy({
+      await destroyAndWait(provider, {
         leaseId: "cbx_retained",
         profile: { ...PROFILE, warmImage: false },
       });

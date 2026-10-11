@@ -8,8 +8,10 @@ import {
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { SessionAcpMeta } from "../../config/sessions/types.js";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
+import type { AdmissionOperations } from "../../infra/sqlite-database-admission.worker.test-support.js";
 import { admitSqliteSchema, runSqliteReadOperationSync } from "../../infra/sqlite-schema-facts.js";
 import { extractSqliteTableSchema } from "../../infra/sqlite-schema-sql.js";
+import { SqliteWorkerBroker } from "../../infra/sqlite-worker-broker.js";
 import {
   closeRetainedOpenClawStateReadConnections,
   withOpenClawStateReadOnlyLocation,
@@ -86,8 +88,9 @@ function fixture() {
   return { writer, pathname, read };
 }
 
-it("reuses admitted ACP rows while observing foreign inserts, updates and deletion on the next read", () => {
-  const { writer, read } = fixture();
+it("reuses admitted ACP rows until writer-worker settlement without freshness probes", async () => {
+  const { writer, pathname, read } = fixture();
+  const broker = new SqliteWorkerBroker();
   expect(read().rows).toEqual([null]);
   expect(read().rows).toEqual([null]);
   const observation = observeSqliteReadSql(StatementSync.prototype);
@@ -110,13 +113,30 @@ it("reuses admitted ACP rows while observing foreign inserts, updates and deleti
       read({ ...command, entries: [{ keys: [key], entry: { sessionId: "successor" } }] }).rows,
     ).toEqual([null]);
     expect(metadataReads()).toHaveLength(1);
-    writer.prepare("UPDATE acp_sessions SET runtime_session_name = 'second'").run();
+    const store = await broker.open<AdmissionOperations>({
+      moduleUrl: new URL(
+        "../../infra/sqlite-database-admission.worker.test-support.ts",
+        import.meta.url,
+      ),
+      databasePath: pathname,
+      input: undefined,
+    });
+    const mutate = (sql: string) =>
+      broker.runOperation(store!, (scope) =>
+        scope.execute({
+          type: "writeRows",
+          input: { sql },
+        }),
+      );
+    await mutate("UPDATE acp_sessions SET runtime_session_name = 'second'");
     expect(read().rows[0]).toMatchObject({ runtime_session_name: "second" });
-    writer.prepare("DELETE FROM acp_sessions").run();
+    await mutate("DELETE FROM acp_sessions");
     expect(read().rows).toEqual([null]);
     expect(metadataReads()).toHaveLength(3);
+    expect(observation.queries.filter((sql) => /data_version/iu.test(sql))).toEqual([]);
   } finally {
     observation.restore();
+    await broker.close();
   }
 });
 

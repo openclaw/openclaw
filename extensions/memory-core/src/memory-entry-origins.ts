@@ -18,6 +18,7 @@ import {
   type MemoryOriginDeletion,
   type MemoryOriginRecord,
 } from "./memory-entry-origins-task.js";
+import { captureMemoryMutationAuthority } from "./memory-mutation-authority.js";
 import { extractPromotionKeys } from "./short-term-promotion-memory-write.js";
 
 export type { MemoryEntryOrigin };
@@ -135,10 +136,14 @@ export async function recordMemoryEntryOrigins(
       observedAt: origin.observedAt,
     })),
   };
-  return executeOriginCommand(captureMemoryAgentDatabaseOptions(params.agentId), {
-    type: "record",
-    input,
-  });
+  return executeOriginCommand(
+    captureMemoryAgentDatabaseOptions(params.agentId),
+    {
+      type: "record",
+      input,
+    },
+    captureMemoryMutationAuthority(),
+  );
 }
 
 async function deleteMemoryEntryOrigins(

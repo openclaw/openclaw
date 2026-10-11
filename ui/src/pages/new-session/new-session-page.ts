@@ -31,10 +31,11 @@ import type { SidebarContent } from "../chat/components/chat-sidebar-content-typ
 import { renderWelcomeState } from "../chat/components/chat-welcome.ts";
 import * as catalog from "./catalog-target.ts";
 import { NewSessionDictationControl } from "./composer-dictation-control.ts";
+import { renderNewSessionComposer } from "./composer.ts";
 import { ConnectMachineSetupState } from "./connect-machine-dialog.ts";
+import { isWorktreeNameValid } from "./create-params.ts";
 import { renderCreationComposer } from "./creation-composer-render.ts";
-import { renderNewSessionBody } from "./draft-body.ts";
-import { renderNewSessionDraftComposer, renderNewSessionDraftErrors } from "./draft-composer.ts";
+import { renderDraftError, renderNewSessionBody } from "./draft-body.ts";
 import { NewSessionDraftController } from "./draft-controller.ts";
 import type { DraftGatewayState } from "./draft-gateway-state.ts";
 import {
@@ -104,10 +105,6 @@ export class NewSessionPage extends OpenClawLightDomElement {
   };
   @state() private imageLightbox: ImageLightboxItem | null = null;
   @state() private agentPickerOpen = false;
-  private readonly groupRouteRevalidation = new catalog.GroupRouteRevalidation(
-    () => this.data,
-    () => this.context?.revalidate("new-session"),
-  );
   private readonly draft: NewSessionDraftController;
   private readonly gateway: DraftGatewayState;
   private readonly browser: DraftPlaceBrowser;
@@ -198,10 +195,7 @@ export class NewSessionPage extends OpenClawLightDomElement {
       .watchStore(() => this.context?.theme)
       .watchStore(() => this.context?.agents)
       .watchStore(() => this.context?.agentIdentity)
-      .watchStore(
-        () => this.context?.sessions,
-        (sessions) => this.groupRouteRevalidation.synchronize(sessions),
-      )
+      .watchStore(() => this.context?.sessions)
       .watchStore(() => this.context?.placementStartup)
       .watchStore(() => this.context?.runtimeConfig)
       .watch(
@@ -416,6 +410,7 @@ export class NewSessionPage extends OpenClawLightDomElement {
     const preferences = context?.theme.settings;
     const voiceControl = dictation.render(draftOwnerKey, preferences?.realtimeTalkInputDeviceId);
     const dictationLocked = dictation.active;
+    const worktreeNameInvalid = place.worktree && !isWorktreeNameValid(place.worktreeName);
     return html`
       <div
         class="new-session-page__draft"
@@ -432,8 +427,34 @@ export class NewSessionPage extends OpenClawLightDomElement {
           titlePreparation.setComposing(false);
         }}
       >
-        ${this.renderTargetBar()} ${renderNewSessionDraftErrors(place, submission, isCatalogTarget)}
-        ${renderNewSessionDraftComposer({
+        ${this.renderTargetBar()}
+        ${worktreeNameInvalid ? renderDraftError(t("newSession.worktreeNameInvalid")) : nothing}
+        ${
+          isCatalogTarget && capabilities.toolOverrides
+            ? renderDraftError(t("newSession.terminalCapabilityOverridesUnsupported"), {
+                label: t("common.reset"),
+                onClick: () => capabilities.setToolOverrides(null),
+              })
+            : nothing
+        }
+        ${
+          submission.submissionOutcomeUnknown
+            ? renderDraftError(
+                t(
+                  submission.submissionOutcomeUnknown === "gateway-changed"
+                    ? "newSession.createOutcomeUnknown"
+                    : "newSession.placementSetupInterrupted",
+                ),
+                submission.pendingPlacement.sessionKey
+                  ? {
+                      label: t("common.reset"),
+                      onClick: () => submission.clearPendingPlacementRecovery(),
+                    }
+                  : undefined,
+              )
+            : nothing
+        }
+        ${renderNewSessionComposer({
           agent: place.selectedAgent(),
           agentId: place.agentId,
           attachmentDraft: submission.attachmentDraft,

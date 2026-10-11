@@ -7,7 +7,7 @@ import { buildConversationIdentity } from "../config/sessions/conversation-ident
 import {
   listConversations,
   registerConversationAddresses,
-  resolveConversationRegistryScope,
+  prepareConversationRegistryScope,
 } from "../config/sessions/conversation-registry.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveOutboundSessionRoute } from "../infra/outbound/outbound-session.js";
@@ -88,7 +88,7 @@ afterEach(async () => {
   tempDirs.cleanup();
 });
 
-function createConversationStore(channels: OpenClawConfig["channels"]) {
+async function createConversationStore(channels: OpenClawConfig["channels"]) {
   const stateDir = tempDirs.make("channel-conversation-list-");
   vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
   const storePath = path.join(stateDir, "main.sqlite");
@@ -98,7 +98,7 @@ function createConversationStore(channels: OpenClawConfig["channels"]) {
     channels,
     session: { store: storePath },
   };
-  return { config, scope: resolveConversationRegistryScope({ config, agentId: "main" }) };
+  return { config, scope: await prepareConversationRegistryScope({ config, agentId: "main" }) };
 }
 
 const deps = {
@@ -110,7 +110,7 @@ const deps = {
 
 describe("conversation listings after removing accounts", () => {
   it("lists live conversations across channels and preserves retired history", async () => {
-    const { config, scope } = createConversationStore({
+    const { config, scope } = await createConversationStore({
       matrix: { accounts: { [LIVE_ACCOUNT_ID]: {} } },
       telegram: { accounts: { [LIVE_ACCOUNT_ID]: {} } },
       slack: { accounts: { [LIVE_ACCOUNT_ID]: {} } },
@@ -147,7 +147,7 @@ describe("conversation listings after removing accounts", () => {
   });
 
   it("searches the active Discord account and preserves inactive history", async () => {
-    const { config, scope } = createConversationStore({
+    const { config, scope } = await createConversationStore({
       discord: { accounts: { [LIVE_ACCOUNT_ID]: {} } },
     });
     const identities = ["retired-one", "retired-two", LIVE_ACCOUNT_ID].map((accountId) =>

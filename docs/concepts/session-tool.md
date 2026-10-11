@@ -177,7 +177,7 @@ In Code Mode, the conversation tools reuse their exact Gateway output contracts.
 
 ### Communication preferences
 
-Open **Session settings** in the session menu to choose **Always**, **Ask**, or
+Open **Advanced** in the session menu to choose **Always**, **Ask**, or
 **Never** for **Send messages** and **Receive messages**. Ask presents a pending
 question to an authorized human in the Control UI before new peer input is admitted.
 A refused or expired request does not start work. Requested replies and

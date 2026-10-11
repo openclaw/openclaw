@@ -102,7 +102,7 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
   ].map((testFile): PolicyTestWatch => ({
     testFile,
     watchGlobs: [
-      "src/gateway/worker-environments/placement-dispatch-store.worker.ts",
+      "src/gateway/worker-environments/placement-lifecycle.worker.ts",
       "src/gateway/worker-environments/placement-turn-claims.worker.ts",
     ],
   })),

@@ -466,12 +466,7 @@ async function startReconcileWorkerTask(
           },
           {
             inputBytes,
-            transferList: (task) => [
-              task.port,
-              ...(task.coordination?.reconciliation
-                ? [task.coordination.reconciliation.admission]
-                : []),
-            ],
+            transferList: (task) => [task.port],
             signal: controller.signal,
           },
         ),

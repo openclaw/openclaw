@@ -4,7 +4,6 @@ import path from "node:path";
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { withTempDir } from "openclaw/plugin-sdk/test-env";
-import { SemVer } from "semver";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocketServer, type RawData } from "ws";
 import { createCodexAppServerAgentHarness } from "../../harness.js";
@@ -24,6 +23,7 @@ import { registerSharedClientIdleTests } from "./shared-client-idle.test-support
 import { registerSharedClientInferenceTests } from "./shared-client-inference.test-support.js";
 import { retireSharedCodexAppServerClientsBeforeDesktopGeneration } from "./shared-client-lifecycle.js";
 import { registerSharedClientLifetimeTests } from "./shared-client-lifetime.test-support.js";
+import { registerSharedClientManagedFallbackTests } from "./shared-client-managed-fallback.test-support.js";
 import { registerSharedClientWebSocketStartupTests } from "./shared-client-websocket-startup.test-support.js";
 import { createClientHarness } from "./test-support.js";
 import { CODEX_APP_SERVER_VERSION, MIN_SUPPORTED_CODEX_APP_SERVER_VERSION } from "./version.js";
@@ -772,34 +772,11 @@ describe("shared Codex app-server client", () => {
     expect(pluginLocal.process.stdin.destroyed).toBe(true);
   });
 
-  it("keeps a supported desktop prerelease instead of falling back by version", async () => {
-    const desktop = createClientHarness();
-    const desktopVersion = `${new SemVer(CODEX_APP_SERVER_VERSION).inc("minor").version}-alpha.4`;
-    const startSpy = vi.spyOn(CodexAppServerClient, "start").mockResolvedValueOnce(desktop.client);
-    const startOptions = configureManagedDesktopFallback();
-
-    const acquire = getSharedCodexAppServerClient({ startOptions, timeoutMs: 1_000 });
-    await sendInitializeResult(desktop, `openclaw/${desktopVersion} (macOS; test)`);
-    const client = await acquire;
-
-    expect(client).toBe(desktop.client);
-    expect(startSpy).toHaveBeenCalledTimes(1);
-    expect(startSpy.mock.calls[0]?.[0]).toMatchObject({
-      command: "/Applications/Codex.app/Contents/Resources/codex",
-      commandSource: "resolved-managed",
-      managedFallbackCommandPaths: ["/cache/openclaw/codex"],
-    });
-    expect(desktop.process.stdin.destroyed).toBe(false);
-    expect(mocks.embeddedAgentLog.warn).toHaveBeenCalledExactlyOnceWith(
-      "codex app-server is newer than OpenClaw's managed runtime; continuing with normal startup validation",
-      {
-        detectedVersion: desktopVersion,
-        validatedVersion: CODEX_APP_SERVER_VERSION,
-      },
-    );
-
-    await clearSharedCodexAppServerClientAndWait({ exitTimeoutMs: 25, forceKillDelayMs: 5 });
-    expect(desktop.process.stdin.destroyed).toBe(true);
+  registerSharedClientManagedFallbackTests({
+    configureManagedDesktopFallback,
+    resolveManagedStart: mocks.resolveManagedCodexAppServerStartOptions,
+    sendInitializeResult,
+    warn: mocks.embeddedAgentLog.warn,
   });
 
   it("shares a managed fallback with a waiter that arrives during fallback initialize", async () => {

@@ -223,7 +223,7 @@ describeControlUiE2e("Control UI Models help mocked Gateway E2E", () => {
             exact: true,
           });
           const behaviorTooltip = behaviorButton.locator("..");
-          const group = behaviorRow.locator("wa-radio-group");
+          const group = behaviorRow.getByRole("radiogroup");
           const behaviorTooltipIsOpen = () =>
             behaviorTooltip
               .locator(".tooltip-surface[popover]")
@@ -236,7 +236,9 @@ describeControlUiE2e("Control UI Models help mocked Gateway E2E", () => {
           await expect.poll(() => behaviorTooltip.textContent()).toContain(help.text);
           await behaviorButton.click();
           await expect.poll(behaviorTooltipIsOpen).toBe(true);
-          await expect.poll(() => group.evaluate((node) => Reflect.get(node, "value"))).toBe("");
+          await expect
+            .poll(() => group.locator('input[type="radio"]:checked').inputValue())
+            .toBe("");
           await expect.poll(() => behaviorTooltip.textContent()).toContain(help.defaultText);
           await page.locator(".page-title", { hasText: "Models" }).first().click();
         }

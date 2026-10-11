@@ -248,16 +248,15 @@ export function sendTalkRealtimeRelayAudio(params: {
   const audio = decodeTalkRelayAudioBase64(params.audioBase64, "Realtime relay");
   const turnId = ensureRelayTurn(session);
   session.bridge.sendAudio(audio);
-  broadcastToOwner(session.context, session.connId, {
-    relaySessionId: session.id,
-    type: "inputAudio",
-    byteLength: audio.byteLength,
-    talkEvent: session.harness.talk.emit({
+  broadcastToOwner(
+    session,
+    { type: "inputAudio", byteLength: audio.byteLength },
+    {
       type: "input.audio.delta",
       turnId,
       payload: { byteLength: audio.byteLength },
-    }),
-  });
+    },
+  );
   if (typeof params.timestamp === "number" && Number.isFinite(params.timestamp)) {
     session.bridge.setMediaTimestamp(params.timestamp);
   }
@@ -529,11 +528,10 @@ export function prepareTalkRealtimeRelayAgentControl(
     if (relaySessions.get(session.id) !== session) {
       return finalResult;
     }
-    broadcastToOwner(session.context, session.connId, {
-      relaySessionId: session.id,
-      type: "toolProgress",
-      result: finalResult,
-      talkEvent: session.harness.talk.emit({
+    broadcastToOwner(
+      session,
+      { type: "toolProgress", result: finalResult },
+      {
         type: "tool.progress",
         turnId,
         payload: {
@@ -542,8 +540,8 @@ export function prepareTalkRealtimeRelayAgentControl(
           result: finalResult,
         },
         final: finalResult.mode === "cancel" || finalResult.mode === "status",
-      }),
-    });
+      },
+    );
     return finalResult;
   };
 }

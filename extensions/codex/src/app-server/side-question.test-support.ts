@@ -82,6 +82,7 @@ const baseBindingStore = createCodexTestBindingStore();
 const bindingStore: CodexAppServerBindingStore = {
   ...baseBindingStore,
   read: (...args) => readCodexAppServerBindingMock(...args),
+  readAsync: async (...args) => readCodexAppServerBindingMock(...args),
 };
 
 async function runCodexAppServerSideQuestion(

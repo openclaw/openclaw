@@ -19,18 +19,23 @@ import {
 } from "../sessions/user-turn-transcript.js";
 import type { AssistantErrorTranscript } from "./assistant-error-transcript.js";
 import { isMidTurnPrecheckAssistantError } from "./embedded-agent-runner/run/midturn-precheck.js";
-import { resolveLiveToolResultMaxChars } from "./embedded-agent-runner/tool-result-truncation.js";
+import { readPersistedImageBlockFactIndexes } from "./embedded-agent-runner/run/prompt-image-metadata.js";
+import {
+  resolveLiveToolResultMaxChars,
+  truncateToolResultMessage,
+} from "./embedded-agent-runner/tool-result-truncation.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "./harness/hook-helpers.js";
 import { projectAgentHarnessTranscriptMessageForDisplay } from "./harness/transcript-visibility.js";
 import type { EmbeddedRunTrigger } from "./run-trigger.js";
 import type { AgentMessage } from "./runtime/index.js";
 import { installSessionToolResultGuard } from "./session-tool-result-guard.js";
+import { resolveMaxToolResultChars } from "./session-tool-result-guard.payload.js";
 import type { SessionManager } from "./sessions/index.js";
 import type {
   CompactionAppendPersistence,
   CompactionAppendPersistenceAsync,
 } from "./sessions/session-compaction-persistence.js";
-import { setSessionToolTextPreparer } from "./sessions/session-tool-result-redaction.js";
+import { setSessionToolResultPreparer } from "./sessions/session-tool-result-redaction.js";
 import {
   copyCodeModeSourceAppend,
   type CodeModeSourceAppend,
@@ -64,6 +69,30 @@ type GuardedSessionManager = SessionManager &
       },
     ) => void;
   };
+
+function publishPersistedUserEnvelope(
+  runtime: PersistedUserTurnMessage | undefined,
+  persisted: PersistedUserTurnMessage,
+): void {
+  // Admission can freeze an unchanged input when it is already storage-canonical.
+  if (!runtime || runtime === persisted || Object.isFrozen(runtime)) {
+    return;
+  }
+  // Publish once, before model transforms. Replay must use the same envelope;
+  // runtime content and non-enumerable media/steering facts remain prepared.
+  const content = runtime.content;
+  const imageFactIndexes = readPersistedImageBlockFactIndexes(runtime);
+  for (const key of Object.keys(runtime)) {
+    Reflect.deleteProperty(runtime, key);
+  }
+  Object.assign(runtime, persisted, { content });
+  if (imageFactIndexes) {
+    runtime["__openclaw"] = {
+      ...runtime["__openclaw"],
+      mediaImageBlockFactIndexes: imageFactIndexes,
+    };
+  }
+}
 
 /**
  * Apply the tool-result guard to a SessionManager exactly once and expose
@@ -253,6 +282,12 @@ export function guardSessionManager(
       }
     : undefined;
 
+  const maxToolResultChars = resolveMaxToolResultChars({
+    maxToolResultChars:
+      typeof opts?.contextWindowTokens === "number"
+        ? resolveLiveToolResultMaxChars({ contextWindowTokens: opts.contextWindowTokens })
+        : undefined,
+  });
   const guard = installSessionToolResultGuard(sessionManager, {
     sessionKey: opts?.sessionKey,
     agentId: opts?.agentId,
@@ -303,12 +338,7 @@ export function guardSessionManager(
     allowedToolNames: opts?.allowedToolNames,
     beforeMessageWriteHook: beforeMessageWrite,
     config: opts?.config,
-    maxToolResultChars:
-      typeof opts?.contextWindowTokens === "number"
-        ? resolveLiveToolResultMaxChars({
-            contextWindowTokens: opts.contextWindowTokens,
-          })
-        : undefined,
+    maxToolResultChars,
     // Compaction may have removed the admitted user from model context. If the
     // prompt reinjects it, keep it model-only; a different queued input clears this above.
     suppressNextUserMessagePersistence: opts?.suppressNextUserMessagePersistence,
@@ -320,6 +350,7 @@ export function guardSessionManager(
     onUserMessagePersisted: async (message, persistence) => {
       const runtimeMessage = runtimeUserMessageByPersistedMessage.get(message);
       runtimeUserMessageByPersistedMessage.delete(message);
+      publishPersistedUserEnvelope(runtimeMessage, persistence.persistedMessage);
       const recorder = takeRuntimeUserTurnTranscriptRecorder(message);
       recorder?.markRuntimePersisted(persistence.persistedMessage, persistence.anchor, {
         appended: persistence.appended,
@@ -329,13 +360,22 @@ export function guardSessionManager(
     onUserMessagePersistenceSuppressed: async (message) => {
       const runtimeMessage = runtimeUserMessageByPersistedMessage.get(message);
       runtimeUserMessageByPersistedMessage.delete(message);
+      const recorder = takeRuntimeUserTurnTranscriptRecorder(message);
+      publishPersistedUserEnvelope(
+        runtimeMessage,
+        recorder?.getPersistedMessage?.() ??
+          preparedUserTurnTranscriptRecorder?.getPersistedMessage?.() ??
+          message,
+      );
       await opts?.onUserMessagePersistenceSuppressed?.(message, runtimeMessage);
     },
     onUserMessageBlocked: opts?.onUserMessageBlocked,
   });
-  setSessionToolTextPreparer(guardedSessionManager, (block) =>
-    prepareModelVisibleToolTextBlock(block, resolveTranscriptLoggingConfig(opts?.config)),
-  );
+  setSessionToolResultPreparer(guardedSessionManager, {
+    prepareText: (block) =>
+      prepareModelVisibleToolTextBlock(block, resolveTranscriptLoggingConfig(opts?.config)),
+    cap: (message) => truncateToolResultMessage(message, maxToolResultChars),
+  });
   guardedSessionManager.hasPendingToolResults = guard.hasPendingToolResults;
   guardedSessionManager.flushPendingToolResults = guard.flushPendingToolResults;
   guardedSessionManager.flushPendingToolResultsAsync = guard.flushPendingToolResultsAsync;

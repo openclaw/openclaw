@@ -213,7 +213,9 @@ describe("renderSkills", () => {
     await Promise.resolve();
 
     expect(
-      container.querySelector<HTMLElement>("wa-switch.settings-toggle")?.hasAttribute("disabled"),
+      container
+        .querySelector<HTMLInputElement>("input.settings-toggle__input")
+        ?.hasAttribute("disabled"),
     ).toBe(true);
     const install = [...container.querySelectorAll<HTMLButtonElement>("button")].find(
       (button) => normalizeText(button) === "Install skill-cli",
@@ -270,12 +272,12 @@ describe("renderSkills", () => {
     expect(refresh?.disabled).toBe(true);
     expect(
       Array.from(
-        container.querySelectorAll<HTMLElement & { disabled: boolean }>(
-          "wa-switch.settings-toggle",
-        ),
+        container.querySelectorAll<HTMLInputElement>("input.settings-toggle__input"),
       ).every((toggle) => toggle.hasAttribute("disabled")),
     ).toBe(true);
-    expect(container.querySelectorAll(".plugins-item wa-switch")).toHaveLength(0);
+    expect(container.querySelectorAll(".plugins-item input.settings-toggle__input")).toHaveLength(
+      0,
+    );
     expect(container.querySelector<HTMLInputElement>('input[type="password"]')?.disabled).toBe(
       true,
     );
@@ -286,7 +288,9 @@ describe("renderSkills", () => {
     expect(mutationButtons.every((button) => button.disabled)).toBe(true);
 
     refresh?.click();
-    for (const toggle of container.querySelectorAll<HTMLElement>("wa-switch.settings-toggle")) {
+    for (const toggle of container.querySelectorAll<HTMLInputElement>(
+      "input.settings-toggle__input",
+    )) {
       toggle.click();
     }
     for (const button of mutationButtons) {

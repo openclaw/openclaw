@@ -77,7 +77,7 @@ persistence finish; it does not admit a new run.
 Completion waits retire with their original registry database during shutdown.
 Late cleanup recovery leaves retained state for the next Gateway instead of
 retrying against a closed store. Failed writes with an unknown outcome still
-report an error and remain fenced until recovery reads the canonical state.
+report an error and remain fenced until recovery reads the stored state.
 
 After a Gateway restart, the parent owns continuation of the user's task.
 Interrupted sub-agents are finalized through their normal completion path instead

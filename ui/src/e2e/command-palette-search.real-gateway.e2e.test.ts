@@ -596,6 +596,11 @@ suite.define(() => {
             pane.locator(".chat-thread"),
           ]);
 
+          // Category membership spans accessible owners, beyond the default Mine scope.
+          await page
+            .locator(".sidebar-navigation-scope")
+            .getByRole("button", { name: "All", exact: true })
+            .click();
           const otherKey = "agent:fifth:search-roster-4";
           await page
             .locator(

@@ -18,7 +18,7 @@ import { projectSessionTree } from "./app-sidebar-session-tree.ts";
 import type { SidebarRecentSession, SidebarSessionAttention } from "./app-sidebar-session-types.ts";
 import { renderTeamSessionSlots } from "./session-attention-presentation.ts";
 
-it("admits only plugin parents by default and preserves an explicitly pinned child's position", () => {
+it("does not manufacture personal pins from plugin defaults", () => {
   const pluginNavigation = [
     { id: "boards", label: "Boards", page: { id: "boards" } },
     { id: "child", parent: "boards", label: "Child", page: { id: "child" } },
@@ -37,8 +37,7 @@ it("admits only plugin parents by default and preserves an explicitly pinned chi
       rows: [],
     });
   const initial = reconcile(["route:usage"]);
-  expect(initial.sidebarEntries).toEqual(["route:usage", "plugin:example/boards"]);
-  expect([...initial.defaultPluginNavigationKeys]).toEqual(["example/boards"]);
+  expect(initial.sidebarEntries).toEqual(["route:usage"]);
   const pinned = ["plugin:example/child", ...initial.sidebarEntries];
   expect(reconcile(pinned).sidebarEntries).toEqual(pinned);
   expect(reconcile(pinned).entries[0]).toEqual({ type: "plugin", key: "example/child" });

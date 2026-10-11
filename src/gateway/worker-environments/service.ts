@@ -43,7 +43,7 @@ import type {
   WorkerEnvironmentRecord,
   WorkerEnvironmentTransitionPatch as TransitionPatch,
 } from "./store.js";
-import { joinWorkerTunnelStops } from "./tunnel-contract.js";
+import { joinWorkerTunnelStops, WorkerTunnelOwnerDisconnectedError } from "./tunnel-contract.js";
 import { createWorkerTurnRpc } from "./worker-turn-rpc.js";
 
 export function createWorkerEnvironmentService(options: WorkerEnvironmentServiceOptions) {
@@ -464,7 +464,13 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
         options.nodePortalCarrier?.stopAll(),
       ]);
     } catch (error) {
-      failures.push(error);
+      if (error instanceof WorkerTunnelOwnerDisconnectedError) {
+        // An unreachable machine cannot be stopped now; its durable attachment keeps the
+        // physical stop for reconnect or provider teardown, so restart must not fail on it.
+        warn(`Worker environment stop deferred during Gateway shutdown: ${error.message}`);
+      } else {
+        failures.push(error);
+      }
     } finally {
       // Tunnel failures cannot release shutdown before admitted owner-bound operations drain.
       const reconciliation = reconcileInFlight;

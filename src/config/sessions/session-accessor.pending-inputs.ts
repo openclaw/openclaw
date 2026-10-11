@@ -507,29 +507,6 @@ async function stagePreparedPendingInput(
     }
     const inputId = existing?.input_id ?? randomUUID();
     const assertAdmittedCurrent = options.assertAdmittedCurrent ?? options.assertCurrent;
-    owner = {
-      agentId: scope.agentId,
-      databaseAgentId: store.databaseAgentId,
-      inputId,
-      transcriptInputId: inputId,
-      sessionId: scope.sessionId,
-      sessionKey: store.sessionKey,
-      databasePath: store.path,
-      workerDatabasePath: store.workerDatabasePath,
-      idempotencyKey: identity.idempotencyKey,
-      lifecycleGeneration,
-      messageJson,
-      config: options.config,
-      assertCurrent: () => {
-        store.assertCurrent();
-        scope.incognito?.actor.assertCurrent();
-        scope.incognito?.authority.assertCurrent();
-        assertAdmittedCurrent();
-      },
-      authority: options.authority,
-      ...(existing ? { restartRecovered: true as const } : {}),
-      finish,
-    };
     await store.mutate(
       {
         ...settlementIdentity(),
@@ -552,12 +529,46 @@ async function stagePreparedPendingInput(
           () => {
             options.assertCurrent();
             assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
-            registerSessionPendingInputOwner(owner!);
+            const staged = facts?.receipt.stagedInput;
+            if (!staged) {
+              throw new SessionPendingInputCustodyError(
+                "Pending input omitted its committed postimage",
+              );
+            }
+            owner = {
+              agentId: scope.agentId,
+              databaseAgentId: store.databaseAgentId,
+              inputId: staged.input_id,
+              transcriptInputId: staged.input_id,
+              sessionId: scope.sessionId,
+              sessionKey: store.sessionKey,
+              databasePath: store.path,
+              workerDatabasePath: store.workerDatabasePath,
+              idempotencyKey: identity.idempotencyKey,
+              lifecycleGeneration,
+              messageJson: staged.message_json,
+              config: options.config,
+              assertCurrent: () => {
+                store.assertCurrent();
+                scope.incognito?.actor.assertCurrent();
+                scope.incognito?.authority.assertCurrent();
+                assertAdmittedCurrent();
+              },
+              authority: options.authority,
+              ...(existing ? { restartRecovered: true as const } : {}),
+              finish,
+            };
+            registerSessionPendingInputOwner(owner);
           },
           assertSourceCurrent,
         );
       },
     );
+    if (!owner) {
+      throw new SessionPendingInputCustodyError(
+        "Pending input did not publish its committed owner",
+      );
+    }
     retained = true;
     return Object.assign(ownerReceipt(owner), completionMethods);
   } finally {

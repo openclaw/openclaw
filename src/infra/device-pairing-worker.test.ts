@@ -1,4 +1,3 @@
-import { DatabaseSync } from "node:sqlite";
 import { afterAll, beforeAll, beforeEach, expect, test, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db-cache.js";
@@ -30,6 +29,7 @@ import {
   updatePairedDeviceMetadata,
 } from "./device-pairing.js";
 import * as queries from "./kysely-sync.js";
+import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { sqliteWorkerOwnerProbe as probe } from "./sqlite-worker-owner-probe.test-support.js";
 
 let baseDir: string;
@@ -203,18 +203,18 @@ test("rolls back owner approval when live policy is revoked before worker commit
   );
 });
 
-test("refreshes cached reads after another connection replaces pairing authority", async () => {
+test("refreshes cached reads after a sibling owner replaces pairing authority", async () => {
   await expect(getPairedDevice("paired-rich", baseDir)).resolves.toMatchObject({
     publicKey: "synthetic-original-key",
   });
   await listDevicePairing(baseDir);
-  const other = new DatabaseSync(database.path);
+  const other = openNodeSqliteDatabase(database.path);
   try {
     other
       .prepare(
         "UPDATE device_pairing_paired SET public_key = ?, display_name = ? WHERE device_id = ?",
       )
-      .run("synthetic-external-key", "External fixture", "paired-rich");
+      .run("synthetic-sibling-key", "Sibling fixture", "paired-rich");
   } finally {
     other.close();
   }
@@ -303,15 +303,15 @@ test("reconnects without replacing paired rows or changing unrelated device fiel
   }
 });
 
-test("reconnect receipts ignore pending rows while invalidating foreign pairing changes", async () => {
+test("reconnect receipts ignore pending rows while invalidating sibling pairing changes", async () => {
   await listDevicePairing(baseDir);
   const previousBinding = getPublishedPairedDeviceBinding("paired-rich", baseDir);
   expect(previousBinding).not.toBeNull();
-  const other = new DatabaseSync(database.path);
+  const other = openNodeSqliteDatabase(database.path);
   try {
     other
       .prepare("UPDATE device_pairing_paired SET public_key = ? WHERE device_id = ?")
-      .run("synthetic-foreign-key", "paired-rich");
+      .run("synthetic-sibling-key", "paired-rich");
     // A receipt must not decode unrelated pending requests.
     other
       .prepare("UPDATE device_pairing_pending SET roles_json = ? WHERE request_id = ?")

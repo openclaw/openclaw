@@ -1,4 +1,3 @@
-import { realpathSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { loadTranscriptEventsSync } from "openclaw/plugin-sdk/session-store-runtime";
@@ -30,7 +29,9 @@ import {
   readRuntimeToolCoverageMetadata,
 } from "./runtime-tool-metadata.js";
 import {
+  canonicalWorkspacePath,
   formatCodexNativeWorkspaceDetails,
+  readOptionalUtf8,
   runCodexNativeWorkspaceFixture,
 } from "./runtime-tool-native-workspace.js";
 import * as searchEvidence from "./runtime-tool-search-evidence.js";
@@ -119,16 +120,6 @@ function formatRuntimePatchFailureOutput(request: QaRuntimeToolFixtureRequest): 
   return JSON.stringify({ text, structuredError: request.toolOutputStructuredError === true });
 }
 
-function canonicalRuntimePatchPath(workspaceDir: string, filePath: string): string {
-  const resolvedPath = path.resolve(workspaceDir, filePath);
-  try {
-    // Native patch paths resolve platform aliases after the target leaf is removed.
-    return path.join(realpathSync.native(path.dirname(resolvedPath)), path.basename(resolvedPath));
-  } catch {
-    return resolvedPath;
-  }
-}
-
 function matchesRuntimePatchInput(
   input: unknown,
   operation: "add" | "update",
@@ -152,10 +143,10 @@ function matchesRuntimePatchInput(
   if (
     fileHeaders.length !== 1 ||
     !fileHeaders[0]?.startsWith(expectedHeaderPrefix) ||
-    canonicalRuntimePatchPath(
+    canonicalWorkspacePath(
       patchWorkingDirectory,
       fileHeaders[0].slice(expectedHeaderPrefix.length),
-    ) !== canonicalRuntimePatchPath(workspaceDir, expectedPath)
+    ) !== canonicalWorkspacePath(workspaceDir, expectedPath)
   ) {
     return false;
   }
@@ -213,8 +204,8 @@ function matchesRuntimePatchArguments(params: {
       : path.resolve(params.workspaceDir, "..", RUNTIME_PATCH_DENIED_FILENAME);
   return (
     operation === params.operation &&
-    canonicalRuntimePatchPath(params.workspaceDir, change.path) ===
-      canonicalRuntimePatchPath(params.workspaceDir, expectedPath)
+    canonicalWorkspacePath(params.workspaceDir, change.path) ===
+      canonicalWorkspacePath(params.workspaceDir, expectedPath)
   );
 }
 
@@ -264,14 +255,13 @@ async function formatRuntimePatchMutationDiagnostics(params: {
   deps: QaRuntimeToolFixtureDeps;
   requestCursor: number;
 }) {
-  const workspaceEntries = await fs
-    .readdir(params.env.gateway.workspaceDir)
-    .then((entries) => entries.toSorted().slice(0, 16))
-    .catch(() => [] as string[]);
-  const tempRootEntries = await fs
-    .readdir(params.env.gateway.tempRoot)
-    .then((entries) => entries.toSorted().slice(0, 16))
-    .catch(() => [] as string[]);
+  const readDirectoryEntries = (directory: string) =>
+    fs
+      .readdir(directory)
+      .then((entries) => entries.toSorted().slice(0, 16))
+      .catch(() => [] as string[]);
+  const workspaceEntries = await readDirectoryEntries(params.env.gateway.workspaceDir);
+  const tempRootEntries = await readDirectoryEntries(params.env.gateway.tempRoot);
   const gatewayPatchLogs = (params.env.gateway.logs?.() ?? "")
     .split(/\r?\n/u)
     .filter((line) =>
@@ -520,6 +510,27 @@ export async function runRuntimeToolFixture(
     throw new QaSuiteScenarioSkipError(withSessionDetails(details));
   };
   const fixtureError = (error: unknown) => runtimeToolFixtureError(error, ...sessionKeys);
+  const assertPatchArguments = (
+    args: unknown,
+    operation: "add" | "update",
+    provider: "live" | "mock",
+  ) => {
+    if (
+      toolName === "apply_patch" &&
+      metadata.required &&
+      !matchesRuntimePatchArguments({ args, workspaceDir: env.gateway.workspaceDir, operation })
+    ) {
+      const target =
+        operation === "add" ? RUNTIME_PATCH_HAPPY_FILENAME : `../${RUNTIME_PATCH_DENIED_FILENAME}`;
+      const details =
+        provider === "live"
+          ? `; observed linked arguments: ${describeRuntimePatchArguments(args)}`
+          : "";
+      throw fixtureError(
+        new Error(`expected linked ${provider} apply_patch to ${operation} ${target}${details}`),
+      );
+    }
+  };
   const failFixture: (details: string) => never = (details) => {
     if (isRecord(config.knownHarnessGap)) {
       skipFixture(formatKnownHarnessGapDetails(toolName, config));
@@ -608,21 +619,14 @@ export async function runRuntimeToolFixture(
       return runHappyPrompt();
     }
     const happyPatchPath = path.join(env.gateway.workspaceDir, RUNTIME_PATCH_HAPPY_FILENAME);
-    const readHappyPatchContents = async () =>
-      fs.readFile(happyPatchPath, "utf8").catch((error: unknown) => {
-        if (isRecord(error) && error.code === "ENOENT") {
-          return undefined;
-        }
-        throw error;
-      });
-    if ((await readHappyPatchContents()) !== undefined) {
+    if ((await readOptionalUtf8(happyPatchPath)) !== undefined) {
       throw new Error(
         `apply_patch happy-path target already exists: ${RUNTIME_PATCH_HAPPY_FILENAME}`,
       );
     }
     try {
       const result = await runHappyPrompt();
-      if ((await readHappyPatchContents()) !== RUNTIME_PATCH_HAPPY_CONTENTS) {
+      if ((await readOptionalUtf8(happyPatchPath)) !== RUNTIME_PATCH_HAPPY_CONTENTS) {
         const diagnostics = await formatRuntimePatchMutationDiagnostics({
           env,
           deps,
@@ -696,21 +700,7 @@ export async function runRuntimeToolFixture(
     if (happyRequest.outputRequest?.hardFailure) {
       failFixture(`expected live happy-path successful tool output for ${toolName}`);
     }
-    if (
-      toolName === "apply_patch" &&
-      metadata.required &&
-      !matchesRuntimePatchArguments({
-        args: happyRequest.executedRequest?.args,
-        workspaceDir: env.gateway.workspaceDir,
-        operation: "add",
-      })
-    ) {
-      throw fixtureError(
-        new Error(
-          `expected linked live apply_patch to add ${RUNTIME_PATCH_HAPPY_FILENAME}; observed linked arguments: ${describeRuntimePatchArguments(happyRequest.executedRequest?.args)}`,
-        ),
-      );
-    }
+    assertPatchArguments(happyRequest.executedRequest?.args, "add", "live");
     const failureRequest = await runFixtureOperation(() =>
       readLiveToolEvidence({
         env,
@@ -728,21 +718,7 @@ export async function runRuntimeToolFixture(
     if (!failureRequest.failureOutputRequest) {
       failFixture(`expected live failure-path tool failure output for ${toolName}`);
     }
-    if (
-      toolName === "apply_patch" &&
-      metadata.required &&
-      !matchesRuntimePatchArguments({
-        args: failureRequest.executedRequest?.args,
-        workspaceDir: env.gateway.workspaceDir,
-        operation: "update",
-      })
-    ) {
-      throw fixtureError(
-        new Error(
-          `expected linked live apply_patch to update ../${RUNTIME_PATCH_DENIED_FILENAME}; observed linked arguments: ${describeRuntimePatchArguments(failureRequest.executedRequest?.args)}`,
-        ),
-      );
-    }
+    assertPatchArguments(failureRequest.executedRequest?.args, "update", "live");
     if (
       toolName === "apply_patch" &&
       !isWorkspaceBoundaryFailureToolOutput(failureRequest.failureOutputRequest?.text)
@@ -842,19 +818,7 @@ export async function runRuntimeToolFixture(
   if (requestHasHappyPathFailureToolOutput(happyRequest.outputRequest)) {
     failFixture(`expected mock happy-path successful tool output for ${toolName}`);
   }
-  if (
-    toolName === "apply_patch" &&
-    metadata.required &&
-    !matchesRuntimePatchArguments({
-      args: happyRequest.plannedRequest.plannedToolArgs,
-      workspaceDir: env.gateway.workspaceDir,
-      operation: "add",
-    })
-  ) {
-    throw fixtureError(
-      new Error(`expected linked mock apply_patch to add ${RUNTIME_PATCH_HAPPY_FILENAME}`),
-    );
-  }
+  assertPatchArguments(happyRequest.plannedRequest.plannedToolArgs, "add", "mock");
   if (!failureRequest) {
     if (dynamicExposureIntentionallyExcluded && !requireCodexNativePatchCoverage) {
       skipFixture(
@@ -882,19 +846,7 @@ export async function runRuntimeToolFixture(
       `expected mock failure-path tool failure output for ${toolName}${patchFailureDiagnostics}`,
     );
   }
-  if (
-    toolName === "apply_patch" &&
-    metadata.required &&
-    !matchesRuntimePatchArguments({
-      args: failureRequest.plannedRequest.plannedToolArgs,
-      workspaceDir: env.gateway.workspaceDir,
-      operation: "update",
-    })
-  ) {
-    throw fixtureError(
-      new Error(`expected linked mock apply_patch to update ../${RUNTIME_PATCH_DENIED_FILENAME}`),
-    );
-  }
+  assertPatchArguments(failureRequest.plannedRequest.plannedToolArgs, "update", "mock");
   if (
     toolName === "apply_patch" &&
     !isWorkspaceBoundaryFailureToolOutput(failureRequest.outputRequest.toolOutput)

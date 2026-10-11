@@ -31,10 +31,7 @@ async function closeIdentityMenu(page: Page, sidebar: Locator) {
 
 async function assertSingleAccountTarget(page: Page, sidebar: Locator) {
   const identity = sidebar.locator(".sidebar-identity-card");
-  const parts = [
-    identity.locator("openclaw-viewer-avatar"),
-    identity.locator(".sidebar-identity-card__name"),
-  ];
+  const parts = [identity.locator("openclaw-viewer-avatar"), identity];
   for (const part of parts) {
     await part.click();
     await expect.poll(() => sidebar.locator("wa-dropdown.sidebar-identity-menu").count()).toBe(1);
@@ -42,11 +39,25 @@ async function assertSingleAccountTarget(page: Page, sidebar: Locator) {
   }
 }
 
-async function assertIdentityMenuContract(sidebar: Locator, menu: Locator) {
+async function assertIdentityMenuContract(menu: Locator) {
   expect(await menu.locator('wa-dropdown-item[value="command:recent-activity"]').count()).toBe(0);
   expect(
     await menu.evaluate((dropdown) => dropdown.closest("openclaw-menu-surface") !== null),
   ).toBe(false);
+}
+
+async function expectRailConnectionStatus(footer: Locator, kind: string, label: string) {
+  const identity = footer.locator(".sidebar-identity-card");
+  await expect.poll(() => identity.getAttribute("data-connection-status")).toBe(kind);
+  expect(await identity.isVisible()).toBe(true);
+  expect(await identity.getAttribute("aria-label")).toBe(
+    `Identity and app menu for Riley: ${label}`,
+  );
+  expect(await identity.getAttribute("title")).toBe(`Identity and app menu for Riley: ${label}`);
+  const lifecycle = footer.locator(":scope > [role=status]");
+  expect(await lifecycle.count()).toBe(1);
+  expect(await lifecycle.textContent()).toBe(label);
+  expect(await identity.getByRole("status").count()).toBe(0);
 }
 
 async function runAccountFooterProof(
@@ -75,7 +86,7 @@ async function runAccountFooterProof(
     const menu = sidebar.locator("wa-dropdown.sidebar-identity-menu");
     const menuSurface = menu.locator('[part="menu"]');
     await menu.waitFor();
-    await assertIdentityMenuContract(sidebar, menu);
+    await assertIdentityMenuContract(menu);
 
     const buildLabel = (
       await menu.getByRole("menuitem", { name: "Control UI build details" }).textContent()
@@ -189,7 +200,7 @@ const suite = createSidebarFooterProofSuite(
 );
 
 suite.define(() => {
-  it("shows one lifecycle subtitle and retries through the account menu", async () => {
+  it("labels the lifecycle status on the account icon and retries through its menu", async () => {
     const opened = await openSidebarFooterProofPage(suite, {
       ...gatewayBuild,
       awaitInitialRoster: false,
@@ -201,9 +212,12 @@ suite.define(() => {
       await setSidebarProofTheme(page, "dark");
       await page.emulateMedia({ colorScheme: "dark", reducedMotion: "reduce" });
       await waitForControlUiGatewayReady(page);
-      await expect
-        .poll(() => footer.locator(".gateway-status__label").textContent())
-        .toBe("Suspended");
+      await expectRailConnectionStatus(footer, "suspended", "Suspended");
+      const inbox = footer.locator("openclaw-sidebar-attention");
+      expect(await inbox.getByRole("status").count()).toBe(1);
+      expect(await inbox.getByRole("status").textContent()).toBe(
+        await inbox.locator(".sidebar-issues-button").getAttribute("aria-label"),
+      );
       await gateway.emitGatewayEvent("gateway.suspension", { phase: "accepting" });
       await expect.poll(() => footer.locator(".gateway-status").count()).toBe(0);
 
@@ -211,9 +225,13 @@ suite.define(() => {
         ["preparing", "Suspending…"],
         ["draining", "Suspending…"],
         ["prepared", "Suspended"],
-      ]) {
+      ] as const) {
         await gateway.emitGatewayEvent("gateway.suspension", { phase });
-        await expect.poll(() => footer.locator(".gateway-status__label").textContent()).toBe(label);
+        await expectRailConnectionStatus(
+          footer,
+          phase === "prepared" ? "suspended" : "suspending",
+          label,
+        );
         await captureUnionProof(
           suite,
           page,
@@ -238,17 +256,11 @@ suite.define(() => {
       await page.locator(".settings-sidebar__back").click();
       await sidebar.waitFor();
       await gateway.emitGatewayEvent("gateway.suspension", { phase: "prepared" });
-      await expect
-        .poll(() => footer.locator(".gateway-status__label").textContent())
-        .toBe("Suspended");
+      await expectRailConnectionStatus(footer, "suspended", "Suspended");
 
       await gateway.setOnline(false);
-      const reconnecting = footer.locator(".gateway-status--reconnecting");
-      await reconnecting.waitFor({ state: "visible", timeout: 10_000 });
+      await expectRailConnectionStatus(footer, "reconnecting", "Reconnecting…");
       expect(await footer.locator(".gateway-status").count()).toBe(1);
-      expect(await reconnecting.locator(".gateway-status__label").textContent()).toBe(
-        "Reconnecting…",
-      );
       expect(await footer.getByText("Offline", { exact: true }).count()).toBe(0);
       await expect.poll(() => page.title()).toContain("(Disconnected)");
       await captureUnionProof(suite, page, "sidebar-account-footer", "feature-dark-offline.png", [
@@ -256,7 +268,12 @@ suite.define(() => {
       ]);
 
       const socketCount = await gateway.getSocketCount();
-      await reconnecting.click();
+      await footer
+        .getByRole("button", {
+          name: "Identity and app menu for Riley: Reconnecting…",
+          exact: true,
+        })
+        .click();
       const retry = sidebar.locator('wa-dropdown-item[value="command:retry-connect"]');
       await retry.waitFor();
       await retry.click();
@@ -265,9 +282,7 @@ suite.define(() => {
         .toBeGreaterThan(socketCount);
 
       await gateway.setOnline(true);
-      await expect
-        .poll(() => footer.locator(".gateway-status__label").textContent())
-        .toBe("Suspended");
+      await expectRailConnectionStatus(footer, "suspended", "Suspended");
       await gateway.emitGatewayEvent("gateway.suspension", { phase: "accepting" });
       await expect
         .poll(() => footer.locator(".gateway-status").count(), { timeout: 10_000 })
@@ -278,9 +293,7 @@ suite.define(() => {
         reason: "gateway restart",
         restartExpectedMs: 5_000,
       });
-      const restarting = footer.locator(".gateway-status--restarting");
-      await restarting.waitFor({ state: "visible" });
-      expect(await restarting.locator(".gateway-status__label").textContent()).toBe("Restarting…");
+      await expectRailConnectionStatus(footer, "restarting", "Restarting…");
       await captureUnionProof(
         suite,
         page,

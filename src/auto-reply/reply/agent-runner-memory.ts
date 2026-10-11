@@ -9,17 +9,14 @@ import { resolveDefaultAgentId } from "../../agents/agent-scope-config.js";
 import { MemoryFlushToolsUnavailableError } from "../../agents/agent-tools.memory-flush.js";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
 import { resolveCliBackendConfig } from "../../agents/cli-backends.js";
-import { estimateMessagesTokens } from "../../agents/compaction.js";
 import { isBenignCompactionSkipResult } from "../../agents/embedded-agent-runner/compact-reasons.js";
 import type { AcceptedCompactionSuccessor } from "../../agents/embedded-agent-runner/compaction-successor.js";
 import { runEmbeddedAgentEntry } from "../../agents/embedded-agent-runner/run-entry.js";
 import { createDeferredEmbeddedRunLifecycleManager } from "../../agents/embedded-agent-runner/run/deferred-lifecycle-owner.js";
-import { createToolResultPromptProjectionState } from "../../agents/embedded-agent-runner/session-prompt-state.js";
 import { findModelInCatalog } from "../../agents/model-catalog-lookup.js";
 import { isCliRuntimeAliasForProvider } from "../../agents/model-runtime-aliases.js";
 import { isCliProvider } from "../../agents/model-selection.js";
 import { resolveContextConfigProviderForRuntime } from "../../agents/openai-routing.js";
-import type { AgentMessage } from "../../agents/runtime/index.js";
 import { resolveSandboxConfigForAgent } from "../../agents/sandbox.js";
 import { withSandboxRuntimeStatusInWorker } from "../../agents/sandbox/runtime-status.js";
 import { createSessionMaintenanceFollowup } from "../../agents/session-maintenance/run.js";
@@ -41,11 +38,6 @@ import {
   updateSessionEntry,
 } from "../../config/sessions/session-accessor.js";
 import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
-import {
-  SQLITE_USAGE_TAIL_MAX_EVENTS,
-  type SessionTranscriptUsageSnapshot,
-} from "../../config/sessions/session-transcript-accounting.types.js";
-import { SessionTranscriptReadFenceError } from "../../config/sessions/session-transcript-read-fence.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   resolveMaxActiveTranscriptBytes,
@@ -62,19 +54,22 @@ import { isIncognitoSessionKey, isUnscopedSessionKeySentinel } from "../../routi
 import { resolveSessionPinnedHarnessId } from "../../sessions/agent-harness-session-key.js";
 import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-turn-transcript.types.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
-import { formatTokenCount } from "../../utils/token-format.js";
 import type { VerboseLevel } from "../thinking.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import {
-  readPreflightTranscriptContextMessages,
+  estimatePromptTokensFromSessionTranscript,
   readSessionLogSnapshot,
+  type TranscriptTokenEstimate,
 } from "./agent-runner-memory-transcript-context.js";
 import { buildRunEntrySelection } from "./agent-runner-run-params.js";
 import {
   buildEmbeddedRunExecutionParams,
   resolveRunThinkingLevelForFallbackCandidate,
 } from "./agent-runner-utils.js";
-import type { CompactionNoticePhase } from "./compaction-notice.js";
+import {
+  resolveCompactionCompletionNotice,
+  type CompactionNoticePhase,
+} from "./compaction-notice.js";
 import {
   buildVisibleMemoryFlushFailure,
   resolveVisibleMemoryFlushErrorPayloads,
@@ -113,9 +108,6 @@ const embeddedAgentRuntimeLoader = createLazyImportLoader(
 );
 const memoryFlushPreparationLoader = createLazyImportLoader(
   () => import("./memory-flush-prepare.js"),
-);
-const toolResultTruncationRuntimeLoader = createLazyImportLoader(
-  () => import("../../agents/embedded-agent-runner/tool-result-truncation.js"),
 );
 
 type FollowupRuntimeParams = {
@@ -195,126 +187,25 @@ function resolveFollowupContextTokens(
   });
 }
 
-function hasUsableProviderPromptUsage(
-  usage: SessionTranscriptUsageSnapshot | undefined,
-): usage is SessionTranscriptUsageSnapshot & { promptTokens: number } {
-  return (
-    typeof usage?.promptTokens === "number" &&
-    Number.isFinite(usage.promptTokens) &&
-    usage.promptTokens > 0
-  );
-}
-
 // Leave room for large assistant outputs when checking near-threshold usage.
 const TRANSCRIPT_OUTPUT_READ_BUFFER_TOKENS = 8192;
 
-type TranscriptTokenEstimate = {
-  promptTokens: number;
-  promptTokenSource:
-    | "provider_usage"
-    | "provider_usage_plus_prompt_projection"
-    | "prompt_projection";
-  outputTokens?: number;
-  promptIncludesOutput?: boolean;
-  transcriptByteSize?: number;
-};
-
-// Fresh totals include the provider usage anchor and any later projected messages.
-async function estimateProviderPromptTokens(
-  messages: AgentMessage[],
-  contextWindowTokens: number,
-  priorPromptTokens = 0,
-): Promise<number | undefined> {
-  if (messages.length === 0) {
-    return Math.ceil(priorPromptTokens);
-  }
-  const { truncateOversizedToolResultsInMessages } = await toolResultTruncationRuntimeLoader.load();
-  // Match first-dispatch trailing-result protection without freezing replacements
-  // owned by the embedded session.
-  const projected = truncateOversizedToolResultsInMessages(
-    messages,
-    contextWindowTokens,
-    undefined,
-    undefined,
-    createToolResultPromptProjectionState(),
-  ).messages;
-  const tokens = estimateMessagesTokens(projected);
-  return Number.isFinite(tokens) && tokens >= 0
-    ? Math.ceil(priorPromptTokens) + Math.ceil(tokens)
-    : undefined;
-}
-
-async function estimatePromptTokensFromSessionTranscript({
-  abortSignal,
-  ...params
-}: Parameters<typeof readPreflightTranscriptContextMessages>[0] & {
-  abortSignal?: AbortSignal;
-  contextWindowTokens: number;
-}): Promise<TranscriptTokenEstimate | undefined> {
-  const sessionId = normalizeOptionalString(params.sessionId);
-  if (!sessionId) {
-    return undefined;
-  }
-  try {
-    const snapshot = await readSessionLogSnapshot({
-      agentId: params.agentId,
-      sessionId,
-      sessionKey: params.sessionKey,
-      storePath: params.storePath,
-      includeByteSize: true,
-      includeUsage: true,
-      abortSignal,
-    });
-    let usage = snapshot.usage;
-    if (
-      !hasUsableProviderPromptUsage(usage) &&
-      typeof snapshot.eventCount === "number" &&
-      snapshot.eventCount > SQLITE_USAGE_TAIL_MAX_EVENTS
-    ) {
-      usage = (
-        await readSessionLogSnapshot({
-          agentId: params.agentId,
-          sessionId,
-          sessionKey: params.sessionKey,
-          storePath: params.storePath,
-          includeByteSize: false,
-          includeUsage: true,
-          usageEventLimit: snapshot.eventCount,
-          abortSignal,
-        })
-      ).usage;
-    }
-    const normalizedOutputTokens =
-      usage?.outputTokens === undefined ? undefined : Math.ceil(usage.outputTokens);
-    const providerUsage = hasUsableProviderPromptUsage(usage) ? usage : undefined;
-    const messages = providerUsage
-      ? providerUsage.trailingMessages
-      : await readPreflightTranscriptContextMessages({ ...params, sessionId }, abortSignal);
-    const promptTokens = await estimateProviderPromptTokens(
-      messages,
-      params.contextWindowTokens,
-      providerUsage?.promptTokens,
-    );
-    if (promptTokens === undefined) {
-      return undefined;
-    }
-    return {
-      promptTokens,
-      promptTokenSource: providerUsage
-        ? messages.length > 0
-          ? "provider_usage_plus_prompt_projection"
-          : "provider_usage"
-        : "prompt_projection",
-      // Full-message estimation already includes assistant content. Preserve
-      // output only for projection against a separate persisted prompt fact.
-      ...(!providerUsage ? { promptIncludesOutput: true } : {}),
-      outputTokens: normalizedOutputTokens,
-      transcriptByteSize: snapshot.byteSize,
-    };
-  } catch (error) {
-    abortSignal?.throwIfAborted();
-    return error instanceof SessionTranscriptReadFenceError ? Promise.reject(error) : undefined;
-  }
+function projectPromptTokens(
+  persistedPromptTokens: number | undefined,
+  promptTokenEstimate: number | undefined,
+  transcript: TranscriptTokenEstimate | undefined,
+): number {
+  const project = (promptTokens: number | undefined, outputTokens: number | undefined) =>
+    typeof promptTokens === "number"
+      ? resolveEffectivePromptTokens(promptTokens, outputTokens, promptTokenEstimate)
+      : 0;
+  return Math.max(
+    project(persistedPromptTokens, transcript?.outputTokens),
+    project(
+      transcript?.promptTokens,
+      transcript?.promptIncludesOutput ? undefined : transcript?.outputTokens,
+    ),
+  );
 }
 
 /** Compacts session context before a reply or after a completed direct command. */
@@ -476,7 +367,7 @@ export async function runSessionCompactionIfNeeded(params: {
       amount: 0,
       expectedSession: entry,
       sessionStore: compactionStore,
-      transcriptByteCompactionLatch: refreshedTranscriptByteCompactionLatch,
+      transcriptByteCompactionLatch: refreshedTranscriptByteCompactionLatch ?? null,
     });
     assertActive();
     if (compactionCount === undefined) {
@@ -502,29 +393,10 @@ export async function runSessionCompactionIfNeeded(params: {
     return entry;
   }
   const transcriptPromptTokens = transcriptUsageTokens?.promptTokens;
-  const transcriptOutputTokens = transcriptUsageTokens?.outputTokens;
-  const transcriptEstimateOutputTokens = transcriptUsageTokens?.promptIncludesOutput
-    ? undefined
-    : transcriptOutputTokens;
-  const usageProjectedTokenCount =
-    typeof transcriptPromptTokens === "number"
-      ? resolveEffectivePromptTokens(
-          transcriptPromptTokens,
-          transcriptEstimateOutputTokens,
-          promptTokenEstimate,
-        )
-      : undefined;
-  const freshProjectedTokenCount =
-    typeof freshPersistedTokens === "number"
-      ? resolveEffectivePromptTokens(
-          freshPersistedTokens,
-          transcriptOutputTokens,
-          promptTokenEstimate,
-        )
-      : undefined;
-  const projectedTokenCount = Math.max(
-    usageProjectedTokenCount ?? 0,
-    freshProjectedTokenCount ?? 0,
+  const projectedTokenCount = projectPromptTokens(
+    freshPersistedTokens,
+    promptTokenEstimate,
+    transcriptUsageTokens,
   );
   const tokenCountForCompaction = asPositiveFiniteNumber(projectedTokenCount);
 
@@ -608,7 +480,7 @@ export async function runSessionCompactionIfNeeded(params: {
       tokensAfter,
       compactionKind,
       expectedSession: acceptedEntry,
-      transcriptByteCompactionLatch,
+      transcriptByteCompactionLatch: transcriptByteCompactionLatch ?? null,
       authorize: () => {
         assertActive();
         return true;
@@ -791,16 +663,11 @@ export async function runSessionCompactionIfNeeded(params: {
       followupRun: params.followupRun,
     });
     assertActive();
-    const serverNotice =
-      result.compactionKind === "server-endpoint" &&
-      typeof result.result?.tokensBefore === "number" &&
-      typeof result.result.tokensAfter === "number"
-        ? `🧹 Server-side compaction complete (${formatTokenCount(result.result.tokensBefore)} → ${formatTokenCount(result.result.tokensAfter)})`
-        : undefined;
-    await notifyCompaction(
-      transcriptByteCompactionLatch ? "context_bounded" : "end",
-      transcriptByteCompactionLatch ? undefined : serverNotice,
+    const notice = resolveCompactionCompletionNotice(
+      result,
+      Boolean(transcriptByteCompactionLatch),
     );
+    await notifyCompaction(notice.phase, notice.text);
     assertActive();
     entry = compactionStore[compactionSessionKey] ?? entry;
     const previousSessionId = params.followupRun.run.sessionId;
@@ -970,17 +837,27 @@ export async function runMemoryFlushIfNeeded(params: {
   const shouldForceFlushByTranscriptSize =
     typeof transcriptByteSize === "number" && transcriptByteSize >= forceFlushTranscriptBytes;
 
-  const transcriptUsageSnapshot = sessionLogSnapshot?.usage;
-  const transcriptOutputTokens = transcriptUsageSnapshot?.outputTokens;
-  const transcriptPromptTokens = hasUsableProviderPromptUsage(transcriptUsageSnapshot)
-    ? await estimateProviderPromptTokens(
-        transcriptUsageSnapshot.trailingMessages,
-        contextWindowTokens,
-        transcriptUsageSnapshot.promptTokens,
-      )
-    : undefined;
+  const transcriptUsageTokens =
+    shouldReadTranscript && entry
+      ? await estimatePromptTokensFromSessionTranscript(
+          {
+            agentId:
+              params.followupRun.run.agentId ??
+              resolveAgentIdFromSessionKey(params.sessionKey ?? params.followupRun.run.sessionKey),
+            sessionId: entry.sessionId,
+            sessionKey: params.sessionKey ?? params.followupRun.run.sessionKey,
+            storePath: params.storePath,
+            contextWindowTokens,
+            abortSignal,
+          },
+          sessionLogSnapshot,
+        )
+      : undefined;
+  const transcriptPromptTokens = transcriptUsageTokens?.promptTokens;
+  const transcriptOutputTokens = transcriptUsageTokens?.outputTokens;
   const shouldPersistTranscriptPromptTokens =
     transcriptPromptTokens !== undefined &&
+    transcriptUsageTokens?.promptTokenSource !== "prompt_projection" &&
     (persistedPromptTokens === undefined || transcriptPromptTokens > persistedPromptTokens);
 
   assertMemoryFlushCurrent();
@@ -1019,15 +896,11 @@ export async function runMemoryFlushIfNeeded(params: {
     }
   }
 
-  const promptTokensSnapshot = Math.max(persistedPromptTokens ?? 0, transcriptPromptTokens ?? 0);
-  const projectedTokenCount =
-    promptTokensSnapshot > 0
-      ? resolveEffectivePromptTokens(
-          promptTokensSnapshot,
-          transcriptOutputTokens,
-          promptTokenEstimate,
-        )
-      : undefined;
+  const projectedTokenCount = projectPromptTokens(
+    asPositiveFiniteNumber(persistedPromptTokens),
+    promptTokenEstimate,
+    transcriptPromptTokens === 0 ? undefined : transcriptUsageTokens,
+  );
   const tokenCountForFlush = asPositiveFiniteNumber(projectedTokenCount);
 
   logVerbose(

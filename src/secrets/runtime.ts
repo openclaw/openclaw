@@ -78,34 +78,24 @@ async function resolveLoadablePluginOrigins(params: {
   return listPluginOriginsFromMetadataSnapshot(params.plugins);
 }
 
-function hasConfiguredPluginEntries(config: OpenClawConfig): boolean {
-  const entries = config.plugins?.entries;
-  return isRecord(entries) && Object.keys(entries).length > 0;
-}
-
-function hasConfiguredChannelEntries(config: OpenClawConfig): boolean {
-  const channels = config.channels;
-  return isRecord(channels) && Object.keys(channels).some((channelId) => channelId !== "defaults");
-}
-
-function hasConfiguredPluginIntegrationSecretProviders(config: OpenClawConfig): boolean {
-  const providers = config.secrets?.providers;
-  if (!isRecord(providers)) {
-    return false;
-  }
-  return Object.values(providers).some(
-    (provider) =>
-      provider?.source === "exec" &&
-      "pluginIntegration" in provider &&
-      provider.pluginIntegration !== undefined,
-  );
-}
-
 function shouldLoadPluginMetadataForSecrets(config: OpenClawConfig): boolean {
+  const entries = config.plugins?.entries;
+  if (isRecord(entries) && Object.keys(entries).length > 0) {
+    return true;
+  }
+  const channels = config.channels;
+  if (isRecord(channels) && Object.keys(channels).some((channelId) => channelId !== "defaults")) {
+    return true;
+  }
+  const providers = config.secrets?.providers;
   return (
-    hasConfiguredPluginEntries(config) ||
-    hasConfiguredChannelEntries(config) ||
-    hasConfiguredPluginIntegrationSecretProviders(config)
+    isRecord(providers) &&
+    Object.values(providers).some(
+      (provider) =>
+        provider?.source === "exec" &&
+        "pluginIntegration" in provider &&
+        provider.pluginIntegration !== undefined,
+    )
   );
 }
 

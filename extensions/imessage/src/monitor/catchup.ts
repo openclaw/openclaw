@@ -38,8 +38,8 @@ export type IMessageCatchupRow = {
 
 export type IMessageCatchupSummary = Awaited<ReturnType<typeof performIMessageCatchup>>;
 
-function openCatchupCursorStore(): PluginStateKeyedStore<IMessageCatchupCursor> {
-  return getIMessageRuntime().state.openKeyedStore<IMessageCatchupCursor>({
+function openCatchupCursorStore(): PluginStateKeyedStore<IMessageCatchupCursor, 2> {
+  return getIMessageRuntime().state.openKeyedStoreV2<IMessageCatchupCursor>({
     namespace: IMESSAGE_CATCHUP_CURSOR_NAMESPACE,
     maxEntries: IMESSAGE_CATCHUP_CURSOR_MAX_ENTRIES,
   });
@@ -140,11 +140,6 @@ async function updateIMessageCatchupCursor(
   ) => PluginStateCompareIntent<IMessageCatchupCursor>,
 ): Promise<boolean> {
   const store = openCatchupCursorStore();
-  if (!store.observe || !store.compareAndApply) {
-    throw new Error(
-      "iMessage catchup cursor persistence requires plugin-state comparison support.",
-    );
-  }
   const key = resolveIMessageCatchupCursorKey(accountId);
   let observation = await store.observe(key);
   for (;;) {

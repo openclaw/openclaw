@@ -1393,112 +1393,29 @@ describe("previous release update compatibility", () => {
     },
   );
 
-  it.each(["source scripts", "different owner", "mutable binding", "dist path", "unknown script"])(
-    "distinguishes source completion contracts from unknown dynamic imports (%s)",
-    (variant) => {
-      const declaration = variant === "mutable binding" ? "let" : "const";
-      const directory = variant === "dist path" ? "dist" : "scripts";
-      const script =
-        variant === "unknown script" ? "unknown.mts" : "stage-bundled-plugin-runtime.mts";
-      const expression = `await (async () => {
-        ${declaration} stagingFile = path.join(root, "${directory}", "${script}");
-        await import(pathToFileURL(stagingFile).href);
-        await import(pathToFileURL(path.join(root, "scripts", "lib", "dist-artifact-ownership.mts")).href);
+  it("records literal dist imports alongside computed package assets", () => {
+    const { inventory } = recordImportedFixture(
+      `await (async () => {
+        await import(pathToFileURL(path.join(root, "node-runtime-recovery.mjs")).href);
+        await import(pathToFileURL(path.join(root, "scripts", "stage-bundled-plugin-runtime.mts")).href);
         return (await import("./surface-abcdefgh.js")).x;
-      })()`;
-      const record = () =>
-        recordImportedFixture(
-          expression,
+      })()`,
+      { "surface-abcdefgh.js": "//#region src/infra/value.ts\nexport const x = 1;\n" },
+    );
+    expect(inventory.releases[0]?.chunks).toEqual([
+      {
+        path: "surface-abcdefgh.js",
+        imports: [
           {
-            "surface-abcdefgh.js": "//#region src/infra/value.ts\nexport const x = 1;\n",
+            importer: "command.js",
+            owner: "src/cli/update-cli/update-command-service-command.ts",
+            exports: ["x"],
           },
-          undefined,
-          variant === "different owner"
-            ? undefined
-            : "src/cli/update-cli/update-command-runtime.ts",
-        );
-      if (variant !== "source scripts") {
-        expect(record).toThrow("Nonliteral post-swap import");
-        return;
-      }
-      expect(record().inventory.releases[0]?.chunks.map((chunk) => chunk.path)).toEqual([
-        "surface-abcdefgh.js",
-      ]);
-    },
-  );
-
-  it.each([
-    { name: "published bootstrap" },
-    { name: "different owner", owner: "src/cli/update-cli/update-command-runtime.ts" },
-    {
-      name: "mutable root",
-      binding: "let driverRoot = resolveOpenClawPackageRootSync({ moduleUrl: import.meta.url });",
-    },
-    { name: "unknown root", binding: "" },
-    { name: "target root", binding: "const driverRoot = root;" },
-    {
-      name: "cwd root",
-      binding: "const driverRoot = resolveOpenClawPackageRootSync({ cwd: process.cwd() });",
-    },
-    {
-      name: "different module",
-      binding: "const driverRoot = resolveOpenClawPackageRootSync({ moduleUrl: targetUrl });",
-    },
-    {
-      name: "extra root options",
-      binding:
-        "const driverRoot = resolveOpenClawPackageRootSync({ moduleUrl: import.meta.url, cwd: root });",
-    },
-    { name: "extra path", target: 'path.join(driverRoot, "node-runtime-recovery.mjs", "extra")' },
-    { name: "dist path", target: 'path.join(driverRoot, "dist", "node-runtime-recovery.mjs")' },
-    { name: "traversal", target: 'path.join(driverRoot, "../node-runtime-recovery.mjs")' },
-    { name: "dynamic path", target: "path.join(driverRoot, entry)" },
-    {
-      name: "different URL form",
-      url: 'new URL("node-runtime-recovery.mjs", import.meta.url).href',
-    },
-    { name: "import options", suffix: ", { with: options }" },
-    { name: "for-of shadow", prefix: "for (const driverRoot of roots) ", declaration: "" },
-    {
-      name: "for initializer shadow",
-      prefix: "for (const driverRoot = root; driverRoot;) ",
-      declaration: "",
-    },
-    { name: "arrow shadow", prefix: "const load = async (driverRoot) => ", declaration: "" },
-  ])(
-    "records dist edges while qualifying the package bootstrap ($name)",
-    ({
-      name,
-      owner = "src/cli/update-cli/update-command-node-runtime-resolution.ts",
-      binding = "const driverRoot = resolveOpenClawPackageRootSync({ moduleUrl: import.meta.url });",
-      target = 'path.join(driverRoot, "node-runtime-recovery.mjs")',
-      url = `pathToFileURL(${target}).href`,
-      suffix = "",
-      prefix = "",
-      declaration = "const { findUsableNodeRuntime } = ",
-    }) => {
-      const expression = `await (async () => {
-        ${binding}
-        if (!driverRoot) return;
-        ${prefix}${declaration}await import(${url}${suffix});
-        return (await import("./surface-abcdefgh.js")).x;
-      })()`;
-      const record = () =>
-        recordImportedFixture(
-          expression,
-          { "surface-abcdefgh.js": "//#region src/infra/value.ts\nexport const x = 1;\n" },
-          undefined,
-          owner,
-        );
-      if (name !== "published bootstrap") {
-        expect(record).toThrow("Nonliteral post-swap import");
-        return;
-      }
-      expect(record().inventory.releases[0]?.chunks.map((chunk) => chunk.path)).toEqual([
-        "surface-abcdefgh.js",
-      ]);
-    },
-  );
+        ],
+        exports: [{ exported: "x", origin: { module: "src/infra/value.ts", symbol: "x" } }],
+      },
+    ]);
+  });
 
   it.each(
     previousReleaseInventory.releases
@@ -1969,17 +1886,26 @@ describe("previous release update compatibility", () => {
     expect(current.y()).toBe("npm");
   });
 
-  it("retains published cleanup-scope imports after package replacement", () => {
+  it("retains only terminal cleanup-scope imports after package replacement", () => {
     const target = "runtime-cleanup-abcdefgh.mjs";
     const { root, inventory } = recordImportedFixture(
-      `(await import("./${target}")).runCliDisposerAfterPending()`,
+      `(async () => {
+        const { prepare } = await import("./prepare-abcdefgh.mjs");
+        prepare();
+        try { return; } finally {
+          return (await import("./${target}")).runCliDisposerAfterPending();
+        }
+      })()`,
       {
+        "prepare-abcdefgh.mjs":
+          "//#region src/infra/gateway-scheduler.ts\nexport function prepare() {}\n",
         [target]:
           '//#region src/cli/runtime-cleanup.ts\nexport function runCliDisposerAfterPending() { return "old"; }\n',
       },
       undefined,
       "src/cli/runtime-cleanup-scope.ts",
     );
+    expect(inventory.releases[0]?.chunks.map((chunk) => chunk.path)).toEqual([target]);
     fsSync.unlinkSync(path.join(root, "dist", target));
     write(
       root,

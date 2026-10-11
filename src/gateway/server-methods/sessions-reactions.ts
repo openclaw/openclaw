@@ -12,7 +12,7 @@ import { resolveChannelAccount } from "../../channels/account-resolution.js";
 import {
   createMessageActionDiscoveryContext,
   resolveCurrentChannelMessageToolDiscoveryAdapter,
-  resolveMessageActionDiscoveryForPlugin,
+  resolveMessageActionDiscoveryForPluginAsync,
 } from "../../channels/plugins/message-action-discovery.js";
 import {
   setSessionReactionAsync,
@@ -138,25 +138,28 @@ async function mirrorReaction(params: {
         const discovery = resolveCurrentChannelMessageToolDiscoveryAdapter(channel);
         if (
           !discovery ||
-          !resolveMessageActionDiscoveryForPlugin({
-            pluginId: discovery.pluginId,
-            actions: discovery.actions,
-            context: createMessageActionDiscoveryContext({
-              cfg,
-              channel,
-              accountId: conversation.accountId,
-              agentId: params.target.agentId,
-              sessionKey: params.target.canonicalKey,
-              sessionId: params.target.entry.sessionId,
-              currentChannelId: conversation.nativeChannelId,
-              currentMessageId: transport.messageId,
-              currentThreadTs: conversation.threadId,
-            }),
-            includeActions: true,
-          }).actions.includes("react")
+          !(
+            await resolveMessageActionDiscoveryForPluginAsync({
+              pluginId: discovery.pluginId,
+              actions: discovery.actions,
+              context: createMessageActionDiscoveryContext({
+                cfg,
+                channel,
+                accountId: conversation.accountId,
+                agentId: params.target.agentId,
+                sessionKey: params.target.canonicalKey,
+                sessionId: params.target.entry.sessionId,
+                currentChannelId: conversation.nativeChannelId,
+                currentMessageId: transport.messageId,
+                currentThreadTs: conversation.threadId,
+              }),
+              includeActions: true,
+            })
+          ).actions.includes("react")
         ) {
           return { status: "skipped", reason: "source channel does not support reactions" };
         }
+        params.assertCurrent();
         if (!plugin) {
           return { status: "skipped", reason: "source channel is unavailable" };
         }

@@ -49,8 +49,16 @@ export {
 } from "./session-work-admission-interruption.js";
 
 export const SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS = 15_000;
+type SessionWorkRun = Readonly<{
+  runId: string;
+  sessionKey?: string;
+  sessionId?: string;
+  agentId?: string;
+  controlUiVisible?: boolean;
+}>;
 type SessionWorkAdmission = HandoffSessionWorkAdmission & {
   lifecycleGeneration: string;
+  run?: SessionWorkRun;
   phase: "pending" | "acquired";
   owner?: symbol;
   released: Promise<void>;
@@ -116,6 +124,9 @@ const {
 } = SESSION_LIFECYCLE_ADMISSION_STATE;
 const {
   collectSessionWorkAdmissions,
+  collectActiveSessionWorkAdmissions,
+  getActiveSessionWorkAdmissionCount,
+  isSessionWorkAdmissionActive,
   getSessionWorkAdmissionRelease,
   getSessionWorkAdmissionOwnerRelease,
   getCompetingSessionWorkAdmissionRelease,
@@ -125,6 +136,9 @@ const {
 );
 export {
   getSessionWorkAdmissionRelease,
+  collectActiveSessionWorkAdmissions,
+  getActiveSessionWorkAdmissionCount,
+  isSessionWorkAdmissionActive,
   getSessionWorkAdmissionOwnerRelease,
   getCompetingSessionWorkAdmissionRelease,
   getTerminalSessionWorkAdmissionRelease,
@@ -383,17 +397,6 @@ export function hasOnlySessionLifecycleMutationKindActive(
   );
 }
 
-export function isSessionWorkAdmissionActive(
-  scope: string,
-  identities: Iterable<string | undefined>,
-): boolean {
-  return normalizeSessionIdentities(scope, identities).some((identity) =>
-    [...(ACTIVE_SESSION_WORK_ADMISSIONS.get(identity) ?? [])].some(
-      (admission) => admission.phase === "acquired",
-    ),
-  );
-}
-
 function isSessionWorkAdmissionTargetActive(params: {
   scope: string;
   sessionKey: string;
@@ -433,20 +436,6 @@ export function isCompetingSessionWorkAdmissionActive(
   );
 }
 
-/** Active session identities grouped by their authoritative store/lifecycle scope. */
-export function collectActiveSessionWorkAdmissions(
-  owners?: ReadonlySet<object>,
-): Map<string, Set<string>> {
-  const identities = [...ACTIVE_SESSION_WORK_ADMISSIONS]
-    .filter(([, admissions]) =>
-      [...admissions].some(
-        (admission) => admission.phase === "acquired" && (!owners || owners.has(admission)),
-      ),
-    )
-    .map(([identity]) => identity);
-  return collectSessionIdentityTargets(identities);
-}
-
 /** Capture exact host-owned admissions; replacements after an await cannot inherit the snapshot. */
 export function captureGatewaySessionWorkAdmissions(resolveGatewayContext: GatewayContextResolver) {
   const owners = collectSessionWorkAdmissions(
@@ -461,14 +450,6 @@ export function captureGatewaySessionWorkAdmissions(resolveGatewayContext: Gatew
     isActive: (target: { scope: string; sessionKey: string; sessionId: string }) =>
       isSessionWorkAdmissionTargetActive({ ...target, owners }),
   };
-}
-
-/** Unique admitted turns; one lease can be indexed under several identities. */
-export function getActiveSessionWorkAdmissionCount(): number {
-  return collectSessionWorkAdmissions(
-    ACTIVE_SESSION_WORK_ADMISSIONS.keys(),
-    (admission) => admission.phase === "acquired",
-  ).size;
 }
 
 /** Unique active lifecycle mutations; one run can be indexed under several identities. */
@@ -491,6 +472,8 @@ export function collectActiveSessionLifecycleMutationIdentities(scope: string): 
 export async function beginSessionWorkAdmission(params: {
   scope: string;
   identities: Iterable<string | undefined>;
+  /** Only an execution owner returning an exact interruption receipt for this runId may declare it. */
+  run?: SessionWorkRun;
   /** Complete store keys read or written by final validation; omission keeps a store-wide barrier. */
   storeWriterIdentities?: Iterable<string | undefined>;
   /** Stable process-wide identity for owners that must be observable while still pending. */
@@ -538,6 +521,7 @@ export async function beginSessionWorkAdmission(params: {
   const { promise: releasedPromise, resolve: resolveReleased } = createDeferredCore();
   const admission: SessionWorkAdmission = {
     lifecycleGeneration: getAgentRunLifecycleGeneration(),
+    run: params.run ? Object.freeze({ ...params.run }) : undefined,
     phase: "pending",
     isSettling: params.isSettling,
     ...(params.owner ? { owner: params.owner } : {}),
@@ -686,6 +670,42 @@ export function closeSessionWorkAdmissions(params: {
     normalizeSessionIdentities(params.scope, params.identities),
     params.reason,
   );
+}
+
+/** Capture exact run owners without interrupting unrelated or initiating admissions. */
+export function captureSessionWorkRunInterruptions(params: {
+  scope: string;
+  identities: Iterable<string | undefined>;
+  accept: (run: SessionWorkRun) => boolean;
+}): Array<{ run: SessionWorkRun; interrupt: (reason: Error) => boolean }> {
+  const identities = normalizeSessionIdentities(params.scope, params.identities);
+  const currentAdmissions = CURRENT_SESSION_WORK_ADMISSIONS.getStore();
+  const isCurrent = (admission: SessionWorkAdmission) =>
+    !admission.interrupted &&
+    admission.lifecycleGeneration === getAgentRunLifecycleGeneration() &&
+    identities.some((identity) => ACTIVE_SESSION_WORK_ADMISSIONS.get(identity)?.has(admission));
+  const admissions = collectSessionWorkAdmissions(
+    identities,
+    (admission) => !currentAdmissions?.has(admission) && isCurrent(admission),
+  );
+  return Array.from(admissions).flatMap((admission) => {
+    const run = admission.run;
+    if (!run || !params.accept(run)) {
+      return [];
+    }
+    return [
+      {
+        run,
+        interrupt: (reason: Error) => {
+          // Awaited preparation cannot transfer Stop to a released or replaced owner.
+          if (!isCurrent(admission)) {
+            return false;
+          }
+          return admission.interrupt?.(reason)?.runId === run.runId;
+        },
+      },
+    ];
+  });
 }
 
 function startNormalizedSessionWorkAdmissionInterruption(params: {

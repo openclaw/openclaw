@@ -468,6 +468,11 @@ export function isCronJobActive(jobId: string) {
   return getCurrentCronActiveJobMarker(jobId) !== undefined;
 }
 
+/** Snapshot host-only activity before scheduling worker maintenance. */
+export function listActiveCronJobIds(): string[] {
+  return [...getCronActiveJobState().activeJobs.keys()].filter(isCronJobActive);
+}
+
 /** Includes admitted runs that have not entered their executing core yet. */
 export function hasActiveCronJobsForAgent(agentId: string): boolean {
   for (const marker of getCronActiveJobState().activeJobs.values()) {

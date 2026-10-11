@@ -261,6 +261,7 @@ export const userProfileOperations = {
             .where("id", "=", profile.id),
         );
         const committed = selectProfileAccessEntries(db, [profile.id])[0]![1];
+        deferSqliteWorkerCommitReceipt(db, committed);
         return {
           profile: toUserProfile({ ...profile, avatar_mime: input.mime, updated_at: input.now }),
           committed,

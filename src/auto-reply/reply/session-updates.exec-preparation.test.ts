@@ -23,7 +23,6 @@ import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { writeExecApprovalsConfigRow } from "../../infra/exec-approvals-sqlite.js";
 import * as approvalStore from "../../infra/exec-approvals-store.js";
-import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -38,7 +37,6 @@ import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.tes
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createReplySessionEntryHandle } from "./session-entry-handle.js";
 import { ensureSkillSnapshot, incrementCompactionCount } from "./session-updates.js";
-import { persistSessionUsageUpdate } from "./session-usage.js";
 
 // mock-isolation: Remote node discovery is outside the approval-read boundary.
 vi.mock("../../skills/runtime/remote.js", () => ({
@@ -266,33 +264,25 @@ it.each(["metadata", "lifecycle", "refresh"] as const)(
           pending,
           "skill preparation did not start",
         );
-        if (change === "refresh") {
+        if (change === "lifecycle") {
+          await applySessionEntryLifecycleMutation({
+            agentId: scope.agentId,
+            storePath: scope.storePath,
+            upserts: [
+              {
+                sessionKey: scope.sessionKey,
+                entry: { ...entry, lifecycleRevision: "replacement" },
+              },
+            ],
+            skipMaintenance: true,
+          });
+        } else {
           await replaceSessionEntry(scope, {
             ...entry,
             pinnedAt: undefined,
             updatedAt: 2,
             systemSent: true,
           });
-        } else {
-          const foreign = new (requireNodeSqlite().DatabaseSync)(reader.database.path);
-          try {
-            foreign
-              .prepare(
-                "UPDATE session_nodes SET entry_json = json_patch(entry_json, ?), updated_at = ?, pinned_at = ? WHERE session_key = ?",
-              )
-              .run(
-                JSON.stringify(
-                  change === "metadata"
-                    ? { pinnedAt: null, updatedAt: 2, systemSent: true }
-                    : { lifecycleRevision: "replacement" },
-                ),
-                change === "metadata" ? 2 : 1,
-                change === "metadata" ? null : 1,
-                scope.sessionKey,
-              );
-          } finally {
-            foreign.close();
-          }
         }
         resume.resolve();
         if (change === "lifecycle") {
@@ -578,6 +568,12 @@ describe("completed compaction accounting", () => {
       expect(fixture.read()?.transcriptByteCompactionLatch).toEqual(latch);
 
       expect(await incrementCompactionCount(fixture.params)).toBe(2);
+      expect(fixture.read()?.transcriptByteCompactionLatch).toEqual(latch);
+
+      await incrementCompactionCount({
+        ...fixture.params,
+        transcriptByteCompactionLatch: null,
+      });
       expect(fixture.read()?.transcriptByteCompactionLatch).toBeUndefined();
     });
   });
@@ -618,29 +614,6 @@ describe("completed compaction accounting", () => {
     });
   });
 
-  it("does not write old compaction usage after the terminal writer changes", async () => {
-    await withAccountingFixture(async (fixture) => {
-      await fixture.replace({
-        activeWriterRunId: "new-writer",
-        totalTokens: 666,
-        totalTokensFresh: true,
-      });
-      const before = fixture.read();
-
-      await persistSessionUsageUpdate({
-        agentId: fixture.params.agentId,
-        storePath: fixture.params.storePath,
-        sessionKey: fixture.params.sessionKey,
-        cfg: {},
-        expectedSession: { ...fixture.entry, activeWriterRunId: "old-writer" },
-        currentContextSnapshot: { tokens: 123 },
-        authorize: () => true,
-      });
-
-      expect(fixture.read()).toEqual(before);
-    });
-  });
-
   it.each([
     { name: "session", patch: { sessionId: "replacement-session" } },
     { name: "lifecycle", patch: { lifecycleRevision: "replacement-revision" } },
@@ -658,32 +631,25 @@ describe("completed compaction accounting", () => {
     });
   });
 
-  it.each(["compaction", "usage"] as const)(
-    "does not commit %s accounting when authority closes after admission",
-    async (kind) => {
-      await withAccountingFixture(async (fixture) => {
-        let authorized = true;
-        const authorize = () => {
-          queueMicrotask(() => {
-            authorized = false;
-          });
-          return authorized;
-        };
-        const result =
-          kind === "compaction"
-            ? await incrementCompactionCount({ ...fixture.params, tokensAfter: 123, authorize })
-            : await persistSessionUsageUpdate({
-                ...fixture.params,
-                cfg: {},
-                currentContextSnapshot: { tokens: 123 },
-                authorize,
-              });
-
-        expect(result).toBeUndefined();
-        expect(fixture.cached()).toBe(fixture.entry);
-        expect(fixture.read()?.compactionCount).toBe(0);
-        expect(fixture.read()?.totalTokens).toBeUndefined();
+  it("does not commit compaction accounting when authority closes after admission", async () => {
+    await withAccountingFixture(async (fixture) => {
+      let authorized = true;
+      const authorize = () => {
+        queueMicrotask(() => {
+          authorized = false;
+        });
+        return authorized;
+      };
+      const result = await incrementCompactionCount({
+        ...fixture.params,
+        tokensAfter: 123,
+        authorize,
       });
-    },
-  );
+
+      expect(result).toBeUndefined();
+      expect(fixture.cached()).toBe(fixture.entry);
+      expect(fixture.read()?.compactionCount).toBe(0);
+      expect(fixture.read()?.totalTokens).toBeUndefined();
+    });
+  });
 });

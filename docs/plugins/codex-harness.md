@@ -334,7 +334,7 @@ through Codex's native image input.
 For an unsandboxed local Codex process with file-read permission, OpenClaw also
 supplies verified paths to saved documents. Codex can process the complete file
 when inline extraction is bounded. OpenClaw adds the paths to the admitted native
-input without changing its canonical attachment references or transcript text.
+input without changing its stored attachment references or transcript text.
 If the path note cannot fit the native input budget, OpenClaw omits it and retains
 the original request and inline attachment context.
 JSON escapes keep mention characters in attachment metadata from selecting skills
@@ -354,7 +354,7 @@ synchronized filesystem. Codex images are materialized directly from typed
 app-server events. Saved-path-only images use the same bounded remote reader.
 Uploads always use the Gateway's configured channel identity and request timeout.
 
-Use canonical OpenAI model refs such as `openai/gpt-6-astra`. Do not configure
+Use standard OpenAI model refs such as `openai/gpt-6-astra`. Do not configure
 legacy Codex GPT refs. Put OpenAI agent auth order under `auth.order.openai`.
 Legacy Codex auth profile ids and legacy Codex auth order entries are
 repaired by `openclaw doctor --fix`.
@@ -569,9 +569,11 @@ same child result after the parent replies.
 
 - The official `@openclaw/codex` plugin installed. Include `codex` in
   `plugins.allow` if your config uses an allowlist.
-- Managed Codex app-server `0.160.0`. The plugin ships and manages
-  `@openai/codex` `0.160.0` by default, so a `codex` command on `PATH` does not
-  affect normal startup. Explicit custom, remote, and macOS desktop-owned
+- Managed Codex app-server `0.160.0` or newer. The plugin ships
+  `@openai/codex` `0.160.0` and uses a newer stable `codex` from `PATH` only
+  after it passes a version check and an app-server handshake; see
+  [Newer installed Codex](/plugins/codex-harness-reference/app-server-transport#newer-installed-codex).
+  Explicit custom, remote, and macOS desktop-owned
   app-servers must report a parseable semantic version of `0.149.0` or newer.
   Newer versions continue with a compatibility warning and normal runtime
   validation.
@@ -710,7 +712,7 @@ nine child pages below. The anchors from the single-page version still resolve h
 - <a id="deployment-patterns"></a>[Deployment patterns](/plugins/codex-harness/routing#deployment-patterns)
 - <a id="basic-codex-deployment"></a>[Basic Codex deployment](/plugins/codex-harness/routing#basic-codex-deployment)
 - <a id="mixed-provider-deployment"></a>[Mixed provider deployment](/plugins/codex-harness/routing#mixed-provider-deployment)
-- <a id="fail-closed-codex-deployment"></a>[Fail-closed Codex deployment](/plugins/codex-harness/routing#fail-closed-codex-deployment)
+- <a id="fail-closed-codex-deployment"></a>[Require Codex for deployment](/plugins/codex-harness/routing#fail-closed-codex-deployment)
 
 ### Codex harness configuration
 

@@ -1,9 +1,10 @@
 import path from "node:path";
 import { setImmediate as nextTurn } from "node:timers/promises";
-import { MessagePort } from "node:worker_threads";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
-import { loseFirstCronMutationReply } from "../../../test/helpers/cron/runtime-mutation.js";
+import {
+  loseFirstCronMutationReply,
+  observeCronStoreCommits,
+} from "../../../test/helpers/cron/runtime-mutation.js";
 import {
   createCronRegressionState,
   createDueIsolatedJob,
@@ -44,6 +45,7 @@ import {
   reserveQueuedCronRun,
   supersedeActivatedCronRun,
 } from "./run-admission.js";
+import * as runtimeMutation from "./runtime-mutation.js";
 import { recomputeUnownedCronSchedules } from "./schedule-maintenance.js";
 
 async function withReservation(
@@ -110,27 +112,6 @@ async function withReservation(
       await state.op;
     }
   });
-}
-
-function duringPreparation(
-  matches: (value: Record<string, unknown>) => boolean,
-  mutate: () => void,
-) {
-  // oxlint-disable-next-line typescript/unbound-method -- Retain the intercepted port as receiver.
-  const original = MessagePort.prototype.postMessage;
-  let observed = false;
-  const spy = vi.spyOn(MessagePort.prototype, "postMessage").mockImplementation(function (
-    this: MessagePort,
-    value,
-    transferList,
-  ) {
-    if (!observed && isRecord(value) && matches(value)) {
-      observed = true;
-      mutate();
-    }
-    return original.call(this, value, transferList);
-  });
-  return { restore: () => spy.mockRestore(), observed: () => observed };
 }
 
 it.each(["activation", "cleanup", "family", "worker control"] as const)(
@@ -294,94 +275,60 @@ it.each([false, true])(
   },
 );
 
-it.each(["durable receipt", "local owner"] as const)(
-  "fences activation after replacement of its %s",
-  async (scope) => {
-    await withReservation(async ({ state, job, identity, readJob, readReceipt }) => {
-      const owner = state.queuedRunReservationsByJobId.get(job.id)!;
-      const original = owner.runReceipt;
-      let replacement: ReturnType<typeof claimCronRunReceiptInDatabaseForTest> | undefined;
-      let localReplacement: object | undefined;
-      if (scope === "durable receipt") {
-        await finishCronRunReceiptAsync({
-          handle: original,
-          status: "interrupted",
-          finishedAtMs: state.deps.nowMs(),
-        });
-        const prepared = prepareCronRunReceiptClaim({
-          observed: undefined,
-          storePath: state.deps.storePath,
-          job,
-          agentId: original.agentId,
-          startedAtMs: original.startedAtMs,
-        });
-        replacement = runOpenClawStateWriteTransaction(({ db }) =>
-          claimCronRunReceiptInDatabaseForTest({
-            database: db,
-            prepared,
-            resolveAgentId: () => original.agentId,
-          }),
-        );
-      }
-      const interception =
-        scope === "local owner"
-          ? duringPreparation(
-              (value) => "markerAtMs" in value,
-              () => {
-                localReplacement = reserveQueuedCronRun(state, job.id, owner.markerAtMs, {
-                  runReceipt: owner.runReceipt,
-                  runReceiptContext: owner.runReceiptContext,
-                });
-              },
-            )
-          : undefined;
-      try {
-        const before = await readJob();
-        const receiptBefore = readReceipt();
-        await expect(
-          activateQueuedCronRun({ state, job, reservationIdentity: identity }),
-        ).resolves.toEqual({ kind: "fenced" });
-        expect(await readJob()).toEqual(before);
-        expect(readReceipt()).toEqual(receiptBefore);
-        if (scope === "durable receipt") {
-          expect(
-            findActiveCronRunReceiptInDatabase({
-              database: openOpenClawStateDatabase().db,
-              storePath: state.deps.storePath,
-              jobId: job.id,
-            }),
-          ).toEqual(replacement);
-          expect(listForeignReceipts(state)).toEqual([]);
-        } else {
-          expect(interception?.observed()).toBe(true);
-          expect(state.queuedRunReservationsByJobId.get(job.id)?.identity).toBe(localReplacement);
-        }
-      } finally {
-        interception?.restore();
-        if (replacement) {
-          await finishCronRunReceiptAsync({
-            handle: replacement,
-            status: "skipped",
-            finishedAtMs: state.deps.nowMs(),
-          });
-        }
-      }
+it("fences activation after replacement of its durable receipt", async () => {
+  await withReservation(async ({ state, job, identity, readJob, readReceipt }) => {
+    const original = state.queuedRunReservationsByJobId.get(job.id)!.runReceipt;
+    await finishCronRunReceiptAsync({
+      handle: original,
+      status: "interrupted",
+      finishedAtMs: state.deps.nowMs(),
     });
-  },
-);
+    const prepared = prepareCronRunReceiptClaim({
+      observed: undefined,
+      storePath: state.deps.storePath,
+      job,
+      agentId: original.agentId,
+      startedAtMs: original.startedAtMs,
+    });
+    const replacement = runOpenClawStateWriteTransaction(({ db }) =>
+      claimCronRunReceiptInDatabaseForTest({
+        database: db,
+        prepared,
+        resolveAgentId: () => original.agentId,
+      }),
+    );
+    try {
+      const before = await readJob();
+      const receiptBefore = readReceipt();
+      await expect(
+        activateQueuedCronRun({ state, job, reservationIdentity: identity }),
+      ).resolves.toEqual({ kind: "fenced" });
+      expect(await readJob()).toEqual(before);
+      expect(readReceipt()).toEqual(receiptBefore);
+      expect(
+        findActiveCronRunReceiptInDatabase({
+          database: openOpenClawStateDatabase().db,
+          storePath: state.deps.storePath,
+          jobId: job.id,
+        }),
+      ).toEqual(replacement);
+      expect(listForeignReceipts(state)).toEqual([]);
+    } finally {
+      await finishCronRunReceiptAsync({
+        handle: replacement,
+        status: "skipped",
+        finishedAtMs: state.deps.nowMs(),
+      });
+    }
+  });
+});
 
-it("rejects payload execution when its agent becomes unavailable during worker activation", async () => {
+it("rejects payload execution when its agent becomes unavailable after activation", async () => {
   await withReservation(async ({ state, job, identity }) => {
     let available = true;
     state.deps.isAgentAvailable = () => available;
     const runner = vi.fn(async () => ({ status: "ok" as const }));
     state.deps.runIsolatedAgentJob = runner;
-    const interception = duringPreparation(
-      (value) => "markerAtMs" in value,
-      () => {
-        available = false;
-      },
-    );
     let activeMarker: Parameters<typeof clearCronJobActive>[1];
     try {
       const result = await executeQueuedCronRun({
@@ -389,13 +336,15 @@ it("rejects payload execution when its agent becomes unavailable during worker a
         jobId: job.id,
         reservedAtMs: state.queuedRunReservationsByJobId.get(job.id)!.markerAtMs,
         reservationIdentity: identity,
+        onActivated: () => {
+          available = false;
+        },
         onNotRunnable: async () => {},
         onCompleted: async (outcome) => {
           activeMarker = outcome.activeJobMarker;
           return false;
         },
       });
-      expect(interception.observed()).toBe(true);
       expect(result).toMatchObject({
         kind: "completed",
         outcome: {
@@ -406,7 +355,6 @@ it("rejects payload execution when its agent becomes unavailable during worker a
       });
       expect(runner).not.toHaveBeenCalled();
     } finally {
-      interception.restore();
       if (activeMarker) {
         clearCronJobActive(job.id, activeMarker);
       }
@@ -415,7 +363,7 @@ it("rejects payload execution when its agent becomes unavailable during worker a
 });
 
 it.each([false, true])(
-  "rolls back stopped activation only without deletion authority: deletion=%s",
+  "cleans up activation stopped after commit unless its agent is deleting: deletion=%s",
   async (deleting) => {
     await withReservation(async ({ state, job, identity, readJob, readReceipt }) => {
       if (deleting) {
@@ -429,10 +377,13 @@ it.each([false, true])(
           sessionsDir: path.join(privateRoot, "agents", "main", "sessions"),
         });
       }
-      const interception = duringPreparation(
-        (value) => "markerAtMs" in value,
-        () => stop(state),
-      );
+      let stoppedAfterCommit = false;
+      const stopObserving = observeCronStoreCommits(state.deps.storePath, () => {
+        if (!stoppedAfterCommit && readReceipt()?.started_at_ms === state.deps.nowMs()) {
+          stoppedAfterCommit = true;
+          stop(state);
+        }
+      });
       try {
         const activation = activateQueuedCronRun({ state, job, reservationIdentity: identity });
         if (deleting) {
@@ -440,7 +391,7 @@ it.each([false, true])(
         } else {
           await expect(activation).resolves.toEqual({ kind: "unavailable", reason: "stopped" });
         }
-        expect(interception.observed()).toBe(true);
+        expect(stoppedAfterCommit).toBe(true);
         const persisted = await readJob();
         if (deleting) {
           expect(persisted?.state.runningAtMs).toBe(1_800_000_001_000);
@@ -456,7 +407,7 @@ it.each([false, true])(
           expect(state.queuedRunReservationsByJobId.has(job.id)).toBe(false);
         }
       } finally {
-        interception.restore();
+        stopObserving();
         if (deleting) {
           removeAgentDeletionJournal("main", "private-delete-main");
         }
@@ -465,8 +416,8 @@ it.each([false, true])(
   },
 );
 
-it.each(["before commit", "after publication"] as const)(
-  "retains the runner fence when settlement completes %s",
+it.each(["submission", "publication"] as const)(
+  "retains the runner fence when settlement completes at %s",
   async (timing) => {
     await withReservation(async ({ state, job, identity, readJob, readReceipt }) => {
       const activated = await activateQueuedCronRun({ state, job, reservationIdentity: identity });
@@ -480,14 +431,25 @@ it.each(["before commit", "after publication"] as const)(
         settlement: runner.promise,
         onFinishError: (error) => finishErrors.push(error),
       });
-      const interception = duringPreparation(
-        (value) => Array.isArray(value.reservations),
-        () => {
-          if (timing === "before commit") {
-            runner.resolve();
-          }
-        },
-      );
+      let observedBoundary = false;
+      const submit = runtimeMutation.runCronRuntimeMutation;
+      const submission =
+        timing === "submission"
+          ? vi.spyOn(runtimeMutation, "runCronRuntimeMutation").mockImplementation((params) => {
+              const pending = submit(params);
+              if (!observedBoundary && params.type === "cron.releaseReservations") {
+                observedBoundary = true;
+                runner.resolve();
+              }
+              return pending;
+            })
+          : undefined;
+      const stopObserving =
+        timing === "publication"
+          ? observeCronStoreCommits(state.deps.storePath, () => {
+              observedBoundary = true;
+            })
+          : undefined;
       try {
         await supersedeActivatedCronRun({
           state,
@@ -497,8 +459,8 @@ it.each(["before commit", "after publication"] as const)(
           runReceiptContext: activated.runReceiptContext,
           reason: "retired occurrence",
         });
-        expect(interception.observed()).toBe(true);
-        if (timing === "after publication") {
+        expect(observedBoundary).toBe(true);
+        if (timing === "publication") {
           expect(readReceipt()).toMatchObject({ status: "running" });
           runner.resolve();
         }
@@ -511,7 +473,8 @@ it.each(["before commit", "after publication"] as const)(
         });
         expect(finishErrors).toEqual([]);
       } finally {
-        interception.restore();
+        submission?.mockRestore();
+        stopObserving?.();
         runner.resolve();
         await runner.promise;
         await readJob();
@@ -543,7 +506,7 @@ it("publishes cleanup once without replay after a committed reply is lost", asyn
 });
 
 it.each(["lost reply", "postcommit conflict error"] as const)(
-  "cleans up a committed reservation after %s without replay",
+  "preserves recoverable reservations after %s without replay",
   async (failure) => {
     await withOpenClawTestState({ label: "cron-reservation-lost-reply" }, async (fixture) => {
       const now = Date.now();
@@ -588,11 +551,25 @@ it.each(["lost reply", "postcommit conflict error"] as const)(
         expect(runner).not.toHaveBeenCalled();
         expect(state.queuedRunReservationsByJobId.size).toBe(0);
         expect(listForeignReceipts(state)).toEqual([]);
-        expect((await loadCronStore(storePath)).jobs[0]?.state.queuedAtMs).toBeUndefined();
-        const receipts = openOpenClawStateDatabase()
-          .db.prepare("SELECT status FROM cron_run_receipts WHERE job_id = ?")
-          .all(job.id);
-        expect(receipts).toEqual([{ status: "skipped" }]);
+        const persisted = (await loadCronStore(storePath)).jobs[0]!;
+        const receipt = findActiveCronRunReceiptInDatabase({
+          database: openOpenClawStateDatabase().db,
+          storePath,
+          jobId: job.id,
+        });
+        if (failure === "lost reply") {
+          expect(persisted.state.queuedAtMs).toBe(now);
+          expect(receipt).toBeDefined();
+          expect(isCronRunReceiptOwnerStale(receipt!)).toBe(true);
+        } else {
+          expect(persisted.state.queuedAtMs).toBeUndefined();
+          expect(receipt).toBeUndefined();
+          expect(
+            openOpenClawStateDatabase()
+              .db.prepare("SELECT status FROM cron_run_receipts WHERE job_id = ?")
+              .all(job.id),
+          ).toEqual([{ status: "skipped" }]);
+        }
       } finally {
         await reply?.close();
         publication?.mockRestore();

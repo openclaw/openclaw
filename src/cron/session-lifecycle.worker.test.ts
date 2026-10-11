@@ -1,16 +1,7 @@
-import { setImmediate as nextTurn } from "node:timers/promises";
-import type { WorkerOptions } from "node:worker_threads";
 import { expect, it, onTestFinished, vi } from "vitest";
-import {
-  registerGeneratedMediaTaskActivity,
-  clearGeneratedMediaTaskActivity,
-} from "../agents/media-generation-activity.js";
 import { createSubagentRunRecord } from "../agents/subagent-test-fixtures.test-helpers.js";
 import "../agents/subagents/registry/subagent-registry-maintenance.js";
-import {
-  saveSubagentRegistryChangesToSqlite,
-  saveSubagentRegistryToSqlite,
-} from "../agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
+import { saveSubagentRegistryToSqlite } from "../agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
 import { clearSubagentRunsReadCacheForTest } from "../agents/subagents/registry/subagent-registry-state.js";
 import { resolveDefaultSessionStorePath } from "../config/sessions/paths.js";
 import {
@@ -18,7 +9,7 @@ import {
   loadTranscriptEvents,
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
-import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.js";
+import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import * as maintenanceReads from "../config/sessions/session-entry-read-maintenance.js";
 import * as sessionReads from "../config/sessions/session-entry-read-runtime.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -31,113 +22,12 @@ import {
 import { removeCronRunContinuationSessionIfIdle } from "./run-continuation-cleanup.js";
 import {
   createCronMutationProbe,
-  updateForeignSubagentPayload,
-  withCronMutationProbe,
   type CronMutationProbe,
 } from "./session-lifecycle.worker.test-support.js";
 import { sweepCronRunSessions } from "./session-reaper.js";
 import { resetReaperThrottle } from "./session-reaper.test-support.js";
 
 const mutation = vi.hoisted(() => ({ current: undefined as CronMutationProbe | undefined }));
-vi.mock("node:worker_threads", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("node:worker_threads")>();
-  return {
-    ...actual,
-    Worker: class extends actual.Worker {
-      constructor(filename: string | URL, options?: WorkerOptions) {
-        const probe = mutation.current;
-        const data: unknown = options?.workerData;
-        const selected =
-          probe &&
-          filename.toString() === probe.moduleUrl &&
-          data !== null &&
-          typeof data === "object" &&
-          "operation" in data &&
-          data.operation === "reclaim";
-        super(filename, selected ? withCronMutationProbe(options, probe) : options);
-        if (selected) {
-          this.on("message", (message: unknown) => {
-            if (
-              message &&
-              typeof message === "object" &&
-              "type" in message &&
-              message.type === "cron-test:post-grant" &&
-              "sessionKey" in message &&
-              message.sessionKey === probe.sessionKey
-            ) {
-              probe.held = true;
-              probe.checkpoint.resolve();
-            }
-          });
-        }
-      }
-    },
-  };
-});
-vi.mock(
-  "../config/sessions/session-accessor.sqlite-reclamation-worker.js",
-  async (importOriginal) => {
-    const actual =
-      await importOriginal<
-        typeof import("../config/sessions/session-accessor.sqlite-reclamation-worker.js")
-      >();
-    return {
-      ...actual,
-      withSqliteReclamationWorker: ((options, claim, run, assertCurrent, signal) =>
-        actual.withSqliteReclamationWorker(
-          options,
-          claim,
-          async (worker) => {
-            const originalRun = worker.run.bind(worker);
-            const spy = vi.spyOn(worker, "run").mockImplementation((params) => {
-              const probe = mutation.current;
-              if (
-                probe &&
-                ["entry", "lifecycle-projection-commit"].includes(params.plan.kind) &&
-                params.plan.descendantRunBasis?.sessionKeys.includes(probe.sessionKey)
-              ) {
-                probe.commitGate = params.commitGate;
-              }
-              return originalRun(params);
-            });
-            try {
-              return await run(worker);
-            } finally {
-              spy.mockRestore();
-            }
-          },
-          assertCurrent,
-          signal,
-        )) satisfies typeof actual.withSqliteReclamationWorker,
-    };
-  },
-);
-vi.mock(
-  "../config/sessions/session-accessor.sqlite-reclamation-commit.js",
-  async (importOriginal) => {
-    const actual =
-      await importOriginal<
-        typeof import("../config/sessions/session-accessor.sqlite-reclamation-commit.js")
-      >();
-    return {
-      ...actual,
-      withSqliteReclamationAuthorization: ((buffer, database, assertCurrent, run) =>
-        actual.withSqliteReclamationAuthorization(
-          buffer,
-          database,
-          () => {
-            const probe = mutation.current;
-            if (probe?.commitGate === buffer) {
-              probe.grantAttempts++;
-              probe.beforeGrant?.();
-            }
-            assertCurrent();
-          },
-          run,
-        )) satisfies typeof actual.withSqliteReclamationAuthorization,
-    };
-  },
-);
 
 type CleanupKind = "continuation" | "reaper";
 
@@ -203,12 +93,6 @@ async function seedCronFixture(kind: CleanupKind, probe: CronMutationProbe) {
     cleanupCompletedAt: now - 500,
     delivery: { status: "not_required" },
   });
-  const unrelated = {
-    ...child,
-    runId: `unrelated-${kind}`,
-    requesterSessionKey: "agent:main:other",
-    childSessionKey: `agent:main:subagent:${kind}-other`,
-  };
   saveSubagentRegistryToSqlite(new Map([[child.runId, child]]));
   clearSubagentRunsReadCacheForTest();
   resetReaperThrottle();
@@ -236,7 +120,7 @@ async function seedCronFixture(kind: CleanupKind, probe: CronMutationProbe) {
       expect(loadSessionEntry(recent)).toMatchObject({ sessionId: "recent", updatedAt: now });
     }
   };
-  return { kind, exact, child, unrelated, context, log, probe, start, verifyPreserved };
+  return { exact, log, start, verifyPreserved };
 }
 
 function holdInitialRead(kind: CleanupKind) {
@@ -268,110 +152,6 @@ function holdInitialRead(kind: CleanupKind) {
   return { entered: entered.promise, release: release.resolve, restore: () => read.mockRestore() };
 }
 
-async function expectRefusal(
-  fixture: Awaited<ReturnType<typeof seedCronFixture>>,
-  work: ReturnType<typeof fixture.start>,
-  diagnostic: RegExp,
-) {
-  if (fixture.kind === "continuation") {
-    await expect(work).rejects.toThrow(diagnostic);
-  } else {
-    expect(await work).toEqual({ swept: false, pruned: 0 });
-    expect(fixture.log.warn).toHaveBeenCalledWith(
-      expect.objectContaining({ err: expect.stringMatching(diagnostic) }),
-      expect.any(String),
-    );
-  }
-  expect(loadSessionEntry(fixture.exact)).toBeDefined();
-  await fixture.verifyPreserved();
-}
-
-it.each([
-  ["continuation", "relevant"],
-  ["continuation", "unrelated"],
-  ["reaper", "relevant"],
-  ["reaper", "unrelated"],
-] as const)(
-  "revalidates %s deletion after a %s foreign commit following the live grant",
-  async (kind, change) => {
-    await withCronFixture(kind, async (fixture) => {
-      saveSubagentRegistryChangesToSqlite(new Map([[fixture.unrelated.runId, fixture.unrelated]]), [
-        fixture.unrelated.runId,
-      ]);
-      clearSubagentRunsReadCacheForTest();
-      let settled = false;
-      const outcome = fixture.start().finally(() => {
-        settled = true;
-      });
-      void outcome.catch(() => {});
-      try {
-        expect(
-          await Promise.race([
-            fixture.probe.checkpoint.promise.then(() => "grant"),
-            outcome.then(() => "done"),
-          ]),
-        ).toBe("grant");
-        expect(fixture.probe.grantAttempts).toBe(1);
-        await nextTurn();
-        expect(settled).toBe(false);
-        const record =
-          change === "relevant"
-            ? {
-                ...fixture.child,
-                execution: { status: "running", startedAt: Date.now() },
-                cleanupCompletedAt: undefined,
-              }
-            : { ...fixture.unrelated, task: "Foreign task text; maintenance protection unchanged" };
-        await updateForeignSubagentPayload(
-          fixture.context.admission.databasePath,
-          record.runId,
-          JSON.stringify(record),
-        );
-        fixture.probe.release();
-        if (change === "relevant") {
-          await expectRefusal(fixture, outcome, /Session subagent facts changed before commit/u);
-        } else {
-          const result = await outcome;
-          if (kind === "reaper") {
-            expect(result).toEqual({ swept: true, pruned: 1 });
-          }
-          expect(fixture.log.warn).not.toHaveBeenCalled();
-          expect(loadSessionEntry(fixture.exact)).toBeUndefined();
-          await fixture.verifyPreserved();
-        }
-      } finally {
-        fixture.probe.release();
-        await outcome.catch(() => {});
-      }
-    });
-  },
-);
-
-it.each(["continuation", "reaper"] as const)(
-  "refuses %s deletion when media becomes active at the live grant",
-  async (kind) => {
-    await withCronFixture(kind, async (fixture) => {
-      const runId = `late-${kind}-media`;
-      fixture.probe.beforeGrant = () =>
-        registerGeneratedMediaTaskActivity(runId, fixture.exact.sessionKey, "main");
-      const work = fixture.start();
-      try {
-        await expectRefusal(
-          fixture,
-          work,
-          /unsettled background work|Cannot prune cron run continuation/u,
-        );
-        expect(fixture.probe.grantAttempts).toBe(1);
-        expect(fixture.probe.held).toBe(false);
-      } finally {
-        fixture.probe.release();
-        await work.catch(() => {});
-        clearGeneratedMediaTaskActivity(runId);
-      }
-    });
-  },
-);
-
 it.each(["continuation", "reaper"] as const)(
   "refuses %s deletion after the captured default state source changes",
   async (kind) => {
@@ -397,12 +177,10 @@ it.each(["continuation", "reaper"] as const)(
             );
           }
         });
-        expect(fixture.probe.grantAttempts).toBe(0);
         expect(loadSessionEntry(fixture.exact)).toBeDefined();
         await fixture.verifyPreserved();
       } finally {
         reader.release();
-        fixture.probe.release();
         await work.catch(() => {});
         reader.restore();
         await other.cleanup();

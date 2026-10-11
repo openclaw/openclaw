@@ -34,10 +34,10 @@ function resolveToastAnchorRect(anchor: Element | undefined) {
 }
 
 function activeModalToastLayer() {
-  const owner = [...(document.openClawModalLayers ?? [])].findLast(
-    (candidate) => candidate.isConnected,
-  );
-  const container = owner?.querySelector<HTMLElement>(".oc-modal-dialog__overlay-content");
+  const owner = [...(document.openClawModalLayers ?? [])]
+    .findLast((candidate) => candidate.isConnected)
+    ?.closest("openclaw-modal-dialog");
+  const container = owner?.getOverlayContainer();
   return owner && container ? { owner, container } : undefined;
 }
 

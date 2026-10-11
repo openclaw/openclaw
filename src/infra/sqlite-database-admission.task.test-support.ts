@@ -14,6 +14,7 @@ export type AdmissionTaskInput = {
   nested?: boolean;
   broker?: boolean;
   creationPath?: string;
+  measureHostAbsence?: boolean;
   holdMutation?: SharedArrayBuffer;
 };
 export type AdmissionTaskResult = AdmissionOperations["admitted"]["output"];
@@ -38,6 +39,7 @@ serveWorkerTasks<AdmissionTaskResult>(async (input, channel) => {
           path: input.path,
           broker: input.broker === true,
           creationPath: typeof input.creationPath === "string" ? input.creationPath : undefined,
+          measureHostAbsence: input.measureHostAbsence === true,
         },
         {},
       );
@@ -78,7 +80,10 @@ serveWorkerTasks<AdmissionTaskResult>(async (input, channel) => {
           }),
         );
       }
-      return await store.execute({ type: "admitted", input: undefined });
+      return await store.execute({
+        type: "admitted",
+        input: input.measureHostAbsence === true ? { measureHostAbsence: true } : undefined,
+      });
     } finally {
       await broker.close();
     }
@@ -90,7 +95,10 @@ serveWorkerTasks<AdmissionTaskResult>(async (input, channel) => {
   }
   const backend = createSqliteWorkerBackend(undefined, { databasePath: input.path });
   try {
-    return backend.execute({ type: "admitted", input: undefined });
+    return backend.execute({
+      type: "admitted",
+      input: input.measureHostAbsence === true ? { measureHostAbsence: true } : undefined,
+    });
   } finally {
     backend.close();
   }

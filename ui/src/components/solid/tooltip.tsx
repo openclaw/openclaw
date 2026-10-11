@@ -1,7 +1,7 @@
 import type { JSX as SolidJSX } from "@solidjs/web";
 import { Show, createEffect, createSignal, onCleanup, onSettled, untrack } from "solid-js";
 import { acquireNativeOverlaySurface } from "../../lib/native-overlay-occlusion.ts";
-import { bindOverlayAnchor } from "../overlay-anchor.ts";
+import { createOverlayAnchor } from "../overlay-anchor.ts";
 import { createOverlay, findOverlayParent } from "../overlay-lifecycle.ts";
 import { isTooltipTriggerElement } from "../tooltip-content.ts";
 import { TooltipController, type TooltipPolicyProps } from "../tooltip-controller.ts";
@@ -46,7 +46,7 @@ export function TooltipContents(props: TooltipContentsProps) {
   });
   let currentProps = untrack(readPolicyProps);
   let controller: TooltipController | undefined;
-  let releaseAnchor: (() => void) | undefined;
+  let anchorBinding: ReturnType<typeof createOverlayAnchor> | undefined;
   let anchoredTrigger: HTMLElement | SVGElement | null = null;
   let anchoredPlacement: string | undefined;
   const [materialized, setMaterialized] = createSignal(false);
@@ -80,6 +80,21 @@ export function TooltipContents(props: TooltipContentsProps) {
     }
   };
 
+  const updateAnchor = () => {
+    const trigger = controller?.trigger;
+    if (!trigger || !controller) {
+      return;
+    }
+    const placement = controller.resolvedPlacement;
+    if (trigger !== anchoredTrigger || placement !== anchoredPlacement) {
+      anchorBinding ??= createOverlayAnchor(surface);
+      anchorBinding.update(trigger, placement);
+      anchoredTrigger = trigger;
+      anchoredPlacement = placement;
+    }
+    surface.setAttribute("placement", placement);
+  };
+
   onSettled(() => {
     const readTrigger = () => {
       const element = triggerSlot.assignedElements({ flatten: true }).find(isTooltipTriggerElement);
@@ -98,16 +113,7 @@ export function TooltipContents(props: TooltipContentsProps) {
           overlay.setParent(findOverlayParent(trigger));
         }
         overlay.bindTrigger(trigger instanceof HTMLElement ? trigger : undefined);
-        if (
-          trigger &&
-          (trigger !== anchoredTrigger || anchoredPlacement !== policy.resolvedPlacement)
-        ) {
-          releaseAnchor?.();
-          releaseAnchor = bindOverlayAnchor(surface, trigger, policy.resolvedPlacement);
-          anchoredTrigger = trigger;
-          anchoredPlacement = policy.resolvedPlacement;
-        }
-        surface.setAttribute("placement", policy.resolvedPlacement);
+        updateAnchor();
         return overlay.request(open);
       },
     });
@@ -151,7 +157,7 @@ export function TooltipContents(props: TooltipContentsProps) {
       childObserver.disconnect();
       unsubscribe();
       overlay.dispose();
-      releaseAnchor?.();
+      anchorBinding?.dispose();
       policy.dispose();
       for (const remove of listeners) {
         remove();
@@ -163,6 +169,9 @@ export function TooltipContents(props: TooltipContentsProps) {
   createEffect(readPolicyProps, (next) => {
     currentProps = next;
     controller?.refresh();
+    if (overlay.open) {
+      updateAnchor();
+    }
   });
   onCleanup(() => overlay.dispose());
 

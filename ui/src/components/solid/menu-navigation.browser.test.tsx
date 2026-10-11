@@ -5,6 +5,7 @@ import { userEvent } from "vitest/browser";
 import {
   item,
   mountMenu,
+  navigationItems,
   openMenu,
   openSurfaces,
   phase,
@@ -97,23 +98,32 @@ describe("Solid menu navigation", () => {
     },
   );
 
-  it("uses real item focus, skips disabled items, and activates typeahead results", async () => {
-    const selected: string[] = [];
-    mountMenu({ onSelect: (entry) => selected.push(entry.id) });
-    await openMenu();
-    await userEvent.keyboard("{End}");
-    expect(document.activeElement).toBe(item("Archive"));
-    await userEvent.keyboard("{ArrowUp}");
-    expect(document.activeElement).toBe(trigger("people-move"));
-    await userEvent.keyboard("{Home}a");
-    expect(document.activeElement).toBe(item("Archive"));
-    expect(surface().hasAttribute("aria-activedescendant")).toBe(false);
-    expect(item("Archive").tabIndex).toBe(0);
-    await userEvent.keyboard("{Enter}");
-    await phase(surface(), "hidden");
-    expect(selected).toEqual(["archive"]);
-    expect(document.activeElement).toBe(trigger());
-  });
+  it.each([undefined, "checkbox", "radio"] as const)(
+    "uses real item focus, skips disabled items, and activates typeahead results (%s)",
+    async (type) => {
+      const selected: string[] = [];
+      mountMenu({
+        items: [
+          ...navigationItems.slice(0, -1),
+          { id: "configured-choice", label: "Archive", type },
+        ],
+        onSelect: (entry) => selected.push(entry.id),
+      });
+      await openMenu();
+      await userEvent.keyboard("{End}");
+      expect(document.activeElement).toBe(item("Archive"));
+      await userEvent.keyboard("{ArrowUp}");
+      expect(document.activeElement).toBe(trigger("people-move"));
+      await userEvent.keyboard("{Home}a");
+      expect(document.activeElement).toBe(item("Archive"));
+      expect(surface().hasAttribute("aria-activedescendant")).toBe(false);
+      expect(item("Archive").tabIndex).toBe(0);
+      await userEvent.keyboard("{Enter}");
+      await phase(surface(), "hidden");
+      expect(selected).toEqual(["configured-choice"]);
+      expect(document.activeElement).toBe(trigger());
+    },
+  );
 
   it("opens at the last enabled item with ArrowUp and exits with native Tab", async () => {
     const view = mountMenu();

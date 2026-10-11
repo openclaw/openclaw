@@ -440,6 +440,65 @@ describe("native overlay lifecycle", () => {
     expect(release).not.toHaveBeenCalled();
   });
 
+  it.each(["div", "dialog"] as const)(
+    "closes the old native %s surface before replacing an animated lifetime",
+    async (surfaceTag) => {
+      const release = vi.fn();
+      const fixture = mountOverlay(
+        {
+          acquireOcclusion: () => release,
+          native:
+            surfaceTag === "dialog"
+              ? {
+                  isOpen: (element) => element.hasAttribute("open"),
+                  show: (element) => {
+                    if (element instanceof HTMLDialogElement) {
+                      element.showModal();
+                    }
+                  },
+                  hide: (element) => {
+                    if (element instanceof HTMLDialogElement) {
+                      element.close();
+                    }
+                  },
+                }
+              : undefined,
+        },
+        undefined,
+        document,
+        surfaceTag,
+      );
+      await open(fixture);
+      const phases = recordPhases(fixture);
+      const replacement = document.createElement(surfaceTag);
+      if (surfaceTag === "div") {
+        replacement.popover = "manual";
+      }
+      fixture.surface.parentElement!.append(replacement);
+      const nativeSelector = surfaceTag === "dialog" ? ":modal" : ":popover-open";
+      const animation = fixture.surface.animate({ opacity: [1, 0.9] }, { duration: 1000 });
+      animation.pause();
+      try {
+        fixture.owner.bindSurface(replacement);
+        expect(fixture.surface.matches(nativeSelector)).toBe(false);
+        expect(fixture.surface.inert).toBe(true);
+        expect(fixture.owner.surface).toBe(replacement);
+        expect(fixture.owner.open).toBe(false);
+        expect(release).toHaveBeenCalledTimes(1);
+
+        await open({ ...fixture, surface: replacement });
+        animation.finish();
+        await frame();
+        expect(replacement.matches(nativeSelector)).toBe(true);
+        expect(fixture.owner.open).toBe(true);
+        expect(phases).toEqual([]);
+        expect(release).toHaveBeenCalledTimes(1);
+      } finally {
+        animation.cancel();
+      }
+    },
+  );
+
   it("waits for a paused finite animation before publishing completion", async () => {
     const fixture = mountOverlay();
     const animation = fixture.surface.animate({ opacity: [0, 1] }, { duration: 60_000 });

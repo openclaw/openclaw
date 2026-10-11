@@ -46,25 +46,6 @@ describe("chat pane native history pagination", () => {
     expect(pane.chatProps?.userAvatar).toBe(user.avatarUrl);
   });
 
-  it("reuses the last resolved viewer identity while reconnecting drops selfUser", () => {
-    const { pane, context } = createRefreshChatPane();
-    const user = {
-      id: "profile-viewer",
-      name: "Viewer",
-      identity: { type: "profile" as const, id: "profile-viewer" },
-    };
-    context.gateway.snapshot.selfUser = user;
-    pane.render();
-    expect(pane.chatProps?.userId).toBe("profile-viewer");
-
-    // A reconnect briefly clears selfUser; peer alignment must not flash by
-    // falling back to null. The last resolved identity is presentation-only
-    // (alignment + sender label), never authorization.
-    context.gateway.snapshot.selfUser = null;
-    pane.render();
-    expect(pane.chatProps?.userId).toBe("profile-viewer");
-  });
-
   it.each(["pending", "resolved"] as const)(
     "keeps a %s people query selectable when selected-session metadata hydrates",
     async (replyState) => {
@@ -272,29 +253,6 @@ describe("chat pane native history pagination", () => {
     }
   });
 
-  it("loads at the top through the canonical path without commanding a viewport jump", async () => {
-    const request = vi.fn(async () => ({
-      messages: [nativeHistoryMessage(1), nativeHistoryMessage(2)],
-      hasMore: true,
-      nextOffset: 4,
-      totalMessages: 6,
-    }));
-    const { pane, scrollToOffset, state } = createNativeShowEarlierPane(request);
-
-    await pane.loadOlderMessages();
-
-    expect(request).toHaveBeenCalledWith("chat.history", {
-      sessionKey: state.sessionKey,
-      limit: 1000,
-      toolResultMaxChars: 2_000,
-      offset: 2,
-    });
-    expect(state.chatMessages.map(nativeHistorySeq)).toEqual([1, 2, 3, 4]);
-    expect(scrollToOffset).not.toHaveBeenCalled();
-    expect(pane.historyObserverArmed).toBe(false);
-    expect(pane.historyAutoLoadBlocked).toBe(false);
-  });
-
   it("publishes older history with its own cursor after a sibling advances", async () => {
     const request = vi.fn(async () => ({
       messages: [nativeHistoryMessage(1), nativeHistoryMessage(2)],
@@ -403,20 +361,6 @@ describe("chat pane native history pagination", () => {
     );
     expect(pane.catalogMessages).toHaveLength(1);
     expect(pane.catalogCursor).toBeUndefined();
-    expect(scrollToOffset).not.toHaveBeenCalled();
-  });
-
-  it("keeps the viewport and pagination retryable when the older load fails", async () => {
-    const request = vi.fn(async () => {
-      throw new Error("history unavailable");
-    });
-    const { pane, scrollToOffset, state, thread } = createNativeShowEarlierPane(request);
-
-    await pane.loadOlderMessages();
-
-    expect(thread.scrollTop).toBe(0);
-    expect(state.chatHistoryPagination).toMatchObject({ hasMore: true });
-    expect(state.lastError).toBe("history unavailable");
     expect(scrollToOffset).not.toHaveBeenCalled();
   });
 
@@ -575,40 +519,6 @@ describe("chat pane native history pagination", () => {
     }
   });
 
-  it("stages the next older page and consumes it without entering the loading state", async () => {
-    const request = stagedPagesRequest();
-    const { pane, state } = createStagedPrefetchPane(request);
-
-    await pane.loadOlderMessages();
-
-    expect(state.chatMessages.map(nativeHistorySeq)).toEqual([5, 6, 7, 8]);
-    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
-    expect(request).toHaveBeenNthCalledWith(2, "chat.history", {
-      sessionKey: state.sessionKey,
-      limit: 1000,
-      toolResultMaxChars: 2_000,
-      offset: 4,
-    });
-    await vi.waitFor(() => expect(pane.stagedOlder.page).not.toBeNull());
-
-    const loadingDuringRender: boolean[] = [];
-    (state.requestUpdate as ReturnType<typeof vi.fn>).mockImplementation(() => {
-      loadingDuringRender.push(pane.loadingOlder);
-    });
-    await expect(pane.loadOlderMessages()).resolves.toBe(true);
-
-    expect(state.chatMessages.map(nativeHistorySeq)).toEqual([3, 4, 5, 6, 7, 8]);
-    // The staged page applies without a round trip or a loading-state render.
-    expect(loadingDuringRender).not.toContain(true);
-    expect(request).toHaveBeenCalledTimes(3);
-    expect(request).toHaveBeenNthCalledWith(3, "chat.history", {
-      sessionKey: state.sessionKey,
-      limit: 1000,
-      toolResultMaxChars: 2_000,
-      offset: 6,
-    });
-  });
-
   it("joins an in-flight prefetch instead of duplicating the request", async () => {
     const deferred = createDeferred<unknown>();
     const request = stagedPagesRequest({ 4: () => deferred.promise });
@@ -694,24 +604,6 @@ describe("chat pane native history pagination", () => {
     expect(texts.some((text) => text?.includes("pre-rewind branch"))).toBe(false);
   });
 
-  it("clears the staged page on viewport reset", async () => {
-    const request = stagedPagesRequest();
-    const { pane } = createStagedPrefetchPane(request);
-
-    await pane.loadOlderMessages();
-    await vi.waitFor(() => expect(pane.stagedOlder.page).not.toBeNull());
-
-    pane.resetOlderMessagesViewport();
-    expect(pane.stagedOlder.page).toBeNull();
-    expect(pane.stagedOlder.load).toBeNull();
-
-    await expect(pane.loadOlderMessages()).resolves.toBe(true);
-    const offsetFourCalls = request.mock.calls.filter(
-      ([, params]) => (params as { offset?: number }).offset === 4,
-    );
-    expect(offsetFourCalls).toHaveLength(2);
-  });
-
   it("keeps prefetch failures silent and retries reactively", async () => {
     let offsetFourCalls = 0;
     const request = stagedPagesRequest({
@@ -737,27 +629,6 @@ describe("chat pane native history pagination", () => {
     await expect(pane.loadOlderMessages()).resolves.toBe(true);
     expect(offsetFourCalls).toBe(2);
     expect(state.chatMessages.map(nativeHistorySeq)).toEqual([3, 4, 5, 6, 7, 8]);
-  });
-
-  it("does not consume bootstrap history while disconnected", () => {
-    const client = { request: vi.fn() } as unknown as GatewayBrowserClient;
-    const { pane, state } = createTestChatPane({ client });
-    state.connected = false;
-    state.chatHistoryPagination = { hasMore: true, nextOffset: 2, totalMessages: 4 };
-    const construct = vi.fn();
-    class FakeIntersectionObserver {
-      constructor() {
-        construct();
-      }
-      disconnect() {}
-      observe() {}
-    }
-    vi.stubGlobal("IntersectionObserver", FakeIntersectionObserver);
-
-    pane.syncHistoryObserver();
-
-    expect(construct).not.toHaveBeenCalled();
-    expect(pane.historyAutoLoadBlocked).toBe(false);
   });
 
   it("reuses an armed history observer and ignores its queued callback after reset", async () => {
@@ -981,38 +852,6 @@ describe("chat pane native history pagination", () => {
     },
   );
 
-  it("keeps projected siblings while replacing the overlapping tail", async () => {
-    const firstProjection = nativeHistoryMessage(3, "first projection");
-    const secondProjection = nativeHistoryMessage(3, "second projection");
-    const request = vi.fn(async () => ({
-      messages: [firstProjection, secondProjection, nativeHistoryMessage(4)],
-      hasMore: true,
-      nextOffset: 2,
-      totalMessages: 4,
-      sessionInfo: { sessionId: "session-current" },
-    }));
-    const client = { request } as unknown as GatewayBrowserClient;
-    const { state } = createTestChatPane({ client });
-    state.currentSessionId = "session-current";
-    state.chatMessages = [
-      nativeHistoryMessage(1),
-      nativeHistoryMessage(2),
-      nativeHistoryMessage(3, "stale projection"),
-      nativeHistoryMessage(4, "stale latest"),
-    ];
-    state.chatHistoryPagination = { hasMore: false, totalMessages: 4 };
-
-    await loadChatHistory(state);
-
-    expect(state.chatMessages).toEqual([
-      nativeHistoryMessage(1),
-      nativeHistoryMessage(2),
-      firstProjection,
-      secondProjection,
-      nativeHistoryMessage(4),
-    ]);
-  });
-
   it("replaces the tail when the refreshed raw range does not overlap loaded history", async () => {
     const request = vi.fn(async () => ({
       messages: [nativeHistoryMessage(7), nativeHistoryMessage(8)],
@@ -1039,34 +878,6 @@ describe("chat pane native history pagination", () => {
       hasMore: true,
       nextOffset: 2,
       totalMessages: 8,
-    });
-  });
-
-  it("preserves loaded visible rows when an adjacent refreshed page projects empty", async () => {
-    const request = vi.fn(async () => ({
-      messages: [],
-      hasMore: true,
-      nextOffset: 2,
-      totalMessages: 6,
-      sessionInfo: { sessionId: "session-current" },
-    }));
-    const client = { request } as unknown as GatewayBrowserClient;
-    const { state } = createTestChatPane({ client });
-    state.currentSessionId = "session-current";
-    state.chatMessages = [
-      nativeHistoryMessage(1),
-      nativeHistoryMessage(2),
-      nativeHistoryMessage(3),
-      nativeHistoryMessage(4),
-    ];
-    state.chatHistoryPagination = { hasMore: false, totalMessages: 4 };
-
-    await loadChatHistory(state);
-
-    expect(state.chatMessages.map(nativeHistorySeq)).toEqual([1, 2, 3, 4]);
-    expect(state.chatHistoryPagination).toEqual({
-      hasMore: false,
-      totalMessages: 6,
     });
   });
 

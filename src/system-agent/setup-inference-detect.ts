@@ -23,7 +23,7 @@ import {
 import { resolveProviderInstallCatalogEntries } from "../plugins/provider-install-catalog.js";
 import { listRecommendedToolInstalls } from "../plugins/recommended-tool-installs.js";
 import {
-  choiceMatchesCredential,
+  findSetupCredentialChoice,
   listSetupInferenceAuthOptions,
   listSetupInferenceEnableOptions,
   listSetupInferenceInstallOptions,
@@ -65,11 +65,7 @@ async function listSavedSetupInferenceCandidates(params: {
     if (!saved && params.cfg.auth?.profiles?.[profileId]) {
       continue;
     }
-    const choice = saved?.authChoice
-      ? params.choices.find(
-          (entry) => entry.choiceId === saved.authChoice && entry.pluginId === saved.pluginId,
-        )
-      : params.choices.find((entry) => choiceMatchesCredential(entry, credential));
+    const choice = findSetupCredentialChoice(params.choices, credential);
     let modelRef = saved?.modelRef;
     if (!modelRef && choice) {
       const loaded = await withSetupProviderAuthMethod({ ...params, choice }, ({ method }) => ({

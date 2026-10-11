@@ -425,3 +425,12 @@ browser-stored credential. The login gate appears only after the initial connect
 Gateway actively rejects authentication (bad token/password, missing trusted identity, revoked
 pairing). Transient connection failures retry automatically; authentication failures explain
 what needs your input.
+
+## Reloading a session link
+
+Authenticated app documents carry the same presentation and capability config as
+`control-ui-config.json`, so the first render can use the configured assistant
+identity without waiting for the WebSocket. These documents use private, no-store
+caching. Public and unauthenticated documents carry no protected bootstrap data;
+the app starts its config request alongside connection startup. Reconnects and
+configuration-change events refresh the serving Gateway's config.

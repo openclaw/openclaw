@@ -1,4 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { getSqliteReadScopeRevision } from "../../infra/sqlite-schema-facts.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
 import {
   applySessionGoalOperation,
@@ -92,6 +93,7 @@ export function createSessionTranscriptTurnKernel(
       transactionDb: OpenClawAgentDatabase,
       messages: readonly SessionTranscriptTurnMessageAppend[],
       projection?: Parameters<typeof appendTranscriptMessageInTransaction>[4],
+      validateSelected?: (selected: ResolvedSessionEntryRow | undefined) => void,
     ) {
       const mutation = options.sessionTurnMutation;
       options.assertCurrent?.();
@@ -99,6 +101,7 @@ export function createSessionTranscriptTurnKernel(
       assertRouting?.(transactionDb);
       let result: SqliteExpectedSessionTranscriptTurnResult;
       const fresh = readEntry(transactionDb);
+      validateSelected?.(fresh);
       const replay = mutation
         ? readSessionGoalOperationReceipt(
             transactionDb.db,
@@ -212,6 +215,7 @@ export function createSessionTranscriptTurnKernel(
       // Append-owned metadata (including history coverage) is part of this same
       // transaction. Do not overwrite it with the pre-append entry snapshot.
       const appended = readEntry(transactionDb);
+      const appendedRevision = getSqliteReadScopeRevision(transactionDb.db);
       const appendedEntry = appended?.entry ?? currentEntry;
       const sessionPatch = buildExpectedTranscriptTurnSessionPatch({
         appendedMessages,
@@ -244,6 +248,7 @@ export function createSessionTranscriptTurnKernel(
         const persisted = writesEntry
           ? writeSessionEntry(transactionDb, resolved.sessionKey, next, {
               canonicalPreviousEntry: previousIdentity.get(resolved.sessionKey) ?? null,
+              canonicalPreviousEntryRevision: appendedRevision,
             })
           : appendedEntry;
         const currentIdentity = new Map(previousIdentity);

@@ -93,7 +93,7 @@ async function runBoundTurn(params: {
     config: params.config,
   });
   const identity = { kind: "conversation" as const, bindingId: params.data.bindingId };
-  const binding = params.bindingStore.read(identity);
+  const binding = await params.bindingStore.readAsync(identity);
   if (!binding?.threadId) {
     throw new Error("bound Codex conversation has no thread binding");
   }
@@ -102,7 +102,7 @@ async function runBoundTurn(params: {
     identity,
     threadId: binding.threadId,
     run: async () => {
-      const current = params.bindingStore.read(identity);
+      const current = await params.bindingStore.readAsync(identity);
       if (!isSameCodexAppServerThreadOwner(current, binding)) {
         throw new Error("Codex conversation binding changed before its turn.");
       }

@@ -169,7 +169,7 @@ export async function materializePendingSupervisionBranch(
       });
     } catch (error) {
       try {
-        const current = params.bindingStore.read(params.bindingIdentity);
+        const current = await params.bindingStore.readAsync(params.bindingIdentity);
         if (matchesPendingSupervisionState(current, pending)) {
           cleanupExpected = pending;
         } else if (matchesPendingSupervisionState(current, expected)) {
@@ -338,7 +338,7 @@ export async function materializePendingSupervisionBranch(
     } catch (error) {
       let current: CodexAppServerThreadBinding | undefined;
       try {
-        current = params.bindingStore.read(params.bindingIdentity);
+        current = await params.bindingStore.readAsync(params.bindingIdentity);
       } catch (readError) {
         provisionalCleanupSafe = false;
         throw new CodexAppServerUnsafeSubscriptionError(

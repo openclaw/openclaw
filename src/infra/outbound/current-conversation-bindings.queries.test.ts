@@ -1,9 +1,8 @@
-import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import type { DB } from "../../state/openclaw-state-db.generated.js";
 import {
-  closeOpenClawStateDatabaseForTest,
+  closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
@@ -12,10 +11,12 @@ import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel-constants.
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../kysely-sync.js";
 import { createAccountScopedConversationBindingManager } from "./account-scoped-conversation-bindings.js";
 import {
+  bindCurrentConversationRecordAsync,
   deleteCurrentConversationBindingRecordsBySession,
   inspectCurrentConversationBindingRecords,
   listCurrentConversationBindingRecordsBySession,
   resolveCurrentConversationBindingRecord,
+  removeCurrentConversationBindingsAsync,
   updateCurrentConversationBindingRecord,
 } from "./current-conversation-bindings.js";
 import { currentConversationBindingPublication } from "./current-conversation-bindings.publication.js";
@@ -85,46 +86,39 @@ it("reads current bindings without recompiling fixed queries after warmup", asyn
   });
 });
 
-it("observes another SQLite connection after warm reads and database reopen", async () => {
+it("invalidates warm main-thread binding rows after worker receipts and database reopen", async () => {
   await withOpenClawTestState({ label: "binding-query-freshness" }, async () => {
-    const original = binding("external");
+    const original = binding("worker-written");
     writeBinding(original);
     const inspect = () => inspectCurrentConversationBindingRecords([original.conversation])[0];
     expect(inspect()).toEqual(original);
     expect(inspect()).toEqual(original);
     const owned = openOpenClawStateDatabase();
-    const external = new DatabaseSync(owned.path);
+    const executions = trackSqliteStatementExecutions(owned.db, ["freshness"], (query) =>
+      /^PRAGMA data_version$|FROM main\.pragma_data_version\(\)\s*$/iu.test(query)
+        ? "freshness"
+        : null,
+    );
     try {
-      const sql = getNodeSqliteKysely<Pick<DB, "current_conversation_bindings">>(external);
       const replacement = {
         ...original,
         targetSessionKey: "agent:other:replacement",
         metadata: { opaque: { fresh: [1, 2] } },
       };
-      executeSqliteQuerySync(
-        external,
-        sql
-          .updateTable("current_conversation_bindings")
-          .set({
-            target_session_key: replacement.targetSessionKey,
-            record_json: JSON.stringify(replacement),
-            metadata_json: JSON.stringify(replacement.metadata),
-          })
-          .where("binding_id", "=", original.bindingId),
+      expect(await bindCurrentConversationRecordAsync({ record: replacement })).toEqual(
+        replacement,
       );
       expect(inspect()).toEqual(replacement);
-      closeOpenClawStateDatabaseForTest();
+      expect(executions.counts.freshness).toBe(0);
+      await closeOpenClawStateDatabaseAsync();
       expect(openOpenClawStateDatabase().db === owned.db).toBe(false);
       expect(inspect()).toEqual(replacement);
-      executeSqliteQuerySync(
-        external,
-        sql
-          .deleteFrom("current_conversation_bindings")
-          .where("binding_id", "=", original.bindingId),
-      );
+      expect(
+        await removeCurrentConversationBindingsAsync({ conversation: original.conversation }),
+      ).toEqual([replacement]);
       expect(inspect()).toBeNull();
     } finally {
-      external.close();
+      executions.restore();
     }
   });
 });
@@ -157,7 +151,7 @@ it("reuses unchanged binding rows while local updates, expiry, and returned obje
       expect(inspect()).toEqual([original, null]);
       expect(inspect()).toEqual([original, null]);
       expect(executions.counts.selection).toBe(1);
-      expect(executions.counts.freshness).toBe(3);
+      expect(executions.counts.freshness).toBe(0);
 
       const replacement = { ...original, targetSessionKey: "agent:other:replacement" };
       writeBinding(replacement);

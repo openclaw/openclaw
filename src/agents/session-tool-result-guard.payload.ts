@@ -13,7 +13,6 @@ import {
   redactSensitiveFieldValueWithConfig,
   redactToolPayloadTextWithConfig,
 } from "../logging/redact.js";
-import { formatContextLimitTruncationNotice } from "./embedded-agent-runner/context-truncation-notice.js";
 import {
   DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS,
   truncateToolResultMessage,
@@ -382,13 +381,7 @@ export function capToolResultForPersistence(
   maxChars: number,
   redactionConfig?: ToolResultDetailRedactionConfig,
 ): AgentMessage {
-  const capped =
-    msg.role === "toolResult"
-      ? truncateToolResultMessage(msg, maxChars, {
-          suffix: formatContextLimitTruncationNotice,
-          minKeepChars: 2_000,
-        })
-      : msg;
+  const capped = msg.role === "toolResult" ? truncateToolResultMessage(msg, maxChars) : msg;
   if (capped.role !== "toolResult") {
     return capped;
   }

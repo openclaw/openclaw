@@ -5,11 +5,11 @@ import {
 import { normalizeOptionalTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { resolveFastModeState } from "../../agents/fast-mode.js";
 import {
+  findModelInCatalog,
   prepareModelRunCapabilities,
   type PreparedModelThinkingCapability,
 } from "../../agents/model-catalog-lookup.js";
 import {
-  needsThinkHydration,
   normalizeThinkingCatalogProviders,
   resolveCandidateThinkingLevel,
 } from "../../agents/thinking-runtime.js";
@@ -422,24 +422,23 @@ export async function buildEmbeddedRunExecutionParams(params: {
     resolveModelFallbackOptions(snapshot.run);
   let modelThinkingCapability: PreparedModelThinkingCapability | undefined;
   if (snapshot.agentRuntime) {
-    let thinkingCatalog = snapshot.run.thinkingCatalog;
-    if (
-      needsThinkHydration(thinkingCatalog, snapshot.provider, snapshot.model, snapshot.agentRuntime)
-    ) {
-      const { loadProviderScopedThinkingCatalog } =
-        await import("../../agents/model-catalog.runtime.js");
-      thinkingCatalog = normalizeThinkingCatalogProviders(
-        await loadProviderScopedThinkingCatalog({
-          config,
-          provider: snapshot.provider,
-          model: snapshot.model,
-          agentRuntime: snapshot.agentRuntime,
-          agentId: snapshot.run.agentId,
-          agentDir: snapshot.run.agentDir,
-          workspaceDir: snapshot.run.workspaceDir,
-        }),
-      );
-    }
+    // Keep the lifecycle-owned catalog module lazy until this turn has a selected runtime.
+    const { loadProviderScopedThinkingCatalog } =
+      await import("../../agents/model-catalog.runtime.js");
+    const observedCatalog = normalizeThinkingCatalogProviders(
+      await loadProviderScopedThinkingCatalog({
+        config,
+        provider: snapshot.provider,
+        model: snapshot.model,
+        agentRuntime: snapshot.agentRuntime,
+        agentId: snapshot.run.agentId,
+        agentDir: snapshot.run.agentDir,
+        workspaceDir: snapshot.run.workspaceDir,
+      }),
+    );
+    const thinkingCatalog = findModelInCatalog(observedCatalog, snapshot.provider, snapshot.model)
+      ? observedCatalog
+      : snapshot.run.thinkingCatalog;
     modelThinkingCapability = prepareModelRunCapabilities(
       [thinkingCatalog, []],
       [snapshot.provider, snapshot.model, snapshot.agentRuntime],

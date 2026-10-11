@@ -173,23 +173,14 @@ describe("ConfigPage navigation", () => {
       expect(patchForm).not.toHaveBeenCalled();
       expect(removeFormValue).not.toHaveBeenCalled();
       const full = expectDefined(
-        page.querySelector<HTMLElement>('wa-radio[value="full"]'),
+        page.querySelector<HTMLInputElement>('.settings-segmented__input[value="full"]'),
         "Full tool choice",
       );
-      expect(page.querySelectorAll("wa-radio")).toHaveLength(4);
+      expect(page.querySelectorAll(".settings-segmented__input")).toHaveLength(4);
       expect(page.querySelectorAll(".settings-segmented__btn--active")).toHaveLength(
         profile ? 1 : 0,
       );
-      if (profile !== "full") {
-        const group = expectDefined(
-          full.closest<HTMLElement & { value: string }>("wa-radio-group"),
-          "tool choices",
-        );
-        group.value = "full";
-        group.dispatchEvent(new Event("change", { bubbles: true }));
-      } else {
-        full.click();
-      }
+      full.click();
       expect(patchForm).toHaveBeenCalledTimes(writes);
       if (writes > 0) {
         expect(patchForm).toHaveBeenCalledWith(["tools", "profile"], "full");
@@ -505,7 +496,7 @@ describe("ConfigPage model catalog lifecycle", () => {
       await settleLitElement(page);
       const secondMainLoad = state.sessionObserverModelsTask.taskComplete;
       const currentMainModels = [{ id: "current-main", name: "Current Main", provider: "openai" }];
-      expect(mainRequests).toBe(1);
+      expect(mainRequests).toBe(2);
       expect(state.sessionObserverModels).toEqual([]);
       firstMain.resolve({ models: [{ id: "stale-main", name: "Stale Main", provider: "openai" }] });
       await settleLitElement(page);
@@ -563,8 +554,7 @@ describe("ConfigPage model catalog lifecycle", () => {
 
       provider.append(page);
       await settleLitElement(page);
-      expect(catalogReads).toBe(2);
-      expect(state.sessionObserverModels).toEqual([]);
+      expect(catalogReads).toBe(3);
       stale.resolve({ models: original });
       await settleLitElement(page);
       expect(state.sessionObserverModels).toEqual(fresh);
@@ -668,7 +658,7 @@ describe("ConfigPage meeting capture", () => {
       expect(advanced).not.toBeNull();
       expect(advanced.open).toBe(false);
       expect(advanced.querySelector("#config-section-transcripts")).not.toBeNull();
-      const toggle = capture.querySelector<HTMLElement & { checked: boolean }>("wa-switch")!;
+      const toggle = capture.querySelector<HTMLInputElement>(".settings-toggle__input")!;
       toggle.checked = false;
       toggle.dispatchEvent(new Event("change"));
       expect(runtimeConfig.state.configForm).toMatchObject({ transcripts: { enabled: false } });

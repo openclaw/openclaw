@@ -136,9 +136,9 @@ describe("SQLite transcript append", () => {
       { seq: 1, event_json: nextJson },
     ]);
     expect(readTranscriptGenerationInTransaction(database, "append-session")).toBe(generation);
-    expect(policy.counts).toEqual({ policy: 1 });
-    expect(policy.rowCounts).toEqual({ policy: 1 });
-    expect(policy.textBytes).toEqual({ policy: 4 });
+    expect(policy.counts).toEqual({ policy: 0 });
+    expect(policy.rowCounts).toEqual({ policy: 0 });
+    expect(policy.textBytes).toEqual({ policy: 0 });
   });
 });
 

@@ -175,6 +175,7 @@ suite.define(() => {
           },
         });
         await page.goto(suite.server.baseUrl + "chat");
+        await page.locator('[data-navigation-view="online"]').click();
         const sidebarPerson = page.locator('[data-online-user-id="profile-ada"]');
         await sidebarPerson.hover();
         const card = page.locator(".person-activity-hovercard[role=dialog]");

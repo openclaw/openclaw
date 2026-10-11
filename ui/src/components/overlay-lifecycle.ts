@@ -649,6 +649,9 @@ export function createOverlay(
     }
   }
   function unbindSurface() {
+    if (native.isOpen(surface)) {
+      setNativeOpen(false);
+    }
     surface.removeEventListener("beforetoggle", beforeToggle);
     surface.removeEventListener("toggle", nativeToggle);
     if (frame !== undefined) {

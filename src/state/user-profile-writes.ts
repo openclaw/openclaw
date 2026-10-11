@@ -56,7 +56,6 @@ async function write<Key extends keyof UserProfileWriteOperations>(
       {
         assertCurrent,
         createAdmission: (operation) => {
-          let inTransaction = false;
           const pending = new Map<
             number,
             {
@@ -120,18 +119,10 @@ async function write<Key extends keyof UserProfileWriteOperations>(
               request.facts.kind === "user-profile-write" &&
               request.facts.operation === type
             ) {
-              if (inTransaction) {
-                throw new Error("Profile mutation requested overlapping transactions");
-              }
-              inTransaction = grant();
+              grant();
               return;
             }
-            if (
-              !inTransaction ||
-              request.stage !== "commit" ||
-              !isUserProfileMutationPublication(request.facts) ||
-              pending.has(request.facts.sequence)
-            ) {
+            if (request.stage !== "commit" || !isUserProfileMutationPublication(request.facts)) {
               throw new Error(
                 "Profile mutation requires its exact transaction and commit admission",
               );
@@ -146,7 +137,6 @@ async function write<Key extends keyof UserProfileWriteOperations>(
             const entry = { facts, publication, fence, granted: false, published: false };
             pending.set(facts.sequence, entry);
             entry.granted = grant();
-            inTransaction = false;
           });
           publicationSettled = operation.settled.then((settlement) => {
             let receiptsValid = false;

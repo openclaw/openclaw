@@ -84,6 +84,12 @@ suite.define(() => {
       const ada = page.locator('[data-session-key="agent:main:ada"]');
       const bob = page.locator('[data-session-key="agent:main:bob"]');
       await ada.waitFor();
+      // This regression protects foreign rows in All during a warm refresh.
+      expect(await bob.count()).toBe(0);
+      await page
+        .locator(".sidebar-navigation-scope")
+        .getByRole("button", { name: "All", exact: true })
+        .click();
       await bob.waitFor();
       await captureSidebar(page, "warm-before-event.png");
 

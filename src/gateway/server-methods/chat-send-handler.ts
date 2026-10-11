@@ -32,10 +32,7 @@ import {
   resolveSessionMutationAuthorization,
   SessionMutationAuthorizationChangedError,
 } from "../session-sharing.js";
-import {
-  prepareGatewaySkillAuthoring,
-  invalidateSkillAuthoringForOtherRequester,
-} from "../skill-library-authoring.js";
+import { invalidateSkillAuthoringForOtherRequester } from "../skill-library-authoring.js";
 import type { RestartSafeChatTerminalState } from "./chat-restart-recovery.js";
 import { startChatDispatch } from "./chat-send-agent-dispatch.js";
 import {
@@ -612,22 +609,22 @@ async function handleChatSendWithOptions(
       context,
       toolsAllow: options?.toolsAllow,
       prepareAssistantTranscriptMessage: options?.prepareAssistantTranscriptMessage,
-      prepareSkillLibraryAuthoring: () =>
-        prepareGatewaySkillAuthoring(
-          {
-            client,
-            context,
-            sessionMutationCommitGuard: () => {
-              sessionMutationCommitGuard?.();
-              admission.assertWorkAdmissionCurrent();
-            },
+      skillLibrary: {
+        sessionKey,
+        owner: {
+          client,
+          context,
+          sessionMutationCommitGuard: () => {
+            sessionMutationCommitGuard?.();
+            admission.assertWorkAdmissionCurrent();
           },
-          sessionKey,
+        },
+        isHumanTurn:
           !options &&
-            !systemInputProvenance &&
-            !reconnectResumeRequested &&
-            request.turnKind === "main",
-        ),
+          !systemInputProvenance &&
+          !reconnectResumeRequested &&
+          request.turnKind === "main",
+      },
       cronCreatorAuthority,
       assertDashboardReadCurrent,
       externalAuthorityAdmission,

@@ -32,7 +32,6 @@ export class McpAppContextStrip extends OpenClawLightDomElement {
     .watch(
       () => this.context?.gateway,
       (gateway, notify) => {
-        const refreshes = new Map<string, number>();
         const stop = gateway.subscribe(notify);
         const stopEvents = gateway.subscribeEvents((event) => {
           if (event.event !== "mcp.app.hostContextChanged") {
@@ -58,21 +57,11 @@ export class McpAppContextStrip extends OpenClawLightDomElement {
             if (!("updateId" in payload) || payload.updateId !== entry.state?.updateId) {
               return;
             }
-            refreshes.set(entry.viewId, (refreshes.get(entry.viewId) ?? 0) + 1);
             publishMcpAppContext(client, { ...entry, state: null });
             return;
           }
-          const generation = (refreshes.get(entry.viewId) ?? 0) + 1;
-          refreshes.set(entry.viewId, generation);
-          const publish = (nextContext: McpAppContextState) => {
-            if (
-              this.isConnected &&
-              gateway.snapshot.client === client &&
-              refreshes.get(entry.viewId) === generation
-            ) {
-              publishMcpAppContext(client, { ...entry, state: nextContext });
-            }
-          };
+          const publish = (contextState: McpAppContextState) =>
+            publishMcpAppContext(client, { ...entry, state: contextState });
           void client
             .request<{ state: McpAppContextState }>("mcp.app.modelContext", {
               sessionKey: entry.sessionKey,
@@ -85,7 +74,6 @@ export class McpAppContextStrip extends OpenClawLightDomElement {
         return () => {
           stop();
           stopEvents();
-          refreshes.clear();
         };
       },
     )

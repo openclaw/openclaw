@@ -237,6 +237,47 @@ describe("run-additional-boundary-checks", () => {
     });
   });
 
+  it("runs the shared focused guard pass once across every source root", () => {
+    const { scripts } = JSON.parse(fs.readFileSync("package.json", "utf8")) as {
+      scripts: Record<string, string>;
+    };
+    const assertionCommand = scripts["lint:no-chained-type-assertions"];
+    const rootExecutables = fs
+      .readdirSync(".", { withFileTypes: true })
+      .filter((entry) => entry.isFile() && /\.[cm]?js$/u.test(entry.name))
+      .map((entry) => entry.name);
+    expect(assertionCommand?.split(" ")).toEqual(
+      expect.arrayContaining([
+        "scripts/run-oxlint.mjs",
+        "--openclaw-focused-config",
+        "config/oxlint/boundary-guards.json",
+        "src",
+        "extensions",
+        "packages",
+        "ui/src",
+        "scripts/openclaw-immutable-launcher.mjs",
+        "scripts/freebsd-service-inspect.mjs",
+        ...rootExecutables,
+      ]),
+    );
+    expect(assertionCommand?.split(" ")).not.toContain("scripts");
+    expect(scripts["lint:no-widen-then-assert"]).toBe(assertionCommand);
+    const focusedChecks = BOUNDARY_CHECKS.filter((check) => {
+      const scriptName = check.args[check.args[0] === "run" ? 1 : 0];
+      return (
+        check.command === "pnpm" &&
+        scripts[scriptName ?? ""]?.includes("--config config/oxlint/boundary-guards.json")
+      );
+    });
+    expect(focusedChecks).toEqual([
+      {
+        label: "lint:no-chained-type-assertions",
+        command: "pnpm",
+        args: ["run", "lint:no-chained-type-assertions"],
+      },
+    ]);
+  });
+
   it("buffers grouped output and reports aggregate failures", async () => {
     const buffer = createOutputBuffer();
     const failures = await runChecks(

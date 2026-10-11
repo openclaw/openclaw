@@ -9,8 +9,6 @@ import compactionSafeguardExtension from "./compaction-safeguard.js";
 
 type CompactionSafeguardTestApi = {
   setSummarizeCompactionHistoryForTest(next?: typeof summarizeCompactionHistory): void;
-  collectToolFailures: CallableFunction;
-  formatToolFailuresSection: CallableFunction;
   splitPreservedRecentTurns: CallableFunction;
   buildPreservedTurnsSection: CallableFunction;
   buildCompactionStructureInstructions: CallableFunction;

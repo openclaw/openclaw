@@ -267,6 +267,27 @@ describe.runIf("__vitest_browser__" in globalThis)("tooltip transition ownership
 });
 
 describe.runIf("__vitest_browser__" in globalThis)("tooltip public lifecycle", () => {
+  it("repositions an open tooltip after placement changes without reopening or moving focus", async () => {
+    const f = await fixture();
+    await openTooltip(f);
+    const body = tooltipBody(f.tooltip);
+    const triggerBounds = f.trigger.getBoundingClientRect();
+    expect(body.getBoundingClientRect().bottom).toBeLessThanOrEqual(triggerBounds.top);
+    f.events.length = 0;
+
+    f.tooltip.placement = "bottom";
+    await commitTooltip(f.tooltip);
+
+    await expect
+      .poll(() => body.getBoundingClientRect().top)
+      .toBeGreaterThanOrEqual(triggerBounds.bottom);
+    expect(body.getAttribute("placement")).toBe("bottom");
+    expect(body.matches(":popover-open")).toBe(true);
+    expect(body.dataset.phase).toBe("open");
+    expect(document.activeElement).toBe(f.trigger);
+    expect(f.events).toEqual([]);
+  });
+
   it.each([false, true])("honors immediate focus input when disabled=%s", async (disabled) => {
     const f = await fixture(disabled);
     if (disabled) {

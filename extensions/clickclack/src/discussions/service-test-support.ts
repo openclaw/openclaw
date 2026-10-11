@@ -1,6 +1,7 @@
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawPluginGatewayEvents, PluginRuntime } from "openclaw/plugin-sdk/core";
 import type {
+  PluginStateActionAuthority,
   PluginStateKeyedStore,
   PluginStateSyncKeyedStore,
 } from "openclaw/plugin-sdk/plugin-state-runtime";
@@ -53,22 +54,70 @@ export function createDiscussionMemoryStore<T>(): PluginStateSyncKeyedStore<T> {
 
 export function asyncDiscussionTestStore<T>(
   openStore: PluginRuntime["state"]["openSyncKeyedStore"],
-  options: Parameters<PluginRuntime["state"]["openKeyedStore"]>[0],
-): PluginStateKeyedStore<T> {
+  options: Parameters<PluginRuntime["state"]["openKeyedStoreV2"]>[0],
+  authority?: PluginStateActionAuthority,
+): PluginStateKeyedStore<T, 2> {
   if (options.retention === "retained") {
     throw new Error("ClickClack discussion fixture expects a bounded store");
   }
   const store = openStore<T>(options);
+  authority?.assertCurrent();
+  const observe = (key: string) => ({
+    value: store.lookup(key),
+    comparison: JSON.stringify(store.entries().find((entry) => entry.key === key) ?? null),
+  });
   return {
-    register: async (...args) => store.register(...args),
+    observe: async (key) => observe(key),
+    compareAndApply: async (key, comparison, intent, compareOptions) => {
+      authority?.assertCurrent();
+      const current = observe(key);
+      if (current.comparison !== comparison) {
+        return { status: "conflict", current };
+      }
+      for (const condition of compareOptions?.conditions ?? []) {
+        const conditionStore = openStore({ ...options, namespace: condition.namespace });
+        const image = conditionStore.entries().find((entry) => entry.key === condition.key) ?? null;
+        if (JSON.stringify(image) !== condition.comparison) {
+          return { status: "conflict", current };
+        }
+      }
+      if (intent.action === "keep") {
+        return { status: "unchanged" };
+      }
+      if (intent.action === "set") {
+        store.register(key, intent.value);
+      } else {
+        store.delete(key);
+      }
+      return { status: "applied" };
+    },
+    register: async (key, value, opts) => {
+      opts?.assertCurrent?.();
+      store.register(key, value, opts);
+    },
     registerIfAbsent: async (...args) => store.registerIfAbsent(...args),
     lookup: async (...args) => store.lookup(...args),
+    lookupMany: async (keys) => keys.map((key) => ({ ok: true, value: store.lookup(key) })),
     consume: async (...args) => store.consume(...args),
     delete: async (key, opts) => {
       opts?.assertCurrent?.();
       return store.delete(key);
     },
     entries: async () => store.entries(),
+    entriesInKeyRange: async ({ keyStartInclusive, keyEndExclusive, limit, order }) =>
+      store
+        .entries()
+        .filter((entry) => entry.key >= keyStartInclusive && entry.key < keyEndExclusive)
+        .toSorted((left, right) =>
+          order === "desc" ? right.key.localeCompare(left.key) : left.key.localeCompare(right.key),
+        )
+        .slice(0, limit),
+    count: async () => store.entries().length,
+    deleteIfEqual: async (key, expected) =>
+      store.lookup(key) === expected ? store.delete(key) : false,
+    moveEntriesFrom: async () => {
+      throw new Error("Discussion stores do not move retained entries");
+    },
     clear: async () => store.clear(),
   };
 }
@@ -143,8 +192,10 @@ export function createHarness(
     config: { current: vi.fn(() => config) },
     state: {
       openSyncKeyedStore,
-      openKeyedStore: <T>(storeOptions: Parameters<PluginRuntime["state"]["openKeyedStore"]>[0]) =>
-        asyncDiscussionTestStore<T>(openSyncKeyedStore, storeOptions),
+      openKeyedStoreV2: <T>(
+        storeOptions: Parameters<PluginRuntime["state"]["openKeyedStoreV2"]>[0],
+        authority?: PluginStateActionAuthority,
+      ) => asyncDiscussionTestStore<T>(openSyncKeyedStore, storeOptions, authority),
     },
     agent: {
       session: {

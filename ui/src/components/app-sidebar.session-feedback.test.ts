@@ -231,6 +231,7 @@ describe("sidebar session feedback", () => {
       if (!failure) {
         for (const status of ["active", "archived", "all"]) {
           await selectFilter(sidebar, "status:" + status);
+          expect(sidebar).toHaveProperty("sessionsStatusFilter", status);
           expect(sidebar.textContent).not.toContain(hint);
         }
         await selectFilter(sidebar, "status:active");
@@ -253,6 +254,7 @@ describe("sidebar session feedback", () => {
         }
         for (const status of ["archived", "all"] as const) {
           await selectFilter(sidebar, "status:" + status);
+          expect(sidebar).toHaveProperty("sessionsStatusFilter", status);
           expect(sidebar.textContent).not.toContain(hint);
         }
         await selectFilter(sidebar, "status:active");

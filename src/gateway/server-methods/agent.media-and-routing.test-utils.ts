@@ -127,7 +127,6 @@ describe("gateway agent handler", () => {
         sessionId: scenario.sessionId,
         sessionKey: scenario.sessionKey,
         storePath,
-        sessionEntry: failedEntryWithStaleActivity,
       });
     } else {
       expect(mocks.hasSessionTranscriptEventsSync).not.toHaveBeenCalled();

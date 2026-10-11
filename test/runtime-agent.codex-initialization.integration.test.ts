@@ -14,10 +14,11 @@ import { sessionRewindHandlers } from "../src/gateway/server-methods/sessions-re
 import type { GatewayRequestContext } from "../src/gateway/server-methods/types.js";
 import * as sqliteAdmission from "../src/infra/sqlite-worker-operation-admission.js";
 import {
-  createPluginStateKeyedStore,
+  createPluginStateKeyedStoreV2,
   createPluginStateSyncKeyedStore,
   type OpenAsyncKeyedStoreOptions,
   type OpenKeyedStoreOptions,
+  type PluginStateActionAuthority,
 } from "../src/plugin-state/plugin-state-store.js";
 import { createEmptyPluginRegistry } from "../src/plugins/registry-empty.js";
 import {
@@ -58,7 +59,6 @@ describe("Codex initialization through the registered session deletion owner", (
       "source successor",
       "source successor during link write",
       "source successor during link cleanup",
-      "source link successor",
       "registry rotation",
       "rollback commit",
       "native cleanup",
@@ -74,8 +74,11 @@ describe("Codex initialization through the registered session deletion owner", (
         const runtime = createPluginRuntimeMock({
           agent,
           state: {
-            openKeyedStore: <T>(options: OpenAsyncKeyedStoreOptions) =>
-              createPluginStateKeyedStore<T>("codex", { ...options, env: state.env }),
+            openKeyedStoreV2: <T>(
+              options: OpenAsyncKeyedStoreOptions,
+              authority: PluginStateActionAuthority = { assertCurrent() {} },
+            ) =>
+              createPluginStateKeyedStoreV2<T>("codex", { ...options, env: state.env }, authority),
             openSyncKeyedStore: <T>(options: OpenKeyedStoreOptions) =>
               createPluginStateSyncKeyedStore<T>("codex", { ...options, env: state.env }),
           },
@@ -138,27 +141,6 @@ describe("Codex initialization through the registered session deletion owner", (
         vi.spyOn(sqliteAdmission, "createSqliteWorkerOperationAdmission").mockImplementation(
           (admit, attachment) => {
             const operation = linkOperation;
-            if (
-              operation === "write" &&
-              failure === "source link successor" &&
-              !linkFailureInjected
-            ) {
-              // Replace the source after its command is captured, before the worker locks it.
-              expect(
-                upsertSessionUpstreamLink({
-                  ...expectDefined(
-                    readSessionUpstreamLinkInDatabase(
-                      openOpenClawStateDatabase().db,
-                      params.source.sessionKey,
-                      "main",
-                    ),
-                    "source link",
-                  ),
-                  threadId: "source-link-successor",
-                }),
-              ).toBe(true);
-              linkFailureInjected = true;
-            }
             return createAdmission((request, grant) => {
               if (
                 rejectReadinessCommit &&
@@ -429,17 +411,6 @@ describe("Codex initialization through the registered session deletion owner", (
         if (failure.startsWith("source successor during link")) {
           expect(linkFailureInjected).toBe(true);
           expect(linkGrantCount).toBeGreaterThan(0);
-        }
-        if (failure === "source link successor") {
-          expect(linkFailureInjected).toBe(true);
-          expect(result.message).toContain("Session upstream source changed during initialization");
-          expect(
-            readSessionUpstreamLinkInDatabase(
-              openOpenClawStateDatabase().db,
-              params.source.sessionKey,
-              "main",
-            )?.threadId,
-          ).toBe("source-link-successor");
         }
         expect(linkGrantReads).toBe(0);
         expect(result).toMatchObject({

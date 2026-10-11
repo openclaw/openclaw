@@ -135,6 +135,111 @@ describe.runIf(browserMode)("modal native focus ownership", () => {
     },
   );
 
+  it.each(
+    [false, true].flatMap((moved) => ["light", "shadow", "slot"].map((tree) => ({ moved, tree }))),
+  )(
+    "returns focus after background inertness clears without replacing new focus ($tree, moved=$moved)",
+    async ({ moved, tree }) => {
+      const background = document.createElement("div");
+      const trigger = document.createElement("button");
+      const nextTarget = document.createElement("button");
+      if (tree === "light") {
+        background.append(trigger, nextTarget);
+        container.append(background);
+      } else if (tree === "shadow") {
+        background.attachShadow({ mode: "open" }).append(trigger, nextTarget);
+        container.append(background);
+      } else {
+        const host = document.createElement("div");
+        host.attachShadow({ mode: "open" }).append(background);
+        container.append(host);
+        background.append(document.createElement("slot"));
+        host.append(trigger, nextTarget);
+      }
+      trigger.focus();
+      const { modal } = await mountModal();
+      modal.setReturnFocusTarget(trigger);
+
+      background.inert = true;
+      modal.remove();
+      expect(trigger.matches(":focus")).toBe(false);
+      background.inert = false;
+      if (moved) {
+        nextTarget.focus();
+      }
+
+      await expect.poll(() => (moved ? nextTarget : trigger).matches(":focus")).toBe(true);
+    },
+  );
+
+  it.each(["inert", "reconnected", "removed"])(
+    "drops deferred focus restoration after cancellation (%s)",
+    async (state) => {
+      const background = document.createElement("div");
+      const trigger = document.createElement("button");
+      background.append(trigger);
+      container.append(background);
+      trigger.focus();
+      const { modal } = await mountModal();
+      let restored = false;
+      trigger.addEventListener("openclaw:restore-focus", () => {
+        restored = true;
+      });
+
+      background.inert = true;
+      modal.remove();
+      if (state === "reconnected") {
+        background.inert = false;
+        container.append(modal);
+      } else if (state === "removed") {
+        background.remove();
+      }
+      await Promise.resolve();
+
+      expect(restored).toBe(false);
+      expect(document.activeElement).not.toBe(trigger);
+    },
+  );
+
+  it.each(["replacement", "suppressed"] as const)(
+    "preserves the original opener after reversing a pending close (%s)",
+    async (mode) => {
+      const opener = document.createElement("button");
+      const replacement = document.createElement("button");
+      container.append(opener, replacement);
+      opener.focus();
+      const { modal, dialog, notes } = await mountModal();
+      notes.focus();
+      const animation = dialog.animate({ opacity: [1, 0.9] }, { duration: 1000 });
+      animation.pause();
+      try {
+        modal.hide();
+        expect(modal.open).toBe(false);
+        expect(dialog.open).toBe(true);
+        modal.show();
+        expect(modal.open).toBe(true);
+        expect(modalDialog(modal)).toBe(dialog);
+        modal.setReturnFocusTarget(mode === "replacement" ? replacement : null);
+
+        const hidden = afterModalPhase(modal, "closed");
+        modal.hide();
+        expect(modal.open).toBe(false);
+        expect(dialog.open).toBe(true);
+        animation.finish();
+        await hidden;
+
+        expect(dialog.open).toBe(false);
+        if (mode === "replacement") {
+          expect(document.activeElement).toBe(replacement);
+        } else {
+          expect(document.activeElement).not.toBe(opener);
+        }
+      } finally {
+        animation.cancel();
+      }
+    },
+  );
+
   it.each(["standard", "drawer"])(
     "honors reduced motion when opening and closing (%s)",
     async (variant) => {

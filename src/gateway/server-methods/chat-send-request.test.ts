@@ -291,7 +291,7 @@ describe("normalizeChatSendRequest", () => {
     expect(result).toMatchObject({
       ok: true,
       value: {
-        inboundMessage: " hello ",
+        inboundMessage: "hello",
         rawMessage: "hello",
         stopCommand: false,
         turnKind: "main",

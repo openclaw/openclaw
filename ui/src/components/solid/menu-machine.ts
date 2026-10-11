@@ -211,7 +211,14 @@ export function useMenuMachine(
     ) {
       const api = read();
       const result = type
-        ? api.getOptionItemProps({ value, type, checked, disabled, closeOnSelect: false })
+        ? api.getOptionItemProps({
+            value,
+            valueText: label,
+            type,
+            checked,
+            disabled,
+            closeOnSelect: false,
+          })
         : api.getItemProps({ value, valueText: label, disabled, closeOnSelect: false });
       return {
         ...result,

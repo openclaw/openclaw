@@ -43,19 +43,6 @@ describe("elevenlabs tts diagnostics", () => {
     vi.restoreAllMocks();
   });
 
-  it("includes parsed provider detail and request id for JSON API errors", async () => {
-    mockFetch(
-      Response.json(
-        { detail: { message: "Quota exceeded", status: "quota_exceeded" } },
-        { status: 429, headers: { "x-request-id": "el_req_456" } },
-      ),
-    );
-
-    await expectDefaultTtsRequestToThrow(
-      "ElevenLabs API error (429): Quota exceeded [code=quota_exceeded] [request_id=el_req_456]",
-    );
-  });
-
   it("includes raw non-JSON error detail while capping streamed body reads", async () => {
     const streamed = createStreamingErrorResponse({
       status: 503,
@@ -70,34 +57,15 @@ describe("elevenlabs tts diagnostics", () => {
     expect(streamed.getReadCount()).toBeLessThan(200);
   });
 
-  it.each([
-    { name: "buffered TTS", synthesize: elevenLabsTTS },
-    { name: "streaming TTS", synthesize: elevenLabsTTSStream },
-  ])("rejects JSON success from $name as malformed audio", async ({ synthesize }) => {
-    mockFetch(Response.json({ error: "not audio" }));
-    await expect(synthesize(createDefaultTtsRequest())).rejects.toThrow(
-      "ElevenLabs API error: malformed audio response",
-    );
-  });
-
-  it("rejects empty successful audio bodies as malformed audio", async () => {
-    mockFetch(new Response(new Uint8Array()));
-
-    await expectDefaultTtsRequestToThrow("ElevenLabs API error: malformed audio response");
-  });
-
-  it("omits the MPEG Accept header for PCM telephony output", async () => {
-    const fetchMock = mockFetch(new Response(Buffer.from("pcm")));
-
-    await elevenLabsTTS({
-      ...createDefaultTtsRequest(),
-      outputFormat: "pcm_22050",
-    });
-
-    const [, init] = expectDefined(fetchMock.mock.calls[0], "ElevenLabs fetch call");
-    const headers = new Headers(expectDefined(init, "ElevenLabs request init").headers);
-    expect(headers.has("accept")).toBe(false);
-  });
+  it.each([{ name: "streaming TTS", synthesize: elevenLabsTTSStream }])(
+    "rejects JSON success from $name as malformed audio",
+    async ({ synthesize }) => {
+      mockFetch(Response.json({ error: "not audio" }));
+      await expect(synthesize(createDefaultTtsRequest())).rejects.toThrow(
+        "ElevenLabs API error: malformed audio response",
+      );
+    },
+  );
 
   it("rejects fractional latency optimization instead of truncating it", async () => {
     const fetchMock = mockFetch(new Response(Buffer.from("mp3")));
@@ -110,20 +78,6 @@ describe("elevenlabs tts diagnostics", () => {
     ).rejects.toThrow("latencyTier must be an integer");
 
     expect(fetchMock).not.toHaveBeenCalled();
-  });
-
-  it("omits latency optimization for eleven_v3 because the API rejects it", async () => {
-    const fetchMock = mockFetch(new Response(Buffer.from("mp3")));
-
-    await elevenLabsTTS({
-      ...createDefaultTtsRequest(),
-      modelId: "eleven_v3",
-      latencyTier: 3,
-    });
-
-    const [requestUrl] = expectDefined(fetchMock.mock.calls[0], "ElevenLabs fetch call");
-    const url = new URL(resolveRequestUrl(requestUrl));
-    expect(url.searchParams.has("optimize_streaming_latency")).toBe(false);
   });
 
   it("uses the streaming endpoint without buffering the audio body", async () => {

@@ -6,6 +6,7 @@ import type {
 } from "./node-worker-journal.types.js";
 import type { NodeWorkerLaunchKernel } from "./node-worker-launch-store.kernel.js";
 import {
+  getNodeWorkerBootIdentity,
   inspectNodeWorkerProcessIdentity,
   type NodeWorkerProcessIdentity,
 } from "./node-worker-process-identity.js";
@@ -47,7 +48,13 @@ export class NodeWorkerLaunchStore {
     nowMs = Date.now(),
     authority?: NodeWorkerJournalAuthority,
   ): Promise<NodeWorkerLaunchClaimResult> {
-    const prepared = structuredClone({ claim, supervisor, capacity, nowMs });
+    const prepared = structuredClone({
+      claim,
+      supervisor,
+      capacity,
+      nowMs,
+      bootId: getNodeWorkerBootIdentity(),
+    });
     return this.worker.run(async (scope) => {
       const observed = await scope.execute({
         type: "nodeWorker.launch.claimObservation",
@@ -75,6 +82,7 @@ export class NodeWorkerLaunchStore {
           prepared.nowMs,
           observed,
           observedSupervisorState,
+          prepared.bootId,
         ],
       });
     }, authority);

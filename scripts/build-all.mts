@@ -28,7 +28,7 @@ import {
 } from "./lib/local-build-metadata.mts";
 import { runManagedCommand } from "./lib/managed-child-process.mts";
 import type { MemoryLimitParams } from "./lib/process-memory.mts";
-import { captureRunNodeInputState } from "./lib/run-node-input-state.mts";
+import { resolveRunNodeInputSignature } from "./lib/run-node-input-state.mts";
 import { preflightInstalledSourceArtifacts } from "./lib/source-update-artifact-preflight.mts";
 import {
   TSDOWN_PACKAGE_CONFIG_GROUP,
@@ -536,22 +536,19 @@ export async function runBuildAllSteps(
     !params.runStep && steps.some((step) => step.label.endsWith("build-stamp"));
   const hasAssetBuild =
     capturesNativeInputs && steps.some((step) => step.label === "plugins:assets:build");
-  const assetInputState = hasAssetBuild
-    ? captureRunNodeInputState(inputDeps, "build", { assetPhase: true })
-    : null;
-  let buildInputState =
+  let buildInputSignature =
     capturesNativeInputs && !hasAssetBuild && steps.some((step) => step.label === "build-stamp")
-      ? captureRunNodeInputState(inputDeps, "build")
+      ? resolveRunNodeInputSignature(inputDeps, "build")
       : null;
   const runtimeEnv = {
     ...buildEnv,
     ...steps.find((step) => step.label === "runtime-postbuild")?.env,
   };
-  let runtimeInputState =
+  let runtimeInputSignature =
     capturesNativeInputs &&
     !hasAssetBuild &&
     steps.some((step) => step.label === "runtime-postbuild-stamp")
-      ? captureRunNodeInputState({ ...inputDeps, env: runtimeEnv }, "runtime")
+      ? resolveRunNodeInputSignature({ ...inputDeps, env: runtimeEnv }, "runtime")
       : null;
   let stampsInvalidated = false;
   const invalidateInputStamps = () => {
@@ -580,7 +577,7 @@ export async function runBuildAllSteps(
         (buildStamp ? writeBuildStamp : writeRuntimePostBuildStamp)({
           cwd,
           env: buildStamp ? buildEnv : runtimeEnv,
-          inputState: buildStamp ? buildInputState : runtimeInputState,
+          inputSignature: buildStamp ? buildInputSignature : runtimeInputSignature,
         });
         return { status: 0 };
       }
@@ -647,19 +644,11 @@ export async function runBuildAllSteps(
       break;
     }
     if (step.label === "plugins:assets:build" && !params.runStep) {
-      const current = captureRunNodeInputState(inputDeps, "build", { assetPhase: true });
-      if (
-        assetInputState &&
-        (!current ||
-          current.signature !== assetInputState.signature ||
-          current.generation !== assetInputState.generation)
-      ) {
-        throw new Error("Build inputs changed during asset preparation; rerun the build");
-      }
-      buildInputState = assetInputState ? captureRunNodeInputState(inputDeps, "build") : null;
-      runtimeInputState = assetInputState
-        ? captureRunNodeInputState({ ...inputDeps, env: runtimeEnv }, "runtime")
-        : null;
+      buildInputSignature = resolveRunNodeInputSignature(inputDeps, "build");
+      runtimeInputSignature = resolveRunNodeInputSignature(
+        { ...inputDeps, env: runtimeEnv },
+        "runtime",
+      );
     }
     // Runtime-only tsdown cleans its output roots. Cache hits restore
     // declarations again after that pass so the full build stays complete.

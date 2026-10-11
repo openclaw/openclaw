@@ -4,7 +4,7 @@ import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runt
 import { describe, expect, it, vi } from "vitest";
 import { crabboxState, openWarmImageStore } from "./crabbox-state.test-support.js";
 import { operationLeaseId } from "./crabbox-worker-profile.js";
-import { commandResult } from "./crabbox-worker-provider.test-support.js";
+import { destroyAndWait, commandResult } from "./crabbox-worker-provider.test-support.js";
 import { listCrabboxWarmImages } from "./crabbox-worker-warm-image-store.js";
 import {
   captureWarmImage,
@@ -325,7 +325,7 @@ describe("Crabbox checkpoint retirement", () => {
         stopping =
           debt === "unrelated profile"
             ? restarted.provider.maintain!(maintenanceContext())
-            : restarted.provider.destroy({ leaseId: lease.leaseId, profile });
+            : destroyAndWait(restarted.provider, { leaseId: lease.leaseId, profile });
         await deleting.promise;
         expect(restarted.calls.find(({ argv }) => argv[2] === "delete")?.argv[3]).toBe(
           "chk_capture_1",
@@ -347,7 +347,10 @@ describe("Crabbox checkpoint retirement", () => {
         true,
       );
       if (debt === "unrelated profile") {
-        await restarted.provider.destroy({ leaseId: (await provisioning).leaseId, profile });
+        await destroyAndWait(restarted.provider, {
+          leaseId: (await provisioning).leaseId,
+          profile,
+        });
       }
       expect(restarted.calls.at(-1)?.argv[1]).toBe("stop");
     },
@@ -409,7 +412,7 @@ describe("Crabbox checkpoint retirement", () => {
         clock.mockReturnValue(now + 17 * DAY_MS);
         const lease = { leaseId: operationLeaseId("inspection-only"), profile: PROFILE };
         await restarted.provider.inspect(lease);
-        await restarted.provider.destroy(lease);
+        await destroyAndWait(restarted.provider, lease);
       } else if (cleanup === "capacity") {
         for (let index = 0; index < 127; index++) {
           store.register(`reserved-${index}`, {
@@ -466,7 +469,7 @@ describe("Crabbox checkpoint retirement", () => {
       } else {
         expect(resources).toEqual(new Set());
       }
-      await restarted.provider.destroy({
+      await destroyAndWait(restarted.provider, {
         leaseId: recovered.leaseId,
         profile: { ...PROFILE, warmImage: false },
       });
@@ -503,7 +506,7 @@ describe("Crabbox checkpoint retirement", () => {
       await captureWarmImage(provider);
       const lease = await provisionWarmProfile(provider, PROFILE, "first-refresh");
       clock.mockReturnValue(now + DAY_MS);
-      const stopping = provider.destroy({ leaseId: lease.leaseId, profile: PROFILE });
+      const stopping = destroyAndWait(provider, { leaseId: lease.leaseId, profile: PROFILE });
       await entered.promise;
       try {
         clock.mockReturnValue(now + 2 * DAY_MS);

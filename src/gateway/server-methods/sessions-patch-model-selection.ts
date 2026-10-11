@@ -37,7 +37,10 @@ import { isSessionStatusModelPatchOrigin } from "../session-model-patch-origin.j
 import { SessionMutationAuthorizationChangedError } from "../session-sharing.js";
 import type { SessionWorkerPlacementContext } from "../worker-environments/session-placement-lifecycle.js";
 import { resolveGatewayModelSelectionPolicy } from "./session-model-selection-policy.js";
-import { resolveSessionWorkerPlacementPatchError } from "./sessions-shared.js";
+import {
+  prepareSessionWorkerPlacementPatchError,
+  resolveSessionWorkerPlacementPatchError,
+} from "./sessions-shared.js";
 
 export function persistSessionPatchModelSelection(params: {
   callerScopes: readonly string[];
@@ -379,7 +382,17 @@ export async function prepareSessionPatchRuntimeSelection(params: {
       }
     }
   }
-  const validate = () => {
+  const placementParams = params.placement && {
+    cfg: params.cfg,
+    agentId: params.agentId,
+    context: params.placement.context,
+    entry: params.entry,
+    key: params.patch.key,
+    sessionKey: params.placement.sessionKey,
+    patch: params.patch,
+    validateModelRuntime: true,
+  };
+  const validate = (preparedPlacement?: { error: string | undefined }) => {
     try {
       assertRequiredWorkerSelection(params.cfg, {
         agentRuntime: params.entry.agentRuntimeOverride,
@@ -394,21 +407,18 @@ export async function prepareSessionPatchRuntimeSelection(params: {
     }
     const message =
       validateRuntime?.() ??
-      (params.placement
-        ? resolveSessionWorkerPlacementPatchError({
-            cfg: params.cfg,
-            agentId: params.agentId,
-            context: params.placement.context,
-            entry: params.entry,
-            key: params.patch.key,
-            sessionKey: params.placement.sessionKey,
-            patch: params.patch,
-            validateModelRuntime: true,
-          })
-        : undefined);
+      (preparedPlacement
+        ? preparedPlacement.error
+        : placementParams
+          ? resolveSessionWorkerPlacementPatchError(placementParams)
+          : undefined);
     return message ? errorShape(ErrorCodes.INVALID_REQUEST, message) : undefined;
   };
-  const error = validate();
+  const error = validate({
+    error: placementParams
+      ? await prepareSessionWorkerPlacementPatchError(placementParams)
+      : undefined,
+  });
   return error
     ? { ok: false, error }
     : {

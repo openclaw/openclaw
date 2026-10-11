@@ -477,6 +477,59 @@ describe("legacy provider catalog retention", () => {
     expect(result.authoritative).toBe(false);
   });
 
+  it.each(["failed refresh", "changed auth", "restrictive success"] as const)(
+    "publishes accepted membership across %s",
+    async (scenario) => {
+      const second = { provider: "custom", id: "other", name: "Other" };
+      const previous: ModelCatalogSnapshot = {
+        entries: [learned, second],
+        routeVariants: [learned, second],
+        providerOutcomes: [
+          { provider: "custom", status: "ready", listedModelIds: ["learned", "other"] },
+        ],
+      };
+      mocks.runPreparedModelCatalogWorker.mockResolvedValue(previous);
+      const owner = await publishPreparedModelRuntimeSnapshot(
+        fixture.agentInput("pro", { agents: { entries: { pro: {} } } }),
+        { catalogMode: "static", provenance: "standalone" },
+      );
+      await owner.loadFullModelCatalog!({ refresh: true });
+      const next: ModelCatalogSnapshot = {
+        entries: scenario === "restrictive success" ? [second] : [],
+        routeVariants: scenario === "restrictive success" ? [second] : [],
+        providerOutcomes: [
+          scenario === "restrictive success"
+            ? { provider: "custom", status: "ready", listedModelIds: ["other"] }
+            : { provider: "custom", status: "unavailable" },
+        ],
+      };
+      if (scenario === "changed auth") {
+        setPreparedModelFullCatalogAuth(next, {
+          providerAuthLabels: new Map(),
+          authStore: { version: 1, profiles: {} },
+          authModes: { custom: "api_key" },
+          credentials: { custom: { type: "api_key", key: "replacement-key" } },
+        });
+      }
+      mocks.runPreparedModelCatalogWorker.mockResolvedValue(next);
+      const result = await owner.loadFullModelCatalog!({ refresh: true });
+      expect(result.providerOutcomes?.[0]?.listedModelIds).toEqual(
+        scenario === "failed refresh"
+          ? ["learned", "other"]
+          : scenario === "restrictive success"
+            ? ["other"]
+            : undefined,
+      );
+      expect(result.entries.map(({ id }) => id).toSorted()).toEqual(
+        scenario === "failed refresh"
+          ? ["learned", "other"]
+          : scenario === "restrictive success"
+            ? ["other"]
+            : [],
+      );
+    },
+  );
+
   it("does not treat native-first configured rows as a completed provider acquisition", async () => {
     const configured = {
       id: "configured",
@@ -606,6 +659,43 @@ describe("legacy provider catalog retention", () => {
       } finally {
         vi.useRealTimers();
       }
+    });
+  });
+
+  it("refreshes native Claude inventory with the canonical Anthropic scope", async () => {
+    const native = { provider: "claude-cli", id: "claude-new", name: "Native" };
+    mocks.runPreparedModelCatalogWorker.mockImplementation(async (providers) => {
+      const discovered: ModelCatalogSnapshot = {
+        entries: providers?.includes("claude-cli") ? [native] : [],
+        routeVariants: [],
+        providerOutcomes: providers?.includes("claude-cli")
+          ? [{ provider: "claude-cli", status: "ready", listedModelIds: [native.id] }]
+          : [],
+      };
+      setPreparedModelFullCatalogAuth(discovered, {
+        providerAuthLabels: new Map(),
+        authStore: { version: 1, profiles: {} },
+        authModes: {},
+        credentials: {},
+      });
+      return discovered;
+    });
+    mocks.configuredAgentIds = ["pro"];
+    const config: OpenClawConfig = { agents: { entries: { pro: {} } } };
+    const owner = await publishPreparedModelRuntimeSnapshot(fixture.agentInput("pro", config), {
+      catalogMode: "static",
+    });
+    const catalog = await owner.loadFullModelCatalog!({
+      refresh: true,
+      providerIds: ["anthropic"],
+    });
+    expect(catalog.entries).toContainEqual(
+      expect.objectContaining({ ...native, provider: "anthropic" }),
+    );
+    expect(catalog.providerOutcomes).toContainEqual({
+      provider: "claude-cli",
+      status: "ready",
+      listedModelIds: [native.id],
     });
   });
 

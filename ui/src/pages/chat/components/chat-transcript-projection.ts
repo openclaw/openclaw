@@ -115,6 +115,7 @@ export function projectChatTranscript(props: ChatThreadProps, transcript: ChatTr
     streamSegments: props.streamSegments,
     stream: props.stream ?? null,
     reasoning,
+    showReasoning,
     streamStartedAt: props.streamStartedAt,
     queue: props.queue,
     initialTurnId: props.initialTurnId,

@@ -47,7 +47,7 @@ import {
 } from "./queued-user-message-retirement.js";
 import type { ResourceLoader } from "./resource-loader.js";
 import type { SessionManager } from "./session-manager.js";
-import { prepareSessionToolResult } from "./session-tool-result-redaction.js";
+import { createSessionToolResultPreparer } from "./session-tool-result-redaction.js";
 import type { SettingsManager } from "./settings-manager.js";
 import { reportSteeringMessagePersistenceFailure } from "./steering-message-identity.js";
 import type { BuildSystemPromptOptions } from "./system-prompt-metadata.js";
@@ -303,6 +303,7 @@ export abstract class AgentSessionBase {
 
   /** Internal handler for agent events - shared by subscribe and reconnect */
   protected handleAgentEvent = async (event: AgentEvent, signal?: AbortSignal): Promise<void> => {
+    const prepareToolResult = createSessionToolResultPreparer(this.sessionManager, event);
     if (event.type === "agent_end") {
       const reason: unknown = signal?.reason;
       this.lastRunEndedForTurnHandoff =
@@ -313,16 +314,19 @@ export abstract class AgentSessionBase {
     }
     if (this.eventMayWriteSession(event)) {
       await this.runWithSessionWriteSettlement(
-        async () => await this.handleAgentEventUnlocked(event),
+        async () => await this.handleAgentEventUnlocked(event, prepareToolResult),
       );
       // Supported callbacks can change the current result or register another secret.
-      prepareSessionToolResult(this.sessionManager, event);
+      prepareToolResult();
       return;
     }
-    await this.handleAgentEventUnlocked(event);
+    await this.handleAgentEventUnlocked(event, prepareToolResult);
   };
 
-  private async handleAgentEventUnlocked(event: AgentEvent): Promise<void> {
+  private async handleAgentEventUnlocked(
+    event: AgentEvent,
+    prepareToolResult: () => boolean,
+  ): Promise<void> {
     if (event.type === "agent_start") {
       this.lastAssistantEntryId = undefined;
     }
@@ -340,7 +344,7 @@ export abstract class AgentSessionBase {
       messageChanged = await this.emitExtensionEvent(event);
     }
     // Extensions can replace the final result. Protect listeners before publishing it.
-    messageChanged = prepareSessionToolResult(this.sessionManager, event) || messageChanged;
+    messageChanged = prepareToolResult() || messageChanged;
     const publishAfterPersistence = event.type === "message_end" && event.message.role === "user";
 
     if (event.type === "agent_end") {
@@ -353,7 +357,7 @@ export abstract class AgentSessionBase {
       this.emit(event);
     }
     // Persist the same prepared bytes after synchronous listener changes.
-    messageChanged = prepareSessionToolResult(this.sessionManager, event) || messageChanged;
+    messageChanged = prepareToolResult() || messageChanged;
 
     if (event.type === "message_end") {
       if (event.message.role === "custom") {

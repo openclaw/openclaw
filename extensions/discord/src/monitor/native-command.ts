@@ -392,7 +392,7 @@ async function dispatchDiscordCommandInteraction(
   if (policy?.isCurrent() === false) {
     return reject("Access policy changed. Try this interaction again.", true);
   }
-  const authority = createDiscordNativeCommandAuthority({
+  const authority = await createDiscordNativeCommandAuthority({
     cfg,
     ctx: ctxPayload,
     commandAuthorized,

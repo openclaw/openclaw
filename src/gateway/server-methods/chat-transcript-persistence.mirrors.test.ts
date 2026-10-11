@@ -13,9 +13,9 @@ import {
   loadTranscriptEventsSync,
   readSessionTranscriptWatermark,
   replaceSessionEntry,
-  replaceTranscriptEventsSync,
 } from "../../config/sessions/session-accessor.js";
 import { patchSessionEntryCore } from "../../config/sessions/session-accessor.sqlite-entry.js";
+import { replaceTranscriptEventsSync } from "../../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { historyLane } from "../../config/sessions/session-transcript-worker-resources.js";
 import { withSessionTranscriptWriteAssertion } from "../../config/sessions/transcript-write-context.js";
 import {

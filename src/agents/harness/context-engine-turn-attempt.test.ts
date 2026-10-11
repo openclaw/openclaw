@@ -376,7 +376,7 @@ describe("accepted context-engine turn finalization", () => {
           { role: "assistant", content: "answer" },
         ],
       });
-      expect(reads.counts.freshness).toBe(1);
+      expect(reads.counts.freshness).toBe(0);
       expect(reads.counts.read).toBeLessThanOrEqual(8);
     } finally {
       reads.restore();

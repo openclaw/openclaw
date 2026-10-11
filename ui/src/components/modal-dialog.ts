@@ -1,5 +1,6 @@
 import { createComponent, createEffect, onSettled, untrack } from "solid-js";
 import { acquireNativeOverlayOcclusion } from "../lib/native-overlay-occlusion.ts";
+import { composedParent } from "../lib/navigation-click.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../lit/solid-bridge.ts";
 import { createOverlay, findOverlayParent } from "./overlay-lifecycle.ts";
 import { containsComposed } from "./overlay-registry.ts";
@@ -95,6 +96,15 @@ function restoreFocus(target: HTMLElement) {
   target.dispatchEvent(new Event("openclaw:restore-focus"));
 }
 
+function isInert(target: Element): boolean {
+  for (let element: Element | null = target; element; element = composedParent(element)) {
+    if (element.hasAttribute("inert")) {
+      return true;
+    }
+  }
+  return false;
+}
+
 type ModalPolicy = {
   request(open: boolean): void;
   setReturnFocusTarget(target: HTMLElement | null): void;
@@ -120,6 +130,7 @@ function createModalPolicy(host: OpenClawModalDialog, props: ModalDialogProperti
   let focusBeforeChrome: HTMLElement | null = null;
   let reportedOpen = false;
   let publication = 0;
+  let focusReturnVersion = 0;
 
   const focusInitialContent = (initial = false) => {
     if (!host.isConnected || !dialog.open) {
@@ -147,6 +158,8 @@ function createModalPolicy(host: OpenClawModalDialog, props: ModalDialogProperti
       return;
     }
     const target = returnOverride === undefined ? returnFocus : returnOverride;
+    const original = returnFocus;
+    const suppressed = returnOverride === null;
     const active = activeElement(host);
     const mayRestore =
       !active ||
@@ -154,13 +167,33 @@ function createModalPolicy(host: OpenClawModalDialog, props: ModalDialogProperti
       active === host.ownerDocument.documentElement ||
       active === returnFocus ||
       containsComposed(dialog, active);
-    if (target?.isConnected && mayRestore) {
-      restoreFocus(target);
-    } else if (returnOverride === null && active === returnFocus) {
-      returnFocus?.blur();
-    }
     returnFocus = null;
     returnOverride = undefined;
+    if (suppressed && active === original) {
+      original?.blur();
+    }
+    if (!target?.isConnected || !mayRestore) {
+      return;
+    }
+    if (!isInert(target)) {
+      restoreFocus(target);
+      return;
+    }
+    const version = ++focusReturnVersion;
+    const connected = host.isConnected;
+    // A containing render can release background inertness after removing us.
+    queueMicrotask(() => {
+      if (
+        version === focusReturnVersion &&
+        host.isConnected === connected &&
+        !dialog.open &&
+        target.isConnected &&
+        !isInert(target) &&
+        activeElement(host) === active
+      ) {
+        restoreFocus(target);
+      }
+    });
   };
 
   const finishInitialFocus = () => {
@@ -175,9 +208,13 @@ function createModalPolicy(host: OpenClawModalDialog, props: ModalDialogProperti
     native: {
       isOpen: () => dialog.open,
       show: () => {
-        returnFocus = activeElement(host);
-        if (returnFocus) {
-          overlay.setReturnTarget(returnFocus);
+        focusReturnVersion += 1;
+        // Reversing a pending close preserves the native dialog's original opener.
+        if (!dialog.open) {
+          returnFocus = activeElement(host);
+          if (returnFocus) {
+            overlay.setReturnTarget(returnFocus);
+          }
         }
         openingInteraction = false;
         initialFocusPending = true;
@@ -246,6 +283,7 @@ function createModalPolicy(host: OpenClawModalDialog, props: ModalDialogProperti
       overlayContainer = element;
     },
     connect() {
+      focusReturnVersion += 1;
       request(host.open);
     },
     disconnect() {

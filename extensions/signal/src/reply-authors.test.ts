@@ -4,7 +4,7 @@ import type {
   PluginStateCompareResult,
   PluginStateKeyedStore,
 } from "openclaw/plugin-sdk/plugin-state-runtime";
-import { createPluginStateKeyedStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { createPluginStateKeyedStoreV2ForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -56,14 +56,16 @@ beforeEach(() => {
 });
 
 function installStore() {
+  const unexpectedOperation = async () => {
+    throw new Error("unexpected storage operation");
+  };
   const store = {
     observe: vi
-      .fn<NonNullable<PluginStateKeyedStore<unknown>["observe"]>>()
+      .fn<PluginStateKeyedStore<unknown, 2>["observe"]>()
       .mockResolvedValue({ value: undefined, comparison: "initial" }),
     compareAndApply: vi
-      .fn<NonNullable<PluginStateKeyedStore<unknown>["compareAndApply"]>>()
+      .fn<PluginStateKeyedStore<unknown, 2>["compareAndApply"]>()
       .mockResolvedValue({ status: "applied" }),
-    update: vi.fn<NonNullable<PluginStateKeyedStore<unknown>["update"]>>(),
     register: vi.fn(),
     registerIfAbsent: vi.fn(),
     lookup: vi.fn().mockResolvedValue(undefined),
@@ -71,11 +73,16 @@ function installStore() {
     delete: vi.fn(),
     entries: vi.fn(),
     clear: vi.fn(),
-  } satisfies PluginStateKeyedStore<unknown>;
+    lookupMany: vi.fn(unexpectedOperation),
+    deleteIfEqual: vi.fn(unexpectedOperation),
+    entriesInKeyRange: vi.fn(unexpectedOperation),
+    moveEntriesFrom: vi.fn(unexpectedOperation),
+    count: vi.fn(unexpectedOperation),
+  } satisfies PluginStateKeyedStore<unknown, 2>;
   const runtime = createPluginRuntimeMock();
   const logger = runtime.logging.getChildLogger({});
   vi.spyOn(runtime.logging, "getChildLogger").mockReturnValue(logger);
-  vi.spyOn(runtime.state, "openKeyedStore").mockReturnValue(store);
+  vi.spyOn(runtime.state, "openKeyedStoreV2").mockReturnValue(store);
   vi.spyOn(runtimeModule, "getOptionalSignalRuntime").mockReturnValue(runtime);
   return { store, runtime };
 }
@@ -101,7 +108,6 @@ describe("Signal reply author comparisons", () => {
       expect(firstIntent).toMatchObject({ value: { registeredAt: 2000 } });
       expect(signalReplyAuthorState.memoryReplyContexts.get(key)?.expiresAt).toBe(2000 + ttl);
       expect(store.observe).toHaveBeenCalledTimes(1);
-      expect(store.update).not.toHaveBeenCalled();
     },
   );
 
@@ -141,7 +147,6 @@ describe("Signal reply author comparisons", () => {
         expiresAt: 2000 + ttl,
       });
       expect(store.compareAndApply).toHaveBeenCalledTimes(2);
-      expect(store.update).not.toHaveBeenCalled();
     },
   );
 
@@ -193,7 +198,6 @@ describe("Signal reply author comparisons", () => {
       store.lookup.mockResolvedValue(record);
       await registerSignalReplyContext(input);
       expect(store[failureStage]).toHaveBeenCalledTimes(1);
-      expect(store.update).not.toHaveBeenCalled();
       expect(store.lookup).toHaveBeenCalledTimes(failureStage === "observe" ? 1 : 0);
       await expect(resolveSignalReplyContextWithPersistence(reply)).resolves.toEqual({
         author: input.author,
@@ -205,40 +209,6 @@ describe("Signal reply author comparisons", () => {
       );
     },
   );
-
-  it.each(["compareAndApply"] as const)(
-    "uses the published-host atomic callback when %s is absent",
-    async (missing) => {
-      const { store } = installStore();
-      const compatible: PluginStateKeyedStore<unknown> = store;
-      delete compatible[missing];
-      store.update.mockImplementation(async (_key, merge) => {
-        expect(merge(record)).toEqual(record);
-        return true;
-      });
-      await registerSignalReplyContext(input);
-      expect(store.update).toHaveBeenCalledTimes(1);
-      await expect(resolveSignalReplyContextWithPersistence(reply)).resolves.toEqual({
-        author: input.author,
-        body: "stored",
-      });
-    },
-  );
-
-  it("supports comparison-only hosts and disables persistence only when no atomic route exists", async () => {
-    const { store } = installStore();
-    const capabilities: PluginStateKeyedStore<unknown> = store;
-    delete capabilities.update;
-    await registerSignalReplyContext(input);
-    expect(store.compareAndApply).toHaveBeenCalledTimes(1);
-    expect(signalReplyAuthorState.persistentStoreDisabled).toBe(false);
-    delete capabilities.observe;
-    await registerSignalReplyContext({ ...input, author: "+15555550999" });
-    expect(signalReplyAuthorState.persistentStoreDisabled).toBe(true);
-    await expect(resolveSignalReplyContextWithPersistence(reply)).resolves.toEqual({
-      ambiguous: true,
-    });
-  });
 });
 
 it("persists and reloads merged reply context with zero parent-thread SQL", async () => {
@@ -246,8 +216,12 @@ it("persists and reloads merged reply context with zero parent-thread SQL", asyn
   const env = { ...process.env, OPENCLAW_STATE_DIR: tempDir };
   const runtime = createPluginRuntimeMock({
     state: {
-      openKeyedStore: <T>(options: Parameters<typeof createPluginStateKeyedStoreForTests>[1]) =>
-        createPluginStateKeyedStoreForTests<T>("signal", { ...options, env }),
+      openKeyedStoreV2: <T>(options: Parameters<typeof createPluginStateKeyedStoreV2ForTests>[1]) =>
+        createPluginStateKeyedStoreV2ForTests<T>(
+          "signal",
+          { ...options, env },
+          { assertCurrent() {} },
+        ),
     },
   });
   vi.spyOn(runtimeModule, "getOptionalSignalRuntime").mockReturnValue(runtime);

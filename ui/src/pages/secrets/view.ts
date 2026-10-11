@@ -40,10 +40,7 @@ type SecretsStoreViewProps = {
   onOpenAdd: () => void;
   onOpenEdit: (entry: SecretStoreEntry) => void;
   onCloseDialog: () => void;
-  onDraftNameChange: (name: string) => void;
-  onDraftValueChange: (value: string) => void;
-  onDraftAllowedHostsChange: (allowedHosts: string) => void;
-  onDraftKindChange: (kind: "secret" | "env") => void;
+  onDraftChange: (patch: Partial<SecretsStoreDraft>) => void;
   onSubmitDraft: () => void;
   onOpenBulk: () => void;
   onCloseBulk: () => void;
@@ -57,10 +54,14 @@ const DOCS_URL = "https://docs.openclaw.ai/gateway/secrets#shared-secret-store";
 const SECRET_MASK = "••••••••";
 
 function renderTextAreaField(props: SecretsStoreViewProps, field: "value" | "hosts" | "bulk") {
-  const [name, value, onInput] = (
+  const [name, fieldValue, onInput] = (
     {
-      value: ["value", props.draft.value, props.onDraftValueChange],
-      hosts: ["allowed-hosts", props.draft.allowedHosts, props.onDraftAllowedHostsChange],
+      value: ["value", props.draft.value, (value: string) => props.onDraftChange({ value })],
+      hosts: [
+        "allowed-hosts",
+        props.draft.allowedHosts,
+        (allowedHosts: string) => props.onDraftChange({ allowedHosts }),
+      ],
       bulk: ["bulk-values", props.bulkRaw, props.onBulkRawChange],
     } as const
   )[field];
@@ -74,7 +75,7 @@ function renderTextAreaField(props: SecretsStoreViewProps, field: "value" | "hos
       ?autofocus=${field === "bulk"}
       placeholder=${field === "hosts" ? t("secretsStore.allowedHostsPlaceholder") : nothing}
       ?disabled=${props.busy}
-      .value=${value}
+      .value=${fieldValue}
       @input=${(event: Event) => onInput((event.currentTarget as HTMLTextAreaElement).value)}
     ></textarea>
     ${field === "hosts" ? html`<small>${t("secretsStore.allowedHostsHint")}</small>` : nothing}
@@ -276,7 +277,7 @@ function renderEntryDialog(props: SecretsStoreViewProps): TemplateResult | typeo
           ?disabled=${props.busy}
           .value=${props.draft.name}
           @input=${(event: Event) =>
-            props.onDraftNameChange((event.currentTarget as HTMLInputElement).value)}
+            props.onDraftChange({ name: (event.currentTarget as HTMLInputElement).value })}
         />
       </label>
       ${renderTextAreaField(props, "value")}
@@ -296,7 +297,7 @@ function renderEntryDialog(props: SecretsStoreViewProps): TemplateResult | typeo
               value=${kind}
               .checked=${props.draft.kind === kind}
               ?disabled=${props.busy}
-              @change=${() => props.onDraftKindChange(kind)}
+              @change=${() => props.onDraftChange({ kind })}
             />
             <span>
               <strong

@@ -25,7 +25,6 @@ import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
 import { settlesWithin } from "../shared/settle-within.js";
 import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db-lifecycle.js";
-import { withAgentDatabaseCloseFence } from "../state/openclaw-agent-db-resources.js";
 import {
   collectGatewayProcessMemoryUsageMb,
   measureGatewayCloseStep,
@@ -199,7 +198,6 @@ export type GatewayCloseParams = {
 
 export type GatewayClosePrepareParams = GatewayRunShutdownParams & {
   preparePluginRegistryClose: ReturnType<typeof createPluginRegistryOwner>["prepareClose"];
-  drainPersistence: () => Promise<void>;
   updateCheckStop?: (() => Promise<void> | void) | null;
   configReloader: { stop: () => Promise<void> };
   getPendingReplyCount: () => number;
@@ -256,11 +254,9 @@ export async function prepareGatewayClose(
   try {
     await shutdownStep("update-check", () => params.updateCheckStop?.());
     await shutdownStep("config-reloader", () => params.configReloader.stop());
-    if (!opts?.onProcessExitReady) {
-      await triggerLifecycleHook("shutdown", GATEWAY_SHUTDOWN_HOOK_TIMEOUT_MS);
-      if (restart) {
-        await triggerLifecycleHook("pre-restart", GATEWAY_PRE_RESTART_HOOK_TIMEOUT_MS);
-      }
+    await triggerLifecycleHook("shutdown", GATEWAY_SHUTDOWN_HOOK_TIMEOUT_MS);
+    if (restart) {
+      await triggerLifecycleHook("pre-restart", GATEWAY_PRE_RESTART_HOOK_TIMEOUT_MS);
     }
     const drainTimeoutMs =
       typeof opts?.drainTimeoutMs === "number" && Number.isFinite(opts.drainTimeoutMs)
@@ -285,16 +281,6 @@ export async function prepareGatewayClose(
       shutdownLog.warn(`memory preparation failed during shutdown: ${formatErrorMessage(error)}`);
       recordShutdownWarning(warnings, "memory-managers");
     });
-    if (opts?.onProcessExitReady) {
-      await measureCloseStep("terminal-persistence", params.drainPersistence);
-      await memoryPreparation;
-      // Keep every path fenced through host lock release and exit: a per-path
-      // idle receipt alone does not prevent accepted cleanup from reopening it.
-      await withAgentDatabaseCloseFence({}, async () => {
-        await measureCloseStep("agent-databases", () => closeOpenClawAgentDatabasesAsync());
-        await measureCloseStep("process-exit", opts.onProcessExitReady!);
-      });
-    }
     return { start, notice, restart, warnings, cleanupWork };
   } catch (error) {
     await measureCloseStep("preparation-cleanup", () => cleanupWork.drain());

@@ -322,6 +322,9 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
               messageToolDeliveryState,
               onCompactionFacts: ({ accounting, postCompactionModelAttempted }) => {
                 if (accounting) {
+                  if (accounting.kind === "durable") {
+                    params.state.sessionWriter = accounting.target;
+                  }
                   recordTurnCompaction(params.state.compaction, accounting);
                 }
                 params.state.postCompactionModelAttempted ||= postCompactionModelAttempted;

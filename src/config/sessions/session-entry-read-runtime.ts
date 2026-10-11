@@ -4,7 +4,7 @@ import {
   assertExistingDatabaseIdentity,
   readDatabasePathIdentitySync,
 } from "../../infra/sqlite-worker-identity.js";
-import { isIncognitoSessionKey, normalizeAgentId } from "../../routing/session-key.js";
+import { normalizeAgentId } from "../../routing/session-key.js";
 import type { AgentDatabaseRegistryChange } from "../../state/openclaw-agent-db-contract.js";
 import { retainOpenClawAgentDatabaseReadCandidates } from "../../state/openclaw-agent-db.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
@@ -25,6 +25,10 @@ import {
   captureCanonicalSessionReaderContinuation,
   type CanonicalSessionReaderContinuation,
 } from "./session-canonical-key.js";
+import {
+  readSessionEntriesWithRetainedFacts,
+  readSessionEntryWithRetainedFacts,
+} from "./session-entry-read-facts.js";
 import {
   readAdmittedSessionEntry,
   withOrderedSessionEntriesInWorker,
@@ -64,9 +68,7 @@ import {
 } from "./session-store-read-candidates.js";
 import { captureSessionStoreReadCandidates } from "./session-store-target-inventory.js";
 import { withSessionStoreTarget } from "./session-store-target-runtime.js";
-import { resolveSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
 import {
-  maintenanceLane,
   projectionLane,
   targetDiscoveryLane,
   type SessionHistoryWorkerLane,
@@ -159,7 +161,9 @@ export async function withSessionEntryReadOnlyInWorker<T>(
         readConsistency: scope.readConsistency,
         projection: scope.projection,
       };
-      const read = await reader.readEntryResult({ scope: readScope, continuation });
+      const read = await readSessionEntryWithRetainedFacts(database, readScope, () =>
+        reader.readEntryResult({ scope: readScope, continuation }),
+      );
       owner.assertCurrent();
       const value = await consumeRead(read, {
         ...owner,
@@ -274,43 +278,6 @@ export async function readSessionEntryByIdReadOnlyInWorker(
 export async function readSessionUpdatedAtInWorker(input: SessionAccessScope) {
   const entry = await readSessionEntryReadOnlyInWorker({ ...input, projection: "list" });
   return entry?.updatedAt;
-}
-
-/** Diagnostic identities name the default agent store, not a logical store locator. */
-export async function withSessionDiagnosticTextInWorker(
-  input: { agentId: string; sessionKey: string; sessionId: string },
-  assertCurrent: () => void,
-  consume: (text: string | undefined) => void,
-): Promise<void> {
-  const { scope, env } = captureSessionEntryReadScope(input);
-  const agentId = normalizeAgentId(input.agentId);
-  assertCurrent();
-  if (isIncognitoSessionKey(scope.sessionKey)) {
-    consume(undefined);
-    return;
-  }
-  const storePath = resolveOpenClawAgentSqlitePath({ agentId, env });
-  const admission = resolveSessionTranscriptReadFence(input);
-  await withSessionHistoryWorkerDatabase(
-    { agentId, path: storePath, env },
-    async (owner) => {
-      assertCurrent();
-      const text = await owner.readDiagnosticText({
-        scope: {
-          ...scope,
-          agentId,
-          databaseAgentId: agentId,
-          storePath,
-          sessionId: input.sessionId,
-        },
-        admission,
-      });
-      owner.assertCurrent();
-      assertCurrent();
-      consume(text);
-    },
-    maintenanceLane,
-  );
 }
 
 export { readSessionEntryInWorker } from "./session-entry-read-writable.js";
@@ -529,7 +496,9 @@ export async function withSessionEntriesFromStoreInWorker<T>(
     input,
     async ({ reader, database, continuation, assertCurrent }) => {
       assertCurrent();
-      const result = await reader.readExactEntries({ ...request, env: database.env, continuation });
+      const result = await readSessionEntriesWithRetainedFacts(database, request, () =>
+        reader.readExactEntries({ ...request, env: database.env, continuation }),
+      );
       assertCurrent();
       return consume({ result, database, assertCurrent });
     },

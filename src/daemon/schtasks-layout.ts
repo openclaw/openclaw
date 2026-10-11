@@ -622,11 +622,9 @@ export function buildTaskScript({
       lines.push(renderCmdSetAssignment(key, value));
     }
   }
-  const commandArguments =
-    environment?.OPENCLAW_SERVICE_KIND === "gateway"
-      ? [...programArguments, WINDOWS_TASK_SUPERVISOR_FLAG]
-      : programArguments;
+  let commandArguments = programArguments;
   if (environment?.OPENCLAW_SERVICE_KIND === "gateway") {
+    commandArguments = [...programArguments, WINDOWS_TASK_SUPERVISOR_FLAG];
     // Legacy VBS launchers supply their own outer owner; direct tasks own CMD.
     lines.push(DIRECT_TASK_LAUNCHER_MARKER);
   }

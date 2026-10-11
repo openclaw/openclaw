@@ -1,4 +1,5 @@
 /** Client ownership and synchronous retirement, independent of startup/auth execution. */
+import { racePromiseWithAbortSignal } from "openclaw/plugin-sdk/time-runtime";
 import { defineCodexBuildState } from "../build-state.js";
 import type { CodexAppServerClient } from "./client.js";
 import type { CodexAppServerStartOptions } from "./config-contracts.js";
@@ -67,7 +68,8 @@ export function recordSharedClientAcquireBoundary(
 }
 
 export type SharedCodexAppServerClientEntry = {
-  readonly key: string;
+  /** Moves only through rekeySharedClientEntry. */
+  key: string;
   client?: CodexAppServerClient;
   startup?: SharedCodexAppServerClientStartup;
   startupTransport?: Promise<CodexAppServerClient>;
@@ -107,6 +109,41 @@ export function getOrCreateSharedClientEntry(
     state.clients.set(key, entry);
   }
   return entry;
+}
+
+export class SharedCodexFallbackJoinError extends Error {
+  readonly code = "CODEX_SHARED_FALLBACK_JOIN";
+
+  constructor() {
+    super("Shared Codex fallback already has a startup owner");
+    this.name = "SharedCodexFallbackJoinError";
+  }
+}
+
+export function isSharedCodexFallbackJoinError(error: unknown): boolean {
+  return error instanceof Error && "code" in error && error.code === "CODEX_SHARED_FALLBACK_JOIN";
+}
+
+/**
+ * Moves a current entry to the fallback key. False means the caller must
+ * re-acquire instead of starting a second client under an already-owned key.
+ */
+export function rekeySharedClientEntry(
+  entry: SharedCodexAppServerClientEntry,
+  key: string,
+): boolean {
+  const state = getSharedCodexAppServerClientState();
+  if (state.clients.get(entry.key) !== entry) {
+    return false;
+  }
+  const target = state.clients.get(key);
+  if (target) {
+    return target === entry;
+  }
+  state.clients.delete(entry.key);
+  entry.key = key;
+  state.clients.set(key, entry);
+  return true;
 }
 
 export function closeSharedClientEntryIfUnclaimed(entry: SharedCodexAppServerClientEntry): boolean {
@@ -332,7 +369,10 @@ export function waitForCodexAppServerClientExit(client: CodexAppServerClient): P
 }
 
 /** Acquire the recorded owner atomically, or join its exit before a replacement writes. */
-export async function retainSharedCodexAppServerClientByInstanceId(clientId: string | undefined) {
+export async function retainSharedCodexAppServerClientByInstanceId(
+  clientId: string | undefined,
+  options?: { signal?: AbortSignal; createAbortError?: (signal: AbortSignal) => Error },
+) {
   const id = clientId?.trim();
   if (!id) {
     return undefined;
@@ -344,7 +384,12 @@ export async function retainSharedCodexAppServerClientByInstanceId(clientId: str
     }
     const entry = state.entriesByClient.get(client);
     if (entry?.client !== client || entry.closeError || client.getCloseError()) {
-      await waitForCodexAppServerClientExit(client);
+      // Cancellation ends only this waiter; discovery still fences later writers.
+      await racePromiseWithAbortSignal(
+        waitForCodexAppServerClientExit(client),
+        options?.signal,
+        options?.createAbortError,
+      );
       return undefined;
     }
     const release = retainSharedClientEntry(entry);

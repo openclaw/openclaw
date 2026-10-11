@@ -158,7 +158,7 @@ it("hydrates only requested snapshots while retaining exact-read lifecycle and a
   });
 });
 
-it("publishes exact-read admission only after commit and reuses it on the retained reader", async () => {
+it("publishes lifecycle snapshot admission only after commit and reuses it on the retained reader", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
     const database = openOpenClawAgentDatabase({ agentId: "main", env });
     const sessionKey = "agent:main:cron:admission";
@@ -179,6 +179,7 @@ it("publishes exact-read admission only after commit and reuses it on the retain
             database: target,
             env,
             sessionKeys: [sessionKey],
+            projection: "lifecycle",
           });
         const commitFailure = new Error("Injected snapshot commit failure");
         const exec = reader.db.exec.bind(reader.db);
@@ -336,6 +337,7 @@ it.each([false, true])("reads row metadata (continuation: %s)", async (useContin
             database: target,
             env,
             sessionKeys: [sessionKey],
+            projection: "lifecycle",
           });
         }
         const continuation = useContinuation
@@ -577,8 +579,6 @@ it("closes worker-prepared authority synchronously before queued consumers can r
       });
     });
     await queued;
-    const result = await readSessionEntriesFromStoreInWorker(input);
-    expect(Object.keys(result).toSorted()).toEqual(["entries", "kind", "lifecycleTimestamps"]);
     await expect(withSessionEntriesFromStoresInWorker([input], async () => {})).rejects.toThrow(
       "consumers must remain synchronous",
     );

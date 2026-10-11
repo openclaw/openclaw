@@ -259,7 +259,7 @@ export function createCodexThreadsTool(options: CodexThreadsToolOptions): AnyAge
           const session = currentSession();
           const identity = session ? currentIdentity(session.sessionId) : undefined;
           const readBinding = () => (identity ? options.bindingStore.read(identity) : undefined);
-          const binding = readBinding();
+          const binding = identity ? await options.bindingStore.readAsync(identity) : undefined;
           const selection = codexBindingConnectionSelection(binding);
           const assertCurrent = () => {
             options.context.assertInvocationCurrent?.();
@@ -357,10 +357,12 @@ export function createCodexThreadsTool(options: CodexThreadsToolOptions): AnyAge
         }
 
         const session = archiveAdmission?.session ?? currentSession();
-        const binding = currentBinding(session);
+        const binding = session
+          ? await options.bindingStore.readAsync(currentIdentity(session.sessionId))
+          : undefined;
         if (archiveAdmission) {
           const { identity, session: admittedSession } = archiveAdmission;
-          const archivedBinding = currentBinding(admittedSession);
+          const archivedBinding = binding;
           if (archivedBinding?.threadId === threadId) {
             // Clearing the binding detaches the harness-owned Codex thread. The session lock keeps
             // both that thread and App Server-selected model routing fixed.

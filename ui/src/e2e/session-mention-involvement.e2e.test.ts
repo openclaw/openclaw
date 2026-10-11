@@ -99,6 +99,11 @@ suite.define(() => {
         });
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, homeKey));
         await waitForSessionRosterHydration(page);
+        // This scenario intentionally compares sessions beyond the current human's Mine scope.
+        await page
+          .locator(".sidebar-navigation-scope")
+          .getByRole("button", { name: "All", exact: true })
+          .click();
         const target = page.locator('[data-session-key="' + sessionKey + '"]');
         await expectBrowser(target).toBeVisible();
         const chooseFilter = async (value: "all" | "involving-me") => {
@@ -150,6 +155,7 @@ suite.define(() => {
         await expectBrowser(target).toBeVisible();
         await target.hover();
         await target.click({ button: "right" });
+        await page.getByRole("menuitem", { name: "Advanced", exact: true }).click();
         const show = page.getByRole("menuitem", { name: "Show in Involving me", exact: true });
         await expectBrowser(show).toBeVisible();
         await captureUiProof(suite, page, "04-restore-from-all-owners.png");

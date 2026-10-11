@@ -3,7 +3,10 @@ import { localeLowercasePreservingWhitespace } from "@openclaw/normalization-cor
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { extractKeywords, isQueryStopWordToken } from "../../memory-host-sdk/query.js";
-import type { CompactionSummarizationInstructions } from "../compaction.js";
+import type {
+  CompactionSummarizationInstructions,
+  summarizeCompactionHistory,
+} from "../compaction.js";
 import { wrapUntrustedPromptDataBlock } from "../sanitize-for-prompt.js";
 
 const MAX_EXTRACTED_IDENTIFIERS = 12;
@@ -26,6 +29,22 @@ const STRICT_EXACT_IDENTIFIERS_INSTRUCTION =
   "For ## Exact identifiers, preserve literal values exactly as seen (IDs, URLs, file paths, ports, hashes, dates, times).";
 const POLICY_OFF_EXACT_IDENTIFIERS_INSTRUCTION =
   "For ## Exact identifiers, include identifiers only when needed for continuity; do not enforce literal-preservation rules.";
+
+export function resolveSummaryReserveTokens(
+  requestedReserveTokens: number,
+  model: NonNullable<Parameters<typeof summarizeCompactionHistory>[0]["model"]>,
+): number {
+  const requested = Math.max(1, Math.floor(requestedReserveTokens));
+  const modelMaxTokens = model.maxTokens;
+  if (
+    typeof modelMaxTokens !== "number" ||
+    !Number.isFinite(modelMaxTokens) ||
+    modelMaxTokens <= 0
+  ) {
+    return requested;
+  }
+  return Math.max(1, Math.min(requested, Math.floor(modelMaxTokens)));
+}
 
 /** Demotes canonical headings when a summary is embedded as supporting context. */
 export function nestRequiredSummaryHeadings(text: string): string {
@@ -343,7 +362,7 @@ export function buildStructuredFallbackSummary(previousSummary: string | undefin
     return trimmedPreviousSummary;
   }
   const values = [
-    trimmedPreviousSummary || "No prior history.",
+    nestRequiredSummaryHeadings(trimmedPreviousSummary) || "No prior history.",
     "None.",
     "None.",
     "None.",

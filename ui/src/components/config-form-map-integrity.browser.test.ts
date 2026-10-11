@@ -128,7 +128,7 @@ describe("config form map integrity", () => {
       const streamingRow = Array.from(container.querySelectorAll(".settings-row--toggle")).find(
         (row) => row.querySelector(".settings-row__title")?.textContent?.trim() === "Streaming",
       );
-      expect(streamingRow?.querySelector("wa-switch")).toBeTruthy();
+      expect(streamingRow?.querySelector('.settings-toggle__input[role="switch"]')).toBeTruthy();
 
       for (const [label, value] of [
         ["On", true],

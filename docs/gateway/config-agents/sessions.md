@@ -28,7 +28,7 @@ Both directions accept `always`, `ask`, or `never`; omitted values default to
 `always`. `ask` requires a human decision before sending or admitting the message
 as new peer input. Existing access restrictions still apply to `always`.
 
-The Control UI **Session settings** submenu can override either direction. **Reset** removes the
+The Control UI session menu’s **Advanced** submenu can override either direction. **Reset** removes the
 override, so later configuration changes apply again. Existing explicit overrides
 are not overwritten when defaults change. Resets preserve the session settings,
 new explicit children and forks inherit them, and delegated work remains subject

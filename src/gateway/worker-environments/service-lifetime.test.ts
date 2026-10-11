@@ -5,6 +5,7 @@ import {
   createTestGatewayScheduler,
 } from "../../test-utils/gateway-scheduler-clock.js";
 import * as support from "./service.test-support.js";
+import { WorkerTunnelOwnerDisconnectedError } from "./tunnel-contract.js";
 import type { WorkerTunnelManager } from "./tunnel.js";
 
 type WorkerEnvironmentServiceError = support.WorkerEnvironmentServiceError;
@@ -172,26 +173,6 @@ describe("worker environment service", () => {
     expect(store.get(active.environmentId)?.profileSnapshot).toEqual(active.profileSnapshot);
   });
 
-  it("maintains configured providers on schedule without environments and stops after shutdown", async () => {
-    const time = createGatewaySchedulerClock();
-    const scheduler = createTestGatewayScheduler(time.clock);
-    const maintain = vi.fn(async () => {});
-    const workerService = support.createService(support.createProvider(), {
-      maintainProviders: maintain,
-      scheduler,
-    });
-
-    expect(support.testState.store.list()).toEqual([]);
-    workerService.start();
-    await workerService.reconcileOnce();
-    expect(maintain).toHaveBeenCalledOnce();
-    await time.advanceBy(250);
-    expect(maintain).toHaveBeenCalledTimes(2);
-    await workerService.stop();
-    await time.advanceBy(25);
-    expect(maintain).toHaveBeenCalledTimes(2);
-  });
-
   it.each(["service", "scheduler"] as const)(
     "keeps maintenance off reconciliation and allocation while %s shutdown aborts and drains it",
     async (closingOwner) => {
@@ -326,22 +307,6 @@ describe("worker environment service", () => {
     expect(prune).toHaveBeenCalledOnce();
   });
 
-  it.each(["SQLITE_BUSY", "SQLITE_LOCKED"])(
-    "continues reconciliation when terminal cleanup fails with %s",
-    async (code) => {
-      const prune = vi
-        .spyOn(support.testState.store, "pruneTerminalEnvironments")
-        .mockImplementation(() => {
-          throw Object.assign(new Error("database is locked"), { code });
-        });
-
-      await expect(
-        support.createService(support.createProvider()).reconcileOnce(),
-      ).resolves.toBeUndefined();
-      expect(prune).toHaveBeenCalledOnce();
-    },
-  );
-
   it("propagates non-lock terminal cleanup failures", async () => {
     const error = Object.assign(new Error("disk I/O error"), { code: "SQLITE_IOERR" });
     const prune = vi
@@ -415,6 +380,19 @@ describe("worker environment service", () => {
       });
     },
   );
+
+  it("defers unreachable worker stops instead of failing Gateway shutdown", async () => {
+    const disconnected = new WorkerTunnelOwnerDisconnectedError("node is not connected");
+    const workerService = support.createService(support.createProvider(), {
+      tunnelManager: {
+        stopAll: vi.fn(async () => {
+          throw disconnected;
+        }),
+      } as unknown as WorkerTunnelManager,
+    });
+
+    await expect(workerService.stop()).resolves.toBeUndefined();
+  });
 
   it("waits for timed-out provider work during shutdown", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });

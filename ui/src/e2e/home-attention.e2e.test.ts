@@ -113,7 +113,7 @@ suite.define(() => {
 
     await page.goto(controlUiSessionUrl(suite.server.baseUrl, mainSessionKey));
     await gateway.waitForRequest("sessions.list", { match: rosterMatch });
-    const home = page.locator(".nav-item--home");
+    const home = page.locator(".sidebar-footer-bar__home");
     await home.waitFor();
     const observed = {
       quiet: await captureState(page, home, "00-non-attention"),

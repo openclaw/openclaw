@@ -196,7 +196,7 @@ export async function prepareFullCatalogFacts(
       input.config,
       input.env,
     );
-    const completeModelCatalog = {
+    const completeModelCatalog: ModelCatalogSnapshot = {
       ...modelCatalog,
       staticEntries:
         input.config.models?.mode === "replace"
@@ -490,8 +490,22 @@ export function prepareModelCatalogPublication(
     ).toSorted(compareModelCatalogEntries);
   // Route dedupe follows another round of normalization callbacks; acquire its policy afresh.
   const routeKeyOf = createModelCatalogIdentityKeyResolver();
+  const providerOutcomes: NonNullable<ModelCatalogSnapshot["providerOutcomes"]>[number][] = [];
+  for (const outcome of catalog.providerOutcomes ?? []) {
+    const accepted = previous?.providerOutcomes?.find(
+      (candidate) => candidate.provider === outcome.provider,
+    );
+    providerOutcomes.push(
+      outcome.status !== "ready" &&
+        retainedProviders.has(normalizeProvider(outcome.provider)) &&
+        accepted?.listedModelIds !== undefined
+        ? { ...outcome, listedModelIds: accepted.listedModelIds }
+        : outcome,
+    );
+  }
   const published: ModelCatalogSnapshot = {
     ...catalog,
+    providerOutcomes,
     entries: retain(catalog.entries, previous?.entries ?? []),
     routeVariants: retain(catalog.routeVariants, previous?.routeVariants ?? [], (entry) =>
       JSON.stringify([routeKeyOf(entry), entry.api, entry.baseUrl, entry.nativeRuntime]),

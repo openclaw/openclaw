@@ -1,7 +1,9 @@
+import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import {
   deferSqliteWorkerCommitReceipt,
   requestSqliteWorkerOperationAdmission,
 } from "../../infra/sqlite-worker-operation-admission.js";
+import type { DB } from "../../state/openclaw-state-db.generated.js";
 import type {
   WorkerOperationContext,
   WorkerOperationHandlers,
@@ -15,17 +17,34 @@ import {
 } from "./placement-move-intent.js";
 import { readWorkerSessionPlacementProjectionInDatabase } from "./placement-read-projection.js";
 import {
+  nextGeneration,
+  normalizeIdentity,
+  normalizeWorkerPlacementExecutionMode,
+  type WorkerPlacementExecutionMode,
+  type WorkerSessionPlacementDispatchIdentity,
+} from "./placement-record.js";
+import {
   retireWorkerSessionPlacement,
   type WorkerSessionPlacementRetirement,
 } from "./placement-retirement.js";
 import {
+  ensureLocal,
   find,
+  getRequired,
+  query,
   readWorkerPlacementsInDatabase,
   readWorkerPlacementsForReconcileInDatabase,
   updateTransition,
 } from "./placement-row-codec.js";
 import type { PlacementStoreRuntime } from "./placement-runtime.js";
+import {
+  isFailedWorkerPlacementEnvironmentGone,
+  matchesWorkerPlacementTarget,
+} from "./placement-target.js";
+import { assertSessionWorkspaceUnreserved } from "./placement-workspace-reservation.kernel.js";
+import { hasWorkerWorkspacePendingResult } from "./placement-workspace-result.js";
 import { consumePreparedEnvironment } from "./prepared-environment-store.js";
+import { findWorkerEnvironment } from "./store-row-codec.js";
 
 type Moves = ReturnType<typeof createPlacementMoveOps>;
 type MoveInput<Method extends keyof Moves> = Parameters<Moves[Method]>[0];
@@ -94,7 +113,108 @@ export const placementReadOperations = {
   ) => readWorkerPlacementsForReconcileInDatabase(open().db, input.sessionKey),
 } satisfies WorkerOperationHandlers;
 
+function startWorkerPlacementDispatch(
+  runtime: PlacementStoreRuntime,
+  input: WorkerSessionPlacementDispatchIdentity,
+) {
+  const identity = normalizeIdentity(input);
+  const executionMode = normalizeWorkerPlacementExecutionMode(input.executionMode);
+  const db = runtime.read();
+  const nowMs = runtime.now();
+  const current = ensureLocal(db, identity, nowMs);
+  assertSessionWorkspaceUnreserved(db, identity.sessionId);
+  if (current.state !== "local" && current.state !== "reclaimed" && current.state !== "failed") {
+    throw new Error(
+      `Cannot dispatch session ${identity.sessionId} from placement ${current.state}`,
+    );
+  }
+  const expected = input.expectedPlacement;
+  if (expected) {
+    if (
+      !matchesWorkerPlacementTarget(current, expected) ||
+      current.executionMode !== executionMode ||
+      (current.state !== "reclaimed" && current.state !== "failed") ||
+      current.turnClaim
+    ) {
+      throw new Error(`Worker placement ${identity.sessionId} changed before redispatch`);
+    }
+    const journal = executeSqliteQuerySync(
+      db,
+      getNodeSqliteKysely<Pick<DB, "worker_workspace_reconciliations">>(db)
+        .selectFrom("worker_workspace_reconciliations")
+        .select("session_id")
+        .where("session_id", "=", identity.sessionId),
+    ).rows[0];
+    if (
+      hasWorkerWorkspacePendingResult(db, identity.sessionId) ||
+      journal ||
+      readWorkerPlacementMovesReadOnly(db, [identity.sessionId]).has(identity.sessionId)
+    ) {
+      throw new Error(
+        `Worker placement ${identity.sessionId} still has pending workspace recovery`,
+      );
+    }
+    if (current.state === "failed") {
+      const environment = current.environmentId
+        ? findWorkerEnvironment(db, current.environmentId)
+        : undefined;
+      if (
+        current.activeOwnerEpoch === null ||
+        !environment ||
+        !isFailedWorkerPlacementEnvironmentGone({
+          environmentService: { get: () => environment },
+          placement: current,
+        })
+      ) {
+        throw new Error(`Failed worker placement ${identity.sessionId} still requires recovery`);
+      }
+    }
+  }
+  // The local predecessor keeps its claim until the dispatch barrier drains it.
+  const result = executeSqliteQuerySync(
+    db,
+    query(db)
+      .updateTable("worker_session_placements")
+      .set({
+        state: "requested",
+        execution_mode: executionMode,
+        environment_id: null,
+        transition_generation: nextGeneration(current.generation),
+        active_owner_epoch: null,
+        workspace_base_manifest_ref: null,
+        remote_workspace_dir: null,
+        worker_bundle_hash: null,
+        last_transcript_ack_cursor: null,
+        last_live_event_ack_cursor: null,
+        recovery_error: null,
+        terminal_reason: null,
+        terminal_at_ms: null,
+        updated_at_ms: nowMs,
+        state_changed_at_ms: nowMs,
+      })
+      .where("session_id", "=", current.sessionId)
+      .where("state", "=", current.state)
+      .where("transition_generation", "=", current.generation),
+  );
+  if (result.numAffectedRows !== 1n) {
+    throw new Error(`Session ${identity.sessionId} placement changed during dispatch barrier`);
+  }
+  return getRequired(db, identity.sessionId);
+}
+
 export const placementLifecycleOperations = {
+  "workerPlacements.startDispatch": operation(
+    "workerPlacements.startDispatch",
+    (
+      runtime,
+      input: WorkerSessionPlacementDispatchIdentity & {
+        executionMode: WorkerPlacementExecutionMode;
+      },
+    ) => ({
+      sessionId: input.sessionId,
+      placement: startWorkerPlacementDispatch(runtime, input),
+    }),
+  ),
   "workerPlacements.beginMove": operation(
     "workerPlacements.beginMove",
     (runtime, input: MoveInput<"beginPlacementMove">, admit) => ({

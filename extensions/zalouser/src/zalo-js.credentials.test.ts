@@ -7,10 +7,11 @@ import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import type {
   OpenAsyncKeyedStoreOptions,
   OpenKeyedStoreOptions,
+  PluginStateActionAuthority,
   PluginStateKeyedStore,
 } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
-  createPluginStateKeyedStoreForTests,
+  createPluginStateKeyedStoreV2ForTests,
   createPluginStateSyncKeyedStoreForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
@@ -152,10 +153,11 @@ describe("zalouser credential persistence", () => {
     beforeCredentialRevocation = undefined;
     beforeCredentialRegister = undefined;
     afterCredentialRegister = undefined;
-    runtime.state.openKeyedStore = <T>(
+    runtime.state.openKeyedStoreV2 = <T>(
       options: OpenAsyncKeyedStoreOptions,
-    ): PluginStateKeyedStore<T> => {
-      const store = createPluginStateKeyedStoreForTests<T>("zalouser", options);
+      authority: PluginStateActionAuthority = { assertCurrent: () => {} },
+    ): PluginStateKeyedStore<T, 2> => {
+      const store = createPluginStateKeyedStoreV2ForTests<T>("zalouser", options, authority);
       return {
         ...store,
         register: async (...args) => {
@@ -180,51 +182,41 @@ describe("zalouser credential persistence", () => {
     createZaloMock.mockReset();
   });
 
-  it.each(["worker", "legacy"] as const)(
-    "preserves credential refresh and logout on %s stores",
-    async (mode) => {
-      if (mode === "legacy") {
-        getZalouserRuntime().state.openKeyedStore = <T>(options: OpenAsyncKeyedStoreOptions) => ({
-          ...createPluginStateKeyedStoreForTests<T>("zalouser", options),
-          observe: undefined,
-          compareAndApply: undefined,
-        });
-      }
-      const stateDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-zalouser-credentials-"));
-      const env = { OPENCLAW_STATE_DIR: stateDir };
-      const profile = "revoked-refresh";
-      const stored = {
-        imei: "device",
-        cookie: [{ key: "zpsid", value: "old", domain: "chat.zalo.me" }],
-        userAgent: "agent",
-        createdAt: "2026-04-01T00:00:00.000Z",
-      };
-      try {
-        await saveStoredZaloCredentials(profile, stored, env);
-        const refreshedCookie = [{ key: "zpsid", value: "refreshed", domain: "chat.zalo.me" }];
+  it("preserves credential refresh and logout on worker stores", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-zalouser-credentials-"));
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const profile = "revoked-refresh";
+    const stored = {
+      imei: "device",
+      cookie: [{ key: "zpsid", value: "old", domain: "chat.zalo.me" }],
+      userAgent: "agent",
+      createdAt: "2026-04-01T00:00:00.000Z",
+    };
+    try {
+      await saveStoredZaloCredentials(profile, stored, env);
+      const refreshedCookie = [{ key: "zpsid", value: "refreshed", domain: "chat.zalo.me" }];
+      await refreshStoredZaloCredentials(
+        profile,
+        { ...stored, cookie: refreshedCookie },
+        () => true,
+        env,
+      );
+      expect((await loadStoredZaloCredentials(profile, env))?.cookie).toEqual(refreshedCookie);
+      await clearStoredZaloCredentials(profile, env);
+
+      expect(
         await refreshStoredZaloCredentials(
           profile,
-          { ...stored, cookie: refreshedCookie },
+          { ...stored, cookie: [{ key: "zpsid", value: "late", domain: "chat.zalo.me" }] },
           () => true,
           env,
-        );
-        expect((await loadStoredZaloCredentials(profile, env))?.cookie).toEqual(refreshedCookie);
-        await clearStoredZaloCredentials(profile, env);
-
-        expect(
-          await refreshStoredZaloCredentials(
-            profile,
-            { ...stored, cookie: [{ key: "zpsid", value: "late", domain: "chat.zalo.me" }] },
-            () => true,
-            env,
-          ),
-        ).toBeNull();
-        expect(await loadStoredZaloCredentials(profile, env)).toBeNull();
-      } finally {
-        await removeCredentialStateDir(stateDir);
-      }
-    },
-  );
+        ),
+      ).toBeNull();
+      expect(await loadStoredZaloCredentials(profile, env)).toBeNull();
+    } finally {
+      await removeCredentialStateDir(stateDir);
+    }
+  });
 
   it("keeps restoration on its original state directory while waiting for logout", async () => {
     const stateDir = tempDirs.make("openclaw-zalouser-credentials-");

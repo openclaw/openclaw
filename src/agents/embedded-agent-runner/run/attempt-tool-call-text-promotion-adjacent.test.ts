@@ -221,7 +221,6 @@ describe("wrapStreamFnPromoteStandaloneTextToolCalls", () => {
           id: expect.stringMatching(/^call_[a-f0-9]{24}$/),
           name: expectedToolName,
           arguments: expectedArguments,
-          partialArgs: JSON.stringify(expectedArguments),
         },
       ];
 
@@ -235,6 +234,9 @@ describe("wrapStreamFnPromoteStandaloneTextToolCalls", () => {
       expect(requireRecord(events[2], "toolcall delta").delta).toBe(
         JSON.stringify(expectedArguments),
       );
+      expect(requireRecord(events[2], "toolcall delta").partial).toMatchObject({
+        content: [{ partialJson: JSON.stringify(expectedArguments) }],
+      });
       const doneEvent = requireRecord(events[4], "done event");
       expect(doneEvent.reason).toBe("toolUse");
       expect(requireRecord(doneEvent.message, "done message").content).toEqual(expectedContent);

@@ -299,7 +299,7 @@ export type OpenAIModeModel = Omit<Model, "compat"> & {
   compat?: OpenAIModeCompatInput | null;
 };
 
-type MutableToolCall = ToolCall & { partialArgs?: string };
+type MutableToolCall = ToolCall & { partialJson?: string };
 
 export type MutableAssistantOutput = Omit<AssistantMessage, "content" | "usage"> & {
   content: Array<TextContent | ThinkingContent | MutableToolCall>;
