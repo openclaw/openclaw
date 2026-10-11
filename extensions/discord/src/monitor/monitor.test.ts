@@ -4,7 +4,11 @@ installDiscordIngressTestRuntime();
 // Discord tests cover monitor plugin behavior.
 import {
   ChannelType,
+  ComponentType,
+  InteractionType,
+  Locale,
   MessageFlags,
+  MessageType,
   type RESTPostAPIChannelMessageResult,
 } from "discord-api-types/v10";
 import { resolveCommandAuthorization } from "openclaw/plugin-sdk/command-auth-native";
@@ -1071,20 +1075,50 @@ describe("discord component interactions", () => {
       {
         id: "interaction1",
         token: "token1",
-        type: 3,
+        type: InteractionType.MessageComponent,
         version: 1,
         application_id: "app1",
+        app_permissions: "0",
+        locale: Locale.EnglishUS,
+        entitlements: [],
+        authorizing_integration_owners: {},
+        attachment_size_limit: 10 * 1024 * 1024,
         channel_id: "dm-channel",
-        user: { id: "123456789", username: "test-user", discriminator: "0000", avatar: null },
-        data: { component_type: 2, custom_id: "button1" },
+        channel: { id: "dm-channel", type: ChannelType.DM },
+        user: {
+          id: "123456789",
+          username: "test-user",
+          discriminator: "0000",
+          global_name: null,
+          avatar: null,
+        },
+        data: { component_type: ComponentType.Button, custom_id: "button1" },
         message: {
           id: "msg-1",
           channel_id: "dm-channel",
+          author: {
+            id: "app1",
+            username: "test-bot",
+            discriminator: "0000",
+            global_name: null,
+            avatar: null,
+            bot: true,
+          },
           flags: MessageFlags.IsComponentsV2,
           content: "",
+          timestamp: "2026-10-11T00:00:00.000Z",
+          edited_timestamp: null,
+          tts: false,
+          mention_everyone: false,
+          mentions: [],
+          mention_roles: [],
+          attachments: [],
+          embeds: [],
+          pinned: false,
+          type: MessageType.Default,
           components: [],
         },
-      } as ConstructorParameters<typeof NativeButtonInteraction>[1],
+      } satisfies ConstructorParameters<typeof NativeButtonInteraction>[1],
     );
 
     await button.run(interaction, { cid: "btn_1" } as ComponentData);

@@ -1,4 +1,11 @@
-import { MessageFlags } from "discord-api-types/v10";
+import {
+  ChannelType,
+  ComponentType,
+  InteractionType,
+  Locale,
+  MessageFlags,
+  MessageType,
+} from "discord-api-types/v10";
 import { describe, expect, it, vi } from "vitest";
 import { ButtonInteraction } from "../internal/interactions.js";
 import { replySilently } from "./agent-components-reply.js";
@@ -14,12 +21,43 @@ function fixture(flags = MessageFlags.IsComponentsV2) {
   const raw = {
     id: "interaction1",
     token: "token1",
-    type: 3,
+    type: InteractionType.MessageComponent,
     version: 1,
     application_id: "app1",
-    data: { component_type: 2, custom_id: "button1" },
-    message: { id: "source1", channel_id: "channel1", flags, content: "", components: [] },
-  } as ConstructorParameters<typeof ButtonInteraction>[1];
+    app_permissions: "0",
+    locale: Locale.EnglishUS,
+    entitlements: [],
+    authorizing_integration_owners: {},
+    attachment_size_limit: 10 * 1024 * 1024,
+    channel_id: "channel1",
+    channel: { id: "channel1", type: ChannelType.DM },
+    data: { component_type: ComponentType.Button, custom_id: "button1" },
+    message: {
+      id: "source1",
+      channel_id: "channel1",
+      author: {
+        id: "app1",
+        username: "test-bot",
+        discriminator: "0000",
+        global_name: null,
+        avatar: null,
+        bot: true,
+      },
+      flags,
+      content: "",
+      timestamp: "2026-10-11T00:00:00.000Z",
+      edited_timestamp: null,
+      tts: false,
+      mention_everyone: false,
+      mentions: [],
+      mention_roles: [],
+      attachments: [],
+      embeds: [],
+      pinned: false,
+      type: MessageType.Default,
+      components: [],
+    },
+  } satisfies ConstructorParameters<typeof ButtonInteraction>[1];
   return { interaction: new ButtonInteraction(client, raw), post, patch };
 }
 
