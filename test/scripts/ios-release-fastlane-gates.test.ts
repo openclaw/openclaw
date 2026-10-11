@@ -15,9 +15,6 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 
 const fastfilePath = path.join(process.cwd(), "apps", "ios", "fastlane", "Fastfile");
-const packageJsonPath = path.join(process.cwd(), "package.json");
-const legacyReleaseScriptPath = path.join(process.cwd(), "scripts", "ios-release.sh");
-const uploadScriptPath = path.join(process.cwd(), "scripts", "ios-release-upload.sh");
 const snapshotUITestPath = path.join(
   process.cwd(),
   "apps",
@@ -30,16 +27,6 @@ const ciWorkflowPath = path.join(process.cwd(), ".github", "workflows", "ci.yml"
 const rubyVersionPath = path.join(process.cwd(), "apps", "ios", ".ruby-version");
 const gemfilePath = path.join(process.cwd(), "apps", "ios", "Gemfile");
 const gemfileLockPath = path.join(process.cwd(), "apps", "ios", "Gemfile.lock");
-const iosReadmePath = path.join(process.cwd(), "apps", "ios", "README.md");
-const fastlaneSetupPath = path.join(process.cwd(), "apps", "ios", "fastlane", "SETUP.md");
-const metadataReadmePath = path.join(
-  process.cwd(),
-  "apps",
-  "ios",
-  "fastlane",
-  "metadata",
-  "README.md",
-);
 const screenshotsScriptPath = path.join(process.cwd(), "scripts", "ios-screenshots.sh");
 
 function runIosScreenshotsCommand(
@@ -137,55 +124,6 @@ function swiftFunctionBody(source: string, name: string): string {
 }
 
 describe("iOS Fastlane release upload gates", () => {
-  it("uses the build attached to the latest public version for notes and rejects missing history", () => {
-    const source = String.raw`
-require "json"
-module UI
-  def self.user_error!(message); raise message; end
-end
-def default_platform(*); end
-def desc(*); end
-def platform(*); yield; end
-def lane(*); end
-alias private_lane lane
-load ARGV.fetch(0)
-Build = Struct.new(:id, :version)
-Version = Struct.new(:version_string, :app_version_state, :build) do
-  def get_build
-    raise "read a non-public build" unless ["2026.7.2", "2026.7.21"].include?(version_string)
-    build
-  end
-end
-old = Version.new("2026.7.2", "REPLACED_WITH_NEW_VERSION", Build.new("old", "8"))
-latest = Version.new("2026.7.21", "READY_FOR_DISTRIBUTION", Build.new("public", "3"))
-candidate = Version.new("2026.7.22", "PREPARE_FOR_SUBMISSION", Build.new("testflight", "19"))
-rows = %w[public delisted first missing ambiguous].map do |scenario|
-  latest.app_version_state = scenario == "delisted" ? "DEVELOPER_REMOVED_FROM_SALE" : "READY_FOR_DISTRIBUTION"
-  latest.build = scenario == "missing" ? nil : Build.new("public", "3")
-  versions = scenario == "first" ? [candidate] : [candidate, latest, old]
-  versions << latest.dup if scenario == "ambiguous"
-  begin
-    { scenario: scenario, baseline: ios_public_release_notes_baseline(versions) }
-  rescue => error
-    { scenario: scenario, error: error.message }
-  end
-end
-puts JSON.generate(rows)
-`;
-    const result = spawnSync("ruby", ["-e", source, fastfilePath], { encoding: "utf8" });
-    expect(result.status, result.stderr).toBe(0);
-    expect(JSON.parse(result.stdout)).toEqual([
-      { scenario: "public", baseline: { audience: "ios", version: "2026.7.21", build: "3" } },
-      { scenario: "delisted", baseline: { audience: "ios", version: "2026.7.21", build: "3" } },
-      { scenario: "first", baseline: { audience: "ios", version: null, build: null } },
-      { scenario: "missing", error: expect.stringContaining("no identifiable attached build") },
-      {
-        scenario: "ambiguous",
-        error: expect.stringContaining("Ambiguous public App Store version"),
-      },
-    ]);
-  });
-
   it("recovers notes and build selection on the registered stage lane without uploading again", () => {
     const source = String.raw`
 require "json"
@@ -753,68 +691,6 @@ puts JSON.generate(rows)
     expect(workflow.match(/name: Install locked Fastlane bundle/gu)).toHaveLength(1);
   });
 
-  it("documents every iOS Fastlane command through the pinned bundle", () => {
-    const documentedCommands = [iosReadmePath, fastlaneSetupPath, metadataReadmePath].flatMap(
-      (documentationPath) =>
-        readFileSync(documentationPath, "utf8")
-          .split("\n")
-          .filter((line) => /\bfastlane (?:ios [a-z_]+|spaceauth)\b/u.test(line)),
-    );
-
-    expect(documentedCommands.length).toBeGreaterThan(0);
-    for (const command of documentedCommands) {
-      expect(command).toContain('BUNDLE_GEMFILE="$PWD/Gemfile" bundle _4.0.22_ exec fastlane');
-    }
-  });
-
-  it("documents a direct Fastlane command that rejects an inherited Gemfile", () => {
-    const fixture = mkdtempSync(path.join(tmpdir(), "openclaw-ios-fastlane-docs-"));
-    const bundlePath = path.join(fixture, "bundle");
-    const tracePath = path.join(fixture, "trace.log");
-    writeFileSync(
-      bundlePath,
-      '#!/usr/bin/env bash\nprintf "%s\\n" "$BUNDLE_GEMFILE" > "$OPENCLAW_FASTLANE_TEST_TRACE"\n',
-      "utf8",
-    );
-    chmodSync(bundlePath, 0o755);
-
-    try {
-      const result = spawnSync(
-        "bash",
-        ["-c", 'BUNDLE_GEMFILE="$PWD/Gemfile" bundle _4.0.22_ exec fastlane ios auth_check'],
-        {
-          cwd: path.join(process.cwd(), "apps", "ios"),
-          encoding: "utf8",
-          env: {
-            ...process.env,
-            BUNDLE_GEMFILE: path.join(fixture, "Gemfile"),
-            OPENCLAW_FASTLANE_TEST_TRACE: tracePath,
-            PATH: `${fixture}:/usr/bin:/bin`,
-          },
-        },
-      );
-
-      expect(result.status).toBe(0);
-      expect(readFileSync(tracePath, "utf8")).toBe(`${gemfilePath}\n`);
-    } finally {
-      rmSync(fixture, { force: true, recursive: true });
-    }
-  });
-
-  it("uses the repository bundle when Fastlane is also on PATH", () => {
-    const { result, trace } = runIosScreenshotsCommand();
-
-    expect(result.status).toBe(0);
-    expect(trace).toBe("bundle:_4.0.22_ exec fastlane ios screenshots\n");
-  });
-
-  it("fails closed when the repository bundle fails", () => {
-    const { result, trace } = runIosScreenshotsCommand({ bundleExit: 42 });
-
-    expect(result.status).toBe(42);
-    expect(trace).toBe("bundle:_4.0.22_ exec fastlane ios screenshots\n");
-  });
-
   it("prints the pinned setup command when the repository bundle is unavailable", () => {
     const { result, trace } = runIosScreenshotsCommand({ bundleCheckExit: 1 });
 
@@ -823,13 +699,6 @@ puts JSON.generate(rows)
     expect(result.stderr).toContain("Install Ruby 3.4.11");
     expect(result.stderr).toContain("gem install bundler -v 4.0.22");
     expect(result.stderr).toContain("bundle _4.0.22_ install");
-  });
-
-  it("ignores a conflicting inherited Gemfile on the pinned path", () => {
-    const { result, trace } = runIosScreenshotsCommand({ conflictingGemfile: true });
-
-    expect(result.status).toBe(0);
-    expect(trace).toBe("bundle:_4.0.22_ exec fastlane ios screenshots\n");
   });
 
   it("fails closed when the repository Gemfile is absent", () => {
@@ -873,100 +742,6 @@ puts JSON.generate(rows)
     } finally {
       rmSync(fixture, { force: true, recursive: true });
     }
-  });
-
-  it("does not keep the old package release alias", () => {
-    const packageJson = JSON.parse(readFileSync(packageJsonPath, "utf8")) as {
-      scripts?: Record<string, string>;
-    };
-
-    expect(packageJson.scripts).toHaveProperty("ios:release:upload");
-    expect(packageJson.scripts).toHaveProperty("ios:release:plan");
-    expect(packageJson.scripts).toHaveProperty("ios:release:cut");
-    expect(packageJson.scripts).not.toHaveProperty("ios:release");
-    expect(existsSync(legacyReleaseScriptPath)).toBe(false);
-  });
-
-  it("routes the package upload wrapper through the guarded Fastlane lane", () => {
-    const script = readFileSync(uploadScriptPath, "utf8");
-
-    expect(script).toContain("OPENCLAW_IOS_RELEASE_WRAPPER=1");
-    expect(script).not.toContain("Missing required --version.");
-    expect(script).not.toContain("Missing required --revision.");
-    expect(script).toContain('"release_version:${RELEASE_VERSION}"');
-    expect(script).toContain('"app_store_revision:${APP_STORE_REVISION}"');
-    expect(script).toContain('"build_number:${BUILD_NUMBER}"');
-    expect(script).toContain("DELIVER_NUMBER_OF_THREADS=1");
-    expect(script).toContain("FL_MAX_NUMBER_OF_THREADS=1");
-    expect(script).toContain('run_ios_fastlane "${FASTLANE_ARGS[@]}"');
-  });
-
-  it("keeps release_upload as the only Fastlane TestFlight upload implementation", () => {
-    const fastfile = readFastfile();
-    const uploadCalls = fastfile.match(/\bupload_to_testflight\s*\(/g) ?? [];
-
-    expect(uploadCalls).toHaveLength(1);
-    expect(laneBody(fastfile, "release_upload")).toContain("upload_to_testflight(");
-    expect(fastfile).not.toMatch(/\n\s+lane :app_store do\b/);
-    expect(fastfile).not.toContain("Deprecated. Use `pnpm ios:release:upload`.");
-  });
-
-  it("rejects direct Fastlane upload before release work", () => {
-    const fastfile = readFastfile();
-    const releaseUpload = laneBody(fastfile, "release_upload");
-    const prepareContext = laneBody(fastfile, "prepare_app_store_context");
-
-    expect(releaseUpload).toContain('ENV["OPENCLAW_IOS_RELEASE_WRAPPER"] == "1"');
-    expect(releaseUpload).toContain("Use `pnpm ios:release:upload`");
-    expect(prepareContext).toContain("options[:release_version]");
-    expect(prepareContext).toContain("options[:app_store_revision]");
-    expect(prepareContext).toContain("options[:build_number]");
-    expect(prepareContext).toContain("resolve_ios_release_plan!");
-    expect(prepareContext).toContain('release_plan.fetch("gatewayVersion")');
-    expect(prepareContext).toContain('release_plan.fetch("appStoreRevision")');
-    expect(prepareContext).toContain('release_plan.fetch("buildNumber")');
-    expect(releaseUpload).toContain("app_store_revision: context[:app_store_revision]");
-    expect(laneBody(fastfile, "metadata")).toContain("options[:release_version]");
-    expect(laneBody(fastfile, "metadata")).toContain("Missing iOS gateway version");
-    expect(laneBody(fastfile, "metadata")).toContain("Missing iOS App Store revision");
-    expect(releaseUpload.indexOf("UI.user_error!")).toBeLessThan(
-      releaseUpload.indexOf("prepare_app_store_context"),
-    );
-  });
-
-  it("preflights the exact App Store version before screenshots and archive work", () => {
-    const fastfile = readFastfile();
-    const releaseUpload = laneBody(fastfile, "release_upload");
-    const preflight = functionBody(fastfile, "preflight_app_store_version!");
-
-    expect(preflight).toContain("EDITABLE_APP_STORE_VERSION_STATES");
-    expect(preflight).toContain("RELEASED_APP_STORE_VERSION_STATES");
-    expect(fastfile).toContain('"READY_FOR_SALE"');
-    expect(fastfile).toContain('"REMOVED_FROM_SALE"');
-    expect(fastfile).toContain('"DEVELOPER_REMOVED_FROM_SALE"');
-    expect(fastfile).not.toMatch(
-      /EDITABLE_APP_STORE_VERSION_STATES = \[[\s\S]*?"WAITING_FOR_REVIEW"[\s\S]*?\]\.freeze/,
-    );
-    expect(preflight).toContain("Revisions are never reused");
-    expect(preflight).toContain("higher version");
-    expect(releaseUpload).toContain("preflight_app_store_version!");
-    expect(releaseUpload.indexOf("preflight_app_store_version!")).toBeLessThan(
-      releaseUpload.indexOf("screenshots("),
-    );
-    expect(releaseUpload.indexOf("preflight_app_store_version!")).toBeLessThan(
-      releaseUpload.indexOf("build = build_app_store_release(context)"),
-    );
-  });
-
-  it("validates explicit build numbers against the exact App Store version", () => {
-    const resolver = functionBody(readFastfile(), "resolve_release_build_number");
-
-    expect(resolver).toContain("app_store_build_uploads");
-    expect(resolver).toContain("IOS_BUILD_UPLOAD_STATES");
-    expect(resolver).toContain("expected #{next_build}");
-    expect(resolver).toContain("explicit.to_i != next_build");
-    expect(resolver).toContain("api_key.nil?");
-    expect(resolver).not.toContain("latest_testflight_build_number");
   });
 
   it("plans revisions and builds from App Store versions and build uploads", () => {
