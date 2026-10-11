@@ -1,7 +1,4 @@
-import type {
-  SubagentMaintenanceDurableBasis,
-  SubagentRunsDurableBasis,
-} from "../../agents/subagents/registry/subagent-registry-read.types.js";
+import type { SubagentRunsDurableBasis } from "../../agents/subagents/registry/subagent-registry-read.types.js";
 import type { SqliteWalReclamationResult } from "../../infra/sqlite-wal.js";
 import type {
   DatabaseFileIdentity,
@@ -207,7 +204,6 @@ export type SessionMaintenanceLiveProtection = Pick<
 
 type SessionReclamationPlanBase = {
   descendantRunBasis?: SubagentRunsDurableBasis;
-  maintenanceRunBasis?: SubagentMaintenanceDurableBasis;
   databaseOptions: ReclamationDatabaseOptions;
   materializedPlans: MaterializedSessionStateDeletePlan[];
 };

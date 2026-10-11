@@ -1,4 +1,3 @@
-import type { SubagentMaintenanceDurableBasis } from "../../agents/subagents/registry/subagent-registry-read.types.js";
 import type { ResolvedSessionEntryRow } from "./session-accessor.sqlite-entry-read.js";
 import type {
   SessionEntryMaintenanceInput,
@@ -27,7 +26,6 @@ export type SessionEntryReplacementCommit = {
   checkPendingArchiveRecovery?: boolean;
   consumePendingReset?: boolean;
   maintenance?: SessionEntryMaintenanceInput;
-  maintenanceRunBasis?: SubagentMaintenanceDurableBasis;
   ownerAssignment?: { sessionKey: string; owner: SessionOwnerAssignment };
 };
 

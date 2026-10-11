@@ -161,8 +161,11 @@ function assertNoUnimportedAgentCodexAuthFile(params: {
   // separates auth requirements plus fallback identities. Preserve the supported
   // stdio API-key login instead of turning a leftover file into a hard failure.
   if (
-    params.authRequirement === "api-key" &&
-    resolveCodexAppServerFallbackApiKeyCacheKey({ startOptions: params.startOptions })
+    (params.authRequirement === "api-key" || params.authRequirement === "environment-api-key") &&
+    resolveCodexAppServerFallbackApiKeyCacheKey({
+      startOptions: params.startOptions,
+      allowNativeAuthFile: params.authRequirement === "api-key",
+    })
   ) {
     return;
   }
@@ -667,14 +670,14 @@ export async function applyCodexAppServerAuthProfile(params: {
   }
   if (
     !loginParams &&
-    params.authRequirement === "api-key" &&
+    (params.authRequirement === "api-key" || params.authRequirement === "environment-api-key") &&
     params.startOptions?.transport === "stdio"
   ) {
     const env = resolveCodexAppServerSpawnEnv(params.startOptions, process.env);
     loginParams = await resolveCodexAppServerFallbackApiKeyLoginParams({
       client: params.client,
       env,
-      codexCliAuthEnv: process.env,
+      ...(params.authRequirement === "api-key" ? { codexCliAuthEnv: process.env } : {}),
       assertCurrent: params.assertCurrent,
     });
   }
@@ -852,12 +855,12 @@ async function resolveCodexAppServerAuthProfileLoginParamsInternal(
 async function resolveCodexAppServerFallbackApiKeyLoginParams(params: {
   client: CodexAppServerClient;
   env: NodeJS.ProcessEnv;
-  codexCliAuthEnv: NodeJS.ProcessEnv;
+  codexCliAuthEnv?: NodeJS.ProcessEnv;
   assertCurrent?: () => void;
 }): Promise<CodexLoginAccountParams | undefined> {
   const apiKey =
     readFirstNonEmptyEnv(params.env, CODEX_APP_SERVER_API_KEY_ENV_VARS) ??
-    (await readCodexCliAuthFileApiKey(params.codexCliAuthEnv));
+    (params.codexCliAuthEnv ? await readCodexCliAuthFileApiKey(params.codexCliAuthEnv) : undefined);
   if (!apiKey) {
     return undefined;
   }

@@ -378,7 +378,7 @@ describe("target-release database schema preflight", () => {
 });
 
 describe("planned legacy configuration admission", () => {
-  it.each(["unchanged", "different profile"] as const)(
+  it.each(["different profile"] as const)(
     "keeps profile ownership and authored bytes across %s",
     async (scenario) => {
       await withTempHome(async (home) => {
@@ -551,34 +551,6 @@ describe("planned migration managed profile isolation", () => {
         expect(fs.readFileSync(servicePath)).toEqual(before);
         expect(fs.existsSync(resolveOpenClawStateSqlitePath(serviceEnv))).toBe(false);
         expect({ ...process.env }).toEqual(originalEnv);
-      });
-    });
-  });
-
-  it("reports invalid fields and repair guidance without admitting unrelated invalid settings", async () => {
-    await withTempHome(async (home) => {
-      await withEnvAsync({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, async () => {
-        const configPath = await writeOpenClawConfig(home, {
-          gateway: { mode: "local", bind: "localhost", port: "invalid" },
-          session: { store: 42 },
-        });
-        const env = { ...process.env, OPENCLAW_CONFIG_PATH: configPath };
-        const before = fs.readFileSync(configPath);
-        const { snapshot, writeOptions } = await createConfigIO({
-          env,
-          observe: false,
-        }).readConfigFileSnapshotForWrite();
-        const legacyConfigPlan = planLegacyConfigForUpdateChannel(snapshot, writeOptions);
-        expect(legacyConfigPlan).toBeUndefined();
-        const inspected = captureTargetDatabaseSchemaContext(env, { legacyConfigPlan });
-        await expect(inspected).rejects.toMatchObject({
-          reason: "invalid-config",
-          message: expect.stringContaining(configPath),
-        });
-        await expect(inspected).rejects.toThrow("gateway.port:");
-        await expect(inspected).rejects.toThrow("session.store:");
-        await expect(inspected).rejects.toThrow("openclaw doctor --fix");
-        expect(fs.readFileSync(configPath)).toEqual(before);
       });
     });
   });

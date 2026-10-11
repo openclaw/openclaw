@@ -565,8 +565,10 @@ export function resolveSessionMutationAuthorization(request: SessionMutationAuth
                 params.preparedProfiles?.readCurrent();
                 const expected = authorizedTargets[0]!;
                 const cfg = params.context.getRuntimeConfig();
-                const assertRoutingCurrent = captureSessionMutationRouting(cfg, () =>
-                  targetChanged(expected.sessionKey),
+                const assertRoutingCurrent = captureSessionMutationRouting(
+                  cfg,
+                  () => targetChanged(expected.sessionKey),
+                  [expected],
                 );
                 return withSessionSharingTarget(
                   { cfg, sessionKey: expected.sessionKey, agentId: expected.agentId },
@@ -599,8 +601,10 @@ export function resolveSessionMutationAuthorization(request: SessionMutationAuth
                   targetChanged: () => targetChanged(expected.sessionKey),
                 });
                 const cfg = params.context.getRuntimeConfig();
-                const assertRoutingCurrent = captureSessionMutationRouting(cfg, () =>
-                  targetChanged(expected.sessionKey),
+                const assertRoutingCurrent = captureSessionMutationRouting(
+                  cfg,
+                  () => targetChanged(expected.sessionKey),
+                  [expected],
                 );
                 return consumeSharing(
                   {

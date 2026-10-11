@@ -1,8 +1,11 @@
 /* @vitest-environment jsdom */
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { flattenTranslations } from "../../../scripts/lib/control-ui-i18n-sync-plan.ts";
 import { useLazyEnglishTest } from "./lazy-english.test-support.ts";
+
+// mock-isolation: Cold catalog imports test page-owned copy, without registering child elements.
+vi.mock("../components/native-chrome-setup.ts", () => ({}));
 
 const loadI18n = useLazyEnglishTest();
 

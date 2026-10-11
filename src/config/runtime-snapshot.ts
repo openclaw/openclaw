@@ -125,6 +125,7 @@ let runtimeConfigSnapshot: OpenClawConfig | null = null;
 let runtimeConfigCapturedSnapshot: OpenClawConfig | null = null;
 let runtimeConfigSourceSnapshot: OpenClawConfig | null = null;
 let runtimeConfigSnapshotMetadata: RuntimeConfigSnapshotMetadata | null = null;
+let runtimeModelConfigCacheKey: string | null = null;
 let runtimeConfigPublishedFacts: ReturnType<typeof serializeConfigResolutionFacts> = null;
 let runtimeConfigAppliedHash: string | null = null;
 let runtimeConfigSnapshotRevision = 0;
@@ -232,6 +233,7 @@ function publishRuntimeConfigSnapshot(
   runtimeConfigCapturedSnapshot = null;
   runtimeConfigSourceSnapshot = sourceConfig ?? null;
   runtimeConfigSnapshotMetadata = metadata;
+  runtimeModelConfigCacheKey = hashModelConfig(config, sourceConfig ?? config);
   runtimeConfigPublishedFacts = facts;
   if (!valuesUnchanged && !matchesPublished) {
     sessionChanges.emit({ all: true, scope });
@@ -356,6 +358,7 @@ export function resetConfigRuntimeState(options: { preserveConfigEnv?: boolean }
   runtimeConfigCapturedSnapshot = null;
   runtimeConfigSourceSnapshot = null;
   runtimeConfigSnapshotMetadata = null;
+  runtimeModelConfigCacheKey = null;
   runtimeConfigPublishedFacts = null;
   runtimeConfigAppliedHash = null;
   runtimeConfigSnapshotRevision = 0;
@@ -401,6 +404,25 @@ export function resolveRuntimeConfigCacheKey(config: OpenClawConfig): string {
     return `runtime:${metadata.revision}:${metadata.fingerprint}`;
   }
   return `config:${hashRuntimeConfigValue(config)}`;
+}
+
+function hashModelConfig(config: OpenClawConfig, sourceConfig: OpenClawConfig): string {
+  const project = (value: OpenClawConfig) => {
+    const { ui: _ui, meta, ...rest } = value;
+    const { lastTouchedVersion: _lastTouchedVersion, ...modelMeta } = meta ?? {};
+    return { config: { ...rest, meta: modelMeta }, facts: serializeConfigResolutionFacts(value) };
+  };
+  return sha256Base64Url(
+    stableConfigStringify({ runtime: project(config), source: project(sourceConfig) }),
+  );
+}
+
+/** Model projections ignore display settings, but retain authored values and resolution provenance. */
+export function resolveRuntimeModelConfigCacheKey(config: OpenClawConfig): string {
+  if (config === runtimeConfigSnapshot && runtimeModelConfigCacheKey !== null) {
+    return runtimeModelConfigCacheKey;
+  }
+  return hashModelConfig(config, getRuntimeConfigCapture(config)?.source ?? config);
 }
 
 export function selectApplicableRuntimeConfig(params: {

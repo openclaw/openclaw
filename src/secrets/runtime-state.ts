@@ -42,7 +42,6 @@ import { parseSecretRef, isSecretRef, type SecretRef } from "../config/types.sec
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import type { PluginOrigin } from "../plugins/plugin-origin.types.js";
 import { isRecord } from "../utils.js";
-import { secretRefKey } from "./ref-contract.js";
 import {
   clearActiveCredentialDegradedOwners,
   setActiveDegradedSecretOwners,
@@ -50,6 +49,7 @@ import {
   type SecretOwnerRefState,
 } from "./runtime-degraded-state.js";
 import type { SecretResolverWarning } from "./runtime-shared.js";
+import { isSecretsRuntimeDisplayChange } from "./runtime-source-contract.js";
 import {
   clearActiveRuntimeWebToolsMetadata,
   setActiveRuntimeWebToolsMetadata,
@@ -68,61 +68,6 @@ export type PreparedSecretsRuntimeSnapshot = {
   secretOwners?: SecretOwnerRefState[];
   webTools: RuntimeWebToolsMetadata;
 };
-
-type LocatedSecretRef = {
-  path: Array<string | number>;
-  ref: SecretRef;
-};
-
-type SecretDefaults = Parameters<typeof parseSecretRef>[1];
-
-function listLocatedSecretRefs(
-  value: unknown,
-  defaults: SecretDefaults | undefined,
-  path: Array<string | number> = [],
-  refs: LocatedSecretRef[] = [],
-): LocatedSecretRef[] {
-  const ref = parseSecretRef(value, defaults);
-  if (ref) {
-    refs.push({ path, ref });
-    return refs;
-  }
-  if (Array.isArray(value)) {
-    for (const [index, entry] of value.entries()) {
-      listLocatedSecretRefs(entry, defaults, [...path, index], refs);
-    }
-    return refs;
-  }
-  if (isRecord(value)) {
-    for (const key of Object.keys(value).toSorted()) {
-      listLocatedSecretRefs(value[key], defaults, [...path, key], refs);
-    }
-  }
-  return refs;
-}
-
-/** Canonical store refs across config and auth profiles for one mutated team entry. */
-export function collectSecretStoreRefKeysInSnapshot(
-  snapshot: Pick<PreparedSecretsRuntimeSnapshot, "sourceConfig" | "authStores">,
-  name: string,
-): Set<string> {
-  const sources = [snapshot.sourceConfig, ...snapshot.authStores.map(({ store }) => store)];
-  return new Set(
-    listLocatedSecretRefs(sources, snapshot.sourceConfig.secrets?.defaults).flatMap(({ ref }) =>
-      ref.source === "store" && ref.id === name ? [secretRefKey(ref)] : [],
-    ),
-  );
-}
-
-/** Whether two configs resolve the same SecretRefs through the same provider contracts. */
-export function hasSameSecretReloadContract(left: OpenClawConfig, right: OpenClawConfig): boolean {
-  const contract = (config: OpenClawConfig) => ({
-    refs: listLocatedSecretRefs(config, config.secrets?.defaults),
-    defaults: config.secrets?.defaults,
-    providers: config.secrets?.providers,
-  });
-  return isDeepStrictEqual(contract(left), contract(right));
-}
 
 /** Context needed to refresh active secrets runtime snapshots without losing plugin origin data. */
 export type SecretsRuntimeRefreshContext = {
@@ -1059,6 +1004,46 @@ export function getActiveSecretsRuntimeSnapshotState(): PreparedSecretsRuntimeSn
   snapshot.authStoreSnapshotsRevision = getRuntimeAuthProfileStoreSnapshotsRevision();
   if (activeRefreshContext) {
     preparedSnapshotRefreshContext.set(snapshot, activeRefreshContext);
+  }
+  return snapshot;
+}
+
+/** Reuse resolved owners when only Control UI presentation changed. */
+export function prepareSecretsRuntimeDisplaySnapshot(
+  params: Omit<
+    Parameters<typeof isSecretsRuntimeDisplayChange>[0],
+    "sourceConfig" | "refreshContext"
+  >,
+): PreparedSecretsRuntimeSnapshot | null {
+  if (
+    !activeSnapshot ||
+    !activeRefreshContext ||
+    activeSnapshot.authStoreCredentialsRevision !==
+      getRuntimeAuthProfileStoreCredentialsRevision() ||
+    activeSnapshot.authStoreSnapshotsRevision !== getRuntimeAuthProfileStoreSnapshotsRevision()
+  ) {
+    return null;
+  }
+  if (
+    !isSecretsRuntimeDisplayChange({
+      ...params,
+      sourceConfig: activeSnapshot.sourceConfig,
+      refreshContext: activeRefreshContext,
+    })
+  ) {
+    return null;
+  }
+  const snapshot = getActiveSecretsRuntimeSnapshotState()!;
+  snapshot.sourceConfig = cloneConfigWithResolutionFacts(params.config);
+  if (params.config.ui === undefined) {
+    delete snapshot.config.ui;
+  } else {
+    snapshot.config.ui = structuredClone(params.config.ui);
+  }
+  if (params.config.meta === undefined) {
+    delete snapshot.config.meta;
+  } else {
+    snapshot.config.meta = structuredClone(params.config.meta);
   }
   return snapshot;
 }

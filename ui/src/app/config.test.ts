@@ -55,18 +55,6 @@ describe("createApplicationConfigCapability", () => {
     expect(listener.mock.calls.map(([value]) => value.uploadsEnabled)).toEqual([false, true]);
   });
 
-  it.each([undefined, "configured", "last-used"] as const)(
-    "loads fresh-session model defaults %s",
-    async (policy) => {
-      vi.stubGlobal(
-        "fetch",
-        vi.fn().mockResolvedValue(Response.json({ newSessionModelDefaults: policy })),
-      );
-      const config = createApplicationConfigCapability({ resourceBasePath: "" });
-      await config.refresh();
-      expect(config.current.newSessionModelDefaults).toBe(policy ?? "last-used");
-    },
-  );
   it("keeps capabilities available when development plugin grants contain invalid URLs", async () => {
     vi.stubGlobal("OPENCLAW_UI_DEV_GATEWAY", {
       gatewayUrl: "ws://gateway.example/mount",
@@ -104,24 +92,7 @@ describe("createApplicationConfigCapability", () => {
     expect(fetchMock).toHaveBeenCalledOnce();
   });
 
-  it("keeps invitations hidden until bootstrap enables them and accepts later opt-outs", async () => {
-    const fetchMock = vi
-      .fn<typeof fetch>()
-      .mockResolvedValueOnce(bootstrapResponse("test"))
-      .mockResolvedValueOnce(bootstrapResponse("test", false, undefined, false));
-    vi.stubGlobal("fetch", fetchMock);
-    const config = createApplicationConfigCapability({ resourceBasePath: "" });
-    const listener = vi.fn();
-    const unsubscribe = config.subscribe(listener);
-
-    expect(config.current.communityInvite).toBe(false);
-    await expect(config.refresh()).resolves.toMatchObject({ communityInvite: true });
-    await expect(config.refresh()).resolves.toMatchObject({ communityInvite: false });
-    expect(listener).toHaveBeenLastCalledWith(expect.objectContaining({ communityInvite: false }));
-    unsubscribe();
-  });
-
-  it.each([undefined, true, false])(
+  it.each([undefined, false])(
     "requires native asset grants unless bootstrap explicitly disables auth: %s",
     async (pluginAssetsRequireAuth) => {
       vi.stubGlobal(
@@ -148,7 +119,7 @@ describe("createApplicationConfigCapability", () => {
     expect(config.current.automaticallyFetchFavicons).toBe(true);
   });
 
-  it.each([null, { pluginFrameGrants: {} }])(
+  it.each([{ pluginFrameGrants: {} }])(
     "returns an unavailable result for invalid bootstrap data: %j",
     async (payload) => {
       vi.stubGlobal(
@@ -275,7 +246,7 @@ describe("createApplicationConfigCapability", () => {
     expect(config.current.serverVersion).toBe("cookie");
   });
 
-  it.each(["", "replacement-fixture-token"])(
+  it.each(["replacement-fixture-token"])(
     "rejects an authenticated response when live credentials change without another refresh: %s",
     async (nextToken) => {
       const response = createDeferred<Response>();

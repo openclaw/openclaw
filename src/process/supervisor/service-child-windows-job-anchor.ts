@@ -353,7 +353,17 @@ export function runServiceChildWindowsJobAnchor(): void {
         executable: shell,
         commandLine: `"${shell}" /d /s /c "${next.windowsShellCommand}"`,
         cwd: next.cwd,
-        env: next.env === undefined ? undefined : mergeProcessEnv([next.env], "win32"),
+        // ARM64 cmd.exe needs SystemRoot even when the command replaces its environment.
+        env:
+          next.env === undefined
+            ? undefined
+            : mergeProcessEnv(
+                [
+                  { SystemRoot: resolveEnvironmentValue(process.env, "SystemRoot", "win32") },
+                  next.env,
+                ],
+                "win32",
+              ),
       });
       const commandPid = child.pid;
       outputStreams.push({ name: "stdout", ended: false }, { name: "stderr", ended: false });

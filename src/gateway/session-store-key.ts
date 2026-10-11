@@ -5,15 +5,21 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import type { ErrorShape } from "../../packages/gateway-protocol/src/index.js";
+import { tryResolveAmbientOwnerAgentId } from "../agents/agent-scope-config.js";
 import {
   AgentSelectionRequiredError,
   listAgentIds,
   resolveSessionAgentId,
 } from "../agents/agent-scope.js";
 import {
+  resolveSessionStoreCompatibilityAgentId,
+  tryResolveLegacyCompatibilityAgentId,
+} from "../config/legacy.default-agent-owner.js";
+import {
   canonicalizeMainSessionAlias,
   resolveAgentMainSessionKey,
 } from "../config/sessions/main-session.js";
+import { isPerAgentSessionStoreConfig } from "../config/sessions/session-store-config.js";
 import { resolvePersistedSessionStoreOwnerForKey } from "../config/sessions/session-store-owner.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -29,6 +35,31 @@ import {
   resolveRequestedSessionAgentId,
   tryResolveSessionCompatibilityOwnerAgentId,
 } from "./session-request-agent.js";
+
+export type SessionRoutingTarget = Omit<Parameters<typeof resolveSessionStoreIdentity>[0], "cfg">;
+
+export function readSessionRoutingFacts(
+  cfg: OpenClawConfig,
+  targets?: readonly SessionRoutingTarget[],
+) {
+  const agents = listAgentIds(cfg);
+  const identities = targets?.map((target) => resolveSessionStoreIdentity({ ...target, cfg }));
+  // Retired-agent discovery searches the roster; configured targets retain only their own route.
+  const scoped = identities?.every(({ agentId }) => agents.includes(agentId));
+  return {
+    agents: scoped ? undefined : agents,
+    identities,
+    storeOwner:
+      scoped && isPerAgentSessionStoreConfig(cfg.session?.store)
+        ? undefined
+        : resolveSessionStoreCompatibilityAgentId(cfg),
+    compatibilityOwner: targets ? undefined : tryResolveLegacyCompatibilityAgentId(cfg),
+    systemOwner: targets ? undefined : tryResolveAmbientOwnerAgentId(cfg),
+    store: cfg.session?.store,
+    mainKey: cfg.session?.mainKey,
+    scope: cfg.session?.scope,
+  };
+}
 
 /** Canonicalize an opaque session key into the agent-scoped store namespace. */
 export function canonicalizeSessionKeyForAgent(agentId: string, key: string): string {

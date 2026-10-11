@@ -30,6 +30,7 @@ import {
   cloneRuntimeAuthSharedOwner,
   runtimeAuthProfileSnapshotSharesOwner,
   runtimeAuthSharedOwnerRebound,
+  resolveRuntimeAuthSharedOwnerPath,
   runtimeAuthMetadataState,
   type RuntimeAuthSharedOwner,
   type RuntimeAuthProfileLegacyCandidates,
@@ -164,16 +165,28 @@ function recordMetadataRevision(
   return true;
 }
 
-function recordChangedSnapshotRevisions(next: ReadonlyMap<string, OwnedRuntimeSnapshot>): boolean {
+function recordChangedSnapshotRevisions(next: ReadonlyMap<string, OwnedRuntimeSnapshot>) {
   const keys = new Set([...runtimeAuthStoreSnapshots.keys(), ...next.keys()]);
-  let metadataChanged = false;
+  const mutations: Array<{ agentDir?: string; profileSetChanged: boolean }> = [];
   for (const key of keys) {
     const previous = runtimeAuthStoreSnapshots.get(key);
     const candidate = next.get(key);
     if (isDeepStrictEqual(previous, candidate)) {
       continue;
     }
-    metadataChanged = recordMetadataRevision(key, previous, candidate) || metadataChanged;
+    if (recordMetadataRevision(key, previous, candidate)) {
+      const shared = [previous, candidate].some(
+        (entry) =>
+          entry &&
+          (["state-db", "legacy-main"] as const).some(
+            (location) => resolveRuntimeAuthSharedOwnerPath(entry.owner, location) === key,
+          ),
+      );
+      mutations.push({
+        agentDir: shared ? undefined : path.dirname(key),
+        profileSetChanged: authProfileSetChanged(previous?.store, candidate?.store),
+      });
+    }
     advanceRuntimeAuthStoreSnapshotsRevision();
     if (next.has(key)) {
       runtimeAuthStoreSnapshotRevisions.set(key, runtimeAuthStoreSnapshotsRevision);
@@ -182,7 +195,7 @@ function recordChangedSnapshotRevisions(next: ReadonlyMap<string, OwnedRuntimeSn
       recordDeletedSnapshotRevision(key);
     }
   }
-  return metadataChanged;
+  return mutations;
 }
 
 function resolveRuntimeSnapshotEntryKey(entry: {
@@ -335,7 +348,14 @@ export function replaceOwnedRuntimeAuthProfileStoreSnapshots(
   const next = new Map(
     sharedEntries.map(
       ({ databasePath, store, owner, legacyCandidates }) =>
-        [databasePath, { store, owner, legacyCandidates }] as const,
+        [
+          databasePath,
+          {
+            store: cloneAuthProfileStore(store),
+            owner: cloneRuntimeAuthSharedOwner(owner),
+            legacyCandidates: cloneRuntimeAuthProfileLegacyCandidates(legacyCandidates),
+          },
+        ] as const,
     ),
   );
   // Cold producer facts are enough to fence stale preparation; do not open SQLite
@@ -357,9 +377,6 @@ export function replaceOwnedRuntimeAuthProfileStoreSnapshots(
   if (credentialsChanged) {
     runtimeAuthStoreCredentialsRevision += 1;
   }
-  const profileSetChanged = [...keys].some((key) =>
-    authProfileSetChanged(runtimeAuthStoreSnapshots.get(key)?.store, next.get(key)?.store),
-  );
   for (const key of keys) {
     if (
       reboundKeys.has(key) ||
@@ -368,24 +385,21 @@ export function replaceOwnedRuntimeAuthProfileStoreSnapshots(
       clearRuntimeAuthMaterializationsAtDatabasePath(key);
     }
   }
-  const metadataChanged = recordChangedSnapshotRevisions(next);
-  const nextOwned = sharedEntries.map((entry) => {
-    const key = resolveRuntimeSnapshotEntryKey(entry);
-    return [
-      key,
-      {
-        store: cloneAuthProfileStore(entry.store),
-        owner: cloneRuntimeAuthSharedOwner(entry.owner),
-        legacyCandidates: cloneRuntimeAuthProfileLegacyCandidates(entry.legacyCandidates),
-      },
-    ] as const;
-  });
+  const mutations = recordChangedSnapshotRevisions(next);
   runtimeAuthStoreSnapshots.clear();
-  for (const [key, entry] of nextOwned) {
+  for (const [key, entry] of next) {
     runtimeAuthStoreSnapshots.set(key, entry);
   }
-  if (metadataChanged) {
-    notifyRuntimeAuthStoreMutation(undefined, profileSetChanged);
+  // Publish the complete roster before listeners refresh any changed local or inherited owner.
+  if (mutations.some(({ agentDir }) => agentDir === undefined)) {
+    notifyRuntimeAuthStoreMutation(
+      undefined,
+      mutations.some(({ profileSetChanged }) => profileSetChanged),
+    );
+  } else {
+    for (const { agentDir, profileSetChanged } of mutations) {
+      notifyRuntimeAuthStoreMutation(agentDir, profileSetChanged);
+    }
   }
 }
 
