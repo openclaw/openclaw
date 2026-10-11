@@ -332,7 +332,8 @@ vi.mock("../agents/model-auth.js", () => ({
   resolveApiKeyForProviderCore: mocks.resolveApiKeyForProviderCore,
 }));
 
-vi.mock("../agents/auth-profiles/store-runtime.js", () => ({
+vi.mock("../agents/auth-profiles/store-runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../agents/auth-profiles/store-runtime.js")>()),
   updateAuthProfileStoreWithLock: mocks.updateAuthProfileStoreWithLock,
   ensureAuthProfileStoreWithoutExternalProfilesAsync: vi.fn(async () => ({
     version: 1,

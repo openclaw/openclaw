@@ -60,7 +60,10 @@ vi.mock("../auth-profiles/source-check.js", () => ({
   hasAnyAuthProfileStoreSourceAsync: async () => false,
 }));
 
-vi.mock("../model-auth.js", () => ({
+// mock-isolation: Dispatch keeps credential discovery outside this fixture.
+vi.mock("../model-auth.js", async () => ({
+  createRuntimeProviderAuthLookup: (await import("../model-auth-runtime.js"))
+    .createRuntimeProviderAuthLookup,
   applyAuthHeaderOverride: vi.fn((model: unknown) => model),
   applyLocalNoAuthHeaderOverride: vi.fn((model: unknown) => model),
   // Catalog construction also probes media providers; this fixture has no credentials.

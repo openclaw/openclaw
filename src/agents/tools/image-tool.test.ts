@@ -159,6 +159,7 @@ function readMockRuntimeAuthProfileStore(agentDir?: string) {
   return store;
 }
 
+// mock-isolation: image selection uses fixture JSON profiles and simulated CLI credentials, never host auth state.
 vi.mock("../auth-profiles.js", () => ({
   externalCliDiscoveryForProviderAuth: (params: { provider: string }) => params,
   ensureAuthProfileStore: readMockRuntimeAuthProfileStore,

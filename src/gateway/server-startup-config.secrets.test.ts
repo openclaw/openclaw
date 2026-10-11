@@ -286,6 +286,7 @@ function installGatewayStartupSecretsRuntimeMock(state: GatewayStartupSecretsRun
       __gatewayStartupSecretsRuntimeMock?: typeof state;
     }
   )["__gatewayStartupSecretsRuntimeMock"] = state;
+  // mock-isolation: startup controls the auth fixture so host credentials cannot alter lazy secrets activation.
   vi.doMock("../agents/auth-profiles.js", () => ({
     loadAuthProfileStoreWithoutExternalProfilesAsync:
       state.loadAuthStore ?? vi.fn(() => createAuthProfileStoreFixture({})),

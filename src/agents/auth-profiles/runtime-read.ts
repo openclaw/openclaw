@@ -4,7 +4,6 @@ import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import type { Result } from "@openclaw/normalization-core/result";
 import { cloneEnvWithPlatformSemantics } from "../../config/config-env-vars.js";
 import { resolveStateDir } from "../../config/paths.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { withSqliteWorkerCleanupFailure } from "../../infra/sqlite-worker-broker-reply.js";
 import { getOpenClawDatabaseMaintenanceScope } from "../../state/openclaw-state-db-async-lifecycle.js";
 import {
@@ -14,20 +13,21 @@ import {
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { isUserModelAuthProfileId } from "../../state/user-model-account-id.js";
 import type { ExternalCliOverlayOptions } from "./external-auth.js";
-import type { ExternalCliAuthDiscovery } from "./external-cli-discovery.js";
 import {
   assertAuthProfileMigrationCandidates,
   assertAuthProfileMigrationStateAtDatabasePath,
 } from "./legacy-source-diagnostic.js";
-import {
-  resolveLegacyAuthProfileSourceCandidates,
-  type LegacyAuthProfileSource,
-} from "./legacy-source-files.js";
+import { resolveLegacyAuthProfileSourceCandidates } from "./legacy-source-files.js";
 import {
   resolveSharedAuthStoreOwnershipAsync,
   resolveSharedAuthStorePath as resolveSharedAuthPath,
 } from "./path-resolve.js";
 import { materializePreparedPersonalAuthProfile } from "./personal-profiles.js";
+import type {
+  AuthProfileReadOwner,
+  LoadAuthProfileStoreOptions,
+  PreparedAuthProfileStoreReads,
+} from "./runtime-read.types.js";
 import { readAuthProfileStoreInWorker } from "./runtime-read.worker.js";
 import { getWorkerAuthProfileWrites } from "./runtime-scope.js";
 import { createEmptyAuthProfileStore } from "./runtime-snapshot-owner.js";
@@ -42,33 +42,14 @@ import {
 import {
   resolveAuthProfileDatabasePath as resolveAgentAuthPath,
   resolveAuthProfileDatabaseOwnerId,
-  type AuthProfileDatabase,
 } from "./sqlite.js";
 import type { AuthProfileStore, AuthProfileRowRead } from "./types.js";
 
-export type LoadAuthProfileStoreOptions = {
-  /** Limit a credential-read refusal to the provider being resolved; writes stay owner-wide. */
-  migrationProvider?: string;
-  deferScopedMigrationRefusals?: boolean;
-  onReadOwner?: (owner: AuthProfileReadOwner) => void;
-  /** Materialize only this explicitly selected personal account into the returned view. */
-  profileId?: string;
-  allowKeychainPrompt?: boolean;
-  config?: OpenClawConfig;
-  database?: AuthProfileDatabase;
-  externalCli?: ExternalCliAuthDiscovery;
-  inheritedAuthDir?: string;
-  readOnly?: boolean;
-  syncExternalCli?: boolean;
-  externalCliProviderIds?: Iterable<string>;
-  externalCliProfileIds?: Iterable<string>;
-};
-
-export type AuthProfileReadOwner = {
-  databasePath: string;
-  candidates: LegacyAuthProfileSource[];
-  readStore: () => AuthProfileStore | null;
-};
+export type {
+  AuthProfileReadOwner,
+  LoadAuthProfileStoreOptions,
+  PreparedAuthProfileStoreReads,
+} from "./runtime-read.types.js";
 
 export function resolveExternalCliOverlayOptions(
   options: LoadAuthProfileStoreOptions | undefined,
@@ -136,20 +117,6 @@ type AuthProfileRowsReader = Pick<
   ReturnType<typeof prepareAgentAuthProfileRowsRead>,
   "read" | "assertCurrent"
 >;
-
-export type PreparedAuthProfileStoreReads = {
-  effectiveAgentDir: string | undefined;
-  env: NodeJS.ProcessEnv;
-  options: LoadAuthProfileStoreOptions;
-  runInCapturedScope: <T>(operation: () => T) => T;
-  sharedPath: () => Promise<string>;
-  readStore: (
-    ownerAgentDir: string | undefined,
-    options: LoadAuthProfileStoreOptions,
-  ) => Promise<AuthProfileStore>;
-  assertCurrent: () => void;
-  materializePersonalProfile: (store: AuthProfileStore) => Promise<AuthProfileStore>;
-};
 
 function captureReadOptions(
   options: LoadAuthProfileStoreOptions | undefined,
