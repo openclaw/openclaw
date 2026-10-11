@@ -10,24 +10,6 @@ import { EDITOR_IDS, EDITOR_LABELS, type EditorId } from "../../../lib/editor-li
 import { t } from "../../../lib/reactive/i18n.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../../lit/solid-bridge.ts";
 
-declare module "@solidjs/web" {
-  namespace JSX {
-    interface IntrinsicElements {
-      "wa-dropdown": HTMLAttributes<HTMLElementTagNameMap["wa-dropdown"]> & {
-        "prop:open"?: boolean;
-        "prop:distance"?: number;
-        placement?: string;
-        "onWa-select"?: (event: CustomEvent<{ item: { value?: string } }>) => void;
-        "onWa-after-hide"?: (event: Event) => void;
-      };
-      "wa-dropdown-item": HTMLAttributes<HTMLElementTagNameMap["wa-dropdown-item"]> & {
-        value?: string;
-        disabled?: boolean;
-      };
-    }
-  }
-}
-
 export type SessionDiffScope =
   | { scope: "all" | "uncommitted" }
   | { scope: "commit"; commit: string };
@@ -172,7 +154,7 @@ function SessionDiffMenuContent(
         <wa-dropdown-item
           class="session-menu__item"
           value="open-file"
-          disabled={!fileProps.menu.canOpenFile}
+          prop:disabled={!fileProps.menu.canOpenFile}
         >
           <span slot="icon" class="session-menu__icon" aria-hidden="true">
             <Icon name="fileText" />
