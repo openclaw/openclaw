@@ -509,6 +509,12 @@ package publication, and `retire` removes only its recorded obsolete objects.
 These commands do not replace post-update plugin, migration or service recovery.
 Keep other package managers stopped while recovering the operation.
 
+On FreeBSD, `repair` and `retire` read process identity through the recorded
+installation's own `koffi` dependency: the live package, or the copy the
+operation retains beside it during publication. Helpers written by older
+updaters cannot repair or retire on FreeBSD; `status` still reports the
+operation.
+
 Bun recovery requires a supported Bun runtime with WAL-reset-safe SQLite and can
 run without Node installed. The installed updater controls the first upgrade:
 older releases may omit the recovery command on Bun or refuse a Bun recovery

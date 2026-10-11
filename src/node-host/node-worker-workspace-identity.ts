@@ -35,7 +35,6 @@ export function assertNodePreparedWorkspacePaths(
     if (
       target !== expected ||
       !stats.isDirectory() ||
-      stats.isSymbolicLink() ||
       fs.realpathSync.native(target) !== expected
     ) {
       throw new Error("INVALID_REQUEST: prepared workspace path escaped its owner root");
@@ -200,7 +199,6 @@ export function resolveNodeManagedWorkspaceIdentity(
     String(request.ownerEpoch),
   );
   if (
-    stats.isSymbolicLink() ||
     !stats.isDirectory() ||
     !isPathInside(root, workspaceDir) ||
     components.length !== 5 ||
@@ -227,7 +225,7 @@ export function ensureContainedDirectory(parent: string, name: string): string {
   fs.mkdirSync(candidate, { recursive: true, mode: 0o700 });
   const stats = fs.lstatSync(candidate);
   const resolved = fs.realpathSync.native(candidate);
-  if (stats.isSymbolicLink() || !stats.isDirectory() || !isPathInside(parent, resolved)) {
+  if (!stats.isDirectory() || !isPathInside(parent, resolved)) {
     throw new Error("INVALID_REQUEST: node worker workspace path escaped its owner root");
   }
   tightenPrivateDirRootSync(resolved, 0o700);
@@ -285,7 +283,6 @@ export async function removeNodeWorkerWorkspaceEntry(
       fs.promises.realpath(target),
     ]);
     if (
-      stats.isSymbolicLink() ||
       !(kind === "directory" ? stats.isDirectory() : stats.isFile()) ||
       path.dirname(resolved) !== parent ||
       !isPathInside(root, resolved)

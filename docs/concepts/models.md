@@ -177,6 +177,7 @@ choices without a catalog-wide warning; selected-model availability still applie
 Other providers can still update. A successful empty response clears that
 provider's discovered models; it does not restore old choices. Explicitly
 configured models and independent native runtime catalogs remain.
+Removing a `models.providers.<id>` entry while the Gateway is running clears saved plugin catalog rows only when their normalized base URL matches that entry's authored `baseUrl`; other discovery endpoints and entries without an authored URL stay, and removals made before this behavior was available are not cleaned retroactively.
 
 Changes to aliases or model restrictions reuse compatible inventory. Changes to
 the provider, plugin, credentials, environment, or workspace can invalidate it.

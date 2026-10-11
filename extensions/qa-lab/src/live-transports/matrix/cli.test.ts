@@ -150,4 +150,16 @@ describe("QA Lab Matrix CLI registration", () => {
     expect(returned).toBe(true);
     expect(exitSpy).not.toHaveBeenCalled();
   });
+
+  it("prints unexpected errors without forcing process exit", async () => {
+    const qa = new Command();
+    matrixQaCliRegistration.register(qa);
+    runLiveTransportQaSuiteCommand.mockRejectedValue(new Error("scenario failed"));
+
+    await qa.parseAsync(["node", "openclaw", "matrix"]);
+
+    expect(stderrSpy).toHaveBeenCalledWith("scenario failed\n");
+    expect(process.exitCode).toBe(1);
+    expect(exitSpy).not.toHaveBeenCalled();
+  });
 });

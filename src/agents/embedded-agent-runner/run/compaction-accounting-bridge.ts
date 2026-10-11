@@ -8,6 +8,7 @@ export type CompactionAccountingReceipt = {
   tokensBefore: number;
   tokensAfter: number | undefined;
   compactionKind: "context-engine" | "server-endpoint";
+  details?: unknown;
 };
 
 type CompactionAccountingRecorder = CompactionRequestConstraints & {

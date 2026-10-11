@@ -209,6 +209,7 @@ export function createFixture(groups: readonly string[], root: string) {
     "src/process/exec-result.ts",
     "src/infra/update-managed-service-handoff-runtime-assets.ts",
     "src/infra/update-managed-service-handoff-native-loader.ts",
+    "src/infra/package-update-activation-native-loader.ts",
     "src/shared/deferred.ts",
     "src/shared/freebsd-process-identity.ts",
     "src/shared/freebsd-process-identity-native.ts",
