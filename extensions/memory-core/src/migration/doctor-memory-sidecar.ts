@@ -510,7 +510,7 @@ export const memorySidecarStateMigration: PluginDoctorStateMigration = {
         `${source.agentId}.sqlite`,
         `${source.agentId}.retry-${crypto.createHash("sha256").update(path.resolve(source.legacyPath)).digest("hex").slice(0, 12)}.sqlite`,
       ]) {
-        for (const suffix of ["", "-wal", "-shm"]) {
+        for (const suffix of LEGACY_MEMORY_SIDECAR_SUFFIXES) {
           resources.push({
             path: path.join(params.stateDir, "memory", `${name}${suffix}`),
             kind: "file",

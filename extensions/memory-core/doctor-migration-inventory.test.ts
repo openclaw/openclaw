@@ -65,8 +65,14 @@ it("inventories sidecar imports and retry paths while preserving empty legacy fi
         kind: "sqlite",
       },
       { path: path.join(params.stateDir, "memory", "main.sqlite"), kind: "file" },
+      { path: path.join(params.stateDir, "memory", "main.sqlite-journal"), kind: "file" },
       expect.objectContaining({
         path: expect.stringMatching(/main\.retry-[a-f0-9]{12}\.sqlite$/u),
+        kind: "file",
+      }),
+      // Retry copies carry every legacy companion, including rollback journals.
+      expect.objectContaining({
+        path: expect.stringMatching(/main\.retry-[a-f0-9]{12}\.sqlite-journal$/u),
         kind: "file",
       }),
     ]),
