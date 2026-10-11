@@ -63,15 +63,55 @@ it("moves the icon grid tab stop and sends appearance actions through the menu o
   const choices = mounted.container.querySelectorAll<HTMLButtonElement>(
     ".session-menu__icon-choice",
   );
-  choices[0]!.focus();
-  choices[0]!.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }));
-  expect(document.activeElement).toBe(choices[1]);
-  expect(choices[0]!.tabIndex).toBe(-1);
-  expect(choices[1]!.tabIndex).toBe(0);
-  choices[1]!.click();
+  choices[1]!.focus();
+  choices[1]!.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }));
+  expect(document.activeElement).toBe(choices[2]);
+  expect(choices[1]!.tabIndex).toBe(-1);
+  expect(choices[2]!.tabIndex).toBe(0);
+  choices[2]!.click();
   expect(runAction).toHaveBeenLastCalledWith({ kind: "set-icon", icon: "🚀" });
   mounted.container.querySelector<HTMLButtonElement>(".session-menu__icon-remove")!.click();
   expect(runAction).toHaveBeenLastCalledWith({ kind: "reset-appearance" });
+  mounted.unmount();
+  host.remove();
+});
+
+it.each([
+  { icon: "🦞", pressed: ["🦞"], tabStops: ["🦞"] },
+  { icon: "bot", pressed: ["bot"], tabStops: ["bot"] },
+  { icon: null, pressed: ["No icon", "No icon"], tabStops: ["No icon"] },
+])("leads both icon sections with the clear choice (icon=$icon)", ({ icon, pressed, tabStops }) => {
+  const host = document.createElement("div");
+  document.body.append(host);
+  const runAction = vi.fn();
+  const mounted = mountSolid(
+    () =>
+      useSessionMenuAppearance(
+        host,
+        () => ({ session: { icon, color: "blue" }, actionDisabledReasons: {} }),
+        () => false,
+        runAction,
+      ).render(true),
+    { container: host },
+  );
+  const label = (choice: Element) =>
+    choice.getAttribute("aria-label") ?? choice.textContent?.trim() ?? "";
+  const grids = mounted.container.querySelectorAll(".session-menu__icon-grid");
+  expect(grids).toHaveLength(2);
+  const clearChoices = [...grids].map((grid) => grid.firstElementChild as HTMLButtonElement);
+  expect(clearChoices.map(label)).toEqual(["No icon", "No icon"]);
+  const choices = [
+    ...mounted.container.querySelectorAll<HTMLButtonElement>(".session-menu__icon-choice"),
+  ];
+  expect(
+    choices.filter((choice) => choice.getAttribute("aria-pressed") === "true").map(label),
+  ).toEqual(pressed);
+  expect(choices.filter((choice) => choice.tabIndex === 0).map(label)).toEqual(tabStops);
+  for (const clear of clearChoices) {
+    clear.click();
+    expect(runAction).toHaveBeenLastCalledWith({ kind: "set-icon", icon: null });
+  }
+  expect(runAction).toHaveBeenCalledTimes(2);
   mounted.unmount();
   host.remove();
 });
