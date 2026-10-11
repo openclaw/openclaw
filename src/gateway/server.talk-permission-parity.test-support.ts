@@ -36,6 +36,7 @@ export async function runTalkNodePermissionParity({
   runEmbeddedAgent,
   rpc,
   waitForDispatchEnd,
+  expectRevokedWriter,
   publicOnly = false,
 }: {
   publicOnly?: boolean;
@@ -52,6 +53,7 @@ export async function runTalkNodePermissionParity({
   runEmbeddedAgent: MockInstance<typeof import("../agents/embedded-agent.js").runEmbeddedAgent>;
   rpc: (method: string, params: Record<string, unknown>) => Promise<Record<string, unknown>>;
   waitForDispatchEnd: () => Promise<void>;
+  expectRevokedWriter: (runId: string, isCurrent: () => boolean) => void;
 }) {
   const scope = () => ({ agentId, sessionKey: canonicalKey, sessionId, storePath });
 
@@ -368,6 +370,9 @@ export async function runTalkNodePermissionParity({
             if (decision === "cancel") {
               await rpc("chat.abort", { sessionKey, runId });
             } else if (decision === "source-revoke") {
+              // The real pre-commit guard may reject an already prepared lifecycle write.
+              // Accept only that exact refusal while this deliberately revoked source is stale.
+              expectRevokedWriter(runId, source.isCurrent);
               invalidateGatewayDeviceRevocation(context, identity.identity.deviceId, "operator");
               if (publicOnly) {
                 expect(activeSignal?.aborted, "public callback retains source cancellation").toBe(

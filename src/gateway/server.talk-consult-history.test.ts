@@ -107,6 +107,7 @@ let publicationErrors: unknown[] = [];
 let requestExecution: Awaited<ReturnType<typeof observeGatewayRunExecution>>;
 let lifecycleWrites: ReturnType<typeof createPreparedLifecycleWriteTracker>;
 let lifecyclePersistence: MockInstance<typeof lifecycleState.prepareGatewaySessionLifecycleEvent>;
+let expectedRevokedWriters: Map<string, () => boolean>;
 
 beforeAll(async () => {
   harness = await createGatewaySuiteHarness();
@@ -117,10 +118,25 @@ afterAll(async () => {
 beforeEach(async () => {
   requestExecution = await observeGatewayRunExecution();
   lifecycleWrites = createPreparedLifecycleWriteTracker();
+  expectedRevokedWriters = new Map();
   const prepareLifecycle = lifecycleState.prepareGatewaySessionLifecycleEvent;
   lifecyclePersistence = vi
     .spyOn(lifecycleState, "prepareGatewaySessionLifecycleEvent")
-    .mockImplementation((params) => lifecycleWrites.track(prepareLifecycle(params)));
+    .mockImplementation((params) => {
+      const persist = prepareLifecycle(params);
+      return lifecycleWrites.track(async () => {
+        try {
+          await persist();
+        } catch (error) {
+          const isCurrent = expectedRevokedWriters.get(params.event.runId);
+          if (!isCurrent || isCurrent()) {
+            throw error;
+          }
+          expect(error).toBeInstanceOf(Error);
+          expect(error).toHaveProperty("message", "Terminal write owner changed before commit");
+        }
+      });
+    });
   agentId = "main";
   sessionKey = canonicalKey = "agent:main:main";
   sessionId = randomUUID();
@@ -990,6 +1006,7 @@ it.runIf(process.platform === "linux").each([false, true])(
       runEmbeddedAgent,
       rpc,
       waitForDispatchEnd,
+      expectRevokedWriter: (runId, isCurrent) => expectedRevokedWriters.set(runId, isCurrent),
     });
   },
 );
