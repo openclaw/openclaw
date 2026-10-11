@@ -5,6 +5,7 @@ import type {
 import { buildControlUiUserAvatarPath } from "../../../src/gateway/control-ui-user-avatar-route.js";
 import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
 import type { ApplicationGateway } from "../app/gateway.ts";
+import { hasOperatorReadAccess } from "../app/operator-access.ts";
 import { createGatewayConnectionLifecycle } from "./gateway-connection-lifecycle.ts";
 import type { IdentityAvatarInput } from "./identity-avatar.ts";
 
@@ -101,7 +102,11 @@ class ProfileDirectory {
       return this.pending;
     }
     const scope = this.connection.capture();
-    if (!scope || (!refresh && (this.result || this.error))) {
+    if (
+      !scope ||
+      !hasOperatorReadAccess(this.gateway.snapshot.hello?.auth ?? null) ||
+      (!refresh && (this.result || this.error))
+    ) {
       return Promise.resolve();
     }
     this.error = undefined;

@@ -17,6 +17,7 @@ import { profileDirectory } from "../lib/profile-directory.ts";
 import { renderChatAuthorAvatar } from "../pages/chat/components/chat-author-avatar.ts";
 import { createApplicationGateway } from "../test-helpers/application-context.ts";
 import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
+import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";
 import "./viewer-facepile.ts";
 
 afterEach(() => {
@@ -470,6 +471,7 @@ it.each([false, true])(
     fixture.publish({
       ...gateway.snapshot,
       phase: "connected",
+      hello: gatewayHelloForMethods(["users.list"], ["operator.read"]),
       client: createTestGatewayClient(async () => ({
         profiles: [
           {

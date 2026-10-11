@@ -3,6 +3,7 @@ import type { UsersListResult } from "../../../packages/gateway-protocol/src/sch
 import { createDeferred } from "../../../test/helpers/promise.ts";
 import { createApplicationGateway } from "../test-helpers/application-context-fixtures.ts";
 import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
+import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";
 import { profileAvatarUrl, profileDirectory } from "./profile-directory.ts";
 
 const photo = {
@@ -25,6 +26,7 @@ it("shares directory reads, resolves merged identities, and advertises only exis
   fixture.publish({
     ...gateway.snapshot,
     phase: "connected",
+    hello: gatewayHelloForMethods(["users.list"], ["operator.read"]),
     client: createTestGatewayClient(request),
   });
   const directory = profileDirectory(gateway);
@@ -58,6 +60,7 @@ it("retires directory facts and ignores pending replies when the connection is r
   fixture.publish({
     ...gateway.snapshot,
     phase: "connected",
+    hello: gatewayHelloForMethods(["users.list"], ["operator.read"]),
     client: createTestGatewayClient(request),
   });
   const directory = profileDirectory(gateway);
@@ -76,4 +79,28 @@ it("retires directory facts and ignores pending replies when the connection is r
   expect(profileAvatarUrl(directory.get("photo"))).toBe("/api/users/photo/avatar?v=8");
   stop();
   expect(directory.get("photo")).toBeUndefined();
+});
+
+it("waits for roster access while a profile-only guest stays on known identity", async () => {
+  const request = vi.fn(async () => ({ profiles: [photo] }));
+  const fixture = createApplicationGateway();
+  const { gateway } = fixture;
+  fixture.publish({
+    ...gateway.snapshot,
+    phase: "connected",
+    client: createTestGatewayClient(request),
+    hello: gatewayHelloForMethods(["users.list"], ["operator.sessions.write"]),
+  });
+  const directory = profileDirectory(gateway);
+  const stop = directory.subscribe(vi.fn());
+  await directory.load();
+  expect(request).not.toHaveBeenCalled();
+  fixture.publish({
+    ...gateway.snapshot,
+    hello: gatewayHelloForMethods(["users.list"], ["operator.read"]),
+  });
+  await directory.load();
+  expect(request).toHaveBeenCalledTimes(1);
+  expect(profileAvatarUrl(directory.get("photo"))).toBe("/api/users/photo/avatar?v=7");
+  stop();
 });
