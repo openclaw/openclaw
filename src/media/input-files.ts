@@ -310,13 +310,10 @@ export async function extractFileContentFromSource(params: {
   const filename = source.filename || "file";
 
   const { buffer, contentType } = await readInputSource(source, limits, "input_file", signal);
-  const { mimeType, charset } = parseContentType(contentType);
-
   const extracted = await extractFileContentFromBuffer({
     buffer,
     filename,
-    mimeType,
-    charset,
+    mimeType: contentType,
     limits,
     config: params.config,
     ...(signal ? { signal } : {}),
