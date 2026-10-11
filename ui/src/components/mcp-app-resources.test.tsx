@@ -4,6 +4,7 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import { GatewayBrowserClient } from "../api/gateway.ts";
 import { createAgentSelectionCapability } from "../app/agent-selection.ts";
 import type { ApplicationContext } from "../app/context.ts";
+import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import {
   createApplicationGateway,
@@ -27,19 +28,19 @@ function mountResources() {
     ...gateway.snapshot,
     client,
     phase: "connected",
-    hello: { type: "hello-ok", protocol: 1, features: { methods: ["mcp.app.discover"] } },
+    hello: gatewayHelloForMethods(["mcp.app.discover"]),
   });
-  // SAFETY: This component only consumes the Gateway and agent selection capabilities.
-  const context = {
+  const context: Pick<ApplicationContext, "gateway" | "agentSelection"> = {
     gateway,
     agentSelection: createAgentSelectionCapability(gateway, {
       state: { agentsList: null },
       subscribe: () => () => {},
     }),
-  } as ApplicationContext;
+  };
   const [sessionKey, setSessionKey] = createSignal("agent:main:main");
   const mounted = mountSolid(() => <McpAppResources sessionKey={sessionKey()} agentId="main" />, {
-    wrapper: createSolidApplicationContextProvider(context).wrapper,
+    // SAFETY: This component only consumes the Gateway and agent selection capabilities.
+    wrapper: createSolidApplicationContextProvider(context as ApplicationContext).wrapper,
   });
   return { ...mounted, request, setSessionKey, publishEvent };
 }

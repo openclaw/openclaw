@@ -5,7 +5,6 @@
   padding: 14px;
   background: var(--bg-accent);
   color: var(--text);
-  font-size: 13px;
   position: relative;
   z-index: 1;
   box-sizing: border-box;

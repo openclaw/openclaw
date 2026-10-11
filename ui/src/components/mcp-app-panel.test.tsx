@@ -11,16 +11,13 @@ import {
 import { flush, waitForSolid } from "../test-helpers/solid-settle.ts";
 import type { McpAppOpenDetail } from "./mcp-app-launch.ts";
 import { McpAppPanel } from "./mcp-app-panel.ts";
+import type { McpAppViewProps } from "./mcp-app-view.ts";
 
-// The panel owns retirement ordering; the view's protocol has its own boundary tests.
+// mock-isolation: Exercise panel retirement without registering the real iframe protocol view.
 vi.mock("./mcp-app-view-registration.ts", () => ({
-  McpAppView: (props: {
-    sessionKey: string;
-    agentId: string;
-    viewId: string;
-    title: string;
-    deepLink?: string;
-  }) => (
+  McpAppView: (
+    props: Pick<McpAppViewProps, "sessionKey" | "agentId" | "viewId" | "title" | "deepLink">,
+  ) => (
     <mcp-app-view
       prop:sessionKey={props.sessionKey}
       prop:agentId={props.agentId}

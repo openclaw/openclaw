@@ -48,7 +48,13 @@ export function createComposerContainer() {
   // SAFETY: Disconnected composer fixtures only read Gateway and agent selection; MCP discovery is unavailable.
   return createApplicationContextProvider({
     gateway: createApplicationGateway().gateway,
-    agentSelection: { state: { selectedId: "main" }, subscribe: () => () => {} },
+    agentSelection: {
+      state: { selectedId: "main", scopeId: "main" },
+      intentRevision: 0,
+      set: () => {},
+      setScope: () => {},
+      subscribe: () => () => {},
+    },
   } as ApplicationContext);
 }
 
