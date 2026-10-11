@@ -5,6 +5,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import { trackAsyncWork } from "../../shared/async-work-scope.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import {
@@ -39,10 +43,6 @@ const preparedRuntimeMocks = vi.hoisted(() => ({
   acquired: vi.fn(),
   releaseDispatch: vi.fn(async () => {}),
   releaseSelected: vi.fn(async () => {}),
-}));
-
-vi.mock("../../config/config.js", () => ({
-  getRuntimeConfig: configMocks.getRuntimeConfig,
 }));
 
 vi.mock("../../commands/agent.js", () => ({
@@ -118,6 +118,7 @@ describe("agent handler session create events", () => {
     storePath = path.join(tempDir, "sessions.json");
     configMocks.storePath = storePath;
     configMocks.workspaceDir = tempDir;
+    setRuntimeConfigSnapshot(configMocks.getRuntimeConfig());
     configMocks.getRuntimeConfig.mockClear();
     agentIngressMocks.agentCommandFromIngress.mockClear();
     agentIngressMocks.agentCommandFromIngress.mockResolvedValue({ ok: true });
@@ -126,6 +127,7 @@ describe("agent handler session create events", () => {
   });
 
   afterEach(() => {
+    clearRuntimeConfigSnapshot();
     for (const entry of listActiveSessionsForShutdown()) {
       forgetActiveSessionForShutdown(entry.sessionId);
     }
