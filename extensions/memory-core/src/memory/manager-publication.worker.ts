@@ -135,22 +135,12 @@ function createPublicationBackend(
     ): MemoryPublicationResult<T> => {
       let entered = false;
       let committed = false;
-      let restoredBusyTimeout = false;
-      const restoreBusyTimeout = () => {
-        if (!restoredBusyTimeout) {
-          db.exec(`PRAGMA busy_timeout = ${input.pragmas.busy_timeout}`);
-          restoredBusyTimeout = true;
-        }
-      };
       try {
         assertPath();
-        // Failed BEGIN is returned to the preparing host without sleeping here.
-        // It revalidates memory-file input before every retry, as before.
-        db.exec("PRAGMA busy_timeout = 0");
+        // SQLite owns the bounded lock wait on this worker, not a host retry loop.
         const value = run({
           onBegin: () => {
             entered = true;
-            restoreBusyTimeout();
             assertPath();
             admit("transaction");
           },
@@ -164,10 +154,6 @@ function createPublicationBackend(
         return { ok: true, value };
       } catch (error) {
         return { ok: false, error: failure(error), entered, committed };
-      } finally {
-        if (db.isOpen) {
-          restoreBusyTimeout();
-        }
       }
     };
     const write = <T>(run: () => T): MemoryPublicationResult<T> =>

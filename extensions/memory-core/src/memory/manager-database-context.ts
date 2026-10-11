@@ -1,7 +1,6 @@
 // Owns the published index state and the isolated lifetime of shadow reindex work.
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { DatabaseSync } from "node:sqlite";
-import { setTimeout as delay } from "node:timers/promises";
 import {
   createSubsystemLogger,
   resolveStateDir,
@@ -63,7 +62,6 @@ type PublicationWorker = {
     OpenClawAgentSqliteWorkerStore<MemoryPublicationOperations>,
     "execute" | "run" | "close"
   >;
-  busyTimeoutMs: number;
 };
 
 function readConnectionPragmas(db: DatabaseSync, errorMessage: string) {
@@ -307,7 +305,6 @@ export class MemoryIndexDatabase {
             this.db,
             worker,
           ),
-          busyTimeoutMs: pragmas.busy_timeout,
         };
       }
       const store = await openSqliteWorkerStore<MemoryPublicationOperations>({
@@ -340,7 +337,6 @@ export class MemoryIndexDatabase {
             runSqliteWorkerStoreWrite(store, operation, assertCurrent, [filename]),
           close: () => store.close(),
         },
-        busyTimeoutMs: pragmas.busy_timeout,
       };
     })().catch((error: unknown) => {
       // Open failure has already drained its native owner, or retained failed
@@ -395,33 +391,24 @@ export class MemoryIndexDatabase {
     );
   }
 
-  private async retryPublication<T>(
+  private async publishPrepared<T>(
     run: () => Promise<MemoryPublicationResult<T>>,
     prepare: () => Promise<boolean> = async () => true,
   ): Promise<T | undefined> {
-    const worker = await this.getPublicationWorker();
-    const deadline = performance.now() + worker.busyTimeoutMs;
-    while (await prepare()) {
-      const result = await run();
-      if (result.ok) {
-        return result.value;
-      }
-      const code = result.error.errcode === undefined ? undefined : result.error.errcode & 0xff;
-      if (result.entered || (code !== 5 && code !== 6) || performance.now() >= deadline) {
-        throw Object.assign(
-          result.error.name === "MemoryIndexRevisionConflictError"
-            ? new MemoryIndexRevisionConflictError(result.error.message)
-            : new Error(result.error.message),
-          result.error,
-          {
-            entered: result.entered,
-            committed: result.committed,
-          },
-        );
-      }
-      await delay(Math.min(25, Math.max(0, deadline - performance.now())));
+    if (!(await prepare())) {
+      return undefined;
     }
-    return undefined;
+    const result = await run();
+    if (result.ok) {
+      return result.value;
+    }
+    throw Object.assign(
+      result.error.name === "MemoryIndexRevisionConflictError"
+        ? new MemoryIndexRevisionConflictError(result.error.message)
+        : new Error(result.error.message),
+      result.error,
+      { entered: result.entered, committed: result.committed },
+    );
   }
 
   read<Key extends "source.hash" | "source.chunks" | "cache.read" | "session.current">(
@@ -433,7 +420,7 @@ export class MemoryIndexDatabase {
 
   admitSchema(input: MemoryPublicationOperations["schema.admit"]["input"]): Promise<void> {
     this.schemaAdmission ??= this.runPublication(
-      (scope) => this.retryPublication(() => scope.execute({ type: "schema.admit", input })),
+      (scope) => this.publishPrepared(() => scope.execute({ type: "schema.admit", input })),
       () => {
         if (this.closed || !this.db.isOpen) {
           throw new Error("Memory database owner closed before schema admission");
@@ -483,9 +470,8 @@ export class MemoryIndexDatabase {
 
   async pruneEmbeddingCache(maxEntries: number, assertCurrent: () => void): Promise<boolean> {
     assertCurrent();
-    // Each failed BEGIN releases admission before retry; successful batches yield at the caller.
     return (
-      (await this.retryPublication(() =>
+      (await this.publishPrepared(() =>
         this.executePublication({ type: "cache.prune", input: { maxEntries } }, assertCurrent),
       )) ?? false
     );
@@ -503,7 +489,7 @@ export class MemoryIndexDatabase {
         mutation,
         prepareRevision,
         invalidate,
-        retry: (run, prepare) => this.retryPublication(run, prepare),
+        publish: (run, prepare) => this.publishPrepared(run, prepare),
       });
     return mutation.kind === "clear" ||
       memoryEmbeddingCacheFitsInline(mutation.header, mutation.entries)
@@ -522,7 +508,7 @@ export class MemoryIndexDatabase {
         state: () => this.publicationState(),
         execute: (command) => this.executePublication(command, assertCurrent),
         run: (operation) => this.runPublication(operation, assertCurrent),
-        retry: (run, prepareRetry) => this.retryPublication(run, prepareRetry),
+        publish: (run, prepare) => this.publishPrepared(run, prepare),
         prepare,
         assertPublished: this.isShadow ? assertCurrent : undefined,
       }),
@@ -536,7 +522,7 @@ export class MemoryIndexDatabase {
     const run = () =>
       this.runPublication(
         (scope) =>
-          this.retryPublication(() =>
+          this.publishPrepared(() =>
             scope.execute({
               type: "source.delete",
               input: { ...input, state: this.publicationState() },
@@ -553,7 +539,7 @@ export class MemoryIndexDatabase {
   ) {
     return this.withSourceMutation(() =>
       this.runPublication(
-        (scope) => this.retryPublication(() => scope.execute({ type: "source.refresh", input })),
+        (scope) => this.publishPrepared(() => scope.execute({ type: "source.refresh", input })),
         assertCurrent,
       ),
     );
@@ -573,7 +559,7 @@ export class MemoryIndexDatabase {
   ) {
     await this.runPublication(
       (scope) =>
-        this.retryPublication(() =>
+        this.publishPrepared(() =>
           scope.execute({
             type: "database.publish",
             input: {

@@ -16,7 +16,7 @@ import {
 import type { MemorySourceIndexReplacement } from "./manager-source-index-kernel.js";
 
 type PublicationScope = Pick<SqliteWorkerStore<MemoryPublicationOperations>, "execute">;
-type PublicationRetry = <T>(
+type PreparedPublication = <T>(
   run: () => Promise<MemoryPublicationResult<T>>,
   prepare: () => Promise<boolean>,
 ) => Promise<T | undefined>;
@@ -27,14 +27,14 @@ export async function publishMemorySource(params: {
   state: () => MemoryPublicationState;
   execute: PublicationScope["execute"];
   run: <T>(operation: (scope: PublicationScope) => Promise<T>) => Promise<T>;
-  retry: PublicationRetry;
+  publish: PreparedPublication;
   prepare: () => Promise<boolean>;
   assertPublished: (() => void) | undefined;
 }) {
-  const { replacement, state, execute, run, retry, prepare, assertPublished } = params;
+  const { replacement, state, execute, run, publish, prepare, assertPublished } = params;
   const inline = memoryPublicationInline(replacement);
   if (inline) {
-    return retry(
+    return publish(
       () => execute({ type: "source.replace.inline", input: { ...inline, state: state() } }),
       prepare,
     );
@@ -46,7 +46,7 @@ export async function publishMemorySource(params: {
     for (const fragments of memoryPublicationBatches(replacement)) {
       await scope.execute({ type: "stage.append", input: { operation, fragments } });
     }
-    const result = await retry(
+    const result = await publish(
       () => scope.execute({ type: "source.replace", input: { operation, state: state() } }),
       prepare,
     );
@@ -65,9 +65,9 @@ export async function publishMemoryEmbeddingCache(params: {
   mutation: MemoryEmbeddingCacheMutation;
   prepareRevision: () => number | undefined;
   invalidate: () => void;
-  retry: PublicationRetry;
+  publish: PreparedPublication;
 }): Promise<boolean | undefined> {
-  const { scope, mutation, prepareRevision, invalidate, retry } = params;
+  const { scope, mutation, prepareRevision, invalidate, publish } = params;
   const expectedRevision = prepareRevision();
   if (expectedRevision === undefined) {
     return undefined;
@@ -75,7 +75,7 @@ export async function publishMemoryEmbeddingCache(params: {
   const prepare = async () => prepareRevision() !== undefined;
   if (mutation.kind === "clear") {
     try {
-      return await retry(
+      return await publish(
         () =>
           scope.execute({
             type: "cache.clear",
@@ -89,7 +89,7 @@ export async function publishMemoryEmbeddingCache(params: {
     }
   }
   if (memoryEmbeddingCacheFitsInline(mutation.header, mutation.entries)) {
-    const current = await retry(
+    const current = await publish(
       () =>
         scope.execute({
           type: "cache.write.inline",
@@ -110,7 +110,7 @@ export async function publishMemoryEmbeddingCache(params: {
   for (const fragments of memoryEmbeddingCacheBatches(mutation.entries)) {
     await scope.execute({ type: "stage.append", input: { operation, fragments } });
   }
-  const current = await retry(
+  const current = await publish(
     () => scope.execute({ type: "cache.write", input: { operation, expectedRevision } }),
     prepare,
   );
