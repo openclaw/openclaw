@@ -30,6 +30,7 @@ const WhatsAppCommonShape = {
   ...accountShape,
   sendReadReceipts: ChannelSendReadReceiptsSchema,
   selfChatMode: z.boolean().optional(),
+  catchUpOfflineMessages: z.boolean().optional(),
   groups: z.record(z.string(), WhatsAppGroupEntrySchema).optional(),
   direct: z.record(z.string(), WhatsAppDirectEntrySchema).optional(),
   ...buildChannelReactionShape({

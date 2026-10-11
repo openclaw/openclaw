@@ -256,6 +256,7 @@ export async function monitorWebChannel(
               mediaMaxMb: account.mediaMaxMb,
               selfChatMode: account.selfChatMode,
               sendReadReceipts: account.sendReadReceipts,
+              catchUpOfflineMessages: account.catchUpOfflineMessages,
               socketTiming,
               debounceMs: tuning.debounceMs,
               appendReplyWindow: connectionLocal.openedAfterRecentInbound

@@ -150,6 +150,25 @@ describe("append upsert handling (#20952)", () => {
     await listener.close();
   });
 
+  it("delivery coordinator processes offline appends of any age when catch-up is enabled", async () => {
+    const onMessage = vi.fn(async () => {});
+    const { listener, sock } = await startInboxMonitor(onMessage, {
+      catchUpOfflineMessages: true,
+    });
+
+    emitUpsert(sock, {
+      id: "offline-1",
+      body: "sent while the gateway was offline",
+      remoteJid: "999@s.whatsapp.net",
+      type: "append",
+      timestamp: Math.floor(Date.now() / 1000) - 6 * 60 * 60,
+    });
+    await waitForMessageCalls(onMessage, 1);
+
+    expect(onMessage).toHaveBeenCalledTimes(1);
+    await listener.close();
+  });
+
   it("delivery coordinator preserves fresh appends after catch-up expires", async () => {
     const onMessage = vi.fn(async () => {});
     const { listener, sock } = await startInboxMonitor(onMessage, {
