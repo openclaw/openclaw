@@ -1,5 +1,6 @@
-/** Test support for the documented matrix of user-supplied fields that accept SecretRefs. */
+/** Generates the documented matrix of user-supplied fields that accept SecretRefs. */
 import { getSecretTargetRegistry } from "./target-registry-data.js";
+import type { SecretTargetRegistryEntry } from "./target-registry-types.js";
 import { unsupportedSecretRefSurfacePolicy } from "./unsupported-surface-policy.js";
 
 type CredentialMatrixEntry = {
@@ -22,10 +23,15 @@ export type SecretRefCredentialMatrixDocument = {
   entries: CredentialMatrixEntry[];
 };
 
+const compareText = (left: string, right: string): number =>
+  left < right ? -1 : left > right ? 1 : 0;
+
 /** Builds the public SecretRef credential matrix from the source target registry. */
-export function buildSecretRefCredentialMatrix(): SecretRefCredentialMatrixDocument {
+export function buildSecretRefCredentialMatrix(
+  registry: readonly SecretTargetRegistryEntry[] = getSecretTargetRegistry({ sourceTree: true }),
+): SecretRefCredentialMatrixDocument {
   const entriesByKey = new Map<string, CredentialMatrixEntry>();
-  for (const entry of getSecretTargetRegistry({ sourceTree: true })) {
+  for (const entry of registry) {
     const matrixEntry = Object.assign(
       { id: entry.id, configFile: entry.configFile, path: entry.pathPattern },
       entry.refPathPattern ? { refPath: entry.refPathPattern } : {},
@@ -51,7 +57,7 @@ export function buildSecretRefCredentialMatrix(): SecretRefCredentialMatrixDocum
     .map((entry) => {
       return entry;
     })
-    .toSorted((a, b) => a.id.localeCompare(b.id));
+    .toSorted((a, b) => compareText(a.id, b.id));
 
   return {
     version: 1,

@@ -9,11 +9,20 @@ import {
   pluginSourceStatIdentity,
 } from "./plugin-source-file.js";
 
-export function readPluginSourceDirectory(source: string) {
-  const entries = fs
-    .readdirSync(source, { withFileTypes: true })
-    .filter((entry) => isPluginSourceEntry(entry.name))
-    .toSorted((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+export function readPluginSourceDirectory(source: string, onEntry?: () => void) {
+  const entries: fs.Dirent[] = [];
+  const directory = fs.opendirSync(source);
+  try {
+    for (let entry = directory.readSync(); entry; entry = directory.readSync()) {
+      onEntry?.();
+      if (isPluginSourceEntry(entry.name)) {
+        entries.push(entry);
+      }
+    }
+  } finally {
+    directory.closeSync();
+  }
+  entries.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
   const content = entries.map((entry) => [
     entry.name,
     entry.isSymbolicLink() ? fs.readlinkSync(path.join(source, entry.name)) : null,
@@ -42,6 +51,7 @@ export type PluginSourceInput = {
   contentHash: string;
   sizeBytes: number;
   directory: boolean;
+  directoryEntryLimit?: number;
   boundary: string;
   native?: boolean;
 };
@@ -52,6 +62,7 @@ export function verifyPluginSourceInputs(
   inputs: ReadonlyMap<string, PluginSourceInput>,
   sources: Iterable<string>,
 ): void {
+  let directoryEntries = 0;
   for (const source of sources) {
     const input = inputs.get(source)!;
     const identity = input.native
@@ -70,7 +81,19 @@ export function verifyPluginSourceInputs(
       fs.realpathSync(source) !== source ||
       identity !== input.identity ||
       (input.directory
-        ? readPluginSourceDirectory(source).contentHash
+        ? readPluginSourceDirectory(
+            source,
+            input.directoryEntryLimit
+              ? (() => {
+                  return () => {
+                    directoryEntries += 1;
+                    if (directoryEntries > input.directoryEntryLimit!) {
+                      throw new Error("Plugin source directory exceeds its verification budget");
+                    }
+                  };
+                })()
+              : undefined,
+          ).contentHash
         : input.native
           ? input.contentHash
           : hashPluginSourceFile(source, input.boundary).contentHash) !== input.contentHash

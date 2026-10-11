@@ -48,6 +48,8 @@ type ResolvePluginModuleLoaderCacheEntryParams = {
   devSourceRoot?: string | null;
   pluginSdkResolution?: PluginSdkResolutionPreference;
   cacheScopeKey?: string;
+  disableAutomaticTsconfig?: boolean;
+  tsconfigPath?: string;
 };
 const MAX_TRACKED_SOURCE_TRANSFORM_TARGETS = 24;
 const pluginModuleLoaderStats = {
@@ -205,7 +207,7 @@ function resolvePluginModuleLoaderCacheEntry(params: ResolvePluginModuleLoaderCa
       });
   const moduleConfigCacheKey = `${tryNative ? "native" : "transform"}\0${aliases.cacheKey}`;
   const lazyNativeAliasFallback = tryNative && !useNodeModuleHooks();
-  const scopedCacheKey = `${loaderFilename}::${params.cacheScopeKey ? `${params.cacheScopeKey}::` : ""}${moduleConfigCacheKey}`;
+  const scopedCacheKey = `${loaderFilename}::${params.disableAutomaticTsconfig ? "no-tsconfig::" : ""}${params.tsconfigPath ? `tsconfig:${params.tsconfigPath}::` : ""}${params.cacheScopeKey ? `${params.cacheScopeKey}::` : ""}${moduleConfigCacheKey}`;
   return {
     loaderFilename,
     getAliasMap: aliases.getAliasMap,
@@ -215,6 +217,8 @@ function resolvePluginModuleLoaderCacheEntry(params: ResolvePluginModuleLoaderCa
       ? aliases.getSourceTransformAliasMap
       : undefined,
     scopedCacheKey,
+    disableAutomaticTsconfig: params.disableAutomaticTsconfig,
+    tsconfigPath: params.tsconfigPath,
   };
 }
 
@@ -222,6 +226,7 @@ function createPluginModuleLoader(
   params: ReturnType<typeof resolvePluginModuleLoaderCacheEntry> & {
     createLoader?: PluginModuleLoaderFactory;
     cache: ReturnType<typeof getPluginCache>;
+    oneShot?: boolean;
   },
 ): PluginModuleLoader {
   let loadWithSourceTransform: PluginModuleLoader | undefined;
@@ -233,10 +238,17 @@ function createPluginModuleLoader(
     const jitiOptions = buildPluginLoaderJitiOptions(aliasMap, {
       modulePath: params.loaderFilename,
     });
-    const automaticTsconfig = resolveAutomaticJitiTsconfig(params.loaderFilename);
+    const automaticTsconfig = params.disableAutomaticTsconfig
+      ? undefined
+      : (params.tsconfigPath ?? resolveAutomaticJitiTsconfig(params.loaderFilename));
     const jitiLoader = (params.createLoader ?? createJiti)(params.loaderFilename, {
       ...jitiOptions,
-      ...(automaticTsconfig ? { tsconfigPaths: automaticTsconfig } : {}),
+      ...(params.oneShot ? { fsCache: false, moduleCache: false } : {}),
+      ...(params.disableAutomaticTsconfig
+        ? { tsconfigPaths: false }
+        : automaticTsconfig
+          ? { tsconfigPaths: automaticTsconfig }
+          : {}),
       // Source SDK aliases resolve outside node_modules, so Jiti's nativeModules
       // matcher misses them. Keep host state native while plugin source remains
       // transformable and reloadable within its cache generation.
@@ -329,6 +341,22 @@ export function getCachedPluginModuleLoader(
   });
   cache.moduleLoaders.set(cacheEntry.scopedCacheKey, loader);
   return loader;
+}
+
+/** Build a one-shot loader for generation tasks that must not retain captured source paths. */
+export function createUncachedPluginModuleLoader(
+  params: ResolvePluginModuleLoaderCacheEntryParams & {
+    createLoader?: PluginModuleLoaderFactory;
+  },
+): PluginModuleLoader {
+  const cacheEntry = resolvePluginModuleLoaderCacheEntry(params);
+  installOpenClawInternalCorePackageNativeResolver({ moduleUrl: params.importerUrl });
+  return createPluginModuleLoader({
+    ...cacheEntry,
+    cache: getPluginCache(),
+    oneShot: true,
+    ...(params.createLoader ? { createLoader: params.createLoader } : {}),
+  });
 }
 
 type PluginModuleBoundaryParams = {

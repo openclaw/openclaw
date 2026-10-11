@@ -136,6 +136,120 @@ async function disposeCaptures(
   }
 }
 
+it("does not treat managed native admission links as authored source hardlinks", async () => {
+  await withOpenClawTestState({ label: "managed-native-hardlink-policy" }, async (state) => {
+    const fixture = createFixture(state.path("installed"), true);
+    const cache = createPluginCache();
+    preparePluginNativeAdmissions(fixture.index, cache);
+    const artifacts: ReturnType<typeof capturePluginGenerationArtifact>[] = [];
+    const capture = (budgeted: boolean) =>
+      withPluginCache(cache, () => {
+        const artifact = capturePluginGenerationArtifact(
+          fixture.root,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          budgeted
+            ? {
+                maxEntries: 10_000,
+                maxFiles: 10_000,
+                maxBytes: 32 * 1024 * 1024,
+                maxFileBytes: 8 * 1024 * 1024,
+                maxTotalBytes: 64 * 1024 * 1024,
+              }
+            : undefined,
+        );
+        artifacts.push(artifact);
+        return artifact;
+      });
+    try {
+      capture(false);
+      expect(() => capture(true).assertNoHardlinks()).not.toThrow();
+    } finally {
+      await disposeCaptures(artifacts, [cache]);
+    }
+  });
+});
+
+it("retains authored native hardlinks when a managed namespace is reused", async () => {
+  await withOpenClawTestState({ label: "managed-native-authored-hardlink" }, async (state) => {
+    const fixture = createFixture(state.path("installed"), true);
+    const external = state.path("external-native-link.node");
+    fs.linkSync(fixture.filename, external);
+    const cache = createPluginCache();
+    preparePluginNativeAdmissions(fixture.index, cache);
+    const artifacts: ReturnType<typeof capturePluginGenerationArtifact>[] = [];
+    const capture = (budgeted: boolean) =>
+      withPluginCache(cache, () => {
+        const artifact = capturePluginGenerationArtifact(
+          fixture.root,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          budgeted
+            ? {
+                maxEntries: 10_000,
+                maxFiles: 10_000,
+                maxBytes: 32 * 1024 * 1024,
+                maxFileBytes: 8 * 1024 * 1024,
+                maxTotalBytes: 64 * 1024 * 1024,
+              }
+            : undefined,
+        );
+        artifacts.push(artifact);
+        return artifact;
+      });
+    try {
+      capture(false);
+      expect(() => capture(true).assertNoHardlinks()).toThrow("hardlinked");
+    } finally {
+      await disposeCaptures(artifacts, [cache]);
+    }
+  });
+});
+
+it("detects authored native hardlinks added after managed admission", async () => {
+  await withOpenClawTestState({ label: "managed-native-late-hardlink" }, async (state) => {
+    const fixture = createFixture(state.path("installed"), true);
+    const cache = createPluginCache();
+    preparePluginNativeAdmissions(fixture.index, cache);
+    const artifacts: ReturnType<typeof capturePluginGenerationArtifact>[] = [];
+    const capture = (budgeted: boolean) =>
+      withPluginCache(cache, () => {
+        const artifact = capturePluginGenerationArtifact(
+          fixture.root,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          budgeted
+            ? {
+                maxEntries: 10_000,
+                maxFiles: 10_000,
+                maxBytes: 32 * 1024 * 1024,
+                maxFileBytes: 8 * 1024 * 1024,
+                maxTotalBytes: 64 * 1024 * 1024,
+              }
+            : undefined,
+        );
+        artifacts.push(artifact);
+        return artifact;
+      });
+    try {
+      capture(false);
+      fs.linkSync(fixture.filename, state.path("late-native-link.node"));
+      expect(() => capture(true).assertNoHardlinks()).toThrow("hardlinked");
+    } finally {
+      await disposeCaptures(artifacts, [cache]);
+    }
+  });
+});
+
 it("shares first native admission across private inspections and publishes after install settlement", async () => {
   await withOpenClawTestState({ label: "native-inspection-admission" }, async (state) => {
     const fixture = createFixture(state.path("installed"), true);
@@ -170,9 +284,9 @@ it("shares first native admission across private inspections and publishes after
             );
             if (admission === "first") {
               expect(inspection.io).toMatchObject({
-                originalBytes: nativeSize,
-                capturedBytes: 0,
-                copies: 0,
+                originalBytes: 0,
+                capturedBytes: nativeSize,
+                copies: 1,
                 wholeFileReads: 0,
               });
               expect(inspection.io.largestBuffer).toBeLessThanOrEqual(1024 * 1024);

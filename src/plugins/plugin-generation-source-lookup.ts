@@ -8,6 +8,10 @@ import { hasErrnoCode } from "../infra/errno.js";
 import { isPathInside, relativePluginPathInsideRootSync } from "./path-safety.js";
 import { getPluginCache } from "./plugin-cache.js";
 import { createPluginCaptureResolver } from "./plugin-capture-resolution.js";
+import {
+  pluginGenerationCaptureBudget,
+  type PluginGenerationCaptureOptions,
+} from "./plugin-generation-capture-budget.js";
 import { PluginSourceRecoveryUnavailableError } from "./plugin-instance-error.js";
 import type { PluginNativeRecovery } from "./plugin-native-admission.js";
 import {
@@ -64,6 +68,7 @@ type PluginGenerationCaptureArguments = [
   moduleSource?: (filename: string) => string,
   nativeRecovery?: PluginNativeRecovery,
   dependencyLookupBoundary?: Parameters<typeof createPluginDependencyResolver>[0],
+  captureOptions?: PluginGenerationCaptureOptions,
 ];
 const sourceCustody = new AsyncLocalStorage<{
   sources: Map<string, SourceCustody>;
@@ -111,10 +116,23 @@ export function createPluginGenerationCapture<
   ) => T,
 ) {
   return (...args: PluginGenerationCaptureArguments): T => {
-    const [rootDir, entryFile, execute, moduleSource, nativeRecovery, dependencyLookupBoundary] =
-      args;
+    const [
+      rootDir,
+      entryFile,
+      execute,
+      moduleSource,
+      nativeRecovery,
+      dependencyLookupBoundary,
+      captureOptions,
+    ] = args;
+    const captureBudget = pluginGenerationCaptureBudget(captureOptions);
+    const copyNativeFiles = captureOptions !== captureBudget;
     const custody =
-      execute && !nativeRecovery && !dependencyLookupBoundary && sourceCustody.getStore();
+      execute &&
+      !nativeRecovery &&
+      !dependencyLookupBoundary &&
+      !captureBudget &&
+      sourceCustody.getStore();
     if (!custody) {
       return create(...args);
     }
@@ -126,6 +144,7 @@ export function createPluginGenerationCapture<
       typeof entryFile === "string"
         ? path.resolve(entryFile)
         : entryFile?.map((file) => path.resolve(file)),
+      copyNativeFiles,
     ]);
     let retained = custody.sources.get(key);
     if (retained) {
@@ -146,6 +165,7 @@ export function createPluginGenerationCapture<
         undefined,
         undefined,
         undefined,
+        captureOptions,
         undefined,
         true,
       );
@@ -159,10 +179,19 @@ export function createPluginGenerationCapture<
     const fork = retained.source.fork();
     try {
       fork.native?.retain(getPluginCache());
-      const artifact = create(rootDir, entryFile, execute, moduleSource, undefined, undefined, {
-        source: fork,
-        files: retained.files,
-      });
+      const artifact = create(
+        rootDir,
+        entryFile,
+        execute,
+        moduleSource,
+        undefined,
+        undefined,
+        copyNativeFiles ? { copyNativeFiles: true } : undefined,
+        {
+          source: fork,
+          files: retained.files,
+        },
+      );
       if (artifact.sourceDigest !== retained.sourceDigest) {
         artifact.dispose();
         throw new Error("Plugin source changed while adopting its retained capture");
@@ -499,6 +528,7 @@ export function createPluginGenerationSourceLookup({
   boundaryRoot,
   capturedPaths,
   hardlinkedSources,
+  revalidate,
   assertModuleAvailable,
   captureNativeRecovery,
 }: {
@@ -507,7 +537,8 @@ export function createPluginGenerationSourceLookup({
   capturedRoot: string;
   boundaryRoot: string;
   capturedPaths: ReadonlyMap<string, string>;
-  hardlinkedSources: ReadonlySet<string>;
+  hardlinkedSources: Set<string>;
+  revalidate?: () => Iterable<string>;
   assertModuleAvailable: (filename: string) => void;
   captureNativeRecovery?: () => PluginNativeRecovery;
 }) {
@@ -515,14 +546,42 @@ export function createPluginGenerationSourceLookup({
     const captured = getCapturedSource(capturedPaths, rootDir, sourceRoot, source);
     return captured && isPathInside(capturedRoot, captured) ? captured : undefined;
   };
+  const revalidateHardlinks = () => {
+    const sources = new Set([...hardlinkedSources, ...(revalidate?.() ?? [])]);
+    const canonical = new Set<string>();
+    for (const source of sources) {
+      hardlinkedSources.add(source);
+      try {
+        canonical.add(fs.realpathSync(source));
+      } catch {}
+    }
+    for (const [source, captured] of capturedPaths) {
+      let flagged = sources.has(path.resolve(source));
+      try {
+        flagged ||= canonical.has(fs.realpathSync(source));
+      } catch {}
+      if (flagged) {
+        hardlinkedSources.add(captured);
+      }
+    }
+  };
   return {
     hasSource: (source: string) => resolveCaptured(source) !== undefined,
+    assertNoHardlinks: () => {
+      revalidateHardlinks();
+      if (hardlinkedSources.size > 0) {
+        throw new Error("Plugin source is hardlinked; use separate files and reload.");
+      }
+    },
     resolve: (source: string, rejectHardlinks = false) => {
       // Public exports may be loaded for the first time after the original package
       // has been edited or removed. Resolve only through facts captured with it.
       const captured = resolveCaptured(source);
       if (!captured) {
         throw new Error("Plugin entry is outside its captured source package");
+      }
+      if (rejectHardlinks) {
+        revalidateHardlinks();
       }
       if (rejectHardlinks && hardlinkedSources.has(captured)) {
         throw new Error("Plugin source is hardlinked; use a separate file and reload.");
@@ -555,6 +614,8 @@ export function createPluginGenerationModuleLookup({
   assertModuleAvailable,
   captureAdmitted,
   captureExecutableFile,
+  captureExecutableFileAtRoot,
+  captureExecutableFilesAtRoot,
   executable,
   packages,
   directory,
@@ -566,12 +627,37 @@ export function createPluginGenerationModuleLookup({
   assertModuleAvailable: (filename: string) => void;
   captureAdmitted: ReturnType<typeof createPluginSourceCapture>["capture"];
   captureExecutableFile: (filename: string) => string | undefined;
+  captureExecutableFileAtRoot: (filename: string, sourceRoot: string) => string | undefined;
+  captureExecutableFilesAtRoot: (
+    filenames: readonly string[],
+    sourceRoot: string,
+  ) => readonly string[] | undefined;
   executable: boolean;
   packages: ReadonlyMap<string, PluginPackageCapture>;
   directory: string;
 }) {
   const packageForFile = (filename: string) =>
     findPluginCapturedPackage(packages, filename, directory)?.owner;
+  const captureResolved = (filename: string, sourceRoot?: string): string | undefined => {
+    const known = capturedPaths.get(path.resolve(filename));
+    if (known) {
+      assertModuleAvailable(known);
+      return known;
+    }
+    const captured = findPluginCapturedPackage(packages, filename, directory);
+    // import.meta.url can name a deferred peer through a private dependency link.
+    const original = captured
+      ? path.join(captured.owner.sourceRoot, path.relative(captured.root, filename))
+      : filename;
+    const source = sourceRoot
+      ? captureExecutableFileAtRoot(original, sourceRoot)
+      : captureExecutableFile(original);
+    const target = source ? capturedPaths.get(source) : undefined;
+    if (target) {
+      capturedPaths.set(path.resolve(filename), target);
+    }
+    return target;
+  };
   return {
     boundaryRoot: directory,
     sourceForCaptured: (file: string) => originalSources.get(path.resolve(file)),
@@ -617,25 +703,23 @@ export function createPluginGenerationModuleLookup({
       );
       return result.value ? { ...result.value, additions: result.additions } : undefined;
     },
-    captureResolvedModule: (filename: string) => {
-      const known = capturedPaths.get(path.resolve(filename));
-      if (known) {
-        assertModuleAvailable(known);
-        return known;
-      }
-      return captureAdmitted(() => {
-        const captured = findPluginCapturedPackage(packages, filename, directory);
-        // import.meta.url can name a deferred peer through a private dependency link.
-        const original = captured
-          ? path.join(captured.owner.sourceRoot, path.relative(captured.root, filename))
-          : filename;
-        const source = captureExecutableFile(original);
-        const target = source ? capturedPaths.get(source) : undefined;
-        if (target) {
-          capturedPaths.set(path.resolve(filename), target);
-        }
-        return target;
-      }).value;
+    captureResolvedModule: (filename: string, sourceRoot?: string) => {
+      return captureAdmitted(() => captureResolved(filename, sourceRoot)).value;
     },
+    captureResolvedModules: (filenames: readonly string[], sourceRoot?: string) =>
+      captureAdmitted(() => {
+        if (!sourceRoot) {
+          return filenames.map((filename) => captureResolved(filename));
+        }
+        const targets = new Map<string, string | undefined>();
+        for (const source of captureExecutableFilesAtRoot(filenames, sourceRoot) ?? []) {
+          const target = capturedPaths.get(path.resolve(source));
+          if (target) {
+            capturedPaths.set(path.resolve(source), target);
+          }
+          targets.set(source, target);
+        }
+        return filenames.map((filename) => targets.get(filename));
+      }).value,
   };
 }

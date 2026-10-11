@@ -52,6 +52,9 @@ export function createPluginGenerationFileCapture({
   receipt,
   retained,
   sourceFacts,
+  directoryEntryLimit,
+  onWillReadDirectoryEntry,
+  onWillCaptureFile,
   onPackageMetadata,
 }: {
   boundary: string;
@@ -71,6 +74,9 @@ export function createPluginGenerationFileCapture({
   receipt: ReturnType<typeof createPluginGenerationReceipt>;
   retained?: { source: PluginRecoverySource; files: ReadonlyMap<string, PluginCapturedSourceFact> };
   sourceFacts?: Map<string, PluginCapturedSourceFact>;
+  directoryEntryLimit?: number;
+  onWillReadDirectoryEntry?: () => void;
+  onWillCaptureFile?: (source: string, sizeBytes: number) => void;
   onPackageMetadata: (source: string, target: string) => void;
 }) {
   const { inputs, pendingInputs, additions } = sourceCapture;
@@ -108,11 +114,10 @@ export function createPluginGenerationFileCapture({
           source: path.resolve(source),
           input: {
             identity: pluginSourceInputIdentity(fs.statSync(original, { bigint: true })),
-            contentHash: stat.isDirectory()
-              ? readPluginSourceDirectory(original).contentHash
-              : contentHash,
+            contentHash,
             sizeBytes,
             directory: stat.isDirectory(),
+            ...(stat.isDirectory() && directoryEntryLimit ? { directoryEntryLimit } : {}),
             boundary: isPathInside(boundary, original) ? boundary : path.dirname(original),
           },
         });
@@ -124,6 +129,7 @@ export function createPluginGenerationFileCapture({
           contentHash,
           sizeBytes,
           directory: stat.isDirectory(),
+          ...(stat.isDirectory() && directoryEntryLimit ? { directoryEntryLimit } : {}),
           boundary: admittedBoundary,
           ...(native ? { native: true } : {}),
         });
@@ -147,7 +153,7 @@ export function createPluginGenerationFileCapture({
       }
       ancestors.add(real);
       fs.mkdirSync(target, { recursive: true, mode: 0o700 });
-      const { names, contentHash } = readPluginSourceDirectory(real);
+      const { names, contentHash } = readPluginSourceDirectory(real, onWillReadDirectoryEntry);
       recordContent(contentHash);
       for (const name of names) {
         if (
@@ -162,9 +168,12 @@ export function createPluginGenerationFileCapture({
       }
       ancestors.delete(real);
     } else if (stat.isFile()) {
-      if (stat.nlink > 1n) {
-        hardlinkedSources.add(target);
-      }
+      const onSourceDescriptor = (admitted: fs.BigIntStats) => {
+        onWillCaptureFile?.(real, Number(admitted.size));
+        if (admitted.nlink > 1n) {
+          hardlinkedSources.add(target);
+        }
+      };
       fs.mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 });
       // Register before copying or admission can fail: known aliases must remain
       // rejected by the acquisition owner even when the first attempt is incomplete.
@@ -183,6 +192,7 @@ export function createPluginGenerationFileCapture({
       if (native) {
         nativeAdmission.reconcileSourceInputs(inputs);
       } else if (retainedFile && !retainedReference) {
+        onSourceDescriptor(stat);
         const retainedInput = retainedFile.input;
         // The receipt verifies the private copy against these retained content facts.
         copiedContent = {
@@ -190,17 +200,22 @@ export function createPluginGenerationFileCapture({
           sizeBytes: retainedInput.sizeBytes,
           sourceIdentity: pluginSourceInputIdentity(stat),
         };
-      } else {
+      } else if (captured) {
         // A second filename for a prefetched entry retains its first bytes and source identity.
-        copiedContent = copyPluginSourceFile(
-          captured ?? real,
-          captured ? directory : inputBoundary,
-          target,
-          { hashCopiedContent: true, copyFile, ...(captured ? { preserveSourceMode: true } : {}) },
-        );
+        copiedContent = copyPluginSourceFile(captured, directory, target, {
+          hashCopiedContent: true,
+          copyFile,
+          preserveSourceMode: true,
+          onSourceDescriptor,
+        });
+      } else {
+        copiedContent = copyPluginSourceFile(real, inputBoundary, target, {
+          hashCopiedContent: true,
+          copyFile,
+          onSourceDescriptor,
+        });
         const identity = pluginSourceInputIdentity(stat);
         if (
-          !captured &&
           copiedContent &&
           copiedContent.sourceIdentity !== identity &&
           !pluginSourceIdentityChangedOnlyByCtime(identity, copiedContent.sourceIdentity)

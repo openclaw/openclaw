@@ -214,6 +214,8 @@ export function createPluginCache(options: { kind?: PluginCache["kind"] } = {}):
     persistedInstalledIndex: new Map(),
     preparedBundledDiscoveryModes: new Map(),
     dependencyStatus: new WeakMap(),
+    channelSecretContracts: new Map(),
+    channelSecretContractDisposers: new Map(),
     moduleLoaders: new Map(),
     sources: new Map(),
     sourceAliases: new Map(),
@@ -350,9 +352,7 @@ export function resetPluginCache(): void {
   state.current = undefined;
   if (previous) {
     // Public libraries refresh synchronously; managed instances keep their separate retirement.
-    for (const source of previous.sources.values()) {
-      source.disposeModule?.();
-    }
+    const disposeErrors = drainPluginModuleDisposers(previous);
     state.retirements.push({
       cache: previous,
       completion: retirePluginCache(previous).then(
@@ -360,7 +360,37 @@ export function resetPluginCache(): void {
         (reason: unknown) => ({ status: "rejected", reason }),
       ),
     });
+    if (disposeErrors.length > 0) {
+      throw new AggregateError(disposeErrors, "Plugin module cleanup failed");
+    }
   }
+}
+
+function drainPluginModuleDisposers(cache: PluginCache): unknown[] {
+  const errors: unknown[] = [];
+  for (const source of cache.sources.values()) {
+    const dispose = source.disposeModule;
+    source.disposeModule = undefined;
+    try {
+      dispose?.();
+    } catch (error) {
+      errors.push(error);
+    }
+  }
+  return errors;
+}
+
+function drainChannelSecretContractDisposers(cache: PluginCache): unknown[] {
+  const errors: unknown[] = [];
+  for (const [key, dispose] of cache.channelSecretContractDisposers) {
+    cache.channelSecretContractDisposers.delete(key);
+    try {
+      dispose();
+    } catch (error) {
+      errors.push(error);
+    }
+  }
+  return errors;
 }
 
 /** Failed loaders retain their real completion under the cache that admitted them. */
@@ -441,7 +471,13 @@ function beginPluginCacheRetirement(
   const retirement = createDeferredCore<PluginHostCleanupResult>();
   cache.retirement = retirement.promise;
   const cleanup = async () => {
-    beforeRetire?.();
+    const preRetirementErrors: unknown[] = [];
+    try {
+      beforeRetire?.();
+    } catch (error) {
+      preRetirementErrors.push(error);
+    }
+    const contractDisposalErrors = drainChannelSecretContractDisposers(cache);
     const registries = cache.retireRegistryLoads?.();
     const resources = new Set([...cache.setupModules.values(), ...cache.instances]);
     for (const resource of resources) {
@@ -477,6 +513,8 @@ function beginPluginCacheRetirement(
       releasePluginCacheInstance(instance, cache);
     }
     const unexpected = [
+      ...preRetirementErrors,
+      ...contractDisposalErrors,
       ...(registry.status === "rejected" ? [registry.reason] : []),
       ...outcomes.flatMap((result) => (result.status === "rejected" ? [result.reason] : [])),
     ];

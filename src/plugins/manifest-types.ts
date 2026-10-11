@@ -45,6 +45,8 @@ export type PluginDiagnosticCode =
   | "configured-plugin-path-unavailable"
   | "dashboard-declaration-invalid"
   | "explicit-config-plugin-selection"
+  | "plugin-candidate-blocked"
+  | "plugin-discovery-incomplete"
   | "plugin-verification"
   | "sdk-incompatible"
   | "workspace-scope-omitted";

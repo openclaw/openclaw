@@ -58,6 +58,22 @@ it("inspects retained import.meta reads and assignments without evaluating depen
   );
 });
 
+it("visits literal references through a bound require alias", () => {
+  const root = temp.make("plugin-inspection-require-alias-");
+  const entryFile = path.join(root, "index.ts");
+  fs.writeFileSync(entryFile, 'const load = require as NodeJS.Require; load("@fixture/contract");');
+  const visited: string[] = [];
+
+  visitPluginSourceReferences(
+    entryFile,
+    fs.readFileSync(entryFile, "utf8"),
+    createJiti(entryFile, { fsCache: false, moduleCache: false }),
+    (reference, kind) => visited.push(`${kind} ${reference}`),
+  );
+
+  expect(visited).toContain("require @fixture/contract");
+});
+
 it("names the dependency whose source cannot be parsed", () => {
   const root = temp.make("plugin-inspection-parse-failure-");
   const entryFile = path.join(root, "index.mjs");

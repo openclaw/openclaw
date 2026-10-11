@@ -1304,6 +1304,7 @@ src/plugins/current-plugin-metadata-state.ts
 src/plugins/default-enablement.ts
 src/plugins/dev-source-root.ts
 src/plugins/discovery-availability.ts
+src/plugins/discovery-candidate-safety.ts
 src/plugins/discovery-required-plugins.ts
 src/plugins/discovery.ts
 src/plugins/doctor-compatibility-migration.ts
@@ -1401,6 +1402,8 @@ src/plugins/plugin-catalog-source.ts
 src/plugins/plugin-config-trust.ts
 src/plugins/plugin-control-plane-context.ts
 src/plugins/plugin-generation-artifact.ts
+src/plugins/plugin-generation-capture-budget.ts
+src/plugins/plugin-generation-executable-capture.ts
 src/plugins/plugin-generation-file-capture.ts
 src/plugins/plugin-generation-receipt.ts
 src/plugins/plugin-generation-source-lookup.ts

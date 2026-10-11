@@ -5,6 +5,11 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { isPathInside } from "../infra/path-guards.js";
 import { createPluginCaptureResolver } from "./plugin-capture-resolution.js";
 import {
+  createBudgetedPluginNativeAdmission,
+  type PluginGenerationCaptureOptions,
+} from "./plugin-generation-capture-budget.js";
+import { createPluginGenerationExecutableCapture as executableCaptureFor } from "./plugin-generation-executable-capture.js";
+import {
   createPluginGenerationFileCapture,
   createPluginSourceLinkCapture,
 } from "./plugin-generation-file-capture.js";
@@ -17,15 +22,11 @@ import {
   type PluginSourceCustodyFork,
   createPluginGenerationModuleLookup,
 } from "./plugin-generation-source-lookup.js";
-import {
-  createPluginNativeAdmission,
-  type PluginNativeRecovery,
-} from "./plugin-native-admission.js";
+import type { PluginNativeRecovery } from "./plugin-native-admission.js";
 import { createPluginNativeImportPattern } from "./plugin-native-resolution.js";
 import {
   capturePluginPackageMetadata,
   capturePluginDependencies,
-  resolvePluginModulePackageRoot,
   createPluginDependencyLookup,
   createPluginDependencyResolver,
   createPluginNativeDependencyScopes,
@@ -37,7 +38,7 @@ import {
   type PluginPackageCapture,
   type PluginModuleCapture,
   isPluginPackageFile as inPackage,
-  findPluginCapturedPackage,
+  findPluginCapturedPackage as findPackage,
 } from "./plugin-package-metadata-capture.js";
 import { isPluginSourceEntry } from "./plugin-source-file.js";
 import {
@@ -48,11 +49,9 @@ import {
 } from "./plugin-source-references.js";
 import { verifyPluginSourceInputs } from "./plugin-source-verification.js";
 
-/** Capture selective entries and whole dependencies without replacing earlier file bytes. */
 export const capturePluginGenerationArtifact = createPluginGenerationCapture(
   createPluginGenerationArtifact,
 );
-
 function createPluginGenerationArtifact(
   rootDir: string,
   entryFile?: string | readonly string[],
@@ -60,6 +59,7 @@ function createPluginGenerationArtifact(
   moduleSource?: (filename: string) => string,
   nativeRecovery?: PluginNativeRecovery,
   dependencyLookupBoundary?: Parameters<typeof createPluginDependencyResolver>[0],
+  captureOptions?: PluginGenerationCaptureOptions,
   retained?: PluginSourceCustodyFork,
   captureForCustody = false,
 ) {
@@ -69,32 +69,31 @@ function createPluginGenerationArtifact(
   }
   const sourceCapture = retained?.source.sourceCapture ?? createPluginSourceCapture();
   const directory = sourceCapture.directory;
-  const packages = new Map<string, PluginPackageCapture>();
-  const packageForFile = (filename: string) =>
-    findPluginCapturedPackage(packages, filename, directory)?.owner;
-  const capturedPaths = new Map<string, string>();
+  const packages = new Map<string, PluginPackageCapture>(),
+    capturedPaths = new Map<string, string>();
+  const packageForFile = (file: string) => findPackage(packages, file, directory)?.owner;
   const originalSources = new Map<string, string>();
-  const hardlinkedSources = new Set<string>();
-  const nativeAdmission = createPluginNativeAdmission(
+  const { budget, nativeAdmission, hardlinkedSources } = createBudgetedPluginNativeAdmission({
     rootDir,
     directory,
     entryFiles,
-    nativeRecovery,
-    sourceCapture.outputRoot,
-  );
+    recovery: nativeRecovery,
+    outputRoot: sourceCapture.outputRoot,
+    captureOptions,
+  });
   const metadataCapture = createPluginPackageMetadataCapture({
     sourceForCaptured: (filename) => originalSources.get(filename),
     packageForFile,
     isRetainedReference: nativeAdmission.isRetainedReference,
     resolveSource: nativeAdmission.resolvePreparedSource,
   });
-  const sourceAliases: Record<string, string> = {};
-  const sourceFacts = createPluginSourceFacts(
-    rootDir,
-    entryFiles,
-    dependencyLookupBoundary,
-    captureForCustody,
-  );
+  const sourceAliases: Record<string, string> = {},
+    sourceFacts = createPluginSourceFacts(
+      rootDir,
+      entryFiles,
+      dependencyLookupBoundary,
+      captureForCustody,
+    );
   const receipt = createPluginGenerationReceipt(nativeAdmission.prepared);
   const {
     inputs,
@@ -152,8 +151,10 @@ function createPluginGenerationArtifact(
       state: "metadata",
       captureTarget(filename) {
         const source = path.join(boundary, path.relative(destination, filename));
+        const capturedTarget = capturedPaths.get(path.resolve(source));
         if (
-          !capturedPaths.has(source) &&
+          (capturedTarget !== filename ||
+            !fs.statSync(filename, { throwIfNoEntry: false })?.isFile()) &&
           !packageMap.hasMissingTarget(source) &&
           fs.statSync(source, { throwIfNoEntry: false })?.isFile() &&
           (isPathInside(boundary, fs.realpathSync(source)) ||
@@ -202,6 +203,13 @@ function createPluginGenerationArtifact(
       receipt,
       retained,
       sourceFacts: sourceFacts.files,
+      directoryEntryLimit: budget.directoryEntryLimit,
+      onWillReadDirectoryEntry() {
+        budget.reserveEntry();
+      },
+      onWillCaptureFile(source, sizeBytes) {
+        budget.reserveFile(source, sizeBytes);
+      },
       onPackageMetadata(source, target) {
         metadataCapture.record(target, (manifest) => {
           for (const alias of importTargetNames(manifest.imports)) {
@@ -231,7 +239,7 @@ function createPluginGenerationArtifact(
           : destination;
       const link = path.join(lookupDirectory, "node_modules", name);
       packages.get(dependency.root)!.links.add(link);
-      if (!fs.existsSync(link)) {
+      if (!fs.lstatSync(link, { throwIfNoEntry: false })) {
         fs.mkdirSync(path.dirname(link), { recursive: true, mode: 0o700 });
         fs.symlinkSync(path.relative(path.dirname(link), captured), link, "junction");
         additions.add(link);
@@ -281,7 +289,7 @@ function createPluginGenerationArtifact(
             throw new Error("Standalone plugin input contains a directory cycle");
           }
           scannedDirectories.add(real);
-          for (const name of fs.readdirSync(real).toSorted()) {
+          for (const name of budget.readDirectoryNames(real)) {
             if (isPluginSourceEntry(name)) {
               captureFile(path.join(source, name));
             }
@@ -373,7 +381,7 @@ function createPluginGenerationArtifact(
               return input;
             }
             if (!isPathInside(resolveDependency(name, source)?.root ?? boundary, input)) {
-              return conditions && execute ? captureExecutableFile(input) : null;
+              return conditions && execute ? executableCapture.captureExecutableFile(input) : null;
             }
           }
           if (!value.startsWith("#") && !self) {
@@ -420,7 +428,7 @@ function createPluginGenerationArtifact(
           if (!selected?.startsWith("file:")) {
             return undefined;
           }
-          return captureExecutableFile(fileURLToPath(selected));
+          return executableCapture.captureExecutableFile(fileURLToPath(selected));
         }
         if (
           !value ||
@@ -458,7 +466,7 @@ function createPluginGenerationArtifact(
             !preparedInput &&
             !isPathInside(boundary, fs.realpathSync(input))
           ) {
-            return conditions ? captureExecutableFile(input) : null;
+            return conditions ? executableCapture.captureExecutableFile(input) : null;
           }
           captureFile(input);
           if (module && path.isAbsolute(value)) {
@@ -619,16 +627,7 @@ function createPluginGenerationArtifact(
     }
     return destination;
   };
-  const captureExecutableFile = (filename: string): string | undefined =>
-    execute?.(() => {
-      const real = fs.realpathSync(filename);
-      if (!fs.statSync(real).isFile()) {
-        return undefined;
-      }
-      copyPackage(resolvePluginModulePackageRoot(real), real, false, true);
-      return real;
-    });
-
+  const executableCapture = executableCaptureFor({ execute, packages, copyPackage });
   try {
     const sourceRoot = fs.realpathSync(rootDir);
     const entries = entryFiles?.map((file) => fs.realpathSync(file));
@@ -663,6 +662,7 @@ function createPluginGenerationArtifact(
       boundaryRoot: directory,
       capturedPaths,
       hardlinkedSources,
+      revalidate: nativeAdmission.untrustedHardlinkedSources,
       assertModuleAvailable,
       captureNativeRecovery: () => nativeAdmission.captureRecovery(initialReceipt, sourceAliases),
     });
@@ -698,7 +698,7 @@ function createPluginGenerationArtifact(
         metadataCapture,
         assertModuleAvailable,
         captureAdmitted,
-        captureExecutableFile,
+        ...executableCapture,
         executable: Boolean(execute),
         packages,
         directory,

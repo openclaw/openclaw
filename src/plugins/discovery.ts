@@ -30,6 +30,10 @@ import {
   pluginPathFailureDiagnostic,
   shouldSkipIncompatiblePackagePluginApi,
 } from "./discovery-availability.js";
+import {
+  checkPluginPathStatAndPermissions,
+  checkPluginSourceEscapesRoot,
+} from "./discovery-candidate-safety.js";
 import { addMissingRequiredPluginDiagnostics } from "./discovery-required-plugins.js";
 import type { PluginCandidate, PluginDiscoveryResult } from "./discovery.types.js";
 import { shouldRejectHardlinkedPluginFiles } from "./hardlink-policy.js";
@@ -49,14 +53,13 @@ import {
   resolvePackageSetupSource,
 } from "./package-entry-resolution.js";
 import { PUBLIC_SURFACE_SOURCE_EXTENSIONS } from "./package-entrypoints.js";
-import { formatPosixMode, isPathInside } from "./path-safety.js";
+import { isPathInside } from "./path-safety.js";
 import {
   parsePluginCacheJson,
   pluginCacheExistsSync,
   pluginCacheRealpathSync,
   pluginCacheStatSync,
   readPluginCacheDirectory,
-  refreshPluginCacheStat,
   readPluginCacheFile,
 } from "./plugin-cache-files.js";
 import { getPluginCache } from "./plugin-cache.js";
@@ -93,92 +96,6 @@ function currentUid(overrideUid?: number | null): number | null {
     return null;
   }
   return process.getuid();
-}
-
-type CandidateBlockIssue = Pick<PluginDiagnostic, "source" | "message">;
-
-function checkSourceEscapesRoot(params: {
-  source: string;
-  rootDir: string;
-}): CandidateBlockIssue | null {
-  const sourceRealPath = pluginCacheRealpathSync(params.source);
-  const rootRealPath = pluginCacheRealpathSync(params.rootDir);
-  if (!sourceRealPath || !rootRealPath) {
-    return null;
-  }
-  if (isPathInside(rootRealPath, sourceRealPath)) {
-    return null;
-  }
-  return {
-    source: params.source,
-    message: `blocked plugin candidate: source escapes plugin root (${params.source} -> ${sourceRealPath}; root=${rootRealPath})`,
-  };
-}
-
-function checkPathStatAndPermissions(params: {
-  source: string;
-  rootDir: string;
-  origin: PluginOrigin;
-  uid: number | null;
-}): CandidateBlockIssue | null {
-  if (process.platform === "win32") {
-    return null;
-  }
-  const pathsToCheck = [params.rootDir, params.source];
-  const seen = new Set<string>();
-  for (const targetPath of pathsToCheck) {
-    const normalized = path.resolve(targetPath);
-    if (seen.has(normalized)) {
-      continue;
-    }
-    seen.add(normalized);
-    let stat = pluginCacheStatSync(targetPath);
-    if (!stat) {
-      return {
-        source: targetPath,
-        message: `blocked plugin candidate: cannot stat path (${targetPath})`,
-      };
-    }
-    let modeBits = stat.mode & 0o777;
-    if ((modeBits & 0o002) !== 0 && params.origin === "bundled") {
-      // npm/global installs can create package-managed extension dirs without
-      // directory entries in the tarball, which may widen them to 0777.
-      // Tighten bundled dirs in place before applying the normal safety gate.
-      try {
-        fs.chmodSync(targetPath, modeBits & ~0o022);
-        const repairedStat = refreshPluginCacheStat(targetPath);
-        if (!repairedStat) {
-          return {
-            source: targetPath,
-            message: `blocked plugin candidate: cannot stat path (${targetPath})`,
-          };
-        }
-        stat = repairedStat;
-        modeBits = repairedStat.mode & 0o777;
-      } catch {
-        // Fall through to the normal block path below when repair is not possible.
-      }
-    }
-    if ((modeBits & 0o002) !== 0) {
-      return {
-        source: targetPath,
-        message: `blocked plugin candidate: world-writable path (${targetPath}, mode=${formatPosixMode(modeBits)})`,
-      };
-    }
-    if (
-      params.origin !== "bundled" &&
-      params.uid !== null &&
-      typeof stat.uid === "number" &&
-      stat.uid !== params.uid &&
-      stat.uid !== 0
-    ) {
-      return {
-        source: targetPath,
-        message: `blocked plugin candidate: suspicious ownership (${targetPath}, uid=${stat.uid}, expected uid=${params.uid} or root)`,
-      };
-    }
-  }
-  return null;
 }
 
 function isExtensionFile(filePath: string): boolean {
@@ -559,8 +476,8 @@ function createPluginScanner(env: NodeJS.ProcessEnv, ownershipUid?: number | nul
     }
     const resolvedRoot = pluginCacheRealpathSync(params.rootDir) ?? path.resolve(params.rootDir);
     const issue =
-      checkSourceEscapesRoot({ source: resolved, rootDir: resolvedRoot }) ??
-      checkPathStatAndPermissions({
+      checkPluginSourceEscapesRoot({ source: resolved, rootDir: resolvedRoot }) ??
+      checkPluginPathStatAndPermissions({
         source: resolved,
         rootDir: resolvedRoot,
         origin: params.origin,
@@ -785,6 +702,7 @@ function createPluginScanner(env: NodeJS.ProcessEnv, ownershipUid?: number | nul
           ? pluginPathFailureDiagnostic(params.dir, params.origin, err)
           : {
               level: "warn",
+              code: "plugin-discovery-incomplete",
               message: `failed to read extensions dir: ${params.dir} (${String(err)})`,
               source: params.dir,
             },

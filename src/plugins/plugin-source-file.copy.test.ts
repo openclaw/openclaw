@@ -5,7 +5,11 @@ import * as fsSafe from "@openclaw/fs-safe/advanced";
 import { FsSafeError } from "@openclaw/fs-safe/errors";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { copyPluginSourceFile, pluginSourceStatIdentity } from "./plugin-source-file.js";
+import {
+  copyPluginSourceFile,
+  linkPluginSourceFile,
+  pluginSourceStatIdentity,
+} from "./plugin-source-file.js";
 
 vi.mock("@openclaw/fs-safe/advanced", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@openclaw/fs-safe/advanced")>()),
@@ -29,6 +33,22 @@ function fixture(bytes = Buffer.from("captured"), basename = "input.js") {
     copy: () => copyPluginSourceFile(source, root, target, { hashCopiedContent: true }),
   };
 }
+
+it.skipIf(process.platform === "win32")(
+  "links the same descriptor identity that passes source policy checks",
+  () => {
+    const subject = fixture();
+    const replacement = path.join(subject.root, "replacement.js");
+    fs.writeFileSync(replacement, "replacement");
+
+    expect(() =>
+      linkPluginSourceFile(subject.source, subject.root, subject.target, () => {
+        fs.renameSync(subject.source, `${subject.source}.original`);
+        fs.renameSync(replacement, subject.source);
+      }),
+    ).toThrow("Native plugin artifact changed during admission");
+  },
+);
 
 it("copies small files through owned descriptors with the same bytes, identity and mode", () => {
   const subject = fixture();

@@ -30,6 +30,8 @@ export const SourceAdmissionReceiptSchema = z.object({
           sourceIdentity: z.string().min(1),
           capturedIdentity: z.string().min(1),
           boundaryChecked: z.boolean(),
+          /** Exact filesystem names created or retained by admission for this inode. */
+          admissionHardlinks: z.array(z.string().min(1)).optional(),
           contentHash: z
             .string()
             .regex(/^[a-f0-9]{64}$/)

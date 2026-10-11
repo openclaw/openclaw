@@ -1,5 +1,7 @@
 /** Builds the static and plugin-derived registry of secret migration targets. */
+import fs from "node:fs";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { loadBundledPluginManifestRegistry } from "../plugins/manifest-registry-build.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { formatConcreteConfigPath } from "../shared/dot-path.js";
@@ -94,17 +96,17 @@ function listPluginConfigSecretTargetRegistryEntries(
 
 function listChannelSecretTargetRegistryEntries(
   channelPlugins: readonly PluginManifestRecord[],
-  throwOnLoadError = false,
+  options?: { throwOnLoadError?: boolean; bindToRecord?: boolean; ephemeral?: boolean },
 ): SecretTargetRegistryEntry[] {
   const entries: SecretTargetRegistryEntry[] = [];
 
   for (const record of channelPlugins) {
     try {
-      const contractApi = loadChannelSecretContractApiForRecord(record, { throwOnLoadError });
+      const contractApi = loadChannelSecretContractApiForRecord(record, options);
       entries.push(...(contractApi?.secretTargetRegistryEntries ?? []));
     } catch (error) {
       // Runtime can isolate unavailable owners; generated docs must never silently lose targets.
-      if (throwOnLoadError) {
+      if (options?.throwOnLoadError) {
         throw error;
       }
     }
@@ -201,7 +203,7 @@ function loadSecretTargetRegistryFromPluginMetadata(params: {
 /** Builds secret targets from one exact manifest-registry plugin set. */
 export function buildSecretTargetRegistryFromPlugins(
   plugins: readonly PluginManifestRecord[],
-  options?: { throwOnLoadError?: boolean },
+  options?: { throwOnLoadError?: boolean; bindToRecord?: boolean; ephemeral?: boolean },
 ): SecretTargetRegistryEntry[] {
   const channelPlugins = plugins.filter(
     (record) =>
@@ -220,7 +222,7 @@ export function buildSecretTargetRegistryFromPlugins(
     ...CORE_SECRET_TARGET_REGISTRY,
     ...listPluginWebProviderSecretTargetRegistryEntries(plugins),
     ...listPluginConfigSecretTargetRegistryEntries(plugins),
-    ...listChannelSecretTargetRegistryEntries(channelPlugins, options?.throwOnLoadError),
+    ...listChannelSecretTargetRegistryEntries(channelPlugins, options),
     ...listOfficialExternalChannelSecretTargetRegistryEntries(),
   ];
   const seen = new Set<string>();
@@ -244,16 +246,39 @@ export function getSecretTargetRegistry(params?: {
   config?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   sourceTree?: boolean;
+  sourceTreeRoot?: string;
 }): SecretTargetRegistryEntry[] {
   if (params?.sourceTree) {
-    // Docs generation needs the source plugin tree, never a process-cached or persisted snapshot.
-    return loadSecretTargetRegistryFromPluginMetadata({
-      env: {
-        ...process.env,
-        OPENCLAW_BUNDLED_PLUGINS_DIR: process.env.OPENCLAW_BUNDLED_PLUGINS_DIR ?? "extensions",
-      },
-      preferPersisted: false,
+    let bundledRoot: string | undefined;
+    if (params.sourceTreeRoot) {
+      try {
+        bundledRoot = fs.realpathSync(params.sourceTreeRoot);
+        if (!fs.statSync(bundledRoot).isDirectory()) {
+          throw new Error("path is not a directory");
+        }
+      } catch (error) {
+        throw new Error(`Unable to load bundled plugin manifests: invalid source tree root`, {
+          cause: error,
+        });
+      }
+    }
+    const manifestRegistry = loadBundledPluginManifestRegistry({
+      env: params.env ?? process.env,
+      ...(bundledRoot ? { bundledRoot } : {}),
+    });
+    const manifestError = manifestRegistry.diagnostics?.find(
+      (diagnostic) =>
+        diagnostic.level === "error" ||
+        diagnostic.code === "plugin-candidate-blocked" ||
+        diagnostic.code === "plugin-discovery-incomplete",
+    );
+    if (manifestError) {
+      throw new Error(`Unable to load bundled plugin manifests: ${manifestError.message}`);
+    }
+    return buildSecretTargetRegistryFromPlugins(manifestRegistry.plugins, {
       throwOnLoadError: true,
+      bindToRecord: true,
+      ephemeral: true,
     });
   }
   if (params?.config) {

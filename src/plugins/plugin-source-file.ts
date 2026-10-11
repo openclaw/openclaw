@@ -55,6 +55,14 @@ function withPluginSourceFile<T>(source: string, boundary: string, read: (fd: nu
   }
 }
 
+export function inspectPluginSourceDescriptor(
+  source: string,
+  boundary: string,
+  inspect: (stat: fs.BigIntStats) => void,
+): void {
+  withPluginSourceFile(source, boundary, (fd) => inspect(fs.fstatSync(fd, { bigint: true })));
+}
+
 export function pluginSourceFileIdentity(source: string, boundary: string): string {
   return withPluginSourceFile(source, boundary, (fd) =>
     pluginSourceStatIdentity(fs.fstatSync(fd, { bigint: true })),
@@ -153,10 +161,12 @@ export function copyPluginSourceFile(
     hashCopiedContent?: boolean;
     preserveSourceMode?: boolean;
     copyFile?: typeof copyRootFileSync;
+    onSourceDescriptor?: (stat: fs.BigIntStats) => void;
   } = {},
 ) {
   return withPluginSourceFile(source, boundary, (fd) => {
     const admitted = fs.fstatSync(fd, { bigint: true });
+    options.onSourceDescriptor?.(admitted);
     try {
       const mode = options.preserveSourceMode
         ? Number(admitted.mode & 0o777n)
@@ -220,9 +230,15 @@ export function copyPluginSourceFile(
   });
 }
 
-export function linkPluginSourceFile(source: string, boundary: string, target: string): void {
+export function linkPluginSourceFile(
+  source: string,
+  boundary: string,
+  target: string,
+  onSourceDescriptor?: (stat: fs.BigIntStats) => void,
+): void {
   withPluginSourceFile(source, boundary, (fd) => {
     const admitted = fs.fstatSync(fd, { bigint: true });
+    onSourceDescriptor?.(admitted);
     fs.linkSync(source, target);
     const linked = fs.statSync(target, { bigint: true });
     if (linked.dev !== admitted.dev || linked.ino !== admitted.ino) {

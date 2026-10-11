@@ -1067,6 +1067,31 @@ describe("release fast lane", () => {
     );
   });
 
+  it.each([
+    "src/secrets/credential-matrix.ts",
+    "scripts/generate-bundled-channel-config-metadata.ts",
+    "scripts/load-channel-config-surface.ts",
+    "scripts/lib/bundled-plugin-source-utils.mts",
+    "scripts/lib/format-generated-module.mts",
+    "scripts/lib/generated-output-utils.mts",
+    "scripts/lib/output-tail.mts",
+    "scripts/runtime-postbuild-shared.mjs",
+    "src/channels/plugins/config-schema.ts",
+    "src/channels/bundled-channel-ids.generated.ts",
+    "src/shared/dot-path.ts",
+    "packages/normalization-core/src/string-normalization.ts",
+    "src/config/bundled-channel-config-metadata.generated.ts",
+  ])("runs docs checks when SecretRef generator input %s changes", (changedPath) => {
+    const result = runCiManifestFixture({
+      ...fixture,
+      changedPaths: [changedPath],
+      scopeEnv: { ...scopeEnv, OPENCLAW_CI_DOCS_CHANGED: "false" },
+    });
+
+    expect(result.status, result.output).toBe(0);
+    expect(result.outputs.run_check_docs).toBe("true");
+  });
+
   it("skips fast-core routing when a tooling owner promotes the PR to full Node", () => {
     const result = runCiManifestFixture({
       ...fixture,

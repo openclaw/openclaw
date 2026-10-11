@@ -23,6 +23,10 @@ export type PluginSourceCacheRecord = {
 
 type PluginPublicSurfaceBoundary = { boundaryLabel: string; rejectHardlinks: boolean };
 
+type ChannelSecretContractCacheEntry =
+  | { status: "loaded"; exports: object }
+  | { status: "unavailable"; error?: unknown };
+
 export type PluginRootArtifactCache = {
   publicSurfaceBoundary?: PluginPublicSurfaceBoundary;
   artifactLoadsInProgress: Set<string>;
@@ -41,6 +45,8 @@ export type PluginRootArtifactCache = {
 };
 
 export type PluginCacheArtifacts = {
+  channelSecretContracts: Map<string, ChannelSecretContractCacheEntry>;
+  channelSecretContractDisposers: Map<string, () => void>;
   moduleLoaders: Map<string, PluginModuleLoader>;
   sources: Map<string, PluginSourceCacheRecord>;
   sourceAliases: Map<string, string>;

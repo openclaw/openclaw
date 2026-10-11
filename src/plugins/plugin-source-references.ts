@@ -7,6 +7,7 @@ import type {
   ExportNamedDeclaration,
   ImportDeclaration,
   Node,
+  OptionalCallExpression,
   Program as BabelProgram,
 } from "@babel/types";
 import { parse, type AnyNode, type Program } from "acorn";
@@ -149,6 +150,43 @@ function unwrapReferenceArgument(input: NodePath | undefined) {
     argument = argument.get("expression");
   }
   return argument;
+}
+
+function isBoundRequireReference(reference: NodePath<Node | null>): boolean {
+  const seen = new Set<NodePath<Node | null>>();
+  let current = reference;
+  let followedBinding = false;
+  while (!seen.has(current)) {
+    seen.add(current);
+    if (!current.node) {
+      return false;
+    }
+    // SAFETY: the null path was rejected above before unwrapping an expression node.
+    const unwrapped = unwrapReferenceArgument(current as NodePath);
+    if (unwrapped) {
+      current = unwrapped as NodePath<Node | null>; // SAFETY: expression wrappers retain one node.
+    }
+    if (current.isMemberExpression() || current.isOptionalMemberExpression()) {
+      if (current.node.computed || !current.get("property").isIdentifier({ name: "resolve" })) {
+        return false;
+      }
+      current = current.get("object") as NodePath<Node | null>; // SAFETY: member object is singular.
+      continue;
+    }
+    if (!current.isIdentifier() || !current.node.name) {
+      return false;
+    }
+    const binding = current.scope.getBinding(current.node.name);
+    if (current.node.name === "require" && !binding) {
+      return followedBinding;
+    }
+    if (!binding?.constant || !binding.path.isVariableDeclarator()) {
+      return false;
+    }
+    followedBinding = true;
+    current = binding.path.get("init") as NodePath<Node | null>; // SAFETY: initializer is singular.
+  }
+  return false;
 }
 
 /** Inspect authored TypeScript syntax before Jiti rewrites module operations. */
@@ -435,6 +473,21 @@ export function visitPluginSourceReferences(
           plugins: [
             {
               pre(file: { path: NodePath<BabelProgram> }) {
+                const visitBoundRequire = (
+                  call: NodePath<CallExpression | OptionalCallExpression>,
+                ) => {
+                  const args = call.get("arguments");
+                  const argument = unwrapReferenceArgument(args.length === 1 ? args[0] : undefined);
+                  const specifier = staticString(argument?.node);
+                  const callee = call.get("callee") as NodePath<Node | null>; // SAFETY: callee is singular.
+                  if (
+                    specifier !== undefined &&
+                    (isBoundRequireReference(callee) ||
+                      (call.isCallExpression() && isCurrentFileRequire(call)))
+                  ) {
+                    visitReference(specifier, "require");
+                  }
+                };
                 file.path.traverse({
                   // Native type erasure retains empty requests from specifier-only type syntax.
                   "ImportDeclaration|ExportNamedDeclaration"(
@@ -488,14 +541,9 @@ export function visitPluginSourceReferences(
                           .map((arg) => staticString(unwrapReferenceArgument(arg)?.node)),
                       );
                     }
-                    const argument = unwrapReferenceArgument(
-                      args.length === 1 ? args[0] : undefined,
-                    );
-                    const specifier = staticString(argument?.node);
-                    if (specifier !== undefined && isCurrentFileRequire(call)) {
-                      visitReference(specifier, "require");
-                    }
+                    visitBoundRequire(call);
                   },
+                  OptionalCallExpression: visitBoundRequire,
                 });
               },
               // Jiti runs these after TypeScript erasure and before lowering module declarations.

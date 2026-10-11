@@ -4,6 +4,7 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import type { JitiOptions, JitiResolveOptions } from "jiti";
 import { isPathInside } from "../infra/path-guards.js";
+import { shouldRejectHardlinkedPluginFiles } from "./hardlink-policy.js";
 import { createJiti } from "./jiti-factory.js";
 import {
   resolvePluginLoaderTryNative,
@@ -82,6 +83,10 @@ export function bindPluginInstanceModuleLoader(params: PluginInstanceModuleLoade
     }
     return { source: filename };
   };
+  const rejectHardlinks = shouldRejectHardlinkedPluginFiles({
+    origin: params.origin,
+    rootDir: params.rootDir,
+  });
   const artifact = capturePluginGenerationArtifact(
     params.rootDir,
     params.standalone ? params.source : undefined,
@@ -91,6 +96,8 @@ export function bindPluginInstanceModuleLoader(params: PluginInstanceModuleLoade
       return entry.generated ? filename : entry.source;
     },
     params.nativeRecovery,
+    undefined,
+    rejectHardlinks ? { copyNativeFiles: true } : undefined,
   );
   if (
     params.expectedSourceDigest !== undefined &&

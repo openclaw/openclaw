@@ -171,6 +171,28 @@ const changedPaths = (() => {
 })();
 const docsOnly = parseCiEnvFlag(process.env.OPENCLAW_CI_DOCS_ONLY);
 const docsChanged = parseCiEnvFlag(process.env.OPENCLAW_CI_DOCS_CHANGED);
+const secretRefDocsInputsChanged =
+  changedPaths?.some(
+    (changedPath) =>
+      changedPath === "package.json" ||
+      changedPath === "scripts/lib/bundled-plugin-source-utils.mts" ||
+      changedPath === "scripts/lib/format-generated-module.mts" ||
+      changedPath === "scripts/lib/generated-output-utils.mts" ||
+      changedPath === "scripts/lib/output-tail.mts" ||
+      changedPath === "scripts/load-channel-config-surface.ts" ||
+      changedPath === "scripts/runtime-postbuild-shared.mjs" ||
+      changedPath === "scripts/generate-bundled-channel-config-metadata.ts" ||
+      changedPath === "scripts/generate-secretref-docs.ts" ||
+      changedPath === "scripts/lib/secretref-docs-file.ts" ||
+      changedPath === "src/config/bundled-channel-config-metadata.generated.ts" ||
+      changedPath === "src/channels/plugins/config-schema.ts" ||
+      changedPath === "src/channels/bundled-channel-ids.generated.ts" ||
+      changedPath === "src/shared/dot-path.ts" ||
+      changedPath.startsWith("packages/normalization-core/") ||
+      changedPath.startsWith("src/secrets/") ||
+      changedPath.startsWith("src/plugins/") ||
+      changedPath.startsWith("extensions/"),
+  ) ?? false;
 const releaseGate = parseCiEnvFlag(process.env.OPENCLAW_CI_RELEASE_GATE) && !ciQualification;
 const compactPullRequest = isCanonicalRepository && eventName === "pull_request";
 const runtimePullRequest = isCanonicalRepository && (compactPullRequest || releaseGate);
@@ -1503,7 +1525,7 @@ const manifest = {
   run_check_additional: runNodeFull && !releaseFastLane && additionalChecks.length > 0,
   shared_sdk_declarations: sharedSdkDeclarations,
   check_additional_matrix: createMatrix(runNodeFull && !releaseFastLane ? additionalChecks : []),
-  run_check_docs: docsChanged && eventName !== "push",
+  run_check_docs: (docsChanged || secretRefDocsInputsChanged) && eventName !== "push",
   run_format_check: runFormatCheck,
   run_control_ui_i18n: runControlUiI18n,
   run_ui_tests: runUiTests,
