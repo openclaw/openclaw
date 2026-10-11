@@ -303,8 +303,8 @@ function coerceProviderRenames(value: unknown): PluginDoctorProviderRename[] {
           baseUrl: z
             .string()
             .url()
-            .refine((value) => {
-              const url = new URL(value);
+            .refine((baseUrl) => {
+              const url = new URL(baseUrl);
               return ["http:", "https:"].includes(url.protocol) && !url.username && !url.password;
             }),
         })

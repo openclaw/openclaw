@@ -1,10 +1,6 @@
 import fs from "node:fs";
 import nodePath from "node:path";
 import { note as showDoctorNote } from "../../packages/terminal-core/src/note.js";
-import { maybeRepairCodexSessionRoutes } from "../commands/doctor/shared/codex-route-session-repair.js";
-import { bindProviderRenameAuthProfiles } from "../commands/doctor/shared/provider-rename-auth.js";
-import { maybeRepairProviderRenameCronJobs } from "../commands/doctor/shared/provider-rename-state.js";
-import { applyProviderRenames } from "../commands/doctor/shared/provider-rename.js";
 import { shouldSkipLegacyUpdateDoctorConfigWrite } from "../commands/doctor/shared/update-phase.js";
 import { ConfigWritePostCommitError } from "../config/io.write-errors.js";
 import { resolveIsConfigReadOnly, resolveIsNixMode } from "../config/paths.js";
@@ -91,6 +87,14 @@ export async function runWriteConfigHealth(
     return false;
   }
   if (providerRenamePending) {
+    // Static imports initialize session/runtime owners during config-only reads with no rename.
+    const { maybeRepairCodexSessionRoutes } =
+      await import("../commands/doctor/shared/codex-route-session-repair.js");
+    const { bindProviderRenameAuthProfiles } =
+      await import("../commands/doctor/shared/provider-rename-auth.js");
+    const { maybeRepairProviderRenameCronJobs } =
+      await import("../commands/doctor/shared/provider-rename-state.js");
+    const { applyProviderRenames } = await import("../commands/doctor/shared/provider-rename.js");
     const renamedCron = await maybeRepairProviderRenameCronJobs({
       cfg: ctx.cfg,
       renames: providerRenames,
@@ -117,7 +121,10 @@ export async function runWriteConfigHealth(
     );
     ctx.cfg = migration.config;
     if (migration.changes.length > 0) {
-      (ctx.configResult.pendingChangePanels ??= []).push(migration.changes.join("\n"));
+      ctx.configResult.pendingChangePanels = [
+        ...(ctx.configResult.pendingChangePanels ?? []),
+        migration.changes.join("\n"),
+      ];
     }
   }
   if (shouldWriteConfig) {

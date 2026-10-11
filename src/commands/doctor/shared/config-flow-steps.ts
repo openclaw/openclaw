@@ -241,8 +241,8 @@ export function restoreDoctorConfigEnvRefs(
       rootAuthoredConfig,
       sourceConfigBeforeMigrations: source.resolved,
     });
-  const canonicalAuthored = projectRoster(source.authored);
-  const canonicalResolved = projectRoster(source.resolved);
+  const canonicalAuthored = coerceConfig(projectRoster(source.authored));
+  const canonicalResolved = coerceConfig(projectRoster(source.resolved));
   const unchanged = restoreEnvVarRefsFromResolved(
     candidate,
     canonicalAuthored,

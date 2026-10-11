@@ -68,8 +68,8 @@ export function bindProviderRenameAuthProfiles(
   // Inherited config cannot pin a shared ID shadowed by an agent's other provider.
   const sharedProfiles = { ...shared?.profiles };
   for (const profiles of profilesByAgent.values()) {
-    for (const id of Object.keys(sharedProfiles)) {
-      if (profiles[id]?.provider !== sharedProfiles[id].provider) {
+    for (const [id, profile] of Object.entries(sharedProfiles)) {
+      if (profiles[id]?.provider !== profile.provider) {
         delete sharedProfiles[id];
       }
     }
@@ -78,9 +78,9 @@ export function bindProviderRenameAuthProfiles(
     profiles: AuthProfileStore["profiles"],
     provider: string,
   ): ProviderRenameAuthProfiles => {
-    const targetAuthProfileIds = Object.keys(profiles).filter(
-      (id) => profiles[id].provider === provider,
-    );
+    const targetAuthProfileIds = Object.entries(profiles)
+      .filter(([, profile]) => profile.provider === provider)
+      .map(([id]) => id);
     const defaultId = `${provider}:default`;
     const targetAuthProfileId = targetAuthProfileIds.includes(defaultId)
       ? defaultId

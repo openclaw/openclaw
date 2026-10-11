@@ -28,7 +28,7 @@ export async function maybeRepairProviderRenameCronJobs(params: {
     const inventory = await inspectCronJobsForDoctor({ env });
     const jobs = inventory.jobs.map((job) => ({
       job,
-      agentId: resolveStoredCronJobOwner(job.definition),
+      agentId: job.definition ? resolveStoredCronJobOwner(job.definition) : undefined,
     }));
     const renames = bindProviderRenameAuthProfiles(params.cfg, params.renames, env, [
       ...new Set(jobs.flatMap(({ agentId }) => (agentId ? [agentId] : []))),

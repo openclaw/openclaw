@@ -67,6 +67,7 @@ function mergeProviders(
   target: ModelProviderConfig,
   path: string,
 ): ModelProviderConfig {
+  // SAFETY: Both inputs are provider configs; the merge retains target fields and fills missing source fields.
   const merged = mergeModelRefMapEntries(target, source, path).value as ModelProviderConfig;
   const models = new Map<string, ModelProviderConfig["models"][number]>();
   for (const model of [...(target.models ?? []), ...(source.models ?? [])]) {
@@ -75,6 +76,7 @@ function mergeProviders(
       model.id,
       existing
         ? (mergeModelRefMapEntries(existing, model, `${path}.models.${model.id}`)
+            // SAFETY: Both catalog entries have the same model ID and retain the target's required fields.
             .value as ModelProviderConfig["models"][number])
         : model,
     );
@@ -111,6 +113,7 @@ export function applyProviderRenames(
     ? { ...config, agents: { ...config.agents, entries: undefined } }
     : config;
   let rewritten = rewriteModelRefs(globalConfig, "config", changes, normalize(globalRenames))
+    // SAFETY: The walker preserves the config shape, changing only model-reference strings and map keys.
     .value as OpenClawConfig;
   if (entries) {
     rewritten = {
@@ -125,6 +128,7 @@ export function applyProviderRenames(
               `config.agents.entries.${agentId}`,
               changes,
               normalize(renames, agentId),
+              // SAFETY: The walker preserves this typed agent entry's fields while rewriting model references.
             ).value as typeof entry,
           ]),
         ),
@@ -185,6 +189,7 @@ function rewriteRenamedSessionModelPair<ProviderKey extends string, ModelKey ext
   if (scopedModel === undefined && !pair.changed) {
     return false;
   }
+  // SAFETY: The walker preserves the provider/model pair and only replaces its string values.
   const rewritten = pair.value as { provider?: string; model: string };
   if (pair.changed) {
     entry[providerKey] = rewritten.provider;
