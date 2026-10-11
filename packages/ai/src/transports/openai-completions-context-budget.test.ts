@@ -91,7 +91,7 @@ describe("compatible context-capped responses", () => {
         chunks,
         ...(format === "JSON"
           ? {
-              options: { streaming: false },
+              model: { params: { streaming: false } },
               response: () =>
                 Response.json({
                   id: "chatcmpl-json",
