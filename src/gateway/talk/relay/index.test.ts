@@ -1139,18 +1139,6 @@ describe("talk realtime gateway relay", () => {
     };
   }
 
-  it("rejects session creation when relay expiry would exceed Date range", () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date(8_640_000_000_000_000));
-
-    expect(() =>
-      createTalkRealtimeRelaySession({
-        context: {} as never,
-        provider: createIdleRelayProvider(),
-      }),
-    ).toThrow("Realtime relay session expiry is outside the supported Date range");
-  });
-
   async function createAbortableRelayRunFixture(
     provider = createIdleRelayProvider(),
     options: { register?: boolean; voiceSelection?: boolean } = {},

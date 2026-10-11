@@ -26,6 +26,11 @@ const NATIVE_HOOK_RELAY_FORBIDDEN_STATIC_MARKERS = [
 ];
 // fs-safe must retain its package scope for optional native-platform loading.
 const NATIVE_HOOK_RELAY_ALLOWED_EXTERNAL_IMPORTS = ["kysely", "@openclaw/fs-safe"];
+// These import-safe subpaths retain proc-safe's package-scoped, lazy native loader.
+const NATIVE_HOOK_RELAY_ALLOWED_EXTERNAL_SUBPATHS = new Set([
+  "@openclaw/proc-safe/errors",
+  "@openclaw/proc-safe/identity",
+]);
 const WORKER_DEPLOY_ENTRYPOINTS = WORKER_BUNDLE_ARTIFACT_PATHS.map(
   (entry) => `dist/worker/${entry}`,
 );
@@ -277,7 +282,7 @@ export function collectNativeHookRelayBundleErrors(params: CliBootstrapCheckPara
     (filePath, specifier) =>
       NATIVE_HOOK_RELAY_ALLOWED_EXTERNAL_IMPORTS.some(
         (dependency) => specifier === dependency || specifier.startsWith(`${dependency}/`),
-      )
+      ) || NATIVE_HOOK_RELAY_ALLOWED_EXTERNAL_SUBPATHS.has(specifier)
         ? ""
         : `Native hook relay static graph imports unexpected package "${specifier}" from ${
             path.relative(rootDir, filePath) || filePath

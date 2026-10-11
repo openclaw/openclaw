@@ -1,6 +1,3 @@
-export {
-  FilePreviewModal,
-  type FilePreviewModalFile,
-  type FilePreviewModalProps,
-  type OpenClawFilePreviewModal,
-} from "./file-preview-modal.tsx";
+import "./file-preview-modal.tsx";
+
+export type { FilePreviewModalFile } from "./file-preview-modal.tsx";

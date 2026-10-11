@@ -4,6 +4,7 @@ import { resolveAvatar } from "../lib/identity-avatar.ts";
 import type { SessionCreatedActor, SessionOwnerOption } from "../lib/session-owner.ts";
 import { renderAgentIdentityAvatar } from "./identity-avatar-view.ts";
 import "./viewer-facepile.ts";
+import "./solid/session-owner-chip.tsx";
 
 export { sessionOwnerInitials, sessionSelfOwner } from "../lib/session-owner.ts";
 export type { SessionCreatedActor, SessionOwnerOption } from "../lib/session-owner.ts";
@@ -58,5 +59,3 @@ export function renderSessionOwnerAvatar(
     aria-hidden="true"
   ></openclaw-viewer-avatar>`;
 }
-
-export { SessionOwnerChip } from "./solid/session-owner-chip.tsx";

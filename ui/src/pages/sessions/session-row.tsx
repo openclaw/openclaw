@@ -2,7 +2,6 @@ import {
   normalizeFastMode,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import type { JSX as SolidJSX } from "@solidjs/web";
 import { createMemo, For, Show } from "solid-js";
 import { formatAgentRuntimeLabel } from "../../../../src/shared/agent-runtime-display.js";
 import { formatFastModeValue } from "../../../../src/shared/fast-mode.js";
@@ -31,6 +30,7 @@ import {
 } from "../../lib/sessions/route-navigation.ts";
 import { formatSessionArchiveReason } from "../../lib/sessions/session-archive-reason.ts";
 import { parseAgentSessionKey, parseSessionKeyParts } from "../../lib/sessions/session-key.ts";
+import type { JSX as SolidJSX } from "../../types/solid-elements.js";
 import { CategoryCell } from "./category-cell.tsx";
 import { SessionStatusBadge } from "./session-status.tsx";
 import { categoryDropHandlers } from "./sessions-filters.tsx";
@@ -39,18 +39,6 @@ import "../../components/agent-row-chip.ts";
 import "../../components/tooltip.ts";
 import "../../components/web-awesome.ts";
 import "../../styles/capacity-meter.css";
-
-declare module "@solidjs/web" {
-  namespace JSX {
-    interface IntrinsicElements {
-      "openclaw-agent-row-chip": HTMLAttributes<
-        HTMLElementTagNameMap["openclaw-agent-row-chip"]
-      > & {
-        "prop:agentId": HTMLElementTagNameMap["openclaw-agent-row-chip"]["agentId"];
-      };
-    }
-  }
-}
 
 const VERBOSE_LEVEL_VALUES = ["", "off", "on", "full"] as const;
 const FAST_LEVEL_VALUES = ["", "auto", "on", "off"] as const;

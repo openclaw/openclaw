@@ -1,8 +1,8 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { withMockedPlatform } from "../test-utils/vitest-spies.js";
 import { stageManagedHandoffRuntime } from "./update-managed-service-handoff-runtime.js";
 
@@ -17,15 +17,21 @@ vi.mock("./runtime-worker-url.js", () => ({
 
 let root: string;
 let destination: string;
-const version = "3.2.1";
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const version = "0.1.0";
 const nativeArch = process.arch;
+const platformName = `@openclaw/proc-safe-freebsd-${nativeArch}`;
 const supportsPosixFiles = process.platform !== "win32";
 const runtimeBytes = Buffer.from("export const fixture = true;\n");
 const packageFiles = {
-  "package.json": JSON.stringify({ name: "koffi", version }),
-  "indirect.cjs": "public loader fixture",
-  "src/koffi/indirect.cjs": "native loader fixture",
-  "LICENSE.txt": "license fixture",
+  "package.json": JSON.stringify({
+    name: "@openclaw/proc-safe",
+    version,
+    optionalDependencies: { [platformName]: version },
+  }),
+  LICENSE: "license fixture",
+  "dist/identity.js": "public identity fixture",
+  "dist/native.js": "native loader fixture",
 };
 
 function write(file: string, bytes: string | Buffer) {
@@ -33,64 +39,44 @@ function write(file: string, bytes: string | Buffer) {
   fs.writeFileSync(file, bytes);
 }
 
-function installedKoffi(selected: "prebuilt" | "canonical", both = false) {
-  const sourceRoot = path.join(root, "install", "node_modules", "koffi");
-  const optionalRoot = path.join(
-    root,
-    "install",
-    "node_modules",
-    "@koromix",
-    `koffi-freebsd-${nativeArch}`,
-  );
-  const canonicalNative = path.join(
-    sourceRoot,
-    "build",
-    "koffi",
-    `freebsd_${nativeArch}`,
-    "koffi.node",
-  );
-  const optionalNative = path.join(optionalRoot, `freebsd_${nativeArch}`, "koffi.node");
-  const selectedNative = selected === "prebuilt" ? optionalNative : canonicalNative;
-  const sourceEntry = path.join(sourceRoot, "indirect.cjs");
+function installedProcSafe() {
+  const sourceRoot = path.join(root, "install", "node_modules", "@openclaw", "proc-safe");
+  const nativeRoot = path.join(root, "install", "node_modules", platformName);
+  const selectedNative = path.join(nativeRoot, "proc-safe-native.node");
+  const sourceEntry = path.join(sourceRoot, "dist", "identity.js");
   for (const [relative, bytes] of Object.entries(packageFiles)) {
     write(path.join(sourceRoot, relative), bytes);
   }
-  const selectedBytes = Buffer.from([0x7f, 0x45, 0x4c, 0x46, selected === "prebuilt" ? 1 : 2]);
+  const selectedBytes = Buffer.from([0x7f, 0x45, 0x4c, 0x46]);
   write(selectedNative, selectedBytes);
-  if (both) {
-    write(selected === "prebuilt" ? canonicalNative : optionalNative, "unselected addon");
-  }
-  // Ports keeps optional metadata after removing the prebuilt addon.
-  write(path.join(optionalRoot, "index.js"), "optional entry fixture");
-  write(path.join(optionalRoot, "package.json"), JSON.stringify({ version }));
+  write(path.join(nativeRoot, "package.json"), JSON.stringify({ name: platformName, version }));
 
-  const sourceNative = {};
-  const privateNative = {};
-  const sourceKoffi = { version, default: sourceNative };
-  const privateKoffi = { version, default: privateNative };
-  const privateRoot = path.join(destination, "runtime", "node_modules", "koffi");
-  const privateEntry = path.join(privateRoot, "indirect.cjs");
-  const privateNativePath = path.join(
-    privateRoot,
-    "build",
-    "koffi",
-    `freebsd_${nativeArch}`,
-    "koffi.node",
-  );
+  const sourceIdentity = {
+    readProcessIdentity: vi.fn(() => ({ startTimeSinceBootMicros: 5_200_002 })),
+  };
+  const privateIdentity = {
+    readProcessIdentity: vi.fn(() => ({ startTimeSinceBootMicros: 5_200_002 })),
+  };
+  const privateModules = path.join(destination, "runtime", "node_modules");
+  const privateEntry = path.join(privateModules, "@openclaw", "proc-safe", "dist", "identity.js");
+  const privateNativePath = path.join(privateModules, platformName, "proc-safe-native.node");
   const cache: Record<string, { filename: string; loaded: boolean; exports: unknown }> = {
-    source: { filename: selectedNative, loaded: true, exports: sourceNative },
+    [selectedNative]: { filename: selectedNative, loaded: true, exports: {} },
   };
   const sourceRequire = Object.assign(
-    vi.fn(() => sourceKoffi),
+    vi.fn(() => sourceIdentity),
     {
       cache,
-      resolve: vi.fn(() => path.join(optionalRoot, "index.js")),
+      resolve: vi.fn((name: string) =>
+        name.endsWith("/package.json") ? path.join(nativeRoot, "package.json") : selectedNative,
+      ),
     },
   );
   const privateRequire = Object.assign(
     vi.fn(() => {
-      cache.private = { filename: privateNativePath, loaded: true, exports: privateNative };
-      return privateKoffi;
+      const canonical = fs.realpathSync(privateNativePath);
+      cache[canonical] = { filename: canonical, loaded: true, exports: {} };
+      return privateIdentity;
     }),
     { cache },
   );
@@ -101,32 +87,32 @@ function installedKoffi(selected: "prebuilt" | "canonical", both = false) {
     if (entry === privateEntry) {
       return privateRequire;
     }
-    return { resolve: () => sourceEntry };
+    return {
+      resolve: (name: string) =>
+        name.endsWith("/package.json") ? path.join(sourceRoot, "package.json") : sourceEntry,
+    };
   });
   return {
     sourceRoot,
+    nativeRoot,
     selectedNative,
     selectedBytes,
     cache,
-    sourceNative,
-    privateKoffi,
+    sourceRequire,
+    privateIdentity,
     privateRequire,
   };
 }
 
 beforeEach(() => {
-  root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-native-stage-")));
+  root = fs.realpathSync(tempDirs.make("openclaw-native-stage-"));
   destination = path.join(root, "handoff");
   const runtime = path.join(root, "managed-handoff-runtime.mjs");
   write(runtime, runtimeBytes);
   createRequireMock.mockReset();
   resolveRuntimeWorkerUrlMock.mockReturnValue(pathToFileURL(runtime));
 });
-
-afterEach(() => {
-  vi.restoreAllMocks();
-  fs.rmSync(root, { recursive: true, force: true });
-});
+afterEach(() => vi.restoreAllMocks());
 
 describe("managed handoff native staging", () => {
   it("preserves the single-file stage outside FreeBSD", async () => {
@@ -134,83 +120,144 @@ describe("managed handoff native staging", () => {
       const files = stageManagedHandoffRuntime(destination);
       expect(files).toEqual([path.join(destination, "runtime", "managed-handoff-runtime.mjs")]);
       expect(fs.readFileSync(files[0]!)).toEqual(runtimeBytes);
-      expect(fs.readdirSync(path.join(destination, "runtime"))).toEqual([
-        "managed-handoff-runtime.mjs",
-      ]);
       expect(createRequireMock).not.toHaveBeenCalled();
     });
   });
 
-  it.each([
-    { selected: "prebuilt" as const, both: true },
-    { selected: "canonical" as const, both: false },
-  ])("stages the loaded $selected addon with both=$both", async ({ selected, both }) => {
-    const fixture = installedKoffi(selected, both);
-    await withMockedPlatform("freebsd", async () => {
-      const files = stageManagedHandoffRuntime(destination);
-      const privateRoot = path.join(destination, "runtime", "node_modules", "koffi");
-      expect(files).toEqual([
-        path.join(destination, "runtime", "managed-handoff-runtime.mjs"),
-        ...Object.keys(packageFiles).map((relative) => path.join(privateRoot, relative)),
-        path.join(privateRoot, "build", "koffi", `freebsd_${nativeArch}`, "koffi.node"),
-      ]);
-      expect(fs.readFileSync(files.at(-1)!)).toEqual(fixture.selectedBytes);
-      for (const file of files) {
-        expect(fs.lstatSync(file).isFile()).toBe(true);
-        if (supportsPosixFiles) {
-          expect(fs.statSync(file).mode & 0o777).toBe(0o600);
-        }
+  it.each([false, true])(
+    "copies private regular bytes through a temporary-directory alias=%s",
+    async (alias) => {
+      if (alias) {
+        fs.symlinkSync(
+          root,
+          path.join(root, "alias"),
+          process.platform === "win32" ? "junction" : "dir",
+        );
+        destination = path.join(root, "alias", "handoff");
       }
-      expect(fs.readdirSync(path.join(destination, "runtime", "node_modules"))).toEqual(["koffi"]);
-      expect(fixture.privateRequire).toHaveBeenCalledOnce();
-    });
-  });
+      const fixture = installedProcSafe();
+      await withMockedPlatform("freebsd", async () => {
+        const files = stageManagedHandoffRuntime(destination);
+        const privateModules = path.join(destination, "runtime", "node_modules");
+        expect(files).toEqual([
+          path.join(destination, "runtime", "managed-handoff-runtime.mjs"),
+          ...Object.keys(packageFiles).map((relative) =>
+            path.join(privateModules, "@openclaw", "proc-safe", relative),
+          ),
+          path.join(privateModules, platformName, "package.json"),
+          path.join(privateModules, platformName, "proc-safe-native.node"),
+        ]);
+        expect(fs.readFileSync(files.at(-1)!)).toEqual(fixture.selectedBytes);
+        for (const [relative, bytes] of Object.entries(packageFiles)) {
+          expect(
+            fs.readFileSync(path.join(privateModules, "@openclaw", "proc-safe", relative), "utf8"),
+          ).toBe(bytes);
+        }
+        for (const file of files) {
+          expect(fs.lstatSync(file).isFile()).toBe(true);
+          if (supportsPosixFiles) {
+            expect(fs.statSync(file).mode & 0o777).toBe(0o600);
+          }
+        }
+        expect(fixture.privateIdentity.readProcessIdentity).toHaveBeenCalledExactlyOnceWith(
+          process.pid,
+        );
+      });
+    },
+  );
 
-  it("rejects missing and ambiguous loaded addon ownership", async () => {
-    const fixture = installedKoffi("prebuilt");
-    delete fixture.cache.source;
+  it("rejects an addon that was not loaded from the selected package", async () => {
+    const fixture = installedProcSafe();
+    delete fixture.cache[fixture.selectedNative];
     await withMockedPlatform("freebsd", async () => {
-      expect(() => stageManagedHandoffRuntime(destination)).toThrow("could not identify");
-      fs.rmSync(destination, { recursive: true, force: true });
-      fixture.cache.first = {
-        filename: fixture.selectedNative,
-        loaded: true,
-        exports: fixture.sourceNative,
-      };
-      fixture.cache.second = fixture.cache.first!;
       expect(() => stageManagedHandoffRuntime(destination)).toThrow("could not identify");
       expect(fixture.privateRequire).not.toHaveBeenCalled();
     });
   });
 
-  it("rejects a selected addon outside the dependency's official layouts", async () => {
-    const fixture = installedKoffi("prebuilt");
-    const unexpected = path.join(root, "unexpected.node");
-    write(unexpected, "unexpected addon");
-    fixture.cache.source!.filename = unexpected;
+  it("rejects a selected addon outside the platform package entry", async () => {
+    const fixture = installedProcSafe();
+    fixture.sourceRequire.resolve.mockImplementation((name: string) =>
+      name.endsWith("/package.json")
+        ? path.join(fixture.nativeRoot, "package.json")
+        : path.join(fixture.nativeRoot, "other.node"),
+    );
+    await withMockedPlatform("freebsd", async () => {
+      expect(() => stageManagedHandoffRuntime(destination)).toThrow("unexpected package path");
+    });
+  });
+
+  it.skipIf(!supportsPosixFiles).each(["LICENSE", "dist", "dist/identity.js", "dist/native.js"])(
+    "rejects source symlinks: %s",
+    async (relative) => {
+      const fixture = installedProcSafe();
+      const original = path.join(fixture.sourceRoot, relative);
+      const moved = path.join(root, "substitute");
+      fs.renameSync(original, moved);
+      fs.symlinkSync(moved, original);
+      await withMockedPlatform("freebsd", async () => {
+        expect(() => stageManagedHandoffRuntime(destination)).toThrow(
+          /regular package|unexpected package path/u,
+        );
+        expect(fixture.privateRequire).not.toHaveBeenCalled();
+      });
+    },
+  );
+
+  it.skipIf(!supportsPosixFiles)("rejects an addon symlink to a different package", async () => {
+    const fixture = installedProcSafe();
+    const substitute = path.join(root, "substitute", "proc-safe-native.node");
+    write(substitute, fixture.selectedBytes);
+    fs.unlinkSync(fixture.selectedNative);
+    fs.symlinkSync(substitute, fixture.selectedNative);
+    fixture.sourceRequire.resolve.mockImplementation((name: string) =>
+      name.endsWith("/package.json") ? path.join(fixture.nativeRoot, "package.json") : substitute,
+    );
     await withMockedPlatform("freebsd", async () => {
       expect(() => stageManagedHandoffRuntime(destination)).toThrow("unexpected package path");
       expect(fixture.privateRequire).not.toHaveBeenCalled();
     });
   });
 
-  it.skipIf(!supportsPosixFiles)("rejects source file symlinks", async () => {
-    const fixture = installedKoffi("canonical");
-    const license = path.join(fixture.sourceRoot, "LICENSE.txt");
-    fs.unlinkSync(license);
-    fs.symlinkSync(path.join(fixture.sourceRoot, "indirect.cjs"), license);
+  it("rejects private loading that reuses the source addon", async () => {
+    const fixture = installedProcSafe();
+    fixture.privateRequire.mockImplementation(() => fixture.privateIdentity);
     await withMockedPlatform("freebsd", async () => {
-      expect(() => stageManagedHandoffRuntime(destination)).toThrow("regular package files");
+      expect(() => stageManagedHandoffRuntime(destination)).toThrow("could not identify");
+    });
+  });
+
+  it("refuses a native package version outside the root's exact pin", async () => {
+    const fixture = installedProcSafe();
+    write(
+      path.join(fixture.nativeRoot, "package.json"),
+      JSON.stringify({ name: platformName, version: "0.0.0" }),
+    );
+    await withMockedPlatform("freebsd", async () => {
+      expect(() => stageManagedHandoffRuntime(destination)).toThrow("version does not match");
       expect(fixture.privateRequire).not.toHaveBeenCalled();
     });
   });
 
-  it("refuses a private native version mismatch before handing off", async () => {
-    const fixture = installedKoffi("prebuilt");
-    fixture.privateKoffi.version = "0.0.0";
+  it("requires the private runtime to reproduce the source identity", async () => {
+    const fixture = installedProcSafe();
+    fixture.privateIdentity.readProcessIdentity.mockReturnValue({ startTimeSinceBootMicros: 0 });
     await withMockedPlatform("freebsd", async () => {
       expect(() => stageManagedHandoffRuntime(destination)).toThrow("did not load its private");
     });
+  });
+
+  it("keeps the sealed loader from loading an external replacement addon", async () => {
+    const require = Object.assign(vi.fn(), {
+      resolve: () => path.join(root, "external", "proc-safe-native.node"),
+    });
+    createRequireMock.mockReturnValue(require);
+    const { loadFreeBsdProcessIdentityNative } =
+      await import("./update-managed-service-handoff-native-loader.js");
+    expect(loadFreeBsdProcessIdentityNative).toThrow(
+      "cannot use an external FreeBSD native runtime",
+    );
+    expect(require).not.toHaveBeenCalled();
   });
 
   it("refuses external resource roots before loading a dependency", async () => {

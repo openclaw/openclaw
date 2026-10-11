@@ -7,8 +7,9 @@ import { acquireNativeOverlayOcclusion } from "../lib/native-overlay-occlusion.t
 import { composedParent } from "../lib/navigation-click.ts";
 import { OpenClawLitElement } from "../lit/openclaw-element.ts";
 
-type ModalDialogAttributes = SolidJSX.HTMLAttributes<HTMLElement> & {
+type ModalDialogAttributes = SolidJSX.HTMLAttributes<OpenClawModalDialog> & {
   label: string;
+  manual?: boolean;
   description?: string;
   "onModal-cancel"?: (event: Event) => void;
 };
@@ -272,16 +273,17 @@ export class OpenClawModalDialog extends OpenClawLitElement {
     this.#returnFocus = null;
     this.#returnFocusOverride = undefined;
     if (returnFocus?.isConnected) {
-      if (!isInert(returnFocus)) {
+      if (!isInert(returnFocus) && !returnFocus.matches(":disabled")) {
         restoreFocus(returnFocus);
       } else {
         const activeElement = document.activeElement;
-        // The containing render may release background inertness after removing the modal.
+        // The containing render may enable the target or release inertness after removal.
         queueMicrotask(() => {
           if (
             !this.isConnected &&
             returnFocus.isConnected &&
             !isInert(returnFocus) &&
+            !returnFocus.matches(":disabled") &&
             document.activeElement === activeElement
           ) {
             restoreFocus(returnFocus);

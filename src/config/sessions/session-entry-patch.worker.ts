@@ -76,10 +76,16 @@ export function createSessionWorkerOperationContext(
 export function readSessionEntryPatchSnapshot(
   database: OpenClawAgentDatabase,
   selection: SessionEntryPatchSelection,
+  includeWindowFacts?: true,
 ) {
   return selection.kind === "target"
-    ? readLifecycleTargetSnapshot(database, selection.target)
-    : readSessionEntrySelectionSnapshot(database, selection.sessionKey, selection.exact);
+    ? readLifecycleTargetSnapshot(database, selection.target, { includeWindowFacts })
+    : readSessionEntrySelectionSnapshot(
+        database,
+        selection.sessionKey,
+        selection.exact,
+        includeWindowFacts,
+      );
 }
 
 export function commitSessionEntryPatch(
@@ -137,7 +143,7 @@ export function commitSessionEntryPatch(
         if (input.validateCanonicalKeys) {
           assertCanonicalSqliteSessionKeysCurrent(database);
         }
-        const fresh = readSessionEntryPatchSnapshot(database, input.selection);
+        const fresh = readSessionEntryPatchSnapshot(database, input.selection, true);
         if (input.ensureIdentitySource) {
           const target =
             input.selection.kind === "target"
@@ -183,12 +189,11 @@ export function commitSessionEntryPatch(
           writeBase,
           next,
           options,
-          reusePostimage: true,
         });
       } else {
         mutation = applySessionEntryPatchInDatabase(database, {
           ...input,
-          readSnapshot: (current) => readSessionEntryPatchSnapshot(current, input.selection),
+          readSnapshot: (current) => readSessionEntryPatchSnapshot(current, input.selection, true),
           options,
         });
       }

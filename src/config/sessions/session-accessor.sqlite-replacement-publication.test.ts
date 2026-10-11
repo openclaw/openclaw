@@ -403,10 +403,16 @@ it("refreshes inline maintenance rows", async () => {
       });
       expect(observerFacts).toEqual([replacementKeys.toSorted(), replacementKeys.toSorted()]);
       expect(whileWaiting).toBeUndefined();
-      expect(sharing.readCurrent()).toBeUndefined();
-      await projection.ensureMaterialized();
       const current = readExactSessionEntryRow(database, archivedKey)?.entry;
       expect(current).toMatchObject({ archivedAt: expect.any(Number) });
+      if (!current) {
+        throw new Error("Expected committed archived entry");
+      }
+      expect(sharing.readCurrent()).toEqual({
+        entry: projectSessionSharingEntry(current),
+        membership: new Set(),
+      });
+      await projection.ensureMaterialized();
       for (const key of [...replacementKeys, archivedKey]) {
         const committed = readExactSessionEntryRow(database, key)?.entry;
         expect(committed).toBeDefined();

@@ -9,6 +9,9 @@ import { supportsOpenClawAgentDatabaseExecution } from "../../state/openclaw-age
 import { ensureSessionGoalOperationsSchema } from "../../state/openclaw-agent-goal-operations-schema.js";
 import {
   applySessionGoalOperation,
+  prepareSessionTurnGoalMessage,
+} from "./goals-operation-policy.js";
+import {
   readSessionGoalOperationInDatabase,
   readSessionGoalOperationReceipt,
 } from "./goals-operations.js";
@@ -46,7 +49,6 @@ import {
 import { appendSessionTurnInWorker } from "./session-turn.js";
 import {
   createSessionTranscriptTurnKernel,
-  prepareSessionTurnGoalMessage,
   sqliteSessionTranscriptTurnRebound,
 } from "./session-turn.kernel.js";
 import type {

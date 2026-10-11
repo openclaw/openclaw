@@ -14,7 +14,9 @@ import {
 } from "./plugin-sdk-subpath-records.js";
 import { PROGRESS_RECEIPT_HANDOFF_COMPAT_RECORD } from "./progress-receipt-handoff-record.js";
 import { SESSION_PERSISTENCE_COMPAT_RECORDS } from "./session-persistence-records.js";
+import { SKILL_COMMAND_DISCOVERY_COMPAT_RECORD } from "./skill-command-discovery-record.js";
 import { SKILL_PROPOSAL_HOOKS_COMPAT_RECORD } from "./skill-proposal-hooks-record.js";
+import { SQLITE_RUNTIME_COMPAT_RECORDS } from "./sqlite-runtime-records.js";
 import { TTS_PREFERENCES_COMPAT_RECORD } from "./tts-preferences-record.js";
 import type { PluginCompatRecord } from "./types.js";
 import { WATCHED_SESSIONS_COMPAT_RECORD } from "./watched-sessions.js";
@@ -38,11 +40,27 @@ export const PLUGIN_COMPAT_RECORDS = [
   MODEL_ACCOUNT_CONNECT_COMPAT_RECORD,
   WORKSPACE_MUTATION_GUARD_COMPAT_RECORD,
   ...SESSION_PERSISTENCE_COMPAT_RECORDS,
+  SKILL_COMMAND_DISCOVERY_COMPAT_RECORD,
+  ...SQLITE_RUNTIME_COMPAT_RECORDS,
   NATIVE_EXEC_APPROVAL_COMPAT_RECORD,
   TTS_PREFERENCES_COMPAT_RECORD,
   ...AGENT_LIST_RUNTIME_PROJECTION_COMPAT_RECORDS,
   WATCHED_SESSIONS_COMPAT_RECORD,
   PROGRESS_RECEIPT_HANDOFF_COMPAT_RECORD,
+  {
+    code: "assistant-text-phase-terminal-hint",
+    status: "deprecated",
+    owner: "sdk",
+    introduced: "2026-08-17",
+    deprecated: "2026-10-11",
+    warningStarts: "2026-10-11",
+    removalGate: "next-plugin-sdk-major",
+    replacement: "Omit textPhaseRequiresTerminal; unphased text is never retroactively classified.",
+    docsPath: "/concepts/streaming#text-phases-and-final-replies",
+    surfaces: ["AssistantMessage.openclawDelivery.textPhaseRequiresTerminal"],
+    diagnostics: ["TypeScript @deprecated annotation; no runtime warning for the ignored field"],
+    tests: ["src/plugin-sdk/assistant-message-compat.test.ts"],
+  },
   {
     code: "gateway-placement-sync-results",
     status: "deprecated",
@@ -69,7 +87,7 @@ export const PLUGIN_COMPAT_RECORDS = [
       "getPluginRuntimeGatewayRequestScope().context",
     ],
     diagnostics: [
-      "TypeScript @deprecated annotations and migration documentation; placement retirement and restart clearing warn once per plugin and capability family on legacy use",
+      "TypeScript @deprecated annotations and migration documentation; placement reads, retirement, and restart clearing warn once per plugin and capability family on legacy use, while GitHub orphan deferral shares the github-publication family warning",
     ],
     tests: [
       "src/plugin-sdk/gateway-placement-compat.test.ts",

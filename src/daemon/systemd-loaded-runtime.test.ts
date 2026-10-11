@@ -545,9 +545,14 @@ describe("bounded owned runtime inspection", () => {
 });
 
 describe("retained original-manager transport", () => {
-  it.each([false, true])(
-    "reads through the retained peer and rejects replacement=%s without another bus lookup",
-    async (replaced) => {
+  it.each([
+    { replaced: false, native: false, tasks: 8n, expectedTasks: 8 },
+    { replaced: true, native: false, tasks: 8n, expectedTasks: 8 },
+    { replaced: false, native: true, tasks: 8n, expectedTasks: 8 },
+    { replaced: false, native: true, tasks: 0xffffffffffffffffn, expectedTasks: undefined },
+  ])(
+    "reads retained peer counters with replacement=$replaced native=$native tasks=$tasks",
+    async ({ replaced, native, tasks, expectedTasks }) => {
       busctl.mockResolvedValue({
         code: 1,
         termination: "exit",
@@ -567,7 +572,13 @@ describe("retained original-manager transport", () => {
         query: vi.fn(async (args: string[]) =>
           managerReply(args)
             .stdout.split("\n")
-            .map((line) => JSON.parse(line).data as unknown),
+            .map((line) => {
+              const row = JSON.parse(line) as { type: string; data: unknown };
+              if (native && row.type === "t" && typeof row.data === "number") {
+                return args.includes("TasksCurrent") && row.data === 8 ? tasks : BigInt(row.data);
+              }
+              return row.data;
+            }),
         ),
       };
       const runtime = await readSystemdServiceRuntime(
@@ -577,6 +588,8 @@ describe("retained original-manager transport", () => {
       expect(runtime.status).toBe(replaced ? "unknown" : "running");
       if (!replaced) {
         expect(runtime.systemd).toMatchObject({ unit: unitName, managerUid: 2001 });
+        expect(runtime.systemd?.tasksCurrent).toBe(expectedTasks);
+        expect(runtime.systemd?.memoryCurrent).toBe(2048);
       }
       expect(busctl).not.toHaveBeenCalled();
       expect(systemctl).not.toHaveBeenCalled();

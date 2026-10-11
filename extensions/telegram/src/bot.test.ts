@@ -111,7 +111,7 @@ const {
   getChatSpy,
   getLoadConfigMock,
   getOnHandler,
-  listSkillCommandsForAgents,
+  prepareSkillCommandsForAgents,
   onSpy,
   getReadChannelAllowFromStoreMock,
   replySpy,
@@ -1172,7 +1172,7 @@ describe("createTelegramBot", () => {
   );
 
   it("allows callback_query in groups when group policy authorizes the sender", async () => {
-    listSkillCommandsForAgents.mockImplementationOnce(({ agentIds }) => {
+    prepareSkillCommandsForAgents.mockImplementationOnce(async ({ agentIds }) => {
       if (agentIds?.length !== 1 || agentIds[0] !== "main") {
         throw new Error("pagination queried commands for the wrong agent");
       }
@@ -1202,7 +1202,7 @@ describe("createTelegramBot", () => {
       }),
     );
 
-    expect(listSkillCommandsForAgents).toHaveBeenCalledOnce();
+    expect(prepareSkillCommandsForAgents).toHaveBeenCalledOnce();
     expect(editMessageTextSpy).toHaveBeenCalledTimes(1);
     expect(editMessageTextSpy).toHaveBeenCalledWith(
       -100999,
@@ -1671,27 +1671,37 @@ describe("createTelegramBot", () => {
         { agents: { defaults: { userTimezone: "UTC" } } },
       );
       loadConfig.mockReturnValue(config);
-      const callbackHandler = await createCallbackHandler({ config });
-      const page = buildCommandsMessagePaginated(config, [], {
-        surface: "telegram",
-        forcePaginatedList: true,
-        page: Number.MAX_SAFE_INTEGER,
-      });
-      expect(page.text).toContain("active-memory");
-      await callbackHandler(
-        createTelegramCallbackContext({
-          id: "cbq-command-code",
-          data: `commands_page_${page.currentPage}:main`,
-          message: { message_id: 17 },
-        }),
-      );
-      expect(editMessageTextSpy).toHaveBeenCalledWith(
-        1234,
-        17,
-        expect.stringContaining("<code>/active-memory</code>"),
-        expect.objectContaining({ parse_mode: "HTML" }),
-      );
-      expect(editMessageTextSpy.mock.calls[0]?.[2]).toContain("Inspect memory &lt;scope&gt;");
+      const readSession = vi
+        .spyOn(telegramBotDepsForTest, "getSessionEntryAsync")
+        .mockResolvedValue(undefined);
+      try {
+        const callbackHandler = await createCallbackHandler({ config });
+        const page = buildCommandsMessagePaginated(config, [], {
+          surface: "telegram",
+          forcePaginatedList: true,
+          page: Number.MAX_SAFE_INTEGER,
+        });
+        expect(page.text).toContain("active-memory");
+        await callbackHandler(
+          createTelegramCallbackContext({
+            id: "cbq-command-code",
+            data: `commands_page_${page.currentPage}:main`,
+            message: { message_id: 17 },
+          }),
+        );
+        expect(editMessageTextSpy).toHaveBeenCalledWith(
+          1234,
+          17,
+          expect.stringContaining("<code>/active-memory</code>"),
+          expect.objectContaining({ parse_mode: "HTML" }),
+        );
+        expect(editMessageTextSpy.mock.calls[0]?.[2]).toContain("Inspect memory &lt;scope&gt;");
+        expect(readSession).toHaveBeenCalledWith(
+          expect.objectContaining({ agentId: "main", sessionKey: expect.any(String) }),
+        );
+      } finally {
+        readSession.mockRestore();
+      }
     });
   });
 
@@ -1706,7 +1716,7 @@ describe("createTelegramBot", () => {
       }),
     );
 
-    expect(listSkillCommandsForAgents).not.toHaveBeenCalled();
+    expect(prepareSkillCommandsForAgents).not.toHaveBeenCalled();
     expect(editMessageTextSpy).not.toHaveBeenCalled();
   });
 
@@ -2797,14 +2807,9 @@ describe("createTelegramBot", () => {
     }
   });
 
-  it("settles spooled plugin callback text after a reply-session conflict retry succeeds", async () => {
-    let calls = 0;
+  it("settles spooled plugin callback text after dispatch succeeds", async () => {
     replySpy.mockImplementation(async (_ctx, opts) => {
-      calls += 1;
       await opts?.onReplyStart?.();
-      if (calls === 1) {
-        throw new Error("reply session initialization conflicted for agent:main:telegram:9");
-      }
       return undefined;
     });
     setTelegramPluginStateRuntimeForTests();
@@ -2816,7 +2821,7 @@ describe("createTelegramBot", () => {
         handler: async () => ({ handled: true, submitText: "Make Alice funnier" }),
       });
       const callbackQuery = makeCallbackQuery({
-        id: "cbq-smart-reply-submit-retry",
+        id: "cbq-smart-reply-submit",
         data: "openclaw-smart-replies:v1:TWFrZSBBbGljZSBmdW5uaWVy",
         message: {
           chat: { id: 9, type: "private" },
@@ -2841,11 +2846,11 @@ describe("createTelegramBot", () => {
       clearTelegramRuntime();
     }
 
-    expect(replySpy).toHaveBeenCalledTimes(2);
+    expect(replySpy).toHaveBeenCalledTimes(1);
     expect(editMessageReplyMarkupSpy).toHaveBeenCalledWith(9, 11, {
       reply_markup: { inline_keyboard: [] },
     });
-    const payload = mockMsgContextArg(replySpy, 1, 0, "replySpy retry call");
+    const payload = mockMsgContextArg(replySpy, 0, 0, "replySpy submit call");
     expect(payload.Body).toContain("Make Alice funnier");
   });
 

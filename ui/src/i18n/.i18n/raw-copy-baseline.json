@@ -208,7 +208,7 @@
       "count": 1,
       "kind": "html-attribute",
       "name": "placeholder",
-      "path": "ui/src/components/login-gate.ts",
+      "path": "ui/src/components/login-gate-solid.tsx",
       "text": "wss://gateway.example:443"
     },
     {
@@ -320,35 +320,42 @@
       "count": 1,
       "kind": "html-text",
       "name": "text",
-      "path": "ui/src/pages/agents/memory/view.ts",
+      "path": "ui/src/pages/agents/memory/view-diary.tsx",
       "text": "memory-wiki"
     },
     {
       "count": 1,
       "kind": "html-text",
       "name": "text",
-      "path": "ui/src/pages/agents/memory/view.ts",
+      "path": "ui/src/pages/agents/memory/view-diary.tsx",
       "text": "plugins.entries.memory-wiki.enabled = true"
     },
     {
       "count": 2,
       "kind": "html-text",
       "name": "text",
-      "path": "ui/src/pages/agents/memory/view.ts",
+      "path": "ui/src/pages/agents/memory/view-scene.tsx",
       "text": "z"
     },
     {
       "count": 1,
       "kind": "html-text",
       "name": "text",
-      "path": "ui/src/pages/agents/memory/view.ts",
+      "path": "ui/src/pages/agents/memory/view-scene.tsx",
       "text": "Z"
     },
     {
       "count": 1,
       "kind": "html-text",
       "name": "text",
-      "path": "ui/src/pages/chat/components/chat-message-timestamp.ts",
+      "path": "ui/src/pages/chat/components/chat-message-stream-view.tsx",
+      "text": "Assistant"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/chat/components/chat-message-timestamp-view.tsx",
       "text": "% ctx"
     },
     {
@@ -416,24 +423,24 @@
     },
     {
       "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/pages/cron/view.ts",
-      "text": "last"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
+      "kind": "html-attribute",
       "name": "placeholder",
-      "path": "ui/src/pages/cron/view.ts",
+      "path": "ui/src/pages/cron/view-delivery.tsx",
       "text": "agent:main:main"
     },
     {
       "count": 1,
-      "kind": "object-property",
+      "kind": "html-attribute",
       "name": "placeholder",
-      "path": "ui/src/pages/cron/view.ts",
+      "path": "ui/src/pages/cron/view-delivery.tsx",
       "text": "default"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/pages/cron/view-delivery.tsx",
+      "text": "last"
     },
     {
       "count": 1,
@@ -490,6 +497,13 @@
       "name": "label",
       "path": "ui/src/pages/new-session/where-chip.test-support.ts",
       "text": "Duplicate runner"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/plugins/consent-dialog.tsx",
+      "text": "v"
     },
     {
       "count": 1,
@@ -591,10 +605,17 @@
     },
     {
       "count": 1,
-      "kind": "object-property",
-      "name": "description",
-      "path": "ui/src/pages/search/search-results.ts",
-      "text": "snippet"
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/plugins/security-audit.tsx",
+      "text": "Clean"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/plugins/security-audit.tsx",
+      "text": "Review"
     },
     {
       "count": 1,
@@ -607,7 +628,7 @@
       "count": 1,
       "kind": "html-text",
       "name": "text",
-      "path": "ui/src/pages/skills/library-view.ts",
+      "path": "ui/src/pages/skills/library-view.tsx",
       "text": "SKILL.md"
     },
     {

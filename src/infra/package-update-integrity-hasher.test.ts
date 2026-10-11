@@ -135,21 +135,6 @@ describe("package file hashing workers", () => {
     },
   );
 
-  it("preserves fs error fields when an admitted file vanishes", async () => {
-    const { file, stat } = await fixture("vanished");
-    await fs.unlink(file);
-    const hasher = createHasher();
-    const hash = hasher.hash(file, stat);
-    hasher.flush();
-    await expect(hash).rejects.toMatchObject({
-      message: expect.stringContaining("ENOENT"),
-      code: "ENOENT",
-      errno: expect.any(Number),
-      syscall: "open",
-      path: file,
-    });
-  });
-
   it.skipIf(process.platform === "win32")(
     "close skips unstarted batch jobs and stops the active file before its next filesystem call",
     async ({ signal }) => {

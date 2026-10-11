@@ -70,7 +70,7 @@ export type SessionTranscriptReconcileWorkerMessage =
   | { type: "lease-released" }
   | { type: "lease-release-failed"; error: string }
   | { type: "fts-chunk"; chunk: EncodedTranscriptFtsChunk; sessionId: string }
-  | { type: "plan-finish"; sessionId: string; remainingSessions: number }
+  | { type: "plan-finish"; sessionId: string }
   | { type: "plan-start"; plan: PreparedSessionTranscriptProjectionMetadata }
   | { type: "source-read"; sessionId: string };
 
@@ -224,7 +224,6 @@ function takeFtsChunkEnd(rows: readonly TranscriptIndexEntry[], start: number): 
 async function streamPreparedProjection(
   plan: PreparedSessionTranscriptProjection,
   port: MessagePort,
-  remainingSessions: number,
 ): Promise<boolean> {
   const { activeRows, ftsRows, ...metadata } = plan;
   if (!(await postAndWait(port, { type: "plan-start", plan: metadata })).accepted) {
@@ -255,8 +254,7 @@ async function streamPreparedProjection(
     offset = end;
   }
   return (
-    (await postAndWait(port, { type: "plan-finish", sessionId: plan.sessionId, remainingSessions }))
-      .yield === true
+    (await postAndWait(port, { type: "plan-finish", sessionId: plan.sessionId })).yield === true
   );
 }
 
@@ -346,21 +344,18 @@ async function run(
         throw new Error(`Cannot prepare transcript indexes: ${opened.reason}`);
       }
       closeDatabase = opened.database.close;
-      assertSource();
       return opened.database;
     })();
     const sessionIds = reconcileInput.sessionIds;
     let yielded = false;
     for (const [index, sessionId] of sessionIds.entries()) {
-      assertSource();
       const plan =
         reconcileInput.mode === "memory"
           ? await prepareMemoryProjection(sessionId, port)
           : prepareSessionTranscriptProjection(database!.db, sessionId);
       if (plan) {
-        yielded = await streamPreparedProjection(plan, port, sessionIds.length - index - 1);
-        assertSource();
-        if (yielded) {
+        if (await streamPreparedProjection(plan, port)) {
+          yielded = index < sessionIds.length - 1;
           break;
         }
       }

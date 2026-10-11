@@ -154,10 +154,12 @@ export function prepareEmbeddedRunTerminal(input: {
       : {}),
     ...(costUsd !== undefined ? { costUsd } : {}),
   };
-  const attemptFinalText = attempt.assistantTexts
-    .map((text) => sanitizeAssistantVisibleStreamText(text))
-    .findLast((text) => text.trim().length > 0)
-    ?.trim();
+  const attemptFinalText = answerAssistant
+    ? undefined
+    : attempt.assistantTexts
+        .map((text) => sanitizeAssistantVisibleStreamText(text))
+        .findLast((text) => text.trim().length > 0)
+        ?.trim();
   const finalAssistantVisibleText = terminalAssistantCanOwnFinalText
     ? (resolveFinalAssistantVisibleText(answerAssistant) ?? attemptFinalText)
     : undefined;

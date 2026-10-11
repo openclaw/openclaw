@@ -128,6 +128,10 @@ Tool Search changes the shape:
   direct-only tools
 - during the turn: the model can load remaining schemas as needed
 
+An enabled `message` tool stays directly visible in both modes, even when the
+current turn delivers final replies automatically. Switching reply delivery
+modes does not change that tool prefix or grant access to unavailable tools.
+
 Tool Search is useful when one run can see many tools, especially from MCP
 servers or client-provided app tools. Structured search is the default, but
 actual request size and latency depend on the catalog and the model's calls.

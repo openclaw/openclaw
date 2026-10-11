@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import type { ViteUserConfig } from "vitest/config";
 import acpCorePackageJson from "../../packages/acp-core/package.json" with { type: "json" };
 import normalizationCorePackageJson from "../../packages/normalization-core/package.json" with { type: "json" };
 import { pluginSdkSubpaths } from "../../scripts/lib/plugin-sdk-entries.mts";
@@ -148,19 +149,24 @@ export const sharedVitestConfig = {
   root: repoRoot,
   envDir: false as const,
   plugins: [
+    {
+      name: "openclaw:node-worker-policy",
+      config: {
+        order: "pre" as const,
+        handler: (config: ViteUserConfig) => ({
+          test: {
+            // Generated projects may copy plugins without the shared test block.
+            environment: config.test?.environment ?? "node",
+            globalSetup: [resolveRepoRootPath("test/vitest/vitest.node-policy.global-setup.ts")],
+          },
+        }),
+      },
+    },
     // Node tests also import UI renderers. Keep their compiler off non-UI sources.
     ...controlUiSolidPlugin([
       `${repoRoot.replaceAll("\\", "/")}/ui/**/*.tsx`,
       `${repoRoot.replaceAll("\\", "/")}/extensions/*/browser/**/*.tsx`,
     ]),
-    {
-      name: "openclaw:node-worker-policy",
-      config: () => ({
-        test: {
-          globalSetup: [resolveRepoRootPath("test/vitest/vitest.node-policy.global-setup.ts")],
-        },
-      }),
-    },
     createStateSchemaInlinePlugin(repoRoot),
     compiledSubprocessesPlugin(),
     createVitestProjectCachePlugin(),

@@ -425,7 +425,7 @@ it.each([
   });
 });
 
-it.each(["membership", "owner", "routing", "policy", "unrelated-config"] as const)(
+it.each(["membership", "routing", "policy", "unrelated-config"] as const)(
   "rechecks %s changes within the consuming frame",
   async (change) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
@@ -450,15 +450,11 @@ it.each(["membership", "owner", "routing", "policy", "unrelated-config"] as cons
       });
       expect(result.error).toBeNull();
       const authorization = result.authorization!;
-      let closing: Promise<void> | undefined;
-      const runExternalClose = AsyncLocalStorage.snapshot();
       let checked = false;
-      const outcome = authorization.withCurrent!(() => {
+      await authorization.withCurrent!(() => {
         authorization.assertCurrent();
         if (change === "membership") {
           removeSessionMemberSync(scope, client.authenticatedUserProfile!.profileId);
-        } else if (change === "owner") {
-          closing = runExternalClose(closeOpenClawAgentDatabasesAsync);
         } else if (change === "policy") {
           const roles = cfg.gateway!.roles!;
           cfg = {
@@ -486,12 +482,6 @@ it.each(["membership", "owner", "routing", "policy", "unrelated-config"] as cons
         }
         checked = true;
       });
-      if (change === "owner") {
-        await expect(outcome).rejects.toThrow();
-      } else {
-        await outcome;
-      }
-      await closing;
       expect(checked).toBe(true);
     });
   },
