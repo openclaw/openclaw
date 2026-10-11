@@ -150,6 +150,7 @@ export function createControlUiCodeSplitting(options: { includeBootGroups?: bool
         priority: 10,
         // Keep the boot graph in fewer partitions; the performance checker owns
         // the compressed-size and request budgets for the emitted chunks.
+        minSize: 256 * 1024,
         maxSize: 1024 * 1024,
       },
       ...(options.includeBootGroups === false
