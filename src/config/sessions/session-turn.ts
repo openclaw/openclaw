@@ -562,7 +562,8 @@ export async function appendSessionTurnInWorker(
                 const command = {
                   commandId: randomUUID(),
                   phaseId: `${inputActor.phase}:${options.expectedSessionId}`,
-                  expected: before.version,
+                  // Memory commands use their FIFO owner's current state, not a cached version.
+                  expected: memory ? undefined : before.version,
                   expectedState,
                   lifecycle: {},
                   turn: plan,

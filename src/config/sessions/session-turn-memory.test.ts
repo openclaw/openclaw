@@ -80,6 +80,28 @@ async function fixture(boundAuthority = authority) {
 }
 
 describe("memory actor transcript turn binding", () => {
+  it("preserves both simultaneous transcript appends", async () => {
+    const { append, history } = await fixture();
+    const messages = [
+      { role: "user", content: "First concurrent input" },
+      { role: "user", content: "Second concurrent input" },
+    ];
+    const results = await Promise.allSettled(
+      messages.map((message) => append({ messages: [{ message }] })),
+    );
+    expect(results).toEqual(
+      messages.map((message) => ({
+        status: "fulfilled",
+        value: expect.objectContaining({
+          appendedMessages: [expect.objectContaining({ appended: true, message })],
+        }),
+      })),
+    );
+    expect((await history()).events.filter((event) => event.type === "message")).toEqual(
+      messages.map((message) => expect.objectContaining({ type: "message", message })),
+    );
+  });
+
   it("prepares fresh input once and publishes the same canonical bytes on retry", async () => {
     const { actor, owner, append, history } = await fixture();
     const original = { role: "user", content: "Original", idempotencyKey: "input-1" };
