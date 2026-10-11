@@ -14,7 +14,10 @@ extension OpenClawChatViewModel {
     }
 
     func replaceMessages(_ messages: [OpenClawChatMessage], narrationSettled: Bool = false) {
-        let reconciled = self.narration.reconcile(messages, settled: narrationSettled)
+        // Do not publish a narration mutation for an unchanged history response.
+        var narration = self.narration
+        let reconciled = narration.reconcile(messages, settled: narrationSettled)
+        if reconciled.changed { self.narration = narration }
         guard self.messages != reconciled.messages || reconciled.changed else { return }
         self.messages = reconciled.messages
         self.seedInputHistory(from: reconciled.messages)

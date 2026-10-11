@@ -675,17 +675,19 @@ extension OpenClawChatView {
 
     @ViewBuilder
     private var liveAssistantContent: some View {
-        if self.showsWorkingIndicator {
-            ChatTypingIndicatorBubble(
-                style: self.style,
-                assistantName: self.assistantName,
-                assistantAvatarText: self.assistantAvatarText,
-                assistantAvatarTint: self.assistantAvatarTint,
-                showsAssistantAvatar: self.showsAssistantAvatars,
-                isClean: self.composerChrome == .clean,
-                runIdentity: self.viewModel.workingIndicatorIdentity,
-                outputTokens: self.viewModel.liveRunOutputTokens)
-                .equatable()
+        ChatRunStatusContent {
+            if self.showsWorkingIndicator {
+                ChatTypingIndicatorBubble(
+                    style: self.style,
+                    assistantName: self.assistantName,
+                    assistantAvatarText: self.assistantAvatarText,
+                    assistantAvatarTint: self.assistantAvatarTint,
+                    showsAssistantAvatar: self.showsAssistantAvatars,
+                    isClean: self.composerChrome == .clean,
+                    runIdentity: self.viewModel.workingIndicatorIdentity,
+                    outputTokens: self.viewModel.liveRunOutputTokens)
+                    .equatable()
+            }
         }
 
         if let text = viewModel.liveAssistantText {
@@ -1542,5 +1544,14 @@ extension OpenClawChatView {
         #else
         .infinity
         #endif
+    }
+}
+
+/// Keep frequently changing run telemetry outside the transcript's observation scope.
+private struct ChatRunStatusContent<Content: View>: View {
+    @ViewBuilder var content: () -> Content
+
+    var body: some View {
+        self.content()
     }
 }

@@ -14202,3 +14202,73 @@ struct ChatViewModelSessionManagementTests {
         #expect(archivedRows.isEmpty)
     }
 }
+
+struct ChatRunTelemetryObservationTests {
+    @Test @MainActor func `token updates do not invalidate run lifecycle`() {
+        final class Fired: @unchecked Sendable { var count = 0 }
+        let vm = OpenClawChatViewModel(sessionKey: "main", transport: TestChatTransport(historyResponses: []))
+        vm.updateActiveSessionRunIDs(["telemetry-run"])
+        #expect(vm.acceptLiveRunSequence(runID: "telemetry-run", sequence: 1, outputTokens: 1))
+        let lifecycle = Fired()
+        let tokens = Fired()
+        withObservationTracking {
+            _ = vm.hasBlockingRunActivity
+            _ = vm.workingIndicatorIdentity
+            _ = vm.liveUsageRunID
+        } onChange: { lifecycle.count += 1 }
+        withObservationTracking { _ = vm.liveRunOutputTokens } onChange: { tokens.count += 1 }
+        #expect(vm.acceptLiveRunSequence(runID: "telemetry-run", sequence: 2, outputTokens: 20))
+        #expect(lifecycle.count == 0)
+        #expect(tokens.count == 1)
+        #expect(vm.liveRunOutputTokens == 20)
+        #expect(vm.acceptLiveRunSequence(runID: "telemetry-run", sequence: 3))
+        #expect(lifecycle.count == 0)
+        vm.retireTerminalRun("telemetry-run")
+        #expect(lifecycle.count == 1)
+        #expect(!vm.hasBlockingRunActivity)
+        #expect(vm.liveUsageRunID == nil)
+    }
+}
+
+struct ChatHistoryObservationTests {
+    @Test(arguments: [false, true]) @MainActor
+    func `unchanged history does not invalidate transcript`(hasNarration: Bool) {
+        final class Fired: @unchecked Sendable { var count = 0 }
+        let vm = OpenClawChatViewModel(sessionKey: "main", transport: TestChatTransport(historyResponses: []))
+        defer { vm.detachTransport() }
+        let message = OpenClawChatMessage(
+            id: UUID(), role: "user",
+            content: [.init(type: "text", text: "Question", mimeType: nil, fileName: nil, content: nil)],
+            timestamp: 1)
+        vm.replaceMessages([message])
+        if hasNarration {
+            vm.pendingRuns.insert("narration-run")
+            vm.handleAgentNarration(OpenClawAgentEventPayload(
+                runId: "narration-run", seq: 1, stream: "item", ts: 2,
+                data: [
+                    "kind": AnyCodable("preamble"),
+                    "itemId": AnyCodable("item"),
+                    "phase": AnyCodable("end"),
+                    "progressText": AnyCodable("Checking"),
+                ]))
+        }
+        let before = vm.transcriptMessages
+        let observed = Fired()
+        withObservationTracking {
+            _ = vm.transcriptMessages
+        } onChange: { observed.count += 1 }
+        vm.replaceMessages([message])
+        #expect(observed.count == 0)
+        #expect(vm.transcriptMessages == before)
+        // Actual settlement still retires narration and invalidates its visible projection.
+        if hasNarration {
+            vm.replaceMessages([message], narrationSettled: true)
+            #expect(observed.count == 1)
+            #expect(vm.transcriptMessages == [message])
+        } else {
+            vm.replaceMessages([])
+            #expect(observed.count == 1)
+            #expect(vm.transcriptMessages.isEmpty)
+        }
+    }
+}
