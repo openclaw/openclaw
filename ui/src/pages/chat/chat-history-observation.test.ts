@@ -19,6 +19,7 @@ import {
 } from "../../lib/sessions/session-capability.test-support.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
+import { createComposerContainer } from "./chat-composer.test-support.ts";
 import { rewindChatHistory, switchChatHistoryBranch } from "./chat-history-actions.ts";
 import type { ChatHistoryResponse } from "./chat-history-snapshot.ts";
 import { getChatHistoryLoadState } from "./chat-history-state.ts";
@@ -507,7 +508,7 @@ it.each([false, true])(
     state.sessionKey = key;
     state.sessionsResult = h.sessions.state.result;
     state.sessionsResultAgentId = h.sessions.state.agentId;
-    const container = document.createElement("div");
+    const container = createComposerContainer();
     document.body.append(container);
     const renderCurrent = () => {
       pane.render();

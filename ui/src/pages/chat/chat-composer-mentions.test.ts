@@ -8,13 +8,17 @@ import {
   people,
   resetMentionComposerFixture,
 } from "./chat-composer-mentions.test-support.ts";
-import { createComposerProps, findPrimaryButton } from "./chat-composer.test-support.ts";
+import {
+  createComposerContainer,
+  createComposerProps,
+  findPrimaryButton,
+} from "./chat-composer.test-support.ts";
 import { renderChatComposer } from "./components/chat-composer.ts";
 
 afterEach(resetMentionComposerFixture);
 
 it("keeps ordinary edits around a selected person off the pane render path", () => {
-  const container = document.createElement("div");
+  const container = createComposerContainer();
   let draft = "@Alex ";
   let mentions: readonly HumanMention[] = [{ profileId: "alex", start: 0, end: 5 }];
   const props = createComposerProps({

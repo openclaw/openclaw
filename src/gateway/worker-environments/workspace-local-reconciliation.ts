@@ -65,8 +65,6 @@ export async function prepareLocalWorkspaceReconciliation(params: {
           )
         : undefined;
     const unchanged = inspected?.conflictPaths.length === 0 ? inspected : undefined;
-    // Exact matches stage only the accepted base; finalization verifies both workspaces
-    // after renewal. Changed results must also fence their inbound bytes before staging.
     if (!unchanged) {
       await snapshot.verifyStable();
     }

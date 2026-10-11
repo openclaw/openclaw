@@ -15,6 +15,7 @@ import {
   createPackageIntegrityReader,
   isPackageIntegrityResourceError,
   packageIntegrityDifferences,
+  type PackageIntegrityFingerprint,
   PackageIntegrityMismatchError,
 } from "./package-update-integrity.js";
 
@@ -115,6 +116,7 @@ export function createPackagePublicationTreeMatcher(
   onWarning: (message: string) => void,
 ) {
   let candidateWarningRecorded = false;
+  const verified = new WeakMap<PackageIntegrityFingerprint, PackageIntegrityFingerprint>();
   return async (
     file: string,
     expected: PackageActivationDescriptor["candidate"],
@@ -135,13 +137,20 @@ export function createPackagePublicationTreeMatcher(
     // files are not re-read. A recovery process parses one without and re-reads all.
     if ("digest" in expected) {
       try {
-        const observed = await createPackageIntegrityReader().tree(file, logical, expected);
+        const observed = await createPackageIntegrityReader().tree(
+          file,
+          logical,
+          verified.get(expected) ?? expected,
+        );
         if (!isDeepStrictEqual(observed, expected)) {
           throw new PackageIntegrityMismatchError(
             `Package publication object changed: ${file}`,
             packageIntegrityDifferences(expected, observed),
           );
         }
+        // A fresh preparation read may predate digest reuse eligibility. Keep
+        // later settled observations, but always compare with the original bytes.
+        verified.set(expected, observed);
         return true;
       } catch (error) {
         if (expected !== candidate || !isPackageIntegrityResourceError(error)) {

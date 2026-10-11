@@ -142,6 +142,19 @@ Release Validation from an immutable `release-ci/*` ref at Q. A publication
 `release-publish/*` tag belongs to P, never to Q merely to make validation run.
 Admission is not a successful test result or publication approval.
 
+`pnpm release:candidate --workflow-sha <P>` pins helper and publication tooling,
+not the qualification harness. Stable `npm-stable-v1` and admitted stable/full
+qualification already include mock-provider package Telegram proof. The helper
+reuses that authenticated proof for the exact FRV-qualified package, without a
+Telegram waiver; `npm-beta-v1` remains deferred, never passed. Separately packed
+historical packages and explicitly selected live-provider Telegram checks need
+their own proof at C. A supplemental check uses only the original retained
+`release-ci/*` ref verified at Q=C, with `harness_ref` pinned to that SHA; missing
+or moved refs require newly bound candidate evidence, never a fallback to main.
+Supplemental run IDs stay in the candidate evidence bundle, not the publisher's
+optional postpublish diagnostic input. Local Parallels qualification likewise
+uses C's harness and dependencies from the validated candidate checkout.
+
 A candidate missing the required qualification contracts needs a deliberate
 backport. The helper does not silently use future-main checks or import
 main-only scenarios. A repair to the qualification harness changes C and Q and

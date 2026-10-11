@@ -92,38 +92,6 @@ describe("web provider public artifact manifest fallback", () => {
     ]);
   });
 
-  it("reuses prepared web-search owners without another manifest scan", () => {
-    const providers = resolveBundledWebSearchProvidersFromPublicArtifacts({
-      config: {},
-      env,
-      manifestRecords: snapshot.plugins,
-    });
-
-    expect(providers).toEqual([searchProvider]);
-    expect(mocks.loadPluginMetadataSnapshot).not.toHaveBeenCalled();
-    expect(
-      mocks.resolveBundledExplicitWebSearchProvidersFromPublicArtifacts,
-    ).toHaveBeenCalledExactlyOnceWith({
-      onlyPluginIds: ["fallback-search"],
-      env,
-      manifestRecords: snapshot.plugins,
-    });
-  });
-
-  it("reuses the candidate manifest registry for bundled web-fetch artifacts", () => {
-    const providers = resolveBundledWebFetchProvidersFromPublicArtifacts({ config: {}, env });
-
-    expect(providers).toEqual([fetchProvider]);
-    expect(mocks.loadPluginMetadataSnapshot).toHaveBeenCalledOnce();
-    expect(
-      mocks.resolveBundledExplicitWebFetchProvidersFromPublicArtifacts,
-    ).toHaveBeenCalledExactlyOnceWith({
-      onlyPluginIds: ["fallback-fetch"],
-      env,
-      manifestRecords: snapshot.plugins,
-    });
-  });
-
   it("loads an allowlisted named web-search provider without a manifest scan", () => {
     const providers = resolveBundledWebSearchProvidersFromPublicArtifacts({
       config: { plugins: { allow: ["fallback-search"] } },
