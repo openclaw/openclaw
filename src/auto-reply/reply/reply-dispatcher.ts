@@ -567,9 +567,9 @@ export function createReplyDispatcher(
         shouldRetryReplyDispatch(await attempt.settlement) &&
         !attempt.pendingDelivery
       ) {
-        const fallback = deliveryFallback;
+        const fallbackInput = deliveryFallback;
         deliveryFallback = null;
-        return await deliverOnce(fallback, dispatchInfo);
+        return await deliverOnce(fallbackInput, dispatchInfo);
       }
       return attempt;
     });
@@ -585,8 +585,8 @@ export function createReplyDispatcher(
         ) {
           // Deferred providers may need the admitted batch to drain before their
           // finalization can prove no-send; those alternatives join the next batch.
-          const fallback = deliveryFallback;
-          attempt = await scheduleDelivery(() => deliverOnce(fallback, dispatchInfo));
+          const fallbackInput = deliveryFallback;
+          attempt = await scheduleDelivery(() => deliverOnce(fallbackInput, dispatchInfo));
           deliveryOutcome = await attempt.settlement;
         }
         settledCounts[kind][REPLY_DISPATCH_OUTCOME_COUNTS[deliveryOutcome]] += 1;
