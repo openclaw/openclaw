@@ -748,7 +748,7 @@ describe("node worker admission re-arm journal", () => {
       expect(JSON.parse(first?.resultJson ?? "null")).toEqual({
         status: "not-started",
         reason: "admission-deadline",
-        errorText: `gateway unreachable ${TEST_WORKER_CREDENTIAL}`,
+        errorText: "gateway unreachable [REDACTED]",
       });
       expect(first?.completedAtMs).not.toBeNull();
       const marker = path.join(admissionFixture.workspaceDir, "admission-attempt");

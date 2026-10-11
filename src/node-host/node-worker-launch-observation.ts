@@ -124,6 +124,13 @@ async function observeNodeWorkerChildOutput(
             if (!frame) {
               throw new Error("worker returned an invalid turn result");
             }
+            if (frame.type === "result" && frame.result.status === "not-started") {
+              frame.result.errorText = sanitizeNodeWorkerDiagnostic(
+                frame.result.errorText,
+                "worker admission failed",
+                active.scrubber.scrub,
+              );
+            }
             await onResult(frame);
             if (outputError || observationEnded) {
               break;
