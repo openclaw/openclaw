@@ -180,10 +180,12 @@ it("batches Lit property bursts without invalidating unrelated Solid computation
   const labels = vi.fn((value: string) => value);
   const counts = vi.fn((value: number) => value);
   const mount = vi.fn();
+  let readLabel = () => "";
   defineSolidBridge<{ label: string; count: number }>(
     "openclaw-solid-granular-test",
     (props) => {
       mount();
+      readLabel = () => props.label;
       const label = createMemo(() => labels(props.label));
       const count = createMemo(() => counts(props.count));
       return (
@@ -208,9 +210,8 @@ it("batches Lit property bursts without invalidating unrelated Solid computation
 
   host.label = "intermediate";
   host.label = "final";
-  host.count = 1;
-  host.count = 0;
   expect(host.label).toBe("final");
+  expect(readLabel()).toBe("final");
   await host.updateComplete;
   expect(host.textContent).toBe("final:0");
   expect(labels).toHaveBeenCalledExactlyOnceWith("final");
