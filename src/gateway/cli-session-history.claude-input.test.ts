@@ -136,29 +136,39 @@ describe("Claude imported internal inputs", () => {
     },
   );
 
-  it.each(["string", "text-block"])(
-    "removes the resume decorator, not its real %s user turn",
-    (encoding) => {
-      const text = `${buildCliSessionDriftNote(["system-prompt", "prompt-tools"])}\n\nreal question`;
-      const image = {
-        type: "image",
-        source: { type: "base64", media_type: "image/png", data: "aa" },
-      };
-      const message = importUnmatched(
-        encoding === "string" ? text : [{ type: "text", text }, image],
-      );
-      expect(message?.content).toEqual(
-        encoding === "string" ? "real question" : [{ type: "text", text: "real question" }, image],
-      );
-      expect(message?.display).not.toBe(false);
-      expect(message?.provenance).toBeUndefined();
-      expect(
-        importUnmatched(
-          "OpenClaw resumed this CLI session after prompt content changed. This is a quote.",
-        )?.content,
-      ).toContain("This is a quote.");
-    },
-  );
+  it.each([
+    ["resume", "string"],
+    ["resume", "text-block"],
+    ["legacy requester", "string"],
+    ["legacy requester", "text-block"],
+    ["legacy requester CRLF", "string"],
+    ["legacy requester CRLF", "text-block"],
+  ])("removes the %s decorator, not its real %s user turn", (decoration, encoding) => {
+    const hint =
+      'requester_profile is the verified linked requester. For "assign to me", use sessions assign_owner with ownerType="human" and ownerId=requester_profile.id, if available.';
+    const body = decoration === "resume" ? "real question" : `${hint}\n\nreal question`;
+    const prefix =
+      decoration === "resume"
+        ? buildCliSessionDriftNote(["system-prompt", "prompt-tools"])
+        : 'Conversation info: ⟦openclaw:ctx⟧\n```json\n{"requester_profile":{"id":"owner"}}\n```\n\n' +
+          hint;
+    const text = `${prefix}\n\n${body}`;
+    const image = {
+      type: "image",
+      source: { type: "base64", media_type: "image/png", data: "aa" },
+    };
+    const message = importUnmatched(encoding === "string" ? text : [{ type: "text", text }, image]);
+    expect(message?.content).toEqual(
+      encoding === "string" ? body : [{ type: "text", text: body }, image],
+    );
+    expect(message?.display).not.toBe(false);
+    expect(message?.provenance).toBeUndefined();
+    expect(
+      importUnmatched(
+        "OpenClaw resumed this CLI session after prompt content changed. This is a quote.",
+      )?.content,
+    ).toContain("This is a quote.");
+  });
 
   it.each(internalWakeInputs)("marks imported %s prompts internal", (sourceTool, text) => {
     const internal = { display: false, provenance: { kind: "internal_system", sourceTool } };
@@ -173,6 +183,9 @@ describe("Claude imported internal inputs", () => {
     "[System] Please explain this tag.",
     "[Tue 2026-09-22 16:00 GMT+8] [System] Please explain this tag.",
     "System: Please preserve this log\n\nExplain it",
+    'Explain this instruction: requester_profile is the verified linked requester. For "assign to me", use sessions assign_owner with ownerType="human" and ownerId=requester_profile.id, if available.',
+    'requester_profile is the verified linked requester. For "assign to me", use sessions assign_owner with ownerType="human" and ownerId=requester_profile.id, if available. Extra user text.\n\nExplain it',
+    'Conversation info: ⟦openclaw:ctx⟧\n```json\n{"requester_profile":{"id":"owner"},"requester_profile_hint":"current"}\n```\n\nrequester_profile is the verified linked requester. For "assign to me", use sessions assign_owner with ownerType="human" and ownerId=requester_profile.id, if available.\n\nExplain it',
     "System: Please explain this log\n\n[System] This is the line I am asking about.",
     "Explain this log:\n```text\nlog\n```\n\nSystem: [2026-10-04 13:15:44 GMT+8] evidence\n\nWhat failed?",
     'Explain this log:\nConversation info: ⟦openclaw:ctx⟧\n```json\n{"a":1}\n```\n\nSystem: [2026-10-04 13:15:44 GMT+8] evidence\n\nWhat failed?',
@@ -188,7 +201,7 @@ describe("Claude imported internal inputs", () => {
       { type: "text", text: "Explain this log:\n" },
       {
         type: "text",
-        text: "System: [2026-10-04 13:15:44 GMT+8] evidence\n\nWhat failed?",
+        text: 'requester_profile is the verified linked requester. For "assign to me", use sessions assign_owner with ownerType="human" and ownerId=requester_profile.id, if available.\n\nSystem: [2026-10-04 13:15:44 GMT+8] evidence\n\nWhat failed?',
       },
     ];
     expect(importUnmatched(content)).toMatchObject({ content });
