@@ -9460,7 +9460,6 @@
 ["src/security/audit-plugins-trust.test.ts","../plugins/plugin-registry.js","a8911bb3b8aafdd1999da6c1085eace24dc4b7731c2f8813ab9f69b450d4372c",1]
 ["src/sessions/provider-review.test.ts","../config/sessions/provider-review-store.js","c522f6274632badbdc40bafbba953f15fdf23403c61e75e6c3fe3eda05d6095a",1]
 ["src/sessions/session-diff-revisions.test.ts","../agents/worktrees/git.js","b6eba0ef166b12a34dfcbf14d30322579a6cb65b29303a6d6faa9ee8ebb7a4fc",1]
-["src/sessions/session-diff.runtime.test.ts","../agents/worktrees/git.js","5e93afbbb3cd04a2b912826621b8e0c58851724676b271b051e714293f86bd1f",1]
 ["src/sessions/session-participant-recording.test.ts","../config/sessions/session-accessor.js","c8f0f2e48b9ae2e4d379c50aa11a43a24035772d158b63c239c1974f283d97cd",1]
 ["src/sessions/session-state-events.worker-control.test.ts","../config/io.js","00279b48c7e75babca4aa3e904b1b22e2a02662a00509e223c766132d5d49787",1]
 ["src/sessions/session-state-events.worker-control.test.ts","../config/sessions/session-accessor.js","691c76059e9a3b01028e86fbf472aabb9447053a9644529eafcf12385ab92920",1]

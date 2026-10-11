@@ -67,12 +67,10 @@ const notices = resolveGlobalSingleton(
             }
             const pending = peekSystemEventEntries(latest.sessionKey);
             // A user turn or store replacement can consume the notice before admission.
-            let remaining = items.filter((item) =>
+            const selected = items.filter((item) =>
               pending.some((event) => event.id === item.occurrence.id),
             );
-            while (remaining.length > 0) {
-              const selected = remaining;
-              let adopted = false;
+            if (selected.length > 0) {
               const target = combineSessionEventTargetsForHost(selected.map((item) => item.target));
               const occurrences = selected.map((item) => item.occurrence);
               const receipt = enqueueSessionEventForHost(
@@ -85,7 +83,6 @@ const notices = resolveGlobalSingleton(
                   occurrences,
                   preserveOccurrenceOnRejection: true,
                   onAdopted: async () => {
-                    adopted = true;
                     await lifecycle.onAdopted();
                     await acknowledgeSessionStateNoticesInWorker(
                       latest.sessionKey,
@@ -103,18 +100,7 @@ const notices = resolveGlobalSingleton(
               if (outcome.status === "failed") {
                 throw new Error(outcome.error ?? "Session state notice failed");
               }
-              if (adopted || outcome.executionStarted || outcome.status !== "cancelled") {
-                return;
-              }
-              const current = peekSystemEventEntries(latest.sessionKey);
-              remaining = selected.filter((item) =>
-                current.some((event) => event.id === item.occurrence.id),
-              );
-              // Exact consumption may remove one member before adoption. Reconcile only
-              // a shrinking set of the same originals after the cancelled owner settles.
-              if (remaining.length === selected.length) {
-                return;
-              }
+              // Cancellation leaves unconsumed notices for an ordinary turn or the next sweep.
             }
           },
         });
