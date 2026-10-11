@@ -238,7 +238,7 @@ suite.define(() => {
           .poll(() =>
             page.evaluate((key) => JSON.parse(localStorage.getItem(key) ?? "null"), pendingKey),
           )
-          .toEqual({ sidebarEntries: ["route:plugins"] });
+          .toBeNull();
       });
     },
   );
