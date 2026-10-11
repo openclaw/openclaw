@@ -1,11 +1,11 @@
 import { html, nothing } from "lit";
 import { keyed } from "lit/directives/keyed.js";
-import { DEFAULT_SIDEBAR_ENTRIES, serializeSidebarEntry } from "../app-navigation.ts";
 import { togglePinnedAgent } from "../app/bootstrap-navigation-preferences.ts";
 import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
 import { isMobileNavLayout } from "../app/mobile-nav-layout.ts";
 import { patchSettings } from "../app/settings.ts";
 import { isUpdateActionable } from "../app/update-schedule-projection.ts";
+import { t } from "../i18n/index.ts";
 import { normalizeAgentLabel } from "../lib/agents/display.ts";
 import { openEditor } from "../lib/editor-links.ts";
 import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
@@ -28,7 +28,7 @@ import {
 } from "../plugins/control-ui-actions.ts";
 import { renderSidebarAgentMenu } from "./app-sidebar-agent-menu.ts";
 import { renderSidebarIdentityMenu } from "./app-sidebar-identity-menu.ts";
-import { renderSidebarCustomizeMenu, renderSidebarMoreMenu } from "./app-sidebar-nav-menus.ts";
+import { renderSidebarDropdown, renderSidebarMenuAction } from "./app-sidebar-nav-menus.ts";
 import { formatSidebarTimestamp } from "./app-sidebar-session-catalogs.ts";
 import { canRetryGatewayStatus } from "./gateway-status.ts";
 import "../styles/sidebar-menus.css";
@@ -52,42 +52,46 @@ export {
 export { renderSidebarPluginNavigationMenuForController } from "./app-sidebar-plugin-navigation-menu.ts";
 export { renderSidebarPeopleFilterMenuForController } from "./app-sidebar-people-filter-menu.ts";
 
-export function renderSidebarCustomizeMenuForController(controller: SidebarMenusController) {
+export function renderSidebarRailPinMenuForController(controller: SidebarMenusController) {
   const { host } = controller;
-  const position = controller.customizeMenuPosition;
-  if (!position) {
+  const position = controller.railPinMenuPosition;
+  if (!position || !host.sidebarEntries.includes(position.entry)) {
     return nothing;
   }
-  const toggleEntry = (entry: string) => {
-    const canonical = host.reconciledSidebarZone().sidebarEntries;
-    host.onUpdateSidebarEntries?.(
-      canonical.includes(entry)
-        ? canonical.filter((candidate) => candidate !== entry)
-        : [...canonical, entry],
-    );
-  };
-  return renderSidebarCustomizeMenu({
+  const entries = [...host.querySelectorAll<HTMLElement>(".sidebar-rail__pin")].map(
+    (pin) => pin.dataset.sidebarEntry!,
+  );
+  const index = entries.indexOf(position.entry);
+  const before = index >= 0 ? entries[index - 1] : undefined;
+  const after = index >= 0 ? entries[index + 1] : undefined;
+  const trigger = controller.railPinMenuTrigger;
+  // A replacement target needs a fresh dropdown so delayed hide events keep their old owner.
+  return keyed(
     position,
-    sidebarEntries: host.sidebarEntries,
-    preferencesBrowserOnly: host.preferencesBrowserOnly,
-    isRouteEnabled: (routeId) => controller.isRouteEnabled(routeId),
-    pluginNavigation: host.pluginNavigation(),
-    ...controller.positionedMenuHandlers("customize"),
-    onToggleRoute: (routeId) =>
-      toggleEntry(serializeSidebarEntry({ type: "route", route: routeId })),
-    onTogglePlugin: (key) => toggleEntry(serializeSidebarEntry({ type: "plugin", key })),
-    onReset: () => {
-      // Canonical list, not the render list: unknown-state session slots
-      // (other agents, still-loading caches) must survive a route reset.
-      const sessions = host
-        .reconciledSidebarZone()
-        .sidebarEntries.filter(
-          (entry) => entry.startsWith("session:") || entry.startsWith("person:"),
-        );
-      host.onUpdateSidebarEntries?.([...DEFAULT_SIDEBAR_ENTRIES, ...sessions]);
-      controller.closePositionedMenu("customize", { restoreFocus: true });
-    },
-  });
+    renderSidebarDropdown({
+      position,
+      className: "sidebar-customize-menu sidebar-rail-pin-menu",
+      label: t("chat.sidebar.reorderItem", { item: position.label }),
+      ...controller.positionedMenuHandlers("railPin"),
+      onSelect: ({ value }) => {
+        controller.closePositionedMenu("railPin");
+        if (value === "remove") {
+          host.sessionOrganizer.removeSidebarEntry(position.entry);
+        } else if (value === "before" || value === "after") {
+          const target = value === "before" ? before : after;
+          if (target) {
+            host.sessionOrganizer.writeSidebarEntryAt(position.entry, target, value);
+            void host.updateComplete.then(() => trigger?.isConnected && trigger.focus());
+          }
+        }
+      },
+      content: html`
+        ${renderSidebarMenuAction("before", t("chat.sidebar.moveUp"), "arrowUp", { disabled: !before })}
+        ${renderSidebarMenuAction("after", t("chat.sidebar.moveDown"), "arrowDown", { disabled: !after })}
+        ${renderSidebarMenuAction("remove", t("nav.unpin"), "pin")}
+      `,
+    }),
+  );
 }
 
 export function renderSidebarAgentMenuForController(controller: SidebarMenusController) {
@@ -460,33 +464,4 @@ export function renderSidebarSessionMenuForController(controller: SidebarMenusCo
       ></openclaw-session-menu>
     `,
   );
-}
-
-export function renderSidebarMoreMenuForController(controller: SidebarMenusController) {
-  const { host } = controller;
-  const position = controller.moreMenuPosition;
-  if (!position) {
-    return nothing;
-  }
-  return renderSidebarMoreMenu({
-    position,
-    basePath: host.basePath,
-    activeRouteId: host.activeRouteId,
-    sidebarEntries: host.sidebarEntries,
-    isRouteEnabled: (routeId) => controller.isRouteEnabled(routeId),
-    ...controller.positionedMenuHandlers("more"),
-    onNavigateRoute: (routeId) => {
-      controller.closePositionedMenu("more", { restoreFocus: true });
-      host.onNavigate?.(routeId);
-    },
-    onPreloadRoute: (routeId, event) => controller.preloadRoute(routeId, event),
-    onCancelPreload: (event) => controller.cancelPreload(event),
-    onEditPinnedItems: () => {
-      const customizePosition = controller.moreMenuPosition;
-      const customizeTrigger = controller.moreMenuTrigger;
-      if (customizePosition) {
-        controller.openCustomizeMenu(customizePosition.x, customizePosition.y, customizeTrigger);
-      }
-    },
-  });
 }

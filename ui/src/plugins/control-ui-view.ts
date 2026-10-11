@@ -1,5 +1,5 @@
 import { ContextConsumer } from "@lit/context";
-import { html, LitElement, nothing, render, type ChildPart } from "lit";
+import { html, LitElement, nothing, type ChildPart } from "lit";
 import { AsyncDirective, directive } from "lit/async-directive.js";
 import type {
   ControlUiSurface,
@@ -108,11 +108,6 @@ class PluginSurfaceDirective extends AsyncDirective {
 }
 
 const pluginSurface = directive(PluginSurfaceDirective);
-
-/** Render an opaque built-in template with its original event receiver. */
-export function renderPluginTemplate(template: unknown, target: HTMLElement, host?: object): void {
-  render(template, target, { host });
-}
 
 export function renderPluginSurface<S extends ControlUiSurface>(
   surface: S,

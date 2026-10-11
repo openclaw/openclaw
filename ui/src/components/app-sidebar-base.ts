@@ -45,15 +45,11 @@ export abstract class AppSidebarBase extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) terminalAvailable = false;
   @property({ attribute: false }) catalogOpenTarget: CatalogOpenTarget = "viewer";
   @property({ attribute: false }) canPairDevice = false;
-  @property({ attribute: false }) preferencesBrowserOnly = false;
   @property({ attribute: false }) sessionKey = "";
   @property({ attribute: false }) sidebarEntries: readonly string[] = DEFAULT_SIDEBAR_ENTRIES;
   @property({ attribute: false }) navigationVisible = true;
-  @property({ attribute: false }) navigationScope: "mine" | "all" = "all";
   @property({ type: Boolean }) navigationCollapsed = false;
-  @property({ attribute: false }) onUpdateNavigationScope?: (scope: "mine" | "all") => void;
   @state() navigationView: "pages" | "sessions" | "online" = "sessions";
-  personalNavigationEpoch = 0;
   sidebarSnapshot: SidebarSnapshotModel | null = null;
   sidebarPluginSnapshot: Pick<SidebarSnapshotModel, "entries" | "plugins"> | null = null;
   private liveSidebarAgentsMode: "chip" | "roster" = "chip";
@@ -89,24 +85,13 @@ export abstract class AppSidebarBase extends OpenClawLightDomContentsElement {
   @consume({ context: applicationContext, subscribe: true })
   protected context?: ApplicationContext;
 
+  get sessionInvolvingMeFilterActive(): boolean {
+    return this.sidebarSnapshot?.involvingMe ?? this.sessionOwnerFilter.involvingMe;
+  }
+
   abstract readonly sessionOwnerFilter: SessionOwnerFilterController;
 
-  get effectiveNavigationScope(): "mine" | "all" {
-    const snapshot = this.context?.gateway.snapshot;
-    // The Gateway retains resolved profileless identity only within the same connection scope.
-    // Pending and retired identities stay private, including while reconnecting.
-    return snapshot?.selfUser === null ? "all" : this.navigationScope;
-  }
-
-  setNavigationScope(scope: "mine" | "all"): void {
-    this.navigationScope = scope;
-    this.sessionOwnerFilter.markUserIntent();
-    this.onUpdateNavigationScope?.(scope);
-  }
-
   setSessionOwnerFilter = (ownerId: string | null, involvingMe = false) => {
-    this.navigationScope = "all";
-    this.onUpdateNavigationScope?.("all");
     this.sessionOwnerFilter.set(ownerId, involvingMe);
   };
 

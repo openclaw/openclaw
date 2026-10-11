@@ -92,6 +92,7 @@ it.each([
 
     const request = vi.fn().mockResolvedValue(props.result);
     const client = { request } as unknown as GatewayBrowserClient;
+    let retryCompletion = Promise.resolve();
     const controller = new SessionActivityController(() =>
       renderSessionActivityViewSolid(
         {
@@ -101,47 +102,50 @@ it.each([
           loading: controller.loading,
           retrying: controller.retrying,
           onRetry: () => {
-            void controller.load(client, props.filters, "retry");
+            retryCompletion = controller.load(client, props.filters, "retry");
           },
         },
         container,
       ),
     );
     try {
-      void controller.load(client, props.filters);
-      await vi.waitFor(() => expect(controller.loading).toBe(false));
+      await controller.load(client, props.filters);
+      expect(controller.loading).toBe(false);
       const retained = container.querySelector<HTMLElement>(
         personId ? "[data-activity-identity]" : ".activity-pulse",
       )!;
       const retainedTop = retained.getBoundingClientRect().top;
       request.mockRejectedValueOnce(new Error("Refresh failed"));
-      void controller.load(client, props.filters, "refresh");
-      await vi.waitFor(() => expect(controller.error).toBe("Refresh failed"));
+      await controller.load(client, props.filters, "refresh");
+      expect(controller.error).toBe("Refresh failed");
       expect(Math.abs(retained.getBoundingClientRect().top - retainedTop)).toBeLessThan(1);
       const retryButton = () =>
-        [...container.querySelectorAll<HTMLButtonElement>("button")].find(
-          (button) => button.textContent?.trim() === "Retry",
-        )!;
-      expect(retryButton()).toBeTruthy();
+        container.querySelector<HTMLButtonElement>(".activity-feed__feedback button");
+      expect(retryButton()?.textContent?.trim()).toBe("Retry");
       const pending = createDeferred<NonNullable<typeof props.result>>();
       request.mockReturnValueOnce(pending.promise);
-      retryButton().click();
+      retryButton()!.click();
       expect(controller.loading).toBe(true);
+      expect(request).toHaveBeenCalledTimes(3);
       expect(container.querySelector('[role="status"]')?.textContent).toContain("Refreshing");
-      expect(retryButton().disabled).toBe(true);
+      expect(retryButton()?.disabled).toBe(true);
       expect(Math.abs(retained.getBoundingClientRect().top - retainedTop)).toBeLessThan(1);
       pending.reject(new Error("Retry failed"));
-      await vi.waitFor(() => expect(controller.error).toBe("Retry failed"));
-      expect(retryButton().disabled).toBe(false);
+      await retryCompletion;
+      expect(controller.error).toBe("Retry failed");
+      expect(retryButton()?.disabled).toBe(false);
       expect(container.querySelector('[role="alert"]')?.textContent).toContain("Retry failed");
       expect(Math.abs(retained.getBoundingClientRect().top - retainedTop)).toBeLessThan(1);
       const recovered = createDeferred<NonNullable<typeof props.result>>();
       request.mockReturnValueOnce(recovered.promise);
-      retryButton().click();
+      retryButton()!.click();
       expect(controller.retrying).toBe(true);
-      expect(retryButton().disabled).toBe(true);
+      expect(request).toHaveBeenCalledTimes(4);
+      expect(retryButton()?.disabled).toBe(true);
       recovered.resolve(props.result!);
-      await vi.waitFor(() => expect(controller.loading).toBe(false));
+      await retryCompletion;
+      expect(controller.loading).toBe(false);
+      expect(retryButton()).toBeNull();
       expect(container.textContent).not.toContain("Refreshing");
       expect(container.querySelector('[role="alert"]')).toBeNull();
       expect(Math.abs(retained.getBoundingClientRect().top - retainedTop)).toBeLessThan(1);

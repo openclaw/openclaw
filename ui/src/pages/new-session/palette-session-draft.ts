@@ -1,4 +1,4 @@
-import { html, nothing, type ReactiveController } from "lit";
+import { html, nothing, type ReactiveController, type ReactiveControllerHost } from "lit";
 import type { ApplicationContext } from "../../app/context.ts";
 import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
 import { t } from "../../i18n/index.ts";
@@ -7,7 +7,6 @@ import type { HumanMention } from "../../lib/chat/chat-types.ts";
 import { resolveSessionDisplayName } from "../../lib/session-display.ts";
 import type { SessionCreateOutcome } from "../../lib/sessions/create.ts";
 import { showToast } from "../../lib/toast.ts";
-import type { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { resolveChatAttachmentLimits } from "../chat/components/chat-attachment-admission.ts";
 import "../../components/web-awesome-popover.ts";
@@ -48,7 +47,8 @@ export class PaletteSessionDraft implements ReactiveController {
   private readonly idPrefix = `palette-session-${++PaletteSessionDraft.nextId}`;
 
   constructor(
-    private readonly host: OpenClawLightDomElement,
+    private readonly host: ReactiveControllerHost &
+      Pick<HTMLElement, "isConnected" | "ownerDocument" | "querySelector" | "querySelectorAll">,
     private readonly read: () => { context: ApplicationContext | undefined; open: boolean },
     private readonly callbacks: {
       onClose: () => void;
@@ -408,7 +408,7 @@ export class PaletteSessionDraft implements ReactiveController {
       ? html`<button class="btn btn--sm" type="button" @click=${this.rejectedOpen}>
           ${t("sessionsView.openSession")}
         </button>`
-      : nothing;
+      : undefined;
   }
 
   renderAuxiliary() {

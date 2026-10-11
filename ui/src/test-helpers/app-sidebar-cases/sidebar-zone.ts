@@ -259,6 +259,7 @@ describe("AppSidebar interleaved zone", () => {
         ],
       },
     });
+    sidebar.sidebarEntries = ["route:cron"];
     await selectSidebarView(sidebar, "pages");
 
     const entry = sidebar.querySelector<HTMLAnchorElement>(
@@ -438,7 +439,7 @@ describe("AppSidebar interleaved zone", () => {
       expect(getComputedStyle(pin).flexBasis).toBe("28px");
       expect(entry.querySelector(".sidebar-reorder-menu")).toBeNull();
     }
-    // Pinned references remain separate icon controls, with their own reorder menus.
+    // Pinned references remain separate icon controls.
     for (const id of ["boards", "notes"]) {
       const railEntry = sidebar.querySelector<HTMLElement>(
         `.sidebar-rail [data-sidebar-entry="plugin:example/${id}"]`,
@@ -447,8 +448,7 @@ describe("AppSidebar interleaved zone", () => {
       expect(railEntry.querySelectorAll("a")).toHaveLength(1);
       expect(railEntry.querySelector(".nav-item__children")).toBeNull();
       expect(railEntry.querySelector("a")?.getAttribute("aria-label")).toBe(id);
-      expect(getComputedStyle(railEntry).flexDirection).toBe("column");
-      expect(railEntry.querySelector(".sidebar-reorder-menu")).not.toBeNull();
+      expect(railEntry.querySelector(".sidebar-reorder-trigger")).toBeNull();
     }
     expect(
       [...sidebar.querySelectorAll<HTMLElement>(".sidebar-rail__pin")].map(
@@ -469,7 +469,7 @@ describe("AppSidebar interleaved zone", () => {
     await sidebar.updateComplete;
     expect(
       sidebar.querySelector('.sidebar-rail [data-sidebar-entry="plugin:example/review"]'),
-    ).not.toBeNull();
+    ).toBeNull();
     expect(
       sidebar.querySelector('.sidebar-rail [data-sidebar-entry="plugin:example/review"] a'),
     ).toBeNull();
@@ -604,7 +604,11 @@ describe("AppSidebar interleaved zone", () => {
     const target = zoneEntry(sidebar, "route:plugins");
     const dataTransfer = createDataTransferStub();
     dispatchDragEvent(source, "dragstart", dataTransfer);
+    await sidebar.updateComplete;
+    expect(sidebar.querySelector(".sidebar-rail__pins--drag-active")).toBeNull();
     dispatchDragEvent(target, "dragover", dataTransfer);
+    await sidebar.updateComplete;
+    expect(sidebar.querySelector(".sidebar-rail__pins--drag-active")).toBeNull();
     dispatchDragEvent(target, "drop", dataTransfer);
     await sidebar.updateComplete;
     await vi.dynamicImportSettled();
@@ -676,10 +680,8 @@ describe("AppSidebar interleaved zone", () => {
     sidebar.onUpdateSidebarEntries = onUpdate;
     await sidebar.updateComplete;
 
-    // Unloaded references retain a neutral shortcut without displaying stale metadata.
     const unresolved = sidebar.querySelector('[data-sidebar-entry="session:agent:b:remote"]');
-    expect(unresolved).not.toBeNull();
-    expect(unresolved?.querySelector("a")).toBeNull();
+    expect(unresolved).toBeNull();
 
     sidebar
       .querySelector<HTMLButtonElement>(
