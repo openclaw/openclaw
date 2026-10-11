@@ -1,8 +1,16 @@
 /* @vitest-environment jsdom */
 import { createComponent } from "solid-js";
-import { expect, it, vi } from "vitest";
+import { expect, it, onTestFinished, vi } from "vitest";
 import { fnv1aUtf16 } from "../../../lib/fnv1a.ts";
+import { disposeSidebarContextLifecycles } from "../../../test-helpers/app-sidebar-context-lifecycle.ts";
+import { createContext, createSessions } from "../../../test-helpers/app-sidebar.ts";
+import {
+  createApplicationContextProvider,
+  createApplicationGateway,
+} from "../../../test-helpers/application-context.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
+import { createSolidApplicationContextProvider } from "../../../test-helpers/solid-application-context.tsx";
+import { flush } from "../../../test-helpers/solid-settle.ts";
 import { ChatDetailsSession } from "./chat-details-session.tsx";
 import type { ChatDetailsProps } from "./chat-details-types.ts";
 import type { ChatSubagentActivityLive } from "./chat-subagent-activity-live.ts";
@@ -15,13 +23,41 @@ async function mount(overrides: Partial<ChatDetailsProps> = {}) {
     selectedSession: { key: "agent:main:details", kind: "direct" },
     ...overrides,
   };
-  const view = mountSolid(() =>
-    createComponent(ChatDetailsSession, { props: value, presented: true }),
+  const context = createContext(createApplicationGateway().gateway, createSessions("main", []));
+  const provider = createApplicationContextProvider(context);
+  document.body.append(provider);
+  onTestFinished(() => {
+    provider.remove();
+    disposeSidebarContextLifecycles();
+  });
+  const view = mountSolid(
+    () => createComponent(ChatDetailsSession, { props: value, presented: true }),
+    { container: provider, wrapper: createSolidApplicationContextProvider(context).wrapper },
   );
   const element = view.container.querySelector("openclaw-chat-details-session")!;
   await element.updateComplete;
   return element;
 }
+it("retains disclosure state across revisions and resets it for another session", async () => {
+  const element = await mount();
+  const disclosure = element.querySelector<HTMLDetailsElement>(".chat-details-session")!;
+  expect(disclosure.open).toBe(true);
+  disclosure.open = false;
+  disclosure.dispatchEvent(new Event("toggle"));
+  flush();
+
+  element.props = { ...element.props!, detailsWorkspace: { root: "/workspace", label: "Updated" } };
+  await element.updateComplete;
+  expect(element.querySelector<HTMLDetailsElement>(".chat-details-session")!.open).toBe(false);
+
+  element.props = {
+    ...element.props!,
+    sessionKey: "agent:main:other",
+    selectedSession: { key: "agent:main:other", kind: "direct", sessionId: "other" },
+  };
+  await element.updateComplete;
+  expect(element.querySelector<HTMLDetailsElement>(".chat-details-session")!.open).toBe(true);
+});
 it("keeps immutable creator, mutable owner and participants distinct without claiming live presence", async () => {
   const element = await mount({
     selectedSession: {

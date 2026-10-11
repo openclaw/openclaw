@@ -170,7 +170,7 @@ export const ChatDetails = defineSolidBridge<Props>(
             </button>
           </div>
           <Show when={scope()} keyed>
-            {() => (
+            {(_scope) => (
               <>
                 <ChatDetailsSession props={props.props} presented={props.presented && opened()} />
                 <Show when={props.props?.progressCard || props.props?.progressCardInitialLoading}>

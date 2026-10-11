@@ -10,7 +10,7 @@ import { renderChatAuthorAvatar } from "./chat-author-avatar.ts";
 import type { ChatDetailsProps } from "./chat-details-types.ts";
 import { renderChatPullRequests } from "./chat-pull-requests.ts";
 import "./chat-subagent-activity-live.ts";
-import "./chat-summary-automations.tsx";
+import { ChatSummaryAutomations } from "./chat-summary-automations.tsx";
 
 type Props = { props?: ChatDetailsProps; presented: boolean };
 export type ChatDetailsSession = SolidBridgeElement<Props>;
@@ -27,7 +27,7 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
     );
     return (
       <Show when={identity()} keyed>
-        {() => {
+        {(_identity) => {
           const [expanded, setExpanded] = createSignal(true);
           const [pullRequestsOpen, setPullRequestsOpen] = createSignal(false);
           const [automationsOpen, setAutomationsOpen] = createSignal(false);
@@ -229,9 +229,9 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
                     {t("chat.sessionDetails.automations")}
                     <Icon name="chevronDown" />
                   </summary>
-                  <openclaw-chat-summary-automations
-                    prop:gateway={props.props?.pullRequestsGateway}
-                    prop:sessionKey={
+                  <ChatSummaryAutomations
+                    gateway={props.props?.pullRequestsGateway}
+                    sessionKey={
                       props.props
                         ? scopedSessionArtifactKey(
                             props.props.sessionKey,
@@ -239,7 +239,7 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
                           )
                         : ""
                     }
-                    prop:presented={active() && automationsOpen()}
+                    presented={active() && automationsOpen()}
                   />
                 </details>
               </details>

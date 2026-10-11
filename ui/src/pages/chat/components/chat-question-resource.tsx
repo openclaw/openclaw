@@ -64,7 +64,7 @@ export const ChatQuestionResource = defineSolidBridge<ResourceProps>(
         props.agentId,
         context ? gatewayPresentationScope(context.gateway).key : -1,
       ]);
-    let identity = key();
+    let identity = untrack(key);
     createEffect(
       () => {
         gateway?.read();

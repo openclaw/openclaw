@@ -13,7 +13,6 @@ import "./chat-message-reactions.css";
 declare module "@solidjs/web" {
   namespace JSX {
     interface IntrinsicElements {
-      "openclaw-tooltip": SolidJSX.HTMLAttributes<HTMLElement> & { "prop:content"?: string };
       "wa-popover": SolidJSX.HTMLAttributes<WaPopover> & {
         for?: string;
         placement?: MessageReactionPlacement;

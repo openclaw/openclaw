@@ -22,7 +22,7 @@ import { t } from "../../../lib/reactive/i18n.ts";
 import { resolveUiConversationIdentity } from "../../../lib/sessions/session-key.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../../lit/solid-bridge.ts";
 import "../../../styles/chat/summary-automations.css";
-import "./chat-summary-overflow.tsx";
+import { ChatSummaryOverflow } from "./chat-summary-overflow.tsx";
 
 type Props = {
   gateway: ApplicationGateway | undefined;
@@ -232,9 +232,9 @@ export const ChatSummaryAutomations = defineSolidBridge<Props>(
                 <span class="chat-summary__automation-icon" aria-hidden="true">
                   <Icon name="clock" />
                 </span>
-                <openclaw-summary-overflow
+                <ChatSummaryOverflow
                   class="chat-summary__automation-title"
-                  prop:text={job().name.trim() || job().id}
+                  text={job().name.trim() || job().id}
                 />
                 <span class="chat-summary__automation-state" title={jobState(job())}>
                   {jobState(job())}

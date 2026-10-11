@@ -2,7 +2,14 @@ import type WaDropdown from "@awesome.me/webawesome/dist/components/dropdown/dro
 import type { ProgressCard } from "@openclaw/gateway-protocol";
 import { createComponent } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { disposeSidebarContextLifecycles } from "../../../test-helpers/app-sidebar-context-lifecycle.ts";
+import { createContext, createSessions } from "../../../test-helpers/app-sidebar.ts";
+import {
+  createApplicationContextProvider,
+  createApplicationGateway,
+} from "../../../test-helpers/application-context.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
+import { createSolidApplicationContextProvider } from "../../../test-helpers/solid-application-context.tsx";
 import type { ChatDetailsProgress } from "./chat-details-progress.tsx";
 import type { ChatDetailsSession } from "./chat-details-session.tsx";
 import type { ChatDetailsProps } from "./chat-details-types.ts";
@@ -39,7 +46,8 @@ async function fixture(value = props()) {
   const styles = document.createElement("style");
   styles.textContent = [baseStyles, progressStyles, detailsStyles].join("\n");
   document.head.append(styles);
-  const frame = document.createElement("div");
+  const context = createContext(createApplicationGateway().gateway, createSessions("main", []));
+  const frame = createApplicationContextProvider(context);
   frame.className = "chat-main__conversation-frame";
   frame.style.cssText = "position:relative;width:600px;height:560px;margin-left:20px";
   const footer = document.createElement("div");
@@ -48,6 +56,7 @@ async function fixture(value = props()) {
   document.body.append(frame);
   const view = mountSolid(() => createComponent(ChatDetails, { props: value, presented: true }), {
     container: frame,
+    wrapper: createSolidApplicationContextProvider(context).wrapper,
   });
   const element = view.container.querySelector("openclaw-chat-details")!;
   frame.append(footer);
@@ -78,6 +87,7 @@ afterEach(() => {
   for (const element of mounted.splice(0)) {
     element.remove();
   }
+  disposeSidebarContextLifecycles();
 });
 
 describe("chat Details presentation", () => {

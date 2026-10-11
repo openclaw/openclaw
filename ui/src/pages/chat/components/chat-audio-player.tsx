@@ -1,4 +1,13 @@
-import { createEffect, createMemo, createSignal, For, onCleanup, onSettled, Show } from "solid-js";
+import {
+  createEffect,
+  createMemo,
+  createSignal,
+  For,
+  onCleanup,
+  onSettled,
+  Show,
+  untrack,
+} from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../../lit/solid-bridge.ts";
@@ -22,6 +31,7 @@ import {
   CHAT_AUDIO_WAVEFORM_SAMPLE_RATE,
   computeChatAudioWaveformPeaks,
   retainCachedChatAudioBlob,
+  resampleChatAudioWaveformPeaks,
   shouldFetchChatAudioWaveform,
   type CachedChatAudioBlob,
 } from "./chat-audio-waveform.ts";
@@ -32,8 +42,6 @@ import { readResponseBytesWithinLimit } from "./chat-response-bytes.ts";
 const SEEK_STEP_SECONDS = 5;
 const WAVEFORM_FETCH_TIMEOUT_MS = 30_000;
 const WAVEFORM_DECODE_DURATION_TOLERANCE = 1.2;
-const WAVEFORM_MIN_BAR_WIDTH_PX = 2.5;
-const WAVEFORM_MIN_GAP_PX = 2.5;
 
 function formatChatMediaTime(seconds: number): string {
   if (!Number.isFinite(seconds) || seconds < 0) {
@@ -194,12 +202,15 @@ function ChatAudioPlayerContent(
     if (releaseWaveformBlob) {
       return;
     }
-    const pending = sourceController.sync(
-      media,
-      props.src,
-      props.sourceIdentity,
-      props.playback,
-      props.authToken,
+    // The source effect tracks changes; imperative ref/event calls sample current props.
+    const pending = untrack(() =>
+      sourceController.sync(
+        media,
+        props.src,
+        props.sourceIdentity,
+        props.playback,
+        props.authToken,
+      ),
     );
     publish();
     if (!pending && waveformVisible) {
@@ -216,12 +227,14 @@ function ChatAudioPlayerContent(
   }
 
   function resolveWaveformCacheKey(): string {
-    return [
-      props.sourceIdentity.trim(),
-      props.playback,
-      props.src.trim(),
-      props.authToken?.trim() ?? "",
-    ].join("\0");
+    return untrack(() =>
+      [
+        props.sourceIdentity.trim(),
+        props.playback,
+        props.src.trim(),
+        props.authToken?.trim() ?? "",
+      ].join("\0"),
+    );
   }
 
   function applyPreparedAudio(
@@ -239,7 +252,11 @@ function ChatAudioPlayerContent(
     if (prepared.value.durationSeconds !== undefined) {
       updateState({ duration: prepared.value.durationSeconds });
     }
-    sourceController.updateSource(media, prepared.value.blobUrl, props.sourceIdentity);
+    sourceController.updateSource(
+      media,
+      prepared.value.blobUrl,
+      untrack(() => props.sourceIdentity),
+    );
   }
 
   function adoptPreparedAudioForPlayback(): void {
@@ -269,11 +286,15 @@ function ChatAudioPlayerContent(
       applyPreparedAudio(cacheKey, cached);
       return;
     }
-    const durationSeconds =
-      props.serverDurationMs !== undefined ? props.serverDurationMs / 1_000 : undefined;
+    const { serverDurationMs, sizeBytes, authToken } = untrack(() => ({
+      serverDurationMs: props.serverDurationMs,
+      sizeBytes: props.sizeBytes,
+      authToken: props.authToken,
+    }));
+    const durationSeconds = serverDurationMs !== undefined ? serverDurationMs / 1_000 : undefined;
     if (
       durationSeconds === undefined ||
-      !shouldFetchChatAudioWaveform({ sizeBytes: props.sizeBytes, durationSeconds })
+      !shouldFetchChatAudioWaveform({ sizeBytes, durationSeconds })
     ) {
       return;
     }
@@ -283,7 +304,7 @@ function ChatAudioPlayerContent(
     }
     waveformAttempted = true;
 
-    const headers = buildChatMediaFetchHeaders(props.authToken);
+    const headers = buildChatMediaFetchHeaders(authToken);
     headers.set("Accept", "audio/*");
     const controller = new AbortController();
     waveformController = controller;
@@ -456,26 +477,9 @@ function ChatAudioPlayerContent(
   const Seek = () => {
     const waveformPeaks = createMemo(() => view().waveformPeaks);
     const waveformWidth = createMemo(() => view().waveformWidth);
-    const displayedPeaks = createMemo(() => {
-      const peaks = waveformPeaks();
-      if (!peaks) {
-        return [];
-      }
-      const bucketWidth = WAVEFORM_MIN_BAR_WIDTH_PX + WAVEFORM_MIN_GAP_PX;
-      const count =
-        waveformWidth() > 0
-          ? Math.max(1, Math.min(peaks.length, Math.floor(waveformWidth() / bucketWidth)))
-          : peaks.length;
-      return Array.from({ length: count }, (_, index) => {
-        const start = Math.floor((index * peaks.length) / count);
-        const end = Math.max(start + 1, Math.floor(((index + 1) * peaks.length) / count));
-        let total = 0;
-        for (let sourceIndex = start; sourceIndex < end; sourceIndex += 1) {
-          total += peaks[sourceIndex] ?? 0;
-        }
-        return Math.min(1, Math.max(0, total / Math.max(1, end - start)));
-      });
-    });
+    const displayedPeaks = createMemo(() =>
+      resampleChatAudioWaveformPeaks(waveformPeaks(), waveformWidth()),
+    );
     const Input = () => (
       <input
         class={[

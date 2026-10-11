@@ -26,6 +26,7 @@ export type ChatQuestionPanel = SolidBridgeElement<PanelBridgeProps>;
 
 function QuestionPanelRequest(props: { panel: QuestionPanelProps; host: ChatQuestionPanel }) {
   const initialModel = untrack(() => props.panel.model);
+  const host = untrack(() => props.host);
   initializeQuestionDrafts(initialModel.questions, initialModel.drafts);
   const [currentQuestionIndex, setCurrentQuestionIndex] = createSignal(0);
   const [uncontrolledCollapsed, setUncontrolledCollapsed] = createSignal(initialModel.collapsed);
@@ -56,12 +57,12 @@ function QuestionPanelRequest(props: { panel: QuestionPanelProps; host: ChatQues
     return item && (item.allowEmpty || answerValues(model(), item).length > 0);
   };
   const focusPanel = () =>
-    props.host.querySelector<HTMLElement>(".chat-question-panel")?.focus({ preventScroll: true });
+    host.querySelector<HTMLElement>(".chat-question-panel")?.focus({ preventScroll: true });
   let initialFocus = true;
   createEffect(
-    () => [collapsed(), currentQuestionIndex()] as const,
-    ([isCollapsed]) => {
-      if (!isCollapsed && (!initialFocus || model().autoFocus !== false)) {
+    () => [collapsed(), currentQuestionIndex(), model().autoFocus] as const,
+    ([isCollapsed, , autoFocus]) => {
+      if (!isCollapsed && (!initialFocus || autoFocus !== false)) {
         focusPanel();
       }
       initialFocus = false;
@@ -70,9 +71,7 @@ function QuestionPanelRequest(props: { panel: QuestionPanelProps; host: ChatQues
   createEffect(
     () => [draft(), currentQuestionIndex(), collapsed()] as const,
     () => {
-      const textarea = props.host.querySelector<HTMLTextAreaElement>(
-        ".chat-question-panel__textarea",
-      );
+      const textarea = host.querySelector<HTMLTextAreaElement>(".chat-question-panel__textarea");
       if (answerTextarea !== textarea) {
         if (answerTextarea) {
           disconnectTextareaOverflowObserver(answerTextarea);
@@ -243,7 +242,7 @@ function QuestionPanelRequest(props: { panel: QuestionPanelProps; host: ChatQues
       return;
     }
     const index = Number(event.key) - 1;
-    const option = props.host.querySelector<HTMLButtonElement>(
+    const option = host.querySelector<HTMLButtonElement>(
       `.chat-question-panel__option[data-option-index="${index}"]`,
     );
     if (index >= 0 && index < 9 && option) {
@@ -560,7 +559,7 @@ export const ChatQuestionPanel = defineSolidBridge<PanelBridgeProps>(
     });
     return (
       <Show when={request()} keyed>
-        {() => <QuestionPanelRequest panel={props.props!} host={host} />}
+        {(_request) => <QuestionPanelRequest panel={props.props!} host={host} />}
       </Show>
     );
   },

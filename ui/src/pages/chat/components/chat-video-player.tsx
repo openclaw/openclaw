@@ -1,4 +1,12 @@
-import { createEffect, createMemo, createSignal, onCleanup, onSettled, Show } from "solid-js";
+import {
+  createEffect,
+  createMemo,
+  createSignal,
+  onCleanup,
+  onSettled,
+  Show,
+  untrack,
+} from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../../lit/solid-bridge.ts";
@@ -51,12 +59,15 @@ function ChatVideoPlayerContent(
     if (!media || !host.isConnected || !mediaVisible) {
       return;
     }
-    const pending = sourceController.sync(
-      media,
-      props.src,
-      props.sourceIdentity,
-      props.playback,
-      props.authToken,
+    // The source effect tracks changes; imperative ref/event calls sample current props.
+    const pending = untrack(() =>
+      sourceController.sync(
+        media,
+        props.src,
+        props.sourceIdentity,
+        props.playback,
+        props.authToken,
+      ),
     );
     publish();
     void pending?.then(() => {
@@ -73,8 +84,8 @@ function ChatVideoPlayerContent(
     () => [props.src, props.sourceIdentity, props.playback, props.authToken] as const,
     { equals: (before, after) => before.every((value, index) => value === after[index]) },
   );
-  createEffect(sourceSnapshot, () => {
-    if (!props.src && media) {
+  createEffect(sourceSnapshot, ([src]) => {
+    if (!src && media) {
       sourceController.cancel();
       sourceController.reset(media);
     }

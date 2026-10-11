@@ -1,10 +1,10 @@
-import { createEffect, createSignal, onCleanup } from "solid-js";
+import { createEffect, createSignal, lazy, Loading, onCleanup } from "solid-js";
 import {
   isOptionalElementDefined,
   LazyCustomElementRequestController,
 } from "../../../app/lazy-custom-element.ts";
-import { Icon } from "../../../components/solid/icon.tsx";
-import { formatUiError } from "../../../lib/format-error.ts";
+import { LazyViewError } from "../../../components/solid/lazy-view-error.tsx";
+import { LoadingState } from "../../../components/solid/loading-state.tsx";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../../lit/solid-bridge.ts";
 import type { QuestionPanelProps } from "./chat-question-card.ts";
@@ -13,12 +13,15 @@ type CardProps = { props?: QuestionPanelProps };
 export type ChatQuestionCard = SolidBridgeElement<CardProps>;
 
 // Summaries and panel props are needed during chat boot; interactive controls are not.
+const QuestionPanel = lazy(() => import("./chat-question-panel.tsx"), {
+  export: "ChatQuestionPanel",
+});
 const questionPanelElement = {
   tagName: "openclaw-chat-question-panel",
   get label() {
     return t("chat.questions.eyebrow");
   },
-  loadModule: () => import("./chat-question-panel.tsx"),
+  loadModule: QuestionPanel.preload,
 };
 
 export const ChatQuestionCard = defineSolidBridge<CardProps>(
@@ -46,60 +49,20 @@ export const ChatQuestionCard = defineSolidBridge<CardProps>(
     return (
       <>
         {props.props && (
-          <>
+          <Loading fallback={<LoadingState />}>
             {loaded() ? (
-              <openclaw-chat-question-panel prop:props={props.props} />
+              <QuestionPanel props={props.props} />
             ) : failure() ? (
-              <div
-                class={["lazy-view-error", { "lazy-view-error--stale": failure()?.stale }]}
-                role="alert"
-              >
-                <div class="lazy-view-error__icon" aria-hidden="true">
-                  <Icon name={failure()?.stale ? "refresh" : "alertTriangle"} />
-                </div>
-                <div class="lazy-view-error__title">
-                  {t(failure()?.stale ? "lazyView.staleTitle" : "lazyView.errorTitle")}
-                </div>
-                <div class="lazy-view-error__subtitle">{questionPanelElement.label}</div>
-                <div class="lazy-view-error__actions">
-                  <button class="btn lazy-view-error__action" onClick={() => loader.retry()}>
-                    {t(failure()?.stale ? "common.reload" : "lazyView.retry")}
-                  </button>
-                </div>
-                <details class="lazy-view-error__details">
-                  <summary>{t("chat.details")}</summary>
-                  <code class="lazy-view-error__detail">{formatUiError(failure()?.error)}</code>
-                </details>
-              </div>
+              <LazyViewError
+                error={failure()?.error}
+                stale={failure()?.stale}
+                subtitle={questionPanelElement.label}
+                onRetry={() => loader.retry()}
+              />
             ) : (
-              <section
-                class="lazy-view-state lazy-view-state--loading"
-                role="status"
-                aria-live="polite"
-                aria-label={t("common.loading")}
-              >
-                <div class="loading-skeleton" aria-hidden="true">
-                  <div class="loading-skeleton__header">
-                    <div class="skeleton loading-skeleton__avatar" />
-                    <div class="skeleton skeleton-line loading-skeleton__title" />
-                  </div>
-                  <div class="loading-skeleton__messages">
-                    <div class="loading-skeleton__message loading-skeleton__message--user">
-                      <div class="skeleton skeleton-line" />
-                      <div class="skeleton skeleton-line skeleton-line--medium" />
-                    </div>
-                    <div class="loading-skeleton__message">
-                      <div class="skeleton loading-skeleton__avatar" />
-                      <div class="skeleton skeleton-line" />
-                      <div class="skeleton skeleton-line skeleton-line--long" />
-                      <div class="skeleton skeleton-line skeleton-line--medium" />
-                    </div>
-                  </div>
-                  <div class="skeleton loading-skeleton__composer" />
-                </div>
-              </section>
+              <LoadingState />
             )}
-          </>
+          </Loading>
         )}
       </>
     );

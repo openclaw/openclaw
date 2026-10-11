@@ -260,9 +260,9 @@ function CameraCaptureContent(props: CameraProps, host: OpenClawChatCameraCaptur
     destination?.(host);
   };
   createEffect(
-    () => [props.disabled, props.readSignal],
-    () => {
-      if (state.stage !== "closed" && (props.disabled || props.readSignal !== activeSignal)) {
+    () => [props.disabled, props.readSignal] as const,
+    ([disabled, readSignal]) => {
+      if (state.stage !== "closed" && (disabled || readSignal !== activeSignal)) {
         close();
       }
     },
