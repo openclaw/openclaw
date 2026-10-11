@@ -740,6 +740,21 @@ describe("model chat and native model ownership", () => {
     },
   );
 
+  it("rereads native ownership when the writer claim follows run admission", async () => {
+    const fixture = await createFixture({}, () => ({ model: "native", auth: "native" }));
+    const admission = await assertAgentHarnessRunAdmission(fixture.runParams);
+    // The lane claims the writer after admission, as the run orchestrator does.
+    await patchSessionEntryCore(fixture.target, () => ({ activeWriterRunId: "claimed-writer" }));
+    fixture.runParams.sessionTarget = {
+      ...fixture.target,
+      sessionId: fixture.entry.sessionId,
+      expectedWriterRunId: "claimed-writer",
+    };
+    const setup = await fixture.resolve(undefined, undefined, admission);
+    expect(setup.nativeModelOwned).toBe(true);
+    await expect(setup.nativeSessionRuntime!.assertCurrent()).resolves.toBeUndefined();
+  });
+
   it("rechecks the admitted writer pin on each worker-prepared ownership read", async () => {
     const fixture = await createFixture({}, () => ({ model: "native", auth: "native" }));
     fixture.runParams.sessionTarget = {

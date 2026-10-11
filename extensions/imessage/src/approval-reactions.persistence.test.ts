@@ -203,6 +203,46 @@ describe("iMessage approval reaction persistence", () => {
     expect(gatewayMocks.resolveApprovalOverGateway).toHaveBeenCalledTimes(1);
   });
 
+  it("persists new poll targets after a transient store-open failure", async () => {
+    installIMessageStateRuntimeForTest();
+    const state = getOptionalIMessageRuntime()?.state;
+    if (!state) {
+      throw new Error("Expected synthetic iMessage state runtime");
+    }
+    const openStore = state.openKeyedStoreV2.bind(state);
+    let failPollStore = true;
+    const openSpy = vi
+      .spyOn(state, "openKeyedStoreV2")
+      .mockImplementation(<T>(options: OpenAsyncKeyedStoreOptions) => {
+        if (options.namespace === "imessage.approval-reaction-poll-targets" && failPollStore) {
+          failPollStore = false;
+          throw new Error("storage temporarily unavailable");
+        }
+        return openStore<T>(options);
+      });
+    const target = {
+      accountId: "recovered-account",
+      conversation: { chatId: 42 },
+      messageId: "recovered-message",
+      approvalId: "exec-recovered",
+      approvalKind: "exec" as const,
+      allowedDecisions: ["allow-once", "deny"] as const,
+    };
+    try {
+      await registerIMessageApprovalReactionTarget(target);
+      await registerIMessageApprovalReactionTarget(target);
+      clearIMessageApprovalReactionTargetsForTest();
+      expect(await listPendingIMessageApprovalReactionPollTargets(target)).toEqual([
+        expect.objectContaining({
+          approvalId: target.approvalId,
+          messageId: target.messageId,
+        }),
+      ]);
+    } finally {
+      openSpy.mockRestore();
+    }
+  });
+
   it.each([
     { name: "decision", approvalKind: "exec", allowedDecisions: ["allow-once", "invalid"] },
     { name: "kind", approvalKind: "unknown", allowedDecisions: ["allow-once"] },

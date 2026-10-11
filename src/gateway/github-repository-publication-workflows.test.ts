@@ -357,8 +357,8 @@ describe("repository checkpoint workflow authority", () => {
           ...params,
           execution: {
             ...params.execution,
-            recordEffect: (effect, observed) => {
-              params.execution.recordEffect(effect, observed);
+            recordEffect: async (effect, observed) => {
+              await params.execution.recordEffect(effect, observed);
               if (effect === "push" && observed === undefined) {
                 pushRecorded = true;
               }
