@@ -77,7 +77,10 @@ export function buildXaiImageGenerationProvider(): ImageGenerationProvider {
   return createOpenAiCompatibleImageGenerationProvider({
     ...metadata,
     defaultBaseUrl: XAI_BASE_URL,
-    resolveAllowPrivateNetwork: () => false,
+    // Private endpoints stay refused unless the operator opts in with
+    // models.providers.xai.request.allowPrivateNetwork: true.
+    resolveAllowPrivateNetwork: ({ providerConfig }) =>
+      providerConfig?.request?.allowPrivateNetwork === true,
     defaultTimeoutMs: XAI_IMAGE_DEFAULT_TIMEOUT_MS,
     buildGenerateRequest: buildRequest,
     buildEditRequest: buildRequest,
