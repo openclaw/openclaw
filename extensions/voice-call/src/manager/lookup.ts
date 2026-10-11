@@ -1,22 +1,13 @@
 import type { CallId, CallRecord } from "../types.js";
 
-/** Resolve an active call from provider call id with map lookup plus stale-map fallback scan. */
+/** Resolve an active call through the index maintained by call mutations. */
 export function getCallByProviderCallId(params: {
   activeCalls: Map<CallId, CallRecord>;
   providerCallIdMap: Map<string, CallId>;
   providerCallId: string;
 }): CallRecord | undefined {
   const callId = params.providerCallIdMap.get(params.providerCallId);
-  if (callId) {
-    return params.activeCalls.get(callId);
-  }
-
-  for (const call of params.activeCalls.values()) {
-    if (call.providerCallId === params.providerCallId) {
-      return call;
-    }
-  }
-  return undefined;
+  return callId ? params.activeCalls.get(callId) : undefined;
 }
 
 /** Resolve an active call by internal call id or provider call id. */
