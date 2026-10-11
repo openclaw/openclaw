@@ -38,11 +38,12 @@ vi.mock("../commands/doctor-model-catalog-credentials.js", () => ({
   maybeMigrateModelCatalogCredentials: vi.fn(async () => undefined),
 }));
 
+// mock-isolation: Auth migration fixtures isolate live credential stores and OAuth refresh while proving migration and persistence ordering.
 vi.mock("../commands/doctor-auth.js", () => ({
-  noteAuthProfileHealth: vi.fn(async () => undefined),
-  noteCopilotAmbientToken: vi.fn(),
-  noteLegacyCodexProviderOverride: vi.fn(() => undefined),
-  noteSharedAuthStoreStatus: vi.fn(() => undefined),
+  inspectAuthProfileHealth: vi.fn(async () => []),
+  collectCopilotAmbientTokenFindings: vi.fn(() => []),
+  collectLegacyCodexProviderOverrideFindings: vi.fn(() => []),
+  collectSharedAuthStoreFindings: vi.fn(() => []),
 }));
 
 const states: OpenClawTestState[] = [];

@@ -72,10 +72,10 @@ const mocks = vi.hoisted(() => ({
   })),
   removeAuthProfilesAcrossOwnerStores: vi.fn(async () => true),
   collectAuthProfileHealthFindings: vi.fn(async () => []),
-  noteAuthProfileHealth: vi.fn().mockResolvedValue(undefined),
-  noteCopilotAmbientToken: vi.fn(),
-  noteLegacyCodexProviderOverride: vi.fn(),
-  noteSharedAuthStoreStatus: vi.fn(),
+  inspectAuthProfileHealth: vi.fn().mockResolvedValue([]),
+  collectCopilotAmbientTokenFindings: vi.fn(() => []),
+  collectLegacyCodexProviderOverrideFindings: vi.fn(() => []),
+  collectSharedAuthStoreFindings: vi.fn(() => []),
   noteMemorySearchHealth: vi.fn().mockResolvedValue(undefined),
   collectMemorySearchHealthFindings: vi
     .fn<() => Promise<readonly HealthFinding[]>>()
@@ -113,7 +113,7 @@ const mocks = vi.hoisted(() => ({
     status: { ok: true },
   })),
   probeGatewayMemoryStatus: vi.fn(async () => ({ checked: true, ready: true, skipped: false })),
-  noteChromeMcpBrowserReadiness: vi.fn(),
+  collectBrowserReadinessFindings: vi.fn().mockResolvedValue([]),
   detectLegacyStateMigrations: vi.fn(),
   runLegacyStateMigrations: vi.fn(),
   repairObsoleteGeneratedExecApprovals: vi.fn(() => 0),
@@ -129,10 +129,6 @@ const mocks = vi.hoisted(() => ({
     }),
   ),
   maybeRepairLegacyPluginManifestContracts: vi.fn().mockResolvedValue(undefined),
-  maybeRepairOwnedChromeExtensionNativeHosts: vi.fn().mockResolvedValue({
-    changes: [],
-    warnings: [],
-  }),
   listAgentIds: vi.fn<(_cfg: OpenClawConfig) => string[]>(() => ["default"]),
   listAgentEntries: vi.fn(() => [{ id: "default" }]),
   tryResolveSoleAgentId: vi.fn<(_cfg: OpenClawConfig) => string | undefined>(() => "default"),
@@ -372,12 +368,13 @@ vi.mock("../agents/auth-profiles.js", async (importOriginal) => ({
   removeAuthProfilesAcrossOwnerStores: mocks.removeAuthProfilesAcrossOwnerStores,
 }));
 
+// mock-isolation: Contribution fixtures own auth diagnostics and isolate live credential stores and OAuth refresh effects.
 vi.mock("../commands/doctor-auth.js", () => ({
   collectAuthProfileHealthFindings: mocks.collectAuthProfileHealthFindings,
-  noteAuthProfileHealth: mocks.noteAuthProfileHealth,
-  noteCopilotAmbientToken: mocks.noteCopilotAmbientToken,
-  noteLegacyCodexProviderOverride: mocks.noteLegacyCodexProviderOverride,
-  noteSharedAuthStoreStatus: mocks.noteSharedAuthStoreStatus,
+  inspectAuthProfileHealth: mocks.inspectAuthProfileHealth,
+  collectCopilotAmbientTokenFindings: mocks.collectCopilotAmbientTokenFindings,
+  collectLegacyCodexProviderOverrideFindings: mocks.collectLegacyCodexProviderOverrideFindings,
+  collectSharedAuthStoreFindings: mocks.collectSharedAuthStoreFindings,
 }));
 
 vi.mock("../commands/doctor-memory-recall.js", () => ({
@@ -440,9 +437,9 @@ vi.mock("../commands/doctor-gateway-health.js", () => ({
   probeGatewayMemoryStatus: mocks.probeGatewayMemoryStatus,
 }));
 
+// mock-isolation: Contribution fixtures own browser diagnostics and isolate host executable probes and personal browser state.
 vi.mock("../commands/doctor-browser.js", () => ({
-  noteChromeMcpBrowserReadiness: mocks.noteChromeMcpBrowserReadiness,
-  maybeRepairOwnedChromeExtensionNativeHosts: mocks.maybeRepairOwnedChromeExtensionNativeHosts,
+  collectBrowserReadinessFindings: mocks.collectBrowserReadinessFindings,
 }));
 
 vi.mock("../agents/agent-scope.js", () => ({
@@ -702,7 +699,7 @@ describe("doctor health contributions", () => {
     });
     mocks.maybeRepairGatewayDaemon.mockResolvedValue(undefined);
     mocks.maybeRepairLegacyPluginManifestContracts.mockResolvedValue(undefined);
-    mocks.noteAuthProfileHealth.mockResolvedValue(undefined);
+    mocks.inspectAuthProfileHealth.mockResolvedValue([]);
     mocks.noteMemorySearchHealth.mockResolvedValue(undefined);
     mocks.collectMemorySearchHealthFindings.mockResolvedValue([]);
     mocks.noteWebFetchProxyDiagnostic.mockResolvedValue(undefined);
@@ -721,7 +718,7 @@ describe("doctor health contributions", () => {
       checksRepaired: 0,
       checksValidated: 0,
     }));
-    mocks.noteChromeMcpBrowserReadiness.mockResolvedValue(undefined);
+    mocks.collectBrowserReadinessFindings.mockResolvedValue([]);
     mocks.detectLegacyStateMigrations.mockResolvedValue({ preview: [], warnings: [], notices: [] });
     mocks.runLegacyStateMigrations.mockResolvedValue({
       changes: [],
@@ -1966,7 +1963,7 @@ describe("doctor health contributions", () => {
       mocks.removeAuthProfilesAcrossOwnerStores.mock.invocationCallOrder[0]!,
     );
     expect(mocks.removeAuthProfilesAcrossOwnerStores.mock.invocationCallOrder[0]).toBeLessThan(
-      mocks.noteAuthProfileHealth.mock.invocationCallOrder[0]!,
+      mocks.inspectAuthProfileHealth.mock.invocationCallOrder[0]!,
     );
     expect(ctx.configResult.retiredAuthProfileCleanupPlans).toBeUndefined();
     expect(ctx.configResult.explicitSetPaths).toContainEqual(["agents", "defaults", "models"]);
@@ -1996,7 +1993,7 @@ describe("doctor health contributions", () => {
 
     expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
     expect(mocks.removeAuthProfilesAcrossOwnerStores).not.toHaveBeenCalled();
-    expect(mocks.noteAuthProfileHealth).not.toHaveBeenCalled();
+    expect(mocks.inspectAuthProfileHealth).not.toHaveBeenCalled();
     expect(ctx.configResult.retiredAuthProfileCleanupPlans).toHaveLength(1);
   });
 

@@ -1,9 +1,6 @@
 import { listAgentIds } from "../agents/agent-scope.js";
 import { isExperimentalClawsEnabled } from "../claws/experimental.js";
-import {
-  maybeRepairOwnedChromeExtensionNativeHosts,
-  noteChromeMcpBrowserReadiness,
-} from "../commands/doctor-browser.js";
+import { collectBrowserReadinessFindings } from "../commands/doctor-browser.js";
 import { hasConfiguredCommandOwners } from "../commands/doctor-command-owner.js";
 import {
   checkShellCompletionStatus,
@@ -573,28 +570,7 @@ const browserCheck: CoreHealthCheck = {
   id: "core/doctor/browser",
   description: "Browser readiness is captured as structured findings.",
   async detect(ctx) {
-    const collector = createNoteCollector("core/doctor/browser");
-    await noteChromeMcpBrowserReadiness(ctx.cfg, { noteFn: collector.noteFn });
-    return collector.findings;
-  },
-  async repair(ctx) {
-    if (ctx.dryRun === true) {
-      return {
-        status: "skipped",
-        reason: "native-host repair requires filesystem writes",
-        changes: [],
-      };
-    }
-    const result = await maybeRepairOwnedChromeExtensionNativeHosts();
-    return {
-      ...(result.status
-        ? { status: result.status, reason: result.reason }
-        : result.changes.length === 0 && result.warnings.length > 0
-          ? { status: "failed" as const, reason: result.warnings.join("; ") }
-          : {}),
-      changes: result.changes,
-      warnings: result.warnings,
-    };
+    return await collectBrowserReadinessFindings(ctx.cfg);
   },
 };
 

@@ -4,7 +4,6 @@ import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { maybeRepairOwnedChromeExtensionNativeHosts } from "../commands/doctor-browser.js";
 import { createDoctorPrompter } from "../commands/doctor-prompter.js";
 import { useAutoCleanupTempDirTracker } from "../plugin-sdk/test-env.js";
 import { loadBundledPluginFacade } from "../test-utils/bundled-plugin-public-surface.js";
@@ -112,26 +111,22 @@ function repairContext() {
 }
 
 it.each([false, true])(
-  "preserves full/facade/structured browser skip (import %s)",
+  "reports browser setup once without inspecting profiles or inventing failed repair (import %s)",
   async (allowSystemProfileImport) => {
     ctx.cfg = { browser: { ...ctx.cfg.browser, allowSystemProfileImport } };
     await runBrowserHealth(ctx);
     expect(accesses).toEqual([]);
-    const notes = capture.note.mock.calls.map(([message]) => String(message)).join("\n");
-    expect(notes).toContain("profile discovery skipped");
-    expect(notes).toContain("native bootstrap was not inspected");
+    expect(capture.note).not.toHaveBeenCalled();
+    expect(ctx.healthFindings).toEqual([
+      expect.objectContaining({
+        category: "recommended",
+        message: expect.stringContaining("native bootstrap was not inspected"),
+        fixHint: expect.stringContaining("openclaw browser extension status --json"),
+      }),
+    ]);
     const findings = await check.detect(repairContext());
-    const findingText = findings
-      .map((finding) => [finding.message, finding.fixHint].join("\n"))
-      .join("\n");
-    expect(findingText).toContain("profile discovery skipped");
-    expect(findingText).toContain("native bootstrap was not inspected");
-    const result = await check.repair?.(repairContext(), findings);
-    expect(result?.changes).toEqual([]);
-    expect(result?.warnings?.join("\n")).toContain("native-host repair skipped");
-    expect(result?.status).toBe("skipped");
-    expect(result?.reason).toContain("Doctor does not inspect personal browser profiles");
-    await expect(maybeRepairOwnedChromeExtensionNativeHosts()).resolves.toEqual(result);
+    expect(findings).toEqual(ctx.healthFindings);
+    expect(check.repair).toBeUndefined();
     const run = await runDoctorHealthRepairs(repairContext(), { checks: [check] });
     expect(run).toMatchObject({
       checksRun: 1,
@@ -139,92 +134,58 @@ it.each([false, true])(
       checksValidated: 0,
       changes: [],
       effects: [],
+      warnings: [],
     });
     expect(run.remainingFindings).toEqual(run.findings);
-    expect(run.warnings).toEqual([
-      ...result!.warnings!,
-      `core/doctor/browser repair skipped: ${result!.reason}`,
-    ]);
     expect(accesses).toEqual([]);
   },
 );
 
-it.each([
-  {
-    label: "warning-only failure, even if the text says skipped",
-    output: { changes: [], warnings: ["native-host repair skipped: invalid registration"] },
-    status: "failed",
-    reason: "native-host repair skipped: invalid registration",
-  },
-  {
-    label: "explicit failure",
-    output: {
-      status: "failed",
-      reason: "registration integrity failure",
-      changes: [],
-      warnings: [],
-    },
-    status: "failed",
-    reason: "registration integrity failure",
-  },
-  {
-    label: "completed repair",
-    output: { changes: ["Repaired registration."], warnings: [] },
-    status: undefined,
-    reason: undefined,
-  },
-])("preserves $label through the facade and adapter", async ({ output, status, reason }) => {
-  capture.surface = {
-    ...capture.surface,
-    maybeRepairOwnedChromeExtensionNativeHosts: vi.fn().mockResolvedValue(output),
-  };
-  await expect(maybeRepairOwnedChromeExtensionNativeHosts()).resolves.toEqual(output);
-  const result = await check.repair?.(repairContext(), []);
-  expect(result).toMatchObject({ changes: output.changes, warnings: output.warnings });
-  expect(result?.status).toBe(status);
-  expect(result?.reason).toBe(reason);
-  const run = await runDoctorHealthRepairs(repairContext(), { checks: [check] });
-  expect(run.checksRepaired).toBe(status === "failed" ? 0 : 1);
-  expect(run.remainingFindings).toEqual(run.findings);
-  expect(run.warnings.join("\n")).toContain(
-    status === "failed" ? `repair failed: ${reason}` : "repair left",
-  );
-  expect(accesses).toEqual([]);
-});
-
-it.each(["loader", "repair hook"])("keeps %s errors as failures", async (source) => {
-  const fail = () => {
-    throw new Error("synthetic browser repair unavailable");
-  };
-  if (source === "loader") {
-    capture.load.mockImplementation(fail);
-  } else {
-    capture.surface = { ...capture.surface, maybeRepairOwnedChromeExtensionNativeHosts: fail };
-  }
-  const result = await check.repair?.(repairContext(), []);
-  expect(result).toMatchObject({ status: "failed", changes: [] });
-  expect(result?.warnings?.join("\n")).toContain("synthetic browser repair unavailable");
-  const run = await runDoctorHealthRepairs(repairContext(), { checks: [check] });
-  expect(run.checksRepaired).toBe(0);
-  expect(run.remainingFindings).toEqual(run.findings);
-  expect(run.warnings.join("\n")).toContain("repair failed:");
-  expect(accesses).toEqual([]);
-});
-
-it("does not load or invoke native-host repair in dry-run", async () => {
-  const repair = vi.fn().mockRejectedValue(new Error("must not invoke repair"));
-  capture.surface = { ...capture.surface, maybeRepairOwnedChromeExtensionNativeHosts: repair };
-  const result = await check.repair?.({ ...repairContext(), dryRun: true }, []);
-  expect(result).toEqual({
-    status: "skipped",
-    reason: "native-host repair requires filesystem writes",
-    changes: [],
+it("retains an actionable inspection gap when the bundled browser surface cannot load", async () => {
+  capture.load.mockImplementation(() => {
+    throw new Error("synthetic browser unavailable");
   });
-  expect(capture.load).not.toHaveBeenCalled();
-  const run = await runDoctorHealthRepairs(repairContext(), { checks: [check], dryRun: true });
-  expect(run).toMatchObject({ checksRepaired: 0, checksValidated: 0, changes: [], effects: [] });
-  expect(run.remainingFindings).toEqual(run.findings);
-  expect(run.warnings).toEqual([`core/doctor/browser repair skipped: ${result!.reason}`]);
-  expect(repair).not.toHaveBeenCalled();
+  await runBrowserHealth(ctx);
+  expect(ctx.healthFindings).toEqual([
+    expect.objectContaining({
+      category: "fix-now",
+      message: expect.stringContaining("synthetic browser unavailable"),
+      fixHint: expect.stringContaining("bundled browser plugin"),
+    }),
+  ]);
+  const run = await runDoctorHealthRepairs(repairContext(), { checks: [check] });
+  expect(run.remainingFindings).toEqual(ctx.healthFindings);
+  expect(accesses).toEqual([]);
+});
+
+it("names a configured missing executable and gives its repair instead of a plugin-load failure", async () => {
+  ctx.cfg = {
+    browser: {
+      headless: true,
+      extensionRelay: { allowLegacyAuth: false },
+      profiles: {
+        work: { driver: "openclaw", cdpPort: 18877, executablePath: "/synthetic/missing-browser" },
+      },
+    },
+  };
+  await runBrowserHealth(ctx);
+  expect(ctx.healthFindings).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({
+        category: "fix-now",
+        message: expect.stringContaining("/synthetic/missing-browser"),
+        fixHint: expect.stringContaining("browser.profiles.work.executablePath"),
+      }),
+    ]),
+  );
+  expect(ctx.healthFindings?.map((finding) => finding.fixHint).join("\n")).not.toContain(
+    "bundled browser plugin",
+  );
+  expect(ctx.healthFindings?.map((finding) => finding.message).join("\n")).toContain(
+    "A configured browser executable could not be used",
+  );
+  expect(ctx.healthFindings?.map((finding) => finding.message).join("\n")).not.toContain(
+    "No Chromium-based browser executable was found on this host",
+  );
   expect(accesses).toEqual([]);
 });

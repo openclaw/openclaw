@@ -1,5 +1,4 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { note } from "../../packages/terminal-core/src/note.js";
 import { resolveSharedAuthStorePath } from "../agents/auth-profiles/path-resolve.js";
 import {
   resolveAuthProfileDatabasePath,
@@ -11,7 +10,7 @@ import { resolvePersistedAuthProfileOwnerAgentDir } from "../agents/auth-profile
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { collectAuthProfileHealthFindings, noteAuthProfileHealth } from "./doctor-auth.js";
+import { collectAuthProfileHealthFindings, inspectAuthProfileHealth } from "./doctor-auth.js";
 import { createDoctorPrompter } from "./doctor-prompter.js";
 
 vi.mock("../../packages/terminal-core/src/note.js", () => ({ note: vi.fn() }));
@@ -28,6 +27,7 @@ vi.mock("../agents/cli-credentials.js", () => ({
 
 afterEach(() => {
   vi.clearAllMocks();
+  refreshProfile.mockReset();
   cliCredentials.readCodex.mockReset();
   cliCredentials.readMiniMax.mockReset();
 });
@@ -86,7 +86,7 @@ describe("Doctor shared auth health", () => {
             "Re-authenticate with `openclaw models auth login --provider diagnostic-provider --profile-id 'diagnostic-provider:shared'`.",
         }),
       ]);
-      await noteAuthProfileHealth({
+      const currentFindings = await inspectAuthProfileHealth({
         cfg,
         prompter: createDoctorPrompter({
           runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
@@ -94,11 +94,16 @@ describe("Doctor shared auth health", () => {
         }),
         allowKeychainPrompt: false,
       });
-      expect(vi.mocked(note)).toHaveBeenCalledWith(
-        expect.stringContaining(
-          "Re-authenticate with `openclaw models auth login --provider diagnostic-provider --profile-id 'diagnostic-provider:shared'`.",
-        ),
-        "Auth profile cooldowns (Agent alpha)",
+      expect(currentFindings).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            target: profileId,
+            category: "fix-now",
+            path: resolveAuthProfileDatabasePath(agentDir),
+            fixHint:
+              "Re-authenticate with `openclaw models auth login --provider diagnostic-provider --profile-id 'diagnostic-provider:shared'`.",
+          }),
+        ]),
       );
     });
   });
@@ -186,7 +191,23 @@ describe("Doctor shared auth health", () => {
         runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
         options: { nonInteractive: true, repair: true },
       });
-      await noteAuthProfileHealth({ cfg, prompter, allowKeychainPrompt: false });
+      if (scenario.owner) {
+        refreshProfile.mockImplementationOnce(async () => {
+          writePersistedAuthProfileStoreRaw(
+            {
+              version: 1,
+              profiles: { [profileId]: { ...shared, expires: Date.now() + 7 * 86_400_000 } },
+            },
+            scenario.owner === "local" ? agentDir : undefined,
+          );
+        });
+      }
+      const afterRefresh = await inspectAuthProfileHealth({
+        cfg,
+        prompter,
+        allowKeychainPrompt: false,
+      });
+      expect(afterRefresh).toEqual([]);
       expect(refreshProfile).toHaveBeenCalledTimes(scenario.owner ? 1 : 0);
       if (scenario.owner) {
         expect(refreshProfile).toHaveBeenCalledWith(

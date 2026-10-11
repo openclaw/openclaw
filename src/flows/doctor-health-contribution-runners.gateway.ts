@@ -119,8 +119,8 @@ export async function runGitHubProjectHealth(ctx: DoctorHealthFlowContext): Prom
 }
 
 export async function runBrowserHealth(ctx: DoctorHealthFlowContext): Promise<void> {
-  const { noteChromeMcpBrowserReadiness } = await import("../commands/doctor-browser.js");
-  await noteChromeMcpBrowserReadiness(ctx.cfg);
+  const { collectBrowserReadinessFindings } = await import("../commands/doctor-browser.js");
+  renderStructuredHealthFindings(ctx, await collectBrowserReadinessFindings(ctx.cfg));
 }
 
 export async function runOpenAIOAuthTlsHealth(ctx: DoctorHealthFlowContext): Promise<void> {

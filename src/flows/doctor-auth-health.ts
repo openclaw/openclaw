@@ -1,6 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 import { emitDoctorNotes } from "../commands/doctor/emit-notes.js";
 import type { DoctorHealthFlowContext } from "./doctor-health-contribution-types.js";
+import { renderStructuredHealthFindings } from "./doctor-health-contribution.js";
 
 export async function runAuthProfileMigration(ctx: DoctorHealthFlowContext): Promise<void> {
   ctx.authProfileHealthReady = false;
@@ -86,19 +87,22 @@ export async function runAuthProfileMigration(ctx: DoctorHealthFlowContext): Pro
 
 export async function runAuthProfileDiagnostics(ctx: DoctorHealthFlowContext): Promise<void> {
   const {
-    noteAuthProfileHealth,
-    noteCopilotAmbientToken,
-    noteLegacyCodexProviderOverride,
-    noteSharedAuthStoreStatus,
+    inspectAuthProfileHealth,
+    collectCopilotAmbientTokenFindings,
+    collectLegacyCodexProviderOverrideFindings,
+    collectSharedAuthStoreFindings,
   } = await import("../commands/doctor-auth.js");
   if (ctx.authProfileHealthReady !== false) {
-    await noteAuthProfileHealth({
-      cfg: ctx.cfg,
-      prompter: ctx.prompter,
-      allowKeychainPrompt: ctx.options.nonInteractive !== true && process.stdin.isTTY,
-    });
+    renderStructuredHealthFindings(
+      ctx,
+      await inspectAuthProfileHealth({
+        cfg: ctx.cfg,
+        prompter: ctx.prompter,
+        allowKeychainPrompt: ctx.options.nonInteractive !== true && process.stdin.isTTY,
+      }),
+    );
   }
-  noteLegacyCodexProviderOverride(ctx.cfg);
-  noteSharedAuthStoreStatus(ctx.env);
-  noteCopilotAmbientToken(ctx.cfg, ctx.env);
+  renderStructuredHealthFindings(ctx, collectLegacyCodexProviderOverrideFindings(ctx.cfg));
+  renderStructuredHealthFindings(ctx, collectSharedAuthStoreFindings(ctx.env));
+  renderStructuredHealthFindings(ctx, collectCopilotAmbientTokenFindings(ctx.cfg, ctx.env));
 }
