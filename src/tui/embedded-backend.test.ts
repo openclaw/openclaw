@@ -119,6 +119,9 @@ const withPreparedModelCatalogOwnerMock = vi.fn(withEmbeddedModelCatalogOwnerFix
 const readChatHistoryPageMock = vi.fn(
   async (
     _params?: unknown,
+    _signal?: AbortSignal,
+    _incognito?: unknown,
+    _retainNativeHistoryAuthorization?: (isCurrent: () => boolean) => void,
   ): Promise<import("../config/sessions/session-history-types.js").ChatHistoryPage> => ({
     messages: [],
   }),
@@ -292,8 +295,10 @@ vi.mock("../gateway/server-methods/chat-history-response-page.js", () => ({
   enrichChatHistoryCompactionMarkers: (messages: unknown[]) => messages,
 }));
 
+// mock-isolation: Keep transcript workers outside the embedded backend fixture.
 vi.mock("../gateway/server-methods/chat-history-pages.js", () => ({
-  readChatHistoryPage: (params: unknown) => readChatHistoryPageMock(params),
+  readChatHistoryPage: (...args: Parameters<typeof readChatHistoryPageMock>) =>
+    readChatHistoryPageMock(...args),
 }));
 
 vi.mock("../gateway/session-utils.js", () => ({
@@ -921,6 +926,7 @@ describe("EmbeddedTuiBackend", () => {
   });
 
   registerEmbeddedHistoryProjectionTests({
+    readHistory: readChatHistoryPageMock,
     createBackend: () => new EmbeddedTuiBackend(),
     loadSessionEntry: loadSessionEntryMock,
     describe: sessionProjection.describe,
@@ -1252,6 +1258,9 @@ describe("EmbeddedTuiBackend", () => {
       });
       expect(readChatHistoryPageMock).toHaveBeenCalledWith(
         expect.objectContaining({ canonicalKey: "global", sessionAgentId: owner, entry }),
+        undefined,
+        undefined,
+        expect.any(Function),
       );
       expect(sessionProjection.present).toHaveBeenCalled();
       expect(buildGatewaySessionRowMock).not.toHaveBeenCalled();
@@ -1380,51 +1389,6 @@ describe("EmbeddedTuiBackend", () => {
     second.resolve({ payloads: [{ text: "second done" }], meta: {} });
     await flushMicrotasks();
     await backend.stop();
-  });
-
-  it("uses the canonical gateway projector for embedded TUI history reads", async () => {
-    loadSessionEntryMock.mockReturnValue({
-      cfg: {},
-      agentId: "main",
-      canonicalKey: "agent:main:main",
-      storePath: "/tmp/openclaw-sessions.json",
-      entry: { sessionId: "sess-main" },
-    });
-
-    const backend = new EmbeddedTuiBackend();
-    const messages = [
-      {
-        role: "toolResult",
-        toolCallId: "wait",
-        toolName: "collab.wait",
-        content: "raw result",
-        isError: false,
-        __openclaw: { id: "wait-result" },
-      },
-    ];
-    readChatHistoryPageMock.mockResolvedValueOnce({
-      messages,
-      activity: [{ messageId: "wait-result", items: [] }],
-    });
-    const history = await backend.loadHistory({ sessionKey: "agent:main:main" });
-    expect(history).toMatchObject({
-      messages,
-      activity: [{ messageId: "wait-result", items: [] }],
-    });
-
-    expect(readChatHistoryPageMock).toHaveBeenCalledWith({
-      entry: { sessionId: "sess-main" },
-      provider: "openai",
-      sessionId: "sess-main",
-      storePath: "/tmp/openclaw-sessions.json",
-      sessionAgentId: "main",
-      canonicalKey: "agent:main:main",
-      max: 200,
-      maxHistoryBytes: 100_000,
-      effectiveMaxChars: 100_000,
-      offset: undefined,
-      messageId: undefined,
-    });
   });
 
   it.each([false, true])("loads history despite runtime plugin failure=%s", async (fails) => {

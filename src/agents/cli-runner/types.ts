@@ -292,6 +292,8 @@ export type PreparedCliRunContext = {
   messageToolPolicyHash?: string;
   promptToolNamesHash?: string;
   resultContentSourceByToolName?: ReadonlyMap<string, ToolResultContentSource>;
+  /** Native transcript root selected from the effective child environment and cwd at execution. */
+  claudeTranscriptRoot?: string;
   cwdHash?: string;
   mcpDeliveryCapture?: true;
 };

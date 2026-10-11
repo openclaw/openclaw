@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import readline from "node:readline";
+import { Readable } from "node:stream";
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import type { Worker } from "node:worker_threads";
 import type { CliSessionReseedReceipt } from "../config/sessions.js";
@@ -75,8 +76,11 @@ type Message = Record<string, unknown>;
 export type ClaudeCliHistoryParams = {
   cliSessionId: string;
   homeDir?: string;
+  cwd?: string;
+  projectsRoot?: string;
   localSessionId?: string;
   reseedReceipt?: CliSessionReseedReceipt;
+  assertNativeHistoryAuthorized?: () => Promise<void>;
 };
 async function decodeOversizedClaudeEntry(
   worker: Worker,
@@ -109,26 +113,60 @@ async function decodeOversizedClaudeEntry(
 export async function resolveClaudeCliHistorySource(
   params: ClaudeCliHistoryParams,
 ): Promise<readonly [filePath: string, cacheKey: string, byteLength: number] | undefined> {
+  await params.assertNativeHistoryAuthorized?.();
   const candidate = await resolveClaudeCliSessionFilePathAsync(params);
   if (!candidate) {
     return undefined;
   }
+  await params.assertNativeHistoryAuthorized?.();
+  let filePath: string;
   try {
-    const filePath = await fs.promises.realpath(candidate);
-    const stats = await fs.promises.stat(filePath);
-    const sourceFingerprint = [stats.dev, stats.ino, stats.size, stats.mtimeMs, stats.ctimeMs].join(
-      ":",
-    );
-    const cacheKey = JSON.stringify([
-      filePath,
-      sourceFingerprint,
-      params.cliSessionId,
-      params.localSessionId?.trim() || null,
-      normalizeCliSessionReseedReceipt(params.reseedReceipt),
-    ]);
-    return [filePath, cacheKey, stats.size];
+    filePath = await fs.promises.realpath(candidate);
   } catch {
     return undefined;
+  }
+  await params.assertNativeHistoryAuthorized?.();
+  let stats: fs.Stats;
+  try {
+    stats = await fs.promises.stat(filePath);
+  } catch {
+    return undefined;
+  }
+  const sourceFingerprint = [stats.dev, stats.ino, stats.size, stats.mtimeMs, stats.ctimeMs].join(
+    ":",
+  );
+  const cacheKey = JSON.stringify([
+    filePath,
+    sourceFingerprint,
+    params.cliSessionId,
+    params.localSessionId?.trim() || null,
+    normalizeCliSessionReseedReceipt(params.reseedReceipt),
+  ]);
+  return [filePath, cacheKey, stats.size];
+}
+
+async function* readGuardedClaudeHistoryFile(
+  filePath: string,
+  byteLength: number | undefined,
+  assertNativeHistoryAuthorized: () => Promise<void>,
+): AsyncGenerator<Buffer> {
+  await assertNativeHistoryAuthorized();
+  const file = await fs.promises.open(filePath, "r");
+  try {
+    const limit = byteLength ?? Number.MAX_SAFE_INTEGER;
+    let offset = 0;
+    while (offset < limit) {
+      await assertNativeHistoryAuthorized();
+      const buffer = Buffer.allocUnsafe(Math.min(64 * 1024, limit - offset));
+      const { bytesRead } = await file.read(buffer, 0, buffer.length, offset);
+      if (bytesRead === 0) {
+        break;
+      }
+      offset += bytesRead;
+      yield buffer.subarray(0, bytesRead);
+    }
+  } finally {
+    await file.close();
   }
 }
 
@@ -143,11 +181,16 @@ export async function visitClaudeCliSessionMessages(
   }
   const messages: Message[] = [];
   const toolNames = new Map<string, string>();
+  const input = params.assertNativeHistoryAuthorized
+    ? Readable.from(
+        readGuardedClaudeHistoryFile(filePath, byteLength, params.assertNativeHistoryAuthorized),
+      ).setEncoding("utf8")
+    : fs.createReadStream(filePath, {
+        encoding: "utf8",
+        ...(byteLength === undefined ? {} : { end: byteLength - 1 }),
+      });
   const lines = readline.createInterface({
-    input: fs.createReadStream(filePath, {
-      encoding: "utf8",
-      ...(byteLength === undefined ? {} : { end: byteLength - 1 }),
-    }),
+    input,
     crlfDelay: Number.POSITIVE_INFINITY,
   });
   const reseedState = createClaudeReseedImportState(params);

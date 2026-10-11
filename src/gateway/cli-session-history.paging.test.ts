@@ -97,6 +97,7 @@ it("serves a captured history prefix while both transcripts append and observes 
         sessionAgentId: scope.agentId,
         canonicalKey: scope.sessionKey,
         cliHistoryHomeDir: homeDir,
+        cliHistoryProjectsRoot: path.join(homeDir, ".claude", "projects"),
         cliHistoryRedaction: captureTranscriptRedactionSnapshot(),
         max: 4,
         maxHistoryBytes: 64 * 1024,
@@ -205,6 +206,7 @@ it("applies native history eligibility to actual empty, message, and marker-only
                 sessionAgentId: scope.agentId,
                 canonicalKey: scope.sessionKey,
                 cliHistoryHomeDir: homeDir,
+                cliHistoryProjectsRoot: path.join(homeDir, ".claude", "projects"),
                 cliHistoryRedaction: captureTranscriptRedactionSnapshot(),
                 max: 10,
                 maxHistoryBytes: 64 * 1024,
@@ -233,6 +235,44 @@ it("applies native history eligibility to actual empty, message, and marker-only
               cli?.dispose();
             }
           });
+        }
+        const readHistoryRevision = vi.fn();
+        const sourceDiscovery = vi.spyOn(rawFs.promises, "readdir");
+        try {
+          for (const denied of [
+            { cliHistoryProjectsRoot: undefined, entry },
+            { cliHistoryProjectsRoot: "relative/projects", entry },
+            {
+              cliHistoryProjectsRoot: path.join(homeDir, ".claude", "projects"),
+              entry: { ...entry, execHost: "node" as const },
+            },
+          ]) {
+            await expect(
+              prepareCliSessionHistoryReader(
+                {
+                  entry: denied.entry,
+                  provider: "claude-cli",
+                  sessionId: scope.sessionId,
+                  storePath: scope.storePath,
+                  sessionAgentId: scope.agentId,
+                  canonicalKey: scope.sessionKey,
+                  cliHistoryHomeDir: homeDir,
+                  cliHistoryProjectsRoot: denied.cliHistoryProjectsRoot,
+                  cliHistoryRedaction: captureTranscriptRedactionSnapshot(),
+                  max: 10,
+                  maxHistoryBytes: 64 * 1024,
+                  effectiveMaxChars: 4096,
+                  offset: undefined,
+                  messageId: undefined,
+                },
+                { ...readers, readHistoryRevision },
+              ),
+            ).resolves.toBeUndefined();
+          }
+          expect(readHistoryRevision).not.toHaveBeenCalled();
+          expect(sourceDiscovery).not.toHaveBeenCalled();
+        } finally {
+          sourceDiscovery.mockRestore();
         }
       } finally {
         owner.close();
@@ -284,6 +324,7 @@ it("observes newly available reset archives and refuses changed archive bodies u
         sessionAgentId: scope.agentId,
         canonicalKey: scope.sessionKey,
         cliHistoryHomeDir: homeDir,
+        cliHistoryProjectsRoot: path.join(homeDir, ".claude", "projects"),
         cliHistoryRedaction: captureTranscriptRedactionSnapshot(),
         max: 10,
         maxHistoryBytes: 64 * 1024,
@@ -480,6 +521,7 @@ it.each([
               sessionAgentId: scope.agentId,
               canonicalKey: scope.sessionKey,
               cliHistoryHomeDir: homeDir,
+              cliHistoryProjectsRoot: path.join(homeDir, ".claude", "projects"),
               cliHistoryRedaction: captureTranscriptRedactionSnapshot(),
               max: 10,
               maxHistoryBytes: 64 * 1024,

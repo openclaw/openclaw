@@ -125,6 +125,10 @@ import { finalizeCliContextEngineTurn } from "./cli-run-transcript.js";
 import { executePluginOwnedProcess } from "./execute-plugin.js";
 import { prepareCliHistoryBoundary } from "./history-boundary.js";
 import {
+  gatewayClaudeProjectsRoot,
+  registerClaudeConfigDirPreparationTests,
+} from "./prepare-claude-config-dir.test-support.js";
+import {
   registerCliMcpPreparationTests,
   setRawCliBackendForPrepareTest,
 } from "./prepare-mcp.test-support.js";
@@ -599,6 +603,7 @@ describe("prepareCliRunContext", () => {
   });
 
   beforeEach(() => {
+    vi.stubEnv("CLAUDE_CONFIG_DIR", undefined);
     // Install narrow test doubles for external runtime seams so preparation
     // remains about data flow, not bundled plugin or loopback startup cost.
     defaultTestCliBackend = buildDefaultTestCliBackend();
@@ -3708,7 +3713,11 @@ describe("prepareCliRunContext", () => {
       cliSessionId: testCase.sessionId,
     });
 
-    const transcriptArgs = { sessionId: testCase.sessionId, workspaceDir: dir };
+    const transcriptArgs = {
+      sessionId: testCase.sessionId,
+      workspaceDir: dir,
+      projectsRoot: gatewayClaudeProjectsRoot(),
+    };
     if (testCase.checksTranscript) {
       expect(transcriptCheck).toHaveBeenCalledWith(transcriptArgs);
     } else {
@@ -4097,6 +4106,7 @@ describe("prepareCliRunContext", () => {
       expect(transcriptCheck).toHaveBeenCalledWith({
         sessionId: "warm-claude-sid",
         workspaceDir: dir,
+        projectsRoot: gatewayClaudeProjectsRoot(),
       });
       expect(orphanCheck).not.toHaveBeenCalled();
       expect(context.reusableCliSession).toEqual({
@@ -4110,30 +4120,10 @@ describe("prepareCliRunContext", () => {
     });
   });
 
-  it("ignores stored CLI session candidates when the backend disables sessions", async () => {
-    setCliBackendForPrepareTest({
-      sessionMode: "none",
-      reseedFromRawTranscriptWhenUncompacted: true,
-    });
-    const transcriptCheck = vi.fn(async () => false);
-    const orphanCheck = vi.fn(async () => false);
-    setCliRunnerPrepareTestDeps({
-      claudeCliSessionTranscriptHasContent: transcriptCheck,
-      claudeCliSessionTranscriptHasOrphanedToolUse: orphanCheck,
-    });
-
-    const context = await fixture.prepare({
-      sessionKey: "agent:main:telegram:direct:peer",
-      prompt: "stateless ask",
-      provider: "claude-cli",
-      model: "opus",
-      cliSessionBinding: { sessionId: "stale-claude-sid" },
-      cliSessionId: "stale-claude-sid",
-    });
-
-    expect(context.reusableCliSession).toEqual({ mode: "none" });
-    expect(transcriptCheck).not.toHaveBeenCalled();
-    expect(orphanCheck).not.toHaveBeenCalled();
+  registerClaudeConfigDirPreparationTests({
+    getFixture: () => fixture,
+    setBackend: setCliBackendForPrepareTest,
+    setRawBackend: setRawCliBackendForPrepareTest,
   });
 
   it.each(["prepared", "admitted"] as const)(

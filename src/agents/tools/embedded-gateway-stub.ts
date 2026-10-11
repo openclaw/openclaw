@@ -231,7 +231,10 @@ async function handleChatHistory(params: Record<string, unknown>) {
     messageId,
     ...(pageCursor ? { pageCursor } : {}),
   };
-  const page = await rt.readChatHistoryPage(pageParams);
+  let isNativeHistoryCurrent: (() => boolean) | undefined;
+  const page = await rt.readChatHistoryPage(pageParams, undefined, undefined, (isCurrent) => {
+    isNativeHistoryCurrent = isCurrent;
+  });
   const {
     messagesBytes: _messagesBytes,
     responseHistoryBytes: _responseHistoryBytes,
@@ -239,6 +242,10 @@ async function handleChatHistory(params: Record<string, unknown>) {
     ...response
   } = rt.prepareChatHistoryResponsePage(page, pageParams);
   const responseOffset = page.responseOffset ?? offset;
+
+  if (isNativeHistoryCurrent && !isNativeHistoryCurrent()) {
+    throw new Error("session changed while reading history; reload the conversation");
+  }
 
   return {
     sessionKey,

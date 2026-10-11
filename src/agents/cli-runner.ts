@@ -16,13 +16,13 @@ import {
   buildAgentHookContextIdentityFields,
 } from "../plugins/hook-agent-context.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
-import { sleep } from "../utils/sleep.js";
 import {
   hasAcceptedSessionSpawn,
   hasCompletionMessageSessionSpawn,
 } from "./accepted-session-spawn.js";
 import { bindOperatorModelExecution, readRunOperatorAuthority } from "./admitted-run-context.js";
 import { runCliBeforeAgentReply } from "./cli-runner/before-agent-reply.js";
+import { isCliBindingFlushed } from "./cli-runner/binding-flush.js";
 import { runCliCleanup } from "./cli-runner/cleanup.js";
 import { acceptsCliLiveSession } from "./cli-runner/cli-live-session-registry.js";
 import {
@@ -66,7 +66,6 @@ import {
   loadCliSessionHistoryMessages,
 } from "./cli-runner/session-history.js";
 import type { PreparedCliRunContext, RunCliAgentParams } from "./cli-runner/types.js";
-import { claudeCliSessionTranscriptHasContent } from "./command/attempt-execution.helpers.js";
 import type { EmbeddedAgentRunResult } from "./embedded-agent-runner.js";
 import { resolveSourceReplyDelivery } from "./embedded-agent-runner/delivery-evidence.js";
 import { coerceToFailoverError, recordModelFallbackStop } from "./failover-error.js";
@@ -81,36 +80,9 @@ import {
 import { resolveReplyExpectation } from "./reply-completion.js";
 import { recordAgentCleanupFailure } from "./run-cleanup-timeout.js";
 
-const log = createSubsystemLogger("agents/cli-runner");
+export { isCliBindingFlushed };
 
-/** Checks whether a Claude CLI session binding has reached its transcript file. */
-export async function isCliBindingFlushed(
-  sessionId: string | undefined,
-  provider: string | undefined,
-  workspaceDir?: string,
-  options?: { skipTranscriptProbe?: boolean },
-): Promise<boolean> {
-  if (!provider || !isClaudeCliBackend(provider)) {
-    return true;
-  }
-  if (!sessionId) {
-    return false;
-  }
-  // Warm-stdin sessions keep continuity in the managed stdio child and do not
-  // write native transcripts. Probing them would always clear a valid binding.
-  if (options?.skipTranscriptProbe) {
-    return true;
-  }
-  for (const delayMs of [0, 50, 150]) {
-    if (delayMs > 0) {
-      await sleep(delayMs);
-    }
-    if (await claudeCliSessionTranscriptHasContent({ sessionId, workspaceDir })) {
-      return true;
-    }
-  }
-  return false;
-}
+const log = createSubsystemLogger("agents/cli-runner");
 
 export function runCliAgent(paramsInput: RunCliAgentParams): Promise<EmbeddedAgentRunResult> {
   const lifecycleGeneration =
@@ -353,11 +325,18 @@ async function runPreparedCliAgentOwned(
             },
           };
     diagnosticLifecycle?.setPhase("send");
-    const output = await executePreparedCliRun(
-      attemptContext,
-      cliSessionIdToUse,
-      diagnosticLifecycle ? { onPhase: diagnosticLifecycle.setPhase } : undefined,
-    );
+    let output: Awaited<ReturnType<typeof executePreparedCliRun>>;
+    try {
+      output = await executePreparedCliRun(
+        attemptContext,
+        cliSessionIdToUse,
+        diagnosticLifecycle ? { onPhase: diagnosticLifecycle.setPhase } : undefined,
+      );
+    } finally {
+      // The attempt may run on a copy; settlement and the flush probe read this context.
+      context.claudeTranscriptRoot =
+        attemptContext.claudeTranscriptRoot ?? context.claudeTranscriptRoot;
+    }
     params.assertCurrent?.();
     // Test facades and non-instrumented executors may not signal the boundary.
     diagnosticLifecycle?.setPhase("resolve");
@@ -542,7 +521,10 @@ async function runPreparedCliAgentOwned(
               effectiveCliSessionId,
               params.provider,
               context.cwd ?? context.workspaceDir,
-              { skipTranscriptProbe: acceptsCliLiveSession(context) },
+              {
+                skipTranscriptProbe: acceptsCliLiveSession(context),
+                projectsRoot: context.claudeTranscriptRoot,
+              },
             );
         const interruptionError = terminalInterruption
           ? formatCliTerminalInterruption(terminalInterruption)

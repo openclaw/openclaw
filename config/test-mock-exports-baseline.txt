@@ -9699,7 +9699,6 @@
 ["src/tui/embedded-backend.test.ts","../gateway/chat-display-projection.js","34709a2d551c4f623bc50665326ffd24d967146911f4e183cbf92cad8fe5c828",1]
 ["src/tui/embedded-backend.test.ts","../gateway/server-constants.js","3e27b7416d56544c9a5ca67a855f32a30446996638c83facc37a0ec493ab0302",1]
 ["src/tui/embedded-backend.test.ts","../gateway/server-methods/agent-timestamp.js","810201fd1aa308e553e25953061afa865b2549a2e593bb7308a33467e5f56169",1]
-["src/tui/embedded-backend.test.ts","../gateway/server-methods/chat-history-pages.js","6185241c0e4a6130a6fe1e4230270467fb9318040662be5da8c1c28954acdca7",1]
 ["src/tui/embedded-backend.test.ts","../gateway/server-methods/models-list-result.js","d1b3ed9c5be8c7bff46c48dc5b5628e8cd474c1b4367fd85d6fa9b12df466e72",1]
 ["src/tui/embedded-backend.test.ts","../gateway/session-create-service.js","85897015affaa8c57c20d23f47a11bf12c926aabf8e6a142f374ef0a9dbb4999",1]
 ["src/tui/embedded-backend.test.ts","../gateway/session-reset-service.js","981453f5b54d2c826376d397e064137de20354b51603ebbba6a15af31c4ef38e",1]

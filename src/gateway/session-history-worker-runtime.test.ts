@@ -211,6 +211,50 @@ function historyTarget() {
   };
 }
 
+it("captures prepared Claude history authority, cwd, and node placement in queued requests", async () => {
+  const pending = readSessionHistoryPageInWorker(
+    request({
+      entry: {
+        sessionId: "history-worker",
+        updatedAt: 1,
+        execHost: "node",
+        cliSessionBindings: {
+          "claude-cli": {
+            sessionId: "native-session",
+            cwd: "/native/workspace",
+            transcriptRoot: "/native/profile/projects",
+          },
+        },
+      },
+      cwd: "/current/child",
+      cliHistoryProjectsRoot: "/authorized/profile/projects",
+    }),
+  );
+  await waitForReaderAdmission(1);
+  const input = queued[0]!.prepare();
+
+  expect(input.request).toMatchObject({
+    kind: "rpc",
+    params: {
+      cwd: "/current/child",
+      cliHistoryProjectsRoot: "/authorized/profile/projects",
+      entry: {
+        execHost: "node",
+        cliSessionBindings: {
+          "claude-cli": {
+            sessionId: "native-session",
+            cwd: "/native/workspace",
+            transcriptRoot: "/native/profile/projects",
+          },
+        },
+      },
+    },
+  });
+  expect(runWorker.mock.calls[0]![1]).toBe(JSON.stringify(input).length * 2);
+  queued[0]!.result.resolve(page("captured authorized root"));
+  await pending;
+});
+
 function page(text: string): Extract<SessionHistoryWorkerResult, { kind: "rpc" }> {
   return {
     kind: "rpc",

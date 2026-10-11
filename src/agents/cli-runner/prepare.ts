@@ -129,7 +129,6 @@ import { prepareCliBundleMcpConfig, resolveCliNativeWebSearchEnabled } from "./b
 import { prepareClaudeCliSkillsPlugin } from "./claude-skills-plugin.js";
 import { runCliCleanup, sequenceCliCleanups } from "./cleanup.js";
 import { resolveBundledCliBackendAuthPolicy } from "./cli-backend-auth-policy.js";
-import { getCliLiveSessionGeneration } from "./cli-live-session-registry.js";
 import { resolveCliSessionId } from "./cli-run-recovery.js";
 import {
   createCliRunCurrentAssertion,
@@ -142,6 +141,7 @@ import { prepareCliHistoryBoundary } from "./history-boundary.js";
 import { cliBackendLog } from "./log.js";
 import { buildCliMcpGrantContext } from "./mcp-grant-context.js";
 import { resolveCliCatalogCapabilities } from "./model-capabilities.js";
+import { prepareClaudeCliSession } from "./prepare-claude-session.js";
 import { detectNodeClaudePlacement, resolveClaudeCliContextModelId } from "./prepare-claude.js";
 import * as mcp from "./prepare-mcp.js";
 import { runWithCliPreparationSource } from "./prepare-source.js";
@@ -1305,51 +1305,24 @@ async function prepareCliRunContextWithinReadFence(
       !canTransportSystemPrompt(preparedBackendFinal.backend)
         ? { mode: "invalidate", invalidatedReason: "system-prompt" }
         : reusableCliSessionCandidate;
-    const candidateClaudeCliSessionId =
-      resolveCliSessionId(backendReusableCliSession)?.trim() || undefined;
-    // Control operations must keep the exact native session they were asked to mutate.
-    // Ordinary-turn transcript recovery must not turn `/compact` into a fresh session.
-    const hasClaudeCliCandidate =
-      !isControlOperation &&
-      !nodeClaudePlacement &&
-      candidateClaudeCliSessionId !== undefined &&
-      isClaudeCliBackendId(params.provider);
-    const claudeCliTranscriptMissing =
-      hasClaudeCliCandidate &&
-      !(await claudeCliSessionTranscriptHasContent({
-        sessionId: candidateClaudeCliSessionId,
-        workspaceDir: cwd,
-      }));
-    const managedClaudeLiveSessionGeneration =
-      claudeCliTranscriptMissing &&
-      backendResolved.id === "claude-cli" &&
-      "liveSession" in preparedBackendFinal.backend &&
-      preparedBackendFinal.backend.liveSession === "claude-stdio" &&
-      preparedBackendFinal.backend.output === "jsonl" &&
-      preparedBackendFinal.backend.input === "stdin" &&
-      getCliLiveSessionGeneration({
+    const { reusableCliSession, managedClaudeLiveSessionGeneration } =
+      await prepareClaudeCliSession({
+        backendReusableCliSession,
+        provider: params.provider,
+        isControlOperation,
+        nodeClaudePlacement,
         backendId: backendResolved.id,
+        backend: preparedBackendFinal.backend,
+        preparedBackend: preparedBackendFinal,
+        config: runConfig,
+        skillsSnapshot: params.skillsSnapshot,
+        cwd,
         agentId: workspaceResolution.agentId,
         sessionId: params.sessionId,
         sessionKey: params.sessionKey,
+        hasTranscriptContent: claudeCliSessionTranscriptHasContent,
+        hasOrphanedToolUse: claudeCliSessionTranscriptHasOrphanedToolUse,
       });
-    const hasManagedClaudeLiveSession = Boolean(managedClaudeLiveSessionGeneration);
-    const claudeCliTranscriptOrphanedToolUse =
-      hasClaudeCliCandidate &&
-      !claudeCliTranscriptMissing &&
-      (await claudeCliSessionTranscriptHasOrphanedToolUse({
-        sessionId: candidateClaudeCliSessionId,
-        workspaceDir: cwd,
-      }));
-    const claudeCliInvalidatedReason: "missing-transcript" | "orphaned-tool-use" | undefined =
-      claudeCliTranscriptMissing && !hasManagedClaudeLiveSession
-        ? "missing-transcript"
-        : claudeCliTranscriptOrphanedToolUse
-          ? "orphaned-tool-use"
-          : undefined;
-    const reusableCliSession: CliReusableSession = claudeCliInvalidatedReason
-      ? { mode: "invalidate", invalidatedReason: claudeCliInvalidatedReason }
-      : backendReusableCliSession;
     const reusableCliSessionId = resolveCliSessionId(reusableCliSession);
     const invalidatedReason =
       reusableCliSession.mode === "invalidate" ? reusableCliSession.invalidatedReason : undefined;

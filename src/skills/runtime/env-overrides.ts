@@ -114,21 +114,24 @@ function sanitizeSkillEnvOverrides(params: {
   return { allowed, blocked: [...blocked], warnings };
 }
 
-function applySkillConfigEnvOverrides(params: {
-  updates: string[];
+type SkillEnvResolution = ReturnType<typeof sanitizeSkillEnvOverrides>;
+
+function resolveSkillConfigEnvOverrides(params: {
+  baseEnv: NodeJS.ProcessEnv;
+  injectedKeys: Pick<ReadonlySet<string>, "has">;
   config?: OpenClawConfig;
   primaryEnv?: string | null;
   requiredEnv?: string[] | null;
   skillKey: string;
-}) {
-  const { updates, primaryEnv, requiredEnv, skillKey } = params;
-  if (isSkillSecretOwnerUnavailable(skillKey)) {
-    return;
+}): SkillEnvResolution {
+  if (isSkillSecretOwnerUnavailable(params.skillKey)) {
+    return { allowed: {}, blocked: [], warnings: [] };
   }
-  const skillConfig = resolveSkillConfig(params.config, skillKey);
+  const skillConfig = resolveSkillConfig(params.config, params.skillKey);
   if (!skillConfig || skillConfig.enabled === false) {
-    return;
+    return { allowed: {}, blocked: [], warnings: [] };
   }
+  const { primaryEnv, requiredEnv, skillKey } = params;
   const allowedSensitiveKeys = new Set<string>();
   const normalizedPrimaryEnv = primaryEnv?.trim();
   if (normalizedPrimaryEnv) {
@@ -146,7 +149,7 @@ function applySkillConfigEnvOverrides(params: {
     for (const [rawKey, envValue] of Object.entries(skillConfig.env)) {
       const envKey = rawKey.trim();
       const hasExternallyManagedValue =
-        process.env[envKey] !== undefined && !activeSkillEnvEntries.has(envKey);
+        params.baseEnv[envKey] !== undefined && !params.injectedKeys.has(envKey);
       if (!envKey || !envValue || hasExternallyManagedValue) {
         continue;
       }
@@ -156,8 +159,8 @@ function applySkillConfigEnvOverrides(params: {
 
   const canInjectPrimaryEnv =
     normalizedPrimaryEnv &&
-    (process.env[normalizedPrimaryEnv] === undefined ||
-      activeSkillEnvEntries.has(normalizedPrimaryEnv));
+    (params.baseEnv[normalizedPrimaryEnv] === undefined ||
+      params.injectedKeys.has(normalizedPrimaryEnv));
   if (canInjectPrimaryEnv && !pendingOverrides[normalizedPrimaryEnv]) {
     const resolvedApiKey =
       normalizeResolvedSecretInputString({
@@ -169,24 +172,74 @@ function applySkillConfigEnvOverrides(params: {
     }
   }
 
-  const sanitized = sanitizeSkillEnvOverrides({
+  return sanitizeSkillEnvOverrides({
     overrides: pendingOverrides,
     allowedSensitiveKeys,
   });
+}
 
-  if (sanitized.blocked.length > 0) {
-    log.warn(`Blocked skill env overrides for ${skillKey}: ${sanitized.blocked.join(", ")}`);
+function applySkillConfigEnvOverrides(params: {
+  updates: string[];
+  config?: OpenClawConfig;
+  primaryEnv?: string | null;
+  requiredEnv?: string[] | null;
+  skillKey: string;
+}) {
+  const resolved = resolveSkillConfigEnvOverrides({
+    ...params,
+    baseEnv: process.env,
+    injectedKeys: activeSkillEnvEntries,
+  });
+
+  if (resolved.blocked.length > 0) {
+    log.warn(`Blocked skill env overrides for ${params.skillKey}: ${resolved.blocked.join(", ")}`);
   }
-  if (sanitized.warnings.length > 0) {
-    log.warn(`Suspicious skill env overrides for ${skillKey}: ${sanitized.warnings.join(", ")}`);
+  if (resolved.warnings.length > 0) {
+    log.warn(
+      `Suspicious skill env overrides for ${params.skillKey}: ${resolved.warnings.join(", ")}`,
+    );
   }
 
-  for (const [envKey, envValue] of Object.entries(sanitized.allowed)) {
+  for (const [envKey, envValue] of Object.entries(resolved.allowed)) {
     if (!acquireActiveSkillEnvKey(envKey, envValue)) {
       continue;
     }
-    updates.push(envKey);
+    params.updates.push(envKey);
   }
+}
+
+/** Projects snapshot env overrides without mutating Gateway process state. */
+export function resolveSkillEnvOverridesFromSnapshot(params: {
+  snapshot?: SkillSnapshot;
+  config?: OpenClawConfig;
+  baseEnv?: NodeJS.ProcessEnv;
+}): Record<string, string> {
+  const config = resolveSkillRuntimeConfig(params.config);
+  const projectedEnv: NodeJS.ProcessEnv = { ...(params.baseEnv ?? process.env) };
+  const projectedValues = new Map(
+    [...activeSkillEnvEntries].map(([key, entry]) => [key, entry.value]),
+  );
+  const overrides: Record<string, string> = {};
+
+  for (const skill of params.snapshot?.skills ?? []) {
+    const resolved = resolveSkillConfigEnvOverrides({
+      baseEnv: projectedEnv,
+      injectedKeys: projectedValues,
+      config,
+      primaryEnv: skill.primaryEnv,
+      requiredEnv: skill.requiredEnv,
+      skillKey: skill.skillKey ?? skill.name,
+    });
+    for (const [envKey, envValue] of Object.entries(resolved.allowed)) {
+      // Runtime application retains the first active override when several skills
+      // claim one key; keep the projection identical without touching process.env.
+      const value = projectedValues.get(envKey) ?? envValue;
+      projectedValues.set(envKey, value);
+      projectedEnv[envKey] = value;
+      overrides[envKey] = value;
+    }
+  }
+  return overrides;
 }
 
 function createEnvReverter(updates: string[]) {

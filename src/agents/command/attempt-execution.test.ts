@@ -32,6 +32,8 @@ import {
 } from "./attempt-execution.helpers.js";
 import { resolveClaudeCliProjectDirForWorkspace } from "./claude-cli-project-dir.js";
 
+beforeEach(() => vi.stubEnv("CLAUDE_CONFIG_DIR", undefined));
+
 function formatClaudeCliFallbackPrelude(
   seed: NonNullable<
     ReturnType<

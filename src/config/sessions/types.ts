@@ -142,6 +142,10 @@ export type CliSessionBinding = {
   extraSystemPromptHash?: string;
   messageToolPolicyHash?: string;
   promptToolNamesHash?: string;
+  /** Historical native child directory; location metadata, not current read authority. */
+  cwd?: string;
+  /** External transcript root selected by the child's effective environment and working directory. */
+  transcriptRoot?: string;
   cwdHash?: string;
   mcpConfigHash?: string;
   mcpResumeHash?: string;

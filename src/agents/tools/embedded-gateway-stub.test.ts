@@ -38,10 +38,17 @@ const runtime = vi.hoisted(() => ({
     canonicalKey: "agent:main:main",
   })),
   resolveSessionModelRef: vi.fn(() => ({ provider: "openai" })),
-  readChatHistoryPage: vi.fn(async (): Promise<ChatHistoryPage> => ({
-    messages: [] as unknown[],
-    pagination: { offset: 0, totalMessages: 0, rawPageMessages: 0 },
-  })),
+  readChatHistoryPage: vi.fn(
+    async (
+      _params?: unknown,
+      _signal?: AbortSignal,
+      _incognito?: unknown,
+      _retainNativeHistoryAuthorization?: (isCurrent: () => boolean) => void,
+    ): Promise<ChatHistoryPage> => ({
+      messages: [] as unknown[],
+      pagination: { offset: 0, totalMessages: 0, rawPageMessages: 0 },
+    }),
+  ),
   resolveTranscriptSessionKeyBySessionId: vi.fn(() => "agent:main:main"),
   resolveEffectiveChatHistoryMaxChars: vi.fn(() => 100_000),
   getMaxChatHistoryMessagesBytes: vi.fn(() => 6 * 1024 * 1024),
@@ -354,6 +361,32 @@ describe("embedded gateway stub", () => {
     });
   });
 
+  it.each([true, false])(
+    "checks retained history authority before returning: %s",
+    async (current) => {
+      const messages = [{ role: "assistant", content: "prepared history" }];
+      const isCurrent = vi.fn(() => current);
+      runtime.readChatHistoryPage.mockImplementationOnce(
+        async (_params, _signal, _incognito, retain) => {
+          retain?.(isCurrent);
+          return { messages, pagination: { offset: 0, totalMessages: 1, rawPageMessages: 1 } };
+        },
+      );
+      const result = createEmbeddedCallGateway()({
+        method: "chat.history",
+        params: { sessionKey: "agent:main:main" },
+      });
+      if (current) {
+        await expect(result).resolves.toMatchObject({ messages });
+      } else {
+        await expect(result).rejects.toThrow(
+          "session changed while reading history; reload the conversation",
+        );
+      }
+      expect(isCurrent).toHaveBeenCalledOnce();
+    },
+  );
+
   it("preserves bounded offset metadata from the shared visible-history scanner", async () => {
     const messages = [{ role: "assistant", content: "older visible", __openclaw: { seq: 2 } }];
     runtime.readChatHistoryPage.mockResolvedValueOnce({
@@ -374,6 +407,9 @@ describe("embedded gateway stub", () => {
 
     expect(runtime.readChatHistoryPage).toHaveBeenCalledWith(
       expect.objectContaining({ offset: 1, max: 1 }),
+      undefined,
+      undefined,
+      expect.any(Function),
     );
     expect(result).toMatchObject({
       messages,
@@ -469,6 +505,9 @@ describe("embedded gateway stub", () => {
         messageId: cursor.messageId,
         pageCursor: cursor,
       }),
+      undefined,
+      undefined,
+      expect.any(Function),
     );
   });
 
@@ -494,7 +533,12 @@ describe("embedded gateway stub", () => {
       params: { sessionKey: "agent:main:main", limit: "2" },
     });
 
-    expect(runtime.readChatHistoryPage).toHaveBeenCalledWith(expect.objectContaining({ max: 2 }));
+    expect(runtime.readChatHistoryPage).toHaveBeenCalledWith(
+      expect.objectContaining({ max: 2 }),
+      undefined,
+      undefined,
+      expect.any(Function),
+    );
   });
 
   it.each(["2.5", -1])("rejects malformed history limit %j before reading", async (limit) => {

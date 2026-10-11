@@ -5,6 +5,7 @@ import type { Worker } from "node:worker_threads";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { resolveClaudeCliHistorySource } from "./cli-session-history.claude-snapshot.js";
 import {
   readClaudeCliSessionMessagesAsync,
   createClaudeTextHistoryLines,
@@ -17,6 +18,41 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 function readRecord(value: unknown): Record<string, unknown> {
   return requireGatewayRecord(value, "record");
 }
+
+it("rechecks native authority after awaited Claude project discovery", async () => {
+  await withClaudeProjectsDir(async ({ homeDir, sessionId, filePath }) => {
+    let authorized = true;
+    let checks = 0;
+    const originalReaddir = rawFs.promises.readdir.bind(rawFs.promises);
+    const readdir = vi.spyOn(rawFs.promises, "readdir").mockImplementationOnce(async (...args) => {
+      const entries = await originalReaddir(...args);
+      authorized = false;
+      return entries;
+    });
+    const access = vi.spyOn(rawFs.promises, "access");
+    try {
+      await expect(
+        resolveClaudeCliHistorySource({
+          cliSessionId: sessionId,
+          homeDir,
+          projectsRoot: path.dirname(path.dirname(filePath)),
+          assertNativeHistoryAuthorized: async () => {
+            checks += 1;
+            if (!authorized) {
+              throw new Error("native history revoked");
+            }
+          },
+        }),
+      ).rejects.toThrow("native history revoked");
+      expect(checks).toBeGreaterThanOrEqual(3);
+      expect(readdir).toHaveBeenCalledTimes(1);
+      expect(access).not.toHaveBeenCalled();
+    } finally {
+      readdir.mockRestore();
+      access.mockRestore();
+    }
+  });
+});
 
 it("reads changed Claude sources and preserves discovery precedence", async () => {
   await withClaudeProjectsDir(async ({ homeDir, sessionId, filePath }) => {

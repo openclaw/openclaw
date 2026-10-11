@@ -1,3 +1,4 @@
+import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 // Claude's native transcript augments display history, never canonical model context.
@@ -48,6 +49,7 @@ export type CliHistoryRevision = {
   leafEventId: string | null;
 };
 export type CliHistoryReaders = SessionTranscriptPageReader & {
+  assertNativeHistoryAuthorized?: () => Promise<void>;
   // Durable cache admission supplies a revision; uncached process-held reads use page fences.
   readHistoryRevision?: () => CliHistoryRevision | Promise<CliHistoryRevision>;
 };
@@ -80,6 +82,13 @@ export async function prepareCliSessionHistoryReader(
   readers: Readers,
 ) {
   if (params.ignoreCliSessionImports) {
+    return undefined;
+  }
+  if (
+    params.entry?.execHost === "node" ||
+    !params.cliHistoryProjectsRoot ||
+    !path.isAbsolute(params.cliHistoryProjectsRoot)
+  ) {
     return undefined;
   }
   const binding = getCliSessionBinding(params.entry, "claude-cli");
@@ -119,10 +128,14 @@ export async function prepareCliSessionHistoryReader(
   const native = {
     cliSessionId: binding.sessionId,
     homeDir: params.cliHistoryHomeDir,
+    cwd: binding.cwd ?? params.cwd,
+    projectsRoot: params.cliHistoryProjectsRoot,
     localSessionId: params.sessionId,
     reseedReceipt: binding.reseedReceipt,
+    assertNativeHistoryAuthorized: readers.assertNativeHistoryAuthorized,
   };
   const identity = JSON.stringify([params.storePath, params.sessionAgentId, params.sessionId]);
+  await readers.assertNativeHistoryAuthorized?.();
   const source = await resolveClaudeCliHistorySource(native);
   if (!source) {
     retire(identity);
@@ -134,6 +147,7 @@ export async function prepareCliSessionHistoryReader(
   const key = JSON.stringify([
     localRevision,
     source[1],
+    params.cliHistoryProjectsRoot,
     params.entry?.sessionStartedAt,
     redaction.policyToken,
   ]);

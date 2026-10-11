@@ -62,7 +62,7 @@ import { assertValidParams } from "./validation.js";
 
 export async function handleChatHistoryRequest({
   params,
-  respond,
+  respond: respondUnchecked,
   client,
   context,
   method,
@@ -79,6 +79,19 @@ export async function handleChatHistoryRequest({
     verifyRetainedState?: () => Promise<boolean>;
   };
 }) {
+  let isNativeHistoryCurrent: (() => boolean) | undefined;
+  // Retained-transcript publication also reaches this frame after its own awaits.
+  const respond: typeof respondUnchecked = (...args) => {
+    if (args[0] && isNativeHistoryCurrent && !isNativeHistoryCurrent()) {
+      respondChatHistoryUnavailable(
+        method,
+        respondUnchecked,
+        "session changed while reading history; reload the conversation",
+      );
+      return;
+    }
+    respondUnchecked(...args);
+  };
   if (!assertValidParams(params, validateChatHistoryParams, method, respond)) {
     return;
   }
@@ -262,6 +275,10 @@ export async function handleChatHistoryRequest({
                     ...(pageCursor ? { pageCursor } : {}),
                   },
                   signal,
+                  undefined,
+                  (isCurrent) => {
+                    isNativeHistoryCurrent = isCurrent;
+                  },
                 ),
               {
                 config: cfg,
