@@ -7,7 +7,11 @@ import { NewSessionAttachmentDraft } from "../new-session/attachment-draft.ts";
 import { NewSessionComposerTextareaController } from "../new-session/composer-controller.ts";
 import { renderNewSessionComposer } from "../new-session/composer.ts";
 import { NewSessionModelControl } from "../new-session/model-control.ts";
-import { createComposerProps, resetComposerFixture } from "./chat-composer.test-support.ts";
+import {
+  createComposerContainer,
+  createComposerProps,
+  resetComposerFixture,
+} from "./chat-composer.test-support.ts";
 import { renderChatComposer } from "./components/chat-composer.ts";
 import { installChatComposerPickerDismissal } from "./components/chat-picker-overlay.ts";
 
@@ -47,7 +51,7 @@ beforeEach(() => {
 });
 
 function fixture(kind: "chat" | "new", locked = false, requiresModifier = false) {
-  const container = document.createElement("div");
+  const container = createComposerContainer();
   document.body.append(container);
   let retired = false;
   fixtureDisposals.push(() => {

@@ -141,7 +141,7 @@ describe("doctor SQLite session transcript header repair", () => {
     ).resolves.toEqual({ found: 1, repaired: 0 });
     expect(readTranscriptStorageRows(database, SESSION_ID)).toEqual(beforeRows);
     expect(note).toHaveBeenCalledWith(
-      '- Found 1 canonical session transcript without a header.\n- Run "openclaw doctor --fix" to repair it before resuming the session.',
+      '- Found 1 stored session transcript without a header.\n- Run "openclaw doctor --fix" to repair it before resuming the session.',
       "Session transcript headers",
     );
 

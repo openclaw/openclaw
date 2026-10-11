@@ -219,7 +219,7 @@ const writeDiagnosticStabilityBundleForFailureSync = vi.fn(() => ({
 }));
 const hasManagedProviderLocalServices = vi.fn(() => false);
 const stopManagedProviderLocalServices = vi.fn(async () => {});
-const cancelShutdownHardExitWatchdog = vi.fn();
+const cancelShutdownHardExitWatchdog = vi.fn(async () => {});
 const armShutdownHardExitWatchdog = vi.fn(
   (_params: { delayMs: number; onError: (error: unknown) => void }) => ({
     cancel: cancelShutdownHardExitWatchdog,
@@ -373,7 +373,7 @@ async function runLoopWithStart(params: {
   completeBoot?: (completion: GatewayBootLifecycleCompletion) => void;
 }) {
   vi.resetModules();
-  const { runGatewayLoop } = await import("./run-loop.js");
+  const { runGatewayLoop } = await import("./run-loop.test-support.js");
   const loopPromise = runGatewayLoop({
     start: params.start as unknown as Parameters<typeof runGatewayLoop>[0]["start"],
     runtime: params.runtime,

@@ -21,10 +21,7 @@ import {
 } from "./session-accessor.sqlite-replacement-state.js";
 import { assertCanonicalSqliteSessionKeysCurrent } from "./session-canonical-key.js";
 import { readSessionEntryPatchPredicate } from "./session-entry-patch-guard.js";
-import {
-  mergeSessionEntryPatch,
-  reduceSessionEntryPatch,
-} from "./session-entry-patch-operation.js";
+import { projectSessionEntryPatch } from "./session-entry-patch-operation.js";
 import type {
   SessionEntryPatchCommit,
   SessionEntryPatchCommitted,
@@ -174,11 +171,11 @@ export function commitSessionEntryPatch(
           };
           return transferSessionEntryWorkerCandidate(database, admit, result);
         }
-        const next = mergeSessionEntryPatch({
+        const next = projectSessionEntryPatch({
           ...input,
           existing,
           writeBase,
-          patch: reduceSessionEntryPatch(input.operation, writeBase, existing),
+          operation: input.operation,
         });
         mutation = writeSessionEntryPatchInDatabase(database, {
           sessionKey: input.sessionKey,
@@ -186,6 +183,7 @@ export function commitSessionEntryPatch(
           writeBase,
           next,
           options,
+          reusePostimage: true,
         });
       } else {
         mutation = applySessionEntryPatchInDatabase(database, {
@@ -203,7 +201,7 @@ export function commitSessionEntryPatch(
               maintenancePlans: [],
             },
             database,
-            { captureFullFacts: true },
+            { captureFullFacts: true, postimages: mutation.postimages },
           )
         : undefined;
       // Publish after every patch-owned write, including commit-receipt preparation.

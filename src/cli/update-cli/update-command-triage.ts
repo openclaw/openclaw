@@ -11,7 +11,7 @@ import { POST_CORE_UPDATE_ENV } from "../../infra/update-post-core-context.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import type { UpdateTriageTarget as TriageTarget } from "../../infra/update-triage.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
-import { defaultRuntime } from "../../runtime.js";
+import { defaultRuntime, ExitError } from "../../runtime.js";
 import { classifyUpdateOutcome, isVerifiedUpdateRollback } from "../../shared/update-outcome.js";
 import { exitCliAfterOutput } from "../one-shot-exit.js";
 import { isTerminalInteractive } from "../terminal-interactivity.js";
@@ -70,6 +70,9 @@ export async function prepareUpdateCommandFailureTriage(
     invocationCwd: opts.invocationCwd,
   });
   return async (error) => {
+    if (error instanceof ExitError) {
+      throw error;
+    }
     // Recovery can replace files still owned by an uncertain command. Preserve
     // the original failure and retained executor for its recovery owner.
     if (hasCommandProcessCleanupError(error)) {

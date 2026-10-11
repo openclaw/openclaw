@@ -664,6 +664,18 @@ describe("normalizeStoredCronJobs", () => {
     expect(schedule.atMs).toBeUndefined();
   });
 
+  it.each([
+    { kind: "at", at: "2026-04-01T12:00:00+02:00" },
+    { kind: "at", at: "2026-04-01T10:00:00.000Z", atMs: undefined },
+    { kind: "at", at: "2026-04-01T11:00:00.000Z", atMs: 1_775_037_600_000 },
+  ])("repairs a noncanonical one-shot schedule once: %j", (schedule) => {
+    const jobs = [makeLegacyJob({ description: undefined, schedule: { ...schedule } })];
+
+    expect(normalizeStoredCronJobs(jobs).mutated).toBe(true);
+    expect(jobs[0]?.schedule).toEqual({ kind: "at", at: "2026-04-01T10:00:00.000Z" });
+    expect(normalizeStoredCronJobs(jobs).mutated).toBe(false);
+  });
+
   it("leaves Date-invalid legacy atMs for persisted shape validation", () => {
     const { job, result } = normalizeOneJob(
       makeLegacyJob({

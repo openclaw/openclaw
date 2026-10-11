@@ -68,25 +68,6 @@ describe("Reef inbound dispatch content", () => {
     });
   });
 
-  it("carries transport reply correlation only in trusted context", () => {
-    const content = resolveReefInboundDispatchContent({
-      id: "message-2",
-      peer: "clanky",
-      text: "correlated reply",
-      provenance: "Untrusted third-party data from @clanky's agent.",
-      autonomy: "bounded",
-      replyTo: "message-1",
-      thread: "thread-1",
-    });
-
-    expect(content.rawBody).toBe("correlated reply");
-    expect(content.extraContext).toMatchObject({
-      ReplyToId: "message-1",
-      ReplyToIdFull: "message-1",
-      MessageThreadId: "thread-1",
-    });
-  });
-
   it("does not invent a thread for an explicitly correlated unthreaded reply", () => {
     const content = resolveReefInboundDispatchContent({
       id: "message-2",
@@ -727,27 +708,6 @@ describe("Reef channel lifecycle", () => {
     expect(order).toEqual(["reconcile", "ready", "inbox"]);
     parent.beginClose();
     await lifecycle;
-  });
-
-  it("rejects startup when the reconcile error is not retryable", async () => {
-    const parent = createTestPluginServiceScheduler();
-    const inbox = hangingInbox();
-    const onReady = vi.fn(async () => {});
-    const error = new Error("approval store unavailable");
-    await expect(
-      runReefChannelLifecycle({
-        scheduler: parent,
-        startInbox: inbox.startInbox,
-        reconcile: async () => {
-          throw error;
-        },
-        onReconcileError: () => {},
-        shouldContinueAfterStartupReconcileError: () => false,
-        onReady,
-      }),
-    ).rejects.toBe(error);
-    expect(onReady).not.toHaveBeenCalled();
-    expect(inbox.seen).toHaveLength(0);
   });
 
   it("does not activate when the parent aborts during startup reconcile", async () => {

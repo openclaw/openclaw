@@ -37,6 +37,7 @@ import {
   mintMessageActionTurnCapability,
   resolveMessageActionTurnCapabilityLifetime,
 } from "../../gateway/message-action-turn-capability.js";
+import { readUserTurnPromptReactionSource } from "../../sessions/user-turn-transcript-admission.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import { isReasoningTagProvider } from "../../utils/provider-utils.js";
 import type { TemplateContext } from "../templating.js";
@@ -330,11 +331,7 @@ export function mintReplyMessageActionTurnCapability(
   }
   const channelIngress = isTrustedMessageActionTurnIngress(turn.sessionCtx.Provider);
   const dashboardAdmission = turn.opts?.dashboardReadAdmission;
-  if (
-    turn.isHeartbeat ||
-    (!channelIngress &&
-      (turn.sessionCtx.Provider !== "webchat" || dashboardAdmission?.runId !== runId))
-  ) {
+  if (turn.isHeartbeat || (!channelIngress && turn.sessionCtx.Provider !== "webchat")) {
     return undefined;
   }
   const context = buildEmbeddedContextFromTemplate({
@@ -348,23 +345,34 @@ export function mintReplyMessageActionTurnCapability(
     return undefined;
   }
   if (!channelIngress) {
-    // Queue options may come from another input. Match the original admission,
-    // not opts.runId, which followup execution replaces with its own run ID.
-    if (
-      !dashboardAdmission ||
-      dashboardAdmission.agentId !== context.agentId ||
-      dashboardAdmission.sessionKey !== sessionKey ||
-      dashboardAdmission.sessionId !== context.sessionId
-    ) {
+    // Read permission stays tied to its original run. A queued prompt instead
+    // brings its own native source custody, bound below to this new execution.
+    const dashboard =
+      dashboardAdmission?.runId === runId &&
+      dashboardAdmission.agentId === context.agentId &&
+      dashboardAdmission.sessionKey === sessionKey &&
+      dashboardAdmission.sessionId === context.sessionId
+        ? dashboardAdmission
+        : undefined;
+    const recorder = turn.followupRun.userTurnTranscriptRecorder;
+    const source = readUserTurnPromptReactionSource(recorder);
+    const promptSource =
+      source && source.agentId === context.agentId && source.sessionKey === sessionKey
+        ? source
+        : undefined;
+    if (!dashboard && !promptSource) {
       return undefined;
     }
-    dashboardAdmission.assertCurrent();
+    dashboard?.assertCurrent();
+    promptSource?.assertCurrent();
     return mintMessageActionTurnCapability({
       agentId: context.agentId,
       runId,
       sessionKey,
       sessionId: context.sessionId,
-      assertDashboardReadCurrent: dashboardAdmission.assertCurrent,
+      assertDashboardReadCurrent: dashboard?.assertCurrent,
+      promptReactionSource:
+        promptSource && recorder ? { source: promptSource, recorder } : undefined,
       expiresWithRun: true,
     });
   }

@@ -63,7 +63,6 @@ const childScript = `
     fs.appendFileSync(tracePath, line + "\\n");
     process.stdout.write("process proof: " + line + "\\n");
   };
-  const keepAlive = setInterval(() => {}, 1_000);
   const queue = createChannelIngressQueue({
     channelId: "process-proof",
     accountId: "direct-stop",
@@ -110,7 +109,8 @@ const childScript = `
     setTimeout(() => releaseEmbedded(), ${RELEASE_DELAY_MS});
   });
 
-  await runGatewayLoop({
+  const code = await runGatewayLoop({
+    ownsProcessLifecycle: true,
     start: async () => {
       await drain.drainOnce();
       await adopted;
@@ -124,17 +124,10 @@ const childScript = `
         },
       };
     },
-    runtime: {
-      log: () => {},
-      error: () => {},
-      exit: (code) => {
-        clearInterval(keepAlive);
-        trace("process-exit:" + code);
-        process.exit(code);
-      },
-    },
     lockPort: 19473,
   });
+  process.exitCode = code;
+  process.once("beforeExit", () => trace("process-exit:" + code));
 `;
 
 function readTrace(tracePath: string): string[] {

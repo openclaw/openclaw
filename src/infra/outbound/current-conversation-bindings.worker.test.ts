@@ -287,6 +287,7 @@ it("reuses resolved bindings until sync or worker writes publish new facts", asy
     updateCurrentConversationBindingRecord(original.conversation, () => original);
     const resolved = await resolveCurrentConversationBindingRecordAsync(original.conversation);
     expect(resolved).toEqual(original);
+    expect(run).not.toHaveBeenCalled();
     resolved!.metadata!.lastActivityAt = 99;
     run.mockClear();
     expect(await resolveCurrentConversationBindingRecordAsync(original.conversation)).toEqual(
@@ -296,24 +297,36 @@ it("reuses resolved bindings until sync or worker writes publish new facts", asy
 
     const replacement = { ...original, targetSessionKey: "agent:main:replacement" };
     await bindCurrentConversationRecordAsync({ record: replacement });
+    run.mockClear();
     expect(await resolveCurrentConversationBindingRecordAsync(original.conversation)).toEqual(
       replacement,
     );
+    expect(run).not.toHaveBeenCalled();
     await touchCurrentConversationBindingRecordAsync({
       conversation: original.conversation,
       bindingId: original.bindingId,
       at: 100,
     });
+    run.mockClear();
     expect(await resolveCurrentConversationBindingRecordAsync(original.conversation)).toMatchObject(
       {
         metadata: { lastActivityAt: 100 },
       },
     );
+    expect(run).not.toHaveBeenCalled();
+    const sibling = record("sibling");
+    updateCurrentConversationBindingRecord(sibling.conversation, () => sibling);
+    expect(await resolveCurrentConversationBindingRecordAsync(original.conversation)).toMatchObject(
+      { metadata: { lastActivityAt: 100 } },
+    );
+    expect(run).not.toHaveBeenCalled();
     await removeCurrentConversationBindingsAsync({
       conversation: original.conversation,
       bindingId: original.bindingId,
     });
+    run.mockClear();
     expect(await resolveCurrentConversationBindingRecordAsync(original.conversation)).toBeNull();
+    expect(run).not.toHaveBeenCalled();
   });
 });
 

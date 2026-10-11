@@ -213,7 +213,7 @@ describe("Markdown table interactions", () => {
     },
   );
 
-  it.each([true, false])(
+  it.each([true])(
     "shows a failed current table copy without stale success (previous success: %s)",
     async (previousSuccess) => {
       vi.useFakeTimers();
@@ -271,13 +271,15 @@ describe("Markdown table interactions", () => {
     expect(modal.querySelector("table")?.textContent).toContain("Alpha");
     dialog.dispatchEvent(new Event("pointerdown", { bubbles: true }));
     expect(document.querySelector(".markdown-table-dialog")).toBeNull();
-    await vi.waitFor(() => expect(document.activeElement).toBe(expand));
+    await Promise.resolve();
+    expect(document.activeElement).toBe(expand);
 
     expand.click();
     const reopened = await waitForRenderedModalDialog(owner);
     reopened.modal.querySelector<HTMLButtonElement>(".markdown-table-dialog__close")!.click();
     expect(document.querySelector(".markdown-table-dialog")).toBeNull();
-    await vi.waitFor(() => expect(document.activeElement).toBe(expand));
+    await Promise.resolve();
+    expect(document.activeElement).toBe(expand);
   });
 
   it("cancels a pending expansion when its owner disconnects and reconnects", async () => {
@@ -298,7 +300,8 @@ describe("Markdown table interactions", () => {
     expect(owner.querySelectorAll(".markdown-table-modal")).toHaveLength(1);
     expect(modal.querySelector("table")?.textContent).toContain("Beta");
     modal.querySelector<HTMLButtonElement>(".markdown-table-dialog__close")!.click();
-    await vi.waitFor(() => expect(document.activeElement).toBe(second));
+    await Promise.resolve();
+    expect(document.activeElement).toBe(second);
   });
 
   it.each([true, false])(

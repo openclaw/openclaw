@@ -278,3 +278,9 @@ class SessionMenu extends OpenClawLightDomElement {
 if (!customElements.get("openclaw-session-menu")) {
   customElements.define("openclaw-session-menu", SessionMenu);
 }
+
+declare global {
+  interface HTMLElementTagNameMap {
+    "openclaw-session-menu": SessionMenu;
+  }
+}

@@ -17,6 +17,7 @@ import type {
 import { readMemoryForgetIndexInWorker } from "../memory-forget-index-read.js";
 import type { ForgetIndexPlan, ForgetIndexReadInput } from "../memory-forget-index-task.js";
 import {
+  readMemoryDatabaseFacts,
   readMemoryRetrievalIndexState,
   readMemoryRecallData,
   type MemoryRecallData,
@@ -52,6 +53,7 @@ export type MemorySearchWorkerInput =
       | { kind: "keyword"; query: MemoryKeywordWorkerQuery; includeIndexState?: boolean }
       | { kind: "vector"; query: MemoryVectorWorkerQuery }
       | { kind: "index-state" }
+      | { kind: "index-facts" }
       | {
           kind: "source-state";
           query: Omit<Parameters<typeof loadMemorySourceFileState>[0], "db">;
@@ -73,6 +75,7 @@ export type MemorySearchWorkerOutput =
   | { kind: "prewarm" }
   | { kind: "presence"; present: boolean }
   | { kind: "index-state"; state: ReturnType<typeof readMemoryRetrievalIndexState> }
+  | { kind: "index-facts"; facts: ReturnType<typeof readMemoryDatabaseFacts> }
   | { kind: "source-state"; rows: ReturnType<typeof loadMemorySourceFileState> }
   | ({ kind: "recall-metadata" } & ReturnType<typeof readMemoryRecallData>)
   | {
@@ -108,8 +111,7 @@ serveWorkerTasks(async (input): Promise<MemorySearchWorkerOutput> => {
   if (
     request.kind === "origin-rows" ||
     request.kind === "origin-exists" ||
-    request.kind === "session-tombstones" ||
-    request.kind === "origin-index-keys"
+    request.kind === "session-tombstones"
   ) {
     return readMemoryOriginsInWorker(request);
   }
@@ -155,6 +157,9 @@ serveWorkerTasks(async (input): Promise<MemorySearchWorkerOutput> => {
     }
     if (request.kind === "index-state") {
       return { kind: "index-state", state: readMemoryRetrievalIndexState(db) };
+    }
+    if (request.kind === "index-facts") {
+      return { kind: "index-facts", facts: readMemoryDatabaseFacts(db) };
     }
     if (request.kind === "curated") {
       const provenanceRepairPending =

@@ -91,14 +91,14 @@ openclaw secrets store set TLS_PRIVATE_KEY \
   --value-file ./client-key.pem
 ```
 
-`set` is idempotent and updates an existing name. Add `--dry-run` to validate and preview the operation without writing. An online write refreshes affected config references in the Gateway. If that refresh fails after saving, the error reports the saved change and directs you to `openclaw secrets reload`; it does not replay the write locally.
+`set` creates or updates a name without duplicate entries. Add `--dry-run` to validate and preview the operation without writing. An online write refreshes affected config references in the Gateway. If that refresh fails after saving, the error reports the saved change and directs you to `openclaw secrets reload`; it does not replay the write locally.
 
 `audit` reports previously stored or resolved placeholders as `PLACEHOLDER_VALUE`
 and counts them as unresolved credentials (exit `2`). For a corrupt store-backed
 Gateway token, run `openclaw doctor --fix`, restart the Gateway, and reconnect or
 re-pair devices. See [Gateway token recovery](/cli/doctor/recovery#invalid-gateway-tokens).
 
-Secret egress substitution fails closed until each secret has at least one exact allowed host. Bind or replace hosts with repeatable `--allow-host` flags. This policy-only form does not ask for or replace an existing secret value:
+Secret egress substitution is blocked until each secret has at least one exact allowed host. Bind or replace hosts with repeatable `--allow-host` flags. This policy-only form does not ask for or replace an existing secret value:
 
 ```bash
 openclaw secrets store set OPENAI_API_KEY --allow-host api.openai.com
@@ -134,7 +134,7 @@ openclaw secrets store rm OLD_TOKEN LEGACY_PASSWORD --yes
 openclaw secrets store rm OLD_TOKEN --dry-run
 ```
 
-Removal is idempotent, so a missing name succeeds quietly. Without `--yes`, the CLI asks for confirmation. Removed rows are soft-deleted and purged after 30 days.
+Removing a missing name succeeds quietly. Without `--yes`, the CLI asks for confirmation. Removed rows are soft-deleted and purged after 30 days.
 
 ### Import dotenv files
 
@@ -224,7 +224,7 @@ Flags:
 Notes:
 
 - Requires an interactive TTY.
-- Targets secret-bearing fields in `openclaw.json` plus the selected agent's auth profile store. The canonical supported surface is [SecretRef Credential Surface](/reference/secretref-credential-surface).
+- Targets secret-bearing fields in `openclaw.json` plus the selected agent's auth profile store. The supported fields are listed in [SecretRef Credential Surface](/reference/secretref-credential-surface).
 - Supports creating new auth profile mappings directly in the picker flow.
 - Runs preflight resolution before apply.
 - Generated plans enable `scrubEnv` and `scrubAuthProfilesForProviderTargets`. `scrubLegacyAuthJson` stays disabled, because Doctor owns legacy `auth.json` migration. Apply is one-way for scrubbed plaintext values.
@@ -235,7 +235,7 @@ Notes:
 
 ### Exec provider safety
 
-Package managers often expose symlinked command paths. Resolve the real binary path (for example with `realpath "$(command -v vault)"`) and configure that absolute, non-symlink path. Use `trustedDirs` to restrict executables to approved directories. Run `openclaw config validate` on the Gateway host to check manual exec command paths without executing providers. On Windows, provider paths fail closed when ACL verification is unavailable, with no provider-level bypass.
+Package managers often expose symlinked command paths. Resolve the real binary path (for example with `realpath "$(command -v vault)"`) and configure that absolute, non-symlink path. Use `trustedDirs` to restrict executables to approved directories. Run `openclaw config validate` on the Gateway host to check manual exec command paths without executing providers. On Windows, provider paths are rejected when ACL verification is unavailable, with no provider-level bypass.
 
 ## Apply a saved plan
 

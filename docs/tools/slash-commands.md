@@ -399,7 +399,7 @@ User-invocable skills are exposed as slash commands:
     By default, skill commands route to the model as a normal request.
 
     Skills can declare `command-dispatch: tool` to route directly to a tool
-    (deterministic, no model involvement).
+    (fixed rules, no model involvement).
 
   </Accordion>
   <Accordion title="Native command arguments">

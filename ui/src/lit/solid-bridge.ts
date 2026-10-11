@@ -1,6 +1,8 @@
 import { render, spread, type JSX } from "@solidjs/web";
+import { nothing, render as renderLit } from "lit";
 import {
   createComponent,
+  createEffect,
   createRenderEffect,
   createSignal,
   flush,
@@ -8,6 +10,8 @@ import {
   runWithOwner,
 } from "solid-js";
 import { applicationContext, type ApplicationContext } from "../app/context.ts";
+import { shellLayoutOwnerForHost } from "../app/shell-layout-owner.ts";
+import { ShellLayoutProvider } from "../app/shell-layout-traits-solid.tsx";
 import { ApplicationProvider } from "../lib/reactive/context.ts";
 
 type Property<T> = {
@@ -25,6 +29,7 @@ export type SolidBridgeElement<Props, Methods = object> = HTMLElement &
 
 type Spec<Props, Methods> = {
   properties: { [Key in keyof Props]-?: Property<Props[Key]> };
+  propertyChanged?: (host: SolidBridgeElement<Props, Methods>, key: keyof Props) => void;
   methods?: {
     [Key in keyof Methods]: Methods[Key] extends (...args: infer Args) => infer Result
       ? (host: SolidBridgeElement<Props, Methods>, ...args: Args) => Result
@@ -109,6 +114,8 @@ export function defineSolidBridge<Props extends object, Methods extends object =
         return;
       }
       this.#values.set(key, value);
+      // SAFETY: Keys come only from spec.properties, which maps every Props key.
+      spec.propertyChanged?.(this.#host, key as keyof Props);
       const property = declarations.get(key);
       if (property?.reflect && property.attribute !== false) {
         const attribute = property.attribute ?? key.toLowerCase();
@@ -134,7 +141,8 @@ export function defineSolidBridge<Props extends object, Methods extends object =
           : typeof property.default === "number"
             ? Number
             : String);
-      this.#write(
+      Reflect.set(
+        this,
         key,
         type === Boolean
           ? value !== null
@@ -142,6 +150,10 @@ export function defineSolidBridge<Props extends object, Methods extends object =
             ? Number(value)
             : value,
       );
+    }
+
+    connectedMoveCallback() {
+      // Atomic parking keeps the existing provider and owned child tree.
     }
 
     connectedCallback() {
@@ -209,38 +221,55 @@ export function defineSolidBridge<Props extends object, Methods extends object =
         if (!this.#content) {
           this.#content = this.ownerDocument.createDocumentFragment();
           this.#start = this.ownerDocument.createComment("solid-bridge-content");
-          this.#content.append(this.#start, ...this.childNodes);
+          this.prepend(this.#start);
+        } else {
+          this.append(...this.#content.childNodes);
         }
-        source = [...this.#content.childNodes];
+        // Adopt passthrough children in place so lazy upgrade keeps focus and hover intent.
+        source = [...this.childNodes];
       }
       this.#mountedApplication = this.#application;
-      this.#dispose = render(() => {
-        const [revision, setRevision] = createSignal(0);
-        this.#notify = () => setRevision((value) => value + 1);
-        const props = {
-          ...defaults,
-          get children() {
-            return children ? children() : source;
-          },
-        };
-        for (const [key] of properties) {
-          Object.defineProperty(props, key, {
-            get: () => {
-              revision();
-              return this.#values.get(key);
+      const layout = !this.#solidOwned ? shellLayoutOwnerForHost(this) : undefined;
+      this.#dispose = render(
+        () => {
+          const [revision, setRevision] = createSignal(0);
+          this.#notify = () => setRevision((value) => value + 1);
+          const props = {
+            ...defaults,
+            get children() {
+              return children ? children() : source;
             },
-          });
-        }
-        const view = () => content(props, this.#host);
-        return this.#application
-          ? createComponent(ApplicationProvider, {
-              value: this.#application,
-              get children() {
-                return view();
+          };
+          for (const [key] of properties) {
+            Object.defineProperty(props, key, {
+              get: () => {
+                revision();
+                return this.#values.get(key);
               },
-            })
-          : view();
-      }, this);
+            });
+          }
+          const renderContent = () => content(props, this.#host);
+          const view = () =>
+            layout
+              ? createComponent(ShellLayoutProvider, {
+                  value: { owner: layout, host: this },
+                  get children() {
+                    return renderContent();
+                  },
+                })
+              : renderContent();
+          return this.#application
+            ? createComponent(ApplicationProvider, {
+                value: this.#application,
+                get children() {
+                  return view();
+                },
+              })
+            : view();
+        },
+        this,
+        source,
+      );
     }
 
     #disposeRoot() {
@@ -268,7 +297,7 @@ export function defineSolidBridge<Props extends object, Methods extends object =
           () => (Reflect.has(props, key) ? Reflect.get(props, key) : absent),
           (value) => {
             if (value !== absent) {
-              host.#write(key, value === undefined ? property.default : value);
+              Reflect.set(host, key, value === undefined ? property.default : value);
             }
           },
         );
@@ -283,4 +312,22 @@ export function defineSolidBridge<Props extends object, Methods extends object =
   return function SolidBridge(props: ComponentProps<Props, Methods>): JSX.Element {
     return BridgeElement.render(props);
   };
+}
+
+/** Unported stateless templates exclusively own this adapter's descendants. */
+export function LitContent(props: { render: () => unknown }) {
+  const host = document.createElement("span");
+  host.style.display = "contents";
+  let part: ReturnType<typeof renderLit> | undefined;
+  createEffect(
+    () => props.render(),
+    (template) => {
+      part = renderLit(template, host, { host });
+    },
+  );
+  onCleanup(() => {
+    part?.setConnected(false);
+    renderLit(nothing, host);
+  });
+  return host;
 }
