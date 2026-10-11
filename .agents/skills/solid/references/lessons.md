@@ -5,6 +5,7 @@ Each entry cost at least one failed CI run, a reverted approach, or a blocked PR
 ## Solid 2 semantics
 
 - **Writes are deferred.** A setter's value is visible only after the microtask flush. That's why owners stay plain TypeScript and components derive instead of write-then-read. A signal-backed store broke callers that mutate and immediately read.
+- **Effect cleanup also runs for equal computed values.** A bridge props refresh can rerun `createEffect` even when its selected status is unchanged, canceling a timer without restarting it. Feed lifecycle effects through a `createMemo` when cleanup must follow value transitions; this kept the saved-status timer from hiding Apply indefinitely.
 - **Removed namespaces compile silently.** `on:click`, `attr:`, `bool:`, `classList`, and `use:` don't error; they become literal attributes or no-ops. Lint is the only guard.
 - **Event names are case-sensitive.** `onWaSelect` listens to `waselect`, not `wa-select`. Use `onWa-select` or `listen(...)`.
 - **Async memos aren't cancellable.** They drop superseded results but get no `AbortSignal`. Transport cancellation needs an owned async-iterable adapter.

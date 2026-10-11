@@ -6367,7 +6367,6 @@
 ["src/commands/status.summary.test.ts","../infra/channel-summary.js","8dc8621439469247e4d4ac3488bf6c5fca98b562881daaa10f347c88024786e1",1]
 ["src/commands/status.summary.test.ts","../infra/system-events.js","e8b8a3c4bb6dfb1f42ce436152a912ca7b76adb382bcf7bebf834078d66acc31",1]
 ["src/commands/status.summary.test.ts","../status/link-channel.js","a739adfcda19085b307cd123caf332aec0bcd82405569b02a8a429ad97aedcbf",1]
-["src/commands/status.summary.test.ts","../status/summary.runtime.js","a4daf9060fc61cb93fd75e53d2574b3fd655108b22a8f1d8177d79dcc293d1a4",1]
 ["src/commands/status.update-channel.test.ts","../version.js","f0e3ffc05e5bb88d719872a8afa5e9b6ecbdcc934442ae969f07de96c78c9763",1]
 ["src/commands/status.usage-routing.test.ts","../daemon/diagnostics.js","b618c65ebef4a0fa62d5e32ae1faa12a7935698a0a407a89655dcd1cd8f01a0e",1]
 ["src/commands/status.usage-routing.test.ts","../gateway/probe.js","46f449a1502b88d55ca1e689d789773f9b0bc858b6162884f1857200e0cc98a6",1]
