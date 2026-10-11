@@ -715,9 +715,6 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
     const logger = {
       warn: vi.fn(),
     };
-    const invalidUrl = new URL("ftp://example.invalid/hook?token=placeholder");
-    invalidUrl.username = "user";
-    invalidUrl.password = "password";
     const job = {
       id: "cron-redact",
       name: "redact",
@@ -732,7 +729,7 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
         mode: "announce",
         completionDestination: {
           mode: "webhook",
-          to: invalidUrl.href,
+          to: "ftp://user:secret@example.invalid/hook?token=secret",
         },
       },
       state: {},
