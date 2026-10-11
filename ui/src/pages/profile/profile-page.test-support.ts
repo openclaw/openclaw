@@ -3,16 +3,18 @@ import type {
   UserProfile,
   UsersSelfResult,
 } from "../../../../packages/gateway-protocol/src/index.ts";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { createAgentSelectionCapability } from "../../app/agent-selection.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import type { AuthenticatedUser } from "../../app/user-profile.ts";
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
-import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
+import {
+  createTestGatewayClient,
+  type GatewayRequestHandler,
+} from "../../test-helpers/gateway-client.ts";
 import { ProfilePage } from "./profile-page.ts";
 
 export function createConnectedContext(
-  request: GatewayBrowserClient["request"],
+  request: GatewayRequestHandler,
   selfUser: AuthenticatedUser | null = null,
 ) {
   let snapshot: ApplicationGatewaySnapshot = {
