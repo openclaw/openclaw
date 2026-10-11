@@ -119,7 +119,7 @@ describe("maintenance lease heartbeat", () => {
         release[closing]!.resolve();
         await withinTest(operations[closing]!, signal);
         const sibling = leases[1 - closing]!;
-        await sibling.renew?.();
+        sibling.renew?.();
         expect(() => sibling.assertOwned()).not.toThrow();
         expect(sibling.signal.aborted).toBe(false);
       } finally {

@@ -1,4 +1,9 @@
-import { MessageChannel, type MessagePort, type Worker } from "node:worker_threads";
+import {
+  MessageChannel,
+  type MessagePort,
+  type Transferable,
+  type Worker,
+} from "node:worker_threads";
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type {
@@ -12,7 +17,7 @@ type Member = {
   closed: ReturnType<typeof createDeferredCore<number>>;
   message?: (reply: CarrierReply) => void;
   failure?: (error: unknown, exitCode?: number, registrationClosed?: boolean) => void;
-  service(): void;
+  service: () => void;
   stopping: boolean;
 };
 type Carrier = {
@@ -33,7 +38,7 @@ export function acquireLeaseHeartbeatCarrier(params: {
   key: string;
   data: LeaseHeartbeatWorkerData;
   createWorker(): Worker;
-  service(): void;
+  service: () => void;
 }) {
   let carrier = carriers.get(params.key);
   const primary = carrier === undefined;
@@ -43,7 +48,7 @@ export function acquireLeaseHeartbeatCarrier(params: {
       worker,
       renewalProgress: params.data.renewalProgress,
       members: new Set(),
-      online: createDeferredCore<void>(),
+      online: createDeferredCore(),
     };
     const owned = carrier;
     void owned.online.promise.catch(() => {});
@@ -151,8 +156,8 @@ export function acquireLeaseHeartbeatCarrier(params: {
     onFailure(fail: Member["failure"]) {
       member.failure = fail;
     },
-    postMessage(value: unknown) {
-      member.channel.postMessage(value, []);
+    postMessage(value: unknown, transferList: readonly Transferable[]) {
+      member.channel.postMessage(value, transferList);
     },
     service() {
       // Synchronous lease verification must also service a sibling's admission.

@@ -383,7 +383,7 @@ export function startOpenClawStateLeaseHeartbeat(
     }
     startupContext.admission.assertCurrent();
     activationSent = true;
-    worker.postMessage({ startup: "activate" });
+    worker.postMessage({ startup: "activate" }, []);
   };
   const databaseAdmission = createSqliteDatabaseAdmissionRelay(() => {
     if (Atomics.load(shared, state.status) >= state.closed) {
@@ -565,7 +565,7 @@ export function startOpenClawStateLeaseHeartbeat(
     checkDeadline();
     try {
       assertRunning();
-      worker.postMessage({ id, operation } satisfies LeaseHeartbeatRequest);
+      worker.postMessage({ id, operation } satisfies LeaseHeartbeatRequest, []);
     } catch (error) {
       pending.delete(id);
       clearTimeout(awaiting.timer);
@@ -583,7 +583,7 @@ export function startOpenClawStateLeaseHeartbeat(
     assertResponsive(expiresAt: number) {
       const remainingBudget = responseBudget(() => expiresAt - Date.now(), expiresAt - Date.now());
       const requestNumber = Atomics.add(shared, state.request, 1n) + 1n;
-      worker.postMessage(null);
+      worker.postMessage(null, []);
       // Exit/error callbacks may be queued behind a synchronous SQLite phase.
       // Require a fresh acknowledgement, never a cached ready/alive observation.
       while (Atomics.load(shared, state.status) === state.ready) {
