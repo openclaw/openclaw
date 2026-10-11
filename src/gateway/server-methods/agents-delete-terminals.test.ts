@@ -104,7 +104,7 @@ it("keeps deletion draining until every connection terminal exits, without touch
     const ptys = [makeFakePty(), makeFakePty(), makeFakePty()];
     const keeper = makeFakePty();
     const killed = createDeferred();
-    const kill = ptys[0]!.kill;
+    const kill = ptys[0]!.kill.bind(ptys[0]);
     ptys[0]!.kill = () => {
       kill();
       killed.resolve();

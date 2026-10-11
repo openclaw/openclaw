@@ -56,7 +56,7 @@ export async function drainAgentExecProcesses(
   assertCurrent: () => void,
 ): Promise<void> {
   const sessions = listExecSessionsForCancellation().filter(
-    (session) => session.agentId === agentId && (!session.exited || session.finalizing),
+    (session) => session.agentId === agentId,
   );
   const accepted: ProcessSession[] = [];
   const failures: unknown[] = [];

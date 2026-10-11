@@ -6,7 +6,11 @@ import {
   captureExecRequestCancellation,
   drainAgentExecProcesses,
 } from "../../agents/bash-process-control.js";
-import { getSession, waitForExecSession } from "../../agents/bash-process-registry.js";
+import {
+  getSession,
+  markBackgrounded,
+  waitForExecSession,
+} from "../../agents/bash-process-registry.js";
 import { resetProcessRegistryForTests } from "../../agents/bash-process-registry.test-support.js";
 import { createExecTool } from "../../agents/bash-tools.exec-run.js";
 import { runExecProcess } from "../../agents/bash-tools.exec-runtime.js";
@@ -223,7 +227,8 @@ it("rejects later exec cancellation after authority loss while joining the accep
   }
 });
 
-it("joins an already exiting process and refuses uncertain physical cleanup", async () => {
+it("joins an already exiting process and refuses uncertain cleanup on deletion retry", async () => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
   const entered = createDeferred();
   const extinction = createDeferred();
   supervisor.spawn.mockImplementationOnce(async (input: SpawnInput) => ({
@@ -234,6 +239,7 @@ it("joins an already exiting process and refuses uncertain physical cleanup", as
     },
   }));
   const run = await launchOwnedProcess();
+  markBackgrounded(run.session);
   await entered.promise;
   const draining = drainAgentExecProcesses("doomed", () => {});
   const settled = vi.fn();
@@ -243,6 +249,14 @@ it("joins an already exiting process and refuses uncertain physical cleanup", as
     expect(settled).not.toHaveBeenCalled();
     extinction.reject(new Error("physical exit could not be confirmed"));
     await expect(draining).rejects.toMatchObject({
+      errors: [
+        expect.objectContaining({
+          message: expect.stringContaining("cleanup could not be confirmed"),
+        }),
+      ],
+    });
+    await run.promise;
+    await expect(drainAgentExecProcesses("doomed", () => {})).rejects.toMatchObject({
       errors: [
         expect.objectContaining({
           message: expect.stringContaining("cleanup could not be confirmed"),
