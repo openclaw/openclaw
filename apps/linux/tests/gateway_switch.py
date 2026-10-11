@@ -6,6 +6,7 @@ consumes the same native Gateway contract as the shared Control UI.
 
 import hashlib
 import json
+import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -33,11 +34,21 @@ Gateway selection adapter and native windows.</p><p id="selection">Waiting for n
 <div id="controls"></div><p id="marker">Independent dashboard state: 0</p>
 <button id="advance">Advance dashboard state</button></main><script>
 const instance = crypto.randomUUID();
+// The Control UI keeps its device identity in origin storage. A saved Gateway
+// dashboard must retain it across app restarts to stay paired.
+const device = (() => {
+  try {
+    const stored = localStorage.getItem('openclaw-fixture-device');
+    if (stored) return stored;
+    localStorage.setItem('openclaw-fixture-device', instance);
+    return instance;
+  } catch { return null; }
+})();
 const page = __PAGE__;
 let clicks = 0;
 const send = message => window.webkit.messageHandlers.openclawGateways.postMessage(message);
 const report = () => fetch('/fixture/report', {method:'POST',headers:{'Content-Type':'application/json'},
-  body:JSON.stringify({page,instance,clicks,path:location.pathname,current:window.__OPENCLAW_NATIVE_GATEWAYS__?.currentId,
+  body:JSON.stringify({page,instance,device,clicks,path:location.pathname,current:window.__OPENCLAW_NATIVE_GATEWAYS__?.currentId,
     tokenMatches:page==='secondary' ? window.__OPENCLAW_NATIVE_CONTROL_AUTH__?.token==='synthetic-gateway-token' : true})});
 function render() {
   const state = window.__OPENCLAW_NATIVE_GATEWAYS__;
@@ -274,12 +285,22 @@ class GatewaySwitchFixture(GatewayFixture):
                 raise RuntimeError("Primary Connection Settings replaced or resized the saved Gateway shell")
             record("Primary Connection Settings " + ("cancel" if action == "Back" else "save") + " returns to Studio")
 
+        studio = [report for report in self.reports.values() if report["page"] == "secondary"]
+        if not studio or not studio[-1]["device"]:
+            raise RuntimeError("Saved Gateway dashboard could not use origin storage")
+        before_restart = set(self.reports)
         app = restart("openclaw://dashboard")
         wait("Studio Gateway", "heading")
         wait("Selected: Studio Gateway")
         main = self.chrome.until(lambda: next(iter(self.windows(app)), None), "restored main window")
         self.capture("after-restart")
         record("first-launch dashboard deep link restores saved selection from system credential vault")
+        restored = self.chrome.until(lambda: next((report for key, report in self.reports.items()
+                                                   if key not in before_restart and report["page"] == "secondary"), None),
+                                     "restored Studio dashboard report")
+        if restored["device"] != studio[-1]["device"]:
+            raise RuntimeError("Restarting the app discarded the saved Gateway dashboard's origin storage")
+        record("saved Gateway dashboard keeps its origin storage across restart")
 
         cli = Path.home() / ".openclaw/bin/openclaw"
         disabled_cli = cli.with_name("openclaw-disabled")
@@ -439,6 +460,43 @@ class GatewaySwitchFixture(GatewayFixture):
         if "/secondary/" in self.websocket_paths:
             raise RuntimeError("Window selection retargeted the Primary Gateway RPC client")
         record("Primary RPC client never connects to a secondary Gateway", {"paths": sorted(set(self.websocket_paths))})
+        storage = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local/share")) / "ai.openclaw.linux/gateway-profiles"
+
+        def stored():
+            return {path for scope in storage.iterdir() for path in scope.iterdir()} if storage.is_dir() else set()
+
+        removed = stored()
+        if not removed:
+            raise RuntimeError("Saved Gateway dashboards did not keep private storage")
+        removed_device = studio[-1]["device"]
+        before_readd = set(self.reports)
+        self.open_native_menu(app, "Manage Gateways…")
+        wait("Manage Gateways", "heading")
+        click("Add Gateway")
+        wait("Add Gateway", "heading")
+        fill("Name", "Studio Gateway")
+        fill("Gateway URL", f"http://127.0.0.1:{self.server_port}/secondary/")
+        select_auth("token")
+        fill("Gateway token (optional)", "synthetic-gateway-token")
+        click("Save Gateway")
+        wait("Saved Studio Gateway.")
+        select("Studio Gateway", main)
+        readded = self.chrome.until(lambda: next((report for key, report in self.reports.items()
+                                                  if key not in before_readd and report["page"] == "secondary"), None),
+                                    "re-added Studio dashboard report")
+        if readded["device"] in (None, removed_device):
+            raise RuntimeError("A removed Gateway saved again reused its previous dashboard storage")
+        record("removed Gateway saved again starts with fresh dashboard storage")
+        fresh = stored() - removed
+        if len(fresh) != 1:
+            raise RuntimeError(f"Expected one fresh storage directory, found {len(fresh)}")
+        if any(path.stat().st_mode & 0o077 for path in [storage, *storage.iterdir(), *stored()]):
+            raise RuntimeError("Saved Gateway dashboard storage is readable by other users")
+        # WebKitGTK keeps a data directory in use until exit, so removal completes on the next launch.
+        app = restart()
+        wait("Studio Gateway", "heading")
+        self.chrome.until(lambda: stored() == fresh, "removed Gateway dashboard storage to be deleted")
+        record("next launch deletes removed Gateways' dashboard storage and keeps saved ones")
         self.passed = True
         print("PASS: native Gateway selection, credential persistence, focus/new windows and removal", flush=True)
 
