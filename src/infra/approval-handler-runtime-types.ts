@@ -52,7 +52,7 @@ export type ChannelApprovalNativeAvailabilityAdapter = {
 };
 
 /** Eligibility may prepare account state through its owning worker. */
-type ChannelApprovalNativeAvailabilityAdapterAsync = {
+export type ChannelApprovalNativeAvailabilityAdapterAsync = {
   isConfigured: (params: ChannelApprovalCapabilityHandlerContext) => boolean | Promise<boolean>;
   shouldHandle: (params: ApprovalRequestContext) => boolean | Promise<boolean>;
 };
@@ -294,6 +294,29 @@ export type ChannelApprovalNativeRuntimeAdapterAsync<
     TPendingEntry,
     TBinding,
     TFinalPayload
+  >,
+  "availability"
+> & { availability: ChannelApprovalNativeAvailabilityAdapterAsync };
+
+export type ChannelApprovalNativeRuntimeSpecAsync<
+  TPendingPayload,
+  TPreparedTarget,
+  TPendingEntry,
+  TBinding = unknown,
+  TFinalPayload = unknown,
+  TPendingView extends PendingApprovalView = PendingApprovalView,
+  TResolvedView extends ResolvedApprovalView = ResolvedApprovalView,
+  TExpiredView extends ExpiredApprovalView = ExpiredApprovalView,
+> = Omit<
+  ChannelApprovalNativeRuntimeSpec<
+    TPendingPayload,
+    TPreparedTarget,
+    TPendingEntry,
+    TBinding,
+    TFinalPayload,
+    TPendingView,
+    TResolvedView,
+    TExpiredView
   >,
   "availability"
 > & { availability: ChannelApprovalNativeAvailabilityAdapterAsync };

@@ -497,7 +497,10 @@ type ChannelApprovalForwardingFallbackParams = {
   request: ExecApprovalRequest | PluginApprovalRequest | SystemAgentApprovalRequest;
 };
 
-export type { ChannelApprovalNativeAdapter } from "./approval-native.types.js";
+export type {
+  ChannelApprovalNativeAdapter,
+  ChannelApprovalNativeAdapterAsync,
+} from "./approval-native.types.js";
 
 type ChannelApprovalRenderHandlers<Request, Resolved> = {
   buildPendingPayload?: (params: {
