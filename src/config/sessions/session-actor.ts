@@ -228,26 +228,36 @@ export function createSessionActor(params: {
           assertReadable();
           authority.assertCurrent();
           let snapshot = params.replica.read();
-          if (!snapshot) {
+          for (let attempt = 0; !snapshot && attempt < 2; attempt += 1) {
             const pending = params.replica.beginRead();
             try {
               snapshot = await scope.execute({ type: "session.actor.read", input: { target } });
               generation?.assertCurrent();
               if (!pending.install(snapshot)) {
-                throw new Error("Session actor changed before its read could publish");
+                // A committed receipt can supersede the read while its reply is in flight.
+                snapshot = params.replica.read();
               }
-              fenced = false;
             } finally {
               pending.cancel();
             }
           }
+          if (!snapshot) {
+            throw new Error("Session actor changed before its read could publish");
+          }
+          fenced = false;
           assertReadable();
           authority.assertCurrent();
           authority.authorize("commit", snapshot);
           authority.assertCurrent();
           assertReadable();
           if (!isInstalled(snapshot)) {
-            throw new Error("Session actor changed before read disclosure");
+            snapshot = params.replica.read();
+            if (!snapshot) {
+              throw new Error("Session actor changed before read disclosure");
+            }
+            authority.authorize("commit", snapshot);
+            authority.assertCurrent();
+            assertReadable();
           }
           return snapshot;
         }, authorize(authority)),
