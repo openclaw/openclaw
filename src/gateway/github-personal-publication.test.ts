@@ -614,7 +614,11 @@ describe("personal publication authority and recovery", () => {
       }
       expect(result).not.toHaveProperty("effect");
       expect(commands.some((argv) => argv.includes("push") || argv.includes("POST"))).toBe(false);
-      expect(readPersonalGitHubPublication(owner, { requestId: result.requestId })).toMatchObject({
+      expect(
+        openOpenClawStateDatabase()
+          .db.prepare(`SELECT status, last_effect, effect_state FROM ${table} WHERE request_id = ?`)
+          .get(result.requestId),
+      ).toMatchObject({
         status: "failed",
         last_effect: null,
         effect_state: null,
