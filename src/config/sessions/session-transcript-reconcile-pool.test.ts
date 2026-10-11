@@ -240,7 +240,8 @@ it.each(["complete", "native-exit"] as const)(
         ending === "native-exit" ? "rejected" : "fulfilled",
         "fulfilled",
       ]);
-      expect(modes).toEqual(
+      // Across agents, planning and lease recovery join the FIFO worker as they become ready.
+      expect(modes.toSorted()).toEqual(
         ending === "native-exit" ? ["disk", "disk", "release"] : ["disk", "disk"],
       );
       expect(getSessionTranscriptReconcileWorkerPoolSnapshot()).toMatchObject({
