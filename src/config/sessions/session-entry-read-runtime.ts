@@ -334,7 +334,7 @@ export function createSessionEntryListReader(
 /** Read descriptive summaries through the original store selection and reader lifetime. */
 export async function readSessionEntrySummariesInWorker(
   input: Omit<SessionStoreWorkerReadScope, "agentId"> &
-    Pick<SessionEntryListWorkerInput["scope"], "agentId" | "cleanupSession">,
+    Pick<SessionEntryListWorkerInput["scope"], "agentId" | "cleanupSession" | "readConsistency">,
 ) {
   const { scope, agentId } = captureSessionEntryReadScope({ ...input, sessionKey: "" });
   const binding = captureIncognitoSessionBinding(scope);
@@ -352,6 +352,7 @@ export async function readSessionEntrySummariesInWorker(
       clone: false,
       projection: "list",
       hydrateSkillPromptRefs: false,
+      readConsistency: input.readConsistency,
     })
       .filter(({ sessionKey, entry }) =>
         matchesPluginHostCleanupSession(sessionKey, entry, input.cleanupSession),
@@ -369,6 +370,7 @@ export async function readSessionEntrySummariesInWorker(
           env: database.env,
           projection: "list",
           cleanupSession: input.cleanupSession,
+          readConsistency: input.readConsistency,
           hydrateSkillPromptRefs: false,
         },
         continuation,

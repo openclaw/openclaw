@@ -165,7 +165,7 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
                       projection: "list",
                     })
                   ).entries
-                : readSessionEntrySummariesInWorker(target),
+                : readSessionEntrySummariesInWorker({ ...target, readConsistency: "latest" }),
             ),
           )
         : undefined;

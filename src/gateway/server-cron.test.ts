@@ -2012,6 +2012,7 @@ describe("buildGatewayCronService", () => {
         "process.stdout.write('scheduled result')",
         {
           deleteAfterRun: false,
+          failureAlert: false,
           delivery: { mode: "announce", channel: "telegram", to: "123" },
         },
       );
