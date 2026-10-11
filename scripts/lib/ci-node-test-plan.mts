@@ -4094,6 +4094,7 @@ export function createSelectedNodeTestShardBundles(
     RuntimeTestSelection & {
       onFallback?: (reason: string) => void;
       preparedTestPlans?: ReadonlyMap<string, ReturnType<typeof buildVitestRunPlans>>;
+      isolateSystemRuntime?: boolean;
     } = {},
 ): CompactNodeTestShard[] | null {
   if (options.runnerBackend === "runson") {
@@ -4273,20 +4274,34 @@ export function createSelectedNodeTestShardBundles(
       canonicalFamilies.set(projectedGroup, compactStripeFamily(group));
       return [projectedGroup];
     });
-    return groups.length
-      ? [
-          {
-            ...shard,
-            checkName: `checks-node-changed-${shard.shardName}`,
-            shardName: `changed-${shard.shardName}`,
-            groups,
-            predictedSeconds: Math.ceil(
-              retainedSeconds +
-                compactPreparationSeconds(shard.pretestBuildMode, options.runnerBackend),
-            ),
-          },
-        ]
-      : [];
+    if (groups.length === 0) {
+      return [];
+    }
+    const job: CompactNodeTestShard = {
+      ...shard,
+      checkName: `checks-node-changed-${shard.shardName}`,
+      shardName: `changed-${shard.shardName}`,
+      groups,
+      predictedSeconds: Math.ceil(
+        retainedSeconds + compactPreparationSeconds(shard.pretestBuildMode, options.runnerBackend),
+      ),
+    };
+    if (
+      options.isolateSystemRuntime &&
+      groups.some((group) =>
+        /^core-runtime-infra-system-runtime(?:-hosted-\d+)?$/u.test(group.shard_name),
+      )
+    ) {
+      // Preserve every sibling's prior worker envelope before serial repacking and repricing.
+      job.planConcurrency = 1;
+      job.env = {
+        ...job.env,
+        OPENCLAW_VITEST_MAX_WORKERS: String(
+          Math.min(2, readPositiveEnvInt("OPENCLAW_VITEST_MAX_WORKERS", job.env ?? {}, 2)),
+        ),
+      };
+    }
+    return [job];
   });
   return applyNativeSoloTimings(
     [

@@ -6,6 +6,7 @@ import {
   createAgentDatabaseInspectionRefusal,
   type AgentDatabaseAdmissionRefusal,
 } from "../../state/agent-database-admission.js";
+import type { AgentDatabaseCleanupFailure } from "../../state/openclaw-agent-execution.js";
 import type { ChannelRuntimeSnapshot } from "../server-channel-runtime.types.js";
 import type { ChannelManager } from "../server-channels.js";
 import type { GatewayPluginReloadStatus } from "../server-plugin-runtime-generation.js";
@@ -86,6 +87,9 @@ function createReadinessHarness(params: {
   getGatewayDraining?: Parameters<typeof createReadinessChecker>[0]["getGatewayDraining"];
   getEventLoopHealth?: Parameters<typeof createReadinessChecker>[0]["getEventLoopHealth"];
   getStateDatabaseFailure?: Parameters<typeof createReadinessChecker>[0]["getStateDatabaseFailure"];
+  getAgentDatabaseCleanupFailures?: Parameters<
+    typeof createReadinessChecker
+  >[0]["getAgentDatabaseCleanupFailures"];
   shouldSkipChannelReadiness?: Parameters<
     typeof createReadinessChecker
   >[0]["shouldSkipChannelReadiness"];
@@ -103,6 +107,7 @@ function createReadinessHarness(params: {
       getGatewayDraining: params.getGatewayDraining,
       getEventLoopHealth: params.getEventLoopHealth,
       getStateDatabaseFailure: params.getStateDatabaseFailure,
+      getAgentDatabaseCleanupFailures: params.getAgentDatabaseCleanupFailures,
       shouldSkipChannelReadiness: params.shouldSkipChannelReadiness,
       cacheTtlMs: params.cacheTtlMs,
     }),
@@ -198,24 +203,49 @@ describe("createReadinessChecker", () => {
   it("reports a terminal state database failure immediately and discards cached channel health", () => {
     withReadinessClock(() => {
       const stateDatabase = { failure: undefined as Error | undefined };
+      let agentCleanup: AgentDatabaseCleanupFailure[] = [];
       const { manager, readiness } = createReadinessHarness({
         getStateDatabaseFailure: () => stateDatabase.failure,
+        getAgentDatabaseCleanupFailures: () => agentCleanup,
         cacheTtlMs: 1_000,
       });
       expect(readiness()).toEqual(readySnapshot());
 
       stateDatabase.failure = new Error("newer shared-state schema");
+      agentCleanup = [{ agentId: "main", reason: "retained cleanup", repairHint: "Restart." }];
       expect(readiness()).toEqual({
         ...failingSnapshot(["state-database"]),
         stateDatabase: { reason: "newer shared-state schema" },
+        agentCleanup,
       });
       expect(manager.getRuntimeSnapshot).toHaveBeenCalledTimes(1);
 
       stateDatabase.failure = undefined;
+      agentCleanup = [];
       expect(readiness()).toEqual(readySnapshot());
       expect(manager.getRuntimeSnapshot).toHaveBeenCalledTimes(2);
     });
   });
+
+  it.each([false, true])(
+    "reports fresh cleanup diagnostics without blocking readiness (skip channels: %s)",
+    (skipChannels) => {
+      withReadinessClock(() => {
+        let agentCleanup: AgentDatabaseCleanupFailure[] = [];
+        const { manager, readiness } = createReadinessHarness({
+          getAgentDatabaseCleanupFailures: () => agentCleanup,
+          shouldSkipChannelReadiness: () => skipChannels,
+          cacheTtlMs: 1_000,
+        });
+        expect(readiness()).toEqual(readySnapshot());
+        agentCleanup = [{ agentId: "main", reason: "retained cleanup", repairHint: "Retry." }];
+        expect(readiness()).toEqual(readySnapshot(FIVE_MIN_MS, { agentCleanup }));
+        agentCleanup = [];
+        expect(readiness()).toEqual(readySnapshot());
+        expect(manager.getRuntimeSnapshot).toHaveBeenCalledTimes(skipChannels ? 0 : 1);
+      });
+    },
+  );
 
   it("reports plugin replacement recovery immediately and resumes channel readiness after settlement", () => {
     withReadinessClock(() => {

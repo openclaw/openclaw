@@ -31,6 +31,35 @@ const executionState = resolveGlobalSingleton<AgentDatabaseExecutionState>(
 );
 const executions = executionState.owners;
 
+export type AgentDatabaseCleanupFailure = {
+  agentId: string;
+  reason: string;
+  repairHint: string;
+};
+
+/** Read owner-held cleanup state without opening storage or changing admission. */
+export function getOpenClawAgentDatabaseCleanupFailures(
+  stateDatabasePath: string,
+): AgentDatabaseCleanupFailure[] {
+  return [...new Set(executions.values())].flatMap((owner) => {
+    if (owner.kind !== "file" || owner.stateDatabasePath !== stateDatabasePath) {
+      return [];
+    }
+    const failure = owner.getCleanupFailure();
+    return failure
+      ? [
+          {
+            agentId: owner.agentId,
+            reason: failure.reason,
+            repairHint: failure.retryable
+              ? "Idle cleanup retries on this agent's next request. If cleanup remains blocked, restart the Gateway; do not delete its database or lease."
+              : "Cleanup failed after this agent was explicitly revoked and cannot retry on a request. Restart the Gateway; do not delete its database or lease.",
+          },
+        ]
+      : [];
+  });
+}
+
 /** File captures stay synchronous; explicit ephemeral targets await their pinned actor. */
 export const captureOpenClawAgentDatabaseExecution = createAgentDatabaseExecutionCapture(
   executions,

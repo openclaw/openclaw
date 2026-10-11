@@ -20,8 +20,12 @@ import {
 } from "./openclaw-agent-db-lifecycle.js";
 import type { AgentDatabaseRequestExecutionSource } from "./openclaw-agent-execution-admission-contract.js";
 import * as native from "./openclaw-agent-execution-native.js";
-import { captureOpenClawAgentDatabaseExecution } from "./openclaw-agent-execution.js";
+import {
+  captureOpenClawAgentDatabaseExecution,
+  getOpenClawAgentDatabaseCleanupFailures,
+} from "./openclaw-agent-execution.js";
 import { closeOpenClawStateDatabaseAsync } from "./openclaw-state-db.js";
+import { resolveDatabasePath } from "./openclaw-state-db.paths.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
@@ -156,7 +160,7 @@ it.each(["shutdown", "restart drain"] as const)("closes all warm executors on %s
   expect(opened.every(({ close }) => close.mock.calls.length === 1)).toBe(true);
 });
 
-it("retires only the selected physical store and shares its directory alias", async () => {
+it("shares physical aliases and retains revoked cleanup custody until retirement", async () => {
   const first = await use("first");
   await use("second");
   fs.mkdirSync(path.dirname(first.path), { recursive: true });
@@ -174,7 +178,22 @@ it("retires only the selected physical store and shares its directory alias", as
   await borrowed.prepare(source);
   await borrowed.release();
   expect(opened).toHaveLength(2);
+  const firstExecutor = opened[0];
+  assert(firstExecutor);
+  firstExecutor.close.mockRejectedValueOnce(new Error("controlled aliased cleanup failure"));
+  await expect(closeOpenClawAgentDatabaseByPathAsync(borrowed.path, "first")).rejects.toThrow();
+  const statePath = resolveDatabasePath({ env });
+  expect(getOpenClawAgentDatabaseCleanupFailures(statePath)).toEqual([
+    expect.objectContaining({
+      agentId: "first",
+      reason: expect.stringContaining("controlled aliased cleanup failure"),
+      repairHint: expect.stringContaining("cannot retry on a request"),
+    }),
+  ]);
+  expect(getOpenClawAgentDatabaseCleanupFailures(`${statePath}.other`)).toEqual([]);
+  expect(() => capture("first")).toThrow("admission is closed");
   await closeOpenClawAgentDatabaseByPathAsync(borrowed.path, "first");
+  expect(getOpenClawAgentDatabaseCleanupFailures(statePath)).toEqual([]);
   expect(closedAgents()).toEqual(["first"]);
   await use("first");
   await use("second");
@@ -206,7 +225,7 @@ it("keeps a reborrow live while another idle executor is being evicted", async (
   await borrowed.release();
 });
 
-it("retains failed eviction custody without retaining a fifth idle executor", async () => {
+it("retains failed eviction custody without consuming healthy idle capacity", async () => {
   for (const agentId of ["first", "second", "third", "fourth"]) {
     await use(agentId);
   }
@@ -214,10 +233,17 @@ it("retains failed eviction custody without retaining a fifth idle executor", as
   assert(first);
   first.close.mockRejectedValueOnce(new Error("synthetic cleanup failure"));
   await use("fifth");
-  expect(closedAgents()).toEqual(["first", "fifth"]);
-  await use("sixth");
+  expect(closedAgents()).toEqual(["first"]);
+  for (const agentId of ["second", "fifth", "third", "fourth"]) {
+    await use(agentId);
+  }
+  expect(opened).toHaveLength(5);
+  expect(first.close).toHaveBeenCalledTimes(1);
+
+  await use("first");
   expect(first.close).toHaveBeenCalledTimes(2);
-  expect(closedAgents()).toEqual(["first", "fifth"]);
+  expect(opened).toHaveLength(6);
+  expect(closedAgents()).toEqual(["first", "second"]);
 });
 
 it("keeps warm executors through unrelated configuration publication", async () => {

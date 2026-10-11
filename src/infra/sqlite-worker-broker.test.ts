@@ -407,7 +407,7 @@ poolIt(
     const parallelism = vi.spyOn(os, "availableParallelism").mockReturnValue(16);
     const broker = new SqliteWorkerBroker();
     const namespace = databasePath();
-    let lost = false;
+    let lost: Error | undefined;
     let nativeStopped: Promise<void> | undefined;
     const options = {
       moduleUrl: new URL("./sqlite-worker-store.test-support.ts", import.meta.url),
@@ -418,8 +418,8 @@ poolIt(
     try {
       expect(await broker.open({ ...options, existingOnly: true })).toBeUndefined();
       const memory = await broker.open<FixtureOperations>(options, undefined, undefined, {
-        onNativeLost() {
-          lost = true;
+        onNativeLost(error) {
+          lost = error;
         },
         onNativeStopped(stopped) {
           nativeStopped = stopped;
@@ -452,10 +452,11 @@ poolIt(
       await expect(
         memory.execute({ type: "commitThenExit", input: { value: "lost" } }),
       ).rejects.toMatchObject({ code: "outcome-unknown" });
-      expect(lost).toBe(true);
+      expect(lost).toMatchObject({ code: "unavailable", cause: expect.any(Error) });
       await nativeStopped;
       await expect(memory.execute({ type: "read", input: undefined })).rejects.toMatchObject({
         code: "unavailable",
+        cause: lost?.cause,
       });
       assert(durableSibling);
       expect(await read(durableSibling)).toEqual(["durable"]);

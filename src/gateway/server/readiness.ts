@@ -1,6 +1,7 @@
 import { isFutureDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import type { ChannelAccountSnapshot } from "../../channels/plugins/types.public.js";
 import type { AgentDatabaseAdmissionRefusal } from "../../state/agent-database-admission.js";
+import type { AgentDatabaseCleanupFailure } from "../../state/openclaw-agent-execution.js";
 import {
   DEFAULT_CHANNEL_CONNECT_GRACE_MS,
   DEFAULT_CHANNEL_STALE_EVENT_THRESHOLD_MS,
@@ -20,6 +21,7 @@ type ReadinessResult = {
   eventLoop?: GatewayEventLoopHealth;
   pluginReload?: GatewayPluginReloadStatus;
   agentDatabases?: readonly AgentDatabaseAdmissionRefusal[];
+  agentCleanup?: readonly AgentDatabaseCleanupFailure[];
   stateDatabase?: { reason: string };
 };
 
@@ -99,6 +101,7 @@ export function createReadinessChecker(
     getEventLoopHealth?: () => GatewayEventLoopHealth | undefined;
     getStateDatabaseFailure?: () => Error | undefined;
     getAgentDatabaseAdmissionRefusals?: () => readonly AgentDatabaseAdmissionRefusal[];
+    getAgentDatabaseCleanupFailures?: () => readonly AgentDatabaseCleanupFailure[];
     allowPendingAgentDatabases?: boolean;
     getPluginReloadStatus?: () => GatewayPluginReloadStatus | undefined;
     shouldSkipChannelReadiness?: () => boolean;
@@ -207,12 +210,14 @@ export function createReadinessChecker(
   };
   return () => {
     const agentDatabases = deps.getAgentDatabaseAdmissionRefusals?.();
+    const agentCleanup = deps.getAgentDatabaseCleanupFailures?.();
     const result = readReadiness(agentDatabases);
     const getEventLoopHealth = deps.getEventLoopHealth;
     const eventLoop = getEventLoopHealth?.();
     return {
       ...result,
       ...(agentDatabases?.length ? { agentDatabases } : {}),
+      ...(agentCleanup?.length ? { agentCleanup } : {}),
       ...(eventLoop ? { eventLoop } : {}),
     };
   };

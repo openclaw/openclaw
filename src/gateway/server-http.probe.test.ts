@@ -377,11 +377,51 @@ describe("gateway probe endpoints", () => {
     }
   });
 
+  it("serves healthy readiness with cleanup details only to local or authenticated callers", async () => {
+    const agentCleanup = ["main", "optional"].map((agentId) => ({
+      agentId,
+      reason: "retained worker cleanup failure",
+      repairHint: "Retry this agent or restart without deleting its lease.",
+    }));
+    const getReadiness: ReadinessChecker = () => ({
+      ready: true,
+      failing: [],
+      uptimeMs: 8_000,
+      agentCleanup,
+    });
+    await withGatewayServer({
+      prefix: "probe-retained-agent-cleanup",
+      resolvedAuth: AUTH_TOKEN,
+      overrides: { getReadiness },
+      run: async (server) => {
+        const local = await sendRequest(server, { path: "/readyz" });
+        expect(local.res.statusCode).toBe(200);
+        expect(JSON.parse(local.getBody())).toEqual(getReadiness());
+        const remote = await sendRequest(server, {
+          path: "/readyz",
+          remoteAddress: "10.0.0.8",
+          host: "gateway.test",
+        });
+        expect(remote.res.statusCode).toBe(200);
+        expect(JSON.parse(remote.getBody())).toEqual({ ready: true });
+        const authenticated = await sendRequest(server, {
+          path: "/readyz",
+          remoteAddress: "10.0.0.8",
+          host: "gateway.test",
+          authorization: "Bearer test-token",
+        });
+        expect(authenticated.res.statusCode).toBe(200);
+        expect(JSON.parse(authenticated.getBody())).toEqual(getReadiness());
+      },
+    });
+  });
+
   it("returns only readiness state for unauthenticated remote /ready requests", async () => {
     const getReadiness: ReadinessChecker = () => ({
       ready: false,
       failing: ["discord", "telegram"],
       uptimeMs: 8_000,
+      agentCleanup: [{ agentId: "main", reason: "retained cleanup", repairHint: "Restart." }],
     });
 
     await withGatewayServer({

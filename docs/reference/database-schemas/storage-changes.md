@@ -2081,6 +2081,12 @@ before opening a replacement generation, so transient lifecycle contention does
 not permanently disable history eviction. Cleanup rechecks the original database
 identity and request authority; it never replays the failed operation. Explicit
 resource revocation remains terminal. Schemas, retention, and update behavior are unchanged.
+Failed idle cleanup releases reusable pool capacity without releasing the original
+generation or lease custody. Healthy owners remain reusable; only the original
+owner retries its cleanup before replacement. Readiness projects the retained
+failure separately from admission refusals, with redacted native details and a
+restart-only repair hint after explicit revocation. This changes no DDL, stored
+row format, migration, retention, or durability contract.
 Successful pooled-agent close relays its recorded WAL checkpoint after native and
 lease cleanup settle. The original generation and physical database identities
 fence that observation, and the budget owner releases deferral only for a newer

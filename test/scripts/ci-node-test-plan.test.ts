@@ -3340,6 +3340,22 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       expect(
         selected.flatMap((job) => job.groups.flatMap((group) => group.includePatterns!)).toSorted(),
       ).toEqual(targets.toSorted());
+
+      const isolated = expectDefined(
+        createSelected(targets, { runnerBackend: "blacksmith", isolateSystemRuntime: true }),
+        "isolated selected infra plan",
+      );
+      const runtime = isolated.filter((job) =>
+        job.groups.some((group) => group.shard_name === "core-runtime-infra-system-runtime"),
+      );
+      expect(runtime).toHaveLength(1);
+      expect(runtime[0]?.planConcurrency).toBe(1);
+      expect(Number(runtime[0]?.env?.OPENCLAW_VITEST_MAX_WORKERS)).toBeLessThanOrEqual(2);
+      expect(runtime[0]?.predictedTestSeconds).toBe(160);
+      expect(runtime[0]?.predictedSeconds).toBe(160);
+      expect(
+        isolated.flatMap((job) => job.groups.flatMap((group) => group.includePatterns!)).toSorted(),
+      ).toEqual(targets.toSorted());
     } finally {
       vi.doUnmock("../../scripts/lib/vitest-build-prerequisites.mts");
       vi.doUnmock("../../scripts/lib/ci-test-timings.mts");

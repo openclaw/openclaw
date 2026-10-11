@@ -108,6 +108,20 @@ checks read the admission owner's recorded result without querying SQLite.
 `/healthz` still reports HTTP liveness. Supervisors that need to detect a Gateway
 that is running but cannot admit work must monitor `/readyz`.
 
+### Retained agent cleanup failure
+
+Detailed readiness can include `agentCleanup`: the affected agent ID, a redacted
+native failure reason (including available SQLite codes and nested causes), and
+a repair hint. These owner-held facts stay fresh independently of the channel
+readiness cache, including when another subsystem makes the Gateway unready.
+
+An idle cleanup failure does not itself make `/readyz` return `503`, even for the
+default or system agent. The failed owner retains its original generation and
+lease but releases reusable idle capacity, so healthy agents can keep running.
+Its next request retries cleanup before opening a replacement. Explicitly revoked
+owners cannot retry on a request and report a restart-only repair hint. Do not
+delete the affected database or lease to clear this diagnostic.
+
 ### Plugin replacement recovery
 
 During plugin replacement or recovery, `/readyz` returns `503`. Detailed responses
