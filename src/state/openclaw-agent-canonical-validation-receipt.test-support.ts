@@ -27,10 +27,14 @@ await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
   }
   const reader = opened.database;
   const prototype = requireNodeSqlite().StatementSync.prototype;
+  const original = { get: prototype.get, all: prototype.all, iterate: prototype.iterate };
   let receiptReads = 0;
-  const observe = <Method extends "get" | "all" | "iterate">(method: Method) => {
-    const original = prototype[method];
-    prototype[method] = new Proxy(original, {
+  const observe = <
+    Read extends StatementSync["get"] | StatementSync["all"] | StatementSync["iterate"],
+  >(
+    read: Read,
+  ): Read =>
+    new Proxy(read, {
       apply(target, receiver: StatementSync, args) {
         assert.doesNotMatch(receiver.sourceSQL, /^PRAGMA table_info\(session_key_contract\)/iu);
         if (/^select "canonical_ready" /iu.test(receiver.sourceSQL)) {
@@ -39,11 +43,9 @@ await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
         return Reflect.apply(target, receiver, args);
       },
     });
-    return () => {
-      prototype[method] = original;
-    };
-  };
-  const restore = (["get", "all", "iterate"] as const).map(observe);
+  prototype.get = observe(original.get);
+  prototype.all = observe(original.all);
+  prototype.iterate = observe(original.iterate);
   try {
     assert.equal(hasPersistedOpenClawAgentCanonicalValidation(reader), true);
     runOpenClawAgentWriteTransaction(
@@ -73,7 +75,9 @@ await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
     assert.equal(hasPersistedOpenClawAgentCanonicalValidation(reader), true);
     assert.equal(receiptReads, readsAfterRollback);
   } finally {
-    restore.forEach((restoreRead) => restoreRead());
+    prototype.get = original.get;
+    prototype.all = original.all;
+    prototype.iterate = original.iterate;
     reader.close();
   }
 });

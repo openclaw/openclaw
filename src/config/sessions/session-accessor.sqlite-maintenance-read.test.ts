@@ -1,12 +1,16 @@
 import path from "node:path";
 import { expect, it, vi } from "vitest";
-import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
+import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
+import type {
+  ReclamationDatabaseOptions,
+  SessionMaintenanceReadCommand,
+} from "./session-accessor.sqlite-lifecycle-types.js";
 import { readSessionMaintenanceInWorker } from "./session-accessor.sqlite-maintenance-transaction.js";
 import { resolveMaintenanceConfigFromInput } from "./store-maintenance.js";
 
@@ -22,11 +26,10 @@ it("reads warm maintenance without a transaction and observes newly committed ca
         });
       }, options);
     write(0);
-    const identity = readOpenClawAgentDatabaseIdentity(database);
     const plan = {
-      kind: "maintenance-plan" as const,
+      kind: "maintenance-plan",
       databaseOptions: options,
-      expectedIdentity: { key: `file:${String(identity.identity)}`, birthtime: identity.birthtime },
+      expectedIdentity: readDatabasePathIdentitySync(database.path),
       input: {
         archiveDirectory: path.join(path.dirname(database.path), "archives"),
         storePath: database.path,
@@ -37,7 +40,7 @@ it("reads warm maintenance without a transaction and observes newly committed ca
         }),
         preservation: { providerKeys: [], workIdentities: [], lifecycleIdentities: [] },
       },
-    };
+    } satisfies SessionMaintenanceReadCommand & { databaseOptions: ReclamationDatabaseOptions };
     expect(readSessionMaintenanceInWorker(plan, database).kind).toBe("maintenance-plan");
     const exec = vi.spyOn(database.db, "exec");
     try {
