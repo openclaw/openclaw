@@ -42,3 +42,5 @@ class ChannelAvatar extends OpenClawLightDomContentsElement {
 if (!customElements.get("openclaw-channel-avatar")) {
   customElements.define("openclaw-channel-avatar", ChannelAvatar);
 }
+
+export type { ChannelAvatar };

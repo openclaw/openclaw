@@ -330,3 +330,5 @@ export function renderExecApprovalCard(props: ExecApprovalCardProps) {
     </div>
   </div>`;
 }
+
+export type { ApprovalCountdown };

@@ -591,3 +591,5 @@ if (!customElements.get("openclaw-plugin-contributions")) {
 if (!customElements.get("openclaw-plugin-view")) {
   customElements.define("openclaw-plugin-view", ControlUiPluginView);
 }
+
+export type { ControlUiPluginView, ControlUiPluginContributions };
