@@ -1,6 +1,7 @@
 import type { ensureMemoryIndexSchema } from "openclaw/plugin-sdk/memory-core-host-engine-schema";
 import type { loadMemoryEmbeddingCache } from "./manager-embedding-cache.js";
-import type { MemoryIndexProviderIdentity } from "./manager-reindex-state.js";
+import type { MemoryIndexMeta, MemoryIndexProviderIdentity } from "./manager-reindex-state.js";
+import type { MemoryDatabaseFacts } from "./manager-retrieval-read.js";
 import type { MemoryShadowConnection, MemoryShadowFailure } from "./manager-shadow-task.js";
 import type { MemorySourceIndexHeader } from "./manager-source-index-kernel.js";
 import type {
@@ -30,9 +31,11 @@ export type MemoryEmbeddingCacheMutation =
   | { kind: "upsert"; header: MemoryEmbeddingCacheHeader; entries: MemoryEmbeddingCacheEntry[] }
   | { kind: "clear"; identities: MemoryIndexProviderIdentity[] };
 export type MemoryPublicationResult<T> =
-  | { ok: true; value: T }
+  | { ok: true; value: T; facts?: MemoryDatabaseFacts; writeToken?: string }
   | { ok: false; error: MemoryShadowFailure; entered: boolean; committed: boolean };
 export type MemoryPublicationOperations = {
+  "index.facts": { input: undefined; output: MemoryDatabaseFacts };
+  "index.writeMetadata": { input: MemoryIndexMeta; output: MemoryPublicationResult<void> };
   "schema.admit": {
     input: Pick<
       Parameters<typeof ensureMemoryIndexSchema>[0],
@@ -56,6 +59,10 @@ export type MemoryPublicationOperations = {
     input: { source: "memory" | "sessions"; path: string };
     output: string | undefined;
   };
+  "source.chunks": {
+    input: { source: "memory" | "sessions"; path: string };
+    output: Array<{ id: string; embedded: boolean }>;
+  };
   "session.current": {
     input: { agentId: string; sessionId: string };
     output: "current" | "forgotten";
@@ -70,6 +77,14 @@ export type MemoryPublicationOperations = {
   };
   "cache.write": {
     input: { operation: string; expectedRevision: number };
+    output: MemoryPublicationResult<boolean>;
+  };
+  "cache.write.inline": {
+    input: {
+      header: MemoryEmbeddingCacheHeader;
+      entries: MemoryEmbeddingCacheEntry[];
+      expectedRevision: number;
+    };
     output: MemoryPublicationResult<boolean>;
   };
   "cache.clear": {
@@ -87,7 +102,20 @@ export type MemoryPublicationOperations = {
   "stage.discard": { input: { operation: string }; output: void };
   "source.replace": {
     input: { operation: string; state: MemoryPublicationState };
-    output: MemoryPublicationResult<{ beforeRevision: number; databaseRevision: number }>;
+    output: MemoryPublicationResult<{
+      beforeRevision: number;
+      databaseRevision: number;
+      retainedDrift: boolean;
+    }>;
+  };
+  "source.replace.inline": {
+    input: {
+      header: MemorySourceIndexHeader;
+      rows: number;
+      fragments: MemoryPublicationFragment[];
+      state: MemoryPublicationState;
+    };
+    output: MemoryPublicationOperations["source.replace"]["output"];
   };
   "source.delete": {
     input: {

@@ -27,7 +27,7 @@ function openSignalReplyAuthorStore() {
   }
   const runtime = getOptionalSignalRuntime();
   try {
-    return runtime?.state.openKeyedStore<SignalReplyContextRecord>({
+    return runtime?.state.openKeyedStoreV2<SignalReplyContextRecord>({
       namespace: PERSISTENT_NAMESPACE,
       maxEntries: PERSISTENT_MAX_ENTRIES,
       defaultTtlMs: DEFAULT_REPLY_AUTHOR_TTL_MS,
@@ -146,23 +146,16 @@ export async function registerSignalReplyContext(params: {
     registeredAt,
   };
   const expiresAt = registeredAt + DEFAULT_REPLY_AUTHOR_TTL_MS;
-  const usesComparisons = Boolean(store?.observe && store.compareAndApply);
-  if (!store || (!store.update && !usesComparisons)) {
+  if (!store) {
     const next = mergeReplyContext(memoryReplyContexts.get(key), record);
     memoryReplyContexts.set(key, { ...next, expiresAt });
     pruneMemoryReplyContexts(registeredAt);
-    if (store) {
-      signalReplyAuthorState.persistentStoreDisabled = true;
-      getOptionalSignalRuntime()
-        ?.logging.getChildLogger({ plugin: "signal", feature: "reply-author-state" })
-        .warn("Signal persistent reply author state lacks atomic updates");
-    }
     return;
   }
   const cachedBeforeUpdate = memoryReplyContexts.get(key);
   const cacheReplyContext = (next: SignalReplyContextRecord | undefined) => {
     const current = memoryReplyContexts.get(key);
-    const changedDuringUpdate = usesComparisons && current !== cachedBeforeUpdate;
+    const changedDuringUpdate = current !== cachedBeforeUpdate;
     if (!next) {
       if (!changedDuringUpdate) {
         memoryReplyContexts.delete(key);
@@ -182,30 +175,21 @@ export async function registerSignalReplyContext(params: {
   let nextRecord: SignalReplyContextRecord | undefined;
   try {
     let updated = false;
-    if (store.observe && store.compareAndApply) {
-      let observation = await store.observe(key);
-      for (;;) {
-        updateEvaluated = true;
-        nextRecord = mergeReplyContext(observation.value, record);
-        const result = await store.compareAndApply(key, observation.comparison, {
-          operation: "update",
-          // Retained values still refresh the row's age and TTL, as update did.
-          action: "set",
-          value: nextRecord,
-        });
-        if (result.status !== "conflict") {
-          updated = result.status === "applied";
-          break;
-        }
-        observation = result.current;
-      }
-    } else if (store.update) {
-      // Published 2026.9.4 hosts lack comparisons; remove at a supporting host floor.
-      updated = await store.update(key, (current) => {
-        updateEvaluated = true;
-        nextRecord = mergeReplyContext(current, record);
-        return nextRecord;
+    let observation = await store.observe(key);
+    for (;;) {
+      updateEvaluated = true;
+      nextRecord = mergeReplyContext(observation.value, record);
+      const result = await store.compareAndApply(key, observation.comparison, {
+        operation: "update",
+        // Retained values still refresh the row's age and TTL.
+        action: "set",
+        value: nextRecord,
       });
+      if (result.status !== "conflict") {
+        updated = result.status === "applied";
+        break;
+      }
+      observation = result.current;
     }
     cacheReplyContext(updated ? nextRecord : undefined);
     pruneMemoryReplyContexts(registeredAt);

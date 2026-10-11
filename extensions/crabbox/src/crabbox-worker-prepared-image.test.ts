@@ -2,7 +2,7 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { describe, expect, it, vi } from "vitest";
 import { crabboxState, openWarmImageStore } from "./crabbox-state.test-support.js";
 import { operationLeaseId } from "./crabbox-worker-profile.js";
-import { commandResult } from "./crabbox-worker-provider.test-support.js";
+import { destroyAndWait, commandResult } from "./crabbox-worker-provider.test-support.js";
 import { listCrabboxWarmImages } from "./crabbox-worker-warm-image-store.js";
 import {
   BASE_COMMIT,
@@ -88,10 +88,10 @@ describe("Crabbox prepared image demand and custody", () => {
         { preparationKey: preparation.key, demandAtMs: now + 60_000 },
       );
       expect((await listCrabboxWarmImages(crabboxState))[0]?.lastDemandAtMs).toBe(now + 60_000);
-      await provider.destroy({ leaseId: borrower.leaseId, profile: PROFILE });
-      await provider.destroy({ leaseId: replacement.leaseId, profile: PROFILE });
+      await destroyAndWait(provider, { leaseId: borrower.leaseId, profile: PROFILE });
+      await destroyAndWait(provider, { leaseId: replacement.leaseId, profile: PROFILE });
       expect(calls.some(({ argv }) => argv[2] === "delete")).toBe(false);
-      await provider.destroy({ leaseId: seed.leaseId, profile: PROFILE });
+      await destroyAndWait(provider, { leaseId: seed.leaseId, profile: PROFILE });
       expect(calls.filter(({ argv }) => argv[2] === "delete").map(({ argv }) => argv[3])).toEqual(
         keepPrevious ? [] : ["chk_demand_1"],
       );
@@ -135,7 +135,7 @@ describe("Crabbox prepared image demand and custody", () => {
       { leaseId: source.leaseId, profile },
       { preparationKey: preparation.key, demandAtMs: now },
     );
-    await provider.destroy({ leaseId: source.leaseId, profile });
+    await destroyAndWait(provider, { leaseId: source.leaseId, profile });
     const next = { ...preparation, key: "e".repeat(64) };
     current = projectOptions(events, new AbortController(), next);
     current.options.project.prepare.mockResolvedValueOnce({
@@ -188,8 +188,8 @@ describe("Crabbox prepared image demand and custody", () => {
       lastDemandAtMs: now + 60_000,
       retirement: { checkpointId: CHECKPOINT_ID },
     });
-    await provider.destroy({ leaseId: changed.leaseId, profile });
-    await provider.destroy({ leaseId: reserve.leaseId, profile });
+    await destroyAndWait(provider, { leaseId: changed.leaseId, profile });
+    await destroyAndWait(provider, { leaseId: reserve.leaseId, profile });
     current = projectOptions(events, new AbortController(), { ...next, purpose: "session" });
     current.options.project.prepare.mockResolvedValueOnce({
       seedKey: PROJECT_KEY,
@@ -229,7 +229,7 @@ describe("Crabbox prepared image demand and custody", () => {
     const source = projectOptions([], new AbortController(), preparation);
     source.options.project.baseCommit = "a".repeat(40);
     const lease = await provider.provision(PROFILE, "capture-policy-source", source.options);
-    await provider.destroy({ leaseId: lease.leaseId, profile: PROFILE });
+    await destroyAndWait(provider, { leaseId: lease.leaseId, profile: PROFILE });
     if (scenario.pinned) {
       await provider.images.pin(CHECKPOINT_ID, true);
     }
@@ -279,7 +279,7 @@ describe("Crabbox prepared image demand and custody", () => {
           purpose: "reserve",
         });
         const lease = await provider.provision(PROFILE, "demand-seed", seed.options);
-        await provider.destroy({ leaseId: lease.leaseId, profile: PROFILE });
+        await destroyAndWait(provider, { leaseId: lease.leaseId, profile: PROFILE });
         clock.mockReturnValue(now + 60_000);
       }
       const current = projectOptions([], new AbortController(), {
@@ -359,14 +359,14 @@ describe("Crabbox prepared image demand and custody", () => {
           { leaseId, profile: PROFILE },
           { preparationKey: preparation.key, demandAtMs: now + 1 },
         );
-        await provider.destroy({ leaseId, profile: PROFILE });
+        await destroyAndWait(provider, { leaseId, profile: PROFILE });
         expect((await listCrabboxWarmImages(crabboxState))[0]).toMatchObject({
           lastDemandAtMs: now + 1,
           allocations: {},
         });
       } else {
         if (outcome === "stop failure") {
-          await provider.destroy({ leaseId, profile: PROFILE });
+          await destroyAndWait(provider, { leaseId, profile: PROFILE });
         } else {
           await maintain(provider);
         }
@@ -400,7 +400,7 @@ describe("Crabbox prepared image demand and custody", () => {
         "release-budget-source",
         projectOptions([], new AbortController(), preparation).options,
       );
-      await provider.destroy({ leaseId: source.leaseId, profile: PROFILE });
+      await destroyAndWait(provider, { leaseId: source.leaseId, profile: PROFILE });
       const current = projectOptions([], new AbortController(), {
         ...preparation,
         key: "e".repeat(64),
@@ -465,7 +465,7 @@ describe("Crabbox prepared image demand and custody", () => {
         { leaseId: source.leaseId, profile },
         { preparationKey: preparation.key, demandAtMs: now },
       );
-      await provider.destroy({ leaseId: source.leaseId, profile });
+      await destroyAndWait(provider, { leaseId: source.leaseId, profile });
       calls.length = 0;
       const controller = new AbortController();
       current = projectOptions(events, controller, {
@@ -523,7 +523,9 @@ describe("Crabbox prepared image demand and custody", () => {
       );
       expect((await listCrabboxWarmImages(crabboxState))[0]?.lastDemandAtMs).toBe(now);
       warn.mockClear();
-      await expect(provider.destroy({ leaseId: reserveId, profile })).resolves.toBeUndefined();
+      await expect(
+        destroyAndWait(provider, { leaseId: reserveId, profile }),
+      ).resolves.toBeUndefined();
       if (outcome === "success") {
         expect(calls.some(({ argv }) => argv[2] === "delete" && argv[3] === CHECKPOINT_ID)).toBe(
           true,

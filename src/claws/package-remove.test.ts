@@ -316,7 +316,7 @@ describe("Claw package removal", () => {
       {
         action: "retain",
         reason:
-          "Claw add introduced this shared requirement; removal releases its dependency edge and retains the artifact. Use its canonical owner separately to uninstall it.",
+          "Claw add introduced this shared requirement; removal releases its dependency edge and retains the artifact. Use its own uninstall command separately.",
       },
     ]);
   });
@@ -381,7 +381,7 @@ describe("Claw package removal", () => {
       {
         action: "retain",
         reason:
-          "Global plugins are excluded from generic remove-if-unused cleanup; select the plugin explicitly to invoke its canonical owner.",
+          "Global plugins are excluded from generic remove-if-unused cleanup; select the plugin explicitly to invoke its own uninstaller.",
       },
     ]);
     expect(resolvePlugin).not.toHaveBeenCalled();

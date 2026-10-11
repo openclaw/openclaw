@@ -2,6 +2,7 @@ import {
   createChannelProgressDraftCompositor,
   createLivePreviewLifecycle,
   createPreviewMessageReceipt,
+  isChannelProgressDraftWorkToolName,
   resolveChannelProgressDraftMaxLineChars,
   resolveChannelProgressDraftMaxLines,
   type ChannelProgressDraftLine,
@@ -23,7 +24,7 @@ import type {
 } from "./bot-message-dispatch.types.js";
 import type { TelegramDraftStream } from "./draft-stream.js";
 import type { DraftLaneState } from "./lane-delivery-text-deliverer.js";
-import { TelegramRequestNotStartedError } from "./network-errors.js";
+import { hasTelegramNetworkErrorCode, TelegramRequestNotStartedError } from "./network-errors.js";
 import { renderTelegramProgressDraftPreview } from "./progress-draft-preview.js";
 import { editMessageTelegram } from "./send.js";
 
@@ -85,6 +86,15 @@ export function createProgressState(
     updateOnLineChange: true,
     shouldStartNow: (line) => typeof line !== "string" && Boolean(line?.toolName),
     update: async (streamText, options) => {
+      if (
+        config.streamMode === "progress" &&
+        !options.snapshot.statusHeadline &&
+        options.snapshot.lines.length === 0 &&
+        !options.snapshot.plan?.length &&
+        (await getTurn().verboseProgressActive())
+      ) {
+        return false;
+      }
       await prepareAnswerLaneForToolProgress(getTurn());
       draftState.answerLane.lastPartialText = streamText;
       draftState.answerLane.hasStreamedMessage = true;
@@ -100,6 +110,7 @@ export function createProgressState(
       if (options.flush) {
         await draftState.answerLane.stream?.flush();
       }
+      return undefined;
     },
     deleteCurrent: async () => await retireAnswerLane(getTurn(), "clear"),
   });
@@ -149,10 +160,9 @@ export async function settleFailedFinalDelivery(turn: Turn): Promise<void> {
   ) {
     return;
   }
-  const text =
-    turn.finalDeliveryNotDispatched && !turn.previewLifecycle.finalDelivered
-      ? "I couldn't send the reply to Telegram. Check OpenClaw chat history for the answer and the Gateway logs for the delivery error."
-      : "I couldn't confirm the reply reached Telegram. Check OpenClaw chat history for the answer before retrying the task.";
+  const text = hasTelegramNetworkErrorCode(turn.finalDeliveryError)
+    ? "I couldn't deliver my reply because of a network problem. Please ask again."
+    : "I couldn't deliver my reply. Please ask again.";
   const stream = turn.answerLane.stream;
   const messageId = stream?.messageId();
   if (
@@ -262,15 +272,18 @@ export function retainProgressDraft(turn: Turn, stream: TelegramDraftStream) {
   };
 }
 
-export async function canPushToolProgress(turn: Turn): Promise<boolean> {
-  const verbose = await turn.verboseProgressActive();
+function canPushProgress(turn: Turn): boolean {
   return Boolean(
     turn.answerLane.stream &&
-    !verbose &&
     !turn.isSuperseded() &&
     !turn.answerLane.finalized &&
     !turn.previewLifecycle.finalStarted,
   );
+}
+
+export async function canPushToolProgress(turn: Turn): Promise<boolean> {
+  const verbose = await turn.verboseProgressActive();
+  return !verbose && canPushProgress(turn);
 }
 
 function pushCompactionProgress(turn: Turn, phase: "start" | "complete" | "incomplete") {
@@ -331,13 +344,20 @@ export async function handleToolStart(
   payload: CallbackPayload<"onToolStart">,
 ): Promise<boolean> {
   const toolName = payload.name?.trim();
-  const progressPromise = (await canPushToolProgress(turn))
-    ? turn.progressCompositor.pushToolEvent(payload)
-    : Promise.resolve(false);
+  const verbose = await turn.verboseProgressActive();
+  let progressPromise: Promise<boolean> | undefined;
+  if (canPushProgress(turn)) {
+    if (!verbose) {
+      progressPromise = turn.progressCompositor.pushToolEvent(payload);
+    } else if (turn.streamMode === "progress" && isChannelProgressDraftWorkToolName(toolName)) {
+      // Durable diagnostics replace tool rows, not the preamble's work gate.
+      progressPromise = turn.progressCompositor.noteActivity();
+    }
+  }
   if (turn.statusReactionController && toolName) {
     await turn.statusReactionController.setTool(toolName);
   }
-  return await progressPromise;
+  return (await progressPromise) ?? false;
 }
 
 export async function handleCompactionStart(turn: Turn): Promise<boolean> {

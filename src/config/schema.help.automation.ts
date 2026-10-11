@@ -36,7 +36,13 @@ export const AUTOMATION_FIELD_HELP: Record<string, string> = {
   "session.mainKey":
     'Accepted but ignored: the per-agent main session suffix is always "main". Omit this field; global session scope uses "global" instead.',
   "session.sendPolicy":
-    "Controls cross-session send permissions using allow/deny rules evaluated against channel, chatType, and key prefixes. Use this to fence where session tools can deliver messages in complex environments.",
+    "Controls session delivery using allow/deny rules evaluated against channel, chatType, and key prefixes. This is separate from incoming and outgoing peer-message admission; use session.communication for those defaults.",
+  "session.communication":
+    "Defaults for new messages between sessions. Each direction accepts always, ask, or never and defaults to always. Sessions inherit these values until a human selects an override; existing access restrictions still apply.",
+  "session.communication.send":
+    "Default for initiating messages to other sessions: always permits, ask requires human approval before sending, and never blocks. Requested replies and authorized delegated-task communication keep their existing authority.",
+  "session.communication.receive":
+    "Default for accepting new messages from other sessions: always permits, ask requires human approval before model input or new work, and never blocks. This does not change history visibility or human access.",
   "session.sendPolicy.default":
     'Sets fallback action when no sendPolicy rule matches: "allow" or "deny". Keep "allow" for simpler setups, or choose "deny" when you require explicit allow rules for every destination.',
   "session.sendPolicy.rules":

@@ -6,6 +6,7 @@ import {
 } from "../config/required-worker-profile.js";
 import { composeSessionSourceAssertion } from "../config/sessions/session-source-authority.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { bindGatewayDeviceRevocation } from "./device-revocation.js";
 import { withGatewayWorkerSessionAdmission } from "./server-worker-placement-dispatch-admission.js";
 import { ensureSessionWorkspaceForPlacement } from "./session-lifecycle-preparation.js";
 import type { coordinateWorkerPlacementDispatch } from "./worker-environments/placement-dispatch-coordinator.js";
@@ -32,18 +33,21 @@ export function createRequiredWorkerSessionPreparation(options: {
       );
     }
     const snapshot = structuredClone(profile);
-    const assertPolicyCurrent = composeSessionSourceAssertion([authorize], (assertSource) => {
-      signal?.throwIfAborted();
-      assertSource();
-      if (
-        options.getConfig().cloudWorkers?.requiredProfile !== required ||
-        !isDeepStrictEqual(options.getConfig().cloudWorkers?.profiles?.[required], snapshot)
-      ) {
-        throw new RequiredWorkerProfileError(
-          "Session source or required worker policy changed during placement; retry.",
-        );
-      }
-    });
+    const assertPolicyCurrent = bindGatewayDeviceRevocation(
+      composeSessionSourceAssertion([authorize], (assertSource) => {
+        signal?.throwIfAborted();
+        assertSource();
+        if (
+          options.getConfig().cloudWorkers?.requiredProfile !== required ||
+          !isDeepStrictEqual(options.getConfig().cloudWorkers?.profiles?.[required], snapshot)
+        ) {
+          throw new RequiredWorkerProfileError(
+            "Session source or required worker policy changed during placement; retry.",
+          );
+        }
+      }),
+      authorize,
+    );
     return await withGatewayWorkerSessionAdmission(
       {
         identity: {

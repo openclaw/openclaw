@@ -9,11 +9,11 @@ import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import { purgeAgentSessionStoreEntries } from "./cleanup-service.js";
 import {
-  appendTranscriptEventSync,
   loadSessionEntry,
   loadTranscriptEventsSync,
   replaceSessionEntry,
 } from "./session-accessor.js";
+import { appendTranscriptEventSync } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 
 describe("purgeAgentSessionStoreEntries", () => {

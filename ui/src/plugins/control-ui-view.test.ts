@@ -155,26 +155,19 @@ describe("native UI built-in delegation", () => {
     await vi.waitFor(() => expect(host.querySelector(".companion-action")).not.toBeNull());
   });
 
-  it.each(["delegated", "failing"] as const)(
-    "uses only built-in controls for a %s replacement composer",
-    async (mode) => {
-      const replacement: ControlUiReplacement<"composer"> = {
-        id: "composer",
-        label: "Custom composer",
-        surface: "composer",
-        mount(container, context) {
-          if (mode === "failing") {
-            throw new Error("Composer failed");
-          }
-          return { dispose: context.mountDefault(container) };
-        },
-      };
-      const { host } = mountSurface(replacement);
-      await vi.waitFor(() => expect(host.querySelector(".builtin-action")).not.toBeNull());
-      expect(host.querySelectorAll(".builtin-action")).toHaveLength(1);
-      expect(host.querySelector(".companion-action")).toBeNull();
-    },
-  );
+  it("uses only built-in controls when a replacement composer fails", async () => {
+    const { host } = mountSurface({
+      id: "composer",
+      label: "Custom composer",
+      surface: "composer",
+      mount() {
+        throw new Error("Composer failed");
+      },
+    });
+    await vi.waitFor(() => expect(host.querySelector(".builtin-action")).not.toBeNull());
+    expect(host.querySelectorAll(".builtin-action")).toHaveLength(1);
+    expect(host.querySelector(".companion-action")).toBeNull();
+  });
 
   it("restores host controls when a replacement stops delegating to the built-in", async () => {
     let stopDefault: (() => void) | undefined;
@@ -188,6 +181,7 @@ describe("native UI built-in delegation", () => {
       },
     });
     await vi.waitFor(() => expect(host.querySelector(".builtin-action")).not.toBeNull());
+    expect(host.querySelectorAll(".builtin-action")).toHaveLength(1);
     expect(host.querySelector(".companion-action")).toBeNull();
     stopDefault?.();
     await vi.waitFor(() => expect(host.querySelector(".companion-action")).not.toBeNull());

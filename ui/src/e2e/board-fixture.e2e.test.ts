@@ -19,6 +19,7 @@ import {
   resolvePlaywrightChromiumExecutablePath,
   type ControlUiMockGateway,
 } from "../test-helpers/control-ui-e2e.ts";
+import { selectAllSidebarSessions } from "./sidebar-navigation.test-support.ts";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
@@ -414,6 +415,8 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
         });
         const page = await context.newPage();
         await page.goto(`${origin}/chat`, { waitUntil: "networkidle" });
+        // The fixture viewer is Riley; this shared checkout belongs to Peter.
+        await selectAllSidebarSessions(page);
         await page.getByText("OpenClaw work checkout", { exact: true }).click();
         await page.getByRole("button", { name: "Write a message to send." }).waitFor();
         await page.screenshot({ path: path.join(artifacts, "chat.png") });
@@ -895,6 +898,8 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
     const page = await browser.newPage();
     try {
       await page.goto(new URL("/chat", fixtureServer.url).toString(), { waitUntil: "networkidle" });
+      // External catalog sessions are unowned and are intentionally outside Mine.
+      await selectAllSidebarSessions(page);
       await page.getByText("Release checklist sweep", { exact: true }).click();
 
       const transcript = [
@@ -929,6 +934,7 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
       expect(
         await page.evaluate(() => localStorage.getItem("openclaw:control-ui:community-invite:v2")),
       ).not.toBeNull();
+      await selectAllSidebarSessions(page);
       await page.getByText("OpenClaw work checkout", { exact: true }).click();
 
       await page.getByRole("button", { name: "Write a message to send." }).waitFor();
@@ -965,6 +971,7 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
     const page = await browser.newPage();
     try {
       await page.goto(new URL("/chat", fixtureServer.url).toString(), { waitUntil: "networkidle" });
+      await selectAllSidebarSessions(page);
       await page.getByText("OpenClaw work checkout", { exact: true }).click();
       await page.getByRole("button", { name: "Write a message to send." }).waitFor();
 

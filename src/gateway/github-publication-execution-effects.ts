@@ -1,6 +1,6 @@
 import type { SessionGitHubPublicationResult } from "../../packages/gateway-protocol/src/schema/session-github-publication.js";
 
-export type GitHubPublicationMutableFacts = {
+type GitHubPublicationMutableFacts = {
   status?: string;
   head_commit?: string | null;
   pull_request_url?: string | null;

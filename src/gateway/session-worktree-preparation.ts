@@ -29,7 +29,10 @@ import type {
   WorktreeSourceStage,
 } from "../agents/worktrees/types.js";
 import { getRuntimeConfig } from "../config/config.js";
-import { captureSessionEntrySourceAssertion } from "../config/sessions/session-entry-source-authority.js";
+import {
+  captureSessionEntryMetadataRead,
+  captureSessionEntrySourceAssertion,
+} from "../config/sessions/session-entry-source-authority.js";
 import {
   composeSessionSourceAssertion,
   type SessionSourceAssertion,
@@ -54,6 +57,7 @@ import type {
 import { invalidSessionRequest } from "./session-request-error.js";
 import { captureSessionMutationRouting } from "./session-sharing-preparation.js";
 import { resolveExplicitSessionName } from "./session-title-state.js";
+import { withGatewaySessionEntryReadOnly } from "./session-utils-read-lifetime.js";
 import { loadGatewaySessionEntryReadOnly } from "./session-utils-store.js";
 
 /** Resolve registered sources identically for dashboard and native child sessions. */
@@ -139,11 +143,33 @@ async function resolveSpawnParentWorktreeSource(
   agentId: string,
   options: { signal?: AbortSignal } = {},
 ): Promise<SpawnParentWorktreeSource | undefined> {
-  const parent = loadGatewaySessionEntryReadOnly(parentSessionKey, { agentId });
+  return withGatewaySessionEntryReadOnly(
+    {
+      cfg: getRuntimeConfig(),
+      key: parentSessionKey,
+      agentId,
+      assertActive: () => options.signal?.throwIfAborted(),
+    },
+    async (parent) => prepareSpawnParentWorktreeSource(parent, agentId, options),
+  );
+}
+
+async function prepareSpawnParentWorktreeSource(
+  parent: ReturnType<typeof loadGatewaySessionEntryReadOnly>,
+  agentId: string,
+  options: { signal?: AbortSignal },
+): Promise<SpawnParentWorktreeSource | undefined> {
   if (!parent.entry) {
     return undefined;
   }
-  const fields = ["sessionId", "archivedAt", "projectId", "sessionRoot", "worktree"] as const;
+  const fields = [
+    "sessionId",
+    "lifecycleRevision",
+    "archivedAt",
+    "projectId",
+    "sessionRoot",
+    "worktree",
+  ] as const;
   const sourceKind = parent.entry.worktree ? "managed worktree" : "project";
   const refuse = (): never => {
     throw new SessionWorktreeSourceChangedError(
@@ -151,16 +177,23 @@ async function resolveSpawnParentWorktreeSource(
     );
   };
   const assertRouting = captureSessionMutationRouting(parent.cfg, refuse);
+  const metadata = captureSessionEntryMetadataRead({
+    agentId,
+    sessionKey: parent.canonicalKey,
+    storePath: parent.storePath,
+  });
   const parentSource = captureSessionEntrySourceAssertion({
     scope: { agentId, sessionKey: parent.canonicalKey, storePath: parent.storePath },
     readSource: parent.capturedReadSource,
     expected: parent.entry,
     fields,
     assertCurrent: () => {
-      const current = loadGatewaySessionEntryReadOnly(parent.canonicalKey, { agentId });
+      const current = metadata
+        ? metadata.readCurrent()
+        : loadGatewaySessionEntryReadOnly(parent.canonicalKey, { agentId }).entry;
       if (
-        !current.entry ||
-        fields.some((field) => !isDeepStrictEqual(current.entry?.[field], parent.entry?.[field]))
+        !current ||
+        fields.some((field) => !isDeepStrictEqual(current?.[field], parent.entry?.[field]))
       ) {
         refuse();
       }

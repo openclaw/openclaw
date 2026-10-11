@@ -235,7 +235,11 @@ export class BrowserPanelInputController {
       return;
     }
     this.suppressStageClick = false;
-    if (event.pointerType !== "touch" || this.host.mode !== "interact") {
+    // Pen contact drags scroll like fingers; mouse drags stay clicks and wheel scrolls.
+    if (
+      (event.pointerType !== "touch" && event.pointerType !== "pen") ||
+      this.host.mode !== "interact"
+    ) {
       return;
     }
     const point = this.remotePoint(event);

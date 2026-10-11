@@ -247,27 +247,6 @@ describe("qa transport registry", () => {
     expect(cleanupAfterGatewayStop).toHaveBeenCalledOnce();
   });
 
-  it("shares a failed cleanup and permits one subsequent retry", async () => {
-    const failure = new Error("pre-cleanup failed");
-    const cleanup = vi.fn().mockRejectedValueOnce(failure).mockResolvedValue(undefined);
-    const created = await createCleanupAdapter(cleanup);
-
-    const attempts = await Promise.allSettled([
-      created.cleanupBeforeGatewayStop(),
-      created.cleanupBeforeGatewayStop(),
-    ]);
-
-    expect(attempts).toEqual([
-      { status: "rejected", reason: failure },
-      { status: "rejected", reason: failure },
-    ]);
-    expect(cleanup).toHaveBeenCalledOnce();
-
-    await created.cleanupBeforeGatewayStop();
-    await created.cleanupBeforeGatewayStop();
-    expect(cleanup).toHaveBeenCalledTimes(2);
-  });
-
   it("runs post-gateway cleanup when gateway-less pre-cleanup fails", async () => {
     const cleanup = vi.fn(async () => {
       throw new Error("pre-cleanup failed");

@@ -29,6 +29,7 @@ import {
   prepareCurrentGitHubPublicationIdentity,
   sameGitHubPublicationWorkspace,
   type PublicationSessionIdentity as SessionIdentity,
+  readGitHubPublicationSession,
 } from "./github-publication-availability.js";
 import {
   exactClaimForPlacement,
@@ -71,7 +72,6 @@ import {
 import { prepareRepositoryOwner } from "./github-repository-publication-workspace.js";
 import type { RepositoryGitHubPublicationStatusRow } from "./github-repository-publication.kernel.js";
 import { loadGatewaySessionEntryReadOnlyInWorker } from "./session-utils-store-worker.js";
-import { loadGatewaySessionEntryReadOnly } from "./session-utils.js";
 import { resolvePlacementTurnEnvironment } from "./worker-environments/placement-record.js";
 import type {
   WorkerSessionPlacementStore,
@@ -205,7 +205,7 @@ export function createRepositoryGitHubPublicationCoordinator(params: {
           agentId: input.agentId,
           assertActive: params.assertCurrent,
         })
-      : loadGatewaySessionEntryReadOnly(input.sessionKey, { agentId: input.agentId });
+      : readGitHubPublicationSession(input.sessionKey, { agentId: input.agentId });
     requester.assertCurrent();
     if (!loaded.entry?.sessionId) {
       throw new Error("GitHub publication session changed.");
@@ -357,7 +357,7 @@ export function createRepositoryGitHubPublicationCoordinator(params: {
             agentId: input.agentId,
             assertActive: params.assertCurrent,
           })
-        : loadGatewaySessionEntryReadOnly(input.sessionKey!, { agentId: input.agentId });
+        : readGitHubPublicationSession(input.sessionKey!, { agentId: input.agentId });
       const placement = loaded.entry?.sessionId
         ? await placements.getAsync(loaded.entry.sessionId)
         : undefined;

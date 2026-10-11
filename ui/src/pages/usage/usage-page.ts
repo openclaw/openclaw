@@ -27,7 +27,7 @@ import { renderUsagePageShell } from "./page-shell.ts";
 import { UsageRefreshPolicy } from "./refresh-policy.ts";
 import { type ProviderUsageSnapshot, requestUsageSnapshot } from "./request-usage-snapshot.ts";
 import { createUsageRequest } from "./request.ts";
-import type { SessionLogRole, UsageProps, UsageRouteData } from "./types.ts";
+import type { UsageProps, UsageRouteData } from "./types.ts";
 import { renderUsage } from "./view.ts";
 
 export type { UsageRouteData } from "./types.ts";
@@ -47,36 +47,39 @@ class UsagePage extends OpenClawLightDomElement {
   @state() private providerUsageUnavailable = false;
   @state() private providerUsageIncomplete = false;
   @state() private usageError: string | null = null;
-  private readonly initialDateRange = createDefaultUsageDateRange();
-  @state() private usageStartDate = this.initialDateRange.startDate;
-  @state() private usageEndDate = this.initialDateRange.endDate;
-  @state() private usageScope: "instance" | "family" = "family";
-  @state() private usageAgentId: string | null = null;
-  @state() private usageCreatorKey: string | null = null;
+  @state() private filters: Omit<UsageProps["filters"], "selectedSessions"> = {
+    ...createDefaultUsageDateRange(),
+    scope: "family",
+    creatorKey: null,
+    selectedDays: [],
+    selectedHours: [],
+    query: "",
+    queryDraft: "",
+    timeZone: "local",
+  };
+  @state() private display: UsageProps["display"] = {
+    chartMode: "tokens",
+    dailyChartMode: "by-type",
+    sessionSort: "recent",
+    sessionSortDir: "desc",
+    recentSessions: [],
+    contextExpanded: false,
+    headerPinned: false,
+    sessionsTab: "all",
+  };
+  @state() private logFilters: UsageProps["detail"]["logFilters"] = {
+    roles: [],
+    tools: [],
+    hasTools: false,
+    query: "",
+  };
   @state() private usageSelectedSessions: string[] = [];
-  @state() private usageSelectedDays: string[] = [];
-  @state() private usageSelectedHours: number[] = [];
-  @state() private usageChartMode: "tokens" | "cost" = "tokens";
-  @state() private usageDailyChartMode: "total" | "by-type" = "by-type";
+  @state() private usageAgentId: string | null = null;
   @state() private usageTimeSeriesMode: "cumulative" | "per-turn" = "per-turn";
   @state() private usageTimeSeriesBreakdownMode: "total" | "by-type" = "by-type";
   @state() private usageTimeSeriesCursorStart: number | null = null;
   @state() private usageTimeSeriesCursorEnd: number | null = null;
   @state() private usageSessionLogsExpanded = false;
-  @state() private usageQuery = "";
-  @state() private usageQueryDraft = "";
-  @state() private usageSessionSort: "tokens" | "cost" | "recent" | "messages" | "errors" =
-    "recent";
-  @state() private usageSessionSortDir: "desc" | "asc" = "desc";
-  @state() private usageRecentSessions: string[] = [];
-  @state() private usageTimeZone: "local" | "utc" = "local";
-  @state() private usageContextExpanded = false;
-  @state() private usageHeaderPinned = false;
-  @state() private usageSessionsTab: "all" | "recent" = "all";
-  @state() private usageLogFilterRoles: SessionLogRole[] = [];
-  @state() private usageLogFilterTools: string[] = [];
-  @state() private usageLogFilterHasTools = false;
-  @state() private usageLogFilterQuery = "";
 
   private dateDebounceTimer: number | null = null;
   private queryDebounceTimer: number | null = null;
@@ -122,7 +125,7 @@ class UsagePage extends OpenClawLightDomElement {
   private readonly observeAgentScope = watchAgentScope((scopeId) => {
     if (this.routeDataInitialized && this.usageAgentId !== scopeId) {
       this.usageAgentId = scopeId;
-      this.usageCreatorKey = null;
+      this.setFilters({ creatorKey: null });
       this.clearSelectionsAndDetails();
       this.refreshPolicy.request("manual");
     }
@@ -240,12 +243,9 @@ class UsagePage extends OpenClawLightDomElement {
       return;
     }
 
-    this.usageStartDate = data.query.startDate;
-    this.usageEndDate = data.query.endDate;
-    this.usageScope = data.query.scope;
-    this.usageTimeZone = data.query.timeZone;
+    const { startDate, endDate, scope, timeZone, creatorKey } = data.query;
+    this.setFilters({ startDate, endDate, scope, timeZone, creatorKey: creatorKey ?? null });
     this.usageAgentId = data.query.agentId;
-    this.usageCreatorKey = data.query.creatorKey ?? null;
     this.usageSnapshot = {
       query: this.currentQuery,
       result: data.result,
@@ -286,7 +286,7 @@ class UsagePage extends OpenClawLightDomElement {
     this.resetProviderUsage();
     this.usageError = null;
     this.usageAgentId = this.context.agentSelection.state.scopeId;
-    this.usageCreatorKey = null;
+    this.setFilters({ creatorKey: null });
     this.clearSelectionsAndDetails();
   }
 
@@ -339,12 +339,12 @@ class UsagePage extends OpenClawLightDomElement {
 
   private get currentQuery(): SessionUsageQuery {
     return {
-      startDate: this.usageStartDate,
-      endDate: this.usageEndDate,
-      scope: this.usageScope,
-      timeZone: this.usageTimeZone,
+      startDate: this.filters.startDate,
+      endDate: this.filters.endDate,
+      scope: this.filters.scope,
+      timeZone: this.filters.timeZone,
       agentId: normalizeLowercaseStringOrEmpty(this.usageAgentId ?? "") || undefined,
-      creatorKey: this.usageCreatorKey ?? undefined,
+      creatorKey: this.filters.creatorKey ?? undefined,
     };
   }
 
@@ -413,10 +413,13 @@ class UsagePage extends OpenClawLightDomElement {
     return this.usageRequest.run([client, refreshSessionKey]);
   }
 
+  private setFilters(next: Partial<typeof this.filters>) {
+    this.filters = { ...this.filters, ...next };
+  }
+
   private clearSelectionsAndDetails() {
     this.usageExportRequest.cancel();
-    this.usageSelectedDays = [];
-    this.usageSelectedHours = [];
+    this.setFilters({ selectedDays: [], selectedHours: [] });
     this.usageSelectedSessions = [];
     this.details.clear();
   }
@@ -473,10 +476,13 @@ class UsagePage extends OpenClawLightDomElement {
 
   private selectSession(key: string, shiftKey: boolean, orderedKeys: string[]) {
     this.details.clear();
-    this.usageRecentSessions = [
-      key,
-      ...this.usageRecentSessions.filter((entry) => entry !== key),
-    ].slice(0, 8);
+    this.display = {
+      ...this.display,
+      recentSessions: [key, ...this.display.recentSessions.filter((entry) => entry !== key)].slice(
+        0,
+        8,
+      ),
+    };
 
     this.usageSelectedSessions = toggleUsageRangeSelection(
       this.usageSelectedSessions,
@@ -516,28 +522,8 @@ class UsagePage extends OpenClawLightDomElement {
         providerUsageStalled: this.providerUsageStalled,
         providerUsageUnavailable: this.providerUsageUnavailable,
       },
-      filters: {
-        startDate: this.usageStartDate,
-        endDate: this.usageEndDate,
-        scope: this.usageScope,
-        selectedSessions: this.usageSelectedSessions,
-        selectedDays: this.usageSelectedDays,
-        selectedHours: this.usageSelectedHours,
-        creatorKey: this.usageCreatorKey,
-        query: this.usageQuery,
-        queryDraft: this.usageQueryDraft,
-        timeZone: this.usageTimeZone,
-      },
-      display: {
-        chartMode: this.usageChartMode,
-        dailyChartMode: this.usageDailyChartMode,
-        sessionSort: this.usageSessionSort,
-        sessionSortDir: this.usageSessionSortDir,
-        recentSessions: this.usageRecentSessions,
-        sessionsTab: this.usageSessionsTab,
-        contextExpanded: this.usageContextExpanded,
-        headerPinned: this.usageHeaderPinned,
-      },
+      filters: { ...this.filters, selectedSessions: this.usageSelectedSessions },
+      display: this.display,
       detail: {
         context: {
           weight: this.details.contextWeight.data,
@@ -555,30 +541,16 @@ class UsagePage extends OpenClawLightDomElement {
         sessionLogsLoading: this.details.sessionLogs.loading,
         sessionLogsStatus: this.details.sessionLogs.status,
         sessionLogsExpanded: this.usageSessionLogsExpanded,
-        logFilters: {
-          roles: this.usageLogFilterRoles,
-          tools: this.usageLogFilterTools,
-          hasTools: this.usageLogFilterHasTools,
-          query: this.usageLogFilterQuery,
-        },
+        logFilters: this.logFilters,
       },
       callbacks: {
         filters: {
-          onStartDateChange: (date) => {
-            this.usageStartDate = date;
-            this.scheduleUsageLoad();
-          },
-          onEndDateChange: (date) => {
-            this.usageEndDate = date;
+          onDatesChange: (dates) => {
+            this.setFilters(dates);
             this.scheduleUsageLoad();
           },
           onScopeChange: (scope) => {
-            this.usageScope = scope;
-            this.clearSelectionsAndDetails();
-            this.refreshPolicy.request("manual");
-          },
-          onCreatorChange: (creatorKey) => {
-            this.usageCreatorKey = creatorKey;
+            this.setFilters(scope);
             this.clearSelectionsAndDetails();
             this.refreshPolicy.request("manual");
           },
@@ -588,49 +560,49 @@ class UsagePage extends OpenClawLightDomElement {
             }
             this.refreshPolicy.request("manual");
           },
-          onTimeZoneChange: (timeZone) => {
-            this.usageTimeZone = timeZone;
-            this.clearSelectionsAndDetails();
-            this.refreshPolicy.request("manual");
+          onToggleHeaderPinned: () => {
+            this.display = { ...this.display, headerPinned: !this.display.headerPinned };
           },
-          onToggleHeaderPinned: () => (this.usageHeaderPinned = !this.usageHeaderPinned),
           onSelectHour: (hour, shiftKey) => {
-            this.usageSelectedHours = toggleUsageRangeSelection(
-              this.usageSelectedHours,
-              hour,
-              Array.from({ length: 24 }, (_, index) => index),
-              shiftKey,
-              "append",
-            );
+            this.setFilters({
+              selectedHours: toggleUsageRangeSelection(
+                this.filters.selectedHours,
+                hour,
+                Array.from({ length: 24 }, (_, index) => index),
+                shiftKey,
+                "append",
+              ),
+            });
           },
           onQueryDraftChange: (query) => {
-            this.usageQueryDraft = query;
+            this.setFilters({ queryDraft: query });
             this.clearDebounce("queryDebounceTimer");
             this.queryDebounceTimer = window.setTimeout(() => {
-              this.usageQuery = this.usageQueryDraft;
+              this.setFilters({ query: this.filters.queryDraft });
               this.queryDebounceTimer = null;
             }, 250);
           },
           onApplyQuery: () => {
             this.clearDebounce("queryDebounceTimer");
-            this.usageQuery = this.usageQueryDraft;
+            this.setFilters({ query: this.filters.queryDraft });
           },
           onClearQuery: () => {
             this.clearDebounce("queryDebounceTimer");
-            this.usageQueryDraft = "";
-            this.usageQuery = "";
+            this.setFilters({ queryDraft: "", query: "" });
           },
           onSelectDay: (day, shiftKey, orderedDays) => {
-            this.usageSelectedDays = toggleUsageRangeSelection(
-              this.usageSelectedDays,
-              day,
-              orderedDays,
-              shiftKey,
-              "toggle",
-            );
+            this.setFilters({
+              selectedDays: toggleUsageRangeSelection(
+                this.filters.selectedDays,
+                day,
+                orderedDays,
+                shiftKey,
+                "toggle",
+              ),
+            });
           },
-          onClearDays: () => (this.usageSelectedDays = []),
-          onClearHours: () => (this.usageSelectedHours = []),
+          onClearDays: () => this.setFilters({ selectedDays: [] }),
+          onClearHours: () => this.setFilters({ selectedHours: [] }),
           onClearSessions: () => {
             this.usageSelectedSessions = [];
             this.details.clear();
@@ -641,33 +613,18 @@ class UsagePage extends OpenClawLightDomElement {
           onExportJson: (data) => {
             void this.usageExportRequest.run(data);
           },
-          onChartModeChange: (mode) => (this.usageChartMode = mode),
-          onDailyChartModeChange: (mode) => (this.usageDailyChartMode = mode),
-          onSessionSortChange: (sort) => (this.usageSessionSort = sort),
-          onSessionSortDirChange: (direction) => (this.usageSessionSortDir = direction),
-          onSessionsTabChange: (tab) => (this.usageSessionsTab = tab),
+          onChange: (next) => {
+            this.display = { ...this.display, ...next };
+          },
         },
         details: {
-          onToggleContextExpanded: () => (this.usageContextExpanded = !this.usageContextExpanded),
+          onToggleContextExpanded: () => {
+            this.display = { ...this.display, contextExpanded: !this.display.contextExpanded };
+          },
           onToggleSessionLogsExpanded: () =>
             (this.usageSessionLogsExpanded = !this.usageSessionLogsExpanded),
-          onLogFilterRolesChange: (roles) => {
-            this.usageLogFilterRoles = roles;
-          },
-          onLogFilterToolsChange: (tools) => {
-            this.usageLogFilterTools = tools;
-          },
-          onLogFilterHasToolsChange: (hasTools) => {
-            this.usageLogFilterHasTools = hasTools;
-          },
-          onLogFilterQueryChange: (query) => {
-            this.usageLogFilterQuery = query;
-          },
-          onLogFilterClear: () => {
-            this.usageLogFilterRoles = [];
-            this.usageLogFilterTools = [];
-            this.usageLogFilterHasTools = false;
-            this.usageLogFilterQuery = "";
+          onLogFiltersChange: (next) => {
+            this.logFilters = { ...this.logFilters, ...next };
           },
           onSelectSession: (key, shiftKey, orderedKeys) =>
             this.selectSession(key, shiftKey, orderedKeys),

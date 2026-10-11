@@ -213,6 +213,8 @@ export function renderConfig(props: ConfigProps) {
   // Includes the app updater: writes are suspended while it runs, so raw
   // Save/Discard must read busy instead of silently no-opping.
   const configBusy = props.loading || props.saving || props.applying || props.updating;
+  const formBusy = configBusy || props.schemaLoading;
+  const showSchemaLoading = props.schemaLoading && !analysis.schema;
   const mutationAllowed = props.mutationAllowed !== false;
   const canRawSave = props.connected && mutationAllowed && !configBusy && hasRawChanges;
   const showAppearanceOnRoot =
@@ -398,6 +400,7 @@ export function renderConfig(props: ConfigProps) {
       id="config-section-panel"
       class="config-content"
       role=${showSectionTabs ? "tabpanel" : "region"}
+      aria-busy=${formMode === "form" && props.schemaLoading ? "true" : nothing}
       aria-labelledby=${
         showSectionTabs ? `config-sections-tab-${props.activeSection ?? "root"}` : nothing
       }
@@ -432,7 +435,7 @@ export function renderConfig(props: ConfigProps) {
                   }
                   ${showAppearanceOnRoot ? renderAppearanceSection(props) : nothing}
                   ${
-                    props.schemaLoading
+                    showSchemaLoading
                       ? html`<div class="config-loading">
                           <div class="config-loading__spinner"></div>
                           <span>${t("configView.loadingSchema")}</span>
@@ -444,7 +447,7 @@ export function renderConfig(props: ConfigProps) {
                             value: props.formValue,
                             embedded: props.embeddedEditor === true || Boolean(showSetup),
                             rawAvailable,
-                            disabled: configBusy || !props.formValue || !mutationAllowed,
+                            disabled: formBusy || !props.formValue || !mutationAllowed,
                             unsupportedPaths: analysis.unsupportedPaths,
                             onPatch: props.onFormPatch,
                             onRemove: props.onFormRemove,
@@ -491,11 +494,11 @@ export function renderConfig(props: ConfigProps) {
                         )
                   }
                   ${
-                    showSetup && !props.schemaLoading
+                    showSetup && !showSchemaLoading
                       ? renderSetupSection(
                           setupSchema,
                           props,
-                          configBusy || !props.formValue || !mutationAllowed,
+                          formBusy || !props.formValue || !mutationAllowed,
                         )
                       : nothing
                   }

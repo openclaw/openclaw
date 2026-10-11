@@ -13,7 +13,6 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import { resolveRuntimeProcessEntrypointUrl } from "../../infra/runtime-process-url.js";
 import { withRuntimeWorkerGeneration } from "../../infra/runtime-worker-generation.js";
-import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import * as workerCpu from "../../infra/worker-cpu.js";
 import { WorkerTaskPool } from "../../infra/worker-task-pool.js";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -179,11 +178,7 @@ describe("physical session disk usage", () => {
       return result;
     });
     let retirement: MockInstance<Worker["terminate"]> | undefined;
-    const diskWorkerUrl = resolveRuntimeWorkerUrl({
-      currentModuleUrl: import.meta.url,
-      sourceWorkerName: "disk-budget.worker",
-      distWorkerPath: "config/sessions/disk-budget.worker.js",
-    });
+    const diskWorkerUrl = resolveRuntimeProcessEntrypointUrl("sessionDiskBudget");
     const stateReadUrl = resolveRuntimeProcessEntrypointUrl("stateRead");
     const ownedStateReadPath = state.path("sdk-drainage-state-read.mjs");
     await fs.writeFile(ownedStateReadPath, `export * from ${JSON.stringify(stateReadUrl.href)};\n`);

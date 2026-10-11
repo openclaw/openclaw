@@ -1,6 +1,6 @@
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { sanitizeUserFacingText } from "../../agents/embedded-agent-helpers/sanitize-user-facing-text.js";
-import { shouldSuppressLocalExecApprovalPrompt } from "../../channels/plugins/exec-approval-local.js";
+import { shouldSuppressLocalExecApprovalPromptAsync } from "../../channels/plugins/exec-approval-local.js";
 import { formatPlanChecklistLines } from "../../channels/streaming.js";
 import { applyMergePatch } from "../../config/merge-patch.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -112,7 +112,7 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
     payload: ReplyPayload,
   ): Promise<ReplyPayload | null> => {
     if (
-      shouldSuppressLocalExecApprovalPrompt({
+      await shouldSuppressLocalExecApprovalPromptAsync({
         channel: normalizeMessageChannel(ctx.Surface ?? ctx.Provider),
         cfg,
         accountId: ctx.AccountId,

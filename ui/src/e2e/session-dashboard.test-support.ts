@@ -1,3 +1,8 @@
+import { writeFile } from "node:fs/promises";
+import path from "node:path";
+import type { Locator, Page } from "playwright";
+import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
+
 export const sessionKey = "agent:main:dashboard";
 export const boardSnapshot = {
   sessionKey,
@@ -104,3 +109,23 @@ export const pluginWidgetBoardSnapshot = {
     },
   ],
 };
+
+export async function captureWidgetDetailsPlacement(
+  page: Page,
+  artifactDir: string,
+  content: Locator[],
+) {
+  if (process.env.OPENCLAW_CAPTURE_UI_PROOF !== "1") {
+    return;
+  }
+  const conversation = page.locator(".chat-main__conversation");
+  const frame = await takeControlUiScreenshotFrame(page, conversation, content, {
+    animations: "disabled",
+    elements: [conversation],
+  });
+  await writeFile(path.join(artifactDir, "widget-details-placement.png"), frame.png);
+  await writeFile(
+    path.join(artifactDir, "widget-details-placement-crop.png"),
+    frame.elements[0]!.png,
+  );
+}

@@ -2,6 +2,8 @@ import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
+import { CONTROL_UI_BOOTSTRAP_CONFIG_ATTRIBUTE } from "../../../src/gateway/control-ui-bootstrap-contract.js";
+import { escapeHtml } from "../../../src/shared/html-escape.js";
 import type { ApplicationRuntime } from "../app/bootstrap.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import {
@@ -61,16 +63,24 @@ async function waitForPersistedWarmState(page: Page): Promise<void> {
           });
         }
         const [rosters, snapshots] = await Promise.all([
-          readRecords("openclaw-session-roster", "rosters"),
+          readRecords("openclaw-chat-snapshots", "sidebarSnapshots"),
           readRecords("openclaw-chat-snapshots", "snapshots"),
         ]);
         return {
           bootRecord: hasBootRecord,
           roster: rosters.some((record) => {
-            if (typeof record !== "object" || record === null || !("result" in record)) {
+            if (typeof record !== "object" || record === null || !("model" in record)) {
               return false;
             }
-            const result = record.result;
+            const model = record.model;
+            if (typeof model !== "object" || model === null || !("roster" in model)) {
+              return false;
+            }
+            const roster = model.roster;
+            if (typeof roster !== "object" || roster === null || !("result" in roster)) {
+              return false;
+            }
+            const result = roster.result;
             return (
               typeof result === "object" &&
               result !== null &&
@@ -112,10 +122,12 @@ suite.define(() => {
           sessionId: "warm-reload-session",
           kind: "direct" as const,
           label: "Warm reload conversation",
+          owner: { actor: { type: "human" as const, id: "profile-a" } },
           updatedAt: timestamp,
         };
         const gateway = await installMockGateway(page, {
           sessionKey,
+          assistantName: "Observatory",
           // The typed hold applies again after reload and releases the normal hello payload.
           heldMethods: ["connect"],
           authMethod: profile === "trusted-proxy" || profile === "device-token" ? profile : "token",
@@ -136,10 +148,26 @@ suite.define(() => {
               sessionId: "cached-only-session",
               kind: "direct",
               label: "Cached only session",
+              owner: { actor: { type: "human", id: "profile-a" } },
               updatedAt: timestamp - 1,
             },
           ],
           methodResponses: {
+            "sessions.list": {
+              cases: [
+                {
+                  match: { includeOwnerSessionCounts: true },
+                  response: {
+                    ts: timestamp,
+                    path: "",
+                    count: 0,
+                    sessions: [],
+                    defaults: { model: null, modelProvider: null, contextTokens: null },
+                    ownerSessionCounts: [],
+                  },
+                },
+              ],
+            },
             "chat.startup": {
               sessionId: "warm-reload-session",
               sessionInfo: currentRow,
@@ -198,13 +226,59 @@ suite.define(() => {
           return snapshot.hello;
         });
 
+        let bootstrapRequests = 0;
+        if (profile === "trusted-proxy") {
+          const documentPath = new URL(page.url()).pathname;
+          await page.route(
+            (url) => url.pathname === documentPath,
+            async (route) => {
+              const response = await route.fetch();
+              const config = {
+                basePath: "",
+                assistantAgentId: "main",
+                assistantName: "Observatory",
+                assistantAvatar: "🔭",
+                terminalEnabled: false,
+                pluginAssetsRequireAuth: true,
+                pluginFrameGrants: [],
+              };
+              await route.fulfill({
+                response,
+                body: (await response.text()).replace(
+                  "<html",
+                  `<html ${CONTROL_UI_BOOTSTRAP_CONFIG_ATTRIBUTE}="${escapeHtml(JSON.stringify(config))}"`,
+                ),
+              });
+            },
+          );
+          page.on("request", (request) => {
+            if (new URL(request.url()).pathname.endsWith("/control-ui-config.json")) {
+              bootstrapRequests++;
+            }
+          });
+        }
         await page.reload();
         const connect = await gateway.waitForRequest("connect");
-        await sidebar.locator(".nav-item--home").waitFor();
+        await sidebar.locator(".sidebar-footer-bar__home").waitFor();
         await sidebar.getByText("Cached only session", { exact: true }).waitFor();
         await transcript.getByText(transcriptText, { exact: true }).waitFor();
         expect(await gateway.getRequests("sessions.list")).toEqual([]);
         expect(await gateway.getRequests("chat.startup")).toEqual([]);
+        if (profile === "trusted-proxy") {
+          await page.screenshot({
+            path: path.join(suite.artifactDir, "bootstrap-before-hello.png"),
+          });
+          expect(
+            await page.evaluate(
+              () =>
+                document.querySelector<HTMLElement & { runtime?: ApplicationRuntime }>(
+                  "openclaw-app",
+                )?.runtime?.context.config.current.assistantIdentity.name,
+            ),
+          ).toBe("Observatory");
+          expect(bootstrapRequests).toBe(0);
+          await sidebar.getByText("Observatory", { exact: true }).waitFor();
+        }
         if (profile === "matching") {
           await expectOwnMessageAlignment(page);
         }
@@ -213,6 +287,7 @@ suite.define(() => {
         });
 
         await gateway.setSessionsListResponse({
+          ownerSessionCounts: [],
           ts: timestamp + 1,
           path: "",
           count: 2,
@@ -224,6 +299,9 @@ suite.define(() => {
               sessionId: "live-only-session",
               kind: "direct",
               label: "Live only session",
+              owner: {
+                actor: { type: "human", id: profile === "different" ? "profile-b" : "profile-a" },
+              },
               updatedAt: timestamp,
             },
           ],
@@ -276,7 +354,7 @@ suite.define(() => {
           expect(startup.params).toMatchObject({ sessionKey, cursor: "warm-reload-cursor" });
         }
         await gateway.waitForRequest("sessions.list");
-        await sidebar.locator(".nav-item--home").waitFor();
+        await sidebar.locator(".sidebar-footer-bar__home").waitFor();
         await sidebar.getByText("Live only session", { exact: true }).waitFor();
         expect(await sidebar.getByText("Cached only session", { exact: true }).count()).toBe(0);
         await transcript

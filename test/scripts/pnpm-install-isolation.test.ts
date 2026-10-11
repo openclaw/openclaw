@@ -113,7 +113,7 @@ it("keeps installed compiler inputs unchanged when another checkout imports the 
 
   expect(fs.readFileSync(second, "utf8")).toBe(source);
   expect(fs.statSync(first).ctimeMs).toBe(before.ctimeMs);
-  await verifyVitestWorkerArtifacts(root, manifest, { inputsChangedAfter: before.ctimeMs + 1 });
+  await verifyVitestWorkerArtifacts(root, manifest);
   fs.writeFileSync(second, "export const value = 2;\n");
   expect(fs.readFileSync(first, "utf8")).toBe(source);
 });

@@ -1,3 +1,5 @@
+import { onCleanup } from "solid-js";
+
 export function closeWorkboardPopoverOnAction(event: Event) {
   if (!(event.target instanceof Element) || !event.target.closest("button")) {
     return;
@@ -9,6 +11,7 @@ export function closeWorkboardPopoverOnAction(event: Event) {
 
 export function workboardPopoverRef(align: "start" | "end" = "start", hover = false) {
   let dispose = () => {};
+  onCleanup(() => dispose());
   return (element: Element | undefined) => {
     dispose();
     if (!(element instanceof HTMLElement)) {

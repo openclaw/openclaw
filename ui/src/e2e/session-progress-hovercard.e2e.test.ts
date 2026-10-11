@@ -276,6 +276,11 @@ suite.define(() => {
 
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, selectedSessionKey));
         expect(await page.evaluate(() => matchMedia("(hover: hover)").matches)).toBe(true);
+        // This card intentionally describes another person's work, outside Mine.
+        await page
+          .locator(".sidebar-navigation-scope")
+          .getByRole("button", { name: "All", exact: true })
+          .click();
 
         const row = page.locator(`.sidebar-recent-session[data-session-key="${sessionKey}"]`);
         await row.waitFor({ state: "visible" });

@@ -181,6 +181,7 @@ describe("settleEmbeddedAttemptStream liveness", () => {
       ...input.cache,
       getObservation: () => ({
         requestIndex: 3,
+        messageCount: 5,
         broke: false,
         input: 100,
         cacheRead: 10_000,

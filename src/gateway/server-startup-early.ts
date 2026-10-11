@@ -107,7 +107,8 @@ export async function startGatewayEarlyRuntime(params: {
     : await measureStartup(params.startupTrace, "runtime.early.skills-listener", async () => {
         const skillsRuntimePromise = import("../skills/runtime/refresh.js");
         const remoteSkillsRuntimePromise = loadRemoteSkillsRuntimeModule();
-        const { closeSkillsWatchers, registerSkillsChangeListener } = await skillsRuntimePromise;
+        const { closeSkillsWatchers, detachSkillsWatchers, registerSkillsChangeListener } =
+          await skillsRuntimePromise;
         const { refreshRemoteBinsForConnectedNodes } = await remoteSkillsRuntimePromise;
         const unregister = registerSkillsChangeListener((event) => {
           if (params.isClosing()) {
@@ -145,9 +146,11 @@ export async function startGatewayEarlyRuntime(params: {
             },
           });
         });
-        return async () => {
+        return async ({ exitAfterClose = false }: { exitAfterClose?: boolean } = {}) => {
           unregister();
-          await closeSkillsWatchers();
+          // Process exit releases native watchers at once; retiring each one here
+          // blocks this thread on fseventsd for seconds apiece on macOS.
+          await (exitAfterClose ? detachSkillsWatchers() : closeSkillsWatchers());
         };
       });
 

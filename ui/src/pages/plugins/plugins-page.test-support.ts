@@ -413,12 +413,14 @@ export async function activatePluginControl(
   label: string,
 ) {
   const controls = [
-    ...page.querySelectorAll<HTMLElement>(`${pluginSelector} button, ${pluginSelector} wa-switch`),
+    ...page.querySelectorAll<HTMLElement>(
+      `${pluginSelector} button, ${pluginSelector} input.settings-toggle__input`,
+    ),
   ];
   const control =
     controls.find((element) =>
       (element.getAttribute("aria-label") ?? element.textContent ?? "").includes(label),
-    ) ?? controls.find((element) => element.tagName.toLowerCase() === "wa-switch");
+    ) ?? controls.find((element) => element instanceof HTMLInputElement);
   if (!control) {
     const pluginId = /data-plugin-id=["']([^"']+)["']/u.exec(pluginSelector)?.[1];
     const plugin = page.result?.plugins.find((entry) => entry.id === pluginId);
@@ -432,13 +434,7 @@ export async function activatePluginControl(
     await page.updateComplete;
     return;
   }
-  if (control.tagName.toLowerCase() === "wa-switch") {
-    const toggle = control as HTMLElement & { checked: boolean };
-    toggle.checked = !toggle.checked;
-    toggle.dispatchEvent(new Event("change", { bubbles: true }));
-  } else {
-    control.click();
-  }
+  control.click();
   await page.updateComplete;
 }
 

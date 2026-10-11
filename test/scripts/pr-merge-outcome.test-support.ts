@@ -747,6 +747,7 @@ source "$script_parent_dir/pr-lib/common.sh"
 source "$script_parent_dir/pr-lib/merge.sh"
 source "$script_parent_dir/pr-lib/review.sh"
 source "$script_parent_dir/pr-lib/gates.sh"
+source "$script_parent_dir/pr-lib/prepare-core.sh"
 repo_root() { printf '%s\\n' "$FIXTURE_REPO"; }
 ensure_gh_api_auth() { :; }
 verify_prep_branch_matches_prepared_head() { [ "$(command git rev-parse HEAD)" = "$2" ]; }
@@ -821,7 +822,7 @@ if [ "\${9:-}" = verify ]; then
 elif [ -n "\${5:-}" ]; then
   merge_complete 123 "$5"
 else
-  merge_run 123 "\${1:-false}" "\${2:-}" "\${3:-}" "\${4:-}" "\${6:-}" "\${7:-false}" "\${8:-}" "\${10:-}" "\${11:-false}"
+  merge_run 123 "\${1:-false}" "\${2:-}" "\${3:-}" "\${4:-}" "\${6:-}" "\${7:-false}" "\${8:-}" "\${10:-}" "\${11:-false}" "\${12:-}"
 fi
 `,
       true,
@@ -870,6 +871,7 @@ fi
       verifyOnly = false,
       adminEvidence = "",
       confirmedAdmin = false,
+      mergedHead = "",
     ) => {
       const result = spawnSync(
         nodeExecutable,
@@ -889,6 +891,7 @@ fi
           verifyOnly ? "verify" : "",
           adminEvidence,
           String(confirmedAdmin),
+          mergedHead,
         ],
         {
           cwd,
@@ -1035,6 +1038,8 @@ fi
       complete: (oid: string) => run(false, repo, "squash", "", "", "", oid),
       verify: () => run(false, repo, "squash", "", "", "", "", "", false, "", true),
       cancel: (oid: string) => run(false, repo, "squash", oid, "", "", "", "", true),
+      acceptHeadDrift: (oid: string, mergedHead: string) =>
+        run(false, repo, "squash", oid, "", "", "", "", false, "", false, "", false, mergedHead),
       recover,
       advance,
       record,

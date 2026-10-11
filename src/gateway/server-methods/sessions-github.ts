@@ -7,7 +7,9 @@ import {
   validateSessionGitHubStatusParams,
   validateSessionGitHubConfirmParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import type { SessionGitHubOptionsResult } from "../../../packages/gateway-protocol/src/schema/session-github-publication.js";
 import { raceWithTimeout } from "../../../packages/retry/src/index.js";
+import { GitHubIdentityError } from "../../agents/github-read-identity.js";
 import { getGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { OpenClawStateLeaseAcquisitionError } from "../../state/openclaw-state-lease-error.js";
@@ -15,6 +17,7 @@ import { prepareControlUiSessionPrRead } from "../control-ui-session-pr-read.js"
 import {
   prepareCurrentGitHubPublicationOptionsIdentity,
   hasSupportedGitHubPublicationTarget,
+  readGitHubPublicationSession,
   type PublicationSessionIdentity,
 } from "../github-publication-availability.js";
 import { GitHubPublicationKnownFailure } from "../github-publication-failure.js";
@@ -23,7 +26,6 @@ import { prepareGitHubPublicationRequesterV2 } from "../github-publication-reque
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { getSessionRowProjection } from "../session-row-projection-access.js";
 import { SessionMutationAuthorizationChangedError } from "../session-sharing.js";
-import { loadGatewaySessionEntryReadOnly } from "../session-utils.js";
 import { SessionWorkspaceReservationBusyError } from "../worker-environments/placement-workspace-reservation.kernel.js";
 import {
   prepareGitHubPublicationOptionsRead,
@@ -201,7 +203,7 @@ export const sessionsGitHubHandlers: GatewayRequestHandlers = {
         }
         return;
       }
-      const loaded = loadGatewaySessionEntryReadOnly(sessionKey, agentId ? { agentId } : undefined);
+      const loaded = readGitHubPublicationSession(sessionKey, agentId ? { agentId } : undefined);
       if (!loaded.entry?.sessionId) {
         respond(
           false,
@@ -249,7 +251,8 @@ export const sessionsGitHubHandlers: GatewayRequestHandlers = {
             options.respond(false, undefined, publicationStateUnavailableError());
             return;
           }
-          let shared = null;
+          let shared: SessionGitHubOptionsResult["shared"] = null;
+          let sharedUnavailableReason: SessionGitHubOptionsResult["sharedUnavailableReason"];
           try {
             const identity = await prepareCurrentGitHubPublicationOptionsIdentity(
               read.session.agentId,
@@ -260,8 +263,9 @@ export const sessionsGitHubHandlers: GatewayRequestHandlers = {
               accountId: identity.account.accountId,
               login: identity.account.login,
             };
-          } catch {
-            /* An unavailable shared account must not hide the caller's personal option. */
+          } catch (error) {
+            sharedUnavailableReason =
+              error instanceof GitHubIdentityError ? error.reason : "unverified";
           }
           read.currentSession();
           const service = options.context.githubOAuthService?.personal;
@@ -292,10 +296,17 @@ export const sessionsGitHubHandlers: GatewayRequestHandlers = {
           if (shared && read.sessionScoped) {
             if (!(await hasSupportedGitHubPublicationTarget(session, assertResponseCurrent))) {
               shared = null;
+              sharedUnavailableReason = "unsupported_workspace";
             }
             assertResponseCurrent();
           }
-          options.respond(true, { personal, shared, pendingPersonal, latestShared });
+          options.respond(true, {
+            personal,
+            shared,
+            ...(sharedUnavailableReason ? { sharedUnavailableReason } : {}),
+            pendingPersonal,
+            latestShared,
+          });
         },
         GITHUB_OPTIONS_TIMEOUT_MS,
         () => {

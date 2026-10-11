@@ -311,6 +311,7 @@ describe("runEmbeddedAttemptExecutionPhase", () => {
           {
             options: {
               requestIndex: 1,
+              messageCount: 0,
               broke: false,
               previousCacheRead: undefined,
               input: 100,

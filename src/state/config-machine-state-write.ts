@@ -7,6 +7,7 @@ import {
 } from "../infra/kysely-sync.js";
 import {
   normalizeConfigMachineStateKey,
+  publishConfigMachineStateRow,
   type ConfigMachineStateDatabase,
 } from "./config-machine-state.js";
 import {
@@ -37,6 +38,7 @@ function upsertConfigMachineState(
         conflict.column("state_key").doUpdateSet({ value_json: valueJson, updated_at_ms: now }),
       ),
   );
+  publishConfigMachineStateRow(database, stateKey, { value_json: valueJson, updated_at_ms: now });
 }
 
 export function writeConfigMachineState(
@@ -127,6 +129,7 @@ export function updateConfigMachineStateInDatabase<T>(
         db.deleteFrom("config_machine_state").where("state_key", "=", stateKey),
       );
     }
+    publishConfigMachineStateRow(database, stateKey, undefined);
     return undefined;
   }
   upsertConfigMachineState(database, stateKey, serializeStateValue(value), now);
@@ -146,6 +149,7 @@ export function deleteConfigMachineState(
         database.db,
         db.deleteFrom("config_machine_state").where("state_key", "=", stateKey),
       );
+      publishConfigMachineStateRow(database.db, stateKey, undefined);
       return (result.numAffectedRows ?? 0n) > 0n;
     },
     options,
@@ -191,6 +195,10 @@ export function importConfigMachineState(
             updated_at_ms: now,
           }),
         );
+        publishConfigMachineStateRow(database.db, entry.key, {
+          value_json: entry.valueJson,
+          updated_at_ms: now,
+        });
         imported.push(entry.key);
       }
       return { imported, kept };

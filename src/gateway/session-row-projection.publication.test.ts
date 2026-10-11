@@ -14,6 +14,7 @@ import { recordSessionParticipant } from "../config/sessions/session-accessor.sq
 import { runSqliteSessionReclamation } from "../config/sessions/session-accessor.sqlite-reclamation-run.js";
 import { createSessionMaintenanceFinalizationOperation } from "../config/sessions/session-accessor.sqlite-reclamation.js";
 import { applySessionEntryExactReplacements } from "../config/sessions/session-accessor.sqlite-replacement-projection.js";
+import * as history from "../config/sessions/session-transcript-worker-runtime.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import {
   emitSessionIdentityMutation,
@@ -28,6 +29,7 @@ import {
   openOpenClawAgentDatabase,
   resolveOpenClawAgentSqlitePath,
 } from "../state/openclaw-agent-db.js";
+import * as stateReads from "../state/openclaw-state-db-readonly.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import * as projectionWork from "./session-projection-work.js";
@@ -168,6 +170,8 @@ it.each(["native", "worker"] as const)(
         expect(warm?.entry).toMatchObject(sideMetadata);
         expect(warm?.storedEntry).toMatchObject(sideMetadata);
         const reads = vi.spyOn(materialization, "readSessionRowEntry");
+        const rowReads = vi.spyOn(history, "withSessionHistoryWorkerDatabases");
+        const sharedReads = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
         const observed: Array<{
           entry: SessionEntry | undefined;
           storedEntry: SessionEntry | undefined;
@@ -204,6 +208,14 @@ it.each(["native", "worker"] as const)(
           },
         ]);
         expect(reads).not.toHaveBeenCalled();
+        await projection.ensureMaterialized();
+        expect(projection.snapshot(query).row?.label).toBe("Updated label");
+        expect(rowReads).not.toHaveBeenCalled();
+        expect(
+          sharedReads.mock.calls.filter(
+            ([, command]) => command.type === "sessionRows.sharedFacts",
+          ),
+        ).toEqual([]);
         const publishedSource = projection.capture(query)?.publishedSource;
         expect(publishedSource).toBeDefined();
         const sql = observeHostDataSql();

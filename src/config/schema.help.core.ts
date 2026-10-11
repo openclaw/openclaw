@@ -315,6 +315,8 @@ export const CORE_FIELD_HELP: Record<string, string> = {
     "Optional default skill allowlist inherited by agents that omit agents.entries.*.skills. Omit for unrestricted skills, set [] to give inheriting agents no skills, and remember explicit agents.entries.*.skills replaces this default instead of merging with it.",
   "agents.defaults.subagents.delegationMode":
     'Prompt-only sub-agent delegation strength. Defaults to "prefer" in each agent\'s main session and "suggest" elsewhere; "prefer" strongly instructs the agent to delegate non-trivial work via sessions_spawn.',
+  "agents.entries.*.subagents.delegateToolsTo":
+    "Exact configured native target agents that may omit this requester agent’s tools.deny at spawn. Requires allowAgents independently. Deny-only handoffs preserve all nonlocal restrictions; restrictive initial profiles/allowlists or unsupported transports refuse the handoff instead of widening them. Same-target native helpers preserve their own additional ceilings. Sender-restricted and ACP requests never use this grant. Revocation restores the original requester snapshot.",
   "agents.entries.*.subagents.delegationMode":
     'Per-agent override for sub-agent delegation strength. Omit to use "prefer" in this agent\'s main session and "suggest" elsewhere; explicit "prefer" or "suggest" always wins.',
   "agents.entries.*.contextInjection":

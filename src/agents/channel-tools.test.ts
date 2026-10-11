@@ -1,11 +1,15 @@
 /** Tests channel action discovery from plugin message-tool descriptors. */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { runMessageActionDiscoveryAsync } from "../channels/plugins/message-action-discovery.js";
 import type { ChannelPlugin } from "../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
-import { listAllChannelSupportedActions, listChannelSupportedActions } from "./channel-tools.js";
+import {
+  listAllChannelSupportedActionsSteps,
+  listChannelSupportedActionsSteps,
+} from "./channel-tools.js";
 
 const EMPTY_PREPARED_MESSAGE_TOOL_CATALOG = {
   version: 0,
@@ -48,26 +52,32 @@ describe("channel tools", () => {
     setActivePluginRegistry(createTestRegistry([]));
   });
 
-  it("keeps an explicitly empty prepared catalog authoritative", () => {
+  it("keeps an explicitly empty prepared catalog authoritative", async () => {
     expect(
-      listAllChannelSupportedActions({
-        cfg: {} as OpenClawConfig,
-        preparedMessageToolCatalog: EMPTY_PREPARED_MESSAGE_TOOL_CATALOG,
-      }),
+      await runMessageActionDiscoveryAsync(
+        listAllChannelSupportedActionsSteps({
+          cfg: {} as OpenClawConfig,
+          preparedMessageToolCatalog: EMPTY_PREPARED_MESSAGE_TOOL_CATALOG,
+        }),
+      ),
     ).toEqual([]);
     expect(errorSpy).not.toHaveBeenCalled();
   });
 
-  it("skips crashing plugins and logs once", () => {
+  it("skips crashing plugins and logs once", async () => {
     const cfg = {} as OpenClawConfig;
-    expect(listAllChannelSupportedActions({ cfg })).toStrictEqual([]);
+    expect(
+      await runMessageActionDiscoveryAsync(listAllChannelSupportedActionsSteps({ cfg })),
+    ).toStrictEqual([]);
     expect(errorSpy).toHaveBeenCalledTimes(1);
 
-    expect(listAllChannelSupportedActions({ cfg })).toStrictEqual([]);
+    expect(
+      await runMessageActionDiscoveryAsync(listAllChannelSupportedActionsSteps({ cfg })),
+    ).toStrictEqual([]);
     expect(errorSpy).toHaveBeenCalledTimes(1);
   });
 
-  it("does not infer poll actions from outbound adapters when action discovery omits them", () => {
+  it("does not infer poll actions from outbound adapters when action discovery omits them", async () => {
     const plugin: ChannelPlugin = {
       id: "polltest",
       meta: {
@@ -94,11 +104,17 @@ describe("channel tools", () => {
     setActivePluginRegistry(createTestRegistry([{ pluginId: "polltest", source: "test", plugin }]));
 
     const cfg = {} as OpenClawConfig;
-    expect(listChannelSupportedActions({ cfg, channel: "polltest" })).toStrictEqual([]);
-    expect(listAllChannelSupportedActions({ cfg })).toStrictEqual([]);
+    expect(
+      await runMessageActionDiscoveryAsync(
+        listChannelSupportedActionsSteps({ cfg, channel: "polltest" }),
+      ),
+    ).toStrictEqual([]);
+    expect(
+      await runMessageActionDiscoveryAsync(listAllChannelSupportedActionsSteps({ cfg })),
+    ).toStrictEqual([]);
   });
 
-  it("normalizes channel aliases before listing supported actions", () => {
+  it("normalizes channel aliases before listing supported actions", async () => {
     const plugin: ChannelPlugin = {
       id: "telegram",
       meta: {
@@ -122,6 +138,10 @@ describe("channel tools", () => {
     setActivePluginRegistry(createTestRegistry([{ pluginId: "telegram", source: "test", plugin }]));
 
     const cfg = {} as OpenClawConfig;
-    expect(listChannelSupportedActions({ cfg, channel: "tg" })).toEqual(["react"]);
+    expect(
+      await runMessageActionDiscoveryAsync(
+        listChannelSupportedActionsSteps({ cfg, channel: "tg" }),
+      ),
+    ).toEqual(["react"]);
   });
 });

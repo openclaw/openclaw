@@ -9,7 +9,7 @@ import {
   msteamsConnectorEffectMiddleware,
   msteamsConnectorHandoffInterceptor,
 } from "./send-handoff.js";
-import type { MSTeamsCredentials } from "./token.js";
+import type { MSTeamsCredentials } from "./token-config.js";
 import { buildOpenClawUserAgentFragment } from "./user-agent.js";
 
 type MSTeamsHttpServerAdapter =

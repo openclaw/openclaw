@@ -127,7 +127,7 @@ function createFixture(
       latestShared,
       personalStatus,
       personalPending,
-      requestForSession,
+      requestForSessionV2: requestForSession,
     },
     githubOAuthService: {
       personal: {

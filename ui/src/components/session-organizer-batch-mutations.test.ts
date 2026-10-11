@@ -32,6 +32,8 @@ import { sessionMenuReasons } from "./session-menu-access.ts";
 import { patchSessionRows } from "./session-organizer-batch-mutations.ts";
 import type { SessionOrganizerControllerHost } from "./session-organizer-controller.ts";
 import {
+  archiveSessionTreeWithUndo,
+  createSessionGroup,
   deleteSession,
   deleteSessionGroup,
   deleteSessionsBatch,
@@ -195,6 +197,84 @@ function createHarness(
 }
 
 describe("patchSessionRows", () => {
+  it.each(["move", "create"])(
+    "preserves mixed group placement and target order for %s",
+    async (action) => {
+      const h = createHarness();
+      const rows = [
+        { ...sessionRow(0), pinnable: true, isChild: false },
+        { ...sessionRow(1), pinnable: false, isChild: false },
+        { ...sessionRow(2), key: "agent:main:subagent:hidden", pinnable: false, isChild: false },
+        { ...sessionRow(3), pinnable: true, sidebarRoot: true, isChild: false },
+      ];
+      if (action === "create") {
+        h.host.knownSessionGroups = () => ["Projects"];
+        await expect(createSessionGroup(h.host, "Projects", rows, h.scope)).resolves.toBe(
+          "completed",
+        );
+      } else {
+        await runBatchSessionAction(
+          h.host,
+          { kind: "move-to-group", category: "Projects" },
+          rows,
+          false,
+          h.scope,
+        );
+      }
+      expect(h.request.mock.calls.map(([, params]) => params)).toEqual([
+        { targets: [sessionTarget(rows[0]!)], patch: { category: "Projects" } },
+        { targets: [sessionTarget(rows[1]!)], patch: { category: "Projects", sidebarRoot: true } },
+        { targets: rows.slice(2).map(sessionTarget), patch: { category: "Projects" } },
+      ]);
+      expect(h.publishSessionMutationError).not.toHaveBeenCalled();
+    },
+  );
+
+  it("rejects a hidden worker as a tree root before reading or changing descendants", async () => {
+    const harness = createHarness();
+    const root = { ...sessionRow(0), key: "agent:main:subagent:hidden" };
+    harness.scope.sessions.describe = vi.fn(async () => ({
+      session: {
+        key: root.key,
+        sessionId: root.sessionId,
+        kind: "direct" as const,
+        updatedAt: null,
+      },
+    }));
+    await archiveSessionTreeWithUndo(harness.host, root, harness.scope);
+    expect(harness.request).not.toHaveBeenCalled();
+    expect(harness.publishSessionMutationError).toHaveBeenCalledWith(
+      harness.scope,
+      expect.objectContaining({ message: t("sessionsView.archiveTreeRootRequired") }),
+    );
+  });
+
+  it("preserves each archive-tree placement expectation and reports only successful targets", async () => {
+    const first = {
+      ...sessionRow(0),
+      archiveGuard: { expectedSidebarRoot: false, expectedCategory: null, expectedArchived: false },
+    };
+    const moved = {
+      ...sessionRow(1),
+      archiveGuard: { expectedSidebarRoot: false, expectedCategory: null, expectedArchived: false },
+    };
+    const harness = createHarness({ failedKeys: [moved.key] });
+    expect(
+      await patchSessionRows(harness.host, [first, moved], { archived: true }, harness.scope, {
+        sessionScope: true,
+      }),
+    ).toEqual([first]);
+    expect(harness.request).toHaveBeenCalledWith(
+      "sessions.patchMany",
+      expect.objectContaining({
+        targets: [first, moved].map((row) => Object.assign(sessionTarget(row), row.archiveGuard)),
+        patch: { archived: true },
+      }),
+      expect.anything(),
+    );
+    expect(harness.publishSessionMutationError).toHaveBeenCalled();
+  });
+
   it("binds Mark as read to the current session identity", async () => {
     const row = sessionRow(0);
     const harness = createHarness();

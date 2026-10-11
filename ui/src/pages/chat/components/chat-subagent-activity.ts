@@ -3,6 +3,7 @@ import { repeat } from "lit/directives/repeat.js";
 import { icons } from "../../../components/icons.ts";
 import { renderThemeBrandIcon } from "../../../components/theme-brand-icon.ts";
 import { t } from "../../../i18n/index.ts";
+import { fnv1aUtf16 } from "../../../lib/fnv1a.ts";
 import type { ChatSubagentActivity } from "../chat-subagent-wait.ts";
 import "./chat-subagent-activity.css";
 
@@ -10,6 +11,7 @@ export function renderSubagentActivity(
   rows: readonly ChatSubagentActivity[],
   onOpenSubagent?: (key: string) => void,
   onOpenSession?: (key: string) => void,
+  compact = false,
 ) {
   if (!rows.length) {
     return nothing;
@@ -33,12 +35,21 @@ export function renderSubagentActivity(
         const activity = row.activity || status;
         const open = row.listed ? (onOpenSubagent ?? onOpenSession) : onOpenSession;
         const content = html`
-          <span
-            class="chat-subagent-activity__icon ${row.status === "running" ? "chat-reading-indicator" : ""}"
-            aria-hidden="true"
-          >
-            ${row.status === "running" ? renderThemeBrandIcon(icons.claw) : icons.clock}
-          </span>
+          ${
+            compact
+              ? html`<span
+                  class="chat-details__agent-avatar"
+                  style=${`--chat-details-avatar-hue: ${fnv1aUtf16(row.key) % 360}`}
+                  aria-hidden="true"
+                  >${icons.bot}</span
+                >`
+              : html`<span
+                  class="chat-subagent-activity__icon ${row.status === "running" ? "chat-reading-indicator" : ""}"
+                  aria-hidden="true"
+                >
+                  ${row.status === "running" ? renderThemeBrandIcon(icons.claw) : icons.clock}
+                </span>`
+          }
           <span class="chat-subagent-activity__name">${row.label}</span>
           <span class="chat-subagent-activity__status">${activity}</span>
         `;

@@ -124,6 +124,15 @@ export async function runMemoryIndexState(target: MemoryReadTarget, signal?: Abo
   return result.state;
 }
 
+export async function runMemoryDatabaseFacts(databasePath: string, agentId: string) {
+  const result = await runRetrieval(
+    { databasePath, agentId, kind: "index-facts" },
+    {},
+    "index facts",
+  );
+  return result.facts;
+}
+
 export async function runMemoryRecallMetadata(
   target: MemoryReadTarget,
   query: Omit<
@@ -192,12 +201,7 @@ export async function runMemoryKeywordSearch(
     { ...target, kind: "keyword", query, includeIndexState },
     {
       signal,
-      inputBytes:
-        2 *
-        (query.body.query.length +
-          (query.body.rankingQuery?.length ?? 0) +
-          query.path.query.length +
-          (query.path.exactPathQuery?.length ?? 0)),
+      inputBytes: 2 * (query.body.query.length + query.path.query.length),
     },
     "keyword",
   );
@@ -212,7 +216,9 @@ export async function runMemoryVectorFallback(
     { ...target, kind: "vector", query },
     {
       signal,
-      inputBytes: query.queryVec.length * 8,
+      inputBytes:
+        query.queryVec.length * 8 +
+        (query.candidateIds?.reduce((bytes, id) => bytes + id.length * 2, 0) ?? 0),
     },
     "vector",
   );

@@ -21,6 +21,7 @@ import {
   type McpAppFormOrigin,
   type McpFormResourceUpload,
 } from "../agents/mcp-ui-resource.js";
+import { captureSessionEntryMetadataRead } from "../config/sessions/session-entry-source-authority.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { resolveMcpAppRequesterId, callMcpAppToolWithElicitation } from "./mcp-app-operations.js";
 import { canSelectQuestion } from "./question-access.js";
@@ -488,11 +489,35 @@ export function createMcpAppWorkspaceUploadProvider(params: {
   agentId: string;
   assertCurrent: () => void;
 }): McpFormResourceUpload {
+  const metadata = captureSessionEntryMetadataRead(params);
+  const initial = metadata?.readCurrent();
   return async (request) => {
     const assertCurrent = () => {
       params.assertCurrent();
+      metadata?.assertCurrent();
       request.assertCurrent();
-      if (resolveLocalSessionWorkspaceRoot(params) !== params.workspaceDir) {
+      if (metadata) {
+        const current = metadata.readCurrent();
+        if (
+          current?.sessionId !== initial?.sessionId ||
+          current?.lifecycleRevision !== initial?.lifecycleRevision
+        ) {
+          throw new Error("Form upload session generation changed");
+        }
+      }
+      if (
+        resolveLocalSessionWorkspaceRoot({
+          ...params,
+          ...(metadata
+            ? {
+                source: {
+                  entry: metadata.readCurrent(),
+                  cfg: request.options.context.getRuntimeConfig(),
+                },
+              }
+            : {}),
+        }) !== params.workspaceDir
+      ) {
         throw new Error("Form upload workspace authority changed");
       }
     };

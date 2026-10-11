@@ -52,18 +52,12 @@ const state = resolveGlobalSingleton(Symbol.for("openclaw.githubPublicationRecei
     db: DatabaseSync;
     facts: Map<string, SqliteCommittedFact<Row>>;
   }>(),
-  installingFacts: 0,
   facts: new Set<(change: Change) => void>(),
 }));
 
 function install(change: Change): void {
   const failures: unknown[] = [];
-  state.installingFacts++;
-  try {
-    notifyListeners(state.facts, change, (error) => failures.push(error));
-  } finally {
-    state.installingFacts--;
-  }
+  notifyListeners(state.facts, change, (error) => failures.push(error));
   if (failures.length) {
     throw new AggregateError(failures, "GitHub publication fact installation failed");
   }
@@ -144,9 +138,6 @@ function stageGitHubPublicationRow<Kind extends keyof Rows>(
   kind: Kind,
   row: Rows[Kind] & Partial<Record<PresentationColumn, string | null>>,
 ): void {
-  if (state.installingFacts) {
-    throw new Error("GitHub publication cannot mutate during fact installation");
-  }
   const value = { ...row };
   delete value.title;
   delete value.body;

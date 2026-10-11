@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import {
   assertExistingDatabaseIdentity,
@@ -62,7 +61,6 @@ type SessionEntryMaintenanceRequest = {
 };
 type SessionEntryMaintenanceOwner = SessionEntryMaintenanceRequest & {
   activeSessionKeys: Set<string>;
-  ageOwner: string;
   ageChanges: Map<string, SessionEntryMaintenanceAgeChange>;
   assertCurrent: () => void;
   captureExecution: () => OpenClawAgentDatabaseExecution | undefined;
@@ -161,7 +159,6 @@ export function kickSessionEntryMaintenanceAfterWrite(
     ...params,
     scope,
     activeSessionKeys: new Set([params.activeSessionKey]),
-    ageOwner: randomUUID(),
     ageChanges: new Map(),
     captureExecution,
     execution: captureExecution(),
@@ -421,7 +418,6 @@ async function runPendingMaintenance(
                 databaseOptions: resolveSessionReclamationDatabaseOptions(
                   toDatabaseOptions(owner.scope),
                 ),
-                ageOwner: owner.ageOwner,
                 kind: "maintenance-plan",
                 materializedPlans: [],
                 input: {
@@ -440,6 +436,7 @@ async function runPendingMaintenance(
       retireMaintenanceOwner(databasePath, owner);
       return;
     }
+    // A running pass keeps its captured policy; configuration changes apply to the next pass.
     const { maintenance, operation } = prepared;
     if (operation === null) {
       if (isCurrent() && owner.generation !== generation) {
@@ -461,12 +458,6 @@ async function runPendingMaintenance(
       if (
         (admitted &&
           [...owner.activeSessionKeys].some((key) => !activeSessionKeys.includes(key))) ||
-        !isDeepStrictEqual(
-          maintenance,
-          owner.maintenanceConfig
-            ? normalizeResolvedMaintenanceConfigInput(owner.maintenanceConfig)
-            : resolveMaintenanceConfig(),
-        ) ||
         (admitted &&
           operation.input.preservation !== null &&
           !isDeepStrictEqual(operation.input.preservation, capturePreservation()))
@@ -534,7 +525,7 @@ async function runPendingMaintenance(
       throw new Error("SQLite automatic maintenance returned another operation's result");
     }
     const plan = result.value;
-    const readAge = async (verify: boolean) => {
+    const readAge = async () => {
       assertInputsCurrent();
       const pending = capturePendingAgeChanges(owner);
       const age = await runSqliteSessionReclamation({
@@ -547,10 +538,7 @@ async function runPendingMaintenance(
           materializedPlans: [],
           maintenance,
           ageChanges: pending.changes,
-          expected: verify ? result.ageSnapshot : undefined,
-          readOnly: result.readOnlyInput
-            ? { input: result.readOnlyInput, snapshot: result.ageSnapshot }
-            : undefined,
+          readOnly: result.readOnlyInput ? { input: result.readOnlyInput } : undefined,
         },
       });
       if (age.kind === "maintenance-age" || age.kind === "maintenance-plan-stale") {
@@ -572,7 +560,7 @@ async function runPendingMaintenance(
     const verifiedNextAt = noChanges
       ? readOnlyPhase.deadline
         ? readOnlyPhase.deadline.nextAt
-        : await readAge(true)
+        : await readAge()
       : undefined;
     if (!noFinalization) {
       await finalizeSessionEntryMaintenancePlansAfterWriterReleaseBestEffort(owner.scope, [plan], {
@@ -585,7 +573,7 @@ async function runPendingMaintenance(
     if (isCurrent() && owner.generation === generation) {
       assertInputsCurrent();
       // Reuse only this pass's consumed decision; newer kicks and changes win after settlement.
-      nextMaintenanceAt = noFinalization ? verifiedNextAt : await readAge(false);
+      nextMaintenanceAt = noFinalization ? verifiedNextAt : await readAge();
       if (owner.ageChanges.size > 0) {
         planningChanged = true;
         throw new SqliteReclamationInputsChangedError(

@@ -276,12 +276,13 @@ export function parseMSTeamsTeamEntry(
 
 export async function resolveMSTeamsChannelAllowlist(params: {
   cfg: unknown;
+  accountId?: string | null;
   entries: string[];
   teamIdMode?: StableMSTeamsTeamIdMode;
 }): Promise<MSTeamsChannelResolution[]> {
   let tokenPromise: Promise<string> | undefined;
   const getToken = () => {
-    tokenPromise ??= resolveGraphToken(params.cfg);
+    tokenPromise ??= resolveGraphToken(params.cfg, { accountId: params.accountId });
     return tokenPromise;
   };
   return await mapAllowlistResolutionInputs({
@@ -409,6 +410,7 @@ export async function resolveMSTeamsChannelAllowlist(params: {
 
 export async function resolveMSTeamsTeamsConfig(params: {
   cfg: unknown;
+  accountId?: string | null;
   teamIdMode: StableMSTeamsTeamIdMode;
   teams: NonNullable<MSTeamsConfig["teams"]>;
 }): Promise<{
@@ -450,6 +452,7 @@ export async function resolveMSTeamsTeamsConfig(params: {
 
   const resolved = await resolveMSTeamsChannelAllowlist({
     cfg: params.cfg,
+    accountId: params.accountId,
     entries: entries.map((entry) => entry.input),
     teamIdMode: params.teamIdMode,
   });
@@ -502,11 +505,12 @@ export async function resolveMSTeamsTeamsConfig(params: {
 
 export async function resolveMSTeamsUserAllowlist(params: {
   cfg: unknown;
+  accountId?: string | null;
   entries: string[];
 }): Promise<BasicAllowlistResolutionEntry[]> {
   let tokenPromise: Promise<string> | undefined;
   const getToken = () => {
-    tokenPromise ??= resolveGraphToken(params.cfg);
+    tokenPromise ??= resolveGraphToken(params.cfg, { accountId: params.accountId });
     return tokenPromise;
   };
   return await mapAllowlistResolutionInputs({

@@ -238,6 +238,7 @@ describe("native Control UI browser assets", () => {
           });
           expect(bootstrap.res.statusCode).toBe(200);
           expect(JSON.parse(bootstrap.getBody())).toMatchObject({
+            pluginControlUiModules: [entry],
             basePath,
             pluginAssetsRequireAuth: requiresAuth,
             pluginFrameGrants: requiresAuth
@@ -442,6 +443,48 @@ describe("native Control UI browser assets", () => {
       }
     },
   );
+
+  it("advertises only admitted static dependencies, including re-exports and cycles", async () => {
+    const fixture = activateFixture();
+    fs.mkdirSync(path.join(fixture.directory, "chunks"));
+    for (const [name, source] of Object.entries({
+      "index.js": `
+        import './chunks/first.js';
+        export { value } from './chunks/second.mjs';
+        import('./lazy.js');
+        import './missing.js';
+        import '../outside.js';
+        import 'bare-package';
+        import 'https://example.test/remote.js';
+        import './theme.css' with { type: 'css' };
+        const text = "import './decoy.js'";
+      `,
+      "chunks/first.js": "export * from './second.mjs'; import '../index.js';",
+      "chunks/second.mjs": "export { value } from '../shared.js';",
+      "shared.js": "export const value = 1;",
+      "lazy.js": "import './decoy.js';",
+      "decoy.js": "export const decoy = true;",
+    })) {
+      fs.writeFileSync(path.join(fixture.directory, name), source);
+    }
+    const catalog = await listControlUiPluginCatalog();
+    expect(catalog.diagnostics).toEqual([]);
+    const entry = catalog.plugins[0]!;
+    const prefix = entry.entryUrl.slice(0, -"index.js".length);
+    expect(entry.imports).toEqual([
+      `${prefix}chunks/first.js`,
+      `${prefix}chunks/second.mjs`,
+      `${prefix}shared.js`,
+    ]);
+  });
+
+  it("preserves browser build admission when a module cannot be parsed for preload hints", async () => {
+    const fixture = activateFixture();
+    fs.writeFileSync(path.join(fixture.directory, "index.js"), "export const = ;");
+    const catalog = await listControlUiPluginCatalog();
+    expect(catalog.diagnostics).toEqual([]);
+    expect(catalog.plugins[0]?.imports).toEqual([]);
+  });
 
   it("serves authenticated immutable builds and preserves the last working revision on failure", async () => {
     const fixture = activateFixture();

@@ -12,6 +12,7 @@ import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
 } from "./control-ui-e2e-suite.test-support.ts";
+import { openHomeFullPage } from "./sidebar-navigation.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "active turn recovery",
@@ -284,19 +285,19 @@ async function assertSteeredRecoveryOrder(
     return {
       originalBeforeCommentary: precedes(original, beforeSteer),
       commentaryBeforeSteer: precedes(beforeSteer, steer),
-      toolBeforeSteer: precedes(tool, steer),
+      steerBeforeTool: precedes(steer, tool),
       toolBeforeLaterCommentary: precedes(tool, afterSteer),
       laterCommentaryBeforeLatest: precedes(afterSteer, latest),
-      latestBeforeSteer: precedes(latest, steer),
+      steerBeforeLatest: precedes(steer, latest),
     };
   }, texts);
   expect(order).toEqual({
     originalBeforeCommentary: true,
     commentaryBeforeSteer: true,
-    toolBeforeSteer: true,
+    steerBeforeTool: true,
     toolBeforeLaterCommentary: true,
     laterCommentaryBeforeLatest: true,
-    latestBeforeSteer: true,
+    steerBeforeLatest: true,
   });
 }
 
@@ -317,7 +318,7 @@ suite.define(() => {
         .locator('wa-dropdown.sidebar-identity-menu wa-dropdown-item[value="command:usage"]')
         .click();
       await waitForControlUiRoute(page, { pathname: "/usage", routeId: "usage" });
-      await sidebar.getByRole("link", { name: "Home" }).click();
+      await openHomeFullPage(page);
       await waitForControlUiRoute(page, { pathname: "/chat/main", routeId: "chat" });
       await assertActiveTurnVisible(page, streamText);
       await expect.poll(() => readWorkingStartedAts(page)).toContain(startedAt);
@@ -606,7 +607,7 @@ suite.define(() => {
     }
   });
 
-  it("keeps all run commentary and tools before its steer through a full reload", async () => {
+  it("preserves accepted steer order through a full reload", async () => {
     const runId = "run-steer-refresh";
     const texts = {
       original: "Review the fixture.",

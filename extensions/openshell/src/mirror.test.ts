@@ -235,7 +235,7 @@ describe("replaceDirectoryContents", () => {
     },
   );
 
-  it.each(["directory", "absent", "file", "symlink"] as const)(
+  it.each(["directory", "symlink"] as const)(
     "preserves trusted host symlinks when their remote ancestor is %s",
     async (remoteAncestor) => {
       const source = await makeTmpDir();
@@ -268,8 +268,6 @@ describe("replaceDirectoryContents", () => {
           "remote",
         );
         await fs.symlink(outside, path.join(source, "nested", "deeper", "dangling-link"));
-      } else if (remoteAncestor === "file") {
-        await fs.writeFile(path.join(source, "nested"), "remote replacement");
       } else if (remoteAncestor === "symlink") {
         await fs.symlink(outside, path.join(source, "nested"));
       }

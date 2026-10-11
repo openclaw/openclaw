@@ -299,9 +299,8 @@ describe("Crabbox warm-image doctor", () => {
       if (operation === "unsupported") {
         expect(findings[0]?.message).toContain(record.captureUnsupported!.message);
         expect(findings[0]?.fixHint).toContain("otherwise provision cold");
-        expect(findings[0]?.fixHint).toContain("each eligible worker retries capture");
         expect(findings[0]?.fixHint).toContain(
-          "Crabbox configuration changes apply to the next dispatch",
+          "capture attempts are skipped until `warmImages.refreshAfter`",
         );
         expect(findings[0]?.fixHint).toContain("supports native checkpoints");
       } else if (operation === "uncertain") {

@@ -2,14 +2,9 @@
 import type { DatabaseSync } from "node:sqlite";
 import { MEMORY_INDEX_META_TABLE } from "openclaw/plugin-sdk/memory-core-host-engine-schema";
 import type { MemoryVectorIndexState } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import { tableExists } from "openclaw/plugin-sdk/sqlite-worker-runtime";
 
 const VECTOR_REBUILD_META_KEY = "memory_vector_rebuild_v1";
-
-export function memoryTableExists(db: DatabaseSync, tableName: string): boolean {
-  return Boolean(
-    db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(tableName),
-  );
-}
 
 export function markMemoryVectorIndexClean(db: DatabaseSync): void {
   db.prepare(
@@ -47,7 +42,7 @@ export function resolvePersistedMemoryVectorIndexState(params: {
   if (row?.value === "1") {
     return { state: "incomplete" };
   }
-  if (!memoryTableExists(params.db, params.vectorTable)) {
+  if (!tableExists(params.db, params.vectorTable)) {
     return params.metaVectorDims && params.hasSemanticChunks
       ? { state: "incomplete" }
       : { state: "empty" };

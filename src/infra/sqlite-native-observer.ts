@@ -1,4 +1,4 @@
-import type { DatabaseSync, SQLInputValue } from "node:sqlite";
+import type { DatabaseSync, SQLInputValue, StatementSync } from "node:sqlite";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { hasErrnoCode } from "./errno.js";
 import { classifySqliteMutation } from "./sqlite-schema-mutation.js";
@@ -11,8 +11,30 @@ declare module "node:sqlite" {
   }
 }
 
-export type NativeSqlite = Pick<typeof import("node:sqlite"), "DatabaseSync" | "StatementSync">;
+export type SqliteIteratorBehavior = Readonly<{
+  nextAfterDoneIsTerminal: boolean;
+  returnAfterDoneIsInert: boolean;
+}>;
+export type NativeSqlite = Pick<typeof import("node:sqlite"), "DatabaseSync" | "StatementSync"> & {
+  iteratorBehavior: SqliteIteratorBehavior;
+};
 
+/** The runtime owner reuses its prepared one-row library probe, once per process load. */
+export function probeSqliteIteratorBehavior(statement: StatementSync): SqliteIteratorBehavior {
+  const previous = statement.iterate();
+  previous.next();
+  previous.next();
+  const nextAfterDoneIsTerminal = previous.next().done === true;
+  previous.return?.();
+  const current = statement.iterate();
+  try {
+    current.next();
+    previous.return?.();
+    return { nextAfterDoneIsTerminal, returnAfterDoneIsInert: current.next().done === true };
+  } finally {
+    current.return?.();
+  }
+}
 const pending = resolveGlobalSingleton(
   Symbol.for("openclaw.sqliteNativeExecution"),
   () => new WeakMap<DatabaseSync, number>(),
@@ -33,6 +55,7 @@ type NativeOperation = {
 type IteratorLifetime = {
   observed?: NativeOperation;
   finished: boolean;
+  invalidated: boolean;
   finish: (succeeded?: boolean, abandoned?: boolean) => void;
   invalidate: () => void;
   pause: () => void;
@@ -53,9 +76,11 @@ function createIteratorLifetime(
 ): IteratorLifetime {
   const lifetime: IteratorLifetime = {
     finished: false,
+    invalidated: false,
     expire: () => lifetime.observed?.expire?.(),
     pause: () => lifetime.stopObservation(),
     invalidate: () => {
+      lifetime.invalidated = true;
       lifetime.finish();
     },
     stopObservation: (succeeded = false, abandoned = false) => {
@@ -77,7 +102,10 @@ function createIteratorLifetime(
 }
 const bindingMutation: SqliteNativeMutation = {
   schemaChange: false,
+  mainSchemaChange: false,
+  temporaryTableSchemaChange: false,
   dataChange: false,
+  temporaryWriteTables: undefined,
   control: undefined,
 };
 
@@ -96,7 +124,7 @@ function refusedBeforeReset(error: unknown): boolean {
 }
 
 /** Dispose callbacks may refuse close; native custody expires only after SQLite has closed. */
-function observeSqliteNativeClose(database: DatabaseSync, onClose: () => void): void {
+export function observeSqliteNativeClose(database: DatabaseSync, onClose: () => void): void {
   for (const method of ["close", Symbol.dispose] as const) {
     if (typeof database[method] !== "function") {
       continue;
@@ -200,7 +228,7 @@ export function observeSqliteNativeOperations(
       : undefined;
     const active = new Set<IteratorLifetime>();
     let registered = false;
-    const reset = <T>(operation: () => T, kind: "reuse" | "finalize" = "reuse"): T => {
+    const reset = <T>(operation: () => T, kind: "reuse" | "finalize" | "return" = "reuse"): T => {
       if (active.size === 0) {
         return operation();
       }
@@ -224,7 +252,11 @@ export function observeSqliteNativeOperations(
         throw error;
       }
       for (const lifetime of previous) {
-        lifetime.invalidate();
+        if (kind === "return") {
+          lifetime.pause();
+        } else {
+          lifetime.invalidate();
+        }
       }
       return result;
     };
@@ -254,13 +286,14 @@ export function observeSqliteNativeOperations(
         "bind",
       );
       const reference = new WeakRef(rows);
+      let done = false;
       const lifetime = createIteratorLifetime(active, activeIterators);
       // oxlint-disable-next-line typescript/unbound-method -- Wrappers pass the native receiver unchanged.
       const nativeNext = rows.next;
       // oxlint-disable-next-line typescript/unbound-method -- Wrappers pass the native receiver unchanged.
       const nativeReturn = rows.return;
       rows.next = function (this: typeof rows, ...args) {
-        if (this !== reference.deref() || !database.isOpen) {
+        if (this !== reference.deref() || lifetime.invalidated || done || !database.isOpen) {
           return nativeNext.apply(this, args);
         }
         if (lifetime.finished) {
@@ -274,8 +307,12 @@ export function observeSqliteNativeOperations(
         try {
           const result = nativeNext.apply(this, args);
           if (result.done) {
-            // Some runtimes restart after done; observe each subsequent next independently.
-            lifetime.finish(true);
+            done = native.iteratorBehavior.nextAfterDoneIsTerminal;
+            if (done) {
+              lifetime.finish(true);
+            } else {
+              lifetime.stopObservation(true);
+            }
           } else {
             lifetime.observed?.stepped?.();
           }
@@ -294,10 +331,22 @@ export function observeSqliteNativeOperations(
       };
       if (nativeReturn) {
         rows.return = function (this: typeof rows, ...args) {
-          if (this !== reference.deref() || !database.isOpen) {
+          if (
+            this !== reference.deref() ||
+            (done && native.iteratorBehavior.returnAfterDoneIsInert) ||
+            !database.isOpen
+          ) {
             return nativeReturn.apply(this, args);
           }
-          const result = execute(() => nativeReturn.apply(this, args), bindingMutation, "bind");
+          const result = execute(
+            () =>
+              lifetime.finished || lifetime.invalidated
+                ? nativeReturn.apply(this, args)
+                : reset(() => nativeReturn.apply(this, args), "return"),
+            bindingMutation,
+            "bind",
+          );
+          done = result.done === true;
           lifetime.finish();
           return result;
         };

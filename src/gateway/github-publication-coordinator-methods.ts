@@ -20,6 +20,7 @@ import {
   prepareCurrentGitHubPublicationIdentity,
   readGitHubPublicationWorktreeOwner,
   type PublicationSessionIdentity,
+  readGitHubPublicationSession,
 } from "./github-publication-availability.js";
 import { GitHubPublicationRecoveryPendingError } from "./github-publication-git-index.js";
 import { captureGitHubPublicationWorkspaceSnapshot } from "./github-publication-git-transport.js";
@@ -53,7 +54,6 @@ import {
   readGitHubPublicationRequest,
 } from "./github-publication-store.js";
 import { loadGatewaySessionEntryReadOnlyInWorker } from "./session-utils-store-worker.js";
-import { loadGatewaySessionEntryReadOnly } from "./session-utils.js";
 import { projectWorkerSessionTurnClaim } from "./worker-environments/placement-record.js";
 import type {
   WorkerSessionPlacementStore,
@@ -228,7 +228,7 @@ export function createGitHubPublicationCoordinatorMethods(params: {
           agentId: input.agentId,
           assertActive: params.assertCurrent,
         })
-      : loadGatewaySessionEntryReadOnly(input.sessionKey, { agentId: input.agentId });
+      : readGitHubPublicationSession(input.sessionKey, { agentId: input.agentId });
     const sessionId = initialLoaded.entry?.sessionId;
     if (!sessionId) {
       throw new Error("GitHub publication session changed.");

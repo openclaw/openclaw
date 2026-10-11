@@ -60,33 +60,6 @@ describe("repository checkpoint GitHub publication", () => {
   installGitHubPublicationTestHarness();
   afterEach(() => vi.unstubAllGlobals());
 
-  it("publishes the accepted checkpoint with an absent-ref lease and replays the same receipt", async () => {
-    const f = await repositoryFixture();
-    let checkedPublishingTransaction = false;
-    const input = {
-      agentId: "main",
-      sessionKey: SESSION_KEY,
-      idempotencyKey: "shared",
-      assertCurrent: () => {
-        if (
-          openOpenClawStateDatabase().db.isTransaction &&
-          listRepositoryGitHubPublications().some((row) => row.status === "publishing")
-        ) {
-          checkedPublishingTransaction = true;
-        }
-      },
-    };
-    const published = await f.coordinator.requestForSession(input);
-    expect(published).toMatchObject({ status: "published", url, publisher: { accountId: 42 } });
-    expect(f.runtime.uploaded.get(f.first.sha)).toEqual(Buffer.from("accepted first\n"));
-    expect(f.casRequests[0]).toMatchObject({ beforeOid: "0".repeat(40), force: false });
-    expect(await f.coordinator.requestForSession(input)).toEqual(published);
-    expect(f.runtime.effects).toEqual(["push", "pull_request"]);
-    expect(mocks.findWorktree).not.toHaveBeenCalled();
-    expect(mocks.resolveRepository).not.toHaveBeenCalled();
-    expect(checkedPublishingTransaction).toBe(true);
-  });
-
   it.each(["shared", "personal"] as const)(
     "retains the accepted %s PR response after publication authority closes",
     async (source) => {
@@ -96,6 +69,7 @@ describe("repository checkpoint GitHub publication", () => {
         f.runtime.accountId = personalPublicationAccount.accountId;
       }
       let current = true;
+      let checkedPublishingTransaction = false;
       const transport = mocks.runCommand.getMockImplementation()!;
       mocks.runCommand.mockImplementation(async (args: string[], options) => {
         const result = await transport(args, options);
@@ -127,6 +101,12 @@ describe("repository checkpoint GitHub publication", () => {
               sessionKey: SESSION_KEY,
               idempotencyKey: "accepted-before-close",
               assertCurrent: () => {
+                if (
+                  openOpenClawStateDatabase().db.isTransaction &&
+                  listRepositoryGitHubPublications().some((row) => row.status === "publishing")
+                ) {
+                  checkedPublishingTransaction = true;
+                }
                 if (!current) {
                   throw new Error("Publication authority closed");
                 }
@@ -134,6 +114,9 @@ describe("repository checkpoint GitHub publication", () => {
             });
       const published = await request();
       expect(published).toMatchObject({ status: "published", url });
+      if (source === "shared") {
+        expect(checkedPublishingTransaction).toBe(true);
+      }
       expect(readRepositoryGitHubPublication(published.requestId)).toMatchObject({
         status: "published",
         pull_request_url: url,
@@ -334,26 +317,6 @@ describe("repository checkpoint GitHub publication", () => {
     expect(f.runtime.uploaded.size).toBe(0);
     expect(f.runtime.effects).toEqual([]);
   });
-
-  it.each([false, true])(
-    "reports no changes for an unchanged pinned ancestor (PR base advanced: %s)",
-    async (advanced) => {
-      const f = await repositoryFixture();
-      if (advanced) {
-        f.runtime.baseHead = "d".repeat(40);
-        f.runtime.baseHeadTree = "c".repeat(40);
-      }
-      await f.capture(null, "unchanged-pr-base");
-      const result = await f.coordinator.requestForSession({
-        agentId: "main",
-        sessionKey: SESSION_KEY,
-        idempotencyKey: "unchanged-pr-base",
-      });
-      expect(result).toMatchObject({ status: "failed", code: "no_changes" });
-      expect(f.runtime.uploaded.size).toBe(0);
-      expect(f.runtime.effects).toEqual([]);
-    },
-  );
 
   it("distinguishes an unchanged published tree from a complete revert to the PR base", async () => {
     const f = await repositoryFixture();

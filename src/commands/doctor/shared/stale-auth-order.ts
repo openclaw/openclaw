@@ -200,7 +200,7 @@ function loadConfiguredAgentAuthStores(
     const expectedAgentIds = expectedAgentIdsByDir.get(mainAgentDir);
     const owner =
       availability === "present"
-        ? inspectOpenClawAgentDatabaseOwner(sharedDatabasePath)
+        ? inspectOpenClawAgentDatabaseOwner(sharedDatabasePath, { revalidateSchema: true })
         : undefined;
     if (
       availability === "unreadable" ||
@@ -237,7 +237,9 @@ function loadConfiguredAgentAuthStores(
       return { status: "blocked", warnings: [INVALID_SQLITE_STORE_WARNING] };
     }
     const owner =
-      availability === "present" ? inspectOpenClawAgentDatabaseOwner(databasePath) : undefined;
+      availability === "present"
+        ? inspectOpenClawAgentDatabaseOwner(databasePath, { revalidateSchema: true })
+        : undefined;
     if (
       owner?.status === "unreadable" ||
       (expectedAgentIds && owner?.status === "owned" && !expectedAgentIds.has(owner.agentId))
@@ -297,7 +299,7 @@ function loadConfiguredAgentAuthStores(
     if (availability === "unreadable") {
       return { status: "blocked", warnings: [INVALID_SQLITE_STORE_WARNING] };
     }
-    const owner = inspectOpenClawAgentDatabaseOwner(databasePath);
+    const owner = inspectOpenClawAgentDatabaseOwner(databasePath, { revalidateSchema: true });
     if (owner.status !== "owned" || !owners.has(owner.agentId)) {
       return { status: "blocked", warnings: [INVALID_SQLITE_STORE_WARNING] };
     }

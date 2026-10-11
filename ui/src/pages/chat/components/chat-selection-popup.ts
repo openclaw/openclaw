@@ -108,6 +108,10 @@ function mountPopup(
   paneId: string,
   onEscape?: () => void,
   anchorElement?: HTMLElement,
+  // A layout-driven transcript scroll must not dismiss in-progress input. The
+  // annotation editor supplies its own policy; the selection toolbar keeps the
+  // default scroll dismissal.
+  shouldDismissOnScroll: () => boolean = () => true,
 ) {
   removeChatSelectionPopup();
   document.body.appendChild(popup);
@@ -141,7 +145,9 @@ function mountPopup(
     "scroll",
     (event) => {
       if (!(event.target instanceof Node) || !popup.contains(event.target)) {
-        removeChatSelectionPopup();
+        if (shouldDismissOnScroll()) {
+          removeChatSelectionPopup();
+        }
       }
     },
     { capture: true, passive: true, signal },
@@ -285,12 +291,18 @@ export function showChatAnnotationEditor(options: {
       }
     }
   });
+  // A width or height change repositions the editor and makes the transcript
+  // follow its end by scrolling. That layout compensation must not discard a
+  // comment the user is still writing, so an edited comment survives the
+  // scroll; an untouched editor still closes, keeping its existing behavior.
+  const originalComment = options.comment;
   const signal = mountPopup(
     popup,
     options.anchorRect,
     options.paneId,
     options.onCancel,
     options.anchorElement,
+    () => input.value === originalComment,
   );
   const resizeInput = () => {
     const scrollTop = input.scrollTop;

@@ -14,7 +14,7 @@ import {
 } from "./session-accessor.sqlite-projection-read.js";
 import { resolveVisibleMessagePositions } from "./session-accessor.sqlite-reset-window.js";
 import { resolveSqliteSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
-import { transcriptEventNavigationSql } from "./transcript-payload.js";
+import { transcriptEventNavigationSql, transcriptEventRunIdSql } from "./transcript-payload.js";
 
 // These derived facts omit transcript bodies and remain inside the admitted snapshot.
 const inputMessageJson =
@@ -23,7 +23,7 @@ const inputMessageJson =
     'idempotencyKey', json_extract(${transcriptEventNavigationSql("event")}, '$.message.idempotencyKey'),
     'provenance', json_extract(${transcriptEventNavigationSql("event")}, '$.message.provenance'),
     '__openclaw', json_object(
-      'runId', json_extract(${transcriptEventNavigationSql("event")}, '$.message.__openclaw.runId'),
+      'runId', ${transcriptEventRunIdSql("event")},
       'steerTargetRunId', json_extract(${transcriptEventNavigationSql("event")}, '$.message.__openclaw.steerTargetRunId')))`;
 
 type RunInputVisibility =
@@ -135,12 +135,7 @@ export function readSessionTranscriptRunInputVisibilityFromProjection(
           "=",
           params.runId,
         ),
-        eb(
-          /* kysely-allow-raw: Retained user records can carry the receiving run explicitly. */
-          sql<string>`json_extract(${transcriptEventNavigationSql("event")}, '$.message.__openclaw.runId')`,
-          "=",
-          params.runId,
-        ),
+        eb(transcriptEventRunIdSql("event"), "=", params.runId),
       ]),
     )
     .orderBy("active.message_position", "asc");

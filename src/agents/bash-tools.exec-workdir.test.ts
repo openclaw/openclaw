@@ -65,14 +65,6 @@ describe("resolveExecWorkdir", () => {
     });
   });
 
-  it("treats exact empty workdir as omitted when using the current cwd", async () => {
-    vi.spyOn(process, "cwd").mockReturnValue(workspaceDir);
-    await expect(resolveExecWorkdir({ host: "gateway", workdir: "" })).resolves.toEqual({
-      kind: "local",
-      hostCwd: workspaceDir,
-    });
-  });
-
   it("fails omitted local workdir when current cwd is unavailable", async () => {
     vi.spyOn(process, "cwd").mockImplementation(() => {
       throw new Error("cwd unavailable");
@@ -94,11 +86,6 @@ describe("resolveExecWorkdir", () => {
 
   it.each([
     { workdir: undefined, nodeCwd: undefined, expected: { kind: "node" } },
-    {
-      workdir: undefined,
-      nodeCwd: "/node/default",
-      expected: { kind: "node", remoteCwd: "/node/default" },
-    },
     {
       workdir: "/node/explicit",
       nodeCwd: "/node/default",

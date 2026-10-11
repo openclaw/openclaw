@@ -11,6 +11,7 @@ import {
 import * as history from "../config/sessions/session-transcript-worker-runtime.js";
 import type { InternalSessionEntry, SessionEntry } from "../config/sessions/types.js";
 import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
+import { sessionChanges } from "../sessions/session-row-changes.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -238,6 +239,7 @@ it("retains transcript previews across metadata edits and refreshes them after a
         await sessions.patchSessionEntryCore(scope, () => ({
           displayName: `Renamed ${edit}`,
           pinnedAt: edit % 2 === 0 ? edit + 1 : undefined,
+          sidebarRoot: edit % 2 === 0 ? true : undefined,
           updatedAt: edit + 2,
         }));
         await projection.ensureMaterialized();
@@ -245,6 +247,7 @@ it("retains transcript previews across metadata edits and refreshes them after a
         await nextTurn();
         expect(projection.snapshot(query, { includeLastMessage: true }).row).toMatchObject({
           displayName: `Renamed ${edit}`,
+          sidebarRoot: edit % 2 === 0,
           lastMessagePreview: "Original preview",
         });
       }
@@ -428,6 +431,7 @@ it("keeps pending Worker metadata, membership, and summary facts across optional
         updatedAt: 2,
         label: "Intermediate label",
       });
+      sessionChanges.emit({ ...scope, factsInvalidated: true });
       reading = listSessions({ client, context, request });
       await Promise.race([
         captured.promise,

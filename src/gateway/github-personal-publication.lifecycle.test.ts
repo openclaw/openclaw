@@ -5,7 +5,7 @@ import {
   installGitHubPublicationTestHarness,
   persistPublicationTestSession,
 } from "./github-publication.test-support.js";
-import { DatabaseSync } from "node:sqlite";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import {
@@ -14,12 +14,18 @@ import {
   patchSessionEntryCore,
   replaceSessionEntrySync,
 } from "../config/sessions/session-accessor.js";
+import {
+  readExactSessionEntryRow,
+  writeSessionEntry,
+} from "../config/sessions/session-accessor.sqlite-entry-store.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
+import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import * as operationAdmission from "../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { githubPublicationReceipts } from "../state/github-publication-receipts.js";
 import { readGitHubPublicationSessionLifecycle } from "../state/github-publication-session-lifecycles.js";
+import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import * as stateWorker from "../state/openclaw-state-worker-store.js";
 import { getSessionRepositoryWorkspaceStore } from "../state/session-repository-workspaces.js";
 import { readUserGitHubConnection } from "../state/user-github-connections.js";
@@ -175,7 +181,7 @@ describe("personal publication session lifecycle", () => {
     }
   });
 
-  it("preserves receipts and repository ownership when a foreign write crosses the native receipt grant", async () => {
+  it("preserves receipts and repository ownership when an owner write crosses the native receipt grant", async () => {
     const { owner } = fixture;
     const { session, published, receipt, binding, lifecycle } = await publishReceipt();
     expect(lifecycle).toBeDefined();
@@ -189,20 +195,20 @@ describe("personal publication session lifecycle", () => {
     const original = session.read();
     const successor = {
       ...original,
-      sessionId: "foreign-receipt-successor",
-      lifecycleRevision: "foreign-receipt-generation",
+      sessionId: "receipt-successor",
+      lifecycleRevision: "receipt-successor-generation",
       updatedAt: Date.now(),
     };
-    const databasePath = resolveSqliteTargetFromSessionStorePath(session.storePath, {
+    // Admit the competing agent writer before receipt cleanup locks the shared-state database.
+    const database = openOpenClawAgentDatabase({
       agentId: "main",
-    }).path;
-    if (!databasePath) {
-      throw new Error("Receipt fixture has no physical session database");
-    }
-    const peer = new DatabaseSync(databasePath);
+      path: resolveSqliteTargetFromSessionStorePath(session.storePath, { agentId: "main" }).path,
+    });
     let injected = false;
     let receiptAdmitted = false;
     let nativeAbsent = false;
+    // A competing writer must not inherit the guarded reader's artifact-preserving context.
+    const inWriterContext = AsyncLocalStorage.snapshot();
     const held = holdReceiptDeletion();
     const admission = probe.admission(operationAdmission, (nativeRequest, grant, admit) => {
       const facts = nativeRequest.facts;
@@ -219,31 +225,12 @@ describe("personal publication session lifecycle", () => {
       ) {
         nativeAbsent = isRecord(facts) && facts.entry === undefined;
         admit(nativeRequest, () => {
-          expect(
-            peer
-              .prepare("SELECT session_key FROM session_nodes WHERE session_key = ?")
-              .get(SESSION_KEY),
-          ).toBeUndefined();
-          peer.exec("BEGIN IMMEDIATE");
-          try {
-            peer
-              .prepare(
-                "INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at) VALUES (?, ?, ?, ?)",
-              )
-              .run(
-                SESSION_KEY,
-                successor.sessionId,
-                JSON.stringify(successor),
-                successor.updatedAt,
-              );
-            peer
-              .prepare("UPDATE session_nodes SET entry_valid = 1 WHERE session_key = ?")
-              .run(SESSION_KEY);
-            peer.exec("COMMIT");
-          } catch (error) {
-            peer.exec("ROLLBACK");
-            throw error;
-          }
+          inWriterContext(() => {
+            expect(readExactSessionEntryRow(database, SESSION_KEY)).toBeUndefined();
+            runSqliteImmediateTransactionSync(database.db, () =>
+              writeSessionEntry(database, SESSION_KEY, successor),
+            );
+          });
           injected = true;
           return grant();
         });
@@ -265,10 +252,8 @@ describe("personal publication session lifecycle", () => {
       receiptAdmitted = true;
       held.release.resolve();
       const outcome = await deletion;
-      expect(injected).toBe(true);
-      expect(
-        peer.prepare("SELECT entry_json FROM session_nodes WHERE session_key = ?").get(SESSION_KEY),
-      ).toEqual({ entry_json: JSON.stringify(successor) });
+      expect(injected, String(outcome.error)).toBe(true);
+      expect(session.read()).toEqual(successor);
       expect(await repositories.get(workspace.workspaceId)).toEqual(workspace);
       expect(readPersonalGitHubPublication(owner, { requestId: published.requestId })).toEqual(
         receipt,
@@ -285,7 +270,6 @@ describe("personal publication session lifecycle", () => {
       await deletion;
       held.restore();
       admission.mockRestore();
-      peer.close();
     }
   });
 

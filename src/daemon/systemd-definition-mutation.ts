@@ -9,6 +9,7 @@ import { sha256Hex } from "../infra/crypto-digest.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import { withFileLock } from "../infra/file-lock.js";
 import { canonicalPathFromExistingAncestor, findExistingAncestor } from "../infra/fs-safe.js";
+import { withServiceInspectionBudget } from "./service-inspection-budget.js";
 import {
   readServiceFileState,
   type GatewayServiceDefinitionTransactionHooks,
@@ -216,66 +217,71 @@ export async function readSystemdDefinitionMutationCapability(
     systemdReadTarget?: SystemdServiceReadTarget;
   },
 ): Promise<ServiceDefinitionMutationCapability> {
-  if (options?.systemdReadTarget?.scope === "system") {
-    return { kind: "sealed", reason: "system-owned" };
-  }
-  const selected =
-    options?.systemdReadTarget?.unitName ?? path.basename(resolveSystemdUnitPath(env));
-  const { environment = env, ...readOptions } = options ?? {};
-  const names =
-    selected === "openclaw-gateway.service" ? [selected, "openclaw.service"] : [selected];
-  const budget =
-    options?.timeoutMs && Number.isFinite(options.timeoutMs) && options.timeoutMs > 0
-      ? options.timeoutMs
-      : options?.requireLoaded
-        ? 5000
-        : undefined;
-  const deadlineAt = budget === undefined ? undefined : performance.now() + budget;
-  const remaining = () => {
-    if (deadlineAt === undefined) {
-      return undefined;
-    }
-    const value = deadlineAt - performance.now();
-    if (value <= 0) {
-      throw new Error("Definition inspection deadline expired.");
-    }
-    return value;
-  };
-  for (const name of names) {
-    try {
-      await assertNoSystemSystemdOwnership(
-        name,
-        remaining(),
-        ...(options?.requireLoaded ? [{ requireLoaded: true }] : []),
-      );
-    } catch (error) {
-      const owned =
-        isSystemSystemdOwnershipError(error) && error.ownership.status !== "unverifiable";
-      if (owned) {
+  return await withServiceInspectionBudget<Promise<ServiceDefinitionMutationCapability>>(
+    async (inspectionBudget) => {
+      if (options?.systemdReadTarget?.scope === "system") {
         return { kind: "sealed", reason: "system-owned" };
       }
-      const unverified = { kind: "unknown", reason: "system-ownership-unverified" } as const;
-      // A loaded user unit whose artifacts this account owns is the manager in
-      // charge; an unreachable system manager cannot make it a competing owner.
-      if (!options?.requireLoaded || !isSystemSystemdOwnershipError(error)) {
-        return unverified;
+      const selected =
+        options?.systemdReadTarget?.unitName ?? path.basename(resolveSystemdUnitPath(env));
+      const { environment = env, ...readOptions } = options ?? {};
+      const names =
+        selected === "openclaw-gateway.service" ? [selected, "openclaw.service"] : [selected];
+      const budget =
+        options?.timeoutMs && Number.isFinite(options.timeoutMs) && options.timeoutMs > 0
+          ? options.timeoutMs
+          : options?.requireLoaded
+            ? 5000
+            : undefined;
+      const deadlineAt = budget === undefined ? undefined : inspectionBudget.now() + budget;
+      const remaining = () => {
+        if (deadlineAt === undefined) {
+          return undefined;
+        }
+        const value = deadlineAt - inspectionBudget.now();
+        if (value <= 0) {
+          throw new Error("Definition inspection deadline expired.");
+        }
+        return value;
+      };
+      for (const name of names) {
+        try {
+          await assertNoSystemSystemdOwnership(
+            name,
+            remaining(),
+            ...(options?.requireLoaded ? [{ requireLoaded: true }] : []),
+          );
+        } catch (error) {
+          const owned =
+            isSystemSystemdOwnershipError(error) && error.ownership.status !== "unverifiable";
+          if (owned) {
+            return { kind: "sealed", reason: "system-owned" };
+          }
+          const unverified = { kind: "unknown", reason: "system-ownership-unverified" } as const;
+          // A loaded user unit whose artifacts this account owns is the manager in
+          // charge; an unreachable system manager cannot make it a competing owner.
+          if (!options?.requireLoaded || !isSystemSystemdOwnershipError(error)) {
+            return unverified;
+          }
+          const loaded = await inspect(env, environment, {
+            ...readOptions,
+            timeoutMs: remaining(),
+            requireLoaded: true,
+          }).then(
+            (inspection) => inspection.capability,
+            () => undefined,
+          );
+          return loaded?.kind === "writable" ? loaded : unverified;
+        }
       }
-      const loaded = await inspect(env, environment, {
-        ...readOptions,
-        timeoutMs: remaining(),
-        requireLoaded: true,
-      }).then(
-        (inspection) => inspection.capability,
-        () => undefined,
-      );
-      return loaded?.kind === "writable" ? loaded : unverified;
-    }
-  }
-  try {
-    return (await inspect(env, environment, { ...readOptions, timeoutMs: remaining() })).capability;
-  } catch {
-    return { kind: "unknown", reason: "inspection-failed" };
-  }
+      try {
+        return (await inspect(env, environment, { ...readOptions, timeoutMs: remaining() }))
+          .capability;
+      } catch {
+        return { kind: "unknown", reason: "inspection-failed" };
+      }
+    },
+  );
 }
 
 export async function withSystemdDefinitionMutation<T>(

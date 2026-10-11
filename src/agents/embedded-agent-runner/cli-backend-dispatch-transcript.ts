@@ -1,5 +1,9 @@
 import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { appendTranscriptMessage } from "../../config/sessions/session-accessor.js";
+import {
+  captureIncognitoSessionOperation,
+  withIncognitoSessionBinding,
+} from "../../config/sessions/session-incognito-binding.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ToolResultMessage } from "../../llm/types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -52,14 +56,25 @@ export function createCliDispatchTranscriptRecorder(params: {
     expectedLifecycleRevision: params.expectedLifecycleRevision,
     expectedWriterRunId: params.expectedWriterRunId,
   };
+  const incognito = captureIncognitoSessionOperation(scope);
+  if (incognito) {
+    scope.agentId = incognito.actor.agentId;
+    scope.storePath = incognito.actor.path;
+  }
 
   const enqueue = (build: () => AgentMessage) => {
     tail = tail.then(async () => {
-      await appendTranscriptMessage(scope, {
-        message: build(),
-        config: params.config,
-        cwd: params.cwd,
-      });
+      const append = () =>
+        appendTranscriptMessage(scope, {
+          message: build(),
+          config: params.config,
+          cwd: params.cwd,
+        });
+      // Events accepted into this FIFO settle even when the run is stopped.
+      // Keep their original actor; event callbacks need not retain its ambient scope.
+      await (incognito
+        ? withIncognitoSessionBinding({ actor: incognito.actor }, append)
+        : append());
     });
     // Transcript mirroring is best-effort; a failed append must not fail the
     // run or poison later appends in the chain.

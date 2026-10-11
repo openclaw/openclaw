@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { matchesGlob } from "node:path";
 import { isPlainRepoRelativePath } from "../../test/vitest/vitest.include-patterns.ts";
+import { resolveUiTypeScriptPath } from "../../test/vitest/vitest.ui-paths.mjs";
 import { isTestFileTarget } from "./changed-path-facts.mjs";
 import { UI_E2E_OWNER_WATCHES } from "./ci-ui-e2e-owner-inventory.mts";
 
@@ -29,7 +30,7 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
   },
   // Browser-served route owners are not imports of the Playwright entry point.
   ...UI_E2E_OWNER_WATCHES.map(({ testFile, watchGlobs }): PolicyTestWatch => ({
-    testFile,
+    testFile: resolveUiTypeScriptPath(testFile),
     watchGlobs,
     sourceOnly: true,
   })),
@@ -101,7 +102,7 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
   ].map((testFile): PolicyTestWatch => ({
     testFile,
     watchGlobs: [
-      "src/gateway/worker-environments/placement-dispatch-store.worker.ts",
+      "src/gateway/worker-environments/placement-lifecycle.worker.ts",
       "src/gateway/worker-environments/placement-turn-claims.worker.ts",
     ],
   })),
@@ -292,6 +293,7 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
   },
   ...[
     "src/agents/embedded-agent-runner/run/attempt-prompt-submit.test.ts",
+    "src/agents/embedded-agent-runner/run/attempt-prompt-submit.runtime-replay.test.ts",
     "src/agents/embedded-agent-runner/run/attempt-stream-custody.test.ts",
     "src/agents/embedded-agent-runner/run/attempt-transcript-lifecycle-prepare.test.ts",
     "src/agents/embedded-agent-runner/run/attempt.spawn-workspace.context-engine.test.ts",
@@ -927,7 +929,6 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     ],
   },
   ...[
-    "src/gateway/talk/client-spoken-confirmation.test.ts",
     "src/gateway/talk/handlers/client-native-control.test.ts",
     "src/gateway/talk/handlers/native-consult-target.test.ts",
     "src/gateway/talk/handlers/target.test.ts",

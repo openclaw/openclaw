@@ -247,8 +247,10 @@ registry, so a retained plugin sees replacement providers after a reload.
 Use it when installing timers, watchers, and listeners, and again when delivering
 each background callback. Keep the runner with the resource that owns it; an old
 manager must not look up a replacement plugin instance. Return asynchronous work
-from the callback so the instance can drain it. Its completion remains independent
-of disposal cleanup, so resource cleanup can safely await it. New calls reject after admission
+from the callback so the instance retains it until it settles. Disposal does not
+wait for this work before running `onDispose`, so cleanup can stop the work and
+safely await it; module teardown still waits for it to settle, and work that
+outlives the cleanup budget is force-retired like other calls. New calls reject after admission
 closes; already admitted host cleanup retains its teardown authority. The runner
 does not schedule work or cancel native resources: release those in the existing
 cleanup owner. Like the other instance lifecycle fields, it can be absent on an
@@ -323,6 +325,15 @@ before asynchronous preparation and release it after publication cleanup. The
 private `sqlite-runtime` facade exposes that existing owner and its recorded
 native identity; each worker command keeps its own FIFO turn and live authority
 checks. Native maintenance and private shadow stores keep their existing owners.
+
+`readSqliteDatabaseWriteTokenForPath` from `openclaw/plugin-sdk/sqlite-runtime`
+reads the existing physical database identity and in-process writer receipt without
+issuing SQL or a worker request. Retained row caches may reuse results only when
+the token is defined and unchanged before and after reading. An undefined token
+means cache reuse is unproven, including while a write is unsettled; it does not
+deny an ordinary read or grant effect authority. A changed token invalidates every
+derived cache that depends on that database, including caches in sibling plugin
+instances. The helper does not observe writes by other processes.
 
 First-party runtime callers can use `withOpenClawAgentDatabaseRuntime` from the
 same subpath to admit cold agent storage in its existing executor before

@@ -271,7 +271,6 @@ export function renderSidebarCatalogViewMenuForController(controller: SidebarMen
   if (!position) {
     return nothing;
   }
-  const trigger = controller.catalogViewMenuTrigger;
   const ownerFilter = {
     owners: host.sessionOwnershipVisibility.filters ? host.sessionOwnerOptions : [],
     ownerFilterId: host.sessionOwnerFilterActive ? host.sessionOwnerFilterId : null,
@@ -310,12 +309,7 @@ export function renderSidebarCatalogViewMenuForController(controller: SidebarMen
           controller.closePositionedMenu("catalogView");
         }
       },
-      onTabAway: () => trigger?.focus(),
-      onClose: (restoreFocus) => {
-        if (controller.catalogViewMenuPosition === position) {
-          controller.closePositionedMenu("catalogView", { restoreFocus });
-        }
-      },
+      ...controller.positionedMenuHandlers("catalogView"),
       content: html`
         ${
           ownerFilter.compact && controller.filterMenuView === "specific-owner"
@@ -383,7 +377,7 @@ export function renderSidebarSessionSortMenuForController(controller: SidebarMen
       value,
       options: options.map((option) => ({ ...option, title: option.label })),
       ariaLabel: label,
-      className: "sidebar-session-menu-segmented",
+      class: "sidebar-session-menu-segmented",
       onChange,
     })}
   </div>`;
@@ -411,11 +405,7 @@ export function renderSidebarSessionSortMenuForController(controller: SidebarMen
       class="sidebar-session-sort-menu"
       .anchor=${controller.sessionSortMenuTrigger}
       .label=${t("chat.sidebar.sortSessions")}
-      .onClose=${(restoreFocus: boolean) => {
-        if (controller.sessionSortMenuPosition === position) {
-          controller.closePositionedMenu("sessionSort", { restoreFocus });
-        }
-      }}
+      .onClose=${controller.positionedMenuHandlers("sessionSort").onClose}
       .content=${html`
         <section
           class="sidebar-session-menu-section"
@@ -433,7 +423,7 @@ export function renderSidebarSessionSortMenuForController(controller: SidebarMen
                       (event.currentTarget as HTMLElement)
                         .closest(".sidebar-session-filter-panel")
                         ?.querySelector<HTMLElement>(
-                          '#sidebar-sessions-status wa-radio[value="active"]',
+                          '#sidebar-sessions-status input[type="radio"][value="active"]',
                         )
                         ?.focus();
                       host.setSessionOwnerFilter(null);
@@ -501,14 +491,7 @@ export function renderSidebarSessionSortMenuForController(controller: SidebarMen
             host.sessionsStatusFilter,
             SIDEBAR_SESSION_STATUS_OPTIONS.map((value) => ({
               value,
-              label:
-                value === "active"
-                  ? t("common.active")
-                  : value === "snoozed"
-                    ? t("sessionsView.snoozed")
-                    : value === "archived"
-                      ? t("sessionsView.archived")
-                      : t("sessionsView.all"),
+              label: value === "active" ? t("common.active") : t(`sessionsView.${value}`),
             })),
             (statusFilter) => host.sessionOrganizer.setSessionsStatusFilter(statusFilter),
           )}

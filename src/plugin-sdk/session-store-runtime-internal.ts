@@ -1,9 +1,5 @@
-import { MAIN_SESSION_RECOVERY_CLEAR_PATCH } from "../agents/main-session-recovery/main-session-recovery-clear.js";
 import type { SessionAccessScope } from "../config/sessions/session-accessor.js";
-import {
-  projectPublicSessionEntry,
-  SESSION_ENTRY_PRIVATE_CLEAR_PATCH,
-} from "../config/sessions/session-entry-projection.js";
+import { projectPublicSessionEntry } from "../config/sessions/session-entry-projection.js";
 import {
   readSessionEntryByIdReadOnlyInWorker,
   readSessionEntryReadOnlyInWorker,
@@ -75,61 +71,3 @@ export function projectPluginSessionEntry(entry: InternalSessionEntry): SessionE
 }
 
 export { projectPublicSessionEntryPatch as projectPluginSessionEntryPatch } from "../config/sessions/session-entry-projection.js";
-
-export function generationValidPrivateFieldsForSameSession(
-  existingEntry: InternalSessionEntry | undefined,
-  nextSessionId: string | undefined,
-  nextLifecycleRevision: string | undefined,
-): Partial<InternalSessionEntry> | undefined {
-  if (
-    !existingEntry ||
-    existingEntry.sessionId !== nextSessionId ||
-    existingEntry.lifecycleRevision !== nextLifecycleRevision
-  ) {
-    return undefined;
-  }
-  const state: Partial<InternalSessionEntry> = {
-    ...(existingEntry.cliHistoryBoundary
-      ? { cliHistoryBoundary: existingEntry.cliHistoryBoundary }
-      : {}),
-    ...(existingEntry.activeWriterRunId !== undefined
-      ? { activeWriterRunId: existingEntry.activeWriterRunId }
-      : {}),
-    ...(existingEntry.lifecycleRunId !== undefined
-      ? { lifecycleRunId: existingEntry.lifecycleRunId }
-      : {}),
-    ...(existingEntry.pendingProjectGitUrl !== undefined
-      ? { pendingProjectGitUrl: existingEntry.pendingProjectGitUrl }
-      : {}),
-    ...(existingEntry.transcriptByteCompactionLatch
-      ? { transcriptByteCompactionLatch: existingEntry.transcriptByteCompactionLatch }
-      : {}),
-    ...(existingEntry.sessionDiffBaselineCapture
-      ? { sessionDiffBaselineCapture: existingEntry.sessionDiffBaselineCapture }
-      : {}),
-    ...(existingEntry.mainRestartRecovery
-      ? {
-          abortedLastRun: existingEntry.abortedLastRun,
-          restartRecoveryRuns: existingEntry.restartRecoveryRuns,
-          mainRestartRecovery: existingEntry.mainRestartRecovery,
-        }
-      : {}),
-  };
-  return Object.keys(state).length > 0 ? state : undefined;
-}
-
-export function clearGenerationPrivateFieldsForRotatedSessionPatch(
-  existingEntry: InternalSessionEntry,
-  publicPatch: Partial<SessionEntry>,
-): Partial<InternalSessionEntry> {
-  return (Object.hasOwn(publicPatch, "sessionId") &&
-    publicPatch.sessionId !== existingEntry.sessionId) ||
-    (Object.hasOwn(publicPatch, "lifecycleRevision") &&
-      publicPatch.lifecycleRevision !== existingEntry.lifecycleRevision)
-    ? {
-        ...publicPatch,
-        ...SESSION_ENTRY_PRIVATE_CLEAR_PATCH,
-        ...MAIN_SESSION_RECOVERY_CLEAR_PATCH,
-      }
-    : publicPatch;
-}

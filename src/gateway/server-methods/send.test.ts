@@ -34,6 +34,7 @@ import { DEDUPE_MAX, DEDUPE_TTL_MS } from "../server-constants.js";
 import { startGatewayMaintenanceTimers } from "../server-maintenance.js";
 import { createGatewayMaintenanceStateForTest } from "../test-helpers.maintenance-state.js";
 import { registerSendDeliveryAttemptTests } from "./send.delivery-attempt.test-support.js";
+import { registerSendSessionRoutingTests } from "./send.session-routing.test-support.js";
 import {
   agentRuntimeClientForTests as agentRuntimeClient,
   createTelegramSourceSendRequest,
@@ -70,7 +71,7 @@ const mocks = vi.hoisted(() => ({
   cancelRestartRecoveryTerminalDelivery: vi.fn(async () => "cleared" as const),
   completeRestartRecoveryTerminalDelivery: vi.fn(async () => "recorded" as const),
   recordSessionMetaFromInbound: vi.fn(async () => ({ ok: true })),
-  resolveOutboundTarget: vi.fn<ResolveOutboundTarget>(() => ({ ok: true, to: "resolved" })),
+  resolveOutboundTarget: vi.fn<ResolveOutboundTarget>(async () => ({ ok: true, to: "resolved" })),
   resolveOutboundSessionRoute: vi.fn(),
   ensureOutboundSessionEntry: vi.fn(async () => undefined),
   resolveMessageChannelSelection: vi.fn(),
@@ -315,7 +316,7 @@ describe("gateway send mirroring", () => {
       canonicalKey: sessionKey,
       entry: undefined,
     }));
-    mocks.resolveOutboundTarget.mockReturnValue({ ok: true, to: "resolved" });
+    mocks.resolveOutboundTarget.mockResolvedValue({ ok: true, to: "resolved" });
     mocks.resolveOutboundSessionRoute.mockImplementation(
       async ({ agentId, channel }: { agentId?: string; channel?: string }) => ({
         sessionKey:
@@ -1313,68 +1314,15 @@ describe("gateway send mirroring", () => {
     expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();
   });
 
-  it("updates mirror session keys and delivery thread ids when Slack routing derives a thread", async () => {
-    registerMessageThreadAddressingPlugin("slack");
-    mockDeliverySuccess("m-thread-derived");
-    mocks.getChannelPlugin.mockReturnValueOnce(undefined);
-    mocks.resolveOutboundSessionRoute.mockResolvedValueOnce({
-      sessionKey: "agent:main:slack:channel:c1:thread:1710000000.9999",
-      baseSessionKey: "agent:main:slack:channel:c1",
-      peer: { kind: "channel", id: "c1" },
-      chatType: "channel",
-      from: "slack:channel:C1",
-      to: "channel:C1",
-      threadId: "1710000000.9999",
-    });
-
-    await runSend({
-      to: "channel:C1",
-      message: "threaded",
-      channel: "slack",
-      sessionKey: "agent:main:slack:channel:c1",
-      idempotencyKey: "idem-thread-derived",
-    });
-
-    expect(ensureSessionEntryCall()?.route?.sessionKey).toBe(
-      "agent:main:slack:channel:c1:thread:1710000000.9999",
-    );
-    expect(ensureSessionEntryCall()?.route?.baseSessionKey).toBe("agent:main:slack:channel:c1");
-    expect(ensureSessionEntryCall()?.route?.threadId).toBe("1710000000.9999");
-    expect(deliveryCall()?.threadId).toBe("1710000000.9999");
-    expect(deliveryCall()?.mirror?.sessionKey).toBe(
-      "agent:main:slack:channel:c1:thread:1710000000.9999",
-    );
-  });
-
-  it("preserves the provided session when Slack derives a thread for a different base session", async () => {
-    registerMessageThreadAddressingPlugin("slack");
-    mockDeliverySuccess("m-thread-mismatch");
-    mocks.resolveOutboundSessionRoute.mockResolvedValueOnce({
-      sessionKey: "agent:main:slack:channel:c2:thread:1710000000.9999",
-      baseSessionKey: "agent:main:slack:channel:c2",
-      peer: { kind: "channel", id: "c2" },
-      chatType: "channel",
-      from: "slack:channel:C2",
-      to: "channel:C2",
-      threadId: "1710000000.9999",
-    });
-
-    await runSend({
-      to: "channel:C2",
-      message: "threaded",
-      channel: "slack",
-      sessionKey: "agent:main:slack:channel:c1",
-      threadId: "1710000000.9999",
-      idempotencyKey: "idem-thread-mismatch",
-    });
-
-    expect(deliveryCall()?.threadId).toBe("1710000000.9999");
-    expect(deliveryCall()?.session?.key).toBe("agent:main:slack:channel:c1");
-    expect(deliveryCall()?.mirror?.sessionKey).toBe("agent:main:slack:channel:c1");
+  registerSendSessionRoutingTests({
+    mocks,
+    runSend,
+    mockDeliverySuccess,
+    registerMessageThreadAddressingPlugin,
   });
 
   it("returns invalid request when outbound target resolution fails", async () => {
-    mocks.resolveOutboundTarget.mockReturnValue({
+    mocks.resolveOutboundTarget.mockResolvedValue({
       ok: false,
       error: new Error("target not found"),
     });
@@ -1887,9 +1835,9 @@ describe("gateway send mirroring", () => {
         `send-test-canonical-${registrySeq}`,
       );
       mocks.resolveMessageChannelSelection.mockResolvedValue({ channel: "twitch", plugin });
-      mocks.resolveOutboundTarget.mockImplementation((target) =>
+      mocks.resolveOutboundTarget.mockImplementation(async (target) =>
         expectDefined(
-          resolveOutboundTargetWithPlugin({ plugin, target }),
+          await resolveOutboundTargetWithPlugin({ plugin, target }),
           "registered plugin resolves outbound targets",
         ),
       );

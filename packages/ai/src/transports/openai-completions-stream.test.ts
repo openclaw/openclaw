@@ -17,6 +17,74 @@ function collectVisibleText(output: OpenAICompletionsOutput): string {
 }
 
 describe("openai completions stream", () => {
+  it.each([false, true])(
+    "publishes cumulative tool input before execution (direct=%s)",
+    async (direct) => {
+      const model = makeCompletionsModel();
+      const output = createAssistantOutput(model);
+      const snapshots: unknown[] = [];
+      await processCompletionsStream(
+        streamChunks([
+          makeCompletionsChunk({
+            tool_calls: [
+              {
+                index: 0,
+                id: "write-progress",
+                type: "function",
+                function: { name: "write", arguments: '{"content":"first' },
+              },
+            ],
+          }),
+          makeCompletionsChunk({
+            tool_calls: [
+              {
+                index: 1,
+                id: "edit-progress",
+                type: "function",
+                function: { name: "edit", arguments: '{"newText":"second' },
+              },
+            ],
+          }),
+          makeCompletionsChunk({ tool_calls: [{ index: 0, function: { arguments: ' line"}' } }] }),
+          makeCompletionsChunk({ tool_calls: [{ index: 1, function: { arguments: ' line"}' } }] }),
+          makeCompletionsChunk({}, "tool_calls"),
+        ]),
+        output,
+        model,
+        {
+          push: (event) => {
+            if (event.type === "toolcall_delta") {
+              snapshots.push(structuredClone(event.partial.content[event.contentIndex]));
+            }
+          },
+        },
+        direct
+          ? { mode: "direct", beforeContentBlock() {}, provisionalCommentaryTags: new Map() }
+          : undefined,
+      );
+      expect(snapshots).toEqual([
+        expect.objectContaining({ id: "write-progress", partialJson: '{"content":"first' }),
+        expect.objectContaining({ id: "edit-progress", partialJson: '{"newText":"second' }),
+        expect.objectContaining({ id: "write-progress", partialJson: '{"content":"first line"}' }),
+        expect.objectContaining({ id: "edit-progress", partialJson: '{"newText":"second line"}' }),
+      ]);
+      expect(output.content).toEqual([
+        {
+          type: "toolCall",
+          id: "write-progress",
+          name: "write",
+          arguments: { content: "first line" },
+        },
+        {
+          type: "toolCall",
+          id: "edit-progress",
+          name: "edit",
+          arguments: { newText: "second line" },
+        },
+      ]);
+    },
+  );
+
   it.each([
     ["length", ["<thi", "nk>unfinished reasoning"], ""],
     ["length", ["Answer. ", "<reasoning>unfinished\n\nreasoning"], "Answer. "],

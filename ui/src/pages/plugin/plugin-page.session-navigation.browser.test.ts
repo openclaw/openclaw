@@ -70,6 +70,7 @@ async function mount(
     terminalEnabled: false,
     uploadsEnabled: true,
     pluginAssetsRequireAuth: true,
+    pluginControlUiModules: [],
     pluginFrameGrants: [
       { pluginId: descriptor.pluginId, path: "/plugins/example", match: "prefix" },
     ],

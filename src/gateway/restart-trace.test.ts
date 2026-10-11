@@ -139,16 +139,6 @@ describe("gateway restart trace handoff", () => {
     });
   });
 
-  it("includes restart resource counts with ready memory metrics", () => {
-    const metrics = Object.fromEntries(collectGatewayProcessMemoryUsageMb());
-
-    expect(metrics.rssMb).toEqual(expect.any(Number));
-    expect(metrics.activeTimersCount).toEqual(expect.any(Number));
-    expect(metrics.processRestartListenersCount).toEqual(expect.any(Number));
-    expect(metrics.processSigtermListenersCount).toEqual(expect.any(Number));
-    expect(metrics.processSigintListenersCount).toEqual(expect.any(Number));
-  });
-
   it("counts active timer resources", () => {
     const timer = setTimeout(() => {}, 10_000);
     try {

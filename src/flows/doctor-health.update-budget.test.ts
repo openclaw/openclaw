@@ -108,6 +108,76 @@ it.each(["rehearsal", "partial-markers"])(
   },
 );
 
+it.each([true, false])(
+  "defers lint-backed advisory inspections from an updater that runs them after restart (budget=%s)",
+  async (hasBudget) => {
+    const deferredIds = new Set([
+      "doctor:runtime-tool-schemas",
+      "doctor:provider-catalog-projection",
+      "doctor:hooks-model",
+    ]);
+    const retainedIds = new Set([
+      "doctor:session-snapshots",
+      "doctor:workspace-status",
+      // Readiness lint gates on its security check; it stays before restart.
+      "doctor:security",
+      // No lint check can reproduce this after restart.
+      "doctor:channel-ingress-dead-letters",
+      "doctor:auth-profiles",
+      "doctor:structured-health-repairs",
+      "doctor:session-transcripts",
+      "doctor:write-config",
+      "doctor:final-config-validation",
+    ]);
+    const contributions = resolveDoctorHealthContributions().filter(
+      (entry) => deferredIds.has(entry.id) || retainedIds.has(entry.id),
+    );
+    expect(contributions).toHaveLength(deferredIds.size + retainedIds.size);
+    const executed: string[] = [];
+    for (const contribution of contributions) {
+      vi.spyOn(contribution, "run").mockImplementation(async () => {
+        executed.push(contribution.id);
+      });
+    }
+    const updateBudget = () => ({
+      agentCount: 1,
+      phase: "activation" as const,
+      inspectionDeadlineMs: Date.now() + 149_000,
+      source: "activation-policy" as const,
+      deferred: new Map(),
+    });
+    const updateEnv = {
+      OPENCLAW_UPDATE_IN_PROGRESS: "1",
+      OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_SERVICE_REPAIR: "0",
+      OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION: "0",
+    };
+    const ctx = createDoctorHealthFlowContext({
+      env: { ...updateEnv, OPENCLAW_UPDATE_PARENT_RUNS_POST_ACTIVATION_INSPECTIONS: "1" },
+      updateBudget: hasBudget ? updateBudget() : undefined,
+    });
+    await runDoctorHealthContributionList(ctx, contributions);
+
+    expect(new Set(executed)).toEqual(retainedIds);
+    expect(ctx.updateWarnings ?? []).toEqual([]);
+    expect(ctx.runtime.log).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "Deferred advisory inspections until the restarted Gateway is ready: doctor:hooks-model, doctor:provider-catalog-projection, doctor:runtime-tool-schemas.",
+      ),
+    );
+
+    // A shipped updater never runs them after restart, so its Doctor keeps them.
+    executed.length = 0;
+    await runDoctorHealthContributionList(
+      createDoctorHealthFlowContext({
+        env: updateEnv,
+        updateBudget: hasBudget ? updateBudget() : undefined,
+      }),
+      contributions,
+    );
+    expect(new Set(executed)).toEqual(new Set([...retainedIds, ...deferredIds]));
+  },
+);
+
 it.each([
   { agentCount: 480, phase: "validation" },
   { agentCount: 3, phase: "activation" },

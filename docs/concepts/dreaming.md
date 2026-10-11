@@ -13,6 +13,7 @@ Dreaming is the background memory consolidation system in `memory-core`. It move
 <Note>
 Dreaming is enabled by default. Set
 `plugins.entries.memory-core.config.dreaming.enabled: false` to disable it.
+Disabled dreaming does not inspect heartbeat system-event queues.
 </Note>
 
 When the cron scheduler is disabled (`cron.enabled: false` or
@@ -20,7 +21,10 @@ When the cron scheduler is disabled (`cron.enabled: false` or
 preserving existing jobs. Startup cleanup of historical dreaming artifacts waits
 for each agent's pending database preparation before running, including managed
 background cleanup after a restart or upgrade. Database preparation failures are
-reported with repair guidance. Explicitly disabling dreaming removes jobs carrying
+reported with repair guidance. If an agent database is still absent after preparation,
+cleanup completes without creating it; concurrent first creation is not a cleanup failure.
+Existing databases remain protected against replacement during cleanup.
+Explicitly disabling dreaming removes jobs carrying
 its canonical declaration key in the active cron store.
 
 ## What dreaming writes
@@ -122,7 +126,7 @@ memory framing in the Generative Agents research.
 
 ## Dream Diary
 
-Dreaming keeps a narrative **Dream Diary** in `DREAMS.md`. After each phase has enough material, `memory-core` runs a tool-free background completion and appends a short diary entry, using the workspace agent's default model unless `dreaming.model` is configured. If the configured model is unavailable, the diary run retries once with that agent's default model. Trust or allowlist failures are not retried.
+Dreaming keeps a narrative **Dream Diary** in `DREAMS.md`. Each sweep with useful material combines its Light, REM, and successfully promoted Deep inputs into one short diary entry, including when nothing qualifies for durable promotion. The tool-free background completion uses the workspace agent's default model unless `dreaming.model` is configured. If the configured model is unavailable, the diary run retries once with that agent's default model. Trust or allowlist failures are not retried.
 
 Diary and consolidation completions use fresh contexts without retaining conversation sessions or delivering chat replies. Failed or empty diary generation writes a local fallback entry and reports a degraded outcome, so missing model output leaves a visible trace.
 
