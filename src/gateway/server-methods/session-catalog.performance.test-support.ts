@@ -373,6 +373,7 @@ export async function createComposedCatalogFixture(
       }
     };
     const setupMaintenance = { completed: 0 };
+    let initialMaintenance: Promise<void> | undefined;
     return {
       api,
       projection,
@@ -383,7 +384,8 @@ export async function createComposedCatalogFixture(
       setupList,
       setupMaintenance,
       async continueSession(hostId: string, threadId: string, sourceHomeId?: string) {
-        const completed = observeSessionMaintenanceCompletion(databasePath, {
+        // The first adoption warms maintenance; later writes reuse its acknowledged age facts.
+        initialMaintenance ??= observeSessionMaintenanceCompletion(databasePath, {
           automatic: true,
         }).then(() => {
           setupMaintenance.completed++;
@@ -396,7 +398,7 @@ export async function createComposedCatalogFixture(
             threadId,
             sourceHomeId,
           }),
-          completed,
+          initialMaintenance,
         ]);
         await nextTurn();
         return result;

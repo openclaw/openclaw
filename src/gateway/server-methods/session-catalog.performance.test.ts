@@ -140,7 +140,7 @@ it("measures 100 composed catalog lists against real session and plugin stores",
           await fixture.projection.ensureMaterialized();
         } while (fixture.projection.needsMaterialization);
         const cpuReferenceP50Ms = measureHostCpuReference();
-        expect(fixture.setupMaintenance).toEqual({ completed: 3 });
+        expect(fixture.setupMaintenance).toEqual({ completed: 1 });
         counters.begin();
         const durations: number[] = [];
         const workPerList = [];
@@ -180,7 +180,7 @@ it("measures 100 composed catalog lists against real session and plugin stores",
         durations.sort((a, b) => a - b);
 
         const inspector = new InspectorSession();
-        expect(fixture.setupMaintenance).toEqual({ completed: 3 });
+        expect(fixture.setupMaintenance).toEqual({ completed: 1 });
         inspector.connect();
         let sampledAllocationBytes: number;
         let cpuSamples: ReturnType<typeof observedCpuSamples>;
