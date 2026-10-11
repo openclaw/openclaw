@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
+import { warnPluginSdkDeprecation } from "../../plugins/sdk-deprecation.js";
 import { sessionChanges, type SessionRowChange } from "../../sessions/session-row-changes.js";
 import { executeExistingOpenClawStateRead } from "../../state/openclaw-state-db-readonly.js";
 import {
@@ -104,7 +105,16 @@ export function createWorkerSessionPlacementStore(
   const store = {
     ...createPlacementReadStore({ path, withWorkspaceResultConflict }),
     ...createPlacementWorkspaceReservationOps(runtime),
-    clearLocalTurnClaimsAfterRestart,
+    /** @deprecated Await clearLocalTurnClaimsAfterRestartAsync; removed in the next Plugin SDK major. */
+    clearLocalTurnClaimsAfterRestart(): number {
+      warnPluginSdkDeprecation({
+        family: "worker-placement-sync-writers",
+        method: "clearLocalTurnClaimsAfterRestart",
+        replacement: "clearLocalTurnClaimsAfterRestartAsync",
+        compatibility: "Synchronous calls retain their return values and commit before returning.",
+      });
+      return clearLocalTurnClaimsAfterRestart();
+    },
     waitForTurnClaimRelease,
     validateTurnClaim,
     ...createPlacementSessionToolOperationOps({
@@ -319,8 +329,14 @@ export function createWorkerSessionPlacementStore(
       return records;
     },
 
-    /** @deprecated Await retireSessionPlacementAsync; retained through the next Plugin SDK major. */
+    /** @deprecated Await retireSessionPlacementAsync; removed in the next Plugin SDK major. */
     retireSessionPlacement(input: WorkerSessionPlacementRetirement): void {
+      warnPluginSdkDeprecation({
+        family: "worker-placement-sync-writers",
+        method: "retireSessionPlacement",
+        replacement: "retireSessionPlacementAsync",
+        compatibility: "Synchronous calls retain their return values and commit before returning.",
+      });
       write((db) => retireWorkerSessionPlacement(db, input));
       workspaceResultConflicts.delete(required(input.sessionId, "session id"));
     },

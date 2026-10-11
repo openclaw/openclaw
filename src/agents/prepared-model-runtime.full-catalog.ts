@@ -51,7 +51,6 @@ import type {
   PreparedModelRuntimeCatalogMode,
   PreparedModelRuntimePluginGeneration,
   PreparedModelRuntimeSnapshot,
-  PreparedModelRuntimeStores,
 } from "./prepared-model-runtime.types.js";
 import { AuthStorage } from "./sessions/auth-storage.js";
 
@@ -280,14 +279,13 @@ export function filterPreparedProviderCatalog(
   catalog: ModelCatalogSnapshot,
   includesProvider: (provider: string) => boolean,
 ): ModelCatalogSnapshot {
+  const includes = (entry: { provider: string }) => includesProvider(entry.provider);
   return {
     ...catalog,
-    entries: catalog.entries.filter((entry) => includesProvider(entry.provider)),
-    routeVariants: catalog.routeVariants.filter((entry) => includesProvider(entry.provider)),
-    staticEntries: catalog.staticEntries?.filter((entry) => includesProvider(entry.provider)),
-    providerOutcomes: catalog.providerOutcomes?.filter((outcome) =>
-      includesProvider(outcome.provider),
-    ),
+    entries: catalog.entries.filter(includes),
+    routeVariants: catalog.routeVariants.filter(includes),
+    staticEntries: catalog.staticEntries?.filter(includes),
+    providerOutcomes: catalog.providerOutcomes?.filter(includes),
     nativeProviderOutcomes: filterNativeModelCatalogScopes(
       catalog.nativeProviderOutcomes,
       includesProvider,
@@ -658,12 +656,6 @@ export function createPreparedModelRuntimeSnapshot(
     metadataSnapshot: pluginMetadataSnapshot,
     pluginRegistry,
   });
-  const createStores = (): PreparedModelRuntimeStores => {
-    // Runtime API keys and session extensions mutate these objects. Fork them per run while the
-    // credential map and parsed catalog remain owned by the lifecycle snapshot.
-    const authStorage = AuthStorage.inMemory(credentials);
-    return { authStorage, modelRegistry: templateModelRegistry.fork(authStorage) };
-  };
   const snapshot: PreparedModelRuntimeSnapshot = Object.freeze({
     catalogOwner,
     ...(input.agentId ? { agentId: input.agentId } : {}),
@@ -710,7 +702,11 @@ export function createPreparedModelRuntimeSnapshot(
       pluginMetadataSnapshot,
     ),
     inlineProviderModels,
-    createStores,
+    createStores: () => {
+      // Runtime keys and session extensions mutate per-run stores; parsed inputs stay shared.
+      const authStorage = AuthStorage.inMemory(credentials);
+      return { authStorage, modelRegistry: templateModelRegistry.fork(authStorage) };
+    },
     routeModelResolutionMemo: new Map<string, Promise<Model>>(),
   });
   bindPreparedModelRuntimeAuth(snapshot, {

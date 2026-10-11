@@ -3,7 +3,6 @@ import { assertAgentSessionStoreDeletionBlocker } from "../agents/agent-delete-s
 import { findAgentSessionStoreDeletionBlocker } from "../agents/agent-delete-session-store-safety.kernel.js";
 import { listAgentEntries, resolveAgentDir } from "../agents/agent-scope-config.js";
 import { resolveSessionTranscriptsDirForAgent } from "../config/sessions/paths.js";
-import { prepareCronReceiptAuthorityPublication } from "../cron/store/receipt-authority-publication.js";
 import { assertExistingDatabaseIdentity } from "../infra/sqlite-worker-identity.js";
 import {
   deferSqliteWorkerCommitReceipt,
@@ -134,7 +133,6 @@ export function mutateClawRemovalJournalInWorker(
       deferSqliteWorkerCommitReceipt(db, {
         nonce: input.nonce,
         journal,
-        receiptAuthority: prepareCronReceiptAuthorityPublication(db),
       });
       requestSqliteWorkerOperationAdmission({ stage: "commit", facts: { nonce: input.nonce } });
       assertLease();
