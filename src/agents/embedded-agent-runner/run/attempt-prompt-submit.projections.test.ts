@@ -62,12 +62,12 @@ describe("durable model prompt projection at provider dispatch", () => {
     { projection: "prepend/append hooks", steering: "midturn" },
     { projection: "modelPrompt replacement", steering: "midturn" },
     { projection: "prepend/append hooks", steering: "initial" },
-    { projection: "redacted prepend/append hooks", steering: "midturn" },
+    { projection: "prepend/append hooks with log patterns", steering: "midturn" },
   ] as const)(
     "preserves complete serialized prefixes across $steering continuation, another turn, and reopen: $projection",
     async ({ projection, steering }) => {
       await withOpenClawTestState({ label: "model-prompt-projection" }, async (state) => {
-        const redactHook = projection === "redacted prepend/append hooks";
+        const withLogPatterns = projection === "prepend/append hooks with log patterns";
         const withImage = projection === "unchanged prompt";
         const imagePath = path.join(state.workspaceDir, "prompt-image.png");
         const imageBuffer = createSolidPngBuffer(1, 1, { r: 12, g: 34, b: 56 });
@@ -79,7 +79,7 @@ describe("durable model prompt projection at provider dispatch", () => {
           sessionId,
           sessionKey: "agent:main:model-prompt-projection",
           storePath: path.join(state.agentDir("main"), "openclaw-agent.sqlite"),
-          ...(redactHook ? { config: { logging: { redactPatterns: ["hidden"] } } } : {}),
+          ...(withLogPatterns ? { config: { logging: { redactPatterns: ["hidden"] } } } : {}),
         };
         await upsertSessionEntryCore(target, { sessionId, updatedAt: 1 });
         const requests: ReturnType<typeof buildOpenAIResponsesParams>[] = [];
@@ -136,7 +136,7 @@ describe("durable model prompt projection at provider dispatch", () => {
             ? `original turn ${turn}`
             : projection === "modelPrompt replacement"
               ? `replacement for turn ${turn}`
-              : `hook before ${turn}${redactHook ? " ***" : ""}\n\noriginal turn ${turn}\n\nhook after ${turn}`;
+              : `hook before ${turn}${withLogPatterns ? " hidden" : ""}\n\noriginal turn ${turn}\n\nhook after ${turn}`;
         const submit = async (active: typeof first, turn: number) => {
           const transcriptPrompt = `original turn ${turn}`;
           const recorder = createUserTurnTranscriptRecorder({
@@ -190,7 +190,7 @@ describe("durable model prompt projection at provider dispatch", () => {
             prependContext:
               projection === "unchanged prompt"
                 ? undefined
-                : `hook before ${turn}${redactHook ? " hidden" : ""}`,
+                : `hook before ${turn}${withLogPatterns ? " hidden" : ""}`,
             appendContext: projection === "unchanged prompt" ? undefined : `hook after ${turn}`,
             getUserTranscriptContexts: active.getUserTranscriptContexts,
             withTranscriptWrite: (write) => withSessionManagerWrite(active.sessionManager, write),
@@ -308,9 +308,9 @@ describe("durable model prompt projection at provider dispatch", () => {
             },
           });
         }
-        if (redactHook) {
-          expect(JSON.stringify(requests)).not.toContain("hidden");
-          expect(JSON.stringify(users)).not.toContain("hidden");
+        if (withLogPatterns) {
+          expect(JSON.stringify(requests)).toContain("hidden");
+          expect(JSON.stringify(users)).toContain("hidden");
         }
       });
     },

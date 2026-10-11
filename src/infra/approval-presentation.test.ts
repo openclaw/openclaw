@@ -77,7 +77,7 @@ describe("buildApprovalPresentation", () => {
       host: "gate\\u{A}way\\u{202E}",
       nodeId: "node\\u{0}id",
     });
-    expect(JSON.stringify(presentation)).not.toContain(githubToken);
+    expect(presentation).toMatchObject({ agentId: githubToken });
     expect(
       buildExecPresentation({
         command: "printf safe",
@@ -109,8 +109,8 @@ describe("buildApprovalPresentation", () => {
     });
   });
 
-  it("redacts secret-like content before applying presentation length limits", () => {
-    const githubToken = `ghp_${"a".repeat(100)}`;
+  it("preserves secret-shaped content within presentation length limits", () => {
+    const githubToken = `ghp_${"a".repeat(48)}`;
     const openAiToken = "sk-abc123456789012345678";
     const presentation = buildPluginPresentation({
       title: githubToken,
@@ -120,13 +120,13 @@ describe("buildApprovalPresentation", () => {
       agentId: `operator-${githubToken}`,
     });
 
-    expect(presentation).not.toBeNull();
-    const serialized = JSON.stringify(presentation);
-    expect(serialized).not.toContain(githubToken);
-    expect(serialized).not.toContain(openAiToken);
     expect(presentation).toMatchObject({
       kind: "plugin",
-      description: expect.stringContaining("Token:\n"),
+      title: githubToken,
+      description: `Token:\n${openAiToken}`,
+      pluginId: githubToken,
+      toolName: openAiToken,
+      agentId: `operator-${githubToken}`,
     });
   });
 

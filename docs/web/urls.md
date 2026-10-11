@@ -273,9 +273,7 @@ and you are its creator or a Gateway admin. See
 
 Public access is separate from teammate visibility and editing permissions.
 The public reader does not open a Gateway WebSocket, subscribe to the session
-roster, send messages, invoke tools, or open private dashboards. It shows every user and assistant text message, including progress updates, with Markdown formatting and code-copy controls. Adjacent tool calls appear in collapsed steps with redacted tool names and short command, path, or query summaries; tool result text stays private. User, assistant, and tool-result images open at full size through a public media route bound to the same publication and transcript entry. Only size-capped PNG, JPEG, GIF, and WebP images are served after checking their bytes. Other attachments appear as filename chips without download links. Reasoning, executable widgets, internal metadata, and hidden messages are omitted. Credential-pattern redaction is best effort, not a
-guarantee that sensitive prose is detected. Review the conversation before
-publishing and remember that future messages become public too.
+roster, send messages, invoke tools, or open private dashboards. It shows every user and assistant text message, including progress updates, with Markdown formatting and code-copy controls. Adjacent tool calls appear in collapsed steps with tool names and short command, path, or query summaries; tool result text stays private. User, assistant, and tool-result images open at full size through a public media route bound to the same publication and transcript entry. Only size-capped PNG, JPEG, GIF, and WebP images are served after checking their bytes. Other attachments appear as filename chips without download links. Reasoning, executable widgets, internal metadata, and hidden messages are omitted. Included text is not secret-masked. Review the conversation for credentials and other sensitive content before publishing; future messages become public too.
 
 The latest public view checks for updates approximately every 15 seconds while
 visible. **Older messages** opens earlier pages without automatic refresh;

@@ -169,11 +169,11 @@ Use `isDeliveredMessagingToolSendToCurrentSource` for source-route comparisons a
 transcript owner's confirmation. Presentation middleware cannot establish new
 delivery facts.
 
-The same runtime entrypoint exports `sanitizeToolArgs` for diagnostic tool
-arguments and event payloads. It redacts nested fields without mutating the input
-and preserves own JSON keys, including `__proto__`; repeated references become
-`"[Circular]"`. Use `sanitizeToolResult` for result presentation, which also applies
-the shared result-size and image-storage rules.
+Pass tool arguments unchanged to execution and event consumers; the former
+`sanitizeToolArgs` export has been removed. Use `sanitizeToolResult` for result
+presentation and its shared size and image-storage rules. It does not mask
+secrets. Secret masking belongs at logging and diagnostic export boundaries;
+`logging.redactPatterns` does not apply to tool or transcript content.
 
 For successful `sessions_spawn` results, use `normalizeAcceptedSessionSpawnResult`
 from `openclaw/plugin-sdk/agent-harness-tool-runtime` and retain its

@@ -688,10 +688,9 @@ describe("appendSessionTranscriptNote", () => {
           { type: "message", id: secondId, parentId: firstId, message: { content: "Second note" } },
         ]);
         const stored = SessionManager.open(originalTarget).getEntry(firstId);
-        expect(stored).toMatchObject({ message: { content: expect.stringContaining("safe") } });
+        expect(stored).toMatchObject({ message: { content: originalNote.content } });
         expect(stored).toHaveProperty("message", firstResult.message);
         expect(beforeReplay.at(-1)).toHaveProperty("message", secondResult.message);
-        expect(JSON.stringify(stored)).not.toContain("CAPTURED_PRIVATE");
         expect(await loadTranscriptEvents(replacement)).toEqual(replacementBefore);
         await expect(fs.stat(state.path("later-state"))).rejects.toMatchObject({ code: "ENOENT" });
       } finally {
@@ -704,7 +703,7 @@ describe("appendSessionTranscriptNote", () => {
   });
 
   it.each(["registry", "pattern"] as const)(
-    "rolls back a static note when %s redaction changes before commit",
+    "preserves a static note when %s logging redaction changes before commit",
     async (policy) => {
       await withOpenClawTestState({ label: "static-note-redaction" }, async (state) => {
         const target = {
@@ -747,29 +746,16 @@ describe("appendSessionTranscriptNote", () => {
           admit(request, grant);
         });
         try {
-          const rejected = await appendSessionTranscriptNote(target, note).then(
-            () => {
-              throw new Error("Expected changed redaction to refuse the commit");
-            },
-            (error: unknown) => error,
-          );
-          expect(changed).toBe(1);
-          expect(rejected).toMatchObject({
-            message: "Transcript message redaction changed before persistence",
-          });
-          expect(isRecordedModelFallbackStop(rejected)).toBe(false);
-          expect(await loadTranscriptEvents(target)).toEqual(before);
-          spy.mockRestore();
           const result = await appendSessionTranscriptNote(target, note);
+          expect(changed).toBe(1);
           const after = await loadTranscriptEvents(target);
           expect(after.slice(0, before.length)).toEqual(before);
           expect(after).toHaveLength(before.length + 1);
           const stored = SessionManager.open(target).getEntry(result.messageId);
           expect(stored).toMatchObject({
             type: "message",
-            message: { content: expect.stringContaining("Visible") },
+            message: { content: note.content },
           });
-          expect(JSON.stringify(stored)).not.toContain(marker);
           expect(stored).toHaveProperty("message", result.message);
         } finally {
           spy.mockRestore();
