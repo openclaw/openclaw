@@ -63,6 +63,7 @@ import { registerSubagentRegistrationPersistenceTests } from "./subagent-registr
 import {
   activateSubagentRegistryWithRecoveryRuntime,
   registerRestoredRequesterWakeSettlementTests,
+  registerRestoredSessionReadTests,
   registerRestoredRollbackPublicationTest,
 } from "./subagent-registry.restored-settlement.test-support.js";
 import {
@@ -646,34 +647,7 @@ describe("subagent registry seam flow", () => {
     expect(mocks.restoreSubagentRunsFromDisk).toHaveBeenCalledTimes(2);
   });
 
-  it("routes restored waits for a newer session run", async () => {
-    const runId = "run-restored-orphan-routing";
-    const restored = createSubagentRunRecord({
-      runId,
-      execution: {
-        status: "running",
-        lifecycleGeneration: "retired-generation",
-      },
-    });
-    mocks.entries = {
-      "agent:main:subagent:child": createSessionEntry({
-        lifecycleRunId: "newer-run",
-        abortedLastRun: false,
-      }),
-    };
-    mockRestoredRuns(() => [restored]);
-    mockPendingAgentWait();
-
-    await hydrateAndActivateRegistry();
-
-    expect(mocks.callGateway).toHaveBeenCalledOnce();
-    expect(mocks.callGateway).toHaveBeenCalledWith(
-      expect.objectContaining({
-        method: "agent.wait",
-        params: expect.objectContaining({ runId }),
-      }),
-    );
-  });
+  registerRestoredSessionReadTests({ mocks, hydrateAndActivateRegistry, mockPendingAgentWait });
 
   it("does not double-run reentrant registry restore calls", async () => {
     let reentrantRestore: ReturnType<typeof mod.initSubagentRegistry> | undefined;
