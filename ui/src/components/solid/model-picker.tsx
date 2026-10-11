@@ -1,4 +1,3 @@
-import type { JSX as SolidJSX } from "@solidjs/web";
 import { createMemo } from "solid-js";
 import { providerDisplayLabel, renderProviderBrandIcon } from "../provider-icon.ts";
 import type { PickerOption, PickerParams, SelectPicker } from "../select-picker.ts";
@@ -17,7 +16,7 @@ type ModelSelectOption = ModelPickerOption & { description?: string };
 declare module "@solidjs/web" {
   namespace JSX {
     interface IntrinsicElements {
-      "openclaw-select-picker": SolidJSX.HTMLAttributes<SelectPicker> & {
+      "openclaw-select-picker": HTMLAttributes<SelectPicker> & {
         "prop:params": PickerParams<PickerOption>;
       };
     }
@@ -70,6 +69,7 @@ export function ModelPicker(props: ModelPickerParams) {
   const selectedIndex = () => options().findIndex((option) => option.value === props.value);
   const commitCustom = (event: Event) => {
     if ((event.type === "change") === (props.custom?.commit === "change")) {
+      // SAFETY: Both handlers are attached to the custom-model input below.
       props.onChange((event.currentTarget as HTMLInputElement).value);
     }
   };
@@ -131,7 +131,7 @@ export function ModelPicker(props: ModelPickerParams) {
           aria-invalid={props.custom.invalid ? "true" : "false"}
           aria-describedby={props.custom.describedBy}
           placeholder={props.custom.placeholder ?? ""}
-          prop:value={props.value}
+          value={props.value}
           hidden={selectedIndex() >= 0}
           disabled={props.disabled}
           onInput={commitCustom}

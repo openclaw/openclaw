@@ -22,25 +22,19 @@ export class ModelPageController implements ControllerHost {
   private settle: ((settled: boolean) => void) | undefined;
   updateComplete = Promise.resolve(true);
 
+  readonly querySelector: HTMLElement["querySelector"];
+  readonly querySelectorAll: HTMLElement["querySelectorAll"];
+
   constructor(
     readonly renderRoot: HTMLElement,
     private readonly notify: () => void,
-  ) {}
+  ) {
+    this.querySelector = renderRoot.querySelector.bind(renderRoot);
+    this.querySelectorAll = renderRoot.querySelectorAll.bind(renderRoot);
+  }
 
   get isConnected(): boolean {
     return this.connected;
-  }
-
-  querySelector<Key extends keyof HTMLElementTagNameMap>(
-    selector: Key,
-  ): HTMLElementTagNameMap[Key] | null;
-  querySelector<E extends Element = Element>(selector: string): E | null;
-  querySelector<E extends Element = Element>(selector: string): E | null {
-    return this.renderRoot.querySelector<E>(selector);
-  }
-
-  querySelectorAll<E extends Element = Element>(selector: string): NodeListOf<E> {
-    return this.renderRoot.querySelectorAll<E>(selector);
   }
 
   addController(controller: PageLifecycle): void {

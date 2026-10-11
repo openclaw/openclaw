@@ -11,7 +11,7 @@ import { t } from "../../i18n/index.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { readSessionDefaults } from "../../lib/sessions/session-key.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
-import { ModelProviderLoginController } from "../model-providers/login-controller.tsx";
+import { ModelProviderLoginController } from "../model-providers/login-controller.ts";
 import { ModelPageController } from "../model-providers/page-controller.ts";
 import {
   captureModelSetupConnection,
@@ -414,7 +414,7 @@ export class ModelSetupController extends ModelPageController {
   private async verifyConnection(modelTarget?: "utility") {
     const client = this.context.gateway.snapshot.client;
     if (!this.canVerify(client) || this.actionsDisabled() || this.state.detectionRequest) {
-      return;
+      return undefined;
     }
     this.setState("verifyState", { phase: "checking" });
     return this.runVerification([client, this.agentSelection.state.selectedId, modelTarget]);

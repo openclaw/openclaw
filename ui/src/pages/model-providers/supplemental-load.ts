@@ -1,5 +1,8 @@
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import { requestProviderUsage } from "../../lib/provider-usage-request.ts";
+import {
+  requestProviderUsage,
+  type ProviderUsageRequestResult,
+} from "../../lib/provider-usage-request.ts";
 import type { GatewayPageController } from "../../lit/gateway-page-controller.ts";
 import { UsageRefreshPolicy } from "../usage/refresh-policy.ts";
 import { loadModelProviderCost, type ModelProvidersData } from "./load.ts";
@@ -128,7 +131,9 @@ export class ModelProviderSupplementalLoader {
     this.requests.set(kind, request);
     this.host.requestUpdate();
     try {
-      const patch =
+      const patch:
+        | { providerUsage: ProviderUsageRequestResult }
+        | { costByProvider: Awaited<ReturnType<typeof loadModelProviderCost>> } =
         kind === "usage"
           ? { providerUsage: await requestProviderUsage(client, { signal: request.signal }) }
           : { costByProvider: await loadModelProviderCost(client, request.signal) };

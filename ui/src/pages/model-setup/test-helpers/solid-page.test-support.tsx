@@ -20,7 +20,9 @@ afterEach(() => {
 });
 
 export function createPage(context: ApplicationContext): TestModelSetupPage {
-  const root = document.createElement("div") as TestModelSetupPage;
+  const root = Object.assign(document.createElement("div"), {
+    updateComplete: Promise.resolve(true),
+  });
   const [revision, setRevision] = createSignal(0);
   let mounted = false;
   let queued = false;

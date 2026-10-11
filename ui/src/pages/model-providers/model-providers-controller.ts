@@ -40,7 +40,7 @@ import {
 import { ModelProviderDiscoveryController } from "./discovery-controller.tsx";
 import { InstalledAgentsController } from "./installed-agents.tsx";
 import { EMPTY_MODEL_PROVIDERS_DATA, type ModelProvidersData } from "./load.ts";
-import { ModelProviderLoginController } from "./login-controller.tsx";
+import { ModelProviderLoginController } from "./login-controller.ts";
 import { ModelPageController } from "./page-controller.ts";
 import { ModelProviderProfileActionsController } from "./profile-actions-controller.ts";
 import { updateRecordEntry } from "./record-state.ts";

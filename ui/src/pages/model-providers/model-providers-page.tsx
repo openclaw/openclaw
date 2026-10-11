@@ -2,6 +2,7 @@ import { createEffect, createMemo, createSignal, onCleanup, onSettled, untrack }
 import type { ApplicationContext } from "../../app/context-types.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../lit/solid-bridge.ts";
+import { ModelProviderAccountRecovery, ModelProviderLoginView } from "./login-view.tsx";
 import { ModelProvidersController } from "./model-providers-controller.ts";
 import type { ModelProvidersRouteData } from "./route.ts";
 import {
@@ -21,8 +22,10 @@ export function ModelProvidersContent(props: {
     revision();
     return controller.viewProps();
   });
-  const Recovery = () => controller.login.renderRecovery(revision);
-  const Login = () => controller.login.render(revision);
+  const Recovery = () => (
+    <ModelProviderAccountRecovery controller={controller.login} revision={revision} />
+  );
+  const Login = () => <ModelProviderLoginView controller={controller.login} revision={revision} />;
   const cards = createMemo(() => current().cards);
   const discoveryData = createMemo(() => current().discovery);
   const InstalledAgents = () =>
@@ -54,6 +57,16 @@ export type ModelProvidersPageProps = {
   routeData?: ModelProvidersRouteData;
   loaderPending?: boolean;
 };
+
+declare module "@solidjs/web" {
+  namespace JSX {
+    interface IntrinsicElements {
+      "openclaw-model-providers-page": HTMLAttributes<HTMLElement> & {
+        [Key in keyof ModelProvidersPageProps as `prop:${Key}`]?: ModelProvidersPageProps[Key];
+      };
+    }
+  }
+}
 
 declare global {
   interface HTMLElementTagNameMap {

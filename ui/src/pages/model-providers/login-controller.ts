@@ -1,5 +1,4 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
-import type { JSX } from "@solidjs/web";
 import { splitTrailingAuthProfile } from "../../../../src/agents/model-ref-profile.js";
 import type { ModelAuthStatusResult, SystemAgentSetupDetectResult } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
@@ -18,7 +17,6 @@ import type {
 import type { ModelProviderRowMessage } from "./config-mutation.ts";
 import { buildModelProviderCards, type ModelProviderCard } from "./data.ts";
 import { buildLoginProviders } from "./login-providers.ts";
-import { ModelProviderAccountRecovery, ModelProviderLoginView } from "./login-view.tsx";
 import type { ControllerHost } from "./page-controller.ts";
 import "../../styles/model-providers.css";
 registerSettingsEnglish();
@@ -101,13 +99,9 @@ export class ModelProviderLoginController {
   }
 
   get pageActions() {
-    const renderLogin = () => this.render();
     return {
       onConnect: () => this.open(),
       connectDisabled: !this.options.canStart() || this.busy,
-      get login() {
-        return renderLogin();
-      },
       loginMessage: this.message,
     };
   }
@@ -161,10 +155,6 @@ export class ModelProviderLoginController {
           onChoose: () => void this.open(providers),
         }
       : null;
-  }
-
-  renderRecovery(revision?: () => unknown): JSX.Element {
-    return <ModelProviderAccountRecovery controller={this} revision={revision} />;
   }
 
   private async activateSavedProfile(profileId: string, modelRef: string): Promise<void> {
@@ -436,10 +426,6 @@ export class ModelProviderLoginController {
         this.host.requestUpdate();
       },
     };
-  }
-
-  render(revision?: () => unknown): JSX.Element {
-    return <ModelProviderLoginView controller={this} revision={revision} />;
   }
 
   private async complete(completion: ModelSetupWizardCompletion): Promise<void> {

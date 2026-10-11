@@ -3,7 +3,7 @@ import { ProviderBrandIcon } from "../../components/solid/provider-icon.tsx";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../../lib/external-link.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { ModelSetupWizard } from "../model-setup/wizard-view-solid.tsx";
-import type { ModelProviderLoginController } from "./login-controller.tsx";
+import type { ModelProviderLoginController } from "./login-controller.ts";
 import { renderProviderAccountSummary } from "./profiles-view.tsx";
 
 export function ModelProviderLoginView(props: {
@@ -77,7 +77,7 @@ export function ModelProviderLoginView(props: {
                           autofocus
                           autocomplete="off"
                           ref={(element) => props.controller.setSearchInput(element)}
-                          prop:value={current().query}
+                          value={current().query}
                           onInput={(event) => current().onQuery(event.currentTarget.value)}
                         />
                       </label>

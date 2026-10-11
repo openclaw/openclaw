@@ -9,7 +9,7 @@ import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx
 import { registerModelSetupEnglish } from "../../i18n/locales/en-model-setup.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import "../../styles/model-setup.css";
-import type { ModelProviderLoginController } from "../model-providers/login-controller.tsx";
+import type { ModelProviderLoginController } from "../model-providers/login-controller.ts";
 import {
   renderMutationMessage,
   ModelProviderConnectAction,
@@ -276,12 +276,10 @@ function Manual(props: ModelSetupViewProps & { detected: SystemAgentSetupDetectR
               required
               aria-invalid={props.manualError ? "true" : undefined}
               aria-describedby={`${manualId()}-help${props.manualError ? ` ${manualId()}-error` : ""}`}
-              prop:value={props.manualApiKey}
+              value={props.manualApiKey}
               disabled={props.actionsDisabled}
               placeholder={t("modelSetup.manual.accessValuePlaceholder")}
-              onInput={(event: Event) =>
-                props.onManualApiKeyChange((event.currentTarget as HTMLInputElement).value)
-              }
+              onInput={(event) => props.onManualApiKeyChange(event.currentTarget.value)}
             />
           </label>
           <div id={`${manualId()}-help`} class="model-setup__manual-help">
@@ -339,7 +337,7 @@ function NativeSessionDiscovery(
         <label>
           <input
             type="checkbox"
-            prop:checked={props.nativeSessionCatalogsEnabled === true}
+            checked={props.nativeSessionCatalogsEnabled === true}
             disabled={props.actionsDisabled}
             onChange={(event) => props.onNativeSessionCatalogsChange?.(event.currentTarget.checked)}
           />
@@ -484,28 +482,31 @@ export function ModelSetupView(props: ModelSetupViewProps): JSX.Element {
         </div>
         <Show when={Boolean(props.connection)}>
           <ModelProviderConnectAction
-            onConnect={() => props.connection?.onConnect()}
+            onConnect={() => {
+              void props.connection?.onConnect();
+            }}
             connectDisabled={props.connection?.connectDisabled ?? true}
             primary
           />
         </Show>
-        {props.page.phase === "ready" &&
-        (props.embedded || !props.page.result.configuredModel) &&
-        props.activation.phase !== "success" &&
-        props.canAdmin &&
-        !props.gatewayTooOld ? (
-          <>
-            {" "}
-            <button
-              type="button"
-              class="btn"
-              disabled={props.actionsDisabled || props.detecting}
-              onClick={props.onDetect}
-            >
-              {props.detecting ? t("modelSetup.verify.checkingButton") : t("modelSetup.checkAgain")}
-            </button>{" "}
-          </>
-        ) : undefined}
+        <Show
+          when={
+            props.page.phase === "ready" &&
+            (props.embedded || !props.page.result.configuredModel) &&
+            props.activation.phase !== "success" &&
+            props.canAdmin &&
+            !props.gatewayTooOld
+          }
+        >
+          <button
+            type="button"
+            class="btn"
+            disabled={props.actionsDisabled || props.detecting}
+            onClick={() => props.onDetect()}
+          >
+            {props.detecting ? t("modelSetup.verify.checkingButton") : t("modelSetup.checkAgain")}
+          </button>
+        </Show>
       </div>
       {props.canAdmin && !props.gatewayTooOld
         ? renderActivationFeedback(props.activation)
@@ -515,27 +516,32 @@ export function ModelSetupView(props: ModelSetupViewProps): JSX.Element {
           {props.refreshWarning}
         </div>
       ) : undefined}
-      {props.activationUnresolved &&
-      !props.actionsDisabled &&
-      props.activation.phase !== "success" ? (
+      <Show
+        when={Boolean(
+          props.activationUnresolved &&
+          !props.actionsDisabled &&
+          props.activation.phase !== "success",
+        )}
+      >
         <div class="model-setup__recovery">
           <p>{t("modelSetup.recovery.unknown")}</p>
-          {props.page.phase === "ready" &&
-          (props.page.result.configuredModel || props.page.result.setupModel) &&
-          props.canVerify &&
-          props.onUseCurrentModel ? (
-            <>
-              {" "}
-              <button type="button" class="btn primary" onClick={props.onUseCurrentModel}>
-                {t("modelSetup.recovery.useCurrent")}
-              </button>{" "}
-            </>
-          ) : undefined}
-          <button type="button" class="btn" onClick={props.onDetect}>
+          <Show
+            when={
+              props.page.phase === "ready" &&
+              Boolean(props.page.result.configuredModel || props.page.result.setupModel) &&
+              props.canVerify &&
+              props.onUseCurrentModel !== undefined
+            }
+          >
+            <button type="button" class="btn primary" onClick={() => props.onUseCurrentModel?.()}>
+              {t("modelSetup.recovery.useCurrent")}
+            </button>
+          </Show>
+          <button type="button" class="btn" onClick={() => props.onDetect()}>
             {t("modelSetup.checkAgain")}
           </button>
         </div>
-      ) : undefined}
+      </Show>
       {renderMutationMessage(props.connection?.loginMessage)}
       {props.detectionError ? (
         <div class="callout warning" role="alert">
@@ -552,7 +558,7 @@ export function ModelSetupView(props: ModelSetupViewProps): JSX.Element {
   );
   const dialogs = (
     <>
-      {props.login ?? props.connection?.login}
+      {props.login}
       <div onModal-cancel={(event: Event) => event.preventDefault()}>
         <ModelSetupWizard
           mode={props.wizardMode}

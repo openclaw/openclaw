@@ -1,4 +1,3 @@
-import type { JSX as SolidJSX } from "@solidjs/web";
 import "./account-usage.tsx";
 import { createMemo, For, onCleanup, Show } from "solid-js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
@@ -17,7 +16,7 @@ import type { ModelProviderCard, ModelProviderPendingLogout } from "./data.ts";
 declare module "@solidjs/web" {
   namespace JSX {
     interface IntrinsicElements {
-      "openclaw-model-account-usage": SolidJSX.HTMLAttributes<ModelAccountUsageElement> & {
+      "openclaw-model-account-usage": HTMLAttributes<ModelAccountUsageElement> & {
         "prop:client": GatewayBrowserClient | null;
         "prop:agentId": string;
         "prop:profileId": string;
@@ -194,16 +193,16 @@ function startPointerDrag(params: {
   move: (targetId: string, position: ArrayDropPosition) => void;
 }): (() => void) | undefined {
   if (!params.canMove || params.event.button !== 0) {
-    return;
+    return undefined;
   }
   const grip = params.event.currentTarget;
   if (!(grip instanceof HTMLElement)) {
-    return;
+    return undefined;
   }
   const row = grip.closest<HTMLElement>(".model-providers__profile");
   const section = grip.closest<HTMLElement>(".model-providers__profiles");
   if (!row || !section) {
-    return;
+    return undefined;
   }
   const sectionTop = section.getBoundingClientRect().top;
   // Use the original slots for hit testing. Measuring animated neighbors would
@@ -213,7 +212,7 @@ function startPointerDrag(params: {
     .map((element) => ({ element, bounds: element.getBoundingClientRect() }));
   const source = slots.find((slot) => slot.element === row);
   if (!source) {
-    return;
+    return undefined;
   }
   const others = slots.filter((slot) => slot !== source);
   let target: (typeof slots)[number] | undefined;

@@ -221,7 +221,7 @@ function ApiKeyInput(props: {
             ? "modelProviders.apiKey.replacePlaceholder"
             : "modelProviders.apiKey.placeholder",
         )}
-        prop:value={props.value}
+        value={props.value}
         disabled={props.disabled}
         onInput={(event) => props.onInput(event.currentTarget.value)}
       />
@@ -559,10 +559,8 @@ function ProviderAccess(props: ModelProvidersViewProps) {
           type="search"
           aria-label={t("modelProviders.search")}
           placeholder={t("modelProviders.search")}
-          prop:value={props.providerQuery ?? ""}
-          onInput={(event: Event) =>
-            props.onProviderQueryChange?.((event.currentTarget as HTMLInputElement).value)
-          }
+          value={props.providerQuery ?? ""}
+          onInput={(event) => props.onProviderQueryChange?.(event.currentTarget.value)}
         />
       </label>
       <div class="model-providers__provider-list">

@@ -1,5 +1,6 @@
 /* @vitest-environment jsdom */
 
+import { createComponent } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   WizardCancelParams,
@@ -11,7 +12,8 @@ import { GatewayRequestError } from "../../api/gateway.ts";
 import type { ModelAuthStatusResult, WizardNextResult } from "../../api/types.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
-import { ModelProviderLoginController } from "./login-controller.tsx";
+import { ModelProviderLoginController } from "./login-controller.ts";
+import { ModelProviderLoginView } from "./login-view.tsx";
 import {
   appendPage,
   unmountPage,
@@ -875,7 +877,9 @@ describe("Models provider login", () => {
       document.body.append(container);
       expect(controller.pageActions.connectDisabled).toBe(false);
       await controller.pageActions.onConnect();
-      const view = mountSolid(() => controller.render(), { container });
+      const view = mountSolid(() => createComponent(ModelProviderLoginView, { controller }), {
+        container,
+      });
       const modal = container.querySelector("openclaw-modal-dialog")!;
       expect(modal.isConnected).toBe(true);
       expect(providerChoices(container)).toEqual([]);
@@ -889,7 +893,7 @@ describe("Models provider login", () => {
         ),
       ).toBe(false);
       view.unmount();
-      mountSolid(() => controller.render(), { container });
+      mountSolid(() => createComponent(ModelProviderLoginView, { controller }), { container });
       expect(container.querySelector("[data-models-login-search]")).toBeNull();
       // Discovery can replace the picker before its custom-element update finishes.
       await modal.updateComplete;

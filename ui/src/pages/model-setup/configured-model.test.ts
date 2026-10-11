@@ -92,7 +92,12 @@ describe("ConfiguredModel", () => {
     };
     const { container, onVerify } = mount(result);
 
-    expect(text(container)).toContain(`Selected model ${fixture.label}`);
+    expect(container.querySelector(".settings-section__header h2")?.textContent).toBe(
+      "Selected model",
+    );
+    expect(container.querySelector(".model-setup__current-copy strong")?.textContent).toBe(
+      fixture.label,
+    );
     expect(text(container)).toContain(fixture.detail);
     expect(text(container)).toContain("connect ECONNREFUSED");
     expect(text(container)).not.toContain("isn’t responding");

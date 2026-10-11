@@ -138,7 +138,7 @@ function TextForm(props: StepProps) {
         type={props.step.sensitive ? "password" : "text"}
         autocomplete={props.step.sensitive ? "off" : "on"}
         placeholder={props.step.placeholder ?? ""}
-        prop:value={value()}
+        value={value()}
         disabled={props.busy}
         aria-invalid={props.validationErrorId ? "true" : undefined}
         aria-describedby={props.validationErrorId}
@@ -234,7 +234,7 @@ function MultipleChoice(props: StepProps & { options: WizardStepOption[] }) {
             <label class="wizard-step__option">
               <input
                 type="checkbox"
-                prop:checked={selected().some((value) => Object.is(value, option().value))}
+                checked={selected().some((value) => Object.is(value, option().value))}
                 disabled={props.busy}
                 aria-invalid={props.validationErrorId ? "true" : undefined}
                 aria-describedby={props.validationErrorId}

@@ -137,6 +137,7 @@ const modelSettingsScenario: ControlUiMockGatewayScenario = {
     ...baseScenario.featureMethods!,
     "codex.accountUsage",
     "models.authLogin",
+    "wizard.next",
     "openclaw.setup.detect",
   ],
   methodResponses: {
@@ -185,8 +186,8 @@ const modelSettingsScenario: ControlUiMockGatewayScenario = {
         },
       ],
     },
-    "models.authLogin": {
-      sessionId: "parity-model-login",
+    "models.authLogin": { done: false, status: "running" },
+    "wizard.next": {
       done: false,
       status: "running",
       step: {
@@ -251,6 +252,27 @@ const modelSetupPage: Scene = {
 
 export const scenes: Scene[] = [
   ...APP_ROUTE_IDS.map(routeScene),
+  ...["status", "setup", "pat"].map((state): Scene =>
+    Object.assign(routeScene("profile"), {
+      id: `github-connections-${state}`,
+      label: `GitHub connections: ${state}`,
+      ready: "#settings-profile-github-connections .settings-row",
+      scrollTo: "#settings-profile-github-connections",
+      prepare: async (page: Page) => {
+        const connections = page.locator("#settings-profile-github-connections");
+        if (state !== "status") {
+          await connections
+            .getByRole("button", { name: "Change System GitHub", exact: true })
+            .click();
+          await connections.locator("[data-github-setup]").waitFor();
+        }
+        if (state === "pat") {
+          await connections.getByRole("button", { name: "Use a PAT instead", exact: true }).click();
+          await connections.getByRole("textbox", { name: "Author Name", exact: true }).waitFor();
+        }
+      },
+    }),
+  ),
   modelSettingsPage,
   {
     ...modelSettingsPage,

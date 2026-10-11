@@ -33,9 +33,12 @@ export function revealManualProvider(root: ParentNode): void {
   input?.scrollIntoView?.({ block: "nearest", behavior: "auto" });
 }
 
-type WebAwesomeSelectEvent = CustomEvent<{
-  item: HTMLElement & { checked?: boolean; value?: string };
-}>;
+type DropdownEvent<T extends Event> = T & { currentTarget: HTMLElementTagNameMap["wa-dropdown"] };
+type WebAwesomeSelectEvent = DropdownEvent<
+  CustomEvent<{
+    item: HTMLElement & { checked?: boolean; value?: string };
+  }>
+>;
 
 declare module "@solidjs/web" {
   namespace JSX {
@@ -62,8 +65,8 @@ function restoreProviderTriggerAfterHide(dropdown: HTMLElement) {
   );
 }
 
-function handleManualProviderKeydown(event: KeyboardEvent): void {
-  const dropdown = event.currentTarget as HTMLElement & { open: boolean };
+function handleManualProviderKeydown(event: DropdownEvent<KeyboardEvent>): void {
+  const dropdown = event.currentTarget;
   if (!dropdown.open || (event.key !== "Tab" && event.key !== "Escape")) {
     return;
   }
@@ -92,7 +95,7 @@ function handleManualProviderSelect(
   onChange: (providerId: string) => void,
 ): void {
   const item = event.detail.item;
-  const dropdown = event.currentTarget as HTMLElement & { open: boolean };
+  const dropdown = event.currentTarget;
   const value = item.value ?? item.getAttribute("value");
   if (!value) {
     return;
