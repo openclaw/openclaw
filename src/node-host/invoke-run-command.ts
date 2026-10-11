@@ -80,13 +80,14 @@ export async function runCommand(
     const launch = resolveCommandLaunch(argv);
     // Only OpenClaw's generated login-shell envelope needs service PATH restoration.
     const servicePath = env?.PATH;
+    let childEnv = env;
     if (servicePath && argv.length === 3 && argv[0] === "/bin/sh" && argv[1] === "-lc") {
-      env = { ...env };
-      launch.argv = [argv[0], argv[1], prependShellPath(argv[2] ?? "", env, servicePath)];
+      childEnv = { ...env };
+      launch.argv = [argv[0], argv[1], prependShellPath(argv[2] ?? "", childEnv, servicePath)];
     }
     const result = await runCommandWithTimeout(launch.argv, {
       ...(launch.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
-      baseEnv: env,
+      baseEnv: childEnv,
       cwd,
       killProcessTree: true,
       maxCombinedOutputBytes: OUTPUT_CAP,

@@ -50,6 +50,7 @@ describe("runCommand", () => {
     "restores the service PATH after login startup and resolves service-only tools",
     async () => {
       const home = tempDirs.make("openclaw-node-service-path-");
+      fs.writeFileSync(path.join(home, ".profile"), "export PATH=/usr/bin:/bin\n");
       const serviceBin = path.join(home, "service bin");
       fs.mkdirSync(serviceBin);
       fs.writeFileSync(path.join(serviceBin, "openclaw-path-probe"), "#!/bin/sh\nprintf service", {
