@@ -156,8 +156,7 @@ function renderCostWindowComparison(
                   {formatAnalysisCost(summary.totals.totalCost)}
                 </div>
                 <div class="cost-window-card__meta">
-                  {formatUsageTokens(summary.totals.totalTokens)} {t("usage.metrics.tokens")} ·
-                  {formatAnalysisCost(averageDailyCost)} {t("usage.costWindows.perDay")}
+                  {`${formatUsageTokens(summary.totals.totalTokens)} ${t("usage.metrics.tokens")} · ${formatAnalysisCost(averageDailyCost)} ${t("usage.costWindows.perDay")}`}
                 </div>
               </div>
             );

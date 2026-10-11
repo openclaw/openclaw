@@ -20,7 +20,7 @@ import {
   presenceViewerLabel,
   type PresenceViewer,
 } from "../../lib/presence-users.ts";
-import { locale, t } from "../../lib/reactive/i18n.ts";
+import { getLocale, t } from "../../lib/reactive/i18n.ts";
 import { resolveSessionDisplayName } from "../../lib/session-display.ts";
 import {
   isSessionKeyAddressable,
@@ -67,7 +67,7 @@ export type SessionActivityViewProps = {
 };
 
 function dayLabel(timestamp: number | null, now = Date.now()): string {
-  locale();
+  getLocale();
   if (timestamp === null) {
     return t("activityFeed.unknownDate");
   }
@@ -123,13 +123,13 @@ function SessionLinkView(props: {
   );
   const SessionLink = dynamic(() => (target() ? "a" : "div"));
   const ownerName = createMemo(() => {
-    locale();
+    getLocale();
     return presenceViewerLabel(sessionActivityOwner(props.row));
   });
   const activityAt = () => sessionActivityTimestamp(props.row);
   const relativeTime = createMemo(() => {
     void props.presentationRevision;
-    locale();
+    getLocale();
     return formatRelativeTimestamp(activityAt(), { fallback: "" });
   });
   const activeObserverRunId = createMemo(() => {
@@ -311,15 +311,15 @@ function IdentityHeader(props: {
     return presenceViewerActivity(props.identity);
   });
   const status = () => {
-    locale();
+    getLocale();
     return online() ? presenceActivityLabel(activity()) : t("activityFeed.offline");
   };
   const descriptions = createMemo(() => {
-    locale();
+    getLocale();
     return presenceConnectionDescriptions(entries());
   });
   const connections = createMemo(() => {
-    locale();
+    getLocale();
     return groupPresenceConnections(entries());
   });
   const viewing = createMemo(() => resolveViewingNow(props.identity, props.rows));

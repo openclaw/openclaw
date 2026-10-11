@@ -234,7 +234,7 @@ describe("renderSessionDetailPanel filtered usage", () => {
       "total",
       {},
       {
-        sessionLogsData: [{ timestamp: 3000, role: "assistant", content: "[Tool: read]" }],
+        sessionLogsData: [{ timestamp: 3, role: "assistant", content: "[Tool: read]" }],
         sessionLogsHasLoaded: true,
       },
     );

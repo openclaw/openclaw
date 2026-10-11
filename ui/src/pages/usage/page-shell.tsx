@@ -11,7 +11,7 @@ import { SettingsPageHeader } from "../../components/solid/settings-ui.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
 import { projectAgentSelection } from "../../lib/reactive/application.ts";
 import { projectAgents } from "../../lib/reactive/domain-capabilities.ts";
-import { locale, t } from "../../lib/reactive/i18n.ts";
+import { getLocale, t } from "../../lib/reactive/i18n.ts";
 import { LitContent } from "../../lit/solid-bridge.ts";
 
 export function UsagePageShell(props: {
@@ -24,7 +24,7 @@ export function UsagePageShell(props: {
   const agents = projectAgents(context.agents);
   const selection = projectAgentSelection(context.agentSelection);
   const header = createMemo(() => {
-    locale();
+    getLocale();
     return { title: titleForRoute("usage"), subtitle: subtitleForRoute("usage") };
   });
   const additionalAgentIds = createMemo(

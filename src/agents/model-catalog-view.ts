@@ -592,15 +592,12 @@ export async function loadPreparedModelCatalogView(
     catalog = catalog.filter((entry) => !deprecatedKeys.has(keyOf(entry)));
     configured = configured.filter((entry) => !staticKeys.has(keyOf(entry)));
   }
-  const entries = [...catalog];
-  const seen = new Set(catalog.map((entry) => pickerModelKey(entry.provider, entry.id)));
-  for (const entry of configured) {
-    const key = pickerModelKey(entry.provider, entry.id);
-    if (!seen.has(key)) {
-      seen.add(key);
-      entries.push(entry);
-    }
-  }
+  const keyOf = (entry: ModelCatalogEntry) => pickerModelKey(entry.provider, entry.id);
+  const seen = new Set(catalog.map(keyOf));
+  const entries = [
+    ...catalog,
+    ...dedupeByKey(configured, keyOf).filter((entry) => !seen.has(keyOf(entry))),
+  ];
   return {
     snapshot: {
       ...view.snapshot,

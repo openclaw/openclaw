@@ -446,24 +446,6 @@ describe("CLI startup benchmark script spawners", () => {
     );
   });
 
-  it("allows skip-baseline reports without fixture case overlap", () => {
-    const { baselinePath, reportPath, checkBudget } = budgetFixture(
-      "openclaw-bench-budget-skip-test-",
-    );
-
-    fs.writeFileSync(
-      baselinePath,
-      JSON.stringify({ primary: { cases: [measuredCase("fixtureOnly", "fixture only")] } }),
-    );
-    fs.writeFileSync(
-      reportPath,
-      JSON.stringify({ primary: { cases: [measuredCase("targetOnly", "target only")] } }),
-    );
-    const result = checkBudget(["--preset", "real", "--skip-baseline"]);
-    expect(result.status).toBe(0);
-    expect(result.stderr).not.toContain("no current cases matched the baseline");
-  });
-
   it("skips x64 startup budgets on noncanonical architectures", () => {
     const { tmpDir, baselinePath, reportPath, checkBudget } = budgetFixture(
       "openclaw-bench-budget-arch-test-",

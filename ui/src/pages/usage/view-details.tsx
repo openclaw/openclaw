@@ -346,14 +346,11 @@ function LoadedContextPanel(props: {
       {state().refreshStatus}
       <div class="context-breakdown-header">
         <div class="card-title usage-section-title">{t("usage.details.systemPromptBreakdown")}</div>
-        {state().hasMore ? (
-          <>
-            {" "}
-            <button class="btn btn--sm" onClick={state().onToggleExpanded}>
-              {state().expanded ? t("usage.details.collapse") : t("usage.details.expandAll")}
-            </button>{" "}
-          </>
-        ) : undefined}
+        <Show when={state().hasMore}>
+          <button class="btn btn--sm" onClick={() => state().onToggleExpanded()}>
+            {state().expanded ? t("usage.details.collapse") : t("usage.details.expandAll")}
+          </button>
+        </Show>
       </div>
       <p class="context-weight-desc">{state().contextDescription}</p>
       <div class="context-stacked-bar">
@@ -521,7 +518,7 @@ function SessionLogs(props: {
         <div class="session-logs-compact">
           <div class="session-logs-header">
             <span>
-              {t("usage.details.conversation")}
+              {t("usage.details.conversation")}{" "}
               <span class="session-logs-header-count">
                 ({state().displayedCount}{" "}
                 {normalizeLowercaseStringOrEmpty(t("usage.overview.messages"))})

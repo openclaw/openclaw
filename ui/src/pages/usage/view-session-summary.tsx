@@ -84,17 +84,9 @@ export function renderSessionSummary(
       meta: (
         <>
           {" "}
-          {hasInterval && !messageCounts ? (
-            t("usage.common.emptyValue")
-          ) : (
-            <>
-              {" "}
-              {messageCounts?.user ?? 0}
-              {normalizeLowercaseStringOrEmpty(t("usage.overview.user"))} ·
-              {messageCounts?.assistant ?? 0}
-              {normalizeLowercaseStringOrEmpty(t("usage.overview.assistant"))}{" "}
-            </>
-          )}
+          {hasInterval && !messageCounts
+            ? t("usage.common.emptyValue")
+            : `${messageCounts?.user ?? 0} ${normalizeLowercaseStringOrEmpty(t("usage.overview.user"))} · ${messageCounts?.assistant ?? 0} ${normalizeLowercaseStringOrEmpty(t("usage.overview.assistant"))}`}
           {hasInterval ? (
             <>
               {" "}

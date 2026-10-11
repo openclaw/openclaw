@@ -2,7 +2,6 @@ import { afterEach, beforeEach, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.js";
-import { resetClientVoiceConfirmationStateForTest } from "./client-voice-confirmation.test-support.js";
 import { clientVoiceSessionTesting } from "./client-voice-session.test-support.js";
 
 type AppendSessionTranscriptTurn =
@@ -45,7 +44,6 @@ export function useClientVoiceSessionHarness() {
         release();
       }
       clientVoiceSessionTesting.reset();
-      resetClientVoiceConfirmationStateForTest();
       try {
         await cleanupSessionStateForTest({ stateDir: tempDir });
       } finally {

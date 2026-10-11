@@ -8,7 +8,7 @@ import { syncPopoverExpanded, syncPopoverLabel } from "../../components/web-awes
 import { registerActivityEnglish } from "../../i18n/locales/en-activity.ts";
 import { formatDurationCompact } from "../../lib/format-duration.ts";
 import { createMsFormatter } from "../../lib/format.ts";
-import { locale, registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
+import { getLocale, registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import "../../styles/activity.css";
 import { activityRunInspectorHref } from "./run-inspector-model.ts";
 import type { ActivityEntry, ActivityStatus } from "./tool-activity.ts";
@@ -276,7 +276,7 @@ function ActivityEntryView(props: {
 export function renderActivity(props: ActivityProps) {
   const formatTimestamp = createMemo(() => {
     // A locale change replaces the formatter while keeping stream rows mounted.
-    locale();
+    getLocale();
     return createMsFormatter({ hour: "numeric", minute: "2-digit", second: "2-digit" }, "");
   });
   const toolNames = createMemo(

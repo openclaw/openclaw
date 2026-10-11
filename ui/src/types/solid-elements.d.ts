@@ -10,7 +10,9 @@ declare module "@solidjs/web" {
     interface IntrinsicElements {
       "openclaw-tooltip": HTMLAttributes<HTMLElementTagNameMap["openclaw-tooltip"]> & {
         "prop:content"?: string;
+        placement?: HTMLElementTagNameMap["openclaw-tooltip"]["placement"];
         "open-on-click"?: boolean;
+        "auto-size"?: boolean;
       };
       "wa-dropdown": HTMLAttributes<WaDropdown> &
         Properties<WaDropdown> & {

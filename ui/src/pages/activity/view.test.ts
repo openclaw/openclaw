@@ -230,7 +230,7 @@ describe("renderActivity", () => {
       throw new Error("Expected the live activity search input");
     }
     search.value = "run";
-    search.dispatchEvent(new Event("input"));
+    search.dispatchEvent(new Event("input", { bubbles: true }));
     expect(onFilterTextChange).toHaveBeenCalledWith("run");
 
     const tool = container.querySelector<HTMLSelectElement>(".activity-live-filter-popover select");
@@ -238,7 +238,7 @@ describe("renderActivity", () => {
       throw new Error("Expected the live activity tool filter");
     }
     tool.value = "read";
-    tool.dispatchEvent(new Event("change"));
+    tool.dispatchEvent(new Event("change", { bubbles: true }));
     expect(onToolFilterChange).toHaveBeenCalledWith("read");
   });
 

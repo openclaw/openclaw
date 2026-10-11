@@ -8,7 +8,7 @@ import {
   presenceViewerLabel,
   type PresenceViewer,
 } from "../../lib/presence-users.ts";
-import { locale, t } from "../../lib/reactive/i18n.ts";
+import { getLocale, t } from "../../lib/reactive/i18n.ts";
 import type { SessionActivityFilters } from "./session-activity.ts";
 
 type ActivityPerson = PresenceViewer & {
@@ -69,7 +69,7 @@ function PersonAvatar(props: {
               class="activity-feed__presence-dot"
               data-presence-activity={activity()}
               role="img"
-              aria-label={(locale(), presenceActivityLabel(activity()))}
+              aria-label={(getLocale(), presenceActivityLabel(activity()))}
             />
           ) : undefined}
         </span>

@@ -138,7 +138,8 @@ export function defineSolidBridge<Props extends object, Methods extends object =
           : typeof property.default === "number"
             ? Number
             : String);
-      this.#write(
+      Reflect.set(
+        this,
         key,
         type === Boolean
           ? value !== null
@@ -146,6 +147,10 @@ export function defineSolidBridge<Props extends object, Methods extends object =
             ? Number(value)
             : value,
       );
+    }
+
+    connectedMoveCallback() {
+      // Atomic parking keeps the existing provider and owned child tree.
     }
 
     connectedCallback() {
@@ -284,7 +289,7 @@ export function defineSolidBridge<Props extends object, Methods extends object =
           () => (Reflect.has(props, key) ? Reflect.get(props, key) : absent),
           (value) => {
             if (value !== absent) {
-              host.#write(key, value === undefined ? property.default : value);
+              Reflect.set(host, key, value === undefined ? property.default : value);
             }
           },
         );
