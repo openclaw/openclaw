@@ -14,7 +14,8 @@ import { hasForwardedSource, isSessionActivityGroup } from "../chat-turn-boundar
 import { renderChatAuthorAvatar } from "./chat-author-avatar.ts";
 import { renderForwardedAttribution } from "./chat-forwarded-attribution.ts";
 import { ActivityGroupContent } from "./chat-message-activity-view.tsx";
-import { GroupedMessage, type GroupedMessageOptions } from "./chat-message-bubble-view.tsx";
+import type { GroupedMessageOptions } from "./chat-message-bubble-options.ts";
+import { GroupedMessage } from "./chat-message-bubble-view.tsx";
 import { RewindButton } from "./chat-message-confirmation-view.tsx";
 import {
   type GroupMessage,
@@ -32,7 +33,8 @@ import {
   type MessageActionDetails,
   ReplyButton,
 } from "./chat-message-markdown-view.tsx";
-import { messageReactionOptions, GroupMessageReactions } from "./chat-message-reactions.ts";
+import { GroupMessageReactions } from "./chat-message-reaction-chips-view.tsx";
+import { messageReactionOptions } from "./chat-message-reaction-model.ts";
 import { ChatSendStatus } from "./chat-message-send-status-view.tsx";
 import { renderSolidEmptyGroupFooter, StreamGroupParts } from "./chat-message-stream-view.tsx";
 import type { AssistantMessageDisclosure } from "./chat-message-text-view.tsx";
@@ -231,23 +233,17 @@ function GroupAvatar(props: { frame: MessageGroupFrame }) {
 
 function SenderIdentity(props: { frame: MessageGroupFrame }) {
   const frame = () => props.frame;
-  const options = () => frame().options;
+  const activityLink = createMemo(() => {
+    const current = frame();
+    const identity = current.group.sender?.identity;
+    return current.isPeerGroup && identity?.type === "profile"
+      ? personActivityLink(identity.id, current.options.personActivity, current.who)
+      : null;
+  });
   return (
     <>
       <Show when={frame().showSenderName}>
-        <LitContent
-          value={renderPersonName(
-            frame().who,
-            frame().isPeerGroup && frame().group.sender?.identity?.type === "profile"
-              ? personActivityLink(
-                  frame().group.sender.identity.id,
-                  options().personActivity,
-                  frame().who,
-                )
-              : null,
-            "chat-sender-name",
-          )}
-        />
+        <LitContent value={renderPersonName(frame().who, activityLink(), "chat-sender-name")} />
       </Show>
       <Show when={frame().visibleSources?.length}>
         <span class="chat-message-source">

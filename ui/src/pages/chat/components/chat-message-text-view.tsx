@@ -46,15 +46,15 @@ export function MessageJson(props: {
   options: MessageTextOptions;
   markdownOptions: MarkdownRenderOptions;
 }) {
-  const parts = createMemo(() => [toSanitizedJsonHtml(props.json, props.markdownOptions)]);
+  const content = createMemo(() => toSanitizedJsonHtml(props.json, props.markdownOptions));
   return (
     <TextDisclosure
       source={props.json.text}
       messageKey={props.messageKey}
       options={props.options}
-      parts={parts()}
+      parts={[content()]}
     >
-      <MarkdownText content={parts()[0]} />
+      <MarkdownText content={content()} />
     </TextDisclosure>
   );
 }
@@ -171,7 +171,7 @@ function TextDisclosure(props: {
         <button
           class="chat-message-disclosure__toggle"
           type="button"
-          aria-expanded={String(expanded())}
+          aria-expanded={expanded() ? "true" : "false"}
           onClick={() => props.options.onToggleUserMessageExpanded?.(disclosureId())}
         >
           {t(expanded() ? "chat.messages.showLess" : "chat.messages.showMore")}

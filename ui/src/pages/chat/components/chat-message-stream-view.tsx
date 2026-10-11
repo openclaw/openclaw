@@ -1,14 +1,7 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { createEffect, createMemo, For, Show, onCleanup } from "solid-js";
+import { createMemo, For, Show } from "solid-js";
 import type { ThemeBranding } from "../../../../../packages/gateway-protocol/src/theme.ts";
 import type { QuestionPrompt } from "../../../app/question-prompt.ts";
-import { parseMarkdownJson } from "../../../components/markdown-json.ts";
-import type { MarkdownRenderOptions } from "../../../components/markdown-render-options.ts";
-import {
-  toSanitizedJsonHtml,
-  toSanitizedMarkdownHtml,
-  toStreamingMarkdownParts,
-} from "../../../components/markdown.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import type { ChatReplyTarget, MessageGroup, ChatItem } from "../../../lib/chat/chat-types.ts";
 import { describeToolGroup, readPreparedActivity } from "../../../lib/chat/tool-call-grouping.ts";
@@ -17,7 +10,6 @@ import { resolveToolDisplay } from "../../../lib/chat/tool-display.ts";
 import { formatDurationLong } from "../../../lib/format-duration.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import "../../../components/tooltip.ts";
-import { detectTextDirection } from "../../../lib/text-direction.ts";
 import {
   emptyLegacyContent as litNothing,
   LitContent,
@@ -25,13 +17,13 @@ import {
 } from "../../../lit/solid-content.tsx";
 import { renderChatAvatar } from "../chat-avatar.ts";
 import type { ChatSubagentWait } from "../chat-subagent-wait.ts";
-import { ChatBubbleActivity, ChatBubbleDots } from "./chat-bubble-activity-view.tsx";
-import { renderSolidGroupedMessage } from "./chat-message-bubble-view.tsx";
+import { ChatBubbleDots } from "./chat-bubble-activity-view.tsx";
+import type { GroupedMessageOptions } from "./chat-message-bubble-options.ts";
+import { GroupedMessage } from "./chat-message-bubble-view.tsx";
 import {
   prepareChatMessageRender,
   resolveMessageActionDetails,
 } from "./chat-message-markdown-view.tsx";
-import { MarkdownText } from "./chat-message-text-view.tsx";
 import { ChatTimestamp } from "./chat-message-timestamp-view.tsx";
 import { renderChatQuestionSummary } from "./chat-question-card.ts";
 import {
@@ -52,7 +44,7 @@ export type StreamGroupPart = Extract<
 >;
 
 type StreamMessageOptions = Pick<
-  Parameters<typeof renderSolidGroupedMessage>[2],
+  GroupedMessageOptions,
   | "onOpenReply"
   | "replyNavigationId"
   | "sessionKey"
@@ -226,34 +218,6 @@ function StreamingMessage(props: {
       timestamp: part().startedAt,
     }),
   );
-  const markdownOptions = (): MarkdownRenderOptions => ({
-    assistantTranscriptRoleHeaders: true,
-    codeBlockChrome: "copy",
-    codeBlockInteraction: "interactive",
-    fileLinks: true,
-    githubRepo: props.options.githubRepo ?? null,
-    githubRepositories: props.options.githubRepositories,
-    humanMentions: prepared().humanMentions,
-    interactiveImages: props.options.onOpenImage !== undefined,
-    sessionLinks: true,
-    tableInteractions: "enabled",
-    linkFavicons: Boolean(props.options.fetchLinkFavicon) && !part().isStreaming,
-  });
-  const markdown = createMemo(() => {
-    const source = prepared().displayMarkdown;
-    const options = markdownOptions();
-    const json = !part().isStreaming && parseMarkdownJson(source);
-    if (json) {
-      return toSanitizedJsonHtml(json, options);
-    }
-    return {
-      messageKey: part().key,
-      source,
-      parts: part().isStreaming
-        ? toStreamingMarkdownParts(source, options, part().key)
-        : ([toSanitizedMarkdownHtml(source, options), ""] satisfies [string, string]),
-    };
-  });
   const actions = createMemo(() =>
     resolveMessageActionDetails(prepared(), {
       messageId: part().key,
@@ -261,55 +225,19 @@ function StreamingMessage(props: {
       senderLabel: props.options.assistant?.name ?? "Assistant",
     }),
   );
-  let entryElement: Element | undefined;
-  let currentEntryRef: ((element?: Element) => void) | undefined;
-  createEffect(
-    () => props.options.entryRefFor?.(part().key),
-    (next) => {
-      if (currentEntryRef !== next) {
-        currentEntryRef?.(undefined);
-      }
-      currentEntryRef = next;
-      if (entryElement) {
-        currentEntryRef?.(entryElement);
-      }
-    },
-  );
-  const entryRef = (element?: Element) => {
-    entryElement = element;
-    currentEntryRef?.(element);
-  };
-  onCleanup(() => currentEntryRef?.(undefined));
-  const thinking = (
-    <MarkdownText
-      class="chat-thinking"
-      content={toSanitizedMarkdownHtml(`_Reasoning:_\n\n${part().thinking ?? ""}`, {
-        codeBlockInteraction: "interactive",
-      })}
-    />
-  );
   return (
-    <div
-      class={["chat-bubble", { streaming: part().isStreaming }]}
-      data-message-id={part().key}
-      data-message-text={actions()?.markdown || prepared().displayMarkdown || undefined}
-      prop:messageActions={actions()}
-      ref={entryRef}
-    >
-      <Show when={part().thinking}>
-        <Show when={props.options.bubbleMode} fallback={thinking}>
-          <ChatBubbleActivity label={t("chat.view.activityDetails")} working={part().isStreaming}>
-            {thinking}
-          </ChatBubbleActivity>
-        </Show>
-      </Show>
-      <Show when={prepared().displayMarkdown}>
-        <MarkdownText
-          content={markdown()}
-          direction={detectTextDirection(prepared().displayMarkdown)}
-        />
-      </Show>
-    </div>
+    <GroupedMessage
+      preparation={prepared()}
+      messageKey={part().key}
+      options={{
+        ...props.options,
+        isStreaming: part().isStreaming,
+        entryRef: props.options.entryRefFor?.(part().key),
+        showReasoning: Boolean(part().thinking),
+        messageActions: actions(),
+      }}
+      onOpenSidebar={props.options.onOpenSidebar}
+    />
   );
 }
 
@@ -463,7 +391,7 @@ function WorkGroupSummaryBody(props: {
       <button
         class="chat-inline-disclosure chat-activity-group__summary"
         type="button"
-        aria-expanded={String(props.options.expanded)}
+        aria-expanded={props.options.expanded ? "true" : "false"}
         aria-label={compact() ? t("chat.view.activityDetails") : undefined}
         onPointerEnter={syncToolDisclosureOverflow}
         onFocus={syncToolDisclosureOverflow}

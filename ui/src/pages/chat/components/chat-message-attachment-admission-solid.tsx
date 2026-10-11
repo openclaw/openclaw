@@ -1,7 +1,7 @@
 import type { JSX } from "@solidjs/web";
 import { Show, createSignal, onCleanup } from "solid-js";
 import { observeChatAttachmentViewport } from "./chat-attachment-viewport.ts";
-import type { AttachmentAdmission } from "./chat-message-attachment-admission.ts";
+import type { AttachmentAdmission } from "./chat-message-attachment-admission-model.ts";
 import type { AttachmentItem, ImageRenderOptions } from "./chat-message-media.ts";
 
 export type AttachmentAdmissionProps = {

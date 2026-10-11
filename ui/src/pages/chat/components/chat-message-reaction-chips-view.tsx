@@ -5,7 +5,7 @@ import {
   type MessageReactionOptions,
   messageReactionOptions,
   ownReactionEmoji,
-} from "./chat-message-reactions.ts";
+} from "./chat-message-reaction-model.ts";
 
 function reactorsLabel(reaction: MessageReactionSummary, userId: string | null | undefined) {
   const you = t("chat.reactions.you");
@@ -60,7 +60,7 @@ export function GroupMessageReactions(props: {
                   class="chat-reaction-chip"
                   type="button"
                   aria-label={`${reaction().emoji} ${reaction().count}`}
-                  aria-pressed={String(pressed())}
+                  aria-pressed={pressed() ? "true" : "false"}
                   disabled={!options().onReact}
                   onClick={() => options().onReact?.(messageId()!, reaction().emoji, pressed())}
                 >

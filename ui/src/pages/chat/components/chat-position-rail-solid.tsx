@@ -1,6 +1,9 @@
 import { createMemo, createSignal, flush, onCleanup, Show } from "solid-js";
+import {
+  ChatPositionRailController,
+  type PositionRailParams,
+} from "./chat-position-rail-controller.ts";
 import { ChatPositionRailView } from "./chat-position-rail-view.tsx";
-import { ChatPositionRailController, type PositionRailParams } from "./chat-position-rail.ts";
 
 export function ChatPositionRail(props: PositionRailParams) {
   const [revision, setRevision] = createSignal(0);

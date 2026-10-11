@@ -26,7 +26,8 @@ import {
   type MessageReactionAction,
   type MessageReactionOptions,
   ownReactionEmoji,
-} from "./chat-message-reactions.ts";
+} from "./chat-message-reaction-model.ts";
+import "./chat-message-reactions.ts";
 
 registerEnglishCatalog(registerChatMessageMetadataEnglish);
 

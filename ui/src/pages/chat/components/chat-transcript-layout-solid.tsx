@@ -102,7 +102,9 @@ function TranscriptRows(props: { snapshot: TranscriptLayoutProps }) {
         >
           <For each={virtualRows()} keyed={(row) => row.key}>
             {(virtualRow, renderedIndex) => {
-              const row = createMemo(() => props.snapshot.rows[virtualRow().index]);
+              const index = createMemo(() => virtualRow().index);
+              const row = createMemo(() => props.snapshot.rows[index()]);
+              const content = createMemo(() => props.snapshot.getContent(index()));
               const gap = createMemo(() => {
                 const previous = virtualRows()[renderedIndex() - 1];
                 return previous && virtualRow().index > previous.index + 1
@@ -128,7 +130,7 @@ function TranscriptRows(props: { snapshot: TranscriptLayoutProps }) {
                     data-index={String(virtualRow().index)}
                     data-virtual-row-key={row()?.key}
                   >
-                    <RowContent value={props.snapshot.getContent(virtualRow().index)} />
+                    <RowContent value={content()} />
                   </div>
                 </>
               );
@@ -243,12 +245,13 @@ export class ChatTranscriptRenderer {
             },
           });
           this.lifecycle = lifecycle;
-          const capture = (event: Event) => lifecycle.snapshot().captureInteractionResize(event);
+          const snapshot = createMemo(lifecycle.snapshot);
+          const capture = (event: Event) => snapshot().captureInteractionResize(event);
           element.addEventListener("click", capture, true);
           onCleanup(() => element.removeEventListener("click", capture, true));
           return (
             <SolidContentPresentation value={active}>
-              <TranscriptRows snapshot={lifecycle.snapshot()} />
+              <TranscriptRows snapshot={snapshot()} />
             </SolidContentPresentation>
           );
         }, element),

@@ -10,7 +10,7 @@ import { resolveAssistantReplyPhase } from "../chat-assistant-reply.ts";
 import { readPendingSendStatus } from "../chat-thread.ts";
 import { hasForwardedSource } from "../chat-turn-boundary.ts";
 import { workspaceResultConflictFromTranscript } from "../workspace-conflict.ts";
-import type { GroupedMessageOptions } from "./chat-message-bubble-view.tsx";
+import type { GroupedMessageOptions } from "./chat-message-bubble-options.ts";
 import type { RenderMessageGroupOptions } from "./chat-message-group-options.ts";
 import {
   FULL_MESSAGE_RETRY_REVISION_LIMIT,

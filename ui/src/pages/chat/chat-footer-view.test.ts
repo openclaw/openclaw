@@ -22,7 +22,7 @@ function expectFooterContext(container: Element, surface: Element) {
   const scrollAnchor = footer.previousElementSibling;
   const viewport = requireElement(container, ".chat-thread-viewport", "transcript viewport");
   expect(scrollAnchor?.classList.contains("chat-scroll-to-bottom-wrap")).toBe(true);
-  expect(scrollAnchor?.previousElementSibling).toBe(viewport);
+  expect(viewport.compareDocumentPosition(scrollAnchor!)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
   expect(viewport.querySelector(':scope > .chat-thread[role="log"]')).not.toBeNull();
   expect(surface.closest(".chat-footer")).toBe(footer);
   expect(shell.closest(".chat-footer")).toBe(footer);

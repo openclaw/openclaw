@@ -52,7 +52,6 @@ export function trackTranscriptRenderDependencies(
   const previous = state.transcriptRenderDependencies;
   if (!transcriptArraysEqual(dependencies, previous)) {
     state.transcriptRenderDependencies = dependencies;
-    state.transcriptRenderContext = {};
   }
 }
 
@@ -65,7 +64,11 @@ export function guardChatRenderItems(
 ) {
   return (item: ChatRenderItem) =>
     new GuardedTranscriptItem(
-      [...itemDependencies(item), state.transcriptRenderContext, ...presentationDependencies(item)],
+      [
+        ...itemDependencies(item),
+        state.transcriptRenderDependencies,
+        ...presentationDependencies(item),
+      ],
       nativeFor(item),
       legacyFor?.(item),
     );

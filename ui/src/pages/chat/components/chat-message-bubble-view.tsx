@@ -10,28 +10,22 @@ import {
   type Accessor,
   untrack,
 } from "solid-js";
-import type { ImageLightboxItem } from "../../../components/image-lightbox.types.ts";
-import type { MarkdownRenderOptions } from "../../../components/markdown-render-options.ts";
 import { toSanitizedMarkdownHtml } from "../../../components/markdown.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { registerChatMessageMetadataEnglish } from "../../../i18n/locales/en-chat-message-metadata.ts";
-import type { BoardProvider } from "../../../lib/board/provider.ts";
 import type { ToolCard } from "../../../lib/chat/chat-types.ts";
 import { resolveMessageDisplayMarkdown } from "../../../lib/chat/message-display.ts";
-import type { EmbedSandboxMode } from "../../../lib/chat/tool-display.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
-import { type PresentationValue, presentedContent } from "../../../lit/presentation-binding.ts";
+import { presentedContent } from "../../../lit/presentation-binding.ts";
 import { LitContent, solidContent } from "../../../lit/solid-content.tsx";
 import { assistantMessageIsInterrupted } from "../chat-assistant-reply.ts";
-import type { PluginToolIcons } from "../chat-tool-icon-controller.ts";
-import type { LinkFaviconFetcher } from "../link-favicon-cache.ts";
 import { renderAsyncQuestionSummary } from "./chat-async-question.ts";
-import type { AsyncQuestionPresentation } from "./chat-async-question.types.ts";
 import "../../../components/person-reference.ts";
 import { ChatBubbleActivity } from "./chat-bubble-activity-view.tsx";
 import { OmittedMedia } from "./chat-message-attachment-status-solid.tsx";
 import { AssistantAttachments, MessageAttachment } from "./chat-message-attachments-solid.tsx";
 import { renderAssistantAttachments } from "./chat-message-attachments.ts";
+import type { GroupedMessageOptions } from "./chat-message-bubble-options.ts";
 import {
   prepareGroupedMessage,
   type GroupedMessagePresentation,
@@ -40,24 +34,12 @@ import { MessageWorkContext } from "./chat-message-context-view.tsx";
 import { MessageImages } from "./chat-message-images-solid.tsx";
 import { renderMessageImages } from "./chat-message-images.ts";
 import "./chat-clawhub-card.ts";
-import type {
-  ChatMessageRenderPreparation,
-  MessageActionDetails,
-} from "./chat-message-markdown-view.tsx";
+import type { ChatMessageRenderPreparation } from "./chat-message-markdown-view.tsx";
 import type { MarkdownMedia } from "./chat-message-media-markdown.ts";
 import { prepareMarkdownMedia } from "./chat-message-media-markdown.ts";
-import {
-  type ArtifactDownloadResolver,
-  type AttachmentItem,
-  schedulePairingQrExpiryRefresh,
-} from "./chat-message-media.ts";
-import {
-  type AssistantMessageDisclosure,
-  MarkdownText,
-  MessageJson,
-  MessageMarkdown,
-} from "./chat-message-text-view.tsx";
-import { type ReplyLine, renderReplyLine } from "./chat-reply-attribution.ts";
+import { type AttachmentItem, schedulePairingQrExpiryRefresh } from "./chat-message-media.ts";
+import { MarkdownText, MessageJson, MessageMarkdown } from "./chat-message-text-view.tsx";
+import { renderReplyLine } from "./chat-reply-attribution.ts";
 import type { SidebarContent } from "./chat-sidebar-content-types.ts";
 import {
   renderToolApprovalReviews,
@@ -67,68 +49,12 @@ import {
   syncToolDisclosureOverflow,
 } from "./chat-tool-cards.ts";
 import {
-  type ToolRenderOptions,
   renderExpandedToolCardContent,
   renderRawOutputToggle,
   renderToolOutcome,
 } from "./chat-tool-content.ts";
 import { renderWorkspaceConflictTranscriptMessage } from "./chat-workspace-conflict.ts";
 import { renderToolPreview } from "./widget-card.ts";
-
-export type GroupedMessageOptions = {
-  isStreaming: boolean;
-  isForwarded?: boolean;
-  sessionKey?: string;
-  presented?: boolean;
-  transcriptVisible?: PresentationValue;
-  boardProvider?: BoardProvider;
-  agentId?: string;
-  duplicateCount?: number;
-  showReasoning: boolean;
-  bubbleMode?: boolean;
-  showToolCalls?: boolean;
-  runActive?: boolean;
-  asyncQuestions?: AsyncQuestionPresentation;
-  isToolMessageExpanded?: (messageId: string) => boolean | undefined;
-  onToggleToolMessageExpanded?: (messageId: string, expanded?: boolean) => void;
-  isUserMessageExpanded?: (messageId: string) => boolean;
-  onToggleUserMessageExpanded?: (messageId: string) => void;
-  assistantMessageDisclosure?: AssistantMessageDisclosure;
-  messageActions?: MessageActionDetails | null;
-  isToolExpanded?: (toolCardId: string) => boolean;
-  onToggleToolExpanded?: (toolCardId: string, expanded?: boolean) => void;
-  toolCardOverrides?: ReadonlyMap<ToolCard, unknown>;
-  onRequestUpdate?: () => void;
-  canvasPluginSurfaceUrl?: string | null;
-  resourceBasePath?: string;
-  mediaPolicyKey?: string;
-  connectionEpoch?: number;
-  assistantAttachmentAuthToken?: string | null;
-  resolveArtifactDownload?: ArtifactDownloadResolver;
-  getTurnVideoMessages?: (
-    key: string,
-  ) => readonly import("./chat-turn-video-gallery.ts").TurnVideoMessage[] | undefined;
-  onRequestOpenImage?: () => number;
-  onOpenImage?: (item: ImageLightboxItem, requestVersion?: number) => void;
-  onAssistantAttachmentLoaded?: () => void;
-  embedSandboxMode?: EmbedSandboxMode;
-  allowExternalEmbedUrls?: boolean;
-  fetchLinkFavicon?: LinkFaviconFetcher;
-  pluginToolIcons?: PluginToolIcons;
-  githubRepo?: MarkdownRenderOptions["githubRepo"];
-  githubRepositories?: MarkdownRenderOptions["githubRepositories"];
-  onOpenWorkspaceFile?: (target: { path: string; line?: number | null }) => void;
-  subagents?: ToolRenderOptions["subagents"];
-  fileLinkSessionKey?: string;
-  avatar?: () => JSX.Element;
-  entryId?: string;
-  /** Freshly submitted user turn: play the one-shot composer entry animation. */
-  entryRef?: (element?: Element) => void;
-  /** This message's own "Replying to" line, drawn inside the bubble. */
-  replyLine?: ReplyLine;
-  onOpenReply?: (replyToId: string) => void;
-  replyNavigationId?: string | null;
-};
 
 registerEnglishCatalog(registerChatMessageMetadataEnglish);
 
@@ -168,7 +94,8 @@ export function GroupedMessage(props: GroupedMessageProps) {
     prepareGroupedMessage(props.preparation, props.messageKey, props.options, props.onOpenSidebar),
   );
   let element: Element | undefined;
-  let currentEntryRef: ((element?: Element) => void) | undefined;
+  // Bind arrivals before the transcript commit consumes their pending identities.
+  let currentEntryRef = untrack(() => props.options.entryRef);
   createEffect(
     () => props.options.entryRef,
     (next) => {
@@ -432,10 +359,11 @@ function MessageText(props: ContentProps) {
 
 function MessageAvatar(props: { render?: () => JSX.Element }) {
   const render = createMemo(() => props.render);
-  return createMemo(() => {
+  const avatar = createMemo(() => {
     const factory = render();
     return factory ? untrack(factory) : undefined;
   });
+  return <>{avatar()}</>;
 }
 
 function VideoPreview(props: ContentProps & { item: Accessor<AttachmentItem | undefined> }) {
@@ -589,7 +517,7 @@ function ToolMessageFallback(props: ContentProps) {
       <button
         class="chat-inline-disclosure chat-tool-msg-summary"
         type="button"
-        aria-expanded={String(props.state().toolMessageExpanded)}
+        aria-expanded={props.state().toolMessageExpanded ? "true" : "false"}
         onPointerEnter={syncToolDisclosureOverflow}
         onFocus={syncToolDisclosureOverflow}
         onClick={() =>

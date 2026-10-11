@@ -2,10 +2,7 @@ import WaPopover from "@awesome.me/webawesome/dist/components/popover/popover.js
 import { css, html, svg } from "lit";
 import { property, state } from "lit/decorators.js";
 import { ref } from "lit/directives/ref.js";
-import {
-  isReactionEmoji,
-  type MessageReactionSummary,
-} from "../../../../../packages/gateway-protocol/src/index.js";
+import { isReactionEmoji } from "../../../../../packages/gateway-protocol/src/index.js";
 import { strokeIcon } from "../../../components/icons-tools.ts";
 import { icons } from "../../../components/icons.ts";
 import { sessionEmojiPickerShortcut } from "../../../components/session-icon-picker.ts";
@@ -17,53 +14,18 @@ import {
   GroupMessageReactions,
   type renderSolidGroupMessageReactions,
 } from "./chat-message-reaction-chips-view.tsx";
+import type { MessageReactionPlacement } from "./chat-message-reaction-model.ts";
 
 export {
   GroupMessageReactions,
   renderSolidGroupMessageReactions,
 } from "./chat-message-reaction-chips-view.tsx";
 
-export type MessageReactionAction = (messageId: string, emoji: string, remove: boolean) => void;
-type MessageReactionPlacement = "bottom-start" | "bottom-end";
-
 const QUICK_REACTIONS = ["👍", "❤️", "🎉", "👀", "🚀", "😂"] as const;
 
 const addReactionIcon = strokeIcon(svg`<path d="M21 11.5a9 9 0 1 1-8.5-8.5"/>
   <path d="M8 14s1.5 2 4 2 4-2 4-2M16 5h6M19 2v6"/>
   <path d="M9 9h.01M15 9h.01"/>`);
-
-export function ownReactionEmoji(
-  reactions: readonly MessageReactionSummary[] | undefined,
-  userId: string | null | undefined,
-): ReadonlySet<string> {
-  return new Set(
-    (reactions ?? [])
-      .filter((reaction) => reaction.identities.some((identity) => identity.id === userId))
-      .map((reaction) => reaction.emoji),
-  );
-}
-
-export type MessageReactionOptions = {
-  messageReactions?: ReadonlyMap<string, MessageReactionSummary[]>;
-  userId?: string | null;
-  onReact?: MessageReactionAction;
-  reactionPlacement?: MessageReactionPlacement;
-};
-
-/** Pickers under a person's own right-aligned prompt open toward the left. */
-export function messageReactionOptions(
-  group: { role: string; sender?: { identity?: { type: string; id: string } } | null },
-  opts: MessageReactionOptions,
-): MessageReactionOptions {
-  const identity = group.sender?.identity;
-  const own = group.role === "user" && identity?.type === "profile" && identity.id === opts.userId;
-  return {
-    messageReactions: opts.messageReactions,
-    userId: opts.userId,
-    onReact: opts.onReact,
-    reactionPlacement: own ? "bottom-end" : "bottom-start",
-  };
-}
 
 export function renderGroupMessageReactions(
   ...args: Parameters<typeof renderSolidGroupMessageReactions>

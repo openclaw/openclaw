@@ -1,7 +1,7 @@
 import type { JSX as SolidJSX } from "@solidjs/web";
 import { For, Match, Show, Switch, createMemo } from "solid-js";
 import { t } from "../../../lib/reactive/i18n.ts";
-import { LitContent } from "../../../lit/solid-content.tsx";
+import { LitContent, solidContent } from "../../../lit/solid-content.tsx";
 import { renderCompactAttachmentCard } from "./chat-attachment-card.ts";
 import "./chat-audio-player.ts";
 import "./chat-svg-attachment.tsx";
@@ -12,15 +12,15 @@ import {
   safePlainTextAttachmentHref,
   safeMediaAttachmentHref,
 } from "./chat-attachment-href.ts";
-import { ChatAttachmentAdmission } from "./chat-message-attachment-admission-solid.tsx";
 import {
   shouldDeferAttachmentCard,
   type AttachmentAdmission,
-} from "./chat-message-attachment-admission.ts";
+} from "./chat-message-attachment-admission-model.ts";
+import { ChatAttachmentAdmission } from "./chat-message-attachment-admission-solid.tsx";
 import { isManagedOutgoingMediaSource } from "./chat-message-attachment-availability.ts";
+import { resolveAttachmentSource } from "./chat-message-attachment-source.ts";
 import { AssistantAttachmentStatusCard } from "./chat-message-attachment-status-solid.tsx";
 import { attachmentFailureReason } from "./chat-message-attachment-status.ts";
-import { renderMessageAttachment, resolveAttachmentSource } from "./chat-message-attachments.ts";
 import { openResolvedImage } from "./chat-message-image-open.ts";
 import { isLocalAssistantAttachmentSource } from "./chat-message-local-media.ts";
 import {
@@ -95,13 +95,13 @@ export function AssistantAttachments(
             sizeBytes: resolved.source.sizeBytes,
           }
         : { pending: resolved.status === "checking" }),
-      fallback: renderMessageAttachment(
+      fallback: solidContent(MessageAttachment, {
         item,
-        props.options,
-        props.onOpenSidebar,
-        props.onAssistantAttachmentLoaded,
-        "card",
-      ),
+        options: props.options,
+        onOpenSidebar: props.onOpenSidebar,
+        onAssistantAttachmentLoaded: props.onAssistantAttachmentLoaded,
+        presentation: "card",
+      }),
     };
   };
   return (
@@ -120,22 +120,26 @@ export function AssistantAttachments(
           value={renderSentCommentAttachments(comments(), props.options, resolveComment)}
         />
         <For each={files()} keyed={false}>
-          {(item) => (
-            <MessageAttachment
-              item={item()}
-              options={props.options}
-              onOpenSidebar={props.onOpenSidebar}
-              onAssistantAttachmentLoaded={props.onAssistantAttachmentLoaded}
-              presentation={
-                props.inlinePlayback !== false ||
-                (item().type === "attachment" &&
-                  item().attachment.kind === "audio" &&
-                  item().attachment.isVoiceNote)
-                  ? "inline"
-                  : "card"
-              }
-            />
-          )}
+          {(item) => {
+            const presentation = createMemo<"inline" | "card">(() => {
+              const current = item();
+              return props.inlinePlayback !== false ||
+                (current.type === "attachment" &&
+                  current.attachment.kind === "audio" &&
+                  current.attachment.isVoiceNote)
+                ? "inline"
+                : "card";
+            });
+            return (
+              <MessageAttachment
+                item={item()}
+                options={props.options}
+                onOpenSidebar={props.onOpenSidebar}
+                onAssistantAttachmentLoaded={props.onAssistantAttachmentLoaded}
+                presentation={presentation()}
+              />
+            );
+          }}
         </For>
       </div>
     </Show>
@@ -346,6 +350,10 @@ function AttachmentContent(
       props.options.policyKey,
     ]);
   const title = () => attachment().label.trim() || t("chat.imageLightbox.untitled");
+  const pastedTextSource = () => {
+    const sourceUrl = model().safeAttachmentUrl;
+    return sourceUrl && !isCrossOriginHttpSource(sourceUrl) ? sourceUrl : undefined;
+  };
   const ready = () => !props.admission || Boolean(model().media);
   return (
     <Switch fallback={<LitContent value={card()} />}>
@@ -364,11 +372,7 @@ function AttachmentContent(
       </Match>
       <Match when={model().pastedText}>
         <openclaw-chat-pasted-text
-          prop:src={
-            model().safeAttachmentUrl && !isCrossOriginHttpSource(model().safeAttachmentUrl)
-              ? model().safeAttachmentUrl
-              : undefined
-          }
+          prop:src={pastedTextSource()}
           prop:sizeBytes={model().media?.sizeBytes ?? attachment().sizeBytes}
           prop:scope={scope()}
           prop:onOpen={model().openAttachmentSidebar}

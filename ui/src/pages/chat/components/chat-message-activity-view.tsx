@@ -234,7 +234,7 @@ function ActivityGroupBody(props: {
         <button
           class="chat-inline-disclosure chat-activity-group__summary"
           type="button"
-          aria-expanded={String(state().activityExpanded)}
+          aria-expanded={state().activityExpanded ? "true" : "false"}
           aria-controls={state().activityBodyId}
           aria-label={compact() ? t("chat.view.activityDetails") : undefined}
           onPointerEnter={syncToolDisclosureOverflow}

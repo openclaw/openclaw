@@ -106,10 +106,8 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
   // Keep one ref per root and row so redraws do not repeat attachment work.
   readonly scrollElementRef = (element?: Element) => {
     const next = element instanceof HTMLDivElement ? element : null;
-    if (next === this.threadInnerElement) {
-      return;
-    }
     this.threadInnerElement = next;
+    // A retained root can move to another host without changing its identity.
     this.queueScrollElementAttach();
   };
   // Sidebar hosts commit after the pane's update. Attach from the stable DOM
@@ -122,9 +120,7 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
     this.scrollElementAttachQueued = true;
     queueMicrotask(() => {
       this.scrollElementAttachQueued = false;
-      if (this.connected) {
-        this.renderer.connect();
-      }
+      this.renderer.connect();
       const instance = this.virtualizer;
       if (this.connected && instance.scrollElement !== this.scrollElement) {
         this.layout.connect(this.scrollElement);
@@ -339,7 +335,14 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
     }
   }
 
-  update = () => this.renderer.commit();
+  update(): void {
+    if (this.threadInnerElement) {
+      this.renderer.commit();
+    } else if (this.connected) {
+      // Empty shells have no native row root; their host still commits readiness.
+      this.didCommit();
+    }
+  }
 
   private readonly didCommit = () => {
     this.entryAnimations.didCommit();

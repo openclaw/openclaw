@@ -204,7 +204,7 @@ export function ChatPositionRailView(props: PositionRailViewParams) {
                       style={{ top: `${entry().index * POSITION_RAIL_MARKER_HEIGHT}px` }}
                       type="button"
                       data-position-marker-id={entry().marker.id}
-                      tabIndex={entry().marker.id === props.rovingId ? 0 : -1}
+                      tabindex={entry().marker.id === props.rovingId ? 0 : -1}
                       aria-label={t("chat.thread.positionMarker", {
                         position: String(entry().index + 1),
                         count: String(props.markers.length),

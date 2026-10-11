@@ -21,7 +21,7 @@ import { isPendingSendMessage } from "../chat-thread-items.ts";
 import { workspaceResultConflictFromTranscript } from "../workspace-conflict.ts";
 import { readAsyncQuestions } from "./chat-async-question.ts";
 import { hasUserFileAttachments } from "./chat-message-attachments.ts";
-import type { GroupedMessageOptions } from "./chat-message-bubble-view.tsx";
+import type { GroupedMessageOptions } from "./chat-message-bubble-options.ts";
 import {
   type ChatMessageRenderPreparation,
   prepareChatMessageRender,
@@ -95,10 +95,13 @@ export function prepareGroupedMessage(
   const videoPreviews =
     normalizedRole === "user"
       ? visibleAttachments.filter(
-          (item) => item.type === "attachment" && item.attachment.kind === "video",
+          (item): item is AttachmentItem =>
+            item.type === "attachment" && item.attachment.kind === "video",
         )
       : [];
-  const cardAttachments = visibleAttachments.filter((item) => !videoPreviews.includes(item));
+  const cardAttachments = visibleAttachments.filter(
+    (item) => item.type !== "attachment" || !videoPreviews.includes(item),
+  );
   const hasUserFiles = normalizedRole === "user" && hasUserFileAttachments(cardAttachments);
   const imageRenderOptions = {
     galleryImages: images,

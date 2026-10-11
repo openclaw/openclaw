@@ -150,7 +150,7 @@ export function ChatThread(input: {
         role="log"
         aria-live="off"
         aria-relevant="additions"
-        tabIndex={0}
+        tabindex={0}
         onFocusIn={(event) => current().session.handleFocusIn(event)}
         onFocusOut={(event) => current().session.handleFocusOut(event)}
         onScroll={(event) => input.props.onChatScroll?.(event)}

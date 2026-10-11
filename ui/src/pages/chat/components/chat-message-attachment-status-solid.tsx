@@ -69,7 +69,7 @@ export function AssistantAttachmentStatusCard(
                 { "chat-assistant-attachment-card__title--unavailable": unavailable() },
               ]}
               title={props.path ?? props.label}
-              tabIndex={props.path ? 0 : undefined}
+              tabindex={props.path ? 0 : undefined}
             >
               {props.label}
             </span>
