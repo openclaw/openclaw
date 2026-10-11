@@ -1987,43 +1987,42 @@ describe("buildGatewayCronService", () => {
     }
   });
 
-  it("does not retry a command announcement after its cron run is cancelled", async () => {
+  it("does not retry cancelled command output while still notifying terminal failure", async () => {
     vi.stubEnv("OPENCLAW_TEST_FAST", "1");
-    const cfg = createCronConfig("server-cron-command-cancelled-retry");
-    loadConfigMock.mockReturnValue(cfg);
     let deliverySignal: AbortSignal | undefined;
-    sendCronAnnouncePayloadStrictMock.mockImplementationOnce(async (...args: unknown[]) => {
-      const request = requireRecord(args[0], "cancelled cron announce attempt");
-      deliverySignal = request.abortSignal as AbortSignal;
+    sendCronAnnouncePayloadStrictMock.mockImplementationOnce(async (request) => {
+      deliverySignal = request.abortSignal;
       expect(abortActiveCronTaskRuns("Cancelled by operator.")).toBe(1);
       throw new PlatformMessageNotDispatchedError("platform unavailable before dispatch", {
-        cause: Object.assign(new Error("connect ECONNREFUSED"), {
-          code: "ECONNREFUSED",
-          syscall: "connect",
-        }),
+        cause: new Error("connect ECONNREFUSED"),
       });
     });
 
-    const state = createCronService(cfg);
     try {
-      const job = await addCommandJob(
-        state,
-        "cancelled command announcement",
-        "process.stdout.write('scheduled result')",
-        {
+      await withCronService(createCronConfig("cron-cancelled-retry"), async (state) => {
+        const job = await addCommandJob(state, "cancelled", "console.log('scheduled result')", {
           deleteAfterRun: false,
           failureAlert: false,
           delivery: { mode: "announce", channel: "telegram", to: "123" },
-        },
-      );
+        });
+        await state.cron.run(job.id, "force");
 
-      await state.cron.run(job.id, "force");
-
-      expect(sendCronAnnouncePayloadStrictMock).toHaveBeenCalledOnce();
-      expect(deliverySignal?.aborted).toBe(true);
-      expect(state.cron.getJob(job.id)?.state.lastRunStatus).toBe("error");
+        expect(sendCronAnnouncePayloadStrictMock).toHaveBeenCalledTimes(2);
+        const completion = sendCronAnnouncePayloadStrictMock.mock.calls[0]?.[0];
+        const failure = sendCronAnnouncePayloadStrictMock.mock.calls[1]?.[0];
+        expect(completion?.completion).toBeDefined();
+        expect(completion?.payload.text).toBe("scheduled result");
+        expect(deliverySignal?.aborted).toBe(true);
+        expect(failure?.completion).toBeUndefined();
+        expect(failure?.payload.text).toContain('Automation "cancelled" failed 1 times');
+        expect(failure?.abortSignal).not.toBe(deliverySignal);
+        expect(failure?.abortSignal?.aborted).toBe(false);
+        expect(state.cron.getJob(job.id)).toMatchObject({
+          enabled: false,
+          state: { lastRunStatus: "error", lastError: "Cancelled by operator." },
+        });
+      });
     } finally {
-      state.cron.stop();
       vi.unstubAllEnvs();
     }
   });

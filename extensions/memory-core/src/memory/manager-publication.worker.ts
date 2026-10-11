@@ -18,6 +18,7 @@ import {
   requestSqliteWorkerOperationAdmission,
   readSqliteDatabasePendingWriteToken,
   runSqliteImmediateTransactionSync,
+  setSqliteBusyTimeout,
   supportsNodeSqliteExtensionLoading,
   tableExists,
   type SqliteWorkerBackend,
@@ -222,7 +223,11 @@ function createPublicationBackend(
       throw new Error("Invalid memory publication connection policy");
     }
     if (ownsConnection) {
-      db.exec(`PRAGMA ${name} = ${value}`);
+      if (name === "busy_timeout") {
+        setSqliteBusyTimeout(db, value);
+      } else {
+        db.exec(`PRAGMA ${name} = ${value}`);
+      }
     }
   }
   const discard = () => {
@@ -243,7 +248,7 @@ function createPublicationBackend(
     let restoredBusyTimeout = false;
     const restoreBusyTimeout = () => {
       if (!restoredBusyTimeout) {
-        db.exec(`PRAGMA busy_timeout = ${input.pragmas.busy_timeout}`);
+        setSqliteBusyTimeout(db, input.pragmas.busy_timeout);
         restoredBusyTimeout = true;
       }
     };
@@ -251,7 +256,7 @@ function createPublicationBackend(
       assertPath();
       // Failed BEGIN is returned to the preparing host without sleeping here.
       // It revalidates memory-file input before every retry, as before.
-      db.exec("PRAGMA busy_timeout = 0");
+      setSqliteBusyTimeout(db, 0);
       const value = run({
         onBegin: () => {
           entered = true;

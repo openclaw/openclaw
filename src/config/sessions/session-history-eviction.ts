@@ -604,7 +604,6 @@ async function enforceSessionHistoryMaintenanceForDatabase(
     const publishedArchives = await publishSessionStateArchives(
       resolved,
       eviction.archivedTranscripts,
-      undefined,
       () => assertDatabasePathIdentity(databasePath, expectedIdentity),
     );
     removedEntries += 1;

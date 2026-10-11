@@ -14,12 +14,13 @@ import {
 const suite = createSessionManagementE2eSuite();
 
 suite.define(() => {
-  it("retains authenticated Mine rows through transport and client replacement without exposing other owners", async () => {
+  it("retains My sessions through transport and client replacement without exposing other owners", async () => {
     const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const sessionKey = "agent:main:owned-reconnect";
     const ownKeys = [sessionKey, "agent:main:owned-other"];
     const gateway = await installMockGateway(page, {
+      hasMultipleSessionSharingIdentities: true,
       sessionKey,
       presenceUsers: [
         { self: true, id: "reader", name: "Reader", identity: { type: "profile", id: "reader" } },
@@ -52,8 +53,8 @@ suite.define(() => {
       await waitForControlUiGatewayReady(page);
       const sidebar = page.locator("openclaw-app-sidebar");
       const rows = sidebar.locator(".sidebar-recent-session");
-      const mine = sidebar.getByRole("button", { name: "Mine", exact: true });
-      await expect.poll(() => mine.getAttribute("aria-pressed")).toBe("true");
+      const ownerFilter = sidebar.locator("#sidebar-session-owner-title");
+      await expect.poll(() => ownerFilter.getAttribute("aria-label")).toBe("Owners: My sessions");
       await expect.poll(() => rows.count()).toBe(2);
       await gateway.setOnline(false);
       await waitForControlUiGatewayReconnecting(page);
@@ -68,13 +69,13 @@ suite.define(() => {
         )
         .click();
       await expect.poll(() => rows.count()).toBe(2);
-      expect(await mine.getAttribute("aria-pressed")).toBe("true");
+      expect(await ownerFilter.getAttribute("aria-label")).toBe("Owners: My sessions");
       expect(await sidebar.locator('[data-session-key="agent:main:foreign"]').count()).toBe(0);
       expect(await sidebar.locator('[data-session-key="agent:main:agent-owned"]').count()).toBe(0);
       await gateway.setOnline(true);
       await waitForControlUiGatewayReady(page);
       await expect.poll(() => rows.count()).toBe(2);
-      expect(await mine.getAttribute("aria-pressed")).toBe("true");
+      expect(await ownerFilter.getAttribute("aria-label")).toBe("Owners: My sessions");
     } finally {
       await context.close();
     }

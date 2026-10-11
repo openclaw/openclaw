@@ -316,20 +316,14 @@ describe("gateway settings and layout persistence", () => {
     expect(loadSettings().navWidth).toBe(258);
     expect(readStored()).not.toHaveProperty("navCollapsed");
 
-    // Corrupt the persisted list; load falls back to the default pinned set.
+    // Corrupt the persisted list; load falls back to the empty rail.
     writeStored({
       ...readStored(),
       sidebarEntries: "route:tasks",
       navWidth: 220,
       navCollapsed: true,
     });
-    expect(loadSettings().sidebarEntries).toEqual([
-      "route:agents-home",
-      "route:dashboards",
-      "route:systems",
-      "route:cron",
-      "route:plugins",
-    ]);
+    expect(loadSettings().sidebarEntries).toEqual([]);
     expect(loadSettings().navWidth).toBe(258);
     expect(loadSettings().navCollapsed).toBe(false);
   });

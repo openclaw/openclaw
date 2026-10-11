@@ -411,17 +411,14 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
     }
   };
 
-  const waitBeforeRetry = async (params: {
-    delayMs: number;
-    deadline: OperationDeadline;
-  }): Promise<number> => {
-    const remainingMs = params.deadline.remainingMs();
-    params.deadline.signal.throwIfAborted();
+  const waitBeforeRetry = async (delayMs: number, deadline: OperationDeadline): Promise<number> => {
+    const remainingMs = deadline.remainingMs();
+    deadline.signal.throwIfAborted();
     await raceNodeWorkerOperation(
-      sleep(Math.min(params.delayMs, remainingMs), params.deadline.signal),
-      params.deadline.signal,
+      sleep(Math.min(delayMs, remainingMs), deadline.signal),
+      deadline.signal,
     );
-    return Math.min(params.delayMs * 2, MAX_RETRY_DELAY_MS);
+    return Math.min(delayMs * 2, MAX_RETRY_DELAY_MS);
   };
 
   const cancelUntilTerminal = async (params: {
@@ -465,7 +462,7 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
             throw error;
           }
         }
-        delayMs = await waitBeforeRetry({ delayMs, deadline });
+        delayMs = await waitBeforeRetry(delayMs, deadline);
       }
     } finally {
       deadline.dispose();
@@ -599,10 +596,7 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
                 // The node journal holds this attempt's reason and proves its child
                 // is gone. Re-arm only after backoff and current authority revalidation.
                 mayHaveLaunched = false;
-                await waitBeforeRetry({
-                  delayMs: rearmDelayMs,
-                  deadline,
-                });
+                await waitBeforeRetry(rearmDelayMs, deadline);
                 // Deterministic IDs make a replay of this adapter find the same journal
                 // rows, never another child for an already completed retry.
                 input = rearmNodeWorkerLaunchInput(originalInput, admissionAttempts++);
@@ -649,10 +643,7 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
           }
           pollStatus = false;
         }
-        delayMs = await waitBeforeRetry({
-          delayMs,
-          deadline: dispatchReady ? deadline : availabilityDeadline,
-        });
+        delayMs = await waitBeforeRetry(delayMs, dispatchReady ? deadline : availabilityDeadline);
       }
     } catch (error) {
       if (restartSignal.aborted && isAgentRunRestartAbortReason(deadline.signal.reason)) {
