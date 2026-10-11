@@ -4486,7 +4486,6 @@
 ["src/cli/gateway-cli/register.option-collisions.test.ts","./run-command.js","6bbe4d9b4942d6c29538570775c02479982e062280c947ff8f3af5cddc35deba",1]
 ["src/cli/gateway-cli/run-loop-mocks.test-support.ts","../../agents/embedded-agent-runner/runs.js","deffd031ad8d470c316c6b0791d290e03755ff1db869884d4f203bfa20e9423e",1]
 ["src/cli/gateway-cli/run-loop-mocks.test-support.ts","../../agents/provider-runtime-lifecycle.js","d80b3a92890b72f673c4cc70fcfa80253cb465464c453dc9e1f4bc75a3a72da7",1]
-["src/cli/gateway-cli/run-loop-mocks.test-support.ts","../../config/runtime-snapshot.js","af3a3899785263dc633e49884cb85761759e1cceccb8d3daffd26bd7d8b8a920",1]
 ["src/cli/gateway-cli/run-loop-mocks.test-support.ts","../../cron/active-jobs.js","575ed832e6c3d1d9527aefe268678d25c2371dbf1c4df09e62a9b32bc07fc2ad",1]
 ["src/cli/gateway-cli/run-loop-mocks.test-support.ts","../../cron/service/active-run-cancellation.js","33708416cdaa530d29977519fce01d4b2cbea9b6311e9b6864ce9f58b9899956",1]
 ["src/cli/gateway-cli/run-loop-mocks.test-support.ts","../../daemon/hosted-stop.js","cc227ffcba8d49b8f8273002d4b077c192b9f1c7ff6dbcc92aa82236ce7846ab",1]
