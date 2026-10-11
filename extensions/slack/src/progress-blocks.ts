@@ -305,7 +305,7 @@ export function buildSlackProgressStreamChunks(params: {
     // summary row for the whole turn; detailed cards add it only as a receipt.
     tasks.push({
       id: "openclaw_summary",
-      title: params.summaryRow ? compactTitle(title) : summaryTitle,
+      title: summaryTitle,
       status: params.finalInProgressStatus ?? (params.summaryRow ? "in_progress" : "complete"),
     });
   }

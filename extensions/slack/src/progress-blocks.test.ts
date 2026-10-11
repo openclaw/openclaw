@@ -264,7 +264,9 @@ describe("native Slack progress stream chunks", () => {
   );
 
   it.each([
-    [false, "complete", "Checking the workspace", "Checking the workspace"],
+    [false, "complete", "Checking the workspace", "Completed"],
+    [false, "error", "Checking the workspace", "Failed"],
+    [false, "complete", "Checking the workspace. ".repeat(8).trim(), "Completed"],
     [true, "error", "Checking the workspace", "Run checks"],
     [false, "complete", undefined, "Completed"],
     [false, "error", undefined, "Failed"],
@@ -293,7 +295,7 @@ describe("native Slack progress stream chunks", () => {
         planUpdate(title ?? "Working"),
         withPlan
           ? taskUpdate("plan_step_1", "Run checks", "in_progress")
-          : taskUpdate("openclaw_summary", title ?? "Working", "in_progress"),
+          : taskUpdate("openclaw_summary", "Working", "in_progress"),
       ]);
       const final = reconcileSlackNativeTaskChunks({
         previous: first.snapshot,
