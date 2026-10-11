@@ -49,6 +49,8 @@ import {
 } from "./plugin-source-references.js";
 import { verifyPluginSourceInputs } from "./plugin-source-verification.js";
 
+export type PluginGenerationArtifact = ReturnType<typeof createPluginGenerationArtifact>;
+
 /** Capture selective entries and whole dependencies without replacing earlier file bytes. */
 export const capturePluginGenerationArtifact = createPluginGenerationCapture(
   createPluginGenerationArtifact,
