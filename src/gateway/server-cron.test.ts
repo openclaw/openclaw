@@ -2005,7 +2005,14 @@ describe("buildGatewayCronService", () => {
 
       await state.cron.run(job.id, "force");
 
-      expect(sendCronAnnouncePayloadStrictMock).toHaveBeenCalledOnce();
+      expect(sendCronAnnouncePayloadStrictMock).toHaveBeenCalledTimes(2);
+      expect(sendCronAnnouncePayloadStrictMock).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          payload: expect.objectContaining({
+            text: expect.stringContaining('Automation "cancelled command announcement" failed'),
+          }),
+        }),
+      );
       expect(deliverySignal?.aborted).toBe(true);
       expect(state.cron.getJob(job.id)?.state.lastRunStatus).toBe("error");
     } finally {
