@@ -122,7 +122,7 @@ function sessionGroupLabel(group: SessionRowGroup, props: SessionsProps): string
   if (props.groupBy === "person") {
     const actor = group.rows[0]?.owner?.actor;
     return actor?.identity?.type === "profile"
-      ? presenceViewerLabel({ id: actor.identity.id, name: actor.label?.trim() || id })
+      ? presenceViewerLabel({ id: actor.identity.id, name: actor.label?.trim() || undefined })
       : actor?.label?.trim() || id;
   }
   return id;

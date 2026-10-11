@@ -126,7 +126,7 @@ export function groupCatalogSessionsByPerson(sessions: readonly SessionCatalogSe
         actor.identity.type === "profile"
           ? presenceViewerLabel({
               id: actor.identity.id,
-              name: actor.label?.trim() || actor.identity.id,
+              name: actor.label?.trim() || undefined,
             })
           : actor.label?.trim() || actor.identity.id;
       return {

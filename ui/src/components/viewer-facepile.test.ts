@@ -32,7 +32,7 @@ it.each(["session", "profile"] as const)(
     document.body.append(avatar);
     await avatar.updateComplete;
     expect(avatar.querySelector(".viewer-avatar")?.getAttribute("aria-label")).toBe(
-      variant === "profile" ? "Saved owner name" : "Shared owner",
+      variant === "profile" ? "Saved owner name" : "Saved owner name · Shared owner",
     );
   },
 );

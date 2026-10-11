@@ -184,7 +184,7 @@ export function sessionActivityOwner(row: GatewaySessionRow): PresenceViewer {
   const { resourceBasePath } = readAvatarGatewayContext();
   return {
     id: normalizeOptionalString(actor?.id) ?? agentId ?? "system",
-    name: normalizeOptionalString(actor?.label) ?? agentId,
+    name: actor ? normalizeOptionalString(actor.label) : agentId,
     avatarUrl: actor
       ? normalizeOptionalString(actor.avatarUrl)
       : agentId

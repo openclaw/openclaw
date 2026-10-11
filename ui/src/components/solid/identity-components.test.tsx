@@ -35,17 +35,21 @@ it("refreshes shared-owner labels without changing identity initials on locale p
   ));
   disposals.push(view.unmount);
   expect(view.container.querySelector(".viewer-avatar")?.getAttribute("aria-label")).toBe(
-    "Shared owner",
+    "Saved owner name · Shared owner",
   );
-  i18n.registerTranslation("pt-BR", { presence: { sharedOwner: { name: "Dono compartilhado" } } });
+  i18n.registerTranslation("pt-BR", {
+    presence: {
+      sharedOwner: { name: "Dono compartilhado", named: "{name} · Dono compartilhado" },
+    },
+  });
   await i18n.setLocale("pt-BR");
   flush();
   expect(view.container.querySelector(".viewer-avatar")?.getAttribute("aria-label")).toBe(
-    "Dono compartilhado",
+    "Saved owner name · Dono compartilhado",
   );
   expect(view.container.querySelector(".viewer-avatar__initials")?.textContent).toBe("SO");
   expect(view.container.querySelector(".viewer-facepile")?.getAttribute("aria-label")).toBe(
-    "Dono compartilhado",
+    "Saved owner name · Dono compartilhado",
   );
 });
 
