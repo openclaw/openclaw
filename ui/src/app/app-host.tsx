@@ -79,7 +79,7 @@ import { changedServerUiPrefs } from "./server-prefs-intent.ts";
 import { isApplyingServerUiPrefs, pushServerUiPrefs } from "./server-prefs.ts";
 import { capturePlacementStartupConnection } from "./session-placement-startup.ts";
 import { setSettingsChangeListener } from "./settings.ts";
-import { ShellLayoutController } from "./shell-layout-traits.ts";
+import { ShellLayoutOwner } from "./shell-layout-owner.ts";
 import {
   isStaleChunkImportError,
   retryStaleChunkReloadWhenReachable,
@@ -94,7 +94,7 @@ export class ShellOwner
   readiness: ControlUiReadiness | undefined;
   onboarding = false;
   private readonly cleanups: Array<() => void> = [];
-  readonly shellLayout = new ShellLayoutController(this);
+  readonly shellLayout = new ShellLayoutOwner(() => this.invalidate());
   readonly commandPaletteElement = COMMAND_PALETTE_ELEMENT;
   readonly terminalPanelElement = TERMINAL_PANEL_ELEMENT;
   readonly browserPanelElement = BROWSER_PANEL_ELEMENT;

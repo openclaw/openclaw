@@ -217,7 +217,9 @@ describe("renderActivity", () => {
     expect(
       toolbar?.querySelectorAll('.activity-status-filter input[type="checkbox"]'),
     ).toHaveLength(3);
-    expect(toolbar?.querySelector(".activity-live-autofollow wa-switch")).not.toBeNull();
+    expect(
+      toolbar?.querySelector(".activity-live-autofollow input.settings-toggle__input"),
+    ).not.toBeNull();
     const filterTrigger = toolbar?.querySelector("#activity-live-filter-trigger");
     expect(filterTrigger?.getAttribute("aria-haspopup")).toBe("dialog");
     expect(filterTrigger?.getAttribute("aria-expanded")).toBe("false");

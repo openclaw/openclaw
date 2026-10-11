@@ -37,7 +37,7 @@ import { readGatewayOperatorAccess } from "./operator-access.ts";
 import { isDesktopPanelAvailable, isHomePanelAvailable } from "./panel-availability.ts";
 import { resolveProfileAppearancePrefs } from "./server-prefs-profile.ts";
 import { NAV_WIDTH_MAX, normalizeCatalogOpenTarget } from "./settings.ts";
-import type { ShellLayoutController } from "./shell-layout-traits.ts";
+import type { ShellLayoutOwner } from "./shell-layout-owner.ts";
 
 export interface ShellViewHost extends ShellLazyOverlayHost {
   readonly devicePairSetup: DevicePairSetupLoader;
@@ -52,7 +52,7 @@ export interface ShellViewHost extends ShellLazyOverlayHost {
   readonly nativeHistoryState: NativeHistoryState;
   readonly navDrawerOpen: boolean;
   navResizing: boolean;
-  readonly shellLayout: ShellLayoutController;
+  readonly shellLayout: ShellLayoutOwner;
   readonly navigationSidebar: HTMLElement;
   readonly onboardingMode: boolean;
   readonly routeState: ShellRouteState;

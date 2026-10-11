@@ -95,7 +95,7 @@ export function createRuntimeImportGraph(
         allowJs: true,
         noLib: true,
         types: [],
-        // Source guards follow UI imports even when the repository config has no JSX emit mode.
+        // Source guards follow JSX files without choosing a renderer's emit mode.
         ...(sourceImports ? { jsx: "preserve" } : {}),
       },
       files: [...roots],

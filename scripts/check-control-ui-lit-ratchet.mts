@@ -43,12 +43,7 @@ function totals(counts: ReadonlyMap<string, MigrationMetrics>) {
   );
 }
 
-// The Solid bridge lets unported Lit pages adopt Solid components, so new Lit debt is enforced.
-export function main(
-  root = process.cwd(),
-  argv = process.argv.slice(2),
-  { enforce = true }: { enforce?: boolean } = {},
-) {
+export function main(root = process.cwd(), argv = process.argv.slice(2)) {
   try {
     const args = parseRatchetArgs(argv);
     if (args.prune) {
@@ -110,12 +105,10 @@ export function main(
             ).increased.map(({ entry, current, allowed }) => `${entry}: ${current} > ${allowed}`),
           },
         ],
-        enforce
-          ? "Lit sites may move between ui/src files, but each metric's total must not grow. Use Solid or offset new sites with removals in the same change."
-          : "Advisory only: Lit growth is reported because enforcement was disabled for this invocation.",
+        "Lit sites may move between ui/src files, but each metric's total must not grow. Use Solid or offset new sites with removals in the same change.",
       )
     ) {
-      return enforce ? 1 : 0;
+      return 1;
     }
     console.log(`Control UI Lit ratchet OK (${changed.size} changed files, base ${base}).`);
     return 0;
