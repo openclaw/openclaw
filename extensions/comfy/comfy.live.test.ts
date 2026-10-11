@@ -5,7 +5,7 @@ import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { isLiveTestEnabled, readLiveTestConfig } from "openclaw/plugin-sdk/test-live";
 import { beforeAll, describe, expect, it } from "vitest";
 import plugin from "./index.js";
-import { isComfyCapabilityConfigured } from "./workflow-runtime.js";
+import { isComfyCapabilityConfiguredAsync } from "./workflow-runtime.js";
 
 const LIVE =
   isLiveTestEnabled(["COMFY_LIVE_TEST"]) && (process.env.COMFY_LIVE_TEST ?? "").trim() === "1";
@@ -77,7 +77,11 @@ describeLive("comfy live", () => {
   // declaration-time skipIf checks would only see the empty placeholders above.
   it("runs an image workflow", async ({ skip }) => {
     if (
-      !(await isComfyCapabilityConfigured({ cfg: cfg as never, agentDir, capability: "image" }))
+      !(await isComfyCapabilityConfiguredAsync({
+        cfg: cfg as never,
+        agentDir,
+        capability: "image",
+      }))
     ) {
       skip("No Comfy image workflow is configured");
       return;
@@ -97,7 +101,11 @@ describeLive("comfy live", () => {
 
   it("runs a video workflow", async ({ skip }) => {
     if (
-      !(await isComfyCapabilityConfigured({ cfg: cfg as never, agentDir, capability: "video" }))
+      !(await isComfyCapabilityConfiguredAsync({
+        cfg: cfg as never,
+        agentDir,
+        capability: "video",
+      }))
     ) {
       skip("No Comfy video workflow is configured");
       return;
@@ -117,7 +125,11 @@ describeLive("comfy live", () => {
 
   it("runs a music workflow", async ({ skip }) => {
     if (
-      !(await isComfyCapabilityConfigured({ cfg: cfg as never, agentDir, capability: "music" }))
+      !(await isComfyCapabilityConfiguredAsync({
+        cfg: cfg as never,
+        agentDir,
+        capability: "music",
+      }))
     ) {
       skip("No Comfy music workflow is configured");
       return;

@@ -108,7 +108,7 @@ const authRuntimeMock = vi.hoisted(() => {
       ensureAuthProfileStoreAsync: vi.fn((agentDir?: string, _options?: unknown) =>
         getStore(agentDir),
       ),
-      loadAuthProfileStoreForRuntime: vi.fn((agentDir?: string) => getStore(agentDir)),
+      loadAuthProfileStoreForRuntimeAsync: vi.fn(async (agentDir?: string) => getStore(agentDir)),
       resolveAuthProfileOrder: vi.fn(
         (params: {
           store: AuthProfileStore;
@@ -189,7 +189,7 @@ function resetModelFallbackTestState(): void {
   clearAgentHarnesses();
   authRuntimeMock.clear();
   authRuntimeMock.runtime.ensureAuthProfileStoreAsync.mockClear();
-  authRuntimeMock.runtime.loadAuthProfileStoreForRuntime.mockClear();
+  authRuntimeMock.runtime.loadAuthProfileStoreForRuntimeAsync.mockClear();
   authRuntimeMock.runtime.resolveAuthProfileOrder.mockClear();
   authRuntimeMock.runtime.maybeReprobeWhamBlockedProfiles.mockReset();
   authSourceCheckMock.hasAnyAuthProfileStoreSourceAsync.mockReset().mockReturnValue(false);

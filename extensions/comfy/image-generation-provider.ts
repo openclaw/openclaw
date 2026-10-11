@@ -2,6 +2,7 @@ import type { ImageGenerationProvider } from "openclaw/plugin-sdk/image-generati
 import {
   DEFAULT_COMFY_MODEL,
   isComfyCapabilityConfigured,
+  isComfyCapabilityConfiguredAsync,
   runComfyWorkflow,
 } from "./workflow-runtime.js";
 
@@ -11,12 +12,14 @@ export function buildComfyImageGenerationProvider(): ImageGenerationProvider {
     label: "ComfyUI",
     defaultModel: DEFAULT_COMFY_MODEL,
     models: [DEFAULT_COMFY_MODEL],
-    isConfiguredAsync: ({ cfg, agentDir }) =>
+    isConfigured: ({ cfg, agentDir }) =>
       isComfyCapabilityConfigured({
         cfg,
         agentDir,
         capability: "image",
       }),
+    isConfiguredAsync: ({ cfg, agentDir }) =>
+      isComfyCapabilityConfiguredAsync({ cfg, agentDir, capability: "image" }),
     capabilities: {
       generate: {
         maxCount: 1,

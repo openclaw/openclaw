@@ -6,6 +6,7 @@ import { resolveGeneratedMediaMaxBytes } from "openclaw/plugin-sdk/media-generat
 import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
 import { resolvePositiveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import {
+  isProviderApiKeyConfigured,
   isProviderApiKeyConfiguredAsync,
   type AuthProfileStore,
 } from "openclaw/plugin-sdk/provider-auth";
@@ -563,11 +564,15 @@ function hasUnavailableComfyHeaderSecret(value: unknown, cfg?: OpenClawConfig): 
   });
 }
 
-export async function isComfyCapabilityConfigured(params: {
+type ComfyCapabilityConfiguredParams = {
   cfg?: OpenClawConfig;
   agentDir?: string;
   capability: ComfyCapability;
-}): Promise<boolean> {
+};
+
+function resolveComfyConfigurationReadiness(
+  params: ComfyCapabilityConfiguredParams,
+): boolean | undefined {
   const { config } = getComfyConfig(params.cfg);
   const capabilityConfig = getComfyCapabilityConfig(config, params.capability);
   const hasWorkflow = Boolean(
@@ -590,11 +595,32 @@ export async function isComfyCapabilityConfigured(params: {
   if (configuredApiKey.status === "configured_unavailable") {
     return false;
   }
-  return isProviderApiKeyConfiguredAsync({
-    provider: "comfy",
-    cfg: params.cfg,
-    agentDir: params.agentDir,
-  });
+  return undefined;
+}
+
+/** Retained for released hosts that discover providers through the synchronous hook. */
+export function isComfyCapabilityConfigured(params: ComfyCapabilityConfiguredParams): boolean {
+  return (
+    resolveComfyConfigurationReadiness(params) ??
+    isProviderApiKeyConfigured({
+      provider: "comfy",
+      cfg: params.cfg,
+      agentDir: params.agentDir,
+    })
+  );
+}
+
+export async function isComfyCapabilityConfiguredAsync(
+  params: ComfyCapabilityConfiguredParams,
+): Promise<boolean> {
+  return (
+    resolveComfyConfigurationReadiness(params) ??
+    isProviderApiKeyConfiguredAsync({
+      provider: "comfy",
+      cfg: params.cfg,
+      agentDir: params.agentDir,
+    })
+  );
 }
 
 export async function runComfyWorkflow(params: {

@@ -2433,6 +2433,42 @@ describe("talk.session unified handlers", () => {
     },
   );
 
+  it("does not create a transcription relay after its requester disconnects during provider preparation", async () => {
+    const preparing = createDeferred();
+    const ready = createDeferred();
+    const provider = {
+      id: "openai",
+      label: "OpenAI Realtime Transcription",
+      isConfiguredAsync: async () => {
+        preparing.resolve();
+        await ready.promise;
+        return true;
+      },
+      createSession: vi.fn(),
+    };
+    mocks.listRealtimeTranscriptionProviders.mockReturnValue([provider] as never);
+    mocks.createTalkTranscriptionRelaySession.mockReturnValue({
+      transcriptionSessionId: "revoked-transcription",
+    });
+    const client = { connId: "revoked-transcription", invalidated: false };
+    const respond = vi.fn();
+    const creation = callTalkHandler("talk.session.create", {
+      params: { mode: "transcription", provider: "openai", model: "test-transcription" },
+      client,
+      respond,
+    });
+    await preparing.promise;
+    client.invalidated = true;
+    ready.resolve();
+    await creation;
+
+    expectRespondError(respond, {
+      code: ErrorCodes.UNAVAILABLE,
+      message: expect.stringContaining("Gateway requester authority changed"),
+    });
+    expect(mocks.createTalkTranscriptionRelaySession).not.toHaveBeenCalled();
+  });
+
   it("creates transcription sessions with an aliased provider missing from the active registry", async () => {
     const openai = {
       id: "openai",

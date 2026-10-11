@@ -30,7 +30,7 @@ vi.mock("./auth-profiles/store-runtime.js", () => ({
   ensureAuthProfileStore: vi.fn(),
   ensureAuthProfileStoreAsync: (...args: Parameters<typeof ensureAuthProfileStore>) =>
     ensureAuthProfileStore(...args),
-  loadAuthProfileStoreForRuntime: vi.fn(),
+  loadAuthProfileStoreForRuntimeAsync: vi.fn(),
 }));
 vi.mock("./auth-profiles/usage.js", () => ({
   getSoonestCooldownExpiry: vi.fn(),

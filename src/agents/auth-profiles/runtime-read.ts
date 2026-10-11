@@ -5,6 +5,7 @@ import type { Result } from "@openclaw/normalization-core/result";
 import { cloneEnvWithPlatformSemantics } from "../../config/config-env-vars.js";
 import { resolveStateDir } from "../../config/paths.js";
 import { withSqliteWorkerCleanupFailure } from "../../infra/sqlite-worker-broker-reply.js";
+import { warnPluginSdkDeprecation } from "../../plugins/sdk-deprecation.js";
 import { getOpenClawDatabaseMaintenanceScope } from "../../state/openclaw-state-db-async-lifecycle.js";
 import {
   getActiveOpenClawStateDatabaseReadSnapshot,
@@ -156,6 +157,8 @@ export function createAuthProfileStoreRuntimeReader({
   function withPreparedAuthProfileStoreReads(
     agentDir: string | undefined,
     options: AsyncAuthProfileStoreOptions | undefined,
+    consume?: undefined,
+    suppliedEnv?: NodeJS.ProcessEnv,
   ): Promise<AuthProfileStore>;
   function withPreparedAuthProfileStoreReads<T>(
     agentDir: string | undefined,
@@ -512,20 +515,30 @@ export function createAuthProfileStoreRuntimeReader({
   async function loadAuthProfileStoreForRuntimeAsync(
     agentDir?: string,
     options?: AsyncAuthProfileStoreOptions,
+    env?: NodeJS.ProcessEnv,
   ): Promise<AuthProfileStore> {
     if (isEnvOnlyAuthProfileRuntime()) {
       return createEmptyAuthProfileStore();
     }
-    return withPreparedAuthProfileStoreReads(agentDir, options);
+    return withPreparedAuthProfileStoreReads(agentDir, options, undefined, env);
+  }
+
+  /** @deprecated Use loadAuthProfileStoreForRuntimeAsync. Removed at the next Plugin SDK major. */
+  function loadAuthProfileStoreForRuntime(
+    agentDir?: string,
+    options?: LoadAuthProfileStoreOptions,
+    env?: NodeJS.ProcessEnv,
+  ): AuthProfileStore {
+    warnPluginSdkDeprecation({
+      family: "auth-profiles",
+      method: "loadAuthProfileStoreForRuntime",
+      replacement: "loadAuthProfileStoreForRuntimeAsync",
+    });
+    return loadRuntimeAuthProfileStore(agentDir, options, env);
   }
 
   return {
-    // Transaction-bound SDK callers retain the synchronous owner until their async cutover.
-    loadAuthProfileStoreForRuntime: (
-      agentDir?: string,
-      options?: LoadAuthProfileStoreOptions,
-      env?: NodeJS.ProcessEnv,
-    ): AuthProfileStore => loadRuntimeAuthProfileStore(agentDir, options, env),
+    loadAuthProfileStoreForRuntime,
     loadAuthProfileStoreForRuntimeAsync,
     withPreparedAuthProfileStoreReads,
   };

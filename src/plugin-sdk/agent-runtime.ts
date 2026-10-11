@@ -140,6 +140,7 @@ export {
   loadAuthProfileStoreWithoutExternalProfilesAsync,
   loadAuthProfileStoreForSecretsRuntime,
   loadAuthProfileStoreForRuntime,
+  loadAuthProfileStoreForRuntimeAsync,
   replaceRuntimeAuthProfileStoreSnapshots,
   saveAuthProfileStore,
   findPersistedAuthProfileCredential,
