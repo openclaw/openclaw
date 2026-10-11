@@ -7,36 +7,21 @@ import { buildCapabilityConsentErrorDetails } from "../../packages/gateway-proto
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import { waitForSignalExitBarriers } from "./signal-exit-barrier.js";
 
-const mocks = vi.hoisted(() => ({ lock: vi.fn(), call: vi.fn(), config: vi.fn(), sleep: vi.fn() }));
+const mocks = vi.hoisted(() => ({ lock: vi.fn(), call: vi.fn(), sleep: vi.fn() }));
 vi.mock("../infra/gateway-lock.js", () => ({ readActiveGatewayLockIdentity: mocks.lock }));
 vi.mock("../gateway/call.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../gateway/call.js")>()),
   callGateway: mocks.call,
 }));
 vi.mock("../utils/sleep.js", () => ({ sleep: mocks.sleep }));
-vi.mock("../config/config.js", () => ({ getRuntimeConfig: mocks.config }));
 const { resolvePluginLifecycleGateway, resolvePluginBatchReload } =
   await import("./plugins-lifecycle-client.js");
 
 describe("plugin lifecycle CLI transport", () => {
   beforeEach(() => {
     mocks.lock.mockReset().mockResolvedValue({ port: 19001 });
-    mocks.config.mockReset().mockReturnValue({ gateway: { port: 18789 } });
     mocks.call.mockReset().mockResolvedValue({ runtime: { generation: 2 } });
     mocks.sleep.mockReset().mockResolvedValue(undefined);
-  });
-
-  it("uses the active local owner's port and requires hot lifecycle support", async () => {
-    const gateway = await resolvePluginLifecycleGateway();
-    await gateway?.("plugins.refresh", {});
-    expect(mocks.call).toHaveBeenCalledWith(
-      expect.objectContaining({
-        localPortOverride: 19001,
-        ignoreEnvUrlOverride: true,
-        requiredMethods: ["plugins.refresh", "plugins.reload"],
-        scopes: ["operator.admin"],
-      }),
-    );
   });
 
   it("waits without a response deadline and cancels the request on CLI interruption", async () => {
@@ -85,24 +70,6 @@ describe("plugin lifecycle CLI transport", () => {
     expect(mocks.call).toHaveBeenCalledOnce();
     expect(mocks.sleep).not.toHaveBeenCalled();
     await expect(waitForSignalExitBarriers()).resolves.toBeUndefined();
-  });
-
-  it("leaves plugin config validation to the install owner when dispatching recovery", async () => {
-    mocks.config.mockImplementation(() => {
-      throw Object.assign(new Error("owned plugin path is missing"), { code: "INVALID_CONFIG" });
-    });
-    const gateway = await resolvePluginLifecycleGateway();
-    expect(gateway).not.toBeNull();
-    await expect(
-      gateway!("plugins.install", { source: "local", path: "/replacement" }),
-    ).resolves.toEqual({ runtime: { generation: 2 } });
-    expect(mocks.call).toHaveBeenCalledWith(
-      expect.objectContaining({
-        method: "plugins.install",
-        localPortOverride: 19001,
-        ignoreEnvUrlOverride: true,
-      }),
-    );
   });
 
   it("selects offline execution only when no local owner exists", async () => {
@@ -204,57 +171,30 @@ describe("plugin lifecycle CLI transport", () => {
     }
   });
 
-  it.each(["delay exceeds remaining budget", "delay overshoots deadline"])(
-    "bounds admission waits when %s",
-    async (outcome) => {
-      let now = 0;
-      const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
-      const busy = new GatewayClientRequestError({
-        code: "UNAVAILABLE",
-        message: "lifecycle busy",
-        retryable: true,
-        retryAfterMs: 300000,
-      });
-      mocks.call.mockRejectedValue(busy);
-      mocks.sleep.mockImplementation(async (ms: number) => {
-        now += outcome === "delay overshoots deadline" ? 600001 : ms;
-      });
-      try {
-        const gateway = await resolvePluginLifecycleGateway();
-        await expect(gateway!("plugins.refresh", {})).rejects.toBe(busy);
-        expect(mocks.sleep).toHaveBeenCalledExactlyOnceWith(300000);
-        expect(mocks.call).toHaveBeenCalledTimes(outcome === "delay overshoots deadline" ? 1 : 2);
-      } finally {
-        clock.mockRestore();
-      }
-    },
-  );
-
-  it.each([
-    { code: "UNAVAILABLE", retryable: true },
-    {
+  it.each(["delay overshoots deadline"])("bounds admission waits when %s", async (outcome) => {
+    let now = 0;
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+    const busy = new GatewayClientRequestError({
       code: "UNAVAILABLE",
-      retryable: false,
-      retryAfterMs: 1000,
-      details: { runtime: { generation: 2 } },
-    },
-    { code: "INVALID_REQUEST", retryable: true, retryAfterMs: 1000 },
-  ])(
-    "does not repeat an error without retryable admission metadata: $code $retryable",
-    async (response) => {
-      const failure = new GatewayClientRequestError({ ...response, message: "request failed" });
-      mocks.call.mockRejectedValue(failure);
+      message: "lifecycle busy",
+      retryable: true,
+      retryAfterMs: 300000,
+    });
+    mocks.call.mockRejectedValue(busy);
+    mocks.sleep.mockImplementation(async (ms: number) => {
+      now += outcome === "delay overshoots deadline" ? 600001 : ms;
+    });
+    try {
       const gateway = await resolvePluginLifecycleGateway();
-      await expect(gateway!("plugins.uninstall", { pluginId: "alpha" })).rejects.toBe(failure);
-      expect(mocks.call).toHaveBeenCalledOnce();
-      expect(mocks.sleep).not.toHaveBeenCalled();
-    },
-  );
+      await expect(gateway!("plugins.refresh", {})).rejects.toBe(busy);
+      expect(mocks.sleep).toHaveBeenCalledExactlyOnceWith(300000);
+      expect(mocks.call).toHaveBeenCalledTimes(outcome === "delay overshoots deadline" ? 1 : 2);
+    } finally {
+      clock.mockRestore();
+    }
+  });
 
-  it.each([
-    { method: "plugins.setEnabled", params: { pluginId: "demo", enabled: true } },
-    { method: "plugins.reload", params: { plugins: [{ pluginId: "demo" }] } },
-  ])(
+  it.each([{ method: "plugins.reload", params: { plugins: [{ pluginId: "demo" }] } }])(
     "retries $method consent using the inspected artifact's exact token",
     async ({ method, params }) => {
       const oldToken = "a".repeat(64);

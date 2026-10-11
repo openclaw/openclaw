@@ -202,6 +202,11 @@ async function runWithRetainedUpdateRuntime<T>(
             targetStateDir: privateRoot,
             candidateRoot,
             retainedHostRoot: sourceRoot,
+            // Missing optional peers must not pull unrelated ancestor installations
+            // into a retained runtime. Explicit linked dependency owners still travel.
+            retainedDependencyRoot: packageOwner
+              ? resolvePathViaExistingAncestorSync(path.resolve(packageOwner))
+              : sourceRoot,
             onProgress: assertCurrent,
           });
           const inventoryMs = Math.round(performance.now() - inventoryStartedAt);
