@@ -36,7 +36,11 @@ export {
   getSessionBindingService,
   inspectSessionBindingByConversation,
   registerSessionBindingAdapter,
+  registerSessionBindingAdapterV2,
   type SessionBindingRecord,
+  type SessionBindingAdapterV2,
+  type SessionBindingSelectionSnapshot,
   type SessionBindingService,
   type AsyncSessionBindingService,
+  type SessionBindingServiceV2,
 } from "../infra/outbound/session-binding-service.js";
