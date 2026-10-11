@@ -516,7 +516,6 @@ function resolveOwnershipMigrationChannelIds(
   params: Parameters<typeof listChannelIdsForOwnershipMigration>[0],
   signals: ChannelPresenceSignal[],
 ): string[] {
-  const env = params.env ?? process.env;
   const records = loadInstalledChannelManifestRecords(params);
   const trustConfig = params.activationSourceConfig ?? params.config;
   const normalizedConfig = normalizePluginsConfig(trustConfig.plugins);
