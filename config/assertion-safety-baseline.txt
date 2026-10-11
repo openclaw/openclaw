@@ -2734,7 +2734,6 @@ ui/src/lit/stream-auto-follow-controller.ts	1
 ui/src/lit/subscriptions-controller.ts	1
 ui/src/local-storage.ts	2
 ui/src/main.ts	1
-ui/src/pages/activity/view.ts	2
 ui/src/pages/agents/model-config.ts	2
 ui/src/pages/chat/chat-gateway.ts	1
 ui/src/pages/chat/chat-history-retry.ts	1
@@ -2805,6 +2804,3 @@ ui/src/pages/plugin/logbook-view.ts	1
 ui/src/pages/plugin/route.ts	1
 ui/src/pages/portals/portal-reachability.ts	1
 ui/src/pages/profile/identity-section.ts	2
-ui/src/pages/usage/view-details.ts	4
-ui/src/pages/usage/view-overview.ts	2
-ui/src/pages/usage/view.ts	5
