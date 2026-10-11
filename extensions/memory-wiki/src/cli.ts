@@ -309,14 +309,18 @@ function parseWikiSearchEnumOption<T extends string>(
   throw invalidCliArgument(`Invalid ${label}: ${value}. Expected one of: ${allowed.join(", ")}`);
 }
 
-async function resolveWikiApplyBody(params: { body?: string; bodyFile?: string }): Promise<string> {
+async function resolveWikiApplyBody(params: {
+  body?: string;
+  bodyFile?: string;
+  json?: boolean;
+}): Promise<string> {
   if (params.body?.trim()) {
     return params.body;
   }
   if (params.bodyFile?.trim()) {
     return await fs.readFile(params.bodyFile, "utf8");
   }
-  throw new Error("wiki apply synthesis requires --body or --body-file.");
+  failWikiCli("wiki apply synthesis requires --body or --body-file.", params.json);
 }
 
 function formatJsonOrText<T>(
@@ -358,6 +362,22 @@ function addWikiSearchConfigOptions<T extends Command>(command: T): T {
       `Search corpus (${WIKI_SEARCH_CORPORA.join(", ")})`,
       (value: string) => parseWikiSearchEnumOption(value, WIKI_SEARCH_CORPORA, "corpus"),
     );
+}
+
+function failWikiCli(message: string, json?: boolean): never {
+  // Surface the operator-facing reason on stderr for human mode. Throw a
+  // commander parse-exit so run-main sets exitCode without the generic
+  // "The CLI command failed." title. JSON mode rethrows and formatCliJsonFailure
+  // already includes error.message. Use the parsed --json option (not argv), so
+  // a positional "--json" query cannot suppress the diagnostic.
+  if (!json) {
+    console.error(message);
+  }
+  throw Object.assign(new Error(message), {
+    name: "InvalidArgumentError",
+    code: "commander.invalidArgument",
+    exitCode: 1,
+  });
 }
 
 function invalidCliArgument(message: string): Error & { code: string; exitCode: number } {
@@ -477,6 +497,8 @@ export function registerWikiCli(program: Command, registration: MemoryWikiCliReg
     | undefined;
   const requireCommandContext = () => {
     if (!commandContext) {
+      // Internal invariant (preAction always populates context). Keep a plain Error
+      // so we do not reference preAction-scoped output-mode locals.
       throw new Error("Memory Wiki CLI agent context was not resolved.");
     }
     return commandContext;
@@ -486,6 +508,7 @@ export function registerWikiCli(program: Command, registration: MemoryWikiCliReg
     .description("Inspect and initialize the memory wiki vault")
     .option("--agent <id>", "Agent id for agent-scoped wiki vaults");
   wiki.hook("preAction", (_thisCommand, actionCommand) => {
+    const actionJson = Boolean(actionCommand.opts<{ json?: boolean }>().json);
     const needsAgent = actionCommand.options.some((option) => option.long === "--agent");
     const requestedAgentId =
       actionCommand.opts<WikiCommandOptions>().agent?.trim() ||
@@ -501,8 +524,9 @@ export function registerWikiCli(program: Command, registration: MemoryWikiCliReg
       try {
         agentId = resolveDefaultAgentId(currentAppConfig ?? {});
       } catch {
-        throw new Error(
+        failWikiCli(
           "No default memory-wiki agent is configured. Pass --agent <id>, or add an agent with `openclaw agents add`.",
+          actionJson,
         );
       }
     }
@@ -613,7 +637,10 @@ export function registerWikiCli(program: Command, registration: MemoryWikiCliReg
     .action(async (query: string, opts: WikiSearchCommandOptions) => {
       const { agentId, appConfig, config } = requireCommandContext();
       if (opts.mode && !(WIKI_SEARCH_MODES as readonly string[]).includes(opts.mode)) {
-        throw new Error(`wiki search --mode must be one of: ${WIKI_SEARCH_MODES.join(", ")}.`);
+        failWikiCli(
+          `wiki search --mode must be one of: ${WIKI_SEARCH_MODES.join(", ")}.`,
+          opts.json,
+        );
       }
       await syncMemoryWikiImportedSources({ config, appConfig });
       const results = await searchMemoryWiki({
@@ -680,9 +707,13 @@ export function registerWikiCli(program: Command, registration: MemoryWikiCliReg
       const metadata = resolveCliMutationMetadata(opts);
       const sourceIds = metadata.sourceIds;
       if (!sourceIds) {
-        throw new Error("wiki apply synthesis requires at least one --source-id.");
+        failWikiCli("wiki apply synthesis requires at least one --source-id.", opts.json);
       }
-      const body = await resolveWikiApplyBody({ body: opts.body, bodyFile: opts.bodyFile });
+      const body = await resolveWikiApplyBody({
+        body: opts.body,
+        bodyFile: opts.bodyFile,
+        json: opts.json,
+      });
       await syncMemoryWikiImportedSources({ config, appConfig });
       const result = await applyMemoryWikiMutation({
         config,
@@ -744,7 +775,10 @@ export function registerWikiCli(program: Command, registration: MemoryWikiCliReg
     .action(async (opts: WikiJsonOptions) => {
       const { appConfig, config } = requireCommandContext();
       if (config.vault.scope === "agent") {
-        throw new Error("Unsafe-local import does not support memory-wiki vault.scope=agent.");
+        failWikiCli(
+          "Unsafe-local import does not support memory-wiki vault.scope=agent.",
+          opts.json,
+        );
       }
       printWikiResult(
         await syncMemoryWikiImportedSources({ config, appConfig }),

@@ -206,6 +206,28 @@ describe("memory-wiki cli", () => {
     };
   }
 
+  it("surfaces missing --source-id as a wiki CLI validation failure", async () => {
+    const { config } = await createCliVault();
+    const stderrSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const previousArgv = process.argv;
+    process.argv = ["node", "openclaw", "wiki", "apply", "synthesis", "Blank2", "--body", "x"];
+    try {
+      await expect(
+        runRegisteredWikiCommand(config, ["apply", "synthesis", "Blank2", "--body", "x"]),
+      ).rejects.toMatchObject({
+        code: "commander.invalidArgument",
+        exitCode: 1,
+        message: "wiki apply synthesis requires at least one --source-id.",
+      });
+      expect(stderrSpy).toHaveBeenCalledWith(
+        "wiki apply synthesis requires at least one --source-id.",
+      );
+    } finally {
+      process.argv = previousArgv;
+      stderrSpy.mockRestore();
+    }
+  });
+
   it("registers apply synthesis and writes a synthesis page", async () => {
     const { rootDir, config } = await createCliVault();
 
