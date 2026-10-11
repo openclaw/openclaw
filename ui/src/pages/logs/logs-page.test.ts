@@ -2,7 +2,7 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import "./logs-page.ts";
 
@@ -58,11 +58,161 @@ function contextWithClient(
   } as unknown as TestApplicationContext;
 }
 
+async function mountLoadedLogsPage(client: GatewayBrowserClient): Promise<TestLogsPage> {
+  vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+  const page = document.createElement("openclaw-logs-page") as TestLogsPage;
+  page.context = contextWithClient(client, true);
+  document.body.append(page);
+  await vi.waitFor(() => expect(page.logsStatus.hasLoaded).toBe(true));
+  await page.updateComplete;
+  return page;
+}
+
 describe("LogsPage lifecycle", () => {
   afterEach(() => {
     document.body.replaceChildren();
     vi.restoreAllMocks();
     vi.useRealTimers();
+  });
+
+  it.each([{ lines: [] }, { lines: ["next line"] }])(
+    "retains the displayed truncation warning after an incremental response with $lines",
+    async ({ lines }) => {
+      const request = vi
+        .fn()
+        .mockResolvedValueOnce({
+          cursor: 100,
+          file: "/tmp/truncated.log",
+          lines: ["retained line"],
+          truncated: true,
+        })
+        .mockResolvedValueOnce({
+          cursor: lines.length ? 110 : 100,
+          file: "/tmp/truncated.log",
+          lines,
+          truncated: false,
+        });
+      const page = await mountLoadedLogsPage({ request } as unknown as GatewayBrowserClient);
+      expect(page.textContent).toContain("Log output truncated; showing latest chunk.");
+
+      await page.loadLogs({ quiet: true });
+      await page.updateComplete;
+
+      expect(request.mock.calls[1]?.[1]).toMatchObject({ cursor: 100 });
+      expect(page.logsEntries.map((entry) => entry.raw)).toEqual(["retained line", ...lines]);
+      expect(page.textContent).toContain("Log output truncated; showing latest chunk.");
+    },
+  );
+
+  it("warns only when the displayed buffer discards rows, then retains that warning", async () => {
+    const lines = Array.from({ length: 2001 }, (_, index) => `line ${index + 1}`);
+    let cursor = 0;
+    const request = vi.fn(async () => {
+      const pageLines = lines.slice(cursor, cursor + 500);
+      cursor += pageLines.length;
+      return { cursor, file: "/tmp/buffer.log", lines: pageLines, truncated: false };
+    });
+    const page = await mountLoadedLogsPage({ request } as unknown as GatewayBrowserClient);
+    expect(page.textContent).not.toContain("Log output truncated; showing latest chunk.");
+    for (const count of [1000, 1500, 2000]) {
+      await page.loadLogs({ quiet: true });
+      await page.updateComplete;
+      expect(page.querySelectorAll(".log-row")).toHaveLength(count);
+      expect(page.textContent).not.toContain("Log output truncated; showing latest chunk.");
+    }
+
+    await page.loadLogs({ quiet: true });
+    await page.updateComplete;
+    expect(page.querySelectorAll(".log-row")).toHaveLength(2000);
+    expect(page.querySelector(".log-message")?.textContent).toBe("line 2");
+    expect(page.logsEntries.at(-1)?.raw).toBe("line 2001");
+    expect(page.textContent).toContain("Log output truncated; showing latest chunk.");
+
+    await page.loadLogs({ quiet: true });
+    await page.updateComplete;
+    expect(page.querySelectorAll(".log-row")).toHaveLength(2000);
+    expect(page.textContent).toContain("Log output truncated; showing latest chunk.");
+  });
+
+  it.each(["manual refresh", "server reset", "file replacement"])(
+    "clears truncation when %s replaces the displayed buffer with a complete tail",
+    async (replacement) => {
+      const request = vi.fn().mockResolvedValueOnce({
+        cursor: 100,
+        file: "/tmp/old.log",
+        lines: ["old tail"],
+        truncated: true,
+      });
+      const page = await mountLoadedLogsPage({ request } as unknown as GatewayBrowserClient);
+      expect(page.textContent).toContain("Log output truncated; showing latest chunk.");
+      if (replacement === "file replacement") {
+        request.mockResolvedValueOnce({
+          cursor: 150,
+          file: "/tmp/new.log",
+          lines: ["discarded cross-file suffix"],
+          truncated: false,
+        });
+      }
+      request.mockResolvedValueOnce({
+        cursor: 150,
+        file: replacement === "file replacement" ? "/tmp/new.log" : "/tmp/old.log",
+        lines: ["complete replacement"],
+        truncated: false,
+        reset: replacement === "server reset",
+      });
+
+      if (replacement === "manual refresh") {
+        page.querySelector<HTMLButtonElement>(".settings-section__actions button")!.click();
+        await vi.waitFor(() =>
+          expect(page.logsEntries.map((entry) => entry.raw)).toEqual(["complete replacement"]),
+        );
+      } else {
+        await page.loadLogs({ quiet: true });
+      }
+      await page.updateComplete;
+
+      expect(page.querySelectorAll(".log-row")).toHaveLength(1);
+      expect(page.querySelector(".log-message")?.textContent).toBe("complete replacement");
+      expect(page.textContent).not.toContain("Log output truncated; showing latest chunk.");
+      expect(request.mock.calls.at(-1)?.[1]).toMatchObject({
+        cursor: replacement === "server reset" ? 100 : undefined,
+      });
+    },
+  );
+
+  it("keeps truncation with stale rows and clears it when read access clears those rows", async () => {
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce({
+        cursor: 100,
+        file: "/tmp/stale.log",
+        lines: ["retained tail"],
+        truncated: true,
+      })
+      .mockRejectedValueOnce(new Error("log read failed"))
+      .mockRejectedValueOnce(
+        new GatewayRequestError({
+          code: "FORBIDDEN",
+          message: "permission denied",
+          details: {
+            code: "MISSING_SCOPE",
+            missingScope: "operator.read",
+            requiredScopes: ["operator.read"],
+          },
+        }),
+      );
+    const page = await mountLoadedLogsPage({ request } as unknown as GatewayBrowserClient);
+    await page.loadLogs({ quiet: true });
+    await page.updateComplete;
+    expect(page.querySelector(".log-message")?.textContent).toBe("retained tail");
+    expect(page.textContent).toContain("Showing stale data");
+    expect(page.textContent).toContain("Log output truncated; showing latest chunk.");
+
+    await page.loadLogs({ quiet: true });
+    await page.updateComplete;
+    expect(page.querySelectorAll(".log-row")).toHaveLength(0);
+    expect(page.textContent).toContain("This connection is missing operator.read");
+    expect(page.textContent).not.toContain("Log output truncated; showing latest chunk.");
   });
 
   it.each([{ lines: [] }, { lines: ["initial log"] }])(
