@@ -9,7 +9,7 @@ import "./panel-tab-strip-lit.tsx";
 
 export type PanelTabStripTab = BasePanelTabStripTab<TemplateResult | typeof nothing>;
 export type PanelTabStripParams<T extends PanelTabStripTab = PanelTabStripTab> =
-  BasePanelTabStripParams<T, TemplateResult | typeof nothing>;
+  BasePanelTabStripParams<T, TemplateResult | Node | typeof nothing>;
 
 type LegacyInputs = Omit<LegacyPanelTabStripParams, "renderContent">;
 

@@ -197,17 +197,13 @@ it("refreshes facts once after another in-process writer commits", async () => {
   await withPublishedIndex(async (database) => {
     await database.refreshFacts();
     const initialRevision = database.facts.revision;
-    await withOpenClawAgentDatabaseWrite(
-      database.writeOptions!,
-      ({ db }) => {
-        db.prepare("INSERT INTO memory_index_meta (key, value) VALUES (?, ?)").run(
-          "memory_index_meta_v1",
-          JSON.stringify(metadata),
-        );
-        db.prepare("UPDATE memory_index_state SET revision = revision + 1 WHERE id = 1").run();
-      },
-      database.db,
-    );
+    await withOpenClawAgentDatabaseWrite(database.writeOptions!, ({ db }) => {
+      db.prepare("INSERT INTO memory_index_meta (key, value) VALUES (?, ?)").run(
+        "memory_index_meta_v1",
+        JSON.stringify(metadata),
+      );
+      db.prepare("UPDATE memory_index_state SET revision = revision + 1 WHERE id = 1").run();
+    });
     const sql = observeHostDataSql();
     const messages = vi.spyOn(Worker.prototype, "postMessage");
     try {
