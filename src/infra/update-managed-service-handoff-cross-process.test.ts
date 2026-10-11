@@ -11,8 +11,11 @@ import {
   createDeferred,
   withinTest,
 } from "../../test/helpers/promise.js";
-import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 import { isPidAlive } from "../shared/pid-alive.js";
+import {
+  createManagedHandoffTempDirTracker,
+  readManagedHandoffArtifacts,
+} from "./update-managed-service-handoff-artifacts.test-support.js";
 import {
   scopeWrapperSource,
   useHandoffFixtureReceipts,
@@ -25,7 +28,7 @@ import {
 import { pathExists } from "./update-managed-service-native.test-support.js";
 
 const spawnMock = vi.hoisted(() => vi.fn());
-const tempDirs = new Set<string>();
+const tempDirs = createManagedHandoffTempDirTracker();
 const handoffParents = new Map<string, import("node:child_process").ChildProcess>();
 const mockedHandoffLeaseCleanups = new Set<() => void>();
 const receipts = useHandoffFixtureReceipts();
@@ -41,7 +44,7 @@ function createReadyChild(_command: string, args: string[]) {
   });
   process.nextTick(signalMockManagedUpdateHandoffReady, {
     child,
-    paramsPath: args.at(-1) ?? "",
+    paramsPath: readManagedHandoffArtifacts(args).paramsPath,
     cleanups: mockedHandoffLeaseCleanups,
   });
   return child;
@@ -64,7 +67,7 @@ beforeEach(async () => {
   // Competing helpers share this fixture's coordinator, never the operator's database.
   const tmpDirOwner = await import("./tmp-openclaw-dir.js");
   vi.spyOn(tmpDirOwner, "resolvePreferredOpenClawTmpDir").mockReturnValue(
-    makeTempDir(tempDirs, "openclaw-handoff-coordinator-"),
+    tempDirs.make("openclaw-handoff-coordinator-"),
   );
   spawnMock.mockReset();
   spawnMock.mockImplementation(createReadyChild);
@@ -87,7 +90,7 @@ afterEach(async () => {
   for (const cleanup of mockedHandoffLeaseCleanups) {
     cleanup();
   }
-  cleanupTempDirs(tempDirs);
+  await tempDirs.cleanup();
   vi.restoreAllMocks();
   vi.resetModules();
 });
@@ -98,9 +101,9 @@ async function prepareConcurrentHandoffHelper(): Promise<{
   baseParams: Record<string, unknown>;
 }> {
   const { startManagedServiceUpdateHandoff } = await import("./update-managed-service-handoff.js");
-  const tmpDir = makeTempDir(tempDirs, "openclaw-handoff-concurrent-test-");
+  const tmpDir = tempDirs.make("openclaw-handoff-concurrent-test-");
 
-  await startManagedServiceUpdateHandoff({
+  const started = await startManagedServiceUpdateHandoff({
     root: tmpDir,
     timeoutMs: 1_800_000,
     restartDrainTimeoutMs: 300_000,
@@ -114,11 +117,9 @@ async function prepareConcurrentHandoffHelper(): Promise<{
   });
 
   const [, args] = spawnMock.mock.calls.at(-1) as unknown as [string, string[]];
-  const helperScriptPath = args[0] ?? "";
-  const baseParams = JSON.parse(await fs.readFile(args[1] ?? "", "utf-8")) as Record<
-    string,
-    unknown
-  >;
+  tempDirs.add(path.dirname(started.logPath));
+  const { scriptPath: helperScriptPath, paramsPath } = readManagedHandoffArtifacts(args);
+  const baseParams = JSON.parse(await fs.readFile(paramsPath, "utf-8")) as Record<string, unknown>;
   const database = new DatabaseSync(String(baseParams.updateLeaseDatabasePath));
   try {
     database
@@ -127,7 +128,6 @@ async function prepareConcurrentHandoffHelper(): Promise<{
   } finally {
     database.close();
   }
-  tempDirs.add(path.dirname(helperScriptPath));
   return { tmpDir, helperScriptPath, baseParams };
 }
 
@@ -237,7 +237,7 @@ describe("managed service update handoff cross-process lease", () => {
         claimManagedServiceUpdateHandoff,
         startManagedServiceUpdateHandoff,
       } = await import("./update-managed-service-handoff.js");
-      const tmpDir = makeTempDir(tempDirs, "openclaw-handoff-scope-wrapper-");
+      const tmpDir = tempDirs.make("openclaw-handoff-scope-wrapper-");
       const helperExitPath = path.join(tmpDir, "nested-helper-exited");
       const launcherPath = path.join(tmpDir, "systemd-run");
       await fs.writeFile(launcherPath, scopeWrapperSource(helperExitPath), { mode: 0o700 });
@@ -287,7 +287,9 @@ describe("managed service update handoff cross-process lease", () => {
           | undefined;
         tempDirs.add(path.dirname(started.logPath));
         const [, args] = spawnMock.mock.calls.at(-1) as unknown as [string, string[]];
-        const helperParams = JSON.parse(await fs.readFile(args.at(-1) ?? "", "utf8")) as {
+        const helperParams = JSON.parse(
+          await fs.readFile(readManagedHandoffArtifacts(args).paramsPath, "utf8"),
+        ) as {
           updateLeaseDatabasePath: string;
           updateLeaseKey: string;
         };

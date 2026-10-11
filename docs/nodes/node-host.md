@@ -90,18 +90,14 @@ ssh -N -L 18790:127.0.0.1:18789 user@gateway-host
 
 # Terminal B: export the gateway token and connect through the tunnel
 export OPENCLAW_GATEWAY_TOKEN="<gateway-token>"
-openclaw node run --host 127.0.0.1 --port 18790 --display-name "Build Node"
+openclaw node run --host 127.0.0.1 --port 18790 --display-name "Build Node" --auth-from-env
 ```
 
 Notes:
 
-- `openclaw node run` supports token or password auth.
-- Env vars are preferred: `OPENCLAW_GATEWAY_TOKEN` / `OPENCLAW_GATEWAY_PASSWORD`.
-- Config fallback is `gateway.auth.token` / `gateway.auth.password`.
-- In local mode, node host intentionally ignores `gateway.remote.token` / `gateway.remote.password`.
-- In remote mode, `gateway.remote.token` / `gateway.remote.password` are eligible per remote precedence rules.
-- If active local `gateway.auth.*` SecretRefs are configured but unresolved, node-host auth fails closed.
-- Node-host auth resolution only honors `OPENCLAW_GATEWAY_*` env vars.
+- Reconnecting to the saved Gateway endpoint uses the paired device token, not ambient credentials from another Gateway.
+- `--auth-from-env` explicitly selects `OPENCLAW_GATEWAY_TOKEN` / `OPENCLAW_GATEWAY_PASSWORD`, including when a paired token exists. Use the same flag with `openclaw node install` to persist this choice for a service.
+- Without a pairing, normal environment/config auth remains available. See [node-host authentication](/cli/node#gateway-auth-for-node-host) for precedence and SecretRef behavior.
 
 ### Restrict the node command surface
 
@@ -143,6 +139,23 @@ openclaw node restart
 ```
 
 `node install` also accepts `--context-path`, `--tls`, `--tls-fingerprint`, `--node-id` (legacy client instance ID only), `--share-installed-apps` / `--no-share-installed-apps`, `--runtime <node|bun>` (default: `node`), and `--force` to reinstall. Bun requires version 1.4+ with WAL-reset-safe `node:sqlite` and is an explicit opt-in; Node remains recommended. `node status`, `node stop`, and `node uninstall` are also available.
+
+For `npx openclaw node install` or `npx openclaw connect <join-url> --service`,
+OpenClaw installs the selected release into `<state-dir>/npm` before writing
+the service. The state directory respects `OPENCLAW_STATE_DIR` and profiles.
+Both launchd and systemd run the durable package after npm clears its `_npx`
+cache. Installation prints the package version, chosen runtime, service command,
+and a node update command:
+
+```bash
+npx -y openclaw@latest node install --force
+```
+
+Use the same profile and state-directory settings. Replace `latest` with `beta`
+or an exact version when needed. This installs into the same managed prefix,
+rewrites the service, and reuses the saved pairing. Reinstalling the same version
+repairs missing package files. It does not accumulate a directory per release.
+The automatic node-runtime updates below remain independent of this CLI package.
 
 Node shutdown waits for plugin availability watchers and active computer executions
 to finish cleanup, and reports failures from those cleanup operations. If a command
