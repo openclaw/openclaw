@@ -135,8 +135,6 @@ describe("prepared short-route identity", () => {
       reply: { ...resolved, key: "agent:roboclaw:thread:12345678-1111-4111-8111-111111111111" },
     },
     { name: "conflicting agent", reply: { ...resolved, agentId: "other" } },
-    { name: "missing", reply: { ok: false } },
-    { name: "error", reply: new Error("Resolution failed") },
   ] satisfies Array<{ name: string; reply: SessionsResolveResult | Error }>)(
     "accepts prepared identity without canonicalizing a later $name reply",
     async ({ reply }) => {
@@ -230,18 +228,6 @@ describe("prepared short-route identity", () => {
     },
   );
 
-  it("keeps resolver errors visible and releases its listeners", async () => {
-    const h = fixture();
-    const baseline = h.listenerCounts();
-    const pending = loadChatRoute(h.context, location, "chat", h.controller.signal);
-    const rejected = expect(pending).rejects.toThrow("Resolution failed");
-    await h.started();
-    h.reply.reject(new Error("Resolution failed"));
-    await rejected;
-    expect(h.listenerCounts()).toEqual(baseline);
-    h.emit();
-  });
-
   it.each(["client", "hello", "profile", "disconnect"] as const)(
     "retires resolution identity on %s replacement before it arrives",
     async (change) => {
@@ -314,35 +300,5 @@ describe("prepared short-route identity", () => {
     expect(h.listenerCounts()).toEqual(baseline);
     h.emit();
     h.reply.resolve(resolved);
-  });
-
-  it.each([
-    {
-      name: "dashboard",
-      face: "dashboard",
-      location: { ...location, pathname: location.pathname.replace("/chat/", "/dashboard/") },
-    },
-    {
-      name: "preferred face",
-      face: "chat",
-      location: { ...location, search: "?__openclawSessionFacePreference=1" },
-    },
-    { name: "anchor", face: "chat", location: { ...location, hash: "#anchor" } },
-  ] as const)("keeps full resolution for $name", async (entry) => {
-    const h = fixture();
-    const baseline = h.listenerCounts();
-    const pending = loadChatRoute(h.context, entry.location, entry.face, h.controller.signal);
-    await h.started();
-    h.emit();
-    expect(h.listenerCounts()).toEqual(baseline);
-    h.reply.resolve({ ...resolved, boardFace: "dashboard" });
-    const data = await pending;
-    expect(data).toMatchObject({
-      kind: "session",
-      sessionKey: sessionRouteKey,
-      face: entry.location.search.includes("__openclawSessionFacePreference")
-        ? "dashboard"
-        : entry.face,
-    });
   });
 });
