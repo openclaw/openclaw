@@ -390,11 +390,9 @@ function createIncognitoAgentExecutionOwner(
         sessionActors: createIncognitoSessionActorFactory({
           options,
           identity,
-          assertOutsideGrant,
           assertBorrowed,
           assertReferenceCurrent,
           assertRetainedCurrent,
-          withGrant,
           retain: (operation) => retain(operation, "settlement"),
           run: (actorAuthority, operation, actorAdmission) =>
             run(actorAuthority, operation, undefined, actorAdmission, false),
