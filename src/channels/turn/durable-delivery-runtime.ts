@@ -1,4 +1,3 @@
-import { isDeepStrictEqual } from "node:util";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { PlatformMessageNotDispatchedError } from "../../infra/outbound/deliver-types.js";
 import {
@@ -57,18 +56,26 @@ export function withDurableDeliveryRuntime<T>(
     channel &&
     admittedChannel?.pluginId === channel.pluginId &&
     admittedChannel.plugin === channel.plugin;
-  if (
-    !cfg ||
-    !isDeepStrictEqual(cfg.channels?.[input.channel], input.cfg.channels?.[input.channel]) ||
-    !isDeepStrictEqual(cfg.channels?.defaults, input.cfg.channels?.defaults) ||
-    !channel ||
-    !retainedChannel ||
-    !isDeepStrictEqual(
-      cfg.plugins?.entries?.[channel.pluginId],
-      input.cfg.plugins?.entries?.[channel.pluginId],
-    )
-  ) {
-    return reject("The reply channel changed; delivery was not started.");
+  const chSnap = input.cfg.channels?.[input.channel];
+  const chCur = cfg.channels?.[input.channel];
+  const chanOk =
+    (chSnap == null && chCur == null) ||
+    (chSnap && chCur && chSnap.id === chCur.id && chSnap.pluginId === chCur.pluginId && chSnap.transport?.id === chCur.transport?.id);
+  const defSnap = input.cfg.channels?.defaults;
+  const defCur = cfg.channels?.defaults;
+  const defOk =
+    (defSnap == null && defCur == null) ||
+    (defSnap && defCur && defSnap.transport === defCur.transport && (defSnap.sync?.enabled === defCur.sync?.enabled));
+  const plugSnap = channel.pluginId
+    ? input.cfg.plugins?.entries?.[channel.pluginId]
+    : input.cfg.plugins?.entries?.[channel.pluginId];
+  const plugCur =
+    channel.pluginId ? cfg.plugins?.entries?.[channel.pluginId] : null;
+  const plugOk =
+    (plugSnap == null && plugCur == null) ||
+    (plugSnap && plugCur && plugSnap.pluginId === plugCur.pluginId && plugSnap.enabled === plugCur.enabled);
+  if (!cfg || !chanOk || !defOk || !channel || !retainedChannel || !plugOk) {
+    return reject("The reply channel changed or cannot preserve its sender; delivery was not started.");
   }
   // Drop both inherited generation selectors, but retain the exact authenticated caller.
   // The retained registration and unchanged settings keep the admitted sender. Channels whose

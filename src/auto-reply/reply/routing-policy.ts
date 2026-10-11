@@ -1,5 +1,5 @@
 /** Resolves whether replies should route to the originating channel or current surface. */
-import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
+import { INTERNAL_MESSAGE_CHANNEL, EXTERNAL_CHANNEL_ORIGINS, normalizeMessageChannel } from "../../utils/message-channel.js";
 
 /** Computes source-routing and typing suppression for a reply turn. */
 export function resolveReplyRoutingDecision(params: {
@@ -15,9 +15,11 @@ export function resolveReplyRoutingDecision(params: {
   const providerChannel = normalizeMessageChannel(params.provider);
   const surfaceChannel = normalizeMessageChannel(params.surface);
   const currentSurface = providerChannel ?? surfaceChannel;
+  const isExternalOriginChannel = EXTERNAL_CHANNEL_ORIGINS.includes(originatingChannel);
   const isInternalWebchatTurn =
     currentSurface === INTERNAL_MESSAGE_CHANNEL &&
     (surfaceChannel === INTERNAL_MESSAGE_CHANNEL || !surfaceChannel) &&
+    !isExternalOriginChannel &&
     params.explicitDeliverRoute !== true;
   const shouldRouteToOriginating = Boolean(
     !params.suppressDirectUserDelivery &&
