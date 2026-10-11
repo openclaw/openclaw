@@ -33,6 +33,7 @@ export function createGatewayRunSignals(params: {
   logger: Pick<SubsystemLogger, "debug" | "info" | "warn" | "error">;
   timeoutMs: number;
   getIteration: () => object;
+  isTerminal: () => boolean;
   isForcedExitStarted: () => boolean;
   isForegroundUpdateClosed: () => boolean;
   isRuntimeResetPending: () => boolean;
@@ -40,7 +41,7 @@ export function createGatewayRunSignals(params: {
   getExternalRestartOwner: () => GatewaySuspendHandoffOwner | undefined;
   getTerminalHostedStop: () => ReturnType<typeof createGatewayHostLifecycle> | undefined;
   updateSuccessor: Pick<GatewayUpdateSuccessor, "stop" | "stopRequested">;
-  forceExit: (reason: string) => Promise<void>;
+  forceExit: (reason: string) => void;
   request: (
     action: GatewayRunSignalAction,
     signal: GatewayRunSignalRequest["signal"],
@@ -97,7 +98,10 @@ export function createGatewayRunSignals(params: {
     const acceptedAtMs = performance.now();
     signalAdmission = beginGatewayRestartSignalAdmission() ?? signalAdmission;
     const isCurrent = () =>
-      signalsActive && !params.isForcedExitStarted() && params.getIteration() === iteration;
+      signalsActive &&
+      !params.isTerminal() &&
+      !params.isForcedExitStarted() &&
+      params.getIteration() === iteration;
     const assertCurrent = () => {
       if (!isCurrent()) {
         throw new Error("Gateway signal belongs to a retired lifecycle iteration");
@@ -119,7 +123,7 @@ export function createGatewayRunSignals(params: {
     const deadline = consumeIntent
       ? setTimeout(
           () => {
-            void params.forceExit("gateway.restart_signal_settlement_timeout");
+            params.forceExit("gateway.restart_signal_settlement_timeout");
           },
           Math.max(0, params.timeoutMs - (performance.now() - acceptedAtMs)),
         )
@@ -165,6 +169,9 @@ export function createGatewayRunSignals(params: {
     });
   };
   const onSigterm = () => {
+    if (!signalsActive || params.isTerminal()) {
+      return;
+    }
     observeSignal("SIGTERM");
     gatewayLog.debug("signal SIGTERM received");
     const terminalHostedStop = params.getTerminalHostedStop();
@@ -214,6 +221,9 @@ export function createGatewayRunSignals(params: {
     );
   };
   const onSigint = () => {
+    if (!signalsActive || params.isTerminal()) {
+      return;
+    }
     observeSignal("SIGINT");
     gatewayLog.debug("signal SIGINT received");
     if (params.isForcedExitStarted()) {
@@ -246,6 +256,9 @@ export function createGatewayRunSignals(params: {
     }
   };
   const onRestartSignal = () => {
+    if (!signalsActive || params.isTerminal()) {
+      return;
+    }
     observeSignal("SIGUSR2");
     gatewayLog.debug("signal SIGUSR2 received");
     if (params.isForegroundUpdateClosed()) {

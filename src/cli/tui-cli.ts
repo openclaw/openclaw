@@ -80,7 +80,6 @@ export async function runTuiCliAction(
     message: opts.message,
     timeoutMs,
     historyLimit,
-    forceProcessExitOnReturn: true,
   });
 }
 

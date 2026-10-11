@@ -21,6 +21,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { readConversationDeliveryStateForTest } from "../../gateway/conversation-delivery.test-support.js";
 import { buildConversationRef } from "../../routing/conversation-ref.js";
 import { registerPendingConversationTurn } from "../../sessions/conversation-turns.js";
+import * as conversationTurns from "../../sessions/conversation-turns.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { recordAgentDatabaseAdmissions } from "../../state/agent-database-admission.js";
 import { unregisterOpenClawAgentDatabase } from "../../state/openclaw-agent-db-registry.js";
@@ -223,37 +224,62 @@ describe("conversation turn capture", () => {
     },
   );
 
-  it("consumes a committed reply when its waiter expires before audit admission", async () => {
-    const setup = await setupReefConversation();
-    vi.useFakeTimers();
-    const id = "reply-committed-before-expiry";
-    const pending = await registerCapture(setup, id);
-    pending.markReady();
-    const markReplied = conversationDeliveryStore.markConversationDeliveryReplied;
-    vi.spyOn(conversationDeliveryStore, "markConversationDeliveryReplied").mockImplementationOnce(
-      async (...args) => {
-        const committed = await markReplied(...args);
-        await vi.advanceTimersByTimeAsync(50);
-        return committed;
-      },
-    );
-    try {
-      await expect(
-        capturePendingConversationTurnReply({ cfg: setup.cfg, ctx: inboundReply(setup, id) }),
-      ).resolves.toBe(true);
-      await expect(pending.wait()).resolves.toBeUndefined();
-      expect(await getConversationDeliveryOperation(setup.scope, id)).toMatchObject({
-        status: "replied",
-        reply: { messageId: "inbound-admission", text: "ordinary reply", replyToId: id },
-      });
-      expect(
-        await sessionAccessor.loadTranscriptEvents({ ...setup.scope, sessionId: setup.sessionId }),
-      ).toEqual([]);
-    } finally {
-      pending.cancel();
-      vi.useRealTimers();
-    }
-  });
+  it.each(["timeout", "replace", "lifecycle", "writer"] as const)(
+    "consumes a committed reply when its audit authority changes: %s",
+    async (outcome) => {
+      const setup = await setupReefConversation();
+      vi.useFakeTimers();
+      const id = "reply-committed-before-expiry";
+      const pending = await registerCapture(setup, id);
+      pending.markReady();
+      const markReplied = conversationDeliveryStore.markConversationDeliveryReplied;
+      vi.spyOn(conversationDeliveryStore, "markConversationDeliveryReplied").mockImplementationOnce(
+        async (...args) => {
+          const committed = await markReplied(...args);
+          if (outcome === "timeout") {
+            await vi.advanceTimersByTimeAsync(50);
+          } else {
+            const scope = { ...setup.scope, sessionKey: setup.sessionKey };
+            const entry = sessionAccessor.loadSessionEntryReadOnly(scope)!;
+            sessionAccessor.replaceSessionEntrySync(scope, {
+              ...entry,
+              ...(outcome === "replace"
+                ? { sessionId: "replacement" }
+                : outcome === "lifecycle"
+                  ? { lifecycleRevision: "replacement-lifecycle" }
+                  : { activeWriterRunId: "replacement-writer" }),
+            });
+          }
+          return committed;
+        },
+      );
+      try {
+        await expect(
+          capturePendingConversationTurnReply({ cfg: setup.cfg, ctx: inboundReply(setup, id) }),
+        ).resolves.toBe(true);
+        if (outcome === "timeout") {
+          await expect(pending.wait()).resolves.toBeUndefined();
+        } else {
+          const reply = await pending.wait();
+          expect(reply?.messageId).toBe("inbound-admission");
+          expect(reply?.transcriptArtifactId).toBeUndefined();
+        }
+        expect(await getConversationDeliveryOperation(setup.scope, id)).toMatchObject({
+          status: "replied",
+          reply: { messageId: "inbound-admission", text: "ordinary reply", replyToId: id },
+        });
+        expect(
+          await sessionAccessor.loadTranscriptEvents({
+            ...setup.scope,
+            sessionId: setup.sessionId,
+          }),
+        ).toEqual([]);
+      } finally {
+        pending.cancel();
+        vi.useRealTimers();
+      }
+    },
+  );
 
   it.each(["replace", "lifecycle"] as const)(
     "rechecks the session after outbound correlation: %s",
@@ -262,11 +288,20 @@ describe("conversation turn capture", () => {
       vi.useFakeTimers();
       const id = `correlation-${outcome}`;
       const pending = await registerCapture(setup, id);
+      const correlating = createDeferredCore();
+      const claimReply = conversationTurns.claimPendingConversationTurnReply;
+      vi.spyOn(conversationTurns, "claimPendingConversationTurnReply").mockImplementationOnce(
+        (...args) => {
+          correlating.resolve();
+          return claimReply(...args);
+        },
+      );
       const capture = capturePendingConversationTurnReply({
         cfg: setup.cfg,
         ctx: inboundReply(setup, id),
       });
       try {
+        await correlating.promise;
         const scope = { ...setup.scope, sessionKey: setup.sessionKey };
         const entry = sessionAccessor.loadSessionEntryReadOnly(scope)!;
         sessionAccessor.replaceSessionEntrySync(scope, {

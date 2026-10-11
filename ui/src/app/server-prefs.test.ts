@@ -1,24 +1,18 @@
-/* @vitest-environment jsdom */
-
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+/* @vitest-environment jsdom */
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../api/gateway.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { waitForFast } from "../test-helpers/wait-for.ts";
 import { resetServerUiPref } from "./server-prefs-controls.ts";
-import { changedServerUiPrefs } from "./server-prefs-intent.ts";
+import { changedServerUiPrefs, requestServerUiPrefIntent } from "./server-prefs-intent.ts";
+import { applyServerUiPrefs, resolveServerUiPrefState } from "./server-prefs-reconcile.ts";
 import {
   configWithPrefs,
   createServerPrefsWriter as createClient,
   type RequestMock,
 } from "./server-prefs.test-support.ts";
-import {
-  applyServerUiPrefs,
-  flushServerUiPrefs,
-  pushServerUiPrefs,
-  resetServerUiPrefsSync,
-  resolveServerUiPrefState,
-} from "./server-prefs.ts";
+import { flushServerUiPrefs, pushServerUiPrefs, resetServerUiPrefsSync } from "./server-prefs.ts";
 import { loadSettings, patchSettings } from "./settings.ts";
 
 const pendingKey = (scope: string) => `openclaw.control.serverPrefs.pending.v1:${scope}`;
@@ -48,6 +42,21 @@ const conflictError = () =>
   new Error("config changed since last load; re-run config.get and retry");
 
 describe("server preferences", () => {
+  it.each([
+    { intents: ["write"], expected: { locale: "de" } },
+    { intents: ["write", "server"], expected: { locale: null } },
+    { intents: ["server", "write"], expected: { locale: null } },
+    { intents: ["write", "server", "device-local"], expected: null },
+    { intents: ["device-local", "server", "write"], expected: null },
+  ] as const)("consumes competing preference requests once: $intents", ({ intents, expected }) => {
+    const settings = patchSettings({ locale: "de" });
+    for (const intent of intents) {
+      requestServerUiPrefIntent("locale", intent);
+    }
+    expect(changedServerUiPrefs(settings, settings)).toEqual(expected);
+    expect(changedServerUiPrefs(settings, settings)).toBeNull();
+  });
+
   it("settles rejected persisted keys even when they are not known preference names", async () => {
     const completed = createDeferred();
     const request = vi.fn(async () => {
@@ -100,7 +109,6 @@ describe("server preferences", () => {
       chatShowToolCalls: false,
       chatPersistCommentary: false,
       chatSendShortcut: "modifier-enter",
-      sidebarEntries: ["route:usage", "session:agent:main:test"],
     });
   });
 
@@ -152,11 +160,11 @@ describe("server preferences", () => {
       ok: false,
       error: "config.get failed",
     });
-    const afterCommit = vi.fn();
+    const committed = createDeferred();
+    const afterCommit = vi.fn(() => committed.resolve());
     pushServerUiPrefs(client, { themeMode: "dark" }, { afterCommit });
-    await waitForFast(() =>
-      expect(localStorage.getItem(`openclaw.control.serverPrefs.pending.v1:${scope}`)).toBeNull(),
-    );
+    await committed.promise;
+    expect(localStorage.getItem(`openclaw.control.serverPrefs.pending.v1:${scope}`)).toBeNull();
 
     expect(applyServerUiPrefs(oldSnapshot, { scope, onApplied })).toBe(false);
     expect(loadSettings().themeMode).toBe("dark");
@@ -450,18 +458,12 @@ describe("server preferences", () => {
     expect(localStorage.getItem(pendingKey("ws://gw"))).not.toBeNull();
   });
 
-  it("marks sidebar arrays for replacement", async () => {
+  it("keeps personal sidebar arrays out of global config writes", () => {
     const request = vi.fn<Request>(async () => ({}));
     const sidebarEntries = ["route:usage"];
 
     pushServerUiPrefs(createClient(request), { sidebarEntries });
-    await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
-
-    expect(request).toHaveBeenCalledWith("config.patch", {
-      raw: JSON.stringify({ ui: { prefs: { sidebarEntries } } }),
-      replacePaths: ["ui.prefs.sidebarEntries"],
-      note: "control-ui prefs sync",
-    });
+    expect(request).not.toHaveBeenCalled();
   });
 
   it("re-adopts scope when a stable writer gains or changes its gateway client", async () => {
@@ -572,6 +574,34 @@ describe("read-only server preference lifecycle", () => {
     flushServerUiPrefs(writer);
     await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
     await vi.waitFor(() => expect(localStorage.getItem(pendingKey(scope))).toBeNull());
+  });
+
+  it("refuses an old queued config dispatch after a new scope owns identical pending intent", async () => {
+    const gate = createDeferred();
+    const queued = createDeferred();
+    const resumed = createDeferred();
+    const oldRequest = vi.fn<Request>(async () => ({}));
+    const writer = createClient(oldRequest, "ws://old");
+    const dispatch = writer.runExternalMutation;
+    writer.runExternalMutation = async (task, options) => {
+      queued.resolve();
+      await gate.promise;
+      const result = await dispatch(task, options);
+      resumed.resolve();
+      return result;
+    };
+    pushServerUiPrefs(writer, { locale: "de" });
+    await queued.promise;
+    const replacement = createClient(
+      vi.fn<Request>(async () => ({})),
+      "ws://new",
+      false,
+    );
+    pushServerUiPrefs(replacement, { locale: "de" });
+    gate.resolve();
+    await resumed.promise;
+    expect(oldRequest).not.toHaveBeenCalled();
+    expect(readPending("ws://new")).toEqual({ locale: "de" });
   });
 
   it("rechecks write capability after queued config writes settle", async () => {

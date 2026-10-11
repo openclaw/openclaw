@@ -14,7 +14,10 @@ import type { MentionWorkerOperations } from "../gateway/mention-inbox.worker-co
 import type { OperatorApprovalWorkerOperations } from "../gateway/operator-approval-store.worker-contract.js";
 import type { WorkerInferenceStoreOperations } from "../gateway/worker-environments/inference-store.worker-contract.js";
 import type { localWorkspaceOperations } from "../gateway/worker-environments/local-workspace-store.worker.js";
-import type { WorkerPlacementDispatchStoreOperations } from "../gateway/worker-environments/placement-dispatch-store.worker-contract.js";
+import type {
+  placementLifecycleOperations,
+  placementReadOperations,
+} from "../gateway/worker-environments/placement-lifecycle.worker.js";
 import type { PlacementSessionToolWorkerOperations } from "../gateway/worker-environments/placement-session-tool-operations.worker-contract.js";
 import type { PlacementTurnClaimWorkerOperations } from "../gateway/worker-environments/placement-turn-claims.worker-contract.js";
 import type { WorkspaceJournalWorkerOperations } from "../gateway/worker-environments/placement-workspace-journal.worker-contract.js";
@@ -100,7 +103,8 @@ export type RegisteredStateWorkerOperations = WorkerOperations<typeof gatewayBoo
   PluginModelCatalogCredentialReadWorkerOperations &
   PluginRuntimeWorkerOperations &
   WorkerInferenceStoreOperations &
-  WorkerPlacementDispatchStoreOperations &
+  WorkerOperations<typeof placementLifecycleOperations> &
+  WorkerOperations<typeof placementReadOperations> &
   PlacementSessionToolWorkerOperations &
   PlacementTurnClaimWorkerOperations &
   WorkspaceJournalWorkerOperations &
@@ -224,9 +228,10 @@ export const stateWorkerRegistry = createWorkerOperationRegistry<
       (m) => m.workerInferenceOperations,
     ),
   workerPlacements: () =>
-    import("../gateway/worker-environments/placement-dispatch-store.worker.js").then(
-      (m) => m.workerPlacementOperations,
-    ),
+    import("../gateway/worker-environments/placement-lifecycle.worker.js").then((m) => ({
+      ...m.placementLifecycleOperations,
+      ...m.placementReadOperations,
+    })),
   placementTools: () =>
     import("../gateway/worker-environments/placement-session-tool-operations.worker.js").then(
       (m) => m.placementSessionToolOperations,

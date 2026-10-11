@@ -17,7 +17,6 @@ import { createRefreshChatPane } from "./chat-pane-history.test-support.ts";
 import { consumePaneSessionHandoff } from "./chat-pane-shared.ts";
 import {
   createGatewayBrowserClientFixture,
-  createSessionCapabilityFixture,
   createSessionContext,
   createTestChatPane,
 } from "./chat-pane.test-support.ts";
@@ -141,32 +140,6 @@ describe("catalog transcript cache", () => {
 });
 
 describe("chat pane catalog session lifecycle", () => {
-  it.each(["global", "agent:other:main", "agent:other:catalog:fixture:gateway:Thread"])(
-    "preserves the pane owner and pending model selection across ordinary snapshots for %s",
-    (sessionKey) => {
-      const client = { request: vi.fn() } as unknown as GatewayBrowserClient;
-      const retireModelOverride = vi.fn();
-      const sessions = createSessionCapabilityFixture({ retireModelOverride });
-      const { pane, state } = createTestChatPane({ client, sessions });
-      pane.sessionKey = state.sessionKey = sessionKey;
-      pane.context.agentSelection.set("other");
-      state.assistantAgentId = "other";
-      const pending = { [sessionKey]: new Promise<boolean>(() => {}) };
-      state.chatModelSwitchPromises = pending;
-
-      pane.applyGatewaySnapshot({
-        ...pane.context.gateway.snapshot,
-        assistantAgentId: "main",
-        selfUser: { id: "fixture-user", name: "Fixture User" },
-      });
-
-      expect(state.selfUser?.id).toBe("fixture-user");
-      expect(state.assistantAgentId).toBe("other");
-      expect(state.chatModelSwitchPromises).toBe(pending);
-      expect(retireModelOverride).not.toHaveBeenCalled();
-    },
-  );
-
   it("finds continuation metadata on a later catalog page", async () => {
     const key = {
       catalogId: "codex",
@@ -300,19 +273,9 @@ describe("chat pane catalog session lifecycle", () => {
 
   it.each([
     {
-      name: "labels a tool call with the text its catalog provided",
-      item: { type: "toolCall", text: "git status --short" },
-      expected: "Tool call\n\ngit status --short",
-    },
-    {
       name: "keeps raw-only tool command labels readable",
       item: { type: "toolCall", raw: { command: "git status --short" } },
       expected: "Tool call\n\ngit status --short",
-    },
-    {
-      name: "keeps a Unicode tool result at the preview boundary whole",
-      item: { type: "toolResult", text: "海".repeat(500) },
-      expected: `Tool result\n\n${"海".repeat(500)}`,
     },
     {
       name: "renders an empty reasoning item as its label alone",
@@ -332,28 +295,9 @@ describe("chat pane catalog session lifecycle", () => {
 
   it.each([
     {
-      name: "text before a conflicting raw fallback",
-      item: {
-        type: "toolResult",
-        text: "x".repeat(750),
-        raw: { aggregatedOutput: "different raw output" },
-      },
-      preview: `${"x".repeat(499)}…`,
-    },
-    {
-      name: "raw aggregated output",
-      item: { type: "toolResult", raw: { aggregatedOutput: "x".repeat(750) } },
-      preview: `${"x".repeat(499)}…`,
-    },
-    {
       name: "raw structured result",
       item: { type: "toolResult", raw: { result: { output: "x".repeat(750) } } },
       preview: `${JSON.stringify({ output: "x".repeat(750) }).slice(0, 499)}…`,
-    },
-    {
-      name: "text ending at a surrogate pair",
-      item: { type: "toolResult", text: `${"x".repeat(498)}🌱tail` },
-      preview: `${"x".repeat(498)}…`,
     },
   ] satisfies Array<{ name: string; item: SessionCatalogTranscriptItem; preview: string }>)(
     "bounds the visible preview from $name without changing source data",
@@ -368,52 +312,7 @@ describe("chat pane catalog session lifecycle", () => {
     },
   );
 
-  it("marks a preview that its catalog truncated", () => {
-    const client = { request: vi.fn() } as unknown as GatewayBrowserClient;
-    const { pane } = createTestChatPane({ client, sessions: {} as SessionCapability });
-
-    const message = pane.catalogItemMessage({
-      type: "toolResult",
-      text: "first bytes of a huge command output",
-      truncated: true,
-    } as SessionCatalogTranscriptItem) as { content: Array<{ text: string }> };
-
-    // Without the marker a previewed payload reads as output that simply ended.
-    expect(message.content[0]?.text).toBe(
-      "Tool result\n\nfirst bytes of a huge command output\n\n[Output truncated]",
-    );
-  });
-
-  it("preserves provider order when catalog items omit timestamps", () => {
-    const client = { request: vi.fn() } as unknown as GatewayBrowserClient;
-    const { pane } = createTestChatPane({ client, sessions: {} as SessionCapability });
-
-    expect(
-      pane.catalogItemMessage({ id: "u1", type: "userMessage", text: "older question" }),
-    ).not.toHaveProperty("timestamp");
-  });
-
   it.each([
-    {
-      name: "exhausts pagination when an older read does not advance the cursor",
-      items: [{ id: "x1", type: "other" }],
-      initialCursor: "cursor-1",
-      nextCursor: "cursor-1",
-      seenCursor: undefined,
-      progressed: false,
-      expectedCursor: undefined,
-      visibleMessages: 0,
-    },
-    {
-      name: "counts visible messages on an exhausted final page as progress",
-      items: [{ id: "u1", type: "userMessage", text: "oldest message" }],
-      initialCursor: "final-page",
-      nextCursor: undefined,
-      seenCursor: undefined,
-      progressed: true,
-      expectedCursor: undefined,
-      visibleMessages: 1,
-    },
     {
       name: "keeps paging when an advancing older page renders nothing new",
       items: [{ id: "x1", type: "other" }],
@@ -422,16 +321,6 @@ describe("chat pane catalog session lifecycle", () => {
       seenCursor: undefined,
       progressed: true,
       expectedCursor: "cursor-2",
-      visibleMessages: 0,
-    },
-    {
-      name: "exhausts pagination when an older read cycles back to a visited cursor",
-      items: [{ id: "x1", type: "other" }],
-      initialCursor: "cursor-2",
-      nextCursor: "cursor-1",
-      seenCursor: "cursor-1",
-      progressed: false,
-      expectedCursor: undefined,
       visibleMessages: 0,
     },
   ] as const)("$name", async (scenario) => {

@@ -57,6 +57,10 @@ const ROOT_TEST_ENTRY_GLOBS = [
   "test/scripts/full-release-validation-at-sha.admission-fixture.mjs!",
   // tsgo:test:root checks these compile-only contracts without runtime imports.
   "test/type-contracts/**/*.ts!",
+  // The corpus README runs this generator by path; remove with that proof command.
+  "test/fixtures/lit-to-solid/compile.mts!",
+  // The codemod test spawns this runtime fixture; remove with that consumer.
+  "test/fixtures/lit-to-solid/runtime.mts!",
   // The module-generation test launches this Bun regression directly from its source path.
   "src/plugins/plugin-module-generation.bun.test-support.ts!",
   // The plugin artifact suite launches these Node tests with the native tooling preload.
@@ -91,6 +95,13 @@ const ROOT_TEST_ENTRY_GLOBS = [
   "test/e2e/qa-lab/runtime/mcp-channels-docker-client.ts!",
   // The Gateway/node MCP parity tests spawn this transport fixture by path.
   "test/e2e/qa-lab/runtime/gateway-node-mcp.fixture.mjs!",
+  // The Codex isolated-completion adapter test spawns this stdio app-server by path.
+  "test/e2e/qa-lab/runtime/codex-isolated-app-server.fixture.mjs!",
+  // The proxy owner test spawns this capture child through resolveRuntimeWorkerUrl.
+  "src/proxy-capture/child-transport.process.test-support.ts!",
+  // `pnpm ui:parity` runs this opt-in Vitest config by path; it includes the capture suite.
+  "scripts/control-ui-parity/vitest.config.ts!",
+  "scripts/control-ui-parity/capture-suite.ts!",
   // The hot-reload scenario passes this isolated upstream preload to the Gateway CLI.
   "test/e2e/qa-lab/runtime/gateway-config-hot-reload-upstream.mjs!",
   // The identity scenario spawns this process-isolated repeated-turn driver by path.
@@ -110,6 +121,10 @@ const ROOT_TEST_ENTRY_GLOBS = [
   "test/fixtures/ts-topology/basic/**/*.{js,mjs,cjs,ts,tsx,mts,cts}!",
   // The focused Oxlint test invokes these deliberate violations by path.
   "test/fixtures/oxlint-boundary-guards/*.ts!",
+  // The boundary test passes these files to Oxlint by path; remove with those cases.
+  "test/fixtures/forced-process-exit.test-support.cjs!",
+  "test/fixtures/oxlint-boundary-guards/forced-process-exit-violation.cjs!",
+  "test/fixtures/oxlint-boundary-guards/forced-process-exit-violation.mjs!",
   // The ACP reset proof spawns this adapter by path from the proof driver.
   "test/fixtures/acp-reset-timeout-adapter.ts!",
 ] as const;
@@ -132,6 +147,13 @@ const workspaces = Object.fromEntries(
         : {}),
       entry: [
         ...settings.entry,
+        // The presentation proof HTML selects these browser entries by renderer query param.
+        ...(workspace === "ui"
+          ? [
+              "src/test-helpers/presentation-primitives-lit.ts!",
+              "src/test-helpers/presentation-primitives-solid.tsx!",
+            ]
+          : []),
         // Native builds load this private entry through the generator's temporary bundle.
         ...(workspace === "packages/gateway-protocol" ? ["scripts/native-codegen.ts!"] : []),
         // Compiler registries emit entry modules, including declarations
