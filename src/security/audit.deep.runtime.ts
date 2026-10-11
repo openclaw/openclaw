@@ -251,7 +251,7 @@ export async function collectPluginsCodeSafetyFindings(params: {
         detail: `Found ${summary[severity]} ${critical ? "critical issue(s)" : "warning(s)"} in ${summary.scannedFiles} scanned file(s):\n${details}`,
         remediation: critical
           ? "Review the plugin source code carefully before use. If untrusted, remove the plugin from your OpenClaw extensions state directory."
-          : "Review the flagged code to ensure it is intentional and safe.",
+          : "Check that the flagged code is intentional and safe.",
       });
     }
   }
@@ -375,7 +375,7 @@ export async function collectInstalledSkillsCodeSafetyFindings(params: {
         detail: `Found ${summary[severity]} ${critical ? "critical issue(s)" : "warning(s)"} in ${summary.scannedFiles} scanned file(s) under ${skillDir}:\n${details}`,
         remediation: critical
           ? `Review the skill source code before use. If untrusted, remove "${skillDir}".`
-          : "Review flagged lines to ensure the behavior is intentional and safe.",
+          : "Check that the behavior in flagged lines is intentional and safe.",
       });
     }
   }

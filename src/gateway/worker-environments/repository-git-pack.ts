@@ -18,7 +18,7 @@ export async function prepareRepositoryWorkerGitPack(params: {
   assertCurrent: () => void;
 }): Promise<string> {
   if (parseConfiguredProjectGitUrl(params.url)?.url !== params.url) {
-    throw new Error("Repository preparation requires a canonical GitHub URL");
+    throw new Error("Repository preparation requires a normalized GitHub HTTPS repository URL");
   }
   if (!/^[a-f0-9]{40}$/u.test(params.baseCommit)) {
     throw new Error("Repository preparation requires an exact GitHub commit");

@@ -123,7 +123,10 @@ export function createWorkerProviderIntent(options: WorkerProviderIntentOptions)
     if (inherited) {
       providerId = normalizeCapabilityProviderId(inherited.providerId) ?? inherited.providerId;
       if (providerId !== inherited.providerId) {
-        throw serviceError("invalid_profile", "Inherited worker provider id is not canonical");
+        throw serviceError(
+          "invalid_profile",
+          "Inherited worker provider ID is not in the expected format",
+        );
       }
       requireInheritedWorkerProfileAuthorization(
         normalizedProfileId,

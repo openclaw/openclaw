@@ -261,7 +261,7 @@ export function warnUnregisteredConfiguredMemoryEmbeddingProviders(params: {
   for (const provider of unregistered) {
     const path = `memory.search.${provider.source}`;
     params.log.warn(
-      `${path}="${provider.configuredId}" is configured, but no loaded plugin registered a memory embedding provider that can serve "${provider.configuredId}". Semantic memory recall will fall back to keyword/FTS-only search. Ensure the plugin that provides "${provider.configuredId}" is installed and enabled.`,
+      `${path}="${provider.configuredId}" is configured, but no loaded plugin registered a memory embedding provider that can serve "${provider.configuredId}". Semantic memory recall will fall back to keyword/FTS-only search. Check that the plugin that provides "${provider.configuredId}" is installed and enabled.`,
     );
   }
 }
