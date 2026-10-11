@@ -14,6 +14,7 @@ import {
   runSqliteImmediateTransactionSync,
   sqliteStringSet,
 } from "openclaw/plugin-sdk/sqlite-worker-runtime";
+import { definedFields } from "../record-fields.js";
 import type {
   PersistedWorkboardAttachment,
   PersistedWorkboardBoard,
@@ -27,7 +28,6 @@ import type {
   WorkboardPersistence,
   WorkboardSubscriptionStore,
 } from "./persistence-types.js";
-import { definedFields } from "./record-fields.js";
 import {
   blobToBase64,
   jsonValue,

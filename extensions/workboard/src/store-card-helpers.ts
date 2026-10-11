@@ -13,7 +13,7 @@ import {
 } from "@openclaw/workboard-contract";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { definedFields } from "./record-fields.js";
+import { definedFields } from "../record-fields.js";
 import {
   BLOCKED_TOO_LONG_MS,
   MAX_CARD_ATTEMPTS,

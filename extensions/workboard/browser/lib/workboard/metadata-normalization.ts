@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { definedFields } from "../../../src/record-fields.js";
+import { definedFields } from "../../../record-fields.js";
 import { normalizeAutomation } from "./metadata-contract-normalization.ts";
 import {
   WORKBOARD_ATTEMPT_STATUSES,

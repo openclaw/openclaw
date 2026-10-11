@@ -17,7 +17,7 @@ export async function fetchXService(
       return dispatch(input, prepared);
     };
   if (fetchImpl) {
-    return authorize((input, prepared) => fetchImpl(String(input), prepared))(url, init);
+    return authorize((_input, prepared) => fetchImpl(url, prepared))(url, init);
   }
   const [{ fetchWithSsrFGuard }, { responseWithRelease }, { fetchWithRuntimeDispatcher }] =
     await Promise.all([

@@ -17,7 +17,7 @@ import {
   iterateSqliteQuerySync,
   sqliteStringSet,
 } from "openclaw/plugin-sdk/sqlite-worker-runtime";
-import { definedFields } from "./record-fields.js";
+import { definedFields } from "../record-fields.js";
 export type Row = Record<string, unknown>;
 
 export function jsonValue(value: unknown): string | null {
