@@ -13,10 +13,8 @@ import { isBenignCompactionSkipResult } from "../../agents/embedded-agent-runner
 import type { AcceptedCompactionSuccessor } from "../../agents/embedded-agent-runner/compaction-successor.js";
 import { runEmbeddedAgentEntry } from "../../agents/embedded-agent-runner/run-entry.js";
 import { createDeferredEmbeddedRunLifecycleManager } from "../../agents/embedded-agent-runner/run/deferred-lifecycle-owner.js";
-import { findModelInCatalog } from "../../agents/model-catalog-lookup.js";
 import { isCliRuntimeAliasForProvider } from "../../agents/model-runtime-aliases.js";
 import { isCliProvider } from "../../agents/model-selection.js";
-import { resolveContextConfigProviderForRuntime } from "../../agents/openai-routing.js";
 import { resolveSandboxConfigForAgent } from "../../agents/sandbox.js";
 import { withSandboxRuntimeStatusInWorker } from "../../agents/sandbox/runtime-status.js";
 import { createSessionMaintenanceFollowup } from "../../agents/session-maintenance/run.js";
@@ -57,6 +55,7 @@ import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { formatTokenCount } from "../../utils/token-format.js";
 import type { VerboseLevel } from "../thinking.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
+import { resolveFollowupContextTokens } from "./agent-runner-memory-context.js";
 import {
   estimatePromptTokensFromSessionTranscript,
   readSessionLogSnapshot,
@@ -88,7 +87,6 @@ import {
   shouldRunMemoryFlush,
   shouldRunPreflightCompaction,
 } from "./memory-flush.js";
-import { resolveContextTokens } from "./model-selection-context.js";
 import { appendPostCompactionRefreshPrompt } from "./post-compaction-context.js";
 import { refreshQueuedFollowupSession, type FollowupRun } from "./queue.js";
 import { startFollowupRunPreAdoptionHeartbeat } from "./queue/lifecycle.js";
@@ -167,22 +165,6 @@ function followupOwnsNativeCompaction(params: FollowupRuntimeParams, runtimeId: 
       agentId: params.followupRun.run.agentId,
     })?.ownsNativeCompaction === true
   );
-}
-
-function resolveFollowupContextTokens(
-  { cfg, followupRun, defaultModel }: FollowupRuntimeParams & { defaultModel: string },
-  runtimeId: string,
-): number {
-  const { provider } = followupRun.run;
-  const model = followupRun.run.model ?? defaultModel;
-  const catalogModel = findModelInCatalog(followupRun.run.thinkingCatalog ?? [], provider, model);
-  return resolveContextTokens({
-    cfg,
-    provider: resolveContextConfigProviderForRuntime({ provider, runtimeId, config: cfg }),
-    model,
-    modelContextWindow: catalogModel?.contextWindow,
-    modelContextTokens: catalogModel?.contextTokens,
-  });
 }
 
 // Leave room for large assistant outputs when checking near-threshold usage.
@@ -285,7 +267,11 @@ export async function runSessionCompactionIfNeeded(params: {
       abortSignal: params.abortSignal,
     });
 
-  const contextWindowTokens = resolveFollowupContextTokens(params, runtimeId);
+  const contextWindowTokens = await resolveFollowupContextTokens(
+    { ...params, sessionEntry: entry },
+    runtimeId,
+  );
+  assertActive();
   const memoryFlushPlan = resolveMemoryFlushPlanForRun({
     cfg: params.cfg,
     contextWindowTokens,
@@ -772,7 +758,11 @@ export async function runMemoryFlushIfNeeded(params: {
   const flushRunId = crypto.randomUUID();
   let flushRunRegistered = false;
   const recordFailure = (error: unknown) => recordMemoryFlushFailure(error, params, entry);
-  const contextWindowTokens = resolveFollowupContextTokens(params, runtimeId);
+  const contextWindowTokens = await resolveFollowupContextTokens(
+    { ...params, sessionEntry: entry },
+    runtimeId,
+  );
+  assertMemoryFlushCurrent();
   let memoryFlushResolution: MemoryFlushPlanForRunResolution | null;
   try {
     memoryFlushResolution = resolveMemoryFlushPlanForRun({ cfg: params.cfg, contextWindowTokens });

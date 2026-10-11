@@ -1,16 +1,28 @@
+import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import * as sessionEntryWriter from "../../config/sessions/session-accessor.entry-mutation.js";
 import type { SessionTranscriptAccountingSnapshot } from "../../config/sessions/session-transcript-accounting.types.js";
-import { SESSION_TOTAL_TOKENS_VERSION } from "../../config/sessions/types.js";
+import { SESSION_TOTAL_TOKENS_VERSION, type SessionEntry } from "../../config/sessions/types.js";
 import {
   clearMemoryPluginState,
   registerMemoryCapability,
 } from "../../plugins/memory-state.test-fixtures.js";
+import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
 import { runMemoryFlushIfNeeded, runSessionCompactionIfNeeded } from "./agent-runner-memory.js";
-import { createTestFollowupRun, withTestModelContextTokens } from "./agent-runner.test-fixtures.js";
+import {
+  createReplyOperation,
+  loadMainSessionEntry,
+  createMemoryFlushPlan,
+} from "./agent-runner-memory.test-support.js";
+import {
+  createTestFollowupRun,
+  withTestModelContextTokens,
+  writeTestSessionStore,
+} from "./agent-runner.test-fixtures.js";
 
 const { accounting, compact, flush, runEntry, increment } = vi.hoisted(() => ({
   accounting: vi.fn<() => Promise<SessionTranscriptAccountingSnapshot>>(),
@@ -147,4 +159,85 @@ it("keeps failed memory accounting conservative without a native retry", async (
   expect(result).toMatchObject({ outcome: "skipped" });
   expect(flush).not.toHaveBeenCalled();
   expect(runEntry).not.toHaveBeenCalled();
+});
+
+let budgetFixtureRoot: string;
+beforeAll(async () => {
+  // openclaw-temp-dir: allow removal after the owned database workers drain
+  budgetFixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-accounting-"));
+});
+afterAll(async () => {
+  await closeOpenClawAgentDatabasesAsync(budgetFixtureRoot);
+  await fs.rm(budgetFixtureRoot, { recursive: true, force: true });
+});
+
+it("rejects operator revocation during budget resolution without recording a flush failure", async () => {
+  const storePath = path.join(budgetFixtureRoot, "sessions.json");
+  const sessionEntry: SessionEntry = {
+    sessionId: "session",
+    updatedAt: 1,
+    totalTokens: 80_000,
+    totalTokensFresh: true,
+    totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
+    compactionCount: 1,
+  };
+  const sessionStore = { main: sessionEntry };
+  await writeTestSessionStore(storePath, "main", sessionEntry);
+  const controller = new AbortController();
+  const revoked = new Error("maintenance operator revoked");
+  const authority = createAdmittedRunOperatorAuthority({
+    profileId: "guest",
+    scopes: ["operator.write"],
+    signal: controller.signal,
+    assertCurrent: () => {},
+  });
+  const started = createDeferred();
+  const release = createDeferred();
+  const context = await import("../../agents/context.js");
+  const resolveBudget = context.resolveContextTokenBudgetForModel;
+  const budget = vi
+    .spyOn(context, "resolveContextTokenBudgetForModel")
+    .mockImplementation(async (params) => {
+      started.resolve();
+      await release.promise;
+      return await resolveBudget(params);
+    });
+  const plan = vi.fn(createMemoryFlushPlan);
+  registerMemoryCapability("memory-core", { flushPlanResolver: plan });
+  const followupRun = createTestFollowupRun({ workspaceDir: budgetFixtureRoot });
+  followupRun.operatorAuthority = authority;
+  const defaultModel = "anthropic/claude-opus-4-6";
+  const pending = runMemoryFlushIfNeeded({
+    followupRun,
+    sessionEntry,
+    sessionStore,
+    storePath,
+    defaultModel,
+    sessionKey: "main",
+    isHeartbeat: false,
+    resolvedVerboseLevel: "off",
+    replyOperation: createReplyOperation(),
+    cfg: withTestModelContextTokens({
+      cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
+      followupRun,
+      defaultModel,
+      contextTokens: 100_000,
+    }),
+  });
+  try {
+    await awaitGateBeforeSettlement(started.promise, pending, "budget was not awaited");
+    controller.abort(revoked);
+    const rejection = expect(pending).rejects.toBe(revoked);
+    release.resolve();
+    await rejection;
+    expect(sessionStore.main.memoryFlush).toBeUndefined();
+    expect(loadMainSessionEntry(storePath).memoryFlush).toBeUndefined();
+    expect(plan).not.toHaveBeenCalled();
+    expect(flush).not.toHaveBeenCalled();
+    expect(runEntry).not.toHaveBeenCalled();
+  } finally {
+    release.resolve();
+    await Promise.allSettled([pending]);
+    budget.mockRestore();
+  }
 });
