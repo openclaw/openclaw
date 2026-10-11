@@ -80,6 +80,7 @@ export function SessionsPageContent(props: { controller: SessionsPageController 
           <LitContent
             render={() => {
               projection.revision();
+              locale.revision();
               return renderAgentScopeControl({
                 agents: context.agents.state.agentsList?.agents ?? [],
                 selection: context.agentSelection,

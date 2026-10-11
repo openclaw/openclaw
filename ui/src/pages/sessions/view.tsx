@@ -4,11 +4,7 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { createMemo, For } from "solid-js";
-import type {
-  AgentIdentityResult,
-  GatewaySessionRow,
-  SessionsListResult,
-} from "../../api/types.ts";
+import type { GatewaySessionRow } from "../../api/types.ts";
 import { Icon } from "../../components/solid/icon.tsx";
 import {
   SettingsPage,
@@ -25,64 +21,16 @@ import {
   UNGROUPED_ID,
 } from "../../lib/sessions/grouping.ts";
 import type { SessionArchivedFilter } from "../../lib/sessions/index.ts";
-import type { SessionPatch } from "../../lib/sessions/patch.ts";
 import { getAgentIdentity, SessionRows, sessionsTableColumnCount } from "./session-row.tsx";
 import {
   categoryDropHandlers,
   clearSessionsSearch,
   handleSessionsSearchKeydown,
   SessionsAdvancedFilters,
-  type SessionsAdvancedFiltersProps,
 } from "./sessions-filters.tsx";
-import { TranscriptSearch, type TranscriptSearchProps } from "./transcript-search-view.tsx";
+import { TranscriptSearch } from "./transcript-search-view.tsx";
+import type { SessionsProps } from "./view-types.ts";
 import "../../styles/sessions.css";
-
-export type SessionsProps = {
-  loading: boolean;
-  refreshing: boolean;
-  result: SessionsListResult | null;
-  error: string | null;
-  basePath: string;
-  agentId: string;
-  mainKey: string;
-  searchQuery: string;
-  agentIdentityById: Record<string, AgentIdentityResult>;
-  sortColumn: "key" | "kind" | "updated" | "tokens";
-  sortDir: "asc" | "desc";
-  knownCategories: string[];
-  page: number;
-  pageSize: number;
-  selectedKeys: Set<string>;
-  sessionMenu: { key: string } | null;
-  expandedSessionKey: string | null;
-  labelDisabledReason?: (row: GatewaySessionRow) => string | undefined;
-  patchAdminDisabledReason?: string;
-  deleteArchivedDisabledReason?: string;
-  deleteSelectedDisabledReason?: string;
-  onClearFilters: () => void;
-  onSearchChange: (query: string) => void;
-  onSortChange: (column: "key" | "kind" | "updated" | "tokens", dir: "asc" | "desc") => void;
-  onAssignCategory: (key: string, category: string | null) => void;
-  onLoadMore: () => void;
-  onPageChange: (page: number) => void;
-  onPageSizeChange: (size: number) => void;
-  onRefresh: () => void;
-  onStatusFilterChange: (statusFilter: SessionArchivedFilter) => void;
-  onDeleteAllArchived: () => void;
-  onPatch: (key: string, patch: SessionPatch, options?: { sessionScope?: boolean }) => void;
-  onToggleSelect: (key: string) => void;
-  onSelectPage: (keys: string[]) => void;
-  onDeselectPage: (keys: string[]) => void;
-  onDeselectAll: () => void;
-  onDeleteSelected: () => void;
-  onOpenSessionMenu: (
-    row: GatewaySessionRow,
-    position: { x: number; y: number },
-    trigger: HTMLElement | null,
-  ) => void;
-  onToggleDetails: (sessionKey: string) => void;
-} & TranscriptSearchProps &
-  SessionsAdvancedFiltersProps;
 
 const PAGE_SIZES = [10, 25, 50, 100] as const;
 

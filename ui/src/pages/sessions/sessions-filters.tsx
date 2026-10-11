@@ -1,5 +1,4 @@
 import type WaPopover from "@awesome.me/webawesome/dist/components/popover/popover.js";
-import type { JSX as SolidJSX } from "@solidjs/web";
 import { createMemo, For } from "solid-js";
 import { Icon } from "../../components/solid/icon.tsx";
 import { syncPopoverExpanded, syncPopoverLabel } from "../../components/web-awesome-popover.ts";
@@ -17,7 +16,7 @@ import { SESSIONS_PAGE_DEFAULT_LIMIT } from "../../lib/sessions/session-requests
 declare module "@solidjs/web" {
   namespace JSX {
     interface IntrinsicElements {
-      "wa-popover": SolidJSX.HTMLAttributes<WaPopover> & {
+      "wa-popover": HTMLAttributes<WaPopover> & {
         for: string;
         placement: WaPopover["placement"];
         "without-arrow"?: boolean;

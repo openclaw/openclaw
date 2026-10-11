@@ -1,5 +1,4 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import type { JSX as SolidJSX } from "@solidjs/web";
 import { createMemo } from "solid-js";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { serializeSidebarEntry } from "../../app-navigation.ts";
@@ -55,7 +54,7 @@ type SessionMenuProperties = Pick<
 declare module "@solidjs/web" {
   namespace JSX {
     interface IntrinsicElements {
-      "openclaw-session-menu": SolidJSX.HTMLAttributes<SessionMenuElement> & {
+      "openclaw-session-menu": HTMLAttributes<SessionMenuElement> & {
         [Key in keyof SessionMenuProperties as `prop:${Key}`]: SessionMenuProperties[Key];
       };
     }

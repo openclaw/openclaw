@@ -26,7 +26,7 @@ function AgentsHomePageContent(props: { active: boolean }) {
         canCreate: canCallGatewayMethod(currentGateway, "openclaw.chat", "operator.admin"),
       };
     },
-    () => props.active !== false,
+    () => props.active,
   );
   const cards = createMemo(() => {
     const defaultId = snapshot().defaultId;

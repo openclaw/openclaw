@@ -76,7 +76,7 @@ import {
   handleSessionManagementNavigationAction,
   type SessionsPageMenuProps,
 } from "./session-menu.tsx";
-import type { SessionsProps } from "./view.tsx";
+import type { SessionsProps } from "./view-types.ts";
 
 registerSessionOrganizationEnglish();
 

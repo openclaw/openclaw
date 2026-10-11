@@ -34,7 +34,7 @@ import { parseAgentSessionKey, parseSessionKeyParts } from "../../lib/sessions/s
 import { CategoryCell } from "./category-cell.tsx";
 import { SessionStatusBadge } from "./session-status.tsx";
 import { categoryDropHandlers } from "./sessions-filters.tsx";
-import type { SessionsProps } from "./view.tsx";
+import type { SessionsProps } from "./view-types.ts";
 import "../../components/agent-row-chip.ts";
 import "../../components/tooltip.ts";
 import "../../components/web-awesome.ts";
@@ -43,7 +43,7 @@ import "../../styles/capacity-meter.css";
 declare module "@solidjs/web" {
   namespace JSX {
     interface IntrinsicElements {
-      "openclaw-agent-row-chip": SolidJSX.HTMLAttributes<
+      "openclaw-agent-row-chip": HTMLAttributes<
         HTMLElementTagNameMap["openclaw-agent-row-chip"]
       > & {
         "prop:agentId": HTMLElementTagNameMap["openclaw-agent-row-chip"]["agentId"];

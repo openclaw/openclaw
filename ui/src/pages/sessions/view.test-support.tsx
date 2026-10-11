@@ -2,8 +2,8 @@ import { createSignal } from "solid-js";
 import type { SessionsListResult } from "../../api/types.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
+import type { SessionsProps } from "./view-types.ts";
 import { SessionsView } from "./view.tsx";
-import type { SessionsProps } from "./view.tsx";
 
 export function buildResult(
   session: SessionsListResult["sessions"][number],
