@@ -165,19 +165,15 @@ it.each(["unavailable", "appeared"] as const)(
   },
 );
 
-it.each(["authority", "memo"])("rejects unavailable facts after %s changes", async (kind) => {
+it("rejects unavailable facts after authority changes", async () => {
   const failure = new Error("authority revoked");
   mocks.read.mockImplementationOnce(async () => {
-    if (kind === "authority") {
-      mocks.assertCurrent.mockImplementation(() => {
-        throw failure;
-      });
-    } else {
-      invalidateRegisteredAgentDatabasesMemo(options);
-    }
+    mocks.assertCurrent.mockImplementation(() => {
+      throw failure;
+    });
     return { status: "unavailable" };
   });
   await expect(prepareOpenClawAgentDatabaseRegistrySnapshotRead(options).read()).rejects.toThrow(
-    kind === "authority" ? failure : "registry changed",
+    failure,
   );
 });

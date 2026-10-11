@@ -10,7 +10,9 @@ import { normalizeAgentId } from "../routing/session-key.js";
 import { diffConfigPaths } from "./config-diff.js";
 import type { GatewayReloadPlan } from "./config-reload-plan.js";
 import {
+  doesReloadAffectPluginCapabilities,
   doesReloadAffectProviderAuth,
+  isProviderAuthRelevantReloadPath,
   shouldRefreshContextWindowCache,
 } from "./config-reload-recovery.js";
 
@@ -24,10 +26,12 @@ export function createGatewayModelRuntimeReload() {
         config: previousConfig,
         sourceConfig: projectConfigOntoRuntimeSourceSnapshot(previousConfig),
       };
-      const agentIds = resolveReloadAgentIds([
-        ...plan.changedPaths,
-        ...diffConfigPaths(baseline.config, nextConfig),
-      ]);
+      const agentIds = doesReloadAffectPluginCapabilities(plan, baseline.config, nextConfig)
+        ? undefined
+        : resolveReloadAgentIds([
+            ...plan.changedPaths,
+            ...diffConfigPaths(baseline.config, nextConfig),
+          ]);
       return {
         required:
           pending !== undefined || doesReloadAffectProviderAuth(plan, previousConfig, nextConfig),
@@ -46,16 +50,13 @@ export function createGatewayModelRuntimeReload() {
   };
 }
 
-/** Returns affected agent ids when every meaningful reload path is agent-entry-local. */
+/** Returns agent-local model/auth changes; undefined requires a global refresh. */
 export function resolveReloadAgentIds(
   changedPaths: readonly string[],
 ): ReadonlySet<string> | undefined {
-  if (changedPaths.length === 0) {
-    return undefined;
-  }
   const agentIds = new Set<string>();
   for (const path of changedPaths) {
-    if (path === "meta" || path.startsWith("meta.")) {
+    if (!isProviderAuthRelevantReloadPath(path)) {
       continue;
     }
     const match = /^agents\.entries\.([^.]+)(?:\.|$)/.exec(path);
@@ -64,7 +65,7 @@ export function resolveReloadAgentIds(
     }
     agentIds.add(normalizeAgentId(match[1]));
   }
-  return agentIds.size > 0 ? agentIds : undefined;
+  return agentIds;
 }
 
 /** Apply known endpoint removals before publishing the replacement model inventory. */

@@ -16,7 +16,6 @@ import {
 } from "../infra/sqlite-worker-operation-admission.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeAgentId } from "../routing/session-key.js";
-import { sessionChanges } from "../sessions/session-row-changes.js";
 import {
   captureAgentDatabasePreparationDeletionForIdentity,
   readAgentDatabaseAdmissionRefusal,
@@ -43,10 +42,7 @@ import {
   type AgentLifecycleStoreFacts,
 } from "../state/agent-lifecycle-read.kernel.js";
 import type { AgentProvenance } from "../state/agent-provenance.js";
-import {
-  invalidateRegisteredAgentDatabasesMemo,
-  emitOpenClawAgentDatabaseRegistryChange,
-} from "../state/openclaw-agent-db-registry-listing.js";
+import { prepareOpenClawAgentDatabaseRegistryRemoval } from "../state/openclaw-agent-db-registry-listing.js";
 import { invalidateOpenClawAgentDatabaseValidationsForAgent } from "../state/openclaw-agent-db-validation-cache.js";
 import { isStateDatabaseReadAdmissionInvalidatedError } from "../state/openclaw-state-db-async-lifecycle.js";
 import type {
@@ -156,6 +152,7 @@ export function withAgentDeletion<T>(
     context,
     async (lease) =>
       withOpenClawStateLeaseWorkerAdmission(lease, statePath, async (lifetime) => {
+        let publishRegistryRemoval: () => void;
         let begun = false;
         let closed = false;
         let currentOperationId: string | undefined;
@@ -222,11 +219,9 @@ export function withAgentDeletion<T>(
                       throw error;
                     }
                     if (facts.unregisterDatabases === true) {
-                      invalidateRegisteredAgentDatabasesMemo({ path: statePath });
                       invalidateOpenClawAgentDatabaseValidationsForAgent(id, []);
-                      emitOpenClawAgentDatabaseRegistryChange(id);
                     }
-                    sessionChanges.emit({ all: true, scope: "stores" });
+                    publishRegistryRemoval();
                   };
                   if (publication?.mutation) {
                     publication.mutation.observe(created.admission, retained, onCommitted);
@@ -269,6 +264,11 @@ export function withAgentDeletion<T>(
             }
             begun = true;
             const capturedEntry = structuredClone(entry);
+            publishRegistryRemoval = await prepareOpenClawAgentDatabaseRegistryRemoval(id, {
+              path: statePath,
+              env: context.environment,
+            });
+            assertCurrentHost();
             const preserveDeleteFiles = beginOptions.preserveDeleteFiles;
             const operationId = crypto.randomUUID();
             currentOperationId = operationId;
@@ -324,7 +324,7 @@ export function withAgentDeletion<T>(
             if (remoteOwner) {
               invalidatePreparation();
               cancelCronRuns();
-              sessionChanges.emit({ all: true, scope: "stores" });
+              publishRegistryRemoval();
             }
             assertCurrentHost();
             const authority: AgentDeletionWorkerAuthority = {
@@ -557,7 +557,7 @@ export function withAgentDeletion<T>(
                 if (remoteOwner) {
                   await rollbackRemoteAgentDeletionJournal(remoteOwner, id, operationId);
                   closed = true;
-                  sessionChanges.emit({ all: true, scope: "stores" });
+                  publishRegistryRemoval();
                   return;
                 }
                 await withCronReceiptAuthorityMutation(

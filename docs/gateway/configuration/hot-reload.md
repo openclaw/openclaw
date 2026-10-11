@@ -34,6 +34,9 @@ change still reports that earlier write as unconfirmed.
 
 Agent-only edits retain session admission and active runtimes for unchanged agents.
 Creation prepares the new agent's runtime database before publishing its config entry.
+Overlapping creation and deletion preserve unchanged agents' prepared model generations
+and session creation. Registry discovery follows completed roster publications;
+removing an agent still revokes access to that agent's stores.
 Overlapping agent edits can supersede an earlier model-runtime refresh. If that
 refresh fails, the newer config retries the unfinished preparation without
 requiring a Gateway restart, including when the newer edit does not change models.

@@ -172,9 +172,10 @@ export function prepareSessionStoreTargetInventoryRead(
   unchangedBy?: Parameters<typeof prepareOpenClawAgentDatabaseRegistrySnapshotRead>[1],
 ) {
   const { candidates, ...prepared } = request;
-  const captureRegistry = () =>
-    prepareOpenClawAgentDatabaseRegistrySnapshotRead({ env: request.env }, unchangedBy);
-  let registry = captureRegistry();
+  let registry = prepareOpenClawAgentDatabaseRegistrySnapshotRead(
+    { env: request.env },
+    unchangedBy,
+  );
   let registryStarted = false;
   const assertRegistryCurrent = () => {
     // Explicit publication scopes retain their witness before discovery; other
@@ -231,16 +232,7 @@ export function prepareSessionStoreTargetInventoryRead(
           assertCurrent();
           if (inventory.kind === "session-target-registry-required") {
             registryStarted = true;
-            let current;
-            try {
-              current = await registry.read();
-            } catch (error) {
-              if (!(error instanceof AgentDatabaseRegistryChangedError)) {
-                throw error;
-              }
-              registry = captureRegistry();
-              current = await registry.read();
-            }
+            const current = await registry.read();
             assertCurrent();
             registry = unchangedBy ? registry : prepareSessionStoreRegistryRead(request);
             inventory = await discovery.readTargetInventory({
