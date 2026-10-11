@@ -1,5 +1,6 @@
 import type { ProgressCard, ProgressCardGetParams } from "@openclaw/gateway-protocol";
-import { nothing, ReactiveElement, render } from "lit";
+import { render } from "@solidjs/web";
+import { createEffect, createSignal, onCleanup, onSettled, runWithOwner } from "solid-js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { pathForRoute } from "../app-route-paths.ts";
 import type { ApplicationContext } from "../app/context.ts";
@@ -15,10 +16,11 @@ import {
   type SessionPullRequestSnapshotStore,
 } from "../lib/session-pull-requests.ts";
 import { parseAgentSessionKey, scopedSessionArtifactKey } from "../lib/sessions/session-key.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../lit/solid-bridge.ts";
 import type { AppSidebarSessionNavigationElement } from "./app-sidebar-session-navigation.ts";
 import { personActivityRouting, type PersonActivityRouting } from "./person-activity-link.ts";
 import { createPortaledHovercard, PortaledHovercardController } from "./portaled-hovercard.ts";
-import { renderSessionHovercard } from "./session-hovercard.ts";
+import { SessionHovercard, type SessionHovercardInput } from "./session-hovercard-solid.tsx";
 import { SessionLinkTitler } from "./session-link-titling.ts";
 import {
   SESSION_MENU_OPEN_EVENT,
@@ -37,13 +39,24 @@ function sessionHovercardMenuOpen(owner: ParentNode): boolean {
   return owner.querySelector("openclaw-session-menu, openclaw-catalog-session-menu") !== null;
 }
 
-export class SessionProgressHovercardProvider extends ReactiveElement {
-  // Let Lit replay dependencies assigned before the lazy element upgrades.
-  static override properties = {
-    client: { attribute: false, noAccessor: true },
-    context: { attribute: false, noAccessor: true },
-    gateway: { attribute: false, noAccessor: true },
-  };
+type SessionProgressHovercardProps = {
+  client: GatewayBrowserClient | null;
+  context: ApplicationContext | null;
+  gateway: ApplicationGateway | null;
+};
+
+export type SessionProgressHovercardProvider = SolidBridgeElement<SessionProgressHovercardProps>;
+
+class SessionProgressHovercardController {
+  private readonly sessionLinkTitler: SessionLinkTitler;
+  private readonly cardUpdates = new WeakMap<
+    HTMLDivElement,
+    (input: SessionHovercardInput, afterCommit: () => void) => void
+  >();
+
+  constructor(private readonly host: HTMLElement) {
+    this.sessionLinkTitler = new SessionLinkTitler(host);
+  }
 
   private applicationClient: GatewayBrowserClient | null = null;
   private applicationContext: ApplicationContext | null = null;
@@ -72,12 +85,11 @@ export class SessionProgressHovercardProvider extends ReactiveElement {
     CLOSE_DELAY_MS,
     () => this.close(),
   );
-  private readonly sessionLinkTitler = new SessionLinkTitler(this);
   private loadGeneration = 0;
   private readonly activeTargetObserver = new MutationObserver(() => {
     if (
       this.activeTarget &&
-      (!this.contains(this.activeTarget) || sessionHovercardMenuOpen(this))
+      (!this.host.contains(this.activeTarget) || sessionHovercardMenuOpen(this.host))
     ) {
       this.close();
       return;
@@ -97,7 +109,7 @@ export class SessionProgressHovercardProvider extends ReactiveElement {
     }
     this.applicationClient = value;
     this.sessionLinkTitler.client = value;
-    if (this.isConnected) {
+    if (this.host.isConnected) {
       this.sessionLinkTitler.refresh();
     }
   }
@@ -107,11 +119,14 @@ export class SessionProgressHovercardProvider extends ReactiveElement {
   }
 
   set context(value: ApplicationContext | null) {
+    if (value === this.applicationContext) {
+      return;
+    }
     this.stopContextUpdates?.();
     this.stopContextUpdates = null;
     this.applicationContext = value;
     this.sessionLinkTitler.context = value;
-    if (this.isConnected) {
+    if (this.host.isConnected) {
       this.sessionLinkTitler.refresh();
       this.connectStore();
     }
@@ -128,42 +143,36 @@ export class SessionProgressHovercardProvider extends ReactiveElement {
     this.disconnectStore();
     this.applicationGateway = value;
     this.close();
-    if (this.isConnected) {
+    if (this.host.isConnected) {
       this.connectStore();
     }
   }
 
-  protected override createRenderRoot(): HTMLElement | DocumentFragment {
-    return this;
-  }
-
-  override connectedCallback(): void {
-    super.connectedCallback();
-    this.style.display = "contents";
-    this.addEventListener("pointerover", this.handlePointerOver);
-    this.addEventListener("pointerout", this.handlePointerOut);
-    this.addEventListener("focusin", this.handleFocusIn);
-    this.addEventListener("focusout", this.handleFocusOut);
-    this.addEventListener("keydown", this.hovercard.handleTriggerKeyDown);
-    this.addEventListener("click", this.handleClick);
-    this.addEventListener(SESSION_MENU_OPEN_EVENT, this.handleSessionMenuOpen);
+  connect(): void {
+    this.host.style.display = "contents";
+    this.host.addEventListener("pointerover", this.handlePointerOver);
+    this.host.addEventListener("pointerout", this.handlePointerOut);
+    this.host.addEventListener("focusin", this.handleFocusIn);
+    this.host.addEventListener("focusout", this.handleFocusOut);
+    this.host.addEventListener("keydown", this.hovercard.handleTriggerKeyDown);
+    this.host.addEventListener("click", this.handleClick);
+    this.host.addEventListener(SESSION_MENU_OPEN_EVENT, this.handleSessionMenuOpen);
     this.sessionLinkTitler.connect();
     this.connectStore();
   }
 
-  override disconnectedCallback(): void {
-    this.removeEventListener("pointerover", this.handlePointerOver);
-    this.removeEventListener("pointerout", this.handlePointerOut);
-    this.removeEventListener("focusin", this.handleFocusIn);
-    this.removeEventListener("focusout", this.handleFocusOut);
-    this.removeEventListener("keydown", this.hovercard.handleTriggerKeyDown);
-    this.removeEventListener("click", this.handleClick);
-    this.removeEventListener(SESSION_MENU_OPEN_EVENT, this.handleSessionMenuOpen);
+  disconnect(): void {
+    this.host.removeEventListener("pointerover", this.handlePointerOver);
+    this.host.removeEventListener("pointerout", this.handlePointerOut);
+    this.host.removeEventListener("focusin", this.handleFocusIn);
+    this.host.removeEventListener("focusout", this.handleFocusOut);
+    this.host.removeEventListener("keydown", this.hovercard.handleTriggerKeyDown);
+    this.host.removeEventListener("click", this.handleClick);
+    this.host.removeEventListener(SESSION_MENU_OPEN_EVENT, this.handleSessionMenuOpen);
     this.sessionLinkTitler.disconnect();
     this.disconnectStore();
     this.close();
     this.clearSkipDelayTimer();
-    super.disconnectedCallback();
   }
 
   private connectStore(): void {
@@ -209,7 +218,7 @@ export class SessionProgressHovercardProvider extends ReactiveElement {
       return;
     }
     const target = sessionProgressHoverTargetFromEvent(event);
-    if (!target || sessionHovercardMenuOpen(this)) {
+    if (!target || sessionHovercardMenuOpen(this.host)) {
       return;
     }
     const delayed = this.delayed;
@@ -237,7 +246,7 @@ export class SessionProgressHovercardProvider extends ReactiveElement {
     const trigger = target?.matches(".sidebar-recent-session")
       ? focused?.closest<HTMLElement>("a.sidebar-recent-session__link")
       : focused;
-    if (!target || !trigger || sessionHovercardMenuOpen(this)) {
+    if (!target || !trigger || sessionHovercardMenuOpen(this.host)) {
       return;
     }
     this.activate(target, trigger, 0, false);
@@ -310,7 +319,7 @@ export class SessionProgressHovercardProvider extends ReactiveElement {
     this.lastProgressCard = null;
     this.progressCards?.watch(this, [this.activeSession]);
     this.hovercard.markTrigger(trigger);
-    this.activeTargetObserver.observe(this, {
+    this.activeTargetObserver.observe(this.host, {
       attributes: true,
       attributeFilter: ["aria-expanded"],
       childList: true,
@@ -333,7 +342,7 @@ export class SessionProgressHovercardProvider extends ReactiveElement {
       !artifactKey ||
       !session ||
       !target ||
-      sessionHovercardMenuOpen(this) ||
+      sessionHovercardMenuOpen(this.host) ||
       !this.hovercard.held
     ) {
       return;
@@ -383,10 +392,9 @@ export class SessionProgressHovercardProvider extends ReactiveElement {
     if (!target || !session || !sessionKey || !artifactKey || !this.open) {
       return;
     }
-    const sidebarRow =
-      this.querySelector<AppSidebarSessionNavigationElement>(
-        "openclaw-app-sidebar",
-      )?.findSidebarHovercardRowByKey(sessionKey);
+    const sidebarRow = this.host
+      .querySelector<AppSidebarSessionNavigationElement>("openclaw-app-sidebar")
+      ?.findSidebarHovercardRowByKey(sessionKey);
     const pullRequests = this.pullRequests?.get(artifactKey);
     const currentProgressCard = this.progressCards?.get(session);
     if (currentProgressCard !== undefined) {
@@ -462,59 +470,96 @@ export class SessionProgressHovercardProvider extends ReactiveElement {
     }
     card.dataset.revision = revision;
     card.setAttribute("aria-label", t("sessionHovercard.ariaLabel"));
-    render(
-      renderSessionHovercard({
-        row: sidebarRow,
-        selfUserId: this.applicationContext?.gateway.snapshot.selfUser?.id,
-        avatarAuth: channelAvatarAuth,
-        personActivity: this.personActivity(),
-        automationLink: this.applicationContext
-          ? {
-              href: `${pathForRoute("cron", this.applicationContext.basePath)}?${new URLSearchParams({ session: sessionKey, agent: session.agentId! })}`,
-              navigate: () => {
-                const context = this.applicationContext;
-                this.close();
-                context?.navigate("cron", {
-                  search: `?${new URLSearchParams({ session: sessionKey, agent: session.agentId! })}`,
-                });
-              },
-            }
-          : undefined,
-        pullRequests,
-        progressCard: this.lastProgressCard,
-      }),
-      card,
-    );
-    if (!card.firstElementChild) {
-      this.hovercard.clearCard();
-      this.hovercard.pointerOverCard = false;
-      this.hovercard.cardFocusInside = false;
-      return;
-    }
-    if (mountedCard) {
-      if (focusedCardElement && !card.contains(document.activeElement)) {
-        const focusables = this.hovercard.focusables();
-        const nextFocused =
-          (focusedHref
-            ? focusables.find(
-                (element) => element instanceof HTMLAnchorElement && element.href === focusedHref,
-              )
-            : undefined) ?? focusables[focusedCardIndex];
-        if (nextFocused) {
-          nextFocused.focus({ preventScroll: true });
-        } else {
-          this.hovercard.cardFocusInside = false;
-          this.hovercard.returnFocus(this.activeTrigger);
-          this.hovercard.focusInside = document.activeElement === this.activeTrigger;
+    const input: SessionHovercardInput = {
+      row: sidebarRow,
+      selfUserId: this.applicationContext?.gateway.snapshot.selfUser?.id,
+      avatarAuth: channelAvatarAuth,
+      personActivity: this.personActivity(),
+      automationLink: this.applicationContext
+        ? {
+            href: `${pathForRoute("cron", this.applicationContext.basePath)}?${new URLSearchParams({ session: sessionKey, agent: session.agentId! })}`,
+            navigate: () => {
+              const context = this.applicationContext;
+              this.close();
+              context?.navigate("cron", {
+                search: `?${new URLSearchParams({ session: sessionKey, agent: session.agentId! })}`,
+              });
+            },
+          }
+        : undefined,
+      pullRequests,
+      progressCard: this.lastProgressCard,
+    };
+    const afterCommit = () => {
+      if (this.hovercard.card !== card) {
+        return;
+      }
+      if (!card.firstElementChild) {
+        this.hovercard.clearCard();
+        this.hovercard.pointerOverCard = false;
+        this.hovercard.cardFocusInside = false;
+        return;
+      }
+      if (mountedCard) {
+        if (focusedCardElement && !card.contains(document.activeElement)) {
+          const focusables = this.hovercard.focusables();
+          const nextFocused =
+            (focusedHref
+              ? focusables.find(
+                  (element) => element instanceof HTMLAnchorElement && element.href === focusedHref,
+                )
+              : undefined) ?? focusables[focusedCardIndex];
+          if (nextFocused) {
+            nextFocused.focus({ preventScroll: true });
+          } else {
+            this.hovercard.cardFocusInside = false;
+            this.hovercard.returnFocus(this.activeTrigger);
+            this.hovercard.focusInside = document.activeElement === this.activeTrigger;
+          }
         }
+        this.hovercard.position();
+        return;
       }
       this.hovercard.position();
+    };
+    if (mountedCard) {
+      this.cardUpdates.get(mountedCard)?.(input, afterCommit);
       return;
     }
     card.addEventListener("pointerleave", this.hovercard.handleCardPointerLeave);
-    this.hovercard.mount(target, card, sessionProgressHoverPlacementForTarget(target), false, () =>
-      render(nothing, card),
+    let dispose: (() => void) | undefined = undefined;
+    let retired = false;
+    this.hovercard.mount(
+      target,
+      card,
+      sessionProgressHoverPlacementForTarget(target),
+      false,
+      () => {
+        retired = true;
+        this.cardUpdates.delete(card);
+        dispose?.();
+      },
     );
+    if (this.hovercard.card !== card) {
+      return;
+    }
+    dispose = runWithOwner(null, () =>
+      render(() => {
+        const [snapshot, setSnapshot] = createSignal({ input, afterCommit });
+        this.cardUpdates.set(card, (next, committed) =>
+          setSnapshot({ input: next, afterCommit: committed }),
+        );
+        createEffect(
+          () => snapshot(),
+          (value) => onSettled(value.afterCommit),
+        );
+        return <SessionHovercard {...snapshot().input} />;
+      }, card),
+    );
+    // An empty initial render can retire its portal before render() returns its disposer.
+    if (retired) {
+      dispose?.();
+    }
     if (animateEntry) {
       void card.offsetWidth;
       window.setTimeout(() => {
@@ -560,3 +605,28 @@ export class SessionProgressHovercardProvider extends ReactiveElement {
     }
   }
 }
+
+export const SessionProgressHovercard = defineSolidBridge<SessionProgressHovercardProps>(
+  "openclaw-session-progress-hovercard-provider",
+  (props, host) => {
+    const controller = new SessionProgressHovercardController(host);
+    createEffect(
+      () => [props.client, props.context, props.gateway] as const,
+      ([client, context, gateway]) => {
+        controller.client = client;
+        controller.context = context;
+        controller.gateway = gateway;
+      },
+    );
+    onSettled(() => controller.connect());
+    onCleanup(() => controller.disconnect());
+    return props.children;
+  },
+  {
+    properties: {
+      client: { default: null, attribute: false },
+      context: { default: null, attribute: false },
+      gateway: { default: null, attribute: false },
+    },
+  },
+);
