@@ -1,6 +1,5 @@
 // Runtime implementations for `openclaw plugins` subcommands. Heavy plugin modules stay
 // lazy-loaded so the base CLI can start without activating the plugin registry.
-import type { PluginsRefreshResult } from "../../packages/gateway-protocol/src/schema/plugins.js";
 import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
@@ -37,6 +36,7 @@ import type {
   PluginRegistryOptions,
 } from "./plugins-cli.js";
 import type { RunPluginInstallCommandParams } from "./plugins-install-preflight.js";
+import { runWithLocalPluginState } from "./plugins-local-state.js";
 
 type PluginInstallActionOptions = RunPluginInstallCommandParams["opts"];
 
@@ -154,6 +154,17 @@ async function runPluginPolicyCommand(
   if (await applyPluginEnabledThroughGateway(id, enabled, { acceptCapabilities })) {
     return;
   }
+  return await runWithLocalPluginState(enabled ? "enable" : "disable", (assertCurrent) =>
+    runPluginPolicyLocal(id, enabled, acceptCapabilities, assertCurrent),
+  );
+}
+
+async function runPluginPolicyLocal(
+  id: string,
+  enabled: boolean,
+  acceptCapabilities: boolean | undefined,
+  assertCurrent: () => void,
+): Promise<void> {
   const { mutateManagedPluginEnabled } = await import("../plugins/management-mutations.js");
   const { ManagedPluginLifecycleError } = await import("../plugins/management-lifecycle-error.js");
   await withPluginLifecycleLease({}, async () => {
@@ -162,6 +173,7 @@ async function runPluginPolicyCommand(
         pluginId: id,
         enabled,
         caller: "cli",
+        beforePersistentApply: assertCurrent,
         requestCapabilityConsent: acceptCapabilities,
         ...resolvePluginCapabilityConsentCliOptions({ acceptCapabilities, action: "enable" }),
       });
@@ -225,46 +237,52 @@ export async function runPluginsRegistryCommand(opts: PluginRegistryOptions): Pr
 
   if (opts.refresh) {
     const { refreshPluginRegistry } = await import("../plugins/plugin-registry-refresh.js");
-    return await withPluginLifecycleLease({}, async () => {
-      const config = getRuntimeConfig();
-      const index = await refreshPluginRegistry({
-        config,
-        reason: "manual",
-      });
-      const inspection = await inspectPluginRegistry({ config });
-      if (inspection.state !== "fresh") {
-        const differenceLines = formatDifferences(inspection.differences);
-        const message = [
-          "Plugin registry refresh could not verify the persisted replacement.",
-          ...differenceLines.map((difference) => `- ${difference}`),
-          "Stop plugin package changes, then run `openclaw plugins registry --refresh` again.",
-        ].join("\n");
+    const refresh = (assertCurrent: () => void) =>
+      withPluginLifecycleLease({}, async (lease) => {
+        const config = getRuntimeConfig();
+        const index = await refreshPluginRegistry({
+          config,
+          reason: "manual",
+          lease,
+          assertCurrent,
+        });
+        const inspection = await inspectPluginRegistry({ config });
+        if (inspection.state !== "fresh") {
+          const differenceLines = formatDifferences(inspection.differences);
+          const message = [
+            "Plugin registry refresh could not verify the persisted replacement.",
+            ...differenceLines.map((difference) => `- ${difference}`),
+            "Stop plugin package changes, then run `openclaw plugins registry --refresh` again.",
+          ].join("\n");
+          if (opts.json) {
+            defaultRuntime.writeJson({
+              ...formatCliJsonFailure(message),
+              refreshed: false,
+              state: inspection.state,
+              refreshReasons: inspection.refreshReasons,
+              differences: inspection.differences,
+            });
+            exitCliAfterOutput(defaultRuntime, 1);
+          }
+          throw new Error(message);
+        }
         if (opts.json) {
           defaultRuntime.writeJson({
-            ...formatCliJsonFailure(message),
-            refreshed: false,
+            refreshed: true,
             state: inspection.state,
             refreshReasons: inspection.refreshReasons,
             differences: inspection.differences,
+            registry: index,
           });
-          exitCliAfterOutput(defaultRuntime, 1);
+          return;
         }
-        throw new Error(message);
-      }
-      if (opts.json) {
-        defaultRuntime.writeJson({
-          refreshed: true,
-          state: inspection.state,
-          refreshReasons: inspection.refreshReasons,
-          differences: inspection.differences,
-          registry: index,
-        });
-        return;
-      }
-      const total = index.plugins.length;
-      const enabled = countEnabledPlugins(index.plugins);
-      defaultRuntime.log(`Plugin registry refreshed: ${enabled}/${total} enabled plugins indexed.`);
-    });
+        const total = index.plugins.length;
+        const enabled = countEnabledPlugins(index.plugins);
+        defaultRuntime.log(
+          `Plugin registry refreshed: ${enabled}/${total} enabled plugins indexed.`,
+        );
+      });
+    return await runWithLocalPluginState("registry --refresh", refresh);
   }
 
   const inspection = await inspectPluginRegistry({ config: getRuntimeConfig() });
@@ -726,6 +744,17 @@ function normalizeMarketplaceExpectedSha256(value: string | undefined): string |
 export async function runPluginMarketplaceEntriesCommand(
   opts: PluginMarketplaceEntriesOptions,
 ): Promise<void> {
+  if (!opts.offline) {
+    return await runWithLocalPluginState("marketplace entries", () =>
+      runPluginMarketplaceEntriesLocal(opts),
+    );
+  }
+  return await runPluginMarketplaceEntriesLocal(opts);
+}
+
+async function runPluginMarketplaceEntriesLocal(
+  opts: PluginMarketplaceEntriesOptions,
+): Promise<void> {
   const catalog = await import("../plugins/official-external-plugin-catalog.js");
   const cfg = getRuntimeConfig();
   const result = await catalog.loadConfiguredHostedOfficialExternalPluginCatalogEntries({
@@ -780,8 +809,14 @@ export async function runPluginMarketplaceEntriesCommand(
 export async function runPluginMarketplaceRefreshCommand(
   opts: PluginMarketplaceRefreshOptions,
 ): Promise<void> {
-  const { resolvePluginLifecycleGateway } = await import("./plugins-lifecycle-client.js");
-  const gateway = await resolvePluginLifecycleGateway();
+  return await runWithLocalPluginState("marketplace refresh", () =>
+    runPluginMarketplaceRefreshLocal(opts),
+  );
+}
+
+async function runPluginMarketplaceRefreshLocal(
+  opts: PluginMarketplaceRefreshOptions,
+): Promise<void> {
   const { loadConfiguredHostedOfficialExternalPluginCatalogEntries } =
     await import("../plugins/official-external-plugin-catalog.js");
   const cfg = getRuntimeConfig();
@@ -795,28 +830,8 @@ export async function runPluginMarketplaceRefreshCommand(
   const { clearManagedPluginCatalogCache } = await import("../plugins/management-catalog.js");
   clearManagedPluginCatalogCache();
   let runtimeNotice: string | undefined;
-  let applicationFailure: string | undefined;
-  // Reused snapshots can lose install authority as they age; apply the current catalog too.
   if (result.source !== "bundled-fallback") {
-    if (gateway) {
-      try {
-        const applied = await gateway<PluginsRefreshResult>("plugins.refresh", {});
-        if (!applied.runtime) {
-          throw new Error("Marketplace refresh did not return a runtime application receipt.");
-        }
-        for (const warning of applied.warnings ?? []) {
-          (opts.json ? defaultRuntime.error : defaultRuntime.log)(theme.warn(warning));
-        }
-        runtimeNotice = `Marketplace catalog applied in Gateway generation ${applied.runtime.generation}.`;
-      } catch (error) {
-        const message = sanitizeTerminalText(
-          error instanceof Error ? error.message : String(error),
-        );
-        applicationFailure = `Marketplace catalog saved, but Gateway runtime application failed: ${message}. Repair the reported problem, then rerun this refresh.`;
-      }
-    } else {
-      runtimeNotice = "Marketplace catalog saved for the next Gateway start.";
-    }
+    runtimeNotice = "Marketplace catalog saved for the next Gateway start.";
   }
   const payload = buildMarketplaceRefreshPayload(result, opts.feedUrl);
 
@@ -831,7 +846,7 @@ export async function runPluginMarketplaceRefreshCommand(
 
   if (opts.json) {
     defaultRuntime.writeJson(payload);
-    if (!gateway && runtimeNotice) {
+    if (runtimeNotice) {
       defaultRuntime.error(runtimeNotice);
     }
   } else {
@@ -841,15 +856,12 @@ export async function runPluginMarketplaceRefreshCommand(
     }
     defaultRuntime.log(lines.join("\n"));
   }
-  if (applicationFailure) {
-    defaultRuntime.error(applicationFailure);
-  }
   if (failedPinnedRefresh) {
     defaultRuntime.error(
       `Pinned marketplace feed refresh did not accept a fresh hosted payload (source: ${payload.source}).`,
     );
   }
-  if (applicationFailure || failedPinnedRefresh) {
+  if (failedPinnedRefresh) {
     return defaultRuntime.exit(1);
   }
 }
