@@ -27,7 +27,7 @@ import {
   renderSkillStatusChips,
 } from "../../lib/skills-shared.ts";
 import type { ClawHubSkillSecurityVerdict } from "../../lib/skills/index.ts";
-import { LitContent } from "../../lit/lit-content.tsx";
+import { LitContent } from "../../lit/solid-bridge.ts";
 import { SkillDiscovery } from "./discovery-view.tsx";
 import { ClawHubDetailDialog, MarkdownContent, SkillReaderDialog } from "./skill-reader-dialog.tsx";
 import { SkillStateStatus, verdictForSkill, verdictStatus } from "./skill-status.tsx";

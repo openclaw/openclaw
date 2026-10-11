@@ -164,7 +164,6 @@ describe("plugin credential authoring controls", () => {
     const input = first.editor.querySelector<HTMLInputElement>("input")!;
     input.focus();
     editInput(input, "synthetic-first-key");
-    flush();
     first.editor
       .querySelector<HTMLButtonElement>('[aria-label="Show API key: Example API key"]')!
       .focus();

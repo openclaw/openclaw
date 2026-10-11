@@ -13,7 +13,7 @@ import {
 } from "../../lib/config/config-state-model.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import type { GatewayPageController } from "../../lit/gateway-page-controller.ts";
-import { LitContent } from "../../lit/lit-content.tsx";
+import { LitContent } from "../../lit/solid-bridge.ts";
 import { PluginCredentialEditor } from "../plugins/credential-editor.tsx";
 import { pluginConfigSchema } from "../plugins/settings-model.ts";
 import { readConfigValue } from "./search-config.ts";

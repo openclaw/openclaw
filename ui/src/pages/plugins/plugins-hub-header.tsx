@@ -5,7 +5,7 @@ import { renderHubTabs } from "../../components/hub-tabs.ts";
 import { LearnMoreLink } from "../../components/solid/settings-ui.tsx";
 import { registerPluginManagementEnglish } from "../../i18n/locales/en-plugin-management.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
-import { LitContent } from "../../lit/lit-content.tsx";
+import { LitContent } from "../../lit/solid-bridge.ts";
 import { PLUGINS_HUB_DOCS_URLS, PLUGINS_HUB_PANEL_ID, type PluginsHubTab } from "./plugins-hub.ts";
 
 registerEnglishCatalog(registerPluginManagementEnglish);

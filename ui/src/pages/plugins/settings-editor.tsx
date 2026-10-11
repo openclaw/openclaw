@@ -1,5 +1,4 @@
 import type { JSX } from "@solidjs/web";
-import { html, nothing } from "lit";
 import { For, Show, createMemo, createRenderEffect, createSignal } from "solid-js";
 import { resolveStructuredDraftInitialValue } from "../../components/config-form-structured-draft.ts";
 import { renderMapField } from "../../components/config-form.node.collection-map.ts";
@@ -22,13 +21,13 @@ import { registerPluginManagementEnglish } from "../../i18n/locales/en-plugin-ma
 import { t } from "../../lib/reactive/i18n.ts";
 import { resolveScrollBehavior } from "../../lib/scroll-behavior.ts";
 import "../../components/web-awesome.ts";
-import { LitContent } from "../../lit/lit-content.tsx";
-import { defineSolidBridge } from "../../lit/solid-bridge.ts";
+import { defineSolidBridge, LitContent } from "../../lit/solid-bridge.ts";
 import { PluginCredentialEditor, type PluginCredentialEditorProps } from "./credential-editor.tsx";
 import "./custom-elements.ts";
 import { renderPluginDetailBreadcrumb } from "./detail-shell.tsx";
-import { pluginEntryValue, type PluginSettingsEditorModel } from "./settings-model.ts";
+import { nothing, renderPluginSettingsGroups } from "./settings-editor.ts";
 import "./settings-editor.css";
+import { pluginEntryValue, type PluginSettingsEditorModel } from "./settings-model.ts";
 
 registerPluginManagementEnglish();
 export type PluginSettingsField = ConfigNodeRenderParams & {
@@ -517,16 +516,13 @@ function PluginSettingsDraft(props: GroupsProps) {
       sourceIdentity: props.params.value,
       initialValue,
       params: props.params,
-      renderNode: (params: ConfigNodeRenderParams) => html`<openclaw-plugin-settings-groups
-        .props=${{ ...groups, params }}
-      ></openclaw-plugin-settings-groups>`,
+      renderNode: (params: ConfigNodeRenderParams) =>
+        renderPluginSettingsGroups({ ...groups, params }),
     };
   });
   return (
     <Show when={Boolean(draft())} fallback={<PluginSettingsGroups {...props} />}>
-      <LitContent>{html`<openclaw-config-form-structured-draft
-        .props=${draft()}
-      ></openclaw-config-form-structured-draft>`}</LitContent>
+      <openclaw-config-form-structured-draft prop:props={draft()} />
     </Show>
   );
 }

@@ -16,7 +16,7 @@ import { formatUiExternalText } from "../../lib/format-error.ts";
 import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
 import type { PluginDiscoveryDetailResult, PluginsInspectResult } from "../../lib/plugins/index.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import { LitContent } from "../../lit/lit-content.tsx";
+import { LitContent } from "../../lit/solid-bridge.ts";
 import { renderPluginReadme } from "./catalog-detail.tsx";
 import "../../plugins/control-ui-contributions.ts";
 import { renderArtTile } from "./consent-dialog.tsx";

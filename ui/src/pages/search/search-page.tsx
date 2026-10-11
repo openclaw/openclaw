@@ -31,8 +31,7 @@ import { useApplication } from "../../lib/reactive/context.ts";
 import { projectAgents, projectRuntimeConfig } from "../../lib/reactive/domain-capabilities.ts";
 import { useGatewayPage } from "../../lib/reactive/gateway-page.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
-import { LitContent } from "../../lit/lit-content.tsx";
-import { defineSolidBridge } from "../../lit/solid-bridge.ts";
+import { LitContent, defineSolidBridge } from "../../lit/solid-bridge.ts";
 import { newSessionModelSearch } from "../new-session/model-location.ts";
 import { readConfigValue, searchConfigRevision, isSearchConfigSettled } from "./search-config.ts";
 import { renderSearchTestResult } from "./search-results.tsx";
@@ -84,7 +83,7 @@ function SearchPageContent() {
   const [models, setModels] = createSignal<ModelCatalogEntry[]>([]);
   const [model, setModel] = createSignal("");
   const [setupProvider, setSetupProvider] = createSignal("");
-  const [query, setQuery] = createSignal(t("searchPage.queryDefault"));
+  const [query, setQuery] = createSignal(untrack(() => t("searchPage.queryDefault")));
   let selectedAgent = "";
   let configRevision = "";
   let disposed = false;

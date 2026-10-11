@@ -61,6 +61,7 @@ function PluginCredentialEditorContent(props: PluginCredentialEditorProps) {
   const saving = () => operation() === "save";
   const cancelling = () => operation() === "discard";
   let referenceSubmitted = false;
+  let referenceTrigger: HTMLElement | null = null;
   let generation = 0;
   let connection: GatewayConnectionScope | null = null;
   let active = true;
@@ -113,6 +114,7 @@ function PluginCredentialEditorContent(props: PluginCredentialEditorProps) {
     active = false;
     generation++;
     referenceSubmitted = false;
+    referenceTrigger = null;
   });
 
   async function inspect(reveal = false) {
@@ -171,7 +173,8 @@ function PluginCredentialEditorContent(props: PluginCredentialEditorProps) {
     }
   }
 
-  function openReference() {
+  function openReference(event: MouseEvent) {
+    referenceTrigger = event.currentTarget instanceof HTMLElement ? event.currentTarget : null;
     referenceSubmitted = false;
     const value = inspection();
     setReference(
@@ -180,6 +183,11 @@ function PluginCredentialEditorContent(props: PluginCredentialEditorProps) {
         : { source: "env", provider: "default", id: "" },
     );
     setDialogOpen(true);
+  }
+
+  function enteredLiteral(input: HTMLInputElement) {
+    // Native blur can precede Solid's signal commit. Revealing a stored key is not an edit.
+    return literal() || input.value !== literalValue() ? input.value : "";
   }
 
   async function patch(value: string | SecretRef) {
@@ -326,15 +334,17 @@ function PluginCredentialEditorContent(props: PluginCredentialEditorProps) {
         <>
           <div
             class="plugin-credential__input settings-secret"
-            onFocusOut={(event: FocusEvent) => {
+            onFocusOut={(event) => {
               if (
                 event.relatedTarget instanceof Element &&
                 event.relatedTarget.closest(".plugin-credential__input") === event.currentTarget
               ) {
                 return;
               }
-              if (literal()) {
-                void patch(literal());
+              const input = event.currentTarget.querySelector("input");
+              const value = input ? enteredLiteral(input) : "";
+              if (value) {
+                void patch(value);
               }
             }}
           >
@@ -354,9 +364,10 @@ function PluginCredentialEditorContent(props: PluginCredentialEditorProps) {
               disabled={disabled()}
               onInput={(event) => setLiteral(event.currentTarget.value)}
               onKeyDown={(event) => {
-                if (event.key === "Enter" && literal()) {
+                const value = enteredLiteral(event.currentTarget);
+                if (event.key === "Enter" && value) {
                   event.preventDefault();
-                  void patch(literal());
+                  void patch(value);
                 }
               }}
             />
@@ -412,6 +423,7 @@ function PluginCredentialEditorContent(props: PluginCredentialEditorProps) {
       ) : null}
       {dialogOpen() ? (
         <openclaw-modal-dialog
+          ref={(dialog) => dialog.setReturnFocusTarget(referenceTrigger)}
           label={`${t("pluginsPage.credentials.referenceTitle")}: ${props.descriptor.label}`}
           onModal-cancel={(event: Event) => {
             event.preventDefault();

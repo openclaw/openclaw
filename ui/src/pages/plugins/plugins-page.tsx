@@ -1,8 +1,8 @@
 import { createEffect, createSignal, onCleanup } from "solid-js";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { defineSolidBridge } from "../../lit/solid-bridge.ts";
-import { PluginsPageController } from "./plugins-page-controller.ts";
 import { PluginsPageView } from "./plugins-page-view.tsx";
+import { PluginsPageController } from "./plugins-page.ts";
 import type { PluginsRouteData } from "./route-data.ts";
 import "../../styles/plugins.css";
 

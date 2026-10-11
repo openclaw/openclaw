@@ -1,14 +1,12 @@
 import type { JSX } from "@solidjs/web";
-import { html } from "lit";
-import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { handleMarkdownCodeBlockClick } from "../../components/markdown-code-blocks.ts";
 import { toSanitizedMarkdownHtml } from "../../components/markdown.ts";
 import { Icon } from "../../components/solid/icon.tsx";
+import { SanitizedHtml } from "../../components/solid/sanitized-html.tsx";
 import { SettingsPage } from "../../components/solid/settings-ui.tsx";
 import { formatUiExternalText } from "../../lib/format-error.ts";
 import type { PluginDiscoveryDetailResult, PluginInstallRequest } from "../../lib/plugins/index.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import { LitContent } from "../../lit/lit-content.tsx";
 import { PluginArtTile } from "./consent-dialog.tsx";
 import { renderPluginDetailShell as PluginDetailShell } from "./detail-shell.tsx";
 import { PluginInstallAction } from "./install-action.tsx";
@@ -56,7 +54,7 @@ export function renderPluginReadme(readme: string | undefined): JSX.Element {
       class="plugin-catalog-detail__readme sidebar-markdown"
       onClick={handleMarkdownCodeBlockClick}
     >
-      <LitContent>{html`${unsafeHTML(readmeHtml)}`}</LitContent>
+      <SanitizedHtml html={readmeHtml ?? ""} class="lit-content" style={{ display: "contents" }} />
     </article>
   ) : (
     <p class="plugin-catalog-detail__empty">{t("pluginsPage.detailNoReadme")}</p>

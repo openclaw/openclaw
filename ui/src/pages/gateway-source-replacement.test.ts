@@ -794,7 +794,9 @@ describe("gateway source replacement across reconnect with a reused client", () 
     await waitForSolid(() =>
       expect(mounted.page.querySelector("#skill-detail-tab-card")).not.toBeNull(),
     );
-    mounted.page.querySelector<HTMLButtonElement>("#skill-detail-tab-card")!.click();
+    mounted.page
+      .querySelector<HTMLElement>("#skill-detail-tab-card")!
+      .dispatchEvent(new MouseEvent("click", { bubbles: true, detail: 1 }));
     await waitForSolid(() => expect(mounted.page.textContent).toContain("Previous provider card"));
     mounted.replaceContext(contextWithClient(client));
     await waitForSolid(() => expect(mounted.page.textContent).not.toContain("Old provider skill"));

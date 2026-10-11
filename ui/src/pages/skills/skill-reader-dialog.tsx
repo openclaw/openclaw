@@ -1,12 +1,10 @@
 import type { JSX } from "@solidjs/web";
-import { html } from "lit";
-import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { createMemo, Show } from "solid-js";
 import { toSanitizedMarkdownHtml } from "../../components/markdown.ts";
 import { Icon } from "../../components/solid/icon.tsx";
 import "../../components/modal-dialog.ts";
+import { SanitizedHtml } from "../../components/solid/sanitized-html.tsx";
 import { t } from "../../lib/reactive/i18n.ts";
-import { LitContent } from "../../lit/lit-content.tsx";
 import type { SkillsProps } from "./view-types.ts";
 
 export function MarkdownContent(props: {
@@ -17,17 +15,16 @@ export function MarkdownContent(props: {
   onClick?: JSX.EventHandler<HTMLElement, MouseEvent>;
 }) {
   return (
-    <LitContent
+    <SanitizedHtml
       tag="article"
-      class={props.class}
+      class={["lit-content", props.class]}
       style={props.style}
       onClick={props.onClick}
-    >{html`${unsafeHTML(
-      toSanitizedMarkdownHtml(
+      html={toSanitizedMarkdownHtml(
         props.content,
         props.changelog ? { codeBlockChrome: "none", mode: "document" } : undefined,
-      ),
-    )}`}</LitContent>
+      )}
+    />
   );
 }
 
@@ -130,7 +127,7 @@ export function ClawHubDetailDialog(props: { view: SkillsProps; installLocked: b
             >
               {(skill) => (
                 <>
-                  <div>{skill().summary ?? ""}</div>
+                  <div>{skill().summary ?? ""}</div>{" "}
                   <Show when={detail()?.owner?.displayName || detail()?.latestVersion}>
                     <div
                       class="clawhub-skill-detail__meta muted"
@@ -145,7 +142,7 @@ export function ClawHubDetailDialog(props: { view: SkillsProps; installLocked: b
                         {(version) => t("skillsPage.latest", { version: version().version })}
                       </Show>
                     </div>
-                  </Show>
+                  </Show>{" "}
                   <Show when={detail()?.latestVersion?.changelog}>
                     {(changelog) => (
                       <MarkdownContent
@@ -154,14 +151,14 @@ export function ClawHubDetailDialog(props: { view: SkillsProps; installLocked: b
                         changelog
                       />
                     )}
-                  </Show>
+                  </Show>{" "}
                   <Show when={detail()?.metadata?.os}>
                     {(os) => (
                       <div class="clawhub-skill-detail__meta muted">
                         {t("skillsPage.platforms", { platforms: os().join(", ") })}
                       </div>
                     )}
-                  </Show>
+                  </Show>{" "}
                   <div class="exec-approval-actions" style={{ "margin-top": "0" }}>
                     <button
                       class="btn primary"

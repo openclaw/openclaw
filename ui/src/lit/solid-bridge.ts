@@ -1,6 +1,8 @@
-import { insert, render, spread, type JSX } from "@solidjs/web";
+import { dynamic, insert, render, spread, type JSX } from "@solidjs/web";
+import { nothing, render as renderLit } from "lit";
 import {
   createComponent,
+  createEffect,
   createRenderEffect,
   createRoot,
   createSignal,
@@ -309,4 +311,39 @@ export function defineSolidBridge<Props extends object, Methods extends object =
   return function SolidBridge(props: ComponentProps<Props, Methods>): JSX.Element {
     return BridgeElement.render(props);
   };
+}
+
+/** Temporary island for stateless Lit fragments while their callers migrate. */
+export function LitContent(props: {
+  children: unknown;
+  tag?: "div" | "span" | "article";
+  class?: JSX.HTMLAttributes<HTMLElement>["class"];
+  style?: JSX.HTMLAttributes<HTMLElement>["style"];
+  onClick?: JSX.EventHandler<HTMLElement, MouseEvent>;
+}) {
+  let container!: HTMLElement;
+  const Container = dynamic(() => props.tag ?? "div");
+  createEffect(
+    () => props.children,
+    (content) => {
+      renderLit(content, container);
+    },
+  );
+  onCleanup(() => {
+    renderLit(nothing, container).setConnected(false);
+  });
+  return createComponent(Container, {
+    get class() {
+      return ["lit-content", props.class];
+    },
+    get style() {
+      return props.style ?? (props.tag ? undefined : { display: "contents" });
+    },
+    get onClick() {
+      return props.onClick;
+    },
+    ref: (element: HTMLElement) => {
+      container = element;
+    },
+  });
 }

@@ -14,6 +14,7 @@ import {
 } from "../../test-helpers/gateway-client.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { createApplicationGateway } from "../../test-helpers/solid-application-context.tsx";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { SearchPage } from "./search-page.tsx";
 
 const providerPath = ["plugins", "entries", "searxng", "config", "webSearch"];
@@ -160,7 +161,9 @@ async function mount(
     flush();
     await settleModelCatalogRequests(client, { agentId: selection.state.selectedId });
     await Promise.allSettled(requested);
-    flush();
+    await waitForSolid(() => {
+      expect(button(element, "Refresh search status").disabled).toBe(false);
+    });
   };
   if (options.waitReady === false) {
     flush();

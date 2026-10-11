@@ -11,7 +11,7 @@ import { SettingsPage } from "../../components/solid/settings-ui.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import { LitContent } from "../../lit/lit-content.tsx";
+import { LitContent } from "../../lit/solid-bridge.ts";
 import { renderPluginCatalogDetail as PluginCatalogDetail } from "./catalog-detail.tsx";
 import { renderPluginCatalogResults as PluginCatalogResults } from "./catalog-results.tsx";
 import { renderPluginConsentDialog as PluginConsentDialog } from "./consent-dialog.tsx";
@@ -23,8 +23,8 @@ import {
 } from "./plugin-row-message.tsx";
 import { PluginsHubHeader } from "./plugins-hub-header.tsx";
 import { PLUGINS_HUB_PANEL_ID, type PluginsHubTab } from "./plugins-hub.ts";
-import type { PluginsPageController } from "./plugins-page-controller.ts";
 import { installRequestForDiscoveryDetail } from "./plugins-page-model.ts";
+import type { PluginsPageController } from "./plugins-page.ts";
 import {
   pluginAdvancedSchema,
   pluginConfigSchema,

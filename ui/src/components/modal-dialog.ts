@@ -465,7 +465,7 @@ declare global {
 declare module "@solidjs/web" {
   namespace JSX {
     interface IntrinsicElements {
-      "openclaw-modal-dialog": HTMLAttributes<HTMLElement> & {
+      "openclaw-modal-dialog": HTMLAttributes<OpenClawModalDialog> & {
         label: string;
         "onModal-cancel"?: (event: Event) => void;
       };

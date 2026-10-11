@@ -1,6 +1,8 @@
-import type { ReactiveController, ReactiveControllerHost } from "lit";
 import { createEffect, createSignal, onCleanup, untrack } from "solid-js";
 import { GatewayPageController } from "../../lit/gateway-page-controller.ts";
+
+type ReactiveControllerHost = ConstructorParameters<typeof GatewayPageController>[0];
+type ReactiveController = Parameters<ReactiveControllerHost["addController"]>[0];
 
 /** Keep request epochs with the existing owner while its render host migrates. */
 export function useGatewayPage(options: ConstructorParameters<typeof GatewayPageController>[1]) {

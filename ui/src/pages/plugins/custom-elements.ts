@@ -2,12 +2,16 @@ import type WaDropdownItem from "@awesome.me/webawesome/dist/components/dropdown
 import type WaDropdown from "@awesome.me/webawesome/dist/components/dropdown/dropdown.js";
 import type WaPopup from "@awesome.me/webawesome/dist/components/popup/popup.js";
 import type WaTabPanel from "@awesome.me/webawesome/dist/components/tab-panel/tab-panel.js";
+import type { ConfigFormStructuredDraftProps } from "../../components/config-form-structured-draft.ts";
 import type { OpenClawFilePreviewModal } from "../../components/file-preview-modal.ts";
 
 // The remaining custom elements own their children and behavior during the page cutover.
 declare module "@solidjs/web" {
   namespace JSX {
     interface IntrinsicElements {
+      "openclaw-config-form-structured-draft": HTMLAttributes<HTMLElement> & {
+        "prop:props"?: ConfigFormStructuredDraftProps;
+      };
       "wa-dropdown": HTMLAttributes<WaDropdown> & {
         placement?: WaDropdown["placement"];
         "onWa-select"?: EventHandler<WaDropdown, CustomEvent<{ item: WaDropdownItem }>>;

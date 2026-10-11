@@ -252,8 +252,11 @@ class SkillsPageState {
       () => [this.client, this.connected, this.gateway.epoch, this.surface] as const,
       { equals: (previous, next) => previous.every((value, index) => value === next[index]) },
     );
-    createEffect(searchContext, () => {
-      void this.runSearch();
+    createEffect(searchContext, ([, connected]) => {
+      // Gateway binding may connect before the initial disconnected effect runs.
+      if (connected) {
+        void this.runSearch();
+      }
     });
     onCleanup(() => {
       this.clearClawHubSearchTimer();

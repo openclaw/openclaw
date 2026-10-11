@@ -134,9 +134,7 @@ describeControlUiE2e("Plugin overview", () => {
         await captureScreenshot(page, `direct-settings-${entry}-refresh.png`, "viewport");
         await gateway.resolveDeferred("plugins.inspect");
         expect(await permission.isChecked()).toBe(true);
-        // The request recorder observes dispatch; wait for the owning writer's
-        // acknowledgement before reloading the saved permission.
-        await page.locator(".settings-save-indicator--saved").waitFor();
+        // The inspection above starts only after the config owner acknowledges the save.
         await page.reload();
         await page.getByRole("textbox", { name: "Time zone", exact: true }).waitFor();
         await expect.poll(() => permission.isChecked()).toBe(true);
@@ -145,9 +143,10 @@ describeControlUiE2e("Plugin overview", () => {
         await permissionRow
           .getByRole("button", { name: "Actions for Add context to prompts", exact: true })
           .click();
+        const resetInspections = (await gateway.getRequests("plugins.inspect")).length;
         await permissionRow.locator('wa-dropdown-item[value="reset"]').click();
         await expect.poll(async () => (await gateway.getRequests("config.set")).length).toBe(1);
-        await page.locator(".settings-save-indicator--saved").waitFor();
+        await gateway.waitForRequest("plugins.inspect", { after: resetInspections });
         const writes = await gateway.getRequests("config.set");
         const saved = JSON.parse((writes.at(-1)!.params as { raw: string }).raw);
         expect(saved.plugins.entries[plugin.id].hooks).toEqual({});

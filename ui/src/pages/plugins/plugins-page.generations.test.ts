@@ -256,7 +256,7 @@ it.each(["settings", "uninstall", "failure"] as const)(
     await waitForSolid(() =>
       expect(page.querySelector("openclaw-plugin-install-action")).not.toBeNull(),
     );
-    await clickPluginAction(page, "Install Calendar Plus");
+    await clickPluginAction(page, "Install");
     try {
       await waitForSolid(() =>
         expect(request.mock.calls.some(([method]) => method === "plugins.install")).toBe(true),

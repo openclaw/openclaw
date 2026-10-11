@@ -4,7 +4,7 @@ import { directive } from "lit/directive.js";
 import { createSignal, flush } from "solid-js";
 import { expect, it, vi } from "vitest";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
-import { LitContent } from "./lit-content.tsx";
+import { LitContent } from "./solid-bridge.ts";
 
 it("retains a Lit island's nodes and disconnects its directives on Solid disposal", () => {
   const disconnected = vi.fn();
