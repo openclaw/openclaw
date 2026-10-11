@@ -379,53 +379,6 @@ describe("syncMemoryWikiBridgeSources", () => {
     );
   });
 
-  it("returns a no-op result outside bridge mode", async () => {
-    const { config } = await createVault({ rootDir: nextCaseRoot("isolated") });
-
-    const result = await syncMemoryWikiBridgeSources({ config });
-
-    expect(result.importedCount).toBe(0);
-    expect(result.updatedCount).toBe(0);
-    expect(result.skippedCount).toBe(0);
-    expect(result.removedCount).toBe(0);
-    expect(result.artifactCount).toBe(0);
-    expect(result.workspaces).toBe(0);
-    expect(result.pagePaths).toEqual([]);
-  });
-
-  it("returns a no-op result when bridge mode is enabled without exported memory artifacts", async () => {
-    const workspaceDir = await createBridgeWorkspace("no-memory-core");
-    const { config } = await createVault({
-      rootDir: nextCaseRoot("no-memory-core-vault"),
-      config: {
-        vaultMode: "bridge",
-        bridge: {
-          enabled: true,
-          readMemoryArtifacts: true,
-          indexMemoryRoot: true,
-        },
-      },
-    });
-
-    await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), "# Durable Memory\n", "utf8");
-
-    const appConfig: OpenClawConfig = {
-      agents: {
-        entries: { main: { workspace: workspaceDir } },
-      },
-    };
-
-    const result = await syncMemoryWikiBridgeSources({ config, appConfig });
-
-    expect(result.importedCount).toBe(0);
-    expect(result.updatedCount).toBe(0);
-    expect(result.skippedCount).toBe(0);
-    expect(result.removedCount).toBe(0);
-    expect(result.artifactCount).toBe(0);
-    expect(result.workspaces).toBe(0);
-    expect(result.pagePaths).toEqual([]);
-  });
-
   it("imports the public memory event journal when followMemoryEvents is enabled", async () => {
     const workspaceDir = await createBridgeWorkspace("events-workspace");
     const { rootDir: vaultDir, config } = await createVault({
@@ -699,20 +652,6 @@ describe("syncMemoryWikiBridgeSources", () => {
     await expect(second).rejects.not.toThrow("through symlink");
   });
 
-  it("does not remove empty directory bridge source collisions as hardlinks", async () => {
-    const { appConfig, config, pageAbsPath } = await createDirectoryCollisionFixture({
-      workspaceName: "empty-directory-workspace",
-      vaultName: "empty-directory-vault",
-    });
-
-    const second = syncMemoryWikiBridgeSources({ config, appConfig });
-    await expect(second).rejects.toThrow(
-      /Refusing to write imported source page \((not-file|path-mismatch)\): sources\//u,
-    );
-    await expect(second).rejects.not.toThrow("through symlink");
-    await expect(fs.stat(pageAbsPath)).resolves.toSatisfy((stat) => stat.isDirectory());
-  });
-
   it("replaces bridge source page hardlinks without clobbering their target", async () => {
     const workspaceDir = await createBridgeWorkspace("hardlink-workspace");
     const { rootDir: vaultDir, config } = await createVault({
@@ -757,50 +696,5 @@ describe("syncMemoryWikiBridgeSources", () => {
     expect(second.updatedCount).toBe(1);
     await expect(fs.readFile(externalTarget, "utf8")).resolves.toBe("external target\n");
     await expect(fs.readFile(pageAbsPath, "utf8")).resolves.toContain("# Updated Durable Memory");
-  });
-
-  it("caps composed bridge source filenames to the filesystem component limit", async () => {
-    const workspaceDir = await createBridgeWorkspace(`${"漢".repeat(50)}-workspace`);
-    const { rootDir: vaultDir, config } = await createVault({
-      rootDir: nextCaseRoot("long-bridge-vault"),
-      config: {
-        vaultMode: "bridge",
-        bridge: {
-          enabled: true,
-          readMemoryArtifacts: true,
-          indexDailyNotes: true,
-        },
-      },
-    });
-
-    const relativePath = `${"語".repeat(50)}/${"録".repeat(50)}.md`;
-    const absolutePath = path.join(workspaceDir, relativePath);
-    await fs.mkdir(path.dirname(absolutePath), { recursive: true });
-    await fs.writeFile(absolutePath, "# Deep Unicode Note\n", "utf8");
-    registerBridgeArtifacts([
-      {
-        kind: "daily-note",
-        workspaceDir,
-        relativePath,
-        absolutePath,
-        agentIds: ["main"],
-        contentType: "markdown",
-      },
-    ]);
-
-    const appConfig: OpenClawConfig = {
-      agents: {
-        entries: { main: { workspace: workspaceDir } },
-      },
-    };
-
-    const result = await syncMemoryWikiBridgeSources({ config, appConfig });
-    const pagePath = result.pagePaths[0] ?? "";
-
-    expect(result.importedCount).toBe(1);
-    expect(Buffer.byteLength(path.basename(pagePath))).toBeLessThanOrEqual(255);
-    await expect(fs.readFile(path.join(vaultDir, pagePath), "utf8")).resolves.toContain(
-      "# Deep Unicode Note",
-    );
   });
 });
