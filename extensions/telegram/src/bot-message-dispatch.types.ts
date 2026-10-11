@@ -157,6 +157,7 @@ export type TelegramDeliveryStateSlice = {
   resolveCurrentTurnTranscriptFinal: () => Promise<CurrentTurnTranscriptFinal | undefined>;
   transcriptMirrorSequence: number;
   transcriptMirrorTurnId: string;
+  transcriptMirrorRunId?: string;
   implicitQuoteReplyTargetId: string | undefined;
   currentMessageIdForQuoteReply: string | undefined;
 };

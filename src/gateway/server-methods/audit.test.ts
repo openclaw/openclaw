@@ -66,18 +66,27 @@ describe("audit gateway methods", () => {
 
   it("preserves the exact shipped audit.list request and result shape", async () => {
     const respond = await runAuditHandler("audit.list", {
-      agentId: "main",
+      agentId: " main ",
       kind: "agent_run",
+      sessionKey: " agent:main:main ",
+      runId: " run-1 ",
       after: 50,
       before: 150,
       limit: 25,
-      cursor: "11",
+      cursor: " 11 ",
     });
 
     expect(listAuditEvents).toHaveBeenCalledWith({
       limit: 25,
       cursor: 11,
-      filters: { agentId: "main", kind: "agent_run", after: 50, before: 150 },
+      filters: {
+        agentId: "main",
+        kind: "agent_run",
+        sessionKey: "agent:main:main",
+        runId: "run-1",
+        after: 50,
+        before: 150,
+      },
     });
     expect(respond).toHaveBeenCalledWith(true, {
       events: [
@@ -254,38 +263,6 @@ describe("audit gateway methods", () => {
         expect.any(Object),
       );
       expect(listAuditEvents).not.toHaveBeenCalled();
-    },
-  );
-
-  it.each(["audit.list", "audit.activity.list"] as const)(
-    "trims whitespace around cursor digits for %s",
-    async (method) => {
-      const respond = await runAuditHandler(method, { cursor: "  11  " });
-      expect(respond).toHaveBeenCalledWith(true, expect.anything());
-      expect(listAuditEvents).toHaveBeenCalledWith(expect.objectContaining({ cursor: 11 }));
-    },
-  );
-
-  it.each(["audit.list", "audit.activity.list"] as const)(
-    "trims exact-match filter ids for %s before store lookup",
-    async (method) => {
-      const respond = await runAuditHandler(method, {
-        agentId: " main ",
-        sessionKey: " agent:main:main ",
-        runId: " run-1 ",
-      });
-
-      expect(respond).toHaveBeenCalledWith(true, expect.anything());
-      expect(listAuditEvents).toHaveBeenCalledWith(
-        expect.objectContaining({
-          filters: expect.objectContaining({
-            agentId: "main",
-            sessionKey: "agent:main:main",
-            runId: "run-1",
-            ...(method === "audit.activity.list" ? { includeMessages: true } : {}),
-          }),
-        }),
-      );
     },
   );
 

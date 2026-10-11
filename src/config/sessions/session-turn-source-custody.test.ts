@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, expect, it, vi } from "vitest";
 import { deferSqlitePostCommitPublication } from "../../infra/sqlite-post-commit.js";
 import * as admission from "../../infra/sqlite-worker-operation-admission.js";
@@ -7,13 +8,98 @@ import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { readExactSessionEntryRow } from "./session-accessor.sqlite-entry-store.js";
+import { readSessionPendingInputByKey } from "./session-accessor.sqlite-pending-inputs.js";
 import { readTranscriptEventRows } from "./session-accessor.sqlite-read.js";
 import { persistSessionTranscriptTurn } from "./session-accessor.transcript-turn.js";
 import { createSessionCompoundWorkerFixture as fixture } from "./session-compound-worker.test-support.js";
+import { acquireSessionInputActor, bindUserTurnInputActor } from "./session-input-actor.js";
 import { withSessionTranscriptSourcePublication } from "./transcript-write-context.js";
 
 afterEach(() => {
   vi.restoreAllMocks();
+});
+
+it("retains actor-bound recorder custody through a durable worker publication failure", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const f = fixture();
+    const input = await acquireSessionInputActor(
+      { agentId: f.scope.agentId, storePath: f.scope.storePath, target: f.target },
+      { assertCurrent() {}, assertReadable() {} },
+    );
+    if (!input) {
+      throw new Error("Durable input must acquire a session actor");
+    }
+    const failure = new Error("durable input publication failed");
+    const message = {
+      role: "user" as const,
+      content: "Keep the worker's committed input.",
+      timestamp: 1,
+      idempotencyKey: "durable-actor:user",
+    };
+    const recorder = createUserTurnTranscriptRecorder({
+      message,
+      target: { ...f.scope, expectedSessionId: f.scope.sessionId, sessionEntry: f.read() },
+      updateMode: "none",
+      onPersistenceError() {},
+    });
+    bindUserTurnInputActor(recorder, { phase: "acceptInput", acquire: async () => input });
+    try {
+      expect(input.actor.target.database.kind).toBe("file");
+      await expect(
+        recorder.stageApproved?.({ runId: "durable-actor", assertCurrent() {} }),
+      ).resolves.toBe(true);
+      expect(
+        readSessionPendingInputByKey(f.database, f.scope, message.idempotencyKey),
+      ).toMatchObject({
+        state: "queued",
+        consumed_event_id: null,
+      });
+      expect(f.events()).toEqual([]);
+      bindUserTurnInputActor(recorder, { phase: "adoptRun", acquire: async () => input });
+      const published = vi.fn<Parameters<typeof withSessionTranscriptSourcePublication>[1]>(() => {
+        expect(recorder.hasPersisted()).toBe(true);
+        expect(recorder.getPersistedMessage?.()).toEqual(message);
+        expect(recorder.getAdmissionReceipt()).toMatchObject({ sessionId: f.scope.sessionId });
+        throw failure;
+      });
+      await expect(
+        withSessionTranscriptSourcePublication(f.scope, published, () =>
+          recorder.persistApproved(),
+        ),
+      ).rejects.toThrow(failure.message);
+      const identity = readOpenClawAgentDatabaseIdentity(f.database);
+      expect(published).toHaveBeenCalledExactlyOnceWith(
+        {
+          agentId: f.scope.agentId,
+          path: f.database.path,
+          databaseIdentity: identity.identity,
+          databaseBirthtime: identity.birthtime,
+        },
+        expect.objectContaining({ sessionId: f.scope.sessionId }),
+      );
+      const receipt = expectDefined(recorder.getAdmissionReceipt(), "committed worker admission");
+      expect(recorder.isPendingInputConsumed?.()).toBe(true);
+      expect(
+        readSessionPendingInputByKey(f.database, f.scope, message.idempotencyKey),
+      ).toBeUndefined();
+      await expect(recorder.persistFallback()).resolves.toMatchObject({
+        appended: true,
+        messageId: receipt.entryId,
+        message,
+      });
+      expect(f.events().filter((event) => event.type === "message")).toEqual([
+        expect.objectContaining({ id: receipt.entryId, message }),
+      ]);
+      expect(published).toHaveBeenCalledOnce();
+    } finally {
+      try {
+        recorder.finishPendingInput?.("interrupted");
+        await recorder.waitForPendingInputSettlement?.();
+      } finally {
+        await input.actor.release();
+      }
+    }
+  });
 });
 
 it.each(["fresh", "replay"])(

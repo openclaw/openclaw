@@ -10,6 +10,7 @@ import type {
   ControlUiMockGatewayScenario,
   MockGatewayControls,
 } from "../../ui/src/test-helpers/control-ui-e2e.ts";
+import { chatToolScenes } from "./chat-tool-scenes.ts";
 import {
   fixedTime,
   sessionKey,
@@ -60,6 +61,7 @@ export type Scene = {
   prepare?: (page: Page, gateway: MockGatewayControls) => Promise<void>;
   scrollTo?: string;
   loading?: boolean;
+  serviceWorkers?: "allow" | "block";
 };
 const configPages = new Set<string>(CONFIG_PAGE_IDS);
 function routeScene(route: RouteId): Scene {
@@ -141,6 +143,7 @@ const configuredMcpServers = {
   },
 };
 export const scenes: Scene[] = [
+  ...chatToolScenes,
   ...APP_ROUTE_IDS.map(routeScene),
   {
     ...routeScene("mcp"),
