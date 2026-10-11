@@ -63,7 +63,7 @@ export function startChatSendDiagnostics(log: { info(message: string): void }) {
       }
       for (const phase of [
         ...PHASES,
-        ...[...totals.keys()].filter((phase) => phase.startsWith("detail.")).sort(),
+        ...[...totals.keys()].filter((name) => name.startsWith("detail.")).sort(),
       ]) {
         const durationMs = totals.get(phase);
         if (durationMs === undefined) {
