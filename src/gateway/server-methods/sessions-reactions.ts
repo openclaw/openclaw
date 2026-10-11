@@ -15,7 +15,6 @@ import {
   resolveMessageActionDiscoveryForPluginAsync,
 } from "../../channels/plugins/message-action-discovery.js";
 import {
-  setSessionReactionAsync,
   SessionReactionLimitError,
   SessionReactionMessageMissingError,
 } from "../../config/sessions/session-reaction-store.js";
@@ -28,6 +27,7 @@ import { withSystemEventOwner } from "../../infra/system-event-ownership.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { enqueueKeyedTask } from "../../plugin-sdk/keyed-async-queue.js";
 import { isAccountEnabled } from "../../shared/account-enabled.js";
+import { commitSessionReaction } from "../session-reaction-mutation.js";
 import type { SessionSharingTarget } from "../session-sharing-policy.js";
 import {
   readSessionReactionsAsync,
@@ -303,13 +303,17 @@ export const sessionReactionHandlers: GatewayRequestHandlers = {
           let write: SessionReactionWrite;
           try {
             assertCurrent();
-            write = await setSessionReactionAsync(scope, {
+            write = await commitSessionReaction({
+              scope,
+              sessionKey: target.canonicalKey,
+              sessionId: target.entry.sessionId,
+              agentId: target.agentId,
               messageId: params.messageId,
               emoji: params.emoji,
-              identityId: actor.id,
-              identityLabel: actor.label,
+              actor,
               remove: params.remove,
-              expectedSessionId: target.entry.sessionId,
+              sessionKeys: [params.sessionKey, target.storeKey],
+              context,
               assertCurrent,
             });
             assertCurrent();
@@ -339,25 +343,6 @@ export const sessionReactionHandlers: GatewayRequestHandlers = {
             return;
           }
           const action = params.remove ? "removed" : "added";
-          context.broadcast(
-            "session.reaction",
-            {
-              sessionKey: target.canonicalKey,
-              agentId: target.agentId,
-              sessionId: target.entry.sessionId,
-              messageId: params.messageId,
-              emoji: params.emoji,
-              action,
-              actor,
-              reactions,
-            },
-            {
-              sessionKeys: [
-                ...new Set([params.sessionKey, target.canonicalKey, target.storeKey]),
-              ].toSorted(),
-              agentId: target.agentId,
-            },
-          );
           const metadata = asOptionalRecord(message["__openclaw"]);
           const author =
             message.role === "assistant"

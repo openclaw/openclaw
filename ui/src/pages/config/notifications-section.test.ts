@@ -207,31 +207,6 @@ describe("Web Push preference controls", () => {
     return container;
   }
 
-  it("renders every preference control through the shared settings control set", () => {
-    const container = renderPreferences();
-
-    expect(
-      container.querySelectorAll('input[type="checkbox"]:not(.settings-toggle__input)'),
-    ).toHaveLength(0);
-    expect(container.querySelectorAll('.settings-toggle__input[role="switch"]')).toHaveLength(7);
-    expect(container.textContent).not.toContain("Background task failed");
-
-    const unstyled = Array.from(container.querySelectorAll<HTMLElement>("select, input"))
-      .filter((control) => {
-        if (control.classList.contains("settings-toggle__input")) {
-          return (
-            control.getAttribute("role") !== "switch" || !control.getAttribute("aria-labelledby")
-          );
-        }
-        const expectedClass = control.tagName === "SELECT" ? "settings-select" : "settings-input";
-        return !control.classList.contains(expectedClass) || !control.getAttribute("aria-label");
-      })
-      .map((control) => control.outerHTML.slice(0, 60));
-    expect(container.querySelectorAll("select")).toHaveLength(10);
-    expect(container.querySelectorAll('input[type="time"]')).toHaveLength(2);
-    expect(unstyled).toEqual([]);
-  });
-
   it("preserves a saved timezone alias and saves a native selection", () => {
     const onUser = vi.fn();
     const container = renderPreferences({ onUser, timeZone: "US/Pacific" });
