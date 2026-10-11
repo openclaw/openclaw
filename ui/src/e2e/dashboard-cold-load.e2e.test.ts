@@ -1,4 +1,5 @@
 import path from "node:path";
+import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { buildWidgetDocument } from "../../../src/canvas/wrap.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
@@ -17,6 +18,235 @@ const title = "Mission control";
 
 suite.define(() => {
   const sandbox = useCanvasSandboxFixture();
+  async function restoresDashboardBeforeHello(
+    page: Page,
+    options: { evictTranscript: boolean; screenshotPrefix: string },
+  ) {
+    const documentRequested = createDeferred();
+    const documentRelease = createDeferred();
+    const configRelease = createDeferred();
+    let reloading = false;
+    const widgetHtml = buildWidgetDocument(title, "<h1>All systems ready</h1>");
+    await page.route("**/__openclaw__/board/**", async (route) => {
+      if (reloading) {
+        documentRequested.resolve();
+        await documentRelease.promise;
+      }
+      await route.fulfill({ status: 200, contentType: "text/html", body: widgetHtml });
+    });
+    const row = {
+      ...createControlUiSessionRow(sessionKey, title, 1),
+      boardFace: "dashboard",
+    };
+    const gateway = await installMockGateway(page, {
+      sessionKey,
+      authMethod: "trusted-proxy",
+      authMode: "trusted-proxy",
+      presenceUsers: [{ id: "fixture-operator", self: true, name: "Fixture operator" }],
+      heldMethods: ["connect", "board.get"],
+      featureMethods: [...defaultControlUiFeatureMethods, "board.get"],
+      sessions: [row],
+      historyMessages: [{ role: "assistant", content: "Synthetic mission briefing." }],
+      methodResponses: {
+        "board.get": {
+          sessionKey,
+          revision: 1,
+          tabs: [{ tabId: "main", title: "Main", position: 0, chatDock: "right" }],
+          widgets: [
+            {
+              name: "mission",
+              tabId: "main",
+              title,
+              contentKind: "html",
+              sizeW: 12,
+              sizeH: 8,
+              position: 0,
+              grantState: "none",
+              revision: 1,
+              frameUrl: `${new URL(suite.server.baseUrl).origin}/__openclaw__/board/${encodeURIComponent(sessionKey)}/mission/index.html?bt=synthetic-ticket`,
+              viewTicket: "synthetic-ticket",
+              viewTicketTtlMs: 1_200_000,
+              viewGeneration: "0123456789abcdef0123456789abcdef",
+              sandboxUrl: sandbox(widgetHtml).sandboxUrl,
+              sandboxPort: sandbox(widgetHtml).sandboxPort,
+            },
+          ],
+        },
+      },
+    });
+    await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey, "dashboard"));
+    await gateway.waitForRequest("connect");
+    await gateway.resolveDeferred("connect");
+    await page.getByText("Synthetic mission briefing.", { exact: true }).waitFor();
+    await page.locator(".chat-pane__session-title-text", { hasText: title }).waitFor();
+    await gateway.waitForRequest("board.get");
+    await gateway.resolveDeferred("board.get");
+    await page
+      .frameLocator(".board-widget__frame")
+      .frameLocator("iframe")
+      .getByText("All systems ready")
+      .waitFor();
+    await page.locator(".chat-panel-swap").click();
+    await expect
+      .poll(() =>
+        page
+          .locator("openclaw-board-view")
+          .evaluate((view) => view.closest("[data-region]")?.getAttribute("data-region")),
+      )
+      .toBe("main");
+    // Observe the browser cache owner's completed write before exercising reload.
+    await expect
+      .poll(() =>
+        page.evaluate(async () => {
+          if (
+            !Object.keys(localStorage).some((key) =>
+              key.startsWith("openclaw.control.bootRecord.v1:"),
+            )
+          ) {
+            return false;
+          }
+          if (!(await indexedDB.databases()).some((db) => db.name === "openclaw-chat-snapshots")) {
+            return false;
+          }
+          return new Promise<boolean>((resolve, reject) => {
+            const open = indexedDB.open("openclaw-chat-snapshots");
+            open.addEventListener("error", () =>
+              reject(open.error ?? new Error("Boot snapshot open failed")),
+            );
+            open.addEventListener("success", () => {
+              const db = open.result;
+              const transaction = db.transaction("sidebarSnapshots", "readonly");
+              const request = transaction.objectStore("sidebarSnapshots").count();
+              transaction.addEventListener("complete", () => {
+                db.close();
+                resolve(request.result > 0);
+              });
+            });
+          });
+        }),
+      )
+      .toBe(true);
+    if (options.evictTranscript) {
+      await expect.poll(() => countSnapshotStore(page, "snapshots")).toBeGreaterThan(0);
+      await page.evaluate(async () => {
+        await new Promise<void>((resolve, reject) => {
+          const open = indexedDB.open("openclaw-chat-snapshots");
+          open.addEventListener("error", () =>
+            reject(open.error ?? new Error("Boot snapshot open failed")),
+          );
+          open.addEventListener("success", () => {
+            const db = open.result;
+            const names = ["snapshots", "snapshotMetadata"].filter((name) =>
+              db.objectStoreNames.contains(name),
+            );
+            if (names.length === 0) {
+              db.close();
+              resolve();
+              return;
+            }
+            const transaction = db.transaction(names, "readwrite");
+            for (const name of names) {
+              transaction.objectStore(name).clear();
+            }
+            transaction.addEventListener("complete", () => {
+              db.close();
+              resolve();
+            });
+            transaction.addEventListener("error", () =>
+              reject(transaction.error ?? new Error("Transcript snapshot clear failed")),
+            );
+          });
+        });
+      });
+      expect(await countSnapshotStore(page, "snapshots")).toBe(0);
+      expect(await countSnapshotStore(page, "sidebarSnapshots")).toBeGreaterThan(0);
+    }
+    await page.addInitScript(() => {
+      const frames: Array<{
+        title: string;
+        welcome: boolean;
+        board: boolean;
+        boardRegion: string | null;
+      }> = [];
+      Reflect.set(window, "dashboardPaints", frames);
+      const observe = () => {
+        const pane = document.querySelector(".chat-pane-cache__pane--visible");
+        const heading = pane?.querySelector(".chat-pane__session-title-text");
+        if (heading) {
+          const board = pane?.querySelector("[data-panel-skeleton=board]");
+          const bounds = board?.getBoundingClientRect();
+          frames.push({
+            title: heading.textContent?.trim() ?? "",
+            welcome: Boolean(pane?.querySelector(".agent-chat__welcome")),
+            board: Boolean(bounds && bounds.width > 0 && bounds.height > 0),
+            boardRegion: board?.closest("[data-region]")?.getAttribute("data-region") ?? null,
+          });
+        }
+        if (frames.length < 120) {
+          requestAnimationFrame(observe);
+        }
+      };
+      requestAnimationFrame(observe);
+    });
+    await page.route("**/control-ui-config.json", async (route) => {
+      await configRelease.promise;
+      await route.fallback();
+    });
+    reloading = true;
+    try {
+      // Reload the bookmarked literal URL, not its live canonical short link.
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey, "dashboard"), {
+        waitUntil: "domcontentloaded",
+      });
+      await gateway.waitForRequest("connect");
+      const skeleton = page.locator("[data-panel-skeleton=board]");
+      await skeleton.waitFor();
+      await page.screenshot({
+        path: path.join(suite.artifactDir, `${options.screenshotPrefix}before-hello.png`),
+      });
+      const frames = await page.evaluate(() => Reflect.get(window, "dashboardPaints"));
+      console.log("Dashboard reload painted frames", JSON.stringify(frames));
+      expect(frames.length).toBeGreaterThan(0);
+      expect(frames).toEqual(
+        expect.arrayContaining([{ title, welcome: false, board: true, boardRegion: "main" }]),
+      );
+      expect(
+        frames.every(
+          (frame: {
+            title: string;
+            welcome: boolean;
+            board: boolean;
+            boardRegion: string | null;
+          }) =>
+            frame.title === title && !frame.welcome && frame.board && frame.boardRegion === "main",
+        ),
+      ).toBe(true);
+      expect(await gateway.getRequests("board.get")).toHaveLength(0);
+      await gateway.resolveDeferred("connect");
+      await gateway.waitForRequest("board.get");
+      expect(await skeleton.count()).toBe(1);
+      await gateway.resolveDeferred("board.get");
+      await documentRequested.promise;
+      expect(await skeleton.count()).toBe(1);
+      await page.screenshot({
+        path: path.join(suite.artifactDir, `${options.screenshotPrefix}before-widget.png`),
+      });
+      documentRelease.resolve();
+      await page
+        .frameLocator(".board-widget__frame")
+        .frameLocator("iframe")
+        .getByText("All systems ready")
+        .waitFor();
+      await skeleton.waitFor({ state: "detached" });
+      await page.screenshot({
+        path: path.join(suite.artifactDir, `${options.screenshotPrefix}widget-ready.png`),
+      });
+    } finally {
+      documentRelease.resolve();
+      configRelease.resolve();
+    }
+  }
+
   it("restores the dashboard layout and title before hello without an empty-chat frame", async () => {
     await suite.withPage(
       {
@@ -25,194 +255,63 @@ suite.define(() => {
         permissions: ["local-network-access"],
       },
       async ({ page }) => {
-        const documentRequested = createDeferred();
-        const documentRelease = createDeferred();
-        const configRelease = createDeferred();
-        let reloading = false;
-        const widgetHtml = buildWidgetDocument(title, "<h1>All systems ready</h1>");
-        await page.route("**/__openclaw__/board/**", async (route) => {
-          if (reloading) {
-            documentRequested.resolve();
-            await documentRelease.promise;
-          }
-          await route.fulfill({ status: 200, contentType: "text/html", body: widgetHtml });
+        await restoresDashboardBeforeHello(page, {
+          evictTranscript: false,
+          screenshotPrefix: "",
         });
-        const row = {
-          ...createControlUiSessionRow(sessionKey, title, 1),
-          boardFace: "dashboard",
-        };
-        const gateway = await installMockGateway(page, {
-          sessionKey,
-          authMethod: "trusted-proxy",
-          authMode: "trusted-proxy",
-          presenceUsers: [{ id: "fixture-operator", self: true, name: "Fixture operator" }],
-          heldMethods: ["connect", "board.get"],
-          featureMethods: [...defaultControlUiFeatureMethods, "board.get"],
-          sessions: [row],
-          historyMessages: [{ role: "assistant", content: "Synthetic mission briefing." }],
-          methodResponses: {
-            "board.get": {
-              sessionKey,
-              revision: 1,
-              tabs: [{ tabId: "main", title: "Main", position: 0, chatDock: "right" }],
-              widgets: [
-                {
-                  name: "mission",
-                  tabId: "main",
-                  title,
-                  contentKind: "html",
-                  sizeW: 12,
-                  sizeH: 8,
-                  position: 0,
-                  grantState: "none",
-                  revision: 1,
-                  frameUrl: `${new URL(suite.server.baseUrl).origin}/__openclaw__/board/${encodeURIComponent(sessionKey)}/mission/index.html?bt=synthetic-ticket`,
-                  viewTicket: "synthetic-ticket",
-                  viewTicketTtlMs: 1_200_000,
-                  viewGeneration: "0123456789abcdef0123456789abcdef",
-                  sandboxUrl: sandbox(widgetHtml).sandboxUrl,
-                  sandboxPort: sandbox(widgetHtml).sandboxPort,
-                },
-              ],
-            },
-          },
+      },
+    );
+  });
+
+  it("keeps welcome hidden before hello when the transcript cache was evicted", async () => {
+    await suite.withPage(
+      {
+        viewport: { width: 1440, height: 900 },
+        serviceWorkers: "block",
+        permissions: ["local-network-access"],
+      },
+      async ({ page }) => {
+        await restoresDashboardBeforeHello(page, {
+          evictTranscript: true,
+          screenshotPrefix: "evicted-",
         });
-        await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey, "dashboard"));
-        await gateway.waitForRequest("connect");
-        await gateway.resolveDeferred("connect");
-        await page.getByText("Synthetic mission briefing.", { exact: true }).waitFor();
-        await page.locator(".chat-pane__session-title-text", { hasText: title }).waitFor();
-        await gateway.waitForRequest("board.get");
-        await gateway.resolveDeferred("board.get");
-        await page
-          .frameLocator(".board-widget__frame")
-          .frameLocator("iframe")
-          .getByText("All systems ready")
-          .waitFor();
-        await page.locator(".chat-panel-swap").click();
-        await expect
-          .poll(() =>
-            page
-              .locator("openclaw-board-view")
-              .evaluate((view) => view.closest("[data-region]")?.getAttribute("data-region")),
-          )
-          .toBe("main");
-        // Observe the browser cache owner's completed write before exercising reload.
-        await expect
-          .poll(() =>
-            page.evaluate(async () => {
-              if (
-                !Object.keys(localStorage).some((key) =>
-                  key.startsWith("openclaw.control.bootRecord.v1:"),
-                )
-              ) {
-                return false;
-              }
-              if (
-                !(await indexedDB.databases()).some((db) => db.name === "openclaw-chat-snapshots")
-              ) {
-                return false;
-              }
-              return new Promise<boolean>((resolve, reject) => {
-                const open = indexedDB.open("openclaw-chat-snapshots");
-                open.addEventListener("error", () =>
-                  reject(open.error ?? new Error("Boot snapshot open failed")),
-                );
-                open.addEventListener("success", () => {
-                  const db = open.result;
-                  const transaction = db.transaction("sidebarSnapshots", "readonly");
-                  const request = transaction.objectStore("sidebarSnapshots").count();
-                  transaction.addEventListener("complete", () => {
-                    db.close();
-                    resolve(request.result > 0);
-                  });
-                });
-              });
-            }),
-          )
-          .toBe(true);
-        await page.addInitScript(() => {
-          const frames: Array<{
-            title: string;
-            welcome: boolean;
-            board: boolean;
-            boardRegion: string | null;
-          }> = [];
-          Reflect.set(window, "dashboardPaints", frames);
-          const observe = () => {
-            const pane = document.querySelector(".chat-pane-cache__pane--visible");
-            const heading = pane?.querySelector(".chat-pane__session-title-text");
-            if (heading) {
-              const board = pane?.querySelector("[data-panel-skeleton=board]");
-              const bounds = board?.getBoundingClientRect();
-              frames.push({
-                title: heading.textContent?.trim() ?? "",
-                welcome: Boolean(pane?.querySelector(".agent-chat__welcome")),
-                board: Boolean(bounds && bounds.width > 0 && bounds.height > 0),
-                boardRegion: board?.closest("[data-region]")?.getAttribute("data-region") ?? null,
-              });
-            }
-            if (frames.length < 120) {
-              requestAnimationFrame(observe);
-            }
-          };
-          requestAnimationFrame(observe);
-        });
-        await page.route("**/control-ui-config.json", async (route) => {
-          await configRelease.promise;
-          await route.fallback();
-        });
-        reloading = true;
-        try {
-          // Reload the bookmarked literal URL, not its live canonical short link.
-          await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey, "dashboard"), {
-            waitUntil: "domcontentloaded",
-          });
-          await gateway.waitForRequest("connect");
-          const skeleton = page.locator("[data-panel-skeleton=board]");
-          await skeleton.waitFor();
-          await page.screenshot({ path: path.join(suite.artifactDir, "before-hello.png") });
-          const frames = await page.evaluate(() => Reflect.get(window, "dashboardPaints"));
-          console.log("Dashboard reload painted frames", JSON.stringify(frames));
-          expect(frames.length).toBeGreaterThan(0);
-          expect(frames).toEqual(
-            expect.arrayContaining([{ title, welcome: false, board: true, boardRegion: "main" }]),
-          );
-          expect(
-            frames.every(
-              (frame: {
-                title: string;
-                welcome: boolean;
-                board: boolean;
-                boardRegion: string | null;
-              }) =>
-                frame.title === title &&
-                !frame.welcome &&
-                frame.board &&
-                frame.boardRegion === "main",
-            ),
-          ).toBe(true);
-          expect(await gateway.getRequests("board.get")).toHaveLength(0);
-          await gateway.resolveDeferred("connect");
-          await gateway.waitForRequest("board.get");
-          expect(await skeleton.count()).toBe(1);
-          await gateway.resolveDeferred("board.get");
-          await documentRequested.promise;
-          expect(await skeleton.count()).toBe(1);
-          await page.screenshot({ path: path.join(suite.artifactDir, "before-widget.png") });
-          documentRelease.resolve();
-          await page
-            .frameLocator(".board-widget__frame")
-            .frameLocator("iframe")
-            .getByText("All systems ready")
-            .waitFor();
-          await skeleton.waitFor({ state: "detached" });
-          await page.screenshot({ path: path.join(suite.artifactDir, "widget-ready.png") });
-        } finally {
-          documentRelease.resolve();
-          configRelease.resolve();
-        }
       },
     );
   });
 });
+
+function countSnapshotStore(
+  page: Page,
+  storeName: "snapshots" | "sidebarSnapshots",
+): Promise<number> {
+  // The callback parameter stays unannotated so Playwright infers Arg from
+  // storeName. A declared literal-union parameter misses the Arg overload and
+  // is checked against PageFunction<void, number>.
+  return page.evaluate(
+    (name) =>
+      new Promise<number>((resolve, reject) => {
+        const open = indexedDB.open("openclaw-chat-snapshots");
+        open.addEventListener("error", () =>
+          reject(open.error ?? new Error("Boot snapshot open failed")),
+        );
+        open.addEventListener("success", () => {
+          const db = open.result;
+          if (!db.objectStoreNames.contains(name)) {
+            db.close();
+            resolve(0);
+            return;
+          }
+          const transaction = db.transaction(name, "readonly");
+          const request = transaction.objectStore(name).count();
+          transaction.addEventListener("complete", () => {
+            db.close();
+            resolve(request.result);
+          });
+          transaction.addEventListener("error", () =>
+            reject(transaction.error ?? new Error("Boot snapshot count failed")),
+          );
+        });
+      }),
+    storeName,
+  );
+}
