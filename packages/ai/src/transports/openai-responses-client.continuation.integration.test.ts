@@ -89,13 +89,13 @@ it("preserves reasoning controls in concurrent same-session SSE requests", async
     reasoningEffort: "low" | "medium" | "high",
     onResponse?: StreamOptions["onResponse"],
   ) => {
-    const options: OpenAIResponsesOptions = {
+    const options = {
       apiKey: "synthetic-continuation-key",
       sessionId: "parallel-reasoning",
       transport: "sse",
       reasoningEffort,
       onResponse,
-    };
+    } satisfies OpenAIResponsesOptions;
     const stream = await createOpenAIResponsesTransportStreamFn()(
       { ...responsesLoopbackModel, id: reasoningModel.id, reasoning: true },
       { messages },
