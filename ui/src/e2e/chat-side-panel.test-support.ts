@@ -27,7 +27,7 @@ export async function openChatSidePanelType(page: Page | Locator, label: string)
   const panelActions: Record<string, { slot: string; action: string | RegExp }> = {
     Browser: { slot: "browser", action: "Toggle browser panel" },
     browser: { slot: "browser", action: "Toggle browser panel" },
-    Desktop: { slot: "desktop", action: "Toggle desktop panel" },
+    Desktop: { slot: "desktop", action: /^(Toggle desktop panel|Desktop)$/ },
     Files: { slot: "workspace", action: /^(Show session files|Collapse session workspace)$/ },
     "Side chat": { slot: "companion", action: /^(Show side chat|Collapse side chat)$/ },
     Terminal: { slot: "terminal", action: "Toggle terminal" },

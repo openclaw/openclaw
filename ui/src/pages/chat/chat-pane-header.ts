@@ -391,7 +391,12 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
           ["session-subagents", "subagents"],
           ["session-processes", "processes"],
         ]);
-        const represented = new Set(actionSlots.values());
+        const represented = new Set(
+          actions.flatMap((action) => {
+            const slot = actionSlots.get(action.id);
+            return slot ? [slot] : [];
+          }),
+        );
         for (const definition of panelDefinitions) {
           if (
             !panelControls ||
