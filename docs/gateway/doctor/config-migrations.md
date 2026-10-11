@@ -14,6 +14,10 @@ Doctor keeps the config from before that hook, reports the failure, and continue
 with the remaining repairs. Warning-only results stay visible without changing
 config. Repair the affected plugin, then run `openclaw doctor --fix` again.
 
+Doctor keeps plugin repair and diagnostic contracts available through later health
+checks and service finalization. It releases its private plugin resources when
+the flow ends, including failed runs.
+
 ## Runtime config migration
 
 Runtime config reads require per-model context budgets and current GitHub Copilot
