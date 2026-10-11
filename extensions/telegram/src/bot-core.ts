@@ -259,7 +259,7 @@ export async function createTelegramBotCore(
       accountId: account.accountId,
       groupId: String(chatId),
     });
-  const resolveGroupActivation = (params: {
+  const resolveGroupActivation = async (params: {
     agentId?: string;
     sessionKey: string;
     cfg: OpenClawConfig;
@@ -267,11 +267,12 @@ export async function createTelegramBotCore(
     const agentId = params.agentId ?? ownerAgentId;
     const storePath = telegramDeps.resolveStorePath(params.cfg.session?.store, { agentId });
     try {
-      const getSessionEntry = telegramDeps.getSessionEntry;
-      const storedActivation = getSessionEntry?.({
-        storePath,
-        sessionKey: params.sessionKey,
-      })?.groupActivation;
+      const storedActivation = (
+        await telegramDeps.getSessionEntryAsync?.({
+          storePath,
+          sessionKey: params.sessionKey,
+        })
+      )?.groupActivation;
       if (storedActivation === "always") {
         return false;
       }

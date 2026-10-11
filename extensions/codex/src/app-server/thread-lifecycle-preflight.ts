@@ -118,7 +118,7 @@ export async function prepareCodexThreadRequestContext(
     throwIfAborted: () => void;
   },
 ) {
-  const startModelSelection = resolveCodexAppServerThreadModelSelection({
+  const startModelSelection = await resolveCodexAppServerThreadModelSelection({
     homeScope: params.appServer.start.homeScope,
     provider: params.params.provider,
     model: params.runtimeModelId ?? params.params.modelId,
@@ -171,11 +171,11 @@ export async function prepareCodexThreadRequestContext(
     bindingIdentity: options.bindingIdentity,
     startModelSelection,
     startModelProvider,
-    normalizeBindingModelProvider: (
+    normalizeBindingModelProvider: async (
       authProfileId: string | undefined,
       modelProvider: string | undefined,
     ) =>
-      normalizeCodexAppServerBindingModelProvider({
+      await normalizeCodexAppServerBindingModelProvider({
         authProfileId,
         modelProvider,
         authProfileStore: params.params.authProfileStore,
@@ -190,12 +190,12 @@ export async function prepareCodexThreadRequestContext(
         modelProvider,
         params.inferenceProviderRoutes,
       ),
-    buildResumeParams: (
+    buildResumeParams: async (
       binding: CodexAppServerThreadBinding,
       authProfileId: string | undefined,
       config: JsonObject | undefined,
     ) =>
-      buildThreadResumeParams(params.params, {
+      await buildThreadResumeParams(params.params, {
         ...params,
         threadId: binding.threadId,
         authProfileId,

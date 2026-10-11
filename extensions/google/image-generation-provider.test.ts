@@ -453,12 +453,12 @@ describe("Google image-generation provider", () => {
     expect(typeof request.method).toBe("string");
   });
 
-  it("still reports not configured with a custom endpoint and no credentials", () => {
-    vi.spyOn(providerAuth, "isProviderApiKeyConfigured").mockReturnValue(false);
+  it("still reports not configured with a custom endpoint and no credentials", async () => {
+    vi.spyOn(providerAuth, "isProviderApiKeyConfiguredAsync").mockResolvedValue(false);
 
     const provider = buildGoogleImageGenerationProvider();
     expect(
-      provider.isConfigured?.({
+      await provider.isConfiguredAsync?.({
         agentDir: "/tmp/agent",
         cfg: googleImageConfig({ baseUrl: "https://gateway.example.test/gemini/v1beta" }),
       }),
