@@ -1,5 +1,4 @@
 import { cancel } from "@clack/prompts";
-import { readByteStreamWithLimit } from "@openclaw/media-core/read-byte-stream-with-limit";
 import { expectDefined } from "@openclaw/normalization-core";
 import { resolveExpiresAtMsFromDurationMs } from "@openclaw/normalization-core/number-coercion";
 import {
@@ -69,6 +68,7 @@ import { tryImportProviderCredential } from "./auth-credential-import.js";
 import {
   looksLikeOpenAIApiKey,
   normalizeManualAuthProvider,
+  readPipedStdin,
   resolveDefaultTokenProfileId,
   validateOpenAICodexApiKeyInput,
 } from "./auth-manual-input.js";
@@ -133,16 +133,6 @@ const password = async (params: Parameters<typeof clackPassword>[0]) =>
   guardCancel(await clackPassword(params));
 const select = async <T>(params: Parameters<typeof clackSelect<T>>[0]) =>
   guardCancel(await clackSelect(params));
-
-const MODELS_AUTH_STDIN_MAX_BYTES = 1024 * 1024;
-
-async function readPipedStdin(): Promise<string> {
-  const bytes = await readByteStreamWithLimit(process.stdin, {
-    maxBytes: MODELS_AUTH_STDIN_MAX_BYTES,
-    onOverflow: ({ maxBytes }) => new Error(`Piped auth input exceeds ${maxBytes} bytes.`),
-  });
-  return bytes.toString("utf8");
-}
 
 async function readPastedSecret(params: {
   message: string;
