@@ -637,8 +637,8 @@ async function runOutboundDeliveryWithQueue(
                         await recoveryParams.onPlatformSendDispatch?.();
                         await claimedDeliveryParams.onPlatformSendDispatch?.();
                       },
-                      onError: (error, payload) => {
-                        finalError = [error, payload];
+                      onError: (retryError, payload) => {
+                        finalError = [retryError, payload];
                       },
                     },
                     params.deliveryQueueStateContext,

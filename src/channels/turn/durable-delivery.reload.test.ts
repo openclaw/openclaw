@@ -157,7 +157,7 @@ describe("final delivery after plugin replacement", () => {
     vi.stubEnv("OPENCLAW_STATE_DIR", state.tmpDir());
     const fixture = await replacementFixture({ sameGeneration: true });
     fixture.request.payload = { text: "**Saved final** with [a link](https://example.com)" };
-    const retryStarted = createDeferred<void>();
+    const retryStarted = createDeferred();
     const retryResult = createDeferred<{ messageId: string }>();
     fixture.sendText
       .mockRejectedValueOnce(
