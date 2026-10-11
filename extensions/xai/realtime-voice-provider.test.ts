@@ -10,6 +10,7 @@ vi.mock("./ws-runtime.js", () => ({
   WebSocket: FakeWebSocket,
 }));
 
+// mock-isolation: Realtime tests control credential availability and pending resolution without host auth storage.
 vi.mock("openclaw/plugin-sdk/provider-auth", () => ({
   isProviderAuthProfileConfigured: () => false,
   isProviderAuthProfileConfiguredAsync: isProviderAuthProfileConfiguredAsyncMock,

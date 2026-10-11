@@ -7,6 +7,7 @@ const mocks = await vi.hoisted(async () => {
   return createOpenAIRealtimeMockState();
 });
 vi.mock("ws", () => ({ default: mocks.FakeWebSocket }));
+// mock-isolation: Outgoing-response ordering uses synthetic credentials, independent of host auth storage.
 vi.mock("openclaw/plugin-sdk/provider-auth", () => ({
   isProviderAuthProfileConfigured: mocks.isProviderAuthProfileConfiguredMock,
   isProviderAuthProfileConfiguredAsync: mocks.isProviderAuthProfileConfiguredMock,

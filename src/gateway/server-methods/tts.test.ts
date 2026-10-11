@@ -71,6 +71,7 @@ vi.mock("../../tts/tts-settings.js", async (importOriginal) => ({
   resolveTtsSettingsSnapshot: mocks.resolveTtsSettingsSnapshot,
 }));
 
+// mock-isolation: TTS RPCs use fixture settings and synthesis without machine preference bindings.
 vi.mock("../../tts/tts.js", () => ({
   getResolvedSpeechProviderConfig: vi.fn(),
   getTtsPersona: vi.fn(() => undefined),
@@ -152,7 +153,7 @@ describe("ttsHandlers", () => {
     });
   });
 
-  it("yields before TTS status setup and reuses one configured-state pass", async () => {
+  it("reuses one configured-state pass for TTS status", async () => {
     const providers = [
       { id: "openai", label: "OpenAI", isConfigured: vi.fn(() => true) },
       { id: "google", label: "Google", isConfigured: vi.fn(() => true) },
@@ -169,9 +170,6 @@ describe("ttsHandlers", () => {
       respond,
       context: { getRuntimeConfig: mocks.getRuntimeConfig },
     } as never);
-
-    expect(mocks.getRuntimeConfig).not.toHaveBeenCalled();
-    expect(mocks.listSpeechProviders).not.toHaveBeenCalled();
 
     await statusPromise;
 

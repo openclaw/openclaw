@@ -19,6 +19,7 @@ vi.mock("./commands-models-catalog.js", () => ({
     modelCatalog: [],
   }),
 }));
+// mock-isolation: Pagination uses synthetic model rows without reading host auth labels or CLI keys.
 vi.mock("../../agents/model-auth-label.js", () => ({
   resolveModelAuthLabelAsync: () => undefined,
 }));

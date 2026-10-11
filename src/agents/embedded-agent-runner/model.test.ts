@@ -102,6 +102,7 @@ vi.mock("../model-suppression.js", async (importOriginal) => {
   };
 });
 
+// mock-isolation: Fixture snapshot lifetimes exclude process-wide auth publication and runtime owners.
 vi.mock("../prepared-model-runtime.js", async () => {
   const discovery = await import("../agent-model-discovery.js");
   const discoveryContext = await import("../model-discovery-context.js");

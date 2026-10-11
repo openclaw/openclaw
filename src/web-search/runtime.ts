@@ -317,11 +317,19 @@ async function resolveWebSearchCandidates(
   }
 
   const agentDir = options?.agentDir?.trim() || resolveDefaultAgentDir(config ?? {});
+  const preparedAuthStore =
+    options?.authStore ??
+    (authProfileRuntimeMode.getStore()
+      ? undefined
+      : getRuntimeAuthProfileStoreSnapshotCore(agentDir));
+  const preparedOptions = preparedAuthStore
+    ? { ...options, authStore: preparedAuthStore }
+    : options;
   let needsAuthSource = false;
   let autoDetectionMessage: string | undefined;
   try {
     const candidates = selectWebSearchCandidates(
-      options,
+      preparedOptions,
       context,
       providers,
       agentDir,

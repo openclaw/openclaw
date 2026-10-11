@@ -339,17 +339,18 @@ async function resolveEndpoints(
   const runtimeConfig = options.getRuntimeConfig?.();
   const { resolveAuthProfileId, resolveRuntimeOptions } = options;
   return await Promise.all(
-    normalizeEndpoints(pluginConfig, options).map(async (endpoint) => ({
-      ...endpoint,
-      connectionKey: await supervisionEndpointConnectionKey({
-        endpoint,
-        pluginConfig,
-        env,
-        runtimeConfig,
-        resolveAuthProfileId,
-        resolveRuntimeOptions,
+    normalizeEndpoints(pluginConfig, options).map(async (endpoint) =>
+      Object.assign({}, endpoint, {
+        connectionKey: await supervisionEndpointConnectionKey({
+          endpoint,
+          pluginConfig,
+          env,
+          runtimeConfig,
+          resolveAuthProfileId,
+          resolveRuntimeOptions,
+        }),
       }),
-    })),
+    ),
   );
 }
 

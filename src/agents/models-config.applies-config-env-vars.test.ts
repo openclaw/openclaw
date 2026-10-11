@@ -3,11 +3,6 @@ import type { OpenClawConfig } from "../config/config.js";
 import { createConfigRuntimeEnv } from "../config/env-vars.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import { testing as externalAuthTesting } from "./auth-profiles/external-auth.test-support.js";
-import {
-  clearRuntimeAuthProfileStoreSnapshots,
-  replaceRuntimeAuthProfileStoreSnapshots,
-} from "./auth-profiles/runtime-snapshots.js";
 import { unsetEnv, withTempEnv } from "./models-config.e2e-harness.js";
 import { planModelsJsonForTest } from "./models-config.plan.test-support.js";
 import * as modelsConfigProviders from "./models-config.providers.js";
@@ -82,6 +77,7 @@ async function generate(params: Partial<Parameters<typeof planModelsJsonForTest>
     cfg: { models: { providers: {} } },
     agentDir: "/tmp/openclaw-models-config-env-vars-test",
     env: {},
+    authStore: { version: 1, profiles: {} },
     ...params,
   });
   if (plan.action !== "write") {
@@ -217,34 +213,24 @@ describe("models-config planning", () => {
     vi.spyOn(modelsConfigProviders, "resolveImplicitProviders").mockResolvedValue({
       "google-vertex": vertex,
     });
-    try {
-      externalAuthTesting.setResolveExternalAuthProfilesForTest(() => []);
-      replaceRuntimeAuthProfileStoreSnapshots([
-        { store: { version: 1, profiles: {} } },
-        {
-          agentDir,
-          store: {
-            version: 1,
-            profiles: {
-              "google-vertex:default": {
-                type: "api_key",
-                provider: "google-vertex",
-                keyRef: { source: "env", provider: "default", id: "GOOGLE_CLOUD_API_KEY" },
-              },
-            },
+    const plan = await generate({
+      agentDir,
+      authStore: {
+        version: 1,
+        profiles: {
+          "google-vertex:default": {
+            type: "api_key",
+            provider: "google-vertex",
+            keyRef: { source: "env", provider: "default", id: "GOOGLE_CLOUD_API_KEY" },
           },
         },
-      ]);
-      const plan = await generate({ agentDir });
-      expect(plan.providers["google-vertex"]).toMatchObject({
-        api: "google-vertex",
-        apiKey: "GOOGLE_CLOUD_API_KEY",
-        models: [{ id: "gemini-2.5-pro" }],
-      });
-    } finally {
-      externalAuthTesting.resetResolveExternalAuthProfilesForTest();
-      clearRuntimeAuthProfileStoreSnapshots();
-    }
+      },
+    });
+    expect(plan.providers["google-vertex"]).toMatchObject({
+      api: "google-vertex",
+      apiKey: "GOOGLE_CLOUD_API_KEY",
+      models: [{ id: "gemini-2.5-pro" }],
+    });
   });
 
   it.each([undefined, "from-host"])(

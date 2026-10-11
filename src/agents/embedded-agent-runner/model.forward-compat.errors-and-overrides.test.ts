@@ -88,6 +88,7 @@ vi.mock("../model-suppression.js", async (importOriginal) => {
   };
 });
 
+// mock-isolation: Synthetic discovery snapshots exclude process-wide auth publication and runtime owners.
 vi.mock("../prepared-model-runtime.js", async () => {
   const discovery = await import("../agent-model-discovery.js");
   const { createPluginMetadataSnapshot } =

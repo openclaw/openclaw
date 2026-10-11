@@ -68,6 +68,7 @@ vi.mock("./source-check.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./source-check.js")>()),
   hasAnyAuthProfileStoreSourceAsync: authStoreMocks.hasAnyAuthProfileStoreSourceAsync,
 }));
+// mock-isolation: Session override cases use the fixture store without loading host credentials.
 vi.mock("./store-runtime.js", () => ({
   ensureAuthProfileStoreAsync: authStoreMocks.ensureAuthProfileStoreAsync,
 }));

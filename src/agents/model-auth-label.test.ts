@@ -20,6 +20,7 @@ const mocks = vi.hoisted(() => ({
   readCodexCliCredentialsCached: vi.fn<(options?: unknown) => unknown>(() => null),
 }));
 
+// mock-isolation: Label privacy cases use synthetic credentials without loading host auth profiles.
 vi.mock("./auth-profiles.js", () => ({
   ensureAuthProfileStoreAsync: mocks.ensureAuthProfileStoreAsync,
   externalCliDiscoveryForProviderAuth: mocks.externalCliDiscoveryForProviderAuth,

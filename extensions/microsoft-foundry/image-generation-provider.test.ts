@@ -42,6 +42,7 @@ const {
   sanitizeConfiguredModelProviderRequestMock: vi.fn((request) => request),
 }));
 
+// mock-isolation: Image request tests control credential availability independently of host auth storage.
 vi.mock("openclaw/plugin-sdk/provider-auth", () => ({
   isProviderApiKeyConfiguredAsync: isProviderApiKeyConfiguredAsyncMock,
 }));

@@ -883,7 +883,10 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
     resolveModelAsync: mockedResolveModelAsync,
   }));
 
-  vi.doMock("../model-auth.js", () => ({
+  // mock-isolation: Overflow recovery uses fixture profiles and keys without host credential discovery.
+  vi.doMock("../model-auth.js", async () => ({
+    createRuntimeProviderAuthLookup: (await import("../model-auth-runtime.js"))
+      .createRuntimeProviderAuthLookup,
     applyAuthHeaderOverride: vi.fn((model: unknown) => model),
     applyLocalNoAuthHeaderOverride: vi.fn((model: unknown) => model),
     ensureAuthProfileStore: mockedEnsureAuthProfileStore,

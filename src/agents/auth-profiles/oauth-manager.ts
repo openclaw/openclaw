@@ -41,8 +41,6 @@ import {
   isOAuthRefreshFence,
   isPendingOAuthRefreshFence,
   isSameOAuthRefreshGeneration,
-  readPendingOAuthRefreshClaimId,
-  readOAuthRefreshGenerationDigest,
 } from "./oauth-refresh-marker.js";
 import { beginOAuthRefreshObservation } from "./oauth-refresh-observation.js";
 import {
@@ -501,20 +499,7 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
             profileId: params.profileId,
             credential: credentialToRefresh,
           });
-          const claimId = readPendingOAuthRefreshClaimId(fence);
-          if (!claimId) {
-            throw new Error("OAuth refresh fence is missing its claim identity");
-          }
-          observation = beginOAuthRefreshObservation({
-            databasePath: authPath,
-            profileId: params.profileId,
-            provider: params.provider,
-            claimId,
-            generation: readOAuthRefreshGenerationDigest({
-              profileId: params.profileId,
-              credential: fence,
-            }),
-          });
+          observation = beginOAuthRefreshObservation();
           let claimed = false;
           const updated = await updateOAuthStore({
             personalStore: params.personalStore,
@@ -575,11 +560,9 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
                 generation: peerGeneration,
                 fence,
                 rollbackOnFailure: false,
-                onFence: observation.includeDatabase,
               });
             }
           } catch (error) {
-            observation.beginSettlement();
             if (error instanceof OAuthRefreshPeerFenceError) {
               peerClaims = mergeOAuthRefreshPeerClaims(peerClaims, error.claims);
             }
@@ -713,7 +696,6 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
             generation,
             fence: claim.fence,
             rollbackOnFailure: false,
-            onFence: claim.observation.includeDatabase,
           }),
         );
       } catch (error) {
@@ -821,7 +803,6 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
       externalRefresh?: boolean;
       rediscoverPeers?: false;
     }): Promise<ResolvedOAuthAccess | null> => {
-      claim.observation.beginSettlement();
       const initiatingError = failure
         ? toErrorObject(failure.error, "OAuth refresh failed")
         : undefined;
@@ -876,7 +857,6 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
       } catch (error) {
         return await settleFailure({ error, externalRefresh: true });
       }
-      claim.observation.beginSettlement();
       if (!refreshed) {
         return await settleFailure();
       }
