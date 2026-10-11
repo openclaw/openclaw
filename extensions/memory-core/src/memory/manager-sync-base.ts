@@ -446,10 +446,14 @@ export abstract class MemoryManagerSyncBase extends MemoryManagerDatabaseContext
   }
 
   protected resetVectorState(): void {
-    this.database.vectorReady = null;
-    this.vector.available = null;
+    // Shadow publication replaces index rows, not this handle's loaded extension.
+    const extensionLoaded = this.vector.available === true;
+    this.database.vectorReady = extensionLoaded ? Promise.resolve(true) : null;
+    if (!extensionLoaded) {
+      this.vector.available = null;
+      this.vector.loadError = undefined;
+    }
     this.vector.semanticAvailable = undefined;
-    this.vector.loadError = undefined;
     this.vector.dims = undefined;
     this.database.vectorDegradedWriteWarningShown = false;
   }

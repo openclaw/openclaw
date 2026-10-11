@@ -62,7 +62,7 @@ export function readMemoryDatabaseFacts(db: DatabaseSync): MemoryDatabaseFacts {
   };
 }
 
-export function readMemoryIndexMetadata(db: DatabaseSync) {
+function readMemoryIndexMetadata(db: DatabaseSync) {
   const row = db
     .prepare("SELECT value FROM memory_index_meta WHERE key = ?")
     .get(MEMORY_INDEX_META_KEY);

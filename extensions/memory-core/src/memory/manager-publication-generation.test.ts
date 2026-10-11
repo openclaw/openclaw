@@ -45,7 +45,17 @@ function sourceReplacement(model: string): MemorySourceIndexReplacement {
     now: 1,
     vectorReady: false,
     embeddings: model === "fts-only" ? [] : [[0.5]],
-    chunks: [{ startLine: 1, endLine: 1, text: "test", hash: "chunk" }],
+    chunks: [
+      {
+        startLine: 1,
+        endLine: 1,
+        text: "test",
+        hash: "chunk",
+        importance: null,
+        triggers: null,
+        projectKey: null,
+      },
+    ],
   };
 }
 
