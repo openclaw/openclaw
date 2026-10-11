@@ -43,7 +43,6 @@ type ConversationReadInvocationOrigin = NonNullable<
 >;
 
 const messagingActions = new Set([
-  "createChannel",
   "openConversation",
   "sendMessage",
   "uploadFile",
@@ -520,6 +519,23 @@ export async function handleSlackAction(
     });
   };
 
+  if (action === "createChannel") {
+    const teamId =
+      readStringParam(params, "teamId") ?? resolveTrustedCurrentSlackTeamId({ account, context });
+    const inviteUserId =
+      normalizeOptionalLowercaseString(context?.currentChannelProvider) === "slack" &&
+      context?.requesterAccountId &&
+      normalizeAccountId(context.requesterAccountId) === normalizeAccountId(account.accountId)
+        ? context?.requesterSenderId
+        : undefined;
+    assertSlackDetachedTargetAllowed(account.accountId, teamId);
+    const result = await slackActionRuntime.createSlackChannel(
+      readStringParam(params, "name", { required: true }),
+      { ...buildActionOpts("write", teamId), inviteUserId },
+    );
+    return jsonResult({ ok: true, ...result });
+  }
+
   if (reactionsActions.has(action)) {
     if (!isActionEnabled("reactions")) {
       throw new Error("Slack reactions are disabled.");
@@ -610,23 +626,6 @@ export async function handleSlackAction(
       return result;
     };
     switch (action) {
-      case "createChannel": {
-        const teamId =
-          readStringParam(params, "teamId") ??
-          resolveTrustedCurrentSlackTeamId({ account, context });
-        const inviteUserId =
-          normalizeOptionalLowercaseString(context?.currentChannelProvider) === "slack" &&
-          context?.requesterAccountId &&
-          normalizeAccountId(context.requesterAccountId) === normalizeAccountId(account.accountId)
-            ? context?.requesterSenderId
-            : undefined;
-        assertSlackDetachedTargetAllowed(account.accountId, teamId);
-        const result = await slackActionRuntime.createSlackChannel(
-          readStringParam(params, "name", { required: true }),
-          { ...buildActionOpts("write", teamId), inviteUserId },
-        );
-        return jsonResult({ ok: true, ...result });
-      }
       case "openConversation": {
         const teamId =
           readStringParam(params, "teamId") ??

@@ -101,7 +101,8 @@ describe("Slack channel-create", () => {
       channelId: "C01234567",
       name: "proj-launch-pixel-peak",
       target: "team:T11111111:channel:C01234567",
-      inviteWarning: "Channel was created, but Slack could not add the requesting user.",
+      inviteWarning:
+        "Slack is missing the invitation permission; the requesting user can join the returned public channel, or an operator can reauthorize the Slack app and retry.",
     });
   });
 });

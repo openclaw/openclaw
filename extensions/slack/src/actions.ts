@@ -278,8 +278,12 @@ export async function createSlackChannel(name: unknown, opts: SlackActionClientO
   if (input.inviteUserId) {
     try {
       await client.conversations.invite({ channel: channelId, users: input.inviteUserId });
-    } catch {
-      inviteWarning = "Channel was created, but Slack could not add the requesting user.";
+    } catch (error) {
+      const reason =
+        error instanceof Error && /missing_scope/i.test(error.message)
+          ? "Slack is missing the invitation permission"
+          : "Slack rejected the invitation";
+      inviteWarning = `${reason}; the requesting user can join the returned public channel, or an operator can reauthorize the Slack app and retry.`;
     }
   }
   return {

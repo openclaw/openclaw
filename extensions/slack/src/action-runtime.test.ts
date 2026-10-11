@@ -152,6 +152,17 @@ describe("handleSlackAction", () => {
     expect(createSlackChannel).not.toHaveBeenCalled();
   });
 
+  it("allows channel creation when message actions are disabled", async () => {
+    cfg = slackConfig({ actions: { channels: true, messages: false } });
+    await expect(
+      handleSlackAction({ action: "createChannel", name: "proj-channel-create-proof" }, cfg, {
+        ...trustedContext,
+        requesterSenderId: "U456",
+      }),
+    ).resolves.toMatchObject({ details: { ok: true, target: "team:T123:channel:C456" } });
+    expect(createSlackChannel).toHaveBeenCalled();
+  });
+
   it.each([
     { name: "an unqualified conversation", context: { currentChannelId: "C123" } },
     {

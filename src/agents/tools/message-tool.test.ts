@@ -2142,13 +2142,21 @@ describe("message tool schema scoping", () => {
 
   it.each([
     { action: "conversation-open", hasTeamId: true },
+    { action: "channel-create", hasTeamId: true },
     { action: "send", hasTeamId: false },
   ] as const)(
     "limits teamId to consuming actions when only $action is allowed",
     ({ action, hasTeamId }) => {
       const plugin = createChannelPlugin({
         id: "test-channel",
-        actions: ["send", "read", "channel-info", "channel-list", "conversation-open"],
+        actions: [
+          "send",
+          "read",
+          "channel-info",
+          "channel-list",
+          "channel-create",
+          "conversation-open",
+        ],
       });
       registerPlugins(plugin);
 
