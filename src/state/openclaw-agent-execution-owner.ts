@@ -420,7 +420,6 @@ export function createAgentDatabaseExecution(
         assertCurrent: assertBorrowed,
         captureGenerationClaim,
         capturePreparedGenerationClaim() {
-          assertBorrowed();
           if (
             agentDatabaseLifecycle.pending.has(pathname) ||
             nativeClosing ||
@@ -428,6 +427,7 @@ export function createAgentDatabaseExecution(
             generation?.failure() ||
             !generation?.isPrepared()
           ) {
+            assertBorrowed();
             return undefined;
           }
           return captureGenerationClaim();
