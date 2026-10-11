@@ -26,13 +26,13 @@ import {
   type UPDATE_PREFLIGHT_DETAILS,
 } from "../../infra/update-preflight-details.js";
 import type { UpdateRequester } from "../../infra/update-requester-authority.js";
-import {
-  recordUpdateRunDiagnostics,
-  recordUpdateRunPhase,
-  recordUpdateRunStep,
-  finishUpdateRun,
-} from "../../infra/update-run-ledger.js";
 import { summarizeUpdateStepFailure, type UpdateRunRecord } from "../../infra/update-run-record.js";
+import {
+  recordUpdateRunDiagnosticsAsync as recordUpdateRunDiagnostics,
+  recordUpdateRunPhaseAsync as recordUpdateRunPhase,
+  recordUpdateRunStepAsync as recordUpdateRunStep,
+  finishUpdateRunAsync as finishUpdateRun,
+} from "../../infra/update-run-write.async.js";
 import { resolveUpdateInstallSurface } from "../../infra/update-runner-install-surface.js";
 import type { UpdateInstallSurface, UpdateRunResult } from "../../infra/update-runner-types.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
@@ -117,16 +117,16 @@ export async function admitGatewayUpdateRequest(request: GatewayRequestHandlerOp
 const IMMUTABLE_UPDATE_GUIDANCE =
   "Run openclaw update as the root installation owner outside the Gateway service cgroup. Native immutable activation requires an explicitly enabled adoption record; use openclaw update recover --root <installation-root> for retained recovery. Gateway update.run cannot acquire that external updater authority.";
 
-export function reportImmutableGatewayUpdateRefusal(
+export async function reportImmutableGatewayUpdateRefusal(
   runId: string,
   installSurface: Extract<UpdateInstallSurface, { kind: "immutable" }>,
   respond: GatewayRequestHandlerOptions["respond"],
-): void {
+): Promise<void> {
   const reason = "immutable-native-updater-required";
-  recordUpdateRunPhase(runId, "requested", {
+  await recordUpdateRunPhase(runId, "requested", {
     origin: { nextAction: IMMUTABLE_UPDATE_GUIDANCE },
   });
-  finishUpdateRun(runId, { status: "skipped", reason });
+  await finishUpdateRun(runId, { status: "skipped", reason });
   respond(true, {
     runId,
     ok: false,
@@ -167,14 +167,14 @@ export function retainUpdateRequesterAuthority(
 }
 
 export async function resolveGatewayUpdateAdmission(runId: string, timeoutMs?: number) {
-  recordUpdateRunStep(runId, { step: "installation-inspection", status: "in_progress" });
+  await recordUpdateRunStep(runId, { step: "installation-inspection", status: "in_progress" });
   const { root, status } = await currentUpdateCheckLifecycle().run((signal) =>
     resolveStartupInstallStatus(false, signal),
   );
   if (status.error?.timeoutMs) {
     throw new Error(status.error.message);
   }
-  recordUpdateRunPhase(runId, "requested", {
+  await recordUpdateRunPhase(runId, "requested", {
     target: {
       ...(status.installKind === "git" || status.installKind === "package"
         ? { kind: status.installKind }
@@ -190,7 +190,7 @@ export async function resolveGatewayUpdateAdmission(runId: string, timeoutMs?: n
     installKind: status.installKind,
     timeoutMs,
   });
-  recordUpdateRunPhase(runId, "requested", {
+  await recordUpdateRunPhase(runId, "requested", {
     ...(installSurface.kind === "global"
       ? { target: { installationMethod: `${installSurface.mode}-global` } }
       : {}),
@@ -244,13 +244,13 @@ function classifyHandoffFailure(
   return "handoff-preparation-failed";
 }
 
-export function recordHandoffFailure(
+export async function recordHandoffFailure(
   runId: string,
   error: unknown,
   previous: UpdateRunResult,
   warn: (message: string) => void,
   stage: HandoffFailureStage = "prepare",
-): UpdateRunResult {
+): Promise<UpdateRunResult> {
   const cause = createUpdateErrorFact("managed-service", error);
   const classified = createUpdatePreflightFailure(
     classifyHandoffFailure(cause, stage),
@@ -277,13 +277,13 @@ export function recordHandoffFailure(
   };
   try {
     if (error instanceof UpdatePreMutationError) {
-      recordUpdateRunPhase(runId, "requested", { origin: { nextAction: error.message } });
+      await recordUpdateRunPhase(runId, "requested", { origin: { nextAction: error.message } });
     }
-    recordUpdateRunStep(runId, { step: step.name, status: "failed", reason });
+    await recordUpdateRunStep(runId, { step: step.name, status: "failed", reason });
   } catch {
     warn("Update failure state could not be recorded; preserving the original error.");
   }
-  recordUpdateRunDiagnostics(
+  await recordUpdateRunDiagnostics(
     runId,
     {
       rollbackOutcome,
@@ -305,12 +305,12 @@ export function recordHandoffFailure(
   };
 }
 
-export function createUnexpectedUpdateFailureResult(
+export async function createUnexpectedUpdateFailureResult(
   current: UpdateRunRecord,
   previous: UpdateRunResult,
   error: unknown,
   warn: (message: string) => void,
-): UpdateRunResult {
+): Promise<UpdateRunResult> {
   const activeStep = current.steps.findLast((step) => step.status === "in_progress");
   const name = activeStep?.step ?? current.phase;
   const reason = error instanceof FreeBsdPkgOwnershipError ? error.reason : "unexpected-error";
@@ -338,7 +338,7 @@ export function createUnexpectedUpdateFailureResult(
     steps: [...previous.steps, step],
     durationMs: Date.now() - current.createdAtMs,
   };
-  recordUpdateRunDiagnostics(
+  await recordUpdateRunDiagnostics(
     current.runId,
     {
       recovery: result.recovery,

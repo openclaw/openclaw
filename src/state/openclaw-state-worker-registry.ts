@@ -44,6 +44,7 @@ import type { ChannelPairingWorkerOperations } from "../pairing/pairing-store.wo
 import type { PluginBlobWorkerOperations } from "../plugin-state/plugin-blob-store.worker.js";
 import type { PluginRuntimeWorkerOperations } from "../plugins/state.worker-contract.js";
 import type { ProjectRegistryWorkerOperations } from "../projects/project-registry.worker-contract.js";
+import type { GitHubSetupWorkerOperations } from "../secrets/store/secret-store-github-handoff.worker.js";
 import type { SkillLibraryWorkerOperations } from "../skills/library/store.worker-contract.js";
 import type { SkillUploadWorkerOperations } from "../skills/lifecycle/upload-store.worker-contract.js";
 import type { SkillWorkshopWorkerOperations } from "../skills/workshop/changes.worker-contract.js";
@@ -112,7 +113,8 @@ export type RegisteredStateWorkerOperations = WorkerOperations<typeof gatewayBoo
   WorkerTranscriptCommitOperations &
   RepositoryWorkspaceWorkerOperations &
   UserBackgroundWorkerOperations &
-  UserProfileWorkerOperations;
+  UserProfileWorkerOperations &
+  GitHubSetupWorkerOperations;
 
 export const stateWorkerRegistry = createWorkerOperationRegistry<
   RegisteredStateWorkerOperations,
@@ -158,6 +160,10 @@ export const stateWorkerRegistry = createWorkerOperationRegistry<
   userBackground: async () =>
     (await import("./user-background.worker.js")).userBackgroundOperations,
   userProfiles: () => import("./user-profiles.worker.js").then((m) => m.userProfileOperations),
+  githubSetup: () =>
+    import("../secrets/store/secret-store-github-handoff.worker.js").then(
+      (m) => m.githubSetupOperations,
+    ),
   agentDatabaseRegistry: () =>
     import("./openclaw-agent-db-registry.worker.js").then((m) => m.agentDatabaseRegistryOperations),
   authProfiles: () =>

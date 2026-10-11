@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import {
   CommandProcessCleanupError,
@@ -8,10 +9,13 @@ import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-
 import { runOpenClawStateWorkerOperation } from "../state/openclaw-state-worker-store.js";
 import { hasSqliteWorkerOutcomeUnknown } from "./sqlite-worker-contract.js";
 import { createSqliteWorkerWriteAdmission } from "./sqlite-worker-store.js";
+import { createUpdateErrorFact } from "./update-failure-facts.js";
 import { captureUpdateRunRedactionFacts, type UpdateRunLedgerOptions } from "./update-run-codec.js";
+import type { createUpdateRun } from "./update-run-ledger.js";
 import type { UpdateRunPhasePatch, UpdateRunWriteCommand } from "./update-run-mutation.types.js";
 import type { UpdateRunPhase, UpdateRunRecord, UpdateRunStep } from "./update-run-record.js";
 import { UpdateRecoveryRequiredError } from "./update-run-recovery-schema.js";
+import type { finishUpdateRun, UpdateRunDiagnostics } from "./update-run-write.js";
 
 export type UpdateRunWriteOptions = UpdateRunLedgerOptions & {
   context?: OpenClawStateWorkerContext;
@@ -29,7 +33,11 @@ async function recordUpdateRunMutationAsync(
   runId: string,
   mutation:
     | { kind: "step"; step: UpdateRunStep & { reason?: string } }
-    | { kind: "phase"; phase: UpdateRunPhase; patch: UpdateRunPhasePatch },
+    | { kind: "phase"; phase: UpdateRunPhase; patch: UpdateRunPhasePatch }
+    | { kind: "create"; run: Parameters<typeof createUpdateRun>[0] }
+    | { kind: "finish"; result: Parameters<typeof finishUpdateRun>[1] }
+    | { kind: "verification"; verification: UpdateRunRecord["verification"]; onlyIfRunning?: true }
+    | { kind: "diagnostics"; diagnostics: UpdateRunDiagnostics; preserveRecovery?: true },
   options: UpdateRunWriteOptions = {},
 ): Promise<UpdateRunRecord | undefined> {
   options.assertAccepting?.();
@@ -55,16 +63,47 @@ async function recordUpdateRunMutationAsync(
     busyTimeoutMs: captured.busyTimeoutMs,
     redactPaths: captured.redactPaths,
   };
-  const command = structuredClone<UpdateRunWriteCommand>(
-    mutation.kind === "step"
-      ? { type: "updateRuns.recordStep", input: { ...input, step: mutation.step } }
-      : {
-          type: "updateRuns.recordPhase",
-          input: { ...input, phase: mutation.phase, patch: mutation.patch },
+  let command: UpdateRunWriteCommand;
+  switch (mutation.kind) {
+    case "step":
+      command = { type: "updateRuns.recordStep", input: { ...input, step: mutation.step } };
+      break;
+    case "phase":
+      command = {
+        type: "updateRuns.recordPhase",
+        input: { ...input, phase: mutation.phase, patch: mutation.patch },
+      };
+      break;
+    case "create":
+      command = { type: "updateRuns.create", input: { ...input, run: mutation.run } };
+      break;
+    case "finish":
+      command = { type: "updateRuns.finish", input: { ...input, result: mutation.result } };
+      break;
+    case "verification":
+      command = {
+        type: "updateRuns.recordVerification",
+        input: {
+          ...input,
+          verification: mutation.verification,
+          onlyIfRunning: mutation.onlyIfRunning,
         },
-  );
+      };
+      break;
+    case "diagnostics":
+      command = {
+        type: "updateRuns.recordDiagnostics",
+        input: {
+          ...input,
+          diagnostics: mutation.diagnostics,
+          preserveRecovery: mutation.preserveRecovery,
+        },
+      };
+      break;
+  }
+  command = structuredClone(command);
   const pending = runOpenClawStateWorkerOperation(context, (scope) => scope.execute(command), {
-    existingOnly: true,
+    existingOnly: mutation.kind !== "create",
     assertCurrent,
     createAdmission: createSqliteWorkerWriteAdmission(assertCurrent, [
       context.admission.databasePath,
@@ -117,4 +156,78 @@ export async function recordUpdateRunPhaseAsync(
     throw new Error("Required update phase was not recorded");
   }
   return record;
+}
+
+export async function createUpdateRunAsync(
+  input: Parameters<typeof createUpdateRun>[0],
+  options: UpdateRunWriteOptions = {},
+): Promise<UpdateRunRecord> {
+  const run = { ...input, runId: input.runId ?? randomUUID() };
+  const record = await recordUpdateRunMutationAsync(run.runId, { kind: "create", run }, options);
+  if (!record) {
+    throw new Error("Update run was not created");
+  }
+  return record;
+}
+
+export async function finishUpdateRunAsync(
+  runId: string,
+  result: Parameters<typeof finishUpdateRun>[1],
+  options: UpdateRunWriteOptions = {},
+): Promise<UpdateRunRecord> {
+  const record = await recordUpdateRunMutationAsync(runId, { kind: "finish", result }, options);
+  if (!record) {
+    throw new Error("Update run outcome was not recorded");
+  }
+  return record;
+}
+
+export async function recordUpdateRunVerificationAsync(
+  runId: string,
+  verification: UpdateRunRecord["verification"],
+  options: UpdateRunWriteOptions & { onlyIfRunning?: true } = {},
+): Promise<UpdateRunRecord> {
+  const record = await recordUpdateRunMutationAsync(
+    runId,
+    { kind: "verification", verification, onlyIfRunning: options.onlyIfRunning },
+    options,
+  );
+  if (!record) {
+    throw new Error("Update verification was not recorded");
+  }
+  return record;
+}
+
+export async function recordUpdateRunDiagnosticsAsync(
+  runId: string,
+  diagnostics: UpdateRunDiagnostics,
+  warn: (message: string) => void,
+  options: UpdateRunWriteOptions & { preserveRecovery?: true } = {},
+): Promise<UpdateRunRecord | undefined> {
+  if (
+    !(
+      diagnostics.failure ||
+      diagnostics.recovery ||
+      diagnostics.rollbackOutcome ||
+      diagnostics.verification
+    )
+  ) {
+    return undefined;
+  }
+  try {
+    return await recordUpdateRunMutationAsync(
+      runId,
+      { kind: "diagnostics", diagnostics, preserveRecovery: options.preserveRecovery },
+      options,
+    );
+  } catch (error) {
+    if (hasCommandProcessCleanupError(error)) {
+      throw error;
+    }
+    const fact = createUpdateErrorFact("requested", error, options.env);
+    warn(
+      `Update diagnostics could not be recorded (${fact.code}): ${fact.message ?? "no error message"}`,
+    );
+    return undefined;
+  }
 }

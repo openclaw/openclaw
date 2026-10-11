@@ -12,7 +12,27 @@ import {
   createSqliteAuditRecordWriter,
   registerSqliteAuditRecordAsync,
 } from "./sqlite-audit-record-store.async.js";
-import { createSqliteAuditRecordStore } from "./sqlite-audit-record-store.js";
+import { createSqliteAuditRecordStore as createNativeSqliteAuditRecordStore } from "./sqlite-audit-record-store.js";
+import {
+  createSqliteAuditRecordKernel,
+  prepareSqliteAuditRecord,
+} from "./sqlite-audit-record.kernel.js";
+
+// Migration fixtures use the same transaction-bound kernel as schema migration.
+function createSqliteAuditRecordStore<T>(
+  options: Parameters<typeof createNativeSqliteAuditRecordStore<T>>[0],
+) {
+  return {
+    ...createNativeSqliteAuditRecordStore<T>(options),
+    register(key: string, value: T, createdAt = Date.now()): void {
+      const record = prepareSqliteAuditRecord(options.scope, { key, value, createdAt });
+      runOpenClawStateWriteTransaction(
+        ({ db }) => createSqliteAuditRecordKernel<T>(db, options).register(record),
+        options,
+      );
+    },
+  };
+}
 
 function withAuditStoreFixture(
   options: { prefix: string },

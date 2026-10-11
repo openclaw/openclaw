@@ -84,6 +84,7 @@ export function createUpdateRun(
     settlement?: { reason: string; detail: string };
   },
   options: LedgerOptions = {},
+  assertCurrent?: (stage: "transaction" | "commit") => void,
 ): UpdateRunRecord {
   const now = Date.now();
   const initial: UpdateRunRecord = {
@@ -171,6 +172,7 @@ export function createUpdateRun(
     },
     options,
     !input.preview,
+    assertCurrent,
   );
 }
 

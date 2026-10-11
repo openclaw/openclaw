@@ -84,12 +84,19 @@ export function executeSharedStateCommand(
   if (stateWorkerRegistry.has(command)) {
     return stateWorkerRegistry.execute(command, { open, write, writeAdmitted, stateOptions });
   }
-  if (command.type === "updateRuns.recordStep" || command.type === "updateRuns.recordPhase") {
+  if (
+    command.type === "updateRuns.recordStep" ||
+    command.type === "updateRuns.recordPhase" ||
+    command.type === "updateRuns.create" ||
+    command.type === "updateRuns.finish" ||
+    command.type === "updateRuns.recordVerification" ||
+    command.type === "updateRuns.recordDiagnostics"
+  ) {
     return recordUpdateRunMutationInWorker(
       command,
       stateOptions(),
       (stage) => requestSqliteWorkerOperationAdmission({ stage, facts: undefined }),
-      updateRunWriter(),
+      updateRunWriter,
     );
   }
   if (command.type === "updateRuns.reconcile") {

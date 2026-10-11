@@ -5,7 +5,7 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import * as ocmUpdate from "../../infra/ocm-update-client.js";
 import * as packageRoot from "../../infra/openclaw-root.js";
 import * as immutableInstall from "../../infra/update-immutable-install.js";
-import * as updateLedger from "../../infra/update-run-ledger.js";
+import * as updateLedger from "../../infra/update-run-write.async.js";
 import {
   adoptUpdateCampaignMock,
   invokeUpdateRun,
@@ -30,7 +30,7 @@ it("refuses an app-owned Gateway update before delegation, history, or restart e
   await fs.writeFile(path.join(root, "openclaw-install-owner.json"), JSON.stringify(installOwner));
   vi.spyOn(packageRoot, "resolveOpenClawPackageRoot").mockResolvedValue(root);
   const resolveManager = vi.spyOn(ocmUpdate, "resolveOcmUpdateManager");
-  const createRun = vi.spyOn(updateLedger, "createUpdateRun");
+  const createRun = vi.spyOn(updateLedger, "createUpdateRunAsync");
   const respond = vi.fn();
 
   await invokeUpdateRun({}, respond);
@@ -59,7 +59,7 @@ it("refuses immutable activation before manager delegation, history, campaign, o
     currentSha: "a".repeat(40),
   });
   const resolveManager = vi.spyOn(ocmUpdate, "resolveOcmUpdateManager");
-  const createRun = vi.spyOn(updateLedger, "createUpdateRun");
+  const createRun = vi.spyOn(updateLedger, "createUpdateRunAsync");
   const respond = vi.fn();
 
   await invokeUpdateRun({}, respond);

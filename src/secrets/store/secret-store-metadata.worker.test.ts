@@ -16,6 +16,7 @@ import {
 import { resolveSecretRefString } from "../resolve.js";
 import { resolveSecretSentinel } from "../sentinel.js";
 import {
+  consumeGitHubSetupHandoff,
   deleteSecretStoreEntry,
   listSecretStoreEntries,
   readSecretStoreExecEnvironment,
@@ -45,6 +46,11 @@ it("reads exec and SecretRef values without caller-thread SQL and registers host
     entries: [
       { name: "WORKER_READ_SECRET", kind: "secret", value: "synthetic-worker-read" },
       { name: "WORKER_READ_ENV", kind: "env", value: "synthetic-env" },
+      {
+        name: "github-setup-11111111111111111111111111111111",
+        kind: "secret",
+        value: "synthetic-handoff",
+      },
     ],
   });
   await closeOpenClawStateDatabaseAsync();
@@ -69,6 +75,11 @@ it("reads exec and SecretRef values without caller-thread SQL and registers host
   expect(isSecretValueRegisteredForRedaction("synthetic-worker-read")).toBe(true);
   expect(environment.env).toEqual({ WORKER_READ_ENV: "synthetic-env" });
   expect(resolveSecretSentinel(environment.secretSentinels?.WORKER_READ_SECRET ?? "")).toBe(value);
+  resetSecretRedactionRegistryForTest();
+  expect(
+    await consumeGitHubSetupHandoff({ name: "github-setup-11111111111111111111111111111111" }),
+  ).toBe("synthetic-handoff");
+  expect(isSecretValueRegisteredForRedaction("synthetic-handoff")).toBe(true);
   await closeOpenClawStateDatabaseAsync();
   for (const spy of sql) {
     expect(spy).not.toHaveBeenCalled();

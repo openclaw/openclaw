@@ -17,6 +17,7 @@ import {
   GatewayDrainingError,
   isGatewayRestartDraining,
 } from "../process/gateway-work-admission.js";
+import { trackAsyncWork } from "../shared/async-work-scope.js";
 import { isPidAlive } from "../shared/pid-alive.js";
 import { SKIPPED_UPDATE_OUTCOMES } from "../shared/update-outcome.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
@@ -92,7 +93,7 @@ import type {
 } from "./update-managed-service-handoff-types.js";
 import { resolveManagedUpdateRequester } from "./update-requester-authority.js";
 import type { ForegroundUpdateOrigin } from "./update-restart-sentinel-payload.js";
-import { recordUpdateRunStep } from "./update-run-ledger.js";
+import { recordUpdateRunStepAsync } from "./update-run-write.async.js";
 import { readCurrentGitUpdateRecovery } from "./update-runner-git-recovery.js";
 import { looksLikeGitCheckout } from "./update-runner-install-surface.js";
 
@@ -1230,9 +1231,10 @@ async function spawnManagedServiceUpdateHandoff(
     onProcessIdentityWarning: (pid, message) => {
       console.warn(`[update] ${message}`);
       if (params.runId) {
-        try {
-          recordUpdateRunStep(
-            params.runId,
+        const runId = params.runId;
+        void trackAsyncWork(async () => {
+          await recordUpdateRunStepAsync(
+            runId,
             {
               step: `warning:process-start-identity:${pid}`,
               status: "completed",
@@ -1241,9 +1243,9 @@ async function spawnManagedServiceUpdateHandoff(
             },
             { env: serviceEnv },
           );
-        } catch {
+        }).catch(() => {
           /* Identity warnings must not abort an update. */
-        }
+        });
       }
     },
   });

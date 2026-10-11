@@ -79,7 +79,7 @@ describe("update.run unexpected-error diagnostics", () => {
       throw original;
     });
     const historyRead = vi
-      .spyOn(await import("../../infra/update-run-ledger.js"), "getUpdateRun")
+      .spyOn(await import("../../infra/update-run-reader.js"), "getUpdateRunAsync")
       .mockImplementation(() => {
         throw new Error("history lookup failed");
       });

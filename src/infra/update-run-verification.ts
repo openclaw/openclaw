@@ -23,6 +23,11 @@ export function recordUpdateRunVerificationRecord(
   if (options.onlyIfRunning && record.status !== "running") {
     return;
   }
+  // A skipped observer cannot revoke the durable receipt of a delivered notice.
+  if (record.verification.noticeDelivered === true && verification.noticeDelivered === false) {
+    verification = { ...verification };
+    delete verification.noticeDelivered;
+  }
   record.verification = {
     ...record.verification,
     ...verification,

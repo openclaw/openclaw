@@ -198,7 +198,7 @@ export function isRequiredUpdateRunStep(step: UpdateRunStep & { reason?: string 
 }
 
 type RecoveryDiagnostics = Pick<UpdateRunRecord["verification"], "recovery" | "rollbackOutcome">;
-type UpdateRunDiagnostics = RecoveryDiagnostics &
+export type UpdateRunDiagnostics = RecoveryDiagnostics &
   Partial<Pick<UpdateRunResult, "verification" | "steps">> & {
     failure?: Pick<UpdateRunStep, "step" | "detail" | "failureFacts" | "exitCode">;
   };
@@ -206,7 +206,7 @@ type UpdateRunDiagnosticsInput =
   | UpdateRunDiagnostics
   | ((recorded: Readonly<RecoveryDiagnostics>) => UpdateRunDiagnostics);
 
-function applyUpdateRunDiagnostics(
+export function applyUpdateRunDiagnostics(
   record: UpdateRunRecord,
   diagnostics: UpdateRunDiagnosticsInput,
 ): void {
@@ -300,41 +300,42 @@ export function finishUpdateRun(
   },
   options: UpdateRunLedgerOptions = {},
 ): UpdateRunRecord {
-  return mutateRun(
-    runId,
-    (record) => {
-      if (record.status === "running") {
-        const diagnostics = result.diagnostics;
-        if (diagnostics) {
-          applyUpdateRunDiagnostics(record, diagnostics);
-          if (!diagnostics.verification) {
-            for (const step of (diagnostics.steps ?? []).flatMap(updateRunStepsFromResultStep)) {
-              upsertStep(record, step);
-            }
-          }
-        }
-        record.before = { ...record.before, ...result.before };
-        const failed =
-          record.steps.find((step) => step.status === "failed" && step.failureFacts?.length) ??
-          (result.status === "failed"
-            ? record.steps.find((step) => step.step === record.phase)
-            : undefined);
-        finishUpdateRunRecord(record, result);
-        if (result.status === "failed" || result.status === "rolled-back") {
-          const summary = completeUpdateFailureSummary(record.reason, failed?.failureFacts);
-          record.reason = summary.reason;
-          if (failed) {
-            failed.failureFacts = summary.failureFacts;
-          } else {
-            upsertStep(record, {
-              step: "update",
-              status: "failed",
-              failureFacts: summary.failureFacts,
-            });
-          }
+  return mutateRun(runId, (record) => applyFinishUpdateRun(record, result), options);
+}
+
+export function applyFinishUpdateRun(
+  record: UpdateRunRecord,
+  result: Parameters<typeof finishUpdateRun>[1],
+): void {
+  if (record.status === "running") {
+    const diagnostics = result.diagnostics;
+    if (diagnostics) {
+      applyUpdateRunDiagnostics(record, diagnostics);
+      if (!diagnostics.verification) {
+        for (const step of (diagnostics.steps ?? []).flatMap(updateRunStepsFromResultStep)) {
+          upsertStep(record, step);
         }
       }
-    },
-    options,
-  );
+    }
+    record.before = { ...record.before, ...result.before };
+    const failed =
+      record.steps.find((step) => step.status === "failed" && step.failureFacts?.length) ??
+      (result.status === "failed"
+        ? record.steps.find((step) => step.step === record.phase)
+        : undefined);
+    finishUpdateRunRecord(record, result);
+    if (result.status === "failed" || result.status === "rolled-back") {
+      const summary = completeUpdateFailureSummary(record.reason, failed?.failureFacts);
+      record.reason = summary.reason;
+      if (failed) {
+        failed.failureFacts = summary.failureFacts;
+      } else {
+        upsertStep(record, {
+          step: "update",
+          status: "failed",
+          failureFacts: summary.failureFacts,
+        });
+      }
+    }
+  }
 }

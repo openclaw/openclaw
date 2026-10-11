@@ -148,9 +148,8 @@ export class NodeWorkerPreparedWorkspaceKernel {
         retired_at_ms: null,
       };
       executeSqliteQuerySync(db, query(db).insertInto(TABLE).values(row));
-      const registered = selectRow(db, input.preparationKey)!;
-      nodePreparedWorkspacePublication.stagePostimages(db, [registered]);
-      return registered;
+      nodePreparedWorkspacePublication.stagePostimages(db, [row]);
+      return row;
     });
   }
 

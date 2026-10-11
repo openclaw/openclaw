@@ -196,8 +196,10 @@ async function loadCapturedSessionCostSummariesFromCache(
       incognito: prepared.incognito,
     });
   }
-  const refreshRunning = await isSessionCostUsageRefreshRunning(params.agentId, databasePath);
-  if (staleSessionFiles.length > 0 && (refreshRunning || refreshRequested)) {
+  if (
+    staleSessionFiles.length > 0 &&
+    (refreshRequested || (await isSessionCostUsageRefreshRunning(params.agentId, databasePath)))
+  ) {
     cacheStatus.status = "refreshing";
     for (const summary of summaries) {
       if (summary?.staleSince !== undefined) {
