@@ -56,7 +56,7 @@ async function readGoogleChatErrorResponse(response: Response): Promise<string> 
       chunkTimeoutMs: GOOGLECHAT_RESPONSE_READ_IDLE_TIMEOUT_MS,
       onIdleTimeout: ({ chunkTimeoutMs }) =>
         new Error(`Google Chat API error response stalled after ${chunkTimeoutMs}ms`),
-    })) ?? "";
+    }).catch(formatErrorMessage)) ?? "";
   // Remote API errors can reflect the request's Authorization header. Force
   // tool-payload redaction before the text enters any surfaced error message.
   return redactToolPayloadText(text);

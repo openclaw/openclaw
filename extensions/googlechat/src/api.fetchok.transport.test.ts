@@ -1,9 +1,10 @@
 // Exercise Google Chat requests through a real guarded HTTP transport.
-import { createServer, type Server } from "node:http";
+import { createServer, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
-import { deleteGoogleChatMessage, sendGoogleChatMessage } from "./api.js";
+import { deleteGoogleChatMessage, GoogleChatApiError, sendGoogleChatMessage } from "./api.js";
+import { deliverGoogleChatReply } from "./monitor-reply-delivery.js";
 
 const proofToken = "googlechat-transport-test-token";
 
@@ -13,6 +14,7 @@ const loopback = vi.hoisted(() => ({
   rejectCancellation: false,
   releases: [] as Array<{ bodyIsNull: boolean; bodyUsed: boolean }>,
   signal: undefined as AbortSignal | undefined,
+  onResponse: undefined as ((status: number) => void) | undefined,
 }));
 
 const fetchWithSsrFGuardMock = vi.hoisted(() => vi.fn());
@@ -31,6 +33,7 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
         ...params,
         url: params.url.replace("https://chat.googleapis.com", loopback.baseUrl),
         policy: { allowPrivateNetwork: true },
+        onResponse: loopback.onResponse,
         ...(loopback.signal ? { signal: loopback.signal } : {}),
       });
 
@@ -126,11 +129,114 @@ describe("Google Chat real guarded transport", () => {
     loopback.rejectCancellation = false;
     loopback.releases = [];
     loopback.signal = undefined;
+    loopback.onResponse = undefined;
   });
 
   afterEach(() => {
     vi.restoreAllMocks();
   });
+
+  it.each([404, 401, 403, 429, 503, 200, "before headers"] as const)(
+    "only resends a typing reply after an authoritative 404 (%s)",
+    async (status) => {
+      const { createPluginRuntimeMock } = await import("openclaw/plugin-sdk/channel-test-helpers");
+      const requests: Array<{
+        method: string | undefined;
+        path: string | undefined;
+        body: string;
+      }> = [];
+      const receivedStatuses: number[] = [];
+      let brokenResponse: ServerResponse | undefined;
+      loopback.onResponse = (receivedStatus) => {
+        receivedStatuses.push(receivedStatus);
+        // Break the real body only after the transport has received its status.
+        brokenResponse?.destroy();
+        brokenResponse = undefined;
+      };
+      const server = createServer((request, response) => {
+        let body = "";
+        request.setEncoding("utf8");
+        request.on("data", (chunk: string) => {
+          body += chunk;
+        });
+        request.on("end", () => {
+          requests.push({ method: request.method, path: request.url, body });
+          if (request.method === "PATCH") {
+            if (status === "before headers") {
+              request.socket.destroy();
+              return;
+            }
+            brokenResponse = response;
+            response.writeHead(status, {
+              "Content-Type": "application/json",
+              "Content-Length": "100",
+            });
+            response.write("{}");
+            return;
+          }
+          response.writeHead(200, { "Content-Type": "application/json" });
+          response.end(JSON.stringify({ name: "spaces/AAA/messages/reply" }));
+        });
+      });
+      const statusSink = vi.fn();
+      const runtime = { error: vi.fn() };
+      loopback.baseUrl = await listen(server);
+      try {
+        const delivery = deliverGoogleChatReply({
+          payload: { text: "final reply" },
+          account,
+          spaceId: "spaces/AAA",
+          runtime,
+          core: createPluginRuntimeMock({
+            channel: { text: { chunkMarkdownTextWithMode: (text) => [text] } },
+          }),
+          config: {},
+          statusSink,
+          typingMessage: { placement: "top-level", name: "spaces/AAA/messages/typing" },
+        });
+        const error: unknown = await delivery.catch((cause: unknown) => cause);
+        console.info("GOOGLECHAT_TYPING_RECEIPT", {
+          status,
+          receivedStatuses,
+          requests,
+          outcome: error instanceof Error ? { name: error.name, message: error.message } : "sent",
+          outboundStatusUpdates: statusSink.mock.calls.length,
+        });
+        if (status === 404) {
+          expect(error).toBeUndefined();
+          expect(requests).toEqual([
+            {
+              method: "PATCH",
+              path: "/v1/spaces/AAA/messages/typing?updateMask=text",
+              body: JSON.stringify({ text: "final reply" }),
+            },
+            {
+              method: "POST",
+              path: "/v1/spaces/AAA/messages",
+              body: JSON.stringify({ text: "final reply" }),
+            },
+          ]);
+          expect(receivedStatuses).toEqual([404, 200]);
+          expect(statusSink).toHaveBeenCalledOnce();
+          expect(statusSink).toHaveBeenCalledWith({ lastOutboundAt: expect.any(Number) });
+        } else {
+          expect(error).toBeInstanceOf(Error);
+          if (typeof status === "number" && status !== 200) {
+            expect(error).toBeInstanceOf(GoogleChatApiError);
+            expect(error).toMatchObject({ status });
+          } else {
+            expect(error).not.toBeInstanceOf(GoogleChatApiError);
+          }
+          expect(requests.map(({ method }) => method)).toEqual(["PATCH"]);
+          expect(receivedStatuses).toEqual(status === "before headers" ? [] : [status]);
+          expect(statusSink).not.toHaveBeenCalled();
+        }
+        expect(runtime.error.mock.calls.flat().join("\n")).not.toContain(proofToken);
+      } finally {
+        await closeServer(server);
+      }
+    },
+  );
 
   it("delivers task-list fallback at the default chunk limit through the SDK", async () => {
     const { withOpenClawTestState } = await import("openclaw/plugin-sdk/test-state");

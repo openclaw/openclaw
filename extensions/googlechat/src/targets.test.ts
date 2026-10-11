@@ -2,7 +2,12 @@
 import { createServer } from "node:http";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
-import { downloadGoogleChatMedia, sendGoogleChatMessage, updateGoogleChatMessage } from "./api.js";
+import {
+  downloadGoogleChatMedia,
+  GoogleChatApiError,
+  sendGoogleChatMessage,
+  updateGoogleChatMessage,
+} from "./api.js";
 import {
   registerGoogleChatManualApprovalFollowupSuppression,
   unregisterGoogleChatManualApprovalFollowupSuppression,
@@ -309,13 +314,57 @@ describe("downloadGoogleChatMedia", () => {
 
   it("cancels a stalled media error body", async () => {
     vi.useFakeTimers();
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(createStalledResponse(500)));
+    const cancel = vi.fn();
+    const release = vi.fn(async () => {});
+    mocks.fetchWithSsrFGuard.mockResolvedValueOnce({
+      response: new Response(new ReadableStream({ start() {}, cancel }), { status: 500 }),
+      release,
+    });
 
-    const result = expect(
-      downloadGoogleChatMedia({ account, resourceName: "media/123", maxBytes: 10 }),
-    ).rejects.toThrow("Google Chat API error response stalled after 30000ms");
+    const download = downloadGoogleChatMedia({ account, resourceName: "media/123", maxBytes: 10 });
+    const result = expect(download).rejects.toThrow(
+      "Google Chat API error response stalled after 30000ms",
+    );
     await vi.advanceTimersByTimeAsync(30_001);
     await result;
+    await expect(download).rejects.toBeInstanceOf(GoogleChatApiError);
+    await expect(download).rejects.toMatchObject({ status: 500 });
+    expect(cancel).toHaveBeenCalledOnce();
+    expect(release).toHaveBeenCalledOnce();
+  });
+
+  it("preserves redacted error-body read diagnostics", async () => {
+    const token = "googlechat-error-read-test-token";
+    const release = vi.fn(async () => {});
+    mocks.fetchWithSsrFGuard.mockResolvedValueOnce({
+      response: new Response(
+        new ReadableStream({
+          start(controller) {
+            controller.error(new Error(`body read failed; Authorization: Bearer ${token}`));
+          },
+        }),
+        { status: 500 },
+      ),
+      release,
+    });
+
+    const outcome = await downloadGoogleChatMedia({
+      account,
+      resourceName: "media/123",
+      maxBytes: 10,
+    }).catch((error: unknown) => error);
+    console.log(
+      "GOOGLECHAT_ERROR_READ_RECEIPT",
+      JSON.stringify({
+        error: outcome instanceof Error ? { name: outcome.name, message: outcome.message } : null,
+        released: release.mock.calls.length,
+      }),
+    );
+    expect(outcome).toBeInstanceOf(GoogleChatApiError);
+    expect(outcome).toMatchObject({ status: 500 });
+    expect((outcome as Error).message).toContain("Google Chat API 500: body read failed");
+    expect((outcome as Error).message).not.toContain(token);
+    expect(release).toHaveBeenCalledOnce();
   });
 
   it("bounds chunked endpoint media downloads even when callers omit maxBytes", async () => {
