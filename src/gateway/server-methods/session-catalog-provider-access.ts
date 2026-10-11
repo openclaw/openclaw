@@ -47,6 +47,21 @@ const sessionCatalogListAdmission = new SessionCatalogListAdmission(
   MAX_QUEUED_SESSION_CATALOG_LISTS,
 );
 
+async function registerCatalogListCompletion(
+  completion: Promise<void>,
+  waitUntil: SessionCatalogListProviderParams["waitUntil"],
+): Promise<void> {
+  if (!waitUntil) {
+    return completion;
+  }
+  try {
+    waitUntil(completion);
+  } catch (error) {
+    await completion;
+    throw error;
+  }
+}
+
 async function runSessionCatalogListSteps(
   provider: SessionCatalogProvider,
   createListOperation: NonNullable<SessionCatalogProvider["createListOperation"]>,
@@ -104,11 +119,7 @@ async function runSessionCatalogListSteps(
         // Registered publications retain their plugin until ordinary completion.
         const retained = consumer;
         const released = Promise.allSettled(completions).then(() => retained.release());
-        if (params.waitUntil) {
-          params.waitUntil(released);
-        } else {
-          await released;
-        }
+        await registerCatalogListCompletion(released, params.waitUntil);
       }
     }
   }
