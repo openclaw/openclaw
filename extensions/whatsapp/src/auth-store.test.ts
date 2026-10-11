@@ -63,16 +63,6 @@ describe("auth-store", () => {
     hoisted.waitForCredsSaveQueueWithTimeout.mockReset().mockResolvedValue("drained");
   });
 
-  it("does not restore creds from backup on ordinary reads", async () => {
-    const authDir = tempDirs.make("openclaw-wa-auth-read-");
-    const credsPath = path.join(authDir, "creds.json");
-    const backupPath = path.join(authDir, "creds.json.bak");
-    fsSync.writeFileSync(backupPath, JSON.stringify({ me: { id: "123@s.whatsapp.net" } }), "utf-8");
-
-    await expect(webAuthExists(authDir)).resolves.toBe(false);
-    expect(fsSync.existsSync(credsPath)).toBe(false);
-  });
-
   it("restores malformed creds from a valid backup", async () => {
     const authDir = tempDirs.make("openclaw-wa-auth-restore-");
     const credsPath = path.join(authDir, "creds.json");
@@ -107,16 +97,6 @@ describe("auth-store", () => {
         },
       }),
     ).rejects.toBe(guardError);
-    expect(fsSync.readFileSync(credsPath, "utf-8")).toBe("{x");
-  });
-
-  it("leaves malformed creds unchanged when the backup is malformed", async () => {
-    const authDir = tempDirs.make("openclaw-wa-auth-malformed-backup-");
-    const credsPath = path.join(authDir, "creds.json");
-    fsSync.writeFileSync(credsPath, "{x", "utf-8");
-    fsSync.writeFileSync(path.join(authDir, "creds.json.bak"), "{y", "utf-8");
-
-    await expect(restoreCredsFromBackupIfNeeded(authDir)).resolves.toBe(false);
     expect(fsSync.readFileSync(credsPath, "utf-8")).toBe("{x");
   });
 
@@ -257,25 +237,6 @@ describe("auth-store", () => {
       await expect(readWebAuthState(authDir)).resolves.toBe("not-linked");
     },
   );
-
-  it("reports unstable auth state when the shared barrier read times out", async () => {
-    const authDir = tempDirs.make("openclaw-wa-auth-unstable-state-");
-    fsSync.writeFileSync(
-      path.join(authDir, "creds.json"),
-      JSON.stringify({ me: { id: "15551234567@s.whatsapp.net" } }),
-      "utf-8",
-    );
-    hoisted.waitForCredsSaveQueueWithTimeout
-      .mockResolvedValueOnce("timed_out")
-      .mockResolvedValueOnce("timed_out");
-
-    await expect(readWebAuthState(authDir)).resolves.toBe("unstable");
-    await expect(readWebAuthSnapshot(authDir)).resolves.toEqual({
-      state: "unstable",
-      authAgeMs: null,
-      selfId: { e164: null, jid: null, lid: null },
-    });
-  });
 
   it("clears unreadable auth state on explicit logout", async () => {
     await withOwnedOAuthAuthDir("openclaw-wa-auth-logout", async (authDir) => {

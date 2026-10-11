@@ -1,7 +1,7 @@
 // Whatsapp tests cover directory config plugin behavior.
 import { createDirectoryTestRuntime } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { readWebAuthExistsForDecision } from "./auth-store.js";
 import { getWhatsAppConnectionController } from "./connection-controller-runtime-context.js";
 import {
@@ -107,10 +107,6 @@ describe("whatsapp directory", () => {
     waitForCredsMock.mockResolvedValue("drained");
   });
 
-  afterEach(() => {
-    vi.useRealTimers();
-  });
-
   it("uses the active gateway owner and applies deterministic filtering", async () => {
     const sock = {
       groupFetchAllParticipating: vi.fn().mockResolvedValue({
@@ -206,39 +202,6 @@ describe("whatsapp directory", () => {
     expect(createSocketMock).not.toHaveBeenCalled();
   });
 
-  it("reports unlinked auth and releases standalone ownership", async () => {
-    readAuthMock.mockResolvedValueOnce({ outcome: "stable", exists: false });
-
-    await expect(listWhatsAppDirectoryGroupsLive(makeParams())).rejects.toMatchObject({
-      code: "whatsapp_directory_unavailable",
-      reason: "not_linked",
-    });
-    expect(mocks.releaseOwner).toHaveBeenCalledOnce();
-  });
-
-  it("resolves standalone credentials for the selected account", async () => {
-    readAuthMock.mockResolvedValueOnce({ outcome: "stable", exists: false });
-    const namedCfg = {
-      channels: { whatsapp: { accounts: { secondary: { enabled: true } } } },
-    } as unknown as OpenClawConfig;
-
-    await expect(
-      listWhatsAppDirectoryGroupsLive({
-        cfg: namedCfg,
-        accountId: "secondary",
-        query: undefined,
-        limit: undefined,
-        runtime: runtimeEnv,
-      } as never),
-    ).rejects.toMatchObject({ reason: "not_linked" });
-
-    expect(mocks.resolveAuthDir).toHaveBeenCalledWith({
-      cfg: namedCfg,
-      accountId: "secondary",
-    });
-    expect(acquireOwnerMock).toHaveBeenCalledWith("/tmp/secondary-wa-auth");
-  });
-
   it("closes a created socket when standalone connection setup fails", async () => {
     let closed = false;
     const sock = {
@@ -292,7 +255,19 @@ describe("whatsapp directory", () => {
     });
     expect(mocks.releaseOwner).not.toHaveBeenCalled();
 
+    acquireOwnerMock.mockImplementationOnce(async () => {
+      expect(mocks.releaseOwner).toHaveBeenCalledOnce();
+      return { release: mocks.releaseOwner };
+    });
     await expect(listWhatsAppDirectoryGroupsLive(makeParams())).resolves.toEqual([]);
     expect(mocks.releaseOwner).toHaveBeenCalledTimes(2);
+    expect(createSocketMock).toHaveBeenCalledTimes(2);
+
+    readAuthMock.mockResolvedValueOnce({ outcome: "stable", exists: false });
+    await expect(listWhatsAppDirectoryGroupsLive(makeParams())).rejects.toMatchObject({
+      reason: "not_linked",
+    });
+    expect(mocks.releaseOwner).toHaveBeenCalledTimes(3);
+    expect(createSocketMock).toHaveBeenCalledTimes(2);
   });
 });

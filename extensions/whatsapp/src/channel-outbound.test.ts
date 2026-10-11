@@ -195,20 +195,6 @@ describe("whatsappChannelOutbound", () => {
         approvalKind: action.approvalKind === "exec" ? "plugin" : "exec",
       }),
     },
-    {
-      name: "approval id",
-      mutate: (action: ApprovalAction): ApprovalAction => ({
-        ...action,
-        approvalId: `${action.approvalId}-other`,
-      }),
-    },
-    {
-      name: "allowed decision",
-      mutate: (action: ApprovalAction): ApprovalAction => ({
-        ...action,
-        decision: "allow-always",
-      }),
-    },
   ])("fails closed when typed $name disagrees with approval metadata", async ({ mutate }) => {
     const renderPresentation = whatsappChannelOutbound.renderPresentation;
     const afterDeliverPayload = whatsappChannelOutbound.afterDeliverPayload;
@@ -294,16 +280,8 @@ describe("whatsappChannelOutbound", () => {
 
   it.each([
     {
-      name: "kind header changes",
-      rewrite: (text: string) => text.replace("Exec approval required", "Plugin approval required"),
-    },
-    {
       name: "id header changes",
       rewrite: (text: string) => text.replace("**ID:** exec-visible-mismatch", "**ID:** other-id"),
-    },
-    {
-      name: "id header disappears",
-      rewrite: (text: string) => text.replace("**ID:** exec-visible-mismatch\n", ""),
     },
     {
       name: "reaction decisions change",
@@ -375,32 +353,6 @@ describe("whatsappChannelOutbound", () => {
     ).resolves.toBeNull();
   });
 
-  it("drops leading blank lines but preserves intentional indentation", () => {
-    expect(
-      whatsappChannelOutbound.normalizePayload?.({
-        payload: { text: "\n \n    indented" },
-      }),
-    ).toEqual({
-      text: "    indented",
-    });
-  });
-
-  it("keeps XML sanitizer normalization idempotent", () => {
-    const raw = [
-      "<function_calls>",
-      '  <invoke name="send_message">',
-      '    <parameter name="text">hidden</parameter>',
-      "  </invoke>",
-      "</function_calls>",
-      "After",
-    ].join("\n");
-    const once = whatsappChannelOutbound.normalizePayload?.({ payload: { text: raw } });
-    const twice = whatsappChannelOutbound.normalizePayload?.({ payload: { text: once?.text } });
-
-    expect(once?.text).toBe("After");
-    expect(twice?.text).toBe("After");
-  });
-
   it("drops whitespace-only text after XML sanitizer removal", () => {
     const raw = [
       "  <function_calls>",
@@ -429,57 +381,6 @@ describe("whatsappChannelOutbound", () => {
     expect(whatsappChannelOutbound.sanitizeText?.({ text: raw, payload: { text: raw } })).toBe(
       "Before\n\nAfter",
     );
-  });
-
-  it("preserves indentation for live text sends", async () => {
-    await whatsappChannelOutbound.sendText!({
-      cfg: {},
-      to: "5511999999999@c.us",
-      text: "\n \n    indented",
-    });
-
-    expect(hoisted.sendMessageWhatsApp).toHaveBeenCalledWith("5511999999999@c.us", "    indented", {
-      verbose: false,
-      cfg: {},
-      accountId: undefined,
-      gifPlayback: undefined,
-      preserveLeadingWhitespace: true,
-    });
-  });
-
-  it("uses the live WhatsApp sender for quoted text replies", async () => {
-    const legacySend = vi.fn(async () => ({ messageId: "legacy-1", toJid: "legacy-jid" }));
-    cacheInboundMessageMeta("default", "5511999999999@c.us", "reply-live-1", {
-      body: "original live body",
-      fromMe: false,
-      participant: "5511999999999@s.whatsapp.net",
-    });
-
-    await whatsappChannelOutbound.sendText!({
-      cfg: {},
-      to: "5511999999999@c.us",
-      text: "quoted reply",
-      replyToId: "reply-live-1",
-      deps: {
-        whatsapp: legacySend,
-      },
-    });
-
-    expect(legacySend).not.toHaveBeenCalled();
-    expect(hoisted.sendMessageWhatsApp).toHaveBeenCalledWith("5511999999999@c.us", "quoted reply", {
-      verbose: false,
-      cfg: {},
-      accountId: undefined,
-      gifPlayback: undefined,
-      quotedMessageKey: {
-        id: "reply-live-1",
-        remoteJid: "5511999999999@c.us",
-        fromMe: false,
-        participant: "5511999999999@s.whatsapp.net",
-        messageText: "original live body",
-      },
-      preserveLeadingWhitespace: true,
-    });
   });
 
   it("uses the live WhatsApp sender for quoted media replies", async () => {

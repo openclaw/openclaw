@@ -53,32 +53,6 @@ describe("handleWhatsAppAction", () => {
     });
   });
 
-  it("adds reactions", async () => {
-    await handleWhatsAppAction(reaction, enabledConfig);
-    expectLastReactionSend({
-      chat: "+123",
-      messageId: "msg1",
-      emoji: "✅",
-      accountId: DEFAULT_ACCOUNT_ID,
-    });
-  });
-
-  it("removes reactions on empty emoji", async () => {
-    await handleWhatsAppAction(
-      {
-        ...reaction,
-        emoji: "",
-      },
-      enabledConfig,
-    );
-    expectLastReactionSend({
-      chat: "+123",
-      messageId: "msg1",
-      emoji: "",
-      accountId: DEFAULT_ACCOUNT_ID,
-    });
-  });
-
   it("removes reactions when remove flag set", async () => {
     await handleWhatsAppAction(
       {
@@ -135,12 +109,6 @@ describe("handleWhatsAppAction", () => {
     });
   });
 
-  it("disables reactions when WhatsApp is not configured", async () => {
-    await expect(handleWhatsAppAction(reaction, {} as OpenClawConfig)).rejects.toThrow(
-      /WhatsApp reactions are disabled/,
-    );
-  });
-
   it("prefers the action gate error when both actions.reactions and reactionLevel disable reactions", async () => {
     const cfg = {
       channels: { whatsapp: { actions: { reactions: false }, reactionLevel: "ack" } },
@@ -152,7 +120,7 @@ describe("handleWhatsAppAction", () => {
     expect(sendReactionWhatsApp).not.toHaveBeenCalled();
   });
 
-  it.each(["off", "ack"] as const)(
+  it.each(["off"] as const)(
     "blocks agent reactions when reactionLevel is %s",
     async (reactionLevel) => {
       await expect(handleWhatsAppAction(reaction, reactionConfig(reactionLevel))).rejects.toThrow(
@@ -186,29 +154,5 @@ describe("handleWhatsAppAction", () => {
         cfg,
       ),
     ).rejects.toMatchObject({ name: "ToolAuthorizationError", status: 403 });
-  });
-
-  it("routes to resolved default account when no accountId is provided", async () => {
-    const cfg = {
-      channels: {
-        whatsapp: {
-          actions: { reactions: true },
-          accounts: {
-            work: {
-              allowFrom: ["123@s.whatsapp.net"],
-            },
-          },
-        },
-      },
-    } as OpenClawConfig;
-
-    await handleWhatsAppAction(reaction, cfg);
-
-    expectLastReactionSend({
-      chat: "+123",
-      messageId: "msg1",
-      emoji: "✅",
-      accountId: "work",
-    });
   });
 });

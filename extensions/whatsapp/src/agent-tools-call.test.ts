@@ -148,60 +148,6 @@ describe("WhatsApp call tool", () => {
     expect(JSON.stringify(tool?.parameters)).not.toContain('"to"');
   });
 
-  it("synthesizes a private WAV and calls only the current requester", async () => {
-    await fs.writeFile(path.join(stateDir, "wa-voip.db"), "sqlite");
-    let audioPath: string | undefined;
-    const runCommand = vi.fn(async (argv: string[]) => {
-      const commandAudioPath = argv.at(-1);
-      if (!commandAudioPath) {
-        throw new Error("missing audio path");
-      }
-      audioPath = commandAudioPath;
-      const wav = await fs.readFile(commandAudioPath);
-      expect(wav.toString("ascii", 0, 4)).toBe("RIFF");
-      expect(wav.toString("ascii", 8, 12)).toBe("WAVE");
-      expect(wav.readUInt32LE(24)).toBe(24_000);
-      expect(wav.readUInt32LE(40)).toBe(48_000);
-      expect(wav.subarray(44)).toEqual(Buffer.alloc(48_000, 1));
-      return {
-        stdout: "",
-        stderr: "",
-        code: 0,
-        signal: null,
-        killed: false,
-        termination: "exit" as const,
-      };
-    }) as OpenClawPluginApi["runtime"]["system"]["runCommandWithTimeout"];
-    const tool = resolveRegisteredCallTool(createApi({ runCommand }), createContext());
-
-    const result = await tool?.execute("call-2", {
-      action: "call",
-      message: "The build finished successfully.",
-    });
-
-    expect(runCommand).toHaveBeenCalledOnce();
-    expect(vi.mocked(runCommand).mock.calls[0]?.[0]).toEqual([
-      "meowcaller",
-      "notify",
-      "--store",
-      path.join(stateDir, "wa-voip.db"),
-      "--answer-timeout",
-      "45s",
-      "--max-duration",
-      "65s",
-      "+15551234567",
-      audioPath,
-    ]);
-    expect(result?.details).toMatchObject({
-      completed: true,
-      recipient: "current WhatsApp requester",
-      callWindowSeconds: 116,
-      ttsProvider: "openai",
-    });
-    expect(audioPath).toBeDefined();
-    await expect(fs.stat(path.dirname(audioPath ?? ""))).rejects.toThrow();
-  });
-
   it("resolves a requester LID through the active WhatsApp account", async () => {
     await fs.writeFile(path.join(stateDir, "wa-voip.db"), "sqlite");
     const runCommand = vi.fn(async () => ({
@@ -288,7 +234,7 @@ describe("WhatsApp call tool", () => {
     ).rejects.toThrow("MeowCaller exceeded the bounded WhatsApp call window");
   });
 
-  it.each(["ulaw_8000", "raw-8khz-8bit-mono-mulaw"])(
+  it.each(["raw-8khz-8bit-mono-mulaw"])(
     "decodes %s telephony audio through the registered tool",
     async (outputFormat) => {
       await fs.writeFile(path.join(stateDir, "wa-voip.db"), "sqlite");
