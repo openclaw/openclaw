@@ -467,8 +467,9 @@ export function buildChatItems(
       if (
         notice.permissionMissing &&
         recordedPermissions.has(JSON.stringify(notice.permissionMissing))
-      )
+      ) {
         continue;
+      }
       projections.push({
         item: buildGuardianNoticeItem(notice),
         bounds: resolveProjectionBounds(notice.runId),

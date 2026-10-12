@@ -405,7 +405,9 @@ function handleNoticeEvent(host: ToolStreamHost, payload: AgentEventPayload): bo
   };
   if (systemNotice && data.kind === "permission_missing") {
     const request = readNodePermissionRequest(data.permissionMissing);
-    if (!request) return true;
+    if (!request) {
+      return true;
+    }
     notice.permissionMissing = request;
   }
   if (systemNotice) {

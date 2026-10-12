@@ -45,9 +45,13 @@ export function ChatPermissionCard(props: {
       if (id === "canvas") {
         return snapshot?.capabilities?.canvasEnabled !== true;
       }
-      if (id === "camera" && snapshot?.capabilities?.cameraEnabled === false) return true;
-      if (id === "location" && snapshot?.permissions.location?.mode === "off") return true;
-      const entry = snapshot?.permissions.entries.find((entry) => entry.id === id);
+      if (id === "camera" && snapshot?.capabilities?.cameraEnabled === false) {
+        return true;
+      }
+      if (id === "location" && snapshot?.permissions.location?.mode === "off") {
+        return true;
+      }
+      const entry = snapshot?.permissions.entries.find((candidate) => candidate.id === id);
       return entry?.status !== "granted" || Boolean(entry.state);
     });
   });
@@ -65,7 +69,7 @@ export function ChatPermissionCard(props: {
       }
       const entries =
         snapshot?.permissions.entries.filter((entry) => remaining().includes(entry.id)) ?? [];
-      for (const state of [
+      for (const candidateState of [
         "stale-grant",
         "restart-required",
         "denied",
@@ -74,18 +78,21 @@ export function ChatPermissionCard(props: {
         if (
           entries.some(
             (entry) =>
-              entry.state === state ||
-              (state === "denied" && entry.status === "denied") ||
-              (state === "not-determined" && entry.status === "notDetermined"),
+              entry.state === candidateState ||
+              (candidateState === "denied" && entry.status === "denied") ||
+              (candidateState === "not-determined" && entry.status === "notDetermined"),
           )
-        )
-          return state;
+        ) {
+          return candidateState;
+        }
       }
     }
     return props.request.state;
   };
   const grant = async () => {
-    if (!local() || busy()) return;
+    if (!local() || busy()) {
+      return;
+    }
     setBusy(true);
     setError("");
     try {
