@@ -10,7 +10,6 @@ import {
   unlinkSync,
 } from "node:fs";
 import nodePath from "node:path";
-import { loadSqliteVecExtension } from "../../packages/memory-host-sdk/src/host/sqlite-vec.js";
 import { requireDirectorySync, syncDirectorySync } from "../infra/directory-durability.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { sameFileMutationFingerprint } from "../infra/file-descriptor.js";
@@ -179,11 +178,9 @@ export async function backupDoctorMigrationDatabases(params: {
         }
         const snapshot = openNodeSqliteDatabase(resolveImmutableSqliteFileUri(targetPath), {
           readOnly: true,
-          allowExtension: true,
         });
         try {
           snapshot.exec("PRAGMA trusted_schema = OFF;");
-          await loadSqliteVecExtension({ db: snapshot });
           assertCapture();
           assertSqliteIntegrity(snapshot, targetPath);
         } finally {
