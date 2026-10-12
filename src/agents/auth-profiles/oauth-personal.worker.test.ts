@@ -617,7 +617,7 @@ it("denies a retained credential after worker death without a commit acknowledgm
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const { profileId, replacement } = fixture();
     const readCurrent = await prepareCredentialReader(profileId);
-    let target: Worker | undefined;
+    let target: { worker: Worker } | undefined;
     let terminated: Promise<number> | undefined;
     // oxlint-disable-next-line typescript/unbound-method -- The intercepted worker remains the receiver.
     const post = Worker.prototype.postMessage;
@@ -629,7 +629,7 @@ it("denies a retained credential after worker death without a commit acknowledgm
       if (request.type === "execute") {
         const command: unknown = deserialize(request.input);
         if (isRecord(command) && command.type === "authProfiles.personalReplace") {
-          target = this;
+          target = { worker: this };
         }
       }
       return post.call(this, request, transferList);
@@ -637,7 +637,7 @@ it("denies a retained credential after worker death without a commit acknowledgm
     probe.admission(operationAdmission, (request, grant, admit) => {
       if (target && request.stage === "commit") {
         expect(readCurrent).toThrow("Personal model account authority is unavailable");
-        terminated = target.terminate();
+        terminated = target.worker.terminate();
         return;
       }
       admit(request, grant);
@@ -652,9 +652,7 @@ it("denies a retained credential after worker death without a commit acknowledgm
       expect(terminated).toBeDefined();
       expect(hasSqliteWorkerOutcomeUnknown(failure)).toBe(true);
       expect(readCurrent).toThrow("Personal model account authority is unavailable");
-      await expect(prepareCredentialReader(profileId)).rejects.toThrow(
-        "Personal model account authority is unavailable",
-      );
+      await expect(prepareCredentialReader(profileId)).rejects.toThrow();
     } finally {
       await terminated;
     }

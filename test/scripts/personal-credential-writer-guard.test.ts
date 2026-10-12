@@ -7,6 +7,8 @@ const owner = `
   export function connectUserModelAccount() {}
   export function renameUserProfileAuthLinks() {}
   export function mergeUserModelAccounts() {}
+  export function setUserProfileAuthLink() {}
+  export function clearUserProfileAuthLink() {}
 `;
 function inspect(extra: Record<string, string>, source = owner) {
   return inspectDatabaseWorkerBoundaries(
@@ -33,7 +35,22 @@ it("allows the exact credential worker operations and exclusive Doctor entry", (
     `,
       "src/commands/doctor-auth-flat-profiles.ts": `
       import { renameUserProfileAuthLinks } from '../state/user-model-accounts.js';
-      export function maybeRepairLegacyAuthProfileStores() { renameUserProfileAuthLinks(); }
+      export function maybeRepairLegacyAuthProfileStores() {
+        const migrate = () => renameUserProfileAuthLinks();
+        migrate();
+      }
+    `,
+      "src/gateway/model-account-connect.ts": `
+      import * as nativeAccounts from '../state/user-model-accounts.js';
+      export function createModelAccountConnectService() {
+        const setLinkNative = () => nativeAccounts.setUserProfileAuthLink();
+        return {
+          /** @deprecated Await linkAsync. */
+          link() { setLinkNative(); },
+          /** @deprecated Await unlinkAsync. */
+          unlink() { nativeAccounts.clearUserProfileAuthLink(); },
+        };
+      }
     `,
     }),
   ).toEqual([]);
@@ -66,6 +83,7 @@ it.each([
   ],
   ["dynamic import", "const writers = await import('./state/user-model-accounts.js');"],
   ["wildcard export", "export * from './state/user-model-accounts.js';"],
+  ["namespace export", "export * as accounts from './state/user-model-accounts.js';"],
 ])("rejects an unowned %s", (_name, consumer) => {
   expect(inspect({ "src/consumer.ts": consumer })).toEqual(
     expect.arrayContaining([
@@ -83,7 +101,10 @@ it("does not mistake worker naming or a sibling Doctor function for an approved 
     `,
       "src/commands/doctor-auth-flat-profiles.ts": `
       import { renameUserProfileAuthLinks } from '../state/user-model-accounts.js';
-      export function newRepair() { renameUserProfileAuthLinks(); }
+      export function newRepair() {
+        const migrate = () => renameUserProfileAuthLinks();
+        migrate();
+      }
     `,
     }),
   ).toHaveLength(2);
@@ -127,6 +148,19 @@ it("ignores type references and same-named unrelated functions", () => {
       function run(updateUserModelAuthProfile: () => void) { updateUserModelAuthProfile(); }
     `,
     }),
+  ).toEqual([]);
+});
+
+it("permits a named reader re-export without exposing its sibling writers", () => {
+  expect(
+    inspect(
+      {
+        "src/consumer.ts": `
+        export { listUserProfileAuthLinksAsync } from './state/user-model-accounts.js';
+      `,
+      },
+      `${owner}\nexport function listUserProfileAuthLinksAsync() {}`,
+    ),
   ).toEqual([]);
 });
 

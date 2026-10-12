@@ -57,11 +57,17 @@ const callers = new Map<string, readonly string[]>([
   // Released SDK selection writes preserve credentials and session pins.
   [
     key(accounts, "setUserProfileAuthLink"),
-    [key(profileWorker, "userProfiles.modelAccount.link"), key(selectionSdk, "setLinkNative")],
+    [
+      key(profileWorker, "userProfiles.modelAccount.link"),
+      key(selectionSdk, "createModelAccountConnectService/setLinkNative"),
+    ],
   ],
   [
     key(accounts, "clearUserProfileAuthLink"),
-    [key(profileWorker, "userProfiles.modelAccount.unlink"), key(selectionSdk, "unlink")],
+    [
+      key(profileWorker, "userProfiles.modelAccount.unlink"),
+      key(selectionSdk, "createModelAccountConnectService/unlink"),
+    ],
   ],
 ]);
 
@@ -69,7 +75,12 @@ const callers = new Map<string, readonly string[]>([
 const exclusiveMaintenanceCallers = new Map([
   [
     key(accounts, "renameUserProfileAuthLinks"),
-    [key("src/commands/doctor-auth-flat-profiles.ts", "maybeRepairLegacyAuthProfileStores")],
+    [
+      key(
+        "src/commands/doctor-auth-flat-profiles.ts",
+        "maybeRepairLegacyAuthProfileStores/migrate",
+      ),
+    ],
   ],
 ]);
 
@@ -113,23 +124,24 @@ const sinks = new Map<string, number>([
 ]);
 
 function operation(node: ts.Node): string {
+  const scope: string[] = [];
   let property: string | undefined;
   for (let parent: ts.Node | undefined = node.parent; parent; parent = parent.parent) {
     if ((ts.isFunctionDeclaration(parent) || ts.isMethodDeclaration(parent)) && parent.name) {
-      return parent.name.getText().replace(/^["']|["']$/g, "");
+      scope.push(parent.name.getText().replace(/^["']|["']$/g, ""));
     }
     if (
       ts.isVariableDeclaration(parent) &&
       parent.initializer &&
       (ts.isArrowFunction(parent.initializer) || ts.isFunctionExpression(parent.initializer))
     ) {
-      return parent.name.getText();
+      scope.push(parent.name.getText());
     }
     if (ts.isPropertyAssignment(parent) && ts.isStringLiteral(parent.name)) {
       property ??= parent.name.text;
     }
   }
-  return property ?? "<module>";
+  return scope.length ? scope.toReversed().join("/") : (property ?? "<module>");
 }
 
 /** Extend the existing worker-ratchet semantic snapshot; no second compiler or runtime guard. */
@@ -247,7 +259,9 @@ export function inspectPersonalCredentialWriters(
       if (
         (ts.isIdentifier(node) || ts.isStringLiteral(node)) &&
         (names.has(node.text) ||
-          (ts.isExportDeclaration(node.parent) && node.parent.moduleSpecifier === node) ||
+          (ts.isExportDeclaration(node.parent) &&
+            node.parent.moduleSpecifier === node &&
+            (!node.parent.exportClause || ts.isNamespaceExport(node.parent.exportClause))) ||
           (ts.isCallExpression(node.parent) &&
             node.parent.expression.kind === ts.SyntaxKind.ImportKeyword)) &&
         !(ts.isFunctionDeclaration(node.parent) && node.parent.name === node) &&

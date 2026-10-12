@@ -28,7 +28,7 @@ import type {
 export type PersonalAuthProfileStore = {
   databasePath: string;
   read(): Promise<AuthProfileStore>;
-  readCurrentCredential(): AuthProfileCredential | undefined;
+  readCurrentCredential(this: void): AuthProfileCredential | undefined;
   update(
     updater: (store: AuthProfileStore) => boolean,
     assertCurrent?: () => void,
@@ -62,7 +62,6 @@ export function withPersonalAuthProfileStore<T>(
     runOpenClawStateWorkerOperation(
       context,
       async (scope) => {
-        const authority = await capturePersonalCredentialAuthority(context, profileId);
         const work = new AsyncWorkScope();
         const asStore = (profile: UserModelAuthProfile | undefined): AuthProfileStore => {
           if (profile) {
@@ -75,17 +74,22 @@ export function withPersonalAuthProfileStore<T>(
           };
         };
         const readProfile = async () => {
+          const authority = await capturePersonalCredentialAuthority(context, profileId);
           const profile = await scope.execute({
             type: "authProfiles.personal",
             input: { profileId, artifactPreserving: false },
           });
           assertCurrent();
           authority.observe(profile?.credential);
+          // Recovery can prepare a replacement without reviving previously retained readers.
+          owner.readCurrentCredential = authority.readCurrentCredential;
           return profile;
         };
         const owner: PersonalAuthProfileStore = {
           databasePath: context.admission.databasePath,
-          readCurrentCredential: authority.readCurrentCredential,
+          readCurrentCredential() {
+            throw new Error("Personal model account credential has not been prepared");
+          },
           read: async () => asStore(await readProfile()),
           async update(updater, assertUpdateCurrent) {
             const expected = await readProfile();

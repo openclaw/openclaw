@@ -64,7 +64,7 @@ personalCredentialPublication.subscribeFacts((change) => {
   } else if (change.kind === "unknown") {
     owner.uncertain = true;
     owner.cells.clear();
-  } else {
+  } else if (change.kind === "committed") {
     for (const [id, fact] of change.receipt.facts) {
       const cell = owner.cells.get(id);
       if (fact.kind !== "postimage") {
@@ -130,7 +130,7 @@ export async function capturePersonalCredentialAuthority(
       // A committed postimage wins over a read dispatched before that mutation.
       retained.credential ??= credential && structuredClone(credential);
     },
-    readCurrentCredential() {
+    readCurrentCredential(this: void) {
       assertCurrent();
       return retained.credential && structuredClone(retained.credential);
     },
