@@ -47,6 +47,10 @@ when personas must not share compiled wiki knowledge.
 
 ## Paths
 
+Workspace examples using `~` also work on native Windows: OpenClaw expands the
+home directory itself. See [Workspace paths](/gateway/config-agents/workspace-and-bootstrap#workspace-paths)
+for Windows path syntax, home-directory overrides, and WSL behavior.
+
 | What                             | Default                                                                                | Override                                                                                    |
 | -------------------------------- | -------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
 | Config                           | `~/.openclaw/openclaw.json`                                                            | `OPENCLAW_CONFIG_PATH`                                                                      |
