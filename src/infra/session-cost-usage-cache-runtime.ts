@@ -378,7 +378,7 @@ async function runQueuedUsageCostRefresh(
       retryDelayMs = 0;
       let partialBatch = false;
       try {
-        while (state.fullRefreshRequested || state.pendingSessionFiles.size > 0) {
+        if (state.fullRefreshRequested || state.pendingSessionFiles.size > 0) {
           const fullRefreshRequested = state.fullRefreshRequested;
           partialBatch = !fullRefreshRequested;
           const sessionFiles: string[] = [];
@@ -434,7 +434,7 @@ async function runQueuedUsageCostRefresh(
             retryDelayMs = busyRetryDelayMs;
             // Contention among many per-agent refreshes must degrade to polling, not a 20Hz spin.
             busyRetryDelayMs = Math.min(busyRetryDelayMs * 2, USAGE_COST_REFRESH_RETRY_MAX_MS);
-            break;
+            continue;
           }
           for (const row of rebuildRows) {
             if (!remainingRollupIds.has(row.key) && state.pendingRebuildRows.get(row.key) === row) {

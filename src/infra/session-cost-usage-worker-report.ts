@@ -55,9 +55,14 @@ export async function readUsageCostReportEntry(params: {
     (!Number.isFinite(endMs) || (endMs + 1) % USAGE_COST_QUARTER_MS === 0);
   if (params.overview && aligned && !envelope.projection.canonicalNumbers) {
     const selected = await params.partitions(row.key, startMs, endMs);
+    const startMonth = Number.isFinite(startMs)
+      ? `${new Date(startMs).toISOString().slice(0, 7)}-01`
+      : "";
+    const endMonth = Number.isFinite(endMs)
+      ? `${new Date(endMs).toISOString().slice(0, 7)}-01`
+      : "\uffff";
     const expected = envelope.projection.dates.filter((date) => {
-      const time = Date.parse(date);
-      return time + 86_400_000 > startMs && time <= endMs;
+      return date >= startMonth && date <= endMonth;
     });
     if (selected.length !== expected.length) {
       return undefined;
@@ -69,7 +74,11 @@ export async function readUsageCostReportEntry(params: {
       if (!day) {
         return undefined;
       }
-      Object.assign(rollup.buckets, day.buckets);
+      for (const [key, bucket] of Object.entries(day.buckets)) {
+        if (bucket.timestampMs >= startMs && bucket.timestampMs <= endMs) {
+          rollup.buckets[key] = bucket;
+        }
+      }
     }
     const formatDay = createUsageDayKeyFormatter(params.dayBucket);
     if (

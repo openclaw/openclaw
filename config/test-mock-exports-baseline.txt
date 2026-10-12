@@ -2662,7 +2662,6 @@
 ["src/agents/github-exec-credential.test.ts","../infra/fs-safe.js","bcfb51e37441acf62947896190d4909a3f21241677a7889a5e3f74cc3e9d91d3",1]
 ["src/agents/github-managed-credential.test.ts","../process/exec.js","e424257697d39948773efe0a3942dc6e89d6295a5c6386c873c5f976eb58cf1d",1]
 ["src/agents/github-managed-credential.test.ts","./github-oauth-records.js","2060d6185d957d63eb53c07be98310814907d2878b0f5a5d219422ce5c8b11ed",1]
-["src/agents/github-oauth-records.test.ts","../secrets/store/secret-store.js","2109ec8c69328b3897718dddf8b241b1618d9bb9bc0d2a832da858b6084526f7",1]
 ["src/agents/github-read-identity.test.ts","../process/exec.js","87bbccb42d2149907918424b8f2779380f5c017162a4a95b7fa0858f85673e6d",1]
 ["src/agents/github-tool-identity.test.ts","../process/exec.js","6f01d6e791341bf8ff8d627d9841bb705010dbd9bac3174444a12281cb25cad3",1]
 ["src/agents/github-tool-identity.test.ts","./github-oauth-records.js","1c9bc36bb2ae3c818b6c0af21f8cbc0e7b1cea68f0b09dc2bcfd3cf455ea9f04",1]

@@ -335,7 +335,6 @@ src/commands/doctor/repair-sequencing.test.ts
 src/commands/doctor/shared/legacy-config-migrate.test.ts
 src/commands/doctor/shared/legacy-config-migrations.runtime.agents.ts
 src/commands/doctor/shared/missing-configured-plugin-install.test.ts
-src/commands/gateway-status.test.ts
 src/commands/models/auth.test.ts
 src/commands/models/auth.ts
 src/commands/models/list.probe.ts

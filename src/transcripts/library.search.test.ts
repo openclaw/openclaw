@@ -10,6 +10,7 @@ import {
   createTranscriptLibraryStoreFixture,
   transcriptLibrarySession as session,
 } from "./library.store.test-support.js";
+import { deriveMeetingTranscriptSummaryColumns } from "./store-columns.js";
 import { meetingTranscriptDb } from "./store-sqlite.js";
 import { transcriptSessionSelector } from "./store.js";
 import { summarizeTranscripts } from "./summary.js";
@@ -92,7 +93,11 @@ describe("transcript library search", () => {
     ).toEqual([transcriptSessionSelector(target)]);
     executeSqliteQuerySync(
       db,
-      summary.set({ markdown: "# Earlier notes\nCanonical decision", summary_json: null }),
+      summary.set({
+        markdown: "# Earlier notes\nCanonical decision",
+        summary_json: null,
+        ...deriveMeetingTranscriptSummaryColumns(null),
+      }),
     );
     expect(
       (await listTranscriptLibrary(store, { query: "CANONICAL DECISION" })).sessions.map(

@@ -1,3 +1,4 @@
+import { AsyncResource } from "node:async_hooks";
 import fs from "node:fs/promises";
 import { expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
@@ -165,8 +166,13 @@ it("validates context projection inside a transcript lock and append preparation
   });
 });
 
-it("keeps a fenced projection valid after a later append", async () => {
-  await withOpenClawTestState({ label: "projection-later-append" }, async (state) => {
+it.each([
+  ["projection", "append"],
+  ["projection", "remove"],
+  ["full context", "append"],
+  ["full context", "remove"],
+] as const)("validates a fenced %s after an owned %s", async (route, change) => {
+  await withOpenClawTestState({ label: `context-${change}` }, async (state) => {
     const target = {
       agentId: "main",
       sessionId: "projection-admission",
@@ -185,21 +191,41 @@ it("keeps a fenced projection valid after a later append", async () => {
     if (!anchor) {
       throw new Error("Missing current-input anchor");
     }
+    const mutate = AsyncResource.bind(async () => {
+      if (change === "remove") {
+        expect(await manager.removeTrailingEntriesAsync((entry) => entry.id === current)).toBe(1);
+      } else {
+        await manager.appendMessageAsync({ role: "user", content: "later", timestamp: 3 });
+      }
+    });
     const projection = runWithSessionTranscriptReadFence(
       { ...anchor, role: "user", logicalTurnId: "projection-turn" },
       () =>
-        readSessionTranscriptContextProjectionAsync(target, async (source) => {
-          const snapshot = await contextWorker.readSessionTranscriptContextMessagesInWorker(
-            source.target,
-            source.admission,
-            undefined,
-            source.physicalSource?.expectedIdentity,
-          );
-          await manager.appendMessageAsync({ role: "user", content: "later", timestamp: 3 });
-          return { value: snapshot.messages, version: snapshot.version };
-        }),
+        route === "projection"
+          ? readSessionTranscriptContextProjectionAsync(target, async (source) => {
+              const snapshot = await contextWorker.readSessionTranscriptContextMessagesInWorker(
+                source.target,
+                source.admission,
+                undefined,
+                source.physicalSource?.expectedIdentity,
+              );
+              await mutate();
+              return { value: snapshot.messages, version: snapshot.version };
+            })
+          : SessionManager.readSessionContextAsync(target, async (messages) => {
+              const selected = [...messages];
+              await mutate();
+              return selected;
+            }),
     );
-    await expect(projection).resolves.toMatchObject([{ role: "user", content: "earlier" }]);
+    if (change === "remove") {
+      await expect(projection).rejects.toMatchObject({
+        name: "SessionTranscriptReadFenceError",
+        message: "Current-turn transcript admission changed",
+      });
+    } else {
+      await expect(projection).resolves.toMatchObject([{ role: "user", content: "earlier" }]);
+    }
   });
 });
 
