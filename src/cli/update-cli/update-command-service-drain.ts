@@ -147,6 +147,19 @@ export async function withGatewayMaintenanceDrain<T>(
     observationFailure = { error };
   }
   assertResidentCurrent();
+  // A verified stopped service with a free listener has no resident to drain.
+  if (
+    !params.state.running &&
+    params.state.runtime?.status === "stopped" &&
+    observationFailure &&
+    connection?.target
+  ) {
+    const usage = await inspectPortUsage(connection.port, { probeHosts: ["127.0.0.1"] });
+    assertResidentCurrent();
+    if (usage.status === "free") {
+      return await finish();
+    }
+  }
   // A resident whose installation was replaced underneath it refuses every
   // connection; it can neither report readiness nor accept new work, so
   // draining it is pointless and would only burn the deadline.
