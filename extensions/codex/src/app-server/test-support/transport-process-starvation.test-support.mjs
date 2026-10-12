@@ -65,9 +65,9 @@ fixtureFs.openSync = (file, ...args) => fixtureOpen(fixtureFiles.get(file) ?? fi
   Object.defineProperty(process, "platform", { value: "linux", configurable: true });
   syncBuiltinESMExports();
 }
-const own = (await readCodexAppServerProcessSnapshot(Date.now() + 10_000, [process.pid])).find(
-  (row) => row.pid === process.pid,
-);
+const own = (
+  await readCodexAppServerProcessSnapshot(performance.now() + 10_000, [process.pid])
+).find((row) => row.pid === process.pid);
 if (!own) {
   throw new Error("The observer identity is unavailable.");
 }
@@ -92,7 +92,7 @@ try {
   readFileSync(`/proc/${process.pid}/stat`);
   const directReadMs = performance.now() - directStart;
   const started = performance.now();
-  const deadline = Date.now() + 10_000;
+  const deadline = performance.now() + 10_000;
   let eventLoopDelayMs;
   const responsive = new Promise((resolve) => {
     setTimeout(() => {

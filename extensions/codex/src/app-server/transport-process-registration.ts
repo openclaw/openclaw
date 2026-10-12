@@ -90,9 +90,9 @@ async function sweepRegisteredCodexAppServerOrphans(
 ): Promise<void> {
   // Loading durable registrations can include cold database-worker startup.
   const entries = await store.entries();
-  const deadline = Date.now() + PROCESS_REGISTRATION_INSPECTION_MS;
+  const deadline = performance.now() + PROCESS_REGISTRATION_INSPECTION_MS;
   for (const entry of entries) {
-    if (Date.now() >= deadline) {
+    if (performance.now() >= deadline) {
       throw new Error("Codex orphan cleanup exceeded its startup budget. Retry to finish cleanup.");
     }
     const registration = registrationSchema.parse(entry.value);
@@ -183,7 +183,7 @@ export async function prepareCodexAppServerProcessRegistration(): Promise<
     if (!child.pid) {
       throw new ProcessInspectionError("unavailable");
     }
-    const deadline = Date.now() + PROCESS_REGISTRATION_INSPECTION_MS;
+    const deadline = performance.now() + PROCESS_REGISTRATION_INSPECTION_MS;
     const snapshot = await readCodexAppServerProcessSnapshot(deadline, [child.pid]);
     const parent = snapshot.find((row) => row.pid === process.pid);
     const spawned = snapshot.find((row) => row.pid === child.pid);
