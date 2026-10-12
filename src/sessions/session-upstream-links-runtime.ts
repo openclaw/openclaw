@@ -1,5 +1,3 @@
-import { assertSessionEntryCurrentAdmission } from "../config/sessions/session-entry-current-admission.js";
-import type { SessionEntryCurrentCheck } from "../config/sessions/session-entry-current.types.js";
 import { createSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
 import {
   executeExistingOpenClawStateRead,
@@ -80,16 +78,11 @@ export function settleSessionUpstreamLink(
   settlement: SessionUpstreamSettlement,
   options: OpenClawStateDatabaseOptions & {
     assertCurrent: () => void;
-    sessionEntryCurrent?: SessionEntryCurrentCheck;
   },
 ): Promise<boolean> {
   const context = captureOpenClawStateWorkerContext(options);
-  const { assertCurrent, sessionEntryCurrent } = options;
-  const input = structuredClone({
-    expected,
-    settlement,
-    sessionEntryCurrentSource: sessionEntryCurrent?.source,
-  });
+  const { assertCurrent } = options;
+  const input = structuredClone({ expected, settlement });
   return runOpenClawStateWorkerOperation(
     context,
     (scope) => scope.execute({ type: "sessionUpstream.settle", input }),
@@ -103,7 +96,6 @@ export function settleSessionUpstreamLink(
           }
           context.admission.assertCurrent();
           assertCurrent();
-          assertSessionEntryCurrentAdmission(request, sessionEntryCurrent);
           grant();
         }),
       }),

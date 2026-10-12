@@ -1,4 +1,3 @@
-import type { SessionEntryCurrentSource } from "../config/sessions/session-entry-current.types.js";
 import type { SessionUpstreamJsonValue } from "../plugins/session-catalog.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 import type {
@@ -35,7 +34,6 @@ export type SessionUpstreamWorkerOperations = {
     input: {
       expected: SessionUpstreamLink;
       settlement: SessionUpstreamSettlement;
-      sessionEntryCurrentSource?: SessionEntryCurrentSource;
     };
     output: boolean;
   };

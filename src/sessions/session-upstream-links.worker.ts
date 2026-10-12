@@ -1,4 +1,3 @@
-import { requestSessionEntryCurrentAdmission } from "../config/sessions/session-entry-current-admission.worker.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import type { SqliteWorkerCommand } from "../infra/sqlite-worker-contract.js";
 import { requestSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
@@ -54,12 +53,9 @@ export function executeSessionUpstreamCommand(
           );
     }, options);
   }
-  const { expected, settlement, sessionEntryCurrentSource } = command.input;
+  const { expected, settlement } = command.input;
   return runOpenClawStateWriteTransaction(({ db }) => {
-    requestSessionEntryCurrentAdmission(sessionEntryCurrentSource, {
-      stage: "transaction",
-      facts: undefined,
-    });
+    requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
     if (!isSessionStateUpstreamCurrentInDatabase(db, expected)) {
       return false;
     }
