@@ -60,11 +60,14 @@ import {
   buildModelsKeyboard,
   buildProviderKeyboard,
   calculateTotalPages,
+  expandModelEntries,
   parseModelCallbackData,
   resolveModelListCallback,
+  resolveModelRuntimeSelection,
   resolveModelSelection,
   type ProviderInfo,
 } from "./model-buttons.js";
+import { buildTelegramRuntimeVariants } from "./model-runtime-variants.js";
 import {
   hasTelegramOpaqueCallbackPrefix,
   parseTelegramNativeCommandCallbackData,
@@ -483,7 +486,10 @@ export function createTelegramCallbackRouter({
           const { provider, page } = listSelection;
           commandText = `/model ${provider} ${page}`;
           const models = [...modelSet].toSorted((left, right) => left.localeCompare(right));
-          const totalPages = calculateTotalPages(models.length);
+          const runtimeVariants = buildTelegramRuntimeVariants(modelData);
+          const totalPages = calculateTotalPages(
+            expandModelEntries(provider, models, runtimeVariants).length,
+          );
           const safePage = Math.max(1, Math.min(page, totalPages));
           const currentModel =
             sessionState.model ||
@@ -496,6 +502,9 @@ export function createTelegramCallbackRouter({
             currentPage: safePage,
             totalPages,
             modelNames: modelData.modelMenu?.modelNames ?? modelData.modelNames,
+            runtimeVariants,
+            baseModelNames: modelData.modelNames,
+            currentRuntime: sessionState.sessionEntry?.agentRuntimeOverride?.trim() || undefined,
           });
           const text = `${await formatModelsAvailableHeaderAsync({
             provider,
@@ -511,12 +520,37 @@ export function createTelegramCallbackRouter({
           return;
         }
 
-        const selection = resolveModelSelection({ callback: modelCallback, providers, byProvider });
+        let selection: { provider: string; model: string; runtime?: string };
         if (
-          selection.kind !== "resolved" ||
-          !byProvider.get(selection.provider)?.has(selection.model)
+          modelCallback.type === "select-runtime" ||
+          modelCallback.type === "select-runtime-ref"
         ) {
-          await showChangedModelPicker();
+          const runtimeSelection = resolveModelRuntimeSelection({
+            callback: modelCallback,
+            providers,
+            byProvider,
+            runtimeVariants: buildTelegramRuntimeVariants(modelData),
+          });
+          if (!runtimeSelection) {
+            await showChangedModelPicker();
+            return;
+          }
+          selection = runtimeSelection;
+        } else if (modelCallback.type === "select" || modelCallback.type === "select-ref") {
+          const resolved = resolveModelSelection({
+            callback: modelCallback,
+            providers,
+            byProvider,
+          });
+          if (
+            resolved.kind !== "resolved" ||
+            !byProvider.get(resolved.provider)?.has(resolved.model)
+          ) {
+            await showChangedModelPicker();
+            return;
+          }
+          selection = resolved;
+        } else {
           return;
         }
 
@@ -529,9 +563,14 @@ export function createTelegramCallbackRouter({
             cfg: runtimeCfg,
             agentId: sessionState.agentId,
           });
+          // A runtime button on the default model counts as "default" only for the
+          // model's configured runtime; the other runtime is an explicit session pin.
           const isDefaultSelection =
             selection.provider === resolvedDefault.provider &&
-            selection.model === resolvedDefault.model;
+            selection.model === resolvedDefault.model &&
+            (!selection.runtime ||
+              selection.runtime ===
+                modelData.modelRuntimeIds?.get(`${selection.provider}/${selection.model}`));
           const persistedSessionEntry = sessionState.sessionEntry;
           const sessionEntryMissing = persistedSessionEntry === undefined;
           const sessionEntry = persistedSessionEntry ?? {
@@ -568,7 +607,11 @@ export function createTelegramCallbackRouter({
                 provider: selection.provider,
                 model: selection.model,
                 isDefault: isDefaultSelection,
-                runtime: isDefaultSelection ? { kind: "clear" } : { kind: "unchanged" },
+                runtime: isDefaultSelection
+                  ? { kind: "clear" }
+                  : selection.runtime
+                    ? { kind: "set", runtime: selection.runtime }
+                    : { kind: "unchanged" },
               },
               markLiveSwitchPending: true,
             }),

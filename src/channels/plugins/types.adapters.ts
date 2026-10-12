@@ -391,6 +391,16 @@ export type ChannelCommandAdapter = {
     totalPages: number;
     pageSize?: number;
     modelNames?: ReadonlyMap<string, string>;
+    /** Page the user asked for, before clamping to model-based pages. */
+    requestedPage?: number;
+    /** Runtime choices per provider/model; channels may show one row per runtime. */
+    runtimeChoicesByModel?: ReadonlyMap<string, readonly { id: string; label: string }[]>;
+    /** Configured default runtime per provider/model (see ModelsProviderData). */
+    modelRuntimeIds?: ReadonlyMap<string, string>;
+    /** Plain model names without route prefix, for runtime row labels. */
+    baseModelNames?: ReadonlyMap<string, string>;
+    /** Runtime pinned on the current session, if any. */
+    currentRuntime?: string;
   }) => ReplyPayload["channelData"] | null;
   buildModelBrowseChannelData?: () => ReplyPayload["channelData"] | null;
 };

@@ -6,6 +6,8 @@
  * - mdl_list_{prov}_{pg}  - show models for provider (page N, 1-indexed)
  * - mdl_sel_{provider/id} - select model (standard)
  * - mdl_sel/{model}       - read legacy providerless model selections
+ * - mdl_rt_{runtime}_{provider/id} - select model on an explicit runtime
+ * - mdl1~r:{sha256}       - select an opaque provider/model/runtime triple
  * - mdl1~m:{sha256}       - select an opaque provider/model ref
  * - mdl1~p:{sha256}:{pg}  - show models for an opaque provider ref
  * - mdl_back              - back to providers list
@@ -23,6 +25,8 @@ export type ParsedModelCallback =
   | { type: "list-ref"; digest: string; page: number }
   | { type: "select"; provider?: string; model: string }
   | { type: "select-ref"; digest: string }
+  | { type: "select-runtime"; provider: string; model: string; runtime: string }
+  | { type: "select-runtime-ref"; digest: string }
   | { type: "back" };
 
 export type ProviderInfo = {
@@ -44,10 +48,30 @@ export type ModelsKeyboardParams = {
   /** Optional map from provider/model to display name. When provided, the
    *  display name is shown on the button instead of the raw model ID. */
   modelNames?: ReadonlyMap<string, string>;
+  /** Runtime choices per provider/model, default runtime first. A model with
+   *  variants gets one button per runtime instead of a single button. */
+  runtimeVariants?: ReadonlyMap<string, readonly ModelRuntimeVariant[]>;
+  /** Plain model names (without route prefix) used for runtime variant labels. */
+  baseModelNames?: ReadonlyMap<string, string>;
+  /** Runtime the session currently uses; marks the matching variant. */
+  currentRuntime?: string;
+};
+
+export type ModelRuntimeVariant = {
+  runtime: string;
+  /** Short route label shown before the model name, e.g. "API" or "Claude CLI". */
+  label: string;
+};
+
+/** One button in the model list: a model, optionally pinned to a runtime. */
+export type ModelListEntry = {
+  model: string;
+  variant?: ModelRuntimeVariant;
 };
 
 const MODELS_PAGE_SIZE = 8;
 const MODEL_BUTTON_LABEL_MAX_LENGTH = 38;
+const MIN_VARIANT_MODEL_LABEL_LENGTH = 12;
 const LEGACY_PROVIDER_PATTERN = /^[a-z0-9_.-]+$/i;
 const CALLBACK_PREFIX = {
   providers: "mdl_prov",
@@ -56,9 +80,15 @@ const CALLBACK_PREFIX = {
   selectStandard: "mdl_sel_",
   opaqueModel: "mdl1~m:",
   opaqueProvider: "mdl1~p:",
+  selectRuntime: "mdl_rt_",
+  opaqueRuntimeModel: "mdl1~r:",
 } as const;
+const RUNTIME_ID_PATTERN = /^[a-z][a-z0-9-]*$/;
 
-function hashOpaqueCallback(domain: "model" | "provider", ...values: string[]): string {
+function hashOpaqueCallback(
+  domain: "model" | "provider" | "runtime-model",
+  ...values: string[]
+): string {
   return createHash("sha256")
     .update(JSON.stringify([`openclaw.telegram.${domain}-callback.v1`, ...values]))
     .digest("base64url");
@@ -69,6 +99,19 @@ export function parseModelCallbackData(data: string): ParsedModelCallback | null
   const opaqueModelMatch = trimmed.match(/^mdl1~m:([A-Za-z0-9_-]{43})$/);
   if (opaqueModelMatch?.[1]) {
     return { type: "select-ref", digest: opaqueModelMatch[1] };
+  }
+  const opaqueRuntimeMatch = trimmed.match(/^mdl1~r:([A-Za-z0-9_-]{43})$/);
+  if (opaqueRuntimeMatch?.[1]) {
+    return { type: "select-runtime-ref", digest: opaqueRuntimeMatch[1] };
+  }
+  const runtimeMatch = trimmed.match(/^mdl_rt_([a-z][a-z0-9-]*)_([^/]+)\/(.+)$/);
+  if (runtimeMatch?.[1] && runtimeMatch[2] && runtimeMatch[3]) {
+    return {
+      type: "select-runtime",
+      runtime: runtimeMatch[1],
+      provider: runtimeMatch[2],
+      model: runtimeMatch[3],
+    };
   }
   const opaqueProviderMatch = trimmed.match(/^mdl1~p:([A-Za-z0-9_-]{43}):(\d+)$/);
   if (opaqueProviderMatch?.[1]) {
@@ -108,6 +151,72 @@ export function buildModelSelectionCallbackData(params: {
     return fullCallbackData;
   }
   return `${CALLBACK_PREFIX.opaqueModel}${hashOpaqueCallback("model", params.provider, params.model)}`;
+}
+
+/** Callback data selecting a model on an explicit runtime. */
+function buildModelRuntimeSelectionCallbackData(params: {
+  provider: string;
+  model: string;
+  runtime: string;
+}): string {
+  const fullCallbackData = `${CALLBACK_PREFIX.selectRuntime}${params.runtime}_${params.provider}/${params.model}`;
+  if (
+    RUNTIME_ID_PATTERN.test(params.runtime) &&
+    LEGACY_PROVIDER_PATTERN.test(params.provider) &&
+    fitsTelegramCallbackData(fullCallbackData)
+  ) {
+    return fullCallbackData;
+  }
+  return `${CALLBACK_PREFIX.opaqueRuntimeModel}${hashOpaqueCallback("runtime-model", params.provider, params.model, params.runtime)}`;
+}
+
+/**
+ * Resolves a runtime selection against the offered variants only, so a stale
+ * or forged callback cannot pick a runtime the picker did not show.
+ */
+export function resolveModelRuntimeSelection(params: {
+  callback: Extract<ParsedModelCallback, { type: "select-runtime" | "select-runtime-ref" }>;
+  providers: readonly string[];
+  byProvider: ReadonlyMap<string, ReadonlySet<string>>;
+  runtimeVariants: ReadonlyMap<string, readonly ModelRuntimeVariant[]>;
+}): { provider: string; model: string; runtime: string } | undefined {
+  const { callback } = params;
+  const offered = (provider: string, model: string, runtime: string) =>
+    params.byProvider.get(provider)?.has(model) === true &&
+    (params.runtimeVariants.get(`${provider}/${model}`) ?? []).some(
+      (variant) => variant.runtime === runtime,
+    );
+  if (callback.type === "select-runtime") {
+    return offered(callback.provider, callback.model, callback.runtime)
+      ? { provider: callback.provider, model: callback.model, runtime: callback.runtime }
+      : undefined;
+  }
+  const matches = params.providers.flatMap((provider) =>
+    [...(params.byProvider.get(provider) ?? [])].flatMap((model) =>
+      (params.runtimeVariants.get(`${provider}/${model}`) ?? [])
+        .filter(
+          (variant) =>
+            hashOpaqueCallback("runtime-model", provider, model, variant.runtime) ===
+            callback.digest,
+        )
+        .map((variant) => ({ provider, model, runtime: variant.runtime })),
+    ),
+  );
+  return matches.length === 1 ? matches[0] : undefined;
+}
+
+/** Expands models into picker entries: one per runtime variant where offered. */
+export function expandModelEntries(
+  provider: string,
+  models: readonly string[],
+  runtimeVariants?: ReadonlyMap<string, readonly ModelRuntimeVariant[]>,
+): ModelListEntry[] {
+  return models.flatMap((model) => {
+    const variants = runtimeVariants?.get(`${provider}/${model}`);
+    return variants && variants.length > 1
+      ? variants.map((variant) => ({ model, variant }))
+      : [{ model }];
+  });
 }
 
 function buildProviderListCallbackData(provider: string, page: number): string {
@@ -202,21 +311,32 @@ export function buildModelsKeyboard(params: ModelsKeyboardParams): ButtonRow[] {
 
   const rows: ButtonRow[] = [];
 
+  const entries = expandModelEntries(provider, models, params.runtimeVariants);
   const startIndex = (currentPage - 1) * pageSize;
-  const endIndex = Math.min(startIndex + pageSize, models.length);
-  const pageModels = models.slice(startIndex, endIndex);
+  const endIndex = Math.min(startIndex + pageSize, entries.length);
+  const pageEntries = entries.slice(startIndex, endIndex);
 
-  for (const model of pageModels) {
-    const callbackData = buildModelSelectionCallbackData({ provider, model });
+  for (const { model, variant } of pageEntries) {
+    const key = `${provider}/${model}`;
+    const callbackData = variant
+      ? buildModelRuntimeSelectionCallbackData({ provider, model, runtime: variant.runtime })
+      : buildModelSelectionCallbackData({ provider, model });
     const isCurrentModel =
       currentSelection.length > 0 &&
-      currentSelection === (currentSelection.includes("/") ? `${provider}/${model}` : model);
+      currentSelection === (currentSelection.includes("/") ? key : model) &&
+      (!variant ||
+        variant.runtime ===
+          (params.currentRuntime ?? params.runtimeVariants?.get(key)?.[0]?.runtime));
     const fallbackLabel = model.includes("/") ? `${provider}/${model}` : model;
-    const displayLabel = modelNames?.get(`${provider}/${model}`) ?? fallbackLabel;
-    const displayText =
-      displayLabel.length <= MODEL_BUTTON_LABEL_MAX_LENGTH
-        ? displayLabel
-        : `…${sliceUtf16Safe(displayLabel, -(MODEL_BUTTON_LABEL_MAX_LENGTH - 1))}`;
+    // Runtime variants truncate only the model part, so "API · …" and
+    // "Claude CLI · …" stay distinguishable for long model names.
+    const displayText = variant
+      ? truncateRuntimeVariantLabel(
+          variant.label,
+          params.baseModelNames?.get(key) ?? fallbackLabel,
+          MODEL_BUTTON_LABEL_MAX_LENGTH,
+        )
+      : truncateModelLabel(modelNames?.get(key) ?? fallbackLabel, MODEL_BUTTON_LABEL_MAX_LENGTH);
     const text = isCurrentModel ? `${displayText} ✓` : displayText;
 
     rows.push([
@@ -242,6 +362,22 @@ export function buildModelsKeyboard(params: ModelsKeyboardParams): ButtonRow[] {
 
 export function buildBrowseProvidersButton(): ButtonRow[] {
   return [[{ text: "Browse providers", callback_data: CALLBACK_PREFIX.providers }]];
+}
+
+function truncateModelLabel(modelLabel: string, maxLen: number): string {
+  if (modelLabel.length <= maxLen) {
+    return modelLabel;
+  }
+  return `…${sliceUtf16Safe(modelLabel, -(maxLen - 1))}`;
+}
+
+function truncateRuntimeVariantLabel(
+  runtimeLabel: string,
+  modelLabel: string,
+  maxLen: number,
+): string {
+  const prefix = `${runtimeLabel} · `;
+  return `${prefix}${truncateModelLabel(modelLabel, Math.max(MIN_VARIANT_MODEL_LABEL_LENGTH, maxLen - prefix.length))}`;
 }
 
 export function getModelsPageSize(): number {
