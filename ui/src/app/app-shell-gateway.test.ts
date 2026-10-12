@@ -15,6 +15,7 @@ import {
 import { createRuntimeConfigCapability } from "../lib/config/runtime-config-capability.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { createProfileAppearanceGateway } from "./app-shell-gateway.test-support.ts";
+import { createGatewayMetadataObserver } from "./gateway-observers.ts";
 import { UI_NAVIGATION_PREFERENCE_KEYS } from "./server-prefs-state.ts";
 import { pushServerUiPrefs, resetServerUiPrefsSync } from "./server-prefs.ts";
 import { loadSettings, patchSettings } from "./settings.ts";
@@ -142,6 +143,30 @@ describe("ShellGatewayOwner profile appearance integration", () => {
     await ready;
     expect(complete).toBe(true);
     expect(loadSettings().accent).toBe("#336699");
+  });
+
+  it("reads fresh profile appearance after reconnecting with the same client", async () => {
+    const { context, owner, snapshot, request } = createProfileAppearanceGateway("profile-owner");
+    request.mockResolvedValue({
+      status: "ok",
+      entries: { "ui.accent": "#336699", "ui.railShortcuts": [] },
+    });
+    owner.synchronizeGateway(snapshot);
+    await owner.ensureRuntimeConfig(snapshot, context.runtimeConfig);
+    expect(loadSettings().accent).toBe("#336699");
+
+    const connected = { ...snapshot };
+    snapshot.phase = "reconnecting";
+    createGatewayMetadataObserver(() => true).synchronize(connected, snapshot);
+    owner.synchronizeGateway(snapshot);
+    request.mockResolvedValue({
+      status: "ok",
+      entries: { "ui.accent": "#445566", "ui.railShortcuts": [] },
+    });
+    snapshot.phase = "connected";
+    owner.synchronizeGateway(snapshot);
+    await owner.ensureRuntimeConfig(snapshot, context.runtimeConfig);
+    expect(loadSettings().accent).toBe("#445566");
   });
 
   it("refuses profile hydration from a superseded config snapshot", async () => {

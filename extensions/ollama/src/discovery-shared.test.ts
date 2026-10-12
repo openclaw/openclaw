@@ -95,6 +95,38 @@ function discover(
   });
 }
 
+describe("configured Ollama thinking metadata", () => {
+  it.each<{
+    name: string;
+    api: ModelProviderConfig["api"];
+    model: Partial<ModelProviderConfig["models"][number]>;
+  }>([
+    { name: "an explicit map", api: "ollama", model: { thinkingLevelMap: { off: "false" } } },
+    { name: "a model API override", api: "ollama", model: { api: "openai-completions" } },
+    { name: "a provider API override", api: "openai-completions", model: {} },
+    { name: "another endpoint", api: "ollama", model: { baseUrl: "http://127.0.0.2:11434" } },
+  ])("does not replace $name with discovered native metadata", async ({ api, model }) => {
+    const result = await discover(
+      {
+        baseUrl: "http://localhost:11434",
+        api,
+        models: [{ ...discoveredModel, ...model }],
+      },
+      {
+        buildProvider: async () => ({
+          baseUrl: "http://localhost:11434",
+          api: "ollama",
+          models: [{ ...discoveredModel, thinkingLevelMap: { off: "true", low: "true" } }],
+        }),
+      },
+    );
+    expect(result).toMatchObject({
+      provider: { models: [] },
+      outcomes: [{ provider: "ollama", status: "ready" }],
+    });
+  });
+});
+
 describe("resolveOllamaDiscoveryResult — hosted Ollama Cloud guard", () => {
   it.each([
     {

@@ -1080,8 +1080,12 @@ to `"pretty"`.
 
 ### Redaction
 
-OpenClaw masks sensitive values in console output, file logs, diagnostic and
-support exports, and OpenTelemetry output. Config snapshots, audit output, and
+File logs store raw records with owner-only (`0600`) permissions. OpenClaw masks
+sensitive values when logs are read through `logs.tail` (CLI or Control UI),
+printed to the console, or exported through diagnostic/support bundles and
+OpenTelemetry. Direct file reads are raw: protect and review them before sharing.
+Log messages should contain IDs, sizes, and outcomes, never message text, prompts,
+tool arguments, or tool results. Config snapshots, audit output, and
 credential-bearing URLs and command-line options retain their credential masking.
 
 `logging.redactPatterns` replaces the default regex string list for logs and
