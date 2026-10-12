@@ -1,9 +1,10 @@
 import { nothing, render } from "lit";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import type { ModelCatalogEntry } from "../../../api/types.ts";
 import { resolveChatFastModeSelectState } from "../../../lib/chat/model-select-state.ts";
 import { resolveChatThinkingSelectState } from "../../../lib/chat/thinking.ts";
-import { renderChatEffortPicker } from "./chat-effort-picker.ts";
+import { solidTemplate } from "./chat-composer-controls.ts";
+import { ChatEffortPicker } from "./chat-effort-picker.tsx";
 
 const host = document.createElement("div");
 
@@ -25,7 +26,7 @@ it("keeps Ultrafast selectable while showing and clearing a provider downgrade",
     serviceTierObservation?: ModelCatalogEntry["serviceTierObservation"],
   ) => {
     render(
-      renderChatEffortPicker({
+      solidTemplate(ChatEffortPicker, {
         disabled: false,
         thinkingDisabled: false,
         sessionKey: "tier-observation",
@@ -72,4 +73,50 @@ it("keeps Ultrafast selectable while showing and clearing a provider downgrade",
 
   expect(show("ultrafast").getAttribute("aria-checked")).toBe("true");
   expect(host.querySelector("summary")!.title).toBe("Speed: Ultrafast");
+});
+
+it("keeps an uncommitted reasoning preview when other picker props refresh", () => {
+  document.body.append(host);
+  onTestFinished(() => host.remove());
+  const onThinkingSelect = vi.fn(async () => undefined);
+  const paint = (active: boolean) =>
+    render(
+      solidTemplate(ChatEffortPicker, {
+        disabled: false,
+        thinkingDisabled: false,
+        sessionKey: "reasoning-preview",
+        thinking: resolveChatThinkingSelectState({
+          catalog: [],
+          sessionKey: "reasoning-preview",
+          sessionsResult: null,
+          session: {
+            thinkingDefault: "high",
+            thinkingLevels: ["low", "high", "ultra"].map((id) => ({ id, label: id })),
+          },
+        }),
+        fastMode: {
+          active,
+          currentOverride: active ? "on" : "off",
+          disabled: false,
+          label: active ? "On" : "Off",
+          nextValue: active ? "off" : "on",
+          supported: true,
+        },
+        onFastModeSelect: async () => undefined,
+        onThinkingSelect,
+      }),
+      host,
+    );
+  paint(false);
+  const slider = host.querySelector<HTMLInputElement>("[data-chat-thinking-slider]")!;
+  slider.value = "2";
+  slider.dispatchEvent(new Event("input", { bubbles: true }));
+  expect(slider.getAttribute("aria-valuetext")).toBe("Ultra");
+  paint(true);
+  expect(host.querySelector("[data-chat-thinking-slider]")).toBe(slider);
+  expect(slider.value).toBe("2");
+  expect(slider.getAttribute("aria-valuetext")).toBe("Ultra");
+  expect(onThinkingSelect).not.toHaveBeenCalled();
+  slider.dispatchEvent(new Event("change", { bubbles: true }));
+  expect(onThinkingSelect).toHaveBeenCalledExactlyOnceWith("ultra", "reasoning-preview");
 });

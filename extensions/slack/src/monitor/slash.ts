@@ -13,7 +13,7 @@ import {
   listNativeCommandSpecsForConfig,
   prepareSkillCommandsForAgents,
   parseCommandArgs,
-  resolveCommandArgMenu,
+  resolveCommandArgMenuAsync,
   type CommandArgs,
   resolveNativeCommandSessionTargets,
 } from "openclaw/plugin-sdk/command-auth-native";
@@ -546,7 +546,7 @@ export function createSlackCommandHandler(params: {
                 readOnly: true,
               })
             : undefined;
-        const menu = resolveCommandArgMenu({
+        const menu = await resolveCommandArgMenuAsync({
           command: commandDefinition,
           args: commandArgs,
           cfg,

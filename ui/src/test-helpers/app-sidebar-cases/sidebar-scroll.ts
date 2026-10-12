@@ -1,11 +1,12 @@
 import { html } from "lit";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { createGateway, createSessions, mountSidebar } from "../app-sidebar.ts";
 import "../../components/app-sidebar.tsx";
 
 describe("AppSidebar scroll", () => {
   it("shows fades only toward additional content", async () => {
+    vi.useFakeTimers({ toFake: ["requestAnimationFrame", "cancelAnimationFrame"] });
     const gateway = createGateway({} as GatewayBrowserClient);
     const { sidebar } = await mountSidebar(gateway, createSessions("main", ["agent:main:main"]));
     sidebar.contextualSidebar = {
@@ -32,6 +33,7 @@ describe("AppSidebar scroll", () => {
     ) => {
       scroller.scrollTop = scrollTop;
       scroller.dispatchEvent(new Event("scroll"));
+      vi.advanceTimersToNextFrame();
       await sidebar.updateComplete;
       expect(scroller.classList.contains(`sidebar-shell__body--scroll-${expected}`)).toBe(true);
     };

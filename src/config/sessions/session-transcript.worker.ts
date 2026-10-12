@@ -342,6 +342,11 @@ serveOwnedWorkerTasks(
           await import("./session-store-target-inventory.js");
         return readSessionStoreTargetInventory(request.request);
       }
+      if (request.kind === "combined-store-topology") {
+        const { readCombinedSessionStoreTopology } =
+          await import("./combined-store-topology.worker.js");
+        return readCombinedSessionStoreTopology(request.request);
+      }
       if (request.kind === "session-identity-evidence") {
         const { withOpenClawAgentDatabaseReadOnly } =
           await import("../../state/openclaw-agent-db-readonly.js");

@@ -1,5 +1,13 @@
 import type { BoardGetParams } from "@openclaw/gateway-protocol";
-import { createEffect, createSignal, onCleanup, onSettled, Show } from "solid-js";
+import {
+  createEffect,
+  createSignal,
+  getOwner,
+  onCleanup,
+  onSettled,
+  runWithOwner,
+  Show,
+} from "solid-js";
 import type {
   ControlUiSurface,
   ControlUiSurfaceProps,
@@ -16,7 +24,7 @@ import { renderPluginTemplate } from "./control-ui-view.runtime.ts";
 import type { ViewKind } from "./control-ui-view.ts";
 
 type ViewRegistration = ControlUiRegistration<{ mount: ControlUiView<unknown> }>;
-export type PluginViewProps = {
+type PluginViewProps = {
   kind: ViewKind;
   contributionKey: string;
   surface: ControlUiSurface;
@@ -68,6 +76,7 @@ function MountedContent(props: {
   host?: object;
   mount?: (target: HTMLElement) => () => void;
 }) {
+  const owner = getOwner();
   let container!: HTMLDivElement;
   createEffect(
     () => ({ mount: props.mount, value: props.mount ? undefined : props.value, host: props.host }),
@@ -75,7 +84,7 @@ function MountedContent(props: {
       if (mount) {
         return mount(container);
       }
-      renderPluginTemplate(value, container, host);
+      runWithOwner(owner, () => renderPluginTemplate(value, container, host));
       return undefined;
     },
   );

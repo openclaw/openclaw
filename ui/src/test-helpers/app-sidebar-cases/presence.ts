@@ -9,6 +9,7 @@ import {
   createSessionsHarness,
   mountSidebar,
 } from "../app-sidebar.ts";
+import { createTestGatewayClient } from "../gateway-client.ts";
 import { settleLitElement } from "../lit-settle.ts";
 import "../../components/app-sidebar.tsx";
 
@@ -448,7 +449,7 @@ describe("AppSidebar viewer presence", () => {
         gateway.publish({ phase: "reconnecting" });
       }
       if (reason === "switch") {
-        gateway.publish({ client: { instanceId: "replacement" } as GatewayBrowserClient });
+        gateway.publish({ client: createTestGatewayClient(async () => ({ profiles: [] })) });
       }
       if (reason === "route") {
         sidebar.activeRouteId = "activity";

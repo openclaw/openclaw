@@ -1,62 +1,15 @@
 import { createMemo } from "solid-js";
+import { modelPickerOptions, type ModelPickerParams } from "../model-picker-options.ts";
 import { providerDisplayLabel, renderProviderBrandIcon } from "../provider-icon.ts";
 import type { PickerParams } from "../select-picker.ts";
 import "../select-picker.ts";
 
-export type ModelPickerOption = {
-  value: string;
-  label: string;
-  provider?: string;
-  detail?: string;
-  disabled?: boolean;
-};
+export type { ModelPickerOption, ModelPickerParams } from "../model-picker-options.ts";
 
-type ModelSelectOption = ModelPickerOption & { description?: string };
-
-export type ModelPickerParams = {
-  id?: string;
-  label: string;
-  value: string;
-  options: readonly ModelPickerOption[];
-  disabled?: boolean;
-  title?: string;
-  placement?: "top" | "bottom";
-  showSelectedDetail?: boolean;
-  groupByProvider?: boolean;
-  searchPlaceholder?: string;
-  custom?: {
-    label: string;
-    placeholder?: string;
-    commit?: "input" | "change";
-    id?: string;
-    invalid?: boolean;
-    describedBy?: string;
-  };
-  onOpen?: () => void;
-  onChange: (value: string) => void;
-};
+type ModelSelectOption = ReturnType<typeof modelPickerOptions>["options"][number];
 
 export function ModelPicker(props: ModelPickerParams) {
-  const customValue = createMemo(() => {
-    let value = "__openclaw_custom_model__";
-    const values = new Set([props.value, ...props.options.map((option) => option.value)]);
-    while (values.has(value)) {
-      value += "_";
-    }
-    return value;
-  });
-  const options = createMemo(() => {
-    const entries: ModelSelectOption[] = [
-      ...props.options.map((option) => ({ ...option, description: option.detail })),
-      ...(props.custom ? [{ value: customValue(), label: props.custom.label }] : []),
-    ];
-    const selected = entries.findIndex((option) => option.value === props.value);
-    if (selected > 0) {
-      entries.unshift(...entries.splice(selected, 1));
-    }
-    return entries;
-  });
-  const selectedIndex = () => options().findIndex((option) => option.value === props.value);
+  const choices = createMemo(() => modelPickerOptions(props));
   const commitCustom = (event: Event) => {
     if ((event.type === "change") === (props.custom?.commit === "change")) {
       // SAFETY: Both handlers are attached to the custom-model input below.
@@ -69,7 +22,7 @@ export function ModelPicker(props: ModelPickerParams) {
     id: props.id,
     label: props.label,
     value: props.value,
-    options: options(),
+    options: choices().options,
     disabled: props.disabled,
     title: props.title,
     placement: props.placement,
@@ -95,7 +48,7 @@ export function ModelPicker(props: ModelPickerParams) {
       const input = select
         .closest(".model-picker")
         ?.querySelector<HTMLInputElement>(".model-picker__custom");
-      if (value === customValue() && input) {
+      if (value === choices().customValue && input) {
         input.hidden = false;
         queueMicrotask(() => input.focus());
         return;
@@ -122,7 +75,7 @@ export function ModelPicker(props: ModelPickerParams) {
           aria-describedby={props.custom.describedBy}
           placeholder={props.custom.placeholder ?? ""}
           value={props.value}
-          hidden={selectedIndex() >= 0}
+          hidden={choices().selectedIndex >= 0}
           disabled={props.disabled}
           onInput={commitCustom}
           onChange={commitCustom}

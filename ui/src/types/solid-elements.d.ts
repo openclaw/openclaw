@@ -4,6 +4,7 @@ import type WaOption from "@awesome.me/webawesome/dist/components/option/option.
 import type WaPopover from "@awesome.me/webawesome/dist/components/popover/popover.js";
 import type WaPopup from "@awesome.me/webawesome/dist/components/popup/popup.js";
 import type WaSelect from "@awesome.me/webawesome/dist/components/select/select.js";
+import type WaSwitch from "@awesome.me/webawesome/dist/components/switch/switch.js";
 import type WaTabGroup from "@awesome.me/webawesome/dist/components/tab-group/tab-group.js";
 import type WaTabPanel from "@awesome.me/webawesome/dist/components/tab-panel/tab-panel.js";
 import type WaTab from "@awesome.me/webawesome/dist/components/tab/tab.js";
@@ -16,11 +17,17 @@ export type { JSX } from "@solidjs/web";
 
 // Keep ambient tag contracts independent of renderer modules: SDK declarations include this file.
 type LegacyAttributes<T extends HTMLElement> = JSX.HTMLAttributes<T> & JSX.Properties<T>;
+type Tooltip = HTMLElementTagNameMap["openclaw-tooltip"];
 
 type ElementProperties<T> = { [Key in keyof T as `prop:${string & Key}`]?: T[Key] };
 
 declare module "@solidjs/web" {
   namespace JSX {
+    interface EventHandlersElement<T> {
+      "onWa-show"?: EventHandlerUnion<T, CustomEvent>;
+      "onWa-after-show"?: EventHandlerUnion<T, CustomEvent>;
+      "onOpenclaw-composer-dismiss-invocations"?: EventHandlerUnion<T, CustomEvent>;
+    }
     interface ExplicitProperties {
       messageActions: MessageActionDetails | null | undefined;
     }
@@ -46,15 +53,25 @@ declare module "@solidjs/web" {
         onResize: (event: CustomEvent<{ splitRatio: number }>) => void;
         "onResize-end": () => void;
       };
-      "openclaw-tooltip": HTMLAttributes<HTMLElementTagNameMap["openclaw-tooltip"]> & {
-        "prop:content"?: string;
-        "prop:contentTemplate"?: HTMLElementTagNameMap["openclaw-tooltip"]["contentTemplate"];
-        "prop:delay"?: number;
-        "prop:closeDelay"?: number;
-        "prop:hoverDismissDelay"?: number;
-        "prop:openOnClick"?: boolean;
-        "prop:describe"?: boolean;
-        placement?: HTMLElementTagNameMap["openclaw-tooltip"]["placement"];
+      "wa-switch": LegacyAttributes<WaSwitch> & {
+        size?: WaSwitch["size"];
+        checked?: boolean;
+        disabled?: boolean;
+      };
+      "openclaw-tooltip": HTMLAttributes<Tooltip> & {
+        "prop:content"?: Tooltip["content"];
+        "prop:contentTemplate"?: Tooltip["contentTemplate"];
+        "prop:delay"?: Tooltip["delay"];
+        "prop:closeDelay"?: Tooltip["closeDelay"];
+        "prop:hoverDismissDelay"?: Tooltip["hoverDismissDelay"];
+        "prop:describe"?: Tooltip["describe"];
+        "prop:openOnClick"?: Tooltip["openOnClick"];
+        "prop:disabled"?: Tooltip["disabled"];
+        "prop:anchor"?: Tooltip["anchor"];
+        "prop:placement"?: Tooltip["placement"];
+        content?: string;
+        disabled?: boolean;
+        placement?: Tooltip["placement"];
         "open-on-click"?: boolean;
         "auto-size"?: boolean;
       };
@@ -78,15 +95,22 @@ declare module "@solidjs/web" {
       };
       "wa-dropdown": HTMLAttributes<WaDropdown> &
         Properties<WaDropdown> & {
+          open?: boolean;
           placement?: WaDropdown["placement"];
-          "onWa-show"?: (event: Event) => void;
-          "onWa-hide"?: (event: Event) => void;
-          "onWa-select"?: (event: CustomEvent<{ item: WaDropdownItem }>) => void;
-          "onWa-after-hide"?: (event: CustomEvent<void>) => void;
+          "onWa-show"?: EventHandlerUnion<WaDropdown, CustomEvent>;
+          "onWa-after-show"?: EventHandlerUnion<WaDropdown, CustomEvent>;
+          "onWa-hide"?: EventHandlerUnion<WaDropdown, CustomEvent>;
+          "onWa-after-hide"?: EventHandlerUnion<WaDropdown, CustomEvent>;
+          "onWa-select"?: EventHandlerUnion<WaDropdown, CustomEvent<{ item: WaDropdownItem }>>;
         };
       "wa-dropdown-item": HTMLAttributes<WaDropdownItem> &
         Properties<WaDropdownItem> &
-        Partial<Pick<WaDropdownItem, "value" | "type" | "variant" | "disabled">> & {
+        Partial<
+          Pick<
+            WaDropdownItem,
+            "value" | "type" | "variant" | "disabled" | "checked" | "href" | "target" | "rel"
+          >
+        > & {
           "onSubmenu-opening"?: (event: CustomEvent<{ item: HTMLElement }>) => void;
         };
       "wa-option": HTMLAttributes<WaOption> &
@@ -97,11 +121,18 @@ declare module "@solidjs/web" {
         Partial<
           Pick<
             WaPopup,
-            "active" | "placement" | "distance" | "skidding" | "arrow" | "flip" | "shift"
+            | "active"
+            | "placement"
+            | "strategy"
+            | "distance"
+            | "skidding"
+            | "arrow"
+            | "flip"
+            | "shift"
           >
         > & {
           "prop:anchor"?: WaPopup["anchor"];
-          "onWa-reposition"?: EventHandlerUnion<WaPopup, Event>;
+          "onWa-reposition"?: EventHandlerUnion<WaPopup, CustomEvent>;
         };
       "wa-select": HTMLAttributes<WaSelect> &
         Properties<WaSelect> &

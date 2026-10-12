@@ -12,7 +12,7 @@ import { ChatPane } from "./chat-pane-render.ts";
 import { createGatewayBrowserClientFixture } from "./chat-pane.test-support.ts";
 import { refreshChatMetadata, retireChatMetadataRequests } from "./chat-state-refresh.ts";
 import { renderChat, type ChatProps } from "./chat-view.ts";
-import { renderChatComposer } from "./components/chat-composer.ts";
+import { renderChatComposer } from "./components/chat-composer.tsx";
 import {
   installTranscriptDomMocks,
   resetTranscriptTestDom,

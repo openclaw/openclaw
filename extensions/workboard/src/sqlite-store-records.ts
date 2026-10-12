@@ -17,6 +17,7 @@ import {
   iterateSqliteQuerySync,
   sqliteStringSet,
 } from "openclaw/plugin-sdk/sqlite-worker-runtime";
+import { definedFields } from "../record-fields.js";
 export type Row = Record<string, unknown>;
 
 export function jsonValue(value: unknown): string | null {
@@ -64,15 +65,6 @@ export function requiredNumber(row: Row, key: string): number {
 
 function optional<T extends object>(value: T): T | undefined {
   return Object.keys(value).length > 0 ? value : undefined;
-}
-
-export function definedFields<T extends object>(fields: T): T {
-  for (const key in fields) {
-    if (fields[key] === undefined) {
-      delete fields[key];
-    }
-  }
-  return fields;
 }
 
 export function blobToBase64(value: unknown): string {

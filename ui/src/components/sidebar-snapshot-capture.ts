@@ -34,8 +34,9 @@ export function isSidebarSnapshotSettled(
   if (!host.connected || !context) {
     return false;
   }
-  if (host.navigationView === "pages" && host.navigationCatalog.dashboards?.loading !== false) {
-    return false;
+  if (host.navigationView === "pages") {
+    const pages = host.navigationCatalog.dashboards;
+    return pages?.loading === false && (pages.readSucceeded === true || pages.error !== null);
   }
   const people = resolveSidebarOnline(host).users;
   if (
@@ -76,6 +77,8 @@ export function captureSidebarSnapshotModel(
   const roster = rosterActivityStore(context).snapshot;
   if (
     host.sidebarSnapshot ||
+    (host.navigationView === "pages" &&
+      host.navigationCatalog.dashboards?.readSucceeded !== true) ||
     host.sessionData.sessionMutationError !== null ||
     context.sessions.state.error !== null ||
     host.sessionData.ownerCounts.error !== null ||

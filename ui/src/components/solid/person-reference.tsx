@@ -1,6 +1,4 @@
-import { createEffect, createMemo, onCleanup, onSettled, Show, untrack } from "solid-js";
-import type { UsersListResult } from "../../../../packages/gateway-protocol/src/schema/users.js";
-import { buildControlUiUserAvatarPath } from "../../../../src/gateway/control-ui-user-avatar-route.js";
+import { createEffect, onCleanup, onSettled, Show, untrack } from "solid-js";
 import { selectApplicationSession } from "../../app/agent-selection.ts";
 import { createGatewayConnectionLifecycle } from "../../lib/gateway-connection-lifecycle.ts";
 import { createPresenceActivityLifecycle } from "../../lib/presence-activity-lifecycle.ts";
@@ -9,6 +7,7 @@ import {
   projectPresencePayload,
   type PresenceViewer,
 } from "../../lib/presence-users.ts";
+import { profileAvatarUrl, profileDirectory } from "../../lib/profile-directory.ts";
 import { projectGateway } from "../../lib/reactive/application.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import {
@@ -25,13 +24,13 @@ import {
   resolveUiDefaultAgentId,
 } from "../../lib/sessions/session-key.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../lit/solid-bridge.ts";
-import { resolveIdentityAvatarView } from "../identity-avatar-view.ts";
 import { mountPersonActivityCard, type PersonActivitySurface } from "../person-activity-card.tsx";
 import { observePersonActivityData } from "../person-activity-data.ts";
 import { personActivityRouting } from "../person-activity-link.ts";
 import { createPortaledHovercard, PortaledHovercardController } from "../portaled-hovercard.ts";
 import { useIdentityApplication } from "./identity-application.ts";
 import { IdentityAvatarImage, identityAvatarState } from "./identity-avatar-image.tsx";
+import { useIdentityAvatarView } from "./identity-avatar-view.ts";
 import "../../styles/chat/person-reference.css";
 
 export type PersonReferenceProps = {
@@ -167,16 +166,10 @@ export function PersonReferenceContent(props: PersonReferenceProps) {
     }
     let resolved: PresenceViewer | null = null;
     try {
-      const { profiles } = await scope.client.request<UsersListResult>("users.list", {});
-      // Follow only canonical merge edges returned by the authorized directory.
-      const byId = new Map(profiles.map((profile) => [profile.id, profile]));
-      const visited = new Set<string>();
-      let profile = byId.get(requestedId);
-      while (profile?.mergedInto && !visited.has(profile.id)) {
-        visited.add(profile.id);
-        profile = byId.get(profile.mergedInto);
-      }
-      if (profile && !profile.mergedInto) {
+      const directory = profileDirectory(context.gateway);
+      await directory.load(true);
+      const profile = directory.get(requestedId);
+      if (profile) {
         resolved = {
           id: profile.id,
           identity: { type: "profile", id: profile.id },
@@ -184,9 +177,7 @@ export function PersonReferenceContent(props: PersonReferenceProps) {
             profile.displayName?.trim() ||
             profile.githubIdentity?.login ||
             untrack(() => t("presence.card.person")),
-          avatarUrl: profile.hasAvatar
-            ? buildControlUiUserAvatarPath(profile.id, profile.updatedAt)
-            : undefined,
+          avatarUrl: profileAvatarUrl(profile),
           watchedSessions: [],
         };
       }
@@ -287,14 +278,11 @@ export function PersonReferenceContent(props: PersonReferenceProps) {
     });
   }
 
-  // The avatar route follows merged profiles; rendering a mention needs no directory read.
-  const avatar = createMemo(() =>
-    resolveIdentityAvatarView({
-      id: profileId(),
-      identity: { type: "profile", id: profileId() },
-      name: label().replace(/^@/u, ""),
-    }),
-  );
+  const avatar = useIdentityAvatarView(() => ({
+    id: profileId(),
+    identity: { type: "profile", id: profileId() },
+    name: label().replace(/^@/u, ""),
+  }));
   return (
     <button
       ref={(element) => {

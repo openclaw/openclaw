@@ -4,7 +4,7 @@ import {
   resolveAgentDir,
   resolveAgentWorkspaceDir,
 } from "../agents/agent-scope.js";
-import { loadAuthProfileStoreWithoutExternalProfiles } from "../agents/auth-profiles/store-runtime.js";
+import { loadAuthProfileStoreWithoutExternalProfilesAsync } from "../agents/auth-profiles/store-runtime.js";
 import { formatLiteralProviderPrefixedModelRef } from "../agents/model-ref-shared.js";
 import { normalizeAgentModelRefForConfig } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -184,7 +184,7 @@ async function prepareProviderPluginAuthMethod(
   const agentId = params.agentId ?? resolveDefaultAgentId(params.config);
   const agentDir = params.agentDir ?? resolveAgentDir(params.config, agentId);
   const workspaceDir = params.workspaceDir ?? resolveAgentWorkspaceDir(params.config, agentId);
-  const store = loadAuthProfileStoreWithoutExternalProfiles(agentDir);
+  const store = await loadAuthProfileStoreWithoutExternalProfilesAsync(agentDir);
   const existingProfiles = Object.entries(store.profiles)
     .filter(([, credential]) => credential.provider === params.providerId)
     .map(([profileId, credential]) => ({ profileId, credential }));

@@ -5,7 +5,7 @@ import type { OAuthRefreshPeerClaim } from "./oauth-refresh-peers.js";
 import { hasMatchingOAuthIdentity, isSafeOAuthPostClaimSettlement } from "./oauth-shared.js";
 import type { PersonalAuthProfileStore } from "./personal-store.js";
 import {
-  loadAuthProfileStoreWithoutExternalProfiles,
+  loadAuthProfileStoreWithoutExternalProfilesAsync,
   updateAuthProfileStoreWithLock,
 } from "./store-runtime.js";
 import type { AuthProfileStore, OAuthCredential } from "./types.js";
@@ -57,7 +57,7 @@ export async function loadStoredOAuthRefreshStore(
   if (personalStore) {
     return personalStore.read();
   }
-  return loadAuthProfileStoreWithoutExternalProfiles(agentDir, {
+  return loadAuthProfileStoreWithoutExternalProfilesAsync(agentDir, {
     allowKeychainPrompt: true,
     profileId,
   });

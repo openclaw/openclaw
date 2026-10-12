@@ -67,16 +67,12 @@ function IpLocationContent(props: IpLocationProps, host: HTMLElement) {
   );
 }
 
-export const IpLocation = defineSolidBridge<IpLocationProps>(
-  "openclaw-ip-location",
-  IpLocationContent,
-  {
-    properties: { ip: { default: undefined, attribute: false } },
-    connected: (host) => {
-      host.style.display = "contents";
-    },
+defineSolidBridge<IpLocationProps>("openclaw-ip-location", IpLocationContent, {
+  properties: { ip: { default: undefined, attribute: false } },
+  connected: (host) => {
+    host.style.display = "contents";
   },
-);
+});
 
 declare global {
   interface HTMLElementTagNameMap {

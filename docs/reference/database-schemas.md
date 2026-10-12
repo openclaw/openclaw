@@ -57,6 +57,14 @@ the target's physical identity is unchanged. Quarantine rows retain their pathna
 scope, and aliases still share physical format, schema, and integrity facts.
 The persisted schema, WAL safety, and recovery behavior are unchanged.
 
+Agent database opens apply private file and directory modes. Warm reads and writes
+reuse the open connection without inspecting or repairing those modes again;
+permission drift is repaired on the next open or by explicit maintenance. Retained
+operations also reuse their admitted file identity. A replacement after admission
+does not redirect that operation to the replacement file; the next admission or
+open detects it through the database lifecycle owner. Commit authority checks and
+Doctor's explicit verification remain in place.
+
 Managed writes publish committed facts before their public observers. Private
 receipts distinguish explicit absence from incomplete coverage and preserve known
 commits independently of reply delivery. See
@@ -67,7 +75,11 @@ SQLite format, schema-version, integrity, canonical-index, and
 table-existence validation runs once per physical database per process load,
 on its first admission. The admitted facts are shared with all workers and
 handles, including later opens and reopens after idle close. File identity uses
-volume, inode, and stable birthtime checked with `fstat`, not SQL. A replaced or
+volume, inode, and stable birthtime captured once with `fstat` on the retained
+admission descriptor, not SQL. Admission lookups and established borrowers reuse
+those shared facts without checking the pathname again. Native open and reopen
+still identify replacement files, and creation witnesses retain their physical
+file check. A replaced or
 restored file needs its own first validation. Migration and repair owners validate
 their changes and publish the new facts after successful DDL settlement; later
 runtime consumers do not recheck them. Doctor and explicit verification retain
@@ -234,6 +246,10 @@ Present main-key values are data facts: unrelated DDL cannot retire a committed
 config postimage. A missing policy row stays with the connection's read revision
 until the schema owner's seed or canonical writer makes the policy available.
 Uncertain rollback can discard a data fact and require one repair read before reuse.
+
+Concurrent Windows handoff initializers share the existing writer admission lock
+until private file publication finishes, preserving the single-link file check
+without quarantining another initializer's in-progress publication.
 
 The Mentions Inbox retains its committed head through the same physical owner.
 An unchanged head skips snapshot worker dispatch. A changed or uncertain mutation

@@ -736,13 +736,6 @@ describe("release candidate checklist", () => {
         expect(stages).toEqual([]);
         return;
       }
-      if (savedToolingSha && (launch !== "npm-only" || retainedHelperRequest)) {
-        await expect(completion).rejects.toThrow("release candidate state mismatch for toolingSha");
-        expect(ensureToolingTag).not.toHaveBeenCalled();
-        expect(writeState).not.toHaveBeenCalled();
-        expect(stages).toEqual([]);
-        return;
-      }
       if (routingError || stopAtRegistry) {
         await expect(completion).rejects.toThrow(
           launch === "mismatch"
@@ -803,8 +796,14 @@ describe("release candidate checklist", () => {
         readFileSync(join(options.outputDir, "release-candidate-evidence.json"), "utf8"),
       );
       if (savedToolingSha) {
+        // Repaired tooling resumes the same state with its own publication tag.
         expect(options.publishWorkflowRef).toBe(publishWorkflowRef);
         expect(ensureToolingTag).toHaveBeenCalledOnce();
+        expect(JSON.parse(readFileSync(statePath, "utf8"))).toMatchObject({
+          toolingSha,
+          publishWorkflowRef,
+          ...(launch === "npm-only" ? {} : { fullReleaseRunId: savedState?.fullReleaseRunId }),
+        });
       }
       if (telegramRunId) {
         expect(evidence.npmTelegram).toMatchObject({ status: "passed", runId: telegramRunId });
@@ -980,6 +979,7 @@ describe("release candidate checklist", () => {
     "worktree removal failure",
     "pinned ancestor",
     "untrusted SHA",
+    "candidate SHA",
   ])("prepares and cleans trusted tooling dependencies: %s", (scenario) => {
     const manifest = { version: "2026.9.1", dependencies: { yaml: "2.8.1" } };
     const { root: targetRoot, git } = candidateGitFixture({
@@ -1021,7 +1021,10 @@ describe("release candidate checklist", () => {
         ? trustedToolingSha
         : scenario === "untrusted SHA"
           ? git("commit-tree", "HEAD^{tree}", "-m", "test: unrelated tooling")
-          : "";
+          : scenario === "candidate SHA"
+            ? (git("commit", "--allow-empty", "-m", "test: release candidate"),
+              git("rev-parse", "HEAD"))
+            : "";
     const installedModules = realpathSync("node_modules");
     if (scenario !== "missing node_modules") {
       symlinkSync(installedModules, join(targetRoot, "node_modules"), "junction");
@@ -1130,8 +1133,22 @@ describe("release candidate checklist", () => {
           },
         },
       );
-    if (scenario === "untrusted SHA") {
-      expect(execute).toThrow(`--workflow-sha ${workflowSha} is not reachable from trusted main`);
+    if (scenario === "untrusted SHA" || scenario === "candidate SHA") {
+      expect(execute).toThrow(`--workflow-sha ${workflowSha} is not reachable from trusted main.`);
+      // The vm context has its own Error realm, so read the rendered message.
+      const message = (() => {
+        try {
+          execute();
+        } catch (error) {
+          return String(error);
+        }
+        return "";
+      })();
+      expect(message).toContain("so it must be a commit on trusted main");
+      // Only the candidate itself gets the candidate-specific hint.
+      expect(message.includes("It is the checked-out release candidate.")).toBe(
+        scenario === "candidate SHA",
+      );
       expect(installs).not.toHaveBeenCalled();
       expect(git("worktree", "list", "--porcelain").match(/^worktree /gmu)).toHaveLength(1);
       return;
@@ -1297,6 +1314,37 @@ describe("release candidate checklist", () => {
         { ...expected, fullReleaseRunId: "333" },
       ),
     ).toThrow("state mismatch for fullReleaseRunId");
+  });
+
+  it("resumes bound state on repaired release tooling", () => {
+    const options = parseArgs(["--tag", "v2026.7.1-beta.4"]);
+    const saved = {
+      ...buildReleaseCandidateState(options, {
+        targetSha: "a".repeat(40),
+        toolingSha: "b".repeat(40),
+      }),
+      publishWorkflowRef: "release-publish/bbbbbbbbbbbb-100",
+      fullReleaseRunId: "111",
+      npmPreflightRunId: "222",
+    };
+    const repaired = {
+      ...buildReleaseCandidateState(options, {
+        targetSha: "a".repeat(40),
+        toolingSha: "c".repeat(40),
+      }),
+      publishWorkflowRef: "release-publish/cccccccccccc-200",
+    };
+
+    expect(reconcileReleaseCandidateState(saved, repaired, true)).toMatchObject({
+      toolingSha: "c".repeat(40),
+      publishWorkflowRef: "release-publish/cccccccccccc-200",
+      fullReleaseRunId: "111",
+      npmPreflightRunId: "222",
+    });
+    // Candidate-bound inputs stay frozen across a tooling repair.
+    expect(() =>
+      reconcileReleaseCandidateState(saved, { ...repaired, skipParallels: !saved.skipParallels }),
+    ).toThrow("state mismatch for skipParallels");
   });
 
   it.each(["unbound", "retained request", "full run", "npm run", "later phase"])(
