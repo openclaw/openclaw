@@ -29,7 +29,7 @@ suite.define(() => {
         page.on("pageerror", (error) => pageErrors.push(error.message));
         const held = await holdModuleResponse(
           page,
-          controlUiE2eBuiltModuleRequest("ui/src/pages/chat/components/chat-session-rail.ts"),
+          controlUiE2eBuiltModuleRequest("ui/src/pages/chat/components/chat-session-rail.tsx"),
         );
         try {
           const gateway = await installMockGateway(page);
@@ -141,7 +141,7 @@ suite.define(() => {
         page.on("pageerror", (error) => pageErrors.push(error.message));
         const held = await holdModuleResponse(
           page,
-          controlUiE2eBuiltModuleRequest("ui/src/pages/chat/components/chat-session-rail.ts"),
+          controlUiE2eBuiltModuleRequest("ui/src/pages/chat/components/chat-session-rail.tsx"),
         );
         try {
           const gateway = await installMockGateway(page);

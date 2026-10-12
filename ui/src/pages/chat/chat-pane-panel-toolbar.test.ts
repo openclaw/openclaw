@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { html, render } from "lit";
-import { expect, it, vi } from "vitest";
+import { expect, it, onTestFinished, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { sidebarPanelDefinitions } from "./chat-pane-embedded-panels.ts";
 import {
@@ -9,6 +9,8 @@ import {
   createSessionCapabilityFixture,
   createTestChatPane,
 } from "./chat-pane.test-support.ts";
+import { mountChatPaneHeader } from "./components/chat-pane-header.test-support.ts";
+import { renderChatPanePanelLayoutActions } from "./components/chat-pane-header.ts";
 import type { SidebarPanelDefinition } from "./components/chat-sidebar-region-types.ts";
 import { openSlot, promoteSidebarPanel, setSidebarOpen } from "./sidebar-layout.ts";
 
@@ -81,4 +83,41 @@ it("keeps main content actions and focus in the task toolbar across plugin panel
   expect(container.querySelectorAll(".chat-side-panel-toggle")).toHaveLength(1);
   container.querySelector<HTMLButtonElement>(".chat-side-panel-toggle")!.click();
   expect(state.sidebarLayout.open).toBe(false);
+});
+
+it("retains focused actions and an open dock menu when header props refresh", () => {
+  const onSplitRight = vi.fn();
+  const panelLayoutActions = () =>
+    renderChatPanePanelLayoutActions(
+      openSlot({ columns: [] }, "workspace"),
+      sidebarPanelDefinitions(),
+      false,
+      vi.fn(),
+    );
+  const mounted = mountChatPaneHeader([], {
+    onClosePane: vi.fn(),
+    onSplitRight,
+    panelLayoutActions: panelLayoutActions(),
+  });
+  onTestFinished(() => {
+    mounted.unmount();
+    mounted.container.remove();
+  });
+  const close = mounted.container.querySelector<HTMLButtonElement>(".chat-pane__close-pane")!;
+  const split = mounted.container.querySelector<HTMLButtonElement>(".chat-pane__split-right")!;
+  const menu = mounted.container.querySelector<HTMLElement & { open: boolean }>(
+    ".chat-panel-layout-menu",
+  )!;
+  menu.open = true;
+  close.focus();
+
+  mounted.update({ title: "Updated session title", panelLayoutActions: panelLayoutActions() });
+
+  expect.soft(mounted.container.querySelector(".chat-pane__close-pane")).toBe(close);
+  expect.soft(mounted.container.querySelector(".chat-pane__split-right")).toBe(split);
+  expect.soft(document.activeElement).toBe(close);
+  expect.soft(mounted.container.querySelector(".chat-panel-layout-menu")).toBe(menu);
+  expect.soft(menu.open).toBe(true);
+  mounted.container.querySelector<HTMLButtonElement>(".chat-pane__split-right")!.click();
+  expect(onSplitRight).toHaveBeenCalledExactlyOnceWith("pane-1");
 });

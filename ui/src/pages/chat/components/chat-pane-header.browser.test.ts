@@ -35,7 +35,7 @@ describe.skipIf(typeof HTMLElement.prototype.checkVisibility !== "function")(
         const editor = state === "editor";
         const onOpenEditor = vi.fn();
         const reason = "Branch switch is unavailable while the agent is working.";
-        const { container, props } = mountChatPaneHeader(containers, {
+        const { container, props, unmount } = mountChatPaneHeader(containers, {
           branchSwitchDisabledReason: busy ? reason : null,
           onClosePane: state === "idle" ? vi.fn() : undefined,
           branches: [
@@ -44,6 +44,7 @@ describe.skipIf(typeof HTMLElement.prototype.checkVisibility !== "function")(
           ],
         });
         if (editor) {
+          unmount();
           render(
             renderChatSidebarEditorMenu({
               absolutePath: "/repo/example.ts",

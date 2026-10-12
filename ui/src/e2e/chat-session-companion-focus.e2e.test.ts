@@ -89,7 +89,7 @@ suite.define(() => {
       await suite.withPage({ viewport: { width: 1440, height: 900 } }, async ({ page }) => {
         const held = await holdModuleResponse(
           page,
-          controlUiE2eBuiltModuleRequest("ui/src/pages/chat/components/chat-session-rail.ts"),
+          controlUiE2eBuiltModuleRequest("ui/src/pages/chat/components/chat-session-rail.tsx"),
         );
         try {
           await installMockGateway(page);
@@ -127,7 +127,7 @@ suite.define(() => {
       await suite.withPage({ viewport: { width: 1440, height: 900 } }, async ({ page }) => {
         const held = await holdModuleResponse(
           page,
-          controlUiE2eBuiltModuleRequest("ui/src/pages/chat/components/chat-session-rail.ts"),
+          controlUiE2eBuiltModuleRequest("ui/src/pages/chat/components/chat-session-rail.tsx"),
         );
         try {
           await installMockGateway(page);
@@ -333,7 +333,7 @@ suite.define(() => {
         intent === "sidebar menu before mount"
           ? await holdModuleResponse(
               page,
-              controlUiE2eBuiltModuleRequest("ui/src/pages/chat/components/chat-session-rail.ts"),
+              controlUiE2eBuiltModuleRequest("ui/src/pages/chat/components/chat-session-rail.tsx"),
             )
           : null;
       try {

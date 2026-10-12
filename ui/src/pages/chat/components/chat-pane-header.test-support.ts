@@ -1,7 +1,9 @@
-import { html, nothing, render } from "lit";
+import { nothing } from "lit";
+import { createComponent, createSignal, flush } from "solid-js";
 import { vi } from "vitest";
 import type { GatewaySessionRow } from "../../../api/types.ts";
-import { renderChatPaneHeader } from "./chat-pane-header.ts";
+import { mountSolid } from "../../../test-helpers/mount-solid.ts";
+import { ChatPaneHeader, renderChatPaneHeader } from "./chat-pane-header.ts";
 
 export type ChatPaneHeaderProps = Parameters<typeof renderChatPaneHeader>[0];
 
@@ -55,8 +57,18 @@ export function mountChatPaneHeader(
     onBranchSelect: vi.fn(),
     ...patch,
   };
-  render(html`${renderChatPaneHeader(props)}`, container);
-  return { container, props };
+  const [current, setCurrent] = createSignal(props);
+  const liveProps = new Proxy(props, { get: (_target, key) => Reflect.get(current(), key) });
+  const mounted = mountSolid(() => createComponent(ChatPaneHeader, liveProps), { container });
+  return {
+    container,
+    props,
+    unmount: mounted.unmount,
+    update(this: void, changes: Partial<ChatPaneHeaderProps>) {
+      setCurrent({ ...current(), ...changes });
+      flush();
+    },
+  };
 }
 
 export function mockWorkspaceIconFetch() {

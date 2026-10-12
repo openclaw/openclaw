@@ -22,7 +22,8 @@ import {
 } from "../../../lit/solid-content.tsx";
 import { ownSessionLaunchCalls } from "../chat-spawned-subagent.ts";
 import { transcriptRunId } from "../chat-thread-run-identity.ts";
-import { activityHeadline, selectActivityHeadline } from "./chat-activity-headline.ts";
+import { ChatActivityHeadline } from "./chat-activity-headline.solid.tsx";
+import { selectActivityHeadline } from "./chat-activity-headline.ts";
 import type { NativeMessageGroupOptions } from "./chat-message-group-frame.ts";
 import {
   renderBrowserTabPreviews,
@@ -224,22 +225,20 @@ function ActivityGroupBody(props: {
             )
           }
         >
-          <LitContent
-            value={activityHeadline(
-              JSON.stringify([
-                props.options.sessionKey,
-                props.options.connectionEpoch,
-                props.options.activityRunId,
-              ]),
-              state().headline,
-              state().groupSummaryLabel,
-              state().currentActivity,
-              props.options.pluginToolIcons,
-              describeToolGroup(state().visibleActivity)
-                .outcomes.filter(({ kind }) => kind !== "failed" && kind !== "skipped")
-                .map(({ label }) => label),
-            )}
-          />
+          <ChatActivityHeadline
+            scope={JSON.stringify([
+              props.options.sessionKey,
+              props.options.connectionEpoch,
+              props.options.activityRunId,
+            ])}
+            activity={state().headline}
+            summary={state().groupSummaryLabel}
+            currentActivity={state().currentActivity}
+            pluginToolIcons={props.options.pluginToolIcons}
+            outcomes={describeToolGroup(state().visibleActivity)
+              .outcomes.filter(({ kind }) => kind !== "failed" && kind !== "skipped")
+              .map(({ label }) => label)}
+          />{" "}
           <LitContent
             value={renderToolReviewOutcome(
               state().reviewOutcome,

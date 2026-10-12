@@ -28,7 +28,6 @@ import {
 } from "./chat-pane-header.test-support.ts";
 import {
   canRevealSessionWorkspace,
-  renderChatPaneHeader,
   resolveChatPaneParentSession,
   resolveChatPaneWorkspaceIcon,
 } from "./chat-pane-header.ts";
@@ -130,7 +129,7 @@ describe("chat pane header", () => {
   });
 
   it("places the session menu last in the header action row", () => {
-    const { container, props } = mountHeader({
+    const { container, update } = mountHeader({
       mergedChrome: true,
       onClosePane: vi.fn(),
       sessionMenuAction: html`<button data-action="session-menu"></button>`,
@@ -147,7 +146,7 @@ describe("chat pane header", () => {
     const header = container.querySelector(".chat-pane__header")!;
     expect(header.classList.contains("chat-pane__header--closable")).toBe(true);
 
-    render(renderChatPaneHeader({ ...props, onClosePane: undefined }), container);
+    update({ onClosePane: undefined });
     expect(container.querySelector(".chat-pane__close-pane")).toBeNull();
     expect(container.querySelector(".chat-pane__header--closable")).toBeNull();
   });
@@ -978,21 +977,12 @@ describe("chat pane workspace chip icon", () => {
     await vi.advanceTimersByTimeAsync(0);
     expect(fetchSpy).toHaveBeenCalledTimes(1);
     await element?.updateComplete;
-    render(
-      html`${renderChatPaneHeader({ ...mounted.props, title: "Updated title", workspaceIcon })}`,
-      mounted.container,
-    );
+    mounted.update({ title: "Updated title", workspaceIcon });
     await element?.updateComplete;
     await Promise.resolve();
 
     expect(fetchSpy).toHaveBeenCalledTimes(1);
-    render(
-      html`${renderChatPaneHeader({
-        ...mounted.props,
-        workspaceIcon: { ...workspaceIcon, authTokens: ["new-token"] },
-      })}`,
-      mounted.container,
-    );
+    mounted.update({ workspaceIcon: { ...workspaceIcon, authTokens: ["new-token"] } });
     await vi.advanceTimersByTimeAsync(0);
     expect(fetchSpy).toHaveBeenCalledTimes(2);
   });
@@ -1014,13 +1004,9 @@ describe("chat pane workspace chip icon", () => {
     });
     const iconProps = () => resolveChatPaneWorkspaceIcon(context, "agent:main:connection");
     const mounted = mountHeader({ workspaceIcon: null });
-    // Use one Lit template callsite for initial mount and subsequent renders so
-    // this proves recovery of the same element, not a template replacement.
+    // Update one Solid root so recovery must retain the same workspace element.
     const paint = async () => {
-      render(
-        html`${renderChatPaneHeader({ ...mounted.props, workspaceIcon: iconProps() })}`,
-        mounted.container,
-      );
+      mounted.update({ workspaceIcon: iconProps() });
       const icon = mounted.container.querySelector<
         HTMLElement & { updateComplete: Promise<unknown> }
       >("openclaw-workspace-icon");

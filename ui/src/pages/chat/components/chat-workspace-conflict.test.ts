@@ -1,10 +1,11 @@
 /* @vitest-environment jsdom */
 
-import { render } from "lit";
+import { createComponent } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { i18n } from "../../../i18n/index.ts";
 import { pt_BR } from "../../../i18n/locales/pt-BR.ts";
-import { renderWorkspaceConflictNotice } from "./chat-workspace-conflict.ts";
+import { mountSolid } from "../../../test-helpers/mount-solid.ts";
+import { WorkspaceConflictNotice } from "./chat-workspace-conflict.ts";
 
 const conflict = {
   paths: ["src/local.ts"],
@@ -41,7 +42,9 @@ describe("workspace conflict copy actions", () => {
     await i18n.setLocale("pt-BR");
     const container = document.body.appendChild(document.createElement("div"));
 
-    render(renderWorkspaceConflictNotice({ conflict }), container);
+    mountSolid(() => createComponent(WorkspaceConflictNotice, { conflict }), {
+      container,
+    });
 
     expect(container.querySelector(".chat-composer-neighbor-card__copy")?.textContent).toContain(
       "Versoes locais mantidas.",
@@ -64,7 +67,9 @@ describe("workspace conflict copy actions", () => {
       value: vi.fn(() => false),
     });
     const container = document.body.appendChild(document.createElement("div"));
-    render(renderWorkspaceConflictNotice({ conflict }), container);
+    mountSolid(() => createComponent(WorkspaceConflictNotice, { conflict }), {
+      container,
+    });
 
     const button = [...container.querySelectorAll<HTMLButtonElement>("button")].find((candidate) =>
       candidate.textContent?.includes("Inspect the first cloud version"),
