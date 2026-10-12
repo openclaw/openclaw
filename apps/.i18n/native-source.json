@@ -1350,6 +1350,8 @@
     {"path":"apps/shared/OpenClawKit/Sources/OpenClawKit/RealtimeTalkOutput.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.90f64f78a77015d7","source":"Realtime audio playback fell behind. Reconnecting…"},
     {"path":"apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatMessageMetadata.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.f62a799f359d4eba","source":"Just now"},
     {"path":"apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatMessageMetadata.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.48defb46ee13dfc7","source":"Model: %@"},
+    {"path":"apps/macos/Sources/OpenClaw/DashboardAttachmentDownloads.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.5e2946ac95b0bf77","source":"Attachment download failed"},
+    {"path":"apps/macos/Sources/OpenClaw/DashboardAttachmentDownloads.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.1ad699329abc8829","source":"Try downloading the attachment again."},
     {"path":"apps/ios/Sources/Model/WatchReplyCoordinator.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.c2d029e25ee77004","source":"Delivery could not be confirmed. Check Chat on iPhone before sending again."},
     {"path":"apps/ios/Sources/Model/WatchReplyCoordinator.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.13a835c61c382115","source":"The Gateway delivery target changed. Review this message on iPhone."},
     {"path":"apps/ios/Sources/Model/WatchReplyCoordinator.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.3c38f5ea6beb32ba","source":"The Gateway returned an unexpected delivery result. Check Chat on iPhone."},

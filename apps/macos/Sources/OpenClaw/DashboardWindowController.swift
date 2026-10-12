@@ -5,7 +5,9 @@ import OpenClawKit
 import WebKit
 
 private final class DashboardWindowContentView: NSView {
-    override var mouseDownCanMoveWindow: Bool {
+    /// AppKit queries this constant during native display-cycle callbacks, outside
+    /// Swift task execution. No actor-owned state is read.
+    override nonisolated var mouseDownCanMoveWindow: Bool {
         true
     }
 
@@ -122,6 +124,7 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
     private var signInProgress: GatewayBrowserSignInProgress?
     private var browserSignInRoute: (baseURL: URL, url: URL)?
     private var navigationGeneration: UInt64 = 0
+    lazy var attachmentDownloads = DashboardAttachmentDownloads(controller: self)
     private var pendingNativeCommands: [DashboardNativeCommand] = []
     private var pendingNativeNavigation: DashboardNativeNavigation?
     var onClosed: (() -> Void)?
@@ -455,6 +458,7 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
 
     func detachWindowForReplacement() -> NSWindow? {
         guard let window else { return nil }
+        self.attachmentDownloads.retire()
         // Route changes replace the privileged document, not its native shell;
         // detaching first transfers AppKit ownership without a close/focus cycle.
         self.reconnectTask?.task.cancel()
@@ -476,6 +480,7 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
     }
 
     private func load(_ url: URL) {
+        self.attachmentDownloads.retire()
         self.invalidateGatewayHealth()
         self.nativeCommandsReady = false
         self.documentHost.load(url)
@@ -734,6 +739,7 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
 
 extension DashboardWindowController {
     private func prepareForFailure(preservingPendingCommands: Bool = false) {
+        self.attachmentDownloads.retire()
         self.deferredFinishSourceID = nil
         self.documentHost.retirePendingLoad()
         self.invalidateGatewayHealth()
@@ -960,6 +966,11 @@ extension DashboardWindowController {
         ControlUIDocumentHost.isTrustedLinkSource(self.webView.url, dashboardURL: self.currentURL)
     }
 
+    var canDownloadAttachments: Bool {
+        self.isWindowOpen && self.documentHost.hasLiveContent && self.pendingGatewaySwitch == nil &&
+            self.isTrustedDashboardDocument && self.documentHost.hasCurrentBrowserSession
+    }
+
     private var canDispatchNativeCommands: Bool {
         // Older shared-credential Gateways predate the shell-ready signal.
         // Personal browser sign-in requires the current Control UI's listener-owned fact.
@@ -1050,6 +1061,7 @@ extension DashboardWindowController {
     }
 
     func windowWillClose(_: Notification) {
+        self.attachmentDownloads.retire()
         self.reconnectTask?.task.cancel()
         self.reconnectTask = nil
         self.browserSignInRoute = nil
@@ -1336,6 +1348,11 @@ extension DashboardWindowController {
             decisionHandler(.cancel)
             return
         }
+        self.attachmentDownloads.prepare(navigationAction)
+        if navigationAction.shouldPerformDownload {
+            decisionHandler(self.attachmentDownloads.admit(navigationAction) ? .download : .cancel)
+            return
+        }
         self.documentHost.decidePolicy(
             for: navigationAction, documentReady: self.nativeCommandsReady, decisionHandler: decisionHandler)
     }
@@ -1353,6 +1370,7 @@ extension DashboardWindowController {
     /// never pass through `load(_:)`, so commands queue for the new document.
     func webView(_ webView: WKWebView, didCommit _: WKNavigation!) {
         guard webView === self.webView else { return }
+        self.attachmentDownloads.retire()
         self.documentHost.committed()
         self.invalidateGatewayHealth()
         self.deviceSettingsMessageHandler.cancelRequests()
@@ -1410,6 +1428,7 @@ extension DashboardWindowController {
 
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
         if webView === self.webView {
+            self.attachmentDownloads.retire()
             self.documentHost.hasLiveContent = false
             self.nativeCommandsReady = false
             self.invalidateGatewayHealth()
@@ -1423,6 +1442,10 @@ extension DashboardWindowController {
         decidePolicyFor navigationResponse: WKNavigationResponse,
         decisionHandler: @escaping @MainActor @Sendable (WKNavigationResponsePolicy) -> Void)
     {
+        if webView === self.webView {
+            decisionHandler(self.attachmentDownloads.admit(navigationResponse) ? .download : .allow)
+            return
+        }
         guard let tab = self.nativeBrowser.browserTab(for: webView) else {
             decisionHandler(.allow)
             return
