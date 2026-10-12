@@ -62,6 +62,7 @@ export const RUNTIME_POSTBUILD_STAMP = `dist/${RUNTIME_POSTBUILD_STAMP_FILE}`;
 export const DIST_PLUGIN_SDK_CORE = "dist/plugin-sdk/core.js";
 export const DIST_CHANNEL_CATALOG = "dist/channel-catalog.json";
 export const DIST_BUILD_INFO = "dist/build-info.json";
+export const DIST_UPDATE_PRELOAD_IMPORTS = "dist/update-preload-imports.json";
 export const DIST_LEGACY_UPDATE_NODE_RUNNER_COMPAT = "dist/shared-Y6bNiw2w.js";
 export const DIST_LEGACY_UPDATE_NODE_RUNNER_COMPAT_ALT = "dist/shared-DTaQo6Hi.js";
 export const DIST_LEGACY_UPDATE_NODE_RUNNER_COMPAT_0229A108 = "dist/shared-1Uyqkfns.js";
@@ -180,6 +181,7 @@ export async function writeRuntimePostBuildScaffold(tmp: string): Promise<void> 
     [DIST_PLUGIN_SDK_CORE]: "export const core = true;\n",
     [DIST_CHANNEL_CATALOG]: '{"entries":[]}\n',
     [DIST_BUILD_INFO]: '{"buildId":"test-build"}\n',
+    [DIST_UPDATE_PRELOAD_IMPORTS]: '{"chunks":[]}\n',
     [DIST_LEGACY_UPDATE_NODE_RUNNER_COMPAT]: "export function resolveNodeRunner() {}\n",
     [DIST_LEGACY_UPDATE_NODE_RUNNER_COMPAT_ALT]: "export function resolveNodeRunner() {}\n",
     [DIST_LEGACY_UPDATE_NODE_RUNNER_COMPAT_0229A108]: "export function resolveNodeRunner() {}\n",
@@ -198,6 +200,7 @@ export async function writeRuntimePostBuildScaffold(tmp: string): Promise<void> 
     [
       DIST_CHANNEL_CATALOG,
       DIST_BUILD_INFO,
+      DIST_UPDATE_PRELOAD_IMPORTS,
       DIST_PLUGIN_SDK_CORE,
       DIST_LEGACY_UPDATE_NODE_RUNNER_COMPAT,
       DIST_LEGACY_UPDATE_NODE_RUNNER_COMPAT_ALT,

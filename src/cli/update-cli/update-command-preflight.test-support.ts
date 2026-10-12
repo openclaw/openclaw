@@ -101,6 +101,7 @@ export function registerUpdatePreflightTests({
       estimatedBytes: 36_864,
       linked: 4,
       copied: 1,
+      retainedImports: true,
     };
     retainUpdateRuntime.mockImplementationOnce(async ({ assertCurrent, installTarget }) => {
       assertCurrent();
