@@ -103,6 +103,13 @@ return to the canonical reader. The projection shares the actor's eviction and
 write-receipt invalidation lifecycle and does not change schemas, stored formats,
 retention, or update behavior.
 
+Metadata-only lifecycle commits publish the resident actor's updated entry while
+retaining its transcript. Participant changes keep transcript payloads private
+until the next actor snapshot confirms the same transcript version. Reply
+delivery can read committed anchor facts after the actor handle is released;
+the delivery caller still owns current authorization. Reset boundaries, session
+replacement, and transcript edits continue to invalidate retained context.
+
 Parent forks use the existing session-entry worker for both transcript copying
 and child-row commits. Internal fork transformations are data patches, not native
 callbacks. The writer reads the current parent and child once and merges the
