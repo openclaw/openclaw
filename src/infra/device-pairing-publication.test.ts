@@ -423,7 +423,7 @@ test.each([
         );
       case "metadata update":
         return updatePairedDeviceMetadata("other", { displayName: "Other" }, baseDir);
-      case "token revocation":
+      default:
         return revokeDeviceToken({ deviceId: "other", role: "node", baseDir });
     }
   };
