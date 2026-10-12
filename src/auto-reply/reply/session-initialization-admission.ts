@@ -1,6 +1,8 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
+import { captureAgentWorkspaceReadiness } from "../../agents/workspace-readiness.js";
 import { readConversationBindingRouteFacts } from "../../channels/conversation-binding-route-facts.js";
+import { resolveSessionWorkStartError } from "../../config/sessions/lifecycle.js";
 import { canonicalizeMainSessionAlias } from "../../config/sessions/main-session.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { loadReplySessionInitializationSnapshot } from "../../config/sessions/session-accessor.reset.js";
@@ -46,6 +48,23 @@ export type InitSessionStateAttemptContext = {
   sessionCtxForState: FinalizedRuntimeMsgContext;
   storePath: string;
 };
+
+export function assertReplySessionInitializationAllowed(
+  sessionKey: string,
+  entry: Parameters<typeof resolveSessionWorkStartError>[1],
+  options: {
+    allowRestartTombstoneReplacement: boolean;
+    providerReviewAcknowledgment: InitSessionStateParams["providerReviewAcknowledgment"];
+  },
+) {
+  const error = resolveSessionWorkStartError(sessionKey, entry, {
+    ...options,
+    allowPendingWorkspace: captureAgentWorkspaceReadiness(sessionKey) ? true : undefined,
+  });
+  if (error) {
+    throw new Error(error);
+  }
+}
 
 export async function resolveInitSessionStateAttemptContext(
   params: Pick<InitSessionStateParams, "cfg" | "ctx">,

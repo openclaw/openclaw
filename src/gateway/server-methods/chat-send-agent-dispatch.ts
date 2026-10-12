@@ -8,6 +8,7 @@ import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/i
 import { classifyAgentRunTerminalOutcome } from "../../agents/agent-run-terminal-outcome.js";
 import { resolveWebchatPromptCacheKey } from "../../agents/embedded-agent-runner/run/session-boundary-prompt-cache-key.js";
 import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
+import { runWithAgentWorkspaceReadiness } from "../../agents/workspace-readiness.js";
 import { dispatchInboundMessageWithProjectedDispatcher } from "../../auto-reply/dispatch.js";
 import type { ReplyDispatchRun } from "../../auto-reply/get-reply-options.types.js";
 import { isReplyPayloadStatusNotice } from "../../auto-reply/reply-payload.js";
@@ -246,21 +247,23 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
           if (!acceptedMessageInjection) {
             admission.assertWorkAdmissionCurrent();
           }
-          let assertWorkspaceRunOwnership: (() => void) | undefined;
+          let workspacePreparation: ReturnType<typeof prepareSessionWorkspace> | undefined;
           if (
             !acceptedMessageInjection &&
             entry &&
             (Object.hasOwn(entry, "pendingProjectGitUrl") || entry.pendingWorktree)
           ) {
             phase?.mark("worktree");
-            assertWorkspaceRunOwnership = await prepareSessionWorkspace({
+            workspacePreparation = prepareSessionWorkspace({
               admission,
               client,
               context,
               session,
             });
-            assertWorkspaceRunOwnership();
+            await workspacePreparation.promptReady;
+            workspacePreparation.assertCurrent();
           }
+          const assertWorkspaceRunOwnership = workspacePreparation?.assertCurrent;
           phase?.mark("replyContext");
           if (replyContextFieldsPromise && !preAckReplyContextPromise) {
             const replyContextFields = await replyContextFieldsPromise;
@@ -491,13 +494,24 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
                     ),
                 }),
             );
-          const dispatchResult = await (cronCreatorAuthority && externalAuthorityAdmission
-            ? externalAuthorityAdmission.run(
-                cronCreatorAuthority,
-                dispatchWithRetry,
-                activeRunAbort.controller.signal,
-              )
-            : dispatchWithRetry());
+          const runDispatch = () =>
+            cronCreatorAuthority && externalAuthorityAdmission
+              ? externalAuthorityAdmission.run(
+                  cronCreatorAuthority,
+                  dispatchWithRetry,
+                  activeRunAbort.controller.signal,
+                )
+              : dispatchWithRetry();
+          const preparedWorkspace = workspacePreparation;
+          const dispatchResult = await (preparedWorkspace
+            ? runWithAgentWorkspaceReadiness(preparedWorkspace, async () => {
+                try {
+                  return await runDispatch();
+                } finally {
+                  await preparedWorkspace.waitUntilReady();
+                }
+              })
+            : runDispatch());
           if (dispatchResult.beforeAgentRunBlocked === true) {
             userTurnRecorder.markBlocked();
           }

@@ -7,6 +7,7 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { OpenClawStateLeaseError } from "../../state/openclaw-state-lease-error.js";
 import type { WorktreeWaitBudget } from "./allocation.js";
 import { withWorktreeGitConfig } from "./checkout-git-config.js";
+import { prepareWorktreePromptFiles } from "./checkout-inputs.js";
 import { resolveWorktreeCheckoutKey } from "./checkout-policy-key.js";
 import type { WorktreeSourceProfile } from "./checkout-profiles.js";
 import { hasWorktreeUnknownOutcome } from "./errors.js";
@@ -47,6 +48,7 @@ type CheckoutOptions = WorktreeFilesystemOptions & {
   sourceProfile?: WorktreeSourceProfile;
   /** Hydrate the registered commit and return its estimated checkout bytes. */
   prepareCommit?: (commit: string) => Promise<number>;
+  onPromptReady?: (commit: string) => Promise<void>;
   rollbackGuard?: () => void;
   /** Unwind source custody before the service reacquires allocation for an untouched registration. */
   deferUnpreparedCleanup?: (cleanup: (assertCurrent: () => void) => Promise<void>) => void;
@@ -87,10 +89,6 @@ function checkoutGitOptions(options: CheckoutOptions, cloneBytes?: number): GitC
     timeoutMs: WORKTREE_CHECKOUT_TIMEOUT_MS,
     ...options.checkoutBudget,
   };
-}
-
-function digest(value: string): string {
-  return createHash("sha256").update(value).digest("hex");
 }
 
 async function estimateTemplateCloneBytes(
@@ -134,16 +132,19 @@ async function prepareTemplate(options: CheckoutOptions) {
     gitOptions(options),
     async (git) => {
       setWorktreePreparationTemplate("unavailable", { reason: "checkout-policy" });
-      const contentKey = await resolveWorktreeCheckoutKey(
-        options,
+      const contentKey = await resolveWorktreeCheckoutKey({
+        commonDir: options.commonDir,
+        destination: options.destination,
         commit,
+        gitOptions: gitOptions(options),
         git,
-        gitOptions(options),
-      );
+      });
       if (!contentKey) {
         return undefined;
       }
-      const cacheKey = digest(`${options.commonDir}\n${options.worktreeRoot}`);
+      const cacheKey = createHash("sha256")
+        .update(`${options.commonDir}\n${options.worktreeRoot}`)
+        .digest("hex");
       const record = await prepareWorktreeTemplate({
         env: options.env,
         now: options.now,
@@ -161,12 +162,14 @@ async function prepareTemplate(options: CheckoutOptions) {
           // --list includes this worktree's config.worktree when the extension is enabled.
           // A clean sparse template can otherwise look identical to a full checkout.
           if (
-            (await resolveWorktreeCheckoutKey(
-              { ...options, destination: existing.path },
+            (await resolveWorktreeCheckoutKey({
+              ...options,
+              ...templateOptions,
+              destination: existing.path,
               commit,
               git,
-              gitOptions(templateOptions),
-            )) !== contentKey
+              gitOptions: gitOptions({ ...options, ...templateOptions }),
+            })) !== contentKey
           ) {
             return false;
           }
@@ -198,12 +201,14 @@ async function prepareTemplate(options: CheckoutOptions) {
             checkoutGitOptions({ ...options, ...templateOptions }),
           );
           if (
-            (await resolveWorktreeCheckoutKey(
-              { ...options, destination: preparing.path },
+            (await resolveWorktreeCheckoutKey({
+              ...options,
+              ...templateOptions,
+              destination: preparing.path,
               commit,
               git,
-              gitOptions(templateOptions),
-            )) !== contentKey
+              gitOptions: gitOptions({ ...options, ...templateOptions }),
+            })) !== contentKey
           ) {
             throw new Error("Template and target checkout configurations differ");
           }
@@ -365,7 +370,9 @@ export async function addManagedWorktree(input: CheckoutOptions): Promise<Checko
     return result.code === 0 ? added : result;
   };
   let retainedTemplate: Awaited<ReturnType<typeof prepareTemplate>>;
-  const measurementKey = digest(`${options.commonDir}\n${options.worktreeRoot}`);
+  const measurementKey = createHash("sha256")
+    .update(`${options.commonDir}\n${options.worktreeRoot}`)
+    .digest("hex");
   let sampledGit: { gitMs?: number } | undefined;
   const prepare = async (): Promise<CheckoutResult> => {
     if (profile && commit !== profile.commit) {
@@ -470,6 +477,33 @@ export async function addManagedWorktree(input: CheckoutOptions): Promise<Checko
     }
     if (!template) {
       const started = performance.now();
+      if (
+        !options.deferGitCheckout &&
+        options.onPromptReady &&
+        (await withWorktreeGitConfig(
+          options.destination,
+          options.sourceOnly === true,
+          gitOptions(options),
+          (git) =>
+            prepareWorktreePromptFiles({
+              repoRoot: options.repoRoot,
+              commonDir: options.commonDir,
+              commit,
+              destination: options.destination,
+              git,
+              gitOptions: gitOptions(options),
+              checkoutOptions: checkoutGitOptions(options),
+              onMaterializationStart: () => {
+                materializationStarted = true;
+              },
+            }),
+        ))
+      ) {
+        await assertRegistration();
+        assertOwned(options);
+        await options.onPromptReady(commit);
+        assertOwned(options);
+      }
       const result = options.deferGitCheckout ? added : await checkout();
       if (sampleGit && measurement && result.code === 0) {
         measurement.gitMs = performance.now() - started;

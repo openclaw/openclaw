@@ -105,12 +105,14 @@ describe("ManagedWorktreeService repository code isolation", () => {
       );
 
       const progress: string[] = [];
+      const onPromptReady = vi.fn(async () => {});
       const created = await service.create({
         repoRoot: repo,
         name: "setup",
         baseRef: "HEAD",
         runSetupScript,
         onProgress: (phase) => progress.push(phase),
+        onPromptReady,
       });
 
       const setupOutput = path.join(created.path, "setup-ran.txt");
@@ -121,6 +123,9 @@ describe("ManagedWorktreeService repository code isolation", () => {
       }
       await expect(fs.access(sentinel)).rejects.toMatchObject({ code: "ENOENT" });
       expect(progress).toEqual(runSetupScript ? ["checkout", "setup"] : ["checkout"]);
+      if (runSetupScript) {
+        expect(onPromptReady).not.toHaveBeenCalled();
+      }
     },
   );
 

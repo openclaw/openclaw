@@ -18,7 +18,6 @@ import { resolveSessionLifecycleTimestampsAsync } from "../../config/sessions/li
 import {
   hasTerminalMainSessionTranscriptNewerThanRegistrySync,
   isRestartRecoveryTombstone,
-  resolveSessionWorkStartError,
 } from "../../config/sessions/lifecycle.js";
 import { deriveSessionMetaPatch } from "../../config/sessions/metadata.js";
 import {
@@ -127,6 +126,7 @@ import {
 } from "./session-init-conflict-retry.js";
 import type { SessionInitResult } from "./session-init.types.js";
 import {
+  assertReplySessionInitializationAllowed,
   prepareReplySessionInitialization,
   resolveInitSessionStateAttemptContext,
   resolveInitializationSessionReader,
@@ -430,13 +430,10 @@ async function initSessionStateAttemptLocked(
     nativeCommandTarget: resolveCommandTurnTargetSessionKey(ctx),
     sessionKey,
   });
-  const archivedSessionError = resolveSessionWorkStartError(sessionKey, entry, {
+  assertReplySessionInitializationAllowed(sessionKey, entry, {
     allowRestartTombstoneReplacement: restartTombstoneReset || restartTombstoneParentFork,
     providerReviewAcknowledgment: params.providerReviewAcknowledgment,
   });
-  if (archivedSessionError) {
-    throw new Error(archivedSessionError);
-  }
   // Locked model selection is coupled to the current native session id. Reject before
   // lifecycle cleanup so a reset cannot detach the durable harness binding.
   const lockedModelSelection = isModelSelectionLocked(entry);

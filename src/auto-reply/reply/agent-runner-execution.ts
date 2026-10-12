@@ -18,6 +18,7 @@ import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-erro
 import { leaseMcpAppModelContextForSessionTurn } from "../../agents/mcp-ui-resource.js";
 import { resolveReplyExpectation } from "../../agents/reply-completion.js";
 import { createAgentPatchedSessionModelRunGuard } from "../../agents/session-model-auto-revert.js";
+import { captureAgentWorkspaceReadiness } from "../../agents/workspace-readiness.js";
 import { readChannelContextGatewayContextResolver } from "../../channels/message-access/admission-evidence.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
@@ -405,7 +406,14 @@ async function executeAgentTurnInternalLoop(
         commitTerminalOutcome,
         clearRecoveredAutoFallbackPrimaryProbe,
       };
-      const fallbackResult = await runAgentFallbackCandidates(cycleParams);
+      let fallbackResult: Awaited<ReturnType<typeof runAgentFallbackCandidates>>;
+      try {
+        fallbackResult = await runAgentFallbackCandidates(cycleParams);
+      } finally {
+        // Completion belongs to the turn, including text-only native runtimes
+        // whose tool or hook surfaces are disabled.
+        await captureAgentWorkspaceReadiness(params.sessionKey)?.waitUntilReady();
+      }
       cycleParams.timing.logIfSlow({
         runId: cycleParams.runId,
         sessionId: cycleParams.turn.followupRun.run.sessionId,

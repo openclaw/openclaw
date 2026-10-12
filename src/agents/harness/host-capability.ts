@@ -23,12 +23,7 @@ import {
   readAdmittedRunOperatorAuthority,
   retainAdmittedRunBeforeToolCallRecovery,
 } from "../admitted-run-context.js";
-import { bindAgentToolSourceExecutionGuard } from "../agent-tool-source-execution-guard.js";
-import { wrapToolWithAbortSignal } from "../agent-tools.abort.js";
-import {
-  rewrapToolWithBeforeToolCallHook,
-  runBeforeToolCallHook,
-} from "../agent-tools.before-tool-call.js";
+import { runBeforeToolCallHook } from "../agent-tools.before-tool-call.js";
 import {
   createOpenClawCodingToolsInternal,
   createOpenClawCodingToolsInternalAsync,
@@ -46,16 +41,18 @@ import {
   getGatewayToolCallerIdentity,
   withGatewayToolApprovalOwner,
   withGatewayToolCallerIdentity,
-  wrapToolWithGatewayCallerIdentity,
 } from "../tools/gateway-caller-context.js";
 import { callGatewayTool } from "../tools/gateway.js";
 import {
   getCoreTtsToolResultMediaUrls,
   transferCoreTtsToolResultProvenance,
 } from "../tools/tts-tool-result-provenance.js";
-import { gateBoundTool } from "./host-bound-tool.js";
+import { bindHostToolSurface } from "./host-bound-tool.js";
 import type { AgentHarnessHostCapabilities } from "./host-capability-types.js";
-import { captureRequiredWorkspaceToolFloor } from "./host-capability-workspace.js";
+import {
+  captureRequiredWorkspaceToolFloor,
+  prepareHostWorkspaceReadiness,
+} from "./host-capability-workspace.js";
 import { normalizeNativeOperationCwd, prepareAgentHarnessEnvironment } from "./host-environment.js";
 import { bindHarnessMedia } from "./host-media.js";
 import {
@@ -172,6 +169,7 @@ export function createAgentHarnessHostCapabilities(params: {
     turnSourceAccountId: attempt.agentAccountId,
     turnSourceThreadId: attempt.currentThreadTs,
   });
+  const workspaceReadiness = prepareHostWorkspaceReadiness(sessionKey, assertActive);
   const observeCoreTtsToolResult = (result: unknown) => {
     if (typeof result === "object" && result !== null && getCoreTtsToolResultMediaUrls(result)) {
       coreTtsToolResults.add(result);
@@ -329,6 +327,9 @@ export function createAgentHarnessHostCapabilities(params: {
     }: Parameters<AgentHarnessHostCapabilities["runBeforeToolCall"]>[0],
   ) => {
     assertCurrent();
+    if (workspaceReadiness.beforeToolCall) {
+      await workspaceReadiness.beforeToolCall(request, assertCurrent);
+    }
     const hostApprovalMode = approvalMode === "defer" ? "defer" : "request";
     const actionHookContext = hookContextForOperation(nativeOperation);
     const result = await runBeforeToolCallHook({
@@ -376,19 +377,15 @@ export function createAgentHarnessHostCapabilities(params: {
     tools: AnyAgentTool[],
     options: Readonly<{ cwd?: string }> | undefined,
     observeResult: (result: unknown) => void,
-  ) => {
-    assertActive();
-    const boundAbortSignal = bindAbortSignal(attempt.abortSignal);
-    const bindingHookContext = hookContextForOperation(options);
-    return tools
-      .map((tool) => bindAgentToolSourceExecutionGuard(tool, assertActive))
-      .map((tool) => rewrapToolWithBeforeToolCallHook(tool, bindingHookContext))
-      .map((tool) =>
-        callerIdentity ? wrapToolWithGatewayCallerIdentity(tool, callerIdentity) : tool,
-      )
-      .map((tool) => wrapToolWithAbortSignal(tool, boundAbortSignal))
-      .map((tool) => gateBoundTool(tool, assertActive, observeResult));
-  };
+  ) =>
+    bindHostToolSurface(tools, {
+      assertActive,
+      observeResult,
+      callerIdentity,
+      hookContext: hookContextForOperation(options),
+      abortSignal: bindAbortSignal(attempt.abortSignal),
+      workspaceReadiness: workspaceReadiness.readiness,
+    });
   const bindToolSurface: AgentHarnessHostCapabilities["bindToolSurface"] = (tools, options) =>
     bindTools(tools, options, () => {});
   const bindModelExecution: AgentHarnessHostCapabilities["bindModelExecution"] =
@@ -456,6 +453,7 @@ export function createAgentHarnessHostCapabilities(params: {
     kind: "agent-harness-host-capability" as const,
     version: 1 as const,
     assertActive,
+    ...(workspaceReadiness.capability ? { workspaceReadiness: workspaceReadiness.capability } : {}),
     get assertNativeSubagentSpawnAllowed() {
       return bindHarnessNativeSpawnAuthority(personalToolParticipants, assertActive);
     },

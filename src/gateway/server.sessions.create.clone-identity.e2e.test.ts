@@ -195,6 +195,8 @@ test.each(
       expect(git.requests.every((authorization) => authorization === AUTHORIZATION)).toBe(true);
       expect(created.entry?.projectId, errors()).toBeDefined();
       expect(dispatchInboundMessageMock).toHaveBeenCalledOnce();
+      expect(errors()).toBe("[]");
+      expect(created.entry?.pendingWorktree).toBeUndefined();
       expect(await fs.readFile(path.join(created.entry!.spawnedCwd!, "input.txt"), "utf8")).toBe(
         "later private content\n",
       );

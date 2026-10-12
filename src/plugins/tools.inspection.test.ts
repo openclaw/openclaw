@@ -1,7 +1,12 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, assert, describe, expect, it } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
+import { createOpenClawCodingToolsAsync } from "../agents/agent-tools.js";
+import { createAdmittedHostCapabilityTestFixture } from "../agents/harness/host-capability.test-support.js";
 import { resolveOpenClawPluginToolsForOptions } from "../agents/openclaw-plugin-tools.js";
+import { createOpenClawToolsAsync } from "../agents/openclaw-tools.js";
+import { runWithAgentWorkspaceReadiness } from "../agents/workspace-readiness.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createPluginCache, withPluginCache } from "./plugin-cache.js";
@@ -23,6 +28,8 @@ function writeToolPlugin(params: {
   id: string;
   events: string;
   failure?: "import" | "registration";
+  workspaceAccess?: boolean | "execute";
+  factoryReadsWorkspace?: boolean;
 }): string {
   fs.mkdirSync(params.root, { recursive: true });
   fs.writeFileSync(
@@ -65,12 +72,13 @@ module.exports = { id: ${JSON.stringify(params.id)}, register(api) {
   api.registerTool((context) => {
     const details = { agentId: context.agentId, workspaceDir: context.workspaceDir };
     event("factory", details);
+    if (${params.factoryReadsWorkspace === true}) details.contents = fs.readFileSync(context.workspaceDir + "/input.txt", "utf8");
     return {
       name: ${JSON.stringify(`${params.id}_tool`)}, label: "Inspection fixture", description: "Synthetic inspection fixture",
       parameters: { type: "object", properties: {} },
-      execute: async () => ({ content: [{ type: "text", text: JSON.stringify(details) }], details }),
+      execute: async () => { event("execute"); return { content: [{ type: "text", text: JSON.stringify(details) }], details }; },
     };
-  }, { name: ${JSON.stringify(`${params.id}_tool`)} });
+  }, { name: ${JSON.stringify(`${params.id}_tool`)}, ...${JSON.stringify(params.workspaceAccess === undefined ? {} : { workspaceAccess: params.workspaceAccess })} });
 } };
 `,
   );
@@ -94,6 +102,148 @@ function readEvents(file: string): Array<{
 }
 
 describe("plugin tool inspection ownership", () => {
+  it.each(
+    ([undefined, true, false, "execute"] as const).flatMap((workspaceAccess) =>
+      [false, true].map((pluginOnly) => ({ workspaceAccess, pluginOnly })),
+    ),
+  )(
+    "honors workspaceAccess=$workspaceAccess with pluginOnly=$pluginOnly before factory and execution",
+    async ({ workspaceAccess, pluginOnly }) => {
+      await withOpenClawTestState(
+        { env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" } },
+        async (state) => {
+          const events = state.path("readiness-events.jsonl");
+          const factoryReadsWorkspace = workspaceAccess === undefined || workspaceAccess === true;
+          const pluginPath = writeToolPlugin({
+            root: state.path("reader-plugin"),
+            id: "project",
+            events,
+            workspaceAccess,
+            factoryReadsWorkspace,
+          });
+          const config: OpenClawConfig = {
+            agents: { entries: { main: { workspace: state.workspaceDir } } },
+            plugins: {
+              allow: ["project"],
+              load: { paths: [pluginPath] },
+              slots: { memory: "none" },
+            },
+          };
+          const ready = createDeferred();
+          const waiting = createDeferred();
+          let complete = false;
+          const sessionKey = "agent:main:readiness";
+          const scope = {
+            context: { config, agentId: "main", workspaceDir: state.workspaceDir },
+            toolAllowlist: ["project_tool"],
+          };
+          const cache = createPluginCache();
+          try {
+            await withPluginCache(cache, async () => {
+              const loadContext = resolvePluginRuntimeLoadContext({ config, env: process.env });
+              const inspection = await acquirePluginToolInspectionRegistry({
+                loadContext,
+                scopes: [scope],
+              });
+              let host:
+                | Awaited<ReturnType<typeof createAdmittedHostCapabilityTestFixture>>
+                | undefined;
+              try {
+                await runWithAgentWorkspaceReadiness(
+                  {
+                    sessionKey,
+                    isReady: () => complete,
+                    assertCurrent: () => {},
+                    waitUntilReady: () => {
+                      waiting.resolve();
+                      return ready.promise;
+                    },
+                  },
+                  async () => {
+                    host = await createAdmittedHostCapabilityTestFixture({
+                      runId: "plugin-readiness",
+                      sessionKey,
+                      sessionId: "readiness",
+                      config,
+                    });
+                    const pending = withPluginRuntimeRegistryScope(inspection.registry, () =>
+                      pluginOnly
+                        ? createOpenClawCodingToolsAsync({
+                            config,
+                            workspaceDir: state.workspaceDir,
+                            sessionKey,
+                            agentId: "main",
+                            includeCoreTools: false,
+                            runtimeToolAllowlist: ["project_tool"],
+                            wrapBeforeToolCallHook: false,
+                          })
+                        : createOpenClawToolsAsync({
+                            config,
+                            workspaceDir: state.workspaceDir,
+                            agentDir: state.agentDir(),
+                            agentSessionKey: sessionKey,
+                            requesterAgentIdOverride: "main",
+                            pluginToolAllowlist: ["project_tool"],
+                            disableMessageTool: true,
+                            webSearchEnabled: false,
+                          }),
+                    );
+                    if (factoryReadsWorkspace) {
+                      await Promise.race([waiting.promise, pending]);
+                      expect(readEvents(events).some((event) => event.kind === "factory")).toBe(
+                        false,
+                      );
+                      fs.writeFileSync(
+                        path.join(state.workspaceDir, "input.txt"),
+                        "late workspace content",
+                      );
+                      complete = true;
+                      ready.resolve();
+                    }
+                    const tool = (await pending).find(
+                      (candidate) => candidate.name === "project_tool",
+                    );
+                    assert(tool, "registered project tool remains available");
+                    const [bound] = host!.hostCapabilities.bindToolSurface([tool]);
+                    const result = bound!.execute("read", {});
+                    if (workspaceAccess === "execute") {
+                      await Promise.race([waiting.promise, result]);
+                      expect(readEvents(events).some((event) => event.kind === "execute")).toBe(
+                        false,
+                      );
+                      complete = true;
+                      ready.resolve();
+                    }
+                    if (workspaceAccess === false) {
+                      await Promise.race([waiting.promise, result]);
+                      expect(readEvents(events).some((event) => event.kind === "execute")).toBe(
+                        true,
+                      );
+                    }
+                    const output = await result;
+                    if (factoryReadsWorkspace) {
+                      expect(output.details).toMatchObject({ contents: "late workspace content" });
+                    }
+                    if (workspaceAccess === false) {
+                      expect(complete).toBe(false);
+                    }
+                  },
+                );
+              } finally {
+                ready.resolve();
+                host?.closeHost();
+                host?.closeAdmission();
+                await inspection.release();
+              }
+            });
+          } finally {
+            await cache[Symbol.asyncDispose]();
+          }
+        },
+      );
+    },
+  );
+
   it("registers the selected fleet once, preserves agent factories, and settles failed owners", async () => {
     await withOpenClawTestState(
       { env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" } },

@@ -124,8 +124,10 @@ describe("registered plugin factory bindings", () => {
       try {
         api.registerTool(kind === "static" ? tools[0]! : { contextVersion: 2, create }, {
           names: shape === "single" ? names.slice(0, 1) : names,
+          workspaceAccess: true,
         });
         expect(builder.registry.diagnostics).toEqual([]);
+        expect(builder.registry.tools[0]?.workspaceAccess).toBe(true);
         const factory = builder.registry.tools[0]!.factory;
         const context = { assertInvocationCurrent() {} };
         const rootResult = factory(context);

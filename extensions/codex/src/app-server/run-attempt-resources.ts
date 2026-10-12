@@ -561,11 +561,23 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
       nativeProcessAuthority?.requiresProcessAdmission && runtime.nativeToolSurfaceEnabled;
     const requiresModelAdmission =
       nativeModelAdmission !== undefined && decision.nativeModelInputTools !== undefined;
-    const requiresExecutionAdmission = requiresProcessAdmission || requiresModelAdmission;
+    const workspaceReadiness = runtime.nativeToolSurfaceEnabled
+      ? params.hostCapabilities.workspaceReadiness
+      : undefined;
+    const requiresWorkspaceAdmission =
+      workspaceReadiness !== undefined && decision.nativeModelInputTools !== undefined;
+    // Optional hook admission can be unavailable on supported native installations.
+    // Finish checkout before starting those threads instead of requiring a new hook policy.
+    if (workspaceReadiness && !requiresWorkspaceAdmission) {
+      await workspaceReadiness.waitUntilReady();
+      connection.assertCurrent();
+    }
+    const requiresExecutionAdmission =
+      requiresProcessAdmission || requiresModelAdmission || requiresWorkspaceAdmission;
     const relayEvents =
       requiresExecutionAdmission && !nativeHookRelayEvents.includes("pre_tool_use")
         ? [...nativeHookRelayEvents, "pre_tool_use" as const]
-        : nativeHookRelayEvents;
+        : [...nativeHookRelayEvents];
     if (params.pluginHarnessToolPolicyRestricted === true) {
       state.nativeHookRelay = undefined;
       return {
@@ -669,7 +681,10 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
         ? buildCodexNativeHookRelayConfig({
             relay: state.nativeHookRelay,
             events: relayEvents,
-            hookTimeoutSec: options.nativeHookRelay?.hookTimeoutSec,
+            // The workspace owner bounds readiness; its wait must fit inside the hook transport.
+            hookTimeoutSec: requiresWorkspaceAdmission
+              ? Math.max(options.nativeHookRelay?.hookTimeoutSec ?? 0, params.timeoutMs / 1_000)
+              : options.nativeHookRelay?.hookTimeoutSec,
           })
         : options.nativeHookRelay?.enabled === false
           ? buildCodexNativeHookRelayDisabledConfig()
