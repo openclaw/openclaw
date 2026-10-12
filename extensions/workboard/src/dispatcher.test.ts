@@ -4,6 +4,36 @@ import { dispatchAndStartWorkboardCards } from "./dispatcher.js";
 import { createWorkboardSqliteTestStore } from "./test/sqlite-store.js";
 
 describe("dispatchAndStartWorkboardCards", () => {
+  it("does not let an implicit target agent workspace widen caller access", async () => {
+    const store = createWorkboardSqliteTestStore();
+    const card = await store.create({
+      title: "Other agent scratch",
+      status: "ready",
+      agentId: "other",
+    });
+    const run = vi.fn();
+
+    const result = await dispatchAndStartWorkboardCards({
+      store,
+      subagent: { run },
+      options: {
+        maxStarts: 1,
+        resolveAgentWorkspace: (agentId) =>
+          agentId === "other" ? "/workspace-other" : "/workspace",
+        workspaceAccess: { unrestricted: false, roots: ["/workspace"], writable: true },
+      },
+    });
+
+    expect(result.startFailures).toEqual([
+      expect.objectContaining({
+        cardId: card.id,
+        error: "workspace path must equal one of the caller's allowed workspace roots.",
+      }),
+    ]);
+    expect(run).not.toHaveBeenCalled();
+    await expect(store.get(card.id)).resolves.toMatchObject({ status: "ready" });
+  });
+
   it("persists the resolved subagent runtime on new executions", async () => {
     const store = createWorkboardSqliteTestStore();
     const card = await store.create({

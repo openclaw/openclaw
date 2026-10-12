@@ -503,7 +503,7 @@ describe("MatrixRecoveryKeyStore", () => {
     expect(resolvedFromMultipleKeys?.[0]).toBe("SSSS");
   });
 
-  it.each([true])(
+  it.each([false, true])(
     "refuses retired recovery-key JSON without replacing state (SQLite key present=%s)",
     async (hasStoredKey) => {
       const recoveryKeyPath = createTempRecoveryKeyPath();

@@ -1604,6 +1604,73 @@ describe("startTelegramWebhook", () => {
       }),
     },
     {
+      name: "a signed approval in another business namespace",
+      mutate: (callback: ReturnType<typeof createTelegramPrivateTopicCallback>) => ({
+        ...callback,
+        data: buildTelegramApprovalCallbackData({
+          type: "approval",
+          approvalKind: "exec",
+          approvalId: "signed-approval",
+          decision: "allow-once",
+        }),
+        message: { ...callback.message, business_connection_id: "business-1234" },
+      }),
+    },
+    {
+      name: "a signed approval in another guest namespace",
+      mutate: (callback: ReturnType<typeof createTelegramPrivateTopicCallback>) => ({
+        ...callback,
+        data: buildTelegramApprovalCallbackData({
+          type: "approval",
+          approvalKind: "plugin",
+          approvalId: "signed-approval",
+          decision: "deny",
+        }),
+        message: { ...callback.message, guest_query_id: "guest-1234" },
+      }),
+    },
+    {
+      name: "a signed approval from a foreign bot",
+      mutate: (callback: ReturnType<typeof createTelegramPrivateTopicCallback>) => ({
+        ...callback,
+        data: buildTelegramApprovalCallbackData({
+          type: "approval",
+          approvalKind: "exec",
+          approvalId: "signed-approval",
+          decision: "allow-once",
+        }),
+        message: { ...callback.message, from: { ...callback.message.from, id: 999 } },
+      }),
+    },
+    {
+      name: "a signed approval from an invalid actor",
+      mutate: (callback: ReturnType<typeof createTelegramPrivateTopicCallback>) => ({
+        ...callback,
+        data: buildTelegramApprovalCallbackData({
+          type: "approval",
+          approvalKind: "plugin",
+          approvalId: "signed-approval",
+          decision: "deny",
+        }),
+        from: { ...callback.from, id: 0 },
+      }),
+    },
+    {
+      name: "an inline signed approval",
+      mutate: (callback: ReturnType<typeof createTelegramPrivateTopicCallback>) => ({
+        id: callback.id,
+        from: callback.from,
+        chat_instance: callback.chat_instance,
+        data: buildTelegramApprovalCallbackData({
+          type: "approval",
+          approvalKind: "exec",
+          approvalId: "signed-approval",
+          decision: "allow-once",
+        }),
+        inline_message_id: "inline-message-141",
+      }),
+    },
+    {
       name: "a signed approval for another chat",
       mutate: (callback: ReturnType<typeof createTelegramPrivateTopicCallback>) => ({
         ...callback,

@@ -667,6 +667,84 @@ describeOnWindows("createMxcSandboxBackendHandle (Windows-only MXC backend tests
     }
   });
 
+  test("filesystem bridge blocks a distinct agent workspace when workspaceAccess is none", async () => {
+    const sandboxWorkdir = mkdtempSync(path.join(tmpdir(), "mxc-fs-bridge-none-sandbox-"));
+    const agentWorkspaceDir = mkdtempSync(path.join(tmpdir(), "mxc-fs-bridge-none-agent-"));
+    const isolatedFile = path.join(sandboxWorkdir, "isolated.txt");
+    const agentFile = path.join(agentWorkspaceDir, "agent.txt");
+    writeFileSync(isolatedFile, "sandbox-only");
+    writeFileSync(agentFile, "agent-secret");
+
+    try {
+      const handle = createMxcSandboxBackendHandle({
+        ...baseParams,
+        workdir: sandboxWorkdir,
+        agentWorkspaceDir,
+        workspaceAccess: "none",
+      });
+      const bridge = handle.createFsBridge?.({
+        sandbox: {
+          workspaceDir: sandboxWorkdir,
+          agentWorkspaceDir,
+          workspaceAccess: "none",
+          containerName: handle.runtimeId,
+          containerWorkdir: sandboxWorkdir,
+          docker: { binds: [] },
+          backend: handle,
+        },
+      });
+      expect(bridge).toBeDefined();
+
+      await expect(
+        bridge?.readFile({ filePath: "isolated.txt", cwd: sandboxWorkdir }),
+      ).resolves.toEqual(Buffer.from("sandbox-only"));
+      await expect(bridge?.readFile({ filePath: agentFile, cwd: sandboxWorkdir })).rejects.toThrow(
+        /Path escapes sandbox root/u,
+      );
+    } finally {
+      rmSync(sandboxWorkdir, { recursive: true, force: true });
+      rmSync(agentWorkspaceDir, { recursive: true, force: true });
+    }
+  });
+
+  test("filesystem bridge exposes a distinct agent workspace as read-only when workspaceAccess is ro", async () => {
+    const sandboxWorkdir = mkdtempSync(path.join(tmpdir(), "mxc-fs-bridge-ro-sandbox-"));
+    const agentWorkspaceDir = mkdtempSync(path.join(tmpdir(), "mxc-fs-bridge-ro-agent-"));
+    const agentFile = path.join(agentWorkspaceDir, "agent.txt");
+    writeFileSync(agentFile, "agent-readable");
+
+    try {
+      const handle = createMxcSandboxBackendHandle({
+        ...baseParams,
+        workdir: sandboxWorkdir,
+        agentWorkspaceDir,
+        workspaceAccess: "ro",
+      });
+      const bridge = handle.createFsBridge?.({
+        sandbox: {
+          workspaceDir: sandboxWorkdir,
+          agentWorkspaceDir,
+          workspaceAccess: "ro",
+          containerName: handle.runtimeId,
+          containerWorkdir: sandboxWorkdir,
+          docker: { binds: [] },
+          backend: handle,
+        },
+      });
+      expect(bridge).toBeDefined();
+
+      await expect(bridge?.readFile({ filePath: agentFile, cwd: sandboxWorkdir })).resolves.toEqual(
+        Buffer.from("agent-readable"),
+      );
+      await expect(
+        bridge?.writeFile({ filePath: agentFile, cwd: sandboxWorkdir, data: "blocked" }),
+      ).rejects.toThrow(/read-only/u);
+    } finally {
+      rmSync(sandboxWorkdir, { recursive: true, force: true });
+      rmSync(agentWorkspaceDir, { recursive: true, force: true });
+    }
+  });
+
   test("filesystem bridge protects skill overlays when workspaceAccess is rw", async () => {
     const workdir = mkdtempSync(path.join(tmpdir(), "mxc-fs-bridge-skills-sandbox-"));
     const agentWorkspaceDir = mkdtempSync(path.join(tmpdir(), "mxc-fs-bridge-skills-agent-"));

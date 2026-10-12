@@ -258,6 +258,23 @@ describe("process reaper", () => {
     expect(killProcess).not.toHaveBeenCalled();
   });
 
+  it("does not kill a reused pid when the live command is not OpenClaw-owned", async () => {
+    const { killed } = cleanupDeps([{ pid: 250, ppid: 1, command: "node unrelated.js" }]);
+
+    const result = await cleanupOpenClawOwnedAcpxProcessTree({
+      rootPid: 250,
+      rootCommand: CODEX_WRAPPER_COMMAND,
+      wrapperRoot: WRAPPER_ROOT,
+    });
+
+    expect(result).toEqual({
+      inspectedPids: [250],
+      terminatedPids: [],
+      skippedReason: "not-openclaw-owned",
+    });
+    expect(killed).toStrictEqual([]);
+  });
+
   it("does not kill a reused adapter pid when the stored root was a generated wrapper", async () => {
     const { killed } = cleanupDeps([
       {

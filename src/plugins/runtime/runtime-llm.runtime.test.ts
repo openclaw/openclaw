@@ -163,6 +163,23 @@ describe("runtime.llm.complete", () => {
     primeCompletionMocks();
   });
 
+  it("denies context-engine model overrides without owning plugin llm policy", async () => {
+    const runtimeContext = resolveContextEngineCapabilities({
+      config: cfg,
+      sessionKey: "agent:main:session:abc",
+      contextEnginePluginId: "lossless-claw",
+      purpose: "context-engine.compaction",
+    });
+
+    await expect(
+      runtimeContext.llm!.complete({
+        model: "openai/gpt-5.4-mini",
+        messages: [{ role: "user", content: "summarize" }],
+      }),
+    ).rejects.toThrow("cannot override the target model");
+    expect(hoisted.acquireSimpleCompletionModelForAgent).not.toHaveBeenCalled();
+  });
+
   it("binds context-engine completions to the active session agent", async () => {
     const runtimeContext = resolveContextEngineCapabilities({
       config: cfg,
