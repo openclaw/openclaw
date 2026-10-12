@@ -1288,7 +1288,6 @@ describe("EmbeddedTuiBackend", () => {
           entry,
           storePath: "/tmp/private.sqlite",
           lightweightListRow: true,
-          skipTranscriptUsageFallback: true,
         }),
       );
       expect(sessionProjection.present).not.toHaveBeenCalled();

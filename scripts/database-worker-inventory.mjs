@@ -998,6 +998,17 @@ const reviewedOperations = new Map([
     ],
   ],
   [
+    "src/config/sessions/session-accessor.sqlite-entry-availability.ts",
+    [
+      {
+        tier: "T3",
+        operations: ["loadExactSessionEntryReadOnlyResult"],
+        evidence:
+          "Only acp/runtime/session-meta-doctor.ts calls this availability probe, from repairAcpSessionMetaKeysForDoctor and readClaimBinding for plugin Doctor claim inspection. Runtime identity evidence uses the separate operations in this file.",
+      },
+    ],
+  ],
+  [
     "src/config/sessions/session-accessor.sqlite-entry-list.read.ts",
     [
       {

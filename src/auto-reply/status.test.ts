@@ -8,6 +8,7 @@ import {
   appendTranscriptMessageSync,
   replaceSessionEntrySync,
 } from "../config/sessions/session-accessor.js";
+import { readRecentSessionUsageFromTranscriptAsync } from "../gateway/session-transcript-usage.js";
 import {
   buildStatusMessage as buildStatusMessageRaw,
   statusModelRefs,
@@ -37,6 +38,24 @@ function buildStatusMessage({ sessionEntry, ...args }: StatusTestArgs): string {
     agent: { model: "anthropic/claude-opus-4-6" },
     ...args,
     sessionEntry: sessionEntry && { sessionId: "status", updatedAt: 0, ...sessionEntry },
+  });
+}
+
+async function buildTranscriptStatusMessage(args: StatusTestArgs): Promise<string> {
+  const sessionKey = Object.hasOwn(args, "sessionKey") ? args.sessionKey : statusContext.sessionKey;
+  const sessionId = args.sessionEntry?.sessionId;
+  return buildStatusMessage({
+    ...args,
+    transcriptUsage: sessionId
+      ? await readRecentSessionUsageFromTranscriptAsync(
+          {
+            agentId: args.agentId,
+            sessionId,
+            sessionKey,
+          },
+          256 * 1024,
+        )
+      : undefined,
   });
 }
 
@@ -745,7 +764,7 @@ describe("buildStatusMessage", () => {
   } as const;
 
   function buildTranscriptStatusText(params: { sessionId: string; sessionKey: string }) {
-    return buildStatusMessage({
+    return buildTranscriptStatusMessage({
       sessionEntry: {
         sessionId: params.sessionId,
         totalTokens: 3,
@@ -756,7 +775,6 @@ describe("buildStatusMessage", () => {
         contextTokensSource: "runtime",
       },
       sessionKey: params.sessionKey,
-      includeTranscriptUsage: true,
       resolvedHarness: "openclaw",
     });
   }
@@ -765,7 +783,7 @@ describe("buildStatusMessage", () => {
     await withStatusHome(async () => {
       const sessionId = "sess-worker1";
       writeTranscriptUsageLog({ agentId: "worker1", sessionId });
-      const text = buildTranscriptStatusText({
+      const text = await buildTranscriptStatusText({
         sessionId,
         sessionKey: "agent:worker1:telegram:12345",
       });
@@ -789,7 +807,7 @@ describe("buildStatusMessage", () => {
         },
       });
 
-      const text = buildStatusMessage({
+      const text = await buildTranscriptStatusMessage({
         sessionEntry: {
           sessionId,
 
@@ -799,7 +817,6 @@ describe("buildStatusMessage", () => {
           totalTokensFresh: false,
           contextTokens: 1_000_000,
         },
-        includeTranscriptUsage: true,
       });
       const normalized = normalizeTestText(text);
 
@@ -824,7 +841,7 @@ describe("buildStatusMessage", () => {
         },
       });
 
-      const text = buildStatusMessage({
+      const text = await buildTranscriptStatusMessage({
         sessionEntry: {
           sessionId,
 
@@ -835,7 +852,6 @@ describe("buildStatusMessage", () => {
           totalTokens: 2_300_000,
           contextTokens: 1_000_000,
         },
-        includeTranscriptUsage: true,
       });
       const normalized = normalizeTestText(text);
 
@@ -860,7 +876,7 @@ describe("buildStatusMessage", () => {
         },
       });
 
-      const text = buildStatusMessage({
+      const text = await buildTranscriptStatusMessage({
         agentId: "worker2",
         sessionEntry: {
           sessionId,
@@ -872,7 +888,6 @@ describe("buildStatusMessage", () => {
           contextTokensSource: "runtime",
         },
         sessionKey: undefined,
-        includeTranscriptUsage: true,
         resolvedHarness: "openclaw",
       });
 
@@ -907,7 +922,7 @@ describe("buildStatusMessage", () => {
         },
       );
 
-      const text = buildTranscriptStatusText({
+      const text = await buildTranscriptStatusText({
         sessionId,
         sessionKey: "agent:main:main",
       });
@@ -933,7 +948,7 @@ describe("buildStatusMessage", () => {
         },
       });
 
-      const text = buildStatusMessage({
+      const text = await buildTranscriptStatusMessage({
         ...modelArgs("openrouter", "google/gemini-2.5-pro"),
         thinkingCatalog: [
           { provider: "openrouter", id: "google/gemini-2.5-pro", contextWindow: 999_000 },
@@ -952,7 +967,6 @@ describe("buildStatusMessage", () => {
           sessionId,
           totalTokens: 5,
         },
-        includeTranscriptUsage: true,
       });
 
       const normalized = normalizeTestText(text);
@@ -1073,7 +1087,7 @@ describe("buildStatusMessage", () => {
         },
       });
 
-      const text = buildStatusMessage({
+      const text = await buildTranscriptStatusMessage({
         ...modelArgs("google-gemini-cli", "gemini-2.5-pro"),
         thinkingCatalog: [
           { provider: "google-gemini-cli", id: "gemini-2.5-pro", contextWindow: 1_000_000 },
@@ -1083,7 +1097,6 @@ describe("buildStatusMessage", () => {
           sessionId,
           totalTokens: 5,
         },
-        includeTranscriptUsage: true,
       });
 
       const normalized = normalizeTestText(text);

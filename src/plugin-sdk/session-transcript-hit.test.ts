@@ -6,6 +6,7 @@ import {
   extractTranscriptStemFromSessionsMemoryHit,
   formatSessionTranscriptMemoryHitKey,
   loadCombinedSessionStoreForGateway,
+  loadCombinedSessionStoreForGatewayAsync,
   parseSessionTranscriptMemoryHitKey,
   resolveSessionTranscriptMemoryHitKeyToSessionKeys,
   resolveTranscriptStemToSessionKeys,
@@ -15,24 +16,30 @@ const loadGatewaySessionStore = vi.hoisted(() => vi.fn());
 vi.mock("../config/sessions/combined-store-gateway.js", () => ({
   loadCombinedSessionStoreForGatewayCore: loadGatewaySessionStore,
 }));
+vi.mock("../config/sessions/combined-store-gateway-read.js", () => ({
+  loadCombinedSessionStoreForGatewayCoreAsync: loadGatewaySessionStore,
+}));
 
-it("filters incognito rows from the plugin cross-session store view", () => {
-  loadGatewaySessionStore.mockReturnValue({
-    storePath: "(multiple)",
-    store: {
-      "agent:main:dashboard:visible": { sessionId: "visible", updatedAt: 1 },
-      "agent:main:dashboard:incognito-private": {
-        incognito: true,
-        sessionId: "private",
-        updatedAt: 2,
+it.each([loadCombinedSessionStoreForGateway, loadCombinedSessionStoreForGatewayAsync])(
+  "filters incognito rows from the plugin cross-session store view (%#)",
+  async (load) => {
+    loadGatewaySessionStore.mockReturnValue({
+      storePath: "(multiple)",
+      store: {
+        "agent:main:dashboard:visible": { sessionId: "visible", updatedAt: 1 },
+        "agent:main:dashboard:incognito-private": {
+          incognito: true,
+          sessionId: "private",
+          updatedAt: 2,
+        },
       },
-    },
-  });
+    });
 
-  expect(loadCombinedSessionStoreForGateway({}).store).toEqual({
-    "agent:main:dashboard:visible": { sessionId: "visible", updatedAt: 1 },
-  });
-});
+    expect((await load({})).store).toEqual({
+      "agent:main:dashboard:visible": { sessionId: "visible", updatedAt: 1 },
+    });
+  },
+);
 
 describe("extractTranscriptIdentityFromSessionsMemoryHit", () => {
   it("extracts builtin live and archived transcript identities", () => {

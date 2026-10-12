@@ -201,6 +201,19 @@ window includes the callback-based `inbound-envelope` helpers and
 and `dispatchInboundDirectDm`. Existing synchronous signatures and callback timing
 remain unchanged. No schema, stored data, retention, or update migration is required.
 
+### Combined session-store reads
+
+Await `loadCombinedSessionStoreForGatewayAsync` from
+`openclaw/plugin-sdk/session-transcript-hit`. It preserves the full-entry result
+and excludes incognito sessions while reading durable stores and foreign parent
+metadata in the database workers. Each call observes committed in-process writes;
+its returned view retains the facts captured for that call.
+
+The synchronous `loadCombinedSessionStoreForGateway` emits a deprecation warning
+and keeps its existing signature and behavior until the next Plugin SDK major and
+explicit breaking-release approval. Bundled Memory search uses the async method.
+No schema, retained data, or update migration is required.
+
 ### Progress card handoff
 
 `ReplyDispatchRuntimeInfo.adoptProgressContinuation(receipt)` from

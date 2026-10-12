@@ -1,13 +1,10 @@
-import { asPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { resolveCurrentSessionAgentRuntimeMetadata } from "../agents/agent-runtime-metadata.js";
 import { findModelCatalogEntry } from "../agents/model-catalog-lookup.js";
 import { selectModelCatalogRuntimeEntry } from "../agents/model-catalog-view.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.types.js";
-import { resolveSessionModelIdentityRef } from "../agents/session-model-ref.js";
 import { buildSubagentSessionListReadIndex } from "../agents/subagents/registry/subagent-registry-read.js";
 import { captureRuntimeStateEnvironment } from "../config/paths.js";
-import { resolveSessionStorePathCore, type SessionEntry } from "../config/sessions.js";
-import { resolveConcreteSessionStorePath } from "../config/sessions/paths.js";
+import type { SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { iterateProjectedAgentRunSessionKeys } from "../infra/agent-run-projection.js";
 import {
@@ -15,13 +12,11 @@ import {
   type ProjectedAgentRunIndex,
 } from "../infra/agent-run-registry.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
-import { readRecentSessionUsageFromTranscript as readScopedRecentSessionUsageFromTranscript } from "./session-transcript-usage.js";
 import {
   createSessionRowModelCacheKey,
   type SessionActorProfileIdentity,
   type SessionListRowContext,
 } from "./session-utils-contracts.js";
-import { resolveEstimatedSessionCostUsd } from "./session-utils-core.js";
 import { resolveWorkerPlacementModelRuntime } from "./worker-environments/placement-session-runtime.js";
 
 export function buildSessionListRowMetadataContext(params: {
@@ -106,86 +101,6 @@ export function buildProjectedSubagentActivity(
     }
   }
   return active;
-}
-
-export function resolveTranscriptUsageFallbacks(params: {
-  cfg: OpenClawConfig;
-  key: string;
-  entry?: SessionEntry;
-  storePath: string;
-  freshTotalTokens?: number;
-  fallbackModelRefs: readonly (string | undefined)[];
-  allowPluginNormalization?: boolean;
-  rowContext?: SessionListRowContext;
-  agentId: string;
-  storeAgentId?: string;
-}): Map<
-  string | undefined,
-  { estimatedCostUsd?: number; totalTokens?: number; totalTokensFresh?: boolean } | null
-> {
-  const { entry, agentId } = params;
-  const fallbacks: ReturnType<typeof resolveTranscriptUsageFallbacks> = new Map();
-  let snapshot: ReturnType<typeof readScopedRecentSessionUsageFromTranscript> | undefined;
-  for (const fallbackModelRef of new Set(params.fallbackModelRefs)) {
-    fallbacks.set(fallbackModelRef, null);
-    if (!entry?.sessionId) {
-      continue;
-    }
-    const resolvedModel = resolveSessionModelIdentityRef(
-      params.cfg,
-      entry,
-      agentId,
-      fallbackModelRef,
-      { allowPluginNormalization: params.allowPluginNormalization },
-    );
-    if (
-      params.freshTotalTokens !== undefined &&
-      resolveEstimatedSessionCostUsd({
-        cfg: params.cfg,
-        provider: resolvedModel.provider,
-        model: resolvedModel.model,
-        entry,
-        rowContext: params.rowContext,
-      }) !== undefined
-    ) {
-      continue;
-    }
-    if (snapshot === undefined) {
-      const storePath =
-        resolveConcreteSessionStorePath(params.storePath) ??
-        resolveSessionStorePathCore(params.cfg.session?.store, { agentId });
-      try {
-        snapshot = readScopedRecentSessionUsageFromTranscript(
-          {
-            agentId: params.storeAgentId ?? agentId,
-            sessionEntry: entry,
-            sessionId: entry.sessionId,
-            sessionKey: params.key,
-            storePath,
-          },
-          256 * 1024,
-        );
-      } catch {
-        snapshot = null;
-      }
-    }
-    if (snapshot) {
-      const estimatedCostUsd = resolveEstimatedSessionCostUsd({
-        cfg: params.cfg,
-        provider: snapshot.modelProvider ?? resolvedModel.provider,
-        model: snapshot.model ?? resolvedModel.model,
-        explicitCostUsd: snapshot.costUsd,
-        entry: snapshot,
-        rowContext: params.rowContext,
-      });
-      fallbacks.set(fallbackModelRef, {
-        totalTokens: asPositiveFiniteNumber(snapshot.totalTokens),
-        totalTokensFresh: snapshot.totalTokensFresh === true,
-        estimatedCostUsd,
-      });
-    }
-  }
-  return fallbacks;
 }
 
 /** Runtime ownership is independent of whether the model itself can change. */

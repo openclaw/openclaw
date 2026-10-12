@@ -58,7 +58,6 @@ export async function readEmbeddedPrivateHistorySessionInfo(
     agentId,
     modelSource: { entry, readSourceEntry: createGatewaySessionEntryReader(selected) },
     lightweightListRow: true,
-    skipTranscriptUsageFallback: true,
   });
 }
 

@@ -7,17 +7,62 @@ import {
   parseActiveTranscriptMessageRow,
   readSnapshotEventRows,
   type CurrentTranscriptProjection,
+  type SessionTranscriptMessageEventPage,
   type SessionTranscriptBoundedMessageTailOptions,
   type SessionTranscriptBoundedMessageTailPage,
 } from "./session-accessor.sqlite-projection-read.js";
 import {
   hasOversizedVisibleMessages,
   iterateVisibleMessageMetadata,
+  readVisibleMessageRange,
   resolveVisibleMessagePositions,
   resolveTranscriptBoundaryWindow,
 } from "./session-accessor.sqlite-reset-window.js";
 import { MAX_VISIBLE_MESSAGE_MAX_MESSAGES } from "./session-accessor.sqlite-visible-cursor.js";
 import { transcriptEventJsonSql } from "./transcript-payload.js";
+
+/** Reads a bounded active-path tail while preserving transcript line and byte caps. */
+export function readRecentSessionTranscriptMessageEventsFromProjection(
+  projection: CurrentTranscriptProjection,
+  options: { maxBytes: number; maxLines: number; maxMessages: number },
+): SessionTranscriptMessageEventPage {
+  const visible = resolveVisibleMessagePositions(projection);
+  const maxMessages = resolveIntegerOption(options.maxMessages, 0, {
+    min: 0,
+    max: MAX_VISIBLE_MESSAGE_MAX_MESSAGES,
+  });
+  const maxLines = resolveIntegerOption(options.maxLines, 0, { min: 0 });
+  if (maxMessages === 0 || maxLines === 0) {
+    return {
+      activeLeafEntryId: projection.state.leafEventId,
+      events: [],
+      totalMessages: visible.total,
+    };
+  }
+  const maxBytes = resolveIntegerOption(options.maxBytes, 8 * 1024 * 1024, { min: 1024 });
+  const candidates = iterateVisibleMessageMetadata(
+    projection,
+    Math.max(0, visible.total - Math.min(maxLines, maxMessages)),
+    visible.total,
+    "desc",
+  );
+  let selectedStart = visible.total;
+  let bytes = 0;
+  for (const row of candidates) {
+    // Keep the newest event even when oversized, then a contiguous suffix. Size stored JSONL
+    // before loading payloads so a small usage budget cannot materialize the entire line window.
+    if (selectedStart < visible.total && bytes + row.serialized_bytes > maxBytes) {
+      break;
+    }
+    selectedStart = row.logicalPosition;
+    bytes += row.serialized_bytes;
+  }
+  return {
+    activeLeafEntryId: projection.state.leafEventId,
+    events: readVisibleMessageRange(projection, selectedStart, visible.total),
+    totalMessages: visible.total,
+  };
+}
 
 /** Runs repeatable newest-first visits synchronously inside one context-tail snapshot. */
 export function withRecentSessionTranscriptActiveEventsInSnapshot<T>(
