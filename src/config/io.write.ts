@@ -28,6 +28,7 @@ import {
   restoreConfigSnapshotAuditRecordAsync,
   upsertConfigSnapshotAuditRecordAsync,
 } from "./config-journal-snapshot.js";
+import { serializeConfigJson } from "./config-json-serialize.js";
 import {
   applyUnsetPathsForWrite,
   resolveManagedUnsetPathsForWrite,
@@ -323,7 +324,7 @@ export async function writeConfigFileFromContext(
     options.lastTouchedVersionOverride,
   );
   rejectConfigNonFiniteNumbers(stampedOutputConfig);
-  const json = JSON.stringify(stampedOutputConfig, null, 2).trimEnd().concat("\n");
+  const json = serializeConfigJson(stampedOutputConfig).trimEnd().concat("\n");
   const nextHash = hashConfigRaw(json);
   const previousHash = hashConfigRaw(snapshot.raw);
   const changedPathCount = changedPaths.size;
