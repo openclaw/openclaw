@@ -1,4 +1,7 @@
 import { listAgentIds, resolveAgentWorkspaceDir } from "../agents/agent-scope-config.js";
+import { replaceContextWindowCaches } from "../agents/context-cache.js";
+import { beginContextWindowCacheRefresh } from "../agents/context-runtime-state.js";
+import { registerPreparedModelRuntimePublicationListener } from "../agents/prepared-model-runtime.publication-events.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
@@ -111,6 +114,96 @@ function gatewayPrewarmItems(getConfig: () => OpenClawConfig): GatewayHandlerPre
   ];
 }
 
+/**
+ * Re-project context limits after each accepted catalog publication. Reuses idle-work
+ * admission; a publisher's temporary startup/auth scope never owns this projection.
+ * Bursts coalesce into one task whose pass reads the newest accepted publication.
+ */
+function scheduleContextCachePublicationRefresh(params: {
+  scheduler: GatewayScheduler;
+  getConfig: () => OpenClawConfig;
+  log: { warn: (msg: string) => void };
+}): GatewayIdleTaskHandle {
+  let stopped = false;
+  let task: GatewayIdleTaskHandle | undefined;
+  let version = 0;
+  const settlingTasks = new Set<GatewayIdleTaskHandle>();
+  const warm = async () => {
+    const { prewarmContextWindowCacheAfterReady } = await import("../agents/context.js");
+    if (!stopped) {
+      await prewarmContextWindowCacheAfterReady({
+        config: params.getConfig(),
+        isCancelled: () => stopped,
+      });
+    }
+  };
+  const unregister = registerPreparedModelRuntimePublicationListener((event) => {
+    if (stopped) {
+      return;
+    }
+    if (event.phase === "invalidated" && event.modelFactsChanged !== false) {
+      beginContextWindowCacheRefresh();
+      replaceContextWindowCaches({
+        configuredTokenCache: new Map(),
+        discoveredTokenCache: new Map(),
+        contextWindowCache: new Map(),
+      });
+      return;
+    }
+    if (
+      (event.phase !== "catalog-published" && event.phase !== "published") ||
+      event.modelFactsChanged === false
+    ) {
+      return;
+    }
+    version += 1;
+    if (task) {
+      return;
+    }
+    task = scheduleGatewayIdleTask({
+      id: "context-window-cache:publication",
+      scheduler: params.scheduler,
+      delayMs: 0,
+      retryDelayMs: GATEWAY_HANDLER_PREWARM_RETRY_DELAY_MS,
+      isClosing: () => stopped,
+      isBusy: () => getActiveGatewayRootWorkCount({ excludeCurrent: true }) > 0,
+      run: async () => {
+        try {
+          let seen: number;
+          do {
+            seen = version;
+            await warm();
+            if (stopped) {
+              break;
+            }
+          } while (seen !== version);
+        } finally {
+          // The idle owner still owns warning delivery and admission release after run settles.
+          // Keep its shutdown join until that whole scheduler scope has drained.
+          const completed = task;
+          task = undefined;
+          if (completed) {
+            settlingTasks.add(completed);
+            void Promise.resolve(completed.stop()).finally(() => settlingTasks.delete(completed));
+          }
+        }
+      },
+      log: params.log,
+      errorMessage: "published context-window-cache refresh failed",
+    });
+  });
+  return {
+    stop: () => {
+      stopped = true;
+      unregister();
+      return Promise.all([
+        task?.stop(),
+        ...[...settlingTasks].map((pending) => pending.stop()),
+      ]).then(() => {});
+    },
+  };
+}
+
 export function scheduleGatewayHandlerPrewarm(params: {
   scheduler: GatewayScheduler;
   getConfig: () => OpenClawConfig;
@@ -120,6 +213,10 @@ export function scheduleGatewayHandlerPrewarm(params: {
   waitForPostReadyWork?: () => Promise<void>;
 }): GatewayIdleTaskHandle {
   let stopped = false;
+  // The built-in context-window-cache item shares this lifetime with publication-driven refresh.
+  const publicationRefresh = params.items
+    ? undefined
+    : scheduleContextCachePublicationRefresh(params);
   const startedAt = params.scheduler.now();
   // Warm code and local facts without executing requests or acquiring live provider catalogs.
   const items = params.items ?? gatewayPrewarmItems(params.getConfig);
@@ -179,7 +276,7 @@ export function scheduleGatewayHandlerPrewarm(params: {
   return {
     stop: () => {
       stopped = true;
-      return idleTask?.stop();
+      return Promise.all([idleTask?.stop(), publicationRefresh?.stop()]).then(() => {});
     },
   };
 }

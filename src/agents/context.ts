@@ -1,3 +1,4 @@
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { computeBackoff, type BackoffPolicy } from "../infra/backoff.js";
@@ -137,14 +138,24 @@ export async function prewarmContextWindowCacheAfterReady(params: {
     if (!owner) {
       throw new Error("published Gateway model catalog owner is unavailable");
     }
-    // Gateway publication intentionally exposes configured/static turn facts. Full catalog
-    // inventory is a separate control-plane load and must not run in post-ready warmup.
+    if (shouldStop()) {
+      return;
+    }
+    // Consume only accepted inventory; this passive read does not acquire or renew it.
+    // A retired owner cannot lend another account's limits during projection yields.
+    const modelCatalog = owner.readFullModelCatalog?.() ?? owner.modelCatalog;
+    const isCurrent = () =>
+      !shouldStop() &&
+      owner.isCurrent() &&
+      (owner.readFullModelCatalog?.() ?? owner.modelCatalog) === modelCatalog;
+    if (!isCurrent()) {
+      return;
+    }
     const caches = await prepareContextWindowCaches({
       config: owner.config,
-      modelCatalog: owner.modelCatalog,
+      modelCatalog,
     });
-    // Superseded projections may finish; only publication needs the current generation.
-    if (shouldStop()) {
+    if (!isCurrent()) {
       return;
     }
     replaceContextWindowCaches(caches);
@@ -246,9 +257,12 @@ export function resolveContextTokensForModel(
 export function resolveModelContextTokenProjection(
   params: ContextTokenResolutionParams,
 ): ModelContextTokenProjection {
-  prepareContextWindowCache({
-    allowAsyncLoad: params.allowAsyncLoad,
-    skipRuntimeConfigLoad: Boolean(params.cfg) || params.allowCacheLookup === false,
-  });
+  const nativeRuntime = normalizeLowercaseStringOrEmpty(params.nativeRuntime);
+  if ((!nativeRuntime || nativeRuntime === "openclaw") && params.allowCacheLookup !== false) {
+    prepareContextWindowCache({
+      allowAsyncLoad: params.allowAsyncLoad,
+      skipRuntimeConfigLoad: Boolean(params.cfg),
+    });
+  }
   return resolveModelContextTokenProjectionFromCache(params);
 }

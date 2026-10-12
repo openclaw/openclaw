@@ -91,7 +91,6 @@ import {
   claudeCliSessionTranscriptHasOrphanedToolUse,
 } from "../command/attempt-execution.helpers.js";
 import { resolveContextWindowInfo } from "../context-window-guard.js";
-import { resolveContextTokensForModel } from "../context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import { waitForDeferredTurnMaintenanceForSession } from "../embedded-agent-runner/context-engine-maintenance.js";
 import {
@@ -141,7 +140,10 @@ import { isClaudeCliBackendId, normalizeCliModel } from "./helpers.js";
 import { prepareCliHistoryBoundary } from "./history-boundary.js";
 import { cliBackendLog } from "./log.js";
 import { buildCliMcpGrantContext } from "./mcp-grant-context.js";
-import { resolveCliCatalogCapabilities } from "./model-capabilities.js";
+import {
+  resolveCliCatalogCapabilities,
+  resolveCliModelContextTokens,
+} from "./model-capabilities.js";
 import { detectNodeClaudePlacement, resolveClaudeCliContextModelId } from "./prepare-claude.js";
 import * as mcp from "./prepare-mcp.js";
 import { runWithCliPreparationSource } from "./prepare-source.js";
@@ -588,24 +590,13 @@ async function prepareCliRunContextWithinReadFence(
   // Aliases can map a canonical id to a CLI shorthand or a user shorthand to
   // a canonical id. Resolve both identities and keep the safest owned limit.
   const contextModelIds = uniqueStrings([requestedContextModelId, normalizedContextModelId]);
-  const contextTokenCandidates = contextModelIds
-    .map((model) =>
-      resolveContextTokensForModel({
-        cfg: params.config,
-        provider: params.provider,
-        modelProvider: backendResolved.modelProvider,
-        model,
-        modelContextWindow: params.modelContextWindow,
-        modelContextTokens: params.modelContextTokens,
-        allowAsyncLoad: false,
-        // A same-name API model may have a different native window from this CLI runtime.
-        allowUnscopedModelLookup: false,
-      }),
-    )
-    .filter((tokens) => tokens !== undefined);
-  let modelContextTokens = contextTokenCandidates.length
-    ? Math.min(...contextTokenCandidates)
-    : DEFAULT_CONTEXT_TOKENS;
+  let modelContextTokens = resolveCliModelContextTokens({
+    ...params,
+    config: runConfig,
+    modelIds: contextModelIds,
+    modelProvider: backendResolved.modelProvider,
+    nativeRuntime: params.nativeRuntime ?? backendResolved.id,
+  });
   // Session-selectable context windows (catalog `contextWindows`, e.g. Claude
   // CLI 200k/1m) cap the resolved window here: the fixed provider contract in
   // resolveAnthropicFixedContextWindow deliberately ignores catalog scalars,

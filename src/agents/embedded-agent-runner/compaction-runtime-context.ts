@@ -269,6 +269,7 @@ export function resolveCompactionContextTokenBudget(params: {
         modelId: params.modelId,
         modelContextTokens: asFiniteNumber(params.model?.contextTokens),
         modelContextWindow: params.model?.contextWindow,
+        modelContextWindowSource: params.model?.contextWindowSource,
         defaultTokens: DEFAULT_CONTEXT_TOKENS,
       }).tokens,
     ) ?? DEFAULT_CONTEXT_TOKENS;

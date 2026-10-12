@@ -2258,7 +2258,6 @@
 ["src/agents/command/session.resolve-session-key.test.ts","../../config/sessions/session-accessor.js","b040b6d0dee8833a119d5625c3e7207adfe58fa2314be08676be39cbb459fdc3",1]
 ["src/agents/context.lookup.test.ts","../config/config.js","d5d8cb353427222b4e78253e8a5f8237d2abf2779fa3911320ca2426d141bf8e",1]
 ["src/agents/context.lookup.test.ts","../config/runtime-source-projection.js","482953b12c51f6241d4f36662c254a8b3c738e088bce4067b9ea363b1eae4390",1]
-["src/agents/context.lookup.test.ts","./prepared-model-catalog.js","efc8ed5b56fa0a01f13c610ccbf1cdb01ec5642b668099cbb03ab3ecdda85cfa",1]
 ["src/agents/context.test.ts","../config/config.js","80a2abb6f728bad47368fccf1da5af3352da6634f26b07e7eb8fe687db875fed",1]
 ["src/agents/embedded-agent-helpers/error-text.provider-owner.test.ts","../../plugins/provider-failover.js","dc010ffff892775488f94304677aaa0fc77093c2fd96a1e37fc5a49a94a05474",1]
 ["src/agents/embedded-agent-helpers/error-text.test.ts","../../logging/subsystem.js","8ad8d703b12215bcc12658da1545116c4acf158332d727dca8ed089fb50a86fe",1]

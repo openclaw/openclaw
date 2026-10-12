@@ -6,6 +6,7 @@ import type { ContextWindowCatalog } from "./context-cache-projection.js";
 import { replaceDiscoveredContextTokenCache } from "./context-cache.js";
 import { CONTEXT_WINDOW_RUNTIME_STATE } from "./context-runtime-state.js";
 import { resetContextWindowCacheForTest } from "./context.test-support.js";
+import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
 
 const state = vi.hoisted(() => {
   const initialConfig: OpenClawConfig = {};
@@ -20,6 +21,8 @@ const state = vi.hoisted(() => {
         | {
             config: OpenClawConfig;
             modelCatalog: ContextWindowCatalog;
+            isCurrent: () => boolean;
+            readFullModelCatalog?: () => ContextWindowCatalog;
           }
         | undefined
     >(),
@@ -30,6 +33,7 @@ vi.mock("../config/config.js", () => ({ getRuntimeConfig: state.loadConfig }));
 vi.mock("../config/runtime-source-projection.js", () => ({
   projectConfigOntoRuntimeSourceSnapshot: (snapshot: OpenClawConfig) => snapshot,
 }));
+// mock-isolation: Read only the admitted owner fixture; catalog acquisition and host state stay outside these cache projections.
 vi.mock("./prepared-model-catalog.js", () => ({
   loadProviderScopedThinkingCatalog: vi.fn(async () => []),
   loadPreparedModelCatalogOwnerSnapshot: state.loadOwner,
@@ -67,6 +71,7 @@ beforeEach(() => {
   state.loadOwner.mockReset().mockImplementation(async () => ({ modelCatalog: state.catalog }));
   state.publishedOwner.mockReset().mockImplementation(() => ({
     config: state.config,
+    isCurrent: () => true,
     modelCatalog: state.catalog,
   }));
   resetContextWindowCacheForTest();
@@ -150,6 +155,14 @@ describe("context cache lifecycle", () => {
       entries: [{ id: "discovered-model", provider: "synthetic", contextWindow: 64_000 }],
       staticEntries: [{ id: "static-model", provider: "google", contextWindow: 1_048_576 }],
     };
+    state.publishedOwner.mockReturnValueOnce({
+      config: state.config,
+      isCurrent: () => true,
+      modelCatalog: {
+        entries: [{ id: "discovered-model", provider: "synthetic", contextWindow: 128_000 }],
+      },
+      readFullModelCatalog: () => state.catalog,
+    });
     await context.prewarmContextWindowCacheAfterReady({ config: requested });
     expect(state.publishedOwner).toHaveBeenCalledWith({
       config: requested,
@@ -162,6 +175,52 @@ describe("context cache lifecycle", () => {
     expect(context.lookupContextTokens("static-model", options)).toBe(1_048_576);
     expect(context.lookupContextTokens("stale-model", options)).toBeUndefined();
   });
+
+  it.each([false, true])(
+    "excludes failed-acquisition starters during actual prewarm (curated=%s)",
+    async (curated) => {
+      const catalog: ModelCatalogSnapshot = {
+        entries: [
+          {
+            provider: "github-copilot",
+            id: "fixture-model",
+            name: "Fixture model",
+            contextTokens: 872_000,
+            contextCapacitySource: "unaccepted-starter",
+          },
+        ],
+        routeVariants: [],
+        staticEntries: [
+          {
+            provider: "github-copilot",
+            id: "fixture-model",
+            name: "Fixture model",
+            contextWindow: 128_000,
+            ...(curated
+              ? { contextTokens: 64_000 }
+              : { contextWindowSource: "synthetic" as const }),
+          },
+        ],
+      };
+      state.publishedOwner.mockReturnValue({
+        config: {},
+        isCurrent: () => true,
+        modelCatalog: catalog,
+        readFullModelCatalog: () => catalog,
+      });
+      await context.prewarmContextWindowCacheAfterReady({ config: {} });
+      expect(
+        context.resolveContextTokensForModel({
+          cfg: {},
+          provider: "github-copilot",
+          model: "fixture-model",
+          allowAsyncLoad: false,
+          allowUnscopedModelLookup: false,
+        }),
+      ).toBe(curated ? 64_000 : undefined);
+      expect(state.loadOwner).not.toHaveBeenCalled();
+    },
+  );
 
   it("retires failed prewarm so exact request-time loading can recover", async () => {
     state.publishedOwner.mockReturnValueOnce(undefined);
@@ -208,7 +267,7 @@ describe("context cache lifecycle", () => {
       queueMicrotask(() => {
         cancelled = true;
       });
-      return { config: state.config, modelCatalog: state.catalog };
+      return { config: state.config, modelCatalog: state.catalog, isCurrent: () => true };
     });
 
     await context.prewarmContextWindowCacheAfterReady({

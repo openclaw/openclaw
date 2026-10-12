@@ -1,7 +1,10 @@
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { resolveProviderThinkingLevel, type ThinkLevel } from "../../auto-reply/thinking.js";
+import { resolveContextTokensForModel } from "../context.js";
+import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import { findModelCatalogEntry } from "../model-catalog.js";
 import type { ModelCatalogEntry } from "../model-catalog.types.js";
+import type { RunCliAgentParams } from "./types.js";
 
 /** Selects both CLI capabilities from the same logical/native catalog identity. */
 export function resolveCliCatalogCapabilities(params: {
@@ -44,4 +47,33 @@ export function resolveCliCatalogCapabilities(params: {
       level: params.thinkLevel,
     }),
   };
+}
+
+export function resolveCliModelContextTokens(
+  params: Pick<
+    RunCliAgentParams,
+    "config" | "provider" | "modelContextWindow" | "modelContextWindowSource" | "modelContextTokens"
+  > & {
+    modelIds: string[];
+    modelProvider?: string;
+    nativeRuntime: string;
+  },
+): number {
+  const candidates = params.modelIds
+    .map((model) =>
+      resolveContextTokensForModel({
+        cfg: params.config,
+        provider: params.provider,
+        modelProvider: params.modelProvider,
+        model,
+        nativeRuntime: params.nativeRuntime,
+        modelContextWindow: params.modelContextWindow,
+        modelContextWindowSource: params.modelContextWindowSource,
+        modelContextTokens: params.modelContextTokens,
+        allowAsyncLoad: false,
+        allowUnscopedModelLookup: false,
+      }),
+    )
+    .filter((tokens) => tokens !== undefined);
+  return candidates.length ? Math.min(...candidates) : DEFAULT_CONTEXT_TOKENS;
 }

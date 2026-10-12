@@ -2,8 +2,10 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { notifyPreparedModelRuntimePublication } from "../agents/prepared-model-runtime.publication-events.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
+  getActiveGatewayRootWorkCount,
   resetGatewayWorkAdmission,
   markGatewayRestartDraining,
   tryBeginGatewayIndependentRootWorkAdmission,
@@ -534,3 +536,45 @@ it.each(["close", "restart"] as const)(
     }
   },
 );
+
+it("joins publication refresh failure warning and admission release when stopped from the warning", async () => {
+  vi.useFakeTimers();
+  mocks.prewarmContextWindowCacheAfterReady.mockRejectedValueOnce(
+    new Error("discovery fixture failure"),
+  );
+  const ready = createDeferred();
+  let stopping: Promise<void> | undefined;
+  let activeAfterStop: number | undefined;
+  const sidecar = scheduleGatewayHandlerPrewarm({
+    scheduler: createTestGatewayScheduler("fake-timers"),
+    getConfig: () => ({}),
+    waitForPostReadyWork: () => ready.promise,
+    log: {
+      warn: () => {
+        notifyPreparedModelRuntimePublication({
+          phase: "catalog-published",
+          modelFactsChanged: true,
+        });
+        stopping = Promise.resolve(sidecar.stop()).then(() => {
+          activeAfterStop = getActiveGatewayRootWorkCount({ excludeCurrent: true });
+        });
+      },
+    },
+  });
+  try {
+    notifyPreparedModelRuntimePublication({ phase: "catalog-published", modelFactsChanged: true });
+    await vi.runAllTimersAsync();
+    await vi.dynamicImportSettled();
+    await vi.runAllTimersAsync();
+    expect(stopping).toBeDefined();
+    await stopping;
+    expect(activeAfterStop).toBe(0);
+    expect(mocks.prewarmContextWindowCacheAfterReady).toHaveBeenCalledTimes(1);
+    const admission = tryBeginGatewayIndependentRootWorkAdmission("publication-after-stop");
+    expect(admission).not.toBeNull();
+    admission?.release();
+  } finally {
+    await sidecar.stop();
+    ready.resolve();
+  }
+});

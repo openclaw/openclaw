@@ -515,30 +515,60 @@ describe("resolveEmbeddedRuntimeModelPolicy", () => {
     expect(unselected.effectiveModel.contextWindow).toBe(272_000);
   });
 
-  it("preserves the effective budget and adds an authored cap for plugin transports (#124702)", () => {
-    const resolve = (models: ModelDefinitionConfig[]) =>
-      resolveEmbeddedRunEffectiveModel({
-        runParams: {
-          config: {
-            models: { providers: { openai: { baseUrl: "https://api.openai.com/v1", models } } },
+  it.each([
+    {
+      name: "metadata window without an authored cap",
+      model: { contextWindow: 200_000, contextTokens: undefined },
+      budget: 200_000,
+      cap: undefined,
+    },
+    {
+      name: "authored cap above a metadata window",
+      model: { contextWindow: 16_000, contextTokens: 32_000 },
+      budget: 16_000,
+      cap: 32_000,
+    },
+    {
+      name: "authored cap below a metadata window",
+      model: { contextWindow: 1_050_000, contextTokens: 32_000 },
+      budget: 32_000,
+      cap: 32_000,
+    },
+    { name: "no configured model", model: undefined, budget: 272_000, cap: undefined },
+  ])("keeps the transport cap authored-only with $name (#124702)", ({ model, budget, cap }) => {
+    const result = resolveEmbeddedRunEffectiveModel({
+      runParams: {
+        sessionId: "native-cap-session",
+        workspaceDir: hookContext.workspaceDir,
+        prompt: "hello",
+        runId: "native-cap-run",
+        timeoutMs: 5_000,
+        config: {
+          models: {
+            providers: {
+              openai: {
+                baseUrl: "https://api.openai.com/v1",
+                models: model ? [createConfiguredModel(model)] : [],
+              },
+            },
           },
-        } as never,
-        provider: "openai",
-        modelConfigProvider: "openai",
-        modelId: "gpt-5.5",
-        agentHarnessId: "claude-cli",
-        runtimeModel: createRuntimeModel(),
-        nativeModelOwned: false,
-      });
+        },
+      },
+      provider: "openai",
+      modelConfigProvider: "openai",
+      modelId: "gpt-5.5",
+      agentHarnessId: "claude-cli",
+      runtimeModel: createRuntimeModel(),
+      nativeModelOwned: false,
+    });
 
-    const capped = resolve([createConfiguredModel({ contextTokens: 32_000 })]);
-    expect(capped.contextTokenBudget).toBe(32_000);
-    expect(capped.contextTokensSource).toBeUndefined();
-    expect(capped.authoredContextTokenCap).toBe(32_000);
-
-    const discovered = resolve([]);
-    expect(discovered.contextTokenBudget).toBe(272_000);
-    expect(discovered).not.toHaveProperty("authoredContextTokenCap");
+    expect(result.contextTokenBudget).toBe(budget);
+    expect(result.contextTokensSource).toBe(model === undefined ? "resolved-v1" : undefined);
+    if (cap === undefined) {
+      expect(result).not.toHaveProperty("authoredContextTokenCap");
+    } else {
+      expect(result.authoredContextTokenCap).toBe(cap);
+    }
   });
 
   it("caps the effective attempt budget with the caller limit", () => {

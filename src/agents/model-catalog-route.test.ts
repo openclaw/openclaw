@@ -9,6 +9,7 @@ import * as activeThinkingPolicy from "../plugins/provider-thinking-active.js";
 import { prepareModelCatalogThinkingPolicies } from "../plugins/provider-thinking.js";
 import type { ProviderDefaultThinkingPolicyContext } from "../plugins/provider-thinking.types.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { resolveModelContextTokenProjectionFromCache } from "./context-resolution.js";
 import {
   type ModelCatalogRoutePolicy,
   projectModelCatalogEntryForRoute,
@@ -68,29 +69,48 @@ const chatGPTEntry: ModelCatalogEntry = {
 };
 
 describe("projectModelCatalogEntryForRoute", () => {
-  it("prefers the exact physical donor over the platform row", () => {
-    const { entry: publicEntry, runtimeEntry } = projectModelCatalogEntryForRoute({
-      entry: platformEntry,
-      projection: { kind: "selected", route: chatGPTRoute, policy: routePolicy },
-      catalog: [
-        platformEntry,
+  it.each([undefined, "synthetic"] as const)(
+    "prefers the exact physical donor over the platform row (source=%s)",
+    (contextWindowSource) => {
+      const { entry: publicEntry, runtimeEntry } = projectModelCatalogEntryForRoute({
+        entry: platformEntry,
+        projection: { kind: "selected", route: chatGPTRoute, policy: routePolicy },
+        catalog: [
+          platformEntry,
+          {
+            ...chatGPTEntry,
+            contextWindowSource,
+            contextWindows: [{ id: "native", label: "Native", contextWindow: 400_000 }],
+            contextWindowDefault: "native",
+          },
+        ],
+      });
+      expect(runtimeEntry.params).toEqual({ chatGPTOnly: true });
+      expect(runtimeEntry.compat).toEqual({ supportsTools: true });
+      expect(runtimeEntry.contextWindow).toBe(400_000);
+      const capacity = resolveModelContextTokenProjectionFromCache(
         {
-          ...chatGPTEntry,
-          contextWindows: [{ id: "native", label: "Native", contextWindow: 400_000 }],
-          contextWindowDefault: "native",
+          provider: runtimeEntry.provider,
+          model: runtimeEntry.id,
+          modelContextWindow: runtimeEntry.contextWindow,
+          modelContextWindowSource: runtimeEntry.contextWindowSource,
         },
-      ],
-    });
-    expect(runtimeEntry.params).toEqual({ chatGPTOnly: true });
-    expect(runtimeEntry.compat).toEqual({ supportsTools: true });
-    expect(runtimeEntry.contextWindow).toBe(400_000);
-    expect(publicEntry).not.toHaveProperty("params");
-    expect(publicEntry).not.toHaveProperty("compat");
-    expect(publicEntry.contextWindows).toEqual([
-      { id: "native", label: "Native", contextWindow: 400_000 },
-    ]);
-    expect(runtimeEntry.contextWindowDefault).toBe("native");
-  });
+        () => undefined,
+        () => undefined,
+      );
+      expect(capacity).toMatchObject({
+        contextTokens: 400_000,
+        source: contextWindowSource === "synthetic" ? "fallback" : "model",
+      });
+      expect(publicEntry.contextWindowSource).toBe(contextWindowSource);
+      expect(publicEntry).not.toHaveProperty("params");
+      expect(publicEntry).not.toHaveProperty("compat");
+      expect(publicEntry.contextWindows).toEqual([
+        { id: "native", label: "Native", contextWindow: 400_000 },
+      ]);
+      expect(runtimeEntry.contextWindowDefault).toBe("native");
+    },
+  );
 
   it.each([
     {

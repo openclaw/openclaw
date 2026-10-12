@@ -202,6 +202,14 @@ describe("context token resolution", () => {
     expect(resolveModelContextTokenProjection(params)).toEqual({
       contextTokens: 128_000,
       authoredContextTokens: 1_000_000,
+      configuredContextTokenLimits: {
+        configuredContextTokens: 1_000_000,
+        effectiveConfiguredTokens: 128_000,
+        authoredContextTokenCap: 128_000,
+        configuredContextWindow: 128_000,
+        fixedContextWindow: undefined,
+      },
+      source: "configured",
     });
     expect(resolve(params)).toBe(128_000);
   });
@@ -243,4 +251,91 @@ describe("context token resolution", () => {
       }),
     ).toBe(200_000);
   });
+});
+
+describe("estimated catalog capacity", () => {
+  it.each([
+    [undefined, undefined],
+    [777_000, 777_000],
+  ])(
+    "does not publish a synthetic native window as discovered capacity with prompt cap %s",
+    async (contextTokens, expected) => {
+      await discover([
+        {
+          provider: "fixture-provider",
+          id: "estimated",
+          contextWindow: 128_000,
+          contextWindowSource: "synthetic",
+          contextTokens,
+        },
+      ]);
+      expect(
+        resolve({
+          provider: "fixture-provider",
+          model: "estimated",
+          allowUnscopedModelLookup: false,
+        }),
+      ).toBe(expected);
+    },
+  );
+
+  it.each([
+    ["synthetic" as const, 777_000],
+    [undefined, 128_000],
+  ] as const)(
+    "keeps reported prompt capacity while honoring genuine native capacity (%s)",
+    (modelContextWindowSource, expected) => {
+      expect(
+        resolveModelContextTokenProjection({
+          cfg: {},
+          provider: "fixture-provider",
+          model: "estimated",
+          modelContextWindow: 128_000,
+          modelContextWindowSource,
+          modelContextTokens: 777_000,
+          allowAsyncLoad: false,
+          allowUnscopedModelLookup: false,
+        }).contextTokens,
+      ).toBe(expected);
+    },
+  );
+});
+
+describe("native owner isolation", () => {
+  it("does not borrow an API cache capacity for a native harness", () => {
+    replaceDiscoveredContextTokenCache(
+      new Map([[providerContextTokenCacheKey("openai", "gpt-4o"), 128_000]]),
+    );
+    expect(
+      resolveModelContextTokenProjection({
+        cfg: {},
+        provider: "openai",
+        model: "gpt-4o",
+        nativeRuntime: "codex",
+        allowAsyncLoad: false,
+        allowUnscopedModelLookup: false,
+      }),
+    ).toEqual({
+      contextTokens: undefined,
+      authoredContextTokens: undefined,
+      configuredContextTokenLimits: {
+        configuredContextTokens: undefined,
+        effectiveConfiguredTokens: undefined,
+        authoredContextTokenCap: undefined,
+        configuredContextWindow: undefined,
+        fixedContextWindow: undefined,
+      },
+      source: "fallback",
+    });
+  });
+});
+
+it("keeps native rows out of the shared API capacity projection", async () => {
+  await discover([
+    { provider: "fixture-provider", id: "same", contextWindow: 400_000 },
+    { provider: "fixture-provider", id: "same", contextWindow: 64_000, nativeRuntime: "codex" },
+  ]);
+  expect(
+    resolve({ provider: "fixture-provider", model: "same", allowUnscopedModelLookup: false }),
+  ).toBe(400_000);
 });
