@@ -280,6 +280,12 @@ bounded, redacted error details for classification, including when a large
 partial response cannot fit in the transcript. Unrecognized errors still use
 generic chat copy; inspect the Gateway logs and stored error for diagnosis.
 
+When reply dispatch converts a thrown error into a generic failure notice, it
+preserves the redacted cause in the `error` field of the terminal
+`message.dispatch.completed` and `message.processed` diagnostics. This includes
+failures after a partial reply or after the turn has been adopted. Enable
+`diagnostics.enabled` to collect these events; the chat notice stays generic.
+
 Responses output-identity conflicts record the event type, output position,
 expected and observed item types, and whether a tool call completed, without
 recording item IDs or response content. OpenClaw uses the existing bounded session
