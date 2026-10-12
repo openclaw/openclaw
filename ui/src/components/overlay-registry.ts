@@ -227,15 +227,11 @@ export function registerOverlay(
 ): () => void {
   const entry: RegisteredOverlay = { ...registration, roots: new Map() };
   registry.members.set(overlay, entry);
-  // Let inner controls handle Escape, then consume it before application shortcuts.
-  const keydown = (event: KeyboardEvent) => registry.events?.keydown(event);
-  overlay.surface.addEventListener("keydown", keydown);
   return () => {
     if (registry.members.get(overlay) !== entry) {
       return;
     }
     registry.members.delete(overlay);
-    overlay.surface.removeEventListener("keydown", keydown);
     const releaseSurface = entry.releaseSurfaceRoot;
     entry.releaseSurfaceRoot = undefined;
     entry.surfaceRoot = undefined;

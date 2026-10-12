@@ -117,15 +117,13 @@ describe("native link menu", () => {
     expect(calls).toEqual(["close", action]);
   });
 
-  it("dismisses a tooltip before its menu without leaking either Escape", async () => {
+  it("dismisses a tooltip before its menu and restores focus", async () => {
     const trigger = document.createElement("a");
     trigger.href = "https://example.com";
     document.body.append(trigger);
     containers.push(trigger);
     const onClose = vi.fn();
     const menu = await mountMenu({ trigger, onClose });
-    const escaped = vi.fn();
-    menu.addEventListener("keydown", escaped);
     const tooltip = document.createElement("openclaw-tooltip");
     tooltip.content = "Link action details";
     tooltip.anchor = menuItems(menu)[0]!;
@@ -145,7 +143,6 @@ describe("native link menu", () => {
 
     expect(popup.matches(":popover-open")).toBe(false);
     expect(firstEscape.defaultPrevented).toBe(true);
-    expect(escaped).not.toHaveBeenCalled();
     expect(onClose).not.toHaveBeenCalled();
     expect(document.activeElement).not.toBe(trigger);
 
@@ -157,7 +154,6 @@ describe("native link menu", () => {
     menuItems(menu)[0]!.dispatchEvent(keydown);
 
     expect(keydown.defaultPrevented).toBe(true);
-    expect(escaped).not.toHaveBeenCalled();
     expect(onClose).toHaveBeenCalledTimes(1);
     expect(document.activeElement).toBe(trigger);
   });
