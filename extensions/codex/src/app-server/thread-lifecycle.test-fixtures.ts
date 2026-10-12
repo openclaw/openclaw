@@ -30,6 +30,21 @@ import {
 import { createClientHarness, createCodexTestModel } from "./test-support.js";
 import { startOrResumeThread as startOrResumeThreadImpl } from "./thread-lifecycle-run.js";
 
+export const DEFAULT_CODEX_RUNTIME_THREAD_CONFIG = {
+  project_doc_max_bytes: 131_072,
+  "features.tool_suggest": false,
+  "features.recommended_plugins": false,
+  "features.goals": false,
+  "tools.update_plan.enabled": false,
+  "features.code_mode": true,
+  "features.code_mode_only": false,
+  "features.shell_tool": true,
+  "features.apply_patch_streaming_events": true,
+  suppress_unstable_features_warning: true,
+  "features.standalone_web_search": false,
+  web_search: "cached",
+} as const;
+
 type NativeFixtureThread = {
   response: Record<string, unknown>;
   thread: Record<string, unknown>;

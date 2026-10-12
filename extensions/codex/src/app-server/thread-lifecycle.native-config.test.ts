@@ -68,6 +68,54 @@ describe("Codex native configuration lifecycle", () => {
   }
 
   it.each([false, true])(
+    "suppresses plugin suggestions on start and resume without disabling plugins (authored: %s)",
+    async (authored) => {
+      registerCodexTestSessionIdentity(sessionFile, "session-1", "agent:main:session-1");
+      const native = threadStartResult("plugin-thread", { cwd: workspaceDir });
+      const config: JsonObject = {
+        "features.apps": true,
+        "features.plugins": true,
+        plugins: { "calendar@fixture": { enabled: true } },
+        apps: { calendar: { enabled: true } },
+        ...(authored
+          ? { "features.tool_suggest": true, "features.recommended_plugins": true }
+          : {}),
+      };
+      const fixture = await createLeasedCodexLifecycleHarness({
+        agentDir: path.join(tempDir, "agent"),
+        respond: async (method) => {
+          if (method === "thread/start" || method === "thread/resume") {
+            return native;
+          }
+          return readNativeConfig(method);
+        },
+      });
+      const common = { ...lifecycleParams(fixture.client), config };
+      await startOrResumeThread(common);
+      fixture.seed(native, { loaded: false, subscribed: false });
+      await startOrResumeThread(common);
+
+      const requests = fixture.writes
+        .map((line): unknown => JSON.parse(line))
+        .filter(isJsonObject)
+        .filter((frame) => frame.method === "thread/start" || frame.method === "thread/resume");
+      expect(requests.map((frame) => frame.method)).toEqual(["thread/start", "thread/resume"]);
+      for (const request of requests) {
+        expect(request.params).toMatchObject({
+          config: {
+            "features.tool_suggest": false,
+            "features.recommended_plugins": false,
+            "features.apps": true,
+            "features.plugins": true,
+            plugins: { "calendar@fixture": { enabled: true } },
+            apps: { calendar: { enabled: true } },
+          },
+        });
+      }
+    },
+  );
+
+  it.each([false, true])(
     "validates every operator parent provider in final native config (overridden: %s)",
     async (overridden) => {
       const fixture = await createLeasedCodexLifecycleHarness({

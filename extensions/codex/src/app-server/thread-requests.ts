@@ -277,6 +277,10 @@ export function buildCodexRuntimeThreadConfig(
         : undefined,
       buildCodexProjectDocThreadConfig(config),
       {
+        // OpenClaw owns plugin discovery and installation. Keep Codex's recommendation
+        // catalog and install-suggestion tools out of managed prompts without disabling plugins.
+        "features.tool_suggest": false,
+        "features.recommended_plugins": false,
         // Native goals start autonomous turns; OpenClaw owns both continuation and progress cards.
         "features.goals": false,
         "tools.update_plan.enabled": false,
