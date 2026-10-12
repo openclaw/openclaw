@@ -588,6 +588,44 @@ A newer candidate cannot run before an already-blocked older updater downloads i
 The candidate's dependency inventory can, however, avoid modifying old recovery
 artifacts during an update that has already passed admission.
 
+### Recover an unfinished publication after a remount
+
+An older updater can reject an unfinished journal before downloading a fix when
+filesystem device numbers change after a reboot or remount. A separately installed
+OpenClaw version containing this fix provides a settlement-only `repair` path:
+
+```bash
+node /path/to/recovery-openclaw/dist/package-update-activation-recovery.mjs \
+  --anchor '/absolute/path/to/.openclaw.package-activation-<key>' \
+  --operation '<recorded-operation-id>' repair
+```
+
+Use the original anchor and operation ID with a supported external Node or Bun
+runtime. Keep other updaters and package managers stopped. Ordinary `status` and
+update admission remain strict for unfinished identity-mismatched journals.
+
+This path accepts only a pending publish acknowledgement with no recorded launcher
+publications, where the candidate is already installed and its staging path is
+absent. It requires consistent device-number changes with matching object inodes,
+the original intact helper and retained previous generation, a matching full
+candidate-tree fingerprint, valid package inventories and manifest, and unchanged
+launchers. Device projection applies only to digest verification: historical
+identities in the journal are not rewritten. Version or inode matches alone do
+not qualify; changed content, unsafe journal permissions or links, active update
+ownership, and unfinished rollback remain refusals.
+
+Under fresh executor ownership, repair records
+`publication-settled-external-change` and preserves the entire journal and recovery
+evidence in the reported archive. Removing that closed receipt from the active
+admission path lets the older updater continue without interpreting a new receipt
+kind. If archival fails while the active receipt remains, resolve the reported
+error and rerun the same command. If the helper reports an unconfirmed archive
+after moving the control directory, preserve and inspect the reported archive;
+the original command no longer has an active journal to reopen. The helper does
+not republish or roll back a package, delete retained generations, or restart or
+verify the Gateway. It does not execute the original helper. Other unfinished
+layouts still require their original recovery owner.
+
 ### Recover a completed receipt with an older updater
 
 An installed 2026.9.8 or 2026.9.9 updater can reject a completed `anchor-retired`
