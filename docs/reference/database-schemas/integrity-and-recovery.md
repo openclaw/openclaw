@@ -934,13 +934,7 @@ the underlying database error.
 
 ### An agent database is damaged
 
-When an agent database fails with `file is not a database` or `database disk image is malformed`, Gateway startup refuses that agent and `openclaw doctor --fix` stops before its later repairs, because they cannot read the file. Both name the recovery command for the affected agent:
-
-```bash
-openclaw doctor --session-sqlite recover --session-sqlite-agent <agent-id>
-```
-
-Stop the Gateway first. Recovery repairs index-only damage in place; otherwise it renames the database and its sidecars with a shared `.corrupt-<timestamp>` suffix so the Gateway can start with a fresh database. The set-aside files are kept for inspection; restore a verified backup if you need the sessions they held. See [SQLite maintenance](/cli/doctor/sqlite-maintenance).
+If an agent database fails with `file is not a database` or `database disk image is malformed`, `openclaw doctor --fix` cannot repair it. Stop the Gateway and run `openclaw doctor --session-sqlite recover --session-sqlite-agent <agent-id>`; see [SQLite maintenance](/cli/doctor/sqlite-maintenance).
 
 ### A database is quarantined after integrity verification failed
 
