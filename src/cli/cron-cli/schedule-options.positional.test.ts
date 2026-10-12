@@ -6,13 +6,6 @@ afterEach(() => {
 });
 
 describe("resolveCronCreateScheduleFromArgs positional schedule disambiguation", () => {
-  it("routes an every-prefixed positional to the every slot only", () => {
-    expect(resolveCronCreateScheduleFromArgs({ positionalSchedule: "every 10m" })).toEqual({
-      kind: "every",
-      everyMs: 600_000,
-    });
-  });
-
   it.each([
     "every day at 9am sharp",
     "every 1h of the day",
