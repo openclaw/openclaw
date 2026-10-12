@@ -47,6 +47,7 @@ export function getTelegramAdoptedDmThreadId(message: object): number | undefine
 }
 
 function resolveTelegramUpdateMessage(update: unknown): object | undefined {
+  // SAFETY: Spooled updates are untyped JSON; only an object-valued `message` is used.
   const message = (update as { message?: unknown } | null)?.message;
   return message !== null && typeof message === "object" ? message : undefined;
 }
@@ -72,9 +73,11 @@ export function adoptTelegramDmTopicUpdate(
   state: TelegramDmTopicAdoptState,
 ): number | undefined {
   const message = resolveTelegramUpdateMessage(update);
-  return message
-    ? adoptTelegramDmTopicMessage(message as TelegramDmTopicMessage, state)
-    : undefined;
+  if (!message) {
+    return undefined;
+  }
+  // SAFETY: Every field read below is type-checked before use (chat, from, ids, date).
+  return adoptTelegramDmTopicMessage(message as TelegramDmTopicMessage, state);
 }
 
 /**

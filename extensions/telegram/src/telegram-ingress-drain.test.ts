@@ -344,15 +344,16 @@ describe("createTelegramIngressMonitor", () => {
         accountId: "default",
         botInfo: dmTopicsBotInfo,
         dispatch: async (update, lifecycle) => {
-          if ((update as { update_id: number }).update_id === 500) {
-            return { kind: "completed" as const };
+          if ((update as { update_id: number }).update_id === 501) {
+            // Hold the root message until the owner is aborted (restart before dispatch).
+            ownerSignal = lifecycle.abortSignal;
+            const participant = createTelegramSpooledReplayDeferredParticipant(
+              "test:dm-topic-adopt-restart",
+            );
+            await dispatchGate;
+            participant?.settle({ kind: "completed" });
           }
-          ownerSignal = lifecycle.abortSignal;
-          const participant = createTelegramSpooledReplayDeferredParticipant(
-            "test:dm-topic-adopt-restart",
-          );
-          await dispatchGate;
-          participant?.settle({ kind: "completed" });
+          return { kind: "completed" as const };
         },
       });
       beforeRestart.start();
