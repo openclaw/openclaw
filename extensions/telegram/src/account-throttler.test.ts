@@ -732,12 +732,60 @@ describe("releaseAccountThrottler", () => {
     expect(recreated).not.toBe(first);
   });
 
-  it("releases the default grammY-backed throttler for recycling", async () => {
-    const first = getOrCreateAccountThrottler("default-release");
+  it("stops timers and settles queued sends on release", async () => {
+    const realSetInterval = globalThis.setInterval;
+    const realClearInterval = globalThis.clearInterval;
+    const live = new Set<ReturnType<typeof setInterval>>();
+    globalThis.setInterval = ((...args: Parameters<typeof setInterval>) => {
+      const handle = realSetInterval(...args);
+      live.add(handle);
+      return handle;
+    }) as typeof setInterval;
+    globalThis.clearInterval = ((handle?: ReturnType<typeof setInterval>) => {
+      if (handle !== undefined) {
+        live.delete(handle);
+      }
+      return realClearInterval(handle);
+    }) as typeof clearInterval;
 
-    await expect(releaseAccountThrottler("default-release")).resolves.toBe(true);
+    try {
+      const account = getOrCreateAccountThrottler("settle-release");
+      const entered: string[] = [];
+      let releaseFirst!: () => void;
+      const firstGate = new Promise<void>((resolve) => {
+        releaseFirst = resolve;
+      });
+      const prev = vi.fn(async (_method: string, payload: unknown) => {
+        const request = payload as { text?: string };
+        entered.push(request.text ?? "");
+        if (entered.length === 1) {
+          await firstGate;
+        }
+        return { ok: true, result: request.text ?? "" };
+      }) as unknown as TelegramPreviousCall;
 
-    expect(getOrCreateAccountThrottler("default-release")).not.toBe(first);
+      const send = (text: string) =>
+        account.transformer(prev, "sendMessage", { chat_id: 42, text }, undefined);
+
+      const first = send("first");
+      await vi.waitFor(() => expect(entered).toEqual(["first"]));
+      const queued = send("queued");
+      // Attach the rejection handler before releasing so the drop never lands
+      // as an unhandled rejection.
+      const queuedRejection = expect(queued).rejects.toThrow(/stopped/i);
+      releaseFirst();
+      await first;
+
+      expect(live.size).toBeGreaterThan(0);
+      await releaseAccountThrottler("settle-release");
+      await queuedRejection;
+      expect(live.size).toBe(0);
+      await expect(send("after-release")).rejects.toThrow(/released/i);
+      expect(getOrCreateAccountThrottler("settle-release")).not.toBe(account);
+    } finally {
+      globalThis.setInterval = realSetInterval;
+      globalThis.clearInterval = realClearInterval;
+    }
   });
 
   it("keeps releasing other tokens independent", async () => {

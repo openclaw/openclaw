@@ -991,6 +991,17 @@ export const telegramPlugin = createChatChannelPlugin({
         if (released) {
           log?.info?.(`[${accountId}] released stopped Telegram polling lease`);
         }
+        // Gateway-side retirement: a config reload (token rotation or account
+        // removal) stops the previously started account inside this process.
+        // Release its throttler once the token is no longer configured, while
+        // unchanged reloads and manual stops keep it so penalty state survives.
+        const runtimeCfg = getOptionalTelegramRuntime()?.config.current?.();
+        if (runtimeCfg && !telegramTokenStillInUse(runtimeCfg as OpenClawConfig, token)) {
+          const releasedThrottler = await releaseAccountThrottler(token);
+          if (releasedThrottler) {
+            log?.info?.(`[${accountId}] released retired Telegram account throttler`);
+          }
+        }
       },
       logoutAccount: async ({ accountId, cfg }) => {
         const envToken = process.env.TELEGRAM_BOT_TOKEN?.trim() ?? "";
