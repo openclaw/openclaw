@@ -3,8 +3,14 @@ import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { resolveAmbientOwnerAgentId } from "../agents/agent-scope-config.js";
 import { resolveAgentEffectiveModelPrimary } from "../agents/agent-scope.js";
 import { loadAuthProfileStoreWithoutExternalProfilesAsync } from "../agents/auth-profiles/store-runtime.js";
+import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import { resolveModelRuntimePolicy } from "../agents/model-runtime-policy.js";
+import {
+  resolveDefaultModelForAgent,
+  resolveConfiguredRouteModelLabel,
+} from "../agents/model-selection.js";
 import { resolveProviderIdForAuth } from "../agents/provider-auth-aliases.js";
+import { resolveConfiguredSetupModelForAgent } from "../agents/utility-model.js";
 import { applyMergePatch } from "../config/merge-patch.js";
 import { normalizeAgentModelRefForConfig } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -56,6 +62,15 @@ function assertUtilitySeparation(ctx: StageContext, modelTarget: "utility" | und
   if (error) {
     throw new Error(error);
   }
+}
+
+/** True when two refs name the same provider (so a saved sign-in can serve both). */
+function sameProviderRef(a: string | undefined, b: string | undefined): boolean {
+  if (!a || !b) {
+    return false;
+  }
+  const providerOf = (ref: string) => normalizeProviderId(parseInferenceRef(ref).provider);
+  return providerOf(a) === providerOf(b);
 }
 
 export function selectSetupCredential(
@@ -276,6 +291,29 @@ async function stagePreparedCandidate(
   };
 }
 
+/**
+ * The agent's current configured model as the executable identity that
+ * configured-route activation labels (aliases resolved, literal catalog
+ * namespaces kept, auth-profile suffix dropped).
+ */
+function resolveConfiguredRouteModelRef(ctx: StageContext): string | undefined {
+  const selection = resolveConfiguredSetupModelForAgent({
+    cfg: ctx.cfg,
+    agentId: ctx.routeAgentId,
+  });
+  if (!selection) {
+    return undefined;
+  }
+  const { profile } = splitTrailingAuthProfile(selection.modelRef);
+  return resolveConfiguredRouteModelLabel({
+    cfg: ctx.cfg,
+    agentId: ctx.routeAgentId,
+    configuredRef: selection.modelRef,
+    resolved: resolveDefaultModelForAgent({ cfg: ctx.cfg, agentId: ctx.routeAgentId }),
+    ...(profile ? { profileId: profile } : {}),
+  });
+}
+
 export async function stageSavedAuthCandidate(
   ctx: StageContext,
   profileId: string,
@@ -316,7 +354,18 @@ export async function stageSavedAuthCandidate(
           "Choose this provider's endpoint and model again. Your saved sign-in is still available.",
       };
     }
-    const modelRef = saved?.modelRef ?? loaded?.method.starterModel;
+    // Prefer an explicit modelRef, then the agent's current configured model when
+    // it belongs to this provider, then the saved/starter model. This lets a
+    // re-login rotate the credential without silently changing the agent's model
+    // (the saved sign-in's starter model is often a different default).
+    const savedModelRef = saved?.modelRef ?? loaded?.method.starterModel;
+    const explicitModelRef = ctx.params.modelRef?.trim();
+    const configuredModelRef = explicitModelRef ? undefined : resolveConfiguredRouteModelRef(ctx);
+    const modelRef =
+      explicitModelRef ??
+      (configuredModelRef && sameProviderRef(configuredModelRef, savedModelRef)
+        ? configuredModelRef
+        : savedModelRef);
     const { validateConfigObjectRaw } = await import("../config/validation-core.js");
     const storedConfig = saved
       ? validateConfigObjectRaw(applyMergePatch(ctx.cfg, JSON.parse(saved.configJson)))

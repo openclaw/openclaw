@@ -180,11 +180,25 @@ export async function resolveSystemAgentConfiguredRouteFromConfig(
     : undefined;
   const authProfileId = allowCliAuthProfileForwarding ? cliAuthProfileId : selection.profileId;
   const executionConfig = projectSystemAgentExecutionConfig(preparedConfig, modelOwnerAgentId);
+  // The route label must equal the identity used by setup discovery and
+  // activation. Resolve aliases first: a qualified alias such as
+  // `openai/Fast` must label the concrete model, rather than retain its mutable
+  // authored spelling. Literal catalog namespaces still retain their spelling.
+  // Drop the auth-profile suffix the selection already separated so callers can
+  // append `authProfileId` themselves.
+  const modelLabel = modelSelection.resolveConfiguredRouteModelLabel({
+    cfg: runConfig,
+    agentId: modelOwnerAgentId,
+    configuredRef: configuredSelection.modelRef,
+    resolved: { provider: selection.provider, model: selection.modelId },
+    ...(selection.profileId ? { profileId: selection.profileId } : {}),
+    ...(deps.pluginMetadataPlugins ? { manifestPlugins: deps.pluginMetadataPlugins } : {}),
+  });
   const base = {
     ...(configuredSelection.modelTarget ? { modelTarget: configuredSelection.modelTarget } : {}),
     sourceConfig: runConfig,
     runConfig: executionConfig,
-    modelLabel: `${selection.provider}/${selection.modelId}`,
+    modelLabel,
     provider: executionProvider,
     model: selection.modelId,
     agentDir: selection.agentDir,

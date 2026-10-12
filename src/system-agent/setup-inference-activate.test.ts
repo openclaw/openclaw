@@ -14,6 +14,7 @@ import { fingerprintResolvedProviderAuth } from "../agents/execution-auth-bindin
 import { resolveModelRuntimePolicy } from "../agents/model-runtime-policy.js";
 import { buildAllowedModelSet } from "../agents/model-selection.js";
 import { ensureOnboardingAgent } from "../commands/onboard-agent.js";
+import { detectInferenceBackends } from "../commands/onboard-inference.js";
 import { hasResolvedRosterBeforeMigrations } from "../config/agent-roster-provenance.js";
 import { clearConfigCache, readConfigFileSnapshot } from "../config/config.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
@@ -413,6 +414,143 @@ describe("setup activation credentials and configuration", () => {
     },
   );
 
+  it("activates the canonical OpenRouter default route from an API key without a model pick", async () => {
+    // The "API Keys -> OpenRouter API key" onboarding flow has no model picker,
+    // so it stages the provider default `openrouter/auto` (the model id itself
+    // carries the provider prefix). A valid key must activate that canonical
+    // route; before the fix the route label was double-prefixed
+    // (`openrouter/openrouter/auto`) and the activation guard rejected it with
+    // "The candidate route does not match the selected provider, model, and
+    // credential." This drives the real activation entry point end to end.
+    const openrouterCredential = {
+      type: "api_key",
+      provider: "openrouter",
+      key: "sk-or-v1-fixture-key",
+    } as const;
+    const setup = await fixture({
+      authMethod: "api_key",
+      provider: {
+        id: "openrouter",
+        label: "OpenRouter",
+        modelRef: "openrouter/auto",
+        modelId: "openrouter/auto",
+        api: "openai-completions",
+        baseUrl: "https://openrouter.ai/api/v1",
+        credential: openrouterCredential,
+        profileId: "openrouter:default",
+      },
+    });
+    setup.run.mockImplementation(async (params) => {
+      expect(setup.readProfile()?.[1]).toMatchObject(openrouterCredential);
+      expect(params.disableTools).toBe(true);
+      return setup.reply(params);
+    });
+
+    const result = await setup.activate("api-key", undefined, {
+      apiKey: openrouterCredential.key,
+    });
+
+    expect(result, JSON.stringify(result)).toMatchObject({ ok: true, modelRef: "openrouter/auto" });
+    expect(setup.readProfile()?.[0]).toMatch(/^openrouter:/);
+    expect(setup.readProfile()?.[1]).toMatchObject(openrouterCredential);
+    expect(setup.run).toHaveBeenCalledOnce();
+    expect(setup.login).toHaveBeenCalledOnce();
+    const persisted = await readConfigFileSnapshot();
+    expect(persisted.valid).toBe(true);
+    expect(resolveAgentModelPrimaryValue(persisted.sourceConfig.agents?.defaults?.model)).toBe(
+      `openrouter/auto@${setup.readProfile()?.[0]}`,
+    );
+  });
+
+  it("activates the canonical OpenRouter default route from OAuth without a model pick", async () => {
+    // OAuth onboarding normalizes into the same OpenRouter credential/profile
+    // representation as the API-key flow (an api_key credential under the
+    // `openrouter` provider) and stages the same `openrouter/auto` default, so
+    // it must activate through the identical route-matching path.
+    const openrouterCredential = {
+      type: "api_key",
+      provider: "openrouter",
+      key: "sk-or-v1-oauth-fixture-key",
+    } as const;
+    const setup = await fixture({
+      authMethod: "oauth",
+      provider: {
+        id: "openrouter",
+        label: "OpenRouter",
+        modelRef: "openrouter/auto",
+        modelId: "openrouter/auto",
+        api: "openai-completions",
+        baseUrl: "https://openrouter.ai/api/v1",
+        credential: openrouterCredential,
+        profileId: "openrouter:default",
+      },
+    });
+    setup.run.mockImplementation(async (params) => {
+      expect(setup.readProfile()?.[1]).toMatchObject(openrouterCredential);
+      return setup.reply(params);
+    });
+
+    const result = await setup.activate();
+
+    expect(result, JSON.stringify(result)).toMatchObject({ ok: true, modelRef: "openrouter/auto" });
+    expect(setup.readProfile()?.[0]).toMatch(/^openrouter:/);
+    expect(setup.readProfile()?.[1]).toMatchObject(openrouterCredential);
+    expect(setup.run).toHaveBeenCalledOnce();
+    expect(setup.login).toHaveBeenCalledOnce();
+    const persisted = await readConfigFileSnapshot();
+    expect(persisted.valid).toBe(true);
+    expect(resolveAgentModelPrimaryValue(persisted.sourceConfig.agents?.defaults?.model)).toBe(
+      `openrouter/auto@${setup.readProfile()?.[0]}`,
+    );
+  });
+
+  it("re-verifies a saved OpenRouter auto installation through current-model discovery", async () => {
+    const openrouterCredential = {
+      type: "api_key",
+      provider: "openrouter",
+      key: "sk-or-v1-existing-fixture-key",
+    } as const;
+    const setup = await fixture({
+      primaryModel: "openrouter/auto@openrouter:existing",
+      provider: {
+        id: "openrouter",
+        label: "OpenRouter",
+        modelRef: "openrouter/auto",
+        modelId: "openrouter/auto",
+        api: "openai-completions",
+        baseUrl: "https://openrouter.ai/api/v1",
+        credential: openrouterCredential,
+        profileId: "openrouter:default",
+      },
+    });
+    await persistProviderAuthProfilesAfterLogin({
+      config: setup.config,
+      agentDir: setup.agentDir,
+      profiles: [{ profileId: "openrouter:existing", credential: openrouterCredential }],
+    });
+
+    const currentModel = (
+      await detectInferenceBackends({
+        config: setup.config,
+        env: {},
+        platform: "linux",
+        deps: {
+          probeLocalCommand: async (command) => ({ command, found: false }),
+          readCodexCliCredentials: () => null,
+        },
+      })
+    ).find((candidate) => candidate.kind === "existing-model");
+    expect(currentModel).toMatchObject({ modelRef: "openrouter/auto" });
+
+    const result = await setup.activate(currentModel!.kind, undefined, {
+      modelRef: currentModel!.modelRef,
+    });
+
+    expect(result, JSON.stringify(result)).toMatchObject({ ok: true, modelRef: "openrouter/auto" });
+    expect(setup.run).toHaveBeenCalledOnce();
+    expect(setup.run.mock.calls[0]?.[0].authProfileId).toBe("openrouter:existing");
+  });
+
   it("records persisted root hashes when setup retains an unrelated include", async () => {
     const setup = await fixture({ surface: "gateway" });
     const includePath = path.join(path.dirname(setup.configPath), "logging.json5");
@@ -723,6 +861,85 @@ describe("setup activation credentials and configuration", () => {
     expect(saved.agents?.entries?.main?.model).toBe(`${modelRef}@openai:replacement`);
     expect(saved.agents?.defaults?.model).toEqual(configured.agents?.defaults?.model);
     expect(saved.agents?.entries?.other).toEqual(configured.agents?.entries?.other);
+  });
+
+  it("rotates a saved sign-in onto the agent's current model without an explicit modelRef", async () => {
+    // Issue #167381: re-running a provider sign-in saves a replacement credential
+    // whose `setup.modelRef` is the method's starter model. Activating it must not
+    // silently switch the agent to that starter model; without an explicit
+    // modelRef, activation should verify and keep the agent's current model when
+    // it belongs to the same provider.
+    const setup = await fixture({ authMethod: "api_key", primaryModel: "stable/global-model" });
+    const configured = structuredClone(setup.config);
+    assert(configured.agents?.defaults);
+    configured.agents.ownership = "explicit";
+    configured.agents.defaults.systemAgent = { agentId: "main" };
+    configured.agents.entries = {
+      main: { model: `${modelRef}@openai:removed` },
+    };
+    await fs.writeFile(setup.configPath, JSON.stringify(configured));
+    clearConfigCache();
+    await upsertAuthProfileWithLock({
+      agentDir: setup.agentDir,
+      profileId: "openai:replacement",
+      credential: {
+        ...credential,
+        setup: {
+          replacement: true,
+          modelRef: "openai/provider-default",
+          configJson: "{}",
+        },
+      },
+    });
+
+    const result = await setup.activate("saved-auth:openai%3Areplacement", true, {
+      agentId: "main",
+      modelRef: undefined,
+    });
+
+    expect(result).toMatchObject({ ok: true, modelRef });
+    expect(setup.run.mock.calls[0]?.[0]).toMatchObject({
+      authProfileId: "openai:replacement",
+      model: "gpt-5.4-mini",
+    });
+    const saved = (await readConfigFileSnapshot()).sourceConfig;
+    expect(saved.agents?.entries?.main?.model).toBe(`${modelRef}@openai:replacement`);
+  });
+
+  it("resolves a configured alias before staging a saved sign-in without an explicit modelRef", async () => {
+    // A qualified alias primary must stage the concrete model the configured
+    // route resolves, not the authored spelling the identity guard would reject.
+    const setup = await fixture({ authMethod: "api_key" });
+    const configured = structuredClone(setup.config);
+    assert(configured.agents?.defaults);
+    configured.agents.ownership = "explicit";
+    configured.agents.defaults.systemAgent = { agentId: "main" };
+    configured.agents.defaults.models = { [modelRef]: { alias: "Fast" } };
+    configured.agents.entries = { main: { model: `openai/Fast@openai:removed` } };
+    await fs.writeFile(setup.configPath, JSON.stringify(configured));
+    clearConfigCache();
+    await upsertAuthProfileWithLock({
+      agentDir: setup.agentDir,
+      profileId: "openai:replacement",
+      credential: {
+        ...credential,
+        setup: { replacement: true, modelRef: "openai/provider-default", configJson: "{}" },
+      },
+    });
+
+    const result = await setup.activate("saved-auth:openai%3Areplacement", true, {
+      agentId: "main",
+      modelRef: undefined,
+    });
+
+    expect(result).toMatchObject({ ok: true, modelRef });
+    expect(setup.run.mock.calls[0]?.[0]).toMatchObject({
+      authProfileId: "openai:replacement",
+      model: "gpt-5.4-mini",
+    });
+    // The config write normalizes the alias to the concrete model too.
+    const saved = (await readConfigFileSnapshot()).sourceConfig;
+    expect(saved.agents?.entries?.main?.model).toBe(`${modelRef}@openai:replacement`);
   });
 
   it("rejects a concurrent provider change without overwriting it or removing the sign-in", async () => {
