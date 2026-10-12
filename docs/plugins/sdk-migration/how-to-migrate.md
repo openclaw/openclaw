@@ -18,6 +18,16 @@ Gateway main thread, including
 the next SDK major. Replace
 `readCodexSessionContext` with the reader from `createCodexSessionContextReader`.
 
+The `codex-session-transcript-runtime` facade also retains deprecated
+`validateCodexSessionTranscriptReadAdmission` and
+`validateCodexSessionTranscriptContextVersion` helpers. Keep validation with the
+owner supplied to `createCodexSessionContextReader` instead of issuing separate
+synchronous database reads. For transcript mirrors, replace
+`withCodexSessionTranscriptMirrorWriteLock` with
+`withCodexSessionTranscriptMirrorWrite`. These compatibility helpers remain until
+the next Plugin SDK major; actor-bound and incognito targets reject their
+synchronous database access.
+
 Opaque `AgentHarnessSessionDeletionMutation.commit` callbacks are deprecated.
 Use `createNativeSessionBindingLifecycleV2` for stored native bindings or
 `createNativeSessionCommitFinalizer` for effects that only run after commit.

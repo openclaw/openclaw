@@ -1351,8 +1351,11 @@ The host captures the database path, state environment, and current admission
 before awaited work. The shared worker owns its canonical connection and schema
 opening, with Gateway schema authority granted by its live host operation.
 Classified database errors survive transport, and canonical close joins worker
-operations and native cleanup. Cold registry restoration and runtime-configuration
-preparation still retain their existing main-thread behavior.
+operations and native cleanup. Cold subagent-registry restoration reads through
+the shared-state read-only worker before installing its resident snapshot.
+Asynchronous runtime-configuration preparation also reads Claw consent provenance
+in the shared-state worker; the synchronous configuration loader retains its
+existing compatibility path.
 
 Dynamic model resolution awaits persisted auth-profile reads. Agent-local and
 legacy shared credentials use the isolated read-only child, so reads can coexist
@@ -1853,8 +1856,8 @@ recording before reporting completion; a recording failure remains a warning and
 does not change the backup result. Status and Doctor await freshness before
 formatting it. Outcome recording executes its insertion-and-pruning transaction
 in the shared-state worker, preserving the 200-row limit and leaving absent
-databases absent. Freshness reads still execute synchronous SQLite internally
-and remain non-creating.
+databases absent. Freshness reads use the shared-state read-only worker and remain
+non-creating; the Gateway computes the summary from the returned ledger rows.
 
 Explicit session deletion, lifecycle-artifact cleanup, and history disk-budget
 eviction prepare their plans inside the session writer queue. When the parent database handle is cold, its

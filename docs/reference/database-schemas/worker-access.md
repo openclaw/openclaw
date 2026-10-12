@@ -60,6 +60,30 @@ paths are migration debt, not a pattern to extend. The
 [migration inventory](/reference/database-schemas/worker-access-inventory) separates
 candidate main-thread paths from SQL already executing in workers.
 
+## Worker ownership and caches
+
+The Gateway owns these runtime stores across its worker threads. SQL stays with
+the existing store worker; the host retains only the facts published by that
+owner. This summary covers the shared caches used by ordinary turns and lists;
+the migration inventory records remaining synchronous compatibility paths.
+
+| Owner                           | SQL execution                                        | Retained facts and writers                                                                                                                                                                                                                                  |
+| ------------------------------- | ---------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Session actor and entry readers | Agent execution writer; session history/read workers | Actor and entry receipts publish entry, participant, membership, anchor, and watermark facts. Native compatibility writers publish through the same session-change owner. Missing or unknown coverage invalidates the affected facts.                       |
+| Session list projection         | Worker hydration and bounded history reads           | The host retains list rows and display metadata. Entry, sharing, transcript, profile, and topology publications update or invalidate their owned fields; incognito rows stay outside the durable roster.                                                    |
+| User profiles                   | Shared-state readers and profile writer              | The resident catalog retains display rows, roles, merge aliases, and email bindings. Profile and binding writers install committed changes before notifications; physical replacement or unknown changes invalidate the catalog.                            |
+| Agent deletion journal          | Shared-state reader and lifecycle writer             | Admission retains `absent`, `pending`, or `complete` per physical database and agent. Journal begin, completion, and removal publish the new status after commit; offline repair invalidates it. Final deletion effects retain their live-authority guards. |
+| Plugin state                    | Plugin-state worker                                  | Bounded keyed postimages and absence facts serve warm reads. Native and worker mutation receipts replace or invalidate keys; pending or unknown settlement prevents reuse, and expiry is evaluated on read.                                                 |
+| Memory index                    | Index publication and retrieval workers              | Index-facts postimages supply source invalidation and vector-completeness facts. The publication owner updates them after index changes; retrieval owns read-only capability probing.                                                                       |
+| Outbound recovery and Web Push  | Existing shared-state workers                        | Queue insertion/replacement invalidates the empty-recovery fact. Subscription writes publish or invalidate subscription presence. These facts never authorize delivery.                                                                                     |
+
+Schema and physical-file admission are shared process facts, not per-request
+cache refreshes. Row receipts do not grant permission, and a missing receipt is
+not proof of absence. Outside processes use the Gateway or exclusive offline
+ownership; ordinary readers do not poll for foreign commits.
+
+## Session and ancillary worker operations
+
 Cold session creation uses the existing session-entry worker for requested-key
 and parent lookups. Personal default selection reads profile links and its selected
 credential through the existing shared-state and auth-store readers; credential
@@ -353,17 +377,15 @@ API/operation at each remaining T1 site, including conservative residuals.
 Boot admission, migrations, Doctor/CLI one-shots, and lock primitives retain their
 existing T2/T3 classifications.
 
-The remaining cutover work includes these live or unproven API families:
-
-| Owner / API                                                   | Why it stays live or unproven                                                                                                                                                                                          |
-| ------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Session store / `getSessionEntry`, `readAcpSessionEntry`      | Codex native execution policy, agent-session creation, and channel binding reconciliation still use synchronous entry points; class methods and runtime facade properties are not covered by the named-function proof. |
-| Codex history / `readCodexSessionContext`                     | The bundled Codex native history reader still calls the synchronous API.                                                                                                                                               |
-| Auth profiles / `findPersistedAuthProfileCredential`          | Auth upsert and Codex OAuth still call it; nested auth-store implementations forwarded through host properties also remain unproven.                                                                                   |
-| Conversation bindings / `inspectSessionBindingByConversation` | Gateway, Telegram, and Matrix routing retain bundled callers.                                                                                                                                                          |
-| Upstream links / `upsertSessionUpstreamLink`                  | The returned session-initialization `link` method still references it.                                                                                                                                                 |
-| Mention Inbox, publication, placement, model accounts         | Deprecated returned methods and class/interface contracts need receiver/escape proof before their shared kernels can be separated.                                                                                     |
-| Skill commands, TTS, proxy capture, session-store namespaces  | Lazy runtime namespaces escape into host API objects; absence of a named direct call is insufficient.                                                                                                                  |
+Use the generated [migration inventory](/reference/database-schemas/worker-access-inventory)
+for current remaining sites and operation names. A mixed helper's T1 classification
+does not mean every caller executes it on the host: bundled Codex SQLite history
+uses `SessionManager.openModelContextAsync`, and native history verification runs
+in its history worker. Bundled conversation routing likewise uses awaited
+binding readers. The deprecated synchronous routing wrapper and session
+initialization's `link` method remain compatibility paths; official harnesses use
+`linkAsync`. Current credential checks at external effects remain security
+boundaries even when their preparatory reads have moved to workers.
 
 Remove a T1-compat API and its remaining synchronous kernel in the next Plugin SDK
 major, together with obsolete SDK exports and registry entries. Publish release

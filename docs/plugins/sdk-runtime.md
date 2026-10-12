@@ -360,9 +360,12 @@ worker grants; existing writer adapter selection remains unchanged.
 `await api.runtime.agent.session.createSessionEntryListReader({ agentId, storePath, env? })`
 creates a read-only metadata inventory reader for a durable session store.
 Await the returned function to read `{ entries, assertCurrent }`. It reuses
-entries only after a worker verifies the same database connection and revision;
-foreign commits and reopened databases invalidate them. Entries exclude saved
-prompt snapshots and derived participants. Treat them as immutable. The returned
+entries while the worker's database incarnation, in-process writer receipts, and
+session-row generation are unchanged. Writes through sibling handles and reopened
+databases invalidate the snapshot; it does not poll for external writers.
+External writers must use the Gateway or hold exclusive ownership while it is
+stopped. Entries exclude saved prompt snapshots and derived participants. Treat
+them as immutable. The returned
 assertion checks physical source identity, not sharing permissions or row freshness;
 revalidate access before publishing data after an await. Keep the reader within
 its consumer's lifecycle and discard it when configuration changes.
