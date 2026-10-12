@@ -91,7 +91,7 @@ it.each([false, true])(
         }
         expect(plan.resolved).toMatchObject({
           childRuntimeSandboxed: false,
-          creationPolicy: { createdActor: { type: "agent", id: "main" } },
+          creationPolicy: { actor: { type: "agent", id: "main" } },
           modelPlan: { initialSessionPatch: { thinkingLevel, fastMode } },
         });
       } finally {
@@ -183,6 +183,9 @@ it.each([
   "keeps the birth requester window through async $backend launch (original=$originalSessionId, global=$globalRequester)",
   async ({ backend, originalSessionId, globalRequester }) => {
     const requesterSessionKey = globalRequester ? "global" : "agent:main:completion-owner";
+    const controllerSessionKey = globalRequester
+      ? "agent:main:dashboard:controller"
+      : fixture.parentSessionKey;
     const originalLifecycleRevision = originalSessionId
       ? "original-requester-lifecycle"
       : undefined;
@@ -213,7 +216,7 @@ it.each([
     await writeSubagentSessionEntry({
       stateDir: fixture.stateDir,
       agentId: "main",
-      sessionKey: fixture.parentSessionKey,
+      sessionKey: controllerSessionKey,
       defaultSessionId: "controller-session",
     });
     if (originalSessionId) {
@@ -286,7 +289,7 @@ it.each([
       );
     });
     const ctx = {
-      agentSessionKey: fixture.parentSessionKey,
+      agentSessionKey: controllerSessionKey,
       completionOwnerKey: requesterSessionKey,
       onSpawnEffectsStart: rotateRequester,
       ...(globalRequester ? { requesterAgentIdOverride: "main" } : {}),
@@ -299,7 +302,7 @@ it.each([
             ? spawnAcpDirect({ task: "window-bound work", agentId: "main", mode: "run" }, ctx)
             : maybeSpawnVisibleSession({
                 raw: { visible: true },
-                ...(globalRequester ? { agentId: "worker" } : {}),
+                ...(globalRequester ? { requestedAgentId: "worker" } : {}),
                 task: "window-bound work",
                 label: "",
                 runtime: "subagent",
@@ -341,7 +344,7 @@ it.each([
       expect(restored).toMatchObject({
         runId,
         requesterSessionKey,
-        controllerSessionKey: fixture.parentSessionKey,
+        controllerSessionKey,
         expectsCompletionMessage: true,
       });
       expect(restored?.completionRequesterSessionId).toBe(originalSessionId);
