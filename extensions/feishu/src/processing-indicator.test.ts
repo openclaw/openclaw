@@ -76,8 +76,9 @@ function harness() {
       onError: errors,
     });
   const owner = makeOwner();
-  const receive = (messageId: string, topicId = "topic-a") =>
+  const receive = (messageId: string, topicId = "topic-a", messageCreateTimeMs?: number) =>
     owner.receive({
+      messageCreateTimeMs,
       messageId,
       chatId: "chat-a",
       topicId,
@@ -271,29 +272,36 @@ describe("Feishu automatic source processing reactions", () => {
     await h.owner.drain();
   });
 
-  it("retries exact stored deletion on restart after the previous owner failed", async () => {
-    const h = harness();
-    const message = h.receive("recoverable");
-    message.queued();
-    await h.owner.drain();
-    h.remove.mockRejectedValueOnce(new Error("temporary delete failure"));
-    message.settled();
-    await h.owner.drain();
-    expect(h.remove).toHaveBeenCalledOnce();
-    expect(h.active).toEqual(new Set(["recoverable:OneSecond"]));
+  it("retries an exact stored deletion on restart after the source ages", async () => {
+    const now = Date.UTC(2026, 9, 12);
+    const clock = vi.spyOn(Date, "now").mockReturnValue(now);
+    try {
+      const h = harness();
+      const message = h.receive("recoverable", "topic-a", now);
+      message.queued();
+      await h.owner.drain();
+      h.remove.mockRejectedValueOnce(new Error("temporary delete failure"));
+      message.settled();
+      await h.owner.drain();
+      expect(h.remove).toHaveBeenCalledOnce();
+      expect(h.active).toEqual(new Set(["recoverable:OneSecond"]));
 
-    const restarted = h.makeOwner();
-    await restarted.drain();
-    expect(h.remove).toHaveBeenCalledTimes(2);
-    expect(h.remove.mock.calls[1]?.[0]).toEqual(
-      expect.objectContaining({
-        accountId: "account-a",
-        messageId: "recoverable",
-        reactionId: "recoverable:OneSecond",
-      }),
-    );
-    expect(h.add).toHaveBeenCalledOnce();
-    expect(h.active.size).toBe(0);
+      clock.mockReturnValue(now + 180_000);
+      const restarted = h.makeOwner();
+      await restarted.drain();
+      expect(h.remove).toHaveBeenCalledTimes(2);
+      expect(h.remove.mock.calls[1]?.[0]).toEqual(
+        expect.objectContaining({
+          accountId: "account-a",
+          messageId: "recoverable",
+          reactionId: "recoverable:OneSecond",
+        }),
+      );
+      expect(h.add).toHaveBeenCalledOnce();
+      expect(h.active.size).toBe(0);
+    } finally {
+      clock.mockRestore();
+    }
   });
 
   it("does not wait for slow reactions and cleans a late receipt while stopping", async () => {
@@ -484,6 +492,42 @@ describe("Feishu automatic source processing reactions", () => {
     }
   });
 
+  it("suppresses new reactions after a source ages while receipt loading waits", async () => {
+    const now = Date.UTC(2026, 9, 12);
+    const clock = vi.spyOn(Date, "now").mockReturnValue(now);
+    try {
+      const h = harness();
+      const loading = createDeferred<void>();
+      const loaded = createDeferred<void>();
+      h.store.lookup.mockImplementationOnce(async () => {
+        loading.resolve();
+        await loaded.promise;
+        return undefined;
+      });
+      const message = h.owner.receive({
+        messageId: "delayed-source",
+        chatId: "chat-a",
+        routeKey: "chat-a:topic-a",
+        messageCreateTimeMs: now,
+      });
+      message.queued();
+      await loading.promise;
+      clock.mockReturnValue(now + 180_000);
+      loaded.resolve();
+      await h.owner.drain();
+      const completion = createDeferred<void>();
+      message.included({ runId: "delayed-run", completion: completion.promise });
+      await h.owner.drain();
+      expect(h.add).not.toHaveBeenCalled();
+      completion.resolve();
+      await completion.promise;
+      await h.owner.drain();
+      expect(h.remove).not.toHaveBeenCalled();
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
   it("never deletes stored receipts belonging to another application or corrupt source key", async () => {
     const h = harness();
     h.rows.set("foreign-key", {
@@ -509,16 +553,12 @@ describe("Feishu automatic source processing reactions", () => {
     expect(h.errors).toHaveBeenCalled();
   });
 
-  it.each(["NO_REPLY", "failure", "cancel"])("cleans current run after %s", async (outcome) => {
+  it("cleans current run when its owner completion rejects", async () => {
     const h = harness();
     const done = createDeferred<void>();
     h.receive("source").included({ runId: "run", completion: done.promise });
     await h.owner.drain();
-    if (outcome === "failure") {
-      done.reject(new Error("failed run"));
-    } else {
-      done.resolve();
-    }
+    done.reject(new Error("failed run"));
     await done.promise.catch(() => undefined);
     await h.owner.drain();
     expect(h.active.size).toBe(0);

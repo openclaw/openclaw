@@ -33,6 +33,9 @@ function messageEnvelope(params: {
   chatId?: string;
   createTime?: string;
   text?: string;
+  chatType?: FeishuMessageEvent["message"]["chat_type"];
+  rootId?: string;
+  threadId?: string;
 }) {
   return {
     schema: "2.0",
@@ -49,7 +52,9 @@ function messageEnvelope(params: {
       message: {
         message_id: params.messageId ?? "om-message",
         chat_id: params.chatId ?? "oc-chat",
-        chat_type: "p2p",
+        chat_type: params.chatType ?? "p2p",
+        ...(params.rootId ? { root_id: params.rootId } : {}),
+        ...(params.threadId ? { thread_id: params.threadId } : {}),
         message_type: "text",
         content: JSON.stringify({ text: params.text ?? "hello" }),
         create_time: params.createTime ?? "1710000000000",
@@ -294,6 +299,103 @@ describe("Feishu durable ingress", () => {
       await ingress.stop();
     });
   });
+
+  it.each([
+    { chatType: "group", expectedTopic: "om-root" },
+    { chatType: "topic_group", expectedTopic: "omt-thread" },
+  ] as const)(
+    "replays stable-release $chatType topic receipts after restart",
+    async ({ chatType, expectedTopic }) => {
+      vi.useFakeTimers();
+      try {
+        await withQueue(async (queue, startIngress) => {
+          const envelope = messageEnvelope({
+            eventId: "evt-stable-topic",
+            chatType,
+            rootId: "om-root",
+            threadId: "omt-thread",
+          });
+          // v2026.10.2 admitted every Feishu message on its chat lane with payload version 1.
+          await queue.enqueue(
+            envelope.header.event_id,
+            {
+              version: 1,
+              receivedAt: Date.now(),
+              rawEnvelope: JSON.stringify(envelope),
+            },
+            { laneKey: "chat:oc-chat" },
+          );
+          await closeOpenClawStateDatabaseAsync();
+          const lanes: Array<string | undefined> = [];
+          const dispatch = vi.fn(async (data: ReturnType<typeof messageEnvelope>) => {
+            lanes.push(
+              (await queue.listClaims()).find((claim) => claim.id === data.header.event_id)
+                ?.laneKey,
+            );
+            await ingress.resolveLifecycle(flattenEnvelope(data))?.onAdopted();
+          });
+          const ingress = startIngress({ queue, dispatcher: createDispatcher(dispatch) });
+          ingress.start();
+          await ingress.waitForIdle();
+
+          expect(dispatch).toHaveBeenCalledWith(envelope);
+          expect(lanes).toEqual([`chat:oc-chat:topic:${expectedTopic}`]);
+          await expect(
+            queue.enqueue(envelope.header.event_id, {} as FeishuIngressPayload),
+          ).resolves.toMatchObject({ kind: "completed", duplicate: true });
+          await ingress.invoke(envelope, { needCheck: false });
+          await ingress.waitForIdle();
+          expect(dispatch).toHaveBeenCalledOnce();
+        });
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it.each([
+    { name: "another chat", eventId: "evt-topic-identity", laneKey: "chat:oc-other" },
+    {
+      name: "another topic",
+      eventId: "evt-topic-identity",
+      laneKey: "chat:oc-chat:topic:omt-other",
+    },
+    { name: "another event", eventId: "evt-other", laneKey: "chat:oc-chat" },
+  ])(
+    "rejects stored topic identities for $name instead of migrating them",
+    async ({ eventId, laneKey }) => {
+      vi.useFakeTimers();
+      try {
+        await withQueue(async (queue, startIngress) => {
+          const envelope = messageEnvelope({
+            eventId,
+            chatType: "topic_group",
+            threadId: "omt-thread",
+          });
+          await queue.enqueue(
+            "evt-topic-identity",
+            {
+              version: 1,
+              receivedAt: Date.now(),
+              rawEnvelope: JSON.stringify(envelope),
+            },
+            { laneKey },
+          );
+          const dispatch = vi.fn(async () => undefined);
+          const ingress = startIngress({ queue, dispatcher: createDispatcher(dispatch) });
+          ingress.start();
+          await ingress.waitForIdle();
+
+          expect(dispatch).not.toHaveBeenCalled();
+          await expect(
+            queue.enqueue("evt-topic-identity", {} as FeishuIngressPayload),
+          ).resolves.toMatchObject({ kind: "failed", record: { reason: "invalid-event" } });
+        });
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
 
   it("dead-letters authentication failures without retrying", async () => {
     await withQueue(async (queue, startIngress) => {

@@ -1,4 +1,5 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
 import { createRuntimeConfigReader } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { isRecord, readStringValue as readString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { ClawdbotConfig, HistoryEntry, PluginRuntime, RuntimeEnv } from "../runtime-api.js";
@@ -21,7 +22,7 @@ import {
 import { isMentionForwardRequest } from "./mention.js";
 import { resolveFeishuGroupConfig } from "./policy.js";
 import { parsePostContent } from "./post.js";
-import type { FeishuProcessingMessage } from "./processing-indicator.js";
+import type { FeishuProcessingMessage, FeishuProcessingTarget } from "./processing-indicator.js";
 import { getMessageFeishu } from "./send.js";
 import { getFeishuSequentialKey } from "./sequential-key.js";
 import { createSequentialQueue } from "./sequential-queue.js";
@@ -37,12 +38,7 @@ type FeishuMessageReceiveHandlerContext = {
   isAccountActive?: () => boolean;
   trackTask?: (task: Promise<void>) => void;
   processingIndicator?: {
-    receive: (target: {
-      messageId: string;
-      chatId: string;
-      topicId?: string;
-      routeKey: string;
-    }) => FeishuProcessingMessage;
+    receive: (target: FeishuProcessingTarget) => FeishuProcessingMessage;
   };
   handleMessage: typeof handleFeishuMessage;
   resolveDebounceText: (params: { event: FeishuMessageEvent; botOpenId?: string }) => string;
@@ -568,6 +564,7 @@ export function createFeishuMessageReceiveHandler({
                   ? (admittedEvent.message.thread_id ?? admittedEvent.message.root_id)
                   : (admittedEvent.message.root_id ?? admittedEvent.message.thread_id);
               const status = processingIndicator.receive({
+                messageCreateTimeMs: parseStrictNonNegativeInteger(event.message.create_time),
                 messageId: event.message.message_id,
                 chatId: event.message.chat_id,
                 topicId,

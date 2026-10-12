@@ -1,4 +1,5 @@
 import type { ClawdbotConfig, PluginRuntime } from "../runtime-api.js";
+import { isFeishuMessageFeedbackStale } from "./message-feedback-age.js";
 import { addReactionFeishu, removeReactionFeishu } from "./reactions.js";
 import { isFeishuBackoffError } from "./typing-backoff.js";
 
@@ -9,13 +10,14 @@ type Reaction = {
 };
 
 export type FeishuProcessingTarget = {
+  messageCreateTimeMs?: number;
   messageId: string;
   chatId: string;
   topicId?: string;
   routeKey: string;
 };
 
-type Receipt = FeishuProcessingTarget & {
+type Receipt = Omit<FeishuProcessingTarget, "messageCreateTimeMs"> & {
   accountId: string;
   appId: string;
   wait: Reaction;
@@ -30,6 +32,7 @@ export type FeishuProcessingMessage = {
 };
 
 type Source = {
+  messageCreateTimeMs?: number;
   key: string;
   sequence: number;
   receipt: Receipt;
@@ -188,8 +191,16 @@ export function createFeishuProcessingIndicator(options: {
   const create = async (source: Source, kind: "wait" | "typing", current: () => boolean) => {
     // New receipt intent may arrive while another source's storage operation awaits.
     await load(source);
+    const currentAndFresh = () =>
+      current() && !isFeishuMessageFeedbackStale(source.messageCreateTimeMs);
     const reaction = source.receipt[kind];
-    if (reaction.phase !== "idle" || source.replay || stopped || isBackedOff() || !current()) {
+    if (
+      reaction.phase !== "idle" ||
+      source.replay ||
+      stopped ||
+      isBackedOff() ||
+      !currentAndFresh()
+    ) {
       return reaction.phase === "active";
     }
     reaction.phase = "adding";
@@ -201,7 +212,7 @@ export function createFeishuProcessingIndicator(options: {
       report(error);
       return false;
     }
-    if (stopped || isBackedOff() || !current()) {
+    if (stopped || isBackedOff() || !currentAndFresh()) {
       reaction.phase = "removed";
       await save(source).catch(report);
       return false;
@@ -450,6 +461,7 @@ export function createFeishuProcessingIndicator(options: {
         settled: finish,
       };
       const source: Source = {
+        messageCreateTimeMs: target.messageCreateTimeMs,
         key,
         sequence: ++sequence,
         receipt: {

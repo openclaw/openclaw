@@ -40,6 +40,7 @@ type FeishuIngressFacts = {
   eventId: string;
   eventType: string;
   laneKey: string;
+  legacyChatLaneKey?: string;
 };
 
 type FeishuIngressOptions = {
@@ -164,6 +165,7 @@ function inspectFeishuIngressEnvelope(
       eventId,
       eventType,
       laneKey: topicId ? `chat:${chatId}:topic:${topicId}` : `chat:${chatId}`,
+      legacyChatLaneKey: `chat:${chatId}`,
     };
   }
   const noticeMeta = isRecord(event.notice_meta) ? event.notice_meta : null;
@@ -307,6 +309,19 @@ export function createFeishuDurableIngress(options: FeishuIngressOptions) {
   let socketTerminator: (() => void) | undefined;
   const activeLifecycles = new Map<string, FeishuIngressLifecycle>();
 
+  const inspectStoredIngress = (id: string, payload: FeishuIngressPayload) => {
+    try {
+      if (payload.version !== FEISHU_INGRESS_PAYLOAD_VERSION) {
+        return null;
+      }
+      const facts = inspectFeishuIngressEnvelope(payload.rawEnvelope, options.encryptKey);
+      return facts?.eventId === id ? facts : null;
+    } catch {
+      // Invalid stored payloads still reach claim inspection and its normal dead-letter path.
+      return null;
+    }
+  };
+
   const monitor = createChannelIngressMonitor<
     string,
     { receivedAt: number; rawEnvelope: string },
@@ -392,6 +407,13 @@ export function createFeishuDurableIngress(options: FeishuIngressOptions) {
       // Debounce/preparation retains its own FIFO. Keep the durable claim alive
       // for replay while letting subsequent receipts reach that admission queue.
       deferredLaneOccupancy: "release",
+      // v2026.10.2 stored message lanes by chat. Reconcile only that exact
+      // envelope-derived identity inside the queue owner's atomic claim transition.
+      deriveLaneKey: (record) => inspectStoredIngress(record.id, record.payload)?.laneKey,
+      reconcileStoredLaneKey: (record, storedLaneKey, derivedLaneKey) => {
+        const facts = inspectStoredIngress(record.id, record.payload);
+        return facts?.legacyChatLaneKey === storedLaneKey && facts.laneKey === derivedLaneKey;
+      },
       adoptionStallTimeoutMs: options.adoptionStallTimeoutMs ?? DEFAULT_INGRESS_ADOPTION_STALL_MS,
       resolveNonRetryableFailure: resolveFeishuIngressNonRetryableFailure,
       onLog: (message) => options.runtime.error?.(`feishu ingress: ${message}`),

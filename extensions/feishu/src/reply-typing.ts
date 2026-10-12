@@ -1,18 +1,7 @@
 import { logTypingFailure } from "openclaw/plugin-sdk/channel-feedback";
 import type { ClawdbotConfig, RuntimeEnv } from "../runtime-api.js";
+import { isFeishuMessageFeedbackStale } from "./message-feedback-age.js";
 import { addTypingIndicator, removeTypingIndicator, type TypingIndicatorState } from "./typing.js";
-
-const TYPING_INDICATOR_MAX_AGE_MS = 2 * 60_000;
-const MS_EPOCH_MIN = 1_000_000_000_000;
-
-function normalizeEpochMs(timestamp: number | undefined): number | undefined {
-  if (!Number.isFinite(timestamp) || timestamp === undefined || timestamp <= 0) {
-    return undefined;
-  }
-  // Defensive normalization: some payloads use seconds, others milliseconds.
-  // Values below 1e12 are treated as epoch-seconds.
-  return timestamp < MS_EPOCH_MIN ? timestamp * 1000 : timestamp;
-}
 
 export function createFeishuReplyTyping(params: {
   cfg: ClawdbotConfig;
@@ -32,13 +21,7 @@ export function createFeishuReplyTyping(params: {
       if (!params.messageId) {
         return;
       }
-      // Skip typing indicator for old messages — likely replays after context
-      // compaction that would flood users with stale notifications (#30418).
-      const messageCreateTimeMs = normalizeEpochMs(params.messageCreateTimeMs);
-      if (
-        messageCreateTimeMs !== undefined &&
-        Date.now() - messageCreateTimeMs > TYPING_INDICATOR_MAX_AGE_MS
-      ) {
+      if (isFeishuMessageFeedbackStale(params.messageCreateTimeMs)) {
         return;
       }
       // Feishu reactions persist until explicitly removed, so skip keepalive

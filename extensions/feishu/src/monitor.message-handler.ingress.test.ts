@@ -11,12 +11,18 @@ import { DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS } from "openclaw/plugin-sdk/channel-
 import { createTestInboundDebounceFlush } from "openclaw/plugin-sdk/channel-test-helpers";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { createNonExitingRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
+import type { GetReplyOptions } from "openclaw/plugin-sdk/reply-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig, PluginRuntime, RuntimeEnv } from "../runtime-api.js";
+import {
+  bindFeishuProcessingReplyLifecycle,
+  withFeishuProcessingFeedback,
+} from "./bot-processing-feedback.js";
 import * as dedup from "./dedup.js";
 import type { FeishuMessageEvent } from "./event-types.js";
 import { createFeishuDurableIngress, type FeishuIngressLifecycle } from "./feishu-ingress.js";
 import { createFeishuMessageReceiveHandler } from "./monitor.message-handler.js";
+import { createFeishuProcessingIndicator } from "./processing-indicator.js";
 
 type MessageReceiveHandlerContext = Parameters<typeof createFeishuMessageReceiveHandler>[0];
 type HandleMessageParams = Parameters<MessageReceiveHandlerContext["handleMessage"]>[0];
@@ -88,6 +94,7 @@ function createHarness(params: {
   lifecycles: ReadonlyMap<string, FeishuIngressLifecycle>;
   claims: readonly dedup.FeishuMessageProcessingClaim[];
   adoptTurn: boolean;
+  processingIndicator?: MessageReceiveHandlerContext["processingIndicator"];
 }) {
   let onFlush:
     | ((entries: DebounceEntry[], createFlush: DebounceFlushFactory) => DebounceFlush)
@@ -140,6 +147,7 @@ function createHarness(params: {
       (JSON.parse(event.message.content) as { text: string }).text,
     hasProcessedMessage,
     getBotOpenId: () => "ou-bot",
+    processingIndicator: params.processingIndicator,
     resolveIngressLifecycle: (data) => {
       const eventId = (data as { event_id?: string }).event_id;
       return eventId ? params.lifecycles.get(eventId) : undefined;
@@ -184,6 +192,95 @@ afterEach(() => {
 });
 
 describe("Feishu durable ingress debounce lifecycle", () => {
+  it.each([
+    { name: "stale milliseconds", ageMs: 180_000, seconds: false, allowed: false },
+    { name: "stale seconds", ageMs: 180_000, seconds: true, allowed: false },
+    { name: "fresh milliseconds", ageMs: 30_000, seconds: false, allowed: true },
+    { name: "fresh seconds", ageMs: 30_000, seconds: true, allowed: true },
+    { name: "missing timestamp", ageMs: undefined, seconds: false, allowed: true },
+    { name: "invalid timestamp", ageMs: 180_000, seconds: false, invalid: true, allowed: true },
+  ])("preserves source feedback age through ingress for $name", async (scenario) => {
+    const now = Date.UTC(2026, 9, 12);
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    const rows = new Map<string, unknown>();
+    const state = {
+      openKeyedStore: () => ({
+        entries: async () => [],
+        lookup: async (key: string) => structuredClone(rows.get(key)),
+        registerIfAbsent: async (key: string, value: unknown) => {
+          if (rows.has(key)) {
+            return false;
+          }
+          rows.set(key, structuredClone(value));
+          return true;
+        },
+        register: async (key: string, value: unknown) => {
+          rows.set(key, structuredClone(value));
+        },
+      }),
+    } as unknown as Pick<PluginRuntime["state"], "openKeyedStore">;
+    const add = vi.fn(async (request: { messageId: string; emojiType: string }) => ({
+      reactionId: `${request.messageId}:${request.emojiType}`,
+    }));
+    const remove = vi.fn(async () => {});
+    const owner = createFeishuProcessingIndicator({
+      cfg: {} as ClawdbotConfig,
+      accountId: "default",
+      appId: "fixture-app",
+      state,
+      addReaction: add,
+      removeReaction: remove,
+    });
+    const transport = createLifecycle();
+    const claim = createClaim("recovered-source");
+    const event = createTextEvent("evt-recovered", "om-recovered", "pending after outage");
+    if (scenario.ageMs === undefined) {
+      delete event.message.create_time;
+    } else {
+      const created = now - scenario.ageMs;
+      event.message.create_time = scenario.seconds ? String(created / 1000) : String(created);
+      if (scenario.invalid) {
+        event.message.create_time += "ms";
+      }
+    }
+    const completion = createDeferred<void>();
+    const harness = createHarness({
+      lifecycles: new Map([[event.event_id, transport.lifecycle]]),
+      claims: [claim],
+      adoptTurn: true,
+      processingIndicator: owner,
+    });
+    harness.handleMessage.mockImplementationOnce(async (params) =>
+      withFeishuProcessingFeedback(params, async (turn) => {
+        const replyOptions: Pick<GetReplyOptions, "turnAdoptionLifecycle"> =
+          bindFeishuProcessingReplyLifecycle(turn.turnAdoptionLifecycle, {
+            processingStatus: turn.processingStatus,
+            onRunIncluded: turn.turnAdoptionLifecycle?.onRunIncluded,
+            onSettled: turn.onQueuedSettled,
+          });
+        const lifecycle = replyOptions.turnAdoptionLifecycle;
+        await lifecycle?.onAdopted();
+        await owner.drain();
+        expect(add.mock.calls.map(([request]) => request.emojiType)).toEqual(
+          scenario.allowed ? ["OneSecond"] : [],
+        );
+        lifecycle?.onRunIncluded?.({ runId: "recovered-run", completion: completion.promise });
+        await owner.drain();
+      }),
+    );
+    await expect(harness.handler(event)).resolves.toEqual({ kind: "deferred" });
+    await harness.flush();
+    expect(add.mock.calls.map(([request]) => request.emojiType)).toEqual(
+      scenario.allowed ? ["OneSecond", "Typing"] : [],
+    );
+    completion.resolve();
+    await completion.promise;
+    await owner.drain();
+    expect(remove.mock.calls).toHaveLength(scenario.allowed ? 2 : 0);
+    expect(harness.handleMessage).toHaveBeenCalledOnce();
+    expect(harness.runtimeError).not.toHaveBeenCalled();
+  });
+
   it("releases a claim acquired after ingress abandonment instead of enqueueing it", async () => {
     const transport = createLifecycle();
     const logicalClaim = createClaim("delayed-admission");
