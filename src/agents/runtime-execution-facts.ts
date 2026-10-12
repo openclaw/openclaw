@@ -1,6 +1,9 @@
 import path from "node:path";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { loadExecApprovals, resolveExecApprovalsFromFile } from "../infra/exec-approvals.js";
+import {
+  loadExecApprovalsReadOnlyAsync,
+  resolveExecApprovalsFromFile,
+} from "../infra/exec-approvals.js";
 import { listActiveProcessSessionReferences } from "./bash-process-references.js";
 import { resolveProcessToolScopeKey } from "./bash-process-scope.js";
 import type { RuntimeContextFragment } from "./internal-runtime-context.js";
@@ -15,13 +18,16 @@ export type ExecutionHostRuntimeFactsParams = {
   includeEmptySnapshots?: boolean;
 };
 
-function buildApprovedExecutablesRuntimeContext(
+async function buildApprovedExecutablesRuntimeContext(
   agentId: string,
   includeEmptySnapshots: boolean,
-): string | undefined {
+): Promise<string | undefined> {
   const header = "## Approved executables";
   try {
-    const { allowlist } = resolveExecApprovalsFromFile({ file: loadExecApprovals(), agentId });
+    const { allowlist } = resolveExecApprovalsFromFile({
+      file: await loadExecApprovalsReadOnlyAsync(),
+      agentId,
+    });
     const hints = allowlist
       .flatMap((entry) => {
         const pattern = entry.pattern.trim();
@@ -56,13 +62,16 @@ function buildApprovedExecutablesRuntimeContext(
   }
 }
 
-export function buildExecutionHostRuntimeFacts(
+export async function buildExecutionHostRuntimeFacts(
   params: ExecutionHostRuntimeFactsParams,
-): RuntimeContextFragment[] {
+): Promise<RuntimeContextFragment[]> {
   const sections: string[] = [];
   const includeEmptySnapshots = params.includeEmptySnapshots === true;
   if (process.platform === "win32" && params.capabilityToolNames.has("exec")) {
-    const approved = buildApprovedExecutablesRuntimeContext(params.agentId, includeEmptySnapshots);
+    const approved = await buildApprovedExecutablesRuntimeContext(
+      params.agentId,
+      includeEmptySnapshots,
+    );
     if (approved) {
       sections.push(approved);
     }

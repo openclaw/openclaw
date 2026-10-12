@@ -46,7 +46,7 @@ const reviewed = new Map([
     {
       priority: 1,
       evidence:
-        "Final synchronous pre-spawn/2026.9.8 SDK policy reads; native opaque approval guards retain MCP grant kernels until the next SDK major",
+        "Bundled execution guards consume committed policy receipts; deprecated synchronous SDK readers and native approval compatibility retain shared row kernels",
     },
   ],
   [
@@ -2405,6 +2405,7 @@ const exceptionModules = new Set([
   "src/state/openclaw-state-lease-storage.ts",
   "src/state/openclaw-agent-db-lease.ts",
   "src/infra/gateway-boot-lifecycle.ts",
+  "src/infra/sqlite-staging-token.ts", // acquireSqliteStagingToken holds the private snapshot admission/retirement lock through native transactions.
 ]);
 const cliModules = new Map([
   [

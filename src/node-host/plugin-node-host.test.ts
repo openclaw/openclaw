@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { createPluginRecord } from "../plugins/loader-records.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import type { PluginNodeHostCommandRegistration } from "../plugins/registry-types.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
@@ -22,6 +23,16 @@ function registerCommands(...commands: Command[]) {
     source: "test",
     command,
   }));
+  registry.plugins = [...new Set(registry.nodeHostCommands.map(({ pluginId }) => pluginId))].map(
+    (id) =>
+      createPluginRecord({
+        id,
+        source: "test",
+        origin: "bundled",
+        enabled: true,
+        configSchema: true,
+      }),
+  );
   setActivePluginRegistry(registry);
   return registry;
 }

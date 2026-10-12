@@ -5,7 +5,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { resolveStateDir } from "../config/paths.js";
 import { createAbortError } from "../infra/abort-signal.js";
 import {
-  loadExecApprovals,
+  loadExecApprovalsReadOnlyAsync,
   maxAsk,
   minSecurity,
   normalizeExecAsk,
@@ -316,7 +316,7 @@ export function createExecTool(defaults?: ExecToolDefaults) {
         host === "sandbox" || defaults?.bypassHostApprovalFloors === true
           ? undefined
           : resolveExecApprovalsFromFile({
-              file: loadExecApprovals(),
+              file: await loadExecApprovalsReadOnlyAsync(),
               agentId,
               overrides: {
                 security: "full",

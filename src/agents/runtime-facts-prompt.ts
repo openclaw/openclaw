@@ -19,7 +19,7 @@ export async function buildRuntimeFactsContext(
   },
 ): Promise<RuntimeContextFragment[]> {
   const includeEmptySnapshots = params.includeEmptySnapshots === true;
-  const facts = params.executionHost === false ? [] : buildExecutionHostRuntimeFacts(params);
+  const facts = params.executionHost === false ? [] : await buildExecutionHostRuntimeFacts(params);
   const canSpawn = params.capabilityToolNames.has("sessions_spawn");
   const subagentContext = await buildActiveSubagentRuntimeContext({
     cfg: params.cfg,

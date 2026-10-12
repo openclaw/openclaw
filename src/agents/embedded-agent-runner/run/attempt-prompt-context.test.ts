@@ -150,11 +150,13 @@ afterEach(async () => {
 describe("prepareEmbeddedAttemptPromptContext", () => {
   it("carries current Windows approval hints without changing system or user prompt bytes", () =>
     withMockedPlatform("win32", async () => {
-      const load = vi.spyOn(execApprovals, "loadExecApprovals").mockReturnValue({ version: 1 });
+      const load = vi
+        .spyOn(execApprovals, "loadExecApprovalsReadOnlyAsync")
+        .mockResolvedValue({ version: 1 });
       const fixture = createInput();
       fixture.input.capabilityToolNames.add("exec");
       const before = await prepareEmbeddedAttemptPromptContext(fixture.input);
-      load.mockReturnValue({
+      load.mockResolvedValue({
         version: 1,
         agents: { "agent-1": { allowlist: [{ pattern: "C:\\Tools\\node.exe" }] } },
       });

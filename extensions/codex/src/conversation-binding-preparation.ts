@@ -5,7 +5,7 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { resolveAgentWorkspaceDir } from "openclaw/plugin-sdk/agent-runtime";
 import { resolveSessionAgentIdsStrict } from "openclaw/plugin-sdk/agent-scope-runtime";
-import { loadExecApprovals } from "openclaw/plugin-sdk/exec-approvals-runtime";
+import { loadExecApprovalsReadOnlyAsync } from "openclaw/plugin-sdk/exec-approvals-runtime";
 import { parseAgentSessionKey } from "openclaw/plugin-sdk/routing";
 import {
   captureSessionEntryCurrentCheck,
@@ -192,7 +192,7 @@ export async function resolveConversationAppServerRuntime(params: {
     execOverrides: permissionMode
       ? { mode: CODEX_SESSION_PERMISSION_EXEC_MODES[permissionMode] }
       : undefined,
-    approvals: permissionMode === "full" ? undefined : loadExecApprovals(),
+    approvals: permissionMode === "full" ? undefined : await loadExecApprovalsReadOnlyAsync(),
   });
   const sandboxForPolicy =
     execPolicy.touched && execPolicy.security === "full" && execPolicy.ask !== "off"

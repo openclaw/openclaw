@@ -32,7 +32,10 @@ vi.mock("../../skills/loading/workspace-skill-sync.runtime.js", () => ({
   syncWorkspaceSkills: async () => [],
 }));
 vi.mock("../../skills/runtime/remote.js", () => ({ getRemoteSkillEligibility: () => undefined }));
-vi.mock("../exec-defaults.js", () => ({ resolveNodeExecEligibility: () => ({ canExec: false }) }));
+// mock-isolation: Runtime-reservation tests keep skill eligibility independent of host approval storage.
+vi.mock("../exec-defaults.js", () => ({
+  resolveNodeExecEligibilityAsync: () => ({ canExec: false }),
+}));
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
