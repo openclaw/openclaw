@@ -127,7 +127,6 @@ describe("new-session route catalog target", () => {
             : [],
         },
         groupsLoad: vi.fn(async () => (unavailable ? null : [])),
-        groupsGeneration: vi.fn(() => 1),
         groupsStatus: vi.fn(() => (unavailable ? "unavailable" : "ready")),
       },
     } as unknown as ApplicationContext;

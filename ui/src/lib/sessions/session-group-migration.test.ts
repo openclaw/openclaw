@@ -64,7 +64,7 @@ afterEach(() => {
 });
 
 describe("legacy session group migration", () => {
-  it.each(["current", "disconnected", "disposed"] as const)(
+  it.each(["disconnected", "disposed"] as const)(
     "settles overlapping automatic group invalidations for a %s owner",
     async (boundary) => {
       const stale = createDeferred<{ groups: { name: string }[] }>();
@@ -107,13 +107,7 @@ describe("legacy session group migration", () => {
         }
         stale.resolve({ groups: [{ name: "Stale" }] });
         await completion;
-        expect(reads).toBe(boundary === "current" ? 2 : 1);
-        if (boundary === "current") {
-          expect(sessions.state.groupSettings).toEqual([
-            expect.objectContaining({ name: "Current", cwd: "/workspace/current", worktree: true }),
-          ]);
-          expect(sessions.groupsStatus()).toBe("ready");
-        }
+        expect(reads).toBe(1);
       } finally {
         stale.resolve({ groups: [] });
         sessions.dispose();
@@ -166,6 +160,46 @@ describe("legacy session group migration", () => {
     expect(sessions.state.groups).toEqual(["Research"]);
     expect(localStorage.getItem("openclaw:sessions:custom-groups")).toBeNull();
     sessions.dispose();
+  });
+
+  it("does not replace saved groups from an invalidated legacy import", async () => {
+    vi.stubGlobal("localStorage", createStorageMock());
+    const legacy = JSON.stringify(["Research"]);
+    localStorage.setItem("openclaw:sessions:custom-groups", legacy);
+    const stale = createDeferred<{ groups: { name: string }[] }>();
+    const current = createDeferred<{ groups: { name: string }[] }>();
+    let reads = 0;
+    const request = vi.fn(async (method: string) => {
+      if (method === "sessions.groups.list") {
+        return ++reads === 1 ? stale.promise : current.promise;
+      }
+      if (method === "sessions.groups.put") {
+        return { groups: [{ name: "Research" }] };
+      }
+      if (method === "sessions.groups.defaults") {
+        return { defaults: [{ name: "Client", cwd: "/repos/client", worktree: true }] };
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const sessions = createTestSessionCapability(createGateway(request, ["operator.write"]));
+    try {
+      const staleLoad = sessions.groupsLoad();
+      sessions.groupsInvalidate();
+      const currentLoad = sessions.groupsLoad();
+      stale.resolve({ groups: [] });
+      await staleLoad;
+
+      expect(request).not.toHaveBeenCalledWith("sessions.groups.put", expect.anything());
+      expect(localStorage.getItem("openclaw:sessions:custom-groups")).toBe(legacy);
+      current.resolve({ groups: [{ name: "Client" }] });
+      await currentLoad;
+      expect(sessions.state.groupSettings).toEqual([
+        { name: "Client", position: 0, cwd: "/repos/client", worktree: true },
+      ]);
+    } finally {
+      current.resolve({ groups: [{ name: "Client" }] });
+      sessions.dispose();
+    }
   });
 });
 

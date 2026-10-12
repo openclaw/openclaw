@@ -41,7 +41,7 @@ export type SkillsState = {
   skillsDetailTab: "overview" | "card";
   skillOperation: SkillOperation;
   skillEdits: Record<string, string>;
-  skillMessages: SkillMessageMap;
+  skillMessages: Record<string, SkillMessage>;
   clawhubSearchQuery: string;
   clawhubSearchResults: ClawHubSearchResult[] | null;
   clawhubSearchLoading: boolean;
@@ -92,8 +92,6 @@ type SkillMessage = {
   kind: "success" | "error";
   message: string;
 };
-
-export type SkillMessageMap = Record<string, SkillMessage>;
 
 function setSkillMessage(state: SkillsState, key: string, message: SkillMessage) {
   if (!key.trim()) {

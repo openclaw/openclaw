@@ -632,7 +632,6 @@ export async function searchClawHubCatalogKeywords(
   const hash = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
   const key = hash([keywords, kinds, resolveClawHubBaseUrl(), params.agentId, params.workspaceDir]);
   let offset = 0;
-  let expectedResults: string | undefined;
   if (request.cursor) {
     const match = /^kw1\.([a-f0-9]{64})\.([a-f0-9]{64})\.(\d{1,5})$/u.exec(request.cursor);
     if (!match || match[1] !== key || Number(match[3]) > 20_000) {
@@ -640,7 +639,6 @@ export async function searchClawHubCatalogKeywords(
         "Invalid keyword cursor. Restart discovery with the same keywords and agent.",
       );
     }
-    expectedResults = match[2];
     offset = Number(match[3]);
   }
   const local = await prepareCatalogLocalState(params, kinds);
@@ -673,14 +671,8 @@ export async function searchClawHubCatalogKeywords(
     ),
   );
   const identities = [...union.keys()].toSorted();
-  // Re-read bounded searches instead of retaining an inventory or unbounded cursor snapshot.
-  // Reject changed unions so a continuation never silently skips or repeats a listing.
+  // Pagination is best effort if the remote catalog changes between requests.
   const signature = hash(identities);
-  if (expectedResults && expectedResults !== signature) {
-    throw new CatalogDiscoveryRequestError(
-      "ClawHub keyword matches changed. Restart discovery to page the current results.",
-    );
-  }
   const pageSize = request.pageSize ?? 20;
   const items = identities.slice(offset, offset + pageSize).map((id) => union.get(id)!);
   const { registerClawHubCatalogIconUrls } = await import("./catalog-icon-registry.js");

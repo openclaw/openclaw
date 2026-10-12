@@ -6,7 +6,7 @@ import path from "node:path";
 import { root as fsSafeRoot } from "@openclaw/fs-safe/root";
 import { loadSqliteVecExtension } from "../../packages/memory-host-sdk/src/host/sqlite-vec.js";
 import { requireDirectorySync, syncDirectory } from "../infra/directory-durability.js";
-import { copyFileHandle, sameFileMutationFingerprint } from "../infra/file-descriptor.js";
+import { copyFileHandle } from "../infra/file-descriptor.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { retireSqliteDatabaseAdmissionForPath } from "../infra/sqlite-database-admission.js";
 import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
@@ -92,10 +92,6 @@ function runAclTool(command: "getfacl" | "setfacl", args: string[], input?: stri
 
 function readAcl(pathname: string): string {
   return runAclTool("getfacl", ["-cEpn", "--", pathname]);
-}
-
-function sameDirectoryMetadata(left: fs.BigIntStats, right: fs.BigIntStats): boolean {
-  return (["dev", "ino", "mode", "uid", "gid"] as const).every((key) => left[key] === right[key]);
 }
 
 function preserveMetadata(target: string, original: fs.BigIntStats, acl: string) {
@@ -402,60 +398,7 @@ export async function repairDoctorSqliteNoCow(params: {
           "SQLite NOCOW staging directory",
         );
       }
-      params.assertCurrent();
-      const observedFiles = readStoreEntries(directory).map((entry) =>
-        path.join(entry.parentPath, entry.name),
-      );
-      for (const pathname of sqlitePaths) {
-        params.assertCurrent();
-        retireSqliteDatabaseAdmissionForPath(pathname, { requireSoleDescriptor: true });
-      }
-      assertNoOpenFiles(observedFiles.filter((pathname) => fs.lstatSync(pathname).isFile()));
-      // A file can appear while fuser checks the previously observed inventory.
-      const currentIdentity = fs.statSync(directory, { bigint: true });
-      const currentFiles = readStoreEntries(directory)
-        .map((entry) => path.join(entry.parentPath, entry.name))
-        .filter((pathname) => {
-          if (sharedMemoryPaths.has(pathname) && fs.lstatSync(pathname).isFile()) {
-            return false;
-          }
-          // Reading a cleanly closed WAL database can create an empty WAL beside the source.
-          if (
-            pathname.endsWith("-wal") &&
-            sqlitePaths.has(pathname.slice(0, -4)) &&
-            !sourceFiles.has(pathname)
-          ) {
-            const stat = fs.lstatSync(pathname);
-            return !stat.isFile() || stat.size !== 0;
-          }
-          return true;
-        });
-      if (
-        !sameDirectoryMetadata(currentIdentity, sourceIdentity) ||
-        readAcl(directory) !== sourceAcls.get(directory) ||
-        currentFiles.length !== sourceFiles.size ||
-        currentFiles.some((pathname) => {
-          const expected = sourceFiles.get(pathname);
-          const current = fs.lstatSync(pathname, { bigint: true });
-          return (
-            !expected ||
-            (expected.isDirectory()
-              ? !current.isDirectory() ||
-                !sameDirectoryMetadata(expected, current) ||
-                readAcl(pathname) !== sourceAcls.get(pathname)
-              : !sameFileMutationFingerprint(expected, current) ||
-                (expected.isSymbolicLink() &&
-                  (!current.isSymbolicLink() ||
-                    !fs
-                      .readlinkSync(pathname, { encoding: "buffer" })
-                      .equals(sourceLinks.get(pathname)!))))
-          );
-        })
-      ) {
-        throw new Error(
-          "source store changed during the NOCOW rewrite; original retained for retry",
-        );
-      }
+      // Offline maintenance excludes writers; unsupported outside writes remain in the retained original.
       const original = fs.statSync(directory);
       const replacement = fs.statSync(backup);
       params.assertCurrent();

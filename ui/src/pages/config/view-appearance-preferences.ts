@@ -48,6 +48,34 @@ export function serverUiPrefProvenanceHint(provenance: ServerUiPrefProvenance): 
   return t("configView.syncedHint");
 }
 
+type LocalToggle =
+  | "chatShowTaskProgress"
+  | "chatCollapseTaskProgress"
+  | "composerHoldToRecord"
+  | "sidebarLiveActivity"
+  | "sessionDeleteConfirm";
+
+function renderLocalToggle(
+  props: ConfigProps,
+  key: LocalToggle,
+  title: string,
+  hint: string,
+  disabled = false,
+) {
+  return renderSettingsToggleRow({
+    title: t(title),
+    description: html`${t(hint)}<br />
+      ${renderSettingsDefaultDescription(
+        t(UI_APPEARANCE_DEFAULTS[key] ? "common.enabled" : "common.disabled"),
+        props[key] !== UI_APPEARANCE_DEFAULTS[key],
+      )}
+      ${t("quickSettings.personal.browserOnly")}`,
+    checked: props[key],
+    onChange: (enabled) => props.onAppearanceChange({ [key]: enabled }),
+    disabled,
+  });
+}
+
 export function renderLanguageSection(props: ConfigProps) {
   const defaultDescription = renderSettingsDefaultDescription(
     props.localeResetValue ? languageLabel(props.localeResetValue) : t("common.system"),
@@ -176,18 +204,6 @@ export function renderChatPreferencesSection(props: ConfigProps) {
     t("chat.catalogOpenTargetViewer"),
     props.catalogOpenTarget !== UI_APPEARANCE_DEFAULTS.catalogOpenTarget,
   );
-  const holdToRecordDefaultDescription = renderSettingsDefaultDescription(
-    t("common.enabled"),
-    props.composerHoldToRecord !== UI_APPEARANCE_DEFAULTS.composerHoldToRecord,
-  );
-  const showTaskProgressDefaultDescription = renderSettingsDefaultDescription(
-    t("common.enabled"),
-    props.chatShowTaskProgress !== UI_APPEARANCE_DEFAULTS.chatShowTaskProgress,
-  );
-  const collapseTaskProgressDefaultDescription = renderSettingsDefaultDescription(
-    t("common.disabled"),
-    props.chatCollapseTaskProgress !== UI_APPEARANCE_DEFAULTS.chatCollapseTaskProgress,
-  );
   return html`
     <section id=${APPEARANCE_SETTINGS_TARGET_IDS.chat} class="settings-section">
       ${renderSettingsSectionHeader(t("configView.chatPrefs.title"))}
@@ -221,21 +237,8 @@ export function renderChatPreferencesSection(props: ConfigProps) {
             />
           `,
         })}
-        ${renderSettingsToggleRow({
-          title: t("configView.chatPrefs.showTaskProgress"),
-          description: html`${t("configView.chatPrefs.showTaskProgressHint")}<br />
-            ${showTaskProgressDefaultDescription} ${t("quickSettings.personal.browserOnly")}`,
-          checked: props.chatShowTaskProgress,
-          onChange: (enabled) => props.onAppearanceChange({ chatShowTaskProgress: enabled }),
-        })}
-        ${renderSettingsToggleRow({
-          title: t("configView.chatPrefs.collapseTaskProgress"),
-          description: html`${t("configView.chatPrefs.collapseTaskProgressHint")}<br />
-            ${collapseTaskProgressDefaultDescription} ${t("quickSettings.personal.browserOnly")}`,
-          checked: props.chatCollapseTaskProgress,
-          onChange: (enabled) => props.onAppearanceChange({ chatCollapseTaskProgress: enabled }),
-          disabled: !props.chatShowTaskProgress,
-        })}
+        ${renderLocalToggle(props, "chatShowTaskProgress", "configView.chatPrefs.showTaskProgress", "configView.chatPrefs.showTaskProgressHint")}
+        ${renderLocalToggle(props, "chatCollapseTaskProgress", "configView.chatPrefs.collapseTaskProgress", "configView.chatPrefs.collapseTaskProgressHint", !props.chatShowTaskProgress)}
         ${renderSettingsSelectRow({
           title: t("chat.sendShortcut"),
           value: props.chatSendShortcut,
@@ -310,13 +313,7 @@ export function renderChatPreferencesSection(props: ConfigProps) {
         })}
         ${renderSettingsMediaDeviceField(props, "microphone")}
         ${renderSettingsMediaDeviceField(props, "camera")}
-        ${renderSettingsToggleRow({
-          title: t("chat.composer.holdToRecordSetting"),
-          description: html`${t("chat.composer.holdToRecordSettingDescription")}<br />
-            ${holdToRecordDefaultDescription} ${t("quickSettings.personal.browserOnly")}`,
-          checked: props.composerHoldToRecord,
-          onChange: (enabled) => props.onAppearanceChange({ composerHoldToRecord: enabled }),
-        })}
+        ${renderLocalToggle(props, "composerHoldToRecord", "chat.composer.holdToRecordSetting", "chat.composer.holdToRecordSettingDescription")}
       </div>
     </section>
   `;
@@ -464,36 +461,13 @@ export function renderLobsterPetSection(props: ConfigProps) {
 
 export function renderSidebarPreferencesSection(props: ConfigProps) {
   const hiddenCatalogIds = [...props.hiddenSessionCatalogIds].toSorted();
-  const liveActivityDefaultDescription = renderSettingsDefaultDescription(
-    t("common.enabled"),
-    props.sidebarLiveActivity !== UI_APPEARANCE_DEFAULTS.sidebarLiveActivity,
-  );
-  // The delete dialog's "Don't ask me again" writes this off; this row is where
-  // the operator turns it back on, so it has to stay next to the session prefs.
-  const sessionDeleteConfirm = props.sessionDeleteConfirm;
-  const deleteConfirmDefaultDescription = renderSettingsDefaultDescription(
-    t("common.enabled"),
-    sessionDeleteConfirm !== UI_APPEARANCE_DEFAULTS.sessionDeleteConfirm,
-  );
   return html`
     <section id=${APPEARANCE_SETTINGS_TARGET_IDS.sidebar} class="settings-section">
       ${renderSettingsSectionHeader(t("configView.sidebarPrefs.title"))}
       <p class="settings-section__desc">${t("configView.sidebarPrefs.hint")}</p>
       <div class="settings-group">
-        ${renderSettingsToggleRow({
-          title: t("configView.sidebarPrefs.liveActivity"),
-          description: html`${t("configView.sidebarPrefs.liveActivityHint")}<br />
-            ${liveActivityDefaultDescription} ${t("quickSettings.personal.browserOnly")}`,
-          checked: props.sidebarLiveActivity,
-          onChange: (enabled) => props.onAppearanceChange({ sidebarLiveActivity: enabled }),
-        })}
-        ${renderSettingsToggleRow({
-          title: t("configView.sidebarPrefs.deleteConfirm"),
-          description: html`${t("configView.sidebarPrefs.deleteConfirmHint")}<br />
-            ${deleteConfirmDefaultDescription} ${t("quickSettings.personal.browserOnly")}`,
-          checked: sessionDeleteConfirm,
-          onChange: (enabled) => props.onAppearanceChange({ sessionDeleteConfirm: enabled }),
-        })}
+        ${renderLocalToggle(props, "sidebarLiveActivity", "configView.sidebarPrefs.liveActivity", "configView.sidebarPrefs.liveActivityHint")}
+        ${renderLocalToggle(props, "sessionDeleteConfirm", "configView.sidebarPrefs.deleteConfirm", "configView.sidebarPrefs.deleteConfirmHint")}
       </div>
       ${
         hiddenCatalogIds.length > 0

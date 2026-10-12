@@ -64,34 +64,17 @@ export function UsageQuerySection(props: {
         </div>
       </div>
       <div class="usage-filter-row">
-        <UsageQueryFilter
-          filterKey="channel"
-          label={t("usage.filters.channel")}
-          options={props.filterOptions.channel}
-          queryDraft={props.filters.queryDraft}
-          onQueryDraftChange={props.actions.onQueryDraftChange}
-        />
-        <UsageQueryFilter
-          filterKey="provider"
-          label={t("usage.filters.provider")}
-          options={props.filterOptions.provider}
-          queryDraft={props.filters.queryDraft}
-          onQueryDraftChange={props.actions.onQueryDraftChange}
-        />
-        <UsageQueryFilter
-          filterKey="model"
-          label={t("usage.filters.model")}
-          options={props.filterOptions.model}
-          queryDraft={props.filters.queryDraft}
-          onQueryDraftChange={props.actions.onQueryDraftChange}
-        />
-        <UsageQueryFilter
-          filterKey="tool"
-          label={t("usage.filters.tool")}
-          options={props.filterOptions.tool}
-          queryDraft={props.filters.queryDraft}
-          onQueryDraftChange={props.actions.onQueryDraftChange}
-        />
+        <For each={["channel", "provider", "model", "tool"] as const}>
+          {(filterKey) => (
+            <UsageQueryFilter
+              filterKey={filterKey}
+              label={t(`usage.filters.${filterKey}`)}
+              options={props.filterOptions[filterKey]}
+              queryDraft={props.filters.queryDraft}
+              onQueryDraftChange={props.actions.onQueryDraftChange}
+            />
+          )}
+        </For>
         <span class="usage-query-hint">{t("usage.query.tip")}</span>
       </div>
       {props.queryTerms.length > 0 ? (

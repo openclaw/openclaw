@@ -238,11 +238,7 @@ export function UsageInsights(props: {
     const totals = props.totals;
     const aggregates = props.aggregates;
     const stats = props.stats;
-    const showCostHint = props.showCostHint;
     const showCostShares = props.showCostShares;
-    const errorHours = props.errorHours;
-    const sessionCount = props.sessionCount;
-    const totalSessions = props.totalSessions;
     if (!totals) {
       return undefined;
     }
@@ -335,13 +331,9 @@ export function UsageInsights(props: {
       cacheHitRate,
       errorRatePct,
       avgDurationLabel,
-      showCostHint,
       avgCost,
-      sessionCount,
-      totalSessions,
       insightLists,
       errorDays,
-      errorHours,
     };
   });
   return (
@@ -416,7 +408,7 @@ export function UsageInsights(props: {
                   hintId="average-cost"
                   metric="avgCost"
                   hint={t(
-                    insights().showCostHint
+                    props.showCostHint
                       ? "usage.overview.avgCostHintMissing"
                       : "usage.overview.avgCostHint",
                   )}
@@ -427,9 +419,9 @@ export function UsageInsights(props: {
                 <SummaryStat
                   hintId="sessions"
                   metric="sessions"
-                  value={insights().sessionCount}
+                  value={props.sessionCount}
                   sub={t("usage.overview.sessionsInRange", {
-                    count: String(insights().totalSessions),
+                    count: String(props.totalSessions),
                   })}
                   class="usage-summary-card--compact"
                 />
@@ -455,7 +447,7 @@ export function UsageInsights(props: {
                 )}
                 {renderInsightList(
                   t("usage.overview.peakErrorHours"),
-                  insights().errorHours,
+                  props.errorHours,
                   t("usage.overview.noErrorData"),
                   {
                     error: true,

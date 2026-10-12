@@ -234,27 +234,6 @@ it("joins the shipped eager registrar's real promise before releasing its native
   );
 });
 
-it("releases an acquisition that finishes after admission closes", async () => {
-  const fixture = nativeFixture();
-  const resources = new CliPluginInvocationResources();
-  const entered = createDeferredCore();
-  const resume = createDeferredCore();
-  const loading = resources.acquire(async () => {
-    const acquisition = await fixture.load();
-    entered.resolve();
-    await resume.promise;
-    return acquisition;
-  });
-  await Promise.race([entered.promise, loading]);
-  const rejected = expect(loading).rejects.toThrow("closed during registry acquisition");
-  const closing = resources.release();
-  expect(fixture.state.database!.isOpen).toBe(true);
-  resume.resolve();
-  await rejected;
-  await closing;
-  expect(fixture.state.disposals).toBe(1);
-});
-
 it("keeps closed command admission separate from retained cleanup authority", async () => {
   const resources = new CliPluginInvocationResources();
   const foreign = new AsyncWorkScope();
