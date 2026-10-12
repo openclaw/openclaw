@@ -3,6 +3,7 @@ import {
   captureExternalSessionCommitGuard,
   composeSessionSourceAssertion,
 } from "../config/sessions/session-source-authority.js";
+import { SessionTranscriptOwnerMismatchError } from "../config/sessions/session-transcript-owner-error.js";
 import type { InternalSessionEntry } from "../config/sessions/types.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
@@ -539,7 +540,10 @@ export async function handleGatewayRequest(
         reject: (error) => respond(false, undefined, error),
       });
     } catch (error) {
-      if (error instanceof AgentDatabaseAdmissionError) {
+      if (
+        error instanceof AgentDatabaseAdmissionError ||
+        error instanceof SessionTranscriptOwnerMismatchError
+      ) {
         respond(false, undefined, errorShapeFromError(ErrorCodes.UNAVAILABLE, error));
         return;
       }

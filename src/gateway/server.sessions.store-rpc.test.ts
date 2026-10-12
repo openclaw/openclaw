@@ -968,3 +968,41 @@ test("archiving a session disables cron jobs bound to it", async () => {
   expect(writeScopedArchive.ok).toBe(true);
   expect(update).not.toHaveBeenCalled();
 });
+
+test("reset and manual compaction refuse another key's transcript with typed, non-retryable details", async () => {
+  const { storePath } = await createSessionStoreDir();
+  const sessionId = "8f14e45f-ceea-4e7a-9f8b-2d5c6b1a0e93";
+  const baseKey = "agent:main:cron:3f1c9a52-7d4e-4b8a-9c21-5e6f7a8b9c0d";
+  const runKey = `${baseKey}:run:${sessionId}`;
+  // An isolated cron run's row is written after its base row, so the run key owns the transcript.
+  await writeSessionStore({
+    entries: {
+      [baseKey]: { sessionId, updatedAt: Date.now() },
+      [runKey]: { sessionId, updatedAt: Date.now() },
+    },
+  });
+  await seedLinearTranscript({ contents: ["cron run"], sessionId, sessionKey: runKey, storePath });
+
+  const { ws } = await openClient();
+  const responses = [
+    await rpcReq(ws, "sessions.reset", { key: baseKey }),
+    await rpcReq(ws, "sessions.reset", { key: baseKey }),
+    await rpcReq(ws, "sessions.compact", { key: baseKey, maxLines: 1 }),
+  ];
+  ws.close();
+
+  for (const response of responses) {
+    expect(response.ok).toBe(false);
+    expect(response.error).toEqual({
+      code: "UNAVAILABLE",
+      message: `Transcript session ${sessionId} is owned by ${runKey}, not ${baseKey}; resolve the transcript target again before retrying.`,
+      retryable: false,
+      details: {
+        code: "SESSION_TRANSCRIPT_OWNER_MISMATCH",
+        sessionId,
+        ownerSessionKey: runKey,
+        requestedSessionKey: baseKey,
+      },
+    });
+  }
+});

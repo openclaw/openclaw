@@ -30,6 +30,7 @@ import {
 } from "../../sessions/session-lifecycle-admission.js";
 import { recordSessionCompacted } from "../../sessions/session-state-events.js";
 import { hasPreparedGatewayDeviceAuthority } from "../device-revocation.js";
+import { errorShapeFromError } from "../error-shape.js";
 import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
 import {
   resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId,
@@ -455,7 +456,7 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
         undefined,
         maxLines !== undefined && isSessionWorkStartInvalidatedError(err)
           ? sessionChangedError()
-          : errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(err)),
+          : errorShapeFromError(ErrorCodes.UNAVAILABLE, err, { message: formatErrorMessage(err) }),
       );
     } finally {
       capturedOperator?.release();

@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { McpOAuthStoreCorruptionError } from "../agents/mcp-oauth-store-error.js";
 import { WorktreeRemovalContentionError } from "../agents/worktrees/errors.js";
 import { SqliteTranscriptMutationConflictError } from "../config/sessions/session-mutation-conflict-error.js";
+import { SessionTranscriptOwnerMismatchError } from "../config/sessions/session-transcript-owner-error.js";
 import {
   SessionTranscriptWriterClaimReboundError,
   type TranscriptAppendRefusal,
@@ -114,6 +115,18 @@ describe("shared-state worker error transport", () => {
     {
       error: new SqliteTranscriptMutationConflictError("session"),
       fields: { sessionId: "session" },
+    },
+    {
+      error: new SessionTranscriptOwnerMismatchError(
+        "session",
+        "agent:main:owner",
+        "agent:main:req",
+      ),
+      fields: {
+        sessionId: "session",
+        ownerSessionKey: "agent:main:owner",
+        requestedSessionKey: "agent:main:req",
+      },
     },
     ...transcriptRefusals.map((cause) => ({
       error: new SessionTranscriptWriterClaimReboundError(cause),

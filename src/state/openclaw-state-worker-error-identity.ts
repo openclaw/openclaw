@@ -16,6 +16,7 @@ import {
   SqliteTranscriptMutationConflictError,
 } from "../config/sessions/session-mutation-conflict-error.js";
 import { SessionPendingInputCustodyError } from "../config/sessions/session-pending-input-custody-error.js";
+import { SessionTranscriptOwnerMismatchError } from "../config/sessions/session-transcript-owner-error.js";
 import { SessionTranscriptReadFenceError } from "../config/sessions/session-transcript-read-fence-error.js";
 import {
   parseTranscriptAppendRefusal,
@@ -156,6 +157,14 @@ export function identifyError(error: Error) {
   if (error instanceof SqliteTranscriptMutationConflictError) {
     return { type: "session-transcript-mutation-conflict" as const, sessionId: error.sessionId };
   }
+  if (error instanceof SessionTranscriptOwnerMismatchError) {
+    return {
+      type: "session-transcript-owner-mismatch" as const,
+      sessionId: error.sessionId,
+      ownerSessionKey: error.ownerSessionKey,
+      requestedSessionKey: error.requestedSessionKey,
+    };
+  }
   if (error instanceof SessionMetadataUnavailableError) {
     return {
       type: "session-metadata" as const,
@@ -244,6 +253,12 @@ export function createError(node: ErrorIdentity & { message: string }): Error {
       return new SqliteSessionMutationConflictError(node.operationLabel);
     case "session-transcript-mutation-conflict":
       return new SqliteTranscriptMutationConflictError(node.sessionId);
+    case "session-transcript-owner-mismatch":
+      return new SessionTranscriptOwnerMismatchError(
+        node.sessionId,
+        node.ownerSessionKey,
+        node.requestedSessionKey,
+      );
     case "session-transcript-writer-claim-rebound":
       return new SessionTranscriptWriterClaimReboundError(node.refusal);
     case "session-metadata":

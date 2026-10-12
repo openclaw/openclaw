@@ -11,6 +11,7 @@ import {
   McpAppViewExpiredErrorDetailsSchema,
   MissingScopeErrorDetailsSchema,
   OutboundDeliveryQueuedErrorDetailsSchema,
+  SessionTranscriptOwnerMismatchErrorDetailsSchema,
   SessionWorkspaceRecoveryRequiredErrorDetailsSchema,
   ProjectCloneErrorDetailsSchema,
   missingScopeErrorShape,
@@ -119,6 +120,23 @@ describe("gateway error details", () => {
     expect(Value.Check(OutboundDeliveryQueuedErrorDetailsSchema, { ...details, retry: true })).toBe(
       false,
     );
+  });
+
+  it("validates transcript owner mismatch details", () => {
+    const details = {
+      code: GatewayErrorDetailCodes.SESSION_TRANSCRIPT_OWNER_MISMATCH,
+      sessionId: "session-1",
+      ownerSessionKey: "agent:main:cron:job:run:session-1",
+      requestedSessionKey: "agent:main:cron:job",
+    };
+    expect(Value.Check(SessionTranscriptOwnerMismatchErrorDetailsSchema, details)).toBe(true);
+    expect(Value.Check(GatewayErrorDetailsSchema, details)).toBe(true);
+    expect(
+      Value.Check(SessionTranscriptOwnerMismatchErrorDetailsSchema, {
+        ...details,
+        ownerSessionKey: "",
+      }),
+    ).toBe(false);
   });
 
   it("validates unknown-agent details", () => {

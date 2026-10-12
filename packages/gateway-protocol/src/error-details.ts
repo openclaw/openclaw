@@ -22,6 +22,7 @@ export type {
   ProjectCloneFailureCause,
   WizardNotFoundErrorDetails,
   SetupAdmissionBusyErrorDetails,
+  SessionTranscriptOwnerMismatchErrorDetails,
   SessionWorkspaceRecoveryRequiredErrorDetails,
 } from "./gateway-error-details.js";
 export {

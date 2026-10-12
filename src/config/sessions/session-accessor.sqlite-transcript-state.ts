@@ -39,6 +39,7 @@ import {
   readTranscriptContextFacts,
   retainTranscriptContextFacts,
 } from "./session-transcript-context-facts.js";
+import { SessionTranscriptOwnerMismatchError } from "./session-transcript-owner-error.js";
 import {
   foldedSessionKeyAliasCandidates,
   normalizeStoreSessionKey,
@@ -275,8 +276,10 @@ export function ensureTranscriptSessionRoot(
                     .where("session_id", "=", scope.sessionId),
                 )?.session_key;
           if (persistedSessionKey && persistedSessionKey !== scope.sessionKey) {
-            throw new Error(
-              `Transcript session ${scope.sessionId} is owned by ${persistedSessionKey}, not ${scope.sessionKey}; resolve the transcript target again before retrying.`,
+            throw new SessionTranscriptOwnerMismatchError(
+              scope.sessionId,
+              persistedSessionKey,
+              scope.sessionKey,
             );
           }
           let retainedRoot = false;

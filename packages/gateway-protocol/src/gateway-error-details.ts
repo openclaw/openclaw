@@ -42,6 +42,7 @@ export const GatewayErrorDetailCodes = {
   SESSION_WORKSPACE_RECOVERY_REQUIRED: "SESSION_WORKSPACE_RECOVERY_REQUIRED",
   TASK_WORKTREE_SOURCE_REQUIRED: "TASK_WORKTREE_SOURCE_REQUIRED",
   TASK_HISTORY_PREVIEW_CAPACITY: "TASK_HISTORY_PREVIEW_CAPACITY",
+  SESSION_TRANSCRIPT_OWNER_MISMATCH: "SESSION_TRANSCRIPT_OWNER_MISMATCH",
 } as const;
 
 /** Missing cron automation identified by its exact store key. */
@@ -122,6 +123,14 @@ export type TaskWorktreeSourceRequiredErrorDetails = {
   cwd: string;
 };
 
+/** A transcript write named a session key other than the one owning that transcript. */
+export type SessionTranscriptOwnerMismatchErrorDetails = {
+  code: typeof GatewayErrorDetailCodes.SESSION_TRANSCRIPT_OWNER_MISMATCH;
+  sessionId: string;
+  ownerSessionKey: string;
+  requestedSessionKey: string;
+};
+
 /** Structured details emitted by method-level failures. */
 export type GatewayErrorDetails =
   | CronJobNotFoundErrorDetails
@@ -136,7 +145,8 @@ export type GatewayErrorDetails =
   | GitHubPublicationSelectionRejectedErrorDetails
   | SessionWorkspaceRecoveryRequiredErrorDetails
   | TaskWorktreeSourceRequiredErrorDetails
-  | { code: typeof GatewayErrorDetailCodes.TASK_HISTORY_PREVIEW_CAPACITY };
+  | { code: typeof GatewayErrorDetailCodes.TASK_HISTORY_PREVIEW_CAPACITY }
+  | SessionTranscriptOwnerMismatchErrorDetails;
 
 const LEGACY_MISSING_SCOPE_PATTERN = /\bmissing scope:\s*([a-z0-9._-]+)/i;
 
