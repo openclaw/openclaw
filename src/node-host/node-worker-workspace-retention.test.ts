@@ -309,6 +309,21 @@ describe("node worker workspace retention", () => {
     expect(fs.existsSync(sessionRoot(root, input))).toBe(false);
   });
 
+  it("does not delete workspaces before the first Gateway snapshot", async () => {
+    const root = tempDirs.make("node-worker-workspace-retention-startup-");
+    const { bundleRoot, env, workspaceDir } = writeNodeWorkerFixture(root);
+    const input = testWorkerLaunchInput(workspaceDir, "startup-retention");
+    const first = seedGeneration(bundleRoot, input, 1);
+    const second = seedGeneration(bundleRoot, input, 2);
+    const supervisor = createNodeWorkerSupervisor({ bundleRoot, env });
+
+    await supervisor.initialize();
+
+    expect(fs.existsSync(first)).toBe(true);
+    expect(fs.existsSync(second)).toBe(true);
+    await supervisor.close();
+  });
+
   it("continues a bounded backlog with an idempotent snapshot replay", async () => {
     const root = tempDirs.make("node-worker-workspace-retention-backlog-");
     const { bundleRoot, env, workspaceDir } = writeNodeWorkerFixture(root);

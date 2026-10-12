@@ -262,21 +262,31 @@ src/write.ts
     expect(preparation.totalTokens).toBeLessThanOrEqual(4);
   });
 
-  it.each(["shell"] as const)(
+  it.each(["shell", "custom"] as const)(
     "preserves earlier branch context while excluding private %s activity",
-    async () => {
+    async (kind) => {
       const model = createModel(8192);
       const capture = createCapturingStream(model);
-      const excludedMessage: AgentMessage = {
-        role: "bashExecution",
-        command: "private command",
-        output: `private output marker ${"x".repeat(80_000)}`,
-        exitCode: 0,
-        cancelled: false,
-        truncated: false,
-        timestamp: 2,
-        excludeFromContext: true,
-      };
+      const excludedMessage: AgentMessage =
+        kind === "shell"
+          ? {
+              role: "bashExecution",
+              command: "private command",
+              output: `private output marker ${"x".repeat(80_000)}`,
+              exitCode: 0,
+              cancelled: false,
+              truncated: false,
+              timestamp: 2,
+              excludeFromContext: true,
+            }
+          : {
+              role: "custom",
+              customType: "openclaw.operator-activity",
+              content: `private output marker ${"x".repeat(80_000)}`,
+              display: true,
+              timestamp: 2,
+              excludeFromContext: true,
+            };
       const entries: SessionTreeEntry[] = [
         createMessageEntry(
           { role: "user", content: "important original request", timestamp: 1 },

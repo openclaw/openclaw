@@ -129,15 +129,20 @@ describe("node worker workspace seeds", () => {
     );
   });
 
-  it("rejects a symlinked seed on apply without touching its target", async () => {
-    const outside = path.join(home, "outside");
-    await fsp.mkdir(outside);
-    await fsp.writeFile(path.join(outside, "marker"), "untouched");
-    await fsp.mkdir(seeds, { recursive: true });
-    await fsp.symlink(outside, path.join(seeds, key), "dir");
-    await expect(execSeed({ action: "apply", key })).rejects.toThrow("seed");
-    expect(await fsp.readFile(path.join(outside, "marker"), "utf8")).toBe("untouched");
-  });
+  it.each(["apply", "store"] as const)(
+    "rejects a symlinked seed on %s without touching its target",
+    async (action) => {
+      const outside = path.join(home, "outside");
+      await fsp.mkdir(outside);
+      await fsp.writeFile(path.join(outside, "marker"), "untouched");
+      await fsp.mkdir(seeds, { recursive: true });
+      await fsp.symlink(outside, path.join(seeds, key), "dir");
+      await expect(
+        execSeed(action === "apply" ? { action, key } : { action, key, maxAgeMs }),
+      ).rejects.toThrow("seed");
+      expect(await fsp.readFile(path.join(outside, "marker"), "utf8")).toBe("untouched");
+    },
+  );
 
   it("rejects a store without an existing source workspace", async () => {
     await fsp.rm(workspace, { recursive: true });

@@ -322,7 +322,7 @@ describe("createAgentHarnessToolSurfaceRuntime", () => {
       }
     },
   );
-  it.each(["quarantine"] as const)(
+  it.each(["quarantine", "prompt-policy"] as const)(
     "narrows collector capabilities after harness %s",
     async (restriction) => {
       const runtime = createRuntime({ tools: { toolSearch: false } });
@@ -510,6 +510,34 @@ describe("createAgentHarnessToolSurfaceRuntime", () => {
     } finally {
       first.cleanup();
       second.cleanup();
+    }
+  });
+
+  it("atomically filters and restores direct tools plus the hidden catalog", () => {
+    const runtime = createRuntime({ tools: { toolSearch: true } });
+    const compacted = runtime.compactTools(
+      tools([TOOL_CALL_RAW_TOOL_NAME, "read", "hidden_alpha", "hidden_beta"]),
+    );
+
+    try {
+      const alpha = compacted.promptToolPolicy.apply({ toolsAllow: ["hidden_alpha"] });
+      expect(alpha.tools.map((tool) => tool.name)).toEqual([TOOL_CALL_RAW_TOOL_NAME]);
+      expect(alpha.callableToolNames).toEqual([TOOL_CALL_RAW_TOOL_NAME, "hidden_alpha"]);
+
+      const beta = compacted.promptToolPolicy.apply({ toolsAllow: ["hidden_beta"] });
+      expect(beta.tools.map((tool) => tool.name)).toEqual([TOOL_CALL_RAW_TOOL_NAME]);
+      expect(beta.callableToolNames).toEqual([TOOL_CALL_RAW_TOOL_NAME, "hidden_beta"]);
+
+      const restored = compacted.promptToolPolicy.apply();
+      expect(restored.tools).toEqual(compacted.tools);
+      expect(restored.callableToolNames).toEqual([
+        TOOL_CALL_RAW_TOOL_NAME,
+        "read",
+        "hidden_alpha",
+        "hidden_beta",
+      ]);
+    } finally {
+      runtime.cleanup();
     }
   });
 

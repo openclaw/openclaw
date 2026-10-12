@@ -67,6 +67,33 @@ describe("Google Meet node invoke policy", () => {
     });
   });
 
+  it("uses trusted configured external bridge commands for start", async () => {
+    const policy = createGoogleMeetChromeNodeInvokePolicy(
+      resolveGoogleMeetConfig({
+        chrome: {
+          audioBridgeHealthCommand: ["trusted-bridge", "status"],
+          audioBridgeCommand: ["trusted-bridge", "start"],
+        },
+      }),
+    );
+    const { ctx, invokeNode } = createContext({
+      action: "start",
+      url: "https://meet.google.com/abc-defg-hij",
+      mode: "bidi",
+      audioBridgeHealthCommand: ["node", "-e", "process.exit(98)"],
+      audioBridgeCommand: ["node", "-e", "process.exit(99)"],
+    });
+
+    await policy.handle(ctx);
+
+    const call = invokeNode.mock.calls[0]?.[0];
+    expect(call?.params).toMatchObject({
+      action: "start",
+      audioBridgeHealthCommand: ["trusted-bridge", "status"],
+      audioBridgeCommand: ["trusted-bridge", "start"],
+    });
+  });
+
   it("rejects direct start for non-Meet URLs before node dispatch", async () => {
     const policy = createGoogleMeetChromeNodeInvokePolicy(resolveGoogleMeetConfig({}));
     const { ctx, invokeNode } = createContext({

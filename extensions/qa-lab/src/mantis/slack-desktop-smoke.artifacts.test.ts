@@ -33,8 +33,18 @@ function createBarrier() {
   return { promise, resolve: () => complete() };
 }
 
-function createRunner(copy: (outputDir: string) => Promise<void>) {
+function createRunner(
+  copy: (outputDir: string, run: number) => Promise<void>,
+  failSecondRemoteRun = false,
+) {
+  let run = 0;
+  let remoteRuns = 0;
   return vi.fn<CommandRunner>(async (command, args) => {
+    if (command === "/tmp/crabbox" && args[0] === "run") {
+      if (++remoteRuns === 2 && failSecondRemoteRun) {
+        throw new Error("current remote failure");
+      }
+    }
     if (command === "/tmp/crabbox" && args[0] === "inspect") {
       return {
         stdout: JSON.stringify({
@@ -52,7 +62,7 @@ function createRunner(copy: (outputDir: string) => Promise<void>) {
       if (!outputDir) {
         throw new Error("Missing artifact copy destination");
       }
-      await copy(outputDir);
+      await copy(outputDir, ++run);
     }
     return { stdout: "", stderr: "" };
   });
@@ -126,6 +136,66 @@ describe("Mantis Slack artifact ownership", () => {
       ),
     ).toBe(false);
   });
+
+  it.each([
+    { missing: "metadata", error: "current remote failure" },
+    { missing: "screenshot", error: "Slack desktop screenshot is missing" },
+    { missing: "checkpoint", error: `Approval checkpoint ${selected}.resolved is missing` },
+  ])(
+    "rejects old $missing when a reused output directory receives incomplete evidence",
+    async ({ missing, error }) => {
+      const runner = createRunner(async (outputDir, run) => {
+        if (run === 1) {
+          await writeRunArtifacts(outputDir, [selected, unselected]);
+          await fs.writeFile(path.join(outputDir, "slack-desktop-smoke.mp4"), "old video");
+          return;
+        }
+        if (missing !== "metadata") {
+          await fs.writeFile(path.join(outputDir, "remote-metadata.json"), '{"qaExitCode":0}');
+        }
+        if (missing !== "screenshot") {
+          await fs.writeFile(path.join(outputDir, "slack-desktop-smoke.png"), "new screenshot");
+        }
+        await writeApprovalCheckpointArtifacts(
+          outputDir,
+          [selected],
+          missing === "checkpoint" ? `${selected}.resolved.json` : undefined,
+        );
+      }, missing === "metadata");
+      const first = await runMantisSlackDesktopSmoke(options(runner));
+      expect(first.status).toBe("pass");
+      const firstSummary = JSON.parse(await fs.readFile(first.summaryPath, "utf8"));
+      const unrelated = path.join(first.outputDir, "unrelated.log");
+      const unselectedPath = path.join(
+        first.outputDir,
+        "approval-checkpoints",
+        `${unselected}.pending.json`,
+      );
+      const unselectedBytes = await fs.readFile(unselectedPath);
+      await fs.writeFile(unrelated, "retained diagnostics");
+
+      const second = await runMantisSlackDesktopSmoke(options(runner));
+      const summary = JSON.parse(await fs.readFile(second.summaryPath, "utf8"));
+      expect(second.status).toBe("fail");
+      expect(summary.error).toContain(error);
+      if (missing === "metadata") {
+        expect(
+          summary.timings.phases.find(
+            (phase: { name: string }) => phase.name === "crabbox.remote_run",
+          )?.status,
+        ).toBe("fail");
+      }
+      expect(summary.remoteOutputDir).not.toBe(firstSummary.remoteOutputDir);
+      await expect(fs.readFile(unrelated, "utf8")).resolves.toBe("retained diagnostics");
+      await expect(fs.readFile(unselectedPath)).resolves.toEqual(unselectedBytes);
+      await expect(
+        fs.lstat(path.join(second.outputDir, "slack-desktop-smoke.mp4")),
+      ).rejects.toMatchObject({ code: "ENOENT" });
+      expect(
+        (await fs.readdir(second.outputDir)).some((name) => name.startsWith(".slack-run-")),
+      ).toBe(false);
+    },
+  );
 
   it.each([
     { overrides: { scenarioIds: ["slack-canary"] }, error: "--approval-checkpoints only supports" },

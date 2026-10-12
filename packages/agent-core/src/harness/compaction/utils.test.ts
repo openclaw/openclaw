@@ -101,25 +101,25 @@ describe("file operation provenance", () => {
 });
 
 describe("serializeConversation", () => {
-  it.each([{ name: "canonical", marker: { runtimeContext: {} } }])(
-    "excludes mixed-media $name runtime carriers from summaries",
-    ({ marker }) => {
-      const serialized = serializeConversation([
-        {
-          role: "user",
-          content: [
-            { type: "text", text: "private legacy runtime context" },
-            { type: "image", data: "AA==", mimeType: "image/png" },
-          ],
-          timestamp: 1,
-          ...marker,
-        },
-        { role: "user", content: "visible user text", timestamp: 2 },
-      ]);
+  it.each([
+    { name: "canonical", marker: { runtimeContext: {} } },
+    { name: "shipped", marker: { runtimeContextCarrier: true } },
+  ])("excludes mixed-media $name runtime carriers from summaries", ({ marker }) => {
+    const serialized = serializeConversation([
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "private legacy runtime context" },
+          { type: "image", data: "AA==", mimeType: "image/png" },
+        ],
+        timestamp: 1,
+        ...marker,
+      },
+      { role: "user", content: "visible user text", timestamp: 2 },
+    ]);
 
-      expect(serialized).toBe("[User]: visible user text");
-    },
-  );
+    expect(serialized).toBe("[User]: visible user text");
+  });
 
   it.each(["custom"] as const)(
     "preserves independent %s blocks through conversion and charges their separator",
