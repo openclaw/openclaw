@@ -256,7 +256,10 @@ export function transferSessionEntryWorkerCandidate<Receipt extends object>(
   const transcriptPublication = readStagedSessionTranscriptAuthority(database);
   const candidate = transcriptPublication ? { ...result, transcriptPublication } : result;
   if (result.publication) {
-    if (result.publication.source && result.publication.fullEntries?.size) {
+    if (
+      result.publication.source &&
+      (result.publication.fullEntries?.size || result.publication.actorPostimages?.size)
+    ) {
       sealSessionEntryPublicationSource(result.publication.source);
     }
     boundSessionEntryReplacementPublication(result.publication, candidate);
