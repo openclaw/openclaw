@@ -1,19 +1,25 @@
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
+import { isSqliteLockError } from "./sqlite-error-diagnostics.js";
 import { holdForeignWriter } from "./sqlite-worker-shared-state-admission.test-support.js";
 import { createRetainedUpdateRecovery } from "./update-retained-recovery.test-support.js";
+import { persistInterruptedUpdateObservation } from "./update-run-interruption-store.js";
 import {
   createUpdateRun,
+  getUpdateRun,
   getUpdateRunAsync,
   getUpdateRunWithReconciliationAsync,
   reconcileAbandonedUpdateRunsAsync,
 } from "./update-run-ledger.js";
+import { reconcileUpdateRunCandidatesInWorker } from "./update-run-reconciliation.worker.js";
 import { loadUpdateRecovery } from "./update-run-recovery.js";
 
 const admission = vi.hoisted(
@@ -136,6 +142,54 @@ describe("update run reconciliation workers", () => {
     expect(recovery).toBeDefined();
     expect(await getUpdateRunAsync(run.runId, options)).toEqual(before);
     expect(loadUpdateRecovery(run.runId, options)).toEqual(recovery);
+  });
+
+  it.each([
+    {
+      name: "reconciliation",
+      expected: ["transaction:free", "commit:held"],
+      write: (
+        options: Awaited<ReturnType<typeof expiredLegacyRun>>["options"],
+        _run: Awaited<ReturnType<typeof expiredLegacyRun>>["run"],
+        admit: (stage: "transaction" | "commit") => void,
+      ) => reconcileUpdateRunCandidatesInWorker({ candidates: [], selection: {} }, options, admit),
+    },
+    {
+      name: "interruption settlement",
+      expected: ["transaction:free"],
+      write: (
+        options: Awaited<ReturnType<typeof expiredLegacyRun>>["options"],
+        run: Awaited<ReturnType<typeof expiredLegacyRun>>["run"],
+        admit: (stage: "transaction" | "commit") => void,
+      ) =>
+        persistInterruptedUpdateObservation(
+          { expected: { ...getUpdateRun(run.runId, options)!, updatedAtMs: 0 }, detail: "fixture" },
+          options,
+          admit,
+        ),
+    },
+  ])("leaves the writer free while the host decides $name admission", async (entry) => {
+    const { options, run } = await expiredLegacyRun();
+    const competitor = new DatabaseSync(resolveOpenClawStateSqlitePath(options.env));
+    competitor.exec("PRAGMA busy_timeout = 0");
+    const observed: string[] = [];
+    try {
+      entry.write(options, run, (stage) => {
+        try {
+          competitor.exec("BEGIN IMMEDIATE");
+          competitor.exec("ROLLBACK");
+          observed.push(`${stage}:free`);
+        } catch (error) {
+          if (!isSqliteLockError(error)) {
+            throw error;
+          }
+          observed.push(`${stage}:held`);
+        }
+      });
+    } finally {
+      competitor.close();
+    }
+    expect(observed).toEqual(entry.expected);
   });
 
   it("allows the host event loop to release a contending native writer", async () => {
