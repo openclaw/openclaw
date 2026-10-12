@@ -11,6 +11,7 @@ import {
   WhatsAppConnectionController,
 } from "./connection-controller.js";
 import { enqueueCredsSave, writeCredsJsonAtomically } from "./creds-persistence.js";
+import { takeHeldInbound } from "./inbound/lifecycle.js";
 import { createAcceptedWhatsAppSendResult } from "./inbound/send-result.test-helper.js";
 import {
   createWaSocket,
@@ -88,6 +89,7 @@ function createSocketWithTransportEmitter() {
     end: vi.fn(async (_error?: Error) => {
       closed = true;
     }),
+    ev: new EventEmitter(),
     ws,
   };
 }
@@ -216,6 +218,28 @@ describe("WhatsAppConnectionController", () => {
     expect(sock.ws.close).not.toHaveBeenCalled();
     expect(controller.socketRef.current).toBeNull();
     expect(controller.getActiveListener()).toBeNull();
+  });
+
+  it("holds inbound upserts emitted between socket open and listener intake", async () => {
+    const sock = createSocketWithTransportEmitter();
+    const earlyUpsert = { type: "notify", messages: [{ key: { id: "early" } }] };
+    createWaSocketMock.mockResolvedValueOnce(sock as never);
+    waitForWaConnectionMock.mockImplementationOnce(async () => {
+      sock.ev.emit("messages.upsert", earlyUpsert);
+    });
+    let taken: unknown[] = [];
+
+    await controller.openConnection({
+      connectionId: "held-inbound",
+      createListener: async () => {
+        await Promise.resolve();
+        taken = takeHeldInbound(sock as never);
+        return createListenerStub() as never;
+      },
+    });
+
+    expect(taken).toEqual([earlyUpsert]);
+    expect(sock.ev.listenerCount("messages.upsert")).toBe(0);
   });
 
   it("falls back to raw websocket close when Baileys end is unavailable", () => {
@@ -714,6 +738,7 @@ describe("WhatsAppConnectionController", () => {
     const order: string[] = [];
     let closed = false;
     const sock = {
+      ev: new EventEmitter(),
       end: vi.fn(async () => {
         closed = true;
         order.push("socket-close");
@@ -837,6 +862,7 @@ describe("WhatsAppConnectionController", () => {
   it("retains connection ownership when socket close cannot be confirmed", async () => {
     let closed = false;
     const sock = {
+      ev: new EventEmitter(),
       end: vi
         .fn()
         .mockRejectedValueOnce(new Error("end failed"))
@@ -864,6 +890,7 @@ describe("WhatsAppConnectionController", () => {
   it("retains connection ownership until queued credentials drain", async () => {
     let closed = false;
     const sock = {
+      ev: new EventEmitter(),
       end: vi.fn(async () => {
         closed = true;
       }),

@@ -1,5 +1,6 @@
 import type {
   AnyMessageContent,
+  BaileysEventMap,
   ConnectionState,
   MiscMessageGenerationOptions,
   proto,
@@ -44,6 +45,7 @@ import { extractText } from "./extract.js";
 import {
   attachEmitterListener,
   closeInboundMonitorSocket,
+  takeHeldInbound,
   type WhatsAppSocketListen,
 } from "./lifecycle.js";
 import { DisconnectReason } from "./runtime-api.js";
@@ -377,8 +379,17 @@ export async function createWhatsAppAttachedSocketSession(options: SocketSession
     );
   };
 
-  const attachSockListener: WhatsAppSocketListen = (event, listener) =>
-    attachEmitterListener(sock.ev, event, listener);
+  const attachSockListener: WhatsAppSocketListen = (event, listener) => {
+    const detach = attachEmitterListener(sock.ev, event, listener);
+    if (event === "messages.upsert") {
+      // Synchronous handoff: nothing can arrive between the hold ending and replay.
+      const onUpsert = listener as (upsert: BaileysEventMap["messages.upsert"]) => void;
+      for (const upsert of takeHeldInbound(sock)) {
+        onUpsert(upsert);
+      }
+    }
+    return detach;
+  };
 
   const handleConnectionUpdate = (update: Partial<ConnectionState>) => {
     try {

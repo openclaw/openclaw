@@ -17,6 +17,7 @@ import {
 import {
   buildNotifyMessageUpsert,
   DEFAULT_ACCOUNT_ID,
+  getSock,
   settleInboundWork,
   startInboxMonitor,
   waitForInboundWorkDrained,
@@ -25,6 +26,7 @@ import {
   type InboxOnMessage,
 } from "./monitor-inbox.test-harness.js";
 import { lookupInboundMessageMeta } from "./quoted-message.js";
+import { waitForWaConnection } from "./session.js";
 import { DEFAULT_WHATSAPP_SOCKET_TIMING } from "./socket-timing.js";
 
 function createAcceptedSendMessageMock() {
@@ -91,6 +93,46 @@ async function primeCapturedReplyWithSuccessor(params: {
 
 describe("web monitor inbox socket lifecycle", () => {
   installStreamsInboundMessageHooks();
+
+  // Baileys acks and emits offline/live messages as soon as the socket opens.
+  // Our intake attaches only after async setup, so anything emitted in between
+  // must be held for it; WhatsApp never redelivers an acked message.
+  it("admits messages Baileys emits after open but before inbox attach", async () => {
+    vi.mocked(waitForWaConnection).mockImplementationOnce(async () => {
+      getSock().ev.emit(
+        "messages.upsert",
+        buildNotifyMessageUpsert({
+          id: nextMessageId("early-open"),
+          remoteJid: "999@s.whatsapp.net",
+          text: "sent while reconnecting",
+          timestamp: 1_700_000_000,
+          pushName: "Tester",
+        }),
+      );
+    });
+    const onMessage = vi.fn(async () => undefined);
+    const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage);
+    try {
+      await waitForMessageCalls(onMessage, 1);
+      expect(inboundMessage(onMessage).payload.body).toBe("sent while reconnecting");
+
+      sock.ev.emit(
+        "messages.upsert",
+        buildNotifyMessageUpsert({
+          id: nextMessageId("after-attach"),
+          remoteJid: "999@s.whatsapp.net",
+          text: "sent after attach",
+          timestamp: 1_700_000_001,
+          pushName: "Tester",
+        }),
+      );
+      await waitForMessageCalls(onMessage, 2);
+      await settleInboundWork();
+      expect(onMessage).toHaveBeenCalledTimes(2);
+    } finally {
+      await listener.close();
+    }
+  });
 
   it("socket session marks only preflight reachout timelocks as retryable no-send", async () => {
     const { listener, sock } = await startInboxMonitor(vi.fn(async () => {}) as InboxOnMessage);
