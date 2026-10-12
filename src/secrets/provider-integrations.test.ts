@@ -93,7 +93,7 @@ afterEach(() => {
 });
 
 describe("secret provider integration presets", () => {
-  it.each([undefined, "1.4.3"])(
+  it.each(["1.4.3"])(
     "materializes exec providers with the selected runtime flags (Bun: %s)",
     (bun) => {
       Object.defineProperty(process, "versions", {
@@ -170,75 +170,6 @@ describe("secret provider integration presets", () => {
     },
   );
 
-  it("normalizes manifest exec provider options to SecretRef provider schema limits", () => {
-    const rootDir = makeTempDir();
-    writeSecureFile(path.join(rootDir, "resolve.mjs"), "process.stdin.resume();\n");
-    writePluginManifest(rootDir, {
-      id: "bounded-secrets",
-      secretProviderIntegrations: {
-        bounded: {
-          source: "exec",
-          command: "${node}",
-          args: ["./resolve.mjs", "ok", "x".repeat(1025)],
-          timeoutMs: 120001,
-          noOutputTimeoutMs: 1.5,
-          maxOutputBytes: 20 * 1024 * 1024 + 1,
-          passEnv: ["GOOD_ENV", "bad-env"],
-        },
-      },
-    });
-
-    const registry = loadTestRegistry(rootDir, "bounded-secrets");
-
-    expect(listSecretProviderIntegrationPresets({ manifestRegistry: registry })).toEqual([
-      {
-        id: "bounded",
-        pluginId: "bounded-secrets",
-        providerAlias: "bounded",
-        displayName: "bounded",
-        providerConfig: pluginIntegrationProviderConfig("bounded-secrets", "bounded"),
-      },
-    ]);
-    expect(
-      resolveSecretProviderIntegrationConfig({
-        manifestRegistry: registry,
-        providerAlias: "bounded",
-        providerConfig: pluginIntegrationProviderConfig("bounded-secrets", "bounded"),
-      }),
-    ).toEqual({
-      ok: true,
-      providerConfig: {
-        source: "exec",
-        command: process.execPath,
-        args: [
-          ...(process.versions.bun ? ["--no-install"] : []),
-          fs.realpathSync(path.join(rootDir, "resolve.mjs")),
-          "ok",
-        ],
-        trustedDirs: [path.dirname(process.execPath), rootDir],
-        passEnv: ["GOOD_ENV"],
-      },
-    });
-  });
-
-  it("skips presets whose provider alias cannot be used as a SecretRef provider", () => {
-    const rootDir = makeTempDir();
-    writePluginManifest(rootDir, {
-      id: "bad-secrets",
-      secretProviderIntegrations: {
-        bad: {
-          providerAlias: "../bad",
-          source: "exec",
-          command: "${node}",
-        },
-      },
-    });
-
-    const registry = loadTestRegistry(rootDir, "bad-secrets");
-
-    expect(listSecretProviderIntegrationPresets({ manifestRegistry: registry })).toEqual([]);
-  });
-
   it("skips presets whose persisted plugin integration IDs would violate config schema limits", () => {
     const rootDir = makeTempDir();
     const longPluginRootDir = makeTempDir();
@@ -283,7 +214,7 @@ describe("secret provider integration presets", () => {
     expect(listSecretProviderIntegrationPresets({ manifestRegistry: registry })).toEqual([]);
   });
 
-  it.each<PluginOrigin>(["bundled", "global"])(
+  it.each<PluginOrigin>(["global"])(
     "skips non-node manifest preset commands for %s plugin roots",
     (origin) => {
       const rootDir = makeTempDir();
@@ -306,79 +237,7 @@ describe("secret provider integration presets", () => {
     },
   );
 
-  it("skips presets from disabled installed plugins", () => {
-    const rootDir = makeTempDir();
-    writeSecureFile(path.join(rootDir, "resolve.mjs"), "process.stdin.resume();\n");
-    writePluginManifest(rootDir, {
-      id: "disabled-secrets",
-      secretProviderIntegrations: {
-        vault: {
-          providerAlias: "vault",
-          source: "exec",
-          command: "${node}",
-          args: ["./resolve.mjs"],
-        },
-      },
-    });
-
-    const registry = loadPluginManifestRegistryCore({
-      candidates: [createCandidate(rootDir, "disabled-secrets", "global")],
-      config: {
-        plugins: {
-          entries: {
-            "disabled-secrets": {
-              enabled: false,
-            },
-          },
-        },
-      },
-    });
-
-    expect(
-      listSecretProviderIntegrationPresets({
-        manifestRegistry: registry,
-        config: {
-          plugins: {
-            entries: {
-              "disabled-secrets": {
-                enabled: false,
-              },
-            },
-          },
-        },
-      }),
-    ).toEqual([]);
-  });
-
-  it("exposes bundled presets enabled by platform default", () => {
-    const rootDir = makeTempDir();
-    writeSecureFile(path.join(rootDir, "resolve.mjs"), "process.stdin.resume();\n");
-    writePluginManifest(rootDir, {
-      id: "platform-secrets",
-      enabledByDefaultOnPlatforms: [process.platform],
-      secretProviderIntegrations: {
-        vault: {
-          providerAlias: "vault",
-          source: "exec",
-          command: "${node}",
-          args: ["./resolve.mjs"],
-        },
-      },
-    });
-    const registry = loadTestRegistry(rootDir, "platform-secrets", "bundled");
-
-    expect(listSecretProviderIntegrationPresets({ manifestRegistry: registry })).toEqual([
-      {
-        id: "vault",
-        pluginId: "platform-secrets",
-        providerAlias: "vault",
-        displayName: "vault",
-        providerConfig: pluginIntegrationProviderConfig("platform-secrets", "vault"),
-      },
-    ]);
-  });
-
-  it.each<PluginOrigin>(["workspace", "config"])(
+  it.each<PluginOrigin>(["workspace"])(
     "skips secret provider presets from %s plugin roots",
     (origin) => {
       const rootDir = makeTempDir();

@@ -1,9 +1,9 @@
-import { html, nothing } from "lit";
-
 function filledIcon(path: string, fillRule?: "evenodd") {
-  return html`<svg viewBox="0 0 24 24" class="icon--filled">
-    <path fill-rule=${fillRule ?? nothing} d=${path} />
-  </svg>`;
+  return () => (
+    <svg viewBox="0 0 24 24" class="icon--filled">
+      <path fill-rule={fillRule} d={path} />
+    </svg>
+  );
 }
 
 // Platform marks for the Apps page cards. Kept local (not in the shared
@@ -11,14 +11,14 @@ function filledIcon(path: string, fillRule?: "evenodd") {
 // icon file stays under its size cap; apps.css targets .icon--filled to
 // render solid fills while unclassed glyphs stay stroked.
 export const appsBrandIcons = {
-  watch: html`
+  watch: () => (
     <svg viewBox="0 0 24 24">
       <circle cx="12" cy="12" r="6" />
       <polyline points="12 10 12 12 13 13" />
       <path d="m16.13 7.66-.81-4.05a2 2 0 0 0-2-1.61h-2.68a2 2 0 0 0-2 1.61l-.78 4.05" />
       <path d="m7.88 16.36.8 4a2 2 0 0 0 2 1.61h2.72a2 2 0 0 0 2-1.61l.81-4.05" />
     </svg>
-  `,
+  ),
   apple: filledIcon(
     "M17.05 12.54c-.03-2.62 2.14-3.88 2.24-3.94-1.22-1.79-3.12-2.03-3.8-2.06-1.61-.16-3.15.95-3.97.95-.82 0-2.08-.93-3.42-.9-1.76.03-3.38 1.02-4.29 2.6-1.83 3.17-.47 7.87 1.31 10.44.87 1.26 1.91 2.67 3.27 2.62 1.31-.05 1.81-.85 3.4-.85 1.58 0 2.03.85 3.42.82 1.41-.02 2.31-1.28 3.17-2.55.99-1.46 1.4-2.87 1.42-2.94-.03-.02-2.73-1.05-2.75-4.19Zm-2.6-7.68c.72-.88 1.21-2.09 1.08-3.3-1.04.04-2.3.69-3.05 1.56-.67.78-1.26 2.02-1.1 3.2 1.16.09 2.34-.59 3.07-1.46Z",
   ),

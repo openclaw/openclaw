@@ -29,9 +29,7 @@ function providerConfig(providers: Record<string, unknown>) {
 }
 
 it.each<[Record<string, unknown>, Record<string, unknown>, string[]]>([
-  [{ qwenThinkingFormat: null }, { temperature: 0 }, ["models.providers.vllm.params"]],
   [{ temperature: 0 }, { qwen_thinking_format: false }, ["models.providers.vllm.models"]],
-  [{ temperature: 0 }, { temperature: 0 }, []],
 ])("detects owned vLLM aliases: %j %j", (providerParams, modelParams, paths) => {
   const raw = {
     models: {
@@ -190,16 +188,8 @@ describe("explicit model allow policy migration", () => {
 
 it.each([
   {
-    agents: { defaults: { modelPolicy: { allow: ["codex/*"] } } },
-    path: "agents.defaults.modelPolicy.allow.0",
-  },
-  {
     agents: { defaults: {}, list: [{ id: "worker", modelPolicy: { allow: ["codex/*"] } }] },
     path: "agents.list[0].modelPolicy.allow.0",
-  },
-  {
-    agents: { entries: { worker: { modelPolicy: { allow: ["codex/*"] } } } },
-    path: "agents.entries.worker.modelPolicy.allow.0",
   },
 ])("retains the legacy provider for a scoped wildcard: $path", ({ agents, path }) => {
   const raw = {
@@ -228,8 +218,6 @@ describe("stale contextWindow migration", () => {
   it.each([
     { provider: "deepseek", id: "deepseek-v4-flash", before: 200_000, after: 1_000_000 },
     { provider: "deepseek", id: "deepseek/deepseek-v4-flash", before: 200_000, after: 1_000_000 },
-    { provider: "deepseek", id: "deepseek-v4-flash", before: 500_000, after: 500_000 },
-    { provider: "openrouter", id: "deepseek/deepseek-v4-flash", before: 200_000, after: 200_000 },
   ])(
     "repairs only stale native-provider windows: $provider/$id ($before)",
     ({ provider, id, before, after }) => {

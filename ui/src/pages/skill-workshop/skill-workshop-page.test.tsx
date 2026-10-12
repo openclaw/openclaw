@@ -3,12 +3,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../../../../src/shared/deferred.js";
 import type { ApplicationContext } from "../../app/context.ts";
 import { createRuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
-import "./skill-workshop-page.ts";
-import {
-  createContext,
-  createRuntimeConfigStub,
-  type SkillWorkshopPageTestElement,
-} from "./skill-workshop-page.test-support.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
+import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
+import { createContext, createRuntimeConfigStub } from "./skill-workshop-page.test-support.ts";
+import { SkillWorkshopPage } from "./skill-workshop-page.tsx";
 
 const SKILL = "actual-budget-operations";
 const VERSION = "20260929T010000000Z-patch";
@@ -65,12 +64,11 @@ function workshopGateway(changes: SkillWorkshopChange[] = [change]) {
 }
 
 async function mount(context: ApplicationContext) {
-  const page = document.createElement(
-    "openclaw-skill-workshop-page",
-  ) as SkillWorkshopPageTestElement;
-  page.context = context;
-  document.body.append(page);
-  await page.updateComplete;
+  const mounted = mountSolid(() => <SkillWorkshopPage />, {
+    wrapper: createSolidApplicationContextProvider(context).wrapper,
+  });
+  const page = mounted.container.querySelector<HTMLElement>("openclaw-skill-workshop-page")!;
+  await waitForSolid(() => expect(page.querySelector("button")).not.toBeNull());
   return page;
 }
 
@@ -114,7 +112,7 @@ describe("Skill Workshop page", () => {
       const initialLoad = runtimeConfig.ensureLoaded();
       firstRead.reject(new Error("Configuration temporarily unavailable"));
       await initialLoad;
-      await page.updateComplete;
+      flush();
 
       expect(configRead).toHaveBeenCalledOnce();
       expect(page.querySelector('[role="alert"]')?.textContent).toContain(
@@ -125,7 +123,7 @@ describe("Skill Workshop page", () => {
       retry!.click();
       expect(configRead).toHaveBeenCalledTimes(2);
       await runtimeConfig.ensureLoaded();
-      await page.updateComplete;
+      flush();
 
       expect(configRead).toHaveBeenCalledTimes(2);
       expect(runtimeConfig.state.configSnapshot?.hash).toBe("recovered");
@@ -212,20 +210,19 @@ describe("Skill Workshop page", () => {
     const page = await mount(context);
     await vi.waitFor(() => expect(button(page, "Archive")).toBeDefined());
     button(page, "Archive")!.click();
-    await page.updateComplete;
+    flush();
 
-    Object.assign(context.agentSelection.state, { selectedId: "scout" });
-    page.requestUpdate();
-    await page.updateComplete;
+    context.agentSelection.set("scout");
+    flush();
     await vi.waitFor(() => expect(button(page, "Undo")).toBeDefined());
     const restoreButton = button(page, "Undo")!;
     restoreButton.click();
-    await page.updateComplete;
+    flush();
     expect(restoreButton.disabled).toBe(true);
 
     archive.reject(new Error("Retired archive failed"));
     await archive.promise.catch(() => undefined);
-    await page.updateComplete;
+    flush();
     expect(restoreButton.disabled).toBe(true);
     expect(page.textContent).not.toContain("Retired archive failed");
 
@@ -320,7 +317,7 @@ describe("Skill Workshop page", () => {
     await vi.waitFor(() => expect(page.textContent).toContain("Synthetic procedure"));
 
     page.querySelectorAll<HTMLButtonElement>(".sw-tab")[2]!.click();
-    await page.updateComplete;
+    flush();
     button(page, "Compare")!.click();
 
     await vi.waitFor(() =>
