@@ -142,6 +142,31 @@ describe("worker workspace reconciliation recovery", () => {
     await expect(fs.readFile(path.join(local, "src"), "utf8")).resolves.toBe("replacement");
   });
 
+  it("rolls back a remote file that replaced a base directory", async () => {
+    const local = await temporaryDirectory("workspace-directory-rollback");
+    const staged = await temporaryDirectory("workspace-directory-rollback-staged");
+    await gitInit(local);
+    await fs.mkdir(path.join(local, "src"));
+    await fs.writeFile(path.join(local, "src", "old.txt"), "base");
+    const base = await manifestFor(local);
+    await fs.writeFile(path.join(staged, "src"), "replacement");
+    const current = await manifestFor(staged);
+
+    await expect(
+      applyWorkspace({
+        root: local,
+        stagingRoot: staged,
+        base,
+        current,
+        commit: () => {
+          throw new Error("placement write failed");
+        },
+      }),
+    ).rejects.toThrow("placement write failed");
+
+    await expect(fs.readFile(path.join(local, "src", "old.txt"), "utf8")).resolves.toBe("base");
+  });
+
   it("restores a file over a directory containing only derived descendants", async () => {
     const local = await temporaryDirectory("workspace-directory-recovery-cache");
     const staged = await temporaryDirectory("workspace-directory-recovery-cache-staged");

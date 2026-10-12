@@ -182,6 +182,28 @@ describe("Discord REST error redaction", () => {
     expect(deepDetails).toContain("[Discord error body redacted: maximum depth exceeded]");
   });
 
+  it("redacts reflected credentials inside Discord validation arrays", () => {
+    const token = "MTAxMjM0NTY3ODkwMTIzNDU2.validation.array.credential";
+    const error = new DiscordError(new Response(null, { status: 400 }), {
+      message: "Invalid Form Body",
+      errors: {
+        content: {
+          _errors: [
+            {
+              code: "BASE_TYPE_BAD_LENGTH",
+              message: `Authorization: Bot ${token}`,
+            },
+          ],
+        },
+      },
+    });
+    const details = JSON.stringify(error.rawBody);
+
+    expect(details).not.toContain(token);
+    expect(details).toContain("BASE_TYPE_BAD_LENGTH");
+    expect(details).toContain("Invalid Form Body");
+  });
+
   it("redacts low-entropy values solely from their sensitive field key", () => {
     const error = new DiscordError(new Response(null, { status: 400 }), {
       message: "Invalid Form Body",

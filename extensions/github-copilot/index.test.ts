@@ -9,7 +9,12 @@ import {
   saveAuthProfileStore,
 } from "openclaw/plugin-sdk/agent-runtime";
 import { MAX_DATE_TIMESTAMP_MS } from "openclaw/plugin-sdk/number-runtime";
-import type { OpenClawConfig, ProviderAuthResult } from "openclaw/plugin-sdk/plugin-entry";
+import type {
+  OpenClawConfig,
+  OpenClawPluginApi,
+  ProviderAuthResult,
+} from "openclaw/plugin-sdk/plugin-entry";
+import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import type { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { markdownToIR } from "openclaw/plugin-sdk/text-chunking";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
@@ -44,6 +49,7 @@ vi.mock("./register.runtime.js", () => ({
   fetchCopilotUsage: vi.fn(),
 }));
 
+import plugin from "./index.js";
 import {
   interactiveContext,
   registerProviderWithPluginConfig,
@@ -139,6 +145,30 @@ function nonInteractiveContext(agentDir: string) {
 }
 
 describe("github-copilot plugin", () => {
+  it("registers embedding provider", () => {
+    const registerEmbeddingProviderMock = vi.fn<OpenClawPluginApi["registerEmbeddingProvider"]>();
+
+    plugin.register(
+      createTestPluginApi({
+        id: "github-copilot",
+        name: "GitHub Copilot",
+        source: "test",
+        config: {},
+        pluginConfig: {},
+        runtime: {} as never,
+        registerProvider: vi.fn(),
+        registerEmbeddingProvider: registerEmbeddingProviderMock,
+      }),
+    );
+
+    expect(registerEmbeddingProviderMock).toHaveBeenCalledTimes(1);
+    const adapter = expectDefined(
+      registerEmbeddingProviderMock.mock.calls[0]?.[0],
+      "embedding provider registration",
+    );
+    expect(adapter.id).toBe("github-copilot");
+  });
+
   it("normalizes legacy OAuth profiles without losing tenant metadata", async () => {
     const provider = registerProviderWithPluginConfig({});
     const credential = {

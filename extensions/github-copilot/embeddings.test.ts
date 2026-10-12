@@ -24,6 +24,7 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
   fetchWithSsrFGuard: fetchWithSsrFGuardMock,
 }));
 
+import { cancelTrackedTextResponse } from "../test-support/streaming-error-response.js";
 import { githubCopilotMemoryEmbeddingProviderAdapter } from "./embeddings.js";
 
 afterAll(() => {
@@ -162,6 +163,65 @@ describe("githubCopilotMemoryEmbeddingProviderAdapter", () => {
       });
     },
   );
+
+  it("bounds model discovery error bodies", async () => {
+    const tracked = cancelTrackedTextResponse(`${"discovery denied ".repeat(1024)}tail`, {
+      status: 503,
+      headers: { "content-type": "text/plain" },
+    });
+    const textSpy = vi.spyOn(tracked.response, "text").mockRejectedValue(new Error("unbounded"));
+    fetchWithSsrFGuardMock.mockImplementationOnce(async () => ({
+      response: tracked.response,
+      release: vi.fn(async () => {}),
+    }));
+
+    let caught: Error | undefined;
+    try {
+      await githubCopilotMemoryEmbeddingProviderAdapter.create(defaultCreateOptions());
+    } catch (error) {
+      caught = error as Error;
+    }
+
+    expect(caught?.message).toContain("GitHub Copilot model discovery HTTP 503");
+    expect(caught?.message).toContain("discovery denied");
+    expect(caught?.message).not.toContain("tail");
+    expect(caught?.message.length).toBeLessThan(8_300);
+    expect(tracked.wasCanceled()).toBe(true);
+    expect(textSpy).not.toHaveBeenCalled();
+    expect(resolveCopilotRuntimeAuthMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("bounds embeddings error bodies", async () => {
+    mockDiscoveryResponse({
+      ok: true,
+      json: buildModelsResponse([
+        { id: "text-embedding-3-small", supported_endpoints: ["/v1/embeddings"] },
+      ]),
+    });
+    const tracked = cancelTrackedTextResponse(`${"embedding denied ".repeat(1024)}tail`, {
+      status: 429,
+      headers: { "content-type": "text/plain" },
+    });
+    const textSpy = vi.spyOn(tracked.response, "text").mockRejectedValue(new Error("unbounded"));
+    const fetchImpl = vi.fn(async () => tracked.response);
+    vi.stubGlobal("fetch", fetchImpl);
+    const result = await githubCopilotMemoryEmbeddingProviderAdapter.create(defaultCreateOptions());
+
+    let caught: Error | undefined;
+    try {
+      await result.provider?.embed("hello", { inputType: "query" });
+    } catch (error) {
+      caught = error as Error;
+    }
+
+    expect(caught?.message).toContain("GitHub Copilot embeddings HTTP 429");
+    expect(caught?.message).toContain("embedding denied");
+    expect(caught?.message).not.toContain("tail");
+    expect(caught?.message.length).toBeLessThan(8_300);
+    expect(tracked.wasCanceled()).toBe(true);
+    expect(textSpy).not.toHaveBeenCalled();
+    expect(resolveCopilotRuntimeAuthMock).toHaveBeenCalledTimes(1);
+  });
 
   it("strips the provider prefix from a user-selected model", async () => {
     const options = {

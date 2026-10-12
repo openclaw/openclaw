@@ -11,8 +11,14 @@ import {
   resetGlobalHookRunner,
 } from "../../plugins/hook-runner-global.js";
 import { createMockPluginRegistry } from "../../plugins/hooks.test-helpers.js";
-const { workerSessionToolTestMocks, SOURCE, TARGET, PARENT, installWorkerSessionToolTestFixture } =
-  await import("./worker-session-tool-executor.test-support.js");
+const {
+  workerSessionToolTestMocks,
+  SOURCE,
+  TARGET,
+  PARENT,
+  PARENT_EXECUTION_IDENTITY_TOKEN,
+  installWorkerSessionToolTestFixture,
+} = await import("./worker-session-tool-executor.test-support.js");
 
 const fixtureMocks = workerSessionToolTestMocks();
 const { sessionEntries, sessionStorePaths, delivered, gatewayRequest, scopedSessionAccess } =
@@ -155,6 +161,47 @@ describe("worker session tool send delivery", () => {
         options: expect.objectContaining({ expectedTargetSessionId: PARENT.sessionId }),
       }),
     );
+  });
+
+  it("delivers a validated policy rewrite with the original tool-call identity", async () => {
+    setParentAndChild();
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([
+        {
+          hookName: "before_tool_call",
+          matcher: ["sessions_send"],
+          handler: () => ({ params: { sessionKey: TARGET.sessionKey, message: "rewritten" } }),
+        },
+      ]),
+    );
+
+    const receipts: DecisionReceiptV1[] = [];
+    const clearReceipts = configureRuntimeActionDecisionSink((receipt) => {
+      receipts.push(receipt);
+      return true;
+    });
+    try {
+      await send("rewritten-worker-send");
+    } finally {
+      clearReceipts();
+    }
+
+    expect(delivered).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        args: expect.objectContaining({ message: "rewritten" }),
+        toolCallId: "rewritten-worker-send",
+      }),
+    );
+    expect(receipts).toHaveLength(1);
+    expect(receipts[0]).toMatchObject({
+      contextId: PARENT_EXECUTION_IDENTITY_TOKEN.contextId,
+      executionId: PARENT_EXECUTION_IDENTITY_TOKEN.executionId,
+      runId: PARENT_EXECUTION_IDENTITY_TOKEN.runId,
+      action: { family: "plugin", operation: "before_tool_call" },
+      decision: { outcome: "allowed", reasonCode: "plugin_hook_allowed" },
+      enforcement: { coverageState: "enforced" },
+      source: { owner: "plugin-hook" },
+    });
   });
 
   it("suppresses policy receipts and effects when worker authority closes during the hook", async () => {

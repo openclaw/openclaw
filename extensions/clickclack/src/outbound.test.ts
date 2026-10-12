@@ -87,6 +87,36 @@ describe("sendClickClackText routing", () => {
     loadOutboundMediaFromUrl.mockReset();
   });
 
+  it("marks dispatch immediately before a durable text platform write", async () => {
+    const order: string[] = [];
+    const onPlatformSendDispatch = vi.fn(async () => {
+      order.push("dispatch");
+    });
+    createChannelMessage.mockImplementationOnce(async () => {
+      order.push("message");
+      return { id: "msg_out" };
+    });
+
+    await sendClickClackText({
+      cfg,
+      to: "channel:general",
+      text: "durable",
+      deliveryQueueId: "queue-text",
+      deliveryPartIndex: 0,
+      onPlatformSendDispatch,
+    });
+
+    expect(order).toEqual(["dispatch", "message"]);
+    expect(onPlatformSendDispatch).toHaveBeenCalledOnce();
+    expect(createChannelMessage).toHaveBeenCalledWith(
+      "general",
+      "durable",
+      expect.objectContaining({
+        nonce: "openclaw-text:4a171ee0c18d243d8d3c510320ab1b1d317afd95b0204abec18312e57307fb24",
+      }),
+    );
+  });
+
   it("sanitizes replies inside a genuine thread", async () => {
     await sendClickClackText({
       cfg,

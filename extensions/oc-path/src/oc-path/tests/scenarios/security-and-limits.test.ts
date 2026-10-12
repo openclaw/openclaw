@@ -147,6 +147,18 @@ describe("sentinel literal at format boundary", () => {
 });
 
 describe("numeric segments dispatch by node kind", () => {
+  it("negative numeric key on object resolves as literal key (openclaw#59934)", () => {
+    // Telegram supergroup IDs are negative numbers used as map keys.
+    const ast = parseJsonc(
+      '{"channels":{"telegram":{"groups":{"-5028303500":{"requireMention":false}}}}}',
+    ).ast;
+    const m = resolveOcPath(
+      ast,
+      parseOcPath("oc://config/channels.telegram.groups.-5028303500.requireMention"),
+    );
+    expect(m?.kind).toBe("leaf");
+  });
+
   it("`$last` literal key on an object is shadowed by the positional sentinel", () => {
     const ast = parseJsonc('{"$last":"literal-value","foo":"bar"}').ast;
     const m = resolveOcPath(ast, parseOcPath("oc://X/$last"));
