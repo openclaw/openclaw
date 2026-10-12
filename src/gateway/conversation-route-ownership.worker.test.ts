@@ -55,7 +55,7 @@ afterEach(() => {
 });
 afterAll(async () => state.cleanup());
 
-it("expires plugin binding inspection when synchronous route preparation returns", async () => {
+it("expires plugin binding inspection when async route preparation settles", async () => {
   const conversation = {
     channel: "reef",
     accountId: "default",
@@ -63,18 +63,19 @@ it("expires plugin binding inspection when synchronous route preparation returns
   };
   const targetSessionKey = "agent:main:reef:channel:prepared";
   let retainedInspector:
-    | Parameters<NonNullable<ChannelMessagingAdapter["prepareConversationRouteOwners"]>>[1]
+    | Parameters<NonNullable<ChannelMessagingAdapter["prepareConversationRouteOwnersAsync"]>>[1]
     | undefined;
   const messaging: ChannelMessagingAdapter = {
-    prepareConversationRouteOwners(inputs, inspectBindings) {
+    async prepareConversationRouteOwnersAsync(inputs, inspectBindings) {
       retainedInspector = inspectBindings;
-      const inspections = inspectBindings(
+      const inspect = await inspectBindings(
         inputs.map((input) => ({
           channel: "reef",
           accountId: input.accountId,
           conversationId: input.conversation.peerId,
         })),
       );
+      const inspections = inspect();
       expect(inspections).toMatchObject([{ status: "available", binding: { targetSessionKey } }]);
       return inspections.map(
         (inspection) => () =>
@@ -104,7 +105,7 @@ it("expires plugin binding inspection when synchronous route preparation returns
     targetKind: "session",
   });
   expect(
-    resolveConversationRouteEligibilitiesForAgent({
+    await resolveConversationRouteEligibilitiesForAgent({
       config,
       agentId: "main",
       conversations: [

@@ -227,15 +227,16 @@ describe("runGatewayConversationSend", () => {
         channel: "reef-current",
         conversationRef: "conv_ffffffffffffffffffffffffffffffff",
       });
+      const currentConfig = {
+        session: {
+          get store(): string {
+            throw new Error("current store must not be opened");
+          },
+        },
+      };
       const result = runGatewayConversationSend({
         config: deps.config,
-        readCurrentConfig: () => ({
-          session: {
-            get store(): string {
-              throw new Error("current store must not be opened");
-            },
-          },
-        }),
+        readCurrentConfig: () => currentConfig,
         agentId: "main",
         senderIsOwner: true,
         operationId,

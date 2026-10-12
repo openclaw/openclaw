@@ -12,7 +12,7 @@ import {
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { afterEach, beforeEach, expect, it } from "vitest";
 import { discordPlugin } from "../channel.js";
-import { inspectDiscordConversationRouteOwner } from "../conversation-route-owner.js";
+import { inspectDiscordConversationRouteOwner } from "../conversation-route-owner.test-support.js";
 import { createNoopThreadBindingManager } from "./thread-bindings.js";
 
 const cfg: OpenClawConfig = {
@@ -52,7 +52,7 @@ it("keeps an unbound direct route available while thread bindings are disabled",
       peer: { kind: scenario.kind, id: scenario.peerId },
     });
     expect(
-      inspectDiscordConversationRouteOwner({
+      await inspectDiscordConversationRouteOwner({
         cfg,
         accountId: "work",
         conversation: { kind: scenario.kind, peerId: scenario.peerId },

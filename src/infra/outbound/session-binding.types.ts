@@ -82,3 +82,51 @@ export type SessionBindingCapabilities = {
   unbindSupported: boolean;
   placements: SessionBindingPlacement[];
 };
+
+type SessionBindingAdapterCapabilities = {
+  placements?: SessionBindingPlacement[];
+  bindSupported?: boolean;
+  unbindSupported?: boolean;
+};
+
+/** @deprecated Implement SessionBindingAdapterV2; removed in the next Plugin SDK major. */
+export type SessionBindingAdapter = {
+  channel: string;
+  accountId: string;
+  capabilities?: SessionBindingAdapterCapabilities;
+  bind?: (input: SessionBindingBindInput) => Promise<SessionBindingRecord | null>;
+  /** @deprecated Use listBySessionAsync; removed in the next Plugin SDK major. */
+  listBySession: (targetSessionKey: string) => SessionBindingRecord[];
+  /** @deprecated Use resolveByConversationAsync. The synchronous form will be removed in the next Plugin SDK major. */
+  resolveByConversation: (ref: ConversationRef) => SessionBindingRecord | null;
+  /** @deprecated Use inspectByConversationAsync; removed in the next Plugin SDK major. */
+  inspectByConversation?: (ref: ConversationRef) => SessionBindingRecord | null;
+  /** Inspects committed ownership without creating storage or pruning rows. */
+  inspectByConversationAsync?: (ref: ConversationRef) => Promise<SessionBindingRecord | null>;
+  resolveByConversationAsync?: (ref: ConversationRef) => Promise<SessionBindingRecord | null>;
+  /** @deprecated Use touchAsync. The synchronous form will be removed in the next Plugin SDK major. */
+  touch?: (bindingId: string, at?: number) => void;
+  /** Settles accepted persistence before resolving. */
+  touchAsync?: (bindingId: string, at?: number) => Promise<void>;
+  unbind?: (input: SessionBindingUnbindInput) => Promise<SessionBindingRecord[]>;
+};
+
+/** A coherent source-owned selection; its assertion also covers absence and replacement. */
+export type SessionBindingSelectionSnapshot = {
+  bindings: readonly (SessionBindingRecord | null)[];
+  assertCurrent: () => void;
+};
+
+/** Awaited adapter contract. Synchronous members serve released SDK consumers only. */
+export type SessionBindingAdapterV2 = SessionBindingAdapter & {
+  version: 2;
+  inspectByConversationsAsync: (
+    refs: readonly ConversationRef[],
+  ) => Promise<SessionBindingSelectionSnapshot>;
+  touchAsync: (bindingId: string, at?: number) => Promise<void>;
+  /** Rechecks the original owner after awaited work and before accepting mutations. */
+  assertCurrent: () => void;
+  listBySessionAsync: (targetSessionKey: string) => Promise<SessionBindingRecord[]>;
+  inspectByConversationAsync: (ref: ConversationRef) => Promise<SessionBindingRecord | null>;
+  resolveByConversationAsync: (ref: ConversationRef) => Promise<SessionBindingRecord | null>;
+};

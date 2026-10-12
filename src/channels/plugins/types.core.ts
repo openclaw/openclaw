@@ -443,7 +443,7 @@ export type ChannelMessagingAdapter = {
    * targets before plugin-specific normalization.
    */
   targetPrefixes?: readonly string[];
-  /** Re-resolve the current owner when channel behavior exceeds generic bindings. */
+  /** @deprecated Use prepareConversationRouteOwnersAsync for worker-backed route ownership. */
   resolveConversationRouteOwner?: (params: {
     cfg: OpenClawConfig;
     accountId: string;
@@ -469,13 +469,22 @@ export type ChannelMessagingAdapter = {
     | { kind: "unavailable" }
     | null
     | undefined;
-  /** Prepare current binding reads together; returned resolvers are consumed synchronously in input order. */
+  /** @deprecated Use prepareConversationRouteOwnersAsync for worker-backed route ownership. */
   prepareConversationRouteOwners?: (
     params: readonly Parameters<
       NonNullable<ChannelMessagingAdapter["resolveConversationRouteOwner"]>
     >[0][],
     inspectBindings: (refs: readonly ConversationRef[]) => readonly SessionBindingInspection[],
   ) => readonly NonNullable<ChannelMessagingAdapter["resolveConversationRouteOwner"]>[];
+  /** Prepare binding facts in workers; returned resolvers run under the current effect grant. */
+  prepareConversationRouteOwnersAsync?: (
+    params: readonly Parameters<
+      NonNullable<ChannelMessagingAdapter["resolveConversationRouteOwner"]>
+    >[0][],
+    inspectBindings: (
+      refs: readonly ConversationRef[],
+    ) => Promise<() => readonly SessionBindingInspection[]>,
+  ) => Promise<readonly NonNullable<ChannelMessagingAdapter["resolveConversationRouteOwner"]>[]>;
   /** DM targets rebuilt from session keys require an explicit `user:` kind prefix. */
   directTargetStyle?: "user-prefixed";
   /** Equality rule for ids carried by prefixed outbound targets. */
