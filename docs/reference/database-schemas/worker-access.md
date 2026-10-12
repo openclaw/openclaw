@@ -878,12 +878,14 @@ Closed entry patches reuse an already resident actor when the session and
 lifecycle stay unchanged. The entry writer supplies its complete row and window
 postimages; the actor keeps the untouched pending inputs and transcript facts,
 then publishes its full hot state through the same commit receipt. A rollback
-retains the previous actor state. Missing residency, replacement lifecycles, and
-unknown writes still require hydration. Oversized optional actor postimages are
+preserves the stored preimage; conservative receipt invalidation can require a
+reload. Missing residency, replacement lifecycles, and unknown writes still
+require hydration. Oversized optional actor postimages are
 shed with full-entry enrichment under the existing publication limit.
 Bounded context reads inside the actor transaction also derive logical parents
-from its active positions and identities; standalone reads retain their SQL
-lookup. Hydration does not repeat a revision check inside this synchronous owner.
+from its active positions and identities and reuse its projection, reset, and
+prefix facts; standalone reads retain their SQL lookups. Hydration does not
+repeat a revision check inside this synchronous owner.
 
 Phase C entry readers share this bounded MAIN residency. Eligible exact-entry
 and ordered-cohort reads reuse complete actor state or its entry-only projection;

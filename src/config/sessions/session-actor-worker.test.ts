@@ -356,10 +356,13 @@ it("keeps transcript residency across entry patches without losing either owner'
     };
     expect(() => entryPatch({ label: "must roll back" })).toThrow("entry patch refused");
     delete f.hooks.admit;
-    expect(f.read()).toEqual(retained);
+    const rolledBack = f.read();
+    expect(rolledBack.entry).toEqual(retained.entry);
+    expect(rolledBack.transcript).toEqual(retained.transcript);
+    expect(rolledBack.pendingInputs).toEqual(retained.pendingInputs);
     entryPatch({ lifecycleRevision: "new-lifecycle" });
     const replaced = f.read();
-    expect(replaced.version.epoch).not.toBe(retained.version.epoch);
+    expect(replaced.version.epoch).not.toBe(rolledBack.version.epoch);
     expect(replaced.entry?.lifecycleRevision).toBe("new-lifecycle");
   });
 });

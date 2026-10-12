@@ -377,7 +377,7 @@ it("initializes over a retained transcript and preserves prepared snapshots, rel
     };
     const retainedReads = trackSqliteStatementExecutions(
       database.db,
-      ["entry", "newer", "parents"],
+      ["entry", "newer", "parents", "projection"],
       (query) =>
         query.toLowerCase().includes('from "session_nodes"')
           ? "entry"
@@ -385,7 +385,9 @@ it("initializes over a retained transcript and preserves prepared snapshots, rel
             ? "newer"
             : query.includes('"parent"."event_id" as "parent_id"')
               ? "parents"
-              : null,
+              : query.includes('"reset_active_position"')
+                ? "projection"
+                : null,
     );
     const committed = (() => {
       try {
@@ -403,6 +405,7 @@ it("initializes over a retained transcript and preserves prepared snapshots, rel
     expect(retainedReads.counts.entry).toBe(0);
     expect(retainedReads.counts.newer).toBe(0);
     expect(retainedReads.counts.parents).toBe(0);
+    expect(retainedReads.counts.projection).toBe(0);
     expect(committed.kind).toBe("metadata");
     if (committed.kind !== "metadata") {
       throw new Error("Expected prepared metadata append");
