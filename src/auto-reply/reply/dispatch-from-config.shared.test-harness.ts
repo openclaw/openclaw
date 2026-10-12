@@ -383,7 +383,7 @@ vi.mock("../../config/sessions/paths.js", async (importOriginal) => ({
 vi.mock("../../config/sessions/session-actor-scope.js", () => ({
   withSessionActor: async () => undefined,
 }));
-// The worker-backed reader has its own storage integration test; dispatch owns delivery policy.
+// mock-isolation: Dispatch uses in-memory session fixtures; the reader owns worker integration tests.
 vi.mock("./session-verbose-level.js", async () => {
   const { normalizeVerboseLevel } = await import("../thinking.js");
   return {
