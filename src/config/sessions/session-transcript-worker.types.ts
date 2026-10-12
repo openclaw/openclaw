@@ -68,10 +68,7 @@ import type {
 import type { readSessionTranscriptModelContext } from "./session-accessor.sqlite-model-context.js";
 import type { listSessionPendingInputReceipts } from "./session-accessor.sqlite-pending-input-receipts.js";
 import type { SessionTranscriptWatermark } from "./session-accessor.sqlite-transcript-watermark-read.js";
-import type {
-  SessionEntryReadScope,
-  SessionTranscriptReadScope,
-} from "./session-accessor.types.js";
+import type { SessionEntryReadScope } from "./session-accessor.types.js";
 import type { CanonicalSessionReaderContinuation } from "./session-canonical-key.js";
 import type { SessionEntryCurrentFacts } from "./session-entry-current.types.js";
 import type { CapturedSessionEntryReadSource } from "./session-entry-read-source.types.js";
@@ -149,9 +146,12 @@ import type {
   SessionTranscriptInventoryWorkerValues,
   SessionTranscriptInventoryReaders,
 } from "./session-transcript-inventory.types.js";
+import type { TranscriptPageReadResult } from "./session-transcript-page-read.types.js";
 import type { SessionTranscriptSearchResult } from "./session-transcript-search.types.js";
 import type { SessionTranscriptWorkerReadError } from "./session-transcript-worker-error.types.js";
 import type {
+  SessionPreviewWorkerInput,
+  SessionTitleFieldsWorkerInput,
   SessionSqliteTargetWorkerInput,
   SessionResetRecallWorkerInput,
   SessionEntryWorkerInput,
@@ -162,6 +162,7 @@ import type {
   SessionHistoricalEvictionCandidatesWorkerInput,
   SessionArchivedEvictionCandidatesWorkerInput,
   SessionTranscriptMatchWorkerInput,
+  SessionTranscriptPageReadWorkerInput,
   SessionTranscriptSearchWorkerInput,
   SessionProjectionStatusWorkerInput,
   SessionTranscriptAnchorsWorkerInput,
@@ -188,35 +189,13 @@ export type {
   SessionTranscriptHydrationChunk,
   SessionTranscriptHydrationWorkerResult,
 } from "./session-transcript-hydration.types.js";
+export type { SessionPreviewWorkerInput } from "./session-transcript-worker-read.types.js";
 
 export type SessionTranscriptHistoryWorkerInput = {
   kind: "history-page";
   database: { agentId: string; path: string };
   request: SessionHistoryWorkerRequest;
   target: Omit<PreparedSessionHistoryReadTarget, "database">;
-  admission?: UserTurnTranscriptAdmissionReceipt;
-};
-
-export type SessionPreviewWorkerInput = {
-  kind: "session-preview";
-  database: { agentId: string; path: string };
-  target: {
-    agentId: string;
-    sessionId: string;
-    sessionKey?: string;
-    entryValidationKey?: string;
-  };
-  env?: NodeJS.ProcessEnv;
-  maxItems: number;
-  maxChars: number;
-  admission?: UserTurnTranscriptAdmissionReceipt;
-};
-
-type SessionTitleFieldsWorkerInput = {
-  kind: "session-title-fields";
-  database: { agentId: string; path: string };
-  scope: SessionTranscriptReadScope;
-  includeInterSession?: boolean;
   admission?: UserTurnTranscriptAdmissionReceipt;
 };
 
@@ -294,6 +273,7 @@ type TrajectoryEventsWorkerInput = {
 };
 
 export type SessionHistoryWorkerInput =
+  | SessionTranscriptPageReadWorkerInput
   | SessionRetirementReadWorkerInput
   | TrajectoryRetentionWorkerInput
   | TrajectoryEventsWorkerInput
@@ -381,6 +361,7 @@ export type SessionHistoryWorkerPreparedInput =
 
 export type SessionTranscriptWorkerValues = SessionTranscriptInventoryWorkerValues &
   SessionTranscriptHydrationWorkerValues & {
+    "transcript-page-read": { kind: "transcript-page-read"; result: TranscriptPageReadResult };
     "session-retirement-read": {
       kind: "session-retirement-read";
       result: SessionRetirementReadResult;
@@ -555,6 +536,12 @@ type CancellableSessionHistoryReader<
 
 export type SessionHistoryWorkerDatabase = SessionTranscriptInventoryReaders &
   SessionTranscriptHydrationReaders & {
+    readTranscriptPage: (
+      input: Omit<SessionTranscriptPageReadWorkerInput, "kind" | "database">,
+      signal?: AbortSignal,
+      /** Uses only the remaining operation allowance. */
+      timeoutMs?: number,
+    ) => Promise<TranscriptPageReadResult>;
     readRetirement: CancellableSessionHistoryReader<
       SessionRetirementReadWorkerInput,
       SessionRetirementReadResult

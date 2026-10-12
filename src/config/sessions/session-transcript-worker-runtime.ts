@@ -6,7 +6,10 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { OpenClawAgentDatabaseOptions } from "../../state/openclaw-agent-db-contract.js";
 import { captureOpenClawAgentDatabaseReadValidation } from "../../state/openclaw-agent-db-validation-cache.js";
 import type { SessionBranchSummaryReadRequest } from "./session-accessor.sqlite-branches.js";
-import { unwrapSessionTranscriptWorkerReply } from "./session-history-worker-errors.js";
+import {
+  sessionHistoryCleanupError,
+  unwrapSessionTranscriptWorkerReply,
+} from "./session-history-worker-errors.js";
 import { withSessionHistoryReadAdmission } from "./session-transcript-worker-read-admission.js";
 import {
   createSessionHistoryWorkerReaders,
@@ -23,6 +26,7 @@ import {
   rotateDatabaseWorkers,
   settleSessionHistoryWorkerEviction,
   type HistoryDatabaseResource,
+  type SessionDatabaseCleanup,
   type SessionHistoryDatabaseTarget,
   type SessionHistoryWorkerLane,
 } from "./session-transcript-worker-resources.js";
@@ -134,8 +138,10 @@ export function retainSessionHistoryWorkerDatabase(
       receive,
       signal,
       onRequest,
-      timeoutMs = 60_000,
+      timeoutMs,
+      retainTask,
     ) => {
+      const timeout = timeoutMs ?? 60_000;
       const validation = captureOpenClawAgentDatabaseReadValidation(database);
       let retirement: Promise<void> | undefined;
       const hostEffects = new Set<Promise<WorkerTaskResponse>>();
@@ -143,15 +149,38 @@ export function retainSessionHistoryWorkerDatabase(
         { ...options, ...database, lane },
         {
           knownSource,
-          timeoutMs,
+          timeoutMs: timeout,
           signal,
           aborters: owned.aborters,
         },
         async (admit, requestLane) => {
+          let taskCleanup: SessionDatabaseCleanup | undefined;
+          let primaryError: unknown;
+          const dispatchTask = (
+            factory: () => SessionHistoryWorkerInput,
+            taskOptions: WorkerTaskOptions<SessionHistoryWorkerInput>,
+          ) => {
+            if (!retainTask) {
+              return requestLane.pool.run(factory, taskOptions);
+            }
+            const task = requestLane.pool.runTask(factory, taskOptions);
+            const cleanup: SessionDatabaseCleanup = {
+              run: async () => {
+                await task.close();
+                const joining = retirement;
+                retirement = undefined;
+                await joining;
+                owned.cleanups.delete(cleanup);
+              },
+            };
+            taskCleanup = cleanup;
+            owned.cleanups.add(cleanup);
+            return task.result;
+          };
           try {
             const reply = await admit((requestSignal, remaining) =>
               runWithSqliteDatabaseAdmissionTurn([database.path], () =>
-                requestLane.pool.run(
+                dispatchTask(
                   () => {
                     assertCurrent();
                     const input = prepare();
@@ -172,7 +201,7 @@ export function retainSessionHistoryWorkerDatabase(
                             context.signal.throwIfAborted();
                             const response = await onRequest(value, context.signal);
                             context.signal.throwIfAborted();
-                            return response ?? { input: null, timeoutMs };
+                            return response ?? { input: null, timeoutMs: timeout };
                           })();
                           hostEffects.add(effect);
                           owned.hostEffects.add(effect);
@@ -187,6 +216,7 @@ export function retainSessionHistoryWorkerDatabase(
                     onExecutionSettled: ({ retired }) => {
                       if (retired) {
                         retirement = rotateDatabaseWorkers(requestLane);
+                        void retirement.catch(() => undefined);
                       }
                     },
                   },
@@ -215,9 +245,24 @@ export function retainSessionHistoryWorkerDatabase(
               await settleSessionHistoryWorkerEviction(requestLane, reply.closedHistoryDatabase);
             }
             return value;
+          } catch (error) {
+            primaryError = error;
+            const joining = retirement;
+            retirement = undefined;
+            try {
+              await joining;
+            } catch (cleanupError) {
+              primaryError = sessionHistoryCleanupError(error, cleanupError, "worker retirement");
+            }
+            throw primaryError;
           } finally {
             // Cancellation removes queued effects; accepted writes still retain settlement custody.
             await Promise.allSettled(hostEffects);
+            if (taskCleanup) {
+              await taskCleanup.run().catch((cleanupError: unknown) => {
+                throw sessionHistoryCleanupError(primaryError, cleanupError, "worker retirement");
+              });
+            }
           }
         },
       );

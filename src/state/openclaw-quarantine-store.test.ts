@@ -5,6 +5,7 @@ import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execut
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as kyselySync from "../infra/kysely-sync.js";
 import * as nodeSqlite from "../infra/node-sqlite.js";
+import { revokeSqliteDatabaseAdmissionsForPath } from "../infra/sqlite-database-admission.js";
 import {
   clearOpenClawAgentIntegrityVerification,
   clearOpenClawDatabaseQuarantine,
@@ -358,3 +359,59 @@ it.each(["record", "clear"] as const)(
     expect(readOpenClawAgentIntegrityVerification(fixture.pathname, fixture.env)).toEqual(receipt);
   },
 );
+
+it("returns the recorded decision when the quarantine store file is read-only", () => {
+  const fixture = createFixture();
+  expect(
+    recordOpenClawDatabaseQuarantine({
+      env: fixture.env,
+      path: fixture.pathname,
+      kind: "agent",
+      reason: "readonly-store-lookup",
+    }),
+  ).toBe(true);
+  // Exercise a cold read instead of the writer's published quarantine decision.
+  revokeSqliteDatabaseAdmissionsForPath(fixture.storePath);
+  fs.chmodSync(fixture.storePath, 0o444);
+  try {
+    const failure = readOpenClawDatabaseQuarantineFailure("agent", fixture.pathname, {
+      env: fixture.env,
+    });
+    expect(failure).toBeInstanceOf(Error);
+    expect(failure?.message).toContain("readonly-store-lookup");
+  } finally {
+    fs.chmodSync(fixture.storePath, 0o666);
+  }
+});
+
+it("does not recreate a quarantine store that disappears before the lookup open", () => {
+  const fixture = createFixture();
+  expect(
+    recordOpenClawDatabaseQuarantine({
+      env: fixture.env,
+      path: fixture.pathname,
+      kind: "agent",
+      reason: "vanished-store",
+    }),
+  ).toBe(true);
+  // A cold worker has no previously published decision to reuse.
+  revokeSqliteDatabaseAdmissionsForPath(fixture.storePath);
+  const open = nodeSqlite.openNodeSqliteDatabase;
+  const spy = vi.spyOn(nodeSqlite, "openNodeSqliteDatabase").mockImplementation((...args) => {
+    // Simulate the deletion race exactly at the exists-check/open seam.
+    if (args[0] === fixture.storePath && fs.existsSync(fixture.storePath)) {
+      fs.rmSync(fixture.storePath);
+    }
+    return open(...args);
+  });
+  try {
+    const failure = readOpenClawDatabaseQuarantineFailure("agent", fixture.pathname, {
+      env: fixture.env,
+    });
+    expect(failure).toBeUndefined();
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(fs.existsSync(fixture.storePath)).toBe(false);
+  } finally {
+    spy.mockRestore();
+  }
+});

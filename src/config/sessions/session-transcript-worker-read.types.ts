@@ -29,6 +29,7 @@ import type {
 } from "./session-history-read.types.js";
 import type { SessionTranscriptAnchorSelection } from "./session-transcript-anchor-read.kernel.js";
 import type { SessionTranscriptAnchorEntry } from "./session-transcript-anchor-read.types.js";
+import type { TranscriptPageReadRequest } from "./session-transcript-page-read.types.js";
 import type { SessionTranscriptSearchParams } from "./session-transcript-search.types.js";
 import type { TranscriptEntryAnchor } from "./transcript-entry-anchor.js";
 
@@ -118,6 +119,36 @@ export type SessionModelContextWorkerInput = {
   through?: TranscriptEntryAnchor;
   limits?: SessionModelContextLimits;
   expectedIdentity?: DatabaseFileIdentity;
+};
+
+export type SessionTranscriptPageReadWorkerInput = {
+  kind: "transcript-page-read";
+  database: { agentId: string; path: string };
+  request: TranscriptPageReadRequest;
+  expectedIdentity: DatabaseFileIdentity;
+};
+
+export type SessionPreviewWorkerInput = {
+  kind: "session-preview";
+  database: { agentId: string; path: string };
+  target: {
+    agentId: string;
+    sessionId: string;
+    sessionKey?: string;
+    entryValidationKey?: string;
+  };
+  env?: NodeJS.ProcessEnv;
+  maxItems: number;
+  maxChars: number;
+  admission?: UserTurnTranscriptAdmissionReceipt;
+};
+
+export type SessionTitleFieldsWorkerInput = {
+  kind: "session-title-fields";
+  database: { agentId: string; path: string };
+  scope: SessionTranscriptReadScope;
+  includeInterSession?: boolean;
+  admission?: UserTurnTranscriptAdmissionReceipt;
 };
 
 export type SessionTranscriptWatermarkWorkerInput = {

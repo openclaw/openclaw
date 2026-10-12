@@ -2376,6 +2376,7 @@ const workerModules = new Set([
   "src/config/sessions/session-cold-storage-selection.ts", // Cold preparation and mutation kernels in session-cold-storage-worker.ts only.
   "src/config/sessions/session-cold-storage-worker.ts", // Archive worker cold-prepare and cold-mutate dispatchers only.
   "src/config/sessions/session-membership-facts.ts", // Transcript worker session-membership-facts dispatcher only.
+  "src/config/sessions/session-transcript-page-read.kernel.ts", // Only session-history-read-operation.worker.ts dispatches transcript page SQL at runtime.
 
   "src/cron/store/run-history.kernel.ts", // Cron read worker and shared-state Cron dispatch own history SQL.
   "src/cron/store/job-name.kernel.ts", // Shared-state/history workers and Doctor transaction hooks only.

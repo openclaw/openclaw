@@ -417,6 +417,59 @@ inline maintenance and archive persistence still share the released opaque SDK
 deletion transaction; moving those calls requires that transaction owner's cutover.
 This changes no schemas, retention, stored bytes, or update behavior.
 
+### Bounded read-only transcript pages
+
+Read-only transcript page reads use the existing session-history lane and its
+retained database owner through an internal transcript-page operation. One
+absolute deadline of at most five seconds bounds the response, including queue
+wait and execution. Worker dispatch receives only the remaining allowance.
+Settlement separately joins preparation, the owned worker task and host cleanup;
+it may outlast the response deadline while retaining custody. A timed-out or
+canceled response carries observed partial accounting marked `final: false`
+under the `timed_out` code and never publishes a late successful page.
+
+Store admission serializes across resource generations. A verified no-dispatch
+refusal settles with final zero accounting. Settlement resolves only when final
+source accounting and cleanup are verified. A lost worker receipt or failed
+cleanup rejects settlement and keeps admission closed, including after an
+ordinary post-dispatch timeout or cancellation. The existing database owner's
+close/reload/shutdown path joins and retries retained cleanup before releasing
+the failed claim. Successful cleanup alone does not reconstruct lost counts;
+reads are never replayed automatically. Callers must handle this availability
+limit rather than retrying against closed admission. A retained failed claim
+also keeps the shared history lane pending, suppressing its idle retirement and
+retaining its memory-pressure subscription until owner recovery.
+Admission is native read-only: the page dispatcher uses the scoped read-only
+owner rather than the generic helper, so a host-held writable handle never
+receives page-read SQL, and the auxiliary quarantine lookup opens its store
+read-only so a lookup cannot create or recreate it. SQLite may create WAL/SHM
+coordination files for an existing store under the logical read-only contract;
+reader-issued writes, DDL, migrations, cold restoration, and missing-store
+creation remain prohibited. First admission of missing, schema-incompatible,
+and bare stores returns closed failures with primary bytes unchanged. Warm
+reads retain the existing owner's published schema facts; an untracked
+`user_version`-only edit to an admitted store is not detected as a fresh
+schema admission. No WAL read mark survives an operation, so the owner's checkpoint still resets the WAL while
+the reader is idle. The kernel meters source queries, lookahead and decoded
+UTF-8 bytes, with limits of 50 returned records, 1,000 scanned entries and 16 MiB.
+This does not yet qualify all schema/quarantine admission SQL against that
+aggregate meter, or prove a post-snapshot archive/rewrite publication fence.
+Those remain required before a public facade can promise the full contract.
+The operation has no production caller or released SDK export.
+
+The page kernel's SQL runs only through
+`session-history-read-operation.worker.ts` at runtime; direct kernel callers are
+test fixtures. Its worker classification is recorded in the migration inventory.
+The kernel intentionally uses SQLite JSON projection for lifecycle identity and
+event-size metadata so it can measure the projected UTF-8 source before returning
+it, without fetching the full private entry or decompressing an event first.
+The dialect ratchet reports three new `json-projection` constructs. Their scoped
+classification requires maintainer review; the guard has not been relaxed.
+A future backend must implement equivalent bounded projection and pre-fetch byte
+measurement at the session-history store owner, with the same identity, snapshot
+and accounting tests, or refuse this operation as unsupported. This contribution
+adds no backend, persistent format or migration.
+
 ## Live T1 and deprecated compatibility
 
 `pnpm check:database-worker-ratchet` reports live **T1** separately from

@@ -126,14 +126,16 @@ export function decodeSessionTranscriptWorkerReadError(
 }
 
 /** Keep read and cleanup failures together through the worker error graph. */
+export class SessionHistoryCleanupError extends AggregateError {}
+
 export function sessionHistoryCleanupError(
   error: unknown,
   cleanupError: unknown,
   stage: "database close" | "worker retirement",
-): AggregateError {
-  return new AggregateError(
-    [error, cleanupError],
-    `${coerceErrorMessage(error)}; ${stage} failed: ${coerceErrorMessage(cleanupError)}`,
+): SessionHistoryCleanupError {
+  return new SessionHistoryCleanupError(
+    error === undefined ? [cleanupError] : [error, cleanupError],
+    `${error === undefined ? "" : `${coerceErrorMessage(error)}; `}${stage} failed: ${coerceErrorMessage(cleanupError)}`,
     { cause: cleanupError },
   );
 }

@@ -1,9 +1,19 @@
 import { types } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { err, ok } from "@openclaw/normalization-core/result";
+import { sqlitePrimaryResultCode } from "../../infra/sqlite-error-diagnostics.js";
+import { WorkerTaskError } from "../../infra/worker-task-pool.js";
 import type { WorkerTaskResponse } from "../../infra/worker-task-pool.types.js";
 import type { TranscriptEvent } from "./session-accessor.sqlite-contract.js";
-import { decodeSessionTranscriptWorkerReadError } from "./session-history-worker-errors.js";
+import {
+  decodeSessionTranscriptWorkerReadError,
+  SessionHistoryCleanupError,
+} from "./session-history-worker-errors.js";
+import {
+  assertTranscriptPageIdentity,
+  TranscriptPageIdentityError,
+} from "./session-transcript-page-read-identity.js";
+import type { TranscriptReadAccounting } from "./session-transcript-page-read.types.js";
 import {
   MAX_SESSION_ROW_FACTS_KEYS,
   type SessionHistoryWorkerDatabase,
@@ -20,6 +30,7 @@ export type SessionHistoryWorkerRequestRunner = <TResult>(
   signal?: AbortSignal,
   onRequest?: (value: unknown, signal: AbortSignal) => void | Promise<WorkerTaskResponse>,
   timeoutMs?: number,
+  retainTask?: true,
 ) => Promise<TResult>;
 
 type SessionHistoryWorkerValue = SessionTranscriptWorkerValues[SessionHistoryWorkerInput["kind"]];
@@ -88,6 +99,70 @@ export function createSessionHistoryWorkerReaders(
       );
   }
   return {
+    readTranscriptPage: async (input, signal, timeoutMs) => {
+      const captured = {
+        request: {
+          ...input.request,
+          scope: {
+            ...input.request.scope,
+            env: captureSessionTranscriptStorageEnvironment(input.request.scope.env ?? process.env),
+          },
+          limits: { ...input.request.limits },
+          position: input.request.position && { ...input.request.position },
+        },
+        expectedIdentity: { ...input.expectedIdentity },
+      };
+      let budget: TranscriptReadAccounting = {
+        scannedEntries: 0,
+        materializedBytes: 0,
+        exhausted: false,
+        final: true,
+      };
+      const assertIdentity = () =>
+        assertTranscriptPageIdentity(captured.request.scope.path, captured.expectedIdentity);
+      try {
+        assertIdentity();
+        return await runRequest(
+          () => {
+            assertIdentity();
+            // From this point native work may have materialized source data;
+            // only a worker receipt can establish the final amount.
+            budget.final = false;
+            return { kind: "transcript-page-read", ...captured };
+          },
+          JSON.stringify(captured).length * 2,
+          (value) => {
+            assertResultKind(value, "transcript-page-read", "a transcript source page");
+            budget = value.result.budget;
+            assertIdentity();
+            return value.result;
+          },
+          signal,
+          undefined,
+          timeoutMs,
+          true,
+        );
+      } catch (error) {
+        // Custody loss is not a store outcome: retirement failures keep the
+        // resource's admission closed and must reach the operation owner.
+        if (error instanceof SessionHistoryCleanupError) {
+          throw error;
+        }
+        return {
+          ok: false,
+          error:
+            error instanceof TranscriptPageIdentityError
+              ? error.reason
+              : error instanceof WorkerTaskError &&
+                  (error.code === "timeout" || signal?.aborted === true)
+                ? "timed_out"
+                : sqlitePrimaryResultCode(error) === 8
+                  ? "unsupported"
+                  : "read_failed",
+          budget,
+        };
+      }
+    },
     readTrajectoryEvents: reader("trajectory-events", "trajectory events", (value) => value.events),
     readTrajectoryRetention: (input, options) => {
       const captured = {
