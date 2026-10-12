@@ -6812,7 +6812,6 @@
 ["src/flows/doctor-health.update.test.ts","../cli/update-cli/update-command.js","b9a86a66602f5df6f7250a377d0676838c76d6a3b152cf83127156e7a122c4ec",1]
 ["src/flows/doctor-health.update.test.ts","../commands/doctor-install.js","404932f0e9552c939f0c25e17c0c521d23613c538d0e8917d1996c2f0eedff1e",1]
 ["src/flows/doctor-health.update.test.ts","../commands/doctor-platform-notes.js","73798bc8c0f36129929c5624ce666c8446478eab6f608f9fbb3a7e1b4a4498e2",1]
-["src/flows/doctor-health.update.test.ts","../commands/doctor-ui.js","384a35d71db8b17bedfa979fe79475da3e9663a319c636da26cc843d49aaf49f",1]
 ["src/flows/doctor-health.update.test.ts","../commands/doctor-update.js","b0cc404b95b46d1c380c064c264a74d218ba63bdee1150e269321e8e6f19e1b3",1]
 ["src/flows/doctor-health.update.test.ts","../commands/doctor/shared/plugin-runtime-symlinks.js","6a6cd9b39b1a93a174238ecf4930dc439481f9ce6109440ec86d179be875b525",1]
 ["src/flows/doctor-health.update.test.ts","../commands/triage.js","dc22af623c5795efe45bd9177fac31383eb8cc46861876121eeffbdd305c7af3",1]

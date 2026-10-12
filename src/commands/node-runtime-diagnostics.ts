@@ -2,6 +2,7 @@
 import { nodeRuntimeFailure, nodeRuntimeNote } from "../../node-sqlite.mjs";
 import {
   formatUnsupportedNodeVersionMessage,
+  parseNodeReleaseVersion,
   SUPPORTED_NODE_VERSIONS,
 } from "../../node-version.mjs";
 import { isDefaultInstallIdentity } from "../config/paths.js";
@@ -9,27 +10,51 @@ import { isNodeRuntime } from "../daemon/runtime-binary.js";
 import { resolveNodeRuntimeInfo } from "../daemon/runtime-paths.js";
 import { summarizeGatewayServiceLayout } from "../daemon/service-layout.js";
 import { resolveGatewayService } from "../daemon/service.js";
-import type { HealthFinding } from "../flows/health-checks.js";
+import type { HealthCheckContext, HealthFinding } from "../flows/health-checks.js";
 import { formatInstallOwnerMessage, readInstallOwner } from "../infra/install-owner.js";
 import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
 import { detectRuntime } from "../infra/runtime-guard.js";
 
 const CHECK_ID = "core/doctor/node-runtime";
 
+// Upstream lifecycle dates are advisory; SQLite capabilities own admission.
+// Compare UTC instants so notes never start before the published effective date.
+const NODE_RELEASE_SCHEDULE = [
+  { major: 24, maintenance: "2026-10-20", eol: "2028-04-30", lts: true },
+  { major: 25, maintenance: "2026-04-01", eol: "2026-06-01", lts: false },
+  { major: 26, maintenance: "2027-10-20", eol: "2029-04-30", lts: true },
+] as const;
+
 /** Inspect the CLI and recorded service without starting or repairing the service. */
 export async function collectNodeRuntimeFindings(
   env: NodeJS.ProcessEnv = process.env,
+  mode?: HealthCheckContext["mode"],
 ): Promise<HealthFinding[]> {
   const findings: HealthFinding[] = [];
   const cliRuntime = await detectRuntime();
   if (cliRuntime.kind === "node" && cliRuntime.sqliteProbe) {
     const failure = nodeRuntimeFailure(cliRuntime.version, cliRuntime.sqliteProbe);
     const message = failure ?? nodeRuntimeNote(cliRuntime.version, cliRuntime.sqliteProbe);
-    const installOwner = failure
-      ? await readInstallOwner(
-          await resolveOpenClawPackageRoot({ moduleUrl: import.meta.url, argv1: process.argv[1] }),
-        )
-      : null;
+    // Lifecycle advice belongs to standalone Doctor, never status or updater admission.
+    const includeLifecycleAdvice =
+      mode === "doctor" &&
+      !(await import("./doctor/shared/update-phase.js")).isUpdateDoctorLintPass(env);
+    const major = parseNodeReleaseVersion(cliRuntime.version)?.major;
+    const release =
+      includeLifecycleAdvice && !failure
+        ? NODE_RELEASE_SCHEDULE.find((entry) => entry.major === major)
+        : undefined;
+    const now = Date.now();
+    const endOfLife = release ? now >= Date.parse(`${release.eol}T00:00:00Z`) : false;
+    const installOwner =
+      failure || endOfLife
+        ? await readInstallOwner(
+            await resolveOpenClawPackageRoot({
+              moduleUrl: import.meta.url,
+              argv1: process.argv[1],
+            }),
+          )
+        : null;
     if (message) {
       findings.push({
         checkId: CHECK_ID,
@@ -46,6 +71,27 @@ export async function collectNodeRuntimeFindings(
             }
           : {}),
       });
+    }
+    if (release) {
+      const label = release.lts ? `Node ${cliRuntime.version} LTS` : `Node ${cliRuntime.version}`;
+      if (endOfLife) {
+        findings.push({
+          checkId: CHECK_ID,
+          severity: "warning",
+          source: "cli",
+          message: `${label} reached upstream end-of-life on ${release.eol}; it no longer receives security updates.`,
+          fixHint: installOwner
+            ? formatInstallOwnerMessage(installOwner)
+            : "Consider a currently maintained release: https://nodejs.org/en/download",
+        });
+      } else if (now >= Date.parse(`${release.maintenance}T00:00:00Z`)) {
+        findings.push({
+          checkId: CHECK_ID,
+          severity: "info",
+          source: "cli",
+          message: `${label} is in upstream maintenance mode (EOL ${release.eol}).`,
+        });
+      }
     }
   }
   if (!isDefaultInstallIdentity(env)) {
