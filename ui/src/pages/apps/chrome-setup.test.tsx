@@ -1,5 +1,3 @@
-/* @vitest-environment jsdom */
-import { render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { ApplicationContext } from "../../app/context.ts";
@@ -7,8 +5,10 @@ import { createNativeDeviceSettingsCapability } from "../../app/native-device-se
 import { i18n } from "../../i18n/index.ts";
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
 import { createChromeExtensionSetupResult } from "../../test-helpers/chrome-extension-setup.ts";
+/* @vitest-environment jsdom */
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { createNativeDeviceSettingsSnapshot } from "../../test-helpers/native-device-settings.ts";
-import { renderApps } from "./view.ts";
+import { Apps } from "./view.tsx";
 
 type SetupElement = HTMLElement & { updateComplete: Promise<boolean> };
 const result = createChromeExtensionSetupResult;
@@ -37,7 +37,7 @@ async function mount(
   nativeDeviceSettings: ApplicationContext["nativeDeviceSettings"] = defaultCapability,
 ) {
   const host = createApplicationContextProvider({ nativeDeviceSettings } as ApplicationContext);
-  render(renderApps({ onNavigate: vi.fn() }), host);
+  mountSolid(() => <Apps onNavigate={vi.fn()} />, { container: host });
   document.body.append(host);
   const setup = host.querySelector<SetupElement>("openclaw-native-chrome-setup")!;
   await setup.updateComplete;

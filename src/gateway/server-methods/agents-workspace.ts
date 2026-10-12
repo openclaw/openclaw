@@ -29,7 +29,7 @@ import {
 } from "./workspace-fs.js";
 
 // Images bypass the text preview cap but stay far below the 25MB WS payload
-// limit even after base64 expansion (see server-constants MAX_PAYLOAD_BYTES).
+// limit even after base64 expansion (see payload-limits MAX_PAYLOAD_BYTES).
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 const DEFAULT_LIST_LIMIT = 250;
 const MAX_LIST_LIMIT = 500;

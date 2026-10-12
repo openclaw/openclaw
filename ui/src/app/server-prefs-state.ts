@@ -24,7 +24,7 @@ export function isAppearancePref(key: string): key is keyof typeof UI_APPEARANCE
 }
 
 export const UI_NAVIGATION_PREFERENCE_KEYS = {
-  sidebarEntries: "ui.sidebarEntries",
+  sidebarEntries: "ui.railShortcuts",
 } as const;
 
 export function isNavigationPref(key: string): key is keyof typeof UI_NAVIGATION_PREFERENCE_KEYS {

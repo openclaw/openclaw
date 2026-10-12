@@ -1,15 +1,14 @@
 /* @vitest-environment jsdom */
-import { html, render } from "lit";
-import { createSignal, flush } from "solid-js";
+import { createSignal, For } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import {
   PRESENTATION_CHANGED_EVENT,
   type PresentationBinding,
-  type PresentationValue,
 } from "../lit/presentation-binding.ts";
 import { installTestLinkReader, TEST_LINK_READER } from "../test-helpers/link-reader.ts";
-import { renderSolidRef } from "../test-helpers/render-solid-ref.ts";
+import { mountSolid } from "../test-helpers/mount-solid.ts";
+import { flush } from "../test-helpers/solid-settle.ts";
 import { prefetchLinkReader } from "./link-reader-prefetch-request.ts";
 import * as linkTargets from "./link-reader-target.ts";
 import { linkReaderPrefetchRef } from "./markdown-element-refs-solid.ts";
@@ -48,37 +47,50 @@ let provider: HTMLElement;
 let idleCallbacks: Map<number, IdleRequestCallback>;
 let nextIdleHandle: number;
 let presentation: PresentationBinding | undefined;
-type PrefetchInput = readonly [string, PresentationValue, boolean];
-let view: ReturnType<typeof renderSolidRef> | undefined;
-let linkRoot: HTMLDivElement | undefined;
-let updateInput: (input: PrefetchInput) => void;
+type LinkInputs = {
+  links: string[];
+  session: string;
+  active: boolean;
+  connected: boolean;
+  presentation: PresentationBinding | undefined;
+};
+let setInputs: (inputs: LinkInputs) => void;
+let unmount: (() => void) | undefined;
 
 function renderLinks(links = [href(1)], session = "first", active = true, connected = true) {
-  const input: PrefetchInput = [session, active ? (presentation ?? true) : false, connected];
-  const root = (linkRoot ??= document.createElement("div"));
-  render(
-    html`${links.map((url) => html`<a class="markdown-github-link" href=${url}>Item</a>`)}`,
-    root,
-  );
-  if (view) {
-    updateInput(input);
+  const next = { links, session, active, connected, presentation };
+  if (!unmount) {
+    const [inputs, update] = createSignal(next);
+    setInputs = update;
+    unmount = mountSolid(
+      () => (
+        <div
+          ref={linkReaderPrefetchRef(() => [
+            inputs().session,
+            inputs().active ? (inputs().presentation ?? true) : false,
+            inputs().connected,
+          ])}
+        >
+          <For each={inputs().links}>
+            {(url) => (
+              <a class="markdown-github-link" href={url}>
+                Item
+              </a>
+            )}
+          </For>
+        </div>
+      ),
+      { container },
+    ).unmount;
   } else {
-    view = renderSolidRef(
-      () => {
-        const [values, setValues] = createSignal(input);
-        updateInput = (next) => setValues(next);
-        return linkReaderPrefetchRef(values);
-      },
-      { container, targetElement: root },
-    );
+    setInputs(next);
   }
   flush();
 }
 
 function unmountLinks() {
-  view?.unmount();
-  view = undefined;
-  linkRoot = undefined;
+  unmount?.();
+  unmount = undefined;
 }
 
 function flushIdleScans() {

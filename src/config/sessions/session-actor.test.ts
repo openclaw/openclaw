@@ -25,6 +25,7 @@ import {
   readExactSessionEntryRow,
   writeSessionEntry,
 } from "./session-accessor.sqlite-entry-store.js";
+import { patchSessionEntryCore } from "./session-accessor.sqlite-entry.js";
 import type { SessionActorAuthority, SessionActorOperations } from "./session-actor-contract.js";
 import { createDurableSessionActorFactory } from "./session-actor-durable.js";
 import { memorySessionActorOwners } from "./session-actor-memory-owner.js";
@@ -120,6 +121,22 @@ it("acquires the exact cold durable execution owner and installs a real worker c
       expect(actor.snapshot(authority)?.entry?.sessionId).toBe(fixture.scope.sessionId);
       expect(actor.snapshot(authority)?.entry?.updatedAt).toBe(543);
       expect(fixture.read()?.updatedAt).toBe(543);
+      const before = actor.snapshot(authority)!;
+      await patchSessionEntryCore(
+        {
+          agentId: "main",
+          storePath: fixture.database.path,
+          sessionKey: fixture.scope.sessionKey,
+          env,
+        },
+        () => ({ label: "published patch" }),
+        { skipMaintenance: true, preserveActivity: true },
+      );
+      const after = actor.snapshot(authority);
+      expect(after?.entry).toMatchObject({ label: "published patch", updatedAt: 543 });
+      expect(after?.transcript).toEqual(before.transcript);
+      expect(after?.pendingInputs).toEqual(before.pendingInputs);
+      expect(after?.version).toEqual({ ...before.version, sequence: before.version.sequence + 1 });
     } finally {
       await actor.release();
     }
