@@ -1507,9 +1507,9 @@ const reviewedOperations = new Map([
     [
       {
         tier: "W",
-        operations: ["selectAcpSessionRows"],
+        operations: ["selectAcpSessionRows", "selectAcpSessionRowsByKeys"],
         evidence:
-          "src/acp/runtime/session-meta-list.ts:21 submits acpSessions.list → src/state/openclaw-state-read.worker.ts:264.",
+          "session-meta-list.ts submits acpSessions.list to the shared read worker. Batched exact-key reads are called only by session-meta-read.worker.ts; ordinary bundled entry readers await that worker and the deprecated synchronous SDK reader uses its separate single-row operation.",
       },
     ],
   ],

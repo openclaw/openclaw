@@ -52,6 +52,8 @@ describe("OpenClaw shell Control UI refresh", () => {
   let fetchMock: ReturnType<typeof vi.fn<typeof fetch>>;
 
   beforeEach(() => {
+    // Keep automatic retry probes inside this fixture's lifetime.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     vi.spyOn(Math, "random").mockReturnValue(0);
     stubGatewayStoreTestGlobals();
     replace = vi.fn();
@@ -70,6 +72,8 @@ describe("OpenClaw shell Control UI refresh", () => {
 
   afterEach(() => {
     store.gateway.stop();
+    vi.clearAllTimers();
+    vi.useRealTimers();
     setAvatarGatewayOrigin(null);
     document.body.replaceChildren();
     vi.unstubAllGlobals();

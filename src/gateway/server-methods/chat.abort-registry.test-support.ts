@@ -8,6 +8,7 @@ import { settleSubagentRegistryPersistenceWork } from "../../agents/subagents/re
 import { resetSubagentRegistryForTests } from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
 import { testing as schedulerTesting } from "../../agents/subagents/swarm/swarm-scheduler.test-support.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../../config/config.js";
+import { captureRuntimeConfigAsyncReader } from "../../config/io.runtime.js";
 import { LegacyContextEngine } from "../../context-engine/legacy.js";
 import { getActiveGatewayRootWorkCount } from "../../process/gateway-work-admission.js";
 import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
@@ -59,6 +60,7 @@ export function useChatAbortRegistryFixture() {
     );
     clearConfigCache();
     clearRuntimeConfigSnapshot();
+    await captureRuntimeConfigAsyncReader()();
     settleRootWork = observeRootWork();
   });
   afterEach(async () => {

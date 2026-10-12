@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import {
   loadSessionEntry,
   loadSessionEntryReadOnly,
@@ -406,7 +407,9 @@ describe("worker placement session maintenance ownership", () => {
   it("retains a configured-store repository base after its placement manifest advances", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const storePath = state.path("custom-sessions", "openclaw-agent.sqlite");
-      await state.writeConfig({ session: { store: storePath } });
+      const cfg = { session: { store: storePath } };
+      await state.writeConfig(cfg);
+      setRuntimeConfigSnapshot({});
       const placement = {
         ...createPlacementFixture("agent:main:dashboard:repository-retention"),
         workspaceBaseManifestRef: `sha256:${"a".repeat(64)}`,
@@ -435,6 +438,7 @@ describe("worker placement session maintenance ownership", () => {
         skipMaintenance: true,
       });
       expect(loadSessionEntryReadOnly(placement)).toBeUndefined();
+      setRuntimeConfigSnapshot(cfg);
       const createRetention = vi.spyOn(workspaceRetention, "createNodeWorkspaceRetainCoordinator");
       let prepared:
         | Awaited<ReturnType<WorkerSessionPlacementStore["prepareRuntimeRefresh"]>>

@@ -12,6 +12,7 @@ import { createEmbeddedRunHandle } from "../../../agents/embedded-agent-runner/r
 import { withPreparedEmbeddedRunToolAuthority } from "../../../agents/harness/tool-authority.runtime.js";
 import type { AgentSession } from "../../../agents/sessions/agent-session.js";
 import { AuthStorage } from "../../../agents/sessions/auth-storage.js";
+import { setRuntimeConfigSnapshot } from "../../../config/io.js";
 import { replaceSessionEntry } from "../../../config/sessions/session-accessor.js";
 import type { TalkRealtimeConfig } from "../../../config/types.gateway.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
@@ -197,6 +198,7 @@ export async function withNativePlugin(
         talk: { agentId: AGENT_ID, realtime: realtimeConfig },
         plugins: { allow: ["openai"], entries: { openai: { enabled: true } } },
       };
+      setRuntimeConfigSnapshot(config);
       const registry = createEmptyPluginRegistry();
       // Native factory binding must retain the fixture's synthetic auth, not resolve operator credentials.
       const capabilityCatalogContext = {

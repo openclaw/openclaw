@@ -67,8 +67,8 @@ describe("Activity recap freshness after transcript writes", () => {
 
   beforeEach(async ({ signal }) => {
     testSignal = signal;
-    testState = await createActivityRecapSessionFixture();
     cfg = { agents: { defaults: { utilityModel: "test/utility" } } };
+    testState = await createActivityRecapSessionFixture(cfg);
     complete
       .mockReset()
       .mockImplementation(async () => activityRecapResult("Completed the requested work."));

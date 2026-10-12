@@ -63,6 +63,11 @@ export function readPluginStateObservationCache(identity: string, key: Key) {
   if (state.pending.has(identity)) {
     return undefined;
   }
+  return readCommittedPluginStateObservationCache(identity, key);
+}
+
+/** Pending writes do not replace committed facts used by a live native lease. */
+export function readCommittedPluginStateObservationCache(identity: string, key: Key) {
   const entry = state.entries.get(cacheKey(identity, key));
   if (!entry?.loaded) {
     return undefined;

@@ -30,6 +30,7 @@ import {
   deliveryContextFromSession,
   sessionDeliveryRoute,
 } from "../../utils/delivery-context.read.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../io.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import {
   applySessionEntryReplacements,
@@ -87,7 +88,14 @@ import {
 import type { SessionEntry } from "./types.js";
 
 const cleanupArchivedSessionTranscriptsMock = vi.hoisted(() => vi.fn(async () => {}));
-const tempDirs = useSessionStoreTempDirs(afterAll, "openclaw-session-accessor-");
+const tempDirs = useSessionStoreTempDirs(
+  (cleanup) =>
+    afterAll(async () => {
+      await cleanup();
+      clearRuntimeConfigSnapshot();
+    }),
+  "openclaw-session-accessor-",
+);
 
 vi.mock("../../gateway/session-archive.runtime.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../gateway/session-archive.runtime.js")>();
@@ -113,6 +121,7 @@ describe("session accessor seam", () => {
     cleanupArchivedSessionTranscriptsMock.mockReset();
     tempDir = tempDirs.make();
     storePath = path.join(tempDir, "sessions.json");
+    setRuntimeConfigSnapshot({ session: { store: storePath } });
   });
 
   it("returns typed sync append outcomes for missing, rebound, and duplicate rows", async () => {

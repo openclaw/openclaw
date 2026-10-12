@@ -2,6 +2,7 @@ import { expectDefined } from "@openclaw/normalization-core/expect";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { contextBudgetStatusFixture } from "../../config/sessions/context-budget.test-support.js";
 import {
   appendTranscriptMessage,
@@ -57,6 +58,7 @@ function fixture() {
       },
     },
   };
+  setRuntimeConfigSnapshot(cfg);
   const client = identifiedClient(person.id);
   client.connect.scopes = ["operator.read"];
   return { cfg, client, person };
@@ -87,6 +89,7 @@ describe("historical model disclosure", () => {
         allow: ["example/allowed*"],
         deny: ["example/allowed-denied"],
       };
+      setRuntimeConfigSnapshot(f.cfg);
       const project = expectDefined(
         prepareOperatorModelPresentation({ cfg: f.cfg, policyConfig: f.cfg, client: f.client }),
         "restricted presentation",
@@ -237,6 +240,7 @@ describe("historical model disclosure", () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const f = fixture();
       await state.writeConfig(f.cfg);
+      setRuntimeConfigSnapshot(f.cfg);
       let committed = f.cfg;
       const scope = {
         agentId: "main",

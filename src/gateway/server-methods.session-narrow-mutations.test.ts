@@ -1,5 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { loadSessionEntry, upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { addSessionMember } from "../config/sessions/session-sharing-store.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -59,6 +60,7 @@ describe("invocation-owned session mutations", () => {
           ? ["operator.write", "operator.sessions.write"]
           : ["operator.sessions.write"];
         const cfg = rolePolicyConfig();
+        setRuntimeConfigSnapshot(cfg);
         const foreignKey = "agent:main:foreign-stop";
         await upsertSessionEntryCore(scope, ownedEntry(client, "own-incarnation"));
         await upsertSessionEntryCore(
@@ -139,6 +141,7 @@ describe("invocation-owned session mutations", () => {
         const originalStore = state.path("original", "sessions.json");
         const nextStore = state.path("replacement", "sessions.json");
         let cfg = { ...rolePolicyConfig(), session: { store: originalStore } };
+        setRuntimeConfigSnapshot(cfg);
         const entered = createDeferredCore();
         const release = createDeferredCore();
         const dispatched = vi.spyOn(chat, "handleDirectExternalChatSend");
@@ -190,6 +193,7 @@ describe("invocation-owned session mutations", () => {
         client.connId = "exact-stop-connection";
         client.connect.scopes = ["operator.sessions.write"];
         const cfg = rolePolicyConfig();
+        setRuntimeConfigSnapshot(cfg);
         await upsertSessionEntryCore(scope, ownedEntry(client, "current-incarnation"));
         for (const explicit of [false, true]) {
           for (const mismatch of [
@@ -284,6 +288,7 @@ describe("invocation-owned session mutations", () => {
         client.connId = "reentrant-stop";
         client.connect.scopes = ["operator.sessions.write"];
         const cfg = rolePolicyConfig();
+        setRuntimeConfigSnapshot(cfg);
         await upsertSessionEntryCore(scope, ownedEntry(client, "original"));
         for (const changed of ["registration", "key", "sessionId", "agentId"] as const) {
           const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
@@ -348,6 +353,7 @@ describe("invocation-owned session mutations", () => {
         const client = roleClient("view", "initial-turn-owner");
         client.connect.scopes = ["operator.sessions.write"];
         const cfg = rolePolicyConfig();
+        setRuntimeConfigSnapshot(cfg);
         const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
         const createdKey = "agent:main:main";
         const dispatch = vi
@@ -386,6 +392,7 @@ describe("invocation-owned session mutations", () => {
       expectDefined(cfg.gateway?.roles?.definitions.view, "mixed-grant role").scopes.push(
         "operator.approvals",
       );
+      setRuntimeConfigSnapshot(cfg);
       await upsertSessionEntryCore(scope, {
         ...ownedEntry(owner, "mixed-session"),
         visibility: "shared",
@@ -451,6 +458,7 @@ describe("invocation-owned session mutations", () => {
       const client = roleClient("view", "send-owner");
       client.connect.scopes = ["operator.sessions.write"];
       const cfg = rolePolicyConfig();
+      setRuntimeConfigSnapshot(cfg);
       const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
       for (const changed of ["none", "source", "generation"] as const) {
         const entry = {
@@ -523,9 +531,10 @@ describe("invocation-owned session mutations", () => {
     async (changed) => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
         const client = roleClient("view", "batch-owner");
-        using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
         client.connect.scopes = ["operator.sessions.write"];
         const cfg = rolePolicyConfig();
+        setRuntimeConfigSnapshot(cfg);
+        using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
         const entry = {
           ...ownedEntry(client, "original"),
           lifecycleRevision: "original",

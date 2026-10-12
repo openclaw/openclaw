@@ -1,5 +1,6 @@
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { captureGatewayOperatorRunAuthority } from "../gateway/operator-run-authority.js";
 import {
@@ -39,6 +40,7 @@ describe("harness completion caller lifetime", () => {
     "settles retained root work when pending custody preparation is %s",
     async (outcome) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+        setRuntimeConfigSnapshot({});
         const context = createContext();
         const resolver = () => context;
         context.resolveGatewayContext = resolver;
@@ -123,6 +125,7 @@ describe("harness completion caller lifetime", () => {
     "retains the original operator ceiling until %s",
     async (ending) => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        setRuntimeConfigSnapshot({});
         const context = createContext();
         const resolver = () => context;
         context.resolveGatewayContext = resolver;
@@ -193,6 +196,7 @@ describe("harness completion caller lifetime", () => {
     "delivers an owned child result when its spawning caller is %s",
     async (callerState) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+        setRuntimeConfigSnapshot({});
         const requesterSessionKey = "agent:main:main";
         const childSessionKey = "native:child";
         const announceId = "native:parent:child:succeeded";

@@ -2,6 +2,7 @@ import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { createChannelIngressDrain } from "../channels/message/ingress-drain.js";
 import { createChannelIngressQueue } from "../channels/message/ingress-queue.js";
 import { getRuntimeConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   createPluginBlobStore,
   type OpenBlobStoreOptions,
@@ -236,9 +237,17 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
         }
         if (prop === "config") {
           const config: PluginRuntime["config"] = getRuntimeProperty();
+          const readCurrent = () => runWithPluginScope(() => config.current(), false);
+          function current(options: { clone: true }): OpenClawConfig;
+          function current(): ReturnType<typeof readCurrent>;
+          function current(options?: { clone: true }) {
+            return options
+              ? runWithPluginScope(() => config.current(options), false)
+              : readCurrent();
+          }
           return {
             ...config,
-            current: () => runWithPluginScope(() => config.current(), false),
+            current,
             mutateConfigFile: (params) => runWithPluginScope(() => config.mutateConfigFile(params)),
             replaceConfigFile: (params) =>
               runWithPluginScope(() => config.replaceConfigFile(params)),

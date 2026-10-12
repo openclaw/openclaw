@@ -1,5 +1,6 @@
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import {
   appendTranscriptMessage,
   upsertSessionEntryCore,
@@ -34,6 +35,7 @@ function createMissingCounts() {
 function createDatabaseOptions() {
   const stateDir = sessionDirs.make();
   vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+  setRuntimeConfigSnapshot({});
   return { env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } };
 }
 
@@ -78,6 +80,7 @@ afterEach(async () => {
   vi.useRealTimers();
   await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
+  resetConfigRuntimeState();
   vi.unstubAllEnvs();
 });
 

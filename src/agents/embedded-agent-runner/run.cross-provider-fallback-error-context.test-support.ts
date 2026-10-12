@@ -163,6 +163,8 @@ describe("runEmbeddedAgent cross-provider fallback error handling", () => {
     runEmbeddedAgent = await loadSharedRunIntegrationHarness();
     const { withOpenClawTestState } = await import("../../test-utils/openclaw-test-state.js");
     await withOpenClawTestState({ label: "cross-provider-warmup" }, async (warmupState) => {
+      const { setRuntimeConfigSnapshot } = await import("../../config/runtime-snapshot.js");
+      setRuntimeConfigSnapshot(makeCrossProviderFallbackConfig());
       await warmRunOverflowCompactionHarness(runEmbeddedAgent, warmupState, {
         config: makeCrossProviderFallbackConfig(),
         agentHarnessRuntimeOverride: "openclaw",
@@ -178,6 +180,8 @@ describe("runEmbeddedAgent cross-provider fallback error handling", () => {
     resetSharedRunIntegrationHarnessMocks();
     const { createOpenClawTestState } = await import("../../test-utils/openclaw-test-state.js");
     state = await createOpenClawTestState({ label: "run.cross-provider-fallback-error-context" });
+    const { setRuntimeConfigSnapshot } = await import("../../config/runtime-snapshot.js");
+    setRuntimeConfigSnapshot(makeCrossProviderFallbackConfig());
     useCrossProviderAuthFixture();
     mockedGlobalHookRunner.hasHooks.mockImplementation(() => false);
   });

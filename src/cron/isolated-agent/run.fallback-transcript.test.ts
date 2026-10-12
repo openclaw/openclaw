@@ -3,6 +3,7 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it, vi } from "vitest";
 import { createEmbeddedAgentRunnerOpenAiConfig } from "../../agents/test-helpers/embedded-agent-runner-e2e-fixtures.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { toErrorObject } from "../../infra/errors.js";
 import { readTranscriptMessages } from "../../sessions/user-turn-transcript.test-support.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -96,6 +97,7 @@ it("continues one cron user turn when the primary times out after provider dispa
         },
       },
     };
+    setRuntimeConfigSnapshot(config);
     const requests: string[] = [];
     const timeoutAdvances: ReturnType<typeof vi.advanceTimersByTimeAsync>[] = [];
     const fetchProvider = vi.fn<typeof fetch>(async (_url, options) => {

@@ -240,6 +240,10 @@ function createGatewayReloadHandlers(
 }
 
 function startManagedGatewayConfigReloader(params: ManagedReloaderTestParams) {
+  setRuntimeConfigSnapshot(
+    params.initialConfig,
+    params.initialAuthoredConfig ?? params.initialCompareConfig ?? params.initialConfig,
+  );
   let state = createDefaultGatewayReloadState();
   return startManagedGatewayConfigReloaderImpl({
     scheduler: createTestGatewayScheduler("fake-timers"),
@@ -373,14 +377,6 @@ vi.mock("../agents/embedded-agent-runner/active-run-projections.js", () => ({
 vi.mock("../agents/main-session-recovery/main-session-restart-recovery.js", () => ({
   markRestartAbortedMainSessions: hoisted.markRestartAbortedMainSessions,
 }));
-
-vi.mock("../config/config.js", async () => {
-  const actual = await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
-  return {
-    ...actual,
-    getRuntimeConfig: () => hoisted.runtimeConfig.value,
-  };
-});
 
 vi.mock("../state/openclaw-database-preflight.js", () => ({
   assertOpenClawDatabasesReady: hoisted.assertOpenClawDatabasesReady,
@@ -795,6 +791,7 @@ let pluginRegistrySnapshot: ReturnType<typeof captureActivePluginRegistrySnapsho
 
 beforeEach((context) => {
   prepareConfigReloadTest(context);
+  setRuntimeConfigSnapshot(hoisted.runtimeConfig.value);
   pluginRegistrySnapshot = captureActivePluginRegistrySnapshot();
   stageActivePluginRegistry(createTestRegistry([]), null, "default");
   process.on("SIGUSR2", testGatewayRestartListener);
@@ -2374,6 +2371,7 @@ describe("gateway hot reload model state", () => {
     const { applyHotReload } = createReloadHandlersForTest();
     const previousConfig = testCase.previousConfig as OpenClawConfig;
     const nextConfig = testCase.nextConfig as OpenClawConfig;
+    setRuntimeConfigSnapshot(previousConfig);
     const changedPaths = diffConfigPaths(previousConfig, nextConfig);
     expect(changedPaths).toEqual([testCase.expectedPath]);
 

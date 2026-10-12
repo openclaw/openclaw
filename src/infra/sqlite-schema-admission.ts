@@ -27,55 +27,8 @@ export const schemaAdmission: SqliteDatabaseAdmissionKey<SqliteSchemaFacts> = {
   name: "sqlite-schema",
   schemaDependent: true,
   read: (value) => {
-    if (
-      !value ||
-      typeof value !== "object" ||
-      !("admissionId" in value) ||
-      typeof value.admissionId !== "string" ||
-      !("revision" in value) ||
-      typeof value.revision !== "number" ||
-      !("userVersion" in value) ||
-      typeof value.userVersion !== "number" ||
-      !("schemaVersion" in value) ||
-      typeof value.schemaVersion !== "number" ||
-      !("textEncoding" in value) ||
-      typeof value.textEncoding !== "string" ||
-      !("tables" in value) ||
-      !(value.tables instanceof Set) ||
-      !("views" in value) ||
-      !(value.views instanceof Set) ||
-      ![...value.views].every((view) => typeof view === "string") ||
-      !("tableSql" in value) ||
-      !(value.tableSql instanceof Map) ||
-      !("indexes" in value) ||
-      !(value.indexes instanceof Set) ||
-      !("indexDefinitions" in value) ||
-      !(value.indexDefinitions instanceof Map) ||
-      ![...value.indexDefinitions].every(
-        ([name, index]) =>
-          typeof name === "string" &&
-          isRecord(index) &&
-          typeof index.table === "string" &&
-          (index.sql === null || typeof index.sql === "string"),
-      ) ||
-      !("triggers" in value) ||
-      !(value.triggers instanceof Map)
-    ) {
-      return undefined;
-    }
-    return {
-      admissionId: value.admissionId,
-      revision: value.revision,
-      userVersion: value.userVersion,
-      textEncoding: value.textEncoding,
-      schemaVersion: value.schemaVersion,
-      tables: value.tables,
-      views: value.views,
-      tableSql: value.tableSql,
-      indexes: value.indexes,
-      indexDefinitions: value.indexDefinitions,
-      triggers: value.triggers,
-    };
+    // SAFETY: Only the typed SQLite catalog owner publishes this private fact key.
+    return isRecord(value) ? (value as SqliteSchemaFacts) : undefined;
   },
 };
 
@@ -104,7 +57,7 @@ function captureSqliteSchemaFacts(
   validateUserVersion?: (userVersion: number) => void,
 ): SqliteSchemaFacts {
   const retainedTextEncoding = getSqliteDatabaseAdmission(database, textEncodingAdmission);
-  const facts = runSqliteSchemaReadSnapshotSync(database, (schemaVersion) => {
+  const captured = runSqliteSchemaReadSnapshotSync(database, (schemaVersion) => {
     const version = executeWithCachedStatement(database, "PRAGMA user_version", [], (s) => s.get());
     const userVersion = Number(version?.user_version ?? 0);
     // Validate the captured header before catalog errors can mask its refusal.
@@ -116,62 +69,54 @@ function captureSqliteSchemaFacts(
       [],
       (s) => s.all(),
     );
-    const tables = objects.filter((row) => row.type === "table");
-    return {
+    const facts = {
       admissionId: randomUUID(),
       revision,
       userVersion,
       textEncoding,
       schemaVersion,
-      tables: new Set(tables.flatMap((row) => (typeof row.name === "string" ? [row.name] : []))),
-      views: new Set(
-        objects.flatMap((row) =>
-          row.type === "view" && typeof row.name === "string" ? [row.name] : [],
-        ),
-      ),
-      tableSql: new Map(
-        tables.flatMap((row) =>
-          typeof row.name === "string"
-            ? [[row.name, typeof row.sql === "string" ? row.sql : null] as const]
-            : [],
-        ),
-      ),
-      indexes: new Set(
-        objects.flatMap((row) =>
-          row.type === "index" && typeof row.name === "string" ? [row.name] : [],
-        ),
-      ),
-      indexDefinitions: new Map(
-        objects.flatMap((row) =>
-          row.type === "index" && typeof row.name === "string" && typeof row.tbl_name === "string"
-            ? [
-                [
-                  row.name,
-                  { table: row.tbl_name, sql: typeof row.sql === "string" ? row.sql : null },
-                ] as const,
-              ]
-            : [],
-        ),
-      ),
-      triggers: new Map(
-        objects.flatMap((row) =>
-          row.type === "trigger" && typeof row.name === "string" && typeof row.tbl_name === "string"
-            ? [
-                [
-                  row.name,
-                  { table: row.tbl_name, sql: typeof row.sql === "string" ? row.sql : null },
-                ] as const,
-              ]
-            : [],
-        ),
-      ),
+      tables: new Set<string>(),
+      views: new Set<string>(),
+      tableSql: new Map<string, string | null>(),
+      indexes: new Set<string>(),
+      indexDefinitions: new Map<string, { table: string; sql: string | null }>(),
+      triggers: new Map<string, { table: string; sql: string | null }>(),
     };
+    for (const row of objects) {
+      if (typeof row.name !== "string") {
+        continue;
+      }
+      const sql = typeof row.sql === "string" ? row.sql : null;
+      switch (row.type) {
+        case "table":
+          facts.tables.add(row.name);
+          facts.tableSql.set(row.name, sql);
+          break;
+        case "view":
+          facts.views.add(row.name);
+          break;
+        case "index":
+          facts.indexes.add(row.name);
+          if (typeof row.tbl_name === "string") {
+            facts.indexDefinitions.set(row.name, { table: row.tbl_name, sql });
+          }
+          break;
+        case "trigger":
+          if (typeof row.tbl_name === "string") {
+            facts.triggers.set(row.name, { table: row.tbl_name, sql });
+          }
+          break;
+        default:
+          break;
+      }
+    }
+    return facts;
   });
   // SQLite may still change an empty database's encoding before its first schema object.
-  if (retainedTextEncoding === undefined && (facts.tables.size > 0 || facts.views.size > 0)) {
-    publishSqliteDatabaseAdmission(database, textEncodingAdmission, facts.textEncoding);
+  if (retainedTextEncoding === undefined && (captured.tables.size > 0 || captured.views.size > 0)) {
+    publishSqliteDatabaseAdmission(database, textEncodingAdmission, captured.textEncoding);
   }
-  return facts;
+  return captured;
 }
 
 export function captureTrackedSqliteSchemaFacts(

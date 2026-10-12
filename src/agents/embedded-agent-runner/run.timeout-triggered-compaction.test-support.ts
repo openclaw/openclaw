@@ -183,6 +183,8 @@ describe("runEmbeddedAgent timeout recovery composition", () => {
   it("leaves timeout recovery to a forced unlocked Codex compaction owner", async () => {
     const { createOpenClawTestState } = await import("../../test-utils/openclaw-test-state.js");
     const state = await createOpenClawTestState({ label: "run.timeout-triggered-compaction" });
+    const { setRuntimeConfigSnapshot } = await import("../../config/runtime-snapshot.js");
+    setRuntimeConfigSnapshot({});
     fixture = state;
     const { clearAgentHarnesses, registerAgentHarness } = await import("../harness/registry.js");
     const pluginRunAttempt = vi.fn<AgentHarness["runAttempt"]>(async () =>
@@ -206,13 +208,15 @@ describe("runEmbeddedAgent timeout recovery composition", () => {
       compact: nativeCompact,
     });
 
+    const config = {
+      agents: { defaults: { models: { "openai/gpt-5.5": { agentRuntime: { id: "codex" } } } } },
+    };
+    setRuntimeConfigSnapshot(config);
     const result = await runEmbeddedAgent({
       ...createOverflowRunParams(state),
       provider: "openai",
       model: "gpt-5.5",
-      config: {
-        agents: { defaults: { models: { "openai/gpt-5.5": { agentRuntime: { id: "codex" } } } } },
-      },
+      config,
       runId: "forced-unlocked-codex-timeout-owner",
     }).finally(clearAgentHarnesses);
 
@@ -261,6 +265,8 @@ describe("runEmbeddedAgent timeout recovery composition", () => {
   it("lets one silent idle timeout retry before the normal timeout surface", async () => {
     const { createOpenClawTestState } = await import("../../test-utils/openclaw-test-state.js");
     const state = await createOpenClawTestState({ label: "run.timeout-triggered-compaction" });
+    const { setRuntimeConfigSnapshot } = await import("../../config/runtime-snapshot.js");
+    setRuntimeConfigSnapshot({});
     fixture = state;
     mockedRunEmbeddedAttempt
       .mockResolvedValueOnce(
