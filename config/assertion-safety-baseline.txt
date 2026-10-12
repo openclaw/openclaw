@@ -2737,8 +2737,6 @@ ui/src/pages/chat/components/chat-pane-header.ts	2
 ui/src/pages/chat/components/chat-selection-popup.ts	1
 ui/src/pages/chat/components/chat-session-sharing.ts	1
 ui/src/pages/chat/components/chat-session-workspace.ts	1
-ui/src/pages/chat/components/chat-sidebar-editor-menu.ts	2
-ui/src/pages/chat/components/chat-sidebar-region.runtime.ts	2
 ui/src/pages/chat/components/chat-task-suggestions.ts	1
 ui/src/pages/chat/components/chat-thread-interactions.ts	2
 ui/src/pages/chat/components/chat-voice-activity.ts	1
@@ -2768,7 +2766,6 @@ ui/src/pages/config/view-appearance-preferences.ts	2
 ui/src/pages/config/view-diff.ts	2
 ui/src/pages/config/view-schema.ts	2
 ui/src/pages/config/view.ts	3
-ui/src/pages/custodian/custodian-surface.ts	2
 ui/src/pages/custodian/session-lifecycle.ts	1
 ui/src/pages/labs/labs-registry.ts	4
 ui/src/pages/new-session/draft-place-browser.ts	2

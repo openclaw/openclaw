@@ -6,7 +6,7 @@ import { createApplicationContextProvider } from "../../test-helpers/application
 import { custodianAlertStore } from "./custodian-alert-store.ts";
 import { createContext } from "./custodian-page.test-harness.ts";
 import { CustodianSessionStore } from "./custodian-session-store.ts";
-import "./custodian-surface.ts";
+import "./custodian-surface.tsx";
 
 function alert(id: string): CustodianAlert {
   return {
