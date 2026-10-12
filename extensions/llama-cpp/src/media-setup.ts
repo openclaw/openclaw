@@ -16,7 +16,7 @@ import {
 import { detectLlamaCppHardware, formatLlamaCppMemory } from "./hardware.js";
 import { resolveManagedLlamaServerPaths, selectLlamaServerAsset } from "./llama-server-assets.js";
 import { ensureLlamaServerInstalled } from "./llama-server-install.js";
-import type { ManagedLlamaModel } from "./llama-server-preset.js";
+import { assertMediaPresetLimits, type ManagedLlamaModel } from "./llama-server-preset.js";
 import {
   ensureLlamaCppModel,
   prepareManagedLlamaServer,
@@ -140,6 +140,7 @@ export async function runLlamaCppMediaSetup(
     return { profiles: [] };
   }
   const recipes = [recommendation.ocr, recommendation.vision];
+  assertMediaPresetLimits(existing?.localService?.args ?? [], recipes);
   const artifacts = [
     ...new Map(
       recipes

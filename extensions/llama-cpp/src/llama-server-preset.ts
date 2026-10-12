@@ -98,6 +98,33 @@ const PRESET_KEY_ALIASES: Record<string, string> = {
   LLAMA_ARG_KV_UNIFIED_PER_SLOT: "kv-unified-per-slot",
 };
 
+// Router CLI options override model sections in the pinned llama.cpp runtime.
+export function assertMediaPresetLimits(
+  args: readonly string[],
+  models: readonly { contextSize: number; imageMaxTokens: number }[],
+): void {
+  const limits: Record<string, number> = {
+    "ctx-size": Math.min(...models.map((model) => model.contextSize)),
+    "image-max-tokens": Math.min(...models.map((model) => model.imageMaxTokens)),
+    parallel: 1,
+  };
+  for (let index = 0; index < args.length; index++) {
+    const [option = "", inlineValue] = args[index]!.split("=", 2);
+    const name = option.replace(/^--?/u, "").replaceAll("_", "-");
+    const key = PRESET_KEY_ALIASES[name] ?? name;
+    const limit = limits[key];
+    if (limit === undefined) {
+      continue;
+    }
+    const value = Number(inlineValue ?? args[++index]);
+    if (!Number.isInteger(value) || value < 1 || value > limit) {
+      throw new Error(
+        `Router option ${option} exceeds the local media limit (${limit}). Lower it or move it into the existing model's preset section, then retry local media setup. Existing configuration is unchanged.`,
+      );
+    }
+  }
+}
+
 const PRESET_SETTING_PATTERN =
   /(?<![^\r\n])([a-zA-Z_][a-zA-Z0-9_.-]*)([ \t]*=[ \t]*)([^\r\n]*?)([ \t]*(?:[;#][^\r\n]*)?)(\r\n|\n|\r|(?![\s\S]))/g;
 

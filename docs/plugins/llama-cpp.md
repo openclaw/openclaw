@@ -281,6 +281,10 @@ configuration, model inventory, provider settings and retained preset comments
 remain intact. Existing media entries need explicit `capabilities` so setup can
 preserve audio/video routes while replacing image routes. External servers and
 managed direct-model commands must first be configured as managed routers.
+Router command-line limits override model presets. Setup rejects image-token,
+context, or parallelism arguments that exceed the media recipes' budgets; lower
+those limits or place them in the existing models' individual preset sections.
+Compatible lower limits and unrelated router options are preserved.
 
 The CLI can also select the installed OCR route explicitly:
 

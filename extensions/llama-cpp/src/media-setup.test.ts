@@ -390,6 +390,7 @@ describe("registered local media setup transaction", () => {
     if (provider.localService) {
       provider.localService.env = { CUSTOM_SETTING: "retained" };
       provider.localService.cwd = root;
+      provider.localService.args?.push("--image-max-tokens", "512", "-c", "4096", "-np", "1");
     }
     ctx.config = {
       models: { providers: { "llama-cpp": provider } },
@@ -553,6 +554,28 @@ describe("registered local media setup transaction", () => {
       expect(mocks.install).not.toHaveBeenCalled();
     },
   );
+
+  it.each([
+    ["--image-max-tokens", "8192"],
+    ["--image_max_tokens=8192"],
+    ["-c", "65536"],
+    ["-np", "4"],
+  ])("rejects inherited router limits before downloading: %j", async (...args) => {
+    const ctx = context();
+    const provider = buildLlamaCppProviderConfig({
+      managed: {
+        command: "/old/llama-server",
+        baseUrl: "http://127.0.0.1:19432/v1",
+        healthUrl: "http://127.0.0.1:19432/health",
+        args: ["--models-preset", "/old/models.ini", ...args],
+      },
+    });
+    ctx.config = { models: { providers: { "llama-cpp": provider } } };
+    await expect(setup(ctx)).rejects.toThrow("exceeds the local media limit");
+    expect(mocks.ensureModel.mock.calls.every(([arg]) => arg.download === false)).toBe(true);
+    expect(mocks.install).not.toHaveBeenCalled();
+    expect(mocks.prepare).not.toHaveBeenCalled();
+  });
 
   it("rejects implicit remote capabilities instead of inventing audio/video intent", async () => {
     const ctx = context();
