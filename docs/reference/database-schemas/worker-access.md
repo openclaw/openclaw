@@ -84,6 +84,15 @@ ownership; ordinary readers do not poll for foreign commits.
 
 ## Session and ancillary worker operations
 
+Bounded transcript hydration retains its result in the existing session actor
+replica. Complete active paths advance from committed append receipts, including
+the stored payload byte lengths; repeated reads and recent reply anchors can then
+use that replica without another history-worker request. Incomplete windows,
+capacity overflow, rewrites, rewinds, compaction, archive changes, and deletion
+return to the canonical reader. The projection shares the actor's eviction and
+write-receipt invalidation lifecycle and does not change schemas, stored formats,
+retention, or update behavior.
+
 Parent forks use the existing session-entry worker for both transcript copying
 and child-row commits. Internal fork transformations are data patches, not native
 callbacks. The writer reads the current parent and child once and merges the

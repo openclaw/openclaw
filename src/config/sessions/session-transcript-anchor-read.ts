@@ -10,6 +10,8 @@ import {
   resolveSqliteTranscriptScope,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
+import { readSessionActorTranscriptReplica } from "./session-actor-replica.js";
+import { readSessionActorTranscriptAnchors } from "./session-actor-transcript-anchors.js";
 import { captureIncognitoSessionHistoryBinding } from "./session-incognito-binding.js";
 import {
   prepareIncognitoSessionHistoryRead,
@@ -31,6 +33,7 @@ import { captureSessionTranscriptStorageEnvironment } from "./transcript-target-
 import {
   getOwnedSessionTranscriptReader,
   readOwnedSessionTranscriptEntry,
+  readOwnedSessionTranscriptState,
 } from "./transcript-write-context.js";
 
 type AnchorScope = SessionTranscriptReadScope & { sessionKey: string };
@@ -66,6 +69,24 @@ export async function readSessionTranscriptAnchorsAsync(
     );
     authority.assertCurrent();
     return facts;
+  }
+  signal?.throwIfAborted();
+  const hot = readOwnedSessionTranscriptState(scope);
+  if (hot && scope.storePath) {
+    const facts = readSessionActorTranscriptAnchors(
+      hot,
+      {
+        agentId: scope.agentId ?? resolveAgentIdFromSessionKey(scope.sessionKey),
+        path: scope.storePath,
+        sessionId: scope.sessionId,
+      },
+      selection,
+      readSessionActorTranscriptReplica(hot)?.tail,
+    );
+    if (facts) {
+      consume(structuredClone(facts));
+      return structuredClone(facts);
+    }
   }
   const selected =
     selection.afterSeq === undefined &&

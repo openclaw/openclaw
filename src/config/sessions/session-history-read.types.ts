@@ -64,6 +64,8 @@ export type PreparedSessionTranscriptHydration =
       kind: "bounded";
       snapshot: SessionTranscriptBoundedActiveContext;
       transcript?: SessionTranscriptAnchorFacts;
+      /** Byte and sequence facts for the actor's bounded context residency. */
+      residentRows?: Array<{ rawSeq: number; serializedBytes: number }>;
     };
 
 export type SessionPendingInputReceipt =
