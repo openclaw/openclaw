@@ -703,7 +703,7 @@ suite.define(() => {
       // profile, prove browser-local provenance through storage and both write boundaries.
       await expect
         .poll(() => readPersistedSettings(page))
-        .toMatchObject({ sidebarEntries: [...pinsBefore, "route:usage"] });
+        .toMatchObject({ railShortcuts: [...pinsBefore, "route:usage"] });
       expect(await gateway.getRequests("config.patch")).toHaveLength(0);
       expect(await gateway.getRequests("users.prefs.set")).toHaveLength(0);
       expect(await gateway.getRequests("sessions.patch")).toHaveLength(0);
@@ -729,7 +729,7 @@ suite.define(() => {
       await usage.getByRole("button", { name: "Unpin", exact: true }).waitFor();
       await expect
         .poll(() => readPersistedSettings(page))
-        .toMatchObject({ sidebarEntries: [...pinsBefore, "route:usage"] });
+        .toMatchObject({ railShortcuts: [...pinsBefore, "route:usage"] });
       expect(await gateway.getRequests("config.patch")).toHaveLength(0);
       expect(await gateway.getRequests("users.prefs.set")).toHaveLength(0);
       expect(await gateway.getRequests("sessions.patch")).toHaveLength(0);

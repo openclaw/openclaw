@@ -138,13 +138,15 @@ export function captureDevicePairingPublication(admission: OpenClawStateDatabase
         captured.blocked = false;
         return true;
       }
+      // Rows are per-device facts: receipts and each device's own lookup refresh them, so a
+      // revision this cache missed leaves unrelated nodes known; only a full list replaces all.
       if (captured.revision !== revision) {
         captured.epoch++;
         captured.nodes = undefined;
-      }
-      if (complete || captured.revision !== revision) {
-        captured.rows.clear();
         captured.complete = false;
+      }
+      if (complete) {
+        captured.rows.clear();
       }
       captured.revision = revision;
       install(rows);
@@ -185,10 +187,7 @@ export function captureDevicePairingPublication(admission: OpenClawStateDatabase
           if (publications.get(path) !== captured || captured.mutation !== mutation) {
             return;
           }
-          if (receipt.beforeRevision !== captured.revision) {
-            captured.complete = false;
-            captured.rows.clear();
-          }
+          captured.complete &&= receipt.beforeRevision === captured.revision;
           if (receipt.revision !== captured.revision) {
             captured.nodes = undefined;
           }

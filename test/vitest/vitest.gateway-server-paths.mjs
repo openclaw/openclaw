@@ -107,6 +107,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/mcp-http.completion-lineage.test.ts",
   "src/gateway/mcp-http.exec-completion.test.ts",
   "src/gateway/mcp-http.exec-egress.test.ts",
+  "src/gateway/mcp-http.plugin-reload.test.ts",
   "src/gateway/mcp-http.question-authority.test.ts",
   "src/gateway/mcp-http.session-controls.test.ts",
   "src/gateway/mcp-http.test.ts",
