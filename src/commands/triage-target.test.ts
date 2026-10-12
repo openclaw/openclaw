@@ -18,10 +18,12 @@ import {
   getRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../config/io.js";
+import { materializeRuntimeConfig } from "../config/materialize.js";
 import { pinRuntimePaths, resolveStateDir } from "../config/paths.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { AgentToolsConfig } from "../config/types.tools.js";
+import { OpenClawSchema } from "../config/zod-schema.js";
 import { sanitizeHostExecEnv } from "../infra/host-env-security.js";
 import {
   getInstallationTarget,
@@ -461,6 +463,12 @@ describe.skipIf(process.platform === "win32")("embedded triage installation targ
                   plugins: { enabled: false },
                   gateway: { auth: { mode: "token", token: secret } },
                 };
+                const originalRuntimeConfig = materializeRuntimeConfig(
+                  OpenClawSchema.parse(config),
+                  {
+                    manifestRegistry: { plugins: [] },
+                  },
+                );
                 await state.writeConfig(config);
                 const agentDir = state.statePath("agents", "diagnostic", "agent");
                 const profileId = "fixture:subscription";
@@ -688,6 +696,7 @@ describe.skipIf(process.platform === "win32")("embedded triage installation targ
                   }),
                 );
 
+                expect(getRuntimeConfigSnapshot()).toBeNull();
                 const run = automatic
                   ? triageCommand(
                       runtime,
@@ -743,10 +752,12 @@ describe.skipIf(process.platform === "win32")("embedded triage installation targ
                 expect(process.env.OPENCLAW_STATE_DIR).toBe(originalSelectors.stateDir);
                 expect(process.env.OPENCLAW_CONFIG_PATH).toBe(originalSelectors.configPath);
                 expect(process.env.OPENCLAW_WORKSPACE_DIR).toBe(originalSelectors.workspaceDir);
-                expect(getRuntimeConfigSnapshot()).toBeNull();
                 if (automatic) {
+                  // Same-installation repair may pin config, but its run overlays stay local.
+                  expect(getRuntimeConfigSnapshot()).toEqual(originalRuntimeConfig);
                   expect((await fs.stat(runStateDir)).isDirectory()).toBe(true);
                 } else {
+                  expect(getRuntimeConfigSnapshot()).toBeNull();
                   await expect(fs.stat(runStateDir)).rejects.toMatchObject({ code: "ENOENT" });
                 }
                 expect(await fs.readFile(state.configPath, "utf8")).toBe(originalConfig);
