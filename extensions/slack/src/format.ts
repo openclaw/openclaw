@@ -72,6 +72,9 @@ function buildSlackLink(link: MarkdownLinkSpan, text: string) {
   if (!href) {
     return null;
   }
+  if (/^[@#!]/u.test(href)) {
+    return null;
+  }
   const label = text.slice(link.start, link.end);
   const trimmedLabel = label.trim();
   const comparableHref = href.startsWith("mailto:") ? href.slice("mailto:".length) : href;
