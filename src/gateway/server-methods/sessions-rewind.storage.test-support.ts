@@ -16,6 +16,7 @@ import {
   loadTranscriptEvents,
 } from "../../config/sessions/session-accessor.transcript.js";
 import { appendPreparedTranscriptEvent } from "../../config/sessions/session-transcript-event.js";
+import { waitForSessionTranscriptIndexReconcile } from "../../config/sessions/session-transcript-reconcile.js";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
@@ -81,6 +82,7 @@ export async function seedMessageCutSource(
     },
     () => {},
   );
+  await waitForSessionTranscriptIndexReconcile(toDatabaseOptions(resolveSqliteScope(scope)));
   return scope;
 }
 
@@ -137,7 +139,10 @@ export function invokeMessageCut(
 }
 
 export async function readMutationStorage(scope: SourceScope) {
-  const database = openOpenClawAgentDatabase(toDatabaseOptions(resolveSqliteScope(scope)));
+  const options = toDatabaseOptions(resolveSqliteScope(scope));
+  // Settle fixture-owned projection work before the native handle claims a shared-state lease.
+  await waitForSessionTranscriptIndexReconcile(options);
+  const database = openOpenClawAgentDatabase(options);
   const db = getSessionKysely(database.db);
   return {
     source: loadSessionEntry(scope),
