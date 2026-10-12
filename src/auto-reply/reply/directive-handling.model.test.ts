@@ -113,7 +113,7 @@ vi.mock("../../plugins/provider-thinking.js", () => ({
 import { resolveAgentDir, resolveSessionAgentId } from "../../agents/agent-scope.js";
 import type { ModelAliasIndex } from "../../agents/model-selection.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import type { InternalSessionEntry, SessionEntry } from "../../config/sessions.js";
+import type { SessionEntry } from "../../config/sessions.js";
 import {
   loadSessionEntry,
   persistSessionTranscriptTurn,
@@ -130,6 +130,11 @@ import { cleanupSessionStateForTest } from "../../test-utils/session-state-clean
 import type { ElevatedLevel } from "../thinking.js";
 import { registerModelRuntimeDirectiveTests } from "./directive-handling.model-runtime.test-support.js";
 import { registerModelStatusDirectiveTests } from "./directive-handling.model-status.test-support.js";
+import {
+  baseAliasIndex,
+  baseConfig,
+  createSessionEntry,
+} from "./directive-handling.model.test-support.js";
 import { createModelSelectionStateFixture } from "./model-selection.test-support.js";
 
 let handleDirectiveOnly: typeof import("./directive-handling.impl.js").handleDirectiveOnly;
@@ -235,26 +240,6 @@ const OPENAI_DATE_PROFILE_ID = "20251001";
 
 type AuthProfileForTest = (typeof authProfilesStoreMock.profiles)[string];
 type ApiKeyProfile = Extract<AuthProfileForTest, { type: "api_key" }>;
-
-function baseAliasIndex(): ModelAliasIndex {
-  return { byAlias: new Map(), byKey: new Map() };
-}
-
-function baseConfig(): OpenClawConfig {
-  return {
-    commands: { text: true },
-    agents: { defaults: {} },
-  } as unknown as OpenClawConfig;
-}
-
-function createSessionEntry(overrides?: Partial<InternalSessionEntry>): InternalSessionEntry {
-  return {
-    sessionId: "s1",
-    updatedAt: Date.now(),
-    delivery: { kind: "none" },
-    ...overrides,
-  };
-}
 
 function setDirectiveTestProviders(
   providers: Array<{
@@ -886,6 +871,7 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
       expect(stickyModelMock.persistBestEffort).not.toHaveBeenCalled();
       expect(enqueueSystemEvent).not.toHaveBeenCalled();
     } finally {
+      await cleanupSessionStateForTest({ stateDir: tempRoot });
       fs.rmSync(tempRoot, { recursive: true, force: true });
     }
   });
@@ -1017,6 +1003,7 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
       expect(sessionEntry).toEqual(sessionStore[sessionKey]);
       expect(loadSessionEntry({ sessionKey, storePath })).toEqual(sessionStore[sessionKey]);
     } finally {
+      await cleanupSessionStateForTest({ stateDir: tempRoot });
       fs.rmSync(tempRoot, { recursive: true, force: true });
     }
   });
@@ -1053,6 +1040,7 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
       );
       expect(sessionStore[sessionKey]).toEqual(rotatedEntry);
     } finally {
+      await cleanupSessionStateForTest({ stateDir: tempRoot });
       fs.rmSync(tempRoot, { recursive: true, force: true });
     }
   });
@@ -1082,6 +1070,7 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
       expect(result?.isError).toBe(true);
       expect(sessionEntry).toMatchObject({ sessionId: "s1", elevatedLevel: "full" });
     } finally {
+      await cleanupSessionStateForTest({ stateDir: tempRoot });
       fs.rmSync(tempRoot, { recursive: true, force: true });
     }
   });
@@ -1121,6 +1110,7 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
         fastMode: true,
       });
     } finally {
+      await cleanupSessionStateForTest({ stateDir: tempRoot });
       fs.rmSync(tempRoot, { recursive: true, force: true });
     }
   });
@@ -1452,6 +1442,7 @@ describe("canonical session directive persistence policy", () => {
         modelOverride: "gpt-5.5",
       });
     } finally {
+      await cleanupSessionStateForTest({ stateDir: tempRoot });
       fs.rmSync(tempRoot, { recursive: true, force: true });
     }
   });
