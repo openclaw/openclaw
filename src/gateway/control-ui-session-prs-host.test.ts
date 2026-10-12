@@ -11,6 +11,11 @@ import { loadControlUiSessionPullRequests } from "./control-ui-session-prs.js";
 import { githubJson, pullListItem, requestUrl } from "./control-ui-session-prs.test-support.js";
 import { getSessionRowProjection } from "./session-row-projection-access.js";
 
+// Broadcasts send one shared pre-encoded buffer per frame; decode before matching text.
+function sentText(socket: { send: { mock: { calls: ReadonlyArray<readonly unknown[]> } } }) {
+  return socket.send.mock.calls.map(([data]) => String(data)).join("\n");
+}
+
 afterEach(() => {
   vi.unstubAllGlobals();
   vi.unstubAllEnvs();
@@ -144,7 +149,7 @@ it("keeps a public session reader outside a same-named private Enterprise reposi
       }
       await f.subscribe([sessionKey, privateKey]);
       await f.subscriptions.pollNow();
-      const delivered = JSON.stringify(f.socket.send.mock.calls);
+      const delivered = sentText(f.socket);
       expect(delivered).toContain("Public change");
       expect(delivered).not.toContain("Private Enterprise secret");
       expect(provider).toHaveBeenCalledOnce();
@@ -188,7 +193,7 @@ it("reads an admitted Enterprise session and builds its branch link on that host
       await f.seed(sessionKey, f.profile.id, { repositoryWorkspaceId: repository.workspaceId });
       await f.subscribe();
       await f.subscriptions.pollNow();
-      expect(JSON.stringify(f.socket.send.mock.calls)).toContain(
+      expect(sentText(f.socket)).toContain(
         "https://ghe.example.test/synthetic/publication/pull/new/guest-change",
       );
       expect(provider).toHaveBeenCalledTimes(2);

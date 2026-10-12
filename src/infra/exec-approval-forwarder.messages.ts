@@ -62,27 +62,23 @@ function buildForwardedExecApprovalRequest(request: ExecApprovalRequest, nowMs: 
   } else {
     lines.push("Command:", formatFencedCodeBlock(command));
   }
-  if (request.request.cwd) {
-    lines.push(`CWD: ${request.request.cwd}`);
-  }
-  if (request.request.nodeId) {
-    lines.push(`Node: ${request.request.nodeId}`);
-  }
+  const appendField = (
+    field: "cwd" | "nodeId" | "host" | "agentId" | "security" | "ask",
+    label: string,
+  ) => {
+    if (request.request[field]) {
+      lines.push(`${label}: ${request.request[field]}`);
+    }
+  };
+  appendField("cwd", "CWD");
+  appendField("nodeId", "Node");
   if (Array.isArray(request.request.envKeys) && request.request.envKeys.length > 0) {
     lines.push(`Env overrides: ${request.request.envKeys.join(", ")}`);
   }
-  if (request.request.host) {
-    lines.push(`Host: ${request.request.host}`);
-  }
-  if (request.request.agentId) {
-    lines.push(`Agent: ${request.request.agentId}`);
-  }
-  if (request.request.security) {
-    lines.push(`Security: ${request.request.security}`);
-  }
-  if (request.request.ask) {
-    lines.push(`Ask: ${request.request.ask}`);
-  }
+  appendField("host", "Host");
+  appendField("agentId", "Agent");
+  appendField("security", "Security");
+  appendField("ask", "Ask");
   lines.push(`Expires in: ${formatExecApprovalExpiresIn(request.expiresAtMs, nowMs)}`);
   lines.push("Mode: foreground (interactive approvals available in this chat).");
   lines.push(

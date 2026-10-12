@@ -229,6 +229,15 @@ runtime-compatible schema filtering, hidden catalog execution, directory
 hydration, and catalog cleanup. Harnesses still own their SDK-specific tool
 conversion and native execution callback.
 
+Pass the host-supplied attempt's `trigger` to this factory. This optional field
+uses the existing run trigger (`cron`, `event`, `heartbeat`, `manual`, `memory`,
+`overflow`, or `user`); omitting it preserves ordinary tool presentation. A
+`memory` turn keeps the host-selected persistence tools directly available and
+disables Tool Search and Code Mode, including when prepared presentation facts
+are supplied. File-backed saving retains `read` and its restricted append-only
+writer; provider-backed saving retains `read` and the selected plugin's declared
+persistence and lookup tools. See [pre-compaction memory flush](/plugins/sdk-overview/memory-and-context#pre-compaction-memory-flush).
+
 Native tool adapters may use `runWithAsyncWorkResources(...)` from the same
 subpath to retain operation cleanup through host-owned admitted work without
 withholding the tool result. Register cleanup with its `onAcquired` callback;

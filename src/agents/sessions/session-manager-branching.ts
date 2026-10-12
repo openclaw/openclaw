@@ -3,13 +3,13 @@ import { replaceSessionWithBranchedTranscript } from "../../config/sessions/sess
 import type { SessionTranscriptContextVersion } from "../../config/sessions/session-accessor.sqlite-contract.js";
 import { publishCommittedSessionIdentity } from "../../config/sessions/session-accessor.sqlite-identity.js";
 import { startSessionTranscriptIndexReconcile } from "../../config/sessions/session-transcript-reconcile.js";
+import { targetDiscoveryLane } from "../../config/sessions/session-transcript-worker-resources.js";
 import { sameSessionTranscriptTargetBinding } from "../../config/sessions/transcript-target-binding.js";
 import {
   captureOwnedTranscriptWriteAssertion,
   withOwnedSessionTranscriptWriterFence,
 } from "../../config/sessions/transcript-write-context.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
-import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import { recordModelFallbackStop } from "../model-fallback-stop.js";
 import { parseOpaqueLeafEntry, parseParentLinkedOpaqueEntry } from "./session-manager-codec.js";
 import { createManagedSessionId, generateSessionEntryId } from "./session-manager-id.js";
@@ -201,7 +201,9 @@ export class SessionManagerBranching extends SessionManagerMetadata {
         if ("db" in admission.database) {
           await restoreSessionColdTranscript(persistenceTarget, assertCurrent);
         }
-        const reader = prepareSessionManagerHydration(persistenceTarget);
+        const reader = prepareSessionManagerHydration(persistenceTarget, {
+          lane: targetDiscoveryLane,
+        });
         const facts = await reader.readMaintenance({ operation: "version" });
         reader.assertCurrent();
         assertCurrent();
@@ -213,6 +215,7 @@ export class SessionManagerBranching extends SessionManagerMetadata {
           assertCurrent();
           assertDestinationOwned();
         };
+        let adopted = false;
         const receipt = await receiveSessionManagerCommit("session.transcript.branch", () =>
           withSessionMetadataWorker(
             admission.options,
@@ -227,6 +230,35 @@ export class SessionManagerBranching extends SessionManagerMetadata {
                   expectedLifecycleRevision: facts.lifecycleRevision,
                 },
               }),
+            {
+              beforeIdentityPublication: (publication) => {
+                const transcript = publication.transcriptPublication
+                  .flatMap((committedReceipt) => [...committedReceipt.facts.values()])
+                  .find(
+                    (fact) =>
+                      fact.kind === "postimage" &&
+                      fact.value.sessionKey === scope.sessionKey &&
+                      fact.value.sessionId === newSessionId,
+                  );
+                if (transcript?.kind !== "postimage") {
+                  throw new Error("Committed session branch omitted its transcript postimage");
+                }
+                this.assertTranscriptViewAvailable();
+                assertNavigation();
+                if (
+                  !sameSessionTranscriptTargetBinding(identity, this.persistenceTarget) ||
+                  this.transcriptVersion !== version
+                ) {
+                  throw new Error("Session transcript changed before branch publication");
+                }
+                const { generation, rawSeq, updatedAt } = transcript.value;
+                adoptBranch(
+                  { ...fencedTarget, sessionId: newSessionId },
+                  { generation, rawSeq, updatedAt },
+                );
+                adopted = true;
+              },
+            },
           ),
         );
         const committed = receipt.value;
@@ -241,20 +273,22 @@ export class SessionManagerBranching extends SessionManagerMetadata {
           if (receipt.failure) {
             throw receipt.failure;
           }
-          assertCurrent();
-          adoptBranch({ ...fencedTarget, sessionId: newSessionId }, committed.version);
+          if (!adopted) {
+            assertCurrent();
+            adoptBranch({ ...fencedTarget, sessionId: newSessionId }, committed.version);
+          }
         } catch (cause) {
           failure = { cause };
         }
         try {
-          publishCommittedSessionIdentity(
-            scope.agentId,
-            "db" in admission.database
-              ? readOpenClawAgentDatabaseIdentity(admission.database).identity
-              : admission.database.identity.incarnation,
-            committed.identity.previous,
-            committed.identity.current,
-          );
+          if (!("db" in admission.database)) {
+            publishCommittedSessionIdentity(
+              scope.agentId,
+              admission.database.identity.incarnation,
+              committed.identity.previous,
+              committed.identity.current,
+            );
+          }
         } catch (cause) {
           failure = {
             cause: failure

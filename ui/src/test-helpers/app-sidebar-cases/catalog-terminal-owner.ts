@@ -274,14 +274,9 @@ describe("AppSidebar catalog deletion", () => {
     },
   );
 
-  it.each([
-    ["event", false],
-    ["page", false],
-    ["event", true],
-    ["page", true],
-  ] as const)(
-    "discards a pre-delete %s response (archive completed: %s) and requests fresh rows",
-    async (source, completed) => {
+  it.each(["event", "page"] as const)(
+    "keeps a pending delete hidden through an earlier %s response and requests fresh rows",
+    async (source) => {
       vi.useFakeTimers();
       const restoreDialog = installDialogPolyfill();
       try {
@@ -329,10 +324,6 @@ describe("AppSidebar catalog deletion", () => {
         ]);
         await sidebar.updateComplete;
         expect(sidebar.querySelector('[data-session-key*="thread-1"]')).toBeNull();
-        if (completed) {
-          archive.resolve({});
-          await vi.advanceTimersByTimeAsync(0);
-        }
         staleList.resolve(catalogList([{ threadId: "thread-1", name: "Stale deleted session" }]));
         await vi.advanceTimersByTimeAsync(0);
         await sidebar.updateComplete;

@@ -39,6 +39,17 @@ describe("searchPathKeyword", () => {
     return db;
   }
 
+  it("keeps filename token matching strict so foo.md does not match unrelated .md paths", async () => {
+    const db = createDb({ ftsTokenizer: "unicode61" });
+    insertKeywordFixture(db, { id: "target", path: "memory/notes/foo.md" });
+    insertKeywordFixture(db, { id: "other-1", path: "memory/notes/bar.md" });
+    insertKeywordFixture(db, { id: "other-2", path: "memory/notes/baz.md" });
+
+    const results = await searchPathKeywordFixture(db, "foo.md", { limit: 10 });
+
+    expect(results.map((entry) => entry.id)).toEqual(["target"]);
+  });
+
   it.each([
     ["unicode61", "common"],
     ["trigram", "README.md"],

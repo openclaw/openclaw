@@ -4,6 +4,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { Worker } from "node:worker_threads";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 
 const evictionWarnSpy = vi.hoisted(() => vi.fn());
 vi.mock("../../logging/subsystem.js", async () => {
@@ -34,7 +35,7 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
-import { appendSqliteTrajectoryRuntimeEvents } from "../../trajectory/runtime-store.sqlite.js";
+import { appendSqliteTrajectoryRuntimeEvents } from "../../trajectory/runtime-store.test-support.js";
 import type { TrajectoryEvent } from "../../trajectory/types.js";
 import * as diskBudgetModule from "./disk-budget.js";
 import { measureSessionPhysicalDiskUsage } from "./disk-budget.js";
@@ -53,6 +54,7 @@ import {
   inspectSqliteSessionHistoryDiskBudget,
   kickSessionHistoryDiskBudgetMaintenance,
 } from "./session-history-eviction.js";
+import { deriveSessionPredicateColumns } from "./session-predicate-columns.js";
 import * as workerReaders from "./session-transcript-worker-readers.js";
 import { resolveMaintenanceConfigFromInput } from "./store-maintenance.js";
 
@@ -161,8 +163,6 @@ describe("SQLite historical session disk budget", () => {
       let reclamationWorkers = 0;
       type ArchiveReply = {
         type: string;
-        operationId?: number;
-        settled?: boolean;
         result?: { kind: string };
       };
       const archiveReplies: Array<{ worker: Worker; message: ArchiveReply }> = [];
@@ -210,10 +210,6 @@ describe("SQLite historical session disk budget", () => {
       expect(archiveReplies.map(({ message }) => message.type)).toEqual(["done", "published"]);
       expect(new Set(archiveReplies.map(({ worker }) => worker)).size).toBe(1);
       expect(archiveReplies.every(({ worker }) => worker.threadId === -1)).toBe(true);
-      expect(archiveReplies.map(({ message }) => message)).toMatchObject([
-        { operationId: 1, settled: true },
-        { operationId: 2, settled: true },
-      ]);
       expect(result?.removedEntries).toBe(1);
       expect(result?.totalBytesAfter).toBeLessThanOrEqual(highWaterBytes);
       expect(result?.totalBytesAfter).toBe(
@@ -540,6 +536,58 @@ describe("SQLite historical session disk budget", () => {
     }
   });
 
+  it("preserves a generation admitted by owner key during archive preparation without host lifecycle reads", async () => {
+    const sessionKey = "agent:main:admission-during-archive";
+    const sessionId = "admission-during-archive-old";
+    await createHistoricalTranscript({
+      content: "history protected while its archive is prepared",
+      nextSessionId: "admission-during-archive-live",
+      sessionId,
+      sessionKey,
+      updatedAt: 1,
+    });
+    settlePhysicalUsage();
+    const owner = database();
+    const archive = await import("./session-accessor.sqlite-archive.js");
+    const materialize = archive.materializeSessionHistoryEvictionPlan;
+    let admission: Awaited<ReturnType<typeof beginSessionWorkAdmission>> | undefined;
+    vi.spyOn(archive, "materializeSessionHistoryEvictionPlan").mockImplementationOnce(
+      async (input) => {
+        const prepared = await materialize(input);
+        expect(prepared?.archive?.bytes.byteLength).toBeGreaterThan(0);
+        admission = await beginSessionWorkAdmission({
+          scope: storePath,
+          identities: [sessionKey],
+          assertAllowed: () => {},
+        });
+        return prepared;
+      },
+    );
+    const reads = trackSqliteStatementExecutions(owner.db, ["history"], (sql) =>
+      /^select\b/i.test(sql) &&
+      /"(?:session_windows|transcript_rewrite_watermarks|trajectory_runtime_events)"/.test(sql)
+        ? "history"
+        : null,
+    );
+    try {
+      expect(
+        await enforceSqliteSessionHistoryDiskBudget({
+          storePath,
+          mode: "enforce",
+          maintenance: { maxDiskBytes: 1, highWaterBytes: 1 },
+        }),
+      ).toMatchObject({ removedEntries: 0 });
+      expect(admission).toBeDefined();
+      expect(reads.counts.history).toBe(0);
+    } finally {
+      reads.restore();
+      admission?.release();
+    }
+    expect(sessionExists(sessionId)).toBe(true);
+    expect(loadTranscriptEventsSync({ sessionId, sessionKey, storePath })).not.toEqual([]);
+    expect(readArchiveNames(sessionId)).toEqual([]);
+  });
+
   it.each(["archivedAt", "pinnedAt", "age-retention", "manual", "recent"] as const)(
     "rechecks %s on the logical owner before deleting an older generation",
     async (field) => {
@@ -632,24 +680,29 @@ describe("SQLite historical session disk budget", () => {
         updatedAt: Date.now(),
       });
       const archive = await import("./session-accessor.sqlite-archive.js");
-      const materialize = archive.materializeSessionStateDeletePlans;
+      const materialize = archive.materializeSessionHistoryEvictionPlan;
       const addReference = () => {
         const owner = database();
         const writer =
           writerKind === "external connection" ? new DatabaseSync(owner.path) : owner.db;
         try {
+          const entryJson = JSON.stringify({
+            sessionId: "survivor-current",
+            updatedAt: 1,
+            usageFamilySessionIds: ["reference-old"],
+          });
+          const columns = deriveSessionPredicateColumns(entryJson);
           writer
             .prepare(
-              "INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at) VALUES (?, ?, ?, 1)",
+              `INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at,
+                session_started_at, has_optional_references) VALUES (?, ?, ?, 1, ?, ?)`,
             )
             .run(
               referringKey,
               "survivor-current",
-              JSON.stringify({
-                sessionId: "survivor-current",
-                updatedAt: 1,
-                usageFamilySessionIds: ["reference-old"],
-              }),
+              entryJson,
+              columns.session_started_at,
+              columns.has_optional_references,
             );
           // Complete the canonical writer's validity settlement for this healthy fixture row.
           writer
@@ -675,9 +728,9 @@ describe("SQLite historical session disk budget", () => {
         });
       }
       const materialization = vi
-        .spyOn(archive, "materializeSessionStateDeletePlans")
-        .mockImplementationOnce(async (plans) => {
-          const prepared = await materialize(plans);
+        .spyOn(archive, "materializeSessionHistoryEvictionPlan")
+        .mockImplementationOnce(async (plan) => {
+          const prepared = await materialize(plan);
           if (after === "materialization") {
             addReference();
           }

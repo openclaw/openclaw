@@ -18,6 +18,7 @@ import {
   ssrfPolicyFromDangerouslyAllowPrivateNetwork,
 } from "./urbit/context.js";
 import { urbitFetch } from "./urbit/fetch.js";
+import { redactUrbitErrorText } from "./urbit/redact.js";
 import { buildMediaStory, sendDmWithStory, sendGroupMessageWithStory } from "./urbit/send.js";
 import { markdownToStory } from "./urbit/story.js";
 import { uploadImageFromUrl } from "./urbit/upload.js";
@@ -80,7 +81,8 @@ async function createHttpPokeApi(params: {
       try {
         if (!response.ok && response.status !== 204) {
           const errorText = await readResponseTextLimited(response, 16 * 1024);
-          throw new Error(`Poke failed: ${response.status} - ${errorText}`);
+          // Ship/proxy error bodies can reflect the session cookie; mask before throwing.
+          throw new Error(`Poke failed: ${response.status} - ${redactUrbitErrorText(errorText)}`);
         }
 
         return pokeId;

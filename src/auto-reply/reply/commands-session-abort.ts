@@ -104,6 +104,11 @@ async function applyAbortTarget(
 export const handleStopCommand: CommandHandler = defineAuthorizedTextCommand(
   { label: "/stop", match: (body) => (body === "/stop" ? true : null) },
   async (params) => {
+    const assertCurrent = () => {
+      if (params.opts?.isCommandTargetCurrent?.() === false) {
+        throw new Error("The selected session changed before it could be stopped.");
+      }
+    };
     const abortTarget = resolveAbortTarget(params);
     const abort = prepareSessionRunTargetAbort({
       agentId: abortTarget.agentId,
@@ -116,11 +121,7 @@ export const handleStopCommand: CommandHandler = defineAuthorizedTextCommand(
           agentId: abortTarget.agentId,
           sessionKey: abortTarget.key,
           sessionId: abortTarget.sessionId,
-          assertCurrent: () => {
-            if (params.opts?.isCommandTargetCurrent?.() === false) {
-              throw new Error("The selected session changed before it could be stopped.");
-            }
-          },
+          assertCurrent,
         })
       : undefined;
     let abortOutcome = { active: false, aborted: false };
@@ -142,11 +143,7 @@ export const handleStopCommand: CommandHandler = defineAuthorizedTextCommand(
               lifecycleRevision: abortTarget.entry.lifecycleRevision ?? null,
             }
           : undefined,
-      assertCurrent: () => {
-        if (params.opts?.isCommandTargetCurrent?.() === false) {
-          throw new Error("The selected session changed before it could be stopped.");
-        }
-      },
+      assertCurrent,
       beforeKill: async (sealRootSelection) => {
         sealRootSelection();
         abortOutcome = await applyAbortTarget(

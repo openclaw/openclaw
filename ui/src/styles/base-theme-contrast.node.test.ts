@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import postcss, { type Rule } from "postcss";
 import { describe, expect, it } from "vitest";
 
 const stylesDir = path.dirname(fileURLToPath(import.meta.url));
@@ -361,21 +362,27 @@ function readBubbleBackgrounds(groupedCss: string): {
   senderTint: string;
   lightSenderTint: string;
 } {
-  const readBackground = (selector: string): string => {
-    const background = readRuleBody(groupedCss, selector).match(
-      /^\s*--chat-bubble-background:\s*([^;]+);/mu,
-    )?.[1];
-    if (!background) {
-      throw new Error(`could not read bubble background token from "${selector}"`);
+  const rules: Rule[] = [];
+  postcss.parse(groupedCss).walkRules((rule) => {
+    rules.push(rule);
+  });
+  const readPaint = (selector: string, property: string): string => {
+    // Read only this rule's declarations, including those after nested artwork treatments.
+    const declaration = rules
+      .find((rule) => rule.selector === selector)
+      ?.nodes.filter((node) => node.type === "decl")
+      .find((node) => node.prop === property);
+    if (!declaration) {
+      throw new Error(`could not read ${property} from "${selector}"`);
     }
-    return background.trim();
+    return declaration.value;
   };
+  const readBackground = (selector: string) => readPaint(selector, "--chat-bubble-background");
   return {
     user: readBackground(USER_BUBBLE_RULE),
     lightUser: readBackground(LIGHT_USER_BUBBLE_RULE),
     lightUserText:
-      readRuleBody(groupedCss, LIGHT_USER_BUBBLE_RULE).match(/color:\s*var\((--[\w-]+)\)/u)?.[1] ??
-      "",
+      readPaint(LIGHT_USER_BUBBLE_RULE, "color").match(/^var\((--[\w-]+)\)$/u)?.[1] ?? "",
     senderTint: readBackground(SENDER_TINT_BUBBLE_RULE),
     lightSenderTint: readBackground(LIGHT_SENDER_TINT_BUBBLE_RULE),
   };

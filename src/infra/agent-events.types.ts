@@ -1,3 +1,4 @@
+import type { AgentEvent } from "../../packages/gateway-protocol/src/schema/agent.js";
 import type { AgentRunContext } from "./agent-run-registry.types.js";
 
 /** Payload for approval requests and their later resolution events. */
@@ -40,6 +41,7 @@ export type AgentEventPayload = {
   stream: AgentEventStream;
   ts: number;
   data: Record<string, unknown>;
+  preamble?: AgentEvent["preamble"];
   /** Internal, non-enumerable gateway lifecycle generation that owns this run. */
   lifecycleGeneration?: string;
   sessionKey?: string;

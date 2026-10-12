@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { inspectConversationBinding } from "openclaw/plugin-sdk/conversation-binding-inspection-runtime";
 import {
   getSessionBindingService,
   resolveConfiguredBindingRoute,
@@ -211,6 +212,16 @@ export function inspectTelegramConversationRoute(
   );
 }
 
+export async function inspectTelegramConversationRouteAsync(
+  params: ResolveTelegramConversationRouteParams,
+): Promise<TelegramConversationRouteResult> {
+  const prepared = prepareTelegramConversationRoute(params);
+  return applyTelegramRuntimeRoute(
+    prepared,
+    await resolveRuntimeConversationBindingRouteAsync({ ...prepared, touchBinding: false }),
+  );
+}
+
 /** Extend only the inspected binding after native command authorization. */
 export async function touchTelegramConversationRoute(
   inspected: TelegramConversationRouteResult,
@@ -221,7 +232,8 @@ export async function touchTelegramConversationRoute(
   }
   const bindings = getSessionBindingService();
   const assertRouteCurrent = () => {
-    const current = bindings.resolveByConversation(captured.conversation);
+    const inspection = inspectConversationBinding(captured.conversation);
+    const current = inspection.status === "available" ? inspection.binding : null;
     if (
       !current ||
       current.bindingId !== captured.bindingId ||
@@ -257,12 +269,10 @@ export function resolveTelegramTargetSession(params: {
   botHasTopicsEnabled?: boolean;
 }): string {
   const baseSessionKey = resolveTelegramConversationBaseSessionKey(params);
-  const threadKeys =
-    shouldUseTelegramDmThreadSession(params) && params.dmThreadId != null
-      ? resolveThreadSessionKeys({
-          baseSessionKey,
-          threadId: `${params.chatId}:${params.dmThreadId}`,
-        })
-      : null;
-  return threadKeys?.sessionKey ?? baseSessionKey;
+  return shouldUseTelegramDmThreadSession(params) && params.dmThreadId != null
+    ? resolveThreadSessionKeys({
+        baseSessionKey,
+        threadId: `${params.chatId}:${params.dmThreadId}`,
+      }).sessionKey
+    : baseSessionKey;
 }

@@ -9,7 +9,6 @@ import {
   loadTranscriptEventsSync,
   persistSessionTranscriptTurn,
   readTranscriptStatsSync,
-  replaceTranscriptEvents,
 } from "./session-accessor.js";
 import { readSessionTranscriptBoundedActiveContextCore } from "./session-accessor.sqlite-active-context.js";
 import {
@@ -25,6 +24,7 @@ import {
 } from "./session-accessor.sqlite-history-events.js";
 import { readActiveTranscriptStats } from "./session-accessor.sqlite-history.test-support.js";
 import { readTranscriptEventRows } from "./session-accessor.sqlite-read.js";
+import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import type { SessionTranscriptRuntimeScope } from "./session-accessor.types.js";
 import {
   shouldRebuildSessionTranscriptIndexSynchronously,

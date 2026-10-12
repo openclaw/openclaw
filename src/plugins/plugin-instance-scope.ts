@@ -39,7 +39,11 @@ export interface PluginInstanceHandle extends PluginInvocationInstance, PluginIn
     registry?: PluginRegistry,
     kind?: "work" | "custody",
   ): PluginInstanceConsumer;
-  runInRegistry<T>(registry: PluginRegistry, run: () => T, options?: { joinDisposal?: boolean }): T;
+  runInRegistry<T>(
+    registry: PluginRegistry | undefined,
+    run: () => T,
+    options?: { joinDisposal?: boolean },
+  ): T;
   createRegistryView(registry: PluginRegistry, invoke: <T>(run: () => T) => T): <T>(value: T) => T;
   drain(options?: {
     includeConsumers?: boolean;
@@ -54,7 +58,6 @@ export type PluginInvocationBinding = {
 };
 
 export type PluginInvocationContext = {
-  /** Retained consumers in this context are joined by a pending reload drain. */
   readonly holdsPendingReplacement?: boolean;
   lookup: (instance: PluginInstanceHandle) => PluginInvocationBinding | undefined;
 };
@@ -82,14 +85,13 @@ export const pluginInvocationContext = resolveGlobalSingleton(
   () => new AsyncLocalStorage<PluginInvocationContext>(),
 );
 
-/** Current work that a pending reload drain is joining, through nested calls or retained scopes. */
+/** Compatibility query for callers holding a published plugin invocation context. */
 export function currentPluginWorkHoldsPendingReplacement(): boolean {
-  for (let call = pluginInstanceInvocation.getStore(); call; call = call.parent) {
-    if (call.instance.holdsPendingReplacement(call.token)) {
-      return true;
-    }
-  }
-  return pluginInvocationContext.getStore()?.holdsPendingReplacement === true;
+  const call = pluginInstanceInvocation.getStore();
+  return (
+    (call?.instance.holdsPendingReplacement(call.token) ?? false) ||
+    pluginInvocationContext.getStore()?.holdsPendingReplacement === true
+  );
 }
 
 export function resolvePluginInstanceOwner(record: PluginRecord, registry: PluginRegistry) {

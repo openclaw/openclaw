@@ -1,7 +1,10 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import {
+  composeSessionSourceAssertion,
+  type SessionSourceAssertion,
+} from "../config/sessions/session-source-authority.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { capturePluginLifecycleAuthority } from "../plugins/registry-lifecycle.js";
 import { getPluginRegistryState } from "../plugins/runtime-state.js";
 import {
   getPluginRuntimeGatewayRequestScope,
@@ -40,7 +43,7 @@ type Owner = {
   committed: () => void;
 };
 type Source = {
-  assertCurrent: () => void;
+  assertCurrent: SessionSourceAssertion;
   assertRollbackCurrent: () => void;
   upstreamLinkCurrent?: SessionUpstreamLinkCurrentCheck;
 };
@@ -68,7 +71,9 @@ export async function withSessionInitializationSource<T>(
       assert();
     };
     const current = Object.freeze({
-      assertCurrent: () => assertActive(source.assertCurrent),
+      assertCurrent: composeSessionSourceAssertion([source.assertCurrent], (assertSources) =>
+        assertActive(assertSources),
+      ),
       assertRollbackCurrent: () => assertActive(source.assertRollbackCurrent),
       upstreamLinkCurrent: source.upstreamLinkCurrent,
     });
@@ -78,45 +83,12 @@ export async function withSessionInitializationSource<T>(
   }
 }
 
-export function captureSessionInitializationOwner(harnessId: string | undefined): Source {
+export function captureSessionInitializationOwner(_harnessId: string | undefined): Source {
   const source = sources.getStore();
-  const scopedRegistry = () =>
-    getPluginRuntimeGenerationRegistry() ?? getPluginRuntimeGatewayRequestScope()?.pluginRegistry;
-  const scoped = scopedRegistry();
-  const registry = scoped ?? getPluginRegistryState()?.activeRegistry;
-  const registration = registry?.agentHarnesses.find(
-    (candidate) => candidate.harness.id === harnessId,
-  );
-  const record = registry?.plugins.find((candidate) => candidate.id === registration?.pluginId);
-  const registryCurrent =
-    registry &&
-    capturePluginLifecycleAuthority(registry, record, { scopedRuntime: scoped === registry });
-  const harness = registration?.harness;
-  const deletion = harness?.withSessionDeletion;
-  const assertRegistryCurrent = () => {
-    if (
-      registry &&
-      (!registryCurrent?.() ||
-        (scoped && scopedRegistry() !== scoped) ||
-        (!scoped && getPluginRegistryState()?.activeRegistry !== registry) ||
-        (registration &&
-          (!registry.agentHarnesses.includes(registration) ||
-            registration.harness !== harness ||
-            harness?.withSessionDeletion !== deletion)))
-    ) {
-      throw new Error("Session initialization registry owner changed");
-    }
-  };
   return {
     upstreamLinkCurrent: source?.upstreamLinkCurrent,
-    assertCurrent() {
-      source?.assertCurrent();
-      assertRegistryCurrent();
-    },
-    assertRollbackCurrent() {
-      source?.assertRollbackCurrent();
-      assertRegistryCurrent();
-    },
+    assertCurrent: composeSessionSourceAssertion([source?.assertCurrent]),
+    assertRollbackCurrent: () => source?.assertRollbackCurrent(),
   };
 }
 

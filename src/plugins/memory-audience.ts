@@ -41,7 +41,6 @@ export type MemoryAudienceResolution =
   | ({ status: "granted" } & MemoryAudienceGrant)
   | { status: "denied"; kind: MemoryAudienceDenialKind; reason: string };
 
-const hostAudiences = new WeakSet<object>();
 const audienceRecords = new WeakMap<object, AudienceRecord>();
 const audienceSessionKeys = new WeakMap<object, string>();
 
@@ -153,7 +152,6 @@ function mintMemoryAudience(
   record: AudienceRecord,
 ): MemoryAudienceGrant {
   const frozen = Object.freeze(audience);
-  hostAudiences.add(frozen);
   audienceRecords.set(frozen, record);
   audienceSessionKeys.set(frozen, sessionKey);
   for (let current: AudienceRecord | undefined = record; current; current = current.parent) {
@@ -318,7 +316,7 @@ export async function resolveMemoryAudienceFromEntry(
 
 /** Return whether a memory audience was minted by this host process. */
 export function isHostMemoryAudience(value: unknown): value is MemoryAudience {
-  return typeof value === "object" && value !== null && hostAudiences.has(value);
+  return typeof value === "object" && value !== null && audienceRecords.has(value);
 }
 
 /** Reject an audience presented outside its host-bound invocation session. */

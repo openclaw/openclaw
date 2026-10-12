@@ -520,6 +520,57 @@ describe("command queue", () => {
     await expect(second).resolves.toBe("second");
   });
 
+  it.each(["admission", "completion", "error"] as const)(
+    "settles callers and drains the session lane when %s diagnostics throw",
+    async (phase) => {
+      vi.useFakeTimers();
+      const lane = "session:agent:test:diagnostic-failure";
+      const diagnosticError = new Error("diagnostic sink failed");
+      const taskError = new Error("Session transcript keyed user is outside the current turn");
+      const gate = createDeferred<string>();
+      const firstTask = vi.fn(() => gate.promise);
+      const successor = vi.fn(async () => "successor");
+      const taskIdentity = { taskKind: "turn", runId: "diagnostic-failure-run" };
+
+      if (phase === "admission") {
+        diagnosticMocks.logLaneDequeue.mockImplementationOnce(() => {
+          throw diagnosticError;
+        });
+      }
+      const outcomes = Promise.allSettled([
+        enqueueCommandInLane(lane, firstTask, { taskIdentity }),
+        enqueueCommandInLane(lane, successor),
+      ]);
+      if (phase !== "admission") {
+        diagnosticMocks.diag[phase === "error" ? "error" : "debug"].mockImplementationOnce(() => {
+          throw diagnosticError;
+        });
+      }
+      if (phase === "error") {
+        gate.reject(taskError);
+      } else {
+        gate.resolve("first");
+      }
+      await vi.runAllTimersAsync();
+
+      expect(successor).toHaveBeenCalledOnce();
+      expect(firstTask).toHaveBeenCalledTimes(phase === "admission" ? 0 : 1);
+      expect(await outcomes).toEqual([
+        phase === "completion"
+          ? { status: "fulfilled", value: "first" }
+          : { status: "rejected", reason: phase === "admission" ? diagnosticError : taskError },
+        { status: "fulfilled", value: "successor" },
+      ]);
+      expect(getCommandLaneSnapshot(lane)).toMatchObject({ activeCount: 0, queuedCount: 0 });
+      if (phase !== "admission") {
+        expect(diagnosticMocks.diag.warn).toHaveBeenCalledWith(
+          expect.stringContaining("lane task diagnostics failed after settlement:"),
+          taskIdentity,
+        );
+      }
+    },
+  );
+
   it.each([
     { reason: "restart", message: "Gateway is restarting. Please try again shortly." },
     {

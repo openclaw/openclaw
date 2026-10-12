@@ -3,17 +3,56 @@ import { afterEach, beforeEach, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.js";
-import { resetClientVoiceConfirmationStateForTest } from "./client-voice-confirmation.test-support.js";
 import { prepareClientVoiceSessionClose } from "./client-voice-session-lifecycle.js";
 import { clientVoiceSessionTesting } from "./client-voice-session.test-support.js";
 
 const { sendDurableMessageBatch } = vi.hoisted(() => ({
   sendDurableMessageBatch: vi.fn(async () => ({ status: "sent" })),
 }));
+const acceptedDigestWork = vi.hoisted(() => new Set<Promise<void>>());
+
+vi.mock("./client-voice-session-lifecycle.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./client-voice-session-lifecycle.js")>();
+  return {
+    ...actual,
+    captureClientVoiceSessionSettlement(
+      ...args: Parameters<typeof actual.captureClientVoiceSessionSettlement>
+    ) {
+      const accepted = actual.captureClientVoiceSessionSettlement(...args);
+      let finish!: () => void;
+      const completed = new Promise<void>((resolve) => {
+        finish = resolve;
+      });
+      acceptedDigestWork.add(completed);
+      return {
+        run<T>(run: () => T): T {
+          return accepted.run(run);
+        },
+        release() {
+          try {
+            accepted.release();
+          } finally {
+            acceptedDigestWork.delete(completed);
+            finish();
+          }
+        },
+      };
+    },
+  };
+});
+
+async function settleDigestAttempts(): Promise<void> {
+  while (acceptedDigestWork.size > 0) {
+    await Promise.all(acceptedDigestWork);
+  }
+}
 
 vi.mock("../channels/message/runtime.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../channels/message/runtime.js")>();
-  return { ...actual, sendDurableMessageBatchCore: sendDurableMessageBatch };
+  return {
+    ...actual,
+    sendDurableMessageBatchCore: sendDurableMessageBatch,
+  };
 });
 
 export function useClientVoiceDigestHarness() {
@@ -21,8 +60,8 @@ export function useClientVoiceDigestHarness() {
   let stateDir: string;
   const tempDirs = useAutoCleanupTempDirTracker((remove) => {
     afterEach(async () => {
+      await settleDigestAttempts();
       clientVoiceSessionTesting.reset();
-      resetClientVoiceConfirmationStateForTest();
       try {
         await cleanupSessionStateForTest({ stateDir });
       } finally {
@@ -40,6 +79,7 @@ export function useClientVoiceDigestHarness() {
 
   return {
     sendDurableMessageBatch,
+    settleDigestAttempts,
     get stateDir() {
       return stateDir;
     },

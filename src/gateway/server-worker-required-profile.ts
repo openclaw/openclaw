@@ -4,7 +4,9 @@ import {
   assertRequiredWorkerSelection,
   RequiredWorkerProfileError,
 } from "../config/required-worker-profile.js";
+import { composeSessionSourceAssertion } from "../config/sessions/session-source-authority.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { bindGatewayDeviceRevocation } from "./device-revocation.js";
 import { withGatewayWorkerSessionAdmission } from "./server-worker-placement-dispatch-admission.js";
 import { ensureSessionWorkspaceForPlacement } from "./session-lifecycle-preparation.js";
 import type { coordinateWorkerPlacementDispatch } from "./worker-environments/placement-dispatch-coordinator.js";
@@ -31,18 +33,21 @@ export function createRequiredWorkerSessionPreparation(options: {
       );
     }
     const snapshot = structuredClone(profile);
-    const assertPolicyCurrent = () => {
-      signal?.throwIfAborted();
-      authorize?.();
-      if (
-        options.getConfig().cloudWorkers?.requiredProfile !== required ||
-        !isDeepStrictEqual(options.getConfig().cloudWorkers?.profiles?.[required], snapshot)
-      ) {
-        throw new RequiredWorkerProfileError(
-          "Session source or required worker policy changed during placement; retry.",
-        );
-      }
-    };
+    const assertPolicyCurrent = bindGatewayDeviceRevocation(
+      composeSessionSourceAssertion([authorize], (assertSource) => {
+        signal?.throwIfAborted();
+        assertSource();
+        if (
+          options.getConfig().cloudWorkers?.requiredProfile !== required ||
+          !isDeepStrictEqual(options.getConfig().cloudWorkers?.profiles?.[required], snapshot)
+        ) {
+          throw new RequiredWorkerProfileError(
+            "Session source or required worker policy changed during placement; retry.",
+          );
+        }
+      }),
+      authorize,
+    );
     return await withGatewayWorkerSessionAdmission(
       {
         identity: {
@@ -56,13 +61,16 @@ export function createRequiredWorkerSessionPreparation(options: {
         retainEntryFields: ["agentRuntimeOverride", "execNode"],
       },
       async (source) => {
-        const assertCurrent = () => {
-          const entry = source.assertCurrent();
-          assertRequiredWorkerSelection(options.getConfig(), {
-            agentRuntime: entry.agentRuntimeOverride,
-            execNode: entry.execNode,
-          });
-        };
+        const assertCurrent = composeSessionSourceAssertion(
+          [source.assertCurrent],
+          (assertSource) => {
+            assertSource();
+            assertRequiredWorkerSelection(options.getConfig(), {
+              agentRuntime: source.entry.agentRuntimeOverride,
+              execNode: source.entry.execNode,
+            });
+          },
+        );
         const placement = await options.dispatch.ensurePlacement({
           request: {
             sessionId: identity.sessionId,

@@ -9,6 +9,54 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
 
+it("limits unadmitted mutation classification to its synchronous guarded branch", () => {
+  const root = tempDirs.make("openclaw-sqlite-guard-ratchet-");
+  const git = (...args: string[]) =>
+    execFileSync("git", ["-c", "user.name=Test", "-c", "user.email=test@example.com", ...args], {
+      cwd: root,
+      stdio: "pipe",
+    });
+  const relative = "src/config/sessions/session-accessor.sqlite-transcript-state.ts";
+  const file = path.join(root, relative);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(
+    file,
+    "function advanceTranscriptMutationAtInTransaction(database) { executeSqliteQuerySync(query); }",
+  );
+  git("init");
+  git("add", ".");
+  git("commit", "-m", "unconditional runtime update");
+  const guarded = `
+function advanceTranscriptMutationAtInTransaction(database) {
+  if (!findOpenClawAgentDatabaseIdentity(database)) {
+    executeSqliteQuerySync(query);
+    return;
+  }
+  const context = executeSqliteQueryTakeFirstSync(query);
+}
+`;
+  fs.writeFileSync(file, guarded);
+  vi.spyOn(console, "log").mockImplementation(() => {});
+  vi.spyOn(console, "error").mockImplementation(() => {});
+  expect(inventory(root).map(({ tier, calls }) => [tier, calls.length])).toEqual([
+    ["T1", 1],
+    ["T2", 1],
+  ]);
+  expect(main(root, ["--base", "HEAD"])).toBe(0);
+  fs.writeFileSync(
+    file,
+    guarded.replace(
+      "    return;\n  }",
+      "    callback(() => executeSqliteQuerySync(query));\n  } else { executeSqliteQuerySync(query); }",
+    ),
+  );
+  expect(inventory(root).map(({ tier, calls }) => [tier, calls.length])).toEqual([
+    ["T1", 3],
+    ["T2", 1],
+  ]);
+  expect(main(root, ["--base", "HEAD"])).toBe(1);
+});
+
 it("rejects total T1 growth with call sites and allows splits, shrinkage, and worker calls", () => {
   const root = tempDirs.make("openclaw-sqlite-ratchet-");
   const git = (...args: string[]) =>
@@ -100,15 +148,14 @@ function anotherRecorder() {
   git("commit", "-m", "base");
   const rows = inventory(root);
   expect(rows.map(({ tier, calls }) => [tier, calls.length])).toEqual([
-    ["T1", 2],
+    ["T1", 3],
     ["T1", 1],
-    ["T2", 1],
     ["W", 1],
     ["W", 4],
   ]);
-  expect(rows.find(({ tier }) => tier === "W")?.calls[0].operation).toBe(
-    "createPlacementTurnClaimOps.releaseTurn",
-  );
+  expect(rows.find(({ tier }) => tier === "W")?.calls[0]).toMatchObject({
+    operation: "createPlacementTurnClaimOps.releaseTurn",
+  });
   expect(rows.find((row) => row.file === eventRelative && row.tier === "W")?.calls).toEqual(
     Array(4).fill(expect.objectContaining({ operation: "recordSessionStateEventInDatabase" })),
   );
@@ -125,4 +172,75 @@ function anotherRecorder() {
   expect(errors).toHaveBeenCalledWith(
     expect.stringContaining("src/another-runtime.ts:1:1 executeSqliteQuerySync"),
   );
+});
+
+it("normalizes only exact SDK query forwarders on both sides without hiding raw T1 growth", () => {
+  const root = tempDirs.make("openclaw-sqlite-forwarding-ratchet-");
+  const git = (...args: string[]) =>
+    execFileSync("git", ["-c", "user.name=Test", "-c", "user.email=test@example.com", ...args], {
+      cwd: root,
+      stdio: "pipe",
+    });
+  const relative = "src/plugin-sdk/sqlite-runtime-legacy.ts";
+  const file = path.join(root, relative);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, "export {};\n");
+  fs.writeFileSync(path.join(root, "src/runtime.ts"), "executeSqliteQuerySync(query);\n");
+  git("init");
+  git("add", ".");
+  git("commit", "-m", "original call");
+  const log = vi.spyOn(console, "log").mockImplementation(() => {});
+  vi.spyOn(console, "error").mockImplementation(() => {});
+  let wrappers = `
+import * as queries from "../infra/kysely-sync.js";
+export function executeSqliteQuerySync(database, query) {
+  warn();
+  return queries.executeSqliteQuerySync(database, query);
+}
+export function executeSqliteQueryTakeFirstSync(database, query) {
+  warn();
+  return queries.executeSqliteQueryTakeFirstSync(database, query);
+}
+`;
+  fs.writeFileSync(file, wrappers);
+  expect(inventory(root).find((row) => row.file === relative)).toMatchObject({
+    tier: "T1",
+    calls: [expect.any(Object), expect.any(Object)],
+  });
+  expect(main(root, ["--base", "HEAD"])).toBe(0);
+  expect(log).toHaveBeenCalledWith(expect.stringContaining("raw calls: 1 -> 3"));
+  wrappers =
+    wrappers
+      .replace("export function executeSqliteQuerySync(", "function executeSqliteQuerySyncLegacy(")
+      .replace(
+        "export function executeSqliteQueryTakeFirstSync(",
+        "function executeSqliteQueryTakeFirstSyncLegacy(",
+      ) +
+    `export {
+  executeSqliteQuerySyncLegacy as executeSqliteQuerySync,
+  executeSqliteQueryTakeFirstSyncLegacy as executeSqliteQueryTakeFirstSync,
+};\n`;
+  fs.writeFileSync(file, wrappers);
+  expect(main(root, ["--base", "HEAD"])).toBe(0);
+  for (const primitive of ["executeSqliteQuerySync", "executeSqliteQueryTakeFirstSync"]) {
+    const direct = `return queries.${primitive}(database, query);`;
+    for (const altered of [
+      `queries.${primitive}(database, query); ${direct}`,
+      `${direct} ${direct}`,
+      `return queries.${primitive}(database, otherQuery);`,
+    ]) {
+      fs.writeFileSync(file, wrappers.replace(direct, altered));
+      expect(main(root, ["--base", "HEAD"]), altered).toBe(1);
+    }
+  }
+  fs.writeFileSync(file, wrappers);
+  fs.writeFileSync(path.join(root, "src/plugin-sdk/other.ts"), wrappers);
+  expect(main(root, ["--base", "HEAD"])).toBe(1);
+  fs.unlinkSync(path.join(root, "src/plugin-sdk/other.ts"));
+  git("add", ".");
+  git("commit", "-m", "exact forwarding wrappers");
+  fs.writeFileSync(file, "export {};\n");
+  fs.writeFileSync(path.join(root, "src/additional.ts"), "executeSqliteQuerySync(query);\n");
+  expect(main(root, ["--base", "HEAD"])).toBe(1);
+  expect(log).toHaveBeenCalledWith(expect.stringContaining("raw calls: 3 -> 2"));
 });

@@ -9,12 +9,10 @@ import { z } from "zod";
 import type { SessionCatalogTranscriptItem } from "../../packages/gateway-protocol/src/schema/sessions-catalog.js";
 import { readTranscriptSenderIdentity } from "../chat/sender-identity.js";
 import type { SessionTranscriptReadScope } from "../config/sessions/session-accessor.sqlite-contract.js";
-import {
-  assertCapturedSessionEntryReadSource,
-  resolveSessionEntry,
-} from "../config/sessions/session-accessor.sqlite-exact-read.js";
+import { resolveSessionEntry } from "../config/sessions/session-accessor.sqlite-exact-read.js";
 import { readSessionTranscriptHistoryEventPage } from "../config/sessions/session-accessor.sqlite-history-events.js";
 import { SessionTranscriptColdError } from "../config/sessions/session-cold-storage-state.js";
+import { assertCapturedSessionEntryReadSource } from "../config/sessions/session-entry-read-source.js";
 import { resolveSessionStorePathForScope } from "../config/sessions/session-store-path.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { redactToolPayloadText } from "../logging/redact.js";
@@ -254,14 +252,6 @@ export async function readSessionTranscriptCatalogPage(
       offset: snapshot.totalMessages - before,
       maxMessages: Math.min(before, limit + 1),
     });
-    // A source append preserves positions; a rewrite rotates displaySource and invalidates cursors.
-    if (
-      page.displaySource !== snapshot.displaySource ||
-      page.activeLeafEntryId !== snapshot.activeLeafEntryId ||
-      page.totalMessages !== snapshot.totalMessages
-    ) {
-      throw new Error("Session transcript changed during this read; retry the page.");
-    }
     const projected = projectChatDisplayMessages(page.events.map(sqliteMessageEventWithSeq), {
       maxChars: MAX_CATALOG_TEXT_CHARS,
       // Catalog assistant items contain text/model facts, not forwarded sender labels.
@@ -278,7 +268,6 @@ export async function readSessionTranscriptCatalogPage(
         : [];
     });
     const preparedSender = await prepareSessionCatalogSourceParticipantProjector(identities);
-    assertSourceCurrent();
     for (const identity of identities) {
       if (identity.type === "profile") {
         senderProjectors.set(identity.id, preparedSender);
@@ -317,10 +306,7 @@ export async function readSessionTranscriptCatalogPage(
       break;
     }
   }
-  // Later batches yield after earlier senders have already been projected.
-  for (const cohort of new Set(senderProjectors.values())) {
-    cohort.assertCurrent();
-  }
+  assertSourceCurrent();
   const nextCursor =
     before > 0 && anchor
       ? Buffer.from(

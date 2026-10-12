@@ -437,6 +437,7 @@ export function createChannelProgressDraftCompositor(params: ChannelProgressDraf
   const progressEventHandlers = createChannelProgressDraftEventHandlers({
     entry: params.entry,
     preparedItems: params.preparedItems,
+    toolIcons: params.toolIcons,
     pushLine: noteProgress,
     onTool: diffStatTracker.stageToolEvent,
     onItem: diffStatTracker.commitItemEvent,

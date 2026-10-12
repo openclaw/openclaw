@@ -2,9 +2,7 @@ import { createHash } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { consumeResponseBytes } from "@openclaw/normalization-core";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/users.js";
-import { resolveControlUiAllowedOrigins } from "../config/gateway-control-ui-origins.js";
 import { getRuntimeConfig } from "../config/io.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { resolveHostAccountAvatar } from "../infra/host-account-avatar.js";
 import { LruCache } from "../infra/lru-cache.js";
@@ -13,6 +11,7 @@ import { getOrCreatePromise } from "../shared/lazy-promise.js";
 import { createProfileAvatarReader } from "../state/user-profiles-avatar.js";
 import { formatUserProfileAvatarEtag, UserProfileNotFoundError } from "../state/user-profiles.js";
 import { parseControlUiUserAvatarPath } from "./control-ui-contract.js";
+import { setControlUiImageCorsHeaders } from "./control-ui-image-cors.js";
 import { authorizeControlUiReadRequestOrReply } from "./http-auth-utils.js";
 import { sendJson, sendMethodNotAllowed, watchClientDisconnect } from "./http-common.js";
 import { matchesHttpIfNoneMatch } from "./http-conditional.js";
@@ -30,45 +29,6 @@ const MAX_GRAVATAR_BYTES = 1_000_000;
 // Bound upstream disclosure when every earlier linked email misses.
 const MAX_GRAVATAR_EMAIL_LOOKUPS = 8;
 const GRAVATAR_MIME_TYPES = new Set(["image/gif", "image/jpeg", "image/png", "image/webp"]);
-
-function resolveAvatarCorsOrigin(req: IncomingMessage, cfg: OpenClawConfig): string | undefined {
-  const rawOrigin = typeof req.headers.origin === "string" ? req.headers.origin.trim() : "";
-  if (!rawOrigin) {
-    return undefined;
-  }
-  let origin: string;
-  try {
-    const parsed = new URL(rawOrigin);
-    if (parsed.origin !== rawOrigin || parsed.username || parsed.password) {
-      return undefined;
-    }
-    origin = parsed.origin;
-  } catch {
-    return undefined;
-  }
-  const allowed = resolveControlUiAllowedOrigins(cfg);
-  return allowed.some((candidate) => candidate.trim() === "*" || candidate.trim() === origin)
-    ? origin
-    : undefined;
-}
-
-function setAvatarCorsHeaders(
-  req: IncomingMessage,
-  res: ServerResponse,
-  cfg: OpenClawConfig,
-): boolean {
-  if (!req.headers.origin) {
-    return true;
-  }
-  const origin = resolveAvatarCorsOrigin(req, cfg);
-  if (!origin) {
-    return false;
-  }
-  res.setHeader("Access-Control-Allow-Origin", origin);
-  res.setHeader("Access-Control-Allow-Credentials", "true");
-  res.setHeader("Vary", "Origin");
-  return true;
-}
 
 type GravatarHit = {
   kind: "hit";
@@ -204,8 +164,12 @@ function sendAvatar(
   req: IncomingMessage,
   res: ServerResponse,
   avatar: { bytes?: Uint8Array; byteLength: number; mime: string; etag: string },
+  revision?: string,
 ): void {
-  const cacheControl = "private, max-age=0, must-revalidate";
+  const cacheControl =
+    revision && new URL(req.url ?? "/", "http://localhost").searchParams.get("v") === revision
+      ? "private, max-age=31536000, immutable"
+      : "private, max-age=0, must-revalidate";
   if (matchesHttpIfNoneMatch(req.headers["if-none-match"], avatar.etag)) {
     // Carry the success cache policy so a 304 does not inherit the miss-path
     // no-store and force the client to re-download an unchanged avatar.
@@ -237,7 +201,7 @@ export async function handleUserProfileAvatarHttpRequest(
   }
   const method = req.method;
   const cfg = opts.cfg ?? getRuntimeConfig();
-  const corsAllowed = setAvatarCorsHeaders(req, res, cfg);
+  const corsAllowed = setControlUiImageCorsHeaders(req, res, cfg);
   if (method === "OPTIONS") {
     if (!corsAllowed) {
       sendJson(res, 403, { ok: false, error: { type: "origin_not_allowed" } });
@@ -269,9 +233,7 @@ export async function handleUserProfileAvatarHttpRequest(
     return true;
   }
   authResult.assertCurrent();
-  // Avatars render as plain <img> against a stable, unversioned route, so a
-  // heuristically-cached 404 miss would otherwise hide a later uploaded image.
-  // Misses must never be cached; the 200 path overrides this with must-revalidate.
+  // Cached misses would hide a later uploaded image behind the unversioned route.
   res.setHeader("Cache-Control", "no-store");
   const profileId = parsed.value;
   if (!profileId) {
@@ -279,6 +241,7 @@ export async function handleUserProfileAvatarHttpRequest(
     return true;
   }
   let emails: string[];
+  let revision: string;
   try {
     const reader = createProfileAvatarReader(profileId);
     for (;;) {
@@ -298,7 +261,7 @@ export async function handleUserProfileAvatarHttpRequest(
         if (!prepared.isCurrent() || (needsBytes && !bytes)) {
           continue;
         }
-        sendAvatar(req, res, { ...uploaded, bytes: bytes?.bytes, etag });
+        sendAvatar(req, res, { ...uploaded, bytes: bytes?.bytes, etag }, etag.slice(1, -1));
         return true;
       }
       // A legacy owner tombstone must never borrow the host photo after a merge.
@@ -318,6 +281,7 @@ export async function handleUserProfileAvatarHttpRequest(
         });
         return true;
       }
+      revision = String(profile.updatedAt);
       emails = prepared.emails;
       break;
     }
@@ -380,6 +344,12 @@ export async function handleUserProfileAvatarHttpRequest(
     return true;
   }
   authResult.assertCurrent();
+  if (
+    !transientFailure &&
+    new URL(req.url ?? "/", "http://localhost").searchParams.get("v") === revision
+  ) {
+    res.setHeader("Cache-Control", "private, max-age=60");
+  }
   sendJson(res, transientFailure ? 502 : 404, {
     ok: false,
     error: { type: transientFailure ? "avatar_upstream_unavailable" : "not_found" },

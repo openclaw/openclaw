@@ -1,4 +1,7 @@
-import { notifyLlmRequestActivity } from "@openclaw/ai/internal/runtime";
+import {
+  notifyLlmRequestActivity,
+  type FirstStreamEventInternalOptions,
+} from "@openclaw/ai/internal/runtime";
 import { toErrorObject as toLintErrorObject } from "@openclaw/normalization-core/error-coercion";
 import {
   createAssistantMessageEventStream,
@@ -6,6 +9,8 @@ import {
   type AssistantMessageEventStream,
 } from "openclaw/plugin-sdk/llm";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { notifyProviderStreamOpened } from "../../../../packages/ai/src/transports/transport-stream-shared.js";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import {
   areDiagnosticsEnabledForProcess,
   setDiagnosticsEnabledForProcess,
@@ -80,6 +85,132 @@ describe("streamWithIdleTimeout", () => {
     expect(onIdleTimeout).not.toHaveBeenCalled();
   });
 
+  it.each(["acceptance", "activity"] as const)(
+    "guards a pending cloud factory after provider %s without policing local gaps",
+    async (event) => {
+      vi.useFakeTimers();
+      for (const scope of ["creation-and-gaps", "creation-only"] as const) {
+        const caller = new AbortController();
+        const created = createDeferred<AssistantMessageEventStream>();
+        const source = createAssistantMessageEventStream();
+        const onIdleTimeout = vi.fn();
+        let requestSignal: AbortSignal | undefined;
+        let accept: () => void | Promise<void> = () => {};
+        const baseFn: StreamFn = (_model, _context, options) => {
+          requestSignal = options?.signal;
+          accept = () =>
+            event === "activity"
+              ? notifyLlmRequestActivity(requestSignal)
+              : notifyProviderStreamOpened({ options, cancelStream: () => {} });
+          return created.promise;
+        };
+        const options: NonNullable<Parameters<StreamFn>[2]> & FirstStreamEventInternalOptions = {
+          signal: caller.signal,
+          firstEventTimeoutMs: 200,
+        };
+        const opening = Promise.resolve(
+          streamWithIdleTimeout(baseFn, 50, onIdleTimeout, { scope })(
+            {} as Parameters<StreamFn>[0],
+            { messages: [] },
+            options,
+          ),
+        ).catch((error: unknown) => error);
+        try {
+          await vi.advanceTimersByTimeAsync(20);
+          await accept();
+          await vi.advanceTimersByTimeAsync(49);
+          expect(onIdleTimeout).not.toHaveBeenCalled();
+          await vi.advanceTimersByTimeAsync(1);
+          if (scope === "creation-and-gaps") {
+            expect(onIdleTimeout).toHaveBeenCalledOnce();
+            expect(await opening).toBe(onIdleTimeout.mock.calls[0]?.[0]);
+            expect(requestSignal?.aborted).toBe(true);
+          } else {
+            await vi.advanceTimersByTimeAsync(500);
+            expect(onIdleTimeout).not.toHaveBeenCalled();
+            expect(requestSignal?.aborted).toBe(false);
+            created.resolve(source);
+            expect(await opening).toBe(source);
+          }
+        } finally {
+          caller.abort();
+          source.end(makeAgentAssistantMessage({ content: [], stopReason: "aborted" }));
+          created.resolve(source);
+          await opening;
+        }
+      }
+    },
+  );
+
+  it.each([false, true])(
+    "keeps the accepted deadline until the iterator watchdog takes over (consume: %s)",
+    async (consume) => {
+      vi.useFakeTimers();
+      const created = createDeferred<AssistantMessageEventStream>();
+      const source = createAssistantMessageEventStream();
+      const onIdleTimeout = vi.fn();
+      const baseFn: StreamFn = (_model, _context, options) => {
+        notifyLlmRequestActivity(options?.signal);
+        return created.promise;
+      };
+      const opening = streamWithIdleTimeout(
+        baseFn,
+        50,
+        onIdleTimeout,
+      )({} as Parameters<StreamFn>[0], { messages: [] });
+      await vi.advanceTimersByTimeAsync(20);
+      created.resolve(source);
+      const stream = await opening;
+      const iterator = stream[Symbol.asyncIterator]();
+      try {
+        await vi.advanceTimersByTimeAsync(29);
+        expect(onIdleTimeout).not.toHaveBeenCalled();
+        const next = consume ? iterator.next().catch((error: unknown) => error) : undefined;
+        if (consume) {
+          await vi.advanceTimersByTimeAsync(49);
+          expect(onIdleTimeout).not.toHaveBeenCalled();
+        }
+        await vi.advanceTimersByTimeAsync(1);
+        expect(onIdleTimeout).toHaveBeenCalledOnce();
+        const outcome = next ?? iterator.next().catch((error: unknown) => error);
+        expect(await outcome).toBe(onIdleTimeout.mock.calls[0]?.[0]);
+      } finally {
+        source.end(makeAgentAssistantMessage({ content: [], stopReason: "aborted" }));
+        await iterator.return?.();
+      }
+      await vi.advanceTimersByTimeAsync(500);
+      expect(onIdleTimeout).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("keeps one local creation deadline when an async producer returns before headers", async () => {
+    vi.useFakeTimers();
+    const created = createDeferred<AssistantMessageEventStream>();
+    const source = createAssistantMessageEventStream();
+    const onIdleTimeout = vi.fn();
+    const baseFn: StreamFn = () => created.promise;
+    const opening = streamWithIdleTimeout(baseFn, 50, onIdleTimeout, { scope: "creation-only" })(
+      {} as Parameters<StreamFn>[0],
+      { messages: [] },
+    );
+    await vi.advanceTimersByTimeAsync(40);
+    created.resolve(source);
+    const stream = await opening;
+    const next = stream[Symbol.asyncIterator]()
+      .next()
+      .catch((error: unknown) => error);
+    try {
+      await vi.advanceTimersByTimeAsync(9);
+      expect(onIdleTimeout).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(onIdleTimeout).toHaveBeenCalledOnce();
+      expect(await next).toBe(onIdleTimeout.mock.calls[0]?.[0]);
+    } finally {
+      source.end(makeAgentAssistantMessage({ content: [], stopReason: "aborted" }));
+      await next;
+    }
+  });
+
   it("records model progress only for content-bearing activity", async () => {
     vi.useFakeTimers();
     const diagnosticsEnabled = areDiagnosticsEnabledForProcess();
@@ -116,8 +247,9 @@ describe("streamWithIdleTimeout", () => {
 
   it("resets idle timer on tool activity", async () => {
     vi.useFakeTimers();
-    const baseFn: StreamFn = vi.fn((_model, _context, _options) => {
+    const baseFn: StreamFn = vi.fn((_model, _context, options) => {
       const stream = createAssistantMessageEventStream();
+      notifyLlmRequestActivity(options?.signal, false);
       setTimeout(() => {
         stream.push({ type: "text_delta", contentIndex: 0, delta: "done" });
       }, 120);

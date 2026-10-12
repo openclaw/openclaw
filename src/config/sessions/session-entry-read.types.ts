@@ -15,8 +15,8 @@ import type {
 import type { CanonicalSessionReaderContinuation } from "./session-canonical-key.js";
 import type { SessionColdArchive } from "./session-cold-storage-state.js";
 import type { CapturedSessionEntryReadSource } from "./session-entry-read-source.types.js";
-import type { SessionEntrySnapshotField } from "./session-entry-snapshots.js";
-import type { SessionMember } from "./session-sharing-store.kernel.js";
+import type { SessionEntrySnapshotField } from "./session-entry-snapshot-values.js";
+import type { SessionMember } from "./session-membership-facts.types.js";
 import type {
   SessionSourcePredicate,
   SessionSourcePredicateFacts,
@@ -37,8 +37,12 @@ export type SessionEntryReadWorkerResult = {
   kind: "session-entry-read";
   source?: CapturedSessionEntryReadSource & { databaseIdentity: string };
 } & (
-  | { entry: SessionEntry | undefined; readError?: never }
-  | { entry: undefined; readError: SessionTranscriptWorkerReadError }
+  | {
+      entry: SessionEntry | undefined;
+      readError?: never;
+      facts?: SessionExactEntriesWorkerResult;
+    }
+  | { entry: undefined; readError: SessionTranscriptWorkerReadError; facts?: never }
 );
 
 export type SessionEntryListWorkerInput = {
@@ -47,12 +51,15 @@ export type SessionEntryListWorkerInput = {
   scope: SessionEntryListScope & { cleanupSession?: string };
   expectedIdentity?: DatabasePathIdentity;
   continuation?: CanonicalSessionReaderContinuation;
+  ifRevision?: string;
 };
 
 export type SessionEntryListWorkerResult = {
   kind: "session-entry-list";
   entries: SessionEntrySummary[];
   source?: CapturedSessionEntryReadSource & { databaseIdentity: string };
+  revision?: string;
+  unchanged?: true;
 };
 
 export type SessionExactEntriesWorkerInput = {
@@ -76,8 +83,15 @@ export type SessionExactEntriesWorkerSelection =
     }
   | {
       sessionKeys?: never;
-      selection: { kind: "session-id"; sessionId: string };
-      projection: "sharing";
+      selection: { kind: "session-id"; sessionId: string; orderBy?: "updatedAt" };
+      projection: "sharing" | "full";
+    }
+  | {
+      sessionKeys?: never;
+      selection:
+        | { kind: "session-id-or-key"; sessionIdOrKey: string }
+        | { kind: "label"; label: string };
+      projection: "list";
     };
 
 export type SessionExactEntriesWorkerRequest = SessionExactEntriesWorkerSelection & {
@@ -109,6 +123,7 @@ export type SessionEntryCohortRequest = Pick<
   sessionKeys: readonly string[];
   includeAuthProfileSource?: boolean;
   runtimeTarget?: Pick<SessionTranscriptRuntimeTarget, "agentId" | "sessionId" | "sessionKey">;
+  includeColdMetadata?: boolean;
   expected?: {
     /** Native incarnation returned by this cohort, independent of the host execution claim. */
     incarnation: string;
@@ -118,7 +133,7 @@ export type SessionEntryCohortRequest = Pick<
       lifecycleRevision: string | undefined;
     }[];
   };
-  transcript?: Omit<SessionTranscriptAnchorSelection, "afterSeq"> & {
+  transcript?: Omit<SessionTranscriptAnchorSelection, "afterSeq" | "includeMessagesForRunId"> & {
     sessionKey: string;
     /** Captured logical owner; the executor still selects the physical database. */
     agentId?: string;
@@ -139,6 +154,7 @@ export type SessionExactEntriesWorkerResult = {
     identity: string;
     incarnation: string;
     filename: string;
+    canonicalPath?: string;
     birthtime?: string;
   };
   members?: Record<string, SessionMember[]>;
@@ -159,6 +175,7 @@ export type SessionExactEntriesWorkerResult = {
 
 export type SessionEntryCohortResult = SessionExactEntriesWorkerResult & {
   runtimeTarget?: SessionTranscriptRuntimeTarget;
+  coldArchives?: Array<Omit<SessionColdArchive, "archive_blob">>;
   source: NonNullable<SessionExactEntriesWorkerResult["source"]>;
   databaseIdentity: NonNullable<SessionExactEntriesWorkerResult["databaseIdentity"]>;
   authProfileSource?: boolean;

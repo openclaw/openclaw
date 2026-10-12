@@ -343,38 +343,4 @@ describe("subagent registry known-run reads", () => {
       });
     });
   });
-
-  it("refreshes physical rows replaced or deleted after another reader cached their aliases", async () => {
-    await withPersistedReads(async () => {
-      const previous = createRun("previous", { swarmRunId: "collector" });
-      saveSubagentRegistryToSqlite(new Map([[previous.runId, previous]]));
-      await prepareSubagentSessionListReadCache();
-
-      // A direct store write models another process without publishing local cache updates.
-      const replacement = createRun("replacement", {
-        swarmRunId: "collector",
-        createdAt: 300,
-        swarmRequesterSessionKey: "agent:other:main",
-      });
-      saveSubagentRegistryToSqlite(new Map([[replacement.runId, replacement]]));
-      const api = createReadApi();
-      const prepared = await api.prepareSubagentRunsByRunIds(["collector"]);
-      expect(
-        prepared.consume((selected) => {
-          expect(selected.get("collector")).toMatchObject({
-            runId: "replacement",
-            swarmRequesterSessionKey: "agent:other:main",
-          });
-        }),
-      ).toEqual({ ready: true, value: undefined });
-
-      saveSubagentRegistryToSqlite(new Map());
-      const deleted = await api.prepareSubagentRunsByRunIds(["collector"]);
-      expect(
-        deleted.consume((selected) => {
-          expect(selected.size).toBe(0);
-        }),
-      ).toEqual({ ready: true, value: undefined });
-    });
-  });
 });

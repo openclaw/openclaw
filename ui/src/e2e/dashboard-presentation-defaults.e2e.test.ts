@@ -40,8 +40,21 @@ async function openDashboard(
     expandedLink?: boolean;
     face?: "chat" | "dashboard";
     sessionRow?: ControlUiSessionFixture;
+    personalPin?: boolean;
   } = {},
 ) {
+  if (options.personalPin) {
+    await page.addInitScript(
+      ({ storageKey, entry }) => {
+        const settings = JSON.parse(localStorage.getItem(storageKey) ?? "{}");
+        localStorage.setItem(storageKey, JSON.stringify({ ...settings, sidebarEntries: [entry] }));
+      },
+      {
+        storageKey: controlUiBundledSettingsStorageKey(suite.server.baseUrl),
+        entry: `session:${key}`,
+      },
+    );
+  }
   const gateway = await installMockGateway(page, {
     sessionKey: key,
     sessions: [options.sessionRow ?? row(presentation)],
@@ -126,11 +139,10 @@ suite.define(() => {
     await suite.withPage({ viewport: { width: 1440, height: 1000 } }, async ({ page }) => {
       const gateway = await openDashboard(page, "expanded", {
         face: "chat",
-        sessionRow: { ...row("expanded"), boardFace: undefined, pinned: true },
+        sessionRow: { ...row("expanded"), boardFace: undefined },
+        personalPin: true,
       });
-      const sidebarLink = page.locator(
-        `[data-sidebar-entry="session:${key}"] .sidebar-recent-session__link`,
-      );
+      const sidebarLink = page.locator(`.sidebar-rail [data-sidebar-entry="session:${key}"] a`);
       await sidebarLink.waitFor();
       expect(await sidebarLink.getAttribute("href")).toContain("/chat/main/");
       await page.keyboard.press("Control+Shift+Alt+G");
@@ -160,7 +172,13 @@ suite.define(() => {
       await page.screenshot({ path: path.join(suite.artifactDir, "08-opening-default-saved.png") });
       await page.locator(".chat-header-session-menu__trigger").click();
       await waitForLayoutMenuClosed(page);
-      await page.getByRole("link", { name: "Home", exact: true }).click();
+      // This fixture can read Sessions but does not advertise Home or session creation.
+      await page.locator('[data-navigation-view="pages"]').click();
+      await page
+        .locator(".sidebar-pages")
+        .getByRole("link", { name: "Sessions", exact: true })
+        .click();
+      await page.waitForURL((url) => url.pathname === "/sessions");
       await page.locator("openclaw-board-view").waitFor({ state: "hidden" });
       await sidebarLink.click();
       await page.waitForURL((url) => url.pathname.includes("/dashboard/main/"));
@@ -176,9 +194,10 @@ suite.define(() => {
             face: "chat",
             readOnly: true,
             sessionRow: savedRow,
+            personalPin: true,
           });
           const readerLink = reader.locator(
-            `[data-sidebar-entry="session:${key}"] .sidebar-recent-session__link`,
+            `.sidebar-rail [data-sidebar-entry="session:${key}"] a`,
           );
           await readerLink.waitFor();
           expect(await readerLink.getAttribute("href")).toContain("/dashboard/main/");

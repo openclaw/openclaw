@@ -4,7 +4,9 @@ import { afterAll, afterEach, beforeAll, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import { claimOpenClawStateOwnership } from "../state/openclaw-state-ownership-operations.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import {
   readChannelPairingStateSnapshot,
@@ -70,14 +72,10 @@ it.each([
     seed(channel, operation === "missing-approve" ? [] : [request("alice", "alpha", createdAt)]);
     const before = readChannelPairingStateSnapshot(channel, env);
     let currentStage: workerAdmission.SqliteWorkerAdmissionRequest["stage"] | undefined;
-    const original = workerAdmission.createSqliteWorkerOperationAdmission;
-    vi.spyOn(workerAdmission, "createSqliteWorkerOperationAdmission").mockImplementation(
-      (admit, attachment) =>
-        original((admission, grant) => {
-          currentStage = admission.stage;
-          admit(admission, grant);
-        }, attachment),
-    );
+    probe.admission(workerAdmission, (admission, grant, admit) => {
+      currentStage = admission.stage;
+      admit(admission, grant);
+    });
     const refusal = new Error("owner authority revoked");
     const assertCurrent = () => {
       if (currentStage === refusedStage) {
@@ -104,16 +102,12 @@ it("settles an accepted approval when authority is revoked after the commit gran
   const channel = "accepted-approval";
   seed(channel, [request("alice")]);
   let revoked = false;
-  const original = workerAdmission.createSqliteWorkerOperationAdmission;
-  vi.spyOn(workerAdmission, "createSqliteWorkerOperationAdmission").mockImplementation(
-    (admit, attachment) =>
-      original((admission, grant) => {
-        admit(admission, grant);
-        if (admission.stage === "commit") {
-          revoked = true;
-        }
-      }, attachment),
-  );
+  probe.admission(workerAdmission, (admission, grant, admit) => {
+    admit(admission, grant);
+    if (admission.stage === "commit") {
+      revoked = true;
+    }
+  });
   const result = approveChannelPairingCode({
     channel,
     code: "ABCDEFGH",
@@ -134,49 +128,41 @@ it("settles an accepted approval when authority is revoked after the commit gran
 });
 
 it.each(["selected", "missing"] as const)(
-  "retains native write authority for a %s host approval after preparation",
+  "refuses a %s host approval after a committed ownership claim",
   async (selection) => {
     const channel = `supervision-${selection}`;
-    seed(channel, selection === "selected" ? [request("alice")] : []);
-    const before = readChannelPairingStateSnapshot(channel, env);
-    const callerEnv = { ...env, OPENCLAW_SUPERVISOR_MODE: undefined };
-    await listChannelPairingRequests(channel, callerEnv);
-    const claim = () => {
-      database.db.prepare("INSERT INTO config_machine_state VALUES (?, ?, ?)").run(
-        "gateway.supervision",
-        JSON.stringify({
-          version: 1,
-          mode: "external",
-          managerId: "pairing-fixture",
-          claimedAt: 1,
-        }),
-        1,
-      );
+    const callerEnv = {
+      ...env,
+      OPENCLAW_STATE_DIR: path.join(root, channel),
+      OPENCLAW_SUPERVISOR_MODE: undefined,
     };
+    const externalEnv = { ...callerEnv, OPENCLAW_SUPERVISOR_MODE: "external" };
+    writeChannelPairingStateSnapshot(
+      channel,
+      { version: 1, requests: selection === "selected" ? [request("alice")] : [], allowFrom: {} },
+      callerEnv,
+    );
+    const before = readChannelPairingStateSnapshot(channel, callerEnv);
+    await listChannelPairingRequests(channel, callerEnv);
+    const claim = () => claimOpenClawStateOwnership("pairing-fixture", { env: externalEnv });
     if (selection === "missing") {
       claim();
     }
-    try {
-      await expect(
-        approveChannelPairingCode({
-          channel,
-          code: "ABCDEFGH",
-          env: callerEnv,
-          pairingAdapter: {
-            idLabel: "peer",
-            resolveApprovalStoreEntry: ({ id }) => {
-              claim();
-              return id;
-            },
+    await expect(
+      approveChannelPairingCode({
+        channel,
+        code: "ABCDEFGH",
+        env: callerEnv,
+        pairingAdapter: {
+          idLabel: "peer",
+          resolveApprovalStoreEntry: ({ id }) => {
+            claim();
+            return id;
           },
-        }),
-      ).rejects.toThrow(/externally supervised by pairing-fixture/);
-    } finally {
-      database.db
-        .prepare("DELETE FROM config_machine_state WHERE state_key = ?")
-        .run("gateway.supervision");
-    }
-    expect(readChannelPairingStateSnapshot(channel, env)).toEqual(before);
+        },
+      }),
+    ).rejects.toThrow(/externally supervised by pairing-fixture/);
+    expect(readChannelPairingStateSnapshot(channel, externalEnv)).toEqual(before);
   },
 );
 

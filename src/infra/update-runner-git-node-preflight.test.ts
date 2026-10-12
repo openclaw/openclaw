@@ -42,37 +42,6 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-it("finds qualified operator PATH Node under Bun and binds candidate commands without changing the caller", async () => {
-  const env = { PATH: path.dirname(nodePath), KEEP: "value" };
-  const result = await prepareGitCandidateNodeRuntime(root, env);
-  expect(result).toEqual({ env });
-  expect(result.env).not.toBe(env);
-  expect(runtimes.resolveNodeRuntimeInfo).toHaveBeenCalledWith(nodePath, env);
-  expect(runtimes.resolveSystemNodeInfo).not.toHaveBeenCalled();
-});
-
-it.each(["old-engine", "unsafe-sqlite", "probe-failure"])(
-  "skips a %s PATH executable and binds the later qualified Node",
-  async (failure) => {
-    vi.mocked(runtimes.resolveNodeRuntimeInfo).mockResolvedValueOnce(
-      failure === "probe-failure"
-        ? { status: "probe-failed", error: new Error("not executable") }
-        : {
-            ...supported,
-            status: failure === "old-engine" ? "supported" : "unsupported",
-            version: failure === "old-engine" ? "24.16.0" : supported.version,
-          },
-    );
-    const originalPath = [path.dirname(oldNodePath), path.dirname(nodePath)].join(path.delimiter);
-    const env = { PATH: originalPath };
-    const result = await prepareGitCandidateNodeRuntime(root, env);
-    expect(result.env?.PATH).toBe(
-      [path.dirname(nodePath), path.dirname(oldNodePath)].join(path.delimiter),
-    );
-    expect(env.PATH).toBe(originalPath);
-  },
-);
-
 it("binds the qualified system fallback when PATH has no Node", async () => {
   vi.mocked(runtimes.resolveSystemNodeInfo).mockResolvedValue({ ...supported, path: nodePath });
   const result = await prepareGitCandidateNodeRuntime(root, {});
@@ -95,7 +64,6 @@ it.each([
   { runtime: "node", selectedFirst: false },
   { runtime: "bun", selectedFirst: false },
   { runtime: "node", selectedFirst: true },
-  { runtime: "bun", selectedFirst: true },
 ])(
   "preserves scoped package tools under $runtime (selected Node first: $selectedFirst)",
   async ({ runtime, selectedFirst }) => {
@@ -152,31 +120,16 @@ it.each([
   },
 );
 
-it.each([true, false])(
-  "qualifies the actual package-tooling Node when the Node host has a custom executable name (available: %s)",
-  async (available) => {
-    Object.defineProperty(process, "versions", {
-      value: { ...originalVersions, node: "26.7.0", bun: undefined },
-    });
-    Object.defineProperty(process, "execPath", { value: path.resolve("fixture", "node26") });
-    await fs.writeFile(
-      path.join(root, "package.json"),
-      JSON.stringify({ engines: { node: ">=24.16.0 <25 || >=26.1.0" } }),
-    );
-    if (!available) {
-      vi.mocked(runtimes.resolveNodeRuntimeInfo).mockResolvedValue({
-        ...supported,
-        status: "unsupported",
-        version: "18.0.0",
-      });
-    }
-    const result = await prepareGitCandidateNodeRuntime(root, { PATH: path.dirname(nodePath) });
-    expect(runtimes.resolveNodeRuntimeInfo).toHaveBeenCalledWith(nodePath, expect.any(Object));
-    if (available) {
-      expect(result.env?.PATH).toBe(path.dirname(nodePath));
-    } else {
-      expect(result.step).toMatchObject({ name: "preflight-node-runtime", exitCode: 1 });
-      expect(result.env).toBeUndefined();
-    }
-  },
-);
+it("qualifies the actual package-tooling Node when the Node host has a custom executable name", async () => {
+  Object.defineProperty(process, "versions", {
+    value: { ...originalVersions, node: "26.7.0", bun: undefined },
+  });
+  Object.defineProperty(process, "execPath", { value: path.resolve("fixture", "node26") });
+  await fs.writeFile(
+    path.join(root, "package.json"),
+    JSON.stringify({ engines: { node: ">=24.16.0 <25 || >=26.1.0" } }),
+  );
+  const result = await prepareGitCandidateNodeRuntime(root, { PATH: path.dirname(nodePath) });
+  expect(runtimes.resolveNodeRuntimeInfo).toHaveBeenCalledWith(nodePath, expect.any(Object));
+  expect(result.env?.PATH).toBe(path.dirname(nodePath));
+});

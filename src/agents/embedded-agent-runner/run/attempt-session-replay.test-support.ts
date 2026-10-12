@@ -31,7 +31,7 @@ import { SettingsManager } from "../../sessions/settings-manager.js";
 import {
   clearEmbeddedSessionPromptStates,
   createToolResultPromptProjectionState,
-  getEmbeddedSessionPromptState,
+  retainEmbeddedSessionPromptState,
   persistToolResultProjections,
 } from "../session-prompt-state.js";
 import { submitEmbeddedAttemptPrompt } from "./attempt-prompt-submit.js";
@@ -116,6 +116,7 @@ export async function withInterruptedTurn(
     compactedInput?: boolean;
     selectedOwner?: boolean;
     sharedStore?: boolean;
+    admittedReceipt?: boolean;
   } = {},
 ) {
   await withOpenClawTestState({ label: "interrupted-keyed-replay" }, async (state) => {
@@ -224,6 +225,16 @@ export async function withInterruptedTurn(
     closeOpenClawAgentDatabasesForTest();
     const recorder = makeRecorder();
     await recorder.stageApproved!({ runId, assertCurrent: () => {} });
+    if (options.admittedReceipt) {
+      recorder.markRuntimePersisted(
+        previous.getPersistedMessage?.(),
+        previous.getAdmissionReceipt(),
+        {
+          appended: false,
+        },
+      );
+      await recorder.waitForRuntimePersistence();
+    }
     const attempt = {
       config: {},
       contextTokenBudget: 8000,
@@ -357,7 +368,8 @@ export async function withReplaySession(
       sessionManager: prepared.sessionManager,
       setActiveSessionSystemPrompt: () => {},
     });
-    const promptState = getEmbeddedSessionPromptState(target.sessionId);
+    using promptStateLease = retainEmbeddedSessionPromptState(target.sessionId);
+    const promptState = promptStateLease.state;
     const submit = () =>
       submitEmbeddedAttemptPrompt({
         attempt,

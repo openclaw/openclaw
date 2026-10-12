@@ -28,56 +28,18 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-it("captures configured registration before awaiting the fallback factory", async () => {
-  const registry = createEmptyPluginRegistry();
-  const fallbackGate = createDeferred();
-  const calls: string[] = [];
-  const factory =
-    (name: string): ContextEngineFactory =>
-    () => {
-      calls.push(name);
-      return new LegacyContextEngine();
-    };
-  registerContextEngineInRegistry(
-    registry,
-    "legacy",
-    async () => {
-      await fallbackGate.promise;
-      return new LegacyContextEngine();
-    },
-    "core",
-  );
-  registerContextEngineInRegistry(registry, "selected", factory("original"), "plugin:fixture");
-  const pending = withPluginRuntimeRegistryScope(registry, () =>
-    resolveLogicalTurnContextEngines({ plugins: { slots: { contextEngine: "selected" } } }),
-  );
-  registerContextEngineInRegistry(registry, "selected", factory("replacement"), "plugin:fixture", {
-    allowSameOwnerRefresh: true,
-  });
-  fallbackGate.resolve();
-  const resolved = await pending;
-  expect(calls).toEqual(["original"]);
-  await resolved.configured.engine.dispose?.();
-  await resolved.fallback.engine.dispose?.();
-});
-
 it.each([
-  "selection",
-  "factory",
   "factory-tail",
   "abort-factory-tail",
   "dispose",
   "dispose-tail",
   "abort-tail",
   "parent-abort",
-  "invalid",
   "invalid-tail",
   "invalid-factory-tail",
-  "factory-error",
   "factory-cleanup-error",
   "closing-factory",
   "last-user",
-  "raw",
   "raw-view",
   "initialization",
   "initialization-error",
@@ -93,9 +55,7 @@ it.each([
   const plugin = { id: "engine-source-fixture", source: path.join(directory, "plugin.cjs") };
   donor.plugins.push(createPluginRecord(plugin));
   supplyingView.plugins.push(createPluginRecord(plugin));
-  if (mode !== "raw") {
-    source.attach(donor);
-  }
+  source.attach(donor);
   if (mode !== "raw-view") {
     viewSource.attach(supplyingView);
   }
@@ -137,10 +97,7 @@ it.each([
   class NativeEngine extends LegacyContextEngine {
     #read = read;
     override readonly info = {
-      id:
-        mode === "invalid" || mode === "invalid-tail" || mode === "invalid-factory-tail"
-          ? ""
-          : "native-engine",
+      id: mode === "invalid-tail" || mode === "invalid-factory-tail" ? "" : "native-engine",
       name: "Native engine",
     };
     override async assemble(params: Parameters<ContextEngine["assemble"]>[0]) {
@@ -158,7 +115,7 @@ it.each([
         cleanupSignal = getAsyncWorkSignal();
         await factoryWorker;
       }
-      if (mode === "dispose" || mode === "invalid" || mode === "invalid-factory-tail") {
+      if (mode === "dispose" || mode === "invalid-factory-tail") {
         await disposeGate.promise;
       }
       if (mode === "dispose-tail" || mode === "invalid-tail") {
@@ -195,10 +152,10 @@ it.each([
       }
     }
     factoryStarted.resolve();
-    if (mode === "factory" || mode === "closing-factory" || mode === "factory-cleanup-error") {
+    if (mode === "closing-factory" || mode === "factory-cleanup-error") {
       await factoryGate.promise;
     }
-    if (mode === "factory-tail" || mode === "factory-error" || mode === "closing-factory") {
+    if (mode === "factory-tail" || mode === "closing-factory") {
       const tail = trackAsyncWork(async () => {
         await factoryTail.promise;
         read();
@@ -220,11 +177,7 @@ it.each([
       tails.push(factoryWorker);
     }
     read();
-    if (
-      mode === "factory-error" ||
-      mode === "closing-factory" ||
-      mode === "factory-cleanup-error"
-    ) {
+    if (mode === "closing-factory" || mode === "factory-cleanup-error") {
       throw new Error("original factory failure");
     }
     return new NativeEngine();
@@ -305,23 +258,18 @@ it.each([
       await first;
       expect(replacement).not.toHaveBeenCalled();
     }
-    if (mode === "selection") {
-      await source.release();
-    }
     await factoryStarted.promise;
     expect(signals.every((signal) => !signal.aborted)).toBe(true);
-    if (mode === "invalid" || mode === "invalid-factory-tail") {
+    if (mode === "invalid-factory-tail") {
       await disposeStarted.promise;
     }
     if (mode === "last-user") {
       await first;
       await start();
     }
-    if (mode !== "raw") {
-      await source.release();
-      expect.soft(database.isOpen).toBe(true);
-      expect.soft(sourceDisposals).toBe(0);
-    }
+    await source.release();
+    expect.soft(database.isOpen).toBe(true);
+    expect.soft(sourceDisposals).toBe(0);
     if (mode === "closing-factory") {
       let parentDrained = false;
       pending.push(
@@ -343,19 +291,12 @@ it.each([
       disposeGate.resolve();
     }
     factoryGate.resolve();
-    if (mode === "invalid") {
-      disposeGate.resolve();
-    }
     const lease = await first;
     expect(contexts.every((value) => value === path.join(directory, "staged-agent"))).toBe(true);
-    if (
-      mode === "factory-error" ||
-      mode === "closing-factory" ||
-      mode === "factory-cleanup-error"
-    ) {
+    if (mode === "closing-factory" || mode === "factory-cleanup-error") {
       expect(lease.degradedReason).toBe("original factory failure");
       factoryTail.resolve();
-    } else if (mode === "invalid" || mode === "invalid-tail" || mode === "invalid-factory-tail") {
+    } else if (mode === "invalid-tail" || mode === "invalid-factory-tail") {
       expect(lease.degradedReason).toContain("missing info.id");
     } else {
       await lease.engine.assemble({ sessionId: "fixture-session", messages: [] });
@@ -409,21 +350,16 @@ it.each([
     const settledTails = await Promise.allSettled(tails);
     expect.soft(settledTails.every((tail) => tail.status === "fulfilled")).toBe(true);
     await parent.drain();
-    if (mode !== "raw") {
-      await sourceDisposed.promise;
-      expect(sourceDisposals).toBe(1);
-      expect(database.isOpen).toBe(false);
-    } else {
-      expect(database.isOpen).toBe(true);
-      expect(sourceDisposals).toBe(0);
-    }
+    await sourceDisposed.promise;
+    expect(sourceDisposals).toBe(1);
+    expect(database.isOpen).toBe(false);
     if (mode === "factory-cleanup-error") {
       expect.soft(cleanupScope.outcome).toBe("uncertain");
     }
     expect(reads.length).toBeGreaterThan(0);
     expect.soft(reads.every((value) => value === 42)).toBe(true);
     expect(engineDisposals).toBe(
-      mode === "factory-error" || mode === "closing-factory" || mode === "factory-cleanup-error"
+      mode === "closing-factory" || mode === "factory-cleanup-error"
         ? 0
         : mode === "last-user"
           ? 2

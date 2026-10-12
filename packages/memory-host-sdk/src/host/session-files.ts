@@ -12,6 +12,7 @@ import {
   redactSensitiveText,
 } from "./openclaw-runtime-io.js";
 import {
+  assertBoundIncognitoMemorySyncAccess,
   captureIncognitoMemoryReader,
   DREAMING_NARRATIVE_RUN_PREFIX,
   isDreamingNarrativeSessionStoreKey,
@@ -488,6 +489,13 @@ export function statSessionEntrySync(
 ): SessionFileState | null {
   const sqliteIdentity = resolveBuildSessionSqliteIdentity(absPath, opts);
   if (sqliteIdentity) {
+    if (!transcriptStats) {
+      assertBoundIncognitoMemorySyncAccess(
+        sqliteIdentity,
+        "statSessionEntrySync",
+        "buildSessionEntry",
+      );
+    }
     const stats = transcriptStats ?? readTranscriptStatsSync(sqliteIdentity);
     return sqliteSessionFileState(absPath, sqliteIdentity, stats, opts.updatedAtMs);
   }
@@ -586,7 +594,6 @@ export async function buildSessionEntryFromSnapshot(
   snapshot: SessionEntrySnapshot,
   assertCurrent: () => void,
 ): Promise<SessionFileEntry | null> {
-  assertCurrent();
   const { onTranscriptMessage, ...options } = opts;
   const result = await buildSessionEntryFromSource(
     absPath,
@@ -597,7 +604,6 @@ export async function buildSessionEntryFromSnapshot(
             onTranscriptMessage(message, observedAt) {
               assertCurrent();
               onTranscriptMessage(message, observedAt);
-              assertCurrent();
             },
           }
         : {}),

@@ -82,6 +82,57 @@ describe("renderAssistantRequestFailureCopy", () => {
     },
   );
 
+  it("renders loading facts consistently in live replies and saved history without provider prose", () => {
+    const assistant = makeAssistantMessageFixture({
+      model: "local/model",
+      errorCode: "model_load_failed",
+      errorMessage: "PRIVATE_PROVIDER_DETAIL",
+      errorBody: JSON.stringify({
+        requestedContextLength: 49152,
+        message: "PRIVATE_PROVIDER_DETAIL",
+        nextStep: "PRIVATE_INJECTION",
+      }),
+    });
+    const expected = String.raw`Could not load model "local\/model" with 49152 context tokens. Wait for loading to finish on the model server, then retry, or lower the model's configured context size.`;
+    expect(formatUserFacingAssistantErrorText(assistant)).toBe(expected);
+    expect(renderRecordedAssistantFailureCopy(assistant)).toBe(expected);
+  });
+
+  it("bounds, redacts, and escapes loading model labels", () => {
+    const assistant = makeAssistantMessageFixture({
+      model: `local/[model]\nAuthorization: Bearer sk-test ${"x".repeat(800)}`,
+      errorCode: "model_load_failed",
+      errorMessage: "PRIVATE_DETAIL",
+      errorBody: '{"requestedContextLength":49152}',
+    });
+    const live = formatUserFacingAssistantErrorText(assistant);
+    expect(renderRecordedAssistantFailureCopy(assistant)).toBe(live);
+    expect(live).toContain(String.raw`local\/\[model\]`);
+    expect(live).not.toContain("sk-test");
+    expect(live).not.toContain("PRIVATE_DETAIL");
+    expect(live).not.toContain("\n");
+    expect(live.length).toBeLessThan(500);
+  });
+
+  it.each([
+    { errorCode: "unknown", errorBody: '{"requestedContextLength":49152}' },
+    { errorCode: "model_load_failed", errorBody: "not json" },
+    ...[undefined, 0, -1, 1.5, "49152", Number.MAX_SAFE_INTEGER + 1].map(
+      (requestedContextLength) => ({
+        errorCode: "model_load_failed",
+        errorBody: JSON.stringify({ requestedContextLength }),
+      }),
+    ),
+  ])("keeps malformed or unrecognized loading facts private: %j", (error) => {
+    const assistant = makeAssistantMessageFixture({
+      ...target,
+      ...error,
+      errorMessage: "PRIVATE_DETAIL",
+    });
+    expect(formatUserFacingAssistantErrorText(assistant)).toBe(runFailure);
+    expect(renderRecordedAssistantFailureCopy(assistant)).toBeUndefined();
+  });
+
   it("preserves an incomplete tool-call diagnosis without exposing provider text", () => {
     const error = makeAssistantMessageFixture({
       ...target,
@@ -140,6 +191,23 @@ describe("renderAssistantRequestFailureCopy", () => {
   });
 
   it.each([
+    "Unknown parameter: 'reasoning_effort'",
+    'Unsupported field: "reasoning_effort"',
+    "got an unexpected keyword argument 'reasoning_effort'",
+    "'reasoning_effort' is not supported for this model",
+  ])("gives the custom-model opt-out for rejected reasoning controls: %s", (detail) => {
+    const assistant = makeAssistantMessageFixture({
+      provider: "custom-local",
+      model: "reasoning-model",
+      errorMessage: `400 ${JSON.stringify({ error: { type: "invalid_request_error", message: detail } })}`,
+    });
+    const expected =
+      "This model endpoint does not support reasoning_effort. Set compat.supportsReasoningEffort: false on this model in your custom provider configuration and try again.";
+    expect(formatUserFacingAssistantErrorText(assistant)).toBe(expected);
+    expect(renderRecordedAssistantFailureCopy(assistant)).toBe(expected);
+  });
+
+  it.each([
     { errorMessage: "Invalid service_tier argument", errorType: "invalid_request_error" },
     {
       errorMessage: "Invalid service_tier argument",
@@ -160,6 +228,31 @@ describe("renderAssistantRequestFailureCopy", () => {
     const expected = String.raw`LLM request rejected: Invalid service\_tier argument`;
     expect(formatUserFacingAssistantErrorText(assistant)).toBe(expected);
     expect(renderRecordedAssistantFailureCopy(assistant)).toBe(expected);
+  });
+
+  it.each(["400 ", "400 Bad Request: "])(
+    "explains an Ollama embedding model rejection in live and saved replies after %s",
+    (prefix) => {
+      const errorBody = JSON.stringify({ error: '"bge-m3:latest" does not support chat' });
+      const assistant = makeAssistantMessageFixture({
+        provider: "ollama",
+        model: "bge-m3:latest",
+        errorMessage: prefix + errorBody,
+        errorBody,
+      });
+      const expected = String.raw`bge\-m3\:latest is an embedding model and cannot chat; pick a chat model with /model (or remove it from models.providers.ollama.models).`;
+      expect(formatUserFacingAssistantErrorText(assistant)).toBe(expected);
+      expect(renderRecordedAssistantFailureCopy(assistant)).toBe(expected);
+    },
+  );
+
+  it("keeps other native Ollama capability errors distinct from embedding models", () => {
+    const assistant = makeAssistantMessageFixture({
+      provider: "ollama",
+      model: "chat-only",
+      errorMessage: `400 ${JSON.stringify({ error: '"chat-only" does not support tools' })}`,
+    });
+    expect(formatUserFacingAssistantErrorText(assistant)).not.toContain("is an embedding model");
   });
 
   it.each([

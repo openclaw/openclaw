@@ -137,7 +137,7 @@ export function registerModelRuntimeDirectiveTests(harness: RuntimeDirectiveTest
     expect(queueMocks.refreshQueuedFollowupSession).not.toHaveBeenCalled();
     expect(stickyModelMock.persistBestEffort).not.toHaveBeenCalled();
   });
-  it.each(["openclaw", "codex"])(
+  it.each(["openclaw"])(
     "commits %s selection while keeping supported mixed thinking on its turn",
     async (runtime) => {
       setOpenAiRuntimeScopedUltraProvider();

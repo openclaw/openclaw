@@ -10,10 +10,10 @@ import type { IncognitoSessionFacts } from "./session-incognito-facts.types.js";
 
 export type IncognitoComputeScope = {
   assertCurrent(this: void): void;
-  execute<Key extends keyof IncognitoComputeOperations>(command: {
-    type: Key;
-    input: IncognitoComputeOperations[Key]["input"];
-  }): Promise<IncognitoComputeOperations[Key]["output"]>;
+  execute<Key extends keyof IncognitoComputeOperations>(
+    command: { type: Key; input: IncognitoComputeOperations[Key]["input"] },
+    signal?: AbortSignal,
+  ): Promise<IncognitoComputeOperations[Key]["output"]>;
 };
 
 /** Cleanup owns only resources captured before dispatch; it never grants data access. */
@@ -26,6 +26,7 @@ export function withIncognitoCompute<T, Claim extends { assertCurrent(this: void
   execute<Key extends keyof IncognitoComputeOperations>(
     command: { type: Key; input: IncognitoComputeOperations[Key]["input"] },
     observeFacts: (facts: readonly IncognitoSessionFacts[]) => void,
+    signal?: AbortSignal,
   ): Promise<IncognitoComputeOperations[Key]["output"]>;
   cleanup: IncognitoComputeScope["execute"];
   operation(scope: IncognitoComputeScope): Promise<T>;
@@ -100,8 +101,9 @@ export function withIncognitoCompute<T, Claim extends { assertCurrent(this: void
       assertCurrent();
       const result = await params.operation({
         assertCurrent,
-        execute(command) {
+        execute(command, signal) {
           assertCurrent();
+          signal?.throwIfAborted();
           const captured = structuredClone(command);
           const input = captured.input;
           if (
@@ -118,7 +120,7 @@ export function withIncognitoCompute<T, Claim extends { assertCurrent(this: void
           if (isIncognitoComputeCommand(captured)) {
             ownResources(captured);
           }
-          const work = params.execute(captured, observeFacts).then((value) => {
+          const work = params.execute(captured, observeFacts, signal).then((value) => {
             assertCurrent();
             disclose();
             assertCurrent();

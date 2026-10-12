@@ -59,10 +59,6 @@ export abstract class ChatPaneReplyNavigation extends ChatPaneSession {
     return cached?.message ? undefined : (cached?.status ?? "pending");
   };
 
-  protected readonly openReplyMessage = (messageId: string): void => {
-    void this.navigateToReplyMessage(messageId);
-  };
-
   protected currentReplyNavigationId(sessionKey: string): string | null {
     return this.replyNavigationSessionKey &&
       areUiSessionKeysEquivalent(this.replyNavigationSessionKey, sessionKey)
@@ -92,7 +88,7 @@ export abstract class ChatPaneReplyNavigation extends ChatPaneSession {
     this.replyNavigationId = null;
   }
 
-  private async navigateToReplyMessage(messageId: string): Promise<void> {
+  protected readonly openReplyMessage = async (messageId: string): Promise<void> => {
     const state = this.state;
     if (!state || parseCatalogSessionKey(state.sessionKey)) {
       return;
@@ -147,5 +143,5 @@ export abstract class ChatPaneReplyNavigation extends ChatPaneSession {
         this.requestUpdate();
       }
     }
-  }
+  };
 }

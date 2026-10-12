@@ -55,6 +55,8 @@ be repaired later to add that platform.
 When backport discovery is requested or part of planning, read
 [backport discovery](backport-discovery.md), freeze the baseline and main SHA,
 and obtain approval for the categorized ledger before mutating the branch.
+Include its selected-contract closure and CI-optimization dispositions; recheck
+closure against the final candidate before freezing or starting qualification.
 Backports stay optional and operator-selected. An unspecified target means the
 newest open release branch. Extended-stable preparation additionally uses
 [its backport procedure](extended-stable-backports.md).

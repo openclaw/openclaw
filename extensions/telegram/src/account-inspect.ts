@@ -6,7 +6,10 @@ import {
   normalizeSecretInputString,
 } from "openclaw/plugin-sdk/secret-input";
 import { canResolveEnvSecretRefInReadOnlyPath } from "openclaw/plugin-sdk/secret-ref-readonly";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asNonArrayRecord,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   listTelegramAccountIds,
   mergeTelegramAccountConfig,
@@ -83,13 +86,7 @@ function inspectTokenValue(params: {
 }
 
 function hasConfiguredTelegramAccounts(cfg: OpenClawConfig): boolean {
-  const accounts = cfg.channels?.telegram?.accounts;
-  return (
-    Boolean(accounts) &&
-    typeof accounts === "object" &&
-    !Array.isArray(accounts) &&
-    Object.keys(accounts).length > 0
-  );
+  return Object.keys(asNonArrayRecord(cfg.channels?.telegram?.accounts)).length > 0;
 }
 
 function inspectTelegramAccountPrimary(params: {

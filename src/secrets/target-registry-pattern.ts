@@ -183,15 +183,7 @@ export function expandPathTokens(
       if (!isRecord(node) || (options.requireOwnKeys && !Object.hasOwn(node, token.value))) {
         return;
       }
-      if (isLeaf) {
-        out.push({
-          segments: [...segments, token.value],
-          captures,
-          value: node[token.value],
-        });
-        return;
-      }
-      if (!Object.hasOwn(node, token.value)) {
+      if (!isLeaf && !Object.hasOwn(node, token.value)) {
         return;
       }
       walk(node[token.value], tokenIndex + 1, [...segments, token.value], captures);

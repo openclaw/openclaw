@@ -22,11 +22,7 @@ import {
 } from "./chat-outbox-drain.ts";
 import { chatOutboxOwner } from "./chat-outbox-owner.ts";
 import { chatProviderReviewRow } from "./chat-provider-review.ts";
-import {
-  admitQueuedMessageForSession,
-  readQueuedMessageById,
-  updateQueuedMessage,
-} from "./chat-queue.ts";
+import { readQueuedMessageById, updateQueuedMessage } from "./chat-queue.ts";
 import type { ChatHost } from "./chat-send-contract.ts";
 import { chatOutboxDrainDependencies, deliverChatQueueItem } from "./chat-send-delivery.ts";
 import { canSendVolatileQueueItem, reconnectSafeQueuedSendState } from "./chat-send-queue-state.ts";
@@ -221,7 +217,7 @@ export async function retryQueuedChatMessage(
       ...captureChatOutboxAdmission(host, located.scope.sessionKey, located.scope.agentId),
       scope: located.scope,
     };
-    if (!admitQueuedMessageForSession(host, admission, item)) {
+    if (chatOutboxOwner(host).admit(host, admission, item) !== "admitted") {
       if (
         wasVolatile &&
         !item.localCommandName &&

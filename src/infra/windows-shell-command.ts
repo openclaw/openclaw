@@ -111,9 +111,10 @@ const POWERSHELL_FLAGS =
   /(?:-(?!c(?:ommand)?\b|-command\b)\w+(?:\s+(?!-)(?:"[^"]*(?:""[^"]*)*"|'[^']*(?:''[^']*)*'|\S+))?\s+)*/i
     .source;
 const POWERSHELL_INVOKE_PREFIX = `^(?:powershell|pwsh)(?:\\.exe)?\\s+${POWERSHELL_FLAGS}(?:-command|-c|--command)\\s+`;
-const POWERSHELL_DOUBLE_QUOTED = new RegExp(`${POWERSHELL_INVOKE_PREFIX}"(.+)"$`, "is");
-const POWERSHELL_SINGLE_QUOTED = new RegExp(`${POWERSHELL_INVOKE_PREFIX}'(.+)'$`, "is");
-const POWERSHELL_UNQUOTED = new RegExp(`${POWERSHELL_INVOKE_PREFIX}(.+)$`, "is");
+const POWERSHELL_INVOKE_PATTERNS = ['"', "'", ""].map((quote) => ({
+  quote,
+  pattern: new RegExp(`${POWERSHELL_INVOKE_PREFIX}${quote}(.+)${quote}$`, "is"),
+}));
 
 function stripWindowsShellWrapperOnce(command: string): string {
   const psCallMatch = command.match(/^&\s+(.+)$/s);
@@ -121,19 +122,12 @@ function stripWindowsShellWrapperOnce(command: string): string {
     return psCallMatch[1];
   }
 
-  const psInvokeMatch = command.match(POWERSHELL_DOUBLE_QUOTED);
-  if (psInvokeMatch?.[1]) {
-    return psInvokeMatch[1].replace(/""/g, '"');
+  for (const { quote, pattern } of POWERSHELL_INVOKE_PATTERNS) {
+    const match = command.match(pattern);
+    if (match?.[1]) {
+      return quote ? match[1].replaceAll(quote + quote, quote) : match[1];
+    }
   }
-  const psInvokeSingleQuote = command.match(POWERSHELL_SINGLE_QUOTED);
-  if (psInvokeSingleQuote?.[1]) {
-    return psInvokeSingleQuote[1].replace(/''/g, "'");
-  }
-  const psInvokeNoQuote = command.match(POWERSHELL_UNQUOTED);
-  if (psInvokeNoQuote?.[1]) {
-    return psInvokeNoQuote[1];
-  }
-
   // `cmd /c` stays intact because PowerShell execution would change cmd.exe
   // builtin semantics; callers need explicit trust for cmd itself.
   return command;

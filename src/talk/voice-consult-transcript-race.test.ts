@@ -10,10 +10,10 @@ import {
 import { runWithSessionTranscriptReadFence } from "../config/sessions/session-transcript-read-fence.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.js";
+import { ensureClientVoiceAgentSessionEntry } from "./client-voice-session-write.js";
 import {
   appendRelayVoiceTranscript,
   createOrResumeClientVoiceSession,
-  ensureClientVoiceAgentSessionEntry,
 } from "./client-voice-session.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -93,7 +93,7 @@ afterEach(async () => {
 it("keeps the voice transcript from failing an in-flight agent consult", async () => {
   const { appendConsultReply, scope, sessionKey, storePath } =
     await prepareConsultTurn("voice-consult-relay");
-  const voiceSessionId = createOrResumeClientVoiceSession({
+  const voiceSessionId = await createOrResumeClientVoiceSession({
     agentId,
     sessionKey,
     origin: "relay",

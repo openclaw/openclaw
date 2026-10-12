@@ -11,6 +11,7 @@ import type {
   SqliteWorkerStore,
 } from "../../infra/sqlite-worker-contract.js";
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import * as workerStore from "../../infra/sqlite-worker-store.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -24,9 +25,9 @@ import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
 import {
   registerSessionPendingInputOwner,
   releaseSessionPendingInputOwner,
-  type SessionPendingInputOwner,
 } from "./session-accessor.sqlite-pending-inputs.js";
 import { readPendingInputHistoryInDatabase } from "./session-pending-input-history.kernel.js";
+import type { SessionPendingInputOwner } from "./session-pending-input-owner.types.js";
 
 it("serves empty pending history from its counted snapshot in one data read", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
@@ -220,18 +221,13 @@ it.each(["transaction", "commit"] as const)(
         finish: () => releaseSessionPendingInputOwner(owner),
       };
       let registered = false;
-      const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
-      const spy = vi
-        .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
-        .mockImplementation((callback, attachment) =>
-          createAdmission((request, grant) => {
-            if (request.stage === phase && !registered) {
-              registerSessionPendingInputOwner(owner);
-              registered = true;
-            }
-            callback(request, grant);
-          }, attachment),
-        );
+      const spy = probe.admission(workerAdmission, (request, grant, callback) => {
+        if (request.stage === phase && !registered) {
+          registerSessionPendingInputOwner(owner);
+          registered = true;
+        }
+        callback(request, grant);
+      });
       const hostSql = observeHostDataSql();
       try {
         const read = listSessionPendingInputs(scope);

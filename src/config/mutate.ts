@@ -89,7 +89,10 @@ import {
 } from "./runtime-write-application.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "./types.js";
 import { validateConfigObjectWithPlugins } from "./validation.js";
-import { createConfigWriteAuthorityGuard } from "./write-authority.js";
+import {
+  composeConfigWriteAssertions,
+  createConfigWriteAuthorityGuard,
+} from "./write-authority.js";
 import {
   captureConfigWriteLockGuard,
   markActiveConfigMutationPath,
@@ -275,10 +278,7 @@ function mergeConfigMutationWriteOptions(
   // Caller authority narrows the captured destination; it must never replace
   // that ownership check through retries and post-write validation.
   if (capturedGuard && callerGuard && capturedGuard !== callerGuard) {
-    merged.assertConfigPathForWrite = () => {
-      capturedGuard();
-      callerGuard();
-    };
+    merged.assertConfigPathForWrite = composeConfigWriteAssertions(capturedGuard, callerGuard);
   } else if (capturedGuard) {
     merged.assertConfigPathForWrite = capturedGuard;
   }
@@ -748,6 +748,8 @@ async function tryWriteIncludeOwnedConfigMutation(params: {
                 configPath: params.snapshot.path,
                 snapshot: refreshedSnapshot,
                 sourceConfig: refreshedSnapshot.sourceConfig,
+                previousSourceConfig: params.snapshot.sourceConfig,
+                writtenSourceConfig: runtimeConfigToWrite,
                 runtimeConfig: refreshedSnapshot.runtimeConfig,
                 persistedHash,
                 deferRuntimeActivation,

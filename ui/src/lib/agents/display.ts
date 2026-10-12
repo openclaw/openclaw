@@ -136,12 +136,10 @@ export function resolveAgentConfig(config: Record<string, unknown> | null, agent
 /** Resolves the effective skill allowlist, including inherited agent defaults. */
 export function resolveAgentSkillsFilter(config: Record<string, unknown> | null, agentId: string) {
   const resolved = resolveAgentConfig(config, agentId);
-  if (Array.isArray(resolved.entry?.skills)) {
-    return normalizeStringEntries(resolved.entry.skills);
-  }
-  return Array.isArray(resolved.defaults?.skills)
-    ? normalizeStringEntries(resolved.defaults.skills)
-    : undefined;
+  const skills = Array.isArray(resolved.entry?.skills)
+    ? resolved.entry.skills
+    : resolved.defaults?.skills;
+  return Array.isArray(skills) ? normalizeStringEntries(skills) : undefined;
 }
 
 export type AgentContext = {

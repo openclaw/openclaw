@@ -126,6 +126,28 @@ sidebarTitle: "Troubleshooting"
 
   </Accordion>
 
+  <Accordion title="Repeated tool errors stop the turn">
+    OpenClaw stops after three consecutive identical failures for the same tool
+    and arguments, including repeated unknown tool IDs. This protection is always
+    active; enabling `tools.loopDetection` is not required.
+
+    On Ollama 0.40.1, some model templates can cause the server to mistake the
+    `<tool_call>` marker for Tool Search's `tool_call` function. OpenClaw avoids
+    this collision with transport-only tool aliases, so Tool Search can remain
+    enabled. Execution and session history keep the original tool names; raw
+    provider requests may show names such as `openclaw_tool_call`.
+
+    This translation covers native Ollama and the Ollama plugin's identified
+    OpenAI-compatible chat-completions route. Other providers are unchanged.
+    Custom Ollama templates with different markers may need separate diagnosis.
+
+    Check the arguments in the recorded error. If the model repeatedly invents
+    tool names or cannot use the exposed schemas, switch to a model with native
+    tool calling and start a new turn. Changed errors and successful retries
+    reset the count. See [Tool-loop detection](/tools/loop-detection).
+
+  </Accordion>
+
   <Accordion title="Kimi or GLM returns garbled symbols">
     Hosted Kimi/GLM responses that are long, non-linguistic symbol runs are
     treated as a failed provider call rather than a successful reply, so

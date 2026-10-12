@@ -117,7 +117,6 @@ describe("recorded plugin trust diagnostics", () => {
   });
 
   it.each([
-    { name: "legacy npm spec", override: {}, reason: "trusted-official", trusted: true },
     {
       name: "official install through a symlinked state root",
       symlinkedStateRoot: true,
@@ -131,8 +130,6 @@ describe("recorded plugin trust diagnostics", () => {
       trusted: false,
       repair: true,
     },
-    { name: "missing record", missing: true, reason: "record-missing", trusted: false },
-    { name: "path install", override: { source: "path" }, reason: "origin-path", trusted: false },
     {
       name: "missing provenance",
       override: { spec: undefined },
@@ -206,7 +203,6 @@ describe("recorded plugin trust diagnostics", () => {
     packageName?: string;
     version?: string;
     override?: Partial<PluginInstallRecord>;
-    missing?: boolean;
     symlinkedStateRoot?: boolean;
     reason: string;
     trusted: boolean;
@@ -216,7 +212,6 @@ describe("recorded plugin trust diagnostics", () => {
     "inspection and registration agree for $name",
     async ({
       override,
-      missing,
       symlinkedStateRoot,
       reason,
       trusted,
@@ -265,7 +260,7 @@ describe("recorded plugin trust diagnostics", () => {
         };
         await refreshPersistedInstalledPluginIndex({
           reason: "source-changed",
-          installRecords: missing ? {} : { [pluginId]: install },
+          installRecords: { [pluginId]: install },
         });
         const config = {
           plugins: {

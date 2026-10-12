@@ -57,6 +57,14 @@ behaviors:
 Relative catalog cache TTLs start when a successful load completes. Cache hits
 preserve that deadline, and explicit absolute provider deadlines remain unchanged.
 Pending loads retain their initial expiry so stalled work can be replaced.
+An explicit refresh through the prepared catalog owner bypasses completed
+response-cache entries only for the keys acquired by that request. Repeated
+reads within the same acquisition share the refreshed value; concurrent callers
+share pending work. Ordinary acquisition keeps its existing cache lifetime.
+
+Passive model-list reads that wait for a configuration replacement resume against
+the newly committed catalog and configuration. They do not retry with the retired
+configuration. Exact runtime acquisitions remain bound to their requested configuration.
 
 Bundled providers set `discoveryMode: "strict"` in their catalog options.
 This code option keeps successful empty results empty and reports failed
@@ -88,6 +96,16 @@ maps never appear in public `providerOutcomes`. Missing, failed, stale, or
 mismatched observations leave support unknown. This metadata does not authorize
 execution or guarantee upstream fulfillment.
 
+A `ready` outcome from an account-scoped subscription listing may include
+private `listedModelIds: string[]` provenance: every model id the response
+returned, including hidden rows. It never appears in public `providerOutcomes`.
+When present, the picker treats a model's subscription route as not entitled
+for that account if the id is absent, unless another usable credential class
+serves the model. An empty array is authoritative. The listing applies only to
+the credential that made it: the outcome's `profileId`, or non-profile auth
+when omitted. Another account's listing leaves entitlement unknown. Omit the
+field when the listing fails or does not describe account entitlement.
+
 Public metadata requests declare `authentication: "none"` in discovery
 options. The prepared request then has no credential or profile identity;
 its cache key is independent of the configured inference credential.
@@ -105,6 +123,18 @@ separate cache identities. Advisory calls still retain only nonempty results.
 Custom live builders can use `runLiveProviderCatalog` at their catalog hook
 to report successful acquisition and convert acquisition errors into outcomes.
 Returning provider configuration alone does not establish a live discovery outcome.
+
+Catalog hooks should omit `contextWindow` when the provider does not report it;
+keep a reported `contextTokens` prompt limit separately. Cached catalogs preserve
+that omission. Runtime construction supplies an estimate and marks it with
+`contextWindowSource: "synthetic"`; dynamic runtime resolvers may mark their own
+unknown-model estimates the same way. This marker is runtime-only, never config
+or persisted catalog metadata. Accepted account discovery can replace that
+estimate for the same provider,
+exact model ID, and transport API (and endpoint, when the fallback binds one).
+Do not mark curated static limits or authored caps as synthetic. Failed discovery
+keeps the estimate unless the catalog owner can retain the same account's inventory.
+
 For compatibility, nonempty rows returned by a legacy catalog hook without an
 outcome survive provider-wide failures under the same credentials. This does not
 establish a successful discovery origin or retain unrelated configured and
@@ -283,10 +313,14 @@ The private `createUpstreamProviderCatalog` helper keeps this snapshot lifecycle
 owner. Supply the trusted seed, provider routes, metadata and model-list
 endpoints, discovery and starter-model audit labels, static-entry eligibility,
 and any model decoration. An optional
-`upstreamSeed` controls which seed lifecycle facts survive an upstream refresh.
+`upstreamSeed` controls which seed lifecycle facts survive an upstream refresh,
+and an optional `projectRows` replaces the default selection of listed rows
+(`projectProviderCatalogSnapshotRows`) when the plugin admits listed IDs the
+metadata does not describe. Model-list requests carry the provider's attribution
+headers from the same owner inference uses.
 The owner exposes `getSnapshot`, `refreshMetadata`, `buildStaticProvider`, and
 `buildLiveProvider`; credentials belong to each build call. Live builds refresh
-metadata before deriving static eligibility and intersecting advertised IDs.
+metadata before deriving static eligibility and projecting advertised IDs.
 Metadata acquisition failure retains the previous snapshot; model-list failures
 and empty results remain strict. `refreshMetadata` returns `undefined` when the
 feed lacks the provider, so explicit model preparation cannot mistake retained

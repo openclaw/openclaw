@@ -2,6 +2,8 @@ import { getReplyPayloadMetadata, type ReplyPayload } from "../../auto-reply/rep
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getAgentRunContext } from "../../infra/agent-run-registry.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
+import { markChatAbortTerminalOutcome } from "../chat-abort-lifecycle-internal.js";
+import type { ChatAbortControllerEntry } from "../chat-abort.types.js";
 import { projectChatDisplayMessage } from "../chat-display-projection.js";
 import { capLiveAssistantText } from "../live-chat-projector.js";
 import type { GatewayBroadcastOpts } from "../server-broadcast-types.js";
@@ -111,6 +113,10 @@ type ChatTerminal =
       errorKind?: "timeout" | "state_contention";
     };
 
+type ChatTerminalBroadcastParams = ChatBroadcastParams & {
+  terminalEntry: Pick<ChatAbortControllerEntry, "terminalOutcomeObserved"> | undefined;
+};
+
 type ChatFrame = ChatTerminal | { state: "delta"; text: string };
 
 function broadcastChatFrame(
@@ -200,13 +206,14 @@ export function broadcastChatDelta(
   );
 }
 
-export function broadcastChatTerminal(params: ChatBroadcastParams & ChatTerminal): void {
+export function broadcastChatTerminal(params: ChatTerminalBroadcastParams & ChatTerminal): void {
+  markChatAbortTerminalOutcome(params.terminalEntry);
   broadcastChatFrame(params);
   params.context.agentRunSeq.delete(params.runId);
 }
 
 export function broadcastChatFinal(
-  params: ChatBroadcastParams & { message?: Record<string, unknown> },
+  params: ChatTerminalBroadcastParams & { message?: Record<string, unknown> },
 ): void {
   broadcastChatTerminal({ ...params, state: "final" });
 }
@@ -244,7 +251,7 @@ export function broadcastSideResult(params: {
 }
 
 export function broadcastChatError(
-  params: ChatBroadcastParams & Omit<Extract<ChatTerminal, { state: "error" }>, "state">,
+  params: ChatTerminalBroadcastParams & Omit<Extract<ChatTerminal, { state: "error" }>, "state">,
 ): void {
   broadcastChatTerminal({ ...params, state: "error" });
 }

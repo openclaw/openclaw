@@ -189,23 +189,20 @@ function sourceMatchesCopy(
   expectedSourceIdentity?: DatabaseFileIdentity,
 ): boolean {
   const source = openPinnedFile(sourcePath, expectedSourceIdentity);
-  let copy: number | undefined;
   try {
-    copy = fs.openSync(copyPath, "r");
-    if (!fs.fstatSync(copy).isFile()) {
-      return false;
-    }
-    const equal = sameFileContentsSync(source.descriptor, copy);
-    assertPinnedIdentityUnchanged(source);
-    return equal;
-  } finally {
+    const copy = fs.openSync(copyPath, "r");
     try {
-      if (copy !== undefined) {
-        fs.closeSync(copy);
+      if (!fs.fstatSync(copy).isFile()) {
+        return false;
       }
+      const equal = sameFileContentsSync(source.descriptor, copy);
+      assertPinnedIdentityUnchanged(source);
+      return equal;
     } finally {
-      fs.closeSync(source.descriptor);
+      fs.closeSync(copy);
     }
+  } finally {
+    fs.closeSync(source.descriptor);
   }
 }
 
@@ -252,6 +249,15 @@ function rollbackJournalReferencesSuperJournal(journalPath: string): boolean {
   }
 }
 
+function syncPrivateSnapshot(snapshotPath: string): void {
+  const descriptor = fs.openSync(snapshotPath, "r+");
+  try {
+    fs.fsyncSync(descriptor);
+  } finally {
+    fs.closeSync(descriptor);
+  }
+}
+
 function recoverPrivateJournalCopy(snapshotPath: string): void {
   if (rollbackJournalReferencesSuperJournal(`${snapshotPath}-journal`)) {
     throw new Error(
@@ -268,12 +274,7 @@ function recoverPrivateJournalCopy(snapshotPath: string): void {
     snapshot.close();
   }
   fs.rmSync(`${snapshotPath}-journal`, { force: true });
-  const descriptor = fs.openSync(snapshotPath, "r+");
-  try {
-    fs.fsyncSync(descriptor);
-  } finally {
-    fs.closeSync(descriptor);
-  }
+  syncPrivateSnapshot(snapshotPath);
 }
 
 function publishPreparedCopy(directory: string): PreparedSqliteReadOnlyLocation {
@@ -417,15 +418,13 @@ async function copyPreparedLocation(
       const { sourcePath, targetPath, expectedSourceIdentity } = step.value;
       const source = openPinnedFile(sourcePath, expectedSourceIdentity);
       try {
-        try {
-          await copySqliteFile(sourcePath, targetPath, source.identity);
-        } catch (error) {
-          assertPinnedIdentityUnchanged(source);
-          throw error;
-        }
-        assertPinnedIdentityUnchanged(source);
+        await copySqliteFile(sourcePath, targetPath, source.identity);
       } finally {
-        fs.closeSync(source.descriptor);
+        try {
+          assertPinnedIdentityUnchanged(source);
+        } finally {
+          fs.closeSync(source.descriptor);
+        }
       }
     } catch (error) {
       step = steps.throw(error);
@@ -434,6 +433,14 @@ async function copyPreparedLocation(
     step = steps.next();
   }
   return step.value;
+}
+
+function preparationCleanupError(errors: unknown[], operation: string): AggregateError {
+  return createSqliteLifecycleAggregateError(
+    errors,
+    `${operation} and cleanup failed: ${coerceErrorMessage(errors[0])}`,
+    errors[0],
+  );
 }
 
 async function createStableReadOnlyCopy(
@@ -453,11 +460,7 @@ async function createStableReadOnlyCopy(
       errors.push(cleanupError),
     );
     if (!removed) {
-      throw createSqliteLifecycleAggregateError(
-        errors,
-        `SQLite snapshot preparation and cleanup failed: ${coerceErrorMessage(error)}`,
-        error,
-      );
+      throw preparationCleanupError(errors, "SQLite snapshot preparation");
     }
     throw error;
   }
@@ -497,12 +500,7 @@ export async function createOnlineReadOnlyBackup(
     } finally {
       snapshot.close();
     }
-    const descriptor = fs.openSync(snapshotPath, "r+");
-    try {
-      fs.fsyncSync(descriptor);
-    } finally {
-      fs.closeSync(descriptor);
-    }
+    syncPrivateSnapshot(snapshotPath);
     return publishPreparedCopy(tempDir);
   } catch (error) {
     const stagingError = sqliteSnapshotStagingError(tempDir, error, false, pathname);
@@ -511,11 +509,7 @@ export async function createOnlineReadOnlyBackup(
       errors.push(cleanupError),
     );
     if (!removed) {
-      throw createSqliteLifecycleAggregateError(
-        errors,
-        `SQLite online backup and cleanup failed: ${coerceErrorMessage(stagingError)}`,
-        stagingError,
-      );
+      throw preparationCleanupError(errors, "SQLite online backup");
     }
     throw stagingError;
   }
@@ -649,8 +643,16 @@ export async function inspectSqliteSchemaHeaderInProcess(
   pathname: string,
   stagingRoot?: string,
   agentSchemaVersionForOwnership?: number,
+  preserveSourceArtifacts = false,
 ) {
   const canonicalPath = fs.realpathSync.native(pathname);
+  if (preserveSourceArtifacts) {
+    return readSqliteSchemaHeaderFromSnapshot(
+      await prepareSqliteReadOnlyCopyInProcess(canonicalPath, stagingRoot),
+      undefined,
+      agentSchemaVersionForOwnership,
+    );
+  }
   const mode = readSourceJournalMode(canonicalPath);
   const sidecars = readSourceSidecars(canonicalPath);
   if (mode !== "wal" || (sidecars.wal && sidecars.shm)) {
@@ -714,11 +716,14 @@ export async function prepareSqliteReadOnlyLocationFromOwnedDatabase(
   signal?: AbortSignal,
   cleanupMode?: "async",
 ): Promise<PreparedSqliteReadOnlyLocation> {
-  signal?.throwIfAborted();
-  assertCurrent();
-  if (!database.isOpen || database.isTransaction) {
-    throw new Error("SQLite inspection requires an open owner outside a transaction");
-  }
+  const assertReady = () => {
+    signal?.throwIfAborted();
+    assertCurrent();
+    if (!database.isOpen || database.isTransaction) {
+      throw new Error("SQLite inspection requires an open owner outside a transaction");
+    }
+  };
+  assertReady();
   const directory = await createSqliteSnapshotStagingDirectory(
     undefined,
     false,
@@ -726,11 +731,7 @@ export async function prepareSqliteReadOnlyLocationFromOwnedDatabase(
     cleanupMode === "async",
   );
   try {
-    signal?.throwIfAborted();
-    assertCurrent();
-    if (!database.isOpen || database.isTransaction) {
-      throw new Error("SQLite inspection requires an open owner outside a transaction");
-    }
+    assertReady();
     const location = path.join(directory, "database.sqlite.partial");
     await retainSnapshotWork(backupNodeSqliteDatabase(database, location));
     signal?.throwIfAborted();
@@ -742,11 +743,7 @@ export async function prepareSqliteReadOnlyLocationFromOwnedDatabase(
       errors.push(cleanupError),
     );
     if (!removed && cleanupMode === "async") {
-      throw createSqliteLifecycleAggregateError(
-        errors,
-        `Owned SQLite snapshot preparation and cleanup failed: ${coerceErrorMessage(error)}`,
-        error,
-      );
+      throw preparationCleanupError(errors, "Owned SQLite snapshot preparation");
     }
     throw error;
   }

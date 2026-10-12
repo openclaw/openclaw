@@ -152,72 +152,53 @@ function operatorApprovalReceiptIdentity(
 function projectOperatorApprovalReceipt(
   record: OperatorApprovalRecord,
   context: OperatorApprovalReceiptContext,
+  linkState: OperatorApprovalExecutionLinkState,
 ): DecisionReceiptV1 {
+  const exact = linkState === "exact";
   const allowed = record.status === "allowed";
   const sourceRef = record.resolutionRef;
   return {
     ...operatorApprovalReceiptIdentity(sourceRef, context),
+    ...(exact
+      ? {}
+      : {
+          receiptId: `approval-unlinked:${createHash("sha256")
+            .update(sourceRef, "utf8")
+            .update("\0", "utf8")
+            .update(context.contextId, "utf8")
+            .digest("base64url")}`,
+        }),
     occurredAt: record.resolvedAtMs ?? record.updatedAtMs,
     action: {
       family: record.kind,
       operation: "approval",
-      summary: allowed
-        ? `A ${record.kind} approval allowed the requested action.`
-        : `A ${record.kind} approval stopped the requested action.`,
+      summary: !exact
+        ? `A terminal ${record.kind} approval shares this run correlation, but its retained binding does not match this exact execution.`
+        : allowed
+          ? `A ${record.kind} approval allowed the requested action.`
+          : `A ${record.kind} approval stopped the requested action.`,
     },
-    decision: {
-      outcome: allowed ? "allowed" : "denied",
-      reasonCode: operatorApprovalReasonCode(record),
-    },
+    decision: exact
+      ? { outcome: allowed ? "allowed" : "denied", reasonCode: operatorApprovalReasonCode(record) }
+      : { outcome: "unknown", reasonCode: `operator_approval_execution_link_${linkState}` },
     enforcement: {
-      coverageState: "enforced",
-      evaluatorRef: `operator-approval:${record.resolver?.kind ?? "system"}`,
+      coverageState: exact ? "enforced" : "unknown",
+      ...(exact ? { evaluatorRef: `operator-approval:${record.resolver?.kind ?? "system"}` } : {}),
       policyRefs: operatorApprovalPolicyRefs(record),
-      grantRefs: allowed ? [`operator-approval-grant:${sourceRef}`] : [],
+      grantRefs: exact && allowed ? [`operator-approval-grant:${sourceRef}`] : [],
       contextFieldsUsed: ["contextId", "executionId", "runId"],
     },
-    missingEvidence: [],
-    remediation: allowed ? [] : [operatorApprovalRemediation(record)],
-  };
-}
-
-function projectUnlinkedOperatorApprovalReceipt(
-  record: OperatorApprovalRecord,
-  context: OperatorApprovalReceiptContext,
-  linkState: Exclude<OperatorApprovalExecutionLinkState, "exact">,
-): DecisionReceiptV1 {
-  const sourceRef = record.resolutionRef;
-  const receiptId = `approval-unlinked:${createHash("sha256")
-    .update(sourceRef, "utf8")
-    .update("\0", "utf8")
-    .update(context.contextId, "utf8")
-    .digest("base64url")}`;
-  return {
-    ...operatorApprovalReceiptIdentity(sourceRef, context),
-    receiptId,
-    occurredAt: record.resolvedAtMs ?? record.updatedAtMs,
-    action: {
-      family: record.kind,
-      operation: "approval",
-      summary: `A terminal ${record.kind} approval shares this run correlation, but its retained binding does not match this exact execution.`,
-    },
-    decision: {
-      outcome: "unknown",
-      reasonCode: `operator_approval_execution_link_${linkState}`,
-    },
-    enforcement: {
-      coverageState: "unknown",
-      policyRefs: operatorApprovalPolicyRefs(record),
-      grantRefs: [],
-      contextFieldsUsed: ["contextId", "executionId", "runId"],
-    },
-    missingEvidence: ["decision.execution_link"],
-    remediation: [
-      {
-        code: "inspect_exact_approval_binding",
-        text: "Treat this approval only as run-correlated; inspect its retained execution binding before trusting attribution.",
-      },
-    ],
+    missingEvidence: exact ? [] : ["decision.execution_link"],
+    remediation: exact
+      ? allowed
+        ? []
+        : [operatorApprovalRemediation(record)]
+      : [
+          {
+            code: "inspect_exact_approval_binding",
+            text: "Treat this approval only as run-correlated; inspect its retained execution binding before trusting attribution.",
+          },
+        ],
   };
 }
 
@@ -630,10 +611,7 @@ export function pageOperatorApprovalReceiptsForRunInDatabase(
         receipt = projectCorruptOperatorApprovalReceipt(snapshot, params.context);
       } else {
         const linkState = operatorApprovalExecutionLinkState(row, params.context);
-        receipt =
-          linkState === "exact"
-            ? projectOperatorApprovalReceipt(record, params.context)
-            : projectUnlinkedOperatorApprovalReceipt(record, params.context, linkState);
+        receipt = projectOperatorApprovalReceipt(record, params.context, linkState);
       }
     }
     return { receipt, selectorId: operatorApprovalSelectorId(snapshot) };

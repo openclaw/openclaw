@@ -4,7 +4,7 @@ import { isDeeplyFrozenPlainData } from "../shared/immutable-data.js";
 import type {
   PreparedModelCatalogWorkerInput,
   PreparedModelWorkerRequest,
-} from "./prepared-model-catalog-worker.js";
+} from "./prepared-model-catalog-worker.types.js";
 import { fingerprintPreparedRuntimeFacts } from "./prepared-model-runtime.facts.js";
 
 export function fingerprintPreparedModelWorkerRequest(

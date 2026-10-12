@@ -10,6 +10,7 @@ import {
   SessionEntryNavigation,
 } from "../../config/sessions/session-entry-navigation.js";
 import type { SessionEntryCohortRequest } from "../../config/sessions/session-entry-read.types.js";
+import { targetDiscoveryLane } from "../../config/sessions/session-transcript-worker-resources.js";
 import {
   captureSessionTranscriptTargetBinding,
   sameSessionTranscriptTargetBinding,
@@ -53,6 +54,11 @@ import type {
 /** @internal Fresh payload adoption and metadata consumption share one history admission. */
 export const sessionManagerReloadTranscriptCohort = Symbol.for(
   "openclaw.session-manager.reload-transcript-cohort",
+);
+
+/** @internal Initial hydration and its synchronous replay decision share one admission. */
+export const sessionManagerOpenTranscriptCohort = Symbol.for(
+  "openclaw.session-manager.open-transcript-cohort",
 );
 
 export class SessionManagerCore extends SessionEntryNavigation<SessionEntry> {
@@ -104,7 +110,7 @@ export class SessionManagerCore extends SessionEntryNavigation<SessionEntry> {
     }
   }
 
-  /** @deprecated Runtime callers should await setSessionTargetAsync. */
+  /** @deprecated Runtime callers should await setSessionTargetAsync; removed in the next Plugin SDK major. */
   setSessionTarget(target: SessionTranscriptRuntimeTarget): void {
     prepareSessionManagerSync("setSessionTarget", target, this);
     this.setSessionTargetSync(target);
@@ -148,15 +154,14 @@ export class SessionManagerCore extends SessionEntryNavigation<SessionEntry> {
   ): Promise<boolean> {
     this.assertTranscriptViewAvailable();
     const capturedTarget = captureSessionTranscriptTargetBinding(target);
-    const retarget =
-      !preserveCwd && !sameSessionTranscriptTargetBinding(capturedTarget, this.persistenceTarget);
-    const hydration = prepareSessionManagerHydration(
-      capturedTarget,
-      complete ? undefined : this.boundedContextLimits,
+    const hydration = prepareSessionManagerHydration(capturedTarget, {
+      limits: complete ? undefined : this.boundedContextLimits,
       signal,
-      this,
-      retarget,
-    );
+      manager: this,
+      retarget:
+        !preserveCwd && !sameSessionTranscriptTargetBinding(capturedTarget, this.persistenceTarget),
+      lane: preserveCwd ? targetDiscoveryLane : undefined,
+    });
     if (cohort && !hydration.readCohort) {
       return false;
     }
@@ -356,7 +361,7 @@ export class SessionManagerCore extends SessionEntryNavigation<SessionEntry> {
     };
   }
 
-  /** @deprecated Runtime callers should await reloadPersistedTranscriptAsync. */
+  /** @deprecated Runtime callers should await reloadPersistedTranscriptAsync; removed in the next Plugin SDK major. */
   reloadPersistedTranscript(): void {
     prepareSessionManagerSync("reloadPersistedTranscript", this.persistenceTarget, this);
     this.reloadPersistedTranscriptSync();

@@ -1,7 +1,8 @@
+import type { AgentDeletionWorkerAuthority } from "../state/agent-deletion-worker.types.js";
 import { assertClawPackageLifecycleWriteArtifact } from "../state/claw-package-lifecycle-lease.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
+import type { OpenClawStateWorkerLeaseContext } from "../state/openclaw-state-lease-context.js";
 import { runWithOpenClawStateLeaseWorker } from "../state/openclaw-state-lease-worker-operation.js";
-import type { OpenClawStateLeaseContext } from "../state/openclaw-state-lease.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { executeOpenClawStateWorker } from "../state/openclaw-state-worker-store.js";
 import type {
@@ -13,7 +14,8 @@ export async function claimClawPackageRefStatus(
   ref: PersistedClawPackageRef,
   status: ClawPackageRefStatus,
   options: OpenClawStateDatabaseOptions & {
-    lease: OpenClawStateLeaseContext;
+    lease: OpenClawStateWorkerLeaseContext;
+    deletion?: AgentDeletionWorkerAuthority;
     nowMs?: number;
     assertCurrent?: () => void;
   },
@@ -25,6 +27,21 @@ export async function claimClawPackageRefStatus(
   const capturedRef = structuredClone(ref);
   const nowMs = options.nowMs;
   assertClawPackageLifecycleWriteArtifact(options.lease, capturedRef);
+  if (options.deletion) {
+    return await options.deletion.runWithWorker(
+      (scope, deletion, additionalLeases) => {
+        const lease = additionalLeases[0];
+        if (!lease) {
+          throw new Error("Claw package write lost its additional lease");
+        }
+        return scope.execute({
+          type: "clawProvenance.packageStatus",
+          input: { ref: capturedRef, status, nowMs, lease, deletion },
+        });
+      },
+      { additionalLeases: [options.lease], assertCurrent: options.assertCurrent },
+    );
+  }
   const assertCaller = options.assertCurrent?.bind(options);
   const context = captureOpenClawStateWorkerContext({
     ...options,

@@ -102,19 +102,15 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
     params.onAssistantDelta({ text: assistantText, delta, sessionId, usage });
   };
 
-  const flushPendingClaudeAssistantText = () => {
+  const flushPendingClaudeText = (kind: "assistant" | "commentary") => {
     if (!pendingClaudeText) {
       return;
     }
-    const delta = pendingClaudeText;
+    const text = kind === "commentary" ? pendingClaudeText.trim() : pendingClaudeText;
     pendingClaudeText = "";
-    appendAssistantText(delta);
-  };
-
-  const flushPendingClaudeCommentaryText = () => {
-    const text = pendingClaudeText.trim();
-    pendingClaudeText = "";
-    if (text) {
+    if (kind === "assistant") {
+      appendAssistantText(text);
+    } else if (text) {
       params.onCommentaryText?.(text);
     }
   };
@@ -362,7 +358,7 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
     if (parsed.type === "result") {
       finishTaggedReasoningMessage();
       if (classifyClaudeCommentary) {
-        flushPendingClaudeAssistantText();
+        flushPendingClaudeText("assistant");
       }
     }
 
@@ -500,9 +496,9 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
       }
       if (classifyClaudeCommentary) {
         if (isToolUseBlockStart) {
-          flushPendingClaudeCommentaryText();
+          flushPendingClaudeText("commentary");
         } else if (evt.type === "content_block_start" || evt.type === "message_stop") {
-          flushPendingClaudeAssistantText();
+          flushPendingClaudeText("assistant");
         }
       }
     }
@@ -543,14 +539,19 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
         onToolResult: params.onToolResult,
       });
     }
-    if (claudeStreamJson || params.onToolUseStart || params.onToolResult) {
+    if (
+      claudeStreamJson ||
+      params.onToolUseStart ||
+      params.onToolInputDelta ||
+      params.onToolResult
+    ) {
       const onToolUseStart =
         claudeStreamJson && parsed.type === "assistant"
           ? (tool: Parameters<NonNullable<typeof params.onToolUseStart>>[0]) => {
               sawToolUseSinceText = true;
               currentMessageHadToolUse = true;
               if (classifyClaudeCommentary) {
-                flushPendingClaudeCommentaryText();
+                flushPendingClaudeText("commentary");
               }
               params.onToolUseStart?.(tool);
             }
@@ -561,6 +562,7 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
         parsed,
         tracker: toolTracker,
         onToolUseStart,
+        onToolInputDelta: params.onToolInputDelta,
         onToolResult: params.onToolResult,
       });
     }
@@ -651,17 +653,21 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
       }
     },
     finish() {
-      if (parseErrorText) {
-        return;
-      }
-      const tail = lineBuffer.pending;
-      lineBuffer.pending = "";
-      if (tail) {
-        handleJsonlLine(tail);
-      }
-      finishTaggedReasoningMessage();
-      if (classifyClaudeCommentary) {
-        flushPendingClaudeAssistantText();
+      try {
+        if (parseErrorText) {
+          return;
+        }
+        const tail = lineBuffer.pending;
+        lineBuffer.pending = "";
+        if (tail) {
+          handleJsonlLine(tail);
+        }
+        finishTaggedReasoningMessage();
+        if (classifyClaudeCommentary) {
+          flushPendingClaudeText("assistant");
+        }
+      } finally {
+        toolTracker.inputProgressById.clear();
       }
     },
     getErrorText() {

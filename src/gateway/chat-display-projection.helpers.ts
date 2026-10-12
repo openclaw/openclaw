@@ -1,3 +1,4 @@
+import { safeParseJson } from "@openclaw/normalization-core/json-coercion";
 import {
   asOptionalObjectRecord as readObjectRecord,
   asOptionalRecord as readRecord,
@@ -96,11 +97,20 @@ export function truncateChatHistoryText(
   text: string,
   maxChars: number = DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
   preserveExactPrefix = false,
+  toolResultMaxChars?: number,
 ): { text: string; truncated: boolean } {
-  if (text.length <= maxChars) {
+  let limit = maxChars;
+  if (toolResultMaxChars !== undefined && toolResultMaxChars < Math.min(text.length, maxChars)) {
+    // Complete JSON drives source cards, Canvas, and structured output rendering.
+    const preview = truncateUtf16Safe(text, maxChars);
+    if (!/^\s*[[{]/u.test(preview) || safeParseJson(preview) === undefined) {
+      limit = toolResultMaxChars;
+    }
+  }
+  if (text.length <= limit) {
     return { text, truncated: false };
   }
-  const prefix = truncateUtf16Safe(text, maxChars);
+  const prefix = truncateUtf16Safe(text, limit);
   return {
     text: preserveExactPrefix ? prefix : `${prefix}\n...(truncated)...`,
     truncated: true,
@@ -147,18 +157,7 @@ export function isAssistantInternalReasoningContentType(type: unknown): boolean 
   return type === "thinking" || type === "reasoning" || type === "redacted_thinking";
 }
 
-export function hasAssistantNonTextContent(message: unknown): boolean {
-  const content = readObjectRecord(message)?.content;
-  return (
-    Array.isArray(content) &&
-    content.some((block) => {
-      const entry = readObjectRecord(block);
-      return entry && !isAssistantTextContentType(entry.type);
-    })
-  );
-}
-
-export function hasAssistantDisplayableNonTextContent(message: unknown): boolean {
+export function hasAssistantNonTextContent(message: unknown, includeReasoning = true): boolean {
   const content = readObjectRecord(message)?.content;
   return (
     Array.isArray(content) &&
@@ -167,10 +166,14 @@ export function hasAssistantDisplayableNonTextContent(message: unknown): boolean
       return (
         entry &&
         !isAssistantTextContentType(entry.type) &&
-        !isAssistantInternalReasoningContentType(entry.type)
+        (includeReasoning || !isAssistantInternalReasoningContentType(entry.type))
       );
     })
   );
+}
+
+export function hasAssistantDisplayableNonTextContent(message: unknown): boolean {
+  return hasAssistantNonTextContent(message, false);
 }
 
 export function shouldPreserveAssistantControlReplyText(message: Record<string, unknown>): boolean {

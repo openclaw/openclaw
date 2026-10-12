@@ -1,6 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { CapturedSessionEntryReadSource } from "./session-entry-read-source.types.js";
-import type { SessionMember } from "./session-sharing-store.kernel.js";
+import type { SessionMember } from "./session-membership-facts.types.js";
 import type { SessionEntry } from "./types.js";
 
 export type SessionPendingInputAuthorityFacts = {

@@ -1,14 +1,13 @@
-import { Modal, type BaseMessageInteractiveComponent } from "../internal/discord.js";
-import {
-  discordComponentControlHandlers,
-  DiscordComponentModal,
-} from "./agent-components.handlers.js";
+import type { BaseMessageInteractiveComponent } from "../internal/discord.js";
+import { discordComponentControlHandlers } from "./agent-components.handlers.js";
 import {
   createAgentComponentButton,
   createAgentSelectMenu,
 } from "./agent-components.system-controls.js";
 import type { AgentComponentContext } from "./agent-components.types.js";
 import { discordComponentControlFactories } from "./agent-components.wildcard-controls.js";
+
+export { createDiscordComponentModal } from "./agent-components.handlers.js";
 
 type ComponentFactory = (ctx: AgentComponentContext) => BaseMessageInteractiveComponent;
 
@@ -22,7 +21,3 @@ export const createDiscordComponentControls = discordComponentControlFactories.m
     (ctx) =>
       createControl(ctx, discordComponentControlHandlers),
 );
-
-export function createDiscordComponentModal(ctx: AgentComponentContext): Modal {
-  return new DiscordComponentModal(ctx);
-}

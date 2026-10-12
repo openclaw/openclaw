@@ -56,20 +56,38 @@ function expectNoStateDirectoryOpens(spy: MockInstance<typeof fsSync.mkdirSync>,
 }
 
 function observePublicationLifetime(events: string[]) {
-  const open = sqliteRuntime.openOpenClawAgentSqliteWorkerStore;
-  return vi
-    .spyOn(sqliteRuntime, "openOpenClawAgentSqliteWorkerStore")
+  const capture = sqliteRuntime.captureOpenClawAgentDatabaseExecution;
+  const retention = vi
+    .spyOn(sqliteRuntime, "captureOpenClawAgentDatabaseExecution")
+    .mockImplementationOnce((...args) => {
+      const execution = capture(...args);
+      events.push("retained");
+      const release = execution.release.bind(execution);
+      vi.spyOn(execution, "release").mockImplementation(async () => {
+        await release();
+        events.push("released");
+      });
+      return execution;
+    });
+  const open = sqliteRuntime.openOpenClawAgentSqliteWorkerStoreV2;
+  const publication = vi
+    .spyOn(sqliteRuntime, "openOpenClawAgentSqliteWorkerStoreV2")
     .mockImplementation(async (...args) => {
       const store = await open(...args);
-      const retention = args[2].input === undefined;
-      events.push(retention ? "retained" : "publication");
+      events.push("publication");
       const close = store.close.bind(store);
       vi.spyOn(store, "close").mockImplementation(async () => {
         await close();
-        events.push(retention ? "released" : "publication-closed");
+        events.push("publication-closed");
       });
       return store;
     });
+  return {
+    mockRestore() {
+      retention.mockRestore();
+      publication.mockRestore();
+    },
+  };
 }
 
 describe("memory preparation shutdown", () => {

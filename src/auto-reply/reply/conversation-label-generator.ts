@@ -9,11 +9,10 @@ import { runIsolatedCompletion } from "../../agents/isolated-completion.js";
 import { splitTrailingAuthProfile } from "../../agents/model-ref-profile.js";
 import { resolveCompatibleAgentRuntimeForProvider } from "../../agents/session-runtime-compat.js";
 import { resolveSimpleCompletionSelectionForAgent } from "../../agents/simple-completion-runtime.js";
+import { resolveAutomaticUtilityRuntimeOverride } from "../../agents/utility-model.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 
 const DEFAULT_MAX_LABEL_LENGTH = 128;
-// Reasoning models spend output tokens before emitting the short visible label.
-const CONVERSATION_LABEL_MAX_TOKENS = 4_096;
 const TIMEOUT_MS = 15_000;
 
 type LabelModelPhase = "utility" | "primary fallback";
@@ -128,11 +127,21 @@ async function runLabelAttempts(
       assertOperatorModelAllowed(params.operatorAuthority, model);
       // The session's runtime override was resolved for its primary provider; a
       // utility model on another provider cannot run through that harness.
-      const agentHarnessRuntimeOverride = resolveCompatibleAgentRuntimeForProvider({
+      const selectedRuntime = resolveCompatibleAgentRuntimeForProvider({
         provider: selection.provider,
         runtime: params.agentHarnessRuntimeOverride,
         cfg: params.cfg,
       });
+      const automaticRuntime = selectedRuntime
+        ? undefined
+        : resolveAutomaticUtilityRuntimeOverride({
+            cfg: params.cfg,
+            agentId: params.agentId,
+            utilityProvider: selection.provider,
+            utilityModelId: selection.modelId,
+          });
+      const agentHarnessRuntimeOverride =
+        selectedRuntime ?? (automaticRuntime === "claude-cli" ? automaticRuntime : undefined);
       const completion = await runIsolatedCompletion({
         purpose: "conversation-label",
         config: params.cfg,
@@ -156,7 +165,7 @@ async function runLabelAttempts(
         assertCurrent: params.assertCurrent,
         ...(params.operatorAuthority ? { operatorAuthority: params.operatorAuthority } : {}),
         outputTextPolicy: "strict-visible",
-        streamParams: { maxTokens: CONVERSATION_LABEL_MAX_TOKENS },
+        answerTokenBudget: 4_096,
       });
       assertCurrent();
       const partitioner = createReasoningTagTextPartitioner();

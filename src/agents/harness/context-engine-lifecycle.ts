@@ -1,6 +1,6 @@
 import { prependSystemPromptAdditionAfterCacheBoundary } from "@openclaw/ai/internal/shared";
 import type { OpenClawConfig } from "../../config/config.js";
-import { prepareSessionTranscriptHydration } from "../../config/sessions/session-transcript-hydration.js";
+import { readActiveTranscriptEntryAnchorAsync } from "../../config/sessions/session-transcript-anchor-read.js";
 import { runWithSessionTranscriptReadFence } from "../../config/sessions/session-transcript-read-fence.js";
 import type { MemoryCitationsMode } from "../../config/types.memory.js";
 import { boundContextEngineAssembly } from "../../context-engine/bounded-context.js";
@@ -31,6 +31,10 @@ import { estimateRenderedLlmBoundaryTokenPressure } from "../embedded-agent-runn
 import { stripRuntimeContextCustomMessages } from "../internal-runtime-context.js";
 import type { AgentMessage } from "../runtime/index.js";
 import { sanitizeToolUseResultPairingForModel } from "../session-transcript-repair.js";
+import {
+  completedTurnMessageAnchor,
+  type CompletedTurnMessageAnchor,
+} from "../sessions/session-manager-message-anchor.js";
 import type { ContextEngineTurnAttemptFacts } from "./context-engine-turn-attempt.js";
 
 export {
@@ -265,7 +269,6 @@ type PreparedHarnessContextEnginePrompt = {
   messages: AgentMessage[];
   systemPrompt: string;
   contextEnginePromptAuthority: NonNullable<AssembleResult["promptAuthority"]>;
-  contextEngineAssemblySucceeded: boolean;
   unwindowedContextEngineMessagesForPrecheck?: AgentMessage[];
 };
 
@@ -281,7 +284,6 @@ export async function prepareHarnessContextEnginePrompt(
     messages: params.messages,
     systemPrompt: params.promptBudget.systemPrompt,
     contextEnginePromptAuthority: "assembled",
-    contextEngineAssemblySucceeded: false,
   };
   if (!params.contextEngine) {
     return initial;
@@ -305,7 +307,6 @@ export async function prepareHarnessContextEnginePrompt(
             })
           : initial.systemPrompt,
         contextEnginePromptAuthority: authority,
-        contextEngineAssemblySucceeded: true,
         ...(authority === "preassembly_may_overflow"
           ? { unwindowedContextEngineMessagesForPrecheck: preassemblyMessages }
           : {}),
@@ -373,28 +374,23 @@ export async function finalizeHarnessContextEngineTurn(
     turnCandidate?: {
       admission?: UserTurnTranscriptAdmissionReceipt;
       terminalEntryId?: string | null;
+      [completedTurnMessageAnchor]?: CompletedTurnMessageAnchor;
       record: (facts: ContextEngineTurnAttemptFacts) => void;
     };
   },
 ) {
-  if (!params.contextEngine) {
+  if (!params.contextEngine || params.promptError || params.aborted || params.yieldAborted) {
     return { postTurnFinalizationSucceeded: true };
   }
   if (params.turnCandidate) {
     const { admission, terminalEntryId, record } = params.turnCandidate;
     if (admission && terminalEntryId) {
-      const reader = prepareSessionTranscriptHydration(admission);
-      const { version } = await reader.readMaintenance({ operation: "version" });
-      const terminal = version
-        ? (
-            await reader.readCurrentTurnEntry({
-              entryId: terminalEntryId,
-              version,
-              includeEntry: false,
-            })
-          ).anchor
-        : undefined;
-      reader.assertCurrent();
+      const committed = params.turnCandidate[completedTurnMessageAnchor];
+      // Reconstructed managers need one anchor snapshot, not a version that a later append can stale.
+      const terminal = committed
+        ? committed.anchor
+        : await readActiveTranscriptEntryAnchorAsync({ ...admission, entryId: terminalEntryId });
+      committed?.assertCurrent();
       if (terminal) {
         record({
           boundary: { admission, terminal },
@@ -414,9 +410,6 @@ export async function finalizeHarnessContextEngineTurn(
         });
       }
     }
-    return { postTurnFinalizationSucceeded: true };
-  }
-  if (params.promptError || params.aborted || params.yieldAborted) {
     return { postTurnFinalizationSucceeded: true };
   }
 
@@ -481,12 +474,7 @@ export async function finalizeHarnessContextEngineTurn(
     }
   }
 
-  if (
-    !params.promptError &&
-    !params.aborted &&
-    !params.yieldAborted &&
-    postTurnFinalizationSucceeded
-  ) {
+  if (postTurnFinalizationSucceeded) {
     await (params.runMaintenance ?? runHarnessContextEngineMaintenance)({
       contextEngine: params.contextEngine,
       sessionId: params.sessionIdUsed,

@@ -31,7 +31,6 @@ const operations = {
 
 const removalStages = [
   ["preparation", "preparationMs"],
-  ["packRepair", "packRepairMs"],
   ["snapshot", "snapshotMs"],
   ["checkoutRemoval", "checkoutRemovalMs"],
   ["finalization", "bodyFinalizeMs"],

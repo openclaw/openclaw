@@ -43,6 +43,10 @@ when:
 - its path (or its root directory) is world-writable
 - for non-bundled plugins, path ownership does not match the current uid (or root)
 
+On Windows, plugin roots can sit beneath directory junctions, including Node
+version-manager prefixes. Root aliases are resolved and verified by directory
+identity before entries are opened; files must still stay inside that root.
+
 World-writable bundled directories get an in-place `chmod` repair attempt
 first (npm/global installs can ship package dirs at `0777`) before the gate
 re-checks; ownership checks are skipped for bundled origin entirely.
@@ -141,6 +145,12 @@ filesystem scanning, `stat`/`realpath` freshness polling, manifest rereads, or
 hashing. Plugin lifecycle operations prepare fresh metadata in their own cache
 generation. Account health and authentication state are not part of the
 immutable package inventory.
+
+An explicit install or refresh clears mutable discovery caches for the command,
+so its next metadata phase observes the updated inventory. Immutable runtime
+generations keep their captured metadata. Each process normally owns one Gateway.
+Overlapping independent Gateways in one process are best effort rather than
+coordinated owners of the same inventory.
 
 Native SDK alias resolution retains each importing file's canonical path, root
 membership, and alias targets in that same generation. Alias registration or
@@ -249,17 +259,19 @@ root and entry, preserving source overlays and retained module instances.
 Bundled provider policy lookups retain their resolved surface, including absence,
 in the metadata cache. Repeated model-reference canonicalization reuses that
 surface without resolving artifact candidates again. The memo follows the
-selected registry's publication version and bundled-directory selection;
-registration and unpublished registries remain uncached. A new generation or
-explicit metadata invalidation resolves the surface again, and managed surfaces
+selected registry's publication version and bundled-directory selection, with
+separate weakly held entries for each registry. Completed private registries
+become cacheable when their loader publishes its identity; registration and
+incomplete registries remain uncached. A new generation or explicit metadata
+invalidation resolves the surface again, and managed surfaces
 retain their instance's admission checks.
 
 The CLI invocation owns one operation cache across config reads, output metadata,
 command ownership, nested registration, and actions. Standalone registration uses
 its caller's active generation. Config validation covers every
 workspace; execution uses the original selected workspace snapshot, or shared
-roots when no workspace owner is proven. Exact config/source identities and
-revision checks fence retained registrars. Preparation closes before Commander
+roots when no workspace owner is proven. Prepared registrars keep their captured
+metadata if configuration changes during the operation. Preparation closes before Commander
 actions, while its cache scope lasts through action completion for late imports.
 Changed package files require a new operation; changing activation inputs does
 not retire compatible package facts. SDK alias maps are prepared on first alias

@@ -1,16 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  awaitGateBeforeSettlement,
-  createDeferred,
-  withinTest,
-} from "../../../test/helpers/promise.js";
-import {
   createOperationalRunInstanceRef,
   prepareAgentRunAdmission,
 } from "../../agents/admitted-run-context.js";
-import { fetchWithSsrFGuard } from "../../infra/net/fetch-guard.js";
-import { withPreparedChannelReadAuthority } from "../../shared/channel-read-authority.js";
-import { withEffectPreparation, type PreparedEffectUse } from "../../shared/effect-authority.js";
 import { recordAgentDatabaseAdmissions } from "../../state/agent-database-admission.js";
 import { StateDatabaseReadAdmissionInvalidatedError } from "../../state/openclaw-state-db-async-lifecycle.js";
 import {
@@ -55,9 +47,7 @@ import {
   CronRunReceiptConflictError,
   CronRunReceiptRevisionError,
   findActiveCronRunReceiptInDatabase,
-  finishCronRunReceiptAsync,
   listActiveCronRunReceiptJobIdsInDatabase,
-  prepareCronRunReceiptClaim,
   releaseLocalCronRunReceiptOwnership,
 } from "./run-receipt-store.js";
 import {
@@ -65,6 +55,8 @@ import {
   claimCronRunReceiptInDatabaseForTest,
   inspectActiveCronRunReceipt,
   makeCronReceiptJob,
+  finishCronRunReceiptAsync,
+  prepareCronRunReceiptClaim,
 } from "./run-receipt-store.test-support.js";
 import {
   isCronRunTriggerStateRetiredInDatabase,
@@ -116,9 +108,7 @@ function receipts(storePath: string, jobId: string) {
 }
 
 describe("cron run receipt store", () => {
-  it("prepares an exact force-disabled message use without host SQL and releases at initiation", async ({
-    signal,
-  }) => {
+  it("checks force-disabled message access without host SQL until its admission closes", async () => {
     const { storePath, job } = await storeJob({
       ...makeCronReceiptJob("force-disabled-message"),
       enabled: false,
@@ -138,12 +128,6 @@ describe("cron run receipt store", () => {
         ingress: { kind: "schedule", boundary: "cron.isolated-agent", state: "present" },
       },
     });
-    const response = createDeferred<string>();
-    const dnsEntered = createDeferred();
-    const releaseDns = createDeferred();
-    const readResponse = createDeferred<string>();
-    const pending: Promise<unknown>[] = [];
-    let use: PreparedEffectUse | undefined;
     let sql: ReturnType<typeof observeMainThreadSql> | undefined;
     try {
       const admitted = await admission.admit("embedded");
@@ -156,111 +140,37 @@ describe("cron run receipt store", () => {
         jobId: job.id,
         operationalRunInstance,
       });
-      const copiedRunId = captureCronJobMessageActionAuthority({
-        jobId: job.id,
-        operationalRunInstance: createOperationalRunInstanceRef(operationalRunInstance.runId),
-      });
-      expect(message?.prepareUse).toBeTypeOf("function");
-      expect(source?.prepareUse).toBeTypeOf("function");
-      expect(copiedRunId).toThrow("no longer active");
-      expect(() => copiedRunId!.prepareUse!()).toThrow("no longer active");
+      expect(message).toBeTypeOf("function");
+      expect(source).toBeTypeOf("function");
       sql = observeMainThreadSql();
       sql.calibrate();
-      use = await source!.prepareUse!();
-      use.assertCurrent();
+      expect(message).not.toThrow();
       expect(source).not.toThrow();
-      use.release();
-      use = await message!.prepareUse!();
-      const initiate = vi.fn(() => {
-        message!();
-        return response.promise;
-      });
-      const delivered = use.initiate(initiate);
       sql.expectIdle();
       sql.restore();
       sql = undefined;
-      expect(initiate).toHaveBeenCalledOnce();
-      expect(() => use!.initiate(initiate)).toThrow();
-      const providerError = new Error("provider read failed");
-      await expect(
-        withPreparedChannelReadAuthority(source!.prepareUse, source, async () => {
-          const result = await fetchWithSsrFGuard({
-            url: "https://public.example/provider-failure",
-            lookupFn: async () => [{ address: "93.184.216.34", family: 4 }],
-            fetchImpl: async () => {
-              throw providerError;
-            },
-          });
-          await result.release();
-        }),
-      ).rejects.toBe(providerError);
-      const fetchImpl = vi.fn(async () => new Response("private provider response"));
-      const fetched = withEffectPreparation(message!.prepareUse, async () => {
-        const result = await fetchWithSsrFGuard({
-          url: "https://public.example/cron-message",
-          fetchImpl,
-          lookupFn: async () => {
-            dnsEntered.resolve();
-            await releaseDns.promise;
-            return [{ address: "93.184.216.34", family: 4 }];
-          },
-        });
-        await result.release();
-        return result.response;
-      });
-      const fetchDenied = expect(fetched).rejects.toThrow("no longer active");
-      const read = withPreparedChannelReadAuthority(
-        source!.prepareUse,
-        source,
-        () => readResponse.promise,
-        signal,
-      );
-      const disclosureDenied = expect(read).rejects.toThrow("no longer active");
-      pending.push(fetched, fetchDenied, read, disclosureDenied);
-      await withinTest(
-        awaitGateBeforeSettlement(dnsEntered.promise, fetched, "Provider request skipped DNS gate"),
-        signal,
-      );
-      await withinTest(
-        update(state, job.id, { payload: { kind: "agentTurn", toolsAllow: ["read"] } }),
-        signal,
-      );
-      releaseDns.resolve();
-      readResponse.resolve("private contents must not be disclosed");
-      await Promise.all([fetchDenied, disclosureDenied]);
-      expect(fetchImpl).not.toHaveBeenCalled();
+      admission.close();
       expect(message).toThrow("no longer active");
-      expect(() => message!.prepareUse!()).toThrow("no longer active");
-      response.resolve("accepted before revocation");
-      await expect(delivered).resolves.toBe("accepted before revocation");
-      expect(initiate).toHaveBeenCalledOnce();
+      expect(source).toThrow("no longer active");
     } finally {
       sql?.restore();
-      use?.release();
-      response.resolve("settled");
-      releaseDns.resolve();
-      readResponse.resolve("settled");
-      await Promise.allSettled(pending);
       admission.close();
-      state.timer?.cancel();
       resetCronActiveJobs();
       await finishCronRunReceiptAsync({ handle: receipt, status: "ok", finishedAtMs: Date.now() });
     }
   });
 
   it.each([
-    { writer: "service", enabled: true, mutation: "tool policy" },
-    { writer: "service", enabled: false, mutation: "tool policy" },
-    { writer: "canonical store", enabled: true, mutation: "tool policy" },
-    { writer: "service", enabled: true, mutation: "origin" },
-    { writer: "canonical store", enabled: true, mutation: "origin" },
-    { writer: "service", enabled: true, mutation: "native name" },
-    { writer: "service", enabled: true, mutation: "native delivery" },
-    { writer: "service", enabled: true, mutation: "native requester" },
-    { writer: "service", enabled: true, mutation: "native trigger state" },
+    { enabled: true, mutation: "tool policy" },
+    { enabled: false, mutation: "tool policy" },
+    { enabled: true, mutation: "origin" },
+    { enabled: true, mutation: "native name" },
+    { enabled: true, mutation: "native delivery" },
+    { enabled: true, mutation: "native requester" },
+    { enabled: true, mutation: "native trigger state" },
   ] as const)(
-    "retires message access after $writer $mutation changes from enabled=$enabled without retiring its receipt",
-    async ({ writer, enabled, mutation }) => {
+    "retires message access after a service $mutation change from enabled=$enabled without retiring its receipt",
+    async ({ enabled, mutation }) => {
       const { storePath } = await makeStorePath();
       const native = mutation !== "tool policy" && mutation !== "origin";
       const channelRequester = {
@@ -353,8 +263,6 @@ describe("cron run receipt store", () => {
           jobId: job.id,
           operationalRunInstance: admitted.operationalRunInstance,
         });
-        const prepared = await assertMessageCurrent!.prepareUse!();
-        prepared.release();
         expect(assertMessageCurrent).not.toThrow();
         expect(assertSourceCurrent).not.toThrow();
         if (native) {
@@ -431,48 +339,24 @@ describe("cron run receipt store", () => {
                 ...provenance,
                 callerOrigin: { kind: "external", channel },
               };
-              if (writer === "service") {
-                await update(
-                  state,
-                  job.id,
-                  { payload: { kind: "agentTurn", toolsAllow: ["message", "exec"] } },
-                  { toolsAllowProvenance: originProvenance },
-                );
-              } else {
-                await saveCronStore(storePath, {
-                  version: 1,
-                  jobs: [{ ...job, toolsAllowProvenance: originProvenance }],
-                });
-                expect(assertSourceCurrent).toThrow();
-              }
+              await update(
+                state,
+                job.id,
+                { payload: { kind: "agentTurn", toolsAllow: ["message", "exec"] } },
+                { toolsAllowProvenance: originProvenance },
+              );
             }
-          } else if (writer === "service") {
+          } else {
             await update(state, job.id, { payload: { kind: "agentTurn", toolsAllow: ["read"] } });
             await update(state, job.id, {
               payload: { kind: "agentTurn", toolsAllow: ["message"] },
             });
-          } else {
-            await saveCronStore(storePath, {
-              version: 1,
-              jobs: [{ ...job, payload: { kind: "command", argv: ["true"] } }],
-            });
-            expect(assertSourceCurrent).toThrow();
-            expect(assertMessageCurrent).toThrow();
-            await saveCronStore(storePath, { version: 1, jobs: [job] });
           }
         }
-        await expect(
-          Promise.resolve().then(async () => {
-            const use = await assertSourceCurrent!.prepareUse!();
-            use.release();
-          }),
-        ).rejects.toThrow();
         expect(assertSourceCurrent).toThrow();
         if (mutation === "tool policy") {
           expect(assertMessageCurrent).toThrow();
         } else {
-          const use = await assertMessageCurrent!.prepareUse!();
-          use.initiate(() => assertMessageCurrent!());
           expect(assertMessageCurrent).not.toThrow();
         }
         expect(controller.signal.aborted).toBe(false);

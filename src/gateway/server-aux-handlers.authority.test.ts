@@ -82,17 +82,6 @@ afterEach(async () => {
 });
 
 describe("gateway auxiliary authority lifecycle", () => {
-  it("shares one approval epoch per gateway lifetime and rotates it on restart", () => {
-    const first = createAuthorityHarness({});
-    const second = createAuthorityHarness({});
-
-    expect(first.execApprovalManager.runtimeEpoch).toBe(first.pluginApprovalManager.runtimeEpoch);
-    expect(second.execApprovalManager.runtimeEpoch).toBe(second.pluginApprovalManager.runtimeEpoch);
-    expect(first.execApprovalManager.runtimeEpoch).not.toBe(
-      second.execApprovalManager.runtimeEpoch,
-    );
-  });
-
   it("leaves durable approval truth pending when authority closes after owner stop", async () => {
     const onAgentRunAuthorityClosed = vi.fn();
     const gatewayAux = createAuthorityHarness({

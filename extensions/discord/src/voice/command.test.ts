@@ -64,7 +64,7 @@ describe("createDiscordVoiceCommand", () => {
   it("serializes subcommands without top-level command-only fields", () => {
     const { command } = createVoiceCommandHarness(null);
     const serialized = command.serialize();
-    const firstOption = serialized.options?.[0] as Record<string, unknown> | undefined;
+    const firstOption = serialized.options?.[0];
 
     expect(firstOption).toEqual({
       name: "join",

@@ -74,6 +74,27 @@ export function mockCompactHooksPluginMetadata(): void {
   }));
 }
 
+export function mockCompactHooksContextEngine(resolveContextEngine: () => Promise<unknown>): void {
+  // mock-isolation: The compaction fixture does not initialize live plugin registrations.
+  vi.doMock("../../context-engine/init.js", () => ({
+    ensureContextEnginesInitialized: vi.fn(),
+  }));
+
+  // mock-isolation: This harness supplies synthetic engines without registering live plugins.
+  vi.doMock("../../context-engine/registry.js", () => ({
+    hasSameContextEngineInstance: (left: unknown, right: unknown) => left === right,
+    isContextEngineAbortRejection: (error: unknown, signal?: AbortSignal) =>
+      signal?.aborted === true && error === signal.reason,
+    resolveContextEngine,
+    resolveContextEngineOwnerPluginId: vi.fn(() => "lossless-claw"),
+    resolveLogicalTurnContextEngines: async () => {
+      const engine = await resolveContextEngine();
+      const ref = { engine, registeredId: "legacy" };
+      return { configured: ref, configuredId: "legacy", fallback: ref };
+    },
+  }));
+}
+
 export async function acquireCompactHooksPreparedModelRuntime(
   input: PreparedModelRuntimeInput,
   _options?: PreparedModelRuntimeLeaseOptions,

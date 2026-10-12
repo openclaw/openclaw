@@ -9,6 +9,7 @@ import {
   closeOpenClawAgentDatabasesForTest,
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { MemoryIndexDatabase } from "./memory/manager-database-context.js";
 import { readMemoryDatabaseRevision } from "./memory/manager-db-kernel.js";
 import { createManagerIndexFixture } from "./memory/manager-index.test-support.js";
 import { MEMORY_INDEX_PROVENANCE_VERSION } from "./memory/manager-reindex-state.js";
@@ -135,6 +136,8 @@ describe("memory_search index versions", () => {
 
   it("discloses a full retry handed to detached maintenance before embedding finishes", async () => {
     const cfg = uncachedConfig();
+    const now = Date.now();
+    const clock = vi.spyOn(Date, "now").mockReturnValue(now);
     let failSync = false;
     let holdSync = false;
     const entered = createDeferred<void>();
@@ -162,6 +165,7 @@ describe("memory_search index versions", () => {
       failSync = true;
       await expect(manager.sync({ reason: "cli", force: true })).rejects.toThrow("HTTP 400");
       failSync = false;
+      clock.mockReturnValue(now + 30_000);
       holdSync = true;
       const embedded = fixture.provider.embedBatchCalls;
       const tool = createMemorySearchToolOrThrow({ config: cfg, agentId: "main" });
@@ -194,6 +198,7 @@ describe("memory_search index versions", () => {
       fixture.provider.beforeEmbedQuery = null;
       await closeAllMemorySearchManagers();
       get.mockRestore();
+      clock.mockRestore();
       fixture.provider.beforeEmbedBatch = null;
     }
   });
@@ -237,10 +242,16 @@ describe("memory_search index versions", () => {
         { status: 400 },
       );
       await expect(manager.sync({ reason: "cli", force: true })).rejects.toThrow("HTTP 400");
-      const db = openOpenClawAgentDatabase({ agentId: "main" }).db;
-      db.prepare(
-        "UPDATE memory_index_meta SET value = json_set(value, '$.provenanceVersion', ?) WHERE key = 'memory_index_meta_v1'",
-      ).run(MEMORY_INDEX_PROVENANCE_VERSION + 1);
+      const database = Reflect.get(manager, "publishedDatabase") as MemoryIndexDatabase;
+      const meta = database.facts.meta;
+      if (!meta) {
+        throw new Error("Expected the published index metadata");
+      }
+      await database.writeMetadata({
+        ...meta,
+        provenanceVersion: MEMORY_INDEX_PROVENANCE_VERSION + 1,
+      });
+      const db = database.db;
       const before = readMemoryDatabaseRevision(db);
       const chunks = db.prepare("SELECT * FROM memory_index_chunks ORDER BY id").all();
       const priorCalls = calls;

@@ -23,7 +23,6 @@ import {
   SessionTranscriptProjectionUnavailableError,
 } from "../../config/sessions/session-accessor.js";
 import { loadSessionEntryForAdmission } from "../../config/sessions/session-accessor.sqlite-entry-admission.js";
-import * as anchorReaders from "../../config/sessions/session-transcript-anchor-read.js";
 import * as historyReaders from "../../config/sessions/session-transcript-worker-readers.js";
 import { withOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context.js";
 import { createStructuredOutboundPayloadPlan } from "../../infra/outbound/payloads.js";
@@ -37,7 +36,6 @@ import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { projectChatDisplayMessage } from "../chat-display-projection.js";
 import * as sessionTranscriptReaders from "../session-transcript-readers.js";
-import * as sessionStoreReaders from "../session-utils-store-worker.js";
 import {
   buildAssistantReplyContentFromInputs,
   extractAssistantDisplayText,
@@ -77,7 +75,58 @@ function createReplyDispatch(
   });
 }
 
+function interceptDeliverySnapshot(afterRead: () => void) {
+  const createReaders = historyReaders.createSessionHistoryWorkerReaders;
+  return vi
+    .spyOn(historyReaders, "createSessionHistoryWorkerReaders")
+    .mockImplementation((runRequest) => {
+      const readers = createReaders(runRequest);
+      return {
+        ...readers,
+        readAnchors: async (input, signal) => {
+          const facts = await readers.readAnchors(input, signal);
+          afterRead();
+          return facts;
+        },
+      };
+    });
+}
+
 describe("chat delivery watermark preparation", () => {
+  it("selects display payloads and delivery anchors in one transcript request", async () => {
+    await withOpenClawTestState({ label: "chat-delivery-one-snapshot" }, async () => {
+      const { dispatch, append } = await createReplyTranscriptFixture();
+      dispatch.captureAgentTranscriptStart();
+      await append("answer", { role: "assistant", content: "Committed answer." });
+      const requests: string[] = [];
+      const createReaders = historyReaders.createSessionHistoryWorkerReaders;
+      const readerSpy = vi
+        .spyOn(historyReaders, "createSessionHistoryWorkerReaders")
+        .mockImplementation((runRequest) =>
+          createReaders((prepare, ...args) =>
+            runRequest(
+              () => {
+                const input = prepare();
+                requests.push(input.kind);
+                return input;
+              },
+              ...args,
+            ),
+          ),
+        );
+      try {
+        expect(await dispatch.resolveReplyDelivery()).toBe("delivered");
+        expect(
+          requests.filter((kind) =>
+            ["transcript-anchors", "transcript-watermark", "history-page"].includes(kind),
+          ),
+        ).toEqual(["transcript-anchors"]);
+      } finally {
+        readerSpy.mockRestore();
+      }
+    });
+  });
+
   it("consumes the committed manager boundary without caller transcript SQL", async () => {
     await withOpenClawTestState({ label: "chat-prepared-start" }, async () => {
       const { dispatch, append, scope, runId } = await createReplyTranscriptFixture();
@@ -113,7 +162,7 @@ describe("chat delivery watermark preparation", () => {
     });
   });
 
-  it("refuses a final anchor snapshot changed by an unpublished native append", async () => {
+  it("refuses an anchor snapshot changed by an unpublished native append", async () => {
     await withOpenClawTestState({ label: "chat-anchor-delay" }, async () => {
       const { dispatch, append, scope } = await createReplyTranscriptFixture();
       dispatch.captureAgentTranscriptStart();
@@ -128,7 +177,7 @@ describe("chat delivery watermark preparation", () => {
             ...readers,
             readAnchors: async (input, signal) => {
               const facts = await readers.readAnchors(input, signal);
-              if (!changed && input.selection.entryIds.includes("answer")) {
+              if (!changed && input.selection.includeMessagesForRunId) {
                 changed = true;
                 expect(
                   appendTranscriptMessageSync(scope, {
@@ -241,62 +290,54 @@ describe("chat delivery watermark preparation", () => {
     },
   );
 
-  it.each([
-    { read: 1, change: "retired", expected: "missing" },
-    { read: 2, change: "retired", expected: "missing" },
-    { read: 1, change: "rejected", expected: "rejected" },
-    { read: 2, change: "rejected", expected: "rejected" },
-  ])("rechecks $change during metadata read $read", async ({ read, change, expected }) => {
-    await withOpenClawTestState({ label: "chat-watermark-delay" }, async () => {
-      const { dispatch, append, retire } = await createReplyTranscriptFixture();
-      await dispatch.runAgentMediaTranscript(
-        { run: async (operation) => operation() },
-        async () => {
-          dispatch.captureAgentTranscriptStart();
-          await append("answer", { role: "assistant", content: "Committed answer." });
-          let reads = 0;
-          const readAnchors = anchorReaders.readSessionTranscriptAnchorsAsync;
-          const failure = new Error("watermark read rejected");
-          const readerSpy = vi
-            .spyOn(anchorReaders, "readSessionTranscriptAnchorsAsync")
-            .mockImplementation(async (...args) => {
-              const facts = await readAnchors(...args);
-              if (++reads !== read) {
-                return facts;
-              }
+  it.each(["retired", "aborted", "rejected"] as const)(
+    "rechecks %s before consuming the delivery snapshot",
+    async (change) => {
+      await withOpenClawTestState({ label: "chat-watermark-delay" }, async () => {
+        const { dispatch, append, retire, abortController } = await createReplyTranscriptFixture();
+        await dispatch.runAgentMediaTranscript(
+          { run: async (operation) => operation() },
+          async () => {
+            dispatch.captureAgentTranscriptStart();
+            await append("answer", { role: "assistant", content: "Committed answer." });
+            let reads = 0;
+            const failure = new Error("delivery snapshot read rejected");
+            const readerSpy = interceptDeliverySnapshot(() => {
+              reads++;
               if (change === "retired") {
                 retire();
-              } else if (change === "rejected") {
+              } else if (change === "aborted") {
+                abortController.abort(failure);
+              } else {
                 throw failure;
               }
-              return facts;
             });
-          try {
-            const delivery = dispatch.resolveReplyDelivery();
-            if (expected === "rejected") {
-              await expect(delivery).rejects.toBe(failure);
-            } else {
-              expect(await delivery).toBe(expected);
+            try {
+              const delivery = dispatch.resolveReplyDelivery();
+              if (change === "rejected" || change === "aborted") {
+                await expect(delivery).rejects.toBe(failure);
+              } else {
+                expect(await delivery).toBe("missing");
+              }
+              expect(reads).toBe(1);
+            } finally {
+              readerSpy.mockRestore();
             }
-            expect(reads).toBe(read);
-          } finally {
-            readerSpy.mockRestore();
-          }
-        },
-      );
-    });
-  });
+          },
+        );
+      });
+    },
+  );
 
   it("uses admitted metadata with detached history and refreshes a changed tail", async () => {
     await withOpenClawTestState({ label: "chat-delivery-cohort" }, async () => {
-      const { dispatch, append, scope } = await createReplyTranscriptFixture();
+      const { dispatch, append, appendSync, scope } = await createReplyTranscriptFixture();
       dispatch.captureAgentTranscriptStart();
       await append("answer", { role: "assistant", content: "Committed answer." });
       const { databaseClaim } = await loadSessionEntryForAdmission(scope);
       if (!("kind" in databaseClaim) || databaseClaim.kind !== "worker" || !databaseClaim.reader) {
         throw new Error("Expected admitted durable session reader");
       }
-      const readSelected = sessionTranscriptReaders.readSessionMessageByIdAsync;
       try {
         await withOwnedSessionTranscriptWrites(
           {
@@ -306,18 +347,15 @@ describe("chat delivery watermark preparation", () => {
           },
           async () => {
             expect(await dispatch.resolveReplyDelivery()).toBe("delivered");
-            const selectedRead = vi
-              .spyOn(sessionTranscriptReaders, "readSessionMessageByIdAsync")
-              .mockImplementationOnce(async (...args) => {
-                const selected = await readSelected(...args);
-                await append("next-input", { role: "user", content: "A new question." });
-                return selected;
-              });
+            const selectedRead = interceptDeliverySnapshot(() => {
+              appendSync("next-input", { role: "user", content: "A new question." });
+            });
             try {
-              expect(await dispatch.resolveReplyDelivery()).toBe("missing");
+              expect(await dispatch.resolveReplyDelivery()).toBe("pending");
             } finally {
               selectedRead.mockRestore();
             }
+            expect(await dispatch.resolveReplyDelivery()).toBe("missing");
             await append("next-answer", { role: "assistant", content: "The new answer." });
             expect(await dispatch.resolveReplyDelivery()).toBe("delivered");
           },
@@ -730,9 +768,13 @@ describe("createChatSendReplyDispatch", () => {
       const { dispatch, append, scope } = await createReplyTranscriptFixture();
       dispatch.captureAgentTranscriptStart();
       await append("answer", { role: "assistant", content: "Committed answer." });
-      const selectedRead = vi
-        .spyOn(sessionTranscriptReaders, "readSessionMessageByIdAsync")
-        .mockRejectedValueOnce(new SessionTranscriptProjectionUnavailableError(scope.sessionId));
+      let unavailable = true;
+      const selectedRead = interceptDeliverySnapshot(() => {
+        if (unavailable) {
+          unavailable = false;
+          throw new SessionTranscriptProjectionUnavailableError(scope.sessionId);
+        }
+      });
       try {
         expect(await observeReplyDelivery(dispatch.resolveReplyDelivery, 0, () => {})).toBe(
           "pending",
@@ -789,6 +831,7 @@ describe("createChatSendReplyDispatch", () => {
     "retired",
     "aborted",
     "lifecycle",
+    "reset",
     "foreign-lifecycle",
     "branch",
     "answer-rewrite",
@@ -814,6 +857,12 @@ describe("createChatSendReplyDispatch", () => {
           } else if (change === "lifecycle") {
             await replaceSessionEntry(scope, {
               sessionId: scope.sessionId,
+              lifecycleRevision: "replacement",
+              updatedAt: 2,
+            });
+          } else if (change === "reset") {
+            await replaceSessionEntry(scope, {
+              sessionId: "replacement-session",
               lifecycleRevision: "replacement",
               updatedAt: 2,
             });
@@ -854,94 +903,42 @@ describe("createChatSendReplyDispatch", () => {
     });
   });
 
-  it("rechecks transcript anchors after the final session lookup yields", async () => {
-    await withOpenClawTestState({ label: "webchat-receipt-final-lookup" }, async () => {
-      const { dispatch, append, inputId } = await createReplyTranscriptFixture();
-      await dispatch.runAgentMediaTranscript(
-        { run: async (operation) => operation() },
-        async () => {
-          dispatch.captureAgentTranscriptStart();
-          await append("answer", { role: "assistant", content: "Committed answer." });
-          const readMessage = sessionTranscriptReaders.readSessionMessageByIdAsync;
-          const readSession = sessionStoreReaders.loadGatewaySessionEntryReadOnlyInWorker;
-          let answerRead = false;
-          let branchChanged = false;
-          const selectedRead = vi
-            .spyOn(sessionTranscriptReaders, "readSessionMessageByIdAsync")
-            .mockImplementation(async (...args) => {
-              const result = await readMessage(...args);
-              answerRead = true;
-              return result;
-            });
-          const sessionRead = vi
-            .spyOn(sessionStoreReaders, "loadGatewaySessionEntryReadOnlyInWorker")
-            .mockImplementation(async (...args) => {
-              const result = await readSession(...args);
-              if (answerRead && !branchChanged) {
-                branchChanged = true;
-                await append("other-branch", { role: "assistant", content: "NO_REPLY" }, inputId);
-              }
-              return result;
-            });
-          try {
-            const delivery = await dispatch.resolveReplyDelivery();
-            expect(branchChanged).toBe(true);
-            expect(delivery).toBe("missing");
-          } finally {
-            sessionRead.mockRestore();
-            selectedRead.mockRestore();
-          }
-        },
-      );
-    });
-  });
-
   it.each(["new-input", "branch", "answer-rewrite", "unrelated-rewrite", "append"] as const)(
     "retains factual delivery while rechecking a concurrent %s",
     async (change) => {
       await withOpenClawTestState({ label: "webchat-receipt-freshness" }, async () => {
-        const { dispatch, append, scope, inputId } = await createReplyTranscriptFixture();
+        const { dispatch, append, appendSync, rewriteSync, inputId } =
+          await createReplyTranscriptFixture();
         await dispatch.runAgentMediaTranscript(
           { run: async (operation) => operation() },
           async () => {
             dispatch.captureAgentTranscriptStart();
             await append("answer", { role: "assistant", content: "Committed answer." });
-            const readSelected = sessionTranscriptReaders.readSessionMessageByIdAsync;
-            const selectedRead = vi
-              .spyOn(sessionTranscriptReaders, "readSessionMessageByIdAsync")
-              .mockImplementationOnce(async (...args) => {
-                const selected = await readSelected(...args);
-                if (change === "new-input") {
-                  await append("next-input", {
-                    role: "user",
-                    content: "Inspect the synthetic fixture.",
-                    idempotencyKey: "next-input:user",
-                  });
-                } else if (change === "branch" || change === "append") {
-                  await append(
-                    "later-answer",
-                    { role: "assistant", content: "NO_REPLY" },
-                    change === "branch" ? inputId : undefined,
-                  );
-                } else {
-                  const anchor = readActiveTranscriptEntryAnchor({
-                    ...scope,
-                    entryId: change === "answer-rewrite" ? "answer" : inputId,
-                  });
-                  if (!anchor) {
-                    throw new Error("Expected current input anchor");
-                  }
-                  await rewriteTranscriptMessageAtAnchor(anchor, (message) => ({
-                    ...asOptionalRecord(message),
-                    content: change === "answer-rewrite" ? "NO_REPLY" : "Edited input display.",
-                  }));
-                }
-                return selected;
-              });
+            let changed = false;
+            const selectedRead = interceptDeliverySnapshot(() => {
+              changed = true;
+              if (change === "new-input") {
+                appendSync("next-input", {
+                  role: "user",
+                  content: "Inspect the synthetic fixture.",
+                  idempotencyKey: "next-input:user",
+                });
+              } else if (change === "branch" || change === "append") {
+                appendSync(
+                  "later-answer",
+                  { role: "assistant", content: "NO_REPLY" },
+                  change === "branch" ? inputId : undefined,
+                );
+              } else {
+                rewriteSync(
+                  change === "answer-rewrite" ? "answer" : inputId,
+                  change === "answer-rewrite" ? "NO_REPLY" : "Edited input display.",
+                );
+              }
+            });
             try {
-              expect(await dispatch.resolveReplyDelivery()).toBe(
-                change === "new-input" || change === "branch" ? "missing" : "pending",
-              );
+              expect(await dispatch.resolveReplyDelivery()).toBe("pending");
+              expect(changed).toBe(true);
             } finally {
               selectedRead.mockRestore();
             }

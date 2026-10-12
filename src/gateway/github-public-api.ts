@@ -31,6 +31,7 @@ export type ControlUiGitHubPreviewIdentity = {
   cacheScope: string;
   /** Host service/env credentials may retry a stale HTTP 401 anonymously. */
   optionalAuth?: true;
+  stale?: true;
   revalidate: () => Promise<void>;
   assertSelected: () => void;
 };

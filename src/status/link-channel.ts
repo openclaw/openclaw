@@ -4,7 +4,7 @@
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveInspectedChannelAccount } from "../channels/account-inspection.js";
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
-import { listReadOnlyChannelPluginsForConfig } from "../channels/plugins/read-only.js";
+import { listReadOnlyChannelPluginsForConfigAsync } from "../channels/plugins/read-only.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
 /** Returns link status for the first configured read-only channel that exposes linked state. */
@@ -13,7 +13,7 @@ export async function resolveLinkChannelContext(
   options: { sourceConfig?: OpenClawConfig } = {},
 ) {
   const sourceConfig = options.sourceConfig ?? cfg;
-  for (const plugin of listReadOnlyChannelPluginsForConfig(cfg, {
+  for (const plugin of await listReadOnlyChannelPluginsForConfigAsync(cfg, {
     activationSourceConfig: sourceConfig,
     includeSetupFallbackPlugins: false,
   })) {

@@ -15,7 +15,9 @@ import type { SessionEntryCreationOperation } from "./session-accessor.sqlite-en
 import type { SessionEntryCommitContext } from "./session-entry-commit-context.js";
 import type { SessionOwnerAssignment } from "./session-entry-provenance.js";
 import type { CapturedSessionEntryReadSource } from "./session-entry-read-source.types.js";
-import type { SessionEntryProjection } from "./session-entry-snapshots.js";
+import type { SessionEntryProjection } from "./session-entry-snapshot-values.js";
+import type { SessionSourceAssertion } from "./session-source-authority.js";
+import type { SessionTranscriptContextVersion } from "./session-transcript-context-version.types.js";
 import type {
   SessionLifecycleRevisionExpectation,
   SessionTranscriptTurnExpectedState,
@@ -307,6 +309,14 @@ export type SessionTranscriptVisibleMessageDeltaResult = SessionTranscriptDeltaR
 >;
 
 export type TranscriptMessageAppendOptions<TMessage> = {
+  /** Detached preparation; fresh commit compares the exact transcript version before insertion. */
+  preparation?: {
+    prepareMessage?: (message: TMessage) => Promise<TMessage | undefined>;
+    /** Owner-prepared row predicates and live lifecycle authority; opaque SQL callbacks are unsupported. */
+    source?: SessionSourceAssertion;
+  };
+  /** Exact read snapshot required for a fresh insertion; replay keeps its original receipt. */
+  expectedTranscript?: SessionTranscriptContextVersion;
   /** Rebase a stale explicit parent when the current tail still descends from it. */
   appendIntent?: "active-branch";
   /** Runtime config used for message redaction and transcript header metadata. */
@@ -325,9 +335,9 @@ export type TranscriptMessageAppendOptions<TMessage> = {
   eventId?: string;
   /** Existing parent id owned by a caller with its own session tree. */
   parentId?: string | null;
-  /** Optional finalizer that runs after duplicate detection but before persistence. */
+  /** @deprecated Use preparation.prepareMessage; removed in the next Plugin SDK major. */
   prepareMessageAfterIdempotencyCheck?: (message: TMessage) => TMessage | undefined;
-  /** Synchronous assertion after replay, custody, preparation, and redaction, before insertion. */
+  /** @deprecated Use preparation.source; removed in the next Plugin SDK major. */
   beforeFreshMessageCommit?: () => void;
   /** Allow append without parent-link migration for large legacy linear transcripts. */
   useRawWhenLinear?: boolean;
@@ -372,10 +382,14 @@ export type SessionTranscriptWriteLockAccessorContext = {
     result: TranscriptMessageAppendResult<TMessage> | undefined;
   }>;
   /** Reads bounded indexed facts for supplied transcript mirror identities. */
-  readMessageFacts: (params: { idempotencyKeys: readonly string[] }) => Promise<{
+  readMessageFacts: (params: {
+    idempotencyKeys: readonly string[];
+    sourceRunId?: string;
+  }) => Promise<{
     anchorsByIdempotencyKey: Map<string, TranscriptEntryAnchor>;
     existingIdempotencyKeys: Set<string>;
     messagesByIdempotencyKey: Map<string, unknown>;
+    sourceEvents?: TranscriptEvent[];
   }>;
   readEvents: () => Promise<TranscriptEvent[]>;
   replaceEvents: (events: readonly TranscriptEvent[]) => Promise<void>;
@@ -385,7 +399,7 @@ export type LockedTranscriptMessageAppendOptions<TMessage> = Omit<
   TranscriptMessageAppendOptions<TMessage>,
   "prepareMessageAfterIdempotencyCheck"
 > & {
-  /** @deprecated Use prepareMessageAfterIdempotencyCheckAsync outside the transaction. */
+  /** @deprecated Use preparation.prepareMessage; removed in the next Plugin SDK major. */
   prepareMessageAfterIdempotencyCheck?: (message: TMessage) => TMessage | undefined;
   /** Awaited after duplicate detection; undefined suppresses a fresh append. */
   prepareMessageAfterIdempotencyCheckAsync?: (message: TMessage) => Promise<TMessage | undefined>;
@@ -462,6 +476,8 @@ export type SessionTranscriptTurnPersistOptions = {
   onMessageCommitted?: (
     result: TranscriptMessageAppendResult<unknown>,
     acceptCompletion: (complete: () => Promise<void>) => void,
+    /** Exact guarded-turn postimage; absent for legacy, unguarded single-message writes. */
+    turn?: Pick<SessionTranscriptTurnPersistResult, "sessionEntry" | "sessionTurnMutationResult">,
   ) => void;
   /** Publish each appended message inline, one file-only invalidation, or nothing. */
   updateMode?: SessionTranscriptTurnUpdateMode;
@@ -491,6 +507,11 @@ export interface SessionTranscriptRuntimeTarget {
   sessionKey: string;
   storePath: string;
 }
+
+export type ResolvedSessionTranscriptRuntimeTarget = SessionTranscriptRuntimeTarget & {
+  selectedSessionId?: string | null;
+  selectedLifecycleRevision?: SessionLifecycleRevisionExpectation;
+};
 
 export type SessionTranscriptManualTrimResult =
   | {

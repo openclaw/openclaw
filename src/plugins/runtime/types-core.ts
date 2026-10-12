@@ -396,25 +396,56 @@ export type PluginRuntimeCore = {
      * registered backend, stored credential mode) so opted-in callers can
      * budget timeouts for the run that will actually execute.
      */
+    /** @deprecated Use resolveCliBackendDispatchEligibilityAsync. Removed at the next Plugin SDK major. */
     resolveCliBackendDispatchEligibility: typeof import("../../agents/embedded-agent-runner/cli-backend-dispatch-eligibility.js").resolveEmbeddedCliBackendDispatchEligibility;
+    resolveCliBackendDispatchEligibilityAsync: typeof import("../../agents/embedded-agent-runner/cli-backend-dispatch-eligibility.js").resolveEmbeddedCliBackendDispatchEligibilityAsync;
     ensureAgentWorkspace: typeof import("./runtime-agent-workspace.js").ensurePluginAgentWorkspace;
     session: {
       resolveStorePath: typeof import("../../config/sessions/paths.js").resolveSessionStorePathCore;
       createSessionEntry: (
         params: RuntimeCreateSessionEntryParams,
       ) => Promise<RuntimeCreateSessionEntryResult>;
+      /** @deprecated Use getSessionEntryAsync. Removed at the next Plugin SDK major. */
       getSessionEntry: (params: RuntimeSessionStoreReadParams) => RuntimeSessionEntry | undefined;
+      /** Worker-backed descriptive read; final synchronous authority checks still use getSessionEntry. */
+      getSessionEntryAsync: (
+        params: RuntimeSessionStoreReadParams,
+      ) => Promise<RuntimeSessionEntry | undefined>;
+      /** Complete public entry for a visible current ID in the selected physical store. */
+      getSessionEntryByIdAsync: (
+        params: Omit<RuntimeSessionStoreReadParams, "sessionKey"> & {
+          sessionId: string;
+          /** Newest normalized-ID match; omitted preserves exact-ID-first listing order. */
+          orderBy?: "updatedAt";
+        },
+      ) => Promise<RuntimeSessionStoreEntrySummary | undefined>;
+      /** @deprecated Use listSessionEntriesAsync for metadata reads. Removed at the next Plugin SDK major. */
       listSessionEntries: (
         params?: RuntimeSessionStoreListParams,
       ) => RuntimeSessionStoreEntrySummary[];
+      /** Read-only metadata listing; saved prompts and other detached snapshots are omitted. */
+      listSessionEntriesAsync: typeof import("../../plugin-sdk/session-store-runtime.js").listSessionEntriesAsync;
+      createSessionEntryListReader: (params: {
+        agentId: string;
+        storePath: string;
+        env?: NodeJS.ProcessEnv;
+      }) => Promise<
+        () => Promise<{
+          entries: RuntimeSessionStoreEntrySummary[];
+          assertCurrent: () => void;
+        }>
+      >;
+      /** @deprecated Use prepareSessionEntryPatch; removed in the next Plugin SDK major. */
       patchSessionEntry: (
         params: RuntimeSessionStoreEntryPatchParams,
       ) => Promise<RuntimeSessionEntry | null>;
+      prepareSessionEntryPatch: typeof import("../../plugin-sdk/session-store-runtime.js").prepareSessionEntryPatch;
       upsertSessionEntry: (params: RuntimeUpsertSessionEntryParams) => Promise<void>;
       runWithWorkAdmission: <T>(
         params: RuntimeSessionWorkAdmissionParams,
         run: (signal: AbortSignal) => Promise<T>,
       ) => Promise<T>;
+      /** @deprecated Use prepareSessionEntryPatch; removed in the next Plugin SDK major. */
       updateSessionStoreEntry: (
         params: RuntimeSessionStoreEntryUpdateParams,
       ) => Promise<RuntimeSessionEntry | null>;
@@ -527,9 +558,14 @@ export type PluginRuntimeCore = {
     openKeyedStore: <T>(
       options: OpenAsyncKeyedStoreOptions,
     ) => import("../../plugin-state/plugin-state-store.types.js").PluginStateKeyedStore<T>;
+    /** Data-only worker store; operations retain this runtime and optional action authority. */
+    openKeyedStoreV2: <T>(
+      options: OpenAsyncKeyedStoreOptions,
+      authority?: import("../../plugin-state/plugin-state-store.types.js").PluginStateActionAuthority,
+    ) => import("../../plugin-state/plugin-state-store.types.js").PluginStateKeyedStore<T, 2>;
     /**
-     * @deprecated Use openKeyedStore and await its operations. The synchronous
-     * compatibility adapter remains through the next Plugin SDK major.
+     * @deprecated Use openKeyedStoreV2 and await its operations. This synchronous
+     * compatibility adapter will be removed in the next Plugin SDK major.
      */
     openSyncKeyedStore: <T>(
       options: import("../../plugin-state/plugin-state-store.types.js").OpenKeyedStoreOptions,
@@ -578,10 +614,14 @@ export type PluginRuntimeCore = {
   modelAuth: {
     /** Existing synchronous SDK operations, composed by the native host. */
     resolveProviderIdForAuth: typeof import("../../agents/provider-auth-aliases.js").resolveProviderIdForAuth;
+    /** @deprecated Use ensureAuthProfileStoreAsync. Removed at the next Plugin SDK major. */
     ensureAuthProfileStore: typeof import("../../agents/auth-profiles/store-runtime.js").ensureAuthProfileStore;
+    ensureAuthProfileStoreAsync: typeof import("../../agents/auth-profiles/store-runtime.js").ensureAuthProfileStoreAsync;
     resolveAuthProfileOrder: typeof import("../../agents/auth-profiles/order.js").resolveAuthProfileOrder;
     listProfilesForProvider: typeof import("../../agents/auth-profiles/profile-list.js").listProfilesForProvider;
+    /** @deprecated Use isProviderApiKeyConfiguredAsync. Removed at the next Plugin SDK major. */
     isProviderApiKeyConfigured: typeof import("../provider-auth-availability.js").isProviderApiKeyConfigured;
+    isProviderApiKeyConfiguredAsync: typeof import("../provider-auth-availability.js").isProviderApiKeyConfiguredAsync;
     /** Resolve auth for a model. Only provider/model, optional cfg, and workspaceDir are used. */
     getApiKeyForModel: (params: {
       model: import("openclaw/plugin-sdk/llm").Model<import("openclaw/plugin-sdk/llm").Api>;

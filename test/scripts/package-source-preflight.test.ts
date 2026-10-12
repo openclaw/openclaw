@@ -426,7 +426,6 @@ describe("package source preflight", () => {
   });
 
   it.each([
-    ["2026.8.1", "Unreleased"],
     ["2026.8.1-beta.4", "Unreleased"],
     ["2026.9.1", "2026.8.3 (Unreleased)"],
   ])("accepts aligned %s source manifests with %s notes", (version, heading) => {

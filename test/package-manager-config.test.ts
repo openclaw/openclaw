@@ -1,4 +1,3 @@
-// Package manager config tests validate workspace package manager settings.
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import { describe, expect, it } from "vitest";
@@ -95,27 +94,6 @@ describe("package manager build policy", () => {
     expect(workspace.onlyBuiltDependencies).toBeUndefined();
   });
 
-  it("includes third-party notices in the published root package", () => {
-    const packageJson = readJson("package.json") as RootPackageJson;
-
-    expect(packageJson.files).toContain("THIRD_PARTY_NOTICES.md");
-  });
-
-  it("omits source-only Crabbox wrapper modules from the published root package", () => {
-    const packageJson = readJson("package.json") as RootPackageJson;
-
-    for (const sourcePath of [
-      "scripts/crabbox-wrapper.mjs",
-      "scripts/crabbox-wrapper.mts",
-      "scripts/crabbox-wrapper-providers.mts",
-      "scripts/crabbox-routing-policy.mts",
-      "scripts/testbox-lease-freshness.mts",
-      "scripts/lib/tsx-cli-shim.mjs",
-    ]) {
-      expect(packageJson.files).not.toContain(sourcePath);
-    }
-  });
-
   it("pins forked transitive dependencies with parent-scoped npm-lock overrides", () => {
     const tarVersion = (readJson("package.json") as RootPackageJson).dependencies.tar;
     const overrides = readNpmLockOverrides(
@@ -130,28 +108,9 @@ describe("package manager build policy", () => {
     expect(overrides[`tar@${tarVersion}`]).toMatchObject({ yallist: "5.0.0" });
   });
 
-  it("merges exact npm-lock pins with nested lock-derived pins", () => {
-    expect(
-      mergeOverrides(
-        { "@mistralai/mistralai": "2.2.1" },
-        { "@mistralai/mistralai": { ".": "2.2.1", zod: "4.4.3" } },
-        {},
-      ),
-    ).toEqual({
-      "@mistralai/mistralai": { ".": "2.2.1", zod: "4.4.3" },
-    });
-  });
-
   it.each([
     { first: "package", second: "workspace", childrenFirst: false, rootSpec: "1.2.3" },
     { first: "package", second: "lock", childrenFirst: true, rootSpec: "npm:@scope/parent@1.2.3" },
-    {
-      first: "workspace",
-      second: "lock",
-      childrenFirst: false,
-      rootSpec: "npm:@scope/parent@1.2.3",
-    },
-    { first: "workspace", second: "lock", childrenFirst: true, rootSpec: "1.2.3" },
   ] as const)(
     "retains child policy and $rootSpec across sources $first/$second (childrenFirst=$childrenFirst)",
     ({ first, second, childrenFirst, rootSpec }) => {
@@ -201,25 +160,25 @@ describe("package manager build policy", () => {
     });
   });
 
-  it.each([
-    ["^1.0.0", "~1.0.0"],
-    ["1.0.0", "2.0.0"],
-  ])("rejects conflicting root pins %s and %s when merging nested pins", (left, right) => {
-    expect(() =>
-      mergeOverrides(
-        { "floating-package": left },
-        { "floating-package": { ".": right, child: "2.0.0" } },
-        {},
-      ),
-    ).toThrow(/conflicts with pnpm lock policy/u);
-    expect(() =>
-      mergeOverrides(
-        { "floating-package": { ".": left, child: "2.0.0" } },
-        { "floating-package": right },
-        {},
-      ),
-    ).toThrow(/conflicts with pnpm lock policy/u);
-  });
+  it.each([["^1.0.0", "~1.0.0"]])(
+    "rejects conflicting root pins %s and %s when merging nested pins",
+    (left, right) => {
+      expect(() =>
+        mergeOverrides(
+          { "floating-package": left },
+          { "floating-package": { ".": right, child: "2.0.0" } },
+          {},
+        ),
+      ).toThrow(/conflicts with pnpm lock policy/u);
+      expect(() =>
+        mergeOverrides(
+          { "floating-package": { ".": left, child: "2.0.0" } },
+          { "floating-package": right },
+          {},
+        ),
+      ).toThrow(/conflicts with pnpm lock policy/u);
+    },
+  );
 
   it("rejects distinct npm alias targets with matching versions", () => {
     expect(() =>

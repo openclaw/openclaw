@@ -69,14 +69,8 @@ function buildRelocatedDailyHeadingLookup(lines: string[]): (string | null)[] {
 }
 
 function targetSnippetHasHeadingContext(targetSnippet: string, bodySnippet: string): boolean {
-  if (!targetSnippet || !bodySnippet || targetSnippet === bodySnippet) {
-    return false;
-  }
   const bodyIndex = targetSnippet.indexOf(bodySnippet);
-  if (bodyIndex <= 0) {
-    return false;
-  }
-  return sliceUtf16Safe(targetSnippet, 0, bodyIndex).trimEnd().endsWith(":");
+  return bodyIndex > 0 && sliceUtf16Safe(targetSnippet, 0, bodyIndex).trimEnd().endsWith(":");
 }
 
 function extractTargetHeadingBodySnippet(
@@ -235,17 +229,13 @@ function lineRangeOverlapsDreamingFence(
     const oneIndexed = i + 1;
     const isStart = DREAMING_FENCE_START_RE.test(line);
     const isEnd = DREAMING_FENCE_END_RE.test(line);
-    if (isStart || isEnd) {
-      // Marker lines are managed content too; promoting them would leak
-      // dreaming scratchwork into MEMORY.md (#80613).
-      if (oneIndexed >= safeStart && oneIndexed <= safeEnd) {
-        return true;
-      }
-      insideFence = isStart;
-      continue;
-    }
-    if (insideFence && oneIndexed >= safeStart && oneIndexed <= safeEnd) {
+    // Marker lines are managed content too; promoting them would leak
+    // dreaming scratchwork into MEMORY.md (#80613).
+    if ((isStart || isEnd || insideFence) && oneIndexed >= safeStart && oneIndexed <= safeEnd) {
       return true;
+    }
+    if (isStart || isEnd) {
+      insideFence = isStart;
     }
   }
   return false;

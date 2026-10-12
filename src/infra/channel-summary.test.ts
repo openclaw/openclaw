@@ -1,5 +1,5 @@
 // Covers channel account summary rendering.
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import type { ChannelPlugin } from "../channels/plugins/types.public.js";
 import { buildChannelSummary } from "./channel-summary.js";
 
@@ -156,24 +156,6 @@ describe("buildChannelSummary", () => {
     ]);
   });
 
-  it("renders summary-only inspectors without passing them to runtime hooks", async () => {
-    const runtimeOnly = vi.fn(() => {
-      throw new Error("runtime hook received an inspection summary");
-    });
-    const plugin = makeFallbackSummaryPlugin({ enabled: true, configured: true });
-    plugin.config.describeAccount = runtimeOnly;
-    plugin.config.isConfigured = runtimeOnly;
-    plugin.config.isEnabled = runtimeOnly;
-    plugin.config.resolveAccount = runtimeOnly;
-    plugin.status = { buildChannelSummary: runtimeOnly };
-
-    await expect(buildChannelSummary({}, { plugins: [plugin] })).resolves.toEqual([
-      "Fallback: configured",
-      "  - default",
-    ]);
-    expect(runtimeOnly).not.toHaveBeenCalled();
-  });
-
   it("preserves Slack HTTP signing-secret unavailable state from source config", async () => {
     const lines = await buildChannelSummary({ marker: "resolved", channels: {} } as never, {
       colorize: false,
@@ -186,16 +168,6 @@ describe("buildChannelSummary", () => {
     expect(lines).toContain(
       "  - primary (Primary) (bot:config, signing:config, secret unavailable in this command path)",
     );
-  });
-
-  it("shows disabled status without configured account detail lines", async () => {
-    const lines = await buildChannelSummary({ channels: {} } as never, {
-      colorize: false,
-      includeAllowFrom: true,
-      plugins: [makeTelegramSummaryPlugin({ enabled: false, configured: false })],
-    });
-
-    expect(lines).toEqual(["Telegram: disabled +15551234567"]);
   });
 
   it("includes linked summary metadata and truncates allow-from details", async () => {

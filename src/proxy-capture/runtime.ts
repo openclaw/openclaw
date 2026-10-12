@@ -33,7 +33,7 @@ import {
   type HttpCaptureParams,
 } from "./runtime-response-body.js";
 import { safeJsonString } from "./store.sqlite.js";
-import type { AsyncDebugProxyCaptureStore } from "./store.types.js";
+import type { AsyncDebugProxyCaptureWriter } from "./store.types.js";
 import type {
   CaptureDirection,
   CaptureEventKind,
@@ -236,7 +236,7 @@ function captureInstalledFetch(
 
 type CaptureExecution =
   | { asynchronous: false }
-  | { asynchronous: true; store: AsyncDebugProxyCaptureStore };
+  | { asynchronous: true; store: AsyncDebugProxyCaptureWriter };
 
 function runOwnedCapture(
   owner: CaptureOwner,

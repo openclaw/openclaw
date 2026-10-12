@@ -4,11 +4,14 @@ import {
   normalizeOptionalString,
   truncateUtf16Safe,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { replaceCard, workboardCardRunId, workboardCardSessionKey } from "./card-state.ts";
 import { runWorkboardCardMutation } from "./mutations.ts";
 import { normalizeCardPayload } from "./normalization.ts";
-import { getWorkboardState, workboardMutationsReady, type WorkboardHost } from "./runtime.ts";
+import {
+  getWorkboardState,
+  workboardMutationsReady,
+  type WorkboardClientContext,
+} from "./runtime.ts";
 import { workboardCardSessionTarget } from "./session-resolution.ts";
 import type {
   WorkboardCard,
@@ -53,14 +56,13 @@ function workboardRunWasAborted(result: unknown): boolean {
   );
 }
 
-export async function startWorkboardCard(params: {
-  host: WorkboardHost;
-  client: GatewayBrowserClient | null;
-  card: WorkboardCard;
-  engine?: WorkboardExecutionEngine;
-  mode?: WorkboardExecutionMode;
-  requestUpdate?: () => void;
-}): Promise<string | null> {
+export async function startWorkboardCard(
+  params: WorkboardClientContext & {
+    card: WorkboardCard;
+    engine?: WorkboardExecutionEngine;
+    mode?: WorkboardExecutionMode;
+  },
+): Promise<string | null> {
   const initialState = getWorkboardState(params.host);
   if (
     !params.client ||
@@ -156,13 +158,12 @@ export async function startWorkboardCard(params: {
   return mutationResult === false ? null : mutationResult;
 }
 
-export async function stopWorkboardCard(params: {
-  host: WorkboardHost;
-  client: GatewayBrowserClient | null;
-  card: WorkboardCard;
-  session?: BoardGetParams;
-  requestUpdate?: () => void;
-}) {
+export async function stopWorkboardCard(
+  params: WorkboardClientContext & {
+    card: WorkboardCard;
+    session?: BoardGetParams;
+  },
+) {
   const linkedSessionKey = workboardCardSessionKey(params.card);
   const session = workboardCardSessionTarget(params.card, params.session);
   if (!linkedSessionKey) {

@@ -22,8 +22,10 @@ describe("Baseten model catalog", () => {
     for (const model of declaredModels) {
       const runtimeModel = runtimeModels.get(model.id);
       expect(runtimeModel, model.id).toBeDefined();
+      expect
+        .soft(runtimeModel?.compat?.supportsReasoningEffort, `${model.id} scalar effort`)
+        .toBe(model.compat?.supportsReasoningEffort ?? false);
       for (const field of [
-        "supportsReasoningEffort",
         "supportedReasoningEfforts",
         "reasoningEffortMap",
         "codeMode",
@@ -102,7 +104,7 @@ describe("Baseten model catalog", () => {
     ])[0];
 
     expect(liveCapabilities).toMatchObject({ reasoning: false, input: ["text"] });
-    expect(liveCapabilities?.compat?.supportsReasoningEffort).toBeUndefined();
+    expect(liveCapabilities?.compat?.supportsReasoningEffort).toBe(false);
     expect(liveCapabilities?.compat?.supportedReasoningEfforts).toBeUndefined();
     expect(liveCapabilities?.compat?.reasoningEffortMap).toBeUndefined();
     expect(curatedCapabilities).toMatchObject({
@@ -122,7 +124,7 @@ describe("Baseten model catalog", () => {
       provider: "baseten",
       api: "openai-completions",
       baseUrl: "https://inference.baseten.co/v1",
-      compat: { supportsTools: true, maxTokensField: "max_tokens" },
+      compat: { supportsTools: true, supportsReasoningEffort: false, maxTokensField: "max_tokens" },
     });
   });
 
@@ -132,14 +134,15 @@ describe("Baseten model catalog", () => {
       id: "deepseek-ai/DeepSeek-V4.1-Flash-custom",
       features: ["tools", "reasoning", "json_mode", "structured_outputs"],
     },
+    { id: "zai-org/GLM-5.2", features: ["tools", "reasoning"] },
     { id: "deepseek-ai/DeepSeek-V4-Pro-0813", features: [] },
     { id: "deepseek-ai/DeepSeek-V4.1-Flash", features: ["tools"] },
   ])("does not borrow documented Flash capabilities for $id with $features", ({ id, features }) => {
     const [model] = projectBasetenLiveModels([
       { id, object: "model", supported_features: features },
     ]);
-    expect(model?.input).toEqual(["text"]);
-    expect(model?.compat?.supportsReasoningEffort).toBeUndefined();
+    expect(model).toMatchObject({ reasoning: features.includes("reasoning"), input: ["text"] });
+    expect(model?.compat?.supportsReasoningEffort).toBe(false);
     expect(model?.compat?.supportedReasoningEfforts).toBeUndefined();
   });
 });

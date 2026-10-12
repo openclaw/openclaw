@@ -151,6 +151,16 @@ function sanitizeAgentPreview(agent: ClawManifest["agent"]): ClawManifest["agent
   };
 }
 
+function summarizePackageFiles(packageFiles: Map<string, Buffer>) {
+  return [...packageFiles.entries()]
+    .map(([path, content]) => ({
+      path,
+      byteLength: content.byteLength,
+      digest: digestClawBytes(content),
+    }))
+    .toSorted((left, right) => left.path.localeCompare(right.path));
+}
+
 function buildPlanIntegrity(
   addPlan: Awaited<ReturnType<typeof buildClawAddPlan>>,
   packageFiles: Map<string, Buffer>,
@@ -158,13 +168,7 @@ function buildPlanIntegrity(
   return digestClawValue({
     schemaVersion: CLAW_MIGRATION_PLAN_SCHEMA_VERSION,
     addPlan,
-    packageFiles: [...packageFiles.entries()]
-      .map(([path, content]) => ({
-        path,
-        digest: digestClawBytes(content),
-        byteLength: content.byteLength,
-      }))
-      .toSorted((left, right) => left.path.localeCompare(right.path)),
+    packageFiles: summarizePackageFiles(packageFiles),
     retained: MIGRATION_RETAINED_PATHS,
   });
 }
@@ -402,13 +406,7 @@ export async function buildClawMigrationPlan(params: {
       packageName: loaded.source.name,
       agent: projected.manifest.agent,
       ...(projected.profile ? { openClawProfile: projected.profile } : {}),
-      generatedPackageFiles: [...projected.packageFiles.entries()]
-        .map(([path, content]) => ({
-          path,
-          byteLength: content.byteLength,
-          digest: digestClawBytes(content),
-        }))
-        .toSorted((left, right) => left.path.localeCompare(right.path)),
+      generatedPackageFiles: summarizePackageFiles(projected.packageFiles),
       workspaceFiles: selectedFiles.map(({ name, content, digest }) => ({
         path: resolve(workspace, name),
         byteLength: content.byteLength,

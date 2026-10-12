@@ -51,19 +51,34 @@ delete reactions for removed message identities in the same transaction, while
 a reset makes old-instance rows inert. Downgrade leaves the table intact and disables Control UI reactions until
 a supporting build returns. No transcript backfill or rewrite is required.
 
-Admitted agent and cached shared-state handles retain their schema version and
-table facts. The handle owner revokes these facts after local DDL or transaction
-rollback. A fresh `PRAGMA data_version` check observes foreign commits on the next
-unpinned read, even within the same event-loop turn. On a foreign commit, the owner
-compares `schema_version` and `user_version` in one pinned snapshot and retains
-facts and their revision when both are unchanged. Data-only commits therefore
-avoid table and column scans while version-only changes still trigger refusal
-when the stored version is newer than the running build. Actual
-SQLite read snapshots retain their view until they end; the next read then observes
-committed changes. Canonical session validation uses the same schema revision.
-Unchanged versions reuse parsed schema facts and prepared statements without
-repeating schema scans. Migration and snapshot consistency checks remain fresh reads.
-This changes no stored schema, migration, durability, or update behavior.
+The first admission validates each physical database's schema version and shape
+once per process load. Agent, shared-state, and other SQLite owners share those
+admitted facts with every later handle and worker, including reopens after idle
+close. A replaced file needs first admission for its new physical identity.
+Migration and repair owners validate their changes and publish new facts after
+successful DDL settlement; rollback cannot publish an uncommitted schema.
+The `schema_meta` role and agent ID describe the physical store's fixed schema
+owner. Creation and migration validate and publish them; changing that row through
+external SQL does not reassign an admitted store to another agent. Session
+permissions, leases, and other live authority remain current-row decisions.
+
+Catalog shape equality cannot prove that the `schema_meta` primary row or the
+`config_machine_state` content-version marker survived DDL. Observed DDL without
+owner-published replacement facts expires these row-backed admissions. The next
+owner lookup validates them once; later handles and opens reuse the result.
+Historical metadata remains private to its snapshot unless the owner positively
+matches it to the current committed admission. Rollback restores both staged
+publication and connection-local version facts.
+
+The Gateway owns runtime database state. Committed in-process write receipts
+invalidate cached rows across handles and workers without querying `data_version`,
+`schema_version`, `user_version`, or the catalog. Other processes must route writes
+through the Gateway or hold exclusive offline ownership. SQLite read snapshots
+retain their view until they end; statements outside an open snapshot see current
+committed rows. Initial admission still refuses unsupported versions. Doctor,
+explicit verification, migration, and snapshot consistency checks retain their
+own contracts. This changes no stored schema, migration, durability, or update
+behavior.
 
 The nullable requester-authority columns on GitHub publication lifecycle and
 repository receipts require [state schema 18](/reference/database-schemas/state-schema-history#state-schema-18).
@@ -270,15 +285,16 @@ the schema migration; changing the cold-storage age setting afterward needs no
 Gateway restart. These are separate operations: live configuration reload does
 not authorize an active schema migration.
 
-Agent schema 21 makes the canonical-validation pending table and its node,
-window and main-key invalidation triggers required. This needs a version bump:
-older schema inspectors reject unexpected triggers on canonical tables. The
-maintenance migration marks existing nodes pending without rewriting their
-contents; readiness and Doctor own validation. Already-open older connections
-leave pending markers when they change canonical inputs. Reopening with older
-code is refused. Rollback uses the verified pre-migration backup and matching
-build, not marker changes or removal of the derived table alone. See
-[incremental canonical-session validation](/reference/database-schemas/agent-schema-history#incremental-canonical-session-validation).
+Agent schemas 21–24 require the canonical-validation pending table and its node,
+window, and main-key invalidation triggers. Schema 25 removes those triggers and
+the `entry_valid` reset triggers: canonical writers validate their final serialized
+inputs before SQL, while offline import and repair explicitly queue admission
+work. This needs a version bump because older schema inspectors require the
+retired triggers. Migration preserves payloads, seeds all existing nodes, and
+clears the old canonical receipt before publishing the new version. Admission
+still rejects invalid imported rows. Reopening with older code is refused;
+rollback uses the verified pre-migration backup and matching build. See
+[canonical writer validation](/reference/database-schemas/agent-schema-history#canonical-writer-validation).
 
 Agent schema 22 introduced exact transcript FTS row ownership with a nullable
 completeness count and lazy backfill. Schema 23 accepts that deployed shape as
@@ -447,6 +463,12 @@ original result and a keyed request fingerprint, not a second raw request.
 There is no backfill or configuration switch. Downgrading preserves the table
 but disables the new structured controls; upgrading can read retained receipts.
 
+The mutable JSON predicate projections require
+[agent schema 26](/reference/database-schemas/agent-schema-history#json-predicate-columns).
+Older writers must be fenced because they update canonical JSON without maintaining
+the promoted columns. The forward migration backfills every retained row once;
+NULL-only repair on reopen cannot make a downgrade and re-upgrade safe.
+
 ### Schema bumps and older updaters
 
 OpenClaw 2026.9.2 introduced the update ledger but reopens it with old code after
@@ -466,8 +488,11 @@ completed rebuild. This requires no new table,
 configuration option, or environment override.
 
 Current content is ready for readers even while its version is unpublished.
-Ordinary CLI commands can run alongside the Gateway throughout this window;
-publication alone does not trigger schema repair or require stopping the Gateway.
+Read-only CLI operations and Gateway-routed mutations can run alongside the
+Gateway throughout this window. Independent SQLite writers require exclusive
+ownership while the Gateway is stopped; the older update driver retains the
+explicit handoff contract below. Publication alone does not trigger schema repair
+or require stopping the Gateway.
 
 A subsequent update can run during this window. Its migration verification and
 rollback checks compare applied content versions from private database snapshots.

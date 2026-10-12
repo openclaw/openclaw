@@ -231,6 +231,29 @@ export function openPackageActivationJournal(anchor: string) {
       throw new Error("Package publication intent is no longer current");
     }
   };
+  const writeCurrent = <T>(
+    expected: PackageActivationRecord,
+    assertCurrent: () => void,
+    write: (db: DatabaseSync, previous: PackageActivationRecord) => T,
+  ): T =>
+    withDatabase(true, (db, transact) =>
+      transact(
+        () => {
+          assertFiles();
+          assertCurrent();
+          const previous = decode(readRow(db));
+          assertRecord(expected, previous);
+          return write(db, previous);
+        },
+        {
+          withCommit: (commit) => {
+            assertFiles();
+            assertCurrent();
+            commit();
+          },
+        },
+      ),
+    );
   const transition = (
     expected: PackageActivationRecord,
     phase: PackageActivationPhase,
@@ -243,37 +266,23 @@ export function openPackageActivationJournal(anchor: string) {
     const intentJson = JSON.stringify(intentSchema.parse(intent));
     PackageActivationPhaseSchema.parse(phase);
     assertCurrent();
-    return withDatabase(true, (db, transact) =>
-      transact(
-        () => {
-          assertFiles();
-          assertCurrent();
-          assertRecord(expected, decode(readRow(db)));
-          executeSqliteQuerySync(
-            db,
-            queries(db)
-              .updateTable("package_activation")
-              .set({
-                revision: expected.revision + 1,
-                phase,
-                descriptor_json: descriptorJsonValue,
-                intent_json: intentJson,
-                publications_json: JSON.stringify(publications),
-              })
-              .where("slot", "=", 1)
-              .where("revision", "=", expected.revision),
-          );
-          return decode(readRow(db));
-        },
-        {
-          withCommit: (commit) => {
-            assertFiles();
-            assertCurrent();
-            commit();
-          },
-        },
-      ),
-    );
+    return writeCurrent(expected, assertCurrent, (db) => {
+      executeSqliteQuerySync(
+        db,
+        queries(db)
+          .updateTable("package_activation")
+          .set({
+            revision: expected.revision + 1,
+            phase,
+            descriptor_json: descriptorJsonValue,
+            intent_json: intentJson,
+            publications_json: JSON.stringify(publications),
+          })
+          .where("slot", "=", 1)
+          .where("revision", "=", expected.revision),
+      );
+      return decode(readRow(db));
+    });
   };
   return {
     read,
@@ -403,56 +412,6 @@ export function openPackageActivationJournal(anchor: string) {
         },
         read: (db) => decode(readRow(db)),
       });
-    },
-    replaceCompleted(
-      expected: PackageActivationRecord,
-      descriptor: Omit<PackageActivationDescriptor, "journalIdentity">,
-      assertCurrent: () => void,
-    ) {
-      const encoded = descriptorJson({ ...descriptor, journalIdentity });
-      return withDatabase(true, (db, transact) =>
-        transact(
-          () => {
-            assertFiles();
-            assertCurrent();
-            const previous = decode(readRow(db));
-            assertRecord(expected, previous);
-            if (
-              !isPackageActivationComplete(anchor, previous) ||
-              fs.lstatSync(anchor, { throwIfNoEntry: false }) ||
-              fs.lstatSync(resolvePackageActivationHelper(anchor), { throwIfNoEntry: false }) ||
-              descriptor.journalParentIdentity !== journalParentIdentity ||
-              packageActivationIdentity(preparationSource(descriptor, "anchor"), true) !==
-                descriptor.anchorIdentity ||
-              packageActivationIdentity(preparationSource(descriptor, "helper"), false) !==
-                descriptor.helperIdentity
-            ) {
-              throw new Error("The previous package receipt is not safely replaceable.");
-            }
-            executeSqliteQuerySync(
-              db,
-              queries(db)
-                .updateTable("package_activation")
-                .set({
-                  revision: previous.revision + 1,
-                  phase: "preparing",
-                  descriptor_json: encoded,
-                  intent_json: JSON.stringify({ kind: "prepare", completed: [], moving: null }),
-                  publications_json: "[]",
-                })
-                .where("slot", "=", 1)
-                .where("revision", "=", previous.revision),
-            );
-          },
-          {
-            withCommit: (commit) => {
-              assertFiles();
-              assertCurrent();
-              commit();
-            },
-          },
-        ),
-      );
     },
     assertCurrent(expected: PackageActivationRecord) {
       assertRecord(expected, read());

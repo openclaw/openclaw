@@ -15,6 +15,10 @@ enum AppleReviewDemoMode {
 }
 
 enum ScreenshotFixtureMode {
+    static var progressBarEnabled: Bool {
+        ProcessInfo.processInfo.arguments.contains("--openclaw-progress-bar-fixture")
+    }
+
     static let gatewayName = "OpenClaw Gateway"
     static let gatewayAddress = "Gateway on local network"
     static let gatewayID = "screenshot-fixture-gateway"
@@ -231,6 +235,20 @@ struct LocalFixtureChatTransport: OpenClawChatTransport {
 
     func requestHistory(sessionKey: String) async throws -> OpenClawChatHistoryPayload {
         try await self.store.history(sessionKey: sessionKey)
+    }
+
+    func fetchProgressCard(sessionKey: String, agentID _: String?) async throws -> ProgressCard? {
+        guard ScreenshotFixtureMode.progressBarEnabled else { return nil }
+        return ProgressCard(
+            sessionkey: sessionKey,
+            revision: 1,
+            updatedat: 0,
+            markdown: """
+            <progress aria-label="Sample tasks · 3/5" value="3" max="5"></progress>
+
+            Now: reading the sample diff.
+            """,
+            steps: [])
     }
 
     func acquireReactionsRouteLease() async -> OpenClawChatReactionsRouteLease? {
@@ -473,6 +491,7 @@ private actor LocalFixtureChatStore {
     }
 
     func history(sessionKey: String) throws -> OpenClawChatHistoryPayload {
+        let owner = ScreenshotFixtureMode.progressBarEnabled ? self.fixture.defaultAgentID : nil
         let normalizedSessionKey = Self.normalizedSessionKey(sessionKey, fallback: self.fixture.sessionKey)
         return try OpenClawChatHistoryPayload(
             sessionKey: normalizedSessionKey,
@@ -481,7 +500,9 @@ private actor LocalFixtureChatStore {
             thinkingLevel: self.thinkingLevel,
             sessionInfo: OpenClawChatSessionInfo(
                 hasActiveRun: self.activeRunID != nil,
-                activeRunIds: self.activeRunID.map { [$0] }),
+                activeRunIds: self.activeRunID.map { [$0] },
+                key: owner.map { "agent:\($0):\(normalizedSessionKey)" },
+                agentId: owner),
             inFlightRun: self.duplicateReplaySessionKey.flatMap { _ in
                 self.activeRunID.map { OpenClawChatInFlightRun(runId: $0, text: "") }
             } ?? (ProcessInfo.processInfo.arguments.contains("--openclaw-streaming-layout-fixture")

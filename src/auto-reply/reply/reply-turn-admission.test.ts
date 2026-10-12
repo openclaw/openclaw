@@ -15,6 +15,7 @@ import {
 } from "../../logging/diagnostic-run-activity.js";
 import { markDiagnosticToolStartedForTest } from "../../logging/diagnostic-run-activity.test-support.js";
 import {
+  getTerminalSessionWorkAdmissionRelease,
   interruptSessionWorkAdmissions,
   runExclusiveSessionLifecycleMutation,
 } from "../../sessions/session-lifecycle-admission.js";
@@ -228,6 +229,16 @@ it("preserves a source recovery identity after adopting a distinct target sessio
   expect(adopted).toBe(source);
   expect(adopted.key).toBe(sessionKey);
   expect(adopted.sessionId).toBe("target-session");
+  const targets = [sourceKey, sessionKey].map((key) => ({ scope: storePath, identities: [key] }));
+  expect(targets.map(getTerminalSessionWorkAdmissionRelease)).toEqual([false, false]);
+  adopted.freezeAbort();
+  const terminalReleases = targets.map((target) => {
+    const released = getTerminalSessionWorkAdmissionRelease(target);
+    if (released === false) {
+      throw new Error("Committed reply admission is still classified as live");
+    }
+    return released;
+  });
   const release = holdRecoveryRelease();
   adopted.complete();
   await release.started;
@@ -241,6 +252,7 @@ it("preserves a source recovery identity after adopting a distinct target sessio
   await Promise.resolve();
   expect(settled).toBe(false);
   release.release();
+  await Promise.all(terminalReleases);
   const next = owned(await successor);
   expect(next.sessionId).toBe(sessionId);
   next.complete();

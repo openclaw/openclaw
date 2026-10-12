@@ -19,6 +19,7 @@ import {
   runSqliteDeferredTransactionSync,
   runSqliteImmediateTransaction,
   runSqliteImmediateTransactionSync,
+  runSqliteReadSnapshotSync,
   withSqliteWriteAdmissionService,
 } from "./sqlite-transaction.js";
 
@@ -175,6 +176,50 @@ describe("runSqliteDeferredTransactionSync", () => {
   });
 });
 
+describe("runSqliteReadSnapshotSync", () => {
+  it("shares one snapshot across nested reads without savepoints and sees the next commit afterward", () => {
+    const databasePath = path.join(
+      tempDirs.make("openclaw-sqlite-read-composition-"),
+      "read.sqlite",
+    );
+    const { DatabaseSync } = requireNodeSqlite();
+    const reader = new DatabaseSync(databasePath);
+    const writer = new DatabaseSync(databasePath);
+    openDatabases.push(reader, writer);
+    reader.exec(
+      "PRAGMA journal_mode = WAL; CREATE TABLE entries (id TEXT PRIMARY KEY); INSERT INTO entries VALUES ('first');",
+    );
+    const transactionSql = vi.spyOn(reader, "exec");
+
+    const rows = runSqliteReadSnapshotSync(reader, () => {
+      const before = readEntries(reader);
+      writer.prepare("INSERT INTO entries VALUES (?)").run("second");
+      const nested = runSqliteReadSnapshotSync(reader, () => readEntries(reader));
+      expect(reader.isTransaction).toBe(true);
+      return { before, nested };
+    });
+
+    expect(rows).toEqual({ before: ["first"], nested: ["first"] });
+    expect(transactionSql.mock.calls.map(([sql]) => sql)).toEqual(["BEGIN", "COMMIT"]);
+    expect(reader.isTransaction).toBe(false);
+    expect(readEntries(reader)).toEqual(["first", "second"]);
+  });
+
+  it.each([false, true])("rejects asynchronous reads with an existing snapshot: %s", (nested) => {
+    const db = createDatabase();
+    const read = () => runSqliteReadSnapshotSync(db, () => Promise.resolve(readEntries(db)));
+    if (nested) {
+      runSqliteDeferredTransactionSync(db, () => {
+        expect(read).toThrow("Promise returns are not supported");
+        expect(db.isTransaction).toBe(true);
+      });
+    } else {
+      expect(read).toThrow("Promise returns are not supported");
+    }
+    expect(db.isTransaction).toBe(false);
+  });
+});
+
 describe("runSqliteImmediateTransactionSync", () => {
   it("keeps outer writes when a nested savepoint rolls back", () => {
     const db = createDatabase();
@@ -285,6 +330,15 @@ describe("runSqliteImmediateTransactionSync", () => {
       reuseError = error;
     }
     expect(reuseError).toBe(primaryError);
+    const read = vi.fn(() => undefined);
+    let readError: unknown;
+    try {
+      runSqliteReadSnapshotSync(db, read);
+    } catch (error) {
+      readError = error;
+    }
+    expect(readError).toBe(primaryError);
+    expect(read).not.toHaveBeenCalled();
     const prepare = vi.fn(async () => () => undefined);
     await expect(runSqliteImmediateTransaction(db, prepare)).rejects.toBe(primaryError);
     expect(prepare).not.toHaveBeenCalled();

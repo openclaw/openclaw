@@ -33,11 +33,9 @@ export abstract class OpenAIRealtimeProtocol {
 
   readonly supportsToolResultSuppression = true;
 
-  protected nextMarkSequence = 1;
+  protected latestMarkSequence = 0;
 
   protected oldestOutstandingMarkSequence: number | null = null;
-
-  protected latestOutstandingMarkSequence: number | null = null;
 
   protected responseActive = false;
 
@@ -90,8 +88,8 @@ export abstract class OpenAIRealtimeProtocol {
 
   acknowledgeMark(markName?: string): void {
     const oldest = this.oldestOutstandingMarkSequence;
-    const latest = this.latestOutstandingMarkSequence;
-    if (oldest === null || latest === null) {
+    const latest = this.latestMarkSequence;
+    if (oldest === null) {
       return;
     }
     const acknowledgedSequence =
@@ -107,7 +105,6 @@ export abstract class OpenAIRealtimeProtocol {
     // earlier mark, while late acknowledgements from that prefix remain harmless.
     if (acknowledgedSequence === latest) {
       this.oldestOutstandingMarkSequence = null;
-      this.latestOutstandingMarkSequence = null;
       return;
     }
     this.oldestOutstandingMarkSequence = acknowledgedSequence + 1;
@@ -415,18 +412,16 @@ export abstract class OpenAIRealtimeProtocol {
   }
 
   protected createPlaybackMark(): string {
-    const sequence = this.nextMarkSequence;
-    this.nextMarkSequence += 1;
+    this.latestMarkSequence += 1;
+    const sequence = this.latestMarkSequence;
     if (this.oldestOutstandingMarkSequence === null) {
       this.oldestOutstandingMarkSequence = sequence;
     }
-    this.latestOutstandingMarkSequence = sequence;
     return `audio-${sequence}`;
   }
 
   protected clearOutstandingMarks(): void {
     this.oldestOutstandingMarkSequence = null;
-    this.latestOutstandingMarkSequence = null;
   }
 
   abstract submitToolResult(

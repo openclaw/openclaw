@@ -16,8 +16,10 @@ import {
 import type { dispatchInboundMessage } from "../auto-reply/dispatch.js";
 import type { GetReplyOptions } from "../auto-reply/get-reply-options.types.js";
 import * as staging from "../auto-reply/reply/stage-sandbox-media.js";
+import { recordAgentRunTerminalOutcome } from "../channels/turn/agent-run-terminal-outcome.js";
 import { clearConfigCache } from "../config/config.js";
-import { loadTranscriptEventsSync } from "../config/sessions/session-accessor.js";
+import { loadSessionEntry, loadTranscriptEventsSync } from "../config/sessions/session-accessor.js";
+import { appendTranscriptMessage } from "../config/sessions/session-accessor.sqlite-transcript-write.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { emitAgentEventIfCurrent } from "../infra/agent-events.js";
 import {
@@ -25,6 +27,7 @@ import {
   interruptSessionWorkAdmissions,
   startSessionWorkAdmissionInterruption,
 } from "../sessions/session-lifecycle-admission.js";
+import * as sessionRunError from "../sessions/session-run-error.js";
 import type { UserTurnTranscriptRecorder } from "../sessions/user-turn-transcript.js";
 import { observeGatewayConnectionWork } from "./server-held-work.test-support.js";
 import {
@@ -49,14 +52,18 @@ let gateway: GatewayHarness;
 const connectionReleases: Promise<void>[] = [];
 let restoreConnectionObserver: (() => void) | undefined;
 
-function trackChatTerminalStates(socket: GatewaySocket, runId: string): string[] {
+function trackChatTerminalStates(
+  socket: GatewaySocket,
+  runId: string,
+  onYielded?: () => void,
+): string[] {
   const terminalStates: string[] = [];
   socket.on("message", (raw) => {
     try {
       const frame = JSON.parse(rawDataToString(raw)) as {
         type?: string;
         event?: string;
-        payload?: { runId?: string; state?: string };
+        payload?: { runId?: string; state?: string; yielded?: boolean };
       };
       if (
         frame.type === "event" &&
@@ -65,6 +72,9 @@ function trackChatTerminalStates(socket: GatewaySocket, runId: string): string[]
         typeof frame.payload.state === "string"
       ) {
         terminalStates.push(frame.payload.state);
+        if (frame.payload.yielded === true) {
+          onYielded?.();
+        }
       }
     } catch {
       // The owned test socket may also carry unrelated gateway events.
@@ -350,72 +360,111 @@ describe("gateway WebSocket chat abort ownership", () => {
     );
   });
 
-  test("does not let a late abort replace an established dispatch error", async () => {
-    const sessionDirectory = temporaryDirectories.make("openclaw-chat-error-late-abort-");
-    const storePath = path.join(sessionDirectory, "sessions.json");
-    testState.sessionStorePath = storePath;
-    await writeMainSession("sess-main");
+  test.for([false, true])(
+    "retains dispatch failure and rejects late abort after yielded waiting end=%s",
+    async (yielded, { signal }) => {
+      const sessionDirectory = temporaryDirectories.make("openclaw-chat-error-late-abort-");
+      const storePath = path.join(sessionDirectory, "sessions.json");
+      testState.sessionStorePath = storePath;
+      await writeMainSession("sess-main");
 
-    const socket = await gateway.openWs();
-    const dispatchEntered = createDeferred();
-    const dispatchRelease = createDeferred();
-    const runId = "real-websocket-dispatch-error-before-late-abort";
-    const terminalStates = trackChatTerminalStates(socket, runId);
-    let admissionRelease: Promise<void> | undefined;
+      const socket = await gateway.openWs();
+      const dispatchEntered = createDeferred();
+      const dispatchRelease = createDeferred();
+      const runId = `real-websocket-dispatch-error-before-late-abort-${yielded}`;
+      const yieldedFrame = createDeferred();
+      const terminalStates = trackChatTerminalStates(socket, runId, yieldedFrame.resolve);
+      let admissionRelease: Promise<void> | undefined;
 
-    try {
-      await connectOk(socket);
-      dispatchInboundMessageMock.mockImplementationOnce(async () => {
-        dispatchEntered.resolve();
-        await dispatchRelease.promise;
-        throw new Error("dispatch rejected before a late abort");
-      });
+      try {
+        await connectOk(socket);
+        dispatchInboundMessageMock.mockImplementationOnce(async (args: unknown) => {
+          const { replyOptions } = args as Parameters<typeof dispatchInboundMessage>[0];
+          await replyOptions?.userTurnTranscriptRecorder?.persistApproved();
+          if (yielded) {
+            replyOptions?.onAgentRunStart?.(runId);
+          }
+          dispatchEntered.resolve();
+          await dispatchRelease.promise;
+          throw new Error("dispatch rejected before a late abort");
+        });
 
-      const sendParameters = {
-        sessionKey: "main",
-        message: "reject this dispatched message before the abort",
-        idempotencyKey: runId,
-      };
-      const started = await rpcReq(socket, "chat.send", sendParameters);
-      expect(started.ok).toBe(true);
-      expect(started.payload).toMatchObject({ runId, status: "started" });
-      await dispatchEntered.promise;
-      expect(dispatchInboundMessageMock).toHaveBeenCalledOnce();
-      admissionRelease = getSessionWorkAdmissionRelease({
-        scope: storePath,
-        identities: ["main", "agent:main:main", "sess-main"],
-      });
-      if (!admissionRelease) {
-        throw new Error("Held dispatch must retain its session admission");
+        const sendParameters = {
+          sessionKey: "main",
+          message: "reject this dispatched message before the abort",
+          idempotencyKey: runId,
+        };
+        const started = await rpcReq(socket, "chat.send", sendParameters);
+        expect(started.ok).toBe(true);
+        expect(started.payload).toMatchObject({ runId, status: "started" });
+        await dispatchEntered.promise;
+        expect(dispatchInboundMessageMock).toHaveBeenCalledOnce();
+        admissionRelease = getSessionWorkAdmissionRelease({
+          scope: storePath,
+          identities: ["main", "agent:main:main", "sess-main"],
+        });
+        if (!admissionRelease) {
+          throw new Error("Held dispatch must retain its session admission");
+        }
+        if (yielded) {
+          expect(
+            emitAgentEventIfCurrent({
+              runId,
+              stream: "lifecycle",
+              sessionKey: "agent:main:main",
+              sessionId: "sess-main",
+              agentId: "main",
+              data: {
+                phase: "end",
+                yielded: true,
+                livenessState: "paused",
+                stopReason: "end_turn",
+              },
+            }),
+          ).toBe(true);
+          await withinTest(yieldedFrame.promise, signal);
+        }
+        dispatchRelease.resolve();
+        await admissionRelease;
+
+        // Admission release follows error persistence/publication; the replay response
+        // follows that error event on this socket, without timing the persistence work.
+        const established = await rpcReq(socket, "chat.send", sendParameters);
+        expect(established.ok).toBe(false);
+        expect(established.payload).toMatchObject({ runId, status: "error" });
+        expect(terminalStates).toEqual(yielded ? ["final", "error"] : ["error"]);
+        const history = await rpcReq<{ messages: unknown[] }>(socket, "chat.history", {
+          sessionKey: "main",
+        });
+        expect(history.payload?.messages).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              role: "custom",
+              customType: "run-failed-before-reply",
+              content: expect.stringContaining("dispatch rejected before a late abort"),
+            }),
+          ]),
+        );
+
+        const lateAbort = await rpcReq(socket, "chat.abort", {
+          sessionKey: "main",
+          runId,
+        });
+        expect(lateAbort.ok).toBe(true);
+        expect(lateAbort.payload).toMatchObject({ ok: true, aborted: false, runIds: [] });
+
+        const replay = await rpcReq(socket, "chat.send", sendParameters);
+        expect(replay.ok).toBe(false);
+        expect(replay.payload).toEqual(established.payload);
+        expect(dispatchInboundMessageMock).toHaveBeenCalledOnce();
+        expect(terminalStates).toEqual(yielded ? ["final", "error"] : ["error"]);
+      } finally {
+        dispatchRelease.resolve();
+        await admissionRelease;
+        socket.close();
       }
-      dispatchRelease.resolve();
-      await admissionRelease;
-
-      // Admission release follows error persistence/publication; the replay response
-      // follows that error event on this socket, without timing the persistence work.
-      const established = await rpcReq(socket, "chat.send", sendParameters);
-      expect(established.ok).toBe(false);
-      expect(established.payload).toMatchObject({ runId, status: "error" });
-      expect(terminalStates).toEqual(["error"]);
-
-      const lateAbort = await rpcReq(socket, "chat.abort", {
-        sessionKey: "main",
-        runId,
-      });
-      expect(lateAbort.ok).toBe(true);
-      expect(lateAbort.payload).toMatchObject({ ok: true, aborted: false, runIds: [] });
-
-      const replay = await rpcReq(socket, "chat.send", sendParameters);
-      expect(replay.ok).toBe(false);
-      expect(replay.payload).toEqual(established.payload);
-      expect(dispatchInboundMessageMock).toHaveBeenCalledOnce();
-      expect(terminalStates).toEqual(["error"]);
-    } finally {
-      dispatchRelease.resolve();
-      await admissionRelease;
-      socket.close();
-    }
-  });
+    },
+  );
 
   test.for([false, true])(
     "keeps a signal-only lifecycle terminal as the only chat terminal (restart=%s)",
@@ -522,6 +571,183 @@ describe("gateway WebSocket chat abort ownership", () => {
       }
     },
   );
+
+  test("publishes one runtime-loss terminal and retains its failure after commentary for another client", async ({
+    signal,
+  }) => {
+    const sessionDirectory = temporaryDirectories.make("openclaw-chat-runtime-loss-");
+    const storePath = path.join(sessionDirectory, "sessions.json");
+    testState.sessionStorePath = storePath;
+    const scope = {
+      storePath,
+      agentId: "main",
+      sessionKey: "agent:main:main",
+      sessionId: "runtime-loss-session",
+    };
+    await writeMainSession(scope.sessionId);
+    const socket = await gateway.openWs();
+    const reader = await gateway.openWs();
+    const runId = "runtime-loss-after-commentary";
+    const error = "codex app-server client closed before turn completed";
+    const warning =
+      "⚠️ Lost the connection to Codex before it confirmed the task was finished. It may still be running. Check the conversation in the Control UI before trying again.";
+    const terminalStates = trackChatTerminalStates(socket, runId);
+    const commentaryPersisted = createDeferred();
+    const dispatchRelease = createDeferred();
+    const failureEntered = createDeferred();
+    const failureRelease = createDeferred();
+    const recordFailure = sessionRunError.recordGatewaySessionRunFailure;
+    let failureWork: Promise<void> | undefined;
+    const failureSpy = vi
+      .spyOn(sessionRunError, "recordGatewaySessionRunFailure")
+      .mockImplementation((...args) => {
+        failureEntered.resolve();
+        failureWork = failureRelease.promise.then(() => recordFailure(...args));
+        return failureWork;
+      });
+    let admissionRelease: Promise<void> | undefined;
+    let startedAt = Date.now();
+    dispatchInboundMessageMock.mockImplementationOnce(async (args: unknown) => {
+      const { dispatcher, replyOptions } = args as Parameters<typeof dispatchInboundMessage>[0];
+      await replyOptions?.userTurnTranscriptRecorder?.persistApproved();
+      replyOptions?.onAgentRunStart?.(runId);
+      startedAt = Date.now();
+      emitAgentEventIfCurrent({
+        ...scope,
+        runId,
+        stream: "lifecycle",
+        data: { phase: "start", startedAt },
+      });
+      await appendTranscriptMessage(scope, {
+        message: {
+          role: "assistant",
+          content: [
+            {
+              type: "text",
+              text: "Running it now.",
+              textSignature: JSON.stringify({
+                v: 1,
+                id: "runtime-loss-commentary",
+                phase: "commentary",
+              }),
+            },
+          ],
+          timestamp: Date.now(),
+          stopReason: "stop",
+          __openclaw: { runId },
+        },
+      });
+      commentaryPersisted.resolve();
+      await dispatchRelease.promise;
+      dispatcher.sendFinalReply({ text: warning, isError: true });
+      await dispatcher.waitForIdle();
+      return recordAgentRunTerminalOutcome(
+        { queuedFinal: true, counts: { tool: 0, block: 0, final: 1 } },
+        "failed",
+      );
+    });
+    try {
+      await connectOk(socket);
+      await connectOk(reader);
+      const sendParameters = {
+        sessionKey: scope.sessionKey,
+        message: "Run the command, then report completion.",
+        idempotencyKey: runId,
+      };
+      const started = await rpcReq(socket, "chat.send", sendParameters);
+      expect(started.payload).toMatchObject({ runId, status: "started" });
+      await commentaryPersisted.promise;
+      admissionRelease = getSessionWorkAdmissionRelease({
+        scope: storePath,
+        identities: [scope.sessionKey, scope.sessionId],
+      });
+      expect(admissionRelease).toBeDefined();
+      const terminal = onceMessage(
+        socket,
+        (frame) =>
+          frame.event === "chat" &&
+          frame.payload?.runId === runId &&
+          frame.payload?.state === "error",
+      );
+      const lifecycle = onceMessage(
+        socket,
+        (frame) =>
+          frame.event === "agent" &&
+          frame.payload?.runId === runId &&
+          frame.payload?.stream === "lifecycle" &&
+          asOptionalRecord(frame.payload?.data)?.phase === "error",
+      );
+      expect(
+        emitAgentEventIfCurrent({
+          ...scope,
+          runId,
+          stream: "lifecycle",
+          data: { phase: "error", startedAt, endedAt: Date.now(), error, executionSettled: true },
+        }),
+      ).toBe(true);
+      await withinTest(failureEntered.promise, signal);
+      await lifecycle;
+      // The same-socket response fences delivered events while the notice commit is held.
+      const heldHistory = await rpcReq<{ messages: unknown[] }>(socket, "chat.history", {
+        sessionKey: scope.sessionKey,
+      });
+      expect(heldHistory.ok).toBe(true);
+      expect(heldHistory.payload?.messages).not.toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ customType: "run-failed-before-reply" }),
+        ]),
+      );
+      expect.soft(terminalStates).toEqual([]);
+      failureRelease.resolve();
+      const terminalFrame = await terminal;
+      expect.soft(terminalStates).toEqual(["error"]);
+      expect.soft(terminalFrame.payload?.errorMessage).toBe(warning);
+      expect(loadSessionEntry(scope)).toMatchObject({ status: "failed", lastRunId: runId });
+      const history = await rpcReq<{ messages: unknown[] }>(reader, "chat.history", {
+        sessionKey: scope.sessionKey,
+      });
+      expect(history.ok).toBe(true);
+      expect(history.payload?.messages).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            role: "assistant",
+            content: expect.arrayContaining([
+              expect.objectContaining({ type: "text", text: "Running it now." }),
+            ]),
+          }),
+          expect.objectContaining({
+            role: "custom",
+            customType: "run-failed-before-reply",
+            content: warning,
+          }),
+        ]),
+      );
+      expect(loadTranscriptEventsSync(scope)).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            customType: "run-failed-before-reply",
+            content: warning,
+            details: expect.objectContaining({ runId, error }),
+          }),
+        ]),
+      );
+      expect(dispatchInboundMessageMock).toHaveBeenCalledOnce();
+      dispatchRelease.resolve();
+      await admissionRelease;
+      const replay = await rpcReq(socket, "chat.send", sendParameters);
+      expect(replay.ok).toBe(false);
+      expect(replay.payload).toMatchObject({ runId, status: "error", summary: warning });
+      expect(terminalStates).toEqual(["error"]);
+    } finally {
+      failureRelease.resolve();
+      dispatchRelease.resolve();
+      await failureWork;
+      await admissionRelease;
+      failureSpy.mockRestore();
+      socket.close();
+      reader.close();
+    }
+  });
 
   test("returns pre-ACK attachment cancellation only after inbound cleanup", async () => {
     const sessionDirectory = temporaryDirectories.make("openclaw-chat-attachment-abort-");

@@ -68,14 +68,9 @@ describe("prepared project retention compatibility", () => {
       provisionOperationId: "provision:retained",
       profileSnapshot: { ...profileSnapshot, project: { ...project, preparation } },
     });
-    let artifactsCurrent = true;
     const prepareNodeArtifacts = vi.fn(async () => ({
       artifacts,
-      assertCurrent: () => {
-        if (!artifactsCurrent) {
-          throw new Error("Runtime artifacts changed");
-        }
-      },
+      assertCurrent: () => {},
     }));
     const providerFor = vi.fn(() => fixture.provider);
     const owner = createWorkerProviderIntent({
@@ -95,9 +90,6 @@ describe("prepared project retention compatibility", () => {
       artifacts,
       prepareNodeArtifacts,
       providerFor,
-      invalidateArtifacts: () => {
-        artifactsCurrent = false;
-      },
     };
   }
 
@@ -216,10 +208,10 @@ describe("prepared project retention compatibility", () => {
     ).toThrow("not owned by this lifecycle");
   });
 
-  it.each(["profile", "provider", "target", "runtime"])(
-    "rechecks %s drift without acquiring external source authority",
+  it.each(["profile", "provider", "target"])(
+    "checks %s compatibility on the next retention pass without external source authority",
     async (mutation) => {
-      const { record, owner, invalidateArtifacts } = await setup();
+      const { record, owner } = await setup();
       const retained = await owner.prepareRetention(record, fixture.abort.signal);
       expect(retained).toBeDefined();
       if (mutation === "profile") {
@@ -232,15 +224,8 @@ describe("prepared project retention compatibility", () => {
           platform: "linux",
           arch: "x64",
         });
-      } else {
-        invalidateArtifacts();
       }
-      if (mutation === "runtime") {
-        expect(() => retained!.isCurrent()).toThrow("Runtime artifacts changed");
-      } else {
-        expect(retained!.isCurrent()).toBe(false);
-        expect(await owner.prepareRetention(record, fixture.abort.signal)).toBeUndefined();
-      }
+      expect(await owner.prepareRetention(record, fixture.abort.signal)).toBeUndefined();
       expect(sourceAdmission).not.toHaveBeenCalled();
     },
   );
@@ -266,6 +251,16 @@ describe("prepared project retention compatibility", () => {
       expect(sourceAdmission).not.toHaveBeenCalled();
     },
   );
+
+  it("rejects agent removal during lifecycle preparation before preparing artifacts", async () => {
+    const { record, owner, prepareNodeArtifacts } = await setup();
+    const pending = owner.prepareRetention(record, fixture.abort.signal);
+    fixture.config.agents = { entries: { other: {} } };
+
+    await expect(pending).resolves.toBeUndefined();
+    expect(prepareNodeArtifacts).not.toHaveBeenCalled();
+    expect(sourceAdmission).not.toHaveBeenCalled();
+  });
 
   it("distinguishes unavailable artifact observations from incompatible contents", async () => {
     const { record, owner, prepareNodeArtifacts } = await setup();

@@ -228,10 +228,8 @@ export function measureInputRichBlocks(blocks: readonly InputRichBlock[]) {
         case "paragraph":
         case "heading":
         case "footer":
-          measureRichBlockText(block.text, size, depth);
-          break;
         case "pre":
-          size.chars += block.text.length;
+          measureRichBlockText(block.text, size, depth);
           break;
         case "mathematical_expression":
           size.chars += block.expression.length;
@@ -366,10 +364,8 @@ export function inputRichBlocksToPlainText(blocks: readonly InputRichBlock[]): s
       case "paragraph":
       case "heading":
       case "footer":
-        push(richTextToPlainString(block.text));
-        break;
       case "pre":
-        push(block.text);
+        push(richTextToPlainString(block.text));
         break;
       case "mathematical_expression":
         push(block.expression);

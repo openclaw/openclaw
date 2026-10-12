@@ -7,7 +7,7 @@ import {
   setAgentEffectiveModelPrimary,
 } from "../agents/agent-scope.js";
 import { withSetupCredentialAccess } from "../agents/auth-profiles/setup-access.js";
-import { loadAuthProfileStoreWithoutExternalProfiles } from "../agents/auth-profiles/store-runtime.js";
+import { loadAuthProfileStoreWithoutExternalProfilesAsync } from "../agents/auth-profiles/store-runtime.js";
 import type { AuthProfileCredential } from "../agents/auth-profiles/types.js";
 import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import { resolveDefaultModelForAgent } from "../agents/model-selection-config.js";
@@ -49,14 +49,19 @@ export async function completeSetupModelAuth(params: {
 }): Promise<{ config: OpenClawConfig; verified: boolean; persisted: boolean }> {
   const { stagedCandidate, opts, baseConfig } = params;
   const replacementTarget = resolveOnboardingSetupTarget(baseConfig);
-  const replacesCredential =
-    stagedCandidate?.authProfiles.some(({ credential }) =>
-      isSetupCredentialReplacement({
+  let replacesCredential = false;
+  for (const { credential } of stagedCandidate?.authProfiles ?? []) {
+    if (
+      await isSetupCredentialReplacement({
         provider: credential.provider,
         baseConfig,
         agentDir: replacementTarget.agentDir,
-      }),
-    ) === true;
+      })
+    ) {
+      replacesCredential = true;
+      break;
+    }
+  }
   // The keep-model choice predates auth setup, distinguishing an imported route
   // from one selected normally after the import.
   if (
@@ -124,13 +129,19 @@ export async function offerLiveModelVerification(params: {
   };
   const agentDir =
     params.agentDir ?? resolveAgentDir(params.config, resolveAmbientOwnerAgentId(params.config));
-  const replacesCredential = params.initialCandidate?.authProfiles.some(({ credential }) =>
-    isSetupCredentialReplacement({
-      provider: credential.provider,
-      baseConfig: params.baseConfig ?? params.config,
-      agentDir,
-    }),
-  );
+  let replacesCredential = false;
+  for (const { credential } of params.initialCandidate?.authProfiles ?? []) {
+    if (
+      await isSetupCredentialReplacement({
+        provider: credential.provider,
+        baseConfig: params.baseConfig ?? params.config,
+        agentDir,
+      })
+    ) {
+      replacesCredential = true;
+      break;
+    }
+  }
   let required =
     params.required ||
     (params.initialCandidate !== undefined &&
@@ -196,7 +207,7 @@ export async function offerLiveModelVerification(params: {
         resolveAgentEffectiveModelPrimary(config, agentId) ?? "",
       ).profile;
       const credential = profileId
-        ? loadAuthProfileStoreWithoutExternalProfiles(agentDir).profiles[profileId]
+        ? (await loadAuthProfileStoreWithoutExternalProfilesAsync(agentDir)).profiles[profileId]
         : undefined;
       savedProfile = profileId && credential ? { profileId, credential } : undefined;
       verifiedBinding = undefined;
@@ -223,8 +234,9 @@ export async function offerLiveModelVerification(params: {
         ? await withSetupCredentialAccess({ profileId, agentDir }, runVerification)
         : await runVerification();
       if (result.ok && profileId) {
-        const verifiedCredential =
-          loadAuthProfileStoreWithoutExternalProfiles(agentDir).profiles[profileId];
+        const verifiedCredential = (
+          await loadAuthProfileStoreWithoutExternalProfilesAsync(agentDir)
+        ).profiles[profileId];
         savedProfile = verifiedCredential
           ? { profileId, credential: verifiedCredential }
           : undefined;

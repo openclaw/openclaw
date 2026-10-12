@@ -47,7 +47,7 @@ export type ResolvedFsSandboxEntry =
   | {
       kind: "glob";
       pattern: string;
-      matcher: RegExp;
+      matcher: (target: string) => boolean;
       literalPrefix: string;
       access: FsAccessMode;
     };

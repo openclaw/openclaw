@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import type { Transferable } from "node:worker_threads";
 import { expect, it, vi } from "vitest";
+import { observeSqliteReadSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { prepareChatHistoryResponsePage } from "../../gateway/server-methods/chat-history-response-page.js";
 import type { SessionArtifactReadQuery } from "../../gateway/session-artifact-read.js";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
@@ -8,7 +9,10 @@ import { applyAgentDatabaseReaderRequest } from "../../infra/agent-database-read
 import * as nodeSqlite from "../../infra/node-sqlite.js";
 import type { UsageCostWorkerReply } from "../../infra/session-cost-usage-worker.types.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../../state/openclaw-agent-db-lifecycle.js";
-import { getOpenClawAgentDatabaseValidationForTransfer } from "../../state/openclaw-agent-db-validation-cache.js";
+import {
+  getOpenClawAgentDatabaseValidationForTransfer,
+  releaseOpenClawAgentDatabaseReadValidation,
+} from "../../state/openclaw-agent-db-validation-cache.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { captureOpenClawStateReadWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -17,6 +21,7 @@ import { appendTranscriptMessageSync } from "./session-accessor.sqlite-transcrip
 import type { ChatHistoryPageParams } from "./session-history-types.js";
 import type {
   SessionTranscriptWorkerInput,
+  SessionTranscriptWorkerRequest,
   SessionTranscriptWorkerReply,
   SessionTranscriptWorkerValues,
 } from "./session-transcript-worker.types.js";
@@ -26,7 +31,7 @@ type WorkerReply =
   | UsageCostWorkerReply;
 
 const worker = vi.hoisted(() => ({
-  read: vi.fn<(input: SessionTranscriptWorkerInput) => Promise<WorkerReply>>(),
+  read: vi.fn<(input: SessionTranscriptWorkerRequest) => Promise<WorkerReply>>(),
   close: vi.fn<(key?: string) => void>(),
   transfers: vi.fn<(reply: WorkerReply) => Transferable[]>(),
 }));
@@ -45,6 +50,86 @@ vi.mock("../../infra/worker-task-server.js", async (importOriginal) => ({
   },
 }));
 import "./session-transcript.worker.js";
+
+it("borrows canonical writer proof without a native reader and still fences foreign changes", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
+    const options = { agentId: "main", env };
+    const opened = openOpenClawAgentDatabase(options);
+    const database = { agentId: opened.agentId, path: opened.path };
+    const sessionKey = "agent:main:writer-proof";
+    replaceSessionEntrySync(
+      { ...options, sessionKey },
+      { sessionId: "writer-proof", updatedAt: 1 },
+    );
+    const retained = getOpenClawAgentDatabaseValidationForTransfer(database);
+    assert(retained);
+    const validation = {
+      agentId: retained.agentId,
+      identity: retained.identity,
+      birthtime: retained.birthtime,
+      receiptId: retained.receiptId,
+      valid: retained.valid,
+      canonicalReady: retained.canonicalReady,
+    };
+    await closeOpenClawAgentDatabaseByPathAsync(database.path);
+    // A reader worker starts without the writer's process-local validation metadata.
+    releaseOpenClawAgentDatabaseReadValidation([{ path: database.path }]);
+    expect(getOpenClawAgentDatabaseValidationForTransfer(database)).toBeUndefined();
+    const request = {
+      kind: "session-entry-read" as const,
+      database,
+      scope: { ...options, sessionKey, storePath: database.path, databaseAgentId: "main" },
+      validation,
+    };
+    const reads = observeSqliteReadSql(nodeSqlite.requireNodeSqlite().StatementSync.prototype);
+    try {
+      await expect(worker.read(request)).resolves.toMatchObject({
+        ok: true,
+        value: { kind: "session-entry-read", entry: { sessionId: "writer-proof" } },
+      });
+      expect(
+        reads.queries.filter(
+          (sql) =>
+            /\bfrom\s+"?session_nodes"?(?:\s|$)/i.test(sql) &&
+            /\bjoin\s+"?session_windows"?(?:\s|$)/i.test(sql) &&
+            !/\bwhere\b/i.test(sql),
+        ),
+      ).toEqual([]);
+      const peer = new (nodeSqlite.requireNodeSqlite().DatabaseSync)(database.path);
+      try {
+        peer
+          .prepare(
+            "UPDATE session_nodes SET entry_json = json_set(entry_json, '$.label', ?) WHERE session_key = ?",
+          )
+          .run("foreign label", sessionKey);
+      } finally {
+        peer.close();
+      }
+      await expect(worker.read(request)).resolves.toMatchObject({
+        ok: true,
+        value: { kind: "session-entry-read", entry: { label: "foreign label" } },
+      });
+      await expect(
+        worker.read({
+          ...request,
+          validation: { ...validation, identity: "different-generation" },
+        }),
+      ).resolves.toMatchObject({
+        ok: false,
+        error: { kind: "read-error", message: expect.stringContaining("validation") },
+      });
+      await expect(worker.read(request)).resolves.toMatchObject({ ok: true });
+      Atomics.store(new Int32Array(validation.valid), 0, 0);
+      await expect(worker.read(request)).resolves.toMatchObject({
+        ok: false,
+        error: { kind: "read-error", message: expect.stringContaining("validation") },
+      });
+    } finally {
+      reads.restore();
+      worker.close(JSON.stringify([{ path: database.path }]));
+    }
+  });
+});
 
 it("transfers bounded history JSON without retaining the worker buffer", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
@@ -126,7 +211,7 @@ it("transfers bounded history JSON without retaining the worker buffer", async (
 });
 
 it.for([
-  { change: "newer schema", sql: "PRAGMA user_version = 999", error: /newer schema version/ },
+  { change: "newer schema", sql: "PRAGMA user_version = 999", error: undefined },
   {
     change: "missing table",
     sql: "DROP TABLE session_nodes",
@@ -138,7 +223,7 @@ it.for([
     error: undefined,
   },
 ])(
-  "revalidates a warm worker listing after a foreign $change",
+  "keeps admitted format and observes row availability after a foreign $change",
   async ({ sql, error }, { signal }) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const options = { agentId: "main", env: state.env };
@@ -196,7 +281,7 @@ it.for([
         } else {
           expect(result).toMatchObject(expected);
         }
-        // Refresh the retained admission, rather than hiding the bug with a cold reader.
+        // The same retained reader handles the changed file.
         expect(countOpens()).toBe(1);
         if (!error) {
           const receipt = getOpenClawAgentDatabaseValidationForTransfer(database);

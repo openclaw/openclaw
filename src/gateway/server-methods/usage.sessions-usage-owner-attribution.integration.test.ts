@@ -19,6 +19,7 @@ import {
 import {
   historyLane,
   projectionLane,
+  targetDiscoveryLane,
 } from "../../config/sessions/session-transcript-worker-resources.js";
 import type { SessionSystemPromptReport } from "../../config/sessions/types.js";
 import { createPersistCronSessionEntry } from "../../cron/isolated-agent/run-session-state.js";
@@ -260,7 +261,7 @@ it("hydrates context metadata only for emitted usage rows while aggregating ever
     ]) {
       let payload: unknown;
       const transferredPrompts = new Set<string>();
-      const transfers = [historyLane, projectionLane].map(({ pool }) => {
+      const transfers = [historyLane, projectionLane, targetDiscoveryLane].map(({ pool }) => {
         const run = pool.run.bind(pool);
         return vi.spyOn(pool, "run").mockImplementation(async (...args) => {
           const reply = await run(...args);
@@ -336,25 +337,27 @@ it("reads selected reports from the physical owner of shared-store sentinels and
     const unrelated = openOpenClawAgentDatabase({ agentId: "unrelated", env: state.env });
     let changeRegistryAfterInventory = false;
     let registryChanges = 0;
-    const run = projectionLane.pool.run.bind(projectionLane.pool);
-    const inventory = vi.spyOn(projectionLane.pool, "run").mockImplementation(async (...args) => {
-      const reply = await run(...args);
-      if (
-        changeRegistryAfterInventory &&
-        reply.ok &&
-        isRecord(reply.value) &&
-        reply.value.kind === "session-target-inventory"
-      ) {
-        changeRegistryAfterInventory = false;
-        registryChanges++;
-        unregisterOpenClawAgentDatabase({
-          agentId: unrelated.agentId,
-          path: unrelated.path,
-          env: state.env,
-        });
-      }
-      return reply;
-    });
+    const run = targetDiscoveryLane.pool.run.bind(targetDiscoveryLane.pool);
+    const inventory = vi
+      .spyOn(targetDiscoveryLane.pool, "run")
+      .mockImplementation(async (...args) => {
+        const reply = await run(...args);
+        if (
+          changeRegistryAfterInventory &&
+          reply.ok &&
+          isRecord(reply.value) &&
+          reply.value.kind === "session-target-inventory"
+        ) {
+          changeRegistryAfterInventory = false;
+          registryChanges++;
+          unregisterOpenClawAgentDatabase({
+            agentId: unrelated.agentId,
+            path: unrelated.path,
+            env: state.env,
+          });
+        }
+        return reply;
+      });
     onTestFinished(() => inventory.mockRestore());
     for (const [agentId, key] of [
       ["ops", "global"],

@@ -1,12 +1,11 @@
 /* @vitest-environment jsdom */
 
-import { render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
+import { createComposerContainer } from "./chat-composer.test-support.ts";
 import * as chatThread from "./chat-thread.ts";
 import { resetChatViewState } from "./chat-view-state.ts";
-import { createChatProps, renderChatInto } from "./chat-view.test-helpers.ts";
-import { renderChat } from "./chat-view.ts";
+import { createChatProps, renderChatInto, renderChatPropsInto } from "./chat-view.test-helpers.ts";
 import {
   installTranscriptDomMocks,
   resetTranscriptTestDom,
@@ -59,28 +58,25 @@ describe("chat transcript cache", () => {
       initialTurn,
     };
     const props = createChatProps({ messages: [loaded], queue: [queued], placementStartup });
-    const container = document.createElement("div");
-    render(renderChat(props), container);
+    const container = createComposerContainer();
+    renderChatPropsInto(container, props);
     expect(historyBuildReads).toBeGreaterThan(0);
 
-    render(renderChat({ ...props, placementStartup: { ...placementStartup } }), container);
+    renderChatPropsInto(container, { ...props, placementStartup: { ...placementStartup } });
     expect(historyBuildReads).toBe(0);
 
-    render(
-      renderChat({
-        ...props,
-        placementStartup: { ...placementStartup, initialTurn: { ...initialTurn } },
-      }),
-      container,
-    );
+    renderChatPropsInto(container, {
+      ...props,
+      placementStartup: { ...placementStartup, initialTurn: { ...initialTurn } },
+    });
     expect(historyBuildReads).toBeGreaterThan(0);
 
-    render(renderChat(props), container);
+    renderChatPropsInto(container, props);
     queued.sendState = "failed";
-    render(renderChat({ ...props, queue: [...props.queue] }), container);
+    renderChatPropsInto(container, { ...props, queue: [...props.queue] });
     expect(historyBuildReads).toBeGreaterThan(0);
 
-    render(renderChat({ ...props, sessionKey: "agent:main:other" }), container);
+    renderChatPropsInto(container, { ...props, sessionKey: "agent:main:other" });
     expect(historyBuildReads).toBeGreaterThan(0);
   });
 
@@ -124,7 +120,7 @@ describe("chat transcript cache", () => {
       tool,
       reading,
     ] as ReturnType<typeof chatThread.buildCachedChatItems>);
-    const container = document.createElement("div");
+    const container = createComposerContainer();
 
     renderChatInto(container, {
       canAbort: true,

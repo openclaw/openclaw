@@ -59,7 +59,6 @@ export async function runGatewayStatusProbePass(params: {
 
   let sshTarget = params.sshTarget;
   let sshTunnelError: string | null = null;
-  let sshTunnelStarted = false;
 
   const tryStartTunnel = async () => {
     if (!sshTarget) {
@@ -71,7 +70,7 @@ export async function runGatewayStatusProbePass(params: {
     }
     try {
       const { startSshPortForward } = await import("../../infra/ssh-tunnel.js");
-      const tunnel = await startSshPortForward({
+      return await startSshPortForward({
         target: sshTarget,
         identity: params.sshIdentity ?? undefined,
         hostKeyPolicy: params.cfg.gateway?.remote?.sshHostKeyPolicy,
@@ -80,14 +79,8 @@ export async function runGatewayStatusProbePass(params: {
         timeoutMs: Math.min(1500, params.overallTimeoutMs),
         signal: params.signal,
       });
-      sshTunnelStarted = true;
-      return tunnel;
     } catch (err) {
-      if (isAbortError(err)) {
-        sshTunnelError = "Aborted";
-        return null;
-      }
-      sshTunnelError = formatErrorMessage(err);
+      sshTunnelError = isAbortError(err) ? "Aborted" : formatErrorMessage(err);
       return null;
     }
   };
@@ -107,9 +100,7 @@ export async function runGatewayStatusProbePass(params: {
 
   // Prefer the concurrently-started tunnel, but allow auto-discovered SSH
   // targets to start after Bonjour finishes.
-  const tunnel =
-    tunnelFirst ||
-    (sshTarget && !sshTunnelStarted && !sshTunnelError ? await tryStartTunnel() : null);
+  const tunnel = tunnelFirst || (sshTarget && !sshTunnelError ? await tryStartTunnel() : null);
 
   const tunnelTarget: GatewayStatusTarget | null = tunnel
     ? {
@@ -183,7 +174,7 @@ export async function runGatewayStatusProbePass(params: {
       discovery,
       probed,
       sshTarget,
-      sshTunnelStarted,
+      sshTunnelStarted: Boolean(tunnel),
       sshTunnelError,
     };
   } finally {

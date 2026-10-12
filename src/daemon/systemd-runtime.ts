@@ -7,6 +7,7 @@ import {
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { formatErrorMessage } from "../infra/errors.js";
 import { parseKeyValueOutput } from "./runtime-parse.js";
+import { withServiceInspectionBudget } from "./service-inspection-budget.js";
 import {
   sanitizeServiceInspectionError,
   ServiceInspectionError,
@@ -45,7 +46,9 @@ export async function isSystemdServiceEnabled(args: GatewayServiceEnvArgs): Prom
   const res =
     installed.scope === "system"
       ? await execSystemctl(["is-enabled", installed.unitName], env, args.timeoutMs)
-      : await execSystemctlUser(env, ["is-enabled", installed.unitName], args.timeoutMs);
+      : await withServiceInspectionBudget(() =>
+          execSystemctlUser(env, ["is-enabled", installed.unitName], args.timeoutMs),
+        );
   if (res.code === 0) {
     return true;
   }
@@ -128,7 +131,7 @@ export async function readSystemdServiceRuntime(
   const res =
     installed?.scope === "system"
       ? await execSystemctl(showArgs, env, timeoutMs)
-      : await execSystemctlUser(env, showArgs, timeoutMs);
+      : await withServiceInspectionBudget(() => execSystemctlUser(env, showArgs, timeoutMs));
   if (res.code !== 0) {
     const detail = (res.stderr || res.stdout).trim();
     const error = systemdInspectionError(res, detail, installed?.scope);

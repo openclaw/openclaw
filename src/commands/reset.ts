@@ -112,8 +112,7 @@ export async function resetCommand(runtime: RuntimeEnv, opts: ResetOptions) {
     runtime.exit(1);
     return;
   }
-  const { stateDir, configPath, oauthDir, configInsideState, oauthInsideState, workspaceDirs } =
-    cleanupPlan;
+  const { configPath, oauthDir, workspaceDirs } = cleanupPlan;
 
   let failed = false;
   if (scope === "config+creds+sessions") {
@@ -129,11 +128,7 @@ export async function resetCommand(runtime: RuntimeEnv, opts: ResetOptions) {
   }
 
   if (scope === "full") {
-    const stateRemoved = await removeStateAndLinkedPaths(
-      { stateDir, configPath, oauthDir, configInsideState, oauthInsideState },
-      runtime,
-      { dryRun },
-    );
+    const stateRemoved = await removeStateAndLinkedPaths(cleanupPlan, runtime, { dryRun });
     const workspaceFailures = await removeWorkspaceDirs(workspaceDirs, runtime, {
       dryRun,
       removeStateRows: !stateRemoved,

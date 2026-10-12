@@ -57,7 +57,8 @@ export async function resolvePrivateCommandRouteTargets(params: {
   const originChannel = params.commandParams.command.channel;
   const targets: PrivateCommandRouteTarget[] = [];
   for (const candidate of listPrivateCommandRouteCandidateChannels(originChannel)) {
-    const native = resolveChannelApprovalAdapter(candidate.plugin)?.native;
+    const adapter = resolveChannelApprovalAdapter(candidate.plugin);
+    const native = adapter?.nativeAsync ?? adapter?.native;
     if (!native?.resolveApproverDmTargets) {
       continue;
     }
@@ -71,7 +72,7 @@ export async function resolvePrivateCommandRouteTargets(params: {
       approvalKind: "exec" as const,
       request,
     });
-    const capabilities = native.describeDeliveryCapabilities(approvalContext());
+    const capabilities = await native.describeDeliveryCapabilities(approvalContext());
     if (!capabilities.enabled || !capabilities.supportsApproverDmSurface) {
       continue;
     }

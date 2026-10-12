@@ -17,6 +17,10 @@ import {
   inheritSessionGitContributorProfileIds,
 } from "../../../config/sessions/session-entry-provenance.js";
 import { readSessionEntryReadOnlyInWorker } from "../../../config/sessions/session-entry-read-runtime.js";
+import {
+  sessionEntryCommitGuardOptions,
+  type SessionSourceAssertion,
+} from "../../../config/sessions/session-source-authority.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import { resolveGatewaySessionStoreTargetInWorker } from "../../../gateway/session-utils-store-worker.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
@@ -126,7 +130,7 @@ type SpawnAcpParams = {
 
 type SpawnAcpContext = {
   onSpawnEffectsStart?: () => void;
-  assertActive?: () => void;
+  assertActive?: SessionSourceAssertion;
   agentSessionKey?: string;
   /** Trusted parent tool construction facts; never read from model arguments. */
   senderIsOwner?: boolean;
@@ -276,6 +280,7 @@ export async function spawnAcpDirect(
     requesterAgentId,
     ownerAgentId,
     ctx,
+    assertActive: ctx.assertActive,
   });
   ctx.assertActive?.();
   const ownership = resolveSubagentSpawnOwnership({
@@ -513,7 +518,7 @@ export async function spawnAcpDirect(
             // Same trust rules as native spawn: stamped last, from trusted host facts only.
             ...parentLineage.receipt,
           },
-          { assertCommitAllowed: ctx.assertActive },
+          sessionEntryCommitGuardOptions(ctx.assertActive),
         )) ?? undefined;
       const initializedSession = await withAcpResumeSessionAuthorization(
         resumeOwnership,

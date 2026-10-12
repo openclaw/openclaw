@@ -68,6 +68,23 @@ export function renderChatModelCatalogState(
                 : "chat.modelControls.noModelsAvailable",
             ))
           : t("chat.modelControls.loadingModels");
+  const renderAction = (action: "retry" | "setup") => html`<button
+    class="chat-controls__model-catalog-action"
+    data-chat-model-target-retry=${action === "retry" ? retryTarget?.groupId : nothing}
+    data-chat-model-setup=${action === "setup" ? "true" : nothing}
+    type="button"
+    ?disabled=${action === "retry" && retryTarget?.disabled}
+    @click=${(event: MouseEvent) => {
+      event.stopPropagation();
+      if (action === "retry") {
+        retryTarget?.onRetry(retryTarget.groupId);
+      } else {
+        onModelSetup?.();
+      }
+    }}
+  >
+    ${t(action === "retry" ? "common.retry" : "chat.modelControls.emptyModelsAction")}
+  </button>`;
   return html`
     <div
       class="chat-controls__model-catalog-state ${
@@ -87,39 +104,10 @@ export function renderChatModelCatalogState(
         }
         <span>${label}</span>
       </span>
-      ${
-        status === "error" && retryTarget
-          ? html`
-              <button
-                class="chat-controls__model-catalog-action"
-                data-chat-model-target-retry=${retryTarget.groupId}
-                type="button"
-                ?disabled=${retryTarget.disabled}
-                @click=${(event: MouseEvent) => {
-                  event.stopPropagation();
-                  retryTarget.onRetry(retryTarget.groupId);
-                }}
-              >
-                ${t("common.retry")}
-              </button>
-            `
-          : nothing
-      }
+      ${status === "error" && retryTarget ? renderAction("retry") : nothing}
       ${
         status === "ready" && !hasSelectableOptions && onModelSetup
-          ? html`
-              <button
-                class="chat-controls__model-catalog-action"
-                data-chat-model-setup="true"
-                type="button"
-                @click=${(event: MouseEvent) => {
-                  event.stopPropagation();
-                  onModelSetup();
-                }}
-              >
-                ${t("chat.modelControls.emptyModelsAction")}
-              </button>
-            `
+          ? renderAction("setup")
           : nothing
       }
     </div>

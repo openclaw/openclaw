@@ -71,7 +71,7 @@ suite.define(() => {
       assistantName: "Roboclaw",
       cliAgentsEnabled: true,
       defaultAgentId: "roboclaw",
-      deferredMethods: ["agents.list"],
+      deferredRequests: [{ method: "agents.list", match: {}, exactParams: true }],
       featureMethods: [...TERMINAL_START_FEATURE_METHODS],
       methodResponses: {
         "sessions.catalog.list": {
@@ -88,7 +88,7 @@ suite.define(() => {
 
     try {
       await page.goto(`${suite.server.baseUrl}new`);
-      await gateway.waitForRequest("agents.list");
+      await gateway.waitForRequest("agents.list", { match: {}, exactParams: true });
       await page.locator(".new-session-page__message").waitFor({ state: "visible" });
       expect(
         (await gateway.getRequests("sessions.catalog.list"))
@@ -96,7 +96,7 @@ suite.define(() => {
           .map((request) => request.params),
       ).toEqual([]);
 
-      await gateway.resolveDeferred("agents.list");
+      await gateway.resolveDeferred("agents.list", undefined, { match: {}, exactParams: true });
 
       await page.getByRole("heading", { name: "Roboclaw" }).waitFor();
       await expect
@@ -843,7 +843,9 @@ suite.define(() => {
 
       const message = page.locator(".new-session-page__message");
       await message.fill("keep my selected agent");
-      const agentRequestsBefore = (await gateway.getRequests("agents.list")).length;
+      const agentRequestsBefore = (
+        await gateway.getRequests("agents.list", {}, { exactParams: true })
+      ).length;
       const branchRequestsBefore = (await gateway.getRequests("worktrees.branches")).length;
 
       await gateway.setOnline(false);
@@ -856,7 +858,9 @@ suite.define(() => {
       await waitForControlUiGatewayReady(page);
 
       await expect
-        .poll(async () => (await gateway.getRequests("agents.list")).length)
+        .poll(
+          async () => (await gateway.getRequests("agents.list", {}, { exactParams: true })).length,
+        )
         .toBe(agentRequestsBefore + 1);
       await expect.poll(() => message.inputValue()).toBe("keep my selected agent");
       await pollLocatorText(page.locator(".new-session-page").getByRole("heading")).toContain(

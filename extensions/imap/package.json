@@ -5,13 +5,13 @@
   "description": "OpenClaw inbound IMAP email trigger plugin",
   "type": "module",
   "dependencies": {
-    "imapflow": "2.0.5",
-    "mailauth": "5.0.3",
-    "mailparser": "3.9.28"
+    "imapflow": "2.2.4",
+    "mailauth": "7.1.0",
+    "mailparser": "3.9.34"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*",
-    "@types/mailparser": "3.4.6"
+    "@types/mailparser": "3.9.0"
   },
   "openclaw": {
     "extensions": [

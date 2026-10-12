@@ -521,7 +521,7 @@ describe("sessions_spawn model fallback through the Gateway", () => {
           const childRequests = provider.requests
             .slice(requestOffset)
             .filter((request) => request.child);
-          expect(terminal.status, JSON.stringify(provider.requests)).toBe(
+          expect(terminal.status, JSON.stringify({ terminal, requests: provider.requests })).toBe(
             scenario.backup ? "ok" : "error",
           );
           expect(entry?.modelOverrideSource).toBe(scenario.model ? "user" : "auto");
@@ -726,10 +726,11 @@ describe("CLI model inheritance through MCP", () => {
                 workspace: home.workspaceDir,
                 skipBootstrap: true,
                 heartbeat: { every: "0m" },
-                model: BACKUP,
+                model: CHILD_BACKUP,
                 models: {
                   [PRIMARY]: { params: { transport: "sse", openaiWsWarmup: false } },
                   [BACKUP]: { params: { transport: "sse", openaiWsWarmup: false } },
+                  [CHILD_BACKUP]: { params: { transport: "sse", openaiWsWarmup: false } },
                 },
                 subagents: { allowAgents: ["*"] },
               },
@@ -738,7 +739,7 @@ describe("CLI model inheritance through MCP", () => {
               mode: "replace",
               providers: {
                 "proof-primary": providerConfig(provider.baseUrl, ["primary"]),
-                "proof-backup": providerConfig(provider.baseUrl, ["backup"]),
+                "proof-backup": providerConfig(provider.baseUrl, ["backup", "child-backup"]),
               },
             },
             tools: { profile: "coding" },
@@ -759,6 +760,11 @@ describe("CLI model inheritance through MCP", () => {
           if (!parent?.sessionId) {
             throw new Error("CLI proof parent was not created");
           }
+          expect(parent).toMatchObject({
+            providerOverride: "proof-backup",
+            modelOverride: "backup",
+            modelOverrideSource: "user",
+          });
           const providerRequests = provider.requests;
           await withCliSpawnGrant(
             {

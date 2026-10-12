@@ -16,6 +16,7 @@ import * as authProfiles from "../../agents/auth-profiles.js";
 import { loadPersistedAuthProfileStore } from "../../agents/auth-profiles/persisted.js";
 import { upsertAuthProfileWithLockOrThrow } from "../../agents/auth-profiles/profiles.js";
 import { resolveSessionAuthSelection } from "../../agents/auth-profiles/session-override.js";
+import * as authStoreRuntime from "../../agents/auth-profiles/store-runtime.js";
 import type { ApiKeyCredential, AuthProfileCredential } from "../../agents/auth-profiles/types.js";
 import { createQueueTestRun } from "../../auto-reply/reply/queue.test-helpers.js";
 import { enqueueFollowupRun } from "../../auto-reply/reply/queue/enqueue.js";
@@ -95,6 +96,100 @@ afterEach(async () => {
 });
 
 describe("shared API-key editing and removal", () => {
+  it.each([false, true])(
+    "checks requester authority after the credential updater returns (revoked=%s)",
+    async (revoke) => {
+      await seedKey("sample:manual", "synthetic-before", "writer");
+      const beforeConfig = fs.readFileSync(configPath(), "utf8");
+      let callbackComplete = false;
+      let revoked = false;
+      const update = authStoreRuntime.updateAuthProfileStoreWithLock;
+      vi.spyOn(authStoreRuntime, "updateAuthProfileStoreWithLock").mockImplementation((params) =>
+        update({
+          ...params,
+          updater: (...args) => {
+            const changed = params.updater(...args);
+            callbackComplete = true;
+            revoked = revoke;
+            return changed;
+          },
+        }),
+      );
+      const result = saveModelProviderApiKey({
+        provider: "sample",
+        apiKey: "synthetic-after",
+        profileId: "sample:manual",
+        agentDir: agentDir("writer"),
+        assertCurrent: () => {
+          if (revoked) {
+            throw new Error("Requester revoked at credential commit");
+          }
+        },
+      });
+      if (revoke) {
+        await expect(result).rejects.toThrow("Requester revoked at credential commit");
+        expect(fs.readFileSync(configPath(), "utf8")).toBe(beforeConfig);
+      } else {
+        await expect(result).resolves.toMatchObject({ profileId: "sample:manual" });
+      }
+      expect(callbackComplete).toBe(true);
+      expect(
+        loadPersistedAuthProfileStore(agentDir("writer"))?.profiles["sample:manual"],
+      ).toMatchObject({
+        key: revoke ? "synthetic-before" : "synthetic-after",
+      });
+    },
+  );
+
+  it.each([false, true])(
+    "checks requester authority after the config transform (revoked=%s)",
+    async (revoke) => {
+      await seedKey("sample:manual", "synthetic-current-key", "writer");
+      const beforeConfig = fs.readFileSync(configPath(), "utf8");
+      const beforeProfiles = loadPersistedAuthProfileStore(agentDir("writer"))?.profiles;
+      let transformed = false;
+      let revoked = false;
+      const updateConfig = configWriter.updateConfig;
+      vi.spyOn(configWriter, "updateConfig").mockImplementation(
+        (mutator, selectModels, beforeCommit, writeOptions) =>
+          updateConfig(
+            async (...args) => {
+              const next = await mutator(...args);
+              transformed = true;
+              revoked = revoke;
+              return next;
+            },
+            selectModels,
+            beforeCommit,
+            writeOptions,
+          ),
+      );
+      const result = saveModelProviderApiKey({
+        provider: "sample",
+        apiKey: "synthetic-current-key",
+        profileId: "sample:manual",
+        agentDir: agentDir("writer"),
+        assertCurrent: () => {
+          if (revoked) {
+            throw new Error("Requester revoked after config transform");
+          }
+        },
+      });
+      if (revoke) {
+        await expect(result).rejects.toThrow("Requester revoked after config transform");
+        expect(fs.readFileSync(configPath(), "utf8")).toBe(beforeConfig);
+      } else {
+        await expect(result).resolves.toMatchObject({ profileId: "sample:manual" });
+        expect((await readConfig()).auth?.profiles?.["sample:manual"]).toMatchObject({
+          provider: "sample",
+          mode: "api_key",
+        });
+      }
+      expect(transformed).toBe(true);
+      expect(loadPersistedAuthProfileStore(agentDir("writer"))?.profiles).toEqual(beforeProfiles);
+    },
+  );
+
   it("waits for the saved binding to reach the Gateway before allowing immediate removal", async () => {
     writeConfig({ models: { providers: { sample: { ...connection, apiKey: "old-inline" } } } });
     let claim: RuntimeConfigWriteApplicationClaim | undefined;

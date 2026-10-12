@@ -45,7 +45,6 @@ import type {
   ReadSessionMessagesAroundIdResult,
   ReadSessionMessagesResult,
   SessionTranscriptMessageByIdOptions,
-  SessionTranscriptPageOptions,
   SessionTranscriptProjectionSelection,
   SessionTranscriptProjectionSelectionResults,
   SessionTranscriptReadOptions,
@@ -390,13 +389,18 @@ export function createSessionTranscriptReader(access: SessionTranscriptReadAcces
     );
   }
 
-  async function readSnapshotIfPresent<T>(
+  async function readSnapshotIfPresent<Selection extends SessionTranscriptProjectionSelection>(
     target: ResolvedTranscriptReadTarget,
-    read: (projection: CurrentTranscriptProjection) => T,
+    selection: Selection,
     options?: SessionTranscriptReadOptions,
-  ): Promise<T | undefined> {
+  ): Promise<SessionTranscriptProjectionSelectionResults[Selection["kind"]] | undefined> {
     try {
-      return await access.readSnapshot(target, read, options);
+      return await access.readSnapshot(
+        target,
+        (projection) =>
+          selectSessionTranscriptProjection(projection, selection, target.sessionFile),
+        options,
+      );
     } catch (error) {
       // Count and exact-ID reads retain their existing missing-store result.
       // History reads suppress the error only to try a reset archive.
@@ -414,11 +418,7 @@ export function createSessionTranscriptReader(access: SessionTranscriptReadAcces
 
   async function readSessionMessageCountAsync(scope: SessionTranscriptReadScope): Promise<number> {
     const target = await access.resolveTarget(scope);
-    return (
-      (await readSnapshotIfPresent(target, (projection) =>
-        selectSessionTranscriptProjection(projection, { kind: "count" }),
-      )) ?? 0
-    );
+    return (await readSnapshotIfPresent(target, { kind: "count" })) ?? 0;
   }
 
   async function readSessionMessagesWithSourceAsync(
@@ -431,12 +431,7 @@ export function createSessionTranscriptReader(access: SessionTranscriptReadAcces
     }
     const snapshot = (await readSnapshotIfPresent(
       target,
-      (projection) =>
-        selectSessionTranscriptProjection(
-          projection,
-          { kind: "source", options: opts },
-          target.sessionFile,
-        ),
+      { kind: "source", options: opts },
       opts,
     )) ?? { messages: [] };
     if (
@@ -465,9 +460,7 @@ export function createSessionTranscriptReader(access: SessionTranscriptReadAcces
     opts?: SessionTranscriptMessageByIdOptions & { allowResetArchiveFallback?: boolean },
   ): Promise<ReadSessionMessageByIdResult> {
     const target = await access.resolveTarget(scope);
-    const found = await readSnapshotIfPresent(target, (projection) =>
-      selectSessionTranscriptProjection(projection, { kind: "by-id", messageId, options: opts }),
-    );
+    const found = await readSnapshotIfPresent(target, { kind: "by-id", messageId, options: opts });
     const selected = found?.found
       ? found
       : opts?.allowResetArchiveFallback === true && !opts.currentOnly
@@ -503,69 +496,33 @@ export function createSessionTranscriptReader(access: SessionTranscriptReadAcces
     );
   }
 
-  async function readRecentSessionMessagesWithStatsAsync(
+  async function readMessagePage(
     scope: SessionTranscriptReadScope,
-    opts: ReadRecentSessionMessagesOptions &
-      TranscriptReadWindowOptions &
-      SessionTranscriptReadOptions,
+    selection: Extract<SessionTranscriptProjectionSelection, { kind: "recent" | "page" }>,
   ): Promise<ReadRecentSessionMessagesResult> {
     const target = await access.resolveTarget(scope);
-    const page = (await readSnapshotIfPresent(
-      target,
-      (projection) =>
-        selectSessionTranscriptProjection(
-          projection,
-          { kind: "recent", options: opts },
-          target.sessionFile,
-        ),
-      opts,
-    )) ?? { messages: [], totalMessages: 0 };
+    const page = (await readSnapshotIfPresent(target, selection, selection.options)) ?? {
+      messages: [],
+      totalMessages: 0,
+    };
     if (
       !page.windowReset &&
       page.totalMessages === 0 &&
-      page.messages.length === 0 &&
-      opts.allowResetArchiveFallback === true
+      (selection.kind === "page" || page.messages.length === 0) &&
+      selection.options.allowResetArchiveFallback === true
     ) {
-      return await archivedTranscriptReader(target).readRecentWithStats(opts);
+      const archive = archivedTranscriptReader(target);
+      return selection.kind === "recent"
+        ? archive.readRecentWithStats(selection.options)
+        : archive.readPage(selection.options);
     }
-    return {
-      ...page,
-      transcriptPath: target.sessionFile,
-      transcriptSource: "active",
-    };
+    return { ...page, transcriptPath: target.sessionFile, transcriptSource: "active" };
   }
 
-  async function readSessionMessagesPageWithStatsAsync(
-    scope: SessionTranscriptReadScope,
-    opts: SessionTranscriptPageOptions,
-  ): Promise<ReadRecentSessionMessagesResult> {
-    const target = await access.resolveTarget(scope);
-    const page = await readSnapshotIfPresent(
-      target,
-      (projection) =>
-        selectSessionTranscriptProjection(
-          projection,
-          { kind: "page", options: opts },
-          target.sessionFile,
-        ),
-      opts,
-    );
-    if (
-      (!page || (page.totalMessages === 0 && !page.windowReset)) &&
-      opts.allowResetArchiveFallback === true
-    ) {
-      return await archivedTranscriptReader(target).readPage(opts);
-    }
-    if (!page) {
-      return {
-        messages: [],
-        totalMessages: 0,
-        transcriptPath: target.sessionFile,
-        transcriptSource: "active",
-      };
-    }
-    return page;
-  }
+  const readRecentSessionMessagesWithStatsAsync: SessionTranscriptReader["readRecentSessionMessagesWithStatsAsync"] =
+    (scope, options) => readMessagePage(scope, { kind: "recent", options });
+  const readSessionMessagesPageWithStatsAsync: SessionTranscriptReader["readSessionMessagesPageWithStatsAsync"] =
+    (scope, options) => readMessagePage(scope, { kind: "page", options });
   /** Reads one message-id-anchored page from a single transcript snapshot. */
   async function readSessionMessagesAroundIdWithStatsAsync(
     scope: SessionTranscriptReadScope,
@@ -578,16 +535,7 @@ export function createSessionTranscriptReader(access: SessionTranscriptReadAcces
       scope.sessionEntry.sessionId !== scope.sessionId
         ? undefined
         : target.sessionFile;
-    const page = await readSnapshotIfPresent(
-      target,
-      (projection) =>
-        selectSessionTranscriptProjection(
-          projection,
-          { kind: "around-id", options: opts },
-          target.sessionFile,
-        ),
-      opts,
-    );
+    const page = await readSnapshotIfPresent(target, { kind: "around-id", options: opts }, opts);
     if (!page?.found) {
       if (opts.allowResetArchiveFallback === true) {
         return await new ArchivedTranscriptReader({

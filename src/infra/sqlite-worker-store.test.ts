@@ -37,11 +37,7 @@ import {
 } from "./sqlite-worker-store.js";
 import type { FixtureOpenInput, FixtureOperations } from "./sqlite-worker-store.test-support.js";
 import { SQLITE_WORKER_TRANSFER_FRAME_BYTES } from "./sqlite-worker-transfer.js";
-
-vi.mock("node:os", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("node:os")>()),
-  availableParallelism: () => 32,
-}));
+import { resolveSqliteBrokerWorkerCount } from "./worker-pool-sizing.js";
 
 const { stores, tempDirs, databasePath, open } = useSqliteWorkerStoreFixture(
   "openclaw-sqlite-worker-store-",
@@ -157,7 +153,9 @@ describe("SQLite worker store", () => {
         for (const value of values) {
           await append(store, value);
         }
-        expect(inlineReplies).toEqual(values.map(() => ["id", "ok", "value"]));
+        expect(inlineReplies).toEqual(
+          values.map(() => ["databaseAdmissions", "id", "ok", "value"]),
+        );
         requests.mockClear();
         const reading = store.execute(
           { type: "read", input: undefined },
@@ -483,8 +481,8 @@ describe("SQLite worker store", () => {
 
   poolIt("keeps a new database usable while another worker retires at capacity", async () => {
     const first = await open(databasePath());
-    // Fill the documented four-worker budget before retiring an otherwise idle worker.
-    for (let index = 0; index < 3; index += 1) {
+    // Give each worker one actor so closing the first actor starts native retirement.
+    for (let index = 1; index < resolveSqliteBrokerWorkerCount(); index += 1) {
       await open(databasePath());
     }
     const retiring = createDeferredCore();
@@ -603,7 +601,7 @@ describe("SQLite worker store", () => {
 
   poolIt("times out a waiting open without retiring healthy workers or writes", async () => {
     const active: SqliteWorkerStore<FixtureOperations>[] = [];
-    for (let index = 0; index < 4; index += 1) {
+    for (let index = 0; index < resolveSqliteBrokerWorkerCount(); index += 1) {
       active.push(await open(databasePath()));
     }
     const repliesReady = createDeferredCore();
@@ -754,7 +752,6 @@ describe("SQLite worker store", () => {
         }
         const [result] = await cleanup;
         expect(events.mock.calls.filter(([event]) => event === "error")).toEqual([]);
-        expect(await readFile(markerPath, "utf8")).toBe("native database closed");
         if (reject) {
           expect(result).toEqual({
             status: "rejected",
@@ -767,6 +764,7 @@ describe("SQLite worker store", () => {
         } else {
           expect(result).toEqual({ status: "fulfilled", value: undefined });
         }
+        expect(await readFile(markerPath, "utf8")).toBe("native database closed");
       } finally {
         events.mockRestore();
         resumeReply?.();

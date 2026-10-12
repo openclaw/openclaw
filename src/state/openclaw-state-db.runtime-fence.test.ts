@@ -1,6 +1,6 @@
-import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -19,10 +19,10 @@ afterEach(() => {
 });
 
 describe("shared state runtime schema fence", () => {
-  it("latches a newer schema committed under an open cached handle", () => {
+  it("latches a newer schema published by a managed peer under an open cached handle", () => {
     const options = { env: { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-runtime-schema-") } };
     const initial = openOpenClawStateDatabase(options);
-    const external = new DatabaseSync(initial.path);
+    const external = openNodeSqliteDatabase(initial.path);
     try {
       external.exec(`
         BEGIN IMMEDIATE;

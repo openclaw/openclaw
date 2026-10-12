@@ -2,6 +2,19 @@ import { describe, expect, it } from "vitest";
 import { resolveResetPreservedSelection } from "./reset-preserved-selection.js";
 
 describe("resolveResetPreservedSelection", () => {
+  it("preserves communication overrides while dropping a temporary model fallback", () => {
+    expect(
+      resolveResetPreservedSelection({
+        entry: {
+          sessionId: "policy",
+          updatedAt: 1,
+          modelOverride: "fallback",
+          modelOverrideSource: "auto",
+          communication: { send: "never", receive: "ask" },
+        },
+      }),
+    ).toEqual({ communication: { send: "never", receive: "ask" } });
+  });
   it("does not stamp legacy raw aliases as resolved during reset", () => {
     expect(
       resolveResetPreservedSelection({

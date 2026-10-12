@@ -375,13 +375,10 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
   try {
     gatewayWorkAdmission = await beginSessionWorkAdmission({
       scope: storePath,
+      isSettling: () => admittedRunAbort?.entry?.terminalOutcomeObserved === true,
       identities: [sessionKey, backingSessionId],
       storeWriterIdentities: [sessionKey, session.sessionTarget.storeKey],
-      assertAllowed: () =>
-        consumeChatSendCurrent(params, () => {
-          assertSessionTargetCurrent();
-          assertChatSendExclusiveAdmission(request, session);
-        }),
+      assertAllowed: assertSessionTargetCurrent,
       revalidateAllowed: async () => {
         if (!restartSafeRequest) {
           return commitChatWorkAdmission(null);
@@ -684,6 +681,7 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
       retainGatewayWorkAdmission: retainedWork.retain,
       settleTerminal: retainedWork.settleTerminal,
       withInputCommitPublication: retainedWork.withInputCommitPublication,
+      acquireInputActor: () => retainedWork.acquireInputActor(),
       setPendingInputCleanup: retainedWork.setPendingInputCleanup,
       assertClientUploadAllowed: uploadAdmission.assertClientUploadAllowed,
       assertWorkAdmissionCurrent: () => {

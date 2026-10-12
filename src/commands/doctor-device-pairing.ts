@@ -249,18 +249,15 @@ function collectPairedRecordFindings(snapshot: DoctorPairingSnapshot): HealthFin
   return findings;
 }
 
-function readLocalIdentity(): { deviceId: string } | null {
-  try {
-    return loadDeviceIdentityIfPresent({ env: process.env });
-  } catch {
-    return null;
-  }
-}
-
 async function collectLocalDeviceAuthFindings(
   snapshot: DoctorPairingSnapshot,
 ): Promise<HealthFinding[]> {
-  const identity = readLocalIdentity();
+  let identity;
+  try {
+    identity = loadDeviceIdentityIfPresent({ env: process.env });
+  } catch {
+    return [];
+  }
   if (!identity) {
     return [];
   }

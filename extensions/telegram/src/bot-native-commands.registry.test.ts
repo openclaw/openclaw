@@ -129,7 +129,7 @@ describe("registerTelegramNativeCommands real plugin registry", () => {
       ).toEqual({ ok: true });
     }
 
-    registerTelegramNativeCommands({
+    await registerTelegramNativeCommands({
       ...createNativeCommandTestParams(
         {},
         {
@@ -197,7 +197,7 @@ describe("registerTelegramNativeCommands real plugin registry", () => {
       ).toEqual({ ok: true });
     }
     const { bot, commandHandlers, setMyCommands } = createCommandBot();
-    registerTelegramNativeCommands({ ...createNativeCommandTestParams({}), bot });
+    await registerTelegramNativeCommands({ ...createNativeCommandTestParams({}), bot });
     const registered = await waitForRegisteredCommands(setMyCommands);
     expect(registered.filter((command) => command.command === "foo_bar")).toEqual([
       { command: "foo_bar", description: "foo_bar", descriptionLocalizations: { ko: "정확함" } },
@@ -234,7 +234,7 @@ describe("registerTelegramNativeCommands real plugin registry", () => {
       ).toEqual({ ok: true });
     }
     const { bot, commandHandlers, setMyCommands } = createCommandBot();
-    registerTelegramNativeCommands({ ...createNativeCommandTestParams({}), bot });
+    await registerTelegramNativeCommands({ ...createNativeCommandTestParams({}), bot });
     await waitForRegisteredCommands(setMyCommands);
 
     await requireCommandHandler(commandHandlers, "foo_bar")(createPrivateCommandContext());
@@ -262,7 +262,7 @@ describe("registerTelegramNativeCommands real plugin registry", () => {
         }),
       ).toEqual({ ok: true });
 
-      registerTelegramNativeCommands({
+      await registerTelegramNativeCommands({
         ...createNativeCommandTestParams(
           {},
           {
@@ -296,7 +296,7 @@ describe("registerTelegramNativeCommands real plugin registry", () => {
 
     registerPairPluginCommand();
 
-    registerTelegramNativeCommands({
+    await registerTelegramNativeCommands({
       ...createNativeCommandTestParams({
         commands: { allowFrom: { telegram: ["999"] } } as OpenClawConfig["commands"],
       }),

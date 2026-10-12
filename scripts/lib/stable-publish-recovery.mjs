@@ -95,6 +95,17 @@ export function validateRecoveryRun(run, expected) {
   return run;
 }
 
+function readSuccessfulRecoveryRun(runId, workflow, expectedSha) {
+  const latest = api(`actions/runs/${runId}`);
+  return validateRecoveryRun(api(`actions/runs/${runId}/attempts/${id(latest.run_attempt)}`), {
+    id: runId,
+    attempt: latest.run_attempt,
+    sha: expectedSha ?? latest.head_sha,
+    workflow,
+    conclusion: "success",
+  });
+}
+
 export function requireRecoveryJob(jobs, run, name) {
   const job = one(
     jobs.filter((entry) => entry.name === name),
@@ -566,17 +577,7 @@ export async function verifyStablePublishRecovery({ evidence, manifest, sourceSh
     ).id === npmId,
     "npm evidence run mismatch.",
   );
-  const npmLatest = api(`actions/runs/${npmId}`);
-  const npm = validateRecoveryRun(
-    api(`actions/runs/${npmId}/attempts/${id(npmLatest.run_attempt)}`),
-    {
-      id: npmId,
-      attempt: npmLatest.run_attempt,
-      sha: npmLatest.head_sha,
-      workflow: NPM_WORKFLOW,
-      conclusion: "success",
-    },
-  );
+  const npm = readSuccessfulRecoveryRun(npmId, NPM_WORKFLOW);
   const npmJob = requireRecoveryJob(
     inventory(`actions/runs/${npmId}/attempts/${npm.run_attempt}/jobs`, "jobs"),
     npm,
@@ -611,17 +612,7 @@ export async function verifyStablePublishRecovery({ evidence, manifest, sourceSh
     readRecoveryStepInputs(npmLog, npmJob, "Verify full release validation evidence"),
     validationInputs,
   );
-  const dockerLatest = api(`actions/runs/${dockerId}`);
-  const docker = validateRecoveryRun(
-    api(`actions/runs/${dockerId}/attempts/${id(dockerLatest.run_attempt)}`),
-    {
-      id: dockerId,
-      attempt: dockerLatest.run_attempt,
-      sha: npm.head_sha,
-      workflow: PUBLISH_WORKFLOW,
-      conclusion: "success",
-    },
-  );
+  const docker = readSuccessfulRecoveryRun(dockerId, PUBLISH_WORKFLOW, npm.head_sha);
   const dockerDispatch = dispatch(docker, sourceSha);
   requireValue(
     dockerDispatch.value.toolingFullRef === originalDispatch.value.toolingFullRef,

@@ -64,26 +64,34 @@ function tableExists(db, tableName) {
   );
 }
 
-function readCurrentSqlitePluginIndex(db) {
-  if (!tableExists(db, "config_machine_state")) {
-    return {};
+function readBoundedIndexRow(db, table, keyColumn, key, jsonColumns, columns) {
+  if (!tableExists(db, table)) {
+    return undefined;
   }
+  const source = `FROM ${table} WHERE ${keyColumn} = ?`;
   const lengths = db
     .prepare(
-      `
-        SELECT octet_length(value_json) AS value_json_bytes
-          FROM config_machine_state
-         WHERE state_key = ?
-      `,
+      `SELECT ${jsonColumns.map((column) => `octet_length(${column}) AS ${column}_bytes`).join(", ")} ${source}`,
     )
-    .get(STATE_KEY);
+    .get(key);
   if (!lengths) {
-    return {};
+    return undefined;
   }
-  assertIndexJsonByteLength(lengths.value_json_bytes, "plugin index value_json");
-  const row = db
-    .prepare("SELECT value_json FROM config_machine_state WHERE state_key = ?")
-    .get(STATE_KEY);
+  for (const column of jsonColumns) {
+    assertIndexJsonByteLength(lengths[`${column}_bytes`], `plugin index ${column}`);
+  }
+  return db.prepare(`SELECT ${columns} ${source}`).get(key);
+}
+
+function readCurrentSqlitePluginIndex(db) {
+  const row = readBoundedIndexRow(
+    db,
+    "config_machine_state",
+    "state_key",
+    STATE_KEY,
+    ["value_json"],
+    "value_json",
+  );
   if (!row) {
     return {};
   }
@@ -92,40 +100,16 @@ function readCurrentSqlitePluginIndex(db) {
 }
 
 function readPreV13SqlitePluginIndex(db) {
-  if (!tableExists(db, "installed_plugin_index")) {
-    return {};
-  }
-  const lengths = db
-    .prepare(
-      `
-        SELECT octet_length(install_records_json) AS install_records_json_bytes,
-               octet_length(plugins_json) AS plugins_json_bytes,
-               octet_length(diagnostics_json) AS diagnostics_json_bytes
-          FROM installed_plugin_index
-         WHERE index_key = ?
-      `,
-    )
-    .get(PRE_V13_INDEX_KEY);
-  if (!lengths) {
-    return {};
-  }
-  assertIndexJsonByteLength(
-    lengths.install_records_json_bytes,
-    "plugin index install_records_json",
+  const row = readBoundedIndexRow(
+    db,
+    "installed_plugin_index",
+    "index_key",
+    PRE_V13_INDEX_KEY,
+    ["install_records_json", "plugins_json", "diagnostics_json"],
+    `version, warning, host_contract_version, compat_registry_version,
+     migration_version, policy_hash, generated_at_ms, refresh_reason,
+     install_records_json, plugins_json, diagnostics_json`,
   );
-  assertIndexJsonByteLength(lengths.plugins_json_bytes, "plugin index plugins_json");
-  assertIndexJsonByteLength(lengths.diagnostics_json_bytes, "plugin index diagnostics_json");
-  const row = db
-    .prepare(
-      `
-        SELECT version, warning, host_contract_version, compat_registry_version,
-               migration_version, policy_hash, generated_at_ms, refresh_reason,
-               install_records_json, plugins_json, diagnostics_json
-          FROM installed_plugin_index
-         WHERE index_key = ?
-      `,
-    )
-    .get(PRE_V13_INDEX_KEY);
   if (!row) {
     return {};
   }

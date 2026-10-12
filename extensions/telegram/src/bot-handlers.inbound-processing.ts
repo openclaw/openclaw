@@ -29,6 +29,7 @@ import type {
   TelegramMediaRef,
 } from "./bot-message-context.types.js";
 import {
+  createTelegramSpooledReplayDeferredParticipant,
   isTelegramSpooledReplayUpdate,
   recordTelegramMessageProcessingResult,
 } from "./bot-processing-outcome.js";
@@ -56,12 +57,7 @@ export function createTelegramInboundProcessing({
   message: TelegramMessagePipeline;
 }) {
   const { accountId, mediaMaxBytes, logger } = handlerParams;
-  const {
-    resolveMediaRuntime,
-    recordMessageResolvedMedia,
-    releaseDispatchDedupeClaims,
-    createSpooledReplayParticipantForBufferedWork,
-  } = message;
+  const { resolveMediaRuntime, recordMessageResolvedMedia, releaseDispatchDedupeClaims } = message;
   const { cancelPending, inboundDebouncer, resolveTelegramDebounceLane } =
     createTelegramInboundBuffers({ params: handlerParams, message });
 
@@ -253,9 +249,10 @@ export function createTelegramInboundProcessing({
     }
     const shouldBufferDebounce = inboundDebouncer.shouldBuffer(debounceEntry);
     if (shouldBufferDebounce) {
-      debounceEntry.spooledReplayParticipant = createSpooledReplayParticipantForBufferedWork(
-        `inbound-debounce:${debounceEntry.debounceKey}`,
-      );
+      debounceEntry.spooledReplayParticipant =
+        createTelegramSpooledReplayDeferredParticipant(
+          `inbound-debounce:${debounceEntry.debounceKey}`,
+        ) ?? undefined;
     }
     await inboundDebouncer.enqueue(debounceEntry);
     return shouldBufferDebounce ? { kind: "buffered", buffer: "debounce" } : { kind: "processed" };
