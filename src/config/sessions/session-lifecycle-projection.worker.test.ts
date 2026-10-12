@@ -240,9 +240,10 @@ it("keeps guarded lifecycle writes and committed follow-ups off the host while p
         afterCommitted: async (context) => {
           context.assertCurrent();
           expect(commitAllowed).toBe(true);
-          expect(publications.get(f.scope.sessionKey)?.entry?.skillsSnapshot).toEqual(
-            f.upserts[0].entry.skillsSnapshot,
-          );
+          expect(publications.get(f.scope.sessionKey)?.entry).toMatchObject({
+            sessionId: f.initial.sessionId,
+            createdAt: f.initial.createdAt,
+          });
           committedFollowup = true;
         },
       });

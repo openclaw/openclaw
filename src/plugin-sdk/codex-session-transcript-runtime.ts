@@ -40,6 +40,7 @@ import {
   assertExistingDatabaseIdentity,
   readDatabasePathIdentitySync,
 } from "../infra/sqlite-worker-identity.js";
+import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
 import { IncognitoSessionSyncAccessError } from "../state/incognito-session-error.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import type { AgentMessage } from "./agent-core.js";
@@ -183,7 +184,7 @@ export function validateCodexSessionTranscriptContextVersion(
   validateSessionTranscriptContextVersion(...args);
 }
 
-/** @deprecated Worker-only synchronous reader. Use createCodexSessionContextReader on the main thread. */
+/** @deprecated Use createCodexSessionContextReader; synchronous compatibility is removed in the next SDK major. */
 export function readCodexSessionContext<T>(
   target: SessionTranscriptRuntimeTarget,
   read: (
@@ -194,6 +195,11 @@ export function readCodexSessionContext<T>(
   admission?: TranscriptTurnAdmission,
   physicalSource?: SessionTranscriptContextProjectionSource["physicalSource"],
 ): T {
+  warnPluginSdkDeprecation({
+    family: "codex-session-context",
+    method: "readCodexSessionContext",
+    replacement: "createCodexSessionContextReader",
+  });
   assertCodexSessionSyncAccess(target, "readCodexSessionContext");
   if (physicalSource) {
     const databasePath = resolveOpenClawAgentSqlitePath(
