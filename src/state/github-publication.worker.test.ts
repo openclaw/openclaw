@@ -324,6 +324,7 @@ it("creates the lazy shared publication schema on its first worker insert", asyn
     repoRoot: "/publication-repository",
     repoFingerprint: "publication-repository-fingerprint",
     branch: "openclaw/first-publication",
+    baseRef: "origin/main",
   };
   await insertRegistryWorktree(process.env, {
     ...worktree,
