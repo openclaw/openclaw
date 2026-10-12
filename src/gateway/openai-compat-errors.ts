@@ -5,6 +5,7 @@ import type { AgentStreamParams } from "../agents/command/shared-types.js";
 import { describeFailoverError, resolveFailoverStatus } from "../agents/failover-error.js";
 import type { FailoverReason } from "../agents/failover/signal.js";
 import { ToolAuthorizationError } from "../agents/tool-input-error.js";
+import { isSessionArchivedError } from "../config/sessions/lifecycle.js";
 import { redactToolPayloadText } from "../logging/redact.js";
 
 export type OpenAiCompatError = {
@@ -39,6 +40,20 @@ const ERROR_TYPE_BY_REASON = {
 export function resolveOpenAiCompatError(err: unknown): OpenAiCompatError | undefined {
   if (err instanceof ToolAuthorizationError) {
     return { status: 403, error: { message: err.message, type: "permission_error" } };
+  }
+  // The caller's stable session key resolved to archived state; retrying cannot succeed,
+  // so return a distinguishable client error with non-destructive recovery instead of 500.
+  if (isSessionArchivedError(err)) {
+    return {
+      status: 409,
+      error: {
+        message: redactToolPayloadText(
+          `${err.message} Unarchive it in the Control UI or with the sessions.patch Gateway method ({"archived": false}), or send the request with a new session key.`,
+        ),
+        type: "invalid_request_error",
+        code: "session_archived",
+      },
+    };
   }
   const described = describeFailoverError(err);
   const reason = described.reason;

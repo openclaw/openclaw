@@ -1133,6 +1133,7 @@ describe("agentCommand", () => {
         return { dir: params?.dir ?? "/tmp/openclaw-workspace" };
       });
 
+      // HTTP and channel callers classify the typed code, not the message text.
       await expect(
         agentCommandFromIngress(
           {
@@ -1142,9 +1143,11 @@ describe("agentCommand", () => {
           },
           runtime,
         ),
-      ).rejects.toThrow(
-        `Session "${sessionKey}" is archived. Restore it before starting new work.`,
-      );
+      ).rejects.toMatchObject({
+        name: "SessionArchivedError",
+        code: "SESSION_ARCHIVED",
+        message: `Session "${sessionKey}" is archived. Restore it before starting new work.`,
+      });
       expect(runEmbeddedAgent).not.toHaveBeenCalled();
     });
   });

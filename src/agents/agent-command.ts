@@ -3,7 +3,8 @@ import type { VerboseLevel } from "../auto-reply/thinking.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import {
   createSessionWorkStartChangedError,
-  resolveSessionWorkStartError,
+  resolveSessionWorkStartBlock,
+  SessionArchivedError,
 } from "../config/sessions/lifecycle.js";
 import type { RestartRecoveryTerminalDeliveryEvidenceResult } from "../config/sessions/restart-recovery-types.js";
 import {
@@ -250,12 +251,11 @@ async function agentCommandInternal(
         if (currentEntry && currentEntry.sessionId !== sessionId && !matchesIntentionalRollover) {
           throw createSessionWorkStartChangedError(sessionKey ?? sessionId);
         }
-        const archivedSessionError = resolveSessionWorkStartError(
-          sessionKey ?? sessionId,
-          currentEntry,
-        );
-        if (archivedSessionError) {
-          throw new Error(archivedSessionError);
+        const workStartBlock = resolveSessionWorkStartBlock(sessionKey ?? sessionId, currentEntry);
+        if (workStartBlock) {
+          throw workStartBlock.reason === "archived"
+            ? new SessionArchivedError(workStartBlock.message)
+            : new Error(workStartBlock.message);
         }
         operatorSession?.assertAuthorized(currentEntry);
         sessionEntry = currentEntry;

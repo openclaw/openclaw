@@ -2,6 +2,7 @@
 export const SESSION_WORK_START_INVALIDATED_ERROR_CODE = "SESSION_WORK_START_INVALIDATED";
 export const SESSION_WORK_START_CHANGED_ERROR_CODE = "SESSION_WORK_START_CHANGED";
 export const SESSION_RESTART_RECOVERY_TOMBSTONE_ERROR_CODE = "SESSION_RESTART_RECOVERY_TOMBSTONE";
+export const SESSION_ARCHIVED_ERROR_CODE = "SESSION_ARCHIVED";
 
 export class SessionWorkStartInvalidatedError extends Error {
   readonly code = SESSION_WORK_START_INVALIDATED_ERROR_CODE;
@@ -41,4 +42,21 @@ export class SessionRestartRecoveryTombstoneError extends Error {
   readonly code = SESSION_RESTART_RECOVERY_TOMBSTONE_ERROR_CODE;
 
   override name = "SessionRestartRecoveryTombstoneError";
+}
+
+/** Archived sessions refuse new work until restored; callers map this to a client error. */
+export class SessionArchivedError extends Error {
+  readonly code = SESSION_ARCHIVED_ERROR_CODE;
+
+  override name = "SessionArchivedError";
+}
+
+export function isSessionArchivedError(error: unknown): error is SessionArchivedError {
+  return (
+    error instanceof SessionArchivedError ||
+    (typeof error === "object" &&
+      error !== null &&
+      "code" in error &&
+      error.code === SESSION_ARCHIVED_ERROR_CODE)
+  );
 }

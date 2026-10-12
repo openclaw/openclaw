@@ -9,8 +9,10 @@ import { loadTranscriptHeaderSync } from "./session-accessor.js";
 import { isTerminalSessionStatus, type SessionEntry, type SessionScope } from "./types.js";
 export {
   createSessionWorkStartChangedError,
+  isSessionArchivedError,
   isSessionWorkStartInvalidatedError,
   SESSION_RESTART_RECOVERY_TOMBSTONE_ERROR_CODE,
+  SessionArchivedError,
   SessionRestartRecoveryTombstoneError,
   SessionWorkStartChangedError,
   SessionWorkStartInvalidatedError,
@@ -18,6 +20,7 @@ export {
 
 export {
   isRestartRecoveryTombstone,
+  resolveSessionWorkStartBlock,
   resolveSessionWorkStartError,
   SESSION_LIFECYCLE_CHANGED_ERROR_REASON,
 } from "./session-work-start.js";

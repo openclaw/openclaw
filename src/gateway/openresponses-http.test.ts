@@ -9,6 +9,7 @@ import { FailoverError } from "../agents/failover-error.js";
 import { HISTORY_CONTEXT_MARKER } from "../auto-reply/reply/history.js";
 import { CURRENT_MESSAGE_MARKER } from "../auto-reply/reply/mentions.js";
 import { resetConfigRuntimeState, type GatewayAuthConfig } from "../config/config.js";
+import { SessionArchivedError } from "../config/sessions/lifecycle.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { emitAgentEvent, onAgentEvent } from "../infra/agent-events.js";
 import { getGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
@@ -205,6 +206,17 @@ const STREAM_FAILURE_CASES = [
     tools: [],
     expectedCode: "api_error",
     expectedMessage: "internal error",
+  },
+  {
+    name: "an archived session",
+    createError: () =>
+      new SessionArchivedError(
+        'Session "agent:main:openresponses:archived" is archived. Restore it before starting new work.',
+      ),
+    tools: [],
+    // Responses failures carry the OpenAI error type as their code.
+    expectedCode: "invalid_request_error",
+    expectedMessage: "sessions.patch",
   },
 ] as const;
 
@@ -973,6 +985,27 @@ describe("OpenResponses HTTP API (e2e)", () => {
       await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(idleRootCount));
     },
   );
+
+  it("maps an archived session to a distinguishable 409 for non-streaming responses", async () => {
+    agentCommandMock.mockClear();
+    agentCommandMock.mockRejectedValueOnce(
+      new SessionArchivedError(
+        'Session "agent:main:openresponses:archived" is archived. Restore it before starting new work.',
+      ) as never,
+    );
+
+    const res = await postResponses(enabledPort, { model: "openclaw", input: "hi" });
+    expect(res.status).toBe(409);
+    const json = (await res.json()) as {
+      status?: string;
+      error?: { code?: string; message?: string };
+    };
+    expect(json.status).toBe("failed");
+    expect(json.error?.code).toBe("invalid_request_error");
+    expect(json.error?.message).toContain("is archived");
+    expect(json.error?.message).toContain("sessions.patch");
+    expect(agentCommandMock).toHaveBeenCalledTimes(1);
+  });
 
   it("preserves declared owner identity for streaming and non-streaming private callers", async () => {
     await expectDeclaredHttpOwnerIdentity({
