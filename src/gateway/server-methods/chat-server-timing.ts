@@ -84,14 +84,16 @@ export function resolveControlUiReconnectResumeParams(
     return { params, resumeRequested: false };
   }
   const record = params as Record<string, unknown>;
-  const resumeRequested =
-    record[CONTROL_UI_RECONNECT_RESUME_PARAM] === true && isOperatorUiClient(clientInfo);
-  if (!resumeRequested) {
+  if (!Object.prototype.hasOwnProperty.call(record, CONTROL_UI_RECONNECT_RESUME_PARAM)) {
     return { params, resumeRequested: false };
   }
   const validatedParams = { ...record };
   delete validatedParams[CONTROL_UI_RECONNECT_RESUME_PARAM];
-  return { params: validatedParams, resumeRequested: true };
+  return {
+    params: validatedParams,
+    resumeRequested:
+      record[CONTROL_UI_RECONNECT_RESUME_PARAM] === true && isOperatorUiClient(clientInfo),
+  };
 }
 
 export function createOperatorChatSendServerTiming({
