@@ -52,6 +52,16 @@ they do not request a second handle admission before that transaction. Current
 transaction authority and final commit admission remain unchanged. These changes
 require no schema, stored-format, retention, or update migration.
 
+Pairing mutations read paired-device rows once in their existing worker write
+transaction. Nested reads reuse transaction-local facts; store writes install the
+normalized persisted rows, and the existing commit receipt publishes those
+postimages. Rollback discards the transaction-local facts. Authentication and
+live commit authority remain unchanged; no schema or update migration is needed.
+
+WebSocket hello prepares session membership only when the resident presence
+roster includes watched sessions. An idle roster needs no session rows; active
+watches retain the existing membership preparation and visibility filtering.
+
 Runtime database access belongs in workers. The Gateway main thread owns live
 projections, caches, and caller authority; it awaits prepared facts and installs
 committed results. Synchronous boot admission, migrations, Doctor/CLI one-shots,
@@ -5202,6 +5212,11 @@ Released synchronous SDK readers retain their compatibility kernels. These
 changes add no schema, cache, configuration, migration, or update requirements.
 
 Awaited full-transcript event reads use the same history worker's hydration stream.
+Its ordered cursor includes the first bounded byte slice of each event; only
+larger events need follow-up slice queries. The cursor and follow-up reads retain
+one SQLite snapshot across transport acknowledgments.
+Manual compaction reads entry and transcript statistics after the previous writer
+settles, then reuses them while its lifecycle owner holds admission closed.
 Compaction preflight, reset hooks, BTW context, exports, and the asynchronous SDK
 reader retain raw event order, read fences, and byte limits. The host captures the
 physical store before discovery yields and keeps its read custody through cold
