@@ -39,8 +39,8 @@ function abortedProcessingResult(
   signal: AbortSignal,
   fallback: string,
 ): TelegramMessageProcessingResult {
-  return signal.reason === "skipped"
-    ? { kind: "skipped" }
+  return signal.reason === "skipped" || signal.reason === "cancelled"
+    ? { kind: signal.reason }
     : { kind: "failed-retryable", error: signal.reason ?? new Error(fallback) };
 }
 
@@ -384,6 +384,18 @@ export const createTelegramMessageProcessor = (
           },
           onDeferredHeartbeat: () => participant.heartbeat(),
           deferredHeartbeatIntervalMs: participant.heartbeatIntervalMs,
+          onCancelled: async () => {
+            if (!adopted) {
+              // Every coalesced participant settles as cancelled, so each
+              // member's claim is released without spending retry budget.
+              void settle({ kind: "cancelled" }, "terminal");
+            }
+            // Intentional cancellation must reach the drain's budget-free
+            // settlement; abandonment would spend a retry attempt.
+            await (drainLifecycle?.onCancelled
+              ? drainLifecycle.onCancelled()
+              : drainLifecycle?.onAbandoned());
+          },
           onAbandoned: () => {
             if (!adopted) {
               void settle({ kind: "failed-retryable", error: "turn-abandoned" }, "terminal");

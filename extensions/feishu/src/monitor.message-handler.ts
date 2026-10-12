@@ -125,6 +125,23 @@ function resolveFeishuDebounceMentions(params: {
   return botMentions.length > 0 ? botMentions : undefined;
 }
 
+/**
+ * An already-fired owner abort ends the turn by intent, so it settles through
+ * cancellation without spending retry budget. Any other pre-admission stop
+ * remains abandonment.
+ */
+async function releaseUnadmittedIngress(lifecycle?: {
+  abortSignal: AbortSignal;
+  onCancelled?: () => void | Promise<void>;
+  onAbandoned: () => void | Promise<void>;
+}): Promise<void> {
+  if (lifecycle?.abortSignal.aborted && lifecycle.onCancelled) {
+    await lifecycle.onCancelled();
+    return;
+  }
+  await lifecycle?.onAbandoned();
+}
+
 export function createFeishuMessageReceiveHandler({
   cfg,
   channelRuntime,
@@ -171,7 +188,7 @@ export function createFeishuMessageReceiveHandler({
     });
     const task = async () => {
       if (turnAdoptionLifecycle?.abortSignal.aborted) {
-        await turnAdoptionLifecycle.onAbandoned();
+        await releaseUnadmittedIngress(turnAdoptionLifecycle);
         return;
       }
       const handling = handleMessage({
@@ -263,7 +280,7 @@ export function createFeishuMessageReceiveHandler({
               return;
             }
             if (admissionLifecycle.abortSignal.aborted) {
-              await admissionLifecycle.onAbandoned();
+              await releaseUnadmittedIngress(admissionLifecycle);
               return;
             }
             try {
@@ -332,7 +349,7 @@ export function createFeishuMessageReceiveHandler({
   return async (data) => {
     const turnAdoptionLifecycle = resolveIngressLifecycle?.(data);
     if (!isAccountActive() || turnAdoptionLifecycle?.abortSignal.aborted) {
-      await turnAdoptionLifecycle?.onAbandoned();
+      await releaseUnadmittedIngress(turnAdoptionLifecycle);
       return undefined;
     }
     const completeSuppressedIngress = async () => {
@@ -394,7 +411,7 @@ export function createFeishuMessageReceiveHandler({
       if (claim.kind === "claimed") {
         claim.handle.release({ error: stoppedError });
       }
-      await turnAdoptionLifecycle?.onAbandoned();
+      await releaseUnadmittedIngress(turnAdoptionLifecycle);
       return { kind: "failed-retryable", error: stoppedError };
     }
     if (claim.kind === "duplicate" || claim.kind === "inflight") {

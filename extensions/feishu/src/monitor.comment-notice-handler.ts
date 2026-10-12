@@ -71,7 +71,10 @@ export function createFeishuDriveCommentNoticeHandler(params: {
     );
     await enqueue(buildCommentNoticeQueueKey(event), async () => {
       if (turnAdoptionLifecycle?.abortSignal.aborted) {
-        await turnAdoptionLifecycle.onAbandoned();
+        // The owner abort ends the turn by intent: cancel without retry budget.
+        await (turnAdoptionLifecycle.onCancelled
+          ? turnAdoptionLifecycle.onCancelled()
+          : turnAdoptionLifecycle.onAbandoned());
         return;
       }
       await handleFeishuCommentEvent({

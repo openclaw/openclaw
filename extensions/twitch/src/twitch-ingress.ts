@@ -132,6 +132,12 @@ export function createTwitchIngress(options: {
           },
           onDeferredHeartbeat: () => lifecycle.onDeferredHeartbeat?.(),
           deferredHeartbeatIntervalMs: lifecycle.deferredHeartbeatIntervalMs,
+          // Intentional cancellation must reach the drain's budget-free
+          // settlement; abandonment would spend a retry attempt.
+          onCancelled: async () => {
+            handedOff = true;
+            await (lifecycle.onCancelled ? lifecycle.onCancelled() : lifecycle.onAbandoned());
+          },
           onAbandoned: async () => {
             handedOff = true;
             await lifecycle.onAbandoned();

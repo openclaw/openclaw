@@ -309,6 +309,20 @@ export function createSlackMessageHandler(params: {
                   ...(deferredHeartbeatIntervals.length > 0
                     ? { deferredHeartbeatIntervalMs: Math.min(...deferredHeartbeatIntervals) }
                     : {}),
+                  // Cancellation frees the same logical claims as abandonment,
+                  // then lets each durable owner settle without retry budget.
+                  onCancelled: async () => {
+                    settlementHandedOff = true;
+                    releaseClaims();
+                    await Promise.all([
+                      turnAdoptionLifecycle?.onCancelled
+                        ? turnAdoptionLifecycle.onCancelled()
+                        : turnAdoptionLifecycle?.onAbandoned(),
+                      admissionLifecycle.onCancelled
+                        ? admissionLifecycle.onCancelled()
+                        : admissionLifecycle.onAbandoned(),
+                    ]);
+                  },
                   onAbandoned: () => {
                     settlementHandedOff = true;
                     releaseClaims();

@@ -406,6 +406,82 @@ describe("dispatchSmsInboundEvent", () => {
     expect(events).toEqual(["cleanup", "abandon"]);
   });
 
+  it("cleans deferred MMS files before forwarding cancellation", async () => {
+    const mocks = createAuthorizedRuntime();
+    const events: string[] = [];
+    unlinkIfExistsMock.mockImplementationOnce(async () => {
+      events.push("cleanup");
+    });
+    const originalLifecycle: SmsTurnAdoptionLifecycle = {
+      onAdopted: vi.fn(async () => undefined),
+      onDeferred: vi.fn(),
+      onCancelled: vi.fn(async () => {
+        events.push("cancel");
+      }),
+      onAbandoned: vi.fn(),
+    };
+    let wrappedLifecycle: SmsTurnAdoptionLifecycle | undefined;
+    mocks.run.mockImplementationOnce(async (runParams) => {
+      wrappedLifecycle = runParams.turnAdoptionLifecycle;
+      wrappedLifecycle?.onDeferred?.();
+    });
+
+    await dispatchSmsInboundEvent({
+      cfg: {},
+      account: createAccount({ dmPolicy: "allowlist", allowFrom: [SMS_FROM] }),
+      channelRuntime: mocks.runtime,
+      receivedAt: 1_700_000_000_123,
+      turnAdoptionLifecycle: originalLifecycle,
+      msg: createMmsMessage("MM-cancelled"),
+    });
+
+    expect(unlinkIfExistsMock).not.toHaveBeenCalled();
+    await wrappedLifecycle?.onCancelled?.();
+    expect(originalLifecycle.onCancelled).toHaveBeenCalledOnce();
+    expect(originalLifecycle.onAbandoned).not.toHaveBeenCalled();
+    expect(unlinkIfExistsMock).toHaveBeenCalledExactlyOnceWith("/tmp/mms-1.jpg");
+    expect(events).toEqual(["cleanup", "cancel"]);
+  });
+
+  it.each(["onCancelled", "onAbandoned"] as const)(
+    "settles the durable claim through %s when MMS cleanup fails",
+    async (terminal) => {
+      const mocks = createAuthorizedRuntime();
+      const warn = vi.fn();
+      unlinkIfExistsMock.mockImplementationOnce(async () => {
+        throw new Error("EACCES");
+      });
+      const originalLifecycle: SmsTurnAdoptionLifecycle = {
+        onAdopted: vi.fn(async () => undefined),
+        onDeferred: vi.fn(),
+        onCancelled: vi.fn(async () => undefined),
+        onAbandoned: vi.fn(),
+      };
+      let wrappedLifecycle: SmsTurnAdoptionLifecycle | undefined;
+      mocks.run.mockImplementationOnce(async (runParams) => {
+        wrappedLifecycle = runParams.turnAdoptionLifecycle;
+        wrappedLifecycle?.onDeferred?.();
+      });
+
+      await dispatchSmsInboundEvent({
+        cfg: {},
+        account: createAccount({ dmPolicy: "allowlist", allowFrom: [SMS_FROM] }),
+        channelRuntime: mocks.runtime,
+        receivedAt: 1_700_000_000_123,
+        turnAdoptionLifecycle: originalLifecycle,
+        log: { warn },
+        msg: createMmsMessage(`MM-cleanup-fails-${terminal}`),
+      });
+
+      await wrappedLifecycle?.[terminal]?.();
+      // A failed unlink must not strand the claim: the owner still settles once.
+      await vi.waitFor(() => expect(originalLifecycle[terminal]).toHaveBeenCalledOnce());
+      const other = terminal === "onCancelled" ? "onAbandoned" : "onCancelled";
+      expect(originalLifecycle[other]).not.toHaveBeenCalled();
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining("EACCES"));
+    },
+  );
+
   it("retains MMS files after successful turn adoption", async () => {
     const mocks = createAuthorizedRuntime();
     const originalLifecycle: SmsTurnAdoptionLifecycle = {

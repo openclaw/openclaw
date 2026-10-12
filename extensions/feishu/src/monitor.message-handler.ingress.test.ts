@@ -354,6 +354,90 @@ describe("Feishu durable ingress debounce lifecycle", () => {
     expect(second.calls.adopted).not.toHaveBeenCalled();
   });
 
+  it("keeps an aged row at the retry ceiling recoverable when its ingress claim already aborted", async () => {
+    const created = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-feishu-abort-cancel-"));
+    const stateDir = await fs.realpath(created);
+    type Queue = NonNullable<Parameters<typeof createFeishuDurableIngress>[0]["queue"]>;
+    type Payload = Parameters<Queue["enqueue"]>[1];
+    const queue = createChannelIngressQueueForTests<Payload>({
+      channelId: "feishu",
+      accountId: "default",
+      stateDir,
+    });
+    const event = {
+      ...createTextEvent("evt-abort-cancel", "om-abort-cancel", "aborted"),
+      event_type: "im.message.receive_v1",
+    };
+    // Received long before the dead-letter age floor, with one try left.
+    await queue.enqueue(
+      "evt-abort-cancel",
+      { version: 1, receivedAt: 1, rawEnvelope: JSON.stringify(event) },
+      { laneKey: "chat:oc-chat", receivedAt: 1 },
+    );
+    for (let attempt = 1; attempt < DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS; attempt += 1) {
+      const claim = await queue.claim("evt-abort-cancel");
+      if (!claim) {
+        throw new Error(`Expected Feishu seed claim ${attempt}`);
+      }
+      await queue.release(claim, { lastError: "prior failure", releasedAt: 1 });
+    }
+    const handleMessage = vi.fn(async () => {});
+    const handler = createFeishuMessageReceiveHandler({
+      cfg: {} as ClawdbotConfig,
+      channelRuntime: {
+        commands: { isControlCommandMessage: () => false },
+        debounce: { resolveInboundDebounceMs: () => 0, createInboundDebouncer },
+      } as unknown as PluginRuntime["channel"],
+      accountId: "default",
+      runtime: createNonExitingRuntimeEnv(),
+      chatHistories: new Map(),
+      handleMessage,
+      resolveDebounceText: () => "aborted",
+      hasProcessedMessage: vi.fn(async () => false),
+      getBotOpenId: () => "ou-bot",
+      // The claim's owner abort has already fired when the handler receives it.
+      resolveIngressLifecycle: (data) => {
+        const lifecycle = ingress.resolveLifecycle(data);
+        return lifecycle && { ...lifecycle, abortSignal: AbortSignal.abort() };
+      },
+    });
+    const finishRedelivery = createDeferred<void>();
+    const invoke = vi
+      .fn()
+      .mockImplementationOnce(async (data: unknown) => await handler(data as never))
+      .mockImplementationOnce(async (data: unknown) => {
+        await finishRedelivery.promise;
+        await ingress.resolveLifecycle(data)?.onAdopted();
+      });
+    const ingress = createFeishuDurableIngress({
+      accountId: "default",
+      queue,
+      dispatcher: { invoke } as never,
+      runtime: { error: vi.fn(), log: vi.fn() },
+      pollIntervalMs: 60_000,
+    });
+    try {
+      ingress.start();
+      // The abort ends ownership by intent, so the drain redelivers the row with
+      // its prior retry facts instead of dead-lettering it.
+      await vi.waitFor(() => expect(invoke).toHaveBeenCalledTimes(2));
+      expect(handleMessage).not.toHaveBeenCalled();
+      expect(await queue.listFailed?.()).toEqual([]);
+      expect(await queue.listClaims()).toEqual([
+        expect.objectContaining({
+          id: "evt-abort-cancel",
+          attempts: DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS - 1,
+          lastError: "prior failure",
+        }),
+      ]);
+    } finally {
+      finishRedelivery.resolve();
+      await ingress.stop();
+      closeOpenClawStateDatabaseForTest();
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("preserves abandon retry accounting, backoff, threshold, and restart behavior", async () => {
     vi.useFakeTimers();
     const now = Date.UTC(2026, 0, 2);

@@ -373,6 +373,57 @@ describe("Slack durable ingress", () => {
     });
   });
 
+  it("releases a cancelled deferred turn's migration fence without spending its retry budget", async () => {
+    await withQueue(async (queue) => {
+      const starts: string[] = [];
+      const redeliveredAttempts: number[] = [];
+      let routed: ReturnType<typeof resolveSlackIngressTurnLifecycle> | undefined;
+      const processEvent = vi.fn(async (receiverEvent: ReceiverEvent) => {
+        const id = (receiverEvent.body as { event_id: string }).event_id;
+        const lifecycle = resolveSlackIngressTurnLifecycle(receiverEvent.customProperties)!;
+        starts.push(id);
+        if (id === "Ev-routed" && !routed) {
+          await lifecycle.onSessionRouted?.("agent:main:slack:channel:C_TEST");
+          lifecycle.onDeferred();
+          routed = lifecycle;
+          return;
+        }
+        if (id === "Ev-routed") {
+          const claims = await queue.listClaims();
+          redeliveredAttempts.push(...claims.filter((c) => c.id === id).map((c) => c.attempts));
+        }
+        await lifecycle.onAdopted();
+      });
+      const { ingress, receive } = attachIngress(queue, processEvent);
+      ingress.start();
+      try {
+        await receive(createReceiverEvent("Ev-routed"));
+        await vi.waitFor(() => expect(routed).toBeDefined());
+        await receive(
+          createReceiverEventWithBody(
+            createChannelIdChangedEnvelope("Ev-migration", "C_OLD", "C_TEST"),
+          ),
+        );
+        await vi.waitFor(async () => expect(await queue.listClaims()).toHaveLength(2));
+        expect(starts).toEqual(["Ev-routed"]);
+
+        // The reply lane settles a cleared queued turn through onCancelled and
+        // falls back to abandonment only when the lifecycle cannot cancel.
+        await (routed?.onCancelled ? routed.onCancelled() : routed?.onAbandoned());
+
+        await vi.waitFor(() => expect(starts).toContain("Ev-migration"));
+        await ingress.waitForIdle();
+        expect(await queue.listFailed?.()).toEqual([]);
+        expect(await queue.listClaims()).toEqual([]);
+        expect(await queue.listPending()).toEqual([]);
+        // Cancellation reopened the routed row without recording an attempt.
+        expect(redeliveredAttempts).toEqual([0]);
+      } finally {
+        await ingress.stop();
+      }
+    });
+  });
+
   it("readmits a released twin before reclaiming dispatch and rearms its watchdog", async () => {
     await withQueue(async (queue) => {
       const owner = createDeferred<boolean>();

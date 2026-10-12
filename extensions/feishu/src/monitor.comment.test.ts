@@ -435,4 +435,32 @@ describe("drive.notice.comment_add_v1 monitor handler", () => {
     expect(handleComment).toHaveBeenCalledTimes(1);
     expect(abandoned).toHaveBeenCalledTimes(1);
   });
+
+  it("cancels a queued durable comment after its claim aborts without spending retry budget", async () => {
+    const first = blockFirstComment();
+    const controller = new AbortController();
+    const cancelled = vi.fn(async () => {});
+    const abandoned = vi.fn(async () => {});
+    const lifecycle: FeishuIngressLifecycle = {
+      abortSignal: controller.signal,
+      onAdopted: vi.fn(async () => {}),
+      onDeferred: vi.fn(),
+      onAdoptionFinalizing: vi.fn(),
+      onCancelled: cancelled,
+      onAbandoned: abandoned,
+    };
+    const onComment = commentHandler({
+      resolveIngressLifecycle: (data) =>
+        (data as { event_id?: string }).event_id === "evt_queued_cancel" ? lifecycle : undefined,
+    });
+    await onComment(makeDriveCommentEvent({ event_id: "evt_blocking_cancel" }));
+    await first.started;
+    const queued = onComment(makeDriveCommentEvent({ event_id: "evt_queued_cancel" }));
+    controller.abort(new Error("adoption timeout"));
+    first.release();
+    await queued;
+    expect(handleComment).toHaveBeenCalledTimes(1);
+    expect(cancelled).toHaveBeenCalledTimes(1);
+    expect(abandoned).not.toHaveBeenCalled();
+  });
 });

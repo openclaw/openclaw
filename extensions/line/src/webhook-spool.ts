@@ -182,7 +182,8 @@ export function createLineWebhookSpool(options: LineWebhookSpoolOptions) {
         if (!acceptsDeferredClaims) {
           // Shutting down: a claim parked in the buffer would never flush, so hand
           // this part back and let a restart redeliver the whole set instead.
-          await lifecycle.onAbandoned();
+          // Shutdown ends ownership by intent, so it spends no retry budget.
+          await (lifecycle.onCancelled ? lifecycle.onCancelled() : lifecycle.onAbandoned());
           return undefined;
         }
         // Hold this claim while the rest of the set arrives. Deferring frees the
@@ -220,7 +221,7 @@ export function createLineWebhookSpool(options: LineWebhookSpoolOptions) {
         releaseLane = set.finish;
       } else if (imageSets.isBusy(laneKey)) {
         if (!acceptsDeferredClaims) {
-          await lifecycle.onAbandoned();
+          await (lifecycle.onCancelled ? lifecycle.onCancelled() : lifecycle.onAbandoned());
           return undefined;
         }
         // Release the lane before waiting. Holding it makes this event the lane
@@ -251,12 +252,17 @@ export function createLineWebhookSpool(options: LineWebhookSpoolOptions) {
           onDeferred: () => {
             handedOff = true;
             if (!acceptsDeferredClaims) {
+              // Shutdown rejects the deferral by intent: cancel, not abandon.
               void Promise.resolve()
-                .then(() => boundLifecycle.onAbandoned())
+                .then(() =>
+                  boundLifecycle.onCancelled
+                    ? boundLifecycle.onCancelled()
+                    : boundLifecycle.onAbandoned(),
+                )
                 .catch((error: unknown) => {
                   options.runtime.error?.(
                     danger(
-                      `line: failed to abandon a late webhook delivery: ${formatErrorMessage(error)}`,
+                      `line: failed to cancel a late webhook delivery: ${formatErrorMessage(error)}`,
                     ),
                   );
                 });
@@ -394,7 +400,7 @@ export function createLineWebhookSpool(options: LineWebhookSpoolOptions) {
           // remove this wait only when core can cancel or abandon the run before release.
           await monitor.waitForDeferredClaims();
           // Close registration only after the live map drains. Later deferrals
-          // are rejected through onAbandoned so disposal cannot orphan a run.
+          // are rejected through cancellation so disposal cannot orphan a run.
           acceptsDeferredClaims = false;
           if (deliveriesSettled) {
             await monitor.waitForIdle();

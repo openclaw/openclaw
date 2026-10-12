@@ -148,13 +148,18 @@ export function prepareSessionFollowupCleanup(params: {
       consumeQueueSummaryDelivery(
         queue,
         { sources: summaries, droppedCount: summaries.length },
-        false,
+        "retained",
       );
       const detached = new Set([...pending, ...summaries]);
       removed += detached.size;
-      completeFollowupRuns(detached, (error) => {
-        defaultRuntime.error?.(`followup queue cancellation settlement failed: ${String(error)}`);
-      });
+      // Stop relinquishes queued turns on purpose: cancellation, not abandonment.
+      completeFollowupRuns(
+        detached,
+        (error) => {
+          defaultRuntime.error?.(`followup queue cancellation settlement failed: ${String(error)}`);
+        },
+        "cancelled",
+      );
       // Settlement of accepted removals is unconditional; later effects need current authority.
       params.assertCurrent();
       if (

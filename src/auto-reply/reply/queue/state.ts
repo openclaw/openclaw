@@ -174,7 +174,8 @@ export function clearFollowupQueue(key: string): number {
   }
   queue.abortController.abort();
   const cleared = queue.items.length + queue.droppedCount;
-  completeFollowupRuns(followupQueueSources(queue));
+  // A cleared queue relinquishes its turns on purpose: cancellation, not abandonment.
+  completeFollowupRuns(followupQueueSources(queue), undefined, "cancelled");
   clearFollowupQueueContent(queue);
   queue.inFlight.clear();
   queue.lastRun = undefined;
