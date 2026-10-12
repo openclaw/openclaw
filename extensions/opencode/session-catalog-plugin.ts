@@ -1,4 +1,3 @@
-import { accessSync, constants, statSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { resolveAcpSessionAvailability } from "openclaw/plugin-sdk/acp-runtime";
@@ -9,12 +8,9 @@ import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import {
   createSessionCatalogFamily,
   createSessionCatalogNodeHostBindings,
-  importSessionCatalogHistory,
-  listAdoptedSessionCatalogSessions,
-  sessionCatalogAdoptedSessionKey,
-  type SessionCatalogEntrySnapshot,
   type SessionCatalogSession,
 } from "openclaw/plugin-sdk/session-catalog";
+import { createAcpSessionCatalogAdoption } from "openclaw/plugin-sdk/session-catalog-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   OPENCODE_LOCAL_SESSION_HOST_ID as LOCAL_HOST_ID,
@@ -41,33 +37,6 @@ const MAX_HOSTS = 100;
 const ACPX_BACKEND_ID = "acpx";
 const OPENCODE_ACP_AGENT_ID = "opencode";
 const OPENCODE_ADOPTED_SESSION_KEY_PREFIX = "plugin:opencode:catalog-adopt:";
-
-function executableOnPath(command: string, env: NodeJS.ProcessEnv): boolean {
-  const pathValue = env.PATH ?? env.Path ?? "";
-  const delimiter = process.platform === "win32" ? ";" : path.delimiter;
-  const extensions =
-    process.platform === "win32" ? (env.PATHEXT ?? ".EXE;.CMD;.BAT;.COM").split(";") : [""];
-  for (const directory of pathValue.split(delimiter)) {
-    for (const extension of extensions) {
-      if (!directory.trim()) {
-        continue;
-      }
-      const candidate = path.join(directory, `${command}${extension}`);
-      try {
-        if (!statSync(candidate).isFile()) {
-          continue;
-        }
-        if (process.platform !== "win32") {
-          accessSync(candidate, constants.X_OK);
-        }
-        return true;
-      } catch {
-        // Keep searching PATH.
-      }
-    }
-  }
-  return false;
-}
 
 function parseNodeParams(paramsJSON?: string | null): unknown {
   if (!paramsJSON) {
@@ -117,30 +86,6 @@ function currentOpenCodeCatalogConfig(api: OpenClawPluginApi): OpenClawConfig {
   return (api.runtime.config?.current?.() ?? api.config ?? {}) as OpenClawConfig;
 }
 
-function listAdoptedOpenCodeSessions(
-  api: OpenClawPluginApi,
-  agentId?: string,
-  sessionEntries?: SessionCatalogEntrySnapshot,
-): Map<string, string> {
-  return listAdoptedSessionCatalogSessions({
-    ...(agentId ? { agentId } : {}),
-    config: currentOpenCodeCatalogConfig(api),
-    pluginId: api.id,
-    runtime: api.runtime,
-    sessionEntries,
-    sourceFromEntry: (entry) => {
-      const opencode = isRecord(entry.pluginExtensions?.opencode)
-        ? entry.pluginExtensions.opencode
-        : undefined;
-      const marker =
-        opencode && isRecord(opencode.sessionCatalog) ? opencode.sessionCatalog : undefined;
-      return marker && typeof marker.sourceThreadId === "string"
-        ? { hostId: LOCAL_HOST_ID, threadId: marker.sourceThreadId }
-        : undefined;
-    },
-  });
-}
-
 async function loadContinuableOpenCodeSession(
   api: OpenClawPluginApi,
   threadId: string,
@@ -156,54 +101,17 @@ async function loadContinuableOpenCodeSession(
   return session;
 }
 
-async function createAdoptedOpenCodeSession(params: {
-  api: OpenClawPluginApi;
-  agentId: string;
-  threadId: string;
-  session: SessionCatalogSession;
-}): Promise<{ sessionKey: string }> {
-  const config = currentOpenCodeCatalogConfig(params.api);
-  const marker = { sourceThreadId: params.threadId };
-  const created = await params.api.runtime.agent.session.createSessionEntry({
-    cfg: config,
-    key: sessionCatalogAdoptedSessionKey(OPENCODE_ADOPTED_SESSION_KEY_PREFIX, params.threadId),
-    agentId: params.agentId,
-    recoverMatchingInitialEntry: true,
-    ...(params.session.name ? { displayName: params.session.name } : {}),
-    ...(params.session.cwd ? { spawnedCwd: params.session.cwd } : {}),
-    initialEntry: {
-      acpBackendId: ACPX_BACKEND_ID,
-      acpSessionBinding: {
-        acpAgentId: OPENCODE_ACP_AGENT_ID,
-        agentSessionId: params.threadId,
-      },
-      pluginExtensions: { opencode: { sessionCatalog: marker } },
-    },
-    afterCreate: async (entry) => {
-      await importSessionCatalogHistory({
-        catalogId: "opencode",
-        threadId: params.threadId,
-        read: ({ cursor, limit }) =>
-          readLocalOpenCodeTranscriptPage({
-            threadId: params.threadId,
-            limit,
-            ...(cursor ? { cursor } : {}),
-          }),
-        sessionId: entry.sessionId,
-        sessionKey: entry.key,
-        agentId: entry.agentId,
-        ...(params.session.cwd ? { cwd: params.session.cwd } : {}),
-        config,
-      });
-      return { pluginExtensions: { opencode: { sessionCatalog: marker } } };
-    },
-  });
-  return { sessionKey: created.key };
-}
-
 function createOpenCodeNodeHostBindings(api: OpenClawPluginApi) {
   const available = ({ config, env }: { config: unknown; env: NodeJS.ProcessEnv }) =>
-    fullConfigCatalogEnabled(config) && executableOnPath("opencode", env);
+    fullConfigCatalogEnabled(config) &&
+    Boolean(
+      resolveNodeHostExecutable("opencode", {
+        env: { ...env, PATHEXT: env.PATHEXT ?? ".EXE;.CMD;.BAT;.COM" },
+        // An explicit empty PATHEXT suffix also allowed bare executables before consolidation.
+        includeExtensionless: env.PATHEXT?.split(";").includes("") ?? false,
+        strategy: "direct",
+      }),
+    );
   return createSessionCatalogNodeHostBindings({
     capability: CAPABILITY,
     listCommand: OPENCODE_SESSIONS_LIST_COMMAND,
@@ -232,6 +140,16 @@ export function registerOpenCodeSessionCatalog(api: OpenClawPluginApi): void {
   if (!isOpenCodeSessionCatalogEnabled(api.pluginConfig)) {
     return;
   }
+  const adoption = createAcpSessionCatalogAdoption({
+    api,
+    config: () => currentOpenCodeCatalogConfig(api),
+    catalogId: OPENCODE_ACP_AGENT_ID,
+    hostId: LOCAL_HOST_ID,
+    keyPrefix: OPENCODE_ADOPTED_SESSION_KEY_PREFIX,
+    markerPluginId: "opencode",
+    markerKey: "sessionCatalog",
+    read: readLocalOpenCodeTranscriptPage,
+  });
   const provider = createSessionCatalogFamily(
     {
       runtime: api.runtime,
@@ -310,11 +228,10 @@ export function registerOpenCodeSessionCatalog(api: OpenClawPluginApi): void {
             backendId: ACPX_BACKEND_ID,
             agentId: OPENCODE_ACP_AGENT_ID,
           }),
-        listAdopted: (agentId, sessionEntries) =>
-          listAdoptedOpenCodeSessions(api, agentId, sessionEntries),
+        listAdopted: (agentId, sessionEntries) => adoption.listAdopted(agentId, sessionEntries),
         loadSession: (threadId) => loadContinuableOpenCodeSession(api, threadId),
         validateSession: () => undefined,
-        create: (params) => createAdoptedOpenCodeSession({ api, ...params }),
+        create: (params) => adoption.create(params),
         complete: (continued, threadId) =>
           linkContinuedOpenCodeSession(continued.sessionKey, threadId),
         nodeReadOnlyMessage: "paired-node OpenCode session rows are view-only",

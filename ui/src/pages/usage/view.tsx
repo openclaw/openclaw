@@ -3,7 +3,7 @@ import {
   addCostUsageTotals,
   createEmptyCostUsageTotals,
 } from "../../../../src/infra/session-cost-usage-totals.js";
-import { renderProviderUsageDetails } from "../../components/provider-usage.ts";
+import { renderProviderUsageDetails } from "../../components/solid/provider-usage.tsx";
 import {
   SettingsSection,
   SettingsPage,
@@ -14,7 +14,6 @@ import { downloadTextFile } from "../../lib/download.ts";
 import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
 import "../../components/tooltip.ts";
 import "../../components/web-awesome.ts";
-import { LitContent } from "../../lit/solid-bridge.ts";
 import { resolveUsageOverviewState } from "./cache-status.ts";
 import "../../styles/usage.css";
 import type { ProviderUsageSummary } from "./data-types.ts";
@@ -99,7 +98,7 @@ function renderProviderUsage(
                     </>
                   ) : undefined}
                 </div>
-                <LitContent render={() => renderProviderUsageDetails(provider)} />
+                {renderProviderUsageDetails(provider)}
               </article>
             )}
           </For>
