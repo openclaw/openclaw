@@ -681,7 +681,7 @@ src/config/sessions/store-entry.ts
 src/config/sessions/targets-collision.ts
 src/config/sessions/targets-configured-agents.ts
 src/config/sessions/targets-path-validation.ts
-src/config/sessions/targets-read-availability.ts
+src/config/sessions/targets-read-availability.worker.ts
 src/config/sessions/targets.ts
 src/config/sessions/transcript-payload.ts
 src/config/sessions/transcript-predicate-fields.ts

@@ -47,9 +47,7 @@ import {
   CronRunReceiptConflictError,
   CronRunReceiptRevisionError,
   findActiveCronRunReceiptInDatabase,
-  finishCronRunReceiptAsync,
   listActiveCronRunReceiptJobIdsInDatabase,
-  prepareCronRunReceiptClaim,
   releaseLocalCronRunReceiptOwnership,
 } from "./run-receipt-store.js";
 import {
@@ -57,6 +55,8 @@ import {
   claimCronRunReceiptInDatabaseForTest,
   inspectActiveCronRunReceipt,
   makeCronReceiptJob,
+  finishCronRunReceiptAsync,
+  prepareCronRunReceiptClaim,
 } from "./run-receipt-store.test-support.js";
 import {
   isCronRunTriggerStateRetiredInDatabase,

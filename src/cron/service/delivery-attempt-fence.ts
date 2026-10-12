@@ -22,7 +22,6 @@ export function createCronCompletionDeliveryFence(params: {
   const { state, handle, activeJobMarker, signal } = params;
   const context = captureOpenClawStateWorkerContext();
   const generation = state.lifecycleGeneration;
-  const reservation = state.queuedRunReservationsByJobId.get(handle.jobId);
   const defaultAgentId = () => state.deps.resolveDefaultAgentId?.() ?? state.deps.defaultAgentId;
   const admittedDefaultAgentId = defaultAgentId();
   const allowMissingJob = () =>
@@ -41,9 +40,6 @@ export function createCronCompletionDeliveryFence(params: {
     }
     if (
       state.lifecycleGeneration !== generation ||
-      !reservation ||
-      state.queuedRunReservationsByJobId.get(handle.jobId) !== reservation ||
-      reservation.runReceipt.receiptId !== handle.receiptId ||
       !isCronActiveJobMarkerCurrent(activeJobMarker) ||
       activeJobMarker?.cancellation?.kind === "requested" ||
       (activeJobMarker?.jobRemoved && !allowMissingJob()) ||

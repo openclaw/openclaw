@@ -8,8 +8,8 @@ import { recomputeNextRunsForMaintenance } from "./jobs-scheduling.js";
 import { createCronServiceState, type DeferredCronNotifications } from "./state.js";
 import { runPostPersistCronNotifications } from "./store.js";
 import type { CronJobRunResult } from "./timer-execution-timeout.js";
+import { authorCronRunCompletion } from "./timer-job-runner.js";
 import { applyJobResult, applyOutcomeToAuthoritativeJob } from "./timer-outcomes.js";
-import { authorCronRunCompletion } from "./timer.js";
 
 const ENDED_AT = Date.parse("2026-07-18T12:00:00.000Z");
 const STARTED_AT = ENDED_AT - 1_000;
