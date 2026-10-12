@@ -384,10 +384,9 @@ grant. Entry-only binding mutations carry `entryCurrent` through existing writer
 admission. Host callbacks check live channel/run facts among those matches, so a
 finishing publisher can yield to a recorded parent without losing a valid title
 update. `source.assertScopeCurrent()` checks only host lifetime and physical source
-custody; it does not replace an awaited effect check. The deprecated
-`captureSessionEntryCurrentCheck` keeps its released synchronous callbacks, warns
-on use, and is scheduled for removal at the next Plugin SDK major. Incognito uses
-its existing native callback route.
+custody; it does not replace an awaited effect check. The never-stable
+`captureSessionEntryCurrentCheck` facade and its synchronous callback preparation
+path are removed. Incognito uses its existing native callback route.
 
 History readers can borrow existing physical and canonical admission without an
 open host reader. The receiving scope checks its actual file and the live receipt;
