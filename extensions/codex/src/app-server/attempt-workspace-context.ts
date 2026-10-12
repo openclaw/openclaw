@@ -162,9 +162,11 @@ export async function buildCodexWorkspaceBootstrapContext(params: {
       memoryToolNames,
       memoryToolRouted,
       promptContext: renderCodexWorkspaceBootstrapPromptContext(promptContextFiles),
-      // Empty is a captured snapshot too; a missing value still permits first capture.
+      // The current file wins so edits reach long-lived sessions; the captured
+      // snapshot only covers an emptied or removed file.
       threadDeveloperInstructions: includeAgentWorkspaceInstructions
-        ? (params.agentWorkspaceDeveloperInstructions ?? prepared.instructionSnapshot.instructions)
+        ? prepared.instructionSnapshot.instructions ||
+          (params.agentWorkspaceDeveloperInstructions ?? prepared.instructionSnapshot.instructions)
         : undefined,
       personaInstructions: injectOpenClawContext ? prepared.personaInstructions : undefined,
       sharedPersonaInstructions: injectOpenClawContext

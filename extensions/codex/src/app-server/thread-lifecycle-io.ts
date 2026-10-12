@@ -263,8 +263,8 @@ export async function resumeExistingCodexThread(
       // Keeping its previous client id disables warm reuse after every restart.
       clientId: resolveCodexAppServerClientInstanceId(params.client),
       pendingResumeConfiguration: undefined,
-      ...(resumeBinding.agentWorkspaceDeveloperInstructions === undefined &&
-      params.agentWorkspaceDeveloperInstructions !== undefined
+      // Keep the last delivered snapshot as the fallback for a later failed load.
+      ...(params.agentWorkspaceDeveloperInstructions !== undefined
         ? { agentWorkspaceDeveloperInstructions: params.agentWorkspaceDeveloperInstructions }
         : {}),
       cwd: params.cwd,
