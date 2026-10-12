@@ -271,7 +271,7 @@ type SyntheticProviderAuthParams = {
 
 type ResolveSyntheticProviderAuth = (
   config: OpenClawConfig | undefined,
-) => ResolvedProviderAuth | undefined;
+) => ReturnType<typeof resolveProviderSyntheticAuthWithPlugin>;
 
 function syntheticAuthLookup(
   params: SyntheticProviderAuthParams,
