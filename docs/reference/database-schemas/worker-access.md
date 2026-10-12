@@ -5957,7 +5957,14 @@ are unchanged.
 
 GitHub publication preparation and per-turn tool availability read the selected
 live worktree through the existing worktree reader and shared-state worker. They
-capture the physical store before yielding, recheck session identity after the
+refresh discovery on identity, configuration, and workspace-binding changes;
+otherwise a read refreshes facts older than one minute instead of polling idle
+sessions. The first read after expiry retains the availability hint but retires
+credentials until asynchronous preparation finishes, so an expired token cannot
+authorize a worker launch. The upstream session monitor likewise skips its
+watched-link query when no catalog can check upstream activity.
+
+Publication readers capture the physical store before yielding, recheck session identity after the
 read, and refresh worktree facts after identity or repository preparation. Those
 facts select inputs and retain the worktree owner's mutation generation through
 publication effects. Synchronous guards still check current session, credential,
