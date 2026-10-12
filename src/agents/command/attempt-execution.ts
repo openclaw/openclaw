@@ -237,7 +237,7 @@ export async function runAgentAttempt(
     params.isFallbackRetry &&
     isClaudeCliProvider(params.originalProvider) &&
     !isClaudeCliProvider(params.providerOverride)
-      ? buildClaudeCliFallbackContextPrelude({
+      ? await buildClaudeCliFallbackContextPrelude({
           cliSessionId: getCliSessionBinding(params.sessionEntry, "claude-cli")?.sessionId,
         })
       : "";

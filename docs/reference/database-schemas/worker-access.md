@@ -241,6 +241,25 @@ inline maintenance and archive persistence still share the released opaque SDK
 deletion transaction; moving those calls requires that transaction owner's cutover.
 This changes no schemas, retention, stored bytes, or update behavior.
 
+## Session target discovery
+
+Gateway combined listings, search preparation, cron owner discovery, delivery
+context recovery, and ordered runtime candidate selection await the existing
+session history/discovery worker. Target selection returns logical and physical
+store facts together; durable reads do not run SQLite on the Gateway thread.
+Combined topology and row reads share the federation policy used by the native
+maintenance entrypoint. Bound incognito rows remain with their process-held actor;
+unbound incognito stores retain their existing process-local native owner.
+
+Ordinary discovery keeps one captured roster and listing through completion.
+Later registry, path, or row changes are observed on the next owner preparation;
+there is no post-read registry retry or repeated listing-identity capture.
+Write receipts invalidate reusable target facts. Current authorization at
+search disclosure, project removal, and other real effects remains required.
+The released synchronous transcript-hit SDK and native mutation callbacks retain
+their existing kernels until those owning contracts are migrated; this is not a
+claim that all shared discovery kernels are worker-only.
+
 ## Config CLI ownership
 
 ### Non-session bookkeeping

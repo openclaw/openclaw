@@ -50,7 +50,10 @@ import {
   captureSessionManagerIncognitoBinding,
   captureSessionManagerIncognitoAdmissionAssertion,
   withRetainedSessionManagerIncognitoActor,
+  withSessionManagerMemoryBinding,
+  installSessionManagerIncognitoBinding,
 } from "./session-manager-incognito-scope.js";
+import { createSessionManagerMemoryDatabase } from "./session-manager-memory.js";
 import { SessionTranscriptMessageCommittedError } from "./session-manager-message-error.js";
 import type { SessionTranscriptAppendResult } from "./session-manager-message-runtime.js";
 import { receiveSessionManagerCommit } from "./session-manager-persistence-error.js";
@@ -138,6 +141,49 @@ export async function withSessionManagerWrite<T>(
     }
     assertCurrent();
   };
+  if (incognitoBinding && "kind" in incognitoBinding) {
+    const queues = detachedWriterQueues.get(manager) ?? new Map<string, StoreWriterQueue>();
+    detachedWriterQueues.set(manager, queues);
+    return trackAsyncWork(() =>
+      incognitoBinding.actor.withPhase(
+        "session-manager.write",
+        { assertCurrent, authorize() {} },
+        async ({ actor }) => {
+          const storage = actor.storage!;
+          const selected = { ...incognitoBinding, actor, storage };
+          const database = createSessionManagerMemoryDatabase(selected);
+          return runQueuedStoreWrite({
+            queues,
+            storePath: "session",
+            label: "memory session write admission",
+            reentrant: true,
+            fn: () =>
+              withSessionManagerMemoryBinding(manager, selected, async () => {
+                assertManager();
+                try {
+                  return await write({ database, options: selected.database, assertCurrent });
+                } finally {
+                  const next = manager.getSessionTarget();
+                  if (
+                    next &&
+                    next.sessionKey === identity.sessionKey &&
+                    next.sessionId !== identity.sessionId
+                  ) {
+                    const replacement = await storage.acquire(next.sessionKey);
+                    installSessionManagerIncognitoBinding(manager, {
+                      ...incognitoBinding,
+                      actor: replacement,
+                      storage: replacement.storage!,
+                      target: next,
+                    });
+                  }
+                }
+              }),
+          });
+        },
+      ),
+    );
+  }
   if (incognitoBinding) {
     captureSessionManagerIncognitoAdmissionAssertion(incognitoBinding)();
     const actor = incognitoBinding.actor;
@@ -219,7 +265,7 @@ export async function appendSessionTranscriptNote(
     ...(options?.config ? { config: captureRuntimeConfig(options.config) } : {}),
   };
   const actorBinding = getOwnedSessionTranscriptActor(captured);
-  if (actorBinding) {
+  if (actorBinding && actorBinding.actor.target.database.kind !== "memory") {
     const { actor: sessionActor } = actorBinding;
     const assertOwned = captureOwnedTranscriptWriteAssertion(captured);
     const assertCurrent = () => {

@@ -580,7 +580,6 @@ export async function buildSessionEntryFromSnapshot(
   snapshot: SessionEntrySnapshot,
   assertCurrent: () => void,
 ): Promise<SessionFileEntry | null> {
-  assertCurrent();
   const { onTranscriptMessage, ...options } = opts;
   const result = await buildSessionEntryFromSource(
     absPath,
@@ -591,7 +590,6 @@ export async function buildSessionEntryFromSnapshot(
             onTranscriptMessage(message, observedAt) {
               assertCurrent();
               onTranscriptMessage(message, observedAt);
-              assertCurrent();
             },
           }
         : {}),

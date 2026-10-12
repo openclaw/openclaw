@@ -15,6 +15,14 @@ function StrokeIcon(props: { children: JSX.Element }) {
     </svg>
   );
 }
+
+function strokePath(d: string) {
+  return (
+    <StrokeIcon>
+      <path d={d} />
+    </StrokeIcon>
+  );
+}
 export const icons = {
   get gitPullRequest() {
     return (
@@ -65,53 +73,25 @@ export const icons = {
   },
 
   get hourglass() {
-    return (
-      <StrokeIcon>
-        <path d="M5 3h14M5 21h14M7 3v4l5 5-5 5v4M17 3v4l-5 5 5 5v4" />
-      </StrokeIcon>
-    );
+    return strokePath("M5 3h14M5 21h14M7 3v4l5 5-5 5v4M17 3v4l-5 5 5 5v4");
   },
   get priorityLow() {
-    return (
-      <StrokeIcon>
-        <path d="m6 9 6 5 6-5" />
-      </StrokeIcon>
-    );
+    return strokePath("m6 9 6 5 6-5");
   },
   get priorityNormal() {
-    return (
-      <StrokeIcon>
-        <path d="M6 12h12" />
-      </StrokeIcon>
-    );
+    return strokePath("M6 12h12");
   },
   get priorityHigh() {
-    return (
-      <StrokeIcon>
-        <path d="m6 15 6-5 6 5" />
-      </StrokeIcon>
-    );
+    return strokePath("m6 15 6-5 6 5");
   },
   get priorityUrgent() {
-    return (
-      <StrokeIcon>
-        <path d="m6 10 6-5 6 5m-12 9 6-5 6 5" />
-      </StrokeIcon>
-    );
+    return strokePath("m6 10 6-5 6 5m-12 9 6-5 6 5");
   },
   get check() {
-    return (
-      <StrokeIcon>
-        <path d="M20 6 9 17l-5-5" />
-      </StrokeIcon>
-    );
+    return strokePath("M20 6 9 17l-5-5");
   },
   get chevronDown() {
-    return (
-      <StrokeIcon>
-        <path d="M6 9l6 6 6-6" />
-      </StrokeIcon>
-    );
+    return strokePath("M6 9l6 6 6-6");
   },
   get chevronsUpDown() {
     return (
@@ -122,11 +102,7 @@ export const icons = {
     );
   },
   get chevronRight() {
-    return (
-      <StrokeIcon>
-        <path d="m9 6 6 6-6 6" />
-      </StrokeIcon>
-    );
+    return strokePath("m9 6 6 6-6 6");
   },
   get maximize() {
     return (
@@ -149,11 +125,7 @@ export const icons = {
     );
   },
   get listFilter() {
-    return (
-      <StrokeIcon>
-        <path d="M3 6h18M7 12h10M10 18h4" />
-      </StrokeIcon>
-    );
+    return strokePath("M3 6h18M7 12h10M10 18h4");
   },
   get moreHorizontal() {
     return (
@@ -165,11 +137,7 @@ export const icons = {
     );
   },
   get refresh() {
-    return (
-      <StrokeIcon>
-        <path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8M21 3v5h-5" />
-      </StrokeIcon>
-    );
+    return strokePath("M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8M21 3v5h-5");
   },
   get search() {
     return (
@@ -237,10 +205,8 @@ export const icons = {
     );
   },
   get edit() {
-    return (
-      <StrokeIcon>
-        <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
-      </StrokeIcon>
+    return strokePath(
+      "M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z",
     );
   },
   get eye() {
@@ -253,18 +219,12 @@ export const icons = {
     );
   },
   get eyeOff() {
-    return (
-      <StrokeIcon>
-        <path d="M10.733 5.076a10.744 10.744 0 0 1 11.205 6.575 1 1 0 0 1 0 .696 10.747 10.747 0 0 1-1.444 2.49M14.084 14.158a3 3 0 0 1-4.242-4.242M17.479 17.499a10.75 10.75 0 0 1-15.417-5.151 1 1 0 0 1 0-.696 10.75 10.75 0 0 1 4.446-5.143M2 2l20 20" />
-      </StrokeIcon>
+    return strokePath(
+      "M10.733 5.076a10.744 10.744 0 0 1 11.205 6.575 1 1 0 0 1 0 .696 10.747 10.747 0 0 1-1.444 2.49M14.084 14.158a3 3 0 0 1-4.242-4.242M17.479 17.499a10.75 10.75 0 0 1-15.417-5.151 1 1 0 0 1 0-.696 10.75 10.75 0 0 1 4.446-5.143M2 2l20 20",
     );
   },
   get list() {
-    return (
-      <StrokeIcon>
-        <path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01" />
-      </StrokeIcon>
-    );
+    return strokePath("M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01");
   },
   get kanban() {
     return (
@@ -286,11 +246,7 @@ export const icons = {
     );
   },
   get layoutCompact() {
-    return (
-      <StrokeIcon>
-        <path d="M4 9h16M4 15h16M10 3l2 2 2-2M12 2v3M10 21l2-2 2 2M12 22v-3" />
-      </StrokeIcon>
-    );
+    return strokePath("M4 9h16M4 15h16M10 3l2 2 2-2M12 2v3M10 21l2-2 2 2M12 22v-3");
   },
   get messageSquare() {
     return (
@@ -301,11 +257,7 @@ export const icons = {
     );
   },
   get penLine() {
-    return (
-      <StrokeIcon>
-        <path d="M12 20h9M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z" />
-      </StrokeIcon>
-    );
+    return strokePath("M12 20h9M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z");
   },
   get play() {
     return (
@@ -315,11 +267,7 @@ export const icons = {
     );
   },
   get plus() {
-    return (
-      <StrokeIcon>
-        <path d="M5 12h14M12 5v14" />
-      </StrokeIcon>
-    );
+    return strokePath("M5 12h14M12 5v14");
   },
   get stop() {
     return (
@@ -329,10 +277,8 @@ export const icons = {
     );
   },
   get trash() {
-    return (
-      <StrokeIcon>
-        <path d="M3 6h18M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2M10 11v6M14 11v6" />
-      </StrokeIcon>
+    return strokePath(
+      "M3 6h18M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2M10 11v6M14 11v6",
     );
   },
   get x() {

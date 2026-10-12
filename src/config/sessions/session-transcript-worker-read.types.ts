@@ -23,6 +23,7 @@ import type {
   SessionTranscriptEventMatch,
 } from "./session-history-read.types.js";
 import type { SessionTranscriptAnchorSelection } from "./session-transcript-anchor-read.kernel.js";
+import type { SessionTranscriptAnchorEntry } from "./session-transcript-anchor-read.types.js";
 import type { SessionTranscriptSearchParams } from "./session-transcript-search.types.js";
 import type { TranscriptEntryAnchor } from "./transcript-entry-anchor.js";
 
@@ -83,6 +84,7 @@ export type SessionTranscriptAnchorsWorkerInput = {
   database: { agentId: string; path: string };
   resolved: ResolvedTranscriptScope;
   selection: SessionTranscriptAnchorSelection;
+  preparedEntry?: SessionTranscriptAnchorEntry;
   expectedIdentity: DatabaseFileIdentity;
 };
 
